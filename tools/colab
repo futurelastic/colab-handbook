@@ -897,6 +897,19 @@ function cmdMigrationGrant(argv) {
   const repoAbs = opts.repo ? resolveRepo(opts) : (git.repoRoot(process.cwd()) || null);
   if (!repoAbs) throw new UserError('not inside a git repo — pass --repo <path>');
 
+  // Argument validation and local ref resolution run BEFORE isGhUsable, deliberately — they are
+  // answerable from the working tree alone, need no `gh` call, and must therefore never depend on
+  // whether this machine happens to have `gh` authenticated. Checking them first also means a CI
+  // runner with no `gh` auth (a real, common case — see #101) still reaches these refusals instead
+  // of always bottoming out on the ambient "gh not usable here" message regardless of what is
+  // actually wrong with the invocation.
+  if (!opts.revoke && !opts.branch) {
+    throw new UserError('--branch <branch> is required — a grant is bound to one branch, never inferred from the current checkout');
+  }
+  if (!opts.revoke && !git.branchExists(repoAbs, opts.branch)) {
+    throw new UserError(`branch "${opts.branch}" does not resolve to a ref (locally or on origin) — refusing to bind a grant to a name nothing exists at`);
+  }
+
   // No local fallback, on purpose — same reasoning as `colab readiness`: the grant lives on
   // GitHub, visible from any machine to the gate that reads it (ship may run on a DIFFERENT
   // machine than the one that granted). Writing or reading it local-only would be invisible to
@@ -909,6 +922,9 @@ function cmdMigrationGrant(argv) {
 }
 
 function cmdMigrationGrantCreate(repoAbs, num, opts) {
+  // --branch and branch existence are already validated by cmdMigrationGrant, ahead of the
+  // isGhUsable gate — see the comment there. Kept as a defensive re-check in case this function is
+  // ever called from a second path.
   if (!opts.branch) {
     throw new UserError('--branch <branch> is required — a grant is bound to one branch, never inferred from the current checkout');
   }

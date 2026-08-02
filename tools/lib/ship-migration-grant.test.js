@@ -22,6 +22,19 @@
  * Deliberately NOT built: any `COLAB_FAKE_GH`-style hook that would let a test inject a fake
  * granted read. A backdoor into an authorization read is the one thing this feature must not
  * have, and a test fixture is not an exception to that (see the plan file's Risks section).
+ *
+ * #101/#100: `isGhUsable()` reading true or false is itself ambient — it depends on whether the
+ * MACHINE running the test has `gh` authenticated, not on anything the fixture controls. A CI
+ * runner with no `gh` auth reads `isGhUsable() === false` for every test in this file, which
+ * silences the deeper "no local fallback" refusals this file exists to exercise and, in the
+ * `ship --dry --json` tests, swaps in a different (also-correct, but untested-here) reason string.
+ * That is not a fake-gh backdoor into authorization (the concern the paragraph above rules out) —
+ * it puts a REAL `gh` binary on PATH first, so `gh --version` / `gh auth status` succeed exactly as
+ * the note above already assumes ("`isGhUsable()` reads true"), and every actual issue-view/edit/
+ * comment call still fails for real (this fixture's `origin` is a local bare repo, not GitHub) —
+ * the same wiring `withFakeGh` in tools/lib/git.test.js uses for `ghRunForSha`. It makes the
+ * fixture's behavior deterministic across machines instead of leaving it to whichever `gh` account
+ * happens to be logged in wherever the suite runs.
  */
 
 const test = require('node:test');
@@ -84,13 +97,29 @@ function fixture(projectYml) {
   g(work, 'commit', '-q', '-m', 'chore: fixture');
   g(work, 'push', '-q', 'origin', 'main');
 
-  return { root, origin, work, home, g };
+  // A fake `gh` placed first on PATH — see the file banner (#101/#100). It answers `--version`
+  // and `auth status` so `isGhUsable()` reads true REGARDLESS of whether this machine actually has
+  // `gh` authenticated, and fails every other subcommand (`issue view`, `issue edit`, `issue
+  // comment`, `label list`, ...) exactly as a real, authenticated `gh` would against this fixture's
+  // local-bare `origin`, which is not a real GitHub repository. Same technique as
+  // tools/lib/git.test.js's `withFakeGh`.
+  const bin = path.join(root, 'bin');
+  fs.mkdirSync(bin);
+  fs.writeFileSync(path.join(bin, 'gh'), [
+    '#!/bin/sh',
+    'if [ "$1" = "--version" ]; then echo "gh version 0.0.0 (fixture)"; exit 0; fi',
+    'if [ "$1" = "auth" ] && [ "$2" = "status" ]; then echo "Logged in to github.com (fixture)" >&2; exit 0; fi',
+    'echo "fixture gh: refusing $*" >&2',
+    'exit 1',
+  ].join('\n') + '\n', { mode: 0o755 });
+
+  return { root, origin, work, home, bin, g };
 }
 
 function colab(fx, args, extraEnv = {}) {
   const r = spawnSync('node', [COLAB, ...args], {
     encoding: 'utf8',
-    env: { ...process.env, COLAB_HOME: fx.home, COLAB_SESSION: '', COLAB_SESSION_NAME: '', ...extraEnv },
+    env: { ...process.env, PATH: `${fx.bin}:${process.env.PATH}`, COLAB_HOME: fx.home, COLAB_SESSION: '', COLAB_SESSION_NAME: '', ...extraEnv },
   });
   return { code: r.status, out: r.stdout || '', err: r.stderr || '' };
 }
@@ -169,6 +198,11 @@ test('migration-grant CREATE against a real branch still refuses (never a silent
   assert.notStrictEqual(r.code, 0, r.out + r.err);
   // Never anything that reads as success.
   assert.doesNotMatch(r.out, /Granted/);
+  // #100: with the fixture's `gh` reading as usable (real `--version`/`auth status`, everything
+  // else refused — see the file banner), this must reach the ACTUAL no-local-fallback refusal —
+  // the failed `gh issue view` inside cmdMigrationGrantCreate — rather than bottom out earlier on
+  // the ambient "gh not usable here" message, which would prove nothing about that deeper path.
+  assert.match(r.err, /could not read #1 from the tracker — refusing to write a grant blind/);
 });
 
 test('migration-grant --list never reports "no outstanding grants" on a failed read', () => {
