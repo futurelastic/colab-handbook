@@ -673,6 +673,14 @@ const VALID_WRITES = new Set(["isolated", "serial"]);
 // (#131). Omission means undeclared, not "solo": nothing infers this from GitHub
 // visibility or anything else, and no rule reads it yet (project.schema.md "room — optional").
 const VALID_ROOM = new Set(["solo", "team", "public"]);
+// `exposure` names what consumes a merge here — the axis `tier`'s gate count will
+// eventually be DERIVED from (#132, epic #128 axis 2). Strictly additive alongside `tier`
+// in this unit: `tier` stays authoritative, and no rule here reads `exposure` to change a
+// `tier`/`trunk`/`deploy`/`production` finding. Omission means undeclared, not "none" —
+// exactly like `room`, and for the same reason: the only path to a value is a human
+// committing the string. Nothing here infers it from GitHub visibility, `production:`,
+// `tier`, or a deploy workflow (project.schema.md "exposure — optional").
+const VALID_EXPOSURE = new Set(["none", "self", "live", "released"]);
 // `deploy` answers HOW a repo reaches production, never WHETHER it is tier A — the tier
 // test is "does a deploy target exist today?". `manual` describes the honest third case:
 // production exists, but shipping is a human running a documented runbook (rsync, compose
@@ -698,7 +706,7 @@ function auditRepo(target, ctx) {
   // report (and in --json) so the row reads as source-of-truth rather than clean-by-luck:
   // a silent skip is indistinguishable from a check that quietly stopped working.
   const isSelf = isHandbookItself(target);
-  const info = { repo: src.label, kind: src.kind, tier: null, self: isSelf, findings: [] };
+  const info = { repo: src.label, kind: src.kind, tier: null, exposure: null, self: isSelf, findings: [] };
 
   const fail = (t) => findings.push({ level: "fail", text: t });
   const warn = (t) => findings.push({ level: "warn", text: t });
@@ -735,6 +743,12 @@ function auditRepo(target, ctx) {
   const ceremony = ceremonyRaw ?? "standard";
   const autonomy = cfg?.autonomy ?? null;
   info.tier = tier;
+  // Raw, no `?? default` — the load-bearing line for the "lowering exposure is a human
+  // act" asymmetry (#132): there is no defaulted `exposure` variable anywhere in this
+  // file, so no rule can accidentally reason from a synthesised value, and `--json`
+  // reports `null` (undeclared) rather than "none" (declared: nothing consumes this).
+  const exposureRaw = "exposure" in (cfg || {}) ? cfg.exposure : null;
+  info.exposure = exposureRaw;
 
   if (cfg) {
     if (!VALID_TIERS.has(tier)) fail(`tier is ${JSON.stringify(tier)}, expected "A", "B" or "C"`);
@@ -771,6 +785,25 @@ function auditRepo(target, ctx) {
     // one; until it does, `room` is a declared fact this check only spell-checks.
     const roomRaw = "room" in (cfg || {}) ? cfg.room : null;
     if (roomRaw !== null && !VALID_ROOM.has(roomRaw)) fail(`room is ${JSON.stringify(roomRaw)}, expected "solo", "team" or "public" (omit if undeclared)`);
+
+    // ---- exposure axis (#132) -------------------------------------------------
+    // Enum sanity, plus exactly one pairing advisory — the same restrained shape as
+    // room/writes above. `tier` stays authoritative in this unit; nothing here changes
+    // any tier/trunk/deploy/production finding, and no rule couples exposure to tier
+    // (CONVENTIONS.md §2 "Exposure", project.schema.md "exposure — optional": "do not add
+    // one" mirrors the writes axis's own instruction, for the same reason).
+    if (exposureRaw !== null && !VALID_EXPOSURE.has(exposureRaw)) {
+      fail(`exposure is ${JSON.stringify(exposureRaw)}, expected one of: none, self, live, released (omit if undeclared)`);
+    }
+    // The one case that asserts BOTH "nothing consumes this" AND "there is nothing to
+    // point at" — advisory, not a failure: the descriptor isn't lying (nothing here can
+    // verify absence of a consumer), it's unanswered, and answering it is a human act
+    // (#128 ruling) this unit does not perform. A `fail` here would make declaring the
+    // key riskier than omitting it, which would suppress exactly the opt-in adoption data
+    // a later unit needs.
+    if (exposureRaw === "none" && (production === null || production === "")) {
+      warn(`exposure: none and production: null — either nothing is left to reach here, or nobody has answered the exposure question yet. Both read the same to this tool; a human should confirm which`);
+    }
 
     // ---- tier <-> trunk coherence ------------------------------------------
     // The canonical Tier A shape is the dev/main split — sessions land on dev, main is the release

@@ -31,6 +31,12 @@
 #               runs isolated (many concurrent worktrees), so the key stays unset here —
 #               a reference example that sets every optional key stops demonstrating
 #               which ones are actually required.
+#   exposure    OPTIONAL. none | self | live | released. What consumes a merge here —
+#               additive alongside tier in this unit; tier stays authoritative
+#               (project.schema.md "exposure — optional"). This repo IS released:
+#               public, adopters copy it, and it ships by tag (#128 §2c — a repo can
+#               be tag-published with real downstream adopters while production stays
+#               null, because there is no server to publish a URL for).
 #
 tier: B
 trunk: main
@@ -38,3 +44,4 @@ production: null
 deploy: none
 stack: docs + copy-and-own CI templates + audit CLI (no build)
 autonomy: auto-trunk
+exposure: released

@@ -192,6 +192,17 @@ the handbook's current version, so a scheduled run is self-documenting.
   is never optional — and it cannot reach a live repo anyway, since rule 1 above
   already requires `production: null` wherever `light` applies.
 
+- **`exposure:` enum + one pairing advisory (#132)** — an optional field naming what
+  consumes a merge here (project.schema.md#exposure--optional), additive alongside `tier`;
+  `tier` stays fully authoritative and no rule couples the two. An unrecognised value is a
+  **finding**; the one coherence check is `exposure: none` + `production: null` together
+  (both-empty) — a **warn**, never a `fail`, because the descriptor is unanswered rather
+  than lying, and answering it is a human act this unit does not perform. Omitting
+  `exposure:` entirely reports `null` (undeclared) in `--json`, never `"none"` — there is
+  no default, by design (`CONVENTIONS.md` §2, *Exposure*, "lowering exposure is a human
+  act"). Every other pairing, including `live`/`released` with `production: null`, is
+  clean.
+
 `stack` is intentionally **not** validated — it is a free-form string now.
 
 ## The repo list — resolution order
