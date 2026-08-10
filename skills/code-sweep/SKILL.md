@@ -296,8 +296,8 @@ Each row names a `path` and a holder. For each:
 - **Holder's liveness is unknown, or the session is confirmed gone** → this is exactly
   the case CONVENTIONS.md's *Place-claims* section reserves for a human:
   `colab place release <path>` on your own hold needs nothing extra, but releasing
-  someone else's requires `COLAB_HUMAN=1` — the same bar as a migration grant or a
-  promotion. **Report it; do not set that variable yourself.**
+  someone else's requires the human-only `COLAB_HUMAN` override — the same bar as a
+  migration grant or a promotion. **Report it; do not set that variable yourself.**
 - **No `colab`, or repo is not `writes: serial`** → nothing to check; this bucket is
   empty by construction, say so rather than silently omitting the row.
 
@@ -510,6 +510,6 @@ still blocked: trunk CI dead (billing), since 2026-07-21T11:40Z
   meant to clear.
 - Nothing was forced past uncommitted work.
 - **On a `writes: serial` repo:** `colab places` was checked, every stale hold reported
-  (never force-released without `COLAB_HUMAN=1`), and every selector that matched
+  (never force-released without the human-only `COLAB_HUMAN` override), and every selector that matched
   nothing was checked against trunk history for a `landed trunk-direct` unit before
   being reported as `selector matched nothing`.
