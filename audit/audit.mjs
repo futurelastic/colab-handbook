@@ -268,7 +268,7 @@ function satisfiesConstraint(version, constraint) {
 
 // Run all stamp/reconciliation checks for one repo, pushing findings via fail/warn.
 // Silent when there is nothing to say (the common, healthy case).
-function checkStamps(src, hb, tmplNames, fail, warn, { ceremony = "standard" } = {}) {
+function checkStamps(src, hb, tmplNames, fail, warn, { ceremony = "standard", missingAxes = [], predatesAxes = [] } = {}) {
   const cur = hb.version;
 
   const compareStamp = (kind, name, stampVersion, files, { isCi = false } = {}) => {
@@ -325,9 +325,24 @@ function checkStamps(src, hb, tmplNames, fail, warn, { ceremony = "standard" } =
   // --- CLAUDE.md conventions block ---
   const claude = src.readFile("CLAUDE.md");
   if (claude) {
-    const stamp = parseClaudeStamp(claude);
-    if (stamp) {
-      compareStamp("CLAUDE block", null, stamp.version, ["templates/repo-CLAUDE-block.md"]);
+    const stampInfo = parseClaudeStamp(claude);
+    if (stampInfo) {
+      compareStamp("CLAUDE block", null, stampInfo.version, ["templates/repo-CLAUDE-block.md"]);
+      // Adoption compatibility window (#138): an axis missing on this repo is only a
+      // finding when its marker actually PREDATES the axis — never merely undeclared,
+      // which stays silent everywhere else (#131/#132/#133/#151's own asymmetry). `warn`
+      // only, never `fail`: the marker was not lying when it was written; the question
+      // simply did not exist yet.
+      if (!hb.untagged && hb.hasGit && missingAxes.length) {
+        const { verifiable, axes } = stamp.axesPredating(HANDBOOK_ROOT, stampInfo.version);
+        if (verifiable) {
+          const predates = missingAxes.filter((a) => axes.includes(a));
+          if (predates.length) {
+            predates.forEach((a) => predatesAxes.push(a));
+            warn(`marker predates the axis model — ${predates.join("/")} entered the model after this repo's stamp @ ${stampInfo.version}; answer ${predates.length > 1 ? "them" : "it"} via CONVENTIONS.md §9's question set (a sync), same as first-time adoption asks (omission stays legal: undeclared, never a default)`);
+          }
+        }
+      }
     } else if (looksLikeHandbookClaude(claude)) {
       warn("CLAUDE.md has the conventions block but no colab-handbook stamp — cannot track handbook drift; re-paste the current block");
     }
@@ -1054,7 +1069,17 @@ function auditRepo(target, ctx) {
   // Note this is narrower than it may look: one of our Python+Node hybrids emits the
   // SAME two advisory lines, legitimately (its ci.yml really is an unstamped copy).
   // Identical text, opposite meanings — nothing here may generalise to that row.
-  if (!isSelf) checkStamps(src, ctx.handbook, ctx.templateNames, fail, warn, { ceremony });
+  // ---- adoption compatibility window (#138) --------------------------------
+  // An old descriptor must report as PREDATING this version, never as broken — reusing
+  // the stamp machinery already above rather than a new mechanism. Missing axes are
+  // "undeclared" on every repo (#131/#132/#133/#151's own asymmetry: never a default,
+  // never nagged on their own); this adds exactly one extra fact when a repo's CLAUDE
+  // stamp names a handbook version at which those axes did not yet exist in
+  // project.schema.md — the marker is not lying, it is simply from before the question
+  // was ever asked.
+  const missingAxes = cfg ? stamp.AXES.filter((a) => !(a in cfg)) : [];
+  info.predatesAxes = [];
+  if (!isSelf) checkStamps(src, ctx.handbook, ctx.templateNames, fail, warn, { ceremony, missingAxes, predatesAxes: info.predatesAxes });
 
   function finish() {
     info.findings = findings;
