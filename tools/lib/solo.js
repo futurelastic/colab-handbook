@@ -123,20 +123,15 @@ function writesMode(doc) {
 
 /**
  * Is solo flow (the serial trunk-direct cell) legal for this repo, and via which key?
- * `writes: serial` is the current key; `ceremony: light` is accepted too, but only as a
- * LEGACY proxy — see the comment inline. Returns `{ok:true, via}` or `{ok:false, reason}`.
+ * `writes: serial` is the only key (#175 removed the `ceremony: light` legacy proxy that
+ * #133 introduced as a bridge — no repo can silently ride the old key any more). Returns
+ * `{ok:true, via}` or `{ok:false, reason}`.
  */
 function soloEligibility(doc) {
   if (writesMode(doc) === 'serial') return { ok: true, via: 'writes' };
-  // #133 re-keys this gate onto `writes: serial`. `ceremony: light` is still accepted, as a
-  // LEGACY proxy only, because no repo has answered the writes question yet and removing it
-  // here would break every light repo on the same commit that introduces its replacement.
-  // #175 (blocked on this issue) removes this legacy clause and the ceremony/production rule.
-  // Do not add a third acceptance path.
-  if (doc && doc.ceremony === 'light') return { ok: true, via: 'ceremony-legacy' };
   return {
     ok: false,
-    reason: 'solo flow requires writes: serial (or, legacy, ceremony: light) — this repo declares neither',
+    reason: 'solo flow requires writes: serial — this repo declares neither',
   };
 }
 

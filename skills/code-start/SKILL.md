@@ -99,17 +99,17 @@ cat .github/project.yml        # tier, trunk, production, deploy, stack, ports
 
 ### `writes: serial`? Check the solo-flow shortcut before steps 2–4
 
-A `writes: serial` repo (or, legacy, `ceremony: light` — CONVENTIONS.md, *Solo flow*)
-may let this whole session skip issue, claim, and worktree — but only through the entry
-gate, never on your own say-so:
+A `writes: serial` repo (CONVENTIONS.md, *Solo flow*) may let this whole session skip
+issue, claim, and worktree — but only through the entry gate, never on your own say-so:
 
 ```sh
 colab solo --session "$SESSION_URL" --session-name "<label>"
 ```
 
-- **Neither `doc.writes` is `serial` nor `doc.ceremony` is `light`** → `colab solo`
-  refuses outright before checking anything else. Continue at step 2 below as normal;
-  solo flow does not apply here.
+- **`doc.writes` is not `serial`** → `colab solo` refuses outright before checking
+  anything else. Continue at step 2 below as normal; solo flow does not apply here.
+  (`ceremony: light` alone no longer opens this path — #175 retired that legacy
+  acceptance clause.)
 - **Refused for a held reason** (a worktree, a claim, an unpushed branch elsewhere, a
   dirty tree, someone else's solo lock, or a conflicting place-claim — CONVENTIONS.md,
   *Place-claims*) → the repo qualifies in principle but ground isn't clean *right now*.

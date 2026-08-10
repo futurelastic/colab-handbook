@@ -289,11 +289,13 @@ function checkStamps(src, hb, tmplNames, fail, warn, { ceremony = "standard" } =
     }
     if (changed) {
       // ceremony: light (#79) downgrades drift on a NON-CI template to an advisory — CI/secret-scan
-      // integrity is never optional, on any ceremony value, so a `ci-*` template copy stays a hard
-      // finding regardless. This is the "stamp drift on non-CI templates" item project.schema.md's
-      // ceremony section names; it exists to stop beta noise from drowning real findings, not to
-      // let a live repo's CI drift unnoticed — and it cannot reach CI because `light` already
-      // requires `production: null` (no live repo can carry it).
+      // integrity is never optional, on any ceremony value or any production status, so a `ci-*`
+      // template copy stays a hard finding regardless (isCi guards this unconditionally, below).
+      // This is the "stamp drift on non-CI templates" item project.schema.md's ceremony section
+      // names; it exists to stop beta noise from drowning real findings on a repo nobody in the
+      // room will comb through, never to let a live repo's CI drift unnoticed — narration (which
+      // `light` relaxes) and CI integrity (which it never does) are exactly the two things #175
+      // split apart.
       const msg = `${kind} copied @ ${stampVersion} — template changed since (${cur}): review, re-copy via colab template`;
       if (ceremony === "light" && !isCi) warn(`${msg} (ceremony: light — advisory, not a build/secret-scan template)`);
       else fail(msg);
@@ -657,15 +659,20 @@ const VALID_DEPLOY = new Set(["tag", "manual", "push-main", "none"]);
 // `ceremony` scales memory/record-keeping DEPTH, never the safety rails (claim discipline,
 // worktree isolation, reserved ports, squash + Closes #N, CI secret scan + build stay full-
 // strength on every value). Omission means "standard" — no existing repo's behaviour changes
-// by this field merely existing. `light` is for beta/throwaway repos nobody will comb through
-// history on; the two coherence rules below keep it from drifting onto a repo where that is
-// no longer true (project.schema.md "ceremony — optional").
+// by this field merely existing. `light` is for repos where narration has no reader (follows
+// `room`, not production status — #175); the one coherence rule below (vs `autonomy:
+// auto-trunk`) keeps it from drifting onto an unattended-merge repo, where an evidence trail
+// is needed for a different reason than narration (project.schema.md "ceremony — optional").
 const VALID_CEREMONY = new Set(["standard", "light"]);
 
 // `writes` names which write-conflict prevention method a repo's sessions default to —
 // a separate axis from both `tier` and `ceremony` (project.schema.md "writes — optional").
 // Omission means "isolated", the fleet's status quo, so an unset key changes no behavior.
 const VALID_WRITES = new Set(["isolated", "serial"]);
+// `room` names who else could ever read what a session writes down — the fourth axis
+// (#131). Omission means undeclared, not "solo": nothing infers this from GitHub
+// visibility or anything else, and no rule reads it yet (project.schema.md "room — optional").
+const VALID_ROOM = new Set(["solo", "team", "public"]);
 // `deploy` answers HOW a repo reaches production, never WHETHER it is tier A — the tier
 // test is "does a deploy target exist today?". `manual` describes the honest third case:
 // production exists, but shipping is a human running a documented runbook (rsync, compose
@@ -737,14 +744,15 @@ function auditRepo(target, ctx) {
     if ("stack" in cfg && (cfg.stack === null || cfg.stack === "")) warn("stack is empty — set a free-form string describing the stack");
     if (ceremonyRaw !== null && !VALID_CEREMONY.has(ceremonyRaw)) fail(`ceremony is ${JSON.stringify(ceremonyRaw)}, expected "standard" or "light" (omit for standard)`);
 
-    // ---- ceremony coherence (#79) -------------------------------------------
-    // `light` relaxes memory-ceremony DEPTH, never the two guarantees that protect anyone
-    // OTHER than this repo's own history: a live repo cannot skip its own audit trail, and
-    // an unattended merge needs an evidence trail exactly when nobody watched it happen.
+    // ---- ceremony coherence (#79, narrowed by #175) --------------------------
+    // `light` relaxes memory-ceremony DEPTH only. #175 removed the `production: null`
+    // rule this used to carry: narration follows the ROOM (a live single-operator repo's
+    // trail still has one reader, live or not), recoverability follows exposure and
+    // irreplaceable state, and welding the two together forbade the first and was silent
+    // on the second. The one guarantee left here protects anyone other than this repo's
+    // own history: an unattended merge needs an evidence trail exactly when nobody
+    // watched it happen.
     if (ceremony === "light") {
-      if (production !== null && production !== "") {
-        fail(`ceremony: light requires production: null — a live repo cannot opt out of its own audit trail (found production: ${JSON.stringify(production)}). Drop to ceremony: standard, or this pairing is the same class of finding as tier: A + deploy: push-main`);
-      }
       if (autonomy === "auto-trunk") {
         fail(`ceremony: light is incompatible with autonomy: auto-trunk — an unattended merge with no evidence trail is a closure nobody can audit. Keep autonomy: auto-trunk and use ceremony: standard, or drop autonomy to manual`);
       }
@@ -752,10 +760,17 @@ function auditRepo(target, ctx) {
 
     // ---- writes axis (#133) --------------------------------------------------
     // Deliberately NOT coupled to tier/production/exposure — see CONVENTIONS.md §2 and
-    // project.schema.md. If you are reading this while adding an exposure key (#132), the
-    // ceremony/production coherence block above is yours to move; this block is not.
+    // project.schema.md.
     const writesRaw = "writes" in (cfg || {}) ? cfg.writes : null;
     if (writesRaw !== null && !VALID_WRITES.has(writesRaw)) fail(`writes is ${JSON.stringify(writesRaw)}, expected "isolated" or "serial" (omit for isolated)`);
+
+    // ---- room axis (#131) ----------------------------------------------------
+    // Enum sanity only — the same shape as ceremony/writes above. #131 introduces the
+    // field's meaning; nothing here infers a repo's room from GitHub visibility or
+    // anything else, and no downstream rule reads this value yet. A later unit may add
+    // one; until it does, `room` is a declared fact this check only spell-checks.
+    const roomRaw = "room" in (cfg || {}) ? cfg.room : null;
+    if (roomRaw !== null && !VALID_ROOM.has(roomRaw)) fail(`room is ${JSON.stringify(roomRaw)}, expected "solo", "team" or "public" (omit if undeclared)`);
 
     // ---- tier <-> trunk coherence ------------------------------------------
     // The canonical Tier A shape is the dev/main split — sessions land on dev, main is the release

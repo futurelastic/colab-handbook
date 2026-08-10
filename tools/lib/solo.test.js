@@ -200,11 +200,12 @@ test('soloEligibility: writes: serial is eligible via "writes"', () => {
   assert.deepStrictEqual(soloEligibility({ writes: 'serial' }), { ok: true, via: 'writes' });
 });
 
-test('soloEligibility: legacy ceremony: light is eligible via "ceremony-legacy"', () => {
-  assert.deepStrictEqual(soloEligibility({ ceremony: 'light' }), { ok: true, via: 'ceremony-legacy' });
+test('soloEligibility: ceremony: light alone is NOT eligible — #175 removed the legacy proxy', () => {
+  const r = soloEligibility({ ceremony: 'light' });
+  assert.strictEqual(r.ok, false);
 });
 
-test('soloEligibility: both set — writes wins the "via" label, still eligible', () => {
+test('soloEligibility: writes: serial is eligible regardless of ceremony', () => {
   const r = soloEligibility({ writes: 'serial', ceremony: 'light' });
   assert.strictEqual(r.ok, true);
   assert.strictEqual(r.via, 'writes');

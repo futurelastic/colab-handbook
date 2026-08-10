@@ -316,21 +316,44 @@ that deploys remain human acts on every repo, always — the field cannot expres
 otherwise. The grant lives in the repo file (not the caller's flags) so autonomy is
 a property of the repo's risk profile, reviewed in a commit like any other change.
 
+### `room` — optional
+
+```yaml
+room: solo     # one human — and every agent that human starts
+room: team     # several people in one org, who may disagree or take over
+room: public   # people outside the org, with no shared context and no way to ask
+```
+
+Who else could ever read what a session writes down here — the fourth axis
+([CONVENTIONS.md §2, *Room*](CONVENTIONS.md#room--who-else-is-here)). It decides what an
+Issue is *for* (memory for `solo`, coordination for `team`, documentation for `public`),
+which language it is written in, and whether "a human performs the release" names a role
+or only names a species. Replaces two things that were proxying it by coincidence: Issue
+language derived from repo privacy, and `ceremony` standing in for "will anyone read the
+audit trail."
+
+**Omission means undeclared, not `solo`.** Nothing infers a repo's room from its GitHub
+visibility, its `production:` value, or anything else — a wrong inference here is worse
+than an honest "not yet answered." The audit enum-checks the value for typos exactly like
+`ceremony`/`writes` do, and nothing more: no downstream rule reads `room` yet. A later unit
+may add one; until it does, this field is a fact a human writes down, not a fact anything
+derives or verifies.
+
 ### `ceremony` — optional
 
 ```yaml
 ceremony: standard   # default; omission = standard — no existing repo changes behavior
-ceremony: light      # beta/testing repos: memory ceremony scales down
+ceremony: light      # repos where nobody in the room will comb through the trail
 ```
 
 How much record-keeping DEPTH a session owes this repo — a separate axis from `tier`,
-which counts gates to production ([CONVENTIONS.md §2](CONVENTIONS.md#2-tiers)). Tier
-answers "how many gates stand between a merge and users"; `ceremony` answers "will
-anyone ever comb through this repo's audit trail" — two Tier B repos can be a heavy,
-long-lived codebase and a disposable beta playground, and only this field lets the
-second one stop paying full record-keeping cost for a record nobody will read.
-Descriptive, not evaluative — like `deploy:`. It never says the code matters less; it
-says the repo has opted out of audit-trail depth.
+which counts gates to production ([CONVENTIONS.md §2](CONVENTIONS.md#2-tiers)), and from
+`room` (who could ever read it). Tier answers "how many gates stand between a merge and
+users"; `ceremony` answers "will anyone ever comb through this repo's audit trail" — two
+Tier B repos can be a heavy, long-lived codebase and a disposable beta playground, and
+only this field lets the second one stop paying full record-keeping cost for a record
+nobody will read. Descriptive, not evaluative — like `deploy:`. It never says the code
+matters less; it says the repo has opted out of audit-trail depth.
 
 **What `light` relaxes:**
 
@@ -338,9 +361,9 @@ says the repo has opted out of audit-trail depth.
    `Closes #N` suffices. Issue narration distills real gotchas only, no progress
    commentary.
 2. **Readiness ceremony** — triage orders and groups but skips the `deps-checked`
-   labeling pass. Coherent because `light` repos cannot be driven unattended (rule 2
-   below), so nothing consumes the column; an empty readiness column that nothing
-   reads is pure cost.
+   labeling pass. Coherent because `light` repos cannot be driven unattended (the
+   coherence rule below), so nothing consumes the column; an empty readiness column
+   that nothing reads is pure cost.
 3. **Audit severity** — memory-ceremony gaps (empty readiness column, missing
    evidence, stamp drift on non-CI templates) downgrade to advisories.
 
@@ -349,24 +372,28 @@ discipline · reserved ports · main checkout at rest on trunk · squash + `Clos
 Conventional Commits · CI secret scan + build. A beta repo shares the same machine,
 session fleet, port space, and claim state as the most serious repo.
 
-**Two coherence rules, audited:**
+**Narration follows `room`; recoverability follows exposure and irreplaceable state — and
+`ceremony` only ever touches the first.** A prior rule required `light` → `production:
+null`, reasoning that a live repo cannot skip its own audit trail. That welded two
+different questions together: whether a *trail* is ever read (the room), and what must
+exist to *undo* a change (exposure/irreplaceable state) — a `solo` repo's trail has one
+reader whether or not it is live, and a live `solo` repo that cannot roll back is a real
+hazard regardless of how much anyone narrates. The rule forbade the first case and was
+silent on the second, so a live single-operator repo could not declare `light` at all —
+pushing that shape toward an undeclared, informal light mode instead. Removed (#175); the
+one coherence rule that survives is the one that protects someone other than this repo's
+own room:
 
-1. **`light` requires `production: null`.** A live repo cannot be light — someone's
-   users are behind those merges. `light` + a production URL is a finding, same class
-   as `tier: A` + `push-main`.
-2. **`light` is incompatible with `autonomy: auto-trunk`.** An unattended merge with
-   no evidence trail is a closure nobody watched and nobody can audit. A beta repo
-   that wants unattended ships accepts `standard` — that is the trade.
+- **`light` is incompatible with `autonomy: auto-trunk`.** An unattended merge with
+  no evidence trail is a closure nobody watched and nobody can audit. A repo that wants
+  unattended ships accepts `standard` — that is the trade.
 
-Known drift risk: a repo marked `light` "for now" that grows real users. Rule 1 is the
-backstop — the moment `production:` gains a URL the audit flags the pair.
-
-**`ceremony: light` also enables solo flow** (`CONVENTIONS.md`, *Solo flow*) — trunk-direct
-commits with no pre-filed issue, claim or worktree, entry-gated by `colab solo`. No new
-field: solo flow is a session-time *option* a light repo permits, not a repo-time state a
-descriptor declares, so there is nothing here for a repo to opt into beyond `light` itself.
-`colab solo` refuses outright on a repo that is neither `writes: serial` nor (legacy)
-`ceremony: light` — see that section for the entry gate and the five rules it never relaxes.
+**`ceremony: light` no longer, by itself, enables solo flow.** #133 introduced
+`writes: serial` as solo flow's real gate and accepted `ceremony: light` as a LEGACY
+proxy only, for repos that had not yet answered the `writes` question. #175 removed that
+bridge: `colab solo` now refuses outright on any repo that is not `writes: serial` — see
+[`writes`](#writes--optional) below for the entry gate and the five rules it never
+relaxes.
 
 ### `writes` — optional
 
@@ -546,9 +573,9 @@ stack: laravel-inertia
 | declared `releaseBranch` exists, and is not `trunk` / `main` / the word `trunk` | `colab doctor` misreading a live deploy target as a spent branch and advising its deletion |
 | toolchain pin vs manifest agreement | building on one version, deploying on another |
 | `ceremony` ∈ {`standard`, `light`} when set | a misspelled value silently read as `standard` |
-| `ceremony: light` → `production: null` | a live repo opting out of its own audit trail |
 | `ceremony: light` → not `autonomy: auto-trunk` | an unattended merge with no evidence trail nobody can audit |
 | `writes` ∈ {`isolated`, `serial`} when set | a misspelled value silently read as `isolated` |
+| `room` ∈ {`solo`, `team`, `public`} when set | a misspelled value silently read as undeclared |
 
 `push-main` on a Tier A repo **is a finding** — a mismatch between the
 mechanism and the tier's contract, not a judgement on the mechanism, and the

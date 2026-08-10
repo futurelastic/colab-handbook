@@ -797,10 +797,10 @@ function cmdGateRecorded(argv) {
 const HELP_SOLO = `colab solo [--repo <path>] [--force] [--session <url>] [--session-name <name>]
 colab solo --done [--repo <path>]
 
-Entry gate for solo flow (CONVENTIONS.md, Solo flow) — legal on a \`writes: serial\` repo, or,
-legacy, a \`ceremony: light\` one (#175 will retire the legacy path). Trunk-direct commits with
-no pre-filed issue, claim or worktree are safe exactly when nobody else could be colliding with
-them; this command checks that mechanically instead of trusting it.
+Entry gate for solo flow (CONVENTIONS.md, Solo flow) — legal on a \`writes: serial\` repo only
+(#175 retired the legacy \`ceremony: light\` acceptance path #133 introduced as a bridge).
+Trunk-direct commits with no pre-filed issue, claim or worktree are safe exactly when nobody
+else could be colliding with them; this command checks that mechanically instead of trusting it.
 
   colab solo            check + LOCK: no live solo session, no worktree, no claim, checked out
                          on trunk, no unpushed branch anywhere, clean tree. Any one held → refuse,
@@ -858,11 +858,9 @@ function cmdSolo(argv) {
   if (opts.help) return print(HELP_SOLO);
   const repoAbs = resolveRepo(opts);
   const doc = projectDoc(repoAbs);
-  // #133 re-keys this gate onto `writes: serial`. `ceremony: light` is still accepted, as a
-  // LEGACY proxy only, because no repo has answered the writes question yet and removing it here
-  // would break every light repo on the same commit that introduces its replacement. #175
-  // (blocked on #133) removes this legacy clause and the ceremony/production coherence rule. Do
-  // not add a third acceptance path.
+  // #133 re-keyed this gate onto `writes: serial`. #175 removed the `ceremony: light` legacy
+  // acceptance path and the ceremony/production coherence rule it depended on — do not add a
+  // second acceptance path back.
   const eligibility = solo.soloEligibility(doc);
   if (!eligibility.ok) throw new UserError(`${eligibility.reason} (CONVENTIONS.md, Solo flow).`);
 
@@ -6982,8 +6980,7 @@ Commands:
                                         code-wrap's A3 quality-gate step (#116) — no colab state
                                         written, no gh call of its own
   solo [--force] [--repo P] | solo --done [--repo P]                 entry-gated trunk-direct
-                                        flow, \`writes: serial\` (or legacy \`ceremony: light\`) only —
-                                        no issue/claim/worktree (#83)
+                                        flow, \`writes: serial\` only — no issue/claim/worktree (#83)
   place acquire|check|release <path> [--repo P] [--force]            writer-verifiable checkout
                                         hold \`writes: serial\` needs (#136); release requires
                                         COLAB_HUMAN=1 unless releasing your own

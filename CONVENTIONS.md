@@ -175,22 +175,84 @@ an `HEAD == trunk` safety check for an unattended rebuild-and-restart). A repo o
 with N lines stays one repo, one descriptor — never N repos, N descriptors, or a second
 entry in `trunk:`/`integration:`.
 
-**Memory ceremony is a fourth axis, and tier cannot carry it.** Tier counts gates to
+### Room — who else is here?
+
+**A fourth axis.** [`room`](project.schema.md#room--optional) names who could ever read
+what a session writes down: `solo` (one human — and every agent that human starts, which
+has no memory across sessions and reads exactly like the human's own notes), `team`
+(several people in one org, who may disagree or take over what a session left behind),
+or `public` (people outside the org, with no shared context and no way to ask). It decides
+what an Issue is *for* — memory for `solo`, coordination for `team`, documentation for
+`public` — which language it is written in, and whether "a human performs the release"
+names a role (`team`/`public`) or only names a species when the room is otherwise empty
+of anyone else to hand the release to (`solo`).
+
+**Replaces two things that were standing in for it by coincidence, not by design.** Issue
+language has been derived from repo privacy — private repos get the team's language,
+public ones get English — which happens to track the room in the common case but is not
+what the room actually asks: a private repo one person touches has a room of one, same as
+if it were public, and the language that serves that room is whichever the person
+actually thinks in, not whichever visibility setting GitHub happens to report.
+[`ceremony`](#ceremony--narration-follows-the-room-recoverability-follows-exposure) has
+also been proxying this: "will anyone ever read this repo's audit trail" was answered by
+squinting at production status, when the honest question is who is in the room to read
+it, independent of whether the thing is live.
+
+**The stated reason for claim discipline gets the same correction.** *"Anything labelled
+in-progress is someone else's — do not take it"* reads, on first pass, as etiquette
+between colleagues. The room axis makes the actual mechanism explicit: in the common case
+today the "someone else" is another agent the same person started minutes earlier, and the
+rule exists to stop two of one person's own sessions from editing the same file, not to
+be polite to a colleague who may not even be there. Politeness is negotiable under
+pressure; a write conflict is not — so state the function, not the etiquette gloss on it.
+
+**Must land before the exposure axis, which is defined against it** (#132 — exposure's
+`self` value is the set of consumers that is a subset of the room's collaborator set;
+that definition points at nothing until the room axis exists).
+
+**What this unit does not do.** It introduces the field and its prose meaning only — no
+audit check reads `room` yet, and no tool infers a repo's room from its GitHub visibility
+or anything else. A later unit may add that; until it does, `room` is a declared fact a
+human writes down, not a fact anything verifies or derives.
+
+### Ceremony — narration follows the room, recoverability follows exposure
+
+**A fifth axis, and tier cannot carry it.** Tier (soon exposure) counts gates to
 production; it says nothing about whether anyone will ever comb through a repo's audit
 trail. [`ceremony: light`](project.schema.md#ceremony--optional) lets a repo opt into
-thinner Issue narration and skip Phase B evidence comments — never the rails that
-protect other sessions and the fleet (claim discipline, worktree isolation, reserved
-ports, squash + `Closes #N`, CI secret scan). Two backstops: a `light` repo must have
-`production: null` (a live repo cannot skip its own audit trail), and it may not combine
-with `autonomy: auto-trunk` (an unattended merge with no evidence trail is unauditable).
+thinner Issue narration and skip Phase B evidence comments — never the rails that protect
+other sessions and the fleet (claim discipline, worktree isolation, reserved ports,
+squash + `Closes #N`, CI secret scan).
+
+**Narration and recoverability are two different questions, and one rule used to weld
+them together.** The rule required `production: null` for `light`, reasoning that a live
+repo cannot skip its own audit trail. That conflates:
+
+- **narration** — Issue prose, progress comments, Phase B evidence. Follows the **room**:
+  a `solo` repo's trail has exactly one reader whether or not the thing is live, so being
+  live does not, by itself, give the trail a second reader.
+- **recoverability** — what must exist to undo a change. Follows **exposure** and
+  irreplaceable state, not narration depth.
+
+A live, single-operator repo whose only irreplaceable asset is a small state file cannot
+skip recoverability, and gains nothing from full narration nobody in the room will ever
+read; the old rule forbade the second and was silent on the first — catching neither
+correctly, and pushing exactly this shape toward an informal, undocumented light mode
+instead of a declared one.
+
+**So `ceremony` now reduces narration only**, gated on the room rather than on
+`production:`. It never waives what exposure requires for recoverability — a live repo
+may run light narration; it may not skip the record required to undo a change. One
+backstop remains: `light` may not combine with `autonomy: auto-trunk` (an unattended
+merge with no evidence trail is unauditable).
 
 ### Writes — serial or isolated, and the two things that make a branch mandatory
 
-**A fifth axis, and the last one this section separates out.** `writes` names which
+**A sixth axis, and the last one this section separates out.** `writes` names which
 write-conflict prevention method a repo's sessions default to
 ([`writes`](project.schema.md#writes--optional)) — a different question from `tier`
-(gates to production), `ceremony` (record-keeping depth), or `integration` (a development
-line). Three methods are coherent; one combination is not:
+(gates to production), `room` (who reads the record), `ceremony` (record-keeping depth),
+or `integration` (a development line). Three methods are coherent; one combination is not:
 
 | method | writer count | branches? | this is… |
 |---|---|---|---|
@@ -226,7 +288,7 @@ the observed correlation as an audited rule would repeat the same weld `ceremony
 introduced to undo (`ceremony` vs. `tier`, above) — so no such rule exists, and none
 should be added later "to catch the common case."
 
-### Solo flow — trunk-direct, issue-on-demand, entry-gated (`writes: serial`, or legacy `ceremony: light`)
+### Solo flow — trunk-direct, issue-on-demand, entry-gated (`writes: serial`)
 
 `ceremony: light` relaxed the record-keeping *end* of a session; the *start* — pre-filed
 issue, claim, branch, worktree — stayed full weight even there. Solo flow is the **serial
@@ -249,16 +311,16 @@ invariants exist to protect *other* sessions.
    everything pushed. Nothing to tear down — solo flow made no worktree and holds no
    claim, though it releases any place-claim it took.
 5. **Never relaxed, even solo:** CI secret scan · reserved ports · Conventional Commits ·
-   `production: null` · not `autonomy: auto-trunk` · no scheduled driver (doubly
-   incompatible — a driver planning against a repo reads its Issues, and a solo repo may
-   have none open at all).
+   not `autonomy: auto-trunk` · no scheduled driver (doubly incompatible — a driver
+   planning against a repo reads its Issues, and a solo repo may have none open at all).
+   `production: null` is **not** on this list — `writes: serial` is deliberately not
+   coupled to production (above), so a live repo may run solo flow.
 
 **The boundary is concurrency reality, not a discipline preference.** A repo more than
 one session touches can never legally run solo flow — the entry gate's own checks are
-false by construction the moment a second session exists. `writes: serial` (or legacy
-`ceremony: light`) is necessary but not sufficient: a repo currently hosting someone
-else's worktree, or someone else's place-claim, still fails `colab solo`'s check,
-correctly.
+false by construction the moment a second session exists. `writes: serial` is necessary
+but not sufficient: a repo currently hosting someone else's worktree, or someone else's
+place-claim, still fails `colab solo`'s check, correctly.
 
 **Consumers inferring activity purely from worktrees/claims will under-report a solo
 session** — fixing that is each such consumer's own call, not mandated here.

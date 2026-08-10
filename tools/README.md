@@ -560,7 +560,7 @@ Design notes, in case a future change is tempted to relax one:
   live sessions straight from it. Treat the shape as a published contract: adding a field is safe,
   renaming or removing one breaks consumers you cannot grep for.
 - **`solo` is keyed by repo, not by issue or worktree.** Solo flow (CONVENTIONS.md, *Solo flow*;
-  `writes: serial`, or legacy `ceremony: light`) makes no claim and no worktree, so it needed its
+  `writes: serial`) makes no claim and no worktree, so it needed its
   own machine-local lock — `colab solo` writes it after its entry gate passes (no worktree/claim
   held, checkout on trunk, no unpushed branch, clean tree, no conflicting place-claim), and
   `colab solo --done` is the only remover, after re-checking clean + pushed. A consumer that infers
@@ -704,7 +704,7 @@ Run `colab <cmd> --help` for full detail.
 | `release <issue> [--repo P]` | release a single issue; siblings + worktree survive |
 | `issue-filed <issue> [--repo P]` | notify-only event (`issue.filed`, #102) for an issue a raw `gh issue create` just made — no state.json entry, no label, no gh call of its own |
 | `gate-recorded [--sha S] [--fail] [--worktree N] [--repo P]` | notify-only event (`gate.recorded`, #116) for code-wrap's own A3 quality-gate step — no state.json entry, no label, no gh call of its own |
-| `solo [--force] [--session S] [--session-name S] [--repo P]` \| `solo --done [--repo P]` | entry-gated trunk-direct flow — `writes: serial` (or legacy `ceremony: light`) only, no issue/claim/worktree (see *Solo flow*, CONVENTIONS.md) |
+| `solo [--force] [--session S] [--session-name S] [--repo P]` \| `solo --done [--repo P]` | entry-gated trunk-direct flow — `writes: serial` only, no issue/claim/worktree (see *Solo flow*, CONVENTIONS.md) |
 | `place acquire\|check\|release <path> [--repo P] [--session S] [--session-name S] [--force]` | path-scoped, machine-local checkout hold `writes: serial` needs (see *Place-claims*, CONVENTIONS.md; #136). `check` exits 0/1/2 (free-or-mine / held-by-a-live-other / liveness-unknown-or-lock-unreachable); releasing someone else's hold requires `COLAB_HUMAN=1` |
 | `places [--json]` | list every place-claim on this machine, liveness resolved right now (never a stored flag) |
 | `readiness <issue> [--clear] [--repo P]` | own the `deps-checked` marker (§5): add it after verifying no open blocker, `--clear` on a new blocker or reopen. Journaled; refuses when `gh` is unusable (the marker has no local-only form) |

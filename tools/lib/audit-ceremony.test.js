@@ -9,9 +9,11 @@
  * of this field (claim discipline, worktree isolation, reserved ports, squash + Closes #N,
  * CI secret scan + build). Three things are pinned here: omission behaves exactly like
  * `standard` (no existing repo's behaviour changes because the field now exists), an unknown
- * value is a finding, and the two coherence rules that keep `light` from drifting onto a repo
- * where the relaxation is no longer safe — a live repo (rule 1) or an unattended-merge repo
- * (rule 2) cannot opt out of its own audit trail.
+ * value is a finding, and the one coherence rule left that keeps `light` from drifting onto
+ * a repo where the relaxation is no longer safe — an unattended-merge repo cannot opt out of
+ * its own audit trail. A second rule (`light` requires `production: null`) was removed by
+ * #175: narration follows the ROOM, not production status, so a live repo may run light
+ * narration as long as it does not also skip what exposure requires for recoverability.
  */
 
 const test = require('node:test');
@@ -158,15 +160,20 @@ test('an unrecognised ceremony value is a finding, not a silent pass', () => {
   assert.ok(hasText(r.fails, /ceremony is "heavy".*expected "standard" or "light"/), r.fails.join(' | '));
 });
 
-// --- coherence rule 1: light + a live production is a finding --------------
+// --- removed rule: light + a live production used to be a finding ----------
+//
+// #175 removed this. Narration follows the ROOM, not production status — a live,
+// single-operator repo's audit trail still has exactly one reader, so `light` + a real
+// `production:` is no longer, by itself, a finding. Recoverability (what must exist to
+// undo a change) is exposure's job, not ceremony's — see CONVENTIONS.md, *Ceremony*.
 
-test('ceremony: light + a real production URL is a finding — a live repo cannot skip its own audit trail', () => {
+test('ceremony: light + a real production URL is CLEAN now — narration follows the room, not production status (#175)', () => {
   const yml = `tier: C\ntrunk: dev\nproduction: https://example.invalid\ndeploy: push-main\nstack: node\nceremony: light\n`;
   const r = audit(fixture(yml));
-  assert.ok(hasText(r.fails, /ceremony: light requires production: null/), r.fails.join(' | '));
+  assert.ok(!hasText(r.fails, /ceremony/), r.fails.join(' | '));
 });
 
-// --- coherence rule 2: light + auto-trunk is a finding ----------------------
+// --- coherence rule (only one remains): light + auto-trunk is a finding ----
 
 test('ceremony: light + autonomy: auto-trunk is a finding — unattended merge with no evidence trail', () => {
   const yml = `tier: B\ntrunk: main\nproduction: null\ndeploy: none\nstack: node\nceremony: light\nautonomy: auto-trunk\n`;
