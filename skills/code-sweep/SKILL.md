@@ -1,6 +1,6 @@
 ---
 name: code-sweep
-description: "Clear out everything finished in ONE repo: find every worktree whose work has landed, every issue whose code shipped but is still open, and every claim outliving its session — then put each through code-wrap and code-ship in sequence, one at a time. Run it at end of day, or ping it whenever a session goes idle — a no-change ping short-circuits in three calls. Sorts candidates into wrap / teardown-only / claim-only / unrecorded / blocked / unlinked, because most do not need a full wrap+ship. Can be scoped to a set of issues or one session/worktree instead of the whole repo. Trigger phrases: 'sweep the repo', 'wrap everything finished', 'clean up the worktrees', 'close out the session work', 'tidy up finished work', 'wrap all the done branches', 'sweep the issues #95 #96', 'sweep the session <name>', 'ship these'; and — when this session's last act was a sweep — the re-ping forms 'again', 'anything new?', 'check again', 'anything to wrap yet?', or a bare 'go'. Composes code-wrap then code-ship per candidate; never batches merges."
+description: "Clear out everything finished in ONE repo: find every worktree whose work has landed, every issue whose code shipped but is still open, and every claim outliving its session — then put each through code-wrap and code-ship in sequence, one at a time. Run it at end of day, or ping it whenever a session goes idle — a no-change ping short-circuits in three calls. Sorts candidates into wrap / teardown-only / claim-only / place-claim / unrecorded / blocked / unlinked, because most do not need a full wrap+ship. Can be scoped to a set of issues or one session/worktree instead of the whole repo. Trigger phrases: 'sweep the repo', 'wrap everything finished', 'clean up the worktrees', 'close out the session work', 'tidy up finished work', 'wrap all the done branches', 'sweep the issues #95 #96', 'sweep the session <name>', 'ship these'; and — when this session's last act was a sweep — the re-ping forms 'again', 'anything new?', 'check again', 'anything to wrap yet?', or a bare 'go'. Composes code-wrap then code-ship per candidate; never batches merges."
 ---
 
 # code-sweep — clear out everything finished, one at a time
@@ -86,6 +86,7 @@ colab worktrees            # scope to this repo — see below
 colab claims               # same
 gh issue list --state open
 gh issue list --label in-progress
+colab places                # writes: serial repos only — see §3's place-claim bucket
 ```
 
 ⚠️ **`colab worktrees` and `colab claims` list the whole machine.** Scope them, or
@@ -171,11 +172,33 @@ none:**
    matching principle for kept worktrees — a worktree kept for a stated reason is fine, one
    kept silently is the 8-of-9 statistic repeating. A scoped run owes the same honesty about
    its own boundary: `scoped to N of M candidates`, and name the M−N.
-3. **A selector that matches nothing is not a clean sweep.** An issue with no worktree, no
-   claim and no branch is not "swept"; it was never there. Report
-   `selector matched nothing` and name where you looked, distinct from `nothing to do`. The
-   two differ in what the human should do next — one means the repo is clear, the other
-   means the number was wrong or the work is somewhere else.
+3. **A selector that matches nothing is usually a wrong number — but on a `writes: serial`
+   repo, check trunk history before reporting it that way.** An issue with no worktree, no
+   claim and no branch is not "swept"; ordinarily it was never there. But that exact triple —
+   no worktree, no claim, no branch — is also the fingerprint of a **finished trunk-direct**
+   unit: solo flow (CONVENTIONS.md, *Solo flow*) commits straight to trunk and its exit
+   (`colab solo --done`) never made a worktree or held a claim, so a landed solo commit is
+   indistinguishable from a wrong number by these three signals alone. Before reporting
+   `selector matched nothing` on a repo with `writes: serial`, check:
+   ```sh
+   git log --oneline origin/<trunk> --grep="#$N"
+   ```
+   A match → report `landed trunk-direct: <sha>`, a fourth, distinct outcome — not
+   `selector matched nothing`, and not one of §3's buckets either, since there is
+   no worktree to tear down and no claim to release. If the issue is still open, close it
+   with that evidence per §5.
+
+   **No match does NOT mean clear — say so, do not let the grep look conclusive.** Solo
+   flow files an Issue **on demand**, not on entry (CONVENTIONS.md, *Solo flow*: "an Issue
+   is filed on demand … recording a decision, or work spanning more than one sitting"),
+   so its whole premise is that the commit **is** the memory — an ordinary solo commit
+   carries no `#N` at all. A landed-trunk-direct unit that never cited the issue is
+   therefore indistinguishable from a genuinely wrong number by this check: the grep
+   returning nothing collapses back into `selector matched nothing`, which is the original
+   defect in its most common shape. There is no reliable signal from git state alone that
+   tells the two apart in that case. Report `selector matched nothing`, and say plainly
+   that the grep found no citation rather than that the work was confirmed absent — a
+   human who recognizes the issue may still know it shipped uncited.
 
 **A scoped run's fingerprint is not the repo-wide one.** The §0 inputs are repo-wide facts,
 so *detection* is shared — but the stored conclusion is per-scope, and `code-triage` §0.1's
@@ -228,16 +251,59 @@ what state the work is *in*; `in-progress` says someone *believes they hold it*.
 disagree in both directions — claims outliving finished work, finished work never
 claimed — and the label remains the veto before any teardown.
 
-## 3. Sort into six buckets — each gets a different action
+## 3. Sort into seven buckets — each gets a different action
 
 | Bucket | What it looks like | Action |
 |---|---|---|
 | **wrap** | `cargo` (or `unknown`), **and** at least one claimed issue | full [`code-wrap`](../code-wrap/SKILL.md) then [`code-ship`](../code-ship/SKILL.md) |
 | **teardown-only** | `landed` — content already on its base, worktree lingering | remove worktree, release claims; close via `colab ship` when it has zero commits (evidence-close, #90), else close by hand with evidence |
 | **claim-only** | no worktree; `in-progress` on work already shipped | release the claim, close the issue with evidence |
+| **place-claim** | `colab places` lists a hold whose session is not this sweep's — see below | **check liveness, report — never force-release a live holder** |
 | **unrecorded** | on disk, `colab worktrees`'s `unrecorded` list — no claim, no ports | **report only** — see below, never `code-wrap`/`code-ship` |
 | **blocked** | uncommitted work — tracked changes or untracked files — or genuinely unfinished | **report — never force** |
 | **unlinked** | `cargo` (or `unknown`), **zero** claimed issues | **report — do not wrap** (#92) |
+
+### `place-claim` — the one hold nothing else here sweeps
+
+Only relevant on a `writes: serial` repo (CONVENTIONS.md, *Place-claims*). A
+place-claim can outlive its session exactly as an issue claim or a worktree can — a
+crashed `colab solo` session, a coordinator-spawned implementer that never reached its
+own exit — and it is not a worktree (`writes: serial` sessions do not need one) and not
+an issue claim (it locks a **checkout path**, not an issue), so neither of the other
+buckets' machinery touches it.
+
+**`§5`'s `colab doctor --prune` DOES reach a place-claim — but only the provable half,
+by design.** `tools/colab`'s prune loop (the comment directly above
+`place.stalePlaces(st)`) deletes a hold whose recorded pid is confirmed dead. It
+deliberately never touches `unknown` liveness (no pid recorded, or the check itself
+couldn't run), because a record the check cannot disprove is held must not read as
+"safe to prune" — the same courtesy-release-only posture CONVENTIONS.md's
+*Place-claims* section states for a human override. So the confirmed-dead half is
+`--prune`'s job, automatic; the unknown-liveness half is what survives every automatic
+pass and is exactly what this bucket exists to surface to a human instead of leaving
+silent. That split is also why this bucket's own action is report-never-force: whatever
+a machine could safely clear, `--prune` already clears; nothing weaker is left for this
+bucket to automate.
+
+```sh
+colab places --json
+```
+
+Each row names a `path` and a holder. For each:
+
+- **Path resolves to a live session** (this sweep's own session, or another one you can
+  confirm is running) → not stale, leave it, do not list it as a finding.
+- **Holder's liveness is unknown, or the session is confirmed gone** → this is exactly
+  the case CONVENTIONS.md's *Place-claims* section reserves for a human:
+  `colab place release <path>` on your own hold needs nothing extra, but releasing
+  someone else's requires `COLAB_HUMAN=1` — the same bar as a migration grant or a
+  promotion. **Report it; do not set that variable yourself.**
+- **No `colab`, or repo is not `writes: serial`** → nothing to check; this bucket is
+  empty by construction, say so rather than silently omitting the row.
+
+A `writes: serial` repo also means solo-flow trunk-direct commits are a normal shape
+here — see §1.1's `landed trunk-direct` outcome for the case where a finished solo unit
+has no worktree, no claim and no branch to sort into any of the buckets above.
 
 `teardown-only` is the common case and the most skipped. It is also the cheapest, so
 do these first — they shrink the list before you start the expensive ones.
@@ -391,6 +457,7 @@ swept 4, left 3
 wrapped         fix/import-115-114-113   → trunk a1b2c3d, #115 #114 closed, #113 split
 teardown-only   feat/console-shell-28    → content already on trunk, worktree removed
 claim-only      #26                      → shipped in e4f5g6h, claim released
+place-claim     . (trunk checkout)       → holder session unknown-liveness — reported, not released
 unrecorded      .worktrees/orphan-1      → landed vs main, no claim — removed by hand
 blocked         feat/session-types-26    → 2 untracked files never committed — needs a human
 blocked         #58                      → trunk CI dead (billing), cannot merge
@@ -442,3 +509,7 @@ still blocked: trunk CI dead (billing), since 2026-07-21T11:40Z
   with the checkout parked on a feature branch has left the repo in the state it was
   meant to clear.
 - Nothing was forced past uncommitted work.
+- **On a `writes: serial` repo:** `colab places` was checked, every stale hold reported
+  (never force-released without `COLAB_HUMAN=1`), and every selector that matched
+  nothing was checked against trunk history for a `landed trunk-direct` unit before
+  being reported as `selector matched nothing`.

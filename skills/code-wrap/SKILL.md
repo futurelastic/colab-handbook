@@ -46,16 +46,17 @@ below against it produces confusing no-ops. The solo exit is its own, short path
    not a signal to fall back into the worktree-shaped steps below.
 4. **Nothing else runs, and `code-ship` never runs at all.** No B0 sync, no B1 CI
    gate beyond what already ran on trunk post-push, no B2 squash (there is no branch
-   to squash), no B2c/B2d/B3/B4. A Tier A release (`code-ship` B5) is unaffected
-   either way — solo flow is `ceremony: light` only, which already requires
-   `production: null`.
+   to squash), no B2c/B2d/B3/B4. A Tier A release (`code-ship` B5) is a separate
+   question that solo flow does not settle either way — solo flow is gated on
+   `writes: serial` (CONVENTIONS.md, *Solo flow*), which is deliberately not coupled
+   to `production`, so a live repo may run solo flow.
 
-If you are unsure whether this session is a solo session, check
-`colab claims`/`colab worktrees` for a row naming your branch — none, on a
-`ceremony: light` repo, is the signature of solo flow. When genuinely unsure,
-treat it as the ordinary worktree flow below; the ordinary steps degrade safely
-(they just find nothing to do), where the solo path degrades unsafely if run
-against a session that DOES hold a claim or worktree.
+If you are unsure whether this session is a solo session, check `writes:` in
+`.github/project.yml`: not `serial` means solo flow never opened, full stop — check
+`colab claims`/`colab worktrees` for a row naming your branch instead, and if genuinely
+unsure, treat it as the ordinary worktree flow below; the ordinary steps degrade safely
+(they just find nothing to do), where the solo path degrades unsafely if run against a
+session that DOES hold a claim or worktree.
 
 ## Do this now
 
