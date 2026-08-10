@@ -38,6 +38,13 @@ Whether production exists is the tier question. *How* it deploys — a tag, a
 `main` push, a human following a runbook — is [`deploy`](#deploy--required)'s
 job, and the two must agree.
 
+**[`exposure`](#exposure--optional) is the axis this field's gate count will eventually
+be *derived* from** (epic tracking the model at CONVENTIONS.md §2, "Exposure"). That is a
+statement about the future, not this document: today `tier` is fully authoritative and
+`exposure` is a separate, additive, optional key that no rule here reads to change a
+`tier`/`trunk`/`deploy`/`production` finding. A later unit may flip which key is
+authoritative; until it does, this section is unchanged by `exposure`'s existence.
+
 ### `trunk` — required
 
 The branch sessions merge into. Must be `dev` when `tier: C`; `main` when
@@ -339,6 +346,55 @@ than an honest "not yet answered." The audit enum-checks the value for typos exa
 may add one; until it does, this field is a fact a human writes down, not a fact anything
 derives or verifies.
 
+### `exposure` — optional
+
+```yaml
+exposure: none       # nothing consumes a merge here
+exposure: self        # only parties already in the room — a subset of the room's collaborator set
+exposure: live         # users, via the promotion itself
+exposure: released      # users or adopters, via a deliberate artifact (a tag, a runbook)
+```
+
+What consumes a merge here — the axis `tier`'s gate count will eventually be *derived*
+from (CONVENTIONS.md §2, "Exposure — what consumes a merge here?"). **Strictly additive in
+this unit**: a new key alongside `tier`, `tier` stays fully authoritative, and no rule
+anywhere reads `exposure` to change a `tier`/`trunk`/`deploy`/`production` finding. A repo
+declaring nothing behaves exactly as it does today, byte for byte, including every outside
+adopter of this public repo who has not opted in.
+
+`self` is defined against the [`room`](#room--optional) axis: the consumer set is a subset
+of the room's collaborator set — that definition points at nothing until `room` exists,
+which is why exposure was sequenced after it. Why `prelaunch` was rejected in favour of a
+relationship word, the old→new mapping from `tier`, and the reasoning behind the
+`production:` pairing rule below all live in CONVENTIONS.md §2, "Exposure" — read there for
+the argument; this page states the field.
+
+**The `production:` pairing — one advisory, and only one.** `exposure` and `production`
+are two flat sibling keys, read independently; there is no nested or paired syntax. The
+audit emits exactly one advisory: `exposure: none` **and** `production: null` together — the
+claim that both nothing consumes this repo and there is nothing to point at. It is a `warn`,
+never a `fail`: the descriptor is not lying, it is unanswered, and answering it is a human
+act ([CONVENTIONS.md §2, *Exposure*](CONVENTIONS.md#exposure--what-consumes-a-merge-here)) —
+a `fail` here would make declaring the key riskier than omitting it. Every other combination
+is clean, including `live`/`released` **with `production: null`** — a repo that ships by tag
+to real adopters and runs no server (this repo is exactly that shape) is not a finding; a
+rule that made it one would re-assert the "exposure means a server" defect this axis exists
+to remove.
+
+**Omission means undeclared, not `none`.** Nothing infers a repo's exposure from its GitHub
+visibility, its `production:` value, its `tier`, or a deploy workflow — a wrong inference
+here is worse than an honest "not yet answered," and it is the concrete mechanism behind
+"lowering a repo's exposure is a human act, with no field that can override it": the only
+path to a `none`/`self` value is a human committing the string, because every candidate
+value for an undeclared repo is a claim about the *absence* of a consumer, which nothing here
+can verify. Raising exposure (proposing `live`/`released` from a committed `production` URL
+or a deploy workflow) is a narrower claim an agent may propose; lowering it never is. The
+audit enum-checks the value and pairs it with `production:` as above, and nothing more —
+**no rule couples `exposure` to `tier`, deliberately, matching [`writes`](#writes--optional)'s
+own "do not add one" instruction**, and no rule yet derives gate count, CI thoroughness,
+rollback obligation, or ceremony from it. A later unit may add any of that; until it does,
+`exposure` is a declared fact whose only enforced consequence is the one advisory above.
+
 ### `ceremony` — optional
 
 ```yaml
@@ -556,6 +612,18 @@ releaseBranch: release
 stack: laravel-inertia
 ```
 
+Tier B, but genuinely consumed — a public, tag-published repo with real adopters and no
+server, `exposure` declared alongside `tier` (this repo's own shape):
+
+```yaml
+tier: B
+trunk: main
+production: null
+deploy: none
+stack: docs + copy-and-own CI templates + audit CLI (no build)
+exposure: released
+```
+
 ## Validity rules (what the audit tool checks)
 
 | Rule | Failure it prevents |
@@ -576,6 +644,8 @@ stack: laravel-inertia
 | `ceremony: light` → not `autonomy: auto-trunk` | an unattended merge with no evidence trail nobody can audit |
 | `writes` ∈ {`isolated`, `serial`} when set | a misspelled value silently read as `isolated` |
 | `room` ∈ {`solo`, `team`, `public`} when set | a misspelled value silently read as undeclared |
+| `exposure` ∈ {`none`, `self`, `live`, `released`} when set | a misspelled value silently read as undeclared |
+| `exposure: none` + `production: null` → **advisory** | the both-empty claim ("nothing consumes this, and there is nothing to point at") going unflagged |
 
 `push-main` on a Tier A repo **is a finding** — a mismatch between the
 mechanism and the tier's contract, not a judgement on the mechanism, and the

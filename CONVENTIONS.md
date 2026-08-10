@@ -206,14 +206,98 @@ rule exists to stop two of one person's own sessions from editing the same file,
 be polite to a colleague who may not even be there. Politeness is negotiable under
 pressure; a write conflict is not — so state the function, not the etiquette gloss on it.
 
-**Must land before the exposure axis, which is defined against it** (#132 — exposure's
-`self` value is the set of consumers that is a subset of the room's collaborator set;
-that definition points at nothing until the room axis exists).
+**Landed first because the exposure axis is defined against it** (#132, below — exposure's
+`self` value is the set of consumers that is a subset of the room's collaborator set; that
+definition points at nothing until the room axis exists).
 
 **What this unit does not do.** It introduces the field and its prose meaning only — no
 audit check reads `room` yet, and no tool infers a repo's room from its GitHub visibility
 or anything else. A later unit may add that; until it does, `room` is a declared fact a
 human writes down, not a fact anything verifies or derives.
+
+### Exposure — what consumes a merge here?
+
+**A fifth axis, and the one `tier`'s gate count will eventually be *derived* from.**
+[`exposure`](project.schema.md#exposure--optional) names what actually consumes a merge to
+this repo: nothing, only parties already in the [room](#room--who-else-is-here), users via
+the promotion, or users/adopters via a deliberate artifact (a tag, a runbook). Four values,
+lowercase, matching the relationship words the room axis already established rather than
+`tier`'s uppercase letters — the letters are the defect this axis exists to remove, and
+reusing their shape would carry the grade-reading over:
+
+| what consumes a merge here | value |
+|---|---|
+| nothing | `none` |
+| only parties already in the room | `self` |
+| users, via the promotion itself | `live` |
+| users or adopters, via a deliberate artifact | `released` |
+
+**`self` is defined against the room axis, which is why exposure had to land after it:**
+the consumer set is a subset of the room's collaborator set. A repo whose only reader is the
+same person who wrote it has `self` exposure regardless of whether anything is technically
+running — the room, not a server, is what bounds the consumer set.
+
+**Gate count becomes derived, not declared, once a later unit reads this field** — `none`
+implies zero gates, `live` implies one (the promotion), `released` implies two (the artifact).
+That is a statement about the target shape, not this unit: **`tier` stays fully authoritative
+today**, and this section changes no `tier`/`trunk`/`deploy`/`production` rule. This is Phase 1
+of the epic tracking this model — a new key alongside the old, both readable, old key
+authoritative — so nothing in the fleet, and no outside adopter of this public repo, breaks on
+this merge.
+
+**`prelaunch` was rejected in favour of a relationship word.** An earlier candidate named this
+axis by a *moment* rather than a *relationship* — the same defect the tier letters have in
+miniature, one member of the set speaking a different language than the rest. It also implies
+a public event many of these repos never have, and implies imminence for a state that has
+already lasted months on more than one repo in this fleet. The intent it was trying to carry —
+"not yet, but headed there" — already has a home: `production:`, which exists today.
+`exposure: none` with a *named* `production` target reads as visibly transitional;
+`exposure: self` with `production: null` reads as terminal. No new marker key encodes this;
+the two existing flat scalars, read together, already say it.
+
+**The old→new mapping is prose, executed by no code.** `tier: A`'s contract — a deliberate
+release artifact gates production — is exactly `released`; `tier: C`'s contract — the
+promotion itself ships — is exactly `live`. Both directions rest on committed facts (a
+non-null `production`, a committed deploy path), so an agent may *propose* either. `tier: B`
+maps to nothing: `none`, `self`, and `released` are all found under `B` in this fleet today
+(the measured 5–5 split, and the tag-published, adopter-consumed shape this very repo is),
+so no rule may ever conclude a `B` repo's exposure value.
+
+**Lowering a repo's exposure is a human act, with no field that can override it.** This is
+the sharper form of the asymmetry above, and it is enforced in code, not only in prose: the
+audit assigns `exposure` no default anywhere — omission reports `null` (undeclared), never
+`"none"` (declared: nothing consumes this) — because every candidate value for an undeclared
+repo is a claim about the *absence* of a consumer, which nothing here can verify. An agent
+may find and report evidence of a consumer; it may never write down that none exists.
+
+**The `production:` pairing gets exactly one advisory, at `warn`, never `fail`:**
+`exposure: none` together with `production: null` — the claim that both nothing consumes this
+repo and there is nothing to point at. Advisory, not failure, because the descriptor is not
+*lying* (the `fail` severity is reserved for that — see the `tier: A` + `push-main` block
+below), it is *unanswered*, and answering it is the human act above, explicitly out of scope
+for this unit (Phase 3 of the epic, ten repos each answering "what would break if you merged
+something wrong?", is not performed here). A `fail` would also make declaring the key riskier
+than omitting it, suppressing exactly the opt-in adoption data a later unit needs. Every other
+combination is clean — in particular `live`/`released` **with `production: null`**, because a
+tag-published repo with real adopters and no server (this repo's own shape) is the case this
+axis exists to stop misreading as "no exposure means no server."
+
+**Deliberately not coupled to `tier`, and no rule may add that coupling** — the identical
+instruction [`writes`](#writes--serial-or-isolated-and-the-two-things-that-make-a-branch-mandatory)
+gives for the identical reason: a coupling rule would re-weld two questions this axis model
+exists to separate, and would over-fire on precisely the transitional and tag-published shapes
+just ruled legal above.
+
+**What this unit does not do.** It ships the key, its four-value enum check, and the one
+`production:` pairing advisory — nothing more. No rule yet derives gate count, CI role or
+thoroughness, the rollback obligation, or `ceremony` from `exposure`; `tier` alone still
+governs every one of those today. No falsifier contradicts a declared `none`/`self` from repo
+evidence (a tag exists, a stamp elsewhere names this repo, a service definition serves it) —
+that is #137. No mechanism flips authority from `tier` to `exposure` or makes the key required
+— that is #144. No tool asks a repo to answer the exposure question — that is #138 (the
+adoption wizard). And no rule here answers the question for any specific repo other than the
+one raise recorded in this repo's own `project.yml`, which rests on a human-given answer
+already on record in the epic ruling, not on anything this unit concluded.
 
 ### Ceremony — narration follows the room, recoverability follows exposure
 
