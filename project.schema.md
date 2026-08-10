@@ -94,7 +94,9 @@ test is "does a deploy target exist today?" ([CONVENTIONS.md §9](CONVENTIONS.md
 - `manual` — production exists, but shipping is a **human running a documented
   procedure** (rsync + `docker compose up -d --build`, an upload, a console
   action) with no workflow and no tag trigger. Requires [`runbook:`](#runbook--required-when-an-out-of-ci-deploy-has-no-workflow).
-- `none` — nothing deploys. Required value for `tier: B`.
+- `none` — nothing deploys. Required value for `tier: B`. Names the absence of a
+  **promotion trigger**, never the absence of anything that runs this code anywhere —
+  that question is [`channels`](#channels--optional).
 - `push-main` — a push to `main` **is** the deploy. The required value for
   [`tier: C`](#tier--required), and a finding on `tier: A` — see below.
 
@@ -395,6 +397,75 @@ own "do not add one" instruction**, and no rule yet derives gate count, CI thoro
 rollback obligation, or ceremony from it. A later unit may add any of that; until it does,
 `exposure` is a declared fact whose only enforced consequence is the one advisory above.
 
+### `channels` — optional
+
+```yaml
+channels: [none]                    # nothing runs this code anywhere
+channels: [workflow]                # merge -> CI -> a deploy workflow
+channels: [hook]                    # a git hook, in-repo or installed locally, fires on a git act
+channels: [procedure]               # a human builds/installs/restarts from a checkout, by a documented procedure
+channels: [checkout]                # a per-machine service definition serves the working tree directly
+channels: [artifact]                # a tag or package that adopters/others consume
+channels: [data]                    # the process is local; the effect lands in another system's production data
+channels: [workflow, hook]          # several channels at once — the reason this key is a LIST, not a scalar
+```
+
+By what path a commit reaches something that *runs* it — a different question from
+[`deploy`](#deploy--required), which names only the trigger that promotes to production
+(CONVENTIONS.md §2, "Channels — by what path does code reach the thing that runs it?").
+**Strictly additive in this unit**: a new key alongside `deploy`, `deploy` stays fully
+authoritative, and no rule anywhere reads `channels` to change a `tier`/`trunk`/`deploy`/
+`production` finding. A repo declaring nothing behaves exactly as it does today, byte for
+byte, including every outside adopter of this public repo who has not opted in.
+
+**A list, not a scalar** — the one structural difference from `exposure`/`room`/`writes`. A
+repo can genuinely have several channels open at once (a reviewed deploy workflow *and* a
+machine-local post-merge hook *and* a tag adopters copy out of), and a scalar would force
+picking the most visible one — the exact failure that produced this axis's finding.
+
+**Names the KIND of channel, never the machine.** "A local hook rebuilds this on merge" is
+a fact about the repo; *which* machine runs the hook is not — see [Per-host deploy target —
+deliberately not a field](#per-host-deploy-target--deliberately-not-a-field), the identical
+ruling this key inherits rather than reopens. Machine-specific mechanism lives in a
+per-host config the repo owns, never in this descriptor.
+
+**Shape rules, the entire audit surface:**
+- Always a **list**. A bare scalar is a finding naming the list form.
+- Every member must be one of the seven values above. An unknown member is a finding.
+- `none` is **exclusive** — `[none]` alone, never combined with another kind. `[none,
+  workflow]` is a finding, not a richer answer.
+- `[]` (empty list) is a finding pointing at `[none]` — an empty list is not an answer.
+- **Omission means undeclared, never `none`** — the identical asymmetry `exposure` carries,
+  for the identical reason: declaring that nothing runs this code anywhere is a claim about
+  *absence* that nothing here can verify, so only a human may write it down. An agent may
+  *propose* adding a channel it found evidence for; it may never write `[none]`.
+
+**Why `procedure` and not `manual`.** `deploy: manual` is a promotion-trigger claim (a human
+runs a documented release procedure); `channels: [procedure]` is a "what runs this" claim (a
+human builds/installs/restarts from a checkout). Reusing `manual` for both would restate the
+same word for two different questions — exactly the conflation this axis exists to undo.
+`deploy: none` names the absence of a promotion trigger; it is not evidence about `channels`
+either way — three of the seven observed paths this axis was built from were found under a
+repo declaring `deploy: none`, so no rule may ever conclude a `deploy: none` repo's channel
+set from `deploy` alone.
+
+**An unintended channel is a finding, never a value.** A working tree file-synced between
+machines with git metadata deliberately excluded is a bug, not a deployment strategy — the
+model must not normalise it into a legal member of this list. The full argument, including
+what a file-synced working tree costs a `writes: serial` repo, lives in CONVENTIONS.md §2,
+"Channels" — read there for the argument; this page states the field.
+
+**The one advisory, and only one.** The audit emits exactly one: `channels: [none]`
+together with a fact already authoritative elsewhere in the same descriptor that
+contradicts it — a non-null `production:`, or a `deploy:` other than `none`. It is a `warn`,
+never a `fail`, on `exposure`'s precedent: a `fail` would make declaring the key riskier
+than omitting it. This check is descriptor-internal coherence against fields already
+authoritative — it is deliberately **not** paired with `exposure`, matching
+[`writes`](#writes--optional)'s own "do not add that coupling" instruction. No rule yet
+hunts repo evidence (a workflow file, an installed hook, a service definition) to
+contradict a declared `[none]` — that is a separate, not-yet-started unit; the six kinds
+above are exactly the checkable artifact classes such a check would look for.
+
 ### `ceremony` — optional
 
 ```yaml
@@ -622,6 +693,7 @@ production: null
 deploy: none
 stack: docs + copy-and-own CI templates + audit CLI (no build)
 exposure: released
+channels: [artifact]
 ```
 
 ## Validity rules (what the audit tool checks)
@@ -646,6 +718,9 @@ exposure: released
 | `room` ∈ {`solo`, `team`, `public`} when set | a misspelled value silently read as undeclared |
 | `exposure` ∈ {`none`, `self`, `live`, `released`} when set | a misspelled value silently read as undeclared |
 | `exposure: none` + `production: null` → **advisory** | the both-empty claim ("nothing consumes this, and there is nothing to point at") going unflagged |
+| `channels` is a list, each member ∈ {`workflow`, `hook`, `procedure`, `checkout`, `artifact`, `data`, `none`}, when set | a misspelled or scalar value silently read as undeclared |
+| `channels: [none]` combined with another member, or `channels: []` → **finding** | an empty or self-contradicting answer read as a real one |
+| `channels: [none]` + (`production` non-null or `deploy` ≠ `none`) → **advisory** | the claim "nothing runs this" going unflagged against a fact already on record elsewhere in the same descriptor |
 
 `push-main` on a Tier A repo **is a finding** — a mismatch between the
 mechanism and the tier's contract, not a judgement on the mechanism, and the

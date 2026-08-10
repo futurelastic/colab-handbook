@@ -681,6 +681,19 @@ const VALID_ROOM = new Set(["solo", "team", "public"]);
 // committing the string. Nothing here infers it from GitHub visibility, `production:`,
 // `tier`, or a deploy workflow (project.schema.md "exposure — optional").
 const VALID_EXPOSURE = new Set(["none", "self", "live", "released"]);
+// `channels` names every path by which a commit reaches something that RUNS it — a
+// different question from `deploy`, which names only the trigger that promotes to
+// production (#151, epic #128 §2d). Strictly additive alongside `deploy` in this unit:
+// `deploy` stays authoritative, and no rule here reads `channels` to change a
+// `tier`/`trunk`/`deploy`/`production` finding. A LIST, not a scalar — unlike every other
+// axis here — because a repo can genuinely have several channels open at once (a deploy
+// workflow AND a machine-local hook AND a tag adopters copy out of); a scalar would force
+// picking the most visible one, the exact failure that produced this finding. Omission
+// means undeclared, not "none" — the identical asymmetry `exposure` carries, and for the
+// identical reason: only a human may write down that nothing runs this code anywhere,
+// because every candidate value for an undeclared repo is a claim about an absence that
+// nothing here can verify (project.schema.md "channels — optional").
+const VALID_CHANNELS = new Set(["workflow", "hook", "procedure", "checkout", "artifact", "data", "none"]);
 // `deploy` answers HOW a repo reaches production, never WHETHER it is tier A — the tier
 // test is "does a deploy target exist today?". `manual` describes the honest third case:
 // production exists, but shipping is a human running a documented runbook (rsync, compose
@@ -706,7 +719,7 @@ function auditRepo(target, ctx) {
   // report (and in --json) so the row reads as source-of-truth rather than clean-by-luck:
   // a silent skip is indistinguishable from a check that quietly stopped working.
   const isSelf = isHandbookItself(target);
-  const info = { repo: src.label, kind: src.kind, tier: null, exposure: null, self: isSelf, findings: [] };
+  const info = { repo: src.label, kind: src.kind, tier: null, exposure: null, channels: null, self: isSelf, findings: [] };
 
   const fail = (t) => findings.push({ level: "fail", text: t });
   const warn = (t) => findings.push({ level: "warn", text: t });
@@ -749,6 +762,11 @@ function auditRepo(target, ctx) {
   // reports `null` (undeclared) rather than "none" (declared: nothing consumes this).
   const exposureRaw = "exposure" in (cfg || {}) ? cfg.exposure : null;
   info.exposure = exposureRaw;
+  // Raw, no `?? default` — the identical asymmetry, for the identical reason (#151):
+  // `--json` reports `null` (undeclared) rather than `["none"]` (declared: nothing runs
+  // this code anywhere).
+  const channelsRaw = "channels" in (cfg || {}) ? cfg.channels : null;
+  info.channels = channelsRaw;
 
   if (cfg) {
     if (!VALID_TIERS.has(tier)) fail(`tier is ${JSON.stringify(tier)}, expected "A", "B" or "C"`);
@@ -803,6 +821,40 @@ function auditRepo(target, ctx) {
     // a later unit needs.
     if (exposureRaw === "none" && (production === null || production === "")) {
       warn(`exposure: none and production: null — either nothing is left to reach here, or nobody has answered the exposure question yet. Both read the same to this tool; a human should confirm which`);
+    }
+
+    // ---- channels axis (#151) -------------------------------------------------
+    // Shape + enum sanity, plus exactly one descriptor-internal coherence advisory — the
+    // same restrained shape as room/writes/exposure above. `deploy` stays authoritative in
+    // this unit; nothing here changes any tier/trunk/deploy/production finding, and no
+    // rule couples `channels` to `exposure` (CONVENTIONS.md §2 "Channels", project.schema.md
+    // "channels — optional": deliberately not paired, mirroring the writes axis's own "do
+    // not add one" instruction). No falsifier hunts repo evidence to contradict a declared
+    // `[none]` here — that is #137, a separate, not-yet-started unit; this block only
+    // checks the shape of what was declared.
+    if (channelsRaw !== null) {
+      if (!Array.isArray(channelsRaw)) {
+        fail(`channels is ${JSON.stringify(channelsRaw)}, expected a list (e.g. [workflow]) — a bare scalar is not a valid shape`);
+      } else if (channelsRaw.length === 0) {
+        fail(`channels is an empty list — that is not an answer; declare [none] if nothing runs this code anywhere, or omit the key if undeclared`);
+      } else {
+        const unknown = channelsRaw.filter((c) => !VALID_CHANNELS.has(c));
+        if (unknown.length) {
+          fail(`channels contains ${JSON.stringify(unknown)}, expected members of: ${[...VALID_CHANNELS].join(", ")}`);
+        } else if (channelsRaw.includes("none") && channelsRaw.length > 1) {
+          fail(`channels combines "none" with another value (${JSON.stringify(channelsRaw)}) — "none" means nothing runs this code anywhere and must stand alone`);
+        } else if (
+          channelsRaw.length === 1 &&
+          channelsRaw[0] === "none" &&
+          ((production !== null && production !== "") || (deploy !== null && deploy !== "none"))
+        ) {
+          // The one advisory: "nothing runs this code anywhere" against a fact already
+          // authoritative elsewhere in the same descriptor that says otherwise. `warn`,
+          // never `fail`, on exposure's precedent — a `fail` would make declaring the key
+          // riskier than omitting it.
+          warn(`channels: [none] together with production: ${JSON.stringify(production)} / deploy: ${JSON.stringify(deploy)} — either nothing actually runs this code, or channels was declared before the rest of the descriptor was; a human should confirm which`);
+        }
+      }
     }
 
     // ---- tier <-> trunk coherence ------------------------------------------
