@@ -294,8 +294,10 @@ thoroughness, the rollback obligation, or `ceremony` from `exposure`; `tier` alo
 governs every one of those today. No falsifier contradicts a declared `none`/`self` from repo
 evidence (a tag exists, a stamp elsewhere names this repo, a service definition serves it) —
 that is #137. No mechanism flips authority from `tier` to `exposure` or makes the key required
-— that is #144. No tool asks a repo to answer the exposure question — that is #138 (the
-adoption wizard). And no rule here answers the question for any specific repo other than the
+— that is #144. The exposure question is now asked, in words, by [§9](#9-adopting-this)'s
+shared question set (question 3) — but by a human walking the checklist, not by a tool;
+no automation detects/asks/derives/writes it in one act (that shape is discussed, not yet
+built, on #138). And no rule here answers the question for any specific repo other than the
 one raise recorded in this repo's own `project.yml`, which rests on a human-given answer
 already on record in the epic ruling, not on anything this unit concluded.
 
@@ -565,10 +567,12 @@ one descriptor-internal advisory — nothing more. No falsifier hunts repo evide
 workflow file, an installed hook, a service definition, sync membership) to contradict a
 declared `[none]` — that is #137, and the seven values above are exactly the checkable
 artifact classes such a check would look for. No mechanism flips authority from
-`tier`/`deploy` to `channels`, or makes the key required — that is #144. No tool asks a
-repo to answer the channel question, and the first-time-adoption question set in
-[§9](#9-adopting-this) is unchanged — that is #138 (already blocked on this issue),
-which #142 and #143 in turn wait on. `room`, `exposure`, `ceremony`, and `writes` rules are unchanged; `tier`,
+`tier`/`deploy` to `channels`, or makes the key required — that is #144. The channel
+question is now asked, in words, by [§9](#9-adopting-this)'s shared question set (question
+5, first-time adoption or a sync against a repo predating this axis) — but by a human, not
+by a tool: no automation detects/asks/derives/writes the set in one act yet (#138's
+discussion records the shape such a tool would take; building it is separate work).
+`room`, `exposure`, `ceremony`, and `writes` rules are unchanged; `tier`,
 `trunk`, `deploy`, and `production` stay fully authoritative, and nothing in the fleet, nor
 any outside adopter of this public repo, breaks on this merge.
 
@@ -602,7 +606,11 @@ as before. A repo may also declare
 [`channels:`](project.schema.md#channels--optional) — every path by which a commit
 reaches something that runs it, a different question from `deploy`'s trigger
 ([§2](#channels--by-what-path-does-code-reach-the-thing-that-runs-it)); omitted, undeclared,
-never read as "none".
+never read as "none". The same is true of
+[`room:`](#room--who-else-is-here), [`exposure:`](#exposure--what-consumes-a-merge-here),
+and [`writes:`](#writes--serial-or-isolated-and-the-two-things-that-make-a-branch-mandatory)
+— each optional, each read as undeclared rather than defaulted when absent, and `exposure`
+in particular never defaults to `none`, which is a *declared* claim, not the absence of one.
 
 Mirror the tier as a GitHub **topic** (`tier-a` / `tier-b` / `tier-c`) so `gh repo list
 --topic tier-a` gives a fleet-wide view. The file is the source of truth; the topic is
@@ -1527,9 +1535,57 @@ only. Resolution order: `--config` flag > `~/.colab/repos.txt` > bundled example
 
 ### Any repo, first-time adoption
 
-1. **Determine the tier** — does a deploy target exist *today* ([§2](#2-tiers))? No →
-   Tier B. Yes → does a tag gate production (A), or does the promotion itself deploy (C)?
-2. **Write `.github/project.yml`** ([§3](#3-githubprojectyml--the-marker)).
+1. **Answer the shared question set** — the same five questions [§9](#9-adopting-this)
+   asks a repo predating one of the newer axes ("Predates an axis", below). Each question
+   is asked as a human answers it, not as a schema field name:
+
+   | # | ask it like this | writes | values |
+   |---|---|---|---|
+   | 1 | does a deploy target exist *today* ([§2](#2-tiers))? if yes — does a tag gate production, or does the promotion itself deploy? | `tier` | `A` / `B` / `C` |
+   | 2 | who else works here? | [`room`](#room--who-else-is-here) | `solo` / `team` / `public` |
+   | 3 | **what would break if you merged something wrong here?** | [`exposure`](#exposure--what-consumes-a-merge-here) | `none` / `self` / `live` / `released` |
+   | 4 | one unit of work in flight at a time, or several at once? | [`writes`](#writes--serial-or-isolated-and-the-two-things-that-make-a-branch-mandatory) | `serial` / `isolated` |
+   | 5 | by what path does a commit reach something that runs it? (a list — several may apply) | [`channels`](#channels--by-what-path-does-code-reach-the-thing-that-runs-it) | `workflow` / `hook` / `procedure` / `checkout` / `artifact` / `data` / `none` |
+
+   Question 3 is phrased this way — never "who consumes this?" — per the ruling on #128:
+   the person answering is standing in the repo, not reading a schema, and "what breaks"
+   is the question they can actually answer.
+
+   **Detected, never asked:** `trunk` (the default branch), `stack` and toolchain pins
+   (read from the repo's own manifests), `ports` (existing config or reservations). Do not
+   ask a human something the repo already states.
+
+   **Derived, never asked:** gate count, CI role and thoroughness, ceremony weight, whether
+   a branch is mandatory, the rollback obligation. Every one of these follows from the
+   answers above; a checklist that also prompts for a derived value is exactly how the
+   fields drift apart from each other again (the failure this whole model exists to stop).
+
+   **Two entry states, one set.** A repo with nothing recorded yet asks all five, right
+   now, during first-time adoption. A repo that already adopted before one of the newer
+   axes existed asks only the axes it is missing — same five questions, same wording, at
+   sync time ("Predates an axis", `handbook-sync`). Building this once and pointing both
+   moments at it is the point; do not let a sync grow its own paraphrase of these five
+   rows.
+
+   **Asking is not the same as writing.** A sync (or a first-time adoption interrupted
+   partway through) records a human's answer; it never fills a missing key on its own,
+   and it never "resolves" the `production:`-pairing advisory below by deleting a key
+   that was already declared. Declaring must never be riskier than omitting.
+
+   **The exposure asymmetry survives here too.** An agent walking through this checklist
+   may *propose* `live` or `released` when it finds committed evidence for one (a non-null
+   `production:`, a committed deploy path) — never `none` or `self`. Omission reports as
+   `null` (undeclared, and legal); only a human answer may write down that nothing, or only
+   the room, consumes a merge here.
+
+   **No tool executes this checklist yet.** A human (or an agent transcribing a human's
+   answers) walks through the five rows by hand and writes `.github/project.yml` directly.
+   The shape a future automation should take — a single command that detects, asks only
+   what it must, derives the rest, and writes in one act, the same way `colab template`
+   copies and stamps together — is recorded on #138's discussion; building it is not part
+   of what landed here.
+2. **Write `.github/project.yml`** ([§3](#3-githubprojectyml--the-marker)) with the
+   answers from step 1.
 3. **Create the whole label set — thirteen names, not a subset** (`in-progress`,
    `deps-checked`, `agent-filed`, `epic`, `needs-decision`, `decision-recorded`,
    `needs-plan`, `migration-granted`, `ci-granted`, and the four `delivery:*`), each
@@ -1593,6 +1649,10 @@ Do this **on the day a deploy target exists** — not before.
 6. Swap the topic to `tier-c`/`tier-a`; update the internal project table.
 7. **Tier A only:** tag the first release (on `manual`, tags are still worth cutting).
    Tier C has nothing to tag — the promotion itself is the release.
+8. **Re-answer questions 3 and 5** of the shared question set above — going live is
+   exactly the event that usually moves `exposure` (to `live` or `released`) and adds a
+   channel (`workflow`, at minimum). Leave `room` and `writes` alone unless who works
+   here, or how many units are in flight, genuinely changed too.
 
 Step 1 comes first because `main` only becomes meaningful once something consumes it —
 what must not exist is a `main` that nothing and nobody reads.
@@ -1607,6 +1667,10 @@ unused tag ritual decays exactly like an unused branch.
 2. Update `project.yml`: `tier: A`, `deploy: tag`. `trunk` stays `dev`.
 3. Swap the topic to `tier-a`.
 4. Tag the current `main`, so the first tagged release names what is already live.
+5. **Re-answer question 5** (`channels`) — a tag ritual is itself a new channel
+   (`artifact`, if others will consume the tag) or reinforces `workflow`. Questions 2–4
+   rarely move at this transition; check them only if something about who works here or
+   how work lands actually changed.
 
 The reverse — **A → C**, the fix when a repo declares `tier: A` with `deploy: push-main`
 — is descriptor-only: set `tier: C`, leave the pipeline exactly as it is, swap the topic.
