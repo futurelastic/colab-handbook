@@ -128,26 +128,36 @@ case.
 code-start's notes-file path; §9's steps 3 and 4 and the GitHub half of 7 do not
 apply. Say so in your report rather than leaving them looking undone.
 
-### The tier question blocks — ask it, never infer it
+### The question set blocks — ask it, never infer it
 
-§9's step 1 is a **judgement, and it is not yours to make.** `CLAUDE.md` is explicit:
-a missing marker means treat the repo as Tier B and *propose* the file. Proposing is
-the agent's job; deciding is not.
+§9's step 1 is a **shared question set — five questions, not one** — and every
+answer is a **judgement, not yours to make.** `CLAUDE.md` is explicit about the
+oldest of them: a missing marker means treat the repo as Tier B and *propose* the
+file. Proposing is the agent's job; deciding is not, for `tier` or for any of the
+newer four (`room`, `exposure`, `writes`, `channels`).
 
-Stop and put the question to the human in the form §9 asks it:
+**Do not restate the five rows here** — that is the exact fork §9's own text
+forbids, one section above this one. Link to §9's table, and know the two outcomes
+that matter for how you run a sync:
 
-1. Does a deploy target exist **today** — not soon, today? No → **Tier B**.
-2. If yes: does a **tag** gate production (**A**), or does the `dev` → `main`
-   promotion itself deploy (**C**)?
+- **You may propose, from committed evidence, and never conclude on your own:**
+  a non-null `production:` or a committed deploy path lets you propose `exposure:
+  live` or `released` — never `none` or `self`, because those declare the *absence*
+  of a consumer, which nothing in a checkout can verify. The identical asymmetry
+  §9 states for `exposure` applies to reading a tier off a `Dockerfile`, a URL in
+  a README, or a deploy workflow that may be dormant: guessing costs nothing at
+  the time it is written and misroutes something later. A repo that describes
+  nothing is more honest than one that describes itself wrongly.
+- **Asking is not writing.** When a sync meets a repo missing one of the newer
+  four axes, put §9's question to the human and record the answer — never fill
+  the gap yourself, and never "resolve" the undeclared-pairing advisory
+  (`exposure: none` + `production: null`, `channels: [none]` + a non-null
+  `production`/non-`none` `deploy`) by deleting a key someone already declared.
+  Declaring must never come out riskier than omitting.
 
-Do not read a tier off a `Dockerfile`, a URL in a README, or a deploy workflow that
-may be dormant. The cost of guessing is silent and delayed — a wrong tier misroutes
-deploys, and nothing complains at the time it is written. A repo that describes
-nothing is more honest than one that describes itself wrongly.
-
-Two things not to do while you wait: do not create `dev` "to be ready" (§9 step 9),
-and if the answer is B, `production: null` and `deploy: none` are the finished values,
-not placeholders to revisit.
+Two things not to do while you wait on tier specifically: do not create `dev` "to
+be ready" (§9 step 9), and if the answer is B, `production: null` and
+`deploy: none` are the finished values, not placeholders to revisit.
 
 ### Partial adoption is the normal case — resume, don't restart
 
@@ -156,6 +166,8 @@ Treat §9 as a checklist to **complete**, and probe each step rather than assume
 
 ```sh
 cat .github/project.yml                 # step 2 — present? does its tier match reality?
+                                         #   which of room/exposure/writes/channels are
+                                         #   already declared, so you ask only what is missing
 gh label list --search in-progress      # step 3
 gh repo view --json repositoryTopics    # step 4 — tier-a / tier-b / tier-c
 grep -c "colab-handbook @" CLAUDE.md    # step 5 — the pointer block and its stamp
@@ -286,11 +298,29 @@ and the audit is what catches it:
   This is a GitHub-side change, not a committed one, so it needs no entry in §8's
   commit — but note it in the Issue so the back-fill is recorded. A remote-less repo
   has no labels to create; say so rather than leave it looking undone.
+- **The repo predates an axis.** `room`/`exposure`/`writes`/`channels` did not always
+  exist, so a repo adopted before one of them landed simply has no key for it — legal,
+  and silent everywhere else in the audit. But when the audit can also see that the
+  repo's own `CLAUDE.md` stamp names a handbook version *older than the axis itself*,
+  it reports one extra `warn`: `marker predates the axis model — … run through §9's
+  question set`. That is your cue, not the label back-fill's: put the missing
+  question(s) — [§9](../../CONVENTIONS.md#9-adopting-this)'s shared set, the same
+  wording as first-time adoption — to the repo's own owner, and write the answer into
+  `project.yml`. **Unlike the label back-fill, this DOES belong in §8's commit** — it
+  is a `project.yml` change, not a GitHub-side one.
 - **`ceremony:` is optional, and syncing never adds it uninvited.** Unlike the label
   set, this is a `project.yml` field the repo opts into (project.schema.md#ceremony--optional)
   — omission already behaves as `standard`, so there is nothing to back-fill. Only
   raise it if the repo's own owner asks whether it qualifies for `light`, and never
   set it yourself as part of a routine sync.
+
+**The `ceremony:` rule above is one instance of a general one: asking is not
+writing.** A sync puts a question to a human and records the human's answer; it
+never fills a gap on its own initiative, and it never "cleans up" an advisory
+(the predates-an-axis warn above, or `exposure`'s `production:`-pairing advisory,
+or `channels`' own) by deleting a key someone already declared. Declaring must
+never read as riskier than omitting — a rule that would flip that is a bug, not a
+tidy-up.
 
 Fix what is genuinely wrong; **report what you are unsure about** rather than
 guessing. A `project.yml` that contradicts reality is worse than one that admits it.
@@ -321,8 +351,13 @@ git show --stat                                                 # verify the fil
 
 **If this was an adoption (§2), additionally:**
 
-- The tier was **answered by a human**, not inferred — and the report says who and
-  which of §9's two questions decided it.
+- **Each question in §9's shared set was answered by a human**, not inferred — and
+  the report says who, and which of the five rows (`tier`/`room`/`exposure`/
+  `writes`/`channels`) were actually asked versus already detected/undeclared.
+- **No `exposure` (or any axis) value claiming the absence of a consumer was
+  written unless a human gave it.** An agent may propose `live`/`released` from
+  committed evidence; concluding `none`/`self` on the repo's behalf is exactly the
+  failure this checklist exists to prevent.
 - `colab update .` no longer reports "nothing adopted here yet", and the audit no
   longer reports "repo is undescribed" — pasted onto the Issue as output, not
   summarised as a claim.
@@ -330,3 +365,12 @@ git show --stat                                                 # verify the fil
 - Every step of §9 is either done or explicitly recorded as not applicable (a repo
   with no GitHub remote skips several) — none left ambiguous.
 - Pre-existing branches are untouched.
+
+**If this sync answered a "repo predates an axis" finding (§7), additionally:**
+
+- Every axis the audit flagged as predated is now declared in `project.yml`, with
+  the answer coming from the repo's own owner — never inferred, and never
+  `none`/`self` without that human's say-so.
+- The commit that adds the answer is in §8's commit, not left as a GitHub-side-only
+  note.
+- Re-running the audit no longer reports the predates-an-axis warn for this repo.

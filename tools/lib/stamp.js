@@ -215,6 +215,36 @@ function templateAt(root, ref, name) {
   return null;
 }
 
+// The descriptor axes that entered the model after the original tier/trunk/deploy/production/
+// stack fields — each one is a heading in project.schema.md, added the commit it landed.
+const AXES = ['room', 'exposure', 'writes', 'channels'];
+
+/**
+ * Which of AXES did NOT yet exist in project.schema.md as of `ref` — i.e. which axes this
+ * repo's marker predates, if its CLAUDE stamp names `ref` as the handbook version it was last
+ * synced against. Reuses the same stamp-comparison shape as templateChangedSince/templateAt:
+ * read the schema doc's content AT THAT REF, never at HEAD, because "predates" is a question
+ * about what existed at adoption time, not about what the handbook has since become.
+ *
+ * `verifiable: false` — same posture as an unresolvable stamp elsewhere in this module — means
+ * the ref cannot be read at all (an unfetched tag, a version string that isn't a real ref). The
+ * caller must stay SILENT in that case, not guess; a repo whose stamp names a ref this checkout
+ * cannot resolve is exactly the "look, don't assume" case the rest of the fleet already treats
+ * as unknown rather than as broken.
+ *
+ * A ref that resolves but predates project.schema.md entirely (the file did not exist yet) is
+ * read as "every axis is missing" — `git show` fails per-heading-check below, which already
+ * degrades to "not found" correctly with no extra branch.
+ */
+function axesPredating(root, ref) {
+  const resolves = gitIn(root, ['rev-parse', '--verify', '--quiet', ref + '^{commit}']).ok;
+  if (!resolves) return { verifiable: false, axes: [] };
+  const schema = gitIn(root, ['show', `${ref}:project.schema.md`]);
+  const text = schema.ok ? schema.out : '';
+  const missing = AXES.filter((axis) => !new RegExp('^###\\s+`' + axis + '`', 'm').test(text));
+  return { verifiable: true, axes: missing };
+}
+
 // ---------------------------------------------------------------------------
 // stamps
 // ---------------------------------------------------------------------------
@@ -519,6 +549,7 @@ module.exports = {
   FROZEN_STAMP_NAME, FROZEN_STAMP_FILE, FROZEN_SOURCES, classifyFrozen,
   gitIn, gitCommonDir, isHandbookItself,
   handbookInfo, freezeVersion, templateNames, templateFiles, templateChangedSince, templateAt,
+  AXES, axesPredating,
   stampLine, parseWorkflowStamp, parseClaudeStamp,
   fingerprintHits, workflowProvenance, unstampedFinding,
   looksLikeHandbookWorkflow, looksLikeHandbookClaude,
