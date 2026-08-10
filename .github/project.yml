@@ -37,6 +37,13 @@
 #               public, adopters copy it, and it ships by tag (#128 §2c — a repo can
 #               be tag-published with real downstream adopters while production stays
 #               null, because there is no server to publish a URL for).
+#   channels    OPTIONAL. a LIST of workflow | hook | procedure | checkout | artifact |
+#               data | none. By what path a commit reaches something that runs it —
+#               additive alongside deploy in this unit; deploy stays authoritative
+#               (project.schema.md "channels — optional"). This repo's own channel is
+#               `artifact`: adopters copy files out of a tagged release (the same fact
+#               already on record as exposure: released above). No deploy workflow, no
+#               in-repo or installed hook, no service definition serves this checkout.
 #
 tier: B
 trunk: main
@@ -45,3 +52,4 @@ deploy: none
 stack: docs + copy-and-own CI templates + audit CLI (no build)
 autonomy: auto-trunk
 exposure: released
+channels: [artifact]

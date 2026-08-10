@@ -332,7 +332,7 @@ merge with no evidence trail is unauditable).
 
 ### Writes — serial or isolated, and the two things that make a branch mandatory
 
-**A sixth axis, and the last one this section separates out.** `writes` names which
+**A sixth axis.** `writes` names which
 write-conflict prevention method a repo's sessions default to
 ([`writes`](project.schema.md#writes--optional)) — a different question from `tier`
 (gates to production), `room` (who reads the record), `ceremony` (record-keeping depth),
@@ -400,6 +400,15 @@ invariants exist to protect *other* sessions.
    `production: null` is **not** on this list — `writes: serial` is deliberately not
    coupled to production (above), so a live repo may run solo flow.
 
+**One more shape a `writes: serial` repo can have, spelled out in
+[Channels](#channels--by-what-path-does-code-reach-the-thing-that-runs-it) below: where the
+trunk merge is itself the deploy, trunk-direct ships every commit.** Such a repo may run
+solo flow, but not the trunk-direct half of it as freely as the general rule above implies —
+it keeps a branch and a pre-merge gate for anything it is not willing to put in front of
+users unreviewed, and skips only the worktree. This is a derived constraint from the
+channel, not a new coupling: `writes` still answers the same question it always has, and
+gains no new field.
+
 **The boundary is concurrency reality, not a discipline preference.** A repo more than
 one session touches can never legally run solo flow — the entry gate's own checks are
 false by construction the moment a second session exists. `writes: serial` is necessary
@@ -444,6 +453,11 @@ and **verified by the writer itself**, not merely by whatever spawned it.
   atomicity and no consistency guarantee inside its sync window — two sessions can each
   read "unlocked," each write "held by me," and both proceed *with confidence*, which is
   worse than having no lock at all. A place-claim refuses to acquire from such a path.
+  **This rules only on the lock's own state path** — a distinct fact from the *checkout*
+  itself being file-synced, which is [Channels](#channels--by-what-path-does-code-reach-the-thing-that-runs-it)'s
+  concern below: a repo whose working tree is synced to another machine cannot use
+  `writes: serial` at all, lock-state location aside, because a hold on one checkout stops
+  meaning one machine the moment the path is shared by sync.
 - **Degraded mode: serial falls back to isolated, never to unlocked.** If the lock cannot
   be reached (state unreadable, or the acquire itself is what lives on a synced path), the
   writer is told to use a worktree and branch instead — which needs no lock. Speed is what
@@ -469,6 +483,94 @@ their own local lock on what happens to be the same logical repo is a distribute
 question this convention does not answer. The existing backstop — separate working
 trees, plus git's own push rejection on a stale ref — remains what prevents two machines
 from landing the same conflict undetected.
+
+### Channels — by what path does code reach the thing that runs it?
+
+**Another axis, and the one `deploy:` has been silently standing in for.**
+[`channels`](project.schema.md#channels--optional) names every path by which a commit
+reaches something that *runs* it — a different question from `deploy`, which names only
+the **trigger** that promotes to production. `deploy:` covers roughly two of the paths
+this fleet has actually observed: merge → CI → a deploy workflow, and a hand-run
+procedure. Measured across a real fleet, code reaches something that runs it by at least
+seven distinct routes, and `deploy: none` had come to mean "there is no workflow file,"
+when the honest reading has to be "nothing runs this code anywhere" — three separate
+running services were found declaring exactly that.
+
+| by what path a commit reaches something that runs it | value |
+|---|---|
+| merge → CI → a deploy workflow | `workflow` |
+| a git hook, in-repo or installed on a machine, fires on a git act | `hook` |
+| a human builds/installs/restarts from a checkout, by a documented procedure | `procedure` |
+| a per-machine service definition serves the working tree directly — no build, no copy | `checkout` |
+| a tag or package that adopters/others consume | `artifact` |
+| the process is local; the effect lands in another system's production data | `data` |
+| nothing runs this code anywhere | `none` |
+
+Lowercase, a **list** (a repo can genuinely have several channels open at once — a
+reviewed workflow *and* a machine-local hook *and* a tag adopters copy out of; a scalar
+would force picking the most visible one, the exact failure that produced this finding).
+Full field shape, the omission asymmetry, and the one advisory:
+[`project.schema.md`](project.schema.md#channels--optional) — this section states the
+argument, that page states the field.
+
+**Why this is not the exposure axis again.** [Exposure](#exposure--what-consumes-a-merge-here)
+asks *who consumes a merge*; this asks *by what route a commit reaches the thing that
+runs*. They fail differently: a repo can answer exposure correctly and still have an
+undeclared channel — the consumer is right, the route is invisible. And two repos with
+identical exposure can need completely different care, because one ships by a reviewed
+workflow and the other by a file-sync nobody wrote down.
+
+**Names the KIND of channel; the MACHINE is never in the descriptor.** Several channels
+are inherently machine-local — a hook installed on one host, a service definition, sync
+membership — and `trunk:` already drew this line once: "which line does *this checkout*
+serve" gets no descriptor field, on any tier, because a per-host entry drifts the moment
+a machine is renamed or retired with nothing able to tell a stale entry from a live one
+([§2](#2-tiers), "`trunk:` answers one question only, deliberately"). This axis inherits
+that ruling rather than reopening it: "a local hook rebuilds this on merge" is a fact
+about the repo, worth declaring; *which* machine runs the hook is not, and stays in a
+per-host mechanism the repo owns.
+
+**Intended channels get declared; unintended ones are findings, never values.** A working
+tree file-synced between machines while git metadata is deliberately excluded is a bug,
+not a deployment strategy, and this model must not normalise it into a legal member of
+the list. Two shapes of consequence, described here by what was true rather than by which
+repo it was true of: a running service reporting a build from a dirty working tree at a
+revision matching no commit findable on the machine inspected, while the repo's own
+deploy script *refuses* a dirty tree by design — meaning the binary arrived by a path that
+bypassed the repo's own documented procedure; and a second machine carrying no git
+metadata at all for a repo it was nonetheless running, so a directory-scoped git command
+silently resolved to an enclosing repository and answered confidently about the wrong one.
+
+**Consequence 1 — a file-synced working tree cannot use [`writes: serial`](#writes--serial-or-isolated-and-the-two-things-that-make-a-branch-mandatory).**
+What makes serial safe is a hold on one checkout, and machine-local state is the correct
+home for that hold — but only while a path on one machine means one machine. Sync breaks
+that silently: two machines can each believe they hold the only checkout. The mode is
+**unavailable** until the repo is excluded from the sync; performing the exclusion is
+operations work, not a rule this handbook states. This is a distinct fact from the
+[place-claim](#place-claims--the-writer-verifiable-hold-writes-serial-needs-and-isolation-does-not)
+rule that the *lock's own state* must never live on a synced path — that rules on where the
+lock is stored, this rules on whether the checkout being locked is itself trustworthy as
+"one machine" at all.
+
+**Consequence 2 — where the trunk merge is itself the deploy, trunk-direct ships every
+commit.** This is the one point where `writes` and this axis genuinely interact — not as
+a coupling, but as a derived constraint, the same way [`ceremony`](#ceremony--narration-follows-the-room-recoverability-follows-exposure)
+derives from the room rather than being welded to it: a repo whose `channels` includes a
+path where merging to trunk directly runs the code may still be `writes: serial`, but not
+trunk-direct as freely as the general rule allows — it keeps a branch and a pre-merge gate
+for anything not fit to put in front of users unreviewed, and skips only the worktree.
+
+**What this unit does not do.** It ships the `channels` key, its shape/enum check, and the
+one descriptor-internal advisory — nothing more. No falsifier hunts repo evidence (a
+workflow file, an installed hook, a service definition, sync membership) to contradict a
+declared `[none]` — that is #137, and the seven values above are exactly the checkable
+artifact classes such a check would look for. No mechanism flips authority from
+`tier`/`deploy` to `channels`, or makes the key required — that is #144. No tool asks a
+repo to answer the channel question, and the first-time-adoption question set in
+[§9](#9-adopting-this) is unchanged — that is #138 (already blocked on this issue),
+which #142 and #143 in turn wait on. `room`, `exposure`, `ceremony`, and `writes` rules are unchanged; `tier`,
+`trunk`, `deploy`, and `production` stay fully authoritative, and nothing in the fleet, nor
+any outside adopter of this public repo, breaks on this merge.
 
 ---
 
@@ -496,7 +598,11 @@ Optional toolchain keys (`node:`, `php:`, …) may be added — see [§7](#7-ci-
 A repo keeping a long-lived line declares it in `integration:` — a development-side axis
 with no path to production ([§2](#2-tiers)). A beta/throwaway repo may declare
 [`ceremony: light`](project.schema.md#ceremony--optional); omitted, a repo behaves exactly
-as before.
+as before. A repo may also declare
+[`channels:`](project.schema.md#channels--optional) — every path by which a commit
+reaches something that runs it, a different question from `deploy`'s trigger
+([§2](#channels--by-what-path-does-code-reach-the-thing-that-runs-it)); omitted, undeclared,
+never read as "none".
 
 Mirror the tier as a GitHub **topic** (`tier-a` / `tier-b` / `tier-c`) so `gh repo list
 --topic tier-a` gives a fleet-wide view. The file is the source of truth; the topic is
