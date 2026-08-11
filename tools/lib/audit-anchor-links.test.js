@@ -178,6 +178,39 @@ test('an external http(s) link with a fragment is ignored', () => {
   assert.deepStrictEqual(r.fails, []);
 });
 
+// The three below are #184. The test above passes trivially — its target has no `.md`,
+// so ANCHOR_LINK_RE never captures it and the scheme guard is never reached. Kept as a
+// separate case rather than edited into the ones below, because it exercises a different
+// branch: replacing it would leave the suite no better covered than before, and one case
+// worse.
+
+test('an external http(s) link whose target ENDS IN .md is ignored (#184)', () => {
+  const r = audit(fixture({
+    'docs/x.md': 'See [install](https://example.com/repo/README.md#installation).\n',
+  }));
+  assert.deepStrictEqual(r.fails, []);
+});
+
+test('a protocol-relative //host link ending in .md is ignored — it carries no scheme (#184)', () => {
+  const r = audit(fixture({
+    'docs/x.md': 'See [install](//example.com/repo/README.md#installation).\n',
+  }));
+  assert.deepStrictEqual(r.fails, []);
+});
+
+test('a repo-absolute /path.md#slug still resolves — the // guard must not swallow it (#184)', () => {
+  const r = audit(fixture({
+    'CONVENTIONS.md': '# Conventions\n\n### Who holds this\n\nBody.\n',
+    'docs/x.md': 'See [holders](/CONVENTIONS.md#who-holds-this) and [gone](/CONVENTIONS.md#not-a-slug).\n',
+  }));
+  assert.deepStrictEqual(r.fails.length, 1, r.fails.join(' | '));
+  // Message shape is "anchor #FRAGMENT does not resolve in FILE" (checkAnchorLinks's
+  // `fail(...)` call, audit/audit.mjs), not "FILE#FRAGMENT" — matches the two-piece
+  // assertion style the "nonexistent slug" test above already uses rather than assuming
+  // a concatenated order this check has never produced.
+  assert.match(r.fails[0], /#not-a-slug does not resolve in CONVENTIONS\.md/);
+});
+
 test('a mailto: link is ignored', () => {
   const r = audit(fixture({
     'docs/x.md': 'Contact [us](mailto:team@example.invalid#nope).\n',

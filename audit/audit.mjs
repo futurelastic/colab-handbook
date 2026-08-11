@@ -1394,9 +1394,18 @@ function checkAnchorLinks(src, fail) {
     const scanText = stripCodeForLinkScan(text);
     while ((m = ANCHOR_LINK_RE.exec(scanText))) {
       const [, rawTarget, fragment] = m;
+      // An external target is not a repo-relative path, even though it ends in ".md".
+      // The comment that stood here claimed ANCHOR_LINK_RE's `.md$` requirement already
+      // excluded http(s) — it does not: `https://host/README.md#install` ends in ".md"
+      // exactly as happily as a local file, so it was joined against the linking file's
+      // directory and reported as missing, at `fail` severity, with a mangled path. The
+      // false comment is why the gap survived review, so it is corrected rather than
+      // merely supplemented (#184). Two shapes, because the second carries no scheme:
+      // an absolute URL (`https:`, `mailto:`) and a protocol-relative one (`//host/…`).
+      // Checked BEFORE the repo-absolute `/` branch below — `//host/x.md` starts with
+      // "/" too, and would otherwise be sliced into the path `/host/x.md`.
+      if (rawTarget && (/^[a-z][a-z0-9+.-]*:/i.test(rawTarget) || rawTarget.startsWith("//"))) continue;
       const targetPath = rawTarget ? (rawTarget.startsWith("/") ? rawTarget.slice(1) : join(dir, rawTarget)) : file;
-      // http(s):// and mailto: never match `.md$`, so they are already excluded by
-      // ANCHOR_LINK_RE requiring the target (when present) to end in ".md".
       const normalized = targetPath.split("/").filter((p) => p !== ".").join("/");
       const slugs = slugsFor(normalized);
       if (slugs === null) {
