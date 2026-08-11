@@ -34,6 +34,7 @@ const migrationGrant = require('./lib/migration-grant');
 const decisionRecord = require('./lib/decision-record');
 const ciGrant = require('./lib/ci-grant');
 const ciVerdict = require('./lib/ci-verdict');
+const adopt = require('./lib/adopt');
 const {
   HOST, UserError, normIssueNum, issueTag, claimKey, today, nowISO, hoursSince,
   parseArgs, table, shortRepo,
@@ -4215,6 +4216,171 @@ function cmdConfig(argv) {
 }
 
 // ---------------------------------------------------------------------------
+// adopt — detect / derive / report §9's five-row question set for a repo (#199, commit 1 of 2).
+//
+// Deliberately report-only in this unit: it never prompts, never checks COLAB_HUMAN, and never
+// writes .github/project.yml — see the plan on #199 ("the seam"). Asking a human what could not
+// be detected, and writing the descriptor in one act, are the next commit. What this one gives
+// is useful on its own: read whatever is already declared, detect what the working tree already
+// states, derive what CONVENTIONS.md §7/§9 says follows, and print it — a single command that
+// answers "what does this repo already say about itself, and what is CONVENTIONS.md #9 still
+// asking for", where before a human had to walk the checklist and the schema by hand.
+//
+// The core logic (tools/lib/adopt.js) is pure and injected-io; this function is the one place
+// that touches fs/git for real, matching every other cmd* function in this file.
+// ---------------------------------------------------------------------------
+
+const HELP_ADOPT = `colab adopt [--repo <path>] [--json] [--no-verify]
+
+Report-only, for now — commit 1 of #199. Reads whatever a repo has already declared in
+.github/project.yml, DETECTS what its working tree already states (trunk, stack, channel
+evidence), DERIVES what CONVENTIONS.md §7/§9 says follows from what is on record, and prints a
+report of the FIVE §9 rows — tier, room, exposure, writes, channels. Asking a human what is still
+missing, and writing the descriptor, are the NEXT commit — this one WRITES NOTHING, EVER.
+
+  --repo <path>   repo to inspect (default: git root of cwd)
+  --json          machine-readable — the same structure the text report renders
+  --no-verify     skip running the handbook's own audit against the repo afterward (default: run it)
+
+Each row's state is one of:
+  answered      declared in .github/project.yml
+  legacy read   derived from a declared tier, because exposure itself is undeclared
+                (tools/lib/axis-authority.js — tier -> exposure is a function, not a bijection)
+  detected      not declared, but working-tree evidence proposes a value — never asserted, and
+                never a claim of absence (an agent may propose \`live\`/\`released\`/a channel it
+                found evidence for; it may never propose \`none\`/\`self\` — CONVENTIONS.md §2)
+  missing       not declared, and nothing here detects it
+
+Detected, never asked (CONVENTIONS.md §9): the default branch (trunk), stack candidates (from
+manifest presence), declared ports, and channel candidates (a version-shaped git tag, a committed
+deploy-*.yml, a hooks dir or non-default core.hooksPath).
+
+Derived, never asked: gate count, CI's role (from writes) and depth (from exposure), the ceremony
+weight (from room), whether a branch is mandatory (from writes), the recovery obligation (from
+exposure), and the legacy tier LETTER as a pure function of (production, deploy) — never of
+exposure (tools/lib/adopt.js:deriveTier).
+
+The verify step runs audit/audit.mjs from THIS handbook checkout, when it is available — a frozen
+install (~/.colab/bin/colab) carries tools/ only, not audit/, and degrades to a note rather than
+failing, the same way \`colab template\` degrades when templates/ is missing.
+`;
+
+const ADOPT_ROW_ORDER = ['tier', 'room', 'exposure', 'writes', 'channels'];
+
+/** `.githooks`, `core.hooksPath` — the one channel-evidence source `adopt.js` cannot read via a
+ * plain file op, so it is gathered here (git config) rather than folded into the io adapter. */
+function adoptGitExtras(repoAbs) {
+  const trunk = git.detectTrunk(repoAbs);
+  const hp = git.git(['config', '--get', 'core.hooksPath'], repoAbs);
+  const hooksPath = hp.ok && hp.stdout ? hp.stdout : null;
+  let hooksDirFiles = [];
+  try { hooksDirFiles = fs.readdirSync(path.join(repoAbs, '.githooks')); } catch (_) { /* absent */ }
+  return { trunk, hooksPath, hooksDirFiles };
+}
+
+/** The `{ readFile, listDir, tags }` adapter tools/lib/adopt.js asks for — matching the local
+ * shape of makeSource() in audit/audit.mjs, never throwing, degrading to null/[] on any miss. */
+function adoptIo(repoAbs) {
+  return {
+    readFile: (p) => {
+      const f = path.join(repoAbs, p);
+      try { return fs.existsSync(f) ? fs.readFileSync(f, 'utf8') : null; } catch (_) { return null; }
+    },
+    listDir: (p) => {
+      const d = path.join(repoAbs, p);
+      try { return fs.existsSync(d) ? fs.readdirSync(d) : []; } catch (_) { return []; }
+    },
+    tags: () => {
+      const r = git.git(['tag', '--list'], repoAbs);
+      if (!r.ok) return null;
+      return r.stdout.split('\n').map((s) => s.trim()).filter(Boolean);
+    },
+  };
+}
+
+/** Runs the handbook's own audit against `repoAbs`, degrading to a note (never throwing) when
+ * audit/ is not part of this install — the frozen copy carries tools/ only. */
+function adoptVerify(repoAbs) {
+  const { root } = handbookPaths();
+  const auditFile = path.join(root, 'audit', 'audit.mjs');
+  if (!fs.existsSync(auditFile)) {
+    return { ran: false, note: 'audit/ is not part of this install (frozen copy carries tools/ only) — run `colab adopt` from a working-tree checkout of colab-handbook to verify, or pass --no-verify to silence this note' };
+  }
+  const r = spawnSync('node', [auditFile, '--local', repoAbs, '--json'], { encoding: 'utf8' });
+  try {
+    const parsed = JSON.parse(r.stdout || '{}');
+    const result = (parsed.results && parsed.results[0]) || null;
+    return { ran: true, ok: !!(result && result.ok), findings: (result && result.findings) || [], gates: result ? result.gates : null };
+  } catch (_) {
+    return { ran: true, ok: false, error: 'could not parse audit output', raw: (r.stdout || '') + (r.stderr || '') };
+  }
+}
+
+function fmtVal(v) { return v === null || v === undefined ? '—' : (typeof v === 'string' ? v : JSON.stringify(v)); }
+
+function cmdAdopt(argv) {
+  const opts = parseArgs(argv, {
+    values: { '--repo': 'repo' },
+    flags: { '--json': 'json', '--no-verify': 'noVerify', '-h': 'help', '--help': 'help' },
+  });
+  if (opts.help) return print(HELP_ADOPT);
+
+  const repoAbs = resolveRepo(opts);
+  const io = adoptIo(repoAbs);
+  const extra = adoptGitExtras(repoAbs);
+  const report = adopt.detect(io, extra);
+  const verify = opts.noVerify ? null : adoptVerify(repoAbs);
+
+  if (opts.json) {
+    print(JSON.stringify({ repo: repoAbs, ...report, verify }, null, 2));
+    return 0;
+  }
+
+  print(`colab adopt — ${repoAbs}`);
+  print(report.descriptorExists ? '.github/project.yml exists.' : 'No .github/project.yml — nothing declared yet.');
+  print('');
+  print(table(
+    ADOPT_ROW_ORDER.map((name) => {
+      const row = report.rows[name];
+      return [name, row.state, fmtVal(row.value), row.source || '—'];
+    }),
+    ['ROW', 'STATE', 'VALUE', 'SOURCE'],
+  ));
+  print('');
+  const t = report.detected.trunk;
+  print(`detected trunk: ${t.detected || '(unknown)'}${t.declared !== null ? `  (declared: ${t.declared}${t.agree === false ? ' ⚠ disagrees with detected' : ''})` : ''}`);
+  print(`stack candidates: ${report.detected.stackCandidates.length ? report.detected.stackCandidates.join(', ') : '(none found)'}`);
+  print(`declared ports: ${fmtVal(report.detected.ports)}`);
+  print(`legacy tier letter, derived from (production, deploy): ${report.legacyTierLetter ?? '(undetermined — production is set but deploy matches none of push-main/tag/manual)'}`);
+  print('');
+  print('Derived consequences:');
+  const c = report.consequences;
+  print(`  gate count             ${fmtVal(c.gateCount)}`);
+  print(`  CI role (from writes)  ${c.ciRole}`);
+  print(`  CI depth (from exposure) ${c.ciDepth ?? '(undetermined — exposure has no axis of record)'}`);
+  print(`  ceremony weight (from room) ${c.ceremonyWeight ?? '(undetermined — room undeclared)'}`);
+  print(`  branch mandatory        ${c.branchMandatory}`);
+  print(`  recovery obligation     ${c.recoveryObligation ?? '(undetermined — exposure has no axis of record)'}`);
+  print('');
+  print('Remaining §9 steps — this command performs none of them:');
+  for (const s of report.remaining) print(`  ${s.n}. ${s.text}`);
+
+  if (verify) {
+    print('');
+    if (!verify.ran) {
+      warn(verify.note);
+    } else if (verify.error) {
+      warn(`verify: ${verify.error}`);
+    } else {
+      print(`Verify (audit): ${verify.ok ? '✓ clean' : `⚠ ${verify.findings.length} finding(s)`}`);
+      for (const f of verify.findings) print(`  [${f.level || '?'}] ${f.text || JSON.stringify(f)}`);
+    }
+  }
+
+  return 0;
+}
+
+// ---------------------------------------------------------------------------
 // template — copy a handbook workflow template into a repo, STAMPED with the
 // handbook's current version. The stamp (`# colab-handbook: <name> @ <version>`) is
 // what audit/audit.mjs reads to tell an adopter their copy has fallen behind a changed
@@ -7018,6 +7184,10 @@ Commands:
   release-notes [<range>] [--repo P] [--out F] [--headline "..."]   grouped Markdown release summary
   release-status [<repo>...] [--repo P] [--json]   merged-but-UNRELEASED lag on tag-gated repos —
                                         read-only, never tags (#81)
+  adopt [--repo P] [--json] [--no-verify]             REPORT-ONLY (#199 commit 1 of 2): detect +
+                                        derive + report §9's five rows (tier, room, exposure,
+                                        writes, channels) for a repo. Writes nothing — asking and
+                                        writing the descriptor are a later command.
   template [<name>] [--dest F] [--repo P] [--force]   copy a handbook workflow template, stamped
   update [<repo>...] [--apply] [--json] [--quiet]   sweep the fleet for stamped copies that fell
                                         behind a changed template; --apply refreshes the pristine
@@ -7077,6 +7247,7 @@ function main(argv) {
     case 'release-notes': return cmdReleaseNotes(rest);
     case 'release-status': return cmdReleaseStatus(rest);
     case 'template': return cmdTemplate(rest);
+    case 'adopt': return cmdAdopt(rest);
     case 'update': return cmdUpdate(rest);
     case 'register': return cmdRegister(rest);
     case 'config': return cmdConfig(rest);

@@ -59,6 +59,13 @@ const { missingConventionLabels } = require("../tools/lib/labels.js");
 // every other cross-tool reading in this file is: two implementations of "which key governs"
 // is exactly the two-places-drift disease this handbook exists to kill.
 const axisAuthority = require("../tools/lib/axis-authority.js");
+// #137's falsifier evidence-gathering — shared with `colab adopt` (#199) for the identical
+// reason: `install.sh` freezes tools/colab + tools/lib/ only, nothing under audit/ is frozen,
+// so anything both need has to live in tools/lib/. This module only gathers evidence; the
+// severity policy built on top of it (warn vs fail, the 2-of-5 reach) stays here.
+const {
+  VERSION_TAG_RE, versionShapedTags, DEPLOY_BASENAME_RE, consumerEvidence, describeEvidence,
+} = require("../tools/lib/consumer-evidence.js");
 const {
   handbookInfo, templateNames, templateChangedSince, cmpParts, cmpSemver,
   parseWorkflowStamp, parseClaudeStamp, workflowProvenance, unstampedFinding, looksLikeHandbookClaude,
@@ -823,7 +830,7 @@ const VALID_CHANNELS = new Set(["workflow", "hook", "procedure", "checkout", "ar
 //
 // Reach is deliberately 2 of 5 possible falsifiers, the two answerable from what is already
 // on disk or one `gh api` call, with no per-host or cross-repo reads:
-//   F1 — a version-shaped tag exists (versionShapedTags below).
+//   F1 — a version-shaped tag exists (versionShapedTags, tools/lib/consumer-evidence.js).
 //   F5 — a committed deploy path exists: a `deploy-*`/`release-*` workflow (already
 //        enumerated by the tier checks — zero new IO), or a `deploy`/`release` basename
 //        file directly under the repo root, scripts/, or bin/ (no recursion, so a
@@ -857,58 +864,11 @@ const VALID_CHANNELS = new Set(["workflow", "hook", "procedure", "checkout", "ar
 // `channelsRaw`. Each caller below decides independently, from its OWN key only, whether to
 // gather evidence at all; neither key's finding is used to compute the other's.
 
-// "v2.1.0", "1.4", "v3.0.0-rc1" count; "backup-2024" does not — no dot-separated numeric
-// parts, so nothing about it claims to be a release. Calibration knob, not a settled
-// grammar: real-world tag schemes vary, and a repo with an unusual-but-real scheme is a
-// false negative here (silence), never a false positive.
-const VERSION_TAG_RE = /^v?\d+\.\d+(?:\.\d+)*(?:[-+][0-9A-Za-z.]+)*$/;
-
-function versionShapedTags(tags) {
-  return (tags || []).filter((t) => VERSION_TAG_RE.test(t));
-}
-
-// A `deploy`/`release` basename, any single extension (or none — a plain shell script often
-// carries none). Matched only against a NON-recursive listing of the repo root, scripts/,
-// and bin/ — the exclusion of templates/, examples/, docs/ in #137's plan is achieved simply
-// by never looking there, not by an exclude list.
-const DEPLOY_BASENAME_RE = /^(deploy|release)(\.[A-Za-z0-9]+)?$/i;
-
-// Cheap repo-local evidence that something OTHER than "nothing" consumes this repo. Never
-// throws, never returns null itself — every source it reads (tags(), listDir()) already
-// degrades to null/[] on failure, and an unreadable source just means less evidence, not an
-// error. Takes `workflows` from the caller (already listed by the tier checks) rather than
-// re-listing .github/workflows — the "zero new IO" half of F5.
-function consumerEvidence(src, workflows) {
-  const versionTags = versionShapedTags(src.tags());
-
-  const deployPaths = [];
-  for (const wf of workflows) {
-    if (/^(deploy|release)[-.]/.test(wf)) deployPaths.push(`.github/workflows/${wf}`);
-  }
-  for (const dir of ["", "scripts", "bin"]) {
-    for (const f of src.listDir(dir)) {
-      if (DEPLOY_BASENAME_RE.test(f)) deployPaths.push(dir ? `${dir}/${f}` : f);
-    }
-  }
-
-  return { versionTags, deployPaths };
-}
-
-// One line of prose describing whatever consumerEvidence() found, or "" when it found
-// nothing — the caller stays silent on "".
-function describeEvidence(evidence) {
-  const bits = [];
-  if (evidence.versionTags.length) {
-    const [first, ...rest] = evidence.versionTags;
-    bits.push(`a release artifact exists (tag ${first}${rest.length ? ` +${rest.length} more` : ""})`);
-  }
-  if (evidence.deployPaths.length) {
-    const shown = evidence.deployPaths.slice(0, 3);
-    const more = evidence.deployPaths.length > 3 ? ", …" : "";
-    bits.push(`a committed deploy path exists (${shown.join(", ")}${more})`);
-  }
-  return bits.join("; ");
-}
+// VERSION_TAG_RE, versionShapedTags, DEPLOY_BASENAME_RE, consumerEvidence and describeEvidence
+// moved to tools/lib/consumer-evidence.js (#199) — install.sh freezes tools/lib/ but not audit/,
+// so `colab adopt` needed them there. Consumed above via the same createRequire this file already
+// uses for stamp.js/labels.js/axis-authority.js. No behaviour change: verified with a byte-diff of
+// `audit.mjs --local . --json` before/after the move.
 
 // The raw right-hand side of a top-level `key: value` line in flat project.yml text, comment
 // stripped, or undefined when the key is absent. Deliberately not parseFlatYaml: this only

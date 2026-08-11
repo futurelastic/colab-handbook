@@ -724,6 +724,7 @@ Run `colab <cmd> --help` for full detail.
 | `update [<repo>...] [--apply] [--json] [--quiet]` | sweep the fleet registry for stamped copies that fell behind a changed template; `--apply` refreshes the **pristine** ones. Never commits; never touches a hand-edited copy (see below) |
 | `register [<path>] [--remove] [--list]` | add/remove a repo in **both** fleet registries at once; `--list` flags drift (see below) |
 | `config [show \| add-repo P \| rm-repo P \| add-reserved-file P \| rm-reserved-file P \| set K V]` | manage config (`set` keys: `claimTTLHours`, `portRange`, `worktreeSubdir`, `notifyUrl`, `journal`) |
+| `adopt [--repo P] [--json] [--no-verify]` | **report-only, for now** (#199, commit 1 of 2) — detect + derive + report CONVENTIONS.md §9's five rows (`tier`, `room`, `exposure`, `writes`, `channels`) for a repo. Writes nothing: asking a human what could not be detected, and writing `.github/project.yml` in one act, are a later command |
 
 ### Release notes
 
