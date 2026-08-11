@@ -289,9 +289,11 @@ exists to separate, and would over-fire on precisely the transitional and tag-pu
 just ruled legal above.
 
 **What this unit does not do.** It ships the key, its four-value enum check, and the one
-`production:` pairing advisory — nothing more. No rule yet derives gate count, CI role or
-thoroughness, the rollback obligation, or `ceremony` from `exposure`; `tier` alone still
-governs every one of those today. No falsifier contradicts a declared `none`/`self` from repo
+`production:` pairing advisory — nothing more. No rule yet derives production **gate
+count** from `exposure`; `tier` alone still governs that today (#144's authority-flip, not
+this unit). [CI's role and thoroughness](#ci--what-it-is-follows-writes-how-much-follows-exposure)
+and the [rollback obligation](#recovery--what-must-exist-to-undo-a-merge) are now derived
+— by later units reading this key, not by this one. No falsifier contradicts a declared `none`/`self` from repo
 evidence (a tag exists, a stamp elsewhere names this repo, a service definition serves it) —
 that is #137. No mechanism flips authority from `tier` to `exposure` or makes the key required
 — that is #144. The exposure question is now asked, in words, by [§9](#9-adopting-this)'s
@@ -1422,6 +1424,16 @@ On a `deploy: manual` repo the sequence is the same, the last step performed by 
 promote, tag, then run the runbook — promotion there always requires a human, and
 `promotion: main-loop` cannot say otherwise.
 
+**Human gate count follows [exposure](#exposure--what-consumes-a-merge-here), not
+preference.** An up-front yes can authorize an intent; it cannot authorize a result
+nobody has seen. Where a merge's only consumer is the room itself (`self`), intent and
+result share one reader, so [solo flow](#solo-flow--trunk-direct-issue-on-demand-entry-gated-writes-serial)'s
+single decision-time authorization already covers the whole cycle — decide, lock, do,
+commit, record, unlock — with no separate look at the diff required. Where a merge
+reaches beyond the room (`live`, `released`), the two audiences differ, so the gates must
+too: approve the idea, then look at what actually shipped. The permission ladder below is
+that second case, at full length.
+
 **The permission ladder, one rung per boundary:** **ship** (branch→trunk, gated by
 `autonomy:`) · **promote** (trunk→main, gated by `deploy:`+`promotion:` — safe to
 automate only where deploy is tag-gated) · **release** (the tag — always a human act, on
@@ -1471,6 +1483,45 @@ reverting.
 longer is. Measured: three repos whose trunks had moved to `dev` while CI still fired
 only on `[main, master]` — every trunk merge ran zero checks, silently. When a repo's
 trunk moves, updating the CI triggers is part of the move, and the audit checks it.
+
+### CI — what it is follows writes, how much follows exposure
+
+**What CI *is* comes from
+[writes](#writes--serial-or-isolated-and-the-two-things-that-make-a-branch-mandatory), not
+from tier.** With a branch, CI runs before the merge — a gate, something to inspect before
+a unit lands. Trunk-direct, it runs after the push — an alarm, not a filter, exactly as
+[Recovery](#recovery--what-must-exist-to-undo-a-merge) already found for solo flow. Same
+file, two different instruments; reading a post-push run as a gate is the mistake that
+leaves trunk-direct trusting something caught what an alarm can only report.
+
+**How thorough it must be comes from [exposure](#exposure--what-consumes-a-merge-here).**
+`none` and `self` answer only to the room; `live` and `released` answer to a consumer with
+no way to ask a clarifying question, so more has to be caught before it reaches them.
+
+**On low-exposure repos the gate is often not CI at all.** A deploy script that refuses a
+dirty tree is a stronger gate than any CI run, because it is the last thing before the
+artifact exists. The rule is therefore not "trunk-direct needs green CI" — it is
+**trunk-direct needs a gate somewhere other than CI's alarm**, at the deploy step if
+nowhere else. Where nothing gates the deploy either, trunk-direct is unsafe, and that is
+the finding to report — not a CI run trusted to be the filter it structurally cannot be.
+
+**Provision CI for planned exposure, not current.** A repo declaring `exposure: none`
+with a named `production:` — the transitional pairing
+[Exposure](#exposure--what-consumes-a-merge-here) already flags — should already run at
+`live` thoroughness, free to be red, rather than discover the gap on cutover day: the one
+day it is most expensive to.
+
+**Test contracts follow the named consumer**, once
+[channels](#channels--by-what-path-does-code-reach-the-thing-that-runs-it) names one: for
+`artifact`, the test that matters is whether a fresh adopter's copy works, not a unit test
+of the generator; for `live`/`released`, the promotion or release path is the product; for
+`self`, whatever would break the room's own ability to work. A generator's internal tests
+passing proves nothing about what ships, if nothing names who actually consumes it.
+
+**No `ci:` field.** A repo needing something its copied templates don't cover edits that
+workflow directly — copy-and-own already permits it, and the audit already classifies the
+edit as drift to reconcile, the same treatment every other stamped file gets. See
+[`project.schema.md`](project.schema.md#ci--deliberately-not-a-field).
 
 ### Toolchain versions — strict precedence
 

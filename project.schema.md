@@ -393,9 +393,13 @@ can verify. Raising exposure (proposing `live`/`released` from a committed `prod
 or a deploy workflow) is a narrower claim an agent may propose; lowering it never is. The
 audit enum-checks the value and pairs it with `production:` as above, and nothing more —
 **no rule couples `exposure` to `tier`, deliberately, matching [`writes`](#writes--optional)'s
-own "do not add one" instruction**, and no rule yet derives gate count, CI thoroughness,
-rollback obligation, or ceremony from it. A later unit may add any of that; until it does,
-`exposure` is a declared fact whose only enforced consequence is the one advisory above.
+own "do not add one" instruction**, and no rule yet derives production gate count from it —
+that stays `tier`'s until a later unit flips authority. CI role and thoroughness and the
+rollback obligation are now derived from it
+([CONVENTIONS.md, CI](CONVENTIONS.md#ci--what-it-is-follows-writes-how-much-follows-exposure);
+[CONVENTIONS.md, Recovery](CONVENTIONS.md#recovery--what-must-exist-to-undo-a-merge)).
+`exposure` otherwise stays a declared fact whose only enforced consequence is the one
+advisory above.
 
 ### `channels` — optional
 
@@ -465,6 +469,20 @@ authoritative — it is deliberately **not** paired with `exposure`, matching
 hunts repo evidence (a workflow file, an installed hook, a service definition) to
 contradict a declared `[none]` — that is a separate, not-yet-started unit; the six kinds
 above are exactly the checkable artifact classes such a check would look for.
+
+### `ci` — deliberately not a field
+
+Not modeled here, on purpose
+([CONVENTIONS.md, CI](CONVENTIONS.md#ci--what-it-is-follows-writes-how-much-follows-exposure)).
+What CI *is* — gate or alarm — is derived from `writes`; how thorough it must be is
+derived from `exposure`. A `ci:` field would let either drift from the axis that already
+answers it, the identical failure every other axis on this page exists to prevent.
+
+A repo needing something its copied workflow doesn't cover edits that file directly.
+Copy-and-own already permits this, and the audit already classifies the edit as drift to
+reconcile, not a violation — the same treatment [`templates/`](templates/) gives every
+other stamped file. Nothing here refuses customization; it refuses a *declared summary* of
+behavior the `writes`/`exposure` axes already determine.
 
 ### `ceremony` — optional
 
