@@ -371,17 +371,34 @@ relationship word, the old→new mapping from `tier`, and the reasoning behind t
 `production:` pairing rule below all live in CONVENTIONS.md §2, "Exposure" — read there for
 the argument; this page states the field.
 
-**The `production:` pairing — one advisory, and only one.** `exposure` and `production`
-are two flat sibling keys, read independently; there is no nested or paired syntax. The
-audit emits exactly one advisory: `exposure: none` **and** `production: null` together — the
-claim that both nothing consumes this repo and there is nothing to point at. It is a `warn`,
-never a `fail`: the descriptor is not lying, it is unanswered, and answering it is a human
-act ([CONVENTIONS.md §2, *Exposure*](CONVENTIONS.md#exposure--what-consumes-a-merge-here)) —
-a `fail` here would make declaring the key riskier than omitting it. Every other combination
+**The `production:` pairing advisory.** `exposure` and `production` are two flat sibling
+keys, read independently; there is no nested or paired syntax. `exposure: none` **and**
+`production: null` together — the claim that both nothing consumes this repo and there is
+nothing to point at — is an advisory. It is a `warn`, never a `fail`: the descriptor is not
+lying, it is unanswered, and answering it is a human act
+([CONVENTIONS.md §2, *Exposure*](CONVENTIONS.md#exposure--what-consumes-a-merge-here)) — a
+`fail` here would make declaring the key riskier than omitting it. Every other combination
 is clean, including `live`/`released` **with `production: null`** — a repo that ships by tag
 to real adopters and runs no server (this repo is exactly that shape) is not a finding; a
 rule that made it one would re-assert the "exposure means a server" defect this axis exists
 to remove.
+
+**The falsifier and duration report (#137).** The pairing advisory above is
+descriptor-internal; it cannot confirm or deny a "nothing consumes this" claim against the
+outside world. `exposure: none` additionally gets **evidence falsification**: the audit
+looks for a version-shaped git tag, or a committed deploy path (a `deploy-*`/`release-*`
+workflow, or a `deploy`/`release` script at the repo root/`scripts/`/`bin/`) — cheap
+repo-local artifacts that usually accompany a consumer. Finding one is a `warn` naming the
+evidence, never a `fail` — a repo released years ago and dead since is truthfully
+`exposure: none` today, tag and all, so this is a prompt to look again, not a contradiction
+proven. Alongside it, a **duration report**: how long the current value has held, computed
+from the descriptor's own git history (never a new field), silent under roughly six months
+and degrading to a lower bound ("at least N months") when the exact origin is not visible.
+Both are gated on `exposure` being exactly `"none"` — every other value, including
+undeclared, triggers neither and does no new IO. `exposure: self` gets neither: it claims a
+consumer set bounded by the room, and a tag or deploy script is perfectly compatible with a
+team shipping to itself. Full falsifier set, what shipped and what did not, and why:
+`audit/README.md`.
 
 **Omission means undeclared, not `none`.** Nothing infers a repo's exposure from its GitHub
 visibility, its `production:` value, its `tier`, or a deploy workflow — a wrong inference
@@ -459,16 +476,30 @@ model must not normalise it into a legal member of this list. The full argument,
 what a file-synced working tree costs a `writes: serial` repo, lives in CONVENTIONS.md §2,
 "Channels" — read there for the argument; this page states the field.
 
-**The one advisory, and only one.** The audit emits exactly one: `channels: [none]`
-together with a fact already authoritative elsewhere in the same descriptor that
-contradicts it — a non-null `production:`, or a `deploy:` other than `none`. It is a `warn`,
-never a `fail`, on `exposure`'s precedent: a `fail` would make declaring the key riskier
-than omitting it. This check is descriptor-internal coherence against fields already
+**The descriptor-internal coherence advisory.** `channels: [none]` together with a fact
+already authoritative elsewhere in the same descriptor that contradicts it — a non-null
+`production:`, or a `deploy:` other than `none` — is an advisory. It is a `warn`, never a
+`fail`, on `exposure`'s precedent: a `fail` would make declaring the key riskier than
+omitting it. This check is descriptor-internal coherence against fields already
 authoritative — it is deliberately **not** paired with `exposure`, matching
-[`writes`](#writes--optional)'s own "do not add that coupling" instruction. No rule yet
-hunts repo evidence (a workflow file, an installed hook, a service definition) to
-contradict a declared `[none]` — that is a separate, not-yet-started unit; the six kinds
-above are exactly the checkable artifact classes such a check would look for.
+[`writes`](#writes--optional)'s own "do not add that coupling" instruction.
+
+**The falsifier and duration report (#137).** The coherence advisory above only checks
+`channels` against other fields in the SAME descriptor; it says nothing about the outside
+world. `channels: [none]` additionally gets **evidence falsification** — the identical
+artifact hunt `exposure: none` gets (a version-shaped git tag, or a committed deploy path:
+a `deploy-*`/`release-*` workflow, or a `deploy`/`release` script at the repo root/
+`scripts/`/`bin/`), because a tag is evidence against BOTH claims at once. A `warn` naming
+the evidence, never a `fail`, for the identical reason. Alongside it, the same **duration
+report** as `exposure`: how long `channels: [none]` has held, from git history, silent
+under roughly six months, degrading to a lower bound when the exact origin is not visible.
+Both gated on `channels` being exactly `["none"]`. Of the artifact classes this axis
+enumerates, only a tag (`artifact`) and a committed deploy path (`workflow`) are checked
+today — a per-machine service definition (`checkout`), an installed hook (`hook`), sync
+membership, and a build/restart procedure (`procedure`/`data`) are each a **named,
+deliberate deferral**, not an oversight: `audit/README.md` states why for each. This check
+stays descriptor-internal-only in one sense and world-facing in another; it is never paired
+with `exposure` regardless — no rule reads one key to decide the other's finding.
 
 ### `ci` — deliberately not a field
 

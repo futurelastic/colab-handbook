@@ -193,30 +193,97 @@ the handbook's current version, so a scheduled run is self-documenting.
   hard finding on every repo regardless of `ceremony`, because build/secret-scan
   integrity is never optional.
 
-- **`exposure:` enum + one pairing advisory (#132)** — an optional field naming what
+- **`exposure:` enum + pairing advisory (#132)** — an optional field naming what
   consumes a merge here (project.schema.md#exposure--optional), additive alongside `tier`;
   `tier` stays fully authoritative and no rule couples the two. An unrecognised value is a
-  **finding**; the one coherence check is `exposure: none` + `production: null` together
-  (both-empty) — a **warn**, never a `fail`, because the descriptor is unanswered rather
-  than lying, and answering it is a human act this unit does not perform. Omitting
-  `exposure:` entirely reports `null` (undeclared) in `--json`, never `"none"` — there is
-  no default, by design (`CONVENTIONS.md` §2, *Exposure*, "lowering exposure is a human
-  act"). Every other pairing, including `live`/`released` with `production: null`, is
+  **finding**; the descriptor-internal coherence check is `exposure: none` + `production:
+  null` together (both-empty) — a **warn**, never a `fail`, because the descriptor is
+  unanswered rather than lying, and answering it is a human act this unit does not perform.
+  Omitting `exposure:` entirely reports `null` (undeclared) in `--json`, never `"none"` —
+  there is no default, by design (`CONVENTIONS.md` §2, *Exposure*, "lowering exposure is a
+  human act"). Every other pairing, including `live`/`released` with `production: null`, is
   clean.
 
-- **`channels:` shape/enum check + one coherence advisory (#151)** — an optional field
+- **`channels:` shape/enum check + coherence advisory (#151)** — an optional field
   naming every path by which a commit reaches something that *runs* it
   (project.schema.md#channels--optional), additive alongside `deploy`; `deploy` stays
   fully authoritative and no rule couples the two. Unlike every other axis here it is a
   **list**, because a repo can genuinely have several channels open at once. A bare
   scalar, an empty list, an unknown member, or `[none]` combined with another value are
-  each a **finding**; the one coherence check is `channels: [none]` together with a
-  non-null `production` or a non-`none` `deploy` — a **warn**, never a `fail`, on
-  `exposure`'s precedent. Omitting `channels:` entirely reports `null` (undeclared) in
-  `--json`, never `["none"]` — there is no default, by design (`CONVENTIONS.md` §2,
-  *Channels*, the same "declaring absence is a human act" asymmetry `exposure` carries).
-  No falsifier hunts repo evidence against a declared `[none]` — that is a separate,
-  not-yet-started unit.
+  each a **finding**; the descriptor-internal coherence check is `channels: [none]`
+  together with a non-null `production` or a non-`none` `deploy` — a **warn**, never a
+  `fail`, on `exposure`'s precedent. Omitting `channels:` entirely reports `null`
+  (undeclared) in `--json`, never `["none"]` — there is no default, by design
+  (`CONVENTIONS.md` §2, *Channels*, the same "declaring absence is a human act" asymmetry
+  `exposure` carries).
+
+- **`exposure`/`channels` falsifiers + duration report (#137)** — the checks above are all
+  descriptor-internal: they can catch a `project.yml` contradicting *itself*, never a
+  `project.yml` contradicting the working tree around it. This unit adds that half, for
+  both keys, from ONE shared evidence collector so a tag counts as evidence against both
+  `exposure: none` and `channels: [none]` at once (a tag is exactly the artifact
+  `channels: [artifact]` names):
+  - **F1 — a version-shaped tag exists.** Any git tag matching a semver-ish shape
+    (`v1.2.3`, `1.4`, `v3.0.0-rc1`); a tag like `backup-2024` does not count — no
+    dot-separated numeric parts, so nothing about it claims to be a release.
+  - **F5 — a committed deploy path exists.** A `deploy-*`/`release-*` workflow (already
+    enumerated by the tier checks above — zero new IO), or a `deploy`/`release` basename
+    file (any single extension, or none) directly under the repo root, `scripts/`, or
+    `bin/`. Non-recursive by construction, so `templates/deploy-*.yml` (this repo has one)
+    or a `docs/deploy.md` writeup is never mistaken for a live path.
+
+  Each finding is a **warn**, never a `fail` — deliberately, on the same reasoning as the
+  coherence advisories above and argued further: a falsifier proves the CLASS of evidence
+  that usually accompanies a consumer, not a consumer itself. A repo released years ago and
+  dead since is truthfully `exposure: none` today, tag and all; the message therefore says
+  "worth a second look," never "you have consumers." `exposure: self` gets no falsifier at
+  all — `self` claims a consumer set bounded by the room, and a tag or a deploy script is
+  perfectly compatible with a team shipping to itself.
+
+  **Three more falsifiers were named when #137 was filed and are deliberately NOT shipped**,
+  each for a reason that more code does not remove:
+  - **A per-machine service definition serving the path** — ruled out as a *field* already
+    (project.schema.md, "Per-host deploy target — deliberately not a field"): it answers
+    differently on every machine for the same commit, and reading outside the checkout is a
+    line this tool has never crossed. Reopens only if that ruling itself changes.
+  - **Another repo's stamp naming this one as a source** — the stamp vocabulary today has
+    exactly one possible source, the literal string `colab-handbook`, and that always
+    declares `exposure: released`, so it could never fire against a `none` claim. Dead code
+    today; reopens if a later unit generalises the stamp to name an arbitrary source.
+  - **A declared `production:` target resolving in DNS** — the repo-local half (`exposure:
+    none` + a *named* `production`) is already the pinned-clean "visibly transitional"
+    shape (`CONVENTIONS.md` §2, *Exposure*; `audit-exposure.test.js`); firing on it would
+    contradict a shipped ruling. The resolving half needs network, which this tool
+    deliberately does not use, and is weak evidence anyway (parked domains, wildcards, CDN
+    catch-alls). What it reached for — visibility into a state that has lasted a long time
+    — is served by the duration report below instead.
+
+  **Duration report, with no new field.** Alongside the falsifier, the audit reports how
+  long the CURRENT `exposure: none` (or `channels: [none]`) value has held — computed fresh
+  every run from the descriptor's own git history (`git log -G` over `.github/project.yml`,
+  walking newest→oldest to find the commit whose parent last disagreed), never a stored
+  date that could rot. Silent under roughly six months (the same fixture committed moments
+  ago that the coherence-advisory tests above rely on staying clean, stays clean here too).
+  Degrades to a **lower bound** ("at least N months") rather than guessing, in three cases
+  that are all handled the same way — the walk hits its 50-commit cap, the oldest matching
+  commit's parent blob is unreadable (a shallow clone's history boundary, or the repo's
+  root commit), or every parent inspected already agreed with the current value.
+
+  **Gating — the whole reason this is additive, not a tax.** Evidence gathering and the
+  git-history walk run ONLY when `exposure` is exactly `"none"` or `channels` is exactly
+  `["none"]`. A repo declaring neither key, or any other value, does byte-for-byte the same
+  IO it did before this unit — including every outside adopter of this public repo who has
+  not opted into either axis. `exposure` and `channels` are never coupled to decide each
+  other's finding: each falsifier/duration check reads only its own key to decide whether
+  to run, even though both draw on the same working-tree evidence once running.
+
+  **Degradation.** Every new source read (`tags()`, the historical `git show` reads) returns
+  `null`/`[]` on failure — no git, not a git repo, a shallow clone, a remote (`owner/name`)
+  source — and the caller stays silent on `null`, never a finding, never a crash. A remote
+  source contributes no duration finding: the per-commit walk has no cheap `gh api`
+  equivalent (reading N historical revisions would be N API calls per repo across a fleet
+  sweep, the same cost `markdownFiles()` above already declined), so `descriptorHistory()`
+  is unconditionally `null` there.
 
 `stack` is intentionally **not** validated — it is a free-form string now.
 

@@ -270,7 +270,7 @@ audit assigns `exposure` no default anywhere — omission reports `null` (undecl
 repo is a claim about the *absence* of a consumer, which nothing here can verify. An agent
 may find and report evidence of a consumer; it may never write down that none exists.
 
-**The `production:` pairing gets exactly one advisory, at `warn`, never `fail`:**
+**The `production:` pairing gets an advisory, at `warn`, never `fail`:**
 `exposure: none` together with `production: null` — the claim that both nothing consumes this
 repo and there is nothing to point at. Advisory, not failure, because the descriptor is not
 *lying* (the `fail` severity is reserved for that — see the `tier: A` + `push-main` block
@@ -288,16 +288,27 @@ gives for the identical reason: a coupling rule would re-weld two questions this
 exists to separate, and would over-fire on precisely the transitional and tag-published shapes
 just ruled legal above.
 
-**What this unit does not do.** It ships the key, its four-value enum check, and the one
+**What this unit does not do.** It ships the key, its four-value enum check, and the
 `production:` pairing advisory — nothing more. No rule yet derives production **gate
 count** from `exposure`; `tier` alone still governs that today (#144's authority-flip, not
 this unit). [CI's role and thoroughness](#ci--what-it-is-follows-writes-how-much-follows-exposure)
 and the [rollback obligation](#recovery--what-must-exist-to-undo-a-merge) are now derived
-— by later units reading this key, not by this one. No falsifier contradicts a declared `none`/`self` from repo
-evidence (a tag exists, a stamp elsewhere names this repo, a service definition serves it) —
-that is #137. No mechanism flips authority from `tier` to `exposure` or makes the key required
-— that is #144. The exposure question is now asked, in words, by [§9](#9-adopting-this)'s
-shared question set (question 3) — but by a human walking the checklist, not by a tool;
+— by later units reading this key, not by this one. **#137 shipped 2 of 5 possible
+falsifiers against a declared `exposure: none`** — a version-shaped tag exists, and a
+committed deploy path exists — each a `warn` naming the evidence, never a `fail` (a
+falsifier proves the CLASS of evidence that usually accompanies a consumer, not a consumer
+itself). `exposure: self` gets no falsifier at all. Three more named in #137 stay
+deliberately deferred: a per-machine service definition serving the path (the schema
+already ruled per-host facts out as a field), another repo's stamp naming this one as a
+source (the stamp vocabulary has no way to name an arbitrary source yet), and a declared
+`production:` target resolving in DNS (the repo-local half of that case is already the
+pinned-clean "visibly transitional" shape below, and the resolving half needs network this
+tool does not use). Reasons in full, and what would reopen each: `audit/README.md`. #137
+also added a **duration report** — how long `exposure: none` has held, from the
+descriptor's own git history, never a new field. No mechanism flips authority from `tier`
+to `exposure` or makes the key required — that is #144. The exposure question is now asked,
+in words, by [§9](#9-adopting-this)'s shared question set (question 3) — but by a human
+walking the checklist, not by a tool;
 no automation detects/asks/derives/writes it in one act (that shape is discussed, not yet
 built, on #138). And no rule here answers the question for any specific repo other than the
 one raise recorded in this repo's own `project.yml`, which rests on a human-given answer
@@ -597,10 +608,13 @@ trunk-direct as freely as the general rule allows — it keeps a branch and a pr
 for anything not fit to put in front of users unreviewed, and skips only the worktree.
 
 **What this unit does not do.** It ships the `channels` key, its shape/enum check, and the
-one descriptor-internal advisory — nothing more. No falsifier hunts repo evidence (a
-workflow file, an installed hook, a service definition, sync membership) to contradict a
-declared `[none]` — that is #137, and the seven values above are exactly the checkable
-artifact classes such a check would look for. No mechanism flips authority from
+descriptor-internal advisory — nothing more. **#137 later added a falsifier**: a
+version-shaped tag, or a committed deploy path, contradicting a declared `channels: [none]`
+— a `warn`, on `exposure`'s own precedent, plus a duration report computed from git history.
+Of the seven values above, only `artifact` (a tag) and `workflow` (a committed deploy path)
+are checked today; `hook`, `procedure`, `checkout`, `data`, and sync membership are each a
+named, deliberate deferral — see `audit/README.md` for the reason each was left out and what
+would reopen it. No mechanism flips authority from
 `tier`/`deploy` to `channels`, or makes the key required — that is #144. The channel
 question is now asked, in words, by [§9](#9-adopting-this)'s shared question set (question
 5, first-time adoption or a sync against a repo predating this axis) — but by a human, not

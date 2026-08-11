@@ -492,6 +492,19 @@ function listRemoteBranches(slug) {
   }
 }
 
+// Same null/[] contract as listRemoteBranches: null = could not determine (no remote, no
+// auth, gh absent, API error), never invented as "no tags". Used by the exposure/channels
+// falsifiers (#137) — a version-shaped tag is evidence against a declared "nothing consumes
+// this" claim, whether the source is local or remote.
+function listRemoteTags(slug) {
+  try {
+    const out = runGh(["api", `repos/${slug}/tags`, "--paginate", "--jq", ".[].name"]);
+    return out.split("\n").map((s) => s.trim()).filter(Boolean);
+  } catch {
+    return null;
+  }
+}
+
 // Labels live on GitHub, not in the working tree, so this is the audit's one check that
 // needs the tracker. `null` means "could not determine" — no remote, no auth, gh absent,
 // API error — and the caller stays SILENT on it rather than warning: unlike branches
@@ -566,6 +579,60 @@ function makeSource(target) {
           return null;
         }
       },
+      // Every tag name, no filtering — the exposure/channels falsifiers (#137) decide
+      // which are version-shaped. null = could not determine (not a git repo, git
+      // unavailable), same contract as branches() above.
+      tags: () => {
+        try {
+          const out = execFileSync("git", ["-C", root, "tag", "--list"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
+          return out.split("\n").map((s) => s.trim()).filter(Boolean);
+        } catch {
+          return null;
+        }
+      },
+      // Commits whose diff to .github/project.yml touched a line matching `^\s*<key>:`,
+      // newest first — the raw material declaredStateAge() (#137) walks to find when a
+      // declared axis last changed. `-G`, not `-S`: `-S` counts occurrence-count changes
+      // (a line moved elsewhere with the same net count would be invisible to it); `-G`
+      // matches any diff touching a line the pattern matches, which is what "did this
+      // key's line change" actually means. Capped at 50 commits — a repo whose descriptor
+      // has changed that many times has no honest "since when" answer either way, and the
+      // cap becomes one of declaredStateAge's own lower-bound degradations rather than an
+      // unbounded git log over a huge history. null = could not determine (not a git repo,
+      // git unavailable); the caller stays silent on null, same contract as tags()/
+      // branches() above.
+      descriptorHistory: (key) => {
+        try {
+          const out = execFileSync(
+            "git",
+            ["-C", root, "log", `-G^\\s*${key}:`, "--max-count=50", "--format=%H %ct", "--", ".github/project.yml"],
+            { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] },
+          );
+          const lines = out.split("\n").map((s) => s.trim()).filter(Boolean);
+          if (!lines.length) return null;
+          return lines.map((l) => {
+            const sp = l.indexOf(" ");
+            return { sha: l.slice(0, sp), epoch: Number(l.slice(sp + 1)) };
+          });
+        } catch {
+          return null;
+        }
+      },
+      // A file's content AT a given ref (`git show <ref>:<path>`), or null — the same
+      // shape as tools/lib/stamp.js's templateAt, reused here rather than duplicated
+      // because both answer "what did this path look like as of some historical point."
+      // null covers every unreadable case identically: the ref does not resolve (a
+      // shallow clone's history boundary, e.g. `<sha>^` past the fetched depth), the path
+      // did not exist at that ref, or git itself is unavailable — declaredStateAge (#137)
+      // reads null as "cannot see further back" and degrades to a lower bound rather than
+      // guessing.
+      fileAt: (ref, path) => {
+        try {
+          return execFileSync("git", ["-C", root, "show", `${ref}:${path}`], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
+        } catch {
+          return null;
+        }
+      },
       // A LINKED worktree is on a feature branch by design — that is the whole point of
       // one. Only the main checkout owes the on-trunk invariant, so the caller skips the
       // check here. Detection: git-dir sits under .git/worktrees/<name> in a linked tree,
@@ -623,6 +690,14 @@ function makeSource(target) {
     // scans nothing and emits nothing for a remote source, matching checkRunbook's
     // "would rather under-report than invent" posture for API-backed reads.
     markdownFiles: () => [],
+    tags: () => listRemoteTags(target.slug),
+    // The duration report (#137) needs a per-commit walk over historical blobs
+    // (`git show <sha>^:path`), which has no cheap `gh api` equivalent — reading N
+    // historical revisions would be N API calls per repo across a fleet sweep, the same
+    // cost markdownFiles() above already declined for the identical reason. A remote
+    // source contributes no duration finding, silently, rather than an advisory.
+    descriptorHistory: () => null,
+    fileAt: () => null,
   };
 }
 
@@ -727,6 +802,166 @@ const VALID_CHANNELS = new Set(["workflow", "hook", "procedure", "checkout", "ar
 // no value for a Capacitor mobile app and forced one of ours to be mislabelled, so the
 // enum was doing harm. It is now free-form documentation.
 
+// ----------------------------------------------------------- exposure/channels falsifiers
+//
+// #137: the audit cannot CONFIRM a declared "nothing consumes this" claim (`exposure: none`
+// / `channels: [none]`) — no local check can prove a negative about the outside world. What
+// it CAN do is hunt for cheap repo-local artifacts that CONTRADICT the claim, the same
+// falsification posture the rest of this file already takes toward tier/trunk/deploy.
+//
+// Severity is `warn`, never `fail`, on `exposure`'s own precedent (see the `production:`
+// pairing advisory above): a falsifier proves evidence of the class that USUALLY accompanies
+// a consumer, not a consumer itself — a repo released years ago and now dead is truthfully
+// `exposure: none` today, tag and all. `fail` stays reserved for a descriptor contradicting
+// something authoritative INSIDE itself (the tier/trunk/deploy checks above); this is
+// evidence from outside the descriptor, which can misfire on a repo that is honestly
+// describing its own history.
+//
+// Reach is deliberately 2 of 5 possible falsifiers, the two answerable from what is already
+// on disk or one `gh api` call, with no per-host or cross-repo reads:
+//   F1 — a version-shaped tag exists (versionShapedTags below).
+//   F5 — a committed deploy path exists: a `deploy-*`/`release-*` workflow (already
+//        enumerated by the tier checks — zero new IO), or a `deploy`/`release` basename
+//        file directly under the repo root, scripts/, or bin/ (no recursion, so a
+//        `templates/deploy-*.yml` — this very repo has one — or an example under docs/ is
+//        never mistaken for a live path).
+// Three more were named in #137 and deliberately deferred, each for a reason that does not
+// go away with more code:
+//   F2 (a per-machine service definition serves the path) — the schema already ruled this
+//      OUT as a field ("Per-host deploy target — deliberately not a field", project.schema.md):
+//      it answers differently on every machine for the same commit, and reading outside the
+//      checkout is a line this tool has never crossed.
+//   F3 (another repo's stamp names this one as a source) — the stamp vocabulary today has
+//      exactly one possible source, the literal string "colab-handbook", which declares
+//      `exposure: released` and so could never fire on a `none` claim. Dead code until a
+//      later unit generalises the stamp to name an arbitrary source.
+//   F4 (a declared `production:` target resolves in DNS) — the repo-local half is already
+//      BLESSED: `exposure: none` with a named `production` is the pinned-clean "visibly
+//      transitional" read (CONVENTIONS.md §2, audit-exposure.test.js). Firing on it would
+//      contradict a shipped ruling. The resolving half needs network, which this tool does
+//      not use, and is weak evidence anyway (parked domains, wildcards, CDN catch-alls).
+//      What F4 reached for — visibility into a state that has lasted a long time — is served
+//      by the duration report below instead.
+//
+// `exposure: self` gets NO falsifier: `self` claims a consumer set bounded by the room
+// (CONVENTIONS.md §2, "Room"), and a tag or a deploy script is perfectly compatible with a
+// team shipping to itself — falsifying `self` needs evidence of a consumer OUTSIDE the room,
+// which none of F1/F5 are. That falsifier (if one is ever built) is out of scope here.
+//
+// Non-coupling, by construction: consumerEvidence() reads only the working tree (tags,
+// workflow filenames, root/scripts/bin listings) — it never reads `exposureRaw` or
+// `channelsRaw`. Each caller below decides independently, from its OWN key only, whether to
+// gather evidence at all; neither key's finding is used to compute the other's.
+
+// "v2.1.0", "1.4", "v3.0.0-rc1" count; "backup-2024" does not — no dot-separated numeric
+// parts, so nothing about it claims to be a release. Calibration knob, not a settled
+// grammar: real-world tag schemes vary, and a repo with an unusual-but-real scheme is a
+// false negative here (silence), never a false positive.
+const VERSION_TAG_RE = /^v?\d+\.\d+(?:\.\d+)*(?:[-+][0-9A-Za-z.]+)*$/;
+
+function versionShapedTags(tags) {
+  return (tags || []).filter((t) => VERSION_TAG_RE.test(t));
+}
+
+// A `deploy`/`release` basename, any single extension (or none — a plain shell script often
+// carries none). Matched only against a NON-recursive listing of the repo root, scripts/,
+// and bin/ — the exclusion of templates/, examples/, docs/ in #137's plan is achieved simply
+// by never looking there, not by an exclude list.
+const DEPLOY_BASENAME_RE = /^(deploy|release)(\.[A-Za-z0-9]+)?$/i;
+
+// Cheap repo-local evidence that something OTHER than "nothing" consumes this repo. Never
+// throws, never returns null itself — every source it reads (tags(), listDir()) already
+// degrades to null/[] on failure, and an unreadable source just means less evidence, not an
+// error. Takes `workflows` from the caller (already listed by the tier checks) rather than
+// re-listing .github/workflows — the "zero new IO" half of F5.
+function consumerEvidence(src, workflows) {
+  const versionTags = versionShapedTags(src.tags());
+
+  const deployPaths = [];
+  for (const wf of workflows) {
+    if (/^(deploy|release)[-.]/.test(wf)) deployPaths.push(`.github/workflows/${wf}`);
+  }
+  for (const dir of ["", "scripts", "bin"]) {
+    for (const f of src.listDir(dir)) {
+      if (DEPLOY_BASENAME_RE.test(f)) deployPaths.push(dir ? `${dir}/${f}` : f);
+    }
+  }
+
+  return { versionTags, deployPaths };
+}
+
+// One line of prose describing whatever consumerEvidence() found, or "" when it found
+// nothing — the caller stays silent on "".
+function describeEvidence(evidence) {
+  const bits = [];
+  if (evidence.versionTags.length) {
+    const [first, ...rest] = evidence.versionTags;
+    bits.push(`a release artifact exists (tag ${first}${rest.length ? ` +${rest.length} more` : ""})`);
+  }
+  if (evidence.deployPaths.length) {
+    const shown = evidence.deployPaths.slice(0, 3);
+    const more = evidence.deployPaths.length > 3 ? ", …" : "";
+    bits.push(`a committed deploy path exists (${shown.join(", ")}${more})`);
+  }
+  return bits.join("; ");
+}
+
+// The raw right-hand side of a top-level `key: value` line in flat project.yml text, comment
+// stripped, or undefined when the key is absent. Deliberately not parseFlatYaml: this only
+// ever compares two revisions of the SAME key for equality (did the text change), so a raw
+// string compare is enough and a second parser implementation is not needed for it.
+function yamlRawValue(text, key) {
+  const re = new RegExp(`^${key}\\s*:\\s*(.*)$`, "m");
+  const m = re.exec(text || "");
+  if (!m) return undefined;
+  return m[1].replace(/\s+#.*$/, "").trim();
+}
+
+const DURATION_MIN_DAYS = 180; // below this, silence — see audit-exposure.test.js's pinned
+                                // "transitional descriptor is clean" case, which this
+                                // threshold exists to keep passing untouched: a descriptor
+                                // committed moments ago must never earn a duration line.
+const DURATION_DAY_SECONDS = 86400;
+
+// How long `key`'s CURRENT value has held, from the descriptor's own git history — never a
+// new field, recomputed every run. Walks descriptorHistory(key) newest -> oldest, reading
+// each commit's PARENT blob, and stops at the first commit whose parent disagreed with the
+// current value (that commit is when the current value was set). Three ways this degrades
+// to a LOWER BOUND instead of a precise date, all handled identically (return the oldest
+// commit actually inspected, marked lowerBound): the walk hits its cap without finding a
+// disagreement, the oldest matching commit's own parent blob is unreadable (a shallow
+// clone's history boundary, or the repo's root commit), or every parent inspected already
+// agreed with HEAD (the value has not changed across all of this key's tracked history).
+// Returns null — silently — when there is nothing to determine at all: no git, no matching
+// commit, or the key is not currently present (nothing to date).
+function declaredStateAge(src, key) {
+  const history = src.descriptorHistory(key);
+  if (!history || !history.length) return null;
+
+  const currentText = src.readFile(".github/project.yml");
+  if (currentText === null) return null;
+  const currentValue = yamlRawValue(currentText, key);
+  if (currentValue === undefined) return null;
+
+  for (const { sha, epoch } of history) {
+    const parentText = src.fileAt(`${sha}^`, ".github/project.yml");
+    if (parentText === null) return { epoch, lowerBound: true }; // shallow boundary / root commit
+    if (yamlRawValue(parentText, key) !== currentValue) return { epoch, lowerBound: false };
+  }
+  // Exhausted every matching commit (or the walk cap) without a disagreement — the value
+  // has held for at least as long as the oldest inspected commit.
+  return { epoch: history[history.length - 1].epoch, lowerBound: true };
+}
+
+// Prose for a declaredStateAge() result, or null when it is too recent to be worth saying
+// (the DURATION_MIN_DAYS gate — the caller must check this before calling warn()).
+function renderDuration(age) {
+  const days = Math.floor((Date.now() / 1000 - age.epoch) / DURATION_DAY_SECONDS);
+  if (days < DURATION_MIN_DAYS) return null;
+  const months = Math.floor(days / 30); // coarse on purpose — a report, not a countdown
+  return `${age.lowerBound ? "at least " : ""}${months} month${months === 1 ? "" : "s"}`;
+}
+
 function auditRepo(target, ctx) {
   const src = makeSource(target);
   const findings = []; // { level: 'fail'|'warn', text }
@@ -759,6 +994,11 @@ function auditRepo(target, ctx) {
     const missing = required.filter((k) => !(k in data));
     if (missing.length) fail(`project.yml: missing key(s): ${missing.join(", ")}`);
   }
+
+  // Read once, early, so both the tier/deploy checks further down AND the exposure/
+  // channels falsifiers (#137) can reuse the same listing — the falsifiers' F5 evidence
+  // is explicitly "zero new IO" over what the tier checks already enumerate.
+  const workflows = src.listDir(".github/workflows").filter((f) => /\.ya?ml$/.test(f));
 
   const tier = cfg?.tier ?? null;
   const trunk = cfg?.trunk ?? null;
@@ -837,16 +1077,35 @@ function auditRepo(target, ctx) {
     if (exposureRaw === "none" && (production === null || production === "")) {
       warn(`exposure: none and production: null — either nothing is left to reach here, or nobody has answered the exposure question yet. Both read the same to this tool; a human should confirm which`);
     }
+    // ---- exposure falsifier + duration report (#137) --------------------------
+    // Gated on the raw value alone — `self`/`live`/`released`/undeclared never reach here,
+    // so an outside adopter who has not opted into this axis does no new IO at all. See the
+    // "exposure/channels falsifiers" block above for the full argument (severity, the 2-of-5
+    // reach, why `self` gets nothing here).
+    if (exposureRaw === "none") {
+      const evidenceLine = describeEvidence(consumerEvidence(src, workflows));
+      if (evidenceLine) {
+        warn(
+          `exposure: none is contradicted by repo evidence — ${evidenceLine}. This does not ` +
+          `prove a live consumer (a repo released years ago and now dead is truthfully ` +
+          `exposure: none) — it means the claim is worth a second look, not that it is wrong`,
+        );
+      }
+      const exposureAge = declaredStateAge(src, "exposure");
+      const durationLine = exposureAge && renderDuration(exposureAge);
+      if (durationLine) {
+        warn(`exposure: none has held for ${durationLine} (per the descriptor's own git history) — visible so a long-running transitional state does not go unnoticed`);
+      }
+    }
 
     // ---- channels axis (#151) -------------------------------------------------
-    // Shape + enum sanity, plus exactly one descriptor-internal coherence advisory — the
-    // same restrained shape as room/writes/exposure above. `deploy` stays authoritative in
-    // this unit; nothing here changes any tier/trunk/deploy/production finding, and no
-    // rule couples `channels` to `exposure` (CONVENTIONS.md §2 "Channels", project.schema.md
-    // "channels — optional": deliberately not paired, mirroring the writes axis's own "do
-    // not add one" instruction). No falsifier hunts repo evidence to contradict a declared
-    // `[none]` here — that is #137, a separate, not-yet-started unit; this block only
-    // checks the shape of what was declared.
+    // Shape + enum sanity, a descriptor-internal coherence advisory, and — when the shape is
+    // exactly `[none]` — the repo-evidence falsifier and duration report (#137, wired below,
+    // gated on `channelsRaw` alone so it never reads `exposureRaw`). `deploy` stays
+    // authoritative in this unit; nothing here changes any tier/trunk/deploy/production
+    // finding, and no rule couples `channels` to `exposure` (CONVENTIONS.md §2 "Channels",
+    // project.schema.md "channels — optional": deliberately not paired, mirroring the writes
+    // axis's own "do not add one" instruction).
     if (channelsRaw !== null) {
       if (!Array.isArray(channelsRaw)) {
         fail(`channels is ${JSON.stringify(channelsRaw)}, expected a list (e.g. [workflow]) — a bare scalar is not a valid shape`);
@@ -868,6 +1127,28 @@ function auditRepo(target, ctx) {
           // never `fail`, on exposure's precedent — a `fail` would make declaring the key
           // riskier than omitting it.
           warn(`channels: [none] together with production: ${JSON.stringify(production)} / deploy: ${JSON.stringify(deploy)} — either nothing actually runs this code, or channels was declared before the rest of the descriptor was; a human should confirm which`);
+        }
+
+        // ---- channels falsifier + duration report (#137) --------------------
+        // Gated on the validated shape alone (length 1, "none") — a standalone check, not a
+        // branch of the if/else-if chain above, but the condition alone already implies
+        // `unknown` is empty and nothing else is combined with "none" ("none" is a member of
+        // VALID_CHANNELS and length 1 excludes the multi-value case). See the "exposure/
+        // channels falsifiers" block above for the full argument.
+        if (channelsRaw.length === 1 && channelsRaw[0] === "none") {
+          const evidenceLine = describeEvidence(consumerEvidence(src, workflows));
+          if (evidenceLine) {
+            warn(
+              `channels: [none] is contradicted by repo evidence — ${evidenceLine}. This does ` +
+              `not prove a live consumer — it means the claim is worth a second look, not that ` +
+              `it is wrong`,
+            );
+          }
+          const channelsAge = declaredStateAge(src, "channels");
+          const durationLine = channelsAge && renderDuration(channelsAge);
+          if (durationLine) {
+            warn(`channels: [none] has held for ${durationLine} (per the descriptor's own git history) — visible so a long-running transitional state does not go unnoticed`);
+          }
         }
       }
     }
@@ -929,7 +1210,6 @@ function auditRepo(target, ctx) {
   checkAnchorLinks(src, fail);
 
   // ---- deploy workflow presence -------------------------------------------
-  const workflows = src.listDir(".github/workflows").filter((f) => /\.ya?ml$/.test(f));
   const deployWorkflows = workflows.filter((f) => /^deploy[-.]/.test(f));
 
   const runbook = cfg && "runbook" in cfg ? cfg.runbook : null;
