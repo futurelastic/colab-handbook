@@ -27,10 +27,22 @@
 #               `python:` here (or add .python-version) or CI has nothing to resolve.
 #   writes      OPTIONAL. isolated (default) | serial. Which write-conflict prevention
 #               method this repo's sessions default to — a separate axis from tier and
-#               ceremony (project.schema.md "writes — optional"). This repo genuinely
-#               runs isolated (many concurrent worktrees), so the key stays unset here —
-#               a reference example that sets every optional key stops demonstrating
-#               which ones are actually required.
+#               ceremony (project.schema.md "writes — optional"). This repo is `serial`:
+#               one writer at a time, which is what lets solo flow's entry gate open
+#               here. The gate stays mechanical, not a promise — it refuses the moment a
+#               second worktree, claim or place-claim is live, which is the ordinary
+#               state while any unit is mid-flight.
+#   room        OPTIONAL. solo | team | public. Who could ever READ what a session writes
+#               down here — not who writes it (project.schema.md "room — optional"). This
+#               repo is `public`: adopters outside the org read its Issues as the worked
+#               examples for the rules it states. Orthogonal to `writes` above, and this
+#               descriptor is the worked example of that orthogonality — one writer, many
+#               readers, so `writes: serial` never implies `room: solo`.
+#   autonomy    ABSENT here, deliberately. Absent already means `manual`
+#               (project.schema.md "autonomy — optional"), and a reference example that
+#               pins a key to its own default stops demonstrating which keys are
+#               required. The `auto-trunk` grant this repo carried was dropped in #202:
+#               every branched unit's Phase B is a human act again.
 #   exposure    OPTIONAL. none | self | live | released. What consumes a merge here —
 #               additive alongside tier in this unit; tier stays authoritative
 #               (project.schema.md "exposure — optional"). This repo IS released:
@@ -50,6 +62,7 @@ trunk: main
 production: null
 deploy: none
 stack: docs + copy-and-own CI templates + audit CLI (no build)
-autonomy: auto-trunk
+writes: serial
+room: public
 exposure: released
 channels: [artifact]
