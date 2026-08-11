@@ -262,6 +262,11 @@ function detect(io, extra = {}) {
 
   const declaredTrunk = Object.prototype.hasOwnProperty.call(cfg, 'trunk') ? cfg.trunk : null;
   const detectedTrunk = (extra && extra.trunk) || null;
+  // 'origin-head' (the ordinary case) | 'current-branch-fallback' (no origin remote at all —
+  // exactly first-time adoption's own shape: `git init`, adopt, add a remote later) | null
+  // (nothing could be determined). Surfaced so a human sees a fallback was INFERRED, not read
+  // from a remote's HEAD — tools/colab's adoptGitExtras() is the only place that computes it.
+  const trunkSource = (extra && extra.trunkSource) || null;
 
   return {
     descriptorExists: io.readFile('.github/project.yml') !== null,
@@ -269,7 +274,7 @@ function detect(io, extra = {}) {
     axis,
     rows,
     detected: {
-      trunk: { declared: declaredTrunk, detected: detectedTrunk, agree: declaredTrunk === null || detectedTrunk === null ? null : declaredTrunk === detectedTrunk },
+      trunk: { declared: declaredTrunk, detected: detectedTrunk, source: trunkSource, agree: declaredTrunk === null || detectedTrunk === null ? null : declaredTrunk === detectedTrunk },
       stackCandidates,
       ports: Object.prototype.hasOwnProperty.call(cfg, 'ports') ? cfg.ports : null,
       channelCandidates: channelInfo.candidates,
@@ -281,6 +286,354 @@ function detect(io, extra = {}) {
   };
 }
 
+// =========================================================================================
+// commit 2 of #199 — asking, the human gate, and the write.
+//
+// Everything above this line is commit 1 (detect / derive / report; never asks, never
+// writes). Everything below is new: which of the five §9 rows still needs a human answer,
+// whether a PROPOSED answer is one this repo's own shape can support (EXPOSURE_SHAPE), whether
+// the answer needs authorization before it may be written (gateVerdict), and how to append it
+// to `.github/project.yml` without disturbing a single byte that was already there
+// (renderDescriptor). tools/colab's cmdAdopt is the only place that reads env/tty/argv and
+// calls fs.writeFileSync — every function here stays pure and unit-testable.
+// =========================================================================================
+
+const VALID_ROOM = new Set(['solo', 'team', 'public']);
+const VALID_WRITES = new Set(['isolated', 'serial']);
+const VALID_EXPOSURE = new Set(['none', 'self', 'live', 'released']);
+const VALID_CHANNELS = new Set(['workflow', 'hook', 'procedure', 'checkout', 'artifact', 'data', 'none']);
+const VALID_DEPLOY = new Set(['tag', 'manual', 'push-main', 'none']);
+
+// ---------------------------------------------------------------------- §9 question set
+
+/**
+ * The five §9 rows, phrased exactly as CONVENTIONS.md §9 phrases them to a human — never
+ * restated with different wording (this handbook has paid for a duplicated checklist drifting
+ * from its source twice in one day; see skills/handbook-sync/SKILL.md's own note on the same
+ * failure). `axis: 'tier'` writes `production` + `deploy`, never `tier` itself — question 1 is
+ * the MECHANISM question ("does a deploy target exist today, and how is it reached?"), and
+ * `tier` is a function of those two answers, never a row a human answers directly
+ * (tools/lib/adopt.js:deriveTier). The `axis` name matches `ROW_NAMES` on purpose: it is the
+ * same five names the report table already uses, so `--axis` and the report agree on vocabulary.
+ */
+const QUESTIONS = Object.freeze([
+  {
+    axis: 'tier',
+    keys: ['production', 'deploy'],
+    prompt: 'Does a deploy target exist today (a URL), and how is it reached — a tag gates '
+      + 'production, the promotion itself deploys (push-main), a human runs a runbook '
+      + '(manual), or nothing is live yet (none)?',
+  },
+  { axis: 'room', keys: ['room'], prompt: 'Who else works here? (solo / team / public)' },
+  {
+    axis: 'exposure',
+    keys: ['exposure'],
+    prompt: 'What would break if you merged something wrong here? (none / self / live / released)',
+  },
+  {
+    axis: 'writes',
+    keys: ['writes'],
+    prompt: 'One unit of work in flight at a time, or several at once? (serial / isolated)',
+  },
+  {
+    axis: 'channels',
+    keys: ['channels'],
+    prompt: 'By what path does a commit reach something that runs it? (a list — several may '
+      + 'apply: workflow / hook / procedure / checkout / artifact / data / none)',
+  },
+]);
+
+/**
+ * Is `axis` (one of `ROW_NAMES`) still unanswered in `cfg`? This is deliberately NOT the same
+ * question `detect()`'s `rows` answer — `rows.tier` reads `detected` the moment `production`
+ * defaults to "no production" (a genuine derivation), and `rows.exposure` reads `legacy read`
+ * off a declared `tier` (a genuine, useful fallback for REPORTING). Neither counts as "answered"
+ * here: asking is about what a human has explicitly put on record, not what this tool could
+ * infer on their behalf. A legacy `tier: C` reading as `exposure: live` must still be ASKED —
+ * that explicit declaration is the entire point of phase 3 of the epic this unit closes.
+ */
+function axisMissing(cfg, axis) {
+  const c = cfg || {};
+  switch (axis) {
+    case 'tier':
+      return !('production' in c) || !('deploy' in c);
+    case 'room':
+      return !('room' in c) || c.room === null || c.room === undefined;
+    case 'exposure':
+      return axisAuthority.axisOfRecord(c).source !== 'exposure';
+    case 'writes':
+      return !('writes' in c) || c.writes === null || c.writes === undefined;
+    case 'channels':
+      return !('channels' in c) || c.channels === null || c.channels === undefined;
+    default:
+      return false;
+  }
+}
+
+// ---------------------------------------------------------------------- EXPOSURE_SHAPE — the constructor
+
+/**
+ * EXPOSURE_SHAPE — the CONSTRUCTOR half of #144's exposure contract, where
+ * `audit/audit.mjs`'s exposure block (~:1321-1396) is the VALIDATOR half. Given the shape a
+ * repo is actually IN right now — `{ trunk, hasProduction, deploy, hasDeployWorkflow, hasRunbook }`
+ * (`hasRunbook`: a `runbook:` key is declared AND the file it names exists — only `released`
+ * with `deploy: manual`, or `deploy: tag` with no committed workflow, ever reads it) — does
+ * it support DECLARING a given exposure value? Only the FAIL direction is reproduced here; the
+ * audit's `warn` ("released with no evidence yet — might not have landed") is advisory, never a
+ * reason to refuse a write, on the same precedent the audit itself follows.
+ *
+ * Deliberately a SEPARATE table from the audit's own block, not a re-key of it — that block is
+ * ~130 lines of fail/warn closures whose byte-identical behaviour was #144's own oracle, hours
+ * old when this landed. `tools/lib/adopt-audit-agreement.test.js` is what keeps the two from
+ * drifting apart instead of a shared implementation.
+ */
+const EXPOSURE_SHAPE = Object.freeze({
+  self: () => ({ ok: true }),
+
+  none: (ctx) => {
+    if (ctx.trunk !== 'main') {
+      return {
+        ok: false,
+        reason: `trunk is ${JSON.stringify(ctx.trunk)}, exposure: none requires trunk "main" `
+          + '— nothing consumes this repo, so there is no release branch to speak of',
+      };
+    }
+    if (ctx.hasDeployWorkflow) {
+      return {
+        ok: false,
+        reason: 'a deploy workflow exists — nothing is supposed to consume this repo, yet '
+          + 'something is wired to deploy it',
+      };
+    }
+    return { ok: true };
+  },
+
+  live: (ctx) => {
+    if (ctx.trunk !== 'dev') {
+      return {
+        ok: false,
+        reason: `trunk is ${JSON.stringify(ctx.trunk)}, exposure: live requires trunk "dev" `
+          + '— the promotion is the deploy, and dev is where sessions land before it ships',
+      };
+    }
+    if (!ctx.hasProduction) {
+      return { ok: false, reason: 'production is not set — exposure: live ships straight to users, so a live URL must be set' };
+    }
+    if (ctx.deploy !== 'push-main') {
+      return {
+        ok: false,
+        reason: `deploy is ${JSON.stringify(ctx.deploy)}, exposure: live requires deploy: push-main `
+          + '— the promotion itself IS the deploy',
+      };
+    }
+    if (!ctx.hasDeployWorkflow) {
+      return { ok: false, reason: 'no .github/workflows/deploy-*.yml — the promotion needs a committed path to production' };
+    }
+    return { ok: true };
+  },
+
+  released: (ctx) => {
+    if (!ctx.hasProduction) {
+      if (ctx.trunk !== 'main') {
+        return {
+          ok: false,
+          reason: `trunk is ${JSON.stringify(ctx.trunk)}; exposure: released with production: `
+            + 'null requires trunk "main" — nothing is live, so there is no release branch to speak of',
+        };
+      }
+      if (ctx.deploy !== null && ctx.deploy !== undefined && ctx.deploy !== 'none') {
+        return {
+          ok: false,
+          reason: `deploy is ${JSON.stringify(ctx.deploy)}; exposure: released with production: `
+            + 'null must be deploy: none — nothing is live to deploy to',
+        };
+      }
+      return { ok: true };
+    }
+    if (ctx.deploy === 'push-main') {
+      return {
+        ok: false,
+        reason: 'deploy: push-main — released means a deliberate release artifact gates '
+          + 'production, and every push to main would reach users with no such gate',
+      };
+    }
+    if (ctx.deploy === 'none' || ctx.deploy === null || ctx.deploy === undefined) {
+      return { ok: false, reason: 'a live production URL but deploy: none is contradictory — use "tag" or "manual"' };
+    }
+    if (ctx.deploy !== 'tag' && ctx.deploy !== 'manual') {
+      return { ok: false, reason: `deploy is ${JSON.stringify(ctx.deploy)} — exposure: released with a live production URL needs deploy: tag or deploy: manual` };
+    }
+    // Mirrors audit.mjs's checkRunbook() exactly (~:1916): a deploy that runs OUTSIDE CI — a
+    // human following `deploy: manual`, or a `deploy: tag` with no committed workflow (an
+    // external GitOps poller deploys it) — must name a committed `runbook:` doc. `deploy: tag`
+    // WITH a committed workflow needs no runbook — the workflow already commits the answer.
+    const externalTagDeploy = ctx.deploy === 'tag' && !ctx.hasDeployWorkflow;
+    if ((ctx.deploy === 'manual' || externalTagDeploy) && !ctx.hasRunbook) {
+      return {
+        ok: false,
+        reason: `deploy: ${ctx.deploy}${externalTagDeploy ? ' (a tag deployed outside CI)' : ''} requires runbook: `
+          + 'naming the committed doc that describes how production is reached',
+      };
+    }
+    if (ctx.trunk !== 'dev' && !(ctx.deploy === 'tag' && ctx.trunk === 'main')) {
+      return {
+        ok: false,
+        reason: ctx.deploy === 'tag'
+          ? `trunk is ${JSON.stringify(ctx.trunk)}; exposure: released with deploy: tag requires trunk "dev" or "main"`
+          : `trunk is ${JSON.stringify(ctx.trunk)}; exposure: released requires trunk "dev" — only a tag-gated release (deploy: tag) may run a single trunk "main"`,
+      };
+    }
+    return { ok: true };
+  },
+});
+
+function exposureShapeVerdict(exposure, ctx) {
+  const fn = EXPOSURE_SHAPE[exposure];
+  if (!fn) return { ok: true };
+  return fn(ctx);
+}
+
+// ---------------------------------------------------------------------- the human gate (#199's plan)
+
+const EXPOSURE_RANK = Object.freeze({ none: 0, self: 1, live: 2, released: 3 });
+
+const GATE_CLASS = Object.freeze({
+  HUMAN_GATED: 'human-gated',
+  EVIDENCE_CONTRADICTS: 'evidence-contradicts',
+  REPO_SHAPE: 'repo-shape',
+});
+
+const EXIT_CODE = Object.freeze({
+  ok: 0,
+  [GATE_CLASS.HUMAN_GATED]: 3,
+  [GATE_CLASS.EVIDENCE_CONTRADICTS]: 4,
+  [GATE_CLASS.REPO_SHAPE]: 5,
+});
+
+/**
+ * THE HONEST LIMIT (#199's plan is emphatic this be stated in code, not only in a comment
+ * somewhere it can be missed): `COLAB_HUMAN=1` is an env var the gated party can set — #150 is
+ * the parked epic that would make it mean something stronger, and until that lands this gate is
+ * exactly as strong as `colab ship`'s identical bar, and no stronger. An interactive TTY is a
+ * better DEFAULT (an agent must take an unusual act — allocate a pty — to defeat it, where
+ * setting an env var is an entirely ordinary one), but a TTY is not identity either. The
+ * provenance comment this module writes beside every answered key does not prevent a false
+ * claim; it makes one require DELIBERATELY writing a lie into a committed file, which is
+ * auditable after the fact. None of this becomes a real access-control boundary until #150's
+ * identity work exists — this module does not pretend otherwise.
+ *
+ * The bar applies ONLY to the LOWERING direction (`EXPOSURE_RANK`: released > live > self >
+ * none) plus first declarations of `none`/`self` — raising, or a FIRST declaration of
+ * `live`/`released`, needs nothing beyond falsifier/shape clearance, because an agent may
+ * PROPOSE those from committed evidence (CONVENTIONS.md §2's asymmetry) while only a human may
+ * conclude "nothing" or "only the room" consumes a merge here.
+ *
+ * Pure — every fact this needs is passed in. `tools/colab`'s cmdAdopt is the only place that
+ * reads `process.env.COLAB_HUMAN` / `process.stdin.isTTY` and passes the booleans through.
+ */
+function gateVerdict({ exposure, currentExposure, shapeCtx, evidence, isTTY, colabHuman, answeredBy, reason }) {
+  const shape = exposureShapeVerdict(exposure, shapeCtx);
+  if (!shape.ok) {
+    return { ok: false, class: GATE_CLASS.REPO_SHAPE, exitCode: EXIT_CODE[GATE_CLASS.REPO_SHAPE], message: `exposure: ${exposure} — ${shape.reason}` };
+  }
+
+  // Falsifier (#137, mirrored): only ever fires on `none` — `self` gets no falsifier at all, on
+  // the audit's own precedent (its consumer set is a subset of the room's, which nothing here
+  // can confirm or deny from repo-local evidence). Direction-independent: this is evidence about
+  // the CLAIM, not about who is authorized to make it.
+  if (exposure === 'none' && evidence) {
+    const line = describeEvidence(evidence);
+    if (line && !reason) {
+      return {
+        ok: false,
+        class: GATE_CLASS.EVIDENCE_CONTRADICTS,
+        exitCode: EXIT_CODE[GATE_CLASS.EVIDENCE_CONTRADICTS],
+        message: `exposure: none is contradicted by repo evidence — ${line}. Choose again, or `
+          + 'override with --reason "<text>", written into the file',
+      };
+    }
+  }
+
+  const isFirst = currentExposure === null || currentExposure === undefined;
+  const isLowering = !isFirst && EXPOSURE_RANK[exposure] < EXPOSURE_RANK[currentExposure];
+  const isRaisingOrFirstHigh = (exposure === 'live' || exposure === 'released') && !isLowering;
+  if (isRaisingOrFirstHigh) return { ok: true };
+
+  const authorized = isTTY || (colabHuman && answeredBy);
+  if (!authorized) {
+    return {
+      ok: false,
+      class: GATE_CLASS.HUMAN_GATED,
+      exitCode: EXIT_CODE[GATE_CLASS.HUMAN_GATED],
+      message: isLowering
+        ? `lowering exposure from ${JSON.stringify(currentExposure)} to ${JSON.stringify(exposure)} requires `
+          + 'a human: answer at an interactive terminal, or re-run with COLAB_HUMAN=1 and --answered-by "<name>"'
+        : `declaring exposure: ${exposure} requires a human: answer at an interactive terminal, `
+          + 'or re-run with COLAB_HUMAN=1 and --answered-by "<name>"',
+    };
+  }
+  if (isLowering && !reason) {
+    return {
+      ok: false,
+      class: GATE_CLASS.HUMAN_GATED,
+      exitCode: EXIT_CODE[GATE_CLASS.HUMAN_GATED],
+      message: `lowering exposure from ${JSON.stringify(currentExposure)} to ${JSON.stringify(exposure)} also `
+        + 'requires --reason "<text>", written into the file',
+    };
+  }
+  return { ok: true };
+}
+
+// ---------------------------------------------------------------------- provenance + the append-only write
+
+/** The comment placed beside a written key — never trusted as identity (see gateVerdict's
+ * header note), only as an audit trail a false claim would have to be written deliberately into. */
+function provenanceComment(key, meta) {
+  if (meta.mode === 'interactive') {
+    return `# ${key}: answered interactively (${meta.host}, ${meta.date})`;
+  }
+  const bits = [`supplied by ${meta.flags.join(', ')}`];
+  if (meta.colabHuman) bits.push('COLAB_HUMAN=1');
+  if (meta.answeredBy) bits.push(`--answered-by ${JSON.stringify(meta.answeredBy)}`);
+  return `# ${key}: ${bits.join(', ')} (${meta.date})`;
+}
+
+function yamlScalar(v) {
+  if (v === null || v === undefined) return 'null';
+  if (typeof v === 'boolean' || typeof v === 'number') return String(v);
+  const s = String(v);
+  if (s === '') return '""';
+  if (/^(null|true|false|yes|no|~)$/i.test(s) || /[:#]/.test(s) || /^\s|\s$/.test(s) || /^['"]/.test(s)) {
+    return JSON.stringify(s);
+  }
+  return s;
+}
+
+function yamlFlowSeq(arr) {
+  return `[${arr.map((v) => yamlScalar(v)).join(', ')}]`;
+}
+
+/**
+ * Append-only. `entries` — `[{ key, value, comment? }]` — are rendered in order and added to the
+ * END of `rawText` (which may be `null`/`''`/absent for a repo adopting for the first time).
+ * Never re-parses, never re-serialises, never touches a byte already present: this repo's own
+ * descriptor is ~60 lines of comment over 9 keys, and a parse-and-reserialise pass would destroy
+ * every one of them. `tools/lib/adopt-cli.test.js` asserts `git diff` shows only appended lines.
+ */
+function renderDescriptor(rawText, entries) {
+  const base = rawText === null || rawText === undefined ? '' : rawText;
+  const lines = [];
+  for (const e of entries) {
+    const valueStr = Array.isArray(e.value) ? yamlFlowSeq(e.value) : yamlScalar(e.value);
+    lines.push(`${e.key}: ${valueStr}`);
+    if (e.comment) lines.push(e.comment);
+  }
+  const block = `${lines.join('\n')}\n`;
+  if (base === '') return block;
+  const needsNewline = !base.endsWith('\n');
+  return base + (needsNewline ? '\n' : '') + block;
+}
+
 module.exports = {
   ROW_NAMES,
   readDescriptor,
@@ -290,4 +643,20 @@ module.exports = {
   deriveConsequences,
   remainingSteps,
   detect,
+  // commit 2
+  VALID_ROOM,
+  VALID_WRITES,
+  VALID_EXPOSURE,
+  VALID_CHANNELS,
+  VALID_DEPLOY,
+  QUESTIONS,
+  axisMissing,
+  EXPOSURE_SHAPE,
+  EXPOSURE_RANK,
+  GATE_CLASS,
+  EXIT_CODE,
+  exposureShapeVerdict,
+  gateVerdict,
+  provenanceComment,
+  renderDescriptor,
 };

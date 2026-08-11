@@ -85,6 +85,17 @@ procedure** — nine steps, already written, already correct. Open it and work i
 order. This section adds only what §9 cannot know: how to interleave it with your
 session, which step blocks, and which steps get skipped.
 
+**Step 1 (the shared question set) is `colab adopt` — run the tool, don't walk the
+five rows by hand (#199).** It detects what the repo already states, asks only what
+is missing (flags, or a prompt at a terminal), derives the rest, and writes
+`.github/project.yml` in one act, append-only. This skill's job around it is
+unchanged: judge whether a *detected* candidate (a stack manifest, a channel
+candidate) is actually right before answering with it, decide what §9's "going
+live" ladder means for THIS repo, and carry the session/Issue ceremony `colab
+adopt` deliberately does not touch. What moved to the tool is steps 3–7 of typing
+the answers in — this skill still grafts, proposes, and judges; it never writes
+the descriptor itself.
+
 Do **not** copy §9's steps into this skill, or into the Issue as a restated list. Two
 copies of one checklist drift, and the disagreement is then found by whoever followed
 the wrong one. This handbook has paid for that twice in a single day — a duplicated
@@ -149,11 +160,16 @@ that matter for how you run a sync:
   the time it is written and misroutes something later. A repo that describes
   nothing is more honest than one that describes itself wrongly.
 - **Asking is not writing.** When a sync meets a repo missing one of the newer
-  four axes, put §9's question to the human and record the answer — never fill
-  the gap yourself, and never "resolve" the undeclared-pairing advisory
-  (`exposure: none` + `production: null`, `channels: [none]` + a non-null
-  `production`/non-`none` `deploy`) by deleting a key someone already declared.
-  Declaring must never come out riskier than omitting.
+  four axes, put §9's question to the human and record the answer through
+  `colab adopt` (`--room`/`--exposure`/`--writes`/`--channels`, or run it at a
+  terminal and answer the prompt) — never fill the gap yourself, and never
+  "resolve" the undeclared-pairing advisory (`exposure: none` +
+  `production: null`, `channels: [none]` + a non-null `production`/non-`none`
+  `deploy`) by deleting a key someone already declared. Declaring must never
+  come out riskier than omitting. `colab adopt` enforces the mechanical half of
+  this (append-only, the human bar on lowering `exposure`) — your judgment is
+  still choosing WHAT to propose when evidence exists, and confirming a human
+  answer before it goes in.
 
 Two things not to do while you wait on tier specifically: do not create `dev` "to
 be ready" (§9 step 9), and if the answer is B, `production: null` and
@@ -165,9 +181,9 @@ A marker but no label; CI but no registration; everything but the CLAUDE pointer
 Treat §9 as a checklist to **complete**, and probe each step rather than assume it:
 
 ```sh
-cat .github/project.yml                 # step 2 — present? does its tier match reality?
-                                         #   which of room/exposure/writes/channels are
-                                         #   already declared, so you ask only what is missing
+colab adopt --repo . --no-verify        # step 2 — one command: which of the five §9 rows
+                                         #   are already declared, what the repo's working
+                                         #   tree already detects, what still needs asking
 gh label list --search in-progress      # step 3
 gh repo view --json repositoryTopics    # step 4 — tier-a / tier-b / tier-c
 grep -c "colab-handbook @" CLAUDE.md    # step 5 — the pointer block and its stamp

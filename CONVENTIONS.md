@@ -321,12 +321,12 @@ tool does not use). Reasons in full, and what would reopen each: `audit/README.m
 also added a **duration report** — how long `exposure: none` has held, from the
 descriptor's own git history, never a new field. #144 shipped the authority flip described
 above; it deliberately does **not** make the key required — that stays phase 3. The exposure
-question is now asked, in words, by [§9](#9-adopting-this)'s shared question set (question 3)
-— but by a human walking the checklist, not by a tool;
-no automation detects/asks/derives/writes it in one act (that shape is discussed, not yet
-built, on #138). And no rule here answers the question for any specific repo other than the
-one raise recorded in this repo's own `project.yml`, which rests on a human-given answer
-already on record in the epic ruling, not on anything this unit concluded.
+question is now asked, in words, by [§9](#9-adopting-this)'s shared question set (question 3),
+and `colab adopt` (#199) is the tool that detects/asks/derives/writes it in one act — gated on
+a human for the `none`/`self`/lowering direction (§9's "colab adopt executes this checklist"
+paragraph). And no rule here answers the question for any specific repo other than the one
+raise recorded in this repo's own `project.yml`, which rests on a human-given answer already
+on record in the epic ruling, not on anything this unit concluded.
 
 ### Ceremony — narration follows the room, recoverability follows exposure
 
@@ -643,9 +643,10 @@ named, deliberate deferral — see `audit/README.md` for the reason each was lef
 would reopen it. No mechanism flips authority from
 `tier`/`deploy` to `channels`, or makes the key required — that is #144. The channel
 question is now asked, in words, by [§9](#9-adopting-this)'s shared question set (question
-5, first-time adoption or a sync against a repo predating this axis) — but by a human, not
-by a tool: no automation detects/asks/derives/writes the set in one act yet (#138's
-discussion records the shape such a tool would take; building it is separate work).
+5, first-time adoption or a sync against a repo predating this axis), and `colab adopt`
+(#199) detects/asks/derives/writes the set in one act — proposed candidates only (a tag, a
+committed deploy path, a hooks dir), never an asserted absence, on the same asymmetry as
+`exposure`.
 `room`, `exposure`, `ceremony`, and `writes` rules are unchanged; `tier`,
 `trunk`, `deploy`, and `production` stay fully authoritative, and nothing in the fleet, nor
 any outside adopter of this public repo, breaks on this merge.
@@ -1664,11 +1665,17 @@ only. Resolution order: `--config` flag > `~/.colab/repos.txt` > bundled example
 
    | # | ask it like this | writes | values |
    |---|---|---|---|
-   | 1 | does a deploy target exist *today* ([§2](#2-tiers))? if yes — does a tag gate production, or does the promotion itself deploy? | `tier` | `A` / `B` / `C` |
+   | 1 | does a deploy target exist *today* ([§2](#2-tiers)), and how is it reached — a tag gates production, the promotion itself deploys, a human runs a runbook, or nothing is live yet? | `production` + `deploy` | a URL (or none) + `push-main` / `tag` / `manual` / `none` |
    | 2 | who else works here? | [`room`](#room--who-else-is-here) | `solo` / `team` / `public` |
    | 3 | **what would break if you merged something wrong here?** | [`exposure`](#exposure--what-consumes-a-merge-here) | `none` / `self` / `live` / `released` |
    | 4 | one unit of work in flight at a time, or several at once? | [`writes`](#writes--serial-or-isolated-and-the-two-things-that-make-a-branch-mandatory) | `serial` / `isolated` |
    | 5 | by what path does a commit reach something that runs it? (a list — several may apply) | [`channels`](#channels--by-what-path-does-code-reach-the-thing-that-runs-it) | `workflow` / `hook` / `procedure` / `checkout` / `artifact` / `data` / `none` |
+
+   Question 1 writes `production` and `deploy`, never `tier` directly — `tier` is a pure
+   function of those two answers (`tools/lib/adopt.js:deriveTier`: no production → `B`;
+   production + `push-main` → `C`; production + `tag`/`manual` → `A`), so asking for the
+   letter directly would be asking for a value that is always derivable from a more basic
+   answer already on record — the same drift-by-redundancy this whole model exists to stop.
 
    Question 3 is phrased this way — never "who consumes this?" — per the ruling on #128:
    the person answering is standing in the repo, not reading a schema, and "what breaks"
@@ -1701,12 +1708,19 @@ only. Resolution order: `--config` flag > `~/.colab/repos.txt` > bundled example
    `null` (undeclared, and legal); only a human answer may write down that nothing, or only
    the room, consumes a merge here.
 
-   **No tool executes this checklist yet.** A human (or an agent transcribing a human's
-   answers) walks through the five rows by hand and writes `.github/project.yml` directly.
-   The shape a future automation should take — a single command that detects, asks only
-   what it must, derives the rest, and writes in one act, the same way `colab template`
-   copies and stamps together — is recorded on #138's discussion; building it is not part
-   of what landed here.
+   **`colab adopt` executes this checklist.** It detects what a repo already states, asks
+   a human only what could not be detected (flags, or an interactive prompt at a
+   terminal), derives the rest, and writes `.github/project.yml` in one act — the same
+   shape `colab template` already uses for copy-and-stamp. A row already answered is
+   skipped; `--axis <row>` forces a re-ask on purpose (the "going live" ladder below asks
+   for exactly that). Lowering an existing `exposure` — or a first declaration of
+   `none`/`self` — requires a human: an interactive terminal, or `COLAB_HUMAN=1` together
+   with `--answered-by <name>` (the same bar `colab ship`'s gates use, and no stronger —
+   see the command's `--help` for the honest limit). Raising, or a first declaration of
+   `live`/`released`, needs nothing beyond the falsifier/shape clearance described above —
+   an agent may run this unattended for exactly the direction CONVENTIONS.md §2's asymmetry
+   already allows it to propose. `colab adopt` never runs steps 3 onward below; it prints
+   them as a to-do list on exit.
 2. **Write `.github/project.yml`** ([§3](#3-githubprojectyml--the-marker)) with the
    answers from step 1.
 3. **Create the whole label set — thirteen names, not a subset** (`in-progress`,

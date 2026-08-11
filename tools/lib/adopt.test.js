@@ -1,8 +1,9 @@
 'use strict';
 /**
- * Unit tests for tools/lib/adopt.js — commit 1 of #199 (detect / derive / report; no ask, no
- * write). All scripted `io`, no real git/filesystem: `tools/lib/adopt-cli.test.js` covers the
- * real-repo path through `colab adopt` itself.
+ * Unit tests for tools/lib/adopt.js — both commits of #199 (detect/derive/report, PLUS
+ * ask/gate/write). All scripted `io`, no real git/filesystem: `tools/lib/adopt-cli.test.js`
+ * covers the real-repo path through `colab adopt` itself, and
+ * `tools/lib/adopt-audit-agreement.test.js` covers `EXPOSURE_SHAPE` against the real audit.
  *
  * Run: `node --test tools/lib/*.test.js` — the existing CI glob picks this file up.
  */
@@ -12,6 +13,8 @@ const assert = require('node:assert');
 
 const {
   deriveTier, deriveConsequences, detectStack, detectChannelCandidates, remainingSteps, detect,
+  QUESTIONS, axisMissing, ROW_NAMES, EXPOSURE_SHAPE, EXPOSURE_RANK, GATE_CLASS, EXIT_CODE,
+  exposureShapeVerdict, gateVerdict, provenanceComment, renderDescriptor,
 } = require('./adopt.js');
 
 /** A minimal scripted io — every field defaults to "nothing here", override per test. */
@@ -247,4 +250,226 @@ test('detect: reports declared vs detected trunk and flags disagreement', () => 
   assert.strictEqual(r.detected.trunk.declared, 'main');
   assert.strictEqual(r.detected.trunk.detected, 'develop');
   assert.strictEqual(r.detected.trunk.agree, false);
+});
+
+// =========================================================================================
+// commit 2 — QUESTIONS / axisMissing
+// =========================================================================================
+
+test('QUESTIONS covers exactly the five ROW_NAMES, in that order, and the tier question never mentions writing tier', () => {
+  assert.deepStrictEqual(QUESTIONS.map((q) => q.axis), ROW_NAMES);
+  const tierQ = QUESTIONS.find((q) => q.axis === 'tier');
+  assert.deepStrictEqual(tierQ.keys, ['production', 'deploy']);
+});
+
+test('axisMissing: an empty descriptor is missing every axis', () => {
+  for (const axis of ROW_NAMES) assert.strictEqual(axisMissing({}, axis), true, axis);
+});
+
+test('axisMissing: a fully declared descriptor (this repo\'s own shape) is missing nothing', () => {
+  const cfg = { production: null, deploy: 'none', room: 'public', exposure: 'released', writes: 'serial', channels: ['artifact'] };
+  for (const axis of ROW_NAMES) assert.strictEqual(axisMissing(cfg, axis), false, axis);
+});
+
+test('axisMissing: a legacy tier-only descriptor still reports exposure as MISSING — a legacy read is not an answer', () => {
+  const cfg = { tier: 'C', production: 'https://x', deploy: 'push-main' };
+  assert.strictEqual(axisMissing(cfg, 'exposure'), true);
+  assert.strictEqual(axisMissing(cfg, 'tier'), false); // production+deploy both present
+});
+
+test('axisMissing: tier axis needs BOTH production and deploy present, not just one', () => {
+  assert.strictEqual(axisMissing({ production: null }, 'tier'), true);
+  assert.strictEqual(axisMissing({ deploy: 'none' }, 'tier'), true);
+  assert.strictEqual(axisMissing({ production: null, deploy: 'none' }, 'tier'), false);
+});
+
+// =========================================================================================
+// commit 2 — EXPOSURE_SHAPE (the constructor half of #144's exposure contract)
+// =========================================================================================
+
+test('EXPOSURE_SHAPE.self: always ok — self carries no mechanism rule at all', () => {
+  assert.deepStrictEqual(exposureShapeVerdict('self', { trunk: 'wherever', hasProduction: true, deploy: 'anything', hasDeployWorkflow: false }), { ok: true });
+});
+
+test('EXPOSURE_SHAPE.none: ok only on trunk main with no deploy workflow', () => {
+  assert.strictEqual(exposureShapeVerdict('none', { trunk: 'main', hasProduction: false, deploy: 'none', hasDeployWorkflow: false }).ok, true);
+  assert.strictEqual(exposureShapeVerdict('none', { trunk: 'dev', hasProduction: false, deploy: 'none', hasDeployWorkflow: false }).ok, false);
+  assert.strictEqual(exposureShapeVerdict('none', { trunk: 'main', hasProduction: false, deploy: 'none', hasDeployWorkflow: true }).ok, false);
+});
+
+test('EXPOSURE_SHAPE.live: needs trunk dev, production set, deploy push-main, and a deploy workflow — all four', () => {
+  const good = { trunk: 'dev', hasProduction: true, deploy: 'push-main', hasDeployWorkflow: true };
+  assert.strictEqual(exposureShapeVerdict('live', good).ok, true);
+  assert.strictEqual(exposureShapeVerdict('live', { ...good, trunk: 'main' }).ok, false);
+  assert.strictEqual(exposureShapeVerdict('live', { ...good, hasProduction: false }).ok, false);
+  assert.strictEqual(exposureShapeVerdict('live', { ...good, deploy: 'tag' }).ok, false);
+  assert.strictEqual(exposureShapeVerdict('live', { ...good, hasDeployWorkflow: false }).ok, false);
+});
+
+test('EXPOSURE_SHAPE.released: no-production shape needs trunk main + deploy none/null', () => {
+  assert.strictEqual(exposureShapeVerdict('released', { trunk: 'main', hasProduction: false, deploy: null, hasDeployWorkflow: false }).ok, true);
+  assert.strictEqual(exposureShapeVerdict('released', { trunk: 'main', hasProduction: false, deploy: 'none', hasDeployWorkflow: false }).ok, true);
+  assert.strictEqual(exposureShapeVerdict('released', { trunk: 'dev', hasProduction: false, deploy: null, hasDeployWorkflow: false }).ok, false);
+  assert.strictEqual(exposureShapeVerdict('released', { trunk: 'main', hasProduction: false, deploy: 'push-main', hasDeployWorkflow: false }).ok, false);
+});
+
+test('EXPOSURE_SHAPE.released: with-production shape needs deploy tag|manual, never push-main or none', () => {
+  const withProd = (deploy, trunk) => exposureShapeVerdict('released', { trunk, hasProduction: true, deploy, hasDeployWorkflow: true, hasRunbook: true });
+  assert.strictEqual(withProd('tag', 'dev').ok, true);
+  assert.strictEqual(withProd('manual', 'dev').ok, true);
+  assert.strictEqual(withProd('tag', 'main').ok, true); // the single-trunk tag-gated variant
+  assert.strictEqual(withProd('manual', 'main').ok, false); // manual has no single-trunk exemption
+  assert.strictEqual(withProd('push-main', 'dev').ok, false);
+  assert.strictEqual(withProd('none', 'dev').ok, false);
+});
+
+test('EXPOSURE_SHAPE.released: deploy: manual, or deploy: tag with no committed workflow, needs a runbook (mirrors audit.mjs\'s checkRunbook)', () => {
+  const manualNoRunbook = exposureShapeVerdict('released', { trunk: 'dev', hasProduction: true, deploy: 'manual', hasDeployWorkflow: false, hasRunbook: false });
+  assert.strictEqual(manualNoRunbook.ok, false);
+  assert.match(manualNoRunbook.reason, /runbook/);
+
+  const manualWithRunbook = exposureShapeVerdict('released', { trunk: 'dev', hasProduction: true, deploy: 'manual', hasDeployWorkflow: false, hasRunbook: true });
+  assert.strictEqual(manualWithRunbook.ok, true);
+
+  const externalTagNoRunbook = exposureShapeVerdict('released', { trunk: 'dev', hasProduction: true, deploy: 'tag', hasDeployWorkflow: false, hasRunbook: false });
+  assert.strictEqual(externalTagNoRunbook.ok, false);
+
+  const tagWithWorkflow = exposureShapeVerdict('released', { trunk: 'dev', hasProduction: true, deploy: 'tag', hasDeployWorkflow: true, hasRunbook: false });
+  assert.strictEqual(tagWithWorkflow.ok, true, 'a committed workflow already answers the path — no runbook needed');
+});
+
+// =========================================================================================
+// commit 2 — gateVerdict (the human gate)
+// =========================================================================================
+
+const okShapeCtx = { trunk: 'main', hasProduction: false, deploy: 'none', hasDeployWorkflow: false }; // supports self/none
+const noEvidence = { versionTags: [], deployPaths: [] };
+
+test('gateVerdict: raising to live/released, or a first declaration of either, needs nothing beyond shape', () => {
+  const liveCtx = { trunk: 'dev', hasProduction: true, deploy: 'push-main', hasDeployWorkflow: true };
+  const v1 = gateVerdict({ exposure: 'live', currentExposure: null, shapeCtx: liveCtx, evidence: noEvidence, isTTY: false, colabHuman: false, answeredBy: null, reason: null });
+  assert.strictEqual(v1.ok, true);
+  const v2 = gateVerdict({ exposure: 'released', currentExposure: 'live', shapeCtx: { ...liveCtx, deploy: 'tag' }, evidence: noEvidence, isTTY: false, colabHuman: false, answeredBy: null, reason: null });
+  assert.strictEqual(v2.ok, true); // raising live -> released
+});
+
+test('gateVerdict: first declaration of none/self is human-gated — refused with neither TTY nor COLAB_HUMAN', () => {
+  const v = gateVerdict({ exposure: 'self', currentExposure: null, shapeCtx: okShapeCtx, evidence: noEvidence, isTTY: false, colabHuman: false, answeredBy: null, reason: null });
+  assert.strictEqual(v.ok, false);
+  assert.strictEqual(v.class, GATE_CLASS.HUMAN_GATED);
+  assert.strictEqual(v.exitCode, 3);
+});
+
+test('gateVerdict: first declaration of none/self clears with COLAB_HUMAN + answeredBy, no reason needed', () => {
+  const v = gateVerdict({ exposure: 'none', currentExposure: null, shapeCtx: okShapeCtx, evidence: noEvidence, isTTY: false, colabHuman: true, answeredBy: 'Alex', reason: null });
+  assert.strictEqual(v.ok, true);
+});
+
+test('gateVerdict: first declaration of none/self clears via isTTY alone, no COLAB_HUMAN needed', () => {
+  const v = gateVerdict({ exposure: 'self', currentExposure: null, shapeCtx: okShapeCtx, evidence: noEvidence, isTTY: true, colabHuman: false, answeredBy: null, reason: null });
+  assert.strictEqual(v.ok, true);
+});
+
+test('gateVerdict: lowering an existing exposure needs the human bar PLUS a reason', () => {
+  const noBar = gateVerdict({ exposure: 'self', currentExposure: 'released', shapeCtx: okShapeCtx, evidence: noEvidence, isTTY: false, colabHuman: false, answeredBy: null, reason: null });
+  assert.strictEqual(noBar.ok, false);
+  assert.strictEqual(noBar.class, GATE_CLASS.HUMAN_GATED);
+
+  const barNoReason = gateVerdict({ exposure: 'self', currentExposure: 'released', shapeCtx: okShapeCtx, evidence: noEvidence, isTTY: true, colabHuman: false, answeredBy: null, reason: null });
+  assert.strictEqual(barNoReason.ok, false, 'a human bar alone is not enough to lower — reason is also required');
+  assert.strictEqual(barNoReason.class, GATE_CLASS.HUMAN_GATED);
+
+  const both = gateVerdict({ exposure: 'self', currentExposure: 'released', shapeCtx: okShapeCtx, evidence: noEvidence, isTTY: true, colabHuman: false, answeredBy: null, reason: 'a considered downgrade' });
+  assert.strictEqual(both.ok, true);
+});
+
+test('gateVerdict: the shape check runs FIRST — a shape refusal wins even over a fully-cleared human bar', () => {
+  const badShape = { trunk: 'main', hasProduction: false, deploy: 'none', hasDeployWorkflow: false }; // does not support live
+  const v = gateVerdict({ exposure: 'live', currentExposure: null, shapeCtx: badShape, evidence: noEvidence, isTTY: true, colabHuman: true, answeredBy: 'Alex', reason: 'anything' });
+  assert.strictEqual(v.ok, false);
+  assert.strictEqual(v.class, GATE_CLASS.REPO_SHAPE);
+  assert.strictEqual(v.exitCode, 5);
+});
+
+test('gateVerdict: the falsifier fires only on "none", never on "self" — self gets no falsifier at all', () => {
+  const evidence = { versionTags: ['v1.0.0'], deployPaths: [] };
+  const noneRefused = gateVerdict({ exposure: 'none', currentExposure: null, shapeCtx: okShapeCtx, evidence, isTTY: true, colabHuman: false, answeredBy: null, reason: null });
+  assert.strictEqual(noneRefused.ok, false);
+  assert.strictEqual(noneRefused.class, GATE_CLASS.EVIDENCE_CONTRADICTS);
+  assert.strictEqual(noneRefused.exitCode, 4);
+  assert.match(noneRefused.message, /v1\.0\.0/);
+
+  const selfOk = gateVerdict({ exposure: 'self', currentExposure: null, shapeCtx: okShapeCtx, evidence, isTTY: true, colabHuman: false, answeredBy: null, reason: null });
+  assert.strictEqual(selfOk.ok, true, 'self has no falsifier — the same evidence must not block it');
+});
+
+test('gateVerdict: a falsifier-contradicted "none" clears with --reason, regardless of direction', () => {
+  const evidence = { versionTags: ['v1.0.0'], deployPaths: [] };
+  const v = gateVerdict({ exposure: 'none', currentExposure: null, shapeCtx: okShapeCtx, evidence, isTTY: true, colabHuman: false, answeredBy: null, reason: 'the tag predates a rewrite' });
+  assert.strictEqual(v.ok, true);
+});
+
+test('EXPOSURE_RANK orders released > live > self > none', () => {
+  assert.ok(EXPOSURE_RANK.released > EXPOSURE_RANK.live);
+  assert.ok(EXPOSURE_RANK.live > EXPOSURE_RANK.self);
+  assert.ok(EXPOSURE_RANK.self > EXPOSURE_RANK.none);
+});
+
+test('EXIT_CODE matches the documented scheme: 3 human-gated, 4 evidence-contradicts, 5 repo-shape', () => {
+  assert.strictEqual(EXIT_CODE[GATE_CLASS.HUMAN_GATED], 3);
+  assert.strictEqual(EXIT_CODE[GATE_CLASS.EVIDENCE_CONTRADICTS], 4);
+  assert.strictEqual(EXIT_CODE[GATE_CLASS.REPO_SHAPE], 5);
+});
+
+// =========================================================================================
+// commit 2 — provenanceComment / renderDescriptor (append-only)
+// =========================================================================================
+
+test('provenanceComment: interactive mode names the host and date, not a flag', () => {
+  const c = provenanceComment('exposure', { mode: 'interactive', host: 'silvercube', date: '2026-08-11' });
+  assert.strictEqual(c, '# exposure: answered interactively (silvercube, 2026-08-11)');
+});
+
+test('provenanceComment: flag mode names the flag(s), and COLAB_HUMAN/--answered-by when present', () => {
+  const c = provenanceComment('exposure', { mode: 'flag', flags: ['--exposure'], date: '2026-08-11', colabHuman: true, answeredBy: 'Alex' });
+  assert.strictEqual(c, '# exposure: supplied by --exposure, COLAB_HUMAN=1, --answered-by "Alex" (2026-08-11)');
+});
+
+test('provenanceComment: flag mode omits COLAB_HUMAN/--answered-by when not part of the story (a raising exposure answer, or any non-exposure row)', () => {
+  const c = provenanceComment('room', { mode: 'flag', flags: ['--room'], date: '2026-08-11', colabHuman: false, answeredBy: null });
+  assert.strictEqual(c, '# room: supplied by --room (2026-08-11)');
+});
+
+test('renderDescriptor: a fresh file (null) is just the entries, nothing prepended', () => {
+  const text = renderDescriptor(null, [{ key: 'room', value: 'solo' }]);
+  assert.strictEqual(text, 'room: solo\n');
+});
+
+test('renderDescriptor: appends after existing content, adding a trailing newline first if missing — never touches an existing line', () => {
+  const before = 'tier: B\ntrunk: main';
+  const text = renderDescriptor(before, [{ key: 'room', value: 'solo', comment: '# room: answered interactively (host, date)' }]);
+  assert.strictEqual(text, 'tier: B\ntrunk: main\nroom: solo\n# room: answered interactively (host, date)\n');
+  assert.ok(text.startsWith(before), 'the original bytes must be a strict prefix of the result');
+});
+
+test('renderDescriptor: a list value renders as an inline flow sequence, parseable by this repo\'s own yaml.js', () => {
+  const text = renderDescriptor('room: solo', [{ key: 'channels', value: ['workflow', 'artifact'] }]);
+  assert.match(text, /channels: \[workflow, artifact\]/);
+  const yaml = require('./yaml.js');
+  assert.deepStrictEqual(yaml.parse(text).channels, ['workflow', 'artifact']);
+});
+
+test('renderDescriptor: a null value renders as the bare YAML null this repo\'s parser reads back as null', () => {
+  const text = renderDescriptor('room: solo', [{ key: 'production', value: null }]);
+  assert.match(text, /^production: null$/m);
+  const yaml = require('./yaml.js');
+  assert.strictEqual(yaml.parse(text).production, null);
+});
+
+test('renderDescriptor: multiple entries, each on its own line, in the order given', () => {
+  const text = renderDescriptor(null, [
+    { key: 'production', value: null, comment: '# c1' },
+    { key: 'deploy', value: 'none', comment: '# c2' },
+  ]);
+  assert.strictEqual(text, 'production: null\n# c1\ndeploy: none\n# c2\n');
 });

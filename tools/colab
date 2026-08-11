@@ -10,6 +10,7 @@
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const readline = require('readline');
 const { spawnSync } = require('child_process');
 
 const state = require('./lib/state');
@@ -35,6 +36,8 @@ const decisionRecord = require('./lib/decision-record');
 const ciGrant = require('./lib/ci-grant');
 const ciVerdict = require('./lib/ci-verdict');
 const adopt = require('./lib/adopt');
+const consumerEvidence = require('./lib/consumer-evidence');
+const axisAuthority = require('./lib/axis-authority');
 const {
   HOST, UserError, normIssueNum, issueTag, claimKey, today, nowISO, hoursSince,
   parseArgs, table, shortRepo,
@@ -4216,33 +4219,91 @@ function cmdConfig(argv) {
 }
 
 // ---------------------------------------------------------------------------
-// adopt — detect / derive / report §9's five-row question set for a repo (#199, commit 1 of 2).
+// adopt — detect / derive / ASK / WRITE §9's five-row question set for a repo (#199, both
+// commits landed).
 //
-// Deliberately report-only in this unit: it never prompts, never checks COLAB_HUMAN, and never
-// writes .github/project.yml — see the plan on #199 ("the seam"). Asking a human what could not
-// be detected, and writing the descriptor in one act, are the next commit. What this one gives
-// is useful on its own: read whatever is already declared, detect what the working tree already
-// states, derive what CONVENTIONS.md §7/§9 says follows, and print it — a single command that
-// answers "what does this repo already say about itself, and what is CONVENTIONS.md #9 still
-// asking for", where before a human had to walk the checklist and the schema by hand.
+// Detect what a repo already states, ask a human only what could not be detected, derive the
+// rest, write .github/project.yml in one act — the single command CONVENTIONS.md §9 always
+// pointed at ("the shape a future automation should take") without one existing yet. Report-only
+// stayed true through commit 1; this file now also asks (flags, or a hand-rolled
+// `node:readline` prompt at an interactive terminal) and writes (append-only, gated on the human
+// bar `tools/lib/adopt.js`'s `gateVerdict()` implements).
 //
-// The core logic (tools/lib/adopt.js) is pure and injected-io; this function is the one place
-// that touches fs/git for real, matching every other cmd* function in this file.
+// THE HONEST LIMIT, stated here because #199's plan asks for it in the code, not only in a
+// comment somewhere it can be missed: on the `COLAB_HUMAN=1` path this gate is EXACTLY as strong
+// as `colab ship`'s identical bar, and no stronger — `COLAB_HUMAN` is an env var the gated party
+// can set (#150, parked: one identity holds every credential on this machine today). An
+// interactive TTY is a better DEFAULT (an agent must take an unusual act — allocate a pty — to
+// defeat it, where setting an env var is an entirely ordinary one), but a TTY is not identity
+// either. The provenance comment this command writes beside every answered key does not prevent
+// a false claim; it makes one require DELIBERATELY writing a lie into a file this repo commits,
+// which is auditable after the fact. This becomes a real access-control boundary only once
+// #150's identity work exists.
+//
+// The core logic (tools/lib/adopt.js) is pure and injected-io/injected-env; this function is the
+// one place that touches fs/git/process.env/process.stdin for real, matching every other cmd*
+// function in this file.
 // ---------------------------------------------------------------------------
 
-const HELP_ADOPT = `colab adopt [--repo <path>] [--json] [--no-verify]
+const HELP_ADOPT = `colab adopt [--repo <path>] [--json] [--no-verify] [--axis a,b,...]
+                 [--room <solo|team|public>] [--exposure <none|self|live|released>]
+                 [--writes <serial|isolated>] [--channels <c1,c2,...>]
+                 [--production <url>|none] [--deploy <push-main|tag|manual|none>]
+                 [--stack "<text>"] [--answered-by <name>] [--reason "<text>"]
 
-Report-only, for now — commit 1 of #199. Reads whatever a repo has already declared in
-.github/project.yml, DETECTS what its working tree already states (trunk, stack, channel
-evidence), DERIVES what CONVENTIONS.md §7/§9 says follows from what is on record, and prints a
-report of the FIVE §9 rows — tier, room, exposure, writes, channels. Asking a human what is still
-missing, and writing the descriptor, are the NEXT commit — this one WRITES NOTHING, EVER.
+Detects what a repo already states in .github/project.yml, ASKS a human only what could not be
+detected (flags, or a hand-rolled interactive prompt at a TTY), DERIVES the rest, and WRITES the
+descriptor in one act — append-only, never touching a byte already there. A complete descriptor
+just reports (write nothing, exit 0); re-answer one row on purpose with --axis.
 
-  --repo <path>   repo to inspect (default: git root of cwd)
-  --json          machine-readable — the same structure the text report renders
-  --no-verify     skip running the handbook's own audit against the repo afterward (default: run it)
+  --repo <path>     repo to inspect (default: git root of cwd)
+  --json            machine-readable
+  --no-verify       skip running the handbook's own audit against the repo afterward
+  --axis a,b        force these rows to be (re-)asked even if already answered — the §9
+                    "going-live" ladder's own instruction ("re-answer questions 3 and 5")
+  --answered-by N   who is answering, alongside COLAB_HUMAN=1 (see THE HUMAN GATE below)
+  --reason "..."    required alongside a lowered or evidence-contradicted exposure answer;
+                    written into the file, next to the key it justifies
 
-Each row's state is one of:
+Any answer flag (--room/--exposure/--writes/--channels/--production/--deploy/--stack) makes the
+whole run NON-INTERACTIVE — it never half-prompts. With no answer flags and no TTY, and something
+is still missing, this refuses in under a second, naming exactly which flags would answer it —
+never hangs waiting on stdin nobody is at.
+
+THE HUMAN GATE — applies ONLY to LOWERING exposure (released > live > self > none), or a FIRST
+declaration of none/self. Raising, or a first declaration of live/released, needs nothing beyond
+falsifier/shape clearance — CONVENTIONS.md §2's asymmetry: an agent may PROPOSE those from
+committed evidence, never conclude "nothing"/"only the room" consumes a merge here.
+
+  live/released, raising or first     none beyond falsifier + shape clearance
+  none/self, first declaration        interactive TTY, OR COLAB_HUMAN=1 AND --answered-by <name>
+  lowering an existing exposure       the above, AND --reason "<text>"
+  falsifiers contradict the answer    --reason "<text>", either direction
+
+THE HONEST LIMIT: on the COLAB_HUMAN=1 path this is EXACTLY as strong as \`colab ship\`'s identical
+bar, and no stronger — COLAB_HUMAN is an env var the gated party can set (#150, parked: one
+identity holds every credential today). An interactive TTY is a better default (an agent must
+take an unusual act — allocate a pty — to defeat it), but it is not identity either. The
+provenance comment this writes beside every answered key does not prevent a false claim; it
+makes one require deliberately writing a lie into a committed file, auditable after the fact.
+This becomes a real access-control boundary only once #150's identity work lands.
+
+The asymmetry is MECHANICAL: the shape check and the falsifier check are code, and no flag,
+project.yml value or answer lowers them. There is no --force.
+
+Exit codes: 3 = human-gated (the bar above, unmet); 4 = evidence contradicts (a falsifier, or
+axis-authority.contradiction() against a declared tier); 5 = this repo's own shape does not
+support the answer (the §9 "going live" ladder — e.g. exposure: live on a repo with no dev trunk
+or no production URL). On ANY refusal, nothing is written — the file does not exist, or is
+byte-identical to before this run.
+
+\`tier\` is written ONLY when exposure ends this run still unanswered (declined, or refused) and no
+\`tier\` key already exists — derived from (production, deploy), never from exposure, with a
+comment naming how to answer exposure later. The normal path never writes \`tier\`: nothing in
+\`tools/colab\` reads it, and a redundant key a later hand-edit can contradict is exactly the drift
+this epic exists to kill.
+
+Each row's state (in the report) is one of:
   answered      declared in .github/project.yml
   legacy read   derived from a declared tier, because exposure itself is undeclared
                 (tools/lib/axis-authority.js — tier -> exposure is a function, not a bijection)
@@ -4253,7 +4314,17 @@ Each row's state is one of:
 
 Detected, never asked (CONVENTIONS.md §9): the default branch (trunk), stack candidates (from
 manifest presence), declared ports, and channel candidates (a version-shaped git tag, a committed
-deploy-*.yml, a hooks dir or non-default core.hooksPath).
+deploy-*.yml, a hooks dir or non-default core.hooksPath). \`trunk\` falls back to the CURRENT
+branch when there is no origin remote at all (first-time adoption's own shape) — the report says
+so ("current branch — no origin remote") rather than presenting it as read from a remote's HEAD.
+
+\`stack\` is a REQUIRED key but free-form, so detection can legitimately come up empty (a
+manifest-less, docs-only repo). adopt NEVER writes a descriptor the audit would then fail: when
+\`stack\` is undeclared and no single manifest-based candidate exists, it asks (a prompt at a
+terminal) or requires \`--stack "<text>"\` (non-interactive) — and refuses the WHOLE write, same
+as an unmet exposure gate, rather than shipping a file missing a required key. The identical rule
+applies to \`trunk\`: if it cannot be determined at all (a detached HEAD with no origin), adopt
+refuses outright rather than guess.
 
 Derived, never asked: gate count, CI's role (from writes) and depth (from exposure), the ceremony
 weight (from room), whether a branch is mandatory (from writes), the recovery obligation (from
@@ -4263,19 +4334,41 @@ exposure (tools/lib/adopt.js:deriveTier).
 The verify step runs audit/audit.mjs from THIS handbook checkout, when it is available — a frozen
 install (~/.colab/bin/colab) carries tools/ only, not audit/, and degrades to a note rather than
 failing, the same way \`colab template\` degrades when templates/ is missing.
+
+Boundary: adopt writes the descriptor and nothing else — no labels, no topic, no CI template, no
+CLAUDE block, no \`colab register\`, and it never commits. It ends with the machine-readable
+"remaining §9 steps" list so the next step is a to-do, not a paraphrase.
 `;
 
 const ADOPT_ROW_ORDER = ['tier', 'room', 'exposure', 'writes', 'channels'];
 
 /** `.githooks`, `core.hooksPath` — the one channel-evidence source `adopt.js` cannot read via a
- * plain file op, so it is gathered here (git config) rather than folded into the io adapter. */
+ * plain file op, so it is gathered here (git config) rather than folded into the io adapter.
+ *
+ * `trunk` — `git.detectTrunk()` (shared with `worktree new`/`ship`/`promote`) reads only
+ * `origin`'s HEAD and returns `null` with no remote at all. Those other callers legitimately
+ * WANT null there (`worktree new` refuses outright; `ship`/`promote` must never merge into a
+ * guessed branch), so the fallback below lives HERE, in adopt only, never in the shared helper.
+ * `adopt`'s primary use case is a repo that has not been pushed anywhere yet — `git init`, adopt,
+ * add a remote later — so falling back to the CURRENT branch is the honest inference: it is not
+ * read from a remote's HEAD, and the report says so (`detected.trunk.source`), never presented
+ * as though it were.
+ */
 function adoptGitExtras(repoAbs) {
-  const trunk = git.detectTrunk(repoAbs);
+  let trunk = git.detectTrunk(repoAbs);
+  let trunkSource = trunk ? 'origin-head' : null;
+  if (!trunk) {
+    const head = git.git(['rev-parse', '--abbrev-ref', 'HEAD'], repoAbs);
+    if (head.ok && head.stdout && head.stdout !== 'HEAD') { // 'HEAD' = detached, not a branch
+      trunk = head.stdout;
+      trunkSource = 'current-branch-fallback';
+    }
+  }
   const hp = git.git(['config', '--get', 'core.hooksPath'], repoAbs);
   const hooksPath = hp.ok && hp.stdout ? hp.stdout : null;
   let hooksDirFiles = [];
   try { hooksDirFiles = fs.readdirSync(path.join(repoAbs, '.githooks')); } catch (_) { /* absent */ }
-  return { trunk, hooksPath, hooksDirFiles };
+  return { trunk, trunkSource, hooksPath, hooksDirFiles };
 }
 
 /** The `{ readFile, listDir, tags }` adapter tools/lib/adopt.js asks for — matching the local
@@ -4318,24 +4411,9 @@ function adoptVerify(repoAbs) {
 
 function fmtVal(v) { return v === null || v === undefined ? '—' : (typeof v === 'string' ? v : JSON.stringify(v)); }
 
-function cmdAdopt(argv) {
-  const opts = parseArgs(argv, {
-    values: { '--repo': 'repo' },
-    flags: { '--json': 'json', '--no-verify': 'noVerify', '-h': 'help', '--help': 'help' },
-  });
-  if (opts.help) return print(HELP_ADOPT);
-
-  const repoAbs = resolveRepo(opts);
-  const io = adoptIo(repoAbs);
-  const extra = adoptGitExtras(repoAbs);
-  const report = adopt.detect(io, extra);
-  const verify = opts.noVerify ? null : adoptVerify(repoAbs);
-
-  if (opts.json) {
-    print(JSON.stringify({ repo: repoAbs, ...report, verify }, null, 2));
-    return 0;
-  }
-
+/** Text report — shared by the "already complete, nothing to do" path and the post-write path
+ * (called again against a fresh detect() so the printed state reflects what was just written). */
+function printAdoptReport(report, repoAbs, verify) {
   print(`colab adopt — ${repoAbs}`);
   print(report.descriptorExists ? '.github/project.yml exists.' : 'No .github/project.yml — nothing declared yet.');
   print('');
@@ -4348,7 +4426,8 @@ function cmdAdopt(argv) {
   ));
   print('');
   const t = report.detected.trunk;
-  print(`detected trunk: ${t.detected || '(unknown)'}${t.declared !== null ? `  (declared: ${t.declared}${t.agree === false ? ' ⚠ disagrees with detected' : ''})` : ''}`);
+  const trunkSourceNote = t.source === 'current-branch-fallback' ? ' (current branch — no origin remote)' : '';
+  print(`detected trunk: ${t.detected || '(unknown)'}${trunkSourceNote}${t.declared !== null ? `  (declared: ${t.declared}${t.agree === false ? ' ⚠ disagrees with detected' : ''})` : ''}`);
   print(`stack candidates: ${report.detected.stackCandidates.length ? report.detected.stackCandidates.join(', ') : '(none found)'}`);
   print(`declared ports: ${fmtVal(report.detected.ports)}`);
   print(`legacy tier letter, derived from (production, deploy): ${report.legacyTierLetter ?? '(undetermined — production is set but deploy matches none of push-main/tag/manual)'}`);
@@ -4376,7 +4455,365 @@ function cmdAdopt(argv) {
       for (const f of verify.findings) print(`  [${f.level || '?'}] ${f.text || JSON.stringify(f)}`);
     }
   }
+}
 
+/** The flag(s) that would answer `axis`, printed in the "no TTY, no flags" refusal so an agent
+ * or a CI invocation knows exactly what to re-run with — never just "answer is missing". */
+function adoptAxisFlagHint(axis) {
+  switch (axis) {
+    case 'tier': return '--production <url>|none --deploy <push-main|tag|manual|none>';
+    case 'room': return '--room <solo|team|public>';
+    case 'exposure': return '--exposure <none|self|live|released> [--answered-by <name>] [--reason "<text>"]';
+    case 'writes': return '--writes <serial|isolated>';
+    case 'channels': return '--channels <c1,c2,...>';
+    default: return `--${axis} <value>`;
+  }
+}
+
+/** Turn CLI flags into `{ axis: { values, mode:'flag', flags:[...] } }` — only for axes actually
+ * in `axesToAsk`, and only for keys not already declared UNLESS the axis was explicitly forced
+ * via --axis (§9's "going-live" re-answer case: a key may already exist and is being answered on
+ * purpose — `renderDescriptor` appends a second occurrence, which this repo's own reader
+ * resolves last-wins, exactly like ordinary "a later line overrides an earlier one" YAML). Also
+ * validates each value against the enum it belongs to, throwing UserError on a bad one — this is
+ * argument validation, not a gate, so it fails loudly and immediately.
+ */
+function adoptAnswersFromFlags(opts, cfg, axesToAsk, forcedAxes) {
+  const answers = {};
+  const eligible = (key, axis) => forcedAxes.has(axis) || !(key in cfg);
+
+  if (axesToAsk.includes('tier')) {
+    const values = {};
+    const flags = [];
+    if (opts.production !== undefined && eligible('production', 'tier')) {
+      values.production = opts.production === 'none' ? null : opts.production;
+      flags.push('--production');
+    }
+    if (opts.deploy !== undefined && eligible('deploy', 'tier')) {
+      if (!adopt.VALID_DEPLOY.has(opts.deploy)) throw new UserError(`--deploy must be one of: ${[...adopt.VALID_DEPLOY].join(', ')}`);
+      values.deploy = opts.deploy;
+      flags.push('--deploy');
+    }
+    if (flags.length) answers.tier = { values, mode: 'flag', flags };
+  }
+  if (axesToAsk.includes('room') && opts.room !== undefined && eligible('room', 'room')) {
+    if (!adopt.VALID_ROOM.has(opts.room)) throw new UserError(`--room must be one of: ${[...adopt.VALID_ROOM].join(', ')}`);
+    answers.room = { values: { room: opts.room }, mode: 'flag', flags: ['--room'] };
+  }
+  if (axesToAsk.includes('writes') && opts.writes !== undefined && eligible('writes', 'writes')) {
+    if (!adopt.VALID_WRITES.has(opts.writes)) throw new UserError(`--writes must be one of: ${[...adopt.VALID_WRITES].join(', ')}`);
+    answers.writes = { values: { writes: opts.writes }, mode: 'flag', flags: ['--writes'] };
+  }
+  if (axesToAsk.includes('channels') && opts.channels !== undefined && eligible('channels', 'channels')) {
+    answers.channels = { values: { channels: adoptValidateChannels(opts.channels.split(',').map((s) => s.trim()).filter(Boolean)) }, mode: 'flag', flags: ['--channels'] };
+  }
+  if (axesToAsk.includes('exposure') && opts.exposure !== undefined && eligible('exposure', 'exposure')) {
+    if (!adopt.VALID_EXPOSURE.has(opts.exposure)) throw new UserError(`--exposure must be one of: ${[...adopt.VALID_EXPOSURE].join(', ')}`);
+    answers.exposure = { values: { exposure: opts.exposure }, mode: 'flag', flags: ['--exposure'] };
+  }
+  return answers;
+}
+
+function adoptValidateChannels(list) {
+  if (!Array.isArray(list) || list.length === 0) {
+    throw new UserError('--channels must be a non-empty comma-separated list — use "none" if nothing runs this code anywhere');
+  }
+  const unknown = list.filter((c) => !adopt.VALID_CHANNELS.has(c));
+  if (unknown.length) throw new UserError(`--channels contains ${JSON.stringify(unknown)}, expected members of: ${[...adopt.VALID_CHANNELS].join(', ')}`);
+  const deduped = [...new Set(list)];
+  if (deduped.length !== list.length) throw new UserError(`--channels contains a duplicate member — declare each channel once: ${JSON.stringify(deduped)}`);
+  if (list.includes('none') && list.length > 1) throw new UserError('--channels combines "none" with another value — "none" must stand alone');
+  return list;
+}
+
+/** `rl.question` wrapped in a Promise — the one async primitive the hand-rolled interactive path
+ * needs; no prompting library (#199's plan is explicit: zero dependencies). */
+function rlAsk(rl, prompt) {
+  return new Promise((resolve) => rl.question(prompt, (answer) => resolve(answer)));
+}
+
+/**
+ * The interactive path: one `QUESTIONS`-worded prompt per axis in `axesToAsk`, in order. An
+ * empty answer to `exposure` specifically is a DECLINE, not an error — the caller falls back to
+ * deriving `tier` instead (see #199's plan, "does adopt write tier?"). Every other empty answer
+ * is re-prompted once, then errors — an interactive session that cannot get an answer is not
+ * the "no TTY, no flags" refusal case, but it must not loop forever either.
+ */
+async function adoptAskInteractive(rl, axesToAsk, cfg) {
+  const answers = {};
+  for (const axis of axesToAsk) {
+    const q = adopt.QUESTIONS.find((x) => x.axis === axis);
+    process.stdout.write(`\n${q.prompt}\n`);
+    if (axis === 'tier') {
+      const prod = (await rlAsk(rl, '  production URL (blank = none): ')).trim();
+      const dep = (await rlAsk(rl, '  deploy: push-main / tag / manual / none: ')).trim();
+      if (!adopt.VALID_DEPLOY.has(dep)) throw new UserError(`deploy must be one of: ${[...adopt.VALID_DEPLOY].join(', ')}`);
+      answers.tier = { values: { production: prod === '' ? null : prod, deploy: dep }, mode: 'interactive' };
+    } else if (axis === 'room') {
+      const v = (await rlAsk(rl, '  solo / team / public: ')).trim();
+      if (!adopt.VALID_ROOM.has(v)) throw new UserError(`room must be one of: ${[...adopt.VALID_ROOM].join(', ')}`);
+      answers.room = { values: { room: v }, mode: 'interactive' };
+    } else if (axis === 'writes') {
+      const v = (await rlAsk(rl, '  serial / isolated: ')).trim();
+      if (!adopt.VALID_WRITES.has(v)) throw new UserError(`writes must be one of: ${[...adopt.VALID_WRITES].join(', ')}`);
+      answers.writes = { values: { writes: v }, mode: 'interactive' };
+    } else if (axis === 'channels') {
+      const raw = (await rlAsk(rl, '  comma-separated: ')).trim();
+      const list = adoptValidateChannels(raw.split(',').map((s) => s.trim()).filter(Boolean));
+      answers.channels = { values: { channels: list }, mode: 'interactive' };
+    } else if (axis === 'exposure') {
+      const v = (await rlAsk(rl, '  none / self / live / released (blank = skip — derive tier instead): ')).trim();
+      if (v === '') continue; // decline — the fallback tier derivation picks this up
+      if (!adopt.VALID_EXPOSURE.has(v)) throw new UserError(`exposure must be one of: ${[...adopt.VALID_EXPOSURE].join(', ')}`);
+      answers.exposure = { values: { exposure: v }, mode: 'interactive' };
+    }
+  }
+  return answers;
+}
+
+/** The `EXPOSURE_SHAPE`/falsifier context, built from EFFECTIVE production/deploy — accounting
+ * for a `tier`-axis answer resolved in THIS SAME run, not only what was already on record, so
+ * declaring production+deploy and exposure together in one invocation validates against each
+ * other rather than the pre-write snapshot. */
+function adoptShapeCtx(cfg, tierAnswer, trunk, workflows, io) {
+  const effProduction = tierAnswer ? tierAnswer.values.production : (Object.prototype.hasOwnProperty.call(cfg, 'production') ? cfg.production : null);
+  const effDeploy = tierAnswer ? tierAnswer.values.deploy : (Object.prototype.hasOwnProperty.call(cfg, 'deploy') ? cfg.deploy : null);
+  const evidence = consumerEvidence.consumerEvidence(io, workflows);
+  const hasDeployWorkflow = evidence.deployPaths.some((p) => p.startsWith('.github/workflows/'));
+  const hasProduction = effProduction !== null && effProduction !== undefined && effProduction !== '';
+  const runbook = Object.prototype.hasOwnProperty.call(cfg, 'runbook') ? cfg.runbook : null;
+  const hasRunbook = !!(runbook && io.readFile(String(runbook).trim().replace(/^\.\//, '')) !== null);
+  return { trunk, hasProduction, deploy: effDeploy, hasDeployWorkflow, hasRunbook, effProduction, effDeploy };
+}
+
+async function cmdAdopt(argv) {
+  const opts = parseArgs(argv, {
+    values: {
+      '--repo': 'repo', '--axis': 'axis', '--room': 'room', '--exposure': 'exposure',
+      '--writes': 'writes', '--channels': 'channels', '--production': 'production',
+      '--deploy': 'deploy', '--stack': 'stack', '--answered-by': 'answeredBy', '--reason': 'reason',
+    },
+    flags: { '--json': 'json', '--no-verify': 'noVerify', '-h': 'help', '--help': 'help' },
+  });
+  if (opts.help) return print(HELP_ADOPT);
+
+  const repoAbs = resolveRepo(opts);
+  const io = adoptIo(repoAbs);
+  const extra = adoptGitExtras(repoAbs);
+  const report = adopt.detect(io, extra);
+  const cfg = report.cfg;
+  const descriptorFile = path.join(repoAbs, '.github', 'project.yml');
+  const rawTextBefore = io.readFile('.github/project.yml');
+
+  const requestedAxes = opts.axis ? opts.axis.split(',').map((s) => s.trim()).filter(Boolean) : [];
+  for (const a of requestedAxes) {
+    if (!adopt.ROW_NAMES.includes(a)) throw new UserError(`Unknown --axis "${a}" — expected one of: ${adopt.ROW_NAMES.join(', ')}`);
+  }
+  const forcedAxes = new Set(requestedAxes);
+  const axesToAsk = adopt.ROW_NAMES.filter((a) => forcedAxes.has(a) || adopt.axisMissing(cfg, a));
+
+  // Already complete (and nothing forced): report, write nothing, exit 0.
+  if (axesToAsk.length === 0 && opts.stack === undefined) {
+    const verify = opts.noVerify ? null : adoptVerify(repoAbs);
+    if (opts.json) { print(JSON.stringify({ repo: repoAbs, ...report, verify }, null, 2)); return 0; }
+    printAdoptReport(report, repoAbs, verify);
+    return 0;
+  }
+
+  // `trunk` is DETECTED, never asked — no answer flag can supply it, and asking a human "what is
+  // your trunk" contradicts §9 by design. `adoptGitExtras()` already falls back to the current
+  // branch when there is no origin remote; the only shape left undetermined is a detached HEAD
+  // with no origin at all, which is not a state `colab adopt` can honestly resolve on its own.
+  // Refuse unconditionally rather than write a descriptor missing a required key.
+  if (axesToAsk.length > 0 && !('trunk' in cfg) && !extra.trunk) {
+    warn('trunk could not be determined — no origin remote, and this checkout is not on a real '
+      + 'branch (e.g. detached HEAD). colab adopt cannot honestly guess it. Check out a real '
+      + 'branch, or set project.yml `trunk:` by hand, then re-run.');
+    return 1;
+  }
+
+  const answerFlagKeys = ['room', 'exposure', 'writes', 'channels', 'production', 'deploy', 'stack'];
+  const anyAnswerFlagGiven = answerFlagKeys.some((k) => opts[k] !== undefined);
+  const isTTY = !!(process.stdin.isTTY && process.stdout.isTTY);
+
+  // `stack` is REQUIRED by the audit but free-form, so it cannot always be detected — a
+  // manifest-less repo (a docs-only repo; this handbook's own shape) has zero candidates.
+  // Writing anything at all while `stack` would stay missing hands back a descriptor the
+  // audit then fails — the "the tool is the gate" promise does not survive that. So: resolvable
+  // (already declared, exactly one unambiguous candidate, or --stack) is fine; anything else is
+  // a hard block on the WHOLE write, same as an unmet exposure gate — never a partial write.
+  const needsStack = !('stack' in cfg) && report.detected.stackCandidates.length !== 1;
+  const stackUnresolvable = axesToAsk.length > 0 && needsStack && opts.stack === undefined;
+
+  let answers;
+  let stackAnsweredInteractively = false;
+  if (axesToAsk.length === 0) {
+    answers = {};
+  } else if (anyAnswerFlagGiven) {
+    // Fully non-interactive: whatever flags were given get applied; anything still missing
+    // just stays missing (reported in "remaining"), never prompted for — half a prompt is worse
+    // than none. `stack` is the one exception: it is a required key, not an optional row, so an
+    // unresolved `stack` refuses the whole run rather than shipping a file the audit will fail.
+    if (stackUnresolvable) {
+      warn('no manifest this tool recognises (package.json, composer.json, pyproject.toml, '
+        + '.python-version) and no --stack was given — stack: is a required key, and adopt '
+        + 'refuses to write a descriptor the audit would then fail. Re-run with: --stack "<text>"');
+      return 1;
+    }
+    answers = adoptAnswersFromFlags(opts, cfg, axesToAsk, forcedAxes);
+  } else if (isTTY) {
+    const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+    try {
+      answers = await adoptAskInteractive(rl, axesToAsk, cfg);
+      if (needsStack && opts.stack === undefined) {
+        process.stdout.write('\nNo manifest recognised (package.json/composer.json/pyproject.toml/'
+          + '.python-version) — the audit requires stack: as a literal key.\n');
+        const v = (await rlAsk(rl, '  stack (free text, e.g. "docs", "node"): ')).trim();
+        if (!v) throw new UserError('stack cannot be blank — the audit requires it as a literal key');
+        opts.stack = v; // folds into the trunk/stack auto-fill block below
+        stackAnsweredInteractively = true;
+      }
+    } finally {
+      rl.close();
+    }
+  } else {
+    const hints = axesToAsk.map(adoptAxisFlagHint).join('  ');
+    const stackHint = stackUnresolvable ? '  --stack "<text>"' : '';
+    warn(`${axesToAsk.length} unanswered §9 row(s) (${axesToAsk.join(', ')}) — no TTY and no answer flags, so there is no way to ask. Re-run with: ${hints}${stackHint}`);
+    return 1;
+  }
+
+  const workflows = io.listDir('.github/workflows').filter((f) => /\.ya?ml$/.test(f));
+  const trunk = extra.trunk;
+
+  // Exposure gate — the only axis with a human bar. Everything else below is validated but
+  // never gated. Checked (and, on refusal, the WHOLE run stops here) before anything is
+  // written, per "nothing partially written on refusal".
+  if (answers.exposure) {
+    const proposedExposure = answers.exposure.values.exposure;
+    const shapeCtx = adoptShapeCtx(cfg, answers.tier, trunk, workflows, io);
+    const evidence = consumerEvidence.consumerEvidence(io, workflows);
+    const currentExposure = axisAuthority.axisOfRecord(cfg).exposure;
+    const verdict = adopt.gateVerdict({
+      exposure: proposedExposure,
+      currentExposure,
+      shapeCtx,
+      evidence,
+      isTTY: answers.exposure.mode === 'interactive' ? true : isTTY,
+      colabHuman: process.env.COLAB_HUMAN === '1',
+      answeredBy: opts.answeredBy || null,
+      reason: opts.reason || null,
+    });
+    if (!verdict.ok) {
+      warn(verdict.message);
+      return verdict.exitCode;
+    }
+  }
+
+  // axis-authority.contradiction() — before writing, and unconditional: no flag lowers it. Only
+  // relevant when THIS run is introducing/changing the exposure value; a pre-existing
+  // tier/exposure disagreement that predates this run is the audit's own finding, not
+  // something an unrelated channels/room write should be blocked by.
+  if (answers.exposure && Object.prototype.hasOwnProperty.call(cfg, 'tier')) {
+    const disagreement = axisAuthority.contradiction(cfg.tier, answers.exposure.values.exposure);
+    if (disagreement) {
+      warn(disagreement);
+      return adopt.EXIT_CODE[adopt.GATE_CLASS.EVIDENCE_CONTRADICTS];
+    }
+  }
+
+  // Build the append entries. Order follows QUESTIONS (tier's production/deploy pair first).
+  const entries = [];
+  const nowDate = today();
+  const meta = (a) => (a.mode === 'interactive'
+    ? { mode: 'interactive', host: HOST, date: nowDate }
+    : { mode: 'flag', flags: a.flags, date: nowDate, colabHuman: process.env.COLAB_HUMAN === '1', answeredBy: opts.answeredBy || null });
+
+  if (answers.tier) {
+    for (const key of ['production', 'deploy']) {
+      if (!(key in answers.tier.values)) continue;
+      entries.push({ key, value: answers.tier.values[key], comment: adopt.provenanceComment(key, meta(answers.tier)) });
+    }
+  }
+  if (answers.room) entries.push({ key: 'room', value: answers.room.values.room, comment: adopt.provenanceComment('room', meta(answers.room)) });
+  if (answers.writes) entries.push({ key: 'writes', value: answers.writes.values.writes, comment: adopt.provenanceComment('writes', meta(answers.writes)) });
+  if (answers.channels) entries.push({ key: 'channels', value: answers.channels.values.channels, comment: adopt.provenanceComment('channels', meta(answers.channels)) });
+  if (answers.exposure) {
+    const m = meta(answers.exposure);
+    const reasonSuffix = opts.reason ? ` — ${opts.reason}` : '';
+    entries.push({
+      key: 'exposure',
+      value: answers.exposure.values.exposure,
+      comment: `${adopt.provenanceComment('exposure', m)}${reasonSuffix}`,
+    });
+  }
+  // Fallback: exposure ends this run still unanswered (declined interactively, or simply not
+  // among the axes that got an answer this run) and no `tier` already exists — derive one from
+  // (production, deploy), using the EFFECTIVE values (this run's tier answer, if any, else what
+  // was already on record). Never overwrites an existing `tier`.
+  const exposureAnsweredThisRun = !!answers.exposure;
+  const exposureAlreadyDeclared = axisAuthority.axisOfRecord(cfg).source === 'exposure';
+  if (!exposureAnsweredThisRun && !exposureAlreadyDeclared && !('tier' in cfg)) {
+    const effProduction = answers.tier && 'production' in answers.tier.values ? answers.tier.values.production : (('production' in cfg) ? cfg.production : null);
+    const effDeploy = answers.tier && 'deploy' in answers.tier.values ? answers.tier.values.deploy : (('deploy' in cfg) ? cfg.deploy : null);
+    const letter = adopt.deriveTier(effProduction, effDeploy);
+    if (letter !== null) {
+      entries.push({
+        key: 'tier',
+        value: letter,
+        comment: '# exposure unanswered — run `colab adopt --axis exposure` at a terminal',
+      });
+    }
+  }
+
+  // `trunk` and `stack` are DETECTED, never asked (CONVENTIONS.md §9) — but a repo's descriptor
+  // still needs them as literal keys (audit/audit.mjs's required list), so whenever this run is
+  // about to write anything at all, fill them in too when they are unambiguous: `trunk` from
+  // git's own default branch (always, when known), `stack` from --stack when supplied, else
+  // auto-filled ONLY when exactly one manifest-based candidate exists — a polyglot or
+  // manifest-less repo (this handbook's own shape: no manifest, `stack: docs`) stays missing
+  // and is reported, never guessed.
+  if (entries.length > 0 || opts.stack !== undefined) {
+    if (!('trunk' in cfg) && extra.trunk) {
+      const trunkNote = extra.trunkSource === 'current-branch-fallback'
+        ? `detected — current branch, no origin remote yet, ${nowDate}`
+        : `detected (the repo's default branch, ${nowDate})`;
+      entries.push({ key: 'trunk', value: extra.trunk, comment: `# trunk: ${trunkNote}` });
+    }
+    if (!('stack' in cfg)) {
+      if (opts.stack !== undefined) {
+        const stackNote = stackAnsweredInteractively
+          ? `answered interactively (${HOST}, ${nowDate})`
+          : `supplied by --stack (${nowDate})`;
+        entries.push({ key: 'stack', value: opts.stack, comment: `# stack: ${stackNote}` });
+      } else if (report.detected.stackCandidates.length === 1) {
+        const bare = report.detected.stackCandidates[0].split(' ')[0];
+        entries.push({ key: 'stack', value: bare, comment: `# stack: detected (${report.detected.stackCandidates[0]}, ${nowDate})` });
+      }
+    }
+  }
+
+  if (entries.length === 0) {
+    warn('nothing to write — every requested row was already answered, or nothing was supplied to answer it.');
+    const verify = opts.noVerify ? null : adoptVerify(repoAbs);
+    if (opts.json) { print(JSON.stringify({ repo: repoAbs, ...report, verify, written: [] }, null, 2)); return 0; }
+    printAdoptReport(report, repoAbs, verify);
+    return 0;
+  }
+
+  const newText = adopt.renderDescriptor(rawTextBefore, entries);
+  fs.mkdirSync(path.dirname(descriptorFile), { recursive: true });
+  fs.writeFileSync(descriptorFile, newText);
+
+  const after = adopt.detect(adoptIo(repoAbs), adoptGitExtras(repoAbs));
+  const verify = opts.noVerify ? null : adoptVerify(repoAbs);
+  if (opts.json) {
+    print(JSON.stringify({ repo: repoAbs, ...after, verify, written: entries.map((e) => ({ key: e.key, value: e.value })) }, null, 2));
+    return 0;
+  }
+  for (const e of entries) print(`✓ wrote ${e.key}: ${fmtVal(e.value)}`);
+  print('');
+  printAdoptReport(after, repoAbs, verify);
   return 0;
 }
 
@@ -7184,10 +7621,13 @@ Commands:
   release-notes [<range>] [--repo P] [--out F] [--headline "..."]   grouped Markdown release summary
   release-status [<repo>...] [--repo P] [--json]   merged-but-UNRELEASED lag on tag-gated repos —
                                         read-only, never tags (#81)
-  adopt [--repo P] [--json] [--no-verify]             REPORT-ONLY (#199 commit 1 of 2): detect +
-                                        derive + report §9's five rows (tier, room, exposure,
-                                        writes, channels) for a repo. Writes nothing — asking and
-                                        writing the descriptor are a later command.
+  adopt [--repo P] [--json] [--no-verify] [--axis a,b] [--room R] [--exposure E]
+        [--writes W] [--channels C] [--production U|none] [--deploy D] [--stack S]
+        [--answered-by N] [--reason "..."]      detect + ask + derive + WRITE §9's five rows
+                                        (tier, room, exposure, writes, channels) in one act
+                                        (#199) — append-only; lowering exposure (or a first
+                                        none/self) needs a human. \`colab adopt --help\` for
+                                        the full gate.
   template [<name>] [--dest F] [--repo P] [--force]   copy a handbook workflow template, stamped
   update [<repo>...] [--apply] [--json] [--quiet]   sweep the fleet for stamped copies that fell
                                         behind a changed template; --apply refreshes the pristine
@@ -7280,6 +7720,11 @@ function main(argv) {
  * async work left pending once we reach the end of this block; the only thing exitCode is waiting
  * on is the stdout write Node already queued. See audit/audit.mjs's near-identical note for the
  * sibling fix (same bug, found first via `colab doctor --json` — issue #147).
+ *
+ * The IIFE is `async` and `main(argv)` is `await`ed for exactly one reason: `colab adopt`'s
+ * interactive path (#199, commit 2) hand-rolls a `node:readline` prompt, which is inherently
+ * async. Every other command still returns a plain number, and `await`ing a plain number
+ * resolves it immediately — this changes nothing about their behaviour or timing.
  */
 {
   const startedAt = Date.now();
@@ -7289,20 +7734,22 @@ function main(argv) {
   try {
     journal.setCmd(argv);
   } catch (_) { /* optional, never fatal */ }
-  try {
-    code = main(argv) || 0;
-  } catch (e) {
-    if (e instanceof UserError) {
-      process.stderr.write(`✗ ${e.message}\n`);
-      failure = e.message;
-    } else {
-      process.stderr.write(`✗ ${e.stack || e.message}\n`);
-      failure = e.message;
+  (async () => {
+    try {
+      code = (await main(argv)) || 0;
+    } catch (e) {
+      if (e instanceof UserError) {
+        process.stderr.write(`✗ ${e.message}\n`);
+        failure = e.message;
+      } else {
+        process.stderr.write(`✗ ${e.stack || e.message}\n`);
+        failure = e.message;
+      }
+      code = 1;
     }
-    code = 1;
-  }
-  try {
-    journal.invoked({ argv, exit: code, durationMs: Date.now() - startedAt, error: failure });
-  } catch (_) { /* optional, never fatal */ }
-  process.exitCode = code;
+    try {
+      journal.invoked({ argv, exit: code, durationMs: Date.now() - startedAt, error: failure });
+    } catch (_) { /* optional, never fatal */ }
+    process.exitCode = code;
+  })();
 }

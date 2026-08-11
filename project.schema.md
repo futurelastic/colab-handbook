@@ -38,6 +38,15 @@ Whether production exists is the tier question. *How* it deploys — a tag, a
 `main` push, a human following a runbook — is [`deploy`](#deploy--required)'s
 job, and the two must agree.
 
+**`colab adopt` (#199) writes `tier` only when `exposure` ends the run still unanswered** —
+declined at an interactive prompt, or simply not among the axes a non-interactive run
+answered — and no `tier` key already exists. The written value is derived purely from
+`(production, deploy)` (`tools/lib/adopt.js:deriveTier`), never from `exposure`, with a
+comment naming how to answer `exposure` later. The normal path — `exposure` answered —
+never writes `tier` at all: nothing in `tools/colab` reads it, and a redundant key a later
+hand-edit can contradict is exactly the drift this axis exists to end. An already-declared
+`tier` is never touched.
+
 **As of #144, [`exposure`](#exposure--optional) is the AXIS OF RECORD when declared —
 `tier` is a legacy read, not a second source of truth.** This is the breaking change the
 major version bump names. The precedence (`tools/lib/axis-authority.js`):
