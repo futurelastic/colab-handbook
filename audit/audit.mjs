@@ -55,6 +55,10 @@ const stamp = require("../tools/lib/stamp.js");
 // The convention-label set is shared with adoption/sync (they provision what this reports),
 // so the three surfaces cannot drift about what the full set is. See tools/lib/labels.js.
 const { missingConventionLabels } = require("../tools/lib/labels.js");
+// #144's authority-flip precedence ladder — shared with `tools/colab` for the same reason
+// every other cross-tool reading in this file is: two implementations of "which key governs"
+// is exactly the two-places-drift disease this handbook exists to kill.
+const axisAuthority = require("../tools/lib/axis-authority.js");
 const {
   handbookInfo, templateNames, templateChangedSince, cmpParts, cmpSemver,
   parseWorkflowStamp, parseClaudeStamp, workflowProvenance, unstampedFinding, looksLikeHandbookClaude,
@@ -988,7 +992,12 @@ function auditRepo(target, ctx) {
     const { data, problems } = parseFlatYaml(rawCfg);
     problems.forEach((p) => fail(`project.yml: ${p}`));
     cfg = data;
-    const required = ["tier", "trunk", "production", "deploy", "stack"];
+    // `tier` is deliberately NOT in this list as of #144: it used to be the sole axis of
+    // record and therefore unconditionally required, but a descriptor may now answer the
+    // gate-count question with `exposure` instead — see the "axis of record" check below,
+    // which fails exactly once when NEITHER key is present. `trunk`/`production`/`deploy`/
+    // `stack` are unrelated to that flip and stay required unconditionally.
+    const required = ["trunk", "production", "deploy", "stack"];
     // `production: null` is legal and meaningful for Tier B, so test key PRESENCE,
     // not truthiness.
     const missing = required.filter((k) => !(k in data));
@@ -1004,6 +1013,12 @@ function auditRepo(target, ctx) {
   const trunk = cfg?.trunk ?? null;
   const production = cfg?.production ?? null;
   const deploy = cfg?.deploy ?? null;
+  // #144: which key is the axis of record for gate count — set inside `if (cfg)` below
+  // (an unparseable/missing project.yml already fails earlier and has nothing to derive
+  // from). Declared here so both halves of the decomposition — the legacy trunk-shape
+  // check inside that block, and the deploy/production dispatch further down, outside it —
+  // can read the same computation.
+  let authority = null;
   // Omission means "standard" (#9 step 3's "no existing repo changes behavior" guarantee) —
   // so the raw value (possibly absent) is what gets validated against the enum, while the
   // defaulted value is what the coherence rules below reason from.
@@ -1024,7 +1039,11 @@ function auditRepo(target, ctx) {
   info.channels = channelsRaw;
 
   if (cfg) {
-    if (!VALID_TIERS.has(tier)) fail(`tier is ${JSON.stringify(tier)}, expected "A", "B" or "C"`);
+    // Gated on presence, unlike before #144: `tier` left the `required` list above, so an
+    // absent tier is no longer itself a finding here — the axis-of-record check below
+    // (which runs whether or not `exposure` fills the gap) is what reports an undescribed
+    // repo now. A PRESENT-but-invalid value is still reported exactly as before.
+    if (tier !== null && !VALID_TIERS.has(tier)) fail(`tier is ${JSON.stringify(tier)}, expected "A", "B" or "C"`);
     if (deploy !== null && !VALID_DEPLOY.has(deploy)) fail(`deploy is ${JSON.stringify(deploy)}, expected one of: ${[...VALID_DEPLOY].join(", ")}`);
     // Only when the key exists but is blank — a wholly absent key is already
     // reported by the missing-keys check above, and saying it twice is noise.
@@ -1161,23 +1180,69 @@ function auditRepo(target, ctx) {
       }
     }
 
-    // ---- tier <-> trunk coherence ------------------------------------------
-    // The canonical Tier A shape is the dev/main split — sessions land on dev, main is the release
-    // branch — which buys a place for the expensive suite to run at promotion time. But a TAG-GATED
-    // A may run a SINGLE trunk `main`: when a version tag gates production, the tag itself marks the
-    // release boundary, so a second branch marking the same boundary (dev vs main) is redundant. The
-    // tier is defined by the promotion GATE (a deliberate release artifact — the tag), not the trunk
-    // NAME, so `main` is coherent here — and ONLY here. `deploy: manual`/`push-main` have no tag to
-    // mark the boundary, so they keep the dev split and its promotion as the ship-ward act.
-    if (tier === "A" && trunk !== "dev" && !(deploy === "tag" && trunk === "main")) {
-      fail(deploy === "tag"
-        ? `tier A with deploy: tag requires trunk "dev" or "main", found ${JSON.stringify(trunk)}`
-        : `tier A requires trunk "dev", found ${JSON.stringify(trunk)} — only a tag-gated A (deploy: tag) may run a single trunk "main"`);
+    // ---- axis of record (#144) -----------------------------------------------
+    // Which key governs gate count: `exposure` when declared (it wins outright — see
+    // tools/lib/axis-authority.js for why this is a function, not a bijection, of `tier`),
+    // else a LEGACY read derived from `tier` (byte-identical to pre-#144 behaviour for every
+    // descriptor that has not declared `exposure`), else neither — the one new hard failure
+    // this unit adds, replacing the old unconditional "missing key(s): tier".
+    authority = axisAuthority.axisOfRecord(cfg);
+    if (authority.source === "none") {
+      fail("project.yml: no axis of record — neither tier nor exposure is declared. Set one (CONVENTIONS.md §2)");
+    } else if (authority.tier !== null && VALID_TIERS.has(authority.tier) && authority.source === "exposure") {
+      // Both declared. Consistent -> silent (no nag to delete `tier`; carrying both is fine
+      // and this repo's own descriptor models exactly that). Inconsistent -> exactly one
+      // fail naming the disagreement; the `exposure` branch below still enforces afterward.
+      const disagreement = axisAuthority.contradiction(authority.tier, authority.exposure);
+      if (disagreement) fail(disagreement);
     }
-    if (tier === "B" && trunk !== "main") fail(`tier B requires trunk "main", found ${JSON.stringify(trunk)}`);
-    // C uses A's two-branch split: main = what is live, dev = where sessions land.
-    if (tier === "C" && trunk !== "dev") fail(`tier C requires trunk "dev", found ${JSON.stringify(trunk)} — C uses the same split as A (main = what is live, dev = where sessions land)`);
+    // The one new advisory this unit ships, and it is dormant today: activates only once
+    // the HANDBOOK ITSELF (not this repo's stamp) reaches AUTHORITY_FLIP_VERSION, mirroring
+    // the `hb.untagged` precedent `compareStamp` already uses elsewhere in this file. Gated
+    // on `tier-legacy` only — a repo that already declared `exposure` has nothing to be
+    // nudged about.
+    if (
+      authority.source === "tier-legacy" &&
+      !ctx.handbook.untagged && ctx.handbook.hasGit &&
+      cmpSemver(ctx.handbook.version, stamp.AUTHORITY_FLIP_VERSION) >= 0
+    ) {
+      warn(
+        `exposure is undeclared — tier is now read as a LEGACY value (tier ${authority.tier} -> ` +
+        `exposure: ${authority.exposure ?? "null"}) rather than the axis of record. Declare ` +
+        `exposure: explicitly to opt in (CONVENTIONS.md §2)`,
+      );
+    }
+
+    // ---- tier <-> trunk coherence, legacy voice ------------------------------
+    // Runs ONLY on the `tier-legacy` path (no `exposure` declared) and is otherwise
+    // UNCHANGED from before #144 — this is the half of the decomposition that must stay
+    // byte-identical for every descriptor without `exposure` (#144's primary oracle). The
+    // canonical Tier A shape is the dev/main split — sessions land on dev, main is the
+    // release branch — which buys a place for the expensive suite to run at promotion time.
+    // But a TAG-GATED A may run a SINGLE trunk `main`: when a version tag gates production,
+    // the tag itself marks the release boundary, so a second branch marking the same
+    // boundary (dev vs main) is redundant. The tier is defined by the promotion GATE (a
+    // deliberate release artifact — the tag), not the trunk NAME, so `main` is coherent here
+    // — and ONLY here. `deploy: manual`/`push-main` have no tag to mark the boundary, so
+    // they keep the dev split and its promotion as the ship-ward act.
+    if (authority.source === "tier-legacy") {
+      if (tier === "A" && trunk !== "dev" && !(deploy === "tag" && trunk === "main")) {
+        fail(deploy === "tag"
+          ? `tier A with deploy: tag requires trunk "dev" or "main", found ${JSON.stringify(trunk)}`
+          : `tier A requires trunk "dev", found ${JSON.stringify(trunk)} — only a tag-gated A (deploy: tag) may run a single trunk "main"`);
+      }
+      if (tier === "B" && trunk !== "main") fail(`tier B requires trunk "main", found ${JSON.stringify(trunk)}`);
+      // C uses A's two-branch split: main = what is live, dev = where sessions land.
+      if (tier === "C" && trunk !== "dev") fail(`tier C requires trunk "dev", found ${JSON.stringify(trunk)} — C uses the same split as A (main = what is live, dev = where sessions land)`);
+    }
   }
+
+  // Additive `--json` keys only (#144's oracle: "`tier` continues to report the DECLARED
+  // letter... New keys are additive"). `axisOfRecord` names which key governs
+  // ('exposure' | 'tier-legacy' | 'none' | null when project.yml itself did not parse);
+  // `gates` is the gate count that resolves to, when known.
+  info.axisOfRecord = authority ? authority.source : null;
+  info.gates = authority && authority.exposure ? (axisAuthority.GATE_COUNT[authority.exposure] ?? null) : null;
 
   // ---- convention labels present on the tracker ---------------------------
   // A convention label absent from an adopted repo is a check that can never fire: the
@@ -1222,67 +1287,153 @@ function auditRepo(target, ctx) {
 
   const runbook = cfg && "runbook" in cfg ? cfg.runbook : null;
 
-  if (tier === "A") {
-    // The answer to "how does this reach production?" must be committed. A CI-driven deploy commits
-    // it as an in-repo deploy-*.yml; a deploy that runs OUTSIDE CI must instead be WRITTEN DOWN in a
-    // runbook: — the same invariant, honoured two ways. Two shapes deploy outside CI:
-    //   - deploy: manual              → a human runs the runbook.
-    //   - deploy: tag with no workflow → an EXTERNAL deployer (a GitOps poller fast-forwards a
-    //                                    release branch on the tag, or the like) ships it; the
-    //                                    runbook documents that path. A deploy: tag repo whose own
-    //                                    CI holds the deploy job keeps its deploy-*.yml and needs no
-    //                                    runbook — the workflow already commits the answer.
-    const externalTagDeploy = deploy === "tag" && !deployWorkflows.length;
-    if (deploy === "manual") {
-      checkRunbook(src, runbook, fail, warn, "deploy: manual");
-    } else if (externalTagDeploy) {
-      checkRunbook(src, runbook, fail, warn, "deploy: tag deployed outside CI (an external GitOps poller)");
-    } else if (!deployWorkflows.length) {
-      fail("tier A but no .github/workflows/deploy-*.yml — the path to production is not in the repo (use deploy: manual + runbook: if it ships by hand, or deploy: tag + runbook: when a GitOps poller deploys the tag from outside CI)");
+  // ---- gate contract, dispatched by axis of record (#144) ------------------
+  // `authority` is null only when project.yml itself did not parse (already failed above,
+  // nothing to derive from). `tier-legacy` runs the UNCHANGED tier-voiced block — the half
+  // that must stay byte-identical for every descriptor without `exposure`. `exposure` runs
+  // the new exposure-voiced rules below: the DECOMPOSITION #144's plan calls for. No branch
+  // in the exposure-voiced half ever reads `tier` — proof the split was cut in the right
+  // place. `none` (no axis of record at all) already got its one fail above; there is
+  // nothing further to derive a gate contract from.
+  if (authority && authority.source === "tier-legacy") {
+    if (tier === "A") {
+      // The answer to "how does this reach production?" must be committed. A CI-driven deploy commits
+      // it as an in-repo deploy-*.yml; a deploy that runs OUTSIDE CI must instead be WRITTEN DOWN in a
+      // runbook: — the same invariant, honoured two ways. Two shapes deploy outside CI:
+      //   - deploy: manual              → a human runs the runbook.
+      //   - deploy: tag with no workflow → an EXTERNAL deployer (a GitOps poller fast-forwards a
+      //                                    release branch on the tag, or the like) ships it; the
+      //                                    runbook documents that path. A deploy: tag repo whose own
+      //                                    CI holds the deploy job keeps its deploy-*.yml and needs no
+      //                                    runbook — the workflow already commits the answer.
+      const externalTagDeploy = deploy === "tag" && !deployWorkflows.length;
+      if (deploy === "manual") {
+        checkRunbook(src, runbook, fail, warn, "deploy: manual");
+      } else if (externalTagDeploy) {
+        checkRunbook(src, runbook, fail, warn, "deploy: tag deployed outside CI (an external GitOps poller)");
+      } else if (!deployWorkflows.length) {
+        fail("tier A but no .github/workflows/deploy-*.yml — the path to production is not in the repo (use deploy: manual + runbook: if it ships by hand, or deploy: tag + runbook: when a GitOps poller deploys the tag from outside CI)");
+      }
+      if (production === null || production === "") fail("tier A but production is null — set the live URL, or drop to tier B");
+      if (deploy === "none") fail('tier A with deploy: none is contradictory — use "tag" or "manual"');
+      // A TIER MISMATCH, not a bad mechanism. push-main is a perfectly good way to deploy;
+      // it just cannot satisfy tier A's contract, which is that a deliberate release artifact
+      // gates production. Here every push to main reaches users, so that gate does not exist.
+      // The message says "options include" on purpose: the two named exits are not exhaustive
+      // and must not read as though they were.
+      if (deploy === "push-main") {
+        fail(
+          "tier A with deploy: push-main — tier A's contract is that a deliberate release " +
+          "artifact gates production, and here every push to main reaches users with no such " +
+          "gate. Options include: retier to C (tier C is exactly this shape — promotion IS the " +
+          "deploy — and is the honest home for a live, low-stakes site), migrate the pipeline " +
+          "to a tag trigger (deploy: tag), or — if shipping really is run by hand — " +
+          "deploy: manual plus runbook: naming the committed procedure.",
+        );
+      }
+    } else if (tier === "C") {
+      // C = "promotion IS the deploy": one gate (the dev→main merge) stands between a merge and
+      // users. It exists because a tag ritual nobody honours is worse than no tag ritual — a
+      // live low-stakes site had nowhere honest to sit, so it claimed A and failed A's contract.
+      if (production === null || production === "") fail("tier C but production is null — tier C is for repos that ARE live; set the live URL, or drop to tier B");
+      if (!deployWorkflows.length) fail("tier C but no .github/workflows/deploy-*.yml — the path to production is not in the repo");
+      // C is defined by its mechanism: the promotion itself deploys. Any other `deploy` value
+      // describes a DIFFERENT number of gates, which is a different tier — so each wrong value
+      // is redirected to the tier that actually matches it, rather than being merely rejected.
+      if (deploy !== "push-main") {
+        if (deploy === "tag") {
+          fail('tier C with deploy: tag — a tag gating production is tier A\'s shape (promotion verifies, the tag deploys = two gates). If you really have a tag ritual, you are tier A; if the tag is aspirational, drop it and use deploy: push-main');
+        } else if (deploy === "manual") {
+          fail('tier C with deploy: manual — there the promotion does NOT deploy (a human running the runbook does), which is tier A with deploy: manual. Retier to A, or use deploy: push-main if the promotion itself ships');
+        } else if (deploy === "none") {
+          fail('tier C with deploy: none is contradictory — tier C means the promotion deploys. Use deploy: push-main, or drop to tier B if nothing is live');
+        } else {
+          fail(`tier C requires deploy: push-main, found ${JSON.stringify(deploy)} — C is defined as "promotion IS the deploy"`);
+        }
+      }
+    } else if (tier === "B") {
+      // This was silently unchecked before: a tier B repo that actually deploys is
+      // either mistiered or shipping to production with none of the tier A gates.
+      if (deploy !== null && deploy !== "none") fail(`tier B must have deploy: none, found ${JSON.stringify(deploy)} — if this really deploys, retier: C when the promotion itself ships, A when a tag or a runbook gates it`);
+      if (production !== null && production !== "") fail(`tier B must not declare a production URL, found ${JSON.stringify(production)} — retier to C (promotion deploys) or A (a tag/runbook gates the deploy)`);
+      if (deployWorkflows.length) fail(`tier B but a deploy workflow exists (${deployWorkflows.join(", ")}) — retier to C or A, or delete it`);
     }
-    if (production === null || production === "") fail("tier A but production is null — set the live URL, or drop to tier B");
-    if (deploy === "none") fail('tier A with deploy: none is contradictory — use "tag" or "manual"');
-    // A TIER MISMATCH, not a bad mechanism. push-main is a perfectly good way to deploy;
-    // it just cannot satisfy tier A's contract, which is that a deliberate release artifact
-    // gates production. Here every push to main reaches users, so that gate does not exist.
-    // The message says "options include" on purpose: the two named exits are not exhaustive
-    // and must not read as though they were.
-    if (deploy === "push-main") {
-      fail(
-        "tier A with deploy: push-main — tier A's contract is that a deliberate release " +
-        "artifact gates production, and here every push to main reaches users with no such " +
-        "gate. Options include: retier to C (tier C is exactly this shape — promotion IS the " +
-        "deploy — and is the honest home for a live, low-stakes site), migrate the pipeline " +
-        "to a tag trigger (deploy: tag), or — if shipping really is run by hand — " +
-        "deploy: manual plus runbook: naming the committed procedure.",
-      );
-    }
-  } else if (tier === "C") {
-    // C = "promotion IS the deploy": one gate (the dev→main merge) stands between a merge and
-    // users. It exists because a tag ritual nobody honours is worse than no tag ritual — a
-    // live low-stakes site had nowhere honest to sit, so it claimed A and failed A's contract.
-    if (production === null || production === "") fail("tier C but production is null — tier C is for repos that ARE live; set the live URL, or drop to tier B");
-    if (!deployWorkflows.length) fail("tier C but no .github/workflows/deploy-*.yml — the path to production is not in the repo");
-    // C is defined by its mechanism: the promotion itself deploys. Any other `deploy` value
-    // describes a DIFFERENT number of gates, which is a different tier — so each wrong value
-    // is redirected to the tier that actually matches it, rather than being merely rejected.
-    if (deploy !== "push-main") {
-      if (deploy === "tag") {
-        fail('tier C with deploy: tag — a tag gating production is tier A\'s shape (promotion verifies, the tag deploys = two gates). If you really have a tag ritual, you are tier A; if the tag is aspirational, drop it and use deploy: push-main');
-      } else if (deploy === "manual") {
-        fail('tier C with deploy: manual — there the promotion does NOT deploy (a human running the runbook does), which is tier A with deploy: manual. Retier to A, or use deploy: push-main if the promotion itself ships');
-      } else if (deploy === "none") {
-        fail('tier C with deploy: none is contradictory — tier C means the promotion deploys. Use deploy: push-main, or drop to tier B if nothing is live');
+  } else if (authority && authority.source === "exposure") {
+    const exp = authority.exposure; // already enum-validated above: none | self | live | released | garbage
+    if (exp === "self") {
+      // CONVENTIONS.md §2, "Exposure": self's consumer set is a subset of the room's — no
+      // mechanism or contract rule applies here AT ALL, not even trunk shape. An unusual
+      // deploy/production/trunk combination alongside a directly-declared `exposure: self`
+      // is not this unit's business to police (#144's plan: "self gets no mechanism rule").
+    } else if (exp === "none") {
+      // Deliberately NOT "production must be null, deploy must be none": `exposure: none`
+      // with a NAMED `production` is the pinned-clean "visibly transitional" read
+      // (CONVENTIONS.md §2, "Exposure"; project.schema.md "exposure — optional") — a repo
+      // heading toward a consumer it has not opted into yet. A `fail` there would punish
+      // exactly the direction an agent may propose, which the schema explicitly forbids.
+      // What stays a real contradiction: claiming trunk shape or a wired-up deploy path for
+      // a repo that says nothing consumes it.
+      if (trunk !== "main") fail(`exposure: none requires trunk "main", found ${JSON.stringify(trunk)} — nothing consumes this repo, so there is no release branch to speak of`);
+      if (deployWorkflows.length) fail(`exposure: none but a deploy workflow exists (${deployWorkflows.join(", ")}) — nothing is supposed to consume this repo, yet something is wired to deploy it`);
+    } else if (exp === "live") {
+      // Mirrors the old tier C contract exactly, INCLUDING its no-runbook asymmetry: a
+      // deploy workflow is required, with no runbook: escape hatch — #144's plan records
+      // this as a deliberate ruling, not an oversight (CONVENTIONS.md §2, "Exposure").
+      if (trunk !== "dev") fail(`exposure: live requires trunk "dev", found ${JSON.stringify(trunk)} — the promotion is the deploy, and dev is where sessions land before it ships`);
+      if (production === null || production === "") fail("exposure: live but production is null — the promotion ships straight to users, so a live URL must be set");
+      if (deploy !== "push-main") fail(`exposure: live requires deploy: push-main, found ${JSON.stringify(deploy)} — the promotion itself IS the deploy`);
+      if (!deployWorkflows.length) fail("exposure: live but no .github/workflows/deploy-*.yml — the promotion needs a committed path to production (no runbook: escape hatch here — live means the promotion itself deploys)");
+    } else if (exp === "released") {
+      // Two legal shapes (#144's plan) — the decomposition's whole point: (1) a live
+      // production URL with a committed deploy path, mirroring the old tier A contract; or
+      // (2) no server at all, evidenced by a version-shaped git tag or channels: [artifact]
+      // — the shape THIS repo's own descriptor is (production: null, channels: [artifact]),
+      // which the old tier: B weld could never express.
+      const hasProduction = production !== null && production !== "";
+      if (!hasProduction) {
+        const hasArtifactEvidence = versionShapedTags(src.tags()).length > 0 || (Array.isArray(channelsRaw) && channelsRaw.includes("artifact"));
+        // `warn`, deliberately never `fail` (#144's plan, "rulings"): raising exposure —
+        // proposing `released` ahead of the evidence that would confirm it — is the
+        // direction an agent may propose, and a `fail` here would make declaring the key
+        // riskier than omitting it, punishing exactly the adoption this axis exists to
+        // invite. Mirrors `exposure: none` + `production: null`'s own advisory-not-failure
+        // precedent above.
+        if (!hasArtifactEvidence) {
+          warn(
+            "exposure: released with production: null and no evidence of a release artifact " +
+            "(no version-shaped git tag, no channels: [artifact]) — either the evidence has not " +
+            "landed yet, or this should read exposure: self/none for now. Both look the same to " +
+            "this tool; a human should confirm which",
+          );
+        }
+        if (trunk !== "main") fail(`exposure: released with production: null requires trunk "main", found ${JSON.stringify(trunk)} — nothing is live, so there is no release branch to speak of`);
+        if (deploy !== null && deploy !== "none") fail(`exposure: released with production: null and deploy: ${JSON.stringify(deploy)} is contradictory — nothing is live to deploy to; use deploy: none, or set production if something IS live`);
       } else {
-        fail(`tier C requires deploy: push-main, found ${JSON.stringify(deploy)} — C is defined as "promotion IS the deploy"`);
+        const externalTagDeploy = deploy === "tag" && !deployWorkflows.length;
+        if (deploy === "manual") {
+          checkRunbook(src, runbook, fail, warn, "exposure: released, deploy: manual");
+        } else if (externalTagDeploy) {
+          checkRunbook(src, runbook, fail, warn, "exposure: released, deploy: tag deployed outside CI (an external GitOps poller)");
+        } else if (!deployWorkflows.length) {
+          fail("exposure: released but no .github/workflows/deploy-*.yml — the path to production is not in the repo (use deploy: manual + runbook: if it ships by hand, or deploy: tag + runbook: when a GitOps poller deploys the tag from outside CI)");
+        }
+        if (deploy === "none") fail('exposure: released with a live production URL but deploy: none is contradictory — use "tag" or "manual"');
+        if (deploy === "push-main") {
+          fail(
+            "exposure: released with deploy: push-main — released means a deliberate release " +
+            "artifact gates production, and here every push to main reaches users with no such " +
+            "gate. Options include: declare exposure: live instead (that IS this shape), migrate " +
+            "the pipeline to a tag trigger (deploy: tag), or — if shipping really is run by hand " +
+            "— deploy: manual plus runbook: naming the committed procedure.",
+          );
+        }
+        if (trunk !== "dev" && !(deploy === "tag" && trunk === "main")) {
+          fail(deploy === "tag"
+            ? `exposure: released with deploy: tag requires trunk "dev" or "main", found ${JSON.stringify(trunk)}`
+            : `exposure: released requires trunk "dev", found ${JSON.stringify(trunk)} — only a tag-gated release (deploy: tag) may run a single trunk "main"`);
+        }
       }
     }
-  } else if (tier === "B") {
-    // This was silently unchecked before: a tier B repo that actually deploys is
-    // either mistiered or shipping to production with none of the tier A gates.
-    if (deploy !== null && deploy !== "none") fail(`tier B must have deploy: none, found ${JSON.stringify(deploy)} — if this really deploys, retier: C when the promotion itself ships, A when a tag or a runbook gates it`);
-    if (production !== null && production !== "") fail(`tier B must not declare a production URL, found ${JSON.stringify(production)} — retier to C (promotion deploys) or A (a tag/runbook gates the deploy)`);
-    if (deployWorkflows.length) fail(`tier B but a deploy workflow exists (${deployWorkflows.join(", ")}) — retier to C or A, or delete it`);
   }
 
   // ---- declared trunk actually exists -------------------------------------

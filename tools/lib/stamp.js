@@ -37,6 +37,22 @@ const CLAUDE_BLOCK_TEMPLATE = 'templates/repo-CLAUDE-block.md';
 // read with parseWorkflowStamp, so there is one stamp format on the machine, not two.
 const FROZEN_STAMP_NAME = 'colab-bin';
 const FROZEN_STAMP_FILE = 'STAMP';
+
+/**
+ * The handbook version at/after which #144's authority-flip advisory activates: a `warn`,
+ * on a repo whose axis of record is a LEGACY `tier` read (no `exposure` declared), noting
+ * that `tier` is now read as legacy rather than authoritative. Dormant below this version,
+ * mirroring the `hb.untagged` precedent `compareStamp` already uses (deactivated while there
+ * is no real version line to compare against) — the re-keying itself is NOT gated by it (it
+ * is designed to be output-identical on every descriptor without `exposure` regardless of
+ * handbook version; only this one new warn is).
+ *
+ * No tag exists past the axis commits yet (#200, a human act, still pending) — the handbook
+ * is expected to cut a MINOR tag containing #144 next (keeping `v1.x`, so the fleet gets a
+ * clean baseline first), and only a LATER, separate major bump would ever reach this
+ * constant. Comparison uses `cmpSemver`, so a same-or-later `v2.x.y` also arms it.
+ */
+const AUTHORITY_FLIP_VERSION = 'v2.0.0';
 // What the frozen copy is made of, as repo-relative paths — the same role `templateFiles()` plays
 // for a template, and fed to the same `git log <stamp>..HEAD -- <paths>` question.
 const FROZEN_SOURCES = ['tools/colab', 'tools/lib'];
@@ -547,6 +563,7 @@ function classifyFrozen(opts) {
 module.exports = {
   CLAUDE_BLOCK_TEMPLATE, WORKFLOW_FINGERPRINTS,
   FROZEN_STAMP_NAME, FROZEN_STAMP_FILE, FROZEN_SOURCES, classifyFrozen,
+  AUTHORITY_FLIP_VERSION,
   gitIn, gitCommonDir, isHandbookItself,
   handbookInfo, freezeVersion, templateNames, templateFiles, templateChangedSince, templateAt,
   AXES, axesPredating,

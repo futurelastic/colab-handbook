@@ -38,8 +38,29 @@ the handbook's current version, so a scheduled run is self-documenting.
 
 ## What it checks, per repo
 
-- `.github/project.yml` present, parses, and has the required keys.
-- Tier ↔ trunk coherence: tiers A and C → `dev`, tier B → `main`.
+- `.github/project.yml` present and parses. `trunk`/`production`/`deploy`/`stack` are
+  required keys; `tier` is **not** — see "Axis of record" below for what replaced it.
+- **Axis of record (#144)** — which key governs gate count. `exposure`, when declared,
+  wins outright (`tools/lib/axis-authority.js`); otherwise `tier` is read as a **legacy**
+  value (`A → released`, `C → live`, `B → null` — the `null` means a bare `tier: B` has
+  no derivable opinion at all, which is why phase 3 of the axis epic still has to ask ten
+  repos by hand). Declaring **neither** key is the one new hard failure this unit adds,
+  replacing the old unconditional "missing key(s): tier". Declaring **both** and
+  disagreeing about gate count (e.g. `tier: A` + `exposure: live`) is exactly one
+  disagreement finding; `tier: B` disagrees with nothing, because a bare `B` never had an
+  opinion to contradict. A repo on the legacy path also gets one **dormant** advisory
+  nudging it to declare `exposure` explicitly — dormant until the HANDBOOK ITSELF (not the
+  repo's own stamp) reaches `AUTHORITY_FLIP_VERSION` (`tools/lib/stamp.js`), mirroring the
+  `hb.untagged` precedent the stamp checks already use. It is inactive today.
+- The bullets below describe the **gate contract** — trunk shape, committed deploy path,
+  production non-null — in whichever voice governs a given repo. On the **legacy** path
+  (no `exposure` declared) the wording is exactly what it always was, letter for letter,
+  because #144's primary requirement is that this half stays byte-identical for every
+  descriptor that has not opted into `exposure`. On the **exposure** path (declared
+  directly) the same rules apply, worded against `exposure`'s vocabulary instead — see
+  `project.schema.md`'s `exposure` section for the two legal `released` shapes and
+  `live`'s no-runbook asymmetry.
+- Tier ↔ trunk coherence (legacy voice): tiers A and C → `dev`, tier B → `main`.
 - Tier A must have a `deploy-*.yml` workflow **and** a non-null `production`, and must
   not say `deploy: none`.
 - Tier A must not say `deploy: push-main` — a **tier mismatch**, not a bad mechanism. The
@@ -169,8 +190,8 @@ the handbook's current version, so a scheduled run is self-documenting.
     handbook's own docs unchanged (not gated on `isSelf`).
   - **Slugifier gotcha, worth knowing if a link ever needs hand-writing:** GitHub
     does not collapse the double space an em-dash leaves behind — a heading like
-    `` `tier` — required `` slugifies to `tier--required` (double hyphen), not
-    `tier-required`.
+    `` `trunk` — required `` slugifies to `trunk--required` (double hyphen), not
+    `trunk-required`.
 
 - **Convention labels present on the tracker** (`in-progress`, `deps-checked`,
   `agent-filed`, `epic` — `tools/lib/labels.js`) — **advisory**, and only when the repo
@@ -193,16 +214,29 @@ the handbook's current version, so a scheduled run is self-documenting.
   hard finding on every repo regardless of `ceremony`, because build/secret-scan
   integrity is never optional.
 
-- **`exposure:` enum + pairing advisory (#132)** — an optional field naming what
-  consumes a merge here (project.schema.md#exposure--optional), additive alongside `tier`;
-  `tier` stays fully authoritative and no rule couples the two. An unrecognised value is a
-  **finding**; the descriptor-internal coherence check is `exposure: none` + `production:
-  null` together (both-empty) — a **warn**, never a `fail`, because the descriptor is
-  unanswered rather than lying, and answering it is a human act this unit does not perform.
-  Omitting `exposure:` entirely reports `null` (undeclared) in `--json`, never `"none"` —
-  there is no default, by design (`CONVENTIONS.md` §2, *Exposure*, "lowering exposure is a
-  human act"). Every other pairing, including `live`/`released` with `production: null`, is
-  clean.
+- **`exposure:` enum + gate contract + pairing advisory (#132, re-keyed by #144)** — an
+  optional field naming what consumes a merge here (project.schema.md#exposure--optional).
+  As of #144 it is the **axis of record when declared** — see "Axis of record" above — so
+  a directly-declared `exposure` now DRIVES the trunk-shape/deploy-path/production-non-null
+  checks the bullets above describe for the legacy (`tier`-only) path, worded in `exposure`'s
+  own vocabulary instead of the tier letters. `live` keeps tier C's old no-runbook
+  asymmetry (a deploy workflow is required; there is no `runbook:` escape hatch). `released`
+  accepts **two legal shapes**: a live `production` URL with a committed deploy path
+  (mirroring the old tier A contract), or — new in #144 — `production: null` evidenced by a
+  version-shaped git tag or `channels: [artifact]`, recording that adopters consume a
+  release even though there is no server (this handbook's own descriptor is exactly this
+  shape). `self` gets **no mechanism or contract rule at all** — its consumer set is a
+  subset of the room's, and policing its deploy/production/trunk shape is out of scope.
+  `none` keeps the SAME pairing advisory it always had (`exposure: none` + `production: null`
+  together is a **warn**, unanswered rather than lying) and stays clean when `production` IS
+  named — the pinned "visibly transitional" read (CONVENTIONS.md §2) — but a committed deploy
+  workflow alongside `exposure: none` is now a real contradiction. An unrecognised value is
+  still a **finding**. Omitting `exposure:` entirely reports `null` (undeclared) in `--json`,
+  never `"none"` — there is no default, by design (`CONVENTIONS.md` §2, *Exposure*, "lowering
+  exposure is a human act") — and falls back to the legacy `tier` read instead.
+  **`tier` + `exposure` both declared and disagreeing about gate count is now exactly one
+  disagreement finding** (`tools/lib/axis-authority.js`'s contradiction table) — `tier: B`
+  disagrees with nothing, every other tier is consistent with exactly one exposure value.
 
 - **`channels:` shape/enum check + coherence advisory (#151)** — an optional field
   naming every path by which a commit reaches something that *runs* it

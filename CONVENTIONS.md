@@ -237,13 +237,19 @@ the consumer set is a subset of the room's collaborator set. A repo whose only r
 same person who wrote it has `self` exposure regardless of whether anything is technically
 running — the room, not a server, is what bounds the consumer set.
 
-**Gate count becomes derived, not declared, once a later unit reads this field** — `none`
-implies zero gates, `live` implies one (the promotion), `released` implies two (the artifact).
-That is a statement about the target shape, not this unit: **`tier` stays fully authoritative
-today**, and this section changes no `tier`/`trunk`/`deploy`/`production` rule. This is Phase 1
-of the epic tracking this model — a new key alongside the old, both readable, old key
-authoritative — so nothing in the fleet, and no outside adopter of this public repo, breaks on
-this merge.
+**Gate count is now derived from this field when it is declared** — `none` implies zero
+gates, `self` zero, `live` one (the promotion), `released` two (the artifact). Phase 1
+shipped the key inert, additive, `tier` fully authoritative; **#144 cut the weld**: `exposure`,
+when declared, is the axis of record outright, and `tier`, when it is the only thing
+declared, is read as a LEGACY value (`tools/lib/axis-authority.js`: `A → released`,
+`C → live`, `B → null` — the `null` is deliberate, because a bare `tier: B` carries no
+derivable opinion about what consumes it). A repo that has never declared `exposure` sees
+zero change — the legacy read reproduces pre-#144 behaviour byte for byte, verified against
+the whole fleet, not merely designed for — so nothing in the fleet, and no outside adopter of
+this public repo who has not opted in, breaks on this flip. Declaring **neither** key is now
+the one hard failure ("no axis of record"), replacing the old unconditional "missing tier".
+`exposure` does **not** become required by this flip — that is phase 3, a separate, later
+step (ten repos answering the question by hand).
 
 **`prelaunch` was rejected in favour of a relationship word.** An earlier candidate named this
 axis by a *moment* rather than a *relationship* — the same defect the tier letters have in
@@ -255,13 +261,17 @@ already lasted months on more than one repo in this fleet. The intent it was try
 `exposure: self` with `production: null` reads as terminal. No new marker key encodes this;
 the two existing flat scalars, read together, already say it.
 
-**The old→new mapping is prose, executed by no code.** `tier: A`'s contract — a deliberate
+**The old→new mapping is now executed by code, not merely prose** (`tools/lib/axis-authority.js`,
+consumed by both the audit and, in time, `colab`). `tier: A`'s contract — a deliberate
 release artifact gates production — is exactly `released`; `tier: C`'s contract — the
 promotion itself ships — is exactly `live`. Both directions rest on committed facts (a
 non-null `production`, a committed deploy path), so an agent may *propose* either. `tier: B`
 maps to nothing: `none`, `self`, and `released` are all found under `B` in this fleet today
 (the measured 5–5 split, and the tag-published, adopter-consumed shape this very repo is),
-so no rule may ever conclude a `B` repo's exposure value.
+so no rule may ever conclude a `B` repo's exposure value — the legacy read for `B` stays
+`null`, forever, until a human answers by hand. When BOTH keys are declared and disagree
+about gate count, that is exactly one finding naming the disagreement; `tier: B` disagrees
+with nothing, because a bare `B` never had an opinion to contradict.
 
 **Lowering a repo's exposure is a human act, with no field that can override it.** This is
 the sharper form of the asymmetry above, and it is enforced in code, not only in prose: the
@@ -282,16 +292,20 @@ combination is clean — in particular `live`/`released` **with `production: nul
 tag-published repo with real adopters and no server (this repo's own shape) is the case this
 axis exists to stop misreading as "no exposure means no server."
 
-**Deliberately not coupled to `tier`, and no rule may add that coupling** — the identical
-instruction [`writes`](#writes--serial-or-isolated-and-the-two-things-that-make-a-branch-mandatory)
-gives for the identical reason: a coupling rule would re-weld two questions this axis model
-exists to separate, and would over-fire on precisely the transitional and tag-published shapes
-just ruled legal above.
+**Not coupled to `tier` by INFERENCE — nothing derives `exposure` from `tier`, ever** — the
+identical instruction [`writes`](#writes--serial-or-isolated-and-the-two-things-that-make-a-branch-mandatory)
+gives for the identical reason: an inference rule would re-weld two questions this axis
+model exists to separate, and would over-fire on precisely the transitional and
+tag-published shapes just ruled legal above. As of #144, the two ARE compared when both are
+declared by hand: a `tier` and an `exposure` that disagree about gate count is a finding
+(above). That is disagreement-detection between two written-down facts, not inference of
+one from the other, and it does not reopen this instruction.
 
-**What this unit does not do.** It ships the key, its four-value enum check, and the
-`production:` pairing advisory — nothing more. No rule yet derives production **gate
-count** from `exposure`; `tier` alone still governs that today (#144's authority-flip, not
-this unit). [CI's role and thoroughness](#ci--what-it-is-follows-writes-how-much-follows-exposure)
+**What this unit (#132) shipped, and what #144 later added.** #132 shipped the key, its
+four-value enum check, and the `production:` pairing advisory — nothing that derived gate
+count. #144 is the unit that flipped authority: `exposure`, when declared, now governs gate
+count directly (see the top of this section, above), rather than merely being readable
+alongside a still-authoritative `tier`. [CI's role and thoroughness](#ci--what-it-is-follows-writes-how-much-follows-exposure)
 and the [rollback obligation](#recovery--what-must-exist-to-undo-a-merge) are now derived
 — by later units reading this key, not by this one. **#137 shipped 2 of 5 possible
 falsifiers against a declared `exposure: none`** — a version-shaped tag exists, and a
@@ -305,10 +319,10 @@ source (the stamp vocabulary has no way to name an arbitrary source yet), and a 
 pinned-clean "visibly transitional" shape below, and the resolving half needs network this
 tool does not use). Reasons in full, and what would reopen each: `audit/README.md`. #137
 also added a **duration report** — how long `exposure: none` has held, from the
-descriptor's own git history, never a new field. No mechanism flips authority from `tier`
-to `exposure` or makes the key required — that is #144. The exposure question is now asked,
-in words, by [§9](#9-adopting-this)'s shared question set (question 3) — but by a human
-walking the checklist, not by a tool;
+descriptor's own git history, never a new field. #144 shipped the authority flip described
+above; it deliberately does **not** make the key required — that stays phase 3. The exposure
+question is now asked, in words, by [§9](#9-adopting-this)'s shared question set (question 3)
+— but by a human walking the checklist, not by a tool;
 no automation detects/asks/derives/writes it in one act (that shape is discussed, not yet
 built, on #138). And no rule here answers the question for any specific repo other than the
 one raise recorded in this repo's own `project.yml`, which rests on a human-given answer

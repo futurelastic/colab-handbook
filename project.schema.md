@@ -12,7 +12,7 @@ finding rather than half-read.
 
 ## Fields
 
-### `tier` — required
+### `tier` — optional (legacy)
 
 `A`, `B` or `C`. The tiers differ in **how many gates stand between a merge and
 users**:
@@ -38,12 +38,39 @@ Whether production exists is the tier question. *How* it deploys — a tag, a
 `main` push, a human following a runbook — is [`deploy`](#deploy--required)'s
 job, and the two must agree.
 
-**[`exposure`](#exposure--optional) is the axis this field's gate count will eventually
-be *derived* from** (epic tracking the model at CONVENTIONS.md §2, "Exposure"). That is a
-statement about the future, not this document: today `tier` is fully authoritative and
-`exposure` is a separate, additive, optional key that no rule here reads to change a
-`tier`/`trunk`/`deploy`/`production` finding. A later unit may flip which key is
-authoritative; until it does, this section is unchanged by `exposure`'s existence.
+**As of #144, [`exposure`](#exposure--optional) is the AXIS OF RECORD when declared —
+`tier` is a legacy read, not a second source of truth.** This is the breaking change the
+major version bump names. The precedence (`tools/lib/axis-authority.js`):
+
+1. `exposure` declared → it governs gate count outright. `tier`, declared or not, is
+   carried through unread by the derivation (though see the contradiction rule below).
+2. Else `tier` declared → gate count is DERIVED from it: `A → released`, `C → live`,
+   `B → null`. The `null` is deliberate, not an oversight — a bare `tier: B` carries no
+   derivable opinion about what consumes it (`none`, `self` and `released` are all
+   measured under `B` in this fleet), so nothing may guess which one it means.
+3. Neither declared → **a finding**: no axis of record. This replaces the old
+   unconditional "missing key(s): tier" — `tier` left the required-key list in this unit,
+   because `exposure` alone is now a complete answer.
+
+**`exposure` does NOT become required by this unit.** 16 of 17 repos in this handbook's own
+fleet have never declared it, and they see zero change: the legacy read reproduces
+pre-#144 behaviour byte for byte. Making `exposure` mandatory is a later, separate step
+(phase 3 of the epic tracking this model, CONVENTIONS.md §2).
+
+**Both keys declared and agreeing is silent — carrying both is fine, and this repo's own
+descriptor (`tier: B` + `exposure: released`) models exactly that**, deliberately, so the
+self-audit keeps exercising the legacy path. **Both declared and DISAGREEING about gate
+count is exactly one finding** naming the disagreement (`tier: A` is consistent only with
+`exposure: released`; `tier: C` only with `exposure: live`; `tier: B` is consistent with
+every value, because a bare `B` never had an opinion to contradict).
+
+Why `tier → exposure` is a **function, not a bijection** — `A → released` holds, but
+`released → A` does not: `released` covers two legal shapes, a tag deploying to a live
+server (the historical `tier: A` shape) and adopters copying files out of a tag with no
+server at all (this repo's own shape). A descriptor that answers with `exposure` is
+answering a strictly more precise question than one that only ever answered with `tier`,
+which is why it is trusted first. Full precedence code and rationale:
+`tools/lib/axis-authority.js`.
 
 ### `trunk` — required
 
@@ -98,7 +125,7 @@ test is "does a deploy target exist today?" ([CONVENTIONS.md §9](CONVENTIONS.md
   **promotion trigger**, never the absence of anything that runs this code anywhere —
   that question is [`channels`](#channels--optional).
 - `push-main` — a push to `main` **is** the deploy. The required value for
-  [`tier: C`](#tier--required), and a finding on `tier: A` — see below.
+  [`tier: C`](#tier--optional-legacy), and a finding on `tier: A` — see below.
 
 `push-main` describes a real mechanism truthfully: for the repos using it,
 pushing `main` really does deploy. It has a home — **tier C is exactly this
@@ -357,12 +384,34 @@ exposure: live         # users, via the promotion itself
 exposure: released      # users or adopters, via a deliberate artifact (a tag, a runbook)
 ```
 
-What consumes a merge here — the axis `tier`'s gate count will eventually be *derived*
-from (CONVENTIONS.md §2, "Exposure — what consumes a merge here?"). **Strictly additive in
-this unit**: a new key alongside `tier`, `tier` stays fully authoritative, and no rule
-anywhere reads `exposure` to change a `tier`/`trunk`/`deploy`/`production` finding. A repo
-declaring nothing behaves exactly as it does today, byte for byte, including every outside
-adopter of this public repo who has not opted in.
+What consumes a merge here — as of **#144**, the AXIS OF RECORD for gate count when
+declared (CONVENTIONS.md §2, "Exposure — what consumes a merge here?"; [`tier`](#tier--optional-legacy)
+above states the full precedence). **This is the breaking change of the major version**: a
+descriptor that opted into `exposure` during phase 1 (additive, inert) now has a
+LOAD-BEARING key — declaring it drives the trunk-shape/deploy-path/production-non-null
+rules directly, in `exposure`'s own vocabulary, rather than `tier`'s. A repo that has
+**never** declared `exposure` sees zero change: the legacy `tier` read reproduces
+pre-#144 behaviour byte for byte, including every outside adopter of this public repo who
+has not opted in — verified empirically (a fleet-wide byte-diff), not merely designed for.
+
+**The gate contract, once `exposure` governs:**
+
+- `none` — no mechanism/contract fail beyond the pairing advisory below; a committed
+  deploy workflow alongside it is a contradiction (nothing is supposed to consume this
+  repo, yet something is wired to deploy it).
+- `self` — **no mechanism or contract rule at all.** Its consumer set is a subset of the
+  room's ([`room`](#room--optional)), so policing its deploy/production/trunk shape is out
+  of scope by design.
+- `live` — `trunk: dev`, a non-null `production`, `deploy: push-main`, and a committed
+  `deploy-*.yml` workflow. Keeps the old tier C contract's no-runbook asymmetry: there is
+  **no `runbook:` escape hatch** for `live` — a deploy workflow must actually exist.
+- `released` — **two legal shapes.** Shape 1: a live `production` URL with a committed
+  deploy path (a workflow, or a `runbook:` when the deploy runs outside CI) — mirrors the
+  old tier A contract exactly. Shape 2, new in #144: `production: null`, evidenced instead
+  by a version-shaped git tag or `channels: [artifact]` — recording that adopters consume a
+  release even though there is no server. This is this repo's OWN shape, and the old
+  `tier: B` weld could never express it (`tier: B` forbade a non-null `production` AND
+  required `deploy: none`, but had no vocabulary for "released to adopters, no server").
 
 `self` is defined against the [`room`](#room--optional) axis: the consumer set is a subset
 of the room's collaborator set — that definition points at nothing until `room` exists,
@@ -408,10 +457,14 @@ path to a `none`/`self` value is a human committing the string, because every ca
 value for an undeclared repo is a claim about the *absence* of a consumer, which nothing here
 can verify. Raising exposure (proposing `live`/`released` from a committed `production` URL
 or a deploy workflow) is a narrower claim an agent may propose; lowering it never is. The
-audit enum-checks the value and pairs it with `production:` as above, and nothing more —
-**no rule couples `exposure` to `tier`, deliberately, matching [`writes`](#writes--optional)'s
-own "do not add one" instruction**, and no rule yet derives production gate count from it —
-that stays `tier`'s until a later unit flips authority. CI role and thoroughness and the
+audit enum-checks the value, pairs it with `production:` as above, and — as of #144 — drives
+the gate contract itself when declared. **`exposure` is now coupled to `tier` in exactly one
+sense: when BOTH are declared and disagree about gate count, that is a finding** (`tier: A`
+is consistent only with `exposure: released`; `tier: C` only with `exposure: live`; `tier: B`
+is consistent with every value). It is still true that nothing INFERS `exposure` from
+`tier`, GitHub visibility, or a deploy workflow — the asymmetry [`writes`](#writes--optional)
+also carries ("do not add one") is about inference, not about disagreement between two
+values a human wrote down separately. CI role and thoroughness and the
 rollback obligation are now derived from it
 ([CONVENTIONS.md, CI](CONVENTIONS.md#ci--what-it-is-follows-writes-how-much-follows-exposure);
 [CONVENTIONS.md, Recovery](CONVENTIONS.md#recovery--what-must-exist-to-undo-a-merge)).
@@ -761,13 +814,22 @@ the shape that shows it. One writer at a time says nothing about who reads the r
 | Rule | Failure it prevents |
 |---|---|
 | file present and parseable | undescribed repo — agents guess |
-| `tier` ∈ {A, B, C} | — |
+| `tier` and `exposure` both absent → **finding**, "no axis of record" | a descriptor with no answer at all about gate count |
+| `tier` and `exposure` both present and disagreeing about gate count → **finding** | a descriptor that contradicts itself about how many gates its own pipeline has |
+| `tier` ∈ {A, B, C}, when set | — |
+| **Legacy path** (`tier` set, `exposure` absent) — reproduces every rule below, worded against the tier letter, byte for byte with pre-#144 behaviour: | |
 | `tier: A` → `trunk: dev`, `production` non-null, `deploy` ∈ {`tag`, `manual`} | a release branch nothing consumes |
 | `tier: A` + `deploy: push-main` → **finding**, pointing at tier C | claiming a release gate the pipeline does not have |
 | `tier: C` → `trunk: dev`, `production` non-null, `deploy: push-main`, a deploy workflow exists | a tier whose shape does not match its mechanism |
 | `deploy: tag` (or `push-main`) → a deploy workflow exists | a tier claimed but never wired up |
 | `deploy: manual` → `runbook:` set, and the path exists in the repo | a hand-deploy only one person knows how to run |
 | `tier: B` → `trunk: main`, `deploy: none`, `production: null` | ceremony without benefit |
+| **Axis path** (`exposure` set — governs regardless of whether `tier` is also set): | |
+| `exposure: live` → `trunk: dev`, `production` non-null, `deploy: push-main`, a deploy workflow exists (no `runbook:` escape hatch) | a live shape claimed but never wired up |
+| `exposure: released`, shape 1 → `production` non-null + a committed deploy path (workflow, or `runbook:` outside CI) | a release claimed but never wired up |
+| `exposure: released`, shape 2 → `production: null` + (a version-shaped tag, or `channels: [artifact]`) | a "released with no server" claim with no evidence it ships anywhere |
+| `exposure: none` → no committed deploy workflow (a NAMED `production` alone stays clean — the transitional read) | claiming nothing consumes this repo while something is wired to deploy it |
+| `exposure: self` → no rule at all | policing a room-bounded repo's deploy shape, which is out of scope |
 | declared `trunk` branch actually exists | docs describing a repo that doesn't exist |
 | every `integration` entry exists, and is not `trunk` / `main` / the word `trunk` | a dev-side line acquiring a path to production |
 | declared `releaseBranch` exists, and is not `trunk` / `main` / the word `trunk` | `colab doctor` misreading a live deploy target as a spent branch and advising its deletion |
