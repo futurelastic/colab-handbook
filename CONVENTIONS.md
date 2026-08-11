@@ -318,7 +318,8 @@ repo cannot skip its own audit trail. That conflates:
   a `solo` repo's trail has exactly one reader whether or not the thing is live, so being
   live does not, by itself, give the trail a second reader.
 - **recoverability** — what must exist to undo a change. Follows **exposure** and
-  irreplaceable state, not narration depth.
+  irreplaceable state, not narration depth ([Recovery](#recovery--what-must-exist-to-undo-a-merge),
+  below).
 
 A live, single-operator repo whose only irreplaceable asset is a small state file cannot
 skip recoverability, and gains nothing from full narration nobody in the room will ever
@@ -331,6 +332,35 @@ instead of a declared one.
 may run light narration; it may not skip the record required to undo a change. One
 backstop remains: `light` may not combine with `autonomy: auto-trunk` (an unattended
 merge with no evidence trail is unauditable).
+
+### Recovery — what must exist to undo a merge?
+
+**Prevention and recovery are alternatives, and which one is available is decided by
+[`writes`](#writes--serial-or-isolated-and-the-two-things-that-make-a-branch-mandatory),
+not by preference.** Isolated and serial-gated both put a gate in front of a merge —
+something to inspect before the unit lands (below) — so "catch it before it lands" is
+achievable there. Serial trunk-direct has no such gate: a commit lands by construction,
+and CI runs after the push as an alarm, not a filter. Recovery is the only instrument left
+on that cell of the table, and it has been undefined — the mode this handbook adopted for
+solo flow carried no stated obligation for what happens once something lands wrong.
+
+The obligation follows [exposure](#exposure--what-consumes-a-merge-here), because what a
+bad commit costs to undo is exactly what exposure says consumed it:
+
+| exposure | recovery obligation |
+|---|---|
+| `none` | amend or `git reset` the trunk-direct commit — nothing outside the repo saw it |
+| `self` | rebuild the checkout from a known-good ref and redeploy — the deploy gate, where the repo has one, is the recovery point; where it doesn't, restoring the checkout is the whole obligation |
+| `live` | revert the commit, then promote the revert — the revert is a deploy in its own right, not a formality before one |
+| `released` | cut a new version and publish an advisory; a release, once tagged, cannot be un-tagged |
+
+**`released` is the strictest cell, not the mildest.** By the time a bad commit reaches
+this row, adopters have already copied it — there is no recall path, only a new version
+and an advisory. This repo's own distribution is exactly this shape (`channels:
+[artifact]`, `exposure: released`): a tag already pulled by an adopter cannot be
+un-pulled, only superseded. "Catch it before it lands" is not conservatism at `released`;
+it is the only defense that exists, because nothing past the tag is recovery, only a
+forward fix.
 
 ### Writes — serial or isolated, and the two things that make a branch mandatory
 
@@ -388,9 +418,11 @@ invariants exist to protect *other* sessions.
    `writes: serial` repo — no conflicting place-claim held on this checkout (below).
    Anything held refuses outright — full ceremony, no partial credit.
 2. **Trunk-direct commits are allowed.** Small Conventional Commits go straight to trunk;
-   CI validates after the push. Branching remains available whenever a squash unit is
-   wanted, or whenever one of the two mandatory-branch conditions above fires — solo flow
-   stops requiring a branch, it does not forbid one.
+   CI validates after the push — an alarm, not a gate, so recovery rather than prevention
+   is the obligation ([Recovery](#recovery--what-must-exist-to-undo-a-merge), above).
+   Branching remains available whenever a squash unit is wanted, or whenever one of the
+   two mandatory-branch conditions above fires — solo flow stops requiring a branch, it
+   does not forbid one.
 3. **An Issue is filed on demand**, not on entry — recording a decision, or work spanning
    more than one sitting.
 4. **Exit check, not teardown.** `colab solo --done` re-derives fresh: tree clean,
