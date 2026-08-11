@@ -121,6 +121,31 @@ test('a link naming a slug that does not exist lists real headings as candidates
   assert.ok(hasText(r.fails, /5-claiming-work/), r.fails.join(' | '));
 });
 
+test('candidates are ranked by edit distance, not document order (#187)', () => {
+  const r = audit(fixture({
+    'CONVENTIONS.md':
+      '# Conventions\n\n' +
+      '## 1. Overview\n\n' +
+      '## 2. Getting started\n\n' +
+      '## 3. Claiming work\n\n' +
+      '## 4. Branches and commits\n\n' +
+      '## 9. Adopting this\n\n',
+    // Typo'd fragment: one letter short of the LAST heading in the document, nowhere
+    // near the first four. The old check took the first five headings in document
+    // order, so it would have suggested "1-overview" et al and never surfaced the
+    // actual near-miss at all — this is the fixture that distinguishes the new
+    // ranked-by-distance behaviour from the old first-five-in-file one (the test
+    // above passes under both, since its correct answer already happens to be first).
+    'docs/x.md': 'See [adoption](../CONVENTIONS.md#9-adoptng-this).\n',
+  }));
+  const msg = r.fails.find((t) => /does not resolve/.test(t));
+  assert.ok(msg, r.fails.join(' | '));
+  const listed = msg.split('nearest headings: ')[1].split(', ');
+  assert.ok(listed.includes('9-adopting-this'), msg);
+  // Not just present — nearest, so it must be ranked first.
+  assert.strictEqual(listed[0], '9-adopting-this', msg);
+});
+
 test('a link to a file that does not exist at all fails', () => {
   const r = audit(fixture({
     'docs/x.md': 'See [ghost](../NOPE.md#somewhere).\n',

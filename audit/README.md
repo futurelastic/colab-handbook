@@ -152,8 +152,10 @@ the handbook's current version, so a scheduled run is self-documenting.
     and cross-file, relative paths resolved against the *linking file's* directory.
   - Resolves each target's headings with a minimal GitHub-compatible slugifier and
     **fails** when a fragment doesn't match any of them, naming the file, the broken
-    anchor, and up to five nearby valid slugs. **Fail, not warn** — an unresolved
-    anchor is unambiguous once found, unlike the byte-ceiling checks above.
+    anchor, and up to five valid slugs ranked by edit distance to the broken one
+    (#187 — nearest by construction, not just the first five headings in the
+    document). **Fail, not warn** — an unresolved anchor is unambiguous once found,
+    unlike the byte-ceiling checks above.
   - **Deliberately link-shaped only.** A bare `§N` in prose, or a bare
     `FILE.md#slug` mention with no `[...](...)` around it, is invisible to this
     check by construction — that is what keeps a not-yet-migrated `§N` citation
@@ -177,20 +179,19 @@ the handbook's current version, so a scheduled run is self-documenting.
   A repo that adopted at an older handbook version never back-fills a label added later
   on its own; the check that label powers then silently cannot fire (`CONVENTIONS.md`
   §8, *Labels reconcile too*).
-- **`ceremony:` coherence (#79)** — an optional field scaling memory-ceremony depth
-  (project.schema.md#ceremony--optional). An unrecognised value is a **finding**; two
-  coherence rules are also findings, both scoped to `ceremony: light` only:
-  - `light` + a non-null `production` — a live repo cannot opt out of its own audit
-    trail, the same class of finding as `tier: A` + `deploy: push-main`.
-  - `light` + `autonomy: auto-trunk` — an unattended merge with no evidence trail is a
-    closure nobody can audit.
-  Omitting `ceremony:` entirely, or setting `ceremony: standard`, triggers neither rule.
-  `light` also **downgrades the handbook-reconciliation stamp check** (above) from
-  `fail` to `warn` — but only for a **non-CI** template (the CLAUDE conventions block,
-  a deploy template, …). A stamped `ci-*` workflow that has drifted stays a hard
-  finding on every repo regardless of `ceremony`, because build/secret-scan integrity
-  is never optional — and it cannot reach a live repo anyway, since rule 1 above
-  already requires `production: null` wherever `light` applies.
+- **`ceremony:` coherence (#79, narrowed by #175)** — an optional field scaling
+  memory-ceremony depth (project.schema.md#ceremony--optional). An unrecognised value
+  is a **finding**; one coherence rule is also a finding, scoped to `ceremony: light`
+  only: `light` + `autonomy: auto-trunk` — an unattended merge with no evidence trail
+  is a closure nobody can audit. (#175 removed the rule this used to also carry —
+  `light` + a non-null `production` — because narration follows the room, not
+  exposure: a live single-operator repo's audit trail still has one reader, live or
+  not.) Omitting `ceremony:` entirely, or setting `ceremony: standard`, triggers no
+  rule. `light` also **downgrades the handbook-reconciliation stamp check** (above)
+  from `fail` to `warn` — but only for a **non-CI** template (the CLAUDE conventions
+  block, a deploy template, …). A stamped `ci-*` workflow that has drifted stays a
+  hard finding on every repo regardless of `ceremony`, because build/secret-scan
+  integrity is never optional.
 
 - **`exposure:` enum + one pairing advisory (#132)** — an optional field naming what
   consumes a merge here (project.schema.md#exposure--optional), additive alongside `tier`;

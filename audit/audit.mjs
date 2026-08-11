@@ -1372,6 +1372,30 @@ function stripCodeForLinkScan(text) {
   return out.join("\n");
 }
 
+// Levenshtein edit distance, local and dependency-free (#187) — the check's suggestion
+// list needs a real similarity measure to earn the word "nearest" in its message; plain
+// two-row DP is all that's warranted at the scale of a heading slug, no need to optimise.
+function levenshtein(a, b) {
+  const m = a.length;
+  const n = b.length;
+  let prev = new Array(n + 1);
+  let curr = new Array(n + 1);
+  for (let j = 0; j <= n; j++) prev[j] = j;
+  for (let i = 1; i <= m; i++) {
+    curr[0] = i;
+    for (let j = 1; j <= n; j++) {
+      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+      curr[j] = Math.min(
+        prev[j] + 1, // deletion
+        curr[j - 1] + 1, // insertion
+        prev[j - 1] + cost, // substitution
+      );
+    }
+    [prev, curr] = [curr, prev];
+  }
+  return prev[n];
+}
+
 function checkAnchorLinks(src, fail) {
   if (src.kind !== "local") return; // remote enumeration is O(files) gh API calls — skip, not warn (see markdownFiles())
   const files = src.markdownFiles();
@@ -1413,7 +1437,16 @@ function checkAnchorLinks(src, fail) {
         continue;
       }
       if (!slugs.has(fragment)) {
-        const near = [...slugs].slice(0, 5);
+        // Ranked by edit distance to the unresolved fragment, ascending, so "nearest"
+        // means what it says (#187 — it used to be the first five headings in document
+        // order, unrelated to the broken fragment). Ties break on document order (the
+        // Set's insertion order) so the message is deterministic — it is asserted in
+        // tests, and a nondeterministic suggestion list would make the suite flaky.
+        const near = [...slugs]
+          .map((slug, index) => ({ slug, index, dist: levenshtein(fragment, slug) }))
+          .sort((a, b) => a.dist - b.dist || a.index - b.index)
+          .slice(0, 5)
+          .map((entry) => entry.slug);
         fail(
           `${file}: anchor #${fragment} does not resolve in ${normalized} — ` +
           (near.length ? `nearest headings: ${near.join(", ")}` : "that file has no headings at all"),
