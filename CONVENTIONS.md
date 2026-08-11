@@ -607,6 +607,18 @@ path where merging to trunk directly runs the code may still be `writes: serial`
 trunk-direct as freely as the general rule allows — it keeps a branch and a pre-merge gate
 for anything not fit to put in front of users unreviewed, and skips only the worktree.
 
+**Evaluating consequence 2 needs `deploy` too — `channels` alone cannot answer it.**
+`workflow` names one shape, merge → CI → a deploy workflow, but that CI can be triggered by
+a push to trunk (`deploy: push-main`) or by a tag (`deploy: tag`), and the two have opposite
+risk profiles for exactly this obligation: a tag interposes a human ritual between merge and
+run, a trunk push does not. `channels: [workflow]` is silent on which. Whether "merging to
+trunk directly runs the code" holds for a given repo is read from `channels` **and** `deploy`
+together, not from `channels` alone — a caveat this section states rather than a coupling it
+reopens: no rule here reads `deploy` to change a `channels` finding, or `channels` to change
+a `deploy` finding, and the two stay independently authoritative for everything except this
+one human-facing question, which was unanswerable from either axis alone before this axis
+existed.
+
 **What this unit does not do.** It ships the `channels` key, its shape/enum check, and the
 descriptor-internal advisory — nothing more. **#137 later added a falsifier**: a
 version-shaped tag, or a committed deploy path, contradicting a declared `channels: [none]`

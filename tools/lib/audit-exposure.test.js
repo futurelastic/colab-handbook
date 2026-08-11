@@ -132,13 +132,21 @@ test('an unrecognised exposure value is a finding, not a silent pass', () => {
 // --- the non-coupling pin — the whole point of this file -----------------------------
 
 test('exposure is NOT coupled to tier — a tier: A repo with any exposure value produces no tier-related finding either way', () => {
+  // exposure: self deliberately gets NO falsifier (#137: "self" claims a consumer set
+  // bounded by the room, so a tag or a deploy path is compatible with it) — so this fixture
+  // proves the non-coupling property cleanly, with no fixture-shaping needed to dodge the
+  // falsifier/duration warns #137 later added on exposure: none.
   const yml = `tier: A\ntrunk: dev\nproduction: https://example.invalid\ndeploy: tag\nstack: node\nexposure: self\n`;
   const r = audit(fixture(yml));
   // exposure: self on a live, tagged tier-A repo is an unusual pairing in practice, but
   // nothing here may treat it as a tier/exposure mismatch — that coupling is explicitly
-  // out of scope for this unit (CONVENTIONS.md §2 "Exposure": "do not add one").
-  assert.ok(!hasText(r.fails, /tier/i), r.fails.join(' | '));
-  assert.ok(!hasText(r.fails, /exposure/), r.fails.join(' | '));
+  // out of scope for this unit (CONVENTIONS.md §2 "Exposure": "do not add one"). Widened to
+  // the union of fails AND warns (#192) — the pin previously guarded `fails` only, so a
+  // coupling introduced at `warn` (the likelier shape, since this axis chose advisory over
+  // failure for its own pairing rule) would have passed it untouched.
+  const findings = [...r.fails, ...r.warns];
+  assert.ok(!hasText(findings, /tier/i), findings.join(' | '));
+  assert.ok(!hasText(findings, /exposure/), findings.join(' | '));
 });
 
 // --- independence from other axes ----------------------------------------------------

@@ -209,7 +209,8 @@ the handbook's current version, so a scheduled run is self-documenting.
   (project.schema.md#channels--optional), additive alongside `deploy`; `deploy` stays
   fully authoritative and no rule couples the two. Unlike every other axis here it is a
   **list**, because a repo can genuinely have several channels open at once. A bare
-  scalar, an empty list, an unknown member, or `[none]` combined with another value are
+  scalar, an empty list, an unknown member, a duplicate member (`[workflow, workflow]`,
+  pointing at the deduplicated form), or `[none]` combined with another value are
   each a **finding**; the descriptor-internal coherence check is `channels: [none]`
   together with a non-null `production` or a non-`none` `deploy` — a **warn**, never a
   `fail`, on `exposure`'s precedent. Omitting `channels:` entirely reports `null`

@@ -1113,8 +1113,16 @@ function auditRepo(target, ctx) {
         fail(`channels is an empty list — that is not an answer; declare [none] if nothing runs this code anywhere, or omit the key if undeclared`);
       } else {
         const unknown = channelsRaw.filter((c) => !VALID_CHANNELS.has(c));
+        const deduped = [...new Set(channelsRaw)];
         if (unknown.length) {
           fail(`channels contains ${JSON.stringify(unknown)}, expected members of: ${[...VALID_CHANNELS].join(", ")}`);
+        } else if (deduped.length !== channelsRaw.length) {
+          // #197's second ruling: a duplicate member (even of an otherwise-valid value, e.g.
+          // `[workflow, workflow]`) previously passed silently — only `[none, none]` was ever
+          // caught, and only incidentally, via the exclusivity check below. Same severity as
+          // every other shape rule in this block (`fail`): a duplicate is a malformed answer,
+          // not a real one, same class as the empty-list and unknown-member cases above.
+          fail(`channels contains a duplicate member (${JSON.stringify(channelsRaw)}) — declare each channel once: ${JSON.stringify(deduped)}`);
         } else if (channelsRaw.includes("none") && channelsRaw.length > 1) {
           fail(`channels combines "none" with another value (${JSON.stringify(channelsRaw)}) — "none" means nothing runs this code anywhere and must stand alone`);
         } else if (

@@ -453,6 +453,10 @@ per-host config the repo owns, never in this descriptor.
 **Shape rules, the entire audit surface:**
 - Always a **list**. A bare scalar is a finding naming the list form.
 - Every member must be one of the seven values above. An unknown member is a finding.
+- **No duplicate members** — `[workflow, workflow]` is a finding pointing at the
+  deduplicated form, same severity as the other shape rules here. `[none, none]` is caught
+  by this rule too (previously it was only caught incidentally, by the exclusivity rule
+  below).
 - `none` is **exclusive** — `[none]` alone, never combined with another kind. `[none,
   workflow]` is a finding, not a richer answer.
 - `[]` (empty list) is a finding pointing at `[none]` — an empty list is not an answer.
@@ -775,6 +779,7 @@ the shape that shows it. One writer at a time says nothing about who reads the r
 | `exposure` ∈ {`none`, `self`, `live`, `released`} when set | a misspelled value silently read as undeclared |
 | `exposure: none` + `production: null` → **advisory** | the both-empty claim ("nothing consumes this, and there is nothing to point at") going unflagged |
 | `channels` is a list, each member ∈ {`workflow`, `hook`, `procedure`, `checkout`, `artifact`, `data`, `none`}, when set | a misspelled or scalar value silently read as undeclared |
+| `channels` contains no duplicate member → **finding** | `[workflow, workflow]` passing silently as though it were a richer answer than `[workflow]` |
 | `channels: [none]` combined with another member, or `channels: []` → **finding** | an empty or self-contradicting answer read as a real one |
 | `channels: [none]` + (`production` non-null or `deploy` ≠ `none`) → **advisory** | the claim "nothing runs this" going unflagged against a fact already on record elsewhere in the same descriptor |
 

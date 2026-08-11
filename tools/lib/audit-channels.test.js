@@ -22,11 +22,17 @@
  *     stand alone;
  *   - a clean multi-member list (e.g. `[workflow, hook]`) is CLEAN — the whole reason this
  *     key is a list and not a scalar;
+ *   - a duplicate member (e.g. `[workflow, workflow]`) is a finding pointing at the
+ *     deduplicated form — same severity as the other shape rules (#197);
  *   - `channels: [none]` + a non-null `production` OR a non-`none` `deploy` is the ONE
  *     advisory this unit emits, and it is a warn, never a fail;
  *   - `channels` is NOT coupled to `exposure` in either direction — same non-coupling
  *     shape as `writes`/`exposure` (audit-writes.test.js, audit-exposure.test.js), for the
- *     same reason (CONVENTIONS.md §2, "Channels" and "Writes": "do not add one").
+ *     same reason (CONVENTIONS.md §2, "Channels" and "Writes": "do not add one");
+ *   - `channels` is NOT coupled to `tier` either (#198) — the exposure file pins this
+ *     against `tier`, this file previously left it to incidental coverage from tier A/C
+ *     fixtures elsewhere; both this pin and #192's widened exposure one check the union of
+ *     `fails` and `warns`, not `fails` alone.
  */
 
 const test = require('node:test');
@@ -117,6 +123,20 @@ test('an unrecognised channels member is a finding, not a silent pass', () => {
   assert.ok(hasText(r.fails, /channels contains \["magic"\].*expected members of/), r.fails.join(' | '));
 });
 
+// --- duplicate members (#197) -------------------------------------------------------
+
+test('channels: [workflow, workflow] is a finding pointing at the deduplicated form — a duplicate previously passed silently', () => {
+  const yml = `tier: B\ntrunk: main\nproduction: null\ndeploy: none\nstack: node\nchannels: [workflow, workflow]\n`;
+  const r = audit(fixture(yml));
+  assert.ok(hasText(r.fails, /channels contains a duplicate member.*declare each channel once.*\["workflow"\]/), r.fails.join(' | '));
+});
+
+test('channels: [none, none] is caught by the duplicate check, not left to the exclusivity rule alone', () => {
+  const yml = `tier: B\ntrunk: main\nproduction: null\ndeploy: none\nstack: node\nchannels: [none, none]\n`;
+  const r = audit(fixture(yml));
+  assert.ok(hasText(r.fails, /channels contains a duplicate member/), r.fails.join(' | '));
+});
+
 // --- "none" exclusivity ------------------------------------------------------------
 
 test('channels: [none, workflow] is a finding — "none" must stand alone', () => {
@@ -174,6 +194,18 @@ test('channels is NOT coupled to exposure — declaring both, or either alone, p
   assert.ok(!hasText(r.fails, /exposure/), r.fails.join(' | '));
   assert.ok(!hasText(r.fails, /channels/), r.fails.join(' | '));
   assert.ok(!hasText(r.warns, /channels/), r.warns.join(' | '));
+});
+
+test('channels is NOT coupled to tier — a tier: A repo with a channels value produces no tier-related finding either way (#198)', () => {
+  // deploy: manual + a real runbook so the fixture is clean on its own terms (no unrelated
+  // deploy-workflow-missing fail to confuse the assertion); channels: [procedure] so neither
+  // the [none] falsifier/duration warns (#137) nor the [none] coherence advisory can fire —
+  // the same "prove the property cleanly, not accidentally" shaping #192 called for.
+  const yml = `tier: A\ntrunk: dev\nproduction: https://example.invalid\ndeploy: manual\nrunbook: docs/deploy.md\nstack: node\nchannels: [procedure]\n`;
+  const r = audit(fixture(yml, { 'docs/deploy.md': '# deploy\n' }));
+  const findings = [...r.fails, ...r.warns];
+  assert.ok(!hasText(findings, /tier/i), findings.join(' | '));
+  assert.ok(!hasText(findings, /channels/), findings.join(' | '));
 });
 
 // --- independence from other axes ----------------------------------------------------
