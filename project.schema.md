@@ -684,7 +684,8 @@ stack: laravel-inertia
 ```
 
 Tier B, but genuinely consumed — a public, tag-published repo with real adopters and no
-server, `exposure` declared alongside `tier` (this repo's own shape):
+server, `exposure` declared alongside `tier`, and one writer serving many readers (this
+repo's own shape):
 
 ```yaml
 tier: B
@@ -692,9 +693,15 @@ trunk: main
 production: null
 deploy: none
 stack: docs + copy-and-own CI templates + audit CLI (no build)
+writes: serial
+room: public
 exposure: released
 channels: [artifact]
 ```
+
+Note `writes: serial` beside `room: public` — the two axes are independent, and this is
+the shape that shows it. One writer at a time says nothing about who reads the record;
+`writes: serial` never implies `room: solo`.
 
 ## Validity rules (what the audit tool checks)
 
