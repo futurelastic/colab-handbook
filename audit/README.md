@@ -79,7 +79,21 @@ the handbook's current version, so a scheduled run is self-documenting.
 - Tier B must have `deploy: none`, no `production` URL, and no deploy workflow. (This
   was silently unchecked before — a tier B repo could quietly ship to production with
   none of the tier A gates.)
-- The declared `trunk` branch actually exists.
+- The declared `trunk` branch actually exists — checked against **local branch refs
+  unioned with remote-tracking refs** (`refs/heads` ∪ `refs/remotes/*`, remote prefix
+  stripped, deduped). A branch present only as `origin/<name>` still counts: `git clone
+  --branch <default>` of a Tier A/C repo routinely leaves every branch but the default in
+  exactly that shape, and reading `refs/heads` alone reported trunk as **absent** on the
+  most pristine checkout there is (#204). The same union feeds the CI stale-reference
+  advisory below, so a workflow triggering on a remote-only trunk is no longer flagged as
+  a ghost branch either. The separate "main checkout is parked on the wrong branch"
+  finding deliberately does **not** use this union — it fires only when trunk has (or once
+  had) a *local* ref here; a fresh clone that never had trunk locally has nothing to
+  "return" the checkout to, so it stays silent rather than give that advice. The
+  branch-naming-convention advisory (`branch name(s) off-convention: … — want
+  <type>/<slug>`) also stays local-only, on purpose: widening it to every branch that has
+  ever touched the remote pulled in every worktree session on every machine, measured
+  against the live fleet as a double-digit list on several repos — noise, not a finding.
 - **Trunk is CI-gated** — at least one CI workflow triggers on **push to the declared
   trunk**. Merges land on the trunk as pushes; if the CI workflows' `on.push.branches`
   still name the *old* trunk after a `main → dev` move, every merge runs zero CI while

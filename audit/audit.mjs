@@ -564,13 +564,16 @@ function makeSource(target) {
       branches: () => {
         try {
           const out = execFileSync("git", ["-C", root, "for-each-ref", "--format=%(refname:short)", "refs/heads"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
-          const list = out.split("\n").map((s) => s.trim()).filter(Boolean);
+          const heads = out.split("\n").map((s) => s.trim()).filter(Boolean);
           // Zero local branch refs plus a detached HEAD is what a shallow `pull_request`
           // checkout looks like (actions/checkout defaults to fetch-depth 1 and checks out
           // the merge commit detached, with no refs/heads at all) — not the same claim as
           // "this repo genuinely has no branches". Report it the same way as "not a git
-          // checkout": unverifiable, not a trunk-missing finding (#104).
-          if (list.length === 0) {
+          // checkout": unverifiable, not a trunk-missing finding (#104). This guard is
+          // keyed off `refs/heads` alone, on purpose — a real shallow CI checkout has no
+          // remote-tracking refs either, so unioning in refs/remotes below never changes
+          // whether this fires.
+          if (heads.length === 0) {
             try {
               const head = execFileSync("git", ["-C", root, "rev-parse", "--abbrev-ref", "HEAD"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim();
               if (head === "HEAD") return null;
@@ -578,9 +581,48 @@ function makeSource(target) {
               // rev-parse itself failed — fall through and report the (empty) list as-is.
             }
           }
-          return list;
+          // A branch that exists only as a remote-tracking ref (refs/remotes/<remote>/<name>)
+          // is still a branch in every sense the checks below care about: `git clone
+          // --branch main` leaves every OTHER branch — including trunk, on a Tier A/C repo
+          // where trunk isn't the default — in exactly this shape, and `colab worktree new`
+          // already cuts from origin/<trunk>, never a local ref. Reading refs/heads alone
+          // reported that trunk as missing on the most pristine checkout there is (#204).
+          // Union it in, stripping the leading "<remote>/" generically (not hard-coded to
+          // "origin" — whatever remote is configured) and excluding the symbolic ref every
+          // remote carries pointing at its default branch. `refname:short` renders that one
+          // two different ways depending on git version: "<remote>/HEAD" (has a slash, would
+          // strip to the literal branch name "HEAD") or just "<remote>" with no slash at all
+          // (git's shorthand for "this remote's HEAD") — the no-slash form is why entries
+          // without a "/" are dropped BEFORE stripping, not after; naively slicing one at
+          // `indexOf("/") + 1` over "-1" would keep the whole remote name as a fake branch.
+          let remotes = [];
+          try {
+            const remoteOut = execFileSync("git", ["-C", root, "for-each-ref", "--format=%(refname:short)", "refs/remotes"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
+            remotes = remoteOut.split("\n").map((s) => s.trim()).filter(Boolean)
+              .filter((s) => s.includes("/"))
+              .map((s) => s.slice(s.indexOf("/") + 1))
+              .filter((s) => s && s !== "HEAD");
+          } catch {
+            // no remotes configured, or the command failed — local refs alone still stand.
+          }
+          return [...new Set([...heads, ...remotes])];
         } catch {
           return null; // not a git repo, or git unavailable
+        }
+      },
+      // refs/heads only, no remote union — used exactly once, by the "checkout parked on
+      // the wrong branch" finding below, to tell "trunk exists but this checkout drifted
+      // off it" (fire) apart from "trunk has never had a local ref here" (a fresh `git
+      // clone --branch <default>` or a CI checkout — nothing to "return" the checkout to,
+      // because it was never there). branches() above stays the general-purpose,
+      // remote-inclusive answer for existence checks; this one exists to preserve the
+      // local/remote distinction that decision specifically needs (#204).
+      localBranches: () => {
+        try {
+          const out = execFileSync("git", ["-C", root, "for-each-ref", "--format=%(refname:short)", "refs/heads"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
+          return out.split("\n").map((s) => s.trim()).filter(Boolean);
+        } catch {
+          return null;
         }
       },
       currentBranch: () => {
@@ -1412,8 +1454,20 @@ function auditRepo(target, ctx) {
   // a checkout parked on a feature branch is the failure, not the work.
   // Remote (owner/name) targets have no checkout, so currentBranch() is null there —
   // stay silent rather than invent a violation, as with `branches === null` above.
+  //
+  // Decision (#204): only fire when trunk has (or had) a LOCAL ref here. `git clone
+  // --branch main` of a conforming Tier A/C repo legitimately leaves the checkout on
+  // "main" with trunk ("dev") existing only as `origin/dev` — that checkout was never on
+  // trunk, so "return the checkout to dev" is not advice, it is noise: there is nothing to
+  // return it to. A checkout that once had trunk locally and has since drifted onto
+  // another branch is the actual failure this check exists for, so that case still fires
+  // exactly as before — the branch-existence fix above (union with refs/remotes) is
+  // deliberately NOT reused here; `localBranches()` keeps the local/remote distinction
+  // this specific decision turns on.
   const head = src.currentBranch();
-  if (trunk && head && head !== "HEAD" && head !== trunk && !src.isLinkedWorktree()) {
+  const localBranches = src.localBranches ? src.localBranches() : null;
+  const trunkEverLocal = Array.isArray(localBranches) && localBranches.includes(trunk);
+  if (trunk && head && head !== "HEAD" && head !== trunk && !src.isLinkedWorktree() && trunkEverLocal) {
     fail(`main checkout is on "${head}", not trunk "${trunk}" — anything reading this working tree (dev server, symlink, LaunchAgent) is serving that branch. Move the work to a worktree and return the checkout to ${trunk}`);
   }
 
@@ -1440,8 +1494,20 @@ function auditRepo(target, ctx) {
   const exempt = exemptList.length ? new Set([...INTEGRATION_BRANCHES, ...exemptList]) : INTEGRATION_BRANCHES;
 
   // ---- branch naming -------------------------------------------------------
-  if (branches) {
-    const bad = branches.filter((b) => !exempt.has(b) && !BRANCH_RE.test(b));
+  // Deliberately LOCAL branches only, not the refs/remotes-inclusive `branches` union above
+  // (#204). "Does trunk exist" and "is a workflow's trigger a ghost" are existence
+  // questions, where a remote-only branch is as real as a local one. Naming convention is a
+  // different question — it is about what THIS checkout's own history has produced — and
+  // widening it to every branch that has ever touched the remote pulls in every worktree
+  // session, past or present, from every machine and every collaborator: measured against
+  // the live fleet, that turned a quiet advisory into a double-digit list on several repos,
+  // none of it actionable from here. `localBranches()` is null for a remote (owner/name)
+  // target (no local checkout to have local refs), so that case still falls back to the
+  // full API list `branches()` already gave it — unaffected by this distinction, exactly as
+  // before this fix.
+  const branchesForNaming = localBranches !== null ? localBranches : branches;
+  if (branchesForNaming) {
+    const bad = branchesForNaming.filter((b) => !exempt.has(b) && !BRANCH_RE.test(b));
     if (bad.length) {
       warn(`branch name(s) off-convention: ${bad.slice(0, 4).join(", ")}${bad.length > 4 ? ` (+${bad.length - 4})` : ""} — want <type>/<slug>`);
     }
