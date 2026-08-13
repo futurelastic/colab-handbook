@@ -12,9 +12,12 @@ says go. If you came here expecting to merge or find `Phase B`, you want that sk
 this one asserts a checklist for it to pick up, nothing more.
 
 Notation: `$N` = the feature's Issue number · `<trunk>` = the branch sessions
-merge into (from `.github/project.yml`; `main` for Tier B, `dev` for Tier A) ·
-`<base>` = **the branch this session ships into** — `<trunk>`, unless it was cut
-from a declared `integration:` line, in which case it is that line.
+merge into — the value of `trunk:` in `.github/project.yml`
+([§2](../../CONVENTIONS.md#2-tiers): `main` on Tier B, `dev` on Tier C and the
+ordinary Tier A, or `main` on a tag-gated Tier A) — the tier letter is only ever
+a **legacy** correlate of the value, it never decided it · `<base>` = **the
+branch this session ships into** — `<trunk>`, unless it was cut from a declared
+`integration:` line, in which case it is that line.
 
 **Read `ceremony:` from `.github/project.yml` before the first write.** Absent, or
 `ceremony: standard` — everything below applies as written. `ceremony: light`
@@ -46,10 +49,11 @@ below against it produces confusing no-ops. The solo exit is its own, short path
    not a signal to fall back into the worktree-shaped steps below.
 4. **Nothing else runs, and `code-ship` never runs at all.** No B0 sync, no B1 CI
    gate beyond what already ran on trunk post-push, no B2 squash (there is no branch
-   to squash), no B2c/B2d/B3/B4. A Tier A release (`code-ship` B5) is a separate
-   question that solo flow does not settle either way — solo flow is gated on
-   `writes: serial` (CONVENTIONS.md, *Solo flow*), which is deliberately not coupled
-   to `production`, so a live repo may run solo flow.
+   to squash), no B2c/B2d/B3/B4. The release ritual (`code-ship` B5 — whichever
+   shape `exposure` gives it) is a separate question that solo flow does not settle
+   either way — solo flow is gated on `writes: serial` (CONVENTIONS.md, *Solo
+   flow*), which is deliberately not coupled to `production`, so a live repo may
+   run solo flow.
 
 If you are unsure whether this session is a solo session, check `writes:` in
 `.github/project.yml`: not `serial` means solo flow never opened, full stop — check
@@ -138,7 +142,8 @@ a comment while the file stays wrong). All three destinations are in `docs/`:
 
 #### `CLAUDE.md` is a router, not an archive
 
-It holds conventions, tier/trunk, ports, run commands, and **pointers** to the docs
+It holds conventions, trunk (and the legacy tier, when that's all a repo declares),
+ports, run commands, and **pointers** to the docs
 that carry the depth. It is also the one file loaded in full into **every** session
 before any work starts, which makes it the worst place in the repo for append-only
 accretion — and currently the place accretion lands.

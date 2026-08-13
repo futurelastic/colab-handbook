@@ -1,6 +1,6 @@
 ---
 name: code-ship
-description: "Close the COORDINATOR half of a coding session, human-authorized: verify code-wrap's hand-off contract, grade the diff against the session's plan (or the Issue's stated ask), verify trunk CI is alive and green, harvest every issue the branch carried, squash-merge with Closes #N, post evidence on each issue (including the grade verdict), release every claim, tear the worktree down — and, if a plan file existed, journal one line about its usage and delete it. A Tier A release is a separate ritual, never bundled in. Trigger phrases: 'ship it', 'merge to trunk', 'merge it', 'update the issue and merge'. Runs after code-wrap, only once a human says go — a dashboard Merge click counts, an agent's own say-so never does."
+description: "Close the COORDINATOR half of a coding session, human-authorized: verify code-wrap's hand-off contract, grade the diff against the session's plan (or the Issue's stated ask), verify trunk CI is alive and green, harvest every issue the branch carried, squash-merge with Closes #N, post evidence on each issue (including the grade verdict), release every claim, tear the worktree down — and, if a plan file existed, journal one line about its usage and delete it. The release ritual — promotion plus tag on exposure: released, or the promotion itself on exposure: live — is a separate thing, never bundled in. Trigger phrases: 'ship it', 'merge to trunk', 'merge it', 'update the issue and merge'. Runs after code-wrap, only once a human says go — a dashboard Merge click counts, an agent's own say-so never does."
 ---
 
 # code-ship — merge a wrapped session: verify hand-off → grade → CI → squash → evidence → release → teardown
@@ -12,9 +12,11 @@ coordinator session, typically a different one from the implementer's, sometimes
 different model tier.
 
 Notation: `$N` = the feature's Issue number · `<trunk>` = the branch sessions merge into
-(from `.github/project.yml`; `main` for Tier B, `dev` for Tier A) · `<base>` = **the
-branch this session ships into** — `<trunk>`, unless the worktree was cut from a declared
-`integration:` line, in which case it is that line.
+— the value of `trunk:` in `.github/project.yml` ([§2](../../CONVENTIONS.md#2-tiers):
+`main` on Tier B, `dev` on Tier C and the ordinary Tier A, or `main` on a tag-gated Tier
+A) — the tier letter is only ever a **legacy** correlate of the value, it never decided
+it · `<base>` = **the branch this session ships into** — `<trunk>`, unless the worktree
+was cut from a declared `integration:` line, in which case it is that line.
 
 **`ceremony: light`? B2b's evidence comment is skipped entirely** (the squash's
 `Closes #N` suffices) — project.schema.md#ceremony--optional. Every other step here —
@@ -195,15 +197,34 @@ migrations run clean together. *(Machine-specific reconcile — e.g. deduping a
 migration against one already on trunk — hooks in here; the universal rule is
 "regen on the merged base, never hand-merge generated files".)*
 
-## B1. Verify CI on `<base>` is alive AND green
+## B1. Verify CI on `<base>` is alive AND green — for the sha you are about to merge
+
+**Ask by commit, not by recency** (`CONVENTIONS.md` §4, #92). `gh run list --branch
+<base> -L 1` reads whatever ran *last*, and under `cancel-in-progress` a cancelled
+straggler can outrank a passing run on the *same* commit — deadlocking a ship that a
+by-commit check would clear. Ask instead whether a completed, successful run exists
+for `<base>`'s current head sha:
 
 ```sh
-gh run list --branch <base> -L 1
+HEAD=$(git rev-parse origin/<base>)
+gh run list --branch <base> --limit 20 --json headSha,conclusion \
+  -q "[.[] | select(.headSha == \"$HEAD\" and .conclusion == \"success\")] | length"
 ```
+
+Non-zero → a green run exists for the exact sha you are about to merge, which is the
+only question that matters. `colab ship` asks it this same way.
 
 A "failure" that never started (billing lockout, runner outage) still means
 **stop** — we once merged for 12 hours into repos whose CI was silently dead
 (`CONVENTIONS.md` §4). Branch protection can't check this for us; this command must.
+
+**What CI *is* follows `writes`, how much it must catch follows `exposure`**
+([§7, *CI*](../../CONVENTIONS.md#ci--what-it-is-follows-writes-how-much-follows-exposure)).
+With a branch (`isolated`, or `serial` under one of §2's two mandatory-branch
+conditions), CI here **is** the gate this merge depends on — a red or missing run for
+the head sha stops the ship, full stop. `none`/`self` exposure answers only to the
+room; `live`/`released` answers to a consumer with no way to ask a clarifying
+question, so more has to be caught before it reaches them.
 
 If `<base>` is a declared line with **no runs at all**, it is not yet CI-gated: check
 `<trunk>` instead and say so in the report. That is a normal early state for a line,
@@ -227,6 +248,13 @@ Commit bodies carry `#N`; branch names carry **bare** trailing digits
 (`fix/import-fixes-115-114-113`) — hence the two different extractions. Anchoring
 the branch half to the trailing group is deliberate: a plain `[0-9]+` sweep turns
 `feat/oauth2-login-88` into issues 2 and 88.
+
+**On a `writes: serial` repo with no branch — a solo-flow trunk-direct unit — the
+branch-name half of this extraction is empty by construction, not a finding.** There
+is no `<branch>` to read a trailing number from; the commit-body `#N` on `<trunk>` is
+the only source harvest has, and it is enough (`CONVENTIONS.md`, *Solo flow*). This is
+the same shape `code-sweep`'s `landed trunk-direct: <sha>` outcome names from the
+sweep side.
 
 **Optional cross-check — the claims registry, if `colab` is installed:**
 
@@ -682,13 +710,26 @@ done
 - **Delete only after the journal line lands**, and only issues with no plan file are a
   silent no-op here — a rung-0 session never had one, and this loop skips it correctly.
 
-## B5. Tier A release — a SEPARATE ritual, and not yours
+## B5. The release ritual — a SEPARATE act, and not yours
 
-Merging to trunk is **not** a release. A Tier A release is promotion `dev` →
-`main` (`--no-ff`, never squash) plus a `v*.*.*` tag — performed by the human
-operator, per `CONVENTIONS.md` §6. If you believe a release is overdue (a
-production fix is merged but unreleased), say so explicitly in your report; do
-not perform it.
+Merging to trunk is **not** a release. What comes next follows
+[`exposure`](../../CONVENTIONS.md#exposure--what-consumes-a-merge-here) — read the
+legacy `tier` value the same way when that is all a repo declares (`A → released`,
+`C → live`, `B → null`):
+
+- **`released`** — the tag is what ships it, human-only, per `CONVENTIONS.md` §6.
+  Two shapes, decided by `<trunk>`, never by the legacy tier letter: `<trunk>: dev` (the
+  ordinary two-branch case) is promotion `dev` → `main` (`--no-ff`, never squash)
+  plus a `v*.*.*` tag; `<trunk>: main` (single-trunk, tag-gated — this repo's own
+  shape) has no promotion at all — the release is just the tag on `main`.
+- **`live`** — the promotion `dev` → `main` **is** the deploy, and is therefore the
+  most consequential act in this file that an agent must never do unattended, not
+  the least (`CLAUDE.md`).
+- **`none` / `self`** — there is no release ritual to be separate from; B2's squash
+  to `<base>` is the whole act.
+
+If you believe a release is overdue (a production fix is merged but unreleased), say
+so explicitly in your report; do not perform it.
 
 ---
 
