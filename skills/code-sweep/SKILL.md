@@ -253,6 +253,16 @@ claimed — and the label remains the veto before any teardown.
 
 ## 3. Sort into seven buckets — each gets a different action
 
+**These buckets are keyed off what §1 enumerated — worktrees, claims, and
+places — which is complete for `isolated` writes (every unit is a worktree) but
+only partial for `writes: serial`.** A finished solo/trunk-direct unit that never
+filed an Issue (CONVENTIONS.md, *Solo flow* — an Issue is filed on demand, not on
+entry) leaves no worktree, no claim, and nothing here to sort, because there is
+nothing left to reconcile: the commit already **is** the record. One that DID file
+an Issue surfaces through §5's "open issues whose code shipped" regardless of
+whether a branch ever existed. The `landed trunk-direct: <sha>` outcome (§1.1) is
+the third case — a scoped selector that names such a unit by issue number.
+
 | Bucket | What it looks like | Action |
 |---|---|---|
 | **wrap** | `cargo` (or `unknown`), **and** at least one claimed issue | full [`code-wrap`](../code-wrap/SKILL.md) then [`code-ship`](../code-ship/SKILL.md) |
@@ -400,7 +410,10 @@ For each **wrap** candidate, in order:
 
 1. **Re-check trunk CI.** `gh run list --branch <trunk> -L 1`. Not once at the start
    — trunk CI can die mid-sweep (billing lockout, runner outage), and a failure that
-   never started still means stop. A sweep can take an hour.
+   never started still means stop. A sweep can take an hour. This re-check is about
+   the **branched** `wrap` candidates below — the merge each is about to go through
+   depends on it being alive. A `place-claim` or `landed trunk-direct` candidate
+   never merges through here at all, so this step has nothing to re-check for those.
 2. Run **code-wrap** for that candidate — distill/docs/gate/commit/push, if not
    already done for the cargo sitting on it — then **code-ship**: B0 sync against
    the *current* trunk, harvest, grade, merge, evidence, release, teardown.

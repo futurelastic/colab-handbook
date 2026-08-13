@@ -230,6 +230,13 @@ Commit bodies carry `#N`; branch names carry **bare** trailing digits
 the branch half to the trailing group is deliberate: a plain `[0-9]+` sweep turns
 `feat/oauth2-login-88` into issues 2 and 88.
 
+**On a `writes: serial` repo with no branch — a solo-flow trunk-direct unit — the
+branch-name half of this extraction is empty by construction, not a finding.** There
+is no `<branch>` to read a trailing number from; the commit-body `#N` on `<trunk>` is
+the only source harvest has, and it is enough (`CONVENTIONS.md`, *Solo flow*). This is
+the same shape `code-sweep`'s `landed trunk-direct: <sha>` outcome names from the
+sweep side.
+
 **Optional cross-check — the claims registry, if `colab` is installed:**
 
 ```sh
