@@ -395,15 +395,37 @@ function postReleaseComment(repoAbs, num) {
  * (only when the winner is a DIFFERENT GitHub user) removes our label + @me assignee. When the
  * winner shares our login (another machine of ours), the GitHub label/assignee is a single shared
  * marker the winner still needs — so we leave it and let the comment layer record the handover.
+ *
+ * #173: the remote write goes through `ghIssueRelease` (GraphQL primary, REST fallback on a
+ * GraphQL-specific rate limit — #164), and the local claim is deleted ONLY when that write
+ * actually landed. A failed write on both transports instead marks the claim `releasePending`,
+ * the same retention #164 already applies at `cmdRelease` and worktree-rm release — so a claim
+ * this session lost the race for, but could not tell GitHub about, stays visible in
+ * `colab claims` for a retry rather than silently vanishing while GitHub still shows us
+ * in-progress.
  */
 function yieldIssue(repoAbs, num, winner, myLogin) {
+  let ghFailed = false;
   if (winner.login !== myLogin) {
-    const r = git.ghIssueEdit(repoAbs, num, ['--remove-label', 'in-progress', '--remove-assignee', '@me']);
-    if (!r.ok) warn(`gh: could not remove our label/assignee on #${num} while yielding (${r.stderr.split('\n')[0] || r.code})`);
+    const r = git.ghIssueRelease(repoAbs, num);
+    if (!r.ok) {
+      ghFailed = true;
+      warn(`gh: could not remove our label/assignee on #${num} while yielding (${r.stderr.split('\n')[0] || r.code}) — local claim KEPT (releasePending) so a retry can find it`);
+    }
   }
   const rc = git.ghIssueComment(repoAbs, num, `${RELEASE_MARK} (yielded — earlier claim by ${winner.identity} wins)`);
   if (!rc.ok) warn(`could not post yield comment on #${num} (${rc.stderr.split('\n')[0] || rc.code})`);
-  state.mutate((st) => { delete st.claims[claimKey(repoAbs, num)]; });
+  state.mutate((st) => {
+    const key = claimKey(repoAbs, num);
+    const c = st.claims[key];
+    if (!c) return;
+    if (ghFailed) {
+      c.releasePending = true;
+      c.releaseNote = `GitHub release failed while yielding (${nowISO()}) — retry with: colab release ${num}`;
+    } else {
+      delete st.claims[key];
+    }
+  });
 }
 
 /**
