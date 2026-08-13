@@ -66,30 +66,53 @@ test('an action outside the map never reaches the wire', () => {
 // ─────────────────────────────────────────────── 2. a dead receiver costs the caller nothing
 
 test('a hanging receiver does not delay the caller', async () => {
-  // A real server that accepts the connection and then never answers — the nastiest case, because
-  // TCP succeeds and only the response is missing. If the push were awaited, this would block for
-  // SEND_TIMEOUT_MS at minimum; being detached, the caller should not wait even that long.
+  // #181: this used to assert a wall-clock bound (`ms < 150`) around a REAL child_process.spawn —
+  // an actual node subprocess fork/exec, competing with however many other tests are forking
+  // processes at the same moment. Measured flake: 210ms against a 150ms bound, purely from suite-wide
+  // process-spawn contention, nothing to do with notify() itself waiting on anything. The real claim
+  // — "the caller returns without waiting for the receiver" — is an ORDERING property, not a
+  // duration, so assert it as one: inject a spawn stand-in that performs the same kind of request the
+  // real detached child does, against a real server that accepts and never answers, but schedules
+  // that request on the next tick (`setImmediate`) rather than doing it inline. JS's single-threaded
+  // execution then makes "notify() must return before the request can possibly begin" a fact checked
+  // the instant the call returns, with no clock and nothing to flake under load.
   const server = http.createServer(() => { /* accept, never respond */ });
   await new Promise((res) => server.listen(0, '127.0.0.1', res));
   const url = `http://127.0.0.1:${server.address().port}/api/events`;
+  let pendingReq = null;
   try {
-    const t0 = process.hrtime.bigint();
-    assert.equal(notify({ notifyUrl: url }, 'claim', { repo: '/r', issue: 7 }), 'sent');
-    const ms = Number(process.hrtime.bigint() - t0) / 1e6;
-    // Generous on purpose: this asserts "the caller is not waiting on the network", not a spawn
-    // benchmark. A regression to an awaited request shows up as >= SEND_TIMEOUT_MS, far above this.
-    assert.ok(ms < 150, `notify() took ${ms.toFixed(1)}ms — it must not wait on the receiver`);
+    let requestStarted = false;
+    const fakeSpawn = () => {
+      setImmediate(() => {
+        requestStarted = true;
+        pendingReq = http.request(url, { method: 'POST' });
+        pendingReq.on('error', () => {});
+        pendingReq.end('{}');
+      });
+      return { unref() {} };
+    };
+    const result = notify({ notifyUrl: url }, 'claim', { repo: '/r', issue: 7 }, { spawn: fakeSpawn });
+    assert.equal(result, 'sent');
+    assert.equal(requestStarted, false, 'notify() must return before the spawned work even begins — it must never wait on the receiver');
+
+    // Confirm the stand-in was not a no-op: the request really does fire on the next tick, and the
+    // server really does hang — so the ordering check above was meaningful, not vacuously true.
+    await new Promise((r) => setImmediate(r));
+    assert.equal(requestStarted, true);
   } finally {
+    if (pendingReq) pendingReq.destroy();
     server.close();
   }
 });
 
 test('an unroutable address is the same non-event', () => {
-  // Port 1 on loopback: connection refused, immediately. The caller must not see it.
-  const t0 = process.hrtime.bigint();
-  assert.equal(notify({ notifyUrl: 'http://127.0.0.1:1/api/events' }, 'ship', { repo: '/r' }), 'sent');
-  const ms = Number(process.hrtime.bigint() - t0) / 1e6;
-  assert.ok(ms < 150, `notify() took ${ms.toFixed(1)}ms`);
+  // Port 1 on loopback: connection refused. Like the hanging-receiver test above (#181), this is an
+  // ordering/structural property — notify() delegates to spawn and returns synchronously — not a
+  // wall-clock one, so it is asserted the same way: via a spawn stand-in, not a real subprocess fork
+  // whose timing depends on whatever else the suite is doing concurrently.
+  const spawn = recordingSpawn();
+  assert.equal(notify({ notifyUrl: 'http://127.0.0.1:1/api/events' }, 'ship', { repo: '/r' }, { spawn }), 'sent');
+  assert.equal(spawn.calls.length, 1, 'notify() must delegate to spawn and return, not perform the request itself');
 });
 
 test('a spawn that throws is swallowed, not propagated', () => {

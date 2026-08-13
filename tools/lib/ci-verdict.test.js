@@ -40,9 +40,24 @@ test('#155 exactly: queued, ZERO jobs, unmoving for hours — wedged on the PRIM
   assert.match(r.reason, /zero jobs/);
 });
 
-test('zero jobs wedges immediately, even on a run created moments ago — no age floor on signal B', () => {
+test('#171: zero jobs does NOT wedge on a run created moments ago — inside the age floor, jobs may simply not have materialized yet', () => {
   const r = v.wedgedVerdict({ status: 'in_progress', conclusion: null, jobCount: 0, createdAt: new Date().toISOString() });
+  assert.strictEqual(r.wedged, false);
+  assert.strictEqual(r.reason, null);
+});
+
+test('#171: zero jobs wedges once past the age floor', () => {
+  const past = new Date(Date.now() - (v.ZERO_JOBS_AGE_FLOOR_MINUTES + 1) * 60000).toISOString();
+  const r = v.wedgedVerdict({ status: 'in_progress', conclusion: null, jobCount: 0, createdAt: past });
   assert.strictEqual(r.wedged, true);
+  assert.match(r.reason, /zero jobs/);
+});
+
+test('#171: zero jobs with no createdAt (age unknown) does not wedge — a missing signal never manufactures a positive', () => {
+  const r1 = v.wedgedVerdict({ status: 'in_progress', conclusion: null, jobCount: 0, createdAt: null });
+  assert.strictEqual(r1.wedged, false);
+  const r2 = v.wedgedVerdict({ status: 'in_progress', conclusion: null, jobCount: 0, createdAt: 'not-a-date' });
+  assert.strictEqual(r2.wedged, false);
 });
 
 test('the age backstop (signal A) catches a run whose jobs are non-empty but frozen — jobCount cannot see this', () => {

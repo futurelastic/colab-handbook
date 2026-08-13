@@ -27,12 +27,28 @@
  *
  * Either signal alone is sufficient; both point to the same reclassification (HUMAN_GATED, not red,
  * not green — "a human must look", the same verdict `ci-grant`'s exemption exists to act on).
+ *
+ * Amendment (#171, 2026-08-13): signal B originally fired with no age floor at all, so a run read
+ * inside the window between creation and GitHub actually materializing its job list — real, and the
+ * realistic path into it is back-to-back ships — had `jobCount === 0` while perfectly healthy, and
+ * classified HUMAN_GATED. Consequence was mild (routes to the ci-grant door, never merges anything it
+ * shouldn't) but false. ZERO_JOBS_AGE_FLOOR_MINUTES below it, zero jobs is read as "not measured yet",
+ * not "wedged" — chosen at the top of the issue's proposed 60–120s range for margin, since the true
+ * materialization window was not re-measured empirically here. Costs nothing against the signal's
+ * actual target: a billing lockout or dead runner pool leaves a run at zero jobs for far longer than
+ * two minutes, so the floor never masks a real wedge, only the moment right after creation.
  */
 
 // Generous on purpose (see doc comment above) — an ordinary run finishes in minutes to tens of
 // minutes even on a slow repo; this threshold only exists to catch a runner that claimed a job and
 // then silently died, which the empty-jobs signal cannot see.
 const WEDGE_AGE_HOURS = 6;
+
+// #171: below this age, zero jobs means "GitHub hasn't materialized the job list yet", not "wedged".
+// Chosen at the top of the issue's proposed 60–120s range — cheap insurance, since the floor only
+// ever delays signal B by up to two minutes and never blinds it (a real wedge stays at zero jobs for
+// hours, not minutes).
+const ZERO_JOBS_AGE_FLOOR_MINUTES = 2;
 
 function hoursSince(iso, nowMs) {
   if (!iso) return null;
@@ -55,14 +71,23 @@ function hoursSince(iso, nowMs) {
  */
 function wedgedVerdict(run, opts = {}) {
   if (!run || run.status === 'completed' || run.status === 'none') return { wedged: false, reason: null };
-  if (run.jobCount === 0) {
-    return { wedged: true, reason: 'zero jobs — no runner has ever picked it up' };
-  }
   const age = hoursSince(run.createdAt, opts.nowMs);
+  if (run.jobCount === 0) {
+    // #171: no createdAt (age unknown) never manufactures a positive here, same posture as the age
+    // backstop below when createdAt is missing/unparseable — a missing signal must not wedge on its own.
+    const floorHours = ZERO_JOBS_AGE_FLOOR_MINUTES / 60;
+    if (age !== null && age >= floorHours) {
+      return {
+        wedged: true,
+        reason: `zero jobs — no runner has ever picked it up (unmoving for ${age.toFixed(2)}h, past the ${ZERO_JOBS_AGE_FLOOR_MINUTES}m floor)`,
+      };
+    }
+    return { wedged: false, reason: null };
+  }
   if (age !== null && age >= WEDGE_AGE_HOURS) {
     return { wedged: true, reason: `status=${run.status} for ${age.toFixed(1)}h (>= ${WEDGE_AGE_HOURS}h backstop)` };
   }
   return { wedged: false, reason: null };
 }
 
-module.exports = { WEDGE_AGE_HOURS, wedgedVerdict };
+module.exports = { WEDGE_AGE_HOURS, ZERO_JOBS_AGE_FLOOR_MINUTES, wedgedVerdict };
