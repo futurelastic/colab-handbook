@@ -226,7 +226,7 @@ test('a cancelled sibling of a passing run on the SAME sha still reads green (#9
     { headSha: fx.sha, status: 'completed', conclusion: 'cancelled' },
     { headSha: fx.sha, status: 'completed', conclusion: 'success' },
   ], () => git.ghRunForSha(fx.work, 'main'));
-  assert.deepStrictEqual(result, { status: 'completed', conclusion: 'success', sha: fx.sha, createdAt: null, databaseId: null });
+  assert.deepStrictEqual(result, { status: 'completed', conclusion: 'success', sha: fx.sha, createdAt: null, databaseId: null, runCount: 2 });
 });
 
 test('a stale run on an OLD sha does not count as green for the current head', () => {
@@ -234,7 +234,10 @@ test('a stale run on an OLD sha does not count as green for the current head', (
   const result = fx.withFakeGh([
     { headSha: 'deadbeefdeadbeefdeadbeefdeadbeefdeadbeef', status: 'completed', conclusion: 'success' },
   ], () => git.ghRunForSha(fx.work, 'main'));
-  assert.deepStrictEqual(result, { status: 'none', conclusion: null, sha: fx.sha, createdAt: null, databaseId: null });
+  // runCount is 0 here (not 1): the one row in the fixture is for a DIFFERENT sha, so `forSha`
+  // (filtered to the current head) is empty — runCount counts siblings AT this sha, not gh's raw
+  // row count.
+  assert.deepStrictEqual(result, { status: 'none', conclusion: null, sha: fx.sha, createdAt: null, databaseId: null, runCount: 0 });
 });
 
 test('a failed sibling of a passing run on the SAME sha reads red, not green (#146/#162)', () => {
@@ -246,7 +249,7 @@ test('a failed sibling of a passing run on the SAME sha reads red, not green (#1
     { headSha: fx.sha, status: 'completed', conclusion: 'success' },
     { headSha: fx.sha, status: 'completed', conclusion: 'failure' },
   ], () => git.ghRunForSha(fx.work, 'main'));
-  assert.deepStrictEqual(result, { status: 'completed', conclusion: 'failure', sha: fx.sha, createdAt: null, databaseId: null });
+  assert.deepStrictEqual(result, { status: 'completed', conclusion: 'failure', sha: fx.sha, createdAt: null, databaseId: null, runCount: 2 });
 });
 
 test('a failed sibling wins regardless of array order — success listed first still reads red', () => {
@@ -255,7 +258,7 @@ test('a failed sibling wins regardless of array order — success listed first s
     { headSha: fx.sha, status: 'completed', conclusion: 'failure' },
     { headSha: fx.sha, status: 'completed', conclusion: 'success' },
   ], () => git.ghRunForSha(fx.work, 'main'));
-  assert.deepStrictEqual(result, { status: 'completed', conclusion: 'failure', sha: fx.sha, createdAt: null, databaseId: null });
+  assert.deepStrictEqual(result, { status: 'completed', conclusion: 'failure', sha: fx.sha, createdAt: null, databaseId: null, runCount: 2 });
 });
 
 test('a timed_out sibling of a passing run on the SAME sha reads red, not green (#165)', () => {
@@ -266,7 +269,7 @@ test('a timed_out sibling of a passing run on the SAME sha reads red, not green 
     { headSha: fx.sha, status: 'completed', conclusion: 'success' },
     { headSha: fx.sha, status: 'completed', conclusion: 'timed_out' },
   ], () => git.ghRunForSha(fx.work, 'main'));
-  assert.deepStrictEqual(result, { status: 'completed', conclusion: 'timed_out', sha: fx.sha, createdAt: null, databaseId: null });
+  assert.deepStrictEqual(result, { status: 'completed', conclusion: 'timed_out', sha: fx.sha, createdAt: null, databaseId: null, runCount: 2 });
 });
 
 test('an action_required sibling of a passing run on the SAME sha reads red, not green (#165)', () => {
@@ -275,7 +278,7 @@ test('an action_required sibling of a passing run on the SAME sha reads red, not
     { headSha: fx.sha, status: 'completed', conclusion: 'action_required' },
     { headSha: fx.sha, status: 'completed', conclusion: 'success' },
   ], () => git.ghRunForSha(fx.work, 'main'));
-  assert.deepStrictEqual(result, { status: 'completed', conclusion: 'action_required', sha: fx.sha, createdAt: null, databaseId: null });
+  assert.deepStrictEqual(result, { status: 'completed', conclusion: 'action_required', sha: fx.sha, createdAt: null, databaseId: null, runCount: 2 });
 });
 
 test('the sha has runs but none succeeded — surfaces the most informative one, not a false none', () => {
@@ -283,7 +286,7 @@ test('the sha has runs but none succeeded — surfaces the most informative one,
   const result = fx.withFakeGh([
     { headSha: fx.sha, status: 'completed', conclusion: 'failure' },
   ], () => git.ghRunForSha(fx.work, 'main'));
-  assert.deepStrictEqual(result, { status: 'completed', conclusion: 'failure', sha: fx.sha, createdAt: null, databaseId: null });
+  assert.deepStrictEqual(result, { status: 'completed', conclusion: 'failure', sha: fx.sha, createdAt: null, databaseId: null, runCount: 1 });
 });
 
 test('a run still in flight for the sha is preferred over a finished-but-not-successful one', () => {
@@ -294,6 +297,27 @@ test('a run still in flight for the sha is preferred over a finished-but-not-suc
   ], () => git.ghRunForSha(fx.work, 'main'));
   assert.strictEqual(result.status, 'in_progress');
   assert.strictEqual(result.sha, fx.sha);
+  assert.strictEqual(result.runCount, 2);
+});
+
+// --- runCount (#176) — the sample size a caller reports alongside its verdict ----------------
+
+test('runCount is 1 for a single run at the sha — the ordinary, un-duplicated case', () => {
+  const fx = fixture();
+  const result = fx.withFakeGh([
+    { headSha: fx.sha, status: 'completed', conclusion: 'success' },
+  ], () => git.ghRunForSha(fx.work, 'main'));
+  assert.strictEqual(result.runCount, 1);
+});
+
+test('runCount counts every sibling workflow at the sha, not just the one whose conclusion is picked', () => {
+  const fx = fixture();
+  const result = fx.withFakeGh([
+    { headSha: fx.sha, status: 'completed', conclusion: 'success' },
+    { headSha: fx.sha, status: 'completed', conclusion: 'success' },
+    { headSha: fx.sha, status: 'completed', conclusion: 'success' },
+  ], () => git.ghRunForSha(fx.work, 'main'));
+  assert.strictEqual(result.runCount, 3);
 });
 
 test('a branch absent on origin returns null rather than a misleading verdict', () => {

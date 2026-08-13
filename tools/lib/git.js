@@ -365,7 +365,7 @@ function ghLabelDelete(repo, name) {
  * any fetch, mid-precondition. `-L limit` widens the window past "the latest row" because the
  * duplicate this exists for can be two runs deep.
  *
- * Returns { status, conclusion, sha }:
+ * Returns { status, conclusion, sha, createdAt, databaseId, runCount }:
  *   - a run for the head sha completed successfully  → {status:'completed', conclusion:'success', sha}
  *   - the head sha has run(s), none succeeded         → {status, conclusion} of the most informative
  *     one (a still-running row over a finished-but-failed/cancelled one), sha set
@@ -373,6 +373,9 @@ function ghLabelDelete(repo, name) {
  *     (still not green — this is also how a billing-style fail-to-start reads: no run was ever
  *     created for the commit that would need one)
  *   - the branch does not exist on origin, or `git`/`gh` failed → null
+ * `runCount` (#176) is additive on every non-null branch — the number of workflow rows found at
+ * that sha (0 for the 'none' case) — so a caller can report a verdict that names its own sample
+ * size instead of a bare singular that hides how many workflows were actually consulted.
  *
  * A cancelled sibling of a passing run on the SAME sha is not evidence of anything — it is simply
  * not read, because the passing run for that sha is what answers the question. Any OTHER completed
@@ -403,7 +406,13 @@ function ghRunForSha(repo, branch, limit = 10) {
   if (!Array.isArray(runs)) return null;
 
   const forSha = runs.filter((x) => x && x.headSha === sha);
-  if (forSha.length === 0) return { status: 'none', conclusion: null, sha, createdAt: null, databaseId: null };
+  if (forSha.length === 0) return { status: 'none', conclusion: null, sha, createdAt: null, databaseId: null, runCount: 0 };
+
+  // runCount (#176) is additive: how many sibling workflow rows exist at this sha, so a caller can
+  // report "N runs at <sha>: all success" instead of a singular verdict that hides how many
+  // workflows actually agreed. It is the row count BEFORE any of the picks below, not "how many
+  // succeeded" — the picked row already tells the caller the conclusion; this tells it the sample size.
+  const runCount = forSha.length;
 
   // A completed sibling whose conclusion is anything but success or cancelled makes the sha
   // not-green, regardless of any sibling that succeeded — checked BEFORE the success check below,
@@ -411,17 +420,17 @@ function ghRunForSha(repo, branch, limit = 10) {
   const notGreen = forSha.find(
     (x) => x.status === 'completed' && x.conclusion !== 'success' && x.conclusion !== 'cancelled',
   );
-  if (notGreen) return { status: 'completed', conclusion: notGreen.conclusion, sha, createdAt: notGreen.createdAt || null, databaseId: notGreen.databaseId || null };
+  if (notGreen) return { status: 'completed', conclusion: notGreen.conclusion, sha, createdAt: notGreen.createdAt || null, databaseId: notGreen.databaseId || null, runCount };
 
   const success = forSha.find((x) => x.status === 'completed' && x.conclusion === 'success');
-  if (success) return { status: 'completed', conclusion: 'success', sha, createdAt: success.createdAt || null, databaseId: success.databaseId || null };
+  if (success) return { status: 'completed', conclusion: 'success', sha, createdAt: success.createdAt || null, databaseId: success.databaseId || null, runCount };
 
   // None succeeded and none failed for this sha — report the most informative row: a run still in
   // flight (it may yet succeed) over a finished-but-not-successful one (gh returns newest-first;
   // forSha[0] is the newest of the non-successes either way).
   const pending = forSha.find((x) => x.status !== 'completed');
   const pick = pending || forSha[0];
-  return { status: pick.status, conclusion: pick.conclusion || null, sha, createdAt: pick.createdAt || null, databaseId: pick.databaseId || null };
+  return { status: pick.status, conclusion: pick.conclusion || null, sha, createdAt: pick.createdAt || null, databaseId: pick.databaseId || null, runCount };
 }
 
 /**

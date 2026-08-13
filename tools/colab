@@ -6020,16 +6020,26 @@ function shipCiCheck(repoAbs, gh, target, trunk, grantThunk) {
  * `shipCiCheck` classifies SELF_CLEARING (retry later, never consult a grant). A grant minted
  * against that state looked live in `ci-grant --list` and was inert at the only place `ship` reads it.
  *
- * `run` is the `{status, conclusion, sha, createdAt, databaseId}` shape `ghRunForSha` returns; `at`
- * is the already-formatted `<ref>@<shortsha>` used in every detail string.
+ * `run` is the `{status, conclusion, sha, createdAt, databaseId, runCount}` shape `ghRunForSha`
+ * returns; `at` is the already-formatted `<ref>@<shortsha>` used in every detail string.
  *
  * The job-count read (`ghRunJobCount`) is made HERE, lazily, only for a run that is already
  * non-completed and therefore a wedge candidate — an ordinary green or plain-failed check never
  * pays for it, matching `ghRunJobCount`'s own doc comment.
+ *
+ * #176: the success detail line names its own sample size — `runCount` runs agreed at this sha,
+ * not just the one row `git.js` happened to pick — so the verdict is auditable at a glance instead
+ * of a bare singular that reads identically whether one workflow ran or five. `runCount` is
+ * additive and may be absent on a hand-built `run` object (a test fixture, say); default to 1 so
+ * the detail string still reads sensibly rather than "undefined runs".
  */
 function classifyCiRun(repoAbs, run, at) {
   if (run.status === 'completed') {
-    if (run.conclusion === 'success') return { ok: true, class: null, detail: `run for ${at}: success` };
+    if (run.conclusion === 'success') {
+      const n = run.runCount == null ? 1 : run.runCount;
+      const detail = n === 1 ? `1 run at ${at}: success` : `${n} runs at ${at}: all success`;
+      return { ok: true, class: null, detail };
+    }
     return { ok: false, class: HUMAN_GATED, detail: `run for ${at}: status=completed conclusion=${run.conclusion || 'none'}` };
   }
   if (run.status === 'none') {
