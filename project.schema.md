@@ -81,6 +81,19 @@ answering a strictly more precise question than one that only ever answered with
 which is why it is trusted first. Full precedence code and rationale:
 `tools/lib/axis-authority.js`.
 
+**Which axis actually governs `trunk`, `production` and `deploy`, below.** The three
+fields that follow are worded in `tier`'s vocabulary because that was, historically, the
+only axis that constrained them, and the wording is kept for the descriptors that still
+speak only `tier`. But the rule that is actually enforced is dispatched by axis of
+record, not always by `tier`: on a descriptor that has declared `exposure`, the
+tier-voiced coherence checks below **do not run at all** — `exposure`'s own gate-contract
+table, in [`exposure`](#exposure--optional) below, is what governs trunk shape,
+`production`'s non-null-ness, and `deploy`'s legal values instead
+(`tools/lib/exposure-shape.js`, consumed by both the audit and `colab adopt`; the split
+point is `tools/lib/axis-authority.js`, whose own comment names it: "Runs ONLY on the
+tier-legacy path"). Read `trunk`/`production`/`deploy` below as the **legacy** shape, and
+`exposure`'s table as the current one when that key is declared.
+
 ### `trunk` — required
 
 The branch sessions merge into. Must be `dev` when `tier: C`; `main` when
@@ -403,24 +416,36 @@ rules directly, in `exposure`'s own vocabulary, rather than `tier`'s. A repo tha
 pre-#144 behaviour byte for byte, including every outside adopter of this public repo who
 has not opted in — verified empirically (a fleet-wide byte-diff), not merely designed for.
 
-**The gate contract, once `exposure` governs:**
+**The gate contract, once `exposure` governs** (`tools/lib/exposure-shape.js` is the one
+executable version of every rule below, shared by the audit and by `colab adopt`'s own
+"can this repo declare that value" check — read it, not this prose, if the two ever
+disagree):
 
-- `none` — no mechanism/contract fail beyond the pairing advisory below; a committed
-  deploy workflow alongside it is a contradiction (nothing is supposed to consume this
-  repo, yet something is wired to deploy it).
-- `self` — **no mechanism or contract rule at all.** Its consumer set is a subset of the
-  room's ([`room`](#room--optional)), so policing its deploy/production/trunk shape is out
-  of scope by design.
+- `none` — `trunk: main` (nothing consumes this repo, so there is no release branch to
+  speak of) **and** no committed deploy workflow — one existing alongside `none` is a
+  contradiction (nothing is supposed to consume this repo, yet something is wired to
+  deploy it), beyond the pairing advisory below.
+- `self` — **no mechanism or contract rule at all, not even trunk shape.** Its consumer
+  set is a subset of the room's ([`room`](#room--optional)), so policing its
+  deploy/production/trunk shape is out of scope by design.
 - `live` — `trunk: dev`, a non-null `production`, `deploy: push-main`, and a committed
   `deploy-*.yml` workflow. Keeps the old tier C contract's no-runbook asymmetry: there is
   **no `runbook:` escape hatch** for `live` — a deploy workflow must actually exist.
-- `released` — **two legal shapes.** Shape 1: a live `production` URL with a committed
-  deploy path (a workflow, or a `runbook:` when the deploy runs outside CI) — mirrors the
-  old tier A contract exactly. Shape 2, new in #144: `production: null`, evidenced instead
-  by a version-shaped git tag or `channels: [artifact]` — recording that adopters consume a
-  release even though there is no server. This is this repo's OWN shape, and the old
-  `tier: B` weld could never express it (`tier: B` forbade a non-null `production` AND
-  required `deploy: none`, but had no vocabulary for "released to adopters, no server").
+- `released` — **two legal shapes, told apart by whether `production` is set.**
+  - **Shape 1 — `production` non-null.** Mirrors the old tier A contract: `deploy` must be
+    `tag` or `manual` (never `push-main` — every push reaching users with no release
+    artifact gating it is the `live` shape, not `released`; never `none` — contradictory
+    with a live URL), a committed deploy path exists (a workflow, or a `runbook:` when the
+    deploy runs outside CI: `deploy: manual`, or `deploy: tag` with no in-repo workflow),
+    and `trunk: dev` — **or**, only when `deploy: tag`, `trunk: main` (the identical
+    tag-gated single-trunk exception [`trunk`](#trunk--required)'s own section states).
+  - **Shape 2 — `production: null`, new in #144.** `trunk: main`, and `deploy` absent or
+    `none` — nothing is live, so there is neither a release-branch split nor a deploy
+    trigger with anything to gate. Evidenced instead by a version-shaped git tag or
+    `channels: [artifact]`: adopters consume a release even though there is no server.
+    This is this repo's OWN shape, and the old `tier: B` weld could never express it
+    (`tier: B` forbade a non-null `production` AND required `deploy: none`, but had no
+    vocabulary for "released to adopters, no server").
 
 `self` is defined against the [`room`](#room--optional) axis: the consumer set is a subset
 of the room's collaborator set — that definition points at nothing until `room` exists,
@@ -798,6 +823,25 @@ releaseBranch: release
 stack: laravel-inertia
 ```
 
+Declared purely by axis, no `tier` key at all — the shape a repo adopting the model fresh
+should reach for, live product, tag-gated, gates counted by `exposure` rather than derived
+from a letter:
+
+```yaml
+trunk: dev
+production: https://app.example.com
+deploy: tag
+stack: laravel-inertia
+exposure: released
+room: team
+writes: isolated
+```
+
+`tier` is optional precisely so this is legal on its own: `exposure: released` with a
+non-null `production` and a committed deploy path is a complete answer to "how many gates
+stand between a merge and users," and nothing here reads a `tier` that was never written.
+Add `tier: A` later only if something outside this handbook still expects to read it.
+
 Tier B, but genuinely consumed — a public, tag-published repo with real adopters and no
 server, `exposure` declared alongside `tier`, and one writer serving many readers (this
 repo's own shape):
@@ -835,9 +879,9 @@ the shape that shows it. One writer at a time says nothing about who reads the r
 | `tier: B` → `trunk: main`, `deploy: none`, `production: null` | ceremony without benefit |
 | **Axis path** (`exposure` set — governs regardless of whether `tier` is also set): | |
 | `exposure: live` → `trunk: dev`, `production` non-null, `deploy: push-main`, a deploy workflow exists (no `runbook:` escape hatch) | a live shape claimed but never wired up |
-| `exposure: released`, shape 1 → `production` non-null + a committed deploy path (workflow, or `runbook:` outside CI) | a release claimed but never wired up |
-| `exposure: released`, shape 2 → `production: null` + (a version-shaped tag, or `channels: [artifact]`) | a "released with no server" claim with no evidence it ships anywhere |
-| `exposure: none` → no committed deploy workflow (a NAMED `production` alone stays clean — the transitional read) | claiming nothing consumes this repo while something is wired to deploy it |
+| `exposure: released`, shape 1 → `production` non-null, `deploy` ∈ {`tag`, `manual`} (never `push-main` — that's `live` — or `none`), a committed deploy path (workflow, or `runbook:` outside CI), `trunk: dev` (or `main` only when `deploy: tag`) | a release claimed but never wired up |
+| `exposure: released`, shape 2 → `production: null`, `trunk: main`, `deploy` absent or `none`, and (a version-shaped tag, or `channels: [artifact]`) | a "released with no server" claim with no evidence it ships anywhere |
+| `exposure: none` → `trunk: main` + no committed deploy workflow (a NAMED `production` alone stays clean — the transitional read) | claiming nothing consumes this repo while something is wired to deploy it |
 | `exposure: self` → no rule at all | policing a room-bounded repo's deploy shape, which is out of scope |
 | declared `trunk` branch actually exists | docs describing a repo that doesn't exist |
 | every `integration` entry exists, and is not `trunk` / `main` / the word `trunk` | a dev-side line acquiring a path to production |
