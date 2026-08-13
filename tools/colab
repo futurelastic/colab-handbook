@@ -810,7 +810,7 @@ function cmdGateRecorded(argv) {
 // ---------------------------------------------------------------------------
 // solo — the entry gate for solo flow (CONVENTIONS.md, Solo flow; #83).
 //
-// Solo flow lets a `ceremony: light` repo skip pre-filed issue / claim / worktree and commit
+// Solo flow lets a `writes: serial` repo skip pre-filed issue / claim / worktree and commit
 // straight to trunk — legal ONLY because the start-side rails (claim discipline, worktree
 // isolation) exist to protect OTHER sessions, and a solo session has none. This command is the
 // mechanical check that condition actually holds, not the honor system: every rule it enforces
@@ -6710,9 +6710,16 @@ function cmdShip(argv) {
       process.stderr.write(`✗ Refusing: the branch name claims issue(s) ${zeroVerdict.named.map((n) => '#' + n).join(' ')}, ` +
         `but this machine's (\`${HOST}\`) claim registry has nothing for this branch (#153).\n`);
       process.stderr.write('  Claims are written to both local state and GitHub, but this resolution reads only the local\n');
-      process.stderr.write(`  registry — so "no claims" here likely means the claim lives on ANOTHER MACHINE. Either:\n`);
-      process.stderr.write(`    - ship from the machine that holds the claim, or\n`);
-      process.stderr.write(`    - take the claim over here:  ${claimRemedy}\n`);
+      process.stderr.write(`  registry, so "no claims" here has THREE possible causes:\n`);
+      process.stderr.write(`    - the claim lives on ANOTHER MACHINE — ship from there, or\n`);
+      process.stderr.write(`    - take the claim over here:  ${claimRemedy}, or\n`);
+      // #172: the parser cannot tell an issue number from a version/count suffix — a branch like
+      // `chore/bump-node-22` reads `22` as a trailing issue number the same way `fix/x-1` reads `1`.
+      // The first two remedies both assume it really IS an issue number; naming the third means an
+      // operator who hits this on a non-issue branch is not pointed at two dead ends (which invites
+      // claiming an unrelated issue just to get past the gate — that claim would then be closed).
+      process.stderr.write(`    - the trailing number is NOT an issue number (a version/count suffix, e.g. \`bump-node-22\`)\n`);
+      process.stderr.write(`      — rename the branch so it does not end in a digit group that reads as one.\n`);
       return 1;
     }
     warn('  Nothing contradicts it, so ship continues. If this branch was meant to close an issue,');

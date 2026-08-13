@@ -185,3 +185,25 @@ test('#153 composes with #149, does not collide: a branch-names-issues zero-clai
   // reached (both live in cmdShip; #153's fires first and short-circuits with `return 1`).
   assert.doesNotMatch(r.out + r.err, /would close #77 on merge/);
 });
+
+// --- #172: the branch-names-issues refusal names the branch-rename remedy too -----------------
+//
+// The trailing number `zeroClaimVerdict` reads off the branch name cannot be told apart from a
+// version/count suffix — `chore/bump-node-22` reads exactly like an issue-number branch. Before
+// #172 the refusal only ever offered two remedies, both assuming the number really is an issue
+// (ship from the machine that holds the claim, or claim it here) — an operator on a genuinely
+// unclaimed non-issue branch was pointed at two dead ends. This pins the third remedy's presence.
+test('#172: the branch-names-issues refusal also names "rename the branch" as a real cause, not just the two claim remedies', () => {
+  const fx = fixture(PROJECT_YML_AUTO_TRUNK);
+  addBranchWithInheritedCloseKeyword(fx, 'chore/bump-node-22', 22);
+
+  const r = colab(fx, ['ship', '--branch', 'chore/bump-node-22', '--repo', fx.work, '--dry']);
+  assert.strictEqual(r.code, 1, r.out + r.err);
+  assert.match(r.err, /branch name claims issue\(s\) #22.*registry has nothing for this branch \(#153\)/);
+  // The two pre-existing remedies are still there …
+  assert.match(r.err, /ship from there/);
+  assert.match(r.err, /colab claim <N> --branch chore\/bump-node-22/);
+  // … and the third, real cause is now named too.
+  assert.match(r.err, /NOT an issue number/);
+  assert.match(r.err, /rename the branch/);
+});
