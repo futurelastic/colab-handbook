@@ -601,14 +601,21 @@ with the blocker named:
       record; it blocks nothing and no tool can act on it.
       **An open blocker is not automatically a blocker** — judge its state, per §5.1.
       **And empty is not "free" — it is "nobody looked".**
-- [ ] **Trunk CI is alive** — `gh run list --branch <trunk> -L 1`. A failure that
-      never started (billing lockout, runner outage) counts as dead. **What CI *is*
-      here follows `writes`** (CONVENTIONS.md, *CI*): on `isolated`, it doubles as
-      the pre-merge gate this bullet is checking you can still pass — if you cannot
-      merge when you finish, you are not ready to start
-      ([§6](../../CONVENTIONS.md)). On `writes: serial`, a trunk-direct commit ships
-      before CI ever runs — CI there is the alarm, not the gate — so being ready to
-      start means nothing here is already sounding it.
+- [ ] **Trunk CI is alive** — ask by commit, not by recency (`CONVENTIONS.md` §4,
+      #92): does a completed, successful run exist for `<trunk>`'s current head sha?
+      (`gh run list --branch <trunk> -L 1` reads whatever ran *last*, and a
+      cancelled straggler can outrank a passing run on the same commit under
+      `cancel-in-progress`.) A failure that never started (billing lockout, runner
+      outage) counts as dead. **What CI *is* here follows `writes`, how much it
+      must catch follows `exposure`**
+      ([§7, *CI*](../../CONVENTIONS.md#ci--what-it-is-follows-writes-how-much-follows-exposure)):
+      on `isolated`, it doubles as the pre-merge gate this bullet is checking you
+      can still pass — if you cannot merge when you finish, you are not ready to
+      start ([§6](../../CONVENTIONS.md)). On `writes: serial`, a trunk-direct
+      commit ships before CI ever runs — CI there is the alarm, not the gate — so
+      being ready to start means nothing is already sounding it, and thoroughness
+      is a question `exposure` answers, not a pre-merge check that structurally
+      cannot exist.
 - [ ] **No live worktree owns those files** — `colab worktrees`, and
       `git branch -a --list '*<n>*'` after `git fetch --prune`. A clean label does
       not prove clean ground: claims are released unconditionally at wrap, so an

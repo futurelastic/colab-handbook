@@ -197,15 +197,34 @@ migrations run clean together. *(Machine-specific reconcile — e.g. deduping a
 migration against one already on trunk — hooks in here; the universal rule is
 "regen on the merged base, never hand-merge generated files".)*
 
-## B1. Verify CI on `<base>` is alive AND green
+## B1. Verify CI on `<base>` is alive AND green — for the sha you are about to merge
+
+**Ask by commit, not by recency** (`CONVENTIONS.md` §4, #92). `gh run list --branch
+<base> -L 1` reads whatever ran *last*, and under `cancel-in-progress` a cancelled
+straggler can outrank a passing run on the *same* commit — deadlocking a ship that a
+by-commit check would clear. Ask instead whether a completed, successful run exists
+for `<base>`'s current head sha:
 
 ```sh
-gh run list --branch <base> -L 1
+HEAD=$(git rev-parse origin/<base>)
+gh run list --branch <base> --limit 20 --json headSha,conclusion \
+  -q "[.[] | select(.headSha == \"$HEAD\" and .conclusion == \"success\")] | length"
 ```
+
+Non-zero → a green run exists for the exact sha you are about to merge, which is the
+only question that matters. `colab ship` asks it this same way.
 
 A "failure" that never started (billing lockout, runner outage) still means
 **stop** — we once merged for 12 hours into repos whose CI was silently dead
 (`CONVENTIONS.md` §4). Branch protection can't check this for us; this command must.
+
+**What CI *is* follows `writes`, how much it must catch follows `exposure`**
+([§7, *CI*](../../CONVENTIONS.md#ci--what-it-is-follows-writes-how-much-follows-exposure)).
+With a branch (`isolated`, or `serial` under one of §2's two mandatory-branch
+conditions), CI here **is** the gate this merge depends on — a red or missing run for
+the head sha stops the ship, full stop. `none`/`self` exposure answers only to the
+room; `live`/`released` answers to a consumer with no way to ask a clarifying
+question, so more has to be caught before it reaches them.
 
 If `<base>` is a declared line with **no runs at all**, it is not yet CI-gated: check
 `<trunk>` instead and say so in the report. That is a normal early state for a line,

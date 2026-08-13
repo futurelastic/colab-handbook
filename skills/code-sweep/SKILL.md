@@ -408,12 +408,17 @@ process, not unfinished work.
 
 For each **wrap** candidate, in order:
 
-1. **Re-check trunk CI.** `gh run list --branch <trunk> -L 1`. Not once at the start
-   — trunk CI can die mid-sweep (billing lockout, runner outage), and a failure that
-   never started still means stop. A sweep can take an hour. This re-check is about
-   the **branched** `wrap` candidates below — the merge each is about to go through
-   depends on it being alive. A `place-claim` or `landed trunk-direct` candidate
-   never merges through here at all, so this step has nothing to re-check for those.
+1. **Re-check trunk CI.** Ask by commit, not by recency (`CONVENTIONS.md` §4, #92):
+   does a completed, successful run exist for `<trunk>`'s current head sha? (`gh run
+   list --branch <trunk> -L 1` reads whatever ran *last*, and a cancelled straggler
+   can outrank a passing run on the same commit under `cancel-in-progress`.) Not
+   once at the start — trunk CI can die mid-sweep (billing lockout, runner outage),
+   and a failure that never started still means stop. A sweep can take an hour.
+   This re-check is about the **branched** `wrap` candidates below — the merge each
+   is about to go through depends on it being alive, at whatever thoroughness its
+   `exposure` demands ([§7, *CI*](../../CONVENTIONS.md#ci--what-it-is-follows-writes-how-much-follows-exposure)).
+   A `place-claim` or `landed trunk-direct` candidate never merges through here at
+   all, so this step has nothing to re-check for those.
 2. Run **code-wrap** for that candidate — distill/docs/gate/commit/push, if not
    already done for the cargo sitting on it — then **code-ship**: B0 sync against
    the *current* trunk, harvest, grade, merge, evidence, release, teardown.
