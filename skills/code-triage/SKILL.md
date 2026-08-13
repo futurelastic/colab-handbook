@@ -467,8 +467,16 @@ Rank the surviving groups:
 1. **Blocks other work** — a bug in a shared engine, a broken trunk, a stale claim
    nobody can get past. These unblock people, so they pay twice.
 2. **Reaches users** — a defect in a repo with a live production target
-   (`project.yml` `production:` non-null). On a Tier C repo the next promotion ships
-   it; on Tier A it waits for a tag. That difference changes urgency.
+   (`project.yml` `production:` non-null). Key the urgency off
+   [`exposure`](../../CONVENTIONS.md#exposure--what-consumes-a-merge-here): `live` means
+   the next promotion ships it; `released` means it waits for a deliberate artifact and,
+   once out, [cannot be recalled](../../CONVENTIONS.md#recovery--what-must-exist-to-undo-a-merge)
+   — the strictest cell, not the mildest, so weigh it accordingly. No `exposure`
+   declared? Read the legacy `tier` value the same way the code does
+   (`tools/lib/axis-authority.js`): `C → live`, `A → released` — and a bare `tier: B`
+   yields **no** urgency signal at all (`B → null`); rank it on the other three
+   criteria instead of guessing, which is the one thing the module exists to stop a
+   caller doing.
 3. **Cheap and unblocking** — small work that lets something bigger start.
 4. **Everything else** — by whatever the humans care about.
 
