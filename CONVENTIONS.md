@@ -1015,7 +1015,10 @@ gh issue view <M> --json id -q .id                 # ← how to get that node id
 ```
 
 `removeSubIssue` requires **both** ids — a child cannot be detached by naming only
-itself.
+itself. (`addSubIssue` is the laxer of the two — it accepts `subIssueUrl` in place of
+`subIssueId`, and `replaceParent: true` to move a child that already has a parent;
+verified live against the GraphQL schema, not restated from memory — `removeSubIssue`
+has neither.)
 
 **The two halves do not share an API, and that is the trap.** Sub-issues are GraphQL,
 keyed by **node** id; dependencies are REST, keyed by **database** id — no dependency
