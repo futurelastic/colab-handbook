@@ -4149,6 +4149,74 @@ function registerList() {
 }
 
 // ---------------------------------------------------------------------------
+// labels (provision the convention label set — CONVENTIONS.md §9 step 3, #206)
+// ---------------------------------------------------------------------------
+
+const HELP_LABELS = `colab labels --ensure [--repo P]
+
+Create every convention label this repo is missing — CONVENTIONS.md §9 step 3, the 13-name set
+(\`in-progress\`, \`deps-checked\`, \`agent-filed\`, \`epic\`, \`needs-decision\`, \`decision-recorded\`,
+\`needs-plan\`, \`migration-granted\`, \`ci-granted\`, and the four \`delivery:*\`), read from ONE
+source (tools/lib/labels.js's CONVENTION_LABELS) — the same list the audit and every other
+label-writing command already read, instead of the three places §9 and this set used to be
+typed out by hand (#206).
+
+  --ensure       required — there is no bare "create", so a typo can never silently do nothing
+  --repo <path>  repo root (default: git root of cwd)
+
+Idempotent: a label already present is left exactly as it is (no color/description overwrite)
+and reported under "already there", never re-created — partial adoption is the normal case
+(CONVENTIONS.md §9's own words), so this is safe to run on a repo that already has some of the
+set, or all of it.
+
+Exit code is 0 when every label ends up present (created this run, or already there); non-zero
+if any \`gh label create\` call itself failed (auth, rate limit, a name \`gh\` rejects) — each
+failure is reported by name, not just a bare non-zero.
+`;
+
+function cmdLabels(argv) {
+  const opts = parseArgs(argv, {
+    values: { '--repo': 'repo' },
+    flags: { '--ensure': 'ensure', '-h': 'help', '--help': 'help' },
+  });
+  if (opts.help || !opts.ensure) return print(HELP_LABELS);
+
+  const repoAbs = resolveRepo(opts);
+  if (!isGhUsable(repoAbs)) {
+    throw new UserError('gh not usable here (no gh auth or no origin remote) — the label set lives on the tracker, and there is deliberately no local-only fallback');
+  }
+
+  const present = git.ghListLabels(repoAbs);
+  if (present === null) {
+    throw new UserError('could not read this repo\'s current label set from the tracker — refusing to create blind (an existing label misread as absent would otherwise look freshly "created")');
+  }
+  // The missing set comes from the SAME function the audit and the readiness/grant hints already
+  // read (labels.missingConventionLabels) — this command does not restate "which of the 13 does
+  // this repo lack", it asks the one place that already answers it.
+  const missing = new Set(labels.missingConventionLabels(present));
+  const existing = labels.conventionLabelNames().filter((n) => !missing.has(n));
+
+  const created = [];
+  const failed = [];
+  for (const l of labels.CONVENTION_LABELS) {
+    if (!missing.has(l.name)) continue;
+    const r = git.ghLabelCreate(repoAbs, l.name, l.color, l.description);
+    if (r.ok) created.push(l.name);
+    else failed.push({ name: l.name, error: (r.stderr || '').trim() || 'gh label create failed' });
+  }
+
+  if (created.length) print(`Created: ${created.join(', ')}`);
+  if (existing.length) print(`Already there: ${existing.join(', ')}`);
+  if (!created.length && !failed.length) print('Nothing to create — the full label set is already present.');
+  if (failed.length) {
+    print('Failed:');
+    for (const f of failed) print(`  ${f.name} — ${f.error}`);
+    return 1;
+  }
+  return 0;
+}
+
+// ---------------------------------------------------------------------------
 // config (show / manage the aggregation inputs)
 // ---------------------------------------------------------------------------
 
@@ -7726,6 +7794,8 @@ Commands:
                                         behind a changed template; --apply refreshes the pristine
                                         ones (never commits, never touches a hand-edited copy)
   register [<path>] [--remove] [--list]   add a repo to BOTH fleet registries (repos.txt + config.json)
+  labels --ensure [--repo P]              create every missing convention label (§9 step 3, #206) —
+                                        idempotent, reports created vs already-there
   config [show|add-repo P|rm-repo P|set K V]
 
 State is machine-local at ~/.colab/ (override with COLAB_HOME). Run any command with
@@ -7783,6 +7853,7 @@ function main(argv) {
     case 'adopt': return cmdAdopt(rest);
     case 'update': return cmdUpdate(rest);
     case 'register': return cmdRegister(rest);
+    case 'labels': return cmdLabels(rest);
     case 'config': return cmdConfig(rest);
     case undefined:
     case '-h': case '--help': case 'help': return print(HELP_ROOT);

@@ -1256,8 +1256,8 @@ function auditRepo(target, ctx) {
   //   Gated on `cfg`: an undescribed repo already fails above, and labels are meaningless
   // without adoption. `labels()` is null for a remote-less or offline audit (see
   // listRemoteLabels) — we stay silent there, since we cannot assert a label is missing
-  // when we could not read the set. A warn, not a fail: the fix is one `gh label create`,
-  // it breaks no build and it does not make the descriptor lie.
+  // when we could not read the set. A warn, not a fail: the fix is one `colab labels
+  // --ensure` (#206), it breaks no build and it does not make the descriptor lie.
   if (cfg) {
     const labels = src.labels();
     if (labels) {
@@ -1266,7 +1266,7 @@ function auditRepo(target, ctx) {
         warn(
           `missing convention label(s): ${missing.join(", ")} — a repo adopted before a ` +
           `label entered the set never back-filled it, so the check it powers can never ` +
-          `fire. Create each (\`gh label create\`, see CONVENTIONS.md §9) or run handbook-sync`,
+          `fire. Run \`colab labels --ensure\` to back-fill the whole set`,
         );
       }
     }

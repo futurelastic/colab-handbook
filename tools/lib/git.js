@@ -351,6 +351,19 @@ function ghLabelDelete(repo, name) {
 }
 
 /**
+ * `gh label create <name> --color <color> --description <description>`, or the raw `run()`
+ * result on failure (the label already exists, no auth, rate limit) — the caller (`colab labels
+ * --ensure`, #206) decides what a failure means; this is a thin wrapper, same posture as
+ * ghLabelDelete just above. No `--force`: overwriting an existing label's color/description is a
+ * different, more destructive act than provisioning a MISSING one, and `--ensure`'s whole contract
+ * is "create what's absent, never touch what's there" — the caller checks presence first via
+ * ghListLabels and only calls this for a name confirmed missing.
+ */
+function ghLabelCreate(repo, name, color, description) {
+  return run('gh', ['label', 'create', name, '--color', color, '--description', description], { cwd: repo });
+}
+
+/**
  * CI verdict for a branch, judged by SHA rather than by recency (#92).
  *
  * The naive "read the newest run" reading breaks under the repo's own
@@ -470,6 +483,6 @@ module.exports = {
   worktreeList, worktreeListDetailed, dirtyTracked, dirtyUntracked, dirtyAny,
   ghAvailable, ghIssueEdit, ghListLabels, ghAssignedIssues,
   ghCurrentLogin, ghIssueView, ghIssueComment, ghRunForSha, ghRunJobCount,
-  ghIssueListByLabel, ghLabelDelete,
+  ghIssueListByLabel, ghLabelDelete, ghLabelCreate,
   ghApi, isGraphqlRateLimit, ghIssueRelease,
 };

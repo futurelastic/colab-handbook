@@ -165,7 +165,7 @@ function deriveConsequences({ exposure, writes, room }) {
  */
 function remainingSteps() {
   return [
-    { n: 3, text: 'Create the full label set (13 names) — `gh label create …`, CONVENTIONS.md §9 step 3' },
+    { n: 3, text: 'Create the full label set (13 names) — `colab labels --ensure`, CONVENTIONS.md §9 step 3 (#206)' },
     { n: 4, text: 'Add the tier topic to the GitHub repo — `gh repo edit --add-topic tier-<b|c|a>`, step 4' },
     { n: 5, text: 'Add the handbook pointer to CLAUDE.md — copy templates/repo-CLAUDE-block.md, step 5' },
     { n: 6, text: "Make sure CI meets §7's outcome — `colab template <name>`, step 6" },

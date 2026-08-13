@@ -1725,23 +1725,15 @@ only. Resolution order: `--config` flag > `~/.colab/repos.txt` > bundled example
    answers from step 1.
 3. **Create the whole label set — thirteen names, not a subset** (`in-progress`,
    `deps-checked`, `agent-filed`, `epic`, `needs-decision`, `decision-recorded`,
-   `needs-plan`, `migration-granted`, `ci-granted`, and the four `delivery:*`), each
-   idempotent (`|| true`) because partial adoption is normal:
+   `needs-plan`, `migration-granted`, `ci-granted`, and the four `delivery:*`):
    ```sh
-   gh label create in-progress       --color FBCA04 --description "Claimed by an active session"  2>/dev/null || true
-   gh label create deps-checked      --color 0E8A16 --description "Dependencies verified — no open blocker"  2>/dev/null || true
-   gh label create agent-filed       --color C5DEF5 --description "Filed by an agent on its own initiative — not human-approved"  2>/dev/null || true
-   gh label create epic              --color 3E4B9E --description "Container for sub-issues — informative, never a start candidate, never claimed as a unit of work"  2>/dev/null || true
-   gh label create needs-decision    --color B60205 --description "A human must answer a blocking question before this can start"  2>/dev/null || true
-   gh label create decision-recorded --color 006B75 --description "A human answered here — read the ⚖ Decision comment before re-applying needs-decision"  2>/dev/null || true
-   gh label create needs-plan        --color 0052CC --description "Triage judged this hard — code-start should run code-plan before coding"  2>/dev/null || true
-   gh label create migration-granted --color D93F0B --description "A human granted this issue's branch an exemption from ship's no-new-migrations gate"  2>/dev/null || true
-   gh label create ci-granted         --color D73A4A --description "A human granted this branch a one-shot exemption from ship's trunk-CI-green gate"  2>/dev/null || true
-   gh label create delivery:code       --color 1D76DB --description "Delivery is a code commit — the ordinary code pipeline applies"  2>/dev/null || true
-   gh label create delivery:content    --color FEF2C0 --description "Delivery is a content push, not a code commit — route, do not start in the code pipeline"  2>/dev/null || true
-   gh label create delivery:ops        --color D4C5F9 --description "Delivery is an ops/production check, not a code commit — route, do not start in the code pipeline"  2>/dev/null || true
-   gh label create delivery:docs-only  --color BFD4F2 --description "Delivery is a docs sync outside code review, not a commit — route, don't start"  2>/dev/null || true
+   colab labels --ensure
    ```
+   Idempotent by construction (#206) — reads the set from `tools/lib/labels.js`'s
+   `CONVENTION_LABELS`, the one place it is actually defined, creates only what this
+   repo is missing, and reports created vs already-there; safe to re-run because
+   partial adoption is normal. (No `colab` on this machine? The thirteen `gh label
+   create … || true` lines this replaced are recoverable from that file's history.)
    What each absence costs, briefly: `in-progress` — the first claim cannot land.
    `deps-checked` — a readiness check can never tell *free* from *nobody looked*.
    `agent-filed` — every agent-filed issue reports as human-approved. `epic` — an epic

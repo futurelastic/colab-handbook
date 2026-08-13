@@ -121,19 +121,17 @@ So **pull §9's step 3 forward, ahead of the claim** — and provision the **who
 set** while you are there, not just the claim label:
 
 ```sh
-gh label create in-progress  --color FBCA04 --description "Claimed by an active session"  2>/dev/null || true
-gh label create deps-checked --color 0E8A16 --description "Dependencies verified — no open blocker"  2>/dev/null || true
-gh label create agent-filed  --color C5DEF5 --description "Filed by an agent on its own initiative — not human-approved"  2>/dev/null || true
-gh label create epic         --color 3E4B9E --description "Container for sub-issues — informative, never a start candidate, never claimed as a unit of work"  2>/dev/null || true
+colab labels --ensure
 ```
 
-Only `in-progress` is ordering-critical (the claim below needs it), but the set is four
-cheap idempotent lines, and creating a subset is the exact bug this leads to: a
-`deps-checked` never created leaves a readiness column that can never fill, and nothing
-downstream can tell *free* from *nobody looked*. Create the set, not the claim label
-alone. Then claim, then work §9 from its step 1. The `|| true` keeps every line safe on a
-repo that already has the label — which matters, because partial adoption is the normal
-case.
+Only `in-progress` is ordering-critical (the claim below needs it), but `--ensure`
+creates the whole thirteen-name set in one idempotent call (#206) — reading it from
+`tools/lib/labels.js`'s `CONVENTION_LABELS`, never restated here — and creating a
+subset is the exact bug this leads to: a `deps-checked` never created leaves a
+readiness column that can never fill, and nothing downstream can tell *free* from
+*nobody looked*. Create the set, not the claim label alone. Then claim, then work §9
+from its step 1. Safe to re-run on a repo that already has some or all of the labels —
+which matters, because partial adoption is the normal case.
 
 **No GitHub remote at all?** There is no label and no claim to be made. Take
 code-start's notes-file path; §9's steps 3 and 4 and the GitHub half of 7 do not
@@ -304,12 +302,9 @@ and the audit is what catches it:
   a label introduced later — so the check that label powers silently cannot fire (a
   readiness column that never leaves "nobody looked", provenance that reads every issue
   as human-filed). The audit now reports this as `missing convention label(s): …`.
-  Back-fill it here — the same idempotent set adoption creates, safe to re-run:
+  Back-fill it here — the same idempotent command §2 and §9 step 3 use, safe to re-run:
   ```sh
-  gh label create in-progress  --color FBCA04 --description "Claimed by an active session"  2>/dev/null || true
-  gh label create deps-checked --color 0E8A16 --description "Dependencies verified — no open blocker"  2>/dev/null || true
-  gh label create agent-filed  --color C5DEF5 --description "Filed by an agent on its own initiative — not human-approved"  2>/dev/null || true
-  gh label create epic         --color 3E4B9E --description "Container for sub-issues — informative, never a start candidate, never claimed as a unit of work"  2>/dev/null || true
+  colab labels --ensure
   ```
   This is a GitHub-side change, not a committed one, so it needs no entry in §8's
   commit — but note it in the Issue so the back-fill is recorded. A remote-less repo
