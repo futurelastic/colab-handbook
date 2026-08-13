@@ -129,11 +129,14 @@ test('--json reports the ref, branch, verdict and why — never silently drops `
 
   const r = colab(fx, ['holders', 'DOC.md', '--repo', fx.work, '--json']);
   assert.strictEqual(r.code, 0, r.err);
-  const rows = JSON.parse(r.out);
-  assert.strictEqual(rows.length, 1);
-  assert.strictEqual(rows[0].branch, 'feat/live-edit-11');
-  assert.strictEqual(rows[0].state, 'cargo', 'fixture invalid: this branch is genuinely unmerged, not the unknown case');
-  assert.ok(rows[0].why, 'why must always be present, whatever the verdict');
+  const body = JSON.parse(r.out);
+  // #179: fresh fetch succeeded here, so the payload says so and names no staleness cause.
+  assert.strictEqual(body.fresh, true);
+  assert.strictEqual(body.staleWhy, null);
+  assert.strictEqual(body.holders.length, 1);
+  assert.strictEqual(body.holders[0].branch, 'feat/live-edit-11');
+  assert.strictEqual(body.holders[0].state, 'cargo', 'fixture invalid: this branch is genuinely unmerged, not the unknown case');
+  assert.ok(body.holders[0].why, 'why must always be present, whatever the verdict');
 });
 
 // --- the load-bearing case: `unknown` must survive the filter, never collapse into either bucket ---
@@ -160,11 +163,12 @@ test('a ref whose edit trunk REWROTE (not merged, not absent) reports `unknown` 
 
   const r = colab(fx, ['holders', 'DOC.md', '--repo', fx.work, '--json']);
   assert.strictEqual(r.code, 0, r.err);
-  const rows = JSON.parse(r.out);
-  assert.strictEqual(rows.length, 1, 'unknown must appear in the output, not be silently filtered out');
-  assert.strictEqual(rows[0].branch, 'feat/rewritten-12');
-  assert.strictEqual(rows[0].state, 'unknown', 'fixture invalid: the merge was expected to conflict, not resolve cleanly');
-  assert.strictEqual(rows[0].containment, 'unknown');
+  const body = JSON.parse(r.out);
+  assert.strictEqual(body.fresh, true);
+  assert.strictEqual(body.holders.length, 1, 'unknown must appear in the output, not be silently filtered out');
+  assert.strictEqual(body.holders[0].branch, 'feat/rewritten-12');
+  assert.strictEqual(body.holders[0].state, 'unknown', 'fixture invalid: the merge was expected to conflict, not resolve cleanly');
+  assert.strictEqual(body.holders[0].containment, 'unknown');
 
   // Same case through the human-readable table: the caller's-eye view must show `unknown` too,
   // not silently print it as clean ground or fold its row into the `cargo` label.
@@ -263,10 +267,46 @@ test('--no-fetch still REPORTS holders it can see — refs you have not fetched 
   assert.match(r.err, /may be incomplete/, 'the list is still flagged as possibly partial');
 });
 
+// --- #179: --json discloses staleness IN the payload, not only on stderr -----------------------
+//
+// A `--no-fetch` run that finds holders is answered at exit 0 (they are real regardless of
+// freshness) — but before this fix the ONLY signal that the list might be incomplete was a stderr
+// warn() printed AFTER the JSON on stdout. A machine caller reading stdout alone saw two clean rows
+// and no way to tell "these are the two holders" from "two of an unknown number".
+test('--no-fetch --json: holders present still report fresh:false and staleWhy, not just a bare array', () => {
+  const fx = fixture();
+  fx.g(fx.work, 'checkout', '-q', '-b', 'feat/local-edit-23');
+  fs.writeFileSync(path.join(fx.work, 'DOC.md'), 'base\nlocal unshipped edit\n');
+  fx.g(fx.work, 'add', '-A');
+  fx.g(fx.work, 'commit', '-q', '-m', 'feat: local edit');
+  fx.g(fx.work, 'checkout', '-q', 'main');
+
+  const r = colab(fx, ['holders', 'DOC.md', '--repo', fx.work, '--no-fetch', '--json']);
+  assert.strictEqual(r.code, 0, r.err);
+  const body = JSON.parse(r.out);
+  assert.strictEqual(body.fresh, false);
+  assert.match(body.staleWhy, /--no-fetch was passed/);
+  assert.strictEqual(body.holders.length, 1);
+  assert.strictEqual(body.holders[0].branch, 'feat/local-edit-23');
+});
+
 test('a repo with no origin remote cannot be fresh, so a clean result is refused there too', () => {
   const fx = fixture();
   fx.g(fx.work, 'remote', 'remove', 'origin');
   const r = colab(fx, ['holders', 'DOC.md', '--repo', fx.work, '--base', 'main']);
   assert.strictEqual(r.code, 2);
   assert.match(r.err, /no `origin` remote/);
+});
+
+// #179, "also while in this function": staleness cause (iii) — an `origin` remote that EXISTS but
+// whose fetch itself errors — reaches the same `!fresh` gate as (i) `--no-fetch` and (ii) no
+// remote, both of which are pinned above, but nothing previously exercised this one. A regression
+// that treated a nonzero `git fetch` exit as success would silently restore the pre-#152 defect
+// (a wrong "clean ground" reported to a caller with a broken remote) with no test to catch it.
+test('origin remote exists but the fetch itself fails: staleness cause (iii), not (i) or (ii) — still refused', () => {
+  const fx = fixture();
+  fx.g(fx.work, 'remote', 'set-url', 'origin', path.join(fx.root, 'no-such-origin.git'));
+  const r = colab(fx, ['holders', 'DOC.md', '--repo', fx.work, '--base', 'main']);
+  assert.strictEqual(r.code, 2);
+  assert.match(r.err, /git fetch --prune origin failed/);
 });

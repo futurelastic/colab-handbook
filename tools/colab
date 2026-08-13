@@ -7342,7 +7342,14 @@ built on missing data. This command owns that problem instead of leaving it to t
   --no-fetch    skip the fetch (offline, or a deliberately pinned view). Holders found are still
                 reported — they cannot be falsified by refs you have not seen — but a CLEAN result
                 is REFUSED (exit 2) rather than printed, because that one is unsound without it.
-  --json        machine-readable: [{ ref, branch, state, method, why }, ...]
+  --json        machine-readable: { fresh, staleWhy, holders: [{ ref, branch, state, method, why }, ...] }.
+                #179: \`fresh\` is false whenever \`--no-fetch\` was passed, this repo has no \`origin\`
+                remote, or the fetch itself failed — in every one of those cases \`holders\` may be
+                INCOMPLETE (refs you did not fetch cannot un-hold a file, so it can only under-report,
+                never invent one). \`staleWhy\` names the cause, null when fresh. A human running the
+                prose form sees the same caveat on stderr; --json exists for unattended callers, so the
+                caveat travels IN the one payload instead, never only on a stream a machine reader may
+                not check.
 
 Empty output is clean ground ONLY when the fetch succeeded. Exit: 0 answered, 2 refused for
 staleness (fetch skipped or failed, and the result would have been "clean").
@@ -7402,7 +7409,12 @@ function cmdHolders(argv) {
     return 2;
   }
 
-  if (opts.json) { print(JSON.stringify(rows, null, 2)); return 0; }
+  // #179: the human-readable path warns on stderr, below — but a machine caller reading --json
+  // exit 0 with an empty stderr saw NOTHING (verified: the warn() call sat after the print() that
+  // already returned). `fresh`/`staleWhy` carry the same disclosure IN the payload instead, so an
+  // unattended caller of holders/--no-fetch cannot mistake "possibly incomplete" for "complete"
+  // just because it never inspected a second stream.
+  if (opts.json) { print(JSON.stringify({ fresh, staleWhy: fresh ? null : staleWhy, holders: rows }, null, 2)); return 0; }
   if (!rows.length) { print(`No holders of ${filePath} against ${baseRef} — clean ground.`); return 0; }
   if (!fresh) warn(`${staleWhy} — these holders are real, but the list may be incomplete.`);
   print(table(
