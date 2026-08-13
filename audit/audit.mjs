@@ -66,6 +66,11 @@ const axisAuthority = require("../tools/lib/axis-authority.js");
 const {
   VERSION_TAG_RE, versionShapedTags, DEPLOY_BASENAME_RE, consumerEvidence, describeEvidence,
 } = require("../tools/lib/consumer-evidence.js");
+// #207: the exposure mechanism contract's ONE shared representation — this file used to hand-
+// encode the VALIDATOR half (report every violation) separately from `colab adopt`'s CONSTRUCTOR
+// half (does declaring this exposure value stay possible at all?). Same install.sh-freezes-
+// tools/lib/ reasoning as the other requires on this page.
+const { evaluateExposure } = require("../tools/lib/exposure-shape.js");
 const {
   handbookInfo, templateNames, templateChangedSince, cmpParts, cmpSemver,
   parseWorkflowStamp, parseClaudeStamp, workflowProvenance, unstampedFinding, looksLikeHandbookClaude,
@@ -1362,79 +1367,37 @@ function auditRepo(target, ctx) {
     }
   } else if (authority && authority.source === "exposure") {
     const exp = authority.exposure; // already enum-validated above: none | self | live | released | garbage
-    if (exp === "self") {
-      // CONVENTIONS.md §2, "Exposure": self's consumer set is a subset of the room's — no
-      // mechanism or contract rule applies here AT ALL, not even trunk shape. An unusual
-      // deploy/production/trunk combination alongside a directly-declared `exposure: self`
-      // is not this unit's business to police (#144's plan: "self gets no mechanism rule").
-    } else if (exp === "none") {
-      // Deliberately NOT "production must be null, deploy must be none": `exposure: none`
-      // with a NAMED `production` is the pinned-clean "visibly transitional" read
-      // (CONVENTIONS.md §2, "Exposure"; project.schema.md "exposure — optional") — a repo
-      // heading toward a consumer it has not opted into yet. A `fail` there would punish
-      // exactly the direction an agent may propose, which the schema explicitly forbids.
-      // What stays a real contradiction: claiming trunk shape or a wired-up deploy path for
-      // a repo that says nothing consumes it.
-      if (trunk !== "main") fail(`exposure: none requires trunk "main", found ${JSON.stringify(trunk)} — nothing consumes this repo, so there is no release branch to speak of`);
-      if (deployWorkflows.length) fail(`exposure: none but a deploy workflow exists (${deployWorkflows.join(", ")}) — nothing is supposed to consume this repo, yet something is wired to deploy it`);
-    } else if (exp === "live") {
-      // Mirrors the old tier C contract exactly, INCLUDING its no-runbook asymmetry: a
-      // deploy workflow is required, with no runbook: escape hatch — #144's plan records
-      // this as a deliberate ruling, not an oversight (CONVENTIONS.md §2, "Exposure").
-      if (trunk !== "dev") fail(`exposure: live requires trunk "dev", found ${JSON.stringify(trunk)} — the promotion is the deploy, and dev is where sessions land before it ships`);
-      if (production === null || production === "") fail("exposure: live but production is null — the promotion ships straight to users, so a live URL must be set");
-      if (deploy !== "push-main") fail(`exposure: live requires deploy: push-main, found ${JSON.stringify(deploy)} — the promotion itself IS the deploy`);
-      if (!deployWorkflows.length) fail("exposure: live but no .github/workflows/deploy-*.yml — the promotion needs a committed path to production (no runbook: escape hatch here — live means the promotion itself deploys)");
-    } else if (exp === "released") {
-      // Two legal shapes (#144's plan) — the decomposition's whole point: (1) a live
-      // production URL with a committed deploy path, mirroring the old tier A contract; or
-      // (2) no server at all, evidenced by a version-shaped git tag or channels: [artifact]
-      // — the shape THIS repo's own descriptor is (production: null, channels: [artifact]),
-      // which the old tier: B weld could never express.
-      const hasProduction = production !== null && production !== "";
-      if (!hasProduction) {
-        const hasArtifactEvidence = versionShapedTags(src.tags()).length > 0 || (Array.isArray(channelsRaw) && channelsRaw.includes("artifact"));
-        // `warn`, deliberately never `fail` (#144's plan, "rulings"): raising exposure —
-        // proposing `released` ahead of the evidence that would confirm it — is the
-        // direction an agent may propose, and a `fail` here would make declaring the key
-        // riskier than omitting it, punishing exactly the adoption this axis exists to
-        // invite. Mirrors `exposure: none` + `production: null`'s own advisory-not-failure
-        // precedent above.
-        if (!hasArtifactEvidence) {
-          warn(
-            "exposure: released with production: null and no evidence of a release artifact " +
-            "(no version-shaped git tag, no channels: [artifact]) — either the evidence has not " +
-            "landed yet, or this should read exposure: self/none for now. Both look the same to " +
-            "this tool; a human should confirm which",
-          );
-        }
-        if (trunk !== "main") fail(`exposure: released with production: null requires trunk "main", found ${JSON.stringify(trunk)} — nothing is live, so there is no release branch to speak of`);
-        if (deploy !== null && deploy !== "none") fail(`exposure: released with production: null and deploy: ${JSON.stringify(deploy)} is contradictory — nothing is live to deploy to; use deploy: none, or set production if something IS live`);
-      } else {
-        const externalTagDeploy = deploy === "tag" && !deployWorkflows.length;
-        if (deploy === "manual") {
-          checkRunbook(src, runbook, fail, warn, "exposure: released, deploy: manual");
-        } else if (externalTagDeploy) {
-          checkRunbook(src, runbook, fail, warn, "exposure: released, deploy: tag deployed outside CI (an external GitOps poller)");
-        } else if (!deployWorkflows.length) {
-          fail("exposure: released but no .github/workflows/deploy-*.yml — the path to production is not in the repo (use deploy: manual + runbook: if it ships by hand, or deploy: tag + runbook: when a GitOps poller deploys the tag from outside CI)");
-        }
-        if (deploy === "none") fail('exposure: released with a live production URL but deploy: none is contradictory — use "tag" or "manual"');
-        if (deploy === "push-main") {
-          fail(
-            "exposure: released with deploy: push-main — released means a deliberate release " +
-            "artifact gates production, and here every push to main reaches users with no such " +
-            "gate. Options include: declare exposure: live instead (that IS this shape), migrate " +
-            "the pipeline to a tag trigger (deploy: tag), or — if shipping really is run by hand " +
-            "— deploy: manual plus runbook: naming the committed procedure.",
-          );
-        }
-        if (trunk !== "dev" && !(deploy === "tag" && trunk === "main")) {
-          fail(deploy === "tag"
-            ? `exposure: released with deploy: tag requires trunk "dev" or "main", found ${JSON.stringify(trunk)}`
-            : `exposure: released requires trunk "dev", found ${JSON.stringify(trunk)} — only a tag-gated release (deploy: tag) may run a single trunk "main"`);
-        }
+    const hasProduction = production !== null && production !== "";
+
+    // The ONE piece of this axis that stays hand-authored here rather than in the shared table
+    // (#207, tools/lib/exposure-shape.js): `warn`, deliberately never `fail` (#144's plan,
+    // "rulings") — raising exposure by proposing `released` ahead of the evidence that would
+    // confirm it is the direction an agent may propose, and a `fail` would make declaring the
+    // key riskier than omitting it, punishing exactly the adoption this axis exists to invite.
+    // `colab adopt`'s constructor (EXPOSURE_SHAPE, now exposureShapeVerdict) never blocks on
+    // this either — it is advisory on both sides, so there was never a second copy to unify.
+    if (exp === "released" && !hasProduction) {
+      const hasArtifactEvidence = versionShapedTags(src.tags()).length > 0 || (Array.isArray(channelsRaw) && channelsRaw.includes("artifact"));
+      if (!hasArtifactEvidence) {
+        warn(
+          "exposure: released with production: null and no evidence of a release artifact " +
+          "(no version-shaped git tag, no channels: [artifact]) — either the evidence has not " +
+          "landed yet, or this should read exposure: self/none for now. Both look the same to " +
+          "this tool; a human should confirm which",
+        );
       }
+    }
+
+    // Every mechanism/contract rule (self/none/live/released) is the ONE shared table (#207,
+    // tools/lib/exposure-shape.js) — `colab adopt`'s constructor reads the identical table to
+    // decide whether a NEW declaration is supported at all. `self` yields no entries by
+    // construction (CONVENTIONS.md §2: no mechanism rule applies to it, not even trunk shape).
+    // A `runbook`-kind entry defers to `checkRunbook` here (this file can read the repo and tell
+    // "missing" from "unreadable via the API"); every other entry is a ready `fail` message.
+    const shapeCtx = { trunk, hasProduction, deploy, hasDeployWorkflow: deployWorkflows.length > 0, deployWorkflowNames: deployWorkflows };
+    for (const entry of evaluateExposure(exp, shapeCtx)) {
+      if (entry.kind === "runbook") checkRunbook(src, runbook, fail, warn, entry.why);
+      else fail(entry.message);
     }
   }
 

@@ -30,6 +30,7 @@
 const axisAuthority = require('./axis-authority.js');
 const yaml = require('./yaml.js');
 const { consumerEvidence, describeEvidence } = require('./consumer-evidence.js');
+const { evaluateExposure } = require('./exposure-shape.js');
 
 const ROW_NAMES = ['tier', 'room', 'exposure', 'writes', 'channels'];
 
@@ -373,124 +374,31 @@ function axisMissing(cfg, axis) {
 // ---------------------------------------------------------------------- EXPOSURE_SHAPE — the constructor
 
 /**
- * EXPOSURE_SHAPE — the CONSTRUCTOR half of #144's exposure contract, where
- * `audit/audit.mjs`'s exposure block (~:1321-1396) is the VALIDATOR half. Given the shape a
- * repo is actually IN right now — `{ trunk, hasProduction, deploy, hasDeployWorkflow, hasRunbook }`
- * (`hasRunbook`: a `runbook:` key is declared AND the file it names exists — only `released`
- * with `deploy: manual`, or `deploy: tag` with no committed workflow, ever reads it) — does
- * it support DECLARING a given exposure value? Only the FAIL direction is reproduced here; the
- * audit's `warn` ("released with no evidence yet — might not have landed") is advisory, never a
- * reason to refuse a write, on the same precedent the audit itself follows.
+ * exposureShapeVerdict — the CONSTRUCTOR half of #144's exposure contract, where
+ * `audit/audit.mjs`'s exposure block is the VALIDATOR half. Given the shape a repo is actually
+ * IN right now — `{ trunk, hasProduction, deploy, hasDeployWorkflow, hasRunbook }` (`hasRunbook`:
+ * a `runbook:` key is declared AND the file it names exists — only `released` with
+ * `deploy: manual`, or `deploy: tag` with no committed workflow, ever reads it) — does it
+ * support DECLARING a given exposure value?
  *
- * Deliberately a SEPARATE table from the audit's own block, not a re-key of it — that block is
- * ~130 lines of fail/warn closures whose byte-identical behaviour was #144's own oracle, hours
- * old when this landed. `tools/lib/adopt-audit-agreement.test.js` is what keeps the two from
- * drifting apart instead of a shared implementation.
+ * Both this and the audit's block now read ONE shared rule table, `tools/lib/exposure-shape.js`
+ * (#207) — this function's whole job is picking the FIRST violation `evaluateExposure` reports
+ * (the audit reports every one; a constructor only needs one reason to refuse) and resolving the
+ * one entry kind ('runbook') whose verdict depends on which caller is asking: the audit can read
+ * the repo and tell "missing" from "unreadable"; this constructor only has `ctx.hasRunbook`.
+ * `EXPOSURE_SHAPE` (the old per-exposure closure table, and the module-level export of the same
+ * name) is retired along with `tools/lib/adopt-audit-agreement.test.js` — see that file's
+ * replacement, `tools/lib/exposure-shape.test.js`, for what now guards this.
  */
-const EXPOSURE_SHAPE = Object.freeze({
-  self: () => ({ ok: true }),
-
-  none: (ctx) => {
-    if (ctx.trunk !== 'main') {
-      return {
-        ok: false,
-        reason: `trunk is ${JSON.stringify(ctx.trunk)}, exposure: none requires trunk "main" `
-          + '— nothing consumes this repo, so there is no release branch to speak of',
-      };
-    }
-    if (ctx.hasDeployWorkflow) {
-      return {
-        ok: false,
-        reason: 'a deploy workflow exists — nothing is supposed to consume this repo, yet '
-          + 'something is wired to deploy it',
-      };
-    }
-    return { ok: true };
-  },
-
-  live: (ctx) => {
-    if (ctx.trunk !== 'dev') {
-      return {
-        ok: false,
-        reason: `trunk is ${JSON.stringify(ctx.trunk)}, exposure: live requires trunk "dev" `
-          + '— the promotion is the deploy, and dev is where sessions land before it ships',
-      };
-    }
-    if (!ctx.hasProduction) {
-      return { ok: false, reason: 'production is not set — exposure: live ships straight to users, so a live URL must be set' };
-    }
-    if (ctx.deploy !== 'push-main') {
-      return {
-        ok: false,
-        reason: `deploy is ${JSON.stringify(ctx.deploy)}, exposure: live requires deploy: push-main `
-          + '— the promotion itself IS the deploy',
-      };
-    }
-    if (!ctx.hasDeployWorkflow) {
-      return { ok: false, reason: 'no .github/workflows/deploy-*.yml — the promotion needs a committed path to production' };
-    }
-    return { ok: true };
-  },
-
-  released: (ctx) => {
-    if (!ctx.hasProduction) {
-      if (ctx.trunk !== 'main') {
-        return {
-          ok: false,
-          reason: `trunk is ${JSON.stringify(ctx.trunk)}; exposure: released with production: `
-            + 'null requires trunk "main" — nothing is live, so there is no release branch to speak of',
-        };
-      }
-      if (ctx.deploy !== null && ctx.deploy !== undefined && ctx.deploy !== 'none') {
-        return {
-          ok: false,
-          reason: `deploy is ${JSON.stringify(ctx.deploy)}; exposure: released with production: `
-            + 'null must be deploy: none — nothing is live to deploy to',
-        };
-      }
-      return { ok: true };
-    }
-    if (ctx.deploy === 'push-main') {
-      return {
-        ok: false,
-        reason: 'deploy: push-main — released means a deliberate release artifact gates '
-          + 'production, and every push to main would reach users with no such gate',
-      };
-    }
-    if (ctx.deploy === 'none' || ctx.deploy === null || ctx.deploy === undefined) {
-      return { ok: false, reason: 'a live production URL but deploy: none is contradictory — use "tag" or "manual"' };
-    }
-    if (ctx.deploy !== 'tag' && ctx.deploy !== 'manual') {
-      return { ok: false, reason: `deploy is ${JSON.stringify(ctx.deploy)} — exposure: released with a live production URL needs deploy: tag or deploy: manual` };
-    }
-    // Mirrors audit.mjs's checkRunbook() exactly (~:1916): a deploy that runs OUTSIDE CI — a
-    // human following `deploy: manual`, or a `deploy: tag` with no committed workflow (an
-    // external GitOps poller deploys it) — must name a committed `runbook:` doc. `deploy: tag`
-    // WITH a committed workflow needs no runbook — the workflow already commits the answer.
-    const externalTagDeploy = ctx.deploy === 'tag' && !ctx.hasDeployWorkflow;
-    if ((ctx.deploy === 'manual' || externalTagDeploy) && !ctx.hasRunbook) {
-      return {
-        ok: false,
-        reason: `deploy: ${ctx.deploy}${externalTagDeploy ? ' (a tag deployed outside CI)' : ''} requires runbook: `
-          + 'naming the committed doc that describes how production is reached',
-      };
-    }
-    if (ctx.trunk !== 'dev' && !(ctx.deploy === 'tag' && ctx.trunk === 'main')) {
-      return {
-        ok: false,
-        reason: ctx.deploy === 'tag'
-          ? `trunk is ${JSON.stringify(ctx.trunk)}; exposure: released with deploy: tag requires trunk "dev" or "main"`
-          : `trunk is ${JSON.stringify(ctx.trunk)}; exposure: released requires trunk "dev" — only a tag-gated release (deploy: tag) may run a single trunk "main"`,
-      };
-    }
-    return { ok: true };
-  },
-});
-
 function exposureShapeVerdict(exposure, ctx) {
-  const fn = EXPOSURE_SHAPE[exposure];
-  if (!fn) return { ok: true };
-  return fn(ctx);
+  for (const entry of evaluateExposure(exposure, ctx || {})) {
+    if (entry.kind === 'runbook') {
+      if (!(ctx && ctx.hasRunbook)) return { ok: false, reason: entry.message };
+      continue; // runbook requirement met — this entry does not block the write
+    }
+    return { ok: false, reason: entry.message };
+  }
+  return { ok: true };
 }
 
 // ---------------------------------------------------------------------- the human gate (#199's plan)
@@ -651,7 +559,6 @@ module.exports = {
   VALID_DEPLOY,
   QUESTIONS,
   axisMissing,
-  EXPOSURE_SHAPE,
   EXPOSURE_RANK,
   GATE_CLASS,
   EXIT_CODE,

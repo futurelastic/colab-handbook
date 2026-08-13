@@ -2,8 +2,10 @@
 /**
  * Unit tests for tools/lib/adopt.js — both commits of #199 (detect/derive/report, PLUS
  * ask/gate/write). All scripted `io`, no real git/filesystem: `tools/lib/adopt-cli.test.js`
- * covers the real-repo path through `colab adopt` itself, and
- * `tools/lib/adopt-audit-agreement.test.js` covers `EXPOSURE_SHAPE` against the real audit.
+ * covers the real-repo path through `colab adopt` itself, and (#207) `exposureShapeVerdict`'s own
+ * rule table now lives in `tools/lib/exposure-shape.js`, shared with `audit/audit.mjs` — see
+ * `tools/lib/exposure-shape.test.js` for the matrix that used to be this file's separate
+ * `adopt-audit-agreement.test.js`, run against the real audit.
  *
  * Run: `node --test tools/lib/*.test.js` — the existing CI glob picks this file up.
  */
@@ -13,7 +15,7 @@ const assert = require('node:assert');
 
 const {
   deriveTier, deriveConsequences, detectStack, detectChannelCandidates, remainingSteps, detect,
-  QUESTIONS, axisMissing, ROW_NAMES, EXPOSURE_SHAPE, EXPOSURE_RANK, GATE_CLASS, EXIT_CODE,
+  QUESTIONS, axisMissing, ROW_NAMES, EXPOSURE_RANK, GATE_CLASS, EXIT_CODE,
   exposureShapeVerdict, gateVerdict, provenanceComment, renderDescriptor,
 } = require('./adopt.js');
 
