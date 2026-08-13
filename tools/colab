@@ -6338,6 +6338,68 @@ function shipMode(repoAbs, target, branch, commits) {
 }
 
 /**
+ * (h2) B4: plan-journal + delete the plan file(s) — shared by BOTH ship completion paths (#193),
+ * resolved by NUMBER-SET MEMBERSHIP rather than reconstructing `issue-<N>.md` from one number at a
+ * time (#201).
+ *
+ * #193: this step used to live ONLY inline in the merge path (originally right after the B4 verify
+ * loop) — `shipEvidenceClose` returned before ever reaching it, so a zero-diff ship left its plan
+ * file on disk with no journal line, the exact symptom #115 fixed on the OTHER exit. Hoisting it
+ * here and calling it from both `cmdShip`'s merge path and `shipEvidenceClose` closes that gap.
+ *
+ * #201: the original loop reconstructed the name straight from `issue-${num}.md` for each number in
+ * `issues` — a shape that only ever matches a SINGLE-issue plan file. A group session's plan file is
+ * named for the whole set (`issue-<A>-<B>-<C>.md`, the convention the plan skills themselves
+ * establish), so `fs.existsSync` missed on every member number and the loop silently `continue`d —
+ * indistinguishable from the legitimate rung-0 "never had a plan" case. Fixed by scanning
+ * `.claude/plans/` and testing each `issue-*.md` file's OWN number set against `issues`:
+ *   - a SUBSET  → this session owns every issue the file names — journal it, then delete it;
+ *   - anything else (no overlap, or a PARTIAL overlap) → left untouched. A file naming even one
+ *     issue this session does not hold is not this session's to collect — it may be another
+ *     session's live plan, or a wider group's file of which this ship only carries part.
+ *
+ * One journal line per issue in the file's set (not one per file) — matches the pre-#201 grain and
+ * the skill's own documented contract ("one line per issue that had a plan file, not one per
+ * branch"); rung/cause are read from the file ONCE and reused for every line the file contributes,
+ * since a shared plan file has one front matter, not one per issue. All of a file's lines are
+ * appended in a single write and the delete follows only on success — chained per FILE (not per
+ * issue), so a failed append leaves that one plan file in place without touching siblings already
+ * written. Verdict is always `pass`: a `reject` grade from B1c ends the coordinator's run before it
+ * ever reaches a ship, on either completion path.
+ */
+function shipJournalPlanFiles(repoAbs, issues) {
+  const plansDir = path.join(repoAbs, '.claude', 'plans');
+  let entries;
+  try { entries = fs.readdirSync(plansDir); } catch (_) { return; } // no plans dir at all — nothing to do
+  const issueSet = new Set(issues.map((n) => String(n)));
+  const journalPath = path.join(os.homedir(), '.colab', 'plan-journal.jsonl');
+  for (const name of entries) {
+    const m = name.match(/^issue-(\d+(?:-\d+)*)\.md$/);
+    if (!m) continue; // not a plan file this convention recognises
+    const nums = m[1].split('-');
+    if (!nums.every((n) => issueSet.has(n))) continue; // not a subset — leave it untouched (#201)
+    const planPath = path.join(plansDir, name);
+    let rung = '1', cause = 'none';
+    try {
+      const txt = fs.readFileSync(planPath, 'utf8');
+      const rm = txt.match(/^rung:\s*(.+)$/m); if (rm) rung = rm[1].trim();
+      const cm = txt.match(/^cause:\s*(.+)$/m); if (cm) cause = cm[1].trim();
+    } catch (_) { /* front matter is optional — the defaults above cover a plain rung-1 stub */ }
+    const lines = nums.map((num) => JSON.stringify({
+      ts: new Date().toISOString().replace(/\.\d{3}Z$/, 'Z'),
+      issue: Number(num), rung, cause, verdict: 'pass',
+    })).join('\n') + '\n';
+    try {
+      fs.mkdirSync(path.dirname(journalPath), { recursive: true });
+      fs.appendFileSync(journalPath, lines);
+      fs.rmSync(planPath, { force: true }); // only after the journal write above landed
+    } catch (e) {
+      warnDeferred(`could not journal/delete the plan file "${name}" (${e.message}) — left in place`);
+    }
+  }
+}
+
+/**
  * The evidence-close path (#90). Posts evidence, CLOSES each closing issue, then tears down exactly
  * as B3 does. No merge, no commit, no push — and deliberately no `--allow-empty` marker commit:
  * inventing a commit to satisfy a code path would put a lie in the history of every repo that
@@ -6416,6 +6478,10 @@ function shipEvidenceClose({ repoAbs, st, sess, target, trunk, gh, closeIssues, 
   // but it is also not "shipped", and deleting it here would destroy the only record that the
   // session existed. Left alone, and said so.
   print(`E2: branch ${sess.branch} left in place (it carried no content to ship; delete it by hand if you want it gone).`);
+
+  // #193: the same (h2) B4 step the merge path runs — this exit used to skip it entirely, leaving
+  // a zero-diff session's plan file on disk with no journal line for the mechanism's own tuning data.
+  shipJournalPlanFiles(repoAbs, sess.issues);
 
   if (skipped.length) {
     process.stderr.write(`✗ evidence-close finished with ${skipped.length} issue(s) still open (see above).\n`);
@@ -7041,39 +7107,10 @@ function cmdShip(argv) {
     }
   }
 
-  // ---- (h2) B4: plan-journal + delete the plan file, per issue (#94, #115) ----
-  // `colab ship` had no implementation of this at all — only the skill's shell snippet performed
-  // it, so a ship driven through the tool alone left the plan file on disk with no journal line
-  // (verified: grep for plan-journal/plans/issue- against this file had zero matches before this).
-  // Ported here with the same two constraints as the skill's snippet: per ISSUE, not per branch
-  // (a group branch can carry several plan files), and journal-then-delete stays one chained
-  // operation — a failed journal append must leave the plan file in place, never silently destroy
-  // it with nothing to show for it. Verdict is always "pass": a "reject" grade from B1c ends the
-  // coordinator's run before it ever reaches B2, so nothing that stops at a reject gets this far.
-  {
-    const journalPath = path.join(os.homedir(), '.colab', 'plan-journal.jsonl');
-    for (const num of sess.issues) {
-      const planPath = path.join(repoAbs, '.claude', 'plans', `issue-${num}.md`);
-      if (!fs.existsSync(planPath)) continue; // rung-0 sessions never had one — silent no-op
-      let rung = '1', cause = 'none';
-      try {
-        const txt = fs.readFileSync(planPath, 'utf8');
-        const rm = txt.match(/^rung:\s*(.+)$/m); if (rm) rung = rm[1].trim();
-        const cm = txt.match(/^cause:\s*(.+)$/m); if (cm) cause = cm[1].trim();
-      } catch (_) { /* front matter is optional — the defaults above cover a plain rung-1 stub */ }
-      const line = JSON.stringify({
-        ts: new Date().toISOString().replace(/\.\d{3}Z$/, 'Z'),
-        issue: num, rung, cause, verdict: 'pass',
-      });
-      try {
-        fs.mkdirSync(path.dirname(journalPath), { recursive: true });
-        fs.appendFileSync(journalPath, line + '\n');
-        fs.rmSync(planPath, { force: true }); // only after the journal write above landed
-      } catch (e) {
-        warnDeferred(`could not journal/delete the plan file for #${num} (${e.message}) — left in place`);
-      }
-    }
-  }
+  // ---- (h2) B4: plan-journal + delete the plan file(s) (#94, #115, #193, #201) ----
+  // Shared with the evidence-close exit — see `shipJournalPlanFiles`'s own doc comment (above
+  // `shipEvidenceClose`) for the #193 hoist and the #201 number-set-membership resolution.
+  shipJournalPlanFiles(repoAbs, sess.issues);
 
   // ---- (i) group-label teardown (#82) ----
   // A `group:<key>` label (CONVENTIONS.md §5, Grouping) records that a set of issues had to
