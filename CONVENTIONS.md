@@ -177,7 +177,7 @@ entry in `trunk:`/`integration:`.
 
 ### Room — who else is here?
 
-**A fourth axis.** [`room`](project.schema.md#room--optional) names who could ever read
+**A new axis.** [`room`](project.schema.md#room--optional) names who could ever read
 what a session writes down: `solo` (one human — and every agent that human starts, which
 has no memory across sessions and reads exactly like the human's own notes), `team`
 (several people in one org, who may disagree or take over what a session left behind),
@@ -217,7 +217,7 @@ human writes down, not a fact anything verifies or derives.
 
 ### Exposure — what consumes a merge here?
 
-**A fifth axis, and the one `tier`'s gate count will eventually be *derived* from.**
+**Another axis, and the one `tier`'s gate count will eventually be *derived* from.**
 [`exposure`](project.schema.md#exposure--optional) names what actually consumes a merge to
 this repo: nothing, only parties already in the [room](#room--who-else-is-here), users via
 the promotion, or users/adopters via a deliberate artifact (a tag, a runbook). Four values,
@@ -330,7 +330,7 @@ on record in the epic ruling, not on anything this unit concluded.
 
 ### Ceremony — narration follows the room, recoverability follows exposure
 
-**A fifth axis, and tier cannot carry it.** Tier (soon exposure) counts gates to
+**Another axis, and tier cannot carry it.** Tier (soon exposure) counts gates to
 production; it says nothing about whether anyone will ever comb through a repo's audit
 trail. [`ceremony: light`](project.schema.md#ceremony--optional) lets a repo opt into
 thinner Issue narration and skip Phase B evidence comments — never the rails that protect
@@ -391,7 +391,7 @@ forward fix.
 
 ### Writes — serial or isolated, and the two things that make a branch mandatory
 
-**A sixth axis.** `writes` names which
+**Another axis.** `writes` names which
 write-conflict prevention method a repo's sessions default to
 ([`writes`](project.schema.md#writes--optional)) — a different question from `tier`
 (gates to production), `room` (who reads the record), `ceremony` (record-keeping depth),

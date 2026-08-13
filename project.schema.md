@@ -369,7 +369,7 @@ room: team     # several people in one org, who may disagree or take over
 room: public   # people outside the org, with no shared context and no way to ask
 ```
 
-Who else could ever read what a session writes down here — the fourth axis
+Who else could ever read what a session writes down here
 ([CONVENTIONS.md §2, *Room*](CONVENTIONS.md#room--who-else-is-here)). It decides what an
 Issue is *for* (memory for `solo`, coordination for `team`, documentation for `public`),
 which language it is written in, and whether "a human performs the release" names a role
@@ -388,9 +388,9 @@ derives or verifies.
 
 ```yaml
 exposure: none       # nothing consumes a merge here
-exposure: self        # only parties already in the room — a subset of the room's collaborator set
-exposure: live         # users, via the promotion itself
-exposure: released      # users or adopters, via a deliberate artifact (a tag, a runbook)
+exposure: self       # only parties already in the room — a subset of the room's collaborator set
+exposure: live       # users, via the promotion itself
+exposure: released   # users or adopters, via a deliberate artifact (a tag, a runbook)
 ```
 
 What consumes a merge here — as of **#144**, the AXIS OF RECORD for gate count when
