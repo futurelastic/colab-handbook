@@ -12,9 +12,12 @@ says go. If you came here expecting to merge or find `Phase B`, you want that sk
 this one asserts a checklist for it to pick up, nothing more.
 
 Notation: `$N` = the feature's Issue number · `<trunk>` = the branch sessions
-merge into (from `.github/project.yml`; `main` for Tier B, `dev` for Tier A) ·
-`<base>` = **the branch this session ships into** — `<trunk>`, unless it was cut
-from a declared `integration:` line, in which case it is that line.
+merge into — the value of `trunk:` in `.github/project.yml`
+([§2](../../CONVENTIONS.md#2-tiers): `main` on Tier B, `dev` on Tier C and the
+ordinary Tier A, or `main` on a tag-gated Tier A) — the tier letter is only ever
+a **legacy** correlate of the value, it never decided it · `<base>` = **the
+branch this session ships into** — `<trunk>`, unless it was cut from a declared
+`integration:` line, in which case it is that line.
 
 **Read `ceremony:` from `.github/project.yml` before the first write.** Absent, or
 `ceremony: standard` — everything below applies as written. `ceremony: light`
@@ -138,7 +141,8 @@ a comment while the file stays wrong). All three destinations are in `docs/`:
 
 #### `CLAUDE.md` is a router, not an archive
 
-It holds conventions, tier/trunk, ports, run commands, and **pointers** to the docs
+It holds conventions, trunk (and the legacy tier, when that's all a repo declares),
+ports, run commands, and **pointers** to the docs
 that carry the depth. It is also the one file loaded in full into **every** session
 before any work starts, which makes it the worst place in the repo for append-only
 accretion — and currently the place accretion lands.

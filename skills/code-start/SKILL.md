@@ -1,6 +1,6 @@
 ---
 name: code-start
-description: "Open a coding session the cheap way: learn the repo's tier/trunk from .github/project.yml, load the feature's context from its GitHub Issue instead of re-reading the codebase, claim the issue so parallel sessions don't collide, then branch off trunk in a worktree — the main checkout stays on trunk at rest, because dev servers, symlinks and LaunchAgents read that working tree and none of them know you branched it. Trigger phrases: 'start coding', 'start a session', 'open a coding session', 'begin work on issue', 'pick up issue', 'claim an issue', 'new worktree', 'set up a session'. Reads a `needs-plan` flag left by code-triage and
+description: "Open a coding session the cheap way: learn the repo's trunk from .github/project.yml, load the feature's context from its GitHub Issue instead of re-reading the codebase, claim the issue so parallel sessions don't collide, then branch off trunk in a worktree — the main checkout stays on trunk at rest, because dev servers, symlinks and LaunchAgents read that working tree and none of them know you branched it. Trigger phrases: 'start coding', 'start a session', 'open a coding session', 'begin work on issue', 'pick up issue', 'claim an issue', 'new worktree', 'set up a session'. Reads a `needs-plan` flag left by code-triage and
 runs code-plan when set, else writes a 3-5 line plan-lite stub. Pairs with code-wrap
 (then code-ship) at the end of the session."
 ---
@@ -84,13 +84,22 @@ colab claim $N --worktree <name> \
 ## 1. Read the repo marker
 
 ```sh
-cat .github/project.yml        # tier, trunk, production, deploy, stack, ports
+cat .github/project.yml        # trunk, tier (legacy), production, deploy, stack, ports
 ```
 
-- Note `trunk` — it is `main` (Tier B) or `dev` (Tier A). Branch off it in step 4.
-- **File missing?** Treat the repo as **Tier B, trunk `main`**, say so in your
-  report, and propose adding the file (`CONVENTIONS.md` §3). Do not invent a tier.
-- Never create a branch literally named `trunk`; never create `dev` in a Tier B repo.
+- **`<trunk>` is the value of `trunk:` in the descriptor — full stop.** `main` on Tier
+  B, `dev` on Tier C and the ordinary Tier A, or `main` on a **tag-gated** Tier A
+  (`deploy: tag` collapses the two-branch split —
+  [§2](../../CONVENTIONS.md#2-tiers)) are what today's fleet declares there; the tier
+  letter is only ever a **legacy** correlate of the value — it never decided it. Read
+  the field, not the letter. Branch off it in step 4.
+- **File missing, or neither `trunk:` nor any axis of record declared at all?** That
+  is the one hard failure — a descriptor answering neither `exposure` nor the legacy
+  `tier` ([§2, *Exposure*](../../CONVENTIONS.md#exposure--what-consumes-a-merge-here)).
+  Do not assume Tier B/trunk `main` — **propose** it, say so in your report, and
+  propose adding the file (`CONVENTIONS.md` §3). Never invent a tier or a trunk.
+- Never create a branch literally named `trunk`; never create `dev` in a Tier B repo
+  — even the legacy-`tier`-only shape settles this from the same field, not a guess.
 - **Note `integration:` if it is there.** It lists long-lived lines the team keeps
   (work for a release weeks out). Your base is still **trunk** unless the task says
   otherwise — but if the work belongs to such a line, that is a decision to take

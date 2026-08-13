@@ -42,7 +42,7 @@ the condition, because it runs before §1.
 ## 1. Establish where this repo stands
 
 ```sh
-cat .github/project.yml                       # tier, trunk, deploy, toolchain pins
+cat .github/project.yml                       # trunk, tier (legacy), deploy, toolchain pins
 colab update .                                # classify this repo's stamped copies
 node "$COLAB_HANDBOOK/audit/audit.mjs" --local .   # conformance beyond stamps
 ```
@@ -169,9 +169,11 @@ that matter for how you run a sync:
   still choosing WHAT to propose when evidence exists, and confirming a human
   answer before it goes in.
 
-Two things not to do while you wait on tier specifically: do not create `dev` "to
-be ready" (§9 step 9), and if the answer is B, `production: null` and
-`deploy: none` are the finished values, not placeholders to revisit.
+Two things not to do while the trunk/tier answer is still pending: do not create
+`dev` "to be ready" (§9 step 9) — `trunk:` is whatever the finished descriptor
+declares, never assumed ahead of it — and if the answer is the legacy Tier B (trunk
+`main`, no `exposure`), `production: null` and `deploy: none` are the finished values, not
+placeholders to revisit.
 
 ### Partial adoption is the normal case — resume, don't restart
 
