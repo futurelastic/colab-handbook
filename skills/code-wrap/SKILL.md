@@ -49,10 +49,11 @@ below against it produces confusing no-ops. The solo exit is its own, short path
    not a signal to fall back into the worktree-shaped steps below.
 4. **Nothing else runs, and `code-ship` never runs at all.** No B0 sync, no B1 CI
    gate beyond what already ran on trunk post-push, no B2 squash (there is no branch
-   to squash), no B2c/B2d/B3/B4. A Tier A release (`code-ship` B5) is a separate
-   question that solo flow does not settle either way — solo flow is gated on
-   `writes: serial` (CONVENTIONS.md, *Solo flow*), which is deliberately not coupled
-   to `production`, so a live repo may run solo flow.
+   to squash), no B2c/B2d/B3/B4. The release ritual (`code-ship` B5 — whichever
+   shape `exposure` gives it) is a separate question that solo flow does not settle
+   either way — solo flow is gated on `writes: serial` (CONVENTIONS.md, *Solo
+   flow*), which is deliberately not coupled to `production`, so a live repo may
+   run solo flow.
 
 If you are unsure whether this session is a solo session, check `writes:` in
 `.github/project.yml`: not `serial` means solo flow never opened, full stop — check

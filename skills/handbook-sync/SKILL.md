@@ -1,6 +1,6 @@
 ---
 name: handbook-sync
-description: "Bring ONE repo up to the current colab-handbook, from inside that repo — including a repo that has never adopted it at all. Detects 'nothing adopted here yet' as a first-class state and drives first-time adoption to completion (tier, marker, claim label, topic, CLAUDE pointer, CI, and registration in the fleet). Otherwise classifies every copied artifact (CI workflows, the CLAUDE conventions block, guards), shows what upstream actually changed since your stamp, and grafts it in without destroying your local edits — because copy-and-own means the repo owns its copies. Also checks whether the tier model itself moved on. Trigger phrases: 'sync the handbook', 'update this repo to the latest handbook', 'adopt the handbook', 'this repo has no project.yml', 'onboard this repo to the conventions', 'register this repo', 'we are behind the handbook', 'handbook drift', 'reconcile conventions', 'colab update says we are behind'. Wrap it in code-start/code-wrap — this is a code change like any other."
+description: "Bring ONE repo up to the current colab-handbook, from inside that repo — including a repo that has never adopted it at all. Detects 'nothing adopted here yet' as a first-class state and drives first-time adoption to completion (tier, marker, claim label, topic, CLAUDE pointer, CI, and registration in the fleet). Otherwise classifies every copied artifact (CI workflows, the CLAUDE conventions block, guards), shows what upstream actually changed since your stamp, and grafts it in without destroying your local edits — because copy-and-own means the repo owns its copies. Also checks whether the axis model itself moved on. Trigger phrases: 'sync the handbook', 'update this repo to the latest handbook', 'adopt the handbook', 'this repo has no project.yml', 'onboard this repo to the conventions', 'register this repo', 'we are behind the handbook', 'handbook drift', 'reconcile conventions', 'colab update says we are behind'. Wrap it in code-start/code-wrap — this is a code change like any other."
 ---
 
 # handbook-sync — bring this repo up to the current handbook
@@ -295,8 +295,13 @@ Add what upstream gained into your own wording, keep your extensions, bump the
 Stamps track *file* drift. The conventions can move without any template changing,
 and the audit is what catches it:
 
-- A new tier may now describe this repo better than the one it declares. If the
-  audit reports a tier mismatch, fixing `project.yml` is part of this work.
+- **The audit now emits two distinct findings here, not one "tier mismatch."**
+  `contradiction()` reports when a declared `tier` and a declared `exposure`
+  disagree about gate count (`tools/lib/axis-authority.js`) — fixing `project.yml`
+  (usually by trusting `exposure`, the axis of record) is part of this work.
+  Declaring **neither** key is the other, unconditional finding — "no axis of
+  record" (`CONVENTIONS.md` §2) — which this sync should close by putting §9's
+  question set to the repo's own owner, never by guessing an answer.
 - Toolchain pins must still agree between `project.yml` and the manifest.
 - A workflow may trigger on branches that no longer exist — CI passing on nothing.
 - **A convention label may have been added since this repo adopted.** The label set
