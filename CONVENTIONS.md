@@ -976,7 +976,9 @@ Ask: permission | backlog | ruling | deferred(<trigger>)
   default when the line is absent.
 - **`ruling`** — resolves to human judgment, never startable as code — same class as
   `needs-decision`. (`ruling` is the ASK CLASS, unchanged by #122's label rename below — see
-  the note there: the two names are deliberately kept independent.)
+  the note there: the two names are deliberately kept independent.) A `ruling` issue's
+  choices belong in a `decision:options` block (§*Decision options*, below) — that block
+  attaches to `needs-decision` directly and is not itself scoped to `agent-filed`.
 - **`deferred(<trigger>)`** — no action needed now; the issue carries its own wake
   condition.
 - **Absent line means `backlog`** — every pre-existing `agent-filed` issue reads as the
@@ -1141,6 +1143,55 @@ by `colab decision <N> --record --ruled-by <name>` — never `needs-decision` cl
 A reader checking whether an issue is decided looks for `decision-recorded` or the live
 comment marker, never merely for `needs-decision`'s absence.
 
+#### Decision options — what a ruling chooses between (#126)
+
+The mechanics above make the **answer** to a `needs-decision` gate machine-readable.
+They say nothing about the **question**: what a human is actually choosing between.
+Left as prose — headings, bullets, a sentence saying "my recommendation is A" — every
+consumer re-derives the choices heuristically or fails to. Measured, one repo
+line-by-line: 3 of 8 open decision issues carried no machine-readable options at all,
+and the failure is quiet in a specific way — an unstructured decision issue **looks
+like a UI defect, not a filing defect**, so nobody goes looking for the missing line.
+Prose is also unsafe on its own terms: a decision issue whose body said *"my
+recommendation: A"* was once implemented as A by a later session, while the actual
+accepted answer sat in a separate, later comment — a recommendation and an acceptance
+read identically as prose, and only a structured record on the answer side (above)
+closes that gap.
+
+**The filer of a `needs-decision` issue writes the options as a fenced block**, at
+filing time, whether the filer is human or an agent — this is not scoped to
+`agent-filed`/`Ask:` (above), because `needs-decision` itself gates issues from either
+provenance:
+
+```
+<!-- decision:options
+A: Short label (recommended) | One line of detail — the trade this option makes.
+B: Short label | What this one buys and what it costs.
+C: Short label | Listed for completeness; why it is probably wrong.
+-->
+```
+
+- `LETTER: label | detail`, one option per line; `detail` is optional.
+- **Two or more lines, or the block does not count** — a one-option decision is not a
+  decision.
+- An HTML comment fence, so it costs a human reader nothing in the rendered issue.
+- **The block states the choices. It never states the answer** — recording the
+  acceptance is the separate, later act above (`colab decision --record --answers
+  <ref>`), naming the block it resolves.
+
+**Lives in the issue body by default** — written once, at filing, alongside the rest
+of the ask. A discussion that narrows the choices may re-post the block as a comment,
+and then **the newest block by creation time is the live one** — the same
+most-recent-wins reading `liveDecisions` already applies on the answer side. That rule
+is for a reader rendering an issue nobody has answered yet. Which block a *recorded*
+decision answers is never inferred from recency: `--answers <ref>` names it explicitly,
+and that reference is what a consumer cross-checks against (`answeredOptionRefs`,
+`tools/lib/decision-record.js`).
+
+**Absent block means "options not declared"** — exactly as an absent `Ask:` line reads
+as `backlog` (above): no backfill, no new failure state for issues filed before this
+existed.
+
 #### Migration exemption — a narrow, human-created door through no-new-migrations (#98)
 
 `colab ship` refuses, by default with no flag/env/field to lower the bar, any branch
@@ -1281,6 +1332,42 @@ repo, then rebased and force-pushed it with no claim and no go-ahead scoped to t
 — caught and reverted before merging. The correct move: report the finding and stop.
 
 #### Epics — a container is not a start candidate
+
+**An issue whose checklist will outlive one session is an epic, and its items are
+issues (#127).** The parent carries the goal and the shared context; each child is
+independently claimable, independently blockable, independently shippable, and closes
+on its own merge — nothing a child does can put a closure claim on the parent. You
+cannot claim half an issue: a checklist issue shipped three-of-six by one session and
+left three behind serializes everything remaining onto one claim regardless of whether
+those items are related, similarly sized, or blocked by the same thing. Measured, one
+repo's clearest offender: three trivial UI additions, one item blocked behind an
+in-flight change, and one needing a design pass, all six behind a single claim. Every
+cost traced to the same cause — one claim, six different readiness states: a session
+that shipped three wrote a closing reference that later blocked an unrelated,
+legitimate ship three days on; and one still-unblocked item was re-measured across
+ten-plus triage passes because the issue's own plan text (written for a different
+sibling) never actually applied to it.
+
+At filing time, ask whether the items would be worked by **one** session. Three
+signals say they will not — evidence for the rule, never its definition, since a
+genuinely one-session multi-item issue should not be forced apart merely because its
+items differ on paper:
+
+1. **Different readiness** — one item is trivial, another needs a design pass; they
+   will not be picked up together, and the trivial ones ship while the hard one
+   becomes a tail.
+2. **Different blockers** — if item A waits on something item B does not, sharing a
+   claim lets one hold the other hostage.
+3. **Disjoint file sets** — items touching non-overlapping files are not one piece of
+   work. (Overlapping files is the opposite finding — the argument for one *branch*,
+   never one issue: see *Grouping*, above.)
+
+**No backfill** — this governs what gets filed next, not existing checklist issues;
+converting one is optional cleanup, never required by adoption. **Not every checklist
+is an epic** — an issue whose boxes are steps of one session's own work (write it,
+test it, document it) is a normal issue with a to-do list, and splitting it would be
+pure overhead. The test is whether the work **outlives a session**, never whether it
+merely *has* boxes.
 
 **The `epic` label marks a container for sub-issues — informative, never a start
 candidate, never claimed as a unit of work** — even when it passes readiness and

@@ -143,8 +143,10 @@ function hasRecordedDecision(comments) {
 
 /** The `<!-- decision:options -->` block references every live decision on this issue claims
  *  to answer, most-recent-last, `'-'` entries filtered out. Lets a caller cross-check a
- *  decision against the options block it names, when one exists (CONVENTIONS.md's
- *  `decision:options` convention — code-triage/SKILL.md). */
+ *  decision against the options block it names, when one exists (CONVENTIONS.md §5,
+ *  *Decision options*, which #126 finally wrote — until then this comment cited
+ *  code-triage/SKILL.md, which has never contained the convention: the format was
+ *  implemented here and specified nowhere). */
 function answeredOptionRefs(comments) {
   return liveDecisions(comments)
     .filter((d) => TRUSTED_ASSOCIATIONS.has(d.authorAssociation) && d.answers && d.answers !== '-')
