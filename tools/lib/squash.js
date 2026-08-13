@@ -186,7 +186,6 @@ const REF_CLAUSE_RE = /([Cc]loses|[Rr]efs) #(\d+)/g;
  * in a way rewriting never was: the operator still authors the final text, ship just declines to
  * commit one that contradicts its own `--refs` intent. See that function's doc comment for the rest.
  *
-
  * @param {string} message
  * @param {string[]} closeNums   normalised (no leading `#`) issue numbers ship will CLOSE
  * @param {Array} [conflicts]    when given, one `{num, from, to}` is pushed per clause dropped —
@@ -362,8 +361,24 @@ function closedIssueNumbers(message) {
  * This one exists to answer a different question: not "did WE write a closing trailer", but "will
  * GITHUB read this text as one", because GitHub honours the full keyword set inside ANY commit
  * text on the default branch, not just a trailer line this tool composed.
+ *
+ * #178: `\s*:?\s*` between the keyword and the `#` — not the earlier bare `\s+` — because GitHub
+ * accepts an optional colon and does not require whitespace on either side of it: `Closes: #58`,
+ * `Closes:#58`, and the original whitespace-only `Closes #58` all read as the same closing
+ * reference to GitHub, and this scan's whole job is to answer "will GitHub read this text as one",
+ * not "does it match the one shape this repo happens to compose".
+ *
+ * DELIBERATELY NOT chased here — a wider scan than the keyword-plus-issue-number shape above:
+ *   - the full-URL form (`closes https://github.com/owner/repo/issues/58`) — documented GitHub
+ *     behaviour, so a message carrying it is a genuine miss, not a false negative by design;
+ *   - `GH-58` (GitHub's short cross-reference token);
+ *   - `owner/repo#58` (cross-repo reference).
+ * All three are real gaps, not oversights, and HELP_SHIP says so rather than claiming coverage
+ * this scan does not have. The B4 post-push check (`tools/colab`, "did not auto-close") is the
+ * backstop under exactly these three shapes — the only one of the two catches (pre-push refusal
+ * here, post-push warning there) still reachable once a message carrying one of them has landed.
  */
-const CLOSING_KEYWORD_RE = /\b(close|closes|closed|fix|fixes|fixed|resolve|resolves|resolved)\s+#(\d+)\b/gi;
+const CLOSING_KEYWORD_RE = /\b(close|closes|closed|fix|fixes|fixed|resolve|resolves|resolved)\s*:?\s*#(\d+)\b/gi;
 
 /**
  * #149: does `message` carry a GitHub closing keyword pointing at an issue `--refs` is keeping
@@ -390,7 +405,6 @@ const CLOSING_KEYWORD_RE = /\b(close|closes|closed|fix|fixes|fixed|resolve|resol
  * warning with nothing left to fix. A pre-push refusal and a post-push warning are not two
  * severities of the same fix; only one of them is reachable while the mistake is still reversible.
  *
-
  * Deliberately checked against `refsIssues` only, not `closeIssues`: a closing keyword hitting a
  * number ship already intends to CLOSE is not a conflict, it is redundant and harmless. It is only
  * a conflict where the flag's entire purpose — keeping the issue open — is being undone by text the

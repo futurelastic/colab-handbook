@@ -433,6 +433,27 @@ test('inheritedClosingKeywordConflicts recognises the full GitHub keyword vocabu
   }
 });
 
+// #178: the colon variant is a live gap — `Closes: #58` (and the tighter `Closes:#58`, no space at
+// all) are documented GitHub closing forms the pre-#178 regex missed entirely, because it required
+// bare whitespace (`\s+`) directly before the `#` with no room for an optional colon.
+test('inheritedClosingKeywordConflicts catches the colon variant, spaced ("Closes: #58") (#178)', () => {
+  const hits = squash.inheritedClosingKeywordConflicts('fix: x\n\nCloses: #58', [58]);
+  assert.deepStrictEqual(hits, [{ num: '58', keyword: 'Closes' }]);
+});
+
+test('inheritedClosingKeywordConflicts catches the colon variant, unspaced ("Closes:#58") (#178)', () => {
+  const hits = squash.inheritedClosingKeywordConflicts('fix: x\n\nCloses:#58', [58]);
+  assert.deepStrictEqual(hits, [{ num: '58', keyword: 'Closes' }]);
+});
+
+test('inheritedClosingKeywordConflicts catches the colon variant on every keyword, case-insensitively (#178)', () => {
+  for (const kw of ['Fixed', 'resolves']) {
+    const hits = squash.inheritedClosingKeywordConflicts(`chore: x\n\n${kw}: #7`, [7]);
+    assert.strictEqual(hits.length, 1, `expected a hit for "${kw}: #7"`);
+    assert.strictEqual(hits[0].num, '7');
+  }
+});
+
 test('inheritedClosingKeywordConflicts ignores a number NOT in refsIssues', () => {
   assert.deepStrictEqual(squash.inheritedClosingKeywordConflicts('fix: x\n\nCloses #58', [59]), []);
 });
@@ -443,6 +464,18 @@ test('inheritedClosingKeywordConflicts also catches the self-contained trailer-l
   // the push, alongside the prose case #149 actually reported.
   assert.deepStrictEqual(squash.inheritedClosingKeywordConflicts('feat: x\n\nCloses #48', [48]),
     [{ num: '48', keyword: 'Closes' }]);
+});
+
+// #178: pinning the DELIBERATE gap, not a forgotten one — the full-URL, `GH-N`, and cross-repo
+// `owner/repo#N` closing forms are documented GitHub behaviour this scan does not chase (see
+// CLOSING_KEYWORD_RE's doc comment for why: the post-push "did not auto-close" check is the net
+// under these three). If this ever starts failing because the regex widened, update it deliberately
+// alongside that doc comment and HELP_SHIP — never let it drift silently in either direction.
+test('inheritedClosingKeywordConflicts still misses the full-URL / GH-N / owner-repo#N forms — deliberate, not a regression (#178)', () => {
+  assert.deepStrictEqual(
+    squash.inheritedClosingKeywordConflicts('fix: x\n\ncloses https://github.com/owner/repo/issues/58', [58]), []);
+  assert.deepStrictEqual(squash.inheritedClosingKeywordConflicts('fix: x\n\ncloses GH-58', [58]), []);
+  assert.deepStrictEqual(squash.inheritedClosingKeywordConflicts('fix: x\n\ncloses owner/repo#58', [58]), []);
 });
 
 test('inheritedClosingKeywordConflicts is empty with no refsIssues, or no message', () => {

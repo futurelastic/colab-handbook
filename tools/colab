@@ -5753,9 +5753,14 @@ Options:
                       claim is still released either way — only Closes→Refs changes.
                       #149: refuses BEFORE the push (real run and --dry alike) if the composed
                       squash message carries a GitHub closing keyword (close/closes/closed/fix/
-                      fixes/fixed/resolve/resolves/resolved + #N) against a --refs'd N — e.g. an
-                      inherited commit subject that mentions "close #N" in prose. Reword the
-                      offending commit and re-run; nothing is rewritten on your behalf.
+                      fixes/fixed/resolve/resolves/resolved, with or without a colon, e.g. "Closes:
+                      #N") against a --refs'd N — e.g. an inherited commit subject that mentions
+                      "close #N" in prose. Reword the offending commit and re-run; nothing is
+                      rewritten on your behalf. #178: this catches the keyword-plus-issue-number
+                      shape only — a full issue URL, a bare "GH-N", or a cross-repo "owner/repo#N"
+                      are documented GitHub closing forms this scan does NOT catch; the only net
+                      under those three is the post-push "did not auto-close" check, by which point
+                      the commit is already permanent in trunk's history.
   --keep-worktree     do not remove the worktree after shipping
   --delete-branch     delete the branch (local + remote) after shipping — off by default
   --dry               print the plan + precondition table and change NOTHING
