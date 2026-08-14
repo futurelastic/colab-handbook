@@ -90,7 +90,7 @@ authorises a promotion, a tag, or anything that deploys.
 
 **First, know what you are merging into.** `<base>` is the branch's base: `<trunk>`
 in the ordinary case, or the declared `integration:` line the session was cut from
-(`CONVENTIONS.md` §2, recorded by `colab worktree new --base`). Everything below —
+(`CONVENTIONS.md` [§2](../../CONVENTIONS.md#2-tiers), recorded by `colab worktree new --base`). Everything below —
 the sync, the CI check, the squash, the push — targets `<base>`, not trunk-by-reflex.
 Shipping a line-based branch into trunk would drag the whole line in behind it inside
 one squash commit.
@@ -135,7 +135,7 @@ shipped branch's own commits look permanently unmerged — a count-only check ca
 *every branch we have ever shipped* unshipped and invites re-merging finished work.
 Without `colab`, ask the content question directly: `git merge-tree --write-tree
 origin/<base> <branch>` printing exactly `git rev-parse origin/<base>^{tree}` means
-the branch adds nothing. (`CONVENTIONS.md` §4, "Has it landed?")
+the branch adds nothing. (`CONVENTIONS.md` [§4](../../CONVENTIONS.md#has-it-landed--the-one-rule-because-the-obvious-one-is-wrong), "Has it landed?")
 
 **Now sync.** Merge conflicts here are almost always **generated files** (codegen
 locks, duplicate-timestamp migrations, generated route/type files) — they happen when
@@ -201,7 +201,7 @@ migration against one already on trunk — hooks in here; the universal rule is
 
 ## B1. Verify CI on `<base>` is alive AND green — for the sha you are about to merge
 
-**Ask by commit, not by recency** (`CONVENTIONS.md` §4, #92). `gh run list --branch
+**Ask by commit, not by recency** (`CONVENTIONS.md` [§4](../../CONVENTIONS.md#4-branches-and-commits), #92). `gh run list --branch
 <base> -L 1` reads whatever ran *last*, and under `cancel-in-progress` a cancelled
 straggler can outrank a passing run on the *same* commit — deadlocking a ship that a
 by-commit check would clear. Ask instead whether a completed, successful run exists
@@ -218,11 +218,11 @@ only question that matters. `colab ship` asks it this same way.
 
 A "failure" that never started (billing lockout, runner outage) still means
 **stop** — we once merged for 12 hours into repos whose CI was silently dead
-(`CONVENTIONS.md` §4). Branch protection can't check this for us; this command must.
+(`CONVENTIONS.md` [§4](../../CONVENTIONS.md#4-branches-and-commits)). Branch protection can't check this for us; this command must.
 
 **What CI *is* follows `writes`, how much it must catch follows `exposure`**
 ([§7, *CI*](../../CONVENTIONS.md#ci--what-it-is-follows-writes-how-much-follows-exposure)).
-With a branch (`isolated`, or `serial` under one of §2's two mandatory-branch
+With a branch (`isolated`, or `serial` under one of [§2](../../CONVENTIONS.md#writes--serial-or-isolated-and-the-two-things-that-make-a-branch-mandatory)'s two mandatory-branch
 conditions), CI here **is** the gate this merge depends on — a red or missing run for
 the head sha stops the ship, full stop. `none`/`self` exposure answers only to the
 room; `live`/`released` answers to a consumer with no way to ask a clarifying
@@ -294,13 +294,13 @@ Never close a partial issue bare — that buries the open question where nobody
 will find it again. Never leave it whole either — the next session reads an
 untouched issue as untouched work and redoes what you already shipped. This is
 the same failure mode as `(#N)`: issues sitting open with their code long since
-merged (`CONVENTIONS.md` §4).
+merged (`CONVENTIONS.md` [§4](../../CONVENTIONS.md#4-branches-and-commits)).
 
 **This sort is now MECHANICALLY checked, not honour-system (#74).** The
 incident that motivated it: an issue was closed by squash-merge with a third
 of its three-section scope unimplemented — the sections were prose, so
 nothing could catch it. If the issue's `## Plan` is a real GitHub checklist
-(`- [ ]` one line per deliverable — CONVENTIONS.md §4, *Merging*), `colab
+(`- [ ]` one line per deliverable — CONVENTIONS.md [§4](../../CONVENTIONS.md#4-branches-and-commits), *Merging*), `colab
 ship` parses it before composing the squash body and refuses to write
 `Closes #N` for any issue with an unticked box and no declared remainder —
 it writes `Refs #N` instead, leaves the issue open, and reports it (loud, not
@@ -371,13 +371,13 @@ is a human integration event of a promotion's weight.
 
 - **`Closes #N`, not a bare `(#N)`** — GitHub only auto-closes on the keyword. We
   measured 26/30 issues left open with their code long merged because commits
-  said `(#N)` (`CONVENTIONS.md` §4).
+  said `(#N)` (`CONVENTIONS.md` [§4](../../CONVENTIONS.md#4-branches-and-commits)).
 - One `Closes #N` per issue the branch carried — the set you harvested in B1b, not
   just the "main" one.
 - **A long-lived tracking/memory issue is `Refs #N`, not `Closes #N`.** If the branch
   claimed an issue used as external memory for a whole domain — a checklist of still-open
   items you touched but did not complete — reference it, don't close it, or you bury its
-  knowledge behind a closed-issue lookup (`CONVENTIONS.md` §5, *Tracking issues*). Through
+  knowledge behind a closed-issue lookup (`CONVENTIONS.md` [§5](../../CONVENTIONS.md#tracking-issues--claimed-but-referenced-not-closed), *Tracking issues*). Through
   the blessed door this is automatic for an issue carrying the `tracking` label, or opt in
   per-ship with `colab ship --refs <N>`; the claim is still released either way.
 - *(Machine-specific automation — migrate the trunk DB, restart the trunk dev
@@ -438,7 +438,7 @@ mockup never went through the app's real CSS cascade). Run the app (`/run` skill
 screenshot the changed surface, attach it to the evidence comment.
 
 **Prepend one invisible marker line** — a stable, machine-readable first line, exactly
-the pattern the claim comments already use (`CONVENTIONS.md` §5 *Rules*: a stable first
+the pattern the claim comments already use (`CONVENTIONS.md` [§5](../../CONVENTIONS.md#rules) *Rules*: a stable first
 line as wire format, everything after it human). It names the trunk sha the comment
 attests, so an external consumer (a closure-review view on a fleet dashboard, say) can
 find and verify the evidence comment without heuristics — "first comment after merge
@@ -465,7 +465,7 @@ not being complete.
 
 **Made a significant design decision mid-work, without a pre-approved spec?** Add
 `design-not-preapproved` as plain text in the same comment, after the marker line
-(`CONVENTIONS.md` §5, *Design ruling*). Not a second marker — the marker's job is being
+(`CONVENTIONS.md` [§5](../../CONVENTIONS.md#decision-gate--a-human-must-answer-first-122), *Design ruling*). Not a second marker — the marker's job is being
 findable, not enumerating every condition a comment might report — just a word a human
 reviewer greps for:
 
@@ -559,7 +559,7 @@ done
 Only `group:*` labels are ever in scope — never `in-progress`, `deps-checked`,
 `agent-filed`, `needs-plan`, or `epic`. Deleting the label does not erase the record:
 the closed issues' timelines still show it was applied, and each member's `Because:`
-comment (`CONVENTIONS.md` §5, *Grouping*) is the durable evidence of *why*, independent
+comment (`CONVENTIONS.md` [§5](../../CONVENTIONS.md#grouping--issues-that-must-share-one-branch), *Grouping*) is the durable evidence of *why*, independent
 of whether the label object survives.
 
 ## B3. Release the claim(s)
@@ -570,7 +570,7 @@ gh issue edit $N --remove-label in-progress    # … else raw, one per issue
 ```
 
 Release **every** issue in the group, even ones you didn't finish — a stale claim
-silently blocks others (`CONVENTIONS.md` §5).
+silently blocks others (`CONVENTIONS.md` [§5](../../CONVENTIONS.md#5-claiming-work--how-to-say-im-on-this)).
 
 **No exceptions — not "unless unfinished", not "unless the worktree stays".**
 `code-start` adds the claim, this skill removes it: symmetric and unconditional.
@@ -747,7 +747,7 @@ Merging to trunk is **not** a release. What comes next follows
 legacy `tier` value the same way when that is all a repo declares (`A → released`,
 `C → live`, `B → null`):
 
-- **`released`** — the tag is what ships it, human-only, per `CONVENTIONS.md` §6.
+- **`released`** — the tag is what ships it, human-only, per `CONVENTIONS.md` [§6](../../CONVENTIONS.md#6-releases).
   Two shapes, decided by `<trunk>`, never by the legacy tier letter: `<trunk>: dev` (the
   ordinary two-branch case) is promotion `dev` → `main` (`--no-ff`, never squash)
   plus a `v*.*.*` tag; `<trunk>: main` (single-trunk, tag-gated — this repo's own

@@ -98,7 +98,7 @@ cat .github/project.yml        # trunk, tier (legacy), production, deploy, stack
   is the one hard failure — a descriptor answering neither `exposure` nor the legacy
   `tier` ([§2, *Exposure*](../../CONVENTIONS.md#exposure--what-consumes-a-merge-here)).
   Do not assume Tier B/trunk `main` — **propose** it, say so in your report, and
-  propose adding the file (`CONVENTIONS.md` §3). Never invent a tier or a trunk.
+  propose adding the file (`CONVENTIONS.md` [§3](../../CONVENTIONS.md#3-githubprojectyml--the-marker)). Never invent a tier or a trunk.
 - Never create a branch literally named `trunk`; never create `dev` in a Tier B repo
   — even the legacy-`tier`-only shape settles this from the same field, not a guess.
 - **Note `integration:` if it is there.** It lists long-lived lines the team keeps
@@ -196,11 +196,11 @@ gh issue view $N --comments                      # prior-session log
   no `colab` on this machine means skip it, nothing else here depends on it.
 
   **The `Filed-by:` line is not optional, and it is about intent — not about who
-  typed** (`CONVENTIONS.md` §5, *Provenance*). On this path you are almost always
+  typed** (`CONVENTIONS.md` [§5](../../CONVENTIONS.md#provenance--who-decided-the-work-should-exist), *Provenance*). On this path you are almost always
   transcribing work a person just asked for, so it is `Filed-by: boss` and **no
   label**. If instead you are filing something *you* noticed and nobody approved,
   say `agent` and add the label — and end the body with an `Ask:` line too
-  (`CONVENTIONS.md` §5, *Ask*): `permission | backlog | ruling | deferred(<trigger>)`,
+  (`CONVENTIONS.md` [§5](../../CONVENTIONS.md#ask--the-filer-declares-the-ask-class-89), *Ask*): `permission | backlog | ruling | deferred(<trigger>)`,
   so a reader never has to guess your ask class back out of the prose. Absent
   line reads as `backlog`, so add it explicitly whenever it is anything else:
   ```sh
@@ -217,7 +217,7 @@ gh issue view $N --comments                      # prior-session log
   days; the native link is what `subIssues` / `subIssuesSummary` report, so a tool can
   see the child exists. Both ids below are **node** ids (`I_kwDO…`) — the sub-issue
   mutation does not take issue numbers, and the dependency REST endpoints take a
-  *different* kind of id again (`CONVENTIONS.md` §5, *Readiness*):
+  *different* kind of id again (`CONVENTIONS.md` [§5](../../CONVENTIONS.md#readiness--open-and-unclaimed-is-not-enough), *Readiness*):
   ```sh
   P=$(gh issue view <epic> --json id -q .id); C=$(gh issue view $N --json id -q .id)
   gh api graphql -f query='mutation($p:ID!,$c:ID!){addSubIssue(input:{issueId:$p,subIssueId:$c}){clientMutationId}}' \
@@ -260,7 +260,7 @@ that was maintained.
 If this session learns something that outlives the feature, plan to put it in the
 durable tier at wrap — not just in the session comment that closes with the issue.
 
-### Write the plan file — rung 0/1/2, before you claim (`CONVENTIONS.md` §5, *Planning*, #94)
+### Write the plan file — rung 0/1/2, before you claim (`CONVENTIONS.md` [§5](../../CONVENTIONS.md#planning--a-plan-file-that-outlives-one-command-and-who-drafts-it-94), *Planning*, #94)
 
 The Issue you just loaded is the coordinator's view; this file is yours to keep for the
 rest of the session. Convention: `.claude/plans/issue-$N.md`, in the **main checkout —
@@ -381,7 +381,7 @@ gh issue view $N --json labels -q '.labels[].name|select(startswith("group:"))'
 - Use `colab worktrees`, not `colab claims`, for this: B3 already released the
   claims, so a kept worktree shows up in the worktree list and **nowhere else**.
 - **A `group:` label means your issue is not alone.** Triage found that these issues touch
-  the same files, so they must move on **one** branch (`CONVENTIONS.md` §5, *Grouping*).
+  the same files, so they must move on **one** branch (`CONVENTIONS.md` [§5](../../CONVENTIONS.md#grouping--issues-that-must-share-one-branch), *Grouping*).
   List the members and read the `Because:` line that carries the collision:
   ```sh
   gh issue list --label "group:<key>" --state open        # every member
@@ -415,7 +415,7 @@ gh issue view $N --json labels -q '.labels[].name|select(startswith("group:"))'
   Empty output — or a path that does not
   exist yet — is clean ground. Non-empty means group onto their branch, or sequence
   after it lands; never a parallel branch on a file someone else is holding
-  (`CONVENTIONS.md` §5, *Writing a conclusion down*). **It fetches for you** — the
+  (`CONVENTIONS.md` [§5](../../CONVENTIONS.md#writing-a-conclusion-down--the-decision-and-the-document-are-two-units), *Writing a conclusion down*). **It fetches for you** — the
   enumeration reads local refs, so a branch pushed by another session and never fetched
   here would be invisible, and it refuses (exit 2) to report "clean ground" when it could
   not fetch rather than answering off stale data. A row reporting `unknown` still means
@@ -428,7 +428,7 @@ This check is the deliberate price of unconditional release, not an oversight in
 
 ## 4. Branch off the base — worktree by default
 
-Name it per `CONVENTIONS.md` §4 — pattern, and the issue number(s) at the end.
+Name it per `CONVENTIONS.md` [§4](../../CONVENTIONS.md#4-branches-and-commits) — pattern, and the issue number(s) at the end.
 **Always branch off `<trunk>`, never off another feature branch.**
 
 **The base is a session fact — record it, do not leave it implied.** It is `<trunk>`
@@ -442,12 +442,12 @@ cut from a line and merged into trunk would carry the whole line in behind it, a
 single squash commit that reads like a small change. So state your base in the report,
 and code-wrap will state which branch it merged into.
 
-**Why the naming rule is load-bearing downstream** (what §4 doesn't say): code-wrap's
+**Why the naming rule is load-bearing downstream** (what [§4](../../CONVENTIONS.md#4-branches-and-commits) doesn't say): code-wrap's
 B1b harvests the issue set for the squash message from exactly two places — the
 **branch name** and the **commit bodies** — cross-checked against the claim registry.
 An issue that appears in neither the branch name nor your claims is one code-wrap
 will never find. It gets no `Closes #N`, so it sits open indefinitely with its code
-already merged — the failure §4 cites at 26/30 issues, reached by a different route.
+already merged — the failure [§4](../../CONVENTIONS.md#4-branches-and-commits) cites at 26/30 issues, reached by a different route.
 Naming the branch correctly *now* is what makes the wrap correct later.
 
 Mechanical detail for group branches: **the numbers must be at the end.** B1b anchors

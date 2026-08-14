@@ -71,7 +71,7 @@ live, so it carries obligations the CI ones do not:
    rotated for one of them, and a leak from any reaches all.
 4. **Make `project.yml` true.** A tag deploys only where `deploy: tag` is
    declared. **This does not change your tier** — tier says whether production
-   exists and how many gates guard it, and it moves only by the §9 checklist. If
+   exists and how many gates guard it, and it moves only by the [§9](../CONVENTIONS.md#9-adopting-this) checklist. If
    the repo was `deploy: manual`, switching it now is a deliberate edit (and drop
    the `runbook:` that is no longer the mechanism). Adopting this into a Tier B
    repo is not an adoption at all: it is giving the repo a production, which is a
