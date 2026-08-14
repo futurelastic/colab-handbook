@@ -72,8 +72,20 @@ test('writes: isolated on a Tier B repo is clean', () => {
   assert.ok(!hasText(r.fails, /writes/), r.fails.join(' | '));
 });
 
-test('writes: serial on a Tier B repo is clean', () => {
+test('writes: serial on a Tier B repo is clean — the legacy alias stays accepted (#208)', () => {
   const yml = `tier: B\ntrunk: main\nproduction: null\ndeploy: none\nstack: node\nwrites: serial\n`;
+  const r = audit(fixture(yml));
+  assert.ok(!hasText(r.fails, /writes/), r.fails.join(' | '));
+});
+
+test('#208: writes: serial-direct on a Tier B repo is clean', () => {
+  const yml = `tier: B\ntrunk: main\nproduction: null\ndeploy: none\nstack: node\nwrites: serial-direct\n`;
+  const r = audit(fixture(yml));
+  assert.ok(!hasText(r.fails, /writes/), r.fails.join(' | '));
+});
+
+test('#208: writes: serial-gated on a Tier B repo is clean', () => {
+  const yml = `tier: B\ntrunk: main\nproduction: null\ndeploy: none\nstack: node\nwrites: serial-gated\n`;
   const r = audit(fixture(yml));
   assert.ok(!hasText(r.fails, /writes/), r.fails.join(' | '));
 });
@@ -83,7 +95,7 @@ test('writes: serial on a Tier B repo is clean', () => {
 test('an unrecognised writes value is a finding, not a silent pass', () => {
   const yml = `tier: B\ntrunk: main\nproduction: null\ndeploy: none\nstack: node\nwrites: parallel\n`;
   const r = audit(fixture(yml));
-  assert.ok(hasText(r.fails, /writes is "parallel".*expected "isolated" or "serial"/), r.fails.join(' | '));
+  assert.ok(hasText(r.fails, /writes is "parallel", expected "isolated", "serial-direct", or "serial-gated"/), r.fails.join(' | '));
 });
 
 // --- the non-coupling pin — the whole point of this file -----------------------

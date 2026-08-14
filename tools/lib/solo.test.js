@@ -217,6 +217,28 @@ test('soloEligibility: neither set refuses with a reason', () => {
   assert.match(r.reason, /writes: serial/);
 });
 
+// --- #208: the writes split — solo eligibility keys off the DIRECT value only ------------
+
+test('writesMode: writes: serial-direct and writes: serial-gated BOTH read as "serial" (the place-claim/CI-alarm summary)', () => {
+  assert.strictEqual(writesMode({ writes: 'serial-direct' }), 'serial');
+  assert.strictEqual(writesMode({ writes: 'serial-gated' }), 'serial');
+});
+
+test('soloEligibility: writes: serial-direct is eligible via "writes"', () => {
+  assert.deepStrictEqual(soloEligibility({ writes: 'serial-direct' }), { ok: true, via: 'writes' });
+});
+
+test('soloEligibility: writes: serial-gated is NOT eligible — a declared pre-merge gate is what solo flow has none of', () => {
+  const r = soloEligibility({ writes: 'serial-gated' });
+  assert.strictEqual(r.ok, false);
+  assert.match(r.reason, /serial-direct/);
+  assert.match(r.reason, /serial-gated/);
+});
+
+test('soloEligibility: the legacy alias writes: serial resolves to serial-direct — stays eligible, unchanged by the split', () => {
+  assert.deepStrictEqual(soloEligibility({ writes: 'serial' }), { ok: true, via: 'writes' });
+});
+
 // --- branchMandatory (#133) ---------------------------------------------------
 
 test('branchMandatory: one unit in flight — not mandatory, condition 2 stays null (not false)', () => {
