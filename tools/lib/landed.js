@@ -130,7 +130,13 @@ function hasCargo(verdict) {
 
 /**
  * The git half. `base` and `branch` are ref names (`dev`, `origin/dev`, `feat/x-12`) — no defaulting
- * happens here; a caller that cannot resolve a base must fail rather than guess `main`.
+ * happens here for `base`; a caller that cannot resolve it must fail rather than guess `main`.
+ *
+ * `branch` gets ONE deliberate exception (#189): a bare name absent locally falls back to
+ * `origin/<branch>` when that resolves — see `resolveBranchRef` above for why and its limits. When
+ * the fallback fires, `facts.branch` is the ref that actually answered (not the bare name given),
+ * and the verdict's `why` says so explicitly — so neither the table nor `--json` output is ever
+ * silently about a different ref than the caller named.
  *
  * Returns { state, method, why, base, branch, commitsAhead, diffEmpty, containment }.
  */
@@ -141,21 +147,28 @@ function landedState(repoAbs, base, branch) {
     return { ...classifyUnresolvable('base and branch must be two different refs'), ...facts };
   }
   const haveBase = git.git(['rev-parse', '--verify', '--quiet', base], repoAbs).ok;
-  const haveBranch = git.git(['rev-parse', '--verify', '--quiet', branch], repoAbs).ok;
-  if (!haveBase || !haveBranch) {
-    const missing = [!haveBase ? base : null, !haveBranch ? branch : null].filter(Boolean).join(', ');
+  const resolved = resolveBranchRef(repoAbs, branch);
+  if (resolved.viaRemote) facts.branch = resolved.ref; // the ref that answered — visible everywhere facts.branch is read
+
+  if (!haveBase || !resolved.ok) {
+    const missing = [!haveBase ? base : null, !resolved.ok ? branch : null].filter(Boolean).join(', ');
     return { ...classifyUnresolvable(`ref not found: ${missing}`), ...facts };
   }
+  const askRef = resolved.ref;
 
-  const count = git.git(['rev-list', '--count', `${base}..${branch}`], repoAbs);
+  const count = git.git(['rev-list', '--count', `${base}..${askRef}`], repoAbs);
   facts.commitsAhead = count.ok ? parseInt(count.stdout, 10) || 0 : 0;
   // `diff --quiet` exits 0 when identical, 1 when they differ. Any other code is an error, and an
   // error must not read as "identical" — that is the direction that loses work.
-  const diff = git.git(['diff', '--quiet', base, branch], repoAbs);
+  const diff = git.git(['diff', '--quiet', base, askRef], repoAbs);
   facts.diffEmpty = diff.code === 0;
 
-  facts.containment = containmentOf(repoAbs, base, branch);
-  return { ...classify(facts), ...facts };
+  facts.containment = containmentOf(repoAbs, base, askRef);
+  const verdict = classify(facts);
+  if (resolved.viaRemote) {
+    verdict.why = `resolved "${branch}" → "${askRef}" (no local ref, but the remote one does) — ${verdict.why}`;
+  }
+  return { ...verdict, ...facts };
 }
 
 /**
@@ -179,4 +192,39 @@ function classifyUnresolvable(why) {
   return { state: 'unknown', method: 'none', why };
 }
 
-module.exports = { classify, landedState, hasCargo, containmentOf, CONTAINED, DIVERGED, UNKNOWN };
+/**
+ * Resolve `branch` against local refs first; fall back to `origin/<branch>` when the local ref is
+ * absent and the remote one resolves (#189).
+ *
+ * WHY THIS EXISTS: every other surface in this toolchain — worktree records, `git branch -r`
+ * stripped of its remote, `colab`'s own tables — hands this module a BARE name, never an
+ * `origin/`-qualified one. For a branch that only ever reached the remote (pushed, then the local
+ * ref pruned or never fetched), the bare name used to resolve to nothing and report `ref not found`
+ * — the one form that gave a useless answer, in exactly the sweep this fallback exists for: stale
+ * REMOTE branches, where that is every candidate.
+ *
+ * Never fires for a name that already names a remote explicitly (`origin/...`, `refs/...`) —
+ * resolving THAT further would silently answer about a third ref the caller never asked for. A
+ * genuinely missing ref (absent both locally and on `origin`) keeps its current honest `ref not
+ * found` — this only widens which local absence still has an answer.
+ *
+ * Returns `{ ok, ref, viaRemote }`. `ref` is the one to actually run git against; `viaRemote` is
+ * true only when the fallback fired, so the caller can say — in the verdict, not just in this
+ * function — that the answer came from the remote ref, not the one named.
+ */
+function resolveBranchRef(repoAbs, branch) {
+  if (typeof branch !== 'string' || !branch) return { ok: false, ref: branch, viaRemote: false };
+  if (git.git(['rev-parse', '--verify', '--quiet', branch], repoAbs).ok) {
+    return { ok: true, ref: branch, viaRemote: false };
+  }
+  if (branch.startsWith('origin/') || branch.startsWith('refs/')) {
+    return { ok: false, ref: branch, viaRemote: false }; // already remote-qualified — no further guessing
+  }
+  const remoteRef = `origin/${branch}`;
+  if (git.git(['rev-parse', '--verify', '--quiet', remoteRef], repoAbs).ok) {
+    return { ok: true, ref: remoteRef, viaRemote: true };
+  }
+  return { ok: false, ref: branch, viaRemote: false };
+}
+
+module.exports = { classify, landedState, hasCargo, containmentOf, resolveBranchRef, CONTAINED, DIVERGED, UNKNOWN };
