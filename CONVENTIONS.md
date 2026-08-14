@@ -82,7 +82,7 @@ benefit, and `main` becomes a branch nobody trusts. Write the suite first, then 
 |---|---|---|---|
 | Has production | no | yes | yes |
 | Gates between merge and users | 0 | 1 | 2 |
-| Trunk (where sessions merge) | `main` | `dev` | `dev` — or `main`, tag-gated¹ |
+| Trunk (where sessions merge) | `main` | `dev`² | `dev` — or `main`, tag-gated¹ |
 | Release branch | — | `main` (= what is live) | `main` |
 | CI on trunk | fast | fast | fast |
 | CI on `main` | — | full suite | full suite |
@@ -92,6 +92,14 @@ benefit, and `main` becomes a branch nobody trusts. Write the suite first, then 
 ¹ A tag-gated Tier A (`deploy: tag`) may collapse the split and run a single trunk
 `main`: the tag marks the release boundary, so the second branch is redundant —
 see *tag-gated Tier A* below.
+
+² Tier C's trunk is a **declared setting, not a fixed spelling**. What the audit
+validates is the two-branch split — trunk must be a branch distinct from `main`,
+the release branch the promotion deploys — never the letters. `dev` is the
+default: it is what `colab adopt` and the templates propose when nothing is
+said. A repo declaring another name (`develop`, say) is **conforming, not
+exempted**: same two branches, same promotion, same gate count, so nothing the
+tier model measures changes when the name does (#205).
 
 **A, B and C are labels, not grades.** `B` has no production at all — it cannot break
 anything for users, because it has none. The letters name *shapes*, not seriousness.
@@ -144,9 +152,14 @@ the usual fix is **retiering to C** — no pipeline change, the descriptor stops
 a gate it never had. Migrating to `deploy: tag`, or declaring `deploy: manual` +
 `runbook:`, remain valid alternatives when the site has genuinely earned them.
 
-**"Trunk" is a role, not a branch name** — the branch sessions merge into: `main` in Tier
-B, `dev` in Tier C, `dev` or (tag-gated) `main` in Tier A. Read `project.yml` to learn
-which. Never create a branch literally named `trunk` — and never *record* the word
+**"Trunk" is a role, not a branch name** — the branch sessions merge into, declared in
+`project.yml`'s `trunk:` field: `main` in Tier B (fixed — there is no second branch to
+distinguish it from); a name **distinct from `main`** in Tier C, `dev` by default but any
+other name equally conforming (the footnote above states why); `dev` or (tag-gated)
+`main` in Tier A. Read `project.yml` to learn which. **"Any name is legal" is not what
+this licenses** — on Tier B and (outside the tag-gated exception) Tier A the value is
+still fixed; only Tier C's split is about the *shape*, not the *spelling*. Never create a
+branch literally named `trunk` — and never *record* the word
 either. Measured: a session's record read `branch: "trunk"`; the merge tool matched
 claims **by branch name**, found none, and squashed anyway — no `Closes #N`, the same
 26-of-30 failure below reached by a different path. **The absence of a branch is null,

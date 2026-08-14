@@ -132,6 +132,22 @@ test('legacy tier: C, no exposure — clean when the C mechanism is satisfied, e
   assert.ok(!hasText(r.fails, /tier C/), r.fails.join(' | '));
 });
 
+// #205: tier C's trunk check validates the two-branch SPLIT, not the "dev" spelling — a
+// declared name other than "dev" is conforming, not a finding, as long as it is not "main"
+// (the release branch the promotion deploys to).
+test('#205: legacy tier: C with a NON-"dev" trunk name is clean, as long as it is not "main"', () => {
+  const yml = `tier: C\ntrunk: develop\nproduction: https://example.invalid\ndeploy: push-main\nstack: node\n`;
+  const r = audit(fixture({ projectYml: yml, extraBranches: ['develop'], files: DEPLOY_WF, checkout: 'develop' }));
+  assert.strictEqual(r.axisOfRecord, 'tier-legacy');
+  assert.ok(!hasText(r.fails, /tier C/), r.fails.join(' | '));
+});
+
+test('#205: legacy tier: C with trunk "main" still fails — main is the release branch, collapsing the split', () => {
+  const yml = `tier: C\ntrunk: main\nproduction: https://example.invalid\ndeploy: push-main\nstack: node\n`;
+  const r = audit(fixture({ projectYml: yml, files: DEPLOY_WF }));
+  assert.ok(hasText(r.fails, /tier C requires trunk to be a branch distinct from "main"/), r.fails.join(' | '));
+});
+
 test('legacy tier: A, no exposure — clean when the A mechanism is satisfied, exactly as before #144', () => {
   const yml = `tier: A\ntrunk: dev\nproduction: https://example.invalid\ndeploy: tag\nstack: node\n`;
   const r = audit(fixture({ projectYml: yml, extraBranches: ['dev'], files: DEPLOY_WF, checkout: 'dev' }));
@@ -189,9 +205,10 @@ test('tier: B + exposure: live yields no letter finding, only the mechanism find
   const yml = `tier: B\ntrunk: main\nproduction: null\ndeploy: none\nstack: node\nexposure: live\n`;
   const r = audit(fixture({ projectYml: yml }));
   assert.ok(!hasText(r.fails, /disagree/), r.fails.join(' | '));
-  // The mechanism finding: `live` requires trunk dev, a production URL, deploy: push-main
-  // and a deploy workflow, none of which this fixture has.
-  assert.ok(hasText(r.fails, /exposure: live requires trunk "dev"/), r.fails.join(' | '));
+  // The mechanism finding: `live` requires a trunk distinct from "main", a production URL,
+  // deploy: push-main and a deploy workflow, none of which this fixture has (trunk here is
+  // "main" itself — #205: the check is the two-branch split, not the "dev" spelling).
+  assert.ok(hasText(r.fails, /exposure: live requires trunk to be a branch distinct from "main"/), r.fails.join(' | '));
 });
 
 // --------------------------------------------------------------------------------

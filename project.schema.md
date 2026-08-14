@@ -96,9 +96,26 @@ tier-legacy path"). Read `trunk`/`production`/`deploy` below as the **legacy** s
 
 ### `trunk` — required
 
-The branch sessions merge into. Must be `dev` when `tier: C`; `main` when
-`tier: B`. On `tier: A` it is `dev` **or**, when `deploy: tag`, `main` (see the
-exception below). Any other value is a finding.
+The branch sessions merge into. `main` when `tier: B` — fixed, there is no
+second branch to distinguish it from. On `tier: A` it is `dev` **or**, when
+`deploy: tag`, `main` (see the exception below) — also fixed, for the same
+reason as B outside that one exception. Any other value on B or (outside the
+tag-gated exception) A is a finding.
+
+**On `tier: C`, `trunk` is a declared setting, not a fixed spelling (#205).**
+What is enforced is the **two-branch split**, not the name: `trunk` must be a
+branch distinct from `main`, the release branch the promotion deploys to.
+`dev` is the **default** — the value `colab adopt` and the templates propose
+when nothing is said — but a repo that declares a different name (`develop`,
+say) is **conforming, not exempted**: no advisory, no "legacy" framing. It
+answered the question the same way `dev` would have. This is deliberately
+narrower than "any name is legal" — Tier B and (non-tag-gated) Tier A keep a
+single fixed value each, because there either is no second branch at all, or
+the tag itself already marks the release boundary. Only the one-gate shape
+(Tier C) has a second branch whose *existence*, not its *spelling*, is what the
+model measures. `tools/lib/exposure-shape.js`'s `evaluateLive` and
+`audit/audit.mjs`'s tier-C coherence check are the two places this is enforced;
+they agree by construction, not by two authors reading the same prose.
 
 This holds for hand-deployed Tier A repos too (`deploy: manual`), and the shape
 earns its keep there rather than being ceremony: `main` is **what is currently
@@ -107,9 +124,10 @@ promotion is the deliberate "I am about to deploy" act. Without automation,
 that merge is the only record of what shipped and when — collapsing the two
 branches would erase it.
 
-Tier C keeps the identical split for the identical reason. There `main` is
-literally what is live — the promotion deploys it — so collapsing the branches
-would remove the only moment at which anyone decides to ship.
+Tier C keeps the identical split for the identical reason, whatever its trunk
+is named. There `main` is literally what is live — the promotion deploys it —
+so collapsing the branches would remove the only moment at which anyone
+decides to ship.
 
 **The exception: a tag-gated Tier A may run a single trunk `main`.** When
 `deploy: tag`, the **tag** is the deliberate release artifact, so the tag itself
@@ -428,9 +446,11 @@ disagree):
 - `self` — **no mechanism or contract rule at all, not even trunk shape.** Its consumer
   set is a subset of the room's ([`room`](#room--optional)), so policing its
   deploy/production/trunk shape is out of scope by design.
-- `live` — `trunk: dev`, a non-null `production`, `deploy: push-main`, and a committed
-  `deploy-*.yml` workflow. Keeps the old tier C contract's no-runbook asymmetry: there is
-  **no `runbook:` escape hatch** for `live` — a deploy workflow must actually exist.
+- `live` — `trunk` distinct from `main` (the two-branch split, `dev` by default — see
+  [`trunk`](#trunk--required); NOT a fixed spelling, #205), a non-null `production`,
+  `deploy: push-main`, and a committed `deploy-*.yml` workflow. Keeps the old tier C
+  contract's no-runbook asymmetry: there is **no `runbook:` escape hatch** for `live` — a
+  deploy workflow must actually exist.
 - `released` — **two legal shapes, told apart by whether `production` is set.**
   - **Shape 1 — `production` non-null.** Mirrors the old tier A contract: `deploy` must be
     `tag` or `manual` (never `push-main` — every push reaching users with no release

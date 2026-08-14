@@ -1239,8 +1239,14 @@ function auditRepo(target, ctx) {
           : `tier A requires trunk "dev", found ${JSON.stringify(trunk)} — only a tag-gated A (deploy: tag) may run a single trunk "main"`);
       }
       if (tier === "B" && trunk !== "main") fail(`tier B requires trunk "main", found ${JSON.stringify(trunk)}`);
-      // C uses A's two-branch split: main = what is live, dev = where sessions land.
-      if (tier === "C" && trunk !== "dev") fail(`tier C requires trunk "dev", found ${JSON.stringify(trunk)} — C uses the same split as A (main = what is live, dev = where sessions land)`);
+      // C uses A's two-branch split: main = what is live, trunk = where sessions land. #205:
+      // this validates the SPLIT, not the spelling — trunk is a declared setting (default
+      // "dev", proposed by colab adopt and the templates), never required to literally be
+      // "dev". The one thing that must hold is that trunk is NOT main itself, since main is
+      // the release branch the promotion deploys — collapsing the two would remove the only
+      // moment anyone decides to ship. A declared name other than "dev" is conforming, not
+      // exempted (CONVENTIONS.md §2, project.schema.md "trunk — required").
+      if (tier === "C" && (!trunk || trunk === "main")) fail(`tier C requires trunk to be a branch distinct from "main" (the release branch the promotion deploys), found ${JSON.stringify(trunk)} — "dev" is the default trunk name; any other declared name is equally conforming (CONVENTIONS.md §2)`);
     }
   }
 

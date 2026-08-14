@@ -76,7 +76,7 @@ test('live: each of the four requirements fires its OWN entry, and the audit\'s 
   const good = { trunk: 'dev', hasProduction: true, deploy: 'push-main', hasDeployWorkflow: true };
   const wrongTrunk = evaluateExposure('live', { ...good, trunk: 'main' });
   assert.deepStrictEqual(kinds(wrongTrunk), ['fail']);
-  assert.match(wrongTrunk[0].message, /exposure: live requires trunk "dev"/);
+  assert.match(wrongTrunk[0].message, /exposure: live requires trunk to be a branch distinct from "main"/);
 
   const noProduction = evaluateExposure('live', { ...good, hasProduction: false });
   assert.deepStrictEqual(kinds(noProduction), ['fail']);
@@ -89,6 +89,21 @@ test('live: each of the four requirements fires its OWN entry, and the audit\'s 
   const noWorkflow = evaluateExposure('live', { ...good, hasDeployWorkflow: false });
   assert.deepStrictEqual(kinds(noWorkflow), ['fail']);
   assert.match(noWorkflow[0].message, /exposure: live but no \.github\/workflows\/deploy-\*\.yml/);
+});
+
+// #205: the trunk rule is the two-branch split, not the "dev" spelling — a repo declaring a
+// different name, distinct from "main", is conforming, not exempted.
+test('live: a trunk NAMED SOMETHING OTHER THAN "dev" is clean, as long as it is not "main"', () => {
+  const good = { trunk: 'develop', hasProduction: true, deploy: 'push-main', hasDeployWorkflow: true };
+  assert.deepStrictEqual(evaluateExposure('live', good), []);
+});
+
+test('live: an undeclared trunk (null/undefined) still fails — the split needs a name to compare against "main"', () => {
+  const base = { hasProduction: true, deploy: 'push-main', hasDeployWorkflow: true };
+  for (const trunk of [null, undefined, '']) {
+    const r = evaluateExposure('live', { ...base, trunk });
+    assert.ok(r.some((e) => e.kind === 'fail' && /exposure: live requires trunk to be a branch distinct from "main"/.test(e.message)), JSON.stringify(r));
+  }
 });
 
 test('live: every requirement wrong at once is four independent entries', () => {
