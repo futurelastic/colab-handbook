@@ -7,10 +7,15 @@ that one ever disagree, `CONVENTIONS.md` wins — and report the discrepancy.
 
 ## Before touching anything
 
-1. Read the repo's `.github/project.yml`. It tells you `tier`, `trunk`,
-   `production`, `deploy`, `stack`, and possibly toolchain pins.
-   - **File missing?** Treat the repo as Tier B with trunk `main`, say so in
-     your report, and propose adding the file. Do not invent a tier.
+1. Read the repo's `.github/project.yml`. It tells you `trunk` (and the legacy
+   `tier`, when that's all a repo declares), `production`, `deploy`, `stack`,
+   and possibly toolchain pins. `trunk:`'s value is the branch you branch off
+   in step 4 — the tier letter only ever correlates with it, it never decides
+   it.
+   - **File missing, or neither `trunk:` nor any axis of record (`exposure` or
+     `tier`) declared at all?** That is the one hard failure. Do not assume
+     Tier B/trunk `main` — propose it, say so in your report, and propose
+     adding the file. Never invent a tier or a trunk.
 2. `gh issue list --label in-progress` — anything listed is someone else's.
    Do not take it.
 3. Claim your issue **before** starting, not when finishing:
@@ -18,33 +23,53 @@ that one ever disagree, `CONVENTIONS.md` wins — and report the discrepancy.
 
 ## Hard rules — each one exists because we measured the failure
 
-- **There are three tiers, and they are labels, not grades.** They count the
-  gates between a merge and users:
-  - **B** — no production. 0 gates. Trunk `main`.
-  - **C** — live; the `dev` → `main` promotion **is** the deploy. 1 gate.
-    Trunk `dev`, `deploy: push-main`.
-  - **A** — live; promotion verifies and a **tag** deploys. 2 gates. Trunk `dev`
-    — **or `main`** when `deploy: tag`: the tag marks the release boundary, so a
-    single-trunk `main` (no `dev`) is allowed for tag-gated A, and only for it.
+- **`exposure` is the axis of record for gate count; `tier`'s three letters are
+  a legacy read of it, not a second opinion.** `exposure` names what actually
+  consumes a merge to a repo: nothing (`none`), only parties already in the
+  room (`self`), users via the promotion (`live`), or users/adopters via a
+  deliberate artifact — a tag, a runbook (`released`). Gate count follows:
+  `none`/`self` → 0, `live` → 1, `released` → 2.
+  - `none` / `self` (legacy Tier B) — no production, or nothing outside the
+    room consumes a merge. Trunk `main`.
+  - `live` (legacy Tier C) — the `dev` → `main` promotion **is** the deploy.
+    1 gate. Trunk `dev`, `deploy: push-main`.
+  - `released` (legacy Tier A) — a deliberate artifact, usually a **tag**,
+    deploys. 2 gates. Trunk `dev` — **or `main`** when `deploy: tag`: the tag
+    marks the release boundary, so a single-trunk `main` (no `dev`) is allowed
+    for a tag-gated `released` repo, and only for it.
 
-  C is A minus the tag. It is *not* "worse than B" — B has no production at all.
-  Never treat a tier as a quality score, and never "upgrade" a repo's tier to be
-  helpful.
+  `live` is `released` minus the tag. It is *not* "worse than" `none`/`self` —
+  those have no production at all. These are labels, not grades. Never treat
+  either axis as a quality score, and never "upgrade" a repo's exposure (or its
+  legacy tier) to be helpful.
+
+  **Where a descriptor declares only `tier`**, read it exactly as the code does
+  (`tools/lib/axis-authority.js`): `A → released`, `C → live`, `B → null` — a
+  bare `tier: B` carries **no** derivable opinion about what consumes it, so
+  never guess `none` vs `self` vs `released` for one; this fleet has all three
+  measured under `B` today. Declaring **neither** key is the one hard failure
+  ("no axis of record") — propose adding one in your report, never invent it.
 - **Never create a branch named `trunk`.** "Trunk" is a role: the branch
-  sessions merge into. It is `main` (Tier B) or `dev` (Tiers A and C). Read
-  `project.yml` to learn which.
+  sessions merge into — the value of `trunk:` in `project.yml`, full stop.
+  `main` on Tier B, `dev` on Tier C and the ordinary Tier A, or `main` on a
+  tag-gated Tier A (`deploy: tag`) are what today's fleet declares there; the
+  tier letter is only ever a legacy correlate of the value — it never decided
+  it. Read the field, not the letter.
 - **Never create a `dev` branch in a Tier B repo** — not even "to be ready".
   A release branch nothing consumes decays into noise (we have one 76 commits
-  stale to prove it). Changing tier is a deliberate checklist
-  ([§9](CONVENTIONS.md#9-adopting-this)), not a side effect.
+  stale to prove it). Changing exposure (or the legacy tier) is a deliberate
+  checklist ([§9](CONVENTIONS.md#9-adopting-this)), not a side effect.
 - **An imminent launch does not make a repo live.** The test is: does a
   deploy target exist *today*? Deploying **by hand** does not make a repo
-  Tier B — a live repo that ships by rsync or `docker compose` is Tier A with
-  `deploy: manual` and a `runbook:` path. `deploy:` says *how* it reaches
-  production, `tier:` says *whether* production exists and *what gates* it.
+  `exposure: none`/`self` (legacy Tier B) — a live repo that ships by rsync or
+  `docker compose` is `exposure: released` (legacy Tier A) with `deploy: manual`
+  and a `runbook:` path. `deploy:` says *how* it reaches production; `exposure:`
+  (or the legacy `tier:`) says *whether* production exists and *what gates* it.
 - **`tier: A` + `deploy: push-main` is a finding, and the fix is usually
-  `tier: C`** — same pipeline, honest descriptor. Report it; do not retier a
-  repo yourself unless that is the task you were given.
+  `tier: C`** — same pipeline, honest descriptor. The same mismatch exists on
+  the axis of record: `exposure: released` + `deploy: push-main` is a finding
+  too, fixed the same way — usually `exposure: live`. Report it; do not retier
+  (or re-expose) a repo yourself unless that is the task you were given.
 - Branch names: `^(feat|fix|docs|chore|refactor|test|perf)/[a-z0-9._-]+$`,
   ending in the issue number(s): `feat/onboard-redesign-23`, or for a group
   `fix/import-fixes-115-114-113`. Existing branches that violate this are
@@ -77,19 +102,31 @@ that one ever disagree, `CONVENTIONS.md` wins — and report the discrepancy.
 5. Release your claim: `gh issue edit <N> --remove-label in-progress`.
    Do this even if you didn't finish — a stale claim silently blocks others.
 
-## Releases — Tiers A and C, and not yours to perform
+## Releases — the ritual follows `exposure`, and none of it is yours to perform
 
-Promotion (`dev` → `main`, `--no-ff`, never squash) and tagging are performed
-by the human operator. **Your job ends with the trunk merge prepared and the
-Issue updated.** Prepare a release; do not perform one. If you believe a
-release is overdue (e.g. a production bug fix is merged but unreleased), say
-so explicitly in your report — that situation has bitten us in payroll.
+What comes after a trunk merge follows
+[`exposure`](CONVENTIONS.md#exposure--what-consumes-a-merge-here) — read the
+legacy `tier` value the same way when that is all a repo declares (`A →
+released`, `C → live`, `B → null`):
 
-**On Tier C the promotion *is* the deploy** — there is no tag afterwards, so
-that merge puts code in front of users immediately. It is therefore the most
-consequential thing in this file that an agent must never do unattended, not
-the least. `colab promote` requires `COLAB_HUMAN=1` there, and `promotion:
-main-loop` cannot apply (it is gated on `deploy: tag`).
+- **`released`** (legacy Tier A) — the tag is what ships it, human-only. Two
+  shapes, decided by `trunk:`, never by the legacy tier letter: `trunk: dev`
+  (the ordinary two-branch case) is promotion `dev` → `main` (`--no-ff`, never
+  squash) plus a `v*.*.*` tag; `trunk: main` (single-trunk, tag-gated) has no
+  promotion at all — the release is just the tag on `main`.
+- **`live`** (legacy Tier C) — the `dev` → `main` promotion **is** the deploy —
+  there is no tag afterwards, so that merge puts code in front of users
+  immediately. It is therefore the most consequential act in this file that an
+  agent must never do unattended, not the least. `colab promote` requires
+  `COLAB_HUMAN=1` there, and `promotion: main-loop` cannot apply (it is gated
+  on `deploy: tag`).
+- **`none` / `self`** (legacy Tier B) — there is no release ritual to be
+  separate from; the trunk merge is the whole act.
+
+**Your job ends with the trunk merge prepared and the Issue updated.** Prepare
+a release; do not perform one. If you believe a release is overdue (e.g. a
+production bug fix is merged but unreleased), say so explicitly in your report
+— that situation has bitten us in payroll.
 
 **One graduated exception — the trunk merge itself.** If the repo's
 `project.yml` says `autonomy: auto-trunk`, you may complete Phase B through
@@ -101,9 +138,9 @@ extends to promotion, tags, or anything that deploys — those are human on
 every repo, with no field that can say otherwise. `deploy: manual` is not a
 loophole: with no automated gate after the promotion, it is the *strictest*
 case, and `colab promote` requires a human there exactly as it does on
-`push-main`. Tier C is not a loophole either — `auto-trunk` there still only
-merges into `dev`, which does not deploy; the deploying step (promotion) stays
-human, as on every tier.
+`push-main`. `exposure: live` is not a loophole either — `auto-trunk` there
+still only merges into `dev`, which does not deploy; the deploying step
+(promotion) stays human, on every exposure value.
 
 ## Worktrees — the default, because the main checkout stays on trunk
 

@@ -662,26 +662,43 @@ through the tool alone left the plan file on disk with no journal line — that 
 closed; nothing here to do on that path.
 
 **Only if you merged by hand** (no `colab ship` — a repo without `autonomy:
-auto-trunk`), do the equivalent yourself. For **each** issue in the harvested set that
-had a plan file — check the main checkout, not the worktree, which this step may
-already be removing. `$MAIN_REPO` is `§0`'s resolved absolute path; re-derive it here
-if this step runs in a fresh shell that no longer has it (#113):
+auto-trunk`), do the equivalent yourself — resolved by **file, tested against the
+harvested set**, never by reconstructing `issue-$N.md` from one number at a time
+(#201's fix in `tools/colab`'s `shipJournalPlanFiles`, mirrored here rather than
+re-derived: a group session's plan file is named for the whole set,
+`issue-<A>-<B>-<C>.md`, so guessing the name from a single member number misses on
+every one of them — the loop completes silently, indistinguishable from the
+legitimate rung-0 "never had a plan" case). Check the main checkout, not the
+worktree, which this step may already be removing. `$MAIN_REPO` is `§0`'s resolved
+absolute path; re-derive it here if this step runs in a fresh shell that no longer
+has it (#113):
 
 ```sh
 MAIN_REPO="${MAIN_REPO:-$(dirname "$(git rev-parse --path-format=absolute --git-common-dir)")}"
-for N in <harvested issue numbers>; do
-  PLAN="$MAIN_REPO/.claude/plans/issue-$N.md"
+ISSUES="<harvested issue numbers, space-separated>"
+for PLAN in "$MAIN_REPO"/.claude/plans/issue-*.md; do
   [ -f "$PLAN" ] || continue
+  NUMS=$(basename "$PLAN" .md); NUMS=${NUMS#issue-}   # e.g. "12-14-15"
+  SUBSET=1
+  for N in $(echo "$NUMS" | tr '-' ' '); do
+    case " $ISSUES " in *" $N "*) ;; *) SUBSET=0; break;; esac
+  done
+  [ "$SUBSET" = 1 ] || continue   # not a subset — leave it untouched (#201): a partial
+                                  # overlap may be another session's live plan, or a
+                                  # wider group's file this ship only carries part of
   RUNG=$(sed -n 's/^rung: *//p' "$PLAN" | head -1)
   CAUSE=$(sed -n 's/^cause: *//p' "$PLAN" | head -1)
   mkdir -p "$(dirname ~/.colab/plan-journal.jsonl)"
   python3 -c '
 import json, sys, datetime
-n, rung, cause, verdict = sys.argv[1:5]
-print(json.dumps({
-    "ts": datetime.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
-    "issue": int(n), "rung": rung, "cause": cause, "verdict": verdict,
-}))' "$N" "${RUNG:-1}" "${CAUSE:-none}" "$GRADE_VERDICT" >> ~/.colab/plan-journal.jsonl \
+nums, rung, cause, verdict, out = sys.argv[1:6]
+ts = datetime.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+with open(out, "a") as f:
+    for n in nums.split("-"):
+        f.write(json.dumps({
+            "ts": ts, "issue": int(n), "rung": rung, "cause": cause, "verdict": verdict,
+        }) + "\n")
+' "$NUMS" "${RUNG:-1}" "${CAUSE:-none}" "$GRADE_VERDICT" ~/.colab/plan-journal.jsonl \
     && rm -f "$PLAN"
 done
 ```
@@ -689,14 +706,21 @@ done
 - **Machine-local, never the tracker.** `~/.colab/plan-journal.jsonl` never leaves this
   machine and is never committed — it is not a second source of truth about the feature,
   only a record of how the planning mechanism itself is being used.
-- **One line per issue that had a plan file**, not one per branch — a group branch can
-  carry several issues, and rung/cause are recorded per plan file, not per branch.
+- **One line per issue in the file's own number set**, not one per branch and not one
+  per file — a group branch can carry several issues behind one shared plan file, and
+  rung/cause are read from that file once and reused for every line it contributes,
+  since a shared plan file has one front matter, not one per issue.
+- **A file matches only when its whole number set is a subset of the harvested
+  issues.** No overlap means it belongs to unrelated work; a *partial* overlap still
+  means leave it alone — it may be another session's live plan, or a wider group's
+  file of which this ship only carries part. Acting on a partial match would journal
+  and delete a plan another session is still using.
 - **This is the one moment everything about the plan's life is known**: rung, cause
   (flagged vs self-escalated), and B1c's grade verdict. Weeks of this file answer rung
   frequencies, flag precision (flagged but the diff graded clean with no friction?), and
   flag recall (unflagged but a mid-session escalation caught it?) — the evidence to tune
   or retire the `needs-plan` mechanism. Nothing reads it automatically; a human greps it.
-- **Delete only after the journal line lands, and chain it — never split across
+- **Delete only after the journal line(s) land, and chain it — never split across
   statements.** The append and the `rm` are one `&&`-joined command, not two lines, because
   a compose that fails silently (wrong interpreter, a bad argument) must not let control
   reach the delete. This is `python3`, not `jq`, on purpose (#96): `jq` was pulled in for
@@ -707,8 +731,12 @@ done
   replaces: `jq` missing → the old `$(jq …)` command substitution failed, `printf` still
   wrote a bare newline (exit 0) into the journal, and the un-chained `rm -f "$PLAN"` on the
   next line still ran — the plan file was gone with no journal line to show for it.
-- **Delete only after the journal line lands**, and only issues with no plan file are a
-  silent no-op here — a rung-0 session never had one, and this loop skips it correctly.
+- **Chained per FILE, not per issue** — every line a file contributes is written in the
+  one append, and the delete follows only on success, so a failed write for one plan
+  file leaves that file in place without touching siblings already journalled.
+- **Delete only after the journal line lands**, and a harvested set with no matching
+  file at all is a silent no-op here — a rung-0 session never had one, and this loop
+  skips it correctly.
 
 ## B5. The release ritual — a SEPARATE act, and not yours
 
