@@ -4,11 +4,23 @@
 # is the single machine-readable answer to "what is this repo?", read by the copied
 # CI templates (for toolchain resolution) and by audit/audit.mjs (for conventions).
 #
-#   tier        A = has a production deploy target. B = does not.
-#   trunk       Branch feature work merges into. Tier A -> dev, tier B -> main.
-#   production  Live URL, or null. Tier A must set it; tier B must leave it null.
+#   tier        OPTIONAL, legacy. A = has a production deploy target. B = does not.
+#               `exposure` below is the axis of record where both are declared; this
+#               is read through it (tools/lib/axis-authority.js: A -> released, C ->
+#               live, B -> null — project.schema.md "tier — optional (legacy)").
+#   trunk       Branch feature work merges into — a declared setting, not a fixed
+#               spelling (project.schema.md "trunk — required"). Fixed to `main`
+#               where there is no production (tier B / exposure none|self). A branch
+#               distinct from `main` where the promotion itself is the deploy (tier C
+#               / exposure live) — `dev` is the default, any other name equally
+#               conforming, never a per-tier mapping. `dev`, or `main` when
+#               `deploy: tag`, where a tag gates production (tier A / exposure
+#               released).
+#   production  Live URL, or null. Must be set wherever a deploy target exists (tier
+#               A or C); null where none does (tier B).
 #   deploy      tag | manual | push-main | none. HOW production is reached, not
-#               whether it exists — that is tier's job. Tier B must be none.
+#               whether it exists — that is tier/exposure's job. `none` wherever no
+#               deploy target exists (tier B).
 #               `manual` (a human runs a documented procedure) also requires
 #               `runbook: <path>` naming that committed document.
 #   stack       FREE-FORM string. Describe the stack however reads best.

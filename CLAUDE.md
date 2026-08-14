@@ -31,8 +31,9 @@ that one ever disagree, `CONVENTIONS.md` wins — and report the discrepancy.
   `none`/`self` → 0, `live` → 1, `released` → 2.
   - `none` / `self` (legacy Tier B) — no production, or nothing outside the
     room consumes a merge. Trunk `main`.
-  - `live` (legacy Tier C) — the `dev` → `main` promotion **is** the deploy.
-    1 gate. Trunk `dev`, `deploy: push-main`.
+  - `live` (legacy Tier C) — the promotion into `main` **is** the deploy. 1
+    gate. Trunk a branch distinct from `main` — `dev` by default, any other
+    name equally conforming, never a fixed spelling. `deploy: push-main`.
   - `released` (legacy Tier A) — a deliberate artifact, usually a **tag**,
     deploys. 2 gates. Trunk `dev` — **or `main`** when `deploy: tag`: the tag
     marks the release boundary, so a single-trunk `main` (no `dev`) is allowed
@@ -51,10 +52,12 @@ that one ever disagree, `CONVENTIONS.md` wins — and report the discrepancy.
   ("no axis of record") — propose adding one in your report, never invent it.
 - **Never create a branch named `trunk`.** "Trunk" is a role: the branch
   sessions merge into — the value of `trunk:` in `project.yml`, full stop.
-  `main` on Tier B, `dev` on Tier C and the ordinary Tier A, or `main` on a
-  tag-gated Tier A (`deploy: tag`) are what today's fleet declares there; the
-  tier letter is only ever a legacy correlate of the value — it never decided
-  it. Read the field, not the letter.
+  `main` on Tier B (fixed — no second branch to distinguish it from); on
+  Tier C a branch distinct from `main` — `dev` by default, any other name
+  equally conforming, never a per-tier mapping; `dev` on the ordinary Tier A,
+  or `main` on a tag-gated Tier A (`deploy: tag`). The tier letter is only
+  ever a legacy correlate of the value — it never decided it. Read the field,
+  not the letter.
 - **Never create a `dev` branch in a Tier B repo** — not even "to be ready".
   A release branch nothing consumes decays into noise (we have one 76 commits
   stale to prove it). Changing exposure (or the legacy tier) is a deliberate
@@ -114,9 +117,10 @@ released`, `C → live`, `B → null`):
   (the ordinary two-branch case) is promotion `dev` → `main` (`--no-ff`, never
   squash) plus a `v*.*.*` tag; `trunk: main` (single-trunk, tag-gated) has no
   promotion at all — the release is just the tag on `main`.
-- **`live`** (legacy Tier C) — the `dev` → `main` promotion **is** the deploy —
-  there is no tag afterwards, so that merge puts code in front of users
-  immediately. It is therefore the most consequential act in this file that an
+- **`live`** (legacy Tier C) — the promotion into `main`, from whatever branch
+  `trunk:` declares (`dev` by default), **is** the deploy — there is no tag
+  afterwards, so that merge puts code in front of users immediately. It is
+  therefore the most consequential act in this file that an
   agent must never do unattended, not the least. `colab promote` requires
   `COLAB_HUMAN=1` there, and `promotion: main-loop` cannot apply (it is gated
   on `deploy: tag`).

@@ -88,11 +88,12 @@ cat .github/project.yml        # trunk, tier (legacy), production, deploy, stack
 ```
 
 - **`<trunk>` is the value of `trunk:` in the descriptor — full stop.** `main` on Tier
-  B, `dev` on Tier C and the ordinary Tier A, or `main` on a **tag-gated** Tier A
-  (`deploy: tag` collapses the two-branch split —
-  [§2](../../CONVENTIONS.md#2-tiers)) are what today's fleet declares there; the tier
-  letter is only ever a **legacy** correlate of the value — it never decided it. Read
-  the field, not the letter. Branch off it in step 4.
+  B (fixed); on Tier C a branch distinct from `main` — `dev` by default, any other
+  name equally conforming, never a fixed spelling; `dev` on the ordinary Tier A, or
+  `main` on a **tag-gated** Tier A (`deploy: tag` collapses the two-branch split —
+  [§2](../../CONVENTIONS.md#2-tiers)) — the tier letter is only ever a **legacy**
+  correlate of the value, it never decided it. Read the field, not the letter. Branch
+  off it in step 4.
 - **File missing, or neither `trunk:` nor any axis of record declared at all?** That
   is the one hard failure — a descriptor answering neither `exposure` nor the legacy
   `tier` ([§2, *Exposure*](../../CONVENTIONS.md#exposure--what-consumes-a-merge-here)).

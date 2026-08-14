@@ -13,10 +13,12 @@ different model tier.
 
 Notation: `$N` = the feature's Issue number · `<trunk>` = the branch sessions merge into
 — the value of `trunk:` in `.github/project.yml` ([§2](../../CONVENTIONS.md#2-tiers):
-`main` on Tier B, `dev` on Tier C and the ordinary Tier A, or `main` on a tag-gated Tier
-A) — the tier letter is only ever a **legacy** correlate of the value, it never decided
-it · `<base>` = **the branch this session ships into** — `<trunk>`, unless the worktree
-was cut from a declared `integration:` line, in which case it is that line.
+`main` on Tier B (fixed); on Tier C a branch distinct from `main` — `dev` by default,
+any other name equally conforming, never a fixed spelling; `dev` on the ordinary Tier A,
+or `main` on a tag-gated Tier A) — the tier letter is only ever a **legacy** correlate
+of the value, it never decided it · `<base>` = **the branch this session ships into**
+— `<trunk>`, unless the worktree was cut from a declared `integration:` line, in which
+case it is that line.
 
 **`ceremony: light`? B2b's evidence comment is skipped entirely** (the squash's
 `Closes #N` suffices) — project.schema.md#ceremony--optional. Every other step here —
