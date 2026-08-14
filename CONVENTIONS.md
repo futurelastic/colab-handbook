@@ -430,10 +430,32 @@ below is the fix — read it before granting anything to a `serial-*` repo:
 
 | constraint | `serial-direct` | `serial-gated` | `isolated` |
 |---|---|---|---|
-| `autonomy: auto-trunk` | **forbidden** (rule 5, Solo flow, below) | allowed | allowed |
+| `autonomy: auto-trunk` | allowed — governs the branch-merge fallback only (rule 5, Solo flow, below) | allowed | allowed |
 | place-claim needed | yes | yes | no — the worktree already is the isolation |
 | branch | optional (mandatory only per the two conditions below) | required per the two conditions below | always |
 | `ceremony: light` + `autonomy: auto-trunk` | — | **forbidden** (above) | **forbidden** (above) |
+
+**`auto-trunk` was marked forbidden for `serial-direct` until #224; that reading was too
+broad, and the correction is worth carrying forward so it is not re-derived.** The old
+cell assumed `serial-direct` means a repo never produces a branch, so nothing would exist
+for `auto-trunk` to merge — granting it could only mean an unattended trunk-direct commit
+with none of solo flow's start-side rails. That assumption does not hold: `writes:
+serial-direct` means solo flow is *available*, not that every unit runs through it. Solo
+flow's own entry gate (rule 1, below) refuses outright whenever it cannot prove nobody
+else is colliding — a live worktree, a held claim, an unpushed branch, a dirty tree — and
+on refusal the session falls back to full ceremony: claim, branch, worktree, merge. A
+`serial-direct` repo therefore does produce branches that need merging, on the days solo
+flow's entry gate refuses, and from that point on it is indistinguishable from
+`serial-gated`.
+
+The hazard the old cell protected against — an unattended merge with no branch, no claim,
+no worktree — is not reachable through `colab ship` on **any** `writes` value: `ship`
+merges a *branch*, and a solo-flow trunk-direct commit never produces one; a raw push to
+trunk is blocked by hook regardless of `writes` or `autonomy`. So the prohibition belongs
+to the act (a solo-flow trunk-direct commit, which an `auto-trunk` grant has no power over
+— there is nothing for `ship` to act on), not to the declared value. `auto-trunk` on a
+`serial-direct` repo governs exactly what it governs on `serial-gated`: the branch-merge
+path, gated identically.
 
 `serial` **remains valid, as a legacy alias of `serial-direct`** — no adopter's descriptor
 breaks on this split. `tools/lib/writes-authority.js` is the one resolver both the audit and
@@ -500,14 +522,17 @@ with no other session to protect against — the start-side invariants exist to 
    claim, though it releases any place-claim it took.
 5. **Solo flow's own invariants, never relaxed even here** — this list is scoped to solo
    flow itself, not to every `serial-*` repo (`serial-gated` is a separate cell with its own
-   row in the constraint matrix above, and is NOT bound by the one item below that reads
-   broadest): CI secret scan · reserved ports · Conventional Commits · **`autonomy:
-   auto-trunk` is forbidden for a `serial-direct`/solo-flow repo specifically** (the matrix's
-   own `serial-direct` row states the same fact; this is the one place a reader stopping
-   here gets the right answer without reading further) · no scheduled driver (doubly
-   incompatible — a driver planning against a repo reads its Issues, and a solo repo may
-   have none open at all). `production: null` is **not** on this list — `writes: serial-*`
-   is deliberately not coupled to production (above), so a live repo may run solo flow.
+   row in the constraint matrix above): CI secret scan · reserved ports · Conventional
+   Commits · no scheduled driver (doubly incompatible — a driver planning against a repo
+   reads its Issues, and a solo repo may have none open at all). `production: null` is
+   **not** on this list — `writes: serial-*` is deliberately not coupled to production
+   (above), so a live repo may run solo flow. **Nor, since #224, is `autonomy: auto-trunk`**
+   — a solo-flow trunk-direct commit produces no branch, so a grant has nothing to act on
+   while flow 2 (trunk-direct commits) is what's running; the grant governs only the branch
+   this repo falls back to producing whenever rule 1's entry gate refuses, at which point
+   `colab ship`'s ordinary branch-merge gate applies, identical to `serial-gated` (the
+   matrix above states the same fact; this is the one place a reader stopping here gets the
+   right answer without reading further).
 
 **One more shape a `writes: serial-direct` repo can have, spelled out in
 [Channels](#channels--by-what-path-does-code-reach-the-thing-that-runs-it) below: where the

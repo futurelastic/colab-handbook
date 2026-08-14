@@ -714,15 +714,26 @@ the second concluded the opposite of the truth:
 
 | constraint | `serial-direct` | `serial-gated` | `isolated` |
 |---|---|---|---|
-| `autonomy: auto-trunk` | **forbidden** (`CONVENTIONS.md`, *Solo flow*, rule 5) | allowed | allowed |
+| `autonomy: auto-trunk` | allowed — governs the branch-merge fallback only (`CONVENTIONS.md`, *Solo flow*, rule 5) | allowed | allowed |
 | place-claim needed | yes | yes | no (the worktree already is the isolation) |
 | branch | optional — only when a unit is mandatory (below) | required when a unit is mandatory (below) | always |
 | `ceremony: light` + `autonomy: auto-trunk` | — (solo flow does not combine with an unattended-merge grant) | **forbidden** | **forbidden** |
 
-`serial-direct` is the ONLY value the `auto-trunk` prohibition names. Granting it to a
-repo that has actually declared `serial-gated` is not merely undocumented — it is the
-misgrant #208 measured happening in practice, because a reader who only reached *Solo
-flow*, rule 5 could not tell the two methods apart.
+**Until #224, the `auto-trunk` row read `forbidden` for `serial-direct`; that was too
+broad, and #208's original worry — a misgrant nobody could tell apart from
+`serial-gated`'s cell — no longer applies, because both cells now read the same.** The
+old reasoning assumed `serial-direct` means the repo never produces a branch, so an
+`auto-trunk` grant could only mean an unattended trunk-direct commit with none of solo
+flow's start-side rails. `writes: serial-direct` means solo flow is *available*, not that
+every unit runs through it: solo flow's entry gate refuses whenever it cannot prove no
+collision (a live worktree, a held claim, an unpushed branch, a dirty tree), and on
+refusal the session falls back to full ceremony — claim, branch, worktree, merge. By the
+time that branch exists, it is indistinguishable from `serial-gated`, and the hazard the
+old cell protected against — an unattended merge with no branch, no claim, no worktree —
+was never reachable through `colab ship` on any `writes` value: `ship` merges a *branch*,
+a solo-flow trunk-direct commit never produces one, and a raw push to trunk is blocked by
+hook regardless. The prohibition belonged to the act, not the declared value; see
+`CONVENTIONS.md`, *Writes*, for the argument in full.
 
 **`writes` says which of those a repo's sessions may use by default; it does NOT say
 whether any given unit of work branches** — that stays a per-unit choice inside whichever
@@ -738,27 +749,34 @@ false by construction at the moment a solo session starts.
 `serial` predates the split and stays declarable — no adopter's descriptor breaks on this
 change. `tools/lib/writes-authority.js` is the ONE shared resolver (the audit and `colab
 adopt` both read it, the same split `tools/lib/axis-authority.js` draws for `tier` →
-`exposure`), and it resolves the alias to `serial-direct` for two reasons, not one:
+`exposure`), and it resolves the alias to `serial-direct` — historically for two reasons;
+#224 retired the second, so the first now carries the resolution alone:
 
 1. **Byte-identical preservation.** Every repo declaring bare `serial` today is
    solo-flow-eligible (`soloEligibility`, `tools/lib/solo.js`) — including this handbook's
    own descriptor, whose comment states outright that `writes: serial` "is what lets solo
    flow's entry gate open here" (see this file's own `.github/project.yml`). Resolving the
    alias to `serial-gated` instead would silently revoke that for every such repo the
-   moment this axis lands — the opposite of "no adopter's descriptor breaks."
-2. **The conservative reading on the one property that is actually dangerous.** A bare
-   `serial` repo staying read as `serial-direct` stays read as a repo that must NEVER
-   receive `autonomy: auto-trunk`. Resolving it to `serial-gated` would instead move it
-   into the constraint matrix's `allowed` cell for a value nobody has re-examined —
-   exactly the wrong direction for an alias.
+   moment this axis lands — the opposite of "no adopter's descriptor breaks." This reason
+   still holds and is sufficient on its own.
+2. ~~**The conservative reading on the one property that is actually dangerous.**~~
+   **Retired by #224.** This reason cited the constraint matrix's old `auto-trunk` cell,
+   which read `forbidden` for `serial-direct` and `allowed` for `serial-gated` — so
+   resolving the alias toward `serial-gated` looked like it would move a repo into a
+   forbidden-vs-allowed cell nobody had re-examined. #224 corrected that cell to `allowed`
+   for both methods (*Writes*, above): `auto-trunk` was never actually gated on
+   `serial-direct` vs `serial-gated`, only on whether a branch exists to `ship`. Resolving
+   toward `serial-gated` no longer changes a repo's `auto-trunk` posture at all — reason 1
+   is what protects the alias now.
 
-**Reclassifying an EXISTING repo's descriptor from `serial` to `serial-gated` is a human
-decision, made per repo, never inferred by a tool.** The trap runs the other way from what
-intuition suggests: `serial-gated` reads as the *safer*, more-conservative choice (it keeps
-the branch), but assigning it automatically to a repo that is actually running trunk-direct
-would move that repo into the `auto-trunk`-eligible cell it must never occupy. Migrating a
-descriptor off the alias, once true of a given repo, is exactly that: a fact somebody
-checks and writes down, not a bulk edit.
+**Reclassifying an EXISTING repo's descriptor from `serial` to `serial-gated` is still a
+human decision, made per repo, never inferred by a tool** — but the reason has narrowed to
+what reason 1 above protects. `serial-gated` forbids solo flow outright (a declared
+pre-merge gate is exactly what solo flow has none of) and makes a branch mandatory on
+every unit, not only the two conditions that apply to `serial-direct`; assigning it
+automatically to a repo that is actually running trunk-direct would silently take solo
+flow away from a repo counting on it. Migrating a descriptor off the alias, once true of a
+given repo, is exactly that: a fact somebody checks and writes down, not a bulk edit.
 
 **Deliberately not coupled to `tier`, `production`, or exposure.** A busy repo with three
 concurrent sessions needs isolation regardless of whether it has a production deploy; a
