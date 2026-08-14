@@ -546,8 +546,10 @@ issues carried and, per label, checks whether any issue anywhere still carries i
 → left exactly as it was, because it still binds the remainder. Nothing here to do on
 that path — it runs automatically, after the evidence comments in B2b.
 
-**Only if you merged by hand** (no `colab ship` — a repo without `autonomy:
-auto-trunk`), do the equivalent yourself, once B2 has pushed:
+**Only if `colab` isn't available in this repo** (no `tools/colab` to run `colab
+ship` with — a repo lacking `autonomy: auto-trunk` still has the tool, a human just
+triggers it instead of the tool running unattended), do the equivalent yourself,
+once B2 has pushed:
 
 ```sh
 for GL in $(gh issue view $N --json labels -q '.labels[].name' | grep '^group:'); do
@@ -663,8 +665,10 @@ to be a step only this shell snippet performed (#115: verified zero matches for
 through the tool alone left the plan file on disk with no journal line — that gap is
 closed; nothing here to do on that path.
 
-**Only if you merged by hand** (no `colab ship` — a repo without `autonomy:
-auto-trunk`), do the equivalent yourself — resolved by **file, tested against the
+**Only if `colab` isn't available in this repo** (no `tools/colab` to run `colab
+ship` with — a repo lacking `autonomy: auto-trunk` still has the tool, a human just
+triggers it instead of the tool running unattended), do the equivalent yourself —
+resolved by **file, tested against the
 harvested set**, never by reconstructing `issue-$N.md` from one number at a time
 (#201's fix in `tools/colab`'s `shipJournalPlanFiles`, mirrored here rather than
 re-derived: a group session's plan file is named for the whole set,
