@@ -22,7 +22,7 @@ const os = require('os');
 const path = require('path');
 const { execFileSync } = require('child_process');
 
-const { classify, landedState, hasCargo, CONTAINED, DIVERGED, UNKNOWN } = require('./landed.js');
+const { classify, landedState, hasCargo, resolveBranchRef, CONTAINED, DIVERGED, UNKNOWN } = require('./landed.js');
 
 // --- fixture builder --------------------------------------------------------
 
@@ -46,6 +46,17 @@ function repo() {
   write('README', 'base\n');
   commit('chore: base');
   return { dir, g, write, commit };
+}
+
+/** Like `repo()`, but with a real bare `origin` the work tree can push branches to (#189). */
+function repoWithOrigin() {
+  const r = repo();
+  const bare = fs.mkdtempSync(path.join(os.tmpdir(), 'landed-origin-'));
+  TMP.push(bare);
+  execFileSync('git', ['init', '-q', '--bare', bare], { encoding: 'utf8' });
+  r.g('remote', 'add', 'origin', bare);
+  r.g('push', '-q', 'origin', 'dev');
+  return r;
 }
 
 // --- the case the naive commit-count rule gets wrong ------------------------
@@ -171,6 +182,86 @@ test('a missing ref is unknown, not landed', () => {
   const v = landedState(r.dir, 'dev', 'feat/never-existed-9');
   assert.strictEqual(v.state, 'unknown');
   assert.strictEqual(hasCargo(v), true);
+});
+
+// --- #189: a bare branch name resolves against origin when only the remote has it ------------
+//
+// Measured cost: `colab landed --branch <name>` reported `ref not found` for every branch a sweep
+// of stale REMOTE branches turned up, because the bare form — the one every other surface in this
+// toolchain hands over — was never checked against `origin/<name>`. The same branch answered fine
+// as `origin/<name>`. These four cases are the narrowed scope from the issue: local-ref-present is
+// unchanged, remote-only now resolves (and says so), a genuine absence stays honestly unanswered,
+// and an already-`origin/`-qualified name is never re-guessed.
+
+test('#189: bare name with a local ref resolves locally — unchanged, no fallback reported', () => {
+  const r = repoWithOrigin();
+  r.g('checkout', '-q', '-b', 'feat/both-10');
+  r.write('both.txt', 'x\n'); r.commit('feat: both');
+  r.g('push', '-q', 'origin', 'feat/both-10');
+  r.g('checkout', '-q', 'dev');
+
+  const v = landedState(r.dir, 'dev', 'feat/both-10');
+  assert.strictEqual(v.branch, 'feat/both-10', 'a local ref must win — never silently switched to origin/...');
+  assert.strictEqual(v.state, 'cargo');
+  assert.ok(!/resolved/.test(v.why), 'why must not claim a resolution that never happened');
+});
+
+test('#189: bare name with only a remote ref now answers, and names the ref that answered', () => {
+  const r = repoWithOrigin();
+  r.g('checkout', '-q', '-b', 'feat/remote-only-11');
+  r.write('remote.txt', 'x\n'); r.commit('feat: remote only');
+  r.g('push', '-q', 'origin', 'feat/remote-only-11');
+  r.g('checkout', '-q', 'dev');
+  r.g('branch', '-D', 'feat/remote-only-11'); // simulate "pushed elsewhere, never fetched/kept here"
+
+  const v = landedState(r.dir, 'dev', 'feat/remote-only-11');
+  assert.strictEqual(v.branch, 'origin/feat/remote-only-11',
+    'facts.branch must be the ref that actually answered, not the bare name asked for');
+  assert.match(v.why, /resolved "feat\/remote-only-11" → "origin\/feat\/remote-only-11"/,
+    'the why must say the answer came from the remote ref');
+  assert.strictEqual(v.state, 'cargo');
+  assert.strictEqual(v.containment, DIVERGED);
+});
+
+test('#189: a genuinely missing ref keeps its honest not-found answer, even with origin configured', () => {
+  const r = repoWithOrigin();
+  const v = landedState(r.dir, 'dev', 'feat/never-existed-12');
+  assert.strictEqual(v.state, 'unknown');
+  assert.strictEqual(v.method, 'none');
+  assert.match(v.why, /ref not found: feat\/never-existed-12/);
+  assert.strictEqual(v.branch, 'feat/never-existed-12', 'no fallback fired — the name must stay as given');
+  assert.strictEqual(hasCargo(v), true);
+});
+
+test('#189: an explicit origin/ prefix is used as-is — no further guessing', () => {
+  const r = repoWithOrigin();
+  r.g('checkout', '-q', '-b', 'feat/explicit-13');
+  r.write('explicit.txt', 'x\n'); r.commit('feat: explicit');
+  r.g('push', '-q', 'origin', 'feat/explicit-13');
+  r.g('checkout', '-q', 'dev');
+
+  const v = landedState(r.dir, 'dev', 'origin/feat/explicit-13');
+  assert.strictEqual(v.branch, 'origin/feat/explicit-13', 'already remote-qualified — must not be rewritten');
+  assert.ok(!/resolved/.test(v.why), 'no fallback should be reported for a name that already names a remote');
+  assert.strictEqual(v.state, 'cargo');
+});
+
+test('#189: resolveBranchRef — the pure resolution rule directly', () => {
+  const r = repoWithOrigin();
+  r.g('checkout', '-q', '-b', 'feat/pure-14');
+  r.write('pure.txt', 'x\n'); r.commit('feat: pure');
+  r.g('push', '-q', 'origin', 'feat/pure-14');
+  r.g('checkout', '-q', 'dev');
+  r.g('branch', '-D', 'feat/pure-14');
+
+  assert.deepStrictEqual(resolveBranchRef(r.dir, 'feat/pure-14'),
+    { ok: true, ref: 'origin/feat/pure-14', viaRemote: true });
+  assert.deepStrictEqual(resolveBranchRef(r.dir, 'dev'),
+    { ok: true, ref: 'dev', viaRemote: false });
+  assert.deepStrictEqual(resolveBranchRef(r.dir, 'nothing-here'),
+    { ok: false, ref: 'nothing-here', viaRemote: false });
+  assert.deepStrictEqual(resolveBranchRef(r.dir, 'origin/nothing-here'),
+    { ok: false, ref: 'origin/nothing-here', viaRemote: false });
 });
 
 // --- the pure rule ----------------------------------------------------------
