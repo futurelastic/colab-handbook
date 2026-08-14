@@ -60,7 +60,10 @@ the handbook's current version, so a scheduled run is self-documenting.
   directly) the same rules apply, worded against `exposure`'s vocabulary instead — see
   `project.schema.md`'s `exposure` section for the two legal `released` shapes and
   `live`'s no-runbook asymmetry.
-- Tier ↔ trunk coherence (legacy voice): tiers A and C → `dev`, tier B → `main`.
+- Tier ↔ trunk coherence (legacy voice): tier A → `dev` (or `main`, tag-gated only),
+  tier B → `main` (fixed). Tier C validates the **two-branch split**, not a spelling —
+  trunk must be a branch distinct from `main`; `dev` is the default, any other declared
+  name is equally conforming, not exempted (#205).
 - Tier A must have a `deploy-*.yml` workflow **and** a non-null `production`, and must
   not say `deploy: none`.
 - Tier A must not say `deploy: push-main` — a **tier mismatch**, not a bad mechanism. The
@@ -70,7 +73,8 @@ the handbook's current version, so a scheduled run is self-documenting.
   a tag trigger (`deploy: tag`) or, if it genuinely ships by hand, `deploy: manual` +
   `runbook:` — but the usual fix is **retiering to C**, which is exactly this shape and
   needs no pipeline change at all.
-- Tier C rules: `trunk: dev`, non-null `production`, `deploy: push-main`, and a
+- Tier C rules: `trunk` a branch distinct from `main` (`dev` by default, any other name
+  equally conforming — #205), non-null `production`, `deploy: push-main`, and a
   `deploy-*.yml` workflow. A wrong `deploy` value on C is redirected to the tier that
   matches its gate count rather than merely rejected — `tag` and `manual` point back to A,
   `none` points to B.
