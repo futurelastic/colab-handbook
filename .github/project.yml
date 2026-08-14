@@ -85,3 +85,14 @@ writes: serial-direct
 room: public
 exposure: released
 channels: [artifact]
+
+# Granted 2026-08-14 (#224), by the operator, after the matrix cell above it was
+# corrected — `serial-direct` + `auto-trunk` was forbidden until that ruling.
+# What it grants: `colab ship` may complete the BRANCH-MERGE half of Phase B on
+# its own, once every precondition passes (CI green measured by trunk's head sha,
+# no new migrations without a grant, no hand-code conflict). A refusal means a
+# human finishes, never that the tool improvises around it.
+# What it does NOT grant, on this repo or any other: promotion, tags, or anything
+# that reaches production. This repo is `exposure: released` — the tag that ships
+# it stays a human act, and no field can say otherwise.
+autonomy: auto-trunk
