@@ -66,11 +66,37 @@ test('deriveConsequences: writes omitted defaults to isolated (schema default), 
   assert.match(c.branchMandatory, /mandatory — isolated/);
 });
 
-test('deriveConsequences: writes: serial makes CI an alarm and the branch optional', () => {
+test('deriveConsequences: writes: serial makes CI an alarm and the branch optional (legacy alias resolves to serial-direct, #208)', () => {
   const c = deriveConsequences({ exposure: null, writes: 'serial', room: null });
   assert.strictEqual(c.writesResolved, 'serial');
+  assert.strictEqual(c.writesMethod, 'serial-direct');
+  assert.strictEqual(c.writesSource, 'legacy');
   assert.match(c.ciRole, /alarm/);
   assert.match(c.branchMandatory, /optional/);
+});
+
+test('#208: deriveConsequences: writes: serial-direct reads identically to the legacy alias — alarm, branch optional', () => {
+  const c = deriveConsequences({ exposure: null, writes: 'serial-direct', room: null });
+  assert.strictEqual(c.writesResolved, 'serial');
+  assert.strictEqual(c.writesMethod, 'serial-direct');
+  assert.strictEqual(c.writesSource, 'declared');
+  assert.match(c.ciRole, /alarm/);
+  assert.match(c.branchMandatory, /optional/);
+});
+
+test('#208: deriveConsequences: writes: serial-gated is a GATE, branch MANDATORY — a pre-merge gate is the declared point', () => {
+  const c = deriveConsequences({ exposure: null, writes: 'serial-gated', room: null });
+  assert.strictEqual(c.writesResolved, 'serial');
+  assert.strictEqual(c.writesMethod, 'serial-gated');
+  assert.strictEqual(c.writesSource, 'declared');
+  assert.match(c.ciRole, /gate/);
+  assert.match(c.branchMandatory, /mandatory/);
+});
+
+test('#208: deriveConsequences: writesSource is null (not "default") when writes is genuinely omitted', () => {
+  const c = deriveConsequences({ exposure: null, writes: null, room: null });
+  assert.strictEqual(c.writesMethod, 'isolated');
+  assert.strictEqual(c.writesSource, null);
 });
 
 test('deriveConsequences: gate count and recovery obligation follow exposure, null when undeclared', () => {

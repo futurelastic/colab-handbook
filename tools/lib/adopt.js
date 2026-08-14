@@ -28,6 +28,7 @@
  */
 
 const axisAuthority = require('./axis-authority.js');
+const writesAuthority = require('./writes-authority.js');
 const yaml = require('./yaml.js');
 const { consumerEvidence, describeEvidence } = require('./consumer-evidence.js');
 const { evaluateExposure } = require('./exposure-shape.js');
@@ -121,17 +122,31 @@ const RECOVERY_OBLIGATION = Object.freeze({
  * CONVENTIONS.md §2 ("CI", "Recovery", "Ceremony", "Writes"). Every value here is null when the
  * axis it depends on is undeclared: this function derives, it never guesses a default beyond the
  * one the schema itself states (`writes` omission = `isolated`).
+ *
+ * #208: `writes` resolves through `tools/lib/writes-authority.js` — the same shared module the
+ * audit uses — to one of THREE methods, not two. `writesResolved` stays the 2-state summary
+ * (`'serial'` | `'isolated'`) existing callers read; `writesMethod`/`writesSource` are ADDITIVE,
+ * carrying the resolved 3-way value and how it was reached, so a report can show the split
+ * without every caller having to learn the new vocabulary. `ciRole` and `branchMandatory` now
+ * differ between the two serial methods: `serial-gated` declares a pre-merge gate exists, so a
+ * branch is this method's whole point (CI runs as a gate, same as isolated) — only
+ * `serial-direct` (solo flow) is trunk-direct by default with CI as an alarm.
  */
 function deriveConsequences({ exposure, writes, room }) {
-  const writesResolved = writes === 'serial' ? 'serial' : 'isolated'; // omission = isolated (schema default)
+  const resolved = writesAuthority.resolveWrites(writes);
+  const writesMethod = resolved.value; // 'isolated' | 'serial-direct' | 'serial-gated'
+  const writesSource = writes === null || writes === undefined ? null : resolved.source;
+  const writesResolved = writesMethod === 'isolated' ? 'isolated' : 'serial'; // 2-state summary, kept for existing callers
 
   const gateCount = exposure && Object.prototype.hasOwnProperty.call(axisAuthority.GATE_COUNT, exposure)
     ? axisAuthority.GATE_COUNT[exposure]
     : null;
 
-  const ciRole = writesResolved === 'serial'
+  const ciRole = writesMethod === 'serial-direct'
     ? 'alarm — trunk-direct by default; CI runs after the push and reports, it does not gate (CONVENTIONS.md §7)'
-    : 'gate — isolated writers always branch, so CI runs before the merge lands (CONVENTIONS.md §7)';
+    : writesMethod === 'serial-gated'
+      ? 'gate — one writer, but a pre-merge gate is this method\'s whole point, so CI runs before the merge lands (CONVENTIONS.md §7)'
+      : 'gate — isolated writers always branch, so CI runs before the merge lands (CONVENTIONS.md §7)';
 
   const ciDepth = (exposure === 'live' || exposure === 'released')
     ? 'thorough — answers to a consumer with no way to ask a clarifying question (CONVENTIONS.md §7)'
@@ -145,15 +160,17 @@ function deriveConsequences({ exposure, writes, room }) {
       ? 'standard narration — more than one reader could ever comb the trail'
       : null;
 
-  const branchMandatory = writesResolved === 'serial'
+  const branchMandatory = writesMethod === 'serial-direct'
     ? 'optional — mandatory only when more than one unit is in flight, or a gate must inspect a unit before it lands (CONVENTIONS.md §2, Writes)'
-    : 'mandatory — isolated writers always use a worktree + branch';
+    : writesMethod === 'serial-gated'
+      ? 'mandatory — a pre-merge gate is this method\'s whole point, so every unit branches (CONVENTIONS.md §2, Writes)'
+      : 'mandatory — isolated writers always use a worktree + branch';
 
   const recoveryObligation = exposure && Object.prototype.hasOwnProperty.call(RECOVERY_OBLIGATION, exposure)
     ? RECOVERY_OBLIGATION[exposure]
     : null;
 
-  return { writesResolved, gateCount, ciRole, ciDepth, ceremonyWeight, branchMandatory, recoveryObligation };
+  return { writesResolved, writesMethod, writesSource, gateCount, ciRole, ciDepth, ceremonyWeight, branchMandatory, recoveryObligation };
 }
 
 // ---------------------------------------------------------------------- §9 remainder checklist
@@ -300,7 +317,10 @@ function detect(io, extra = {}) {
 // =========================================================================================
 
 const VALID_ROOM = new Set(['solo', 'team', 'public']);
-const VALID_WRITES = new Set(['isolated', 'serial']);
+// #208: `colab adopt --writes` accepts the current 3-way vocabulary AND the legacy alias
+// `serial` — an existing script or muscle-memory invocation keeps working, exactly like the
+// audit's own read-side acceptance (tools/lib/writes-authority.js is the ONE set both share).
+const VALID_WRITES = writesAuthority.WRITES_ACCEPTED_SET;
 const VALID_EXPOSURE = new Set(['none', 'self', 'live', 'released']);
 const VALID_CHANNELS = new Set(['workflow', 'hook', 'procedure', 'checkout', 'artifact', 'data', 'none']);
 const VALID_DEPLOY = new Set(['tag', 'manual', 'push-main', 'none']);

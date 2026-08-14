@@ -412,16 +412,42 @@ or `integration` (a development line). Three methods are coherent; one combinati
 
 | method | writer count | branches? | this is… |
 |---|---|---|---|
-| serial trunk-direct | one at a time | no | solo flow, below |
-| serial gated | one at a time | yes, when the two conditions below apply | the common case: a claim, a branch, a squash |
-| isolated | many, concurrently | yes, always (worktrees) | today's fleet default |
+| `serial-direct` | one at a time | no | solo flow, below |
+| `serial-gated` | one at a time | yes, when the two conditions below apply | the common case: a claim, a branch, a squash |
+| `isolated` | many, concurrently | yes, always (worktrees) | today's fleet default |
 | *(N writers, trunk-direct)* | many | no | **not a method** — simply an unlocked repo |
 
 The fourth row is named, not left implicit: nothing coordinates concurrent trunk-direct
 writers, so it is not a degraded version of the other three, it is the absence of a
 method. A repo cannot select it; it is what "no `writes` discipline at all" looks like.
 
-**Exactly two conditions make a branch mandatory** on a `writes: serial` repo — no others:
+**#208 split what used to be one declarable value, `serial`, into the two top rows above** —
+`serial-direct` and `serial-gated` DECLARE IDENTICALLY under the old vocabulary, yet carry
+different constraints, and a reader answering "may this repo be granted `autonomy:
+auto-trunk`?" had to piece the answer together from three separate passages, one of them
+easy to stop reading early and conclude the opposite of the truth. The constraint matrix
+below is the fix — read it before granting anything to a `serial-*` repo:
+
+| constraint | `serial-direct` | `serial-gated` | `isolated` |
+|---|---|---|---|
+| `autonomy: auto-trunk` | **forbidden** (rule 5, Solo flow, below) | allowed | allowed |
+| place-claim needed | yes | yes | no — the worktree already is the isolation |
+| branch | optional (mandatory only per the two conditions below) | required per the two conditions below | always |
+| `ceremony: light` + `autonomy: auto-trunk` | — | **forbidden** (above) | **forbidden** (above) |
+
+`serial` **remains valid, as a legacy alias of `serial-direct`** — no adopter's descriptor
+breaks on this split. `tools/lib/writes-authority.js` is the one resolver both the audit and
+`colab adopt` read (the identical split `tools/lib/axis-authority.js` draws for `tier` →
+`exposure`); it resolves the alias toward `serial-direct`, never `serial-gated`, because that
+is the reading that changes nothing observable for a repo that has not opted into the split
+— including this handbook's own descriptor, whose `writes: serial` predates the split and
+still means solo flow is open here. Reclassifying an EXISTING repo's descriptor to
+`serial-gated` is a human decision made per repo, never inferred: `serial-gated` reads as the
+*safer*, more-conservative spelling, but assigning it automatically to a repo that is
+actually running trunk-direct would move that repo into the `auto-trunk`-eligible cell above
+— exactly the cell it must never occupy.
+
+**Exactly two conditions make a branch mandatory** on a `serial-*` repo — no others:
 
 1. **More than one unit of work is in flight** — a second claim, worktree, or place-claim
    already live on the repo. One writer stops being true, so the branch is what draws the
@@ -447,15 +473,19 @@ should be added later "to catch the common case."
 ### Solo flow — trunk-direct, issue-on-demand, entry-gated (`writes: serial`)
 
 `ceremony: light` relaxed the record-keeping *end* of a session; the *start* — pre-filed
-issue, claim, branch, worktree — stayed full weight even there. Solo flow is the **serial
-trunk-direct** cell of the table above: a repo one person codes directly, in one
-conversation-driven session, with no other session to protect against — the start-side
-invariants exist to protect *other* sessions.
+issue, claim, branch, worktree — stayed full weight even there. Solo flow is the
+**`serial-direct`** cell of the table above — and **only** that cell: `serial-gated`
+declares a pre-merge gate exists, which is exactly what solo flow has none of, so it does
+not qualify (#208; `soloEligibility` in `tools/lib/solo.js` keys off the direct value for
+this reason). The legacy alias `writes: serial` resolves to `serial-direct` and stays
+eligible unchanged. A repo one person codes directly, in one conversation-driven session,
+with no other session to protect against — the start-side invariants exist to protect
+*other* sessions.
 
 1. **Entry gate, not honor system.** `colab solo` checks fresh on every invocation, never
    a cached answer: no live solo session already open, no worktree, no claim, checkout on
    trunk with no unpushed branch anywhere, a clean (tracked + untracked) tree, and — on a
-   `writes: serial` repo — no conflicting place-claim held on this checkout (below).
+   `writes: serial-direct` repo — no conflicting place-claim held on this checkout (below).
    Anything held refuses outright — full ceremony, no partial credit.
 2. **Trunk-direct commits are allowed.** Small Conventional Commits go straight to trunk;
    CI validates after the push — an alarm, not a gate, so recovery rather than prevention
@@ -468,13 +498,18 @@ invariants exist to protect *other* sessions.
 4. **Exit check, not teardown.** `colab solo --done` re-derives fresh: tree clean,
    everything pushed. Nothing to tear down — solo flow made no worktree and holds no
    claim, though it releases any place-claim it took.
-5. **Never relaxed, even solo:** CI secret scan · reserved ports · Conventional Commits ·
-   not `autonomy: auto-trunk` · no scheduled driver (doubly incompatible — a driver
-   planning against a repo reads its Issues, and a solo repo may have none open at all).
-   `production: null` is **not** on this list — `writes: serial` is deliberately not
-   coupled to production (above), so a live repo may run solo flow.
+5. **Solo flow's own invariants, never relaxed even here** — this list is scoped to solo
+   flow itself, not to every `serial-*` repo (`serial-gated` is a separate cell with its own
+   row in the constraint matrix above, and is NOT bound by the one item below that reads
+   broadest): CI secret scan · reserved ports · Conventional Commits · **`autonomy:
+   auto-trunk` is forbidden for a `serial-direct`/solo-flow repo specifically** (the matrix's
+   own `serial-direct` row states the same fact; this is the one place a reader stopping
+   here gets the right answer without reading further) · no scheduled driver (doubly
+   incompatible — a driver planning against a repo reads its Issues, and a solo repo may
+   have none open at all). `production: null` is **not** on this list — `writes: serial-*`
+   is deliberately not coupled to production (above), so a live repo may run solo flow.
 
-**One more shape a `writes: serial` repo can have, spelled out in
+**One more shape a `writes: serial-direct` repo can have, spelled out in
 [Channels](#channels--by-what-path-does-code-reach-the-thing-that-runs-it) below: where the
 trunk merge is itself the deploy, trunk-direct ships every commit.** Such a repo may run
 solo flow, but not the trunk-direct half of it as freely as the general rule above implies —
@@ -485,9 +520,9 @@ gains no new field.
 
 **The boundary is concurrency reality, not a discipline preference.** A repo more than
 one session touches can never legally run solo flow — the entry gate's own checks are
-false by construction the moment a second session exists. `writes: serial` is necessary
-but not sufficient: a repo currently hosting someone else's worktree, or someone else's
-place-claim, still fails `colab solo`'s check, correctly.
+false by construction the moment a second session exists. `writes: serial-direct` is
+necessary but not sufficient: a repo currently hosting someone else's worktree, or someone
+else's place-claim, still fails `colab solo`'s check, correctly.
 
 **Consumers inferring activity purely from worktrees/claims will under-report a solo
 session** — fixing that is each such consumer's own call, not mandated here.
@@ -495,7 +530,8 @@ session** — fixing that is each such consumer's own call, not mandated here.
 ### Place-claims — the writer-verifiable hold `writes: serial` needs, and isolation does not
 
 An **isolated** writer needs no lock: its worktree already is the isolation. A **serial**
-writer does — one checkout, no branch, so nothing but a lock stops two sessions (or an
+writer does — either method, `serial-direct` or `serial-gated` (#208) — one checkout, no
+branch, so nothing but a lock stops two sessions (or an
 implementer agent fanned out by a coordinator, which never went through anything that
 could refuse a spawn) from writing the same trunk checkout at once. A place-claim is that
 lock: **path-scoped**, not repo-scoped — the checkout path is the unit, so a repo running
@@ -530,8 +566,9 @@ and **verified by the writer itself**, not merely by whatever spawned it.
   **This rules only on the lock's own state path** — a distinct fact from the *checkout*
   itself being file-synced, which is [Channels](#channels--by-what-path-does-code-reach-the-thing-that-runs-it)'s
   concern below: a repo whose working tree is synced to another machine cannot use
-  `writes: serial` at all, lock-state location aside, because a hold on one checkout stops
-  meaning one machine the moment the path is shared by sync.
+  either serial method (`writes: serial-direct` or `writes: serial-gated`) at all,
+  lock-state location aside, because a hold on one checkout stops meaning one machine the
+  moment the path is shared by sync.
 - **Degraded mode: serial falls back to isolated, never to unlocked.** If the lock cannot
   be reached (state unreadable, or the acquire itself is what lives on a synced path), the
   writer is told to use a worktree and branch instead — which needs no lock. Speed is what
@@ -615,7 +652,7 @@ bypassed the repo's own documented procedure; and a second machine carrying no g
 metadata at all for a repo it was nonetheless running, so a directory-scoped git command
 silently resolved to an enclosing repository and answered confidently about the wrong one.
 
-**Consequence 1 — a file-synced working tree cannot use [`writes: serial`](#writes--serial-or-isolated-and-the-two-things-that-make-a-branch-mandatory).**
+**Consequence 1 — a file-synced working tree cannot use [either serial method](#writes--serial-or-isolated-and-the-two-things-that-make-a-branch-mandatory) (`serial-direct`/`serial-gated`).**
 What makes serial safe is a hold on one checkout, and machine-local state is the correct
 home for that hold — but only while a path on one machine means one machine. Sync breaks
 that silently: two machines can each believe they hold the only checkout. The mode is
@@ -630,8 +667,8 @@ lock is stored, this rules on whether the checkout being locked is itself trustw
 commit.** This is the one point where `writes` and this axis genuinely interact — not as
 a coupling, but as a derived constraint, the same way [`ceremony`](#ceremony--narration-follows-the-room-recoverability-follows-exposure)
 derives from the room rather than being welded to it: a repo whose `channels` includes a
-path where merging to trunk directly runs the code may still be `writes: serial`, but not
-trunk-direct as freely as the general rule allows — it keeps a branch and a pre-merge gate
+path where merging to trunk directly runs the code may still be `writes: serial-direct`,
+but not trunk-direct as freely as the general rule allows — it keeps a branch and a pre-merge gate
 for anything not fit to put in front of users unreviewed, and skips only the worktree.
 
 **Evaluating consequence 2 needs `deploy` too — `channels` alone cannot answer it.**

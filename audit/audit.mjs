@@ -71,6 +71,9 @@ const {
 // half (does declaring this exposure value stay possible at all?). Same install.sh-freezes-
 // tools/lib/ reasoning as the other requires on this page.
 const { evaluateExposure } = require("../tools/lib/exposure-shape.js");
+// #208's `writes` split precedence ladder — same shared-module reasoning as axisAuthority
+// above, reused for a second axis rather than a bespoke second mechanism.
+const writesAuthority = require("../tools/lib/writes-authority.js");
 const {
   handbookInfo, templateNames, templateChangedSince, cmpParts, cmpSemver,
   parseWorkflowStamp, parseClaudeStamp, workflowProvenance, unstampedFinding, looksLikeHandbookClaude,
@@ -816,7 +819,10 @@ const VALID_CEREMONY = new Set(["standard", "light"]);
 // `writes` names which write-conflict prevention method a repo's sessions default to —
 // a separate axis from both `tier` and `ceremony` (project.schema.md "writes — optional").
 // Omission means "isolated", the fleet's status quo, so an unset key changes no behavior.
-const VALID_WRITES = new Set(["isolated", "serial"]);
+// #208 split the declarable value into three (`isolated` / `serial-direct` / `serial-gated`)
+// and kept `serial` valid as a legacy alias — tools/lib/writes-authority.js is the ENUM
+// (accepted-or-not) AND the resolution (which of the three a value means) in one shared
+// module, the same split axisAuthority draws for tier -> exposure.
 // `room` names who else could ever read what a session writes down — the fourth axis
 // (#131). Omission means undeclared, not "solo": nothing infers this from GitHub
 // visibility or anything else, and no rule reads it yet (project.schema.md "room — optional").
@@ -1075,7 +1081,10 @@ function auditRepo(target, ctx) {
     // Deliberately NOT coupled to tier/production/exposure — see CONVENTIONS.md §2 and
     // project.schema.md.
     const writesRaw = "writes" in (cfg || {}) ? cfg.writes : null;
-    if (writesRaw !== null && !VALID_WRITES.has(writesRaw)) fail(`writes is ${JSON.stringify(writesRaw)}, expected "isolated" or "serial" (omit for isolated)`);
+    if (writesRaw !== null && !writesAuthority.isAcceptedWritesValue(writesRaw)) {
+      fail(`writes is ${JSON.stringify(writesRaw)}, expected "isolated", "serial-direct", or `
+        + '"serial-gated" (the legacy alias "serial" is also accepted; omit for isolated)');
+    }
 
     // ---- room axis (#131) ----------------------------------------------------
     // Enum sanity only — the same shape as ceremony/writes above. #131 introduces the

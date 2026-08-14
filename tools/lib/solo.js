@@ -13,6 +13,7 @@
  */
 
 const git = require('./git');
+const writesAuthority = require('./writes-authority.js');
 
 /**
  * Local branches carrying commits their upstream (or, absent one, `origin/<trunk>`) does not have.
@@ -111,27 +112,40 @@ function exitProblems(repoAbs, trunk) {
 
 /**
  * Which write-conflict prevention method a repo's `project.yml` declares (`writes:` —
- * CONVENTIONS.md §2 "Writes", project.schema.md "writes — optional"). Fails closed to
+ * CONVENTIONS.md §2 "Writes", project.schema.md "writes — optional"). #208 split `serial`
+ * into `serial-direct`/`serial-gated`; this is the 2-state SUMMARY reading callers that only
+ * need "does this repo need a place-claim / run CI as an alarm rather than a gate" still want
+ * — both serial methods answer that the same way (place-claims and the CI-role default are
+ * NOT what distinguishes them; solo-flow eligibility, below, is). Fails closed to
  * `'isolated'` on anything unrecognised, the same direction `promotion:` fails closed
- * (toward the safer, more-isolated reading) — never toward `serial`, which is the one
- * that trusts a single writer.
+ * (toward the safer, more-isolated reading) — never toward a serial reading.
  */
 function writesMode(doc) {
-  const raw = doc && doc.writes;
-  return raw === 'serial' ? 'serial' : 'isolated';
+  const v = writesAuthority.resolveWrites(doc && doc.writes).value;
+  return v === 'serial-direct' || v === 'serial-gated' ? 'serial' : 'isolated';
 }
 
 /**
- * Is solo flow (the serial trunk-direct cell) legal for this repo, and via which key?
- * `writes: serial` is the only key (#175 removed the `ceremony: light` legacy proxy that
- * #133 introduced as a bridge — no repo can silently ride the old key any more). Returns
- * `{ok:true, via}` or `{ok:false, reason}`.
+ * Is solo flow (the serial TRUNK-DIRECT cell) legal for this repo, and via which key?
+ * #208: eligibility keys off the DIRECT value specifically, not either serial method — a
+ * `serial-gated` repo has declared that a pre-merge gate exists, which is exactly what solo
+ * flow (no branch, CI as an alarm rather than a gate) has none of. `writes: serial` (the
+ * legacy alias) resolves to `serial-direct` (tools/lib/writes-authority.js) and stays
+ * eligible, unchanged from before the split. Returns `{ok:true, via}` or `{ok:false, reason}`.
  */
 function soloEligibility(doc) {
-  if (writesMode(doc) === 'serial') return { ok: true, via: 'writes' };
+  const r = writesAuthority.resolveWrites(doc && doc.writes);
+  if (r.value === 'serial-direct') return { ok: true, via: 'writes' };
+  if (r.value === 'serial-gated') {
+    return {
+      ok: false,
+      reason: 'solo flow requires writes: serial-direct — this repo declares writes: serial-gated '
+        + '(one writer, but a declared pre-merge gate; solo flow has none)',
+    };
+  }
   return {
     ok: false,
-    reason: 'solo flow requires writes: serial — this repo declares neither',
+    reason: 'solo flow requires writes: serial-direct — this repo declares neither',
   };
 }
 
