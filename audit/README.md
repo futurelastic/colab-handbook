@@ -217,7 +217,7 @@ the handbook's current version, so a scheduled run is self-documenting.
   or offline audits stay silent rather than claim a label is missing they could not see).
   A repo that adopted at an older handbook version never back-fills a label added later
   on its own; the check that label powers then silently cannot fire (`CONVENTIONS.md`
-  §8, *Labels reconcile too*).
+  [§8](../CONVENTIONS.md#labels-reconcile-too--not-just-stamped-files), *Labels reconcile too*).
 - **`ceremony:` coherence (#79, narrowed by #175)** — an optional field scaling
   memory-ceremony depth (project.schema.md#ceremony--optional). An unrecognised value
   is a **finding**; one coherence rule is also a finding, scoped to `ceremony: light`
@@ -247,10 +247,10 @@ the handbook's current version, so a scheduled run is self-documenting.
   subset of the room's, and policing its deploy/production/trunk shape is out of scope.
   `none` keeps the SAME pairing advisory it always had (`exposure: none` + `production: null`
   together is a **warn**, unanswered rather than lying) and stays clean when `production` IS
-  named — the pinned "visibly transitional" read (CONVENTIONS.md §2) — but a committed deploy
+  named — the pinned "visibly transitional" read (CONVENTIONS.md [§2](../CONVENTIONS.md#exposure--what-consumes-a-merge-here)) — but a committed deploy
   workflow alongside `exposure: none` is now a real contradiction. An unrecognised value is
   still a **finding**. Omitting `exposure:` entirely reports `null` (undeclared) in `--json`,
-  never `"none"` — there is no default, by design (`CONVENTIONS.md` §2, *Exposure*, "lowering
+  never `"none"` — there is no default, by design (`CONVENTIONS.md` [§2](../CONVENTIONS.md#exposure--what-consumes-a-merge-here), *Exposure*, "lowering
   exposure is a human act") — and falls back to the legacy `tier` read instead.
   **`tier` + `exposure` both declared and disagreeing about gate count is now exactly one
   disagreement finding** (`tools/lib/axis-authority.js`'s contradiction table) — `tier: B`
@@ -267,7 +267,7 @@ the handbook's current version, so a scheduled run is self-documenting.
   together with a non-null `production` or a non-`none` `deploy` — a **warn**, never a
   `fail`, on `exposure`'s precedent. Omitting `channels:` entirely reports `null`
   (undeclared) in `--json`, never `["none"]` — there is no default, by design
-  (`CONVENTIONS.md` §2, *Channels*, the same "declaring absence is a human act" asymmetry
+  (`CONVENTIONS.md` [§2](../CONVENTIONS.md#channels--by-what-path-does-code-reach-the-thing-that-runs-it), *Channels*, the same "declaring absence is a human act" asymmetry
   `exposure` carries).
 
 - **`exposure`/`channels` falsifiers + duration report (#137)** — the checks above are all
@@ -305,7 +305,7 @@ the handbook's current version, so a scheduled run is self-documenting.
     today; reopens if a later unit generalises the stamp to name an arbitrary source.
   - **A declared `production:` target resolving in DNS** — the repo-local half (`exposure:
     none` + a *named* `production`) is already the pinned-clean "visibly transitional"
-    shape (`CONVENTIONS.md` §2, *Exposure*; `audit-exposure.test.js`); firing on it would
+    shape (`CONVENTIONS.md` [§2](../CONVENTIONS.md#exposure--what-consumes-a-merge-here), *Exposure*; `audit-exposure.test.js`); firing on it would
     contradict a shipped ruling. The resolving half needs network, which this tool
     deliberately does not use, and is weak evidence anyway (parked domains, wildcards, CDN
     catch-alls). What it reached for — visibility into a state that has lasted a long time

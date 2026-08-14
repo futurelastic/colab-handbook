@@ -219,7 +219,7 @@ colab landed --all                  # every worktree of this repo: landed · car
 ```
 
 That is the whole decision, and it is the same rule `code-ship` uses
-(`CONVENTIONS.md` §4, "Has it landed?"). It is asked against each branch's **base** —
+(`CONVENTIONS.md` [§4](../../CONVENTIONS.md#4-branches-and-commits), "Has it landed?"). It is asked against each branch's **base** —
 trunk, or the declared `integration:` line it was cut from — because a line-based
 branch measured against trunk reads as enormous unshipped cargo.
 
@@ -408,7 +408,7 @@ process, not unfinished work.
 
 For each **wrap** candidate, in order:
 
-1. **Re-check trunk CI.** Ask by commit, not by recency (`CONVENTIONS.md` §4, #92):
+1. **Re-check trunk CI.** Ask by commit, not by recency (`CONVENTIONS.md` [§4](../../CONVENTIONS.md#4-branches-and-commits), #92):
    does a completed, successful run exist for `<trunk>`'s current head sha? (`gh run
    list --branch <trunk> -L 1` reads whatever ran *last*, and a cancelled straggler
    can outrank a passing run on the same commit under `cancel-in-progress`.) Not

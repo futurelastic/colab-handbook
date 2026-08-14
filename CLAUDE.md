@@ -181,7 +181,7 @@ colab worktree rm <name>        # releases all its claims, frees its ports
   error, silently swapping uncommitted work between sessions. We measured
   exactly this on a repo running 10+ concurrent worktree sessions. Use
   `git diff`/`git status`, a targeted `git checkout -- <path>`, or diff
-  directly against `origin/<trunk>` instead — see `CONVENTIONS.md` §4 for the
+  directly against `origin/<trunk>` instead — see `CONVENTIONS.md` [§4](CONVENTIONS.md#4-branches-and-commits) for the
   full incident and the stale-`stash@{N}`-index gotcha.
 
 ## The Issue is the memory

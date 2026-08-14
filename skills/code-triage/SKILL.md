@@ -266,7 +266,7 @@ repo — which is exactly why the tracker is the wrong home for it.
 
   **A `blocked_by_added` later than the newest `deps-checked` `labeled` event means the
   label is stale** — treat the issue as `dependencies unchecked`, re-run the §5 gate, and
-  remove the label if a blocker is now open. `CONVENTIONS.md` §5 assigns removal to whoever
+  remove the label if a blocker is now open. `CONVENTIONS.md` [§5](../../CONVENTIONS.md#5-claiming-work--how-to-say-im-on-this) assigns removal to whoever
   adds the blocker; this is how the next reader finds out when they didn't. Only spend the
   call on issues a `deps-checked` is actually deciding for.
 
@@ -361,7 +361,7 @@ Two conditions on that, both of which have teeth:
 gh issue list --state open --label epic --json number -q '.[].number'
 ```
 
-An `epic`-labelled issue is informative, never a start candidate (`CONVENTIONS.md` §5,
+An `epic`-labelled issue is informative, never a start candidate (`CONVENTIONS.md` [§5](../../CONVENTIONS.md#epics--a-container-is-not-a-start-candidate),
 *Epics*) — leave it off the ranked list entirely, the same way a taken issue is left off,
 but for a different reason: it is not that someone else holds it, it is that there is no
 code to write for it directly. Still report it, in its own bucket, so it does not read as
@@ -376,7 +376,7 @@ gh issue list --state open --search "label:delivery:content,delivery:ops,deliver
 
 An issue carrying `delivery:content`, `delivery:ops` or `delivery:docs-only` is real work
 whose completion is not a code commit — a content push, an ops/production check, a docs
-sync outside code review (`CONVENTIONS.md` §5, *Delivery type*). Leave it off the ranked
+sync outside code review (`CONVENTIONS.md` [§5](../../CONVENTIONS.md#delivery-type--route-not-start-112), *Delivery type*). Leave it off the ranked
 list the same way an epic is: not because someone holds it, but because there is nothing
 to branch on in *this* pipeline. Report it in its own **route** bucket, distinct from the
 epic bucket — see §6 — so a human sees where it actually needs to go instead of it reading
@@ -393,7 +393,7 @@ serialization, and how it is realized follows
 [`writes`](../../CONVENTIONS.md#writes--serial-or-isolated-and-the-two-things-that-make-a-branch-mandatory):
 on `isolated` (today's fleet default), one branch, always — every rule below applies
 unchanged. On `writes: serial`, one unit at a time behind a place-claim is enough on
-its own; a branch is mandatory only when one of §2's two conditions fires (more than
+its own; a branch is mandatory only when one of [§2](../../CONVENTIONS.md#writes--serial-or-isolated-and-the-two-things-that-make-a-branch-mandatory)'s two conditions fires (more than
 one unit in flight, or a gate must inspect the unit before it lands) — see §6's
 `start:` line for what that changes about the command a session runs.
 
@@ -404,7 +404,7 @@ Group when:
 
 Keep separate when the files are disjoint — parallel sessions are the point.
 
-**On `isolated`, name the group per [`CONVENTIONS.md` §4](../../CONVENTIONS.md):**
+**On `isolated`, name the group per [`CONVENTIONS.md` §4](../../CONVENTIONS.md#4-branches-and-commits):**
 every issue number in one **trailing** run, e.g. `fix/import-fixes-115-114-113`.
 This is load-bearing — code-wrap's harvest reads the branch name and the claim
 registry, so a number in neither is one the wrap will never find, and it sits open
@@ -435,7 +435,7 @@ Verify `file:line` references before quoting them; engines get edited and refs r
 A group printed to a terminal dies with the terminal, and the next session claiming one
 member never learns the other exists — the exact collision this section computes in order
 to prevent. "Which files does this issue touch" is a judgement, so nothing downstream can
-recover it; **triage is the only writer** (`CONVENTIONS.md` §5, *Grouping*).
+recover it; **triage is the only writer** (`CONVENTIONS.md` [§5](../../CONVENTIONS.md#grouping--issues-that-must-share-one-branch), *Grouping*).
 
 Two writes per group, and both are needed: the label makes it *queryable*, the comment
 carries the *evidence*.
@@ -518,7 +518,7 @@ relationship is the part the readiness gate above (and any other tool) reads.
 - **Read it back after you write it, too.** A wrong `$DB` — an empty variable, a failed
   subshell, the issue *number* pasted where the database id goes — does not error. The POST
   returns 200 and attaches whichever issue holds that id anywhere on GitHub, in repos neither
-  you nor this org has heard of (`CONVENTIONS.md` §5, *Readiness*). The check is not about
+  you nor this org has heard of (`CONVENTIONS.md` [§5](../../CONVENTIONS.md#readiness--open-and-unclaimed-is-not-enough), *Readiness*). The check is not about
   the API being flaky: at the moment of the write, a wrong id is **indistinguishable from
   success**, and the only later symptom is a blocker nobody recognises.
 - **Record only what you actually determined.** A sequence you inferred from titles is
@@ -596,12 +596,12 @@ with the blocker named:
 - [ ] **Actionable** — the Issue says what "done" looks like. An Issue that is a
       question is blocked on an answer, not ready to code.
 - [ ] **Nothing it depends on is still missing** — read the **relationship**, never
-      the prose: `gh issue view <N> --json blockedBy` (`CONVENTIONS.md` §5,
+      the prose: `gh issue view <N> --json blockedBy` (`CONVENTIONS.md` [§5](../../CONVENTIONS.md#readiness--open-and-unclaimed-is-not-enough),
       *Readiness*). Prose saying "depends on the other one" is an explanation, not a
       record; it blocks nothing and no tool can act on it.
       **An open blocker is not automatically a blocker** — judge its state, per §5.1.
       **And empty is not "free" — it is "nobody looked".**
-- [ ] **Trunk CI is alive** — ask by commit, not by recency (`CONVENTIONS.md` §4,
+- [ ] **Trunk CI is alive** — ask by commit, not by recency (`CONVENTIONS.md` [§4](../../CONVENTIONS.md#4-branches-and-commits),
       #92): does a completed, successful run exist for `<trunk>`'s current head sha?
       (`gh run list --branch <trunk> -L 1` reads whatever ran *last*, and a
       cancelled straggler can outrank a passing run on the same commit under
@@ -611,7 +611,7 @@ with the blocker named:
       ([§7, *CI*](../../CONVENTIONS.md#ci--what-it-is-follows-writes-how-much-follows-exposure)):
       on `isolated`, it doubles as the pre-merge gate this bullet is checking you
       can still pass — if you cannot merge when you finish, you are not ready to
-      start ([§6](../../CONVENTIONS.md)). On `writes: serial`, a trunk-direct
+      start ([§6](../../CONVENTIONS.md#6-releases)). On `writes: serial`, a trunk-direct
       commit ships before CI ever runs — CI there is the alarm, not the gate — so
       being ready to start means nothing is already sounding it, and thoroughness
       is a question `exposure` answers, not a pre-merge check that structurally
@@ -627,7 +627,7 @@ with the blocker named:
       finding — do not narrate it in the report, and do not let it vary the
       per-beat verdict when the only thing that moved was an unrelated worktree.
       Report contention only when there is a real path overlap, and name it.
-- [ ] **No pending decision** — no `needs-decision` label (`CONVENTIONS.md` §5,
+- [ ] **No pending decision** — no `needs-decision` label (`CONVENTIONS.md` [§5](../../CONVENTIONS.md#decision-gate--a-human-must-answer-first-122),
       *Decision gate*). A surface awaiting a human answer is not a start candidate
       for anyone, manual or scheduled, until the decision is recorded — report it
       exactly as any other blocker, naming the label as what must be cleared and by
@@ -641,7 +641,7 @@ with the blocker named:
       re-gated settled work). `colab decision --list` shows every issue with a live
       decision right now.
 - [ ] **Delivery type is code, or not asked** — no `delivery:content` / `delivery:ops` /
-      `delivery:docs-only` label (`CONVENTIONS.md` §5, *Delivery type*). This issue was
+      `delivery:docs-only` label (`CONVENTIONS.md` [§5](../../CONVENTIONS.md#delivery-type--route-not-start-112), *Delivery type*). This issue was
       already filtered out at §2 if it carries one; this bullet is the reminder for a
       caller checking a single issue outside a full triage pass. **Absence is not this
       gate** — an unlabelled issue and one explicitly `delivery:code` both pass through
@@ -653,7 +653,7 @@ with the blocker named:
 that behave nothing alike: a blocker **nobody has started**, and a blocker **whose code
 is written and pushed**, its session over and stopped at the human merge gate. In the
 second the dependency already exists — reporting it as `blocked` parks a session for
-nothing (`CONVENTIONS.md` §5, *Readiness*).
+nothing (`CONVENTIONS.md` [§5](../../CONVENTIONS.md#readiness--open-and-unclaimed-is-not-enough), *Readiness*).
 
 So for each open blocker, ask what evidence exists that its work is real:
 
@@ -710,7 +710,7 @@ occasion.
 For each **ready** group, give the four things a session needs to begin. The fourth,
 `start:`, follows [`writes`](../../CONVENTIONS.md#writes--serial-or-isolated-and-the-two-things-that-make-a-branch-mandatory):
 on `isolated` (the shape below), it is a claim-and-worktree command; on
-`writes: serial` with neither of §2's two mandatory-branch conditions firing, it is
+`writes: serial` with neither of [§2](../../CONVENTIONS.md#writes--serial-or-isolated-and-the-two-things-that-make-a-branch-mandatory)'s two mandatory-branch conditions firing, it is
 `colab solo` instead — no claim, no worktree, because solo flow's entry gate stands
 in for both (§3, above).
 
@@ -801,7 +801,7 @@ Prefer `colab readiness` over a raw `gh` edit for the reason §4 gives: colab
 owns the write, so it is journaled and the `readiness.marked` event fires from
 the same site — the single signal the event-driven consumer actually receives.
 
-### Then flag hard groups with `needs-plan` — a label, not a plan (#94, `CONVENTIONS.md` §5 *Planning*)
+### Then flag hard groups with `needs-plan` — a label, not a plan (#94, `CONVENTIONS.md` [§5](../../CONVENTIONS.md#planning--a-plan-file-that-outlives-one-command-and-who-drafts-it-94) *Planning*)
 
 Some READY (or soft-ready) groups are cheap to describe but hard to build: an ambiguous
 ask, a design with no precedent in this repo, an issue set coupled by more than file

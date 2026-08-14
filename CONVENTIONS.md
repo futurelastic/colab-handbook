@@ -336,7 +336,7 @@ descriptor's own git history, never a new field. #144 shipped the authority flip
 above; it deliberately does **not** make the key required — that stays phase 3. The exposure
 question is now asked, in words, by [§9](#9-adopting-this)'s shared question set (question 3),
 and `colab adopt` (#199) is the tool that detects/asks/derives/writes it in one act — gated on
-a human for the `none`/`self`/lowering direction (§9's "colab adopt executes this checklist"
+a human for the `none`/`self`/lowering direction ([§9](#9-adopting-this)'s "colab adopt executes this checklist"
 paragraph). And no rule here answers the question for any specific repo other than the one
 raise recorded in this repo's own `project.yml`, which rests on a human-given answer already
 on record in the epic ruling, not on anything this unit concluded.
@@ -998,7 +998,7 @@ instead of `Closes #N`.
 - **`colab ship --refs <N[,M]>`** — explicit, per-ship, for an unlabelled issue.
 
 The claim is released unconditionally either way. `tracking` is deliberately **not** in
-the convention label set (§9) — its absence breaks no check, so adoption does not
+the convention label set ([§9](#9-adopting-this)) — its absence breaks no check, so adoption does not
 provision it and the audit does not report it missing.
 
 Do not write `Closes #<tracking>` in a commit body — GitHub closes on the keyword
@@ -1172,7 +1172,7 @@ colab readiness <N> --mechanical --clear
 - `readiness.classify()` keeps `graphEmpty`/`depsChecked` as distinct type-level inputs;
   empty-but-unchecked reads a fourth verdict, `unchecked-mechanical` — `isStartable()`
   still says no by default.
-- Not in the convention label set (§9), same reasoning as `tracking`.
+- Not in the convention label set ([§9](#9-adopting-this)), same reasoning as `tracking`.
 - **No `readiness.marked` event fires for `--mechanical`** — that event kind's payload
   means `deps-checked` specifically (#45, #46); emitting it here would be
   indistinguishable from the stronger claim.
@@ -1883,7 +1883,7 @@ only. Resolution order: `--config` flag > `~/.colab/repos.txt` > bundled example
    with `--answered-by <name>` (the same bar `colab ship`'s gates use, and no stronger —
    see the command's `--help` for the honest limit). Raising, or a first declaration of
    `live`/`released`, needs nothing beyond the falsifier/shape clearance described above —
-   an agent may run this unattended for exactly the direction CONVENTIONS.md §2's asymmetry
+   an agent may run this unattended for exactly the direction CONVENTIONS.md [§2](#exposure--what-consumes-a-merge-here)'s asymmetry
    already allows it to propose. `colab adopt` never runs steps 3 onward below; it prints
    them as a to-do list on exit.
 2. **Write `.github/project.yml`** ([§3](#3-githubprojectyml--the-marker)) with the

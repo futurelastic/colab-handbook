@@ -329,7 +329,7 @@ A worktree entry carries a `status`, backfilled-on-read (older/absent → `runni
 
 "Can this issue start right now?" has three answers, not two — `blocked`, `ready-with-a-note`,
 `ready` — because an open blocker whose code is already written and pushed is not blocking in
-practice; only the human merge gate stands between it and trunk. `CONVENTIONS.md` §5 (*Readiness*)
+practice; only the human merge gate stands between it and trunk. `CONVENTIONS.md` [§5](../CONVENTIONS.md#readiness--open-and-unclaimed-is-not-enough) (*Readiness*)
 is the rule; `lib/readiness.js` is the executable form of it, and `code-triage` §5.1 is the manual
 procedure that reaches the same verdicts by hand.
 
@@ -707,7 +707,7 @@ Run `colab <cmd> --help` for full detail.
 | `solo [--force] [--session S] [--session-name S] [--repo P]` \| `solo --done [--repo P]` | entry-gated trunk-direct flow — `writes: serial` only, no issue/claim/worktree (see *Solo flow*, CONVENTIONS.md) |
 | `place acquire\|check\|release <path> [--repo P] [--session S] [--session-name S] [--force]` | path-scoped, machine-local checkout hold `writes: serial` needs (see *Place-claims*, CONVENTIONS.md; #136). `check` exits 0/1/2 (free-or-mine / held-by-a-live-other / liveness-unknown-or-lock-unreachable); releasing someone else's hold requires `COLAB_HUMAN=1` |
 | `places [--json]` | list every place-claim on this machine, liveness resolved right now (never a stored flag) |
-| `readiness <issue> [--clear] [--repo P]` | own the `deps-checked` marker (§5): add it after verifying no open blocker, `--clear` on a new blocker or reopen. Journaled; refuses when `gh` is unusable (the marker has no local-only form) |
+| `readiness <issue> [--clear] [--repo P]` | own the `deps-checked` marker ([§5](../CONVENTIONS.md#5-claiming-work--how-to-say-im-on-this)): add it after verifying no open blocker, `--clear` on a new blocker or reopen. Journaled; refuses when `gh` is unusable (the marker has no local-only form) |
 | `claims [--json] [--sync [--prune]]` | list (grouped by worktree); `--sync` **adds** claims found on GitHub (assigned + in-progress); `--prune` also **removes** local claims GitHub no longer shows |
 | `port alloc [--count N] [--range A-B \| --at p1,p2,...] [--worktree N \| --claim I \| --label S]` | allocate consecutive free ports, or pin exact ports with `--at` |
 | `port free <port> \| --worktree N \| --claim I` | free ports |
@@ -724,7 +724,7 @@ Run `colab <cmd> --help` for full detail.
 | `update [<repo>...] [--apply] [--json] [--quiet]` | sweep the fleet registry for stamped copies that fell behind a changed template; `--apply` refreshes the **pristine** ones. Never commits; never touches a hand-edited copy (see below) |
 | `register [<path>] [--remove] [--list]` | add/remove a repo in **both** fleet registries at once; `--list` flags drift (see below) |
 | `config [show \| add-repo P \| rm-repo P \| add-reserved-file P \| rm-reserved-file P \| set K V]` | manage config (`set` keys: `claimTTLHours`, `portRange`, `worktreeSubdir`, `notifyUrl`, `journal`) |
-| `adopt [--repo P] [--json] [--no-verify] [--axis a,b] [--room R] [--exposure E] [--writes W] [--channels C] [--production U\|none] [--deploy D] [--stack S] [--answered-by N] [--reason "..."]` | detect + ask + derive + WRITE CONVENTIONS.md §9's five rows (`tier`, `room`, `exposure`, `writes`, `channels`) in one act (#199) — a complete descriptor just reports; a flag makes the whole run non-interactive, a TTY prompts, neither refuses fast. Lowering `exposure` (or a first `none`/`self`) needs a human (`COLAB_HUMAN=1` + `--answered-by`, or a terminal); raising, or a first `live`/`released`, does not. Append-only — never rewrites an existing byte; never writes `tier` unless `exposure` ends unanswered |
+| `adopt [--repo P] [--json] [--no-verify] [--axis a,b] [--room R] [--exposure E] [--writes W] [--channels C] [--production U\|none] [--deploy D] [--stack S] [--answered-by N] [--reason "..."]` | detect + ask + derive + WRITE CONVENTIONS.md [§9](../CONVENTIONS.md#9-adopting-this)'s five rows (`tier`, `room`, `exposure`, `writes`, `channels`) in one act (#199) — a complete descriptor just reports; a flag makes the whole run non-interactive, a TTY prompts, neither refuses fast. Lowering `exposure` (or a first `none`/`self`) needs a human (`COLAB_HUMAN=1` + `--answered-by`, or a terminal); raising, or a first `live`/`released`, does not. Append-only — never rewrites an existing byte; never writes `tier` unless `exposure` ends unanswered |
 
 ### Release notes
 
@@ -801,7 +801,7 @@ every out-of-date copy "hand-edited" and make the safe/unsafe distinction meanin
   re-copy: advising `--force` on a file we cannot attribute would overwrite work that never came
   from here. (Both misfires we shipped were stack vocabulary — a framework's codegen command and a
   third-party tool's download URL.)
-- **Never rewrites a `diverged` copy**, even with `--apply`. Copy-and-own (§7) makes local edits
+- **Never rewrites a `diverged` copy**, even with `--apply`. Copy-and-own ([§7](../CONVENTIONS.md#7-ci-and-toolchain)) makes local edits
   legitimate; a tool that silently overwrote them would destroy the principle it serves.
 - **Never rewrites the CLAUDE conventions block.** That block is a *fragment* pasted into a
   larger hand-written file, and the template ships placeholders the adopter fills in (`<A|B>`,
@@ -1075,7 +1075,7 @@ message is composed (`tools/lib/squash.js`, unit-tested):
   **oldest** (the commit that established what the branch is for). Not the newest commit. That was
   the old rule, and it was wrong in exactly the common case: on a well-run branch the newest commit
   is the docs pass, so features shipped titled `docs:` and — because release notes group on the
-  prefix (§4) — vanished from the changelog without anything failing. If no commit carries a
+  prefix ([§4](../CONVENTIONS.md#4-branches-and-commits)) — vanished from the changelog without anything failing. If no commit carries a
   recognised prefix there is nothing to weigh, and it falls back to the newest.
   "Wrote itself" is a first-parent walk from the merge-base, not a raw `<base>..<branch>` diff — the
   latter cannot tell a commit the branch authored from one it merely merged in from elsewhere, and a

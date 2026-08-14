@@ -12,7 +12,7 @@ seed the plan into, and no branch or worktree for it to describe.
 
 Notation: `$N` = the feature's Issue number · plan file = `$PLAN`, resolved as
 `.claude/plans/issue-$N.md` in the **main checkout**, outside any worktree
-(`CONVENTIONS.md` §5, *Planning*):
+(`CONVENTIONS.md` [§5](../../CONVENTIONS.md#planning--a-plan-file-that-outlives-one-command-and-who-drafts-it-94), *Planning*):
 
 ```sh
 MAIN_REPO="$(dirname "$(git rev-parse --path-format=absolute --git-common-dir)")"

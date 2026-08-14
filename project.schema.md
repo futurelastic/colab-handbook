@@ -64,7 +64,7 @@ major version bump names. The precedence (`tools/lib/axis-authority.js`):
 **`exposure` does NOT become required by this unit.** 16 of 17 repos in this handbook's own
 fleet have never declared it, and they see zero change: the legacy read reproduces
 pre-#144 behaviour byte for byte. Making `exposure` mandatory is a later, separate step
-(phase 3 of the epic tracking this model, CONVENTIONS.md §2).
+(phase 3 of the epic tracking this model, CONVENTIONS.md [§2](CONVENTIONS.md#2-tiers)).
 
 **Both keys declared and agreeing is silent — carrying both is fine, and this repo's own
 descriptor (`tier: B` + `exposure: released`) models exactly that**, deliberately, so the
@@ -425,7 +425,7 @@ exposure: released   # users or adopters, via a deliberate artifact (a tag, a ru
 ```
 
 What consumes a merge here — as of **#144**, the AXIS OF RECORD for gate count when
-declared (CONVENTIONS.md §2, "Exposure — what consumes a merge here?"; [`tier`](#tier--optional-legacy)
+declared (CONVENTIONS.md [§2](CONVENTIONS.md#exposure--what-consumes-a-merge-here), "Exposure — what consumes a merge here?"; [`tier`](#tier--optional-legacy)
 above states the full precedence). **This is the breaking change of the major version**: a
 descriptor that opted into `exposure` during phase 1 (additive, inert) now has a
 LOAD-BEARING key — declaring it drives the trunk-shape/deploy-path/production-non-null
@@ -471,7 +471,7 @@ disagree):
 of the room's collaborator set — that definition points at nothing until `room` exists,
 which is why exposure was sequenced after it. Why `prelaunch` was rejected in favour of a
 relationship word, the old→new mapping from `tier`, and the reasoning behind the
-`production:` pairing rule below all live in CONVENTIONS.md §2, "Exposure" — read there for
+`production:` pairing rule below all live in CONVENTIONS.md [§2](CONVENTIONS.md#exposure--what-consumes-a-merge-here), "Exposure" — read there for
 the argument; this page states the field.
 
 **The `production:` pairing advisory.** `exposure` and `production` are two flat sibling
@@ -540,7 +540,7 @@ channels: [workflow, hook]          # several channels at once — the reason th
 
 By what path a commit reaches something that *runs* it — a different question from
 [`deploy`](#deploy--required), which names only the trigger that promotes to production
-(CONVENTIONS.md §2, "Channels — by what path does code reach the thing that runs it?").
+(CONVENTIONS.md [§2](CONVENTIONS.md#channels--by-what-path-does-code-reach-the-thing-that-runs-it), "Channels — by what path does code reach the thing that runs it?").
 **Strictly additive in this unit**: a new key alongside `deploy`, `deploy` stays fully
 authoritative, and no rule anywhere reads `channels` to change a `tier`/`trunk`/`deploy`/
 `production` finding. A repo declaring nothing behaves exactly as it does today, byte for
@@ -584,7 +584,7 @@ set from `deploy` alone.
 **An unintended channel is a finding, never a value.** A working tree file-synced between
 machines with git metadata deliberately excluded is a bug, not a deployment strategy — the
 model must not normalise it into a legal member of this list. The full argument, including
-what a file-synced working tree costs a `writes: serial` repo, lives in CONVENTIONS.md §2,
+what a file-synced working tree costs a `writes: serial` repo, lives in CONVENTIONS.md [§2](CONVENTIONS.md#channels--by-what-path-does-code-reach-the-thing-that-runs-it),
 "Channels" — read there for the argument; this page states the field.
 
 **The descriptor-internal coherence advisory.** `channels: [none]` together with a fact
@@ -704,7 +704,7 @@ declarable values, one per coherent method:
 | `isolated` (default) | many, concurrently | always (worktrees) | today's fleet default |
 
 A fourth cell — many units in flight, writing trunk-direct — is not a method; it is simply
-an unlocked repo, and is named incoherent (`CONVENTIONS.md` §2, *Writes*). It has no
+an unlocked repo, and is named incoherent (`CONVENTIONS.md` [§2](CONVENTIONS.md#writes--serial-or-isolated-and-the-two-things-that-make-a-branch-mandatory), *Writes*). It has no
 declarable value.
 
 **The constraint matrix (#208) — read this before granting anything to a `serial-*`

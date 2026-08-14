@@ -96,7 +96,7 @@ This step is where most agent-initiated issues in the fleet are born: you found
 something real, it is out of scope, so you file it rather than lose it. Keep doing
 that — but a follow-up you decided to file is **work no human has approved yet**,
 and it must be labelled so a batch-start tool can leave it alone
-(`CONVENTIONS.md` §5, *Provenance*):
+(`CONVENTIONS.md` [§5](../../CONVENTIONS.md#provenance--who-decided-the-work-should-exist), *Provenance*):
 
 ```sh
 gh label create agent-filed --color C5DEF5 --description "Filed by an agent on its own initiative — not human-approved" 2>/dev/null || true
@@ -110,7 +110,7 @@ interval. No `colab` on this machine means skip it.
 
 End the body with the origin, naming the issue you were wrapping when you found it —
 that is the breadcrumb back to the context — and, on the next line, the ask class
-(`CONVENTIONS.md` §5, *Ask*) so a decision surface never has to re-derive it from
+(`CONVENTIONS.md` [§5](../../CONVENTIONS.md#ask--the-filer-declares-the-ask-class-89), *Ask*) so a decision surface never has to re-derive it from
 prose:
 
 ```
@@ -183,7 +183,7 @@ gate, but it means a session no longer has to catch this by eye.
 A2 covers docs your work made **wrong** — the domain moved, the deploy changed, a
 gotcha surfaced. It does not cover a session that *concluded something new*: a rule
 about how people work, a decision with alternatives that were weighed. Those go on an
-Issue now and get written by a claimed unit of their own (`CONVENTIONS.md` §5,
+Issue now and get written by a claimed unit of their own (`CONVENTIONS.md` [§5](../../CONVENTIONS.md#writing-a-conclusion-down--the-decision-and-the-document-are-two-units),
 *Writing a conclusion down*). Two reasons, and the second is the one agents miss:
 
 - The reasoning needs a home a reader can find, and a squash commit body is not one.
@@ -215,7 +215,7 @@ Run whatever this repo's CI runs — resolve it from the repo, don't assume:
 
 Gate red because of your change → fix it. Never make it green by loosening the
 test. If it's red for a reason unrelated to your work, that's a finding — report
-it, don't paper over it (`CONVENTIONS.md` §8).
+it, don't paper over it (`CONVENTIONS.md` [§8](../../CONVENTIONS.md#8-conformance-and-reconciliation)).
 
 **The gate going green against the plan's stated oracle IS the stop condition
 (#94).** Not a floor to build past — polishing beyond what the oracle asks for is
@@ -286,7 +286,7 @@ git commit                             # Conventional Commits: type(scope): summ
 ```
 
 Conventional-Commit prefix is mandatory — release notes group on it, so an
-unprefixed commit is invisible in the changelog (`CONVENTIONS.md` §4).
+unprefixed commit is invisible in the changelog (`CONVENTIONS.md` [§4](../../CONVENTIONS.md#4-branches-and-commits)).
 
 ### A5. Push the session branch as backup
 

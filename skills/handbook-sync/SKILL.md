@@ -14,7 +14,7 @@ so a colleague's clone is invisible to `colab update`. This works on any checkou
 
 ## Principle — this is a graft, not a refresh
 
-Templates are **copy-and-own** ([`CONVENTIONS.md` §7](../../CONVENTIONS.md)). The
+Templates are **copy-and-own** ([`CONVENTIONS.md` §7](../../CONVENTIONS.md#7-ci-and-toolchain)). The
 handbook never pushes; the moment you copied a file it became yours. So the job is
 to take what upstream changed *and keep what you added*. A tool can do the provably
 pristine cases. The rest is judgment, and pretending otherwise destroys work.
@@ -82,7 +82,7 @@ this. **It can only be adopted from inside, by someone standing in it.** That is
 
 **[`CONVENTIONS.md` §9 "Adopting this"](../../CONVENTIONS.md#9-adopting-this) is the
 procedure** — nine steps, already written, already correct. Open it and work it in
-order. This section adds only what §9 cannot know: how to interleave it with your
+order. This section adds only what [§9](../../CONVENTIONS.md#9-adopting-this) cannot know: how to interleave it with your
 session, which step blocks, and which steps get skipped.
 
 **Step 1 (the shared question set) is `colab adopt` — run the tool, don't walk the
@@ -90,22 +90,22 @@ five rows by hand (#199).** It detects what the repo already states, asks only w
 is missing (flags, or a prompt at a terminal), derives the rest, and writes
 `.github/project.yml` in one act, append-only. This skill's job around it is
 unchanged: judge whether a *detected* candidate (a stack manifest, a channel
-candidate) is actually right before answering with it, decide what §9's "going
+candidate) is actually right before answering with it, decide what [§9](../../CONVENTIONS.md#9-adopting-this)'s "going
 live" ladder means for THIS repo, and carry the session/Issue ceremony `colab
 adopt` deliberately does not touch. What moved to the tool is steps 3–7 of typing
 the answers in — this skill still grafts, proposes, and judges; it never writes
 the descriptor itself.
 
-Do **not** copy §9's steps into this skill, or into the Issue as a restated list. Two
+Do **not** copy [§9](../../CONVENTIONS.md#9-adopting-this)'s steps into this skill, or into the Issue as a restated list. Two
 copies of one checklist drift, and the disagreement is then found by whoever followed
 the wrong one. This handbook has paid for that twice in a single day — a duplicated
 detection predicate that broke invisibly, and a list that quietly conflated two
-different things. Link to §9, summarise its outcomes, never fork it.
+different things. Link to [§9](../../CONVENTIONS.md#9-adopting-this), summarise its outcomes, never fork it.
 
 ### The ordering trap — you cannot claim before the label exists
 
-§9's step 3 creates the `in-progress` label, because on an unadopted repo it does not
-exist. But **code-start claims the Issue in its own step 3, before any of §9 runs** —
+[§9](../../CONVENTIONS.md#9-adopting-this)'s step 3 creates the `in-progress` label, because on an unadopted repo it does not
+exist. But **code-start claims the Issue in its own step 3, before any of [§9](../../CONVENTIONS.md#9-adopting-this) runs** —
 so the claim depends on machinery adoption has not built yet.
 
 On the path most sessions take, the failure is quiet:
@@ -114,10 +114,10 @@ On the path most sessions take, the failure is quiet:
 - `colab claim $N` **does not fail.** It warns that the `gh` edit failed and keeps the
   **local** claim. So the machine-local cache reads as claimed while GitHub — the
   source of truth, and the only thing a colleague on another machine can see — holds
-  nothing. That is precisely the collision `CONVENTIONS.md` §5 exists to prevent,
+  nothing. That is precisely the collision `CONVENTIONS.md` [§5](../../CONVENTIONS.md#5-claiming-work--how-to-say-im-on-this) exists to prevent,
   reached from underneath.
 
-So **pull §9's step 3 forward, ahead of the claim** — and provision the **whole label
+So **pull [§9](../../CONVENTIONS.md#9-adopting-this)'s step 3 forward, ahead of the claim** — and provision the **whole label
 set** while you are there, not just the claim label:
 
 ```sh
@@ -129,36 +129,36 @@ creates the whole thirteen-name set in one idempotent call (#206) — reading it
 `tools/lib/labels.js`'s `CONVENTION_LABELS`, never restated here — and creating a
 subset is the exact bug this leads to: a `deps-checked` never created leaves a
 readiness column that can never fill, and nothing downstream can tell *free* from
-*nobody looked*. Create the set, not the claim label alone. Then claim, then work §9
+*nobody looked*. Create the set, not the claim label alone. Then claim, then work [§9](../../CONVENTIONS.md#9-adopting-this)
 from its step 1. Safe to re-run on a repo that already has some or all of the labels —
 which matters, because partial adoption is the normal case.
 
 **No GitHub remote at all?** There is no label and no claim to be made. Take
-code-start's notes-file path; §9's steps 3 and 4 and the GitHub half of 7 do not
+code-start's notes-file path; [§9](../../CONVENTIONS.md#9-adopting-this)'s steps 3 and 4 and the GitHub half of 7 do not
 apply. Say so in your report rather than leaving them looking undone.
 
 ### The question set blocks — ask it, never infer it
 
-§9's step 1 is a **shared question set — five questions, not one** — and every
+[§9](../../CONVENTIONS.md#9-adopting-this)'s step 1 is a **shared question set — five questions, not one** — and every
 answer is a **judgement, not yours to make.** `CLAUDE.md` is explicit about the
 oldest of them: a missing marker means treat the repo as Tier B and *propose* the
 file. Proposing is the agent's job; deciding is not, for `tier` or for any of the
 newer four (`room`, `exposure`, `writes`, `channels`).
 
-**Do not restate the five rows here** — that is the exact fork §9's own text
-forbids, one section above this one. Link to §9's table, and know the two outcomes
+**Do not restate the five rows here** — that is the exact fork [§9](../../CONVENTIONS.md#9-adopting-this)'s own text
+forbids, one section above this one. Link to [§9](../../CONVENTIONS.md#9-adopting-this)'s table, and know the two outcomes
 that matter for how you run a sync:
 
 - **You may propose, from committed evidence, and never conclude on your own:**
   a non-null `production:` or a committed deploy path lets you propose `exposure:
   live` or `released` — never `none` or `self`, because those declare the *absence*
   of a consumer, which nothing in a checkout can verify. The identical asymmetry
-  §9 states for `exposure` applies to reading a tier off a `Dockerfile`, a URL in
+  [§9](../../CONVENTIONS.md#9-adopting-this) states for `exposure` applies to reading a tier off a `Dockerfile`, a URL in
   a README, or a deploy workflow that may be dormant: guessing costs nothing at
   the time it is written and misroutes something later. A repo that describes
   nothing is more honest than one that describes itself wrongly.
 - **Asking is not writing.** When a sync meets a repo missing one of the newer
-  four axes, put §9's question to the human and record the answer through
+  four axes, put [§9](../../CONVENTIONS.md#9-adopting-this)'s question to the human and record the answer through
   `colab adopt` (`--room`/`--exposure`/`--writes`/`--channels`, or run it at a
   terminal and answer the prompt) — never fill the gap yourself, and never
   "resolve" the undeclared-pairing advisory (`exposure: none` +
@@ -170,7 +170,7 @@ that matter for how you run a sync:
   answer before it goes in.
 
 Two things not to do while the trunk/tier answer is still pending: do not create
-`dev` "to be ready" (§9 step 9) — `trunk:` is whatever the finished descriptor
+`dev` "to be ready" ([§9](../../CONVENTIONS.md#9-adopting-this) step 9) — `trunk:` is whatever the finished descriptor
 declares, never assumed ahead of it — and if the answer is the legacy Tier B (trunk
 `main`, no `exposure`), `production: null` and `deploy: none` are the finished values, not
 placeholders to revisit.
@@ -178,7 +178,7 @@ placeholders to revisit.
 ### Partial adoption is the normal case — resume, don't restart
 
 A marker but no label; CI but no registration; everything but the CLAUDE pointer.
-Treat §9 as a checklist to **complete**, and probe each step rather than assume it:
+Treat [§9](../../CONVENTIONS.md#9-adopting-this) as a checklist to **complete**, and probe each step rather than assume it:
 
 ```sh
 colab adopt --repo . --no-verify        # step 2 — one command: which of the five §9 rows
@@ -191,16 +191,16 @@ ls .github/workflows/                   # step 6
 colab register --list                   # step 7 — is this repo in BOTH registries?
 ```
 
-Every step of §9 is safe to re-run, and `colab register` documents it in its own help
+Every step of [§9](../../CONVENTIONS.md#9-adopting-this) is safe to re-run, and `colab register` documents it in its own help
 ("Idempotent: registering an already-registered repo reports it and exits 0"). Record
-the *outcomes* in the Issue as a checklist; leave the *steps* in §9.
+the *outcomes* in the Issue as a checklist; leave the *steps* in [§9](../../CONVENTIONS.md#9-adopting-this).
 
-**Leave existing branches alone** (§9 step 8) — §4 grandfathers them, and a first sync
+**Leave existing branches alone** ([§9](../../CONVENTIONS.md#9-adopting-this) step 8) — [§4](../../CONVENTIONS.md#4-branches-and-commits) grandfathers them, and a first sync
 is exactly when someone is tempted to tidy. Renaming one can break a live worktree.
 
 ### Registration is the step that gets skipped
 
-**`colab register` (§9 step 7) is last on the list and first to be forgotten**, because
+**`colab register` ([§9](../../CONVENTIONS.md#9-adopting-this) step 7) is last on the list and first to be forgotten**, because
 nothing local breaks without it. The repo builds, CI passes, the session wraps — and
 the repo simply never appears in a sweep, accumulating drift nobody can see. It is the
 mechanism by which a cohort that size goes unnoticed. Run it, do not defer it.
@@ -221,7 +221,7 @@ fleet list, `C` = the ports config); a path in only one is drift, and the comman
 exits non-zero when it finds any. Paste that output onto the Issue. A repo is adopted
 when the fleet can see it, and this is the evidence for it.
 
-Then return to §1. Anything you copied in §9's step 6 is now a stamped artifact, and
+Then return to §1. Anything you copied in [§9](../../CONVENTIONS.md#9-adopting-this)'s step 6 is now a stamped artifact, and
 the rest of this skill applies to it in the ordinary way.
 
 ## 3. `behind` — let the tool write only what is provably pristine
@@ -300,7 +300,7 @@ and the audit is what catches it:
   disagree about gate count (`tools/lib/axis-authority.js`) — fixing `project.yml`
   (usually by trusting `exposure`, the axis of record) is part of this work.
   Declaring **neither** key is the other, unconditional finding — "no axis of
-  record" (`CONVENTIONS.md` §2) — which this sync should close by putting §9's
+  record" (`CONVENTIONS.md` [§2](../../CONVENTIONS.md#2-tiers)) — which this sync should close by putting [§9](../../CONVENTIONS.md#9-adopting-this)'s
   question set to the repo's own owner, never by guessing an answer.
 - Toolchain pins must still agree between `project.yml` and the manifest.
 - A workflow may trigger on branches that no longer exist — CI passing on nothing.
@@ -309,7 +309,7 @@ and the audit is what catches it:
   a label introduced later — so the check that label powers silently cannot fire (a
   readiness column that never leaves "nobody looked", provenance that reads every issue
   as human-filed). The audit now reports this as `missing convention label(s): …`.
-  Back-fill it here — the same idempotent command §2 and §9 step 3 use, safe to re-run:
+  Back-fill it here — the same idempotent command §2 and [§9](../../CONVENTIONS.md#9-adopting-this) step 3 use, safe to re-run:
   ```sh
   colab labels --ensure
   ```
@@ -320,7 +320,7 @@ and the audit is what catches it:
   exist, so a repo adopted before one of them landed simply has no key for it — legal,
   and silent everywhere else in the audit. But when the audit can also see that the
   repo's own `CLAUDE.md` stamp names a handbook version *older than the axis itself*,
-  it reports one extra `warn`: `marker predates the axis model — … run through §9's
+  it reports one extra `warn`: `marker predates the axis model — … run through [§9](../../CONVENTIONS.md#9-adopting-this)'s
   question set`. That is your cue, not the label back-fill's: put the missing
   question(s) — [§9](../../CONVENTIONS.md#9-adopting-this)'s shared set, the same
   wording as first-time adoption — to the repo's own owner, and write the answer into
@@ -369,7 +369,7 @@ git show --stat                                                 # verify the fil
 
 **If this was an adoption (§2), additionally:**
 
-- **Each question in §9's shared set was answered by a human**, not inferred — and
+- **Each question in [§9](../../CONVENTIONS.md#9-adopting-this)'s shared set was answered by a human**, not inferred — and
   the report says who, and which of the five rows (`tier`/`room`/`exposure`/
   `writes`/`channels`) were actually asked versus already detected/undeclared.
 - **No `exposure` (or any axis) value claiming the absence of a consumer was
@@ -380,7 +380,7 @@ git show --stat                                                 # verify the fil
   longer reports "repo is undescribed" — pasted onto the Issue as output, not
   summarised as a claim.
 - `colab register --list` shows this repo in **both** registries and exits 0.
-- Every step of §9 is either done or explicitly recorded as not applicable (a repo
+- Every step of [§9](../../CONVENTIONS.md#9-adopting-this) is either done or explicitly recorded as not applicable (a repo
   with no GitHub remote skips several) — none left ambiguous.
 - Pre-existing branches are untouched.
 
