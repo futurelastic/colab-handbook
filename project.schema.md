@@ -967,12 +967,12 @@ the shape that shows it. One writer at a time says nothing about who reads the r
 | **Legacy path** (`tier` set, `exposure` absent) — reproduces every rule below, worded against the tier letter, byte for byte with pre-#144 behaviour: | |
 | `tier: A` → `trunk: dev`, `production` non-null, `deploy` ∈ {`tag`, `manual`} | a release branch nothing consumes |
 | `tier: A` + `deploy: push-main` → **finding**, pointing at tier C | claiming a release gate the pipeline does not have |
-| `tier: C` → `trunk: dev`, `production` non-null, `deploy: push-main`, a deploy workflow exists | a tier whose shape does not match its mechanism |
+| `tier: C` → `trunk` a branch distinct from `main` (`dev` by default, any name conforming), `production` non-null, `deploy: push-main`, a deploy workflow exists | a tier whose shape does not match its mechanism |
 | `deploy: tag` (or `push-main`) → a deploy workflow exists | a tier claimed but never wired up |
 | `deploy: manual` → `runbook:` set, and the path exists in the repo | a hand-deploy only one person knows how to run |
 | `tier: B` → `trunk: main`, `deploy: none`, `production: null` | ceremony without benefit |
 | **Axis path** (`exposure` set — governs regardless of whether `tier` is also set): | |
-| `exposure: live` → `trunk: dev`, `production` non-null, `deploy: push-main`, a deploy workflow exists (no `runbook:` escape hatch) | a live shape claimed but never wired up |
+| `exposure: live` → `trunk` a branch distinct from `main` (`dev` by default, any name conforming), `production` non-null, `deploy: push-main`, a deploy workflow exists (no `runbook:` escape hatch) | a live shape claimed but never wired up |
 | `exposure: released`, shape 1 → `production` non-null, `deploy` ∈ {`tag`, `manual`} (never `push-main` — that's `live` — or `none`), a committed deploy path (workflow, or `runbook:` outside CI), `trunk: dev` (or `main` only when `deploy: tag`) | a release claimed but never wired up |
 | `exposure: released`, shape 2 → `production: null`, `trunk: main`, `deploy` absent or `none`, and (a version-shaped tag, or `channels: [artifact]`) | a "released with no server" claim with no evidence it ships anywhere |
 | `exposure: none` → `trunk: main` + no committed deploy workflow (a NAMED `production` alone stays clean — the transitional read) | claiming nothing consumes this repo while something is wired to deploy it |
