@@ -26,32 +26,37 @@ nhiều app production được bảo trì gần như hoàn toàn bởi AI agent
 trên nhiều worktree. Mục anti-pattern không phải lý thuyết: từng mục là chuyện
 đã xảy ra thật, kèm sẹo để chứng minh.
 
-## Mô hình trong 30 giây
+## Năm câu hỏi
 
-Hai câu hỏi quyết định tất cả: **repo này có deploy production không — và nếu
-có, cái gì chặn giữa merge và người dùng?**
+Adopt handbook này nghĩa là trả lời năm câu hỏi về repo của bạn, một lần, ghi
+vào `.github/project.yml` — để không phiên nào phải đoán, và không hai repo
+nào hiểu khác nhau về cùng một từ:
 
-- **Không → Tier B.** Một nhánh duy nhất: `main`. Không ship gì, tag tùy chọn.
-  Đa số repo nằm đây. **0 cổng.**
-- **Có, và chính lần promote là deploy → Tier C.** Code merge vào `dev` (CI
-  nhanh), promote `dev` → `main` — và cú push `main` đó *chính là* deploy.
-  Không có tag. **1 cổng.** Hợp với site đang chạy thật nhưng nhẹ đô, nơi nghi
-  thức tag chẳng ai giữ.
-- **Có, và một tag mới deploy → Tier A.** Code merge vào `dev` (CI nhanh),
-  thăng cấp lên `main` (chạy full test suite), và một tag `v*.*.*` — chỉ tag —
-  mới deploy. **2 cổng.**
+1. **Hôm nay đã có đích deploy chưa** — và đến đó bằng đường nào: một tag gác
+   cổng production, chính cú promote là deploy, một người chạy runbook bằng
+   tay, hay chưa có gì sống cả?
+2. **Còn ai khác làm ở repo này** — một mình, một team, hay có cả người
+   ngoài?
+3. **Merge nhầm thì cái gì hỏng** — không gì cả, chỉ những người đang có mặt
+   ở đây, người dùng qua lần promote kế tiếp, hay người dùng/người adopt qua
+   một artifact đã phát hành?
+4. **Một việc tại một thời điểm, hay nhiều việc chạy song song?**
+5. **Code đi tới chỗ nó chạy bằng đường nào** — một workflow CI, một git
+   hook, một quy trình tay có ghi lại, một checkout đang sống sẵn, một
+   artifact phát hành, dữ liệu của hệ thống khác, hay chưa có đường nào cả?
 
-**A/B/C là nhãn, không phải điểm số.** Đọc lướt dễ tưởng C "tệ hơn" B, nhưng B
-không có production nào cả. Chữ cái mô tả *hình dạng* pipeline, không phải mức
-độ nghiêm túc — chọn cái đúng với sự thật của repo mình.
+Trả lời xong năm câu này là quyết định luôn mọi thứ còn lại: merge vào nhánh
+nào, release nghĩa là gì, Issue tường thuật nhiều hay ít, cần gì để undo một
+merge, có bắt buộc phải có branch hay không. Không câu nào bị hỏi hai lần, và
+không câu nào hỏi cái mà repo đã tự nói sẵn rồi — nhánh mặc định, toolchain,
+port của nó.
 
-Mỗi repo khai báo mình thuộc tier nào trong `.github/project.yml`, nên không ai
-phải đoán. Issue được **claim** bằng assignee + label `in-progress` trước khi
-bắt tay vào làm, nên các phiên song song không bao giờ đụng nhau trên cùng một
-việc.
+Issue được **claim** bằng assignee + label `in-progress` trước khi bắt tay vào
+làm, nên các phiên song song không bao giờ đụng nhau trên cùng một việc.
 
-Toàn bộ luật: [`CONVENTIONS.md`](CONVENTIONS.md). Đọc mất ~15 phút và là file
-**chuẩn tắc duy nhất** — mọi thứ còn lại trong repo chỉ phục vụ nó.
+Toàn bộ luật — mỗi câu trả lời quy về đâu, và vì sao:
+[`CONVENTIONS.md`](CONVENTIONS.md). Đọc mất ~15 phút và là file **chuẩn tắc
+duy nhất** — mọi thứ còn lại trong repo chỉ phục vụ nó.
 
 ## Cấu trúc repo
 
@@ -155,7 +160,7 @@ tắc duy nhất ở đây.
 Bản rút gọn — checklist đầy đủ ở
 [`CONVENTIONS.md` §9](CONVENTIONS.md#9-adopting-this):
 
-1. Xác định tier một cách trung thực (có production **hôm nay** không, chứ
+1. Trả lời câu 1 một cách trung thực (có production **hôm nay** không, chứ
    không phải "sắp có").
 2. Thêm `.github/project.yml`.
 3. `gh label create in-progress` — label claim chưa tồn tại sẵn đâu.

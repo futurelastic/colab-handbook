@@ -27,31 +27,36 @@ production apps maintained almost entirely by AI agents working in parallel
 across many worktrees. The anti-pattern list is not theory: every entry is
 something that actually happened, with the scar to prove it.
 
-## The model in 30 seconds
+## The questions
 
-Two questions decide everything: **does this repo deploy to production — and if
-so, what stands between a merge and the users?**
+Adopting this means answering five questions about your repo, once, into
+`.github/project.yml` — so no session has to guess, and no two repos disagree
+on what a word means:
 
-- **No → Tier B.** A single branch: `main`. Nothing ships, tags optional.
-  Most repos live here. **0 gates.**
-- **Yes, and the promotion itself is the deploy → Tier C.** Code merges into
-  `dev` (fast CI), you promote `dev` → `main` — and that push to `main` *is*
-  the deploy. No tag. **1 gate.** Right for sites that are genuinely live but
-  lightweight, where nobody would keep up a tagging ritual.
-- **Yes, and only a tag deploys → Tier A.** Code merges into `dev` (fast CI),
-  gets promoted to `main` (full test suite runs), and a `v*.*.*` tag — only the
-  tag — deploys. **2 gates.**
+1. **Does a deploy target exist today** — and how is it reached: a tag gates
+   production, the promotion itself deploys, a human runs a runbook, or
+   nothing is live yet?
+2. **Who else works here** — one person, a team, or the public?
+3. **What would break if you merged something wrong here** — nothing, only
+   the people already in the room, users via the next promotion, or users and
+   adopters via a released artifact?
+4. **One unit of work in flight at a time, or several at once?**
+5. **By what path does a commit reach the thing that runs it** — a CI
+   workflow, a git hook, a documented procedure, a live checkout, a published
+   artifact, another system's data, or none of those yet?
 
-**A/B/C are labels, not scores.** Skim too fast and C looks "worse" than B, but
-B has no production at all. The letter describes the *shape* of the pipeline,
-not how seriously anyone takes it — pick the one that matches your repo's truth.
+The answers decide everything that follows: which branch a session merges
+into, what a release is, how much an Issue narrates, what must exist before a
+merge can be undone, whether a branch is even required. Nothing here is asked
+twice, and nothing is asked that the repo already states for itself — its
+default branch, its toolchain, its ports.
 
-Every repo declares its tier in `.github/project.yml`, so nobody has to guess.
-Issues are **claimed** with an assignee plus the `in-progress` label before work
-starts, so parallel sessions never collide on the same task.
+Issues are **claimed** with an assignee plus the `in-progress` label before
+work starts, so parallel sessions never collide on the same task.
 
-The full rules: [`CONVENTIONS.md`](CONVENTIONS.md). It takes ~15 minutes to read
-and is the **single normative file** — everything else in the repo serves it.
+The full rules — what each answer resolves to, and why:
+[`CONVENTIONS.md`](CONVENTIONS.md). ~15 minutes to read, and the **single
+normative file** — everything else in the repo serves it.
 
 ## Repo layout
 
@@ -155,7 +160,7 @@ normative file here.
 The short version — the full checklist is
 [`CONVENTIONS.md` §9](CONVENTIONS.md#9-adopting-this):
 
-1. Determine the tier honestly (is there production **today**, not "soon").
+1. Answer question 1 honestly (is there production **today**, not "soon").
 2. Add `.github/project.yml`.
 3. `gh label create in-progress` — the claim label does not exist by default.
 4. Paste [`templates/repo-CLAUDE-block.md`](templates/repo-CLAUDE-block.md)
