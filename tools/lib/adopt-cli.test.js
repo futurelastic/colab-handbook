@@ -193,6 +193,23 @@ test('fresh fixture + full flags + COLAB_HUMAN=1: exit 0, written, audit reports
   assert.strictEqual(parsed.verify.ok, true, JSON.stringify(parsed.verify.findings));
 });
 
+// #208: the split's current vocabulary is a legal --writes flag value too, not just the
+// legacy alias exercised above.
+test('#208: --writes serial-direct (current vocabulary, not the legacy alias): exit 0, written, audit reports ok:true', () => {
+  const fx = fixture(undefined);
+  const r = colab(fx, [
+    'adopt', '--repo', fx.work, '--json',
+    '--production', 'none', '--deploy', 'none', '--stack', 'docs',
+    '--room', 'solo', '--writes', 'serial-direct', '--channels', 'none',
+    '--exposure', 'self', '--answered-by', 'Test Human',
+  ], { COLAB_HUMAN: '1' });
+  assert.strictEqual(r.code, 0, r.err);
+  const parsed = JSON.parse(r.out);
+  assert.strictEqual(parsed.cfg.writes, 'serial-direct');
+  assert.ok(parsed.verify && parsed.verify.ran, 'verify should have run (audit/ is available in this checkout)');
+  assert.strictEqual(parsed.verify.ok, true, JSON.stringify(parsed.verify.findings));
+});
+
 test('same fresh fixture, same flags, WITHOUT COLAB_HUMAN=1: non-zero, class human-gated, file does not exist', () => {
   const fx = fixture(undefined);
   const r = colab(fx, [

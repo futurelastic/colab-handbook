@@ -96,9 +96,26 @@ tier-legacy path"). Read `trunk`/`production`/`deploy` below as the **legacy** s
 
 ### `trunk` — required
 
-The branch sessions merge into. Must be `dev` when `tier: C`; `main` when
-`tier: B`. On `tier: A` it is `dev` **or**, when `deploy: tag`, `main` (see the
-exception below). Any other value is a finding.
+The branch sessions merge into. `main` when `tier: B` — fixed, there is no
+second branch to distinguish it from. On `tier: A` it is `dev` **or**, when
+`deploy: tag`, `main` (see the exception below) — also fixed, for the same
+reason as B outside that one exception. Any other value on B or (outside the
+tag-gated exception) A is a finding.
+
+**On `tier: C`, `trunk` is a declared setting, not a fixed spelling (#205).**
+What is enforced is the **two-branch split**, not the name: `trunk` must be a
+branch distinct from `main`, the release branch the promotion deploys to.
+`dev` is the **default** — the value `colab adopt` and the templates propose
+when nothing is said — but a repo that declares a different name (`develop`,
+say) is **conforming, not exempted**: no advisory, no "legacy" framing. It
+answered the question the same way `dev` would have. This is deliberately
+narrower than "any name is legal" — Tier B and (non-tag-gated) Tier A keep a
+single fixed value each, because there either is no second branch at all, or
+the tag itself already marks the release boundary. Only the one-gate shape
+(Tier C) has a second branch whose *existence*, not its *spelling*, is what the
+model measures. `tools/lib/exposure-shape.js`'s `evaluateLive` and
+`audit/audit.mjs`'s tier-C coherence check are the two places this is enforced;
+they agree by construction, not by two authors reading the same prose.
 
 This holds for hand-deployed Tier A repos too (`deploy: manual`), and the shape
 earns its keep there rather than being ceremony: `main` is **what is currently
@@ -107,9 +124,10 @@ promotion is the deliberate "I am about to deploy" act. Without automation,
 that merge is the only record of what shipped and when — collapsing the two
 branches would erase it.
 
-Tier C keeps the identical split for the identical reason. There `main` is
-literally what is live — the promotion deploys it — so collapsing the branches
-would remove the only moment at which anyone decides to ship.
+Tier C keeps the identical split for the identical reason, whatever its trunk
+is named. There `main` is literally what is live — the promotion deploys it —
+so collapsing the branches would remove the only moment at which anyone
+decides to ship.
 
 **The exception: a tag-gated Tier A may run a single trunk `main`.** When
 `deploy: tag`, the **tag** is the deliberate release artifact, so the tag itself
@@ -428,9 +446,11 @@ disagree):
 - `self` — **no mechanism or contract rule at all, not even trunk shape.** Its consumer
   set is a subset of the room's ([`room`](#room--optional)), so policing its
   deploy/production/trunk shape is out of scope by design.
-- `live` — `trunk: dev`, a non-null `production`, `deploy: push-main`, and a committed
-  `deploy-*.yml` workflow. Keeps the old tier C contract's no-runbook asymmetry: there is
-  **no `runbook:` escape hatch** for `live` — a deploy workflow must actually exist.
+- `live` — `trunk` distinct from `main` (the two-branch split, `dev` by default — see
+  [`trunk`](#trunk--required); NOT a fixed spelling, #205), a non-null `production`,
+  `deploy: push-main`, and a committed `deploy-*.yml` workflow. Keeps the old tier C
+  contract's no-runbook asymmetry: there is **no `runbook:` escape hatch** for `live` — a
+  deploy workflow must actually exist.
 - `released` — **two legal shapes, told apart by whether `production` is set.**
   - **Shape 1 — `production` non-null.** Mirrors the old tier A contract: `deploy` must be
     `tag` or `manual` (never `push-main` — every push reaching users with no release
@@ -658,31 +678,87 @@ own room:
 **`ceremony: light` no longer, by itself, enables solo flow.** #133 introduced
 `writes: serial` as solo flow's real gate and accepted `ceremony: light` as a LEGACY
 proxy only, for repos that had not yet answered the `writes` question. #175 removed that
-bridge: `colab solo` now refuses outright on any repo that is not `writes: serial` — see
-[`writes`](#writes--optional) below for the entry gate and the five rules it never
-relaxes.
+bridge: `colab solo` now refuses outright on any repo that does not resolve to
+`writes: serial-direct` (#208 split `serial` into `serial-direct`/`serial-gated`; the
+legacy alias `serial` still resolves to `serial-direct`, so this is unchanged for every
+repo that has not opted into the split) — see [`writes`](#writes--optional) below for the
+entry gate and the five rules it never relaxes.
 
 ### `writes` — optional
 
 ```yaml
-writes: isolated   # default; omission = isolated — no existing repo changes behavior
-writes: serial      # one writer at a time in a place, under a place-claim
+writes: isolated       # default; omission = isolated — no existing repo changes behavior
+writes: serial-direct   # one writer at a time, no branch — solo flow is this cell
+writes: serial-gated    # one writer at a time, still branches for a pre-merge gate
+writes: serial           # LEGACY ALIAS of serial-direct — see below
 ```
 
 Which write-conflict prevention method this repo's sessions use, by default — a separate
 axis from `tier` (gates to production) and from `ceremony` (record-keeping depth). Three
-coherent methods exist: **serial trunk-direct** (one writer, no branch — solo flow is this
-cell), **serial gated** (one writer, still branches for a squash unit or a pre-merge gate),
-and **isolated** (worktrees, no shared mutable state — today's default and the vast
-majority of this fleet). A fourth cell — many units in flight, writing trunk-direct — is
-not a method; it is simply an unlocked repo, and is named incoherent
-(`CONVENTIONS.md` §2, *Writes*).
+declarable values, one per coherent method:
 
-`writes` says which of those a repo's sessions may use by default; it does **not** say
-whether any given unit of work branches — that stays a per-unit choice inside whichever
-method applies. Two conditions, and only two, make a branch mandatory on a `serial` repo:
-more than one unit in flight, or a gate that must inspect a unit before it lands. "It feels
-safer" is not on that list.
+| method | writer count | branches? | this is… |
+|---|---|---|---|
+| `serial-direct` | one at a time | no | solo flow |
+| `serial-gated` | one at a time | required when the two conditions below apply | the common case: a claim, a branch, a squash |
+| `isolated` (default) | many, concurrently | always (worktrees) | today's fleet default |
+
+A fourth cell — many units in flight, writing trunk-direct — is not a method; it is simply
+an unlocked repo, and is named incoherent (`CONVENTIONS.md` §2, *Writes*). It has no
+declarable value.
+
+**The constraint matrix (#208) — read this before granting anything to a `serial-*`
+repo.** This is the table the issue that split the value asked for by name, because the
+prose alone put the `auto-trunk` answer three passages apart and a reader who stopped at
+the second concluded the opposite of the truth:
+
+| constraint | `serial-direct` | `serial-gated` | `isolated` |
+|---|---|---|---|
+| `autonomy: auto-trunk` | **forbidden** (`CONVENTIONS.md`, *Solo flow*, rule 5) | allowed | allowed |
+| place-claim needed | yes | yes | no (the worktree already is the isolation) |
+| branch | optional — only when a unit is mandatory (below) | required when a unit is mandatory (below) | always |
+| `ceremony: light` + `autonomy: auto-trunk` | — (solo flow does not combine with an unattended-merge grant) | **forbidden** | **forbidden** |
+
+`serial-direct` is the ONLY value the `auto-trunk` prohibition names. Granting it to a
+repo that has actually declared `serial-gated` is not merely undocumented — it is the
+misgrant #208 measured happening in practice, because a reader who only reached *Solo
+flow*, rule 5 could not tell the two methods apart.
+
+**`writes` says which of those a repo's sessions may use by default; it does NOT say
+whether any given unit of work branches** — that stays a per-unit choice inside whichever
+method applies. Two conditions, and only two, make a branch mandatory on a `serial-*`
+repo: more than one unit in flight, or a gate that must inspect a unit before it lands.
+"It feels safer" is not on that list. This applies to `serial-gated` in the ordinary
+case (a declared pre-merge gate makes condition 2 true as a matter of policy, so branching
+is the norm there) and to `serial-direct` only in the rare case both conditions fire mid
+session — solo flow's entry gate already refuses to open a second unit, so condition 1 is
+false by construction at the moment a solo session starts.
+
+**The legacy alias: `serial` resolves to `serial-direct`, not `serial-gated`.**
+`serial` predates the split and stays declarable — no adopter's descriptor breaks on this
+change. `tools/lib/writes-authority.js` is the ONE shared resolver (the audit and `colab
+adopt` both read it, the same split `tools/lib/axis-authority.js` draws for `tier` →
+`exposure`), and it resolves the alias to `serial-direct` for two reasons, not one:
+
+1. **Byte-identical preservation.** Every repo declaring bare `serial` today is
+   solo-flow-eligible (`soloEligibility`, `tools/lib/solo.js`) — including this handbook's
+   own descriptor, whose comment states outright that `writes: serial` "is what lets solo
+   flow's entry gate open here" (see this file's own `.github/project.yml`). Resolving the
+   alias to `serial-gated` instead would silently revoke that for every such repo the
+   moment this axis lands — the opposite of "no adopter's descriptor breaks."
+2. **The conservative reading on the one property that is actually dangerous.** A bare
+   `serial` repo staying read as `serial-direct` stays read as a repo that must NEVER
+   receive `autonomy: auto-trunk`. Resolving it to `serial-gated` would instead move it
+   into the constraint matrix's `allowed` cell for a value nobody has re-examined —
+   exactly the wrong direction for an alias.
+
+**Reclassifying an EXISTING repo's descriptor from `serial` to `serial-gated` is a human
+decision, made per repo, never inferred by a tool.** The trap runs the other way from what
+intuition suggests: `serial-gated` reads as the *safer*, more-conservative choice (it keeps
+the branch), but assigning it automatically to a repo that is actually running trunk-direct
+would move that repo into the `auto-trunk`-eligible cell it must never occupy. Migrating a
+descriptor off the alias, once true of a given repo, is exactly that: a fact somebody
+checks and writes down, not a bulk edit.
 
 **Deliberately not coupled to `tier`, `production`, or exposure.** A busy repo with three
 concurrent sessions needs isolation regardless of whether it has a production deploy; a
@@ -692,7 +768,7 @@ consumes it* — encoding that correlation as a rule would repeat the same weld 
 was introduced to undo. No coherence rule is audited against `tier`/`production` for this
 reason; do not add one.
 
-**No field for the place-claim itself.** The lock that enforces `writes: serial`
+**No field for the place-claim itself.** The lock that enforces either `serial-*` method
 (`CONVENTIONS.md`, *Solo flow* / place-claims) is a fact about one checkout on one
 machine at one moment — the same reasoning that keeps `deploys: {host: branch}` out of
 this schema ([§2](CONVENTIONS.md#2-tiers)) applies here: a path on one host is meaningless

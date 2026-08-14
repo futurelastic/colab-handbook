@@ -510,8 +510,10 @@ function cmdClaim(argv) {
   const gh = isGhUsable(repoAbs);
   const myLogin = gh ? git.ghCurrentLogin() : null;
 
-  // #133/#136: a claim with NO worktree is the trunk-checkout shape — on a `writes: serial` repo
-  // that is condition 1's unit (CONVENTIONS.md §2, "Writes"), so a second one already in flight
+  // #133/#136: a claim with NO worktree is the trunk-checkout shape — on a serial repo (either
+  // `writes: serial-direct` or `writes: serial-gated` — #208 split the value; the legacy alias
+  // `writes: serial` reads the same way here, via `solo.writesMode`) that is condition 1's unit
+  // (CONVENTIONS.md §2, "Writes"), so a second one already in flight
   // makes a place-claim conflict, and it is refused here the same way a worktree/issue conflict is
   // below — before the mutate, never after. Computed BEFORE the state read so a read failure can
   // be attributed correctly (place-claim-aware degrade vs. the ordinary claim path, below).
@@ -810,11 +812,14 @@ function cmdGateRecorded(argv) {
 // ---------------------------------------------------------------------------
 // solo — the entry gate for solo flow (CONVENTIONS.md, Solo flow; #83).
 //
-// Solo flow lets a `writes: serial` repo skip pre-filed issue / claim / worktree and commit
-// straight to trunk — legal ONLY because the start-side rails (claim discipline, worktree
-// isolation) exist to protect OTHER sessions, and a solo session has none. This command is the
-// mechanical check that condition actually holds, not the honor system: every rule it enforces
-// is read fresh from git + state.json on every call, never assumed from a prior run.
+// Solo flow lets a `writes: serial-direct` repo (or the legacy alias `writes: serial` — #208
+// split `serial` into `serial-direct`/`serial-gated`; solo eligibility keys off the DIRECT
+// value only, since `serial-gated` declares a pre-merge gate exists, which is exactly what
+// solo flow has none of) skip pre-filed issue / claim / worktree and commit straight to trunk
+// — legal ONLY because the start-side rails (claim discipline, worktree isolation) exist to
+// protect OTHER sessions, and a solo session has none. This command is the mechanical check
+// that condition actually holds, not the honor system: every rule it enforces is read fresh
+// from git + state.json on every call, never assumed from a prior run.
 //
 // The lock (`state.solo[repoAbs]`) is its own thing, not a claim or a worktree — solo flow makes
 // neither, so there is nothing else in state.json a second solo attempt could collide with.
@@ -823,8 +828,10 @@ function cmdGateRecorded(argv) {
 const HELP_SOLO = `colab solo [--repo <path>] [--force] [--session <url>] [--session-name <name>]
 colab solo --done [--repo <path>]
 
-Entry gate for solo flow (CONVENTIONS.md, Solo flow) — legal on a \`writes: serial\` repo only
-(#175 retired the legacy \`ceremony: light\` acceptance path #133 introduced as a bridge).
+Entry gate for solo flow (CONVENTIONS.md, Solo flow) — legal on a \`writes: serial-direct\`
+repo only (the legacy alias \`writes: serial\` reads the same way; \`serial-gated\` does NOT
+qualify — it declares a pre-merge gate, which solo flow has none of. #175 retired the legacy
+\`ceremony: light\` acceptance path #133 introduced as a bridge).
 Trunk-direct commits with no pre-filed issue, claim or worktree are safe exactly when nobody
 else could be colliding with them; this command checks that mechanically instead of trusting it.
 
@@ -884,9 +891,11 @@ function cmdSolo(argv) {
   if (opts.help) return print(HELP_SOLO);
   const repoAbs = resolveRepo(opts);
   const doc = projectDoc(repoAbs);
-  // #133 re-keyed this gate onto `writes: serial`. #175 removed the `ceremony: light` legacy
-  // acceptance path and the ceremony/production coherence rule it depended on — do not add a
-  // second acceptance path back.
+  // #133 re-keyed this gate onto `writes: serial`. #208 split that value into
+  // `serial-direct`/`serial-gated`; `soloEligibility` keys off `serial-direct` only (the
+  // legacy alias still resolves there — tools/lib/writes-authority.js). #175 removed the
+  // `ceremony: light` legacy acceptance path and the ceremony/production coherence rule it
+  // depended on — do not add a second acceptance path back.
   const eligibility = solo.soloEligibility(doc);
   if (!eligibility.ok) throw new UserError(`${eligibility.reason} (CONVENTIONS.md, Solo flow).`);
 
@@ -974,14 +983,17 @@ function cmdSoloDone(repoAbs, doc) {
 }
 
 // ---------------------------------------------------------------------------
-// place — the writer-verifiable checkout hold `writes: serial` needs (#136)
+// place — the writer-verifiable checkout hold a serial repo needs (#136; #208: either
+// `writes: serial-direct` or `writes: serial-gated`, the legacy alias `writes: serial`
+// included — see solo.writesMode)
 // ---------------------------------------------------------------------------
 
 const HELP_PLACE = `colab place <acquire|check|release> <path> [--repo P] [--session URL] [--session-name N] [--force]
 
-Path-scoped, machine-local hold on ONE checkout (CONVENTIONS.md, Place-claims) — what
-\`writes: serial\` needs and \`writes: isolated\` (worktrees) does not. Not repo-scoped: a
-repo running several worktrees needs one hold per checkout in use.
+Path-scoped, machine-local hold on ONE checkout (CONVENTIONS.md, Place-claims) — what a
+serial repo (\`writes: serial-direct\` or \`writes: serial-gated\`) needs and \`writes: isolated\`
+(worktrees) does not. Not repo-scoped: a repo running several worktrees needs one hold per
+checkout in use.
 
   colab place acquire <path>   take the hold. Same exit scheme as \`check\` below on a refusal
                                 (exit 1 held-by-a-live-other, exit 2 liveness-unknown-or-degraded).
@@ -995,7 +1007,7 @@ repo running several worktrees needs one hold per checkout in use.
                                 a held place-claim with a live holder is a genuine refusal, not
                                 friction to route around.
 
-\`colab claim\` on a \`writes: serial\` repo with no --worktree takes/checks this SAME hold on the
+\`colab claim\` on a serial repo (\`writes: serial-direct\`/\`serial-gated\`) with no --worktree takes/checks this SAME hold on the
 trunk checkout — its \`--force\` over a live other holder is gated by the identical COLAB_HUMAN=1
 bar as \`place acquire --force\` above; there is only one override rule, enforced at both entry
 points that can trigger it.
@@ -4337,7 +4349,7 @@ function cmdConfig(argv) {
 
 const HELP_ADOPT = `colab adopt [--repo <path>] [--json] [--no-verify] [--axis a,b,...]
                  [--room <solo|team|public>] [--exposure <none|self|live|released>]
-                 [--writes <serial|isolated>] [--channels <c1,c2,...>]
+                 [--writes <isolated|serial-direct|serial-gated>] [--channels <c1,c2,...>]
                  [--production <url>|none] [--deploy <push-main|tag|manual|none>]
                  [--stack "<text>"] [--answered-by <name>] [--reason "<text>"]
 
@@ -4554,7 +4566,7 @@ function adoptAxisFlagHint(axis) {
     case 'tier': return '--production <url>|none --deploy <push-main|tag|manual|none>';
     case 'room': return '--room <solo|team|public>';
     case 'exposure': return '--exposure <none|self|live|released> [--answered-by <name>] [--reason "<text>"]';
-    case 'writes': return '--writes <serial|isolated>';
+    case 'writes': return '--writes <isolated|serial-direct|serial-gated>';
     case 'channels': return '--channels <c1,c2,...>';
     default: return `--${axis} <value>`;
   }
@@ -7744,9 +7756,10 @@ Commands:
                                         code-wrap's A3 quality-gate step (#116) — no colab state
                                         written, no gh call of its own
   solo [--force] [--repo P] | solo --done [--repo P]                 entry-gated trunk-direct
-                                        flow, \`writes: serial\` only — no issue/claim/worktree (#83)
+                                        flow, \`writes: serial-direct\` only (legacy alias
+                                        \`serial\` included) — no issue/claim/worktree (#83)
   place acquire|check|release <path> [--repo P] [--force]            writer-verifiable checkout
-                                        hold \`writes: serial\` needs (#136); release requires
+                                        hold a serial repo needs (#136); release requires
                                         COLAB_HUMAN=1 unless releasing your own
   places [--json]                                                     list every place-claim, with
                                         liveness resolved right now

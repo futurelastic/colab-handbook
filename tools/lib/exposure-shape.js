@@ -97,11 +97,15 @@ function evaluateNone(ctx) {
 
 function evaluateLive(ctx) {
   const out = [];
-  if (ctx.trunk !== 'dev') {
+  // #205: validates the two-branch SPLIT, not the spelling — trunk must be declared and
+  // distinct from "main" (the release branch the promotion deploys to), never required to
+  // literally be "dev". "dev" is the default project.schema.md's `trunk` section and the
+  // templates propose; a repo naming its trunk something else is conforming, not exempted.
+  if (!ctx.trunk || ctx.trunk === 'main') {
     out.push({
       kind: 'fail',
-      message: `exposure: live requires trunk "dev", found ${JSON.stringify(ctx.trunk)} — the `
-        + 'promotion is the deploy, and dev is where sessions land before it ships',
+      message: `exposure: live requires trunk to be a branch distinct from "main", found ${JSON.stringify(ctx.trunk)} `
+        + '— the promotion is the deploy, and trunk (dev by default) is where sessions land before it ships',
     });
   }
   if (!ctx.hasProduction) {
