@@ -1077,6 +1077,19 @@ function auditRepo(target, ctx) {
       }
     }
 
+    // ---- autonomy needs the tool it grants latitude to run (#216) -------------
+    // `autonomy: auto-trunk` grants code-ship exactly one graduated exception — Phase B
+    // may complete unattended, but ONLY through `colab ship`, and no other path
+    // (CLAUDE.md, "One graduated exception"). A repo that declares the grant with no
+    // `tools/colab` to run it with is not unsafe: nothing can act on a permission nothing
+    // can invoke, so no unattended merge actually happens. But the descriptor still
+    // asserts a capability the repo does not have — the same class of drift the tier +
+    // deploy mismatch above reports, at `warn` rather than `fail` because nothing here is
+    // a safety hazard, only a stale or aspirational field.
+    if (autonomy === "auto-trunk" && src.readFile("tools/colab") === null) {
+      warn(`autonomy: auto-trunk but no tools/colab in this repo — the grant has nothing to act on`);
+    }
+
     // ---- writes axis (#133) --------------------------------------------------
     // Deliberately NOT coupled to tier/production/exposure — see CONVENTIONS.md §2 and
     // project.schema.md.
