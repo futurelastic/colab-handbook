@@ -717,7 +717,7 @@ the second concluded the opposite of the truth:
 | `autonomy: auto-trunk` | allowed — governs the branch-merge fallback only (`CONVENTIONS.md`, *Solo flow*, rule 5) | allowed | allowed |
 | place-claim needed | yes | yes | no (the worktree already is the isolation) |
 | branch | optional — only when a unit is mandatory (below) | required when a unit is mandatory (below) | always |
-| `ceremony: light` + `autonomy: auto-trunk` | — (solo flow does not combine with an unattended-merge grant) | **forbidden** | **forbidden** |
+| `ceremony: light` + `autonomy: auto-trunk` | **forbidden** | **forbidden** | **forbidden** |
 
 **Until #224, the `auto-trunk` row read `forbidden` for `serial-direct`; that was too
 broad, and #208's original worry — a misgrant nobody could tell apart from

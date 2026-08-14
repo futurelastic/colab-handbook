@@ -433,7 +433,7 @@ below is the fix — read it before granting anything to a `serial-*` repo:
 | `autonomy: auto-trunk` | allowed — governs the branch-merge fallback only (rule 5, Solo flow, below) | allowed | allowed |
 | place-claim needed | yes | yes | no — the worktree already is the isolation |
 | branch | optional (mandatory only per the two conditions below) | required per the two conditions below | always |
-| `ceremony: light` + `autonomy: auto-trunk` | — | **forbidden** (above) | **forbidden** (above) |
+| `ceremony: light` + `autonomy: auto-trunk` | **forbidden** (above) | **forbidden** (above) | **forbidden** (above) |
 
 **`auto-trunk` was marked forbidden for `serial-direct` until #224; that reading was too
 broad, and the correction is worth carrying forward so it is not re-derived.** The old
