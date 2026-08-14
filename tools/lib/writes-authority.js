@@ -18,19 +18,24 @@
  * `serial -> serial-direct` is the LEGACY resolution, and it is deliberately the one that
  * changes nothing observable for a repo that has not opted into the split — the identical
  * reasoning axis-authority.js gives for its own LEGACY map ("reproduces pre-#144 behaviour
- * byte for byte"):
+ * byte for byte"). It rested on two reasons; #224 retired the second, so the first now
+ * carries the resolution alone:
  *
  *   - Every repo declaring bare `serial` today is solo-flow eligible
  *     (`soloEligibility`, tools/lib/solo.js) — including this handbook's own descriptor,
  *     whose comment states outright that `writes: serial` "is what lets solo flow's entry
  *     gate open here". Resolving the alias to `serial-gated` instead would silently revoke
- *     that for every such repo the moment this unit lands.
- *   - It is also the CONSERVATIVE reading on the one property #208 measured as actually
- *     dangerous: a bare `serial` repo staying read as `serial-direct` stays read as a repo
- *     that must NEVER receive `autonomy: auto-trunk` (CONVENTIONS.md, Solo flow, rule 5).
- *     Resolving it to `serial-gated` would instead move it into the cell the issue's own
- *     constraint matrix marks `allowed` — the wrong direction for a value nobody has
- *     re-examined yet.
+ *     that for every such repo the moment this unit lands. Still true, and sufficient on
+ *     its own.
+ *   - RETIRED (#224): this used to also cite the constraint matrix's `auto-trunk` cell,
+ *     which read `forbidden` for `serial-direct` and `allowed` for `serial-gated` —
+ *     resolving toward `serial-gated` looked like it would move a repo into a cell nobody
+ *     had re-examined. #224 corrected that cell to `allowed` for both methods
+ *     (CONVENTIONS.md §2 "Writes"; project.schema.md "writes — optional"): `auto-trunk`
+ *     was never actually gated on `serial-direct` vs `serial-gated`, only on whether a
+ *     branch exists for `colab ship` to act on. Resolving toward `serial-gated` no longer
+ *     changes a repo's `auto-trunk` posture at all, so this reason no longer applies — the
+ *     first reason above is what protects the alias now.
  *
  * Reclassifying an EXISTING repo's descriptor to `serial-gated` stays a human's call, never
  * inferred by this resolver — #208's migration note is explicit that reclassification is a
