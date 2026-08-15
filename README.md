@@ -65,9 +65,9 @@ normative file** — everything else in the repo serves it.
 | [`CONVENTIONS.md`](CONVENTIONS.md) | The rules. Normative, the single source of truth (EN). |
 | [`CLAUDE.md`](CLAUDE.md) | The entry point for AI agents — the operational distillation (EN). |
 | [`project.schema.md`](project.schema.md) | Field reference for `.github/project.yml`. |
-| [`templates/`](templates/) | **Copy-and-own** starting points: CI, release, the `CLAUDE.md` block for adopting repos. **Nothing is called remotely** — copy it, edit it, own it. |
-| [`tools/`](tools/) | `colab` — a small CLI for claiming issues, allocating ports, and managing worktrees (optional). JSON state, zero dependencies. |
-| [`audit/`](audit/) | An external conformance checker. Reads all your repos — every owner, including local-only ones — and reports drift in a single run. Advisory only, never blocking. |
+| [`templates/`](templates/) | **Copy-and-own** starting points: CI, release, git hooks (a secret scan and an identity scan), and the `CLAUDE.md` block for adopting repos. **Nothing is called remotely** — copy it, edit it, own it. Templates, not scaffolding, because scaffolding only reaches repos created after it shipped. |
+| [`tools/`](tools/) | `colab` — a small CLI (optional): adopt a repo, claim issues, allocate ports, manage worktrees, and merge a finished branch to trunk when the repo grants it. JSON state, zero dependencies. |
+| [`audit/`](audit/) | An external conformance checker. Reads all your repos — every owner, including local-only ones — and reports drift in a single run. Advisory only, never blocking. `--identity` additionally scans public repository descriptions and topics, which no git hook can see. |
 | [`skills/`](skills/) | Portable session flow: `code-triage` (pick the next task, flagging hard ones for a plan) → `code-start` (open a session; runs `code-plan` when flagged) → `code-wrap` (distill + gate + hand off) → `code-ship` (grade + merge, human-authorized), plus `code-sweep` (clear out everything ALREADY DONE in one repo — or just a named set of issues or one session — running `code-wrap`+`code-ship` on each) and `handbook-sync` (bring ONE repo up to the latest handbook, run from inside it). Installed as Claude Code skills by [`install.sh`](install.sh) — see *Setting up a machine* below. |
 | [`install.sh`](install.sh) | Sets up **your machine**: skills, the `colab` CLI, the pre-commit hook, the fleet list. Idempotent, and `--dry` shows you everything first. |
 
@@ -161,8 +161,12 @@ The short version — the full checklist is
 [`CONVENTIONS.md` §9](CONVENTIONS.md#9-adopting-this):
 
 1. Answer question 1 honestly (is there production **today**, not "soon").
-2. Add `.github/project.yml`.
-3. `gh label create in-progress` — the claim label does not exist by default.
+2. Add `.github/project.yml`. `colab adopt` asks the five questions and writes
+   the file for you — it stops at the descriptor and prints the rest of this
+   list, because the remaining steps are not its to take.
+3. `colab labels --ensure` — the convention labels do not exist by default, and
+   there are more than one. A check whose label was never created can never
+   fire.
 4. Paste [`templates/repo-CLAUDE-block.md`](templates/repo-CLAUDE-block.md)
    into the repo's `CLAUDE.md` — this is the only way agents discover these
    conventions.
@@ -181,6 +185,14 @@ conventions explain *why* each rule exists, so you can judge for yourself when
 breaking one is worth it. When you do break one, fix the documentation in the
 same PR — a document describing a repo that does not exist is the worst thing in
 this business.
+
+**Two things do block, and the line between them is deliberate.** The git hooks
+refuse: a secret scan, and an identity scan that stops a hostname, a home path
+or a customer's name reaching a public repo. Those guard **publication**, which
+is the one mistake that cannot be undone — history cannot be recalled once
+anything is cloned. Everything about *conformance* stays advisory, because being
+wrong about a convention costs a conversation, and being wrong about publication
+costs forever.
 
 ## License
 

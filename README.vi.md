@@ -65,9 +65,9 @@ duy nhất** — mọi thứ còn lại trong repo chỉ phục vụ nó.
 | [`CONVENTIONS.md`](CONVENTIONS.md) | Luật. Chuẩn tắc, nguồn sự thật duy nhất (EN). |
 | [`CLAUDE.md`](CLAUDE.md) | Cửa vào cho AI agent — bản chưng cất vận hành (EN). |
 | [`project.schema.md`](project.schema.md) | Tham chiếu field của `.github/project.yml`. |
-| [`templates/`](templates/) | Điểm khởi đầu **copy-về-là-của-bạn**: CI, release, block `CLAUDE.md` cho repo adopt. **Không có gì được gọi từ xa** — copy, sửa, sở hữu. |
-| [`tools/`](tools/) | `colab` — một CLI nhỏ cho claim issue, cấp port, và quản lý worktree (tùy chọn). State JSON, không dependency. |
-| [`audit/`](audit/) | Trình kiểm tra conformance từ bên ngoài. Đọc mọi repo của bạn — mọi owner, kể cả repo local-only — và báo drift trong một lần chạy. Chỉ cảnh báo, không bao giờ chặn. |
+| [`templates/`](templates/) | Điểm khởi đầu **copy-về-là-của-bạn**: CI, release, git hook (một bản quét secret và một bản quét danh tính), và block `CLAUDE.md` cho repo adopt. **Không có gì được gọi từ xa** — copy, sửa, sở hữu. Là template chứ không phải scaffold, vì scaffold chỉ tới được những repo tạo ra sau khi nó ra đời. |
+| [`tools/`](tools/) | `colab` — một CLI nhỏ (tùy chọn): adopt một repo, claim issue, cấp port, quản lý worktree, và merge nhánh đã xong vào trunk khi repo cho phép. State JSON, không dependency. |
+| [`audit/`](audit/) | Trình kiểm tra conformance từ bên ngoài. Đọc mọi repo của bạn — mọi owner, kể cả repo local-only — và báo drift trong một lần chạy. Chỉ cảnh báo, không bao giờ chặn. Thêm `--identity` thì quét cả description và topic của repo public — thứ mà không git hook nào nhìn thấy được. |
 | [`skills/`](skills/) | Flow phiên làm việc portable: `code-triage` (chọn việc tiếp theo, gắn cờ việc khó cần plan) → `code-start` (mở phiên; chạy `code-plan` khi có cờ) → `code-wrap` (chưng cất + gate + bàn giao) → `code-ship` (chấm điểm + merge, cần người xác nhận), cộng `code-sweep` (dọn sạch mọi việc ĐÃ XONG trong một repo — hoặc chỉ một nhóm issue hay một phiên được chỉ định — chạy `code-wrap`+`code-ship` từng cái) và `handbook-sync` (kéo MỘT repo lên bản handbook mới nhất, chạy từ trong repo đó). [`install.sh`](install.sh) cài chúng thành skill Claude Code — xem mục *Cài đặt máy* ngay dưới. |
 | [`install.sh`](install.sh) | Cài đặt cho **máy của bạn**: skills, CLI `colab`, hook pre-commit, danh sách repo cho audit. Idempotent, và `--dry` cho xem trước mọi thứ. |
 
@@ -162,8 +162,12 @@ Bản rút gọn — checklist đầy đủ ở
 
 1. Trả lời câu 1 một cách trung thực (có production **hôm nay** không, chứ
    không phải "sắp có").
-2. Thêm `.github/project.yml`.
-3. `gh label create in-progress` — label claim chưa tồn tại sẵn đâu.
+2. Thêm `.github/project.yml`. `colab adopt` hỏi năm câu rồi ghi file giùm bạn —
+   nó dừng ở phần descriptor và in ra phần còn lại của danh sách này, vì mấy
+   bước sau không phải việc của nó.
+3. `colab labels --ensure` — các label quy ước không có sẵn, và không phải chỉ
+   một cái. Một check mà label của nó chưa từng được tạo thì không bao giờ chạy
+   được.
 4. Dán [`templates/repo-CLAUDE-block.md`](templates/repo-CLAUDE-block.md) vào
    `CLAUDE.md` của repo — đây là cách duy nhất để agent phát hiện ra bộ quy ước
    này.
@@ -181,6 +185,14 @@ cho việc **tuân thủ rẻ và việc kiểm tra rẻ**. Audit tool báo drif
 giải thích *vì sao* từng luật tồn tại để bạn tự phán đoán khi nào đáng phá luật.
 Khi phá, hãy sửa tài liệu trong cùng PR — một tài liệu mô tả một repo không tồn
 tại là thứ tệ nhất trong nghề này.
+
+**Có hai thứ thì chặn thật, và ranh giới đó là cố ý.** Git hook thì từ chối:
+một bản quét secret, và một bản quét danh tính chặn không cho tên máy, đường dẫn
+home hay tên khách hàng lọt vào một repo public. Chúng canh phần **phát hành ra
+ngoài** — sai lầm duy nhất không thể sửa được, vì history không thu hồi lại được
+một khi đã có người clone. Mọi thứ thuộc về *conformance* vẫn chỉ là cảnh báo:
+sai một quy ước thì tốn một cuộc trao đổi, còn sai chuyện phát hành thì tốn vĩnh
+viễn.
 
 ## Giấy phép
 
