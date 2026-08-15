@@ -27,6 +27,64 @@ production apps maintained almost entirely by AI agents working in parallel
 across many worktrees. The anti-pattern list is not theory: every entry is
 something that actually happened, with the scar to prove it.
 
+### The problem it solves
+
+One person on one repo needs none of this. The conventions live in their head,
+and their head is the only place they need to be.
+
+That stops working somewhere around the third repo, and it collapses entirely
+once sessions run **in parallel** — several at a time, on different machines,
+some of them agents that will not think to ask. Then every unwritten assumption
+becomes a way to lose work:
+
+- two sessions claim the same issue, because neither could see the other had
+  started;
+- a feature branch is left checked out on the working tree a dev server reads
+  from, and the live app quietly serves unmerged code;
+- code merges and the issue stays open, so the next person re-does it;
+- a repo's documentation describes a repo that no longer exists — which is worse
+  than no documentation, because someone will act on it.
+
+None of those is a hard problem. They are all the *same* problem: **facts about
+a repo that live in someone's memory instead of in the repo.**
+
+### What it actually does
+
+It makes each repo answer a handful of questions about itself, **once**, in a
+file every session reads before touching anything — is there production today,
+who else works here, what breaks if a merge is wrong, how many units of work run
+at a time, how a commit reaches the thing that runs it.
+
+Everything else follows from those answers: which branch to merge into, what a
+release even means here, whether a branch is required at all, how much a session
+must write down before it stops. A session never guesses, and two repos never
+disagree about what a word means.
+
+The rest of the repo exists to serve that: a CLI that performs the mechanical
+parts, an audit that reports where reality has drifted from what a repo claims,
+and portable session flows so a coding session opens and closes the same way
+everywhere.
+
+### What it is not
+
+- **Not a service.** Nothing here is a dependency and nothing phones home. You
+  copy what is useful and own the copy — fork it, edit it, delete half of it.
+  That is what the licence is for.
+- **Not a CI system, and not an opinion about your stack.** Bring your own
+  language, test runner and pipeline. The handbook only asks that the pipeline
+  produce two outcomes, and never says how.
+- **Not an enforcement layer**, with one deliberate exception. Conformance is
+  advisory, because being wrong about a convention costs a conversation.
+  Publication blocks, because history cannot be recalled once anything is
+  cloned.
+- **Not a maturity model.** No answer here ranks a repo above another. A repo
+  with no production is not a worse repo; it is a repo with fewer gates.
+
+If you run one repo alone, read the anti-patterns and take what is useful. If
+you run many — or you work alongside agents that never met the person who set
+the rules — the whole thing is likely to pay for itself faster than it takes to
+read.
+
 ## The questions
 
 Adopting this means answering five questions about your repo, once, into

@@ -26,6 +26,62 @@ nhiều app production được bảo trì gần như hoàn toàn bởi AI agent
 trên nhiều worktree. Mục anti-pattern không phải lý thuyết: từng mục là chuyện
 đã xảy ra thật, kèm sẹo để chứng minh.
 
+### Nó giải quyết vấn đề gì
+
+Một người, một repo thì chẳng cần gì trong đây cả. Quy ước nằm trong đầu người
+đó, và trong đầu là chỗ duy nhất nó cần nằm.
+
+Cách đó hết hiệu lực đâu đó quanh cái repo thứ ba, và sụp hẳn khi các phiên bắt
+đầu chạy **song song** — vài phiên một lúc, trên nhiều máy khác nhau, có những
+phiên là agent và chúng sẽ không nghĩ ra chuyện phải hỏi. Lúc đó mọi giả định
+không viết ra đều thành một cách để mất việc:
+
+- hai phiên cùng claim một issue, vì chẳng bên nào thấy được bên kia đã bắt đầu;
+- một nhánh feature bị bỏ quên trên chính working tree mà dev server đang đọc,
+  thế là app đang chạy lặng lẽ phục vụ code chưa merge;
+- code đã merge mà issue vẫn mở, nên người sau làm lại từ đầu;
+- tài liệu của một repo mô tả một repo không còn tồn tại — thứ này tệ hơn là
+  không có tài liệu, vì kiểu gì cũng có người tin theo mà làm.
+
+Không cái nào trong đó là vấn đề khó. Chúng đều là **cùng một** vấn đề: **những
+sự thật về một repo lại nằm trong trí nhớ của ai đó thay vì nằm trong repo.**
+
+### Thực chất nó làm gì
+
+Nó bắt mỗi repo tự trả lời một nhúm câu hỏi về chính mình, **một lần**, vào một
+file mà mọi phiên đều đọc trước khi động vào bất cứ thứ gì — hôm nay đã có
+production chưa, còn ai khác làm ở đây, merge sai thì hỏng cái gì, mỗi lúc chạy
+bao nhiêu đầu việc, và code đi tới chỗ nó chạy bằng đường nào.
+
+Mọi thứ còn lại suy ra từ mấy câu trả lời đó: merge vào nhánh nào, ở repo này
+release nghĩa là gì, có bắt buộc phải có nhánh không, một phiên phải ghi lại
+bao nhiêu trước khi dừng. Phiên làm việc không phải đoán, và hai repo không bao
+giờ hiểu khác nhau về cùng một từ.
+
+Phần còn lại của repo sinh ra để phục vụ điều đó: một CLI làm giúp phần cơ học,
+một audit báo chỗ nào thực tế đã trôi khỏi thứ repo tự khai, và các luồng phiên
+làm việc mang đi được để phiên code ở đâu cũng mở ra và đóng lại giống nhau.
+
+### Nó không phải cái gì
+
+- **Không phải một service.** Không có gì ở đây là dependency và không có gì gửi
+  dữ liệu về. Bạn copy cái nào thấy dùng được rồi sở hữu bản copy đó — fork,
+  sửa, xoá bớt nửa cũng được. Giấy phép sinh ra để làm việc đó.
+- **Không phải hệ thống CI, cũng không có ý kiến gì về stack của bạn.** Ngôn
+  ngữ, test runner, pipeline — của bạn cả. Handbook chỉ yêu cầu pipeline cho ra
+  hai kết quả, và không bao giờ nói phải làm bằng cách nào.
+- **Không phải lớp ép buộc**, trừ đúng một ngoại lệ cố ý. Chuyện tuân thủ chỉ là
+  cảnh báo, vì sai một quy ước thì tốn một cuộc trao đổi. Chuyện phát hành ra
+  ngoài thì chặn, vì history không thu hồi lại được một khi đã có người clone.
+- **Không phải thang đo độ trưởng thành.** Không câu trả lời nào ở đây xếp repo
+  này trên repo kia. Một repo chưa có production không phải repo tệ hơn; nó là
+  repo có ít cổng hơn.
+
+Nếu bạn làm một repo một mình, đọc mục anti-pattern rồi lấy cái nào thấy dùng
+được. Còn nếu bạn chạy nhiều repo — hoặc bạn làm việc cùng những agent chưa
+từng gặp người đặt ra luật — thì nhiều khả năng nó hoàn vốn nhanh hơn cả thời
+gian bạn bỏ ra để đọc.
+
 ## Năm câu hỏi
 
 Adopt handbook này nghĩa là trả lời năm câu hỏi về repo của bạn, một lần, ghi
