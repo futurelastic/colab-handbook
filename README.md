@@ -114,7 +114,7 @@ you want.
 |---|---|
 | *(none)* | Symlink `skills/` into `~/.claude/skills/`, so they are available in every repo you open. |
 | `--tools` | Two installs of one CLI: a **symlink** at `~/.local/bin/colab` for your sessions (checking that directory is really on your `PATH`, and printing the exact line to add if not), plus a stamped **frozen copy** at `~/.colab/bin/colab` for always-on services — see below. |
-| `--hooks` | Point this clone's git at `.githooks/` (gitleaks pre-commit). `core.hooksPath` lives in `.git/config`, so it is per-clone, per-machine, and never travels with the repo. |
+| `--hooks` | Point this clone's git at `.githooks/`, whose `pre-commit` runs every check in `pre-commit.d/` — a gitleaks secret scan, and an identity scan that needs a vocabulary you supply by path and keep outside every repo (see [`templates/README.md`](templates/README.md)). `core.hooksPath` lives in `.git/config`, so it is per-clone, per-machine, and never travels with the repo. |
 | `--fleet` | Seed `~/.colab/repos.txt` from `audit/repos.txt`, only if it is absent. That list stays machine-local on purpose: it names your private repos, and this repo is public. |
 | `--all` | `--tools --hooks --fleet`. |
 | `--dry` | Print what would happen, change nothing. Combines with all of the above. |

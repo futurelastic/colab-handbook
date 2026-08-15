@@ -34,6 +34,16 @@
 //   node audit.mjs --config other.txt    # a different repo list
 //   node audit.mjs --json                # machine-readable
 //   node audit.mjs --quiet               # only repos with findings
+//   node audit.mjs --identity            # also scan PUBLIC repository METADATA (description,
+//                                        # topics, homepage, name) against the operator's
+//                                        # private identity vocabulary — see "Identity" below
+//
+// Identity (--identity): metadata never passes through git, so the pre-commit identity scan
+// (templates/pre-commit-identity) structurally cannot see it, and it is the first thing a
+// visitor reads. This is the periodic sweep for it. The vocabulary is supplied by path and
+// kept outside every repo — COLAB_IDENTITY_VOCAB, else ${COLAB_HOME:-~/.colab}/identity-
+// vocabulary — and is never shipped, printed, or written into a report. Off unless asked
+// for: it needs the network, and a fleet sweep must stay runnable offline.
 //
 // Exit code: 0 when every repo passes, 1 when any repo has a finding, 2 on a usage
 // error. Findings never crash the run — a repo missing project.yml is a result, not
@@ -74,6 +84,11 @@ const { evaluateExposure } = require("../tools/lib/exposure-shape.js");
 // #208's `writes` split precedence ladder — same shared-module reasoning as axisAuthority
 // above, reused for a second axis rather than a bespoke second mechanism.
 const writesAuthority = require("../tools/lib/writes-authority.js");
+// #228's identity vocabulary — resolution, parsing, matching and REDACTION. Shared with the
+// conformance test that holds it and the shell hook (templates/pre-commit-identity) to the
+// same semantics; the shell scanner cannot require it (a template lands in repos with no
+// Node and no tools/lib/), which is exactly why the semantics needed one written home.
+const identity = require("../tools/lib/identity.js");
 const {
   handbookInfo, templateNames, templateChangedSince, cmpParts, cmpSemver,
   parseWorkflowStamp, parseClaudeStamp, workflowProvenance, unstampedFinding, looksLikeHandbookClaude,
@@ -89,11 +104,12 @@ const COLAB_HOME = process.env.COLAB_HOME || join(homedir(), ".colab");
 
 function parseArgs(argv) {
   // config === null means "resolve from the precedence chain"; a string means explicit.
-  const opts = { config: null, locals: [], slugs: [], json: false, quiet: false, help: false };
+  const opts = { config: null, locals: [], slugs: [], json: false, quiet: false, help: false, identity: false };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === "--json") opts.json = true;
     else if (a === "--quiet" || a === "-q") opts.quiet = true;
+    else if (a === "--identity") opts.identity = true;
     else if (a === "--local") {
       const p = argv[++i];
       if (!p) die("--local needs a path");
@@ -539,6 +555,29 @@ function listRemoteLabels(slug) {
   }
 }
 
+// The repository's own METADATA — name, description, homepage, topics, visibility — which
+// lives only on GitHub and never passes through git. #228's whole reason for existing as a
+// second mechanism: no commit-time hook can see any of it.
+//
+// Three outcomes, never conflated:
+//   { status: "ok", data }   the API answered
+//   { status: "unreadable" } gh is absent, unauthenticated, offline, or the repo is gone —
+//                            a check that did not run, which the caller reports as a FAIL.
+//                            It is deliberately NOT the silent null that listRemoteLabels()
+//                            returns: labels are a provisioning nag, and being unable to read
+//                            them costs nothing; being unable to read metadata while the
+//                            operator explicitly asked for an identity scan is a scan that
+//                            silently did not happen.
+//   { status: "no-remote" }  (local sources only) nothing on GitHub to have metadata.
+function readRemoteMetadata(slug) {
+  try {
+    const out = runGh(["api", `repos/${slug}`]);
+    return { status: "ok", data: JSON.parse(out) };
+  } catch {
+    return { status: "unreadable" };
+  }
+}
+
 // github.com/owner/name, git@github.com:owner/name.git → "owner/name". Non-GitHub or
 // unparseable remotes return null, so a local-only repo (or a self-hosted git remote)
 // contributes no label finding — matching the skill's "no remote" branch.
@@ -721,6 +760,18 @@ function makeSource(target) {
         const slug = githubSlugFromRemote(url);
         return slug ? listRemoteLabels(slug) : null;
       },
+      // Same origin-slug resolution as labels() above, one API call, and only when the
+      // identity scan was explicitly asked for — see readRemoteMetadata for the contract.
+      metadata: () => {
+        let url;
+        try {
+          url = execFileSync("git", ["-C", root, "remote", "get-url", "origin"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim();
+        } catch {
+          return { status: "no-remote" };
+        }
+        const slug = githubSlugFromRemote(url);
+        return slug ? readRemoteMetadata(slug) : { status: "no-remote" };
+      },
       // Every tracked `*.md` path, repo-relative — used by the anchor-link check (#158).
       // git-tracked, not a filesystem walk: an untracked scratch file citing a bogus
       // anchor is not a repo finding. Empty array (not null) on any failure — the
@@ -752,6 +803,7 @@ function makeSource(target) {
     // "would rather under-report than invent" posture for API-backed reads.
     markdownFiles: () => [],
     tags: () => listRemoteTags(target.slug),
+    metadata: () => readRemoteMetadata(target.slug),
     // The duration report (#137) needs a per-commit walk over historical blobs
     // (`git show <sha>^:path`), which has no cheap `gh api` equivalent — reading N
     // historical revisions would be N API calls per repo across a fleet sweep, the same
@@ -1537,6 +1589,11 @@ function auditRepo(target, ctx) {
   info.predatesAxes = [];
   if (!isSelf) checkStamps(src, ctx.handbook, ctx.templateNames, fail, warn, { ceremony, missingAxes, predatesAxes: info.predatesAxes });
 
+  // ---- repository metadata identity scan (#228 part 4) ----------------------
+  // Explicitly NOT gated on isSelf: the handbook is public, its description and topics are
+  // read by every visitor, and it is subject to the rule it publishes.
+  if (ctx.identity) checkIdentityMetadata(src, ctx.identity, info, fail);
+
   function finish() {
     info.findings = findings;
     info.ok = !findings.some((f) => f.level === "fail");
@@ -1544,6 +1601,78 @@ function auditRepo(target, ctx) {
     return info;
   }
   return finish();
+}
+
+/**
+ * #228 part 4 — the identity scan of REPOSITORY METADATA: name, description, homepage and
+ * topics. None of it passes through git, so the pre-commit scan cannot see any of it, and it
+ * is the first thing a visitor reads.
+ *
+ * SCOPED TO PUBLIC REPOS. The harm this answers is publication: a hostname in a private
+ * repo's description is visible to the people who already have the repo. A private repo is
+ * therefore NOT APPLICABLE — a determination, reached by successfully reading `visibility`,
+ * which is a different thing from a check that could not run and must not be reported the
+ * same way.
+ *
+ * FAIL DIRECTION. `unreadable` is a `fail`, not a warn and never silence. The operator passed
+ * --identity, so a repo whose metadata could not be read is a scan that did not happen, and
+ * the one outcome that must never be possible is a sweep reporting clean over a check that
+ * never ran. This is deliberately stricter than the labels check next door, which stays
+ * silent on the same failure: nothing there was asked for, and an unreadable label set costs
+ * a provisioning nag rather than a missed disclosure.
+ *
+ * REDACTION. A hit prints the field and the vocabulary entry number, never the matched text.
+ * The audit's output is pasted into issues and chat far more often than a hook's is, so
+ * republishing the string in a finding ABOUT that string is the one thing this must not do.
+ * COLAB_IDENTITY_SHOW=1 unredacts locally, the same lever the hook uses.
+ *
+ * Writes `info.identityMetadata` on every path, including the silent ones, so `--json`
+ * always states what happened even where the text report says nothing.
+ */
+function checkIdentityMetadata(src, vocab, info, fail) {
+  const meta = src.metadata ? src.metadata() : { status: "unreadable" };
+
+  if (meta.status === "no-remote") {
+    info.identityMetadata = { status: "not-applicable", reason: "no GitHub remote — no repository metadata exists" };
+    return;
+  }
+  if (meta.status !== "ok" || !meta.data) {
+    info.identityMetadata = { status: "unreadable" };
+    fail("repository metadata: could not be read through `gh` (offline, unauthenticated, or no such repo) — the identity scan did NOT run");
+    return;
+  }
+
+  const data = meta.data;
+  const isPublic = data.visibility ? data.visibility === "public" : data.private === false;
+  if (!isPublic) {
+    info.identityMetadata = { status: "not-applicable", reason: "repository is not public" };
+    return;
+  }
+
+  const records = [];
+  if (data.name) records.push({ location: "repository name", text: String(data.name) });
+  if (data.description) records.push({ location: "description", text: String(data.description) });
+  if (data.homepage) records.push({ location: "homepage", text: String(data.homepage) });
+  for (const [i, topic] of (Array.isArray(data.topics) ? data.topics : []).entries()) {
+    records.push({ location: `topic ${i + 1}`, text: String(topic) });
+  }
+
+  const hits = identity.scan(records, vocab.terms);
+  if (!hits.length) {
+    info.identityMetadata = { status: "clean", fields: records.length };
+    return;
+  }
+
+  const show = process.env.COLAB_IDENTITY_SHOW === "1";
+  info.identityMetadata = {
+    status: "matched",
+    fields: records.length,
+    // The report carries the same redaction as the text output — see the note above.
+    hits: hits.map((h) => ({ location: h.location, entry: h.entry, chars: h.chars, ...(show ? { value: h.value } : {}) })),
+  };
+  for (const hit of hits) {
+    fail(`repository metadata names something the identity vocabulary forbids — ${identity.describeHit(hit, { show })}`);
+  }
 }
 
 // `integration:` — the declared dev-side axis. Optional; absent is the normal case.
@@ -2271,6 +2400,11 @@ function report(results, opts, ctx) {
       generated: new Date().toISOString(),
       handbook: { version: ctx.handbook.version, untagged: ctx.handbook.untagged, root: ctx.handbook.root },
       configSource: opts.resolvedConfig?.source ?? (opts.locals.length || opts.slugs.length ? "ad-hoc (--local / positional)" : null),
+      // Whether the metadata identity scan ran, stated on every run — a consumer must never
+      // have to infer it from the absence of findings. The terms themselves are NEVER here.
+      identity: ctx.identity
+        ? { scanned: true, vocabulary: ctx.identity.path, source: ctx.identity.source, terms: ctx.identity.count }
+        : { scanned: false, reason: "not requested (--identity)" },
       results,
     }, null, 2));
     return;
@@ -2279,6 +2413,14 @@ function report(results, opts, ctx) {
   // Header: which repo list + handbook version, so a scheduled run is self-documenting.
   if (opts.resolvedConfig) console.log(`repo list: ${opts.resolvedConfig.source}`);
   console.log(`handbook:  ${ctx.handbook.version}${ctx.handbook.untagged ? " (untagged — stamp checks inactive)" : ""}`);
+  // Whether repository METADATA was scanned, said out loud on every run. A per-repo advisory
+  // would be the alternative, and on a fleet where most repos have no vocabulary configured
+  // it would mark every one of them non-clean — training the reader to ignore the report,
+  // which is a worse failure than the silence it fixes. Once per run, always, is the honest
+  // middle: no run can be mistaken for having checked something it did not.
+  console.log(ctx.identity
+    ? `identity:  ${ctx.identity.count} term(s) from ${ctx.identity.path} (${ctx.identity.source}) — public repository metadata scanned`
+    : "identity:  repository metadata NOT scanned (pass --identity)");
   console.log("");
 
   const shown = opts.quiet ? results.filter((r) => !r.clean) : results;
@@ -2308,6 +2450,37 @@ function report(results, opts, ctx) {
   console.log(`${results.length} repo(s): ${results.length - failed - warned} clean, ${warned} with advisories, ${failed} with problems.`);
 }
 
+/**
+ * Resolve + load the identity vocabulary for a --identity run, or exit 2.
+ *
+ * EVERY failure here is a usage error, never a degraded run: the operator asked for a scan
+ * that has one input, and there is no honest way to perform it without that input. A missing
+ * file, an unreadable one and a malformed one all end the run before a single repo is audited
+ * — because the alternative is a sweep that prints "N clean" over a check that never ran,
+ * which is the exact outcome this part of #228 exists to make impossible.
+ *
+ * `git config colab.identityVocabulary` is deliberately NOT consulted: it is a per-repo
+ * setting and this tool sweeps many repos at once, so there is no single repo whose config
+ * could answer for the run. The hook (which has exactly one repo) does read it.
+ */
+function loadIdentityVocabulary() {
+  const resolved = identity.resolveVocabularyPath({ env: process.env });
+  const loaded = identity.loadVocabulary(resolved.path);
+  if (!loaded) {
+    die(`--identity: no vocabulary at ${resolved.path} (${resolved.source}).\n`
+      + "  It is supplied by path and kept outside every repo — start from the handbook's\n"
+      + "  templates/identity-vocabulary.example, or set COLAB_IDENTITY_VOCAB.");
+  }
+  if (loaded.problems.length) {
+    die(`--identity: the vocabulary at ${resolved.path} is unusable:\n`
+      + loaded.problems.map((p) => `  ${p.message}`).join("\n"));
+  }
+  if (!loaded.terms.length) {
+    die(`--identity: the vocabulary at ${resolved.path} has no terms — an empty list is not a scan.`);
+  }
+  return { path: resolved.path, source: resolved.source, terms: loaded.terms, count: loaded.terms.length };
+}
+
 // The usage block is this file's own leading comment, rendered on demand.
 function helpText() {
   return readFileSync(fileURLToPath(import.meta.url), "utf8")
@@ -2323,6 +2496,7 @@ function runAudit(opts) {
   if (!targets.length) die("nothing to audit — add entries to the repo list or pass --local <path>");
 
   const ctx = { handbook: handbookInfo(HANDBOOK_ROOT), templateNames: templateNames(HANDBOOK_ROOT) };
+  ctx.identity = opts.identity ? loadIdentityVocabulary() : null;
 
   const results = [];
   for (const t of targets) {

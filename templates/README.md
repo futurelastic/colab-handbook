@@ -21,6 +21,24 @@ Starting points you **copy into your own repo**. That is the entire model.
 | `deploy-xserver.yml` | `.github/workflows/deploy-xserver.yml` | PHP-framework + Vite apps shipped to **shared hosting over SSH** (no root, no Docker): build on a runner, rsync, migrate on the server | Derived from three independently-written copies. Resolves Node the same way the CI templates do — all three hardcoded it, and one shipped on a different major than its CI built on. Migrates **production**; keeps a **mandatory** smoke test. Does **not** change your tier. |
 | `repo-CLAUDE-block.md` | *paste into* `CLAUDE.md` | Every adopting repo | The discovery hook — how an agent finds the handbook at all. |
 
+### Hooks — the same model, copied by hand
+
+These are `sh`, not YAML, so `colab template` does not carry them (it enumerates
+`*.yml` only) and they take **no version stamp**: a stamp is a comment line prepended
+to a file, and prepending anything above a `#!` shebang breaks it. Copy them with `cp`,
+`chmod +x`, and own them exactly as you own a workflow.
+
+| File | Copy to | For | Notes |
+|---|---|---|---|
+| `pre-push-guard` | `<hooks>/pre-push` | Every repo with a protected trunk | Refuses a raw push to trunk, a declared integration line, or `main` on a repo that promotes. Reads `project.yml`; missing descriptor → allows, with a warning. |
+| `pre-commit-dispatch` | `<hooks>/pre-commit` | Any repo that needs **more than one** pre-commit check | Runs every hooklet in `pre-commit.d/`, fails if any failed, and **refuses when there is nothing to run**. Read its header before installing — it replaces a hook you already have, and step 2 of its instructions is where your existing check survives. |
+| `pre-commit-identity` | `<hooks>/pre-commit.d/20-identity` | Any repo that could publish an identity — every public one, and any private one that may ever be opened | Scans staged content against a vocabulary the operator supplies **by path**. Also installs as `commit-msg`. |
+| `identity-vocabulary.example` | *outside every repo* — e.g. `~/.colab/identity-vocabulary` | The above | Invented entries. **A real one is never committed anywhere**, which is the whole reason the scanner takes a path instead of shipping a list. |
+
+`<hooks>` is `git config core.hooksPath` if you set one, else `.git/hooks`. The
+executable bit is per-clone for anything git does not track, so ship a one-line install
+script that chmods (this repo's `scripts/install-hooks.sh` is the pattern).
+
 ## How to adopt
 
 1. **Copy — use `colab template`.** It copies the template *and* prepends a version
@@ -51,6 +69,54 @@ Starting points you **copy into your own repo**. That is the entire model.
    find its way back here. Set its `<!-- colab-handbook @ <version> -->` stamp to the
    handbook version you adopted at.
 6. **Own it.** From this point the file is yours. Edit freely; nothing overwrites it.
+
+### Adopting a guard in an existing repo — why this is a template at all
+
+**A guard delivered by scaffolding reaches only repos created after it shipped.** We have
+measured that: one existed for months and covered a small minority of repositories, while
+every older one — public ones included — had `core.hooksPath` set, a hooks directory
+present, and no such check in it. Nothing was broken and nothing reported anything. The
+repo *looked* configured, which is worse than an obviously empty one, because the state
+that makes you go and look never arises.
+
+Templates are copied into repositories that **already exist**. That is the mechanism that
+actually propagates here, and it is why a guard belongs in this directory rather than in a
+scaffold. A scaffold answers "what does a new repo start with"; a template answers "what
+can any repo adopt today". A control that only the newest repos have is not a control.
+
+So, into a repo that already has a `pre-commit` hook — the normal case, since a secret
+scan is the one guard almost everything already carries:
+
+```sh
+mkdir -p <hooks>/pre-commit.d
+git mv <hooks>/pre-commit <hooks>/pre-commit.d/10-secrets   # your existing check, unchanged
+cp templates/pre-commit-dispatch <hooks>/pre-commit
+cp templates/pre-commit-identity <hooks>/pre-commit.d/20-identity
+chmod +x <hooks>/pre-commit <hooks>/pre-commit.d/*
+cp templates/identity-vocabulary.example ~/.colab/identity-vocabulary   # then EDIT it, outside any repo
+```
+
+Four things to know before you do it:
+
+1. **Your existing check is moved, never replaced.** The dispatcher sequences checks; it
+   has no opinion about them. Step 2 above is load-bearing — skip it and you have swapped
+   a working secret scan for a dispatcher with nothing to dispatch (which refuses to
+   commit, so you will find out immediately, but you will have to go and get it back).
+2. **Do not simply append the identity scan to your existing hook.** The usual secret-scan
+   hook exits early when its scanner is not installed, and everything below that line is
+   skipped with it — on exactly the machine that is already least protected. The
+   dispatcher's header carries the full argument.
+3. **The vocabulary is not ours to ship and not yours to commit.** Without one the scan
+   warns on every commit and passes; that is a deliberate no-op, not a silent one.
+4. **Verify by committing something you expect it to catch**, once. A guard nobody has ever
+   seen fire is indistinguishable from one that is not installed — which is the failure
+   this whole section is about.
+
+Repository *metadata* — description, topics, homepage, the name — never passes through git,
+so no hook can see any of it, and it is the first thing a visitor reads. That half is a
+periodic sweep instead: `node audit.mjs --identity`, documented in
+[`audit/README.md`](../audit/README.md). Same vocabulary, same path, same refusal to run
+without one.
 
 ### Adopting the deploy template — the extra steps
 

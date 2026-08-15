@@ -22,6 +22,14 @@ secrets.json
 *.p12
 id_rsa*
 
+# ─── Identity vocabulary (#228) ───
+# A filled-in vocabulary is a precise index of what an organisation does not want found —
+# more useful to a reader than any one string in it. It lives outside every repo, supplied
+# to the scanner by path. The invented example is the one file here allowed to look like one.
+identity-vocabulary
+identity-vocabulary.*
+!identity-vocabulary.example
+
 # ─── Logs ───
 *.log
 

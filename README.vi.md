@@ -114,7 +114,7 @@ nếu bạn thật sự chỉ cần bấy nhiêu.
 |---|---|
 | *(không có)* | Symlink `skills/` vào `~/.claude/skills/`, để mở repo nào cũng có. |
 | `--tools` | Cài một CLI theo hai cách: một **symlink** ở `~/.local/bin/colab` cho các phiên làm việc của bạn (có kiểm tra thư mục đó thật sự nằm trong `PATH` không, thiếu thì in ra đúng dòng cần thêm), cộng một **bản đóng băng** có đóng dấu ở `~/.colab/bin/colab` cho các service luôn-bật — xem ngay dưới. |
-| `--hooks` | Trỏ git của clone này vào `.githooks/` (pre-commit chạy gitleaks). `core.hooksPath` nằm trong `.git/config` nên là cấu hình per-clone, per-máy, không đi theo repo. |
+| `--hooks` | Trỏ git của clone này vào `.githooks/`, ở đó `pre-commit` chạy lần lượt mọi check trong `pre-commit.d/` — quét secret bằng gitleaks, và quét danh tính (identity) vốn cần một danh sách từ khoá do bạn cấp bằng đường dẫn và giữ NGOÀI mọi repo (xem [`templates/README.md`](templates/README.md)). `core.hooksPath` nằm trong `.git/config` nên là cấu hình per-clone, per-máy, không đi theo repo. |
 | `--fleet` | Tạo `~/.colab/repos.txt` từ `audit/repos.txt`, chỉ khi file chưa tồn tại. Danh sách đó cố tình nằm ngoài repo: nó ghi tên các repo private của bạn, còn repo này thì public. |
 | `--all` | `--tools --hooks --fleet`. |
 | `--dry` | In ra sẽ làm gì, không thay đổi gì. Ghép được với mọi flag trên. |

@@ -1,0 +1,267 @@
+#!/bin/sh
+# pre-commit-identity — refuse to commit content that names something the operator has
+# decided must never be published: a machine hostname, an account handle, an absolute home
+# path, an internal domain, a customer or partner name.
+#
+# WHY THIS EXISTS. Every automated gate in a normal repo guards SECRETS. A secret scanner
+# finds credentials, and it finds them well — but a hostname is not a credential, an
+# account handle is not a credential, and a customer's name is not a credential. Those pass
+# every gate, land in a public repo, and stay there: git history cannot be recalled once
+# anything is cloned or forked. This scans the one class the secret scanner structurally
+# cannot see.
+#
+# WHY PRE-COMMIT AND NOT CI. CI is too late. By the time a workflow runs, the commit exists
+# and may already be pushed, and the only remedy is rewriting published history. Pre-commit
+# is the last point at which nothing has left the machine.
+#
+# ⚠ THE SCANNER SHIPS; THE VOCABULARY DOES NOT. A list of the exact strings an organisation
+# considers sensitive is itself sensitive — it is a precise index of what to look for. This
+# script therefore takes the vocabulary BY PATH, from a file the operator keeps OUTSIDE the
+# repo. Never commit a real one. `templates/identity-vocabulary.example` is an invented
+# list, safe to copy and then edit in place outside the working tree.
+#
+# WHERE THE VOCABULARY COMES FROM (first hit wins):
+#   1. $COLAB_IDENTITY_VOCAB                  — explicit, per invocation
+#   2. git config colab.identityVocabulary    — explicit, per clone (lives in .git/config,
+#                                               so it is machine-local and never synced —
+#                                               the same property core.hooksPath relies on)
+#   3. ${COLAB_HOME:-~/.colab}/identity-vocabulary   — the machine-wide default
+#
+# If 1 or 2 names a file that cannot be read, this REFUSES the commit: you declared a
+# vocabulary and it is not there, so the check cannot run, and a check that cannot run must
+# never pass silently. If only 3 applies and the file is absent, the machine simply has no
+# vocabulary configured — it warns on every commit and exits 0, exactly as the gitleaks
+# hook does when gitleaks is not installed.
+#
+# INSTALL — three shapes, pick one:
+#   a. Alongside an existing pre-commit hook (the usual case), via the dispatcher:
+#        cp templates/pre-commit-dispatch  <hooks>/pre-commit        # see its own header
+#        cp templates/pre-commit-identity  <hooks>/pre-commit.d/20-identity
+#        chmod +x <hooks>/pre-commit <hooks>/pre-commit.d/*
+#   b. As the whole hook, in a repo that has no pre-commit hook at all:
+#        cp templates/pre-commit-identity .git/hooks/pre-commit && chmod +x .git/hooks/pre-commit
+#   c. Additionally as a commit-msg hook — a commit MESSAGE is published too, and unlike a
+#      file it cannot be corrected afterwards without rewriting history:
+#        cp templates/pre-commit-identity .git/hooks/commit-msg && chmod +x .git/hooks/commit-msg
+#      (git passes the message file as $1; this script scans a file when given one.)
+#   <hooks> is `git config core.hooksPath` if you set one, else `.git/hooks`.
+#
+# WHAT IT SCANS. With no argument: the STAGED diff's added lines, plus the staged path
+# names themselves (a directory named after a customer names them just as loudly as a line
+# of prose). Deleted lines and unstaged work are not scanned — this is about what the commit
+# publishes. With a file argument: that file, whole.
+#
+# ON A MATCH. The commit is refused, and the matched text is REDACTED in the output: the
+# whole point is that the string should not be republished, and a terminal, a shell history
+# and a CI log are all places it would then live. You get file:line and the vocabulary entry
+# number — you own that file, so the entry number is all you need. COLAB_IDENTITY_SHOW=1
+# prints the matched term when you genuinely cannot tell what fired.
+#
+# OVERRIDE — per invocation, never persistent:
+#   COLAB_IDENTITY_OK=1 git commit ...
+# It is deliberately an environment variable and NOT an in-file marker (`# privacy-ok` and
+# friends). Three reasons: a marker is persistent, so it silently allows every future commit
+# touching that line; a marker is itself committed, which publishes an arrow pointing at the
+# thing it excuses; and a marker can be added by the same diff that carries the leak, which
+# means the scanner can be disabled by the content it is scanning. An environment variable
+# is none of those — it is one act, by the person at the keyboard, for one commit.
+# `git commit --no-verify` also works, but it disables EVERY hook including the secret scan;
+# this override is narrower on purpose. Setting it is the operator's call — an agent that
+# hits this block surfaces it and stops, it does not set the variable for itself.
+#
+# EXIT: 0 clean (or overridden, or no vocabulary configured), 1 blocked.
+
+set -eu
+
+MIN_TERM_LEN=3      # a 1-2 character term matches nearly everything; refuse it as a mistake
+MAX_REPORTED=20     # a flood of hits is not more informative than the first twenty
+
+say() { printf '%s\n' "$*" >&2; }
+
+# --------------------------------------------------------------- resolve the vocabulary
+vocab=""
+vocab_src=""
+vocab_explicit=0
+
+if [ -n "${COLAB_IDENTITY_VOCAB:-}" ]; then
+  vocab=$COLAB_IDENTITY_VOCAB
+  vocab_src="COLAB_IDENTITY_VOCAB"
+  vocab_explicit=1
+else
+  cfg=$(git config --get colab.identityVocabulary 2>/dev/null || true)
+  if [ -n "$cfg" ]; then
+    vocab=$cfg
+    vocab_src="git config colab.identityVocabulary"
+    vocab_explicit=1
+  else
+    vocab="${COLAB_HOME:-$HOME/.colab}/identity-vocabulary"
+    vocab_src="default"
+  fi
+fi
+
+# `~` is not expanded inside a git config value or an exported variable.
+case $vocab in
+  "~/"*) vocab="$HOME/${vocab#\~/}" ;;
+esac
+
+if [ ! -r "$vocab" ]; then
+  if [ "$vocab_explicit" -eq 1 ]; then
+    say "❌ identity scan: the vocabulary named by $vocab_src cannot be read — commit BLOCKED."
+    say "   path: $vocab"
+    say "   A configured check that cannot run is not a pass. Fix the path, or unset it."
+    exit 1
+  fi
+  say "⚠  identity scan: no vocabulary at $vocab — nothing was scanned for identity."
+  say "   Create one (start from templates/identity-vocabulary.example, keep it OUT of any repo)"
+  say "   or point at yours:  git config colab.identityVocabulary <path>"
+  exit 0
+fi
+
+# ------------------------------------------------------------------------ what to scan
+tmp=$(mktemp -d "${TMPDIR:-/tmp}/identity-scan.XXXXXX")
+trap 'rm -rf "$tmp"' EXIT
+trap 'rm -rf "$tmp"; exit 130' INT
+trap 'rm -rf "$tmp"; exit 143' TERM
+
+subject="$tmp/subject"   # one record per line:  <location><TAB><text>
+: > "$subject"
+
+if [ "$#" -gt 0 ] && [ -n "${1:-}" ]; then
+  if [ ! -r "$1" ]; then
+    say "❌ identity scan: cannot read $1 — commit BLOCKED (the check could not run)."
+    exit 1
+  fi
+  awk '{ printf "%s:%d\t%s\n", FILENAME, FNR, $0 }' "$1" > "$subject"
+else
+  # Staged PATHS. A path is content too, and it is the one kind a diff of added lines
+  # never shows: renaming a directory after a customer adds no line anywhere.
+  #
+  # Reported by ORDINAL, never by name — the path IS the offending string here, so printing
+  # it as the location would republish exactly what the redaction exists to withhold. The
+  # ordinal is the line number in the listing below, which the message tells you how to run.
+  git diff --cached --name-only --diff-filter=ACMR \
+    | awk 'NF { printf "(staged path %d)\t%s\n", FNR, $0 }' >> "$subject"
+
+  # Staged ADDED LINES, with real file:line locations reconstructed from the hunk headers.
+  # --unified=0 so there is no context: a neighbouring line somebody else wrote is not
+  # this commit's to answer for.
+  git diff --cached --unified=0 --diff-filter=ACMR \
+    | awk '
+        /^\+\+\+ \/dev\/null/ { path = ""; next }
+        /^\+\+\+ /            { path = substr($0, 7); next }   # strips the "+++ b/" prefix
+        /^@@ /                { n = $3; sub(/^\+/, "", n); sub(/,.*$/, "", n); ln = n + 0; next }
+        /^\+/                 { printf "%s:%d\t%s\n", (path == "" ? "(unknown)" : path), ln, substr($0, 2); ln++; next }
+      ' >> "$subject"
+fi
+
+# ------------------------------------------------------------------- parse the vocabulary
+# One term per line. Blank lines and lines whose first non-space character is `#` are
+# comments. A leading `re:` marks an extended regular expression; everything else is a
+# fixed string. Matching is case-insensitive and by SUBSTRING, deliberately: a hostname
+# appears inside URLs, paths and identifiers with no word boundary anywhere near it.
+# A term is kept verbatim apart from surrounding whitespace, so it may contain `#`.
+terms="$tmp/terms"
+awk '
+  {
+    line = $0
+    sub(/\r$/, "", line)
+    sub(/^[ \t]+/, "", line); sub(/[ \t]+$/, "", line)
+    if (line == "" || substr(line, 1, 1) == "#") next
+    kind = "fixed"
+    if (substr(line, 1, 3) == "re:") { kind = "regex"; line = substr(line, 4); sub(/^[ \t]+/, "", line) }
+    if (line == "") next
+    gsub(/\t/, " ", line)          # tab separates the fields of the record below
+    printf "%d\t%s\t%s\n", FNR, kind, line
+  }' "$vocab" > "$terms"
+
+# ------------------------------------------------------------------------------- scan
+hits="$tmp/hits"          # <entry><TAB><chars><TAB><location><TAB><term>
+: > "$hits"
+problems="$tmp/problems"
+: > "$problems"
+
+TAB=$(printf '\t')
+while IFS="$TAB" read -r entry kind value; do
+  [ -n "${entry:-}" ] || continue
+  if [ "${#value}" -lt "$MIN_TERM_LEN" ]; then
+    printf 'entry %s is only %s character(s) — too short to be a term (minimum %s)\n' \
+      "$entry" "${#value}" "$MIN_TERM_LEN" >> "$problems"
+    continue
+  fi
+  if ! found=$(
+        TERM_VALUE="$value" TERM_KIND="$kind" awk '
+          BEGIN { t = tolower(ENVIRON["TERM_VALUE"]); k = ENVIRON["TERM_KIND"] }
+          {
+            i = index($0, "\t")
+            if (i == 0) next
+            loc = substr($0, 1, i - 1)
+            text = tolower(substr($0, i + 1))
+            if (k == "regex") { if (text ~ t) print loc }
+            else if (index(text, t) > 0) { print loc }
+          }' "$subject" 2>/dev/null
+      ); then
+    printf 'entry %s is not a valid regular expression\n' "$entry" >> "$problems"
+    continue
+  fi
+  [ -n "$found" ] || continue
+  printf '%s\n' "$found" | while IFS= read -r loc; do
+    [ -n "$loc" ] || continue
+    printf '%s\t%s\t%s\t%s\n' "$entry" "${#value}" "$loc" "$value" >> "$hits"
+  done
+done < "$terms"
+
+# ---------------------------------------------------------------------------- verdict
+if [ -s "$problems" ]; then
+  say "❌ identity scan: the vocabulary itself is unusable — commit BLOCKED."
+  while IFS= read -r p; do say "   $p"; done < "$problems"
+  say "   Vocabulary: $vocab ($vocab_src)"
+  say "   Fix those entries. This is not what COLAB_IDENTITY_OK is for — a broken"
+  say "   vocabulary is not a false positive, it is a check that did not run."
+  exit 1
+fi
+
+if [ ! -s "$hits" ]; then
+  exit 0
+fi
+
+total=$(wc -l < "$hits" | tr -d ' ')
+if [ "${COLAB_IDENTITY_OK:-}" = "1" ]; then
+  say "⚠  identity scan: $total match(es) allowed through by COLAB_IDENTITY_OK=1."
+else
+  say "❌ identity scan: staged content names something the vocabulary forbids — commit BLOCKED."
+fi
+
+shown=0
+while IFS="$TAB" read -r entry chars loc value; do
+  shown=$((shown + 1))
+  if [ "$shown" -gt "$MAX_REPORTED" ]; then continue; fi
+  if [ "${COLAB_IDENTITY_SHOW:-}" = "1" ]; then
+    say "   $loc — vocabulary entry $entry: $value"
+  else
+    say "   $loc — vocabulary entry $entry ($chars chars, redacted)"
+  fi
+done < "$hits"
+if [ "$total" -gt "$MAX_REPORTED" ]; then
+  say "   … and $((total - MAX_REPORTED)) more."
+fi
+
+if [ "${COLAB_IDENTITY_OK:-}" = "1" ]; then
+  exit 0
+fi
+
+if grep -q '(staged path ' "$hits" 2>/dev/null; then
+  say "   Resolve a (staged path N) with:"
+  say "     git diff --cached --name-only --diff-filter=ACMR | sed -n Np"
+fi
+
+say ""
+say "   The matched text is redacted on purpose — printing it here would republish it into"
+say "   your terminal, your shell history and any log that captures them. Vocabulary:"
+say "   $vocab ($vocab_src). COLAB_IDENTITY_SHOW=1 unredacts it locally."
+say ""
+say "   • Rewrite it with an invented value — a fixture asserts shape, never provenance, so"
+say "     an invented value tests exactly as well (CONVENTIONS.md §9)."
+say "   • Genuinely a false positive?  COLAB_IDENTITY_OK=1 git commit ..."
+say "     That override is the operator's call. An agent surfaces this block; it does not"
+say "     set the variable for itself."
+exit 1

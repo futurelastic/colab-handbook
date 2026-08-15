@@ -1,0 +1,14 @@
+#!/bin/sh
+# Identity scan — the class of finding the secret scanner in 10-secrets structurally cannot
+# see: a hostname, an account handle, a home path, an internal domain, a customer name.
+# None of them is a credential, so a secret scanner passes all of them, correctly.
+#
+# Execs the template rather than copying it, for the reason in ../pre-commit: the source
+# lives in this same tree, so a copy here could only drift from it. An adopting repo copies
+# templates/pre-commit-identity to <hooks>/pre-commit.d/20-identity instead.
+#
+# The vocabulary is NOT in this repo and never will be: it is machine-local, supplied by
+# path. With none configured this warns and passes — see the template's header.
+set -eu
+root=$(git rev-parse --show-toplevel)
+exec "$root/templates/pre-commit-identity"

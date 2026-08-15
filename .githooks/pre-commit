@@ -1,22 +1,13 @@
 #!/bin/sh
-# pre-commit — block commits containing secrets, using gitleaks.
-# Emergency bypass: git commit --no-verify  (only when you are certain there is no secret)
-
-if ! command -v gitleaks >/dev/null 2>&1; then
-  echo "⚠️  gitleaks is not installed — skipping the secret scan for this commit."
-  echo "    Install it with: brew install gitleaks"
-  exit 0
-fi
-
-gitleaks protect --staged --redact -v
-status=$?
-
-if [ "$status" -ne 0 ]; then
-  echo ""
-  echo "❌ gitleaks found a secret in the staged changes — commit BLOCKED."
-  echo "   • Remove the secret from the diff and commit again, OR"
-  echo "   • If you are sure it is a false positive: git commit --no-verify"
-  exit 1
-fi
-
-exit 0
+# The handbook's own pre-commit hook: one line of glue, because the mechanism it uses is a
+# template it ships (templates/pre-commit-dispatch), and this repo is not exempt from its
+# own handbook.
+#
+# It EXECS THE TEMPLATE rather than keeping a copy of it. That is the one thing an adopter
+# must NOT do — copy-and-own means your hook is yours and nothing changes it under you — but
+# here the template and the repo are the same repo, so a copy would be a second copy of a
+# file already in this tree, free to drift from the source it was copied from. The hooklets
+# in .githooks/pre-commit.d/ do the same where a template exists for them.
+set -eu
+root=$(git rev-parse --show-toplevel)
+exec "$root/templates/pre-commit-dispatch" "$root/.githooks/pre-commit.d"

@@ -1992,6 +1992,23 @@ a specific environment — it belongs in an Issue on a private tracker, not in a
 file. The destination decides, exactly as it does for
 [§4](#4-branches-and-commits)'s commit messages.
 
+**The rule has a mechanism, and it is not CI.** `templates/pre-commit-identity` scans
+staged content against a vocabulary of strings the operator says must never be published,
+and `templates/pre-commit-dispatch` composes it with the secret scan a repo already has.
+Pre-commit, deliberately: by the time a workflow runs, the commit exists and may already
+be pushed, and the only remedy left is rewriting published history. **The scanner is
+shipped; the vocabulary never is** — a list of the exact strings an organisation treats as
+sensitive is a precise index of what to look for, so it is supplied by path and kept
+outside every repo. Adoption steps: [`templates/README.md`](templates/README.md).
+
+Two things the hook cannot see, both real. **Repository metadata** — description, topics,
+homepage, the name itself — never passes through git, and it is the first thing a visitor
+reads; that needs a periodic sweep instead (`node audit/audit.mjs --identity`, documented in
+[`audit/README.md`](audit/README.md), reading the same operator-supplied vocabulary and
+refusing to run without one). **A machine with no vocabulary configured** scans nothing, and
+says so on every commit. Neither is a reason to relax the rule above: the rule is the
+control, and both mechanisms are backstops for the day somebody forgets it.
+
 ---
 
 ## 10. Anti-patterns

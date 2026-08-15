@@ -1,0 +1,58 @@
+# identity-vocabulary — EXAMPLE. Every entry below is invented.
+#
+# ⚠ COPY THIS FILE OUT OF THE REPOSITORY BEFORE YOU EDIT IT.
+#   cp templates/identity-vocabulary.example ~/.colab/identity-vocabulary
+#   chmod 600 ~/.colab/identity-vocabulary        # it is a list of things you consider sensitive
+#
+# A filled-in vocabulary is a precise index of what an organisation does not want found. It
+# is more useful to a reader than any single one of the strings in it, so it never belongs in
+# a repository — public or private, tracked or "just for now". The scanner takes it BY PATH
+# for exactly this reason (templates/pre-commit-identity), and the audit's metadata check
+# reads it the same way.
+#
+# FORMAT
+#   • One term per line. Leading and trailing whitespace is ignored.
+#   • Blank lines, and lines whose first non-space character is `#`, are comments. A `#`
+#     inside a term is part of the term — comments are whole-line only.
+#   • Matching is CASE-INSENSITIVE and by SUBSTRING. `build-box-01` matches
+#     `ssh://build-box-01.example.invalid/`, and it also matches `my-build-box-01x`.
+#     Substring is the deliberate choice: a hostname or handle appears inside URLs, paths
+#     and identifiers with no word boundary anywhere near it, and over-blocking has a
+#     one-command override while under-blocking has none.
+#   • A term shorter than 3 characters is refused as a mistake — it would match everything.
+#   • A line starting with `re:` is an extended regular expression, matched against the
+#     lower-cased line. Use it for shapes rather than strings; prefer plain terms otherwise.
+#
+# WHAT BELONGS HERE — the classes a secret scanner cannot catch, because none of them is a
+# credential: machine and host names, internal domains, account handles, absolute home
+# paths, customer and partner names, internal service or project code names.
+#
+# WHAT DOES NOT BELONG HERE: passwords, tokens, keys. Those are secrets — your secret
+# scanner already finds them by shape, without being told, and writing one down here to
+# "make sure" copies it into a second file that is easier to forget about.
+
+# --- machines and internal hosts -----------------------------------------------------
+build-box-01
+build-box-02
+db-primary.corp.invalid
+vpn.corp.invalid
+
+# --- internal domains ----------------------------------------------------------------
+corp.invalid
+intranet.example
+
+# --- account handles -----------------------------------------------------------------
+j-doe-ops
+release-bot-7
+
+# --- customers and partners (a commercial disclosure, not a technical one) ------------
+Northwind Freight
+Blue Harbour Logistics
+
+# --- absolute home paths, as a shape rather than a list ------------------------------
+# Matches /Users/<anyone>/ and /home/<anyone>/ — an absolute path names the person as
+# surely as their handle does, and it is the single most-copied thing in an error message.
+re:/(users|home)/[a-z0-9._-]+/
+
+# --- an internal project code name ---------------------------------------------------
+project-lighthouse

@@ -52,6 +52,13 @@ jobs:
           node --check tools/colab
           for f in tools/lib/*.js audit/audit.mjs; do node --check "$f"; done
           sh -n install.sh
+          # Every shell artifact this repo ships or runs. The hook templates are `sh`, and an
+          # unbalanced quote inside an embedded awk program parses as a shell quote — one such
+          # typo (an apostrophe in an awk comment) made the scanner unrunnable while looking
+          # perfectly ordinary. Their BEHAVIOUR is covered by tools/lib/identity-hook.test.js;
+          # this line is the cheap first gate, not the coverage.
+          for f in scripts/install-hooks.sh templates/pre-commit-identity templates/pre-commit-dispatch \
+                   .githooks/pre-commit .githooks/pre-commit.d/*; do sh -n "$f"; done
       # A syntax check reads bytes; it does not read like a human. Two raw NULs once made the CLI
       # read as "binary data" to file(1) and invisible to grep without -a, while node --check, the
       # tests, git diff and the audit all stayed green. Cheap byte scan, catches the whole class.

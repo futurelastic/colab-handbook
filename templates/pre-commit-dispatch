@@ -1,0 +1,88 @@
+#!/bin/sh
+# pre-commit-dispatch — run EVERY hooklet in `pre-commit.d/`, in lexical order, and refuse
+# the commit if any of them refused.
+#
+# WHY A DISPATCHER AND NOT ONE MORE LINE IN YOUR EXISTING HOOK. A repo that already guards
+# secrets has a `pre-commit` hook, and the obvious way to add a second check is to append a
+# line to it. That fails in a way nobody notices:
+#
+#   - The usual secret-scan hook EXITS EARLY when its scanner is not installed ("gitleaks is
+#     not installed — skipping"). Anything appended below that line is skipped with it. The
+#     machine that is least protected — no scanner installed — is exactly the machine that
+#     silently loses the second check too.
+#   - `sh -e`, or `cmd || exit 1` style chaining, stops at the FIRST failure. You fix one
+#     finding, commit again, and get blocked by the second. Two round trips to learn what one
+#     run already knew.
+#   - Every added check makes one file longer and more entangled, so eventually somebody
+#     edits it wrongly and the repo *looks* configured while running less than it claims.
+#
+# A directory of independent hooklets fixes all three: each one runs regardless of what the
+# others did, this file collects the statuses and fails if ANY failed, and adding or removing
+# a check is adding or removing a file. Ordering is by filename (`10-`, `20-`, …) and is
+# purely cosmetic — since nothing short-circuits, it only decides the order of the output.
+#
+# IT REFUSES WHEN IT HAS NOTHING TO DISPATCH. An empty (or missing) `pre-commit.d` blocks the
+# commit with instructions instead of passing. A hook that quietly does nothing is the precise
+# failure this whole mechanism exists to prevent: `core.hooksPath` is set, the file is there,
+# the repo looks guarded, and nothing runs. The one moment that state is cheap to fix is the
+# first commit after installing it.
+#
+# INSTALL — into a repo that ALREADY has a pre-commit hook (the normal case):
+#   1. mkdir -p <hooks>/pre-commit.d
+#   2. git mv/cp your existing hook's BODY to <hooks>/pre-commit.d/10-secrets   (keep it —
+#      it is yours, copy-and-own; this dispatcher never replaces a check, only sequences it)
+#   3. cp templates/pre-commit-dispatch <hooks>/pre-commit
+#   4. cp templates/pre-commit-identity <hooks>/pre-commit.d/20-identity
+#   5. chmod +x <hooks>/pre-commit <hooks>/pre-commit.d/*
+#   <hooks> is `git config core.hooksPath` if you set one, else `.git/hooks`. If you use a
+#   tracked hooks directory, remember the executable bit is per-clone for anything git does
+#   not track — ship an install script that chmods, as this handbook does.
+#
+# ARGUMENT: an optional hooklet directory. With none, it uses `pre-commit.d` beside this
+# file. (The handbook itself passes one, so its own hook can exec the template rather than
+# keep a second copy of it.)
+#
+# EXIT: 0 when every hooklet passed, 1 when any refused or could not be run.
+
+set -u
+
+self_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+dir="${1:-$self_dir/pre-commit.d}"
+
+if [ ! -d "$dir" ]; then
+  printf '%s\n' "❌ pre-commit: no hooklet directory at $dir — commit BLOCKED." >&2
+  printf '%s\n' "   This dispatcher runs the checks in <hooks>/pre-commit.d/. There are none," >&2
+  printf '%s\n' "   so nothing would have been checked. See templates/pre-commit-dispatch for" >&2
+  printf '%s\n' "   the install steps, or restore the hook you replaced." >&2
+  exit 1
+fi
+
+status=0
+ran=0
+
+for hooklet in "$dir"/*; do
+  [ -e "$hooklet" ] || continue          # unmatched glob
+  [ -f "$hooklet" ] || continue          # directories, sockets — not ours to run
+  case "${hooklet##*/}" in
+    .*|*.sample|*.disabled|*.md|*~) continue ;;
+  esac
+  if [ ! -x "$hooklet" ]; then
+    printf '%s\n' "❌ pre-commit: $hooklet is not executable — it would be skipped silently." >&2
+    printf '%s\n' "   chmod +x it, or rename it to *.disabled if you meant to switch it off." >&2
+    status=1
+    continue
+  fi
+  ran=$((ran + 1))
+  if ! "$hooklet"; then
+    status=1
+  fi
+done
+
+if [ "$ran" -eq 0 ] && [ "$status" -eq 0 ]; then
+  printf '%s\n' "❌ pre-commit: $dir contains no runnable hooklet — commit BLOCKED." >&2
+  printf '%s\n' "   Nothing was checked. A hook that does nothing is worse than no hook: the" >&2
+  printf '%s\n' "   repo looks configured. Add your checks there (see templates/pre-commit-dispatch)." >&2
+  exit 1
+fi
+
+exit "$status"

@@ -29,6 +29,7 @@ node audit.mjs --json                   # machine-readable, for a dashboard/cron
 node audit.mjs --local ~/code/my-repo   # one local path, ad hoc (repeatable)
 node audit.mjs my-org/my-repo           # one remote slug, ad hoc
 node audit.mjs --config other-list.txt  # a different repo list
+node audit.mjs --identity               # ALSO scan public repository metadata — see below
 ```
 
 Exit code: `0` when every repo passes, `1` when any repo has a finding, `2` on a
@@ -339,6 +340,51 @@ the handbook's current version, so a scheduled run is self-documenting.
   is unconditionally `null` there.
 
 `stack` is intentionally **not** validated — it is a free-form string now.
+
+## Repository metadata — `--identity`
+
+A repository's **description, topics, homepage and name** never pass through git. No
+commit-time hook can see any of them, and they are the first thing a visitor reads. The
+pre-commit identity scan (`templates/pre-commit-identity`) covers committed content; this
+covers the part it structurally cannot reach.
+
+```sh
+node audit.mjs --identity                  # sweep the whole list
+node audit.mjs --identity --local ~/code/my-repo
+COLAB_IDENTITY_SHOW=1 node audit.mjs --identity   # unredact the findings, locally
+```
+
+**The vocabulary is yours and lives outside every repo.** Resolved from
+`COLAB_IDENTITY_VOCAB`, else `${COLAB_HOME:-~/.colab}/identity-vocabulary` — beside the
+fleet registry above, private for the same reason. Start from the handbook's
+`templates/identity-vocabulary.example`, which is entirely invented. A filled-in list is a
+precise index of what an organisation does not want found, so it is never committed, never
+printed, and never carried in this tool's output.
+
+*(`git config colab.identityVocabulary` is deliberately **not** consulted here, though the
+hook does read it: that is a per-repo setting and this tool sweeps many repos at once, so
+there is no single repo whose config could answer for the run.)*
+
+**It is off unless you ask.** A fleet sweep has to stay runnable offline, and this check
+needs the network. With the flag, it costs exactly one `gh api repos/<slug>` per repo — the
+same shape and cost as the label check already next to it.
+
+**How it can end, and why each ending is what it is:**
+
+| Outcome | Report | Why |
+|---|---|---|
+| a term matches a public repo's metadata | **fail**, redacted (`description — vocabulary entry 3 (12 chars, redacted)`) | The finding is *about* a string that must not be published; this output gets pasted into issues and chat. `COLAB_IDENTITY_SHOW=1` unredacts locally. |
+| metadata could not be read (`gh` absent, unauthenticated, offline, repo gone) | **fail** — "the identity scan did NOT run" | You asked for the scan. A check that cannot run must never report clean. This is deliberately stricter than the label check, which stays silent on the same failure: nothing there was requested, and an unreadable label set costs a nag rather than a missed disclosure. |
+| the repo is **private** | silent; `--json` says `not-applicable` | The harm answered here is *publication*. Reading `visibility` and finding "private" is a determination, not a failure to run — a different thing, reported differently. |
+| the repo has **no GitHub remote** | silent; `--json` says `not-applicable` | There is no repository metadata to scan. No API call is made. |
+| no vocabulary, an unusable one, or an empty one | **exit 2**, before a single repo is audited | The check has exactly one input. Degrading the run would print "N clean" over a scan that never happened. |
+
+**Every run says whether it scanned**, in the header (`identity: repository metadata NOT
+scanned (pass --identity)`) and in `--json` (`identity.scanned`). That is deliberately a
+once-per-run statement rather than a per-repo advisory: on a fleet where most operators have
+no vocabulary configured, a per-repo line would mark every repo non-clean and train the
+reader to ignore the report — a worse failure than the silence it fixes. But no run may be
+mistaken for having checked something it did not, so the header always says which it was.
 
 ## The repo list — resolution order
 
