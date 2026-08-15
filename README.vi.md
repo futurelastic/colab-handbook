@@ -181,3 +181,14 @@ cho việc **tuân thủ rẻ và việc kiểm tra rẻ**. Audit tool báo drif
 giải thích *vì sao* từng luật tồn tại để bạn tự phán đoán khi nào đáng phá luật.
 Khi phá, hãy sửa tài liệu trong cùng PR — một tài liệu mô tả một repo không tồn
 tại là thứ tệ nhất trong nghề này.
+
+## Giấy phép
+
+[Apache License 2.0](LICENSE). Cứ copy những gì thấy dùng được — repo này sinh
+ra để làm việc đó. Giấy phép là nửa pháp lý của "copy-and-own": bạn được dùng,
+sửa và phát hành lại mọi thứ ở đây, kể cả trong sản phẩm đóng mã nguồn, miễn là
+giữ lại phần ghi chú bản quyền. Nó cũng kèm một điều khoản cấp quyền sáng chế
+rõ ràng, và giữ lại quyền với thương hiệu của dự án.
+
+Việc bạn adopt một quy ước không tốn gì của bạn và cũng không cho chúng tôi
+quyền gì. Không có gì ở đây gửi dữ liệu về, và không có nghĩa vụ đóng góp ngược.

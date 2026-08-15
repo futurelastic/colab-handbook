@@ -181,3 +181,14 @@ conventions explain *why* each rule exists, so you can judge for yourself when
 breaking one is worth it. When you do break one, fix the documentation in the
 same PR — a document describing a repo that does not exist is the worst thing in
 this business.
+
+## License
+
+[Apache License 2.0](LICENSE). Copy what is useful — that is what this repo is
+for. The licence is the legal half of "copy-and-own": you may use, modify and
+redistribute anything here, including in closed-source work, provided you keep
+the notice. It also carries an express patent grant, and reserves the project's
+trademarks.
+
+Adopting a convention costs you nothing and grants us nothing. Nothing here
+phones home, and there is no obligation to contribute anything back.
