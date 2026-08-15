@@ -454,8 +454,8 @@ test('EXIT_CODE matches the documented scheme: 3 human-gated, 4 evidence-contrad
 // =========================================================================================
 
 test('provenanceComment: interactive mode names the host and date, not a flag', () => {
-  const c = provenanceComment('exposure', { mode: 'interactive', host: 'silvercube', date: '2026-08-11' });
-  assert.strictEqual(c, '# exposure: answered interactively (silvercube, 2026-08-11)');
+  const c = provenanceComment('exposure', { mode: 'interactive', host: 'build-box-01', date: '2026-08-11' });
+  assert.strictEqual(c, '# exposure: answered interactively (build-box-01, 2026-08-11)');
 });
 
 test('provenanceComment: flag mode names the flag(s), and COLAB_HUMAN/--answered-by when present', () => {

@@ -1969,6 +1969,29 @@ unused tag ritual decays exactly like an unused branch.
 The reverse — **A → C**, the fix when a repo declares `tier: A` with `deploy: push-main`
 — is descriptor-only: set `tier: C`, leave the pipeline exactly as it is, swap the topic.
 
+### Fixtures and examples use invented values
+
+**Test fixtures, sample data and documentation examples MUST use invented values.**
+Never a real hostname, account handle, filesystem path, internal domain, customer or
+partner name — even when the real value is what was measured. Write `build-box-01`,
+not the machine you ran it on.
+
+This is not the secret-scanning rule wearing a different hat. A credential is a secret
+and a scanner finds it; **a hostname is not a secret, so every gate you run passes it**,
+and in a public repo it is published the moment it lands. Git history cannot be recalled
+once anything is cloned or forked, so the only reliable control is never writing the real
+value down.
+
+The cost of complying is zero — an invented value tests exactly as well as a real one,
+because a fixture asserts *shape*, never provenance. We found real machine names in four
+of this repo's own fixtures, one of them inside an asserted output string, with CI green
+throughout and correctly so.
+
+**Where the real value genuinely matters** — a reproduction that only makes sense against
+a specific environment — it belongs in an Issue on a private tracker, not in a tracked
+file. The destination decides, exactly as it does for
+[§4](#4-branches-and-commits)'s commit messages.
+
 ---
 
 ## 10. Anti-patterns

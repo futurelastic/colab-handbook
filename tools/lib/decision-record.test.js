@@ -18,7 +18,7 @@ const {
   evaluateIssue,
 } = require('./decision-record.js');
 
-const HOST = 'silvercube';
+const HOST = 'build-box-01';
 const NOW = '2026-08-06T10:00:00Z';
 const LATER = '2026-08-06T11:00:00Z';
 const LATEST = '2026-08-06T12:00:00Z';

@@ -18,7 +18,7 @@ const {
   evaluateIssue, evaluateShipSet,
 } = require('./migration-grant.js');
 
-const HOST = 'silvercube';
+const HOST = 'build-box-01';
 const NOW = '2026-08-02T10:00:00Z';
 const LATER = '2026-08-02T11:00:00Z';
 const LATEST = '2026-08-02T12:00:00Z';
