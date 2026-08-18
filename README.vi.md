@@ -252,7 +252,7 @@ viễn.
 
 ## Giấy phép
 
-[Apache License 2.0](LICENSE). Cứ copy những gì thấy dùng được — repo này sinh
+[MIT License](LICENSE). Cứ copy những gì thấy dùng được — repo này sinh
 ra để làm việc đó. Giấy phép là nửa pháp lý của "copy-and-own": bạn được dùng,
 sửa và phát hành lại mọi thứ ở đây, kể cả trong sản phẩm đóng mã nguồn, miễn là
 giữ lại phần ghi chú bản quyền. Nó cũng kèm một điều khoản cấp quyền sáng chế

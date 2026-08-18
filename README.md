@@ -254,7 +254,7 @@ costs forever.
 
 ## License
 
-[Apache License 2.0](LICENSE). Copy what is useful — that is what this repo is
+[MIT License](LICENSE). Copy what is useful — that is what this repo is
 for. The licence is the legal half of "copy-and-own": you may use, modify and
 redistribute anything here, including in closed-source work, provided you keep
 the notice. It also carries an express patent grant, and reserves the project's
