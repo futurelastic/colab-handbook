@@ -261,6 +261,36 @@ function axesPredating(root, ref) {
   return { verifiable: true, axes: missing };
 }
 
+// The ruling's own landed vocabulary (project.schema.md, "writes — optional", and
+// CONVENTIONS.md, "Writes"), used as the boundary marker below rather than a hand-picked
+// version number. Distinct from a structural heading (what AXES/axesPredating match) because
+// the `writes` heading itself did not change — only what is written under it did.
+const WRITES_VETO_MARKER = 'two-state VETO';
+
+/**
+ * #239: did a repo's marker already tell it what ⚖ #233 changed about `writes:`? Same
+ * stamp-comparison shape as axesPredating one function above — read project.schema.md AS OF
+ * the repo's OWN stamped ref, never at HEAD, because this asks what a sync at THAT time could
+ * have told the repo, not what the handbook has since become.
+ *
+ * Deliberately gated on the ruling's own arrival (`WRITES_VETO_MARKER`'s presence at `ref`),
+ * not a version threshold: unlike `AUTHORITY_FLIP_VERSION` near the top of this file — which
+ * exists BECAUSE that advisory wanted to wait for a later, separate major bump — #239's own
+ * text says this must not be deferred past the very next tag that carries #237. Reading for
+ * the change's own landed text sidesteps having to invent a version number for a tag nobody
+ * has cut yet (tagging stays a human act, CLAUDE.local.md).
+ *
+ * `verifiable: false` on the same terms as axesPredating: an unresolvable ref means stay
+ * silent, never guess.
+ */
+function writesRulingKnownAt(root, ref) {
+  const resolves = gitIn(root, ['rev-parse', '--verify', '--quiet', ref + '^{commit}']).ok;
+  if (!resolves) return { verifiable: false, known: false };
+  const schema = gitIn(root, ['show', `${ref}:project.schema.md`]);
+  const text = schema.ok ? schema.out : '';
+  return { verifiable: true, known: text.includes(WRITES_VETO_MARKER) };
+}
+
 // ---------------------------------------------------------------------------
 // stamps
 // ---------------------------------------------------------------------------
@@ -567,6 +597,7 @@ module.exports = {
   gitIn, gitCommonDir, isHandbookItself,
   handbookInfo, freezeVersion, templateNames, templateFiles, templateChangedSince, templateAt,
   AXES, axesPredating,
+  WRITES_VETO_MARKER, writesRulingKnownAt,
   stampLine, parseWorkflowStamp, parseClaudeStamp,
   fingerprintHits, workflowProvenance, unstampedFinding,
   looksLikeHandbookWorkflow, looksLikeHandbookClaude,

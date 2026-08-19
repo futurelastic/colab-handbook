@@ -37,17 +37,19 @@
 #               NOTE requirements.txt is not a source: it pins dependencies, never
 #               the interpreter, so a Python repo with only that file must declare
 #               `python:` here (or add .python-version) or CI has nothing to resolve.
-#   writes      OPTIONAL. isolated (default) | serial-direct | serial-gated (serial is a
-#               legacy alias of serial-direct — #208). Which write-conflict prevention
-#               method this repo's sessions default to — a separate axis from tier and
-#               ceremony (project.schema.md "writes — optional"). This repo is
-#               `serial-direct`: one writer at a time, no declared pre-merge gate, which
-#               is what lets solo flow's entry gate open here — a doc-only fix may commit
-#               straight to trunk with no issue/branch (CLAUDE.local.md, "Doc-only typo
-#               fixes do not need this ceremony"). Deliberately NOT serial-gated: this
-#               repo genuinely uses the trunk-direct escape hatch, not merely a branch by
-#               another name, and #208 made that distinction declarable rather than
-#               inferred. The entry gate stays mechanical, not a promise — it refuses the
+#   writes      OPTIONAL. isolated (the veto) | serial-direct | serial-gated (serial is a
+#               legacy alias of serial-direct — #208). ⚖ #233 (2026-08-19): stopped
+#               selecting a write-conflict prevention METHOD, became a two-state VETO —
+#               `isolated` forbids trunk-direct outright, human or not; absence and every
+#               other declared value (including this repo's own `serial-direct`, and
+#               `serial-gated`) all mean the SAME thing now, coexistence, and are inert
+#               (project.schema.md "writes — optional", CONVENTIONS.md §2 "Writes"). This
+#               repo carries `serial-direct` for its history, not because the spelling
+#               still selects anything: coexistence is what lets solo flow's entry gate
+#               open here — a doc-only fix may commit straight to trunk with no
+#               issue/branch (CLAUDE.local.md, "Doc-only typo fixes do not need this
+#               ceremony"), provided a human asserts COLAB_HUMAN=1 (no automated session
+#               ever may). The entry gate stays mechanical, not a promise — it refuses the
 #               moment a second worktree, claim or place-claim is live, which is the
 #               ordinary state while any unit is mid-flight (most work here still goes
 #               through the full claim + branch + squash flow).

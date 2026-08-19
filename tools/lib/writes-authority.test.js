@@ -9,7 +9,8 @@
 const test = require('node:test');
 const assert = require('node:assert');
 const {
-  resolveWrites, isAcceptedWritesValue, trunkDirectVetoed, WRITES_DECLARED, WRITES_LEGACY,
+  resolveWrites, isAcceptedWritesValue, trunkDirectVetoed, writesSyncAdvisory,
+  WRITES_DECLARED, WRITES_LEGACY,
 } = require('./writes-authority.js');
 
 test('WRITES_DECLARED is exactly the three current methods', () => {
@@ -84,4 +85,42 @@ test('trunkDirectVetoed: every non-isolated declared value coexists, including b
 
 test('trunkDirectVetoed: case-sensitive — "ISOLATED" does not veto', () => {
   assert.strictEqual(trunkDirectVetoed('ISOLATED'), false);
+});
+
+// --- writesSyncAdvisory (#239) ---------------------------------------------------------------
+// The four-way sync announcement for ⚖ #233, keyed on the RAW declared value — same trap as
+// trunkDirectVetoed above, so covered the same way: undeclared must read as "coexistence",
+// never as "isolated" (resolveWrites(...).value's own reading).
+
+test('writesSyncAdvisory: null and undefined both get the coexistence-default message', () => {
+  for (const raw of [null, undefined]) {
+    const msg = writesSyncAdvisory(raw);
+    assert.match(msg, /COEXISTENCE/);
+    assert.match(msg, /declare writes: isolated/);
+  }
+});
+
+test('writesSyncAdvisory: an unrecognised string gets the same coexistence-default message as undeclared', () => {
+  assert.strictEqual(writesSyncAdvisory('parallel'), writesSyncAdvisory(undefined));
+});
+
+test('writesSyncAdvisory: "isolated" gets the meaning-changed/veto message, distinct from every other message', () => {
+  const msg = writesSyncAdvisory('isolated');
+  assert.match(msg, /changed meaning/);
+  assert.match(msg, /VETOES/);
+  assert.doesNotMatch(msg, /COEXISTENCE/);
+  assert.doesNotMatch(msg, /inert/);
+});
+
+test('writesSyncAdvisory: "serial-direct" and the legacy "serial" alias both say inert + may be removed, spelled as declared', () => {
+  assert.match(writesSyncAdvisory('serial-direct'), /writes: serial-direct is inert/);
+  assert.match(writesSyncAdvisory('serial'), /writes: serial is inert/);
+  assert.match(writesSyncAdvisory('serial-direct'), /may be removed/);
+});
+
+test('writesSyncAdvisory: "serial-gated" points at the gating axis instead, distinct from the plain-inert message', () => {
+  const msg = writesSyncAdvisory('serial-gated');
+  assert.match(msg, /is inert/);
+  assert.match(msg, /axis that owns gating/);
+  assert.doesNotMatch(msg, /may be removed/);
 });
