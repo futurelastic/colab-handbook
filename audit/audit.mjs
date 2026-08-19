@@ -303,7 +303,7 @@ function satisfiesConstraint(version, constraint) {
 
 // Run all stamp/reconciliation checks for one repo, pushing findings via fail/warn.
 // Silent when there is nothing to say (the common, healthy case).
-function checkStamps(src, hb, tmplNames, fail, warn, { ceremony = "standard", missingAxes = [], predatesAxes = [] } = {}) {
+function checkStamps(src, hb, tmplNames, fail, warn, { ceremony = "standard", missingAxes = [], predatesAxes = [], writesRaw = null } = {}) {
   const cur = hb.version;
 
   const compareStamp = (kind, name, stampVersion, files, { isCi = false } = {}) => {
@@ -377,6 +377,18 @@ function checkStamps(src, hb, tmplNames, fail, warn, { ceremony = "standard", mi
             warn(`marker predates the axis model — ${predates.join("/")} entered the model after this repo's stamp @ ${stampInfo.version}; answer ${predates.length > 1 ? "them" : "it"} via CONVENTIONS.md §9's question set (a sync), same as first-time adoption asks (omission stays legal: undeclared, never a default)`);
           }
         }
+      }
+      // ⚖ #233 sync announcement (#239): a repo whose marker predates the ruling never got
+      // told what silence (or its own declared value) now means — the ONLY channel that
+      // reaches a repo declaring nothing, because there is no diff to show it (#239's own
+      // argument: a change to what silence means cannot be delivered as a diff). Gated on the
+      // ruling's own arrival at this repo's stamped ref, not a version number — see
+      // `writesRulingKnownAt`'s docstring (tools/lib/stamp.js) for why this deliberately does
+      // NOT mirror the `AUTHORITY_FLIP_VERSION`-gated check further down this file, which
+      // defers on purpose; this one must not defer at all.
+      if (!hb.untagged && hb.hasGit) {
+        const { verifiable, known } = stamp.writesRulingKnownAt(HANDBOOK_ROOT, stampInfo.version);
+        if (verifiable && !known) warn(writesAuthority.writesSyncAdvisory(writesRaw));
       }
     } else if (looksLikeHandbookClaude(claude)) {
       warn("CLAUDE.md has the conventions block but no colab-handbook stamp — cannot track handbook drift; re-paste the current block");
@@ -1102,6 +1114,10 @@ function auditRepo(target, ctx) {
   // this code anywhere).
   const channelsRaw = "channels" in (cfg || {}) ? cfg.channels : null;
   info.channels = channelsRaw;
+  // Raw, no default — same shape as exposureRaw/channelsRaw two lines up. Declared here
+  // (not inside `if (cfg)` below, where the enum-check half of this axis lives) because
+  // #239's sync announcement, further down past that block, needs it too.
+  const writesRaw = "writes" in (cfg || {}) ? cfg.writes : null;
 
   if (cfg) {
     // Gated on presence, unlike before #144: `tier` left the `required` list above, so an
@@ -1144,8 +1160,8 @@ function auditRepo(target, ctx) {
 
     // ---- writes axis (#133) --------------------------------------------------
     // Deliberately NOT coupled to tier/production/exposure — see CONVENTIONS.md §2 and
-    // project.schema.md.
-    const writesRaw = "writes" in (cfg || {}) ? cfg.writes : null;
+    // project.schema.md. `writesRaw` itself is declared above `if (cfg)`, alongside
+    // exposureRaw/channelsRaw — see that declaration's own comment for why.
     if (writesRaw !== null && !writesAuthority.isAcceptedWritesValue(writesRaw)) {
       fail(`writes is ${JSON.stringify(writesRaw)}, expected "isolated", "serial-direct", or `
         + '"serial-gated" (the legacy alias "serial" is also accepted; omit for isolated)');
@@ -1616,7 +1632,7 @@ function auditRepo(target, ctx) {
   // was ever asked.
   const missingAxes = cfg ? stamp.AXES.filter((a) => !(a in cfg)) : [];
   info.predatesAxes = [];
-  if (!isSelf) checkStamps(src, ctx.handbook, ctx.templateNames, fail, warn, { ceremony, missingAxes, predatesAxes: info.predatesAxes });
+  if (!isSelf) checkStamps(src, ctx.handbook, ctx.templateNames, fail, warn, { ceremony, missingAxes, predatesAxes: info.predatesAxes, writesRaw });
 
   // ---- repository metadata identity scan (#228 part 4) ----------------------
   // Explicitly NOT gated on isSelf: the handbook is public, its description and topics are

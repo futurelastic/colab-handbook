@@ -116,6 +116,44 @@ function trunkDirectVetoed(raw) {
   return raw === 'isolated';
 }
 
+/**
+ * #239: the sync announcement for ⚖ #233 (CONVENTIONS.md §2, "Writes" — the four-row table).
+ * Four shapes, keyed on the RAW declared value exactly like `trunkDirectVetoed` (never the
+ * 3-way `resolveWrites` parse, for the identical trap that function's own docstring warns
+ * about — reading `.value` would call an absent key "isolated").
+ *
+ * This text is the ONE source for the announcement — the audit's sync-path warn quotes it
+ * verbatim (audit/audit.mjs, gated by tools/lib/stamp.js's `writesRulingKnownAt`), and it is
+ * meant to double as the "writes" bullet in whichever tag's release notes ship #237/⚖ #233 —
+ * written once, so the two copies cannot drift apart the way a hand-restated pair always does.
+ */
+function writesSyncAdvisory(raw) {
+  if (raw === 'isolated') {
+    return 'writes: isolated changed meaning under ⚖ #233 — it no longer describes a default, '
+      + 'it now VETOES trunk-direct outright, human or not. If this repo runs many concurrent '
+      + 'units and declared isolated only to describe that shape (not to forbid trunk-direct), '
+      + 'confirm with the repo\'s owner whether the veto is actually intended (CONVENTIONS.md '
+      + '§2, Writes)';
+  }
+  if (raw === 'serial-gated') {
+    return 'writes: serial-gated is inert under ⚖ #233 — coexistence is the default regardless. '
+      + 'Its one real assertion, a pre-merge gate exists here, moved to the axis that owns '
+      + 'gating: declare it there instead (a trunk-gating CI workflow, or branch protection), '
+      + 'not via writes (CONVENTIONS.md §2, Writes)';
+  }
+  if (raw === 'serial' || raw === 'serial-direct') {
+    return `writes: ${raw} is inert under ⚖ #233 — identical to omitting the key; coexistence `
+      + 'is the default regardless. The line may be removed (CONVENTIONS.md §2, Writes)';
+  }
+  // raw === null/undefined, or an unrecognised string — both coexist by the same reading
+  // trunkDirectVetoed gives them, so both get the "silent majority" message (#239's own name
+  // for this case: the only channel that reaches a repo declaring nothing).
+  return 'writes is undeclared — as of ⚖ #233 this now means COEXISTENCE: a worktree session '
+    + 'and an attended human trunk-direct session (COLAB_HUMAN=1) may both write to this repo\'s '
+    + 'trunk, side by side. If that is not intended, declare writes: isolated to veto trunk-direct '
+    + 'outright (CONVENTIONS.md §2, Writes)';
+}
+
 module.exports = {
   WRITES_DECLARED,
   WRITES_LEGACY,
@@ -123,4 +161,5 @@ module.exports = {
   resolveWrites,
   isAcceptedWritesValue,
   trunkDirectVetoed,
+  writesSyncAdvisory,
 };

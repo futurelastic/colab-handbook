@@ -691,10 +691,11 @@ never relaxes.
 ### `writes` — optional
 
 ```yaml
-writes: isolated       # default; omission = isolated — no existing repo changes behavior
-writes: serial-direct   # one writer at a time, no branch — solo flow is this cell
-writes: serial-gated    # one writer at a time, still branches for a pre-merge gate
-writes: serial           # LEGACY ALIAS of serial-direct — see below
+# (key omitted)          # coexistence — the default
+writes: isolated         # the veto — no trunk-direct here, human or not; NOT the default
+writes: serial-direct    # inert (⚖ #233) — identical to omitting the key
+writes: serial-gated     # inert (⚖ #233) — its one real assertion moved to the axis that owns gating
+writes: serial            # LEGACY ALIAS of serial-direct — inert, same as omitted
 ```
 
 **⚖ #233 (2026-08-19): this field stopped selecting a write-conflict prevention METHOD and
@@ -704,8 +705,9 @@ declared value (`serial-direct`, `serial-gated`, and the legacy `serial` alias �
 now INERT, identical to absence), means **coexistence**: a worktree session and an
 attended human trunk-direct session (`COLAB_HUMAN=1`, `CONVENTIONS.md` [§5, "The human
 flag"](CONVENTIONS.md#the-human-flag--what-colab-human1-asserts)) run side by side. The
-YAML block above and the `(default)` annotation are the field's VALUE PRESENTATION —
-untouched here, reworked by #239 — but the paragraphs and tables below this note describe
+YAML block above is reworked by #239 to say so directly — "isolated (default)" was wrong
+twice over (neither the default nor merely descriptive) — but the paragraphs and tables
+below this note describe
 BEHAVIOUR, and state what is true today, not the retired three-method reading.
 
 A fourth shape — many units in flight, writing trunk-direct, with no attendance and no
