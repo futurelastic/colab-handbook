@@ -237,6 +237,28 @@ function evaluateShipSet(issues, records, branch, trunk, redTrunkSha, evidence, 
 }
 
 /**
+ * Whether trunk went green at some point strictly after `priorAtIso` (#229) — pure, taking `runs`
+ * as plain data so it is testable without git/gh. Compares INSTANTS via `Date.parse`, never raw ISO
+ * strings: `git log --format=%aI` reports the machine's LOCAL UTC offset (`2026-08-15T11:21:46+09:00`)
+ * while `gh run list --json createdAt` is always UTC (`2026-08-15T09:57:00Z`). String comparison
+ * diverges at the offset digits — `"...T09:57:00Z" > "...T11:21:46+09:00"` reads false even though
+ * the run is 7.6 hours LATER as an instant — which can rank a truly later run as "before" the prior
+ * grant merge, permanently wedging `stackingVerdict`'s second-grant path once it happens once (#229).
+ *
+ * `NaN` on either side (an unparseable date) counts as "cannot prove it went green" — the same
+ * conservative posture the caller already takes on a JSON parse failure below.
+ */
+function wentGreenSince(runs, priorAtIso) {
+  const priorAt = Date.parse(priorAtIso);
+  if (Number.isNaN(priorAt) || !Array.isArray(runs)) return false;
+  return runs.some((r) => {
+    if (!r || r.status !== 'completed' || r.conclusion !== 'success') return false;
+    const at = Date.parse(r.createdAt);
+    return !Number.isNaN(at) && at > priorAt;
+  });
+}
+
+/**
  * Anti-stacking verdict (#105 guard 2) — pure, used by the `colab ci-grant` CREATE path (tools/
  * colab), NOT by ship's read path above (ship only ever re-checks a grant already made; whether a
  * NEW one may be MADE is a separate, narrower question this function answers).
@@ -266,5 +288,5 @@ module.exports = {
   GRANT_MARK, REVOKE_MARK, GRANT_RE, REVOKE_RE,
   grantCommentBody, revokeCommentBody,
   liveGrants, TRUSTED_ASSOCIATIONS,
-  evaluateIssue, evaluateShipSet, stackingVerdict,
+  evaluateIssue, evaluateShipSet, stackingVerdict, wentGreenSince,
 };

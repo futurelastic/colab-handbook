@@ -1907,16 +1907,19 @@ function cmdCiGrantCreate(repoAbs, num, opts) {
   if (priorGrantMerge) {
     // Was there ANY successful trunk run created after the prior grant-merge's commit date? If so,
     // trunk went green at some point since — this is a NEW, later red, not the same one stacking.
+    // #229: the comparison itself (instants, not raw ISO strings) lives in the pure, unit-tested
+    // ciGrant.wentGreenSince — priorGrantMerge.at is git's LOCAL-offset %aI, runs' createdAt is gh's
+    // UTC Z, and comparing those two shapes as strings sorts wrong whenever the local offset is
+    // positive (tools/lib/ci-grant.js's wentGreenSince doc comment has the full failure).
+    let wentGreen = false;
     const runsR = git.run('gh', ['run', 'list', '--branch', trunk, '-L', '100',
       '--json', 'conclusion,status,createdAt'], { cwd: repoAbs });
-    let wentGreenSince = false;
     if (runsR.ok) {
       try {
-        const runs = JSON.parse(runsR.stdout);
-        wentGreenSince = runs.some((r) => r.status === 'completed' && r.conclusion === 'success' && r.createdAt > priorGrantMerge.at);
+        wentGreen = ciGrant.wentGreenSince(JSON.parse(runsR.stdout), priorGrantMerge.at);
       } catch (_) { /* unparseable — treat conservatively as "cannot prove it went green" */ }
     }
-    redContinuousSincePriorGrant = !wentGreenSince;
+    redContinuousSincePriorGrant = !wentGreen;
   }
   const stacking = ciGrant.stackingVerdict({ trunkIsRed, priorGrantMerge, redContinuousSincePriorGrant });
   if (!stacking.ok) throw new UserError(stacking.reason);

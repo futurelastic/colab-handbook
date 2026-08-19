@@ -14,7 +14,7 @@ const {
   GRANT_MARK, REVOKE_MARK, GRANT_RE, REVOKE_RE,
   grantCommentBody, revokeCommentBody,
   liveGrants, TRUSTED_ASSOCIATIONS,
-  evaluateIssue, evaluateShipSet, stackingVerdict,
+  evaluateIssue, evaluateShipSet, stackingVerdict, wentGreenSince,
 } = require('./ci-grant.js');
 
 const {
@@ -319,6 +319,64 @@ test('evaluateShipSet: a failed read for one issue in the set is reported, never
   assert.equal(v.ok, false);
   assert.deepStrictEqual(v.missing.map((m) => m.issue), [2]);
   assert.match(v.missing[0].reason, /could not be read/);
+});
+
+// --- wentGreenSince (#229 — instant comparison, never raw ISO string comparison) ------------
+// The exact shape from the issue report: a commit timestamp with a POSITIVE local offset
+// (git's %aI, `+09:00`) whose UTC HOUR is NUMERICALLY LOWER than a run's UTC (`Z`) timestamp,
+// even though the run happened chronologically LATER. A same-timezone fixture cannot reproduce
+// this — the offset mismatch has to be in the fixture, per the issue's own "test that would
+// have caught it" section.
+
+test('wentGreenSince: a +09:00 prior-merge instant vs a later Z run whose UTC hour string-sorts LOWER — must read true (#229 repro)', () => {
+  // 2026-08-15T11:21:46+09:00 == 2026-08-15T02:21:46Z as an instant.
+  const priorAt = '2026-08-15T11:21:46+09:00';
+  // 2026-08-15T09:57:00Z is chronologically LATER (09:57 > 02:21 in UTC) even though, compared
+  // as raw strings, "...T09:57:00Z" < "...T11:21:46+09:00" at the offset digits — the exact
+  // inversion the issue demonstrates.
+  const runs = [{ status: 'completed', conclusion: 'success', createdAt: '2026-08-15T09:57:00Z' }];
+  assert.equal(wentGreenSince(runs, priorAt), true,
+    'a run 7.6 hours after the prior grant merge must read as "went green since", not before it');
+});
+
+test('wentGreenSince: the OLD string-comparison bug is reproduced (documents what #229 fixed) — same inputs, naive comparison would say false', () => {
+  const priorAt = '2026-08-15T11:21:46+09:00';
+  const createdAt = '2026-08-15T09:57:00Z';
+  assert.equal(createdAt > priorAt, false, 'the broken string comparison this issue reports');
+  const runs = [{ status: 'completed', conclusion: 'success', createdAt }];
+  assert.equal(wentGreenSince(runs, priorAt), true, 'the FIXED instant comparison disagrees with the string one, on purpose');
+});
+
+test('wentGreenSince: a genuinely earlier run (by instant) still reads false', () => {
+  const priorAt = '2026-08-15T11:21:46+09:00'; // == 02:21:46Z
+  const runs = [{ status: 'completed', conclusion: 'success', createdAt: '2026-08-15T02:00:00Z' }];
+  assert.equal(wentGreenSince(runs, priorAt), false);
+});
+
+test('wentGreenSince: ignores runs that are not completed+success, even if later', () => {
+  const priorAt = '2026-08-15T02:00:00Z';
+  const runs = [
+    { status: 'in_progress', conclusion: null, createdAt: '2026-08-15T03:00:00Z' },
+    { status: 'completed', conclusion: 'failure', createdAt: '2026-08-15T03:00:00Z' },
+  ];
+  assert.equal(wentGreenSince(runs, priorAt), false);
+});
+
+test('wentGreenSince: unparseable priorAt is treated conservatively as "cannot prove it went green"', () => {
+  const runs = [{ status: 'completed', conclusion: 'success', createdAt: '2026-08-15T09:57:00Z' }];
+  assert.equal(wentGreenSince(runs, 'not-a-date'), false);
+});
+
+test('wentGreenSince: a run with an unparseable createdAt is skipped, not thrown', () => {
+  const priorAt = '2026-08-15T02:00:00Z';
+  const runs = [{ status: 'completed', conclusion: 'success', createdAt: 'not-a-date' }];
+  assert.equal(wentGreenSince(runs, priorAt), false);
+});
+
+test('wentGreenSince: tolerates non-array/empty input without throwing', () => {
+  assert.equal(wentGreenSince([], NOW), false);
+  assert.equal(wentGreenSince(null, NOW), false);
+  assert.equal(wentGreenSince(undefined, NOW), false);
 });
 
 // --- stackingVerdict (#105 guard 2 — anti-stacking, evaluated at CREATE time) ---------------
