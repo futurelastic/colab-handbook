@@ -604,6 +604,15 @@ and **verified by the writer itself**, not merely by whatever spawned it.
   only, with nothing locally probable) is exactly the case where a human is needed, and
   the refusal names both remedies: wait for the liveness window to clear, or override on
   the confirmed knowledge that the session is gone.
+- **The refusal always names a resolvable holder — never a bare "unknown" (#235).** Acquiring
+  without `--session`/`--session-name` still succeeds (the same never-fail stance as claim and
+  worktree creation) but warns, because it costs the record its only remedy if the hold turns out
+  live: with neither field, a later refusal's holder name falls back to the pid every acquire site
+  already records (`process.ppid`, not `colab`'s own short-lived pid), formatted as `pid <n> on
+  <host>` — enough for a human to `ps -p <pid>` and find a lead, where "unknown" left none. It is
+  weaker than a real name or URL and does not make the acquiring session recognizable as its own
+  holder on a later re-acquire (`conflict`'s self-exemption matches on `session`) — supply an
+  identity when one is available, this is a floor, not a substitute.
 
 **A related lock already exists outside this convention, and this section describes it
 rather than forking it.** A session dashboard refuses to spawn a second `ship`/`sweep`

@@ -161,10 +161,25 @@ function resolveSessionName(opts) {
  * the live session). Never match on the name to close the gap — a consumer tried and reverted
  * after a worktree sat beside a live session with a near-identical name and was NOT it.
  *
- * So: WARN at the CREATION paths (claim, worktree new) — the one moment the URL is cheap to
- * supply — and never fail, because some agents genuinely have no session URL.
+ * Neither `session` nor `sessionName` — a NO-identity record — is a distinct, worse case (#235):
+ * the row reads as owned to nobody, so a live hold's refusal has no name and no URL to offer a
+ * human, only `place.holderLabel`'s pid+host fallback. That fallback is real but weaker than
+ * either field a caller could have supplied, and it breaks self re-acquire too (`conflict`'s
+ * exemption matches on `session`, so an identity-less acquire is never recognized as its own
+ * later renew) — worth flagging even though the write still proceeds.
+ *
+ * So: WARN at the CREATION paths (claim, worktree new, solo, place acquire, ship, promote) — the
+ * one moment an identity is cheap to supply — and never fail, because some agents genuinely have
+ * no session URL and some invocations (a bare human `colab place acquire`) may have neither.
  */
-function warnHalfIdentity(session, sessionName, what, ref) {
+function warnWeakIdentity(session, sessionName, what, ref) {
+  if (!session && !sessionName) {
+    warn(`no --session or --session-name given — this ${what} will carry NO holder identity.`);
+    warn(`  A live hold's refusal can then only point at its process id, and this acquire will`);
+    warn(`  not be recognized as your own on a later re-acquire without one.`);
+    if (ref) warn(`  Repair once you have an identity:  colab worktree tag ${ref} --session <url>`);
+    return;
+  }
   if (!sessionName || session) return;
   warn(`session name "${sessionName}" recorded with NO session URL — this ${what} will read as owned`);
   warn(`  but cannot be traced to a session. The name is display text; the URL is the join key.`);
@@ -506,7 +521,7 @@ function cmdClaim(argv) {
   const wtName = opts.worktree || null;
   const session = resolveSession(opts);
   const sessionName = resolveSessionName(opts);
-  warnHalfIdentity(session, sessionName, 'claim', wtName);
+  warnWeakIdentity(session, sessionName, 'claim', wtName);
   const gh = isGhUsable(repoAbs);
   const myLogin = gh ? git.ghCurrentLogin() : null;
 
@@ -933,7 +948,7 @@ function cmdSolo(argv) {
 
   const session = resolveSession(opts);
   const sessionName = resolveSessionName(opts);
-  warnHalfIdentity(session, sessionName, 'solo lock', null);
+  warnWeakIdentity(session, sessionName, 'solo lock', null);
 
   const written = placeMutate('opening solo flow', (s) => {
     s.solo = s.solo || {};
@@ -1053,7 +1068,7 @@ function cmdPlace(argv) {
       throw new UserError(`--force on a held place-claim requires a human: re-run with COLAB_HUMAN=1. ` +
         `(No field, flag or project.yml value can lower this bar — CONVENTIONS.md, Place-claims.)`);
     }
-    warnHalfIdentity(session, sessionName, 'place-claim', null);
+    warnWeakIdentity(session, sessionName, 'place-claim', null);
     // `process.ppid`, deliberately not `process.pid`: `colab` is a short-lived CLI invocation that
     // exits the moment this command returns, so its OWN pid is already dead by the time anyone
     // else checks the hold — which would make every acquire read as immediately stale. The PARENT
@@ -1078,7 +1093,7 @@ function cmdPlace(argv) {
     if (!rec) { print(`Nothing held at "${pathAbs}" — nothing to release.`); return 0; }
     const mine = session && rec.session === session;
     if (!mine && process.env.COLAB_HUMAN !== '1') {
-      throw new UserError(`"${pathAbs}" is held by a different session ("${rec.sessionName || rec.session || 'unknown'}") — ` +
+      throw new UserError(`"${pathAbs}" is held by a different session ("${place.holderLabel(rec)}") — ` +
         `releasing it requires a human: re-run with COLAB_HUMAN=1. (No field, flag or project.yml value can lower this bar.)`);
     }
     const written = placeMutate('release', (s) => { if (s.places) delete s.places[key]; });
@@ -1103,13 +1118,16 @@ function cmdPlaces(argv) {
   const rows = Object.entries(st.places || {}).map(([key, rec]) => {
     const { live, reason } = place.isLive(rec);
     return { path: key, repo: rec.repo, branch: rec.branch, host: rec.host, session: rec.session,
-      sessionName: rec.sessionName, since: rec.since, live, reason };
+      sessionName: rec.sessionName, pid: rec.pid, since: rec.since, live, reason };
   });
   if (opts.json) return print(JSON.stringify(rows, null, 2));
   if (!rows.length) { print('No place-claims recorded on this machine.'); return 0; }
   for (const r of rows) {
     const liveTxt = r.live === true ? 'live' : r.live === false ? 'DEAD' : 'unknown';
-    print(`${r.path}  [${liveTxt}]  ${displayIdentity(r.sessionName, r.session) || '-'}  since ${r.since}`);
+    // `place.holderLabel`, not `displayIdentity` — a place-claim's record carries a `pid`
+    // (`process.ppid` at every write site) that neither a claim nor a worktree record has, so a
+    // fully name/URL-less hold still resolves to something here instead of the bare "-" (#235).
+    print(`${r.path}  [${liveTxt}]  ${place.holderLabel(r)}  since ${r.since}`);
   }
   return 0;
 }
@@ -2492,7 +2510,7 @@ function cmdWorktreeNew(argv) {
   const range = resolveWorktreeRange(opts, config, repoAbs); // --range > repo worktreePorts > default
   const session = resolveSession(opts);
   const sessionName = resolveSessionName(opts);
-  warnHalfIdentity(session, sessionName, 'worktree (and its claims)', name);
+  warnWeakIdentity(session, sessionName, 'worktree (and its claims)', name);
   const gh = isGhUsable(repoAbs);
   const myLogin = gh ? git.ghCurrentLogin() : null;
 
@@ -2890,7 +2908,7 @@ function cmdWorktreeTag(argv) {
   // Already-posted "🔒 Claimed" comments are NOT rewritten: a comment is a dated record of what was
   // known then, and editing history to look tidy is exactly the lie this handbook warns about.
   print(`  note: existing GitHub claim comments keep their original text (history, not state)`);
-  warnHalfIdentity(out.after.session, out.after.sessionName, 'worktree', name);
+  warnWeakIdentity(out.after.session, out.after.sessionName, 'worktree', name);
   return 0;
 }
 
@@ -7060,6 +7078,7 @@ function cmdShip(argv) {
       process.stderr.write('  confirmed that session is gone: COLAB_HUMAN=1 colab place release ' + repoAbs + '\n');
       return 1;
     }
+    warnWeakIdentity(sess.session, sess.sessionName, 'trunk-checkout place-claim', null);
     const written = placeMutate('ship into the trunk checkout', (s) => {
       s.places = s.places || {};
       s.places[place.placeKey(repoAbs)] = place.holdRecord({
@@ -7772,6 +7791,7 @@ function cmdPromote(argv) {
       process.stderr.write('  confirmed that session is gone: COLAB_HUMAN=1 colab place release ' + repoAbs + '\n');
       return 1;
     }
+    warnWeakIdentity(promoteSession, promoteSessionName, 'trunk-checkout place-claim', null);
     const written = placeMutate('promote into the main checkout', (s) => {
       s.places = s.places || {};
       s.places[place.placeKey(repoAbs)] = place.holdRecord({

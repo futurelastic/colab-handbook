@@ -144,6 +144,24 @@ function holderOf(st, pathAbs, probe = defaultProbe) {
 }
 
 /**
+ * A holder identity that always resolves to SOMETHING a human can act on — never the bare
+ * "unknown" that leaves a live-hold refusal with no remedy but COLAB_HUMAN=1 and nobody to ask
+ * (#235). Preference order: the human-supplied label, the session URL, then the (pid, host) every
+ * real acquire site already records (`tools/colab` passes `process.ppid` at every write site) — a
+ * human blocked by a hold with neither a name nor a URL can still `ps -p <pid>` on `<host>` and
+ * find out what that process is, which is a real lead where "unknown" is none. Only a record with
+ * NEITHER identity NOR a pid — not producible by any current write site, but not impossible in a
+ * hand-edited state.json — falls all the way back to the literal 'unknown'.
+ */
+function holderLabel(rec) {
+  if (!rec) return 'unknown';
+  if (rec.sessionName) return rec.sessionName;
+  if (rec.session) return rec.session;
+  if (rec.pid) return `pid ${rec.pid} on ${rec.host || os.hostname()}`;
+  return 'unknown';
+}
+
+/**
  * Would acquiring `pathAbs` for `self` (an optional {session} to exempt the caller's own
  * re-acquire/renew) conflict with an existing hold? Returns `null` for clear ground, or
  * `{holder, kind, message}` — `kind` is `'held'` (a live other holder, refuse), `'unknown'`
@@ -167,7 +185,7 @@ function conflict(st, pathAbs, self = {}, probe = defaultProbe) {
     return {
       holder: h.rec,
       kind: 'unknown',
-      message: `place "${h.rec.path}" is held by session "${h.rec.sessionName || h.rec.session || 'unknown'}" ` +
+      message: `place "${h.rec.path}" is held by session "${holderLabel(h.rec)}" ` +
         `and its liveness cannot be confirmed locally (${h.reason}) — wait a moment and check again if it may ` +
         'have just died, or override with COLAB_HUMAN=1 once you know that session is gone',
     };
@@ -175,7 +193,7 @@ function conflict(st, pathAbs, self = {}, probe = defaultProbe) {
   return {
     holder: h.rec,
     kind: 'held',
-    message: `place "${h.rec.path}" is held by session "${h.rec.sessionName || h.rec.session || 'unknown'}" (${h.reason})`,
+    message: `place "${h.rec.path}" is held by session "${holderLabel(h.rec)}" (${h.reason})`,
   };
 }
 
@@ -251,6 +269,6 @@ function syncedStateProblem(colabDir) {
 }
 
 module.exports = {
-  placeKey, holdRecord, defaultProbe, isLive, holderOf, conflict, stalePlaces,
+  placeKey, holdRecord, defaultProbe, isLive, holderOf, holderLabel, conflict, stalePlaces,
   syncedStateProblem,
 };

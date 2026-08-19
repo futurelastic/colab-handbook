@@ -75,6 +75,29 @@ test('holdRecord: defaults host to this machine and pid to null when omitted', (
   assert.strictEqual(r.pid, null);
 });
 
+// --- holderLabel — a resolvable identity, never bare "unknown" when a pid exists (#235) ---------
+
+test('holderLabel: prefers sessionName over session and pid', () => {
+  assert.strictEqual(place.holderLabel(rec({ sessionName: 'my-session', session: 'sess-1', pid: 4242 })), 'my-session');
+});
+
+test('holderLabel: falls back to session when no sessionName', () => {
+  assert.strictEqual(place.holderLabel(rec({ sessionName: null, session: 'sess-1', pid: 4242 })), 'sess-1');
+});
+
+test('holderLabel: neither session nor sessionName falls back to "pid <n> on <host>" — never bare "unknown"', () => {
+  assert.strictEqual(place.holderLabel(rec({ sessionName: null, session: null, pid: 4242, host: 'some-host' })),
+    'pid 4242 on some-host');
+});
+
+test('holderLabel: neither identity nor pid — the one case a hand-edited state.json could still produce — is "unknown"', () => {
+  assert.strictEqual(place.holderLabel(rec({ sessionName: null, session: null, pid: null })), 'unknown');
+});
+
+test('holderLabel: no record at all is "unknown"', () => {
+  assert.strictEqual(place.holderLabel(null), 'unknown');
+});
+
 // --- defaultProbe / isLive — the liveness-at-read-time core (#136 comment 3) --------
 
 test('defaultProbe: no pid recorded is unknown (null), not dead — fails closed', () => {
@@ -163,6 +186,15 @@ test('conflict: unknown liveness (no pid) refuses, kind "unknown", names both re
   assert.strictEqual(c.kind, 'unknown');
   assert.match(c.message, /wait a moment/);
   assert.match(c.message, /COLAB_HUMAN=1/);
+});
+
+test('conflict: a hold with neither session nor sessionName names its pid+host in the message, never a bare "unknown" (#235)', () => {
+  const key = place.placeKey('/tmp/repo');
+  const st = { places: { [key]: rec({ session: null, sessionName: null, pid: 9999, host: HOST }) } };
+  const c = place.conflict(st, '/tmp/repo', { session: 'sess-mine' }, () => true);
+  assert.strictEqual(c.kind, 'held');
+  assert.match(c.message, /pid 9999 on/);
+  assert.doesNotMatch(c.message, /session "unknown"/);
 });
 
 test('conflict: a foreign-host record refuses, kind "foreign-host", citing the sync prohibition', () => {

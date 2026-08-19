@@ -195,3 +195,54 @@ test('cmdWorktreeNew refuses to create a worktree when COLAB_HOME sits under a s
   assert.match(r.err, /file-synced/);
   assert.deepStrictEqual(fs.readdirSync(fx.work), before, 'must refuse BEFORE step 1 creates a worktree directory or branch');
 });
+
+// --- #235: place acquire with NO resolvable identity — warns, still proceeds, always resolves ---
+
+test('cmdPlace acquire with neither --session nor --session-name still succeeds, but warns "no --session or --session-name given"', () => {
+  const fx = fixture();
+  const r = colab(fx, ['place', 'acquire', fx.work, '--repo', fx.work]); // colab() defaults both env vars to ''
+  assert.strictEqual(r.code, 0, r.err);
+  assert.match(r.err, /no --session or --session-name given/);
+  const st = JSON.parse(fs.readFileSync(path.join(fx.home, 'state.json'), 'utf8'));
+  const rec = Object.values(st.places)[0];
+  assert.strictEqual(rec.session, null);
+  assert.strictEqual(rec.sessionName, null);
+  assert.ok(rec.pid, 'the write site must still record process.ppid — the only thing that later resolves this holder');
+});
+
+test('cmdPlace acquire with a --session-name but no --session still gets the half-identity warning, unchanged, not the no-identity one', () => {
+  const fx = fixture();
+  const r = colab(fx, ['place', 'acquire', fx.work, '--repo', fx.work, '--session-name', 'my-label']);
+  assert.strictEqual(r.code, 0, r.err);
+  assert.match(r.err, /recorded with NO session URL/);
+  assert.doesNotMatch(r.err, /no --session or --session-name given/);
+});
+
+test('cmdPlace acquire with both --session and --session-name warns about neither case', () => {
+  const fx = fixture();
+  const r = colab(fx, ['place', 'acquire', fx.work, '--repo', fx.work, '--session', 's', '--session-name', 'n']);
+  assert.strictEqual(r.code, 0, r.err);
+  assert.strictEqual(r.err, '');
+});
+
+test('colab places never renders a live, identity-less hold as a bare "-" — it shows the pid fallback (#235)', () => {
+  const fx = fixture();
+  const acq = colab(fx, ['place', 'acquire', fx.work, '--repo', fx.work]);
+  assert.strictEqual(acq.code, 0, acq.err);
+  const list = colab(fx, ['places']);
+  assert.strictEqual(list.code, 0, list.err);
+  assert.match(list.out, /pid \d+ on/);
+  assert.doesNotMatch(list.out, /\]\s+-\s+since/, 'must never fall back to the bare dash a name/URL-less record used to render as');
+});
+
+test('colab places --json still carries the raw (possibly null) session/sessionName/pid fields — no fabrication in the data itself', () => {
+  const fx = fixture();
+  colab(fx, ['place', 'acquire', fx.work, '--repo', fx.work]);
+  const list = colab(fx, ['places', '--json']);
+  assert.strictEqual(list.code, 0, list.err);
+  const rows = JSON.parse(list.out);
+  assert.strictEqual(rows.length, 1);
+  assert.strictEqual(rows[0].session, null);
+  assert.strictEqual(rows[0].sessionName, null);
+  assert.ok(rows[0].pid, 'JSON output should carry pid too, the field the text rendering now falls back to');
+});
