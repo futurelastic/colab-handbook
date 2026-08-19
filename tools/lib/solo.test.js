@@ -102,12 +102,10 @@ test('entryProblems: a worktree recorded against this repo does NOT refuse (#236
   assert.deepStrictEqual(entryProblems(st, r.dir, 'main'), []);
 });
 
-test('entryProblems: a claim recorded against this repo refuses, by issue', () => {
+test('entryProblems: a claim recorded against this repo (tied to a worktree elsewhere) does NOT refuse (#240) — same category error #236 fixed for worktrees', () => {
   const r = repo();
-  const st = { worktrees: {}, claims: { [`${r.dir}#9`]: { issue: '#9', repo: r.dir, worktree: null } } };
-  const problems = entryProblems(st, r.dir, 'main');
-  assert.strictEqual(problems.length, 1);
-  assert.match(problems[0], /claim\(s\) held: #9/);
+  const st = { worktrees: {}, claims: { [`${r.dir}#9`]: { issue: '#9', repo: r.dir, worktree: 'some-feature-9' } } };
+  assert.deepStrictEqual(entryProblems(st, r.dir, 'main'), []);
 });
 
 test('entryProblems: a worktree/claim recorded against a DIFFERENT repo does not refuse', () => {
@@ -124,11 +122,13 @@ test('entryProblems: every condition failing at once is reported together, not j
   const r = repo();
   r.g('checkout', '-q', '-b', 'feat/thing-1');
   r.write('scratch.txt', 'dirty\n');
-  // A worktree recorded elsewhere in the repo is included in `st` too, to pin that it no longer
-  // contributes a problem (#236) — only claim held + wrong branch + dirty tree do.
-  const st = { worktrees: { w: { name: 'w', repo: r.dir } }, claims: { [`${r.dir}#1`]: { issue: '#1', repo: r.dir } } };
+  // A worktree AND a claim recorded elsewhere in the repo are both included in `st`, to pin that
+  // neither contributes a problem (#236, #240) — only wrong branch + dirty tree do. (A claim taken
+  // directly against THIS checkout, with no worktree, is covered separately — via the place-claim
+  // it acquires at claim time — not by this function; see cmdSolo's own place.conflict check.)
+  const st = { worktrees: { w: { name: 'w', repo: r.dir } }, claims: { [`${r.dir}#1`]: { issue: '#1', repo: r.dir, worktree: 'w' } } };
   const problems = entryProblems(st, r.dir, 'main');
-  assert.strictEqual(problems.length, 3, problems.join('\n'));
+  assert.strictEqual(problems.length, 2, problems.join('\n'));
 });
 
 // --- exitProblems -------------------------------------------------------------

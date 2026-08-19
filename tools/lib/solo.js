@@ -65,18 +65,21 @@ function fullyDirty(repoAbs) {
  * problem found" if git itself is unavailable, because a missing git is a bigger failure the CLI
  * surfaces elsewhere, not a reason to silently claim the tree is dirty.
  *
- * Deliberately does NOT refuse merely because a worktree exists somewhere in this repo (#236). A
- * worktree is a different directory with a different checkout — a session writing there is not a
- * writer of the checkout solo flow is about to commit straight to, and cannot become one. The
- * resource this gate protects is `repoAbs`'s own checkout, not the repo as a whole: `cmdSolo`
- * covers that checkout-scoped conflict separately, via `place.conflict` against a live place-claim
- * held here (CONVENTIONS.md, "Solo flow", rule 1) — the thing a worktree elsewhere can never be.
+ * Deliberately does NOT refuse merely because a worktree exists somewhere in this repo (#236), nor
+ * because a claim is held somewhere in this repo (#240) — the same category error, twice. The claim
+ * registry (lib/state.js `claims`) holds an *issue*, not a *place* (lib/place.js header): a claim
+ * tied to a worktree elsewhere is that worktree's business, not this checkout's, and a worktree is a
+ * different directory with a different checkout — a session writing there is not a writer of the
+ * checkout solo flow is about to commit straight to, and cannot become one. The resource this gate
+ * protects is `repoAbs`'s own checkout, not the repo as a whole: `cmdSolo` covers that
+ * checkout-scoped conflict separately, via `place.conflict` against a live place-claim held here
+ * (CONVENTIONS.md, "Solo flow", rule 1) — the thing a worktree or an off-checkout claim can never
+ * be. A claim taken directly against the trunk checkout (no worktree) already acquires that same
+ * place-claim at claim time (`cmdClaim`'s `takingPlace` path), so `place.conflict` catches it too;
+ * nothing here needs to re-check the claim registry to see it.
  */
 function entryProblems(st, repoAbs, trunk) {
   const problems = [];
-
-  const claims = Object.entries((st && st.claims) || {}).filter(([k]) => k.startsWith(`${repoAbs}#`));
-  if (claims.length) problems.push(`claim(s) held: ${claims.map(([, c]) => c.issue).join(', ')}`);
 
   const cur = git.git(['branch', '--show-current'], repoAbs);
   if (cur.ok && cur.stdout && cur.stdout !== trunk) {
