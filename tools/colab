@@ -7031,7 +7031,58 @@ function cmdShip(argv) {
     }
     ephemeralTarget = true;
   }
-  const cleanupTarget = () => { if (ephemeralTarget) git.git(['worktree', 'remove', '--force', targetDir], repoAbs); };
+  // #234: `ephemeralTarget === false` means `targetDir === repoAbs` — the write is about to land in
+  // the MAIN checkout, the one thing the place registry exists to protect and the one write site it
+  // never consulted. Acquired here, right before the squash-merge starts touching it, and released
+  // by `cleanupTarget` below — which every exit path from this point on already calls, success or
+  // failure, so the hold cannot outlive this one ship. Never `--force`: a live foreign hold on the
+  // trunk checkout stays behind the same human bar as everywhere else in Place-claims (CONVENTIONS.md).
+  let acquiredTrunkPlace = false;
+  if (!ephemeralTarget) {
+    // Same guard every other from-scratch place-claim write site runs before it writes (cmdClaim's
+    // trunk-checkout path, cmdSolo, cmdWorktreeNew) — a hold acquired from a file-synced ~/.colab has
+    // no atomicity inside the sync window (CONVENTIONS.md, Place-claims), which is exactly as unsafe
+    // here as at any of those.
+    const syncProblem = place.syncedStateProblem(state.COLAB_DIR);
+    if (syncProblem) { cleanupEphemeral(); process.stderr.write(`✗ B1: ${syncProblem}\n`); return 1; }
+    const loadedPlace = placeState('ship into the trunk checkout');
+    if (!loadedPlace.ok) {
+      cleanupEphemeral();
+      process.stderr.write(`✗ B1: ${loadedPlace.message}\n`);
+      return 1;
+    }
+    const placeConf = place.conflict(loadedPlace.st, repoAbs, { session: sess.session });
+    if (placeConf) {
+      cleanupEphemeral();
+      process.stderr.write(`✗ B1: refusing — ${placeConf.message}\n`);
+      process.stderr.write('  Never --force here: a live foreign hold on the trunk checkout stays behind the same\n');
+      process.stderr.write('  human bar as everywhere else in Place-claims. Wait for it to clear, or once you have\n');
+      process.stderr.write('  confirmed that session is gone: COLAB_HUMAN=1 colab place release ' + repoAbs + '\n');
+      return 1;
+    }
+    const written = placeMutate('ship into the trunk checkout', (s) => {
+      s.places = s.places || {};
+      s.places[place.placeKey(repoAbs)] = place.holdRecord({
+        pathAbs: repoAbs, repo: repoAbs, branch: null, host: HOST,
+        session: sess.session, sessionName: sess.sessionName, pid: process.ppid,
+      });
+    });
+    if (!written.ok) {
+      cleanupEphemeral();
+      process.stderr.write(`✗ B1: ${written.message}\n`);
+      return 1;
+    }
+    acquiredTrunkPlace = true;
+  }
+  const cleanupTarget = () => {
+    if (ephemeralTarget) git.git(['worktree', 'remove', '--force', targetDir], repoAbs);
+    if (acquiredTrunkPlace) {
+      // Best-effort on the way out: a stuck lock here is reported by `colab doctor`/`colab places`,
+      // never a reason to leave the caller's real failure (or success) unreported.
+      try { state.mutate((s) => { if (s.places) delete s.places[place.placeKey(repoAbs)]; }); } catch (_) { /* degraded release — see above */ }
+      acquiredTrunkPlace = false;
+    }
+  };
 
   let commitMsg;
   // Collects one {num, from, to} per inherited trailer the composer overruled (#58: a branch commit
@@ -7699,7 +7750,45 @@ function cmdPromote(argv) {
     if (!add.ok) { try { fs.rmdirSync(mainDir); } catch (_) {} throw new UserError(`could not check out main for promotion: ${add.stderr.split('\n')[0]}`); }
     ephemeral = true;
   }
-  const cleanup = () => { if (ephemeral) git.git(['worktree', 'remove', '--force', mainDir], repoAbs); };
+  // #234: same gap as `ship` (see its own comment at the equivalent site) — `!ephemeral` means
+  // `mainDir === repoAbs`, the main checkout, about to take a `merge --no-ff` directly. Acquire for
+  // the duration of that merge, release via `cleanup` below, refuse loud on a live foreign hold —
+  // never `--force`. Promotion is already human-gated (COLAB_HUMAN=1, checked above); this is a
+  // SEPARATE hazard — a human promoting while another session (human or agent) is mid-write on the
+  // very same checkout — and the human gate does nothing to prevent it.
+  const promoteSession = resolveSession(opts);
+  const promoteSessionName = resolveSessionName(opts);
+  let acquiredTrunkPlace = false;
+  if (!ephemeral) {
+    const syncProblem = place.syncedStateProblem(state.COLAB_DIR);
+    if (syncProblem) { process.stderr.write(`✗ ${syncProblem}\n`); return 1; }
+    const loadedPlace = placeState('promote into the main checkout');
+    if (!loadedPlace.ok) { process.stderr.write(`✗ ${loadedPlace.message}\n`); return 1; }
+    const placeConf = place.conflict(loadedPlace.st, repoAbs, { session: promoteSession });
+    if (placeConf) {
+      process.stderr.write(`✗ refusing — ${placeConf.message}\n`);
+      process.stderr.write('  Never --force here: a live foreign hold on the main checkout stays behind the same\n');
+      process.stderr.write('  human bar as everywhere else in Place-claims. Wait for it to clear, or once you have\n');
+      process.stderr.write('  confirmed that session is gone: COLAB_HUMAN=1 colab place release ' + repoAbs + '\n');
+      return 1;
+    }
+    const written = placeMutate('promote into the main checkout', (s) => {
+      s.places = s.places || {};
+      s.places[place.placeKey(repoAbs)] = place.holdRecord({
+        pathAbs: repoAbs, repo: repoAbs, branch: null, host: HOST,
+        session: promoteSession, sessionName: promoteSessionName, pid: process.ppid,
+      });
+    });
+    if (!written.ok) { process.stderr.write(`✗ ${written.message}\n`); return 1; }
+    acquiredTrunkPlace = true;
+  }
+  const cleanup = () => {
+    if (ephemeral) git.git(['worktree', 'remove', '--force', mainDir], repoAbs);
+    if (acquiredTrunkPlace) {
+      try { state.mutate((s) => { if (s.places) delete s.places[place.placeKey(repoAbs)]; }); } catch (_) { /* degraded release — see `ship`'s identical comment */ }
+      acquiredTrunkPlace = false;
+    }
+  };
 
   const msg = opts.message || `release: ${trunk} → main — ${today()} (promotion via colab promote)`;
   print(`merge --no-ff ${trunk} → ${MAIN} …`);
