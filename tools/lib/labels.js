@@ -73,6 +73,22 @@
  * tools/lib/migration-grant.js, and no automated path ever writes either half) — an unused label
  * is inert, an absent one is a wall.
  *
+ * `needs-migration-grant` joined the set in #230: the PLAN-TIME half of the same gate.
+ * `migration-granted` above is what `colab ship` reads at merge time; this one is what a
+ * consumer (the fleet dashboard) writes at plan/triage time, as soon as it can tell an
+ * issue's deliverable IS a schema migration — flagging the eventual grant request before
+ * `ship` has to refuse and discover it late. This repo's own tooling never reads it (unlike
+ * `needs-plan`, which `code-start` reads directly); it exists here purely to be
+ * PROVISIONABLE, on the same precedent `needs-plan` and `agent-filed` already set — a label
+ * whose semantics live in a downstream consumer, not in `colab` itself, can still belong to
+ * this set if leaving it repo-local would produce the identical malignant-absence failure
+ * `migration-granted` names: measured across four adopted repos, one lacked the label
+ * entirely and the plan-time flag silently did nothing there — no error, no audit finding,
+ * just a request that never surfaced until `ship` refused much later. It is explicitly never
+ * a substitute for `migration-granted` — it only widens detection of what might need a
+ * grant, it grants nothing itself, and only a human minting `migration-granted` still
+ * authorizes anything.
+ *
  * `ci-granted` joined the set in #105: a human-only, per-issue, branch-bound, expiring
  * exemption to `colab ship`'s trunk-CI-green precondition, for the one case that gate
  * otherwise makes permanently un-shippable unattended — a GENUINELY red trunk, where the
@@ -117,6 +133,7 @@ const CONVENTION_LABELS = [
   { name: 'decision-recorded', color: '006B75', description: 'A human answered here — read the ⚖ Decision comment before re-applying needs-decision' },
   { name: 'needs-plan', color: '0052CC', description: 'Triage judged this hard — code-start should run code-plan before coding' },
   { name: 'migration-granted', color: 'D93F0B', description: "A human granted this issue's branch an exemption from ship's no-new-migrations gate" },
+  { name: 'needs-migration-grant', color: 'D4C5F9', description: 'Agent-flagged: deliverable is a schema migration; surfaces the grant request for a human to Accept' },
   { name: 'ci-granted', color: 'D73A4A', description: "A human granted this branch a one-shot exemption from ship's trunk-CI-green gate" },
   { name: 'delivery:code', color: '1D76DB', description: 'Delivery is a code commit — the ordinary code pipeline applies' },
   { name: 'delivery:content', color: 'FEF2C0', description: 'Delivery is a content push, not a code commit — route, do not start in the code pipeline' },

@@ -1362,6 +1362,14 @@ exemption** — deliberately not a repo- or tier-level switch.
 - **Never weakens any other precondition** — CI green, claim corroboration, trunk-checkout
   check, and hand-merge conflict check all still run in full on a granted branch.
 
+**`needs-migration-grant` is this gate's plan-time half, not a second gate (#230).**
+It is provisioned in `CONVENTION_LABELS` alongside `migration-granted` for the same
+malignant-absence reason, but nothing in this repo's own tooling reads it — a
+downstream consumer (the fleet dashboard) applies it at plan/triage time, as soon as
+it can tell an issue's deliverable IS a schema migration, so the grant request
+surfaces before `ship` ever has a reason to refuse. It authorises nothing by itself;
+only a human minting `migration-granted` above does that.
+
 #### Red-trunk exemption — the one-shot door through trunk-CI-green (#105)
 
 Same shape as a migration grant, strictly **more dangerous** — a bad migration grant
@@ -1973,16 +1981,17 @@ only. Resolution order: `--config` flag > `~/.colab/repos.txt` > bundled example
    them as a to-do list on exit.
 2. **Write `.github/project.yml`** ([§3](#3-githubprojectyml--the-marker)) with the
    answers from step 1.
-3. **Create the whole label set — thirteen names, not a subset** (`in-progress`,
+3. **Create the whole label set — fourteen names, not a subset** (`in-progress`,
    `deps-checked`, `agent-filed`, `epic`, `needs-decision`, `decision-recorded`,
-   `needs-plan`, `migration-granted`, `ci-granted`, and the four `delivery:*`):
+   `needs-plan`, `migration-granted`, `needs-migration-grant`, `ci-granted`, and the
+   four `delivery:*`):
    ```sh
    colab labels --ensure
    ```
    Idempotent by construction (#206) — reads the set from `tools/lib/labels.js`'s
    `CONVENTION_LABELS`, the one place it is actually defined, creates only what this
    repo is missing, and reports created vs already-there; safe to re-run because
-   partial adoption is normal. (No `colab` on this machine? The thirteen `gh label
+   partial adoption is normal. (No `colab` on this machine? The fourteen `gh label
    create … || true` lines this replaced are recoverable from that file's history.)
    What each absence costs, briefly: `in-progress` — the first claim cannot land.
    `deps-checked` — a readiness check can never tell *free* from *nobody looked*.
@@ -1994,7 +2003,9 @@ only. Resolution order: `--config` flag > `~/.colab/repos.txt` > bundled example
    `code-start` always sees "no flag", every session falls back to rung 1.
    `migration-granted`/`ci-granted` are **not opt-in** (unlike `tracking`) — absence fails
    malignantly, discovered only when a repo hits the wall with no route past `ship`'s gate
-   at all. `delivery:*` — a content push or ops check has no way to say "not a diff" and
+   at all. `needs-migration-grant` — the plan-time flag a consumer raises before `ship`
+   would refuse has nowhere to land, so the grant request never surfaces until the wall
+   (#230). `delivery:*` — a content push or ops check has no way to say "not a diff" and
    jams the code pipeline. This full set is provisioned again on every sync, not only at
    adoption.
 4. **Add the tier topic** — `gh repo edit <owner>/<repo> --add-topic tier-b` (or

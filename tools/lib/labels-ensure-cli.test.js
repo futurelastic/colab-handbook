@@ -1,11 +1,11 @@
 'use strict';
 /**
- * CLI-level tests for `colab labels --ensure` (#206) — the 13-name convention label set used to
+ * CLI-level tests for `colab labels --ensure` (#206) — the 14-name convention label set used to
  * be typed out by hand in three places (CONVENTIONS.md §9 step 3, skills/handbook-sync/SKILL.md
  * §2, and `tools/lib/labels.js`'s CONVENTION_LABELS, the only one actually executed). This is the
  * missing executable: create every label a repo lacks, idempotent, reporting created vs already
  * there — reading the missing set from `labels.missingConventionLabels`, the same function the
- * audit and the readiness/grant hint functions already read, rather than restating the 13 names
+ * audit and the readiness/grant hint functions already read, rather than restating the 14 names
  * a fourth time.
  *
  * Real CLI, real repo, real bare `origin` on disk (no network) — same fixture shape as
@@ -115,7 +115,7 @@ test('a failed `gh label list` refuses outright — never creates blind', () => 
 
 // --- the happy path: exactly the missing ones get created, the rest reported as already there --
 
-test('an empty tracker creates all 13 labels, none reported already-there', () => {
+test('an empty tracker creates all 14 labels, none reported already-there', () => {
   const fx = fixture();
   const r = colab(fx, ['labels', '--ensure', '--repo', fx.work], { FAKE_GH_LABELS: '' });
   assert.strictEqual(r.code, 0, r.err);
@@ -172,7 +172,7 @@ function escapeRe(s) { return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
 // shape CONVENTION_LABELS declares, so the tracker's label never silently drifts from the source.)
 
 test('CONVENTION_LABELS is what --ensure iterates — the source this command must never restate', () => {
-  assert.strictEqual(conventionLabelNames().length, 13);
+  assert.strictEqual(conventionLabelNames().length, 14);
   for (const l of CONVENTION_LABELS) {
     assert.ok(l.name && l.color && l.description, `label ${JSON.stringify(l)} is missing a field --ensure needs to create it`);
   }
