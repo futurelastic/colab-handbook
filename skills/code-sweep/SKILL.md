@@ -86,7 +86,7 @@ colab worktrees            # scope to this repo — see below
 colab claims               # same
 gh issue list --state open
 gh issue list --label in-progress
-colab places                # writes: serial repos only — see §3's place-claim bucket
+colab places                # repos that permit trunk-direct only — see §3's place-claim bucket
 ```
 
 ⚠️ **`colab worktrees` and `colab claims` list the whole machine.** Scope them, or
@@ -172,14 +172,15 @@ none:**
    matching principle for kept worktrees — a worktree kept for a stated reason is fine, one
    kept silently is the 8-of-9 statistic repeating. A scoped run owes the same honesty about
    its own boundary: `scoped to N of M candidates`, and name the M−N.
-3. **A selector that matches nothing is usually a wrong number — but on a `writes: serial`
-   repo, check trunk history before reporting it that way.** An issue with no worktree, no
-   claim and no branch is not "swept"; ordinarily it was never there. But that exact triple —
-   no worktree, no claim, no branch — is also the fingerprint of a **finished trunk-direct**
-   unit: solo flow (CONVENTIONS.md, *Solo flow*) commits straight to trunk and its exit
+3. **A selector that matches nothing is usually a wrong number — but on a repo that permits
+   trunk-direct (⚖ #233: any repo not declaring `writes: isolated`), check trunk history
+   before reporting it that way.** An issue with no worktree, no claim and no branch is not
+   "swept"; ordinarily it was never there. But that exact triple — no worktree, no claim, no
+   branch — is also the fingerprint of a **finished trunk-direct** unit: an attended solo-flow
+   session (CONVENTIONS.md, *Solo flow*) commits straight to trunk and its exit
    (`colab solo --done`) never made a worktree or held a claim, so a landed solo commit is
    indistinguishable from a wrong number by these three signals alone. Before reporting
-   `selector matched nothing` on a repo with `writes: serial`, check:
+   `selector matched nothing` on a repo that does not declare the veto, check:
    ```sh
    git log --oneline origin/<trunk> --grep="#$N"
    ```
@@ -254,8 +255,9 @@ claimed — and the label remains the veto before any teardown.
 ## 3. Sort into seven buckets — each gets a different action
 
 **These buckets are keyed off what §1 enumerated — worktrees, claims, and
-places — which is complete for `isolated` writes (every unit is a worktree) but
-only partial for `writes: serial`.** A finished solo/trunk-direct unit that never
+places — which is complete for a repo declaring the veto (`writes: isolated`, every
+unit is a worktree) but only partial for a repo permitting trunk-direct (⚖ #233: any
+repo without the veto).** A finished solo/trunk-direct unit that never
 filed an Issue (CONVENTIONS.md, *Solo flow* — an Issue is filed on demand, not on
 entry) leaves no worktree, no claim, and nothing here to sort, because there is
 nothing left to reconcile: the commit already **is** the record. One that DID file
@@ -275,12 +277,12 @@ the third case — a scoped selector that names such a unit by issue number.
 
 ### `place-claim` — the one hold nothing else here sweeps
 
-Only relevant on a `writes: serial` repo (CONVENTIONS.md, *Place-claims*). A
-place-claim can outlive its session exactly as an issue claim or a worktree can — a
-crashed `colab solo` session, a coordinator-spawned implementer that never reached its
-own exit — and it is not a worktree (`writes: serial` sessions do not need one) and not
-an issue claim (it locks a **checkout path**, not an issue), so neither of the other
-buckets' machinery touches it.
+Only relevant on a repo permitting trunk-direct (⚖ #233: any repo not declaring `writes:
+isolated` — CONVENTIONS.md, *Place-claims*). A place-claim can outlive its session
+exactly as an issue claim or a worktree can — a crashed `colab solo` session, a
+coordinator-spawned implementer that never reached its own exit — and it is not a
+worktree (a trunk-direct session does not need one) and not an issue claim (it locks a
+**checkout path**, not an issue), so neither of the other buckets' machinery touches it.
 
 **`§5`'s `colab doctor --prune` DOES reach a place-claim — but only the provable half,
 by design.** `tools/colab`'s prune loop (the comment directly above
@@ -308,12 +310,12 @@ Each row names a `path` and a holder. For each:
   `colab place release <path>` on your own hold needs nothing extra, but releasing
   someone else's requires the human-only `COLAB_HUMAN` override — the same bar as a
   migration grant or a promotion. **Report it; do not set that variable yourself.**
-- **No `colab`, or repo is not `writes: serial`** → nothing to check; this bucket is
+- **No `colab`, or repo declares `writes: isolated`** → nothing to check; this bucket is
   empty by construction, say so rather than silently omitting the row.
 
-A `writes: serial` repo also means solo-flow trunk-direct commits are a normal shape
-here — see §1.1's `landed trunk-direct` outcome for the case where a finished solo unit
-has no worktree, no claim and no branch to sort into any of the buckets above.
+A repo permitting trunk-direct also means solo-flow trunk-direct commits are a normal
+shape here — see §1.1's `landed trunk-direct` outcome for the case where a finished solo
+unit has no worktree, no claim and no branch to sort into any of the buckets above.
 
 `teardown-only` is the common case and the most skipped. It is also the cheapest, so
 do these first — they shrink the list before you start the expensive ones.
@@ -416,7 +418,7 @@ For each **wrap** candidate, in order:
    and a failure that never started still means stop. A sweep can take an hour.
    This re-check is about the **branched** `wrap` candidates below — the merge each
    is about to go through depends on it being alive, at whatever thoroughness its
-   `exposure` demands ([§7, *CI*](../../CONVENTIONS.md#ci--what-it-is-follows-writes-how-much-follows-exposure)).
+   `exposure` demands ([§7, *CI*](../../CONVENTIONS.md#ci--what-it-is-follows-the-units-shape-how-much-follows-exposure)).
    A `place-claim` or `landed trunk-direct` candidate never merges through here at
    all, so this step has nothing to re-check for those.
 2. Run **code-wrap** for that candidate — distill/docs/gate/commit/push, if not
@@ -527,7 +529,7 @@ still blocked: trunk CI dead (billing), since 2026-07-21T11:40Z
   with the checkout parked on a feature branch has left the repo in the state it was
   meant to clear.
 - Nothing was forced past uncommitted work.
-- **On a `writes: serial` repo:** `colab places` was checked, every stale hold reported
+- **On a repo permitting trunk-direct (not declaring `writes: isolated`):** `colab places` was checked, every stale hold reported
   (never force-released without the human-only `COLAB_HUMAN` override), and every selector that matched
   nothing was checked against trunk history for a `landed trunk-direct` unit before
   being reported as `selector matched nothing`.

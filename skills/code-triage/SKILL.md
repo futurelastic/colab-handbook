@@ -1,6 +1,6 @@
 ---
 name: code-triage
-description: "Decide what to work on next in ONE repo. Takes every open Issue, discards the ones already shipped and the ones someone else holds, groups what must move together (issues touching the same files must serialize — usually one branch, or a place-claim on writes: serial), orders what remains by blast radius, and says which groups can be started RIGHT NOW — including whether the repo's trunk CI is alive enough to merge into. Outputs claim + branch commands that feed straight into code-start. Flags a group judged genuinely hard with a needs-plan label + one-line reason, for code-plan to draft against later — never a plan of its own. Also asks, per ready group, whether the work is batch-mechanical with a usable oracle, and tags the minority that qualifies with a mechanical-lane label + suggested batch size, for a cheap mechanical-work engine to pick up — never routes or dispatches it itself. Cheap to re-run: a no-change ping short-circuits in three calls. Trigger phrases: 'what should I work on', 'triage the issues', 'what can we start', 'plan the next session', 'group the open issues', 'what is ready to pick up', 'sort the backlog'; and — when this session's last act was a triage — the re-ping forms 'again', 'anything new?', 'check again', 'anything to pick up yet?', or a bare 'go'. Runs before code-start; pairs with code-start and code-wrap."
+description: "Decide what to work on next in ONE repo. Takes every open Issue, discards the ones already shipped and the ones someone else holds, groups what must move together (issues touching the same files must serialize — usually one branch, or a place-claim on any repo not declaring writes: isolated), orders what remains by blast radius, and says which groups can be started RIGHT NOW — including whether the repo's trunk CI is alive enough to merge into. Outputs claim + branch commands that feed straight into code-start. Flags a group judged genuinely hard with a needs-plan label + one-line reason, for code-plan to draft against later — never a plan of its own. Also asks, per ready group, whether the work is batch-mechanical with a usable oracle, and tags the minority that qualifies with a mechanical-lane label + suggested batch size, for a cheap mechanical-work engine to pick up — never routes or dispatches it itself. Cheap to re-run: a no-change ping short-circuits in three calls. Trigger phrases: 'what should I work on', 'triage the issues', 'what can we start', 'plan the next session', 'group the open issues', 'what is ready to pick up', 'sort the backlog'; and — when this session's last act was a triage — the re-ping forms 'again', 'anything new?', 'check again', 'anything to pick up yet?', or a bare 'go'. Runs before code-start; pairs with code-start and code-wrap."
 ---
 
 # code-triage — what should we work on next?
@@ -390,12 +390,15 @@ explicit code affirmative, not a routing signal.
 **Issues that touch the same files must serialize.** Two sessions editing the same
 files merge over each other; grouping is how that is prevented — the obligation is
 serialization, and how it is realized follows
-[`writes`](../../CONVENTIONS.md#writes--serial-or-isolated-and-the-two-things-that-make-a-branch-mandatory):
-on `isolated` (today's fleet default), one branch, always — every rule below applies
-unchanged. On `writes: serial`, one unit at a time behind a place-claim is enough on
-its own; a branch is mandatory only when one of [§2](../../CONVENTIONS.md#writes--serial-or-isolated-and-the-two-things-that-make-a-branch-mandatory)'s two conditions fires (more than
+[`writes`](../../CONVENTIONS.md#writes--the-trunk-direct-veto-and-the-two-things-that-make-a-branch-mandatory)
+(⚖ #233 — a veto now, not a method choice): on `writes: isolated` (the veto), one
+branch, always — every rule below applies unchanged. On a repo permitting trunk-direct
+(absence, or any other declared value), an attended human session behind a place-claim
+is enough on its own; a branch is mandatory only when one of [§2](../../CONVENTIONS.md#writes--the-trunk-direct-veto-and-the-two-things-that-make-a-branch-mandatory)'s two conditions fires (more than
 one unit in flight, or a gate must inspect the unit before it lands) — see §6's
-`start:` line for what that changes about the command a session runs.
+`start:` line for what that changes about the command a session runs. Triage output
+itself is consumed by sessions that may be UNATTENDED, so `start:` never assumes
+attendance on its own — see §6.
 
 Group when:
 - the issues touch overlapping files or the same subsystem
@@ -411,9 +414,9 @@ registry, so a number in neither is one the wrap will never find, and it sits op
 with its code merged. The failure this whole skill exists to prevent, re-created by
 sloppy naming.
 
-**On `writes: serial` with no branch, the branch-name half of that harvest is empty
-by construction** (`code-ship` B1b) — claim every member issue anyway, and cite each
-`#N` in the trunk-direct commit body, since that is the only source harvest has left
+**On an attended trunk-direct unit with no branch, the branch-name half of that harvest
+is empty by construction** (`code-ship` B1b) — claim every member issue anyway, and cite
+each `#N` in the trunk-direct commit body, since that is the only source harvest has left
 to read.
 
 **Epics: read the state, never the title.** The title states the ambition; the title is
@@ -606,16 +609,18 @@ with the blocker named:
       (`gh run list --branch <trunk> -L 1` reads whatever ran *last*, and a
       cancelled straggler can outrank a passing run on the same commit under
       `cancel-in-progress`.) A failure that never started (billing lockout, runner
-      outage) counts as dead. **What CI *is* here follows `writes`, how much it
-      must catch follows `exposure`**
-      ([§7, *CI*](../../CONVENTIONS.md#ci--what-it-is-follows-writes-how-much-follows-exposure)):
-      on `isolated`, it doubles as the pre-merge gate this bullet is checking you
-      can still pass — if you cannot merge when you finish, you are not ready to
-      start ([§6](../../CONVENTIONS.md#6-releases)). On `writes: serial`, a trunk-direct
-      commit ships before CI ever runs — CI there is the alarm, not the gate — so
-      being ready to start means nothing is already sounding it, and thoroughness
-      is a question `exposure` answers, not a pre-merge check that structurally
-      cannot exist.
+      outage) counts as dead. **What CI *is* here follows whether the unit has a
+      branch, how much it must catch follows `exposure`**
+      ([§7, *CI*](../../CONVENTIONS.md#ci--what-it-is-follows-the-units-shape-how-much-follows-exposure)
+      — ⚖ #233 retired the `writes`-keyed reading): with a branch — the ordinary
+      case, or an attended trunk-direct session falling back to full ceremony — it
+      doubles as the pre-merge gate this bullet is checking you can still pass — if
+      you cannot merge when you finish, you are not ready to start
+      ([§6](../../CONVENTIONS.md#6-releases)). On an attended trunk-direct unit with
+      no branch, a commit ships before CI ever runs — CI there is the alarm, not the
+      gate — so being ready to start means nothing is already sounding it, and
+      thoroughness is a question `exposure` answers, not a pre-merge check that
+      structurally cannot exist.
 - [ ] **No live worktree owns those files** — `colab worktrees`, and
       `git branch -a --list '*<n>*'` after `git fetch --prune`. A clean label does
       not prove clean ground: claims are released unconditionally at wrap, so an
@@ -708,11 +713,13 @@ comment, the plan/lane reason), never through a fresh prose comment invented for
 occasion.
 
 For each **ready** group, give the four things a session needs to begin. The fourth,
-`start:`, follows [`writes`](../../CONVENTIONS.md#writes--serial-or-isolated-and-the-two-things-that-make-a-branch-mandatory):
-on `isolated` (the shape below), it is a claim-and-worktree command; on
-`writes: serial` with neither of [§2](../../CONVENTIONS.md#writes--serial-or-isolated-and-the-two-things-that-make-a-branch-mandatory)'s two mandatory-branch conditions firing, it is
-`colab solo` instead — no claim, no worktree, because solo flow's entry gate stands
-in for both (§3, above).
+`start:`, is **always the claim-and-worktree command** — ⚖ #233 makes this true on
+every repo now, not just `writes: isolated` ones: triage's own output is consumed by
+sessions that may be **unattended** (a dashboard auto-start, a scheduled driver), and
+solo flow now requires `COLAB_HUMAN=1` — attendance transcribed from a live human
+instruction, never inferred, never assumed by a triage report. `start:` may not emit
+`colab solo` on any repo, because it cannot know whether the session reading it will
+have a human behind it.
 
 ```
 READY  fix/import-fixes-115-114-113   #115 #114 #113
@@ -721,8 +728,22 @@ READY  fix/import-fixes-115-114-113   #115 #114 #113
        start: colab claim 115 114 113 --worktree import-fixes-115-114-113
 ```
 
-On `writes: serial`, the same group instead reads `start: colab solo` — no branch
-name to give, because none is mandatory.
+**On a repo that does not declare `writes: isolated`, add a note — never replace
+`start:` with it:** a human working the trunk checkout directly, in a live
+conversation, may instead run `COLAB_HUMAN=1 colab solo` where neither of
+[§2](../../CONVENTIONS.md#writes--the-trunk-direct-veto-and-the-two-things-that-make-a-branch-mandatory)'s
+two mandatory-branch conditions fires — but that is a human's choice to make in the
+moment, not a command this report may hand to whatever reads it next:
+
+```
+READY  fix/import-fixes-115-114-113   #115 #114 #113
+       why: blocks the payroll import; trunk CI green 2h ago
+       files: app/Import/*, tests/Import/*
+       start: colab claim 115 114 113 --worktree import-fixes-115-114-113
+       note: no writes: isolated veto here — a human at the keyboard may instead run
+             `COLAB_HUMAN=1 colab solo` (no branch mandatory); an unattended session
+             must use the worktree command above regardless
+```
 
 A **soft-ready** group is startable, so it belongs in the ready list — but it carries a
 line the plain ones do not, because a session picking it up needs to know both *what it

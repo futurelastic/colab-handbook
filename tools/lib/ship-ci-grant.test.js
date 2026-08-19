@@ -42,9 +42,15 @@ const REPO_ROOT = path.resolve(__dirname, '..', '..');
 const COLAB = path.join(REPO_ROOT, 'tools', 'colab');
 
 // --- the human-only property, second layer: no automated path sets COLAB_HUMAN --------------
+// #237 (⚖ Decision on #233, ruling 2) carved out ONE narrow exception, shared verbatim with the
+// identical check in ship-migration-grant.test.js: "the assistant may set it when the human says
+// so" — for solo-flow entry specifically. A file is exempt only when every COLAB_HUMAN mention in
+// it is solo-flow-only AND it never also mentions one of the commands this property still forbids
+// outright (a migration grant, a CI grant, a promotion, a place-claim force-override).
+const HUMAN_GATED_COMMANDS = /migration-grant|ci-grant|colab promote|colab place[^\n]*--force/;
 
-test('human-only property: no file under skills/ ever sets COLAB_HUMAN (ci-grant shares the bar)', () => {
-  const skillsDir = path.join(REPO_ROOT, 'skills');
+function skillFilesSettingColabHuman(repoRoot) {
+  const skillsDir = path.join(repoRoot, 'skills');
   const offenders = [];
   const walk = (dir) => {
     for (const name of fs.readdirSync(dir)) {
@@ -52,12 +58,21 @@ test('human-only property: no file under skills/ ever sets COLAB_HUMAN (ci-grant
       if (fs.statSync(p).isDirectory()) { walk(p); continue; }
       if (!/\.(md|mjs|js|sh)$/.test(name)) continue;
       const text = fs.readFileSync(p, 'utf8');
-      if (/COLAB_HUMAN\s*=\s*1/.test(text) || /COLAB_HUMAN=['"]?1/.test(text)) offenders.push(p);
+      const setsHuman = /COLAB_HUMAN\s*=\s*1/.test(text) || /COLAB_HUMAN=['"]?1/.test(text);
+      if (!setsHuman) continue;
+      const isSoloOnly = /\bsolo\b/i.test(text) && !HUMAN_GATED_COMMANDS.test(text);
+      if (!isSoloOnly) offenders.push(p);
     }
   };
   walk(skillsDir);
+  return offenders;
+}
+
+test('human-only property: no file under skills/ sets COLAB_HUMAN except for solo-flow attendance (ci-grant shares the bar, #237)', () => {
+  const offenders = skillFilesSettingColabHuman(REPO_ROOT);
   assert.deepStrictEqual(offenders, [],
-    `a skill sets COLAB_HUMAN=1 — this would let an unattended session grant itself a CI exemption: ${offenders.join(', ')}`);
+    `a skill sets COLAB_HUMAN=1 outside a solo-flow-only context — this would let an unattended ` +
+    `session grant itself a CI exemption (or another human-gated act): ${offenders.join(', ')}`);
 });
 
 const TMP = [];

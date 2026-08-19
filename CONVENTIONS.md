@@ -306,7 +306,7 @@ tag-published repo with real adopters and no server (this repo's own shape) is t
 axis exists to stop misreading as "no exposure means no server."
 
 **Not coupled to `tier` by INFERENCE — nothing derives `exposure` from `tier`, ever** — the
-identical instruction [`writes`](#writes--serial-or-isolated-and-the-two-things-that-make-a-branch-mandatory)
+identical instruction [`writes`](#writes--the-trunk-direct-veto-and-the-two-things-that-make-a-branch-mandatory)
 gives for the identical reason: an inference rule would re-weld two questions this axis
 model exists to separate, and would over-fire on precisely the transitional and
 tag-published shapes just ruled legal above. As of #144, the two ARE compared when both are
@@ -318,7 +318,7 @@ one from the other, and it does not reopen this instruction.
 four-value enum check, and the `production:` pairing advisory — nothing that derived gate
 count. #144 is the unit that flipped authority: `exposure`, when declared, now governs gate
 count directly (see the top of this section, above), rather than merely being readable
-alongside a still-authoritative `tier`. [CI's role and thoroughness](#ci--what-it-is-follows-writes-how-much-follows-exposure)
+alongside a still-authoritative `tier`. [CI's role and thoroughness](#ci--what-it-is-follows-the-units-shape-how-much-follows-exposure)
 and the [rollback obligation](#recovery--what-must-exist-to-undo-a-merge) are now derived
 — by later units reading this key, not by this one. **#137 shipped 2 of 5 possible
 falsifiers against a declared `exposure: none`** — a version-shaped tag exists, and a
@@ -376,13 +376,16 @@ merge with no evidence trail is unauditable).
 ### Recovery — what must exist to undo a merge?
 
 **Prevention and recovery are alternatives, and which one is available is decided by
-[`writes`](#writes--serial-or-isolated-and-the-two-things-that-make-a-branch-mandatory),
-not by preference.** Isolated and serial-gated both put a gate in front of a merge —
-something to inspect before the unit lands (below) — so "catch it before it lands" is
-achievable there. Serial trunk-direct has no such gate: a commit lands by construction,
-and CI runs after the push as an alarm, not a filter. Recovery is the only instrument left
-on that cell of the table, and it has been undefined — the mode this handbook adopted for
-solo flow carried no stated obligation for what happens once something lands wrong.
+whether the unit has a branch, not by preference** — a fact about the session now, not a
+declared [`writes`](#writes--the-trunk-direct-veto-and-the-two-things-that-make-a-branch-mandatory)
+method (⚖ #233 retired the method reading; see [CI](#ci--what-it-is-follows-the-units-shape-how-much-follows-exposure)
+for the full re-basing). A worktree session, or an attended trunk-direct one falling back
+to full ceremony, has a gate in front of the merge — something to inspect before the unit
+lands (below) — so "catch it before it lands" is achievable there. An attended trunk-direct
+commit with no branch has no such gate: it lands by construction, and CI runs after the
+push as an alarm, not a filter. Recovery is the only instrument left in that shape, and it
+has been undefined — the mode this handbook adopted for solo flow carried no stated
+obligation for what happens once something lands wrong.
 
 The obligation follows [exposure](#exposure--what-consumes-a-merge-here), because what a
 bad commit costs to undo is exactly what exposure says consumed it:
@@ -402,80 +405,83 @@ un-pulled, only superseded. "Catch it before it lands" is not conservatism at `r
 it is the only defense that exists, because nothing past the tag is recovery, only a
 forward fix.
 
-### Writes — serial or isolated, and the two things that make a branch mandatory
+### Writes — the trunk-direct veto, and the two things that make a branch mandatory
 
-**Another axis.** `writes` names which
-write-conflict prevention method a repo's sessions default to
-([`writes`](project.schema.md#writes--optional)) — a different question from `tier`
-(gates to production), `room` (who reads the record), `ceremony` (record-keeping depth),
-or `integration` (a development line). Three methods are coherent; one combination is not:
+**Another axis.** `writes` ([`writes`](project.schema.md#writes--optional)) — a different
+question from `tier` (gates to production), `room` (who reads the record), `ceremony`
+(record-keeping depth), or `integration` (a development line) — answers exactly one
+question: **may a human ever commit straight to this repo's trunk checkout, alongside
+worktree sessions?**
 
-| method | writer count | branches? | this is… |
-|---|---|---|---|
-| `serial-direct` | one at a time | no | solo flow, below |
-| `serial-gated` | one at a time | yes, when the two conditions below apply | the common case: a claim, a branch, a squash |
-| `isolated` | many, concurrently | yes, always (worktrees) | today's fleet default |
-| *(N writers, trunk-direct)* | many | no | **not a method** — simply an unlocked repo |
+**⚖ Decision on #233 (2026-08-19): `writes` stopped selecting a write-conflict prevention
+METHOD and became a two-state VETO.** Before this ruling, the field named which of three
+coherent methods a repo's sessions defaulted to (`serial-direct` / `serial-gated` /
+`isolated`), and the three interacted with `autonomy`, CI role, and branch-mandatory in
+different ways — machinery this section used to spend most of its length explaining. That
+machinery is retired. The vocabulary now resolves to exactly two states:
 
-The fourth row is named, not left implicit: nothing coordinates concurrent trunk-direct
-writers, so it is not a degraded version of the other three, it is the absence of a
-method. A repo cannot select it; it is what "no `writes` discipline at all" looks like.
+| descriptor says | means |
+|---|---|
+| *(absent)* | **coexistence** — the default. Worktree sessions and an attended human trunk-direct session run side by side. |
+| `isolated` | **veto** — no trunk-direct in this repo, human or not. No field, flag, or override lowers this bar. |
+| `serial` · `serial-direct` · `serial-gated` | **inert** — identical to absent. These spellings stay valid (no adopter's descriptor breaks), and resolve through the legacy alias exactly as before (`tools/lib/writes-authority.js`), but nothing downstream treats them as a method choice any longer. |
 
-**#208 split what used to be one declarable value, `serial`, into the two top rows above** —
-`serial-direct` and `serial-gated` DECLARE IDENTICALLY under the old vocabulary, yet carry
-different constraints, and a reader answering "may this repo be granted `autonomy:
-auto-trunk`?" had to piece the answer together from three separate passages, one of them
-easy to stop reading early and conclude the opposite of the truth. The constraint matrix
-below is the fix — read it before granting anything to a `serial-*` repo:
+Binary in practice: veto, or not. `tools/lib/writes-authority.js`'s `trunkDirectVetoed(raw)`
+is the one function anything may act on — it reads the **raw** declared value, never the
+3-way parse `resolveWrites` still performs (that resolver's *job* is unchanged: parse,
+resolve the legacy alias, report `source` — what changed is that nothing may read its
+3-way `value` as selecting a method anymore).
 
-| constraint | `serial-direct` | `serial-gated` | `isolated` |
-|---|---|---|---|
-| `autonomy: auto-trunk` | allowed — governs the branch-merge fallback only (rule 5, Solo flow, below) | allowed | allowed |
-| place-claim needed | yes | yes | no — the worktree already is the isolation |
-| branch | optional (mandatory only per the two conditions below) | required per the two conditions below | always |
-| `ceremony: light` + `autonomy: auto-trunk` | **forbidden** (above) | **forbidden** (above) | **forbidden** (above) |
+**Whether trunk-direct is legal here is a descriptor fact (the veto); whether THIS session
+may use it is a session-identity fact, not a descriptor fact.** A repo that does not veto
+permits an *attended* human session to commit straight to trunk — attendance is asserted
+with `COLAB_HUMAN=1`, set only on a human's explicit instruction (never inferred, never
+from a headless, scheduled, or driver session — [§5, "The human flag"](#the-human-flag--what-colab-human1-asserts),
+below). An automated session never gets trunk-direct here, veto or not — the veto forbids
+it for everyone, and absence of the veto still requires attendance, which an automated
+session cannot assert. See [Solo flow](#solo-flow--trunk-direct-issue-on-demand-entry-gated-a-human-must-be-at-the-keyboard)
+below for the mechanical entry gate.
 
-**`auto-trunk` was marked forbidden for `serial-direct` until #224; that reading was too
-broad, and the correction is worth carrying forward so it is not re-derived.** The old
-cell assumed `serial-direct` means a repo never produces a branch, so nothing would exist
-for `auto-trunk` to merge — granting it could only mean an unattended trunk-direct commit
-with none of solo flow's start-side rails. That assumption does not hold: `writes:
-serial-direct` means solo flow is *available*, not that every unit runs through it. Solo
-flow's own entry gate (rule 1, below) refuses outright whenever it cannot prove nobody
-else is colliding — a live worktree, a held claim, an unpushed branch, a dirty tree — and
-on refusal the session falls back to full ceremony: claim, branch, worktree, merge. A
-`serial-direct` repo therefore does produce branches that need merging, on the days solo
-flow's entry gate refuses, and from that point on it is indistinguishable from
-`serial-gated`.
+**The constraint matrix**, re-based on what the runtime actually decides — two columns
+keyed on the descriptor, with the session-identity distinction expressed in the rows that
+used to be keyed to a declarable method:
 
-The hazard the old cell protected against — an unattended merge with no branch, no claim,
-no worktree — is not reachable through `colab ship` on **any** `writes` value: `ship`
-merges a *branch*, and a solo-flow trunk-direct commit never produces one; a raw push to
-trunk is blocked by hook regardless of `writes` or `autonomy`. So the prohibition belongs
-to the act (a solo-flow trunk-direct commit, which an `auto-trunk` grant has no power over
-— there is nothing for `ship` to act on), not to the declared value. `auto-trunk` on a
-`serial-direct` repo governs exactly what it governs on `serial-gated`: the branch-merge
-path, gated identically.
+| constraint | `writes: isolated` (the veto) | absent · `serial` · `serial-direct` · `serial-gated` (coexistence) |
+|---|---|---|
+| trunk-direct, human at the keyboard (`COLAB_HUMAN=1`) | **forbidden** | allowed |
+| trunk-direct, automated session | **forbidden** | **forbidden** |
+| `autonomy: auto-trunk` | allowed | allowed |
+| `ceremony: light` + `autonomy: auto-trunk` | **forbidden** (above) | **forbidden** (above) |
+| place-claim needed | n/a — nothing writes the shared checkout | yes, on the trunk checkout |
+| branch | always | always, except an attended trunk-direct unit |
 
-`serial` **remains valid, as a legacy alias of `serial-direct`** — no adopter's descriptor
-breaks on this split. `tools/lib/writes-authority.js` is the one resolver both the audit and
-`colab adopt` read (the identical split `tools/lib/axis-authority.js` draws for `tier` →
-`exposure`); it resolves the alias toward `serial-direct`, never `serial-gated`, because that
-is the reading that changes nothing observable for a repo that has not opted into the split
-— including this handbook's own descriptor, whose `writes: serial` predates the split and
-still means solo flow is open here. Reclassifying an EXISTING repo's descriptor to
-`serial-gated` is a human decision made per repo, never inferred: `serial-gated` reads as the
-*safer*, more-conservative spelling, but assigning it automatically to a repo that is
-actually running trunk-direct would move that repo into the `auto-trunk`-eligible cell above
-— exactly the cell it must never occupy.
+The two rows that never varied by the old method (`autonomy: auto-trunk`,
+`ceremony: light` + `auto-trunk`) keep their cells unchanged — that they never depended on
+`writes` is now evidence for this direction, not an invitation to re-open them. The two
+rows that used to vary by declared method (`place-claim needed`, `branch`) are re-based
+onto session identity, which a test can now drive end to end against the real `colab solo`
+— see `tools/lib/audit-writes-matrix.test.js`.
 
-**Exactly two conditions make a branch mandatory** on a `serial-*` repo — no others:
+**Retired: the `auto-trunk`/`serial-direct` narrative #208 and #224 argued over.** The old
+three-method table spent several paragraphs establishing that `auto-trunk` was never
+actually gated on `serial-direct` vs `serial-gated`, only on whether a branch exists for
+`colab ship` to act on. That conclusion is now trivially true — there is only one
+coexistence cell, not two — and the argument that reached it is retired along with the
+distinction it was about.
+
+**Exactly two conditions make a branch mandatory** for an attended trunk-direct session —
+every other kind of session (a worktree one) has a branch by construction, so this now
+governs solo flow specifically:
 
 1. **More than one unit of work is in flight** — a second claim, worktree, or place-claim
    already live on the repo. One writer stops being true, so the branch is what draws the
    boundary between units.
 2. **A gate must inspect the unit before it lands** — CI, review, or any check that needs
-   something to point at. Trunk-direct has nothing to gate.
+   something to point at. Trunk-direct has nothing to gate. A repo where this is true says
+   so by *having* a gate — a trunk-gating CI workflow, or branch protection — not by a
+   declared value; see [CI](#ci--what-it-is-follows-the-units-shape-how-much-follows-exposure)
+   below for where that fact now lives (this migrated from the retired `serial-gated`
+   spelling, which used to be the only way to assert it).
 
 **Not on that list: "it feels safer."** A branch is one way to draw a unit boundary; a
 place-claim (below) is another, and where neither condition applies, the place-claim is
@@ -492,30 +498,51 @@ the observed correlation as an audited rule would repeat the same weld `ceremony
 introduced to undo (`ceremony` vs. `tier`, above) — so no such rule exists, and none
 should be added later "to catch the common case."
 
-### Solo flow — trunk-direct, issue-on-demand, entry-gated (`writes: serial`)
+**Retired: the deploy-shape prohibition.** A now-dropped rule once required a repo whose
+trunk merge is itself the deploy to keep a branch and a pre-merge gate rather than run
+trunk-direct freely (spelled out under [Channels](#channels--by-what-path-does-code-reach-the-thing-that-runs-it)
+below). ⚖ #233 removed it outright rather than deriving a replacement test: measured
+before deciding, the shape it protected against (`exposure: live` **and** `trunk: main`)
+had zero instances across 40 adopted descriptors — every live repo already declares a
+trunk distinct from `main`, so its trunk merge lands on a branch that ships nothing. A
+repo that later grows into that shape without declaring the veto gets trunk-direct
+silently, and there a commit reaches users immediately; the audit reports the combination
+as an informational advisory (never a refusal) — `writes: isolated` is now the only way to
+say "not here."
+
+### Solo flow — trunk-direct, issue-on-demand, entry-gated (a human must be at the keyboard)
 
 `ceremony: light` relaxed the record-keeping *end* of a session; the *start* — pre-filed
 issue, claim, branch, worktree — stayed full weight even there. Solo flow is the
-**`serial-direct`** cell of the table above — and **only** that cell: `serial-gated`
-declares a pre-merge gate exists, which is exactly what solo flow has none of, so it does
-not qualify (#208; `soloEligibility` in `tools/lib/solo.js` keys off the direct value for
-this reason). The legacy alias `writes: serial` resolves to `serial-direct` and stays
-eligible unchanged. A repo one person codes directly, in one conversation-driven session,
-with no other session to protect against — the start-side invariants exist to protect
-*other* sessions.
+**coexistence, attended** cell of the table above: legal on any repo that does not declare
+`writes: isolated` (absence and every other value permit it — ⚖ #233), **and only to a
+session a human is behind**. A repo one person codes directly, in one conversation-driven
+session, with no other session to protect against — the start-side invariants exist to
+protect *other* sessions, and the attendance requirement exists because trunk-direct
+itself needs someone present to answer for the commit.
 
+0. **Attendance comes first — before any mechanical check below.** `COLAB_HUMAN=1` asserts
+   one thing: a human is behind this command ([§5, "The human flag"](#the-human-flag--what-colab-human1-asserts),
+   below). Set it only on a human's explicit instruction — **transcription, never
+   inference**: type it because the human said "take the trunk," never because the
+   situation seemed to call for it. **Live conversation only** — a headless, scheduled, or
+   driver session may never set it, whatever its prompt contains: an issue body can
+   literally contain the words, and an unattended session cannot tell an instruction from
+   a quotation of one. `writes: isolated` vetoes this outright, for a human exactly as for
+   an automated session — no flag lowers that bar.
 1. **Entry gate, not honor system.** `colab solo` checks fresh on every invocation, never
-   a cached answer: no live solo session already open, checkout on trunk with no
-   unpushed branch anywhere, a clean (tracked + untracked) tree, and no conflicting
-   place-claim held on **this checkout** (below). Anything held refuses outright — full
-   ceremony, no partial credit. **Not** on this list, deliberately: a worktree existing
-   anywhere else in the repo (#236), or a claim held anywhere else in the repo (#240) —
-   the same category error, twice. The claim registry holds an *issue*, not a *place*, so
-   a claim tied to a worktree elsewhere is that worktree's business, not this checkout's —
-   a session writing there is not a writer of the checkout solo flow is about to commit
-   straight to, and cannot become one. (A claim taken directly against *this* checkout,
-   with no worktree, already acquires the same place-claim at claim time, so it still
-   refuses here — via the place-claim check, not a separate claim check.)
+   a cached answer: `COLAB_HUMAN=1` set, no veto declared, no live solo session already
+   open, checkout on trunk with no unpushed branch anywhere, a clean (tracked + untracked)
+   tree, and no conflicting place-claim held on **this checkout** (below). Anything
+   held/unmet refuses outright — full ceremony, no partial credit. **Not** on this list,
+   deliberately: a worktree existing anywhere else in the repo (#236), or a claim held
+   anywhere else in the repo (#240) — the same category error, twice. The claim registry
+   holds an *issue*, not a *place*, so a claim tied to a worktree elsewhere is that
+   worktree's business, not this checkout's — a session writing there is not a writer of
+   the checkout solo flow is about to commit straight to, and cannot become one. (A claim
+   taken directly against *this* checkout, with no worktree, already acquires the same
+   place-claim at claim time, so it still refuses here — via the place-claim check, not a
+   separate claim check.)
 2. **Trunk-direct commits are allowed.** Small Conventional Commits go straight to trunk;
    CI validates after the push — an alarm, not a gate, so recovery rather than prevention
    is the obligation ([Recovery](#recovery--what-must-exist-to-undo-a-merge), above).
@@ -524,36 +551,29 @@ with no other session to protect against — the start-side invariants exist to 
    does not forbid one.
 3. **An Issue is filed on demand**, not on entry — recording a decision, or work spanning
    more than one sitting.
-4. **Exit check, not teardown.** `colab solo --done` re-derives fresh: tree clean,
-   everything pushed. Nothing to tear down — solo flow made no worktree and holds no
-   claim, though it releases any place-claim it took.
-5. **Solo flow's own invariants, never relaxed even here** — this list is scoped to solo
-   flow itself, not to every `serial-*` repo (`serial-gated` is a separate cell with its own
-   row in the constraint matrix above): CI secret scan · reserved ports · Conventional
-   Commits · no scheduled driver (doubly incompatible — a driver planning against a repo
-   reads its Issues, and a solo repo may have none open at all). `production: null` is
-   **not** on this list — `writes: serial-*` is deliberately not coupled to production
-   (above), so a live repo may run solo flow. **Nor, since #224, is `autonomy: auto-trunk`**
-   — a solo-flow trunk-direct commit produces no branch, so a grant has nothing to act on
-   while flow 2 (trunk-direct commits) is what's running; the grant governs only the branch
-   this repo falls back to producing whenever rule 1's entry gate refuses, at which point
-   `colab ship`'s ordinary branch-merge gate applies, identical to `serial-gated` (the
-   matrix above states the same fact; this is the one place a reader stopping here gets the
-   right answer without reading further).
-
-**One more shape a `writes: serial-direct` repo can have, spelled out in
-[Channels](#channels--by-what-path-does-code-reach-the-thing-that-runs-it) below: where the
-trunk merge is itself the deploy, trunk-direct ships every commit.** Such a repo may run
-solo flow, but not the trunk-direct half of it as freely as the general rule above implies —
-it keeps a branch and a pre-merge gate for anything it is not willing to put in front of
-users unreviewed, and skips only the worktree. This is a derived constraint from the
-channel, not a new coupling: `writes` still answers the same question it always has, and
-gains no new field.
+4. **Exit check, not teardown, and never gated on attendance.** `colab solo --done`
+   re-derives fresh: tree clean, everything pushed. Nothing to tear down — solo flow made
+   no worktree and holds no claim, though it releases any place-claim it took. `--done`
+   releases a hold and authorizes nothing, so it dispatches before the eligibility check —
+   refusing it on a missing `COLAB_HUMAN=1` would strand the lock with no way to clear it
+   short of `COLAB_HUMAN=1 colab place release`.
+5. **Solo flow's own invariants, never relaxed even here:** CI secret scan · reserved
+   ports · Conventional Commits · no scheduled driver (doubly incompatible — a driver
+   planning against a repo reads its Issues, and a solo repo may have none open at all;
+   also structurally incapable of asserting attendance, rule 0 above). `production: null`
+   is **not** on this list — `writes` is deliberately not coupled to production (above),
+   so a live repo may run solo flow if it does not declare the veto. `autonomy: auto-trunk`
+   is not either — a solo-flow trunk-direct commit produces no branch, so a grant has
+   nothing to act on while flow 2 (trunk-direct commits) is what's running; the grant
+   governs only the branch this repo falls back to producing whenever rule 1's entry gate
+   refuses, at which point `colab ship`'s ordinary branch-merge gate applies (the matrix
+   above states the same fact; this is the one place a reader stopping here gets the right
+   answer without reading further).
 
 **The boundary is concurrency reality, not a discipline preference — scoped to the
 checkout, not the repo (#236, #240).** A *checkout* more than one session touches can
 never legally run solo flow there — the entry gate's own checks are false by
-construction the moment a second session is writing to it. `writes: serial-direct` is
+construction the moment a second session is writing to it. Not declaring the veto is
 necessary but not sufficient: a checkout currently hosting someone else's place-claim
 still fails `colab solo`'s check, correctly. A *repo* hosting another session — via a
 worktree elsewhere, or an issue claim tied to one — is not disqualifying by itself: a
@@ -565,14 +585,15 @@ trunk checkout itself — which is exactly the shape a place-claim already catch
 **Consumers inferring activity purely from worktrees/claims will under-report a solo
 session** — fixing that is each such consumer's own call, not mandated here.
 
-### Place-claims — the writer-verifiable hold `writes: serial` needs, and isolation does not
+### Place-claims — the writer-verifiable hold a shared checkout needs, and a worktree does not
 
-An **isolated** writer needs no lock: its worktree already is the isolation. A **serial**
-writer does — either method, `serial-direct` or `serial-gated` (#208) — one checkout, no
-branch, so nothing but a lock stops two sessions (or an
-implementer agent fanned out by a coordinator, which never went through anything that
-could refuse a spawn) from writing the same trunk checkout at once. A place-claim is that
-lock: **path-scoped**, not repo-scoped — the checkout path is the unit, so a repo running
+A **worktree** writer needs no lock: its own directory already is the isolation. A writer
+of the **shared trunk checkout** does — any repo that does not declare `writes: isolated`
+(⚖ #233; both legacy `serial-*` spellings and absence permit this shape identically now)
+— one checkout, no branch, so nothing but a lock stops two sessions (or an implementer
+agent fanned out by a coordinator, which never went through anything that could refuse a
+spawn) from writing the same trunk checkout at once. A place-claim is that lock:
+**path-scoped**, not repo-scoped — the checkout path is the unit, so a repo running
 multiple worktrees still needs only one hold per checkout in use — **held by a session**
 and **verified by the writer itself**, not merely by whatever spawned it.
 
@@ -604,16 +625,17 @@ and **verified by the writer itself**, not merely by whatever spawned it.
   **This rules only on the lock's own state path** — a distinct fact from the *checkout*
   itself being file-synced, which is [Channels](#channels--by-what-path-does-code-reach-the-thing-that-runs-it)'s
   concern below: a repo whose working tree is synced to another machine cannot use
-  either serial method (`writes: serial-direct` or `writes: serial-gated`) at all,
-  lock-state location aside, because a hold on one checkout stops meaning one machine the
-  moment the path is shared by sync.
-- **Degraded mode: serial falls back to isolated, never to unlocked.** If the lock cannot
-  be reached (state unreadable, or the acquire itself is what lives on a synced path), the
-  writer is told to use a worktree and branch instead — which needs no lock. Speed is what
-  degrades, never safety; nothing ever proceeds trunk-direct without a hold.
+  trunk-direct at all, lock-state location aside, because a hold on one checkout stops
+  meaning one machine the moment the path is shared by sync.
+- **Degraded mode: the shared checkout falls back to a worktree, never to unlocked.** If
+  the lock cannot be reached (state unreadable, or the acquire itself is what lives on a
+  synced path), the writer is told to use a worktree and branch instead — which needs no
+  lock. Speed is what degrades, never safety; nothing ever proceeds trunk-direct without a
+  hold.
 - **Override is a human act.** A held place-claim with a live holder is a genuine refusal,
   not friction to route around; overriding one requires the same `COLAB_HUMAN=1` bar as
-  a migration grant or a promotion. An `unknown`-liveness holder (recorded by session URL
+  a migration grant or a promotion ([§5, "The human flag"](#the-human-flag--what-colab-human1-asserts),
+  below). An `unknown`-liveness holder (recorded by session URL
   only, with nothing locally probable) is exactly the case where a human is needed, and
   the refusal names both remedies: wait for the liveness window to clear, or override on
   the confirmed knowledge that the session is gone.
@@ -699,36 +721,27 @@ bypassed the repo's own documented procedure; and a second machine carrying no g
 metadata at all for a repo it was nonetheless running, so a directory-scoped git command
 silently resolved to an enclosing repository and answered confidently about the wrong one.
 
-**Consequence 1 — a file-synced working tree cannot use [either serial method](#writes--serial-or-isolated-and-the-two-things-that-make-a-branch-mandatory) (`serial-direct`/`serial-gated`).**
-What makes serial safe is a hold on one checkout, and machine-local state is the correct
-home for that hold — but only while a path on one machine means one machine. Sync breaks
-that silently: two machines can each believe they hold the only checkout. The mode is
-**unavailable** until the repo is excluded from the sync; performing the exclusion is
+**Consequence — a file-synced working tree cannot use trunk-direct at all.** What makes a
+shared-checkout hold safe is a lock on one checkout, and machine-local state is the
+correct home for that lock — but only while a path on one machine means one machine. Sync
+breaks that silently: two machines can each believe they hold the only checkout. The mode
+is **unavailable** until the repo is excluded from the sync; performing the exclusion is
 operations work, not a rule this handbook states. This is a distinct fact from the
-[place-claim](#place-claims--the-writer-verifiable-hold-writes-serial-needs-and-isolation-does-not)
+[place-claim](#place-claims--the-writer-verifiable-hold-a-shared-checkout-needs-and-a-worktree-does-not)
 rule that the *lock's own state* must never live on a synced path — that rules on where the
 lock is stored, this rules on whether the checkout being locked is itself trustworthy as
 "one machine" at all.
 
-**Consequence 2 — where the trunk merge is itself the deploy, trunk-direct ships every
-commit.** This is the one point where `writes` and this axis genuinely interact — not as
-a coupling, but as a derived constraint, the same way [`ceremony`](#ceremony--narration-follows-the-room-recoverability-follows-exposure)
-derives from the room rather than being welded to it: a repo whose `channels` includes a
-path where merging to trunk directly runs the code may still be `writes: serial-direct`,
-but not trunk-direct as freely as the general rule allows — it keeps a branch and a pre-merge gate
-for anything not fit to put in front of users unreviewed, and skips only the worktree.
-
-**Evaluating consequence 2 needs `deploy` too — `channels` alone cannot answer it.**
-`workflow` names one shape, merge → CI → a deploy workflow, but that CI can be triggered by
-a push to trunk (`deploy: push-main`) or by a tag (`deploy: tag`), and the two have opposite
-risk profiles for exactly this obligation: a tag interposes a human ritual between merge and
-run, a trunk push does not. `channels: [workflow]` is silent on which. Whether "merging to
-trunk directly runs the code" holds for a given repo is read from `channels` **and** `deploy`
-together, not from `channels` alone — a caveat this section states rather than a coupling it
-reopens: no rule here reads `deploy` to change a `channels` finding, or `channels` to change
-a `deploy` finding, and the two stay independently authoritative for everything except this
-one human-facing question, which was unanswerable from either axis alone before this axis
-existed.
+**Retired: the second consequence, where the trunk merge was itself the deploy.** A rule
+used to sit here requiring such a repo to keep a branch and a pre-merge gate for
+trunk-direct rather than running it freely — a derived constraint from `channels`+`deploy`
+together, not a declared field. ⚖ #233 dropped it outright rather than deriving a
+replacement test, measuring first that the shape it protected against (`exposure: live`
+**and** `trunk: main`) has zero instances across 40 adopted descriptors — every live repo
+already declares a trunk distinct from `main`. See
+[Writes, "Retired: the deploy-shape prohibition"](#writes--the-trunk-direct-veto-and-the-two-things-that-make-a-branch-mandatory)
+for the replacement: a repo needing this restriction now declares `writes: isolated`
+outright, and the audit reports the undeclared shape as an informational advisory.
 
 **What this unit does not do.** It ships the `channels` key, its shape/enum check, and the
 descriptor-internal advisory — nothing more. **#137 later added a falsifier**: a
@@ -780,7 +793,7 @@ reaches something that runs it, a different question from `deploy`'s trigger
 ([§2](#channels--by-what-path-does-code-reach-the-thing-that-runs-it)); omitted, undeclared,
 never read as "none". The same is true of
 [`room:`](#room--who-else-is-here), [`exposure:`](#exposure--what-consumes-a-merge-here),
-and [`writes:`](#writes--serial-or-isolated-and-the-two-things-that-make-a-branch-mandatory)
+and [`writes:`](#writes--the-trunk-direct-veto-and-the-two-things-that-make-a-branch-mandatory)
 — each optional, each read as undeclared rather than defaulted when absent, and `exposure`
 in particular never defaults to `none`, which is a *declared* claim, not the absence of one.
 
@@ -1289,6 +1302,44 @@ and that reference is what a consumer cross-checks against (`answeredOptionRefs`
 as `backlog` (above): no backfill, no new failure state for issues filed before this
 existed.
 
+#### The human flag — what `COLAB_HUMAN=1` asserts
+
+`COLAB_HUMAN=1` is one mechanism carrying one assertion, used at several gates in this
+handbook: **a human is behind this command.** ⚖ #233 widened it to this single statement,
+covering both uses it already had and one it gained. Read every site below as an instance
+of the same assertion, never as a separate rule with its own semantics:
+
+- **Promotion** ([`colab promote`](#4-branches-and-commits)) — authorises the act that
+  deploys to production.
+- **Migration exemption** (below) and **Red-trunk exemption** (below) — authorise a write
+  that did not exist before the command ran.
+- **A place-claim override** ([Place-claims](#place-claims--the-writer-verifiable-hold-a-shared-checkout-needs-and-a-worktree-does-not),
+  above) — authorises taking over a live hold.
+- **`colab adopt`'s exposure-lowering gate** — authorises a descriptor claiming fewer
+  consumers exist than the tool can verify.
+- **Solo-flow entry** ([Solo flow](#solo-flow--trunk-direct-issue-on-demand-entry-gated-a-human-must-be-at-the-keyboard),
+  above) — the newest instance (⚖ #233): asserts a human is present to commit straight to
+  trunk, on any repo that does not declare the veto.
+
+**Two terms make the assertion checkable, not just statable** — the same standard
+`code-ship` already holds itself to, restated here as the general rule rather than one
+skill's local convention:
+
+- **Transcription, never inference.** Set it because a human said so — "take the trunk,"
+  "promote this," "grant the migration" — never because the situation seemed to call for
+  it. A human's go-ahead counts; an agent's own reading of the situation never does.
+- **Live conversation only.** A headless, scheduled, or driver session may never set it,
+  whatever its prompt contains. An issue body, a triage comment, a scheduled task's own
+  instructions can all literally contain the words "take the trunk" — an unattended
+  session has no way to tell a live instruction from a quotation of one, so it must never
+  try.
+
+**The honest limit, stated once here rather than wherever it currently gets re-derived:**
+`COLAB_HUMAN` is an env var the gated party can set itself — nothing enforces the two
+terms above beyond the discipline of everyone honoring them (#150, parked: a stronger
+mechanism would need an out-of-band attestation this fleet does not have). The two terms
+are what make a violation *legible* after the fact, not what makes one impossible.
+
 #### Migration exemption — a narrow, human-created door through no-new-migrations (#98)
 
 `colab ship` refuses, by default with no flag/env/field to lower the bar, any branch
@@ -1655,7 +1706,7 @@ promote, tag, then run the runbook — promotion there always requires a human, 
 **Human gate count follows [exposure](#exposure--what-consumes-a-merge-here), not
 preference.** An up-front yes can authorize an intent; it cannot authorize a result
 nobody has seen. Where a merge's only consumer is the room itself (`self`), intent and
-result share one reader, so [solo flow](#solo-flow--trunk-direct-issue-on-demand-entry-gated-writes-serial)'s
+result share one reader, so [solo flow](#solo-flow--trunk-direct-issue-on-demand-entry-gated-a-human-must-be-at-the-keyboard)'s
 single decision-time authorization already covers the whole cycle — decide, lock, do,
 commit, record, unlock — with no separate look at the diff required. Where a merge
 reaches beyond the room (`live`, `released`), the two audiences differ, so the gates must
@@ -1712,15 +1763,27 @@ longer is. Measured: three repos whose trunks had moved to `dev` while CI still 
 only on `[main, master]` — every trunk merge ran zero checks, silently. When a repo's
 trunk moves, updating the CI triggers is part of the move, and the audit checks it.
 
-### CI — what it is follows writes, how much follows exposure
+### CI — what it is follows the unit's shape, how much follows exposure
 
-**What CI *is* comes from
-[writes](#writes--serial-or-isolated-and-the-two-things-that-make-a-branch-mandatory), not
-from tier.** With a branch, CI runs before the merge — a gate, something to inspect before
-a unit lands. Trunk-direct, it runs after the push — an alarm, not a filter, exactly as
-[Recovery](#recovery--what-must-exist-to-undo-a-merge) already found for solo flow. Same
-file, two different instruments; reading a post-push run as a gate is the mistake that
-leaves trunk-direct trusting something caught what an alarm can only report.
+**What CI *is* comes from whether the unit has a branch — a fact about the session, not a
+declared value** (⚖ #233 retired the `writes`-keyed reading this heading used to carry:
+`writes` is a veto now, not a method, so it no longer selects which CI role applies).
+With a branch — the ordinary worktree session, or an attended trunk-direct one falling
+back to full ceremony — CI runs before the merge: a gate, something to inspect before a
+unit lands. An attended trunk-direct session with no branch runs it after the push — an
+alarm, not a filter, exactly as [Recovery](#recovery--what-must-exist-to-undo-a-merge)
+already found for solo flow. Same file, two different instruments; reading a post-push run
+as a gate is the mistake that leaves trunk-direct trusting something caught what an alarm
+can only report.
+
+**A repo where a pre-merge gate must inspect every unit says so by having one — a
+trunk-gating CI workflow, or branch protection — never by a declared value.** This is
+where the retired `writes: serial-gated` spelling's one real assertion ("a pre-merge gate
+exists here") now lives: [Writes](#writes--the-trunk-direct-veto-and-the-two-things-that-make-a-branch-mandatory)'s
+second mandatory-branch condition ("a gate must inspect the unit before it lands") reads
+this fact, not a field. A declared value never carried this fact reliably — nothing
+audited whether a `serial-gated` repo actually ran one — and the gate itself is something
+the audit CAN see where it could never see a declaration.
 
 **How thorough it must be comes from [exposure](#exposure--what-consumes-a-merge-here).**
 `none` and `self` answer only to the room; `live` and `released` answer to a consumer with
@@ -1855,7 +1918,7 @@ only. Resolution order: `--config` flag > `~/.colab/repos.txt` > bundled example
    | 1 | does a deploy target exist *today* ([§2](#2-tiers)), and how is it reached — a tag gates production, the promotion itself deploys, a human runs a runbook, or nothing is live yet? | `production` + `deploy` | a URL (or none) + `push-main` / `tag` / `manual` / `none` |
    | 2 | who else works here? | [`room`](#room--who-else-is-here) | `solo` / `team` / `public` |
    | 3 | **what would break if you merged something wrong here?** | [`exposure`](#exposure--what-consumes-a-merge-here) | `none` / `self` / `live` / `released` |
-   | 4 | one unit of work in flight at a time, or several at once? | [`writes`](#writes--serial-or-isolated-and-the-two-things-that-make-a-branch-mandatory) | `serial` / `isolated` |
+   | 4 | should a human ever be allowed to commit straight to this repo's trunk checkout, alongside worktree sessions? | [`writes`](#writes--the-trunk-direct-veto-and-the-two-things-that-make-a-branch-mandatory) | *(unanswered, or anything but `isolated`)* permits it / `isolated` vetoes it outright |
    | 5 | by what path does a commit reach something that runs it? (a list — several may apply) | [`channels`](#channels--by-what-path-does-code-reach-the-thing-that-runs-it) | `workflow` / `hook` / `procedure` / `checkout` / `artifact` / `data` / `none` |
 
    Question 1 writes `production` and `deploy`, never `tier` directly — `tier` is a pure

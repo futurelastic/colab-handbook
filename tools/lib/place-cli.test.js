@@ -57,7 +57,11 @@ function fixture(projectYml = SERIAL_YML) {
 function colab(fx, args, extraEnv = {}) {
   const r = spawnSync('node', [COLAB, ...args], {
     encoding: 'utf8',
-    env: { ...process.env, COLAB_HOME: fx.home, COLAB_SESSION: '', COLAB_SESSION_NAME: '', ...extraEnv },
+    // #237: COLAB_HUMAN defaults to '' here (neutralised), never inherited from the ambient
+    // shell — a developer with COLAB_HUMAN=1 exported would otherwise get green `solo` tests
+    // that prove nothing, since eligibility now depends on it. Tests that need it pass it
+    // explicitly via extraEnv, same as every other override on this line.
+    env: { ...process.env, COLAB_HOME: fx.home, COLAB_SESSION: '', COLAB_SESSION_NAME: '', COLAB_HUMAN: '', ...extraEnv },
   });
   return { code: r.status, out: r.stdout || '', err: r.stderr || '' };
 }
@@ -118,12 +122,24 @@ test('cmdClaim --force + COLAB_HUMAN=1 on a writes:serial repo DOES take over th
   assert.ok(claimKeyed, 'the claim itself must still be recorded');
 });
 
-test('cmdClaim on a writes:isolated repo (default) is UNAFFECTED by place-claim logic — no COLAB_HUMAN gate applies', () => {
-  const fx = fixture('tier: B\ntrunk: main\nproduction: null\ndeploy: none\nstack: node\n'); // writes omitted = isolated
+test('cmdClaim on a writes:isolated repo (the EXPLICIT veto) is UNAFFECTED by place-claim logic — no COLAB_HUMAN gate applies', () => {
+  const fx = fixture('tier: B\ntrunk: main\nproduction: null\ndeploy: none\nstack: node\nwrites: isolated\n');
   const r = colab(fx, ['claim', '5', '--repo', fx.work, '--force', '--session', 'sess-AGENT']);
   assert.strictEqual(r.code, 0, r.err);
   const st = JSON.parse(fs.readFileSync(path.join(fx.home, 'state.json'), 'utf8'));
-  assert.deepStrictEqual(st.places, {}, 'an isolated repo never takes a trunk-checkout place-claim');
+  assert.deepStrictEqual(st.places, {}, 'a veto (writes: isolated) repo never takes a trunk-checkout place-claim');
+});
+
+test('#237: cmdClaim on a repo with NO writes: key (coexistence default) NOW takes the trunk-checkout place-claim — the widening ruling #1 requires', () => {
+  // Before #237, absence resolved through resolveWrites to "isolated" and took no place-claim.
+  // Coexistence is now the default: a claim with no --worktree IS the shared-trunk-checkout
+  // shape, and under coexistence that shape is legal (and therefore hold-worthy) everywhere
+  // except a repo that explicitly declares the veto.
+  const fx = fixture('tier: B\ntrunk: main\nproduction: null\ndeploy: none\nstack: node\n'); // writes omitted entirely
+  const r = colab(fx, ['claim', '5', '--repo', fx.work, '--session', 'sess-AGENT']);
+  assert.strictEqual(r.code, 0, r.err);
+  const st = JSON.parse(fs.readFileSync(path.join(fx.home, 'state.json'), 'utf8'));
+  assert.strictEqual(Object.keys(st.places).length, 1, 'absence now takes the trunk-checkout place-claim, same as writes: serial-*');
 });
 
 // --- Reject 2: the degrade path — unreadable state.json must not throw a raw stack trace --------
@@ -161,10 +177,19 @@ test('cmdPlace release against an unreadable state.json degrades (exit 2)', () =
 test('cmdSolo against an unreadable state.json on a writes:serial repo degrades (refuses, no stack trace) instead of crashing', () => {
   const fx = fixture();
   corruptState(fx);
-  const r = colab(fx, ['solo', '--repo', fx.work, '--session', 's']);
+  const r = colab(fx, ['solo', '--repo', fx.work, '--session', 's'], { COLAB_HUMAN: '1' });
   assert.notStrictEqual(r.code, 0);
   assert.match(r.out, /degrading/);
   assert.doesNotMatch(r.err, /at Object\.loadState/, 'must not leak a raw stack trace');
+});
+
+test('cmdSolo with no COLAB_HUMAN=1 refuses on attendance BEFORE ever reading state.json — an unreadable state.json never even gets reached', () => {
+  const fx = fixture();
+  corruptState(fx);
+  const r = colab(fx, ['solo', '--repo', fx.work, '--session', 's']); // no COLAB_HUMAN
+  assert.notStrictEqual(r.code, 0);
+  assert.match(r.err, /COLAB_HUMAN=1/);
+  assert.doesNotMatch(r.out, /degrading/, 'attendance is checked first — it never reaches the state read');
 });
 
 test('cmdClaim taking the trunk-checkout place-claim against an unreadable state.json degrades instead of crashing', () => {
@@ -181,7 +206,7 @@ test('cmdClaim taking the trunk-checkout place-claim against an unreadable state
 test('cmdSolo refuses to open when COLAB_HOME sits under a synced marker, same as cmdPlace acquire', () => {
   const fx = fixture();
   fs.mkdirSync(path.join(fx.home, '.sync'));
-  const r = colab(fx, ['solo', '--repo', fx.work, '--session', 's']);
+  const r = colab(fx, ['solo', '--repo', fx.work, '--session', 's'], { COLAB_HUMAN: '1' });
   assert.notStrictEqual(r.code, 0);
   assert.match(r.err, /file-synced/);
 });
@@ -286,7 +311,7 @@ test('cmdPlace release refuses on someone else\'s hold and names its age, not ju
 
 test('cmdSolo "already OPEN" refusal names the lock\'s age, not just "since <iso>"', () => {
   const fx = fixture();
-  const first = colab(fx, ['solo', '--repo', fx.work, '--session', 's1', '--session-name', 'first']);
+  const first = colab(fx, ['solo', '--repo', fx.work, '--session', 's1', '--session-name', 'first'], { COLAB_HUMAN: '1' });
   assert.strictEqual(first.code, 0, first.err);
 
   // backdate the SOLO lock itself (a separate record, st.solo[repo] — not a place-claim). Keyed
@@ -298,8 +323,24 @@ test('cmdSolo "already OPEN" refusal names the lock\'s age, not just "since <iso
   st.solo[repoKey].since = new Date(Date.now() - 4 * 24 * 3_600_000).toISOString();
   fs.writeFileSync(statePath, JSON.stringify(st, null, 2));
 
-  const second = colab(fx, ['solo', '--repo', fx.work, '--session', 's2', '--session-name', 'second']);
+  const second = colab(fx, ['solo', '--repo', fx.work, '--session', 's2', '--session-name', 'second'], { COLAB_HUMAN: '1' });
   assert.notStrictEqual(second.code, 0);
   assert.match(second.out, /already OPEN/);
   assert.match(second.out, /held 4d ago/);
+});
+
+// --- #237: `--done` dispatches BEFORE the eligibility check, so it is NEVER gated on
+// COLAB_HUMAN — releasing a hold authorizes nothing. Opened attended, closed unattended. ------
+
+test('cmdSolo --done succeeds with NO COLAB_HUMAN=1 set, even though opening required it', () => {
+  const fx = fixture();
+  const opened = colab(fx, ['solo', '--repo', fx.work, '--session', 's1'], { COLAB_HUMAN: '1' });
+  assert.strictEqual(opened.code, 0, opened.err);
+
+  const done = colab(fx, ['solo', '--done', '--repo', fx.work]); // no COLAB_HUMAN
+  assert.strictEqual(done.code, 0, done.err);
+
+  const st = JSON.parse(fs.readFileSync(path.join(fx.home, 'state.json'), 'utf8'));
+  assert.deepStrictEqual(st.solo, {}, 'the lock must be released');
+  assert.deepStrictEqual(st.places, {}, 'the place-claim it took must be released too');
 });

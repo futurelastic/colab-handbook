@@ -220,13 +220,15 @@ A "failure" that never started (billing lockout, runner outage) still means
 **stop** — we once merged for 12 hours into repos whose CI was silently dead
 (`CONVENTIONS.md` [§4](../../CONVENTIONS.md#4-branches-and-commits)). Branch protection can't check this for us; this command must.
 
-**What CI *is* follows `writes`, how much it must catch follows `exposure`**
-([§7, *CI*](../../CONVENTIONS.md#ci--what-it-is-follows-writes-how-much-follows-exposure)).
-With a branch (`isolated`, or `serial` under one of [§2](../../CONVENTIONS.md#writes--serial-or-isolated-and-the-two-things-that-make-a-branch-mandatory)'s two mandatory-branch
-conditions), CI here **is** the gate this merge depends on — a red or missing run for
-the head sha stops the ship, full stop. `none`/`self` exposure answers only to the
-room; `live`/`released` answers to a consumer with no way to ask a clarifying
-question, so more has to be caught before it reaches them.
+**What CI *is* follows whether the unit has a branch, how much it must catch follows
+`exposure`** ([§7, *CI*](../../CONVENTIONS.md#ci--what-it-is-follows-the-units-shape-how-much-follows-exposure)
+— ⚖ #233 retired the `writes`-keyed reading this used to carry). With a branch — the
+ordinary case, or an attended trunk-direct session falling back to full ceremony under
+one of [§2](../../CONVENTIONS.md#writes--the-trunk-direct-veto-and-the-two-things-that-make-a-branch-mandatory)'s
+two mandatory-branch conditions — CI here **is** the gate this merge depends on — a red
+or missing run for the head sha stops the ship, full stop. `none`/`self` exposure
+answers only to the room; `live`/`released` answers to a consumer with no way to ask a
+clarifying question, so more has to be caught before it reaches them.
 
 If `<base>` is a declared line with **no runs at all**, it is not yet CI-gated: check
 `<trunk>` instead and say so in the report. That is a normal early state for a line,
@@ -251,12 +253,12 @@ Commit bodies carry `#N`; branch names carry **bare** trailing digits
 the branch half to the trailing group is deliberate: a plain `[0-9]+` sweep turns
 `feat/oauth2-login-88` into issues 2 and 88.
 
-**On a `writes: serial` repo with no branch — a solo-flow trunk-direct unit — the
-branch-name half of this extraction is empty by construction, not a finding.** There
-is no `<branch>` to read a trailing number from; the commit-body `#N` on `<trunk>` is
-the only source harvest has, and it is enough (`CONVENTIONS.md`, *Solo flow*). This is
-the same shape `code-sweep`'s `landed trunk-direct: <sha>` outcome names from the
-sweep side.
+**On a trunk-direct unit with no branch — an attended solo-flow session, legal on any
+repo without the veto (⚖ #233) — the branch-name half of this extraction is empty by
+construction, not a finding.** There is no `<branch>` to read a trailing number from;
+the commit-body `#N` on `<trunk>` is the only source harvest has, and it is enough
+(`CONVENTIONS.md`, *Solo flow*). This is the same shape `code-sweep`'s `landed
+trunk-direct: <sha>` outcome names from the sweep side.
 
 **Optional cross-check — the claims registry, if `colab` is installed:**
 

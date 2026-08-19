@@ -59,38 +59,58 @@ test('deriveTier is a function of (production, deploy) only — never reads expo
 
 // --------------------------------------------------------------- deriveConsequences
 
-test('deriveConsequences: writes omitted defaults to isolated (schema default), CI is a gate', () => {
+// #237 (⚖ Decision on #233): `writes` stopped selecting a write-conflict prevention METHOD and
+// became a two-state VETO. `writesResolved`/`writesMethod`/`writesSource` are UNCHANGED — still
+// `resolveWrites`'s parse — but `ciRole`/`branchMandatory` no longer switch on that 3-way parse;
+// they switch on the veto (`trunkDirectVetoed`, computed from the RAW value) plus a new
+// `trunkDirect` field naming the session-identity condition explicitly. Absence and every
+// non-veto value — INCLUDING `serial-gated`, which used to force a gate/mandatory branch on its
+// own — now read identically: trunk-direct is permitted, but only to an attended human session.
+
+test('deriveConsequences: writes omitted is NOT vetoed — trunkDirect is "permitted...attended", CI/branch are conditional on session identity', () => {
   const c = deriveConsequences({ exposure: null, writes: null, room: null });
-  assert.strictEqual(c.writesResolved, 'isolated');
-  assert.match(c.ciRole, /gate/);
-  assert.match(c.branchMandatory, /mandatory — isolated/);
+  assert.strictEqual(c.writesResolved, 'isolated'); // the PARSE is unchanged — resolveWrites(null).value is still 'isolated'
+  assert.match(c.trunkDirect, /permitted/);
+  assert.match(c.trunkDirect, /COLAB_HUMAN=1/);
+  assert.match(c.ciRole, /gate for a worktree/);
+  assert.match(c.ciRole, /alarm for an attended trunk-direct/);
+  assert.match(c.branchMandatory, /mandatory for every session except an attended trunk-direct/);
 });
 
-test('deriveConsequences: writes: serial makes CI an alarm and the branch optional (legacy alias resolves to serial-direct, #208)', () => {
+test('deriveConsequences: writes: isolated (the EXPLICIT veto) forbids trunk-direct outright, CI is always a gate, branch always mandatory', () => {
+  const c = deriveConsequences({ exposure: null, writes: 'isolated', room: null });
+  assert.strictEqual(c.writesResolved, 'isolated');
+  assert.match(c.trunkDirect, /vetoed/);
+  assert.doesNotMatch(c.trunkDirect, /COLAB_HUMAN/, 'the veto never advertises a way around itself');
+  assert.match(c.ciRole, /^gate —/);
+  assert.match(c.branchMandatory, /^mandatory — isolated/);
+});
+
+test('deriveConsequences: writes: serial is NOT vetoed — reads identically to omission (legacy alias resolves to serial-direct, #208; both are inert under #237)', () => {
   const c = deriveConsequences({ exposure: null, writes: 'serial', room: null });
   assert.strictEqual(c.writesResolved, 'serial');
   assert.strictEqual(c.writesMethod, 'serial-direct');
   assert.strictEqual(c.writesSource, 'legacy');
-  assert.match(c.ciRole, /alarm/);
-  assert.match(c.branchMandatory, /optional/);
+  assert.match(c.trunkDirect, /permitted/);
+  assert.match(c.ciRole, /alarm for an attended trunk-direct/);
 });
 
-test('#208: deriveConsequences: writes: serial-direct reads identically to the legacy alias — alarm, branch optional', () => {
+test('#208/#237: deriveConsequences: writes: serial-direct reads identically to the legacy alias — not vetoed', () => {
   const c = deriveConsequences({ exposure: null, writes: 'serial-direct', room: null });
   assert.strictEqual(c.writesResolved, 'serial');
   assert.strictEqual(c.writesMethod, 'serial-direct');
   assert.strictEqual(c.writesSource, 'declared');
-  assert.match(c.ciRole, /alarm/);
-  assert.match(c.branchMandatory, /optional/);
+  assert.match(c.trunkDirect, /permitted/);
 });
 
-test('#208: deriveConsequences: writes: serial-gated is a GATE, branch MANDATORY — a pre-merge gate is the declared point', () => {
+test('#237: deriveConsequences: writes: serial-gated is now INERT — identical to omission, NOT a forced gate/mandatory-branch (that #208 behaviour is retired)', () => {
   const c = deriveConsequences({ exposure: null, writes: 'serial-gated', room: null });
   assert.strictEqual(c.writesResolved, 'serial');
-  assert.strictEqual(c.writesMethod, 'serial-gated');
+  assert.strictEqual(c.writesMethod, 'serial-gated'); // the PARSE still reports the declared value
   assert.strictEqual(c.writesSource, 'declared');
-  assert.match(c.ciRole, /gate/);
-  assert.match(c.branchMandatory, /mandatory/);
+  assert.match(c.trunkDirect, /permitted/); // NOT vetoed — this is the behavioural break from #208
+  assert.match(c.ciRole, /alarm for an attended trunk-direct/);
+  assert.match(c.branchMandatory, /mandatory for every session except an attended trunk-direct/);
 });
 
 test('#208: deriveConsequences: writesSource is null (not "default") when writes is genuinely omitted', () => {

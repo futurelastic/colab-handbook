@@ -52,9 +52,20 @@ const COLAB = path.join(REPO_ROOT, 'tools', 'colab');
 // bar cmdPromote already holds a production promotion to. This makes that mechanical rather than
 // aspirational: walk every skill under skills/ (the automated paths that could plausibly run a
 // coding session unattended) and fail loudly if any of them sets the env var.
+//
+// #237 (⚖ Decision on #233, ruling 2) carved out ONE narrow exception: "The assistant may set
+// [COLAB_HUMAN=1] when the human says so" — specifically for solo-flow entry, transcribed from a
+// live human instruction, never inferred. That is a genuinely different act from what this test
+// still forbids: a skill instructing an UNATTENDED session to self-authorize an irreversible act
+// (a migration grant, a CI grant, a promotion, a place-claim force-override) with no human in the
+// loop at all. The check below stays a hard fail for every one of those; it exempts a file ONLY
+// when every COLAB_HUMAN mention in it is about solo flow AND the file never also mentions one of
+// the commands this property exists to protect — so a future skill that tried to smuggle a
+// migration-grant instruction in next to legitimate solo-flow prose would still be caught.
+const HUMAN_GATED_COMMANDS = /migration-grant|ci-grant|colab promote|colab place[^\n]*--force/;
 
-test('human-only property: no file under skills/ ever sets COLAB_HUMAN', () => {
-  const skillsDir = path.join(REPO_ROOT, 'skills');
+function skillFilesSettingColabHuman(repoRoot) {
+  const skillsDir = path.join(repoRoot, 'skills');
   const offenders = [];
   const walk = (dir) => {
     for (const name of fs.readdirSync(dir)) {
@@ -62,12 +73,57 @@ test('human-only property: no file under skills/ ever sets COLAB_HUMAN', () => {
       if (fs.statSync(p).isDirectory()) { walk(p); continue; }
       if (!/\.(md|mjs|js|sh)$/.test(name)) continue;
       const text = fs.readFileSync(p, 'utf8');
-      if (/COLAB_HUMAN\s*=\s*1/.test(text) || /COLAB_HUMAN=['"]?1/.test(text)) offenders.push(p);
+      const setsHuman = /COLAB_HUMAN\s*=\s*1/.test(text) || /COLAB_HUMAN=['"]?1/.test(text);
+      if (!setsHuman) continue;
+      // Exempt only if this file's COLAB_HUMAN story is solo-flow-only: it mentions "solo"
+      // somewhere (the file is genuinely about solo flow, not just coincidentally containing the
+      // string) AND it never mentions any of the commands this property still forbids outright.
+      const isSoloOnly = /\bsolo\b/i.test(text) && !HUMAN_GATED_COMMANDS.test(text);
+      if (!isSoloOnly) offenders.push(p);
     }
   };
   walk(skillsDir);
+  return offenders;
+}
+
+test('human-only property: no file under skills/ sets COLAB_HUMAN except for solo-flow attendance (#237)', () => {
+  const offenders = skillFilesSettingColabHuman(REPO_ROOT);
   assert.deepStrictEqual(offenders, [],
-    `a skill sets COLAB_HUMAN=1 — this would let an unattended session grant itself a migration exemption: ${offenders.join(', ')}`);
+    `a skill sets COLAB_HUMAN=1 outside a solo-flow-only context — this would let an unattended ` +
+    `session grant itself a migration exemption (or another human-gated act): ${offenders.join(', ')}`);
+});
+
+// --- pin the exemption's boundary, not just its happy path (#237) ------------------------------
+
+function fakeSkillsRoot(fileName, content) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'human-gate-skills-'));
+  TMP.push(dir);
+  fs.mkdirSync(path.join(dir, 'skills'), { recursive: true });
+  fs.writeFileSync(path.join(dir, 'skills', fileName), content);
+  return dir;
+}
+
+test('#237 exemption: a solo-flow-only mention of COLAB_HUMAN=1 is NOT an offender', () => {
+  const root = fakeSkillsRoot('SKILL.md', 'Set `COLAB_HUMAN=1 colab solo` only on a human instruction.');
+  assert.deepStrictEqual(skillFilesSettingColabHuman(root), []);
+});
+
+test('#237 exemption: COLAB_HUMAN=1 with NO mention of "solo" anywhere in the file is STILL an offender', () => {
+  const root = fakeSkillsRoot('SKILL.md', 'Just run COLAB_HUMAN=1 colab whatever, no context given.');
+  const offenders = skillFilesSettingColabHuman(root);
+  assert.strictEqual(offenders.length, 1);
+});
+
+test('#237 exemption: COLAB_HUMAN=1 alongside a migration-grant mention in the SAME file is STILL an offender, even with "solo" present too', () => {
+  const root = fakeSkillsRoot('SKILL.md',
+    'Solo flow needs COLAB_HUMAN=1. Also, just run colab migration-grant with COLAB_HUMAN=1 set.');
+  const offenders = skillFilesSettingColabHuman(root);
+  assert.strictEqual(offenders.length, 1, 'the migration-grant mention must poison the whole file\'s exemption');
+});
+
+test('#237 exemption: COLAB_HUMAN=1 alongside colab promote is STILL an offender', () => {
+  const root = fakeSkillsRoot('SKILL.md', 'solo flow. Now COLAB_HUMAN=1 colab promote it.');
+  assert.strictEqual(skillFilesSettingColabHuman(root).length, 1);
 });
 
 const TMP = [];

@@ -1150,6 +1150,35 @@ function auditRepo(target, ctx) {
       fail(`writes is ${JSON.stringify(writesRaw)}, expected "isolated", "serial-direct", or `
         + '"serial-gated" (the legacy alias "serial" is also accepted; omit for isolated)');
     }
+    // #237 (⚖ Decision on #233, ruling 3): the informational replacement for the deployment-
+    // shape prohibition that unit DROPPED outright ("where the trunk merge is itself the
+    // deploy, keep a branch and a pre-merge gate" — no longer enforced or derived). A repo
+    // needing that restriction now declares it: `writes: isolated` vetoes trunk-direct
+    // outright. This is the one finding that names the veto as the remedy — the pre-existing
+    // exposure/tier-legacy shape `fail`s below (both the `exposure: live` mechanism-rule path
+    // and the `tier: C` + `trunk: main` legacy path) tell an adopter to move their trunk, and
+    // neither mentions `writes` at all.
+    //
+    // MEASURED, not guessed: this can only ever fire ALONGSIDE one of those existing `fail`s —
+    // `exposure: live` + `trunk: main` already fails exposure-shape's `evaluateLive`, and the
+    // `tier: C` + `trunk: main` legacy path fails separately below — so it is dormant by
+    // construction today (the ruling's own measurement: zero instances of this shape across 40
+    // adopted descriptors). Shipped anyway per the ruling: it survives if the exposure-shape
+    // rule is ever relaxed, and it is the only finding a reader sees that connects THIS shape
+    // to THIS remedy. Deliberately narrow — do NOT broaden the trigger to `deploy: push-main`
+    // alone, or to the tier-legacy path; that goes past what was ruled.
+    const authorityForWrites = axisAuthority.axisOfRecord(cfg);
+    if (
+      authorityForWrites.source === "exposure" && authorityForWrites.exposure === "live"
+      && trunk === "main" && !writesAuthority.trunkDirectVetoed(writesRaw)
+    ) {
+      warn(
+        'exposure: live with trunk "main" and no writes: isolated — here a trunk-direct commit ' +
+        "reaches users immediately, because the branch a merge lands on is the branch that " +
+        "deploys. Declare writes: isolated to veto trunk-direct in this repo. Informational: " +
+        "this never refuses (CONVENTIONS.md §2, Writes)",
+      );
+    }
 
     // ---- room axis (#131) ----------------------------------------------------
     // Enum sanity only — the same shape as ceremony/writes above. #131 introduces the

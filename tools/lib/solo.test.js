@@ -16,7 +16,7 @@ const os = require('os');
 const path = require('path');
 const { execFileSync } = require('child_process');
 
-const { unpushedBranches, fullyDirty, entryProblems, exitProblems, writesMode, soloEligibility, branchMandatory } = require('./solo.js');
+const { unpushedBranches, fullyDirty, entryProblems, exitProblems, soloEligibility, branchMandatory } = require('./solo.js');
 
 // --- fixture builder --------------------------------------------------------
 
@@ -176,65 +176,75 @@ test('fullyDirty: counts untracked AND tracked changes, unlike git.js dirtyTrack
   assert.strictEqual(fullyDirty(r.dir).length, 2);
 });
 
-// --- writesMode (#133) --------------------------------------------------------
+// --- soloEligibility (#237 — the ⚖ Decision on #233: session identity, gated by the veto) ----
+// `writesMode` is RETIRED with the three-method reading it summarised; the one question left is
+// the veto (writes: isolated) plus whether `human` was asserted by the caller (COLAB_HUMAN=1).
 
-test('writesMode: omission defaults to isolated', () => {
-  assert.strictEqual(writesMode({}), 'isolated');
-  assert.strictEqual(writesMode(null), 'isolated');
+test('soloEligibility: omitted writes + human:true is eligible via "human"', () => {
+  assert.deepStrictEqual(soloEligibility({}, { human: true }), { ok: true, via: 'human' });
+  assert.deepStrictEqual(soloEligibility(null, { human: true }), { ok: true, via: 'human' });
 });
 
-test('writesMode: writes: serial reads as serial', () => {
-  assert.strictEqual(writesMode({ writes: 'serial' }), 'serial');
-});
-
-test('writesMode: an unrecognised value fails closed to isolated, not serial', () => {
-  assert.strictEqual(writesMode({ writes: 'bogus' }), 'isolated');
-  assert.strictEqual(writesMode({ writes: 'ISOLATED' }), 'isolated'); // case-sensitive, fails closed
-});
-
-// --- soloEligibility (#133) ---------------------------------------------------
-
-test('soloEligibility: writes: serial is eligible via "writes"', () => {
-  assert.deepStrictEqual(soloEligibility({ writes: 'serial' }), { ok: true, via: 'writes' });
-});
-
-test('soloEligibility: ceremony: light alone is NOT eligible — #175 removed the legacy proxy', () => {
-  const r = soloEligibility({ ceremony: 'light' });
-  assert.strictEqual(r.ok, false);
-});
-
-test('soloEligibility: writes: serial is eligible regardless of ceremony', () => {
-  const r = soloEligibility({ writes: 'serial', ceremony: 'light' });
-  assert.strictEqual(r.ok, true);
-  assert.strictEqual(r.via, 'writes');
-});
-
-test('soloEligibility: neither set refuses with a reason', () => {
+test('soloEligibility: omitted writes + no human argument at all refuses — fails CLOSED, not open', () => {
   const r = soloEligibility({});
   assert.strictEqual(r.ok, false);
-  assert.match(r.reason, /writes: serial/);
+  assert.strictEqual(r.code, 'not-human');
 });
 
-// --- #208: the writes split — solo eligibility keys off the DIRECT value only ------------
-
-test('writesMode: writes: serial-direct and writes: serial-gated BOTH read as "serial" (the place-claim/CI-alarm summary)', () => {
-  assert.strictEqual(writesMode({ writes: 'serial-direct' }), 'serial');
-  assert.strictEqual(writesMode({ writes: 'serial-gated' }), 'serial');
-});
-
-test('soloEligibility: writes: serial-direct is eligible via "writes"', () => {
-  assert.deepStrictEqual(soloEligibility({ writes: 'serial-direct' }), { ok: true, via: 'writes' });
-});
-
-test('soloEligibility: writes: serial-gated is NOT eligible — a declared pre-merge gate is what solo flow has none of', () => {
-  const r = soloEligibility({ writes: 'serial-gated' });
+test('soloEligibility: omitted writes + human:false refuses, code "not-human", names COLAB_HUMAN=1', () => {
+  const r = soloEligibility({}, { human: false });
   assert.strictEqual(r.ok, false);
-  assert.match(r.reason, /serial-direct/);
-  assert.match(r.reason, /serial-gated/);
+  assert.strictEqual(r.code, 'not-human');
+  assert.match(r.reason, /COLAB_HUMAN=1/);
 });
 
-test('soloEligibility: the legacy alias writes: serial resolves to serial-direct — stays eligible, unchanged by the split', () => {
-  assert.deepStrictEqual(soloEligibility({ writes: 'serial' }), { ok: true, via: 'writes' });
+test('soloEligibility: writes: isolated + human:true STILL refuses — the veto binds humans too, code "veto"', () => {
+  const r = soloEligibility({ writes: 'isolated' }, { human: true });
+  assert.strictEqual(r.ok, false);
+  assert.strictEqual(r.code, 'veto');
+  assert.match(r.reason, /writes: isolated/);
+});
+
+test('soloEligibility: the veto refusal never advertises COLAB_HUMAN as a way around it', () => {
+  const r = soloEligibility({ writes: 'isolated' }, { human: true });
+  assert.doesNotMatch(r.reason, /COLAB_HUMAN/);
+});
+
+test('soloEligibility: writes: isolated + human:false refuses on the veto, not on attendance — veto is checked first', () => {
+  const r = soloEligibility({ writes: 'isolated' }, { human: false });
+  assert.strictEqual(r.code, 'veto');
+});
+
+test('soloEligibility: ceremony: light alone (no writes, no human) still refuses on attendance — #175 removed the legacy proxy, this is now the ordinary not-human case', () => {
+  const r = soloEligibility({ ceremony: 'light' });
+  assert.strictEqual(r.ok, false);
+  assert.strictEqual(r.code, 'not-human');
+});
+
+test('soloEligibility: ceremony: light + human:true is eligible — ceremony plays no role either way', () => {
+  const r = soloEligibility({ ceremony: 'light' }, { human: true });
+  assert.strictEqual(r.ok, true);
+  assert.strictEqual(r.via, 'human');
+});
+
+// --- legacy values are inert: serial / serial-direct / serial-gated all behave EXACTLY like
+// absence now (coexistence, gated only by attendance) — this is the test that pins #237's claim
+// that no adopter's descriptor breaks and every declared method collapses to one behaviour ------
+
+for (const v of ['serial', 'serial-direct', 'serial-gated']) {
+  test(`soloEligibility: writes: ${v} + human:true is eligible via "human" — identical to absence`, () => {
+    assert.deepStrictEqual(soloEligibility({ writes: v }, { human: true }), { ok: true, via: 'human' });
+  });
+
+  test(`soloEligibility: writes: ${v} + human:false refuses on attendance, not on the (retired) method distinction`, () => {
+    const r = soloEligibility({ writes: v }, { human: false });
+    assert.strictEqual(r.ok, false);
+    assert.strictEqual(r.code, 'not-human');
+  });
+}
+
+test('soloEligibility: an unrecognised writes value coexists (does not veto) — matches trunkDirectVetoed, not resolveWrites', () => {
+  assert.deepStrictEqual(soloEligibility({ writes: 'bogus' }, { human: true }), { ok: true, via: 'human' });
 });
 
 // --- branchMandatory (#133) ---------------------------------------------------

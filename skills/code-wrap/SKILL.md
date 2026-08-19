@@ -53,16 +53,23 @@ below against it produces confusing no-ops. The solo exit is its own, short path
    gate beyond what already ran on trunk post-push, no B2 squash (there is no branch
    to squash), no B2c/B2d/B3/B4. The release ritual (`code-ship` B5 — whichever
    shape `exposure` gives it) is a separate question that solo flow does not settle
-   either way — solo flow is gated on `writes: serial` (CONVENTIONS.md, *Solo
-   flow*), which is deliberately not coupled to `production`, so a live repo may
-   run solo flow.
+   either way — solo flow is gated on session attendance (`COLAB_HUMAN=1`) plus the
+   repo not declaring `writes: isolated` (⚖ #233, CONVENTIONS.md, *Writes* / *Solo
+   flow*), neither of which is coupled to `production`, so a live repo may run solo
+   flow.
 
-If you are unsure whether this session is a solo session, check `writes:` in
-`.github/project.yml`: not `serial` means solo flow never opened, full stop — check
-`colab claims`/`colab worktrees` for a row naming your branch instead, and if genuinely
-unsure, treat it as the ordinary worktree flow below; the ordinary steps degrade safely
-(they just find nothing to do), where the solo path degrades unsafely if run against a
-session that DOES hold a claim or worktree.
+If you are unsure whether this session is a solo session, **`writes:` in
+`.github/project.yml` no longer answers this** (⚖ #233 — the field is a veto on ANY
+session, including yours; it says nothing about whether YOUR session specifically opened
+through solo flow). The reliable signal is `colab solo`'s own lock, not the descriptor:
+```sh
+colab place check <repo-abs-path>    # exit 0 = free or held by you; exit 1 = held by a live other
+```
+or check `colab claims`/`colab worktrees` for a row naming your branch — if one exists,
+this was NOT a solo session (solo flow makes neither). If genuinely unsure, treat it as
+the ordinary worktree flow below; the ordinary steps degrade safely (they just find
+nothing to do), where the solo path degrades unsafely if run against a session that DOES
+hold a claim or worktree.
 
 ## Do this now
 

@@ -121,32 +121,43 @@ const RECOVERY_OBLIGATION = Object.freeze({
  * Everything §9/§7's "derived, never asked" list follows from `writes`/`exposure`/`room` alone —
  * CONVENTIONS.md §2 ("CI", "Recovery", "Ceremony", "Writes"). Every value here is null when the
  * axis it depends on is undeclared: this function derives, it never guesses a default beyond the
- * one the schema itself states (`writes` omission = `isolated`).
+ * one the schema itself states.
  *
- * #208: `writes` resolves through `tools/lib/writes-authority.js` — the same shared module the
- * audit uses — to one of THREE methods, not two. `writesResolved` stays the 2-state summary
- * (`'serial'` | `'isolated'`) existing callers read; `writesMethod`/`writesSource` are ADDITIVE,
- * carrying the resolved 3-way value and how it was reached, so a report can show the split
- * without every caller having to learn the new vocabulary. `ciRole` and `branchMandatory` now
- * differ between the two serial methods: `serial-gated` declares a pre-merge gate exists, so a
- * branch is this method's whole point (CI runs as a gate, same as isolated) — only
- * `serial-direct` (solo flow) is trunk-direct by default with CI as an alarm.
+ * #237 (⚖ Decision on #233): `writes` stopped selecting a write-conflict prevention METHOD and
+ * became a two-state VETO — `trunkDirectVetoed` (tools/lib/writes-authority.js), computed from
+ * the RAW value, is the only reading anything downstream may act on now. `writesMethod` /
+ * `writesSource` / `writesResolved` are UNCHANGED — they still report `resolveWrites`'s parse,
+ * which is still accurate as a parse — but `ciRole` and `branchMandatory` (and the new
+ * `trunkDirect`, below) no longer switch on that 3-way method: they switch on the veto plus
+ * session attendance, which `deriveConsequences` cannot see (it is a session-identity fact, not a
+ * descriptor fact) and so states as a conditional rather than a single resolved outcome.
+ *
+ * #208's original three-method split is preserved in comments only where it explains why
+ * `writesMethod` still exists as a value (a legacy alias question the descriptor may still be
+ * asked to resolve), never as something a consequence is derived FROM anymore.
  */
 function deriveConsequences({ exposure, writes, room }) {
   const resolved = writesAuthority.resolveWrites(writes);
-  const writesMethod = resolved.value; // 'isolated' | 'serial-direct' | 'serial-gated'
+  const writesMethod = resolved.value; // 'isolated' | 'serial-direct' | 'serial-gated' — still a parse; decides nothing below
   const writesSource = writes === null || writes === undefined ? null : resolved.source;
   const writesResolved = writesMethod === 'isolated' ? 'isolated' : 'serial'; // 2-state summary, kept for existing callers
+  const vetoed = writesAuthority.trunkDirectVetoed(writes); // the ONE reading that decides anything now (#237)
 
   const gateCount = exposure && Object.prototype.hasOwnProperty.call(axisAuthority.GATE_COUNT, exposure)
     ? axisAuthority.GATE_COUNT[exposure]
     : null;
 
-  const ciRole = writesMethod === 'serial-direct'
-    ? 'alarm — trunk-direct by default; CI runs after the push and reports, it does not gate (CONVENTIONS.md §7)'
-    : writesMethod === 'serial-gated'
-      ? 'gate — one writer, but a pre-merge gate is this method\'s whole point, so CI runs before the merge lands (CONVENTIONS.md §7)'
-      : 'gate — isolated writers always branch, so CI runs before the merge lands (CONVENTIONS.md §7)';
+  // #237: absence and every non-veto value now permit trunk-direct to an ATTENDED session
+  // (COLAB_HUMAN=1) — a session-identity fact this function cannot see from the descriptor
+  // alone, so `trunkDirect` names both branches rather than resolving to one.
+  const trunkDirect = vetoed
+    ? 'vetoed — writes: isolated forbids trunk-direct for every session, human or not (CONVENTIONS.md §2, Writes)'
+    : 'permitted to an attended human session only — COLAB_HUMAN=1, set on a human\'s explicit instruction (CONVENTIONS.md §5, The human flag)';
+
+  const ciRole = vetoed
+    ? 'gate — isolated writers always branch, so CI runs before the merge lands (CONVENTIONS.md §7)'
+    : 'gate for a worktree session, alarm for an attended trunk-direct one — what CI is follows '
+      + 'whether the unit has a branch, a fact about the session rather than a declared value (CONVENTIONS.md §7)';
 
   const ciDepth = (exposure === 'live' || exposure === 'released')
     ? 'thorough — answers to a consumer with no way to ask a clarifying question (CONVENTIONS.md §7)'
@@ -160,17 +171,20 @@ function deriveConsequences({ exposure, writes, room }) {
       ? 'standard narration — more than one reader could ever comb the trail'
       : null;
 
-  const branchMandatory = writesMethod === 'serial-direct'
-    ? 'optional — mandatory only when more than one unit is in flight, or a gate must inspect a unit before it lands (CONVENTIONS.md §2, Writes)'
-    : writesMethod === 'serial-gated'
-      ? 'mandatory — a pre-merge gate is this method\'s whole point, so every unit branches (CONVENTIONS.md §2, Writes)'
-      : 'mandatory — isolated writers always use a worktree + branch';
+  const branchMandatory = vetoed
+    ? 'mandatory — isolated writers always use a worktree + branch'
+    : 'mandatory for every session except an attended trunk-direct one, which needs a branch only '
+      + 'when more than one unit is already in flight, or a gate must inspect a unit before it '
+      + 'lands (CONVENTIONS.md §2, Writes)';
 
   const recoveryObligation = exposure && Object.prototype.hasOwnProperty.call(RECOVERY_OBLIGATION, exposure)
     ? RECOVERY_OBLIGATION[exposure]
     : null;
 
-  return { writesResolved, writesMethod, writesSource, gateCount, ciRole, ciDepth, ceremonyWeight, branchMandatory, recoveryObligation };
+  return {
+    writesResolved, writesMethod, writesSource, trunkDirect, gateCount, ciRole, ciDepth,
+    ceremonyWeight, branchMandatory, recoveryObligation,
+  };
 }
 
 // ---------------------------------------------------------------------- §9 remainder checklist
@@ -354,7 +368,12 @@ const QUESTIONS = Object.freeze([
   {
     axis: 'writes',
     keys: ['writes'],
-    prompt: 'One unit of work in flight at a time, or several at once? (serial / isolated)',
+    // #237: `writes` is a VETO, not a method choice — absence and every other value permit an
+    // attended human session to commit straight to trunk alongside worktree sessions; only an
+    // explicit `isolated` forbids that for everyone, human included.
+    prompt: 'Should a human ever be allowed to commit straight to this repo\'s trunk checkout, '
+      + 'alongside worktree sessions? Declare isolated to forbid it outright; leave unanswered '
+      + '(or declare any other value) to allow it.',
   },
   {
     axis: 'channels',

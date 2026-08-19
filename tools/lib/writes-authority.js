@@ -41,6 +41,20 @@
  * inferred by this resolver — #208's migration note is explicit that reclassification is a
  * per-repo decision, not an automatic one, and this module's job is only to answer "what does
  * an unexamined `serial` mean today", not "what should it mean going forward".
+ *
+ * #237 (the ⚖ Decision on #233): the three-method reading above is RETIRED. `writes` no longer
+ * selects a write-conflict prevention method — it is a two-state VETO. `writes: isolated` means
+ * exactly one thing: no trunk-direct in this repo, human or not. Absence, and every other value
+ * (including both `serial-*` spellings and the `serial` alias), means COEXISTENCE: automated
+ * sessions work in worktrees, a human may take the trunk checkout and commit directly, and the
+ * two run side by side. `resolveWrites` below is UNCHANGED — it still parses the declared value
+ * and resolves the legacy alias, exactly as before — because nothing about that job is wrong,
+ * only what callers may DO with its answer. The three-method resolution it still performs is now
+ * inert either way: `serial-direct` and `serial-gated` both mean coexistence, so the alias
+ * question this file's banner spends 30 lines on ("does `serial` mean `serial-direct` or
+ * `serial-gated`?") no longer changes any repo's observable behaviour — both branches land on
+ * the same veto answer. See `trunkDirectVetoed` below for the one function that now decides
+ * anything.
  */
 
 // The three current, declarable methods (CONVENTIONS.md §2, "Writes" — the four-row table).
@@ -82,4 +96,31 @@ function isAcceptedWritesValue(raw) {
   return raw === null || raw === undefined || WRITES_ACCEPTED_SET.has(raw);
 }
 
-module.exports = { WRITES_DECLARED, WRITES_LEGACY, WRITES_ACCEPTED_SET, resolveWrites, isAcceptedWritesValue };
+/**
+ * #237: does this descriptor's `writes:` VETO trunk-direct? The one two-state reading that
+ * decides anything now (CONVENTIONS.md §2, "Writes"). `writes: isolated` vetoes trunk-direct
+ * for every session, human or not; absence and every other declared value (both `serial-*`
+ * spellings, the `serial` alias, and any unrecognised string) mean coexistence — no veto.
+ *
+ * Deliberately reads the RAW declared value, never `resolveWrites(raw).value` — that function's
+ * `value` reads `'isolated'` on BOTH `source: 'declared'` (a real `writes: isolated` line) AND
+ * `source: 'default'` (the key is simply absent). Testing `resolveWrites(raw).value ===
+ * 'isolated'` would therefore veto every repo with no `writes:` key at all — the exact opposite
+ * of the ruling ("Absence — and every other value — means coexistence"). Only an EXPLICIT,
+ * exactly-spelled `writes: isolated` vetoes; everything else, including a typo'd or unrecognised
+ * string, coexists (the audit's own enum check is what catches a typo — see
+ * `isAcceptedWritesValue` above — a silent non-veto here is not an unattended-write risk, because
+ * every path that non-veto opens still requires a human at the keyboard: `COLAB_HUMAN=1`).
+ */
+function trunkDirectVetoed(raw) {
+  return raw === 'isolated';
+}
+
+module.exports = {
+  WRITES_DECLARED,
+  WRITES_LEGACY,
+  WRITES_ACCEPTED_SET,
+  resolveWrites,
+  isAcceptedWritesValue,
+  trunkDirectVetoed,
+};

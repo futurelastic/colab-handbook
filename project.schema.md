@@ -520,7 +520,7 @@ is consistent with every value). It is still true that nothing INFERS `exposure`
 also carries ("do not add one") is about inference, not about disagreement between two
 values a human wrote down separately. CI role and thoroughness and the
 rollback obligation are now derived from it
-([CONVENTIONS.md, CI](CONVENTIONS.md#ci--what-it-is-follows-writes-how-much-follows-exposure);
+([CONVENTIONS.md, CI](CONVENTIONS.md#ci--what-it-is-follows-the-units-shape-how-much-follows-exposure);
 [CONVENTIONS.md, Recovery](CONVENTIONS.md#recovery--what-must-exist-to-undo-a-merge)).
 `exposure` otherwise stays a declared fact whose only enforced consequence is the one
 advisory above.
@@ -584,7 +584,8 @@ set from `deploy` alone.
 **An unintended channel is a finding, never a value.** A working tree file-synced between
 machines with git metadata deliberately excluded is a bug, not a deployment strategy — the
 model must not normalise it into a legal member of this list. The full argument, including
-what a file-synced working tree costs a `writes: serial` repo, lives in CONVENTIONS.md [§2](CONVENTIONS.md#channels--by-what-path-does-code-reach-the-thing-that-runs-it),
+what a file-synced working tree costs a repo permitting trunk-direct (⚖ #233: any repo
+that does not declare `writes: isolated`), lives in CONVENTIONS.md [§2](CONVENTIONS.md#channels--by-what-path-does-code-reach-the-thing-that-runs-it),
 "Channels" — read there for the argument; this page states the field.
 
 **The descriptor-internal coherence advisory.** `channels: [none]` together with a fact
@@ -615,16 +616,18 @@ with `exposure` regardless — no rule reads one key to decide the other's findi
 ### `ci` — deliberately not a field
 
 Not modeled here, on purpose
-([CONVENTIONS.md, CI](CONVENTIONS.md#ci--what-it-is-follows-writes-how-much-follows-exposure)).
-What CI *is* — gate or alarm — is derived from `writes`; how thorough it must be is
-derived from `exposure`. A `ci:` field would let either drift from the axis that already
-answers it, the identical failure every other axis on this page exists to prevent.
+([CONVENTIONS.md, CI](CONVENTIONS.md#ci--what-it-is-follows-the-units-shape-how-much-follows-exposure)).
+What CI *is* — gate or alarm — is derived from whether the unit has a branch, a fact about
+the session (⚖ #233 retired the `writes`-keyed reading — a branch, not a declared value,
+decides this now); how thorough it must be is derived from `exposure`. A `ci:` field would
+let either drift from what already answers it, the identical failure every other axis on
+this page exists to prevent.
 
 A repo needing something its copied workflow doesn't cover edits that file directly.
 Copy-and-own already permits this, and the audit already classifies the edit as drift to
 reconcile, not a violation — the same treatment [`templates/`](templates/) gives every
 other stamped file. Nothing here refuses customization; it refuses a *declared summary* of
-behavior the `writes`/`exposure` axes already determine.
+behavior the session-shape/`exposure` axes already determine.
 
 ### `ceremony` — optional
 
@@ -678,11 +681,12 @@ own room:
 **`ceremony: light` no longer, by itself, enables solo flow.** #133 introduced
 `writes: serial` as solo flow's real gate and accepted `ceremony: light` as a LEGACY
 proxy only, for repos that had not yet answered the `writes` question. #175 removed that
-bridge: `colab solo` now refuses outright on any repo that does not resolve to
-`writes: serial-direct` (#208 split `serial` into `serial-direct`/`serial-gated`; the
-legacy alias `serial` still resolves to `serial-direct`, so this is unchanged for every
-repo that has not opted into the split) — see [`writes`](#writes--optional) below for the
-entry gate and the five rules it never relaxes.
+bridge. ⚖ #233 then re-based the gate itself: `colab solo` now refuses outright on any
+repo declaring `writes: isolated` (the veto, human or not), and on any session that
+cannot assert `COLAB_HUMAN=1` — the `writes`-keyed method distinction (`serial-direct`
+vs `serial-gated`) this paragraph used to describe no longer exists, both spellings are
+inert — see [`writes`](#writes--optional) below for the entry gate and the rules it
+never relaxes.
 
 ### `writes` — optional
 
@@ -693,100 +697,84 @@ writes: serial-gated    # one writer at a time, still branches for a pre-merge g
 writes: serial           # LEGACY ALIAS of serial-direct — see below
 ```
 
-Which write-conflict prevention method this repo's sessions use, by default — a separate
-axis from `tier` (gates to production) and from `ceremony` (record-keeping depth). Three
-declarable values, one per coherent method:
+**⚖ #233 (2026-08-19): this field stopped selecting a write-conflict prevention METHOD and
+became a two-state VETO.** `writes: isolated` means exactly one thing — no trunk-direct in
+this repo, human or not, no field/flag/override lowers that bar. Absence, and every other
+declared value (`serial-direct`, `serial-gated`, and the legacy `serial` alias — all three
+now INERT, identical to absence), means **coexistence**: a worktree session and an
+attended human trunk-direct session (`COLAB_HUMAN=1`, `CONVENTIONS.md` [§5, "The human
+flag"](CONVENTIONS.md#the-human-flag--what-colab-human1-asserts)) run side by side. The
+YAML block above and the `(default)` annotation are the field's VALUE PRESENTATION —
+untouched here, reworked by #239 — but the paragraphs and tables below this note describe
+BEHAVIOUR, and state what is true today, not the retired three-method reading.
 
-| method | writer count | branches? | this is… |
-|---|---|---|---|
-| `serial-direct` | one at a time | no | solo flow |
-| `serial-gated` | one at a time | required when the two conditions below apply | the common case: a claim, a branch, a squash |
-| `isolated` (default) | many, concurrently | always (worktrees) | today's fleet default |
+A fourth shape — many units in flight, writing trunk-direct, with no attendance and no
+veto — is not legal under either state; nothing coordinates concurrent UNATTENDED
+trunk-direct writers, so it stays named as incoherent (`CONVENTIONS.md` [§2](CONVENTIONS.md#writes--the-trunk-direct-veto-and-the-two-things-that-make-a-branch-mandatory), *Writes*)
+and has no declarable value.
 
-A fourth cell — many units in flight, writing trunk-direct — is not a method; it is simply
-an unlocked repo, and is named incoherent (`CONVENTIONS.md` [§2](CONVENTIONS.md#writes--serial-or-isolated-and-the-two-things-that-make-a-branch-mandatory), *Writes*). It has no
-declarable value.
+**The constraint matrix, re-based for ⚖ #233 — read this before granting anything to a
+repo that does not declare `writes: isolated`.** Two columns keyed on the descriptor now,
+not three keyed on a declared method — the runtime distinction moved into the rows:
 
-**The constraint matrix (#208) — read this before granting anything to a `serial-*`
-repo.** This is the table the issue that split the value asked for by name, because the
-prose alone put the `auto-trunk` answer three passages apart and a reader who stopped at
-the second concluded the opposite of the truth:
+| constraint | `writes: isolated` (the veto) | absent · `serial` · `serial-direct` · `serial-gated` (coexistence) |
+|---|---|---|
+| trunk-direct, human at the keyboard (`COLAB_HUMAN=1`) | **forbidden** | allowed |
+| trunk-direct, automated session | **forbidden** | **forbidden** |
+| `autonomy: auto-trunk` | allowed | allowed |
+| place-claim needed | n/a — nothing writes the shared checkout | yes, on the trunk checkout |
+| branch | always | always, except an attended trunk-direct unit |
+| `ceremony: light` + `autonomy: auto-trunk` | **forbidden** | **forbidden** |
 
-| constraint | `serial-direct` | `serial-gated` | `isolated` |
-|---|---|---|---|
-| `autonomy: auto-trunk` | allowed — governs the branch-merge fallback only (`CONVENTIONS.md`, *Solo flow*, rule 5) | allowed | allowed |
-| place-claim needed | yes | yes | no (the worktree already is the isolation) |
-| branch | optional — only when a unit is mandatory (below) | required when a unit is mandatory (below) | always |
-| `ceremony: light` + `autonomy: auto-trunk` | **forbidden** | **forbidden** | **forbidden** |
+**Retired: the `auto-trunk`/`serial-direct` narrative #208 and #224 argued over.** A
+misgrant nobody could tell apart from `serial-gated`'s cell was the worry that motivated
+splitting `serial` in the first place; #224 corrected the cell itself before this ruling
+landed. Under ⚖ #233 there is only one coexistence cell, not two, so the distinction the
+narrative was about no longer exists — see `CONVENTIONS.md`, *Writes*, for the one
+sentence that survives it.
 
-**Until #224, the `auto-trunk` row read `forbidden` for `serial-direct`; that was too
-broad, and #208's original worry — a misgrant nobody could tell apart from
-`serial-gated`'s cell — no longer applies, because both cells now read the same.** The
-old reasoning assumed `serial-direct` means the repo never produces a branch, so an
-`auto-trunk` grant could only mean an unattended trunk-direct commit with none of solo
-flow's start-side rails. `writes: serial-direct` means solo flow is *available*, not that
-every unit runs through it: solo flow's entry gate refuses whenever it cannot prove no
-collision (a live worktree, a held claim, an unpushed branch, a dirty tree), and on
-refusal the session falls back to full ceremony — claim, branch, worktree, merge. By the
-time that branch exists, it is indistinguishable from `serial-gated`, and the hazard the
-old cell protected against — an unattended merge with no branch, no claim, no worktree —
-was never reachable through `colab ship` on any `writes` value: `ship` merges a *branch*,
-a solo-flow trunk-direct commit never produces one, and a raw push to trunk is blocked by
-hook regardless. The prohibition belonged to the act, not the declared value; see
-`CONVENTIONS.md`, *Writes*, for the argument in full.
+**Exactly two conditions make a branch mandatory** for an attended trunk-direct
+session — every other kind of session (a worktree one) has a branch by construction, so
+this now governs solo flow specifically: more than one unit in flight, or a gate that must
+inspect a unit before it lands. "It feels safer" is not on that list. A repo where a gate
+must inspect every unit says so by *having* one — a trunk-gating CI workflow, or branch
+protection (`CONVENTIONS.md` [CI](CONVENTIONS.md#ci--what-it-is-follows-the-units-shape-how-much-follows-exposure))
+— never by a declared value; this is where the retired `serial-gated` spelling's one real
+assertion now lives.
 
-**`writes` says which of those a repo's sessions may use by default; it does NOT say
-whether any given unit of work branches** — that stays a per-unit choice inside whichever
-method applies. Two conditions, and only two, make a branch mandatory on a `serial-*`
-repo: more than one unit in flight, or a gate that must inspect a unit before it lands.
-"It feels safer" is not on that list. This applies to `serial-gated` in the ordinary
-case (a declared pre-merge gate makes condition 2 true as a matter of policy, so branching
-is the norm there) and to `serial-direct` only in the rare case both conditions fire mid
-session — solo flow's entry gate already refuses to open a second unit, so condition 1 is
-false by construction at the moment a solo session starts.
+**The legacy values: `serial`, `serial-direct`, and `serial-gated` all resolve to
+coexistence — none of them veto.** `tools/lib/writes-authority.js` is the ONE shared
+resolver (the audit and `colab adopt` both read it, the same split
+`tools/lib/axis-authority.js` draws for `tier` → `exposure`); its 3-way parse of these
+spellings is UNCHANGED (still resolves `serial` toward `serial-direct`, never
+`serial-gated`, for the historical reasons below), but nothing downstream treats that
+parse as selecting a method any longer — both branches land on the identical veto answer
+(none), so the alias question this resolver spends effort on no longer changes any repo's
+observable behaviour:
 
-**The legacy alias: `serial` resolves to `serial-direct`, not `serial-gated`.**
-`serial` predates the split and stays declarable — no adopter's descriptor breaks on this
-change. `tools/lib/writes-authority.js` is the ONE shared resolver (the audit and `colab
-adopt` both read it, the same split `tools/lib/axis-authority.js` draws for `tier` →
-`exposure`), and it resolves the alias to `serial-direct` — historically for two reasons;
-#224 retired the second, so the first now carries the resolution alone:
-
-1. **Byte-identical preservation.** Every repo declaring bare `serial` today is
-   solo-flow-eligible (`soloEligibility`, `tools/lib/solo.js`) — including this handbook's
-   own descriptor, whose comment states outright that `writes: serial` "is what lets solo
-   flow's entry gate open here" (see this file's own `.github/project.yml`). Resolving the
-   alias to `serial-gated` instead would silently revoke that for every such repo the
-   moment this axis lands — the opposite of "no adopter's descriptor breaks." This reason
-   still holds and is sufficient on its own.
+1. **Byte-identical preservation, still the operative reason.** Every repo declaring bare
+   `serial` today stays solo-flow-eligible (subject to attendance, ⚖ #233) — including
+   this handbook's own descriptor (see this file's own `.github/project.yml`).
 2. ~~**The conservative reading on the one property that is actually dangerous.**~~
-   **Retired by #224.** This reason cited the constraint matrix's old `auto-trunk` cell,
-   which read `forbidden` for `serial-direct` and `allowed` for `serial-gated` — so
-   resolving the alias toward `serial-gated` looked like it would move a repo into a
-   forbidden-vs-allowed cell nobody had re-examined. #224 corrected that cell to `allowed`
-   for both methods (*Writes*, above): `auto-trunk` was never actually gated on
-   `serial-direct` vs `serial-gated`, only on whether a branch exists to `ship`. Resolving
-   toward `serial-gated` no longer changes a repo's `auto-trunk` posture at all — reason 1
-   is what protects the alias now.
+   **Retired by #224**, and moot after ⚖ #233 besides: the `auto-trunk` cell no longer
+   varies by which legacy spelling is declared, so there is nothing left for this reason to
+   protect against.
 
-**Reclassifying an EXISTING repo's descriptor from `serial` to `serial-gated` is still a
-human decision, made per repo, never inferred by a tool** — but the reason has narrowed to
-what reason 1 above protects. `serial-gated` forbids solo flow outright (a declared
-pre-merge gate is exactly what solo flow has none of) and makes a branch mandatory on
-every unit, not only the two conditions that apply to `serial-direct`; assigning it
-automatically to a repo that is actually running trunk-direct would silently take solo
-flow away from a repo counting on it. Migrating a descriptor off the alias, once true of a
-given repo, is exactly that: a fact somebody checks and writes down, not a bulk edit.
+**Reclassifying an EXISTING repo's descriptor to `serial-gated` is now presentation-only —
+it changes nothing observable.** Before ⚖ #233 this was a meaningful, human-only decision
+(`serial-gated` forbade solo flow outright and made every unit branch). Now it is inert,
+identical to leaving the field absent or as bare `serial` — the field going fully advisory
+is the next step, per the epic, once measured.
 
 **Deliberately not coupled to `tier`, `production`, or exposure.** A busy repo with three
-concurrent sessions needs isolation regardless of whether it has a production deploy; a
-quiet repo with one session at a time does not need it merely because it is live. The
+concurrent sessions needs a place-claim regardless of whether it has a production deploy;
+a quiet repo with one session at a time does not need one merely because it is live. The
 correlation seen across today's fleet is caused by *who works a repo*, not by *what
 consumes it* — encoding that correlation as a rule would repeat the same weld `ceremony`
 was introduced to undo. No coherence rule is audited against `tier`/`production` for this
 reason; do not add one.
 
-**No field for the place-claim itself.** The lock that enforces either `serial-*` method
+**No field for the place-claim itself.** The lock that a shared trunk checkout needs
 (`CONVENTIONS.md`, *Solo flow* / place-claims) is a fact about one checkout on one
 machine at one moment — the same reasoning that keeps `deploys: {host: branch}` out of
 this schema ([§2](CONVENTIONS.md#2-tiers)) applies here: a path on one host is meaningless
@@ -983,10 +971,11 @@ the shape that shows it. One writer at a time says nothing about who reads the r
 | toolchain pin vs manifest agreement | building on one version, deploying on another |
 | `ceremony` ∈ {`standard`, `light`} when set | a misspelled value silently read as `standard` |
 | `ceremony: light` → not `autonomy: auto-trunk` | an unattended merge with no evidence trail nobody can audit |
-| `writes` ∈ {`isolated`, `serial`} when set | a misspelled value silently read as `isolated` |
+| `writes` ∈ {`isolated`, `serial-direct`, `serial-gated`, `serial`} when set | a misspelled value silently read as coexistence (⚖ #233: never veto on an unrecognised value) |
 | `room` ∈ {`solo`, `team`, `public`} when set | a misspelled value silently read as undeclared |
 | `exposure` ∈ {`none`, `self`, `live`, `released`} when set | a misspelled value silently read as undeclared |
 | `exposure: none` + `production: null` → **advisory** | the both-empty claim ("nothing consumes this, and there is nothing to point at") going unflagged |
+| `exposure: live` + `trunk: main` + no `writes: isolated` → **advisory** (⚖ #233, replacing the dropped deploy-shape prohibition) | a trunk-direct commit reaching users immediately, with the descriptor never naming the one field that vetoes it — dormant by construction today (measured: this shape already fails the `exposure: live` mechanism rule above, zero instances across 40 adopted descriptors), shipped anyway as the one finding that names the remedy |
 | `channels` is a list, each member ∈ {`workflow`, `hook`, `procedure`, `checkout`, `artifact`, `data`, `none`}, when set | a misspelled or scalar value silently read as undeclared |
 | `channels` contains no duplicate member → **finding** | `[workflow, workflow]` passing silently as though it were a richer answer than `[workflow]` |
 | `channels: [none]` combined with another member, or `channels: []` → **finding** | an empty or self-contradicting answer read as a real one |

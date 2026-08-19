@@ -170,3 +170,33 @@ test('exposure and writes are independent — an unrelated writes finding does n
   assert.ok(hasText(r.fails, /writes is "bogus"/), r.fails.join(' | '));
   assert.ok(hasText(r.fails, /exposure is "bogus"/), r.fails.join(' | '));
 });
+
+// --- #237: the dropped-prohibition's informational replacement — exposure: live + trunk: main,
+// no writes: isolated declared, is a warn naming the veto. MEASURED dormant by construction: this
+// shape already fails exposure-shape's evaluateLive ("requires trunk to be a branch distinct from
+// main"), so the warn always fires ALONGSIDE that fail, never alone — the ruling ships it anyway
+// as the one finding that names `writes: isolated` as the remedy. ------------------------------
+
+test('#237: exposure: live + trunk: main + no writes: isolated is a warn naming both exposure: live and writes: isolated, alongside the pre-existing live/main fail', () => {
+  const yml = `tier: C\ntrunk: main\nproduction: https://example.invalid\ndeploy: push-main\nstack: node\nexposure: live\n`;
+  const r = audit(fixture(yml, { '.github/workflows/deploy-prod.yml': 'on:\n  push:\n    branches: [main]\njobs:\n  deploy:\n    runs-on: ubuntu-latest\n    steps: []\n' }));
+  assert.ok(hasText(r.warns, /exposure: live with trunk "main"/), r.warns.join(' | '));
+  assert.ok(hasText(r.warns, /writes: isolated/), r.warns.join(' | '));
+  // the pre-existing mechanism-rule fail (trunk must be distinct from main) is still there too —
+  // the advisory is ADDED, it replaces nothing.
+  assert.ok(hasText(r.fails, /trunk to be a branch distinct from "main"|trunk.*distinct from main/i), r.fails.join(' | '));
+});
+
+test('#237: the same live + trunk: main shape with writes: isolated declared drops the advisory (and only the advisory)', () => {
+  const yml = `tier: C\ntrunk: main\nproduction: https://example.invalid\ndeploy: push-main\nstack: node\nexposure: live\nwrites: isolated\n`;
+  const r = audit(fixture(yml, { '.github/workflows/deploy-prod.yml': 'on:\n  push:\n    branches: [main]\njobs:\n  deploy:\n    runs-on: ubuntu-latest\n    steps: []\n' }));
+  assert.ok(!hasText(r.warns, /writes: isolated/), r.warns.join(' | '));
+  // the mechanism-rule fail is orthogonal to `writes` and stays regardless.
+  assert.ok(hasText(r.fails, /trunk to be a branch distinct from "main"|trunk.*distinct from main/i), r.fails.join(' | '));
+});
+
+test('#237: exposure: live + trunk NOT main never fires the advisory, veto declared or not', () => {
+  const yml = `tier: C\ntrunk: dev\nproduction: https://example.invalid\ndeploy: push-main\nstack: node\nexposure: live\n`;
+  const r = audit(fixture(yml, { '.github/workflows/deploy-prod.yml': 'on:\n  push:\n    branches: [main]\njobs:\n  deploy:\n    runs-on: ubuntu-latest\n    steps: []\n' }));
+  assert.ok(!hasText(r.warns, /writes: isolated/), r.warns.join(' | '));
+});

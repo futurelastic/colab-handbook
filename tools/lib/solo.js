@@ -15,6 +15,12 @@
 const git = require('./git');
 const writesAuthority = require('./writes-authority.js');
 
+// #237 (⚖ Decision on #233): `writes` stopped selecting a write-conflict prevention METHOD and
+// became a two-state VETO — see writes-authority.js's header. `writesMode` and the old
+// `soloEligibility` below (which keyed off `resolveWrites(...).value === 'serial-direct'`) are
+// retired with it. Eligibility is now a SESSION-IDENTITY question — is a human at the keyboard,
+// asserted with COLAB_HUMAN=1 — gated by the veto, not selected by a declared method.
+
 /**
  * Local branches carrying commits their upstream (or, absent one, `origin/<trunk>`) does not have.
  * Returns `[{branch, reason}]` — empty means every local branch is fully pushed.
@@ -118,47 +124,56 @@ function exitProblems(repoAbs, trunk) {
 }
 
 /**
- * Which write-conflict prevention method a repo's `project.yml` declares (`writes:` —
- * CONVENTIONS.md §2 "Writes", project.schema.md "writes — optional"). #208 split `serial`
- * into `serial-direct`/`serial-gated`; this is the 2-state SUMMARY reading callers that only
- * need "does this repo need a place-claim / run CI as an alarm rather than a gate" still want
- * — both serial methods answer that the same way (place-claims and the CI-role default are
- * NOT what distinguishes them; solo-flow eligibility, below, is). Fails closed to
- * `'isolated'` on anything unrecognised, the same direction `promotion:` fails closed
- * (toward the safer, more-isolated reading) — never toward a serial reading.
+ * Is solo flow (trunk-direct) legal for this repo right now, and on what authority?
+ *
+ * #237 (⚖ Decision on #233): eligibility is a SESSION-IDENTITY question, gated by the veto —
+ * not a declared-method question. `writes: isolated` refuses outright, for a human exactly as
+ * for an automated session — no flag lowers that bar. Absence, and every other declared value
+ * (both `serial-*` spellings, the `serial` alias, anything unrecognised), permit trunk-direct
+ * to an ATTENDED session: `human` must be `true`, asserted by the CALLER from `COLAB_HUMAN=1`
+ * (transcribed on the human's explicit instruction, never inferred, and never from a headless,
+ * scheduled or driver session — CONVENTIONS.md §5, "The human flag").
+ *
+ * Deliberately does NOT read `process.env` itself — this module's header states every function
+ * here is pure with respect to external state, and that split is what lets a test drive both
+ * branches without mutating the ambient environment. The CLI (`tools/colab`'s `cmdSolo`) reads
+ * `COLAB_HUMAN` and passes the boolean in.
+ *
+ * `human` defaults to `false` so a caller that forgets the argument fails CLOSED (refused), not
+ * open. The veto is checked FIRST: a vetoed repo must never be told "re-run with COLAB_HUMAN=1"
+ * — that would advertise a route around a bar no flag may lower.
+ *
+ * Returns `{ok:true, via:'human'}` or `{ok:false, code, reason}` where `code` is `'veto'`
+ * (writes: isolated — no flag can change this) or `'not-human'` (set COLAB_HUMAN=1).
  */
-function writesMode(doc) {
-  const v = writesAuthority.resolveWrites(doc && doc.writes).value;
-  return v === 'serial-direct' || v === 'serial-gated' ? 'serial' : 'isolated';
-}
-
-/**
- * Is solo flow (the serial TRUNK-DIRECT cell) legal for this repo, and via which key?
- * #208: eligibility keys off the DIRECT value specifically, not either serial method — a
- * `serial-gated` repo has declared that a pre-merge gate exists, which is exactly what solo
- * flow (no branch, CI as an alarm rather than a gate) has none of. `writes: serial` (the
- * legacy alias) resolves to `serial-direct` (tools/lib/writes-authority.js) and stays
- * eligible, unchanged from before the split. Returns `{ok:true, via}` or `{ok:false, reason}`.
- */
-function soloEligibility(doc) {
-  const r = writesAuthority.resolveWrites(doc && doc.writes);
-  if (r.value === 'serial-direct') return { ok: true, via: 'writes' };
-  if (r.value === 'serial-gated') {
+function soloEligibility(doc, { human = false } = {}) {
+  if (writesAuthority.trunkDirectVetoed(doc && doc.writes)) {
     return {
       ok: false,
-      reason: 'solo flow requires writes: serial-direct — this repo declares writes: serial-gated '
-        + '(one writer, but a declared pre-merge gate; solo flow has none)',
+      code: 'veto',
+      reason: 'solo flow is refused here: this repo declares writes: isolated, which vetoes '
+        + 'trunk-direct for every session, human or not (CONVENTIONS.md, Writes). Use a '
+        + 'worktree and a branch.',
     };
   }
-  return {
-    ok: false,
-    reason: 'solo flow requires writes: serial-direct — this repo declares neither',
-  };
+  if (!human) {
+    return {
+      ok: false,
+      code: 'not-human',
+      reason: 'solo flow commits straight to trunk and requires a human at the keyboard: '
+        + 're-run with COLAB_HUMAN=1, set only on a human\'s explicit instruction — never '
+        + 'inferred, and never from a headless, scheduled or driver session. (No field, flag '
+        + 'or project.yml value can lower this bar.)',
+    };
+  }
+  return { ok: true, via: 'human' };
 }
 
 /**
- * The two conditions from CONVENTIONS.md §2 ("Writes") that make a branch mandatory on a
- * `writes: serial` repo, evaluated against state where it can be:
+ * The two conditions from CONVENTIONS.md §2 ("Writes") that make a branch mandatory for an
+ * ATTENDED trunk-direct session (#237: every other kind of session has a branch by construction
+ * — a worktree — so this now governs solo flow specifically, not a declared `writes: serial`
+ * method), evaluated against state where it can be:
  *
  *   1. units-in-flight — more than one claim/worktree/place-claim already live on the repo.
  *      Machine-decidable from `st`, so `met` is a real boolean.
@@ -195,4 +210,4 @@ function branchMandatory(st, repoAbs) {
   return { mandatory: unitsMet, conditions };
 }
 
-module.exports = { unpushedBranches, fullyDirty, entryProblems, exitProblems, writesMode, soloEligibility, branchMandatory };
+module.exports = { unpushedBranches, fullyDirty, entryProblems, exitProblems, soloEligibility, branchMandatory };

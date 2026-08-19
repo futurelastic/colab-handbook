@@ -103,7 +103,19 @@ function fixture() {
 function colab(fx, args) {
   const r = spawnSync('node', [COLAB, ...args], {
     encoding: 'utf8',
-    env: { ...process.env, PATH: `${fx.bin}:${process.env.PATH}`, HOME: fx.home, COLAB_HOME: fx.home, COLAB_SESSION: '', COLAB_SESSION_NAME: '' },
+    // #237: a fixed, non-blank COLAB_SESSION (not '') — every fixture in this file runs `claim`
+    // then `ship` against the SAME trunk checkout, and #234 made `ship` acquire that checkout's
+    // place-claim at B1. Under #237's coexistence default, `claim` (no --worktree) now ALSO takes
+    // that same place-claim (previously only a declared `writes: serial-*` repo did). Two blank
+    // ('') sessions do NOT count as "the same holder" to place.conflict's re-acquire exemption —
+    // only a truthy, EQUAL session does — so leaving this blank made every ship in this file
+    // refuse against its own claim's still-live hold. A real session always carries a stable
+    // --session for its whole lifetime (code-start step 0); this fixture now models that instead
+    // of the untested "nobody ever identifies themselves" edge case.
+    env: {
+      ...process.env, PATH: `${fx.bin}:${process.env.PATH}`, HOME: fx.home, COLAB_HOME: fx.home,
+      COLAB_SESSION: 'sess-plan-journal-test', COLAB_SESSION_NAME: '',
+    },
   });
   return { code: r.status, out: r.stdout || '', err: r.stderr || '' };
 }

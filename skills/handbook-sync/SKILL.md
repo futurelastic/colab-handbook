@@ -325,7 +325,11 @@ and the audit is what catches it:
   question(s) — [§9](../../CONVENTIONS.md#9-adopting-this)'s shared set, the same
   wording as first-time adoption — to the repo's own owner, and write the answer into
   `project.yml`. **Unlike the label back-fill, this DOES belong in §8's commit** — it
-  is a `project.yml` change, not a GitHub-side one.
+  is a `project.yml` change, not a GitHub-side one. **`writes` is now a veto question
+  (⚖ #233), not a method choice** — put it to the owner as [§9](../../CONVENTIONS.md#9-adopting-this)'s
+  question 4 phrases it: should a human ever be allowed to commit straight to this
+  repo's trunk checkout? Leaving it unanswered is a legal, common answer (coexistence,
+  the default), not a gap that needs closing.
 - **`ceremony:` is optional, and syncing never adds it uninvited.** Unlike the label
   set, this is a `project.yml` field the repo opts into (project.schema.md#ceremony--optional)
   — omission already behaves as `standard`, so there is nothing to back-fill. Only

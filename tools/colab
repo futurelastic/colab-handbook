@@ -38,6 +38,7 @@ const ciVerdict = require('./lib/ci-verdict');
 const adopt = require('./lib/adopt');
 const consumerEvidence = require('./lib/consumer-evidence');
 const axisAuthority = require('./lib/axis-authority');
+const writesAuthority = require('./lib/writes-authority');
 const {
   HOST, UserError, normIssueNum, issueTag, claimKey, today, nowISO, hoursSince, humanAge,
   parseArgs, table, shortRepo,
@@ -525,15 +526,19 @@ function cmdClaim(argv) {
   const gh = isGhUsable(repoAbs);
   const myLogin = gh ? git.ghCurrentLogin() : null;
 
-  // #133/#136: a claim with NO worktree is the trunk-checkout shape — on a serial repo (either
-  // `writes: serial-direct` or `writes: serial-gated` — #208 split the value; the legacy alias
-  // `writes: serial` reads the same way here, via `solo.writesMode`) that is condition 1's unit
-  // (CONVENTIONS.md §2, "Writes"), so a second one already in flight
-  // makes a place-claim conflict, and it is refused here the same way a worktree/issue conflict is
-  // below — before the mutate, never after. Computed BEFORE the state read so a read failure can
-  // be attributed correctly (place-claim-aware degrade vs. the ordinary claim path, below).
+  // #133/#136, re-based by #237: a claim with NO worktree is the trunk-checkout shape — on any
+  // repo COEXISTENCE permits trunk-direct on (i.e. everywhere `writes:` does not veto it —
+  // absence, both `serial-*` spellings, the `serial` alias, or an unrecognised value; see
+  // writes-authority.js's `trunkDirectVetoed`) that is condition 1's unit (CONVENTIONS.md §2,
+  // "Writes"), so a second one already in flight makes a place-claim conflict, and it is refused
+  // here the same way a worktree/issue conflict is below — before the mutate, never after.
+  // Computed BEFORE the state read so a read failure can be attributed correctly (place-claim-
+  // aware degrade vs. the ordinary claim path, below). Widens from before #237: a claim with no
+  // worktree now takes this hold on every repo except a veto (`writes: isolated`) repo, where
+  // it previously did so only on a declared `serial-*` repo — the correct consequence of
+  // coexistence being the default rather than the exception.
   const doc0 = projectDoc(repoAbs);
-  const takingPlace = !wtName && solo.writesMode(doc0) === 'serial';
+  const takingPlace = !wtName && !writesAuthority.trunkDirectVetoed(doc0 && doc0.writes);
 
   // ---- REFUSAL (two layers, check-then-refuse) ----
   let st0;
@@ -827,14 +832,15 @@ function cmdGateRecorded(argv) {
 // ---------------------------------------------------------------------------
 // solo — the entry gate for solo flow (CONVENTIONS.md, Solo flow; #83).
 //
-// Solo flow lets a `writes: serial-direct` repo (or the legacy alias `writes: serial` — #208
-// split `serial` into `serial-direct`/`serial-gated`; solo eligibility keys off the DIRECT
-// value only, since `serial-gated` declares a pre-merge gate exists, which is exactly what
-// solo flow has none of) skip pre-filed issue / claim / worktree and commit straight to trunk
-// — legal ONLY because the start-side rails (claim discipline, worktree isolation) exist to
-// protect OTHER sessions, and a solo session has none. This command is the mechanical check
-// that condition actually holds, not the honor system: every rule it enforces is read fresh
-// from git + state.json on every call, never assumed from a prior run.
+// #237 (⚖ Decision on #233): solo flow is legal wherever `writes:` does NOT veto trunk-direct
+// (absence, or any declared value other than exactly `writes: isolated` — see
+// tools/lib/writes-authority.js's `trunkDirectVetoed`; both `serial-*` spellings and the legacy
+// `serial` alias are now inert and identical to absence) — AND the session is ATTENDED, asserted
+// with `COLAB_HUMAN=1` on a human's explicit instruction (never inferred, never from a headless,
+// scheduled or driver session — CONVENTIONS.md §5, "The human flag"). Trunk-direct commits with
+// no pre-filed issue, claim or worktree are safe exactly when nobody else could be colliding with
+// them AND a human is present to answer for the commit; this command checks both mechanically
+// instead of trusting either.
 //
 // The lock (`state.solo[repoAbs]`) is its own thing, not a claim or a worktree — solo flow makes
 // neither, so there is nothing else in state.json a second solo attempt could collide with.
@@ -843,18 +849,23 @@ function cmdGateRecorded(argv) {
 const HELP_SOLO = `colab solo [--repo <path>] [--force] [--session <url>] [--session-name <name>]
 colab solo --done [--repo <path>]
 
-Entry gate for solo flow (CONVENTIONS.md, Solo flow) — legal on a \`writes: serial-direct\`
-repo only (the legacy alias \`writes: serial\` reads the same way; \`serial-gated\` does NOT
-qualify — it declares a pre-merge gate, which solo flow has none of. #175 retired the legacy
-\`ceremony: light\` acceptance path #133 introduced as a bridge).
-Trunk-direct commits with no pre-filed issue, claim or worktree are safe exactly when nobody
-else could be colliding with them; this command checks that mechanically instead of trusting it.
+Entry gate for solo flow (CONVENTIONS.md, Solo flow) — requires BOTH: this repo does not declare
+\`writes: isolated\` (the veto — absence and every other value, including both \`serial-*\`
+spellings and the legacy \`serial\` alias, permit trunk-direct here), AND \`COLAB_HUMAN=1\` is set,
+on a human's explicit instruction only — never inferred, never from a headless/scheduled/driver
+session (#237, the ⚖ Decision on #233; #175 retired the legacy \`ceremony: light\` acceptance path
+#133 introduced as a bridge).
+Trunk-direct commits with no pre-filed issue, claim or worktree are safe exactly when nobody else
+could be colliding with them and a human is present to answer for the commit; this command checks
+both mechanically instead of trusting either.
 
-  colab solo            check + LOCK: no live solo session, no claim, checked out on trunk, no
-                         unpushed branch anywhere, clean tree, no conflicting place-claim on THIS
-                         checkout (#236 — a worktree elsewhere is a different checkout, not a
-                         conflict). Any one held → refuse, full ceremony, no exception.
-  colab solo --done     exit check: tree clean AND pushed, then releases the lock.
+  colab solo            check + LOCK: writes: isolated not declared, COLAB_HUMAN=1 set, no live
+                         solo session, no claim, checked out on trunk, no unpushed branch
+                         anywhere, clean tree, no conflicting place-claim on THIS checkout
+                         (#236 — a worktree elsewhere is a different checkout, not a conflict).
+                         Any one held/unmet → refuse, full ceremony, no exception.
+  colab solo --done     exit check: tree clean AND pushed, then releases the lock. Never gated on
+                         COLAB_HUMAN — releasing a hold authorizes nothing.
   colab solo --force    take over a lock THIS command already holds in this repo (e.g. a crashed
                          session) — never bypasses the other checks, only a stale lock of your own.
 
@@ -907,15 +918,24 @@ function cmdSolo(argv) {
   if (opts.help) return print(HELP_SOLO);
   const repoAbs = resolveRepo(opts);
   const doc = projectDoc(repoAbs);
-  // #133 re-keyed this gate onto `writes: serial`. #208 split that value into
-  // `serial-direct`/`serial-gated`; `soloEligibility` keys off `serial-direct` only (the
-  // legacy alias still resolves there — tools/lib/writes-authority.js). #175 removed the
-  // `ceremony: light` legacy acceptance path and the ceremony/production coherence rule it
-  // depended on — do not add a second acceptance path back.
-  const eligibility = solo.soloEligibility(doc);
-  if (!eligibility.ok) throw new UserError(`${eligibility.reason} (CONVENTIONS.md, Solo flow).`);
 
+  // #237: `--done` dispatches BEFORE the eligibility check, not after. `--done` releases a hold
+  // and verifies clean+pushed; it authorizes nothing, so gating it on COLAB_HUMAN adds friction
+  // with no safety gain — and refusing it would strand the lock (and the place-claim it holds)
+  // in any session that opened solo attended but is now closing it unattended, with no way to
+  // clear the state short of `COLAB_HUMAN=1 colab place release`. (Ordering bug this reorder
+  // exists to prevent: eligibility now requires COLAB_HUMAN, and `--done` must never require it.)
   if (opts.done) return cmdSoloDone(repoAbs, doc);
+
+  // #237 (⚖ Decision on #233): eligibility is a session-identity question — the veto
+  // (tools/lib/writes-authority.js `trunkDirectVetoed`) gates everyone, human or not; attendance
+  // (COLAB_HUMAN=1) gates whether THIS session may use the non-vetoed default. `solo.js` stays
+  // pure with respect to process.env (its own header states this split); the CLI is the one place
+  // that reads the flag. #175 removed the `ceremony: light` legacy acceptance path and the
+  // ceremony/production coherence rule it depended on — do not add a second acceptance path back.
+  const human = process.env.COLAB_HUMAN === '1';
+  const eligibility = solo.soloEligibility(doc, { human });
+  if (!eligibility.ok) throw new UserError(`${eligibility.reason} (CONVENTIONS.md, Solo flow).`);
 
   const loaded = placeState('opening solo flow');
   if (!loaded.ok) { print(`✗ ${loaded.message}`); return 1; }
@@ -999,17 +1019,17 @@ function cmdSoloDone(repoAbs, doc) {
 }
 
 // ---------------------------------------------------------------------------
-// place — the writer-verifiable checkout hold a serial repo needs (#136; #208: either
-// `writes: serial-direct` or `writes: serial-gated`, the legacy alias `writes: serial`
-// included — see solo.writesMode)
+// place — the writer-verifiable checkout hold a shared trunk checkout needs (#136; #237: any
+// repo where `writes:` does not veto trunk-direct — i.e. every repo except one declaring
+// exactly `writes: isolated` — see writes-authority.js's `trunkDirectVetoed`)
 // ---------------------------------------------------------------------------
 
 const HELP_PLACE = `colab place <acquire|check|release> <path> [--repo P] [--session URL] [--session-name N] [--force]
 
-Path-scoped, machine-local hold on ONE checkout (CONVENTIONS.md, Place-claims) — what a
-serial repo (\`writes: serial-direct\` or \`writes: serial-gated\`) needs and \`writes: isolated\`
-(worktrees) does not. Not repo-scoped: a repo running several worktrees needs one hold per
-checkout in use.
+Path-scoped, machine-local hold on ONE checkout (CONVENTIONS.md, Place-claims) — what a shared
+trunk checkout needs on any repo that does not declare \`writes: isolated\` (the veto), and a
+worktree does not, because a worktree is never shared. Not repo-scoped: a repo running several
+worktrees needs one hold per checkout in use.
 
   colab place acquire <path>   take the hold. Same exit scheme as \`check\` below on a refusal
                                 (exit 1 held-by-a-live-other, exit 2 liveness-unknown-or-degraded).
@@ -1023,10 +1043,10 @@ checkout in use.
                                 a held place-claim with a live holder is a genuine refusal, not
                                 friction to route around.
 
-\`colab claim\` on a serial repo (\`writes: serial-direct\`/\`serial-gated\`) with no --worktree takes/checks this SAME hold on the
-trunk checkout — its \`--force\` over a live other holder is gated by the identical COLAB_HUMAN=1
-bar as \`place acquire --force\` above; there is only one override rule, enforced at both entry
-points that can trigger it.
+\`colab claim\` on any repo that does not declare \`writes: isolated\` with no --worktree takes/checks
+this SAME hold on the trunk checkout — its \`--force\` over a live other holder is gated by the
+identical COLAB_HUMAN=1 bar as \`place acquire --force\` above; there is only one override rule,
+enforced at both entry points that can trigger it.
 
 Never acquired from a file-synced location (Resilio/Syncthing/Dropbox/iCloud) — refuses outright;
 a lock with no atomicity inside a sync window is worse than no lock (both sides read "unlocked"
@@ -1519,10 +1539,13 @@ over-blocking, safe and visible — rather than the reverse, which would reprodu
 
 \`--ruled-by\` is REQUIRED and names the human whose call this is — never the typist. This mirrors
 \`Filed-by:\` (CONVENTIONS.md §5, Provenance): the ordinary case is an agent transcribing a ruling
-Boss already made, not inventing one. Unlike \`colab migration-grant\` / \`colab ci-grant\` /
-\`colab promote\`, this command is deliberately NOT gated on COLAB_HUMAN=1 — those three AUTHORIZE
-a write that did not exist before the command ran; this one TRANSCRIBES a decision made elsewhere.
-The safety property is carried by \`--ruled-by\` plus TRUSTED_ASSOCIATIONS on read instead.
+Boss already made, not inventing one. \`COLAB_HUMAN=1\` (CONVENTIONS.md §5, "The human flag")
+asserts one thing everywhere it appears — a human is behind this command — and unlike \`colab
+migration-grant\` / \`colab ci-grant\` / \`colab promote\` / solo flow's entry gate, this command
+does not carry that assertion in the env flag: it carries it in \`--ruled-by\` plus
+TRUSTED_ASSOCIATIONS, checked on read. Same principle, a different mechanism, because this
+command TRANSCRIBES a decision made elsewhere rather than AUTHORIZING a write that did not exist
+before it ran — the flag would assert nothing here that \`--ruled-by\` does not already.
 
 \`--answers <ref>\` names the \`<!-- decision:options -->\` comment (id or URL) this decision
 resolves, when one exists — omit it when there was no options block.
