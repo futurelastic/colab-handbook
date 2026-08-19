@@ -98,6 +98,22 @@ test('holderLabel: no record at all is "unknown"', () => {
   assert.strictEqual(place.holderLabel(null), 'unknown');
 });
 
+// --- holdAge — a hold's age, self-evident on sight, never a raw timestamp to subtract (#238) ----
+
+test('holdAge: a fresh record reads "just now"', () => {
+  assert.strictEqual(place.holdAge(rec({ since: new Date().toISOString() })), 'just now');
+});
+
+test('holdAge: a days-old record reads in days — the record #238\'s own design observed', () => {
+  const since = new Date(Date.now() - 4 * 24 * 3_600_000).toISOString();
+  assert.strictEqual(place.holdAge(rec({ since })), '4d ago');
+});
+
+test('holdAge: a record with no "since" (only reachable via a hand-edited state.json) degrades to a label, never throws', () => {
+  assert.strictEqual(place.holdAge(rec({ since: null })), 'age unknown');
+  assert.strictEqual(place.holdAge(null), 'age unknown');
+});
+
 // --- defaultProbe / isLive — the liveness-at-read-time core (#136 comment 3) --------
 
 test('defaultProbe: no pid recorded is unknown (null), not dead — fails closed', () => {
@@ -202,6 +218,34 @@ test('conflict: a foreign-host record refuses, kind "foreign-host", citing the s
   const st = { places: { [key]: rec({ host: 'other-machine', session: 'sess-other' }) } };
   const c = place.conflict(st, '/tmp/repo', { session: 'sess-mine' }, () => true);
   assert.strictEqual(c.kind, 'foreign-host');
+});
+
+// --- conflict() names the hold's age, on every kind (#238) ------------------------
+
+const DAYS_OLD = new Date(Date.now() - 4 * 24 * 3_600_000).toISOString();
+
+test('conflict: kind "held" names the age alongside the holder, not just liveness', () => {
+  const key = place.placeKey('/tmp/repo');
+  const st = { places: { [key]: rec({ session: 'sess-other', since: DAYS_OLD }) } };
+  const c = place.conflict(st, '/tmp/repo', { session: 'sess-mine' }, () => true);
+  assert.strictEqual(c.kind, 'held');
+  assert.match(c.message, /held 4d ago/);
+});
+
+test('conflict: kind "unknown" names the age too — a forgotten hold looks the same as a fresh one without it', () => {
+  const key = place.placeKey('/tmp/repo');
+  const st = { places: { [key]: rec({ pid: null, session: 'sess-other', since: DAYS_OLD }) } };
+  const c = place.conflict(st, '/tmp/repo', { session: 'sess-mine' });
+  assert.strictEqual(c.kind, 'unknown');
+  assert.match(c.message, /held 4d ago/);
+});
+
+test('conflict: kind "foreign-host" names the age too', () => {
+  const key = place.placeKey('/tmp/repo');
+  const st = { places: { [key]: rec({ host: 'other-machine', session: 'sess-other', since: DAYS_OLD }) } };
+  const c = place.conflict(st, '/tmp/repo', { session: 'sess-mine' }, () => true);
+  assert.strictEqual(c.kind, 'foreign-host');
+  assert.match(c.message, /held 4d ago/);
 });
 
 // --- stalePlaces -----------------------------------------------------------------

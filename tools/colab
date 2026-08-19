@@ -39,7 +39,7 @@ const adopt = require('./lib/adopt');
 const consumerEvidence = require('./lib/consumer-evidence');
 const axisAuthority = require('./lib/axis-authority');
 const {
-  HOST, UserError, normIssueNum, issueTag, claimKey, today, nowISO, hoursSince,
+  HOST, UserError, normIssueNum, issueTag, claimKey, today, nowISO, hoursSince, humanAge,
   parseArgs, table, shortRepo,
 } = require('./lib/util');
 
@@ -924,7 +924,7 @@ function cmdSolo(argv) {
   if (held && !opts.force) {
     print(`✗ solo already OPEN in ${shortRepo(repoAbs)} — held by ${held.host}` +
       (held.sessionName || held.session ? ` (${displayIdentity(held.sessionName, held.session)})` : '') +
-      ` since ${held.since}.`);
+      ` since ${held.since} (held ${humanAge(held.since)}).`);
     print('  Close it first (colab solo --done), or --force if it is stale (that host crashed/is gone).');
     return 1;
   }
@@ -1094,7 +1094,7 @@ function cmdPlace(argv) {
     if (!rec) { print(`Nothing held at "${pathAbs}" — nothing to release.`); return 0; }
     const mine = session && rec.session === session;
     if (!mine && process.env.COLAB_HUMAN !== '1') {
-      throw new UserError(`"${pathAbs}" is held by a different session ("${place.holderLabel(rec)}") — ` +
+      throw new UserError(`"${pathAbs}" is held by a different session ("${place.holderLabel(rec)}", held ${place.holdAge(rec)}) — ` +
         `releasing it requires a human: re-run with COLAB_HUMAN=1. (No field, flag or project.yml value can lower this bar.)`);
     }
     const written = placeMutate('release', (s) => { if (s.places) delete s.places[key]; });
@@ -1119,7 +1119,7 @@ function cmdPlaces(argv) {
   const rows = Object.entries(st.places || {}).map(([key, rec]) => {
     const { live, reason } = place.isLive(rec);
     return { path: key, repo: rec.repo, branch: rec.branch, host: rec.host, session: rec.session,
-      sessionName: rec.sessionName, pid: rec.pid, since: rec.since, live, reason };
+      sessionName: rec.sessionName, pid: rec.pid, since: rec.since, age: place.holdAge(rec), live, reason };
   });
   if (opts.json) return print(JSON.stringify(rows, null, 2));
   if (!rows.length) { print('No place-claims recorded on this machine.'); return 0; }
@@ -1128,7 +1128,9 @@ function cmdPlaces(argv) {
     // `place.holderLabel`, not `displayIdentity` — a place-claim's record carries a `pid`
     // (`process.ppid` at every write site) that neither a claim nor a worktree record has, so a
     // fully name/URL-less hold still resolves to something here instead of the bare "-" (#235).
-    print(`${r.path}  [${liveTxt}]  ${place.holderLabel(r)}  since ${r.since}`);
+    // Age (#238) is next to liveness, not buried after `since`: a stored ISO timestamp requires a
+    // reader to subtract it by hand, and a forgotten hold looked identical to a fresh one without it.
+    print(`${r.path}  [${liveTxt}]  held ${r.age}  ${place.holderLabel(r)}  since ${r.since}`);
   }
   return 0;
 }

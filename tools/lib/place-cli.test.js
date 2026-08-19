@@ -246,3 +246,60 @@ test('colab places --json still carries the raw (possibly null) session/sessionN
   assert.strictEqual(rows[0].sessionName, null);
   assert.ok(rows[0].pid, 'JSON output should carry pid too, the field the text rendering now falls back to');
 });
+
+// --- #238: places and refusals report hold age, so a forgotten hold no longer looks fresh -------
+
+/** Rewrite the single place record's `since` in state.json, simulating a hold taken days ago. */
+function backdatePlace(fx, isoSince) {
+  const statePath = path.join(fx.home, 'state.json');
+  const st = JSON.parse(fs.readFileSync(statePath, 'utf8'));
+  const key = Object.keys(st.places)[0];
+  st.places[key].since = isoSince;
+  fs.writeFileSync(statePath, JSON.stringify(st, null, 2));
+}
+
+test('colab places reports age alongside liveness, not just a raw "since" timestamp', () => {
+  const fx = fixture();
+  const acq = colab(fx, ['place', 'acquire', fx.work, '--repo', fx.work]);
+  assert.strictEqual(acq.code, 0, acq.err);
+  backdatePlace(fx, new Date(Date.now() - 4 * 24 * 3_600_000).toISOString());
+
+  const list = colab(fx, ['places']);
+  assert.strictEqual(list.code, 0, list.err);
+  assert.match(list.out, /held 4d ago/);
+
+  const listJson = colab(fx, ['places', '--json']);
+  const rows = JSON.parse(listJson.out);
+  assert.strictEqual(rows[0].age, '4d ago');
+});
+
+test('cmdPlace release refuses on someone else\'s hold and names its age, not just its holder', () => {
+  const fx = fixture();
+  const acq = colab(fx, ['place', 'acquire', fx.work, '--repo', fx.work, '--session', 'sess-OTHER', '--session-name', 'other']);
+  assert.strictEqual(acq.code, 0, acq.err);
+  backdatePlace(fx, new Date(Date.now() - 4 * 24 * 3_600_000).toISOString());
+
+  const rel = colab(fx, ['place', 'release', fx.work, '--repo', fx.work, '--session', 'sess-MINE']);
+  assert.notStrictEqual(rel.code, 0);
+  assert.match(rel.err, /held 4d ago/);
+});
+
+test('cmdSolo "already OPEN" refusal names the lock\'s age, not just "since <iso>"', () => {
+  const fx = fixture();
+  const first = colab(fx, ['solo', '--repo', fx.work, '--session', 's1', '--session-name', 'first']);
+  assert.strictEqual(first.code, 0, first.err);
+
+  // backdate the SOLO lock itself (a separate record, st.solo[repo] — not a place-claim). Keyed
+  // by colab's resolved repo root (git's git-common-dir, e.g. macOS /private/var/... for a /var/...
+  // tmp path), not necessarily the raw fixture path — read the key back rather than assume it.
+  const statePath = path.join(fx.home, 'state.json');
+  const st = JSON.parse(fs.readFileSync(statePath, 'utf8'));
+  const repoKey = Object.keys(st.solo)[0];
+  st.solo[repoKey].since = new Date(Date.now() - 4 * 24 * 3_600_000).toISOString();
+  fs.writeFileSync(statePath, JSON.stringify(st, null, 2));
+
+  const second = colab(fx, ['solo', '--repo', fx.work, '--session', 's2', '--session-name', 'second']);
+  assert.notStrictEqual(second.code, 0);
+  assert.match(second.out, /already OPEN/);
+  assert.match(second.out, /held 4d ago/);
+});

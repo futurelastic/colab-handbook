@@ -50,6 +50,7 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 const procs = require('./procs');
+const { humanAge } = require('./util');
 
 /**
  * Resolve a checkout path to the canonical string every caller keys against — `realpath` so a
@@ -162,6 +163,18 @@ function holderLabel(rec) {
 }
 
 /**
+ * How long `rec` has been held, self-evident on sight ("3h ago", "4d ago") — never a raw
+ * timestamp a reader has to subtract by hand (#238). The one thing that distinguishes a hold a
+ * live session parked at a prompt for an hour from one somebody genuinely forgot days ago; both
+ * render identically as "[live]" otherwise, which is precisely the gap #238 measured. `rec.since`
+ * is missing only on a hand-edited state.json — every real write site sets it (`holdRecord`
+ * above defaults it at construction) — so this still resolves to something rather than throwing.
+ */
+function holdAge(rec) {
+  return rec && rec.since ? humanAge(rec.since) : 'age unknown';
+}
+
+/**
  * Would acquiring `pathAbs` for `self` (an optional {session} to exempt the caller's own
  * re-acquire/renew) conflict with an existing hold? Returns `null` for clear ground, or
  * `{holder, kind, message}` — `kind` is `'held'` (a live other holder, refuse), `'unknown'`
@@ -177,7 +190,8 @@ function conflict(st, pathAbs, self = {}, probe = defaultProbe) {
     return {
       holder: h.rec,
       kind: 'foreign-host',
-      message: `place "${h.rec.path}" is recorded held from host "${h.rec.host}" — ${h.reason}`,
+      message: `place "${h.rec.path}" is recorded held from host "${h.rec.host}" ` +
+        `(held ${holdAge(h.rec)}) — ${h.reason}`,
     };
   }
   if (h.live === false) return null; // dead holder — clear ground, nothing to refuse
@@ -185,7 +199,7 @@ function conflict(st, pathAbs, self = {}, probe = defaultProbe) {
     return {
       holder: h.rec,
       kind: 'unknown',
-      message: `place "${h.rec.path}" is held by session "${holderLabel(h.rec)}" ` +
+      message: `place "${h.rec.path}" is held by session "${holderLabel(h.rec)}" (held ${holdAge(h.rec)}) ` +
         `and its liveness cannot be confirmed locally (${h.reason}) — wait a moment and check again if it may ` +
         'have just died, or override with COLAB_HUMAN=1 once you know that session is gone',
     };
@@ -193,7 +207,7 @@ function conflict(st, pathAbs, self = {}, probe = defaultProbe) {
   return {
     holder: h.rec,
     kind: 'held',
-    message: `place "${h.rec.path}" is held by session "${holderLabel(h.rec)}" (${h.reason})`,
+    message: `place "${h.rec.path}" is held by session "${holderLabel(h.rec)}" (${h.reason}, held ${holdAge(h.rec)})`,
   };
 }
 
@@ -269,6 +283,6 @@ function syncedStateProblem(colabDir) {
 }
 
 module.exports = {
-  placeKey, holdRecord, defaultProbe, isLive, holderOf, holderLabel, conflict, stalePlaces,
+  placeKey, holdRecord, defaultProbe, isLive, holderOf, holderLabel, holdAge, conflict, stalePlaces,
   syncedStateProblem,
 };
