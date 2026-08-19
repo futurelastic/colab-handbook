@@ -850,9 +850,10 @@ qualify — it declares a pre-merge gate, which solo flow has none of. #175 reti
 Trunk-direct commits with no pre-filed issue, claim or worktree are safe exactly when nobody
 else could be colliding with them; this command checks that mechanically instead of trusting it.
 
-  colab solo            check + LOCK: no live solo session, no worktree, no claim, checked out
-                         on trunk, no unpushed branch anywhere, clean tree. Any one held → refuse,
-                         full ceremony, no exception.
+  colab solo            check + LOCK: no live solo session, no claim, checked out on trunk, no
+                         unpushed branch anywhere, clean tree, no conflicting place-claim on THIS
+                         checkout (#236 — a worktree elsewhere is a different checkout, not a
+                         conflict). Any one held → refuse, full ceremony, no exception.
   colab solo --done     exit check: tree clean AND pushed, then releases the lock.
   colab solo --force    take over a lock THIS command already holds in this repo (e.g. a crashed
                          session) — never bypasses the other checks, only a stale lock of your own.

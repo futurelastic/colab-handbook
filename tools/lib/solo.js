@@ -64,12 +64,16 @@ function fullyDirty(repoAbs) {
  * resolved trunk. Empty array = clear to open solo flow. Never throws; every check degrades to "no
  * problem found" if git itself is unavailable, because a missing git is a bigger failure the CLI
  * surfaces elsewhere, not a reason to silently claim the tree is dirty.
+ *
+ * Deliberately does NOT refuse merely because a worktree exists somewhere in this repo (#236). A
+ * worktree is a different directory with a different checkout — a session writing there is not a
+ * writer of the checkout solo flow is about to commit straight to, and cannot become one. The
+ * resource this gate protects is `repoAbs`'s own checkout, not the repo as a whole: `cmdSolo`
+ * covers that checkout-scoped conflict separately, via `place.conflict` against a live place-claim
+ * held here (CONVENTIONS.md, "Solo flow", rule 1) — the thing a worktree elsewhere can never be.
  */
 function entryProblems(st, repoAbs, trunk) {
   const problems = [];
-
-  const wts = Object.values((st && st.worktrees) || {}).filter((w) => w.repo === repoAbs);
-  if (wts.length) problems.push(`worktree(s) held: ${wts.map((w) => w.name).join(', ')}`);
 
   const claims = Object.entries((st && st.claims) || {}).filter(([k]) => k.startsWith(`${repoAbs}#`));
   if (claims.length) problems.push(`claim(s) held: ${claims.map(([, c]) => c.issue).join(', ')}`);

@@ -96,12 +96,10 @@ test('entryProblems: trunk itself ahead of origin (a previous solo session left 
   assert.match(problems[0], /unpushed branch "main"/);
 });
 
-test('entryProblems: a worktree recorded against this repo refuses, by name', () => {
+test('entryProblems: a worktree recorded against this repo does NOT refuse (#236) — it is a different checkout, not a writer of this one', () => {
   const r = repo();
   const st = { worktrees: { 'some-feature-9': { name: 'some-feature-9', repo: r.dir } }, claims: {} };
-  const problems = entryProblems(st, r.dir, 'main');
-  assert.strictEqual(problems.length, 1);
-  assert.match(problems[0], /worktree\(s\) held: some-feature-9/);
+  assert.deepStrictEqual(entryProblems(st, r.dir, 'main'), []);
 });
 
 test('entryProblems: a claim recorded against this repo refuses, by issue', () => {
@@ -126,11 +124,11 @@ test('entryProblems: every condition failing at once is reported together, not j
   const r = repo();
   r.g('checkout', '-q', '-b', 'feat/thing-1');
   r.write('scratch.txt', 'dirty\n');
+  // A worktree recorded elsewhere in the repo is included in `st` too, to pin that it no longer
+  // contributes a problem (#236) — only claim held + wrong branch + dirty tree do.
   const st = { worktrees: { w: { name: 'w', repo: r.dir } }, claims: { [`${r.dir}#1`]: { issue: '#1', repo: r.dir } } };
   const problems = entryProblems(st, r.dir, 'main');
-  // worktree held + claim held + wrong branch + dirty tree — four independent problems, all
-  // surfaced at once rather than stopping at the first (§ the whole point of a mechanical gate).
-  assert.strictEqual(problems.length, 4, problems.join('\n'));
+  assert.strictEqual(problems.length, 3, problems.join('\n'));
 });
 
 // --- exitProblems -------------------------------------------------------------

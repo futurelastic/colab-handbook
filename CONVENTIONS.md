@@ -505,10 +505,13 @@ with no other session to protect against — the start-side invariants exist to 
 *other* sessions.
 
 1. **Entry gate, not honor system.** `colab solo` checks fresh on every invocation, never
-   a cached answer: no live solo session already open, no worktree, no claim, checkout on
-   trunk with no unpushed branch anywhere, a clean (tracked + untracked) tree, and — on a
-   `writes: serial-direct` repo — no conflicting place-claim held on this checkout (below).
-   Anything held refuses outright — full ceremony, no partial credit.
+   a cached answer: no live solo session already open, no claim, checkout on trunk with no
+   unpushed branch anywhere, a clean (tracked + untracked) tree, and no conflicting
+   place-claim held on **this checkout** (below). Anything held refuses outright — full
+   ceremony, no partial credit. **Not** on this list, deliberately (#236): a worktree
+   existing anywhere else in the repo — a worktree is a different directory with a
+   different checkout, so a session writing there is not a writer of the checkout solo
+   flow is about to commit straight to, and cannot become one.
 2. **Trunk-direct commits are allowed.** Small Conventional Commits go straight to trunk;
    CI validates after the push — an alarm, not a gate, so recovery rather than prevention
    is the obligation ([Recovery](#recovery--what-must-exist-to-undo-a-merge), above).
@@ -543,11 +546,14 @@ users unreviewed, and skips only the worktree. This is a derived constraint from
 channel, not a new coupling: `writes` still answers the same question it always has, and
 gains no new field.
 
-**The boundary is concurrency reality, not a discipline preference.** A repo more than
-one session touches can never legally run solo flow — the entry gate's own checks are
-false by construction the moment a second session exists. `writes: serial-direct` is
-necessary but not sufficient: a repo currently hosting someone else's worktree, or someone
-else's place-claim, still fails `colab solo`'s check, correctly.
+**The boundary is concurrency reality, not a discipline preference — scoped to the
+checkout, not the repo (#236).** A *checkout* more than one session touches can never
+legally run solo flow there — the entry gate's own checks are false by construction the
+moment a second session is writing to it. `writes: serial-direct` is necessary but not
+sufficient: a checkout currently hosting someone else's place-claim, or someone else's
+issue claim anywhere in the repo, still fails `colab solo`'s check, correctly. A *repo*
+hosting another session is not disqualifying by itself — a worktree is its own checkout,
+isolated by construction, and was never the thing this gate exists to protect.
 
 **Consumers inferring activity purely from worktrees/claims will under-report a solo
 session** — fixing that is each such consumer's own call, not mandated here.
