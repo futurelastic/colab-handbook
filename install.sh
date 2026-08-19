@@ -8,7 +8,7 @@
 #   ./install.sh --tools  ALSO symlink tools/colab onto your PATH (~/.local/bin/colab)
 #                         AND freeze a stamped copy of the CLI at ~/.colab/bin/colab.
 #   ./install.sh --hooks  ALSO enable this clone's gitleaks pre-commit hook
-#                         (runs scripts/install-hooks.sh; per-machine, not synced).
+#                         (runs .githooks/install.sh; per-machine, not synced).
 #   ./install.sh --fleet  ALSO seed ~/.colab/repos.txt from audit/repos.txt —
 #                         only when absent; an existing fleet list is never touched.
 #   ./install.sh --all    = --tools --hooks --fleet (the recommended first run).
@@ -288,12 +288,12 @@ fi
 if [ "$WITH_HOOKS" = 1 ]; then
   echo "hooks → $DIR/.githooks"
   if [ "$DRY" = 1 ]; then
-    echo "  [dry] run: scripts/install-hooks.sh (git config core.hooksPath .githooks)"
-  elif [ -x "$DIR/scripts/install-hooks.sh" ] || [ -f "$DIR/scripts/install-hooks.sh" ]; then
-    ( cd "$DIR" && sh scripts/install-hooks.sh 2>&1 | sed 's/^/  /' ) || \
-      warn "install-hooks.sh failed — see above; nothing else was affected."
+    echo "  [dry] run: .githooks/install.sh (git config core.hooksPath .githooks)"
+  elif [ -x "$DIR/.githooks/install.sh" ] || [ -f "$DIR/.githooks/install.sh" ]; then
+    ( cd "$DIR" && sh .githooks/install.sh 2>&1 | sed 's/^/  /' ) || \
+      warn "install.sh failed — see above; nothing else was affected."
   else
-    warn "scripts/install-hooks.sh not found — skipped."
+    warn ".githooks/install.sh not found — skipped."
   fi
   echo "  note: core.hooksPath lives in .git/config, so this is per-clone and"
   echo "        per-machine. Every clone you make needs it again."

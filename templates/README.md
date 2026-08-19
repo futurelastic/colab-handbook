@@ -37,7 +37,15 @@ to a file, and prepending anything above a `#!` shebang breaks it. Copy them wit
 
 `<hooks>` is `git config core.hooksPath` if you set one, else `.git/hooks`. The
 executable bit is per-clone for anything git does not track, so ship a one-line install
-script that chmods (this repo's `scripts/install-hooks.sh` is the pattern).
+script that chmods — put it **inside `<hooks>` itself** (this repo's
+`.githooks/install.sh` is the pattern), not in a top-level `scripts/` dir. It is
+never invoked as a hook (git only ever runs the exact hook filenames it knows —
+`pre-commit`, `pre-push`, etc. — never every file in the directory), and
+colocating it with what it installs means a repo whose only "script" is this
+one installer does not end up with a whole `scripts/` folder for a single
+506-byte file. An earlier version of this handbook shipped the pattern at
+`scripts/install-hooks.sh`; that scaffolded a bare one-file `scripts/`
+directory into ~45 repos and was wrong — fixed 2026-08-20.
 
 ## How to adopt
 
