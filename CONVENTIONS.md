@@ -881,12 +881,16 @@ every other session's trunk merge in that repo. A plain branch is still allowed 
 repo nothing reads from; taking it means **you** own returning the checkout to trunk
 before you wrap.
 
-**`git stash` is repo-scoped, not worktree-scoped — never reach for a bare stash inside a
-worktree session.** `refs/stash` is one ref per repository; two concurrent sessions
-stashing around the same time can push/pop over each other with no error. Measured: on a
-repo running 10+ concurrent worktree sessions, one session's `git stash pop` restored a
-*different* session's uncommitted changes, with a third, unrelated, much older stash
-sitting in the same shared stack the whole time.
+**`git stash` is repo-scoped, not worktree-scoped — never reach for a bare stash in any
+checkout of a repo that has more than one.** `refs/stash` is one ref per repository, not
+per checkout; two concurrent sessions stashing around the same time can push/pop over
+each other with no error. Measured: on a repo running 10+ concurrent worktree sessions,
+one session's `git stash pop` restored a *different* session's uncommitted changes, with
+a third, unrelated, much older stash sitting in the same shared stack the whole time.
+**The hazard follows the repo, not where a session stands** (#241) — a recovery that
+*starts* in the main checkout (stash) and only *pops* inside a worktree still shares the
+one ref between two checkouts; it is not exempt just because the command that reaches for
+`refs/stash` isn't the one sitting inside the worktree.
 
 Prefer, in order: `git diff`/`git status` to read without moving; targeted
 `git checkout -- <path>` plus manual re-apply; comparing directly against
@@ -894,6 +898,17 @@ Prefer, in order: `git diff`/`git status` to read without moving; targeted
 (`git stash push -m "<issue> wip"`) and **re-run `git stash list` immediately before
 touching any `stash@{N}` index** — a concurrent push renumbers every existing entry, so
 a captured index may already point at someone else's work.
+
+**Landed edits in the wrong checkout** (main instead of a worktree, or the reverse)?
+That is exactly the cross-checkout shape the hazard above covers — recover with a
+**patch**, never a stash entry. A patch file is private to the session; `refs/stash`
+never is:
+
+```sh
+git -C <wrong-checkout> diff > /tmp/misplaced.patch    # add --cached / -u as needed
+git -C <wrong-checkout> checkout -- .
+git -C <right-checkout> apply /tmp/misplaced.patch
+```
 
 **Commits** — Conventional Commits (`feat:`, `fix:`, `docs:`, `chore:`, `refactor:`,
 `test:`, `perf:`). Not decoration: [§6](#6-releases) builds the release summary by

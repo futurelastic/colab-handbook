@@ -175,14 +175,17 @@ colab worktree rm <name>        # releases all its claims, frees its ports
   most-skipped step we measured (8 of 9 sessions, 2.9 GB). If you cannot
   remove it (uncommitted work, unsure), say so in your report instead of
   silently leaving it.
-- **Never `git stash` inside a worktree.** `refs/stash` is one ref shared by
-  every worktree of the repo, not scoped per worktree — two concurrent
-  sessions stashing around the same time can push/pop over each other with no
-  error, silently swapping uncommitted work between sessions. We measured
-  exactly this on a repo running 10+ concurrent worktree sessions. Use
-  `git diff`/`git status`, a targeted `git checkout -- <path>`, or diff
-  directly against `origin/<trunk>` instead — see `CONVENTIONS.md` [§4](CONVENTIONS.md#4-branches-and-commits) for the
-  full incident and the stale-`stash@{N}`-index gotcha.
+- **Never `git stash` in any checkout of a repo that has more than one** — not just
+  "inside a worktree", the main checkout included. `refs/stash` is one ref shared by
+  the whole repo, not scoped per checkout — two concurrent sessions stashing around
+  the same time can push/pop over each other with no error, silently swapping
+  uncommitted work between checkouts. We measured exactly this on a repo running 10+
+  concurrent worktree sessions. Use `git diff`/`git status`, a targeted
+  `git checkout -- <path>`, or diff directly against `origin/<trunk>` instead. **Wrote
+  into the wrong checkout?** Capture a patch and replay it in the right one — never a
+  stash entry, which is exactly as shared as the worktree-to-worktree case above — see
+  `CONVENTIONS.md` [§4](CONVENTIONS.md#4-branches-and-commits) for the full incident, the stale-`stash@{N}`-index
+  gotcha, and the patch-capture recipe.
 
 ## The Issue is the memory
 
