@@ -510,7 +510,7 @@ as an unticked row later — it just quietly stops existing.
 |---|---|---|---|---|
 | 316 | First-time adoption determines tier by asking whether a deploy target exists today (not "soon") — if yes, whether a tag gates production (A) or the promotion itself deploys (C). | none | unknown | hard rule |
 | 317 | Adoption requires writing `.github/project.yml`. | none | unknown | hard rule |
-| 318 | Adoption creates the whole convention label set — all twelve — not a subset, because each powers a check that silently cannot fire while its label is absent. | none | unknown | hard rule |
+| 318 | Adoption creates the whole convention label set — not a subset — because each powers a check that silently cannot fire while its label is absent. | none | unknown | hard rule |
 | 319 | Provisioning uses `\|\| true` so re-running is safe — partial adoption is the normal case. | none | unknown | hard rule |
 | 320 | Missing `in-progress` means the first claim cannot land, and `colab claim` keeps a local claim while GitHub holds nothing — a collision reached from underneath. | none | unknown | explanation |
 | 321 | Missing `deps-checked` means a readiness check can never tell "free" from "nobody looked" — worse than an absent feature, because a board keeps advising "run triage" and triage is a no-op. | none | unknown | explanation |
@@ -707,7 +707,7 @@ to `CONVENTIONS.md` or `project.schema.md`.**
   `gh label create` invocations above it). Read strictly, "twelve" is defensible only if
   `delivery:*` counts as one item — but the explanatory bullet list directly below
   (`CONVENTIONS.md:1861-1901`) enumerates it as its own bulleted item alongside the other
-  eleven, i.e. 8 singular labels + 1 `delivery:*` family = 9 *bullets*, not 12 and not 14.
+  eight, i.e. 8 singular labels + 1 `delivery:*` family = 9 *bullets*, not 12 and not 14.
   None of the three countings (12 stated, 14 `gh` lines, 9 explanatory bullets) agree with
   each other at face value; the reconciliation is that "twelve" counts distinct label
   *names* (12) while treating `delivery:*`'s four names as four, which the "not a subset"
@@ -715,6 +715,11 @@ to `CONVENTIONS.md` or `project.schema.md`.**
   ambiguous **measured claim** — the number "twelve" is asserted but the document's own
   adjacent enumeration does not resolve unambiguously to it without a side calculation a
   reader has to do themselves.
+  **Resolved as of #243 (2026-08-20):** re-measured against current `main` — `CONVENTIONS.md`
+  now says "fourteen" consistently (`CONVENTIONS.md:1999-2010`), matching both the `gh label
+  create`/`colab labels --ensure` count and `tools/lib/labels.js`'s `CONVENTION_LABELS.length`
+  (14). This entry's "twelve" was accurate for the `4b46c08` snapshot this document measures
+  from and is kept as the historical finding; the live drift it describes no longer exists.
 - **F3 — `colab readiness` vs. `readiness.marked` event payload naming.** `CONVENTIONS.md:834-836`
   says the `colab readiness` write is "the single site the observer event (§ notify, kind
   `readiness.marked`) emits from" — but the section symbol `§ notify` does not resolve to any
