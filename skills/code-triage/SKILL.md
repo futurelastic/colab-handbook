@@ -1,6 +1,6 @@
 ---
 name: code-triage
-description: "Decide what to work on next in ONE repo. Takes every open Issue, discards the ones already shipped and the ones someone else holds, groups what must move together (issues touching the same files must serialize — usually one branch, or a place-claim on any repo not declaring writes: isolated), orders what remains by blast radius, and says which groups can be started RIGHT NOW — including whether the repo's trunk CI is alive enough to merge into. Outputs claim + branch commands that feed straight into code-start. Flags a group judged genuinely hard with a needs-plan label + one-line reason, for code-plan to draft against later — never a plan of its own. Also asks, per ready group, whether the work is batch-mechanical with a usable oracle, and tags the minority that qualifies with a mechanical-lane label + suggested batch size, for a cheap mechanical-work engine to pick up — never routes or dispatches it itself. Cheap to re-run: a no-change ping short-circuits in three calls. Trigger phrases: 'what should I work on', 'triage the issues', 'what can we start', 'plan the next session', 'group the open issues', 'what is ready to pick up', 'sort the backlog'; and — when this session's last act was a triage — the re-ping forms 'again', 'anything new?', 'check again', 'anything to pick up yet?', or a bare 'go'. Runs before code-start; pairs with code-start and code-wrap."
+description: "Decide what to work on next in ONE repo. Takes every open Issue, discards the ones already shipped and the ones someone else holds, groups what must move together (issues touching the same files must serialize — usually one branch, or a place-claim on any repo not declaring writes: isolated), orders what remains by blast radius, and says which groups can be started RIGHT NOW — including whether the repo's trunk CI is alive enough to merge into. Outputs claim + branch commands that feed straight into code-start. Flags a group judged genuinely hard with a needs-plan label + one-line reason, for code-plan to draft against later — never a plan of its own. Also asks, per ready group, whether the work is batch-mechanical with a usable oracle, and tags the minority that qualifies with a mechanical-lane label + suggested batch size, for a cheap mechanical-work engine to pick up — never routes or dispatches it itself. Cheap to re-run only when §0 is honoured first: a five-input fingerprint compare that ends a genuine no-change ping in three calls — a convention the executing agent follows, not a gate anything enforces, so every run opens by naming which §0 outcome it took (unchanged / changed:<inputs> / no usable cache). Trigger phrases: 'what should I work on', 'triage the issues', 'what can we start', 'plan the next session', 'group the open issues', 'what is ready to pick up', 'sort the backlog'; and — when this session's last act was a triage — the re-ping forms 'again', 'anything new?', 'check again', 'anything to pick up yet?', or a bare 'go'. Runs before code-start; pairs with code-start and code-wrap."
 ---
 
 # code-triage — what should we work on next?
@@ -34,6 +34,22 @@ inputs that did not move, and re-derive a byte-identical answer.
 
 So the first thing this skill does is decide whether it needs to run at all.
 
+**Measured, #244: this was not happening.** A six-week census of one adopting fleet found
+code-triage's median run cost **24 tool calls (p90 40) over 1,722 runs** — 8x the
+documented three — and code-sweep's median was **27 (p90 59) over 372 runs**. Neither
+gap was read amplification (0 median duplicate file reads) or the skill body reloading
+mid-run (well under one `Skill` invocation per run). Two causes, both fixed below: inputs 2
+and 5 were broad enough to read "changed" on nearly every ping (a bare comment; any push
+to any branch, including `code-wrap`'s routine backup push), and — found only once this
+was traced against a real checkout — **the persisted record itself had no specified
+shape**, so two model-executed runs stored two different partial things and the "cache is
+never an authority" rule then correctly forced a full pass regardless of what moved. A
+third cause is not fixable from inside this repo at all: nothing outside the executing
+agent's own compliance verifies §0 ran, so a skipped §0 and a §0 that ran and found
+genuine change are indistinguishable in a transcript. §0 below narrows what it can, and
+gives the third cause a receipt instead of pretending to enforce it — see the outcome-line
+and cache-record requirements after the fingerprint.
+
 **The fingerprint — five inputs, three network calls:**
 
 ```sh
@@ -42,8 +58,11 @@ CACHE="$GITDIR/colab-triage.json"
 REPO="$(dirname "$GITDIR")"      # the MAIN checkout — see the note on input 4
 
 git fetch origin --quiet && git rev-parse origin/<trunk>          # 1. trunk sha
-gh issue list --state open --limit 100 --json number,updatedAt,labels \
-  | shasum -a 256 | cut -c1-16                                    # 2. backlog digest
+
+OUT2=$(gh issue list --state open --limit 100 --json number,state,title,body,labels \
+  -q '"N2 \(length)", (.[]|"I \(.number) \(.state) \([.labels[].name]|sort|join(","))\t\(.title)\t\(.body|@base64)")')
+                                                                    # 2. backlog digest — network call now,
+                                                                    #    receipt/digest decided below once input 3's TOTAL is in hand
 NWO=$(gh repo view --json nameWithOwner -q .nameWithOwner)        # 3. dependency digest
 OUT=$(gh api graphql -F owner="${NWO%%/*}" -F name="${NWO##*/}" -f query='
   query($owner:String!,$name:String!){ repository(owner:$owner,name:$name){
@@ -62,17 +81,63 @@ elif [ "$TOTAL" != "$FETCHED" ] || [ "$MORE" != false ]; then
 else printf '%s\n' "$COV" "$(printf '%s\n' "$OUT" | grep -e '^DEP ' -e '^BY ' | sort)" \
        | shasum -a 256 | cut -c1-16
 fi
+
+N2=$(printf '%s\n' "$OUT2" | grep '^N2 ')                         # ← input 2's own receipt
+read -r _ N2COUNT <<< "$N2"
+if   [ -z "$N2" ]; then echo "REFUSING to digest: backlog read returned nothing → full pass"
+elif [ -z "$COV" ] || [ "$N2COUNT" != "$TOTAL" ]; then
+     echo "TRUNCATED: $N2COUNT open issues read, $TOTAL reported by input 3 → full pass"
+else printf '%s\n' "$(printf '%s\n' "$OUT2" | grep '^I ' | sort)" \
+       | shasum -a 256 | cut -c1-16                                # 2. backlog digest
+fi
+
 python3 -c 'import json,os,sys                                    # 4. claim digest (local, 0 calls)
 r=os.path.realpath(sys.argv[1]); s=json.load(open(os.path.expanduser("~/.colab/state.json")))
 print(sorted(k for k,v in s.get("claims",{}).items() if os.path.realpath(v["repo"])==r),
       sorted(n for n,w in s.get("worktrees",{}).items() if os.path.realpath(w["repo"])==r))' "$REPO"
+
+OPEN=$(printf '%s\n' "$OUT2" | grep '^I ' | awk '{print $2}' | sort -u)   # open issue numbers, free — already in hand from input 2
 git for-each-ref 'refs/remotes/origin/**' --format='%(refname) %(objectname)' \
-  | shasum -a 256 | cut -c1-16                                    # 5. remote heads (local, 0 calls)
+  | awk '{n=$1; sub("refs/remotes/origin/","",n); print n, $2}' \
+  | grep -vE '^(HEAD|<trunk>|dependabot/)' > "$GITDIR/.triage-branches.tmp"
+MATCHED=""
+while read -r NAME SHA; do
+  NUM=$(printf '%s' "$NAME" | grep -oE '[0-9]+$') || continue      # trailing number run — same convention §3 writes, §5.1 reads
+  printf '%s\n' "$OPEN" | grep -qx "$NUM" || continue               # only branches carrying an OPEN issue number
+  AHEAD=0
+  [ "$(git rev-list --count "origin/<trunk>..origin/$NAME")" -gt 0 ] && AHEAD=1
+  MATCHED="$MATCHED
+B $NAME $AHEAD"
+done < "$GITDIR/.triage-branches.tmp"
+TOTALREFS=$(wc -l < "$GITDIR/.triage-branches.tmp" | tr -d ' ')
+MATCHEDCOUNT=$(printf '%s\n' "$MATCHED" | grep -c '^B ')
+echo "B5 $TOTALREFS $MATCHEDCOUNT"                                 # ← the read's own receipt — empty match is a legitimate state, not a failed one
+printf '%s\n' "$(printf '%s\n' "$MATCHED" | grep '^B ' | sort)" \
+  | shasum -a 256 | cut -c1-16                                     # 5. session-branch digest (local, 0 calls)
+rm -f "$GITDIR/.triage-branches.tmp"
 ```
 
 All five equal to the stored run ⇒ **report `nothing has changed since <ts>`, re-print the
 stored conclusion (§0.1), and stop.** Three calls instead of fifty. Input 2 is not an extra
 cost on a run that *does* proceed — §1 needs that list anyway.
+
+**Every run — short-circuited or not — opens by printing exactly one of three outcome
+lines, before anything else.** This is the one thing #244 established a docs repo actually
+*can* ship toward "verified to have fired": not an enforced gate (nothing here executes a
+skill), but a spoken, greppable receipt that turns "did §0 run" from an invisible
+compliance question into a line any reader — human, an orchestrator's transcript scan, a
+later census — can check for.
+
+```
+§0 unchanged since <ts> · fingerprint <16hex> · 3 calls — re-printing stored conclusion (scope: <scope>)
+§0 changed: <input names that moved, e.g. trunkSha,branches> — full pass
+§0 no usable cache: <missing | version <v> unrecognised | unparseable | truncated | empty read on input <n>> — full pass
+```
+
+The third line is the load-bearing one — it is what separates *cold cache* from *genuine
+change*, the exact distinction a transcript census cannot make from a bare "full pass". A
+run printing none of the three did not run §0 as specified; §6's report and every write
+below still happen, this is purely an addition at the top.
 
 - **Where the cache lives, and why not `~/.colab/`.** `--git-common-dir` resolves to the
   main checkout's `.git` even from inside a worktree, so every worktree of the repo shares
@@ -92,17 +157,36 @@ cost on a run that *does* proceed — §1 needs that list anyway.
   short-circuit almost never. Reading the file is local and free; read it precisely. (Same
   reason it is a *digest* and not a timestamp: an atomic rewrite with identical contents is
   not a change.)
-- **Compare for equality, never for recency.** "Newest `updatedAt` is no later than last
-  time" is wrong: when the most recently touched issue *closes*, it leaves the open set and
+- **Compare for equality, never for recency.** "Newest touch is no later than last time"
+  is wrong: when the most recently touched issue *closes*, it leaves the open set and
   the maximum moves **backwards** — the busiest issue in the repo changing state reads as
-  "nothing happened". Digest the whole `(number, updatedAt)` set and compare digests.
-- **`updatedAt` does not see dependency edges — measured on the live API.** Adding a
+  "nothing happened". Digest the whole `(number, state, labels, title, body)` set and
+  compare digests, never a single most-recent marker.
+- **Input 2 dropped `updatedAt` entirely — measured, #244.** `updatedAt` moves on a bare
+  comment, and on a fleet where many concurrent sessions comment on issues that alone kept
+  the fingerprint "changed" on nearly every ping — the sufficient explanation, alongside
+  input 5 below, for a measured median of 24 tool calls against a documented 3. Digesting
+  `number,state,title,body,labels` instead moves on exactly what triage's own grouping,
+  blast-radius and readiness gates read (a label add/remove, close/reopen, a title/body
+  edit, entering or leaving the open set) and stays silent on a bare comment. `@base64`-
+  encode the body in the `-q` filter before hashing — a multi-line body would otherwise
+  break the line-oriented `sort` the digest depends on. This still needs its own receipt
+  (`N2`, the count of issues read) for the same reason input 3 needs `COV`: `shasum` of
+  empty input is the constant `e3b0c44298fc1c14` below, and a failed `gh issue list` must
+  never be mistaken for a truncation-free empty backlog. Cross-check `N2` against input 3's
+  `TOTAL` rather than issuing a second count query — `TOTAL` is already the total open-issue
+  count, so this costs no extra call and reuses the same truncation logic input 3 already
+  has. Deliberately still blind to: assignee, milestone, lock state, comment volume — none
+  of them feed a gate this skill evaluates (§5.1 reads "taken" from the `in-progress` label
+  and live claims, input 4, not from assignee).
+- **`updatedAt` does not see dependency edges either — measured on the live API.** Adding a
   `blocked_by` edge and removing it again left `updatedAt` byte-identical across both
   writes, while a label add/remove moved it twice in the same minute. Edges do land in the
   issue timeline (`blocked_by_added` / `blocked_by_removed`), but reading that is a call
-  *per issue*; input 3 is the entire graph in one query. Drop it and the fingerprint goes
-  blind to precisely the data the §5 readiness gate turns on — a new blocker would be
-  reported as `free (checked)` forever.
+  *per issue*; input 3 is the entire graph in one query. This is why input 3 stays a
+  separate input even after input 2's narrowing above — none of `state,title,body,labels`
+  sees an edge either, so dropping input 3 would go blind to precisely the data the §5
+  readiness gate turns on: a new blocker would be reported as `free (checked)` forever.
 - **Input 3 digests BOTH directions, because an inbound edge is not visible on this side's
   `blockedBy`.** An edge written from another repository *toward* an issue here moves that
   issue's `blocking` count and never touches its `blockedBy`. Measured: an open issue whose
@@ -141,11 +225,12 @@ cost on a run that *does* proceed — §1 needs that list anyway.
   `gh`'s built-in `-q` (and the audit's `--jq`) for exactly this reason, but an external
   `jq` is not universally installed — piping this query into one on a machine without it
   returned that constant, silently.
-- **No silent caps — say what was dropped.** `first:100` here, `--limit 100` in input 2 and
-  in §1, all bounded and none previously checked; past 100 open issues the digest covers a
-  partial set, so movement in the tail reads as "unchanged" and the short-circuit then hides
-  it. `totalCount` and `pageInfo { hasNextPage }` are free in the same request, which makes
-  truncation loud and gives all three bounded reads one authoritative count to check against.
+- **No silent caps — say what was dropped.** `first:100` in input 3, `--limit 100` in
+  input 2 and in §1, all bounded; past 100 open issues the digest covers a partial set, so
+  movement in the tail reads as "unchanged" and the short-circuit then hides it.
+  `totalCount` and `pageInfo { hasNextPage }` are free in the same input-3 request, which
+  makes truncation loud and gives all three bounded reads one authoritative count (`TOTAL`)
+  to check against — input 2's own truncation check above is exactly this reuse.
   **Both guards fall toward work, never toward silence:** each prints instead of a digest, and
   no digest means no match, which means a **full pass** — not a stop. A truncated backlog
   therefore stops short-circuiting until someone paginates, and that is the intended price:
@@ -180,9 +265,32 @@ cost on a run that *does* proceed — §1 needs that list anyway.
   inputs 1-4: trunk is untouched, the issues are untouched, the edge is untouched, and the
   claim may live on another machine. Without this the new verdict would almost never be
   discovered under a ping loop, which is the same blindness input 3 was added to fix. It
-  reads refs the fetch on input 1 already updated, so it costs no call. The price is honest:
-  any push to any branch forces a full pass. That is the right trade — a push is also
-  exactly what can hand a live worktree the files a group needs (§5, last gate).
+  reads refs the fetch on input 1 already updated, so it costs no call.
+- **Input 5 now digests branch presence + ahead-ness, not tip shas — measured, #244.** The
+  old digest (every remote ref's tip sha) moved on any push to any branch, and this repo's
+  own text already conceded it: "any push to any branch forces a full pass" — a safe
+  default when written; on a fleet where `code-wrap` routinely pushes a session branch as
+  backup every time it wraps, it is the other sufficient explanation for the measured 24/27
+  call median. §5.1 only ever asks two things of a branch — *does one exist carrying this
+  issue's number*, and *does it have real commits* — and returns the same verdict for the
+  1st push and the 12th. So digest that: filter remote refs to ones whose **trailing number
+  run** matches an *open* issue number (the same convention §3 writes and §5.1 reads;
+  `<trunk>`, `HEAD` and `dependabot/*` excluded), and pair each with a 0/1 ahead-of-trunk
+  flag rather than its sha. A repeat push to an already-matched, already-ahead branch no
+  longer re-arms the fingerprint. The `B5 <total refs> <matched>` line is this input's
+  receipt, load-bearing for a different reason than the others: after narrowing, an *empty*
+  match set is a normal, common state, and hashing empty input is the same
+  `e3b0c44298fc1c14` constant below — the count line is what tells a zero-match digest apart
+  from a failed read. Deliberately still blind to a later push on an already-matched branch
+  that changes *which files* it touches (§5's file-contention gate); that gate was never
+  cached in the first place (see "what is deliberately NOT in the fingerprint" below) and is
+  re-derived on any pass that proceeds, narrowed or not.
+- **`code-sweep` does NOT inherit this narrowing — read why in its own §0.** Its cache of
+  `colab landed --all` is keyed on branch **tips**, so a new commit on an already-`landed`
+  branch is precisely the event that un-lands it and creates a new sweep candidate; a
+  name-set-only digest there would go blind to its own input. It takes only the branch
+  *filter* (issue-carrying, trunk/HEAD/dependabot excluded) and the `B5` receipt shape, and
+  states plainly that it keeps tip shas.
 - **What is deliberately NOT in the fingerprint.** Trunk CI, live worktrees and live
   processes are volatile by nature and are never cached. So a matching fingerprint means
   *the backlog has not moved*; it never means *you may merge*. Nothing downstream may skip
@@ -209,6 +317,49 @@ single-issue mode below is the same shape), and apply the coverage rule:
 > serve a re-ping about one issue — filter it. A stored single-issue conclusion cannot
 > serve a repo-wide ping, however unchanged the world is: that run never looked at the
 > rest, and an unexamined issue is not a clean one.
+
+**The record has a required shape — measured, #244.** §0 above specified the comparison in
+exhaustive detail and never specified what to store, so two model-executed sessions in this
+very checkout wrote two different partial things: one held only `fingerprint: {trunkSha}` —
+one of five inputs, leaving four with nothing to compare against on the next ping — and the
+other was a 61 KB, ever-growing map of ad-hoc `scope:*` keys with no `fingerprint`, no
+`ranAt`, no `version` at all. §0's own "cache is never an authority" rule then correctly
+forced a full pass every time — a third, independent explanation for the measured 24/27
+call median, on top of inputs 2 and 5's narrowing above. So `$CACHE` is now a **required**
+shape, versioned so an old partial record is discarded loudly rather than silently
+half-matching:
+
+```json
+{
+  "version": "code-triage/2",
+  "scope": "whole-repo",
+  "ranAt": "<ISO8601>",
+  "fingerprint": {
+    "trunkSha": "<40hex>",
+    "backlog":  "<16hex>",
+    "deps":     "<16hex>",
+    "claims":   "<16hex>",
+    "branches": "<16hex>"
+  },
+  "lastRun": { "decision": "full", "moved": ["trunkSha", "backlog"], "calls": 24 },
+  "conclusion": { "ready": [ "…" ], "blocked": [ "…" ], "taken": [ "…" ], "close": [ "…" ] }
+}
+```
+
+- **All five `fingerprint` keys are required.** A record missing any of them is `no usable
+  cache` (the third outcome line above), said out loud — never treated as a partial match
+  on the keys that happen to be present. An unrecognised `version` is the same: bump the
+  version whenever the shape changes, and read a version you do not recognise exactly like
+  a missing file.
+- **`lastRun` is the receipt this section exists to add.** It is Q3's "small amount of
+  persisted state" — `decision` (`short-circuit` | `full`), `moved` (which fingerprint keys
+  differed, empty on a short-circuit), `calls` (how many network calls this run actually
+  made). This is what lets a later census answer "did §0 fire" by reading one JSON file per
+  repo, with no transcript corpus required.
+- **Never store the empty-digest constant, `e3b0c44298fc1c14`, as if it were a value.** Any
+  fingerprint slot equal to it means the read that produced it did not arrive — refuse to
+  write the record, exactly as §0's outcome-line 3 says, rather than persisting a digest
+  that will match forever for the wrong reason.
 
 ### 0.2 Running this twice must change nothing
 
@@ -922,10 +1073,16 @@ Hand the top group to **code-start**, which will re-verify the claim before taki
   "still ready, unchanged" note — the report went to the console and nowhere else. A
   group's file-contention line, if reported at all, named an actual path overlap with this
   group's own deliverables, not the repo-wide worktree list.
+- **One of the three required §0 outcome lines was printed, first, before anything else** —
+  `unchanged` / `changed:<inputs>` / `no usable cache`. A run printing none of them did not
+  run §0 as specified, whatever else it got right.
 - A run that short-circuited said so, named the timestamp it compared against, and
   re-printed a stored conclusion whose scope covers what was asked.
-- A run that proceeded wrote its fingerprint **and** its conclusion to `$CACHE`, so the
-  next ping can be the cheap one.
+- A run that proceeded wrote the **required** `$CACHE` shape — `version`, `scope`, `ranAt`,
+  all five `fingerprint` keys, `lastRun`, and `conclusion` — not a partial record. A record
+  missing any fingerprint key, or none of the five, is the failure #244 measured directly in
+  this checkout: a cache nobody can compare against next time, that forces every future run
+  to take the full pass regardless of what actually changed.
 - Re-running changed nothing that was already true: no duplicate `blocked_by` edge, no
   re-closed issue, no second copy of a group's evidence comment.
 - Every multi-issue group survives this run: `group:<key>` on **every** member, one

@@ -1,6 +1,6 @@
 ---
 name: code-sweep
-description: "Clear out everything finished in ONE repo: find every worktree whose work has landed, every issue whose code shipped but is still open, and every claim outliving its session — then put each through code-wrap and code-ship in sequence, one at a time. Run it at end of day, or ping it whenever a session goes idle — a no-change ping short-circuits in three calls. Sorts candidates into wrap / teardown-only / claim-only / place-claim / unrecorded / blocked / unlinked, because most do not need a full wrap+ship. Can be scoped to a set of issues or one session/worktree instead of the whole repo. Trigger phrases: 'sweep the repo', 'wrap everything finished', 'clean up the worktrees', 'close out the session work', 'tidy up finished work', 'wrap all the done branches', 'sweep the issues #95 #96', 'sweep the session <name>', 'ship these'; and — when this session's last act was a sweep — the re-ping forms 'again', 'anything new?', 'check again', 'anything to wrap yet?', or a bare 'go'. Composes code-wrap then code-ship per candidate; never batches merges."
+description: "Clear out everything finished in ONE repo: find every worktree whose work has landed, every issue whose code shipped but is still open, and every claim outliving its session — then put each through code-wrap and code-ship in sequence, one at a time. Run it at end of day, or ping it whenever a session goes idle — cheap to re-run only when §0 is honoured first, a convention the executing agent follows and not a gate anything enforces (its fingerprint stays sensitive to branch tips, so the cheap path is rarer here than in code-triage — see §0). Sorts candidates into wrap / teardown-only / claim-only / place-claim / unrecorded / blocked / unlinked, because most do not need a full wrap+ship. Can be scoped to a set of issues or one session/worktree instead of the whole repo. Trigger phrases: 'sweep the repo', 'wrap everything finished', 'clean up the worktrees', 'close out the session work', 'tidy up finished work', 'wrap all the done branches', 'sweep the issues #95 #96', 'sweep the session <name>', 'ship these'; and — when this session's last act was a sweep — the re-ping forms 'again', 'anything new?', 'check again', 'anything to wrap yet?', or a bare 'go'. Composes code-wrap then code-ship per candidate; never batches merges."
 ---
 
 # code-sweep — clear out everything finished, one at a time
@@ -38,6 +38,24 @@ there; only the differences are repeated here. A full sweep is a fixed floor of 
 calls plus a CI re-check and a full `code-wrap` + `code-ship` per candidate, so a ping
 with nothing new is worth refusing to start.
 
+**Measured, #244: median 27 calls (p90 59) over 372 runs in one adopting fleet's census —
+9x the documented 3.** Two of the three causes are inherited from code-triage §0's own
+narrowing (read there): input 2's drop of `updatedAt` propagates here for free.
+**Input 5 does NOT propagate — deliberately.** `colab landed --all`'s inputs are the trunk
+sha and the branch **tips**; a new commit on an already-`landed` branch is exactly the
+event that un-lands it and creates a fresh sweep candidate, so a name-set-only digest here
+would go blind to its own input. This skill keeps tip shas and pays the wider re-arm as the
+honest cost of that dependency — it only inherits the branch **filter** (issue-carrying,
+`<trunk>`/`HEAD`/`dependabot/*` excluded) and the `B5`-shaped receipt.
+
+The third cause was found only by reading this checkout's own cache file directly: at 61 KB
+it held **no `fingerprint`, no `ranAt`, no `version` key at all** — a flat, ever-growing map
+of 24 ad-hoc `scope:*` keys accumulated since 2026-08-08, with key sets that drifted between
+entries (`fingerprint_check` present in one, absent in the next). A shape §0 never specified
+cannot be compared against, so this skill's short-circuit was structurally unable to fire in
+this repo regardless of whether inputs 2/5 narrowed. §0.1 below fixes that with a required,
+single, versioned record.
+
 ```sh
 CACHE="$(git rev-parse --path-format=absolute --git-common-dir)/colab-sweep.json"
 ```
@@ -53,6 +71,13 @@ since <ts>`, name the candidates that were left standing last time and why, and 
   it. Do **not** cache `colab worktrees`, `colab claims` or `gh run list` — live state.
 - **A matching fingerprint never authorises a merge.** §4's per-candidate CI re-check
   happens regardless: trunk CI can die mid-sweep, and the fingerprint does not watch it.
+
+**Every run — short-circuited or not — opens with the same three required outcome lines
+code-triage §0 defines**, printed before anything else: `unchanged` / `changed:<inputs>` /
+`no usable cache`. The third is what separates a cold or malformed cache from a genuine
+full-sweep-worthy change, exactly as it does for triage — see code-triage §0 for the three
+literal line shapes; this skill emits the same three, substituting its own inputs (trunk
+sha, branch tips, and whichever of code-triage's narrowed inputs it reuses) for the names.
 
 ### 0.1 Resume an interrupted sweep
 
@@ -78,6 +103,37 @@ each merged at), the candidate it **stopped on**, and the **stop reason**. On th
    keeps a truncated or stale cache from being read as "already shipped" — the single most
    expensive wrong belief in this family (`code-triage`'s opening principle measured it at
    4 of 9 sessions in one day).
+
+**`$CACHE` is one required, versioned record — never a growing map, measured, #244.** The
+61 KB / 24-key accumulation found in this checkout (above) had no lifecycle rule: each scope
+got a new top-level key and nothing ever removed one. Fixed shape instead, mirroring
+code-triage's own `/2` record plus the bounded `interrupted` block this section needs:
+
+```json
+{
+  "version": "code-sweep/2",
+  "scope": "whole-repo",
+  "ranAt": "<ISO8601>",
+  "fingerprint": {
+    "trunkSha": "<40hex>",
+    "branchTips": "<16hex>",
+    "backlog": "<16hex>"
+  },
+  "lastRun": { "decision": "full", "moved": ["branchTips"], "calls": 27 },
+  "interrupted": { "completed": ["…"], "stoppedOn": "…", "stopReason": "…" },
+  "conclusion": { "wrapped": ["…"], "blocked": ["…"], "…": "…" }
+}
+```
+
+- **One record per repo, overwritten each run — not appended.** A new scope replaces the
+  `scope`/`fingerprint`/`conclusion` fields in place; it never adds a sibling key.
+- **`interrupted` is present only while a sweep is genuinely stopped mid-way**, and is
+  cleared (removed, not left empty) the run after it resolves — an `interrupted` block that
+  outlives its sweep is exactly the kind of stale state 0.1's own resume logic exists to
+  avoid re-trusting blindly (rule 3, just above).
+- **An unrecognised `version`, or any missing key, is `no usable cache`** — the third
+  required outcome line, same as code-triage's rule for its own record. Never a partial
+  match on the keys that happen to be present.
 
 ## 1. Enumerate — scoped to THIS repo
 
@@ -518,8 +574,14 @@ still blocked: trunk CI dead (billing), since 2026-07-21T11:40Z
 - A scoped run reported `N of M`, restricted §5 to the selection, and did not run
   `doctor --prune`.
 - A selector that matched nothing said so — not "swept 0".
+- **One of the three required §0 outcome lines was printed, first, before anything else** —
+  `unchanged` / `changed:<inputs>` / `no usable cache`.
 - A run that short-circuited named the timestamp it compared against; a run that stopped
   recorded enough for the next ping to resume rather than restart.
+- `$CACHE` holds the **required** `code-sweep/2` shape — one record, not an accumulating
+  map of `scope:*` keys — with `version`, `scope`, `ranAt`, all `fingerprint` keys, and
+  `lastRun`. An `interrupted` block is present only while genuinely unresolved, and is
+  removed (not left empty) once the sweep it describes finishes.
 - Every merge was preceded by its own CI check, not one check for the whole sweep.
 - Every issue closed carries evidence; every claim released, including on issues you
   did not finish.
