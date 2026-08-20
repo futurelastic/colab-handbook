@@ -80,8 +80,9 @@ branch on it.
 - **Claims are many-to-one with worktrees.** Multiple issues can be worked on one branch/worktree.
   Releasing one issue leaves the rest (and the worktree) alive. Removing the worktree releases the
   whole group.
-- **Claiming and ports work without a worktree.** `colab claim 42` (a trunk claim) and
-  `colab port alloc` are standalone.
+- **Claiming and ports work without a worktree.** `colab claim 42 --session <id>` (a trunk
+  claim — `--session` mandatory here since #242, see *Place-claims*) and `colab port alloc`
+  are standalone.
 - **"No branch" is `null`, and never the word `trunk`.** A claim held on the trunk checkout has no
   branch, and `trunk` is a *role* — the branch this repo merges into, `main` or `dev`. Recording the
   role word as though it were a name is refused on write (`colab claim --branch trunk` exits 1, and
@@ -618,8 +619,13 @@ it concurrently, so a read-modify-write there can lose another session's update:
 
 ```sh
 colab release <N>
-colab claim <N> --branch <real-branch> [--worktree <name>]
+colab claim <N> --branch <real-branch> [--worktree <name>] --session <id>
 ```
+
+`--session` is mandatory when `[--worktree <name>]` is omitted (#242, *Place-claims*) — a claim
+with no worktree takes the trunk-checkout place-claim, and a blank session can never be
+recognized as its own later re-acquire. Shown above unconditionally since it's accepted (though
+not required) either way.
 
 ## Reserved ports — the design change
 

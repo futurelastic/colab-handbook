@@ -3667,7 +3667,7 @@ function cmdDoctor(argv) {
       print('  matches no claims — so a merge lands with no `Closes #N` and the issue stays open.');
       print('  --prune repairs only what a directory on disk proves; a branch nothing can see is');
       print('  never guessed. Repair the rest through the CLI, never by editing state.json:');
-      print('    colab release <N>  &&  colab claim <N> --branch <real-branch> [--worktree <name>]');
+      print('    colab release <N>  &&  colab claim <N> --branch <real-branch> [--worktree <name>] --session <id>');
       print('    colab worktree rm <name>        # if the worktree is genuinely finished');
     }
   }
@@ -5883,7 +5883,8 @@ A ZERO-CLAIM RESOLUTION (#153) splits on what the BRANCH NAME says. No trailing 
 → a legitimate zero (chore, docs, evidence-close): warn, continue. A trailing group present but the
 LOCAL claim registry has nothing for it → refuse: claims are written to both local state and GitHub,
 but this resolution reads only the local registry, so the likely cause is the claim living on
-ANOTHER MACHINE — ship from there, or \`colab claim <N> --branch <br>\` to take it over here.
+ANOTHER MACHINE — ship from there, or \`colab claim <N> --branch <br> --session <id>\` to take it
+over here (--session mandatory here, #242: no --worktree means the trunk-checkout place-claim).
 
 MIGRATION GRANTS (#98) are the ONE narrow, human-created exception to the no-new-migrations
 precondition — for an issue whose entire deliverable IS a schema change, which the gate would
@@ -6869,9 +6870,12 @@ function cmdShip(argv) {
   // --worktree used to be invisible to ship even after following this exact remedy (#76): `ship`
   // resolves issues through name+branch now (the union above), but the shorter --branch-only form is
   // still the one that used to silently do nothing, so don't keep telling people to run it.
+  // #242: the no-worktree branch mints the trunk-checkout place-claim and now REQUIRES a
+  // session id up front — append the same placeholder to both forms rather than only the one
+  // that strictly needs it, so a caller copying either line gets a runnable command either way.
   const claimRemedy = sess.name
-    ? `colab claim <N> --worktree ${sess.name} --branch ${sess.branch}`
-    : `colab claim <N> --branch ${sess.branch}`;
+    ? `colab claim <N> --worktree ${sess.name} --branch ${sess.branch} --session <id>`
+    : `colab claim <N> --branch ${sess.branch} --session <id>`;
   const zeroVerdict = shipguard.zeroClaimVerdict(sess.issues.length, sess.branch, brokenClaims.length);
   if (zeroVerdict.relevant) {
     warn('this branch resolves to ZERO claimed issues — the squash will carry NO `Closes #N`,');
