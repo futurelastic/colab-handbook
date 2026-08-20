@@ -56,7 +56,7 @@ test('the readiness label absent is reported — the exact gap that silently un-
   );
 });
 
-test('a repo with the claim label only is missing the other eleven', () => {
+test('a repo with the claim label only is missing everything else', () => {
   assert.deepStrictEqual(
     missingConventionLabels(['in-progress']),
     ['deps-checked', 'agent-filed', 'epic', 'needs-decision', 'decision-recorded', 'needs-plan', 'migration-granted', 'needs-migration-grant', 'ci-granted', 'delivery:code', 'delivery:content', 'delivery:ops', 'delivery:docs-only'],
@@ -224,7 +224,7 @@ test('groupLabelNames tolerates empty / null / undefined the same way missingCon
 // unattended adoption/sync/audit provisions (opt-in, like `tracking`), and that its write helper
 // never shares a name or a code path with `readinessLabelArgs`.
 
-test('graph-empty is not one of the eleven provisioned convention labels', () => {
+test('graph-empty is not one of the provisioned convention labels', () => {
   assert.equal(MECHANICAL_READINESS_LABEL, 'graph-empty');
   assert.ok(!conventionLabelNames().includes(MECHANICAL_READINESS_LABEL),
     'a mechanical-only check must stay opt-in — forcing it defeats the point of a cheaper lane');
@@ -246,12 +246,12 @@ test('mechanicalReadinessLabelArgs maps set⇒add and clear⇒remove against its
 });
 
 // --- migration-grant marker (#98) ---------------------------------------------------------
-// `migration-granted` IS one of the eleven provisioned convention labels (unlike `tracking` /
+// `migration-granted` IS one of the provisioned convention labels (unlike `tracking` /
 // `graph-empty` above) — see the doc comment in labels.js for why its absence fails malignantly
 // rather than benignly. These tests pin that it is provisioned, and that its write helper never
 // shares a name or a code path with the other markers'.
 
-test('migration-granted IS one of the eleven provisioned convention labels', () => {
+test('migration-granted IS one of the provisioned convention labels', () => {
   assert.equal(MIGRATION_GRANT_LABEL, 'migration-granted');
   assert.ok(conventionLabelNames().includes(MIGRATION_GRANT_LABEL),
     'unlike tracking/graph-empty, an unexempted repo silently cannot ever grant — provision it');
@@ -284,13 +284,13 @@ test('migrationGrantMissingLabelHint returns null when the label set could not b
 });
 
 // --- ci-grant marker (#105) ----------------------------------------------------------------
-// `ci-granted` IS one of the twelve provisioned convention labels, for the identical
+// `ci-granted` IS one of the provisioned convention labels, for the identical
 // malignant-absence reason `migration-granted` is (see the doc comment in labels.js). These
 // tests pin that it is provisioned, and that its write helper never shares a name or a code
 // path with migration-granted's — the two grants must never be interchangeable, since they
 // authorize different (and differently dangerous) exemptions.
 
-test('ci-granted IS one of the twelve provisioned convention labels', () => {
+test('ci-granted IS one of the provisioned convention labels', () => {
   assert.equal(CI_GRANT_LABEL, 'ci-granted');
   assert.ok(conventionLabelNames().includes(CI_GRANT_LABEL),
     'unlike tracking/graph-empty, an unexempted repo silently cannot ever grant — provision it');
@@ -331,7 +331,7 @@ test('ciGrantMissingLabelHint returns null when the label set could not be READ'
 // gate's absence. Both are provisioned, unlike tracking/graph-empty, for the same
 // malignant-absence reason migration-granted/ci-granted are.
 
-test('needs-decision and decision-recorded ARE two of the thirteen provisioned convention labels', () => {
+test('needs-decision and decision-recorded ARE two of the provisioned convention labels', () => {
   assert.equal(NEEDS_DECISION_LABEL, 'needs-decision');
   assert.equal(DECISION_RECORDED_LABEL, 'decision-recorded');
   assert.ok(conventionLabelNames().includes(NEEDS_DECISION_LABEL));
