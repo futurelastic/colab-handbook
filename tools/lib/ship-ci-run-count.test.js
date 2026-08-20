@@ -75,7 +75,11 @@ function fixture(projectYml, runs) {
 function colab(fx, args, extraEnv = {}) {
   const r = spawnSync('node', [COLAB, ...args], {
     encoding: 'utf8',
-    env: { ...process.env, PATH: `${fx.bin}:${process.env.PATH}`, COLAB_HOME: fx.home, COLAB_SESSION: '', COLAB_SESSION_NAME: '', ...extraEnv },
+    // #242: a non-blank, fixed COLAB_SESSION — this file's `claim` calls use `--branch` with no
+    // `--worktree`, which mints the trunk-checkout place-claim and now REQUIRES a session id up
+    // front (blank never counts as "the same holder" on a later re-acquire). Same fix as
+    // ship-plan-journal.test.js's precedent comment for the identical #237 root cause.
+    env: { ...process.env, PATH: `${fx.bin}:${process.env.PATH}`, COLAB_HOME: fx.home, COLAB_SESSION: 'sess-ci-run-count-test', COLAB_SESSION_NAME: '', ...extraEnv },
   });
   return { code: r.status, out: r.stdout || '', err: r.stderr || '' };
 }

@@ -344,3 +344,70 @@ test('cmdSolo --done succeeds with NO COLAB_HUMAN=1 set, even though opening req
   assert.deepStrictEqual(st.solo, {}, 'the lock must be released');
   assert.deepStrictEqual(st.places, {}, 'the place-claim it took must be released too');
 });
+
+// --- #242: a shared-checkout hold (claim with no worktree, solo) requires a non-blank
+// session, mandatorily — a blank one can never be told apart from itself on re-acquire. -------
+
+test('claim with no worktree and no session refuses before reading state, naming --session and COLAB_SESSION (#242)', () => {
+  const fx = fixture();
+  const r = colab(fx, ['claim', '5', '--repo', fx.work]); // no --session, COLAB_SESSION neutralised by colab()
+  assert.notStrictEqual(r.code, 0);
+  assert.match(r.err, /--session/);
+  assert.match(r.err, /COLAB_SESSION/);
+
+  // Refused before ANY state was touched — state.json is never even created by this attempt.
+  const statePath = path.join(fx.home, 'state.json');
+  assert.strictEqual(fs.existsSync(statePath), false, 'no state write of any kind by the refused attempt');
+});
+
+test('#242 reproduction: claim --branch then a second command carrying the same session is not refused by its own hold', () => {
+  const fx = fixture();
+  const claimed = colab(fx, ['claim', '5', '--repo', fx.work, '--branch', 'fix/thing-5', '--session', 's1']);
+  assert.strictEqual(claimed.code, 0, claimed.err);
+
+  const check = colab(fx, ['place', 'check', fx.work, '--repo', fx.work, '--session', 's1']);
+  assert.strictEqual(check.code, 0, check.err);
+  assert.match(check.out, /free \(or held by you\)/);
+});
+
+test('solo with no session refuses with the identity message', () => {
+  const fx = fixture();
+  const r = colab(fx, ['solo', '--repo', fx.work], { COLAB_HUMAN: '1' }); // no --session
+  assert.notStrictEqual(r.code, 0);
+  assert.match(r.err, /--session/);
+
+  // Refused before the mutate — no solo lock, no state.json write at all from this attempt.
+  const statePath = path.join(fx.home, 'state.json');
+  assert.strictEqual(fs.existsSync(statePath), false, 'solo flow must not have opened, nothing written');
+});
+
+test('COLAB_SESSION env alone satisfies the requirement — no --session flag needed', () => {
+  const fx = fixture();
+  const r = colab(fx, ['claim', '5', '--repo', fx.work, '--branch', 'fix/thing-5'], { COLAB_SESSION: 'env-session' });
+  assert.strictEqual(r.code, 0, r.err);
+
+  const st = JSON.parse(fs.readFileSync(path.join(fx.home, 'state.json'), 'utf8'));
+  const rec = Object.values(st.places)[0];
+  assert.strictEqual(rec.session, 'env-session');
+});
+
+test('claim --worktree with no session is UNCHANGED by #242 — warns, does not refuse (no shared-checkout hold is minted)', () => {
+  const fx = fixture();
+  const r = colab(fx, ['claim', '5', '--repo', fx.work, '--worktree', 'thing-5']); // no --session
+  assert.strictEqual(r.code, 0, r.err);
+  assert.match(r.err, /no --session or --session-name given/);
+
+  const st = JSON.parse(fs.readFileSync(path.join(fx.home, 'state.json'), 'utf8'));
+  assert.deepStrictEqual(st.places, {}, 'a --worktree claim never takes the shared-checkout place-claim');
+});
+
+test('place release: a blank-session holder\'s refusal explains the identity gap', () => {
+  const fx = fixture();
+  const acq = colab(fx, ['place', 'acquire', fx.work, '--repo', fx.work]); // no session, no name
+  assert.strictEqual(acq.code, 0, acq.err);
+
+  const rel = colab(fx, ['place', 'release', fx.work, '--repo', fx.work]); // still no session
+  assert.notStrictEqual(rel.code, 0);
+  assert.match(rel.err, /carries a session id/);
+  assert.match(rel.err, /COLAB_HUMAN=1/);
+});

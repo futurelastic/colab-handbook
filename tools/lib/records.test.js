@@ -106,7 +106,11 @@ function fixture(projectYml = PROJECT_YML) {
 function colab(fx, args) {
   const r = spawnSync('node', [COLAB, ...args], {
     encoding: 'utf8',
-    env: { ...process.env, COLAB_HOME: fx.home, COLAB_SESSION: '', COLAB_SESSION_NAME: '' },
+    // #242: a non-blank, fixed COLAB_SESSION — some fixtures here `claim` with no `--worktree`,
+    // which mints the trunk-checkout place-claim and, since #242, REQUIRES a session id up front
+    // (blank never counts as "the same holder" on a later re-acquire). Same fix as
+    // ship-plan-journal.test.js's precedent comment for the identical #237 root cause.
+    env: { ...process.env, COLAB_HOME: fx.home, COLAB_SESSION: 'sess-records-test', COLAB_SESSION_NAME: '' },
   });
   return { code: r.status, out: r.stdout || '', err: r.stderr || '' };
 }

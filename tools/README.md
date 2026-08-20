@@ -221,7 +221,10 @@ Every claim and worktree can record a **two-part Claude session identity**:
 | `session` (URL) | `--session <url>` **>** `COLAB_SESSION` env **>** absent | `https://claude.ai/code/session_…` |
 | `sessionName` (label) | `--session-name <s>` **>** `COLAB_SESSION_NAME` env **>** absent | `colab-handbook`, `pilot-issue-30` |
 
-Either, both, or neither may be set — never an error.
+Either, both, or neither may be set — never an error, **except at the two call sites that mint a
+SHARED-checkout place-claim** (`colab claim` with no `--worktree`, and `colab solo`): there,
+`session` is now mandatory (#242) — see *Place-claims* in CONVENTIONS.md for why a blank one can
+never be recognized as its own later re-acquire.
 
 - Both fields are stored on worktree **and** claim entries; a claim made via `worktree new --issues`
   **inherits both** from the worktree. Standalone `colab claim` reads the same flags/envs.

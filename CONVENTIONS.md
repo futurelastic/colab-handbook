@@ -640,14 +640,28 @@ and **verified by the writer itself**, not merely by whatever spawned it.
   the refusal names both remedies: wait for the liveness window to clear, or override on
   the confirmed knowledge that the session is gone.
 - **The refusal always names a resolvable holder — never a bare "unknown" (#235).** Acquiring
-  without `--session`/`--session-name` still succeeds (the same never-fail stance as claim and
-  worktree creation) but warns, because it costs the record its only remedy if the hold turns out
-  live: with neither field, a later refusal's holder name falls back to the pid every acquire site
-  already records (`process.ppid`, not `colab`'s own short-lived pid), formatted as `pid <n> on
-  <host>` — enough for a human to `ps -p <pid>` and find a lead, where "unknown" left none. It is
-  weaker than a real name or URL and does not make the acquiring session recognizable as its own
-  holder on a later re-acquire (`conflict`'s self-exemption matches on `session`) — supply an
+  through `colab place acquire`, or the hold a fresh worktree carries, still succeeds without
+  `--session`/`--session-name` (a never-fail stance) but warns, because it costs the record its
+  only remedy if the hold turns out live: with neither field, a later refusal's holder name falls
+  back to the pid every acquire site already records (`process.ppid`, not `colab`'s own
+  short-lived pid), formatted as `pid <n> on <host>` — enough for a human to `ps -p <pid>` and find
+  a lead, where "unknown" left none. It is weaker than a real name or URL and does not make the
+  acquiring session recognizable as its own holder on a later re-acquire (`conflict`'s
+  self-exemption matches on `session`, never on `sessionName` or `pid` — see below) — supply an
   identity when one is available, this is a floor, not a substitute.
+- **Narrowed by #242: acquiring a SHARED-checkout hold is no longer warn-only.** A `colab claim`
+  with no `--worktree` (the trunk-checkout shape) and `colab solo` both mint a hold meant to be
+  re-acquired/renewed by the SAME caller across later commands — and `conflict`'s same-holder
+  exemption only ever recognizes that via a truthy, matching `session`; two blank ones are never
+  the same holder. So both now REFUSE outright, before any state is touched, when no `--session`
+  (or `COLAB_SESSION`) is given — the #235 warn-only floor above still applies to `colab place
+  acquire` and to a worktree's own hold, neither of which is re-acquired the same way.
+  **A `pid` is process lineage, not a session, and is never used to decide the re-acquire
+  exemption** — only surfaced as a hint in a refusal's message when it happens to match. Two
+  invocations sharing a parent shell share one `pid` without being one writer, and this
+  primitive's whole value is refusing when it cannot prove safety; a measured falsifier run found
+  agent tool calls do not even share a stable `pid` across separate commands, so the mandatory
+  identity at the two minting call sites is the fix, not a weaker match inside `conflict` itself.
 
 **A related lock already exists outside this convention, and this section describes it
 rather than forking it.** A session dashboard refuses to spawn a second `ship`/`sweep`

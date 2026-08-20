@@ -167,11 +167,18 @@ function resolveSessionName(opts) {
  * human, only `place.holderLabel`'s pid+host fallback. That fallback is real but weaker than
  * either field a caller could have supplied, and it breaks self re-acquire too (`conflict`'s
  * exemption matches on `session`, so an identity-less acquire is never recognized as its own
- * later renew) — worth flagging even though the write still proceeds.
+ * later renew) — worth flagging even though the write still proceeds, on the paths below.
  *
- * So: WARN at the CREATION paths (claim, worktree new, solo, place acquire, ship, promote) — the
- * one moment an identity is cheap to supply — and never fail, because some agents genuinely have
- * no session URL and some invocations (a bare human `colab place acquire`) may have neither.
+ * So: WARN (never fail) at `colab place acquire` and `colab worktree new` — a worktree's hold is
+ * on an isolated path nothing re-acquires, and `place acquire` is the explicit low-level verb
+ * where a caller deliberately wants an inspectable record; some agents genuinely have no session
+ * URL and some invocations (a bare human `colab place acquire`) may have neither.
+ *
+ * NARROWED BY #242: the two call sites that mint a SHARED-checkout hold — `cmdClaim`'s
+ * trunk-checkout path (no `--worktree`) and `cmdSolo` — no longer merely warn. A blank session
+ * on either of those is exactly the case `place.conflict`'s same-holder exemption can never
+ * recognize (blank does not match blank), so a caller that acquires there and later re-acquires
+ * collides with itself. `requirePlaceIdentity`, below, is their mandatory gate.
  */
 function warnWeakIdentity(session, sessionName, what, ref) {
   if (!session && !sessionName) {
@@ -185,6 +192,28 @@ function warnWeakIdentity(session, sessionName, what, ref) {
   warn(`session name "${sessionName}" recorded with NO session URL — this ${what} will read as owned`);
   warn(`  but cannot be traced to a session. The name is display text; the URL is the join key.`);
   if (ref) warn(`  Repair once you have it:  colab worktree tag ${ref} --session <url>`);
+}
+
+/**
+ * MANDATORY identity gate for the two call sites that mint a SHARED-checkout place-claim — a
+ * `cmdClaim` with no `--worktree` (the trunk-checkout shape) and `cmdSolo` (#242). Both mint a
+ * hold that the SAME logical caller is expected to re-acquire/renew across later commands, and
+ * `place.conflict`'s same-holder exemption only ever recognizes that via a truthy, matching
+ * `session` — never via `sessionName` (display text, not a join key — see above) and never via
+ * `pid` (`place.js`'s own doc comment on `conflict` has the full argument: process lineage, not
+ * a session, and a falsifier run confirmed agent tool calls do not even share a stable pid across
+ * commands). So unlike `warnWeakIdentity`'s WARN-and-proceed elsewhere, a blank session HERE is
+ * refused outright, before any state is read or written — the caller must supply one.
+ */
+function requirePlaceIdentity(session, what) {
+  if (session) return;
+  throw new UserError(
+    `no --session given for ${what} — this checkout's hold must carry a session id, or a later ` +
+    `re-acquire from the same caller cannot be told apart from anyone else's (#242: blank never ` +
+    `matches blank). --session-name alone does not satisfy this — it is display text, not a join ` +
+    `key. Supply --session <url-or-any-stable-id> on this command, or export ` +
+    `COLAB_SESSION="<stable-id>" once for the shell.`
+  );
 }
 
 /** Compact a session URL for display: the `session_…` tail, or the raw value, capped. */
@@ -499,8 +528,13 @@ Options:
   --branch <name>     branch these claims are worked on. Default: none (null) — a claim held on
                       the trunk checkout has no branch. Never the word "trunk": that is a role,
                       and a record holding it resolves to no ref (refused, exit 1)
-  --session <url>     Claude session URL recorded on the claim + comment (default: COLAB_SESSION env)
-  --session-name <s>  short human label shown in tables/messages (default: COLAB_SESSION_NAME env)
+  --session <url>     Claude session URL recorded on the claim + comment (default: COLAB_SESSION env).
+                      MANDATORY when no --worktree is given (#242): a claim with no worktree takes
+                      the trunk-checkout place-claim, and a blank session can never be recognized
+                      as its own later re-acquire — refused (exit 1) before anything is read/written.
+  --session-name <s>  short human label shown in tables/messages (default: COLAB_SESSION_NAME env).
+                      Does NOT satisfy the --session requirement above — it is display text, not a
+                      join key.
   --force             take over a claim held by another worktree / GitHub user (logged, never silent)
 `;
 
@@ -539,6 +573,10 @@ function cmdClaim(argv) {
   // coexistence being the default rather than the exception.
   const doc0 = projectDoc(repoAbs);
   const takingPlace = !wtName && !writesAuthority.trunkDirectVetoed(doc0 && doc0.writes);
+  // A shared-checkout hold is about to be minted (#242) — identity is mandatory here, not just
+  // warned about; see `requirePlaceIdentity`'s doc comment for why. Cheapest possible refusal:
+  // nothing has been read or written yet.
+  if (takingPlace) requirePlaceIdentity(session, 'claiming the trunk checkout');
 
   // ---- REFUSAL (two layers, check-then-refuse) ----
   let st0;
@@ -563,7 +601,7 @@ function cmdClaim(argv) {
     const syncProblem = place.syncedStateProblem(state.COLAB_DIR);
     if (syncProblem) throw new UserError(syncProblem);
 
-    const placeConf = place.conflict(st0, repoAbs, { session });
+    const placeConf = place.conflict(st0, repoAbs, { session, pid: process.ppid });
     if (placeConf) {
       if (!opts.force) {
         // Wired to the structure built to guarantee this, not a hand-written string (ship-grade
@@ -871,6 +909,11 @@ both mechanically instead of trusting either.
 
 Not honor system: nothing here is read once and cached — every check re-derives its answer from
 git and ~/.colab/state.json on this invocation. The lock is machine-local, one repo at a time.
+
+--session is MANDATORY here (#242): solo mints the same kind of shared-checkout hold a
+worktree-less \`colab claim\` does, and a blank session can never be recognized as its own
+later re-acquire — refused before anything is read/written. --session-name alone does not
+satisfy this (display text, not a join key).
 `;
 
 /**
@@ -953,7 +996,7 @@ function cmdSolo(argv) {
   const problems = solo.entryProblems(st, repoAbs, trunk);
   // A live place-claim on this checkout (someone else already writing here right now, outside
   // solo flow's own lock) refuses entry too — rule 1 of Solo flow gains this check (#136).
-  const placeConf = place.conflict(st, repoAbs, { session: resolveSession(opts) });
+  const placeConf = place.conflict(st, repoAbs, { session: resolveSession(opts), pid: process.ppid });
   if (placeConf) problems.push(placeConf.message);
   if (problems.length) {
     print(`✗ solo refused in ${shortRepo(repoAbs)} — full ceremony required:`);
@@ -970,6 +1013,9 @@ function cmdSolo(argv) {
   const session = resolveSession(opts);
   const sessionName = resolveSessionName(opts);
   warnWeakIdentity(session, sessionName, 'solo lock', null);
+  // Solo mints a shared-checkout hold too (#242) — mandatory, same as cmdClaim's trunk-checkout
+  // path. Placed after eligibility/held/entryProblems above so no existing refusal is reordered.
+  requirePlaceIdentity(session, 'opening solo flow');
 
   const written = placeMutate('opening solo flow', (s) => {
     s.solo = s.solo || {};
@@ -1074,7 +1120,7 @@ function cmdPlace(argv) {
   if (sub === 'check') {
     const loaded = placeState('check');
     if (!loaded.ok) { print(`✗ ${loaded.message}`); return 2; }
-    const c = place.conflict(loaded.st, pathAbs, { session });
+    const c = place.conflict(loaded.st, pathAbs, { session, pid: process.ppid });
     if (!c) { print(`✓ "${pathAbs}" is free (or held by you).`); return 0; }
     print(`✗ ${c.message}`);
     return c.kind === 'unknown' ? 2 : 1;
@@ -1083,7 +1129,7 @@ function cmdPlace(argv) {
   if (sub === 'acquire') {
     const loaded = placeState('acquire');
     if (!loaded.ok) { print(`✗ ${loaded.message}`); return 2; }
-    const c = place.conflict(loaded.st, pathAbs, { session });
+    const c = place.conflict(loaded.st, pathAbs, { session, pid: process.ppid });
     if (c && !opts.force) { print(`✗ ${c.message}`); return c.kind === 'unknown' ? 2 : 1; }
     if (c && opts.force && process.env.COLAB_HUMAN !== '1') {
       throw new UserError(`--force on a held place-claim requires a human: re-run with COLAB_HUMAN=1. ` +
@@ -1114,8 +1160,15 @@ function cmdPlace(argv) {
     if (!rec) { print(`Nothing held at "${pathAbs}" — nothing to release.`); return 0; }
     const mine = session && rec.session === session;
     if (!mine && process.env.COLAB_HUMAN !== '1') {
+      // Same blank-blank hole as `place.conflict`'s exemption (#242): an unidentified holder can
+      // never release its own hold, because nothing distinguishes "this is mine" from "this is
+      // someone else's". Never relaxed — the identity-gap sentence just makes the escape hatch
+      // (COLAB_HUMAN=1) legible instead of leaving a caller to guess why they were refused.
+      const unidentified = !session && !rec.session;
       throw new UserError(`"${pathAbs}" is held by a different session ("${place.holderLabel(rec)}", held ${place.holdAge(rec)}) — ` +
-        `releasing it requires a human: re-run with COLAB_HUMAN=1. (No field, flag or project.yml value can lower this bar.)`);
+        `releasing it requires a human: re-run with COLAB_HUMAN=1. (No field, flag or project.yml value can lower this bar.)` +
+        (unidentified ? ` Neither this hold nor this attempt carries a session id, so it cannot be told ` +
+          `apart from your own (#242) — that is why this refuses even if it is in fact yours.` : ''));
     }
     const written = placeMutate('release', (s) => { if (s.places) delete s.places[key]; });
     if (!written.ok) { print(`✗ ${written.message}`); return 2; }
@@ -7098,7 +7151,7 @@ function cmdShip(argv) {
       process.stderr.write(`✗ B1: ${loadedPlace.message}\n`);
       return 1;
     }
-    const placeConf = place.conflict(loadedPlace.st, repoAbs, { session: sess.session });
+    const placeConf = place.conflict(loadedPlace.st, repoAbs, { session: sess.session, pid: process.ppid });
     if (placeConf) {
       cleanupEphemeral();
       process.stderr.write(`✗ B1: refusing — ${placeConf.message}\n`);
@@ -7812,7 +7865,7 @@ function cmdPromote(argv) {
     if (syncProblem) { process.stderr.write(`✗ ${syncProblem}\n`); return 1; }
     const loadedPlace = placeState('promote into the main checkout');
     if (!loadedPlace.ok) { process.stderr.write(`✗ ${loadedPlace.message}\n`); return 1; }
-    const placeConf = place.conflict(loadedPlace.st, repoAbs, { session: promoteSession });
+    const placeConf = place.conflict(loadedPlace.st, repoAbs, { session: promoteSession, pid: process.ppid });
     if (placeConf) {
       process.stderr.write(`✗ refusing — ${placeConf.message}\n`);
       process.stderr.write('  Never --force here: a live foreign hold on the main checkout stays behind the same\n');
