@@ -92,11 +92,23 @@ jobs:
     # and falls through to `npm install` with no package.json to install, then
     # "Build" fails outright trying to read it — turning trunk CI red as the
     # first consequence of adopting, not of anything about the repo changing.
-    # Skip the whole job instead, the same way the generic scaffold workflow
-    # guards it (`if [ -f package.json ]; then node=true; else node=false; fi`).
-    # gitleaks above stays unconditional — a repo with no code can still commit
-    # a secret.
-    if: hashFiles('package.json') != ''
+    # Skip the package.json-dependent steps instead, the same way the generic
+    # scaffold workflow guards it (`if [ -f package.json ]; then node=true; else
+    # node=false; fi`). gitleaks above stays unconditional — a repo with no code
+    # can still commit a secret.
+    #
+    # NOTE (#245): this guard used to sit here, at job level — `if:
+    # hashFiles('package.json') != ''`. `hashFiles()` is NOT among the functions
+    # GitHub allows in `jobs.<job_id>.if` (only `github` / `needs` / `vars` /
+    # `inputs` plus always()/cancelled()/success()/failure()); a job-level `if:`
+    # using it is rejected at workflow-VALIDATION time, before any job runs — the
+    # whole workflow file fails with "0 jobs created" and a message that names
+    # neither the key nor the expression. It is valid in a step-level `if:`,
+    # which is why it looked right when written (a042cea, fixing #73). Moved the
+    # guard onto every step below that assumes package.json exists instead — the
+    # workspace isn't even checked out yet at job level, so a job-level
+    # hashFiles() would have been testing an empty directory even if it were
+    # allowed.
     runs-on: ubuntu-latest # EDIT: self-hosted label if this repo needs one.
     defaults:
       run:
@@ -120,6 +132,7 @@ jobs:
       # ---------------------------------------------------------------------------
       - name: Resolve Node version
         id: toolchain
+        if: hashFiles('package.json') != ''
         run: |
           set -euo pipefail
 
@@ -188,11 +201,14 @@ jobs:
           echo "Node $NODE_VERSION (resolved from: $SOURCE)"
           echo "Node **$NODE_VERSION** — resolved from \`$SOURCE\`" >> "$GITHUB_STEP_SUMMARY"
 
-      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
+      - name: Setup Node
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
+        if: hashFiles('package.json') != ''
         with:
           node-version: ${{ steps.toolchain.outputs.node-version }}
 
       - name: Install dependencies
+        if: hashFiles('package.json') != ''
         run: |
           # Lockfile decides the package manager. `npm ci` / `--frozen-lockfile` are
           # intentional: CI must fail on a stale lockfile rather than silently resolve
@@ -209,6 +225,7 @@ jobs:
 
       - name: Detect optional scripts
         id: scripts
+        if: hashFiles('package.json') != ''
         run: |
           # node -e over grep: package.json is JSON, and a "typecheck" substring can
           # appear inside a dependency name or another script's body.
@@ -237,4 +254,5 @@ jobs:
         run: npm test
 
       - name: Build
+        if: hashFiles('package.json') != ''
         run: npm run "$BUILD_COMMAND"
