@@ -20,6 +20,7 @@ Starting points you **copy into your own repo**. That is the entire model.
 | `release-tag.yml` | `.github/workflows/release.yml` | Any repo cutting `v*.*.*` releases | Triggers on tag push. Publishes a grouped GitHub Release. No toolchain, no deploy. |
 | `deploy-xserver.yml` | `.github/workflows/deploy-xserver.yml` | PHP-framework + Vite apps shipped to **shared hosting over SSH** (no root, no Docker): build on a runner, rsync, migrate on the server | Derived from three independently-written copies. Resolves Node the same way the CI templates do — all three hardcoded it, and one shipped on a different major than its CI built on. Migrates **production**; keeps a **mandatory** smoke test. Does **not** change your tier. |
 | `repo-CLAUDE-block.md` | *paste into* `CLAUDE.md` | Every adopting repo | The discovery hook — how an agent finds the handbook at all. |
+| `gotchas-d-README.md` | `docs/gotchas.d/README.md` | Any repo starting a `docs/gotchas.d/` directory ([`code-wrap`](../skills/code-wrap/SKILL.md)'s A2 step) | Naming rule (`<issue>-<slug>.md`) and the don't-copy-back rule against an existing `docs/gotchas.md`. Optional — writing the first gotcha entry does not require copying this in first. |
 
 ### Hooks — the same model, copied by hand
 

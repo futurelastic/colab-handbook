@@ -145,9 +145,44 @@ a comment while the file stays wrong). All three destinations are in `docs/`:
 - Domain model changed (new entity/table, renamed concept, new flow) → the
   architecture doc.
 - Infra/ops changed (deploy, env, DNS, service account, runbook) → the deploy doc.
-- A long-lived gotcha (bites again, not tied to one feature) → the contributing/gotchas
-  doc. **Missing? Create it** (`docs/gotchas.md`) rather than appending to whichever
-  file is already in your context — which is always `CLAUDE.md`.
+- A long-lived gotcha (bites again, not tied to one feature) → **one file per
+  gotcha**, `docs/gotchas.d/<issue>-<slug>.md` (create the directory if
+  missing) — never append it into whichever file is already in your context,
+  which is always `CLAUDE.md`.
+
+#### `docs/gotchas.d/` — one file per gotcha, not one growing file
+
+A single append-target `docs/gotchas.md` is where this used to point, and it
+broke at scale: section-numbered entries, cited elsewhere by number, that
+parallel sessions kept appending to. On the busiest measured repo it reached
+~15KB and dozens of entries; the renumber procedure this forced had to be
+re-explained verbatim in 8 separate session briefs in one week, and every
+renumber silently stale-dates every existing `§N` citation with no error.
+
+The fix, already proven on two repos in the same fleet: `docs/gotchas.d/`,
+one file per gotcha, named `<issue-number>-<slug>.md`, append-only — never
+edit another entry's file. No shared counter, so no merge contention and
+nothing to ever renumber; the issue number is a stable id citations can use
+across renames; two parallel branches adding a gotcha each touch a different
+file, never the same line.
+
+- **New gotcha → new file.** `docs/gotchas.d/$N-<slug>.md`, one entry, in this
+  session's commit.
+- **`docs/gotchas.md` is now optional** — a curated, hand-maintained topical
+  guide that *points into* `gotchas.d/` entries (`See docs/gotchas.d/N-slug.md`),
+  never a second copy of one. Don't copy an entry's content back and forth
+  between the two; the index links, it doesn't duplicate.
+- **Migration is lazy.** A repo that already has a `docs/gotchas.md` keeps it
+  exactly as-is — no forced split, no rewrite. Only *new* entries from here on
+  go to `gotchas.d/`. If `docs/gotchas.md` doesn't exist yet, don't create it
+  just to hold one entry — go straight to `gotchas.d/`.
+- Repo has neither yet? `docs/gotchas.d/` is created by this step, on demand,
+  the same way `docs/gotchas.md` used to be — no template run is required to
+  start using it. A stub README for the directory (naming rule, the
+  don't-copy-back rule above) is available at
+  [`templates/gotchas-d-README.md`](../../templates/gotchas-d-README.md) for
+  adoption/handbook-sync to seed; copying it in is optional, not a
+  precondition for writing the first entry.
 
 #### `CLAUDE.md` is a router, not an archive
 
