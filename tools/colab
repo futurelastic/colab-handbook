@@ -33,6 +33,7 @@ const groupLabels = require('./lib/group-labels');
 const shipguard = require('./lib/shipguard');
 const migrationGrant = require('./lib/migration-grant');
 const decisionRecord = require('./lib/decision-record');
+const blockedBy = require('./lib/blocked-by');
 const ciGrant = require('./lib/ci-grant');
 const ciVerdict = require('./lib/ci-verdict');
 const adopt = require('./lib/adopt');
@@ -1339,6 +1340,253 @@ function cmdReadinessMechanical(repoAbs, num, opts) {
   // Deliberately no pushEvent: the receiver has agreed `readiness.marked` to mean deps-checked
   // specifically (#45, #46); this marker is not that claim and gets no event until a kind for it
   // is separately agreed (CONVENTIONS.md §5, Mechanical readiness).
+  return 0;
+}
+
+// ---------------------------------------------------------------------------
+// blocked — colab owns the `blocked_by` dependency-edge write (#251). tools/lib/blocked-by.js
+// carries every judgement (arg validity, edge-shape normalisation, presence, the resolved
+// blocker's usability, the read-back verdict, the --clear guard); this section is the gh I/O
+// and printing only — same split as readiness/decision above.
+// ---------------------------------------------------------------------------
+
+const HELP_BLOCKED = `colab blocked <blocked> --by <blocker> [--repo <path>]
+colab blocked <blocked> --by <blocker> --clear --reason "<why>" [--force] [--repo <path>]
+
+Own the \`blocked_by\` dependency-edge write (#251) — the one triage write still hand-rolled
+\`gh api\`, and the one with two independent SILENT-failure modes measured live on this repo:
+
+  1. Wrong id attaches a stranger's issue. The REST endpoint's payload is a global DATABASE
+     id, not the issue number a human types — an empty variable, a failed subshell, or the
+     issue NUMBER pasted where the id goes is still a valid integer, and the POST returns 200
+     attaching whichever issue holds that id anywhere on GitHub. This command takes issue
+     NUMBERS ONLY and resolves the database id itself — the hazardous value never passes
+     through a caller's hands.
+  2. The read-before-write guard is easy to write wrong. \`blockedBy\` is a connection object
+     (\`{nodes,totalCount}\`), not an array — \`| length\` reads 2 for zero blockers (#250).
+     This command reads \`.totalCount\`/\`.nodes\`, never a raw object's own key count.
+
+  colab blocked <N> --by <M>                       add: #N is blocked by #M
+  colab blocked <N> --by <M> --clear --reason R     remove that edge, with a REQUIRED reason
+
+Every write reads the current edges FIRST (idempotent — already-present is a no-op, already-
+absent --clear is a no-op) and reads BACK after, to CONFIRM the edge names the intended
+blocker before printing success. A read-back showing a DIFFERENT edge than the one just
+POSTed is reported as a WRONG BLOCKER, with the exact remediation command — never auto-
+"fixed": an ambiguous read is not license for a second destructive write.
+
+\`--clear\` requires \`--reason "<why>"\` — colab cannot verify intent, so it records yours
+instead, as a receipt comment on the blocked issue (the delete itself leaves no other trace of
+WHY). A CLOSED blocker refuses \`--clear\` by default: closing is not proof the edge is false —
+the dependency and the edge both survive the blocker's code simply having landed (code-triage
+§4). \`--force\` releases exactly that one guard, nothing else — never the read-back, never a
+failed write.
+
+Cross-repo edges are REFUSED, structurally: the blocker is always resolved IN THIS REPO
+(\`gh api\`'s own \`{owner}/{repo}\` placeholder). A genuine cross-repo need falls back to the
+raw \`gh api\` form this command's own error messages print.
+
+There is deliberately no local-only fallback: the edge lives on GitHub, visible from any
+machine to the readiness gate and to any other triage pass that reads it.
+
+Options:
+  --by <blocker>        required — the issue number that blocks <blocked>
+  --clear                remove the edge instead of adding it (requires --reason)
+  --reason "<why>"       required with --clear — why this edge is FALSE, not just landed
+  --force                (--clear only) override the closed-blocker refusal
+  --repo <path>          repo root (default: git root of cwd)
+`;
+
+/**
+ * Read `<num>`'s current blocked_by edges via the REST dependency endpoint — the shape measured
+ * live against this repo (#251): an array of full issue objects, each carrying `id`, `number`,
+ * `state`, `repository_url`. `-q` slims the payload at the source rather than pulling every
+ * field (body, labels, ...) over the wire for a list this module only ever reads four fields
+ * from. Returns the parsed array, or null on any read failure — NEVER `[]` for an unreadable
+ * read (mirrors ghIssueView's own null-means-unreadable contract).
+ */
+function readBlockedByEdges(repoAbs, num) {
+  const r = git.ghApi(repoAbs, [
+    `repos/{owner}/{repo}/issues/${num}/dependencies/blocked_by`,
+    '-q', '[.[] | {id: .id, number: .number, state: .state, repository_url: .repository_url}]',
+  ]);
+  if (!r.ok) return null;
+  try { return JSON.parse(r.stdout); } catch (_) { return null; }
+}
+
+/**
+ * Resolve `<num>`'s own database id/number/state/repository_url — the ONLY point a database id
+ * enters this command's flow, and only after `blockedBy.resolvedBlockerProblem` has validated
+ * it against the number that was actually asked for (failure mode 1's guard).
+ */
+function resolveBlockerIssue(repoAbs, num) {
+  const r = git.ghApi(repoAbs, [
+    `repos/{owner}/{repo}/issues/${num}`,
+    '-q', '{id: .id, number: .number, state: .state, repository_url: .repository_url}',
+  ]);
+  if (!r.ok) return null;
+  try { return JSON.parse(r.stdout); } catch (_) { return null; }
+}
+
+function cmdBlocked(argv) {
+  const opts = parseArgs(argv, {
+    values: { '--repo': 'repo', '--by': 'by', '--reason': 'reason' },
+    flags: { '--clear': 'clear', '--force': 'force', '-h': 'help', '--help': 'help' },
+  });
+  if (opts.help || opts._.length === 0) return print(HELP_BLOCKED);
+
+  const blocked = normIssueNum(opts._[0]);
+  const blocker = opts.by != null && opts.by !== '' ? normIssueNum(opts.by) : null;
+
+  const argErr = blockedBy.argProblem({
+    blocked, blocker, clear: !!opts.clear, reason: opts.reason, force: !!opts.force,
+  });
+  if (argErr) throw new UserError(argErr);
+
+  const repoAbs = opts.repo ? resolveRepo(opts) : (git.repoRoot(process.cwd()) || null);
+  if (!repoAbs) throw new UserError('not inside a git repo — pass --repo <path>');
+
+  if (!isGhUsable(repoAbs)) {
+    throw new UserError('gh not usable here (no gh auth or no origin remote) — the blocked_by edge lives on GitHub and cannot be written local-only');
+  }
+
+  return opts.clear
+    ? cmdBlockedClear(repoAbs, blocked, blocker, opts)
+    : cmdBlockedAdd(repoAbs, blocked, blocker, opts);
+}
+
+function cmdBlockedAdd(repoAbs, blocked, blocker, opts) {
+  const resolved = resolveBlockerIssue(repoAbs, blocker);
+  const resolveErr = blockedBy.resolvedBlockerProblem(resolved, blocker);
+  if (resolveErr) throw new UserError(resolveErr);
+
+  const thisRepo = blockedBy.repoSlugFromUrl(resolved.repository_url);
+  if (!thisRepo) throw new UserError(`could not determine this repo's owner/name from the resolved blocker's repository_url — refusing to write blind`);
+  const target = { number: blocker, repo: thisRepo };
+
+  if (resolved.state && String(resolved.state).toLowerCase() === 'closed') {
+    // Informational only — the edge is still correct to record; readiness reads the blocker's
+    // state for itself at read time (readiness.js), so a closed-but-relevant blocker is not a
+    // reason to skip recording the relationship. Pre-empts the confusion from the OTHER
+    // direction, the one --clear's guard below exists for.
+    warn(`note: #${blocker} is already closed — the edge is still correctly recorded; readiness reads the blocker's state for itself, not this command's opinion of it.`);
+  }
+
+  const beforeRaw = readBlockedByEdges(repoAbs, blocked);
+  const before = blockedBy.normaliseEdges(beforeRaw);
+  if (!before.ok) {
+    throw new UserError(`could not read #${blocked}'s current blocked_by edges — refusing to write blind (is #${blocked} real, and can gh read it?)`);
+  }
+  if (blockedBy.edgePresent(before.edges, target)) {
+    print(`#${blocked} is already recorded as blocked by #${blocker} in ${shortRepo(repoAbs)} — nothing to do.`);
+    return 0;
+  }
+
+  const foreign = blockedBy.foreignEdges(before.edges, thisRepo);
+  if (foreign.length) {
+    warn(`note: #${blocked} already carries ${foreign.length} edge(s) to another repo (${foreign.map((e) => `${e.repo}#${e.number}`).join(', ')}) — not written by this command, left untouched.`);
+  }
+
+  const postR = git.ghApi(repoAbs, [
+    '-X', 'POST', `repos/{owner}/{repo}/issues/${blocked}/dependencies/blocked_by`,
+    '-F', `issue_id=${resolved.id}`,
+  ]);
+  if (!postR.ok) {
+    // Still read back — an exit code is not evidence, and this command's whole thesis is that a
+    // wrong write can look exactly like success. A FAILED post reporting the edge now present is
+    // worth knowing about just as much as a successful one that silently didn't land.
+    const afterRaw = readBlockedByEdges(repoAbs, blocked);
+    const afterNorm = afterRaw === null ? null : blockedBy.normaliseEdges(afterRaw);
+    const after = afterNorm && afterNorm.ok ? afterNorm.edges : null;
+    if (after && blockedBy.edgePresent(after, target)) {
+      print(`the POST reported failure (${postR.stderr.split('\n')[0] || postR.code}), but the read-back shows the edge IS present — #${blocked} is blocked by #${blocker}. Nothing further to do, but the POST's own failure is worth investigating.`);
+      return 0;
+    }
+    throw new UserError(`could not write the blocked_by edge (${postR.stderr.split('\n')[0] || postR.code}) — read-back confirms nothing was written, safe to retry`);
+  }
+
+  const afterRaw = readBlockedByEdges(repoAbs, blocked);
+  const afterNorm = afterRaw === null ? null : blockedBy.normaliseEdges(afterRaw);
+  const after = afterNorm && afterNorm.ok ? afterNorm.edges : null;
+  const verdict = blockedBy.confirmVerdict(before.edges, after, target);
+
+  if (verdict.verdict === blockedBy.ADD_CONFIRMED) {
+    print(`#${blocked} is now blocked by #${blocker} in ${shortRepo(repoAbs)} (confirmed by read-back).`);
+    // No pushEvent here: notify.js's ACTION_KIND is a closed vocabulary agreed PER ACTION with
+    // the receiver, and no `dependency.*` kind has been agreed (same reasoning as `readiness
+    // --mechanical` and `solo` — both #45/#46 precedent). If one ever is, the shape this write
+    // would report is: action 'blocked-by' -> kind 'dependency.changed', payload
+    // { state: 'added', blocker }, repo/issue riding the envelope like every other kind.
+    return 0;
+  }
+  if (verdict.verdict === blockedBy.ADD_WRONG) {
+    const bad = verdict.intruders[0];
+    throw new UserError(`WRONG BLOCKER: ${verdict.why}. Nothing was auto-corrected (an ambiguous read `
+      + `is not license for a second destructive write). Remediate by hand once you have confirmed which `
+      + `edge is wrong:\n`
+      + `  gh api -X DELETE repos/{owner}/{repo}/issues/${blocked}/dependencies/blocked_by/${bad.id != null ? bad.id : '<id>'}`);
+  }
+  if (verdict.verdict === blockedBy.ADD_MISSING) {
+    throw new UserError(`the POST reported success but the read-back shows #${blocked} is still NOT blocked by #${blocker} — ${verdict.why}. Safe to retry.`);
+  }
+  // ADD_UNCONFIRMED
+  throw new UserError(`the edge was POSTed but could not be confirmed (${verdict.why}). Verify by hand, and clean up if it landed wrong:\n`
+    + `  gh api repos/{owner}/{repo}/issues/${blocked}/dependencies/blocked_by\n`
+    + `  gh api -X DELETE repos/{owner}/{repo}/issues/${blocked}/dependencies/blocked_by/${resolved.id}`);
+}
+
+function cmdBlockedClear(repoAbs, blocked, blocker, opts) {
+  const resolved = resolveBlockerIssue(repoAbs, blocker);
+  const resolveErr = blockedBy.resolvedBlockerProblem(resolved, blocker);
+  if (resolveErr) throw new UserError(resolveErr);
+
+  const thisRepo = blockedBy.repoSlugFromUrl(resolved.repository_url);
+  if (!thisRepo) throw new UserError(`could not determine this repo's owner/name from the resolved blocker's repository_url — refusing to write blind`);
+  const target = { number: blocker, repo: thisRepo };
+
+  const beforeRaw = readBlockedByEdges(repoAbs, blocked);
+  const before = blockedBy.normaliseEdges(beforeRaw);
+  if (!before.ok) {
+    throw new UserError(`could not read #${blocked}'s current blocked_by edges — refusing to write blind`);
+  }
+  if (!blockedBy.edgePresent(before.edges, target)) {
+    print(`#${blocked} is not currently recorded as blocked by #${blocker} in ${shortRepo(repoAbs)} — nothing to do.`);
+    return 0;
+  }
+
+  const closed = !!(resolved.state && String(resolved.state).toLowerCase() === 'closed');
+  const guardErr = blockedBy.clearProblem({ closed, force: !!opts.force });
+  if (guardErr) throw new UserError(guardErr);
+
+  if (resolved.id == null) {
+    throw new UserError(`could not resolve #${blocker}'s database id — refusing the DELETE blind`);
+  }
+  const delR = git.ghApi(repoAbs, [
+    '-X', 'DELETE', `repos/{owner}/{repo}/issues/${blocked}/dependencies/blocked_by/${resolved.id}`,
+  ]);
+  if (!delR.ok) {
+    throw new UserError(`could not remove the blocked_by edge (${delR.stderr.split('\n')[0] || delR.code}) — nothing confirmed removed, safe to retry`);
+  }
+
+  const afterRaw = readBlockedByEdges(repoAbs, blocked);
+  const afterNorm = afterRaw === null ? null : blockedBy.normaliseEdges(afterRaw);
+  if (!afterNorm || !afterNorm.ok) {
+    throw new UserError(`the DELETE reported success but the read-back could not be completed — verify by hand:\n  gh api repos/{owner}/{repo}/issues/${blocked}/dependencies/blocked_by`);
+  }
+  if (blockedBy.edgePresent(afterNorm.edges, target)) {
+    throw new UserError(`the DELETE reported success but the read-back STILL shows #${blocked} blocked by #${blocker} — do not trust the exit code, verify by hand`);
+  }
+
+  print(`Cleared: #${blocked} is no longer recorded as blocked by #${blocker} in ${shortRepo(repoAbs)}.`);
+
+  // Best-effort receipt — the delete already landed (safe), so a failed comment WARNS rather
+  // than flips the exit code (mirrors decision --reopen / migration-grant --revoke's precedent).
+  const commentR = git.ghIssueComment(repoAbs, blocked, blockedBy.removalReceiptBody(blocker, HOST, nowISO(), opts.reason));
+  if (!commentR.ok) {
+    warn(`the removal receipt failed to post on #${blocked} (${commentR.stderr.split('\n')[0] || commentR.code}) — the edge IS cleared; the WHY is not recorded on the tracker. Post it by hand if it matters.`);
+  }
+  // No pushEvent — see the identical note in cmdBlockedAdd; the proposed payload here would be
+  // { state: 'removed', blocker }.
   return 0;
 }
 
@@ -7959,6 +8207,8 @@ Commands:
   places [--json]                                                     list every place-claim, with
                                         liveness resolved right now
   readiness <issue> [--clear] [--mechanical] [--repo P]              own the deps-checked / graph-empty markers (§5)
+  blocked <blocked> --by <blocker> [--clear --reason R [--force]] [--repo P]
+                                        own the blocked_by dependency-edge write (#251)
   migration-grant <issue> --branch B | --revoke | --list [--json]    human-only ship migration exemption (#98)
   decision <issue> --record --ruled-by N | --reopen --ruled-by N | --list [--json]
                                         record/reopen a needs-decision answer (#121, #122)
@@ -8042,6 +8292,7 @@ function main(argv) {
     case 'place': return cmdPlace(rest);
     case 'places': return cmdPlaces(rest);
     case 'readiness': return cmdReadiness(rest);
+    case 'blocked': return cmdBlocked(rest);
     case 'migration-grant': return cmdMigrationGrant(rest);
     case 'decision': return cmdDecision(rest);
     case 'ci-grant': return cmdCiGrant(rest);
