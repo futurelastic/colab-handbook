@@ -579,3 +579,155 @@ test('`colab update` reads the frozen stamp from COLAB_HOME, not from a hardcode
   // `n-a`. A state assertion would therefore pass locally and be meaningless in CI — a worse
   // failure than a flapping one, because it looks green.
 });
+
+// --- #252: a stamp for shebang/non-YAML templates ---------------------------
+//
+// A *.yml copy has no shebang, so prepending the stamp at line 1 (the original behaviour) is
+// unchanged and untested again here. What's new is a copy that opens with `#!`: prepending
+// above it breaks the shebang, and `#`-style comments are a JS syntax error on any OTHER line
+// of a `.mjs` file — so both the insertion point and the comment syntax have to be chosen by
+// what the file actually is, never a single fixed spelling.
+
+test('stampCommentPrefix: # for YAML/shell, // for JS — a bare # elsewhere is a JS syntax error', () => {
+  assert.strictEqual(stamp.stampCommentPrefix('yml'), '#');
+  assert.strictEqual(stamp.stampCommentPrefix('yaml'), '#');
+  assert.strictEqual(stamp.stampCommentPrefix('sh'), '#');
+  assert.strictEqual(stamp.stampCommentPrefix('mjs'), '//');
+  assert.strictEqual(stamp.stampCommentPrefix('js'), '//');
+});
+
+test('stampLine still defaults to # — every existing *.yml caller is unaffected', () => {
+  assert.strictEqual(stamp.stampLine('ci-node', 'v1.0.0'), '# colab-handbook: ci-node @ v1.0.0\n');
+});
+
+test('stampLine takes an explicit comment prefix for a non-YAML copy', () => {
+  assert.strictEqual(stamp.stampLine('docs-lint', 'v1.0.0', '//'), '// colab-handbook: docs-lint @ v1.0.0\n');
+});
+
+test('insertStamp prepends at line 1 for a body with no shebang — unchanged *.yml behaviour', () => {
+  const body = 'name: CI\non: [push]\n';
+  const out = stamp.insertStamp(body, '# colab-handbook: ci-node @ v1.0.0\n');
+  assert.strictEqual(out, '# colab-handbook: ci-node @ v1.0.0\nname: CI\non: [push]\n');
+});
+
+test('insertStamp puts the stamp on line 2 for a shebang body, keeping the shebang first', () => {
+  const body = '#!/usr/bin/env node\nconsole.log("hi");\n';
+  const out = stamp.insertStamp(body, '// colab-handbook: docs-lint @ v1.0.0\n');
+  const lines = out.split('\n');
+  assert.strictEqual(lines[0], '#!/usr/bin/env node', 'the shebang must still be line 1 — a shell/node loader only honours it there');
+  assert.strictEqual(lines[1], '// colab-handbook: docs-lint @ v1.0.0');
+  assert.strictEqual(lines[2], 'console.log("hi");');
+});
+
+test('insertStamp on a shebang with no trailing newline still lands the stamp, not mangled', () => {
+  const body = '#!/usr/bin/env node'; // pathological — no body at all after the shebang
+  const out = stamp.insertStamp(body, '// colab-handbook: docs-lint @ v1.0.0\n');
+  assert.strictEqual(out, '#!/usr/bin/env node\n// colab-handbook: docs-lint @ v1.0.0\n');
+});
+
+test('parseWorkflowStamp reads a // stamp exactly like a # one', () => {
+  assert.deepStrictEqual(stamp.parseWorkflowStamp('// colab-handbook: docs-lint @ v1.2.3\n'),
+    { name: 'docs-lint', version: 'v1.2.3' });
+});
+
+test('parseWorkflowStamp finds the stamp on line 2, not just line 1', () => {
+  const text = '#!/usr/bin/env node\n// colab-handbook: docs-lint @ v1.2.3\nconsole.log(1);\n';
+  assert.deepStrictEqual(stamp.parseWorkflowStamp(text), { name: 'docs-lint', version: 'v1.2.3' });
+});
+
+test('a // stamp round-trips through insertStamp + parseWorkflowStamp for a real shebang file', () => {
+  const body = '#!/usr/bin/env node\n// docs-lint — TEMPLATE.\nconsole.log("lint");\n';
+  const line = stamp.stampLine('docs-lint', 'v1.9.0', stamp.stampCommentPrefix('mjs'));
+  const stamped = stamp.insertStamp(body, line);
+  assert.ok(stamped.startsWith('#!/usr/bin/env node\n'), 'shebang must survive as line 1');
+  assert.deepStrictEqual(stamp.parseWorkflowStamp(stamped), { name: 'docs-lint', version: 'v1.9.0' });
+});
+
+// --- #252 end to end: `colab template docs-lint.mjs` through the real CLI ---
+
+/**
+ * Run `colab template <args...>` for real, with `cwd` pinned to a throwaway, non-git directory —
+ * never the ambient process cwd. `resolveRepo()`'s default-destination path walks up from `cwd`
+ * to find a git root, and every test below is meant to pass `--dest` explicitly; but a test that
+ * forgets it (or a resolution bug like #252's own stem-collision one, caught while writing these)
+ * must fail loudly against a repo-less tmp dir, never silently write into whatever real checkout
+ * happens to be running the suite. Reproduces exactly how this bug briefly wrote a real
+ * `.github/workflows/docs-lint.yml` into this handbook's own main checkout while these tests were
+ * still being developed — a `cwd` was never pinned, so `resolveRepo()` found the ambient repo.
+ */
+function runTemplate(args, t) {
+  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'colab-template-cwd-'));
+  if (t) t.after(() => fs.rmSync(cwd, { recursive: true, force: true }));
+  return spawnSync(process.execPath, [path.join(REPO_ROOT, 'tools', 'colab'), 'template', ...args],
+    { encoding: 'utf8', cwd });
+}
+
+test('`colab template` now lists docs-lint.mjs alongside docs-lint.yml, both with extension', (t) => {
+  const r = runTemplate([], t);
+  assert.strictEqual(r.status, 0);
+  assert.match(r.stdout, /^\s*docs-lint\.mjs\s*$/m);
+  assert.match(r.stdout, /^\s*docs-lint\.yml\s*$/m);
+});
+
+test('the listing has no duplicate rows — a bare stem is never printed twice for two real files', (t) => {
+  // The regression this whole hold was about: docs-lint.yml and docs-lint.mjs share the stem
+  // "docs-lint", and a listing keyed on the stripped stem prints "docs-lint" twice with nothing
+  // telling the rows apart. Every row must be a distinct string once printed.
+  const r = runTemplate([], t);
+  assert.strictEqual(r.status, 0);
+  const rows = r.stdout.split('\n').map((l) => l.trim()).filter((l) => l && !l.includes(' '));
+  assert.strictEqual(new Set(rows).size, rows.length,
+    `listing has a duplicate row: ${JSON.stringify(rows)}`);
+});
+
+test('`colab template docs-lint.mjs` with no --dest refuses — there is no formulaic destination', (t) => {
+  const r = runTemplate(['docs-lint.mjs'], t);
+  assert.notStrictEqual(r.status, 0);
+  assert.match(r.stderr + r.stdout, /--dest/);
+});
+
+test('`colab template docs-lint` (bare, no extension) still resolves to the .yml — unchanged default', (t) => {
+  // docs-lint.yml and docs-lint.mjs share the stem "docs-lint" — a real collision. A bare name
+  // must keep meaning what it always meant (the CI workflow, going to .github/workflows/), or
+  // every existing "colab template docs-lint --dest .github/workflows/docs-lint.yml" invocation
+  // out there would start copying the wrong file.
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'colab-template-bare-'));
+  t.after(() => fs.rmSync(tmp, { recursive: true, force: true }));
+  const dest = path.join(tmp, 'docs-lint.yml');
+  const r = runTemplate(['docs-lint', '--dest', dest], t);
+  assert.strictEqual(r.status, 0, r.stderr);
+  const out = fs.readFileSync(dest, 'utf8');
+  assert.match(out, /^# colab-handbook: docs-lint @ /);
+  assert.match(out, /^name: docs-lint/m, 'must be the CI workflow, not the .mjs script');
+  // The confirmation line must name the RESOLVED file, not the bare stem — a stem alone cannot
+  // tell docs-lint.yml from docs-lint.mjs apart, and a --dest with no visible extension (as
+  // used here on purpose) would otherwise make the two invocations print an identical line.
+  assert.match(r.stdout, /✓ docs-lint\.yml @ /, 'success line must name the resolved .yml, not the bare stem');
+});
+
+test('`colab template docs-lint.mjs --dest <path>` copies it stamped on line 2, shebang intact', (t) => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'colab-template-mjs-'));
+  t.after(() => fs.rmSync(tmp, { recursive: true, force: true }));
+  const dest = path.join(tmp, 'tools', 'docs-lint.mjs');
+  const r = runTemplate(['docs-lint.mjs', '--dest', dest], t);
+  assert.strictEqual(r.status, 0, r.stderr);
+  const out = fs.readFileSync(dest, 'utf8');
+  const lines = out.split('\n');
+  assert.strictEqual(lines[0], '#!/usr/bin/env node', 'copied file must still be a runnable script');
+  const st = stamp.parseWorkflowStamp(lines[1]);
+  assert.ok(st, 'line 2 must carry the stamp');
+  assert.strictEqual(st.name, 'docs-lint');
+  assert.match(lines[1], /^\/\//, 'a .mjs copy is stamped with // — a bare # would be a JS syntax error there');
+  // Same requirement as the bare-.yml case above, the other side of the collision: the
+  // confirmation line must name docs-lint.mjs, not the ambiguous bare stem.
+  assert.match(r.stdout, /✓ docs-lint\.mjs @ /, 'success line must name the resolved .mjs, not the bare stem');
+});
+
+test('the not-found error lists available templates with extension, no duplicates', (t) => {
+  const r = runTemplate(['nonexistent-template'], t);
+  assert.notStrictEqual(r.status, 0);
+  const msg = r.stderr + r.stdout;
+  assert.match(msg, /docs-lint\.mjs/);
+  assert.match(msg, /docs-lint\.yml/);
+  assert.doesNotMatch(msg, /docs-lint, docs-lint/, 'must not repeat the bare stem twice');
+});

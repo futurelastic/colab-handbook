@@ -295,15 +295,48 @@ function writesRulingKnownAt(root, ref) {
 // stamps
 // ---------------------------------------------------------------------------
 
-/** The canonical workflow stamp line. `colab template` writes it; `colab update` rewrites it. */
-function stampLine(name, version) {
-  return `# colab-handbook: ${name} @ ${version}\n`;
+/**
+ * Which comment syntax a stamp line should use, chosen by the copied file's language — not a
+ * single fixed spelling. `#` works for YAML and shell (the original, and still the default for
+ * backward compatibility). A `.mjs`/`.js` copy cannot use it: a bare `#` on any line but a `#!`
+ * shebang is a JS syntax error (outside a class body, where it means something else entirely), so
+ * a stamped JS file needs `//` or it would break the very file it is stamping (#252).
+ */
+function stampCommentPrefix(ext) {
+  return ext === 'mjs' || ext === 'js' ? '//' : '#';
 }
 
-/** Workflow stamp: `# colab-handbook: <name> @ <version>`. */
+/** The canonical workflow stamp line. `colab template` writes it; `colab update` rewrites it.
+ * `commentPrefix` defaults to `#` (unchanged behaviour for every existing *.yml caller) — pass
+ * the value from `stampCommentPrefix(ext)` for a non-YAML template. */
+function stampLine(name, version, commentPrefix = '#') {
+  return `${commentPrefix} colab-handbook: ${name} @ ${version}\n`;
+}
+
+/**
+ * Insert a stamp line into a copied template's body.
+ *
+ * A `*.yml` copy has always taken the stamp prepended at the very top (line 1) — unchanged here.
+ * A copy that opens with a `#!` shebang cannot take that: prepending anything above line 1 breaks
+ * the shebang, which is exactly the gap `templates/README.md`'s Hooks section documents (#252).
+ * So a shebang file gets the stamp on its SECOND line instead — after the first `\n`, shebang
+ * intact on line 1 — and everything else is prepended as before.
+ */
+function insertStamp(body, line) {
+  if (body.startsWith('#!')) {
+    const nl = body.indexOf('\n');
+    if (nl === -1) return body + '\n' + line; // shebang with no trailing newline — still safe
+    return body.slice(0, nl + 1) + line + body.slice(nl + 1);
+  }
+  return line + body;
+}
+
+/** Workflow stamp: `# colab-handbook: <name> @ <version>` or, for a shebang/JS copy, the same
+ * shape with `//` (see stampCommentPrefix) — either prefix is accepted wherever it appears in the
+ * file, not just on line 1, so a second-line stamp reads back identically to a first-line one. */
 function parseWorkflowStamp(text) {
   if (!text) return null;
-  const m = text.match(/#\s*colab-handbook:\s*([A-Za-z0-9._-]+)\s*@\s*(v?[0-9][0-9A-Za-z.\-+]*)/);
+  const m = text.match(/(?:#|\/\/)\s*colab-handbook:\s*([A-Za-z0-9._-]+)\s*@\s*(v?[0-9][0-9A-Za-z.\-+]*)/);
   return m ? { name: m[1], version: m[2] } : null;
 }
 
@@ -598,7 +631,7 @@ module.exports = {
   handbookInfo, freezeVersion, templateNames, templateFiles, templateChangedSince, templateAt,
   AXES, axesPredating,
   WRITES_VETO_MARKER, writesRulingKnownAt,
-  stampLine, parseWorkflowStamp, parseClaudeStamp,
+  stampLine, stampCommentPrefix, insertStamp, parseWorkflowStamp, parseClaudeStamp,
   fingerprintHits, workflowProvenance, unstampedFinding,
   looksLikeHandbookWorkflow, looksLikeHandbookClaude,
   cmpParts, cmpSemver, sameContent, classifyStamped,

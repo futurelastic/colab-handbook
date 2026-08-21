@@ -22,15 +22,19 @@ Starting points you **copy into your own repo**. That is the entire model.
 | `repo-CLAUDE-block.md` | *paste into* `CLAUDE.md` | Every adopting repo | The discovery hook — how an agent finds the handbook at all. |
 | `gotchas-d-README.md` | `docs/gotchas.d/README.md` | Any repo starting a `docs/gotchas.d/` directory ([`code-wrap`](../skills/code-wrap/SKILL.md)'s A2 step) | Naming rule (`<issue>-<slug>.md`) and the don't-copy-back rule against an existing `docs/gotchas.md`. Optional — writing the first gotcha entry does not require copying this in first. |
 | `adr-README.md` | `docs/adr/README.md` | Any repo starting a `docs/adr/` directory ([`code-wrap`](../skills/code-wrap/SKILL.md)'s A2 step) | Same issue-keyed naming rule as `gotchas-d-README.md`, applied to architecture decision records instead of gotchas — an existing sequentially-numbered `docs/adr/` is left as-is; only new decisions use `<issue>-<slug>.md`. Optional, same as above. |
-| `docs-lint.mjs` | anywhere in-repo (e.g. `tools/docs-lint.mjs`) | Every repo — checks the STRUCTURE of the doc graph (router integrity, orphans, drafts-in-`docs/`, router size budget, dated files, §-citation resolution, `gotchas.d/` registry discipline, two-surface linkage) | Zero-dependency, plain Node. **Not enumerated by `colab template`** (it lists `*.yml` only) and **takes no automatic version stamp**, same reasoning as the `sh` hooks below — copy it by hand and re-copy by hand when this template changes. Pairs with `docs-lint.yml`. Also runs from `code-wrap`'s docs step and a weekly fleet sweep (colab-handbook #249) — this row is the third of its three seats. |
+| `docs-lint.mjs` | anywhere in-repo (e.g. `tools/docs-lint.mjs`) | Every repo — checks the STRUCTURE of the doc graph (router integrity, orphans, drafts-in-`docs/`, router size budget, dated files, §-citation resolution, `gotchas.d/` registry discipline, two-surface linkage) | Zero-dependency, plain Node. **Enumerated by `colab template` and DOES take an automatic version stamp** (colab-handbook #252): `colab template docs-lint.mjs --dest tools/docs-lint.mjs` copies it stamped on its **second** line (`// colab-handbook: docs-lint @ <version>`, after the `#!/usr/bin/env node` shebang — a bare `#` on any other line is a JS syntax error, unlike the YAML templates above) — `--dest` is required, since this file has no formulaic destination the way a workflow does. Pairs with `docs-lint.yml`. Also runs from `code-wrap`'s docs step and a weekly fleet sweep (colab-handbook #249) — this row is the third of its three seats. |
 | `docs-lint.yml` | `.github/workflows/docs-lint.yml` | Every repo that copied `docs-lint.mjs` | Advisory job — `continue-on-error: true` on the lint step, so a finding never blocks a merge until a repo deliberately removes that line. Requires `docs-lint.mjs` to already be in the repo; does not vendor it. |
 
 ### Hooks — the same model, copied by hand
 
-These are `sh`, not YAML, so `colab template` does not carry them (it enumerates
-`*.yml` only) and they take **no version stamp**: a stamp is a comment line prepended
-to a file, and prepending anything above a `#!` shebang breaks it. Copy them with `cp`,
-`chmod +x`, and own them exactly as you own a workflow.
+These are `sh`, with no file extension at all, and their destination filename does not
+match their source stem (`pre-push-guard` → `<hooks>/pre-push`) — so `colab template`
+does not carry them, and they take **no version stamp**. The original reason a stamp
+was impossible here — prepending a comment line above a `#!` shebang breaks it — is
+fixed for `docs-lint.mjs` above (a second-line stamp, colab-handbook #252), but that fix
+still needs a destination formula before it can apply to these too, and these three
+files don't have one. Copy them with `cp`, `chmod +x`, and own them exactly as you own
+a workflow.
 
 | File | Copy to | For | Notes |
 |---|---|---|---|
@@ -53,19 +57,25 @@ directory into ~45 repos and was wrong — fixed 2026-08-20.
 
 ## How to adopt
 
-1. **Copy — use `colab template`.** It copies the template *and* prepends a version
-   stamp in one act, so the audit can later tell you when the source moved on:
+1. **Copy — use `colab template`.** It copies the template *and* stamps it with the
+   current handbook version in one act, so the audit can later tell you when the
+   source moved on:
 
    ```sh
    colab template                                   # list templates + handbook version
    colab template ci-node   --dest .github/workflows/ci.yml
    colab template release-tag --dest .github/workflows/release.yml
    colab template deploy-xserver --dest .github/workflows/deploy-xserver.yml
+   colab template docs-lint.mjs --dest tools/docs-lint.mjs   # --dest is required for this one
    ```
 
-   The stamp is one prepended line — `# colab-handbook: <name> @ <version>`. Do a plain
-   `cp` only if you have no `colab` on PATH, and then add that stamp line by hand
-   (an unstamped copy is untrackable — the audit will nag you to re-copy).
+   The stamp is one comment line — `# colab-handbook: <name> @ <version>` — prepended
+   at the top for a YAML copy. `docs-lint.mjs` opens with a `#!/usr/bin/env node`
+   shebang, so its stamp lands on the **second** line instead, spelled `//` (a bare `#`
+   anywhere but a shebang is a JS syntax error) — the shebang still has to stay first
+   for the file to run. Do a plain `cp` only if you have no `colab` on PATH, and then
+   add that stamp line by hand (an unstamped copy is untrackable — the audit will nag
+   you to re-copy).
 2. **Walk the `# EDIT:` markers.** Each one is a decision only your repo can make:
    which branches exist, self-hosted runner or not, the build command, working
    directory.
