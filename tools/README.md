@@ -354,6 +354,39 @@ Evidence is a **pushed branch with real commits**. An active session on the bloc
 (intent, not code — one measured session was already dead ten minutes in, having never claimed its
 issue), nor is an unpushed branch, nor an empty one.
 
+## Dependency edges (`lib/blocked-by.js`) — the `blocked_by` write, owned (#251)
+
+The `blocked_by` dependency edge was the one write in `CONVENTIONS.md` [§5](../CONVENTIONS.md#readiness--open-and-unclaimed-is-not-enough)
+(*Readiness*) still hand-rolled `gh api`, and the one with two independent SILENT-failure modes
+measured live on this repo: (1) the REST endpoint's payload is a global **database** id, not the
+issue number a human types, so an empty variable or the issue number pasted where the id goes is
+still a valid integer — the POST returns 200 and attaches whichever issue holds that id *anywhere*
+on GitHub; (2) `blockedBy` is a **connection object** (`{nodes, totalCount}`), not an array —
+`| length` reads `2` for an issue with zero blockers, so a hand-written guard can conclude
+"already there" forever and never write the edge (#250).
+
+`colab blocked <blocked> --by <blocker>` (and `--clear --reason "<why>" [--force]`) owns this write
+the same way `colab readiness` owns `deps-checked`: it takes issue **numbers only** and resolves the
+database id itself, reads the current edges before writing (idempotent — an already-present add or
+an already-absent clear is a no-op), writes, and reads back to CONFIRM the edge names the intended
+blocker before printing success — a read-back showing a *different* edge than the one just POSTed is
+reported as a wrong-blocker error with the exact `gh api -X DELETE` remediation, never auto-"fixed".
+`--clear` requires a `--reason` (colab cannot verify intent, so it records yours as a receipt comment
+instead) and refuses a **closed** blocker by default — closing is not proof the edge is false, and
+`--force` releases only that one guard. Cross-repo edges are refused structurally: the blocker is
+always resolved through `gh api`'s own `{owner}/{repo}` placeholder, i.e. in the current repo.
+
+`lib/blocked-by.js` is **pure** — the arg validation, edge-shape normalisation (the #250 trap),
+presence check, resolved-blocker validation (failure mode 1's guard) and the read-back verdict are
+all data judgements with no git/gh/network, so the two failure modes above are each pinned by a
+three-line unit test (`lib/blocked-by.test.js`) instead of a subprocess fixture. `lib/blocked-cli.test.js`
+covers the gh I/O wiring in `tools/colab` (`cmdBlocked`/`cmdBlockedAdd`/`cmdBlockedClear`).
+
+No observer event is emitted for this write: `notify.js`'s `ACTION_KIND` is a closed vocabulary
+agreed per-action with the receiver, and no `dependency.*` kind has been agreed yet (same posture as
+`readiness --mechanical` and `solo` — see `pushEvent` below). The command's own source comments the
+proposed shape (`dependency.changed`, payload `{state, blocker}`) for whoever agrees it later.
+
 ## State & config files (machine-local)
 
 Everything lives under `~/.colab/` (override the directory with the `COLAB_HOME` env var):
@@ -717,6 +750,7 @@ Run `colab <cmd> --help` for full detail.
 | `place acquire\|check\|release <path> [--repo P] [--session S] [--session-name S] [--force]` | path-scoped, machine-local checkout hold `writes: serial` needs (see *Place-claims*, CONVENTIONS.md; #136). `check` exits 0/1/2 (free-or-mine / held-by-a-live-other / liveness-unknown-or-lock-unreachable); releasing someone else's hold requires `COLAB_HUMAN=1` |
 | `places [--json]` | list every place-claim on this machine, liveness resolved right now (never a stored flag) |
 | `readiness <issue> [--clear] [--repo P]` | own the `deps-checked` marker ([§5](../CONVENTIONS.md#5-claiming-work--how-to-say-im-on-this)): add it after verifying no open blocker, `--clear` on a new blocker or reopen. Journaled; refuses when `gh` is unusable (the marker has no local-only form) |
+| `blocked <blocked> --by <blocker> [--clear --reason R [--force]] [--repo P]` | own the `blocked_by` dependency-edge write (#251): numbers only, resolves the database id itself, reads before writing, reads back to confirm. `--clear` requires `--reason` and refuses a closed blocker without `--force`. Refuses cross-repo; refuses when `gh` is unusable |
 | `claims [--json] [--sync [--prune]]` | list (grouped by worktree); `--sync` **adds** claims found on GitHub (assigned + in-progress); `--prune` also **removes** local claims GitHub no longer shows |
 | `port alloc [--count N] [--range A-B \| --at p1,p2,...] [--worktree N \| --claim I \| --label S]` | allocate consecutive free ports, or pin exact ports with `--at` |
 | `port free <port> \| --worktree N \| --claim I` | free ports |

@@ -1142,7 +1142,15 @@ sub-issues, sequence as blocked-by.
 # read (repo-relative — no owner/name to get wrong)
 gh issue view <N> --json blockedBy,blocking,parent,subIssues,subIssuesSummary
 
-# write a sequence — REST, and the payload is the DATABASE id, not the issue number
+# write a sequence — colab owns this write (#251); it takes NUMBERS ONLY, resolves the
+# database id itself, reads before writing, writes, and reads back to confirm the edge
+# names the blocker you meant. Refuses cross-repo, structurally.
+colab blocked <N> --by <M>
+colab blocked <N> --by <M> --clear --reason "<why>" [--force]   # --force only overrides
+                                                                  # the closed-blocker guard
+
+# raw (portable fallback; the payload is the DATABASE id, not the issue number — the trap
+# `colab blocked` exists to make unreachable, see below)
 gh api -X POST   repos/{owner}/{repo}/issues/<N>/dependencies/blocked_by -F issue_id=<db-id>
 gh api -X DELETE repos/{owner}/{repo}/issues/<N>/dependencies/blocked_by/<db-id>
 gh api repos/{owner}/{repo}/issues/<M> -q .id      # ← how to get that db-id
@@ -1167,7 +1175,9 @@ mutation exists in GraphQL. Three mistakes fail loud (wrong type, `NOT_FOUND`); 
 silent and is the one to fear: the REST endpoint accepts an **issue number** as a valid
 integer database id and **succeeds**, attaching a blocker from whichever issue happens to
 hold that id *anywhere on GitHub*. Measured: `issue_id=34` silently attached a blocker
-from a stranger's unrelated repo. **Read `blockedBy` back after every write.**
+from a stranger's unrelated repo. **Read `blockedBy` back after every write.** `colab
+blocked` (#251) takes issue numbers only, so this hazardous value never passes through a
+caller's hands at all.
 
 **Read that confirmation from the `blockedBy`/`blocking` connections, never
 `issueDependenciesSummary` — the summary lags the graph.** Measured, within a single

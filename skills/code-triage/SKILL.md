@@ -382,7 +382,7 @@ else is authorised.** An enumeration of "which writes must be careful" reads, by
 as permission for anything unlisted; it is not. If a write is not one of the five below, it
 is not a triage write, no matter how naturally it seems to belong on the issue:
 
-1. `blocked_by` dependency edges (§4)
+1. `blocked_by` dependency edges, via `colab blocked` (§4, #251)
 2. the `deps-checked` label, via `colab readiness` (single-issue mode, §4; whole-repo path, §6)
 3. the `group:<key>` label plus its one evidence comment (§3)
 4. the `needs-plan` label plus its one reason comment (§6)
@@ -418,6 +418,9 @@ repo — which is exactly why the tracker is the wrong home for it.
   ```sh
   gh issue view <N> --json blockedBy -q ".blockedBy.totalCount"      # 0 = no blockers
   ```
+  `colab blocked` (#251) encodes this guard once, in a pure module with a unit test that
+  names #250 directly — use it and this trap stops being something every triage pass has
+  to reimplement correctly from scratch (§4).
   `subIssues` has the identical shape and the identical trap — `.subIssues | length` also
   reports `2` regardless of child count; read `.subIssues.nodes | length` (or prefer
   `subIssuesSummary`, §3) instead. `comments`, `labels` and `assignees` are plain arrays,
@@ -776,6 +779,17 @@ So when this pass concludes that one issue must wait for another, record it wher
 machine can read it back:
 
 ```sh
+colab blocked <blocked> --by <blocker>                                    # add the edge
+colab blocked <blocked> --by <blocker> --clear --reason "<why>" [--force] # remove it
+```
+
+Prefer `colab blocked`: it takes issue **numbers**, never a database id, and resolves the
+id itself, reads before writing, writes, and reads back to confirm the edge names the
+blocker you meant — every step below, done once, in one place, instead of re-implemented
+from scratch every triage pass (#251). The raw `gh` form is the documented portable
+fallback and does the exact same three steps by hand:
+
+```sh
 DB=$(gh api repos/{owner}/{repo}/issues/<blocker> -q .id)   # database id, not the number
 gh api -X POST repos/{owner}/{repo}/issues/<blocked>/dependencies/blocked_by -F issue_id=$DB
 gh issue view <blocked> --json blockedBy      # ← and confirm it names the blocker you meant
@@ -784,23 +798,36 @@ gh issue view <blocked> --json blockedBy      # ← and confirm it names the blo
 The report still explains the reasoning — that is what prose is good for. The
 relationship is the part the readiness gate above (and any other tool) reads.
 
-- **Read before you write.** The edge may already exist — this triage may be the second
-  one to reach the same conclusion (§0.2). Check `blockedBy` first; do not file a duplicate.
-- **Read it back after you write it, too.** A wrong `$DB` — an empty variable, a failed
-  subshell, the issue *number* pasted where the database id goes — does not error. The POST
-  returns 200 and attaches whichever issue holds that id anywhere on GitHub, in repos neither
-  you nor this org has heard of (`CONVENTIONS.md` [§5](../../CONVENTIONS.md#readiness--open-and-unclaimed-is-not-enough), *Readiness*). The check is not about
-  the API being flaky: at the moment of the write, a wrong id is **indistinguishable from
-  success**, and the only later symptom is a blocker nobody recognises.
+- **Read before you write — `colab blocked` does this for you.** The edge may already
+  exist — this triage may be the second one to reach the same conclusion (§0.2). Running
+  it twice on an already-present edge is a no-op; on the raw form, check `blockedBy` first
+  and do not file a duplicate.
+- **Read it back after you write it, too — `colab blocked` does this for you as well,
+  and refuses to print success if the read-back disagrees.** A wrong `$DB` — an empty
+  variable, a failed subshell, the issue *number* pasted where the database id goes —
+  does not error. The POST returns 200 and attaches whichever issue holds that id
+  anywhere on GitHub, in repos neither you nor this org has heard of (`CONVENTIONS.md`
+  [§5](../../CONVENTIONS.md#readiness--open-and-unclaimed-is-not-enough), *Readiness*).
+  The check is not about the API being flaky: at the moment of the write, a wrong id is
+  **indistinguishable from success**, and the only later symptom is a blocker nobody
+  recognises. On the raw form this read-back is a manual step you must not skip.
 - **Record only what you actually determined.** A sequence you inferred from titles is
   a guess; leave it unwritten and say so in the report.
-- **Remove an edge only when the edge is false — not because the blocker moved.** Delete
-  (`-X DELETE …/dependencies/blocked_by/<db-id>`) when the dependency never existed, or
-  stopped existing because the work was descoped or redesigned. **Do not delete it because
-  the blocker's code landed**: the two issues really are related, the readiness gate reads
-  the blocker's state for itself (§5.1), and an edge deleted for a display's convenience
-  does not come back if the blocker is reverted. Editing a fact to change what a report
-  prints is how the graph stops being trustworthy.
+- **Remove an edge only when the edge is false — not because the blocker moved.**
+  `colab blocked <blocked> --by <blocker> --clear --reason "<why>"` requires the reason
+  (colab cannot verify intent, so it records yours instead) and refuses by default when
+  the blocker is **closed** — the detectable signature of the exact mistake this rule
+  exists to prevent — unless you pass `--force`. Use `--clear` when the dependency never
+  existed, or stopped existing because the work was descoped or redesigned. **Do not clear
+  it because the blocker's code landed**: the two issues really are related, the readiness
+  gate reads the blocker's state for itself (§5.1), and an edge cleared for a display's
+  convenience does not come back if the blocker is reverted. Editing a fact to change what
+  a report prints is how the graph stops being trustworthy. The raw form
+  (`gh api -X DELETE …/dependencies/blocked_by/<db-id>`) carries none of these guards —
+  the same reasoning as `readiness`'s two-tier shape below.
+- **Cross-repo edges are refused by `colab blocked`**, structurally — the blocker is
+  always resolved in the current repo. A genuine cross-repo need falls back to the raw
+  `gh api` form above.
 - **Triage still never claims and never touches trunk.** Its writes are exactly three, all
   of them recordings of its own judgement about issues: `blocked_by` edges, the
   `deps-checked` label, and the `group:` label plus its evidence comment (§3).
@@ -1213,8 +1240,9 @@ Hand the top group to **code-start**, which will re-verify the claim before taki
 - The `issues` map (§0.3) was rewritten, not appended to — every entry corresponds to an
   issue still open at the end of this run, nothing else. A group verdict that was reused
   had every member's key checked, not just the one issue being printed.
-- Re-running changed nothing that was already true: no duplicate `blocked_by` edge, no
-  re-closed issue, no second copy of a group's evidence comment.
+- Re-running changed nothing that was already true: no duplicate `blocked_by` edge (`colab
+  blocked` is idempotent on an already-present edge — §4, #251), no re-closed issue, no
+  second copy of a group's evidence comment.
 - Every multi-issue group survives this run: `group:<key>` on **every** member, one
   evidence comment naming the collision, and the label removed anywhere it stopped being
   true. A group that exists only in this report is the failure §3 describes.
@@ -1228,7 +1256,8 @@ Hand the top group to **code-start**, which will re-verify the claim before taki
 - Every "ready" group passed all six gates, not just "nobody is assigned".
 - Every open blocker was judged on its **state** (§5.1), not on being open — and every
   soft-ready group says what it waits on and names the branch the code is already on.
-- No `blocked_by` edge was deleted merely because its blocker's code landed.
+- No `blocked_by` edge was cleared merely because its blocker's code landed (`colab blocked
+  --clear` refuses a closed blocker without `--force` — §4, #251).
 - Every "already shipped" call carries evidence (sha + `file:line`) — not a hunch.
 - Branch names carry all issue numbers in one trailing run.
 - Every group judged hard got `needs-plan` on its lead issue plus a one-line reason
