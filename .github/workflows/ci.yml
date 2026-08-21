@@ -32,6 +32,42 @@ jobs:
       - name: gitleaks detect
         run: gitleaks detect --source . --no-banner
 
+  actionlint:
+    name: Schema-lint workflow templates (actionlint)
+    runs-on: ubuntu-latest
+    env:
+      ACTIONLINT_VERSION: "1.7.12"
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      # Pinned binary, same pattern as gitleaks above.
+      - name: Install actionlint (pinned binary)
+        run: |
+          curl -sSL -o actionlint.tar.gz \
+            "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
+          tar -xzf actionlint.tar.gz actionlint
+          chmod +x actionlint
+          sudo mv actionlint /usr/local/bin/actionlint
+          rm -f actionlint.tar.gz
+      # #245: a job-level `if: hashFiles('package.json') != ''` in templates/ci-node.yml
+      # is rejected at workflow-VALIDATION time — before any job runs — because
+      # hashFiles() is not among the functions GitHub permits in `jobs.<job_id>.if`.
+      # yaml.safe_load and this job's own syntax checks both pass on a file like that;
+      # only a schema/expression-aware linter catches it. That bug shipped in two
+      # tagged releases before an adopter's red trunk surfaced it. This step is what
+      # would have caught it on the commit that introduced it (a042cea).
+      #
+      # -shellcheck= and -pyflakes= are deliberate: they turn off actionlint's shell-
+      # and Python-linting integrations, which flag pre-existing style issues in the
+      # templates' embedded scripts unrelated to workflow schema/expression validity —
+      # the regression class this step exists for. templates/*.yml are also meant to
+      # be edited by adopters after copying, so shell-style enforcement here would be
+      # policing text that is not this repo's to keep clean. Verified: actionlint with
+      # both disabled is clean on current templates/*.yml + this repo's own ci.yml, and
+      # fails at the exact offending line when #245's job-level `if: hashFiles(...)` is
+      # reintroduced.
+      - name: actionlint templates/*.yml + this repo's own workflow
+        run: actionlint -shellcheck= -pyflakes= templates/*.yml .github/workflows/*.yml
+
   self-check:
     name: Self-audit + syntax
     runs-on: ubuntu-latest
