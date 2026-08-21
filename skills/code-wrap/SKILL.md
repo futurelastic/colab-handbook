@@ -131,6 +131,10 @@ you have already decided no action is needed until something else happens, and
 `backlog` — the default a missing line reads as anyway — for an ordinary work
 proposal.
 
+**Before you file: would one session finish this?** If not, it is an epic — file
+the parent for the goal and each item as its own issue, linked as sub-issues, with
+`blocked_by` for real ordering (`CONVENTIONS.md` [§5](../../CONVENTIONS.md#epics--a-container-is-not-a-start-candidate), *Epics*).
+
 The distinction is intent, not keyboard. **If the human asked for the follow-up
 during this session, it is theirs** — `Filed-by: boss (via session <name>)`, no
 label. Only what you decided to raise on your own is `agent-filed`.

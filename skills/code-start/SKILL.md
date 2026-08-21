@@ -219,6 +219,11 @@ gh issue view $N --comments                      # prior-session log
 
   Filed-by: <boss (via <session>) | agent (<what prompted it>, session <name>)>
   ```
+  **Before you file: would one session finish this?** If not, it is an epic — the
+  `Plan (checklist)` heading above is an invitation, not a green light. File the
+  parent for the goal and each item as its own issue, linked as sub-issues, with
+  `blocked_by` for real ordering (`CONVENTIONS.md` [§5](../../CONVENTIONS.md#epics--a-container-is-not-a-start-candidate), *Epics*).
+
   Record the returned number as `$N`. If `colab` is installed, follow with
   `colab issue-filed $N` — a best-effort notify event (`issue.filed`, #102) that lets an
   external observer refresh its snapshot the moment the issue exists, instead of waiting
