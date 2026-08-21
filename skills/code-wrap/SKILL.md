@@ -139,12 +139,14 @@ The distinction is intent, not keyboard. **If the human asked for the follow-up
 during this session, it is theirs** — `Filed-by: boss (via session <name>)`, no
 label. Only what you decided to raise on your own is `agent-filed`.
 
-### A2. Update repo docs the work made stale — in `docs/`, not in `CLAUDE.md`
+### A2. Update repo docs the work made stale — not in `CLAUDE.md`
 
 The Issue is the feature's log; **docs in the repo are the living knowledge** the
 next person reads without digging through Issues. If this session changed any of
 these, update the doc **in the same session** (don't leave "will update later" in
-a comment while the file stays wrong). All four destinations are in `docs/`:
+a comment while the file stays wrong). Four of the five destinations below are
+in `docs/` — the fifth, a comment at the call site, is not, and follows after
+them:
 
 - Domain model changed (new entity/table, renamed concept, new flow) → the
   architecture doc — a single **running** description of the system as it is
