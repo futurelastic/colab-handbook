@@ -262,6 +262,25 @@ the README while omitting four docs totalling 120 KB — this step grew the body
 Never write a secret into docs — only *where it lives* (a GitHub Secret, `.env`
 on the server, a password manager). Docs are deliverable paths; commit them in A3.
 
+#### `docs-lint`, if this repo has adopted it — structure, not truth
+
+A2 above is about whether docs are still **true**; a separate, optional check
+handles whether the doc graph is still **structurally sound** — router links that
+resolve, `docs/` files nobody points to, drafts left where current truth lives,
+§-citations that resolve. If this repo has copied in `docs-lint.mjs`
+(`templates/docs-lint.mjs` — colab-handbook #249), this is the moment to run it:
+docs were just touched, so this is when a broken reference is cheapest to catch.
+
+```sh
+node <path-to>/docs-lint.mjs --repo .
+```
+
+**Advisory only — never a reason to block A4.** Fold any finding into this
+session's report the same way you would any other advisory (CI gone red for an
+unrelated reason, a stale claim); fix it now if it is trivial and yours, otherwise
+say so and move on. No `docs-lint.mjs` in this repo → skip this step silently,
+same as any other optional tool this skill checks for.
+
 ### A3. Run the repo's own quality gate
 
 Run whatever this repo's CI runs — resolve it from the repo, don't assume:
