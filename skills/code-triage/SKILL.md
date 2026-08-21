@@ -331,7 +331,7 @@ half-matching:
 
 ```json
 {
-  "version": "code-triage/2",
+  "version": "code-triage/3",
   "scope": "whole-repo",
   "ranAt": "<ISO8601>",
   "fingerprint": {
@@ -342,7 +342,11 @@ half-matching:
     "branches": "<16hex>"
   },
   "lastRun": { "decision": "full", "moved": ["trunkSha", "backlog"], "calls": 24 },
-  "conclusion": { "ready": [ "…" ], "blocked": [ "…" ], "taken": [ "…" ], "close": [ "…" ] }
+  "conclusion": { "ready": [ "…" ], "blocked": [ "…" ], "taken": [ "…" ], "close": [ "…" ] },
+  "issues": {
+    "115": { "key": "<16hex>", "group": "import-fixes", "bucket": "ready" },
+    "247":  { "key": "<16hex>", "group": null, "bucket": "blocked" }
+  }
 }
 ```
 
@@ -360,6 +364,13 @@ half-matching:
   fingerprint slot equal to it means the read that produced it did not arrive — refuse to
   write the record, exactly as §0's outcome-line 3 says, rather than persisting a digest
   that will match forever for the wrong reason.
+- **`issues` is required-when-present, not required outright (#247).** It is the per-issue
+  verdict cache §0.3 reads and writes; the five `fingerprint` keys above stay the only ones
+  that make a record `no usable cache` when absent. A `code-triage/3` record with no `issues`
+  key (or an empty one) is a legitimate first-run-of-this-feature state, not a corrupt one —
+  §0.3 says what to do with it. Bumped from `/2` because this is a shape change under §0.1's
+  own rule ("bump the version whenever the shape changes"), even though every `/2` reader's
+  five fingerprint keys still parse unchanged.
 
 ### 0.2 Running this twice must change nothing
 
@@ -420,6 +431,98 @@ repo — which is exactly why the tracker is the wrong home for it.
   remove the label if a blocker is now open. `CONVENTIONS.md` [§5](../../CONVENTIONS.md#5-claiming-work--how-to-say-im-on-this) assigns removal to whoever
   adds the blocker; this is how the next reader finds out when they didn't. Only spend the
   call on issues a `deps-checked` is actually deciding for.
+
+### 0.3 Per-issue verdict cache — reuse across a pass that proceeds (#247)
+
+§0's fingerprint answers one question: did *anything* move. When it did — even one label on
+one issue — the run so far falls back to re-deriving **every** open issue from scratch: §2's
+discard check, §3's grouping, §4's ordering, §5's readiness gate, all repeated for issues
+whose own inputs never moved. §0 already makes this argument for the whole-repo case
+("about 4 of ~50 carry new information"); it holds **per issue** too — if issue N's own
+content, its dependency edges, and trunk did not move, N's verdict cannot have moved either,
+whatever happened to issue M.
+
+**The per-issue key — already in hand, zero added calls.** `OUT2` (input 2) carries one `I
+<number> <state> <labels>\t<title>\t<body@base64>` line per open issue; `OUT` (input 3)
+carries one `DEP <number>:<blockedBy>:<blocking>` line per open issue. Both are fully fetched
+by the time §0 has decided to proceed — this section changes what gets *stored and skipped*,
+not what gets *fetched*. Per issue N:
+
+```sh
+KEY_N=$(printf '%s\n%s\n%s' "$TRUNKSHA" "$(grep "^I $N " <<<"$OUT2")" "$(grep "^DEP $N:" <<<"$OUT")" \
+  | shasum -a 256 | cut -c1-16)
+```
+
+Trunk sha is in the key deliberately, per #247's own proposal: §2's already-shipped check
+depends on trunk state, not just the issue's own text, so a trunk push has to invalidate the
+issues it might have shipped. It invalidates **every** issue's key at once — a per-issue
+cache buys nothing on a pass where trunk moved, same as today. The case it targets, and the
+common one (#247: "the common invalidation is a single claim or label move"), is a pass where
+trunk did *not* move.
+
+**Reuse is narrower than "N's own key matched" — grouping is not a per-issue fact.** "Which
+files does this issue touch" (§3) is a judgement about N alone, stable whenever N's key is.
+"Which *group* N belongs to" is a judgement about the whole open backlog: an issue N never
+touched can still change N's group by entering the backlog with an overlapping file, or by
+leaving it and dissolving a group down to one surviving member (§3, "a one-member group is
+not a group"). So reuse N's stored verdict only when **all** of:
+
+1. `KEY_N` matches the stored `issues.N.key`.
+2. Every other member of N's stored group (if any) also matches its own stored key — a group
+   is one unit; one dirty member dirties the whole group, exactly as an un-cached pass would
+   re-derive the whole group rather than one member of it.
+3. No issue **newly present** this pass (no stored entry at all — including one dropped by
+   the previous pass's prune, below) overlaps N's stored file-set. §3's evidence comment
+   already records what that file-set was judged to be; read it back, do not re-derive it. A
+   new issue is cheap to check against every stored file-set locally — it is not cheap to
+   skip checking.
+4. No member of N's stored group **closed or left the open set** since the stored verdict —
+   closing shrinks the group, and a shrunk group can need its label removed (§3).
+
+An issue with **no stored entry at all** — the first pass to see it, or one the previous
+pass's prune (below) dropped — has nothing to compare against, so conditions 1-4 do not
+apply; it is derived fresh by definition, same as today.
+
+Fails any of 1-4 ⇒ re-derive N (and, by 2/4, its whole group) exactly as an un-cached pass
+would: §2's discard check, §3's grouping, §4's ordering, §5's readiness gate. Passes all four
+⇒ re-print N's stored verdict (§6) and skip re-deriving §2-§5 for it. This is safe to skip
+even on a re-run: §3/§4/§5's writes are already idempotent (§0.2), so a pass that *would*
+have re-reached the same conclusion loses nothing by not re-reaching it.
+
+**What this deliberately does NOT skip.** §4's ordering ranks the *surviving* groups against
+each other (blast radius, exposure, cost) — a whole-set comparison, no network calls, no
+issue-body re-reading, and it gains nothing from caching; redo it every pass that proceeds,
+over whichever groups §2/§3 left standing (reused or freshly derived). §5's readiness gate
+for a **blocked** issue still reports the blocker's *current* state — condition 1 already
+invalidates the moment `DEP` moves, so a blocker's close can never hide behind a stale
+bucket. And this section is about *reasoning* cost, not network calls: unlike §0's own
+short-circuit, per-issue reuse does not reduce `lastRun.calls` — inputs 2 and 3 are always
+fetched in full to identify which issues are new or dirty in the first place. What it saves
+is the executing session re-deriving grouping/ordering/readiness for issues nothing about
+this pass actually put in question.
+
+**Store one entry per currently-open issue, in the same `$CACHE`, replacing — not
+accumulating onto — the previous `issues` map:**
+
+```json
+"issues": {
+  "115": { "key": "<16hex>", "group": "import-fixes", "bucket": "ready" },
+  "247":  { "key": "<16hex>", "group": null, "bucket": "blocked" }
+}
+```
+
+- **Prune on every write — bounded, never a growing map.** Write only entries for issues
+  still open at the end of *this* pass; drop everything else. This is the exact defect #244
+  found and fixed for `colab-sweep.json` (61 KB, 24 accumulated ad-hoc keys), arriving here by
+  a different route — a per-issue cache has one entry per open issue on the backlog by
+  construction, not one per issue this repo has ever had.
+- **`group` and `bucket` are enough** to satisfy condition 2 above and to re-print §6's report
+  without re-deriving it; they do not duplicate §0.1's `conclusion` arrays, which stay the
+  ranked prose a re-print serves.
+- **Never store a per-issue key from an empty read.** Same rule as §0's outcome line 3 and
+  §0.1's empty-digest warning: if N's `I` or `DEP` line did not arrive, write no entry for N
+  at all, rather than a key built from `e3b0c44298fc1c14`-equivalent emptiness. A missing
+  entry is condition 3's "newly present" case next pass — safe, not silent.
 
 ## 1. Gather
 
@@ -625,6 +728,10 @@ Because: app/Import/Parser.php:88 — #115 and #114 both rewrite the delimiter b
 - **Record only collisions you actually checked.** A group inferred from titles is a guess;
   leave it unwritten and say so in the report. Writing it makes the guess look verified to
   every reader afterwards.
+- **On a pass that proceeds under §0's fingerprint, this whole section may already be
+  answered for some issues.** §0.3's per-issue verdict cache reuses a stored group verdict
+  when the issue's own key, its group-mates' keys, and the surrounding backlog membership
+  all still match — re-derive here only the issues §0.3 flagged dirty.
 
 ## 4. Order by blast radius, not by number
 
@@ -977,6 +1084,12 @@ Prefer `colab readiness` over a raw `gh` edit for the reason §4 gives: colab
 owns the write, so it is journaled and the `readiness.marked` event fires from
 the same site — the single signal the event-driven consumer actually receives.
 
+**This is also where §0.3's per-issue cache gets written, once per pass.** After the
+`$CACHE` fingerprint and `conclusion` writes (§0.1), write the pruned `issues` map: one
+`{key, group, bucket}` entry per issue still open at the end of this pass — reused
+verdicts included, not just freshly-derived ones, since a reused verdict's key has not
+changed and stays valid to compare against next pass.
+
 ### Then flag hard groups with `needs-plan` — a label, not a plan (#94, `CONVENTIONS.md` [§5](../../CONVENTIONS.md#planning--a-plan-file-that-outlives-one-command-and-who-drafts-it-94) *Planning*)
 
 Some READY (or soft-ready) groups are cheap to describe but hard to build: an ambiguous
@@ -1087,6 +1200,9 @@ Hand the top group to **code-start**, which will re-verify the claim before taki
   missing any fingerprint key, or none of the five, is the failure #244 measured directly in
   this checkout: a cache nobody can compare against next time, that forces every future run
   to take the full pass regardless of what actually changed.
+- The `issues` map (§0.3) was rewritten, not appended to — every entry corresponds to an
+  issue still open at the end of this run, nothing else. A group verdict that was reused
+  had every member's key checked, not just the one issue being printed.
 - Re-running changed nothing that was already true: no duplicate `blocked_by` edge, no
   re-closed issue, no second copy of a group's evidence comment.
 - Every multi-issue group survives this run: `group:<key>` on **every** member, one
