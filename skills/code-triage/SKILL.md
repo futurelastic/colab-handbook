@@ -409,9 +409,19 @@ CHANGED/REVERSED", corrections to either, and "final state of this pass" summari
 verdict stamped to a trunk sha goes stale the next time trunk moves — minutes, in an active
 repo — which is exactly why the tracker is the wrong home for it.
 
-- **Dependency edges: read before writing.** `gh issue view <N> --json blockedBy` and skip
-  the POST if the edge is already there. §4 writes edges; a second triage reaching the same
-  conclusion must not file it twice.
+- **Dependency edges: read before writing.** Skip the POST if the edge is already there.
+  §4 writes edges; a second triage reaching the same conclusion must not file it twice.
+  `blockedBy` is a **connection object** (`{nodes, totalCount}`), not an array — `| length`
+  counts its two keys and returns `2` for an issue with **no** blockers at all, so a guard
+  written that way silently concludes "already there" every time and never writes the edge
+  (#250). Read the count field, not the object's own length:
+  ```sh
+  gh issue view <N> --json blockedBy -q ".blockedBy.totalCount"      # 0 = no blockers
+  ```
+  `subIssues` has the identical shape and the identical trap — `.subIssues | length` also
+  reports `2` regardless of child count; read `.subIssues.nodes | length` (or prefer
+  `subIssuesSummary`, §3) instead. `comments`, `labels` and `assignees` are plain arrays,
+  so `| length` is correct on those.
 - **Already-shipped closes:** an issue already closed is not re-closed and not re-evidenced.
 - **Group records: the label is idempotent, the comment is not.** Re-applying `group:<key>`
   changes nothing; re-posting its evidence comment stacks a duplicate every idle cycle.
