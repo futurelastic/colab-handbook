@@ -220,6 +220,68 @@ test('conflict: a foreign-host record refuses, kind "foreign-host", citing the s
   assert.strictEqual(c.kind, 'foreign-host');
 });
 
+// --- conflict() and blank-session self-recognition (#242) -----------------------------
+
+test('conflict: two blank sessions are NOT the same holder — a self-collision still refuses', () => {
+  const key = place.placeKey('/tmp/repo');
+  const st = { places: { [key]: rec({ session: null, sessionName: null }) } };
+  const c = place.conflict(st, '/tmp/repo', { session: '' }, () => true);
+  assert.notStrictEqual(c, null);
+  assert.strictEqual(c.kind, 'held');
+});
+
+test('conflict: pid is never an exemption key — identical pid, blank sessions both sides, still a conflict', () => {
+  const key = place.placeKey('/tmp/repo');
+  const st = { places: { [key]: rec({ session: null, sessionName: null, pid: 4242 }) } };
+  const c = place.conflict(st, '/tmp/repo', { session: '', pid: 4242 }, () => true);
+  assert.notStrictEqual(c, null);
+  assert.strictEqual(c.kind, 'held');
+  assert.strictEqual(c.likelySelf, true);
+});
+
+test('conflict: a blank-blank refusal names the identity gap and both remedies', () => {
+  const key = place.placeKey('/tmp/repo');
+  const st = { places: { [key]: rec({ session: null, sessionName: null, pid: 4242 }) } };
+  const c = place.conflict(st, '/tmp/repo', { session: '', pid: 4242 }, () => true);
+  assert.match(c.message, /carries a session id/);
+  assert.match(c.message, /--session/);
+  assert.match(c.message, /COLAB_SESSION/);
+  assert.match(c.message, /COLAB_HUMAN=1 colab place release/);
+});
+
+test('conflict: blank-blank with a DIFFERENT pid carries no likelySelf and never claims the hold is yours', () => {
+  const key = place.placeKey('/tmp/repo');
+  const st = { places: { [key]: rec({ session: null, sessionName: null, pid: 4242 }) } };
+  const c = place.conflict(st, '/tmp/repo', { session: '', pid: 9999 }, () => true);
+  assert.notStrictEqual(c.likelySelf, true);
+  assert.doesNotMatch(c.message, /very likely yours/);
+});
+
+test('conflict: a non-blank matching session still exempts itself (unchanged)', () => {
+  const key = place.placeKey('/tmp/repo');
+  const st = { places: { [key]: rec({ session: 'sess-mine' }) } };
+  assert.strictEqual(place.conflict(st, '/tmp/repo', { session: 'sess-mine' }, () => true), null);
+});
+
+test('conflict: unidentified is false whenever either side carries a session', () => {
+  const key = place.placeKey('/tmp/repo');
+  const st1 = { places: { [key]: rec({ session: 'sess-other' }) } };
+  const c1 = place.conflict(st1, '/tmp/repo', { session: '' }, () => true);
+  assert.strictEqual(c1.unidentified, false);
+
+  const st2 = { places: { [key]: rec({ session: null }) } };
+  const c2 = place.conflict(st2, '/tmp/repo', { session: 'sess-mine' }, () => true);
+  assert.strictEqual(c2.unidentified, false);
+});
+
+test('conflict: sessionName is never an exemption key — equal names, blank sessions both sides, still a conflict', () => {
+  const key = place.placeKey('/tmp/repo');
+  const st = { places: { [key]: rec({ session: null, sessionName: 'same-label' }) } };
+  const c = place.conflict(st, '/tmp/repo', { session: '', sessionName: 'same-label' }, () => true);
+  assert.notStrictEqual(c, null);
+  assert.strictEqual(c.kind, 'held');
+});
+
 // --- conflict() names the hold's age, on every kind (#238) ------------------------
 
 const DAYS_OLD = new Date(Date.now() - 4 * 24 * 3_600_000).toISOString();

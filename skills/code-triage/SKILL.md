@@ -881,10 +881,13 @@ READY  fix/import-fixes-115-114-113   #115 #114 #113
 
 **On a repo that does not declare `writes: isolated`, add a note — never replace
 `start:` with it:** a human working the trunk checkout directly, in a live
-conversation, may instead run `COLAB_HUMAN=1 colab solo` where neither of
+conversation, may instead run `COLAB_HUMAN=1 colab solo --session <id>` where neither of
 [§2](../../CONVENTIONS.md#writes--the-trunk-direct-veto-and-the-two-things-that-make-a-branch-mandatory)'s
 two mandatory-branch conditions fires — but that is a human's choice to make in the
-moment, not a command this report may hand to whatever reads it next:
+moment, not a command this report may hand to whatever reads it next. **`--session` is
+mandatory on `colab solo` since #242** (it mints the same shared-checkout hold a
+worktree-less `colab claim` does) — never drop it from the note, even though the note
+itself is optional:
 
 ```
 READY  fix/import-fixes-115-114-113   #115 #114 #113
@@ -892,8 +895,9 @@ READY  fix/import-fixes-115-114-113   #115 #114 #113
        files: app/Import/*, tests/Import/*
        start: colab claim 115 114 113 --worktree import-fixes-115-114-113
        note: no writes: isolated veto here — a human at the keyboard may instead run
-             `COLAB_HUMAN=1 colab solo` (no branch mandatory); an unattended session
-             must use the worktree command above regardless
+             `COLAB_HUMAN=1 colab solo --session <id>` (no branch mandatory; --session
+             mandatory, #242); an unattended session must use the worktree command
+             above regardless
 ```
 
 A **soft-ready** group is startable, so it belongs in the ready list — but it carries a

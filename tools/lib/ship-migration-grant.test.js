@@ -175,7 +175,11 @@ function fixture(projectYml) {
 function colab(fx, args, extraEnv = {}) {
   const r = spawnSync('node', [COLAB, ...args], {
     encoding: 'utf8',
-    env: { ...process.env, PATH: `${fx.bin}:${process.env.PATH}`, COLAB_HOME: fx.home, COLAB_SESSION: '', COLAB_SESSION_NAME: '', ...extraEnv },
+    // #242: a non-blank, fixed COLAB_SESSION — fixtures here `claim` with no `--worktree`, then
+    // `ship` against the same trunk checkout; both now REQUIRE a session id up front to mint the
+    // shared-checkout place-claim (blank never counts as "the same holder" on re-acquire). Same
+    // fix as ship-plan-journal.test.js's precedent comment for the identical #237 root cause.
+    env: { ...process.env, PATH: `${fx.bin}:${process.env.PATH}`, COLAB_HOME: fx.home, COLAB_SESSION: 'sess-migration-grant-test', COLAB_SESSION_NAME: '', ...extraEnv },
   });
   return { code: r.status, out: r.stdout || '', err: r.stderr || '' };
 }

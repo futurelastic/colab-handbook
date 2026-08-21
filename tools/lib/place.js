@@ -44,6 +44,18 @@
  * object). The catch lives in `tools/colab`'s `placeState()`/`placeMutate()` helpers, used by every
  * caller that acquires or checks a place-claim (`cmdSolo`, `cmdClaim`'s trunk-checkout path,
  * `cmdPlace`) — see those for the actual degrade behaviour, exit code 2 on `cmdPlace`.
+ *
+ * BLANK-SESSION SELF-RECOGNITION IS A CALLER RESPONSIBILITY, NOT SOMETHING THIS MODULE GUESSES
+ * (#242). `conflict`'s same-holder exemption matches ONLY a truthy, matching `session` — two
+ * invocations that both carry a blank one are never recognized as the same holder, even when a
+ * hold's recorded `pid` matches the caller's own. That is deliberate: `pid` is `process.ppid`,
+ * the parent shell, not a unique per-command identity, so matching on it could exempt a genuine
+ * conflict (two unrelated commands sharing a shell) — the one failure mode this primitive must
+ * never have. `tools/colab`'s `cmdClaim`/`cmdSolo` instead make a non-blank `session` MANDATORY
+ * at the two call sites that mint a shared-checkout hold, so the gap is closed by requiring
+ * identity up front rather than by weakening what counts as a match here. See `conflict`'s own
+ * doc comment for the full argument, including a falsifier run that measured agent tool calls
+ * NOT sharing a stable pid across commands, which is what rules pid out as a fix.
  */
 
 const fs = require('fs');
@@ -175,21 +187,71 @@ function holdAge(rec) {
 }
 
 /**
- * Would acquiring `pathAbs` for `self` (an optional {session} to exempt the caller's own
+ * The sentence appended to a `held`/`unknown` message when neither side of the comparison
+ * carries a session id (#242). Blank-blank is NOT recognized as a re-acquire by the SAME
+ * holder — `conflict`'s exemption only fires on a truthy, matching `session` — so this is
+ * where that silence would otherwise leave a caller with no explanation and no remedy.
+ *
+ * `likelySelf` names a real, useful hint (the hold's pid is this invocation's own parent
+ * process) WITHOUT turning it into an exemption — see the `conflict` doc comment for why a
+ * pid is never used to decide `null` vs refuse.
+ */
+function identityGap(rec, self, likelySelf) {
+  let msg = ' — neither this hold nor this attempt carries a session id, so it cannot be ' +
+    'told apart from your own (#242): supply --session <stable-id> on the acquiring command, ' +
+    'or export COLAB_SESSION="<stable-id>" once for the shell, so a re-acquire is recognized ' +
+    'as yours. If you know this holder is gone, COLAB_HUMAN=1 colab place release ' +
+    `"${rec.path}".`;
+  if (likelySelf) {
+    msg += ` (This hold's recorded pid (${rec.pid}) is this invocation's own parent process, ` +
+      'so it is very likely yours — but a pid is process lineage, not a session, and this ' +
+      'module will not exempt on it.)';
+  }
+  return msg;
+}
+
+/**
+ * Would acquiring `pathAbs` for `self` (an optional {session, pid} to exempt the caller's own
  * re-acquire/renew) conflict with an existing hold? Returns `null` for clear ground, or
- * `{holder, kind, message}` — `kind` is `'held'` (a live other holder, refuse), `'unknown'`
- * (liveness could not be resolved, refuse and name the remedy), or `'foreign-host'` (refuse,
- * citing the sync hazard).
+ * `{holder, kind, message, unidentified, likelySelf}` — `kind` is `'held'` (a live other
+ * holder, refuse), `'unknown'` (liveness could not be resolved, refuse and name the remedy),
+ * or `'foreign-host'` (refuse, citing the sync hazard). `unidentified` is true when neither
+ * side carries a session id (blank-blank); `likelySelf` is additionally true when, in that
+ * same blank-blank case, the hold's recorded pid equals `self.pid`.
+ *
+ * PID IS NEVER AN EXEMPTION KEY (#242). Only a matching, non-blank `session` ever returns
+ * `null` here — a pid match is surfaced in the message as a hint, never used to decide
+ * held-vs-clear. Two reasons, both measured rather than assumed: (1) this fleet's own
+ * agents are told to pass `--session` as a FLAG, never rely on an `export`, precisely
+ * because shell state does not persist between an agent's separate tool calls — and if the
+ * shell does not persist, its pid does not either, so pid-matching buys agents nothing; a
+ * live falsifier run (two `colab place acquire` calls from two separate tool-call shells)
+ * recorded two DIFFERENT pids and the second silently superseded the first because its
+ * holder had already died — the self-collision this module has to worry about needs a
+ * still-ALIVE prior holder, which the agent-tool-call model rarely produces. (2) `pid` is
+ * `process.ppid` — the parent SHELL, not a unique invocation — so two unrelated commands run
+ * in the same shell (or a recycled pid) would share one, and this primitive's whole value is
+ * refusing when it cannot prove safety: a pid match could exempt a genuine conflict, which is
+ * the one failure mode it must never have. The population that genuinely needs self-recognition
+ * across commands (a persistent interactive shell) already has a free, correct fix: `export
+ * COLAB_SESSION=<id>` once. `sessionName` is likewise never an exemption key — it is display
+ * text a caller picks about the WORK, not a join key, and two concurrent sessions can
+ * plausibly choose the same one (a consumer that tried name-matching measured exactly this
+ * and reverted it).
  */
 function conflict(st, pathAbs, self = {}, probe = defaultProbe) {
   const h = holderOf(st, pathAbs, probe);
   if (!h) return null;
   if (self && self.session && h.rec.session === self.session) return null; // re-acquire by the same holder
+  const unidentified = !!(self && !self.session && !h.rec.session);
+  const likelySelf = !!(unidentified && self.pid && h.rec.pid === self.pid);
 
   if (h.rec.host && h.rec.host !== os.hostname()) {
     return {
       holder: h.rec,
       kind: 'foreign-host',
+      unidentified,
+      likelySelf,
       message: `place "${h.rec.path}" is recorded held from host "${h.rec.host}" ` +
         `(held ${holdAge(h.rec)}) — ${h.reason}`,
     };
@@ -199,15 +261,21 @@ function conflict(st, pathAbs, self = {}, probe = defaultProbe) {
     return {
       holder: h.rec,
       kind: 'unknown',
+      unidentified,
+      likelySelf,
       message: `place "${h.rec.path}" is held by session "${holderLabel(h.rec)}" (held ${holdAge(h.rec)}) ` +
         `and its liveness cannot be confirmed locally (${h.reason}) — wait a moment and check again if it may ` +
-        'have just died, or override with COLAB_HUMAN=1 once you know that session is gone',
+        'have just died, or override with COLAB_HUMAN=1 once you know that session is gone' +
+        (unidentified ? identityGap(h.rec, self, likelySelf) : ''),
     };
   }
   return {
     holder: h.rec,
     kind: 'held',
-    message: `place "${h.rec.path}" is held by session "${holderLabel(h.rec)}" (${h.reason}, held ${holdAge(h.rec)})`,
+    unidentified,
+    likelySelf,
+    message: `place "${h.rec.path}" is held by session "${holderLabel(h.rec)}" (${h.reason}, held ${holdAge(h.rec)})` +
+      (unidentified ? identityGap(h.rec, self, likelySelf) : ''),
   };
 }
 

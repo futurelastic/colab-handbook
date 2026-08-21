@@ -364,7 +364,7 @@ colab claims          # if colab is installed …
 gh issue list --label in-progress    # … else the raw command
 
 # claim it (before starting, not when you open the PR)
-colab claim $N        # if colab is installed …
+colab claim $N --session "$SESSION_URL"        # if colab is installed …
 gh issue edit $N --add-assignee @me --add-label in-progress    # … else raw
 ```
 
@@ -374,12 +374,17 @@ gh issue edit $N --add-assignee @me --add-label in-progress    # … else raw
 > claim from the first. That is fixed, but one command is still the right shape.
 > Run the bare `colab claim $N` above **only** when you are taking the plain-branch
 > path, or when you want the issue held before you are ready to build anything.
+> **`--session` is mandatory on this path (#242)** — no `--worktree` here means this
+> mints the trunk-checkout place-claim, and a blank session can never be recognized
+> as its own later re-acquire. Same identity you carry through the rest of this skill
+> (step 0), not a one-off.
 
 - An unclaimed issue is fair game — someone may take it out from under you.
   Claim first.
 - A branch may carry a group of issues; claim **every** issue in the group now
-  (`colab claim 115 114 113`, or one `gh issue edit` each). Claiming the whole
-  group is load-bearing at wrap, not bookkeeping — see step 4.
+  (`colab claim 115 114 113 --session "$SESSION_URL"`, or one `gh issue edit` each).
+  Claiming the whole group is load-bearing at wrap, not bookkeeping — see step 4.
+  **`--session` mandatory here too** — same reason as above.
 
 ### A clean label does not mean clean ground
 
