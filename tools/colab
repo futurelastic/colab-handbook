@@ -5327,11 +5327,21 @@ function handbookVersion(root) {
   return d.ok && d.stdout ? d.stdout : 'v0';
 }
 
+// *.yml/*.yaml are whole-file CI copies with a formulaic destination (.github/workflows/<name>.yml),
+// so `colab template <name>` alone is enough to place them. *.mjs templates (docs-lint.mjs today —
+// #252) have no such formula — templates/README.md says "anywhere in-repo" — so they are listed and
+// stamped the same way but always require an explicit --dest; see cmdTemplate below.
+//
+// Deliberately NOT widened to the `sh` hook templates (pre-commit-dispatch, pre-commit-identity,
+// pre-push-guard): those ship with no file extension at all AND copy to a destination filename that
+// does not match their source stem (`pre-push-guard` → `<hooks>/pre-push`), so "widen the enumeration"
+// is a second, separate design decision — left to #252's own deferred fleet-wide rollout, not done
+// here. templates/README.md's Hooks section still describes them as hand-copied, unstamped.
 function listTemplates(templatesDir) {
   try {
     return fs.readdirSync(templatesDir)
-      .filter((f) => /\.ya?ml$/.test(f))
-      .map((f) => f.replace(/\.ya?ml$/, ''))
+      .filter((f) => /\.(?:ya?ml|mjs)$/.test(f))
+      .map((f) => f.replace(/\.(?:ya?ml|mjs)$/, ''))
       .sort();
   } catch (_) {
     throw new UserError(`Cannot read handbook templates dir: ${templatesDir}`);
@@ -5340,20 +5350,28 @@ function listTemplates(templatesDir) {
 
 const HELP_TEMPLATE = `colab template [<name>] [--dest <path>] [--repo <path>] [--force]
 
-Copy a colab-handbook workflow template into a repo, STAMPED with the handbook's current
-version. The stamp lets the audit tell you later when the source template has moved on.
+Copy a colab-handbook template into a repo, STAMPED with the handbook's current version. The
+stamp lets the audit tell you later when the source template has moved on.
 
   colab template                    list available templates + current handbook version
   colab template <name>             copy templates/<name>.yml → <repo>/.github/workflows/<name>.yml
   colab template <name> --dest F    copy to an explicit file F
                                     (adopters usually want --dest .github/workflows/ci.yml)
+  colab template docs-lint.mjs --dest F
+                                    non-YAML templates have no formulaic destination — --dest
+                                    is required for them (see templates/README.md)
 
 Options:
-  --repo <path>   target repo root for the default destination (default: git root of cwd)
+  --repo <path>   target repo root for the default destination (default: git root of cwd) —
+                  *.yml templates only; a non-YAML template always requires --dest.
   --force         overwrite an existing destination. You OWN the copy — local edits are lost.
 
-The copied file gets one line prepended:
+The copied file gets one stamp line:
   # colab-handbook: <name> @ <version>
+prepended at the top for a *.yml/*.yaml copy, since there is no shebang to protect. A copy that
+opens with a \`#!\` shebang (a *.mjs template) gets the same stamp on its SECOND line instead —
+using \`//\` there, since a bare \`#\` on any other line is a JS syntax error — so the shebang
+still has to be line 1 for the file to run.
 These templates are NEVER called remotely — copy, edit, own. When the audit flags your
 copy as behind a changed template, review the diff and re-copy to re-stamp.
 `;
@@ -5380,19 +5398,40 @@ function cmdTemplate(argv) {
     return 0;
   }
 
-  const stem = name.replace(/\.ya?ml$/, '');
-  const srcFile = path.join(templatesDir, `${stem}.yml`);
+  // docs-lint.yml and docs-lint.mjs share the stem "docs-lint" — a real collision, not a
+  // hypothetical one — so an explicit ".mjs" suffix on the argument MUST pin the lookup to the
+  // mjs file; only a bare, extension-less name falls back to auto-detection (yml first, unchanged
+  // from before, then mjs). Guessing yml-first even when ".mjs" was typed would silently hand back
+  // the wrong template whenever a *.yml sibling happens to exist under the same stem.
+  const extMatch = name.match(/\.(ya?ml|mjs)$/);
+  const stem = extMatch ? name.slice(0, -extMatch[0].length) : name;
+  let srcFile, ext;
+  if (extMatch && extMatch[1] === 'mjs') {
+    srcFile = path.join(templatesDir, `${stem}.mjs`);
+    ext = 'mjs';
+  } else {
+    srcFile = path.join(templatesDir, `${stem}.yml`);
+    ext = 'yml';
+    if (!fs.existsSync(srcFile) && !extMatch) {
+      const mjsFile = path.join(templatesDir, `${stem}.mjs`);
+      if (fs.existsSync(mjsFile)) { srcFile = mjsFile; ext = 'mjs'; }
+    }
+  }
   if (!fs.existsSync(srcFile)) {
     throw new UserError(`No template "${stem}". Available: ${available.join(', ') || '(none)'}`);
   }
 
-  // Destination: explicit --dest, else <repo>/.github/workflows/<name>.yml.
+  // Destination: explicit --dest always wins. Only a *.yml template has a formulaic default
+  // (<repo>/.github/workflows/<name>.yml) — a *.mjs template's home is "anywhere in-repo"
+  // (templates/README.md), so there is no honest default to guess and --dest is required (#252).
   let destFile;
   if (opts.dest) {
     destFile = path.resolve(opts.dest);
-  } else {
+  } else if (ext === 'yml') {
     const repoAbs = resolveRepo(opts);
     destFile = path.join(repoAbs, '.github', 'workflows', `${stem}.yml`);
+  } else {
+    throw new UserError(`"${stem}" is a .${ext} template with no formulaic destination — pass --dest <path> (e.g. --dest tools/${stem}.${ext}).`);
   }
 
   if (fs.existsSync(destFile) && !opts.force) {
@@ -5408,9 +5447,12 @@ function cmdTemplate(argv) {
   }
 
   const body = fs.readFileSync(srcFile, 'utf8');
-  const stampLine = `# colab-handbook: ${stem} @ ${version}\n`;
+  // A *.yml copy has no shebang to protect, so this is still a plain prepend at line 1 — unchanged
+  // from before. A *.mjs copy opens with `#!/usr/bin/env node`; insertStamp puts the stamp on line
+  // 2 instead so the shebang stays first and the file keeps running as a script (#252).
+  const stampLineText = stamp.stampLine(stem, version, stamp.stampCommentPrefix(ext));
   fs.mkdirSync(path.dirname(destFile), { recursive: true });
-  fs.writeFileSync(destFile, stampLine + body);
+  fs.writeFileSync(destFile, stamp.insertStamp(body, stampLineText));
 
   print(`✓ ${stem} @ ${version} → ${destFile}`);
   print('  stamped. Walk its # EDIT: markers, declare your toolchain, then commit. You own this file now.');
