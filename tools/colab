@@ -5337,11 +5337,16 @@ function handbookVersion(root) {
 // does not match their source stem (`pre-push-guard` → `<hooks>/pre-push`), so "widen the enumeration"
 // is a second, separate design decision — left to #252's own deferred fleet-wide rollout, not done
 // here. templates/README.md's Hooks section still describes them as hand-copied, unstamped.
+// Returns FILENAMES, extension included — never bare stems. docs-lint.yml and docs-lint.mjs
+// share the stem "docs-lint" (a real collision, not hypothetical), so a stem-only list would
+// print "docs-lint" twice with nothing telling the two apart. Every caller of this list (the
+// no-name listing, and the not-found error's "Available:" line) inherits the fix for free by
+// consuming the filename as-is instead of re-stripping it (#252 display sweep — resolution
+// itself, below in cmdTemplate, is untouched: a bare "docs-lint" still resolves to the .yml).
 function listTemplates(templatesDir) {
   try {
     return fs.readdirSync(templatesDir)
       .filter((f) => /\.(?:ya?ml|mjs)$/.test(f))
-      .map((f) => f.replace(/\.(?:ya?ml|mjs)$/, ''))
       .sort();
   } catch (_) {
     throw new UserError(`Cannot read handbook templates dir: ${templatesDir}`);
@@ -5431,7 +5436,7 @@ function cmdTemplate(argv) {
     const repoAbs = resolveRepo(opts);
     destFile = path.join(repoAbs, '.github', 'workflows', `${stem}.yml`);
   } else {
-    throw new UserError(`"${stem}" is a .${ext} template with no formulaic destination — pass --dest <path> (e.g. --dest tools/${stem}.${ext}).`);
+    throw new UserError(`"${stem}.${ext}" has no formulaic destination — pass --dest <path> (e.g. --dest tools/${stem}.${ext}).`);
   }
 
   if (fs.existsSync(destFile) && !opts.force) {
@@ -5454,7 +5459,11 @@ function cmdTemplate(argv) {
   fs.mkdirSync(path.dirname(destFile), { recursive: true });
   fs.writeFileSync(destFile, stamp.insertStamp(body, stampLineText));
 
-  print(`✓ ${stem} @ ${version} → ${destFile}`);
+  // Names the RESOLVED file (with extension), never the bare stem — the stem alone cannot tell
+  // "docs-lint.yml" from "docs-lint.mjs" apart, and relying on the reader to notice from
+  // `destFile` (a user-supplied --dest, which may not spell out or may even obscure the
+  // extension) is exactly how a stem collision reads back as a false confirmation (#252).
+  print(`✓ ${stem}.${ext} @ ${version} → ${destFile}`);
   print('  stamped. Walk its # EDIT: markers, declare your toolchain, then commit. You own this file now.');
   return 0;
 }

@@ -662,10 +662,22 @@ function runTemplate(args, t) {
     { encoding: 'utf8', cwd });
 }
 
-test('`colab template` now lists docs-lint (the .mjs template), not just *.yml stems', (t) => {
+test('`colab template` now lists docs-lint.mjs alongside docs-lint.yml, both with extension', (t) => {
   const r = runTemplate([], t);
   assert.strictEqual(r.status, 0);
-  assert.match(r.stdout, /^\s*docs-lint\s*$/m);
+  assert.match(r.stdout, /^\s*docs-lint\.mjs\s*$/m);
+  assert.match(r.stdout, /^\s*docs-lint\.yml\s*$/m);
+});
+
+test('the listing has no duplicate rows — a bare stem is never printed twice for two real files', (t) => {
+  // The regression this whole hold was about: docs-lint.yml and docs-lint.mjs share the stem
+  // "docs-lint", and a listing keyed on the stripped stem prints "docs-lint" twice with nothing
+  // telling the rows apart. Every row must be a distinct string once printed.
+  const r = runTemplate([], t);
+  assert.strictEqual(r.status, 0);
+  const rows = r.stdout.split('\n').map((l) => l.trim()).filter((l) => l && !l.includes(' '));
+  assert.strictEqual(new Set(rows).size, rows.length,
+    `listing has a duplicate row: ${JSON.stringify(rows)}`);
 });
 
 test('`colab template docs-lint.mjs` with no --dest refuses — there is no formulaic destination', (t) => {
@@ -687,6 +699,10 @@ test('`colab template docs-lint` (bare, no extension) still resolves to the .yml
   const out = fs.readFileSync(dest, 'utf8');
   assert.match(out, /^# colab-handbook: docs-lint @ /);
   assert.match(out, /^name: docs-lint/m, 'must be the CI workflow, not the .mjs script');
+  // The confirmation line must name the RESOLVED file, not the bare stem — a stem alone cannot
+  // tell docs-lint.yml from docs-lint.mjs apart, and a --dest with no visible extension (as
+  // used here on purpose) would otherwise make the two invocations print an identical line.
+  assert.match(r.stdout, /✓ docs-lint\.yml @ /, 'success line must name the resolved .yml, not the bare stem');
 });
 
 test('`colab template docs-lint.mjs --dest <path>` copies it stamped on line 2, shebang intact', (t) => {
@@ -702,4 +718,16 @@ test('`colab template docs-lint.mjs --dest <path>` copies it stamped on line 2, 
   assert.ok(st, 'line 2 must carry the stamp');
   assert.strictEqual(st.name, 'docs-lint');
   assert.match(lines[1], /^\/\//, 'a .mjs copy is stamped with // — a bare # would be a JS syntax error there');
+  // Same requirement as the bare-.yml case above, the other side of the collision: the
+  // confirmation line must name docs-lint.mjs, not the ambiguous bare stem.
+  assert.match(r.stdout, /✓ docs-lint\.mjs @ /, 'success line must name the resolved .mjs, not the bare stem');
+});
+
+test('the not-found error lists available templates with extension, no duplicates', (t) => {
+  const r = runTemplate(['nonexistent-template'], t);
+  assert.notStrictEqual(r.status, 0);
+  const msg = r.stderr + r.stdout;
+  assert.match(msg, /docs-lint\.mjs/);
+  assert.match(msg, /docs-lint\.yml/);
+  assert.doesNotMatch(msg, /docs-lint, docs-lint/, 'must not repeat the bare stem twice');
 });
