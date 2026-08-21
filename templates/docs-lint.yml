@@ -1,0 +1,55 @@
+# docs-lint (Advisory) — TEMPLATE. Copy me into your repo at
+# .github/workflows/docs-lint.yml. Copy-and-own, exactly like every other
+# workflow template in this directory — nothing calls this workflow remotely,
+# and nothing here updates itself. See templates/README.md.
+#
+# Pairs with templates/docs-lint.mjs, which must ALSO be copied into the repo
+# (see that file's own header for what it checks and why). This workflow does
+# not vendor the script — it runs whatever copy you committed.
+#
+# ADVISORY BY DESIGN (colab-handbook #249): the lint step below runs with
+# `continue-on-error: true`, so a structural finding NEVER blocks a merge on
+# its own — only the annotation step surfaces it as a visible warning on the
+# run. Promoting this to a hard gate is a deliberate, per-repo decision you
+# make later, once you've run it for a while and trust the signal: delete the
+# `continue-on-error: true` line (and, if you want the annotation step to stop
+# being redundant, delete that step too). Do not remove it preemptively — the
+# Issue that specced this job explicitly wants the pilot period first.
+#
+# EDIT POINTS are marked `# EDIT:`.
+
+name: docs-lint
+
+on:
+  push:
+    # EDIT: keep only the branches this repo actually has (same note as
+    # templates/ci-node.yml — do not drop the trunk branch on a Tier A/C repo).
+    branches: [main, dev]
+  pull_request:
+    branches: [main, dev]
+
+jobs:
+  docs-lint:
+    name: docs-lint (advisory)
+    # EDIT: private repo with an org self-hosted runner? Use it instead —
+    # see templates/README.md "Runner policy". Public repos stay on
+    # ubuntu-latest always (a fork PR must never execute on your own runner).
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run docs-lint
+        id: lint
+        # ADVISORY — see the header note above. This is the one line that
+        # decides whether a finding can block a merge.
+        continue-on-error: true
+        # EDIT: path to wherever you copied docs-lint.mjs (defaults to the
+        # same relative path this template ships at).
+        run: node docs-lint.mjs --repo .
+
+      - name: Surface the result
+        if: always()
+        run: |
+          if [ "${{ steps.lint.outcome }}" = "failure" ]; then
+            echo "::warning::docs-lint found a structural finding — advisory only, review the job log above for detail"
+          fi
