@@ -1216,6 +1216,11 @@ Suggested batch size: <N> — <why that size, not one big batch>"
 - **Report it too.** A ready group carrying this verdict gets one extra line in §6, the
   same way a soft-ready group carries its `note:` line — a session (or a router reading
   the report instead of a human) should not have to re-derive the verdict from the label.
+- **Has a second reader now: `code-ship` B1c (#262).** A rejected diff on an issue set
+  carrying this label is the one case that skill's grading step may retry once,
+  automatically, instead of stopping for a human — this label is the signal it reads to
+  know a rung above the one that produced the diff exists at all. Nothing here changes
+  because of that; it is one more reason not to apply the label loosely.
 
 Hand the top group to **code-start**, which will re-verify the claim before taking it.
 
