@@ -941,12 +941,24 @@ grouping on these prefixes. A commit with no prefix is invisible in release note
   `- [ ]` line per deliverable, load-bearing. A prose-only `## Plan` cannot be verified
   mechanically (reported, not blocking; cannot bind an issue opened before this
   convention). `colab ship` parses the checklist before composing the squash body: any
-  claimed issue with an unticked box and no declared `Remainder: #M` gets `Refs #N`
-  instead of `Closes #N` — stays open, redirect reported, never silent. A hand-merge runs
-  the identical check by reading the same two fields
+  claimed issue with an unticked box and no declared `Remainder: #M` **refuses the
+  merge outright (#263)** — a precondition row exactly like a red CI run, not a silent
+  `Closes #N` → `Refs #N` downgrade that lets the ship proceed anyway. Measured before
+  this tightened: on one repo, ~8 weeks, 125 `Refs #N` merges against 780 `Closes #N`
+  ones, and only 10 commits ever declared a remainder — the redirect was reported, but
+  reported is not the same as read; a tracker showing an open issue with unticked boxes
+  is indistinguishable from work nobody started. Ticking every box, declaring
+  `Remainder: #M`, or an explicit `--refs #N` (a deliberate choice, never gated) all
+  clear it. A hand-merge runs the identical check by reading the same two fields
   (`gh issue view N --json body,comments`). Motivating incident: an issue closed by
   squash-merge with a third of its three-section scope unimplemented — the sections were
   prose, so nothing could have caught it.
+- **Requiring the remainder issue is the convention — the gate does not file one for
+  you (#263).** A merge blocked on a missing `Remainder: #M` could in principle create
+  that issue automatically; this deliberately does not, because filing on an agent's own
+  judgement writes an artifact to the tracker nobody asked for, while requiring the
+  human (or session) that already knows what was left out to write the one line keeps
+  authorship where the judgement actually lives. The smaller change, taken on purpose.
 - **Every closed issue must be corroborated by git, not the claim registry alone (#87).**
   Measured: a branch carrying #71 and #76 resolved to `[71, 74, 76]` because a co-tenant
   claimed #74 onto the same worktree minutes after merge authorisation, with nothing on
@@ -971,6 +983,42 @@ grouping on these prefixes. A commit with no prefix is invisible in release note
 - **That resolves a FALSE red — a real one has a different, human-only door (#105).** A
   **genuinely** red trunk (the sha really failed) is a true deadlock when the candidate
   branch's entire content IS the fix — see *Red-trunk exemption* below.
+
+### Is a shipped half actually shippable? — the mechanical gate is not the judgement call (#263)
+
+The close gate above is mechanical: it can see whether a box is ticked and whether a
+remainder is declared. It cannot see whether shipping *only* the ticked half is a good
+idea — that is judgement, and until now no convention stated a test for it.
+
+**Half-done splits three ways, and only one of them is a filing defect:**
+
+1. **Filing defect** — the work genuinely outlived one session: different readiness,
+   different blockers, disjoint file sets. This should have been an epic (*Epics*,
+   above); the fix is filing it that way next time, not shipping the half.
+2. **Not a defect at all** — external interruption. A usage window closed, a
+   human-only gate (migration, promotion) sits in the way, a blocker surfaced
+   mid-flight, priorities changed. A correctly filed issue lands half-done for any of
+   these, and reflexively splitting it on that account teaches nothing and adds
+   tracker churn for its own sake.
+3. **Inseparable** — the boxes are stages of *one* change, not independent deliverables.
+   Shipping the first half puts something half-wired on trunk: a route with no guard,
+   a rename applied to some call sites, a migration with no backfill. Here, shipping
+   half is worse than shipping nothing, and the right move is to leave the branch and
+   finish it next session — never to declare a remainder just to get the gate to pass.
+
+Nothing about the checklist itself distinguishes these three — a `- [ ]`/`- [x]` count
+cannot tell "inseparable" from "not a defect," and a partial diff can pass every
+existing green gate (tests included) when the tests for the unwritten half simply do
+not exist yet. So the gate is a precondition, never the answer to "should this half
+ship."
+
+**The test, applied at grading time (`code-ship` B1c) before the close gate is ever
+reached:** *does the shipped half have its own oracle?* If the only way to know the
+shipped half actually works is to finish the other half first, it is case 3 —
+inseparable — and it is not shippable regardless of what the checklist says. If it
+has its own oracle (its own passing tests, its own working route, its own verifiable
+behavior) independent of the unshipped remainder, cases 1 and 2 apply and a declared
+`Remainder: #M` is the honest way to ship it.
 
 ### Has it landed? — the one rule, because the obvious one is wrong
 

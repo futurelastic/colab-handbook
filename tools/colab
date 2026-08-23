@@ -6283,12 +6283,12 @@ Options:
                       instead — an unattended caller must NOT read it as a no-op.
 
                       \`checks\` has one entry per precondition — branch resolves, not an integration
-                      line, autonomy granted, target CI alive+green, no new migrations, trunk
-                      checkout ready, no hand-merge conflict (a real preview merge, done in a
-                      throwaway detached worktree — nothing on disk here is touched by it), claims
-                      corroborated by git (#87), and branch has commits (#90 — TRUE, not false, when
-                      the branch qualifies for evidence-close: it is a different path, not a
-                      failure). \`class\`
+                      line, autonomy granted, target CI alive+green, no new migrations, remainder
+                      declared for unticked issues (#263 — see below), trunk checkout ready, no
+                      hand-merge conflict (a real preview merge, done in a throwaway detached
+                      worktree — nothing on disk here is touched by it), claims corroborated by git
+                      (#87), and branch has commits (#90 — TRUE, not false, when the branch
+                      qualifies for evidence-close: it is a different path, not a failure). \`class\`
                       is set ONLY on a failing check, from a CLOSED, STABLE-WIRE-FORMAT vocabulary:
                         self-clearing   CI still running, a transient gh/preview read failure — an
                                         unattended caller may retry later with NO human action.
@@ -6305,10 +6305,12 @@ Options:
                       \`closeIssues\`/\`refsIssues\` (#74) are \`issues\` split by what a real ship would
                       write: Closes vs Refs, unioning --refs, the "tracking" label, and the close gate.
                       \`checklistFindings\` lists only the issues the CLOSE GATE (not --refs, not the
-                      label) moved from close to ref — an unticked \`## Plan\` checklist with no
-                      declared \`Remainder: #M\`. Deliberately NOT folded into \`checks\`/\`ok\`: a
-                      checklist finding does not block this ship, it only redirects that one issue's
-                      trailer, so it must never read as a precondition failure to an unattended caller.
+                      label) would move from close to ref — an unticked \`## Plan\` checklist with no
+                      declared \`Remainder: #M\`. #263: a non-empty \`checklistFindings\` now ALSO
+                      appears as its own \`checks\` row ("remainder declared for unticked issues"),
+                      ok:false, class:human-gated — it blocks this ship, exactly like a real
+                      precondition failure, until the boxes are ticked, a \`Remainder: #M\` is
+                      declared, or the issue is explicitly \`--refs\`'d.
 
                       \`migrationGrant\` (#98) is \`null\` when the branch adds no migration file (the
                       ordinary case). Otherwise: \`{ branch, files: [...], granted: [{issue,by,at}],
@@ -6423,9 +6425,11 @@ const HUMAN_GATED = 'human-gated';     // autonomy absent, a real failure, a dec
  * rather than refusing to ship over a read this function never attempted.
  *
  * Returns `gateFindings`: one entry per issue the CHECKLIST gate — not the flag, not the label —
- * moved from close to ref. Callers report these distinctly: unlike an explicit `--refs` or a
- * declared tracking issue, this one is a surprise the operator did not ask for, and the whole
- * point of #74 is that it must be LOUD.
+ * moved from close to ref. #263: a non-empty `gateFindings` is no longer just a redirect a caller
+ * may proceed past — both `cmdShip` and `cmdShipDryJson` now fold it into their precondition set
+ * and REFUSE THE MERGE on it, same as a red CI run. The declaration (tick the boxes, add
+ * `Remainder: #M`, or explicit `--refs`/the `tracking` label) becomes a precondition of shipping,
+ * not a request that a downgraded `Refs #N` already satisfied silently.
  */
 function resolveCloseRefsSplit(repoAbs, gh, issues, refsFromFlag) {
   const refsSet = new Set(issues.filter((n) => refsFromFlag.has(n)));
@@ -6658,12 +6662,12 @@ function cmdShipDryJson(opts) {
 
   const checks = [];
   let target = null;
-  // #74: the close-gate split (closeIssues/refsIssues/checklistFindings) is reported ALONGSIDE
-  // `checks`, never folded into it — a checklist-gated issue does not block this ship (it only
-  // redirects that one issue's Closes to a Refs), so it must not flip `ok` the way a real
-  // precondition failure does. `checks`' documented contract (HELP_SHIP) is "one entry per
-  // PRECONDITION, ok:false only on something that blocks" — additive new top-level fields keep
-  // that contract intact for every existing consumer of `ok`/`checks`.
+  // #74/#263: the close-gate split (closeIssues/refsIssues/checklistFindings) is reported
+  // ALONGSIDE `checks` AS WELL AS folded into it — `closeIssues`/`refsIssues`/`checklistFindings`
+  // stay additive fields for a caller that wants the per-issue detail, but a non-empty
+  // `checklistFindings` ALSO becomes its own row in `checks` (below, once the split is computed)
+  // and therefore DOES flip `ok`, same as a red CI run: an unticked `## Plan` checklist with no
+  // declared remainder is now a precondition failure, not a silent Closes→Refs redirect.
   let closeIssues = sess.issues, refsIssues = [], checklistFindings = [];
   // #90: `mode` is additive and tells an unattended caller WHICH completion path this branch has —
   // "squash" or "evidence-close". Without it, a zero-commit branch read `ok: true` and then hit
@@ -6724,12 +6728,25 @@ function cmdShipDryJson(opts) {
   ciGrantPayloadVal = ciGrantPayload(ciResultJson);
   checks.push({ name: ciResultJson.name, ok: ciResultJson.ok, class: ciResultJson.class, detail: ciResultJson.detail });
 
-  // #74: same close-gate split the prose path runs, reported via the additive fields above.
+  // #74/#263: same close-gate split the prose path runs, reported via the additive fields above —
+  // AND, since #263, folded into `checks` as its own precondition row (below).
   const refsFromFlagJson = new Set(
     String(opts.refs || '').split(',').map((s) => s.trim().replace(/^#/, '')).filter(Boolean).map(Number),
   );
   const split = resolveCloseRefsSplit(repoAbs, gh, sess.issues, refsFromFlagJson);
   closeIssues = split.closeIssues; refsIssues = split.refsIssues; checklistFindings = split.gateFindings;
+
+  // #263: the close gate now REFUSES the merge, not just the close. `checklistFindings` here is
+  // strictly the CHECKLIST gate's own findings (not --refs, not the tracking label — see
+  // `resolveCloseRefsSplit`'s doc comment) — those are deliberate, human-made choices to keep an
+  // issue open, and neither one is a precondition failure. An unticked box with no declared
+  // remainder is a surprise the operator did not ask for, so it is the one shape that blocks.
+  const gateOkJson = checklistFindings.length === 0;
+  checks.push({ name: 'remainder declared for unticked issues', ok: gateOkJson, class: gateOkJson ? null : HUMAN_GATED,
+    detail: gateOkJson
+      ? 'no unticked Plan checklist item(s) without a declared remainder'
+      : `${checklistFindings.map((f) => `#${f.issue} (${f.unchecked}/${f.total} unticked)`).join(', ')} — ` +
+        'tick what shipped, file `Remainder: #M` for the rest, or pass --refs to keep it open deliberately' });
 
   const migrations = newMigrations(repoAbs, target, sess.branch);
   const migGrants = migrations.length ? shipMigrationGrants(repoAbs, gh, sess.issues, sess.branch) : null;
@@ -7094,12 +7111,14 @@ function cmdShip(argv) {
     if (!sess.issues.includes(n)) warn(`--refs #${n} is not a claimed issue on this branch — ignored`);
   }
   const { closeIssues, refsIssues, refsSet, gateFindings } = resolveCloseRefsSplit(repoAbs, gh, sess.issues, refsFromFlag);
-  // #74: a checklist-gated issue is a SURPRISE the operator did not ask for (unlike --refs or a
-  // tracking label, both deliberate) — call it out on its own, loud, not folded silently into the
-  // "issues:" line's "(ref — kept open)" annotation below.
+  // #74/#263: a checklist-gated issue is a SURPRISE the operator did not ask for (unlike --refs or
+  // a tracking label, both deliberate) — call it out on its own, loud, not folded silently into
+  // the "issues:" line's "(ref — kept open)" annotation below. #263: this is now a REFUSAL, not a
+  // silent Closes→Refs redirect — see the `checks` row below, which is what actually blocks.
+  const gateOk = gateFindings.length === 0;
   for (const f of gateFindings) {
-    warn(`#${f.issue}: ${f.reason} — Closes withheld, Refs #${f.issue} written instead (does not block this ship).`);
-    warn(`  Tick what shipped with evidence, file \`Remainder: #M\` for the rest, then re-run to close it.`);
+    warn(`#${f.issue}: ${f.reason} — refusing to ship until this is resolved.`);
+    warn(`  Tick what shipped with evidence, file \`Remainder: #M\` for the rest, or pass --refs ${f.issue} to keep it open deliberately, then re-run.`);
   }
   // CI alive + green on the TARGET.
   //
@@ -7125,6 +7144,14 @@ function cmdShip(argv) {
   const migOk = migrations.length === 0 || migGrants.ok;
   checks.push([migOk ? '✓' : '✗', 'no new migrations', migDetail(migrations, migGrants, target, sess.branch).text]);
 
+  // #263: the close gate's own row — folded into the precondition table, not just a warning. Only
+  // the CHECKLIST gate's own findings count here (not --refs, not the tracking label, both
+  // deliberate choices already excluded from `gateFindings` by `resolveCloseRefsSplit`).
+  checks.push([gateOk ? '✓' : '✗', 'remainder declared for unticked issues',
+    gateOk
+      ? 'no unticked Plan checklist item(s) without a declared remainder'
+      : `${gateFindings.map((f) => `#${f.issue} (${f.unchecked}/${f.total} unticked)`).join(', ')} — no declared remainder`]);
+
   // ---- B1b's cross-check, run by the tool rather than by the reader (#87) ----
   // The claim registry is read AT SHIP TIME, so a claim a co-tenant session wrote onto this branch
   // minutes ago is indistinguishable from one this session made. Ask git whether the branch
@@ -7148,8 +7175,9 @@ function cmdShip(argv) {
 
   // #87 gates the ship: writing `Closes #N` for work that has not started is unrecoverable — the
   // issue can be reopened, but the false claim stays in trunk's immutable history, and GitHub will
-  // have closed it the instant trunk was pushed.
-  const preOk = ciOk && migOk && treeOk && corr.ok;
+  // have closed it the instant trunk was pushed. #263: gateOk joins the same list — an unticked
+  // checklist with no declared remainder is exactly as unrecoverable once `Closes #N` ships.
+  const preOk = ciOk && migOk && treeOk && corr.ok && gateOk;
 
   // ---- report the table ----
   print(`ship ${shortRepo(repoAbs)} · branch ${sess.branch} → ${target}` +
