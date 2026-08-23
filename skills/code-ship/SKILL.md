@@ -347,14 +347,62 @@ ask) as a whole:
   something different and that reason holds up. Proceed to B2; the verdict rides on
   B2b's evidence comment.
 - **reject** — the diff does not satisfy the oracle, or drifts from the plan's Files
-  list with no written reason anywhere in the plan file. **Do not merge.** Post a
-  comment on the issue naming specifically what falls short — not "does not match the
-  plan," the actual gap. Leave every claim in the harvested set held; this is a stop for
-  a human to resolve (accept the shortfall, send it back, or override), never an
-  automatic revert of the branch and never a silent merge-anyway.
+  list with no written reason anywhere in the plan file. **Do not merge, and do not
+  proceed to B2 on this pass, whichever reject class below applies.** Post a comment on
+  the issue naming specifically what falls short — not "does not match the plan," the
+  actual gap. Every claim in the harvested set stays held; this is never an automatic
+  revert of the branch and never a silent merge-anyway.
 
-A rejected grade ends this skill's run for that issue set. Nothing past B1c executes
-until a human has seen the reject comment and said what happens next.
+### Reject classifies further — `decision` is the default, `escalate` is the narrow exception (#262)
+
+A stop-for-a-human on *every* reject was measured to be the wrong default for the
+common case: one fleet's cheap-tier lane spent 47 attempts — 35 of them rejects, all at
+the *same* worker tier — on a single issue, because nothing forced a tier change once
+that tier had been shown insufficient. A human wasn't blocking any of it; nothing was
+routing around a tier that had already failed repeatedly. Waiting for a person bought
+nothing there. So a reject is graded into exactly one of two classes, decided **at
+grading time**, never guessed from a label alone:
+
+- **`decision`** — the default, and everything not explicitly `escalate` below. The
+  oracle itself looks wrong, the ask was ambiguous, the diff drifted from scope with no
+  reason recorded in the plan file, or the change touches migration, promotion,
+  security, money, or anything non-undoable. **A human resolves this — no exception,
+  whatever any label says.** Behaviour is exactly what "reject" already meant above:
+  comment, hold every claim, stop.
+- **`escalate`** — narrow, and every condition below must hold, not just one:
+  1. **The issue set carries the `mechanical-lane` label** (`code-triage`,
+     *mechanical-lane*, #93). That label is the one in-repo signal that this work was
+     dispatched below the fleet's default engine in the first place — which is what
+     makes "a rung above exists" a fact this skill can read, not a guess it is making.
+     No label on the harvested set → no `escalate` class, ever, regardless of 2 and 3.
+  2. **The gap is a plain oracle-unmet**, not an oracle-is-wrong or scope-is-wrong
+     finding — the diff genuinely attempted the stated task and the oracle genuinely
+     still says no. Anything that reads as the oracle itself being the problem is
+     `decision`, not this.
+  3. **The one-time bound has not already been spent.** Read the issue's comments for a
+     prior `<!-- colab:reject escalate=1 -->` marker (below). If one is already there,
+     this reject is `decision`, full stop, regardless of 1 and 2 — one automatic
+     escalation per issue set, ever. A second reject after that spent escalation is
+     exactly the case a human is for.
+
+  On `escalate`: post the same specific-gap comment `reject` always requires, and
+  append the bound's marker in the same comment: `<!-- colab:reject escalate=1 -->`.
+  Leave the claim held and the worktree in place, same as `decision` — do not tear
+  down, do not release, do not merge. **This skill does not itself pick or dispatch the
+  next rung** — which engine backs it, and how it is invoked, is per-fleet and
+  deliberately out of this skill's scope, the same posture `mechanical-lane` itself
+  already takes (`code-triage`). Report the escalation instead of a hard stop; whatever
+  routes this fleet's mechanical lane (or a human, absent one) picks up the still-held
+  claim and re-attempts, carrying this reject comment as that attempt's context.
+  Re-attempting at the *same* tier with nobody having checked for the marker first is
+  precisely the failure this section exists to close off — checking condition 3 above
+  is not optional bookkeeping, it is the cap.
+
+A rejected grade — either class — ends this skill's run for that issue set: nothing
+past B1c executes on this pass. What differs is what happens next: `decision` waits on
+a human who has seen the comment and said what happens next, same as before this
+section existed; `escalate` waits on the one bounded automatic retry the marker
+records, and falls back to waiting on a human the moment that retry rejects too.
 
 ## B2. Squash-merge with `Closes #N`
 
@@ -597,9 +645,11 @@ exists (`git log --grep`, grep the code, and look for an existing branch or
 worktree for that issue) rather than trusting the absence of a label. `code-start`
 already says *open ≠ untouched*; this is why.
 
-**A `reject` verdict from B1c never reaches this step** — the claim stays held until a
-human resolves the rejection, which is the whole point of stopping at B1c rather than
-merging past it.
+**A `reject` verdict from B1c never reaches this step** — the claim stays held either
+way: until a human resolves a `decision`-class rejection, or until the one bounded
+auto-retry an `escalate`-class rejection recorded lands (and reverts to the same
+human-held state if that retry rejects too, B1c's *Reject classifies further*). Either
+class is the whole point of stopping at B1c rather than merging past it.
 
 ## B4. Tear down the worktree — remove by DEFAULT
 
