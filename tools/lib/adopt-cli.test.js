@@ -376,6 +376,38 @@ test('DEFECT 2 regression: a detached HEAD with no origin cannot be honestly res
   assert.strictEqual(fs.existsSync(path.join(fx.work, '.github', 'project.yml')), false);
 });
 
+// --------------------------------------------------------------- #258 — writes into the
+// --------------------------------------------------------------- caller's OWN working tree,
+// --------------------------------------------------------------- never the main checkout
+
+test('#258: colab adopt --repo <linked worktree> writes project.yml into the worktree, never the main checkout', () => {
+  const fx = fixture(undefined);
+  const wtPath = path.join(fx.root, 'wt');
+  execFileSync('git', ['worktree', 'add', '-b', 'feat/thing-1', wtPath, 'main'], { cwd: fx.work, encoding: 'utf8' });
+  const r = colab(fx, [
+    'adopt', '--repo', wtPath, '--room', 'solo', '--writes', 'serial', '--channels', 'none',
+    '--production', 'none', '--deploy', 'none', '--exposure', 'self', '--stack', 'docs', '--no-verify',
+    '--answered-by', 'Test Human',
+  ], { COLAB_HUMAN: '1' });
+  assert.strictEqual(r.code, 0, r.err);
+  assert.strictEqual(fs.existsSync(path.join(wtPath, '.github', 'project.yml')), true, 'must write into the worktree it was run against');
+  assert.strictEqual(fs.existsSync(path.join(fx.work, '.github', 'project.yml')), false, 'must NOT write into the main checkout');
+});
+
+test('#258: colab adopt run from inside a linked worktree (no --repo, cwd resolution) writes into the worktree, never the main checkout', () => {
+  const fx = fixture(undefined);
+  const wtPath = path.join(fx.root, 'wt');
+  execFileSync('git', ['worktree', 'add', '-b', 'feat/thing-2', wtPath, 'main'], { cwd: fx.work, encoding: 'utf8' });
+  const r = spawnSync('node', [COLAB,
+    'adopt', '--room', 'solo', '--writes', 'serial', '--channels', 'none',
+    '--production', 'none', '--deploy', 'none', '--exposure', 'self', '--stack', 'docs', '--no-verify',
+    '--answered-by', 'Test Human',
+  ], { cwd: wtPath, encoding: 'utf8', env: { ...process.env, COLAB_HOME: fx.root, COLAB_HUMAN: '1' } });
+  assert.strictEqual(r.status, 0, r.stderr || '');
+  assert.strictEqual(fs.existsSync(path.join(wtPath, '.github', 'project.yml')), true, 'must write into the worktree cwd was inside');
+  assert.strictEqual(fs.existsSync(path.join(fx.work, '.github', 'project.yml')), false, 'must NOT write into the main checkout');
+});
+
 // --------------------------------------------------------------- --help / root help
 
 test('colab adopt --help documents the command; root help lists it', () => {
