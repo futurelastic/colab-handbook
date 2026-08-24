@@ -766,6 +766,11 @@ Rank the surviving groups:
 3. **Cheap and unblocking** — small work that lets something bigger start.
 4. **Everything else** — by whatever the humans care about.
 
+**Then push every `low-priority` group to the back, after all four ranks above are
+applied — never sorted in among them.** It is a throttle on position, not an input to
+blast radius; see *Then rank low-priority groups last*, below §5, for the full check
+and what the report says about it.
+
 State the reason next to each rank. "Ordered by priority" with no reasoning is not
 triage; it is a re-sorted list.
 
@@ -1071,6 +1076,17 @@ READY  chore/relabel-status-columns-140-139-138   #140 #139 #138
        start: colab claim 140 139 138 --worktree relabel-status-columns-140-139-138
 ```
 
+A group carrying `low-priority` (the verdict below, after §5) carries one more line
+too — present only on the minority that earns it, and printed **last** in the ready
+list regardless of what its `why:` line says:
+
+```
+READY  fix/stale-log-cleanup-190   #190
+       why: cheap and unblocking; trunk CI green 2h ago
+       priority: low — startable, ranked last
+       start: colab claim 190 --worktree stale-log-cleanup-190
+```
+
 Then, briefly:
 
 - **blocked** — one line each, naming the blocker and who could clear it.
@@ -1222,6 +1238,39 @@ Suggested batch size: <N> — <why that size, not one big batch>"
   know a rung above the one that produced the diff exists at all. Nothing here changes
   because of that; it is one more reason not to apply the label loosely.
 
+### Then rank `low-priority` groups last — a throttle, not a veto (#268)
+
+`low-priority` is read three different, undocumented ways by the tools sitting around
+this skill unless this check runs: a hard veto by one scheduled driver, a sort key
+nothing enforces by a sibling tool, and — before this check existed — invisible to
+`code-triage` itself, which reported a `low-priority` group **READY** with no
+distinguishing signal at all. The convention (`CONVENTIONS.md` [§5](../../CONVENTIONS.md#priority--a-throttle-not-a-veto-268), *Priority*) settles
+which reading is correct: **`low-priority` orders a queue, it does not remove work
+from one.**
+
+For every ready or soft-ready group, check whether its lead issue carries
+`low-priority`:
+
+```sh
+gh issue view <lead-issue> --json labels -q '.labels[].name' | grep -qx low-priority
+```
+
+- **Not a readiness gate.** Same posture as `needs-plan` and `mechanical-lane`: this
+  label never blocks a group from being reported ready, and §5's gate is unaffected —
+  it only changes where in the ranked list the group is printed.
+- **Rank last, not off the list.** §4 already says this; this is the check that makes
+  it mechanical instead of a judgement call re-derived per group. A `low-priority`
+  group that also blocks other work (§4 rank 1) still says so in its `why:` line — the
+  label moves its position, it does not erase the reasoning that would otherwise have
+  ranked it higher.
+- **Report it — one extra `priority:` line in §6, same shape as `mechanical:`.**
+  Absent from every group not carrying the label — same discipline as `mechanical:`,
+  present only on the minority that earns it.
+- **A driver implementing the veto reading must say so where this check can be
+  compared against it** — never leave the driver silently skipping what this report
+  called ready. That disagreement is a finding to surface, not a difference to paper
+  over by second-guessing the driver's behavior here.
+
 Hand the top group to **code-start**, which will re-verify the claim before taking it.
 
 ## Verify complete
@@ -1272,5 +1321,8 @@ Hand the top group to **code-start**, which will re-verify the claim before taki
   got `mechanical-lane` on its lead issue plus a one-line reason and suggested batch
   size, and a `mechanical:` line in the §6 report — and, same as `needs-plan`, it landed
   on the minority actually both mechanical and oracle-checkable, not on every group.
+- Every `low-priority` group was ranked last in §4's list — never off it, never sorted
+  by its own blast-radius reasoning alone — and carries a `priority:` line in the §6
+  report; §5's readiness gate treated it exactly like any other group.
 - Anything surprising — a stale claim, a dead trunk CI, an epic whose table
   contradicts its title — is **reported**, not silently worked around.

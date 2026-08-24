@@ -122,6 +122,18 @@
  * decision (a scheduler's or triage's start-or-skip) depends on being able to tell the three
  * states apart, and a repo that adopted before this set existed cannot create the label at all —
  * the malignant-absence failure this file's opening paragraph names.
+ *
+ * `low-priority` joined the set in #268: it orders a queue, it does not remove work from
+ * one — unlike `epic` and `delivery:*` above, a `low-priority` issue IS a start candidate,
+ * only ranked behind every other ready group (CONVENTIONS.md §5, *Priority*). It joins
+ * CONVENTION_LABELS for the same reason `epic` and `delivery:*` did: a scheduled driver's
+ * ordering decision depends on seeing the label, and a repo that adopted before it existed
+ * cannot create it at all — the identical malignant-absence failure. Before #268 the label
+ * was read three different, undocumented ways across one adopting fleet (a hard veto by one
+ * driver, a sort key nothing enforced by a sibling tool, and invisible to `code-triage`
+ * entirely, which reported `low-priority` groups READY with no distinguishing signal) —
+ * this entry, plus the matching `code-triage` verdict, is what makes those readings
+ * reconcilable instead of silently contradictory.
  */
 
 const CONVENTION_LABELS = [
@@ -135,6 +147,7 @@ const CONVENTION_LABELS = [
   { name: 'migration-granted', color: 'D93F0B', description: "A human granted this issue's branch an exemption from ship's no-new-migrations gate" },
   { name: 'needs-migration-grant', color: 'D4C5F9', description: 'Agent-flagged: deliverable is a schema migration; surfaces the grant request for a human to Accept' },
   { name: 'ci-granted', color: 'D73A4A', description: "A human granted this branch a one-shot exemption from ship's trunk-CI-green gate" },
+  { name: 'low-priority', color: 'C2E0C6', description: 'Throttle, not a veto — startable, but code-triage ranks it behind every other ready group' },
   { name: 'delivery:code', color: '1D76DB', description: 'Delivery is a code commit — the ordinary code pipeline applies' },
   { name: 'delivery:content', color: 'FEF2C0', description: 'Delivery is a content push, not a code commit — route, do not start in the code pipeline' },
   { name: 'delivery:ops', color: 'D4C5F9', description: 'Delivery is an ops/production check, not a code commit — route, do not start in the code pipeline' },

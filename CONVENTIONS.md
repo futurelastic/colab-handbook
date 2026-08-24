@@ -1636,6 +1636,24 @@ session. Whoever files or triages sets the label — no mechanical rule infers i
 title or body. `delivery:*` is in the provisioned label set because every adopting repo
 needs all four values before the first triage pass can classify anything.
 
+#### Priority — a throttle, not a veto (#268)
+
+**`low-priority` orders a queue; it does not remove work from one.** Unlike `epic` and
+`delivery:*` above, a `low-priority` issue **is** a start candidate — it passes the
+readiness gate exactly like any other issue, and a scheduled driver may still pick it up.
+What the label changes is rank, not eligibility: `code-triage`'s ordering step ranks a
+`low-priority` group behind every other ready group, never off the ready list. Reading
+the label as a hard veto turns "later" into "never" for work someone filed believing they
+were only setting its place in line — the opposite of what filing it as low priority,
+rather than not filing it at all, was meant to say.
+
+A driver that implements the veto reading anyway must say so somewhere `code-triage`'s
+output can be checked against — never leave the two silently disagreeing about what
+"ready" means for the same label. `low-priority` is in the provisioned label set for the
+same reason `epic` and `delivery:*` are: an unattended driver's ordering decision depends
+on being able to see it, and a repo that adopted before it existed cannot create it at
+all.
+
 ### How a decision is recorded
 
 #### Planning — a plan file that outlives one command, and who drafts it (#94)
@@ -2068,17 +2086,17 @@ only. Resolution order: `--config` flag > `~/.colab/repos.txt` > bundled example
    them as a to-do list on exit.
 2. **Write `.github/project.yml`** ([§3](#3-githubprojectyml--the-marker)) with the
    answers from step 1.
-3. **Create the whole label set — fourteen names, not a subset** (`in-progress`,
+3. **Create the whole label set — fifteen names, not a subset** (`in-progress`,
    `deps-checked`, `agent-filed`, `epic`, `needs-decision`, `decision-recorded`,
-   `needs-plan`, `migration-granted`, `needs-migration-grant`, `ci-granted`, and the
-   four `delivery:*`):
+   `needs-plan`, `migration-granted`, `needs-migration-grant`, `ci-granted`,
+   `low-priority`, and the four `delivery:*`):
    ```sh
    colab labels --ensure
    ```
    Idempotent by construction (#206) — reads the set from `tools/lib/labels.js`'s
    `CONVENTION_LABELS`, the one place it is actually defined, creates only what this
    repo is missing, and reports created vs already-there; safe to re-run because
-   partial adoption is normal. (No `colab` on this machine? The fourteen `gh label
+   partial adoption is normal. (No `colab` on this machine? The fifteen `gh label
    create … || true` lines this replaced are recoverable from that file's history.)
    What each absence costs, briefly: `in-progress` — the first claim cannot land.
    `deps-checked` — a readiness check can never tell *free* from *nobody looked*.
@@ -2092,7 +2110,9 @@ only. Resolution order: `--config` flag > `~/.colab/repos.txt` > bundled example
    malignantly, discovered only when a repo hits the wall with no route past `ship`'s gate
    at all. `needs-migration-grant` — the plan-time flag a consumer raises before `ship`
    would refuse has nowhere to land, so the grant request never surfaces until the wall
-   (#230). `delivery:*` — a content push or ops check has no way to say "not a diff" and
+   (#230). `low-priority` — a triage pass has no way to say "startable, but ranked last",
+   so a group meant to wait its turn is reported exactly like every other ready group
+   (#268). `delivery:*` — a content push or ops check has no way to say "not a diff" and
    jams the code pipeline. This full set is provisioned again on every sync, not only at
    adoption.
 4. **Add the tier topic** — `gh repo edit <owner>/<repo> --add-topic tier-b` (or
