@@ -13,10 +13,22 @@
  * audit-exposure.test.js / audit-writes.test.js / audit-channels.test.js) — it is a repo
  * whose marker predates the question. That earns exactly ONE `warn`, never a `fail`.
  *
- * `v1.9.0` is used as the "old" ref throughout: it is a real, resolvable tag in this
- * repo's own history, and all four axis commits (room/exposure/writes/channels) landed
- * AFTER it and remain untagged as of this test being written (#138's plan file records
- * this as a known, deliberate fixture choice — there is no later tag to use instead yet).
+ * #271: most tests below run against a SYNTHETIC throwaway handbook
+ * (`buildSyntheticHandbook`), not the real one at REPO_ROOT. Reason: `checkStamps` runs
+ * two independent checks off one CLAUDE.md stamp — the axis-predates read this file
+ * exercises (a pure content read AT a fixed historical ref, permanently stable) and
+ * `compareStamp`'s template-drift check (a commit-range scan from that stamp to the
+ * handbook's *current* HEAD). Pointing the second check at the real, live-evolving
+ * REPO_ROOT meant any future edit to templates/repo-CLAUDE-block.md — however trivial —
+ * added an unrelated `fail` and could flip `ok` to false out from under these tests
+ * (measured: `49d47a4`, a one-line link fix, did exactly this). The synthetic handbook's
+ * two commits hold that template file byte-identical by construction, so the drift check
+ * reports `changed: false` forever, regardless of what the real template goes on to do.
+ *
+ * The one test that intentionally keeps using the real handbook — "current stamp … " —
+ * clones REPO_ROOT and tags its OWN HEAD, so its stamp and its "current" version are the
+ * same commit; that check's range is always empty, immune to drift by construction, and
+ * it is checking a real fact (that the axis commits have actually landed), so it stays.
  */
 
 const test = require('node:test');
@@ -28,10 +40,77 @@ const { execFileSync } = require('child_process');
 
 const REPO_ROOT = path.resolve(__dirname, '..', '..');
 const AUDIT = path.join(REPO_ROOT, 'audit', 'audit.mjs');
-const OLD_REF = 'v1.9.0'; // predates room/exposure/writes/channels in project.schema.md
 
 const TMP = [];
 process.on('exit', () => { for (const d of TMP) { try { fs.rmSync(d, { recursive: true, force: true }); } catch (_) {} } });
+
+// A project.schema.md with none of the four axis headings and no writes-ruling text —
+// stands in for "the handbook as it was before #131/#132/#133/#151 landed".
+const SYNTH_SCHEMA_OLD = [
+  '# project.schema.md (synthetic fixture — see audit-adoption-window.test.js #271)',
+  '',
+  '### `tier`',
+  'OPTIONAL, legacy.',
+  '',
+  '### `trunk`',
+  'REQUIRED.',
+  '',
+].join('\n');
+
+// Same file, with the four axis headings added — stands in for "the handbook as it is
+// once the axis model has landed". templates/repo-CLAUDE-block.md is deliberately NOT
+// rewritten between the two commits below — see buildSyntheticHandbook.
+const SYNTH_SCHEMA_NEW = SYNTH_SCHEMA_OLD + [
+  '### `room`',
+  'OPTIONAL.',
+  '',
+  '### `exposure`',
+  'OPTIONAL.',
+  '',
+  '### `writes`',
+  'OPTIONAL.',
+  '',
+  '### `channels`',
+  'OPTIONAL.',
+  '',
+].join('\n');
+
+const SYNTH_TEMPLATE = '# repo-CLAUDE-block.md (synthetic fixture, held constant — #271)\n';
+
+const SYNTH_OLD_TAG = 'v1.0.0';
+const SYNTH_NEW_TAG = 'v2.0.0';
+
+/**
+ * A throwaway two-commit, two-tag git repo standing in for the handbook, entirely
+ * decoupled from this repo's own history: `SYNTH_OLD_TAG`'s project.schema.md predates
+ * the axis model, `SYNTH_NEW_TAG`'s carries it — and templates/repo-CLAUDE-block.md is
+ * written ONCE and never touched again, so no commit in this synthetic history ever
+ * shows up in a `templates/repo-CLAUDE-block.md` drift scan between the two tags. Built
+ * once per test run and reused (git init + two commits is cheap, but no need to repeat).
+ */
+let _synthHandbook;
+function syntheticHandbook() {
+  if (_synthHandbook) return _synthHandbook;
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'audit-adoption-window-synth-hb-'));
+  TMP.push(root);
+  const g = (...args) => execFileSync('git', args, { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+  g('init', '-q', '-b', 'main', '.');
+  g('config', 'user.email', 'test@example.invalid');
+  g('config', 'user.name', 'audit test');
+  fs.mkdirSync(path.join(root, 'templates'), { recursive: true });
+  fs.writeFileSync(path.join(root, 'templates', 'repo-CLAUDE-block.md'), SYNTH_TEMPLATE);
+  fs.writeFileSync(path.join(root, 'project.schema.md'), SYNTH_SCHEMA_OLD);
+  g('add', '-A');
+  g('commit', '-q', '-m', 'chore: pre-axis-model handbook state');
+  g('tag', SYNTH_OLD_TAG);
+  fs.writeFileSync(path.join(root, 'project.schema.md'), SYNTH_SCHEMA_NEW);
+  // templates/repo-CLAUDE-block.md intentionally NOT rewritten here — see docstring above.
+  g('add', '-A');
+  g('commit', '-q', '-m', 'chore: axis model lands');
+  g('tag', SYNTH_NEW_TAG);
+  _synthHandbook = root;
+  return root;
+}
 
 function fixture({ projectYml, claudeStamp }) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'audit-adoption-window-'));
@@ -85,7 +164,7 @@ const ALL_AXES_YML =
   'room: solo\nexposure: self\nwrites: isolated\nchannels: [none]\n';
 
 test('old stamp + no axes declared: exactly one warn naming the missing axes, zero new fails', () => {
-  const r = audit(fixture({ projectYml: NO_AXES_YML, claudeStamp: OLD_REF }));
+  const r = audit(fixture({ projectYml: NO_AXES_YML, claudeStamp: SYNTH_OLD_TAG }), syntheticHandbook());
   assert.ok(!hasText(r.fails, /predates|axis/i), r.fails.join(' | '));
   assert.ok(hasText(r.warns, /marker predates the axis model/), r.warns.join(' | '));
   assert.ok(hasText(r.warns, /room/), r.warns.join(' | '));
@@ -97,21 +176,18 @@ test('old stamp + no axes declared: exactly one warn naming the missing axes, ze
 });
 
 test('old stamp + all axes declared: silent — declaring closed the gap, nothing to warn about', () => {
-  const r = audit(fixture({ projectYml: ALL_AXES_YML, claudeStamp: OLD_REF }));
+  const r = audit(fixture({ projectYml: ALL_AXES_YML, claudeStamp: SYNTH_OLD_TAG }), syntheticHandbook());
   assert.ok(!hasText(r.warns, /predates the axis model/), r.warns.join(' | '));
   assert.deepStrictEqual(r.predatesAxes, []);
 });
 
 test('current stamp (a ref where all four axes already exist) + no axes declared: silent — undeclared stays legal and un-nagged, this is not a NEW finding', () => {
-  // No tag exists yet AFTER the four axis commits (they are all untagged past v1.9.0, per
-  // this unit's own plan file) — `git describe --tags` on HEAD still resolves to v1.9.0,
-  // the very ref this file uses as "old", and `parseClaudeStamp`'s regex requires a
-  // version starting with a digit or "v", so a bare commit SHA cannot be used as the
-  // stamp text either. So this test builds its OWN throwaway clone of the handbook and
-  // tags its current HEAD (which already carries all four axis commits — verified below
-  // rather than assumed) with a synthetic version past v1.9.0, purely so a real, digit-
-  // prefixed, resolvable "current" ref exists to test against. Nothing here mutates the
-  // real repo's tags.
+  // This is the one test in this file that intentionally checks the REAL handbook — is the
+  // axis model actually landed on it? — rather than the synthetic one above. It clones
+  // REPO_ROOT and tags its OWN HEAD, so the stamp version and "current" version resolve to
+  // the same commit: templateChangedSince's range is always empty regardless of what the
+  // real template has done since, so this stays immune to the #271 drift bug by
+  // construction — no synthetic handbook needed here.
   const clone = fs.mkdtempSync(path.join(os.tmpdir(), 'audit-adoption-window-clone-'));
   TMP.push(clone);
   execFileSync('git', ['clone', '-q', '--no-hardlinks', REPO_ROOT, clone], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
@@ -126,18 +202,18 @@ test('current stamp (a ref where all four axes already exist) + no axes declared
 });
 
 test('unresolvable stamp version: silent — same "look, do not assume" posture as an unfetched stamp elsewhere', () => {
-  const r = audit(fixture({ projectYml: NO_AXES_YML, claudeStamp: 'v999.999.999' }));
+  const r = audit(fixture({ projectYml: NO_AXES_YML, claudeStamp: 'v999.999.999' }), syntheticHandbook());
   assert.ok(!hasText(r.warns, /predates the axis model/), r.warns.join(' | '));
   assert.deepStrictEqual(r.predatesAxes, []);
 });
 
 test('no CLAUDE.md at all: silent — nothing to compare a stamp against, existing "no stamp" advisories are unaffected', () => {
-  const r = audit(fixture({ projectYml: NO_AXES_YML }));
+  const r = audit(fixture({ projectYml: NO_AXES_YML }), syntheticHandbook());
   assert.ok(!hasText(r.warns, /predates the axis model/), r.warns.join(' | '));
   assert.deepStrictEqual(r.predatesAxes, []);
 });
 
 test('this check never becomes a fail and never touches a tier finding', () => {
-  const r = audit(fixture({ projectYml: NO_AXES_YML, claudeStamp: OLD_REF }));
+  const r = audit(fixture({ projectYml: NO_AXES_YML, claudeStamp: SYNTH_OLD_TAG }), syntheticHandbook());
   assert.ok(!hasText(r.fails, /tier/i), r.fails.join(' | '));
 });
