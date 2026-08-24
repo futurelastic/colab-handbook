@@ -105,6 +105,12 @@ const DEFAULT_CONFIG = {
   // every state transition and every invocation is appended to ~/.colab/journal.jsonl; see
   // lib/journal.js. Absent rather than false, for the same reason as notifyUrl. Unrelated to
   // notifyUrl: one is a local append-only file, the other a push to somebody else's receiver.
+  //
+  // Optional claim tie-break identity granularity (`claimIdentity: "login,host,session"`). Unset =
+  // "login,host" (unchanged behaviour): two sessions of one GitHub account on one host are
+  // indistinguishable to the tie-break (#267). See tools/lib/claim-identity.js and `colab config
+  // set claimIdentity` for the tradeoff (only safe where --session is stable across a resume).
+  // Absent rather than the coarse string, for the same reason as journal/notifyUrl.
 };
 
 function ensureDir() {

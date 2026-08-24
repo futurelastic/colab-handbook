@@ -40,6 +40,7 @@ const adopt = require('./lib/adopt');
 const consumerEvidence = require('./lib/consumer-evidence');
 const axisAuthority = require('./lib/axis-authority');
 const writesAuthority = require('./lib/writes-authority');
+const claimIdentity = require('./lib/claim-identity');
 const {
   HOST, UserError, normIssueNum, issueTag, claimKey, today, nowISO, hoursSince, humanAge,
   parseArgs, table, shortRepo,
@@ -318,17 +319,35 @@ function localClaimConflicts(st, repoAbs, nums, wtName) {
 }
 
 /**
- * Issues GitHub shows as claimed by SOMEONE ELSE: label `in-progress` present AND a non-empty
- * assignee set that does not include us. A read failure (null) is skipped, never treated as free.
+ * Issues GitHub shows as claimed by SOMEONE ELSE. Two shapes:
+ *   - the ordinary case: label `in-progress` present AND a non-empty assignee set that does not
+ *     include us.
+ *   - the CO-TENANT case (#267, only checked when `comps` includes `session`): the assignee set
+ *     structurally cannot express "two sessions of MY OWN login" — GitHub tracks one identity per
+ *     account, not per session — so a live claim comment from a different session under the same
+ *     login+host is invisible to the check above. Read the comments too and look for exactly that.
+ * A read failure (null) is skipped, never treated as free.
  */
-function ghClaimConflicts(repoAbs, nums, myLogin) {
+function ghClaimConflicts(repoAbs, nums, myLogin, myHost, mySession, comps) {
+  comps = comps || claimIdentity.DEFAULT_COMPONENTS;
   const out = [];
   for (const num of nums) {
-    const info = git.ghIssueView(repoAbs, num, ['assignees', 'labels']);
+    const info = git.ghIssueView(repoAbs, num, ['assignees', 'labels', 'comments']);
     if (!info) continue; // couldn't read → don't block on a failed read
     const labeled = (info.labels || []).some((l) => l.name === 'in-progress');
     const assignees = (info.assignees || []).map((a) => a.login);
-    if (labeled && assignees.length > 0 && !assignees.includes(myLogin)) out.push({ num, assignees });
+    // Both conflict shapes require `labeled` — "GitHub shows this issue as actively claimed" is the
+    // precondition either way; an issue with no in-progress label yet is not conflicted by either
+    // check (it may be mid-claim from another session whose label write has not landed — the
+    // simultaneous-claim tie-break, not the refusal gate, is what covers that window).
+    if (!labeled) continue;
+    if (assignees.length > 0 && !assignees.includes(myLogin)) { out.push({ num, assignees }); continue; }
+    if (comps.includes('session')) {
+      const me = { login: myLogin, host: myHost, session: mySession || '' };
+      const live = liveClaimComments(info.comments || [], comps);
+      const cotenant = live.find((c) => c.login === myLogin && c.host === myHost && !claimIdentity.sameClaimant(c, me, comps));
+      if (cotenant) out.push({ num, assignees, cotenant });
+    }
   }
   return out;
 }
@@ -344,7 +363,12 @@ function printRefusal(localConf, ghConf) {
       `  #${c.num} local: worktree "${h.worktree || '-'}" · branch ${h.branch || '-'} · host ${h.host}${sess} · since ${String(h.created).slice(0, 10)}\n`);
   }
   for (const c of ghConf) {
-    process.stderr.write(`  #${c.num} GitHub: assigned to ${c.assignees.join(', ')} (labeled in-progress)\n`);
+    if (c.cotenant) {
+      const id = displayIdentity(c.cotenant.sessionName, c.cotenant.session) || c.cotenant.identity;
+      process.stderr.write(`  #${c.num} GitHub: live claim comment by ${id} (same account, different session)\n`);
+    } else {
+      process.stderr.write(`  #${c.num} GitHub: assigned to ${c.assignees.join(', ')} (labeled in-progress)\n`);
+    }
   }
   process.stderr.write('  Re-run with --force to take over, or claim a different issue.\n');
   process.stderr.write('  Stale claims from dead worktrees are freed by: colab doctor --prune\n');
@@ -359,16 +383,26 @@ function printTakeover(localConf, ghConf) {
     print(`  --force: taking over #${c.num} from worktree "${h.worktree || '-'}" (host ${h.host}${sess}, since ${String(h.created).slice(0, 10)})`);
   }
   for (const c of ghConf) {
-    print(`  --force: taking over #${c.num} from GitHub assignee ${c.assignees.join(', ')}`);
+    if (c.cotenant) {
+      const id = displayIdentity(c.cotenant.sessionName, c.cotenant.session) || c.cotenant.identity;
+      print(`  --force: taking over #${c.num} from a co-tenant claim (${id}, same account+host)`);
+    } else {
+      print(`  --force: taking over #${c.num} from GitHub assignee ${c.assignees.join(', ')}`);
+    }
   }
 }
 
 /**
  * Live claim comments on an issue = every `🔒 Claimed` not cancelled by a LATER `✅ Released`
- * from the SAME GitHub author. Returns [{login, host, at, identity}], `at` = the comment's real
- * GitHub createdAt (authoritative, sub-second), `identity` = `login@host`.
+ * from the SAME GitHub author. Returns [{login, host, session, sessionName, at, identity}], `at` =
+ * the comment's real GitHub createdAt (authoritative, sub-second). `identity` is built from `comps`
+ * (tools/lib/claim-identity.js `components()` — `[login,host]` by default, `[login,host,session]`
+ * opt-in, #267) so a caller comparing on `identity` alone already sees the configured granularity;
+ * `login`/`host`/`session` are still returned raw for callers (`tieBreakVerdict`) that need
+ * `sameClaimant`'s degrade-on-missing comparison rather than a flat string match.
  */
-function liveClaimComments(comments) {
+function liveClaimComments(comments, comps) {
+  comps = comps || claimIdentity.DEFAULT_COMPONENTS;
   const sorted = [...comments].sort((a, b) => (a.createdAt < b.createdAt ? -1 : a.createdAt > b.createdAt ? 1 : 0));
   // releases per author login (release comments carry no host — cancellation is by author, per spec)
   const releasesByLogin = new Map();
@@ -389,26 +423,36 @@ function liveClaimComments(comments) {
     const { session, sessionName } = parseSessionField(body); // handles [name](url) / url / name / legacy
     const at = c.createdAt;
     const cancelled = (releasesByLogin.get(login) || []).some((r) => r > at);
-    if (!cancelled) live.push({ login, host, session, sessionName, at, identity: `${login}@${host}` });
+    if (!cancelled) live.push({ login, host, session, sessionName, at, identity: claimIdentity.identityString({ login, host, session }, comps) });
   }
   return live;
 }
 
 /**
- * Deterministic verdict on the simultaneous-claim race. Given the issue's comments, our login and
- * host: if a live claim from a DIFFERENT author-or-host is EARLIER than ours → we lost (returns the
- * winner). Exact-timestamp ties break on identity string (lexicographically smaller identity wins),
- * so both racers, reading the same comments, reach the same verdict independently.
+ * Deterministic verdict on the simultaneous-claim race. Given the issue's comments and our own
+ * identity (`myLogin`/`myHost`/`mySession`): if a live claim that is NOT us under `comps`
+ * (tools/lib/claim-identity.js `sameClaimant`, #267) is EARLIER than our own earliest live claim →
+ * we lost (returns the winner). Exact-timestamp ties break on identity string (lexicographically
+ * smaller identity wins), so both racers, reading the same comments, reach the same verdict
+ * independently.
+ *
+ * Anchors on our EARLIEST live claim, not the latest (#264/#267 together): a re-claim that corrects
+ * a record (#264's `updated` path) posts a SECOND comment from us, and anchoring on the latest of
+ * those would let that correction restart our own priority — costing us a race we had already won.
+ * Under the coarse default this only changes the verdict when we hold more than one live claim, and
+ * only ever in the "yield less" direction.
  */
-function tieBreakVerdict(comments, myLogin, myHost) {
-  const live = liveClaimComments(comments);
+function tieBreakVerdict(comments, myLogin, myHost, mySession, comps) {
+  comps = comps || claimIdentity.DEFAULT_COMPONENTS;
+  const live = liveClaimComments(comments, comps);
+  const me = { login: myLogin, host: myHost, session: mySession || '' };
   const mine = live
-    .filter((c) => c.login === myLogin && c.host === myHost)
-    .sort((a, b) => (a.at > b.at ? -1 : a.at < b.at ? 1 : 0))[0]; // our latest live claim
+    .filter((c) => claimIdentity.sameClaimant(c, me, comps))
+    .sort((a, b) => (a.at < b.at ? -1 : a.at > b.at ? 1 : 0))[0]; // our EARLIEST live claim
   if (!mine) return { lost: false }; // our own comment not visible yet → don't yield to a phantom
   let winner = null;
   for (const c of live) {
-    if (c.login === myLogin && c.host === myHost) continue; // never yield to ourselves
+    if (claimIdentity.sameClaimant(c, me, comps)) continue; // never yield to ourselves
     const earlier = c.at < mine.at || (c.at === mine.at && c.identity < mine.identity);
     if (!earlier) continue;
     if (!winner || c.at < winner.at || (c.at === winner.at && c.identity < winner.identity)) winner = c;
@@ -476,21 +520,36 @@ function yieldIssue(repoAbs, num, winner, myLogin) {
 
 /**
  * Run the claim comment + tie-break for issues we just claimed on GitHub. Returns the list of
- * issue numbers we LOST (already yielded). `owner` is {wtName, branch, myLogin, session, sessionName}.
+ * issue numbers we LOST (already yielded). `owner` is
+ * {wtName, branch, myLogin, session, sessionName, comps}. `comps` is the active identity
+ * granularity (tools/lib/claim-identity.js `components()`, #267) — defaults to coarse when absent.
  */
 function commentAndTieBreak(repoAbs, nums, owner) {
+  const comps = owner.comps || claimIdentity.DEFAULT_COMPONENTS;
   const lost = [];
   for (const num of nums) {
     postClaimComment(repoAbs, num, owner.wtName, owner.branch, owner.session, owner.sessionName);
     const info = git.ghIssueView(repoAbs, num, ['comments']);
     if (!info || !Array.isArray(info.comments)) continue; // can't read comments → keep the claim
-    const verdict = tieBreakVerdict(info.comments, owner.myLogin, HOST);
+    const verdict = tieBreakVerdict(info.comments, owner.myLogin, HOST, owner.session, comps);
     if (verdict.lost) {
       yieldIssue(repoAbs, num, verdict.winner, owner.myLogin);
       const w = verdict.winner;
       const id = displayIdentity(w.sessionName, w.session);
       const wsess = id ? ` · session ${id}` : '';
-      warn(`Yielded #${num} — an earlier simultaneous claim by ${w.identity}${wsess} wins. Pick another issue.`);
+      // Co-tenant yield (#267 fine setting): same login+host, DIFFERENT session — the exact case the
+      // coarse default cannot even see. Louder and more specific than the ordinary yield message
+      // (safety rule 3, .claude/plans/issue-264.md) because a wrong self-yield here must be
+      // diagnosable in one screen, not archaeology: name both session ids, say which setting
+      // produced the verdict, and print both undos.
+      if (comps.includes('session') && w.login === owner.myLogin && w.host === HOST) {
+        const mySessId = displayIdentity(owner.sessionName, owner.session) || '(no session recorded)';
+        warn(`Yielded #${num} to a CO-TENANT — same account+host, different session. claimIdentity=login,host,session ` +
+          `judged ${id || '(no session recorded)'} earlier than us (${mySessId}). If this is wrong: ` +
+          `\`colab claim ${num} --force\` to take it back, or \`colab config set claimIdentity login,host\` to stop distinguishing sessions.`);
+      } else {
+        warn(`Yielded #${num} — an earlier simultaneous claim by ${w.identity}${wsess} wins. Pick another issue.`);
+      }
       lost.push(num);
     }
   }
@@ -514,11 +573,18 @@ Multiple issues in one call are claimed atomically onto the SAME worktree/branch
 
 Claims are ENFORCED, not advisory. Before claiming, colab REFUSES (exit 1) if:
   • LOCAL:  the issue already has a live claim on a DIFFERENT worktree (holder shown), or
-  • GITHUB: the issue is labeled in-progress AND assigned to someone who isn't you.
-Re-claiming onto the SAME worktree is idempotent (OK). --force takes over either layer,
-printing exactly what it overrides. On a successful claim colab posts a "🔒 Claimed" comment
-on the Issue; if a simultaneous racer claimed microseconds earlier, the tie-break yields to
-them automatically (see tools/README.md "Claim lifecycle").
+  • GITHUB: the issue is labeled in-progress AND assigned to someone who isn't you (or, with
+            claimIdentity=login,host,session set, a live claim comment from a DIFFERENT session
+            of your own account — see 'colab config -h', #267).
+Re-claiming onto the SAME worktree is idempotent when nothing changes. If it supplies a
+branch/session this worktree's claim did not already have, that is a CORRECTION: the record is
+updated and one fresh "🔒 Claimed" comment is posted — a blank value never overwrites a value the
+same holder already recorded (#264), so a later claim from a context with no branch in hand can
+never regress a correct one. --force takes over either refusal layer, printing exactly what it
+overrides — a takeover from a DIFFERENT holder never inherits the displaced holder's branch/session.
+On a genuinely new claim colab posts a "🔒 Claimed" comment on the Issue; if a simultaneous racer
+claimed microseconds earlier, the tie-break yields to them automatically (see tools/README.md
+"Claim lifecycle").
 
 Options:
   --repo <path>       repo root (default: git root of cwd)
@@ -560,6 +626,14 @@ function cmdClaim(argv) {
   warnWeakIdentity(session, sessionName, 'claim', wtName);
   const gh = isGhUsable(repoAbs);
   const myLogin = gh ? git.ghCurrentLogin() : null;
+  // #267: the active identity granularity for this invocation. A bad value already on disk (a
+  // hand-edited config.json) degrades quietly to the coarse default — see claim-identity.js — but
+  // this command still WARNS about it, since a caller relying on the fine setting deserves to know
+  // it silently isn't active.
+  const cfg = state.loadConfig();
+  const idProblem = claimIdentity.claimIdentityProblem(cfg.claimIdentity);
+  if (idProblem) warn(`config: ${idProblem} — using the coarse default (login,host) for this claim`);
+  const comps = claimIdentity.components(cfg);
 
   // #133/#136, re-based by #237: a claim with NO worktree is the trunk-checkout shape — on any
   // repo COEXISTENCE permits trunk-direct on (i.e. everywhere `writes:` does not veto it —
@@ -589,7 +663,7 @@ function cmdClaim(argv) {
     st0 = state.loadState(); // unchanged from before this branch — not a place-claim read
   }
   const localConf = localClaimConflicts(st0, repoAbs, nums, wtName);
-  const ghConf = gh ? ghClaimConflicts(repoAbs, nums, myLogin) : [];
+  const ghConf = gh ? ghClaimConflicts(repoAbs, nums, myLogin, HOST, session, comps) : [];
   if (!gh) warn('gh not usable here (no gh auth or no origin remote) — refusal is LOCAL-ONLY');
   if ((localConf.length || ghConf.length)) {
     if (!opts.force) { printRefusal(localConf, ghConf); return 1; }
@@ -645,16 +719,44 @@ function cmdClaim(argv) {
         // have — doctor knows the difference, and a stub that never becomes a worktree is reported
         // as drift.
         st.worktrees[wtName] = { name: wtName, repo: repoAbs, branch, path: null, ports: [], host: HOST, session, sessionName, status: records.PENDING, created: nowISO() };
+      } else if (wtName && st.worktrees[wtName] && st.worktrees[wtName].status === records.PENDING && !st.worktrees[wtName].branch && branch) {
+        // #264: an existing PENDING stub (claimed before the branch was cut) learns the branch this
+        // call supplies, instead of staying null forever because it already existed.
+        st.worktrees[wtName].branch = branch;
       }
-      const created = [], reclaimed = [];
+      const created = [], reclaimed = [], updated = [], updatedDetails = [];
       for (const num of nums) {
         const key = claimKey(repoAbs, num);
         const ex = st.claims[key];
-        if (ex && (ex.worktree || null) === (wtName || null)) { reclaimed.push(num); continue; } // idempotent
-        st.claims[key] = { issue: issueTag(num), repo: repoAbs, worktree: wtName, branch, host: HOST, session, sessionName, created: nowISO() };
-        created.push(num);
+        const sameHolder = !!ex && (ex.worktree || null) === (wtName || null);
+        const incoming = { issue: issueTag(num), repo: repoAbs, worktree: wtName, branch, host: HOST, session, sessionName, created: (ex && ex.created) || nowISO() };
+        // #264/#267: ONE merge rule for both a plain first claim (ex absent — merge is a no-op,
+        // `incoming` passes through), a same-worktree re-claim/correction (sameHolder — a blank
+        // branch/session/sessionName never overwrites a known value), and a --force takeover from a
+        // DIFFERENT holder (sameHolder false — mergeClaimRecord never inherits in that case, matching
+        // the full-overwrite behaviour this code path always had). See tools/lib/claim-identity.js.
+        const merged = claimIdentity.mergeClaimRecord(ex, incoming, { sameHolder });
+        // Second source for `branch` (#264 path A, the actually-observed fleet symptom): the
+        // worktree record may already know a branch (set by `colab worktree new`) that this
+        // specific claim record has not caught up to yet.
+        if (!merged.branch && wtName && st.worktrees[wtName] && st.worktrees[wtName].branch) {
+          merged.branch = st.worktrees[wtName].branch;
+        }
+        if (!ex || !sameHolder) {
+          st.claims[key] = merged;
+          created.push(num);
+          continue;
+        }
+        // Same holder re-claim: a WRITE + comment only when something the record actually asserts
+        // changed. An unchanged re-claim stays the pre-existing silent no-op — no write, no comment,
+        // no network — exactly as before this branch.
+        const changed = ['branch', 'session', 'sessionName'].some((f) => (ex[f] || null) !== (merged[f] || null));
+        if (!changed) { reclaimed.push(num); continue; }
+        st.claims[key] = merged;
+        updated.push(num);
+        updatedDetails.push({ num, branch: merged.branch, was: ex.branch || null });
       }
-      return { created, reclaimed };
+      return { created, reclaimed, updated, updatedDetails };
     });
   } catch (e) {
     if (takingPlace) {
@@ -667,6 +769,13 @@ function cmdClaim(argv) {
   }
 
   for (const num of res.reclaimed) print(`#${num} already claimed by this worktree — OK (idempotent)`);
+  // #264: a same-holder correction — something the record asserts (branch/session/sessionName)
+  // actually changed since the last claim. Reported distinctly from `reclaimed` (a true no-op) and
+  // from `created` (a first claim / a --force takeover), because none of those three read the same
+  // to a human resuming this session.
+  for (const d of res.updatedDetails) {
+    print(`#${d.num} re-claimed — branch recorded: ${d.branch || '-'} (was ${d.was || 'none'})`);
+  }
 
   // ---- GitHub side (outside the lock — network): assign/label, comment, tie-break ----
   let lost = [];
@@ -676,7 +785,15 @@ function cmdClaim(argv) {
       if (r.ok) print(`  gh: #${num} assigned + labeled in-progress`);
       else warn(`gh edit #${num} failed (${r.stderr.split('\n')[0] || r.code}) — local claim stands`);
     }
-    lost = commentAndTieBreak(repoAbs, res.created, { wtName, branch, myLogin, session, sessionName });
+    lost = commentAndTieBreak(repoAbs, res.created, { wtName, branch, myLogin, session, sessionName, comps });
+    // #264: a same-holder correction posts ONE fresh claim comment (via the same helper used for a
+    // first claim) so comment-reading consumers — the exact failure mode #264 is about — see the
+    // fix. It does NOT run the tie-break: acquisition was already settled at first claim, and
+    // re-running it here would re-expose the "our own correction costs us a race we already won"
+    // hazard the earliest-anchor fix (#267) exists to avoid.
+    for (const d of res.updatedDetails) {
+      postClaimComment(repoAbs, d.num, wtName, d.branch, session, sessionName);
+    }
   } else {
     warn('gh not usable here — claims are LOCAL-ONLY (no comment, no tie-break)');
   }
@@ -2843,11 +2960,14 @@ function cmdWorktreeNew(argv) {
   warnWeakIdentity(session, sessionName, 'worktree (and its claims)', name);
   const gh = isGhUsable(repoAbs);
   const myLogin = gh ? git.ghCurrentLogin() : null;
+  const idProblem = claimIdentity.claimIdentityProblem(config.claimIdentity);
+  if (idProblem) warn(`config: ${idProblem} — using the coarse default (login,host) for this claim`);
+  const comps = claimIdentity.components(config);
 
   // ---- REFUSAL: don't build a worktree around issues someone else already holds ----
   if (issues.length) {
     const localConf = localClaimConflicts(state.loadState(), repoAbs, issues, name);
-    const ghConf = gh ? ghClaimConflicts(repoAbs, issues, myLogin) : [];
+    const ghConf = gh ? ghClaimConflicts(repoAbs, issues, myLogin, HOST, session, comps) : [];
     if (!gh) warn('gh not usable here — issue refusal is LOCAL-ONLY');
     if (localConf.length || ghConf.length) {
       if (!opts.force) { printRefusal(localConf, ghConf); return 1; }
@@ -2967,9 +3087,14 @@ function cmdWorktreeNew(argv) {
     const claimedNums = [], dupes = [];
     for (const num of issues) {
       const key = claimKey(repoAbs, num);
-      // claim inherits the worktree's session
-      if (st.claims[key]) { dupes.push(num); st.claims[key].worktree = name; st.claims[key].branch = branch; st.claims[key].session = session; st.claims[key].sessionName = sessionName; continue; }
-      st.claims[key] = { issue: issueTag(num), repo: repoAbs, worktree: name, branch, host: HOST, session, sessionName, created: nowISO() };
+      const ex = st.claims[key];
+      // claim inherits the worktree's session. `worktree new` always supplies a real branch/session
+      // by this point, so `mergeClaimRecord` behaves the same as the direct-overwrite this used to
+      // be — but routes it through the ONE #264 merge rule (tools/lib/claim-identity.js) rather than
+      // a second, independently-drifting overwrite.
+      const incoming = { issue: issueTag(num), repo: repoAbs, worktree: name, branch, host: HOST, session, sessionName, created: (ex && ex.created) || nowISO() };
+      if (ex) { dupes.push(num); st.claims[key] = claimIdentity.mergeClaimRecord(ex, incoming, { sameHolder: true }); continue; }
+      st.claims[key] = incoming;
       claimedNums.push(num);
     }
     return { chosenPorts, claimedNums, dupes };
@@ -2983,7 +3108,7 @@ function cmdWorktreeNew(argv) {
       const r = git.ghIssueEdit(repoAbs, num, ['--add-assignee', '@me', '--add-label', 'in-progress']);
       if (!r.ok) warn(`gh edit #${num} failed — local claim stands`);
     }
-    lostIssues = commentAndTieBreak(repoAbs, claimedHere, { wtName: name, branch, myLogin, session, sessionName });
+    lostIssues = commentAndTieBreak(repoAbs, claimedHere, { wtName: name, branch, myLogin, session, sessionName, comps });
     if (lostIssues.length) {
       warn(`Worktree "${name}" was created, but issue(s) ${lostIssues.map((n) => '#' + n).join(' ')} were lost to a`);
       warn(`simultaneous claim and yielded. The worktree remains — reuse it for another issue, or:`);
@@ -4588,7 +4713,8 @@ const HELP_CONFIG = `colab config [show|add-repo <path>|rm-repo <path>|add-reser
   add-reserved-file <path>   add a machine-local reserved-ports file (~ is expanded); its ports join
                              the reserved set (lenient parse: whitespace ints per line, # comments)
   rm-reserved-file <path>    remove a reserved-ports file
-  set <key> <value>          set claimTTLHours | portRange | worktreeSubdir | notifyUrl | journal
+  set <key> <value>          set claimTTLHours | portRange | worktreeSubdir | notifyUrl | journal |
+                              claimIdentity
 
 notifyUrl is OPTIONAL and off by default: unset, colab makes no network call of its own. Set it to
 an http(s) endpoint and claim / release / ship / worktree new / worktree rm each push one small
@@ -4602,6 +4728,15 @@ line, local, never sent anywhere. It is what lets you ask afterwards how long a 
 which invocations failed, and where the wall clock went; state.json cannot answer any of those,
 because it DELETES records rather than retiring them. Turn it off again with:
   colab config set journal false        (removes the key; the existing file is left alone)
+
+claimIdentity is OPTIONAL and "login,host" (unchanged behaviour) by default. It sets how finely the
+claim tie-break (colab claim's simultaneous-claim race) and its refusal gate tell one claimant from
+another (#267). Set it to "login,host,session" to also distinguish two sessions of the SAME GitHub
+account on the SAME host — without it they are indistinguishable, so the tie-break's own "never
+yield to ourselves" rule can treat a co-tenant's live claim as our own. ONLY turn this on where
+--session (or COLAB_SESSION) is a STABLE id across a restart/resume of that session: an id that
+changes on resume makes that session's own earlier claim comment read as a different claimant, and
+it will yield to itself. Unset it again with:  colab config set claimIdentity ""
 `;
 
 function cmdConfig(argv) {
@@ -4660,6 +4795,15 @@ function cmdConfig(argv) {
       // on" are the same state on disk. A stored '' would read as a configured-but-broken endpoint.
       if (v === '') delete cfg[k];
       else if (!/^https?:\/\//i.test(v)) throw new UserError('notifyUrl must be an http(s) URL (or "" to unset)');
+      else cfg[k] = v;
+    }
+    else if (k === 'claimIdentity') {
+      // Same "absent, not falsy" discipline as journal/notifyUrl. Validated through the SAME
+      // function claim.js reads it back through (tools/lib/claim-identity.js), so `set` refuses a
+      // typo at write time instead of it silently degrading at every later `claim` (#267).
+      const problem = claimIdentity.claimIdentityProblem(v);
+      if (problem) throw new UserError(problem);
+      if (v === '') delete cfg[k];
       else cfg[k] = v;
     }
     else throw new UserError(`Unknown config key "${k}"`);
