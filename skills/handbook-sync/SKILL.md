@@ -198,6 +198,68 @@ the *outcomes* in the Issue as a checklist; leave the *steps* in [§9](../../CON
 **Leave existing branches alone** ([§9](../../CONVENTIONS.md#9-adopting-this) step 8) — [§4](../../CONVENTIONS.md#4-branches-and-commits) grandfathers them, and a first sync
 is exactly when someone is tempted to tidy. Renaming one can break a live worktree.
 
+### Runner preflight — before `colab template` writes `runs-on`
+
+Step 6 of [§9](../../CONVENTIONS.md#9-adopting-this) (`colab template <name>`) stamps a CI workflow whose jobs
+default to `runs-on: ubuntu-latest`, with a `# EDIT: self-hosted label if this repo
+needs one.` comment left for a human to act on later. On a **private repo owned by a
+personal account**, that default is not a placeholder to revisit — it is a red trunk
+waiting to happen: GitHub-hosted runners stop being available the moment that
+account's included Actions minutes run out, so every job dies before it starts.
+Measured twice, on two different repos, two days apart (#259).
+
+**Worth stating plainly, because it is not obvious: public repos do not consume
+Actions minutes, private ones do.** A repo that must stay private — because its
+contents are sensitive — cannot dodge this by becoming public. "Make it public" is
+not an available fix; do not offer it as one.
+
+So before accepting the template's default, check what is actually checkable:
+
+- **owner type** — `gh api users/<owner> -q .type` (`User` vs `Organization`)
+- **repository visibility** — `gh repo view <owner>/<repo> --json isPrivate -q .isPrivate`
+- **is a usable self-hosted runner registered and online?** —
+  `gh api repos/<owner>/<repo>/actions/runners`
+
+If the repo is **private under a personal account** and that last call returns no
+runner that is both registered and `online`, **stop and ask** rather than letting
+`ubuntu-latest` stand. The answer — how this machine actually provides a self-hosted
+runner — is local infrastructure and does not belong in this shared skill; put the
+question to the repo's own owner and let their workspace's own notes answer it. This
+skill's job ends at detecting the situation and asking, not at solving it.
+
+### CI comes back red after adoption — which kind of red?
+
+Two different causes produce an identical red X on the run, and only one of them has
+logs worth reading:
+
+```
+run:  run_started_at 14:37:42Z → updated_at 14:37:46Z    (4s for the whole run)
+job:  started 14:37:43Z → completed 14:37:45Z            (2s)
+      steps = 0        runner_name = ""                  (empty)
+```
+
+`steps: 0` plus an empty `runner_name` plus a run measured in single-digit seconds
+means **no runner was ever assigned** — the workflow never executed, so its contents
+are irrelevant, correct or not. This is the runner-preflight failure above, arrived
+at from the other direction: the repo went unadopted, then adopted with a default
+that can't run.
+
+**Check run duration and step count before reading logs.** `gh run view --log`
+returns `log not found` for this failure, which reads like "logs aren't ready yet"
+but actually means "nothing ran" — chasing it leads straight into editing workflow
+contents that were never the problem. Three fix-and-push rounds were burned this way
+before the two fields above answered it in one call:
+
+```sh
+gh run view <run-id> --json status,conclusion,startedAt,updatedAt \
+  -q '{status,conclusion,startedAt,updatedAt}'
+gh api repos/<owner>/<repo>/actions/runs/<run-id>/jobs \
+  -q '.jobs[] | {steps: (.steps|length), runner_name, started_at, completed_at}'
+```
+
+A real workflow failure has nonzero steps, a named runner, and logs to read. An
+empty preflight failure has none of those — go do the runner check above instead.
+
 ### Registration is the step that gets skipped
 
 **`colab register` ([§9](../../CONVENTIONS.md#9-adopting-this) step 7) is last on the list and first to be forgotten**, because
