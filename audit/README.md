@@ -191,11 +191,16 @@ the handbook's current version, so a scheduled run is self-documenting.
     below) for link-shaped `](target#fragment)` references: same-file (`[…](#slug)`)
     and cross-file, relative paths resolved against the *linking file's* directory.
   - Resolves each target's headings with a minimal GitHub-compatible slugifier and
-    **fails** when a fragment doesn't match any of them, naming the file, the broken
-    anchor, and up to five valid slugs ranked by edit distance to the broken one
-    (#187 — nearest by construction, not just the first five headings in the
-    document). **Fail, not warn** — an unresolved anchor is unambiguous once found,
-    unlike the byte-ceiling checks above.
+    **fails** when a fragment doesn't match any of them, naming the file **and its
+    1-based source line** (`file:line:`, #256 — repeated links to the same broken
+    anchor from one file are otherwise byte-identical findings that look like
+    duplicate noise, tempting a reader to wrongly dedupe them and silently lose
+    real distinct defects), the broken anchor, and up to five valid slugs ranked
+    by edit distance to the broken one (#187 — nearest by construction, not just
+    the first five headings in the document). Same `file:line:` prefix on the
+    sibling "target file does not exist at all" finding. **Fail, not warn** — an
+    unresolved anchor is unambiguous once found, unlike the byte-ceiling checks
+    above.
   - **Deliberately link-shaped only.** A bare `§N` in prose, or a bare
     `FILE.md#slug` mention with no `[...](...)` around it, is invisible to this
     check by construction — that is what keeps a not-yet-migrated `§N` citation
