@@ -9,7 +9,7 @@
 
 <!-- colab-handbook @ <version> -->
 
-This repo follows the [colab-handbook](https://github.com/godx-jp/colab-handbook/blob/main/CONVENTIONS.md) conventions.
+This repo follows the [colab-handbook](https://github.com/futurelastic/colab-handbook/blob/main/CONVENTIONS.md) conventions.
 
 - **Tier:** `<A|B|C>` — <A = a tag deploys · C = promotion dev→main deploys · B = no production target>
 - **Trunk:** `<dev|main>` (feature branches `feat|fix|docs|chore|refactor|test|perf/<slug>`)
