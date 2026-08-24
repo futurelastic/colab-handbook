@@ -86,6 +86,42 @@ This grants no new latitude. Every step below runs in full, `autonomy: auto-trun
 decides whether you may perform the trunk merge at all, and no click of any kind
 authorises a promotion, a tag, or anything that deploys.
 
+## What a defer is for — and what it is never for (#257)
+
+A coordinator once deferred a sound branch because the branch's originating session was
+sitting at an interactive prompt with unsent text in its composer and the coordinator
+could not deliver a message into it. Nothing about the diff was wrong; the deferral was
+written up carefully and was still the wrong outcome, because **every step this skill
+performs runs in the coordinator's own worktree** — B0's sync, B1's CI check, B2's
+squash — and none of them contact the originating session at all. Declining a step this
+skill assigns to you, on grounds that step never involves, is not caution; it is
+inventing a stop condition.
+
+- **Unsent or stranded text in the originating session's composer is an operational
+  nuisance about a UI, never a fact about the work.** Neither is "the session did not
+  answer", "the session is parked", or "I could not deliver a message into it." None of
+  these produce a defer, ever.
+- **A defer is reserved for a genuine blocker on the work**: a red or dead precondition
+  the coordinator cannot itself clear (B1's CI gate), a real conflict needing the
+  author's judgement (B0's non-generated-file conflict path), or a missing human gate
+  (the go-ahead itself, `autonomy`, a `needs-decision` answer). If you cannot name which
+  of these three a deferral is, it is not a deferral — go do the step.
+- **The blast radius is never just this one branch.** A finish-before-start gate reads a
+  session holding an unfinished worktree as a reason to refuse *new* starts across the
+  whole repo — one wrongly deferred branch can make a large share of a ready backlog
+  unstartable, and a comment on one issue is not a place a human looking at the backlog
+  will ever see it. Clearing one such session by deferring it just moves the block to the
+  next session in the same state; it resolves nothing.
+- **A recorded deferral carries a clock, or it is indistinguishable from a defer nobody
+  noticed.** Name the specific precondition, what would clear it, and an expiry or
+  re-measure trigger — the event or time after which the branch is measured again rather
+  than waiting for someone to ask. A blocker no agent may clear belongs on the
+  handbook's existing human-watched surface, the `needs-decision` label
+  (`CONVENTIONS.md` [§5](../../CONVENTIONS.md#decision-gate--a-human-must-answer-first-122), *Decision gate*) —
+  triage already re-measures it every run and clears it on a recorded decision — plus
+  your own report to whoever is operating you. An issue comment alone is a record, not a
+  notification; reuse this existing machinery rather than inventing a second one.
+
 ## B0. Is there still cargo? Then sync `<base>` into the branch
 
 **First, know what you are merging into.** `<base>` is the branch's base: `<trunk>`
@@ -136,6 +172,13 @@ shipped branch's own commits look permanently unmerged — a count-only check ca
 Without `colab`, ask the content question directly: `git merge-tree --write-tree
 origin/<base> <branch>` printing exactly `git rev-parse origin/<base>^{tree}` means
 the branch adds nothing. (`CONVENTIONS.md` [§4](../../CONVENTIONS.md#has-it-landed--the-one-rule-because-the-obvious-one-is-wrong), "Has it landed?")
+
+**This sync is the coordinator's own act, in the worktree it already holds — it makes no
+contact with the branch's originating session.** `git fetch` and `git merge` need
+nothing from that session: not a running process, not a reachable prompt, not an empty
+composer. Being unable to deliver a message into it changes nothing about this step —
+see *What a defer is for*, above, before treating anything about that session's state as
+a reason to stop here.
 
 **Now sync.** Merge conflicts here are almost always **generated files** (codegen
 locks, duplicate-timestamp migrations, generated route/type files) — they happen when
@@ -365,8 +408,11 @@ ask) as a whole:
   list with no written reason anywhere in the plan file. **Do not merge, and do not
   proceed to B2 on this pass, whichever reject class below applies.** Post a comment on
   the issue naming specifically what falls short — not "does not match the plan," the
-  actual gap. Every claim in the harvested set stays held; this is never an automatic
-  revert of the branch and never a silent merge-anyway.
+  actual gap, and carry a `<!-- colab:grade verdict=reject-decision round=<n> -->` or
+  `verdict=reject-escalate round=<n>` marker per the classification below — same
+  grammar and reading rule as B2b's `pass` marker (*The grade verdict is a marker, not
+  a sentence to parse*). Every claim in the harvested set stays held; this is never an
+  automatic revert of the branch and never a silent merge-anyway.
 
 ### Reject classifies further — `decision` is the default, `escalate` is the narrow exception (#262)
 
@@ -394,24 +440,30 @@ grading time**, never guessed from a label alone:
      finding — the diff genuinely attempted the stated task and the oracle genuinely
      still says no. Anything that reads as the oracle itself being the problem is
      `decision`, not this.
-  3. **The one-time bound has not already been spent.** Read the issue's comments for a
-     prior `<!-- colab:reject escalate=1 -->` marker (below). If one is already there,
-     this reject is `decision`, full stop, regardless of 1 and 2 — one automatic
-     escalation per issue set, ever. A second reject after that spent escalation is
-     exactly the case a human is for.
+  3. **`reject-escalate` may only ever be emitted at `round=1`.** Read the issue's
+     comments for a prior spend of the bound — **either** a `<!-- colab:grade
+     verdict=reject-escalate ... -->` marker **or** the legacy
+     `<!-- colab:reject escalate=1 -->` marker (#260 minted the former; every marker
+     from before that change is the latter, and issue comments are immutable, so both
+     forms exist in history permanently — read the union of the two, always, not just
+     the current one). If either is already present, this reject is `decision`, full
+     stop, regardless of 1 and 2 — one automatic escalation per issue set, ever. A
+     second reject after that spent escalation is exactly the case a human is for.
 
-  On `escalate`: post the same specific-gap comment `reject` always requires, and
-  append the bound's marker in the same comment: `<!-- colab:reject escalate=1 -->`.
-  Leave the claim held and the worktree in place, same as `decision` — do not tear
-  down, do not release, do not merge. **This skill does not itself pick or dispatch the
-  next rung** — which engine backs it, and how it is invoked, is per-fleet and
-  deliberately out of this skill's scope, the same posture `mechanical-lane` itself
-  already takes (`code-triage`). Report the escalation instead of a hard stop; whatever
-  routes this fleet's mechanical lane (or a human, absent one) picks up the still-held
-  claim and re-attempts, carrying this reject comment as that attempt's context.
-  Re-attempting at the *same* tier with nobody having checked for the marker first is
-  precisely the failure this section exists to close off — checking condition 3 above
-  is not optional bookkeeping, it is the cap.
+  On `escalate`: post the same specific-gap comment `reject` always requires, with the
+  `<!-- colab:grade verdict=reject-escalate round=1 -->` marker — this marker *is* the
+  one-time bound now; nothing else needs to be written to record it, and condition 3
+  above is how a later pass reads whether it was spent. Leave the claim held and the
+  worktree in place, same as `decision` — do not tear down, do not release, do not
+  merge. **This skill does not itself pick or dispatch the next rung** — which engine
+  backs it, and how it is invoked, is per-fleet and deliberately out of this skill's
+  scope, the same posture `mechanical-lane` itself already takes (`code-triage`).
+  Report the escalation instead of a hard stop; whatever routes this fleet's mechanical
+  lane (or a human, absent one) picks up the still-held claim and re-attempts, carrying
+  this reject comment as that attempt's context. Re-attempting at the *same* tier with
+  nobody having checked for the marker first is precisely the failure this section
+  exists to close off — checking condition 3 above is not optional bookkeeping, it is
+  the cap.
 
 A rejected grade — either class — ends this skill's run for that issue set: nothing
 past B1c executes on this pass. What differs is what happens next: `decision` waits on
@@ -481,14 +533,17 @@ whole thing" is exactly the shape that let a partially-done issue close silently
 first place — a reader auditing later cannot tell which box a general paragraph actually
 covers.
 
-**Carry B1c's grade verdict here too — one line, not a second comment.** `Grade: pass —
-<what confirmed it>` for a plan/ask that was satisfied. A `reject` never reaches this
-step at all (B1c stopped before B2); if you are here, the verdict is `pass` by
-construction, but say what confirmed it so the record does not read as a bare rubber
-stamp.
+**Carry B1c's grade verdict here too — one line of prose, plus the machine-readable
+marker (#260).** `Grade: pass — <what confirmed it>` for a plan/ask that was satisfied.
+A `reject` never reaches this step at all (B1c stopped before B2); if you are here, the
+verdict is `pass` by construction, but say what confirmed it so the record does not read
+as a bare rubber stamp. Add a `<!-- colab:grade verdict=pass round=<n> -->` line
+immediately after the `colab:evidence` marker — see *The grade verdict is a marker, not
+a sentence to parse* below for the full contract.
 
 ```sh
 gh issue comment 88 -b "<!-- colab:evidence sha=a1b2c3d -->
+<!-- colab:grade verdict=pass round=1 -->
 Shipped in \`a1b2c3d\` on <trunk>.
 Grade: pass — diff matches the plan's Files list and the payroll fixture in the oracle
 confirms the double-count is gone.
@@ -515,6 +570,7 @@ by the closing actor" is brittle; a stable marker is not.
 
 ```sh
 gh issue comment 88 -b "<!-- colab:evidence sha=a1b2c3d -->
+<!-- colab:grade verdict=pass round=1 -->
 Shipped in \`a1b2c3d\` on <trunk>.
 \`app/Models/Payroll.php:142\` — added the \`overtime_rate\` column.
 Checked: ran the payroll fixture for a 25%-overtime employee; the premium is now
@@ -527,7 +583,44 @@ still counts as evidence and must never be treated as absent by anything reading
 comments. Everything after the marker line stays free prose — **not** a structured
 evidence format. A schema with fields invites padding (a 3-line honest comment becomes
 a 15-line template of restated obviousness); the marker's whole job is being findable,
-not being complete.
+not being complete. A comment may carry both markers; a reader matches each by its own
+name, never by line position, so their order in the body is never load-bearing.
+
+### The grade verdict is a marker, not a sentence to parse (#260)
+
+Free prose was measured to fail two ways at once, on two independently written adopter
+parsers: a decorative emoji before a prose heading blanked one consumer's match
+entirely, while the other's `PASS\b`-shaped tail pattern read a held, qualified verdict
+(`PASS-WITH-NOTES`) as cleared. Opposite failures from the same root cause — there was no
+fixed shape to parse in the first place. So the verdict is a **closed vocabulary in a
+fixed marker**, and the prose next to it is decoration a consumer never has to touch:
+
+```
+<!-- colab:grade verdict=<token> round=<n> -->
+```
+
+- **Exactly three tokens are ever emitted here**: `pass` (B2b, this section) ·
+  `reject-decision` · `reject-escalate` (both B1c, on the reject comment — see B1c
+  below). No token is a prefix of another and none is a decorated variant of another —
+  a qualified outcome is a different whole token, never `pass` with a suffix. Free prose
+  around the marker (a heading, an emoji, "held one round") is exactly that: prose. It
+  can say anything; it changes what no consumer reads.
+- **`round=<n>`** is the 1-based grading attempt for the harvested issue set — count
+  prior `colab:grade` markers on these issues and add one.
+- **Reading rule, so two adopters written independently agree:** match the marker
+  anywhere in the comment body, never by heading text or line position. Compare the
+  `verdict` token by **equality**, never by prefix or substring. Four states follow:
+  **cleared** (token is exactly `pass`) · **held** (a recognised non-`pass` token) ·
+  **unrecognised** (marker present, token not in the reader's set) · **absent** (no
+  marker at all). Unrecognised and absent both mean "do not treat this as cleared" —
+  never a silent default to the safe-looking value. Absent is not a failure either
+  (*Degrade, never gate*, above): an older ship, a hand-written comment, or a
+  `ceremony: light` repo carries no marker and that is not evidence of anything wrong.
+- **An adopter needing an outcome this skill doesn't emit mints its own whole token**
+  (e.g. `hold`) rather than qualifying an existing one — because *unrecognised* is
+  defined as never-cleared, a new token is safe by construction at every consumer that
+  hasn't been taught it yet. The handbook constrains its own emission and the reading
+  rule; it does not police what an adopter's own tooling chooses to add.
 
 **Not evidence:** quoting your own commit message · restating the ticked checklist ·
 "done in `feat/x-23`". All three assert the work happened; none show it did.
@@ -540,6 +633,7 @@ reviewer greps for:
 
 ```sh
 gh issue comment 88 -b "<!-- colab:evidence sha=a1b2c3d -->
+<!-- colab:grade verdict=pass round=1 -->
 Shipped in \`a1b2c3d\` on <trunk>.
 design-not-preapproved — the spec did not cover the empty-state illustration; chose one
 consistent with the existing icon set. Flagging for review.
@@ -753,6 +847,8 @@ has it (#113):
 ```sh
 MAIN_REPO="${MAIN_REPO:-$(dirname "$(git rev-parse --path-format=absolute --git-common-dir)")}"
 ISSUES="<harvested issue numbers, space-separated>"
+GRADE_VERDICT=pass   # only a `pass` reaches B4 by construction (B1c stops a reject before
+                      # this step); use the same token B2b's marker emits, never a bare word
 for PLAN in "$MAIN_REPO"/.claude/plans/issue-*.md; do
   [ -f "$PLAN" ] || continue
   NUMS=$(basename "$PLAN" .md); NUMS=${NUMS#issue-}   # e.g. "12-14-15"
@@ -842,8 +938,10 @@ so explicitly in your report; do not perform it.
 
 - The hand-off contract was **verified**, not assumed — each item re-derived from git
   or GitHub, any gap fixed or escalated before continuing.
-- B1c's grade verdict is recorded — `pass`, carried into B2b's evidence comment, or
-  `reject`, standing alone with nothing past it executed for that issue set.
+- B1c's grade verdict is recorded — `pass`, carried into B2b's evidence comment as a
+  `<!-- colab:grade verdict=pass round=<n> -->` marker, or `reject-decision`/
+  `reject-escalate`, marked the same way on the reject comment, with nothing past it
+  executed for that issue set on this pass.
 - `gh issue view $N`: checklist ticked (inherited from `code-wrap`), and now closed
   with evidence, or left open with the next step written into it.
 - Every issue the branch carried (B1b's harvested set) is either closed with evidence,

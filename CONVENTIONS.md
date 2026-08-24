@@ -1090,7 +1090,14 @@ colab doctor --prune     # free claims whose worktrees no longer exist
   release. `code-ship`'s evidence comment (B2b, `ceremony: standard` only) uses the same
   pattern: an invisible marker line, `<!-- colab:evidence sha=<trunk-sha> -->`, prepended
   to free prose. **Degrade, never gate** — a comment missing the marker still counts as
-  evidence; no consumer may treat its absence as "no evidence exists".
+  evidence; no consumer may treat its absence as "no evidence exists". `code-ship`'s grade
+  verdict (B1c) uses the same family of marker, on its own line: `<!-- colab:grade
+  verdict=<token> round=<n> -->`, `<token>` one of a **closed** set (`pass` ·
+  `reject-decision` · `reject-escalate` — no token a prefix or decorated variant of
+  another, so a qualifier can never be mistaken for `pass`). Read by equality, never by
+  prefix or heading text; an unrecognised token or a missing marker both mean "not
+  cleared", never a silent default to the safe-looking value — the same *degrade, never
+  gate* posture applies to its absence.
 - **Simultaneous claims break ties deterministically**: re-read after claiming, the
   earliest live claim comment (by `createdAt`) wins, the loser posts
   `✅ Released (yielded — …)`.
