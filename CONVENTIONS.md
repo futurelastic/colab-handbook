@@ -1640,19 +1640,29 @@ needs all four values before the first triage pass can classify anything.
 
 **`low-priority` orders a queue; it does not remove work from one.** Unlike `epic` and
 `delivery:*` above, a `low-priority` issue **is** a start candidate — it passes the
-readiness gate exactly like any other issue, and a scheduled driver may still pick it up.
-What the label changes is rank, not eligibility: `code-triage`'s ordering step ranks a
-`low-priority` group behind every other ready group, never off the ready list. Reading
-the label as a hard veto turns "later" into "never" for work someone filed believing they
-were only setting its place in line — the opposite of what filing it as low priority,
-rather than not filing it at all, was meant to say.
+readiness gate exactly like any other issue and stays on the ready list. What the label
+changes is rank, not eligibility: `code-triage`'s ordering step ranks a `low-priority`
+group behind every other ready group, never off the ready list. Reading the label as a
+hard veto turns "later" into "never" for work someone filed believing they were only
+setting its place in line — the opposite of what filing it as low priority, rather than
+not filing it at all, was meant to say.
 
-A driver that implements the veto reading anyway must say so somewhere `code-triage`'s
-output can be checked against — never leave the two silently disagreeing about what
-"ready" means for the same label. `low-priority` is in the provisioned label set for the
-same reason `epic` and `delivery:*` are: an unattended driver's ordering decision depends
-on being able to see it, and a repo that adopted before it existed cannot create it at
-all.
+**A scheduled driver declining to auto-start a `low-priority` group unattended is not
+that hard-veto reading, provided three things hold:** the decline applies only to
+*unattended* starts, checked after every harder objection, with the group still ranked
+last exactly where the ordering above puts it; the group never leaves the ready list, so
+a human may start it by hand at any time; and clearing the label is the sanctioned way to
+release the group back to the scheduler. A driver meeting all three is honouring the
+throttle, not overriding it — it has scoped "who may start this without asking" more
+narrowly than "who may start it at all", which is a different question than eligibility.
+
+A driver that implements the hard-veto reading instead — declining the group outright,
+for a human or an unattended start alike, with no ranking, no unattended/attended split,
+and no label-clearing release path — must say so somewhere `code-triage`'s output can be
+checked against — never leave the two silently disagreeing about what "ready" means for
+the same label. `low-priority` is in the provisioned label set for the same reason `epic`
+and `delivery:*` are: an unattended driver's ordering decision depends on being able to
+see it, and a repo that adopted before it existed cannot create it at all.
 
 ### How a decision is recorded
 
