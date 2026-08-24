@@ -389,6 +389,41 @@ slows this step. It resolves the worktree from cwd against `colab worktrees` and
 running it from somewhere other than the worktree whose gate just ran. No `colab`
 installed → skip this call; A3's own verdict (above) is still what governs A4/A5.
 
+### A3b. Request a migration grant, if this branch needs one
+
+`colab ship` refuses, unconditionally, any branch touching `database/migrations/` or
+`prisma/migrations/` unless every claimed issue already carries a live
+`migration-granted` exemption (`CONVENTIONS.md` [§5](../../CONVENTIONS.md#migration-exemption--a-narrow-human-created-door-through-no-new-migrations-98),
+*Migration exemption*) — human-only, so creating that grant is never yours to do here.
+What **is** yours: making sure the *request* gets filed, so the human with the
+authority to grant it is actually asked — instead of a session finishing, wrapping,
+reporting success, and going idle, with the un-shippable branch discovered only when a
+later `ship` (often days later, often a different session) refuses it.
+
+```sh
+git diff --name-only <base>...HEAD | grep -E '(^|/)(database|prisma)/migrations/'
+```
+
+- **No matches** → nothing to do, skip to A4.
+- **Matches, and every issue this branch carries already holds `needs-migration-grant`
+  or `migration-granted`** → the request (or the grant itself) already exists, skip to A4.
+- **Matches, and a carried issue holds neither** → apply the request signal to that
+  issue now, **before declaring hand-off complete**:
+  ```sh
+  gh label create needs-migration-grant --color D4C5F9 \
+    --description "Agent-flagged: deliverable is a schema migration; surfaces the grant request for a human to Accept" \
+    2>/dev/null || true
+  gh issue edit <issue> --add-label needs-migration-grant
+  ```
+  State it in the wrap report — which issue(s) got the label — and note that a human
+  still has to run `COLAB_HUMAN=1 colab migration-grant <issue> --branch <branch>`
+  before `code-ship` can merge this branch.
+
+Mechanical, not a judgement call: a file-path diff, and a label write gated on nothing
+but ordinary `gh` access — no `COLAB_HUMAN`, no schema review. It never substitutes for
+the grant and authorizes nothing by itself; only a human minting `migration-granted`
+still does that.
+
 ### A4. Commit only the deliverable paths
 
 ```sh
@@ -421,6 +456,9 @@ never by trusting this session's word for it:
 - [ ] session branch pushed (A5)
 - [ ] distill comment posted on each carried issue (A1)
 - [ ] gate result recorded — green, or red-for-an-unrelated-reason reported (A3)
+- [ ] migration-grant REQUEST filed on every carried issue whose branch touches a
+      migration path and didn't already carry the signal (A3b) — or N/A, no migration
+      files on this branch
 - [ ] claim(s) still held — nothing here releases them; `code-ship` B3 does
 - [ ] plan file present at `$MAIN_REPO/.claude/plans/issue-$N.md` — the **absolute main
       checkout path**, resolved via `--git-common-dir`, not "present in `.claude/plans/`"
