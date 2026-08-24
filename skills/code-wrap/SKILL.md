@@ -408,21 +408,34 @@ git diff --name-only <base>...HEAD | grep -E '(^|/)(database|prisma)/migrations/
 - **Matches, and every issue this branch carries already holds `needs-migration-grant`
   or `migration-granted`** → the request (or the grant itself) already exists, skip to A4.
 - **Matches, and a carried issue holds neither** → apply the request signal to that
-  issue now, **before declaring hand-off complete**:
+  issue now, **before declaring hand-off complete** — and read it back, because an exit
+  code is not evidence the write took (`code-triage` carries this same lesson for the
+  identical failure):
   ```sh
-  gh label create needs-migration-grant --color D4C5F9 \
-    --description "Agent-flagged: deliverable is a schema migration; surfaces the grant request for a human to Accept" \
-    2>/dev/null || true
   gh issue edit <issue> --add-label needs-migration-grant
+  gh issue view <issue> --json labels -q '.labels[].name' | grep -qx needs-migration-grant
   ```
-  State it in the wrap report — which issue(s) got the label — and note that a human
-  still has to run `COLAB_HUMAN=1 colab migration-grant <issue> --branch <branch>`
-  before `code-ship` can merge this branch.
+  - **Confirmed present** → done. State it in the wrap report — which issue(s) got the
+    label — and note that a human still has to run
+    `COLAB_HUMAN=1 colab migration-grant <issue> --branch <branch>` before `code-ship`
+    can merge this branch.
+  - **Still absent after the add** → this repo adopted the conventions before
+    `needs-migration-grant` entered the set (#230) and never back-filled it, so the ADD
+    landed on a label that does not exist — the same doubly-silent failure
+    `readinessMissingLabelHint`/`migrationGrantMissingLabelHint` exist to name for
+    `deps-checked`/`migration-granted` (`tools/lib/labels.js`). **Do not create the label
+    here** — defining it is not this step's job; `tools/lib/labels.js`'s
+    `CONVENTION_LABELS` already owns that definition, and a skill that also defines it
+    becomes a second source of truth that drifts (this skill is public and copied by
+    other repos, so the drift ships to them too). Say so loudly instead: report that the
+    request could **not** be filed, and point at `colab labels --ensure` (or
+    `handbook-sync`, `CONVENTIONS.md` §9 step 3) to provision the convention label set —
+    never claim success on a write that did not land.
 
-Mechanical, not a judgement call: a file-path diff, and a label write gated on nothing
-but ordinary `gh` access — no `COLAB_HUMAN`, no schema review. It never substitutes for
-the grant and authorizes nothing by itself; only a human minting `migration-granted`
-still does that.
+This is mechanical, not a judgement call — a file-path diff, and a label *application*
+gated on nothing but ordinary `gh` access, no `COLAB_HUMAN`, no schema review. It never
+defines the label and never substitutes for the grant; only a human minting
+`migration-granted` still authorizes anything.
 
 ### A4. Commit only the deliverable paths
 
