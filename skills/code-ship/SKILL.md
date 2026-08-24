@@ -298,17 +298,23 @@ untouched issue as untouched work and redoes what you already shipped. This is
 the same failure mode as `(#N)`: issues sitting open with their code long since
 merged (`CONVENTIONS.md` [§4](../../CONVENTIONS.md#4-branches-and-commits)).
 
-**This sort is now MECHANICALLY checked, not honour-system (#74).** The
-incident that motivated it: an issue was closed by squash-merge with a third
-of its three-section scope unimplemented — the sections were prose, so
-nothing could catch it. If the issue's `## Plan` is a real GitHub checklist
-(`- [ ]` one line per deliverable — CONVENTIONS.md [§4](../../CONVENTIONS.md#4-branches-and-commits), *Merging*), `colab
-ship` parses it before composing the squash body and refuses to write
-`Closes #N` for any issue with an unticked box and no declared remainder —
-it writes `Refs #N` instead, leaves the issue open, and reports it (loud, not
-silent). Doing B2 **by hand** (no `colab ship`, or a repo without
-`autonomy: auto-trunk`): run the same check yourself before you write the
-commit message —
+**This sort is now MECHANICALLY checked, not honour-system (#74), and the check
+now refuses the MERGE, not just the close (#263).** The incident that motivated
+#74: an issue was closed by squash-merge with a third of its three-section
+scope unimplemented — the sections were prose, so nothing could catch it.
+#74's own fix — downgrading `Closes #N` to a silent `Refs #N` and shipping
+anyway — turned out to still fail, just quietly: measured on one repo over
+~8 weeks, 125 such downgrades against only 10 commits that ever declared a
+remainder, so the redirect was reported but essentially never read. If the
+issue's `## Plan` is a real GitHub checklist (`- [ ]` one line per
+deliverable — CONVENTIONS.md [§4](../../CONVENTIONS.md#4-branches-and-commits), *Merging*),
+`colab ship` parses it before composing the squash body and **refuses to
+ship at all** for any claimed issue with an unticked box and no declared
+remainder — a precondition row (`remainder declared for unticked issues`),
+exactly like a red CI run, not a redirect that lets the ship proceed. Doing
+B2 **by hand** (no `colab ship`, or a repo without `autonomy: auto-trunk`):
+run the same check yourself before you write the commit message, and treat a
+hit as a stop, not a note —
 
 ```sh
 gh issue view $N --json body,comments -q '.body, (.comments[].body)' | grep -E '^\s*- \[[ ]\]|^Remainder: #'
@@ -316,11 +322,20 @@ gh issue view $N --json body,comments -q '.body, (.comments[].body)' | grep -E '
 
 any `- [ ]` line with no `Remainder: #M` anywhere in that output means **Partial**,
 not **Done** — file the remainder issue and tick what shipped (B2b's evidence
-template below) *before* you write `Closes #N`, the same order `colab ship`
-enforces mechanically. A `## Plan` with no checkboxes at all — written as
-prose — cannot be checked this way; that shape is itself a finding, worth a
-line in the Issue, but it does not block the close (nothing here can predate
-this convention and be held to it retroactively).
+template below) *before* you write `Closes #N`; do not squash-merge this issue
+until you have. Ticking the remaining boxes, or an explicit, deliberate
+`colab ship --refs $N`, both clear it too. A `## Plan` with no checkboxes at
+all — written as prose — cannot be checked this way; that shape is itself a
+finding, worth a line in the Issue, but it does not block the close (nothing
+here can predate this convention and be held to it retroactively).
+
+**Before filing the remainder issue, ask whether this half should ship at
+all** (CONVENTIONS.md [§4](../../CONVENTIONS.md#4-branches-and-commits), *Is a shipped half actually
+shippable?*) — **does the shipped half have its own oracle**, independent of
+the unshipped remainder? If the only way to know it works is to finish the
+other half first, declaring a remainder and shipping anyway is the wrong
+move regardless of what the gate allows; leave the branch and finish it next
+session instead.
 
 ## B1c. Grade the diff against the plan (#94)
 
@@ -424,6 +439,10 @@ is a human integration event of a promotion's weight.
   said `(#N)` (`CONVENTIONS.md` [§4](../../CONVENTIONS.md#4-branches-and-commits)).
 - One `Closes #N` per issue the branch carried — the set you harvested in B1b, not
   just the "main" one.
+- **This step never runs against the will of B1b's close gate.** If any harvested
+  issue has an unticked `## Plan` box with no declared remainder, `colab ship` has
+  already refused before reaching this step (#263, B1b above) — do not hand-write
+  `Closes #N` around that refusal; resolve it the way B1b describes, then re-run.
 - **A long-lived tracking/memory issue is `Refs #N`, not `Closes #N`.** If the branch
   claimed an issue used as external memory for a whole domain — a checklist of still-open
   items you touched but did not complete — reference it, don't close it, or you bury its
