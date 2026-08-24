@@ -97,6 +97,7 @@ function syntheticHandbook() {
   g('init', '-q', '-b', 'main', '.');
   g('config', 'user.email', 'test@example.invalid');
   g('config', 'user.name', 'audit test');
+  g('config', 'core.hooksPath', path.join(root, '.nohooks'));
   fs.mkdirSync(path.join(root, 'templates'), { recursive: true });
   fs.writeFileSync(path.join(root, 'templates', 'repo-CLAUDE-block.md'), SYNTH_TEMPLATE);
   fs.writeFileSync(path.join(root, 'project.schema.md'), SYNTH_SCHEMA_OLD);
