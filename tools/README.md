@@ -111,10 +111,17 @@ issue is taken:
   worktree, branch, host, and the date since. Re-claiming onto the **same** worktree is idempotent
   and succeeds silently-OK (so re-running a command is safe).
 - **GitHub** (when `gh` is authed and the repo has an `origin`): `gh issue view <n> --json
-  assignees,labels`. If the `in-progress` label is present **and** the assignee set is non-empty
-  **and** does not include your `gh api user` login, refuse and name the assignee. A failed/blank
-  read is *skipped*, never treated as "free" (same rationale as `claims --sync` being add-only). If
-  `gh` is unavailable the check is **local-only** and says so.
+  assignees,labels,comments`. Both refusal shapes below require the `in-progress` label to be
+  present — an issue GitHub does not yet show as claimed refuses neither way; a genuinely
+  simultaneous claim (the label write mid-flight) is the *tie-break*'s job (§3), not this gate's.
+  - **Assignee set** does not include your `gh api user` login → refuse, naming the assignee.
+  - **Co-tenant** (#267, only checked when `claimIdentity` includes `session` — see *Identity
+    granularity* below): the assignee set is keyed by GitHub login, so it cannot distinguish two of
+    *your own* sessions on one machine. If a **live** `🔒 Claimed` comment exists from a *different*
+    session under your own login+host, refuse and name it — `#N GitHub: live claim comment by
+    <identity> (same account, different session)`.
+  A failed/blank read is *skipped*, never treated as "free" (same rationale as `claims --sync` being
+  add-only). If `gh` is unavailable the check is **local-only** and says so.
 
 `--force` overrides **both** layers and prints exactly what it takes over
 (`--force: taking over #7 from worktree "A" …`) — a takeover is always visible, never silent. Every
@@ -132,6 +139,21 @@ stable, machine-greppable** format (the refusal path and future dashboards parse
 
 Both `worktree` and `branch` render as `-` when absent. `branch` used to render the word `trunk`
 for a claim that had none, which read as a branch name that never existed.
+
+**A re-claim can never DOWNGRADE a known value (#264).** `branch`, `session` and `sessionName` are
+**monotonic** for the same holder (same worktree): a `colab claim N --worktree w` run again with a
+blank `--branch` keeps whatever branch that worktree's claim already recorded — it does not
+overwrite it with `-`. This is what makes "claim before the branch is cut, then claim again once it
+is" safe: the first call is idempotent-with-nothing-changed if genuinely nothing changed, but if it
+*supplies new information* (a branch this worktree's claim did not have yet) it is a **correction**:
+the local record is updated and **one fresh** `🔒 Claimed` comment is posted — printed as `#N
+re-claimed — branch recorded: <branch> (was <old>)` — so any consumer reading the comment stream
+(not just `state.json`) sees the fix too. A correction does **not** re-run the tie-break (§3);
+acquisition was already settled at the first claim. A `--force` **takeover from a different holder**
+never inherits the displaced holder's branch/session — the new record honestly reflects what the new
+holder actually supplied, even if that means recording `-` (a trunk-checkout takeover that genuinely
+has no branch yet is still an honest `-`, not a lie in either direction). See
+`tools/lib/claim-identity.js` (`mergeClaimRecord`) for the exact rule.
 
 On `release` / `worktree rm` it posts `✅ Released` — **unless the issue is already CLOSED**, in
 which case it stays silent (a `Closes #N` merge already ended the story). Comments are
@@ -155,24 +177,52 @@ the tie **deterministically**, so both racers independently reach the *same* ver
 
 1. After posting our claim comment, re-read the issue's comments.
 2. Compute the **live** claims: every `🔒 Claimed` comment **not** followed by a later `✅ Released`
-   from the **same author**. Each carries `login`, `host` (parsed from the comment body), and the
-   comment's authoritative GitHub `createdAt`.
-3. Identify **ours** = the live claim whose `login` is our `gh` login **and** `host` is this machine.
-4. If any **other** live claim (different `login` *or* different `host`) has an **earlier**
-   `createdAt` than ours, **we lost**. Exact-timestamp ties break on the identity string
-   `login@host` — the lexicographically smaller identity wins — so the verdict is fully
-   deterministic even at equal timestamps.
+   from the **same author**. Each carries `login`, `host`, `session` (parsed from the comment body),
+   and the comment's authoritative GitHub `createdAt`.
+3. Identify **ours** = the **earliest** live claim that is the *same claimant* as us (see *Identity
+   granularity* below) — **earliest**, not latest: a same-holder correction comment (the previous
+   section) must never restart our own priority and cost us a race our first comment had already won.
+4. If any **other** live claim (not the same claimant) has an **earlier** `createdAt` than ours,
+   **we lost**. Exact-timestamp ties break on the identity string — the lexicographically smaller
+   identity wins — so the verdict is fully deterministic even at equal timestamps.
 5. On a loss we **yield automatically**: remove our local claim, post
    `✅ Released (yielded — earlier claim by <who> wins)`, and exit 1 telling the caller to pick
    another issue. We remove our GitHub `in-progress` label + `@me` assignee **only when the winner
-   is a different GitHub user** — if the winner shares our login (another machine of ours), the
-   label/assignee is a single shared marker the winner still needs, so we leave it and let the
-   comment layer record the handover. (This is a deliberate refinement of "remove our label only if
-   we added them": on GitHub the label/assignee is keyed by login, not by host, so it cannot be
-   split between two machines of the same user.)
+   is a different GitHub user** — if the winner shares our login (another machine, or another
+   session, of ours), the label/assignee is a single shared marker the winner still needs, so we
+   leave it and let the comment layer record the handover. (This is a deliberate refinement of
+   "remove our label only if we added them": on GitHub the label/assignee is keyed by login, not by
+   host or session, so it cannot be split between two sessions of the same user.)
 
 In `worktree new`, a lost issue is yielded the same way but the **worktree is kept** (its files may
 already be set up) — reuse it for another issue or `colab worktree rm <name>`; the command exits 1.
+
+#### Identity granularity — `claimIdentity` (#267)
+
+"Same claimant" above is computed from a **configured** set of components, not a hardcoded
+`login@host`:
+
+- **`login,host`** (the default — unset behaves exactly as before this was configurable). Two
+  sessions of your own account on one machine are **indistinguishable**: the tie-break's "never
+  yield to ourselves" rule treats a co-tenant's live claim as our own, so neither racer can ever lose
+  to the other. This was a measured near-miss, not a theoretical gap.
+- **`login,host,session`** (opt-in: `colab config set claimIdentity login,host,session`) —
+  distinguishes two sessions of one account on one host. **Only turn this on where `--session` /
+  `COLAB_SESSION` is a STABLE id across a restart or resume of that session.** If it is not, a
+  session's own earlier claim comment reads as a *different* claimant on resume and it will yield to
+  itself — a property of how sessions are managed on your fleet, not of `colab`, hence a knob with a
+  conservative default rather than always-on.
+- **Degrade-on-missing**: `session` sharpens a comparison only when **both** sides being compared
+  carry a non-empty one. A legacy comment with no session field (written before #242, or any
+  comment where the session field is genuinely blank) still compares on `login,host` alone even with
+  the fine setting active — otherwise turning the knob on would make every such comment from your
+  own account read as a stranger, and any that is still live would instantly win every future race.
+- A co-tenant yield's message is distinct and louder than an ordinary yield — it names both session
+  ids, says which setting produced the verdict, and prints both undos (`colab claim N --force …`
+  to take it back, `colab config set claimIdentity login,host` to stop distinguishing sessions) — a
+  wrong self-yield here must be diagnosable in one screen.
+
+See `tools/lib/claim-identity.js` for the implementation and `colab config -h` for the setting.
 
 ### 4. What `doctor` does NOT do
 
@@ -418,6 +468,7 @@ append-only and never participates in that lock.
 | `worktreeSubdir` | where worktrees are created inside a repo (default `.worktrees` — gitignore it). |
 | `notifyUrl` | **absent by default** — optional observer endpoint, see below. Unset means colab makes no network call of its own, ever. |
 | `journal` | **absent by default** — set to `true` for a local append-only record of every state transition and invocation in `~/.colab/journal.jsonl`, see below. Unset means colab writes no journal file, ever. Unrelated to `notifyUrl`: local file vs. remote push. |
+| `claimIdentity` | **absent by default** (`login,host` behaviour, unchanged) — set to `login,host,session` to distinguish two of your own sessions on one machine in the claim tie-break (#267). See *Identity granularity* under *Claim lifecycle* above; only safe where `--session` is stable across a resume. |
 
 ### `notifyUrl` — optional event push (off by default)
 
@@ -766,7 +817,7 @@ Run `colab <cmd> --help` for full detail.
 | `template [<name>] [--dest F] [--repo P] [--force]` | copy a handbook workflow template into a repo, **stamped** with the handbook version (see below) |
 | `update [<repo>...] [--apply] [--json] [--quiet]` | sweep the fleet registry for stamped copies that fell behind a changed template; `--apply` refreshes the **pristine** ones. Never commits; never touches a hand-edited copy (see below) |
 | `register [<path>] [--remove] [--list]` | add/remove a repo in **both** fleet registries at once; `--list` flags drift (see below) |
-| `config [show \| add-repo P \| rm-repo P \| add-reserved-file P \| rm-reserved-file P \| set K V]` | manage config (`set` keys: `claimTTLHours`, `portRange`, `worktreeSubdir`, `notifyUrl`, `journal`) |
+| `config [show \| add-repo P \| rm-repo P \| add-reserved-file P \| rm-reserved-file P \| set K V]` | manage config (`set` keys: `claimTTLHours`, `portRange`, `worktreeSubdir`, `notifyUrl`, `journal`, `claimIdentity`) |
 | `adopt [--repo P] [--json] [--no-verify] [--axis a,b] [--room R] [--exposure E] [--writes W] [--channels C] [--production U\|none] [--deploy D] [--stack S] [--answered-by N] [--reason "..."]` | detect + ask + derive + WRITE CONVENTIONS.md [§9](../CONVENTIONS.md#9-adopting-this)'s five rows (`tier`, `room`, `exposure`, `writes`, `channels`) in one act (#199) — a complete descriptor just reports; a flag makes the whole run non-interactive, a TTY prompts, neither refuses fast. Lowering `exposure` (or a first `none`/`self`) needs a human (`COLAB_HUMAN=1` + `--answered-by`, or a terminal); raising, or a first `live`/`released`, does not. Append-only — never rewrites an existing byte; never writes `tier` unless `exposure` ends unanswered |
 
 ### Release notes
