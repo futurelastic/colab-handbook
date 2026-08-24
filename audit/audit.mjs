@@ -2048,6 +2048,7 @@ function checkAnchorLinks(src, fail) {
     const scanText = stripCodeForLinkScan(text);
     while ((m = ANCHOR_LINK_RE.exec(scanText))) {
       const [, rawTarget, fragment] = m;
+      const line = scanText.slice(0, m.index).split("\n").length;
       // An external target is not a repo-relative path, even though it ends in ".md".
       // The comment that stood here claimed ANCHOR_LINK_RE's `.md$` requirement already
       // excluded http(s) — it does not: `https://host/README.md#install` ends in ".md"
@@ -2063,7 +2064,7 @@ function checkAnchorLinks(src, fail) {
       const normalized = targetPath.split("/").filter((p) => p !== ".").join("/");
       const slugs = slugsFor(normalized);
       if (slugs === null) {
-        fail(`${file}: links to ${normalized}#${fragment}, but ${normalized} does not exist`);
+        fail(`${file}:${line}: links to ${normalized}#${fragment}, but ${normalized} does not exist`);
         continue;
       }
       if (!slugs.has(fragment)) {
@@ -2078,7 +2079,7 @@ function checkAnchorLinks(src, fail) {
           .slice(0, 5)
           .map((entry) => entry.slug);
         fail(
-          `${file}: anchor #${fragment} does not resolve in ${normalized} — ` +
+          `${file}:${line}: anchor #${fragment} does not resolve in ${normalized} — ` +
           (near.length ? `nearest headings: ${near.join(", ")}` : "that file has no headings at all"),
         );
       }

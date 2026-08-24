@@ -236,6 +236,44 @@ test('a repo-absolute /path.md#slug still resolves — the // guard must not swa
   assert.match(r.fails[0], /#not-a-slug does not resolve in CONVENTIONS\.md/);
 });
 
+// --- repeated broken links get DISTINCT findings, keyed by line (#256) -------
+// The check is deliberately correct to emit one finding per link occurrence, even
+// when two occurrences produce byte-identical text otherwise — collapsing them
+// would silently destroy real, separate defects. The line number is what makes
+// each finding actionable and distinguishable.
+
+test('two identical broken-anchor links in one file produce two findings that differ by line (#256)', () => {
+  const r = audit(fixture({
+    'CONVENTIONS.md': '# Conventions\n\n## 5. Claiming work\n\nBody.\n',
+    'docs/x.md':
+      'First mention: [claiming](../CONVENTIONS.md#4-branches-and-commits).\n\n' +
+      'Second mention: [claiming again](../CONVENTIONS.md#4-branches-and-commits).\n',
+  }));
+  const broken = r.fails.filter((t) => /#4-branches-and-commits/.test(t));
+  assert.strictEqual(broken.length, 2, r.fails.join(' | '));
+  assert.notStrictEqual(broken[0], broken[1], 'findings must differ (carry distinct line numbers)');
+  assert.ok(/docs\/x\.md:1:/.test(broken[0]), broken[0]);
+  assert.ok(/docs\/x\.md:3:/.test(broken[1]), broken[1]);
+});
+
+test('a broken-anchor finding names the exact 1-based source line (#256)', () => {
+  const r = audit(fixture({
+    'docs/x.md': '# Title\n\nSome prose.\n\nSee [nowhere](#nope).\n',
+  }));
+  const msg = r.fails.find((t) => /#nope/.test(t));
+  assert.ok(msg, r.fails.join(' | '));
+  assert.ok(/^docs\/x\.md:5:/.test(msg), msg);
+});
+
+test('a link to a nonexistent FILE also gets its source line number (#256)', () => {
+  const r = audit(fixture({
+    'docs/x.md': '# Title\n\nSome prose.\n\nSee [ghost](../NOPE.md#somewhere).\n',
+  }));
+  const msg = r.fails.find((t) => /NOPE\.md/.test(t));
+  assert.ok(msg, r.fails.join(' | '));
+  assert.ok(/^docs\/x\.md:5:/.test(msg), msg);
+});
+
 test('a mailto: link is ignored', () => {
   const r = audit(fixture({
     'docs/x.md': 'Contact [us](mailto:team@example.invalid#nope).\n',
