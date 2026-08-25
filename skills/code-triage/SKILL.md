@@ -637,13 +637,14 @@ silently dropped — see §6.
 **Non-code delivery — route, not start:**
 
 ```sh
-gh issue list --state open --search "label:delivery:content,delivery:ops,delivery:docs-only" \
+gh issue list --state open --search "label:delivery:content,delivery:ops,delivery:docs-only,delivery:elsewhere" \
   --json number -q '.[].number'
 ```
 
-An issue carrying `delivery:content`, `delivery:ops` or `delivery:docs-only` is real work
-whose completion is not a code commit — a content push, an ops/production check, a docs
-sync outside code review (`CONVENTIONS.md` [§5](../../CONVENTIONS.md#delivery-type--route-not-start-112), *Delivery type*). Leave it off the ranked
+An issue carrying `delivery:content`, `delivery:ops`, `delivery:docs-only` or
+`delivery:elsewhere` is real work whose completion is not a code commit *in this repo* — a
+content push, an ops/production check, a docs sync outside code review, or code that lands
+in a different repository (`CONVENTIONS.md` [§5](../../CONVENTIONS.md#delivery-type--route-not-start-112), *Delivery type*). Leave it off the ranked
 list the same way an epic is: not because someone holds it, but because there is nothing
 to branch on in *this* pipeline. Report it in its own **route** bucket, distinct from the
 epic bucket — see §6 — so a human sees where it actually needs to go instead of it reading
@@ -946,7 +947,7 @@ with the blocker named:
       re-gated settled work). `colab decision --list` shows every issue with a live
       decision right now.
 - [ ] **Delivery type is code, or not asked** — no `delivery:content` / `delivery:ops` /
-      `delivery:docs-only` label (`CONVENTIONS.md` [§5](../../CONVENTIONS.md#delivery-type--route-not-start-112), *Delivery type*). This issue was
+      `delivery:docs-only` / `delivery:elsewhere` label (`CONVENTIONS.md` [§5](../../CONVENTIONS.md#delivery-type--route-not-start-112), *Delivery type*). This issue was
       already filtered out at §2 if it carries one; this bullet is the reminder for a
       caller checking a single issue outside a full triage pass. **Absence is not this
       gate** — an unlabelled issue and one explicitly `delivery:code` both pass through

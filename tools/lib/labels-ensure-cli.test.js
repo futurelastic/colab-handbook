@@ -1,12 +1,12 @@
 'use strict';
 /**
- * CLI-level tests for `colab labels --ensure` (#206) — the 15-name convention label set used to
- * be typed out by hand in three places (CONVENTIONS.md §9 step 3, skills/handbook-sync/SKILL.md
- * §2, and `tools/lib/labels.js`'s CONVENTION_LABELS, the only one actually executed). This is the
- * missing executable: create every label a repo lacks, idempotent, reporting created vs already
- * there — reading the missing set from `labels.missingConventionLabels`, the same function the
- * audit and the readiness/grant hint functions already read, rather than restating the 15 names
- * a fourth time.
+ * CLI-level tests for `colab labels --ensure` (#206) — the 16-name convention label set (15
+ * until `delivery:elsewhere` joined it in #274) used to be typed out by hand in three places
+ * (CONVENTIONS.md §9 step 3, skills/handbook-sync/SKILL.md §2, and `tools/lib/labels.js`'s
+ * CONVENTION_LABELS, the only one actually executed). This is the missing executable: create
+ * every label a repo lacks, idempotent, reporting created vs already there — reading the missing
+ * set from `labels.missingConventionLabels`, the same function the audit and the readiness/grant
+ * hint functions already read, rather than restating the names a fourth time.
  *
  * Real CLI, real repo, real bare `origin` on disk (no network) — same fixture shape as
  * tools/lib/ship-migration-grant.test.js. A fake `gh` on PATH answers `--version`/`auth status`
@@ -171,8 +171,17 @@ function escapeRe(s) { return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
 // (not re-testing gh's own argv handling — this pins that ghLabelCreate is called with the SAME
 // shape CONVENTION_LABELS declares, so the tracker's label never silently drifts from the source.)
 
+// #274: the set's size was independently restated as a hand-typed prose number in (at least)
+// CONVENTIONS.md §5 ("Four labels" — now "Five"), CONVENTIONS.md §9 step 3 ("fifteen names" — now
+// "sixteen"), and skills/handbook-sync/SKILL.md ("fifteen-name set" — now "sixteen-name"), on top
+// of the literal pinned here. None of those four is checkable against the others, so adding
+// `delivery:elsewhere` here silently left three of them wrong until this issue found it by hand.
+// This assertion cannot make prose self-updating, but it is the one count a CI run actually
+// exercises — if you bump CONVENTION_LABELS.length again, this fails LOUDLY, and that failure is
+// the reminder to grep the three prose sites above and move all three together.
 test('CONVENTION_LABELS is what --ensure iterates — the source this command must never restate', () => {
-  assert.strictEqual(conventionLabelNames().length, 15);
+  assert.strictEqual(conventionLabelNames().length, 16,
+    'label count changed — also update the prose counts in CONVENTIONS.md §5/§9 and skills/handbook-sync/SKILL.md');
   for (const l of CONVENTION_LABELS) {
     assert.ok(l.name && l.color && l.description, `label ${JSON.stringify(l)} is missing a field --ensure needs to create it`);
   }

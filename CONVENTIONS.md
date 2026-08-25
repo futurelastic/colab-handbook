@@ -1630,18 +1630,31 @@ territory.
 
 #### Delivery type — route, not start (#112)
 
-**Four labels — `delivery:code`, `delivery:content`, `delivery:ops`,
-`delivery:docs-only`** — name whether finishing an issue produces a code commit at all.
-**Three-valued, not boolean:** no label = not asked (behaves as before); `delivery:code`
-= ordinary pipeline; the other three = non-code, route, do not start. **"Not asked" must
-never collapse into "non-code"** — every issue is unlabelled the day this set is adopted,
-and reading absence as non-code would freeze every scheduled driver on day one.
+**Five labels — `delivery:code`, `delivery:content`, `delivery:ops`,
+`delivery:docs-only`, `delivery:elsewhere`** — name whether finishing an issue produces a
+code commit *in this repo* at all. **Three-valued, not boolean:** no label = not asked
+(behaves as before); `delivery:code` = ordinary pipeline; the other four = non-code-here,
+route, do not start. **"Not asked" must never collapse into "non-code"** — every issue is
+unlabelled the day this set is adopted, and reading absence as non-code would freeze every
+scheduled driver on day one.
 
-`content`/`ops`/`docs-only` gate exactly like `needs-decision` — not a start candidate for
-anyone. A session landing on one distills the finding onto the issue and ends the
-session. Whoever files or triages sets the label — no mechanical rule infers it from a
-title or body. `delivery:*` is in the provisioned label set because every adopting repo
-needs all four values before the first triage pass can classify anything.
+`content`/`ops`/`docs-only`/`elsewhere` gate exactly like `needs-decision` — not a start
+candidate for anyone. A session landing on one distills the finding onto the issue and
+ends the session. Whoever files or triages sets the label — no mechanical rule infers it
+from a title or body. `delivery:*` is in the provisioned label set because every adopting
+repo needs all five values before the first triage pass can classify anything.
+
+**`delivery:elsewhere` (#274)** names an issue whose deliverable IS code, but code that
+lands in a different repository than the one the issue lives in — a consumer that read a
+tracker across several repositories provisioned it by hand on three separate trackers, 21
+issues total, well before this convention adopted it. Before #274, an issue explicitly
+labelled `delivery:elsewhere` was byte-identical, to this repo's own classifier, to one
+nobody had ever labelled: `deliveryType()` returned `null` for it (the "not asked" case),
+so `isRouteNotStart()` read `false` and the issue reported startable — the opposite of what
+applying the label was asking for. It routes for the same reason `content`/`ops`/
+`docs-only` do: this pipeline's worktree, gate, mergeable and squash machinery all assume
+the diff lands in the repo the issue lives in, and an `elsewhere` issue breaks that
+assumption identically to a content push.
 
 #### Priority — a throttle, not a veto (#268)
 
@@ -2137,18 +2150,25 @@ only. Resolution order: `--config` flag > `~/.colab/repos.txt` > bundled example
    them as a to-do list on exit.
 2. **Write `.github/project.yml`** ([§3](#3-githubprojectyml--the-marker)) with the
    answers from step 1.
-3. **Create the whole label set — fifteen names, not a subset** (`in-progress`,
+3. **Create the whole label set — sixteen names, not a subset** (`in-progress`,
    `deps-checked`, `agent-filed`, `epic`, `needs-decision`, `decision-recorded`,
    `needs-plan`, `migration-granted`, `needs-migration-grant`, `ci-granted`,
-   `low-priority`, and the four `delivery:*`):
+   `low-priority`, and the five `delivery:*`):
    ```sh
    colab labels --ensure
    ```
    Idempotent by construction (#206) — reads the set from `tools/lib/labels.js`'s
    `CONVENTION_LABELS`, the one place it is actually defined, creates only what this
    repo is missing, and reports created vs already-there; safe to re-run because
-   partial adoption is normal. (No `colab` on this machine? The fifteen `gh label
+   partial adoption is normal. (No `colab` on this machine? The sixteen `gh label
    create … || true` lines this replaced are recoverable from that file's history.)
+
+   **This count is a hand-typed number restated in at least four places** (here, the
+   `gh label create` fallback line above, `skills/handbook-sync/SKILL.md`, and
+   `tools/lib/labels.js`'s own doc comment) — **none checkable against the others except
+   the one pinned assertion in `tools/lib/labels-ensure-cli.test.js`.** #274: adding
+   `delivery:elsewhere` left three of the four wrong until found by hand. Add a label,
+   bump that test, then grep for the other three prose counts before you're done.
    What each absence costs, briefly: `in-progress` — the first claim cannot land.
    `deps-checked` — a readiness check can never tell *free* from *nobody looked*.
    `agent-filed` — every agent-filed issue reports as human-approved. `epic` — an epic
@@ -2313,7 +2333,7 @@ gh issue list --label in-progress                 # what's taken
 gh issue list --label agent-filed                 # filed by an agent — no human approved it yet
 gh issue list --label epic                        # a container for sub-issues — never a start candidate
 gh issue list --label group:<key>                 # must share one branch — start them together
-gh issue list --search "label:delivery:content,delivery:ops,delivery:docs-only"  # non-code — route, don't start
+gh issue list --search "label:delivery:content,delivery:ops,delivery:docs-only,delivery:elsewhere"  # non-code-here — route, don't start
 gh issue edit N --add-assignee @me --add-label in-progress
 git checkout -b feat/<slug>-N origin/<trunk>      # trunk = main (B) or dev (A)
 

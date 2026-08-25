@@ -4663,14 +4663,22 @@ function registerList() {
 // labels (provision the convention label set — CONVENTIONS.md §9 step 3, #206)
 // ---------------------------------------------------------------------------
 
+// The name list and count below are DERIVED from labels.js's CONVENTION_LABELS at load time,
+// never hand-typed here — #274 measured this exact help text as a fifth stale restatement of
+// the set's size (it read "13-name set" and named only 9 of the non-delivery labels, both
+// already wrong before delivery:elsewhere existed), on top of the four prose sites CONVENTIONS.md
+// §5/§9 and skills/handbook-sync/SKILL.md restated by hand. A derived string cannot drift.
+const NON_DELIVERY_LABEL_NAMES = labels.conventionLabelNames()
+  .filter((n) => !n.startsWith(labels.DELIVERY_LABEL_PREFIX));
+const DELIVERY_LABEL_COUNT = labels.conventionLabelNames().length - NON_DELIVERY_LABEL_NAMES.length;
+
 const HELP_LABELS = `colab labels --ensure [--repo P]
 
-Create every convention label this repo is missing — CONVENTIONS.md §9 step 3, the 13-name set
-(\`in-progress\`, \`deps-checked\`, \`agent-filed\`, \`epic\`, \`needs-decision\`, \`decision-recorded\`,
-\`needs-plan\`, \`migration-granted\`, \`ci-granted\`, and the four \`delivery:*\`), read from ONE
-source (tools/lib/labels.js's CONVENTION_LABELS) — the same list the audit and every other
-label-writing command already read, instead of the three places §9 and this set used to be
-typed out by hand (#206).
+Create every convention label this repo is missing — CONVENTIONS.md §9 step 3, the ${labels.conventionLabelNames().length}-name set
+(${NON_DELIVERY_LABEL_NAMES.map((n) => `\`${n}\``).join(', ')}, and the ${DELIVERY_LABEL_COUNT} \`delivery:*\` values),
+read from ONE source (tools/lib/labels.js's CONVENTION_LABELS) — the same list the audit and
+every other label-writing command already read, instead of the three places §9 and this set
+used to be typed out by hand (#206).
 
   --ensure       required — there is no bare "create", so a typo can never silently do nothing
   --repo <path>  repo root (default: git root of cwd)

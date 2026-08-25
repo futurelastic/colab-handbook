@@ -111,17 +111,28 @@
  * an issue can never reach a mergeable state, so it reads as eternally stuck, and — the expensive
  * half — it looks STARTABLE to triage and a scheduled driver alike, because no existing readiness
  * label says "this is real work, but not a diff" the way `epic` says "this is not a unit of work
- * at all". Four labels, one classifier, deliberately THREE-VALUED rather than boolean
+ * at all". Five labels, one classifier, deliberately (still) THREE-VALUED rather than boolean
  * (CONVENTIONS.md §5, *Delivery type*): no `delivery:*` label at all reads as **not asked**, and
  * must behave exactly as before this label set existed — every issue in every tracker is
  * unlabelled the day this lands, so absence collapsing into "non-code" would freeze the start
  * gate for everyone on day one. `delivery:code` is the explicit affirmative for a code issue;
- * `content` / `ops` / `docs-only` are the explicit non-code types, which triage and the readiness
- * gate treat as route-not-start — a companion to the `epic` rule and the `needs-decision` gate, not
- * a merge of either. It joins `CONVENTION_LABELS` for the same reason `epic` did: an unattended
- * decision (a scheduler's or triage's start-or-skip) depends on being able to tell the three
- * states apart, and a repo that adopted before this set existed cannot create the label at all —
- * the malignant-absence failure this file's opening paragraph names.
+ * `content` / `ops` / `docs-only` / `elsewhere` are the explicit non-code types, which triage and
+ * the readiness gate treat as route-not-start — a companion to the `epic` rule and the
+ * `needs-decision` gate, not a merge of either. It joins `CONVENTION_LABELS` for the same reason
+ * `epic` did: an unattended decision (a scheduler's or triage's start-or-skip) depends on being
+ * able to tell the states apart, and a repo that adopted before this set existed cannot create
+ * the label at all — the malignant-absence failure this file's opening paragraph names.
+ *
+ * `delivery:elsewhere` joined the set in #274, after living un-provisioned on three separate
+ * trackers (21 issues, all hand-created — `colab labels --ensure` could never create a label
+ * absent from `CONVENTION_LABELS`). It names an issue whose deliverable IS code, but code that
+ * lands in a different repository than this tracker's own — so it belongs in the non-code-HERE
+ * bucket for exactly the reason `content`/`ops`/`docs-only` do: this pipeline's worktree, gate,
+ * mergeable and squash machinery all assume the diff lands in the repo the issue lives in, and
+ * an `elsewhere` issue breaks that assumption the same way a content push does. Before this
+ * entry, `deliveryType()` returned `null` for it — byte-identical to an issue nobody ever
+ * labelled — so `isRouteNotStart()` read `false` and every one of those 21 issues reported
+ * STARTABLE to triage, the opposite of what applying the label was asking for.
  *
  * `low-priority` joined the set in #268: it orders a queue, it does not remove work from
  * one — unlike `epic` and `delivery:*` above, a `low-priority` issue IS a start candidate,
@@ -152,16 +163,17 @@ const CONVENTION_LABELS = [
   { name: 'delivery:content', color: 'FEF2C0', description: 'Delivery is a content push, not a code commit — route, do not start in the code pipeline' },
   { name: 'delivery:ops', color: 'D4C5F9', description: 'Delivery is an ops/production check, not a code commit — route, do not start in the code pipeline' },
   { name: 'delivery:docs-only', color: 'BFD4F2', description: "Delivery is a docs sync outside code review, not a commit — route, don't start" },
+  { name: 'delivery:elsewhere', color: 'F9D0C4', description: 'Delivery is code, but lands in a different repository — route, do not start here' },
 ];
 
-// The DELIVERY label prefix (CONVENTIONS.md §5, Delivery type). Four fixed values, unlike
+// The DELIVERY label prefix (CONVENTIONS.md §5, Delivery type). Five fixed values, unlike
 // `group:<key>` — provisioned up front in CONVENTION_LABELS above, not created on demand.
 const DELIVERY_LABEL_PREFIX = 'delivery:';
 
-// The three non-code delivery types — the ones triage and the readiness gate treat as
+// The four non-code delivery types — the ones triage and the readiness gate treat as
 // route-not-start. `delivery:code` is deliberately excluded: it is the explicit CODE
 // affirmative, not a non-code type.
-const NON_CODE_DELIVERY_TYPES = ['content', 'ops', 'docs-only'];
+const NON_CODE_DELIVERY_TYPES = ['content', 'ops', 'docs-only', 'elsewhere'];
 
 /**
  * The three-valued delivery classifier (CONVENTIONS.md §5, *Delivery type*).
@@ -170,7 +182,7 @@ const NON_CODE_DELIVERY_TYPES = ['content', 'ops', 'docs-only'];
  *   - `null`     — NOT ASKED. No `delivery:*` label present. Must read identically to how the
  *                  issue behaved before this label set existed — never as non-code.
  *   - `'code'`   — `delivery:code` present.
- *   - `'content' | 'ops' | 'docs-only'` — the matching `delivery:*` label present.
+ *   - `'content' | 'ops' | 'docs-only' | 'elsewhere'` — the matching `delivery:*` label present.
  *
  * Tolerant of label objects or bare strings, the same shape every other helper in this file
  * accepts. If more than one `delivery:*` label is somehow present (a tracker mistake, not a
