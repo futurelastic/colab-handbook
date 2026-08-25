@@ -125,7 +125,7 @@ colab labels --ensure
 ```
 
 Only `in-progress` is ordering-critical (the claim below needs it), but `--ensure`
-creates the whole fourteen-name set in one idempotent call (#206) — reading it from
+creates the whole fifteen-name set in one idempotent call (#206) — reading it from
 `tools/lib/labels.js`'s `CONVENTION_LABELS`, never restated here — and creating a
 subset is the exact bug this leads to: a `deps-checked` never created leaves a
 readiness column that can never fill, and nothing downstream can tell *free* from
