@@ -2,7 +2,7 @@
 
 Starting points you **copy into your own repo**. That is the entire model.
 
-> **These are NOT called remotely.** There is no `uses: godx-jp/colab-handbook/...`
+> **These are NOT called remotely.** There is no `uses: futurelastic/colab-handbook/...`
 > anywhere, and there is no reusable `workflow_call` here. An earlier version of this
 > handbook told repos to call shared workflows; that was reversed. Every workflow now
 > lives, in full, inside the repo that runs it. You copy the file, you edit it, **you

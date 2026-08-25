@@ -142,7 +142,7 @@ vào bất cứ gì.
 thư mục tạm.
 
 ```sh
-git clone https://github.com/godx-jp/colab-handbook.git ~/code/colab-handbook
+git clone https://github.com/futurelastic/colab-handbook.git ~/code/colab-handbook
 cd ~/code/colab-handbook
 ```
 
