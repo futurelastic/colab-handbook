@@ -197,10 +197,41 @@ function templateFiles(name) {
   return [`templates/${name}.yml`, `templates/${name}.yaml`];
 }
 
+// The trailer key a handbook editor writes on a commit to declare — at edit time, never
+// inferred afterward — that a template change carries no rule content (#272). One key,
+// one truthy spelling; keep this narrow so a reader never has to guess what counts.
+const RULE_NEUTRAL_TRAILER = 'Rule-Neutral';
+const RULE_NEUTRAL_TRUE = /^(yes|true)$/i;
+
+/**
+ * Is every commit that touched `files` in `sinceRef..untilRef` marked with the
+ * Rule-Neutral trailer? Empty range (nothing changed) reads as false — callers only ask
+ * this after confirming `changed`, and "no commits" is not the same claim as "all
+ * commits declared neutral".
+ *
+ * Uses `\x1f`/`\x1e` as field/record separators, not the trailer text itself, because
+ * `%(trailers:valueonly)` renders empty for a commit with no trailer — a plain newline
+ * join cannot tell "no trailer" apart from "trailer, empty value" from the commit count.
+ */
+function allCommitsRuleNeutral(root, files, sinceRef, untilRef) {
+  const fmt = `%H\x1f%(trailers:key=${RULE_NEUTRAL_TRAILER},valueonly,separator=%x2C)\x1e`;
+  const r = gitIn(root, ['log', `--format=${fmt}`, `${sinceRef}..${untilRef}`, '--', ...files]);
+  if (!r.ok || !r.out) return false;
+  const records = r.out.split('\x1e').map((s) => s.trim()).filter(Boolean);
+  if (records.length === 0) return false;
+  return records.every((rec) => {
+    const value = rec.split('\x1f')[1] || '';
+    return RULE_NEUTRAL_TRUE.test(value.trim());
+  });
+}
+
 /**
  * Did any of the given files change between the stamped version and `untilRef` (default HEAD)?
- * Returns { verifiable, changed }. verifiable=false when either ref does not resolve in this
- * checkout (a tag we do not have) — reported, never guessed.
+ * Returns { verifiable, changed, ruleNeutral }. verifiable=false when either ref does not
+ * resolve in this checkout (a tag we do not have) — reported, never guessed. `ruleNeutral` is
+ * only ever true alongside `changed: true` — see `allCommitsRuleNeutral` above (#272): a
+ * template stays a hard fail unless EVERY commit since the stamp was deliberately declared
+ * rule-neutral by whoever wrote it, never by comparing before/after content here.
  *
  * This is the check that keeps releases quiet: comparing version STRINGS would mark every adopter
  * stale on every handbook release, including releases that touched nothing they copied.
@@ -212,9 +243,11 @@ function templateFiles(name) {
  */
 function templateChangedSince(root, files, sinceRef, untilRef = 'HEAD') {
   const resolves = (ref) => gitIn(root, ['rev-parse', '--verify', '--quiet', ref + '^{commit}']).ok;
-  if (!resolves(sinceRef) || !resolves(untilRef)) return { verifiable: false, changed: false };
+  if (!resolves(sinceRef) || !resolves(untilRef)) return { verifiable: false, changed: false, ruleNeutral: false };
   const log = gitIn(root, ['log', '--oneline', `${sinceRef}..${untilRef}`, '--', ...files]);
-  return { verifiable: true, changed: log.ok && log.out.length > 0 };
+  const changed = log.ok && log.out.length > 0;
+  const ruleNeutral = changed && allCommitsRuleNeutral(root, files, sinceRef, untilRef);
+  return { verifiable: true, changed, ruleNeutral };
 }
 
 /**

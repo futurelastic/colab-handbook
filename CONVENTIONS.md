@@ -2005,6 +2005,40 @@ since the stamped version** is a finding; an unstamped copy, unknown template, o
 stamp newer than the handbook is advisory. Reconcile deliberately: read the diff,
 `colab template <name> --force`, commit.
 
+**A rule-neutral change downgrades the finding to a warn — declared, never inferred
+(#272).** Bytes drift is always a hard fail by default: a repo stamped against an old
+template gets `fail` the moment anything in that template changed, including a fix that
+touches no rule at all (a corrected hyperlink, once, flipped every under-stamped adopter
+red — the incident that motivated this). The fix is not a classifier that reads the diff
+and guesses whether it mattered; that trades a loud, honest failure for a quiet, wrong
+one. Instead, the person editing `templates/` states the claim themselves, at the moment
+they know it best — as a `Rule-Neutral: yes` trailer on the commit:
+
+```
+fix(templates): point repo-CLAUDE-block.md's org link at this repo's own origin
+
+Rule-Neutral: yes
+```
+
+- The audit only downgrades fail→warn when **every** commit touching that template
+  since the adopter's stamp carries the trailer — one undeclared or ordinary commit in
+  the range and the whole span stays a hard fail, same as today.
+- **Declaring nothing is the default and it is exactly today's behaviour** — an editor
+  who never writes the trailer changes nothing about how drift is reported.
+- **CI and secret-scan templates (`ci-*`) are never eligible**, trailer or not — the
+  same carve-out `ceremony: light` already respects (above): integrity there is not
+  optional on any setting, so a declaration cannot soften it either.
+- This is a claim about intent, not a computed fact — a false declaration is a human
+  error to catch in review, the same as a false `Closes #N` or a mis-typed commit
+  prefix elsewhere in this file; the audit trusts the trailer exactly as far as it
+  trusts the person who wrote it.
+- **The trailer must survive the squash.** This repo's own [§4](#4-branches-and-commits)
+  squash-merges a branch into one trunk commit, and the audit reads only trunk history
+  — never the pre-squash branch commits the declaration was written on. `Rule-Neutral`
+  is on the squash's carried-trailer allowlist (`tools/lib/squash.js`) for exactly this
+  reason; dropping it from that list would make the declaration invisible the moment the
+  branch that wrote it merges, on this repo specifically.
+
 `colab update` classifies every stamped copy and, with `--apply`, refreshes only those
 still pristine as of their own stamp — never commits, never rewrites a hand-edited copy.
 

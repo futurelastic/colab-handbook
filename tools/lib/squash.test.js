@@ -209,6 +209,15 @@ test('duplicate trailers collapse, case-insensitively', () => {
   assert.strictEqual(msg.match(/co-authored-by:/gi).length, 1);
 });
 
+// #272: `Rule-Neutral:` must survive a squash, or the whole declare-at-edit-time mechanism is
+// dead on arrival on this repo's own trunk — `templateChangedSince` (tools/lib/stamp.js) reads
+// only the squashed trunk commit, never the pre-squash branch history the trailer was written on.
+test('Rule-Neutral: yes survives a squash — the declaration this repo\'s own audit relies on', () => {
+  const commits = [c('fix(templates): correct a stray hyperlink', 'Rule-Neutral: yes')];
+  const msg = composeSquashMessage(commits, []);
+  assert.match(msg, /Rule-Neutral: yes/);
+});
+
 // --- #105: extraTrailerLines — composed trailers, distinct from harvested/inherited ones --------
 
 test('extraTrailerLines: a composed trailer (e.g. CI-Grant:) lands in the block, appended after inherited ones', () => {

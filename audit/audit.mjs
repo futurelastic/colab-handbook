@@ -317,7 +317,7 @@ function checkStamps(src, hb, tmplNames, fail, warn, { ceremony = "standard", mi
       warn(`${kind} stamped @ ${stampVersion} is NEWER than handbook current ${cur} — clock skew or a hand-edited stamp`);
       return;
     }
-    const { verifiable, changed } = templateChangedSince(HANDBOOK_ROOT, files, stampVersion);
+    const { verifiable, changed, ruleNeutral } = templateChangedSince(HANDBOOK_ROOT, files, stampVersion);
     if (!verifiable) {
       warn(`${kind} stamped @ ${stampVersion}, a version not in this handbook checkout — cannot verify drift (fetch tags, or re-copy)`);
       return;
@@ -332,7 +332,14 @@ function checkStamps(src, hb, tmplNames, fail, warn, { ceremony = "standard", mi
       // `light` relaxes) and CI integrity (which it never does) are exactly the two things #175
       // split apart.
       const msg = `${kind} copied @ ${stampVersion} — template changed since (${cur}): review, re-copy via colab template`;
-      if (ceremony === "light" && !isCi) warn(`${msg} (ceremony: light — advisory, not a build/secret-scan template)`);
+      // ruleNeutral (#272, ruling option C): every commit since the stamp declared itself
+      // rule-neutral, by the person who wrote it, at commit time — never inferred here from
+      // the diff. Same downgrade shape as ceremony: light and the same CI carve-out: a `ci-*`
+      // template stays a hard fail regardless of the declaration, for the identical reason
+      // `isCi` already overrides ceremony above. Declaring nothing (the default) is unaffected
+      // — that repo gets exactly today's fail.
+      if (ruleNeutral && !isCi) warn(`${msg} (declared rule-neutral at commit time — see CONVENTIONS.md §8)`);
+      else if (ceremony === "light" && !isCi) warn(`${msg} (ceremony: light — advisory, not a build/secret-scan template)`);
       else fail(msg);
     }
   };

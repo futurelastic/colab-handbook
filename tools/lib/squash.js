@@ -52,8 +52,12 @@ const SUBJECT_RE = /^([a-z]+)(?:\(([^)]*)\))?(!)?:\s*(.+)$/;
 
 /** Trailer keys worth carrying across a squash. An allowlist, not a general trailer parser: a
  *  loose `^\w+:` rule swallows ordinary prose lines ("Note: ...") and `Closes #N`, which is
- *  composed separately and must not be duplicated. */
-const TRAILER_RE = /^(?:Co-authored-by|Signed-off-by|Claude-Session|Reviewed-by):\s*\S/i;
+ *  composed separately and must not be duplicated.
+ *  `Rule-Neutral` (#272) has to survive here or the whole mechanism is dead on arrival on this
+ *  very repo: a template edit lands on trunk as ONE squashed commit, and `templateChangedSince`
+ *  (tools/lib/stamp.js) reads that trunk commit's trailers, never the pre-squash branch history a
+ *  contributor actually wrote the declaration on. */
+const TRAILER_RE = /^(?:Co-authored-by|Signed-off-by|Claude-Session|Reviewed-by|Rule-Neutral):\s*\S/i;
 
 /** Sync-merge noise: a commit produced by B0 pulling trunk into the branch, not by the author. */
 function isSyncNoise(subject) {

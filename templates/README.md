@@ -183,6 +183,12 @@ your stamp, the audit flags it: review the diff, take what you want, and re-run
 `colab template … --force` to re-stamp. That is the whole loop — no remote calls, no
 silent updates, just an honest report that you are behind.
 
+If you're the one editing a template *in this repo* and the change touches no rule at
+all — a typo, a broken hyperlink, a comment — write `Rule-Neutral: yes` as a trailer on
+that commit. Every adopter's drift finding for it then downgrades to a warn instead of a
+hard fail, but only if **every** commit since their stamp declared it; a `ci-*` template
+is never eligible, trailer or not. Full contract: [CONVENTIONS.md §8](../CONVENTIONS.md#8-conformance-and-reconciliation).
+
 ## Keeping honest
 
 `audit/audit.mjs` in this handbook sweeps many repos and reports when a `project.yml`

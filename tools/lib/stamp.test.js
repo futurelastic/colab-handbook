@@ -731,3 +731,81 @@ test('the not-found error lists available templates with extension, no duplicate
   assert.match(msg, /docs-lint\.yml/);
   assert.doesNotMatch(msg, /docs-lint, docs-lint/, 'must not repeat the bare stem twice');
 });
+
+// --- templateChangedSince's `ruleNeutral` field (#272) -----------------------
+//
+// The declaration is a git trailer on the COMMIT that changed the template, written by the
+// person who made the change, never inferred by comparing before/after content. These tests
+// use the same `tempHandbook` fixture as the frozen-CLI-copy tests above, scoped to a fake
+// `templates/x.yml` instead of `tools/colab` — the mechanism (git log over a path range) is
+// identical, only the files list differs.
+
+test('templateChangedSince: no change at all is neither changed nor rule-neutral', (t) => {
+  const h = tempHandbook(t);
+  h.commit('templates/x.yml', 'name: x v1\n', 'chore: seed template');
+  h.git('tag', 'v1.0.0');
+  const c = stamp.templateChangedSince(h.root, ['templates/x.yml'], 'v1.0.0');
+  assert.strictEqual(c.verifiable, true);
+  assert.strictEqual(c.changed, false);
+  assert.strictEqual(c.ruleNeutral, false);
+});
+
+test('templateChangedSince: a single commit declared Rule-Neutral: yes is changed AND rule-neutral', (t) => {
+  const h = tempHandbook(t);
+  h.commit('templates/x.yml', 'name: x v1\n', 'chore: seed template');
+  h.git('tag', 'v1.0.0');
+  h.commit('templates/x.yml', 'name: x v1\n# fixed a typo in this comment only\n', 'fix(templates): typo\n\nRule-Neutral: yes');
+  const c = stamp.templateChangedSince(h.root, ['templates/x.yml'], 'v1.0.0');
+  assert.strictEqual(c.changed, true);
+  assert.strictEqual(c.ruleNeutral, true);
+});
+
+test('templateChangedSince: "Rule-Neutral: true" is accepted, case-insensitively', (t) => {
+  const h = tempHandbook(t);
+  h.commit('templates/x.yml', 'name: x v1\n', 'chore: seed template');
+  h.git('tag', 'v1.0.0');
+  h.commit('templates/x.yml', 'name: x v1\n# fix\n', 'fix(templates): typo\n\nrule-neutral: True');
+  const c = stamp.templateChangedSince(h.root, ['templates/x.yml'], 'v1.0.0');
+  assert.strictEqual(c.ruleNeutral, true);
+});
+
+test('templateChangedSince: one undeclared commit in the range keeps the whole span NOT rule-neutral', (t) => {
+  const h = tempHandbook(t);
+  h.commit('templates/x.yml', 'name: x v1\n', 'chore: seed template');
+  h.git('tag', 'v1.0.0');
+  h.commit('templates/x.yml', 'name: x v1\n# fixed a typo\n', 'fix(templates): typo\n\nRule-Neutral: yes');
+  h.commit('templates/x.yml', 'name: x v2 — new required step\n', 'feat(templates): add a required step');
+  const c = stamp.templateChangedSince(h.root, ['templates/x.yml'], 'v1.0.0');
+  assert.strictEqual(c.changed, true);
+  assert.strictEqual(c.ruleNeutral, false, 'a real change hiding behind one declared commit must still fail');
+});
+
+test('templateChangedSince: no trailer at all is changed but NOT rule-neutral — the default is unaffected', (t) => {
+  const h = tempHandbook(t);
+  h.commit('templates/x.yml', 'name: x v1\n', 'chore: seed template');
+  h.git('tag', 'v1.0.0');
+  h.commit('templates/x.yml', 'name: x v2\n', 'feat(templates): real change');
+  const c = stamp.templateChangedSince(h.root, ['templates/x.yml'], 'v1.0.0');
+  assert.strictEqual(c.changed, true);
+  assert.strictEqual(c.ruleNeutral, false);
+});
+
+test('templateChangedSince: an unrelated trailer does not count as the declaration', (t) => {
+  const h = tempHandbook(t);
+  h.commit('templates/x.yml', 'name: x v1\n', 'chore: seed template');
+  h.git('tag', 'v1.0.0');
+  h.commit('templates/x.yml', 'name: x v1\n# fix\n', 'fix(templates): typo\n\nCloses: #1');
+  const c = stamp.templateChangedSince(h.root, ['templates/x.yml'], 'v1.0.0');
+  assert.strictEqual(c.ruleNeutral, false);
+});
+
+test('templateChangedSince: two commits BOTH declared rule-neutral downgrade the whole span', (t) => {
+  const h = tempHandbook(t);
+  h.commit('templates/x.yml', 'name: x v1\n', 'chore: seed template');
+  h.git('tag', 'v1.0.0');
+  h.commit('templates/x.yml', 'name: x v1\n# a\n', 'fix(templates): a\n\nRule-Neutral: yes');
+  h.commit('templates/x.yml', 'name: x v1\n# a\n# b\n', 'fix(templates): b\n\nRule-Neutral: yes');
+  const c = stamp.templateChangedSince(h.root, ['templates/x.yml'], 'v1.0.0');
+  assert.strictEqual(c.changed, true);
+  assert.strictEqual(c.ruleNeutral, true);
+});
