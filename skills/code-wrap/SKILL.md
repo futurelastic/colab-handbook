@@ -495,4 +495,14 @@ actually meet.
   must print `<trunk>`. If you branched in place rather than using a worktree, this is
   the step that pays that debt: a checkout left on a feature branch means anything
   reading that tree (dev server, symlink, LaunchAgent) is serving unmerged code.
+- **Ask git, scoped to the repo root, whether it is *dirty*** —
+  `git -C <repo-root> status --porcelain`, nothing else. Never infer from a path prefix
+  or a directory walk: `colab worktree new` nests every worktree inside the main
+  checkout, at `<repo-root>/.worktrees/<name>`, so a live worktree's absolute path
+  always carries the main checkout's path as a prefix, and a plain listing there reads
+  as "the main checkout is dirty" when it is not — git already excludes registered
+  worktrees from the parent's status (`CONVENTIONS.md`
+  [§4](../../CONVENTIONS.md#4-branches-and-commits)). On a genuine hit, **report it,
+  never clean it** — an uncommitted file in the shared main checkout is someone else's
+  live, uncommitted work.
 - The hand-off checklist above is stated, filled in, in your final report — not implied.

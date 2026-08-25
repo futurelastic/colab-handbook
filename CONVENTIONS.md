@@ -924,6 +924,20 @@ git -C <wrong-checkout> checkout -- .
 git -C <right-checkout> apply /tmp/misplaced.patch
 ```
 
+**A nested worktree's path shares the main checkout's prefix — never infer dirty from
+that path, ask git.** `colab worktree new` puts every worktree inside the main checkout,
+at `<repo-root>/.worktrees/<name>`, so a live worktree's absolute path always carries the
+main checkout's path as a prefix. A judgement made from that path string, or from a
+directory walk that descends into `.worktrees/`, reads "the main checkout is dirty" when
+it is not — git itself is not fooled; it already excludes registered worktrees from the
+parent's status. The only reliable check is `git -C <repo-root> status --porcelain`,
+scoped to the repo root, nothing else. Measured: a wrapping session reported the shared
+main checkout dirty with two files it did not own, and named another session's issue as
+the cause — the files were inside `.worktrees/<other-session>/`, on that session's own
+branch, doing exactly the right thing (#273). On a genuine hit, **report it, never clean
+it** — an uncommitted file in a shared main checkout is another session's live,
+uncommitted work, same as the stash hazard above.
+
 **Commits** — Conventional Commits (`feat:`, `fix:`, `docs:`, `chore:`, `refactor:`,
 `test:`, `perf:`). Not decoration: [§6](#6-releases) builds the release summary by
 grouping on these prefixes. A commit with no prefix is invisible in release notes.
