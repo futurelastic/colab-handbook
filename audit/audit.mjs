@@ -871,7 +871,7 @@ function isHandbookItself(target) {
 
 // ------------------------------------------------------------------------- checks
 
-const BRANCH_RE = /^(feat|fix|docs|chore|refactor|test|perf)\/[a-z0-9._-]+$/;
+const BRANCH_RE = /^(feat|fix|docs|chore|refactor|test|perf|design)\/[a-z0-9._-]+$/;
 const INTEGRATION_BRANCHES = new Set(["main", "dev", "master", "trunk"]);
 // Tiers count the GATES between a merge and users: B has no production (0), C promotes and
 // that promotion IS the deploy (1), A promotes to verify and a tag deploys (2). They are

@@ -844,7 +844,7 @@ the command inside it is still alive a second later.
 **Branch names:**
 
 ```
-^(feat|fix|docs|chore|refactor|test|perf)/[a-z0-9._-]+$
+^(feat|fix|docs|chore|refactor|test|perf|design)/[a-z0-9._-]+$
 ```
 
 Convention is `feat/<slug>-<issue-number>`, e.g. `feat/onboard-redesign-23` — the issue
@@ -939,8 +939,34 @@ it** — an uncommitted file in a shared main checkout is another session's live
 uncommitted work, same as the stash hazard above.
 
 **Commits** — Conventional Commits (`feat:`, `fix:`, `docs:`, `chore:`, `refactor:`,
-`test:`, `perf:`). Not decoration: [§6](#6-releases) builds the release summary by
-grouping on these prefixes. A commit with no prefix is invisible in release notes.
+`test:`, `perf:`, `design:`). Not decoration: [§6](#6-releases) builds the release summary
+by grouping on these prefixes. A commit with no prefix is invisible in release notes.
+
+**The squash-subject picker recognises a wider, RANKED set, not just the branch-name
+list above (#261).** `colab ship`'s default subject is the branch's highest-weight
+commit — highest wins, ties go to the oldest — in this order, documented here because
+before #261 it was discoverable only by shipping a branch and reading a warning:
+
+```
+breaking (any type, +1000) > feat > fix > perf > refactor / revert > design > docs
+  > test > build / ci > style > chore
+```
+
+`design:` (a specification, mockup, or visual decision rather than a behaviour change)
+is ranked here, not merely branch-legal — added because an adopter had 3 genuine
+`design:` commits over 400, six live `design/…` branches, and its own conventions
+already named `design` a legitimate type before this repo's tooling recognised it.
+
+**A type outside this list is not invisible, but it cannot outrank a named one.** A
+commit shaped like a Conventional Commit (`type(scope): text`) whose `type` this repo
+does not weigh — `wip:`, `spike:`, an adopter-invented type not yet added here — ranks
+below every named type, but above a commit with no Conventional Commit shape at all: on
+a branch where nothing else carries a named type it now wins the subject over a
+shapeless commit, and on a mixed branch it still loses to a named type, silently,
+exactly as before. `colab ship --dry` warns about this class either way (`N commit(s)
+… carry no recognised Conventional Commit type`); the fix is to re-word the commit to a
+recognised type, or ship with `--message "<subject>"` so the subject is stated rather
+than guessed.
 
 **Merging:**
 

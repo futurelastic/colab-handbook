@@ -30,6 +30,12 @@
  * Conventional Commit type → weight. Ordering follows the semantic-release convention that decides
  * what a change means to a consumer: feat is a minor bump, fix a patch, the rest cosmetic. The
  * numbers are spaced so a type can be inserted without renumbering; only the ORDER is meaningful.
+ * This is the RECOGNISED set — the one place it lives (#261) — documented for adopters in
+ * CONVENTIONS.md §4 alongside the branch-name regex; keep the two in sync by hand when either moves.
+ *
+ * `design` (#261): a deliberate spec/mockup/visual-decision commit, not a behaviour change — ranked
+ * above `docs` because it is typically the branch's own deliverable rather than paperwork about one,
+ * and below `refactor`/`revert` because, like `docs`, it changes nothing a consumer runs.
  */
 const TYPE_WEIGHT = {
   feat: 70,
@@ -37,6 +43,7 @@ const TYPE_WEIGHT = {
   perf: 50,
   refactor: 40,
   revert: 40,
+  design: 35,
   docs: 30,
   test: 20,
   build: 15,
@@ -44,6 +51,20 @@ const TYPE_WEIGHT = {
   style: 12,
   chore: 10,
 };
+
+/**
+ * Weight given to a commit whose subject IS Conventional-Commit-shaped (`type(scope): text`) but
+ * whose `type` is not a key of `TYPE_WEIGHT` — `wip:`, `spike:`, a future adopter-invented type this
+ * table has not caught up with yet (#261). Deliberately below every named type (lower than `chore`,
+ * the lowest), so a real headline still cannot be outranked by an unrecognised one on merit — but
+ * ABOVE 0 (a commit with no Conventional Commit shape at all), so an unrecognised-but-intentional
+ * type is no longer bucketed identically with "no signal whatsoever": on a branch where nothing else
+ * carries a named type, it now wins the subject over a shapeless commit instead of losing to whichever
+ * of the two happens to be newest (`pickSubjectIndex` rule 4). It still LOSES to any named type on a
+ * mixed branch — the class shrinks from "invisible" to "ranks last, and only a human's `--message`
+ * fixes it", per the issue's own suggested design; `unweightedCommits` below still flags it either way.
+ */
+const UNRECOGNISED_WEIGHT = 5;
 
 /** A breaking change outranks every non-breaking one, whatever its type. */
 const BREAKING_BONUS = 1000;
@@ -72,42 +93,57 @@ function parseSubject(subject) {
 }
 
 /**
- * Weight of one commit. 0 means "carries no Conventional Commit prefix we recognise" — which is a
- * finding in its own right (§4: an unprefixed commit is invisible in the changelog), but here it
- * only means the commit cannot claim the subject on merit.
+ * Weight of one commit. 0 means "carries no Conventional Commit shape at all" — the true no-signal
+ * case, still resolved by `pickSubjectIndex`'s newest-wins fallback. A shape that IS Conventional-
+ * Commit-like but names a type outside `TYPE_WEIGHT` scores `UNRECOGNISED_WEIGHT` instead (#261) —
+ * low enough to never beat a named type, high enough to beat a truly shapeless commit. Either way
+ * the commit cannot claim the subject on MERIT against a named type; see `unweightedCommits` for the
+ * caller-facing warning, which still flags both shapes as one finding.
  */
 function commitWeight(commit) {
   const parsed = parseSubject(commit && commit.subject);
   if (!parsed) return 0;
   const base = TYPE_WEIGHT[parsed.type];
-  if (base === undefined) return 0; // a prefix-shaped word that is not a known type
   const breaking = parsed.breaking || /^BREAKING[ -]CHANGE:/m.test(String((commit && commit.body) || ''));
+  if (base === undefined) return UNRECOGNISED_WEIGHT + (breaking ? BREAKING_BONUS : 0); // shaped, unnamed type (#261)
   return base + (breaking ? BREAKING_BONUS : 0);
 }
 
+/** True when `commit`'s subject names a Conventional Commit type this repo actually weighs — the
+ *  narrower of the two things `commitWeight` folds into one number. Exists so `unweightedCommits`
+ *  keeps flagging an unrecognised-but-shaped commit (`wip:`, `spike:`) even though #261 gave it a
+ *  nonzero weight: that weight only protects it from a truly shapeless commit, never from a NAMED
+ *  type, so it still deserves the same warning as before. */
+function hasRecognisedType(commit) {
+  const parsed = parseSubject(commit && commit.subject);
+  return !!parsed && TYPE_WEIGHT[parsed.type] !== undefined;
+}
+
 /**
- * Commits whose weight is 0, excluding sync-merge noise (#88). Two shapes land here, and both are
- * the SAME finding `commitWeight`'s comment already names: the type will never win the subject and
- * will never head a changelog entry titled by it.
+ * Commits carrying no NAMED Conventional Commit type, excluding sync-merge noise (#88). Two shapes
+ * land here, and both are the same finding: the type will never outrank a named one for the subject
+ * and will never head a changelog entry titled by it.
  *
- *   - no Conventional Commit shape at all ("fixed the thing")
+ *   - no Conventional Commit shape at all ("fixed the thing") — weight 0
  *   - a shape that isn't a recognised type — `wip:`, `spike:` — which is the more dangerous of the
- *     two, because it LOOKS finished. `pickSubjectIndex` cannot tell "this branch has no signal"
- *     (falls back to newest, harmlessly) apart from "this branch's real headline is invisible to
- *     the ranking" (a lower-weight RECOGNISED commit wins instead, silently) — both just read as
- *     weight 0. #88 Case 1 is exactly this: a branch shipping a convention plus +104 lines of
- *     CONVENTIONS.md landed titled `fix(labels): correct mechanical-readiness tests…`, because its
- *     only commit describing the deliverable was typed `wip:`. The incidental `fix` (weight 60) won
- *     over nothing rather than over the headline — the `wip` commit was never in the race.
+ *     two, because it LOOKS finished. #88 Case 1 is exactly this: a branch shipping a convention
+ *     plus +104 lines of CONVENTIONS.md landed titled `fix(labels): correct mechanical-readiness
+ *     tests…`, because its only commit describing the deliverable was typed `wip:`. The incidental
+ *     `fix` (weight 60) won over nothing rather than over the headline — the `wip` commit was never
+ *     in the race. #261 gave this shape `UNRECOGNISED_WEIGHT` (5) instead of 0, so it now beats a
+ *     truly shapeless commit for the subject — but it still loses to any NAMED type exactly as
+ *     before, so it still belongs on this warning list. Test with `hasRecognisedType`, not a weight
+ *     comparison — `commitWeight`'s scale conflates "unrecognised" and "shapeless" on purpose, this
+ *     function must not.
  *
  * Named for a caller to WARN with, not to decide with — `pickSubjectIndex` already resolves ties
  * and fallbacks correctly on its own terms; this only surfaces the blind spot at ship time instead
- * of only at changelog-reading time, which is CONVENTIONS.md §4 undetected until now.
+ * of only at changelog-reading time, which is CONVENTIONS.md §4.
  */
 function unweightedCommits(commits) {
   return (Array.isArray(commits) ? commits : [])
     .filter((c) => c && !isSyncNoise(c.subject))
-    .filter((c) => commitWeight(c) === 0);
+    .filter((c) => !hasRecognisedType(c));
 }
 
 /**
@@ -116,11 +152,13 @@ function unweightedCommits(commits) {
  *
  * Rules, in order:
  *   1. sync-merge noise never titles a squash (unless it is all there is);
- *   2. highest weight wins;
+ *   2. highest weight wins — an unrecognised-but-shaped type (#261, weight `UNRECOGNISED_WEIGHT`)
+ *      beats a truly shapeless commit here, so it is no longer a coin-flip against rule 4;
  *   3. ties go to the OLDEST of the tied commits — on a branch of three `feat`s, the first one
  *      names the branch's purpose and the rest extend it;
- *   4. if nothing carries a recognised prefix, fall back to the newest commit. There is no signal
- *      to weigh, and the previous behaviour is at least predictable.
+ *   4. if NOTHING on the branch carries any Conventional Commit shape at all (weight 0, the one
+ *      case #261 left alone), fall back to the newest commit. There is no signal to weigh, and the
+ *      previous behaviour is at least predictable.
  */
 function pickSubjectIndex(commits) {
   if (!Array.isArray(commits) || commits.length === 0) return -1;
@@ -128,7 +166,7 @@ function pickSubjectIndex(commits) {
     .filter((c) => !c.noise);
   const pool = candidates.length ? candidates : commits.map((c, i) => ({ i, w: commitWeight(c) }));
   const best = Math.max(...pool.map((c) => c.w));
-  if (best === 0) return pool[0].i; // no prefixes anywhere → newest, as before
+  if (best === 0) return pool[0].i; // no Conventional Commit shape anywhere → newest, as before
   // pool is newest-first, so the LAST entry at the best weight is the oldest of the tied commits.
   const tied = pool.filter((c) => c.w === best);
   return tied[tied.length - 1].i;
@@ -470,8 +508,8 @@ function spliceCloses(message, closes = [], refs = [], conflicts) {
 }
 
 module.exports = {
-  TYPE_WEIGHT, BREAKING_BONUS, TRAILER_RE,
-  isSyncNoise, parseSubject, commitWeight, unweightedCommits, pickSubjectIndex, harvestTrailers,
-  composeSquashMessage, spliceCloses, reconcileClosesRefsConflict, closedIssueNumbers,
-  inheritedClosingKeywordConflicts,
+  TYPE_WEIGHT, UNRECOGNISED_WEIGHT, BREAKING_BONUS, TRAILER_RE,
+  isSyncNoise, parseSubject, commitWeight, hasRecognisedType, unweightedCommits, pickSubjectIndex,
+  harvestTrailers, composeSquashMessage, spliceCloses, reconcileClosesRefsConflict,
+  closedIssueNumbers, inheritedClosingKeywordConflicts,
 };

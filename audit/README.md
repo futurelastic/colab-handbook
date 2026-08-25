@@ -123,7 +123,7 @@ the handbook's current version, so a scheduled run is self-documenting.
   - The `on:` block is read by a small indentation-aware parser (not the flat
     project.yml reader): it handles flow lists (`branches: [main, dev]`), block lists,
     inline `on: push` / `on: [push, pull_request]`, and `branches-ignore`.
-- Branch names match `^(feat|fix|docs|chore|refactor|test|perf)/[a-z0-9._-]+$`
+- Branch names match `^(feat|fix|docs|chore|refactor|test|perf|design)/[a-z0-9._-]+$`
   (integration branches `main`/`dev`/`master`/`trunk` exempt).
 - **Toolchain agreement** — flags when `project.yml`, the ecosystem manifest
   (`.nvmrc` / `engines.node` / `composer.json require.php`), and the versions the

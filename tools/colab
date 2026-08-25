@@ -7456,16 +7456,17 @@ function cmdShip(argv) {
     }
   }
 
-  // ---- surface the squash-subject blind spot BEFORE it ships (#88) ----
+  // ---- surface the squash-subject blind spot BEFORE it ships (#88, weighting refined #261) ----
   // A commit whose prefix isn't a recognised Conventional Commit type (`wip:`, or no prefix at
-  // all) can never win the squash subject on merit — pickSubjectIndex cannot see it, so a
-  // LOWER-WEIGHT recognised commit (often the closing `docs:` pass) wins instead, silently. Only
-  // meaningful on the composed path: `--message` replaces the subject outright.
+  // all) can never win the squash subject over a NAMED type on merit — pickSubjectIndex ranks it
+  // below every entry in TYPE_WEIGHT, so a LOWER-WEIGHT recognised commit (often the closing
+  // `docs:` pass) wins instead, silently. Only meaningful on the composed path: `--message`
+  // replaces the subject outright.
   if (!opts.message) {
     const unweighted = squash.unweightedCommits(shipCommits);
     if (unweighted.length) {
       warn(`${unweighted.length} commit(s) on this branch carry no recognised Conventional Commit type`);
-      warn('  — invisible to the squash-subject ranking, however small the commit that wins instead:');
+      warn('  — ranks below every named type, however small the commit that wins instead:');
       for (const c of unweighted) warn(`    ${String(c.sha || '').slice(0, 7)}  ${c.subject}`);
       warn('  If one of these is the branch\'s real headline, re-word it to a recognised type, or ship');
       warn('  with --message so the subject is not guessed.');

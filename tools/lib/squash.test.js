@@ -137,6 +137,51 @@ test('unweightedCommits: empty input is empty output', () => {
   assert.deepStrictEqual(unweightedCommits(undefined), []);
 });
 
+// --- #261: `design` joins the recognised set; an unrecognised-but-shaped type ranks above
+// nothing, not identically with nothing --------------------------------------------------------
+
+test('#261: design is recognised — ranks above docs, below refactor/revert', () => {
+  const w = (s, body) => commitWeight(c(s, body));
+  assert.ok(w('refactor: x') > w('design: x'));
+  assert.ok(w('revert: x') > w('design: x'));
+  assert.ok(w('design: x') > w('docs: x'));
+});
+
+test('#261: a design headline is not demoted to a smaller docs pass', () => {
+  const commits = [
+    c('docs: note the new spec in the runbook'),
+    c('design: the onboarding flow redesign'),
+  ];
+  assert.strictEqual(composeSquashMessage(commits, []).split('\n')[0], 'design: the onboarding flow redesign');
+});
+
+test('#261: design is a named type, so unweightedCommits does not flag it', () => {
+  assert.deepStrictEqual(unweightedCommits([c('design: x')]), []);
+});
+
+test('#261: an unrecognised-but-shaped type outranks a truly shapeless commit — no longer a coin flip', () => {
+  const commits = [c('start on the parser'), c('spike: the actual headline, just unlabelled')];
+  // Previously both scored 0 and fell back to "newest" (rule 4), which happened to pick the
+  // shapeless one here. #261: `spike:` now outranks the shapeless commit on its own weight.
+  assert.strictEqual(
+    composeSquashMessage(commits, []).split('\n')[0],
+    'spike: the actual headline, just unlabelled',
+  );
+});
+
+test('#261: an unrecognised-but-shaped type still loses to any NAMED type — the mis-ordering the issue accepted', () => {
+  const commits = [c('chore: bump a lockfile'), c('spike: the actual headline, just unlabelled')];
+  assert.strictEqual(composeSquashMessage(commits, []).split('\n')[0], 'chore: bump a lockfile');
+  // ...but it is still flagged, so a human reading --dry output can catch it and use --message.
+  const flagged = unweightedCommits(commits);
+  assert.strictEqual(flagged.length, 1);
+  assert.strictEqual(flagged[0].subject, 'spike: the actual headline, just unlabelled');
+});
+
+test('#261: unweightedCommits still flags an unrecognised type even though its weight is now nonzero', () => {
+  assert.strictEqual(unweightedCommits([c('spike: still poking at it')]).length, 1);
+});
+
 test('chore(sync) merge noise never titles a squash and never becomes a bullet', () => {
   const commits = [c("chore(sync): merge trunk into the branch"), c('fix: the real change')];
   const msg = composeSquashMessage(commits, []);
