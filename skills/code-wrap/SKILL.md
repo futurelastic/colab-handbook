@@ -53,8 +53,8 @@ below against it produces confusing no-ops. The solo exit is its own, short path
    gate beyond what already ran on trunk post-push, no B2 squash (there is no branch
    to squash), no B2c/B2d/B3/B4. The release ritual (`code-ship` B5 — whichever
    shape `exposure` gives it) is a separate question that solo flow does not settle
-   either way — solo flow is gated on session attendance (`COLAB_HUMAN=1`) plus the
-   repo not declaring `writes: isolated` (⚖ #233, CONVENTIONS.md, *Writes* / *Solo
+   either way — solo flow is gated on session attendance (human-asserted, never
+   automated) plus the repo not declaring `writes: isolated` (⚖ #233, CONVENTIONS.md, *Writes* / *Solo
    flow*), neither of which is coupled to `production`, so a live repo may run solo
    flow.
 
@@ -417,8 +417,8 @@ git diff --name-only <base>...HEAD | grep -E '(^|/)(database|prisma)/migrations/
   ```
   - **Confirmed present** → done. State it in the wrap report — which issue(s) got the
     label — and note that a human still has to run
-    `COLAB_HUMAN=1 colab migration-grant <issue> --branch <branch>` before `code-ship`
-    can merge this branch.
+    `colab migration-grant <issue> --branch <branch>` (human-gated — no agent may set the
+    env assertion that authorizes it) before `code-ship` can merge this branch.
   - **Still absent after the add** → this repo adopted the conventions before
     `needs-migration-grant` entered the set (#230) and never back-filled it, so the ADD
     landed on a label that does not exist — the same doubly-silent failure
