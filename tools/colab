@@ -88,6 +88,32 @@ function resolveRepo(opts) {
   return root;
 }
 
+/**
+ * Absolute root of the CALLER'S OWN working tree from --repo or cwd — a linked worktree's own
+ * root, never normalized to the main checkout. Use this for anything that WRITES a committable
+ * source file (a file meant to travel through a branch and get reviewed), never for state.
+ *
+ * resolveRepo()/mainRepoRoot() answers "where does this repo's STATE live" (claims, ports,
+ * worktree records — deliberately normalized to the main tree so those lookups never miss).
+ * A file write is a different question, and conflating the two made `colab adopt` write
+ * `.github/project.yml` into the main checkout when run from inside a worktree it was supposed
+ * to target — silently violating "the main checkout stays on trunk at rest" (#258). This
+ * mirrors the `opts.repo ? resolveRepo(opts) : (git.repoRoot(process.cwd()) || null)` pattern
+ * already used at most other cmd* call sites, as a named, reusable resolver.
+ */
+function resolveWorkingRepo(opts) {
+  let r = opts.repo;
+  if (r) {
+    r = path.resolve(r);
+    if (!fs.existsSync(r)) throw new UserError(`--repo path does not exist: ${opts.repo}`);
+    const root = git.repoRoot(r);
+    return root || r; // allow a non-git path (mirrors resolveRepo's own fallback)
+  }
+  const root = git.repoRoot(process.cwd());
+  if (!root) throw new UserError('Not inside a git repo — pass --repo <path>');
+  return root;
+}
+
 /** All repo roots colab should aggregate reserved ports from: config + current repo (if any). */
 function knownRepos(config) {
   const cur = git.mainRepoRoot(process.cwd());
@@ -5191,7 +5217,7 @@ async function cmdAdopt(argv) {
   });
   if (opts.help) return print(HELP_ADOPT);
 
-  const repoAbs = resolveRepo(opts);
+  const repoAbs = resolveWorkingRepo(opts);
   const io = adoptIo(repoAbs);
   const extra = adoptGitExtras(repoAbs);
   const report = adopt.detect(io, extra);
