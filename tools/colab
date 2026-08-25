@@ -5611,7 +5611,11 @@ function cmdTemplate(argv) {
   if (opts.dest) {
     destFile = path.resolve(opts.dest);
   } else if (ext === 'yml') {
-    const repoAbs = resolveRepo(opts);
+    // resolveWorkingRepo, not resolveRepo — this WRITES a committable source file, so it must
+    // land in the caller's own working tree (a linked worktree included), never normalized to
+    // the main checkout the way claim/port/worktree STATE lookups are. Same shape as #258's
+    // cmdAdopt fix; #276 is the same bug in cmdTemplate's default-dest branch.
+    const repoAbs = resolveWorkingRepo(opts);
     destFile = path.join(repoAbs, '.github', 'workflows', `${stem}.yml`);
   } else {
     throw new UserError(`"${stem}.${ext}" has no formulaic destination — pass --dest <path> (e.g. --dest tools/${stem}.${ext}).`);
