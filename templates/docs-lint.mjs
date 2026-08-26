@@ -238,7 +238,11 @@ function slugifyHeading(text) {
     .trim()
     .replace(/#+$/, "")
     .toLowerCase()
-    .replace(/[^\w\- ]+/g, "")
+    // `\w` is ASCII-only; GitHub keeps Unicode letters when it slugifies a heading, so
+    // this widens to `\p{L}`/`\p{N}` (Unicode letter/digit) while keeping `_` as its own
+    // explicit class member -- the next line folds `_` into `-` and needs it to survive
+    // this step to do that. Kept in sync with audit/audit.mjs's slugifyHeading (#280).
+    .replace(/[^\p{L}\p{N}_\- ]+/gu, "")
     .trim()
     .replace(/[ _]/g, "-");
 }

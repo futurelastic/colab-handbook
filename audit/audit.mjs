@@ -1956,7 +1956,16 @@ function slugifyHeading(text) {
     .trim()
     .replace(/#+$/, "") // a trailing "##" some repos use to mark a self-anchor
     .toLowerCase()
-    .replace(/[^\w\- ]+/g, "") // strip punctuation, keep word chars/hyphens/spaces -- NOT collapsed
+    // strip punctuation, keep Unicode letters/digits, underscore, hyphens/spaces -- NOT
+    // collapsed. `\w` is ASCII-only ([A-Za-z0-9_]); GitHub's real slugifier keeps Unicode
+    // letters (Vietnamese, Japanese, accented Latin, ...), so `\w` alone silently deleted
+    // them and produced a slug GitHub never renders (#280). `\p{L}`/`\p{N}` (with the `/u`
+    // flag) widen letter/digit matching to Unicode while `_` stays its own explicit member
+    // of the class -- it must NOT be folded into `\p{L}`/`\p{N}`, because the very next
+    // step below (`.replace(/[ _]/g, "-")`) turns underscores into hyphens and needs them
+    // to survive this line to do it; the issue's own one-line suggestion dropped `_` from
+    // the class and would have silently broken every underscored heading slug.
+    .replace(/[^\p{L}\p{N}_\- ]+/gu, "")
     .trim()
     // Each space/underscore becomes its OWN hyphen -- never collapsed. GitHub does not
     // merge runs: a heading like "tier -- required" strips the em-dash but keeps both
