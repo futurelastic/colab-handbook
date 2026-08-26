@@ -429,10 +429,11 @@ repo — which is exactly why the tracker is the wrong home for it.
 - **Group records: the label is idempotent, the comment is not.** Re-applying `group:<key>`
   changes nothing; re-posting its evidence comment stacks a duplicate every idle cycle.
   Grep the existing comments for the key before posting (§3).
-- **`deps-checked` has a timestamp — it is just not on the label.** The label is a cache
-  with no expiry, so today it never goes stale; but the `labeled` event that set it is in
-  the timeline, and so is every edge write. That makes staleness computable rather than a
-  matter of trust:
+- **`deps-checked` has a timestamp — it is just not on the label.** The label is monotonic
+  (`CONVENTIONS.md` §5, *Readiness*, #279): once set it stays set, and its only staleness is
+  computed against blocker edges, never against age. But the `labeled` event that set it is in
+  the timeline, and so is every edge write. That makes the one staleness that matters —
+  a blocker opening after the label was set — computable rather than a matter of trust:
 
   ```sh
   gh api "repos/{owner}/{repo}/issues/<N>/timeline" \

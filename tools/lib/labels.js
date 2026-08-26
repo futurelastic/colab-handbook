@@ -145,6 +145,37 @@
  * entirely, which reported `low-priority` groups READY with no distinguishing signal) —
  * this entry, plus the matching `code-triage` verdict, is what makes those readings
  * reconcilable instead of silently contradictory.
+ *
+ * `deferred:date` / `deferred:measurement` / `deferred:external-party` joined the set in
+ * #279: `deps-checked` was being asked to carry two orthogonal facts at once — "has a
+ * reasoning session evaluated this?" (process state, monotonic — the label's own
+ * definition above) and "is it startable right now?" (readiness, volatile) — and
+ * `code-triage` runs in practice sacrificed the first to express the second, by clearing
+ * the label on work it judged not startable for a reason that was never a blocker.
+ * Measured on one adopting fleet: one repo with 83 open issues had 40 carrying
+ * `deps-checked`, 9 genuinely untriaged, and 11 triaged-work-reporting-as-untriaged —
+ * more than half of the untriaged-looking backlog; a second, smaller repo had 4 such
+ * cases. `deps-checked` is now monotonic (CONVENTIONS.md §5, *Disposition*) and these
+ * three labels are the machine-readable carrier for the displaced fact: an issue is
+ * ready, but parked on a date, a measurement, or someone outside this repo, rather than
+ * on another issue (`blockedBy`, unchanged) or a human ruling (`needs-decision`,
+ * unchanged). They join `CONVENTION_LABELS` for the identical malignant-absence reason
+ * `delivery:*` did: a repo that adopted before this landed cannot create the label at
+ * all, so a park it wants to record instead reports as an unexamined issue — the exact
+ * confusion #279 measured. **Vocabulary only, deliberately inert on landing:** nothing in
+ * this repo's own tooling writes or reads these three yet (no `code-triage` write, no
+ * readiness wiring, no audit finding) — the sequencing hazard #279 itself names is that
+ * emitting the label before a consumer renders the disposition distinctly produces a
+ * label nothing reads, which is worse than the silent park it replaces. An unused label
+ * is inert; see `migration-granted`'s own paragraph above for the same argument.
+ *
+ * `review-by:<date>` is the wake condition a `deferred:*` park should usually name,
+ * deliberately NOT in `CONVENTION_LABELS` — same treatment as `group:<key>`: the date
+ * varies per issue, so there is no fixed set to provision up front, and it is created on
+ * demand by whoever applies the park. "A defer must name its wake condition" (#279): a
+ * `deferred:*` label with no `review-by:<date>` and no `blockedBy` edge is not a defer at
+ * all — it is a deprioritisation or a `wontfix` that should be said plainly, because an
+ * unbounded park is a silent `wontfix`.
  */
 
 const CONVENTION_LABELS = [
@@ -164,6 +195,9 @@ const CONVENTION_LABELS = [
   { name: 'delivery:ops', color: 'D4C5F9', description: 'Delivery is an ops/production check, not a code commit — route, do not start in the code pipeline' },
   { name: 'delivery:docs-only', color: 'BFD4F2', description: "Delivery is a docs sync outside code review, not a commit — route, don't start" },
   { name: 'delivery:elsewhere', color: 'F9D0C4', description: 'Delivery is code, but lands in a different repository — route, do not start here' },
+  { name: 'deferred:date', color: 'B08800', description: 'Parked until a specific date — pair with a review-by:<date> label naming it' },
+  { name: 'deferred:measurement', color: '7C6F57', description: 'Parked until a metric crosses a threshold — name the metric and the threshold on the issue' },
+  { name: 'deferred:external-party', color: '6E5494', description: 'Parked until someone outside this repo acts — name who, and pair with review-by:<date>' },
 ];
 
 // The DELIVERY label prefix (CONVENTIONS.md §5, Delivery type). Five fixed values, unlike
@@ -203,6 +237,98 @@ function deliveryType(present) {
 // `null` (not asked) and `'code'` both read false here — only an explicit non-code type routes.
 function isRouteNotStart(present) {
   return NON_CODE_DELIVERY_TYPES.includes(deliveryType(present));
+}
+
+// The DEFERRED label prefix (CONVENTIONS.md §5, Disposition — #279). Three fixed values,
+// same treatment as DELIVERY_LABEL_PREFIX: provisioned up front in CONVENTION_LABELS above,
+// not created on demand.
+const DEFERRED_LABEL_PREFIX = 'deferred:';
+
+// The three park kinds a ready-but-not-started issue can carry — a date, a measurement, or
+// a party outside this repo. Distinct from `blockedBy` (waiting on another issue) and from
+// `needs-decision` (waiting on a human ruling), which are unchanged by this set.
+const DEFERRED_KINDS = ['date', 'measurement', 'external-party'];
+
+/**
+ * The deferred-kind classifier (CONVENTIONS.md §5, *Disposition*, #279) — same shape as
+ * `deliveryType()` above, deliberately: tolerant of label objects or bare strings, first
+ * match in canonical order wins if more than one is somehow present.
+ *
+ * Returns one of:
+ *   - `null` — no `deferred:*` label present.
+ *   - `'date' | 'measurement' | 'external-party'` — the matching `deferred:*` label present.
+ *
+ * Nothing in this repo's own tooling calls this yet (#279 ships the vocabulary only) — see
+ * the doc comment above CONVENTION_LABELS for why that is the deliberate end state, not an
+ * oversight.
+ */
+function deferredKind(present) {
+  const have = new Set(
+    (present || []).map((n) => (n && typeof n === 'object' ? n.name : n)).map((n) => String(n)),
+  );
+  for (const kind of DEFERRED_KINDS) {
+    if (have.has(`${DEFERRED_LABEL_PREFIX}${kind}`)) return kind;
+  }
+  return null;
+}
+
+// Is this issue carrying a deferred:* park? Same shape as isRouteNotStart(): a thin,
+// readable wrapper over the classifier for a caller that only needs the boolean.
+function isDeferred(present) {
+  return deferredKind(present) !== null;
+}
+
+// The REVIEW-BY label prefix (CONVENTIONS.md §5, Disposition — #279). Deliberately NOT in
+// CONVENTION_LABELS, same reasoning as GROUP_LABEL_PREFIX below: the date varies per issue,
+// so there is no fixed set to provision up front — created on demand by whoever applies the
+// park, and it is the wake condition a `deferred:*` label should usually be paired with.
+const REVIEW_BY_LABEL_PREFIX = 'review-by:';
+
+// Is this label name a review-by marker? Guards against the bare prefix itself
+// ("review-by:" with no date) reading as one, same shape as isGroupLabel below.
+function isReviewByLabel(name) {
+  return typeof name === 'string' && name.length > REVIEW_BY_LABEL_PREFIX.length && name.startsWith(REVIEW_BY_LABEL_PREFIX);
+}
+
+// The review-by label names carried by a label list — same tolerant shape as
+// groupLabelNames below (bare strings or {name} objects), order-preserving, deduplicated.
+function reviewByLabelNames(present) {
+  const out = [];
+  const seen = new Set();
+  for (const n of (present || [])) {
+    const name = n && typeof n === 'object' ? n.name : n;
+    const s = name === undefined || name === null ? '' : String(name);
+    if (isReviewByLabel(s) && !seen.has(s)) { seen.add(s); out.push(s); }
+  }
+  return out;
+}
+
+/**
+ * Parse a `review-by:<date>` label's date, strictly — the sole purpose of this function is
+ * to make "is this actually a valid calendar date" checkable without a caller reaching for
+ * lenient `Date` parsing, which silently accepts what this must reject: `new Date('2026-02-30')`
+ * does not throw, it rolls over to March 2nd, and `Date.parse` accepts forms (two-digit
+ * years, unpadded months/days) this label was never meant to carry.
+ *
+ * Returns the `YYYY-MM-DD` string unchanged if it names a real calendar day, or `null` for
+ * anything else (wrong shape, out-of-range month/day, or not a review-by label at all).
+ *
+ * Pure, deliberately: no `Date.now()`, no "is this overdue" — that is a consumer's decision
+ * to make once one exists (#279 ships the vocabulary only), not this function's.
+ */
+function parseReviewByDate(name) {
+  const s = name && typeof name === 'object' ? name.name : name;
+  if (typeof s !== 'string') return null;
+  const m = /^review-by:(\d{4})-(\d{2})-(\d{2})$/.exec(s);
+  if (!m) return null;
+  const [, ys, ms, ds] = m;
+  const y = Number(ys), mo = Number(ms), d = Number(ds);
+  const asUtc = new Date(Date.UTC(y, mo - 1, d));
+  // Round-trip check: Date.UTC normalises out-of-range components (month 13 rolls into the
+  // next year, day 30 of February rolls into March) instead of rejecting them, so read the
+  // parts back and require an exact match.
+  if (asUtc.getUTCFullYear() !== y || asUtc.getUTCMonth() !== mo - 1 || asUtc.getUTCDate() !== d) return null;
+  return `${ys}-${ms}-${ds}`;
 }
 
 function conventionLabelNames() {
@@ -415,4 +541,6 @@ module.exports = {
   NEEDS_DECISION_LABEL, DECISION_RECORDED_LABEL, decisionRecordedMissingLabelHint,
   GROUP_LABEL_PREFIX, isGroupLabel, groupLabelNames,
   DELIVERY_LABEL_PREFIX, NON_CODE_DELIVERY_TYPES, deliveryType, isRouteNotStart,
+  DEFERRED_LABEL_PREFIX, DEFERRED_KINDS, deferredKind, isDeferred,
+  REVIEW_BY_LABEL_PREFIX, isReviewByLabel, reviewByLabelNames, parseReviewByDate,
 };

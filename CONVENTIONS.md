@@ -1285,12 +1285,19 @@ own marker:
 ```sh
 gh label create deps-checked --color 0E8A16 --description "Dependencies verified — no open blocker"
 colab readiness <N>           # set only after actually looking (raw: gh issue edit <N> --add-label deps-checked)
-colab readiness <N> --clear   # on any new blocker, or on reopening
+colab readiness <N> --clear   # a genuinely NEW blocker appeared, or the issue reopened — never "not now"
 ```
 
-The label is *derived* state, only as fresh as its last check — whoever adds a blocker
-removes it; prefer leaving it off to leaving it wrong. A prose note saying "checked, no
-blockers" does not count.
+**`deps-checked` is monotonic (#279): once set, it stays set.** It records that a
+reasoning session looked and found no open blocker — not that the issue is startable
+*today*. Clearing it means exactly one of two things: a new blocker appeared (already
+carried by the `blockedBy` edge above, so stripping the label on top of that edge adds no
+information), or the issue reopened after being closed. It never means "startable in
+principle, but not right now" — that fact has its own carrier, below (*Disposition*), and
+piling it onto this label is what #279 measured going wrong: `code-triage` clearing
+`deps-checked` to keep non-startable work out of the ready column, at a rate where more
+than half of one repo's untriaged-looking backlog was actually triaged work misreporting
+as untriaged. A prose note saying "checked, no blockers" does not count as setting it.
 
 ##### Readiness is not a boolean — read the blocker's state, not just its existence
 
@@ -1307,9 +1314,11 @@ ready:
 | closed, or its work is already on trunk | **ready** |
 
 **The middle value is computed at read time, never recorded as a second label** —
-rejected: a second label (stale the moment the blocker moves, doubling `deps-checked`'s
-own hazard); deleting the edge once code is written (destroys a true fact, doesn't
-survive a revert).
+rejected: a second label (stale the moment the blocker's own state moves — narrower a
+hazard than it once was, now that `deps-checked` itself is monotonic (#279) and only ever
+goes stale on a genuinely new blocker, but still a hazard a read-time computation avoids
+entirely); deleting the edge once code is written (destroys a true fact, doesn't survive a
+revert).
 
 **An active session on the blocker is not evidence — a pushed branch with real commits
 is.** Measured: a session open ten minutes was already dead, having never claimed its
@@ -1345,6 +1354,54 @@ colab readiness <N> --mechanical --clear
 - **No `readiness.marked` event fires for `--mechanical`** — that event kind's payload
   means `deps-checked` specifically (#45, #46); emitting it here would be
   indistinguishable from the stronger claim.
+
+#### Disposition — a park must name its wake condition (#279)
+
+`deps-checked` (above) is monotonic: it records that triage looked, nothing more. That
+leaves a real fact with nowhere to live — an issue can be ready, evaluated, and still not
+startable *right now*, for a reason that is not a blocker on another issue and not a
+question for a human. Before #279, `code-triage` expressed that by clearing
+`deps-checked`, which silently reused the "nobody has looked" state to mean "somebody
+looked and parked it" — the two became indistinguishable to any later reader, including
+another triage pass.
+
+The four situations, and where each fact lives:
+
+| Situation | Signal |
+|---|---|
+| Needs a human answer | `needs-decision` (unchanged, see *Decision gate* below) |
+| Blocked by another issue | `blockedBy` edge (*Readiness*, above) — do **not** also clear `deps-checked` |
+| Waiting on a date / measurement / external party | `deferred:<kind>` + `review-by:<date>` |
+| Not code delivery | `delivery:*` (unchanged, *Delivery type*, below) |
+
+Three fixed `deferred:*` kinds, each naming what the park is waiting on:
+
+- **`deferred:date`** — parked until a specific date. Pair with `review-by:<date>`.
+- **`deferred:measurement`** — parked until a metric crosses a threshold. Name the metric
+  and the threshold on the issue.
+- **`deferred:external-party`** — parked until someone outside this repo acts. Name who,
+  and pair with `review-by:<date>` when there is one.
+
+**A defer must name its wake condition.** A `deferred:*` label with no `review-by:<date>`
+and no `blockedBy` edge is not a defer at all — it is a deprioritisation or a `wontfix`,
+and should be said plainly instead. An unbounded park is a silent `wontfix`.
+
+`review-by:<date>` is created **on demand**, the same way `group:<key>` is — the date
+varies per issue, so there is no fixed set to provision up front.
+
+**This section defines vocabulary only.** Landing it changes nothing `code-triage`
+writes today: no tracker write in this repo's own tooling emits `deferred:*` or
+`review-by:<date>` yet. Consumer-side rendering of a disposition, and surfacing of an
+expired park, are meant to land before that write does — emitting the label before
+something renders it distinctly produces a park that is machine-readable and unread,
+which is worse than the silent park it replaces. Re-triaging existing silent parks once
+the vocabulary exists is a follow-up, not part of landing the vocabulary.
+
+This generalises the `Ask: … | deferred(<trigger>)` line (*Ask*, above) beyond
+`agent-filed` issues and gives it a machine-readable carrier: that line is free text,
+scoped to filing time, and mechanically ungrepped anywhere in this repo's own tooling;
+`deferred:<kind>` + `review-by:<date>` is a label pair any consumer can query and act on
+without parsing prose.
 
 #### Decision gate — a human must answer first (#122)
 
@@ -2190,17 +2247,17 @@ only. Resolution order: `--config` flag > `~/.colab/repos.txt` > bundled example
    them as a to-do list on exit.
 2. **Write `.github/project.yml`** ([§3](#3-githubprojectyml--the-marker)) with the
    answers from step 1.
-3. **Create the whole label set — sixteen names, not a subset** (`in-progress`,
+3. **Create the whole label set — nineteen names, not a subset** (`in-progress`,
    `deps-checked`, `agent-filed`, `epic`, `needs-decision`, `decision-recorded`,
    `needs-plan`, `migration-granted`, `needs-migration-grant`, `ci-granted`,
-   `low-priority`, and the five `delivery:*`):
+   `low-priority`, the five `delivery:*`, and the three `deferred:*`):
    ```sh
    colab labels --ensure
    ```
    Idempotent by construction (#206) — reads the set from `tools/lib/labels.js`'s
    `CONVENTION_LABELS`, the one place it is actually defined, creates only what this
    repo is missing, and reports created vs already-there; safe to re-run because
-   partial adoption is normal. (No `colab` on this machine? The sixteen `gh label
+   partial adoption is normal. (No `colab` on this machine? The nineteen `gh label
    create … || true` lines this replaced are recoverable from that file's history.)
 
    **This count is a hand-typed number restated in at least four places** (here, the
@@ -2224,8 +2281,10 @@ only. Resolution order: `--config` flag > `~/.colab/repos.txt` > bundled example
    (#230). `low-priority` — a triage pass has no way to say "startable, but ranked last",
    so a group meant to wait its turn is reported exactly like every other ready group
    (#268). `delivery:*` — a content push or ops check has no way to say "not a diff" and
-   jams the code pipeline. This full set is provisioned again on every sync, not only at
-   adoption.
+   jams the code pipeline. `deferred:*` — a triage pass has no way to say "parked, and
+   here is what wakes it", so a deliberate park is indistinguishable from an unexamined
+   issue — measured at 11 + 4 issues misreporting as untriaged across two repos (#279).
+   This full set is provisioned again on every sync, not only at adoption.
 4. **Add the tier topic** — `gh repo edit <owner>/<repo> --add-topic tier-b` (or
    `tier-c`/`tier-a`).
 5. **Add the handbook pointer to `CLAUDE.md`** — copy
@@ -2374,6 +2433,7 @@ gh issue list --label agent-filed                 # filed by an agent — no hum
 gh issue list --label epic                        # a container for sub-issues — never a start candidate
 gh issue list --label group:<key>                 # must share one branch — start them together
 gh issue list --search "label:delivery:content,delivery:ops,delivery:docs-only,delivery:elsewhere"  # non-code-here — route, don't start
+gh issue list --search "label:deferred:date,deferred:measurement,deferred:external-party"  # parked — each must name a wake condition
 gh issue edit N --add-assignee @me --add-label in-progress
 git checkout -b feat/<slug>-N origin/<trunk>      # trunk = main (B) or dev (A)
 

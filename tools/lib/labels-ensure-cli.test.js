@@ -1,7 +1,8 @@
 'use strict';
 /**
- * CLI-level tests for `colab labels --ensure` (#206) — the 16-name convention label set (15
- * until `delivery:elsewhere` joined it in #274) used to be typed out by hand in three places
+ * CLI-level tests for `colab labels --ensure` (#206) — the 19-name convention label set (16
+ * until `deferred:date` / `deferred:measurement` / `deferred:external-party` joined it in #279;
+ * 15 until `delivery:elsewhere` joined it in #274) used to be typed out by hand in three places
  * (CONVENTIONS.md §9 step 3, skills/handbook-sync/SKILL.md §2, and `tools/lib/labels.js`'s
  * CONVENTION_LABELS, the only one actually executed). This is the missing executable: create
  * every label a repo lacks, idempotent, reporting created vs already there — reading the missing
@@ -176,11 +177,13 @@ function escapeRe(s) { return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
 // "sixteen"), and skills/handbook-sync/SKILL.md ("fifteen-name set" — now "sixteen-name"), on top
 // of the literal pinned here. None of those four is checkable against the others, so adding
 // `delivery:elsewhere` here silently left three of them wrong until this issue found it by hand.
-// This assertion cannot make prose self-updating, but it is the one count a CI run actually
-// exercises — if you bump CONVENTION_LABELS.length again, this fails LOUDLY, and that failure is
-// the reminder to grep the three prose sites above and move all three together.
+// #279 repeated the exact same pattern moving 16 -> 19 (three `deferred:*` labels, Disposition):
+// CONVENTIONS.md §9 step 3 count, and skills/handbook-sync/SKILL.md's "sixteen-name set", plus
+// this literal. This assertion cannot make prose self-updating, but it is the one count a CI run
+// actually exercises — if you bump CONVENTION_LABELS.length again, this fails LOUDLY, and that
+// failure is the reminder to grep the prose sites above and move them all together.
 test('CONVENTION_LABELS is what --ensure iterates — the source this command must never restate', () => {
-  assert.strictEqual(conventionLabelNames().length, 16,
+  assert.strictEqual(conventionLabelNames().length, 19,
     'label count changed — also update the prose counts in CONVENTIONS.md §5/§9 and skills/handbook-sync/SKILL.md');
   for (const l of CONVENTION_LABELS) {
     assert.ok(l.name && l.color && l.description, `label ${JSON.stringify(l)} is missing a field --ensure needs to create it`);
