@@ -317,3 +317,34 @@ test("a heading containing a code span and an em dash slugifies with GitHub's do
   }));
   assert.deepStrictEqual(r.fails, []);
 });
+
+// --- non-ASCII headings (#280) — slugifyHeading used to strip every letter -----------
+// outside `\w` (ASCII-only), so a real, resolving link to a heading with a non-ASCII
+// letter was reported as a false-positive `fail`. Fails against the pre-fix regex
+// (`/[^\w\- ]+/g`), passes against the fixed one (`/[^\p{L}\p{N}_\- ]+/gu`).
+
+test('a heading with a non-ASCII letter (accented Latin) slugifies without dropping it, and its real link is clean (#280)', () => {
+  const r = audit(fixture({
+    'docs/x.md': '## Notes & Résumé\n\nSee [see](#notes--résumé).\n',
+  }));
+  assert.ok(!hasText(r.fails.concat(r.warns), /anchor/i), r.fails.concat(r.warns).join(' | '));
+});
+
+test('a heading with CJK letters slugifies without dropping them, and its real link is clean (#280)', () => {
+  const r = audit(fixture({
+    'docs/x.md': '## 日本語 見出し\n\nSee [see](#日本語-見出し).\n',
+  }));
+  assert.ok(!hasText(r.fails.concat(r.warns), /anchor/i), r.fails.concat(r.warns).join(' | '));
+});
+
+// Regression for the defect the issue's own one-line suggestion introduced: dropping
+// `_` from the character class (as the issue body's literal `[^\p{L}\p{N}\- ]+/gu`
+// does) breaks the immediately-following `[ _] -> -` step, since it would have nothing
+// left to act on -- `snake_case_heading` would slug to `snakecaseheading` instead of
+// `snake-case-heading`. Pins `_` staying an explicit class member.
+test('an underscored heading still slugs to hyphens after the Unicode widening (#280 triage note)', () => {
+  const r = audit(fixture({
+    'docs/x.md': '## snake_case_heading\n\nSee [see](#snake-case-heading).\n',
+  }));
+  assert.deepStrictEqual(r.fails, []);
+});
