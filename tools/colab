@@ -1365,7 +1365,7 @@ the write is journaled like every other colab action, the label name comes from 
 pushEvent() path the other state changes use (kind readiness.marked, agreed with the receiver).
 
   colab readiness <N>            add deps-checked    (set ONLY after actually looking)
-  colab readiness <N> --clear    remove deps-checked (a new blocker, or the issue reopened)
+  colab readiness <N> --clear    remove deps-checked (a genuinely new blocker, or the issue reopened)
 
 Runs the label edit for you:  gh issue edit N --add-label deps-checked  (or --remove-label).
 The marker lives on GitHub, visible from any machine to the readiness gate that reads it, so
@@ -1374,8 +1374,12 @@ wrote nothing anyone can see — there is deliberately no local-only fallback. L
 repo never got the deps-checked label (adopted before it entered the set), the add REFUSES with
 an actionable message pointing at handbook-sync — never a success on a write that did not land.
 
-The label is DERIVED state, only ever as fresh as this last check: whoever adds a blocker
-clears it. Prefer leaving it off to leaving it wrong (CONVENTIONS.md §5).
+deps-checked is MONOTONIC (CONVENTIONS.md §5, "Readiness"): once set, it stays set. It
+records that a reasoning session looked and found no open blocker, not that the issue is
+startable today. --clear means a genuinely NEW blocker appeared, or the issue reopened —
+never "not startable right now". That fact is already carried by the blockedBy edge, so
+stripping this label on top of it adds nothing; a defer waiting on a date, a measurement,
+or an external party has its own carrier — see "Disposition" (CONVENTIONS.md §5, #279).
 
   colab readiness <N> --mechanical           add graph-empty    (reads blockedBy itself)
   colab readiness <N> --mechanical --clear   remove graph-empty
@@ -4669,13 +4673,16 @@ function registerList() {
 // already wrong before delivery:elsewhere existed), on top of the four prose sites CONVENTIONS.md
 // §5/§9 and skills/handbook-sync/SKILL.md restated by hand. A derived string cannot drift.
 const NON_DELIVERY_LABEL_NAMES = labels.conventionLabelNames()
-  .filter((n) => !n.startsWith(labels.DELIVERY_LABEL_PREFIX));
-const DELIVERY_LABEL_COUNT = labels.conventionLabelNames().length - NON_DELIVERY_LABEL_NAMES.length;
+  .filter((n) => !n.startsWith(labels.DELIVERY_LABEL_PREFIX) && !n.startsWith(labels.DEFERRED_LABEL_PREFIX));
+const DELIVERY_LABEL_COUNT = labels.conventionLabelNames()
+  .filter((n) => n.startsWith(labels.DELIVERY_LABEL_PREFIX)).length;
+const DEFERRED_LABEL_COUNT = labels.conventionLabelNames()
+  .filter((n) => n.startsWith(labels.DEFERRED_LABEL_PREFIX)).length;
 
 const HELP_LABELS = `colab labels --ensure [--repo P]
 
 Create every convention label this repo is missing — CONVENTIONS.md §9 step 3, the ${labels.conventionLabelNames().length}-name set
-(${NON_DELIVERY_LABEL_NAMES.map((n) => `\`${n}\``).join(', ')}, and the ${DELIVERY_LABEL_COUNT} \`delivery:*\` values),
+(${NON_DELIVERY_LABEL_NAMES.map((n) => `\`${n}\``).join(', ')}, the ${DELIVERY_LABEL_COUNT} \`delivery:*\` values, and the ${DEFERRED_LABEL_COUNT} \`deferred:*\` values),
 read from ONE source (tools/lib/labels.js's CONVENTION_LABELS) — the same list the audit and
 every other label-writing command already read, instead of the three places §9 and this set
 used to be typed out by hand (#206).
@@ -4710,7 +4717,7 @@ function cmdLabels(argv) {
     throw new UserError('could not read this repo\'s current label set from the tracker — refusing to create blind (an existing label misread as absent would otherwise look freshly "created")');
   }
   // The missing set comes from the SAME function the audit and the readiness/grant hints already
-  // read (labels.missingConventionLabels) — this command does not restate "which of the 13 does
+  // read (labels.missingConventionLabels) — this command does not restate "which of the set does
   // this repo lack", it asks the one place that already answers it.
   const missing = new Set(labels.missingConventionLabels(present));
   const existing = labels.conventionLabelNames().filter((n) => !missing.has(n));
