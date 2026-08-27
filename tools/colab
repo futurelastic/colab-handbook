@@ -35,6 +35,7 @@ const migrationGrant = require('./lib/migration-grant');
 const decisionRecord = require('./lib/decision-record');
 const blockedBy = require('./lib/blocked-by');
 const ciGrant = require('./lib/ci-grant');
+const ciCure = require('./lib/ci-cure');
 const ciVerdict = require('./lib/ci-verdict');
 const adopt = require('./lib/adopt');
 const consumerEvidence = require('./lib/consumer-evidence');
@@ -2261,6 +2262,50 @@ Options:
   --repo <path>            repo root (default: git root of cwd)
 `;
 
+/**
+ * Anti-stacking measurement (#105 guard 2), extracted from `cmdCiGrantCreate` (#281) so a cure
+ * verdict (tools/lib/ci-cure.js condition 3) and a human grant CREATE can no longer independently
+ * disagree about whether trunk is mid-stack — both call this SAME function, never a re-derived copy.
+ *
+ * Heuristic, bounded-window scan for a prior EXEMPTION merge — the `CI-Grant:` trailer (#105) OR
+ * the `CI-Cure:` trailer (#281), either one — that a red trunk already merged something under. Two
+ * `--grep` flags to `git log` OR together by default (no `--all-match`), so a repo that has used
+ * both doors is scanned as one continuous "was this red already exempted once" history, matching
+ * the stacking guard's OWN framing: "no prior exemption merged while trunk stayed continuously
+ * red" (#281's proposal) makes no distinction between which door the prior exemption went through.
+ * This cannot see arbitrarily far back, and it is not meant to: see tools/lib/ci-grant.js's
+ * stackingVerdict doc comment for what this signal means and its limits.
+ */
+function computeAntiStacking(repoAbs, trunk, trunkIsRed) {
+  const priorLog = git.git(['log', trunk, '--grep=^CI-Grant:', '--grep=^CI-Cure:', '-n', '5',
+    '--format=%H%x09%aI'], repoAbs);
+  let priorGrantMerge = null;
+  if (priorLog.ok && priorLog.stdout.trim()) {
+    const [sha, at] = priorLog.stdout.trim().split('\n')[0].split('\t');
+    priorGrantMerge = { sha, at };
+  }
+  let redContinuousSincePriorGrant = false;
+  if (priorGrantMerge) {
+    // Was there ANY successful trunk run created after the prior exemption-merge's commit date? If
+    // so, trunk went green at some point since — this is a NEW, later red, not the same one
+    // stacking. #229: the comparison itself (instants, not raw ISO strings) lives in the pure,
+    // unit-tested ciGrant.wentGreenSince — priorGrantMerge.at is git's LOCAL-offset %aI, runs'
+    // createdAt is gh's UTC Z, and comparing those two shapes as strings sorts wrong whenever the
+    // local offset is positive (tools/lib/ci-grant.js's wentGreenSince doc comment has the full
+    // failure).
+    let wentGreen = false;
+    const runsR = git.run('gh', ['run', 'list', '--branch', trunk, '-L', '100',
+      '--json', 'conclusion,status,createdAt'], { cwd: repoAbs });
+    if (runsR.ok) {
+      try {
+        wentGreen = ciGrant.wentGreenSince(JSON.parse(runsR.stdout), priorGrantMerge.at);
+      } catch (_) { /* unparseable — treat conservatively as "cannot prove it went green" */ }
+    }
+    redContinuousSincePriorGrant = !wentGreen;
+  }
+  return ciGrant.stackingVerdict({ trunkIsRed, priorGrantMerge, redContinuousSincePriorGrant });
+}
+
 function cmdCiGrant(argv) {
   const opts = parseArgs(argv, {
     values: { '--repo': 'repo', '--branch': 'branch', '--evidence-run': 'evidenceRun' },
@@ -2341,35 +2386,7 @@ function cmdCiGrantCreate(repoAbs, num, opts) {
   const trunkIsRed = trunkVerdict.class === HUMAN_GATED;
   const redSha = trunkRun.sha;
 
-  // Heuristic, bounded-window scan for a prior grant-authorized merge (the `CI-Grant:` trailer,
-  // tools/lib/squash.js). This cannot see arbitrarily far back, and it is not meant to: see
-  // tools/lib/ci-grant.js's stackingVerdict doc comment for what this signal means and its limits.
-  const priorLog = git.git(['log', trunk, '--grep=^CI-Grant:', '-n', '5',
-    '--format=%H%x09%aI'], repoAbs);
-  let priorGrantMerge = null;
-  if (priorLog.ok && priorLog.stdout.trim()) {
-    const [sha, at] = priorLog.stdout.trim().split('\n')[0].split('\t');
-    priorGrantMerge = { sha, at };
-  }
-  let redContinuousSincePriorGrant = false;
-  if (priorGrantMerge) {
-    // Was there ANY successful trunk run created after the prior grant-merge's commit date? If so,
-    // trunk went green at some point since — this is a NEW, later red, not the same one stacking.
-    // #229: the comparison itself (instants, not raw ISO strings) lives in the pure, unit-tested
-    // ciGrant.wentGreenSince — priorGrantMerge.at is git's LOCAL-offset %aI, runs' createdAt is gh's
-    // UTC Z, and comparing those two shapes as strings sorts wrong whenever the local offset is
-    // positive (tools/lib/ci-grant.js's wentGreenSince doc comment has the full failure).
-    let wentGreen = false;
-    const runsR = git.run('gh', ['run', 'list', '--branch', trunk, '-L', '100',
-      '--json', 'conclusion,status,createdAt'], { cwd: repoAbs });
-    if (runsR.ok) {
-      try {
-        wentGreen = ciGrant.wentGreenSince(JSON.parse(runsR.stdout), priorGrantMerge.at);
-      } catch (_) { /* unparseable — treat conservatively as "cannot prove it went green" */ }
-    }
-    redContinuousSincePriorGrant = !wentGreen;
-  }
-  const stacking = ciGrant.stackingVerdict({ trunkIsRed, priorGrantMerge, redContinuousSincePriorGrant });
+  const stacking = computeAntiStacking(repoAbs, trunk, trunkIsRed);
   if (!stacking.ok) throw new UserError(stacking.reason);
 
   // ---- GUARD 1 (evidence) — measured, never asserted ----
@@ -6318,6 +6335,20 @@ function ciGrantTrailerLine(grantVerdict, branch, trunk) {
   return `CI-Grant: ${issues} branch ${branch} over-red ${trunk}@${shortSha(g.redSha)} evidence ${shortSha(g.evidenceSha)}`;
 }
 
+/**
+ * The `CI-Cure:` trailer line (#281) — the audit trail for a ship that went through under the
+ * MACHINE-CHECKABLE cure rule, same reasoning as `CI-Grant:`'s trailer (the commit is the artifact
+ * that survives a later tracker read failure), but scoped to the branch alone: the cure rule is not
+ * per-issue (tools/lib/ci-cure.js never reads the tracker at all), so unlike `CI-Grant:` this names
+ * no issue — only the branch, the red trunk sha it contained, and the evidence run sha proving the
+ * branch's own head green. `computeAntiStacking`'s `--grep=^CI-Cure:` scan is the ONLY consumer that
+ * cares about this line's exact wording surviving verbatim; keep the two in lockstep.
+ */
+function ciCureTrailerLine(cureVerdict, branch, trunk) {
+  if (!cureVerdict || !cureVerdict.ok) return null;
+  return `CI-Cure: branch ${branch} over-red ${trunk}@${shortSha(cureVerdict.redSha)} evidence ${shortSha(cureVerdict.evidenceSha)}`;
+}
+
 const HELP_SHIP = `colab ship [--repo <path>] [--worktree <name> | --branch <br>] [--message "<msg>"] [--refs <N[,M]>] [--keep-worktree] [--delete-branch] [--dry] [--json]
 
 The ONE sanctioned door for code-wrap Phase B: squash-merge a session branch into the BASE IT WAS
@@ -6334,14 +6365,15 @@ promotes is an integration event of the same weight as a promotion, and stays hu
 
 Sequence (each step gated; any failure aborts before the push — the target is never half-shipped):
   a. autonomy gate      repo must grant auto-trunk (no --force override)
-  b. preconditions      target CI alive+green (UNLESS every issue the branch carries holds a valid
+  b. preconditions      target CI alive+green (UNLESS the branch proves the CURE RULE, #281 — no
+                        human step needed — OR every issue the branch carries holds a valid
                         \`colab ci-grant\` over trunk's CURRENT red sha, #105 — see below) · no new
                         migrations on branch (UNLESS every issue holds a valid \`colab migration-grant\`,
                         #98 — see below) · trunk checkout clean · every closing claim corroborated by
                         git (see below)
                         (an integration line with NO runs at all borrows trunk's verdict, advisory —
-                        an ungated line is a normal early state; a RED line still blocks; ci-grant
-                        covers trunk only, never a line)
+                        an ungated line is a normal early state; a RED line still blocks; the cure
+                        rule and ci-grant both cover trunk only, never a line)
   c. B0 sync            merge the target INTO the branch; non-generated conflict → abort (human merge);
                         generated-only conflict → repo's .colab/hooks/pre-ship regenerates, else abort
   d. B1 squash          re-check CI green, then squash-merge branch → target (Closes every claimed issue,
@@ -6395,6 +6427,20 @@ A grant is bound to ONE issue, ONE branch, AND the red trunk sha it was reviewed
 the instant that issue closes OR trunk's head moves, whichever comes first. It exempts ONLY the
 trunk-CI-green check: never the migration gate, claim corroboration, the trunk-checkout check, or
 \`colab promote\`. See \`colab ci-grant --help\` for the full design.
+
+THE CURE RULE (#281) is a SECOND, MACHINE-CHECKABLE door through the same precondition, needing no
+human step at all — tried FIRST, before ci-grant is even consulted. It fires only when ALL of:
+(1) the branch CONTAINS trunk's current red head sha as an ancestor (proof it was built against the
+exact failure, not merely conflict-free with it — a stronger claim than a ci-grant's evidence check
+makes today); (2) the branch's own CI is green AT ITS OWN CURRENT HEAD, measured, never asserted;
+(3) the same anti-stacking guard ci-grant uses holds (no prior grant OR cure merged while trunk has
+stayed continuously red since); (4) the branch diff does not touch \`.github/workflows/**\` (a branch
+may not self-certify a change to the CI configuration grading it). A cured merge carries a
+\`CI-Cure:\` trailer instead of \`CI-Grant:\`. Honest limit: test-file self-weakening (gutting the
+failing tests) is invisible at this gate either way — condition 4 closes only the CI-config door,
+not the test-content one. Falls through to ci-grant automatically when any condition fails — the
+cure rule narrows the human's job, it never replaces the door for what it does not cover (a
+non-cure red-trunk merge, a wedged run, a repo with no usable CI).
 
 The default squash subject is the branch's HIGHEST-WEIGHT commit (breaking > feat > fix > perf >
 refactor > docs > test > chore, ties to the oldest) — NOT its newest commit, which on a well-run
@@ -6656,32 +6702,36 @@ function resolveCloseRefsSplit(repoAbs, gh, issues, refsFromFlag) {
  * all borrows trunk's verdict, advisory) so the two can no longer independently disagree about
  * whether CI is green — only about how the reason for "no" is presented (array row vs object).
  *
- * `grantThunk`, if provided, is a function `(redSha) => {ok, granted, missing}` (tools/lib/ci-grant
- * .js's evaluateShipSet shape) that this function calls LAZILY — ONLY when the raw verdict already
- * failed, `target === trunk`, and the failure class is HUMAN_GATED. Never for SELF_CLEARING (a
- * still-running run, a failed `gh run list`, or `gh` being unusable must never be papered over by a
- * grant — those are transient reads, not a reviewed red). Never for a non-trunk line (an
- * integration line's red already borrows trunk's advisory verdict when it has no runs of its own;
- * widening the exemption to lines too is a decision this feature deliberately does not make).
+ * `grantThunk` and `cureThunk`, if provided, are functions `(redSha) => verdict` called LAZILY —
+ * ONLY when the raw verdict already failed, `target === trunk`, and the failure class is
+ * HUMAN_GATED. Never for SELF_CLEARING (a still-running run, a failed `gh run list`, or `gh` being
+ * unusable must never be papered over by either door — those are transient reads, not a reviewed
+ * red). Never for a non-trunk line (an integration line's red already borrows trunk's advisory
+ * verdict when it has no runs of its own; widening either exemption to lines too is a decision
+ * this feature deliberately does not make). `grantThunk` returns tools/lib/ci-grant.js's
+ * evaluateShipSet shape (`{ok, granted, missing}`); `cureThunk` returns tools/lib/ci-cure.js's
+ * cureVerdict shape (`{ok, reason}`, plus `redSha`/`evidenceSha` folded in by `shipCiCure` below).
+ * The cure rule (#281) is tried FIRST — it needs no tracker round-trip — and the human ci-grant
+ * (#105) remains the fallback door for everything the cure rule does not cover.
  *
- * Returns the additive `grantVerdict` field (null unless the grant was actually consulted) so a
- * caller can build the --dry --json `ciGrant` payload from the SAME verdict the prose detail
- * string was built from — see ciGrantPayload, below.
+ * Returns the additive `grantVerdict`/`cureVerdict` fields (null unless actually consulted) so a
+ * caller can build the --dry --json `ciGrant`/`ciCure` payloads from the SAME verdicts the prose
+ * detail string was built from — see ciGrantPayload/ciCurePayload, below.
  */
-function shipCiCheck(repoAbs, gh, target, trunk, grantThunk) {
+function shipCiCheck(repoAbs, gh, target, trunk, grantThunk, cureThunk) {
   const name = `${target === trunk ? 'trunk' : 'line'} CI green`;
-  if (!gh) return { name, ok: false, class: SELF_CLEARING, detail: 'gh not usable (no auth / no origin) — cannot confirm CI', grantVerdict: null };
+  if (!gh) return { name, ok: false, class: SELF_CLEARING, detail: 'gh not usable (no auth / no origin) — cannot confirm CI', grantVerdict: null, cureVerdict: null };
   let run = git.ghRunForSha(repoAbs, target);
   let via = target;
   if (run && run.status === 'none' && target !== trunk) {
     run = git.ghRunForSha(repoAbs, trunk);
     via = `${trunk} (line "${target}" has no runs — ungated, advisory)`;
   }
-  if (!run) return { name, ok: false, class: SELF_CLEARING, detail: 'gh run list failed', grantVerdict: null };
+  if (!run) return { name, ok: false, class: SELF_CLEARING, detail: 'gh run list failed', grantVerdict: null, cureVerdict: null };
   const at = `${via}@${shortSha(run.sha)}`;
   const verdict = classifyCiRun(repoAbs, run, at);
-  if (verdict.ok || verdict.class !== HUMAN_GATED) return { name, ...verdict, grantVerdict: null };
-  return applyCiGrant({ name, ...verdict }, target, trunk, run.sha, grantThunk);
+  if (verdict.ok || verdict.class !== HUMAN_GATED) return { name, ...verdict, grantVerdict: null, cureVerdict: null };
+  return applyRedTrunkExemptions({ name, ...verdict }, target, trunk, run.sha, grantThunk, cureThunk);
 }
 
 /**
@@ -6729,30 +6779,47 @@ function classifyCiRun(repoAbs, run, at) {
 }
 
 /**
- * Folds a ci-grant (#105) into an already-failed, already-HUMAN_GATED trunk-CI-green verdict —
- * shipCiCheck's ONLY call site for a grant, so the exemption cannot accidentally widen to the
- * migration gate, claim corroboration, or the trunk-checkout check (none of those ever call this).
- * Scoped to `target === trunk`: see shipCiCheck's doc comment for why a non-trunk line is excluded.
+ * Folds BOTH red-trunk exemption doors into an already-failed, already-HUMAN_GATED trunk-CI-green
+ * verdict — shipCiCheck's ONLY call site for either, so neither exemption can accidentally widen to
+ * the migration gate, claim corroboration, or the trunk-checkout check (none of those ever call
+ * this). Scoped to `target === trunk`: see shipCiCheck's doc comment for why a non-trunk line is
+ * excluded from both.
+ *
+ * The cure rule (#281) is tried FIRST: it needs no tracker round-trip (`cureThunk`, when supplied,
+ * is pure git+CI measurement — see `shipCiCure` below), where the human ci-grant (#105) always
+ * costs at least one `gh issue view`. A branch that already proves its own cure never needs to wait
+ * on a human, or on the tracker read; a branch that does not falls through to the grant exactly as
+ * it always has, unaffected by this rule's existence.
  */
-function applyCiGrant(raw, target, trunk, redSha, grantThunk) {
-  if (target !== trunk || !grantThunk) return { ...raw, grantVerdict: null };
-  const grantVerdict = grantThunk(redSha);
+function applyRedTrunkExemptions(raw, target, trunk, redSha, grantThunk, cureThunk) {
+  if (target !== trunk) return { ...raw, grantVerdict: null, cureVerdict: null };
+
+  const cureVerdict = cureThunk ? cureThunk(redSha) : null;
+  if (cureVerdict && cureVerdict.ok) {
+    return {
+      name: raw.name, ok: true, class: null,
+      detail: `PRECONDITION OVERRIDDEN by the cure rule (#281) — branch contains red ${shortSha(redSha)} and is green at its own head (raw: ${raw.detail})`,
+      grantVerdict: null, cureVerdict,
+    };
+  }
+
+  const grantVerdict = grantThunk ? grantThunk(redSha) : null;
   if (grantVerdict && grantVerdict.ok) {
     const by = grantVerdict.granted.map((g) => '#' + g.issue).join(' ');
     return {
       name: raw.name, ok: true, class: null,
       detail: `PRECONDITION OVERRIDDEN by a human ci-grant on ${by} — trunk was red at ${shortSha(redSha)} (raw: ${raw.detail})`,
-      grantVerdict,
+      grantVerdict, cureVerdict,
     };
   }
-  return { ...raw, grantVerdict };
+  return { ...raw, grantVerdict, cureVerdict };
 }
 
 /**
  * ci-grant verdict for a ship's whole claimed issue set (#105) — read from the tracker AND measured
  * evidence, validated by tools/lib/ci-grant.js's evaluateShipSet. ONLY invoked, via a thunk, by
- * applyCiGrant above — and that only happens once the raw trunk-CI-green verdict has already
- * failed, so an ordinary green-trunk ship never reaches this function and pays nothing for it.
+ * applyRedTrunkExemptions above — and that only happens once the raw trunk-CI-green verdict has
+ * already failed, so an ordinary green-trunk ship never reaches this function and pays nothing for it.
  *
  * Evidence is MEASURED here, never asserted: a completed, successful run for `branch`'s CURRENT
  * remote head, via the identical `ghRunForSha` the raw CI check itself uses — the same function,
@@ -6784,6 +6851,59 @@ function ciGrantPayload(ciResult) {
     granted: g.granted.map((x) => ({ issue: x.issue, by: x.by, at: x.at, redSha: x.redSha, evidenceSha: x.evidenceSha })),
     missing: g.missing.map((m) => ({ issue: m.issue, reason: m.reason })),
   };
+}
+
+/**
+ * The cure-rule measurement (#281) — git+CI facts in, tools/lib/ci-cure.js's pure `cureVerdict` out.
+ * ONLY invoked, via a thunk, by `applyRedTrunkExemptions`, and only once the raw trunk-CI-green
+ * verdict has already failed HUMAN_GATED — an ordinary green-trunk ship never reaches this and pays
+ * nothing for it, same posture as `shipCiGrants`.
+ *
+ * Unlike `shipCiGrants`, this never touches the tracker (`gh issue view`) at all — every signal
+ * comes from git and one `gh run list` for the branch's own head, so the cure rule can be tried
+ * BEFORE the grant without spending the grant's tracker round-trip on a branch that ends up curing
+ * on its own.
+ *
+ * Measures, in order:
+ *   1. containment — `git merge-base --is-ancestor <redSha> <branch>`, translated to a bool.
+ *   2. evidence — a completed, successful CI run for `branch`'s CURRENT head, via the identical
+ *      `ghRunForSha` the raw CI check and `shipCiGrants` both use.
+ *   3. anti-stacking — `computeAntiStacking`, the SAME function `cmdCiGrantCreate` calls, so a cure
+ *      and a human grant can never independently disagree about whether trunk is mid-stack.
+ *   4. workflow-file changes — `git diff --name-only <trunk>...<branch>` (merge-base-relative, the
+ *      same idiom `shipMergeConflictCheck`'s diff-review paths use elsewhere in this file), filtered
+ *      for any path under `.github/workflows/`.
+ *
+ * Returns tools/lib/ci-cure.js's verdict shape PLUS `redSha`/`evidenceSha` folded in — additive
+ * fields the pure module itself never carries (it only ever sees the sha values passed in), needed
+ * so `ciCureTrailerLine`/`ciCurePayload` can read them straight off the verdict, same convention
+ * `shipCiGrants`'s `granted[].redSha`/`evidenceSha` already establishes for the grant side.
+ */
+function shipCiCure(repoAbs, gh, target, trunk, redSha, branch) {
+  if (!gh) {
+    return { ok: false, reason: 'gh not usable (no auth / no origin) — the cure rule needs a measured CI run', redSha, evidenceSha: null };
+  }
+  const containsRedSha = git.git(['merge-base', '--is-ancestor', redSha, branch], repoAbs).ok;
+  const evRun = git.ghRunForSha(repoAbs, branch);
+  const evidence = !evRun ? null : { ok: evRun.status === 'completed' && evRun.conclusion === 'success', sha: evRun.sha };
+  const stacking = computeAntiStacking(repoAbs, trunk, true /* trunkIsRed: shipCiCure is only ever reached from a HUMAN_GATED raw verdict */);
+  const diffR = git.git(['diff', '--name-only', `${trunk}...${branch}`], repoAbs);
+  const changed = diffR.ok ? diffR.stdout.split('\n').filter(Boolean) : [];
+  const workflowsTouched = changed.some((f) => f.startsWith('.github/workflows/'));
+  const verdict = ciCure.cureVerdict({ containsRedSha, evidence, redSha, stacking, workflowsTouched });
+  return { ...verdict, redSha, evidenceSha: evidence ? evidence.sha : null };
+}
+
+/**
+ * The trunk-CI-green row's --dry --json additive payload for the cure rule (#281), parallel to
+ * `ciGrantPayload` above and built from the SAME cureVerdict `shipCiCheck` already computed (never
+ * re-derived). `null` when the cure rule was never consulted — the ordinary green-trunk case, or a
+ * red integration line (the cure rule is trunk-only, same scoping as the grant).
+ */
+function ciCurePayload(ciResult) {
+  if (!ciResult.cureVerdict) return null;
+  const c = ciResult.cureVerdict;
+  return { ok: c.ok, reason: c.reason, redSha: c.redSha, evidenceSha: c.evidenceSha };
 }
 
 /**
@@ -6868,11 +6988,15 @@ function cmdShipDryJson(opts) {
   // #105: null unless the trunk-CI-green check actually consulted a grant (i.e. the raw check
   // already failed) — set alongside that check, below.
   let ciGrantPayloadVal = null;
+  // #281: null unless the trunk-CI-green check actually consulted the cure rule — set alongside
+  // that same check, below. Parallel to ciGrantPayloadVal, never both non-null at once (the cure
+  // rule short-circuits before the grant is even consulted once it succeeds).
+  let ciCurePayloadVal = null;
   const emit = (ok) => {
     print(JSON.stringify({
       ok, dry: true, repo: shortRepo(repoAbs), branch: sess.branch, worktree: sess.name || null,
       target, mode, issues: sess.issues, closeIssues, refsIssues, checklistFindings, checks,
-      migrationGrant: migrationGrantPayload, ciGrant: ciGrantPayloadVal,
+      migrationGrant: migrationGrantPayload, ciGrant: ciGrantPayloadVal, ciCure: ciCurePayloadVal,
     }, null, 2));
     return ok ? 0 : 1;
   };
@@ -6913,8 +7037,10 @@ function cmdShipDryJson(opts) {
   // ---- (b) the rest of the preconditions, same rules as the prose path ----
   const gh = isGhUsable(repoAbs);
   const ciResultJson = shipCiCheck(repoAbs, gh, target, trunk,
-    (redSha) => shipCiGrants(repoAbs, gh, sess.issues, sess.branch, trunk, redSha));
+    (redSha) => shipCiGrants(repoAbs, gh, sess.issues, sess.branch, trunk, redSha),
+    (redSha) => shipCiCure(repoAbs, gh, target, trunk, redSha, sess.branch));
   ciGrantPayloadVal = ciGrantPayload(ciResultJson);
+  ciCurePayloadVal = ciCurePayload(ciResultJson);
   checks.push({ name: ciResultJson.name, ok: ciResultJson.ok, class: ciResultJson.class, detail: ciResultJson.detail });
 
   // #74/#263: same close-gate split the prose path runs, reported via the additive fields above —
@@ -7316,13 +7442,14 @@ function cmdShip(argv) {
   // every ship into a line nobody has wired CI for would make the declared axis useless — which
   // pushes the work back to the undeclared workarounds. A line that HAS runs and is red still ✗:
   // once CI exists, it counts.
-  // #105: shipCiCheck is now the SINGLE verdict producer for this row — the JSON path (cmdShipDryJson)
-  // calls the identical function, so the two can no longer independently drift on whether CI is
-  // green. The grant lookup is passed as a THUNK (called with the red sha), not a precomputed
-  // value: shipCiCheck only invokes it when the raw verdict already failed, so an ordinary
-  // green-trunk ship makes zero extra `gh` reads for a grant nobody needs.
+  // #105/#281: shipCiCheck is now the SINGLE verdict producer for this row — the JSON path
+  // (cmdShipDryJson) calls the identical function, so the two can no longer independently drift on
+  // whether CI is green. Both lookups are passed as THUNKS (called with the red sha), not
+  // precomputed values: shipCiCheck only invokes either when the raw verdict already failed, so an
+  // ordinary green-trunk ship makes zero extra `gh` reads for a door nobody needs.
   const ciResult = shipCiCheck(repoAbs, gh, target, trunk,
-    (redSha) => shipCiGrants(repoAbs, gh, sess.issues, sess.branch, trunk, redSha));
+    (redSha) => shipCiGrants(repoAbs, gh, sess.issues, sess.branch, trunk, redSha),
+    (redSha) => shipCiCure(repoAbs, gh, target, trunk, redSha, sess.branch));
   const ciOk = ciResult.ok;
   checks.push([ciResult.ok ? '✓' : '✗', ciResult.name, ciResult.detail]);
   // No new migrations on the branch, measured against what it will merge into — UNLESS every
@@ -7612,24 +7739,29 @@ function cmdShip(argv) {
   }
 
   // ---- (d) B1: re-verify CI, then squash-merge into the target ----
-  // #105: a GENUINE re-read via shipCiCheck (never cached from the precondition table above) — B1
-  // exists precisely to catch trunk going red BETWEEN the table and the merge. Passing the same
-  // grant thunk means a ci-grant that covered the earlier table also covers this re-check, but
-  // ONLY while the red sha has not moved: shipCiCheck measures target's CURRENT head sha fresh
-  // right here, and ci-grant.js's evaluateIssue refuses the moment that sha no longer matches what
-  // the grant was reviewed against — so a grant-authorized ship that itself changed trunk's head
-  // (or a trunk that moved for any other reason between the table and here) can never silently
-  // ride the same grant twice.
+  // #105/#281: a GENUINE re-read via shipCiCheck (never cached from the precondition table above) —
+  // B1 exists precisely to catch trunk going red BETWEEN the table and the merge. Passing the same
+  // grant/cure thunks means a door that covered the earlier table also covers this re-check, but
+  // ONLY while the red sha has not moved: shipCiCheck measures target's CURRENT head sha fresh right
+  // here, and both ci-grant.js's evaluateIssue and ci-cure.js's cureVerdict refuse the moment that
+  // sha no longer matches what was reviewed/measured — so an exemption-authorized ship that itself
+  // changed trunk's head (or a trunk that moved for any other reason between the table and here) can
+  // never silently ride the same exemption twice.
   let ciGrantForTrailer = null; // #105: set below when B1 shipped UNDER a grant — read at commit-message time
+  let ciCureForTrailer = null; // #281: set below when B1 shipped UNDER the cure rule — read at commit-message time
   if (gh) {
     const ciResultB1 = shipCiCheck(repoAbs, gh, target, trunk,
-      (redSha) => shipCiGrants(repoAbs, gh, sess.issues, sess.branch, trunk, redSha));
+      (redSha) => shipCiGrants(repoAbs, gh, sess.issues, sess.branch, trunk, redSha),
+      (redSha) => shipCiCure(repoAbs, gh, target, trunk, redSha, sess.branch));
     if (!ciResultB1.ok) {
       cleanupEphemeral();
       process.stderr.write(`✗ B1: CI for ${target} is no longer green — aborting before merge. Nothing pushed. (${ciResultB1.detail})\n`);
       return 1;
     }
-    if (ciResultB1.grantVerdict && ciResultB1.grantVerdict.ok) {
+    if (ciResultB1.cureVerdict && ciResultB1.cureVerdict.ok) {
+      warn(`  ✓ trunk CI green ONLY because of the machine-checkable cure rule — this merge carries a CI-Cure: trailer.`);
+      ciCureForTrailer = ciResultB1.cureVerdict;
+    } else if (ciResultB1.grantVerdict && ciResultB1.grantVerdict.ok) {
       warn(`  ✓ trunk CI green ONLY because of a human ci-grant — this merge carries a CI-Grant: trailer.`);
       ciGrantForTrailer = ciResultB1.grantVerdict;
     }
@@ -7710,9 +7842,13 @@ function cmdShip(argv) {
   // Collects one {num, from, to} per inherited trailer the composer overruled (#58: a branch commit
   // wrote e.g. `Refs #53` before #53 was decided as a Closes) — surfaced below, not silently dropped.
   const trailerConflicts = [];
-  // #105: the audit-trail trailer for a ship that went through under a ci-grant — empty array on
-  // the ordinary (no grant consulted) path, so this changes nothing when #105 never fires.
-  const ciTrailer = ciGrantTrailerLine(ciGrantForTrailer, sess.branch, target);
+  // #105/#281: the audit-trail trailer for a ship that went through under either red-trunk
+  // exemption door — empty array on the ordinary (neither consulted) path, so this changes nothing
+  // when neither #105 nor #281 ever fires. The two are mutually exclusive per B1 above (the cure
+  // rule short-circuits before the grant is even consulted once it succeeds), so at most one of
+  // these two calls ever returns non-null.
+  const ciTrailer = ciGrantTrailerLine(ciGrantForTrailer, sess.branch, target) ||
+    ciCureTrailerLine(ciCureForTrailer, sess.branch, target);
   const ciTrailerLines = ciTrailer ? [ciTrailer] : [];
   if (opts.message) {
     // --message overrides the subject/body, but Closes is spliced in as its own paragraph — never
