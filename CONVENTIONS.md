@@ -487,8 +487,9 @@ now, two are decided as *proposals* and handed to a ⚖ ruling rather than settl
   second claim, worktree, or place-claim is live; legalising concurrent direct writers means
   loosening that live safety gate, which needs its own fixture-driven matrix test in
   `tools/lib/place.js`/`colab solo`, not a diff whose other half is prompt rendering.
-  **Unblocked by:** follow-up issue A ("`writes: direct` runtime: place-claim gates every
-  concurrent direct writer") — itself blocked on the ruling below.
+  **Unblocked by:** [#285](https://github.com/futurelastic/colab-handbook/issues/285)
+  ("`writes: direct` runtime: place-claim gates every concurrent direct writer") — itself
+  blocked on the ruling below.
 - **CI role — DECIDED AND SHIPPED, as derived report text only.** Under `direct`, `ciRole` is
   **alarm, always** — nothing branches under a merge event that never happens, so CI can
   never gate a merge that doesn't exist. Cheap to decide because `ciRole` is derived prose in
@@ -501,8 +502,9 @@ now, two are decided as *proposals* and handed to a ⚖ ruling rather than settl
   code-wrap" and is named as one, not ruled here — this repo's decision-record mechanism
   (`needs-decision` / `decision-recorded`, [§5](#5-claiming-work--how-to-say-im-on-this))
   exists precisely so a single session does not unilaterally re-rule the ship protocol.
-  **Unblocked by:** follow-up issue B, labelled `needs-decision`, carrying this proposal as
-  the thing to rule on. No skill file (`code-ship`, `code-wrap`) is touched by this change.
+  **Unblocked by:** [#284](https://github.com/futurelastic/colab-handbook/issues/284),
+  labelled `needs-decision`, carrying this proposal as the thing to rule on. No skill file
+  (`code-ship`, `code-wrap`) is touched by this change.
 - **Exposure restriction — DECIDED AND ENFORCED NOW.** Declaring `writes: direct` requires
   the same human bar as lowering exposure (an interactive TTY, or `COLAB_HUMAN=1` together
   with `--answered-by <name>` — `direct` is the only `writes` value that *expands*
