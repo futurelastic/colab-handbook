@@ -67,10 +67,31 @@ const WRITES_DECLARED_SET = new Set(WRITES_DECLARED);
 // not serial-gated.
 const WRITES_LEGACY = Object.freeze({ serial: 'serial-direct' });
 
-// Everything the audit accepts as a value (current vocabulary + the legacy alias) — an enum
-// check, not a resolution. `colab adopt --writes` also accepts this set, so an existing
-// script or muscle-memory invocation using `--writes serial` keeps working.
-const WRITES_ACCEPTED_SET = new Set([...WRITES_DECLARED, ...Object.keys(WRITES_LEGACY)]);
+// #283: the three spellings the WIZARD offers and `writesMode` (below) resolves TOWARD —
+// replacing the retired 3-method vocabulary with names that describe what a repo PERMITS, not a
+// mechanism it once selected. `direct` is new: declared, stored, and honestly reported today
+// (deriveConsequences, --json, the wizard), but its RUNTIME is deferred — see CONVENTIONS.md
+// §2, "writes: direct — declared today, runtime deferred (#283)". `trunkDirectVetoed` (below)
+// is unaffected: only the exact string 'isolated' ever vetoes, under either vocabulary.
+const WRITES_CURRENT = Object.freeze(['free', 'direct', 'isolated']);
+const WRITES_CURRENT_SET = new Set(WRITES_CURRENT);
+
+// The three pre-#283 spellings (#208's original 3-method split), ALL of which `writesMode` now
+// folds toward `free` — distinct from `WRITES_LEGACY` above (the `serial` alias, which
+// `resolveWrites` still parses toward `serial-direct`, unchanged): this is the wider set
+// `writesMode` needs to recognise every spelling that predates this vocabulary, `serial`
+// included, in one pass.
+const WRITES_LEGACY_FREE = Object.freeze(['serial', 'serial-direct', 'serial-gated']);
+const WRITES_LEGACY_FREE_SET = new Set(WRITES_LEGACY_FREE);
+
+// Everything the audit accepts as a value (current vocabulary + every legacy spelling) — an
+// enum check, not a resolution. `colab adopt --writes` also accepts this set, so an existing
+// script or muscle-memory invocation using `--writes serial` (or `serial-direct`/`serial-gated`)
+// keeps working, and `--writes direct` is now legal too (subject to `writesGateVerdict` in
+// tools/lib/adopt.js).
+const WRITES_ACCEPTED_SET = new Set([
+  ...WRITES_DECLARED, ...Object.keys(WRITES_LEGACY), ...WRITES_CURRENT, ...WRITES_LEGACY_FREE,
+]);
 
 /**
  * Resolve a declared `writes:` value (possibly undefined/null/unrecognised) to one of the
@@ -82,6 +103,16 @@ const WRITES_ACCEPTED_SET = new Set([...WRITES_DECLARED, ...Object.keys(WRITES_L
  *   { value: 'isolated',               source: 'unrecognised' }  — some other string; fails
  *                                                                   closed to isolated, never
  *                                                                   toward a serial reading.
+ *
+ * DEPRECATED-INTERNAL as of #283: this resolver's OWN job (parse the `serial` alias toward
+ * `serial-direct`, report `source`) is unchanged and still correct — nothing here is wrong — but
+ * nothing outside `writes-authority.js` should read its 3-way `.value` as deciding anything any
+ * longer, for the identical trap `trunkDirectVetoed`'s docstring below has always warned about.
+ * `tools/lib/adopt.js`'s `deriveConsequences` reads `writesMode(raw)` instead, which is a TOTAL
+ * function onto exactly `free` / `direct` / `isolated` and cannot produce that trap in the first
+ * place. `resolveWrites` stays exported, unchanged, and fully tested for whatever legacy-alias
+ * bookkeeping still needs its 3-way parse — it is retired from being read as a method choice,
+ * not retired outright.
  */
 function resolveWrites(raw) {
   if (WRITES_DECLARED_SET.has(raw)) return { value: raw, source: 'declared' };
@@ -89,6 +120,31 @@ function resolveWrites(raw) {
     return { value: WRITES_LEGACY[raw], source: 'legacy' };
   }
   return { value: 'isolated', source: raw === null || raw === undefined ? 'default' : 'unrecognised' };
+}
+
+/**
+ * #283: the TOTAL reading `deriveConsequences` uses instead of `resolveWrites` — maps EVERY
+ * possible input (undefined/null, any of the three current spellings, any of the three legacy
+ * spellings, or an unrecognised string) onto exactly one of `free` / `direct` / `isolated`, with
+ * a `source` naming which bucket it came from. "Total" is the point: there is no input this
+ * function fails to classify, which is what makes "writesResolved disagrees with trunkDirect"
+ * (#282) structurally unreachable — see `tools/lib/adopt.js`'s `deriveConsequences`.
+ *
+ * Fails toward `free` on anything unrecognised — the same posture `trunkDirectVetoed` already
+ * takes (only an exact, correctly-spelled `isolated` ever restricts anything); the audit's own
+ * enum check (`isAcceptedWritesValue`) is what catches a typo, not this function.
+ *
+ *   { mode: 'free',            source: 'default' }       — undefined/null (the key is absent).
+ *   { mode: 'free',            source: 'legacy' }         — one of WRITES_LEGACY_FREE.
+ *   { mode: <one of WRITES_CURRENT>, source: 'declared' } — raw is exactly free/direct/isolated.
+ *   { mode: 'free',            source: 'unrecognised' }   — anything else; fails closed to free,
+ *                                                            never toward isolated or direct.
+ */
+function writesMode(raw) {
+  if (raw === null || raw === undefined) return { mode: 'free', source: 'default' };
+  if (WRITES_CURRENT_SET.has(raw)) return { mode: raw, source: 'declared' };
+  if (WRITES_LEGACY_FREE_SET.has(raw)) return { mode: 'free', source: 'legacy' };
+  return { mode: 'free', source: 'unrecognised' };
 }
 
 /** Is `raw` a value the audit accepts — current vocabulary, the legacy alias, or omitted? */
@@ -128,6 +184,19 @@ function trunkDirectVetoed(raw) {
  * written once, so the two copies cannot drift apart the way a hand-restated pair always does.
  */
 function writesSyncAdvisory(raw) {
+  // #283: `free`/`direct` branches, added for totality now that `writesMode` widens the enum —
+  // near-dead code today, same as the four branches below: `writesRulingKnownAt` (stamp.js)
+  // gates this whole call site on a repo's stamp predating ⚖ #237, and no repo can predate #237
+  // while already declaring #283's vocabulary. Added for completeness, not reach.
+  if (raw === 'free') {
+    return 'writes: free is the ⚖ #233/#283 spelling of coexistence — identical to omitting the '
+      + 'key, or to any of the legacy serial* spellings (CONVENTIONS.md §2, Writes)';
+  }
+  if (raw === 'direct') {
+    return 'writes: direct declares that an attended human may commit straight to trunk — the '
+      + 'SAME runtime permission as free/absence today (declared, not yet enforced — #283); see '
+      + 'CONVENTIONS.md §2, "writes: direct — declared today, runtime deferred (#283)"';
+  }
   if (raw === 'isolated') {
     return 'writes: isolated changed meaning under ⚖ #233 — it no longer describes a default, '
       + 'it now VETOES trunk-direct outright, human or not. If this repo runs many concurrent '
@@ -157,8 +226,11 @@ function writesSyncAdvisory(raw) {
 module.exports = {
   WRITES_DECLARED,
   WRITES_LEGACY,
+  WRITES_CURRENT,
+  WRITES_LEGACY_FREE,
   WRITES_ACCEPTED_SET,
   resolveWrites,
+  writesMode,
   isAcceptedWritesValue,
   trunkDirectVetoed,
   writesSyncAdvisory,

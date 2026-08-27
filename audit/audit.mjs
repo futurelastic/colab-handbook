@@ -1170,8 +1170,9 @@ function auditRepo(target, ctx) {
     // project.schema.md. `writesRaw` itself is declared above `if (cfg)`, alongside
     // exposureRaw/channelsRaw — see that declaration's own comment for why.
     if (writesRaw !== null && !writesAuthority.isAcceptedWritesValue(writesRaw)) {
-      fail(`writes is ${JSON.stringify(writesRaw)}, expected "isolated", "serial-direct", or `
-        + '"serial-gated" (the legacy alias "serial" is also accepted; omit for isolated)');
+      fail(`writes is ${JSON.stringify(writesRaw)}, expected "free", "direct", or "isolated" `
+        + '(the legacy spellings "serial", "serial-direct", "serial-gated" are also accepted; '
+        + 'omit for free — #283)');
     }
     // #237 (⚖ Decision on #233, ruling 3): the informational replacement for the deployment-
     // shape prohibition that unit DROPPED outright ("where the trunk merge is itself the

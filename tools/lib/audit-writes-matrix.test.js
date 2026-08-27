@@ -76,7 +76,10 @@ const RUNTIME_ROWS = new Set(['trunk-direct, human at the keyboard (COLAB_HUMAN=
 
 function parseWritesMatrix() {
   const text = fs.readFileSync(CONVENTIONS, 'utf8');
-  const headerNeedle = '| constraint | `writes: isolated` (the veto) | absent · `serial` · `serial-direct` · `serial-gated` (coexistence) |';
+  // #283 widened the coexistence column header to list `free`/`direct` alongside every legacy
+  // spelling — still exactly 3 pipe-cells (constraint + veto + coexistence), so WRITES_COLUMNS
+  // and every downstream assertion in this file are unaffected by the wording change alone.
+  const headerNeedle = '| constraint | `writes: isolated` (the veto) | `free` · `direct` · absent · `serial` · `serial-direct` · `serial-gated` (coexistence) |';
   const headerIdx = text.indexOf(headerNeedle);
   if (headerIdx === -1) {
     throw new Error(

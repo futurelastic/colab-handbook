@@ -90,12 +90,26 @@ test('#208: writes: serial-gated on a Tier B repo is clean', () => {
   assert.ok(!hasText(r.fails, /writes/), r.fails.join(' | '));
 });
 
+// #283: the two new current-vocabulary spellings are clean too.
+
+test('#283: writes: free on a Tier B repo is clean', () => {
+  const yml = `tier: B\ntrunk: main\nproduction: null\ndeploy: none\nstack: node\nwrites: free\n`;
+  const r = audit(fixture(yml));
+  assert.ok(!hasText(r.fails, /writes/), r.fails.join(' | '));
+});
+
+test('#283: writes: direct on a Tier B repo is clean — declared today, runtime deferred', () => {
+  const yml = `tier: B\ntrunk: main\nproduction: null\ndeploy: none\nstack: node\nwrites: direct\n`;
+  const r = audit(fixture(yml));
+  assert.ok(!hasText(r.fails, /writes/), r.fails.join(' | '));
+});
+
 // --- unknown value -------------------------------------------------------------
 
 test('an unrecognised writes value is a finding, not a silent pass', () => {
   const yml = `tier: B\ntrunk: main\nproduction: null\ndeploy: none\nstack: node\nwrites: parallel\n`;
   const r = audit(fixture(yml));
-  assert.ok(hasText(r.fails, /writes is "parallel", expected "isolated", "serial-direct", or "serial-gated"/), r.fails.join(' | '));
+  assert.ok(hasText(r.fails, /writes is "parallel", expected "free", "direct", or "isolated"/), r.fails.join(' | '));
 });
 
 // --- the non-coupling pin — the whole point of this file -----------------------

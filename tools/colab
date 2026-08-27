@@ -4899,14 +4899,21 @@ function cmdConfig(argv) {
 
 const HELP_ADOPT = `colab adopt [--repo <path>] [--json] [--no-verify] [--axis a,b,...]
                  [--room <solo|team|public>] [--exposure <none|self|live|released>]
-                 [--writes <isolated|serial-direct|serial-gated>] [--channels <c1,c2,...>]
+                 [--writes <free|direct|isolated>] [--channels <c1,c2,...>]
                  [--production <url>|none] [--deploy <push-main|tag|manual|none>]
                  [--stack "<text>"] [--answered-by <name>] [--reason "<text>"]
 
 Detects what a repo already states in .github/project.yml, ASKS a human only what could not be
-detected (flags, or a hand-rolled interactive prompt at a TTY), DERIVES the rest, and WRITES the
-descriptor in one act — append-only, never touching a byte already there. A complete descriptor
-just reports (write nothing, exit 0); re-answer one row on purpose with --axis.
+detected (flags, or a forced multiple-choice menu at a TTY — every row is a numbered choice,
+answered by its number OR its literal value), DERIVES the rest, and WRITES the descriptor in one
+act — append-only, never touching a byte already there. A complete descriptor just reports
+(write nothing, exit 0); re-answer one row on purpose with --axis.
+
+--writes accepts free (coexistence, the default), direct (an attended human may commit straight
+to trunk; DECLARED today, its runtime is DEFERRED — see CONVENTIONS.md §2, "writes: direct —
+declared today, runtime deferred"), or isolated (vetoes trunk-direct outright, human or not).
+Every pre-#283 spelling (isolated/serial-direct/serial-gated, and the serial alias) is still
+accepted and reads as free — no adopter's descriptor breaks, and none is re-asked.
 
   --repo <path>     repo to inspect (default: git root of cwd)
   --json            machine-readable
@@ -4932,6 +4939,16 @@ committed evidence, never conclude "nothing"/"only the room" consumes a merge he
   lowering an existing exposure       the above, AND --reason "<text>"
   falsifiers contradict the answer    --reason "<text>", either direction
 
+THE WRITES: DIRECT GATE (#283) — direct is the ONE writes value that EXPANDS permission (free and
+isolated never do), so declaring it is gated, both directions:
+
+  declaring writes: direct             interactive TTY, OR COLAB_HUMAN=1 AND --answered-by <name>
+  effective exposure is live/released  refused outright (exit 5) — no bar clears this one; a repo
+                                        whose merge reaches users/adopters directly cannot declare
+                                        direct until its runtime lands. Symmetric: answering
+                                        --exposure live|released against an already-declared (or
+                                        same-run) writes: direct is refused by the same check.
+
 THE HONEST LIMIT: on the COLAB_HUMAN=1 path this is EXACTLY as strong as \`colab ship\`'s identical
 bar, and no stronger — COLAB_HUMAN is an env var the gated party can set (#150, parked: one
 identity holds every credential today). An interactive TTY is a better default (an agent must
@@ -4943,10 +4960,12 @@ This becomes a real access-control boundary only once #150's identity work lands
 The asymmetry is MECHANICAL: the shape check and the falsifier check are code, and no flag,
 project.yml value or answer lowers them. There is no --force.
 
-Exit codes: 3 = human-gated (the bar above, unmet); 4 = evidence contradicts (a falsifier, or
-axis-authority.contradiction() against a declared tier); 5 = this repo's own shape does not
-support the answer (the §9 "going live" ladder — e.g. exposure: live on a repo with no dev trunk
-or no production URL). On ANY refusal, nothing is written — the file does not exist, or is
+Exit codes: 3 = human-gated (the bar above, unmet — also writes: direct declared without one);
+4 = evidence contradicts (a falsifier, or axis-authority.contradiction() against a declared tier);
+5 = this repo's own shape does not support the answer (the §9 "going live" ladder — e.g.
+exposure: live on a repo with no dev trunk or no production URL — also writes: direct declared
+where the effective exposure is live/released, either direction). On ANY refusal, nothing is
+written — the file does not exist, or is
 byte-identical to before this run.
 
 \`tier\` is written ONLY when exposure ends this run still unanswered (declined, or refused) and no
@@ -5087,6 +5106,7 @@ function printAdoptReport(report, repoAbs, verify) {
   print('Derived consequences:');
   const c = report.consequences;
   print(`  gate count             ${fmtVal(c.gateCount)}`);
+  print(`  writes mode             ${c.writesResolved}`);
   print(`  CI role (from writes)  ${c.ciRole}`);
   print(`  CI depth (from exposure) ${c.ciDepth ?? '(undetermined — exposure has no axis of record)'}`);
   print(`  ceremony weight (from room) ${c.ceremonyWeight ?? '(undetermined — room undeclared)'}`);
@@ -5116,7 +5136,7 @@ function adoptAxisFlagHint(axis) {
     case 'tier': return '--production <url>|none --deploy <push-main|tag|manual|none>';
     case 'room': return '--room <solo|team|public>';
     case 'exposure': return '--exposure <none|self|live|released> [--answered-by <name>] [--reason "<text>"]';
-    case 'writes': return '--writes <isolated|serial-direct|serial-gated>';
+    case 'writes': return '--writes <free|direct|isolated>';
     case 'channels': return '--channels <c1,c2,...>';
     default: return `--${axis} <value>`;
   }
@@ -5166,17 +5186,10 @@ function adoptAnswersFromFlags(opts, cfg, axesToAsk, forcedAxes) {
   return answers;
 }
 
-function adoptValidateChannels(list) {
-  if (!Array.isArray(list) || list.length === 0) {
-    throw new UserError('--channels must be a non-empty comma-separated list — use "none" if nothing runs this code anywhere');
-  }
-  const unknown = list.filter((c) => !adopt.VALID_CHANNELS.has(c));
-  if (unknown.length) throw new UserError(`--channels contains ${JSON.stringify(unknown)}, expected members of: ${[...adopt.VALID_CHANNELS].join(', ')}`);
-  const deduped = [...new Set(list)];
-  if (deduped.length !== list.length) throw new UserError(`--channels contains a duplicate member — declare each channel once: ${JSON.stringify(deduped)}`);
-  if (list.includes('none') && list.length > 1) throw new UserError('--channels combines "none" with another value — "none" must stand alone');
-  return list;
-}
+// #283: moved into tools/lib/adopt.js (unchanged logic) so the wizard's `resolveChoice` can
+// share it with this flag-driven path without a second copy — re-exported under the same name
+// so every call site below reads identically to before the move.
+const adoptValidateChannels = adopt.adoptValidateChannels;
 
 /** `rl.question` wrapped in a Promise — the one async primitive the hand-rolled interactive path
  * needs; no prompting library (#199's plan is explicit: zero dependencies). */
@@ -5185,40 +5198,76 @@ function rlAsk(rl, prompt) {
 }
 
 /**
- * The interactive path: one `QUESTIONS`-worded prompt per axis in `axesToAsk`, in order. An
- * empty answer to `exposure` specifically is a DECLINE, not an error — the caller falls back to
- * deriving `tier` instead (see #199's plan, "does adopt write tier?"). Every other empty answer
- * is re-prompted once, then errors — an interactive session that cannot get an answer is not
- * the "no TTY, no flags" refusal case, but it must not loop forever either.
+ * Ask via `promptFn` (prints the menu, returns the raw typed line) and resolve through
+ * `adopt.resolveChoice(axis, raw)` (#283). Re-prompts ONCE on a bad answer, then throws
+ * UserError — this finally *implements* the "re-prompted once, then errors" contract this
+ * function's docstring has claimed since #199 without ever honouring it: it used to throw on
+ * the very first bad answer. A second latent doc/code contradiction fixed in the same pass.
+ */
+async function askMenu(rl, axis, promptFn) {
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const raw = await promptFn();
+    const resolved = adopt.resolveChoice(axis, raw);
+    if (resolved.ok) return resolved;
+    process.stdout.write(`  ${resolved.message}\n`);
+  }
+  throw new UserError(`${axis}: no valid answer after one re-prompt`);
+}
+
+/**
+ * The interactive path (#283): one `QUESTIONS`-worded prompt + numbered menu per axis in
+ * `axesToAsk`, in order. All the branching logic — which value a raw answer resolves to,
+ * whether an axis has a skip option — lives in the PURE `adopt.resolveChoice`/`adopt.renderMenu`
+ * exports; this loop is deliberately thin I/O (`tools/lib/adopt-cli.test.js`'s own header notes
+ * the interactive path "cannot be driven from `node --test` without a pty", which is exactly why
+ * the decision logic had to move OUT of here to be unit-testable at all).
+ *
+ * `tier` is the one axis with no single enum menu: `deploy` is an ordinary 4-option menu
+ * (`resolveChoice('tier', ...)`), but `production` is a URL, not a member of a closed set, so it
+ * is asked as its own two-option gate ("does a deploy target exist today?") right here, with the
+ * URL itself asked only on "yes" — this keeps every axis forced-choice-shaped without pretending
+ * a URL belongs to an enum.
  */
 async function adoptAskInteractive(rl, axesToAsk, cfg) {
   const answers = {};
   for (const axis of axesToAsk) {
     const q = adopt.QUESTIONS.find((x) => x.axis === axis);
     process.stdout.write(`\n${q.prompt}\n`);
+
     if (axis === 'tier') {
-      const prod = (await rlAsk(rl, '  production URL (blank = none): ')).trim();
-      const dep = (await rlAsk(rl, '  deploy: push-main / tag / manual / none: ')).trim();
-      if (!adopt.VALID_DEPLOY.has(dep)) throw new UserError(`deploy must be one of: ${[...adopt.VALID_DEPLOY].join(', ')}`);
-      answers.tier = { values: { production: prod === '' ? null : prod, deploy: dep }, mode: 'interactive' };
-    } else if (axis === 'room') {
-      const v = (await rlAsk(rl, '  solo / team / public: ')).trim();
-      if (!adopt.VALID_ROOM.has(v)) throw new UserError(`room must be one of: ${[...adopt.VALID_ROOM].join(', ')}`);
-      answers.room = { values: { room: v }, mode: 'interactive' };
-    } else if (axis === 'writes') {
-      const v = (await rlAsk(rl, '  serial / isolated (blank = leave unanswered, coexistence): ')).trim();
-      if (v === '') continue; // #282: the prompt itself says "leave unanswered" permits coexistence — blank must not throw
-      if (!adopt.VALID_WRITES.has(v)) throw new UserError(`writes must be one of: ${[...adopt.VALID_WRITES].join(', ')}`);
-      answers.writes = { values: { writes: v }, mode: 'interactive' };
+      const depChoice = await askMenu(rl, 'tier', () => {
+        process.stdout.write(`${adopt.renderMenu('tier')}\n`);
+        return rlAsk(rl, '  deploy: ');
+      });
+      process.stdout.write('  1) no deploy target exists today\n  2) yes — enter the URL\n');
+      const existsRaw = (await rlAsk(rl, '  production: ')).trim();
+      let prod = null;
+      if (existsRaw === '2' || existsRaw === 'yes') {
+        prod = (await rlAsk(rl, '    URL: ')).trim() || null;
+      } else if (existsRaw !== '1' && existsRaw !== 'no') {
+        throw new UserError('production: choose 1 (no deploy target exists today) or 2 (yes — enter the URL)');
+      }
+      answers.tier = { values: { production: prod, deploy: depChoice.value }, mode: 'interactive' };
     } else if (axis === 'channels') {
-      const raw = (await rlAsk(rl, '  comma-separated: ')).trim();
-      const list = adoptValidateChannels(raw.split(',').map((s) => s.trim()).filter(Boolean));
-      answers.channels = { values: { channels: list }, mode: 'interactive' };
+      const resolved = await askMenu(rl, 'channels', () => {
+        process.stdout.write(`${adopt.renderMenu('channels')}\n`);
+        return rlAsk(rl, '  one or more numbers or names, comma-separated: ');
+      });
+      answers.channels = { values: { channels: resolved.value }, mode: 'interactive' };
     } else if (axis === 'exposure') {
-      const v = (await rlAsk(rl, '  none / self / live / released (blank = skip — derive tier instead): ')).trim();
-      if (v === '') continue; // decline — the fallback tier derivation picks this up
-      if (!adopt.VALID_EXPOSURE.has(v)) throw new UserError(`exposure must be one of: ${[...adopt.VALID_EXPOSURE].join(', ')}`);
-      answers.exposure = { values: { exposure: v }, mode: 'interactive' };
+      const resolved = await askMenu(rl, 'exposure', () => {
+        process.stdout.write(`${adopt.renderMenu('exposure')}\n`);
+        return rlAsk(rl, '  choice: ');
+      });
+      if (resolved.skip) continue; // decline — the fallback tier derivation picks this up
+      answers.exposure = { values: { exposure: resolved.value }, mode: 'interactive' };
+    } else {
+      // room, writes — plain single-choice menus, no skip.
+      const resolved = await askMenu(rl, axis, () => {
+        process.stdout.write(`${adopt.renderMenu(axis)}\n`);
+        return rlAsk(rl, '  choice: ');
+      });
+      answers[axis] = { values: { [axis]: resolved.value }, mode: 'interactive' };
     }
   }
   return answers;
@@ -5360,6 +5409,30 @@ async function cmdAdopt(argv) {
     if (!verdict.ok) {
       warn(verdict.message);
       return verdict.exitCode;
+    }
+  }
+
+  // #283, Approach §6: writes: direct's own declaration-time gate — a SIBLING check to the
+  // exposure gate above, run whenever THIS run touches either axis (declares/changes `writes`,
+  // or declares/changes `exposure`), so the symmetric case is caught too: declaring
+  // `--exposure live|released` against an ALREADY-declared `writes: direct` is refused by the
+  // same check as declaring `writes: direct` against an already-live/released exposure —
+  // otherwise the gate is bypassed by answering in the other order. Never runs on an unrelated
+  // write (e.g. `--channels` alone) so a pre-existing, hand-edited contradiction does not block
+  // an unrelated row from being answered.
+  if (answers.writes || answers.exposure) {
+    const proposedWrites = answers.writes ? answers.writes.values.writes : (Object.prototype.hasOwnProperty.call(cfg, 'writes') ? cfg.writes : null);
+    const effExposure = answers.exposure ? answers.exposure.values.exposure : axisAuthority.axisOfRecord(cfg).exposure;
+    const writesVerdict = adopt.writesGateVerdict({
+      writes: proposedWrites,
+      effExposure,
+      isTTY: (answers.writes && answers.writes.mode === 'interactive') ? true : isTTY,
+      colabHuman: process.env.COLAB_HUMAN === '1',
+      answeredBy: opts.answeredBy || null,
+    });
+    if (!writesVerdict.ok) {
+      warn(writesVerdict.message);
+      return writesVerdict.exitCode;
     }
   }
 

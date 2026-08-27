@@ -16,7 +16,8 @@ const assert = require('node:assert');
 const {
   deriveTier, deriveConsequences, detectStack, detectChannelCandidates, remainingSteps, detect,
   QUESTIONS, axisMissing, ROW_NAMES, EXPOSURE_RANK, GATE_CLASS, EXIT_CODE,
-  exposureShapeVerdict, gateVerdict, provenanceComment, renderDescriptor,
+  exposureShapeVerdict, gateVerdict, writesGateVerdict, provenanceComment, renderDescriptor,
+  renderMenu, resolveChoice,
 } = require('./adopt.js');
 
 /** A minimal scripted io — every field defaults to "nothing here", override per test. */
@@ -59,26 +60,26 @@ test('deriveTier is a function of (production, deploy) only — never reads expo
 
 // --------------------------------------------------------------- deriveConsequences
 
-// #237 (⚖ Decision on #233): `writes` stopped selecting a write-conflict prevention METHOD and
-// became a two-state VETO. `writesResolved`/`writesMethod`/`writesSource` are UNCHANGED — still
-// `resolveWrites`'s parse — but `ciRole`/`branchMandatory` no longer switch on that 3-way parse;
-// they switch on the veto (`trunkDirectVetoed`, computed from the RAW value) plus a new
-// `trunkDirect` field naming the session-identity condition explicitly. Absence and every
-// non-veto value — INCLUDING `serial-gated`, which used to force a gate/mandatory branch on its
-// own — now read identically: trunk-direct is permitted, but only to an attended human session.
+// #283: `writes` widened again, and the reading `deriveConsequences` uses changed structurally,
+// not just cosmetically — this whole block was rewritten (not just added-to) for it. Before:
+// `writesResolved` was `resolveWrites(writes).value`'s 2-state summary, which read 'isolated'
+// for BOTH an explicit declaration AND plain absence — the exact defect #282 reported, because
+// `trunkDirect` (computed separately, from the raw value via `trunkDirectVetoed`) could then
+// disagree with it in the same --json blob. Now: `writesResolved` is `writesMode(writes).mode` —
+// a TOTAL function onto exactly `free` / `direct` / `isolated` — and `trunkDirect` is still
+// `trunkDirectVetoed(writes)`, so both read the SAME underlying fact and can never disagree.
+// `writesMethod` (the retired 3-way parse) is DROPPED from the returned object entirely.
 
-test('deriveConsequences: writes omitted is NOT vetoed — trunkDirect is "permitted...attended", CI/branch are conditional on session identity', () => {
+test('deriveConsequences: writes omitted resolves to free — coexistence, not vetoed, CI/branch conditional on session identity', () => {
   const c = deriveConsequences({ exposure: null, writes: null, room: null });
-  // #282 fix: writesResolved is now derived from the veto reading (`vetoed`), not from
-  // resolveWrites(null).value (which reads 'isolated' — source: 'default' — for plain absence).
-  // Before the fix this asserted 'isolated' here, disagreeing with trunkDirect below in the same
-  // returned object; that disagreement was #282's whole complaint.
-  assert.strictEqual(c.writesResolved, 'serial');
+  assert.strictEqual(c.writesResolved, 'free');
+  assert.strictEqual(c.writesSource, null); // genuinely omitted — not "default"
   assert.match(c.trunkDirect, /permitted/);
   assert.match(c.trunkDirect, /COLAB_HUMAN=1/);
   assert.match(c.ciRole, /gate for a worktree/);
   assert.match(c.ciRole, /alarm for an attended trunk-direct/);
   assert.match(c.branchMandatory, /mandatory for every session except an attended trunk-direct/);
+  assert.strictEqual('writesMethod' in c, false);
 });
 
 test('deriveConsequences: writes: isolated (the EXPLICIT veto) forbids trunk-direct outright, CI is always a gate, branch always mandatory', () => {
@@ -90,41 +91,48 @@ test('deriveConsequences: writes: isolated (the EXPLICIT veto) forbids trunk-dir
   assert.match(c.branchMandatory, /^mandatory — isolated/);
 });
 
-test('deriveConsequences: writes: serial is NOT vetoed — reads identically to omission (legacy alias resolves to serial-direct, #208; both are inert under #237)', () => {
-  const c = deriveConsequences({ exposure: null, writes: 'serial', room: null });
-  assert.strictEqual(c.writesResolved, 'serial');
-  assert.strictEqual(c.writesMethod, 'serial-direct');
-  assert.strictEqual(c.writesSource, 'legacy');
+test('deriveConsequences: writes: free reads identically to omission', () => {
+  const c = deriveConsequences({ exposure: null, writes: 'free', room: null });
+  assert.strictEqual(c.writesResolved, 'free');
+  assert.strictEqual(c.writesSource, 'declared');
   assert.match(c.trunkDirect, /permitted/);
   assert.match(c.ciRole, /alarm for an attended trunk-direct/);
 });
 
-test('#208/#237: deriveConsequences: writes: serial-direct reads identically to the legacy alias — not vetoed', () => {
-  const c = deriveConsequences({ exposure: null, writes: 'serial-direct', room: null });
-  assert.strictEqual(c.writesResolved, 'serial');
-  assert.strictEqual(c.writesMethod, 'serial-direct');
-  assert.strictEqual(c.writesSource, 'declared');
-  assert.match(c.trunkDirect, /permitted/);
+test('deriveConsequences: every legacy spelling (serial, serial-direct, serial-gated) resolves to free, source legacy, reading identically to omission', () => {
+  for (const writes of ['serial', 'serial-direct', 'serial-gated']) {
+    const c = deriveConsequences({ exposure: null, writes, room: null });
+    assert.strictEqual(c.writesResolved, 'free', writes);
+    assert.strictEqual(c.writesSource, 'legacy', writes);
+    assert.match(c.trunkDirect, /permitted/, writes);
+    assert.match(c.ciRole, /alarm for an attended trunk-direct/, writes);
+  }
 });
 
-test('#237: deriveConsequences: writes: serial-gated is now INERT — identical to omission, NOT a forced gate/mandatory-branch (that #208 behaviour is retired)', () => {
-  const c = deriveConsequences({ exposure: null, writes: 'serial-gated', room: null });
-  assert.strictEqual(c.writesResolved, 'serial');
-  assert.strictEqual(c.writesMethod, 'serial-gated'); // the PARSE still reports the declared value
+test('#283: deriveConsequences: writes: direct is declared honestly, not vetoed, and every consequence field says "declared, not yet enforced"', () => {
+  const c = deriveConsequences({ exposure: null, writes: 'direct', room: null });
+  assert.strictEqual(c.writesResolved, 'direct');
   assert.strictEqual(c.writesSource, 'declared');
-  assert.match(c.trunkDirect, /permitted/); // NOT vetoed — this is the behavioural break from #208
-  assert.match(c.ciRole, /alarm for an attended trunk-direct/);
-  assert.match(c.branchMandatory, /mandatory for every session except an attended trunk-direct/);
+  assert.doesNotMatch(c.trunkDirect, /vetoed/);
+  assert.match(c.trunkDirect, /declared, not yet enforced/);
+  assert.match(c.ciRole, /declared, not yet enforced/);
+  assert.match(c.ciRole, /alarm, always/);
+  assert.match(c.branchMandatory, /declared, not yet enforced/);
 });
 
 test('#208: deriveConsequences: writesSource is null (not "default") when writes is genuinely omitted', () => {
   const c = deriveConsequences({ exposure: null, writes: null, room: null });
-  assert.strictEqual(c.writesMethod, 'isolated');
+  assert.strictEqual(c.writesResolved, 'free');
   assert.strictEqual(c.writesSource, null);
 });
 
-test('#282 regression: writesResolved and trunkDirect can never disagree about the veto, for every current/legacy writes value', () => {
-  for (const writes of [undefined, null, 'isolated', 'serial', 'serial-direct', 'serial-gated']) {
+test('#208/#282/#283: deriveConsequences no longer returns writesMethod at all', () => {
+  const c = deriveConsequences({ exposure: null, writes: 'serial-direct', room: null });
+  assert.strictEqual('writesMethod' in c, false);
+});
+
+test('#282 regression, restated as a coherence invariant for the full #283 vocabulary: writesResolved === "isolated" iff trunkDirect is vetoed', () => {
+  for (const writes of [undefined, null, 'serial', 'serial-direct', 'serial-gated', 'free', 'direct', 'isolated']) {
     const c = deriveConsequences({ exposure: null, writes, room: null });
     assert.strictEqual(
       c.writesResolved === 'isolated',
@@ -323,6 +331,128 @@ test('QUESTIONS covers exactly the five ROW_NAMES, in that order, and the tier q
   assert.deepStrictEqual(QUESTIONS.map((q) => q.axis), ROW_NAMES);
   const tierQ = QUESTIONS.find((q) => q.axis === 'tier');
   assert.deepStrictEqual(tierQ.keys, ['production', 'deploy']);
+});
+
+test('#283: every QUESTIONS entry carries a non-empty choices array, the wizard\'s forced menu', () => {
+  for (const q of QUESTIONS) {
+    assert.ok(Array.isArray(q.choices) && q.choices.length > 0, q.axis);
+  }
+});
+
+test('#283: the writes menu is exactly free/direct/isolated — the retired serial vocabulary appears nowhere in it', () => {
+  const writesQ = QUESTIONS.find((q) => q.axis === 'writes');
+  assert.deepStrictEqual(writesQ.choices.map((c) => c.value), ['free', 'direct', 'isolated']);
+  assert.doesNotMatch(writesQ.prompt, /serial/);
+  assert.doesNotMatch(writesQ.prompt, /leave unanswered/);
+});
+
+test('#283: exposure is the only QUESTIONS entry that declares a skip', () => {
+  for (const q of QUESTIONS) {
+    if (q.axis === 'exposure') assert.ok(q.skip, 'exposure must declare a skip');
+    else assert.strictEqual(q.skip, undefined, `${q.axis} must not declare a skip`);
+  }
+});
+
+// --------------------------------------------------------------- renderMenu / resolveChoice (#283)
+
+test('renderMenu: writes lists free/direct/isolated and never mentions serial', () => {
+  const menu = renderMenu('writes');
+  assert.match(menu, /free/);
+  assert.match(menu, /direct/);
+  assert.match(menu, /isolated/);
+  assert.doesNotMatch(menu, /serial/);
+});
+
+test('renderMenu: exposure lists its four values plus a trailing skip line', () => {
+  const menu = renderMenu('exposure');
+  assert.match(menu, /5\) skip/);
+});
+
+test('renderMenu: an axis with no choices renders an empty string', () => {
+  assert.strictEqual(renderMenu('nonexistent-axis'), '');
+});
+
+test('resolveChoice: an ordinary axis accepts EITHER the option number or the literal value, identically', () => {
+  assert.deepStrictEqual(resolveChoice('room', '2'), { ok: true, value: 'team' });
+  assert.deepStrictEqual(resolveChoice('room', 'team'), { ok: true, value: 'team' });
+});
+
+test('resolveChoice: writes has no skip — a blank answer refuses, naming the three options', () => {
+  const r = resolveChoice('writes', '');
+  assert.strictEqual(r.ok, false);
+  assert.match(r.message, /free/);
+  assert.match(r.message, /direct/);
+  assert.match(r.message, /isolated/);
+});
+
+test('resolveChoice: exposure\'s skip option resolves via its number', () => {
+  assert.deepStrictEqual(resolveChoice('exposure', '5'), { ok: true, skip: true });
+});
+
+test('resolveChoice: an out-of-range number refuses', () => {
+  const r = resolveChoice('writes', '9');
+  assert.strictEqual(r.ok, false);
+});
+
+test('resolveChoice: channels is multi-select — comma-separated numbers resolve to their values, validated through adoptValidateChannels', () => {
+  const r = resolveChoice('channels', '1,3');
+  assert.strictEqual(r.ok, true);
+  assert.deepStrictEqual(r.value, ['workflow', 'procedure']);
+});
+
+test('resolveChoice: channels rejects "none" combined with another member, via adoptValidateChannels', () => {
+  const r = resolveChoice('channels', 'none,workflow');
+  assert.strictEqual(r.ok, false);
+  assert.match(r.message, /none/);
+});
+
+test('resolveChoice: an unknown axis refuses rather than throwing', () => {
+  const r = resolveChoice('nonexistent-axis', '1');
+  assert.strictEqual(r.ok, false);
+});
+
+// --------------------------------------------------------------- writesGateVerdict (#283, §6)
+
+test('writesGateVerdict: free and isolated always clear, in every combination — the gate exists for direct alone', () => {
+  for (const writes of ['free', 'isolated']) {
+    for (const effExposure of ['none', 'self', 'live', 'released']) {
+      for (const isTTY of [true, false]) {
+        assert.deepStrictEqual(
+          writesGateVerdict({ writes, effExposure, isTTY, colabHuman: false, answeredBy: null }),
+          { ok: true },
+          `writes=${writes} effExposure=${effExposure} isTTY=${isTTY}`,
+        );
+      }
+    }
+  }
+});
+
+test('writesGateVerdict: direct + exposure live/released refuses, exit 5, regardless of human bar', () => {
+  for (const effExposure of ['live', 'released']) {
+    const r = writesGateVerdict({ writes: 'direct', effExposure, isTTY: true, colabHuman: true, answeredBy: 'x' });
+    assert.strictEqual(r.ok, false);
+    assert.strictEqual(r.class, GATE_CLASS.REPO_SHAPE);
+    assert.strictEqual(r.exitCode, 5);
+  }
+});
+
+test('writesGateVerdict: direct + exposure none/self, no TTY, no COLAB_HUMAN refuses, exit 3', () => {
+  for (const effExposure of ['none', 'self', null]) {
+    const r = writesGateVerdict({ writes: 'direct', effExposure, isTTY: false, colabHuman: false, answeredBy: null });
+    assert.strictEqual(r.ok, false);
+    assert.strictEqual(r.class, GATE_CLASS.HUMAN_GATED);
+    assert.strictEqual(r.exitCode, 3);
+  }
+});
+
+test('writesGateVerdict: direct + exposure none clears via COLAB_HUMAN + answeredBy, no TTY needed', () => {
+  const r = writesGateVerdict({ writes: 'direct', effExposure: 'none', isTTY: false, colabHuman: true, answeredBy: 'x' });
+  assert.deepStrictEqual(r, { ok: true });
+});
+
+test('writesGateVerdict: direct + exposure none clears via isTTY alone, no COLAB_HUMAN needed', () => {
+  const r = writesGateVerdict({ writes: 'direct', effExposure: 'none', isTTY: true, colabHuman: false, answeredBy: null });
+  assert.deepStrictEqual(r, { ok: true });
 });
 
 test('axisMissing: an empty descriptor is missing every axis', () => {
