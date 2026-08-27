@@ -69,7 +69,11 @@ test('deriveTier is a function of (production, deploy) only — never reads expo
 
 test('deriveConsequences: writes omitted is NOT vetoed — trunkDirect is "permitted...attended", CI/branch are conditional on session identity', () => {
   const c = deriveConsequences({ exposure: null, writes: null, room: null });
-  assert.strictEqual(c.writesResolved, 'isolated'); // the PARSE is unchanged — resolveWrites(null).value is still 'isolated'
+  // #282 fix: writesResolved is now derived from the veto reading (`vetoed`), not from
+  // resolveWrites(null).value (which reads 'isolated' — source: 'default' — for plain absence).
+  // Before the fix this asserted 'isolated' here, disagreeing with trunkDirect below in the same
+  // returned object; that disagreement was #282's whole complaint.
+  assert.strictEqual(c.writesResolved, 'serial');
   assert.match(c.trunkDirect, /permitted/);
   assert.match(c.trunkDirect, /COLAB_HUMAN=1/);
   assert.match(c.ciRole, /gate for a worktree/);
@@ -117,6 +121,17 @@ test('#208: deriveConsequences: writesSource is null (not "default") when writes
   const c = deriveConsequences({ exposure: null, writes: null, room: null });
   assert.strictEqual(c.writesMethod, 'isolated');
   assert.strictEqual(c.writesSource, null);
+});
+
+test('#282 regression: writesResolved and trunkDirect can never disagree about the veto, for every current/legacy writes value', () => {
+  for (const writes of [undefined, null, 'isolated', 'serial', 'serial-direct', 'serial-gated']) {
+    const c = deriveConsequences({ exposure: null, writes, room: null });
+    assert.strictEqual(
+      c.writesResolved === 'isolated',
+      /^vetoed/.test(c.trunkDirect),
+      `writes=${JSON.stringify(writes)}: writesResolved=${JSON.stringify(c.writesResolved)}, trunkDirect=${JSON.stringify(c.trunkDirect)}`,
+    );
+  }
 });
 
 test('deriveConsequences: gate count and recovery obligation follow exposure, null when undeclared', () => {

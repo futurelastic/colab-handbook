@@ -140,8 +140,14 @@ function deriveConsequences({ exposure, writes, room }) {
   const resolved = writesAuthority.resolveWrites(writes);
   const writesMethod = resolved.value; // 'isolated' | 'serial-direct' | 'serial-gated' — still a parse; decides nothing below
   const writesSource = writes === null || writes === undefined ? null : resolved.source;
-  const writesResolved = writesMethod === 'isolated' ? 'isolated' : 'serial'; // 2-state summary, kept for existing callers
   const vetoed = writesAuthority.trunkDirectVetoed(writes); // the ONE reading that decides anything now (#237)
+  // #282 fix: derived from `vetoed` (the RAW-value veto reading), never from resolveWrites(writes)
+  // .value — that value reads 'isolated' for BOTH an explicit `writes: isolated` declaration
+  // (source: 'declared') AND simple absence (source: 'default'), so a `writesResolved: 'isolated'`
+  // could sit in the same --json blob as a `trunkDirect: 'permitted...'` computed from the same
+  // raw value via `trunkDirectVetoed` — the exact disagreement #282 reported. Both fields now read
+  // the same underlying fact, so that disagreement is structurally unreachable.
+  const writesResolved = vetoed ? 'isolated' : 'serial'; // 2-state summary, kept for existing callers
 
   const gateCount = exposure && Object.prototype.hasOwnProperty.call(axisAuthority.GATE_COUNT, exposure)
     ? axisAuthority.GATE_COUNT[exposure]
