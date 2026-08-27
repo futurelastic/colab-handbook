@@ -1020,9 +1020,10 @@ than guessed.
   `cancel-in-progress` a cancelled straggler can outrank a passing run on the same commit.
   The right question: does a completed, successful run exist for this branch's current
   head sha? `colab ship` asks it that way.
-- **That resolves a FALSE red — a real one has a different, human-only door (#105).** A
-  **genuinely** red trunk (the sha really failed) is a true deadlock when the candidate
-  branch's entire content IS the fix — see *Red-trunk exemption* below.
+- **That resolves a FALSE red — a real one has two different doors, one of them
+  human-only (#105), one machine-checkable (#281).** A **genuinely** red trunk (the sha
+  really failed) is a true deadlock when the candidate branch's entire content IS the
+  fix — see *Red-trunk exemption* and *Cure rule* below.
 
 ### Is a shipped half actually shippable? — the mechanical gate is not the judgement call (#263)
 
@@ -1583,6 +1584,57 @@ is known-failing.
   borrows trunk's advisory verdict when the line has no runs of its own; widening the
   exemption to lines is a deliberately unmade decision.
 
+#### Cure rule — the machine-checkable door through trunk-CI-green (#281)
+
+A second door through the same precondition, tried **before** ci-grant and needing
+**no human step at all** — `colab ship` fires it automatically the moment the raw
+trunk-CI-green check fails HUMAN_GATED, and falls straight through to the ordinary
+ci-grant when any condition below is not met. Fires **iff**:
+
+1. the branch **contains trunk's current red head sha** as an ancestor — proof the
+   branch was built against the exact failure, not merely conflict-free with it. A
+   ci-grant's evidence guard checks the branch's own head is green, but never
+   containment: a branch cut from an OLDER, green base can carry a green run that
+   proves nothing about the redness it is being exempted from.
+2. the branch's own CI is green **at its own current head**, measured, never
+   asserted — identical "ask by sha" discipline to ci-grant's evidence guard.
+3. the **same anti-stacking guard** ci-grant uses holds — no prior grant OR cure
+   already merged while trunk has stayed continuously red since. A repo that
+   auto-cures once and stays red anyway must not auto-cure again on the same
+   continuous red.
+4. the branch diff does **not** touch `.github/workflows/**` — a branch may not
+   self-certify a change to the CI configuration that is grading it. This door
+   stays behind a human ci-grant.
+
+Conditions 1+2 together mean the branch's tree passed the full suite **including
+the tests trunk is currently failing** — merging it provably turns trunk green.
+That is the one thing the human click on a ci-grant is supposed to certify,
+mechanically checkable instead — which is why this door needs no `COLAB_HUMAN=1`,
+no label, and no tracker comment: nothing here is a human write.
+
+- **Honest limit, not glossed over:** test-file self-weakening (gutting the failing
+  tests to go green) is invisible at this gate either way — check-runs name jobs,
+  not files. Condition 4 closes only the adjacent, checkable door (weakening the CI
+  config itself); content weakening is caught where it is caught today — review/grade
+  time, downstream of ship.
+- **Containment costs a fresh CI round, by design.** Requiring the red sha in the
+  branch forces a rebase onto red trunk, which moves the branch head and
+  invalidates any prior green run — every cure pays one CI round at the new head.
+  That is the price of the proof, not overhead to trim.
+- A cured merge carries a `CI-Cure:` trailer instead of `CI-Grant:` — unlike the
+  grant's trailer it names no issue (the cure rule never reads the tracker at all,
+  so it has none to name), only the branch, the red trunk sha it contained, and the
+  evidence run sha.
+- **Group branches get simpler under this door.** A ci-grant on a group branch
+  requires a valid grant on every member issue; the cure's evidence is branch-level,
+  so the all-or-nothing-per-branch property holds with zero per-issue paperwork.
+- **`colab ci-grant`'s anti-stacking scan now recognises either trailer** —
+  `CI-Grant:` or `CI-Cure:` — as "an exemption already merged against this red", so a
+  repo that has used both doors is scanned as one continuous stacking history rather
+  than two independent ones.
+- Scoped identically to the grant: trunk-only, and never exempts anything but
+  trunk-CI-green.
+
 #### Scheduled drivers — provenance and autonomy meet a caller that is not a person
 
 A **scheduled driver** — a per-repo autopilot waking on a cadence, shipping finished
@@ -1612,11 +1664,14 @@ label, comment, or merge directly.
 
 **It may complete a trunk merge only where the repo has granted `autonomy: auto-trunk`,
 and only through `colab ship`**, subject to the identical gates as any other caller (CI
-green or valid CI grant, no new migrations or valid migration grant, no hand-merge
-conflict, no `--force`). Without the grant, `ship` refuses and a human runs Phase B.
+green, a proven cure, or a valid CI grant, no new migrations or valid migration grant,
+no hand-merge conflict, no `--force`). Without a proven cure or the grant, `ship`
+refuses and a human runs Phase B.
 
-**A genuinely red trunk with no valid CI grant is human-gated, not self-clearing** — a
-scheduler must not queue and wait on it; it parks, states it once, and stops.
+**A genuinely red trunk with no proven cure and no valid CI grant is human-gated, not
+self-clearing** — a scheduler must not queue and wait on it; it parks, states it once,
+and stops. A scheduler never mints a ci-grant itself either way — only the cure rule's
+mechanical door is available to it unattended, exactly as it is to any other caller.
 
 **Never promotes and never tags, on any repo, on any tier**, with no field able to say
 otherwise.
