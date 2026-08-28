@@ -9,8 +9,8 @@
 const test = require('node:test');
 const assert = require('node:assert');
 const {
-  resolveWrites, isAcceptedWritesValue, trunkDirectVetoed, writesSyncAdvisory,
-  WRITES_DECLARED, WRITES_LEGACY,
+  resolveWrites, writesMode, isAcceptedWritesValue, trunkDirectVetoed, writesSyncAdvisory,
+  WRITES_DECLARED, WRITES_LEGACY, WRITES_CURRENT, WRITES_LEGACY_FREE, WRITES_ACCEPTED_SET,
 } = require('./writes-authority.js');
 
 test('WRITES_DECLARED is exactly the three current methods', () => {
@@ -52,6 +52,63 @@ test('isAcceptedWritesValue: anything else is rejected', () => {
   assert.strictEqual(isAcceptedWritesValue('parallel'), false);
   assert.strictEqual(isAcceptedWritesValue('SERIAL'), false);
   assert.strictEqual(isAcceptedWritesValue('serial-gated '), false); // no trimming
+});
+
+// --- #283: WRITES_CURRENT / WRITES_LEGACY_FREE / the widened accepted set --------------------
+
+test('WRITES_CURRENT is exactly the three #283 spellings', () => {
+  assert.deepStrictEqual([...WRITES_CURRENT].sort(), ['direct', 'free', 'isolated']);
+});
+
+test('WRITES_LEGACY_FREE is exactly the three pre-#283 spellings, all folding to free', () => {
+  assert.deepStrictEqual([...WRITES_LEGACY_FREE].sort(), ['serial', 'serial-direct', 'serial-gated']);
+});
+
+test('WRITES_ACCEPTED_SET is the union of both vocabularies — six spellings', () => {
+  assert.deepStrictEqual(
+    [...WRITES_ACCEPTED_SET].sort(),
+    ['direct', 'free', 'isolated', 'serial', 'serial-direct', 'serial-gated'],
+  );
+});
+
+test('isAcceptedWritesValue: free and direct are accepted, alongside every legacy spelling', () => {
+  assert.strictEqual(isAcceptedWritesValue('free'), true);
+  assert.strictEqual(isAcceptedWritesValue('direct'), true);
+  assert.strictEqual(isAcceptedWritesValue('serial'), true);
+  assert.strictEqual(isAcceptedWritesValue('serial-direct'), true);
+  assert.strictEqual(isAcceptedWritesValue('serial-gated'), true);
+});
+
+// --- writesMode (#283) — the TOTAL reading deriveConsequences uses instead of resolveWrites ---
+
+test('writesMode: absence (null/undefined) resolves to free, source default', () => {
+  assert.deepStrictEqual(writesMode(null), { mode: 'free', source: 'default' });
+  assert.deepStrictEqual(writesMode(undefined), { mode: 'free', source: 'default' });
+});
+
+test('writesMode: every legacy spelling (including the "serial" alias) resolves to free, source legacy', () => {
+  for (const v of WRITES_LEGACY_FREE) {
+    assert.deepStrictEqual(writesMode(v), { mode: 'free', source: 'legacy' }, v);
+  }
+});
+
+test('writesMode: each current spelling reads as itself, source declared', () => {
+  for (const v of WRITES_CURRENT) {
+    assert.deepStrictEqual(writesMode(v), { mode: v, source: 'declared' }, v);
+  }
+});
+
+test('writesMode: an unrecognised string fails closed to free, source unrecognised — never toward isolated or direct', () => {
+  assert.deepStrictEqual(writesMode('parallel'), { mode: 'free', source: 'unrecognised' });
+  assert.deepStrictEqual(writesMode('DIRECT'), { mode: 'free', source: 'unrecognised' }); // case-sensitive
+});
+
+test('writesMode is total — every WRITES_ACCEPTED_SET member plus absence plus a typo all classify, none throw', () => {
+  const inputs = [null, undefined, 'parallel', ...WRITES_ACCEPTED_SET];
+  for (const raw of inputs) {
+    const r = writesMode(raw);
+    assert.ok(['free', 'direct', 'isolated'].includes(r.mode), `writesMode(${JSON.stringify(raw)}) = ${JSON.stringify(r)}`);
+  }
 });
 
 // --- trunkDirectVetoed (#237 — the ⚖ Decision on #233) --------------------------------------
@@ -123,4 +180,21 @@ test('writesSyncAdvisory: "serial-gated" points at the gating axis instead, dist
   assert.match(msg, /is inert/);
   assert.match(msg, /axis that owns gating/);
   assert.doesNotMatch(msg, /may be removed/);
+});
+
+// --- #283: writesSyncAdvisory gains free/direct branches, added for totality (near-dead code —
+// this call site is gated on a stamp predating ⚖ #237, and no repo can predate #237 while
+// already declaring #283's vocabulary) --------------------------------------------------------
+
+test('writesSyncAdvisory: "free" gets its own coexistence message, distinct from every other message', () => {
+  const msg = writesSyncAdvisory('free');
+  assert.match(msg, /coexistence/i);
+  assert.notStrictEqual(msg, writesSyncAdvisory(undefined));
+  assert.notStrictEqual(msg, writesSyncAdvisory('isolated'));
+});
+
+test('writesSyncAdvisory: "direct" names it as declared, not yet enforced, distinct from every other message', () => {
+  const msg = writesSyncAdvisory('direct');
+  assert.match(msg, /not yet enforced/);
+  assert.doesNotMatch(msg, /VETOES/);
 });

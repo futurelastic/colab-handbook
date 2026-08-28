@@ -32,6 +32,7 @@ const writesAuthority = require('./writes-authority.js');
 const yaml = require('./yaml.js');
 const { consumerEvidence, describeEvidence } = require('./consumer-evidence.js');
 const { evaluateExposure } = require('./exposure-shape.js');
+const { UserError } = require('./util.js');
 
 const ROW_NAMES = ['tier', 'room', 'exposure', 'writes', 'channels'];
 
@@ -125,39 +126,57 @@ const RECOVERY_OBLIGATION = Object.freeze({
  *
  * #237 (⚖ Decision on #233): `writes` stopped selecting a write-conflict prevention METHOD and
  * became a two-state VETO — `trunkDirectVetoed` (tools/lib/writes-authority.js), computed from
- * the RAW value, is the only reading anything downstream may act on now. `writesMethod` /
- * `writesSource` / `writesResolved` are UNCHANGED — they still report `resolveWrites`'s parse,
- * which is still accurate as a parse — but `ciRole` and `branchMandatory` (and the new
- * `trunkDirect`, below) no longer switch on that 3-way method: they switch on the veto plus
- * session attendance, which `deriveConsequences` cannot see (it is a session-identity fact, not a
- * descriptor fact) and so states as a conditional rather than a single resolved outcome.
+ * the RAW value, is the only reading anything downstream may act on now.
  *
- * #208's original three-method split is preserved in comments only where it explains why
- * `writesMethod` still exists as a value (a legacy alias question the descriptor may still be
- * asked to resolve), never as something a consequence is derived FROM anymore.
+ * #283 (structural fix for #282, replacing the `writesMethod`/`resolveWrites` reading): this
+ * function now reads `writesAuthority.writesMode(writes)` — a TOTAL function onto exactly
+ * `free` / `direct` / `isolated` — instead of `resolveWrites`, so `writesResolved` and
+ * `trunkDirect` (still computed from the raw value via `trunkDirectVetoed`, unchanged since
+ * #237) are derived from the SAME underlying fact and can never disagree in the same --json
+ * blob. That disagreement was #282's whole complaint: `resolveWrites(raw).value` reads
+ * 'isolated' for BOTH an explicit declaration and plain absence, so a `writesResolved` sourced
+ * from it could say "isolated" while `trunkDirect` (sourced from `trunkDirectVetoed(raw)`) said
+ * "permitted", in the same returned object. `writesMethod` — the retired 3-way parse whose only
+ * job was that now-wrong reading — is dropped from the returned object entirely; nothing
+ * downstream may read it as a method choice (#282's own suggested fix).
+ *
+ * `direct` is declared, stored, and honestly reported here — but its runtime is DEFERRED (#283,
+ * Approach §2): `trunkDirect`/`ciRole`/`branchMandatory` each name that explicitly ("declared,
+ * not yet enforced") rather than silently reusing `free`'s text, so a `direct` repo's report
+ * never claims a guarantee this diff does not implement.
  */
 function deriveConsequences({ exposure, writes, room }) {
-  const resolved = writesAuthority.resolveWrites(writes);
-  const writesMethod = resolved.value; // 'isolated' | 'serial-direct' | 'serial-gated' — still a parse; decides nothing below
-  const writesSource = writes === null || writes === undefined ? null : resolved.source;
-  const writesResolved = writesMethod === 'isolated' ? 'isolated' : 'serial'; // 2-state summary, kept for existing callers
-  const vetoed = writesAuthority.trunkDirectVetoed(writes); // the ONE reading that decides anything now (#237)
+  const { mode: writesResolved, source: modeSource } = writesAuthority.writesMode(writes);
+  const writesSource = writes === null || writes === undefined ? null : modeSource;
+  const vetoed = writesAuthority.trunkDirectVetoed(writes); // the ONE reading that decides anything now (#237) — unchanged, raw value, direct never vetoes
 
   const gateCount = exposure && Object.prototype.hasOwnProperty.call(axisAuthority.GATE_COUNT, exposure)
     ? axisAuthority.GATE_COUNT[exposure]
     : null;
 
+  const DIRECT_DEFERRED_POINTER = 'declared, not yet enforced — see CONVENTIONS.md §2, '
+    + '"writes: direct — declared today, runtime deferred (#283)"';
+
   // #237: absence and every non-veto value now permit trunk-direct to an ATTENDED session
   // (COLAB_HUMAN=1) — a session-identity fact this function cannot see from the descriptor
-  // alone, so `trunkDirect` names both branches rather than resolving to one.
+  // alone, so `trunkDirect` names both branches rather than resolving to one. `direct` gets its
+  // own branch (#283): it never over-claims a guarantee `free` does not already give — see
+  // writes-authority.js's `WRITES_CURRENT` comment on the fail-safe direction this rests on.
   const trunkDirect = vetoed
     ? 'vetoed — writes: isolated forbids trunk-direct for every session, human or not (CONVENTIONS.md §2, Writes)'
-    : 'permitted to an attended human session only — COLAB_HUMAN=1, set on a human\'s explicit instruction (CONVENTIONS.md §5, The human flag)';
+    : writesResolved === 'direct'
+      ? `${DIRECT_DEFERRED_POINTER} — an attended session may take trunk-direct today exactly as under free (COLAB_HUMAN=1, CONVENTIONS.md §5, The human flag)`
+      : 'permitted to an attended human session only — COLAB_HUMAN=1, set on a human\'s explicit instruction (CONVENTIONS.md §5, The human flag)';
 
+  // #283, Approach §3 (Q2 — decided and shipped): under `direct` there is no merge event, so CI
+  // can never gate a merge that never happens — `ciRole` is alarm, always. This is cheap to
+  // decide because `ciRole` is derived prose here, not enforcement.
   const ciRole = vetoed
     ? 'gate — isolated writers always branch, so CI runs before the merge lands (CONVENTIONS.md §7)'
-    : 'gate for a worktree session, alarm for an attended trunk-direct one — what CI is follows '
-      + 'whether the unit has a branch, a fact about the session rather than a declared value (CONVENTIONS.md §7)';
+    : writesResolved === 'direct'
+      ? `alarm, always — ${DIRECT_DEFERRED_POINTER}`
+      : 'gate for a worktree session, alarm for an attended trunk-direct one — what CI is follows '
+        + 'whether the unit has a branch, a fact about the session rather than a declared value (CONVENTIONS.md §7)';
 
   const ciDepth = (exposure === 'live' || exposure === 'released')
     ? 'thorough — answers to a consumer with no way to ask a clarifying question (CONVENTIONS.md §7)'
@@ -173,16 +192,18 @@ function deriveConsequences({ exposure, writes, room }) {
 
   const branchMandatory = vetoed
     ? 'mandatory — isolated writers always use a worktree + branch'
-    : 'mandatory for every session except an attended trunk-direct one, which needs a branch only '
-      + 'when more than one unit is already in flight, or a gate must inspect a unit before it '
-      + 'lands (CONVENTIONS.md §2, Writes)';
+    : writesResolved === 'direct'
+      ? `${DIRECT_DEFERRED_POINTER} — the same two conditions as free decide it today`
+      : 'mandatory for every session except an attended trunk-direct one, which needs a branch only '
+        + 'when more than one unit is already in flight, or a gate must inspect a unit before it '
+        + 'lands (CONVENTIONS.md §2, Writes)';
 
   const recoveryObligation = exposure && Object.prototype.hasOwnProperty.call(RECOVERY_OBLIGATION, exposure)
     ? RECOVERY_OBLIGATION[exposure]
     : null;
 
   return {
-    writesResolved, writesMethod, writesSource, trunkDirect, gateCount, ciRole, ciDepth,
+    writesResolved, writesSource, trunkDirect, gateCount, ciRole, ciDepth,
     ceremonyWeight, branchMandatory, recoveryObligation,
   };
 }
@@ -331,13 +352,33 @@ function detect(io, extra = {}) {
 // =========================================================================================
 
 const VALID_ROOM = new Set(['solo', 'team', 'public']);
-// #208: `colab adopt --writes` accepts the current 3-way vocabulary AND the legacy alias
-// `serial` — an existing script or muscle-memory invocation keeps working, exactly like the
-// audit's own read-side acceptance (tools/lib/writes-authority.js is the ONE set both share).
+// #283: `colab adopt --writes` accepts the CURRENT 3-way vocabulary (free/direct/isolated) AND
+// every pre-#283 spelling (isolated/serial-direct/serial-gated, plus the `serial` alias) — an
+// existing script or muscle-memory invocation keeps working, exactly like the audit's own
+// read-side acceptance (tools/lib/writes-authority.js's WRITES_ACCEPTED_SET is the ONE set both
+// share). `--writes direct` is legal here but subject to `writesGateVerdict` below before a
+// write may proceed.
 const VALID_WRITES = writesAuthority.WRITES_ACCEPTED_SET;
 const VALID_EXPOSURE = new Set(['none', 'self', 'live', 'released']);
 const VALID_CHANNELS = new Set(['workflow', 'hook', 'procedure', 'checkout', 'artifact', 'data', 'none']);
 const VALID_DEPLOY = new Set(['tag', 'manual', 'push-main', 'none']);
+
+/** `--channels` / the wizard's shared validator (#283: moved here from tools/colab so
+ * `resolveChoice` below can share it with `adoptAnswersFromFlags`'s flag-driven path without a
+ * second copy): non-empty, every member in VALID_CHANNELS, no duplicate member, and "none" must
+ * stand alone. Throws UserError — the CLI's flag path lets that surface directly; `resolveChoice`
+ * below catches it and turns it into an `{ ok: false, message }`. */
+function adoptValidateChannels(list) {
+  if (!Array.isArray(list) || list.length === 0) {
+    throw new UserError('--channels must be a non-empty comma-separated list — use "none" if nothing runs this code anywhere');
+  }
+  const unknown = list.filter((c) => !VALID_CHANNELS.has(c));
+  if (unknown.length) throw new UserError(`--channels contains ${JSON.stringify(unknown)}, expected members of: ${[...VALID_CHANNELS].join(', ')}`);
+  const deduped = [...new Set(list)];
+  if (deduped.length !== list.length) throw new UserError(`--channels contains a duplicate member — declare each channel once: ${JSON.stringify(deduped)}`);
+  if (list.includes('none') && list.length > 1) throw new UserError('--channels combines "none" with another value — "none" must stand alone');
+  return list;
+}
 
 // ---------------------------------------------------------------------- §9 question set
 
@@ -350,6 +391,16 @@ const VALID_DEPLOY = new Set(['tag', 'manual', 'push-main', 'none']);
  * `tier` is a function of those two answers, never a row a human answers directly
  * (tools/lib/adopt.js:deriveTier). The `axis` name matches `ROW_NAMES` on purpose: it is the
  * same five names the report table already uses, so `--axis` and the report agree on vocabulary.
+ *
+ * #283: every entry below now carries a `choices` array — the wizard's forced multiple-choice
+ * menu, rendered by `renderMenu(axis)` and resolved by `resolveChoice(axis, raw)` (both below).
+ * `tier`'s `choices` are the `deploy` menu's four options — `production` is a URL, not an enum
+ * member, so it is asked as its own two-option gate ("does a deploy target exist today?")
+ * directly in `tools/colab`'s `adoptAskInteractive`, never through this generic mechanism; a URL
+ * cannot honestly be a menu choice without pretending it belongs to a closed set. `channels` is
+ * the one `multi: true` entry — "one or more numbers or names, comma-separated" — and its
+ * resolution still runs through `adoptValidateChannels` unchanged (dedupe, "none" stands alone).
+ * `exposure` is the one entry with a `skip` — see the "blank = skip" rule below its prompt.
  */
 const QUESTIONS = Object.freeze([
   {
@@ -358,30 +409,147 @@ const QUESTIONS = Object.freeze([
     prompt: 'Does a deploy target exist today (a URL), and how is it reached — a tag gates '
       + 'production, the promotion itself deploys (push-main), a human runs a runbook '
       + '(manual), or nothing is live yet (none)?',
+    choices: [
+      { value: 'push-main', label: 'the promotion itself deploys' },
+      { value: 'tag', label: 'a version tag gates production' },
+      { value: 'manual', label: 'a human runs a documented runbook' },
+      { value: 'none', label: 'nothing is live yet' },
+    ],
   },
-  { axis: 'room', keys: ['room'], prompt: 'Who else works here? (solo / team / public)' },
+  {
+    axis: 'room',
+    keys: ['room'],
+    prompt: 'Who else works here? (solo / team / public)',
+    choices: [
+      { value: 'solo', label: 'nobody else could ever read what a session writes here' },
+      { value: 'team', label: 'colleagues could read the record' },
+      { value: 'public', label: 'anyone could read the record' },
+    ],
+  },
   {
     axis: 'exposure',
     keys: ['exposure'],
     prompt: 'What would break if you merged something wrong here? (none / self / live / released)',
+    choices: [
+      { value: 'none', label: 'nothing outside this room consumes a merge' },
+      { value: 'self', label: 'only parties already in the room' },
+      { value: 'live', label: 'the promotion into trunk is itself the deploy' },
+      { value: 'released', label: 'a deliberate artifact (a tag, a runbook) deploys' },
+    ],
+    // #283: the ONE row that keeps a decline path — CONVENTIONS.md §9's own fallback (derive
+    // `tier` from production+deploy instead) is a real fallback that consumes the absence. The
+    // other four rows have no such fallback, so a skip there would just re-create #282's "leave
+    // unanswered" shape under a different name.
+    skip: { label: 'skip — derive tier from production + deploy instead' },
   },
   {
     axis: 'writes',
     keys: ['writes'],
-    // #237: `writes` is a VETO, not a method choice — absence and every other value permit an
-    // attended human session to commit straight to trunk alongside worktree sessions; only an
-    // explicit `isolated` forbids that for everyone, human included.
+    // #283: `free` IS the former blank. The old prompt told a human to "leave unanswered" for
+    // coexistence because there was no spelling for it; now `free` names it directly, so this
+    // prompt no longer offers (or needs) a decline — a later reader must not "restore" the
+    // decline path here as a regression fix, it is deliberately gone (§5 of the plan on #283).
     prompt: 'Should a human ever be allowed to commit straight to this repo\'s trunk checkout, '
-      + 'alongside worktree sessions? Declare isolated to forbid it outright; leave unanswered '
-      + '(or declare any other value) to allow it.',
+      + 'alongside worktree sessions? free allows it with no runtime restriction; direct allows '
+      + 'it and additionally declares intent for a stronger guarantee later (declared today, not '
+      + 'yet enforced — CONVENTIONS.md §2); isolated vetoes it outright, human or not.',
+    choices: [
+      { value: 'free', label: 'no restriction beyond the ordinary worktree flow (the default)' },
+      { value: 'direct', label: 'declares intent for a future guarantee; declared today, not yet enforced' },
+      { value: 'isolated', label: 'vetoes trunk-direct outright, human or not' },
+    ],
   },
   {
     axis: 'channels',
     keys: ['channels'],
     prompt: 'By what path does a commit reach something that runs it? (a list — several may '
       + 'apply: workflow / hook / procedure / checkout / artifact / data / none)',
+    multi: true,
+    choices: [
+      { value: 'workflow', label: 'merge → CI → a deploy workflow' },
+      { value: 'hook', label: 'a git hook fires on a git act' },
+      { value: 'procedure', label: 'a human builds/installs/restarts by a documented procedure' },
+      { value: 'checkout', label: 'a per-machine service serves the working tree directly' },
+      { value: 'artifact', label: 'a tag or package that adopters/others consume' },
+      { value: 'data', label: 'the effect lands in another system\'s production data' },
+      { value: 'none', label: 'nothing runs this code anywhere' },
+    ],
   },
 ]);
+
+// ---------------------------------------------------------------------- the wizard (#283) — pure menu logic
+
+/**
+ * The numbered menu block for `axis` — one line per choice ("N) value — label"), plus a
+ * trailing skip line when the axis declares one (`exposure` only, today). Pure string building;
+ * `tools/colab`'s `adoptAskInteractive` prints the question's `prompt` separately, then this.
+ */
+function renderMenu(axis) {
+  const q = QUESTIONS.find((x) => x.axis === axis);
+  if (!q || !q.choices) return '';
+  const lines = q.choices.map((c, i) => `  ${i + 1}) ${c.value} — ${c.label}`);
+  if (q.skip) lines.push(`  ${q.choices.length + 1}) ${q.skip.label}`);
+  return lines.join('\n');
+}
+
+/**
+ * Resolve a raw typed answer for `axis` against its menu (#283). Accepts EITHER the option
+ * NUMBER or the literal VALUE — muscle memory and scriptability read the same validating set:
+ * `resolveChoice('room', '2')` and `resolveChoice('room', 'team')` both succeed identically.
+ *
+ * Returns one of:
+ *   { ok: true, value }     — an ordinary choice, resolved to its declared value.
+ *   { ok: true, skip: true } — the skip option, only for an axis that declares one (`exposure`).
+ *   { ok: false, message }  — anything else; `message` names the valid options so a reprompt
+ *                             (or a scripted caller) knows exactly what would have worked.
+ *
+ * `channels` is the one `multi: true` axis: `raw` is a comma-separated list of numbers/names,
+ * each resolved independently against the same menu, then the whole resulting list is run
+ * through `adoptValidateChannels` UNCHANGED (dedupe, "none" stands alone) — a thrown UserError
+ * from that call becomes this function's ordinary `{ ok: false, message }` shape, never a throw.
+ */
+function resolveChoice(axis, raw) {
+  const q = QUESTIONS.find((x) => x.axis === axis);
+  const trimmed = (raw === null || raw === undefined ? '' : String(raw)).trim();
+  if (!q || !q.choices) return { ok: false, message: `no menu defined for axis "${axis}"` };
+
+  const findOne = (part) => {
+    if (/^\d+$/.test(part)) {
+      const byNumber = q.choices[Number(part) - 1];
+      if (byNumber) return byNumber;
+    }
+    return q.choices.find((c) => c.value === part) || null;
+  };
+  const optionsText = () => {
+    const base = q.choices.map((c, i) => `${i + 1}) ${c.value}`).join(', ');
+    return q.skip ? `${base}, ${q.choices.length + 1}) ${q.skip.label}` : base;
+  };
+
+  if (q.multi) {
+    if (trimmed === '') {
+      return { ok: false, message: `choose one or more of: ${q.choices.map((c) => c.value).join(', ')} (numbers or names, comma-separated)` };
+    }
+    const parts = trimmed.split(',').map((s) => s.trim()).filter(Boolean);
+    const values = [];
+    for (const part of parts) {
+      const choice = findOne(part);
+      if (!choice) return { ok: false, message: `"${part}" is not one of: ${optionsText()}` };
+      values.push(choice.value);
+    }
+    try {
+      return { ok: true, value: adoptValidateChannels(values) };
+    } catch (e) {
+      return { ok: false, message: e.message };
+    }
+  }
+
+  if (q.skip && trimmed === String(q.choices.length + 1)) return { ok: true, skip: true };
+  if (trimmed === '') return { ok: false, message: `choose one of: ${optionsText()}` };
+
+  const choice = findOne(trimmed);
+  if (!choice) return { ok: false, message: `"${trimmed}" is not one of: ${optionsText()}` };
+  return { ok: true, value: choice.value };
+}
 
 /**
  * Is `axis` (one of `ROW_NAMES`) still unanswered in `cfg`? This is deliberately NOT the same
@@ -531,6 +699,54 @@ function gateVerdict({ exposure, currentExposure, shapeCtx, evidence, isTTY, col
   return { ok: true };
 }
 
+/**
+ * #283, Approach §6: the declaration-time gate for `writes: direct` — a SIBLING of `gateVerdict`
+ * above, never an overload of it, so neither function's existing tests get entangled with the
+ * other's. `direct` is the only `writes` value that EXPANDS permission relative to `free`
+ * (`free`/`isolated` never do), so it is the only one gated:
+ *
+ *   1. Human bar — the same bar as lowering exposure: an interactive TTY, or `COLAB_HUMAN=1`
+ *      together with `--answered-by <name>`. `GATE_CLASS.HUMAN_GATED`, exit 3.
+ *   2. Exposure refusal, BOTH directions — refused when the EFFECTIVE exposure (this run's
+ *      exposure answer, else the descriptor's own axis of record) is `live` or `released`.
+ *      `GATE_CLASS.REPO_SHAPE`, exit 5. The symmetric case matters: declaring `writes: direct`
+ *      when exposure is already live/released is refused, and so is answering
+ *      `--exposure live|released` against an already-declared `writes: direct` (or one answered
+ *      in the SAME run) — the caller (`tools/colab`'s `cmdAdopt`) is what computes `effExposure`
+ *      to cover both orders; this function only ever sees the resolved value.
+ *
+ * No `--force`, no override flag — consistent with `HELP_ADOPT`'s "There is no --force." A
+ * `writes` value other than `direct` always clears this gate; it exists for `direct` alone.
+ */
+function writesGateVerdict({ writes, effExposure, isTTY, colabHuman, answeredBy }) {
+  if (writes !== 'direct') return { ok: true };
+
+  if (effExposure === 'live' || effExposure === 'released') {
+    return {
+      ok: false,
+      class: GATE_CLASS.REPO_SHAPE,
+      exitCode: EXIT_CODE[GATE_CLASS.REPO_SHAPE],
+      message: `writes: direct is refused when exposure is ${JSON.stringify(effExposure)} — a `
+        + 'repo where a merge reaches users or adopters directly is exactly the shape this '
+        + 'declaration-time gate exists to stop before direct\'s runtime lands (CONVENTIONS.md '
+        + '§2, "writes: direct — declared today, runtime deferred (#283)")',
+    };
+  }
+
+  const authorized = isTTY || (colabHuman && answeredBy);
+  if (!authorized) {
+    return {
+      ok: false,
+      class: GATE_CLASS.HUMAN_GATED,
+      exitCode: EXIT_CODE[GATE_CLASS.HUMAN_GATED],
+      message: 'declaring writes: direct requires a human: answer at an interactive terminal, or '
+        + 're-run with COLAB_HUMAN=1 and --answered-by "<name>" — direct is the one writes value '
+        + 'that EXPANDS permission',
+    };
+  }
+  return { ok: true };
+}
+
 // ---------------------------------------------------------------------- provenance + the append-only write
 
 /** The comment placed beside a written key — never trusted as identity (see gateVerdict's
@@ -596,13 +812,17 @@ module.exports = {
   VALID_EXPOSURE,
   VALID_CHANNELS,
   VALID_DEPLOY,
+  adoptValidateChannels,
   QUESTIONS,
+  renderMenu,
+  resolveChoice,
   axisMissing,
   EXPOSURE_RANK,
   GATE_CLASS,
   EXIT_CODE,
   exposureShapeVerdict,
   gateVerdict,
+  writesGateVerdict,
   provenanceComment,
   renderDescriptor,
 };

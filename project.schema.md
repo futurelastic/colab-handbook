@@ -692,8 +692,10 @@ never relaxes.
 
 ```yaml
 # (key omitted)          # coexistence — the default
+writes: free              # coexistence, spelled out (#283) — IS the former blank
+writes: direct             # coexistence, PLUS a declared intent (#283) — declared today, runtime deferred
 writes: isolated         # the veto — no trunk-direct here, human or not; NOT the default
-writes: serial-direct    # inert (⚖ #233) — identical to omitting the key
+writes: serial-direct    # inert (⚖ #233) — identical to omitting the key (reads as `free`, #283)
 writes: serial-gated     # inert (⚖ #233) — its one real assertion moved to the axis that owns gating
 writes: serial            # LEGACY ALIAS of serial-direct — inert, same as omitted
 ```
@@ -710,6 +712,19 @@ twice over (neither the default nor merely descriptive) — but the paragraphs a
 below this note describe
 BEHAVIOUR, and state what is true today, not the retired three-method reading.
 
+**#283 (2026-08-27) widened the vocabulary again, without touching the two-state model
+above.** `free` and `direct` are the CURRENT spellings the wizard (`colab adopt`) offers;
+every pre-#283 spelling — `isolated`/`serial-direct`/`serial-gated`, plus the `serial`
+alias — is still accepted and still resolves the same way. `free` is coexistence, spelled
+out: it IS the state absence already named, given a name of its own because the old prompt
+had to tell a human to "leave unanswered" for it. `direct` is coexistence **plus a declared
+intent**: stored and reported honestly (`tools/lib/writes-authority.js`'s `writesMode`,
+`tools/lib/adopt.js`'s `deriveConsequences`), but its runtime is **deferred** —
+`trunkDirectVetoed('direct')` is `false`, identical to `free`, so declaring it changes no
+session's actual permissions today. See `CONVENTIONS.md` §2, "writes: direct — declared
+today, runtime deferred (#283)" for the four open questions this vocabulary shipped with
+and how each is unblocked.
+
 A fourth shape — many units in flight, writing trunk-direct, with no attendance and no
 veto — is not legal under either state; nothing coordinates concurrent UNATTENDED
 trunk-direct writers, so it stays named as incoherent (`CONVENTIONS.md` [§2](CONVENTIONS.md#writes--the-trunk-direct-veto-and-the-two-things-that-make-a-branch-mandatory), *Writes*)
@@ -719,7 +734,7 @@ and has no declarable value.
 repo that does not declare `writes: isolated`.** Two columns keyed on the descriptor now,
 not three keyed on a declared method — the runtime distinction moved into the rows:
 
-| constraint | `writes: isolated` (the veto) | absent · `serial` · `serial-direct` · `serial-gated` (coexistence) |
+| constraint | `writes: isolated` (the veto) | `free` · `direct` · absent · `serial` · `serial-direct` · `serial-gated` (coexistence) |
 |---|---|---|
 | trunk-direct, human at the keyboard (`COLAB_HUMAN=1`) | **forbidden** | allowed |
 | trunk-direct, automated session | **forbidden** | **forbidden** |
@@ -973,7 +988,7 @@ the shape that shows it. One writer at a time says nothing about who reads the r
 | toolchain pin vs manifest agreement | building on one version, deploying on another |
 | `ceremony` ∈ {`standard`, `light`} when set | a misspelled value silently read as `standard` |
 | `ceremony: light` → not `autonomy: auto-trunk` | an unattended merge with no evidence trail nobody can audit |
-| `writes` ∈ {`isolated`, `serial-direct`, `serial-gated`, `serial`} when set | a misspelled value silently read as coexistence (⚖ #233: never veto on an unrecognised value) |
+| `writes` ∈ {`free`, `direct`, `isolated`, `serial-direct`, `serial-gated`, `serial`} when set | a misspelled value silently read as coexistence (⚖ #233: never veto on an unrecognised value) |
 | `room` ∈ {`solo`, `team`, `public`} when set | a misspelled value silently read as undeclared |
 | `exposure` ∈ {`none`, `self`, `live`, `released`} when set | a misspelled value silently read as undeclared |
 | `exposure: none` + `production: null` → **advisory** | the both-empty claim ("nothing consumes this, and there is nothing to point at") going unflagged |

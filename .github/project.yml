@@ -37,28 +37,28 @@
 #               NOTE requirements.txt is not a source: it pins dependencies, never
 #               the interpreter, so a Python repo with only that file must declare
 #               `python:` here (or add .python-version) or CI has nothing to resolve.
-#   writes      OPTIONAL. isolated (the veto) | serial-direct | serial-gated (serial is a
-#               legacy alias of serial-direct — #208). ⚖ #233 (2026-08-19): stopped
-#               selecting a write-conflict prevention METHOD, became a two-state VETO —
-#               `isolated` forbids trunk-direct outright, human or not; absence and every
-#               other declared value (including this repo's own `serial-direct`, and
-#               `serial-gated`) all mean the SAME thing now, coexistence, and are inert
-#               (project.schema.md "writes — optional", CONVENTIONS.md §2 "Writes"). This
-#               repo carries `serial-direct` for its history, not because the spelling
-#               still selects anything: coexistence is what lets solo flow's entry gate
-#               open here — a doc-only fix may commit straight to trunk with no
-#               issue/branch (CLAUDE.local.md, "Doc-only typo fixes do not need this
-#               ceremony"), provided a human asserts COLAB_HUMAN=1 (no automated session
-#               ever may). The entry gate stays mechanical, not a promise — it refuses the
-#               moment a second worktree, claim or place-claim is live, which is the
-#               ordinary state while any unit is mid-flight (most work here still goes
-#               through the full claim + branch + squash flow).
+#   writes      OPTIONAL. free (coexistence, the default) | direct (coexistence + a
+#               declared intent — declared today, runtime deferred, #283) | isolated (the
+#               veto). Every pre-#283 spelling (isolated/serial-direct/serial-gated, and
+#               the `serial` alias) is still accepted and reads as free — no adopter's
+#               descriptor breaks (project.schema.md "writes — optional", CONVENTIONS.md §2
+#               "Writes"). This repo carries `free` — migrated from `serial-direct` in
+#               #283, the reference example moving off a legacy spelling while the wizard
+#               teaches the new one: `free` is not `isolated`, so nothing below changes.
+#               Coexistence is what lets solo flow's entry gate open here — a doc-only fix
+#               may commit straight to trunk with no issue/branch (CLAUDE.local.md,
+#               "Doc-only typo fixes do not need this ceremony"), provided a human asserts
+#               COLAB_HUMAN=1 (no automated session ever may). The entry gate stays
+#               mechanical, not a promise — it refuses the moment a second worktree, claim
+#               or place-claim is live, which is the ordinary state while any unit is
+#               mid-flight (most work here still goes through the full claim + branch +
+#               squash flow).
 #   room        OPTIONAL. solo | team | public. Who could ever READ what a session writes
 #               down here — not who writes it (project.schema.md "room — optional"). This
 #               repo is `public`: adopters outside the org read its Issues as the worked
 #               examples for the rules it states. Orthogonal to `writes` above, and this
 #               descriptor is the worked example of that orthogonality — one writer, many
-#               readers, so `writes: serial-direct` never implies `room: solo`.
+#               readers, so `writes: free` never implies `room: solo`.
 #   autonomy    ABSENT here, deliberately. Absent already means `manual`
 #               (project.schema.md "autonomy — optional"), and a reference example that
 #               pins a key to its own default stops demonstrating which keys are
@@ -83,7 +83,7 @@ trunk: main
 production: null
 deploy: none
 stack: docs + copy-and-own CI templates + audit CLI (no build)
-writes: serial-direct
+writes: free
 room: public
 exposure: released
 channels: [artifact]

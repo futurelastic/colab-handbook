@@ -408,6 +408,121 @@ test('#258: colab adopt run from inside a linked worktree (no --repo, cwd resolu
   assert.strictEqual(fs.existsSync(path.join(fx.work, '.github', 'project.yml')), false, 'must NOT write into the main checkout');
 });
 
+// --------------------------------------------------------------- #283 — the free/direct/isolated
+// --------------------------------------------------------------- vocabulary and the wizard's
+// --------------------------------------------------------------- declaration-time gate on `direct`
+
+test('#283: --writes free writes a literal `writes: free` line with provenance, git diff shows only appended lines, audit ok:true', () => {
+  const fx = fixture(fullYml({ writes: undefined }));
+  fx.g(fx.work, 'add', '-A'); fx.g(fx.work, 'commit', '-q', '-m', 'chore: pin baseline', '--allow-empty');
+  const r = colab(fx, ['adopt', '--repo', fx.work, '--writes', 'free', '--json']);
+  assert.strictEqual(r.code, 0, r.err);
+  const diff = fx.g(fx.work, 'diff', '--unified=0', '--', '.github/project.yml');
+  const added = diff.split('\n').filter((l) => l.startsWith('+') && !l.startsWith('+++'));
+  const removed = diff.split('\n').filter((l) => l.startsWith('-') && !l.startsWith('---'));
+  assert.strictEqual(removed.length, 0, `no line should be removed/changed:\n${diff}`);
+  assert.ok(added.some((l) => l.includes('writes: free')), diff);
+  const raw = fs.readFileSync(path.join(fx.work, '.github', 'project.yml'), 'utf8');
+  assert.match(raw, /^writes: free$/m);
+  const parsed = JSON.parse(r.out);
+  assert.ok(parsed.verify && parsed.verify.ran);
+  assert.strictEqual(parsed.verify.ok, true, JSON.stringify(parsed.verify.findings));
+});
+
+test('#283: --writes serial (legacy spelling) is still writable as-is, audit ok:true', () => {
+  const fx = fixture(fullYml({ writes: undefined }));
+  const r = colab(fx, ['adopt', '--repo', fx.work, '--writes', 'serial', '--json']);
+  assert.strictEqual(r.code, 0, r.err);
+  const parsed = JSON.parse(r.out);
+  assert.strictEqual(parsed.cfg.writes, 'serial');
+  assert.ok(parsed.verify && parsed.verify.ran);
+  assert.strictEqual(parsed.verify.ok, true, JSON.stringify(parsed.verify.findings));
+});
+
+test('#283: --writes direct on an exposure: none repo, with COLAB_HUMAN + --answered-by: exit 0, written, audit ok:true', () => {
+  const fx = fixture(fullYml({ writes: undefined, exposure: 'none' }));
+  const r = colab(fx, [
+    'adopt', '--repo', fx.work, '--writes', 'direct', '--answered-by', 'Test Human', '--json',
+  ], { COLAB_HUMAN: '1' });
+  assert.strictEqual(r.code, 0, r.err);
+  const parsed = JSON.parse(r.out);
+  assert.strictEqual(parsed.cfg.writes, 'direct');
+  assert.ok(parsed.verify && parsed.verify.ran);
+  assert.strictEqual(parsed.verify.ok, true, JSON.stringify(parsed.verify.findings));
+});
+
+test('#283: --writes direct with no COLAB_HUMAN and no TTY: exit 3, nothing written', () => {
+  const fx = fixture(fullYml({ writes: undefined, exposure: 'none' }));
+  const before = fs.readFileSync(path.join(fx.work, '.github', 'project.yml'), 'utf8');
+  const r = colab(fx, ['adopt', '--repo', fx.work, '--writes', 'direct', '--no-verify']);
+  assert.strictEqual(r.code, 3, r.err);
+  assert.match(r.err, /requires a human/);
+  const after = fs.readFileSync(path.join(fx.work, '.github', 'project.yml'), 'utf8');
+  assert.strictEqual(after, before, 'nothing should have been written on refusal');
+});
+
+test('#283: --writes direct on a fixture already declaring exposure: released: exit 5, nothing written', () => {
+  const fx = fixture(fullYml({ writes: undefined, exposure: 'released', production: 'https://example.com', deploy: 'tag' }), { branch: 'dev' });
+  const before = fs.readFileSync(path.join(fx.work, '.github', 'project.yml'), 'utf8');
+  const r = colab(fx, [
+    'adopt', '--repo', fx.work, '--writes', 'direct', '--answered-by', 'Test Human', '--no-verify',
+  ], { COLAB_HUMAN: '1' });
+  assert.strictEqual(r.code, 5, r.err);
+  assert.match(r.err, /direct/);
+  const after = fs.readFileSync(path.join(fx.work, '.github', 'project.yml'), 'utf8');
+  assert.strictEqual(after, before);
+});
+
+test('#283: --exposure released against an already-declared writes: direct: exit 5, nothing written (the symmetric case)', () => {
+  const fx = fixture(fullYml({ writes: 'direct', exposure: undefined, production: undefined, deploy: undefined }), { branch: 'dev' });
+  fs.mkdirSync(path.join(fx.work, '.github', 'workflows'), { recursive: true });
+  fs.writeFileSync(path.join(fx.work, '.github', 'workflows', 'deploy-prod.yml'), 'on:\n  push:\n    branches: [dev]\njobs:\n  x:\n    runs-on: ubuntu-latest\n    steps: []\n');
+  fx.g(fx.work, 'add', '-A'); fx.g(fx.work, 'commit', '-q', '-m', 'chore: add deploy workflow');
+  const before = fs.readFileSync(path.join(fx.work, '.github', 'project.yml'), 'utf8');
+  const r = colab(fx, [
+    'adopt', '--repo', fx.work, '--exposure', 'released',
+    '--production', 'https://example.com', '--deploy', 'tag',
+    '--answered-by', 'Test Human', '--no-verify',
+  ], { COLAB_HUMAN: '1' });
+  assert.strictEqual(r.code, 5, r.err);
+  assert.match(r.err, /direct/);
+  const after = fs.readFileSync(path.join(fx.work, '.github', 'project.yml'), 'utf8');
+  assert.strictEqual(after, before);
+});
+
+test('#283: writes genuinely absent (never answered) still reports coherently — writesResolved free, trunkDirect not vetoed, writesMethod gone', () => {
+  const fx = fixture(undefined);
+  const r = colab(fx, [
+    'adopt', '--repo', fx.work, '--json', '--no-verify',
+    '--room', 'solo', '--channels', 'none', '--production', 'none', '--deploy', 'none', '--exposure', 'self',
+    '--stack', 'docs', '--answered-by', 'Test Human',
+  ], { COLAB_HUMAN: '1' });
+  assert.strictEqual(r.code, 0, r.err);
+  const parsed = JSON.parse(r.out);
+  assert.strictEqual(Object.prototype.hasOwnProperty.call(parsed.cfg, 'writes'), false, 'writes must stay genuinely unanswered, never defaulted in the file');
+  assert.strictEqual(parsed.consequences.writesResolved, 'free');
+  assert.doesNotMatch(parsed.consequences.trunkDirect, /vetoed/);
+  assert.strictEqual('writesMethod' in parsed.consequences, false);
+});
+
+test('#283: writes: serial-gated (legacy spelling) never re-asked; --json reports writesResolved free, source legacy', () => {
+  const fx = fixture(fullYml({ writes: 'serial-gated' }));
+  const r = colab(fx, ['adopt', '--repo', fx.work, '--json', '--no-verify']);
+  assert.strictEqual(r.code, 0, r.err);
+  const parsed = JSON.parse(r.out);
+  assert.strictEqual(parsed.rows.writes.state, 'answered');
+  assert.strictEqual(parsed.rows.writes.value, 'serial-gated');
+  assert.strictEqual(parsed.consequences.writesResolved, 'free');
+  assert.strictEqual(parsed.consequences.writesSource, 'legacy');
+});
+
+test('#283: writes: serial-gated in the TEXT report shows "writes  answered  serial-gated", never re-asked', () => {
+  const fx = fixture(fullYml({ writes: 'serial-gated' }));
+  const r = colab(fx, ['adopt', '--repo', fx.work, '--no-verify']);
+  assert.strictEqual(r.code, 0, r.err);
+  assert.match(r.out, /writes\s+answered\s+serial-gated/);
+});
+
 // --------------------------------------------------------------- --help / root help
 
 test('colab adopt --help documents the command; root help lists it', () => {

@@ -247,6 +247,34 @@ test('soloEligibility: an unrecognised writes value coexists (does not veto) —
   assert.deepStrictEqual(soloEligibility({ writes: 'bogus' }, { human: true }), { ok: true, via: 'human' });
 });
 
+// --- #283: the honesty pin — `writes: direct`'s runtime is DEFERRED, and `soloEligibility` is
+// the exact function that would have to change to enforce anything different. It reads
+// `trunkDirectVetoed(doc && doc.writes)` alone (tools/lib/solo.js), unchanged by #283, and
+// `trunkDirectVetoed` only ever vetoes the exact string 'isolated' — so `direct` MUST give
+// identical verdicts to `free` and to no `writes` key at all. If this test ever needs changing,
+// the runtime-deferred scope decision named in CONVENTIONS.md's "writes: direct" subsection has
+// been silently violated — see #283's plan, Approach §2's table ("this session implements": NO
+// for actual runtime permission change).
+
+test('#283: soloEligibility gives IDENTICAL verdicts for writes: direct, writes: free, and no writes key — human:true', () => {
+  const direct = soloEligibility({ writes: 'direct' }, { human: true });
+  const free = soloEligibility({ writes: 'free' }, { human: true });
+  const absent = soloEligibility({}, { human: true });
+  assert.deepStrictEqual(direct, { ok: true, via: 'human' });
+  assert.deepStrictEqual(direct, free);
+  assert.deepStrictEqual(direct, absent);
+});
+
+test('#283: soloEligibility gives IDENTICAL verdicts for writes: direct, writes: free, and no writes key — refused without human:true', () => {
+  const direct = soloEligibility({ writes: 'direct' }, { human: false });
+  const free = soloEligibility({ writes: 'free' }, { human: false });
+  const absent = soloEligibility({}, { human: false });
+  assert.strictEqual(direct.ok, false);
+  assert.strictEqual(direct.code, 'not-human');
+  assert.deepStrictEqual(direct, free);
+  assert.deepStrictEqual(direct, absent);
+});
+
 // --- branchMandatory (#133) ---------------------------------------------------
 
 test('branchMandatory: one unit in flight — not mandatory, condition 2 stays null (not false)', () => {

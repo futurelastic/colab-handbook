@@ -423,8 +423,10 @@ machinery is retired. The vocabulary now resolves to exactly two states:
 | descriptor says | means |
 |---|---|
 | *(absent)* | **coexistence** — the default. Worktree sessions and an attended human trunk-direct session run side by side. |
+| `free` | **coexistence, spelled out (#283).** The same state as absence, given a name — `free` IS the former blank: the old prompt told a human to "leave unanswered" for this state because there was no spelling for it; now there is. |
+| `direct` | **coexistence, plus a DECLARED intent (#283) — declared today, runtime deferred.** Stored and reported honestly (`tools/lib/adopt.js`'s `deriveConsequences`, `--json`, the wizard) as an explicit "declared, not yet enforced" state; `trunkDirectVetoed('direct')` is `false`, so it changes NO session's actual permissions in this diff — it behaves exactly like `free` at runtime until a separate unit implements what it declares. See "writes: direct — declared today, runtime deferred (#283)", below. |
 | `isolated` | **veto** — no trunk-direct in this repo, human or not. No field, flag, or override lowers this bar. |
-| `serial` · `serial-direct` · `serial-gated` | **inert** — identical to absent. These spellings stay valid (no adopter's descriptor breaks), and resolve through the legacy alias exactly as before (`tools/lib/writes-authority.js`), but nothing downstream treats them as a method choice any longer. |
+| `serial` · `serial-direct` · `serial-gated` | **inert — identical to `free` (#283, formerly "identical to absent").** These spellings stay valid (no adopter's descriptor breaks), and resolve through the legacy alias exactly as before (`tools/lib/writes-authority.js`), but nothing downstream treats them as a method choice any longer. |
 
 Binary in practice: veto, or not. `tools/lib/writes-authority.js`'s `trunkDirectVetoed(raw)`
 is the one function anything may act on — it reads the **raw** declared value, never the
@@ -446,7 +448,7 @@ below for the mechanical entry gate.
 keyed on the descriptor, with the session-identity distinction expressed in the rows that
 used to be keyed to a declarable method:
 
-| constraint | `writes: isolated` (the veto) | absent · `serial` · `serial-direct` · `serial-gated` (coexistence) |
+| constraint | `writes: isolated` (the veto) | `free` · `direct` · absent · `serial` · `serial-direct` · `serial-gated` (coexistence) |
 |---|---|---|
 | trunk-direct, human at the keyboard (`COLAB_HUMAN=1`) | **forbidden** | allowed |
 | trunk-direct, automated session | **forbidden** | **forbidden** |
@@ -461,6 +463,58 @@ The two rows that never varied by the old method (`autonomy: auto-trunk`,
 rows that used to vary by declared method (`place-claim needed`, `branch`) are re-based
 onto session identity, which a test can now drive end to end against the real `colab solo`
 — see `tools/lib/audit-writes-matrix.test.js`.
+
+#### writes: direct — declared today, runtime deferred (#283)
+
+`direct` is a real, tested, storable value — the audit accepts it, `colab adopt`'s wizard
+offers it, `.github/project.yml` may carry it — but this repo's tooling implements exactly
+one guarantee about it today: **it never claims more than `free` already grants.**
+`trunkDirectVetoed('direct')` is `false`, unchanged from `free` — an attended human session
+may take trunk-direct under `direct` exactly as under `free`/absence, an automated session
+may not, and no other file (`colab solo`, `tools/lib/place.js`, `code-ship`/`code-wrap`) was
+touched to make this true. `direct` **under-delivers** relative to a naive reading of its
+name, never over-delivers — the fail-safe direction, and the only reason storing it before
+enforcing it is defensible.
+
+Four open questions were named when this vocabulary shipped; two are decided and enforced
+now, two are decided as *proposals* and handed to a ⚖ ruling rather than settled here:
+
+- **Concurrency on the shared checkout — PUNT, proposal of record.** Under `direct`, the
+  intended design is that the trunk checkout becomes a strictly one-writer-at-a-time
+  resource, and *every* direct writer (human or agent) holds the existing path-scoped
+  place-claim on it — extending place-claim from "the one attended writer" to "whoever holds
+  it right now". **Not implemented.** `colab solo`'s entry gate today *refuses* the moment a
+  second claim, worktree, or place-claim is live; legalising concurrent direct writers means
+  loosening that live safety gate, which needs its own fixture-driven matrix test in
+  `tools/lib/place.js`/`colab solo`, not a diff whose other half is prompt rendering.
+  **Unblocked by:** [#285](https://github.com/futurelastic/colab-handbook/issues/285)
+  ("`writes: direct` runtime: place-claim gates every concurrent direct writer") — itself
+  blocked on the ruling below.
+- **CI role — DECIDED AND SHIPPED, as derived report text only.** Under `direct`, `ciRole` is
+  **alarm, always** — nothing branches under a merge event that never happens, so CI can
+  never gate a merge that doesn't exist. Cheap to decide because `ciRole` is derived prose in
+  `tools/lib/adopt.js`'s `deriveConsequences`, not enforcement.
+- **The human merge gate and the Phase A / Phase B split — DECIDED AS A PROPOSAL, not
+  implemented.** Proposal of record: under `direct` there is no merge event, so Phase B (the
+  merge half of `code-ship`) does not apply to a `direct`-shaped unit; Phase A (`code-wrap`)
+  applies in full and unchanged; the human authorization bar moves from the merge act to the
+  session-start instruction. This is a real departure from "merge means the full
+  code-wrap" and is named as one, not ruled here — this repo's decision-record mechanism
+  (`needs-decision` / `decision-recorded`, [§5](#5-claiming-work--how-to-say-im-on-this))
+  exists precisely so a single session does not unilaterally re-rule the ship protocol.
+  **Unblocked by:** [#284](https://github.com/futurelastic/colab-handbook/issues/284),
+  labelled `needs-decision`, carrying this proposal as the thing to rule on. No skill file
+  (`code-ship`, `code-wrap`) is touched by this change.
+- **Exposure restriction — DECIDED AND ENFORCED NOW.** Declaring `writes: direct` requires
+  the same human bar as lowering exposure (an interactive TTY, or `COLAB_HUMAN=1` together
+  with `--answered-by <name>` — `direct` is the only `writes` value that *expands*
+  permission, `free`/`isolated` never do), and is refused outright when the *effective*
+  exposure (this run's answer, else the descriptor's axis of record) is `live` or
+  `released` — checked both directions, so declaring `direct` against an already-live/
+  released repo and declaring `live`/`released` against an already-`direct` repo are both
+  refused by the same check. `tools/lib/adopt.js`'s `writesGateVerdict`, wired into
+  `tools/colab`'s `cmdAdopt` alongside the existing exposure gate. No `--force`, no override
+  flag, consistent with the rest of this command's asymmetry.
 
 **Retired: the `auto-trunk`/`serial-direct` narrative #208 and #224 argued over.** The old
 three-method table spent several paragraphs establishing that `auto-trunk` was never
@@ -2247,7 +2301,7 @@ only. Resolution order: `--config` flag > `~/.colab/repos.txt` > bundled example
    | 1 | does a deploy target exist *today* ([§2](#2-tiers)), and how is it reached — a tag gates production, the promotion itself deploys, a human runs a runbook, or nothing is live yet? | `production` + `deploy` | a URL (or none) + `push-main` / `tag` / `manual` / `none` |
    | 2 | who else works here? | [`room`](#room--who-else-is-here) | `solo` / `team` / `public` |
    | 3 | **what would break if you merged something wrong here?** | [`exposure`](#exposure--what-consumes-a-merge-here) | `none` / `self` / `live` / `released` |
-   | 4 | should a human ever be allowed to commit straight to this repo's trunk checkout, alongside worktree sessions? | [`writes`](#writes--the-trunk-direct-veto-and-the-two-things-that-make-a-branch-mandatory) | *(unanswered, or anything but `isolated`)* permits it / `isolated` vetoes it outright |
+   | 4 | Should a human ever be allowed to commit straight to this repo's trunk checkout, alongside worktree sessions? free allows it with no runtime restriction; direct allows it and additionally declares intent for a stronger guarantee later (declared today, not yet enforced — CONVENTIONS.md §2); isolated vetoes it outright, human or not. | [`writes`](#writes--the-trunk-direct-veto-and-the-two-things-that-make-a-branch-mandatory) | `free` / `direct` / `isolated` (unanswered reads as `free` — #283) |
    | 5 | by what path does a commit reach something that runs it? (a list — several may apply) | [`channels`](#channels--by-what-path-does-code-reach-the-thing-that-runs-it) | `workflow` / `hook` / `procedure` / `checkout` / `artifact` / `data` / `none` |
 
    Question 1 writes `production` and `deploy`, never `tier` directly — `tier` is a pure
@@ -2299,7 +2353,12 @@ only. Resolution order: `--config` flag > `~/.colab/repos.txt` > bundled example
    `live`/`released`, needs nothing beyond the falsifier/shape clearance described above —
    an agent may run this unattended for exactly the direction CONVENTIONS.md [§2](#exposure--what-consumes-a-merge-here)'s asymmetry
    already allows it to propose. `colab adopt` never runs steps 3 onward below; it prints
-   them as a to-do list on exit.
+   them as a to-do list on exit. **The five questions above are asked as forced numbered
+   menus (#283)**, not free text — every option is answerable by its number or its literal
+   value — and `exposure` is the only one of the five that carries a skip option (its own
+   fallback, deriving `tier` instead, is a real fallback that consumes the absence; the
+   other four have none, so declining them would just recreate #282's shape under a
+   different row).
 2. **Write `.github/project.yml`** ([§3](#3-githubprojectyml--the-marker)) with the
    answers from step 1.
 3. **Create the whole label set — nineteen names, not a subset** (`in-progress`,
