@@ -247,3 +247,104 @@ test('--dry --json: an ordinary branch with commits stays mode squash', () => {
   assert.strictEqual(check.ok, true);
   assert.match(check.detail, /1 vs main/);
 });
+
+// --- #293: the additive `baseCi` advisory ------------------------------------------------------
+//
+// A `gh` stub is placed first on PATH so `isGhUsable`/`ghRunForSha`/`ghRunForCommit` see canned
+// runs instead of hitting the network — same posture as tools/lib/git.test.js's own `ghRunForSha`
+// fixture. `git ls-remote`/`git merge-base` run for real against the bare `origin` these fixtures
+// already create.
+
+function fakeGhBin(root, runsByBranch) {
+  const bin = path.join(root, 'fake-gh-bin');
+  fs.mkdirSync(bin, { recursive: true });
+  // `gh run list --branch <b> ...` → the canned rows for that branch; anything else `gh` needs
+  // (originUrl is read via `git`, not `gh`) never reaches this stub, so an unhandled subcommand
+  // failing loudly is fine — nothing in this test path should call it.
+  const body = Object.entries(runsByBranch)
+    .map(([b, rows]) => `if [ "$branch" = "${b}" ]; then echo '${JSON.stringify(rows)}'; exit 0; fi`)
+    .join('\n');
+  fs.writeFileSync(path.join(bin, 'gh'), `#!/bin/sh
+if [ "$1" = "--version" ]; then echo "gh version 2.0.0"; exit 0; fi
+if [ "$1" = "auth" ] && [ "$2" = "status" ]; then exit 0; fi
+branch=""
+prev=""
+for a in "$@"; do
+  if [ "$prev" = "--branch" ]; then branch="$a"; fi
+  prev="$a"
+done
+${body}
+echo '[]'
+`, { mode: 0o755 });
+  return bin;
+}
+
+function colabWithGh(fx, bin, args) {
+  const r = spawnSync('node', [COLAB, ...args], {
+    encoding: 'utf8',
+    env: { ...process.env, PATH: `${bin}:${process.env.PATH}`,
+      COLAB_HOME: fx.home, COLAB_SESSION: 'sess-dry-json-test', COLAB_SESSION_NAME: '' },
+  });
+  return { code: r.status, out: r.stdout || '', err: r.stderr || '' };
+}
+
+test('#293: base red + own head green — baseCi reports suspect-green, and it never flips `ok`', () => {
+  const fx = fixture(PROJECT_YML_AUTO_TRUNK);
+  const baseSha = fx.g(fx.work, 'rev-parse', 'main').trim();
+  fx.g(fx.work, 'checkout', '-q', '-b', 'feat/suspect-6');
+  fs.writeFileSync(path.join(fx.work, 'g.txt'), 'x\n');
+  fx.g(fx.work, 'add', '-A');
+  fx.g(fx.work, 'commit', '-q', '-m', 'feat: suspect');
+  fx.g(fx.work, 'push', '-q', 'origin', 'feat/suspect-6');
+  const ownSha = fx.g(fx.work, 'rev-parse', 'feat/suspect-6').trim();
+  fx.g(fx.work, 'checkout', '-q', 'main');
+  // trunk moves on AFTER the branch was cut, so the base sha is no longer main's current head —
+  // exactly the shape #293 measured (base red at cut time, trunk has since moved).
+  fs.writeFileSync(path.join(fx.work, 'trunk-moved.txt'), 'x\n');
+  fx.g(fx.work, 'add', '-A');
+  fx.g(fx.work, 'commit', '-q', '-m', 'chore: trunk moved on');
+  fx.g(fx.work, 'push', '-q', 'origin', 'main');
+  const trunkHeadSha = fx.g(fx.work, 'rev-parse', 'main').trim();
+
+  const bin = fakeGhBin(fx.root, {
+    // trunk's CURRENT head reads green (the ordinary trunk-CI-green check must pass cleanly), the
+    // OLD sha the branch was cut from reads red — the exact shape #293 measured: trunk has since
+    // recovered, but that says nothing about what the branch actually built against.
+    main: [
+      { headSha: trunkHeadSha, status: 'completed', conclusion: 'success' },
+      { headSha: baseSha, status: 'completed', conclusion: 'failure' },
+    ],
+    'feat/suspect-6': [{ headSha: ownSha, status: 'completed', conclusion: 'success' }],
+  });
+  const r = colabWithGh(fx, bin, ['ship', '--branch', 'feat/suspect-6', '--repo', fx.work, '--dry', '--json']);
+  const body = JSON.parse(r.out);
+  assert.ok(body.baseCi, `expected a baseCi payload, got ${JSON.stringify(body.baseCi)}`);
+  assert.strictEqual(body.baseCi.severity, 'suspect-green');
+  assert.strictEqual(body.baseCi.baseSha, baseSha);
+  const row = body.checks.find((c) => c.name === 'base CI verdict (advisory, #293)');
+  assert.ok(row, 'advisory row missing from checks[]');
+  assert.strictEqual(row.ok, true, 'the advisory row must never fail the table');
+  // The ordinary trunk-CI-green precondition passes cleanly on its own terms (trunk's CURRENT head
+  // is green) — baseCi is additive, never a replacement for that check, and the two can disagree.
+  const ciCheck = body.checks.find((c) => /CI green/.test(c.name));
+  assert.ok(ciCheck);
+  assert.strictEqual(ciCheck.ok, true, JSON.stringify(ciCheck));
+});
+
+test('#293: base green — no baseCi payload, no advisory row at all', () => {
+  const fx = fixture(PROJECT_YML_AUTO_TRUNK);
+  const baseSha = fx.g(fx.work, 'rev-parse', 'main').trim();
+  fx.g(fx.work, 'checkout', '-q', '-b', 'feat/clean-base-7');
+  fs.writeFileSync(path.join(fx.work, 'g.txt'), 'x\n');
+  fx.g(fx.work, 'add', '-A');
+  fx.g(fx.work, 'commit', '-q', '-m', 'feat: clean base');
+  fx.g(fx.work, 'checkout', '-q', 'main');
+
+  const bin = fakeGhBin(fx.root, {
+    main: [{ headSha: baseSha, status: 'completed', conclusion: 'success' }],
+  });
+  const r = colabWithGh(fx, bin, ['ship', '--branch', 'feat/clean-base-7', '--repo', fx.work, '--dry', '--json']);
+  const body = JSON.parse(r.out);
+  assert.strictEqual(body.baseCi, null);
+  assert.strictEqual(body.checks.find((c) => c.name === 'base CI verdict (advisory, #293)'), undefined);
+});

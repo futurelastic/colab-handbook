@@ -1,7 +1,8 @@
 'use strict';
 /**
  * Tests for tools/lib/git.js — `worktreeListDetailed` (#67), `resolveWorktreePathForBranch` and
- * `gitFailureLine` (#286/#287), the dirty-tree readings (#86), and `ghRunForSha` (#92).
+ * `gitFailureLine` (#286/#287), the dirty-tree readings (#86), `ghRunForSha` (#92), and
+ * `ghRunForCommit` (#293).
  *
  * Run: `node --test tools/lib/*.test.js` — the existing CI glob picks this file up.
  *
@@ -385,6 +386,50 @@ test('a branch absent on origin returns null rather than a misleading verdict', 
 test('gh failing returns null, distinct from "no runs for this sha"', () => {
   const fx = fixture();
   const result = fx.withFailingGh(() => git.ghRunForSha(fx.work, 'main'));
+  assert.strictEqual(result, null);
+});
+
+// --- ghRunForCommit (#293) — the same verdict, for a sha that is NOT necessarily the branch's
+// current remote head (the merge-base a feature branch was cut from, almost always trunk history).
+
+test('#293: verdict for an explicit historical sha, not the branch\'s current head', () => {
+  const fx = fixture();
+  const result = fx.withFakeGh([
+    { headSha: fx.sha, status: 'completed', conclusion: 'failure' },
+  ], () => git.ghRunForCommit(fx.work, 'main', fx.sha));
+  assert.deepStrictEqual(result, { status: 'completed', conclusion: 'failure', sha: fx.sha, createdAt: null, databaseId: null, runCount: 1 });
+});
+
+test('#293: ghRunForSha and ghRunForCommit agree at the SAME sha — same allowlist, same picks', () => {
+  const fx = fixture();
+  const runs = [
+    { headSha: fx.sha, status: 'completed', conclusion: 'cancelled' },
+    { headSha: fx.sha, status: 'completed', conclusion: 'success' },
+  ];
+  const viaSha = fx.withFakeGh(runs, () => git.ghRunForSha(fx.work, 'main'));
+  const viaCommit = fx.withFakeGh(runs, () => git.ghRunForCommit(fx.work, 'main', fx.sha));
+  assert.deepStrictEqual(viaCommit, viaSha);
+});
+
+test('#293: no sha given returns null — this function never resolves one itself', () => {
+  const fx = fixture();
+  const result = fx.withFakeGh([{ headSha: fx.sha, status: 'completed', conclusion: 'success' }],
+    () => git.ghRunForCommit(fx.work, 'main', null));
+  assert.strictEqual(result, null);
+});
+
+test('#293: a sha with no matching run reports status: none, runCount: 0', () => {
+  const fx = fixture();
+  const otherSha = 'deadbeefdeadbeefdeadbeefdeadbeefdeadbeef';
+  const result = fx.withFakeGh([
+    { headSha: fx.sha, status: 'completed', conclusion: 'success' },
+  ], () => git.ghRunForCommit(fx.work, 'main', otherSha));
+  assert.deepStrictEqual(result, { status: 'none', conclusion: null, sha: otherSha, createdAt: null, databaseId: null, runCount: 0 });
+});
+
+test('#293: gh failing returns null for ghRunForCommit too', () => {
+  const fx = fixture();
+  const result = fx.withFailingGh(() => git.ghRunForCommit(fx.work, 'main', fx.sha));
   assert.strictEqual(result, null);
 });
 

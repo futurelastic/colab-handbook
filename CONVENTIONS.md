@@ -1161,6 +1161,26 @@ base's tree at all?**
 `in-progress` label answers *does someone believe they hold this*; git answers *what
 state is this actually in*. Do not collapse them.
 
+**A green branch can be reporting a red base's problem, not its own (#293).** `colab
+ship`'s trunk-CI-green check asks whether trunk is green *right now* — never whether
+the sha a branch was actually *cut from* was green *at the time*, and those differ
+once trunk has moved. Measured: three branches cut from one identical red base sha;
+two drew a green run of their own and shipped unchallenged, one drew red and cost a
+coordinator a hand diagnosis — none of the three touched the failing harness, the
+differing verdicts were a flaky test on the base. The dangerous case is the GREEN
+one: it currently looks safest of all, which is exactly backwards.
+
+```sh
+colab landed --worktree <name> --ci     # adds: was the cut-from sha actually green?
+```
+
+Advisory only — it never blocks `colab landed` or `colab ship` (both surface it as an
+additive field/row, never as a new precondition). Three severities, loudest first:
+`suspect-green` (base red, branch's own head green — the branch's green may be
+inherited, not earned), `inherited-red` (base red, branch's own head red too — likely
+the same pre-existing failure), `unresolved` (base red, branch's own head has no
+completed verdict yet). Silent when the base was not measurably red.
+
 ---
 
 ## 5. Claiming work — how to say "I'm on this"

@@ -443,6 +443,28 @@ function ghRunForSha(repo, branch, limit = 10) {
   if (!head.ok) return null;
   const sha = (head.stdout.split('\n')[0] || '').split('\t')[0].trim();
   if (!sha) return null; // branch does not exist on origin
+  return ghRunForCommit(repo, branch, sha, limit);
+}
+
+/**
+ * The same per-sha verdict `ghRunForSha` computes for a branch's CURRENT remote head, generalized
+ * to ANY sha reachable through `branch`'s workflow history (#293). `ghRunForSha` resolves its own
+ * sha via `git ls-remote` — fine for "is this branch's head green", useless for "was the commit
+ * this branch was CUT FROM green", which is almost never any branch's current head. Split out so
+ * both callers share one allowlist rule (only `success`/`cancelled` are not-bad) rather than
+ * silently drifting apart the way `shipCiCheck` and `ci-grant`'s red check once did (#155's frame).
+ *
+ * `branch` narrows the `gh run list` query exactly as it does in `ghRunForSha` (workflow runs list
+ * by branch, not by sha) — pass the branch whose history `sha` lives on. For a base-sha check that
+ * is almost always trunk, since the sha in question is the merge-base a feature branch was cut from.
+ *
+ * Returns the identical `{status, conclusion, sha, createdAt, databaseId, runCount}` shape as
+ * `ghRunForSha` (see its doc comment for what each state means), or null on a `gh`/parse failure or
+ * a missing `sha`. Never resolves `sha` itself — a caller with no sha to ask about has nothing to
+ * pass here, unlike `ghRunForSha`'s branch-name convenience.
+ */
+function ghRunForCommit(repo, branch, sha, limit = 10) {
+  if (!sha) return null;
 
   // createdAt + databaseId are additive (#155): a NON-completed pick needs both to let a caller
   // judge whether it is merely slow or structurally WEDGED (tools/lib/ci-verdict.js) — createdAt for
@@ -520,7 +542,7 @@ module.exports = {
   worktreeList, worktreeListDetailed, resolveWorktreePathForBranch, gitFailureLine,
   dirtyTracked, dirtyUntracked, dirtyAny,
   ghAvailable, ghIssueEdit, ghListLabels, ghAssignedIssues,
-  ghCurrentLogin, ghIssueView, ghIssueComment, ghRunForSha, ghRunJobCount,
+  ghCurrentLogin, ghIssueView, ghIssueComment, ghRunForSha, ghRunForCommit, ghRunJobCount,
   ghIssueListByLabel, ghLabelDelete, ghLabelCreate,
   ghApi, isGraphqlRateLimit, ghIssueRelease,
 };

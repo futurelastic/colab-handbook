@@ -37,6 +37,7 @@ const blockedBy = require('./lib/blocked-by');
 const ciGrant = require('./lib/ci-grant');
 const ciCure = require('./lib/ci-cure');
 const ciVerdict = require('./lib/ci-verdict');
+const baseCiVerdict = require('./lib/base-ci-verdict');
 const adopt = require('./lib/adopt');
 const consumerEvidence = require('./lib/consumer-evidence');
 const axisAuthority = require('./lib/axis-authority');
@@ -6941,6 +6942,46 @@ function classifyCiRun(repoAbs, run, at) {
 }
 
 /**
+ * ADVISORY-ONLY: was the sha `branch` was cut FROM actually green (#293)? `shipCiCheck` above
+ * answers "is `target` green RIGHT NOW" — never whether the commit `branch` diverged from was green
+ * AT THE TIME, and those differ once `target` has moved. The measured incident: three branches cut
+ * from one byte-identical RED base sha; two drew a green run of their own and shipped unchallenged,
+ * one drew red and cost a coordinator a hand diagnosis — none of the three touched the failing
+ * harness, the differing verdicts were a flaky test on the base.
+ *
+ * NEVER a precondition: this never appears as a `checks[]` row that can flip `ok`, never blocks
+ * `colab ship`, and touches none of the existing exemption machinery (grants, the cure rule,
+ * autonomy). It exists so a human/coordinator grading a branch — `colab landed --ci`, or `ship`'s
+ * own dry/prose output — sees the fact instead of re-deriving it by hand for every branch in a sweep.
+ *
+ * Returns `{ severity, why, baseSha, base: {status,conclusion}, own: {status,conclusion}|null } |
+ * null`. Null covers every case where nothing can or need be said: `gh` unusable, no merge-base
+ * resolvable (unrelated histories), the branch has not diverged from the base at all (its "own" CI
+ * IS the base's CI — `shipCiCheck` already covers that question), or the base sha turned out not to
+ * be measurably red (`base-ci-verdict.js`'s null case — see there for the full severity rules).
+ */
+function baseCiAdvisory(repoAbs, gh, base, branch) {
+  if (!gh) return null;
+  const baseName = String(base).replace(/^origin\//, '');
+  const mb = git.git(['merge-base', base, branch], repoAbs);
+  if (!mb.ok || !mb.stdout) return null;
+  const baseSha = mb.stdout.trim();
+
+  const ownRun = git.ghRunForSha(repoAbs, branch);
+  if (ownRun && ownRun.sha === baseSha) return null; // zero divergence — shipCiCheck already asks this exact question
+
+  const baseRun = git.ghRunForCommit(repoAbs, baseName, baseSha);
+  if (!baseRun) return null;
+  const verdict = baseCiVerdict.classify(baseRun, ownRun);
+  if (!verdict.severity) return null;
+  return {
+    severity: verdict.severity, why: verdict.why, baseSha,
+    base: { status: baseRun.status, conclusion: baseRun.conclusion },
+    own: ownRun ? { status: ownRun.status, conclusion: ownRun.conclusion } : null,
+  };
+}
+
+/**
  * Folds BOTH red-trunk exemption doors into an already-failed, already-HUMAN_GATED trunk-CI-green
  * verdict — shipCiCheck's ONLY call site for either, so neither exemption can accidentally widen to
  * the migration gate, claim corroboration, or the trunk-checkout check (none of those ever call
@@ -7154,11 +7195,16 @@ function cmdShipDryJson(opts) {
   // that same check, below. Parallel to ciGrantPayloadVal, never both non-null at once (the cure
   // rule short-circuits before the grant is even consulted once it succeeds).
   let ciCurePayloadVal = null;
+  // #293: null unless the sha this branch was cut from turned out to be measurably red — see
+  // `baseCiAdvisory`'s doc comment. ADVISORY ONLY: never folds into `ok` — the `checks` row it also
+  // produces (below) is always `ok: true` for the same reason.
+  let baseCiPayloadVal = null;
   const emit = (ok) => {
     print(JSON.stringify({
       ok, dry: true, repo: shortRepo(repoAbs), branch: sess.branch, worktree: sess.name || null,
       target, mode, issues: sess.issues, closeIssues, refsIssues, checklistFindings, checks,
       migrationGrant: migrationGrantPayload, ciGrant: ciGrantPayloadVal, ciCure: ciCurePayloadVal,
+      baseCi: baseCiPayloadVal,
     }, null, 2));
     return ok ? 0 : 1;
   };
@@ -7204,6 +7250,14 @@ function cmdShipDryJson(opts) {
   ciGrantPayloadVal = ciGrantPayload(ciResultJson);
   ciCurePayloadVal = ciCurePayload(ciResultJson);
   checks.push({ name: ciResultJson.name, ok: ciResultJson.ok, class: ciResultJson.class, detail: ciResultJson.detail });
+
+  // #293: advisory only — was the sha this branch was cut from actually green? Always `ok: true`
+  // (never a precondition), so a coordinator grading the branch sees the fact without it ever
+  // blocking `ship`. Reuses the SAME `gh` handle the CI check above already resolved.
+  baseCiPayloadVal = baseCiAdvisory(repoAbs, gh, target, sess.branch);
+  if (baseCiPayloadVal) {
+    checks.push({ name: 'base CI verdict (advisory, #293)', ok: true, class: null, detail: baseCiPayloadVal.why });
+  }
 
   // #74/#263: same close-gate split the prose path runs, reported via the additive fields above —
   // AND, since #263, folded into `checks` as its own precondition row (below).
@@ -7614,6 +7668,13 @@ function cmdShip(argv) {
     (redSha) => shipCiCure(repoAbs, gh, target, trunk, redSha, sess.branch));
   const ciOk = ciResult.ok;
   checks.push([ciResult.ok ? '✓' : '✗', ciResult.name, ciResult.detail]);
+
+  // #293: advisory only — was the sha this branch was cut from actually green? Never a
+  // precondition (always prints '·', never '✗', and is not folded into `preOk` below): the point
+  // is visibility for whoever is grading this branch, not a new refusal.
+  const baseCiResult = baseCiAdvisory(repoAbs, gh, target, sess.branch);
+  if (baseCiResult) checks.push(['·', 'base CI verdict (advisory, #293)', baseCiResult.why]);
+
   // No new migrations on the branch, measured against what it will merge into — UNLESS every
   // issue the branch carries holds a live, branch-bound migration grant (#98). Grants are read
   // from the tracker only when a migration actually exists, so the ordinary ship pays nothing.
@@ -8280,7 +8341,14 @@ conflicts and no content answer exists. That reports \`unknown\`, never \`landed
   --all               every worktree of this repo, as a table
   --base <br>         compare against this ref instead
   --json              machine-readable
-No network: fetch first if the base ref may be stale.
+  --ci                ALSO check: was the sha this branch was cut from actually green? (#293)
+                      opt-in and networked (gh) — every other reading above stays local. A branch's
+                      own green CI can be inherited from a RED base rather than earned by its diff;
+                      this never blocks anything, it only surfaces the fact as \`baseCi\` (--json) or
+                      a warning line (table): severity suspect-green (base red, own green — the
+                      dangerous, loudest case) | inherited-red (both red) | unresolved (base red,
+                      own CI absent/pending). Silent (null) when the base was not measurably red.
+No network by default: fetch first if the base ref may be stale. --ci is the one exception.
 `;
 
 /** Trunk for `landed` — project.yml, then the LOCAL origin/HEAD ref. Never "main", never network. */
@@ -8298,17 +8366,23 @@ function landedBaseTrunk(repoAbs) {
 function cmdLanded(argv) {
   const opts = parseArgs(argv, {
     values: { '--repo': 'repo', '--worktree': 'worktree', '--branch': 'branch', '--base': 'base' },
-    flags: { '--all': 'all', '--json': 'json', '-h': 'help', '--help': 'help' },
+    flags: { '--all': 'all', '--json': 'json', '--ci': 'ci', '-h': 'help', '--help': 'help' },
   });
   if (opts.help) return print(HELP_LANDED);
   const repoAbs = resolveRepo(opts);
   if (!git.repoRoot(repoAbs)) throw new UserError(`${repoAbs} is not a git repo`);
   const st = state.loadState();
   const trunk = opts.base ? String(opts.base) : landedBaseTrunk(repoAbs);
+  // #293: opt-in, not automatic — every OTHER `landed` read is deliberately network-free (see
+  // HELP_LANDED), and `--all` can mean dozens of rows; paying two `gh` calls per row unasked would
+  // silently turn a fast local answer into a slow networked one on every ordinary invocation.
+  const gh = opts.ci ? isGhUsable(repoAbs) : null;
 
   const ask = (branch, wtName) => {
     const base = opts.base ? String(opts.base) : resolveBase(st, repoAbs, wtName, trunk);
-    return { worktree: wtName || null, ...landed.landedState(repoAbs, base, branch) };
+    const row = { worktree: wtName || null, ...landed.landedState(repoAbs, base, branch) };
+    if (opts.ci) row.baseCi = baseCiAdvisory(repoAbs, gh, base, branch);
+    return row;
   };
 
   let rows;
@@ -8333,6 +8407,14 @@ function cmdLanded(argv) {
     rows.map((r) => [r.branch, r.base, r.state, `${r.commitsAhead === null ? '?' : r.commitsAhead} ahead`, r.method, r.why]),
     ['BRANCH', 'BASE', 'VERDICT', 'COMMITS', 'BY', 'WHY'],
   ));
+  // #293: printed separately from the table, never folded into a column — it is advisory and rare
+  // (most rows have no flag at all), so a column would sit empty for almost every row.
+  if (opts.ci) {
+    const flagged = rows.filter((r) => r.baseCi && r.baseCi.severity);
+    for (const r of flagged) {
+      print(`  ⚠ ${r.branch}: base ${shortSha(r.baseCi.baseSha)} — ${r.baseCi.severity}: ${r.baseCi.why}`);
+    }
+  }
   // Exit code carries the answer for one branch, so a script can branch on it without parsing:
   // 0 = landed, 1 = cargo or unknown (i.e. "do not tear this down"). --all is informational only.
   if (opts.all) return 0;
