@@ -152,6 +152,41 @@ test('--dry --json: a real non-generated conflict is reported human-gated, and f
   assert.doesNotMatch(fx.g(fx.work, 'worktree', 'list'), /conflict-4/);
 });
 
+// --- #294: the dirty-trunk row still refuses the same way, now naming the path ----------------
+
+test('--dry --json: a dirty trunk checkout still fails "trunk checkout ready" the same way, now naming the path', () => {
+  const fx = fixture(PROJECT_YML_AUTO_TRUNK);
+  fx.g(fx.work, 'checkout', '-q', '-b', 'feat/dirty-trunk-6');
+  fs.writeFileSync(path.join(fx.work, 'g.txt'), 'work\n');
+  fx.g(fx.work, 'add', '-A');
+  fx.g(fx.work, 'commit', '-q', '-m', 'feat: work');
+  fx.g(fx.work, 'checkout', '-q', 'main');
+  // A TRACKED, uncommitted edit on the main checkout — #294's shape (a stray relative-path write
+  // that landed on trunk), not an untracked scratch file (`dirtyTracked` is tracked-only, #86).
+  fs.writeFileSync(path.join(fx.work, 'f.txt'), 'stray edit\n');
+
+  const r = colab(fx, ['ship', '--branch', 'feat/dirty-trunk-6', '--repo', fx.work, '--dry', '--json']);
+  // Same refusal shape #294 must not change: ok:false, exit 1 — identical to every other
+  // human-gated precondition failure in this file (e.g. the hand-merge-conflict test above).
+  assert.strictEqual(r.code, 1, r.out + r.err);
+  const body = JSON.parse(r.out);
+  assert.strictEqual(body.ok, false);
+  const row = body.checks.find((c) => c.name === 'trunk checkout ready');
+  assert.strictEqual(row.ok, false);
+  assert.strictEqual(row.class, 'human-gated');
+  // #294's whole point: the detail now NAMES the dirty path, not just "uncommitted".
+  assert.match(row.detail, /f\.txt/);
+  // No live worktree exists in this fixture, so attribution has nothing to attribute to — the
+  // enrichment must degrade to "unattributed", never invent an owner out of nothing.
+  assert.match(row.detail, /unattributed/);
+  // Additive-only: `dirtyOwners` appears alongside the unchanged table, never replacing a field.
+  assert.ok(body.dirtyOwners, 'dirtyOwners payload missing');
+  assert.strictEqual(body.dirtyOwners.paths[0].path, 'f.txt');
+  assert.strictEqual(body.dirtyOwners.paths[0].verdict, 'unattributed');
+  // The main checkout is left exactly as this test found it — a dry run inspects, never cleans.
+  assert.strictEqual(fx.g(fx.work, 'diff', '--name-only').trim(), 'f.txt');
+});
+
 test('--dry --json: a branch with no commits of its own to ship is a clean, all-green table', () => {
   const fx = fixture(PROJECT_YML_AUTO_TRUNK);
   fx.g(fx.work, 'checkout', '-q', '-b', 'feat/clean-5');

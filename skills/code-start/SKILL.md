@@ -313,6 +313,9 @@ it every time:
 ```sh
 MAIN_REPO="$(dirname "$(git rev-parse --path-format=absolute --git-common-dir)")"
 PLAN="$MAIN_REPO/.claude/plans/issue-$N.md"
+mkdir -p "$MAIN_REPO/.claude/plans"
+grep -qxF '.claude/plans/' "$MAIN_REPO/.git/info/exclude" 2>/dev/null || \
+  echo '.claude/plans/' >> "$MAIN_REPO/.git/info/exclude"    # best-effort, machine-local — not a substitute for the repo's own .gitignore
 ```
 
 **Check for the flag first — you already have the data.** The `gh issue view $N` you ran
@@ -526,6 +529,13 @@ set and the branch name are the two places code-wrap's harvest reads.
 **Repeat the identity flags here** (step 0): as an agent you cannot rely on an export
 made in an earlier tool call, and this is the command whose row a dashboard shows.
 
+**Your cwd does not follow this command.** `colab worktree new` creates the worktree
+on disk; it does not `cd` you into it, and a `cd` in one tool call would not persist
+into the next one anyway. Every write from here on needs the worktree's **absolute**
+path — a relative one still resolves against the main checkout, silently, with no
+error (`#294`). This is exactly the failure `code-wrap` A2b exists to catch after the
+fact; the cheaper fix is never producing it here.
+
 **Plain branch — allowed, but only with a commitment.** Fine on a repo nothing reads
 from and where a worktree is more setup than the work deserves. If you take it, you
 own returning the checkout to trunk before you wrap; code-wrap verifies it.
@@ -538,11 +548,29 @@ git checkout -b <type>/<slug>-$N origin/<trunk>
 **Verify before you start working**, whichever path you took:
 
 ```sh
-git -C <repo-root> branch --show-current    # must print <trunk>
+git -C <repo-root> branch --show-current            # must print <trunk>
+git -C <repo-root> status --porcelain -uall          # the session's dirty-trunk baseline
 ```
 
-If that prints a feature branch, you are in the failure this rule exists to prevent —
-stop and move the work to a worktree.
+If the branch check prints a feature branch, you are in the failure this rule exists
+to prevent — stop and move the work to a worktree.
+
+**Record the second line's result — it is the baseline `code-wrap` A2b compares
+against, not a check you discard once it passes.** A repo-wide dirty check run once
+at wrap time cannot, by construction, tell a file that was already dirty before this
+session opened from one this session put there — that gap is exactly what let a
+stray relative-path write survive undetected until a *different* session's ship got
+blocked by it (`#294`). Recording "clean at start" or the exact dirty-path list now
+is what turns wrap's later check from a guess into a diff:
+
+```sh
+DIRTY_AT_START="$(git -C <repo-root> status --porcelain -uall | tr '\n' ';')"
+[ -n "$PLAN" ] && printf '\nTrunk-dirty-at-start: %s\n' "${DIRTY_AT_START:-clean}" >> "$PLAN"
+```
+
+No `$PLAN` this session (rung 0, no plan written) → state the same line in step 5's
+report instead; it still has to be recorded somewhere a later step in *this* session
+can read it back.
 
 - Ports listed in any repo's `project.yml` `ports:` are **reserved** for that
   repo's trunk dev server — never reuse them for a worktree, even while the trunk
@@ -570,5 +598,7 @@ stop and move the work to a worktree.
   fanning out to sub-agents).
 - **The plan rung** — 0, 1, or 2 — and, if 2, whether it came from a `needs-plan` flag
   or a mid-session escalation.
+- **The dirty-trunk baseline from step 4's verify block** — clean, or the exact dirty
+  path list, so `code-wrap` A2b has something to diff against instead of guessing.
 - Remind: close the session with **code-wrap** to ship and distill knowledge back
   onto the Issue, then **code-ship** to merge.

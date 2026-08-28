@@ -315,6 +315,68 @@ unrelated reason, a stale claim); fix it now if it is trivial and yours, otherwi
 say so and move on. No `docs-lint.mjs` in this repo → skip this step silently,
 same as any other optional tool this skill checks for.
 
+### A2b. Reconcile the trunk checkout — is anything of mine sitting in it?
+
+This session's process cwd is the main checkout, not this worktree — it started that
+way before the worktree existed (`code-start` step 4 creates it), and nothing ever
+moves it. So a tool call made with a **relative path**, any time after that point,
+lands on trunk with no error and no warning — most often a docs or changelog edit
+made later in the session, after the code itself (absolute worktree paths) already
+landed correctly. Check now, before A3 runs the gate on a tree that might be missing
+what you are about to commit:
+
+```sh
+git -C <repo-root> status --porcelain -uall     # broader than code-ship's check — see below
+```
+
+Clean → skip to A3. Dirty → **git is authoritative about *whether* the root is dirty
+and silent about *whose* the dirt is.** Do not default to either answer; work the
+ladder, strongest signal first:
+
+1. **Branch overlap.** Did your branch touch this path?
+   `git -C <worktree> diff --name-only <base>...HEAD -- <path>`. Non-empty is close
+   to decisive, and it is exactly the observed shape: a docs file edited on both
+   sides, the paragraph present on trunk and missing from the worktree's own copy.
+2. **Content.** Read the diff (`git -C <repo-root> diff -- <path>`) for a tracked
+   file, or the file itself for an untracked one. Recognisable as this session's own
+   prose or edit → it's yours, whatever the branch overlap said — this is the only
+   signal that catches a stray write to a path your branch never otherwise touches.
+3. **Timing.** Was the root already dirty when this session opened? Check `$PLAN`'s
+   `Trunk-dirty-at-start` line (code-start step 4) if one exists, or compare the
+   file's mtime against this worktree's `created` timestamp (`colab worktrees`).
+4. **Company.** `colab worktrees` / `colab claims` — is any *other* session live in
+   this repo right now? None → "someone else's live work" has no candidate owner.
+
+One of three verdicts, never a fourth:
+
+- **Mine (or plausibly mine)** — recover it, don't discard it. Capture and replay a
+  patch, never a stash (`CONVENTIONS.md` [§4](../../CONVENTIONS.md#4-branches-and-commits)):
+  ```sh
+  git -C <repo-root> diff -- <path> > /tmp/misplaced.patch   # or read an untracked file directly
+  git -C <repo-root> checkout -- <path>     # only this path — never a whole-tree `checkout -- .`
+  git -C <worktree> apply /tmp/misplaced.patch
+  ```
+  Re-run A3's gate after — it needs the complete tree, not one missing the file you
+  are about to commit. **This is a recovery, not "cleaning someone else's work"** —
+  the never-clean rule below is about the other two verdicts, not this one.
+- **Conclusively not mine** (branch never touched it, content is unrelated, predates
+  this session, another live session is the plausible owner) — **report it, never
+  clean it**, exactly as before, but now say who the plausible owner is (from
+  `colab worktrees`) instead of only "the root is dirty."
+- **Can't tell** — leave it, and say precisely what you checked in the report.
+  Neither commit past it nor delete it.
+
+**Why `-uall` here, and tracked-only at `colab ship`:** an untracked file written by
+a relative path is invisible to `colab ship`'s dirty-trunk gate forever — it stays
+tracked-only by design (#86, regression-guarded, do not "fix" that). A2b is the only
+point in the whole flow that class is ever caught, so it deliberately reads wider.
+Two things that widens the net to catch, read correctly: a whole *directory* showing
+up under `-uall` is an unregistered worktree, not an edit — check `git worktree list`
+before reacting, the #273 lesson still applies. And `$PLAN`
+(`.claude/plans/issue-$N.md`) showing up here is expected when this session wrote
+one — code-start best-effort excludes it via `.git/info/exclude`, but that is
+machine-local, not a guarantee every adopter's `.gitignore` repeats it.
+
 ### A3. Run the repo's own quality gate
 
 Run whatever this repo's CI runs — resolve it from the repo, don't assume:
@@ -478,6 +540,9 @@ never by trusting this session's word for it:
       relative to wherever this checklist happens to be asserted from (#113) — **if** one
       was written this session (#94); absent is fine when the work never needed one
       (rung 0)
+- [ ] trunk checkout reconciled (A2b) — clean, or every dirty path worked through the
+      ownership ladder and reported by verdict (recovered / not-mine-with-owner /
+      can't-tell) — never left unexplained
 
 State this checklist, filled in, as the last thing you report. A box you cannot
 check is not a reason to force it true — say what is missing and why, and let
@@ -495,14 +560,17 @@ actually meet.
   must print `<trunk>`. If you branched in place rather than using a worktree, this is
   the step that pays that debt: a checkout left on a feature branch means anything
   reading that tree (dev server, symlink, LaunchAgent) is serving unmerged code.
-- **Ask git, scoped to the repo root, whether it is *dirty*** —
-  `git -C <repo-root> status --porcelain`, nothing else. Never infer from a path prefix
-  or a directory walk: `colab worktree new` nests every worktree inside the main
+- **Ask git, scoped to the repo root, whether it is *dirty* — again** —
+  `git -C <repo-root> status --porcelain -uall`, nothing else. Never infer from a path
+  prefix or a directory walk: `colab worktree new` nests every worktree inside the main
   checkout, at `<repo-root>/.worktrees/<name>`, so a live worktree's absolute path
   always carries the main checkout's path as a prefix, and a plain listing there reads
   as "the main checkout is dirty" when it is not — git already excludes registered
   worktrees from the parent's status (`CONVENTIONS.md`
-  [§4](../../CONVENTIONS.md#4-branches-and-commits)). On a genuine hit, **report it,
-  never clean it** — an uncommitted file in the shared main checkout is someone else's
-  live, uncommitted work.
+  [§4](../../CONVENTIONS.md#4-branches-and-commits)). This is A2b's ladder re-run, not a
+  fresh judgement call: clean, or dirty with exactly the not-mine set A2b already worked
+  through and reported. **Git only ever answers whether the root is dirty, never whose
+  the dirt is** — a hit here that A2b never saw means something after A2b (most often
+  A4's own commit) introduced new dirt on trunk; go back to A2b rather than assuming
+  ownership either way.
 - The hand-off checklist above is stated, filled in, in your final report — not implied.

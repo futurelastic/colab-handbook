@@ -34,7 +34,7 @@ under any authorization.
 
 ## 0. Verify the hand-off contract — don't trust the report, re-derive it
 
-`code-wrap` **asserts** five things when it stops. Re-check each from git and GitHub
+`code-wrap` **asserts** seven things when it stops. Re-check each from git and GitHub
 directly — a session's own report of its state is exactly the kind of self-grading #94
 exists to add a second check on top of:
 
@@ -49,6 +49,7 @@ git ls-remote origin <branch>                              # branch actually pus
 gh issue view $N --comments | tail -5                       # distill comment present?
 colab claims                                                 # claim(s) still held?
 ls "$MAIN_REPO/.claude/plans/issue-$N.md" 2>/dev/null        # plan file, if one was written
+git -C "$MAIN_REPO" status --porcelain -uall                 # trunk checkout still clean?
 ```
 
 - **Branch not on the remote** → `code-wrap` did not finish A5. Stop; do not improvise a
@@ -61,6 +62,17 @@ ls "$MAIN_REPO/.claude/plans/issue-$N.md" 2>/dev/null        # plan file, if one
 - **Gate result** has no independent artifact to re-derive from outside the report itself
   on most repos — trust the report here, but if anything else on this list is off, treat
   the gate claim as unverified too and re-run it (`code-wrap` A3) before proceeding.
+- **Trunk checkout dirty here too** → `code-wrap` A2b's own re-derivation (its *Verify
+  complete* step) either missed this or ran before whatever caused it. Don't re-run the
+  same ownership ladder blind: `git ls-remote` above already told you this branch's
+  remote sha, so diff it directly — `git -C "$MAIN_REPO" diff --name-only <path>` against
+  the branch's own commits for **branch overlap**, then the dirty path's content, same as
+  `code-wrap` A2b — before deciding whether this is the wrapped session's own stray write
+  (send it back, don't merge over it) or a genuinely different live session's work
+  (`colab worktrees` for a name to route the finding to). **Never merge past an
+  unattributed dirty trunk** — `colab ship`'s own precondition already refuses on a
+  dirty trunk checkout; this is what turns that refusal into something someone can act
+  on, not a reason to bypass it.
 
 A contract that fails to verify is not a reason to skip the merge — it is a reason to
 fix the gap (re-push, re-comment, re-claim) before continuing, or to hand back to an

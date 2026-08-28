@@ -1010,9 +1010,30 @@ parent's status. The only reliable check is `git -C <repo-root> status --porcela
 scoped to the repo root, nothing else. Measured: a wrapping session reported the shared
 main checkout dirty with two files it did not own, and named another session's issue as
 the cause — the files were inside `.worktrees/<other-session>/`, on that session's own
-branch, doing exactly the right thing (#273). On a genuine hit, **report it, never clean
-it** — an uncommitted file in a shared main checkout is another session's live,
-uncommitted work, same as the stash hazard above.
+branch, doing exactly the right thing (#273). That was a **false positive about
+dirtiness itself** — the check asked the wrong question (a path prefix, not git) — and
+the fix above, *ask git scoped to the repo root*, stands on its own and is not touched
+by what follows.
+
+**Git answers *whether* the root is dirty; it never answers *whose* the dirt is — and
+the two questions must not collapse into one default.** A session's process cwd is the
+main checkout, not any worktree it later creates (code-start §4 creates the worktree
+after the cwd is already fixed), so a tool call made with a relative path anywhere in
+that session lands on trunk with no error — most often a docs edit made after the code
+itself already landed correctly in the worktree (#294). Reading every dirty hit here as
+categorically "someone else's" — the reading this section used to state outright —
+assumes away exactly that failure: the session that caused it declines to even check,
+ships code with no docs, and leaves the trunk checkout dirty for every other session's
+merge to trip over. **The default is "possibly mine until shown otherwise," not the
+reverse** — the cost of checking one file's branch overlap and content is a `git diff`
+and a sentence in a report; the cost of assuming wrongly is lost content plus a blocked
+repo. Once a dirty path is actually investigated — does *this* session's branch touch
+it, does the content read as this session's own — and it is conclusively not yours, the
+original rule still holds exactly as before: **report it, never clean it.** The
+investigation is what changed, not the rule for what to do once you've genuinely run
+it. `skills/code-wrap/SKILL.md` A2b is the worked procedure — the ladder to run, the
+three verdicts, and the patch-based recovery for a hit that turns out to be yours (using
+the recipe two paragraphs above, never a stash).
 
 **Commits** — Conventional Commits (`feat:`, `fix:`, `docs:`, `chore:`, `refactor:`,
 `test:`, `perf:`, `design:`). Not decoration: [§6](#6-releases) builds the release summary

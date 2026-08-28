@@ -38,6 +38,7 @@ const ciGrant = require('./lib/ci-grant');
 const ciCure = require('./lib/ci-cure');
 const ciVerdict = require('./lib/ci-verdict');
 const baseCiVerdict = require('./lib/base-ci-verdict');
+const dirtyOwner = require('./lib/dirty-owner');
 const adopt = require('./lib/adopt');
 const consumerEvidence = require('./lib/consumer-evidence');
 const axisAuthority = require('./lib/axis-authority');
@@ -6982,6 +6983,72 @@ function baseCiAdvisory(repoAbs, gh, base, branch) {
 }
 
 /**
+ * #294: WHICH paths are dirty in the trunk checkout, and — where the signal is strong enough — a
+ * likely owner. Never a precondition: it enriches the ALREADY-COMPUTED "trunk checkout ready"
+ * check's `detail` string (and, on the JSON path, an additive `dirtyOwners` field) — it never
+ * touches `ok`/`class`/the exit code, same posture as `baseCiAdvisory` above. `git status
+ * --porcelain` answers only whether the root is dirty, never whose the dirt is (CONVENTIONS.md
+ * §4) — this is the best-effort answer to the second question, always labelled with how confident
+ * it is, via the pure `tools/lib/dirty-owner.js` (no I/O there by construction — see its own doc
+ * comment).
+ *
+ * `dirtyPorcelain` is the `git.dirtyTracked(repoAbs)` string the caller already computed — this
+ * makes no extra `git status` call. This function's only job is gathering the plain data
+ * `dirty-owner.js` asks for: each dirty path's mtime, and every LIVE worktree's own branch-diff
+ * (touched paths vs its base) and open-since timestamp. "Live" here is `status !== 'merged'` —
+ * `st.worktrees` is not pruned on teardown of the state entry itself, but a merged worktree's
+ * branch already landed, so it is not a candidate source of NEW trunk dirt.
+ *
+ * Returns `null` when there is nothing dirty to enrich — callers only invoke this once the
+ * "trunk checkout ready" check already came back false.
+ */
+function dirtyOwnerAdvisory(repoAbs, st, dirtyPorcelain) {
+  const paths = dirtyOwner.parsePorcelainPaths(dirtyPorcelain);
+  if (!paths.length) return null;
+
+  const trunk = resolveTrunk(repoAbs, projectDoc(repoAbs));
+  const liveWts = Object.values(st.worktrees).filter((w) => w.repo === repoAbs && w.status !== 'merged');
+  const worktrees = liveWts.map((w) => {
+    const base = w.base || trunk;
+    const diffR = base && w.branch ? git.git(['diff', '--name-only', `${base}...${w.branch}`], repoAbs) : null;
+    const touchedPaths = diffR && diffR.ok ? diffR.stdout.split('\n').filter(Boolean) : [];
+    const createdAtMs = w.created ? Date.parse(w.created) : NaN;
+    return {
+      name: w.name, branch: w.branch || null, session: w.session || null, sessionName: w.sessionName || null,
+      touchedPaths, createdAtMs: Number.isFinite(createdAtMs) ? createdAtMs : null,
+    };
+  });
+
+  const dirtyPaths = paths.map((p) => {
+    let mtimeMs = null;
+    try { mtimeMs = fs.statSync(path.join(repoAbs, p)).mtimeMs; } catch { /* deleted/renamed — no mtime to compare */ }
+    return { path: p, mtimeMs };
+  });
+
+  return dirtyOwner.attributeDirtyPaths({ dirtyPaths, worktrees });
+}
+
+/**
+ * Folds a `dirtyOwnerAdvisory` result into the "trunk checkout ready" row's `detail` string — the
+ * ONE thing this changes. `baseDetail` already carries the plain "tracked changes uncommitted"
+ * message computed before this ever runs; this only appends what could be attributed.
+ */
+function dirtyOwnerDetail(baseDetail, advisory) {
+  if (!advisory || !advisory.paths.length) return baseDetail;
+  const lines = advisory.paths.map((p) => {
+    if (p.verdict === 'attributed') {
+      const c = p.candidates[0];
+      return `${p.path} — likely ${c.sessionName || c.worktree} (${c.confidence})`;
+    }
+    if (p.verdict === 'ambiguous') {
+      return `${p.path} — ambiguous among ${p.candidates.length} live session(s)`;
+    }
+    return `${p.path} — unattributed`;
+  });
+  return `${baseDetail}: ${lines.join('; ')}`;
+}
+
+/**
  * Folds BOTH red-trunk exemption doors into an already-failed, already-HUMAN_GATED trunk-CI-green
  * verdict — shipCiCheck's ONLY call site for either, so neither exemption can accidentally widen to
  * the migration gate, claim corroboration, or the trunk-checkout check (none of those ever call
@@ -7199,12 +7266,16 @@ function cmdShipDryJson(opts) {
   // `baseCiAdvisory`'s doc comment. ADVISORY ONLY: never folds into `ok` — the `checks` row it also
   // produces (below) is always `ok: true` for the same reason.
   let baseCiPayloadVal = null;
+  // #294: null unless the trunk checkout turned out to be dirty — see `dirtyOwnerAdvisory`'s doc
+  // comment. ADVISORY ONLY: it enriches the ALREADY-COMPUTED 'trunk checkout ready' row's `detail`
+  // string, never its `ok`, so this payload can be non-null on a row that still reads `ok: false`.
+  let dirtyOwnersPayloadVal = null;
   const emit = (ok) => {
     print(JSON.stringify({
       ok, dry: true, repo: shortRepo(repoAbs), branch: sess.branch, worktree: sess.name || null,
       target, mode, issues: sess.issues, closeIssues, refsIssues, checklistFindings, checks,
       migrationGrant: migrationGrantPayload, ciGrant: ciGrantPayloadVal, ciCure: ciCurePayloadVal,
-      baseCi: baseCiPayloadVal,
+      baseCi: baseCiPayloadVal, dirtyOwners: dirtyOwnersPayloadVal,
     }, null, 2));
     return ok ? 0 : 1;
   };
@@ -7300,8 +7371,12 @@ function cmdShipDryJson(opts) {
   // So this is not an oversight to "finish" — completing the sweep here is the regression.
   const dirty = git.dirtyTracked(repoAbs);
   const treeOk = onTrunk && !dirty;
+  // #294: advisory-only enrichment, computed only on the dirty branch — see `dirtyOwnerAdvisory`'s
+  // doc comment. Never re-derives `dirty` itself, never touches `treeOk` above.
+  if (onTrunk && dirty) dirtyOwnersPayloadVal = dirtyOwnerAdvisory(repoAbs, st, dirty);
   checks.push({ name: 'trunk checkout ready', ok: treeOk, class: treeOk ? null : HUMAN_GATED,
-    detail: !onTrunk ? `main checkout is on "${headBranch}", not "${trunk}"` : (dirty ? 'tracked changes uncommitted in trunk checkout' : `on ${trunk}, clean`) });
+    detail: !onTrunk ? `main checkout is on "${headBranch}", not "${trunk}"`
+      : (dirty ? dirtyOwnerDetail('tracked changes uncommitted in trunk checkout', dirtyOwnersPayloadVal) : `on ${trunk}, clean`) });
 
   // ---- (c) no hand-merge conflict — NEW: the plain --dry prose path never checks this today ----
   const generated = [...DEFAULT_GENERATED, ...(Array.isArray(doc.generated) ? doc.generated.map(String) : [])];
@@ -7709,8 +7784,13 @@ function cmdShip(argv) {
   const onTrunk = headBranch === trunk;
   const dirty = git.dirtyTracked(repoAbs); // tracked-only on purpose — see the #86 note in cmdShipJson
   const treeOk = onTrunk && !dirty;
+  // #294: advisory-only enrichment, computed only on the dirty branch — see `dirtyOwnerAdvisory`'s
+  // doc comment. Never re-derives `dirty` itself, never touches `treeOk` above, never folds into
+  // `preOk` below.
+  const dirtyOwnersResult = (onTrunk && dirty) ? dirtyOwnerAdvisory(repoAbs, st, dirty) : null;
   checks.push([treeOk ? '✓' : '✗', 'trunk checkout ready',
-    !onTrunk ? `main checkout is on "${headBranch}", not "${trunk}"` : (dirty ? 'tracked changes uncommitted in trunk checkout' : `on ${trunk}, clean`)]);
+    !onTrunk ? `main checkout is on "${headBranch}", not "${trunk}"`
+      : (dirty ? dirtyOwnerDetail('tracked changes uncommitted in trunk checkout', dirtyOwnersResult) : `on ${trunk}, clean`)]);
 
   // #87 gates the ship: writing `Closes #N` for work that has not started is unrecoverable — the
   // issue can be reopened, but the false claim stays in trunk's immutable history, and GitHub will
