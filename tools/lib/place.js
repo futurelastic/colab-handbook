@@ -52,14 +52,17 @@
  * BLANK-SESSION SELF-RECOGNITION IS A CALLER RESPONSIBILITY, NOT SOMETHING THIS MODULE GUESSES
  * (#242). `conflict`'s same-holder exemption matches ONLY a truthy, matching `session` — two
  * invocations that both carry a blank one are never recognized as the same holder, even when a
- * hold's recorded `pid` matches the caller's own. That is deliberate: `pid` is `process.ppid`,
- * the parent shell, not a unique per-command identity, so matching on it could exempt a genuine
- * conflict (two unrelated commands sharing a shell) — the one failure mode this primitive must
- * never have. `tools/colab`'s `cmdClaim`/`cmdSolo` instead make a non-blank `session` MANDATORY
- * at the two call sites that mint a shared-checkout hold, so the gap is closed by requiring
+ * hold's recorded `pid` matches the caller's own. That is deliberate: `pid` was unconditionally
+ * `process.ppid`, the parent shell, not a unique per-command identity, so matching on it could
+ * exempt a genuine conflict (two unrelated commands sharing a shell) — the one failure mode this
+ * primitive must never have. `tools/colab`'s `cmdClaim`/`cmdSolo` instead make a non-blank `session`
+ * MANDATORY at the two call sites that mint a shared-checkout hold, so the gap is closed by requiring
  * identity up front rather than by weakening what counts as a match here. See `conflict`'s own
  * doc comment for the full argument, including a falsifier run that measured agent tool calls
- * NOT sharing a stable pid across commands, which is what rules pid out as a fix.
+ * NOT sharing a stable pid across commands, which is what rules pid out as a fix. `resolveAnchor`
+ * (#288, below) governs a DIFFERENT question — whether a recorded pid may ever be PROBED for
+ * liveness at all — and leaves this exemption rule, and every word of it above, untouched: pid stays
+ * a message-only `likelySelf` hint here no matter which `pidKind` produced it.
  */
 
 const fs = require('fs');
@@ -90,17 +93,27 @@ function placeKey(pathAbs) {
  * trunk checkout" (never the literal word `trunk`, refused by `records.branchProblem` at write
  * time in lib/state.js's `mutate`), a real name for a worktree. `pid` is optional: a hold acquired
  * on behalf of a process this module cannot introspect (e.g. relayed from a session id alone) may
- * omit it, and its absence makes the hold's liveness `unknown` — see `isLive` below. CALLERS
- * SHOULD PASS THE LONG-LIVED PROCESS's pid, not a short-lived CLI invocation's own — `tools/colab`
- * passes `process.ppid` for exactly this reason: the `colab` process that acquires a hold exits the
- * moment the command returns, so its own pid would already read dead by the time anything checks.
+ * omit it, and its absence makes the hold's liveness `unknown` — see `isLive` below.
+ *
+ * `pidKind` (#288) says what KIND of process `pid` names, because "no pid recorded" and "a pid is
+ * recorded but naming it would be a false signal" need to be told apart:
+ *   - `'anchor'` (default, and every legacy record with no `pidKind` at all) — `pid` is the
+ *     long-lived process whose death means the work is over; it MAY be probed for liveness. CALLERS
+ *     SHOULD PASS THE LONG-LIVED PROCESS's pid, never a short-lived CLI invocation's own — `tools/colab`
+ *     used to pass `process.ppid` unconditionally for exactly this reason: the `colab` process that
+ *     acquires a hold exits the moment the command returns, so its own pid would already read dead
+ *     by the time anything checks. `resolveAnchor` below is what now decides, per call, whether
+ *     `process.ppid` is actually that long-lived process (#288's bug: an agent's `ppid` is a
+ *     short-lived per-tool-call shell, not the session).
+ *   - `'invocation'` — `pid` is kept ONLY as a human lead for `holderLabel` (#235); it is NEVER
+ *     probed, so it can never produce a false "dead" verdict. See `defaultProbe`/`isLive` below.
  *
  * `machine` (#289) is this machine's hardware-bound id (`tools/lib/machine.js` `localMachine().id`),
  * recorded alongside `host` so a reader can tell "genuinely a different machine" from "the same
  * machine under a drifted hostname" without re-deriving it — `host` stays what `holderLabel` and
  * every refusal message print, unchanged.
  */
-function holdRecord({ pathAbs, repo, branch = null, host, session, sessionName, pid = null, since }) {
+function holdRecord({ pathAbs, repo, branch = null, host, session, sessionName, pid = null, pidKind, since }) {
   return {
     path: placeKey(pathAbs),
     repo,
@@ -110,8 +123,55 @@ function holdRecord({ pathAbs, repo, branch = null, host, session, sessionName, 
     session: session || null,
     sessionName: sessionName || null,
     pid: pid || null,
+    pidKind: pidKind || null,
     since: since || new Date().toISOString(),
   };
+}
+
+/**
+ * Decide what pid a NEW hold should anchor on, and whether that pid may ever be probed (#288).
+ * Pure — every real-world source (`alive`, `isAncestor`) is injected, so this is testable with no
+ * real process tree. Returns `{ pid, pidKind, why }`; `why` is a short human-readable trace of which
+ * rule fired, for callers that want to say more than "trust me" when `--pid` was not given.
+ *
+ * Precedence, first match wins:
+ *   1. An explicit anchor — `pidOpt` (`--pid <n|none>` at the CLI, or `COLAB_PLACE_PID`). The literal
+ *      string `'none'` means "I know there is nothing worth anchoring on", and resolves to the same
+ *      fail-closed `'invocation'` shape as rule 3 — but as a caller's explicit statement, not a
+ *      default. A numeric value must pass `alive()`; a caller naming a dead pid is a mistake worth
+ *      surfacing (`UserError` at the CLI call site), never a silently-adopted dead anchor.
+ *   2. `env.CLAUDE_PID`, numeric, alive, AND `isAncestor(n, process.pid)` — an agent session's
+ *      long-lived `claude` process, verified to actually contain this invocation (not merely named by
+ *      an env var that could be stale, forged, or left over from a different session). Adopted as
+ *      `'anchor'`: this is the #288 fix that needs no recipe change from any caller.
+ *   3. `env.CLAUDECODE === '1' || env.AI_AGENT` with no anchor proven by rule 2 — an agent shell with
+ *      nothing safe to anchor on. Fails closed: `pid` is kept (as `ppid`) ONLY as a human lead, never
+ *      probed (`pidKind: 'invocation'`). This is #288's own caller shape: a short-lived per-tool-call
+ *      shell whose `ppid` is NOT the session, so probing it produces exactly the false-dead verdict
+ *      #288 reports.
+ *   4. Default — `{ pid: ppid, pidKind: 'anchor' }`, today's exact behaviour, unchanged for every
+ *      interactive-terminal caller and every record already on disk (absence of `pidKind` takes this
+ *      same branch on read, per `defaultProbe`/`isLive` above).
+ */
+function resolveAnchor({ pidOpt, env = {}, ppid, alive = procs.alive, isAncestor = procs.isAncestor } = {}) {
+  if (pidOpt !== undefined && pidOpt !== null && pidOpt !== '') {
+    if (String(pidOpt).trim().toLowerCase() === 'none') {
+      return { pid: ppid, pidKind: 'invocation', why: '--pid none: caller states no anchor exists' };
+    }
+    const n = Number(pidOpt);
+    if (!Number.isFinite(n) || !alive(n)) {
+      return { pid: null, pidKind: null, why: `--pid ${pidOpt} is not a live process`, invalid: true };
+    }
+    return { pid: n, pidKind: 'anchor', why: `--pid ${n}: caller-supplied anchor` };
+  }
+  const claudePid = Number(env.CLAUDE_PID);
+  if (env.CLAUDE_PID && Number.isFinite(claudePid) && alive(claudePid) && isAncestor(claudePid, process.pid)) {
+    return { pid: claudePid, pidKind: 'anchor', why: `CLAUDE_PID ${claudePid}: alive and proven an ancestor` };
+  }
+  if (env.CLAUDECODE === '1' || env.AI_AGENT) {
+    return { pid: ppid, pidKind: 'invocation', why: 'agent shell (CLAUDECODE/AI_AGENT), no proven anchor — failing closed' };
+  }
+  return { pid: ppid, pidKind: 'anchor', why: 'default: ppid is the long-lived invoking process' };
 }
 
 /**
@@ -119,15 +179,20 @@ function holdRecord({ pathAbs, repo, branch = null, host, session, sessionName, 
  * what happens to be running on the machine. Returns `true` (live, hold stands), `false` (dead,
  * not a hold), or `null` (cannot tell, FAILS CLOSED — the hold stands and the message says why).
  *
- * Order matters: a foreign machine is checked before pid liveness, because a record naming a pid on
- * another machine is not "unknown" in the ordinary sense — it is evidence of the sync hazard this
- * module exists to refuse, and that is worth a distinct message (`machine.isLocal`, #289, replaces a
- * raw `os.hostname()` string compare so a drifted-but-same-machine record is no longer misread as
- * foreign).
+ * Order matters, in three steps: a foreign-machine record is checked before anything about pid,
+ * because it is not "unknown" in the ordinary sense — it is evidence of the sync hazard this module
+ * exists to refuse, and that is worth a distinct message (`machine.isLocal`, #289, replaces a raw
+ * `os.hostname()` string compare so a drifted-but-same-machine record is no longer misread as
+ * foreign). Then `pidKind: 'invocation'` (#288) — a pid recorded ONLY as a human lead, never a
+ * liveness signal — is checked before ordinary pid probing, because probing it would produce a
+ * false-dead verdict on a still-running holder (the #288 bug: an agent's short-lived per-tool-call
+ * shell pid, mistaken for the long-lived session). Finally an `'anchor'` pid (the default, and
+ * every legacy record with no `pidKind` at all) is probed as before.
  */
 function defaultProbe(rec) {
   if (!rec) return false;
   if (!machine.isLocal(rec)) return null; // foreign-machine — see isLive's message
+  if (rec.pidKind === 'invocation') return null; // never probed — see isLive's message
   if (rec.pid) return procs.alive(rec.pid);
   return null; // no pid recorded — cannot probe locally, fails closed
 }
@@ -148,6 +213,15 @@ function isLive(rec, probe = defaultProbe) {
         'different machine (place-claims are machine-local only, CONVENTIONS.md "Place-claims") or ' +
         '~/.colab is itself being synced, which is the same hazard this module refuses for the lock ' +
         'file itself',
+    };
+  }
+  if (rec.pidKind === 'invocation') {
+    return {
+      live: null,
+      reason: rec.pid
+        ? `pid ${rec.pid} is an invocation shell, not the anchor process (#288) — never probed for ` +
+          'liveness, failing closed (hold stands)'
+        : 'no anchor pid recorded — cannot probe liveness locally, failing closed (hold stands)',
     };
   }
   const verdict = probe(rec);
@@ -308,6 +382,24 @@ function stalePlaces(st, probe = defaultProbe) {
   return out;
 }
 
+/**
+ * Every place record whose liveness cannot be proven either way (`live === null`) — `colab doctor`'s
+ * companion to `stalePlaces` (#288/#289). This is what makes an `'invocation'`-anchored hold, or a
+ * genuinely unreachable foreign-machine one, VISIBLE instead of silently accumulating: neither is
+ * "confirmed dead" (so `stalePlaces`/`--prune` correctly never touch it), but a human left with no
+ * report at all has no way to notice one exists short of stumbling on it in `colab places`.
+ * Deliberately excludes `live === false` (that is `stalePlaces`'s own report) and `live === true` —
+ * this is only ever the middle, unprovable case.
+ */
+function unprovablePlaces(st, probe = defaultProbe) {
+  const out = [];
+  for (const [key, rec] of Object.entries((st && st.places) || {})) {
+    const { live, reason } = isLive(rec, probe);
+    if (live === null) out.push({ path: key, rec, reason });
+  }
+  return out;
+}
+
 /** Marker files/directories that mean "this ancestor is a file-sync root" — heuristic, not exhaustive. */
 const SYNC_MARKERS = [
   '.sync', // Resilio Sync
@@ -366,6 +458,6 @@ function syncedStateProblem(colabDir) {
 }
 
 module.exports = {
-  placeKey, holdRecord, defaultProbe, isLive, holderOf, holderLabel, holdAge, conflict, stalePlaces,
-  syncedStateProblem,
+  placeKey, holdRecord, resolveAnchor, defaultProbe, isLive, holderOf, holderLabel, holdAge, conflict,
+  stalePlaces, unprovablePlaces, syncedStateProblem,
 };

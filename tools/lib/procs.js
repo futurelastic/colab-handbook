@@ -152,4 +152,34 @@ function terminate(pid, waitMs = 2000) {
   return !alive(pid);
 }
 
-module.exports = { isInside, parseLsofCwd, listeningPorts, commandOf, cwdOf, processesInDir, listeners, portIsBound, alive, terminate };
+/**
+ * Does `of` (default: this process) descend from `candidate` — i.e. is `candidate` an ancestor,
+ * reached by walking `ppid` links? #288: this is what turns "an env var NAMES a pid" into "this pid
+ * PROVABLY contains this invocation" — `place.js`'s `resolveAnchor` only trusts `CLAUDE_PID` after
+ * this passes, precisely because a stale/reused/forged env value is otherwise indistinguishable from
+ * a real one.
+ *
+ * `hops` bounds the walk (default 10 — deep enough for any real shell/agent process tree, shallow
+ * enough that a `ppid` cycle from bad `ps` output cannot spin). Same never-throw discipline as the
+ * rest of this file: `ps` missing, a pid that has already exited mid-walk, malformed output — all
+ * degrade to `false` (not an ancestor), never an exception. `false` on "cannot tell" is deliberately
+ * fail-closed here — the caller (`resolveAnchor`) falls through to the fail-closed `'invocation'`
+ * anchor kind on a `false`, so an unprovable ancestry claim never gets treated as proven.
+ */
+function isAncestor(candidate, of = process.pid, hops = 10) {
+  const target = String(candidate);
+  if (!target || Number.isNaN(Number(target))) return false;
+  let pid = Number(of);
+  for (let i = 0; i < hops; i++) {
+    if (!pid || Number.isNaN(pid) || pid <= 1) return false;
+    const r = run('ps', ['-o', 'ppid=', '-p', String(pid)]);
+    if (!r.ok || !r.stdout) return false;
+    const ppid = parseInt(r.stdout.trim(), 10);
+    if (!ppid || Number.isNaN(ppid)) return false;
+    if (String(ppid) === target) return true;
+    pid = ppid;
+  }
+  return false;
+}
+
+module.exports = { isInside, parseLsofCwd, listeningPorts, commandOf, cwdOf, processesInDir, listeners, portIsBound, alive, terminate, isAncestor };

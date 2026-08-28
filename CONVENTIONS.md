@@ -697,10 +697,10 @@ and **verified by the writer itself**, not merely by whatever spawned it.
   through `colab place acquire`, or the hold a fresh worktree carries, still succeeds without
   `--session`/`--session-name` (a never-fail stance) but warns, because it costs the record its
   only remedy if the hold turns out live: with neither field, a later refusal's holder name falls
-  back to the pid every acquire site already records (`process.ppid`, not `colab`'s own
-  short-lived pid), formatted as `pid <n> on <host>` — enough for a human to `ps -p <pid>` and find
-  a lead, where "unknown" left none. It is weaker than a real name or URL and does not make the
-  acquiring session recognizable as its own holder on a later re-acquire (`conflict`'s
+  back to the pid every acquire site already records — the resolved anchor (see #288 below, not
+  unconditionally `process.ppid` as before it), formatted as `pid <n> on <host>` — enough for a
+  human to `ps -p <pid>` and find a lead, where "unknown" left none. It is weaker than a real name
+  or URL and does not make the acquiring session recognizable as its own holder on a later re-acquire (`conflict`'s
   self-exemption matches on `session`, never on `sessionName` or `pid` — see below) — supply an
   identity when one is available, this is a floor, not a substitute.
 - **Narrowed by #242: acquiring a SHARED-checkout hold is no longer warn-only.** A `colab claim`
@@ -716,6 +716,19 @@ and **verified by the writer itself**, not merely by whatever spawned it.
   primitive's whole value is refusing when it cannot prove safety; a measured falsifier run found
   agent tool calls do not even share a stable `pid` across separate commands, so the mandatory
   identity at the two minting call sites is the fix, not a weaker match inside `conflict` itself.
+- **The anchor pid is resolved per call, not always `process.ppid` (#288).** An agent's `ppid` is
+  the short-lived shell spawned for ONE tool call, not the long-lived session — probing it as a
+  liveness signal produces exactly the false-dead verdict this measured. So every write site
+  resolves an *anchor* first: an explicit `--pid <n|none>` (or `COLAB_PLACE_PID`) always wins;
+  otherwise an agent session's own long-lived process is auto-detected and verified — never merely
+  trusted — by checking it is both alive and a proven ancestor of the current invocation; failing
+  that, an agent shell (`CLAUDECODE`/`AI_AGENT`) with nothing provable fails CLOSED rather than
+  anchoring on its own `ppid`; every other caller keeps today's exact default (`ppid`, probed
+  normally). A pid that fails closed this way is still recorded — `colab places` and `colab
+  doctor` both surface it as a human lead — it is simply never treated as a liveness signal, so it
+  can never be pruned as "confirmed dead" on a signal that was never trustworthy to begin with.
+  This governs a different question than the #242 bullet above (whether a pid may be PROBED at
+  all, not whether it exempts a re-acquire) and changes nothing about that rule.
 - **Machine identity, not a hostname string (#289).** A record's `host` alone false-refuses the
   SAME machine the instant its short hostname drifts from its FQDN, or DHCP/mDNS hands out a
   different label between processes. Comparison is now two-tier: a cheap, pure canonicalization

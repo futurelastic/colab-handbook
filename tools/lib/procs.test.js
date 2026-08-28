@@ -17,7 +17,7 @@
 const test = require('node:test');
 const assert = require('node:assert');
 
-const { isInside, parseLsofCwd } = require('./procs.js');
+const { isInside, parseLsofCwd, isAncestor } = require('./procs.js');
 
 const WT = '/repo/.claude/worktrees/feat-x';
 
@@ -59,4 +59,24 @@ test('parseLsofCwd tolerates empty and malformed input rather than throwing', ()
   assert.deepStrictEqual(parseLsofCwd(null, WT), []);
   assert.deepStrictEqual(parseLsofCwd('n/orphan/path\nfcwd', WT), [],
     'a path line with no preceding pid is not a process');
+});
+
+// isAncestor (#288) walks real `ps -o ppid=` links, so — same discipline as the rest of this file —
+// only the inputs that degrade to `false` WITHOUT spawning anything are exercised here; the walk
+// itself is exercised indirectly via `resolveAnchor`'s injected `isAncestor` in place.test.js, which
+// never touches a real process tree either.
+
+test('isAncestor: hops=0 refuses to walk at all — false, no spawn', () => {
+  assert.strictEqual(isAncestor(process.ppid, process.pid, 0), false);
+});
+
+test('isAncestor: an empty/non-numeric candidate is false, never throws', () => {
+  assert.strictEqual(isAncestor('', process.pid), false);
+  assert.strictEqual(isAncestor(null, process.pid), false);
+  assert.strictEqual(isAncestor('not-a-pid', process.pid), false);
+});
+
+test('isAncestor: `of` already <= 1 (init/kernel) is false immediately, never throws', () => {
+  assert.strictEqual(isAncestor(process.ppid, 1), false);
+  assert.strictEqual(isAncestor(process.ppid, 0), false);
 });

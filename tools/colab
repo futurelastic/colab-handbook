@@ -185,6 +185,28 @@ function resolveSessionName(opts) {
 }
 
 /**
+ * Resolve the pid a NEW place-claim hold should anchor on (#288): --pid <n|none> flag >
+ * COLAB_PLACE_PID env > auto-detection (`place.resolveAnchor`'s own precedence — an agent
+ * session's long-lived process, verified alive and a proven ancestor, else fail closed). Every
+ * real-world source (`process.env`, `process.ppid`, `procs.alive`, `procs.isAncestor`) is supplied
+ * here, at the one CLI boundary — `place.resolveAnchor` itself stays pure and never throws, so an
+ * invalid `--pid` (named but not a live process) is turned into a `UserError` HERE rather than
+ * silently adopting a dead anchor.
+ */
+function resolvePlaceAnchor(opts) {
+  const pidOpt = opts && opts.pid !== undefined && opts.pid !== null && opts.pid !== ''
+    ? opts.pid : process.env.COLAB_PLACE_PID;
+  const anchor = place.resolveAnchor({
+    pidOpt, env: process.env, ppid: process.ppid, alive: procs.alive, isAncestor: procs.isAncestor,
+  });
+  if (anchor.invalid) {
+    throw new UserError(`--pid ${pidOpt}: not a live process on this machine — pass --pid none to ` +
+      `record no anchor, or omit --pid to auto-detect.`);
+  }
+  return anchor;
+}
+
+/**
  * A `sessionName` with no `session` URL is a HALF-identity, and it is worse than no identity at
  * all: the row reads as owned, yet nothing can join it to a session. `sessionName` is display
  * text; `session` is the only join key a consumer has (worktree.session → its `session_…` tail →
@@ -629,12 +651,17 @@ Options:
   --session-name <s>  short human label shown in tables/messages (default: COLAB_SESSION_NAME env).
                       Does NOT satisfy the --session requirement above — it is display text, not a
                       join key.
+  --pid <n|none>      the place-claim's liveness anchor (#288, trunk-checkout claims only): a
+                      numeric pid must be alive right now, or 'none' to record no anchor at all
+                      (never probed — a human lead only). Default: auto-detect (an agent session's
+                      long-lived process, verified alive + a proven ancestor; else the parent shell,
+                      exactly as before). Also settable via COLAB_PLACE_PID.
   --force             take over a claim held by another worktree / GitHub user (logged, never silent)
 `;
 
 function cmdClaim(argv) {
   const opts = parseArgs(argv, {
-    values: { '--repo': 'repo', '--worktree': 'worktree', '--branch': 'branch', '--session': 'session', '--session-name': 'sessionName' },
+    values: { '--repo': 'repo', '--worktree': 'worktree', '--branch': 'branch', '--session': 'session', '--session-name': 'sessionName', '--pid': 'pid' },
     flags: { '--force': 'force', '-h': 'help', '--help': 'help' },
   });
   if (opts.help || opts._.length === 0) return print(HELP_CLAIM);
@@ -679,6 +706,9 @@ function cmdClaim(argv) {
   // warned about; see `requirePlaceIdentity`'s doc comment for why. Cheapest possible refusal:
   // nothing has been read or written yet.
   if (takingPlace) requirePlaceIdentity(session, 'claiming the trunk checkout');
+  // #288: resolved once, reused for both the conflict check below and the write, so `likelySelf`
+  // and the recorded anchor always agree with each other.
+  const anchor = takingPlace ? resolvePlaceAnchor(opts) : null;
 
   // ---- REFUSAL (two layers, check-then-refuse) ----
   let st0;
@@ -703,7 +733,7 @@ function cmdClaim(argv) {
     const syncProblem = place.syncedStateProblem(state.COLAB_DIR);
     if (syncProblem) throw new UserError(syncProblem);
 
-    const placeConf = place.conflict(st0, repoAbs, { session, pid: process.ppid });
+    const placeConf = place.conflict(st0, repoAbs, { session, pid: anchor.pid });
     if (placeConf) {
       if (!opts.force) {
         // Wired to the structure built to guarantee this, not a hand-written string (ship-grade
@@ -736,7 +766,8 @@ function cmdClaim(argv) {
       if (takingPlace) {
         st.places = st.places || {};
         st.places[place.placeKey(repoAbs)] = place.holdRecord({
-          pathAbs: repoAbs, repo: repoAbs, branch: null, host: HOST, session, sessionName, pid: process.ppid,
+          pathAbs: repoAbs, repo: repoAbs, branch: null, host: HOST, session, sessionName,
+          pid: anchor.pid, pidKind: anchor.pidKind,
         });
       }
       if (wtName && !st.worktrees[wtName]) {
@@ -1059,6 +1090,9 @@ git and ~/.colab/state.json on this invocation. The lock is machine-local, one r
 worktree-less \`colab claim\` does, and a blank session can never be recognized as its own
 later re-acquire — refused before anything is read/written. --session-name alone does not
 satisfy this (display text, not a join key).
+
+--pid <n|none> sets the place-claim's liveness anchor (#288), same meaning as \`colab claim\`'s
+own --pid above; also settable via COLAB_PLACE_PID. Default: auto-detect.
 `;
 
 /**
@@ -1100,7 +1134,7 @@ function placeMutate(actionLabel, fn) {
 
 function cmdSolo(argv) {
   const opts = parseArgs(argv, {
-    values: { '--repo': 'repo', '--session': 'session', '--session-name': 'sessionName' },
+    values: { '--repo': 'repo', '--session': 'session', '--session-name': 'sessionName', '--pid': 'pid' },
     flags: { '--done': 'done', '--force': 'force', '-h': 'help', '--help': 'help' },
   });
   if (opts.help) return print(HELP_SOLO);
@@ -1141,7 +1175,10 @@ function cmdSolo(argv) {
   const problems = solo.entryProblems(st, repoAbs, trunk);
   // A live place-claim on this checkout (someone else already writing here right now, outside
   // solo flow's own lock) refuses entry too — rule 1 of Solo flow gains this check (#136).
-  const placeConf = place.conflict(st, repoAbs, { session: resolveSession(opts), pid: process.ppid });
+  // #288: resolved once, reused for the write below too, so `likelySelf` and the recorded anchor
+  // always agree with each other.
+  const anchor = resolvePlaceAnchor(opts);
+  const placeConf = place.conflict(st, repoAbs, { session: resolveSession(opts), pid: anchor.pid });
   if (placeConf) problems.push(placeConf.message);
   if (problems.length) {
     print(`✗ solo refused in ${shortRepo(repoAbs)} — full ceremony required:`);
@@ -1171,7 +1208,8 @@ function cmdSolo(argv) {
     // check`) — the thing solo's own `held` check above cannot offer a coordinator-spawned agent.
     s.places = s.places || {};
     s.places[place.placeKey(repoAbs)] = place.holdRecord({
-      pathAbs: repoAbs, repo: repoAbs, branch: null, host: HOST, session, sessionName, pid: process.ppid,
+      pathAbs: repoAbs, repo: repoAbs, branch: null, host: HOST, session, sessionName,
+      pid: anchor.pid, pidKind: anchor.pidKind,
     });
   });
   if (!written.ok) { print(`✗ ${written.message}`); return 1; }
@@ -1243,13 +1281,19 @@ Never acquired from a file-synced location (Resilio/Syncthing/Dropbox/iCloud) �
 a lock with no atomicity inside a sync window is worse than no lock (both sides read "unlocked"
 with confidence). Release is a LIVENESS LOOKUP AT READ TIME, never a state transition written at
 kill time — nothing here trusts a stored "released" flag; every check re-derives it.
+
+--pid <n|none> sets the new hold's liveness anchor (#288, \`acquire\` only — \`check\`/\`release\` don't
+mint a record): a numeric pid must be alive right now, or 'none' to record no anchor at all (kept
+only as a human lead, never probed). Default: auto-detect (an agent session's long-lived process,
+verified alive + a proven ancestor; else the parent shell — today's exact prior behaviour). Also
+settable via COLAB_PLACE_PID.
 `;
 
 function cmdPlace(argv) {
   const sub = argv[0];
   const rest = argv.slice(1);
   const opts = parseArgs(rest, {
-    values: { '--repo': 'repo', '--session': 'session', '--session-name': 'sessionName' },
+    values: { '--repo': 'repo', '--session': 'session', '--session-name': 'sessionName', '--pid': 'pid' },
     flags: { '--force': 'force', '-h': 'help', '--help': 'help' },
   });
   if (opts.help || !sub || opts._.length === 0) return print(HELP_PLACE);
@@ -1261,11 +1305,15 @@ function cmdPlace(argv) {
 
   const session = resolveSession(opts);
   const sessionName = resolveSessionName(opts);
+  // #288: resolved once for both `check` and `acquire` (never for `release`, which mints no record
+  // and takes no --pid) — `check`'s own conflict() call benefits from the same accurate `likelySelf`
+  // hint an `acquire` from this same invocation shape would record.
+  const anchor = (sub === 'check' || sub === 'acquire') ? resolvePlaceAnchor(opts) : null;
 
   if (sub === 'check') {
     const loaded = placeState('check');
     if (!loaded.ok) { print(`✗ ${loaded.message}`); return 2; }
-    const c = place.conflict(loaded.st, pathAbs, { session, pid: process.ppid });
+    const c = place.conflict(loaded.st, pathAbs, { session, pid: anchor.pid });
     if (!c) { print(`✓ "${pathAbs}" is free (or held by you).`); return 0; }
     print(`✗ ${c.message}`);
     return c.kind === 'unknown' ? 2 : 1;
@@ -1274,22 +1322,24 @@ function cmdPlace(argv) {
   if (sub === 'acquire') {
     const loaded = placeState('acquire');
     if (!loaded.ok) { print(`✗ ${loaded.message}`); return 2; }
-    const c = place.conflict(loaded.st, pathAbs, { session, pid: process.ppid });
+    const c = place.conflict(loaded.st, pathAbs, { session, pid: anchor.pid });
     if (c && !opts.force) { print(`✗ ${c.message}`); return c.kind === 'unknown' ? 2 : 1; }
     if (c && opts.force && process.env.COLAB_HUMAN !== '1') {
       throw new UserError(`--force on a held place-claim requires a human: re-run with COLAB_HUMAN=1. ` +
         `(No field, flag or project.yml value can lower this bar — CONVENTIONS.md, Place-claims.)`);
     }
     warnWeakIdentity(session, sessionName, 'place-claim', null);
-    // `process.ppid`, deliberately not `process.pid`: `colab` is a short-lived CLI invocation that
-    // exits the moment this command returns, so its OWN pid is already dead by the time anyone
-    // else checks the hold — which would make every acquire read as immediately stale. The PARENT
-    // process (the shell/session runtime that invoked `colab`) is the thing whose liveness this
-    // hold actually needs to track; it outlives this one invocation the way the hold is meant to.
+    // The anchor pid (#288, resolved above) is deliberately not always `process.ppid`: `colab` is a
+    // short-lived CLI invocation that exits the moment this command returns, so its OWN pid is
+    // already dead by the time anyone else checks the hold — which would make every acquire read as
+    // immediately stale. `resolveAnchor` picks the actual long-lived process whose liveness this
+    // hold needs to track (the parent shell by default, or a verified agent-session process), and
+    // fails closed to a human-lead-only pid when nothing provable exists.
     const written = placeMutate('acquire', (s) => {
       s.places = s.places || {};
       s.places[place.placeKey(pathAbs)] = place.holdRecord({
-        pathAbs, repo: repoAbs, branch: opts.repo ? null : null, host: HOST, session, sessionName, pid: process.ppid,
+        pathAbs, repo: repoAbs, branch: opts.repo ? null : null, host: HOST, session, sessionName,
+        pid: anchor.pid, pidKind: anchor.pidKind,
       });
     });
     if (!written.ok) { print(`✗ ${written.message}`); return 2; }
@@ -1336,19 +1386,24 @@ function cmdPlaces(argv) {
   const st = state.loadState();
   const rows = Object.entries(st.places || {}).map(([key, rec]) => {
     const { live, reason } = place.isLive(rec);
-    return { path: key, repo: rec.repo, branch: rec.branch, host: rec.host, session: rec.session,
-      sessionName: rec.sessionName, pid: rec.pid, since: rec.since, age: place.holdAge(rec), live, reason };
+    return { path: key, repo: rec.repo, branch: rec.branch, host: rec.host, machine: rec.machine || null,
+      session: rec.session, sessionName: rec.sessionName, pid: rec.pid, pidKind: rec.pidKind || null,
+      since: rec.since, age: place.holdAge(rec), live, reason };
   });
   if (opts.json) return print(JSON.stringify(rows, null, 2));
   if (!rows.length) { print('No place-claims recorded on this machine.'); return 0; }
   for (const r of rows) {
     const liveTxt = r.live === true ? 'live' : r.live === false ? 'DEAD' : 'unknown';
     // `place.holderLabel`, not `displayIdentity` — a place-claim's record carries a `pid`
-    // (`process.ppid` at every write site) that neither a claim nor a worktree record has, so a
-    // fully name/URL-less hold still resolves to something here instead of the bare "-" (#235).
+    // (the resolved anchor at every write site, #288 — not unconditionally `process.ppid` as
+    // before it) that neither a claim nor a worktree record has, so a fully name/URL-less hold
+    // still resolves to something here instead of the bare "-" (#235). `pidKind: 'invocation'` is
+    // called out inline — it is exactly the case where that pid is a human lead, never a liveness
+    // signal, and a reader seeing "unknown" here should not expect --prune to ever clear it.
     // Age (#238) is next to liveness, not buried after `since`: a stored ISO timestamp requires a
     // reader to subtract it by hand, and a forgotten hold looked identical to a fresh one without it.
-    print(`${r.path}  [${liveTxt}]  held ${r.age}  ${place.holderLabel(r)}  since ${r.since}`);
+    print(`${r.path}  [${liveTxt}]  held ${r.age}  ${place.holderLabel(r)}` +
+      `${r.pidKind === 'invocation' ? '  (pid is a lead only, never probed — #288)' : ''}  since ${r.since}`);
   }
   return 0;
 }
@@ -2826,6 +2881,8 @@ dependency symlinking, dev-server restarts) live in OPTIONAL repo hooks, not her
         --repo <path>      repo root (default: git root of cwd)
         --session <url>    Claude session URL recorded on the worktree + its claims (env COLAB_SESSION)
         --session-name <s> short human label for tables/messages (env COLAB_SESSION_NAME)
+        --pid <n|none>     the new worktree's place-claim liveness anchor (#288) — same meaning as
+                           \`colab claim\`'s --pid; default: auto-detect (env COLAB_PLACE_PID too)
         --force            take over issues already claimed by another worktree / GitHub user
       Claimed issues are ENFORCED: if --issues names an issue already held (locally on another
       worktree, or on GitHub by someone else) the command REFUSES before building anything,
@@ -2982,7 +3039,7 @@ function uncommittedWork(wtPath) {
 
 function cmdWorktreeNew(argv) {
   const opts = parseArgs(argv, {
-    values: { '--issues': 'issues', '--ports': 'ports', '--range': 'range', '--at': 'at', '--name': 'name', '--trunk': 'trunk', '--base': 'base', '--repo': 'repo', '--session': 'session', '--session-name': 'sessionName' },
+    values: { '--issues': 'issues', '--ports': 'ports', '--range': 'range', '--at': 'at', '--name': 'name', '--trunk': 'trunk', '--base': 'base', '--repo': 'repo', '--session': 'session', '--session-name': 'sessionName', '--pid': 'pid' },
     aliases: { '--issue': '--issues' },
     flags: { '--force': 'force', '-h': 'help', '--help': 'help' },
   });
@@ -3005,6 +3062,9 @@ function cmdWorktreeNew(argv) {
   const session = resolveSession(opts);
   const sessionName = resolveSessionName(opts);
   warnWeakIdentity(session, sessionName, 'worktree (and its claims)', name);
+  // #288: resolved before the mutate lock below, not inside it — an invalid --pid should refuse
+  // the whole command the same way any other bad argument does, not surface from inside the lock.
+  const anchor = resolvePlaceAnchor(opts);
   const gh = isGhUsable(repoAbs);
   const myLogin = gh ? git.ghCurrentLogin() : null;
   const idProblem = claimIdentity.claimIdentityProblem(config.claimIdentity);
@@ -3129,7 +3189,8 @@ function cmdWorktreeNew(argv) {
     // for anything created from this point on.
     st.places = st.places || {};
     st.places[place.placeKey(wtPath)] = place.holdRecord({
-      pathAbs: wtPath, repo: repoAbs, branch, host: HOST, session, sessionName, pid: process.ppid,
+      pathAbs: wtPath, repo: repoAbs, branch, host: HOST, session, sessionName,
+      pid: anchor.pid, pidKind: anchor.pidKind,
     });
     const claimedNums = [], dupes = [];
     for (const num of issues) {
@@ -3748,7 +3809,7 @@ function cmdDoctor(argv) {
   const config = state.loadConfig();
   const ttl = opts.ttl ? parseFloat(opts.ttl) : config.claimTTLHours;
 
-  const report = { deadWorktrees: [], orphanClaims: [], staleClaims: [], stalePlaces: [], orphanPorts: [], brokenRecords: [], prunedPorts: [],
+  const report = { deadWorktrees: [], orphanClaims: [], staleClaims: [], stalePlaces: [], unprovablePlaces: [], orphanPorts: [], brokenRecords: [], prunedPorts: [],
     mergedFlips: [], mergedSweep: [], mergedDirty: [], mergedHookFail: [], mergedRemoveFail: [], shippedBranches: [], ghostPorts: [],
     spentGroupLabels: [], groupLabelsChecked: !!opts.sync, pruned: !!opts.prune };
 
@@ -3806,6 +3867,16 @@ function cmdDoctor(argv) {
       report.stalePlaces.push({ path: stale.path, repo: shortRepo(stale.rec.repo), reason: stale.reason,
         session: stale.rec.session || '', sessionName: stale.rec.sessionName || '' });
       if (opts.prune) delete st.places[stale.path];
+    }
+    // 1c. unprovable place-claims (#288/#289) — `live === null`: an `'invocation'`-anchored hold
+    // (a pid kept only as a human lead, never probed) or a genuinely unreachable foreign-machine
+    // one. Report-only, NEVER pruned here — this is the visibility half of #288's design ("an
+    // abandoned 'invocation' hold sticks until a human runs `place release`" — see CONVENTIONS.md,
+    // Place-claims), mirroring `report.shippedBranches`'s pattern: printed after the health verdict,
+    // never counted in `issues`, never in `nothing`.
+    for (const u of place.unprovablePlaces(st)) {
+      report.unprovablePlaces.push({ path: u.path, repo: shortRepo(u.rec.repo), reason: u.reason,
+        age: place.holdAge(u.rec), session: u.rec.session || '', sessionName: u.rec.sessionName || '' });
     }
     // 2. orphan claims (worktree ref not in state)
     for (const [k, c] of Object.entries(st.claims)) {
@@ -4120,6 +4191,23 @@ function cmdDoctor(argv) {
     report.brokenRecords.length === 0 &&
     report.mergedFlips.length === 0 && report.mergedSweep.length === 0 && report.mergedDirty.length === 0;
   if (nothing) print('All healthy — nothing to prune.');
+
+  // Printed AFTER the health verdict, same precedent as `shippedBranches` below: never counted in
+  // `issues`/`nothing`, never pruned (#288/#289) — an `'invocation'`-anchored hold or a genuinely
+  // unreachable foreign-machine record is NOT drift to flag as an "issue", it is expected shape for
+  // an agent-session hold that correctly refuses to guess at its own liveness. But leaving it purely
+  // silent was #288's own complaint (an abandoned hold sticks until a human clears it, with no report
+  // anywhere) — this is what makes it visible instead.
+  if (report.unprovablePlaces.length) {
+    print('');
+    print(`Place-claim(s) with UNPROVABLE liveness (${report.unprovablePlaces.length}) — never auto-pruned, ` +
+      'not counted above:');
+    for (const u of report.unprovablePlaces) {
+      print(`  ${u.path} [${u.repo}] held ${u.age} — ${u.reason}` +
+        `${displayIdentity(u.sessionName, u.session) ? ` session=${displayIdentity(u.sessionName, u.session)}` : ''}`);
+    }
+    print('  Once you have confirmed the holder is gone: COLAB_HUMAN=1 colab place release "<path>"');
+  }
 
   // Printed AFTER the health verdict, on purpose: these are not drift. `ship` keeps the branch by
   // default, so this list grows by one per shipped session and is expected to be non-empty.
@@ -7878,7 +7966,10 @@ function cmdShip(argv) {
       process.stderr.write(`✗ B1: ${loadedPlace.message}\n`);
       return 1;
     }
-    const placeConf = place.conflict(loadedPlace.st, repoAbs, { session: sess.session, pid: process.ppid });
+    // #288: resolved once, reused for the write below too — no --pid flag on `ship` itself, but
+    // COLAB_PLACE_PID and the same agent-session auto-detection still apply.
+    const anchor = resolvePlaceAnchor(opts);
+    const placeConf = place.conflict(loadedPlace.st, repoAbs, { session: sess.session, pid: anchor.pid });
     if (placeConf) {
       cleanupEphemeral();
       process.stderr.write(`✗ B1: refusing — ${placeConf.message}\n`);
@@ -7892,7 +7983,7 @@ function cmdShip(argv) {
       s.places = s.places || {};
       s.places[place.placeKey(repoAbs)] = place.holdRecord({
         pathAbs: repoAbs, repo: repoAbs, branch: null, host: HOST,
-        session: sess.session, sessionName: sess.sessionName, pid: process.ppid,
+        session: sess.session, sessionName: sess.sessionName, pid: anchor.pid, pidKind: anchor.pidKind,
       });
     });
     if (!written.ok) {
@@ -8596,7 +8687,10 @@ function cmdPromote(argv) {
     if (syncProblem) { process.stderr.write(`✗ ${syncProblem}\n`); return 1; }
     const loadedPlace = placeState('promote into the main checkout');
     if (!loadedPlace.ok) { process.stderr.write(`✗ ${loadedPlace.message}\n`); return 1; }
-    const placeConf = place.conflict(loadedPlace.st, repoAbs, { session: promoteSession, pid: process.ppid });
+    // #288: resolved once, reused for the write below too — no --pid flag on `promote` itself, but
+    // COLAB_PLACE_PID and the same agent-session auto-detection still apply.
+    const anchor = resolvePlaceAnchor(opts);
+    const placeConf = place.conflict(loadedPlace.st, repoAbs, { session: promoteSession, pid: anchor.pid });
     if (placeConf) {
       process.stderr.write(`✗ refusing — ${placeConf.message}\n`);
       process.stderr.write('  Never --force here: a live foreign hold on the main checkout stays behind the same\n');
@@ -8609,7 +8703,7 @@ function cmdPromote(argv) {
       s.places = s.places || {};
       s.places[place.placeKey(repoAbs)] = place.holdRecord({
         pathAbs: repoAbs, repo: repoAbs, branch: null, host: HOST,
-        session: promoteSession, sessionName: promoteSessionName, pid: process.ppid,
+        session: promoteSession, sessionName: promoteSessionName, pid: anchor.pid, pidKind: anchor.pidKind,
       });
     });
     if (!written.ok) { process.stderr.write(`✗ ${written.message}\n`); return 1; }
