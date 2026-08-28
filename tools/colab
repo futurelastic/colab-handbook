@@ -1536,10 +1536,16 @@ function cmdReadinessMechanical(repoAbs, num, opts) {
   // The receipt (#69, framing 2): auditable rather than assumed. Best-effort — the label write
   // above already landed, and a comment that fails to post costs a human re-deriving "when was
   // this checked" from the label's own timestamp, not a lost fact.
+  //
+  // Issue-specific facts only (#296): the count, the timestamp, the label applied. What the
+  // check can and cannot see is true of every run on every issue, forever, so it lives once in
+  // CONVENTIONS.md §5 (Mechanical readiness) — not copied onto each issue it touches. That
+  // caveat used to be ~190 of ~230 bytes here, repeated byte-for-byte across every issue this
+  // command marks (#296: 21/21 identical on one backlog, 40% of it).
   const ts = new Date().toISOString();
   git.ghIssueComment(repoAbs, num,
-    `Mechanical readiness check (\`colab readiness --mechanical\`): \`blockedBy\` totalCount = 0, read ${ts}. `
-    + `This confirms the ENCODED graph only — it cannot see a blocker described only in prose. Applied \`${labels.MECHANICAL_READINESS_LABEL}\`, not \`${labels.READINESS_LABEL}\`.`);
+    `Mechanical readiness: \`blockedBy\` totalCount = 0, read ${ts}. Applied \`${labels.MECHANICAL_READINESS_LABEL}\` `
+    + `(CONVENTIONS.md §5, Mechanical readiness — not \`${labels.READINESS_LABEL}\`).`);
 
   print(`Marked #${num} in ${shortRepo(repoAbs)} ${labels.MECHANICAL_READINESS_LABEL} — blockedBy reads empty (receipt posted)`);
   // Deliberately no pushEvent: the receiver has agreed `readiness.marked` to mean deps-checked
