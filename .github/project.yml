@@ -59,11 +59,15 @@
 #               examples for the rules it states. Orthogonal to `writes` above, and this
 #               descriptor is the worked example of that orthogonality — one writer, many
 #               readers, so `writes: free` never implies `room: solo`.
-#   autonomy    ABSENT here, deliberately. Absent already means `manual`
-#               (project.schema.md "autonomy — optional"), and a reference example that
-#               pins a key to its own default stops demonstrating which keys are
-#               required. The `auto-trunk` grant this repo carried was dropped in #202:
-#               every branched unit's Phase B is a human act again.
+#   autonomy    OPTIONAL. Absent means `manual` (project.schema.md "autonomy —
+#               optional"). This repo's grant has moved twice: `auto-trunk` was
+#               dropped in #202 (every branched unit's Phase B a human act again),
+#               then re-granted in #224 once the writes/autonomy matrix cell that
+#               had forbidden it on this repo's `writes` value was corrected. The
+#               live value below (`auto-trunk`) and the separate `# Granted
+#               2026-08-14 (#224)…` comment immediately preceding it reflect the
+#               current, #224 state — see there for exactly what it grants and
+#               what it never does.
 #   exposure    OPTIONAL. none | self | live | released. What consumes a merge here —
 #               additive alongside tier in this unit; tier stays authoritative
 #               (project.schema.md "exposure — optional"). This repo IS released:
