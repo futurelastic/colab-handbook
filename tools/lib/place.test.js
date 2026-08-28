@@ -16,6 +16,7 @@ const os = require('os');
 const path = require('path');
 
 const place = require('./place.js');
+const machine = require('./machine.js');
 
 const HOST = os.hostname();
 
@@ -365,4 +366,113 @@ test('syncedStateProblem: an iCloud "Library/Mobile Documents" path is flagged b
   const problem = place.syncedStateProblem(p);
   assert.ok(problem);
   assert.match(problem, /iCloud/);
+});
+
+// --- #289: machine identity end-to-end through isLive/conflict, not just machine.js in isolation --
+
+test('isLive: a record whose host is the SAME first label under a different case/suffix than the live machine is live: true — #289 drift case, end-to-end', () => {
+  const localHost = machine.localMachine().host;
+  const drifted = localHost.toUpperCase() + '.some.other.suffix.';
+  const r = rec({ host: drifted, pid: process.pid });
+  const { live, reason } = place.isLive(r, () => true);
+  assert.strictEqual(live, true);
+  assert.match(reason, /alive/);
+});
+
+// --- #288: pidKind — 'invocation' pids are a lead for humans, never a liveness signal ------------
+
+test('defaultProbe: pid + no pidKind (legacy/anchor default) is probed normally', () => {
+  assert.strictEqual(place.defaultProbe(rec({ pid: process.pid, pidKind: undefined })), true);
+});
+
+test('defaultProbe: pid + pidKind "invocation" is NEVER probed — null even though the pid is alive', () => {
+  assert.strictEqual(place.defaultProbe(rec({ pid: process.pid, pidKind: 'invocation' })), null);
+});
+
+test('defaultProbe: pid + pidKind "anchor" is probed exactly like the legacy default', () => {
+  assert.strictEqual(place.defaultProbe(rec({ pid: process.pid, pidKind: 'anchor' })), true);
+});
+
+test('isLive: an "invocation" record names WHY it cannot probe and cites #288, distinct from the no-pid reason', () => {
+  const withPid = place.isLive(rec({ pid: 4242, pidKind: 'invocation' }));
+  assert.strictEqual(withPid.live, null);
+  assert.match(withPid.reason, /#288/);
+  assert.doesNotMatch(withPid.reason, /no pid recorded/);
+
+  const noPid = place.isLive(rec({ pid: null, pidKind: null }));
+  assert.strictEqual(noPid.live, null);
+  assert.match(noPid.reason, /no pid recorded/);
+});
+
+// --- stalePlaces / unprovablePlaces — an 'invocation' hold is never "confirmed dead" --------------
+
+test('stalePlaces: never lists an "invocation" record, even with a probe that would say dead for anyone else', () => {
+  const st = {
+    places: {
+      '/tmp/inv': rec({ path: '/tmp/inv', pid: 1, pidKind: 'invocation' }),
+      '/tmp/dead': rec({ path: '/tmp/dead', pid: 2, pidKind: 'anchor' }),
+    },
+  };
+  const probe = () => false; // "would say dead" for everyone the module actually lets it probe
+  const stale = place.stalePlaces(st, probe);
+  assert.deepStrictEqual(stale.map((s) => s.path), ['/tmp/dead']);
+});
+
+test('unprovablePlaces: lists an "invocation" record and any other live:null hold, never a live:false one', () => {
+  const st = {
+    places: {
+      '/tmp/inv': rec({ path: '/tmp/inv', pid: 1, pidKind: 'invocation' }),
+      '/tmp/dead': rec({ path: '/tmp/dead', pid: 2, pidKind: 'anchor' }),
+      '/tmp/alive': rec({ path: '/tmp/alive', pid: 3, pidKind: 'anchor' }),
+    },
+  };
+  const probe = (r) => (r.path === '/tmp/dead' ? false : r.path === '/tmp/alive' ? true : null);
+  const unprovable = place.unprovablePlaces(st, probe);
+  assert.deepStrictEqual(unprovable.map((s) => s.path), ['/tmp/inv']);
+});
+
+// --- resolveAnchor (#288) — table-driven, every real-world source injected ------------------------
+
+test('resolveAnchor: --pid <n>, alive → {pid: n, pidKind: "anchor"}', () => {
+  const r = place.resolveAnchor({ pidOpt: '123', env: {}, ppid: 999, alive: () => true, isAncestor: () => false });
+  assert.deepStrictEqual({ pid: r.pid, pidKind: r.pidKind }, { pid: 123, pidKind: 'anchor' });
+});
+
+test('resolveAnchor: --pid <n>, NOT alive → invalid, no anchor adopted', () => {
+  const r = place.resolveAnchor({ pidOpt: '123', env: {}, ppid: 999, alive: () => false, isAncestor: () => false });
+  assert.strictEqual(r.invalid, true);
+});
+
+test('resolveAnchor: --pid none → {pid: ppid, pidKind: "invocation"}', () => {
+  const r = place.resolveAnchor({ pidOpt: 'none', env: {}, ppid: 999, alive: () => true, isAncestor: () => false });
+  assert.deepStrictEqual({ pid: r.pid, pidKind: r.pidKind }, { pid: 999, pidKind: 'invocation' });
+});
+
+test('resolveAnchor: CLAUDE_PID alive + proven ancestor → {pid: that, pidKind: "anchor"}', () => {
+  const r = place.resolveAnchor({
+    env: { CLAUDE_PID: '555' }, ppid: 999, alive: () => true, isAncestor: () => true,
+  });
+  assert.deepStrictEqual({ pid: r.pid, pidKind: r.pidKind }, { pid: 555, pidKind: 'anchor' });
+});
+
+test('resolveAnchor: CLAUDE_PID alive but NOT an ancestor + CLAUDECODE=1 → {pid: ppid, pidKind: "invocation"}', () => {
+  const r = place.resolveAnchor({
+    env: { CLAUDE_PID: '555', CLAUDECODE: '1' }, ppid: 999, alive: () => true, isAncestor: () => false,
+  });
+  assert.deepStrictEqual({ pid: r.pid, pidKind: r.pidKind }, { pid: 999, pidKind: 'invocation' });
+});
+
+test('resolveAnchor: CLAUDECODE=1 alone (no CLAUDE_PID) → {pid: ppid, pidKind: "invocation"}', () => {
+  const r = place.resolveAnchor({ env: { CLAUDECODE: '1' }, ppid: 999, alive: () => true, isAncestor: () => true });
+  assert.deepStrictEqual({ pid: r.pid, pidKind: r.pidKind }, { pid: 999, pidKind: 'invocation' });
+});
+
+test('resolveAnchor: empty env, no --pid → {pid: ppid, pidKind: "anchor"} — today\'s exact default', () => {
+  const r = place.resolveAnchor({ env: {}, ppid: 999, alive: () => true, isAncestor: () => true });
+  assert.deepStrictEqual({ pid: r.pid, pidKind: r.pidKind }, { pid: 999, pidKind: 'anchor' });
+});
+
+test('resolveAnchor: AI_AGENT truthy behaves like CLAUDECODE=1 — fails closed to "invocation"', () => {
+  const r = place.resolveAnchor({ env: { AI_AGENT: '1' }, ppid: 999, alive: () => true, isAncestor: () => true });
+  assert.strictEqual(r.pidKind, 'invocation');
 });

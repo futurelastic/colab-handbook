@@ -411,3 +411,57 @@ test('place release: a blank-session holder\'s refusal explains the identity gap
   assert.match(rel.err, /carries a session id/);
   assert.match(rel.err, /COLAB_HUMAN=1/);
 });
+
+// --- #288 CLI-level (plan's acceptance oracle items 14-15) --------------------------------------
+
+test('#288: --pid none records pidKind "invocation"/live:null, and `colab doctor --prune` leaves it present + reports it', () => {
+  const fx = fixture();
+  const acq = colab(fx, ['place', 'acquire', fx.work, '--repo', fx.work, '--pid', 'none', '--session', 's1']);
+  assert.strictEqual(acq.code, 0, acq.err);
+
+  const list = colab(fx, ['places', '--json']);
+  assert.strictEqual(list.code, 0, list.err);
+  const rows = JSON.parse(list.out);
+  assert.strictEqual(rows.length, 1);
+  assert.strictEqual(rows[0].pidKind, 'invocation');
+  assert.strictEqual(rows[0].live, null);
+
+  const doc = colab(fx, ['doctor', '--json', '--prune']);
+  assert.strictEqual(doc.code, 0, doc.err);
+  const report = JSON.parse(doc.out);
+  assert.strictEqual(report.unprovablePlaces.length, 1, 'reported in the unprovable section, not stalePlaces');
+  assert.strictEqual(report.stalePlaces.length, 0);
+
+  const st = JSON.parse(fs.readFileSync(path.join(fx.home, 'state.json'), 'utf8'));
+  assert.strictEqual(Object.keys(st.places).length, 1, '--prune must NEVER remove an unprovable (live:null) hold');
+});
+
+test('#288: a clean (non-agent) env still anchors on the parent pid (pidKind "anchor"), and a dead-pid record is still pruned — pruning not regressed', () => {
+  const fx = fixture();
+  // Neutralise this test RUNNER's own agent-session env (this suite may itself be running inside
+  // an agent shell) so the acquire below exercises rule 4's plain default, not rule 2/3.
+  const cleanEnv = { CLAUDECODE: '', CLAUDE_PID: '', AI_AGENT: '' };
+  const acq = colab(fx, ['place', 'acquire', fx.work, '--repo', fx.work, '--session', 's1'], cleanEnv);
+  assert.strictEqual(acq.code, 0, acq.err);
+
+  const st1 = JSON.parse(fs.readFileSync(path.join(fx.home, 'state.json'), 'utf8'));
+  const rec1 = Object.values(st1.places)[0];
+  assert.strictEqual(rec1.pidKind, 'anchor');
+  assert.ok(rec1.pid, 'pid must still be recorded');
+
+  // Seed a SECOND place record (a different checkout path) directly, with an obviously-dead pid and
+  // no pidKind at all — the legacy shape `stalePlaces`/`--prune` must keep pruning unregressed.
+  const otherPath = fs.mkdtempSync(path.join(os.tmpdir(), 'place-cli-dead-'));
+  TMP.push(otherPath);
+  st1.places[otherPath] = {
+    path: otherPath, repo: fx.work, branch: null, host: os.hostname(),
+    session: 's2', sessionName: null, pid: 999999999, since: new Date().toISOString(),
+  };
+  fs.writeFileSync(path.join(fx.home, 'state.json'), JSON.stringify(st1, null, 2));
+
+  const doc = colab(fx, ['doctor', '--json', '--prune']);
+  assert.strictEqual(doc.code, 0, doc.err);
+  const st2 = JSON.parse(fs.readFileSync(path.join(fx.home, 'state.json'), 'utf8'));
+  assert.ok(!st2.places[otherPath], 'the dead-pid legacy record must still be pruned');
+  assert.ok(st2.places[Object.keys(st1.places).find((k) => k !== otherPath)], 'the live anchor record must survive');
+});
