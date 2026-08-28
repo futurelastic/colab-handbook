@@ -196,6 +196,17 @@ resuming the feature should get full context from `gh issue view N` without
 re-reading the codebase. When you learn something non-obvious (a gotcha, a
 decision, a dead end), distill it onto the Issue before you stop.
 
+- **A comment carries what is true of *this issue* — not what is true of the
+  command that wrote it.** An automated check's fixed explanation of what it
+  can and cannot see (what graph it read, what it is blind to) is true of
+  *every* run, on *every* issue, forever — that belongs once in the command's
+  own documentation, not copied onto each issue it touches. We measured one
+  repo where this boilerplate was 82% of such a comment's bytes and had
+  landed on 40% of an open backlog, growing with every newly-checked issue
+  because nothing capped it. The issue-specific payload — what was measured,
+  and when — still belongs on the Issue; the standing caveat about the tool
+  does not.
+
 ## When in doubt
 
 Prefer reporting a conflict over resolving it silently: a `project.yml` that
