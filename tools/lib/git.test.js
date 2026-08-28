@@ -1,7 +1,7 @@
 'use strict';
 /**
- * Tests for tools/lib/git.js — `worktreeListDetailed` (#67), the dirty-tree readings (#86), and
- * `ghRunForSha` (#92).
+ * Tests for tools/lib/git.js — `worktreeListDetailed` (#67), `resolveWorktreePathForBranch` and
+ * `gitFailureLine` (#286/#287), the dirty-tree readings (#86), and `ghRunForSha` (#92).
  *
  * Run: `node --test tools/lib/*.test.js` — the existing CI glob picks this file up.
  *
@@ -98,6 +98,61 @@ test('a non-repo path returns [] rather than throwing', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'git-test-notrepo-'));
   TMP.push(dir);
   assert.deepStrictEqual(worktreeListDetailed(dir), []);
+});
+
+// --- resolveWorktreePathForBranch (#286) ---------------------------------------
+//
+// `colab ship`'s B0 used to trust a session's own `wtPath` record, which can be null or stale
+// while a live worktree of that branch still exists on disk — and then mint a SECOND checkout of
+// the same branch, which git refuses ("already checked out at …"). This is the ground-truth read
+// that replaces it: built on `worktreeListDetailed` (already tested above against real git), not
+// a fresh porcelain parse.
+
+test('#286: a branch checked out in a linked worktree resolves to that worktree\'s path', () => {
+  const r = repo();
+  const wtDir = tmp('git-test-wt-');
+  fs.rmdirSync(wtDir);
+  r.g('worktree', 'add', '-b', 'feat/thing', wtDir);
+
+  const found = git.resolveWorktreePathForBranch(r.dir, 'feat/thing');
+  assert.strictEqual(path.resolve(found), path.resolve(wtDir));
+});
+
+test('#286: a branch not checked out anywhere resolves to null — the only safe case for an ephemeral checkout', () => {
+  const r = repo();
+  r.g('branch', 'feat/never-checked-out');
+  assert.strictEqual(git.resolveWorktreePathForBranch(r.dir, 'feat/never-checked-out'), null);
+});
+
+test('#286: the main checkout itself resolves for its own current branch', () => {
+  const r = repo();
+  assert.strictEqual(path.resolve(git.resolveWorktreePathForBranch(r.dir, 'main')), path.resolve(r.dir));
+});
+
+// --- gitFailureLine (#287) ------------------------------------------------------
+//
+// `stderr.split('\n')[0]` on a failed `git worktree add` keeps git's generic progress line
+// ("Preparing worktree (checking out '<branch>')") and discards the `fatal:` line beneath it —
+// the only line naming what actually went wrong, including (on a checkout collision) the path of
+// the worktree already holding the branch.
+
+test('#287: prefers the fatal: line over a leading progress line', () => {
+  const stderr = "Preparing worktree (checking out 'feat/x')\nfatal: 'feat/x' is already checked out at '/repo/wt1'";
+  assert.strictEqual(git.gitFailureLine(stderr), "fatal: 'feat/x' is already checked out at '/repo/wt1'");
+});
+
+test('#287: falls back to the last non-empty line when there is no fatal: line', () => {
+  const stderr = 'Preparing worktree (new branch \'x\')\nhint: something else\n';
+  assert.strictEqual(git.gitFailureLine(stderr), "hint: something else");
+});
+
+test('#287: a single-line stderr returns that line', () => {
+  assert.strictEqual(git.gitFailureLine('fatal: not a git repository'), 'fatal: not a git repository');
+});
+
+test('#287: empty/undefined stderr does not throw', () => {
+  assert.strictEqual(git.gitFailureLine(''), '');
+  assert.strictEqual(git.gitFailureLine(undefined), '');
 });
 
 // --- dirty readings (#86) -----------------------------------------------------

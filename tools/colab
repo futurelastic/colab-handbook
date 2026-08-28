@@ -7759,12 +7759,12 @@ function cmdShip(argv) {
   // ---- (c) B0: merge the TARGET into the branch (in the worktree, or an ephemeral one) ----
   const generated = [...DEFAULT_GENERATED, ...(Array.isArray(doc.generated) ? doc.generated.map(String) : [])];
   const hasPreShip = fs.existsSync(path.join(repoAbs, '.colab', 'hooks', 'pre-ship'));
-  let branchDir = sess.wtPath && fs.existsSync(sess.wtPath) ? sess.wtPath : null;
+  let branchDir = git.resolveWorktreePathForBranch(repoAbs, sess.branch);
   let ephemeral = false;
   if (!branchDir) {
     branchDir = fs.mkdtempSync(path.join(os.tmpdir(), 'colab-ship-'));
     const add = git.git(['worktree', 'add', branchDir, sess.branch], repoAbs);
-    if (!add.ok) { try { fs.rmdirSync(branchDir); } catch (_) {} throw new UserError(`could not check out ${sess.branch} for B0: ${add.stderr.split('\n')[0]}`); }
+    if (!add.ok) { try { fs.rmdirSync(branchDir); } catch (_) {} throw new UserError(`could not check out ${sess.branch} for B0: ${git.gitFailureLine(add.stderr)}`); }
     ephemeral = true;
   }
   const cleanupEphemeral = () => { if (ephemeral) git.git(['worktree', 'remove', '--force', branchDir], repoAbs); };
@@ -7853,7 +7853,7 @@ function cmdShip(argv) {
     if (!addT.ok) {
       cleanupEphemeral();
       try { fs.rmdirSync(targetDir); } catch (_) {}
-      process.stderr.write(`✗ B1: could not check out "${target}" to merge into: ${addT.stderr.split('\n')[0]}. Nothing pushed.\n`);
+      process.stderr.write(`✗ B1: could not check out "${target}" to merge into: ${git.gitFailureLine(addT.stderr)}. Nothing pushed.\n`);
       return 1;
     }
     ephemeralTarget = true;
@@ -8579,7 +8579,7 @@ function cmdPromote(argv) {
   if (!mainDir) {
     mainDir = fs.mkdtempSync(path.join(os.tmpdir(), 'colab-promote-'));
     const add = git.git(['worktree', 'add', mainDir, MAIN], repoAbs);
-    if (!add.ok) { try { fs.rmdirSync(mainDir); } catch (_) {} throw new UserError(`could not check out main for promotion: ${add.stderr.split('\n')[0]}`); }
+    if (!add.ok) { try { fs.rmdirSync(mainDir); } catch (_) {} throw new UserError(`could not check out main for promotion: ${git.gitFailureLine(add.stderr)}`); }
     ephemeral = true;
   }
   // #234: same gap as `ship` (see its own comment at the equivalent site) — `!ephemeral` means

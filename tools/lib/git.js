@@ -169,6 +169,43 @@ function worktreeListDetailed(repo) {
 }
 
 /**
+ * Resolves where `branch` is actually checked out right now, from git's own ground truth —
+ * never a caller's own record of it (a `wtPath` field on a session/worktree object), which can
+ * be null or stale (the record went missing, or was never written — happens, has multiple real
+ * producers) while a live worktree of that branch still exists on disk. `colab ship`'s B0 used
+ * to trust `sess.wtPath` alone and, on a stale/missing record, fall through to minting an
+ * ADDITIONAL temp checkout of the same branch — which git then refuses ("already checked out
+ * at …"), because two checkouts of one branch is something git itself does not allow (#286).
+ *
+ * Built on `worktreeListDetailed` above rather than re-parsing `--porcelain` output — same
+ * ground-truth source already used for `colab worktrees`' reconciliation and the orphan-branch
+ * scan, and already covered by its own tests.
+ *
+ * Returns null when git itself says the branch is not checked out anywhere — the only case in
+ * which minting a fresh (ephemeral) checkout is safe.
+ */
+function resolveWorktreePathForBranch(repo, branch) {
+  const hit = worktreeListDetailed(repo).find((w) => w.branch === branch);
+  return hit ? hit.path : null;
+}
+
+/**
+ * `stderr.split('\n')[0]` on a failed `git worktree add` keeps git's own generic progress line
+ * ("Preparing worktree (checking out '<branch>')") and discards the `fatal:` line beneath it —
+ * the only line that actually names what went wrong, including (in a checkout-collision) the
+ * path of the worktree already holding that branch (#287). Prefer the first `fatal:` line; fall
+ * back to the last non-empty line for a failure that doesn't say `fatal:` at all, rather than
+ * always the first line, which is the one most likely to be boilerplate progress output.
+ */
+function gitFailureLine(stderr) {
+  const lines = (stderr || '').split('\n');
+  const fatal = lines.find((l) => l.startsWith('fatal:'));
+  if (fatal) return fatal;
+  const nonEmpty = lines.filter(Boolean);
+  return nonEmpty.length ? nonEmpty[nonEmpty.length - 1] : lines[0];
+}
+
+/**
  * `git status --porcelain` split into its tracked and untracked halves, or null if git could not
  * answer. Two deliberate choices, both load-bearing for the callers below:
  *
@@ -480,7 +517,8 @@ function ghAssignedIssues(repo) {
 
 module.exports = {
   run, git, repoRoot, mainRepoRoot, originUrl, detectTrunk, branchExists, existingBranchRef,
-  worktreeList, worktreeListDetailed, dirtyTracked, dirtyUntracked, dirtyAny,
+  worktreeList, worktreeListDetailed, resolveWorktreePathForBranch, gitFailureLine,
+  dirtyTracked, dirtyUntracked, dirtyAny,
   ghAvailable, ghIssueEdit, ghListLabels, ghAssignedIssues,
   ghCurrentLogin, ghIssueView, ghIssueComment, ghRunForSha, ghRunJobCount,
   ghIssueListByLabel, ghLabelDelete, ghLabelCreate,
