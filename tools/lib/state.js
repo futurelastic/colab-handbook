@@ -35,7 +35,7 @@
  *     "<repoAbs>": { host, session, sessionName, since }
  *   },
  *   places: {                            // #136 — path-scoped place-claims, machine-local only
- *     "<checkoutPathAbs>": { path, repo, branch, host, session, sessionName, pid, since }
+ *     "<checkoutPathAbs>": { path, repo, branch, host, machine, session, sessionName, pid, since }
  *   }
  * }
  *
@@ -68,6 +68,11 @@
  * past its holder's death is the expected, harmless shape, not a bug to migrate away. `places` and
  * `solo` deliberately coexist rather than merge: `solo` is the published contract noted above, and
  * converging the two is out of scope for #133/#136 (tracked for after #175).
+ *
+ * `machine` (#289) is backward-compatible the same way: a record written before it existed simply
+ * lacks it, and readers must tolerate that — no migration. It is this machine's hardware-bound id
+ * (lib/machine.js `localMachine().id`), recorded alongside `host` so a reader can tell a genuinely
+ * different machine from the same machine under a drifted hostname without re-deriving it.
  */
 
 const fs = require('fs');

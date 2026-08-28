@@ -716,6 +716,15 @@ and **verified by the writer itself**, not merely by whatever spawned it.
   primitive's whole value is refusing when it cannot prove safety; a measured falsifier run found
   agent tool calls do not even share a stable `pid` across separate commands, so the mandatory
   identity at the two minting call sites is the fix, not a weaker match inside `conflict` itself.
+- **Machine identity, not a hostname string (#289).** A record's `host` alone false-refuses the
+  SAME machine the instant its short hostname drifts from its FQDN, or DHCP/mDNS hands out a
+  different label between processes. Comparison is now two-tier: a cheap, pure canonicalization
+  (case-fold, drop a trailing dot, keep only the first label) resolves the ordinary drift case, and
+  when both sides also carry a hardware-bound id — `ioreg`'s `IOPlatformUUID` on darwin, the
+  D-Bus machine id on linux, a MAC-address hash as the last resort — that id decides exactly,
+  immune to hostname drift entirely. A record written before this landed carries no such id and
+  takes the hostname-comparison branch, which is strictly *more* permissive than the raw string
+  equality it replaces; no record that compared equal before can start comparing unequal now.
 
 **A related lock already exists outside this convention, and this section describes it
 rather than forking it.** A session dashboard refuses to spawn a second `ship`/`sweep`

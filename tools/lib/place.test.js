@@ -16,6 +16,7 @@ const os = require('os');
 const path = require('path');
 
 const place = require('./place.js');
+const machine = require('./machine.js');
 
 const HOST = os.hostname();
 
@@ -365,4 +366,15 @@ test('syncedStateProblem: an iCloud "Library/Mobile Documents" path is flagged b
   const problem = place.syncedStateProblem(p);
   assert.ok(problem);
   assert.match(problem, /iCloud/);
+});
+
+// --- #289: machine identity end-to-end through isLive/conflict, not just machine.js in isolation --
+
+test('isLive: a record whose host is the SAME first label under a different case/suffix than the live machine is live: true — #289 drift case, end-to-end', () => {
+  const localHost = machine.localMachine().host;
+  const drifted = localHost.toUpperCase() + '.some.other.suffix.';
+  const r = rec({ host: drifted, pid: process.pid });
+  const { live, reason } = place.isLive(r, () => true);
+  assert.strictEqual(live, true);
+  assert.match(reason, /alive/);
 });

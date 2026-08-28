@@ -624,7 +624,8 @@ Design notes, in case a future change is tempted to relax one:
     "/abs/repo/or/worktree/path": {
       "path": "/abs/repo/or/worktree/path", "repo": "/abs/repo",
       "branch": null,                          // same representation as a claim's — null or a real name
-      "host": "machine", "session": "https://claude.ai/code/session_…",
+      "host": "machine", "machine": "iokit:1234-…",  // hardware-bound id, #289 — tolerate-absence, no migration
+      "session": "https://claude.ai/code/session_…",
       "sessionName": "colab-handbook",
       "pid": 4242,                              // the LONG-LIVED holder's pid, never a `colab` invocation's own
       "since": "<iso>"
@@ -661,6 +662,10 @@ Design notes, in case a future change is tempted to relax one:
   lock cannot answer for an implementer agent fanned out by a coordinator. **Never trust a stored
   flag for release** — every reader (`colab place check`, `colab places`, `colab doctor`) re-derives
   liveness from `pid` at read time; a record surviving its holder's death is expected, not a bug.
+  `machine` is backward-compatible the same way as `session`/`base` above — a record written before
+  #289 simply lacks it, no migration: it is this machine's hardware id, and comparing it (when both
+  sides have one) replaces a raw hostname string compare so a drifted-but-same-machine record is not
+  misread as foreign.
 
 ### Records that cannot be acted on
 

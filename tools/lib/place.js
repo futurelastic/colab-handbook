@@ -26,9 +26,13 @@
  * worktrees needs one hold per checkout in use. Two machines each holding their own local lock on
  * what happens to be the same logical repo is a distributed-systems question this module does not
  * answer; the existing backstop (separate working trees, git's own push rejection on a stale ref)
- * remains what prevents two machines from landing the same conflict undetected. A record whose
- * `host` does not match this machine is proof `~/.colab` itself is being synced across machines,
- * which `syncedStateProblem` below treats as the same hazard as a synced lock file.
+ * remains what prevents two machines from landing the same conflict undetected. A record that is not
+ * this machine (`tools/lib/machine.js` `isLocal` — a hardware id compare when both sides have one,
+ * else a canonicalized-hostname compare, #289) is proof `~/.colab` itself is being synced across
+ * machines, which `syncedStateProblem` below treats as the same hazard as a synced lock file. Before
+ * #289 this was a raw `rec.host !== os.hostname()` string compare, which false-refused the SAME
+ * machine the instant its short hostname drifted from its FQDN (`devbox.local` vs `devbox`)
+ * — `machine.isLocal` is strictly more permissive, never less, than that check.
  *
  * NEVER IN A FILE-SYNCED LOCATION. A Resilio/Syncthing/Dropbox/iCloud path has no atomicity and no
  * consistency guarantee inside its sync window: two sessions can each read "unlocked", each write
@@ -62,6 +66,7 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 const procs = require('./procs');
+const machine = require('./machine');
 const { humanAge } = require('./util');
 
 /**
@@ -89,6 +94,11 @@ function placeKey(pathAbs) {
  * SHOULD PASS THE LONG-LIVED PROCESS's pid, not a short-lived CLI invocation's own — `tools/colab`
  * passes `process.ppid` for exactly this reason: the `colab` process that acquires a hold exits the
  * moment the command returns, so its own pid would already read dead by the time anything checks.
+ *
+ * `machine` (#289) is this machine's hardware-bound id (`tools/lib/machine.js` `localMachine().id`),
+ * recorded alongside `host` so a reader can tell "genuinely a different machine" from "the same
+ * machine under a drifted hostname" without re-deriving it — `host` stays what `holderLabel` and
+ * every refusal message print, unchanged.
  */
 function holdRecord({ pathAbs, repo, branch = null, host, session, sessionName, pid = null, since }) {
   return {
@@ -96,6 +106,7 @@ function holdRecord({ pathAbs, repo, branch = null, host, session, sessionName, 
     repo,
     branch,
     host: host || os.hostname(),
+    machine: machine.localMachine().id,
     session: session || null,
     sessionName: sessionName || null,
     pid: pid || null,
@@ -108,13 +119,15 @@ function holdRecord({ pathAbs, repo, branch = null, host, session, sessionName, 
  * what happens to be running on the machine. Returns `true` (live, hold stands), `false` (dead,
  * not a hold), or `null` (cannot tell, FAILS CLOSED — the hold stands and the message says why).
  *
- * Order matters: a foreign host is checked before pid liveness, because a record naming a pid on
+ * Order matters: a foreign machine is checked before pid liveness, because a record naming a pid on
  * another machine is not "unknown" in the ordinary sense — it is evidence of the sync hazard this
- * module exists to refuse, and that is worth a distinct message.
+ * module exists to refuse, and that is worth a distinct message (`machine.isLocal`, #289, replaces a
+ * raw `os.hostname()` string compare so a drifted-but-same-machine record is no longer misread as
+ * foreign).
  */
 function defaultProbe(rec) {
   if (!rec) return false;
-  if (rec.host && rec.host !== os.hostname()) return null; // foreign-host — see isLive's message
+  if (!machine.isLocal(rec)) return null; // foreign-machine — see isLive's message
   if (rec.pid) return procs.alive(rec.pid);
   return null; // no pid recorded — cannot probe locally, fails closed
 }
@@ -126,13 +139,15 @@ function defaultProbe(rec) {
  */
 function isLive(rec, probe = defaultProbe) {
   if (!rec) return { live: false, reason: 'no record' };
-  if (rec.host && rec.host !== os.hostname()) {
+  if (!machine.isLocal(rec)) {
+    const local = machine.localMachine();
     return {
       live: null,
-      reason: `recorded on host "${rec.host}", not this machine ("${os.hostname()}") — ` +
-        'either a genuinely different machine (place-claims are machine-local only, CONVENTIONS.md ' +
-        '"Place-claims") or ~/.colab is itself being synced, which is the same hazard this module ' +
-        'refuses for the lock file itself',
+      reason: `recorded on host "${rec.host}"${rec.machine ? ` (machine ${rec.machine})` : ''}, not this ` +
+        `machine ("${local.host}"${local.id ? `, machine ${local.id}` : ''}) — either a genuinely ` +
+        'different machine (place-claims are machine-local only, CONVENTIONS.md "Place-claims") or ' +
+        '~/.colab is itself being synced, which is the same hazard this module refuses for the lock ' +
+        'file itself',
     };
   }
   const verdict = probe(rec);
@@ -246,7 +261,7 @@ function conflict(st, pathAbs, self = {}, probe = defaultProbe) {
   const unidentified = !!(self && !self.session && !h.rec.session);
   const likelySelf = !!(unidentified && self.pid && h.rec.pid === self.pid);
 
-  if (h.rec.host && h.rec.host !== os.hostname()) {
+  if (!machine.isLocal(h.rec)) {
     return {
       holder: h.rec,
       kind: 'foreign-host',
