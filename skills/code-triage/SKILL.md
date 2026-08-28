@@ -592,6 +592,34 @@ colab claims                                 # includes host + session + name
 A claim carries who holds it. If it looks stale, that is a **finding to raise**, not
 permission to take the work.
 
+**Exception — a `deferred:*` claim whose wake condition has resolved is re-surfaced, not
+silently discarded (#290).** `deferred:date` / `deferred:measurement` /
+`deferred:external-party` (`CONVENTIONS.md` [§5](../../CONVENTIONS.md#disposition--a-park-must-name-its-wake-condition-279), *Disposition*) mark a claim genuinely
+parked on something outside this repo — a human-gated permission it is still waiting on,
+not abandoned. A bare `in-progress` can't tell "actively worked" apart from "parked,
+waiting"; a claim carrying no `deferred:*` label is read exactly as before — this only
+adds a check before the ordinary Taken rule fires on one that does:
+
+```sh
+gh issue list --label in-progress --search "label:deferred:date,deferred:measurement,deferred:external-party" \
+  --json number,labels -q '.[] | {number, labels: [.labels[].name]}'
+```
+
+- **`review-by:<date>` present and past** — the wake condition is due for a look. Do not
+  discard it under Taken, and do not silently restart the work either — the claim's holder
+  may still be the right owner. Flag it in the report as *parked, wake condition due*
+  (§6) so a human or the holder re-checks whether the gate actually cleared; never fold it
+  into the ranked start list as if it were unclaimed.
+- **No `review-by:<date>`** — *Disposition* allows an unbounded `deferred:external-party`
+  park (no date, someone else's action is the only wake signal); that can't be resolved
+  mechanically, so it discards under the ordinary Taken rule same as before — but note it
+  in the report, so a park with no clearing signal is at least visible rather than silently
+  re-discarded forever.
+- **No `deferred:*` label at all** — ordinary Taken rule, unchanged.
+
+This never re-runs the discarded issue's own work; it only stops a claim from staying
+invisible once the thing it was waiting on has cleared.
+
 **Already shipped** — the expensive pass, and the one that pays:
 
 ```sh
@@ -1092,7 +1120,10 @@ READY  fix/stale-log-cleanup-190   #190
 Then, briefly:
 
 - **blocked** — one line each, naming the blocker and who could clear it.
-- **taken** — who holds it, and since when.
+- **taken** — who holds it, and since when. A claim flagged *parked, wake condition due*
+  (§2's `deferred:*` exception) gets its own line inside this bucket, not the ready list —
+  name the `deferred:<kind>` and the `review-by:<date>` that passed, so a human can check
+  whether the gate actually cleared instead of finding this by manual audit.
 - **close these** — already shipped, with the evidence you found.
 - **epics** — one line each, naming the container and (if its table is hand-maintained)
   whether it looks current. Never a start candidate; see §2.
