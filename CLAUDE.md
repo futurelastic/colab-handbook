@@ -206,6 +206,17 @@ decision, a dead end), distill it onto the Issue before you stop.
   because nothing capped it. The issue-specific payload — what was measured,
   and when — still belongs on the Issue; the standing caveat about the tool
   does not.
+- **A session that finds no work must not re-post a conclusion the issue
+  already records.** If the note it is about to write restates one already
+  present, it writes nothing. Measured across six repeatedly-selected issues:
+  ~148 KB of comments, 41% of it repeated "nothing to do" notes — one issue
+  collected 15 of them, another six in a row whose text visibly escalated
+  ("third session, same conclusion" … "this is now recurring noise") before
+  one finally stopped restating and traced the root cause instead. The
+  **first** such note still gets posted — it is real information — and
+  **new** information always earns a comment; only the repeat is silenced.
+  The repeat count itself is telemetry, not Issue content: it belongs
+  wherever the project keeps local state, never as a comment.
 
 ## When in doubt
 
