@@ -766,11 +766,15 @@ function cmdClaim(argv) {
   try {
     res = state.mutate((st) => {
       if (takingPlace) {
-        st.places = st.places || {};
-        st.places[place.placeKey(repoAbs)] = place.holdRecord({
+        // #285: decided HERE, under the lock, against the state this mutation actually sees — not
+        // by the pre-check above, which judged a snapshot loaded before the lock was taken. Losing
+        // throws, which rolls the WHOLE mutation back (state.mutate throws before saveState), so a
+        // claim never lands without the hold that makes it safe.
+        const got = place.acquire(st, {
           pathAbs: repoAbs, repo: repoAbs, branch: null, host: HOST, session, sessionName,
-          pid: anchor.pid, pidKind: anchor.pidKind,
+          pid: anchor.pid, pidKind: anchor.pidKind, force: !!opts.force,
         });
+        if (!got.ok) { const e = new UserError(`${got.conflict.message}${PLACE_RACE_NOTE}`); e.placeRace = got.conflict; throw e; }
       }
       if (wtName && !st.worktrees[wtName]) {
         // A stub for a worktree that will be created later. It exists so the claim is not read as
@@ -819,6 +823,9 @@ function cmdClaim(argv) {
       return { created, reclaimed, updated, updatedDetails };
     });
   } catch (e) {
+    // #285: an under-lock place-claim refusal is a genuine conflict, not an unreachable lock — say
+    // so, and do not advise the worktree fallback the degrade path below is for.
+    if (e && e.placeRace) { print(`✗ ${e.message}`); return placeRefusalCode(e.placeRace); }
     if (takingPlace) {
       print(`✗ place-claim state write is unreachable (${String(e.message).split('\n')[0]}) — degrading: ` +
         `claiming the trunk checkout refused. Fall back to a worktree + branch, which needs no lock ` +
@@ -1125,6 +1132,12 @@ function placeMutate(actionLabel, fn) {
   try {
     return { ok: true, result: state.mutate(fn) };
   } catch (e) {
+    // #285: a compound mutation (cmdClaim, cmdSolo) signals "I lost the place-claim race" by
+    // THROWING out of `fn`, which is what makes the whole mutation roll back — `state.mutate`
+    // throws before `saveState`, so nothing is written. That is a deliberate refusal, not an
+    // unreachable lock, and reporting it with the degrade wording below would tell the caller to
+    // fall back to a worktree when what actually happened is that somebody else holds the checkout.
+    if (e && e.placeRace) throw e;
     return {
       ok: false,
       message: `place-claim state write is unreachable (${String(e.message).split('\n')[0]}) — degrading: ` +
@@ -1132,6 +1145,49 @@ function placeMutate(actionLabel, fn) {
         '(CONVENTIONS.md, Place-claims).',
     };
   }
+}
+
+/**
+ * #285 — the note appended to a refusal produced by the INNER, under-lock decision rather than by
+ * the cheap pre-check. Both refusals carry the identical `conflict.message` (they call the same
+ * `place.conflict`), so without this line the two are indistinguishable to a reader, and the one
+ * fact worth knowing — that the loser lost a genuine race rather than walking into a hold that was
+ * already sitting there — would be invisible.
+ */
+const PLACE_RACE_NOTE = ' — and this holder arrived BETWEEN the pre-check and the write. The '
+  + 'decision is made inside the state lock (#285), so the later writer is refused instead of '
+  + 'silently superseding the earlier one; nothing was written.';
+
+/** The exit code a place-claim refusal carries, everywhere: 2 when liveness is unprovable, else 1. */
+function placeRefusalCode(conf) { return conf && conf.kind === 'unknown' ? 2 : 1; }
+
+/**
+ * Decide AND write a place-claim in ONE critical section (#285) — the authority every shared-checkout
+ * acquire site now defers to.
+ *
+ * Before this, each site was a check-then-act pair straddling the lock: `placeState()` loaded state
+ * with no lock, `place.conflict` judged that snapshot, and `placeMutate` then wrote the record
+ * unconditionally. Measured on a fixture: 8 concurrent `colab place acquire` invocations ALL exited
+ * 0 and left one record belonging to whoever wrote last — the place-claim provided no mutual
+ * exclusion whatsoever, which is the "two sessions each read unlocked, each write held by me, and
+ * both proceed WITH CONFIDENCE" failure CONVENTIONS.md ("Place-claims") calls worse than no lock.
+ *
+ * The cheap pre-check STAYS at every call site: it refuses without taking the lock in the common
+ * case, and it owns the `--force` / `COLAB_HUMAN=1` policy this function never second-guesses. It is
+ * simply no longer the authority.
+ *
+ * Returns `{ok:true, rec, superseded}`, `{ok:false, conflict, message, code}` (lost the race), or
+ * `{ok:false, degraded:true, message, code:2}` (the lock itself was unreachable — `placeMutate`'s
+ * own documented degrade wording, verbatim).
+ */
+function placeAcquireLocked(actionLabel, opts) {
+  const written = placeMutate(actionLabel, (s) => place.acquire(s, opts));
+  if (!written.ok) return { ok: false, degraded: true, message: written.message, code: 2 };
+  const r = written.result;
+  if (r && r.ok === false) {
+    return { ok: false, conflict: r.conflict, message: `${r.conflict.message}${PLACE_RACE_NOTE}`, code: placeRefusalCode(r.conflict) };
+  }
+  return { ok: true, rec: r.rec, superseded: r.superseded };
 }
 
 function cmdSolo(argv) {
@@ -1165,12 +1221,34 @@ function cmdSolo(argv) {
   if (!loaded.ok) { print(`✗ ${loaded.message}`); return 1; }
   const st = loaded.st;
   const held = (st.solo || {})[repoAbs];
-  if (held && !opts.force) {
+  // #285: `st.solo` records PRESENCE and carries no liveness signal of its own — before this, a solo
+  // record left behind by a crashed session refused every later attendee until somebody reached for
+  // `--force`, which is the same blunt instrument used to take over a LIVE holder. The place-claim
+  // written alongside it (below) does carry liveness, so ask that instead: a solo lock whose
+  // co-located hold is CONFIRMED dead is superseded and said so. `true` (alive) and `null`
+  // (unprovable, including every #288 `pidKind: 'invocation'` hold) both keep today's refusal — fail
+  // closed, exactly as `place.js` does. No co-located record at all is also `null`-shaped: nothing
+  // proves the holder is gone, so nothing is reclaimed.
+  //
+  // Deliberately NOT gated on `writes: direct`. A stale solo record is equally stale under `free`,
+  // and a safety rule that only applies in one mode is the class of conditional the incident log in
+  // CONVENTIONS.md §4 warns about. This is strictly NARROWER than the `--force` it replaces, so it
+  // cannot widen anything: `--force` still exists for every case this does not cover.
+  const soloCo = held ? place.holderOf(st, repoAbs) : null;
+  const soloHolderDead = !!(soloCo && soloCo.live === false);
+  if (held && !opts.force && !soloHolderDead) {
     print(`✗ solo already OPEN in ${shortRepo(repoAbs)} — held by ${held.host}` +
       (held.sessionName || held.session ? ` (${displayIdentity(held.sessionName, held.session)})` : '') +
       ` since ${held.since} (held ${humanAge(held.since)}).`);
     print('  Close it first (colab solo --done), or --force if it is stale (that host crashed/is gone).');
+    if (soloCo) print(`  Its place-claim's liveness: ${soloCo.reason}`);
+    else print('  No place-claim recorded beside it, so nothing here can prove its holder is gone.');
     return 1;
+  }
+  if (held && soloHolderDead) {
+    print(`Superseding a solo lock in ${shortRepo(repoAbs)} held by ${held.host}` +
+      (held.sessionName || held.session ? ` (${displayIdentity(held.sessionName, held.session)})` : '') +
+      ` since ${held.since} — its place-claim's holder is confirmed gone (${soloCo.reason}).`);
   }
 
   const trunk = resolveTrunk(repoAbs, doc);
@@ -1201,19 +1279,30 @@ function cmdSolo(argv) {
   // path. Placed after eligibility/held/entryProblems above so no existing refusal is reordered.
   requirePlaceIdentity(session, 'opening solo flow');
 
-  const written = placeMutate('opening solo flow', (s) => {
-    s.solo = s.solo || {};
-    s.solo[repoAbs] = { host: HOST, session, sessionName, since: nowISO() };
-    // Written ALONGSIDE `solo`, not instead of it — `solo` is a published state contract with an
-    // external reader (lib/state.js header); converging the two records is post-#175 work. The
-    // place-claim is what a writer OTHER than colab's own solo gate can verify (`colab place
-    // check`) — the thing solo's own `held` check above cannot offer a coordinator-spawned agent.
-    s.places = s.places || {};
-    s.places[place.placeKey(repoAbs)] = place.holdRecord({
-      pathAbs: repoAbs, repo: repoAbs, branch: null, host: HOST, session, sessionName,
-      pid: anchor.pid, pidKind: anchor.pidKind,
+  let written;
+  try {
+    written = placeMutate('opening solo flow', (s) => {
+      // #285: the place-claim is decided HERE, inside the lock, not by the pre-check above — and the
+      // solo record is written only if it wins. Writing `s.solo` first and letting the hold fail would
+      // leave a solo lock with no place-claim behind it: the exact half-open state `--done` and the
+      // entry gate both read as authoritative.
+      const got = place.acquire(s, {
+        pathAbs: repoAbs, repo: repoAbs, branch: null, host: HOST, session, sessionName,
+        pid: anchor.pid, pidKind: anchor.pidKind,
+      });
+      if (!got.ok) { const e = new UserError(`${got.conflict.message}${PLACE_RACE_NOTE}`); e.placeRace = got.conflict; throw e; }
+      s.solo = s.solo || {};
+      s.solo[repoAbs] = { host: HOST, session, sessionName, since: nowISO() };
+      // Written ALONGSIDE `solo`, not instead of it — `solo` is a published state contract with an
+      // external reader (lib/state.js header); converging the two records is post-#175 work. The
+      // place-claim is what a writer OTHER than colab's own solo gate can verify (`colab place
+      // check`) — the thing solo's own `held` check above cannot offer a coordinator-spawned agent.
+      return got;
     });
-  });
+  } catch (e) {
+    if (e && e.placeRace) { print(`✗ solo refused in ${shortRepo(repoAbs)} — ${e.message}`); return placeRefusalCode(e.placeRace); }
+    throw e;
+  }
   if (!written.ok) { print(`✗ ${written.message}`); return 1; }
 
   // No pushEvent here: `solo` is not in notify.js's ACTION_KIND (closed vocabulary, agreed with the
@@ -1330,6 +1419,19 @@ function cmdPlace(argv) {
       throw new UserError(`--force on a held place-claim requires a human: re-run with COLAB_HUMAN=1. ` +
         `(No field, flag or project.yml value can lower this bar — CONVENTIONS.md, Place-claims.)`);
     }
+    // #285: under `writes: direct` a repo DECLARES the serialization contract, and a blank-identity
+    // hold on its own trunk checkout can never be re-acquired or released by its own owner —
+    // `conflict`'s self-exemption matches only a truthy `session` (#242), and `place release`'s
+    // `mine` test is the same comparison. Under a one-writer-at-a-time contract that does not
+    // degrade to a warning: it wedges the checkout until a human intervenes. So the #242 floor that
+    // left `place acquire` warn-only is RAISED here, for the one descriptor that asks for it, and on
+    // its own trunk checkout only — every other path and every other repo keeps the warning.
+    // A tightening needs no ruling; the matching LOOSENING (letting an automated session take
+    // trunk-direct) would, and is deliberately not in this diff.
+    if (place.placeKey(pathAbs) === place.placeKey(repoAbs)
+        && writesAuthority.writesMode(projectDoc(repoAbs).writes).mode === 'direct') {
+      requirePlaceIdentity(session, 'a place-claim on a `writes: direct` repo\'s own trunk checkout');
+    }
     warnWeakIdentity(session, sessionName, 'place-claim', null);
     // The anchor pid (#288, resolved above) is deliberately not always `process.ppid`: `colab` is a
     // short-lived CLI invocation that exits the moment this command returns, so its OWN pid is
@@ -1337,15 +1439,13 @@ function cmdPlace(argv) {
     // immediately stale. `resolveAnchor` picks the actual long-lived process whose liveness this
     // hold needs to track (the parent shell by default, or a verified agent-session process), and
     // fails closed to a human-lead-only pid when nothing provable exists.
-    const written = placeMutate('acquire', (s) => {
-      s.places = s.places || {};
-      s.places[place.placeKey(pathAbs)] = place.holdRecord({
-        pathAbs, repo: repoAbs, branch: opts.repo ? null : null, host: HOST, session, sessionName,
-        pid: anchor.pid, pidKind: anchor.pidKind,
-      });
+    const got = placeAcquireLocked('acquire', {
+      pathAbs, repo: repoAbs, branch: null, host: HOST, session, sessionName,
+      pid: anchor.pid, pidKind: anchor.pidKind, force: !!opts.force,
     });
-    if (!written.ok) { print(`✗ ${written.message}`); return 2; }
+    if (!got.ok) { print(`✗ ${got.message}`); return got.code; }
     print(`✓ place-claim acquired on "${pathAbs}".`);
+    if (got.superseded) print(`  (superseded a hold by "${place.holderLabel(got.superseded)}")`);
     return 0;
   }
 
@@ -8126,14 +8226,13 @@ function cmdShip(argv) {
       return 1;
     }
     warnWeakIdentity(sess.session, sess.sessionName, 'trunk-checkout place-claim', null);
-    const written = placeMutate('ship into the trunk checkout', (s) => {
-      s.places = s.places || {};
-      s.places[place.placeKey(repoAbs)] = place.holdRecord({
-        pathAbs: repoAbs, repo: repoAbs, branch: null, host: HOST,
-        session: sess.session, sessionName: sess.sessionName, pid: anchor.pid, pidKind: anchor.pidKind,
-      });
+    const written = placeAcquireLocked('ship into the trunk checkout', {
+      pathAbs: repoAbs, repo: repoAbs, branch: null, host: HOST,
+      session: sess.session, sessionName: sess.sessionName, pid: anchor.pid, pidKind: anchor.pidKind,
     });
     if (!written.ok) {
+      // #285: the under-lock refusal is a NEW exit path out of B1, and every exit from here owes
+      // `cleanupEphemeral()` — the ephemeral worktree must not outlive a ship that refused.
       cleanupEphemeral();
       process.stderr.write(`✗ B1: ${written.message}\n`);
       return 1;
@@ -8867,13 +8966,12 @@ function cmdPromote(argv) {
       return 1;
     }
     warnWeakIdentity(promoteSession, promoteSessionName, 'trunk-checkout place-claim', null);
-    const written = placeMutate('promote into the main checkout', (s) => {
-      s.places = s.places || {};
-      s.places[place.placeKey(repoAbs)] = place.holdRecord({
-        pathAbs: repoAbs, repo: repoAbs, branch: null, host: HOST,
-        session: promoteSession, sessionName: promoteSessionName, pid: anchor.pid, pidKind: anchor.pidKind,
-      });
+    const written = placeAcquireLocked('promote into the main checkout', {
+      pathAbs: repoAbs, repo: repoAbs, branch: null, host: HOST,
+      session: promoteSession, sessionName: promoteSessionName, pid: anchor.pid, pidKind: anchor.pidKind,
     });
+    // #285: a new exit path — `ephemeral` is false in this branch, so there is no worktree to tear
+    // down here (`cleanup` below is defined after this point and owns that for every later exit).
     if (!written.ok) { process.stderr.write(`✗ ${written.message}\n`); return 1; }
     acquiredTrunkPlace = true;
   }

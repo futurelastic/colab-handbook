@@ -480,22 +480,32 @@ Four open questions were named when this vocabulary shipped. Two are decided and
 now; one was handed to a ⚖ ruling and has since been ruled (#284, below — recorded, runtime
 still deferred); one remains a proposal of record:
 
-- **Concurrency on the shared checkout — PUNT, proposal of record.** Under `direct`, the
-  intended design is that the trunk checkout becomes a strictly one-writer-at-a-time
-  resource, and *every* direct writer (human or agent) holds the existing path-scoped
-  place-claim on it — extending place-claim from "the one attended writer" to "whoever holds
-  it right now". **Not implemented.** `colab solo`'s entry gate today *refuses* the moment a
-  second claim, worktree, or place-claim is live; legalising concurrent direct writers means
-  loosening that live safety gate, which needs its own fixture-driven matrix test in
-  `tools/lib/place.js`/`colab solo`, not a diff whose other half is prompt rendering.
-  **Unblocked by:** [#285](https://github.com/futurelastic/colab-handbook/issues/285)
-  ("`writes: direct` runtime: place-claim gates every concurrent direct writer"). #285's own
-  blocker on the ruling below is **cleared** (#284 is ruled); what it now waits on is
-  [#288](https://github.com/futurelastic/colab-handbook/issues/288) and
-  [#289](https://github.com/futurelastic/colab-handbook/issues/289) — confirmed-live defects
-  in the very place-claim liveness probe #285 intends to build on, measured 2026-09-01 as all
-  9 place records reading foreign-host and 0 prunable. Building the concurrency gate on a
-  probe that cannot currently prune is building on the defect.
+- **Concurrency on the shared checkout — DONE (#285), and it turned out not to be a
+  loosening at all.** The proposal of record was that under `direct` the trunk checkout
+  becomes a strictly one-writer-at-a-time resource, every direct writer holding the
+  path-scoped place-claim, and that `colab solo`'s entry gate would have to be *loosened*
+  from "refuse if anything is held" to allow it. Implementing it found the premise wrong in
+  both halves, and the correction is worth more than the original plan:
+  - The gate was already "whoever holds it right now" — `conflict` clears for a dead holder
+    and for a same-session re-acquire, and `entryProblems` deliberately ignores worktrees
+    (#236) and off-checkout claims (#240). There was nothing to loosen.
+  - What was missing is that the hold **did not serialize anybody**, on any repo, under any
+    `writes:` value: every acquire site decided outside the state lock and wrote inside it,
+    so 8 concurrent acquires on one checkout all succeeded (see
+    [Place-claims](#place-claims--the-writer-verifiable-hold-a-shared-checkout-needs-and-a-worktree-does-not)).
+    `colab ship`'s B1 merge and `colab promote` take that same hold on the main checkout,
+    so this was a live defect in paths that already run today — not a future `direct`-only
+    concern. #285 moved the decision inside the lock and proved it with
+    `tools/lib/place-serialize.test.js`, demonstrated failing (8 winners where 1 is
+    required) against the pre-#285 binary before it passed against the new one.
+  So `direct` gains no new permission here — that is deliberate, and the matrix cells above
+  are unchanged. Its one `direct`-specific consequence is a **tightening**: a place-claim on
+  a `direct` repo's own trunk checkout must carry an identity (`--session`), because a
+  blank-identity hold can never be re-acquired or released by its own owner (#242) and would
+  wedge the very checkout whose serialization the value declares. Whether `direct` should
+  additionally admit *automated* trunk-direct writers — the reading the original issue text
+  invites — is a ⚖ ruling nobody has made, not an implementation detail; the "trunk-direct,
+  automated session" row above still reads **forbidden** for every column.
 - **CI role — DECIDED AND SHIPPED, as derived report text only.** Under `direct`, `ciRole` is
   **alarm, always** — nothing branches under a merge event that never happens, so CI can
   never gate a merge that doesn't exist. Cheap to decide because `ciRole` is derived prose in
@@ -568,6 +578,16 @@ silence:
   write* (colab's own markers do not count); an issue without one is reported and left
   open. Whether that gate is right for a `direct` unit — where the human's session-start
   instruction, not a comment, is the authorization — is a real follow-up question.
+  **⚠️ Measured during #285, and the answer is that the question is premature: the
+  assumption underneath it is false.** `colab ship` cannot reach evidence-close for a
+  branchless `direct` unit at all — `resolveShipSession` refuses with `ship needs
+  --worktree or --branch` when neither is given (the direct unit's exact shape), and
+  supplying the only branch it has, trunk, is refused by `--branch is the trunk itself`;
+  both fire *before* the evidence-close path is ever consulted, and `colab solo --done`
+  neither posts evidence nor closes anything. So a `direct` unit today has **no close path
+  whatsoever** — the same 26/30 hole option B was chosen to avoid, reached by another
+  route. The gate question is moot until a direct unit can reach the gate. Both are now
+  owned by [#302](https://github.com/futurelastic/colab-handbook/issues/302).
 - **Everything else about `direct`'s runtime stays deferred**, concurrency included. The
   ruling settles close-accounting only; it does not authorize any session to take
   trunk-direct anywhere the veto and the attendance bar do not already allow it.
@@ -648,7 +668,19 @@ itself needs someone present to answer for the commit.
    a cached answer: `COLAB_HUMAN=1` set, no veto declared, no live solo session already
    open, checkout on trunk with no unpushed branch anywhere, a clean (tracked + untracked)
    tree, and no conflicting place-claim held on **this checkout** (below). Anything
-   held/unmet refuses outright — full ceremony, no partial credit. **Not** on this list,
+   held/unmet refuses outright — full ceremony, no partial credit, with **one narrow
+   exception added by #285**: a solo record whose co-located place-claim holder is
+   *confirmed dead* is superseded rather than refused. `colab solo`'s own `solo` record
+   carries no liveness signal — it used to refuse on mere presence, so a crashed session's
+   leftovers blocked every later attendee until somebody reached for `--force`, the same
+   blunt instrument used to take over a **live** holder. The place-claim beside it does
+   carry liveness, so that is what is asked. `live: true` and `live: null` (unprovable —
+   including every #288 `invocation`-anchored hold, and the case where no place record
+   exists at all) both keep the refusal: fail closed, exactly as the primitive does. This
+   is strictly narrower than the `--force` it replaces and is deliberately **not** gated on
+   any `writes:` value — a stale record is equally stale under every one of them, and a
+   safety rule that only applies in one mode is the kind of conditional [§4](#4-branches-and-commits)'s
+   incident log warns about. **Not** on this list,
    deliberately: a worktree existing anywhere else in the repo (#236), or a claim held
    anywhere else in the repo (#240) — the same category error, twice. The claim registry
    holds an *issue*, not a *place*, so a claim tied to a worktree elsewhere is that
@@ -732,6 +764,33 @@ and **verified by the writer itself**, not merely by whatever spawned it.
   *notices* the holder died, roughly a minute later — so immediately re-spawning after a
   kill gets a refusal indistinguishable from a genuine conflict. A read-time liveness
   check has no such lag; adopt that stronger semantics rather than the poller's.
+- **The decision happens INSIDE the state lock, not beside it (#285).** A hold is acquired by
+  one function that re-checks the conflict against the state it is about to write
+  (`tools/lib/place.js`'s `acquire`), called from within `state.mutate`'s critical section.
+  Before this, every shared-checkout write site was a check-then-act pair straddling that
+  boundary: state was loaded with no lock, `conflict` judged that snapshot, and the write then
+  landed unconditionally under the lock without re-checking the fact the decision rested on.
+  **Measured on a fixture: 8 concurrent `colab place acquire` invocations against one checkout
+  ALL exited 0**, and the state file ended up holding a single record belonging to whoever wrote
+  last — the same "each reads unlocked, each writes held by me, both proceed *with confidence*"
+  failure the sync-location bullet below names as worse than no lock, reached through the
+  check/write split instead of through a synced filesystem. It gated nothing, on any repo,
+  under any `writes:` value. The cheap lock-free pre-check remains at every call site — it
+  refuses without taking the lock in the common case, and it owns the `--force`/`COLAB_HUMAN=1`
+  policy — but it is no longer the authority. Both refusals are composed from the same
+  `conflict()` result, so their wording cannot drift apart; the inner one adds a line saying the
+  holder arrived between the check and the write. Note the scope this does **not** reach: the
+  lock is a same-filesystem `mkdir`, so it orders writers on ONE machine and says nothing across
+  a synced `~/.colab` — that stays the next bullet's refusal and #289's foreign-machine branch,
+  not something this ordering fixes.
+- **Serialization means acquire-or-refuse, never a queue with waiting.** Nothing sleeps, polls,
+  or blocks inside the tool. Two reasons, both structural rather than stylistic: the state lock
+  is a busy-wait spin with a fixed budget, so a blocking acquire would hold a machine-wide lock
+  across an unbounded wait — starving every other command, including the release it is waiting
+  for; and a waiter entry would be a **stored flag**, which is the one thing this module refuses
+  to keep (see the read-time liveness bullet above) — it would need its own liveness probe, a
+  second copy of the problem #288/#289 just fixed. A caller that wants to wait polls
+  `colab place check <path>` itself, which already answers in exit codes.
 - **Never in a file-synced location.** A Resilio/Syncthing/Dropbox/iCloud path has no
   atomicity and no consistency guarantee inside its sync window — two sessions can each
   read "unlocked," each write "held by me," and both proceed *with confidence*, which is

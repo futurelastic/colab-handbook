@@ -151,7 +151,15 @@ fall through to the full flow.
   dirty tree, someone else's solo lock, or a conflicting place-claim — CONVENTIONS.md,
   *Place-claims*) → the repo qualifies in principle but ground isn't clean *right now*.
   Report what was held and fall through to steps 2–4, full ceremony — do not retry solo
-  automatically; the holder is somebody's unfinished work.
+  automatically; the holder is somebody's unfinished work. **There is no queue to wait in,
+  by design (#285)** — the tool never blocks or polls on your behalf. If you genuinely want
+  to wait rather than fall through, `colab place check <path>` is the poll primitive (exit
+  0 free-or-yours · 1 held by a live other · 2 liveness unprovable); looping on it is your
+  choice to make, never something an acquire does silently.
+  **One case is no longer a refusal:** a solo record whose place-claim holder is *confirmed
+  dead* is superseded automatically, with a line saying so — you should no longer reach for
+  `--force` to clear a crashed session's leftovers. A holder that is alive, or whose
+  liveness cannot be proven, still refuses.
 - **Opens** → this session may commit **straight to `<trunk>`** with plain Conventional
   Commits, no pre-filed issue and no worktree. Skip steps 2–4 entirely — there is
   nothing to load (no Issue is required to exist), nothing to claim, nothing to branch.
