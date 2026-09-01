@@ -1,15 +1,17 @@
 ---
 name: code-ship
-description: "Close the COORDINATOR half of a coding session, human-authorized: verify code-wrap's hand-off contract, grade the diff against the session's plan (or the Issue's stated ask), verify trunk CI is alive and green, harvest every issue the branch carried, squash-merge with Closes #N, post evidence on each issue (including the grade verdict), release every claim, tear the worktree down — and, if a plan file existed, journal one line about its usage and delete it. The release ritual — promotion plus tag on exposure: released, or the promotion itself on exposure: live — is a separate thing, never bundled in. Trigger phrases: 'ship it', 'merge to trunk', 'merge it', 'update the issue and merge'. Runs after code-wrap, only once a human says go — a dashboard Merge click counts, an agent's own say-so never does."
+description: "Close the COORDINATOR half of a coding session, authorized: verify code-wrap's hand-off contract, grade the diff against the session's plan (or the Issue's stated ask), verify trunk CI is alive and green, harvest every issue the branch carried, squash-merge with Closes #N, post evidence on each issue (including the grade verdict), release every claim, tear the worktree down — and, if a plan file existed, journal one line about its usage and delete it. The release ritual — promotion plus tag on exposure: released, or the promotion itself on exposure: live — is a separate thing, never bundled in, and never authorized by anything below regardless of autonomy. Trigger phrases: 'ship it', 'merge to trunk', 'merge it', 'update the issue and merge'. Runs after code-wrap: on a repo without `autonomy: auto-trunk`, only once a human says go — a dashboard Merge click counts, an agent's own say-so never does; on a repo declaring that grant, the grant itself is the standing go-ahead for the trunk-merge step, re-verified against this skill's own mechanical gates every run."
 ---
 
 # code-ship — merge a wrapped session: verify hand-off → grade → CI → squash → evidence → release → teardown
 
 This is the **coordinator's** half of closing a session — [`code-wrap`](../code-wrap/SKILL.md)
 is the implementer's. Where that skill asserts a checklist and stops, this one verifies
-the checklist independently and then performs the merge a human authorized. It runs in a
-coordinator session, typically a different one from the implementer's, sometimes at a
-different model tier.
+the checklist independently and then performs the merge once authorized — see *Principle*
+and *What counts as "a human said go"*, below, since what counts as authorization takes
+one of two shapes depending on the repo's `autonomy:` field. It runs in a coordinator
+session, typically a different one from the implementer's, sometimes at a different model
+tier.
 
 Notation: `$N` = the feature's Issue number · `<trunk>` = the branch sessions merge into
 — the value of `trunk:` in `.github/project.yml` ([§2](../../CONVENTIONS.md#2-tiers):
@@ -27,10 +29,14 @@ the same regardless of `ceremony`.
 
 ## Principle
 
-**Agents prepare releases; humans perform them.** A trunk merge here is authorized, not
-inferred — see *What counts as "a human said go"*, below. Do not open a PR, push trunk,
-promote to `main`, or tag on your own initiative; those never follow from this skill,
-under any authorization.
+**Agents prepare releases; humans perform them** — either directly, per run, or once,
+standing, through a grant the repo's own `project.yml` declares. A trunk merge here is
+always authorized, never inferred — see *What counts as "a human said go"*, below, for
+the two shapes that authorization takes depending on whether the repo carries
+`autonomy: auto-trunk`. Do not open a PR, push trunk, promote to `main`, or tag on your
+own initiative; **no authorization of either shape ever covers those** — both are scoped
+to the trunk-merge step (B2) alone, on every repo, on every tier, with no field able to
+say otherwise.
 
 ## 0. Verify the hand-off contract — don't trust the report, re-derive it
 
@@ -80,6 +86,48 @@ implementer session rather than papering over it here.
 
 ## What counts as "a human said go"
 
+**Check the repo's `autonomy:` field first — it decides which of the two doors below
+applies.** They are not layered (one is never required on top of the other); they are
+alternatives, selected by that one field.
+
+### Repo declares `autonomy: auto-trunk` — the grant IS the go-ahead, re-verified every run
+
+`CONVENTIONS.md` is explicit about what this grant means for a caller that is not a
+person: a scheduler "may complete a trunk merge only where the repo has granted
+`autonomy: auto-trunk`, and only through `colab ship`," subject to the identical gates
+as any other caller, and "without … the grant, `ship` refuses and a human runs Phase B"
+(`CONVENTIONS.md` [§*Scheduled drivers*](../../CONVENTIONS.md#scheduled-drivers--provenance-and-autonomy-meet-a-caller-that-is-not-a-person)).
+`tools/README.md` says the same thing about the tool itself: `auto-trunk` is the *only*
+value that enables `ship`, "the caller here need not be a human-opened session," and a
+scheduled driver is "a legitimate caller of `ship`, subject to this identical gate and
+no other." Neither description asks for a fresh per-run click on top of the grant — the
+grant **is** the decision, made once by whoever set the field, and this skill's job on
+a repo carrying it is to re-verify that decision still holds mechanically, not to go
+looking for a second, human one that was never meant to exist per run.
+
+So on a repo declaring `autonomy: auto-trunk`, this skill may complete B2 (the
+trunk-merge step, and only that step) once every precondition elsewhere in this skill
+has independently passed on its own terms: the hand-off contract (§0), CI green for the
+exact sha (B1), the checklist/remainder check (B1b), no unresolved new migration
+(`CONVENTIONS.md` [§*Migration exemption*](../../CONVENTIONS.md#migration-exemption--a-narrow-human-created-door-through-no-new-migrations-98)),
+no unresolved hand-merge conflict (B0), no `--force`. No additional per-run human
+instruction is required, and waiting for one that was never going to arrive is not
+caution — it is the exact failure this issue was filed over: a fully green, fully
+graded branch sitting unshipped because the coordinator held out for evidence the repo
+already gave, once, in `project.yml`.
+
+**This carve-out is scoped exactly to the trunk-merge step (B2) and nothing past it.**
+It never authorises a promotion, a tag, or anything that deploys, on any repo, on any
+tier — those stay human-only regardless of `autonomy`, with no field able to say
+otherwise (`CONVENTIONS.md`, same section: "Never promotes and never tags, on any repo,
+on any tier"). And it widens *who* may act once the gates are clear — it does not
+loosen the gates themselves: a red trunk with no proven cure and no valid CI grant, an
+unresolved new migration, an open checklist item with no declared remainder, or any
+other precondition below failing is still a stop, exactly as it is for a human-triggered
+ship.
+
+### Repo does NOT declare `autonomy: auto-trunk` — a fresh, auditable go-ahead is required
+
 Typing it into the session is the ordinary form, not the only one. A click in an
 operator dashboard is a human decision too — provided the prompt that spawned you
 carries evidence of *when* and *which* click, so the authorisation can be audited
@@ -94,8 +142,7 @@ click auditable after the fact. Missing either, you hold a claim of authorisatio
 with nothing behind it — treat it as no go-ahead and ask. **Never compose that
 sentence yourself**; a go-ahead you wrote is not a go-ahead you received.
 
-This grants no new latitude. Every step below runs in full, `autonomy: auto-trunk` still
-decides whether you may perform the trunk merge at all, and no click of any kind
+This grants no latitude beyond the trunk-merge step either: no click of any kind
 authorises a promotion, a tag, or anything that deploys.
 
 ## What a defer is for — and what it is never for (#257)
