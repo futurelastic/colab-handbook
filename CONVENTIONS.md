@@ -476,8 +476,9 @@ touched to make this true. `direct` **under-delivers** relative to a naive readi
 name, never over-delivers — the fail-safe direction, and the only reason storing it before
 enforcing it is defensible.
 
-Four open questions were named when this vocabulary shipped; two are decided and enforced
-now, two are decided as *proposals* and handed to a ⚖ ruling rather than settled here:
+Four open questions were named when this vocabulary shipped. Two are decided and enforced
+now; one was handed to a ⚖ ruling and has since been ruled (#284, below — recorded, runtime
+still deferred); one remains a proposal of record:
 
 - **Concurrency on the shared checkout — PUNT, proposal of record.** Under `direct`, the
   intended design is that the trunk checkout becomes a strictly one-writer-at-a-time
@@ -488,23 +489,25 @@ now, two are decided as *proposals* and handed to a ⚖ ruling rather than settl
   loosening that live safety gate, which needs its own fixture-driven matrix test in
   `tools/lib/place.js`/`colab solo`, not a diff whose other half is prompt rendering.
   **Unblocked by:** [#285](https://github.com/futurelastic/colab-handbook/issues/285)
-  ("`writes: direct` runtime: place-claim gates every concurrent direct writer") — itself
-  blocked on the ruling below.
+  ("`writes: direct` runtime: place-claim gates every concurrent direct writer"). #285's own
+  blocker on the ruling below is **cleared** (#284 is ruled); what it now waits on is
+  [#288](https://github.com/futurelastic/colab-handbook/issues/288) and
+  [#289](https://github.com/futurelastic/colab-handbook/issues/289) — confirmed-live defects
+  in the very place-claim liveness probe #285 intends to build on, measured 2026-09-01 as all
+  9 place records reading foreign-host and 0 prunable. Building the concurrency gate on a
+  probe that cannot currently prune is building on the defect.
 - **CI role — DECIDED AND SHIPPED, as derived report text only.** Under `direct`, `ciRole` is
   **alarm, always** — nothing branches under a merge event that never happens, so CI can
   never gate a merge that doesn't exist. Cheap to decide because `ciRole` is derived prose in
   `tools/lib/adopt.js`'s `deriveConsequences`, not enforcement.
-- **The human merge gate and the Phase A / Phase B split — DECIDED AS A PROPOSAL, not
-  implemented.** Proposal of record: under `direct` there is no merge event, so Phase B (the
-  merge half of `code-ship`) does not apply to a `direct`-shaped unit; Phase A (`code-wrap`)
-  applies in full and unchanged; the human authorization bar moves from the merge act to the
-  session-start instruction. This is a real departure from "merge means the full
-  code-wrap" and is named as one, not ruled here — this repo's decision-record mechanism
-  (`needs-decision` / `decision-recorded`, [§5](#5-claiming-work--how-to-say-im-on-this))
-  exists precisely so a single session does not unilaterally re-rule the ship protocol.
-  **Unblocked by:** [#284](https://github.com/futurelastic/colab-handbook/issues/284),
-  labelled `needs-decision`, carrying this proposal as the thing to rule on. No skill file
-  (`code-ship`, `code-wrap`) is touched by this change.
+- **The human merge gate and the Phase A / Phase B split — ⚖ RULED (#284), runtime not yet
+  implemented.** The proposal handed to the ruling was: under `direct` there is no merge
+  event, so Phase B does not apply at all; Phase A applies unchanged; the human
+  authorization bar moves from the merge act to the session-start instruction. **The
+  ruling amended it in one place** — see *Phase A / Phase B under `direct`* immediately
+  below, which is the statement of record. No skill file (`code-ship`, `code-wrap`) is
+  touched yet, because nothing about `direct`'s runtime is implemented yet; the ruling
+  says what those files must be true of when it is.
 - **Exposure restriction — DECIDED AND ENFORCED NOW.** Declaring `writes: direct` requires
   the same human bar as lowering exposure (an interactive TTY, or `COLAB_HUMAN=1` together
   with `--answered-by <name>` — `direct` is the only `writes` value that *expands*
@@ -515,6 +518,63 @@ now, two are decided as *proposals* and handed to a ⚖ ruling rather than settl
   refused by the same check. `tools/lib/adopt.js`'s `writesGateVerdict`, wired into
   `tools/colab`'s `cmdAdopt` alongside the existing exposure gate. No `--force`, no override
   flag, consistent with the rest of this command's asymmetry.
+
+##### Phase A / Phase B under `direct` — ⚖ ruled #284: the merge goes, the evidence stays
+
+**The ruling (option B of three, 2026-09-01).** Under `direct`:
+
+- **Phase A (`code-wrap`) applies in full and unchanged** — issue distillation, doc
+  updates, quality gate, evidence on the issue. Nothing about it depended on a branch.
+- **The MERGE half of Phase B never runs.** There is no branch and no squash, so there is
+  nothing to merge, nothing to `Closes #N` from, and no CI gate on a merge that does not
+  exist (which is the same fact that makes `ciRole` **alarm, always**, above).
+- **`code-ship` still runs, in its existing evidence-close mode.** A `direct` unit leaves
+  the same closing event as every other unit: evidence posted, the issue closed, claims
+  released. Uniform audit trail; no merge.
+- **The human authorization bar moves from the merge act to the session-start
+  instruction** — the human who asked for the unit is the authorization, rather than a
+  human clicking merge afterward. This is the real departure from "merge means the full
+  code-wrap", and it is named here deliberately so nobody discovers it later by assuming
+  Phase B still runs somewhere.
+
+**Why not the simpler "Phase B never runs at all" (option A).** Because Phase A does not
+close issues — it only distills onto them. Drop the whole of Phase B and a `direct` repo
+has no close mechanism whatsoever: every unit's issue stays open forever with its work
+long since on trunk. That is not a hypothetical — it is the failure [§4](#4-branches-and-commits)
+already quantifies at 26/30 issues open with their code merged, and the failure
+evidence-close (#90) was built to close:
+
+> That branch cannot be squashed (there is nothing to stage) and used to have no
+> completion path at all: the claim was released, the worktree torn down, and the issue
+> stayed open forever, because the only close mechanism in the system was `Closes #N`
+> inside a squash commit.
+
+Option A recreates that hole for *every* `direct` unit. The ruling is a codebase fact
+rather than a preference: the machinery option B asks for already exists and is already
+this repo's answer to this exact shape of problem.
+
+**Which is also why it is cheap.** Evidence-close is not a new mode somebody has to build
+for `direct`. Its trigger is `landed ∧ zero own commits` — **both measured from git, never
+declared by the session**. A `direct` unit commits straight to trunk, so its work *is*
+trunk: it should classify as landed with zero own commits against its base and fall into
+evidence-close by the existing detection, with no new branch of logic. ⚠️ **Whoever
+implements `direct`'s runtime verifies that rather than assumes it** — the design intent
+lines up, the measurement has not been taken.
+
+**Two things this ruling deliberately does NOT settle** — they are open, not answered by
+silence:
+
+- **Evidence-close is gated** on the issue *already carrying a comment the tool did not
+  write* (colab's own markers do not count); an issue without one is reported and left
+  open. Whether that gate is right for a `direct` unit — where the human's session-start
+  instruction, not a comment, is the authorization — is a real follow-up question.
+- **Everything else about `direct`'s runtime stays deferred**, concurrency included. The
+  ruling settles close-accounting only; it does not authorize any session to take
+  trunk-direct anywhere the veto and the attendance bar do not already allow it.
+
+**Option C (defer until #285's concurrency design is further along) was declined.**
+Close-accounting is independent of how concurrent writers are serialized, and leaving it
+open cost #285 its unblock for no gain.
 
 **Retired: the `auto-trunk`/`serial-direct` narrative #208 and #224 argued over.** The old
 three-method table spent several paragraphs establishing that `auto-trunk` was never
