@@ -539,6 +539,20 @@ function checkDatedFilesInDocs(ctx) {
 //   (b) "<file>.md §N"      -> resolved against that named file's headings
 //   (c) bare "§N"           -> resolved against the CURRENT file's own headings
 //
+// Pattern (b) has TWO shapes, and colab-handbook #300 measured that conflating
+// them is what broke this check on the handbook's own trunk. A token carrying a
+// separator ("../CONVENTIONS.md", "docs/adr/288-x.md") is a PATH claim: resolve
+// it against the citing file's directory and nowhere else. A token that is a
+// BARE NAME ("CONVENTIONS.md") is a NAME, and a reader resolves a name the
+// obvious way — the copy sitting next to this file if there is one, otherwise
+// the repo's own copy at the root. Resolving a bare name against the citing
+// directory ALONE made every unlinked `CONVENTIONS.md §N` inside a nested skill
+// file a FAIL against a sibling that was never meant to exist. Measured on this
+// handbook: all 10 filename-qualified citations in the repo name CONVENTIONS.md
+// by bare name and not one is path-shaped; 8 sit in root-level files (where the
+// two resolutions coincide), which is the only reason the bug stayed invisible
+// until two skill files used the same style two levels down.
+//
 // A fifth outcome, SKIPPED, exists deliberately: a `§N` immediately preceded
 // by a BACKTICK-WRAPPED token that is neither "gotchas" nor `*.md` (e.g.
 // `` `code-triage` §5.1 ``, a real citation style in this very handbook,
@@ -582,6 +596,20 @@ function precedingToken(text, index) {
   return { token: m[2], backticked: Boolean(m[1] || m[3]) };
 }
 
+// Candidate target(s) for a filename-qualified citation, in the order a reader
+// would try them. Path-shaped token (any separator) -> exactly one candidate,
+// resolved against the citing directory. Bare name -> the sibling first, then
+// the repo root; the FIRST candidate that EXISTS wins, so a repo that really
+// does keep a same-named file next to the citing doc still resolves there, and
+// a missing heading number in it is still a genuine break rather than something
+// the root copy silently papers over.
+function citationCandidates(dir, token) {
+  if (token.includes("/")) return [resolveRepoPath(dir, token)];
+  const sibling = resolveRepoPath(dir, token);
+  const atRoot = resolveRepoPath("", token);
+  return sibling === atRoot ? [sibling] : [sibling, atRoot];
+}
+
 function lineNumberAt(text, index) {
   let line = 0;
   for (let i = 0; i < index && i < text.length; i++) if (text.charCodeAt(i) === 10) line++;
@@ -604,7 +632,7 @@ function checkGotchaCitations(ctx) {
     return result;
   };
 
-  let resolved = 0, broken = 0, skipped = 0, literalExamples = 0;
+  let resolved = 0, broken = 0, skipped = 0, literalExamples = 0, viaRoot = 0;
   for (const file of files) {
     const rawText = readFileSafeText(join(repoRoot, file));
     if (rawText === null) continue;
@@ -628,14 +656,14 @@ function checkGotchaCitations(ctx) {
       }
 
       const pre = precedingToken(scanText, m.index);
-      let targetFile = file; // default: bare -> current file
+      let candidates = [file]; // default: bare -> current file
       let label = `bare §${num}`;
 
       if (pre && pre.token.toLowerCase() === "gotchas" && !pre.backticked) {
-        targetFile = config.gotchasFile;
+        candidates = [config.gotchasFile];
         label = `gotchas §${num}`;
       } else if (pre && /\.md$/i.test(pre.token)) {
-        targetFile = resolveRepoPath(dir, pre.token);
+        candidates = citationCandidates(dir, pre.token);
         label = `${pre.token} §${num}`;
       } else if (pre && pre.backticked) {
         // A named, non-.md, backtick-wrapped artifact — cannot resolve generically.
@@ -644,12 +672,19 @@ function checkGotchaCitations(ctx) {
       }
       // else: ordinary prose word or nothing before it -> bare, current file.
 
-      const nums = numsFor(targetFile);
-      if (nums === null) {
+      const targetFile = candidates.find((c) => numsFor(c) !== null);
+      if (targetFile === undefined) {
         broken++;
-        findings.fail(check, `${file}:${ln + 1}: "${label}" — ${targetFile} does not exist`);
+        const where =
+          candidates.length > 1
+            ? `neither ${candidates[0]} nor ${candidates[1]} exists`
+            : `${candidates[0]} does not exist`;
+        findings.fail(check, `${file}:${ln + 1}: "${label}" — ${where}`);
         continue;
       }
+      if (targetFile !== candidates[0]) viaRoot++;
+
+      const nums = numsFor(targetFile);
       if (!nums.has(num)) {
         broken++;
         const suggestion = nearest(num, nums, 5);
@@ -663,7 +698,10 @@ function checkGotchaCitations(ctx) {
       resolved++;
     }
   }
-  receipt.note = `${resolved} citation(s) resolved, ${broken} broken, ${skipped} skipped (unresolvable external artifact), ${literalExamples} literal code-span example(s) ignored`;
+  receipt.note =
+    `${resolved} citation(s) resolved` +
+    (viaRoot ? ` (${viaRoot} by bare name at the repo root, no sibling copy)` : "") +
+    `, ${broken} broken, ${skipped} skipped (unresolvable external artifact), ${literalExamples} literal code-span example(s) ignored`;
   return { receipt };
 }
 

@@ -191,6 +191,62 @@ test('docs-lint: check 6 — a backtick-wrapped non-.md token before §N is repo
   assert.match(result.note, /1 skipped/);
 });
 
+test('docs-lint: check 6 — a BARE-NAME file citation from a nested file resolves at the repo root (#300)', () => {
+  // The regression: `CONVENTIONS.md §5` written two levels down was resolved
+  // against skills/x/CONVENTIONS.md — a sibling nobody ever meant — and FAILed
+  // on the handbook's own trunk. A bare name is a name, not a relative path.
+  const dir = mkfixture({
+    'CONVENTIONS.md': '# C\n\n## 5. Readiness\nBody.\n',
+    'skills/x/SKILL.md': '# X\n\nThe label is monotonic (`CONVENTIONS.md` §5, *Readiness*).\n',
+  });
+  const report = run(dir);
+  assert.equal(findingsFor(report, '6').length, 0, JSON.stringify(findingsFor(report, '6')));
+  const result = report.results.find((r) => r.name.startsWith('6'));
+  assert.match(result.note, /1 by bare name at the repo root/);
+});
+
+test('docs-lint: check 6 — a sibling copy still wins over the repo root, and its missing heading is still a break (#300)', () => {
+  // The root fallback must not paper over a real drift: where a same-named file
+  // DOES sit next to the citing doc, that is what a reader opens, so that is
+  // what gets resolved — even when the root copy would have satisfied the number.
+  const dir = mkfixture({
+    'CONVENTIONS.md': '# root\n\n## 5. Readiness\nBody.\n',
+    'skills/x/CONVENTIONS.md': '# local\n\n## 2. Other\nBody.\n',
+    'skills/x/SKILL.md': '# X\n\nSee CONVENTIONS.md §5 for the rule.\n',
+  });
+  const report = run(dir);
+  const findings = findingsFor(report, '6');
+  assert.equal(findings.length, 1, JSON.stringify(findings));
+  assert.match(findings[0].message, /skills\/x\/CONVENTIONS\.md has no heading numbered 5/);
+});
+
+test('docs-lint: check 6 — a PATH-shaped citation token gets no root fallback (#300)', () => {
+  // "../CONVENTIONS.md" is a claim about a path, so a wrong one stays broken;
+  // silently retrying it at the root would hide a genuinely dead relative path.
+  const dir = mkfixture({
+    'CONVENTIONS.md': '# C\n\n## 5. Readiness\nBody.\n',
+    // ../../CONVENTIONS.md IS the root from here and must resolve; ../CONVENTIONS.md
+    // is skills/CONVENTIONS.md, which does not exist and must stay broken.
+    'skills/x/SKILL.md':
+      '# X\n\nGood: ../../CONVENTIONS.md §5 for the rule.\n\nBad: ../CONVENTIONS.md §5 too.\n',
+  });
+  const report = run(dir);
+  const findings = findingsFor(report, '6');
+  assert.equal(findings.length, 1, JSON.stringify(findings));
+  assert.match(findings[0].message, /skills\/CONVENTIONS\.md does not exist/);
+  assert.doesNotMatch(findings[0].message, /neither/);
+});
+
+test('docs-lint: check 6 — a bare name that exists NOWHERE still fails, naming both candidates (#300)', () => {
+  const dir = mkfixture({
+    'skills/x/SKILL.md': '# X\n\nSee CONVENTIONS.md §5 for the rule.\n',
+  });
+  const report = run(dir);
+  const findings = findingsFor(report, '6');
+  assert.equal(findings.length, 1, JSON.stringify(findings));
+  assert.match(findings[0].message, /neither skills\/x\/CONVENTIONS\.md nor CONVENTIONS\.md exists/);
+});
+
 test('docs-lint: check 7 flags a malformed gotchas.d filename and a duplicate issue number', () => {
   const dir = mkfixture({
     'docs/gotchas.d/not-a-number.md': '# Bad\n',
