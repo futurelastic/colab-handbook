@@ -163,6 +163,29 @@ them:
 
 The last two share one naming rule — see below — because they share one defect.
 
+#### Design artifact — promote it out of exploration, onto this branch, right here (§5)
+
+A fifth destination, distinct from the four above because it is not "this session
+made a doc stale" — it is a durable repo asset that only now has a session to carry
+it. If this branch's work followed an approved design ruling — a `⚖ Decision
+recorded` marker on the Issue (`CONVENTIONS.md`
+[§5](../../CONVENTIONS.md#design-conclusions-are-three-units-not-two), *Design
+conclusions are three units, not two*) — its artifact belongs in `docs/design/`
+on **this branch**, promoted right here at **A2**, not left sitting in a
+scratch/exploration home with instructions not to promote it: that leaves the
+next session touching the same surface to pay the design lane's boot cost again,
+from nothing, as if the ruling never happened.
+
+- File it `docs/design/<slug>-<N>-mockup.html` or `<slug>-<N>-spec.md`, per §5's
+  naming — commit it as a deliverable path in A4, same as any other file this
+  session produced.
+- **Superseded artifacts are marked, never deleted** — trunk carries the design
+  lineage. Replacing an earlier ruling's file for the same surface adds the new
+  one and marks the old one superseded; it does not overwrite or remove it.
+
+No design ruling landed on this branch → skip this step silently, same as any
+other optional check A2 makes.
+
 #### Or: a comment at the call site — when `docs/` is the expensive answer
 
 The four destinations above all cost something to read *later* — a doc is cold

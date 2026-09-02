@@ -483,6 +483,24 @@ ask) as a whole:
   a sentence to parse*). Every claim in the harvested set stays held; this is never an
   automatic revert of the branch and never a silent merge-anyway.
 
+#### UI-affecting issues — also grade against the design artifact, when one exists (§5)
+
+When the harvested set touches a UI surface and `docs/design/` carries an artifact
+for it (`<slug>-<N>-mockup.html` / `<slug>-<N>-spec.md` — `CONVENTIONS.md`
+[§5](../../CONVENTIONS.md#design-conclusions-are-three-units-not-two), *Design
+conclusions are three units, not two*), grade the diff against that artifact too,
+alongside the plan's own oracle — not instead of it: a diff can satisfy the plan's
+stated Files/oracle and still miss what the approved design actually specified.
+The result folds into the **same** pass/reject verdict above — there is no separate
+design-verdict token — and a mismatch classifies exactly like any other B1c gap:
+`decision` by default, `escalate` only when the three conditions below all still
+hold. Name the artifact file in the reject comment so the gap is findable, not
+just "doesn't match the design."
+
+No artifact under `docs/design/` for this surface, or the harvested set is not
+UI-affecting → nothing new to check here; the plan/ask oracle above is still the
+whole grade, exactly as before this clause.
+
 ### Reject classifies further — `decision` is the default, `escalate` is the narrow exception (#262)
 
 A stop-for-a-human on *every* reject was measured to be the wrong default for the

@@ -1117,6 +1117,35 @@ READY  fix/stale-log-cleanup-190   #190
        start: colab claim 190 --worktree stale-log-cleanup-190
 ```
 
+A **UI-affecting** ready group — its files fall under a UI surface (views,
+templates, frontend components, anything a design system consumes) — carries one
+more line, reporting whatever `docs/design/` shows for it (`CONVENTIONS.md`
+[§5](../../CONVENTIONS.md#design-conclusions-are-three-units-not-two), *Design
+conclusions are three units, not two*). This is a report line, not a new
+readiness gate — the gate is the existing `needs-decision` check in §5 above; this
+line exists only so "no artifact yet" is visible before a session starts building,
+not after:
+
+```
+READY  feat/onboard-redesign-88   #88
+       why: cheap and unblocking; trunk CI green 2h ago
+       files: resources/js/Onboard/*.tsx
+       design: docs/design/onboard-88-spec.md present — build to it
+       start: colab claim 88 --worktree onboard-redesign-88
+```
+
+Three states, mirroring the ruling's table exactly:
+
+- **present** — name the file(s) found under `docs/design/` for this slug/issue.
+- **absent** — say so plainly. If nothing has applied `needs-decision` to this
+  group yet, that is worth a human's attention before the session starts building
+  — but absence is not a new gate to enforce here, it is the same `needs-decision`
+  gate §5 above already checks.
+- **superseded** — the artifact exists but a later ruling replaced it; name both
+  files so a session does not build against the stale one.
+
+Not UI-affecting → no `design:` line, same as `mechanical:` and `priority:` above.
+
 Then, briefly:
 
 - **blocked** — one line each, naming the blocker and who could clear it.
