@@ -225,6 +225,16 @@ delivered on the Issue first (`code-wrap` A1 is where that happens anyway), or s
 report the issue and leave it open. The zero-diff fact is measured from git; you do not
 declare it.
 
+⚠️ **This door needs a branch, so a `writes: direct` unit cannot walk through it.** #284
+ruled that a trunk-direct unit still closes via evidence-close; measured during #285, it
+cannot reach it — `ship` refuses with `ship needs --worktree or --branch` when given
+neither (a direct unit has neither), and refuses `--branch <trunk>` with `--branch is the
+trunk itself`, both before evidence-close is consulted. `colab solo --done` posts no
+evidence and closes nothing. So a `direct` unit has **no close path today**; do not plan a
+session around one. Tracked, together with whether the "comment colab did not write" gate
+is even the right gate when a human's session-start instruction is the authorization, as
+[#302](https://github.com/futurelastic/colab-handbook/issues/302).
+
 **Never decide this by counting commits.** A squash-merge mints a new sha, so a
 shipped branch's own commits look permanently unmerged — a count-only check calls
 *every branch we have ever shipped* unshipped and invites re-merging finished work.

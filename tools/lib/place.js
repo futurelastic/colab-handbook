@@ -369,6 +369,59 @@ function conflict(st, pathAbs, self = {}, probe = defaultProbe) {
 }
 
 /**
+ * Decide AND write, in one pass, over the state object the caller hands in (#285).
+ *
+ * WHY THIS EXISTS — the defect it closes. Every shared-checkout write site in `tools/colab` was a
+ * check-then-act pair straddling the state lock: `placeState()` loaded state with NO lock,
+ * `conflict()` judged that snapshot, and only then `placeMutate()` -> `state.mutate` -> `withLock`
+ * re-read state and wrote `st.places[key]` UNCONDITIONALLY — never re-checking the fact the
+ * decision rested on. Two processes could each read "free", each write "held by me", and both exit
+ * 0, with the second silently superseding the first. That is precisely the "two sessions can each
+ * read unlocked, each write held by me, and both proceed WITH CONFIDENCE" failure CONVENTIONS.md
+ * ("Place-claims") names as worse than having no lock at all — it was simply being caused by the
+ * check/write split rather than by a synced filesystem.
+ *
+ * So the decision moves INSIDE the critical section. Callers pass this as `state.mutate`'s
+ * function: the `st` it receives is the one loaded under the lock, microseconds before the write,
+ * and the same `conflict()` that judged the earlier snapshot judges THIS one. The outer, lock-free
+ * pre-check stays where it is at every call site — it is a cheap refusal that avoids taking the
+ * lock at all in the common case, and it owns the `--force`/`COLAB_HUMAN=1` policy — but it is no
+ * longer the authority. This one is.
+ *
+ * PURE WITH RESPECT TO THE FILESYSTEM, deliberately, exactly like every other function in this
+ * module (see the header): it mutates the object it is given and returns a verdict. It never loads
+ * or saves state, never reads `process.env`, and never decides policy — `syncedStateProblem`,
+ * `resolveAnchor`, `requirePlaceIdentity` and the `COLAB_HUMAN` bar all stay at the call site,
+ * because those are questions about the CALLER, not about the record.
+ *
+ * `force` writes over a live holder. It is not an override this module grants — the caller has
+ * already cleared the `COLAB_HUMAN=1` bar CONVENTIONS.md ("Place-claims": "override is a human
+ * act") requires before it may pass it. Passing it here is the caller stating that bar was met.
+ *
+ * Returns `{ok: true, rec, superseded}` — `superseded` is the record this write replaced, if any
+ * (a confirmed-dead holder, or a forced takeover), so a caller can SAY what it displaced rather
+ * than silently overwriting it — or `{ok: false, conflict}`, where `conflict` is exactly what
+ * `conflict()` returns, so a refusal message composed from it cannot drift from the pre-check's.
+ */
+function acquire(st, opts = {}, probe = defaultProbe) {
+  const {
+    pathAbs, repo, branch = null, host, session, sessionName, pid = null, pidKind, force = false,
+  } = opts;
+  const key = placeKey(pathAbs);
+  const prior = (st && st.places && st.places[key]) || null;
+  const conf = conflict(st, pathAbs, { session, pid }, probe);
+  if (conf && !force) return { ok: false, conflict: conf };
+  const rec = holdRecord({ pathAbs, repo, branch, host, session, sessionName, pid, pidKind });
+  st.places = st.places || {};
+  st.places[key] = rec;
+  // `prior` is reported as superseded only when it was somebody ELSE's — a re-acquire by the same
+  // holder (`conflict` returned null on a matching session) is a renewal, not a takeover, and
+  // calling it "superseded" would put a scary word in an ordinary message.
+  const sameHolder = !!(prior && session && prior.session === session);
+  return { ok: true, rec, superseded: prior && !sameHolder ? prior : null };
+}
+
+/**
  * Every place record whose holder is confirmed dead — `colab doctor`'s report, same shape as
  * `staleClaims`. Deliberately excludes `unknown` liveness: a record this module cannot disprove is
  * held stays out of a report that implies "safe to prune".
@@ -458,6 +511,6 @@ function syncedStateProblem(colabDir) {
 }
 
 module.exports = {
-  placeKey, holdRecord, resolveAnchor, defaultProbe, isLive, holderOf, holderLabel, holdAge, conflict,
+  placeKey, holdRecord, resolveAnchor, defaultProbe, isLive, holderOf, holderLabel, holdAge, conflict, acquire,
   stalePlaces, unprovablePlaces, syncedStateProblem,
 };

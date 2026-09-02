@@ -476,3 +476,93 @@ test('resolveAnchor: AI_AGENT truthy behaves like CLAUDECODE=1 — fails closed 
   const r = place.resolveAnchor({ env: { AI_AGENT: '1' }, ppid: 999, alive: () => true, isAncestor: () => true });
   assert.strictEqual(r.pidKind, 'invocation');
 });
+
+// --- acquire (#285) ------------------------------------------------------------
+//
+// The decide-and-write half. These are DELIBERATELY deterministic — no processes, no timing, no
+// scheduler luck: they drive the exact state transition the concurrency test can only observe
+// statistically. `place-serialize.test.js` proves the same property against real racing processes;
+// this proves it is not an accident of scheduling.
+
+const ALIVE = () => true;
+const DEAD = () => false;
+
+function emptySt() { return { places: {} }; }
+
+function acquireOpts(session, over = {}) {
+  return {
+    pathAbs: '/tmp/repo-285', repo: '/tmp/repo-285', branch: null, host: HOST,
+    session, sessionName: `name-${session}`, pid: 4242, pidKind: 'anchor', ...over,
+  };
+}
+
+test('acquire: on clear ground it writes exactly one record and reports no supersede', () => {
+  const st = emptySt();
+  const r = place.acquire(st, acquireOpts('sess-A'), ALIVE);
+  assert.strictEqual(r.ok, true);
+  assert.strictEqual(r.superseded, null);
+  assert.deepStrictEqual(Object.keys(st.places), [place.placeKey('/tmp/repo-285')]);
+  assert.strictEqual(st.places[place.placeKey('/tmp/repo-285')].session, 'sess-A');
+});
+
+test('acquire: a SECOND acquire on the SAME mutated state is refused, and the first record is untouched', () => {
+  // This is the whole point of #285. Before it, each call site re-read state under the lock and wrote
+  // unconditionally, so this second write silently superseded the first — measured as 8/8 concurrent
+  // `colab place acquire` invocations all exiting 0 against one checkout.
+  const st = emptySt();
+  assert.strictEqual(place.acquire(st, acquireOpts('sess-A'), ALIVE).ok, true);
+  const before = JSON.stringify(st.places);
+
+  const r = place.acquire(st, acquireOpts('sess-B'), ALIVE);
+  assert.strictEqual(r.ok, false);
+  assert.strictEqual(r.conflict.kind, 'held');
+  assert.match(r.conflict.message, /name-sess-A/);
+  assert.strictEqual(JSON.stringify(st.places), before, 'a refused acquire must write nothing at all');
+});
+
+test('acquire: the same session re-acquiring is a RENEWAL — allowed, and never reported as a supersede', () => {
+  const st = emptySt();
+  place.acquire(st, acquireOpts('sess-A'), ALIVE);
+  const r = place.acquire(st, acquireOpts('sess-A'), ALIVE);
+  assert.strictEqual(r.ok, true);
+  assert.strictEqual(r.superseded, null, 'a renewal is not a takeover and must not be worded as one');
+  assert.strictEqual(Object.keys(st.places).length, 1);
+});
+
+test('acquire: a CONFIRMED-DEAD holder is clear ground — superseded, and the displaced record is reported', () => {
+  const st = emptySt();
+  place.acquire(st, acquireOpts('sess-A'), ALIVE);
+  const r = place.acquire(st, acquireOpts('sess-B'), DEAD);
+  assert.strictEqual(r.ok, true);
+  assert.strictEqual(r.superseded && r.superseded.session, 'sess-A');
+  assert.strictEqual(st.places[place.placeKey('/tmp/repo-285')].session, 'sess-B');
+});
+
+test('acquire: a pidKind "invocation" holder is UNPROVABLE, and fails closed — refused, not reclaimed', () => {
+  // #288's fail-closed direction must survive #285. An agent hold with no provable anchor reads
+  // live:null forever; auto-reclaiming it here would silently undo exactly what #288 fixed.
+  const st = emptySt();
+  place.acquire(st, acquireOpts('sess-A', { pidKind: 'invocation' }), ALIVE);
+  const r = place.acquire(st, acquireOpts('sess-B'), place.defaultProbe);
+  assert.strictEqual(r.ok, false);
+  assert.strictEqual(r.conflict.kind, 'unknown');
+  assert.strictEqual(st.places[place.placeKey('/tmp/repo-285')].session, 'sess-A');
+});
+
+test('acquire: force writes over a live holder and names what it displaced', () => {
+  // `force` is not an override this module grants — the caller has already cleared the COLAB_HUMAN=1
+  // bar. This only pins that passing it does what it says.
+  const st = emptySt();
+  place.acquire(st, acquireOpts('sess-A'), ALIVE);
+  const r = place.acquire(st, acquireOpts('sess-B', { force: true }), ALIVE);
+  assert.strictEqual(r.ok, true);
+  assert.strictEqual(r.superseded && r.superseded.session, 'sess-A');
+  assert.strictEqual(st.places[place.placeKey('/tmp/repo-285')].session, 'sess-B');
+});
+
+test('acquire: two different paths never conflict — the hold is path-scoped, not repo-scoped', () => {
+  const st = emptySt();
+  assert.strictEqual(place.acquire(st, acquireOpts('sess-A'), ALIVE).ok, true);
+  assert.strictEqual(place.acquire(st, acquireOpts('sess-B', { pathAbs: '/tmp/repo-285-other' }), ALIVE).ok, true);
+  assert.strictEqual(Object.keys(st.places).length, 2);
+});
