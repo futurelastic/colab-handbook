@@ -911,6 +911,13 @@ Release a single issue: removes the local claim and, if gh is usable, runs
 Sibling claims on the same worktree stay alive (a group finishes issues one at a time).
 The worktree is NEVER auto-removed here (uncommitted work may exist); if this was the
 last claim, the output says the worktree now has zero claims.
+
+A claim with NO worktree also took a checkout place-claim when it was made, and this
+gives it back — but only once it is the LAST such claim this session holds on that
+checkout (a place-claim covers the checkout, not one issue), and only when the claim
+record's own session matches the hold's. A hold belonging to another session, to
+another machine, or one whose claim's GitHub release just failed, is left alone and
+said so. Worktree claims never held the checkout; \`colab worktree rm\` owns theirs.
 `;
 
 function cmdRelease(argv) {
@@ -946,20 +953,68 @@ function cmdRelease(argv) {
   }
 
   let remaining = null;
+  let placeOutcome = null;
   state.mutate((st) => {
     const c = st.claims[found.key];
     if (!c) return; // shouldn't happen — we just read it above
     if (ghFailed) {
+      // #305: the claim is KEPT (releasePending), so the hold that makes it safe is kept too.
+      // Dropping the checkout hold under a claim that still stands is exactly the local/remote
+      // disagreement #164 exists to prevent, arriving from the other side.
       c.releasePending = true;
       c.releaseNote = `GitHub release failed (${nowISO()}) — retry with: colab release ${num}`;
     } else {
       delete st.claims[found.key];
       if (wtName) remaining = Object.values(st.claims).filter((cl) => cl.worktree === wtName).length;
+      // #305: a claim with NO worktree took a checkout place-claim at `cmdClaim` (`takingPlace`),
+      // and nothing ever gave it back — `colab release` only ever deleted the claim. So every
+      // ops/discussion session following the documented no-worktree pattern leaked the checkout
+      // lock on exit, blocking every sibling session on the machine until its process died or a
+      // human ran `colab place release` with COLAB_HUMAN=1. Mirrors what `colab worktree rm`
+      // already does for the worktree shape (claim + place + ports together).
+      //
+      // Ownership is proved from the CLAIM RECORD's own session, never from an ambient
+      // --session/COLAB_SESSION (`cmdRelease` deliberately has no such flag). `cmdClaim` wrote
+      // ONE `session` const into both records in the same invocation, so this is exact — and it
+      // is immune to #306: a claim minted with a wrong-shape value stored that same wrong value
+      // in both, so wrong matches wrong and even the holds already stranded on disk are cured.
+      // It is also strictly safer than an ambient check would be: if this session died holding
+      // the checkout and a LATER session re-took it as clear ground, the place record carries the
+      // later session and this stale claim's release correctly touches nothing.
+      //
+      // THE TRAP: a place-claim covers the CHECKOUT, not one issue. `colab claim 1480 1481` mints
+      // two claims and ONE hold, so releasing the first must not drop it. Counted here, INSIDE
+      // the same lock and AFTER the delete above, against the state this write actually sees
+      // (#285's lesson) — one critical section, so there is never a window where the claim is
+      // gone and the hold is not. A `releasePending` sibling counts as remaining: the session
+      // still holds that issue locally, and `doctor --prune` clears a genuinely dead one.
+      if (!wtName) {
+        const siblings = Object.values(st.claims).filter((cl) => cl.repo === repo && !cl.worktree
+          && (cl.session || null) === (found.claim.session || null));
+        if (siblings.length === 0) {
+          placeOutcome = place.releaseOwnedBy(st, repo, found.claim.session);
+        } else {
+          placeOutcome = { released: false, reason: 'siblings', siblings: siblings.length };
+        }
+      }
     }
   });
 
   print(ghFailed ? `Release of #${num} recorded locally as PENDING (GitHub write failed — see above)` : `Released #${num} from ${shortRepo(repo)}`);
-  pushEvent('release', { repo, issue: num, worktree: wtName, session: found.claim.session });
+  // #305: say what happened to the checkout hold — silence here is what let the leak run unnoticed.
+  // Nothing is printed when there was never a record to act on ('no-record'), which is the ordinary
+  // case for every worktree claim and every `writes: isolated` repo.
+  if (placeOutcome && placeOutcome.released) {
+    print(`  released the checkout place-claim on ${placeOutcome.rec.path} (this was the last claim holding it)`);
+  } else if (placeOutcome && placeOutcome.reason === 'siblings') {
+    print(`  checkout place-claim KEPT — this session still holds ${placeOutcome.siblings} more claim(s) here`);
+  } else if (placeOutcome && (placeOutcome.reason === 'other-session' || placeOutcome.reason === 'foreign-machine')) {
+    print(`  checkout place-claim left alone — held by ${placeOutcome.reason === 'foreign-machine' ? 'another machine' : 'a different session'} ("${place.holderLabel(placeOutcome.rec)}")`);
+  }
+  pushEvent('release', {
+    repo, issue: num, worktree: wtName, session: found.claim.session,
+    placeReleased: !!(placeOutcome && placeOutcome.released), // additive to the agreed shape, not a new kind
+  });
   if (!ghFailed && wtName && remaining === 0) {
     print(`  note: worktree "${wtName}" now has ZERO claims (not removed — run: colab worktree rm ${wtName})`);
   } else if (!ghFailed && wtName) {

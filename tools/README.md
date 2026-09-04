@@ -83,6 +83,20 @@ branch on it.
 - **Claiming and ports work without a worktree.** `colab claim 42 --session <id>` (a trunk
   claim — `--session` mandatory here since #242, see *Place-claims*) and `colab port alloc`
   are standalone.
+- **A trunk claim's checkout hold ends with the last claim holding it (#305).** The no-worktree
+  shape takes a place-claim on the checkout at `claim` time, and `colab release` gives it back —
+  but a place-claim covers the *checkout*, not one issue, so `claim 1480 1481` mints two claims
+  and ONE hold, and only the second `release` frees it. Ownership is proved from the claim
+  record's own `session` (written by the same `claim` invocation that wrote the hold), never from
+  an ambient `--session`: `colab release` has no such flag, so a stale claim swept long after a
+  LATER session re-took the checkout correctly touches nothing. A failed GitHub write keeps the
+  claim (`releasePending`) and therefore keeps the hold with it.
+- **`--session` takes a URL or any stable id — but a session NAME in that slot is warned about
+  (#306).** Nothing rejects a non-URL value (`requirePlaceIdentity` promises
+  `<url-or-any-stable-id>`), but a value that looks like neither a URL nor a `session_…` id draws
+  a warning at write time, because `place release`'s self-check is exact equality: a name recorded
+  there means presenting your real URL later fails your own ownership check. See
+  `docs/adr/306-session-identity-fixed-at-write-time-not-name-matched-at-release.md`.
 - **"No branch" is `null`, and never the word `trunk`.** A claim held on the trunk checkout has no
   branch, and `trunk` is a *role* — the branch this repo merges into, `main` or `dev`. Recording the
   role word as though it were a name is refused on write (`colab claim --branch trunk` exits 1, and
@@ -802,7 +816,7 @@ Run `colab <cmd> --help` for full detail.
 | command | purpose |
 |---|---|
 | `claim <issue>... [--worktree N] [--branch B] [--session S] [--session-name S] [--force] [--repo P]` | claim one or many issues (atomic; onto one worktree). **Enforced** — see *Claim lifecycle* below |
-| `release <issue> [--repo P]` | release a single issue; siblings + worktree survive |
+| `release <issue> [--repo P]` | release a single issue; siblings + worktree survive. A no-worktree claim's **checkout place-claim** is given back too, but only on the LAST such claim this session holds there, and only when the claim record's own session matches the hold (#305) |
 | `issue-filed <issue> [--repo P]` | notify-only event (`issue.filed`, #102) for an issue a raw `gh issue create` just made — no state.json entry, no label, no gh call of its own |
 | `gate-recorded [--sha S] [--fail] [--worktree N] [--repo P]` | notify-only event (`gate.recorded`, #116) for code-wrap's own A3 quality-gate step — no state.json entry, no label, no gh call of its own |
 | `solo [--force] [--session S] [--session-name S] [--repo P]` \| `solo --done [--repo P]` | entry-gated trunk-direct flow — `writes: serial` only, no issue/claim/worktree (see *Solo flow*, CONVENTIONS.md) |

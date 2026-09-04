@@ -764,6 +764,27 @@ and **verified by the writer itself**, not merely by whatever spawned it.
   *notices* the holder died, roughly a minute later — so immediately re-spawning after a
   kill gets a refusal indistinguishable from a genuine conflict. A read-time liveness
   check has no such lag; adopt that stronger semantics rather than the poller's.
+- **A trunk claim's hold is given back by its last `release` — a courtesy, never a
+  correctness dependency (#305).** The no-worktree claim shape takes this hold at `claim`
+  time, so the command that undoes that claim gives it back: `colab release` frees it once
+  no claim of that session is left holding that checkout. A place-claim covers the
+  *checkout*, not one issue, so a two-issue claim mints one hold and only the second
+  release frees it. Ownership is proved from the **claim record's own session**, written by
+  the same invocation that wrote the hold — never from an ambient `--session`, so a stale
+  claim swept long after a *later* session re-took the checkout correctly touches nothing.
+  None of this weakens the bullet above: read-time liveness remains the authority, and this
+  only removes the lag that made an ops session's finished hold look live for as long as its
+  process survived. Measured: a session released its issue on GitHub cleanly and still held
+  the checkout 45 minutes later, blocking every sibling claim on the machine.
+- **Identity is fixed when the hold is written, never matched loosely when it is released.**
+  `--session` accepts a URL or any stable id, but a value that is neither is warned about at
+  write time, because the self-release check is exact equality on that field: a session
+  *name* recorded there means presenting your real URL later fails your own ownership check
+  and demands `COLAB_HUMAN=1` for a release that was legitimately yours. `sessionName` is
+  **never** widened into an exemption key to paper over this — display text is not a join
+  key, and a consumer that tried name-matching measured a false match and reverted it. Full
+  reasoning, and the two alternatives rejected:
+  [`docs/adr/306-session-identity-fixed-at-write-time-not-name-matched-at-release.md`](docs/adr/306-session-identity-fixed-at-write-time-not-name-matched-at-release.md).
 - **The decision happens INSIDE the state lock, not beside it (#285).** A hold is acquired by
   one function that re-checks the conflict against the state it is about to write
   (`tools/lib/place.js`'s `acquire`), called from within `state.mutate`'s critical section.
