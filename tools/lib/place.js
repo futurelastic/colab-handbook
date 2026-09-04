@@ -510,7 +510,58 @@ function syncedStateProblem(colabDir) {
   return null;
 }
 
+/**
+ * Is `rec` a hold this `session` may act on as its own? (#306, naming what was already there.)
+ *
+ * This is EXACTLY `conflict`'s same-holder exemption above — a truthy, exactly-equal `session` —
+ * given a name and a test file, because `cmdPlace release`'s `mine` test and that exemption are
+ * required to be the same comparison. Two spellings of one rule is how a CLI ends up with two
+ * different answers to "is this hold mine", and a hold that answers that inconsistently is worse
+ * than one that refuses.
+ *
+ * ⚠ NEVER widen this to `sessionName`, or to `pid`. Both were considered and rejected on measured
+ * evidence — see `conflict`'s doc comment above (a consumer that tried name-matching reverted it
+ * after a worktree sat beside a live session with a near-identical name and was NOT it) and
+ * CONVENTIONS.md, "Place-claims". #306 proposed exactly that widening as one of two candidate
+ * fixes; it was rejected for these reasons and the fix went to write time instead. A blank session
+ * never matches, including blank-against-blank (#242).
+ */
+function ownsHold(rec, session) {
+  return !!session && !!rec && rec.session === session;
+}
+
+/**
+ * Release the hold at `pathAbs` IF AND ONLY IF `session` provably owns it — the AUTOMATIC
+ * counterpart to `cmdPlace release`'s deliberate, human-typed act (#305).
+ *
+ * Decide-and-write over the caller's `st`, mirroring `acquire`'s post-#285 shape so the decision
+ * is made against the state the write actually sees, inside the caller's existing lock. It never
+ * throws and never prompts: every non-release is a named `reason` the caller reports and carries
+ * on from, because this runs as a rider on `colab release`, whose real job (dropping the claim)
+ * has already succeeded by then.
+ *
+ * Stricter than `ownsHold` alone by one term — `machine.isLocal`. A human naming a path is
+ * asserting intent about that path; a side effect of another command must never delete a record
+ * another machine wrote, where "held" cannot even be evaluated (this module is machine-local by
+ * design — see the module doc). That asymmetry is deliberate and lives HERE, not in `ownsHold`:
+ * adding it to the shared predicate would change `cmdPlace release`'s behaviour, which is beyond
+ * what #305/#306 decided.
+ *
+ * Returns `{released: false, reason: 'no-record'|'foreign-machine'|'other-session', rec}` or
+ * `{released: true, rec}` — `rec` is the record inspected (or removed) so a caller can name the
+ * holder it left alone.
+ */
+function releaseOwnedBy(st, pathAbs, session) {
+  const key = placeKey(pathAbs);
+  const rec = (st && st.places && st.places[key]) || null;   // `places` may be absent entirely
+  if (!rec) return { released: false, reason: 'no-record', rec: null };
+  if (!machine.isLocal(rec)) return { released: false, reason: 'foreign-machine', rec };
+  if (!ownsHold(rec, session)) return { released: false, reason: 'other-session', rec };
+  delete st.places[key];
+  return { released: true, rec };
+}
+
 module.exports = {
   placeKey, holdRecord, resolveAnchor, defaultProbe, isLive, holderOf, holderLabel, holdAge, conflict, acquire,
-  stalePlaces, unprovablePlaces, syncedStateProblem,
+  stalePlaces, unprovablePlaces, syncedStateProblem, ownsHold, releaseOwnedBy,
 };

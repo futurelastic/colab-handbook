@@ -245,9 +245,57 @@ test('cmdPlace acquire with a --session-name but no --session still gets the hal
 
 test('cmdPlace acquire with both --session and --session-name warns about neither case', () => {
   const fx = fixture();
-  const r = colab(fx, ['place', 'acquire', fx.work, '--repo', fx.work, '--session', 's', '--session-name', 'n']);
+  // #306: the --session value here was `'s'`, which the new shape warning correctly flags. This is
+  // a FIXTURE correction, not a loosened gate: the test's subject is "warns about neither identity
+  // case", and it was never a promise that a one-character session id is warning-free. The
+  // empty-stderr assertion below is deliberately kept exactly as it was — it now also proves the
+  // shape warning does NOT over-fire on a well-formed session URL.
+  const r = colab(fx, ['place', 'acquire', fx.work, '--repo', fx.work,
+    '--session', 'https://claude.ai/code/session_017PlaceCliBoth', '--session-name', 'n']);
   assert.strictEqual(r.code, 0, r.err);
   assert.strictEqual(r.err, '');
+});
+
+// --- #306: a non-blank but wrong-SHAPE --session warns at write time, and the later refusal says so
+
+test('a --session that is plainly a session NAME warns at claim time, but is still accepted (#306)', () => {
+  const fx = fixture();
+  const r = colab(fx, ['claim', '901', '--repo', fx.work, '--session', 'ops-coding-dashboard-1480']);
+  assert.strictEqual(r.code, 0, r.err);
+  assert.match(r.err, /does not look like a session URL/);
+  assert.match(r.err, /--session-name/);
+  // Warned, never refused — `requirePlaceIdentity` promises `<url-or-any-stable-id>`.
+  const st = JSON.parse(fs.readFileSync(path.join(fx.home, 'state.json'), 'utf8'));
+  assert.strictEqual(Object.values(st.places)[0].session, 'ops-coding-dashboard-1480');
+});
+
+test('a well-formed session URL draws NO shape warning — the check does not over-fire (#306)', () => {
+  const fx = fixture();
+  const r = colab(fx, ['claim', '902', '--repo', fx.work,
+    '--session', 'https://claude.ai/code/session_017GKdaNPELs2mtKPDCasha1']);
+  assert.strictEqual(r.code, 0, r.err);
+  assert.doesNotMatch(r.err, /does not look like a session URL/);
+});
+
+test('place release refused on a session mismatch NAMES both values and the recovery command (#306)', () => {
+  const fx = fixture();
+  const bad = 'ops-coding-dashboard-1480';
+  const real = 'https://claude.ai/code/session_017Real';
+  assert.strictEqual(colab(fx, ['claim', '903', '--repo', fx.work, '--session', bad]).code, 0);
+
+  // The live incident: releasing with the objectively-correct URL is refused, because the wrong
+  // value landed at claim time. The GATE is unchanged; what it now does is explain itself.
+  const r = colab(fx, ['place', 'release', fx.work, '--repo', fx.work, '--session', real]);
+  assert.notStrictEqual(r.code, 0, 'must still refuse — the gate is not relaxed');
+  assert.match(r.err, /COLAB_HUMAN=1/);
+  assert.match(r.err, /recorded session: ops-coding-dashboard-1480/);
+  assert.match(r.err, new RegExp(`you presented: *${real.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`));
+  assert.match(r.err, /colab place release .* --session 'ops-coding-dashboard-1480'/);
+
+  // …and the command it printed actually works, with no human flag — the workaround the issue
+  // author proved by hand, now the thing the refusal hands you.
+  const ok = colab(fx, ['place', 'release', fx.work, '--repo', fx.work, '--session', bad]);
+  assert.strictEqual(ok.code, 0, ok.err);
 });
 
 test('colab places never renders a live, identity-less hold as a bare "-" — it shows the pid fallback (#235)', () => {

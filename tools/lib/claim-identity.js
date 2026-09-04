@@ -124,7 +124,30 @@ function mergeClaimRecord(existing, incoming, { sameHolder } = {}) {
   return merged;
 }
 
+/**
+ * Does `v` look like a session ID a consumer could actually JOIN on — a URL, or a `session_…`
+ * token embedded in one (#306)? The repo's ONE answer to that question: `parseSessionField`
+ * (tools/colab) decodes a claim comment's `· session <field>` tail with exactly this test, and
+ * `warnWeakIdentity` warns with it. Two copies of a shape rule drift, and this one decides
+ * whether a hold can ever be released by its own owner, so there is one.
+ *
+ * ⚠ This is a SHAPE heuristic and deliberately not a gate. `requirePlaceIdentity`'s own refusal
+ * text promises `--session <url-or-any-stable-id>`, and the fleet has real callers (and six of
+ * this repo's own test fixtures) using bare stable ids like `sess-agent`. A false here means
+ * "warn the caller they may have passed a session NAME by mistake" — never "refuse the write".
+ * Rejecting a non-URL would break that documented contract and every such adopter.
+ *
+ * False for '' / null: absence is `warnWeakIdentity`'s and `requirePlaceIdentity`'s subject
+ * (#11/#242), never this predicate's — callers test blankness first.
+ */
+function looksLikeSessionId(v) {
+  const s = String(v == null ? '' : v).trim();
+  if (!s) return false;
+  return /^https?:\/\//.test(s) || /session_[\w-]+/.test(s);
+}
+
 module.exports = {
   DEFAULT_COMPONENTS, FINE_COMPONENTS,
   claimIdentityProblem, components, identityString, sameClaimant, mergeClaimRecord,
+  looksLikeSessionId,
 };
