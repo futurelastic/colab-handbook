@@ -91,8 +91,9 @@ that one ever disagree, `CONVENTIONS.md` wins — and report the discrepancy.
    for 12 hours into repos whose CI was silently dead. But `gh run list --branch
    <trunk> -L 1` answers the wrong question: under `cancel-in-progress`, a
    cancelled straggler can outrank a passing run on the *same* commit and
-   deadlock every ship. Ask whether a successful run exists for the branch's
-   current head sha — `colab ship` does ([§4](CONVENTIONS.md#4-branches-and-commits)).
+   deadlock every ship. Ask whether **every** run at the branch's current head sha
+   has finished and one of them succeeded — a sibling still in flight has not passed,
+   it has not run — `colab ship` does ([§4](CONVENTIONS.md#4-branches-and-commits)).
 2. Squash-merge, one commit per unit of work.
 3. **The merge message must say `Closes #N`** — one per issue in the group.
    A bare `(#N)` does not auto-close, and we measured 26/30 issues sitting

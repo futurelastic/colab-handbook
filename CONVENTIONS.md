@@ -1234,8 +1234,10 @@ than guessed.
   billing lockout) — every run "failed" without starting. **Ask by commit, not by recency
   (#92):** `gh run list --branch <trunk> -L 1` reads whatever ran *last*, and under
   `cancel-in-progress` a cancelled straggler can outrank a passing run on the same commit.
-  The right question: does a completed, successful run exist for this branch's current
-  head sha? `colab ship` asks it that way.
+  The right question: has EVERY run at this branch's current head sha completed, and did
+  one of them succeed? `colab ship` asks it that way. Both halves are load-bearing: a
+  sibling that is merely still in progress has not passed either (#307), so a fast
+  workflow finishing green must never answer for a slow one that has not run yet.
 - **That resolves a FALSE red — a real one has two different doors, one of them
   human-only (#105), one machine-checkable (#281).** A **genuinely** red trunk (the sha
   really failed) is a true deadlock when the candidate branch's entire content IS the
