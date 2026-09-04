@@ -337,6 +337,112 @@ test('an action_required sibling of a passing run on the SAME sha reads red, not
   assert.deepStrictEqual(result, { status: 'completed', conclusion: 'action_required', sha: fx.sha, createdAt: null, databaseId: null, runCount: 2 });
 });
 
+// --- #307: an UNFINISHED sibling blocks green exactly as a failed one does -------------------
+// The allowlist above quantifies over `conclusion`; these quantify over `status`. A sibling that has
+// not finished has not passed, so a fast workflow completing green must not answer for a slow one
+// that is still running — the measured shape was build+lint green, tests still in_progress, and the
+// gate reading "3 runs: all success".
+
+test('#307: an in_progress sibling of a passing run reads NOT green — the masking order', () => {
+  const fx = fixture();
+  // gh returns newest-first; the passing fast workflow is row 0, so a first-completed-success pick
+  // finds it immediately and never looks at the row below it.
+  const result = fx.withFakeGh([
+    { headSha: fx.sha, status: 'completed', conclusion: 'success' },
+    { headSha: fx.sha, status: 'in_progress', conclusion: null },
+  ], () => git.ghRunForSha(fx.work, 'main'));
+  assert.strictEqual(result.status, 'in_progress');
+  assert.notStrictEqual(result.conclusion, 'success');
+  assert.strictEqual(result.runCount, 2);
+});
+
+test('#307: order-independent — the unfinished sibling listed first reads the same', () => {
+  const fx = fixture();
+  const result = fx.withFakeGh([
+    { headSha: fx.sha, status: 'in_progress', conclusion: null },
+    { headSha: fx.sha, status: 'completed', conclusion: 'success' },
+  ], () => git.ghRunForSha(fx.work, 'main'));
+  assert.strictEqual(result.status, 'in_progress');
+  assert.strictEqual(result.runCount, 2);
+});
+
+test('#307: a QUEUED sibling blocks too — not-completed is the test, not the specific status word', () => {
+  const fx = fixture();
+  const result = fx.withFakeGh([
+    { headSha: fx.sha, status: 'completed', conclusion: 'success' },
+    { headSha: fx.sha, status: 'queued', conclusion: null },
+  ], () => git.ghRunForSha(fx.work, 'main'));
+  assert.strictEqual(result.status, 'queued');
+  assert.strictEqual(result.runCount, 2);
+});
+
+test('#307: the observed 3-workflow shape — build+lint green, tests in flight — is not green', () => {
+  const fx = fixture();
+  const result = fx.withFakeGh([
+    { headSha: fx.sha, status: 'completed', conclusion: 'success' },
+    { headSha: fx.sha, status: 'completed', conclusion: 'success' },
+    { headSha: fx.sha, status: 'in_progress', conclusion: null },
+  ], () => git.ghRunForSha(fx.work, 'main'));
+  assert.strictEqual(result.status, 'in_progress');
+  assert.strictEqual(result.runCount, 3);
+});
+
+test('#307: the blocked verdict carries the UNFINISHED row\'s createdAt/databaseId, not the passing one\'s', () => {
+  const fx = fixture();
+  // ci-verdict.js judges slow-vs-WEDGED from exactly these two fields; handing back the finished
+  // row's would age-check a run that already finished and could never wedge.
+  const result = fx.withFakeGh([
+    { headSha: fx.sha, status: 'completed', conclusion: 'success', createdAt: '2026-09-04T00:00:00Z', databaseId: 111 },
+    { headSha: fx.sha, status: 'in_progress', conclusion: null, createdAt: '2026-09-04T01:00:00Z', databaseId: 222 },
+  ], () => git.ghRunForSha(fx.work, 'main'));
+  assert.strictEqual(result.databaseId, 222);
+  assert.strictEqual(result.createdAt, '2026-09-04T01:00:00Z');
+});
+
+test('#307 REGRESSION: all siblings finished, one cancelled — still green (#92\'s deadlock fix survives)', () => {
+  const fx = fixture();
+  // The new quantifier is over `status`, so `cancelled` — which is COMPLETED — must keep reading as
+  // not-bad. Blocking here would re-open the deadlock #92 was filed to close.
+  const result = fx.withFakeGh([
+    { headSha: fx.sha, status: 'completed', conclusion: 'cancelled' },
+    { headSha: fx.sha, status: 'completed', conclusion: 'success' },
+  ], () => git.ghRunForSha(fx.work, 'main'));
+  assert.deepStrictEqual(result, { status: 'completed', conclusion: 'success', sha: fx.sha, createdAt: null, databaseId: null, runCount: 2 });
+});
+
+test('#307: a failed sibling still outranks an unfinished one — red beats retry-later', () => {
+  const fx = fixture();
+  const result = fx.withFakeGh([
+    { headSha: fx.sha, status: 'in_progress', conclusion: null },
+    { headSha: fx.sha, status: 'completed', conclusion: 'failure' },
+    { headSha: fx.sha, status: 'completed', conclusion: 'success' },
+  ], () => git.ghRunForSha(fx.work, 'main'));
+  assert.strictEqual(result.status, 'completed');
+  assert.strictEqual(result.conclusion, 'failure');
+});
+
+test('#307: every sibling finished and green is still green — the ordinary ship case', () => {
+  const fx = fixture();
+  const result = fx.withFakeGh([
+    { headSha: fx.sha, status: 'completed', conclusion: 'success' },
+    { headSha: fx.sha, status: 'completed', conclusion: 'success' },
+  ], () => git.ghRunForSha(fx.work, 'main'));
+  assert.strictEqual(result.conclusion, 'success');
+  assert.strictEqual(result.runCount, 2);
+});
+
+test('#307: ghRunForCommit blocks on an unfinished sibling too — one rule, both entry points', () => {
+  const fx = fixture();
+  const runs = [
+    { headSha: fx.sha, status: 'completed', conclusion: 'success' },
+    { headSha: fx.sha, status: 'in_progress', conclusion: null },
+  ];
+  const viaSha = fx.withFakeGh(runs, () => git.ghRunForSha(fx.work, 'main'));
+  const viaCommit = fx.withFakeGh(runs, () => git.ghRunForCommit(fx.work, 'main', fx.sha));
+  assert.deepStrictEqual(viaCommit, viaSha);
+  assert.strictEqual(viaCommit.status, 'in_progress');
+});
+
 test('the sha has runs but none succeeded — surfaces the most informative one, not a false none', () => {
   const fx = fixture();
   const result = fx.withFakeGh([
