@@ -416,9 +416,11 @@ function ghLabelCreate(repo, name, color, description) {
  * duplicate this exists for can be two runs deep.
  *
  * Returns { status, conclusion, sha, createdAt, databaseId, runCount }:
- *   - a run for the head sha completed successfully  → {status:'completed', conclusion:'success', sha}
- *   - the head sha has run(s), none succeeded         → {status, conclusion} of the most informative
- *     one (a still-running row over a finished-but-failed/cancelled one), sha set
+ *   - EVERY run at the head sha finished, and one succeeded → {status:'completed', conclusion:'success', sha}
+ *   - the head sha has run(s) and no green verdict is owed → {status, conclusion} of the most
+ *     informative one (a still-running row over a finished-but-failed/cancelled one), sha set.
+ *     "No green verdict owed" covers both a sha where nothing succeeded AND a sha where something
+ *     did but a sibling has not finished yet (#307) — the latter reads as still-running, not green.
  *   - the head sha has no run in the recent window     → {status:'none', conclusion:null, sha}
  *     (still not green — this is also how a billing-style fail-to-start reads: no run was ever
  *     created for the commit that would need one)
@@ -437,6 +439,17 @@ function ghLabelCreate(repo, name, color, description) {
  * `cancelled` are not-bad) rather than a denylist of conclusion values as they get discovered —
  * #146 covered `failure` alone and #165 was filed the moment a second denylist entry was on the
  * table; inverting the quantifier once closes the whole family instead of chasing it value by value.
+ *
+ * That ALL-quantifier binds `status` exactly as it binds `conclusion` (#307), and for one reason:
+ * a sibling that has not FINISHED has not passed — it can still fail. Applying the quantifier to
+ * only one of the two fields made the same workflow gating when red and invisible when merely
+ * unfinished, so a repo whose fast workflows (build, lint) finish ahead of its slow one (a
+ * self-hosted test suite) read fully green for as long as the gap between them — tens of minutes
+ * on the measured repo, with `colab ship`'s autonomy path trusting exactly this verdict. The
+ * not-yet-finished sha therefore falls through to the still-running branch below, which is the
+ * state `classifyCiRun` already knows how to handle: SELF_CLEARING (retry later), or HUMAN_GATED
+ * when tools/lib/ci-verdict.js finds the run WEDGED rather than merely slow. Nothing here waits or
+ * polls — it reports what is true at read time and lets the caller decide.
  */
 function ghRunForSha(repo, branch, limit = 10) {
   const head = run('git', ['ls-remote', 'origin', `refs/heads/${branch}`], { cwd: repo });
@@ -494,12 +507,19 @@ function ghRunForCommit(repo, branch, sha, limit = 10) {
   );
   if (notGreen) return { status: 'completed', conclusion: notGreen.conclusion, sha, createdAt: notGreen.createdAt || null, databaseId: notGreen.databaseId || null, runCount };
 
-  const success = forSha.find((x) => x.status === 'completed' && x.conclusion === 'success');
+  // A green verdict is owed only when EVERY sibling at this sha has finished (#307). A row that is
+  // still queued/in_progress has not passed — it has not run — so picking the first completed
+  // success here would stamp `runCount` (the FULL sibling count) onto a verdict that inspected one
+  // row. Same all-quantifier as `notGreen` above, on `status` instead of `conclusion`; when it does
+  // not hold, control reaches the still-running pick below.
+  const allFinished = forSha.every((x) => x.status === 'completed');
+  const success = allFinished ? forSha.find((x) => x.conclusion === 'success') : null;
   if (success) return { status: 'completed', conclusion: 'success', sha, createdAt: success.createdAt || null, databaseId: success.databaseId || null, runCount };
 
-  // None succeeded and none failed for this sha — report the most informative row: a run still in
-  // flight (it may yet succeed) over a finished-but-not-successful one (gh returns newest-first;
-  // forSha[0] is the newest of the non-successes either way).
+  // No green verdict is owed for this sha — either nothing succeeded, or something did while a
+  // sibling is still unfinished (#307). Report the most informative row: a run still in flight (the
+  // sha may yet go green) over a finished-but-not-successful one (gh returns newest-first, so
+  // forSha[0] is the newest remaining row either way).
   const pending = forSha.find((x) => x.status !== 'completed');
   const pick = pending || forSha[0];
   return { status: pick.status, conclusion: pick.conclusion || null, sha, createdAt: pick.createdAt || null, databaseId: pick.databaseId || null, runCount };
