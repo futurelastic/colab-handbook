@@ -1,6 +1,6 @@
 ---
 name: code-sweep
-description: "Clear out everything finished in ONE repo: find every worktree whose work has landed, every issue whose code shipped but is still open, and every claim outliving its session — then put each through code-wrap and code-ship in sequence, one at a time. Run it at end of day, or ping it whenever a session goes idle — cheap to re-run only when §0 is honoured first, a convention the executing agent follows and not a gate anything enforces (its fingerprint stays sensitive to branch tips, so the cheap path is rarer here than in code-triage — see §0). Sorts candidates into wrap / teardown-only / claim-only / place-claim / unrecorded / blocked / unlinked, because most do not need a full wrap+ship. Can be scoped to a set of issues or one session/worktree instead of the whole repo. Trigger phrases: 'sweep the repo', 'wrap everything finished', 'clean up the worktrees', 'close out the session work', 'tidy up finished work', 'wrap all the done branches', 'sweep the issues #95 #96', 'sweep the session <name>', 'ship these'; and — when this session's last act was a sweep — the re-ping forms 'again', 'anything new?', 'check again', 'anything to wrap yet?', or a bare 'go'. Composes code-wrap then code-ship per candidate; never batches merges."
+description: "Clear out everything finished in ONE repo: find every worktree whose work has landed, every issue whose code shipped but is still open, and every claim outliving its session — then put each through code-wrap and code-ship in sequence, one at a time. Run it at end of day, or ping it whenever a session goes idle — cheap to re-run only when §0 is honoured first, a convention the executing agent follows and not a gate anything enforces (its fingerprint stays sensitive to branch tips, so the cheap path is rarer here than in code-triage — see §0). Sorts candidates into wrap / teardown-only / claim-only / place-claim / unrecorded / blocked / unlinked, because most do not need a full wrap+ship. A candidate that fails mid-run is deferred and the run carries on to the next one; only a repo-wide blocker (trunk CI dead or red) or a destructive/unclassifiable failure stops the sweep. Can be scoped to a set of issues or one session/worktree instead of the whole repo. Trigger phrases: 'sweep the repo', 'wrap everything finished', 'clean up the worktrees', 'close out the session work', 'tidy up finished work', 'wrap all the done branches', 'sweep the issues #95 #96', 'sweep the session <name>', 'ship these'; and — when this session's last act was a sweep — the re-ping forms 'again', 'anything new?', 'check again', 'anything to wrap yet?', or a bare 'go'. Composes code-wrap then code-ship per candidate; never batches merges."
 ---
 
 # code-sweep — clear out everything finished, one at a time
@@ -81,18 +81,23 @@ sha, branch tips, and whichever of code-triage's narrowed inputs it reuses) for 
 
 ### 0.1 Resume an interrupted sweep
 
-§4 stops the whole sweep on the first failure, and that stays — skipping ahead leaves a
-half-swept repo. But under ping-when-idle a stopped sweep gets re-pinged within minutes,
-and today the re-ping restarts from §1 carrying nothing: it re-derives every bucket, walks
-back to the candidate that failed, and fails there again.
+§4 no longer stops on the first failure — a candidate-scoped failure **defers** and the run
+carries on (#308). What still stops a run is a **repo-wide** blocker (trunk CI dead or red)
+or a destructive/unclassifiable one, and that narrower case is the only thing this section
+is about. Under ping-when-idle such a stop gets re-pinged within minutes, and a re-ping that
+restarted from §1 would carry nothing: it re-derives every bucket, walks back to the wall,
+and hits it again.
 
-So when a sweep stops, record in `$CACHE`: the candidates **completed** (with the trunk sha
-each merged at), the candidate it **stopped on**, and the **stop reason**. On the next run:
+So when a sweep **stops**, record in `$CACHE`: the candidates **completed** (with the trunk
+sha each merged at), the candidate it **stopped on**, and the **stop reason**. On the next
+run:
 
 1. **Re-test the stop reason first, and nothing else.** Dead trunk CI ⇒ one `gh run list`.
    Still dead ⇒ report `still blocked: <reason>, since <ts>` and stop. That is a two-call
    ping for a repo that cannot be swept, instead of a full re-derivation ending in the same
-   sentence.
+   sentence. **This rung is for a run-level stop only.** It is right precisely because a
+   repo-wide blocker makes every remaining candidate unmergeable — the property that does
+   not hold for a deferral, below.
 2. **Cleared ⇒ re-derive the buckets, do not replay the old list.** The recorded completions
    are skipped; everything else is classified afresh. Trunk moved during the part that did
    succeed, and §4's invalidation is the whole reason this skill is sequential — a resume
@@ -103,6 +108,17 @@ each merged at), the candidate it **stopped on**, and the **stop reason**. On th
    keeps a truncated or stale cache from being read as "already shipped" — the single most
    expensive wrong belief in this family (`code-triage`'s opening principle measured it at
    4 of 9 sessions in one day).
+
+**Deferred candidates are not an interrupted sweep, and must not be resumed through the
+ladder above.** A run that deferred candidates *finished*: there is no wall to re-test, and
+rung 1 applied to one would report `still blocked` for a repo that is merging perfectly
+well. They are re-derived from scratch on the next full run like everything else — and §0's
+fingerprint already covers most of them for free, because the cure for a candidate-scoped
+block (a conflict resolved, a gate fixed, a graded diff reworked) moves that branch's tip,
+and this skill deliberately keeps tip shas where code-triage drops them. **The exception to
+name in the report is a block that clears with no commit** — a rejected grade waiting on a
+human decision. An unchanged fingerprint is honest about that one: nothing has changed, and
+nothing will until a person acts.
 
 **`$CACHE` is one required, versioned record — never a growing map, measured, #244.** The
 61 KB / 24-key accumulation found in this checkout (above) had no lifecycle rule: each scope
@@ -121,7 +137,7 @@ code-triage's own `/2` record plus the bounded `interrupted` block this section 
   },
   "lastRun": { "decision": "full", "moved": ["branchTips"], "calls": 27 },
   "interrupted": { "completed": ["…"], "stoppedOn": "…", "stopReason": "…" },
-  "conclusion": { "wrapped": ["…"], "blocked": ["…"], "…": "…" }
+  "conclusion": { "wrapped": ["…"], "deferred": [{ "candidate": "…", "reason": "…" }], "blocked": ["…"], "…": "…" }
 }
 ```
 
@@ -130,7 +146,9 @@ code-triage's own `/2` record plus the bounded `interrupted` block this section 
 - **`interrupted` is present only while a sweep is genuinely stopped mid-way**, and is
   cleared (removed, not left empty) the run after it resolves — an `interrupted` block that
   outlives its sweep is exactly the kind of stale state 0.1's own resume logic exists to
-  avoid re-trusting blindly (rule 3, just above).
+  avoid re-trusting blindly (rule 3, just above). **A deferral never goes here** — it lives
+  in `conclusion.deferred`, because it describes a run that finished, and writing it as
+  `interrupted` would arm rung 1 against a wall that does not exist.
 - **An unrecognised `version`, or any missing key, is `no usable cache`** — the third
   required outcome line, same as code-triage's rule for its own record. Never a partial
   match on the keys that happen to be present.
@@ -482,11 +500,52 @@ For each **wrap** candidate, in order:
    the *current* trunk, harvest, grade, merge, evidence, release, teardown.
 3. **Then** move to the next. Trunk has moved; the next B0 must see that.
 
-If any wrap stops (CI dead, conflict needing judgment, gate failing for unrelated
-reasons), **stop the sweep there** and report. Skipping ahead leaves a half-swept repo
-that is harder to reason about than an unswept one. **Record the stop** — completed
-candidates, the one it stopped on, and why — so the next ping resumes instead of
-re-deriving its way back to the same wall (§0.1).
+### A failure defers that candidate — the run goes on (#308)
+
+This was one paragraph reading *stop the sweep there* on any failure. It is now three
+classes, and they divide on **scope**, not on severity — which of the three a failure
+falls into is what decides whether the run continues:
+
+- **Candidate-scoped** — a conflict needing judgment, this branch's gate failing for
+  reasons unrelated to trunk, a rejected grade on one issue set. It blocks *that*
+  candidate and says nothing about the next one. **Defer it, record why, continue.**
+  [`code-ship`](../code-ship/SKILL.md) already scopes its own refusals exactly this way
+  — *"a rejected grade — either class — ends this skill's run **for that issue set**"* —
+  and it was only this section that escalated a per-candidate refusal into a run-level
+  one.
+- **Repo-wide** — trunk CI dead or red. **Stop the merge loop** and say what would clear
+  it, routing to the cure rule (`CONVENTIONS.md` [§5, *Cure rule*](../../CONVENTIONS.md#cure-rule--the-machine-checkable-door-through-trunk-ci-green-281), #281). Continuing
+  here is not conservatism, it is spinning: step 1 above re-checks trunk CI per
+  candidate, so every remaining wrap refuses at the same wall. **Nothing in this section
+  is license to merge onto a red trunk** — the two doors through that precondition are
+  the cure rule and a human ci-grant, both defined elsewhere, neither of them this
+  skill's to open. (`colab ship` fires the cure automatically per branch, so the
+  refusal you just got already means the door did not open *for that branch*; do not
+  hand-walk the bucket hunting for one it might open for.)
+- **Destructive, or you cannot tell which of the two above it is** — stop, exactly as
+  before. An unclassifiable failure is treated as repo-wide until someone proves
+  otherwise; that is the direction it is safe to be wrong in.
+
+**Stopping the merge loop is not stopping the sweep.** §5's tracker reconciliation merges
+nothing, and neither do the `teardown-only`, `claim-only`, `place-claim` or `unrecorded`
+buckets — a dead trunk CI has no bearing on any of them. Carry on with those and say that
+you did.
+
+**Record it either way, but they are different records.** A run-level stop writes
+`interrupted` (§0.1) — completed candidates, the one it stopped on, why — so the next ping
+resumes instead of re-deriving its way back to the same wall. A deferral is **not** a stop:
+it goes in `conclusion.deferred` with its reason, and the run that produced it finished.
+
+**The `half-swept repo` the old rule guarded against is what deferral answers best.** That
+rule bought its tidiness by leaving every later candidate unexamined — *"stopped at
+candidate 3"* says nothing about candidates 4 through 13. A per-candidate record of what
+landed and what deferred, with why, is strictly more information about the repo's state,
+not less; §0.1 already requires that record to exist. Measured (#308): on one `auto-trunk`
+repo a bucket grew from 5 to 13 candidates while a **single** blocked candidate held the
+run for **10.5 hours** — the re-pings correctly re-tested the stop reason, found it
+unchanged, and eventually stopped re-deriving at all, so anything that became shippable in
+that window was invisible. It cleared in ~35 minutes of human attention, after which three
+issues shipped back to back.
 
 ## 5. Reconcile the tracker
 
@@ -533,15 +592,28 @@ swept 4, left 3
 wrapped         fix/import-115-114-113   → trunk a1b2c3d, #115 #114 closed, #113 split
 teardown-only   feat/console-shell-28    → content already on trunk, worktree removed
 claim-only      #26                      → shipped in e4f5g6h, claim released
+deferred        fix/oauth-scope-31       → gate red on an unrelated lint rule; run continued
 place-claim     . (trunk checkout)       → holder session unknown-liveness — reported, not released
 unrecorded      .worktrees/orphan-1      → landed vs main, no claim — removed by hand
 blocked         feat/session-types-26    → 2 untracked files never committed — needs a human
-blocked         #58                      → trunk CI dead (billing), cannot merge
+blocked         #58                      → branch never pushed, 3 commits local-only — needs a human
 unlinked        fix/railquiet-fixture-trunk-red → 1 commit ahead of trunk, no issue claimed — not wrapped, not dropped
 ```
 
 Say what you left and why. A worktree kept for a stated reason is fine; a worktree
 kept silently is the 8-of-9 statistic repeating.
+
+**`deferred` and `blocked` are different outcomes — never collapse them into one line.**
+`blocked` is a candidate §3 never sent into §4 at all (uncommitted work, genuinely
+unfinished); `deferred` is one §4 *tried*, failed on, and moved past. So a `deferred` line
+owes the reader two things a `blocked` line does not: what failed, and what would clear it.
+Those two facts are the whole record the old run-level stop used to provide, now carried
+per candidate.
+
+**A repo-wide trunk-CI failure is neither of them.** It stops the merge loop, so it appears
+as the `stopped:` ending below — never as a per-candidate `blocked` line, which is how this
+example used to write it and is exactly the conflation §4 now removes: one candidate's line
+cannot carry a fact about the whole repo.
 
 A **scoped** run says so on the first line and names its boundary — the M−N by name, not
 just by count, because a count cannot be checked against what the human had in mind:
@@ -559,7 +631,11 @@ into the clean-sweep line above:
 selector matched nothing   #99 — no claim, no worktree, no branch carrying that number
 nothing has changed since 2026-07-21T14:02Z   (3 calls; 2 candidates still standing, see below)
 still blocked: trunk CI dead (billing), since 2026-07-21T11:40Z
+stopped: trunk CI red at a1b2c3d — merge loop halted after 2 of 6; §5 reconcile still ran
 ```
+
+The last of those is the run-level stop of §4, and it says two things on purpose: how far
+the merge loop got, and that the non-merging work was **not** abandoned with it.
 
 ## Verify complete
 
@@ -582,6 +658,12 @@ still blocked: trunk CI dead (billing), since 2026-07-21T11:40Z
   map of `scope:*` keys — with `version`, `scope`, `ranAt`, all `fingerprint` keys, and
   `lastRun`. An `interrupted` block is present only while genuinely unresolved, and is
   removed (not left empty) once the sweep it describes finishes.
+- **No candidate was skipped because a different candidate failed.** Every §4 failure is
+  recorded either as a `deferred` line — candidate-scoped, and the run went on — or as a
+  run-level stop naming a repo-wide or destructive cause. "Stopped at candidate 3", with 4
+  through N never examined, is no longer a conforming outcome (#308).
+- A run-level stop halted the **merge loop** only: §5's reconciliation and the
+  non-merging buckets either ran, or are named as deliberately skipped with a reason.
 - Every merge was preceded by its own CI check, not one check for the whole sweep.
 - Every issue closed carries evidence; every claim released, including on issues you
   did not finish.
