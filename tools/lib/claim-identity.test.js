@@ -119,3 +119,33 @@ test('mergeClaimRecord: no existing record — incoming passes through unchanged
   const merged = ci.mergeClaimRecord(null, incoming, { sameHolder: true });
   assert.deepStrictEqual(merged, incoming);
 });
+
+// --- looksLikeSessionId (#306) --------------------------------------------------------------
+// The ONE shape rule in the tree. `parseSessionField` (tools/colab) decodes claim comments with
+// it and `warnWeakIdentity` warns with it; these cases pin both at once. It is a WARNING
+// heuristic, never a gate — see the function's own doc comment.
+
+test('looksLikeSessionId: a real session URL, and a bare session_ token, both pass', () => {
+  assert.strictEqual(ci.looksLikeSessionId('https://claude.ai/code/session_017GKdaNPELs2mtKPDCasha1'), true);
+  assert.strictEqual(ci.looksLikeSessionId('http://example.invalid/x'), true);
+  assert.strictEqual(ci.looksLikeSessionId('session_017abc-DEF'), true);
+});
+
+test('looksLikeSessionId: a session NAME in the URL slot fails — the #306 live case', () => {
+  assert.strictEqual(ci.looksLikeSessionId('ops-coding-dashboard-1480'), false);
+  assert.strictEqual(ci.looksLikeSessionId('colab-handbook-305-306'), false);
+});
+
+test('looksLikeSessionId: blank/null are false — absence is #11/#242 territory, not this predicate', () => {
+  assert.strictEqual(ci.looksLikeSessionId(''), false);
+  assert.strictEqual(ci.looksLikeSessionId('   '), false);
+  assert.strictEqual(ci.looksLikeSessionId(null), false);
+  assert.strictEqual(ci.looksLikeSessionId(undefined), false);
+});
+
+test('looksLikeSessionId: a bare stable id is FALSE but must stay usable — this is a warning, not a gate', () => {
+  // The fleet, and six of this repo's own fixtures, pass ids like these. `requirePlaceIdentity`
+  // promises `<url-or-any-stable-id>`; nothing may turn this false into a refusal.
+  assert.strictEqual(ci.looksLikeSessionId('sess-OTHER'), false);
+  assert.strictEqual(ci.looksLikeSessionId('sess-plan-journal-test'), false);
+});

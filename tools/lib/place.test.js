@@ -566,3 +566,66 @@ test('acquire: two different paths never conflict — the hold is path-scoped, n
   assert.strictEqual(place.acquire(st, acquireOpts('sess-B', { pathAbs: '/tmp/repo-285-other' }), ALIVE).ok, true);
   assert.strictEqual(Object.keys(st.places).length, 2);
 });
+
+// --- ownsHold / releaseOwnedBy (#305, #306) --------------------------------------------------
+
+test('ownsHold: exact, non-blank session equality — and blank never matches blank (#242)', () => {
+  assert.strictEqual(place.ownsHold({ session: 'sess-A' }, 'sess-A'), true);
+  assert.strictEqual(place.ownsHold({ session: 'sess-A' }, 'sess-B'), false);
+  assert.strictEqual(place.ownsHold({ session: '' }, ''), false);
+  assert.strictEqual(place.ownsHold({ session: 'sess-A' }, ''), false);
+  assert.strictEqual(place.ownsHold(null, 'sess-A'), false);
+});
+
+test('ownsHold: sessionName is NEVER an exemption key, however plausible the match', () => {
+  // The widening #306 proposed as its option 2 and this repo has now rejected three times over
+  // (place.js `conflict` doc, tools/colab `warnWeakIdentity` doc, CONVENTIONS.md Place-claims).
+  // If a future change makes this pass, that rejection has been quietly reversed.
+  assert.strictEqual(place.ownsHold({ session: 'sess-A', sessionName: 'ops-1480' }, 'ops-1480'), false);
+});
+
+test('releaseOwnedBy: the owning session releases its own hold', () => {
+  const st = emptySt();
+  place.acquire(st, acquireOpts('sess-A'), ALIVE);
+  const r = place.releaseOwnedBy(st, '/tmp/repo-285', 'sess-A');
+  assert.strictEqual(r.released, true);
+  assert.deepStrictEqual(st.places, {});
+});
+
+test('releaseOwnedBy: a different session releases NOTHING and says why', () => {
+  const st = emptySt();
+  place.acquire(st, acquireOpts('sess-A'), ALIVE);
+  const r = place.releaseOwnedBy(st, '/tmp/repo-285', 'sess-B');
+  assert.strictEqual(r.released, false);
+  assert.strictEqual(r.reason, 'other-session');
+  assert.strictEqual(r.rec.session, 'sess-A', 'the record it left alone is handed back, to be named');
+  assert.strictEqual(st.places[place.placeKey('/tmp/repo-285')].session, 'sess-A');
+});
+
+test('releaseOwnedBy: a blank session releases nothing — an unidentified caller proves nothing', () => {
+  const st = emptySt();
+  place.acquire(st, acquireOpts('sess-A'), ALIVE);
+  assert.strictEqual(place.releaseOwnedBy(st, '/tmp/repo-285', '').released, false);
+  assert.strictEqual(Object.keys(st.places).length, 1);
+});
+
+test('releaseOwnedBy: no record at all, and no `places` key at all, are both a quiet no-op', () => {
+  const st = emptySt();
+  assert.strictEqual(place.releaseOwnedBy(st, '/tmp/repo-285', 'sess-A').reason, 'no-record');
+  assert.strictEqual(place.releaseOwnedBy({}, '/tmp/repo-285', 'sess-A').reason, 'no-record');
+  assert.strictEqual(place.releaseOwnedBy({ places: {} }, '/tmp/repo-285', 'sess-A').reason, 'no-record');
+});
+
+test('releaseOwnedBy: a record written by ANOTHER machine is never deleted, even on a session match', () => {
+  // Stricter than `ownsHold` by one term, deliberately (see the function doc): an automatic
+  // side-effect must not delete a record whose liveness this machine cannot even evaluate.
+  const st = emptySt();
+  place.acquire(st, acquireOpts('sess-A'), ALIVE);
+  const key = place.placeKey('/tmp/repo-285');
+  st.places[key].host = 'some-other-machine';
+  st.places[key].machine = 'iokit:00000000-0000-0000-0000-00000000dead';
+  const r = place.releaseOwnedBy(st, '/tmp/repo-285', 'sess-A');
+  assert.strictEqual(r.released, false);
+  assert.strictEqual(r.reason, 'foreign-machine');
+  assert.strictEqual(Object.keys(st.places).length, 1);
+});

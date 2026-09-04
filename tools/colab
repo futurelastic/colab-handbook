@@ -232,6 +232,17 @@ function resolvePlaceAnchor(opts) {
  * on either of those is exactly the case `place.conflict`'s same-holder exemption can never
  * recognize (blank does not match blank), so a caller that acquires there and later re-acquires
  * collides with itself. `requirePlaceIdentity`, below, is their mandatory gate.
+ *
+ * WIDENED BY #306 — a THIRD case, orthogonal to both above: a `session` that is present but is not
+ * a session id at all. `--session` and `--session-name` are adjacent flags with near-identical
+ * names, so passing the NAME to the URL flag is a one-character mistake; both #11's branch (name
+ * with no url) and #242's gate (no url at all) test for ABSENCE and neither fires on it. The value
+ * is then written verbatim to the place record, and `place release`'s exact-equality `mine` test
+ * refuses the caller's own hold when they later present their REAL url — measured live, and it
+ * cost a session an unexplained refusal it correctly declined to override with COLAB_HUMAN=1.
+ * This WARNS and proceeds; it deliberately does not refuse. `requirePlaceIdentity` below promises
+ * `<url-or-any-stable-id>`, so a bare stable id is a documented, blessed value — rejecting one
+ * would break that contract, every adopter relying on it, and six of this repo's own fixtures.
  */
 function warnWeakIdentity(session, sessionName, what, ref) {
   if (!session && !sessionName) {
@@ -239,6 +250,19 @@ function warnWeakIdentity(session, sessionName, what, ref) {
     warn(`  A live hold's refusal can then only point at its process id, and this acquire will`);
     warn(`  not be recognized as your own on a later re-acquire without one.`);
     if (ref) warn(`  Repair once you have an identity:  colab worktree tag ${ref} --session <url>`);
+    return;
+  }
+  if (session && !claimIdentity.looksLikeSessionId(session)) {
+    // #306, the third case: NON-blank but wrong-CONTENT. #11's half-identity branch below only
+    // ever fires on ABSENCE, so a session NAME sitting in the URL slot sailed through every
+    // check — and then `place release`, whose `mine` test is exact equality on this field,
+    // refused the caller's own hold when they later presented their REAL url. Warn, never
+    // refuse: `requirePlaceIdentity` promises `<url-or-any-stable-id>`, so a bare stable id is
+    // a blessed value and rejecting it would break that contract and every adopter using one.
+    warn(`--session "${session}" does not look like a session URL or a session_… id — this ${what}`);
+    warn(`  will record it verbatim. That is allowed (any stable id works), but if this is your`);
+    warn(`  session NAME you probably meant --session-name: a later 'colab place release'`);
+    warn(`  presenting your real URL will NOT match this value and will be refused (#306).`);
     return;
   }
   if (!sessionName || session) return;
@@ -327,7 +351,9 @@ function parseSessionField(body) {
   const v = m[1].trim();
   const link = v.match(/^\[([^\]]*)\]\((.*)\)$/);
   if (link) return { sessionName: link[1], session: link[2] };
-  if (/^https?:\/\//.test(v) || /session_[\w-]+/.test(v)) return { sessionName: '', session: v };
+  // #306: the shape test moved to claimIdentity.looksLikeSessionId — same expressions, one copy.
+  // `warnWeakIdentity` needs the identical rule at write time, and a second regex would drift.
+  if (claimIdentity.looksLikeSessionId(v)) return { sessionName: '', session: v };
   return { sessionName: v, session: '' };
 }
 
@@ -1455,17 +1481,30 @@ function cmdPlace(argv) {
     const key = place.placeKey(pathAbs);
     const rec = (loaded.st.places || {})[key];
     if (!rec) { print(`Nothing held at "${pathAbs}" — nothing to release.`); return 0; }
-    const mine = session && rec.session === session;
+    // #306: the same predicate `place.conflict`'s same-holder exemption uses, now named rather
+    // than spelled a second time here. The COMPARISON is unchanged — exact, non-blank equality.
+    const mine = place.ownsHold(rec, session);
     if (!mine && process.env.COLAB_HUMAN !== '1') {
       // Same blank-blank hole as `place.conflict`'s exemption (#242): an unidentified holder can
       // never release its own hold, because nothing distinguishes "this is mine" from "this is
       // someone else's". Never relaxed — the identity-gap sentence just makes the escape hatch
       // (COLAB_HUMAN=1) legible instead of leaving a caller to guess why they were refused.
       const unidentified = !session && !rec.session;
+      // #306: `holderLabel` PREFERS sessionName, so a refusal could name the display text while
+      // never showing the `session` string the comparison actually failed on — which is why the
+      // live incident could only be diagnosed by diffing `colab places --json` by hand. When both
+      // sides are present and simply differ, say what was compared, verbatim, and hand over the
+      // command that works. The gate itself is untouched; only its legibility changes. No new
+      // exposure — `colab places --json` already prints this field to anyone on this machine.
+      const mismatch = !!(session && rec.session && rec.session !== session);
       throw new UserError(`"${pathAbs}" is held by a different session ("${place.holderLabel(rec)}", held ${place.holdAge(rec)}) — ` +
         `releasing it requires a human: re-run with COLAB_HUMAN=1. (No field, flag or project.yml value can lower this bar.)` +
         (unidentified ? ` Neither this hold nor this attempt carries a session id, so it cannot be told ` +
-          `apart from your own (#242) — that is why this refuses even if it is in fact yours.` : ''));
+          `apart from your own (#242) — that is why this refuses even if it is in fact yours.` : '') +
+        (mismatch ? `\n  recorded session: ${rec.session}\n  you presented:    ${session}\n` +
+          `  If the recorded value is in fact yours (a session NAME passed to --session by mistake, ` +
+          `#306), release it with the value on file and no human flag is needed:\n` +
+          `    colab place release ${pathAbs} --session '${rec.session}'` : ''));
     }
     const written = placeMutate('release', (s) => { if (s.places) delete s.places[key]; });
     if (!written.ok) { print(`✗ ${written.message}`); return 2; }
