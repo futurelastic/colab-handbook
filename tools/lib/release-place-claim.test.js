@@ -72,6 +72,16 @@ function fixture({ withOrigin = false } = {}) {
   return { root, work, home, origin, g };
 }
 
+// #317: the agent-anchor env vars are neutralised for the same reason #237 neutralised
+// COLAB_HUMAN above — a green test must never depend on WHO ran the suite. `place.resolveAnchor`
+// adopts CLAUDE_PID as a `'verified'` anchor when it is alive and an ancestor of the invocation,
+// and `ownsAnchor` then treats every hold taken under it as the caller's own. Run this file from
+// inside an agent session with those vars set and every child `colab` here shares ONE verified
+// anchor, so two fixtures pretending to be different sessions become one writer and the
+// different-holder refusals below silently stop being exercised — while the same file stays green
+// on CI, where the vars are unset. Measured exactly that: 9 tests across 3 files passed on a
+// runner and failed on an agent's machine. Tests that WANT the verified-anchor path set CLAUDE_PID
+// explicitly through `extraEnv`.
 function colab(fx, args, extraEnv = {}) {
   const r = spawnSync('node', [COLAB, ...args], {
     encoding: 'utf8',
@@ -81,6 +91,9 @@ function colab(fx, args, extraEnv = {}) {
       COLAB_SESSION: '',
       COLAB_SESSION_NAME: '',
       COLAB_HUMAN: '', // never inherited — a green test must not depend on the developer's shell
+      CLAUDE_PID: '',
+      CLAUDECODE: '',
+      AI_AGENT: '',
       ...extraEnv,
     },
   });
@@ -210,6 +223,136 @@ fail('fake gh: unhandled ' + JSON.stringify(args));
 });
 
 // --- #306's wrong-shape session does not break #305's fix ------------------------------------
+
+// --- #312: the OTHER claim-deletion sites, and #317's read-time lapse ---------------------------
+//
+// `cmdRelease` was the site somebody noticed in production; `grep -n "delete st.claims" tools/colab`
+// found seven. Three of them dropped a claim and kept the checkout hold — the same end state,
+// reached by a different command.
+
+/** Rewrite every claim's `created` so doctor's age predicate (default ttl 24h) fires. */
+function backdateClaims(fx, hours) {
+  const p = path.join(fx.home, 'state.json');
+  const st = JSON.parse(fs.readFileSync(p, 'utf8'));
+  const when = new Date(Date.now() - hours * 3_600_000).toISOString();
+  for (const c of Object.values(st.claims)) c.created = when;
+  fs.writeFileSync(p, JSON.stringify(st, null, 2));
+}
+
+test('#312: `doctor --prune` reaping a stale worktree-less claim frees the checkout hold it took', () => {
+  const fx = fixture();
+  assert.strictEqual(colab(fx, ['claim', '911', '--repo', fx.work, '--session', SESSION]).code, 0);
+  assert.strictEqual(places(fx).length, 1);
+  backdateClaims(fx, 48);
+
+  // The holder is ALIVE here (the hold anchors on this test's own shell), which is exactly why
+  // doctor's own stale-PLACE prune (pass 1b, keyed on holder liveness) cannot cover this: it runs
+  // earlier in the same mutate and correctly leaves a live-anchor hold alone. #312's guess that
+  // 1b "may already cover it" is wrong, and this is the measurement.
+  const doc = colab(fx, ['doctor', '--prune']);
+  assert.strictEqual(doc.code, 0, doc.err);
+  assert.match(doc.out, /Released 1 checkout place-claim\(s\) whose claim was pruned/);
+  assert.deepStrictEqual(places(fx), [], 'the hold must not outlive the claim doctor just reaped');
+});
+
+test('#312: `doctor --prune` keeps the hold while a SIBLING no-worktree claim of that session remains', () => {
+  const fx = fixture();
+  assert.strictEqual(colab(fx, ['claim', '921', '--repo', fx.work, '--session', SESSION]).code, 0);
+  assert.strictEqual(colab(fx, ['claim', '922', '--repo', fx.work, '--session', SESSION]).code, 0);
+  // Age out only ONE of the two claims.
+  const p = path.join(fx.home, 'state.json');
+  const st = JSON.parse(fs.readFileSync(p, 'utf8'));
+  const key = Object.keys(st.claims).find((k) => k.endsWith('#921'));
+  st.claims[key].created = new Date(Date.now() - 48 * 3_600_000).toISOString();
+  fs.writeFileSync(p, JSON.stringify(st, null, 2));
+
+  const doc = colab(fx, ['doctor', '--prune']);
+  assert.strictEqual(doc.code, 0, doc.err);
+  assert.strictEqual(places(fx).length, 1, '#922 is still claimed here and still writing to this checkout');
+  assert.doesNotMatch(doc.out, /Released 1 checkout place-claim/);
+});
+
+test('#312: `doctor --prune` never touches a hold belonging to a DIFFERENT session', () => {
+  const fx = fixture();
+  assert.strictEqual(colab(fx, ['claim', '931', '--repo', fx.work, '--session', SESSION]).code, 0);
+  // Retarget the hold at a session this claim does not name — a LATER session re-took the checkout
+  // and this is a stale claim being swept. Ownership is proved from the claim record, so it must
+  // touch nothing.
+  const p = path.join(fx.home, 'state.json');
+  const st = JSON.parse(fs.readFileSync(p, 'utf8'));
+  const pk = Object.keys(st.places)[0];
+  st.places[pk].session = 'a-later-session';
+  fs.writeFileSync(p, JSON.stringify(st, null, 2));
+  backdateClaims(fx, 48);
+
+  const doc = colab(fx, ['doctor', '--prune']);
+  assert.strictEqual(doc.code, 0, doc.err);
+  assert.strictEqual(places(fx).length, 1, "a later session's hold is not this claim's to give back");
+  assert.strictEqual(places(fx)[0].session, 'a-later-session');
+});
+
+test('#317: releasing a claim whose hold has a DEAD anchor leaves no record, whatever session it names', () => {
+  const fx = fixture();
+  assert.strictEqual(colab(fx, ['claim', '941', '--repo', fx.work, '--session', SESSION]).code, 0);
+  // A corpse held by somebody else entirely: read-time lapse clears it before ownership is asked.
+  const p = path.join(fx.home, 'state.json');
+  const st = JSON.parse(fs.readFileSync(p, 'utf8'));
+  const pk = Object.keys(st.places)[0];
+  st.places[pk].session = 'someone-long-gone';
+  st.places[pk].pid = 999999999;
+  st.places[pk].pidKind = 'anchor';
+  fs.writeFileSync(p, JSON.stringify(st, null, 2));
+
+  const rel = colab(fx, ['release', '941', '--repo', fx.work]);
+  assert.strictEqual(rel.code, 0, rel.err);
+  assert.deepStrictEqual(places(fx), [], 'a dead anchor lapses at read time (#317), it does not wait for doctor');
+});
+
+test('#317: an UNPROVABLE hold is NOT lapsed by a release — #288 still fails closed', () => {
+  const fx = fixture();
+  assert.strictEqual(colab(fx, ['claim', '951', '--repo', fx.work, '--session', SESSION]).code, 0);
+  const p = path.join(fx.home, 'state.json');
+  const st = JSON.parse(fs.readFileSync(p, 'utf8'));
+  const pk = Object.keys(st.places)[0];
+  st.places[pk].session = 'someone-unprovable';
+  st.places[pk].pidKind = 'invocation'; // never probed — liveness null, not false
+  fs.writeFileSync(p, JSON.stringify(st, null, 2));
+
+  const rel = colab(fx, ['release', '951', '--repo', fx.work]);
+  assert.strictEqual(rel.code, 0, rel.err);
+  assert.strictEqual(places(fx).length, 1, 'unprovable is not dead — it stays until a human says otherwise');
+});
+
+test('#312: `claims --sync --prune` reaping a claim GitHub no longer shows frees its checkout hold', () => {
+  // The prune path has only the STORED claim record to work from — no ambient identity, and none
+  // should be reached for. A no-worktree claim pruned here used to leave its hold behind with
+  // nothing on disk pointing at it: unreachable even by `colab release`, which needs the claim it
+  // had just deleted.
+  const fx = fixture({ withOrigin: true });
+  const ghBin = path.join(fx.root, 'bin');
+  fs.mkdirSync(ghBin);
+  fs.writeFileSync(path.join(ghBin, 'gh'), `#!/usr/bin/env node
+const args = process.argv.slice(2);
+function ok(o) { if (o) process.stdout.write(o); process.exit(0); }
+if (args[0] === '--version') return ok('gh version 2.0.0 (fake)\\n');
+if (args[0] === 'auth' && args[1] === 'status') return ok('Logged in (fake)\\n');
+if (args[0] === 'api' && args.includes('user')) return ok('octofake\\n');
+// the claim write succeeds, the tie-break read sees no competing claim …
+if (args[0] === 'issue' && args[1] === 'view') return ok(JSON.stringify({ comments: [] }));
+// … and the reconcile read says GitHub shows nothing assigned+in-progress any more.
+if (args[0] === 'issue' && args[1] === 'list') return ok('[]');
+return ok('');
+`, { mode: 0o755 });
+  const env = { PATH: `${ghBin}:${process.env.PATH}` };
+
+  assert.strictEqual(colab(fx, ['claim', '961', '--repo', fx.work, '--session', SESSION], env).code, 0);
+  assert.strictEqual(places(fx).length, 1);
+
+  const sync = colab(fx, ['claims', '--sync', '--prune'], { ...env, PWD: fx.work });
+  assert.strictEqual(sync.code, 0, sync.err);
+  assert.match(sync.out, /freed its checkout hold/, sync.out);
+  assert.deepStrictEqual(places(fx), [], 'the hold must not outlive the claim the reconcile pruned');
+});
 
 test('a claim minted with a wrong-SHAPE session still releases its own hold (#305 x #306)', () => {
   // cmdClaim writes ONE `session` value into both the claim and the place record, so a wrong

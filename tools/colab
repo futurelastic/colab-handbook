@@ -572,7 +572,7 @@ function postReleaseComment(repoAbs, num) {
  * `colab claims` for a retry rather than silently vanishing while GitHub still shows us
  * in-progress.
  */
-function yieldIssue(repoAbs, num, winner, myLogin) {
+function yieldIssue(repoAbs, num, winner, myLogin, session = null) {
   let ghFailed = false;
   if (winner.login !== myLogin) {
     const r = git.ghIssueRelease(repoAbs, num);
@@ -583,17 +583,43 @@ function yieldIssue(repoAbs, num, winner, myLogin) {
   }
   const rc = git.ghIssueComment(repoAbs, num, `${RELEASE_MARK} (yielded — earlier claim by ${winner.identity} wins)`);
   if (!rc.ok) warn(`could not post yield comment on #${num} (${rc.stderr.split('\n')[0] || rc.code})`);
+  let placeOutcome = null;
   state.mutate((st) => {
     const key = claimKey(repoAbs, num);
     const c = st.claims[key];
     if (!c) return;
     if (ghFailed) {
+      // The claim is KEPT (releasePending), so the hold that makes it safe is kept too — the same
+      // local/remote-disagreement rule #305 applies at `cmdRelease` (#312).
       c.releasePending = true;
       c.releaseNote = `GitHub release failed while yielding (${nowISO()}) — retry with: colab release ${num}`;
     } else {
+      const wtName = c.worktree;
+      const claimSession = c.session || session || null;
       delete st.claims[key];
+      // #312, the sharpest of the three leaks this fixed: `cmdClaim` has ALREADY acquired the
+      // checkout hold by the time the tie-break decides this session lost the race, so before this
+      // the loser dropped its claim and kept the hold — and the WINNER was then blocked by the
+      // session that had just conceded to it. Same three guards as `cmdRelease`'s release (#305):
+      // skip a claim that carried a worktree (it never took a checkout hold), skip while any other
+      // no-worktree claim of this session still holds that checkout, and never on the kept-claim
+      // branch above. Ownership comes from the CLAIM RECORD's own session — `cmdClaim` wrote one
+      // `session` const into both records in the same invocation, so it is exact — falling back to
+      // that same live const when the record carries none.
+      if (!wtName) {
+        const siblings = Object.values(st.claims).filter((cl) => cl.repo === repoAbs && !cl.worktree
+          && (cl.session || null) === claimSession);
+        if (siblings.length === 0) placeOutcome = place.releaseOwnedBy(st, repoAbs, claimSession);
+        else placeOutcome = { released: false, reason: 'siblings', siblings: siblings.length };
+      }
     }
   });
+  if (placeOutcome && placeOutcome.released) {
+    print(`  released the checkout place-claim on ${placeOutcome.rec.path}` +
+      (placeOutcome.reason === 'lapsed-dead' ? ' (its holder was already gone)' : ' (this was the last claim holding it)'));
+  } else if (placeOutcome && placeOutcome.reason === 'siblings') {
+    print(`  checkout place-claim KEPT — this session still holds ${placeOutcome.siblings} more claim(s) here`);
+  }
 }
 
 /**
@@ -611,7 +637,7 @@ function commentAndTieBreak(repoAbs, nums, owner) {
     if (!info || !Array.isArray(info.comments)) continue; // can't read comments → keep the claim
     const verdict = tieBreakVerdict(info.comments, owner.myLogin, HOST, owner.session, comps);
     if (verdict.lost) {
-      yieldIssue(repoAbs, num, verdict.winner, owner.myLogin);
+      yieldIssue(repoAbs, num, verdict.winner, owner.myLogin, owner.session || null);
       const w = verdict.winner;
       const id = displayIdentity(w.sessionName, w.session);
       const wsess = id ? ` · session ${id}` : '';
@@ -799,7 +825,7 @@ function cmdClaim(argv) {
         // claim never lands without the hold that makes it safe.
         const got = place.acquire(st, {
           pathAbs: repoAbs, repo: repoAbs, branch: null, host: HOST, session, sessionName,
-          pid: anchor.pid, pidKind: anchor.pidKind, force: !!opts.force,
+          pid: anchor.pid, pidKind: anchor.pidKind, anchorProof: anchor.proof, force: !!opts.force,
         });
         if (!got.ok) { const e = new UserError(`${got.conflict.message}${PLACE_RACE_NOTE}`); e.placeRace = got.conflict; throw e; }
       }
@@ -1370,7 +1396,7 @@ function cmdSolo(argv) {
       // entry gate both read as authoritative.
       const got = place.acquire(s, {
         pathAbs: repoAbs, repo: repoAbs, branch: null, host: HOST, session, sessionName,
-        pid: anchor.pid, pidKind: anchor.pidKind,
+        pid: anchor.pid, pidKind: anchor.pidKind, anchorProof: anchor.proof,
       });
       if (!got.ok) { const e = new UserError(`${got.conflict.message}${PLACE_RACE_NOTE}`); e.placeRace = got.conflict; throw e; }
       s.solo = s.solo || {};
@@ -1486,10 +1512,20 @@ function cmdPlace(argv) {
   if (sub === 'check') {
     const loaded = placeState('check');
     if (!loaded.ok) { print(`✗ ${loaded.message}`); return 2; }
-    const c = place.conflict(loaded.st, pathAbs, { session, pid: anchor.pid });
-    if (!c) { print(`✓ "${pathAbs}" is free (or held by you).`); return 0; }
-    print(`✗ ${c.message}`);
-    return c.kind === 'unknown' ? 2 : 1;
+    // #317: the same three-way answer `colab ship` prints — `own` / `dead` / `live-other` — so a
+    // caller polling this primitive (CONVENTIONS.md, Place-claims: "a caller that wants to wait
+    // polls `colab place check`") is told WHICH of them it is, not just free-or-not. Exit codes are
+    // unchanged: 0 free-or-yours, 1 a live other, 2 liveness unprovable.
+    const cls = place.classify(loaded.st, pathAbs, { session });
+    if (cls.cls === 'free') { print(`✓ "${pathAbs}" is free.`); return 0; }
+    if (cls.cls === 'own') { print(`✓ "${pathAbs}" is held by YOU (class: own) — re-acquiring it renews your own hold.`); return 0; }
+    if (cls.cls === 'dead') {
+      print(`✓ "${pathAbs}" is free — class: dead. Its holder ("${place.holderLabel(cls.rec)}", held ` +
+        `${place.holdAge(cls.rec)}) is confirmed gone (${cls.reason}); the record lapses at the next write here.`);
+      return 0;
+    }
+    print(`✗ class: ${cls.cls} — ${cls.conflict.message}`);
+    return cls.cls === 'unknown' ? 2 : 1;
   }
 
   if (sub === 'acquire') {
@@ -1523,7 +1559,7 @@ function cmdPlace(argv) {
     // fails closed to a human-lead-only pid when nothing provable exists.
     const got = placeAcquireLocked('acquire', {
       pathAbs, repo: repoAbs, branch: null, host: HOST, session, sessionName,
-      pid: anchor.pid, pidKind: anchor.pidKind, force: !!opts.force,
+      pid: anchor.pid, pidKind: anchor.pidKind, anchorProof: anchor.proof, force: !!opts.force,
     });
     if (!got.ok) { print(`✗ ${got.message}`); return got.code; }
     print(`✓ place-claim acquired on "${pathAbs}".`);
@@ -1538,8 +1574,24 @@ function cmdPlace(argv) {
     const rec = (loaded.st.places || {})[key];
     if (!rec) { print(`Nothing held at "${pathAbs}" — nothing to release.`); return 0; }
     // #306: the same predicate `place.conflict`'s same-holder exemption uses, now named rather
-    // than spelled a second time here. The COMPARISON is unchanged — exact, non-blank equality.
-    const mine = place.ownsHold(rec, session);
+    // than spelled a second time here — and since #317 that predicate is `ownsPlace`, so a hold
+    // this very process's proven anchor took is releasable by it even when the recorded `session`
+    // string is one this invocation cannot reproduce (#306's own population).
+    //
+    // #317 also stops the human bar standing in front of a CORPSE. A holder confirmed gone is not
+    // a conflict to override, it is a record to clear — demanding COLAB_HUMAN=1 for it is literally
+    // the command a human had to type at 01:35 to unstick a trunk. `unknown` liveness keeps the bar:
+    // that is the case #288 fails closed on, and the one where a human genuinely is the authority.
+    const cls = place.classify(loaded.st, pathAbs, { session });
+    const mine = cls.cls === 'own';
+    if (cls.cls === 'dead') {
+      const written = placeMutate('release', (s) => { if (s.places) delete s.places[key]; });
+      if (!written.ok) { print(`✗ ${written.message}`); return 2; }
+      print(`✓ place-claim released on "${pathAbs}" — class: dead, its holder ` +
+        `("${place.holderLabel(rec)}", held ${place.holdAge(rec)}) is confirmed gone (${cls.reason}). ` +
+        `No COLAB_HUMAN needed: clearing a lapsed record overrides nobody.`);
+      return 0;
+    }
     if (!mine && process.env.COLAB_HUMAN !== '1') {
       // Same blank-blank hole as `place.conflict`'s exemption (#242): an unidentified holder can
       // never release its own hold, because nothing distinguishes "this is mine" from "this is
@@ -1554,7 +1606,7 @@ function cmdPlace(argv) {
       // exposure — `colab places --json` already prints this field to anyone on this machine.
       const mismatch = !!(session && rec.session && rec.session !== session);
       throw new UserError(`"${pathAbs}" is held by a different session ("${place.holderLabel(rec)}", held ${place.holdAge(rec)}) — ` +
-        `releasing it requires a human: re-run with COLAB_HUMAN=1. (No field, flag or project.yml value can lower this bar.)` +
+        `class: ${cls.cls}. Releasing it requires a human: re-run with COLAB_HUMAN=1. (No field, flag or project.yml value can lower this bar.)` +
         (unidentified ? ` Neither this hold nor this attempt carries a session id, so it cannot be told ` +
           `apart from your own (#242) — that is why this refuses even if it is in fact yours.` : '') +
         (mismatch ? `\n  recorded session: ${rec.session}\n  you presented:    ${session}\n` +
@@ -1585,6 +1637,12 @@ function cmdPlaces(argv) {
     const { live, reason } = place.isLive(rec);
     return { path: key, repo: rec.repo, branch: rec.branch, host: rec.host, machine: rec.machine || null,
       session: rec.session, sessionName: rec.sessionName, pid: rec.pid, pidKind: rec.pidKind || null,
+      anchorProof: rec.anchorProof || null,
+      // #317: `lapsed` is the ACTIONABLE half of `live` — true only for a CONFIRMED-dead holder,
+      // which every acquire already treats as free and which the next write at that path clears.
+      // Never true for `live: null`: that is the unprovable case #288/#289 fail closed on, and
+      // conflating the two here is exactly how a reader would talk themselves into pruning it.
+      lapsed: live === false,
       since: rec.since, age: place.holdAge(rec), live, reason };
   });
   if (opts.json) return print(JSON.stringify(rows, null, 2));
@@ -1600,7 +1658,13 @@ function cmdPlaces(argv) {
     // Age (#238) is next to liveness, not buried after `since`: a stored ISO timestamp requires a
     // reader to subtract it by hand, and a forgotten hold looked identical to a fresh one without it.
     print(`${r.path}  [${liveTxt}]  held ${r.age}  ${place.holderLabel(r)}` +
-      `${r.pidKind === 'invocation' ? '  (pid is a lead only, never probed — #288)' : ''}  since ${r.since}`);
+      `${r.pidKind === 'invocation' ? '  (pid is a lead only, never probed — #288)' : ''}` +
+      // #317: a DEAD row is inert, not a hold — say so where it is read, because the row otherwise
+      // looks exactly like something blocking the reader. This command stays READ-ONLY: a
+      // diagnostic that silently mutates state is worse than one showing a stale row, so the
+      // record is cleared by the next command that writes at that path, or by `doctor --prune`.
+      `${r.lapsed ? '  (lapsed — treated as free by every acquire; cleared by the next write here, or `colab doctor --prune`)' : ''}` +
+      `  since ${r.since}`);
   }
   return 0;
 }
@@ -2843,7 +2907,29 @@ function syncClaims({ prune = false } = {}) {
         const num = normIssueNum(c.issue);
         if (!assignedSet.has(num)) {
           state.mutate((s) => {
-            if (s.claims[key]) { delete s.claims[key]; removed.push(`-#${num} ${shortRepo(repoAbs)} (no longer assigned+in-progress on GitHub)`); }
+            if (!s.claims[key]) return;
+            const wtName = s.claims[key].worktree;
+            const claimSession = s.claims[key].session || null;
+            delete s.claims[key];
+            let note = '';
+            // #312: a no-worktree claim took a checkout place-claim at `cmdClaim` (`takingPlace`),
+            // and pruning it here left that hold behind with nothing on disk pointing at it —
+            // unreachable by `colab release`, which needs the claim it just deleted. Same three
+            // guards as #305, and — per #285's lesson — the sibling count is taken INSIDE this
+            // mutate and AFTER the delete, against the state the write actually sees, so there is
+            // no window where the claim is gone and the hold is not. Only the stored record's own
+            // session is used as the key; there is no ambient identity to reach for here, which is
+            // exactly as it should be (a stale claim swept long after a LATER session re-took the
+            // checkout correctly touches nothing).
+            if (!wtName) {
+              const siblings = Object.values(s.claims).filter((cl) => cl.repo === repoAbs && !cl.worktree
+                && (cl.session || null) === claimSession);
+              if (siblings.length === 0) {
+                const out = place.releaseOwnedBy(s, repoAbs, claimSession);
+                if (out.released) note = out.reason === 'lapsed-dead' ? ' + freed its checkout hold (holder already gone)' : ' + freed its checkout hold';
+              }
+            }
+            removed.push(`-#${num} ${shortRepo(repoAbs)} (no longer assigned+in-progress on GitHub)${note}`);
           });
         }
       }
@@ -3423,7 +3509,7 @@ function cmdWorktreeNew(argv) {
     st.places = st.places || {};
     st.places[place.placeKey(wtPath)] = place.holdRecord({
       pathAbs: wtPath, repo: repoAbs, branch, host: HOST, session, sessionName,
-      pid: anchor.pid, pidKind: anchor.pidKind,
+      pid: anchor.pid, pidKind: anchor.pidKind, anchorProof: anchor.proof,
     });
     const claimedNums = [], dupes = [];
     for (const num of issues) {
@@ -3576,6 +3662,9 @@ function cmdWorktreeRm(argv) {
   // residue: `releasePending` + `releaseNote` say WHY it's still there, not just THAT it is).
   const trackerFailedSet = new Set(trackerFailed);
   const removed = state.mutate((st) => {
+    // #312: NOT a checkout-place-claim leak — every claim here carried this worktree, so none
+    // took a checkout hold (`takingPlace` is `!wtName`); the WORKTREE's own hold is a different
+    // record, deleted a few lines below by `delete st.places[place.placeKey(wt.path)]`.
     const claims = Object.keys(st.claims).filter((k) => st.claims[k].worktree === name);
     let deleted = 0;
     for (const k of claims) {
@@ -4042,7 +4131,7 @@ function cmdDoctor(argv) {
   const config = state.loadConfig();
   const ttl = opts.ttl ? parseFloat(opts.ttl) : config.claimTTLHours;
 
-  const report = { deadWorktrees: [], orphanClaims: [], staleClaims: [], stalePlaces: [], unprovablePlaces: [], orphanPorts: [], brokenRecords: [], prunedPorts: [],
+  const report = { deadWorktrees: [], orphanClaims: [], staleClaims: [], stalePlaces: [], unprovablePlaces: [], releasedPlaces: [], orphanPorts: [], brokenRecords: [], prunedPorts: [],
     mergedFlips: [], mergedSweep: [], mergedDirty: [], mergedHookFail: [], mergedRemoveFail: [], shippedBranches: [], ghostPorts: [],
     spentGroupLabels: [], groupLabelsChecked: !!opts.sync, pruned: !!opts.prune };
 
@@ -4086,6 +4175,9 @@ function cmdDoctor(argv) {
       const claims = Object.entries(st.claims).filter(([, c]) => c.worktree === wt.name);
       report.deadWorktrees.push({ name: wt.name, repo: shortRepo(wt.repo), path: wt.path, ports: wt.ports, claims: claims.map(([, c]) => c.issue), session: wt.session || '', sessionName: wt.sessionName || '' });
       if (opts.prune) {
+        // #312: NOT a checkout-place-claim leak — every claim here is filtered `c.worktree ===
+        // wt.name`, so each had `takingPlace === false` at `cmdClaim` and never took a checkout
+        // hold. The WORKTREE's own hold is a different record, released by `worktree rm`.
         for (const [k] of claims) delete st.claims[k];
         for (const p of wt.ports) { delete st.ports[String(p)]; report.prunedPorts.push(p); }
         delete st.worktrees[wt.name];
@@ -4115,6 +4207,8 @@ function cmdDoctor(argv) {
     for (const [k, c] of Object.entries(st.claims)) {
       if (c.worktree && !st.worktrees[c.worktree]) {
         report.orphanClaims.push({ issue: c.issue, repo: shortRepo(c.repo), worktree: c.worktree });
+        // #312: NOT a leak — the `c.worktree &&` guard above means these claims never took a
+        // checkout hold (`takingPlace` is `!wtName`).
         if (opts.prune) delete st.claims[k];
       }
     }
@@ -4144,7 +4238,25 @@ function cmdDoctor(argv) {
             for (const p of Object.keys(st.ports)) {
               if (st.ports[p].owner.type === 'claim' && st.ports[p].owner.ref === k) { delete st.ports[p]; report.prunedPorts.push(Number(p)); }
             }
+            const claimSession = c.session || null;
             delete st.claims[k];
+            // #312 — the ONE real leak among doctor's three claim-deletion sites: `!c.worktree`
+            // above is exactly `cmdClaim`'s `takingPlace` population, so every claim pruned here
+            // took a checkout hold that nothing gave back. Pass 1b's stale-place prune does NOT
+            // cover it, and the issue's own "may already be covered" guess is wrong on measurement:
+            // 1b runs earlier in this same mutate and is keyed on HOLDER LIVENESS, so a hold whose
+            // anchor is still alive survives a run that just deleted its claim. Same three guards
+            // as #305, sibling count taken after the delete against the state being written (#285).
+            const siblings = Object.values(st.claims).filter((cl) => cl.repo === c.repo && !cl.worktree
+              && (cl.session || null) === claimSession);
+            if (siblings.length === 0) {
+              const out = place.releaseOwnedBy(st, c.repo, claimSession);
+              if (out.released) {
+                report.releasedPlaces.push({ path: out.rec.path, repo: shortRepo(c.repo), issue: c.issue,
+                  reason: out.reason === 'lapsed-dead' ? 'holder already gone' : 'last claim holding it',
+                  session: out.rec.session || '', sessionName: out.rec.sessionName || '' });
+              }
+            }
           }
         }
       }
@@ -4366,6 +4478,13 @@ function cmdDoctor(argv) {
       print(`  ${c.issue} [${c.repo}] ${why} host=${c.host}${displayIdentity(c.sessionName, c.session) ? ` session=${displayIdentity(c.sessionName, c.session)}` : ''}`);
     }
     if (!opts.prune) print('  (worktree-less claims are not auto-removed — re-run with --prune to remove)');
+  }
+  if (report.releasedPlaces.length) {
+    // #312: reported, never silent — a hold released as a side effect of pruning its claim is a
+    // state change somebody may be waiting on, and the leak ran unnoticed for as long as it did
+    // precisely because nothing said anything.
+    print(`Released ${report.releasedPlaces.length} checkout place-claim(s) whose claim was pruned:`);
+    for (const p of report.releasedPlaces) print(`  ${p.path} [${p.repo}] ${p.issue} — ${p.reason}${displayIdentity(p.sessionName, p.session) ? ` session=${displayIdentity(p.sessionName, p.session)}` : ''}`);
   }
   if (report.stalePlaces.length) {
     print(`${opts.prune ? 'Pruned' : 'Flagged'} ${report.stalePlaces.length} stale place-claim(s) (holder confirmed dead):`);
@@ -8346,28 +8465,44 @@ function cmdShip(argv) {
     // #288: resolved once, reused for the write below too — no --pid flag on `ship` itself, but
     // COLAB_PLACE_PID and the same agent-session auto-detection still apply.
     const anchor = resolvePlaceAnchor(opts);
-    const placeConf = place.conflict(loadedPlace.st, repoAbs, { session: sess.session, pid: anchor.pid });
-    if (placeConf) {
+    // #317: one classification, so the refusal names WHICH of the three cases it is and the exact
+    // next command. `own` and `dead` are not refusals at all — the specimen was a ship session
+    // refused by a hold its OWN claim had taken minutes earlier, and the message it printed
+    // ("held by session <x>") could not be told apart from a genuine foreign conflict.
+    const placeCls = place.classify(loadedPlace.st, repoAbs, { session: sess.session });
+    if (placeCls.conflict) {
       cleanupEphemeral();
-      process.stderr.write(`✗ B1: refusing — ${placeConf.message}\n`);
+      process.stderr.write(`✗ B1: refusing — class: ${placeCls.cls} — ${placeCls.conflict.message}\n`);
       process.stderr.write('  Never --force here: a live foreign hold on the trunk checkout stays behind the same\n');
       process.stderr.write('  human bar as everywhere else in Place-claims. Wait for it to clear, or once you have\n');
-      process.stderr.write('  confirmed that session is gone: COLAB_HUMAN=1 colab place release ' + repoAbs + '\n');
+      process.stderr.write(`  confirmed that session is gone: ${placeCls.remedy}\n`);
       return 1;
     }
-    warnWeakIdentity(sess.session, sess.sessionName, 'trunk-checkout place-claim', null);
-    const written = placeAcquireLocked('ship into the trunk checkout', {
-      pathAbs: repoAbs, repo: repoAbs, branch: null, host: HOST,
-      session: sess.session, sessionName: sess.sessionName, pid: anchor.pid, pidKind: anchor.pidKind,
-    });
-    if (!written.ok) {
-      // #285: the under-lock refusal is a NEW exit path out of B1, and every exit from here owes
-      // `cleanupEphemeral()` — the ephemeral worktree must not outlive a ship that refused.
-      cleanupEphemeral();
-      process.stderr.write(`✗ B1: ${written.message}\n`);
-      return 1;
+    if (placeCls.cls === 'own') {
+      // #317: the trunk checkout is ALREADY held by this session — typically by its own
+      // no-worktree `colab claim`, which is what the specimen was. Do NOT re-acquire it: the
+      // acquire would overwrite that claim's record (session, sessionName, since), and the
+      // `cleanupTarget` below would then DELETE it on the way out — leaving the claim standing
+      // with no hold behind it. Renewing somebody's hold and then destroying it is strictly worse
+      // than never touching it, and before this the only reason it did not fire constantly was
+      // that the identity strings rarely matched.
+      print(`  B1: trunk checkout already held by this session ("${place.holderLabel(placeCls.rec)}", ` +
+        `held ${place.holdAge(placeCls.rec)}) — left in place, not re-taken, and not released at the end.`);
+    } else {
+      warnWeakIdentity(sess.session, sess.sessionName, 'trunk-checkout place-claim', null);
+      const written = placeAcquireLocked('ship into the trunk checkout', {
+        pathAbs: repoAbs, repo: repoAbs, branch: null, host: HOST,
+        session: sess.session, sessionName: sess.sessionName, pid: anchor.pid, pidKind: anchor.pidKind, anchorProof: anchor.proof,
+      });
+      if (!written.ok) {
+        // #285: the under-lock refusal is a NEW exit path out of B1, and every exit from here owes
+        // `cleanupEphemeral()` — the ephemeral worktree must not outlive a ship that refused.
+        cleanupEphemeral();
+        process.stderr.write(`✗ B1: ${written.message}\n`);
+        return 1;
+      }
+      acquiredTrunkPlace = true;
     }
-    acquiredTrunkPlace = true;
   }
   const cleanupTarget = () => {
     if (ephemeralTarget) git.git(['worktree', 'remove', '--force', targetDir], repoAbs);
@@ -9131,23 +9266,30 @@ function cmdPromote(argv) {
     // #288: resolved once, reused for the write below too — no --pid flag on `promote` itself, but
     // COLAB_PLACE_PID and the same agent-session auto-detection still apply.
     const anchor = resolvePlaceAnchor(opts);
-    const placeConf = place.conflict(loadedPlace.st, repoAbs, { session: promoteSession, pid: anchor.pid });
-    if (placeConf) {
-      process.stderr.write(`✗ refusing — ${placeConf.message}\n`);
+    // #317: same classification `ship` uses one command over — see there for why `own` must not
+    // re-acquire (the cleanup below would then delete a hold this command only renewed).
+    const placeCls = place.classify(loadedPlace.st, repoAbs, { session: promoteSession });
+    if (placeCls.conflict) {
+      process.stderr.write(`✗ refusing — class: ${placeCls.cls} — ${placeCls.conflict.message}\n`);
       process.stderr.write('  Never --force here: a live foreign hold on the main checkout stays behind the same\n');
       process.stderr.write('  human bar as everywhere else in Place-claims. Wait for it to clear, or once you have\n');
-      process.stderr.write('  confirmed that session is gone: COLAB_HUMAN=1 colab place release ' + repoAbs + '\n');
+      process.stderr.write(`  confirmed that session is gone: ${placeCls.remedy}\n`);
       return 1;
     }
-    warnWeakIdentity(promoteSession, promoteSessionName, 'trunk-checkout place-claim', null);
-    const written = placeAcquireLocked('promote into the main checkout', {
-      pathAbs: repoAbs, repo: repoAbs, branch: null, host: HOST,
-      session: promoteSession, sessionName: promoteSessionName, pid: anchor.pid, pidKind: anchor.pidKind,
-    });
-    // #285: a new exit path — `ephemeral` is false in this branch, so there is no worktree to tear
-    // down here (`cleanup` below is defined after this point and owns that for every later exit).
-    if (!written.ok) { process.stderr.write(`✗ ${written.message}\n`); return 1; }
-    acquiredTrunkPlace = true;
+    if (placeCls.cls === 'own') {
+      print(`  main checkout already held by this session ("${place.holderLabel(placeCls.rec)}", ` +
+        `held ${place.holdAge(placeCls.rec)}) — left in place, not re-taken, and not released at the end.`);
+    } else {
+      warnWeakIdentity(promoteSession, promoteSessionName, 'trunk-checkout place-claim', null);
+      const written = placeAcquireLocked('promote into the main checkout', {
+        pathAbs: repoAbs, repo: repoAbs, branch: null, host: HOST,
+        session: promoteSession, sessionName: promoteSessionName, pid: anchor.pid, pidKind: anchor.pidKind, anchorProof: anchor.proof,
+      });
+      // #285: a new exit path — `ephemeral` is false in this branch, so there is no worktree to tear
+      // down here (`cleanup` below is defined after this point and owns that for every later exit).
+      if (!written.ok) { process.stderr.write(`✗ ${written.message}\n`); return 1; }
+      acquiredTrunkPlace = true;
+    }
   }
   const cleanup = () => {
     if (ephemeral) git.git(['worktree', 'remove', '--force', mainDir], repoAbs);

@@ -103,10 +103,34 @@ function fixture(releaseMode) {
   return { root, origin, work, home, bin, g };
 }
 
-function colab(fx, args) {
+// #317: the agent-anchor env vars are neutralised for the same reason #237 neutralised
+// COLAB_HUMAN above — a green test must never depend on WHO ran the suite. `place.resolveAnchor`
+// adopts CLAUDE_PID as a `'verified'` anchor when it is alive and an ancestor of the invocation,
+// and `ownsAnchor` then treats every hold taken under it as the caller's own. Run this file from
+// inside an agent session with those vars set and every child `colab` here shares ONE verified
+// anchor, so two fixtures pretending to be different sessions become one writer and the
+// different-holder refusals below silently stop being exercised — while the same file stays green
+// on CI, where the vars are unset. Measured exactly that: 9 tests across 3 files passed on a
+// runner and failed on an agent's machine. Tests that WANT the verified-anchor path set CLAUDE_PID
+// explicitly through `extraEnv`.
+// #317: the agent-anchor env vars are neutralised for the same reason #237 neutralised
+// COLAB_HUMAN elsewhere — a green test must never depend on WHO ran the suite. `place.resolveAnchor`
+// adopts CLAUDE_PID as a `'verified'` anchor when it is alive and an ancestor of the invocation,
+// and `ownsAnchor` then treats every hold taken under it as the caller's own. Run this file from
+// inside an agent session with those vars set and every child `colab` here shares ONE verified
+// anchor, so two fixtures pretending to be different sessions become one writer and the
+// different-holder refusals silently stop being exercised — while the same file stays green on CI,
+// where the vars are unset. Measured exactly that: 9 tests across 3 files passed on a runner and
+// failed on an agent's machine. Tests that WANT the verified-anchor path set CLAUDE_PID explicitly.
+function colab(fx, args, extraEnv = {}) {
   const r = spawnSync('node', [COLAB, ...args], {
     encoding: 'utf8',
-    env: { ...process.env, PATH: `${fx.bin}:${process.env.PATH}`, COLAB_HOME: fx.home, COLAB_SESSION: '', COLAB_SESSION_NAME: '' },
+    env: {
+      ...process.env, PATH: `${fx.bin}:${process.env.PATH}`, COLAB_HOME: fx.home,
+      COLAB_SESSION: '', COLAB_SESSION_NAME: '',
+      CLAUDE_PID: '', CLAUDECODE: '', AI_AGENT: '',
+      ...extraEnv,
+    },
   });
   return { code: r.status, out: r.stdout || '', err: r.stderr || '' };
 }
@@ -118,6 +142,52 @@ function loadClaims(fx) {
 
 // `colab claim` exits non-zero whenever a claim is lost to the tie-break (a real issue got
 // yielded, not merely claimed) — that is expected in every test here and not what is under test.
+
+// --- #312: the losing session must give the checkout hold back, or it blocks the WINNER ---------
+//
+// `cmdClaim` acquires the checkout place-claim (`takingPlace`) BEFORE the tie-break runs, so a
+// session that loses the race used to drop its claim and keep the hold. The session it just
+// conceded to is then refused by it. Same end state #305 reported, reached in one command.
+
+function loadPlaces(fx) {
+  return JSON.parse(fs.readFileSync(path.join(fx.home, 'state.json'), 'utf8')).places || {};
+}
+
+test('#312: a no-worktree claim that LOSES the tie-break leaves no checkout place-claim behind', () => {
+  const fx = fixture('ok');
+  const r = colab(fx, ['claim', '9', '--repo', fx.work, '--session', 'sess-LOSER']);
+  assert.match(r.out + r.err, /Yielded #9/, r.out + r.err);
+  assert.match(r.out, /released the checkout place-claim/, r.out);
+  assert.deepStrictEqual(loadPlaces(fx), {}, 'the hold must not outlive the claim that took it');
+});
+
+test('#312: a sibling no-worktree claim on the same checkout KEEPS the hold — one hold, many issues', () => {
+  const fx = fixture('ok');
+  // Both issues lose the tie-break (the fixture's `gh` rigs every issue the same way), so the
+  // first yield must find #10 still claimed here and leave the hold alone; only the last one frees
+  // it. A place-claim covers the CHECKOUT, not one issue — the trap #305 names.
+  const r = colab(fx, ['claim', '9', '10', '--repo', fx.work, '--session', 'sess-LOSER']);
+  assert.match(r.out + r.err, /Yielded #9/, r.out + r.err);
+  assert.match(r.out, /checkout place-claim KEPT/, r.out);
+  assert.match(r.out, /released the checkout place-claim/, r.out);
+  assert.deepStrictEqual(loadPlaces(fx), {}, 'and by the last yield it is gone');
+});
+
+test('#312: a yield whose GitHub write FAILED keeps the claim, so it keeps the hold (#164 x #305)', () => {
+  const fx = fixture('fail-both');
+  const r = colab(fx, ['claim', '9', '--repo', fx.work, '--session', 'sess-LOSER']);
+  assert.match(r.err, /local claim KEPT \(releasePending\)/, r.err);
+  assert.strictEqual(Object.keys(loadPlaces(fx)).length, 1,
+    'dropping the hold under a claim that still stands is the local/remote disagreement #164 exists to prevent');
+});
+
+test('#312: a yield of a --worktree claim never touches st.places — it never took a checkout hold', () => {
+  const fx = fixture('ok');
+  const r = colab(fx, ['claim', '9', '--worktree', 'wt-9', '--repo', fx.work, '--session', 'sess-LOSER']);
+  assert.match(r.out + r.err, /Yielded #9/, r.out + r.err);
+  assert.doesNotMatch(r.out, /released the checkout place-claim/);
+  assert.deepStrictEqual(loadPlaces(fx), {}, 'a worktree claim mints no checkout hold in the first place');
+});
 
 test('yieldIssue, remote release succeeds: the local claim is deleted, same as before #173', () => {
   const fx = fixture('ok');

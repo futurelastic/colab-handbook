@@ -54,6 +54,16 @@ function fixture(projectYml = SERIAL_YML) {
   return { root, origin, work, home, g };
 }
 
+// #317: the agent-anchor env vars are neutralised for the same reason #237 neutralised
+// COLAB_HUMAN above — a green test must never depend on WHO ran the suite. `place.resolveAnchor`
+// adopts CLAUDE_PID as a `'verified'` anchor when it is alive and an ancestor of the invocation,
+// and `ownsAnchor` then treats every hold taken under it as the caller's own. Run this file from
+// inside an agent session with those vars set and every child `colab` here shares ONE verified
+// anchor, so two fixtures pretending to be different sessions become one writer and the
+// different-holder refusals below silently stop being exercised — while the same file stays green
+// on CI, where the vars are unset. Measured exactly that: 9 tests across 3 files passed on a
+// runner and failed on an agent's machine. Tests that WANT the verified-anchor path set CLAUDE_PID
+// explicitly through `extraEnv`.
 function colab(fx, args, extraEnv = {}) {
   const r = spawnSync('node', [COLAB, ...args], {
     encoding: 'utf8',
@@ -61,7 +71,11 @@ function colab(fx, args, extraEnv = {}) {
     // shell — a developer with COLAB_HUMAN=1 exported would otherwise get green `solo` tests
     // that prove nothing, since eligibility now depends on it. Tests that need it pass it
     // explicitly via extraEnv, same as every other override on this line.
-    env: { ...process.env, COLAB_HOME: fx.home, COLAB_SESSION: '', COLAB_SESSION_NAME: '', COLAB_HUMAN: '', ...extraEnv },
+    env: {
+      ...process.env, COLAB_HOME: fx.home, COLAB_SESSION: '', COLAB_SESSION_NAME: '', COLAB_HUMAN: '',
+      CLAUDE_PID: '', CLAUDECODE: '', AI_AGENT: '',
+      ...extraEnv,
+    },
   });
   return { code: r.status, out: r.stdout || '', err: r.stderr || '' };
 }
@@ -415,7 +429,144 @@ test('#242 reproduction: claim --branch then a second command carrying the same 
 
   const check = colab(fx, ['place', 'check', fx.work, '--repo', fx.work, '--session', 's1']);
   assert.strictEqual(check.code, 0, check.err);
-  assert.match(check.out, /free \(or held by you\)/);
+  // #317 split the old "free (or held by you)" into the two answers it was hiding: this is the
+  // held-by-you half, and saying so is the point — a caller polling `place check` (CONVENTIONS.md,
+  // Place-claims) could not previously tell "nobody holds this" from "you already do".
+  assert.match(check.out, /held by YOU \(class: own\)/);
+});
+
+// --- #317: a corpse is not a conflict, and the human bar must not stand in front of one ---------
+//
+// The live incident: `COLAB_HUMAN=1 colab place release <checkout>` typed by a human at 01:35 to
+// clear a hold whose holder had been gone for hours. Overriding nobody should not require a human.
+
+/** Rewrite the one place record so its holder is provably gone (a pid nothing can be). */
+function killHolder(fx) {
+  const statePath = path.join(fx.home, 'state.json');
+  const st = JSON.parse(fs.readFileSync(statePath, 'utf8'));
+  const key = Object.keys(st.places)[0];
+  st.places[key].pid = 999999999;
+  st.places[key].pidKind = 'anchor';
+  fs.writeFileSync(statePath, JSON.stringify(st, null, 2));
+  return key;
+}
+
+test('#317: `place release` on a DEAD holder of another session needs no COLAB_HUMAN', () => {
+  const fx = fixture();
+  const acq = colab(fx, ['place', 'acquire', fx.work, '--repo', fx.work, '--session', 'sess-OTHER', '--session-name', 'other']);
+  assert.strictEqual(acq.code, 0, acq.err);
+  const key = killHolder(fx);
+
+  const rel = colab(fx, ['place', 'release', fx.work, '--repo', fx.work, '--session', 'sess-MINE']);
+  assert.strictEqual(rel.code, 0, rel.err);
+  assert.match(rel.out, /class: dead/);
+  assert.match(rel.out, /No COLAB_HUMAN needed/);
+
+  const st = JSON.parse(fs.readFileSync(path.join(fx.home, 'state.json'), 'utf8'));
+  assert.ok(!st.places[key], 'the lapsed record must be gone');
+});
+
+test('#317: a LIVE other holder still refuses without COLAB_HUMAN — the bar moved for corpses only', () => {
+  const fx = fixture();
+  colab(fx, ['place', 'acquire', fx.work, '--repo', fx.work, '--session', 'sess-OTHER']);
+  const rel = colab(fx, ['place', 'release', fx.work, '--repo', fx.work, '--session', 'sess-MINE']);
+  assert.notStrictEqual(rel.code, 0);
+  assert.match(rel.err, /COLAB_HUMAN=1/);
+  assert.match(rel.err, /class: live-other/);
+});
+
+test('#317: an UNPROVABLE holder keeps the human bar — #288 fails closed, and this does not relax it', () => {
+  const fx = fixture();
+  // `--pid none` records an 'invocation' anchor: never probed, so liveness is null, not false.
+  const acq = colab(fx, ['place', 'acquire', fx.work, '--repo', fx.work, '--pid', 'none', '--session', 'sess-OTHER']);
+  assert.strictEqual(acq.code, 0, acq.err);
+  const rel = colab(fx, ['place', 'release', fx.work, '--repo', fx.work, '--session', 'sess-MINE']);
+  assert.notStrictEqual(rel.code, 0, 'unprovable is not dead — a human is still the authority here');
+  assert.match(rel.err, /class: unknown/);
+
+  const st = JSON.parse(fs.readFileSync(path.join(fx.home, 'state.json'), 'utf8'));
+  assert.strictEqual(Object.keys(st.places).length, 1, 'and nothing was lapsed');
+});
+
+test('#317: `place check` on a dead holder answers free, and names the class', () => {
+  const fx = fixture();
+  colab(fx, ['place', 'acquire', fx.work, '--repo', fx.work, '--session', 'sess-OTHER']);
+  killHolder(fx);
+  const chk = colab(fx, ['place', 'check', fx.work, '--repo', fx.work, '--session', 'sess-MINE']);
+  assert.strictEqual(chk.code, 0, chk.err);
+  assert.match(chk.out, /class: dead/);
+});
+
+test('#317: `colab places` marks a dead row lapsed and carries it in --json — and never mutates', () => {
+  const fx = fixture();
+  colab(fx, ['place', 'acquire', fx.work, '--repo', fx.work, '--session', 'sess-OTHER']);
+  const key = killHolder(fx);
+
+  const list = colab(fx, ['places']);
+  assert.strictEqual(list.code, 0, list.err);
+  assert.match(list.out, /\[DEAD\]/);
+  assert.match(list.out, /lapsed — treated as free by every acquire/);
+
+  const rows = JSON.parse(colab(fx, ['places', '--json']).out);
+  assert.strictEqual(rows[0].lapsed, true);
+
+  const st = JSON.parse(fs.readFileSync(path.join(fx.home, 'state.json'), 'utf8'));
+  assert.ok(st.places[key], '`places` is a READ — listing a lapsed hold must not delete it');
+});
+
+test('#317: an unprovable row is NOT lapsed in --json — the two must stay distinguishable', () => {
+  const fx = fixture();
+  colab(fx, ['place', 'acquire', fx.work, '--repo', fx.work, '--pid', 'none', '--session', 's1']);
+  const rows = JSON.parse(colab(fx, ['places', '--json']).out);
+  assert.strictEqual(rows[0].live, null);
+  assert.strictEqual(rows[0].lapsed, false);
+});
+
+test('#317: a hold anchored by an explicitly DECLARED pid is releasable by a caller presenting a different session', () => {
+  const fx = fixture();
+  // `--pid <a live pid>` is `anchorProof: 'declared'`. The releasing invocation is a child of that
+  // same process, so the anchor provably contains it — ownership without the string matching.
+  const acq = colab(fx, ['place', 'acquire', fx.work, '--repo', fx.work, '--pid', String(process.pid), '--session', 'sess-RECORDED']);
+  assert.strictEqual(acq.code, 0, acq.err);
+  const st0 = JSON.parse(fs.readFileSync(path.join(fx.home, 'state.json'), 'utf8'));
+  assert.strictEqual(Object.values(st0.places)[0].anchorProof, 'declared');
+
+  const rel = colab(fx, ['place', 'release', fx.work, '--repo', fx.work, '--session', 'a-string-i-cannot-reproduce']);
+  assert.strictEqual(rel.code, 0, rel.err);
+  const st = JSON.parse(fs.readFileSync(path.join(fx.home, 'state.json'), 'utf8'));
+  assert.strictEqual(Object.keys(st.places || {}).length, 0);
+});
+
+test('#317: the same hold with a DEFAULTED anchor is NOT self-releasable — the #242 population', () => {
+  const fx = fixture();
+  // No --pid, no agent env: rule 4, `anchorProof: 'default'` — a bare parent shell, which two
+  // unrelated commands share. The releasing invocation IS a descendant of that shell, so the
+  // ancestry walk passes; only term 3 stops this being ownership.
+  const acq = colab(fx, ['place', 'acquire', fx.work, '--repo', fx.work, '--session', 'sess-RECORDED']);
+  assert.strictEqual(acq.code, 0, acq.err);
+  const st0 = JSON.parse(fs.readFileSync(path.join(fx.home, 'state.json'), 'utf8'));
+  assert.strictEqual(Object.values(st0.places)[0].anchorProof, 'default');
+
+  const rel = colab(fx, ['place', 'release', fx.work, '--repo', fx.work, '--session', 'someone-else']);
+  assert.notStrictEqual(rel.code, 0, 'a shared parent shell is not an identity (#242)');
+  assert.match(rel.err, /COLAB_HUMAN=1/);
+});
+
+test('#317: a VERIFIED agent anchor makes a later command with a mismatched session its own holder', () => {
+  const fx = fixture();
+  // CLAUDE_PID = this test runner, which really is an ancestor of both child invocations below —
+  // so `resolveAnchor` rule 2 fires for real, exactly as it does for an agent session.
+  const agent = { CLAUDE_PID: String(process.pid) };
+  const acq = colab(fx, ['place', 'acquire', fx.work, '--repo', fx.work, '--session', 'recorded-as-a-NAME'], agent);
+  assert.strictEqual(acq.code, 0, acq.err);
+  const st0 = JSON.parse(fs.readFileSync(path.join(fx.home, 'state.json'), 'utf8'));
+  assert.strictEqual(Object.values(st0.places)[0].anchorProof, 'verified');
+
+  // #306's population: the session string on file is one this caller cannot present. Before #317
+  // that cost a COLAB_HUMAN=1 for a release that was legitimately its own.
+  const chk = colab(fx, ['place', 'check', fx.work, '--repo', fx.work, '--session', 'https://claude.ai/code/session_real'], agent);
+  assert.strictEqual(chk.code, 0, chk.err);
+  assert.match(chk.out, /class: own/);
 });
 
 test('solo with no session refuses with the identity message', () => {
