@@ -39,6 +39,7 @@ const ciCure = require('./lib/ci-cure');
 const ciVerdict = require('./lib/ci-verdict');
 const baseCiVerdict = require('./lib/base-ci-verdict');
 const dirtyOwner = require('./lib/dirty-owner');
+const lockfileDrift = require('./lib/lockfile-drift');
 const adopt = require('./lib/adopt');
 const consumerEvidence = require('./lib/consumer-evidence');
 const axisAuthority = require('./lib/axis-authority');
@@ -3141,10 +3142,32 @@ dependency symlinking, dev-server restarts) live in OPTIONAL repo hooks, not her
 HOOKS (optional, provided by the adopting repo):
   <repo>/.colab/hooks/post-create   run after worktree creation (if present & executable)
   <repo>/.colab/hooks/pre-remove    run before worktree removal
-  Both receive:  argv = <worktree-path> <port> <port> ...
+  <repo>/.colab/hooks/post-ship     run by \`colab ship\` after a successful push to TRUNK (#304)
+  All receive:   argv = <worktree-path> <port> <port> ...
   and env: COLAB_WORKTREE_PATH, COLAB_WORKTREE_NAME, COLAB_BRANCH, COLAB_PORTS (csv),
            COLAB_REPO, COLAB_TRUNK, COLAB_BASE (what the branch was cut from), COLAB_ISSUES (csv)
   A non-zero post-create hook is a WARNING (worktree already exists); pre-remove non-zero ABORTS.
+
+  post-ship is where machine-specific TRUNK-SIDE work belongs — re-install dependencies, migrate
+  the trunk DB, restart the trunk dev server. It is the answer to "colab should just run
+  \`composer install\`": it should not, and this is where the repo says what to run instead.
+    · Runs ONLY when the ship's target is the shared trunk checkout, never for a merge into a
+      declared integration line (that happens in a throwaway worktree with no long-lived
+      installed tree to go stale).
+    · COLAB_WORKTREE_PATH is the TRUNK CHECKOUT, not a worktree — post-ship runs after the
+      session's worktree is already merged. This is what distinguishes it from pre-ship, which
+      runs in the BRANCH worktree during B0 conflict resolution. post-ship also RUNS there
+      (cwd = the trunk checkout), so a bare \`composer install\` installs into the right tree;
+      post-create/pre-remove still inherit colab's own cwd, unchanged.
+    · Extra env: COLAB_TARGET (branch merged into), COLAB_SHA (the squash commit),
+      COLAB_LOCKFILES (csv of dependency lockfiles this merge changed — empty when none did).
+    · A non-zero exit is a WARNING, never a failed ship: the merge is already pushed, and an
+      error exit here would read as "ship failed" and invite a re-merge. Bounded by the same
+      timeout as the other hooks (COLAB_TEARDOWN_TIMEOUT_MS).
+    · A post-ship hook MUST leave the trunk checkout clean — a dirty trunk blocks every other
+      session's ship, which is the very failure this hook exists to prevent.
+  With no post-ship hook, a merge that changed a lockfile only prints a warning naming the file
+  and the install command (#304) — colab never runs a package manager on your checkout itself.
 `;
 
 function worktreeSubdir(config) { return config.worktreeSubdir || '.worktrees'; }
@@ -3172,9 +3195,17 @@ function runHook(repoAbs, name, ctx) {
     // need the base, not the trunk, or they set the session up against the wrong schema.
     COLAB_BASE: ctx.base || ctx.trunk || '',
     COLAB_ISSUES: (ctx.issues || []).join(','),
+    // Hook-specific additions. post-ship needs COLAB_TARGET/COLAB_SHA/COLAB_LOCKFILES, which mean
+    // nothing to the worktree hooks; rather than add three permanently-empty variables to every
+    // hook's environment, the caller passes what its own hook is contracted to receive (#304).
+    ...(ctx.extraEnv || {}),
   };
   print(`  running hook ${name} …`);
-  const r = spawnSync(hook, [ctx.wtPath, ...(ctx.ports || []).map(String)], { stdio: 'inherit', env, timeout: TEARDOWN_TIMEOUT_MS });
+  // `cwd` is opt-in per caller. Absent (post-create/pre-remove) the hook inherits colab's own
+  // working directory, exactly as it always has. post-ship passes the TRUNK CHECKOUT (#304):
+  // its whole job is acting on that tree, and `composer install` run from wherever the operator
+  // happened to invoke `colab ship` would install into the wrong repo entirely.
+  const r = spawnSync(hook, [ctx.wtPath, ...(ctx.ports || []).map(String)], { stdio: 'inherit', env, cwd: ctx.cwd || undefined, timeout: TEARDOWN_TIMEOUT_MS });
   const timedOut = !!(r.error && r.error.code === 'ETIMEDOUT');
   if (timedOut) warn(`  hook ${name} timed out after ${Math.round(TEARDOWN_TIMEOUT_MS / 1000)}s with no output — treating as failed`);
   return { ran: true, ok: r.status === 0 && !timedOut, code: r.status, timedOut };
@@ -6745,6 +6776,11 @@ Sequence (each step gated; any failure aborts before the push — the target is 
                         Refs #N and stays open). Into trunk that happens in the main checkout; into a
                         line it happens in an EPHEMERAL worktree, so the main checkout never leaves trunk.
   e. B2 push            push the target (COLAB_SHIP=1 in env so a pre-push-guard lets it through)
+  e2. post-ship         target==trunk only: run the repo's .colab/hooks/post-ship (if any) on the
+                        TRUNK CHECKOUT — re-install deps, migrate, restart. Non-zero is a WARNING,
+                        never a failed ship (the push already landed). With no hook, a merge that
+                        changed composer.lock/package-lock.json/... warns, naming the install
+                        command; colab never runs a package manager itself (#304)
   f. B3 teardown        colab worktree rm (releases claims + ports + ✅ comments) unless --keep-worktree.
                         The BRANCH IS KEPT — pass --delete-branch to remove it (local + remote).
   g. B4 verify + h.     confirm each issue auto-closed; post "🚢 Shipped to <trunk>" per issue
@@ -8477,6 +8513,49 @@ function cmdShip(argv) {
     return 1;
   }
   print('  pushed.');
+
+  // ---- (e2) POST-SHIP: the target checkout's installed tree may now be stale (#304) ----
+  // The merge has landed and is pushed. Nothing below may fail the ship: there is nothing left to
+  // refuse, and a non-zero exit after a successful push reads as "ship failed" and invites a
+  // re-merge. Everything here warns, never aborts.
+  //
+  // #114's deferred window opens HERE rather than at B3, because that is the whole point of it: on
+  // a long ship these lines would otherwise scroll off above the `✓ Shipped` line — which is
+  // exactly how #304's failure went unnoticed in the first place.
+  deferredCollector = [];
+  // Only when the target IS the shared checkout. `ephemeralTarget === false` means
+  // `targetDir === repoAbs` (see #234's note above); a declared integration line merged in a
+  // throwaway worktree has no long-lived installed tree to go stale, so it is correctly out of
+  // scope. The place-claim taken before B1 is still held — `cleanupTarget()` below releases it —
+  // so this is the one moment a side effect on the shared checkout is sanctioned.
+  if (!ephemeralTarget) {
+    // A squash is exactly one commit on every path that reaches here (`git merge --squash` then
+    // `git commit`, above), so `sha~1..sha` is the merge's whole diff and needs no extra
+    // bookkeeping. A future multi-commit path would silently narrow this.
+    const changed = git.git(['diff', '--name-only', `${sha}~1..${sha}`], targetDir);
+    const hits = changed.ok ? lockfileDrift.changedLockfiles(changed.stdout.split('\n').filter(Boolean)) : [];
+    // The hook fires on EVERY successful trunk ship, not only on drift: it is the moment
+    // skills/code-ship/SKILL.md already points at for trunk-side automation (migrate the trunk DB,
+    // restart the trunk dev server), and it is inert for every repo that has not written one —
+    // runHook returns {ran:false} when the file is absent or not executable.
+    const hook = runHook(repoAbs, 'post-ship', {
+      wtPath: targetDir, name: sess.name || '', branch: sess.branch, ports: [],
+      trunk, base: target, issues: sess.issues,
+      cwd: targetDir,
+      extraEnv: {
+        COLAB_TARGET: target,
+        COLAB_SHA: sha,
+        COLAB_LOCKFILES: hits.map((h) => h.path).join(','),
+      },
+    });
+    if (hook.ran && !hook.ok) {
+      warnDeferred(`post-ship hook failed (exit ${hook.code === null || hook.code === undefined ? '?' : hook.code}${hook.timedOut ? ', timed out' : ''}) — ${target} IS merged and pushed at ${sha}; do NOT re-run ship. Finish whatever the hook does by hand and check the checkout is clean.`);
+    }
+    // The warning is for drift NOBODY handled. A repo with a working hook has already dealt with
+    // it and does not need to be told; a repo whose hook failed was told by the line above.
+    if (hits.length && !hook.ran) warnDeferred(lockfileDrift.driftWarning(hits));
+  }
+
   cleanupEphemeral();
   cleanupTarget();
 
@@ -8502,10 +8581,11 @@ function cmdShip(argv) {
   for (const num of closeIssues) pushEvent('issue-merged', { repo: repoAbs, issue: num, payload: { sha } });
 
   // ---- (f) B3: teardown the worktree (releases claims + ports + ✅ comments) ----
-  // #114: from here through the end of B4, defer every non-fatal write failure into one block
-  // instead of letting it warn inline and scroll off above the `✓ Shipped` line a long ship
-  // prints last — see warnDeferred's own comment for why this is scoped to exactly this window.
-  deferredCollector = [];
+  // #114: every non-fatal write failure from here through the end of B4 defers into one block
+  // instead of warning inline and scrolling off above the `✓ Shipped` line a long ship prints
+  // last — see warnDeferred's own comment for why this is scoped to exactly this window. The
+  // window itself now OPENS at the push (e2, #304), not here: post-ship's warnings belong in the
+  // same block, and re-assigning the collector here would silently discard them.
   const worktreeKept = !!(sess.name && opts.keepWorktree);
   if (sess.name && !opts.keepWorktree) {
     print(`B3: removing worktree ${sess.name} …`);
@@ -8571,7 +8651,7 @@ function cmdShip(argv) {
   print('');
   print(`✓ Shipped ${sess.branch} → ${target} @ ${sha}${sess.issues.length ? ' (' + sess.issues.map((n) => '#' + n).join(' ') + ')' : ''}`);
   if (target !== trunk) print(`  "${target}" is a declared line: this work is NOT in ${trunk} until a human merges the line.`);
-  // #114: everything deferred since B3 lands here, AFTER the success line — not scattered above it
+  // #114: everything deferred since the push (e2, #304) lands here, AFTER the success line — not scattered above it
   // where a long ship scrolls it out of view. The merge itself already landed either way; this is
   // strictly "what post-merge writes still need a human's attention", never a reason to re-run.
   if (deferredCollector && deferredCollector.length) {

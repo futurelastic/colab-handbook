@@ -782,12 +782,53 @@ symlinking, dev-server restarts) is *not* hardcoded — the adopting repo provid
 |---|---|---|
 | `<repo>/.colab/hooks/post-create` | after a worktree is created | **warning** (worktree already exists) |
 | `<repo>/.colab/hooks/pre-remove`  | before a worktree is removed | **aborts** removal (unless `--force`) |
+| `<repo>/.colab/hooks/pre-ship`    | during `colab ship` B0, in the **branch** worktree, to regenerate generated files that conflicted | **aborts** the ship (nothing has been pushed yet) |
+| `<repo>/.colab/hooks/post-ship`   | after `colab ship` pushes, in the **trunk checkout** — trunk targets only | **warning** — the merge already landed (#304) |
 
 Each hook is run only if it exists **and is executable**. It receives:
 
 - **argv:** `<worktree-path> <port> <port> ...`
 - **env:** `COLAB_WORKTREE_PATH`, `COLAB_WORKTREE_NAME`, `COLAB_BRANCH`, `COLAB_PORTS` (csv),
-  `COLAB_REPO`, `COLAB_TRUNK`, `COLAB_ISSUES` (csv)
+  `COLAB_REPO`, `COLAB_TRUNK`, `COLAB_BASE`, `COLAB_ISSUES` (csv)
+- `post-ship` additionally: `COLAB_TARGET` (branch merged into), `COLAB_SHA` (the squash commit),
+  `COLAB_LOCKFILES` (csv of dependency lockfiles this merge changed — empty when none did)
+
+### `post-ship` — the trunk-side half
+
+`post-ship` is where trunk-side machine-specific work belongs: **re-install dependencies**,
+migrate the trunk DB, restart the trunk dev server. It exists because a merge is not a checkout
+update — `colab ship` commits the squash *in the shared trunk checkout* when the target is trunk,
+and nothing re-installs `vendor/` or `node_modules/` afterwards. A merge that adds a Composer
+package therefore leaves a trunk whose installed tree does not match its lockfile, and anything
+regenerating committed output from that tree (a route-binding generator, an always-on dev server)
+can **delete** those committed files, leaving trunk dirty and blocking every other session's ship
+(#304 — `docs/gotchas.d/`).
+
+Four rules, and they are the whole contract:
+
+1. **Trunk targets only.** A merge into a declared `integration:` line happens in a throwaway
+   worktree; there is no long-lived installed tree to go stale.
+2. **`COLAB_WORKTREE_PATH` is the trunk checkout**, not a worktree — this is what distinguishes
+   `post-ship` from `pre-ship`, which runs in the *branch* worktree during B0. `post-ship` also
+   **runs** there (its `cwd` is the trunk checkout), so a bare `composer install` reaches the right
+   tree; `post-create`/`pre-remove` still inherit colab's own cwd, unchanged.
+3. **Non-zero is a warning, never a failed ship.** The push has already landed; an error exit
+   would read as "ship failed" and invite a re-merge.
+4. **The hook must leave the trunk checkout clean.** A dirty trunk blocks every other session's
+   ship — precisely the failure this hook exists to prevent.
+
+With no `post-ship` hook, a merge that changed a lockfile prints a warning naming the file and the
+install command. **`colab` never runs a package manager on your checkout itself** — the same rule
+that keeps DB cloning out of the portable core keeps `composer install` out of it.
+
+```sh
+#!/bin/sh
+# <repo>/.colab/hooks/post-ship — trunk checkout is $COLAB_WORKTREE_PATH
+set -e
+cd "$COLAB_WORKTREE_PATH"
+case ",$COLAB_LOCKFILES," in *,composer.lock,*) composer install --no-interaction ;; esac
+case ",$COLAB_LOCKFILES," in *,package-lock.json,*) npm ci ;; esac
+```
 
 Example `post-create` that clones a MySQL DB and symlinks `node_modules` (the kind of logic that
 used to be baked into the machine-specific script):
@@ -1031,6 +1072,7 @@ Each step is checked; any failure aborts **before the push**, so trunk is never 
 | c. B0 sync | merge trunk **into** the branch | conflict in a **non-generated** file → abort (hand-merge); generated-only conflict → the repo's `.colab/hooks/pre-ship` regenerates, else abort |
 | d. B1 squash | re-verify CI green, then squash-merge branch → trunk | CI no longer green / squash fails |
 | e. B2 push | push trunk with `COLAB_SHIP=1` in the env | push rejected (commit stays local, unpushed) |
+| e2. post-ship | trunk targets only: run the repo's `.colab/hooks/post-ship` on the trunk checkout (re-install deps, migrate, restart). With no hook, a merge that changed a dependency lockfile warns, naming the install command | **never aborts** — the push already landed (#304) |
 | f. B3 teardown | `colab worktree rm` (releases claims + ports + `✅` comments) unless `--keep-worktree`. The **branch is kept**; `--delete-branch` removes it local + remote | branch deletion is best-effort — a failure warns, it never fails a ship that already pushed |
 | g/h. B4 + summary | verify each issue auto-closed; post `🚢 Shipped to <trunk> by colab ship — <sha>` | non-closing issues are reported, not fatal |
 

@@ -588,9 +588,23 @@ is a human integration event of a promotion's weight.
   knowledge behind a closed-issue lookup (`CONVENTIONS.md` [§5](../../CONVENTIONS.md#tracking-issues--claimed-but-referenced-not-closed), *Tracking issues*). Through
   the blessed door this is automatic for an issue carrying the `tracking` label, or opt in
   per-ship with `colab ship --refs <N>`; the claim is still released either way.
-- *(Machine-specific automation — migrate the trunk DB, restart the trunk dev
-  server — hooks in here: `.colab/hooks/`. It is the one moment trunk may go down;
-  keep the window short.)*
+- **Machine-specific trunk-side automation runs itself — `.colab/hooks/post-ship`.**
+  Migrate the trunk DB, restart the trunk dev server, re-install dependencies: `colab
+  ship` runs that hook on the trunk checkout right after the push, so this is no longer
+  a step you perform by hand. It is the one moment trunk may go down; keep the window
+  short. A non-zero hook is a warning, never a failed ship — the merge already landed,
+  so **never re-run `ship` because the hook complained**; finish what it does by hand
+  and leave the trunk checkout clean.
+- **A merge that changed a dependency lockfile leaves the trunk checkout stale, and
+  that is not cosmetic (#304).** The squash lands *in the shared trunk checkout*, and
+  nothing re-installs `vendor/`/`node_modules/` afterwards — so a merge adding a
+  Composer/npm package leaves an installed tree that disagrees with its lockfile.
+  Anything regenerating committed output from that tree (a route-binding generator, an
+  always-on dev server) then deletes those committed files, and the resulting dirty
+  trunk blocks **every other session's ship**, including ones whose diff touched
+  nothing related. With no `post-ship` hook, `colab ship` warns and names the install
+  command; `colab` never runs a package manager on a checkout itself. If you see that
+  warning, run the install before you walk away.
 
 ## B2b. Post evidence on EVERY issue — including the auto-closed ones
 
