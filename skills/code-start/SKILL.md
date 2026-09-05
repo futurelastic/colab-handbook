@@ -445,6 +445,16 @@ gh issue view $N --json labels -q '.labels[].name|select(startswith("group:"))'
   deliberately breaking it (the collision is gone), remove the label from the members it
   no longer covers and say so in your report — nothing else removes it, and a stale group
   label reads exactly like a live one.
+- **With a `group:` label, run the branch-existence check for EVERY open member's number,
+  not just yours.** The check above (`git branch -a --list '*<n>*'`, after the mandatory
+  fetch) is keyed to *your* issue number, so it is blind to a sibling member's branch — the
+  very branch the group exists to keep you off. A live ref on **any** member means join or
+  continue that branch (see *Found one → continue it, or ask*, below); it does not mean open
+  a second one. Two cautions, both measured 2026-09-06: the ref may be **local-only**, so
+  fetching does not conjure it and only `refs/heads/**` shows it; and it may have **zero
+  commits** — a branch created minutes ago reads `landed` under `colab landed`'s content
+  question ("merging the branch would not change the base tree"), so *no commits is not no
+  branch*. Absence of content is never absence of an owner.
 - **No `group:` label is not proof of no collision** — it can equally mean nobody has
   triaged this issue. Run [`code-triage`](../code-triage/SKILL.md) if you are unsure;
   do not read absence as clearance.
