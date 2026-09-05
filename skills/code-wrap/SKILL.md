@@ -163,7 +163,7 @@ them:
 
 The last two share one naming rule — see below — because they share one defect.
 
-#### Design artifact — promote it out of exploration, onto this branch, right here (§5)
+#### Design artifact — promote it out of exploration, onto this branch, right here (`CONVENTIONS.md` §5)
 
 A fifth destination, distinct from the four above because it is not "this session
 made a doc stale" — it is a durable repo asset that only now has a session to carry
@@ -176,7 +176,8 @@ scratch/exploration home with instructions not to promote it: that leaves the
 next session touching the same surface to pay the design lane's boot cost again,
 from nothing, as if the ruling never happened.
 
-- File it `docs/design/<slug>-<N>-mockup.html` or `<slug>-<N>-spec.md`, per §5's
+- File it `docs/design/<slug>-<N>-mockup.html` or `<slug>-<N>-spec.md`, per
+  `CONVENTIONS.md` §5's
   naming — commit it as a deliverable path in A4, same as any other file this
   session produced.
 - **Superseded artifacts are marked, never deleted** — trunk carries the design
@@ -533,11 +534,64 @@ git commit                             # Conventional Commits: type(scope): summ
 Conventional-Commit prefix is mandatory — release notes group on it, so an
 unprefixed commit is invisible in the changelog (`CONVENTIONS.md` [§4](../../CONVENTIONS.md#4-branches-and-commits)).
 
-### A5. Push the session branch as backup
+### A5. Push the session branch as backup — then read the run it started
 
 ```sh
 git push -u origin <branch>    # a backup/record, NOT a PR, NOT trunk
 ```
+
+**A3's green gate does not answer for this branch's CI, and nobody downstream asks.**
+A3 runs the suite *locally*, on this machine; CI runs it on the runner. They disagree
+for ordinary reasons — a different OS, a browser the runner has to boot, a toolchain
+pin the local machine already satisfies. Measured, 2026-09-05: a branch sat red three
+times on its remote run while its wrap had recorded a clean local gate, and no step in
+`code-wrap` → `code-ship` → `colab ship` was reading that run at all — `code-ship` B1
+reads **trunk**, and `colab ship`'s cure rule reads the branch only as a side condition.
+
+So read it here, where the push just created it, and pass the answer forward as a
+**class** rather than a pass/fail:
+
+```sh
+HEAD=$(git rev-parse HEAD)     # the pushed head — the only sha the class describes
+gh run list --branch <branch> --limit 20 \
+  --json headSha,status,conclusion,workflowName,databaseId \
+  -q "[.[] | select(.headSha == \"$HEAD\")]"
+```
+
+| class | what you saw at `$HEAD` | what it means downstream |
+|---|---|---|
+| `green` | **every** run `completed`, at least one `success`, none `failure` | nothing owed |
+| `none` | no run exists yet, or **any** run is still in flight | `code-ship` waits, bounded — a run in flight has not passed, it has **not run** |
+| `red:infra` | a run failed **before** the suite could judge the branch — runner boot, browser install, billing lockout, a dependency fetch. Where the repo separates them, **exit 2** | `code-ship` may re-run it **once**; identical twice ⇒ the ops lane, not this branch |
+| `red:finding` | the suite ran and something in it failed — **exit 1** where separated | comes back to an implementer session as a class; never merged past |
+
+**Both quantifiers, and this repo measured why each one is there.** The `every … completed`
+half is #307: a sha whose fast workflows had gone green while a slow one was still
+`in_progress` reported "3 runs, all success" off a single inspected row — the same workflow
+gated when red and was invisible when merely unfinished. So a green sibling does not cover
+an unfinished one; that case is `none`, not `green`. The `none failure` half is the
+ordinary one. **`cancelled` is neither** — it is `completed` and not a `failure`, so a
+cancelled straggler alongside a real `success` is still `green`, which is #92's deadlock
+fix and must survive this ladder (`CONVENTIONS.md`
+[§4](../../CONVENTIONS.md#4-branches-and-commits)).
+
+- **A red class is data, not a failed wrap.** Do not go back and start fixing on a
+  `red:infra` — you would be debugging the runner, in a session whose oracle is already
+  green. Record the class and stop; the ladder above says who acts next. `red:finding`
+  is the one that names *you*, and even then only if the finding is this branch's —
+  say so and let `code-ship` route it, rather than silently reopening the work.
+- **Where the repo does not separate exit 1 from exit 2, you cannot infer the class
+  from the conclusion alone** — `failure` is all GitHub reports. Read the failing job's
+  log far enough to say which side of the line it fell on, and if it genuinely cannot be
+  told, report `red:finding`: treating an unclassifiable red as the branch's own problem
+  routes it to a human who can look, whereas guessing `red:infra` spends the free re-run
+  and then parks it in an ops lane nobody opened.
+- **`none` is the honest answer for a repo with no CI at all** — say `none (no workflows
+  on this repo)` so the distinction between "not configured" and "not finished yet"
+  survives into `code-ship`, which treats only the second as something to wait for.
+- Do not block the wrap waiting for a run to finish. Report `none`, say the run was in
+  flight, and let `code-ship` do the bounded wait — it is the step that actually needs
+  the answer.
 
 ## Hand off — assert the contract, then stop
 
@@ -551,7 +605,9 @@ what it needs" — with an explicit checklist this skill **asserts** and
 [`code-ship`](../code-ship/SKILL.md) **verifies** independently, from git and GitHub,
 never by trusting this session's word for it:
 
-- [ ] session branch pushed (A5)
+- [ ] session branch pushed (A5), **and** its branch-CI class recorded for the pushed
+      sha — `green` · `none` · `red:infra` · `red:finding`, naming the sha (A5). A red
+      class does not fail this box; an unrecorded one does
 - [ ] distill comment posted on each carried issue (A1)
 - [ ] gate result recorded — green, or red-for-an-unrelated-reason reported (A3)
 - [ ] migration-grant REQUEST filed on every carried issue whose branch touches a
