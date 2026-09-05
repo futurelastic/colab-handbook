@@ -58,8 +58,30 @@ ls "$MAIN_REPO/.claude/plans/issue-$N.md" 2>/dev/null        # plan file, if one
 git -C "$MAIN_REPO" status --porcelain -uall                 # trunk checkout still clean?
 ```
 
-- **Branch not on the remote** → `code-wrap` did not finish A5. Stop; do not improvise a
-  push from here.
+- **Branch not on the remote** → `code-wrap` did not finish A5. **You may push it — and
+  only it.** The head that exists locally, unchanged, when it equals the commit
+  `code-wrap` reported in its hand-off; nothing else. Verify before you push, do not
+  assume:
+
+  ```sh
+  git rev-parse <branch>                 # must equal the sha code-wrap reported
+  git log --oneline origin/<trunk>..<branch>   # must be this branch's own commits only
+  git push -u origin <branch>
+  ```
+
+  If the local head is **not** the wrapped commit, that is a different problem —
+  somebody committed after the wrap, and this skill has no idea whether that work was
+  gated. Stop there and hand back.
+
+  **This is the one thing the coordinator may do to the branch, and the boundary is
+  source.** You may push a wrapped head, re-run an infra-class red run once, cure-merge,
+  and rebase a clean conflict. You may **not** edit source, add a commit, amend, or
+  force-push — the grader is not the fixer, and a coordinator that writes code is
+  grading its own work one step later. Measured, 2026-09-05: a branch's head — the very
+  commit whose message said the failure was resolved — sat unpushed for a day because
+  this line read *"stop; do not improvise a push from here"* while the paragraph twenty
+  lines below told the same reader to *"re-push"* before continuing. Nobody pushed, no
+  CI run ever validated the fix, and the contradiction was doing the blocking.
 - **No recent distill comment** → A1 did not happen, or happened somewhere this can't
   see. Ask, don't assume it was verbal.
 - **Claim released already** → someone (or something) other than this skill let it go.
@@ -68,6 +90,12 @@ git -C "$MAIN_REPO" status --porcelain -uall                 # trunk checkout st
 - **Gate result** has no independent artifact to re-derive from outside the report itself
   on most repos — trust the report here, but if anything else on this list is off, treat
   the gate claim as unverified too and re-run it (`code-wrap` A3) before proceeding.
+  **The branch-CI class A5 reports is the opposite case — it *does* re-derive, and B1a
+  below re-derives it rather than reading it here.** A missing class in the hand-off is
+  a wrap that skipped a step, worth saying in the report; it is not a blocker, because
+  B1a measures it again from GitHub anyway. A class that *contradicts* what B1a measures
+  usually means the head moved between the two reads, which is B1a's own sync caveat,
+  not a dishonest report.
 - **Trunk checkout dirty here too** → `code-wrap` A2b's own re-derivation (its *Verify
   complete* step) either missed this or ran before whatever caused it. Don't re-run the
   same ownership ladder blind: `git ls-remote` above already told you this branch's
@@ -81,8 +109,11 @@ git -C "$MAIN_REPO" status --porcelain -uall                 # trunk checkout st
   on, not a reason to bypass it.
 
 A contract that fails to verify is not a reason to skip the merge — it is a reason to
-fix the gap (re-push, re-comment, re-claim) before continuing, or to hand back to an
-implementer session rather than papering over it here.
+fix the gap before continuing, or to hand back to an implementer session rather than
+papering over it here. **"Fix the gap" is mechanical only, and it is exactly the three
+above**: re-push a wrapped head, re-comment a missing distill, re-claim a released
+claim. Anything that needs a line of source changed is a hand-back, never a fix from
+here — see the push bullet above for why that boundary is written twice.
 
 ## What counts as "a human said go"
 
@@ -346,6 +377,65 @@ If `<base>` is a declared line with **no runs at all**, it is not yet CI-gated: 
 `<trunk>` instead and say so in the report. That is a normal early state for a line,
 not a green light — a line that *has* runs and is red still stops the ship.
 
+### B1a. Now read the BRANCH's CI too — beside `<base>`'s, not instead of it
+
+The check above answers *"is the thing I am merging into healthy?"*. It says nothing
+about the thing being merged. Both have to be true, and until now nothing in this chain
+asked the second question: `code-wrap` asserted a **local** gate, this section read
+`<base>`, and `colab ship`'s cure rule touched the branch's run only as a side
+condition. A branch could therefore be red on the runner through every step of the ship
+and never be stopped by one.
+
+`code-wrap` A5 reports the class for the sha it pushed. **Re-derive it here — do not
+take the report's word for it.** The head may have moved (B0's sync commit moves it by
+design), and §0's rule is that this skill verifies the contract from git and GitHub
+rather than trusting the session:
+
+```sh
+BHEAD=$(git rev-parse <branch>)
+gh run list --branch <branch> --limit 20 \
+  --json headSha,status,conclusion,workflowName,databaseId \
+  -q "[.[] | select(.headSha == \"$BHEAD\")]"
+```
+
+Same four classes, same spelling as A5 — `green` · `none` · `red:infra` ·
+`red:finding` — and each has a named next step, so none of them is a park:
+
+| class | what this skill does |
+|---|---|
+| `green` | proceed to B1b |
+| `none` | **Depends which `none` — check before you wait.** A run *queued or in flight* has not passed, it has not run: wait, bounded. That includes a fast sibling already green while a slow one is unfinished (#307; A5's table carries the evidence). But a run that **cannot arrive for this ref** is not pending at all — proceed, exactly as the no-runs line above already allows for `<base>`. Two shapes: no workflows on the repo, and — far more common — workflows that only trigger on `pull_request` / `push` to trunk, so a backup branch push produces nothing, forever. A5 reports which; re-read the triggers if it did not |
+| `red:infra` | **re-run it once** (`gh run rerun <databaseId> --failed`), then re-read. Identical failure twice ⇒ it is the runner, not the branch: hand it to the **ops lane** and stop. Do not merge, and do not send it back to the implementer — there is nothing in the diff for them to fix |
+| `red:finding` | **hand back to an implementer session, as a class** — the branch's own suite found something. Never a merge, never a re-run |
+
+**How this lands against *What a defer is for* (#257) — it does not loosen it.** A twice-
+identical `red:infra` is precisely that section's first legitimate case: *a red or dead
+precondition the coordinator cannot itself clear*. So record it as a defer with the clock
+that section requires — precondition: the runner, not the diff; what clears it: a green
+run on `<base>`; re-measure trigger: that run. What is still never a defer is unchanged:
+`red:finding` is a hand-back to an implementer, not a park, and nothing about the
+originating session's composer, silence or parked state enters this decision at all —
+every step here runs in the coordinator's own worktree.
+
+- **Re-running is mechanical, and it is the only CI action permitted here** — same
+  boundary as §0's push rule. One re-run per red episode, not per attempt: a second
+  identical failure is evidence, and spending re-runs on it just moves the wall further
+  out.
+- **B0's sync commit invalidates an earlier class.** If you merged `<base>` in, the sha
+  A5 measured is not the sha you are about to merge. Push the sync commit and read the
+  class again for the new head — a green class inherited from a pre-sync sha is exactly
+  the "green run on a different commit" this whole section exists to refuse.
+- **Never wait out a bound on a repo whose workflows cannot fire for a branch ref.**
+  This handbook's own repo is that shape (`push: branches: [main]` + `pull_request`),
+  and `code-wrap` A5 does not open a PR by design — so branch CI genuinely does not
+  exist here before the merge, and `<base>`'s own gate at B1 is the whole CI story.
+  That is a normal state, not a degraded one; say so in the report rather than treating
+  it as a missing measurement.
+- **Cannot separate `red:infra` from `red:finding`?** Read it as `red:finding` and hand
+  back, for the reason A5 gives: an unclassifiable red routed to a human who can look
+  costs a hand-back, while a wrong `red:infra` burns the free re-run and parks the work
+  in a lane nobody is watching.
+
 ## B1b. Harvest every issue the branch carried
 
 B2 needs the **complete** set of issue numbers at the moment it writes the squash
@@ -483,7 +573,7 @@ ask) as a whole:
   a sentence to parse*). Every claim in the harvested set stays held; this is never an
   automatic revert of the branch and never a silent merge-anyway.
 
-#### UI-affecting issues — also grade against the design artifact, when one exists (§5)
+#### UI-affecting issues — also grade against the design artifact, when one exists (`CONVENTIONS.md` §5)
 
 When the harvested set touches a UI surface and `docs/design/` carries an artifact
 for it (`<slug>-<N>-mockup.html` / `<slug>-<N>-spec.md` — `CONVENTIONS.md`
