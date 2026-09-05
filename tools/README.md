@@ -90,13 +90,18 @@ branch on it.
   record's own `session` (written by the same `claim` invocation that wrote the hold), never from
   an ambient `--session`: `colab release` has no such flag, so a stale claim swept long after a
   LATER session re-took the checkout correctly touches nothing. A failed GitHub write keeps the
-  claim (`releasePending`) and therefore keeps the hold with it.
+  claim (`releasePending`) and therefore keeps the hold with it. **#312 brought the other three
+  claim-deletion sites to the same rule** — the tie-break loser inside `colab claim`, `claims
+  --sync --prune`, and `doctor`'s stale worktree-less-claim prune; the remaining sites are
+  worktree-keyed and never took a checkout hold at all, and each says so at the site.
 - **`--session` takes a URL or any stable id — but a session NAME in that slot is warned about
   (#306).** Nothing rejects a non-URL value (`requirePlaceIdentity` promises
   `<url-or-any-stable-id>`), but a value that looks like neither a URL nor a `session_…` id draws
   a warning at write time, because `place release`'s self-check is exact equality: a name recorded
   there means presenting your real URL later fails your own ownership check. See
-  `docs/adr/306-session-identity-fixed-at-write-time-not-name-matched-at-release.md`.
+  `docs/adr/306-session-identity-fixed-at-write-time-not-name-matched-at-release.md`. The warning
+  still stands, but it is no longer the only backstop: #317's anchor proof recognises such a hold as
+  the caller's own regardless of what string is on file.
 - **"No branch" is `null`, and never the word `trunk`.** A claim held on the trunk checkout has no
   branch, and `trunk` is a *role* — the branch this repo merges into, `main` or `dev`. Recording the
   role word as though it were a name is refused on write (`colab claim --branch trunk` exits 1, and
@@ -682,7 +687,20 @@ Design notes, in case a future change is tempted to relax one:
   replaces a raw hostname string compare so a drifted-but-same-machine record is not misread as
   foreign; `pidKind` (`'anchor'`/absent vs `'invocation'`) says whether `pid` may ever be probed for
   liveness, so a short-lived per-tool-call shell pid an agent recorded is kept as a human lead
-  (`colab places`) without ever producing a false "dead" verdict.
+  (`colab places`) without ever producing a false "dead" verdict. `anchorProof` (#317) is additive
+  in the same way — absent on every pre-#317 record, and read by nothing except the ownership test
+  below.
+- **A hold is yours by session string OR by proven anchor, and a corpse is nobody's (#317).**
+  `pidKind` alone cannot decide ownership: `resolveAnchor` rules 1, 2 *and* 4 all write `'anchor'`,
+  but rule 4 records a bare `process.ppid` — the parent shell #242 rejected as an identity — so
+  `anchorProof` (`verified` · `declared` · `default` · `none` · absent) is the second term.
+  Self-ownership needs an `'anchor'` pid whose proof is `verified`/`declared`, alive, and this
+  process or a proven ancestor of it right now; a `default` or absent proof never qualifies, which
+  is what keeps #242 closed. A CONFIRMED-dead holder is cleared by the next command that writes at
+  that path and needs no `COLAB_HUMAN` to release; `live: null` (unprovable) is never touched.
+  `colab place check` and `colab ship`/`promote` report the answer as one of `free` ·
+  `foreign-machine` · `own` · `dead` · `unknown` · `live-other`, with the exact next command. Full
+  argument: `docs/adr/317-anchor-pid-self-ownership.md`.
 
 ### Records that cannot be acted on
 

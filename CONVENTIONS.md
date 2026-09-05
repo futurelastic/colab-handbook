@@ -840,9 +840,10 @@ and **verified by the writer itself**, not merely by whatever spawned it.
   back to the pid every acquire site already records — the resolved anchor (see #288 below, not
   unconditionally `process.ppid` as before it), formatted as `pid <n> on <host>` — enough for a
   human to `ps -p <pid>` and find a lead, where "unknown" left none. It is weaker than a real name
-  or URL and does not make the acquiring session recognizable as its own holder on a later re-acquire (`conflict`'s
-  self-exemption matches on `session`, never on `sessionName` or `pid` — see below) — supply an
-  identity when one is available, this is a floor, not a substitute.
+  or URL: a `sessionName` still never makes a session recognizable as its own holder on a later
+  re-acquire, and a pid does so only where it is a **proven anchor** (the anchor-proof bullet
+  below — never a bare or defaulted one) — supply an identity when one is available, this is a
+  floor, not a substitute.
 - **Narrowed by #242: acquiring a SHARED-checkout hold is no longer warn-only.** A `colab claim`
   with no `--worktree` (the trunk-checkout shape) and `colab solo` both mint a hold meant to be
   re-acquired/renewed by the SAME caller across later commands — and `conflict`'s same-holder
@@ -850,12 +851,15 @@ and **verified by the writer itself**, not merely by whatever spawned it.
   the same holder. So both now REFUSE outright, before any state is touched, when no `--session`
   (or `COLAB_SESSION`) is given — the #235 warn-only floor above still applies to `colab place
   acquire` and to a worktree's own hold, neither of which is re-acquired the same way.
-  **A `pid` is process lineage, not a session, and is never used to decide the re-acquire
+  **A BARE `pid` is process lineage, not a session, and is never used to decide the re-acquire
   exemption** — only surfaced as a hint in a refusal's message when it happens to match. Two
   invocations sharing a parent shell share one `pid` without being one writer, and this
   primitive's whole value is refusing when it cannot prove safety; a measured falsifier run found
   agent tool calls do not even share a stable `pid` across separate commands, so the mandatory
   identity at the two minting call sites is the fix, not a weaker match inside `conflict` itself.
+  ⚖ #317 draws the boundary this paragraph was always about, rather than moving it: the population
+  it rules out — a `process.ppid`, shared by every command in one shell — is ruled out permanently,
+  and only a pid that was **proved** to contain the caller earns the exemption (two bullets down).
 - **The anchor pid is resolved per call, not always `process.ppid` (#288).** An agent's `ppid` is
   the short-lived shell spawned for ONE tool call, not the long-lived session — probing it as a
   liveness signal produces exactly the false-dead verdict this measured. So every write site
@@ -869,6 +873,40 @@ and **verified by the writer itself**, not merely by whatever spawned it.
   can never be pruned as "confirmed dead" on a signal that was never trustworthy to begin with.
   This governs a different question than the #242 bullet above (whether a pid may be PROBED at
   all, not whether it exempts a re-acquire) and changes nothing about that rule.
+- **A hold's holder is identified by its proven anchor process as well as by its session string
+  (#317).** The string has to be reproduced identically by every later command of the same session,
+  and twice now it was not: a session that recorded its *name* in `--session` failed its own
+  ownership check (#306), and a ship session that could not resolve any identity at all was refused
+  by a hold **its own claim had taken minutes earlier** — one merge in 8½ hours on that repo until a
+  human cleared it by hand. So a hold is also yours when its recorded anchor pid is alive and
+  provably contains this very invocation. Four terms guard that, and the second is the one doing the
+  work: the anchor must be `'anchor'`-kind; its **proof** must be `verified` (auto-detected *and*
+  ancestor-checked at write time) or `declared` (`--pid <n>`); it must be alive; and it must be this
+  process or an ancestor of it **right now**. A `default` proof — a bare `process.ppid` — and every
+  record written before this are excluded by construction, which is exactly the #242 population
+  above. `sessionName` is still never an ownership key, on any path. The equivalence class this
+  admits is never coarser than the session string beside it: everything it exempts is something the
+  same session could already exempt by exporting `COLAB_SESSION` once. Full argument, the four
+  alternatives rejected, and the falsifier that would supersede it:
+  [`docs/adr/317-anchor-pid-self-ownership.md`](docs/adr/317-anchor-pid-self-ownership.md).
+- **A confirmed-dead holder lapses at read time — it is a record to clear, not a conflict to
+  override (#317).** Read-time liveness (above) already meant a dead holder refused nothing; what it
+  did not mean was that the record went away. Only `colab doctor --prune` removed one, and only when
+  somebody thought to run it, so a corpse sat in `colab places` looking exactly like a hold and
+  `colab place release` demanded `COLAB_HUMAN=1` to clear it — which is the command a human actually
+  had to type at 01:35 to unstick a trunk. Now every command that writes at that path clears it on
+  the way past, and releasing one needs no human flag: overriding nobody is not a human decision.
+  **`unknown` liveness is untouched** — that is the case #288/#289 deliberately fail closed on, and
+  it keeps the human bar. `colab places` stays a READ: it labels a lapsed row rather than deleting
+  it, because a diagnostic that silently mutates is worse than one showing a stale row.
+- **A claim's hold is given back by every command that deletes that claim, not just by `release`
+  (#312).** `colab release` was the site somebody noticed in production; three others dropped the
+  claim and kept the hold — the tie-break loser inside `colab claim` (which had *already* acquired
+  the hold, so it blocked the session it had just conceded to), `claims --sync --prune`, and
+  `doctor`'s stale worktree-less-claim prune. Each applies the same three guards: skip a claim that
+  carried a worktree, skip while another no-worktree claim of that session still holds that
+  checkout, and never on a branch that KEEPS the claim (a `releasePending` claim keeps its hold with
+  it). The remaining deletion sites are all worktree-keyed and never took a checkout hold at all.
 - **Machine identity, not a hostname string (#289).** A record's `host` alone false-refuses the
   SAME machine the instant its short hostname drifts from its FQDN, or DHCP/mDNS hands out a
   different label between processes. Comparison is now two-tier: a cheap, pure canonicalization
