@@ -13,8 +13,11 @@
 // step and a human hygiene pass. This split is deliberate (colab-handbook #249).
 //
 // ZERO DEPENDENCIES. Plain Node (>= 18), no npm install, no package.json needed
-// to run it — only `node:fs`, `node:path` and (for the receipt hashes below)
-// the builtin `node:crypto`.
+// to run it — only `node:fs`, `node:path`, (for the receipt hashes below) the
+// builtin `node:crypto`, and `node:child_process` to shell out to `git
+// check-ignore` once per run (see the git-ignore false-positive rule below).
+// It never calls the network, and a repo with no git — or no `git` binary —
+// still lints, it just filters nothing.
 //
 // Usage:
 //   node docs-lint.mjs                 lint the current directory as repo root
@@ -60,6 +63,19 @@
 //     generically resolve (a skill directory, a command) — it is reported as
 //     SKIPPED, never guessed at and never silently miscounted as broken
 //     (check 6; see the long comment at CITATION_CONTEXT below for why).
+//   - a git-IGNORED markdown file is not part of the doc graph and is never
+//     enumerated by any check. Scratch that never ships must not be able to
+//     fail a structural check on the repo — and it was: `.claude/plans/
+//     issue-<N>.md`, the git-excluded, `code-ship`-deleted plan file that
+//     `code-start` writes, contributed 7 of one control run's 10 check-6
+//     failures purely by quoting `§4` in prose, which made the repo lint clean
+//     or dirty depending on who happened to have a session open
+//     (colab-handbook #310, #313). The filter asks `git check-ignore`, not a
+//     hard-coded `.claude/` path, so every adopter's own scratch convention is
+//     covered by the same rule. Untracked-but-NOT-ignored files are still
+//     linted on purpose: a doc you are about to commit is exactly when you
+//     want the feedback. Tracked files are never treated as ignored, even when
+//     they match a pattern — that is `git check-ignore`'s own default.
 //   - every check reports how much it actually read (files, bytes) alongside
 //     its verdict — an all-clear on zero bytes read (a missing directory, a
 //     misconfigured path) must never print identically to an all-clear that
@@ -68,6 +84,7 @@
 import { readFileSync, existsSync, readdirSync, statSync } from "node:fs";
 import { join, dirname, relative, sep } from "node:path";
 import { createHash } from "node:crypto";
+import { spawnSync } from "node:child_process";
 
 // ---------------------------------------------------------------------------
 // CLI + config
@@ -177,6 +194,63 @@ function walkMarkdownFiles(root) {
     }
   }
   return out.sort();
+}
+
+// Git-ignore filter. A file git ignores is not part of the repo's doc graph:
+// it is scratch, it never ships, and `code-ship` may delete it mid-run — so no
+// check may enumerate it (colab-handbook #310). Answered by `git check-ignore`
+// in ONE batched call per enumeration, cached across checks, because asking per
+// file is a process spawn per file.
+//
+// Two properties of `check-ignore` this relies on, both its documented default:
+// a TRACKED file is never reported as ignored (even if a pattern matches it —
+// that needs `--no-index`), and exit 1 means "nothing matched", which is a
+// successful answer, not an error. Anything else — no `git` on PATH, or "not a
+// git repository" (128) — means this filter cannot answer at all, and it then
+// filters NOTHING and every check behaves exactly as it did before this
+// existed. Degrading to the old behaviour is the only safe direction: silently
+// skipping files because git was unavailable would turn a lint into a lie.
+function makeIgnoreFilter(repoRoot) {
+  const cache = new Map(); // repo-relative path -> true when git ignores it
+  let available = true;
+
+  const learn = (paths) => {
+    const unknown = paths.filter((p) => !cache.has(p));
+    if (!available || unknown.length === 0) return;
+    const res = spawnSync("git", ["-C", repoRoot, "check-ignore", "--stdin", "-z"], {
+      input: unknown.join("\0"),
+      encoding: "utf8",
+      maxBuffer: 64 * 1024 * 1024,
+    });
+    if (res.error || (res.status !== 0 && res.status !== 1)) {
+      available = false;
+      return;
+    }
+    const ignored = new Set((res.stdout ?? "").split("\0").filter(Boolean));
+    for (const p of unknown) cache.set(p, ignored.has(p));
+  };
+
+  return (paths) => {
+    learn(paths);
+    const kept = [];
+    let ignored = 0;
+    for (const p of paths) {
+      if (cache.get(p) === true) ignored++;
+      else kept.push(p);
+    }
+    return { files: kept, ignored };
+  };
+}
+
+// Repo-relative markdown enumeration with the git-ignore filter applied. Every
+// check goes through this rather than calling walkMarkdownFiles directly, so
+// one rule about what belongs to the doc graph holds across all of them.
+// `relDir` scopes the walk (e.g. `docs`) while the returned paths stay
+// repo-relative, which is what findings, receipts and link resolution all use.
+function walkRepoMarkdown(ctx, relDir = "") {
+  const root = relDir === "" ? ctx.repoRoot : join(ctx.repoRoot, relDir);
+  const found = walkMarkdownFiles(root).map((f) => (relDir === "" ? f : `${relDir}/${f}`));
+  return ctx.ignoreFilter(found);
 }
 
 function listDirFiles(root, relDir) {
@@ -402,7 +476,7 @@ function checkOrphans(ctx) {
   const receipt = makeReceipt();
   const check = "2 orphans";
 
-  const allMd = walkMarkdownFiles(repoRoot);
+  const { files: allMd } = walkRepoMarkdown(ctx);
   if (allMd.length === 0) {
     findings.warn(check, "no markdown files found in the repo at all — nothing to check");
     return { receipt };
@@ -425,7 +499,7 @@ function checkOrphans(ctx) {
     }
   }
 
-  const docsFiles = walkMarkdownFiles(join(repoRoot, config.docsDir)).map((f) => `${config.docsDir}/${f}`);
+  const { files: docsFiles } = walkRepoMarkdown(ctx, config.docsDir);
   const gotchasPrefix = `${config.gotchasDir}/`;
   const candidates = docsFiles.filter((f) => !f.startsWith(gotchasPrefix) && !/\/README\.md$/i.test(f));
 
@@ -455,7 +529,7 @@ function checkDraftsInDocs(ctx) {
   const receipt = makeReceipt();
   const check = "3 drafts-in-docs";
 
-  const docsFiles = walkMarkdownFiles(join(repoRoot, config.docsDir)).map((f) => `${config.docsDir}/${f}`);
+  const { files: docsFiles } = walkRepoMarkdown(ctx, config.docsDir);
   const gotchasPrefix = `${config.gotchasDir}/`;
   const candidates = docsFiles.filter((f) => !f.startsWith(gotchasPrefix));
 
@@ -515,7 +589,7 @@ function checkDatedFilesInDocs(ctx) {
   const receipt = makeReceipt();
   const check = "5 dated-files-in-docs";
 
-  const docsFiles = walkMarkdownFiles(join(repoRoot, config.docsDir)).map((f) => `${config.docsDir}/${f}`);
+  const { files: docsFiles } = walkRepoMarkdown(ctx, config.docsDir);
   const gotchasPrefix = `${config.gotchasDir}/`;
   const candidates = docsFiles.filter((f) => !f.startsWith(gotchasPrefix));
 
@@ -621,7 +695,8 @@ function checkGotchaCitations(ctx) {
   const receipt = makeReceipt();
   const check = "6 section-citations";
 
-  const files = walkMarkdownFiles(repoRoot).filter((f) => !f.startsWith(`${config.gotchasDir}/`));
+  const { files: allMd, ignored: ignoredCount } = walkRepoMarkdown(ctx);
+  const files = allMd.filter((f) => !f.startsWith(`${config.gotchasDir}/`));
   const headingCache = new Map(); // repo-relative path -> Set<numberString> | null
 
   const numsFor = (path) => {
@@ -701,7 +776,8 @@ function checkGotchaCitations(ctx) {
   receipt.note =
     `${resolved} citation(s) resolved` +
     (viaRoot ? ` (${viaRoot} by bare name at the repo root, no sibling copy)` : "") +
-    `, ${broken} broken, ${skipped} skipped (unresolvable external artifact), ${literalExamples} literal code-span example(s) ignored`;
+    `, ${broken} broken, ${skipped} skipped (unresolvable external artifact), ${literalExamples} literal code-span example(s) ignored` +
+    (ignoredCount ? `, ${ignoredCount} git-ignored file(s) not enumerated` : "");
   return { receipt };
 }
 
@@ -842,7 +918,7 @@ function main() {
   }
   const config = buildConfig(repoRoot);
   const findings = makeFindings();
-  const ctx = { repoRoot, config, findings };
+  const ctx = { repoRoot, config, findings, ignoreFilter: makeIgnoreFilter(repoRoot) };
 
   const results = [];
   for (const [name, fn] of CHECKS) {
