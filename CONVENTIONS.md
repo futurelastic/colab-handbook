@@ -2017,6 +2017,11 @@ of mid-flight detection would be one nothing can keep. It is caught on the **nex
 which is a real bound rather than a hope: a newly-pushed sibling ref moves `code-triage`
 §0's branch digest, so the next ping cannot short-circuit and takes a full pass.
 
+The alternatives weighed and rejected — including a live re-check at ship time, and a
+path-keyed check whose false-positive rate was measured at 6-of-6 on this repo's own
+history — are recorded in
+[`docs/adr/316-group-serialisation-enforced-at-triage-and-ship.md`](docs/adr/316-group-serialisation-enforced-at-triage-and-ship.md).
+
 #### Scope — diagnosing across repos is not license to act in them
 
 **Reading and diagnosing across repos to find a root cause is expected.** **Acting in
