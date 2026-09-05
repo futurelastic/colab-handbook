@@ -68,11 +68,21 @@ function writeState(fx, { worktrees = {}, claims = {}, ports = {} } = {}) {
   );
 }
 
+// #317: the agent-anchor env vars are neutralised for the same reason #237 neutralised
+// COLAB_HUMAN elsewhere — a green test must never depend on WHO ran the suite. `place.resolveAnchor`
+// adopts CLAUDE_PID as a `'verified'` anchor when it is alive and an ancestor of the invocation,
+// and `ownsAnchor` then treats every hold taken under it as the caller's own, so two fixtures
+// pretending to be different sessions would silently become one writer here while the same file
+// stayed green on CI, where those vars are unset.
 function doctor(fx, args, extraEnv = {}) {
   const r = spawnSync('node', [COLAB, 'doctor', '--json', ...args], {
     cwd: fx.work,
     encoding: 'utf8',
-    env: { ...process.env, COLAB_HOME: fx.home, COLAB_SESSION: '', COLAB_SESSION_NAME: '', ...extraEnv },
+    env: {
+      ...process.env, COLAB_HOME: fx.home, COLAB_SESSION: '', COLAB_SESSION_NAME: '',
+      CLAUDE_PID: '', CLAUDECODE: '', AI_AGENT: '',
+      ...extraEnv,
+    },
   });
   assert.strictEqual(r.status, 0, r.stderr);
   return JSON.parse(r.stdout);

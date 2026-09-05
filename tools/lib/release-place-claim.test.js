@@ -72,6 +72,16 @@ function fixture({ withOrigin = false } = {}) {
   return { root, work, home, origin, g };
 }
 
+// #317: the agent-anchor env vars are neutralised for the same reason #237 neutralised
+// COLAB_HUMAN above — a green test must never depend on WHO ran the suite. `place.resolveAnchor`
+// adopts CLAUDE_PID as a `'verified'` anchor when it is alive and an ancestor of the invocation,
+// and `ownsAnchor` then treats every hold taken under it as the caller's own. Run this file from
+// inside an agent session with those vars set and every child `colab` here shares ONE verified
+// anchor, so two fixtures pretending to be different sessions become one writer and the
+// different-holder refusals below silently stop being exercised — while the same file stays green
+// on CI, where the vars are unset. Measured exactly that: 9 tests across 3 files passed on a
+// runner and failed on an agent's machine. Tests that WANT the verified-anchor path set CLAUDE_PID
+// explicitly through `extraEnv`.
 function colab(fx, args, extraEnv = {}) {
   const r = spawnSync('node', [COLAB, ...args], {
     encoding: 'utf8',
@@ -81,6 +91,9 @@ function colab(fx, args, extraEnv = {}) {
       COLAB_SESSION: '',
       COLAB_SESSION_NAME: '',
       COLAB_HUMAN: '', // never inherited — a green test must not depend on the developer's shell
+      CLAUDE_PID: '',
+      CLAUDECODE: '',
+      AI_AGENT: '',
       ...extraEnv,
     },
   });

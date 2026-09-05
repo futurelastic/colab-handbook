@@ -79,10 +79,25 @@ function fixture(projectYml) {
   return { root, origin, work, home, bin, g, greenCi };
 }
 
+// #317: the agent-anchor env vars are neutralised for the same reason #237 neutralised
+// COLAB_HUMAN above — a green test must never depend on WHO ran the suite. `place.resolveAnchor`
+// adopts CLAUDE_PID as a `'verified'` anchor when it is alive and an ancestor of the invocation,
+// and `ownsAnchor` then treats every hold taken under it as the caller's own. Run this file from
+// inside an agent session with those vars set and every child `colab` here shares ONE verified
+// anchor, so two fixtures pretending to be different sessions become one writer and the
+// different-holder refusals below silently stop being exercised — while the same file stays green
+// on CI, where the vars are unset. Measured exactly that: 9 tests across 3 files passed on a
+// runner and failed on an agent's machine. Tests that WANT the verified-anchor path set CLAUDE_PID
+// explicitly through `extraEnv`.
 function colab(fx, args, extraEnv = {}) {
   const r = spawnSync('node', [COLAB, ...args], {
     encoding: 'utf8',
-    env: { ...process.env, PATH: `${fx.bin}:${process.env.PATH}`, COLAB_HOME: fx.home, COLAB_SESSION: '', COLAB_SESSION_NAME: '', ...extraEnv },
+    env: {
+      ...process.env, PATH: `${fx.bin}:${process.env.PATH}`, COLAB_HOME: fx.home,
+      COLAB_SESSION: '', COLAB_SESSION_NAME: '',
+      CLAUDE_PID: '', CLAUDECODE: '', AI_AGENT: '',
+      ...extraEnv,
+    },
   });
   return { code: r.status, out: r.stdout || '', err: r.stderr || '' };
 }
@@ -124,6 +139,13 @@ test('ship refuses when a LIVE place-claim on the trunk checkout is held by a di
   assert.notStrictEqual(r.code, 0, r.out + r.err);
   assert.match(r.err, /refusing/);
   assert.match(r.err, /place .* is held by session/);
+  // #317: the refusal now names WHICH of the three cases this is. `live-other` here is also the
+  // regression sentinel for `ownsAnchor`'s term 3: the hold was written by a `colab place acquire`
+  // whose anchor is this test process's own parent (`anchorProof: 'default'`), and the command
+  // under test is a descendant of that same parent — so terms 1/2/4/5 alone would return "own",
+  // it would self-own a live FOREIGN hold, and this assertion would read `own` instead. If that
+  // ever happens, #242 has been reopened.
+  assert.match(r.err, /class: live-other/);
   // Never offered as a self-service escape hatch — the only remedy named is the human-gated one.
   assert.doesNotMatch(r.err + r.out, /re-run with --force/);
   assert.doesNotMatch(r.err + r.out, /--force to (take|clear|override)/);
@@ -140,6 +162,62 @@ test('ship refuses when a LIVE place-claim on the trunk checkout is held by a di
   const rec = st.places[fs.realpathSync(fx.work)];
   assert.ok(rec, 'the other session\'s place-claim must still be recorded');
   assert.strictEqual(rec.session, 'session_other-holder');
+});
+
+// --- #317: ship must not destroy a hold it merely renewed, and must not refuse its own ----------
+
+test('#317: ship on a checkout its OWN claim already holds leaves that hold in place (the 8.5h specimen)', () => {
+  const fx = fixture(PROJECT_YML_TIER_B);
+  branchWithCommit(fx, 'feat/own-hold-7', 'g.txt', 'feat: own hold');
+  fx.greenCi('main');
+
+  // A no-worktree `colab claim` mints the checkout place-claim (`takingPlace`), then the same
+  // session ships. `--branch` is what lets `resolveShipSession` FIND that claim and so resolve the
+  // identity string: its filter is worktree-keyed or branch-keyed, and a claim carrying neither is
+  // invisible to it — which is the specimen's own shape, covered by the anchor test below.
+  const claimed = colab(fx, ['claim', '7', '--repo', fx.work, '--branch', 'feat/own-hold-7', '--session', 'session_shipper']);
+  assert.strictEqual(claimed.code, 0, claimed.out + claimed.err);
+  const key = fs.realpathSync(fx.work);
+  const before = readState(fx).places[key];
+  assert.ok(before, 'the claim must have taken the checkout hold');
+
+  const r = colab(fx, ['ship', '--branch', 'feat/own-hold-7', '--repo', fx.work], { COLAB_SESSION: 'session_shipper' });
+  assert.strictEqual(r.code, 0, r.out + r.err);
+  assert.match(r.out, /already held by this session/);
+
+  // BEFORE #317 this record was gone: ship's acquire overwrote the claim's hold, and its cleanup
+  // deleted the record on the way out — leaving the claim standing with nothing holding the
+  // checkout for it. The claim is still open here, so its hold must survive its own ship.
+  const after = readState(fx).places[key];
+  assert.ok(after, "the claim's hold must survive the ship");
+  assert.strictEqual(after.session, 'session_shipper');
+  assert.strictEqual(after.since, before.since, 'left in place, not re-taken (a re-acquire would reset `since`)');
+});
+
+test('#317: a ship whose session STRING does not match is still its own holder under a verified anchor', () => {
+  const fx = fixture(PROJECT_YML_TIER_B);
+  branchWithCommit(fx, 'feat/anchor-own-here', 'g.txt', 'feat: anchor own');
+  fx.greenCi('main');
+
+  // CLAUDE_PID = this test process, a real ancestor of both child invocations — `resolveAnchor`
+  // rule 2 fires for real, so the hold is recorded `anchorProof: 'verified'`.
+  // Claimed with NEITHER --worktree NOR --branch — so `resolveShipSession` cannot find this claim
+  // and ship presents a blank/other identity. The branch name deliberately carries no issue number,
+  // for the same reason: this is the specimen, where ship and its own claim never met.
+  const agent = { CLAUDE_PID: String(process.pid) };
+  const claimed = colab(fx, ['claim', '8', '--repo', fx.work, '--session', 'coding-dashboard-1545'], agent);
+  assert.strictEqual(claimed.code, 0, claimed.out + claimed.err);
+  const key = fs.realpathSync(fx.work);
+  assert.strictEqual(readState(fx).places[key].anchorProof, 'verified');
+
+  // The specimen: ship resolves its identity from the worktree/branch-keyed claim, and a
+  // no-worktree claim carries `branch: null`, so it presented a session the hold does not name.
+  // That was an 8.5-hour trunk stall; it is now class `own`.
+  const r = colab(fx, ['ship', '--branch', 'feat/anchor-own-here', '--repo', fx.work],
+    { ...agent, COLAB_SESSION: 'a-session-string-the-hold-does-not-carry' });
+  assert.strictEqual(r.code, 0, r.out + r.err);
+  assert.match(r.out, /already held by this session/);
+  assert.strictEqual(readState(fx).places[key].session, 'coding-dashboard-1545', 'not overwritten either');
 });
 
 test('ship proceeds when the only place record on the checkout is a DEAD holder (pid gone) — liveness is re-derived, not trusted', () => {
@@ -225,6 +303,13 @@ test('promote refuses when a LIVE place-claim on the main checkout is held by a 
   assert.notStrictEqual(r.code, 0, r.out + r.err);
   assert.match(r.err, /refusing/);
   assert.match(r.err, /place .* is held by session/);
+  // #317: the refusal now names WHICH of the three cases this is. `live-other` here is also the
+  // regression sentinel for `ownsAnchor`'s term 3: the hold was written by a `colab place acquire`
+  // whose anchor is this test process's own parent (`anchorProof: 'default'`), and the command
+  // under test is a descendant of that same parent — so terms 1/2/4/5 alone would return "own",
+  // it would self-own a live FOREIGN hold, and this assertion would read `own` instead. If that
+  // ever happens, #242 has been reopened.
+  assert.match(r.err, /class: live-other/);
   assert.doesNotMatch(r.err + r.out, /re-run with --force/);
   assert.doesNotMatch(r.err + r.out, /--force to (take|clear|override)/);
 

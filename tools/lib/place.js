@@ -59,10 +59,21 @@
  * MANDATORY at the two call sites that mint a shared-checkout hold, so the gap is closed by requiring
  * identity up front rather than by weakening what counts as a match here. See `conflict`'s own
  * doc comment for the full argument, including a falsifier run that measured agent tool calls
- * NOT sharing a stable pid across commands, which is what rules pid out as a fix. `resolveAnchor`
- * (#288, below) governs a DIFFERENT question — whether a recorded pid may ever be PROBED for
- * liveness at all — and leaves this exemption rule, and every word of it above, untouched: pid stays
- * a message-only `likelySelf` hint here no matter which `pidKind` produced it.
+ * NOT sharing a stable pid across commands, which is what rules a BARE pid out as a fix.
+ * `resolveAnchor` (#288, below) governs a DIFFERENT question — whether a recorded pid may ever be
+ * PROBED for liveness at all — and leaves this exemption rule untouched.
+ *
+ * IDENTITY GAINED A SECOND, INDEPENDENT PROOF IN #317 — AND THE PARAGRAPH ABOVE STILL HOLDS. A hold
+ * whose recorded anchor process is PROVABLY this invocation's own (`ownsAnchor`: `pidKind: 'anchor'`
+ * AND `anchorProof` `'verified'`/`'declared'` AND alive AND containing this pid right now) is the
+ * caller's, whatever string either side carries. That is not the pid match rejected above: the
+ * rejected one was `process.ppid`, a parent shell two unrelated commands share, and every record
+ * carrying one — `anchorProof: 'default'`, plus every record written before #317 — is excluded by
+ * construction and always will be. The population that gained self-recognition is the one #288
+ * taught this module to identify properly in the first place: a long-lived agent session process,
+ * verified as an ancestor at write time. It was measured being locked out by its own hold for 8.5
+ * hours. `sessionName` remains never an ownership key, on any path. Full argument: `ownsAnchor`, and
+ * docs/adr/317-anchor-pid-self-ownership.md.
  */
 
 const fs = require('fs');
@@ -108,12 +119,17 @@ function placeKey(pathAbs) {
  *   - `'invocation'` — `pid` is kept ONLY as a human lead for `holderLabel` (#235); it is NEVER
  *     probed, so it can never produce a false "dead" verdict. See `defaultProbe`/`isLive` below.
  *
+ * `anchorProof` (#317) is `resolveAnchor`'s `proof` for that same pid — `'declared'`/`'verified'`
+ * (a pid somebody named or proved), `'default'` (a bare `ppid`, assumed), `'none'`, or `null` for a
+ * record written before this field existed. It is stored ONLY so `ownsAnchor` can tell a session's
+ * own process from whatever shell happened to run the command; nothing about liveness reads it.
+ *
  * `machine` (#289) is this machine's hardware-bound id (`tools/lib/machine.js` `localMachine().id`),
  * recorded alongside `host` so a reader can tell "genuinely a different machine" from "the same
  * machine under a drifted hostname" without re-deriving it — `host` stays what `holderLabel` and
  * every refusal message print, unchanged.
  */
-function holdRecord({ pathAbs, repo, branch = null, host, session, sessionName, pid = null, pidKind, since }) {
+function holdRecord({ pathAbs, repo, branch = null, host, session, sessionName, pid = null, pidKind, anchorProof, since }) {
   return {
     path: placeKey(pathAbs),
     repo,
@@ -124,6 +140,7 @@ function holdRecord({ pathAbs, repo, branch = null, host, session, sessionName, 
     sessionName: sessionName || null,
     pid: pid || null,
     pidKind: pidKind || null,
+    anchorProof: anchorProof || null,
     since: since || new Date().toISOString(),
   };
 }
@@ -131,8 +148,23 @@ function holdRecord({ pathAbs, repo, branch = null, host, session, sessionName, 
 /**
  * Decide what pid a NEW hold should anchor on, and whether that pid may ever be probed (#288).
  * Pure — every real-world source (`alive`, `isAncestor`) is injected, so this is testable with no
- * real process tree. Returns `{ pid, pidKind, why }`; `why` is a short human-readable trace of which
- * rule fired, for callers that want to say more than "trust me" when `--pid` was not given.
+ * real process tree. Returns `{ pid, pidKind, proof, why }`; `why` is a short human-readable trace of
+ * which rule fired, for callers that want to say more than "trust me" when `--pid` was not given.
+ *
+ * `proof` (#317) says HOW the anchor was established, which `pidKind` alone cannot express: rules 1
+ * and 2 below record a pid somebody either NAMED deliberately or PROVED contains this invocation,
+ * while rule 4 records a bare `process.ppid` — the parent SHELL, which two unrelated commands share.
+ * All three are `pidKind: 'anchor'` (all three may be probed for liveness), so a predicate that has
+ * to tell "a session's own process" from "whatever shell happened to run me" needs this second term:
+ *
+ *   `'declared'`  rule 1, numeric — a caller named it and it was verified alive.
+ *   `'verified'`  rule 2 — `CLAUDE_PID`, alive AND proven an ancestor of this invocation.
+ *   `'default'`   rule 4 — `ppid`, assumed, never proven. NOT a self-ownership signal (#242).
+ *   `'none'`      rules 1-`none` and 3 — fail-closed, `pidKind: 'invocation'`.
+ *   absent        every record written before #317 — read exactly like `'default'`: never self-owned.
+ *
+ * `ownsAnchor` below is the only consumer; `defaultProbe`/`isLive` deliberately never read it, so
+ * liveness, `stalePlaces` and every prune path behave identically to before this field existed.
  *
  * Precedence, first match wins:
  *   1. An explicit anchor — `pidOpt` (`--pid <n|none>` at the CLI, or `COLAB_PLACE_PID`). The literal
@@ -156,22 +188,22 @@ function holdRecord({ pathAbs, repo, branch = null, host, session, sessionName, 
 function resolveAnchor({ pidOpt, env = {}, ppid, alive = procs.alive, isAncestor = procs.isAncestor } = {}) {
   if (pidOpt !== undefined && pidOpt !== null && pidOpt !== '') {
     if (String(pidOpt).trim().toLowerCase() === 'none') {
-      return { pid: ppid, pidKind: 'invocation', why: '--pid none: caller states no anchor exists' };
+      return { pid: ppid, pidKind: 'invocation', proof: 'none', why: '--pid none: caller states no anchor exists' };
     }
     const n = Number(pidOpt);
     if (!Number.isFinite(n) || !alive(n)) {
-      return { pid: null, pidKind: null, why: `--pid ${pidOpt} is not a live process`, invalid: true };
+      return { pid: null, pidKind: null, proof: null, why: `--pid ${pidOpt} is not a live process`, invalid: true };
     }
-    return { pid: n, pidKind: 'anchor', why: `--pid ${n}: caller-supplied anchor` };
+    return { pid: n, pidKind: 'anchor', proof: 'declared', why: `--pid ${n}: caller-supplied anchor` };
   }
   const claudePid = Number(env.CLAUDE_PID);
   if (env.CLAUDE_PID && Number.isFinite(claudePid) && alive(claudePid) && isAncestor(claudePid, process.pid)) {
-    return { pid: claudePid, pidKind: 'anchor', why: `CLAUDE_PID ${claudePid}: alive and proven an ancestor` };
+    return { pid: claudePid, pidKind: 'anchor', proof: 'verified', why: `CLAUDE_PID ${claudePid}: alive and proven an ancestor` };
   }
   if (env.CLAUDECODE === '1' || env.AI_AGENT) {
-    return { pid: ppid, pidKind: 'invocation', why: 'agent shell (CLAUDECODE/AI_AGENT), no proven anchor — failing closed' };
+    return { pid: ppid, pidKind: 'invocation', proof: 'none', why: 'agent shell (CLAUDECODE/AI_AGENT), no proven anchor — failing closed' };
   }
-  return { pid: ppid, pidKind: 'anchor', why: 'default: ppid is the long-lived invoking process' };
+  return { pid: ppid, pidKind: 'anchor', proof: 'default', why: 'default: ppid is the long-lived invoking process' };
 }
 
 /**
@@ -308,20 +340,28 @@ function identityGap(rec, self, likelySelf) {
  * side carries a session id (blank-blank); `likelySelf` is additionally true when, in that
  * same blank-blank case, the hold's recorded pid equals `self.pid`.
  *
- * PID IS NEVER AN EXEMPTION KEY (#242). Only a matching, non-blank `session` ever returns
- * `null` here — a pid match is surfaced in the message as a hint, never used to decide
- * held-vs-clear. Two reasons, both measured rather than assumed: (1) this fleet's own
+ * A BARE PID IS NEVER AN EXEMPTION KEY (#242, boundary restated by #317). Two things return `null`
+ * here: a matching, non-blank `session`, and — since #317 — a hold whose PROVEN anchor process
+ * (`anchorProof` `'verified'`/`'declared'`, alive, and containing this invocation right now)
+ * identifies the caller as the same writer. Everything the paragraph below rules out is still ruled
+ * out: a `sessionName` match, a blank-against-blank match, and above all a match on a `'default'` or
+ * legacy pid — `process.ppid`, the parent shell — which is the population the argument is about and
+ * which `ownsAnchor`'s term 3 excludes permanently. The measured falsifier runs below are what that
+ * exclusion exists to honour, so they are kept, not deleted. Two reasons, both measured rather than
+ * assumed: (1) this fleet's own
  * agents are told to pass `--session` as a FLAG, never rely on an `export`, precisely
  * because shell state does not persist between an agent's separate tool calls — and if the
  * shell does not persist, its pid does not either, so pid-matching buys agents nothing; a
  * live falsifier run (two `colab place acquire` calls from two separate tool-call shells)
  * recorded two DIFFERENT pids and the second silently superseded the first because its
  * holder had already died — the self-collision this module has to worry about needs a
- * still-ALIVE prior holder, which the agent-tool-call model rarely produces. (2) `pid` is
- * `process.ppid` — the parent SHELL, not a unique invocation — so two unrelated commands run
- * in the same shell (or a recycled pid) would share one, and this primitive's whole value is
- * refusing when it cannot prove safety: a pid match could exempt a genuine conflict, which is
- * the one failure mode it must never have. The population that genuinely needs self-recognition
+ * still-ALIVE prior holder, which the agent-tool-call model rarely produces. (2) `pid` WAS
+ * `process.ppid` unconditionally — the parent SHELL, not a unique invocation — so two unrelated
+ * commands run in the same shell (or a recycled pid) would share one, and this primitive's whole
+ * value is refusing when it cannot prove safety: a pid match could exempt a genuine conflict, which
+ * is the one failure mode it must never have. Reason (2) is exactly why #317 did NOT simply start
+ * matching on `pid`: it matches only where #288's `resolveAnchor` already replaced that `ppid` with
+ * a pid it PROVED contains the caller, and the shared-shell population keeps refusing. The population that genuinely needs self-recognition
  * across commands (a persistent interactive shell) already has a free, correct fix: `export
  * COLAB_SESSION=<id>` once. `sessionName` is likewise never an exemption key — it is display
  * text a caller picks about the WORK, not a join key, and two concurrent sessions can
@@ -331,7 +371,10 @@ function identityGap(rec, self, likelySelf) {
 function conflict(st, pathAbs, self = {}, probe = defaultProbe) {
   const h = holderOf(st, pathAbs, probe);
   if (!h) return null;
-  if (self && self.session && h.rec.session === self.session) return null; // re-acquire by the same holder
+  // Re-acquire by the same holder — proved by the session string, or (#317) by the anchor process
+  // that took the hold provably containing this invocation. `self.anchorOpts` is the injection seam
+  // for `ownsAnchor`'s process sources; absent, it reads the real process tree.
+  if (ownsPlace(h.rec, self && self.session, (self && self.anchorOpts) || {})) return null;
   const unidentified = !!(self && !self.session && !h.rec.session);
   const likelySelf = !!(unidentified && self.pid && h.rec.pid === self.pid);
 
@@ -405,19 +448,23 @@ function conflict(st, pathAbs, self = {}, probe = defaultProbe) {
  */
 function acquire(st, opts = {}, probe = defaultProbe) {
   const {
-    pathAbs, repo, branch = null, host, session, sessionName, pid = null, pidKind, force = false,
+    pathAbs, repo, branch = null, host, session, sessionName, pid = null, pidKind, anchorProof,
+    anchorOpts = {}, force = false,
   } = opts;
   const key = placeKey(pathAbs);
   const prior = (st && st.places && st.places[key]) || null;
-  const conf = conflict(st, pathAbs, { session, pid }, probe);
+  const conf = conflict(st, pathAbs, { session, pid, anchorOpts }, probe);
   if (conf && !force) return { ok: false, conflict: conf };
-  const rec = holdRecord({ pathAbs, repo, branch, host, session, sessionName, pid, pidKind });
+  const rec = holdRecord({ pathAbs, repo, branch, host, session, sessionName, pid, pidKind, anchorProof });
   st.places = st.places || {};
   st.places[key] = rec;
   // `prior` is reported as superseded only when it was somebody ELSE's — a re-acquire by the same
   // holder (`conflict` returned null on a matching session) is a renewal, not a takeover, and
   // calling it "superseded" would put a scary word in an ordinary message.
-  const sameHolder = !!(prior && session && prior.session === session);
+  // #317: "the same holder" is the same question `conflict` just answered, so it is asked with the
+  // same predicate — a hold this caller's own proven anchor took is a RENEWAL, not a takeover, even
+  // when the session string presented this time differs from the one recorded.
+  const sameHolder = !!(prior && ownsPlace(prior, session, anchorOpts));
   return { ok: true, rec, superseded: prior && !sameHolder ? prior : null };
 }
 
@@ -519,19 +566,173 @@ function syncedStateProblem(colabDir) {
  * different answers to "is this hold mine", and a hold that answers that inconsistently is worse
  * than one that refuses.
  *
- * ⚠ NEVER widen this to `sessionName`, or to `pid`. Both were considered and rejected on measured
- * evidence — see `conflict`'s doc comment above (a consumer that tried name-matching reverted it
- * after a worktree sat beside a live session with a near-identical name and was NOT it) and
- * CONVENTIONS.md, "Place-claims". #306 proposed exactly that widening as one of two candidate
+ * ⚠ NEVER widen THIS function — to `sessionName`, or to `pid`. Both were considered and rejected on
+ * measured evidence — see `conflict`'s doc comment above (a consumer that tried name-matching
+ * reverted it after a worktree sat beside a live session with a near-identical name and was NOT it)
+ * and CONVENTIONS.md, "Place-claims". #306 proposed exactly that widening as one of two candidate
  * fixes; it was rejected for these reasons and the fix went to write time instead. A blank session
- * never matches, including blank-against-blank (#242).
+ * never matches, including blank-against-blank (#242). Every word of that still holds, and this
+ * function's body is unchanged.
+ *
+ * What #317 added is a SECOND, independent proof of the same fact beside it — `ownsAnchor` below —
+ * not a loosening of this one. The boundary it draws is precise, and worth stating here because a
+ * reader arriving at "never widen to pid" needs to know which pid: a `sessionName` is still never an
+ * ownership key on any path; a bare, defaulted or legacy pid (`anchorProof` `'default'` or absent —
+ * #242's `process.ppid`, shared by every command in one shell) is still never one either; only a pid
+ * that was PROVED an ancestor at write time, or explicitly named by a caller, and that still
+ * contains this very invocation, is. Consumers ask `ownsPlace`, which is this OR that.
  */
 function ownsHold(rec, session) {
   return !!session && !!rec && rec.session === session;
 }
 
 /**
- * Release the hold at `pathAbs` IF AND ONLY IF `session` provably owns it — the AUTOMATIC
+ * Is `rec` a hold whose ANCHOR PROCESS provably contains this invocation — i.e. is this the very
+ * session that took the hold, reached through process lineage instead of through a typed string?
+ * (#317.)
+ *
+ * WHY THIS EXISTS. A ship session recovered an issue with a no-worktree claim, which minted a
+ * checkout hold under the identity string `coding-dashboard-1545`. It then shipped, and every later
+ * squash-merge was refused by ITS OWN hold: the identity `colab ship` resolves comes from the
+ * worktree record or a branch-keyed claim, and a no-worktree claim carries `branch: null`, so the
+ * session presented a blank one. `ownsHold` is exact string equality and blank never matches, so a
+ * session was locked out by a lock it had taken itself. One merge in 8.5 hours on that repo, cleared
+ * only when a human ran `COLAB_HUMAN=1 colab place release` at 01:35. The string was never the
+ * durable fact; the process was.
+ *
+ * FIVE TERMS, ALL REQUIRED — and term 3 is the one that keeps #242 closed:
+ *   1. `machine.isLocal(rec)` — an ancestry walk across machines is meaningless (#289).
+ *   2. `rec.pidKind === 'anchor'` — an `'invocation'` pid is a human lead, never a signal (#288).
+ *   3. `rec.anchorProof` is `'verified'` or `'declared'` — the pid was PROVED an ancestor at write
+ *      time, or NAMED by a caller. A `'default'` proof (rule 4: a bare `process.ppid`) and every
+ *      legacy record with no `anchorProof` at all are excluded, permanently.
+ *   4. `alive(rec.pid)` — a dead anchor is class `dead`, never class `own`.
+ *   5. the anchor is this process, or an ancestor of it, RIGHT NOW (`isAncestor`) — not "an env var
+ *      names it" (#288's own lesson), not "equals my ppid" (#242's rejected form).
+ *
+ * ⚠ WHY THIS IS NOT #242 REOPENED, and why term 3 is load-bearing rather than cautious. #242
+ * rejected `rec.pid === self.pid` where `pid` was UNCONDITIONALLY `process.ppid` — the parent shell
+ * — so two unrelated commands sharing one shell shared one pid, and a match could exempt a genuine
+ * conflict. Term 3 excludes exactly that population: a `'default'`-proof record can never be
+ * self-owned no matter how the ancestry walk comes out. This repo's own suite is the falsifier —
+ * `ship-promote-place-claim.test.js` acquires a hold as a deliberately DIFFERENT session through
+ * `colab place acquire`, whose recorded pid is the CLI's `ppid`, the node test runner; the `colab
+ * ship` invocation in the same test is also a child of that runner, so terms 1/2/4/5 alone would
+ * return true and ship would self-own a live foreign hold. Term 3 is what makes that record
+ * ineligible, and that test going red is the sentinel if anybody removes it.
+ *
+ * The equivalence class this admits is ONE verified long-lived session process, which is never
+ * coarser than the `session` string beside it: everything `ownsAnchor` exempts is something the same
+ * session could already exempt by exporting `COLAB_SESSION` once (the remedy #242 named). It removes
+ * the requirement to type that string identically on a later command — which is precisely #306's
+ * complaint — without widening WHO counts as one writer. Falsifier for the whole rule: if two
+ * concurrent writers of one checkout are ever measured sharing a `'verified'` anchor but NOT sharing
+ * a session string, term 5 is insufficient and `docs/adr/317-…` must be superseded.
+ *
+ * ⚠ `sessionName` remains never an ownership key, on any path — display text is not a join key
+ * (#306, and the consumer that measured a false name match and reverted it).
+ *
+ * Every real-world source is injected, so this is testable with no real process tree.
+ */
+function ownsAnchor(rec, { pid = process.pid, alive = procs.alive, isAncestor = procs.isAncestor } = {}) {
+  if (!rec || !rec.pid) return false;
+  if (!machine.isLocal(rec)) return false;                                   // 1
+  if (rec.pidKind !== 'anchor') return false;                                // 2
+  if (rec.anchorProof !== 'verified' && rec.anchorProof !== 'declared') return false; // 3
+  if (!alive(rec.pid)) return false;                                         // 4
+  if (Number(rec.pid) === Number(pid)) return true;                          // 5 — the anchor IS me
+  return !!isAncestor(rec.pid, pid);                                         // 5 — …or contains me
+}
+
+/**
+ * "Is this hold mine?", as every consumer should ask it (#317) — the session string OR the proven
+ * anchor. Two independent proofs of one fact, and a caller that can supply either is the same
+ * writer; neither widens who counts as one writer (see `ownsAnchor`'s doc for that argument).
+ *
+ * `ownsHold`'s own implementation is deliberately untouched: `cmdPlace release`'s `mine` test and
+ * `conflict`'s exemption must stay ONE comparison, so the widening happens here, in a predicate both
+ * call, rather than by two separate edits that could drift.
+ */
+function ownsPlace(rec, session, anchorOpts = {}) {
+  return ownsHold(rec, session) || ownsAnchor(rec, anchorOpts);
+}
+
+
+/**
+ * WHO holds `pathAbs`, relative to ME — one word, computed once, so no consumer re-derives it and
+ * no two consumers disagree (#317). Returns `{cls, rec, live, reason, remedy, conflict}`.
+ *
+ * The live specimen this closes was not a wrong answer; it was an UNCLASSIFIED one. `colab ship`
+ * printed `place "…" is held by session "coding-dashboard-1545"` and stopped — true, and useless:
+ * the reader could not tell from it whether the holder was itself, a corpse, or a live sibling, and
+ * those three need three different next moves. The refusal now names the class and the exact next
+ * command, and two of the six classes are not refusals at all.
+ *
+ *   `free`            no record — proceed.
+ *   `foreign-machine` recorded by another machine — refuse; the sync hazard (#289), unchanged.
+ *   `own`             mine, by session string or proven anchor — proceed, and DO NOT release it at
+ *                     cleanup: a hold this caller renewed is one somebody else's claim may still be
+ *                     relying on (`cmdShip`/`cmdPromote` used to delete it on the way out).
+ *   `dead`            holder confirmed gone — proceed; the record lapses at the next write here.
+ *   `unknown`         liveness unprovable — REFUSE, fail closed. #288's invariant: a record this
+ *                     module cannot disprove is held is never treated as absent and never pruned.
+ *   `live-other`      a live holder that is not me — refuse; `COLAB_HUMAN=1` is the human bar.
+ *
+ * Precedence is `conflict`'s own order, deliberately: `foreign-machine` outranks everything because
+ * it is evidence about the STATE FILE rather than about a process, and `own` outranks `dead`/
+ * `unknown` because a caller's own hold needs no liveness argument at all.
+ *
+ * `conflict` is carried on the result, non-null exactly for the three refusing classes, so a caller
+ * composing a message cannot drift from `conflict()`'s wording — the same guarantee #285 gave the
+ * pre-check and the under-lock check.
+ */
+function classify(st, pathAbs, self = {}, probe = defaultProbe) {
+  const h = holderOf(st, pathAbs, probe);
+  if (!h) return { cls: 'free', rec: null, live: null, reason: 'no record', remedy: null, conflict: null };
+  const anchorOpts = (self && self.anchorOpts) || {};
+  const conf = conflict(st, pathAbs, self, probe);
+  const base = { rec: h.rec, live: h.live, reason: h.reason };
+  if (!machine.isLocal(h.rec)) {
+    return { ...base, cls: 'foreign-machine', conflict: conf, remedy: `COLAB_HUMAN=1 colab place release "${h.rec.path}"` };
+  }
+  if (ownsPlace(h.rec, self && self.session, anchorOpts)) {
+    return { ...base, cls: 'own', conflict: null, remedy: null };
+  }
+  if (h.live === false) return { ...base, cls: 'dead', conflict: null, remedy: null };
+  if (h.live === null) {
+    return { ...base, cls: 'unknown', conflict: conf, remedy: `COLAB_HUMAN=1 colab place release "${h.rec.path}"` };
+  }
+  return { ...base, cls: 'live-other', conflict: conf, remedy: `COLAB_HUMAN=1 colab place release "${h.rec.path}"` };
+}
+
+/**
+ * Drop the record at `pathAbs` IF its holder is CONFIRMED dead — the read-time lapse (#317).
+ *
+ * Read-time liveness already meant a dead holder refuses nothing (`conflict` returns `null` on
+ * `live === false`, and `acquire` supersedes the record). What it did NOT mean was that the record
+ * went away: only `colab doctor --prune` ever removed one, and only when a human thought to run it.
+ * So a dead-anchor hold sat in `colab places` looking like a hold — one on this very repo had sat
+ * for five days — and `colab place release` demanded `COLAB_HUMAN=1` to clear a corpse. This makes
+ * every command that already writes at that path clear it on the way past.
+ *
+ * ⚠ `live === null` is NEVER touched — not "unknown, probably fine", but the exact case #288/#289
+ * fail closed on: an `'invocation'`-anchored hold, or an unreachable foreign-machine one. Pruning on
+ * a signal that was never trustworthy is the failure `stalePlaces` was written to avoid, and this
+ * function must never become a second, weaker copy of it.
+ *
+ * Returns the removed record, or `null` when there was nothing to lapse.
+ */
+function lapseDead(st, pathAbs, probe = defaultProbe) {
+  const key = placeKey(pathAbs);
+  const rec = (st && st.places && st.places[key]) || null;
+  if (!rec) return null;
+  if (isLive(rec, probe).live !== false) return null; // live, or unprovable — #288 fails closed
+  delete st.places[key];
+  return rec;
+}
+
+/**
+ * Release the hold at `pathAbs` IF AND ONLY IF the caller provably owns it — the AUTOMATIC
  * counterpart to `cmdPlace release`'s deliberate, human-typed act (#305).
  *
  * Decide-and-write over the caller's `st`, mirroring `acquire`'s post-#285 shape so the decision
@@ -547,21 +748,35 @@ function ownsHold(rec, session) {
  * adding it to the shared predicate would change `cmdPlace release`'s behaviour, which is beyond
  * what #305/#306 decided.
  *
+ * #317 changed two things here, both additive. Ownership is now `ownsPlace` — the session string OR
+ * the proven anchor — so a claim minted with a mis-shaped `--session` (#306's population) still gives
+ * its hold back. And a CONFIRMED-DEAD holder lapses before ownership is consulted at all, whatever
+ * identity it names: that is what makes every caller of this function a dead-anchor sweeper, instead
+ * of leaving a corpse for `colab doctor --prune` and a human who remembers to run it. An
+ * unprovable (`live === null`) holder is still never touched — #288's invariant.
+ *
  * Returns `{released: false, reason: 'no-record'|'foreign-machine'|'other-session', rec}` or
- * `{released: true, rec}` — `rec` is the record inspected (or removed) so a caller can name the
- * holder it left alone.
+ * `{released: true, rec}` / `{released: true, reason: 'lapsed-dead', rec}` — `rec` is the record
+ * inspected (or removed) so a caller can name the holder it left alone, or the corpse it cleared.
  */
-function releaseOwnedBy(st, pathAbs, session) {
+function releaseOwnedBy(st, pathAbs, session, opts = {}) {
+  const { anchorOpts = {}, probe = defaultProbe } = opts;
   const key = placeKey(pathAbs);
   const rec = (st && st.places && st.places[key]) || null;   // `places` may be absent entirely
   if (!rec) return { released: false, reason: 'no-record', rec: null };
+  // #317: a confirmed-dead holder lapses here, before ownership is even asked — whoever it names.
+  // This is what turns every claim-deletion site into a dead-anchor sweeper without any of them
+  // growing its own liveness logic. `live === null` is untouched (see `lapseDead`).
+  const lapsed = lapseDead(st, pathAbs, probe);
+  if (lapsed) return { released: true, reason: 'lapsed-dead', rec: lapsed };
   if (!machine.isLocal(rec)) return { released: false, reason: 'foreign-machine', rec };
-  if (!ownsHold(rec, session)) return { released: false, reason: 'other-session', rec };
+  if (!ownsPlace(rec, session, anchorOpts)) return { released: false, reason: 'other-session', rec };
   delete st.places[key];
   return { released: true, rec };
 }
 
 module.exports = {
   placeKey, holdRecord, resolveAnchor, defaultProbe, isLive, holderOf, holderLabel, holdAge, conflict, acquire,
-  stalePlaces, unprovablePlaces, syncedStateProblem, ownsHold, releaseOwnedBy,
+  stalePlaces, unprovablePlaces, syncedStateProblem, ownsHold, ownsAnchor, ownsPlace, classify, lapseDead,
+  releaseOwnedBy,
 };

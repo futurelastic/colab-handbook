@@ -477,6 +477,7 @@ test('resolveAnchor: AI_AGENT truthy behaves like CLAUDECODE=1 — fails closed 
   assert.strictEqual(r.pidKind, 'invocation');
 });
 
+
 // --- acquire (#285) ------------------------------------------------------------
 //
 // The decide-and-write half. These are DELIBERATELY deterministic — no processes, no timing, no
@@ -495,6 +496,176 @@ function acquireOpts(session, over = {}) {
     session, sessionName: `name-${session}`, pid: 4242, pidKind: 'anchor', ...over,
   };
 }
+
+// --- #317: `proof` — what KIND of claim the anchor pid represents ------------------------------
+//
+// `pidKind` cannot answer this on its own: rules 1, 2 and 4 all produce `'anchor'`, but only the
+// first two record a pid somebody NAMED or PROVED, while rule 4 records a bare `ppid` — the parent
+// shell #242 rejected as an identity. `ownsAnchor` below is the only consumer.
+
+test('#317 resolveAnchor: --pid <n> alive → proof "declared" — a caller named it', () => {
+  const r = place.resolveAnchor({ pidOpt: '123', env: {}, ppid: 999, alive: () => true, isAncestor: () => false });
+  assert.strictEqual(r.proof, 'declared');
+});
+
+test('#317 resolveAnchor: CLAUDE_PID alive + proven ancestor → proof "verified"', () => {
+  const r = place.resolveAnchor({ env: { CLAUDE_PID: '555' }, ppid: 999, alive: () => true, isAncestor: () => true });
+  assert.strictEqual(r.proof, 'verified');
+});
+
+test('#317 resolveAnchor: the DEFAULT ppid anchor is proof "default" — never a self-ownership signal', () => {
+  const r = place.resolveAnchor({ env: {}, ppid: 999, alive: () => true, isAncestor: () => true });
+  assert.deepStrictEqual({ pidKind: r.pidKind, proof: r.proof }, { pidKind: 'anchor', proof: 'default' });
+});
+
+test('#317 resolveAnchor: both fail-closed rules (--pid none, agent shell) report proof "none"', () => {
+  const none = place.resolveAnchor({ pidOpt: 'none', env: {}, ppid: 999, alive: () => true, isAncestor: () => false });
+  const shell = place.resolveAnchor({ env: { CLAUDECODE: '1' }, ppid: 999, alive: () => true, isAncestor: () => true });
+  assert.deepStrictEqual([none.proof, shell.proof], ['none', 'none']);
+});
+
+test('#317 holdRecord stores anchorProof, and its absence is a legitimate record shape', () => {
+  assert.strictEqual(place.holdRecord({ pathAbs: '/tmp/x', repo: '/tmp/x', host: HOST, session: 's', pid: 7, pidKind: 'anchor', anchorProof: 'verified' }).anchorProof, 'verified');
+  assert.strictEqual(place.holdRecord({ pathAbs: '/tmp/x', repo: '/tmp/x', host: HOST, session: 's' }).anchorProof, null);
+});
+
+// --- #317: ownsAnchor — five terms, and term 3 is what keeps #242 closed -----------------------
+
+const ANC = (candidate, of) => true;   // "the anchor contains me"
+const NOT_ANC = () => false;
+
+function ownRec(over = {}) {
+  return rec({ pid: 555, pidKind: 'anchor', anchorProof: 'verified', ...over });
+}
+
+test('#317 ownsAnchor: all five terms hold → mine', () => {
+  assert.strictEqual(place.ownsAnchor(ownRec(), { pid: 12345, alive: () => true, isAncestor: ANC }), true);
+});
+
+test('#317 ownsAnchor: the anchor being THIS process (not merely an ancestor) is also mine', () => {
+  assert.strictEqual(place.ownsAnchor(ownRec({ pid: 12345 }), { pid: 12345, alive: () => true, isAncestor: NOT_ANC }), true);
+});
+
+test('#317 ownsAnchor: FALSE when any single term fails — term by term', () => {
+  const opts = { pid: 12345, alive: () => true, isAncestor: ANC };
+  // 1. another machine — an ancestry walk there is meaningless (#289)
+  assert.strictEqual(place.ownsAnchor(ownRec({ host: 'elsewhere', machine: 'iokit:00000000-0000-0000-0000-0000000dead0' }), opts), false, 'foreign machine');
+  // 2. an 'invocation' pid is a human lead, never a signal (#288)
+  assert.strictEqual(place.ownsAnchor(ownRec({ pidKind: 'invocation' }), opts), false, 'invocation pidKind');
+  // 3. THE #242 EXCLUSION — a bare/defaulted ppid anchor
+  assert.strictEqual(place.ownsAnchor(ownRec({ anchorProof: 'default' }), opts), false, 'default proof');
+  // 3. …and every record written before #317 carries no proof at all
+  assert.strictEqual(place.ownsAnchor(ownRec({ anchorProof: undefined }), opts), false, 'legacy record, no proof field');
+  // 4. a dead anchor is class `dead`, never class `own`
+  assert.strictEqual(place.ownsAnchor(ownRec(), { ...opts, alive: () => false }), false, 'dead anchor');
+  // 5. alive, but it does not contain this invocation
+  assert.strictEqual(place.ownsAnchor(ownRec(), { ...opts, isAncestor: NOT_ANC }), false, 'not an ancestor');
+  // and a record with no pid at all
+  assert.strictEqual(place.ownsAnchor(ownRec({ pid: null }), opts), false, 'no pid recorded');
+});
+
+test('#317 ownsAnchor: the #242 SHAPE is still refused — same pid, defaulted proof, is NOT ownership', () => {
+  // Two unrelated commands sharing one parent SHELL is exactly what #242 measured and rejected.
+  // The pid matches this invocation's own; the proof says nobody ever verified it. Still false.
+  const shellRec = rec({ pid: 12345, pidKind: 'anchor', anchorProof: 'default', session: 'someone-else' });
+  assert.strictEqual(place.ownsAnchor(shellRec, { pid: 12345, alive: () => true, isAncestor: ANC }), false);
+  assert.strictEqual(place.ownsPlace(shellRec, 'me', { pid: 12345, alive: () => true, isAncestor: ANC }), false);
+});
+
+test('#317 ownsHold is UNCHANGED — the widening lives in ownsPlace, not in it', () => {
+  const r = ownRec({ session: 'sess-A', sessionName: 'display' });
+  assert.strictEqual(place.ownsHold(r, 'sess-A'), true);
+  assert.strictEqual(place.ownsHold(r, 'sess-B'), false);
+  assert.strictEqual(place.ownsHold(r, 'display'), false, 'sessionName is never an ownership key');
+  assert.strictEqual(place.ownsHold(r, ''), false);
+  assert.strictEqual(place.ownsHold(rec({ session: null }), null), false, 'blank against blank is never a match');
+});
+
+test('#317 ownsPlace: either proof alone is enough, and neither present is not', () => {
+  const anchorOpts = { pid: 12345, alive: () => true, isAncestor: ANC };
+  assert.strictEqual(place.ownsPlace(ownRec({ session: 'sess-A' }), 'sess-A', {}), true, 'string alone');
+  assert.strictEqual(place.ownsPlace(ownRec({ session: 'sess-A' }), 'sess-B', anchorOpts), true, 'anchor alone');
+  assert.strictEqual(place.ownsPlace(ownRec({ anchorProof: 'default' }), 'sess-B', anchorOpts), false, 'neither');
+});
+
+// --- #317: conflict — the specimen, and the population it must keep refusing -------------------
+
+test('#317 conflict: a session locked out by its OWN hold is no longer a conflict (the specimen)', () => {
+  // coding-dashboard, 2026-09-05: a ship session's own no-worktree claim held the checkout under
+  // `coding-dashboard-1545`; the ship then presented a BLANK session and was refused by its own
+  // lock for 8.5 hours. Blank never matched then, and still never matches — the anchor does.
+  const st = { places: { [place.placeKey('/tmp/repo')]: ownRec({ session: 'coding-dashboard-1545' }) } };
+  const anchorOpts = { pid: 12345, alive: () => true, isAncestor: ANC };
+  assert.strictEqual(place.conflict(st, '/tmp/repo', { session: '', anchorOpts }, ALIVE), null);
+  assert.strictEqual(place.conflict(st, '/tmp/repo', { session: 'a-different-string', anchorOpts }, ALIVE), null);
+});
+
+test('#317 conflict: the SAME record with a defaulted anchor still refuses — the #242 population', () => {
+  const st = { places: { [place.placeKey('/tmp/repo')]: ownRec({ session: 'other', anchorProof: 'default' }) } };
+  const anchorOpts = { pid: 12345, alive: () => true, isAncestor: ANC };
+  const c = place.conflict(st, '/tmp/repo', { session: 'mine', anchorOpts }, ALIVE);
+  assert.ok(c, 'must still be a conflict');
+  assert.strictEqual(c.kind, 'held');
+});
+
+// --- #317: classify — one word, six answers, computed once ------------------------------------
+
+test('#317 classify: every class, in precedence order', () => {
+  const key = (p) => place.placeKey(p);
+  const anchorOpts = { pid: 12345, alive: () => true, isAncestor: ANC };
+  const mk = (r) => ({ places: { [key('/tmp/repo')]: r } });
+
+  assert.strictEqual(place.classify({ places: {} }, '/tmp/repo', {}, ALIVE).cls, 'free');
+  assert.strictEqual(place.classify(mk(rec({ host: 'elsewhere', machine: 'iokit:00000000-0000-0000-0000-0000000dead0' })), '/tmp/repo', {}, ALIVE).cls, 'foreign-machine');
+  assert.strictEqual(place.classify(mk(ownRec({ session: 'other' })), '/tmp/repo', { session: '', anchorOpts }, ALIVE).cls, 'own');
+  assert.strictEqual(place.classify(mk(rec({ session: 'other', pidKind: 'anchor' })), '/tmp/repo', { session: 'mine' }, DEAD).cls, 'dead');
+  assert.strictEqual(place.classify(mk(rec({ session: 'other', pidKind: 'invocation' })), '/tmp/repo', { session: 'mine' }, ALIVE).cls, 'unknown');
+  assert.strictEqual(place.classify(mk(rec({ session: 'other', pidKind: 'anchor' })), '/tmp/repo', { session: 'mine' }, ALIVE).cls, 'live-other');
+});
+
+test('#317 classify: `own` and `dead` carry NO conflict; the three refusing classes carry one and a remedy', () => {
+  const key = place.placeKey('/tmp/repo');
+  const anchorOpts = { pid: 12345, alive: () => true, isAncestor: ANC };
+  const own = place.classify({ places: { [key]: ownRec({ session: 'other' }) } }, '/tmp/repo', { session: '', anchorOpts }, ALIVE);
+  assert.strictEqual(own.conflict, null);
+  assert.strictEqual(own.remedy, null);
+
+  const dead = place.classify({ places: { [key]: rec({ pidKind: 'anchor' }) } }, '/tmp/repo', { session: 'mine' }, DEAD);
+  assert.strictEqual(dead.conflict, null);
+
+  const other = place.classify({ places: { [key]: rec({ session: 'other', pidKind: 'anchor' }) } }, '/tmp/repo', { session: 'mine' }, ALIVE);
+  assert.ok(other.conflict && other.conflict.message);
+  assert.match(other.remedy, /COLAB_HUMAN=1 colab place release/);
+});
+
+// --- #317: lapseDead — and the one record it must never touch ---------------------------------
+
+test('#317 lapseDead: a CONFIRMED-dead holder is removed and handed back', () => {
+  const key = place.placeKey('/tmp/repo');
+  const st = { places: { [key]: rec({ session: 'gone', pidKind: 'anchor' }) } };
+  const removed = place.lapseDead(st, '/tmp/repo', DEAD);
+  assert.strictEqual(removed.session, 'gone');
+  assert.deepStrictEqual(st.places, {});
+});
+
+test('#317 lapseDead: `live: null` is NEVER touched — the #288/#289 fail-closed invariant', () => {
+  const key = place.placeKey('/tmp/repo');
+  // an 'invocation' anchor (#288) and a foreign-machine record (#289) are the two unprovable shapes
+  for (const r of [rec({ pidKind: 'invocation' }), rec({ host: 'elsewhere', machine: 'iokit:00000000-0000-0000-0000-0000000dead0' })]) {
+    const st = { places: { [key]: r } };
+    assert.strictEqual(place.lapseDead(st, '/tmp/repo'), null);
+    assert.strictEqual(Object.keys(st.places).length, 1, 'unprovable is not dead — it stays');
+  }
+});
+
+test('#317 lapseDead: a live holder stays, and a missing record is a quiet null', () => {
+  const key = place.placeKey('/tmp/repo');
+  const st = { places: { [key]: rec({ pidKind: 'anchor' }) } };
+  assert.strictEqual(place.lapseDead(st, '/tmp/repo', ALIVE), null);
+  assert.strictEqual(Object.keys(st.places).length, 1);
+  assert.strictEqual(place.lapseDead({ places: {} }, '/tmp/repo', DEAD), null);
+  assert.strictEqual(place.lapseDead({}, '/tmp/repo', DEAD), null);
+});
 
 test('acquire: on clear ground it writes exactly one record and reports no supersede', () => {
   const st = emptySt();
@@ -592,10 +763,13 @@ test('releaseOwnedBy: the owning session releases its own hold', () => {
   assert.deepStrictEqual(st.places, {});
 });
 
-test('releaseOwnedBy: a different session releases NOTHING and says why', () => {
+test('releaseOwnedBy: a different LIVE session releases NOTHING and says why', () => {
+  // #317: the probe is now part of the fixture rather than an implicit "whatever the machine says".
+  // A holder this call cannot prove alive is a CORPSE, and a corpse lapses (see the dead-anchor test
+  // below) — so the ownership rule under test here is only observable against a live holder.
   const st = emptySt();
   place.acquire(st, acquireOpts('sess-A'), ALIVE);
-  const r = place.releaseOwnedBy(st, '/tmp/repo-285', 'sess-B');
+  const r = place.releaseOwnedBy(st, '/tmp/repo-285', 'sess-B', { probe: ALIVE });
   assert.strictEqual(r.released, false);
   assert.strictEqual(r.reason, 'other-session');
   assert.strictEqual(r.rec.session, 'sess-A', 'the record it left alone is handed back, to be named');
@@ -605,7 +779,7 @@ test('releaseOwnedBy: a different session releases NOTHING and says why', () => 
 test('releaseOwnedBy: a blank session releases nothing — an unidentified caller proves nothing', () => {
   const st = emptySt();
   place.acquire(st, acquireOpts('sess-A'), ALIVE);
-  assert.strictEqual(place.releaseOwnedBy(st, '/tmp/repo-285', '').released, false);
+  assert.strictEqual(place.releaseOwnedBy(st, '/tmp/repo-285', '', { probe: ALIVE }).released, false);
   assert.strictEqual(Object.keys(st.places).length, 1);
 });
 
