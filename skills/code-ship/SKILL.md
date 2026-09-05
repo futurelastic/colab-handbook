@@ -323,6 +323,27 @@ codegen) if the repo has one, and commit:
 git add -A && git commit -m "chore(sync): merge <base> + regen generated files"
 ```
 
+**`<base>` is the only ref this step may merge — never a sibling member's branch.** If
+this branch carries a `group:` label and a sibling still has unmerged work you want, the
+answer is to sequence behind it or group onto it (`CONVENTIONS.md` [§5](../../CONVENTIONS.md#grouping--issues-that-must-share-one-branch), *Grouping*),
+never to pull it in here. Measured on coding-dashboard, 2026-09-05 — that repo's ADR
+`docs/adr/1530-ship-lanes-reorg.md`, section 2 L5: one branch in `group:cockpit-fidelity`
+carried **8 `chore(sync)` commits** pulling siblings' fixes ahead of their own trunk
+merge. The cost is not the noise — it is that a branch holding a sibling's unlanded
+commits can no longer land independently of that sibling, so each waits on the other and
+neither converges, while both keep burning CI rebasing around each other. The commit
+message shape above is exactly the one that failure wore, which is why this paragraph
+sits under it.
+
+**Carrying a `group:` label with a sibling ref still live? You are landing one of N.**
+Land yours against the current `<base>` and **re-derive the contention here** — `colab
+holders` on the group's own paths — rather than trusting a triage snapshot. Triage names
+a carrier and a rebase order at pass time
+([`code-triage` §3](../code-triage/SKILL.md#3-group--this-is-a-correctness-constraint-not-tidiness),
+[§6](../code-triage/SKILL.md#6-report--make-it-directly-actionable)); trunk has very likely
+moved since, and a verdict stamped to an older trunk sha is exactly the perishable kind
+that must not be treated as current at merge time.
+
 **Before the gate, assert the merge actually incorporated `<base>` — a green
 gate is not evidence of this, only of self-consistency:**
 
@@ -744,6 +765,12 @@ confirms the double-count is gone.
       against a copy of prod data, 0 rows left at the old rate.
 - [ ] moved to #91 — the reporting-UI column was out of scope for this branch."
 ```
+
+**A group that is not fully closed by this merge: name the siblings that must now rebase.**
+The squash just moved trunk, so every remaining member branch in the `group:<key>` is now
+behind it — say which refs those are and onto which sha, so the next ship is not left
+re-deriving it from scratch. Only when the group survives this merge: once every member is
+closed, the label is spent and B2d tears the object down instead.
 
 **UI-affecting issues additionally require a screenshot of the BUILT app**, not a DOM
 assertion and not a static mockup with tokens redefined to match the design system —

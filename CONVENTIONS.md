@@ -1982,6 +1982,46 @@ existed. Deletion removes it from future queries only — never touches closed i
 own timelines or the durable `Because:` comment. Only `group:*` labels are ever in scope
 — never the operational set (`in-progress`, `deps-checked`, `agent-filed`, `epic`).
 
+**The label is a serialisation contract, so the group is ONE unit of work.** It is
+realized as one branch — always, on
+[`writes: isolated`](#writes--the-trunk-direct-veto-and-the-two-things-that-make-a-branch-mandatory);
+on a repo permitting trunk-direct, either one branch or one attended trunk-direct
+place-claim. **A second live branch across a group's members is a finding, never a
+spawn.** Two enforcement points, and neither may be mistaken for the other:
+
+- **triage prevents and names** — a triage pass never offers a `start:` line that would
+  mint a second branch in a group, and it names every second live branch it can see at
+  pass time as a finding, with the **carrier** branch and the **rebase order** so the
+  members can be landed one at a time.
+- **ship orders** — a ship lands one member branch at a time against a re-fetched base,
+  and **never merges a sibling member's branch to borrow its unmerged fix**: sequence
+  behind it or group onto it (the same rule *Writing a conclusion down* below states for
+  a file-level group), because a branch carrying a sibling's unlanded commits cannot land
+  independently of it, and then neither converges.
+
+`code-start` is not a third enforcement point — it is the reader that honours the offer.
+
+Measured on coding-dashboard, 2026-09-05 — that repo's ADR
+`docs/adr/1530-ship-lanes-reorg.md`, section 2 L5 and section 7 item 7:
+`group:cockpit-fidelity`, whose evidence line read "collide on CockpitView.tsx",
+held 6 open issues and 3+ live parallel branches; two overlapped on
+`src/console/CockpitView.tsx`, `src/i18n/messages/cockpit.ts` and `CLAUDE.md`, and one
+carried **8 `chore(sync)` commits** pulling siblings' fixes ahead of their own trunk
+merge. They burned CI rebasing around each other and none converged. Nothing had read the
+label: the dashboard's `planShipOrder` never consulted it, and its pairwise conflict check
+is same-beat only.
+
+**The limit, stated rather than rounded up: triage sees pass time only.** A second branch
+created after a pass ends is invisible to that pass — no skill here polls, and a promise
+of mid-flight detection would be one nothing can keep. It is caught on the **next** pass,
+which is a real bound rather than a hope: a newly-pushed sibling ref moves `code-triage`
+§0's branch digest, so the next ping cannot short-circuit and takes a full pass.
+
+The alternatives weighed and rejected — including a live re-check at ship time, and a
+path-keyed check whose false-positive rate was measured at 6-of-6 on this repo's own
+history — are recorded in
+[`docs/adr/316-group-serialisation-enforced-at-triage-and-ship.md`](docs/adr/316-group-serialisation-enforced-at-triage-and-ship.md).
+
 #### Scope — diagnosing across repos is not license to act in them
 
 **Reading and diagnosing across repos to find a root cause is expected.** **Acting in

@@ -1,6 +1,6 @@
 ---
 name: code-triage
-description: "Decide what to work on next in ONE repo. Takes every open Issue, discards the ones already shipped and the ones someone else holds, groups what must move together (issues touching the same files must serialize — usually one branch, or a place-claim on any repo not declaring writes: isolated), orders what remains by blast radius, and says which groups can be started RIGHT NOW — including whether the repo's trunk CI is alive enough to merge into. Outputs claim + branch commands that feed straight into code-start. Flags a group judged genuinely hard with a needs-plan label + one-line reason, for code-plan to draft against later — never a plan of its own. Also asks, per ready group, whether the work is batch-mechanical with a usable oracle, and tags the minority that qualifies with a mechanical-lane label + suggested batch size, for a cheap mechanical-work engine to pick up — never routes or dispatches it itself. Cheap to re-run only when §0 is honoured first: a five-input fingerprint compare that ends a genuine no-change ping in three calls — a convention the executing agent follows, not a gate anything enforces, so every run opens by naming which §0 outcome it took (unchanged / changed:<inputs> / no usable cache). Trigger phrases: 'what should I work on', 'triage the issues', 'what can we start', 'plan the next session', 'group the open issues', 'what is ready to pick up', 'sort the backlog'; and — when this session's last act was a triage — the re-ping forms 'again', 'anything new?', 'check again', 'anything to pick up yet?', or a bare 'go'. Runs before code-start; pairs with code-start and code-wrap."
+description: "Decide what to work on next in ONE repo. Takes every open Issue, discards the ones already shipped and the ones someone else holds, groups what must move together (issues touching the same files must serialize — usually one branch, or a place-claim on any repo not declaring writes: isolated), orders what remains by blast radius, and says which groups can be started RIGHT NOW — including whether the repo's trunk CI is alive enough to merge into. Outputs claim + branch commands that feed straight into code-start. A group is ONE unit of work, so a second live branch across its members is reported as a finding naming the carrier branch and the rebase order — never offered as a second spawn. Flags a group judged genuinely hard with a needs-plan label + one-line reason, for code-plan to draft against later — never a plan of its own. Also asks, per ready group, whether the work is batch-mechanical with a usable oracle, and tags the minority that qualifies with a mechanical-lane label + suggested batch size, for a cheap mechanical-work engine to pick up — never routes or dispatches it itself. Cheap to re-run only when §0 is honoured first: a five-input fingerprint compare that ends a genuine no-change ping in three calls — a convention the executing agent follows, not a gate anything enforces, so every run opens by naming which §0 outcome it took (unchanged / changed:<inputs> / no usable cache). Trigger phrases: 'what should I work on', 'triage the issues', 'what can we start', 'plan the next session', 'group the open issues', 'what is ready to pick up', 'sort the backlog'; and — when this session's last act was a triage — the re-ping forms 'again', 'anything new?', 'check again', 'anything to pick up yet?', or a bare 'go'. Runs before code-start; pairs with code-start and code-wrap."
 ---
 
 # code-triage — what should we work on next?
@@ -306,8 +306,11 @@ below still happen, this is purely an addition at the top.
 is lost the moment the report scrolls away*. The same is true of the report itself. Write
 the §6 output into `$CACHE` alongside the fingerprint — the ranked **ready** groups (with
 each soft-ready note, §5.1, or the re-print loses the one thing that made it startable),
-the **blocked** bucket with its named blockers, **taken**, and **close these**. Without it the
-short-circuit is useless: it would announce that nothing changed and have nothing to show.
+the **blocked** bucket with its named blockers, **taken**, **close these**, and the
+group-level **findings** (§3, §6 — or the short-circuit re-print silently loses the one
+thing that made a group unsafe to spawn into, which is exactly the state a re-ping most
+needs to be told about). Without it the short-circuit is useless: it would announce that
+nothing changed and have nothing to show.
 
 Record the **scope** of the conclusion with it (see code-sweep's scoped mode; triage's
 single-issue mode below is the same shape), and apply the coverage rule:
@@ -331,7 +334,7 @@ half-matching:
 
 ```json
 {
-  "version": "code-triage/3",
+  "version": "code-triage/4",
   "scope": "whole-repo",
   "ranAt": "<ISO8601>",
   "fingerprint": {
@@ -342,7 +345,8 @@ half-matching:
     "branches": "<16hex>"
   },
   "lastRun": { "decision": "full", "moved": ["trunkSha", "backlog"], "calls": 24 },
-  "conclusion": { "ready": [ "…" ], "blocked": [ "…" ], "taken": [ "…" ], "close": [ "…" ] },
+  "conclusion": { "ready": [ "…" ], "blocked": [ "…" ], "taken": [ "…" ], "close": [ "…" ],
+                  "findings": [ "…" ] },
   "issues": {
     "115": { "key": "<16hex>", "group": "import-fixes", "bucket": "ready" },
     "247":  { "key": "<16hex>", "group": null, "bucket": "blocked" }
@@ -371,6 +375,14 @@ half-matching:
   §0.3 says what to do with it. Bumped from `/2` because this is a shape change under §0.1's
   own rule ("bump the version whenever the shape changes"), even though every `/2` reader's
   five fingerprint keys still parse unchanged.
+- **`conclusion.findings` bumped `/3` to `/4`, under that same rule.** The one-time cost is
+  real and worth naming: the first ping in every adopting repo reads `no usable cache:
+  version code-triage/3 unrecognised` and takes one full pass. That is the honest behaviour
+  the shape rule already prescribes — a record whose `conclusion` predates findings cannot
+  answer "did this group break the one-branch contract", and half-matching it would re-print
+  a conclusion that silently omits the finding. Like `issues`, `findings` is
+  required-when-present: an empty list on a repo where no group broke the contract is the
+  ordinary state, not a corrupt record.
 
 ### 0.2 Running this twice must change nothing
 
@@ -776,6 +788,118 @@ Because: app/Import/Parser.php:88 — #115 and #114 both rewrite the delimiter b
   when the issue's own key, its group-mates' keys, and the surrounding backlog membership
   all still match — re-derive here only the issues §0.3 flagged dirty.
 
+### Then ask the one-branch question — a second live branch is a finding, not a spawn
+
+The group you just persisted is **one unit of work** (`CONVENTIONS.md` [§5](../../CONVENTIONS.md#grouping--issues-that-must-share-one-branch), *Grouping*).
+So before §6 can offer anything for it, ask whether it already has a live branch — and
+whether it has **more than one**. Two live branches in one group is the collision §3
+computed the group in order to prevent, arriving anyway.
+
+**Run this for every group with two or more open members, whatever bucket its members
+land in.** Not only the ready ones: in the measurement behind this rule every member was
+*claimed*, so the whole group would otherwise disappear into §6's `taken` bucket with no
+complaint. This is a group-level question, which is why its output is a finding rather
+than a sixth issue bucket — every open number still ends the pass in exactly one bucket.
+
+**Run §3's removal rules first, not after.** A spent or contradicted `group:` label makes
+unrelated refs look like siblings; the check is only ever as good as the group record.
+
+#### Three measurements decide the shape
+
+Taken in this checkout, 2026-09-06 — each one kills an obvious-looking rule:
+
+- **`colab holders <path>` alone over-reports catastrophically.** `colab holders
+  skills/code-triage/SKILL.md` returns **6 refs, every one `unknown`** ("commits ahead AND
+  a diff, but no content answer"), and all six belong to **closed** issues (#268 #262 #250
+  #247 #242 #244) — spent local refs whose base moved on under them. A rule that counted
+  `unknown` as live would report six second branches on a group that has none, on every
+  pass. **A finding that always fires means nothing.**
+- **Content classification is blind to the exact case this rule is about.** A second
+  session's brand-new branch has no commits yet, and `colab landed` answers a *content*
+  question: measured on this very session's branch at creation —
+  `fix/group-second-branch-finding-316`, 0 commits ahead of `main` — the verdict is
+  **`landed`**, "merging the branch would not change the base tree". So every
+  content-based check drops precisely the branch you are hunting. The primary detector
+  must be **ref existence**, never content.
+- **A fresh second branch is often local-only, so §0 input 5 cannot see it either.** That
+  same branch had no `refs/remotes/origin/**` ref at all until it was first pushed, and
+  input 5 enumerates only remote refs. Both nets below are needed, and each must name what
+  the other misses.
+
+#### The check — existing primitives, in this order
+
+1. **Primary — ref existence, name-keyed. Local git, zero network calls.** Enumerate
+   `refs/heads/**` and `refs/remotes/origin/**`, take each ref's **trailing** number run
+   (the same convention §3 writes and §5.1 reads), and keep the refs whose numbers
+   intersect this group's **open** members:
+   ```sh
+   MEMBERS="$GITDIR/.triage-members.tmp"          # same $GITDIR scratch pattern as §0 input 5
+   gh issue list --label "group:$KEY" --state open --json number -q '.[].number' | sort -u > "$MEMBERS"
+   git for-each-ref 'refs/heads/**' 'refs/remotes/origin/**' --format='%(refname:short)' \
+     | grep -vE '^(HEAD|origin/HEAD|<trunk>|origin/<trunk>|dependabot/)' \
+     | sed 's|^origin/||' | sort -u \
+     | while read -r R; do
+         # the WHOLE trailing run, not just the last number — `code-ship` B1b's extraction
+         HITS=$(printf '%s' "$R" | grep -oE '(-[0-9]+)+$' | tr -- '-' '\n' \
+                | grep -E '^[0-9]+$' | sort -u | grep -xFf "$MEMBERS" | wc -l | tr -d ' ')
+         [ "${HITS:-0}" -gt 0 ] && echo "$HITS $R"      # member count, then ref
+       done | sort -rn
+   rm -f "$MEMBERS"
+   ```
+   **Extract the whole trailing run, never just the last number.** `grep -oE '[0-9]+$'`
+   alone reads `fix/import-fixes-115-114-113` as issue 113 only, so the moment #113 closes
+   the carrier stops matching its own group and the check reports the group as branchless.
+   `code-ship` B1b already had to solve this; use its extraction, not a fresh one. The
+   printed count is also exactly what the carrier rule below ranks on, so the two cannot
+   drift apart.
+
+   **The open-member filter is what drops all six false positives above** — without
+   needing to classify content at all. **Do not widen §0 input 5 to do this job**: input 5
+   is a fingerprint input, and changing what it reads changes every stored digest, forcing
+   a full pass in every repo. Read the refs a second time here; it is local and free.
+2. **Classify each candidate for the report, not for the filter.** `colab landed --branch
+   <ref>` gives `cargo` (live work) · `landed` (either genuine squash-merge tracker lag —
+   route it to §2's already-shipped path — or a zero-commit fresh branch, told apart by
+   `git rev-list --count origin/<trunk>..<ref>`) · `unknown` (treat as live, and say so).
+   A candidate counts as a second branch **because its ref exists on an open member**, not
+   because it has commits.
+3. **Second net — path-keyed, for a branch whose name carries no member number.** Run
+   `colab holders <p>` for each path `p` in this group's own `Because:` line, re-quoted
+   from the current tree as §3 already requires. Fold in **`cargo` rows only**. Put
+   `unknown` rows on a separate advisory line with their reason — never count one as a
+   second branch on its own (measurement 1). `holders` fetches first and exits 2 rather
+   than report "clean ground" off a stale read: report that refusal as `contention
+   unknown`, never as one branch. A `Because:` line naming no path at all (a subsystem
+   judgement rather than a file) yields `contention: unknown — group evidence names no
+   path`.
+4. **On a coexistence repo, a live unit is not always a branch.** Where the repo does not
+   declare `writes: isolated`, an attended trunk-direct session holds the group's ground
+   with a **place-claim** and no branch — `colab places` (filtered to this repo's path;
+   it prints `[live]`/`[DEAD]`, the holder session and an age) is the primitive. One
+   place-claim and zero branches is the group being worked *correctly*; a place-claim
+   **and** a branch is two live units and reports as the finding. So this check can never
+   be written as "count branches" alone.
+5. **Fail toward the finding.** An `unknown` candidate, a refused `holders`, or a pathless
+   `Because:` line all report as *cannot tell* — never as "one branch, all clear".
+6. **Cost.** Zero added network calls — §0 input 1 already fetched — and a handful of local
+   git invocations per group, only on a pass that proceeds. #244 made call count a
+   first-class concern; this check does not spend against it.
+
+#### Carrier and rebase order — mechanical, so a re-run prints the same answer
+
+The **carrier** is the ref whose trailing number run covers **the most** of the group's
+open members: it is the ref closest to the group's own contract, so landing it converts
+the most members and leaves the fewest rebases behind. Tie-break on the **older head
+commit** (it has waited longest, and is likeliest already wrapped), then on ref name, so
+the order is reproducible rather than a matter of taste. The remaining branches are listed
+in descending member count; each rebases onto the new trunk sha **after** the carrier
+lands.
+
+**Triage reports this order. It never performs it.** Rebasing, pushing, deleting a ref or
+editing a branch are not among §0.2's five authorised writes, and they are not writes this
+skill may invent — see §6 for the printed shape, and `code-ship` B0 for the half that
+actually does the landing.
+
 ## 4. Order by blast radius, not by number
 
 Rank the surviving groups:
@@ -962,6 +1086,11 @@ with the blocker named:
       finding — do not narrate it in the report, and do not let it vary the
       per-beat verdict when the only thing that moved was an unrelated worktree.
       Report contention only when there is a real path overlap, and name it.
+      **A group's own members are the exception to "do not narrate it".** Where this
+      group carries a `group:` label, a second live branch across its members is a
+      **finding** regardless of whether this gate leaves the group ready — see §3,
+      *Then ask the one-branch question*, for the check and §6 for the printed shape.
+      That question is asked once per group, not re-derived here.
 - [ ] **No pending decision** — no `needs-decision` label (`CONVENTIONS.md` [§5](../../CONVENTIONS.md#decision-gate--a-human-must-answer-first-122),
       *Decision gate*). A surface awaiting a human answer is not a start candidate
       for anyone, manual or scheduled, until the decision is recorded — report it
@@ -1158,6 +1287,49 @@ Then, briefly:
   whether it looks current. Never a start candidate; see §2.
 - **route** — one line each, naming the delivery type (`content` / `ops` / `docs-only`)
   and where it actually needs to go. Never a start candidate for the code pipeline; see §2.
+
+Then, **findings** — group-level, so they are not a bucket and do not compete with the
+rule below. One block per group that broke the one-branch contract (§3):
+
+```
+FINDING group:cockpit-fidelity — 3 live branches in one group (contract: one)
+        members:  #1530 #1531 #1533 #1536 #1540 #1542 (6 open)
+        collide on: src/console/CockpitView.tsx, src/i18n/messages/cockpit.ts
+        carrier:  fix/cockpit-fidelity-1530-1531-1533  (covers 3 members, cargo)
+        then:     feat/cockpit-beat-1536 (1), fix/cockpit-i18n-1540 (1)
+        land one at a time: each rebases onto trunk AFTER the carrier lands
+        seen-at:  trunk e31a896, 2026-09-06T09:12Z
+```
+
+A group that already has a live carrier gets **`continue:`**, naming that ref — never a
+`start:` line minting a second worktree. `colab worktree new` refuses an existing branch
+anyway (#124, and `--force` does not override it), so a `start:` there would hand the
+reader a command the CLI is guaranteed to reject:
+
+```
+FINDING group:import-fixes — 2 live branches in one group (contract: one)
+        carrier:  fix/import-fixes-115-114  (covers 2 members, cargo)
+        continue: resume the carrier — code-start step 3, "Found one → continue it, or ask"
+        then:     fix/import-delimiter-113 (1) rebases after it lands
+```
+
+**Print the limits line on every pass, including a clean one** — the same discipline
+`colab worktrees` applies to its orphan scan ("a clean result answers 'none THERE', not
+'none anywhere'") and `colab holders` applies to a failed fetch. A findings section with
+nothing in it is not a guarantee, and must not read as one:
+
+```
+findings: none — no second live branch in any group AT PASS TIME (trunk e31a896).
+  Blind to: a branch created after this pass ended (caught on the next ping — a pushed
+  sibling ref moves §0's `branches` digest, so the next ping cannot short-circuit); an
+  unpushed branch on another machine; a ref whose name carries no open member number
+  (the `colab holders` net covers this only where the group's `Because:` line names a
+  path); a group whose evidence line names no path at all.
+```
+
+Never write a stronger promise than that line. Triage does not poll, so it cannot detect a
+second branch mid-flight, and a report implying otherwise is worse than one that says what
+it missed.
 
 **Do not let an Issue vanish.** Every open number ends the pass in exactly one
 bucket — ready, blocked, taken, epic, route, or close-it. A number that quietly falls off
@@ -1362,6 +1534,19 @@ Hand the top group to **code-start**, which will re-verify the claim before taki
 - Every multi-issue group survives this run: `group:<key>` on **every** member, one
   evidence comment naming the collision, and the label removed anywhere it stopped being
   true. A group that exists only in this report is the failure §3 describes.
+- **Every group with two or more open members was asked the one-branch question** (§3) —
+  including groups whose members all landed in `taken`, which is the bucket the motivating
+  measurement's group would otherwise have vanished into unremarked.
+- Every second live branch found is reported as a **finding** naming the carrier and the
+  rebase order, and a group with a live carrier got a `continue:` line rather than a
+  `start:` one that `colab worktree new` would refuse (#124).
+- **No ref was rebased, pushed, deleted or otherwise edited by this pass.** Triage names
+  the order; `code-ship` B0 performs it. Neither is among §0.2's five authorised writes.
+- **The findings limits line was printed — clean or not** — and it claims only pass-time
+  knowledge, naming what it is blind to. A findings section that reads as a guarantee of no
+  second branch is a fail, not a wording nit: nothing here polls.
+- The finding went to the console and to `$CACHE`'s `conclusion.findings`, and **nowhere on
+  the tracker**. It is not a sixth write.
 - Every open Issue is accounted for in exactly one bucket.
 - The verdicts were **persisted, not only printed**: every free group got its
   `colab readiness` marker, every blocked group was left unset (or cleared if
