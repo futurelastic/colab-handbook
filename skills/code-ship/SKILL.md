@@ -404,7 +404,7 @@ Same four classes, same spelling as A5 — `green` · `none` · `red:infra` ·
 | class | what this skill does |
 |---|---|
 | `green` | proceed to B1b |
-| `none` | **wait, bounded.** A run in flight has not passed — it has not run, and that includes the case where a fast sibling is already green while a slow one is unfinished (#307; A5's table carries the evidence). Nothing queued and no workflows on the repo at all is a different fact: say `none (no CI on this repo)` and proceed, exactly as the no-runs line above already allows for `<base>` |
+| `none` | **Depends which `none` — check before you wait.** A run *queued or in flight* has not passed, it has not run: wait, bounded. That includes a fast sibling already green while a slow one is unfinished (#307; A5's table carries the evidence). But a run that **cannot arrive for this ref** is not pending at all — proceed, exactly as the no-runs line above already allows for `<base>`. Two shapes: no workflows on the repo, and — far more common — workflows that only trigger on `pull_request` / `push` to trunk, so a backup branch push produces nothing, forever. A5 reports which; re-read the triggers if it did not |
 | `red:infra` | **re-run it once** (`gh run rerun <databaseId> --failed`), then re-read. Identical failure twice ⇒ it is the runner, not the branch: hand it to the **ops lane** and stop. Do not merge, and do not send it back to the implementer — there is nothing in the diff for them to fix |
 | `red:finding` | **hand back to an implementer session, as a class** — the branch's own suite found something. Never a merge, never a re-run |
 
@@ -425,6 +425,12 @@ every step here runs in the coordinator's own worktree.
   A5 measured is not the sha you are about to merge. Push the sync commit and read the
   class again for the new head — a green class inherited from a pre-sync sha is exactly
   the "green run on a different commit" this whole section exists to refuse.
+- **Never wait out a bound on a repo whose workflows cannot fire for a branch ref.**
+  This handbook's own repo is that shape (`push: branches: [main]` + `pull_request`),
+  and `code-wrap` A5 does not open a PR by design — so branch CI genuinely does not
+  exist here before the merge, and `<base>`'s own gate at B1 is the whole CI story.
+  That is a normal state, not a degraded one; say so in the report rather than treating
+  it as a missing measurement.
 - **Cannot separate `red:infra` from `red:finding`?** Read it as `red:finding` and hand
   back, for the reason A5 gives: an unclassifiable red routed to a human who can look
   costs a hand-back, while a wrong `red:infra` burns the free re-run and parks the work

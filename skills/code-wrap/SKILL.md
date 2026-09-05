@@ -586,9 +586,27 @@ fix and must survive this ladder (`CONVENTIONS.md`
   told, report `red:finding`: treating an unclassifiable red as the branch's own problem
   routes it to a human who can look, whereas guessing `red:infra` spends the free re-run
   and then parks it in an ops lane nobody opened.
-- **`none` is the honest answer for a repo with no CI at all** — say `none (no workflows
-  on this repo)` so the distinction between "not configured" and "not finished yet"
-  survives into `code-ship`, which treats only the second as something to wait for.
+- **`none` splits two ways, and only one of them is worth waiting for.** Before
+  reporting it, ask whether a run *can* arrive for this ref at all — read the triggers,
+  do not assume:
+
+  ```sh
+  gh workflow list --all                       # what exists
+  sed -n '/^on:/,/^jobs:/p' .github/workflows/*.yml   # what each one triggers on
+  ```
+
+  A workflow that fires on `push: branches: [<trunk>]` and `pull_request` produces **no
+  run for a feature-branch push**, ever — and this handbook's own repo is exactly that
+  shape, which is how this bullet got written. Since A5 pushes a backup branch and
+  explicitly does **not** open a PR, `none` there is permanent, not pending. Say which
+  one you measured:
+  - `none (no workflow triggers on a branch push here — CI runs on PR/trunk)` → nothing
+    to wait for; `code-ship` proceeds on it.
+  - `none (run queued/in flight)` → `code-ship` does the bounded wait.
+  - `none (no workflows on this repo)` → nothing configured at all.
+
+  Collapsing these into a bare `none` is what turns a bounded wait into a wait for a run
+  that was never coming.
 - Do not block the wrap waiting for a run to finish. Report `none`, say the run was in
   flight, and let `code-ship` do the bounded wait — it is the step that actually needs
   the answer.
