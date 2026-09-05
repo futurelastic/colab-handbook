@@ -143,6 +143,52 @@ function loadClaims(fx) {
 // `colab claim` exits non-zero whenever a claim is lost to the tie-break (a real issue got
 // yielded, not merely claimed) — that is expected in every test here and not what is under test.
 
+// --- #312: the losing session must give the checkout hold back, or it blocks the WINNER ---------
+//
+// `cmdClaim` acquires the checkout place-claim (`takingPlace`) BEFORE the tie-break runs, so a
+// session that loses the race used to drop its claim and keep the hold. The session it just
+// conceded to is then refused by it. Same end state #305 reported, reached in one command.
+
+function loadPlaces(fx) {
+  return JSON.parse(fs.readFileSync(path.join(fx.home, 'state.json'), 'utf8')).places || {};
+}
+
+test('#312: a no-worktree claim that LOSES the tie-break leaves no checkout place-claim behind', () => {
+  const fx = fixture('ok');
+  const r = colab(fx, ['claim', '9', '--repo', fx.work, '--session', 'sess-LOSER']);
+  assert.match(r.out + r.err, /Yielded #9/, r.out + r.err);
+  assert.match(r.out, /released the checkout place-claim/, r.out);
+  assert.deepStrictEqual(loadPlaces(fx), {}, 'the hold must not outlive the claim that took it');
+});
+
+test('#312: a sibling no-worktree claim on the same checkout KEEPS the hold — one hold, many issues', () => {
+  const fx = fixture('ok');
+  // Both issues lose the tie-break (the fixture's `gh` rigs every issue the same way), so the
+  // first yield must find #10 still claimed here and leave the hold alone; only the last one frees
+  // it. A place-claim covers the CHECKOUT, not one issue — the trap #305 names.
+  const r = colab(fx, ['claim', '9', '10', '--repo', fx.work, '--session', 'sess-LOSER']);
+  assert.match(r.out + r.err, /Yielded #9/, r.out + r.err);
+  assert.match(r.out, /checkout place-claim KEPT/, r.out);
+  assert.match(r.out, /released the checkout place-claim/, r.out);
+  assert.deepStrictEqual(loadPlaces(fx), {}, 'and by the last yield it is gone');
+});
+
+test('#312: a yield whose GitHub write FAILED keeps the claim, so it keeps the hold (#164 x #305)', () => {
+  const fx = fixture('fail-both');
+  const r = colab(fx, ['claim', '9', '--repo', fx.work, '--session', 'sess-LOSER']);
+  assert.match(r.err, /local claim KEPT \(releasePending\)/, r.err);
+  assert.strictEqual(Object.keys(loadPlaces(fx)).length, 1,
+    'dropping the hold under a claim that still stands is the local/remote disagreement #164 exists to prevent');
+});
+
+test('#312: a yield of a --worktree claim never touches st.places — it never took a checkout hold', () => {
+  const fx = fixture('ok');
+  const r = colab(fx, ['claim', '9', '--worktree', 'wt-9', '--repo', fx.work, '--session', 'sess-LOSER']);
+  assert.match(r.out + r.err, /Yielded #9/, r.out + r.err);
+  assert.doesNotMatch(r.out, /released the checkout place-claim/);
+  assert.deepStrictEqual(loadPlaces(fx), {}, 'a worktree claim mints no checkout hold in the first place');
+});
+
 test('yieldIssue, remote release succeeds: the local claim is deleted, same as before #173', () => {
   const fx = fixture('ok');
   const r = colab(fx, ['claim', '9', '--worktree', 'wt-9', '--repo', fx.work]);

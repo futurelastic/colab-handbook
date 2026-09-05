@@ -572,7 +572,7 @@ function postReleaseComment(repoAbs, num) {
  * `colab claims` for a retry rather than silently vanishing while GitHub still shows us
  * in-progress.
  */
-function yieldIssue(repoAbs, num, winner, myLogin) {
+function yieldIssue(repoAbs, num, winner, myLogin, session = null) {
   let ghFailed = false;
   if (winner.login !== myLogin) {
     const r = git.ghIssueRelease(repoAbs, num);
@@ -583,17 +583,43 @@ function yieldIssue(repoAbs, num, winner, myLogin) {
   }
   const rc = git.ghIssueComment(repoAbs, num, `${RELEASE_MARK} (yielded — earlier claim by ${winner.identity} wins)`);
   if (!rc.ok) warn(`could not post yield comment on #${num} (${rc.stderr.split('\n')[0] || rc.code})`);
+  let placeOutcome = null;
   state.mutate((st) => {
     const key = claimKey(repoAbs, num);
     const c = st.claims[key];
     if (!c) return;
     if (ghFailed) {
+      // The claim is KEPT (releasePending), so the hold that makes it safe is kept too — the same
+      // local/remote-disagreement rule #305 applies at `cmdRelease` (#312).
       c.releasePending = true;
       c.releaseNote = `GitHub release failed while yielding (${nowISO()}) — retry with: colab release ${num}`;
     } else {
+      const wtName = c.worktree;
+      const claimSession = c.session || session || null;
       delete st.claims[key];
+      // #312, the sharpest of the three leaks this fixed: `cmdClaim` has ALREADY acquired the
+      // checkout hold by the time the tie-break decides this session lost the race, so before this
+      // the loser dropped its claim and kept the hold — and the WINNER was then blocked by the
+      // session that had just conceded to it. Same three guards as `cmdRelease`'s release (#305):
+      // skip a claim that carried a worktree (it never took a checkout hold), skip while any other
+      // no-worktree claim of this session still holds that checkout, and never on the kept-claim
+      // branch above. Ownership comes from the CLAIM RECORD's own session — `cmdClaim` wrote one
+      // `session` const into both records in the same invocation, so it is exact — falling back to
+      // that same live const when the record carries none.
+      if (!wtName) {
+        const siblings = Object.values(st.claims).filter((cl) => cl.repo === repoAbs && !cl.worktree
+          && (cl.session || null) === claimSession);
+        if (siblings.length === 0) placeOutcome = place.releaseOwnedBy(st, repoAbs, claimSession);
+        else placeOutcome = { released: false, reason: 'siblings', siblings: siblings.length };
+      }
     }
   });
+  if (placeOutcome && placeOutcome.released) {
+    print(`  released the checkout place-claim on ${placeOutcome.rec.path}` +
+      (placeOutcome.reason === 'lapsed-dead' ? ' (its holder was already gone)' : ' (this was the last claim holding it)'));
+  } else if (placeOutcome && placeOutcome.reason === 'siblings') {
+    print(`  checkout place-claim KEPT — this session still holds ${placeOutcome.siblings} more claim(s) here`);
+  }
 }
 
 /**
@@ -611,7 +637,7 @@ function commentAndTieBreak(repoAbs, nums, owner) {
     if (!info || !Array.isArray(info.comments)) continue; // can't read comments → keep the claim
     const verdict = tieBreakVerdict(info.comments, owner.myLogin, HOST, owner.session, comps);
     if (verdict.lost) {
-      yieldIssue(repoAbs, num, verdict.winner, owner.myLogin);
+      yieldIssue(repoAbs, num, verdict.winner, owner.myLogin, owner.session || null);
       const w = verdict.winner;
       const id = displayIdentity(w.sessionName, w.session);
       const wsess = id ? ` · session ${id}` : '';
@@ -2881,7 +2907,29 @@ function syncClaims({ prune = false } = {}) {
         const num = normIssueNum(c.issue);
         if (!assignedSet.has(num)) {
           state.mutate((s) => {
-            if (s.claims[key]) { delete s.claims[key]; removed.push(`-#${num} ${shortRepo(repoAbs)} (no longer assigned+in-progress on GitHub)`); }
+            if (!s.claims[key]) return;
+            const wtName = s.claims[key].worktree;
+            const claimSession = s.claims[key].session || null;
+            delete s.claims[key];
+            let note = '';
+            // #312: a no-worktree claim took a checkout place-claim at `cmdClaim` (`takingPlace`),
+            // and pruning it here left that hold behind with nothing on disk pointing at it —
+            // unreachable by `colab release`, which needs the claim it just deleted. Same three
+            // guards as #305, and — per #285's lesson — the sibling count is taken INSIDE this
+            // mutate and AFTER the delete, against the state the write actually sees, so there is
+            // no window where the claim is gone and the hold is not. Only the stored record's own
+            // session is used as the key; there is no ambient identity to reach for here, which is
+            // exactly as it should be (a stale claim swept long after a LATER session re-took the
+            // checkout correctly touches nothing).
+            if (!wtName) {
+              const siblings = Object.values(s.claims).filter((cl) => cl.repo === repoAbs && !cl.worktree
+                && (cl.session || null) === claimSession);
+              if (siblings.length === 0) {
+                const out = place.releaseOwnedBy(s, repoAbs, claimSession);
+                if (out.released) note = out.reason === 'lapsed-dead' ? ' + freed its checkout hold (holder already gone)' : ' + freed its checkout hold';
+              }
+            }
+            removed.push(`-#${num} ${shortRepo(repoAbs)} (no longer assigned+in-progress on GitHub)${note}`);
           });
         }
       }
@@ -3614,6 +3662,9 @@ function cmdWorktreeRm(argv) {
   // residue: `releasePending` + `releaseNote` say WHY it's still there, not just THAT it is).
   const trackerFailedSet = new Set(trackerFailed);
   const removed = state.mutate((st) => {
+    // #312: NOT a checkout-place-claim leak — every claim here carried this worktree, so none
+    // took a checkout hold (`takingPlace` is `!wtName`); the WORKTREE's own hold is a different
+    // record, deleted a few lines below by `delete st.places[place.placeKey(wt.path)]`.
     const claims = Object.keys(st.claims).filter((k) => st.claims[k].worktree === name);
     let deleted = 0;
     for (const k of claims) {
@@ -4080,7 +4131,7 @@ function cmdDoctor(argv) {
   const config = state.loadConfig();
   const ttl = opts.ttl ? parseFloat(opts.ttl) : config.claimTTLHours;
 
-  const report = { deadWorktrees: [], orphanClaims: [], staleClaims: [], stalePlaces: [], unprovablePlaces: [], orphanPorts: [], brokenRecords: [], prunedPorts: [],
+  const report = { deadWorktrees: [], orphanClaims: [], staleClaims: [], stalePlaces: [], unprovablePlaces: [], releasedPlaces: [], orphanPorts: [], brokenRecords: [], prunedPorts: [],
     mergedFlips: [], mergedSweep: [], mergedDirty: [], mergedHookFail: [], mergedRemoveFail: [], shippedBranches: [], ghostPorts: [],
     spentGroupLabels: [], groupLabelsChecked: !!opts.sync, pruned: !!opts.prune };
 
@@ -4124,6 +4175,9 @@ function cmdDoctor(argv) {
       const claims = Object.entries(st.claims).filter(([, c]) => c.worktree === wt.name);
       report.deadWorktrees.push({ name: wt.name, repo: shortRepo(wt.repo), path: wt.path, ports: wt.ports, claims: claims.map(([, c]) => c.issue), session: wt.session || '', sessionName: wt.sessionName || '' });
       if (opts.prune) {
+        // #312: NOT a checkout-place-claim leak — every claim here is filtered `c.worktree ===
+        // wt.name`, so each had `takingPlace === false` at `cmdClaim` and never took a checkout
+        // hold. The WORKTREE's own hold is a different record, released by `worktree rm`.
         for (const [k] of claims) delete st.claims[k];
         for (const p of wt.ports) { delete st.ports[String(p)]; report.prunedPorts.push(p); }
         delete st.worktrees[wt.name];
@@ -4153,6 +4207,8 @@ function cmdDoctor(argv) {
     for (const [k, c] of Object.entries(st.claims)) {
       if (c.worktree && !st.worktrees[c.worktree]) {
         report.orphanClaims.push({ issue: c.issue, repo: shortRepo(c.repo), worktree: c.worktree });
+        // #312: NOT a leak — the `c.worktree &&` guard above means these claims never took a
+        // checkout hold (`takingPlace` is `!wtName`).
         if (opts.prune) delete st.claims[k];
       }
     }
@@ -4182,7 +4238,25 @@ function cmdDoctor(argv) {
             for (const p of Object.keys(st.ports)) {
               if (st.ports[p].owner.type === 'claim' && st.ports[p].owner.ref === k) { delete st.ports[p]; report.prunedPorts.push(Number(p)); }
             }
+            const claimSession = c.session || null;
             delete st.claims[k];
+            // #312 — the ONE real leak among doctor's three claim-deletion sites: `!c.worktree`
+            // above is exactly `cmdClaim`'s `takingPlace` population, so every claim pruned here
+            // took a checkout hold that nothing gave back. Pass 1b's stale-place prune does NOT
+            // cover it, and the issue's own "may already be covered" guess is wrong on measurement:
+            // 1b runs earlier in this same mutate and is keyed on HOLDER LIVENESS, so a hold whose
+            // anchor is still alive survives a run that just deleted its claim. Same three guards
+            // as #305, sibling count taken after the delete against the state being written (#285).
+            const siblings = Object.values(st.claims).filter((cl) => cl.repo === c.repo && !cl.worktree
+              && (cl.session || null) === claimSession);
+            if (siblings.length === 0) {
+              const out = place.releaseOwnedBy(st, c.repo, claimSession);
+              if (out.released) {
+                report.releasedPlaces.push({ path: out.rec.path, repo: shortRepo(c.repo), issue: c.issue,
+                  reason: out.reason === 'lapsed-dead' ? 'holder already gone' : 'last claim holding it',
+                  session: out.rec.session || '', sessionName: out.rec.sessionName || '' });
+              }
+            }
           }
         }
       }
@@ -4404,6 +4478,13 @@ function cmdDoctor(argv) {
       print(`  ${c.issue} [${c.repo}] ${why} host=${c.host}${displayIdentity(c.sessionName, c.session) ? ` session=${displayIdentity(c.sessionName, c.session)}` : ''}`);
     }
     if (!opts.prune) print('  (worktree-less claims are not auto-removed — re-run with --prune to remove)');
+  }
+  if (report.releasedPlaces.length) {
+    // #312: reported, never silent — a hold released as a side effect of pruning its claim is a
+    // state change somebody may be waiting on, and the leak ran unnoticed for as long as it did
+    // precisely because nothing said anything.
+    print(`Released ${report.releasedPlaces.length} checkout place-claim(s) whose claim was pruned:`);
+    for (const p of report.releasedPlaces) print(`  ${p.path} [${p.repo}] ${p.issue} — ${p.reason}${displayIdentity(p.sessionName, p.session) ? ` session=${displayIdentity(p.sessionName, p.session)}` : ''}`);
   }
   if (report.stalePlaces.length) {
     print(`${opts.prune ? 'Pruned' : 'Flagged'} ${report.stalePlaces.length} stale place-claim(s) (holder confirmed dead):`);
