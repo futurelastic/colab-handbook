@@ -116,7 +116,7 @@ test('--dry --json reports EVERY precondition even when autonomy already fails (
   const names = body.checks.map((c) => c.name);
   // Every documented precondition is present, not just the one that failed first.
   for (const n of ['branch resolves', 'not an integration line', 'declared base', 'autonomy granted',
-    'no new migrations', 'trunk checkout ready', 'no hand-merge conflict']) {
+    'no new migrations', 'trunk checkout ready', 'target in sync with origin', 'no hand-merge conflict']) {
     assert.ok(names.includes(n), `missing check "${n}" in ${JSON.stringify(names)}`);
   }
   const autonomy = body.checks.find((c) => c.name === 'autonomy granted');

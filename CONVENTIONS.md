@@ -2539,6 +2539,31 @@ automate only where deploy is tag-gated) · **release** (the tag — always a hu
 every repo, with no field able to say otherwise). The `pre-push-guard` hook enforces the
 first two mechanically; `COLAB_SHIP` never opens `main`.
 
+**`COLAB_SHIP` and `COLAB_PROMOTE` are process-identity assertions, not permissions — an
+agent never sets either by hand, and a refusal never names one.** They mean "that command
+ran its preconditions", which is a claim only the command can truthfully make; typed at a
+shell, one asserts it falsely and reaches a direct trunk push having skipped the grade,
+the branch-CI check, the claim release and the evidence comment. Unlike `COLAB_HUMAN`,
+neither has any sanctioned hand-set case at all — not even solo flow's. Measured: two
+independent sessions set `COLAB_SHIP=1` by hand on the same repo on the same day, neither
+aware it was crossing a line, one reporting it in a status summary as ordinary
+housekeeping — and **neither had read it in a skill.** They read it in `pre-push-guard`'s
+own refusal, which named the variable that opens it. A guard that teaches its bypass at
+the moment it refuses is not a guard, so every refusal on this path now names the remedy
+(`colab ship`, `colab promote`) and nothing else.
+
+**Closing that door required closing the corner behind it, or it would have become a
+stall.** Both sessions reached for the variable while holding a completed local merge
+`colab ship` could not publish — `ship` merges a *branch*, so it has no path for a commit
+already sitting on trunk. Two changes remove the corner rather than seal the exit: ship's
+preconditions now measure the local target against `origin/<target>` and refuse *before*
+merging (behind → one fast-forward, self-clearing; ahead or diverged → unpublished commits
+on a push-guarded branch, to be moved onto a session branch and shipped, human-gated), and
+a failed B2 push rolls the squash back so the unpublishable state does not exist to be
+cornered in. The upstream rail is [`code-wrap`](skills/code-wrap/SKILL.md)'s: **a distilled
+doc lands on the session branch, never as a commit on the trunk checkout** — that commit is
+what both sessions were trying to publish.
+
 **On Tier C the ladder has two rungs, not three, and the second is the deploy** —
 promotion there always requires `COLAB_HUMAN=1`; `promotion: main-loop` applies only
 where `deploy: tag` makes promotion verification-only, so it can never apply to C.

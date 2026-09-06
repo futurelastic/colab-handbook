@@ -12,6 +12,12 @@
 # On tier B (trunk == main) the trunk rule already covers main. Non-protected pushes always pass.
 # Missing .github/project.yml → degrade to ALLOW (with a warning) rather than block work.
 #
+# The two variables named above are set BY A TOOL (`colab ship`, `colab promote`) or BY A PERSON at
+# the keyboard — never by an agent reading this file or one of the refusals below. COLAB_SHIP is a
+# process-identity assertion, not a permission: typed by hand it claims preconditions nothing ran.
+# The refusal messages below therefore name the remedy and not the variable (#322) — this header is
+# the documentation lane, which a human consults deliberately and an error message is not.
+#
 # Install (copy-and-own, per repo):
 #   cp templates/pre-push-guard .git/hooks/pre-push && chmod +x .git/hooks/pre-push
 #   # or, if you use a shared hooks dir:  cp templates/pre-push-guard "$(git config core.hooksPath)/pre-push"
@@ -55,24 +61,44 @@ while read -r _localref _localsha remoteref _remotesha; do
   done
 done
 
+# A REFUSAL NAMES THE REMEDY, NEVER THE DOOR (#322). Each message below used to end with the
+# environment variable that defeats it. That is a bypass printed at the exact moment its reader has
+# run out of ideas, and it was taken: two independent sessions in one day set COLAB_SHIP=1 by hand
+# after this hook refused them, one of them reporting it as ordinary housekeeping. Neither had read
+# it in a skill — they read it HERE. So these messages say what to run; the attended-human override
+# is documented in this file's header and in tools/README.md, where a person looks it up and an
+# agent scanning an error message does not find it.
+#
+# COLAB_SHIP is a PROCESS-IDENTITY assertion — "`colab ship` ran its preconditions" — not a human
+# gate. Typed by hand it asserts that falsely and skips the grade, the branch-CI check, the claim
+# release and the evidence comment. There is no case where typing it is the right next step.
+
 # TRUNK guard (also covers tier B, where trunk == main).
 if [ "$pushing_trunk" -eq 1 ] && [ "${COLAB_SHIP:-}" != "1" ] && [ "${COLAB_HUMAN:-}" != "1" ]; then
   echo "pre-push-guard: refusing raw push to trunk '$trunk'." >&2
-  echo "  Use 'colab ship' for Phase B, or export COLAB_HUMAN=1 for a sanctioned manual push." >&2
+  echo "  Ship the branch instead:  colab ship --branch <your-branch>" >&2
+  echo "  Already committed onto '$trunk' by hand? That commit belongs on a branch, not here:" >&2
+  echo "    git log --oneline origin/$trunk..$trunk        # what is actually there" >&2
+  echo "    git branch <type>/<slug>-<issue> $trunk        # keep it, on a branch" >&2
+  echo "    git reset --hard origin/$trunk                 # return the checkout to at-rest" >&2
+  echo "  then claim its issue and ship that branch." >&2
   exit 1
 fi
 
 # INTEGRATION-LINE guard — a declared long-lived line is an integration point, not a feature branch.
 if [ -n "$pushing_line" ] && [ "${COLAB_SHIP:-}" != "1" ] && [ "${COLAB_HUMAN:-}" != "1" ]; then
   echo "pre-push-guard: refusing raw push to integration line '$pushing_line'." >&2
-  echo "  Use 'colab ship' (it merges into the base the branch was cut from), or export COLAB_HUMAN=1." >&2
+  echo "  Ship the branch instead (it merges into the base the branch was cut from):" >&2
+  echo "    colab ship --branch <your-branch>" >&2
   exit 1
 fi
 
 # MAIN guard — only on tier A and C (trunk != main). COLAB_SHIP intentionally does NOT open main.
 if [ "$trunk" != "main" ] && [ "$pushing_main" -eq 1 ] && [ "${COLAB_PROMOTE:-}" != "1" ] && [ "${COLAB_HUMAN:-}" != "1" ]; then
   echo "pre-push-guard: refusing raw push to 'main' (promotion target)." >&2
-  echo "  Use 'colab promote' for trunk→main, or export COLAB_HUMAN=1 for a sanctioned manual push." >&2
+  echo "  Promotion is trunk->main and it is a human act on every repo:  colab promote" >&2
+  echo "  There is no agent-side override for this one; if you are an agent, this is where you stop" >&2
+  echo "  and report, not where you look for a flag." >&2
   exit 1
 fi
 
