@@ -1087,9 +1087,10 @@ Each step is checked; any failure aborts **before the push**, so trunk is never 
 | | · trunk CI alive **and** green (`gh run list --branch <trunk> -L 1`) | not `completed`+`success`, UNLESS every claimed issue holds a valid `colab ci-grant` over trunk's CURRENT red sha (#105, below) → human must run Phase B (billing fail-to-start counts as ✗ regardless — never exempted, see below) |
 | | · **no new migration files** on the branch (`database/migrations/`, `prisma/migrations/`) | any present, UNLESS every claimed issue holds a valid `colab migration-grant` for this branch (#98, below) → human must run Phase B |
 | | · trunk checkout is on trunk and clean | wrong branch / dirty tracked tree |
+| | · the local merge target agrees with `origin/<target>` (#322) | **behind** → self-clearing, the remedy is one `git merge --ff-only`; **ahead / diverged** → human-gated: those are unpublished commits on a push-guarded branch, to be moved onto a session branch, never published from there. Unmeasurable (no `origin`, fetch failed) is a ✗ too — a merge that cannot be pushed is the state this row exists to prevent |
 | c. B0 sync | merge trunk **into** the branch | conflict in a **non-generated** file → abort (hand-merge); generated-only conflict → the repo's `.colab/hooks/pre-ship` regenerates, else abort |
 | d. B1 squash | re-verify CI green, then squash-merge branch → trunk | CI no longer green / squash fails |
-| e. B2 push | push trunk with `COLAB_SHIP=1` in the env | push rejected (commit stays local, unpushed) |
+| e. B2 push | push trunk with `COLAB_SHIP=1` in the env | push rejected → the squash is **rolled back** to the target's pre-merge sha (#322), so nothing is left locally that only a guard bypass could publish; the branch still carries the work, so `colab ship` is re-runnable. Rollback impossible (something else moved the target) → says so and prints the exact `reset --hard`, never an environment variable |
 | e2. post-ship | trunk targets only: run the repo's `.colab/hooks/post-ship` on the trunk checkout (re-install deps, migrate, restart). With no hook, a merge that changed a dependency lockfile warns, naming the install command | **never aborts** — the push already landed (#304) |
 | f. B3 teardown | `colab worktree rm` (releases claims + ports + `✅` comments) unless `--keep-worktree`. The **branch is kept**; `--delete-branch` removes it local + remote | branch deletion is best-effort — a failure warns, it never fails a ship that already pushed |
 | g/h. B4 + summary | verify each issue auto-closed; post `🚢 Shipped to <trunk> by colab ship — <sha>` | non-closing issues are reported, not fatal |
@@ -1344,6 +1345,22 @@ branches** (read from `.github/project.yml`):
 - **trunk** — unless `COLAB_SHIP=1` (set by `colab ship`) or `COLAB_HUMAN=1`.
 - **main**, only where `trunk != main` (tiers A and C) — unless `COLAB_PROMOTE=1` (set by `colab promote`)
   or `COLAB_HUMAN=1`. `COLAB_SHIP` does **not** open main — `ship` is trunk-only by design.
+
+**`COLAB_SHIP` and `COLAB_PROMOTE` are process-identity assertions, not permissions, and no agent
+ever sets either by hand.** They mean "`colab ship`/`colab promote` ran its preconditions" — a
+claim only that process can truthfully make. Typed at a shell they assert it falsely and reach a
+direct trunk push while skipping the grade, the branch-CI check, the claim release and the evidence
+comment. Unlike `COLAB_HUMAN`, neither has any sanctioned hand-set case at all — not even #237's
+solo-flow one — and `tools/lib/sanctioned-path-vars.test.js` fails the build if a skill sets either.
+
+**The guard's refusals therefore name the remedy, never the variable (#322).** They used to end
+with the assignment that defeats them, which is a bypass printed at the exact moment its reader has
+run out of ideas — and it was taken twice in one day by two sessions that had never read it in a
+skill. The trunk refusal now points at `colab ship`, and — for the corner that produced the
+incident, a commit *already* made on the trunk checkout, which `ship` has no path for — spells out
+moving it onto a branch and resetting the checkout. The variables stay documented here and in the
+template's header comment, where a person looks them up deliberately and an error message does not
+put them in front of an agent.
 
 On tier B (`trunk == main`) the trunk rule already covers main. Non-protected pushes always pass; a
 missing `project.yml` degrades to *allow* with a warning (never blocks work). Install copy-and-own,

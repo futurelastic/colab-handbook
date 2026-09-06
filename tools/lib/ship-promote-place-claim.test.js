@@ -258,20 +258,24 @@ test('ship (no place-claim on the machine at all): unaffected, and leaves no pla
 test('ship: the place-claim is released even when B2 (the push) FAILS — the actual race #234 is about', () => {
   const fx = fixture(PROJECT_YML_TIER_B);
   branchWithCommit(fx, 'feat/push-race-here', 'g.txt', 'feat: something');
+  fx.greenCi('main');
 
-  // Simulate a DIFFERENT writer landing on origin/main between ship's precondition table and its
-  // own push — a raw clone (not fx.work) pushes directly to origin. fx.work's local `main` ref is
-  // deliberately left stale, exactly like a real trunk checkout that has not re-synced yet.
-  const raceClone = fs.mkdtempSync(path.join(os.tmpdir(), 'colab-place-claim-race-'));
-  TMP.push(raceClone);
-  execFileSync('git', ['clone', '-q', fx.origin, raceClone], { encoding: 'utf8' });
-  fs.writeFileSync(path.join(raceClone, 'race.txt'), 'x\n');
-  execFileSync('git', ['-C', raceClone, 'config', 'user.email', 'race@example.invalid']);
-  execFileSync('git', ['-C', raceClone, 'config', 'user.name', 'race']);
-  execFileSync('git', ['-C', raceClone, 'add', '-A']);
-  execFileSync('git', ['-C', raceClone, 'commit', '-q', '-m', 'chore: a different writer lands first']);
-  execFileSync('git', ['-C', raceClone, 'push', '-q', 'origin', 'main']);
-  fx.greenCi('main'); // green for origin's NEW head — the sha ship's CI checks will actually see
+  // HOW B2 IS MADE TO FAIL, and why it changed (#322). This test used to arrange the failure by
+  // letting a different writer land on origin/main while fx.work's local ref stayed stale — the
+  // shape #234 was written against. That arrangement no longer REACHES B2: ship now measures the
+  // local target against origin/<target> in its precondition table and refuses before merging
+  // anything, precisely so a merge it cannot publish is never made. Which is a better outcome for
+  // that scenario and a worse fixture for THIS property, whose subject is the hold ship takes at
+  // B1 and must release however B2 ends.
+  //
+  // So the push is refused at the REMOTE instead: origin rejects every push, the local ref stays
+  // in sync, every precondition passes, B1 acquires the hold, and B2 fails for a reason no
+  // precondition can pre-empt (which is the honest residual case — a remote can always refuse).
+  const hooks = path.join(fx.origin, 'hooks');
+  fs.mkdirSync(hooks, { recursive: true });
+  const preReceive = path.join(hooks, 'pre-receive');
+  fs.writeFileSync(preReceive, '#!/bin/sh\necho "fixture origin: push refused" >&2\nexit 1\n', { mode: 0o755 });
+  fs.chmodSync(preReceive, 0o755);
 
   const r = colab(fx, ['ship', '--branch', 'feat/push-race-here', '--repo', fx.work]);
   assert.notStrictEqual(r.code, 0, r.out + r.err);

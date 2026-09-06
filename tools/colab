@@ -45,6 +45,7 @@ const consumerEvidence = require('./lib/consumer-evidence');
 const axisAuthority = require('./lib/axis-authority');
 const writesAuthority = require('./lib/writes-authority');
 const claimIdentity = require('./lib/claim-identity');
+const targetSync = require('./lib/ship-target-sync');
 const {
   HOST, UserError, normIssueNum, issueTag, claimKey, today, nowISO, hoursSince, humanAge,
   parseArgs, table, shortRepo,
@@ -7838,6 +7839,21 @@ function cmdShipDryJson(opts) {
     detail: !onTrunk ? `main checkout is on "${headBranch}", not "${trunk}"`
       : (dirty ? dirtyOwnerDetail('tracked changes uncommitted in trunk checkout', dirtyOwnersPayloadVal) : `on ${trunk}, clean`) });
 
+  // #322: the same single producer the prose path uses — the two cannot drift on whether the local
+  // target is publishable, the way they once could on whether CI was green. `remedy` is additive
+  // and present only when the row fails: this path's whole audience is an unattended caller, and
+  // the remedy is the one thing that stops it reaching for the pre-push bypass instead.
+  // CLASS: behind-only is mechanical (a clean fast-forward decides nothing) → self-clearing;
+  // ahead/diverged is unpublished work on a push-guarded branch → human-gated. `unknown` is
+  // self-clearing too: the comparison, not the repo, is what failed.
+  const syncResultJson = targetSync.readTargetSync(git, repoAbs, target, { repoLabel: repoAbs });
+  checks.push({
+    name: syncResultJson.name, ok: syncResultJson.ok,
+    class: syncResultJson.ok ? null : (syncResultJson.cls === 'behind' || syncResultJson.cls === 'unknown' ? SELF_CLEARING : HUMAN_GATED),
+    detail: syncResultJson.detail,
+    ...(syncResultJson.ok ? {} : { remedy: syncResultJson.remedy }),
+  });
+
   // ---- (c) no hand-merge conflict — NEW: the plain --dry prose path never checks this today ----
   const generated = [...DEFAULT_GENERATED, ...(Array.isArray(doc.generated) ? doc.generated.map(String) : [])];
   const hasPreShip = fs.existsSync(path.join(repoAbs, '.colab', 'hooks', 'pre-ship'));
@@ -8252,11 +8268,19 @@ function cmdShip(argv) {
     !onTrunk ? `main checkout is on "${headBranch}", not "${trunk}"`
       : (dirty ? dirtyOwnerDetail('tracked changes uncommitted in trunk checkout', dirtyOwnersResult) : `on ${trunk}, clean`)]);
 
+  // #322: … and it agrees with the remote. "Trunk checkout ready" above asks whether the checkout
+  // is on trunk and clean — never whether the local ref is publishable. A trunk fetched but never
+  // fast-forwarded, or carrying a hand-made commit, passes that row, so B1 completed a merge B2
+  // could not push, and the only exit the failure named was pre-push-guard's env-var back door.
+  // Discovered HERE, the remedy is still an ordinary git command. See lib/ship-target-sync.js.
+  const syncResult = targetSync.readTargetSync(git, repoAbs, target, { repoLabel: repoAbs });
+  checks.push([syncResult.ok ? '✓' : '✗', syncResult.name, syncResult.detail]);
+
   // #87 gates the ship: writing `Closes #N` for work that has not started is unrecoverable — the
   // issue can be reopened, but the false claim stays in trunk's immutable history, and GitHub will
   // have closed it the instant trunk was pushed. #263: gateOk joins the same list — an unticked
   // checklist with no declared remainder is exactly as unrecoverable once `Closes #N` ships.
-  const preOk = ciOk && migOk && treeOk && corr.ok && gateOk;
+  const preOk = ciOk && migOk && treeOk && corr.ok && gateOk && syncResult.ok;
 
   // ---- report the table ----
   print(`ship ${shortRepo(repoAbs)} · branch ${sess.branch} → ${target}` +
@@ -8387,6 +8411,14 @@ function cmdShip(argv) {
   print('');
   print(table(checks.map((c) => [c[0], c[1], c[2]]), ['', 'PRECONDITION', 'DETAIL']));
   print('');
+
+  // #322: the out-of-sync row is the one refusal whose remedy is a command, not a decision — and
+  // the one whose absence sent two sessions to an env-var bypass. Printed here rather than crammed
+  // into the DETAIL column, and above the --dry return so a dry run sees it too.
+  if (!syncResult.ok) {
+    for (const line of syncResult.remedy) print(`  ${line}`);
+    print('');
+  }
 
   if (mode.evidenceClose) {
     print('→ MODE: evidence-close (the branch introduces no change to ' + target + ' — nothing to merge)');
@@ -8725,6 +8757,10 @@ function cmdShip(argv) {
     }
   }
 
+  // #322: the target's tip BEFORE the squash lands, so B2 can put it back if the push is rejected.
+  // Read as a full sha (not `--short`) because it is used as a reset destination, not as prose.
+  const preMergeSha = git.git(['rev-parse', 'HEAD'], targetDir).stdout;
+
   print(`B1: squash-merging ${sess.branch} → ${target} …`);
   const sq = git.git(['merge', '--squash', sess.branch], targetDir);
   if (!sq.ok) {
@@ -8740,21 +8776,53 @@ function cmdShip(argv) {
     return 1;
   }
   const sha = git.git(['rev-parse', '--short', 'HEAD'], targetDir).stdout;
+  // #322: the same commit as a FULL sha — B2's rollback compares against it to prove the thing it
+  // is about to unwind is still its own, and a short sha is a prefix, not an identity.
+  const mergeSha = git.git(['rev-parse', 'HEAD'], targetDir).stdout;
   print(`  committed ${sha}: ${commitMsg}`);
-
-  // B1 has landed the squash on the target → the worktree's branch is now merged. Record it before B3,
-  // so a --keep-worktree entry survives with status=merged (and doctor treats it as a sweep candidate).
-  if (sess.name) state.mutate((st) => { if (st.worktrees[sess.name]) st.worktrees[sess.name].status = 'merged'; });
 
   // ---- (e) B2: push the target with COLAB_SHIP=1 (the sanctioned-path signal for pre-push-guard) ----
   print(`B2: pushing ${target} …`);
   const push = git.run('git', ['push', 'origin', target], { cwd: targetDir, env: { ...process.env, COLAB_SHIP: '1' } });
   if (!push.ok) {
-    process.stderr.write(`✗ B2: push failed: ${push.stderr.split('\n')[0]}. ${target} committed locally at ${sha} but NOT pushed — resolve and push by hand (COLAB_HUMAN=1).\n`);
+    // #322: UNDO THE MERGE, and never name the variable that would publish it by hand.
+    //
+    // A failed B2 used to leave a completed local merge on the target with no sanctioned way
+    // forward — `colab ship` merges a BRANCH, so it has no path for a commit already sitting on
+    // trunk — and the message said "push by hand (COLAB_HUMAN=1)". That is a back door printed at
+    // the exact moment its reader has no other option, and two independent sessions walked through
+    // it in one day (#322). The honest recovery was always cheaper than the bypass: the squash is
+    // reproducible from the branch, which still exists (B3 has not run), so putting the target back
+    // where it started loses nothing and makes `colab ship` re-runnable — B0 re-syncs, and #322's
+    // new sync precondition refuses early if the remote has genuinely moved.
+    //
+    // Guarded on HEAD still being the commit we just made: if anything else moved the target
+    // meanwhile, this is no longer our commit to unwind, and the reset is skipped in favour of
+    // saying so.
+    const headNow = git.git(['rev-parse', 'HEAD'], targetDir).stdout;
+    const ours = !!(headNow && mergeSha && preMergeSha && headNow === mergeSha);
+    const rolled = ours ? git.git(['reset', '--hard', preMergeSha], targetDir).ok : false;
+    process.stderr.write(`✗ B2: push failed: ${push.stderr.split('\n')[0]}\n`);
+    if (rolled) {
+      process.stderr.write(`  ${target} rolled back to ${shortSha(preMergeSha)} — the merge did NOT land, locally or on origin.\n`);
+      process.stderr.write(`  Nothing is lost: ${sess.branch} still carries the work. Re-run \`colab ship\` (B0 re-syncs first).\n`);
+    } else {
+      process.stderr.write(`  ${target} is committed locally at ${sha} and NOT pushed, and could not be rolled back automatically.\n`);
+      process.stderr.write(`  Put the checkout back before anything else reads it, then re-run \`colab ship\`:\n`);
+      process.stderr.write(`      git -C ${targetDir} reset --hard ${preMergeSha || `origin/${target}`}\n`);
+      process.stderr.write(`  Do not publish it from here by hand — ${target} is push-guarded on purpose, and the branch\n`);
+      process.stderr.write('  can produce this same merge again.\n');
+    }
     cleanupEphemeral(); cleanupTarget();
     return 1;
   }
   print('  pushed.');
+
+  // The squash is on the target AND published → the worktree's branch is genuinely merged. Recorded
+  // here rather than right after B1 (#322): between the two, the push can still fail and be rolled
+  // back, and a `status: merged` record written before that point outlives a merge that never
+  // happened — inviting a later sweep to tear down a branch whose work is still only on the branch.
+  if (sess.name) state.mutate((st) => { if (st.worktrees[sess.name]) st.worktrees[sess.name].status = 'merged'; });
 
   // ---- (e2) POST-SHIP: the target checkout's installed tree may now be stale (#304) ----
   // The merge has landed and is pushed. Nothing below may fail the ship: there is nothing left to
