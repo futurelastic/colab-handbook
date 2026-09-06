@@ -1435,7 +1435,10 @@ colab doctor --prune     # free claims whose worktrees no longer exist
   another, so a qualifier can never be mistaken for `pass`). Read by equality, never by
   prefix or heading text; an unrecognised token or a missing marker both mean "not
   cleared", never a silent default to the safe-looking value — the same *degrade, never
-  gate* posture applies to its absence.
+  gate* posture applies to its absence. A **third** member of the family, `<!-- colab:disposition
+  proposed=<token> -->`, proposes how a non-code unit of work ends — same closed-set,
+  read-by-equality, degrade-never-gate rules (*Disposition — the marker, the seven kinds, and who
+  may apply one*, below).
 - **Simultaneous claims break ties deterministically**: re-read after claiming, the
   earliest live claim comment (by `createdAt`) wins, the loser posts
   `✅ Released (yielded — …)`.
@@ -1700,6 +1703,112 @@ This generalises the `Ask: … | deferred(<trigger>)` line (*Ask*, above) beyond
 scoped to filing time, and mechanically ungrepped anywhere in this repo's own tooling;
 `deferred:<kind>` + `review-by:<date>` is a label pair any consumer can query and act on
 without parsing prose.
+
+#### Disposition — the marker, the seven kinds, and who may apply one (#315)
+
+The park above is one of seven ways a piece of work can end. This subsection names all
+seven, the marker that proposes one, and the rule deciding whether an agent may apply it
+unattended or a human must.
+
+**A session does not dispose of its own issue.** It does the work, posts evidence, and
+proposes a disposition; a **separate later pass applies it**. That separation is the whole
+point: *looking something up is not doing it*, and a session grading its own measurement is
+the failure this exists to prevent. It is the same shape as the code lane — an implementer
+hands off, a coordinator lands it — with a different oracle.
+
+**The proposal is a marker**, one line, the family `colab:evidence` / `colab:grade` already
+use (*Rules*, above), followed by a one-line reason in prose:
+
+```md
+<!-- colab:disposition proposed=hold -->
+Waiting on the DNS change; `review-by:2026-10-01`.
+```
+
+`<token>` is one of a **closed** set of seven, **read by equality** — never by prefix, never
+by heading text. No token is a prefix or a decorated variant of another. An unrecognised
+token, a missing marker, or two markers proposing different things all mean **"not
+cleared"** — never a silent default to the safe-looking value. *Degrade, never gate* applies
+to absence exactly as it does for `colab:evidence`: a comment with no marker is evidence
+with no proposal, never "no evidence exists".
+
+**The kind and the token differ for exactly one member.** `not planned` keeps GitHub's own
+close-reason spelling, because that is the string the close is made with; its token is
+`not-planned`, because a token compared by equality cannot carry whitespace.
+
+| Kind | Token | What it means | What it converts to |
+|---|---|---|---|
+| `done` | `done` | The ask was executed **and** cross-checked; acceptance ticked, or a remainder declared | closes with evidence |
+| `split` | `split` | Part landed; the remainder is filed as a native sub-issue carrying the same `delivery:` and a wake condition, evidence copied across | closes with evidence |
+| `routed-out` | `routed-out` | The work belongs to another repo; `<other-repo>#N` exists and links back | closes with evidence |
+| `hold` | `hold` | Parked on a named wake condition | `deferred:<kind>` + `review-by:<date>` (above) |
+| `needs-boss` | `needs-boss` | A human must answer before anything else can happen | a recorded decision (*Decision gate*, below) |
+| `not planned` | `not-planned` | Superseded, or the direction was abandoned | closes as `not planned` |
+| `leave` | `leave` | Nothing decided | **never applied by an agent** — a nameable wake ⇒ `hold`; nothing to name ⇒ a *finding* |
+
+`leave` is the one kind that is not really a disposition. An issue on its fourth session
+with no disposition is a **brief problem, not a measurement problem** — so an agent converts
+it or reports it, and never leaves it. A human may leave with a reason; that reason is
+itself the wake condition.
+
+**The evidence a marker rides on has a fixed shape** — *what was done · the command · the
+result · what remains*. Free-form evidence is a **finding, not a disposition**: a pass that
+cannot tell what was done from what remains cannot verify either, and applying anything on
+top of it is a guess wearing a marker. Where the ask was an **action** rather than a
+measurement, a fifth line carries the **cross-check**: a second, independent, re-runnable
+command confirming the effect. That line is what makes `done` mechanical — a measurement
+cannot cross-check itself.
+
+##### Who may apply one — a table over measurable inputs, never a judgement call
+
+"Sometimes an agent, sometimes a human" has to be **deterministic**, decided from facts on
+the issue, never from an agent's own confidence in its work. Two inputs are shared, and both
+gate only the two kinds whose close **asserts an outcome** — `done` and `not planned`.
+`split` and `routed-out` close too, but they re-home work rather than claim it finished, so
+neither input reaches them.
+
+- **The axis of record** (*Exposure*, §2). `exposure: released` ⇒ a human confirms; `none`,
+  `self` and `live` ⇒ the agent applies. Read a legacy `tier`-only descriptor **through**
+  that axis (`A -> released`, `C -> live`, `B -> null`) rather than by letter — which means
+  a bare `tier: B` resolves to *no opinion*, and no opinion is not permission. This mirrors
+  how `autonomy:` is granted by the repo and never claimed by the agent.
+- **Skip-fence class** — production access, credentials, destructive or non-undoable
+  operations, promotion. Evidence naming one of these ⇒ human, whatever the exposure. The
+  agent names the classes its evidence touches; nothing sniffs prose for them.
+
+| Disposition | **Agent applies** unattended when… | **Human must** apply when… |
+|---|---|---|
+| `done` | evidence in the fixed shape **∧** a re-runnable cross-check recorded **∧** acceptance ticked or a remainder declared **∧** the issue gates nothing still open **∧** the axis permits **∧** no skip-fence class | the axis does not permit · a skip-fence class · no cross-check possible · the issue is a gate node for something open |
+| `split` | the remainder is filed as a native sub-issue with the same `delivery:` and a wake condition, evidence copied across | never — filing is mechanical |
+| `routed-out` | `<other-repo>#N` exists **and** links back to this issue | never — but the filing itself obeys the destination repo's own language rule |
+| `hold` | a wake condition is present — `review-by:<date>` **or** a real `blockedBy` edge | the wake has stood **30 d** (a PROPOSAL, unmeasured) with no movement ⇒ a human confirms it is still wanted, else `not planned` |
+| `needs-boss` | **never** — the agent *records* the question and moves on (record-first) | always; the answer returns the issue to intake |
+| `not planned` | superseded by a **merged or closed** replacement that references this issue | an abandoned direction — a human judgement, always |
+| `leave` | **never** — the agent converts it (see above) | a human may leave with a reason |
+
+Three properties hold this together, and each is load-bearing:
+
+- **Fails towards `human`, always.** An absent, malformed or unresolvable fact never yields
+  `agent` — the posture *Readiness* (above) takes towards `ready`, for the same reason.
+  Spending a human's attention on something mechanical is cheap and visible; closing an
+  issue nobody checked is expensive and invisible.
+- **"An agent may" is never "a human may not."** A human can apply any disposition on any
+  issue at any time, in either direction. The verdict is a proposal, not a lock.
+- **A mechanical gap is not a judgement call.** `split` with nothing filed yet, or `hold`
+  with no wake named, is not *escalated* — it is *incomplete*. The fix is to file the
+  sub-issue or name the wake, not to ask somebody. Only the outcome-asserting kinds escalate.
+
+**The reference implementation is `tools/lib/disposition.js`** — pure, facts in, `agent` |
+`human` out, no tracker I/O, the pattern `readiness.js`, `landed.js` and `axis-authority.js`
+already set. Two consumers reaching the same verdict from the same evidence holds **by
+construction** only if both call one function, or copy-and-own that file ([§9](#9-adopting-this)); two prose
+copies of the table above is the two-places-drift disease this handbook exists to kill.
+`parseMarker` / `formatMarker` are the only sanctioned way to read or write the marker —
+they are what keeps the token set closed and the comparison by equality.
+
+**This section defines vocabulary only**, exactly as the park above does. Nothing in this
+repo's own tooling writes `colab:disposition` today, and no skill here reads it: the pass
+that applies a disposition is coupled to a consumer's own surfaces and lives with that
+consumer, not in a repo-generic handbook. What lives here is the table both sides agree on.
 
 #### Decision gate — a human must answer first (#122)
 
