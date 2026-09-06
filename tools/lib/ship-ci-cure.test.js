@@ -162,3 +162,64 @@ test('ci-grant CREATE still refuses on this fixture exactly as before #281 (comp
   assert.doesNotMatch(r.out, /Granted/);
   assert.match(r.err, /could not read #1 from the tracker — refusing to write a grant blind/);
 });
+
+// --- #321: the workflow carve-out leaves every wiring contract above intact -------------------
+//
+// Same limit as this file's banner: the carve-out cannot FIRE here either, because the raw verdict
+// against a local-bare `origin` is always SELF_CLEARING and neither door is consulted. Its
+// judgement is unit-tested without a live `gh` in tools/lib/ci-cure.test.js, on purpose. What these
+// prove is that adding it disturbed nothing on the paths this fixture CAN reach.
+
+test('#321: a branch that TOUCHES .github/workflows/** still reads not-ok here, and ciCure stays null — the carve-out is not a way around a self-clearing CI read', () => {
+  const fx = fixture(PROJECT_YML_AUTO_TRUNK);
+  fx.g(fx.work, 'checkout', '-q', '-b', 'fix/ci-repair-9');
+  fs.mkdirSync(path.join(fx.work, '.github', 'workflows'), { recursive: true });
+  fs.writeFileSync(path.join(fx.work, '.github', 'workflows', 'ci.yml'), 'name: ci\non: push\n');
+  fx.g(fx.work, 'add', '-A');
+  fx.g(fx.work, 'commit', '-q', '-m', 'fix: pin jobs to a networked runner pool');
+  fx.g(fx.work, 'push', '-q', '-u', 'origin', 'fix/ci-repair-9');
+  fx.g(fx.work, 'checkout', '-q', 'main');
+  colab(fx, ['claim', '9', '--branch', 'fix/ci-repair-9', '--repo', fx.work]);
+
+  const r = colab(fx, ['ship', '--branch', 'fix/ci-repair-9', '--repo', fx.work, '--dry', '--json']);
+  const body = JSON.parse(r.out);
+  const ci = body.checks.find((c) => c.name === 'trunk CI green');
+  assert.strictEqual(ci.ok, false);
+  assert.strictEqual(body.ciCure, null, 'a self-clearing CI read must consult neither door, workflow touch or not');
+  assert.strictEqual(body.ciGrant, null);
+});
+
+test('#321: shipCiCure pays for NO job-level gh read on the ordinary path — the calls sit inside the workflowsTouched guard', () => {
+  // Read as source, not behaviour: the fixture can never reach the cure rule (see the banner), so
+  // the only honest oracle for "costs nothing when not needed" is that the two job-level readers
+  // are lexically inside the guard. A regression that hoisted them would make every red-trunk ship
+  // pay a `gh run view` per run.
+  const src = fs.readFileSync(path.join(REPO_ROOT, 'tools', 'colab'), 'utf8');
+  const fn = src.slice(src.indexOf('function shipCiCure('), src.indexOf('function shipCureJobEvidence('));
+  assert.ok(fn.length > 0, 'shipCiCure/shipCureJobEvidence not found — this assertion needs updating, not deleting');
+  assert.doesNotMatch(fn, /ghRunJobs|ghRunsForCommit/, 'job-level reads must not sit in shipCiCure itself');
+  assert.match(fn, /workflowsTouched \? shipCureJobEvidence\(/, 'the job-level read must be gated on workflowsTouched');
+});
+
+test('#321: the CI-Cure trailer keeps its anchored `CI-Cure:` prefix — computeAntiStacking greps on it', () => {
+  const src = fs.readFileSync(path.join(REPO_ROOT, 'tools', 'colab'), 'utf8');
+  // The carve-out appends a suffix; the prefix is what the scan at `--grep=^CI-Cure:` matches, so
+  // the two must stay in this relationship, not in wording lockstep.
+  assert.match(src, /return `CI-Cure: branch \$\{branch\}/);
+  assert.match(src, /--grep=\^CI-Cure:/);
+});
+
+test('#321: ciCurePayload reports WHICH door fired — `via` on every cure row, `carveOut` only when the widened one did', () => {
+  // Source-level, and honestly so: `ciCurePayload` is a plain function inside `tools/colab` (not a
+  // requireable module) and the fixture can never produce a cure verdict for it to shape, so there
+  // is no behavioural path to it from here. Asserting the source is a weaker check than a call —
+  // it is also the only one available, and it still catches the regression that matters: `via`
+  // silently dropping out of the payload a reader uses to tell an ordinary cure from a carve-out.
+  const src = fs.readFileSync(path.join(REPO_ROOT, 'tools', 'colab'), 'utf8');
+  const fn = src.slice(src.indexOf('function ciCurePayload('));
+  const body = fn.slice(0, fn.indexOf('\n}\n') + 3);
+  assert.match(body, /via: c\.carveOut \? 'workflow-carve-out' : 'ordinary'/);
+  assert.match(body, /redDurationMs: j\.redMs/);
+  assert.match(body, /branchDurationMs: j\.branchMs/);
+  assert.match(body, /: null,/, 'carveOut must be null, not absent, on the ordinary path');
+});

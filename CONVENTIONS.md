@@ -2010,7 +2010,46 @@ ci-grant when any condition below is not met. Fires **iff**:
    continuous red.
 4. the branch diff does **not** touch `.github/workflows/**` — a branch may not
    self-certify a change to the CI configuration that is grading it. This door
-   stays behind a human ci-grant.
+   stays behind a human ci-grant, **unless** the branch passes the carve-out
+   below.
+
+**The workflow carve-out (#321) — one guarded door through condition 4, not a
+relaxation of it.** The repair for a CI-*infrastructure* outage is, by
+construction, a workflow change: when trunk goes red because the runner pool
+cannot reach a service container, the branch that fixes it necessarily edits
+`.github/workflows/**` and was therefore permanently cure-ineligible however
+green it was — leaving a mechanically-verifiable repair waiting on a human who
+may not be watching. Worse, the human is measurably the wrong judge here: a
+genuine repair and a "CI fix" that pins every job to a runner missing a shared
+library read identically in a one-line grant prompt, and granting the wrong one
+converts a 30-hour stall into a permanently red trunk. The CI evidence tells
+them apart. So a workflow-touching branch may still cure when, on top of 1-3,
+**all** of:
+
+- **4a — job-name superset.** Every job RED on trunk's run at the red sha
+  exists on the branch's own green run, completed and concluded `success`.
+  *"I made the red job disappear"* — deleted, renamed, filtered away — fails here.
+- **4b — executed-step superset.** For each of those jobs, every step that
+  actually **ran** on trunk (reached a terminal, non-skipped conclusion) is
+  present on the branch's job and concluded `success`. Steps *after* the failing
+  one are `skipped` on trunk and so constrain nothing — only steps that
+  demonstrably ran do. *"I made it exit early"* fails here. This is the
+  structural, primary sub-test: it embeds no constant and is symmetric with 4a
+  one level down. It is also why job-level `success` is not enough on its own —
+  GitHub reports a job whose steps were **all** skipped as `conclusion:
+  success`, so run- and job-level conclusions are blind to exactly the fast-exit
+  this catches.
+- **4c — duration floor.** Each of those jobs cost at least the wall time its
+  failure did on trunk. 4b proves the *steps* ran; it cannot see a step's `run:`
+  body gutted to a no-op inside the very workflow file being carved for, and
+  duration is the only signal that touches that. The comparison is against a
+  measurement taken in the same repo, on the same job, on the same runner class,
+  minutes apart — so there is no repo-specific constant to tune. Measured case:
+  `browser` fast-failing at 36s pre-fix versus passing at 11m8s on the repair.
+
+Anything unmeasurable — no job evidence, an empty red-job set, an unreadable
+step list, a missing duration — **refuses**, exactly as before. The carve-out
+only ever widens the door on evidence, never on the absence of it.
 
 Conditions 1+2 together mean the branch's tree passed the full suite **including
 the tests trunk is currently failing** — merging it provably turns trunk green.
@@ -2023,6 +2062,36 @@ no label, and no tracker comment: nothing here is a human write.
   not files. Condition 4 closes only the adjacent, checkable door (weakening the CI
   config itself); content weakening is caught where it is caught today — review/grade
   time, downstream of ship.
+- **The carve-out's own honest limit, in the same register:** it proves the red
+  jobs still exist, still ran the steps they ran on trunk, and still cost at
+  least the wall time the failure did. It cannot see what those steps
+  **asserted**. A workflow edit that preserves every step name and every second
+  of wall time while weakening what the commands actually check passes this door
+  — the same content-blindness above, moved one layer down into the workflow
+  itself. What it closes is the structural form: deleting, renaming, `if:`-ing
+  away, or fast-exiting the job trunk is red on.
+- **Two known, accepted false refusals — both fall through to the ordinary
+  ci-grant, which is the safe direction.** (i) A trunk job that failed by
+  **timeout** or hang ran *longer* than any healthy green run, so 4c refuses the
+  genuine repair; relaxing 4c for a `timed_out`/`cancelled` red job is a
+  deliberately unmade decision — one `if`, and the obvious first follow-up the
+  moment it is observed in the field, but adding it unmeasured is the
+  speculative loosening condition 4 exists to resist. (ii) A repair that
+  legitimately **renames** a job or a step fails 4a/4b, because the gate cannot
+  distinguish a rename from a deletion. Expect this to be the most common benign
+  refusal.
+- **`package.json`'s `scripts` block is not in scope of this carve-out, and must
+  not be folded into it.** The carve-out's evidence cannot adjudicate a
+  scripts-block weakening in the general case — it happens inside a step whose
+  name and conclusion are unchanged and whose duration delta may sit below any
+  signal, so 4b and 4c would both silently pass a change they are structurally
+  unable to see. Two instrument paths, two different doors. What is named once
+  is the carve-out *predicate*, never the path list.
+
+The full reasoning — why the executed-step superset is the primary test and a
+bare duration threshold was rejected, what the two accepted false refusals cost,
+and why the `timed_out` relaxation is deliberately left unwritten — is in
+[`docs/adr/321-workflow-carve-out-measures-execution-not-duration.md`](docs/adr/321-workflow-carve-out-measures-execution-not-duration.md).
 - **Containment costs a fresh CI round, by design.** Requiring the red sha in the
   branch forces a rebase onto red trunk, which moves the branch head and
   invalidates any prior green run — every cure pays one CI round at the new head.
@@ -2031,6 +2100,16 @@ no label, and no tracker comment: nothing here is a human write.
   grant's trailer it names no issue (the cure rule never reads the tracker at all,
   so it has none to name), only the branch, the red trunk sha it contained, and the
   evidence run sha.
+- **The trailer and the `--dry --json` payload name WHICH door was used.** A cure
+  admitted through the carve-out appends ` via workflow-carve-out jobs <a,b>` to
+  its trailer and reports `ciCure.via: "workflow-carve-out"` (with per-job
+  durations) instead of `"ordinary"`. This is not decoration: anti-stacking
+  permits exactly **one** exemption per continuous red episode, so a later reader
+  has to be able to tell which door spent it — a cure that went through the
+  widened door on a branch editing the CI config is a materially different fact
+  from an ordinary one, and the commit is the only artifact that still says so
+  after the runs age out. The `--grep=^CI-Cure:` scan is anchored on the prefix,
+  so the suffix never disturbs it.
 - **Group branches get simpler under this door.** A ci-grant on a group branch
   requires a valid grant on every member issue; the cure's evidence is branch-level,
   so the all-or-nothing-per-branch property holds with zero per-issue paperwork.

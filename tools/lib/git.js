@@ -476,7 +476,22 @@ function ghRunForSha(repo, branch, limit = 10) {
  * a missing `sha`. Never resolves `sha` itself — a caller with no sha to ask about has nothing to
  * pass here, unlike `ghRunForSha`'s branch-name convenience.
  */
-function ghRunForCommit(repo, branch, sha, limit = 10) {
+/**
+ * EVERY workflow run at one sha — the raw row list `ghRunForCommit` picks its single verdict from
+ * (#321). Same query, same `--json` field set, same filter; split out so both share one filter
+ * rather than drifting apart the way `shipCiCheck` and `ci-grant`'s red check once did.
+ *
+ * Returns the (possibly empty) array of rows at `sha`, or `null` on a `gh`/parse failure or a
+ * missing `sha` — `null` is "the read failed", never "no runs", exactly as it is for the singular
+ * function below.
+ *
+ * WHY A CALLER WOULD WANT ALL OF THEM. `ghRunForCommit` answers "is this sha green", for which one
+ * picked row is the right answer. It is the WRONG answer for "which jobs are red at this sha": a
+ * sha can carry several workflow runs, so building a red-job set from the one picked row could
+ * miss a second failing workflow entirely. tools/lib/ci-cure.js's #321 carve-out needs the full
+ * set for exactly that reason.
+ */
+function ghRunsForCommit(repo, branch, sha, limit = 10) {
   if (!sha) return null;
 
   // createdAt + databaseId are additive (#155): a NON-completed pick needs both to let a caller
@@ -489,8 +504,12 @@ function ghRunForCommit(repo, branch, sha, limit = 10) {
   let runs;
   try { runs = JSON.parse(r.stdout); } catch (_) { return null; }
   if (!Array.isArray(runs)) return null;
+  return runs.filter((x) => x && x.headSha === sha);
+}
 
-  const forSha = runs.filter((x) => x && x.headSha === sha);
+function ghRunForCommit(repo, branch, sha, limit = 10) {
+  const forSha = ghRunsForCommit(repo, branch, sha, limit);
+  if (forSha === null) return null;
   if (forSha.length === 0) return { status: 'none', conclusion: null, sha, createdAt: null, databaseId: null, runCount: 0 };
 
   // runCount (#176) is additive: how many sibling workflow rows exist at this sha, so a caller can
@@ -546,6 +565,44 @@ function ghRunJobCount(repo, runDatabaseId) {
 }
 
 /**
+ * The JOBS of one workflow run, with their steps (#321) — `[{name, status, conclusion, startedAt,
+ * completedAt, steps: [{name, status, conclusion}]}]`, or `null` if it could not be read (gh
+ * failure, run gone, unparseable body). `null` must NOT be read as "no jobs"; every consumer of
+ * this fails closed on it.
+ *
+ * A SIBLING of `ghRunJobCount` above, deliberately not a refactor of it: that function sits on the
+ * wedge-detection hot path, and rewriting it as `ghRunJobs(...).length` would be churn with real
+ * regression surface for no gain here.
+ *
+ * Costs one `gh run view` per run, so callers fetch it LAZILY — tools/lib/ci-cure.js's #321
+ * carve-out is the only caller today, and `colab ship` reaches it only for a branch that both
+ * touches `.github/workflows/**` and is already blocked by a red trunk. Every other ship path
+ * makes zero of these calls.
+ *
+ * Step-level detail is the whole point: GitHub reports a job whose steps were all SKIPPED as
+ * `conclusion: success`, so run- and job-level conclusions are blind to exactly the fast-exit the
+ * carve-out has to catch.
+ */
+function ghRunJobs(repo, runDatabaseId) {
+  if (runDatabaseId === null || runDatabaseId === undefined) return null;
+  const r = run('gh', ['run', 'view', String(runDatabaseId), '--json', 'jobs'], { cwd: repo });
+  if (!r.ok) return null;
+  let parsed;
+  try { parsed = JSON.parse(r.stdout); } catch (_) { return null; }
+  if (!parsed || !Array.isArray(parsed.jobs)) return null;
+  return parsed.jobs.map((j) => ({
+    name: j && j.name,
+    status: j && j.status,
+    conclusion: j && j.conclusion,
+    startedAt: (j && j.startedAt) || null,
+    completedAt: (j && j.completedAt) || null,
+    steps: j && Array.isArray(j.steps)
+      ? j.steps.map((s) => ({ name: s && s.name, status: s && s.status, conclusion: s && s.conclusion }))
+      : null,
+  }));
+}
+
+/**
  * Issues claimed by the current gh user in a repo = assigned to @me AND labeled in-progress
  * (that pairing is exactly what `colab claim` writes). Returns array of numbers, or null on failure.
  */
@@ -562,7 +619,8 @@ module.exports = {
   worktreeList, worktreeListDetailed, resolveWorktreePathForBranch, gitFailureLine,
   dirtyTracked, dirtyUntracked, dirtyAny,
   ghAvailable, ghIssueEdit, ghListLabels, ghAssignedIssues,
-  ghCurrentLogin, ghIssueView, ghIssueComment, ghRunForSha, ghRunForCommit, ghRunJobCount,
+  ghCurrentLogin, ghIssueView, ghIssueComment, ghRunForSha, ghRunForCommit, ghRunsForCommit,
+  ghRunJobCount, ghRunJobs,
   ghIssueListByLabel, ghLabelDelete, ghLabelCreate,
   ghApi, isGraphqlRateLimit, ghIssueRelease,
 };

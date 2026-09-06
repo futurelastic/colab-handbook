@@ -258,7 +258,14 @@ function fixture() {
   const bin = path.join(root, 'bin');
   fs.mkdirSync(bin);
   const runsFile = path.join(root, 'runs.json');
-  fs.writeFileSync(path.join(bin, 'gh'), `#!/bin/sh\ncat "${runsFile}"\n`, { mode: 0o755 });
+  // #321: the stub now DISPATCHES on the subcommand, because `ghRunJobs` calls `gh run view` and
+  // must be able to answer differently from `gh run list`. Everything that is not `run view` still
+  // gets runs.json verbatim, so every pre-existing case below is unaffected.
+  const jobsFile = path.join(root, 'jobs.json');
+  fs.writeFileSync(jobsFile, JSON.stringify({ jobs: [] }));
+  fs.writeFileSync(path.join(bin, 'gh'),
+    `#!/bin/sh\nif [ "$1" = "run" ] && [ "$2" = "view" ]; then cat "${jobsFile}"; exit 0; fi\ncat "${runsFile}"\n`,
+    { mode: 0o755 });
   // a `gh` that always fails, for the "gh run list failed" case
   const failBin = path.join(root, 'bin-fail');
   fs.mkdirSync(failBin);
@@ -271,7 +278,19 @@ function fixture() {
     try { return fn(); } finally { process.env.PATH = prevPath; }
   }
 
-  return { work, sha, withFakeGh: (runs, fn) => withFakeGh(runs, bin, fn), withFailingGh: (fn) => withFakeGh([], failBin, fn) };
+  /** #321: `gh run view --json jobs` answers `body` (written verbatim, so an unparseable body can
+   *  be tested too); `gh run list` still answers `runs`. */
+  function withFakeGhJobs(runs, body, fn) {
+    fs.writeFileSync(jobsFile, typeof body === 'string' ? body : JSON.stringify(body));
+    return withFakeGh(runs, bin, fn);
+  }
+
+  return {
+    work, sha,
+    withFakeGh: (runs, fn) => withFakeGh(runs, bin, fn),
+    withFailingGh: (fn) => withFakeGh([], failBin, fn),
+    withFakeGhJobs,
+  };
 }
 
 test('a cancelled sibling of a passing run on the SAME sha still reads green (#92, the deadlock case)', () => {
@@ -681,4 +700,61 @@ test('ghIssueRelease: a non-rate-limit GraphQL failure is NOT retried over REST'
   const r = fx.withBehavior('generic-fail', () => git.ghIssueRelease(fx.repo, 164));
   assert.strictEqual(r.ok, false);
   assert.strictEqual(fx.calls().length, 1, 'no REST fallback attempted for an unrelated error');
+});
+
+// --- ghRunsForCommit + ghRunJobs (#321) ------------------------------------------------------
+
+test('#321 ghRunsForCommit: returns EVERY row at the sha, not the single row ghRunForCommit picks', () => {
+  const fx = fixture();
+  const rows = fx.withFakeGh([
+    { headSha: fx.sha, status: 'completed', conclusion: 'failure', databaseId: 1 },
+    { headSha: fx.sha, status: 'completed', conclusion: 'success', databaseId: 2 },
+    { headSha: 'deadbeefdeadbeefdeadbeefdeadbeefdeadbeef', status: 'completed', conclusion: 'failure', databaseId: 3 },
+  ], () => git.ghRunsForCommit(fx.work, 'main', fx.sha));
+  // The point of the split: ghRunForCommit would return ONE verdict row here, and a red job sitting
+  // in the workflow it did not pick would be invisible to the #321 carve-out.
+  assert.deepStrictEqual(rows.map((r) => r.databaseId), [1, 2]);
+});
+
+test('#321 ghRunsForCommit: no rows at the sha is an EMPTY array, a failed read is null — never confused', () => {
+  const fx = fixture();
+  const none = fx.withFakeGh([
+    { headSha: 'deadbeefdeadbeefdeadbeefdeadbeefdeadbeef', status: 'completed', conclusion: 'success' },
+  ], () => git.ghRunsForCommit(fx.work, 'main', fx.sha));
+  assert.deepStrictEqual(none, []);
+  assert.strictEqual(fx.withFailingGh(() => git.ghRunsForCommit(fx.work, 'main', fx.sha)), null);
+  assert.strictEqual(git.ghRunsForCommit(fx.work, 'main', ''), null);
+});
+
+test('#321 ghRunJobs: returns per-job name/status/conclusion/timestamps and the STEP list', () => {
+  const fx = fixture();
+  const jobs = fx.withFakeGhJobs([], {
+    jobs: [{
+      name: 'browser', status: 'completed', conclusion: 'failure',
+      startedAt: '2026-01-01T00:00:00Z', completedAt: '2026-01-01T00:00:36Z',
+      steps: [{ name: 'Wait for MySQL', status: 'completed', conclusion: 'failure' }],
+    }],
+  }, () => git.ghRunJobs(fx.work, 4242));
+  assert.deepStrictEqual(jobs, [{
+    name: 'browser', status: 'completed', conclusion: 'failure',
+    startedAt: '2026-01-01T00:00:00Z', completedAt: '2026-01-01T00:00:36Z',
+    steps: [{ name: 'Wait for MySQL', status: 'completed', conclusion: 'failure' }],
+  }]);
+});
+
+test('#321 ghRunJobs: a job with no steps array degrades to steps:null — unmeasurable, never an empty list', () => {
+  const fx = fixture();
+  const jobs = fx.withFakeGhJobs([], { jobs: [{ name: 'ci', status: 'completed', conclusion: 'success' }] },
+    () => git.ghRunJobs(fx.work, 1));
+  assert.strictEqual(jobs[0].steps, null);
+  assert.strictEqual(jobs[0].startedAt, null);
+});
+
+test('#321 ghRunJobs: null on a gh failure, an unparseable body, a shape with no jobs array, or no run id', () => {
+  const fx = fixture();
+  assert.strictEqual(fx.withFailingGh(() => git.ghRunJobs(fx.work, 1)), null);
+  assert.strictEqual(fx.withFakeGhJobs([], 'not json at all', () => git.ghRunJobs(fx.work, 1)), null);
+  assert.strictEqual(fx.withFakeGhJobs([], { jobs: 'nope' }, () => git.ghRunJobs(fx.work, 1)), null);
+  assert.strictEqual(git.ghRunJobs(fx.work, null), null);
+  assert.strictEqual(git.ghRunJobs(fx.work, undefined), null);
 });

@@ -6856,11 +6856,22 @@ function ciGrantTrailerLine(grantVerdict, branch, trunk) {
  * per-issue (tools/lib/ci-cure.js never reads the tracker at all), so unlike `CI-Grant:` this names
  * no issue — only the branch, the red trunk sha it contained, and the evidence run sha proving the
  * branch's own head green. `computeAntiStacking`'s `--grep=^CI-Cure:` scan is the ONLY consumer that
- * cares about this line's exact wording surviving verbatim; keep the two in lockstep.
+ * cares about this line, and what it matches on is the `CI-Cure:` PREFIX, anchored — that prefix is
+ * the load-bearing part, not the whole wording, which is why the #321 carve-out may append to the
+ * line without touching the scan.
+ *
+ * A cure admitted through the #321 workflow carve-out appends ` via workflow-carve-out jobs <a,b>`.
+ * That suffix is not decoration: anti-stacking permits exactly ONE exemption per continuous red
+ * episode, so a later reader has to be able to tell WHICH door spent it — and a cure that went
+ * through the widened door on a branch editing the CI config is a materially different fact from an
+ * ordinary one. The commit is the only artifact that still says so after the runs age out.
  */
 function ciCureTrailerLine(cureVerdict, branch, trunk) {
   if (!cureVerdict || !cureVerdict.ok) return null;
-  return `CI-Cure: branch ${branch} over-red ${trunk}@${shortSha(cureVerdict.redSha)} evidence ${shortSha(cureVerdict.evidenceSha)}`;
+  const via = cureVerdict.carveOut
+    ? ` via workflow-carve-out jobs ${cureVerdict.carveOut.jobs.map((j) => j.name).join(',')}`
+    : '';
+  return `CI-Cure: branch ${branch} over-red ${trunk}@${shortSha(cureVerdict.redSha)} evidence ${shortSha(cureVerdict.evidenceSha)}${via}`;
 }
 
 const HELP_SHIP = `colab ship [--repo <path>] [--worktree <name> | --branch <br>] [--message "<msg>"] [--refs <N[,M]>] [--keep-worktree] [--delete-branch] [--dry] [--json]
@@ -6954,12 +6965,28 @@ exact failure, not merely conflict-free with it — a stronger claim than a ci-g
 makes today); (2) the branch's own CI is green AT ITS OWN CURRENT HEAD, measured, never asserted;
 (3) the same anti-stacking guard ci-grant uses holds (no prior grant OR cure merged while trunk has
 stayed continuously red since); (4) the branch diff does not touch \`.github/workflows/**\` (a branch
-may not self-certify a change to the CI configuration grading it). A cured merge carries a
-\`CI-Cure:\` trailer instead of \`CI-Grant:\`. Honest limit: test-file self-weakening (gutting the
-failing tests) is invisible at this gate either way — condition 4 closes only the CI-config door,
-not the test-content one. Falls through to ci-grant automatically when any condition fails — the
+may not self-certify a change to the CI configuration grading it) — UNLESS it passes the #321
+CARVE-OUT below. A cured merge carries a \`CI-Cure:\` trailer instead of \`CI-Grant:\`. Honest limit:
+test-file self-weakening (gutting the failing tests) is invisible at this gate either way —
+condition 4 closes only the CI-config door, not the test-content one. Falls through to ci-grant
+automatically when any condition fails — the
 cure rule narrows the human's job, it never replaces the door for what it does not cover (a
 non-cure red-trunk merge, a wedged run, a repo with no usable CI).
+
+THE #321 WORKFLOW CARVE-OUT exists because the repair for a CI-INFRASTRUCTURE outage IS a workflow
+change, so condition (4) permanently locked out the one branch class that can end such a stall. It
+is one guarded door, not a relaxation: on top of (1)-(3), ALL of — (4a) every job RED on trunk's run
+exists on the branch's own green run, completed and successful (deleting, renaming or filtering the
+failing job away fails here); (4b) every step that actually RAN in those jobs on trunk is present on
+the branch and concluded \`success\` (steps after the failure are \`skipped\` on trunk and constrain
+nothing — this is the sub-test that catches a fast exit, because GitHub reports a job whose steps
+were all skipped as \`conclusion: success\`); (4c) each of those jobs cost at least the wall time its
+failure did on trunk. Anything unmeasurable refuses, exactly as before. A carve-out cure names the
+door in its \`CI-Cure:\` trailer and in \`--dry --json\`'s \`ciCure.via\`, because anti-stacking permits
+only ONE exemption per continuous red and a later reader must be able to tell which door spent it.
+Its own honest limit: it proves the red jobs still ran the steps they ran and still cost the time —
+never what those steps ASSERTED. Known false refusal: a trunk job that failed by TIMEOUT ran longer
+than any healthy run, so (4c) refuses the genuine repair; take the ordinary ci-grant door there.
 
 The default squash subject is the branch's HIGHEST-WEIGHT commit (breaking > feat > fix > perf >
 refactor > docs > test > chore, ties to the oldest) — NOT its newest commit, which on a well-run
@@ -7421,9 +7448,15 @@ function applyRedTrunkExemptions(raw, target, trunk, redSha, grantThunk, cureThu
 
   const cureVerdict = cureThunk ? cureThunk(redSha) : null;
   if (cureVerdict && cureVerdict.ok) {
+    // A carve-out cure must never render as an ordinary one: the branch edits the CI config that is
+    // grading it, and "contains red X and is green at its own head" is a materially incomplete
+    // account of why that was allowed through (#321).
+    const via = cureVerdict.carveOut
+      ? ` THROUGH THE #321 WORKFLOW CARVE-OUT — every job red on trunk ran to success here: ${cureVerdict.carveOut.jobs.map((j) => `${j.name} (${j.redMs}ms red, ${j.branchMs}ms passing)`).join(', ')}`
+      : '';
     return {
       name: raw.name, ok: true, class: null,
-      detail: `PRECONDITION OVERRIDDEN by the cure rule (#281) — branch contains red ${shortSha(redSha)} and is green at its own head (raw: ${raw.detail})`,
+      detail: `PRECONDITION OVERRIDDEN by the cure rule (#281) — branch contains red ${shortSha(redSha)} and is green at its own head${via} (raw: ${raw.detail})`,
       grantVerdict: null, cureVerdict,
     };
   }
@@ -7498,11 +7531,31 @@ function ciGrantPayload(ciResult) {
  *   4. workflow-file changes — `git diff --name-only <trunk>...<branch>` (merge-base-relative, the
  *      same idiom `shipMergeConflictCheck`'s diff-review paths use elsewhere in this file), filtered
  *      for any path under `.github/workflows/`.
+ *   5. job-level evidence for the #321 carve-out — measured ONLY when step 4 found a workflow touch,
+ *      because that is the only case a verdict can be changed by it. Every other ship — an ordinary
+ *      cure, and every green-trunk ship — makes ZERO of these calls, preserving the lazy-read
+ *      discipline `ghRunJobCount`'s own doc comment already establishes. On the carve-out path it
+ *      costs one `gh run list` (all runs at the red sha, not just the one picked row — a sha can
+ *      carry several workflow runs and a red job could hide in the one not picked) plus one
+ *      `gh run view` per not-green red run, plus one for the branch's own evidence run.
+ *
+ * The raw job rows are shaped by ci-cure.js's PURE `shapeJobEvidence`, not here: the red-job
+ * selection rule is a judgement and belongs where it can be unit-tested, leaving this function's
+ * untestable residue to plain I/O. Any failed read hands the pure module `null`, which refuses —
+ * the carve-out only ever widens the door on evidence, never on the absence of it.
+ *
+ * DELIBERATELY NOT threading trunk's red run object down from `shipCiCheck` through
+ * `applyRedTrunkExemptions`'s `cureThunk`: that would change the thunk signature at all three call
+ * sites and still carry only ONE of possibly several runs at the red sha. Re-resolving here costs
+ * one extra `gh run list` on the carve-out path alone and touches zero call sites.
  *
  * Returns tools/lib/ci-cure.js's verdict shape PLUS `redSha`/`evidenceSha` folded in — additive
  * fields the pure module itself never carries (it only ever sees the sha values passed in), needed
  * so `ciCureTrailerLine`/`ciCurePayload` can read them straight off the verdict, same convention
- * `shipCiGrants`'s `granted[].redSha`/`evidenceSha` already establishes for the grant side.
+ * `shipCiGrants`'s `granted[].redSha`/`evidenceSha` already establishes for the grant side. A cure
+ * admitted through the carve-out additionally carries `carveOut: {jobs}` straight off the pure
+ * verdict — the presence of that key is what tells the trailer and the JSON payload which door
+ * fired.
  */
 function shipCiCure(repoAbs, gh, target, trunk, redSha, branch) {
   if (!gh) {
@@ -7515,8 +7568,49 @@ function shipCiCure(repoAbs, gh, target, trunk, redSha, branch) {
   const diffR = git.git(['diff', '--name-only', `${trunk}...${branch}`], repoAbs);
   const changed = diffR.ok ? diffR.stdout.split('\n').filter(Boolean) : [];
   const workflowsTouched = changed.some((f) => f.startsWith('.github/workflows/'));
-  const verdict = ciCure.cureVerdict({ containsRedSha, evidence, redSha, stacking, workflowsTouched });
+  const jobEvidence = workflowsTouched ? shipCureJobEvidence(repoAbs, trunk, redSha, branch, evRun) : null;
+  const verdict = ciCure.cureVerdict({ containsRedSha, evidence, redSha, stacking, workflowsTouched, jobEvidence });
   return { ...verdict, redSha, evidenceSha: evidence ? evidence.sha : null };
+}
+
+/**
+ * The job-level read behind the #321 carve-out — the ONLY caller is `shipCiCure` above, and only
+ * when the branch actually touches `.github/workflows/**`. Everything it returns is raw: the
+ * judgement (which jobs count as red, what a step "running" means, how a duration is derived) lives
+ * in ci-cure.js's pure `shapeJobEvidence`, so it can be tested without a live `gh`.
+ *
+ * Returns `null` on ANY failed read. That is not a shortcut: `null` reaches `cureVerdict` as
+ * "unmeasurable", which refuses and falls through to the ordinary human ci-grant — the same
+ * fail-closed direction every other unmeasured signal in this subsystem takes.
+ *
+ * `evRun` is the branch's own evidence run, already read by the caller — its `databaseId` is reused
+ * rather than re-resolved, so the branch side costs one `gh run view` and no second `run list`.
+ */
+function shipCureJobEvidence(repoAbs, trunk, redSha, branch, evRun) {
+  if (!evRun || evRun.databaseId === null || evRun.databaseId === undefined) return null;
+
+  // ALL runs at the red sha, not the single row `ghRunForCommit` would pick: a red job can sit in a
+  // sibling workflow the picker never returned, and admitting a carve-out while that job is still
+  // red is exactly the failure this evidence exists to prevent.
+  const redRuns = git.ghRunsForCommit(repoAbs, trunk, redSha);
+  if (redRuns === null || redRuns.length === 0) return null;
+
+  // Same inverted allowlist git.js uses at run level (#146/#165): only `success`/`cancelled` are
+  // not-bad, so a new not-success conclusion value is covered the day GitHub invents it.
+  const notGreen = redRuns.filter((r) => r.status === 'completed' && r.conclusion !== 'success' && r.conclusion !== 'cancelled');
+  if (notGreen.length === 0) return null;
+
+  const redRunJobs = [];
+  for (const r of notGreen) {
+    const jobs = git.ghRunJobs(repoAbs, r.databaseId);
+    if (jobs === null) return null;
+    redRunJobs.push(...jobs);
+  }
+
+  const branchRunJobs = git.ghRunJobs(repoAbs, evRun.databaseId);
+  if (branchRunJobs === null) return null;
+
+  return ciCure.shapeJobEvidence({ redRunJobs, branchRunJobs });
 }
 
 /**
@@ -7528,7 +7622,18 @@ function shipCiCure(repoAbs, gh, target, trunk, redSha, branch) {
 function ciCurePayload(ciResult) {
   if (!ciResult.cureVerdict) return null;
   const c = ciResult.cureVerdict;
-  return { ok: c.ok, reason: c.reason, redSha: c.redSha, evidenceSha: c.evidenceSha };
+  // `via` answers "which door" without a consumer re-deriving it from prose (#321). It is present
+  // on every cure row, including refusals, so a reader never has to treat its absence as a third
+  // state; `carveOut` carries the per-job evidence and is null unless the widened door actually
+  // fired. Same reason the `CI-Cure:` trailer names it: one exemption per red episode, so which
+  // door spent it is the fact a later reader needs.
+  return {
+    ok: c.ok, reason: c.reason, redSha: c.redSha, evidenceSha: c.evidenceSha,
+    via: c.carveOut ? 'workflow-carve-out' : 'ordinary',
+    carveOut: c.carveOut
+      ? { jobs: c.carveOut.jobs.map((j) => ({ name: j.name, redDurationMs: j.redMs, branchDurationMs: j.branchMs })) }
+      : null,
+  };
 }
 
 /**
@@ -8417,7 +8522,9 @@ function cmdShip(argv) {
       return 1;
     }
     if (ciResultB1.cureVerdict && ciResultB1.cureVerdict.ok) {
-      warn(`  ✓ trunk CI green ONLY because of the machine-checkable cure rule — this merge carries a CI-Cure: trailer.`);
+      warn(ciResultB1.cureVerdict.carveOut
+        ? `  ✓ trunk CI green ONLY because of the machine-checkable cure rule, through the #321 WORKFLOW CARVE-OUT (this branch edits .github/workflows/**; jobs proven: ${ciResultB1.cureVerdict.carveOut.jobs.map((j) => j.name).join(', ')}) — this merge carries a CI-Cure: trailer.`
+        : `  ✓ trunk CI green ONLY because of the machine-checkable cure rule — this merge carries a CI-Cure: trailer.`);
       ciCureForTrailer = ciResultB1.cureVerdict;
     } else if (ciResultB1.grantVerdict && ciResultB1.grantVerdict.ok) {
       warn(`  ✓ trunk CI green ONLY because of a human ci-grant — this merge carries a CI-Grant: trailer.`);
