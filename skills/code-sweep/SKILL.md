@@ -1,6 +1,6 @@
 ---
 name: code-sweep
-description: "Clear out everything finished in ONE repo: find every worktree whose work has landed, every issue whose code shipped but is still open, and every claim outliving its session — then put each through code-wrap and code-ship in sequence, one at a time. Run it at end of day, or ping it whenever a session goes idle — cheap to re-run only when §0 is honoured first, a convention the executing agent follows and not a gate anything enforces (its fingerprint stays sensitive to branch tips, so the cheap path is rarer here than in code-triage — see §0). Sorts candidates into wrap / teardown-only / claim-only / place-claim / unrecorded / blocked / unlinked, because most do not need a full wrap+ship. A candidate that fails mid-run is deferred and the run carries on to the next one; only a repo-wide blocker (trunk CI dead or red) or a destructive/unclassifiable failure stops the sweep. Can be scoped to a set of issues or one session/worktree instead of the whole repo. Trigger phrases: 'sweep the repo', 'wrap everything finished', 'clean up the worktrees', 'close out the session work', 'tidy up finished work', 'wrap all the done branches', 'sweep the issues #95 #96', 'sweep the session <name>', 'ship these'; and — when this session's last act was a sweep — the re-ping forms 'again', 'anything new?', 'check again', 'anything to wrap yet?', or a bare 'go'. Composes code-wrap then code-ship per candidate; never batches merges."
+description: "Clear out everything finished in ONE repo: find every worktree whose work has landed, every issue whose code shipped but is still open, and every claim outliving its session — then put each through code-wrap and code-ship in sequence, one at a time. Run it at end of day, or ping it whenever a session goes idle — cheap to re-run only when §0 is honoured first, a convention the executing agent follows and not a gate anything enforces (its fingerprint stays sensitive to branch tips, so the cheap path is rarer here than in code-triage — see §0). Sorts candidates into wrap / teardown-only / claim-only / place-claim / unrecorded / blocked / unlinked, because most do not need a full wrap+ship. A candidate that fails mid-run is deferred and the run carries on to the next one; only a repo-wide blocker (trunk CI dead or red) or a destructive/unclassifiable failure stops the sweep. Before writing its cache record and reporting, it re-derives the candidate set once more, so a branch that finished its wrap while a long grade was running is processed or named, never left waiting on a notification that does not exist. Can be scoped to a set of issues or one session/worktree instead of the whole repo. Trigger phrases: 'sweep the repo', 'wrap everything finished', 'clean up the worktrees', 'close out the session work', 'tidy up finished work', 'wrap all the done branches', 'sweep the issues #95 #96', 'sweep the session <name>', 'ship these'; and — when this session's last act was a sweep — the re-ping forms 'again', 'anything new?', 'check again', 'anything to wrap yet?', or a bare 'go'. Composes code-wrap then code-ship per candidate; never batches merges."
 ---
 
 # code-sweep — clear out everything finished, one at a time
@@ -137,7 +137,7 @@ code-triage's own `/2` record plus the bounded `interrupted` block this section 
   },
   "lastRun": { "decision": "full", "moved": ["branchTips"], "calls": 27 },
   "interrupted": { "completed": ["…"], "stoppedOn": "…", "stopReason": "…" },
-  "conclusion": { "wrapped": ["…"], "deferred": [{ "candidate": "…", "reason": "…" }], "blocked": ["…"], "…": "…" }
+  "conclusion": { "wrapped": ["…"], "deferred": [{ "candidate": "…", "reason": "…" }], "blocked": ["…"], "ripened": [{ "candidate": "…", "processed": false, "reason": "…" }], "…": "…" }
 }
 ```
 
@@ -500,6 +500,9 @@ For each **wrap** candidate, in order:
    the *current* trunk, harvest, grade, merge, evidence, release, teardown.
 3. **Then** move to the next. Trunk has moved; the next B0 must see that.
 
+When the list runs out, the run is not over: [§5.1](#51-re-derive-once-more-before-you-stop-329)
+re-derives it once more. The list you started with is not the list the repo has now.
+
 ### A failure defers that candidate — the run goes on (#308)
 
 This was one paragraph reading *stop the sweep there* on any failure. It is now three
@@ -584,6 +587,68 @@ Worktrees are only half of it. Also:
   rewrite its prose, never build a table that does not exist, never infer parentage
   from a title.
 
+### 5.1 Re-derive once more before you stop (#329)
+
+§0 and §1 build the candidate set at the **start** of a run, and §0.1 rebuilds it after a
+cleared blocker. Nothing rebuilt it before the run **ended**, and a run that grades
+something hard can take hours. Anything that becomes a candidate in that window is
+invisible to the run that is already going.
+
+Measured twice, on an `auto-trunk` repo with autopilot-spawned sweeps:
+
+- A sweep started at 09:48Z and spent about 2.5 h on one group (rejected twice, with a
+  ruling in between). At 11:30Z a different branch finished `code-wrap`: pushed, CI green,
+  hand-off contract asserted. At 12:19Z the sweep reported the main checkout clean, wrote its
+  cache record and went idle. It never saw the new candidate, which waited until a
+  coordinator re-pinged the session by hand.
+- The day before, a sweep deferred a candidate behind another candidate's in-flight work and
+  ended with *"I'll carry on when the notification arrives."* Nothing sends that
+  notification. The candidate waited until someone re-pinged by hand.
+
+**So the last step before the `$CACHE` write and the §6 report is one more derive:**
+
+1. **Cheap compare first.** Recompute §0's fingerprint inputs and compare them with the
+   snapshot **this run's §1 enumeration** was built from, not with the cache record the run
+   opened against. Leave out what the run caused itself: branches it merged or deleted, and
+   the trunk sha its own merges produced. If nothing else moved, nothing ripened. That is a
+   few calls, and the step ends there.
+2. **Something else moved ⇒ re-run §1 and §3 in full.** Classify every candidate the run
+   has not already handled, plus any handled candidate whose tip moved after it was sorted.
+   A deferred branch that got a fix commit, or a `blocked` worktree whose files were
+   committed and pushed, is a new candidate now, not the same candidate as before.
+3. **Process what ripened, through §4 and §5 as usual** — one at a time, with a CI re-check
+   before each merge. Then go back to rung 1. The run ends only when a re-derive finds
+   nothing new.
+4. **Anything you leave unprocessed gets a reason.** List it as `ripened … not processed`,
+   with the reason stated. Legitimate reasons: a run-level stop is in force (the merge loop
+   is halted, but `teardown-only`/`claim-only` ripenings still get handled); the candidate
+   is outside a scoped run's selector (§1.1); or the session is ending and says so. "Did
+   not look" is not a reason. This bucket exists so that looking is never skipped.
+
+**The fingerprint and the conclusion you write must come from the same snapshot.** This is
+the part that made the first incident sticky rather than just late:
+
+- If you write the **start-of-run** fingerprint, the next ping sees branch tips that have
+  moved and does a full sweep. That wastes calls, but nothing is lost.
+- If you recompute the fingerprint **at write time without re-deriving**, the next ping
+  reads `unchanged` and re-prints a conclusion that never contained the ripened branch. The
+  blind spot then persists until some unrelated change re-arms the fingerprint.
+
+Rung 1's recompute is the one you store, and the conclusion stored with it is the one the
+final pass produced.
+
+**Never end a run on a promise to wake up.** Phrases like *"when the notification
+arrives"*, *"once X finishes I'll pick it up"* and *"I'll carry on after the grade lands"*
+all assume a channel this skill does not have. No event reaches a sweep that has already
+reported. A candidate waiting on another's in-flight work goes in `conclusion.deferred`
+with what would clear it and **what will bring it back**:
+
+- **A commit cures it.** The cure moves a branch tip, which re-arms §0 on the next ping.
+- **It needs a human act with no commit.** This is §0.1's named exception: the fingerprint
+  will not move, so say that a person has to act or re-ping.
+
+Then the run ends. It does not end on a wait.
+
 ## 6. Report
 
 ```
@@ -598,7 +663,16 @@ unrecorded      .worktrees/orphan-1      → landed vs main, no claim — remove
 blocked         feat/session-types-26    → 2 untracked files never committed — needs a human
 blocked         #58                      → branch never pushed, 3 commits local-only — needs a human
 unlinked        fix/railquiet-fixture-trunk-red → 1 commit ahead of trunk, no issue claimed — not wrapped, not dropped
+ripened         fix/late-wrap-77         → became a candidate at 11:30Z, mid-run; shipped in the §5.1 pass, trunk 9f8e7d6
+ripened         feat/late-thing-81       → became a candidate mid-run; not processed: merge loop stopped (trunk CI red)
+end-of-run      §5.1 re-derived 2x       → second pass found nothing new; fingerprint + conclusion written from it
 ```
+
+**The `end-of-run` line is required on every run that got past §0, even when it found
+nothing new** (`§5.1 re-derived 1x → nothing moved but this run's own merges`). Leave it
+out, and a reader cannot tell a run that checked from one that never looked. That
+difference is the whole of #329. A `ripened` line always says which pass handled it, or
+why no pass did.
 
 Say what you left and why. A worktree kept for a stated reason is fine; a worktree
 kept silently is the 8-of-9 statistic repeating.
@@ -664,6 +738,11 @@ the merge loop got, and that the non-merging work was **not** abandoned with it.
   through N never examined, is no longer a conforming outcome (#308).
 - A run-level stop halted the **merge loop** only: §5's reconciliation and the
   non-merging buckets either ran, or are named as deliberately skipped with a reason.
+- **§5.1 ran before the `$CACHE` write and the report**, and the report carries its
+  `end-of-run` line. Every candidate that ripened during the run was either processed or
+  listed as `ripened … not processed` with a reason. The stored fingerprint and conclusion
+  come from the same final pass. No line in the report waits on a notification, callback or
+  "once X finishes" (#329).
 - Every merge was preceded by its own CI check, not one check for the whole sweep.
 - Every issue closed carries evidence; every claim released, including on issues you
   did not finish.
