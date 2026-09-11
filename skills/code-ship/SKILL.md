@@ -627,7 +627,11 @@ grading time**, never guessed from a label alone:
   reason recorded in the plan file, or the change touches migration, promotion,
   security, money, or anything non-undoable. **A human resolves this — no exception,
   whatever any label says.** Behaviour is exactly what "reject" already meant above:
-  comment, hold every claim, stop.
+  comment, hold every claim, stop. *Resolves* does not always mean *answers a
+  question first*: when your own recommended fix already sits inside authority the
+  repo has granted, the human's part is to overrule it, not to pick it (*A reject
+  that already carries its answer*, below). Either way the claims stay held and
+  nothing merges.
 - **`escalate`** — narrow, and every condition below must hold, not just one:
   1. **The issue set carries the `mechanical-lane` label** (`code-triage`,
      *mechanical-lane*, #93). That label is the one in-repo signal that this work was
@@ -663,10 +667,69 @@ grading time**, never guessed from a label alone:
   exists to close off — checking condition 3 above is not optional bookkeeping, it is
   the cap.
 
-A rejected grade — either class — ends this skill's run for that issue set: nothing
-past B1c executes on this pass. What differs is what happens next: `decision` waits on
-a human who has seen the comment and said what happens next, same as before this
-section existed; `escalate` waits on the one bounded automatic retry the marker
+### A reject that already carries its answer — record the direction, don't ask for it (#328)
+
+Measured 2026-09-11 on an `auto-trunk` repo, in a ship session autopilot had spawned:
+the grade found that the rework added a network poll outside the repo's three
+human-ruled network openings. The coordinator then stopped on an interactive prompt
+offering two options. **1 (Recommended)** was to move the refresh onto the path the
+repo had already budgeted for and delete the new slot, with no boundary change.
+**2** was to have a human rule a fourth opening. Option 1 only applied a ruling the
+repo already held. Only option 2 needed a human. The session waited on the modal
+anyway. The dashboard parked the stage (`waitingOn: prompt`), and two green
+candidates queued behind it until another session read the prompt and typed `1` by
+hand. On an unattended lane an interactive prompt is a stall with no timer. The
+reject was right. Asking a question the coordinator had already answered was the
+mistake, the same one *`decision` is the default* above argues against, one level
+up.
+
+So when you reject and have a recommended route, check whether that route needs
+**authority you do not already hold**. It does if it needs any of the following:
+
+- **a new or amended ruling**, meaning any boundary, policy or `needs-decision` answer
+  the repo does not already record. "The ruling already exists" means you can cite it:
+  a file and line, a `⚖ Decision recorded` comment, or an issue number. A pattern you
+  inferred and cannot cite counts as a new ruling.
+- **a grant**: `migration-granted`, a `decision-recorded` label, a go-ahead, or
+  anything else this skill reads as a human act;
+- **a migration, promotion, tag or deploy**, or anything security, money or
+  non-undoable (the `decision` list above, unchanged);
+- **a change of scope or oracle**, meaning a fix that stops answering the issue's
+  stated ask, or changes what counts as done.
+
+**Every option needs one of these** → ordinary `decision`, unchanged. Post the reject
+comment with the options laid out and stop. A human attending the session live may be
+asked there as well, but an unattended session (autopilot, a scheduled driver, any run
+with nobody typing to it) never waits on an interactive prompt. The comment is where
+the human will look, and a modal holds up every candidate queued behind this one.
+
+**Your recommended route needs none of them** → still `reject-decision`. The route
+adds no new marker token, keeps every claim held, merges nothing and never proceeds
+to B2. Only the comment's shape changes, and no prompt is raised at all:
+
+1. **State the route as the direction**, meaning the rework to do. Cite the ruling it
+   applies, which is what makes it the author's to follow and not yours to invent.
+2. **State the alternative you declined** and which authority it would need ("rule a
+   4th network opening, a human act"), so a human who prefers it can overrule on the
+   issue. The direction stands unless someone overrules it. Nobody has to answer before
+   rework can start.
+3. **End the run for this issue set, as for any reject**, and move to the next
+   candidate. Picking or dispatching the rework is outside this skill, exactly as for
+   `escalate`. Whatever routes rework in this fleet (or a human, when nothing does)
+   picks up the held claim and carries this comment as its brief.
+
+**Bounded, and on the same marker.** A direction may only ride on a `round=1` reject:
+no `colab:grade verdict=reject-*` marker, and no legacy `colab:reject escalate=1`,
+already on the harvested set. If the rework that followed a direction is rejected
+again, a human reads it. Two direction-bearing rejects in a row are how a coordinator
+and an author loop on each other's judgement with nobody deciding. The round number
+already records this, so nothing new has to be parsed.
+
+A rejected grade, of any class, ends this skill's run for that issue set: nothing
+past B1c executes on this pass. What differs is what happens next. A `decision`
+waits on a human who has seen the comment and said what happens next, or, when it
+carries a direction, waits on the rework the direction names unless a human
+overrules first. An `escalate` waits on the one bounded automatic retry the marker
 records, and falls back to waiting on a human the moment that retry rejects too.
 
 ## B2. Squash-merge with `Closes #N`
@@ -1159,7 +1222,10 @@ so explicitly in your report; do not perform it.
 - B1c's grade verdict is recorded — `pass`, carried into B2b's evidence comment as a
   `<!-- colab:grade verdict=pass round=<n> -->` marker, or `reject-decision`/
   `reject-escalate`, marked the same way on the reject comment, with nothing past it
-  executed for that issue set on this pass.
+  executed for that issue set on this pass. An unattended run raised **no interactive
+  prompt**. A reject whose recommended route needed no new authority posted that route
+  as the direction, together with the alternative a human may pick instead
+  (B1c, *A reject that already carries its answer*).
 - `gh issue view $N`: checklist ticked (inherited from `code-wrap`), and now closed
   with evidence, or left open with the next step written into it.
 - Every issue the branch carried (B1b's harvested set) is either closed with evidence,
