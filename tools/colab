@@ -45,6 +45,7 @@ const consumerEvidence = require('./lib/consumer-evidence');
 const axisAuthority = require('./lib/axis-authority');
 const writesAuthority = require('./lib/writes-authority');
 const claimIdentity = require('./lib/claim-identity');
+const machine = require('./lib/machine');
 const targetSync = require('./lib/ship-target-sync');
 const {
   HOST, UserError, normIssueNum, issueTag, claimKey, today, nowISO, hoursSince, humanAge,
@@ -169,6 +170,15 @@ const CLAIM_RE = /🔒 Claimed — worktree `([^`]*)` · branch `([^`]*)` · hos
 // the THREE shapes it can take — `[name](url)`, a bare URL, or a bare name — plus the legacy
 // plain-URL form written before sessionName existed.
 const SESSION_RE = /· session (.+)$/;
+// #327: the claimant's machine, as the public `m:` digest (tools/lib/machine.js `machineToken`),
+// written AFTER the timestamp and BEFORE the session suffix — so CLAIM_RE's four groups and
+// SESSION_RE's end anchor both parse a new comment exactly as they parse a legacy one, and a legacy
+// comment (no such field) simply has no machine and is compared by canonical hostname.
+const MACHINE_RE = /· machine `(m:[0-9a-f]{12})`/;
+
+/** This machine's canonical id (#327), or null when every resolution scheme failed. Lazy: one
+ *  `ioreg` spawn only for commands that actually write or compare a claim. */
+function myMachineId() { return machine.localMachine().id || null; }
 
 /**
  * Resolve the Claude session URL for this invocation: --session flag > COLAB_SESSION env >
@@ -254,7 +264,8 @@ function warnWeakIdentity(session, sessionName, what, ref) {
     if (ref) warn(`  Repair once you have an identity:  colab worktree tag ${ref} --session <url>`);
     return;
   }
-  if (session && !claimIdentity.looksLikeSessionId(session)) {
+  // #326: a planner intent id is a deliberate, documented non-URL value — not a mistyped name.
+  if (session && !claimIdentity.looksLikeSessionId(session) && !claimIdentity.isIntentSession(session)) {
     // #306, the third case: NON-blank but wrong-CONTENT. #11's half-identity branch below only
     // ever fires on ABSENCE, so a session NAME sitting in the URL slot sailed through every
     // check — and then `place release`, whose `mine` test is exact equality on this field,
@@ -372,7 +383,11 @@ function claimCommentBody(wtName, branch, session, sessionName) {
   // `-` for "no branch", matching the worktree field beside it. It used to be the word `trunk`,
   // which read as a branch name that never existed (#53).
   const base = `${CLAIM_MARK} — worktree \`${wtName || '-'}\` · branch \`${branch || '-'}\` · host \`${HOST}\` · ${nowISO()}`;
-  return base + sessionCommentSuffix(session, sessionName); // no-identity body stays EXACTLY as before
+  // #327: `host` stays the raw hostname (display, and byte-stable for every older reader); the
+  // comparable identity is the machine digest beside it. Omitted when no id resolved.
+  const token = machine.machineToken(myMachineId());
+  const mach = token ? ` · machine \`${token}\`` : '';
+  return base + mach + sessionCommentSuffix(session, sessionName);
 }
 
 /** Issues whose EXISTING local claim sits on a different worktree than the one we're claiming onto. */
@@ -391,10 +406,90 @@ function localClaimConflicts(st, repoAbs, nums, wtName) {
     // asymmetrically stricter than the remote one.
     // Still a conflict: a DIFFERENT worktree holds it (two sessions on one machine),
     // or the trunk claim belongs to another host.
-    if (want !== null && (ex.worktree || null) === null && ex.host === HOST) continue;
+    // #327: "this host" is the canonical machine (machine.js `isLocal`), not the raw hostname
+    // string — one machine writes `box.local` in one process and `box.lan` in another.
+    if (want !== null && (ex.worktree || null) === null && machine.isLocal(ex)) continue;
     out.push({ num, holder: ex });
   }
   return out;
+}
+
+/**
+ * #325 — the claim record every machine can read, whatever the tracker: a branch on the remote whose
+ * name carries the issue number (CONVENTIONS.md §4 puts the numbers in the trailing run; `code-start`
+ * pushes the branch the moment it is cut). Asked of the remote directly (`ls-remote`, no fetch), so a
+ * clone that has never fetched sees exactly what a fresh one would.
+ *
+ * `mode`:
+ *   'no-remote'   — the repo has no remote at all. Nothing else can ever share its branches, so the
+ *                   local record is the whole truth; the claim proceeds and says so.
+ *   'unreachable' — a remote exists and could not be read. FAIL CLOSED: the caller refuses. The old
+ *                   degrade ("refusal is LOCAL-ONLY") silently dropped the only lock a claim has on a
+ *                   multi-machine fleet.
+ *   'ok'          — `conflicts` lists every head carrying one of `nums` that is NOT this machine's.
+ *
+ * "This machine's" = a worktree or claim record in THIS machine's state naming that branch in this
+ * repo (`machine.isLocal`, #327). State is machine-local by construction (place.js refuses a synced
+ * `~/.colab`) and is written by the same invocation that pushes, so it is the one signal that tells
+ * "mine, resumed" from "another machine's": upstream tracking cannot (a clone adopting the branch
+ * tracks it too), and a claim comment cannot (it needs the tracker this check exists not to need).
+ * A branch whose name carries no trailing number (grandfathered, §4) is invisible here — accepted.
+ */
+function remoteClaimConflicts(st, repoAbs, nums) {
+  const remote = git.claimRemote(repoAbs);
+  if (!remote) return { mode: 'no-remote', remote: null, conflicts: [] };
+  const heads = git.remoteHeads(repoAbs, remote);
+  if (!heads.ok) return { mode: 'unreachable', remote, error: heads.stderr, conflicts: [] };
+  const want = new Set(nums);
+  const records = [...Object.values(st.worktrees || {}), ...Object.values(st.claims || {})];
+  const ours = (b) => records.some((r) => r && r.repo === repoAbs && r.branch === b && machine.isLocal(r));
+  const conflicts = [];
+  for (const h of heads.heads) {
+    const carried = shipguard.branchIssueNumbers(h.branch).filter((n) => want.has(n));
+    if (!carried.length || ours(h.branch)) continue;
+    for (const num of carried) conflicts.push({ num, remote, branch: h.branch, sha: h.sha });
+  }
+  return { mode: 'ok', remote, conflicts };
+}
+
+/** The fail-closed refusal for an unreadable remote (#325) — no override: nothing can be checked. */
+function printRemoteUnreachable(check, what) {
+  const why = String(check.error || '').split('\n').filter(Boolean).slice(-1)[0] || 'no answer';
+  process.stderr.write(`✗ Refusing — the git remote "${check.remote}" could not be read (${why}).\n`);
+  process.stderr.write('  A branch on the remote is the claim record every machine reads (#325). Without it this\n');
+  process.stderr.write(`  ${what} could collide with work another machine already holds, so it fails closed.\n`);
+  process.stderr.write('  Restore access to the remote and re-run. (A tracker outage alone never blocks a claim.)\n');
+}
+
+/**
+ * Record, on each claim just written, whether its TRACKER half landed (#325). The tracker is the
+ * people-facing copy now, not the lock, so an outage there no longer blocks the claim — but a copy
+ * that silently never arrives is how a claim goes unseen by a human reading the Issue. A missed one
+ * is marked `trackerPending` (shown ⚠ by `colab claims`) and completed by re-running the same claim;
+ * a landed one clears the mark. No background queue: the re-run is the retry, and it is named.
+ */
+function settleTrackerPending(repoAbs, nums, missed, owner) {
+  if (!nums.length) return;
+  const missedSet = new Set(missed);
+  state.mutate((st) => {
+    for (const num of nums) {
+      const c = st.claims[claimKey(repoAbs, num)];
+      if (!c) continue;
+      if (missedSet.has(num)) {
+        c.trackerPending = true;
+        c.trackerNote = `tracker half not posted (${nowISO()}) — re-run the claim to post it`;
+      } else {
+        delete c.trackerPending;
+        delete c.trackerNote;
+      }
+    }
+  });
+  const pending = nums.filter((n) => missedSet.has(n));
+  if (!pending.length) return;
+  warn(`tracker not updated for ${pending.map((n) => '#' + n).join(' ')} — the claim stands (remote branch + this machine), its tracker half is PENDING (#325).`);
+  warn('  Pending: gh issue edit <N> --add-assignee @me --add-label in-progress, and the "🔒 Claimed" comment.');
+  warn(`  Posted by re-running the same claim once the tracker is back: colab claim ${pending.join(' ')}` +
+    `${owner.wtName ? ` --worktree ${owner.wtName}` : ''}${owner.branch ? ` --branch ${owner.branch}` : ''} --session <id>`);
 }
 
 /**
@@ -417,8 +512,9 @@ function localClaimConflicts(st, repoAbs, nums, wtName) {
  *     login+host is invisible to the check above. Read the comments too and look for exactly that.
  * A read failure (null) is skipped, never treated as free.
  */
-function ghClaimConflicts(repoAbs, nums, myLogin, myHost, mySession, comps) {
+function ghClaimConflicts(repoAbs, nums, myLogin, myHost, mySession, comps, myMachine = null) {
   comps = comps || claimIdentity.DEFAULT_COMPONENTS;
+  const me = { login: myLogin, host: myHost, session: mySession || '', machine: myMachine || '' };
   const out = [];
   for (const num of nums) {
     const info = git.ghIssueView(repoAbs, num, ['assignees', 'labels', 'comments']);
@@ -433,23 +529,41 @@ function ghClaimConflicts(repoAbs, nums, myLogin, myHost, mySession, comps) {
     if (assignees.length === 0) {
       // Half-claim, label side (#323): labeled with nobody assigned. Our own live claim comment
       // means this is our interrupted claim — completing it is the repair, not a collision.
-      const me = { login: myLogin, host: myHost, session: mySession || '' };
       const ours = liveClaimComments(info.comments || [], comps).some((c) => claimIdentity.sameClaimant(c, me, comps));
       if (!ours) { out.push({ num, assignees, half: 'label' }); continue; }
     }
-    if (comps.includes('session')) {
-      const me = { login: myLogin, host: myHost, session: mySession || '' };
+    // #325: OUR OWN account holding it from ANOTHER machine. The assignee set cannot say which
+    // machine (GitHub tracks one identity per account), so before this a second machine on the same
+    // login passed every check and was only tie-broken by comment order after both had already
+    // claimed. Always on — not gated on the fine claimIdentity setting — because a machine is a
+    // different place to hold work in, while a session knob only ever distinguished co-tenants.
+    {
       const live = liveClaimComments(info.comments || [], comps);
-      const cotenant = live.find((c) => c.login === myLogin && c.host === myHost && !claimIdentity.sameClaimant(c, me, comps));
+      const other = live.find((c) => c.login === myLogin && !claimIdentity.sameHost(c, me));
+      if (other) { out.push({ num, assignees, otherMachine: other }); continue; }
+    }
+    if (comps.includes('session')) {
+      const live = liveClaimComments(info.comments || [], comps);
+      // #327: same machine by canonical id/hostname, never a raw hostname string compare.
+      const cotenant = live.find((c) => c.login === myLogin && claimIdentity.sameHost(c, me) && !claimIdentity.sameClaimant(c, me, comps));
       if (cotenant) out.push({ num, assignees, cotenant });
     }
   }
   return out;
 }
 
-/** Print the two-layer refusal and the escape hatches. */
-function printRefusal(localConf, ghConf) {
+/** Print the refusal (remote branch · local record · tracker) and the escape hatches. */
+function printRefusal(localConf, ghConf, remoteConf = []) {
   process.stderr.write('✗ Refusing — one or more issues are already claimed:\n');
+  for (const c of remoteConf) {
+    process.stderr.write(`  #${c.num} remote: branch ${c.remote}/${c.branch} @ ${c.sha} carries it, and it is not this machine's (#325)\n`);
+  }
+  if (remoteConf.length) {
+    const c = remoteConf[0];
+    process.stderr.write('  That branch IS the claim — continue it rather than open a second one:\n');
+    process.stderr.write(`    git fetch ${c.remote} ${c.branch} && git worktree add <path> ${c.branch}\n`);
+    process.stderr.write(`    colab claim ${c.num} --worktree <name> --branch ${c.branch} --session <id> --force\n`);
+  }
   for (const c of localConf) {
     const h = c.holder;
     const id = displayIdentity(h.sessionName, h.session);
@@ -458,7 +572,11 @@ function printRefusal(localConf, ghConf) {
       `  #${c.num} local: worktree "${h.worktree || '-'}" · branch ${h.branch || '-'} · host ${h.host}${sess} · since ${String(h.created).slice(0, 10)}\n`);
   }
   for (const c of ghConf) {
-    if (c.cotenant) {
+    if (c.otherMachine) {
+      const o = c.otherMachine;
+      const id = displayIdentity(o.sessionName, o.session);
+      process.stderr.write(`  #${c.num} GitHub: live claim comment from another machine (host ${o.host}${id ? ` · session ${id}` : ''}) — same account (#325)\n`);
+    } else if (c.cotenant) {
       const id = displayIdentity(c.cotenant.sessionName, c.cotenant.session) || c.cotenant.identity;
       process.stderr.write(`  #${c.num} GitHub: live claim comment by ${id} (same account, different session)\n`);
     } else if (c.half) {
@@ -479,7 +597,10 @@ function halfClaimText(c) {
 }
 
 /** Announce exactly what --force overrides (a takeover is visible, never silent). */
-function printTakeover(localConf, ghConf) {
+function printTakeover(localConf, ghConf, remoteConf = []) {
+  for (const c of remoteConf) {
+    print(`  --force: taking over #${c.num} although branch ${c.remote}/${c.branch} @ ${c.sha} carries it (not this machine's)`);
+  }
   for (const c of localConf) {
     const h = c.holder;
     const id = displayIdentity(h.sessionName, h.session);
@@ -487,7 +608,9 @@ function printTakeover(localConf, ghConf) {
     print(`  --force: taking over #${c.num} from worktree "${h.worktree || '-'}" (host ${h.host}${sess}, since ${String(h.created).slice(0, 10)})`);
   }
   for (const c of ghConf) {
-    if (c.cotenant) {
+    if (c.otherMachine) {
+      print(`  --force: taking over #${c.num} from this account's claim on another machine (host ${c.otherMachine.host})`);
+    } else if (c.cotenant) {
       const id = displayIdentity(c.cotenant.sessionName, c.cotenant.session) || c.cotenant.identity;
       print(`  --force: taking over #${c.num} from a co-tenant claim (${id}, same account+host)`);
     } else if (c.half) {
@@ -527,9 +650,11 @@ function liveClaimComments(comments, comps) {
     const login = (c.author && c.author.login) || '';
     const host = m[3];
     const { session, sessionName } = parseSessionField(body); // handles [name](url) / url / name / legacy
+    const mm = body.match(MACHINE_RE); // #327 — absent on a legacy comment: compared by canonical host
+    const machineTok = mm ? mm[1] : '';
     const at = c.createdAt;
     const cancelled = (releasesByLogin.get(login) || []).some((r) => r > at);
-    if (!cancelled) live.push({ login, host, session, sessionName, at, identity: claimIdentity.identityString({ login, host, session }, comps) });
+    if (!cancelled) live.push({ login, host, machine: machineTok, session, sessionName, at, identity: claimIdentity.identityString({ login, host, session }, comps) });
   }
   return live;
 }
@@ -548,10 +673,10 @@ function liveClaimComments(comments, comps) {
  * Under the coarse default this only changes the verdict when we hold more than one live claim, and
  * only ever in the "yield less" direction.
  */
-function tieBreakVerdict(comments, myLogin, myHost, mySession, comps) {
+function tieBreakVerdict(comments, myLogin, myHost, mySession, comps, myMachine = null) {
   comps = comps || claimIdentity.DEFAULT_COMPONENTS;
   const live = liveClaimComments(comments, comps);
-  const me = { login: myLogin, host: myHost, session: mySession || '' };
+  const me = { login: myLogin, host: myHost, session: mySession || '', machine: myMachine || '' };
   const mine = live
     .filter((c) => claimIdentity.sameClaimant(c, me, comps))
     .sort((a, b) => (a.at < b.at ? -1 : a.at > b.at ? 1 : 0))[0]; // our EARLIEST live claim
@@ -663,7 +788,7 @@ function commentAndTieBreak(repoAbs, nums, owner) {
     postClaimComment(repoAbs, num, owner.wtName, owner.branch, owner.session, owner.sessionName);
     const info = git.ghIssueView(repoAbs, num, ['comments']);
     if (!info || !Array.isArray(info.comments)) continue; // can't read comments → keep the claim
-    const verdict = tieBreakVerdict(info.comments, owner.myLogin, HOST, owner.session, comps);
+    const verdict = tieBreakVerdict(info.comments, owner.myLogin, HOST, owner.session, comps, myMachineId());
     if (verdict.lost) {
       yieldIssue(repoAbs, num, verdict.winner, owner.myLogin, owner.session || null);
       const w = verdict.winner;
@@ -674,7 +799,7 @@ function commentAndTieBreak(repoAbs, nums, owner) {
       // (safety rule 3, .claude/plans/issue-264.md) because a wrong self-yield here must be
       // diagnosable in one screen, not archaeology: name both session ids, say which setting
       // produced the verdict, and print both undos.
-      if (comps.includes('session') && w.login === owner.myLogin && w.host === HOST) {
+      if (comps.includes('session') && w.login === owner.myLogin && claimIdentity.sameHost(w, { host: HOST, machine: myMachineId() || '' })) {
         const mySessId = displayIdentity(owner.sessionName, owner.session) || '(no session recorded)';
         warn(`Yielded #${num} to a CO-TENANT — same account+host, different session. claimIdentity=login,host,session ` +
           `judged ${id || '(no session recorded)'} earlier than us (${mySessId}). If this is wrong: ` +
@@ -695,15 +820,26 @@ function commentAndTieBreak(repoAbs, nums, owner) {
 const HELP_CLAIM = `colab claim <issue> [<issue> ...] [options]
 
 Claim one or more GitHub issues so parallel sessions/agents don't collide.
-Writes BOTH local state (fast path) and GitHub (source of truth across machines):
+The claim RECORD every machine reads is a branch on the git remote carrying the issue number
+(\`colab worktree new\` pushes it the moment it is cut, #325). Also writes local state (fast path)
+and the tracker (the copy people read):
   gh issue edit N --add-assignee @me --add-label in-progress
-If gh is unavailable or the repo has no remote, degrades to local-only (and says so).
+Remote unreachable → REFUSED (fail closed). Tracker unreachable → the claim stands and its tracker
+half is marked pending (⚠ in 'colab claims'); re-run the same claim to post it. A repo with no
+remote at all has nothing to share a branch through, so its claim is this machine's alone (says so).
+
+Planner claims (#326): \`--session intent:<id>\` holds an issue before the session that will work it
+exists — no worktree, no checkout place-claim, tracker required. That session's own claim (or
+\`worktree new --issues\`) from the same machine upgrades it in place, re-posting nothing; one whose
+session never claimed is released by \`colab doctor --prune --sync\` after plannerClaimTTLMinutes.
 
 Multiple issues in one call are claimed atomically onto the SAME worktree/branch
 (a group of related issues on one branch is normal practice):
   colab claim 115 114 113 --worktree import-fixes-115-114-113 --branch fix/import-fixes-115-114-113
 
 Claims are ENFORCED, not advisory. Before claiming, colab REFUSES (exit 1) if:
+  • REMOTE: a branch on the remote carries the issue number and is not this machine's — the
+            refusal names it and how to continue it instead (#325), or
   • LOCAL:  the issue already has a live claim on a DIFFERENT worktree (holder shown), or
   • GITHUB: the issue is labeled in-progress AND assigned to someone who isn't you (or, with
             claimIdentity=login,host,session set, a live claim comment from a DIFFERENT session
@@ -772,6 +908,19 @@ function cmdClaim(argv) {
   if (idProblem) warn(`config: ${idProblem} — using the coarse default (login,host) for this claim`);
   const comps = claimIdentity.components(cfg);
 
+  // #326: a PLANNER claim — an autopilot holding an issue during the minute its spawned session
+  // takes to boot and claim for itself. It names no worktree (the session does not exist yet), and
+  // its only cross-machine record is the tracker (no branch exists to push), so it needs gh.
+  const intent = claimIdentity.isIntentSession(session);
+  if (intent && wtName) {
+    throw new UserError(`--session ${session} is a planner intent id: it holds an issue BEFORE its session exists, so it ` +
+      'takes no --worktree. The spawned session claims with its real --session and upgrades this record in place (#326).');
+  }
+  if (intent && !gh) {
+    throw new UserError(`--session ${session}: a planner intent claim is recorded only on the tracker (there is no branch yet ` +
+      'to push), and gh is not usable here — refusing rather than holding an issue no other machine can see (#326).');
+  }
+
   // #133/#136, re-based by #237: a claim with NO worktree is the trunk-checkout shape — on any
   // repo COEXISTENCE permits trunk-direct on (i.e. everywhere `writes:` does not veto it —
   // absence, both `serial-*` spellings, the `serial` alias, or an unrecognised value; see
@@ -784,7 +933,9 @@ function cmdClaim(argv) {
   // it previously did so only on a declared `serial-*` repo — the correct consequence of
   // coexistence being the default rather than the exception.
   const doc0 = projectDoc(repoAbs);
-  const takingPlace = !wtName && !writesAuthority.trunkDirectVetoed(doc0 && doc0.writes);
+  // #326: an intent claim never takes the checkout — it is not working in it, and a hold anchored on
+  // a long-lived planner process would block every sibling session on the machine.
+  const takingPlace = !wtName && !intent && !writesAuthority.trunkDirectVetoed(doc0 && doc0.writes);
   // A shared-checkout hold is about to be minted (#242) — identity is mandatory here, not just
   // warned about; see `requirePlaceIdentity`'s doc comment for why. Cheapest possible refusal:
   // nothing has been read or written yet.
@@ -802,12 +953,17 @@ function cmdClaim(argv) {
   } else {
     st0 = state.loadState(); // unchanged from before this branch — not a place-claim read
   }
+  // #325: the remote first — the branch on it is the claim record every machine reads.
+  const remoteCheck = remoteClaimConflicts(st0, repoAbs, nums);
+  if (remoteCheck.mode === 'unreachable') { printRemoteUnreachable(remoteCheck, 'claim'); return 1; }
+  if (remoteCheck.mode === 'no-remote') warn('no git remote — this claim is recorded on this machine only; no other machine can see it');
+  const remoteConf = remoteCheck.conflicts;
   const localConf = localClaimConflicts(st0, repoAbs, nums, wtName);
-  const ghConf = gh ? ghClaimConflicts(repoAbs, nums, myLogin, HOST, session, comps) : [];
-  if (!gh) warn('gh not usable here (no gh auth or no origin remote) — refusal is LOCAL-ONLY');
-  if ((localConf.length || ghConf.length)) {
-    if (!opts.force) { printRefusal(localConf, ghConf); return 1; }
-    printTakeover(localConf, ghConf);
+  const ghConf = gh ? ghClaimConflicts(repoAbs, nums, myLogin, HOST, session, comps, myMachineId()) : [];
+  if (!gh && remoteCheck.mode === 'ok') warn('gh not usable here — refusal checked the remote and this machine; the tracker half will be PENDING');
+  if (remoteConf.length || localConf.length || ghConf.length) {
+    if (!opts.force) { printRefusal(localConf, ghConf, remoteConf); return 1; }
+    printTakeover(localConf, ghConf, remoteConf);
   }
 
   if (takingPlace) {
@@ -863,23 +1019,31 @@ function cmdClaim(argv) {
         // what makes the null path HONEST rather than a record claiming a directory it does not
         // have — doctor knows the difference, and a stub that never becomes a worktree is reported
         // as drift.
-        st.worktrees[wtName] = { name: wtName, repo: repoAbs, branch, path: null, ports: [], host: HOST, session, sessionName, status: records.PENDING, created: nowISO() };
+        st.worktrees[wtName] = { name: wtName, repo: repoAbs, branch, path: null, ports: [], host: HOST, machine: myMachineId(), session, sessionName, status: records.PENDING, created: nowISO() };
       } else if (wtName && st.worktrees[wtName] && st.worktrees[wtName].status === records.PENDING && !st.worktrees[wtName].branch && branch) {
         // #264: an existing PENDING stub (claimed before the branch was cut) learns the branch this
         // call supplies, instead of staying null forever because it already existed.
         st.worktrees[wtName].branch = branch;
       }
-      const created = [], reclaimed = [], updated = [], updatedDetails = [];
+      const created = [], reclaimed = [], updated = [], updatedDetails = [], upgraded = [], pendingRetry = [];
       for (const num of nums) {
         const key = claimKey(repoAbs, num);
         const ex = st.claims[key];
         const sameHolder = !!ex && (ex.worktree || null) === (wtName || null);
-        const incoming = { issue: issueTag(num), repo: repoAbs, worktree: wtName, branch, host: HOST, session, sessionName, created: (ex && ex.created) || nowISO() };
+        const incoming = { issue: issueTag(num), repo: repoAbs, worktree: wtName, branch, host: HOST, machine: myMachineId(), session, sessionName, created: (ex && ex.created) || nowISO() };
         // #264/#267: ONE merge rule for both a plain first claim (ex absent — merge is a no-op,
         // `incoming` passes through), a same-worktree re-claim/correction (sameHolder — a blank
         // branch/session/sessionName never overwrites a known value), and a --force takeover from a
         // DIFFERENT holder (sameHolder false — mergeClaimRecord never inherits in that case, matching
         // the full-overwrite behaviour this code path always had). See tools/lib/claim-identity.js.
+        // #326: this machine's PLANNER claim, now taken by the session it spawned — one claim, upgraded
+        // in place with the real session + worktree. Not `created`: the tracker already shows the
+        // assignee, label and claim comment, so nothing is re-posted and no tie-break re-runs.
+        if (ex && !ex.worktree && wtName && claimIdentity.isIntentSession(ex.session) && machine.isLocal(ex)) {
+          st.claims[key] = claimIdentity.mergeClaimRecord(ex, incoming, { sameHolder: true });
+          upgraded.push(num);
+          continue;
+        }
         const merged = claimIdentity.mergeClaimRecord(ex, incoming, { sameHolder });
         // Second source for `branch` (#264 path A, the actually-observed fleet symptom): the
         // worktree record may already know a branch (set by `colab worktree new`) that this
@@ -896,12 +1060,19 @@ function cmdClaim(argv) {
         // changed. An unchanged re-claim stays the pre-existing silent no-op — no write, no comment,
         // no network — exactly as before this branch.
         const changed = ['branch', 'session', 'sessionName'].some((f) => (ex[f] || null) !== (merged[f] || null));
+        // #325: a same-holder re-claim of a claim whose TRACKER half never landed is the retry —
+        // it posts what was missed (assign/label, comment, tie-break), whether or not anything changed.
+        if (ex.trackerPending) {
+          st.claims[key] = { ...merged, trackerPending: true, trackerNote: ex.trackerNote };
+          pendingRetry.push(num);
+          continue;
+        }
         if (!changed) { reclaimed.push(num); continue; }
         st.claims[key] = merged;
         updated.push(num);
         updatedDetails.push({ num, branch: merged.branch, was: ex.branch || null });
       }
-      return { created, reclaimed, updated, updatedDetails };
+      return { created, reclaimed, updated, updatedDetails, upgraded, pendingRetry };
     });
   } catch (e) {
     // #285: an under-lock place-claim refusal is a genuine conflict, not an unreachable lock — say
@@ -917,6 +1088,7 @@ function cmdClaim(argv) {
   }
 
   for (const num of res.reclaimed) print(`#${num} already claimed by this worktree — OK (idempotent)`);
+  for (const num of res.upgraded) print(`#${num} planner claim upgraded in place → worktree "${wtName}" (tracker unchanged)`);
   // #264: a same-holder correction — something the record asserts (branch/session/sessionName)
   // actually changed since the last claim. Reported distinctly from `reclaimed` (a true no-op) and
   // from `created` (a first claim / a --force takeover), because none of those three read the same
@@ -927,13 +1099,19 @@ function cmdClaim(argv) {
 
   // ---- GitHub side (outside the lock — network): assign/label, comment, tie-break ----
   let lost = [];
+  for (const num of res.pendingRetry) print(`#${num} tracker half was pending — posting it now`);
+  const toTracker = [...res.created, ...res.pendingRetry];
+  const trackerMissed = [];
   if (gh) {
-    for (const num of res.created) {
+    const landedOnTracker = [];
+    for (const num of toTracker) {
       const r = git.ghIssueEdit(repoAbs, num, ['--add-assignee', '@me', '--add-label', 'in-progress']);
-      if (r.ok) print(`  gh: #${num} assigned + labeled in-progress`);
-      else warn(`gh edit #${num} failed (${r.stderr.split('\n')[0] || r.code}) — local claim stands`);
+      if (r.ok) { print(`  gh: #${num} assigned + labeled in-progress`); landedOnTracker.push(num); }
+      else { warn(`gh edit #${num} failed (${r.stderr.split('\n')[0] || r.code}) — claim stands, tracker half pending`); trackerMissed.push(num); }
     }
-    lost = commentAndTieBreak(repoAbs, res.created, { wtName, branch, myLogin, session, sessionName, comps });
+    // Comment + tie-break only where the assign/label landed: a tracker that refused the edit is not
+    // one to post into, and the retry (settleTrackerPending) posts all of it together.
+    lost = commentAndTieBreak(repoAbs, landedOnTracker, { wtName, branch, myLogin, session, sessionName, comps });
     // #264: a same-holder correction posts ONE fresh claim comment (via the same helper used for a
     // first claim) so comment-reading consumers — the exact failure mode #264 is about — see the
     // fix. It does NOT run the tie-break: acquisition was already settled at first claim, and
@@ -943,8 +1121,9 @@ function cmdClaim(argv) {
       postClaimComment(repoAbs, d.num, wtName, d.branch, session, sessionName);
     }
   } else {
-    warn('gh not usable here — claims are LOCAL-ONLY (no comment, no tie-break)');
+    trackerMissed.push(...toTracker);
   }
+  settleTrackerPending(repoAbs, toTracker.filter((n) => !lost.includes(n)), trackerMissed, { wtName, branch });
 
   const kept = res.created.filter((n) => !lost.includes(n));
   if (kept.length) {
@@ -955,6 +1134,7 @@ function cmdClaim(argv) {
   // One event per issue KEPT — not per command. An issue lost to the tie-break was never ours, and
   // reporting the group as claimed would tell an observer the opposite of what GitHub now says.
   for (const num of kept) pushEvent('claim', { repo: repoAbs, issue: num, worktree: wtName, session, payload: { branch } });
+  for (const num of res.upgraded) pushEvent('claim', { repo: repoAbs, issue: num, worktree: wtName, session, payload: { branch, upgradedFromIntent: true } });
   // Lost any issue to the tie-break → non-zero so the caller picks another.
   return lost.length ? 1 : 0;
 }
@@ -2890,11 +3070,14 @@ function cmdClaims(argv) {
     // #164: a claim left `releasePending` means the GitHub write failed (rate limit/network) —
     // it is NOT a normal live claim, so say so inline instead of it reading identically to one.
     const rows = cs.map((c) => [
-      c.issue + (c.releasePending ? ' ⚠' : ''), shortRepo(c.repo), c.branch || '-', c.host,
-      identityCell(c.sessionName, c.session), c.created.slice(0, 10),
+      c.issue + (c.releasePending || c.trackerPending ? ' ⚠' : ''), shortRepo(c.repo), c.branch || '-', c.host,
+      // #326: a planner claim is recognisable on sight — a stale one is a spawn that never claimed.
+      claimIdentity.isIntentSession(c.session) ? `${c.session} (planner)` : identityCell(c.sessionName, c.session),
+      c.created.slice(0, 10),
     ]);
     print(table(rows, ['ISSUE', 'REPO', 'BRANCH', 'HOST', 'SESSION', 'SINCE']).split('\n').map((l) => '  ' + l).join('\n'));
     for (const c of cs) if (c.releasePending) print(`  ⚠ #${c.issue}: ${c.releaseNote || 'release pending — GitHub write failed'}`);
+    for (const c of cs) if (c.trackerPending) print(`  ⚠ ${c.issue}: ${c.trackerNote || 'tracker half pending — re-run the claim to post it'}`);
     identityLegend(cs);
   }
   return 0;
@@ -2923,7 +3106,7 @@ function syncClaims({ prune = false } = {}) {
         if (!s.claims[key]) {
           // No branch is knowable from GitHub — an assignee + label says nothing about where the
           // work sits. `null` says exactly that; the word "trunk" used to, and lied (#53).
-          s.claims[key] = { issue: issueTag(num), repo: repoAbs, worktree: null, branch: null, host: HOST, created: nowISO() };
+          s.claims[key] = { issue: issueTag(num), repo: repoAbs, worktree: null, branch: null, host: HOST, machine: myMachineId(), created: nowISO() };
           added.push(`+#${num} ${shortRepo(repoAbs)} (assigned+in-progress on GitHub, missing locally)`);
         }
       });
@@ -3420,12 +3603,17 @@ function cmdWorktreeNew(argv) {
 
   // ---- REFUSAL: don't build a worktree around issues someone else already holds ----
   if (issues.length) {
-    const localConf = localClaimConflicts(state.loadState(), repoAbs, issues, name);
-    const ghConf = gh ? ghClaimConflicts(repoAbs, issues, myLogin, HOST, session, comps) : [];
-    if (!gh) warn('gh not usable here — issue refusal is LOCAL-ONLY');
-    if (localConf.length || ghConf.length) {
-      if (!opts.force) { printRefusal(localConf, ghConf); return 1; }
-      printTakeover(localConf, ghConf);
+    const st0 = state.loadState();
+    // #325: the remote first — the branch on it is the claim record every machine reads.
+    const remoteCheck = remoteClaimConflicts(st0, repoAbs, issues);
+    if (remoteCheck.mode === 'unreachable') { printRemoteUnreachable(remoteCheck, 'worktree and its claims'); return 1; }
+    if (remoteCheck.mode === 'no-remote') warn('no git remote — these claims are recorded on this machine only; no other machine can see them');
+    const localConf = localClaimConflicts(st0, repoAbs, issues, name);
+    const ghConf = gh ? ghClaimConflicts(repoAbs, issues, myLogin, HOST, session, comps, myMachineId()) : [];
+    if (!gh && remoteCheck.mode === 'ok') warn('gh not usable here — refusal checked the remote and this machine; the tracker half will be PENDING');
+    if (remoteCheck.conflicts.length || localConf.length || ghConf.length) {
+      if (!opts.force) { printRefusal(localConf, ghConf, remoteCheck.conflicts); return 1; }
+      printTakeover(localConf, ghConf, remoteCheck.conflicts);
     }
   }
 
@@ -3493,6 +3681,33 @@ function cmdWorktreeNew(argv) {
   if (!add.ok) throw new UserError(`git worktree add failed: ${add.stderr}`);
   const baseSha = git.git(['rev-parse', '--short', `origin/${base}`], repoAbs).stdout;
 
+  // #325: push at cut. The branch on the remote IS the claim record another machine reads — before
+  // this the first push happened at code-wrap, hours after the claim, and triage named "an unpushed
+  // branch on another machine" as its own blind spot. `--force-with-lease=<ref>:` (empty expect) is
+  // CREATE-ONLY: two machines cutting the same name race on a real compare-and-swap, and the loser is
+  // rejected instead of overwriting. With issues to claim, a failed push takes nothing: the worktree
+  // and the zero-commit branch this invocation just made are removed again, so no half-claim exists
+  // anywhere. With no issues there is no claim to protect, and a failed push only warns.
+  const pushRemote = git.claimRemote(repoAbs);
+  let pushed = false;
+  if (pushRemote) {
+    const push = git.git(['push', '-u', pushRemote, `--force-with-lease=refs/heads/${branch}:`, branch], repoAbs, { timeoutMs: 120_000 });
+    if (push.ok) {
+      pushed = true;
+      print(`  pushed ${branch} → ${pushRemote} (the claim record other machines read)`);
+    } else {
+      const why = String(push.stderr || '').split('\n').filter(Boolean).slice(-1)[0] || `exit ${push.code}`;
+      if (issues.length) {
+        git.git(['worktree', 'remove', '--force', wtPath], repoAbs);
+        git.git(['branch', '-D', branch], repoAbs);
+        throw new UserError(`git push ${pushRemote} ${branch} failed (${why}) — claim NOT taken: the worktree and branch ` +
+          'were removed again. The pushed branch is the claim record other machines read (#325); fix the push ' +
+          '(access, network, or a branch of that name another machine just created) and re-run.');
+      }
+      warn(`git push ${pushRemote} ${branch} failed (${why}) — worktree created, branch not on the remote yet`);
+    }
+  }
+
   // How far behind trunk the line is, as INFORMATION — never a threshold. A long-lived line is
   // expected to diverge; a refusal (or a warning with a number in it) would fire on every healthy
   // session and be tuned out within a week.
@@ -3511,7 +3726,17 @@ function cmdWorktreeNew(argv) {
   }
 
   // 3. allocate ports + record worktree + claims (atomic)
-  const alloc = state.mutate((st) => {
+  // #325: if recording fails after the push above, take the pushed branch back off the remote —
+  // otherwise it would stand there as a claim record nothing on any machine owns, refusing every
+  // later claim on these issues. (The local worktree is left as before this change.)
+  let alloc;
+  try {
+    alloc = allocWorktreeRecord();
+  } catch (e) {
+    if (pushed) git.git(['push', pushRemote, '--delete', branch], repoAbs, { timeoutMs: 120_000 });
+    throw e;
+  }
+  function allocWorktreeRecord() { return state.mutate((st) => {
     let chosenPorts = [];
     if (atPorts) {
       const reserved = ports.reservedSet(config, [repoAbs, ...knownRepos(config)]);
@@ -3528,7 +3753,7 @@ function cmdWorktreeNew(argv) {
     }
     // `base` is recorded even when it IS trunk: a reader must be able to tell "cut from trunk" from
     // "cut before bases existed", and only a written value says the first.
-    st.worktrees[name] = { name, repo: repoAbs, branch, base, path: wtPath, ports: chosenPorts, host: HOST, session, sessionName, status: 'running', created: nowISO() };
+    st.worktrees[name] = { name, repo: repoAbs, branch, base, path: wtPath, ports: chosenPorts, host: HOST, machine: myMachineId(), session, sessionName, status: 'running', created: nowISO() };
     for (const p of chosenPorts) st.ports[String(p)] = { port: p, owner: { type: 'worktree', ref: name }, host: HOST, created: nowISO() };
     // Creating a worktree IS taking it (CONVENTIONS.md, Place-claims — "creating it is taking it;
     // there is no separate act"). Recording the hold here closes that gap for every new worktree,
@@ -3539,39 +3764,52 @@ function cmdWorktreeNew(argv) {
       pathAbs: wtPath, repo: repoAbs, branch, host: HOST, session, sessionName,
       pid: anchor.pid, pidKind: anchor.pidKind, anchorProof: anchor.proof,
     });
-    const claimedNums = [], dupes = [];
+    const claimedNums = [], dupes = [], upgraded = [];
     for (const num of issues) {
       const key = claimKey(repoAbs, num);
       const ex = st.claims[key];
+      // #326: this machine's planner claim, taken by the session it spawned — upgraded in place, and
+      // kept OUT of the tracker writes below (assignee/label/comment are already there).
+      if (ex && !ex.worktree && claimIdentity.isIntentSession(ex.session) && machine.isLocal(ex)) {
+        st.claims[key] = claimIdentity.mergeClaimRecord(ex,
+          { issue: issueTag(num), repo: repoAbs, worktree: name, branch, host: HOST, machine: myMachineId(), session, sessionName, created: ex.created || nowISO() },
+          { sameHolder: true });
+        upgraded.push(num);
+        continue;
+      }
       // claim inherits the worktree's session. `worktree new` always supplies a real branch/session
       // by this point, so `mergeClaimRecord` behaves the same as the direct-overwrite this used to
       // be — but routes it through the ONE #264 merge rule (tools/lib/claim-identity.js) rather than
       // a second, independently-drifting overwrite.
-      const incoming = { issue: issueTag(num), repo: repoAbs, worktree: name, branch, host: HOST, session, sessionName, created: (ex && ex.created) || nowISO() };
+      const incoming = { issue: issueTag(num), repo: repoAbs, worktree: name, branch, host: HOST, machine: myMachineId(), session, sessionName, created: (ex && ex.created) || nowISO() };
       if (ex) { dupes.push(num); st.claims[key] = claimIdentity.mergeClaimRecord(ex, incoming, { sameHolder: true }); continue; }
       st.claims[key] = incoming;
       claimedNums.push(num);
     }
-    return { chosenPorts, claimedNums, dupes };
-  });
+    return { chosenPorts, claimedNums, dupes, upgraded };
+  }); }
 
   // 4. GitHub claim (network, outside lock): assign/label, then comment + tie-break
   let lostIssues = [];
+  const claimedHere = [...alloc.claimedNums, ...alloc.dupes];
+  const trackerMissed = [];
   if (gh) {
-    const claimedHere = [...alloc.claimedNums, ...alloc.dupes];
+    const landedOnTracker = [];
     for (const num of claimedHere) {
       const r = git.ghIssueEdit(repoAbs, num, ['--add-assignee', '@me', '--add-label', 'in-progress']);
-      if (!r.ok) warn(`gh edit #${num} failed — local claim stands`);
+      if (r.ok) landedOnTracker.push(num);
+      else { warn(`gh edit #${num} failed — claim stands, tracker half pending`); trackerMissed.push(num); }
     }
-    lostIssues = commentAndTieBreak(repoAbs, claimedHere, { wtName: name, branch, myLogin, session, sessionName, comps });
+    lostIssues = commentAndTieBreak(repoAbs, landedOnTracker, { wtName: name, branch, myLogin, session, sessionName, comps });
     if (lostIssues.length) {
       warn(`Worktree "${name}" was created, but issue(s) ${lostIssues.map((n) => '#' + n).join(' ')} were lost to a`);
       warn(`simultaneous claim and yielded. The worktree remains — reuse it for another issue, or:`);
       warn(`  colab worktree rm ${name}`);
     }
-  } else if (issues.length) {
-    warn('gh not usable — issue claims are LOCAL-ONLY (no comment, no tie-break)');
+  } else {
+    trackerMissed.push(...claimedHere);
   }
+  settleTrackerPending(repoAbs, claimedHere.filter((n) => !lostIssues.includes(n)), trackerMissed, { wtName: name, branch });
 
   // 5. optional repo hook (machine-specific steps plug in here)
   const hook = runHook(repoAbs, 'post-create', { wtPath, name, branch, ports: alloc.chosenPorts, trunk, base, issues });
@@ -3584,7 +3822,7 @@ function cmdWorktreeNew(argv) {
   print(`  env:      ${envCopied.join(' ') || '—'}`);
   print(`  ports:    ${alloc.chosenPorts.join(', ') || '—'}`);
   const keptIssues = issues.filter((n) => !lostIssues.includes(n));
-  print(`  issues:   ${keptIssues.map((n) => '#' + n).join(' ') || '—'}${gh ? '' : ' (local-only)'}` +
+  print(`  issues:   ${keptIssues.map((n) => '#' + n).join(' ') || '—'}${trackerMissed.length ? ' (tracker pending)' : ''}` +
     (lostIssues.length ? `  (lost: ${lostIssues.map((n) => '#' + n).join(' ')})` : ''));
   // The worktree first, then the claims it carries. As at teardown, this orders `ts` and not
   // arrival — see the note in cmdWorktreeRm.
@@ -4160,6 +4398,7 @@ function cmdDoctor(argv) {
   const ttl = opts.ttl ? parseFloat(opts.ttl) : config.claimTTLHours;
 
   const report = { deadWorktrees: [], orphanClaims: [], staleClaims: [], stalePlaces: [], unprovablePlaces: [], releasedPlaces: [], orphanPorts: [], brokenRecords: [], prunedPorts: [],
+    renamedHostRecords: [], unprovenHostRecords: [],
     mergedFlips: [], mergedSweep: [], mergedDirty: [], mergedHookFail: [], mergedRemoveFail: [], shippedBranches: [], ghostPorts: [],
     spentGroupLabels: [], groupLabelsChecked: !!opts.sync, pruned: !!opts.prune };
 
@@ -4190,6 +4429,29 @@ function cmdDoctor(argv) {
       if (!git.ghAvailable() || !git.originUrl(repoAbs)) { trackerCache.set(repoAbs, null); continue; }
       const assigned = git.ghAssignedIssues(repoAbs);
       trackerCache.set(repoAbs, assigned === null ? null : new Set(assigned));
+    }
+  }
+
+  // #326: planner intent claims past the spawn window. A successful spawn ALWAYS replaces the intent
+  // session (its own claim upgrades the record), so one still carrying it past the window is a spawn
+  // that never claimed. Its tracker half (assignee + label + claim comment) is the only thing another
+  // machine sees, so pruning only the local record would strand exactly the half that blocks others
+  // — which is why removal needs --sync too: doctor touches the tracker ONLY under --sync (see the
+  // LOCAL-ONLY note on the merged sweep below). The release runs here, OUTSIDE the lock, same shape
+  // as trackerCache above; the mutate below deletes a record only when its release landed.
+  const plannerTtlMin = Number.isFinite(config.plannerClaimTTLMinutes) && config.plannerClaimTTLMinutes > 0
+    ? config.plannerClaimTTLMinutes : 30;
+  const isStaleIntent = (c) => !!c && !c.worktree && claimIdentity.isIntentSession(c.session)
+    && hoursSince(c.created) * 60 > plannerTtlMin;
+  const intentReleased = new Map(); // claim key → true (tracker released) | false (could not)
+  if (opts.prune && opts.sync) {
+    for (const [k, c] of Object.entries(state.loadState().claims)) {
+      if (!isStaleIntent(c)) continue;
+      if (!isGhUsable(c.repo)) { intentReleased.set(k, false); continue; }
+      const num = normIssueNum(c.issue);
+      const r = git.ghIssueRelease(c.repo, num);
+      if (r.ok) postReleaseComment(c.repo, num);
+      intentReleased.set(k, !!r.ok);
     }
   }
 
@@ -4247,6 +4509,24 @@ function cmdDoctor(argv) {
     //    dead on GitHub while still far under a 24h TTL. `trackerCache` already encodes the
     //    unreachable-host skip (a repo `null` never counts as "not assigned" here).
     for (const [k, c] of Object.entries(st.claims)) {
+      if (!c.worktree && claimIdentity.isIntentSession(c.session)) {
+        // #326 — a planner claim has its own window and its own removal rule (see intentReleased).
+        if (!isStaleIntent(c)) continue;
+        const released = intentReleased.get(k);
+        report.staleClaims.push({
+          issue: c.issue, repo: shortRepo(c.repo), ageHours: Math.round(hoursSince(c.created)), host: c.host,
+          ageMinutes: Math.round(hoursSince(c.created) * 60), session: c.session, sessionName: c.sessionName || '',
+          reason: 'intent', released: released === true,
+        });
+        if (opts.prune && opts.sync) {
+          if (released === true) delete st.claims[k];
+          else if (!c.releasePending) {
+            c.releasePending = true;
+            c.releaseNote = `planner claim past ${plannerTtlMin}m, but its tracker release failed (${nowISO()}) — retry with: colab release ${normIssueNum(c.issue)}`;
+          }
+        }
+        continue;
+      }
       if (!c.worktree) {
         const age = hoursSince(c.created);
         const byAge = age > ttl;
@@ -4287,6 +4567,28 @@ function cmdDoctor(argv) {
             }
           }
         }
+      }
+    }
+    // 3b. #327 — claim/worktree records in THIS machine's state whose hostname no longer
+    //     canonicalises to ours. Report-only, never pruned, never counted as drift. Two shapes:
+    //     `renamed` — the record's canonical machine id IS ours, so the machine was renamed: still
+    //       recognised as local everywhere (#327 compares the id), listed so a human is not
+    //       surprised by the old name in `colab claims`.
+    //     `unproven` — no machine id to settle it (a legacy record), or a DIFFERENT id: it reads as
+    //       foreign to every comparison even though it sits in this machine's state — a rename
+    //       before #327 landed, or a `~/.colab` that is being file-synced (place.js
+    //       `syncedStateProblem` names that hazard).
+    {
+      const local = machine.localMachine();
+      const recs = [
+        ...Object.values(st.claims).map((c) => ({ kind: 'claim', name: c.issue, rec: c })),
+        ...Object.values(st.worktrees).map((w) => ({ kind: 'worktree', name: w.name, rec: w })),
+      ];
+      for (const { kind, name, rec } of recs) {
+        if (!rec || !rec.host || machine.canonHost(rec.host) === machine.canonHost(local.host)) continue;
+        const entry = { kind, name, repo: shortRepo(rec.repo), host: rec.host };
+        if (rec.machine && local.id && rec.machine === local.id) report.renamedHostRecords.push(entry);
+        else report.unprovenHostRecords.push({ ...entry, reason: rec.machine ? 'different machine id' : 'no machine id recorded' });
       }
     }
     // 4. orphan ports (owner vanished)
@@ -4500,6 +4802,12 @@ function cmdDoctor(argv) {
   if (report.staleClaims.length) {
     print(`${opts.prune ? 'Pruned' : 'Flagged'} ${report.staleClaims.length} stale worktree-less claim(s):`);
     for (const c of report.staleClaims) {
+      if (c.reason === 'intent') {
+        const outcome = !(opts.prune && opts.sync) ? 'kept — its tracker half is released only by --prune --sync'
+          : c.released ? 'released on the tracker and removed' : 'tracker release FAILED — kept, releasePending';
+        print(`  ${c.issue} [${c.repo}] planner claim age=${c.ageMinutes}m (> ${plannerTtlMin}m) — its session never claimed; ${outcome} session=${c.session}`);
+        continue;
+      }
       const why = c.reason === 'tracker' ? 'no longer assigned+in-progress on GitHub'
         : c.reason === 'age+tracker' ? `age=${c.ageHours}h (> ${ttl}h) + no longer assigned+in-progress on GitHub`
           : `age=${c.ageHours}h (> ${ttl}h)`;
@@ -4587,6 +4895,22 @@ function cmdDoctor(argv) {
         `${displayIdentity(u.sessionName, u.session) ? ` session=${displayIdentity(u.sessionName, u.session)}` : ''}`);
     }
     print('  Once you have confirmed the holder is gone: COLAB_HUMAN=1 colab place release "<path>"');
+  }
+
+  // #327 — after the verdict, same precedent: host spelling is not drift.
+  if (report.renamedHostRecords.length) {
+    print('');
+    print(`Record(s) written under a previous name of THIS machine (${report.renamedHostRecords.length}) — same machine id, still local:`);
+    for (const r of report.renamedHostRecords) print(`  ${r.kind} ${r.name} [${r.repo}] host=${r.host}`);
+  }
+  if (report.unprovenHostRecords.length) {
+    print('');
+    print(`Record(s) in this machine's state whose host is NOT this machine's (${report.unprovenHostRecords.length}) — ` +
+      'every claim comparison treats them as foreign:');
+    for (const r of report.unprovenHostRecords) print(`  ${r.kind} ${r.name} [${r.repo}] host=${r.host} — ${r.reason}`);
+    print('  Either this machine was renamed before claims carried a machine id (re-claim to record it:');
+    print('  colab claim <N> --worktree <name> --session <id>), or ~/.colab is being file-synced from another');
+    print('  machine — stop that first (CONVENTIONS.md, Place-claims).');
   }
 
   // Printed AFTER the health verdict, on purpose: these are not drift. `ship` keeps the branch by
@@ -5239,7 +5563,7 @@ const HELP_CONFIG = `colab config [show|add-repo <path>|rm-repo <path>|add-reser
   add-reserved-file <path>   add a machine-local reserved-ports file (~ is expanded); its ports join
                              the reserved set (lenient parse: whitespace ints per line, # comments)
   rm-reserved-file <path>    remove a reserved-ports file
-  set <key> <value>          set claimTTLHours | portRange | worktreeSubdir | notifyUrl | journal |
+  set <key> <value>          set claimTTLHours | plannerClaimTTLMinutes | portRange | worktreeSubdir | notifyUrl | journal |
                               claimIdentity
 
 notifyUrl is OPTIONAL and off by default: unset, colab makes no network call of its own. Set it to
@@ -5307,6 +5631,12 @@ function cmdConfig(argv) {
     const [k, v] = [argv[1], argv[2]];
     if (!k || v === undefined) throw new UserError('set needs <key> <value>');
     if (k === 'claimTTLHours') cfg[k] = parseFloat(v);
+    else if (k === 'plannerClaimTTLMinutes') {
+      // #326: refuse a non-number rather than store NaN — doctor would then never flag any planner claim.
+      const n = parseFloat(v);
+      if (!Number.isFinite(n) || n <= 0) throw new UserError('plannerClaimTTLMinutes must be a positive number of minutes');
+      cfg[k] = n;
+    }
     else if (k === 'portRange' || k === 'worktreeSubdir') cfg[k] = v;
     else if (k === 'journal') {
       // Same "absent, not falsy" discipline as notifyUrl: off is the key not being there, so

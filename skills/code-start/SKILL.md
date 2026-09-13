@@ -372,7 +372,22 @@ divergence.
 
 ## 3. Check claims, then claim before you start
 
-**Source of truth is GitHub** (visible from any machine, to any person):
+**The record of a claim is its branch on the git remote; the tracker is its mirror for
+people** (`CONVENTIONS.md` [§5](../../CONVENTIONS.md#5-claiming-work--how-to-say-im-on-this), *Record of a claim*, #325). What that means here:
+
+- `colab worktree new` (step 4) **pushes the branch the moment it cuts it** — that push is
+  what another machine's claim is refused against. Without `colab`, push it yourself right
+  after the plain-git cut: `git push -u origin <branch>`.
+- `colab claim` / `colab worktree new` **refuse** when a branch on the remote carries `#N` and
+  is not this machine's, and name it with the commands to continue it. That is not an obstacle
+  to route around — it is step 3's "Found one → continue it" arriving before you branched. Only
+  `--force` takes it over, loudly.
+- **Remote unreachable → refused** (no local-only fallback). **Tracker unreachable → the claim
+  still stands**, its tracker half marked pending (⚠ in `colab claims`); re-run the same claim
+  once the tracker is back to post it. Say so in your report if you leave one pending.
+- A claim is refused by this account's own live claim comment from **another machine** too.
+
+The tracker mirror, which a human reads (and `colab claims` / the raw commands below query):
 
 ```sh
 # check what's taken
@@ -538,11 +553,20 @@ colab worktree new <type>/<slug>-$N --issues $N --ports 1 \
 #   the base is recorded on the worktree and is what `colab ship` merges into.
 # … else fall back to plain git (then claim by hand, step 3):
 git worktree add -b <type>/<slug>-$N ../<slug>-$N origin/<trunk>
+git push -u origin <type>/<slug>-$N          # the claim record other machines read (#325)
 ```
 
 `--issues` does the claiming, which is why step 3 tells you not to claim separately on
 this path. Pass **every** issue the branch will carry (`--issues 115,114,113`) — that
 set and the branch name are the two places code-wrap's harvest reads.
+
+**It also pushes the branch at cut (#325)** — `pushed <branch> → origin` in its output. That
+push *is* the claim record other machines are refused against, so a failed push takes nothing:
+with `--issues`, the worktree and branch are removed again and it exits 1 (`claim NOT taken`).
+Fix the push (access, network, or a same-named branch another machine just created) and re-run;
+do not recreate the worktree by hand around it. **Opened by a planner?** If a
+`--session intent:<id>` claim already holds the issue on this machine, this command upgrades
+that record in place with your real session — expected, and nothing is re-posted.
 
 **Repeat the identity flags here** (step 0): as an agent you cannot rely on an export
 made in an earlier tool call, and this is the command whose row a dashboard shows.

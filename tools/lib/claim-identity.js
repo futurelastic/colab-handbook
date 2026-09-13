@@ -34,6 +34,8 @@
  * such comment still live (never released) would instantly win every future race.
  */
 
+const machine = require('./machine');
+
 const DEFAULT_COMPONENTS = Object.freeze(['login', 'host']);
 const FINE_COMPONENTS = Object.freeze(['login', 'host', 'session']);
 
@@ -84,16 +86,54 @@ function identityString(entry, comps) {
 }
 
 /**
- * Are `a` and `b` the SAME claimant under `comps`? `login`+`host` are always required to match —
- * they are the baseline every component set includes. `session` sharpens the match ONLY when
- * `comps` includes it AND both sides carry a non-empty value; either side blank degrades that pair
- * back to the coarse comparison (see the module doc's DEGRADE-ON-MISSING note).
+ * Is `s` a PLANNER INTENT id rather than a session (#326)? A planner running on every machine
+ * claims an issue BEFORE it spawns the session that will do the work, with `--session
+ * intent:<id>`; the spawned session's own claim later replaces that value with its real one. An
+ * intent id therefore never identifies a session, and must never be compared as one.
+ */
+function isIntentSession(s) {
+  return /^intent:\S/.test(String(s == null ? '' : s).trim());
+}
+
+/**
+ * Are `a` and `b` on the SAME machine (#327)? Both carry a `machine` → compare those (a raw id or
+ * the `m:` digest a claim comment carries — `machineToken` makes the two comparable); raw ids of
+ * DIFFERENT schemes (one machine resolving `iokit:` in one process and the MAC fallback in another)
+ * cannot be compared, so they fall through, exactly as `machine.js` `sameMachineWith` does.
+ * Otherwise → `canonHost`, so `devbox.local`, `Devbox.` and `devbox.lan` read as one machine: raw
+ * `os.hostname()` spells one machine two ways, and a string compare used to split it into two
+ * claimants. Blank on both sides compares equal, matching the pre-#327 `'' === ''`.
+ */
+function sameHost(a, b) {
+  const am = String((a && a.machine) || '').trim();
+  const bm = String((b && b.machine) || '').trim();
+  if (am && bm) {
+    const digested = /^m:/.test(am) || /^m:/.test(bm);
+    if (digested) return machine.machineToken(am) === machine.machineToken(bm);
+    if (machineScheme(am) === machineScheme(bm)) return am === bm;
+  }
+  return machine.canonHost(a && a.host) === machine.canonHost(b && b.host);
+}
+
+function machineScheme(id) {
+  const i = id.indexOf(':');
+  return i === -1 ? '' : id.slice(0, i);
+}
+
+/**
+ * Are `a` and `b` the SAME claimant under `comps`? `login` and the machine (`sameHost`, #327) are
+ * always required to match — they are the baseline every component set includes. `session`
+ * sharpens the match ONLY when `comps` includes it AND both sides carry a non-empty value that is a
+ * real session; either side blank, or either side a planner intent id (#326 — replaced by the real
+ * session at spawn, so it is not a different claimant), degrades that pair back to the coarse
+ * comparison (see the module doc's DEGRADE-ON-MISSING note).
  */
 function sameClaimant(a, b, comps) {
   if (!a || !b) return false;
   if ((a.login || '') !== (b.login || '')) return false;
-  if ((a.host || '') !== (b.host || '')) return false;
-  if (comps && comps.includes('session') && a.session && b.session) {
+  if (!sameHost(a, b)) return false;
+  if (comps && comps.includes('session') && a.session && b.session
+    && !isIntentSession(a.session) && !isIntentSession(b.session)) {
     return a.session === b.session;
   }
   return true;
@@ -149,5 +189,5 @@ function looksLikeSessionId(v) {
 module.exports = {
   DEFAULT_COMPONENTS, FINE_COMPONENTS,
   claimIdentityProblem, components, identityString, sameClaimant, mergeClaimRecord,
-  looksLikeSessionId,
+  looksLikeSessionId, isIntentSession, sameHost,
 };

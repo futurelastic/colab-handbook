@@ -149,3 +149,72 @@ test('looksLikeSessionId: a bare stable id is FALSE but must stay usable — thi
   assert.strictEqual(ci.looksLikeSessionId('sess-OTHER'), false);
   assert.strictEqual(ci.looksLikeSessionId('sess-plan-journal-test'), false);
 });
+
+// --- #327: machine identity — one machine is one claimant however its hostname is spelled ------
+
+const machine = require('./machine');
+
+test('#327 sameHost: two spellings of one hostname are one machine', () => {
+  assert.strictEqual(ci.sameHost({ host: 'Box.local.' }, { host: 'box' }), true);
+  assert.strictEqual(ci.sameHost({ host: 'box.lan' }, { host: 'box.local' }), true);
+  assert.strictEqual(ci.sameHost({ host: 'box' }, { host: 'crate' }), false);
+  assert.strictEqual(ci.sameHost({}, {}), true, 'blank on both sides stays equal, as before #327');
+});
+
+test('#327 sameHost: machine ids decide when both sides carry one — a hostname cannot override them', () => {
+  assert.strictEqual(ci.sameHost({ host: 'box', machine: 'iokit:A' }, { host: 'box', machine: 'iokit:B' }), false);
+  assert.strictEqual(ci.sameHost({ host: 'oldname', machine: 'iokit:A' }, { host: 'newname', machine: 'iokit:A' }), true);
+});
+
+test('#327 sameHost: a claim comment digest compares equal to the raw id it was made from, and only to it', () => {
+  const tok = machine.machineToken('iokit:A');
+  assert.match(tok, /^m:[0-9a-f]{12}$/);
+  assert.strictEqual(ci.sameHost({ host: 'x', machine: tok }, { host: 'y', machine: 'iokit:A' }), true);
+  assert.strictEqual(ci.sameHost({ host: 'box', machine: tok }, { host: 'box', machine: 'iokit:B' }), false);
+});
+
+test('#327 sameHost: raw ids of DIFFERENT schemes cannot be compared → canonical hostname decides', () => {
+  assert.strictEqual(ci.sameHost({ host: 'box.local', machine: 'iokit:A' }, { host: 'box', machine: 'mac:abc' }), true);
+  assert.strictEqual(ci.sameHost({ host: 'crate', machine: 'iokit:A' }, { host: 'box', machine: 'mac:abc' }), false);
+});
+
+test('#327 sameHost: a legacy record (no machine id) is compared by canonical hostname', () => {
+  assert.strictEqual(ci.sameHost({ host: 'BOX.local' }, { host: 'box', machine: 'iokit:A' }), true);
+  assert.strictEqual(ci.sameHost({ host: 'crate' }, { host: 'box', machine: 'iokit:A' }), false);
+});
+
+test('#327 sameClaimant: login plus canonical machine — two spellings never read as two claimants', () => {
+  assert.strictEqual(ci.sameClaimant({ login: 'me', host: 'Box.local.' }, { login: 'me', host: 'box' }, ci.DEFAULT_COMPONENTS), true);
+  assert.strictEqual(ci.sameClaimant(
+    { login: 'me', host: 'box', machine: 'iokit:A' }, { login: 'me', host: 'box', machine: 'iokit:B' }, ci.DEFAULT_COMPONENTS), false);
+  assert.strictEqual(ci.sameClaimant({ login: 'me', host: 'box' }, { login: 'you', host: 'box' }, ci.DEFAULT_COMPONENTS), false);
+});
+
+test('#327 machineToken: idempotent on a token, blank on blank, never the raw id', () => {
+  const tok = machine.machineToken('iokit:1234-ABCD');
+  assert.strictEqual(machine.machineToken(tok), tok);
+  assert.ok(!tok.includes('1234'));
+  assert.strictEqual(machine.machineToken(''), '');
+  assert.strictEqual(machine.machineToken(null), '');
+});
+
+// --- #326: planner intent ids --------------------------------------------------------------------
+
+test('#326 isIntentSession: only the `intent:<id>` shape', () => {
+  assert.strictEqual(ci.isIntentSession('intent:plan-42'), true);
+  assert.strictEqual(ci.isIntentSession('  intent:x '), true);
+  assert.strictEqual(ci.isIntentSession('intent:'), false);
+  assert.strictEqual(ci.isIntentSession('https://claude.ai/code/session_abc'), false);
+  assert.strictEqual(ci.isIntentSession(''), false);
+  assert.strictEqual(ci.isIntentSession(null), false);
+});
+
+test('#326 sameClaimant: an intent id is never a DIFFERENT session under the fine setting — the spawn replaces it', () => {
+  const fine = ci.FINE_COMPONENTS;
+  assert.strictEqual(ci.sameClaimant(
+    { login: 'me', host: 'box', session: 'intent:p1' }, { login: 'me', host: 'box', session: 'https://x/session_abc' }, fine), true);
+  assert.strictEqual(ci.sameClaimant({ login: 'me', host: 'box', session: 's1' }, { login: 'me', host: 'box', session: 's2' }, fine), false);
+  assert.strictEqual(ci.sameClaimant(
+    { login: 'me', host: 'box', machine: 'iokit:A', session: 'intent:p1' }, { login: 'me', host: 'box', machine: 'iokit:B', session: 's1' }, fine),
+  false, 'an intent id relaxes only the session compare, never the machine');
+});

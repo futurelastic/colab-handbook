@@ -183,4 +183,20 @@ function isLocal(rec) {
   return sameMachineWith(rec, localMachine());
 }
 
-module.exports = { canonHost, localMachine, sameMachineWith, isLocal, resolveMachineId };
+/**
+ * The PUBLIC form of a machine id (#327): `m:` + the first 12 hex chars of sha256(id). A claim
+ * comment is posted to the tracker — on a public repo, to the internet — and the raw id is a
+ * hardware serial (`IOPlatformUUID`, `/etc/machine-id`) that has no business being published. The
+ * digest keeps what a comparison needs (equal ids → equal tokens, drift-proof like the id itself)
+ * and nothing else. Idempotent: an already-digested token passes through unchanged, so a caller can
+ * compare a comment's token against a local record's raw id without knowing which it holds.
+ * Falsy/blank input → `''` (no machine known — callers fall back to `canonHost`).
+ */
+function machineToken(id) {
+  const s = String(id || '').trim();
+  if (!s) return '';
+  if (/^m:[0-9a-f]{12}$/.test(s)) return s;
+  return `m:${crypto.createHash('sha256').update(s).digest('hex').slice(0, 12)}`;
+}
+
+module.exports = { canonHost, localMachine, sameMachineWith, isLocal, resolveMachineId, machineToken };
