@@ -7243,7 +7243,7 @@ function ciCureTrailerLine(cureVerdict, branch, trunk) {
   return `CI-Cure: branch ${branch} over-red ${trunk}@${shortSha(cureVerdict.redSha)} evidence ${shortSha(cureVerdict.evidenceSha)}${via}`;
 }
 
-const HELP_SHIP = `colab ship [--repo <path>] [--worktree <name> | --branch <br>] [--message "<msg>"] [--refs <N[,M]>] [--keep-worktree] [--delete-branch] [--dry] [--json]
+const HELP_SHIP = `colab ship [--repo <path>] [--worktree <name> | --branch <br> | --direct] [--message "<msg>"] [--refs <N[,M]>] [--keep-worktree] [--delete-branch] [--adopt] [--session <id>] [--session-name <s>] [--dry] [--json]
 
 The ONE sanctioned door for code-wrap Phase B: squash-merge a session branch into the BASE IT WAS
 CUT FROM — trunk for an ordinary session, or the declared integration line recorded on its worktree
@@ -7281,6 +7281,8 @@ Sequence (each step gated; any failure aborts before the push — the target is 
                         changed composer.lock/package-lock.json/... warns, naming the install
                         command; colab never runs a package manager itself (#304)
   f. B3 teardown        colab worktree rm (releases claims + ports + ✅ comments) unless --keep-worktree.
+                        Claims with NO worktree (--branch-keyed, or unattached) are released too,
+                        through colab release (#319) — ship alone leaves the registry consistent.
                         The BRANCH IS KEPT — pass --delete-branch to remove it (local + remote).
   g. B4 verify + h.     confirm each issue auto-closed; post "🚢 Shipped to <trunk>" per issue
   i. group teardown     for every group:<key> label the branch's issues carried, delete the
@@ -7304,6 +7306,16 @@ LOCAL claim registry has nothing for it → refuse: claims are written to both l
 but this resolution reads only the local registry, so the likely cause is the claim living on
 ANOTHER MACHINE — ship from there, or \`colab claim <N> --branch <br> --session <id>\` to take it
 over here (--session mandatory here, #242: no --worktree means the trunk-checkout place-claim).
+A no-digit branch that exists ONLY on origin (no local ref) is refused too (#324): a branch this
+machine never held is most likely another machine's work in flight. Ship it from there, claim it
+here, or pass --adopt if it genuinely has no issue — the squash then carries a
+\`Colab-Adopted: origin/<br> @ <sha> on <host> (machine <id>)\` trailer. A LOCAL no-digit branch is
+still a legitimate zero. --adopt never bypasses a branch that names issues.
+
+UNATTACHED CLAIMS (#319). A claim taken with no --worktree and no --branch (\`colab claim <N>
+--session <id>\`) is carried by a branch ship only when BOTH hold: its session equals this ship's
+(--session / COLAB_SESSION, or the worktree record's), and the branch name's trailing group names
+the issue. Anything else of this session's is reported at B3 and left in place — never closed.
 
 MIGRATION GRANTS (#98) are the ONE narrow, human-created exception to the no-new-migrations
 precondition — for an issue whose entire deliverable IS a schema change, which the gate would
@@ -7381,6 +7393,20 @@ merge, no push, and deliberately NO --allow-empty marker commit, which would put
 history of every repo that adopts this. The gate: an issue is closed this way only when it ALREADY
 carries a comment colab did not write (its own 🔒/✅/🚢/🔖 markers do not count). An issue without one
 is reported and LEFT OPEN while the rest proceed.
+
+TRUNK-DIRECT — \`colab ship --direct\` (#302). A unit committed straight to trunk has no branch and
+no worktree, so neither door above can find it, and evidence-close's own detection cannot fire
+(\`landed\` is \`unknown\` when base === branch). --direct is its close path: the claims are this
+session's claims in this repo with no worktree and no branch (identity REQUIRED — --session or
+COLAB_SESSION; a claim of another session is never touched, a same-session claim that names a
+branch is pointed at --branch). Preconditions: writes: not \`isolated\` · autonomy: auto-trunk ·
+trunk CI green · checklist close gate · trunk checked out and clean · local trunk not ahead of
+origin (the work is PUBLISHED). Then exactly evidence-close: evidence comment, close each issue
+(same gate — the issue must already carry a comment colab did not write; code-wrap A1's distill is
+that comment), release the claims and the checkout hold, journal the plan file. An issue left open
+keeps its claim so a re-run finds it. Cannot be combined with --worktree/--branch/--message/
+--delete-branch/--keep-worktree/--adopt. \`writes: direct\` is not required. --dry and --dry --json
+work as usual (json: \`direct: true\`, \`branch: null\`, \`mode: "evidence-close"\`).
 
 B3 KEEPS the branch by default. Deleting refs from a shared remote is not something this command
 does unasked, however certain it is that the content landed: reporting is safe and reversible,
@@ -7534,7 +7560,7 @@ function resolveShipSession(st, repoAbs, opts) {
     const wt = Object.values(st.worktrees).find((w) => w.repo === repoAbs && w.branch === branch);
     if (wt) { name = wt.name; wtPath = wt.path; session = wt.session || ''; sessionName = wt.sessionName || ''; }
   } else {
-    throw new UserError('ship needs --worktree <name> or --branch <br>');
+    throw new UserError('ship needs --worktree <name> or --branch <br> — or --direct, for a branchless trunk-direct unit (#302)');
   }
   // Claimed issues for this session: worktree-keyed AND branch-keyed claims are UNIONED (#76).
   // `colab claim <N> --worktree <w> --branch <b>` writes worktree === w; the warning's own printed
@@ -7544,12 +7570,71 @@ function resolveShipSession(st, repoAbs, opts) {
   // and a worktree-keyed claim on the SAME branch name the same work, so both count.
   const claims = Object.values(st.claims)
     .filter((c) => c.repo === repoAbs && ((name && c.worktree === name) || (branch && c.branch === branch)));
+  // #319: a claim carrying NEITHER a worktree NOR a branch — `colab claim <N> --session <id>`, the
+  // documented trunk-direct / ops / recovery shape, and the exact claim #317 measured holding the
+  // trunk checkout under its own ship — used to be invisible to both key spaces above. Widening the
+  // filter to "any unattached claim in this repo" is the over-broad match #153 exists to refuse, so
+  // the rule is narrow and needs BOTH of two independent proofs:
+  //   1. identity — the claim's own `session` is non-blank and equals this ship's identity (the
+  //      worktree record's session, or --session / COLAB_SESSION). Blank never matches blank.
+  //   2. git — the branch NAME's trailing issue group names that issue. In branch mode an adopted
+  //      claim becomes `Closes #N` in immutable history, so an unrelated ops claim the same
+  //      coordinator happens to hold must not be swept in; and a claim the branch names is, by
+  //      construction, already corroborated for #87.
+  // A same-session unattached claim that fails (2) is NOT adopted — it is reported (`unadopted`) with
+  // the command that attaches it, never silently closed and never silently ignored.
+  const shipIds = new Set([session, resolveSession(opts)].filter(Boolean));
+  const named = new Set(shipguard.branchIssueNumbers(branch));
+  const taken = new Set(claims);
+  const unattached = Object.values(st.claims).filter((c) => !taken.has(c) && c.repo === repoAbs &&
+    !c.worktree && !c.branch && c.session && shipIds.has(c.session));
+  const unadopted = [];
+  for (const c of unattached) {
+    if (named.has(normIssueNum(c.issue))) claims.push(c);
+    else unadopted.push(normIssueNum(c.issue));
+  }
   const issues = [...new Set(claims.map((c) => normIssueNum(c.issue)))].sort((a, b) => a - b);
   if (!session && !sessionName) { // fall back to a claim's identity
     const withId = claims.find((c) => c.session || c.sessionName);
     if (withId) { session = withId.session || ''; sessionName = withId.sessionName || ''; }
   }
-  return { name, branch, wtPath, issues, session, sessionName };
+  // #319: …and then to the ship's OWN identity. Without it a claimless ship presented a blank
+  // session downstream, so B1's place classification could not recognise a hold this same session
+  // took (#317) and the evidence/ship comments carried no session at all.
+  if (!session) session = resolveSession(opts);
+  if (!sessionName) sessionName = resolveSessionName(opts);
+  return { name, branch, wtPath, issues, session, sessionName, claims, unadopted: unadopted.sort((a, b) => a - b) };
+}
+
+/**
+ * #319: release every claim this ship carried that `colab worktree rm` cannot reach — i.e. every
+ * claim with NO worktree. `cmdWorktreeRm` deletes only claims whose `worktree === name`, so a
+ * branch-keyed claim (`colab claim N --branch b`) and an unattached one (`colab claim N --session
+ * s`) both used to survive a successful ship: `in-progress` on GitHub with the code already merged,
+ * which is CONVENTIONS.md §4's 26/30 failure reached by a third route. The `code-ship` skill papered
+ * over it by running `colab release <N>` by hand after every ship.
+ *
+ * Goes through `cmdRelease` rather than re-implementing it, because that one command already owns
+ * every consequence of a release: the GitHub unassign + label removal (GraphQL, REST fallback), the
+ * `✅ Released` marker (suppressed on a closed issue), `releasePending` when the GitHub write fails
+ * (#164), and handing the trunk-checkout place-claim back only once it is this session's LAST
+ * unattached claim there (#305). Same shape as B3 calling `cmdWorktreeRm`.
+ *
+ * `keep` names issues whose claim must survive: the evidence-close path leaves an issue with no
+ * evidence OPEN and tells the operator to re-run — releasing its claim would make that re-run
+ * resolve to nothing. Failures warn (deferred where a collector is open); none fails the ship,
+ * whose real work has already happened by the time this runs.
+ */
+function shipReleaseUnattachedClaims(repoAbs, sess, keep = new Set()) {
+  const live = state.loadState().claims;
+  for (const c of sess.claims || []) {
+    if (c.worktree) continue; // worktree rm owns these — or --keep-worktree deliberately kept them
+    const num = normIssueNum(c.issue);
+    if (keep.has(num)) { print(`  claim #${num} kept — the issue was left open, so a re-run must still find it`); continue; }
+    if (!live[claimKey(repoAbs, num)]) continue; // already released by something else
+    try { cmdRelease([String(num), '--repo', repoAbs]); }
+    catch (e) { warnDeferred(`could not release claim #${num}: ${e.message} — run \`colab release ${num}\``); }
+  }
 }
 
 // The closed refusal-class vocabulary for `ship --dry --json` (#77) — a STABLE WIRE FORMAT, same
@@ -8066,7 +8151,7 @@ function cmdShipDryJson(opts) {
   const sess = resolveShipSession(st, repoAbs, opts);
   const trunk = resolveTrunk(repoAbs, doc);
   if (!trunk) throw new UserError('Could not determine trunk branch (set project.yml trunk:)');
-  if (sess.branch === trunk) throw new UserError(`Refusing: --branch is the trunk itself (${trunk}) — nothing to ship`);
+  if (sess.branch === trunk) throw new UserError(`Refusing: --branch is the trunk itself (${trunk}) — nothing to ship. A unit committed straight to ${trunk} closes with \`colab ship --direct\` (#302)`);
 
   const checks = [];
   let target = null;
@@ -8243,14 +8328,22 @@ function cmdShipDryJson(opts) {
   // branch whose name claims issues the local registry has nothing for reported `ok: true`.
   const dryBrokenClaims = Object.values(st.claims).filter((c) => c.repo === repoAbs &&
     (records.branchProblem(c.branch) || (c.branch && !git.branchExists(repoAbs, c.branch))));
-  const dryZeroVerdict = shipguard.zeroClaimVerdict(sess.issues.length, sess.branch, dryBrokenClaims.length);
+  // #324: same measurement, same moment-before-any-checkout, as the prose path.
+  const dryRefs = git.branchRefs(repoAbs, sess.branch);
+  const dryRemoteOnly = !dryRefs.localSha && !!dryRefs.remoteSha;
+  const dryZeroVerdict = shipguard.zeroClaimVerdict(sess.issues.length, sess.branch, dryBrokenClaims.length,
+    { remoteOnly: dryRemoteOnly, adopt: !!opts.adopt });
   if (dryZeroVerdict.relevant) {
     const okZero = !dryZeroVerdict.refuse;
     const detail = dryZeroVerdict.reason === 'broken-claims'
       ? `${dryBrokenClaims.length} claim(s) in this repo name a branch that resolves to no ref — registry is broken, not the branch`
       : dryZeroVerdict.reason === 'branch-names-issues'
         ? `branch name claims ${dryZeroVerdict.named.map((n) => '#' + n).join(' ')} but this machine's ("${HOST}") registry has nothing for it (#153) — claim may live on another machine`
-        : 'branch name carries no issue numbers — a legitimate zero (chore / evidence-close)';
+        : dryZeroVerdict.reason === 'remote-only-unclaimed'
+          ? `branch exists ONLY on origin (@ ${shortSha(dryRefs.remoteSha)}) and this machine's ("${HOST}") registry has nothing for it (#324) — likely another machine's work; ship from there, claim it here, or --adopt`
+          : dryZeroVerdict.reason === 'adopted'
+            ? `branch exists ONLY on origin (@ ${shortSha(dryRefs.remoteSha)}) — adopted explicitly (--adopt); the squash will carry a Colab-Adopted: trailer (#324)`
+            : 'branch name carries no issue numbers — a legitimate zero (chore / evidence-close)';
     checks.push({ name: 'issues resolved (not zero-by-registry-gap)', ok: okZero,
       class: okZero ? null : HUMAN_GATED, detail });
   }
@@ -8401,14 +8494,17 @@ function shipJournalPlanFiles(repoAbs, issues) {
  * other issues' evidence is not made worse by this one's absence.
  */
 function shipEvidenceClose({ repoAbs, st, sess, target, trunk, gh, closeIssues, refsIssues, refsSet, mode, opts }) {
-  print(`E1: evidence-close — no merge into ${target}, nothing to push.`);
+  print(sess.direct
+    ? `E1: evidence-close (trunk-direct) — no branch, no merge into ${target}, nothing to push.`
+    : `E1: evidence-close — no merge into ${target}, nothing to push.`);
   if (!gh) {
     process.stderr.write('✗ E1: gh is not usable (no auth / no origin), so neither the evidence check nor the\n');
     process.stderr.write('  close can be performed. Nothing was changed. Fix gh and re-run.\n');
     return 1;
   }
 
-  const head = git.git(['rev-parse', '--short', sess.branch], repoAbs).stdout || '(unknown)';
+  // #302: a trunk-direct unit has no branch — its work IS the target's tip.
+  const head = git.git(['rev-parse', '--short', sess.direct ? target : sess.branch], repoAbs).stdout || '(unknown)';
   const closed = [];
   const skipped = [];
   for (const num of closeIssues) {
@@ -8420,7 +8516,14 @@ function shipEvidenceClose({ repoAbs, st, sess, target, trunk, gh, closeIssues, 
       continue;
     }
     const shipSess = sessionCommentSuffix(sess.session, sess.sessionName);
-    const body = `✅ Closed by colab ship — **evidence-close**: this branch (\`${sess.branch}\` @ ${head}) ` +
+    const body = sess.direct
+      ? `✅ Closed by colab ship — **evidence-close (trunk-direct, #302)**: this unit was committed straight to ` +
+        `\`${target}\` (now @ ${head}), so there is no branch, no merge commit and no \`Closes #${num}\` to carry.\n\n` +
+        `The deliverable is recorded on this issue (see the comment(s) above), which is what authorised ` +
+        `the close — colab closes an issue without a merge only when it already carries a comment colab did ` +
+        `not write. The claim was matched by this session's identity, and the published state was measured ` +
+        `from git: ${mode.why}.${shipSess}`
+      : `✅ Closed by colab ship — **evidence-close**: this branch (\`${sess.branch}\` @ ${head}) ` +
       `introduces no change to \`${target}\`, so there is no merge commit and no \`Closes #${num}\` to carry.\n\n` +
       `The deliverable is recorded on this issue (see the comment(s) above), which is what authorised ` +
       `the close — colab closes a zero-diff issue only when it already carries a comment colab did not ` +
@@ -8437,6 +8540,7 @@ function shipEvidenceClose({ repoAbs, st, sess, target, trunk, gh, closeIssues, 
     warn(`#${s.num} left OPEN — ${s.why}.`);
     warn('  Record what was delivered as a comment on the issue, then re-run; colab will not invent');
     warn('  the evidence for you, and closing without it is what the gate exists to prevent.');
+    if (sess.direct) warn('  Under trunk-direct this is code-wrap A1\'s distill comment — post it, then re-run `colab ship --direct`.');
   }
   for (const num of refsIssues) print(`  #${num} kept open (ref).`);
 
@@ -8446,10 +8550,10 @@ function shipEvidenceClose({ repoAbs, st, sess, target, trunk, gh, closeIssues, 
   pushEvent('ship', {
     repo: repoAbs, worktree: sess.name, session: sess.session,
     issue: sess.issues.length === 1 ? sess.issues[0] : undefined,
-    payload: { state: 'evidence-closed', branch: sess.branch, target, sha: null, issues: closed },
+    payload: { state: 'evidence-closed', branch: sess.branch, target, sha: null, issues: closed, ...(sess.direct ? { direct: true } : {}) },
   });
 
-  // Teardown, exactly as B3 — the claims are released by worktree rm, as on every other path.
+  // Teardown, exactly as B3 — worktree claims are released by worktree rm, as on every other path.
   if (sess.name && !opts.keepWorktree) {
     print(`E2: removing worktree ${sess.name} …`);
     try { cmdWorktreeRm([sess.name, '--repo', repoAbs, '--force']); }
@@ -8457,11 +8561,14 @@ function shipEvidenceClose({ repoAbs, st, sess, target, trunk, gh, closeIssues, 
   } else if (sess.name) {
     print(`E2: keeping worktree ${sess.name} (--keep-worktree)`);
   }
+  // #319: …and every claim worktree rm cannot reach (no worktree). A kept worktree keeps its
+  // whole claim set, as before; an issue left open for want of evidence keeps its claim.
+  if (!(sess.name && opts.keepWorktree)) shipReleaseUnattachedClaims(repoAbs, sess, new Set(skipped.map((s) => s.num)));
 
   // The branch carried no content, so there is nothing for `handleShippedBranch` to reason about —
   // but it is also not "shipped", and deleting it here would destroy the only record that the
-  // session existed. Left alone, and said so.
-  print(`E2: branch ${sess.branch} left in place (it carried no content to ship; delete it by hand if you want it gone).`);
+  // session existed. Left alone, and said so. A trunk-direct unit (#302) has no branch to mention.
+  if (sess.branch) print(`E2: branch ${sess.branch} left in place (it carried no content to ship; delete it by hand if you want it gone).`);
 
   // #193: the same (h2) B4 step the merge path runs — this exit used to skip it entirely, leaving
   // a zero-diff session's plan file on disk with no journal line for the mechanism's own tuning data.
@@ -8475,10 +8582,187 @@ function shipEvidenceClose({ repoAbs, st, sess, target, trunk, gh, closeIssues, 
   return 0;
 }
 
+/**
+ * #302: `colab ship --direct` — the close path for a BRANCHLESS trunk-direct unit.
+ *
+ * #284 ruled (option B) that a unit committed straight to trunk still leaves the same closing event
+ * as every other unit: evidence posted, issue closed, claims released — through evidence-close. It
+ * assumed such a unit would classify as `landed ∧ zero own commits` and fall into that path with no
+ * new logic. Measured false at THREE layers, not two: `resolveShipSession` refuses with no
+ * worktree/branch, `--branch <trunk>` is refused as "nothing to ship", and even with both removed
+ * `landed.landedState` answers `unknown` whenever base === branch (lib/landed.js), and `unknown` is
+ * never evidence-close (see `shipMode`). So this mode does not route through `shipMode` at all: its
+ * "nothing to merge" fact is structural (there is no branch), and what it measures instead is that
+ * the work is actually PUBLISHED — trunk checked out, clean, and not ahead of origin.
+ *
+ * Why a flag on `ship` and not a new subcommand or `solo --done`:
+ *   - a subcommand would fork the autonomy gate, the close/refs split, `shipEvidenceClose`, the
+ *     teardown, the events and the plan journal — every one of which a unit must share for the
+ *     audit trail to stay uniform, which was the whole point of the ruling;
+ *   - `solo --done` is the wrong shape: solo flow holds no claim by construction and `--done` is
+ *     deliberately never gated (#237). A trunk-direct unit WITH an issue is a no-worktree `colab
+ *     claim`, not a solo session. A solo session with no claim has nothing to close, which is fine;
+ *   - explicit, never inferred from "no --worktree/--branch": COLAB_SESSION is set in most agent
+ *     sessions, so an implicit mode would turn a forgotten `--branch` into a close.
+ *
+ * Claims are matched by IDENTITY — repo, no worktree, no branch, `session` equal to this invocation's
+ * --session/COLAB_SESSION — and a blank identity is refused (#242). That stands in for #87's git
+ * corroboration, whose hazard is a DIFFERENT session writing onto a shared key; here the key is the
+ * session. Trunk commits naming each issue are listed, advisory only.
+ *
+ * What is deliberately UNCHANGED (policy, not this unit's to move): the evidence gate
+ * (`shipguard.hasEvidence` — ⚖ proposed answer recorded in CONVENTIONS.md §2, confirmation pending),
+ * the autonomy gate, and trunk CI as a gate. `writes: direct` is NOT required: this grants nothing —
+ * no trunk write, no push — so any repo whose `writes:` does not veto trunk-direct may use it.
+ */
+function cmdShipDirect(opts) {
+  const clash = [['worktree', '--worktree'], ['branch', '--branch'], ['message', '--message'],
+    ['deleteBranch', '--delete-branch'], ['keepWorktree', '--keep-worktree'], ['adopt', '--adopt']]
+    .filter(([k]) => opts[k]).map(([, f]) => f);
+  if (clash.length) throw new UserError(`--direct ships no branch and no worktree — it cannot be combined with ${clash.join(', ')}`);
+  const repoAbs = resolveRepo(opts);
+  if (!git.repoRoot(repoAbs)) throw new UserError(`${repoAbs} is not a git repo`);
+  const doc = projectDoc(repoAbs);
+  const trunk = resolveTrunk(repoAbs, doc);
+  if (!trunk) throw new UserError('Could not determine trunk branch (set project.yml trunk:)');
+  const session = resolveSession(opts);
+  const sessionName = resolveSessionName(opts);
+  if (!session) {
+    throw new UserError('ship --direct needs this session\'s identity: --session <id> (or COLAB_SESSION). A branchless ' +
+      'unit has no worktree or branch to find its claims by — only the session that took them — and a blank identity matches nobody (#242).');
+  }
+  const json = !!(opts.dry && opts.json);
+  const st = state.loadState();
+  const mine = Object.values(st.claims).filter((c) => c.repo === repoAbs && !c.worktree && c.session === session);
+  const claims = mine.filter((c) => !c.branch);
+  const onBranch = mine.filter((c) => c.branch);
+  const othersCount = Object.values(st.claims)
+    .filter((c) => c.repo === repoAbs && !c.worktree && !c.branch && c.session !== session).length;
+  const issues = [...new Set(claims.map((c) => normIssueNum(c.issue)))].sort((a, b) => a - b);
+  const sess = { name: null, branch: null, wtPath: null, issues, session, sessionName, claims, unadopted: [], direct: true };
+  const label = sessionName || session;
+
+  for (const c of onBranch) {
+    warn(`#${normIssueNum(c.issue)} is claimed by this session on branch ${c.branch} — not a trunk-direct unit; ship it with --branch ${c.branch}`);
+  }
+  const othersNote = othersCount ? `; ${othersCount} other session(s)' unattached claim(s) in this repo left alone` : '';
+
+  const checks = []; // {name, ok, class, detail, advisory?}
+  let closeIssues = [], refsIssues = [], refsSet = new Set(), checklistFindings = [], dirtyOwners = null;
+  const emitJson = (ok) => {
+    print(JSON.stringify({
+      ok, dry: true, direct: true, repo: shortRepo(repoAbs), branch: null, worktree: null, target: trunk,
+      mode: 'evidence-close', issues, closeIssues, refsIssues, checklistFindings,
+      checks: checks.map(({ name, ok: rowOk, class: cls, detail }) => ({ name, ok: rowOk, class: cls, detail })),
+      migrationGrant: null, ciGrant: null, ciCure: null, baseCi: null, dirtyOwners,
+    }, null, 2));
+    return ok ? 0 : 1;
+  };
+
+  if (!issues.length) {
+    const detail = `none claimed by session "${label}" with no worktree and no branch — nothing to close${othersNote}`;
+    if (json) { checks.push({ name: 'claims matched by session identity', ok: true, class: null, detail }); return emitJson(true); }
+    print(`ship ${shortRepo(repoAbs)} · trunk-direct unit on ${trunk}${opts.dry ? '  [DRY RUN]' : ''}`);
+    print(`  issues: (${detail})`);
+    return 0;
+  }
+
+  // ---- the veto, and the autonomy gate — both unchanged policy ----
+  const vetoed = writesAuthority.trunkDirectVetoed(doc.writes);
+  checks.push({ name: 'trunk-direct permitted', ok: !vetoed, class: vetoed ? HUMAN_GATED : null,
+    detail: vetoed
+      ? `project.yml writes: ${doc.writes} vetoes trunk-direct — every unit here has a branch; ship it with --worktree/--branch`
+      : `writes: ${doc.writes ? String(doc.writes) : 'absent'} does not veto trunk-direct` });
+  const autonomy = doc.autonomy ? String(doc.autonomy) : 'manual';
+  const autonomyOk = autonomy === 'auto-trunk';
+  checks.push({ name: 'autonomy granted', ok: autonomyOk, class: autonomyOk ? null : HUMAN_GATED,
+    detail: autonomyOk ? 'auto-trunk' : `project.yml autonomy: ${doc.autonomy ? autonomy : 'absent'} — a human must trigger Phase B` });
+
+  checks.push({ name: 'claims matched by session identity', ok: true, class: null,
+    detail: `${issues.map((n) => '#' + n).join(' ')} claimed by "${label}", no worktree, no branch${othersNote}` });
+
+  // ---- trunk CI: a gate, exactly as it is for a branch's evidence-close. The unit's own trunk commit
+  // may be what turned it red. No grant/cure doors: both are defined over a candidate BRANCH.
+  const gh = isGhUsable(repoAbs);
+  const ci = shipCiCheck(repoAbs, gh, trunk, trunk, null, null);
+  checks.push({ name: ci.name, ok: ci.ok, class: ci.class, detail: ci.detail });
+
+  const refsFromFlag = new Set(
+    String(opts.refs || '').split(',').map((s) => s.trim().replace(/^#/, '')).filter(Boolean).map(Number),
+  );
+  for (const n of refsFromFlag) {
+    if (!issues.includes(n)) warn(`--refs #${n} is not a claimed issue of this unit — ignored`);
+  }
+  const split = resolveCloseRefsSplit(repoAbs, gh, issues, refsFromFlag);
+  ({ closeIssues, refsIssues, refsSet } = split);
+  checklistFindings = split.gateFindings;
+  const gateOk = checklistFindings.length === 0;
+  for (const f of checklistFindings) warn(`#${f.issue}: ${f.reason} — refusing to close until this is resolved.`);
+  checks.push({ name: 'remainder declared for unticked issues', ok: gateOk, class: gateOk ? null : HUMAN_GATED,
+    detail: gateOk
+      ? 'no unticked Plan checklist item(s) without a declared remainder'
+      : `${checklistFindings.map((f) => `#${f.issue} (${f.unchecked}/${f.total} unticked)`).join(', ')} — no declared remainder` });
+
+  // ---- the work is committed on trunk … ----
+  const headBranch = git.git(['rev-parse', '--abbrev-ref', 'HEAD'], repoAbs).stdout;
+  const onTrunk = headBranch === trunk;
+  const dirty = git.dirtyTracked(repoAbs); // tracked-only, for the same reason as cmdShipDryJson's #86 note
+  if (onTrunk && dirty) dirtyOwners = dirtyOwnerAdvisory(repoAbs, st, dirty);
+  const treeOk = onTrunk && !dirty;
+  checks.push({ name: 'trunk checkout ready', ok: treeOk, class: treeOk ? null : HUMAN_GATED,
+    detail: !onTrunk ? `main checkout is on "${headBranch}", not "${trunk}"`
+      : (dirty ? dirtyOwnerDetail('tracked changes uncommitted in trunk checkout — commit or discard them first', dirtyOwners) : `on ${trunk}, clean`) });
+
+  // ---- … and published. Behind-only is fine: nothing local is unpublished. Ahead/diverged is not.
+  const sync = targetSync.readTargetSync(git, repoAbs, trunk, { repoLabel: repoAbs });
+  const syncOk = sync.ok || sync.cls === 'behind';
+  checks.push({ name: 'unit published to origin', ok: syncOk,
+    class: syncOk ? null : (sync.cls === 'unknown' ? SELF_CLEARING : HUMAN_GATED),
+    detail: sync.ok ? sync.detail : (syncOk ? `${sync.detail} — behind only, so nothing of this unit is unpublished` : sync.detail) });
+
+  // ---- advisory: which trunk commits name each issue since it was claimed. Never a gate — the
+  // session writes those messages itself, so they cannot stand in for evidence.
+  const since = claims.map((c) => c.created).filter(Boolean).sort()[0];
+  const logR = git.git(['log', trunk, '--format=%s%x1f%b%x1e', ...(since ? [`--since=${since}`] : ['-n', '200'])], repoAbs);
+  const commits = logR.ok ? logR.stdout.split('\x1e').map((r) => r.trim()).filter(Boolean)
+    .map((r) => { const [subject, body] = r.split('\x1f'); return { subject, body }; }) : [];
+  const mention = issues.map((n) => `#${n}: ${commits.filter((c) => shipguard.commitIssueNumbers([c]).includes(n)).length}`);
+  checks.push({ name: 'trunk commits naming each issue (advisory)', ok: true, class: null, advisory: true,
+    detail: `${mention.join(', ')} since ${since || 'the last 200 commits'} — informational; the close gate is the issue's own evidence comment` });
+
+  const preOk = checks.every((c) => c.ok);
+  if (json) return emitJson(preOk);
+
+  print(`ship ${shortRepo(repoAbs)} · trunk-direct unit on ${trunk} (no branch, no merge)${opts.dry ? '  [DRY RUN]' : ''}`);
+  print(`  issues: ${issues.map((n) => '#' + n + (refsSet.has(n) ? ' (ref — kept open)' : '')).join(' ')} · session ${label}`);
+  print('');
+  print(table(checks.map((c) => [c.advisory ? '·' : (c.ok ? '✓' : '✗'), c.name, c.detail]), ['', 'PRECONDITION', 'DETAIL']));
+  print('');
+  if (!syncOk && Array.isArray(sync.remedy)) { for (const line of sync.remedy) print(`  ${line}`); print(''); }
+  if (!autonomyOk) {
+    process.stderr.write(`✗ ${shortRepo(repoAbs)} does not grant auto-trunk (project.yml autonomy: ${doc.autonomy ? autonomy : 'absent'}).\n`);
+    process.stderr.write('  A human must close this unit. (Autonomy is granted by the repo, not by a flag — --force cannot override.)\n');
+    return 1;
+  }
+  print(`→ MODE: evidence-close (trunk-direct — the work is already on ${trunk}; nothing to merge)`);
+  if (opts.dry) {
+    print(preOk ? '→ READY: preconditions pass. Re-run without --dry to close.' : '→ NOT READY: fix the ✗ rows above.');
+    print('  Plan: no merge, no commit, no push · post evidence comment + CLOSE each issue · release the claims (and the checkout hold)');
+    print('  Gate: every closing issue must already carry an evidence comment — checked at run time.');
+    if (refsIssues.length) print(`  Refs (kept open, NOT closed): ${refsIssues.map((n) => '#' + n).join(' ')}`);
+    return preOk ? 0 : 1;
+  }
+  if (!preOk) { process.stderr.write('✗ Aborting: one or more preconditions failed (see ✗ above). Nothing was closed.\n'); return 1; }
+
+  const tip = shortSha(git.git(['rev-parse', trunk], repoAbs).stdout);
+  const mode = { evidenceClose: true, direct: true, why: `trunk-direct unit — ${trunk}@${tip} is checked out clean and published to origin/${trunk}` };
+  return shipEvidenceClose({ repoAbs, st, sess, target: trunk, trunk, gh, closeIssues, refsIssues, refsSet, mode, opts });
+}
+
 function cmdShip(argv) {
   const opts = parseArgs(argv, {
-    values: { '--repo': 'repo', '--worktree': 'worktree', '--branch': 'branch', '--message': 'message', '--refs': 'refs' },
-    flags: { '--keep-worktree': 'keepWorktree', '--delete-branch': 'deleteBranch', '--dry': 'dry', '--json': 'json', '-h': 'help', '--help': 'help' },
+    values: { '--repo': 'repo', '--worktree': 'worktree', '--branch': 'branch', '--message': 'message', '--refs': 'refs', '--session': 'session', '--session-name': 'sessionName' },
+    flags: { '--keep-worktree': 'keepWorktree', '--delete-branch': 'deleteBranch', '--dry': 'dry', '--json': 'json', '--direct': 'direct', '--adopt': 'adopt', '-h': 'help', '--help': 'help' },
   });
   if (opts.help) return print(HELP_SHIP);
   // --json is scoped to --dry only (#77): a machine-readable READ of the preconditions. Reporting
@@ -8488,6 +8772,9 @@ function cmdShip(argv) {
   // A fully separate code path, deliberately: the prose/table path below is unchanged by this
   // feature (CONVENTIONS/#77 requires it stay byte-identical), so --dry --json does its own
   // resolution rather than threading a json branch through the existing one.
+  // #302: a branchless trunk-direct unit — its own function, handling --dry and --dry --json itself,
+  // so none of the B0–B4 body below has to learn what "no branch" means.
+  if (opts.direct) return cmdShipDirect(opts);
   if (opts.dry && opts.json) return cmdShipDryJson(opts);
   const repoAbs = resolveRepo(opts);
   if (!git.repoRoot(repoAbs)) throw new UserError(`${repoAbs} is not a git repo`);
@@ -8496,7 +8783,7 @@ function cmdShip(argv) {
   const sess = resolveShipSession(st, repoAbs, opts);
   const trunk = resolveTrunk(repoAbs, doc);
   if (!trunk) throw new UserError('Could not determine trunk branch (set project.yml trunk:)');
-  if (sess.branch === trunk) throw new UserError(`Refusing: --branch is the trunk itself (${trunk}) — nothing to ship`);
+  if (sess.branch === trunk) throw new UserError(`Refusing: --branch is the trunk itself (${trunk}) — nothing to ship. A unit committed straight to ${trunk} closes with \`colab ship --direct\` (#302)`);
 
   // ---- the recorded branch must RESOLVE, before anything else is computed ----
   // Everything downstream is keyed to this name: the claim lookup above, the migration diff, the
@@ -8674,7 +8961,19 @@ function cmdShip(argv) {
   const claimRemedy = sess.name
     ? `colab claim <N> --worktree ${sess.name} --branch ${sess.branch} --session <id>`
     : `colab claim <N> --branch ${sess.branch} --session <id>`;
-  const zeroVerdict = shipguard.zeroClaimVerdict(sess.issues.length, sess.branch, brokenClaims.length);
+  // #324: measured HERE, before B0's `git worktree add` — which would DWIM a local ref out of
+  // origin's copy and erase the only evidence that this machine never held the branch.
+  const shipRefs = git.branchRefs(repoAbs, sess.branch);
+  const remoteOnly = !shipRefs.localSha && !!shipRefs.remoteSha;
+  const zeroVerdict = shipguard.zeroClaimVerdict(sess.issues.length, sess.branch, brokenClaims.length, { remoteOnly, adopt: !!opts.adopt });
+  let adoptInfo = null;
+  if (zeroVerdict.reason === 'adopted') {
+    let machineId = null;
+    try { machineId = (machine.localMachine() || {}).id || null; } catch (_) { /* unknown is recorded as such */ }
+    adoptInfo = { branch: sess.branch, remoteSha: shipRefs.remoteSha, host: HOST, machine: machineId };
+  } else if (opts.adopt) {
+    warn('--adopt ignored — it applies only to a branch that exists ONLY on origin, carries no issue number, and has no claim on this machine');
+  }
   if (zeroVerdict.relevant) {
     warn('this branch resolves to ZERO claimed issues — the squash will carry NO `Closes #N`,');
     warn('  so anything it fixes stays open with its code already merged (CONVENTIONS.md §4).');
@@ -8704,8 +9003,22 @@ function cmdShip(argv) {
       process.stderr.write(`      — rename the branch so it does not end in a digit group that reads as one.\n`);
       return 1;
     }
-    warn('  Nothing contradicts it, so ship continues. If this branch was meant to close an issue,');
-    warn(`  stop now and:  ${claimRemedy}`);
+    if (zeroVerdict.reason === 'remote-only-unclaimed') {
+      process.stderr.write(`✗ Refusing: "${sess.branch}" exists ONLY on origin (@ ${shortSha(shipRefs.remoteSha)}) and this machine's (\`${HOST}\`) ` +
+        'claim registry has nothing for it (#324).\n');
+      process.stderr.write('  A branch this machine never held is most likely ANOTHER MACHINE\'s work in flight — shipping it here\n');
+      process.stderr.write('  would land it under this session with no issue closed and no claim released. So:\n');
+      process.stderr.write(`    - ship it from the machine that made it, or\n`);
+      process.stderr.write(`    - take the claim over here:  ${claimRemedy}, or\n`);
+      process.stderr.write(`    - re-run with --adopt if this branch genuinely has no issue — the squash then records the adoption.\n`);
+      return 1;
+    }
+    if (adoptInfo) {
+      warn(`  --adopt: shipping origin/${sess.branch} @ ${shortSha(adoptInfo.remoteSha)}, a branch this machine never held — the squash carries a Colab-Adopted: trailer.`);
+    } else {
+      warn('  Nothing contradicts it, so ship continues. If this branch was meant to close an issue,');
+      warn(`  stop now and:  ${claimRemedy}`);
+    }
   } else if (brokenClaims.length) {
     warn(`${brokenClaims.length} claim(s) in this repo name a branch that resolves to no ref — run \`colab doctor\``);
   }
@@ -9032,15 +9345,21 @@ function cmdShip(argv) {
   // these two calls ever returns non-null.
   const ciTrailer = ciGrantTrailerLine(ciGrantForTrailer, sess.branch, target) ||
     ciCureTrailerLine(ciCureForTrailer, sess.branch, target);
-  const ciTrailerLines = ciTrailer ? [ciTrailer] : [];
+  // #324: an adopted remote-only branch records WHOSE work this was — there is no issue to comment
+  // on (a zero-claim ship by definition), so the immutable squash is the one place it survives.
+  const adoptTrailer = adoptInfo
+    ? `Colab-Adopted: origin/${adoptInfo.branch} @ ${adoptInfo.remoteSha} on ${adoptInfo.host} (machine ${adoptInfo.machine || 'unknown'})`
+    : null;
+  const ciTrailerLines = [ciTrailer, adoptTrailer].filter(Boolean);
   if (opts.message) {
     // --message overrides the subject/body, but Closes is spliced in as its own paragraph — never
     // concatenated. Appending it welded ` — Closes #N` onto whatever the message ended with, which
     // for any message carrying a trailer block corrupted the last trailer's value.
     commitMsg = squash.spliceCloses(opts.message, closeIssues, refsIssues, trailerConflicts);
-    if (ciTrailer && !commitMsg.toLowerCase().includes(ciTrailer.toLowerCase())) {
+    for (const tl of ciTrailerLines) {
+      if (commitMsg.toLowerCase().includes(tl.toLowerCase())) continue;
       const lastLine = commitMsg.split('\n').pop().trim();
-      commitMsg += (/^(?:Co-authored-by|Signed-off-by|Claude-Session|Reviewed-by):\s*\S/i.test(lastLine) ? '\n' : '\n\n') + ciTrailer;
+      commitMsg += (/^(?:Co-authored-by|Signed-off-by|Claude-Session|Reviewed-by|CI-Grant|CI-Cure|Colab-Adopted):\s*\S/i.test(lastLine) ? '\n' : '\n\n') + tl;
     }
   } else {
     // Preserve the branch's crafted commit (subject + footers); insert Closes/Refs above the footers.
@@ -9243,7 +9562,7 @@ function cmdShip(argv) {
   pushEvent('ship', {
     repo: repoAbs, worktree: sess.name, session: sess.session,
     issue: sess.issues.length === 1 ? sess.issues[0] : undefined,
-    payload: { state: 'merged', branch: sess.branch, target, sha, issues: sess.issues },
+    payload: { state: 'merged', branch: sess.branch, target, sha, issues: sess.issues, ...(adoptInfo ? { adopted: adoptInfo } : {}) },
   });
 
   // Then, PER ISSUE, a merge-completion event (#46 §2, following #45 §2). The ship event above is
@@ -9271,6 +9590,13 @@ function cmdShip(argv) {
     catch (e) { warnDeferred(`worktree rm reported: ${e.message}`); }
   } else if (sess.name) {
     print(`B3: keeping worktree ${sess.name} (--keep-worktree)`);
+  }
+  // #319: the claims worktree rm cannot reach — branch-keyed or unattached, no worktree. Before
+  // this they outlived every successful ship. A kept worktree keeps its whole claim set.
+  if (!worktreeKept) shipReleaseUnattachedClaims(repoAbs, sess);
+  for (const n of sess.unadopted || []) {
+    warnDeferred(`#${n} is claimed by this session with no worktree and no branch, but ${sess.branch} does not name it — not closed, claim left in place. ` +
+      `If it is this branch's work: colab claim ${n} --branch ${sess.branch} --session <id>; if not, release it when that work ends.`);
   }
 
   // B3 (cont.) — the shipped branch. Kept by default; --delete-branch opts in. MUST come after the
@@ -9328,6 +9654,7 @@ function cmdShip(argv) {
 
   print('');
   print(`✓ Shipped ${sess.branch} → ${target} @ ${sha}${sess.issues.length ? ' (' + sess.issues.map((n) => '#' + n).join(' ') + ')' : ''}`);
+  if (adoptInfo) print(`  adopted from origin/${adoptInfo.branch} @ ${shortSha(adoptInfo.remoteSha)} — recorded in the Colab-Adopted: trailer (#324)`);
   if (target !== trunk) print(`  "${target}" is a declared line: this work is NOT in ${trunk} until a human merges the line.`);
   // #114: everything deferred since the push (e2, #304) lands here, AFTER the success line — not scattered above it
   // where a long ship scrolls it out of view. The merge itself already landed either way; this is

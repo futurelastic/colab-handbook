@@ -272,3 +272,44 @@ test('zeroClaimVerdict: a broken claim record refuses regardless of the branch n
   assert.strictEqual(unnamedBranch.reason, 'broken-claims');
   assert.strictEqual(unnamedBranch.refuse, true);
 });
+
+// --- #324: a remote-only, digit-less, locally-unclaimed branch is not a legit zero ---------------
+
+test('zeroClaimVerdict (#324): a three-argument call is unchanged — a local digit-less branch stays legit-zero', () => {
+  const r = g.zeroClaimVerdict(0, 'chore/bump-node', 0);
+  assert.strictEqual(r.reason, 'legit-zero');
+  assert.strictEqual(r.refuse, false);
+  assert.strictEqual(g.zeroClaimVerdict(0, 'chore/bump-node', 0, { remoteOnly: false }).reason, 'legit-zero');
+});
+
+test('zeroClaimVerdict (#324): remote-only with no --adopt refuses', () => {
+  const r = g.zeroClaimVerdict(0, 'chore/bump-node', 0, { remoteOnly: true });
+  assert.strictEqual(r.relevant, true);
+  assert.strictEqual(r.refuse, true);
+  assert.strictEqual(r.ok, false);
+  assert.strictEqual(r.reason, 'remote-only-unclaimed');
+});
+
+test('zeroClaimVerdict (#324): remote-only WITH --adopt proceeds as an adoption', () => {
+  const r = g.zeroClaimVerdict(0, 'fix/parser-rewrite', 0, { remoteOnly: true, adopt: true });
+  assert.strictEqual(r.refuse, false);
+  assert.strictEqual(r.ok, true);
+  assert.strictEqual(r.reason, 'adopted');
+});
+
+test('zeroClaimVerdict (#324): --adopt never bypasses a branch that NAMES issues — that remedy is to claim', () => {
+  const r = g.zeroClaimVerdict(0, 'fix/parser-rewrite-81', 0, { remoteOnly: true, adopt: true });
+  assert.strictEqual(r.reason, 'branch-names-issues');
+  assert.strictEqual(r.refuse, true);
+});
+
+test('zeroClaimVerdict (#324): a broken registry refuses before remote-only is even considered', () => {
+  const r = g.zeroClaimVerdict(0, 'chore/bump-node', 2, { remoteOnly: true, adopt: true });
+  assert.strictEqual(r.reason, 'broken-claims');
+});
+
+test('zeroClaimVerdict (#324): issues resolved means irrelevant, remote-only or not', () => {
+  const r = g.zeroClaimVerdict(1, 'chore/bump-node', 0, { remoteOnly: true });
+  assert.strictEqual(r.relevant, false);
+  assert.strictEqual(r.refuse, false);
+});

@@ -287,8 +287,19 @@ function closesCoverage({ message, closeIssues, refsIssues = [], commits = [] })
  *
  * Callers with issuesCount > 0 should not call this at all — `relevant: false` says so defensively,
  * so a caller that does anyway gets an inert verdict rather than a silently wrong one.
+ *
+ * #324: the legit zero had a hole on any fleet where more than one machine ships. A branch that
+ * exists ONLY as origin's copy (`remoteOnly` — no local ref; ship's B0 would check it out from the
+ * remote) with no digit suffix and no local claim read as a chore, so ship landed another machine's
+ * in-flight work under this session with nothing closed and nothing released — and `chore/bump-node`
+ * or `fix/parser-rewrite` are ordinary names. That shape now refuses (`remote-only-unclaimed`) unless
+ * the caller passes `adopt` explicitly (`adopted` — the caller records the adoption). `adopt` never
+ * bypasses the two refusals above it: a broken registry and a branch naming issues each have their
+ * own remedy (repair; claim), and adopting past them would ship with no `Closes #N` exactly as #153
+ * forbids. A LOCAL digit-less unclaimed branch is still a legit zero — this machine made it.
+ * The fourth argument is optional; a three-argument call behaves exactly as before.
  */
-function zeroClaimVerdict(issuesCount, branchName, brokenClaimsCount) {
+function zeroClaimVerdict(issuesCount, branchName, brokenClaimsCount, { remoteOnly = false, adopt = false } = {}) {
   if (issuesCount > 0) return { relevant: false, ok: true, refuse: false, reason: null };
   if (brokenClaimsCount > 0) {
     return { relevant: true, ok: false, refuse: true, reason: 'broken-claims' };
@@ -297,6 +308,8 @@ function zeroClaimVerdict(issuesCount, branchName, brokenClaimsCount) {
   if (named.length > 0) {
     return { relevant: true, ok: false, refuse: true, reason: 'branch-names-issues', named };
   }
+  if (remoteOnly && !adopt) return { relevant: true, ok: false, refuse: true, reason: 'remote-only-unclaimed' };
+  if (remoteOnly && adopt) return { relevant: true, ok: true, refuse: false, reason: 'adopted' };
   return { relevant: true, ok: true, refuse: false, reason: 'legit-zero' };
 }
 

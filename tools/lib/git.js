@@ -103,6 +103,19 @@ function branchExists(repo, branch) {
 }
 
 /**
+ * #324: WHERE a branch name resolves — `{localSha, remoteSha}`, each a full sha or null. The answer
+ * `branchExists` above deliberately flattens: "exists only as origin's copy" is exactly the shape of
+ * another machine's work, which `ship` must not adopt silently. Read it BEFORE anything that runs
+ * `git worktree add <dir> <branch>`: git's DWIM checkout silently creates the local ref from the
+ * remote one, after which the branch is indistinguishable from one this machine made.
+ */
+function branchRefs(repo, branch) {
+  if (!branch || typeof branch !== 'string') return { localSha: null, remoteSha: null };
+  const at = (ref) => { const r = git(['rev-parse', '--verify', '--quiet', ref], repo); return r.ok && r.stdout ? r.stdout : null; };
+  return { localSha: at(`refs/heads/${branch}`), remoteSha: at(`refs/remotes/origin/${branch}`) };
+}
+
+/**
  * Authoritative "does this branch name already resolve to a ref" check — for the one caller
  * (`worktree new`, #124) that must refuse rather than silently cut a fresh branch over an
  * existing one's history.
@@ -643,7 +656,7 @@ function ghAssignedIssues(repo) {
 }
 
 module.exports = {
-  run, git, repoRoot, mainRepoRoot, originUrl, detectTrunk, branchExists, existingBranchRef,
+  run, git, repoRoot, mainRepoRoot, originUrl, detectTrunk, branchExists, branchRefs, existingBranchRef,
   claimRemote, remoteHeads,
   worktreeList, worktreeListDetailed, resolveWorktreePathForBranch, gitFailureLine,
   dirtyTracked, dirtyUntracked, dirtyAny,
