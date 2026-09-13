@@ -6105,6 +6105,17 @@ function cmdTemplate(argv) {
   });
   if (opts.help) return print(HELP_TEMPLATE);
 
+  // The frozen copy carries tools/ only — no templates/ to copy from, and no git history to stamp
+  // with: handbookVersion() from <COLAB_HOME> would answer 'v0', so even a copy that found its
+  // templates would write a stamp no audit can place. Refuse clearly, as `update` does, rather than
+  // fail on a missing directory whose path reads like a broken install (#341).
+  const self = selfProvenance();
+  if (self.frozen) {
+    throw new UserError(
+      `this is the frozen copy (${self.source}), which carries no templates/ and no handbook history to stamp with.\n` +
+      '  Run `colab template` from the handbook working tree (~/.local/bin/colab) — the frozen copy is for services.');
+  }
+
   const { root, templatesDir } = handbookPaths();
   const available = listTemplates(templatesDir);
   const version = handbookVersion(root);

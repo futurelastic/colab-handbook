@@ -34,6 +34,15 @@ outlives one: an always-on service would change behaviour because of an unrelate
 running, and report nothing. **Always-on services (launch agents, daemons, headless runners) call
 `~/.colab/bin/colab`.** Re-freezing is deliberate — re-run `install.sh`; `colab update` reports the
 copy when the CLI has moved on since its stamp, and `colab --version` names which install answered.
+`../install.sh --check` goes one step further and names the commands an old frozen copy does not
+dispatch (logic: `lib/install-check.js`). The copy carries no `templates/`, so `colab template`
+refuses there, as `colab update` does.
+
+**`install.sh` is a release artifact.** A new top-level command either gets a line in its "next"
+block or an entry, with the reason, in `NOT_IN_NEXT` in `lib/install-sh.test.js` — the test fails
+until one of the two lands. Anything `freeze_cli` copies must also be in `stamp.js`
+`FROZEN_SOURCES`, or a change to it never marks a frozen copy behind; the same test holds the
+two lists together.
 
 ## Quick start
 
