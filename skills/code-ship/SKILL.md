@@ -419,13 +419,16 @@ gh run list --branch <branch> --limit 20 \
   -q "[.[] | select(.headSha == \"$BHEAD\")]"
 ```
 
-Same four classes, same spelling as A5 — `green` · `none` · `red:infra` ·
-`red:finding` — and each has a named next step, so none of them is a park:
+Same four classes as A5 — `green` · `none` · `red:infra` · `red:finding` — defined,
+with their quantifiers and next steps, in `CONVENTIONS.md`
+[§4](../../CONVENTIONS.md#branch-ci--the-candidates-own-run-read-as-a-class-314),
+*Branch CI*. Each has a named next step, so none of them is a park; here is what that
+step is in this skill:
 
 | class | what this skill does |
 |---|---|
 | `green` | proceed to B1b |
-| `none` | **Depends which `none` — check before you wait.** A run *queued or in flight* has not passed, it has not run: wait, bounded. That includes a fast sibling already green while a slow one is unfinished (#307; A5's table carries the evidence). But a run that **cannot arrive for this ref** is not pending at all — proceed, exactly as the no-runs line above already allows for `<base>`. Two shapes: no workflows on the repo, and — far more common — workflows that only trigger on `pull_request` / `push` to trunk, so a backup branch push produces nothing, forever. A5 reports which; re-read the triggers if it did not |
+| `none` | **Depends which `none` — check before you wait.** A run *queued or in flight* (including a slow sibling behind a green fast one, #307): wait, bounded. A run that **cannot arrive for this ref** — no workflows, or workflows triggering only on `pull_request` / `push` to trunk — is not pending: proceed, exactly as the no-runs line above already allows for `<base>`. A5 reports which; re-read the triggers if it did not |
 | `red:infra` | **re-run it once** (`gh run rerun <databaseId> --failed`), then re-read. Identical failure twice ⇒ it is the runner, not the branch: hand it to the **ops lane** and stop. Do not merge, and do not send it back to the implementer — there is nothing in the diff for them to fix |
 | `red:finding` | **hand back to an implementer session, as a class** — the branch's own suite found something. Never a merge, never a re-run |
 
@@ -453,9 +456,8 @@ every step here runs in the coordinator's own worktree.
   That is a normal state, not a degraded one; say so in the report rather than treating
   it as a missing measurement.
 - **Cannot separate `red:infra` from `red:finding`?** Read it as `red:finding` and hand
-  back, for the reason A5 gives: an unclassifiable red routed to a human who can look
-  costs a hand-back, while a wrong `red:infra` burns the free re-run and parks the work
-  in a lane nobody is watching.
+  back (§4, *Branch CI*: a wrong hand-back costs one look, a wrong `red:infra` burns the
+  re-run and parks the work in a lane nobody is watching).
 
 ## B1b. Harvest every issue the branch carried
 
