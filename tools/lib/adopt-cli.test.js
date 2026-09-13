@@ -7,7 +7,9 @@
  * not reaching the gate, a write happening when it should have refused — live at the CLI
  * boundary, not in the pure module.
  *
- * Every test here runs with a NON-TTY child process (`spawnSync`'s default stdio), which is
+ * Every test here runs with a NON-TTY child process (`spawnSync`'s default stdio, or — for the
+ * one test asserting "does not wait on stdin" — `colabWithOpenStdin()`, whose stdin is a pipe
+ * held open so a blocking read is observable; #311), which is
  * exactly the "no TTY" half of every gate this file exercises — the interactive prompt path
  * (`node:readline` at a real terminal) cannot be driven from `node --test` without a pty and is
  * therefore not covered here; see `tools/lib/adopt.test.js`'s `QUESTIONS`/`axisMissing` tests for
@@ -140,13 +142,47 @@ test('colab adopt --json on a complete descriptor: same fields as before, no `wr
 
 // --------------------------------------------------------------- oracle item 10 — refuse fast, no TTY, no flags
 
-test('incomplete descriptor, no flags, no TTY: refuses in well under 1s, names the exact missing rows, writes nothing', () => {
+/**
+ * Like `colab()`, but stdin is a pipe held OPEN for the child's whole life — never written to,
+ * never ended. Under `spawnSync` stdin reaches EOF at once, so a child that (wrongly) read it
+ * would see end-of-input and move on: that helper cannot observe a block on stdin. Here the
+ * same read has nothing to return and never ends, so "did it wait for input?" becomes an
+ * observable fact: the child either exits by itself, or is still sitting there when the
+ * ceiling fires and gets killed (`killed: true`).
+ *
+ * The ceiling is deliberately generous (#311). It is not a speed budget — the old 1000ms one
+ * went red at 1092ms on a loaded machine while the property held. A genuine block never
+ * returns, so any finite ceiling catches it; a large one costs nothing on the passing path.
+ */
+function colabWithOpenStdin(fx, args, { ceilingMs = 30_000, envOverrides = {} } = {}) {
+  const { spawn } = require('child_process');
+  return new Promise((resolve, reject) => {
+    const child = spawn('node', [COLAB, ...args], {
+      stdio: ['pipe', 'pipe', 'pipe'],
+      env: { ...process.env, COLAB_HOME: fx.root, COLAB_HUMAN: undefined, ...envOverrides },
+    });
+    let out = ''; let err = ''; let killed = false;
+    child.stdout.setEncoding('utf8').on('data', (d) => { out += d; });
+    child.stderr.setEncoding('utf8').on('data', (d) => { err += d; });
+    const timer = setTimeout(() => { killed = true; child.kill('SIGKILL'); }, ceilingMs);
+    child.on('error', (e) => { clearTimeout(timer); reject(e); });
+    child.on('close', (code, signal) => {
+      clearTimeout(timer);
+      child.stdin.destroy();
+      resolve({ code, signal, killed, out, err });
+    });
+  });
+}
+
+// #311: this used to assert `elapsed < 1000ms`, a timing proxy for the real property — "refuses
+// instead of waiting on a TTY read" — and flaked at 1092ms under ~16 concurrent sessions. It now
+// asserts the property itself: with stdin held open, the process ends on its own.
+test('incomplete descriptor, no flags, no TTY: refuses without waiting on stdin, names the exact missing rows, writes nothing', async () => {
   const fx = fixture(fullYml({ channels: undefined }));
-  const start = Date.now();
-  const r = colab(fx, ['adopt', '--repo', fx.work, '--no-verify']);
-  const elapsed = Date.now() - start;
+  const r = await colabWithOpenStdin(fx, ['adopt', '--repo', fx.work, '--no-verify']);
+  assert.strictEqual(r.killed, false, `still running at the ceiling with stdin open — it is waiting for input it will never get\nstderr so far:\n${r.err}`);
+  assert.strictEqual(r.signal, null, `exited by signal ${r.signal}, not on its own`);
   assert.notStrictEqual(r.code, 0);
-  assert.ok(elapsed < 1000, `took ${elapsed}ms, expected well under 1000ms`);
   assert.match(r.err, /channels/);
   assert.match(r.err, /--channels/);
   const raw = fs.readFileSync(path.join(fx.work, '.github', 'project.yml'), 'utf8');
