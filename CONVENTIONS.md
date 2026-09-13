@@ -477,8 +477,8 @@ name, never over-delivers — the fail-safe direction, and the only reason stori
 enforcing it is defensible.
 
 Four open questions were named when this vocabulary shipped. Two are decided and enforced
-now; one was handed to a ⚖ ruling and has since been ruled (#284, below — recorded, runtime
-still deferred); one remains a proposal of record:
+now; one was handed to a ⚖ ruling and has since been ruled (#284, below — recorded; its close
+path built in #302, the rest of the runtime still deferred); one remains a proposal of record:
 
 - **Concurrency on the shared checkout — DONE (#285), and it turned out not to be a
   loosening at all.** The proposal of record was that under `direct` the trunk checkout
@@ -510,14 +510,14 @@ still deferred); one remains a proposal of record:
   **alarm, always** — nothing branches under a merge event that never happens, so CI can
   never gate a merge that doesn't exist. Cheap to decide because `ciRole` is derived prose in
   `tools/lib/adopt.js`'s `deriveConsequences`, not enforcement.
-- **The human merge gate and the Phase A / Phase B split — ⚖ RULED (#284), runtime not yet
-  implemented.** The proposal handed to the ruling was: under `direct` there is no merge
+- **The human merge gate and the Phase A / Phase B split — ⚖ RULED (#284); its close path
+  IMPLEMENTED (#302, `colab ship --direct`).** The proposal handed to the ruling was: under `direct` there is no merge
   event, so Phase B does not apply at all; Phase A applies unchanged; the human
   authorization bar moves from the merge act to the session-start instruction. **The
   ruling amended it in one place** — see *Phase A / Phase B under `direct`* immediately
-  below, which is the statement of record. No skill file (`code-ship`, `code-wrap`) is
-  touched yet, because nothing about `direct`'s runtime is implemented yet; the ruling
-  says what those files must be true of when it is.
+  below, which is the statement of record. Since #302 the close-accounting half has a
+  runtime — `colab ship --direct` — and `code-ship`/`code-wrap` say how a trunk-direct unit
+  reaches it; everything else about `direct`'s runtime is still deferred.
 - **Exposure restriction — DECIDED AND ENFORCED NOW.** Declaring `writes: direct` requires
   the same human bar as lowering exposure (an interactive TTY, or `COLAB_HUMAN=1` together
   with `--answered-by <name>` — `direct` is the only `writes` value that *expands*
@@ -571,6 +571,19 @@ evidence-close by the existing detection, with no new branch of logic. ⚠️ **
 implements `direct`'s runtime verifies that rather than assumes it** — the design intent
 lines up, the measurement has not been taken.
 
+**Measured (#285, #302): false, at three layers.** The two refusals named below fire first;
+and underneath them `landedState` itself answers `unknown` whenever base === branch
+(`tools/lib/landed.js`), and `unknown` is never evidence-close. So `colab ship --direct`
+(#302) does not route through that detection at all. "Nothing to merge" is structural there
+(there is no branch); what it measures instead is that the unit is **published** — trunk
+checked out, clean, and not ahead of `origin`. The claims it closes are matched by the
+session's identity (same repo, no worktree, no branch, same `--session`/`COLAB_SESSION`),
+never by a widened filter, and a blank identity is refused. It reuses everything else a
+branch's evidence-close runs — the autonomy gate, trunk CI, the close/refs split, the
+evidence comment, the claim release, the plan journal — so the audit trail stays uniform,
+which was the point of the ruling. `writes: direct` is not required to use it: it grants no
+write, only a close, so any repo whose `writes:` does not veto trunk-direct may.
+
 **Two things this ruling deliberately does NOT settle** — they are open, not answered by
 silence:
 
@@ -578,16 +591,23 @@ silence:
   write* (colab's own markers do not count); an issue without one is reported and left
   open. Whether that gate is right for a `direct` unit — where the human's session-start
   instruction, not a comment, is the authorization — is a real follow-up question.
-  **⚠️ Measured during #285, and the answer is that the question is premature: the
-  assumption underneath it is false.** `colab ship` cannot reach evidence-close for a
-  branchless `direct` unit at all — `resolveShipSession` refuses with `ship needs
-  --worktree or --branch` when neither is given (the direct unit's exact shape), and
-  supplying the only branch it has, trunk, is refused by `--branch is the trunk itself`;
-  both fire *before* the evidence-close path is ever consulted, and `colab solo --done`
-  neither posts evidence nor closes anything. So a `direct` unit today has **no close path
-  whatsoever** — the same 26/30 hole option B was chosen to avoid, reached by another
-  route. The gate question is moot until a direct unit can reach the gate. Both are now
-  owned by [#302](https://github.com/futurelastic/colab-handbook/issues/302).
+  **⚠️ Measured during #285:** the question was premature, because `colab ship` could not
+  reach evidence-close for a branchless `direct` unit at all — `resolveShipSession` refused
+  with `ship needs --worktree or --branch`, supplying trunk was refused by `--branch is the
+  trunk itself`, and `colab solo --done` neither posts evidence nor closes anything: the same
+  26/30 hole option B was chosen to avoid. **[#302](https://github.com/futurelastic/colab-handbook/issues/302)
+  built that door (`colab ship --direct`, above) and left the gate exactly as it is.**
+  Proposed answer of record — **⚖ confirmation pending, not ruled**: the gate is right for a
+  `direct` unit too, because the two things answer different questions. The session-start
+  instruction authorizes the *unit* to exist; the comment evidences its *delivery* — and
+  Phase A, which applies to `direct` in full, writes that comment anyway (`code-wrap` A1).
+  Counting trunk commits that mention `#N` as evidence was considered and rejected: the
+  session writes those messages itself, so the evidence would be self-declared. Two further
+  choices in #302 are interpretations a ruling may overturn, recorded here so nobody
+  discovers them by accident: the **autonomy gate still applies** to `--direct` (without
+  `autonomy: auto-trunk` a human closes the unit — reading "the bar moves to session-start"
+  as lifting it is policy, not implementation), and **trunk CI still gates the close**, as it
+  does a branch's evidence-close (the unit's own commit may be what turned it red).
 - **Everything else about `direct`'s runtime stays deferred**, concurrency included. The
   ruling settles close-accounting only; it does not authorize any session to take
   trunk-direct anywhere the veto and the attendance bar do not already allow it.
@@ -1109,7 +1129,8 @@ a lookup table.
 `fix/import-fixes-115-114-113`. Claim every issue in the group before starting, and
 **release every claim in the group together at wrap** — unconditionally, including
 issues that did not get finished; an unfinished issue that stays claimed silently blocks
-whoever picks it up next.
+whoever picks it up next. (`colab ship` releases every claim it carried itself, worktree or
+not — #319.)
 
 **A group is not a chain.** A *group* is issues that touch the same code and must move
 together on one branch, spelled with trailing numbers in the branch name. A *chain* is
@@ -1288,6 +1309,18 @@ than guessed.
   measured from git, never declared by the session) and switches to **evidence-close**:
   post evidence, close each issue, tear down — no merge, no push, no `--allow-empty`
   marker commit. Gated on the issue **already carrying a comment the tool did not write**.
+  A unit committed straight to trunk has no branch to detect this from; it closes the same
+  way through `colab ship --direct` (#302), which matches its claims by session identity and
+  refuses until the work is published.
+- **A ship releases every claim it carried (#319)** — not only the worktree's. A claim with
+  no worktree (`--branch`-keyed, or taken with neither) used to survive a successful ship
+  still `in-progress`, because teardown ran only through `colab worktree rm`. An unattached
+  claim of the *same session* is carried by a branch ship only when the branch name's
+  trailing group names it; otherwise it is reported and left alone, never closed.
+- **A branch this machine never held is not a legit zero (#324).** A branch that exists only
+  on `origin`, with no issue number in its name and no local claim, is most likely another
+  machine's work in flight; `colab ship` refuses it unless `--adopt` is passed, and an
+  adopted squash carries a `Colab-Adopted:` trailer naming the remote sha and this machine.
 - **Before merging to trunk, check that trunk's last CI run is green — and that it ran at
   all.** We once merged for 12 straight hours into repos whose CI was silently dead (org
   billing lockout) — every run "failed" without starting. **Ask by commit, not by recency

@@ -256,15 +256,24 @@ delivered on the Issue first (`code-wrap` A1 is where that happens anyway), or s
 report the issue and leave it open. The zero-diff fact is measured from git; you do not
 declare it.
 
-⚠️ **This door needs a branch, so a `writes: direct` unit cannot walk through it.** #284
-ruled that a trunk-direct unit still closes via evidence-close; measured during #285, it
-cannot reach it — `ship` refuses with `ship needs --worktree or --branch` when given
-neither (a direct unit has neither), and refuses `--branch <trunk>` with `--branch is the
-trunk itself`, both before evidence-close is consulted. `colab solo --done` posts no
-evidence and closes nothing. So a `direct` unit has **no close path today**; do not plan a
-session around one. Tracked, together with whether the "comment colab did not write" gate
-is even the right gate when a human's session-start instruction is the authorization, as
-[#302](https://github.com/futurelastic/colab-handbook/issues/302).
+**A unit committed straight to trunk has no branch — its door is `--direct` (#302).**
+#284 ruled that a trunk-direct unit still closes via evidence-close; the branch door above
+cannot find one (no worktree, no branch, and `--branch <trunk>` is refused), so it has its
+own:
+
+```sh
+colab ship --direct --session "$SESSION_URL" --dry   # → MODE: evidence-close (trunk-direct)
+colab ship --direct --session "$SESSION_URL"         # posts evidence, CLOSES, releases claims + hold
+```
+
+It closes exactly the claims **this session** holds in the repo with no worktree and no
+branch — identity is required, another session's claim is never touched — and only once
+the work is **published** (trunk checked out, clean, not ahead of `origin`). Everything
+else is the branch door's: autonomy gate, trunk CI, the checklist close gate, and the same
+evidence gate (code-wrap A1's distill comment is the evidence). An issue left open keeps its
+claim, so a re-run finds it. A solo session with no claim has nothing to close and does not
+run this. Whether the evidence gate is the right gate for a `direct` unit is recorded in
+CONVENTIONS.md §2 as a proposed answer, ⚖ confirmation pending — the code did not move it.
 
 **Never decide this by counting commits.** A squash-merge mints a new sha, so a
 shipped branch's own commits look permanently unmerged — a count-only check calls
@@ -1011,6 +1020,13 @@ comment (`CONVENTIONS.md` [§5](../../CONVENTIONS.md#grouping--issues-that-must-
 of whether the label object survives.
 
 ## B3. Release the claim(s)
+
+**`colab ship` already did this for every claim it carried (#319)** — worktree claims
+through `colab worktree rm`, and claims with no worktree (`--branch`-keyed, or unattached)
+through `colab release`. Check `colab claims` rather than re-running it. Release by hand
+only what ship did not carry: a kept worktree (`--keep-worktree`), a claim ship reported
+and left in place (same session, but the branch does not name it), an issue evidence-close
+left open that you are abandoning, or a machine without `colab`:
 
 ```sh
 colab release $N        # if colab is installed …

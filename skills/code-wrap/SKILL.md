@@ -34,7 +34,16 @@ same regardless of `ceremony`.
 Solo flow (CONVENTIONS.md, *Solo flow*) made no worktree and holds no claim, so there is
 nothing here — or in `code-ship` — for either skill to harvest or tear down. This is not
 `ceremony: light` again, it is a genuinely different shape, and running the sections
-below against it produces confusing no-ops. The solo exit is its own, short path:
+below against it produces confusing no-ops.
+
+> **Holding a claim with no worktree? Then this is a trunk-direct *unit*, not a solo
+> session (#302).** Committing straight to trunk against an issue you claimed with
+> `colab claim <N> --session <id>` still owes that issue its close. Run Phase A as usual
+> (A1's distill comment is the evidence), then close it with
+> `colab ship --direct --session <id>` — `code-ship`'s evidence-close door for a unit with
+> no branch. Only a session with no claim at all takes the solo exit below.
+
+The solo exit is its own, short path:
 
 1. **Run the quality gate anyway** (A3) — solo flow relaxes ceremony, never the gate.
 2. **Distill onto an Issue only if a decision emerged** this sitting (A1's spirit,
