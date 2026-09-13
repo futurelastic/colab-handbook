@@ -17,7 +17,9 @@ that one ever disagree, `CONVENTIONS.md` wins — and report the discrepancy.
      Tier B/trunk `main` — propose it, say so in your report, and propose
      adding the file. Never invent a tier or a trunk.
 2. `gh issue list --label in-progress` — anything listed is someone else's.
-   Do not take it.
+   Do not take it. An issue with someone else's **assignee but no label** is a
+   half-claim — broken, not free: report it for repair, do not start it
+   ([§5](CONVENTIONS.md#5-claiming-work--how-to-say-im-on-this)).
 3. Claim your issue **before** starting, not when finishing:
    `gh issue edit <N> --add-assignee @me --add-label in-progress`
 
@@ -108,7 +110,8 @@ that one ever disagree, `CONVENTIONS.md` wins — and report the discrepancy.
 4. **A deliverable with no diff still has to close.** Zero commits is a real
    outcome (a decision, an investigation, an artifact outside the repo) — run
    `colab ship`, which switches to evidence-close instead of refusing.
-5. Release your claim: `gh issue edit <N> --remove-label in-progress`.
+5. Release your claim — both halves:
+   `gh issue edit <N> --remove-assignee @me --remove-label in-progress`.
    Do this even if you didn't finish — a stale claim silently blocks others.
 
 ## Releases — the ritual follows `exposure`, and none of it is yours to perform

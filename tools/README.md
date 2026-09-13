@@ -139,10 +139,15 @@ issue is taken:
   worktree, branch, host, and the date since. Re-claiming onto the **same** worktree is idempotent
   and succeeds silently-OK (so re-running a command is safe).
 - **GitHub** (when `gh` is authed and the repo has an `origin`): `gh issue view <n> --json
-  assignees,labels,comments`. Both refusal shapes below require the `in-progress` label to be
-  present — an issue GitHub does not yet show as claimed refuses neither way; a genuinely
-  simultaneous claim (the label write mid-flight) is the *tie-break*'s job (§3), not this gate's.
-  - **Assignee set** does not include your `gh api user` login → refuse, naming the assignee.
+  assignees,labels,comments`. A genuinely simultaneous pair of full claims is the *tie-break*'s
+  job (§3), not this gate's.
+  - **Assignee set** does not include your `gh api user` login, label present → refuse, naming the
+    assignee.
+  - **Half-claim** (#323, `CONVENTIONS.md` §5): a claim is the assignee *and* the label, so either
+    half alone is a broken claim, not a free issue → refuse, naming the half present and the repair.
+    Someone else's assignee with no label refuses; a label with nobody assigned refuses unless a
+    live `🔒 Claimed` comment of *yours* shows it is your own interrupted claim. Your own assignee
+    with no label is not a conflict — claiming completes it.
   - **Co-tenant** (#267, only checked when `claimIdentity` includes `session` — see *Identity
     granularity* below): the assignee set is keyed by GitHub login, so it cannot distinguish two of
     *your own* sessions on one machine. If a **live** `🔒 Claimed` comment exists from a *different*

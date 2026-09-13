@@ -1444,8 +1444,16 @@ Parallel sessions and parallel agents must not collide on the same Issue. Two la
 ```sh
 gh issue list --label in-progress                               # check, before taking work
 gh issue edit <N> --add-assignee @me --add-label in-progress    # claim, at session start
-gh issue edit <N> --remove-label in-progress                    # release, at session end
+gh issue edit <N> --remove-assignee @me --remove-label in-progress   # release, at session end
 ```
+
+**A claim is both halves — the assignee *and* `in-progress`.** Either half alone is a
+**half-claim**: a broken claim, which is neither free nor taken (ruled in #323). Nobody
+starts on it; triage reports it for **repair** — whoever holds the assignee completes the
+claim (adds the label) or drops the assignee (releases it) — and `colab claim` refuses it
+until then, `--force` taking it over loudly like any other claim. Our own half-claim is
+the one exception: re-claiming completes it. Release therefore drops **both** halves;
+removing only the label is what leaves the assignee-only half-claim behind.
 
 Assignee plus `in-progress` is authoritative because it is **visible from any machine
 and to any person**. The label does not exist in a fresh repo — creating it is part of
@@ -3104,7 +3112,7 @@ colab holders <path>
 # finishing work
 colab landed --worktree <name>                    # landed → teardown, cargo → merge
 git checkout <base> && git merge --squash feat/<slug>-N   # base = trunk, or a declared line
-gh issue edit N --remove-label in-progress
+gh issue edit N --remove-assignee @me --remove-label in-progress   # both halves — one alone is a half-claim
 
 # releasing — TIER A ONLY
 git checkout main && git merge --no-ff dev && git push   # --no-ff, never squash

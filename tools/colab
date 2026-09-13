@@ -398,9 +398,19 @@ function localClaimConflicts(st, repoAbs, nums, wtName) {
 }
 
 /**
- * Issues GitHub shows as claimed by SOMEONE ELSE. Two shapes:
+ * Issues GitHub shows as claimed by SOMEONE ELSE. Three shapes:
  *   - the ordinary case: label `in-progress` present AND a non-empty assignee set that does not
  *     include us.
+ *   - the HALF-CLAIM case (#323, ruling C — CONVENTIONS.md §5 *Who holds this*): a claim is the
+ *     assignee AND the label; either half alone is a broken claim, not a free issue. Refused so
+ *     nobody starts on it until it is repaired (`c.half` names which half is present):
+ *       'assignee' — someone else assigned, no label (the shape a label-only release leaves);
+ *       'label'    — labeled, nobody assigned, and no live claim comment of OURS explains it
+ *                    (ours would be our own interrupted claim, which re-claiming completes).
+ *     Our own assignee with no label is not a conflict either: claiming completes it.
+ *     `gh issue edit --add-assignee @me --add-label in-progress` writes both halves in one
+ *     mutation, so a half-claim is not an ordinary mid-claim window — the tie-break still covers
+ *     two simultaneous full claims.
  *   - the CO-TENANT case (#267, only checked when `comps` includes `session`): the assignee set
  *     structurally cannot express "two sessions of MY OWN login" — GitHub tracks one identity per
  *     account, not per session — so a live claim comment from a different session under the same
@@ -415,12 +425,18 @@ function ghClaimConflicts(repoAbs, nums, myLogin, myHost, mySession, comps) {
     if (!info) continue; // couldn't read → don't block on a failed read
     const labeled = (info.labels || []).some((l) => l.name === 'in-progress');
     const assignees = (info.assignees || []).map((a) => a.login);
-    // Both conflict shapes require `labeled` — "GitHub shows this issue as actively claimed" is the
-    // precondition either way; an issue with no in-progress label yet is not conflicted by either
-    // check (it may be mid-claim from another session whose label write has not landed — the
-    // simultaneous-claim tie-break, not the refusal gate, is what covers that window).
-    if (!labeled) continue;
-    if (assignees.length > 0 && !assignees.includes(myLogin)) { out.push({ num, assignees }); continue; }
+    const foreign = assignees.length > 0 && !assignees.includes(myLogin);
+    // Half-claim, assignee side (#323): someone else's assignee without the label is a broken
+    // claim, not a free issue. Our own assignee alone is ours to complete.
+    if (!labeled) { if (foreign) out.push({ num, assignees, half: 'assignee' }); continue; }
+    if (foreign) { out.push({ num, assignees }); continue; }
+    if (assignees.length === 0) {
+      // Half-claim, label side (#323): labeled with nobody assigned. Our own live claim comment
+      // means this is our interrupted claim — completing it is the repair, not a collision.
+      const me = { login: myLogin, host: myHost, session: mySession || '' };
+      const ours = liveClaimComments(info.comments || [], comps).some((c) => claimIdentity.sameClaimant(c, me, comps));
+      if (!ours) { out.push({ num, assignees, half: 'label' }); continue; }
+    }
     if (comps.includes('session')) {
       const me = { login: myLogin, host: myHost, session: mySession || '' };
       const live = liveClaimComments(info.comments || [], comps);
@@ -445,12 +461,21 @@ function printRefusal(localConf, ghConf) {
     if (c.cotenant) {
       const id = displayIdentity(c.cotenant.sessionName, c.cotenant.session) || c.cotenant.identity;
       process.stderr.write(`  #${c.num} GitHub: live claim comment by ${id} (same account, different session)\n`);
+    } else if (c.half) {
+      process.stderr.write(`  #${c.num} GitHub: ${halfClaimText(c)}\n`);
     } else {
       process.stderr.write(`  #${c.num} GitHub: assigned to ${c.assignees.join(', ')} (labeled in-progress)\n`);
     }
   }
   process.stderr.write('  Re-run with --force to take over, or claim a different issue.\n');
   process.stderr.write('  Stale claims from dead worktrees are freed by: colab doctor --prune\n');
+}
+
+/** One line describing a half-claim conflict (#323) — which half is present, and the repair. */
+function halfClaimText(c) {
+  return c.half === 'assignee'
+    ? `half-claim — assigned to ${c.assignees.join(', ')} but not labeled in-progress (repair: the assignee adds the label or drops the assignment)`
+    : 'half-claim — labeled in-progress but nobody is assigned (repair: whoever labeled it assigns themselves or removes the label)';
 }
 
 /** Announce exactly what --force overrides (a takeover is visible, never silent). */
@@ -465,6 +490,8 @@ function printTakeover(localConf, ghConf) {
     if (c.cotenant) {
       const id = displayIdentity(c.cotenant.sessionName, c.cotenant.session) || c.cotenant.identity;
       print(`  --force: taking over #${c.num} from a co-tenant claim (${id}, same account+host)`);
+    } else if (c.half) {
+      print(`  --force: taking over #${c.num} from a ${halfClaimText(c)}`);
     } else {
       print(`  --force: taking over #${c.num} from GitHub assignee ${c.assignees.join(', ')}`);
     }

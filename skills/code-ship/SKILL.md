@@ -1014,8 +1014,11 @@ of whether the label object survives.
 
 ```sh
 colab release $N        # if colab is installed …
-gh issue edit $N --remove-label in-progress    # … else raw, one per issue
+gh issue edit $N --remove-assignee @me --remove-label in-progress    # … else raw, one per issue
 ```
+
+Drop **both** halves. A release that removes only the label leaves an assignee-only
+half-claim, which every reader must now treat as a broken claim (`CONVENTIONS.md` [§5](../../CONVENTIONS.md#5-claiming-work--how-to-say-im-on-this), #323).
 
 Release **every** issue in the group, even ones you didn't finish — a stale claim
 silently blocks others (`CONVENTIONS.md` [§5](../../CONVENTIONS.md#5-claiming-work--how-to-say-im-on-this)).
@@ -1067,7 +1070,7 @@ survives with `status: "running"`, still holding its ports, and any tool reading
 `colab worktrees` reports it as live work in progress long after the checkout is
 gone. Taking this path (no `colab` on this machine) means finishing the other three
 by hand, on the machine that holds `state.json`: release each claim
-(`gh issue edit <N> --remove-label in-progress`) and have that machine prune the
+(`gh issue edit <N> --remove-assignee @me --remove-label in-progress`) and have that machine prune the
 stale record — `colab` has no unattended flag for this, so say so in your report
 rather than leaving it silently wrong.
 
@@ -1097,7 +1100,7 @@ leave one standing silently:
 > did not happen for you. Do it explicitly:
 > ```sh
 > colab release <N>                              # … or, without colab:
-> gh issue edit <N> --remove-label in-progress
+> gh issue edit <N> --remove-assignee @me --remove-label in-progress
 > ```
 > B3 is unconditional: a kept worktree changes **who runs** the release, never
 > **whether** it runs.

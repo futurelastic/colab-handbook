@@ -176,9 +176,13 @@ below still happen, this is purely an addition at the top.
   never be mistaken for a truncation-free empty backlog. Cross-check `N2` against input 3's
   `TOTAL` rather than issuing a second count query — `TOTAL` is already the total open-issue
   count, so this costs no extra call and reuses the same truncation logic input 3 already
-  has. Deliberately still blind to: assignee, milestone, lock state, comment volume — none
-  of them feed a gate this skill evaluates (§5.1 reads "taken" from the `in-progress` label
-  and live claims, input 4, not from assignee).
+  has. Deliberately still blind to: assignee, milestone, lock state, comment volume. §2's
+  *Taken* rule does read assignee since #323 — but only to find a **half-claim**, which
+  never makes a group startable, so an assignee change can only ever move an issue from
+  "broken claim" to "taken" or "free" via the label or claim state this fingerprint already
+  digests. The one miss: an assignee added to or dropped from an issue with no label and no
+  other change — a pure half-claim appearing or being repaired. Re-run triage fully when
+  one is being repaired rather than trusting a cache hit.
 - **`updatedAt` does not see dependency edges either — measured on the live API.** Adding a
   `blocked_by` edge and removing it again left `updatedAt` byte-identical across both
   writes, while a label add/remove moved it twice in the same minute. Edges do land in the
@@ -600,6 +604,20 @@ Two passes, in this order — the cheap one first.
 
 ```sh
 colab claims                                 # includes host + session + name
+```
+
+**Half-claim — neither free nor taken (#323, `CONVENTIONS.md` [§5](../../CONVENTIONS.md#5-claiming-work--how-to-say-im-on-this), *Who holds this*).**
+A claim is the assignee *and* `in-progress`. An open issue with an assignee but no label,
+or the label but no assignee, is a **broken claim**: discard it from the start list
+exactly as if it were taken, and report it under its own heading with the repair — the
+assignee completes it (adds the label) or drops the assignee. Never read an assignee
+alone as "free", and never as a live claim to wait on indefinitely: it is a finding with
+a bounded fix. A group containing one is `blocked` on that repair, named.
+
+```sh
+gh issue list --state open --limit 1000 --json number,assignees,labels \
+  -q '.[] | select((.assignees|length>0) != ([.labels[].name]|index("in-progress")!=null))
+          | "#\(.number) assignees=\([.assignees[].login]|join(",")) label=\([.labels[].name]|index("in-progress")!=null)"'
 ```
 A claim carries who holds it. If it looks stale, that is a **finding to raise**, not
 permission to take the work.
@@ -1048,7 +1066,8 @@ has been since.
 A group is **ready** only if every one of these holds. Anything else is `blocked`,
 with the blocker named:
 
-- [ ] **Unclaimed** — no `in-progress`, no live claim.
+- [ ] **Unclaimed** — no `in-progress`, no live claim, and no half-claim (an assignee
+      without the label, or the label without an assignee — §2; blocked on its repair).
 - [ ] **Verifiably undone** — §2 passed against the code, not the tracker.
 - [ ] **Actionable** — the Issue says what "done" looks like. An Issue that is a
       question is blocked on an answer, not ready to code.

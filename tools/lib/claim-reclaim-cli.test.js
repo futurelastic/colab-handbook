@@ -288,6 +288,48 @@ test('#267 refusal gate: a fully-claimed co-tenant issue (labeled + assigned) re
   // timestamps, which is correct and orthogonal to whether --force cleared the refusal gate.
 });
 
+// --- #323: a half-claim is a broken claim, not a free issue ---------------------------------------
+
+test('#323 assignee-only half-claim (someone else assigned, no label) refuses before any write; --force is announced', () => {
+  const fx = fixture();
+  seedIssue(fx, 9, { assignees: ['someone-else'] });
+
+  const refused = colab(fx, ['claim', '9', '--worktree', 'w', '--session', 's1', '--repo', fx.work]);
+  assert.strictEqual(refused.code, 1, refused.out + refused.err);
+  assert.match(refused.err, /#9 GitHub: half-claim — assigned to someone-else but not labeled in-progress/);
+  assert.strictEqual(loadClaim(fx, 9), null, 'a refused claim must not have written a local record');
+  assert.deepStrictEqual(readCalls(fx).filter((a) => a[0] === 'issue' && (a[1] === 'edit' || a[1] === 'comment')), []);
+
+  const forced = colab(fx, ['claim', '9', '--worktree', 'w', '--force', '--session', 's1', '--repo', fx.work]);
+  assert.strictEqual(forced.code, 0, forced.out + forced.err);
+  assert.match(forced.out, /--force: taking over #9 from a half-claim — assigned to someone-else/);
+});
+
+test('#323 label-only half-claim (labeled, nobody assigned, no claim comment of ours) refuses', () => {
+  const fx = fixture();
+  seedIssue(fx, 9, { labels: ['in-progress'] });
+  const r = colab(fx, ['claim', '9', '--worktree', 'w', '--session', 's1', '--repo', fx.work]);
+  assert.strictEqual(r.code, 1, r.out + r.err);
+  assert.match(r.err, /#9 GitHub: half-claim — labeled in-progress but nobody is assigned/);
+  assert.strictEqual(loadClaim(fx, 9), null);
+});
+
+test('#323 our OWN half-claims are ours to complete: own assignee without label, and a label backed by our live claim comment, both claim and end with both halves', () => {
+  const fx = fixture();
+  seedIssue(fx, 9, { assignees: ['me'] });
+  const a = colab(fx, ['claim', '9', '--worktree', 'w', '--session', 's1', '--repo', fx.work]);
+  assert.strictEqual(a.code, 0, a.out + a.err);
+  assert.deepStrictEqual([readIssueState(fx, 9).assignees, readIssueState(fx, 9).labels], [['me'], ['in-progress']]);
+
+  seedIssue(fx, 10, {
+    labels: ['in-progress'],
+    comments: [{ createdAt: fakeIso(0), author: { login: 'me' }, body: claimBody({ wt: 'w', host: HOST, iso: fakeIso(0), session: 's1' }) }],
+  });
+  const b = colab(fx, ['claim', '10', '--worktree', 'w', '--session', 's1', '--repo', fx.work]);
+  assert.strictEqual(b.code, 0, b.out + b.err);
+  assert.deepStrictEqual([readIssueState(fx, 10).assignees, readIssueState(fx, 10).labels], [['me'], ['in-progress']]);
+});
+
 test('legacy comment safety: a session-less claim comment from our own login+host does not make us yield under the fine setting (degrade-on-missing)', () => {
   const fx = fixture();
   colab(fx, ['config', 'set', 'claimIdentity', 'login,host,session']);
