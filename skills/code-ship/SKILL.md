@@ -273,7 +273,8 @@ else is the branch door's: autonomy gate, trunk CI, the checklist close gate, an
 evidence gate (code-wrap A1's distill comment is the evidence). An issue left open keeps its
 claim, so a re-run finds it. A solo session with no claim has nothing to close and does not
 run this. Whether the evidence gate is the right gate for a `direct` unit is recorded in
-CONVENTIONS.md §2 as a proposed answer, ⚖ confirmation pending — the code did not move it.
+CONVENTIONS.md §2 as a proposed answer, ⚖ confirmation pending
+([#342](https://github.com/futurelastic/colab-handbook/issues/342)) — the code did not move it.
 
 **Never decide this by counting commits.** A squash-merge mints a new sha, so a
 shipped branch's own commits look permanently unmerged — a count-only check calls

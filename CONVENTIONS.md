@@ -597,7 +597,8 @@ silence:
   trunk itself`, and `colab solo --done` neither posts evidence nor closes anything: the same
   26/30 hole option B was chosen to avoid. **[#302](https://github.com/futurelastic/colab-handbook/issues/302)
   built that door (`colab ship --direct`, above) and left the gate exactly as it is.**
-  Proposed answer of record — **⚖ confirmation pending, not ruled**: the gate is right for a
+  Proposed answer of record — **⚖ confirmation pending, not ruled
+  ([#342](https://github.com/futurelastic/colab-handbook/issues/342))**: the gate is right for a
   `direct` unit too, because the two things answer different questions. The session-start
   instruction authorizes the *unit* to exist; the comment evidences its *delivery* — and
   Phase A, which applies to `direct` in full, writes that comment anyway (`code-wrap` A1).
