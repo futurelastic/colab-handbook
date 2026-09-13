@@ -14,6 +14,11 @@
 #   ./install.sh --all    = --tools --hooks --fleet (the recommended first run).
 #   ./install.sh --dry    print what would happen; change nothing. Combines with
 #                         any of the above.
+#   ./install.sh --check  READ-ONLY health report of what an earlier install left
+#                         behind: is the frozen copy behind the handbook, and which
+#                         commands does it not dispatch; is the state file there;
+#                         is anything registered in the fleet; can the hooklets run.
+#                         Exit 1 on any ✗ row. Takes no other flag.
 #
 # A preflight runs on every invocation. It only reports (✓ / ⚠) and never aborts:
 # a tool you have not installed must not block the parts that do not need it.
@@ -52,9 +57,10 @@ FROZEN_DIR="$COLAB_DIR/bin"
 FROZEN_BIN="$FROZEN_DIR/colab"
 FROZEN_STAMP="$FROZEN_DIR/STAMP"
 
-WITH_TOOLS=0; WITH_HOOKS=0; WITH_FLEET=0; DRY=0
+WITH_TOOLS=0; WITH_HOOKS=0; WITH_FLEET=0; DRY=0; CHECK=0
 for a in "$@"; do
   case "$a" in
+    --check) CHECK=1 ;;
     --tools) WITH_TOOLS=1 ;;
     --hooks) WITH_HOOKS=1 ;;
     --fleet) WITH_FLEET=1 ;;
@@ -68,6 +74,12 @@ for a in "$@"; do
     *) echo "unknown arg: $a" >&2; exit 2 ;;
   esac
 done
+# --check is a report about what an earlier run left behind. Combined with an install flag it would
+# report on a machine this same invocation is about to change — refuse rather than pick an order.
+if [ "$CHECK" = 1 ] && [ $# -gt 1 ]; then
+  echo "--check takes no other flag: it only reads. Run the install first, then ./install.sh --check" >&2
+  exit 2
+fi
 
 have() { command -v "$1" >/dev/null 2>&1; }
 
@@ -130,6 +142,22 @@ preflight() {
   else
     echo "  ⚠ gitleaks not found — optional, only used by --hooks. Without it the"
     echo "            pre-commit hook installs but skips the scan (macOS: brew install gitleaks)."
+  fi
+
+  # The SECOND hooklet's dependency, reported with the same weight as the first's. It guards
+  # publishing an internal name to a public repo — the mistake that cannot be recalled — and with
+  # no vocabulary it warns and lets every commit through. Resolution order mirrors
+  # templates/pre-commit-identity: env → git config in this clone → <COLAB_HOME>/identity-vocabulary.
+  vocab="${COLAB_IDENTITY_VOCAB:-}"
+  [ -n "$vocab" ] || vocab="$(git -C "$DIR" config --get colab.identityVocabulary 2>/dev/null || true)"
+  [ -n "$vocab" ] || vocab="$COLAB_DIR/identity-vocabulary"
+  case "$vocab" in "~/"*) vocab="$HOME/${vocab#\~/}" ;; esac
+  if [ -r "$vocab" ]; then
+    echo "  ✓ identity vocabulary $vocab"
+  else
+    echo "  ⚠ identity vocabulary not found ($vocab) — optional, only used by --hooks. Without"
+    echo "            it the identity hooklet warns and lets EVERY commit through. Keep one outside"
+    echo "            every repo; format: templates/identity-vocabulary.example"
   fi
 
   # The skills are symlinks INTO this working tree, so this clone is permanent
@@ -238,6 +266,48 @@ freeze_cli() {
   echo "  refreshing it is deliberate — re-run install.sh; \`colab update\` reports when it is behind."
 }
 
+if [ "$CHECK" = 1 ]; then
+  echo "== colab-handbook install --check (read-only) =="
+  preflight
+  echo "check"
+  if ! have node; then
+    echo "  ✗ node not found — the check itself needs node, as the CLI does."
+    exit 1
+  fi
+  # The logic lives in tools/lib/install-check.js so it is unit-tested; this is only the entry.
+  rc=0
+  node "$DIR/tools/lib/install-check.js" --root "$DIR" --colab-home "$COLAB_DIR" --home "$HOME" || rc=$?
+  echo "== done =="
+  exit "$rc"
+fi
+
+# seed_state — create an EMPTY state file when none exists, through the CLI's own module so the
+# shape can never drift from what the CLI writes. The CLI otherwise creates it lazily on the first
+# state-changing command, so a consumer reading it on a freshly-installed machine got an error where
+# it should have seen an empty fleet (#341). Exclusive create ('wx'): an existing file — somebody's
+# live claims — is never touched, not even by a concurrent first write.
+seed_state() {
+  local f="$COLAB_DIR/state.json"
+  if [ -e "$f" ]; then
+    echo "  ✓ state file exists → left untouched ($f)"
+    return
+  fi
+  if [ "$DRY" = 1 ]; then
+    echo "  [dry] create empty state file: $f"
+    return
+  fi
+  have node || return 0
+  if COLAB_HOME="$COLAB_DIR" node -e '
+    const fs = require("fs"); const s = require(process.argv[1]);
+    fs.mkdirSync(s.COLAB_DIR, { recursive: true });
+    try { fs.writeFileSync(s.STATE_FILE, JSON.stringify(s.emptyState(), null, 2) + "\n", { flag: "wx" }); }
+    catch (e) { if (e.code !== "EEXIST") throw e; }' "$DIR/tools/lib/state.js"; then
+    echo "  📄 state file created, empty: $f"
+  else
+    warn "could not create $f — the CLI creates it on its first state-changing command."
+  fi
+}
+
 echo "== colab-handbook install ($([ "$DRY" = 1 ] && echo dry-run || echo apply)) =="
 
 preflight
@@ -280,6 +350,7 @@ if [ "$WITH_TOOLS" = 1 ]; then
       ;;
   esac
   freeze_cli
+  seed_state
 else
   echo "tools: skipped (pass --tools to symlink colab onto your PATH + freeze a copy for services)"
 fi
@@ -314,10 +385,14 @@ if [ "$WITH_FLEET" = 1 ]; then
   else
     mkdir -p "$COLAB_DIR"
     cp "$FLEET_SRC" "$FLEET_DEST"
-    echo "  📄 seeded from audit/repos.txt (example entries — replace them)"
+    echo "  📄 seeded from audit/repos.txt — format notes and commented placeholders ONLY"
   fi
-  echo "  edit it: $FLEET_DEST"
-  echo "  one line per repo: an absolute path, or owner/name for a remote-only audit."
+  # A seeded list registers nothing: every entry in it is a comment, so the next fleet command
+  # refuses "No repos registered". Say what fills it, and prefer the command to a hand edit —
+  # `colab register` writes BOTH registries (this file and config.json's repos[]) so they agree.
+  echo "  register each repo (writes this list AND config.json, so the two never drift):"
+  echo "      colab register /path/to/repo"
+  echo "  remote-only audit target (owner/name, nothing cloned): add that line to $FLEET_DEST by hand."
 else
   echo "fleet: skipped (pass --fleet to seed the audit's machine-local repo list)"
 fi
@@ -349,9 +424,17 @@ else
 fi
 
 echo
+# The "next" block is a RELEASE ARTIFACT: it is what a new machine actually does after this script,
+# so a new top-level command either earns a line here or is recorded in tools/lib/install-sh.test.js
+# with the reason it does not. That test fails until one of the two happens (#341).
 echo "next"
 echo "  colab --help                    # what the CLI can do (needs --tools)"
+echo "  colab register /path/to/repo    # put each repo on this machine's fleet list — nothing is registered yet"
+echo "  colab adopt --repo /path/to/repo  # in a repo not yet adopted: write .github/project.yml"
+echo "  colab labels --ensure --repo /path/to/repo  # create the convention labels there"
+echo "  colab update                    # stamped copies behind the handbook, the frozen CLI included"
 echo "  node audit/audit.mjs            # conformance report for your fleet"
+echo "  ./install.sh --check            # later: is what this installed still current? (read-only)"
 echo "  open CONVENTIONS.md             # the rules — ~15 minutes, the only normative file"
 if [ "$WITH_TOOLS" = 1 ]; then
   echo

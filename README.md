@@ -173,9 +173,15 @@ you want.
 | *(none)* | Symlink `skills/` into `~/.claude/skills/`, so they are available in every repo you open. |
 | `--tools` | Two installs of one CLI: a **symlink** at `~/.local/bin/colab` for your sessions (checking that directory is really on your `PATH`, and printing the exact line to add if not), plus a stamped **frozen copy** at `~/.colab/bin/colab` for always-on services — see below. |
 | `--hooks` | Point this clone's git at `.githooks/`, whose `pre-commit` runs every check in `pre-commit.d/` — a gitleaks secret scan, and an identity scan that needs a vocabulary you supply by path and keep outside every repo (see [`templates/README.md`](templates/README.md)). `core.hooksPath` lives in `.git/config`, so it is per-clone, per-machine, and never travels with the repo. |
-| `--fleet` | Seed `~/.colab/repos.txt` from `audit/repos.txt`, only if it is absent. That list stays machine-local on purpose: it names your private repos, and this repo is public. |
+| `--fleet` | Seed `~/.colab/repos.txt` from `audit/repos.txt`, only if it is absent. The seed is format notes and commented placeholders — it registers **nothing**; `colab register <path>` (step 3) is what fills it. That list stays machine-local on purpose: it names your private repos, and this repo is public. |
 | `--all` | `--tools --hooks --fleet`. |
 | `--dry` | Print what would happen, change nothing. Combines with all of the above. |
+| `--check` | **Read-only** health report on what an earlier install left behind — see *Checking an install* below. Takes no other flag; exit 1 on any ✗ row. |
+
+`--tools` also creates an **empty** `~/.colab/state.json` when there is none (it never
+touches an existing one). Without that, the file appeared only on the first
+state-changing `colab` command, and anything reading it on a fresh machine got an
+error where it should have seen an empty fleet.
 
 **Always-on services must call `~/.colab/bin/colab`.** The symlinked CLI follows
 whatever branch this clone has checked out — deliberate for a human session, and
@@ -198,17 +204,40 @@ window between a CLI commit and the next tag, and the advertised remedy copies
 *from* that same working tree — so on a machine developing the handbook it
 advised services to adopt untagged code.) It never rewrites the copy, not even
 with `--apply`: that is the toolchain your running services are executing.
-`colab --version` says which of the two you are talking to.
+`colab --version` says which of the two you are talking to. The frozen copy carries
+`tools/` only, so `colab template` refuses there — run it from the working tree.
 
-**3. Verify, and point the audit at your repos.**
+**3. Verify, and register your repos.**
 
 ```sh
-colab --help                 # not found? fix your PATH — step 2 prints the exact line
-colab --version              # which colab is this: the working tree, or the frozen copy?
-$EDITOR ~/.colab/repos.txt   # replace the examples with your own repos
-node audit/audit.mjs         # a conformance report across the whole fleet
-colab update                 # stamped copies that fell behind — the frozen CLI included
+colab --help                  # not found? fix your PATH — step 2 prints the exact line
+colab --version               # which colab is this: the working tree, or the frozen copy?
+colab register /path/to/repo  # once per repo — writes repos.txt AND config.json, so they agree
+node audit/audit.mjs          # a conformance report across the whole fleet
+colab update                  # stamped copies that fell behind — the frozen CLI included
 ```
+
+`colab register` is the way in; hand-editing `~/.colab/repos.txt` still works for
+the audit, but leaves `config.json` — where the CLI reserves each repo's ports —
+unaware of the repo. A remote-only audit target (`owner/name`, nothing cloned) is
+the one entry you add to `repos.txt` by hand. A repo not yet adopted then needs
+`colab adopt` and `colab labels --ensure` — see *Adopting it into a repo* below.
+
+### Checking an install
+
+```sh
+./install.sh --check          # read-only; exit 1 on any ✗ row
+```
+
+A frozen copy never breaks — it gets **old**, and an old complete copy answers
+normally for every command it knows until something asks for one added after it
+was frozen. `--check` is the report nothing else gives: whether the frozen copy is
+behind the latest release, **which commands it does not dispatch**, whether the
+state file exists, whether anything is registered, and whether both pre-commit
+hooklets can actually run (gitleaks, and the identity vocabulary). ✗ means
+something installed here is stale or unusable; ⚠ means something was never set
+up, which may be deliberate. It never refreshes anything — re-freezing stays your
+call: `./install.sh --tools`.
 
 Then read [`CONVENTIONS.md`](CONVENTIONS.md): ~15 minutes, and the only
 normative file here.

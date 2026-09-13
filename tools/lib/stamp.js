@@ -55,7 +55,10 @@ const FROZEN_STAMP_FILE = 'STAMP';
 const AUTHORITY_FLIP_VERSION = 'v2.0.0';
 // What the frozen copy is made of, as repo-relative paths — the same role `templateFiles()` plays
 // for a template, and fed to the same `git log <stamp>..HEAD -- <paths>` question.
-const FROZEN_SOURCES = ['tools/colab', 'tools/lib'];
+// Every path install.sh's freeze_cli COPIES belongs here: a source it copies but this list omits can
+// change without ever marking a frozen copy behind. tools/package.json was exactly that gap (#341) —
+// an `engines` bump shipped to no machine. tools/lib/install-sh.test.js holds the two lists together.
+const FROZEN_SOURCES = ['tools/colab', 'tools/lib', 'tools/package.json'];
 
 // ---------------------------------------------------------------------------
 // git access to the handbook checkout
