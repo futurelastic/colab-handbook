@@ -94,6 +94,9 @@ that one ever disagree, `CONVENTIONS.md` wins — and report the discrepancy.
    deadlock every ship. Ask whether **every** run at the branch's current head sha
    has finished and one of them succeeded — a sibling still in flight has not passed,
    it has not run — `colab ship` does ([§4](CONVENTIONS.md#4-branches-and-commits)).
+   The **branch's** own run gates too, read at its head sha as one of four classes —
+   `green` · `none` · `red:infra` · `red:finding` — each with a fixed next step
+   ([§4, *Branch CI*](CONVENTIONS.md#branch-ci--the-candidates-own-run-read-as-a-class-314)).
 2. Squash-merge, one commit per unit of work.
 3. **The merge message must say `Closes #N`** — one per issue in the group.
    A bare `(#N)` does not auto-close, and we measured 26/30 issues sitting

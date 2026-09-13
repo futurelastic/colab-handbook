@@ -1297,10 +1297,59 @@ than guessed.
   one of them succeed? `colab ship` asks it that way. Both halves are load-bearing: a
   sibling that is merely still in progress has not passed either (#307), so a fast
   workflow finishing green must never answer for a slow one that has not run yet.
+  That is the half of the question about what is merged **into**; the branch's own run
+  is the other half — see *Branch CI*, below.
 - **That resolves a FALSE red — a real one has two different doors, one of them
   human-only (#105), one machine-checkable (#281).** A **genuinely** red trunk (the sha
   really failed) is a true deadlock when the candidate branch's entire content IS the
   fix — see *Red-trunk exemption* and *Cure rule* below.
+
+### Branch CI — the candidate's own run, read as a class (#314)
+
+Trunk CI answers *"is the thing I am merging into healthy?"*. It says nothing about the
+thing being merged, and both gate a merge. A local quality gate does not answer for the
+branch's CI either: local and runner disagree for ordinary reasons — a different OS, a
+browser the runner has to boot, a toolchain pin the local machine already satisfies.
+Measured, 2026-09-05: a branch sat red three times on its remote run while its wrap had
+recorded a clean local gate, and no step between the implementer's wrap and the merge was
+reading that run at all.
+
+**Read the runs at the branch's current head sha, and report the result as one of four
+classes — not as pass/fail.** The names are shared vocabulary: the implementer records
+one when it pushes, the coordinator re-derives it before merging, and a fleet planner
+reading either sees the same spelling. Spell them exactly so, everywhere:
+
+| class | what the runs at the head sha show | next step |
+|---|---|---|
+| `green` | **every** run `completed`, at least one `success`, none `failure` | nothing owed — this precondition passes |
+| `none` | no run exists, or **any** run is still in flight | a run queued or in flight has not passed, it has **not run**: wait, bounded. A run that **cannot arrive** for this ref — no workflows, or workflows triggering only on `pull_request` / trunk push — is not pending: proceed, and the base's own CI is the whole CI story |
+| `red:infra` | a run failed **before** the suite could judge the branch — runner boot, browser install, billing lockout, dependency fetch. **Exit 2** where the repo separates them | re-run **once**; an identical failure twice is the runner, not the branch — hand it to the ops lane. Never merged past, never sent back to the implementer: there is nothing in the diff to fix |
+| `red:finding` | the suite ran and something in it failed. **Exit 1** where separated | back to an implementer session, **as a class**. Never merged past, never re-run |
+
+- **The quantifiers are the trunk rule's, unchanged (#92, #307).** `every … completed`: a
+  fast sibling already green never answers for a slow one still running — that sha is
+  `none`, not `green`. `cancelled` is `completed` and not a `failure`, so a cancelled
+  straggler beside a real `success` is still `green`; the ladder must not reintroduce the
+  deadlock #92 fixed.
+- **An unclassifiable red is `red:finding`.** Where a repo does not separate exit 1 from
+  exit 2, `failure` is all the platform reports: read the failing job's log far enough to
+  say which side of the line it fell on, and if that cannot be told, report `red:finding`.
+  A wrong `red:finding` costs one hand-back to someone who can look; a wrong `red:infra`
+  spends the one re-run and then parks the work in a lane nobody opened.
+- **Say which `none`.** A bare `none` turns a bounded wait into a wait for a run that was
+  never coming. This handbook's own repo is the permanent shape: its workflow triggers on
+  trunk push and `pull_request`, and a wrap pushes a backup branch without opening a PR,
+  so branch CI does not exist here before the merge — a normal state, not a missing
+  measurement.
+- **A class describes one sha.** Anything that moves the head — a sync merge of the base
+  into the branch — invalidates it; read it again at the new head. A green inherited from
+  an earlier sha is exactly the green-run-on-a-different-commit this section refuses.
+- **A red class is data, not a failed wrap.** The implementer records it and stops; the
+  table says who acts next. Only `red:finding` names the implementer, and only when the
+  finding is the branch's own.
+- **One re-run per red episode, not per attempt** — and it is the only CI action the
+  coordinator takes. A second identical failure is evidence; spending more re-runs on it
+  just moves the wall further out.
 
 ### Is a shipped half actually shippable? — the mechanical gate is not the judgement call (#263)
 

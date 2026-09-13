@@ -577,11 +577,10 @@ git push -u origin <branch>    # a backup/record, NOT a PR, NOT trunk
 
 **A3's green gate does not answer for this branch's CI, and nobody downstream asks.**
 A3 runs the suite *locally*, on this machine; CI runs it on the runner. They disagree
-for ordinary reasons — a different OS, a browser the runner has to boot, a toolchain
-pin the local machine already satisfies. Measured, 2026-09-05: a branch sat red three
-times on its remote run while its wrap had recorded a clean local gate, and no step in
-`code-wrap` → `code-ship` → `colab ship` was reading that run at all — `code-ship` B1
-reads **trunk**, and `colab ship`'s cure rule reads the branch only as a side condition.
+for ordinary reasons, and a branch once sat red three times on the runner under a clean
+local wrap with nothing downstream reading that run (`CONVENTIONS.md`
+[§4](../../CONVENTIONS.md#branch-ci--the-candidates-own-run-read-as-a-class-314),
+*Branch CI*, has the measurement).
 
 So read it here, where the push just created it, and pass the answer forward as a
 **class** rather than a pass/fail:
@@ -593,34 +592,26 @@ gh run list --branch <branch> --limit 20 \
   -q "[.[] | select(.headSha == \"$HEAD\")]"
 ```
 
-| class | what you saw at `$HEAD` | what it means downstream |
-|---|---|---|
-| `green` | **every** run `completed`, at least one `success`, none `failure` | nothing owed |
-| `none` | no run exists yet, or **any** run is still in flight | `code-ship` waits, bounded — a run in flight has not passed, it has **not run** |
-| `red:infra` | a run failed **before** the suite could judge the branch — runner boot, browser install, billing lockout, a dependency fetch. Where the repo separates them, **exit 2** | `code-ship` may re-run it **once**; identical twice ⇒ the ops lane, not this branch |
-| `red:finding` | the suite ran and something in it failed — **exit 1** where separated | comes back to an implementer session as a class; never merged past |
+The four classes, their quantifiers and each one's next step are defined in
+`CONVENTIONS.md` [§4](../../CONVENTIONS.md#branch-ci--the-candidates-own-run-read-as-a-class-314),
+*Branch CI* — use exactly those names. What you are classifying at `$HEAD`:
 
-**Both quantifiers, and this repo measured why each one is there.** The `every … completed`
-half is #307: a sha whose fast workflows had gone green while a slow one was still
-`in_progress` reported "3 runs, all success" off a single inspected row — the same workflow
-gated when red and was invisible when merely unfinished. So a green sibling does not cover
-an unfinished one; that case is `none`, not `green`. The `none failure` half is the
-ordinary one. **`cancelled` is neither** — it is `completed` and not a `failure`, so a
-cancelled straggler alongside a real `success` is still `green`, which is #92's deadlock
-fix and must survive this ladder (`CONVENTIONS.md`
-[§4](../../CONVENTIONS.md#4-branches-and-commits)).
+| class | what you saw at `$HEAD` |
+|---|---|
+| `green` | **every** run `completed`, at least one `success`, none `failure` (a `cancelled` straggler beside a `success` is still `green`, #92) |
+| `none` | no run exists yet, or **any** run is still in flight — a green fast sibling does not cover an unfinished slow one (#307) |
+| `red:infra` | a run failed **before** the suite could judge the branch — runner boot, browser install, billing lockout, a dependency fetch; **exit 2** where separated |
+| `red:finding` | the suite ran and something in it failed — **exit 1** where separated |
 
 - **A red class is data, not a failed wrap.** Do not go back and start fixing on a
   `red:infra` — you would be debugging the runner, in a session whose oracle is already
-  green. Record the class and stop; the ladder above says who acts next. `red:finding`
+  green. Record the class and stop; §4's table says who acts next. `red:finding`
   is the one that names *you*, and even then only if the finding is this branch's —
   say so and let `code-ship` route it, rather than silently reopening the work.
 - **Where the repo does not separate exit 1 from exit 2, you cannot infer the class
   from the conclusion alone** — `failure` is all GitHub reports. Read the failing job's
-  log far enough to say which side of the line it fell on, and if it genuinely cannot be
-  told, report `red:finding`: treating an unclassifiable red as the branch's own problem
-  routes it to a human who can look, whereas guessing `red:infra` spends the free re-run
-  and then parks it in an ops lane nobody opened.
+  log far enough to say which side of the line it fell on; if it genuinely cannot be
+  told, it is `red:finding` (§4, *Branch CI*, gives the reason).
 - **`none` splits two ways, and only one of them is worth waiting for.** Before
   reporting it, ask whether a run *can* arrive for this ref at all — read the triggers,
   do not assume:
