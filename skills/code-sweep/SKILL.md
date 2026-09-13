@@ -1,6 +1,6 @@
 ---
 name: code-sweep
-description: "Clear out everything finished in ONE repo: find every worktree whose work has landed, every issue whose code shipped but is still open, and every claim outliving its session — then put each through code-wrap and code-ship in sequence, one at a time. Run it at end of day, or ping it whenever a session goes idle — cheap to re-run only when §0 is honoured first, a convention the executing agent follows and not a gate anything enforces (its fingerprint stays sensitive to branch tips, so the cheap path is rarer here than in code-triage — see §0). Sorts candidates into wrap / teardown-only / claim-only / place-claim / unrecorded / blocked / unlinked, because most do not need a full wrap+ship. A candidate that fails mid-run is deferred and the run carries on to the next one; only a repo-wide blocker (trunk CI dead or red) or a destructive/unclassifiable failure stops the sweep. Before writing its cache record and reporting, it re-derives the candidate set once more, so a branch that finished its wrap while a long grade was running is processed or named, never left waiting on a notification that does not exist. Can be scoped to a set of issues or one session/worktree instead of the whole repo. Trigger phrases: 'sweep the repo', 'wrap everything finished', 'clean up the worktrees', 'close out the session work', 'tidy up finished work', 'wrap all the done branches', 'sweep the issues #95 #96', 'sweep the session <name>', 'ship these'; and — when this session's last act was a sweep — the re-ping forms 'again', 'anything new?', 'check again', 'anything to wrap yet?', or a bare 'go'. Composes code-wrap then code-ship per candidate; never batches merges."
+description: "Clear out everything finished in ONE repo: find every worktree whose work has landed, every issue whose code shipped but is still open, and every claim outliving its session — then put each through code-wrap and code-ship in sequence, one at a time. Run it at end of day, or ping it whenever a session goes idle — cheap to re-run only when §0 is honoured first, a convention the executing agent follows and not a gate anything enforces (its fingerprint stays sensitive to branch tips, so the cheap path is rarer here than in code-triage — see §0). Sorts candidates into wrap / teardown-only / claim-only / place-claim / unrecorded / blocked / unlinked / spent-remote, because most do not need a full wrap+ship. Spent remote branches — refs left on origin by ships that kept the branch, whose issues are all closed — are listed for a human to delete, never deleted by the sweep. A candidate that fails mid-run is deferred and the run carries on to the next one; only a repo-wide blocker (trunk CI dead or red) or a destructive/unclassifiable failure stops the sweep. Before writing its cache record and reporting, it re-derives the candidate set once more, so a branch that finished its wrap while a long grade was running is processed or named, never left waiting on a notification that does not exist. Can be scoped to a set of issues or one session/worktree instead of the whole repo. Trigger phrases: 'sweep the repo', 'wrap everything finished', 'clean up the worktrees', 'close out the session work', 'tidy up finished work', 'wrap all the done branches', 'sweep the issues #95 #96', 'sweep the session <name>', 'ship these'; and — when this session's last act was a sweep — the re-ping forms 'again', 'anything new?', 'check again', 'anything to wrap yet?', or a bare 'go'. Composes code-wrap then code-ship per candidate; never batches merges."
 ---
 
 # code-sweep — clear out everything finished, one at a time
@@ -211,6 +211,55 @@ skill prescribes. A detector for that shape is tracked separately (see #97's fol
 until it lands, this enumeration's coverage is real but narrower than "every worktree on
 disk."
 
+### 1.3 Remote refs — the one input that is not a worktree, a claim or a place (#331)
+
+Everything above starts from a worktree, a claim or a place. A branch that exists **only on
+origin** has none of those, so before #331 no bucket could ever see it. That is exactly the
+shape a ship leaves behind: `colab ship` keeps the branch by default (`--delete-branch` is
+opt-in, the resolution of #17). Measured on this repo, 2026-09-12: 54 branches on origin besides
+`main`, carrying 39 issue numbers, every one of them CLOSED. Two days later there were 56.
+
+```sh
+TRUNK=main                                                    # the value of trunk: in project.yml
+S="$(mktemp)"; W="$(mktemp)"
+gh issue list --state all --limit 5000 --json number,state,stateReason \
+  -q '.[]|"\(.number) \(.state) \(.stateReason)"' > "$S"      # ONE call, not one per branch
+git worktree list --porcelain | sed -n 's#^branch refs/heads/##p' > "$W"
+git ls-remote --heads origin | sed 's#.*refs/heads/##' |
+  grep -vx "$TRUNK" | grep -v '^dependabot/' |                # also drop every integration: line
+  awk -v S="$S" -v W="$W" '
+    BEGIN { while ((getline l < S) > 0) { split(l, a, " "); st[a[1]] = a[2]; rs[a[1]] = a[3] }
+            while ((getline l < W) > 0) wt[l] = 1 }
+    { b = $0
+      if (b in wt)                     { print "has-worktree", b; next }
+      if (!match(b, /(-[0-9]+)+$/))    { print "no-number", b; next }
+      n = split(substr(b, RSTART + 1), num, "-"); ok = 1; note = ""
+      for (i = 1; i <= n; i++) {
+        s = (num[i] in st) ? st[num[i]] : "NOT-HERE"
+        if (s != "CLOSED") { ok = 0; note = note " #" num[i] ":" s }
+        else if (rs[num[i]] != "COMPLETED") note = note " #" num[i] ":" rs[num[i]]
+      }
+      print (ok ? "spent-remote" : "open-issue"), b, note }'
+rm -f "$S" "$W"
+```
+
+- **Trailing number group only** — the same anchor `code-ship`'s B1b harvest uses, so
+  `feat/oauth2-login-88` carries 88, not 2 and 88.
+- **One `gh issue list`, not a `gh issue view` per branch.** It is a single call instead of
+  N. It also avoids a trap: `gh` inside a `while read` loop reads the loop's stdin, so each
+  call fails, and a `|| echo MISSING` fallback then silently turns every branch into "not
+  closed". Measured while writing this section: 56 of 56 read as MISSING that way, 56 of 56
+  as CLOSED with the one-call form.
+- **`--limit` must exceed the repo's issue count.** A truncated list reads an old closed
+  issue as `NOT-HERE`. That is a false *open*, the safe direction, but raise the limit anyway.
+- **Only `spent-remote` rows go to §3.** `open-issue` is a live branch, or a number from
+  another repo's tracker (`NOT-HERE`, #67's shape), and belongs to no bucket here. `no-number`
+  cannot be judged from its name, and `has-worktree` is already a candidate through §1. None
+  of these three becomes a finding just because it is not spent.
+- **"Remote-only" means remote-only from this machine.** `git worktree list` sees only this
+  machine's checkouts, and a closed issue can still have a branch open on another machine.
+  That is one more reason the bucket reports and never acts.
+
 ### 1.1 Scoped mode — sweep a subset, and say that you did
 
 `code-triage` has single-issue mode; this had nothing between "the whole repo" and calling
@@ -240,7 +289,9 @@ none:**
    candidates, and `colab doctor --prune` is **machine-wide** — it would reach past the
    scope, past the repo, to other projects entirely. In a scoped run: restrict §5 to the
    selected issues, **never run `doctor --prune`**, and say both in the report. Someone who
-   asked to ship three issues did not ask you to reconcile the machine.
+   asked to ship three issues did not ask you to reconcile the machine. The same goes for
+   §1.3's `spent-remote` list: it is repo-wide, so a scoped run reports only the refs that
+   carry a selected issue number.
 2. **Report what you did not look at.** This is the real trap: *a scoped sweep that finds
    nothing looks identical to a full sweep that finds nothing.* The skill already holds the
    matching principle for kept worktrees — a worktree kept for a stated reason is fine, one
@@ -326,10 +377,10 @@ what state the work is *in*; `in-progress` says someone *believes they hold it*.
 disagree in both directions — claims outliving finished work, finished work never
 claimed — and the label remains the veto before any teardown.
 
-## 3. Sort into seven buckets — each gets a different action
+## 3. Sort into eight buckets — each gets a different action
 
-**These buckets are keyed off what §1 enumerated — worktrees, claims, and
-places — which is complete for a repo declaring the veto (`writes: isolated`, every
+**These buckets are keyed off what §1 enumerated — worktrees, claims, places, and
+(for `spent-remote` only) origin's branch refs (§1.3) — which is complete for a repo declaring the veto (`writes: isolated`, every
 unit is a worktree) but only partial for a repo permitting trunk-direct (⚖ #233: any
 repo without the veto).** A finished solo/trunk-direct unit that never
 filed an Issue (CONVENTIONS.md, *Solo flow* — an Issue is filed on demand, not on
@@ -348,6 +399,34 @@ the third case — a scoped selector that names such a unit by issue number.
 | **unrecorded** | on disk, `colab worktrees`'s `unrecorded` list — no claim, no ports | **report only** — see below, never `code-wrap`/`code-ship` |
 | **blocked** | uncommitted work — tracked changes or untracked files — or genuinely unfinished | **report — never force** |
 | **unlinked** | `cargo` (or `unknown`), **zero** claimed issues | **report — do not wrap** (#92) |
+| **spent-remote** | on origin only — no worktree here, not trunk or an `integration:` line — and every trailing issue number CLOSED (§1.3) | **report only — never delete** (#331, keeps #17) |
+
+### `spent-remote` — a shipped branch nobody deleted
+
+**Report only. Never delete it, not even with every issue closed and `colab landed`
+reading `landed`.** #17 ruled that removing refs from a shared remote is the wrong default
+for an agent, however well verified: reporting can be undone, deleting cannot. #331 kept
+that ruling and added this bucket instead, so the pile shows up where sessions actually
+look. `colab doctor` was the only mitigation before, and nobody schedules a doctor run.
+
+- **The key is issue state, not `colab landed`.** A squash followed by trunk movement reads
+  as `unknown`. Of the 54 refs measured in #331, 32 read that way while every one of their
+  issues was closed. An `unknown` spent ref is not unshipped work, and a `landed` verdict
+  is not permission to delete. Neither verdict belongs in this decision.
+- **Every issue a branch carries must be CLOSED.** One open number makes the branch live.
+  That includes a reopened issue: its old branch may be exactly what the next session
+  continues from (`code-start` step 3).
+- **Say when an issue closed as something other than COMPLETED.** §1.3 prints the
+  `stateReason` (for example `NOT_PLANNED`). An issue closed without shipping can leave a
+  branch holding the only copy of its work, the `unlinked` lesson in a different shape. It
+  is still `spent-remote`, but give the reason on its line so the human deleting it knows
+  to look first.
+- **Does not stop the merge loop and needs no CI.** It merges nothing, so a dead trunk CI
+  does not touch it (§4).
+- **Deleting is the human's act.** Name the refs in §6. If you print the command, label it as
+  the human's: `git push origin --delete <branch> …`. Do not run it. If the pile keeps
+  growing after this bucket exists, the fix is to bring #331's option A (delete by default at
+  ship) back to a human with the count. Quietly pruning from a sweep is not the fix.
 
 ### `place-claim` — the one hold nothing else here sweeps
 
@@ -530,8 +609,8 @@ falls into is what decides whether the run continues:
   otherwise; that is the direction it is safe to be wrong in.
 
 **Stopping the merge loop is not stopping the sweep.** §5's tracker reconciliation merges
-nothing, and neither do the `teardown-only`, `claim-only`, `place-claim` or `unrecorded`
-buckets — a dead trunk CI has no bearing on any of them. Carry on with those and say that
+nothing, and neither do the `teardown-only`, `claim-only`, `place-claim`, `unrecorded` or
+`spent-remote` buckets — a dead trunk CI has no bearing on any of them. Carry on with those and say that
 you did.
 
 **Record it either way, but they are different records.** A run-level stop writes
@@ -663,6 +742,8 @@ unrecorded      .worktrees/orphan-1      → landed vs main, no claim — remove
 blocked         feat/session-types-26    → 2 untracked files never committed — needs a human
 blocked         #58                      → branch never pushed, 3 commits local-only — needs a human
 unlinked        fix/railquiet-fixture-trunk-red → 1 commit ahead of trunk, no issue claimed — not wrapped, not dropped
+spent-remote    56 refs on origin        → every trailing issue CLOSED; listed below for a human to delete, none deleted
+                  fix/ship-reject-recommended-route-328, feat/dropped-idea-12 (#12: NOT_PLANNED — look first), …
 ripened         fix/late-wrap-77         → became a candidate at 11:30Z, mid-run; shipped in the §5.1 pass, trunk 9f8e7d6
 ripened         feat/late-thing-81       → became a candidate mid-run; not processed: merge loop stopped (trunk CI red)
 end-of-run      §5.1 re-derived 2x       → second pass found nothing new; fingerprint + conclusion written from it
@@ -723,6 +804,9 @@ the merge loop got, and that the non-merging work was **not** abandoned with it.
   detector, tracked separately.
 - A scoped run reported `N of M`, restricted §5 to the selection, and did not run
   `doctor --prune`.
+- **§1.3's remote-ref list was read, and every `spent-remote` ref is named in the report**
+  (or the report says there are none). A count with no names cannot be acted on. **No ref
+  was deleted by this run** (#17, #331).
 - A selector that matched nothing said so — not "swept 0".
 - **One of the three required §0 outcome lines was printed, first, before anything else** —
   `unchanged` / `changed:<inputs>` / `no usable cache`.
