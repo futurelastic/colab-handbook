@@ -7,6 +7,12 @@
 # Release whose body is built by `colab release-notes`, and then — the whole point — runs the
 # fleet audit as a reconciliation report so a release is also the moment the fleet is checked.
 #
+# Candidates and finals are two paths (#338). A release CANDIDATE, vX.Y.Z-rc.N, is cut by
+# `colab release cut` — it checks CONVENTIONS.md §6's four conditions on the exact commit and pushes
+# only the tag. This script publishes a FINAL vX.Y.Z and refuses a candidate version. When candidates
+# exist for the version, the final is tagged on the NEWEST candidate's commit (§6: "the final vX.Y.Z is
+# that candidate's commit, tagged final") — never on a later HEAD nobody tested as that candidate.
+#
 # Usage:
 #   sh scripts/release.sh vX.Y.Z ["optional headline sentence"]
 #   sh scripts/release.sh vX.Y.Z --dry        # run every guard + print the plan, change nothing
@@ -58,6 +64,9 @@ done
 
 [ -n "$VER" ] || die "no version given (usage: sh scripts/release.sh vX.Y.Z [\"headline\"] [--dry])"
 
+if echo "$VER" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+-'; then
+  die "$VER is a pre-release — candidates are cut by \`colab release cut\` (#338), which checks CONVENTIONS.md §6's conditions; this script publishes a final vX.Y.Z"
+fi
 echo "$VER" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$' \
   || die "version must look like vX.Y.Z (got: $VER)"
 
@@ -65,6 +74,8 @@ echo "$VER" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$' \
 # `gh release create` (it happened: a transient API failure orphaned v1.1.0). That state is
 # resumable — refusing it with "pick a new version" would force a bogus version bump.
 RESUME=0
+CANDIDATE=""
+TARGET=""
 if git -C "$ROOT" rev-parse -q --verify "refs/tags/$VER" >/dev/null 2>&1; then
   if ( cd "$ROOT" && gh release view "$VER" >/dev/null 2>&1 ); then
     die "tag $VER already exists AND its Release is published — pick a new version"
@@ -89,16 +100,32 @@ if [ "$RESUME" -eq 0 ]; then
   REMOTE_SHA="$(git -C "$ROOT" rev-parse origin/main 2>/dev/null || echo remote)"
   [ "$LOCAL_SHA" = "$REMOTE_SHA" ] \
     || die "local main ($LOCAL_SHA) and origin/main ($REMOTE_SHA) differ — push or pull to sync first"
+
+  # Which commit the final names: the newest candidate of this version, when there is one (#338).
+  git -C "$ROOT" fetch --tags origin >/dev/null 2>&1 \
+    || die "git fetch --tags origin failed — cannot see which candidates of $VER exist"
+  CANDIDATE="$(git -C "$ROOT" tag --list "$VER-rc.*" | grep -E "^$(echo "$VER" | sed 's/\./\\./g')-rc\.[0-9]+$" \
+    | awk -F'-rc.' '{ print $2 "\t" $0 }' | sort -n | tail -n 1 | cut -f2)"
+  if [ -n "$CANDIDATE" ]; then
+    TARGET="$(git -C "$ROOT" rev-list -n 1 "$CANDIDATE" 2>/dev/null || true)"
+    [ -n "$TARGET" ] || die "cannot resolve the commit of candidate $CANDIDATE"
+    git -C "$ROOT" merge-base --is-ancestor "$TARGET" "$REMOTE_SHA" \
+      || die "candidate $CANDIDATE ($TARGET) is not on origin/main — refusing to finalize a commit main does not contain"
+  else
+    TARGET="$LOCAL_SHA"
+  fi
 fi
 
 # ---- compute the notes range (previous tag .. this version) --------------------------------
 if [ "$RESUME" -eq 1 ]; then
   # HEAD may have moved past the tag since the failed run — derive PREV from the tag's own
   # ancestry, not from HEAD, so the notes cover exactly what the tag covers.
-  PREV="$(git -C "$ROOT" describe --tags --abbrev=0 "$VER^" 2>/dev/null || true)"
+  PREV="$(git -C "$ROOT" describe --tags --abbrev=0 --exclude='*-*' "$VER^" 2>/dev/null || true)"
 else
-  # describe finds the most recent tag reachable from HEAD; empty on the very first release.
-  PREV="$(git -C "$ROOT" describe --tags --abbrev=0 2>/dev/null || true)"
+  # describe finds the most recent FINAL tag reachable from the commit being tagged; empty on the very
+  # first release. Candidates are skipped (#334's rule, tools/lib/release-tag.js): the final's notes
+  # cover everything since the previous final, not since its own last candidate.
+  PREV="$(git -C "$ROOT" describe --tags --abbrev=0 --exclude='*-*' "$TARGET" 2>/dev/null || true)"
 fi
 if [ -n "$PREV" ]; then
   RANGE="$PREV..$VER"
@@ -111,6 +138,11 @@ echo "Release plan — colab-handbook:"
 echo "  version:    $VER"
 echo "  prev tag:   ${PREV:-<none> (first release)}"
 echo "  notes range: $RANGE"
+if [ "$RESUME" -eq 0 ]; then
+  if [ -n "$CANDIDATE" ]; then echo "  commit:     $TARGET (candidate $CANDIDATE)"
+  else echo "  commit:     $TARGET (HEAD — no candidate of $VER exists; a human release, not §6's candidate path)"
+  fi
+fi
 [ "$HEADLINE_SET" -eq 1 ] && echo "  headline:   $HEADLINE"
 if [ "$RESUME" -eq 1 ]; then
   echo "  steps:      (resume) gh release create $VER -> node audit/audit.mjs (reconcile)"
@@ -127,7 +159,7 @@ fi
 # ---- real release steps --------------------------------------------------------------------
 
 if [ "$RESUME" -eq 0 ]; then
-  git -C "$ROOT" tag "$VER"            || die "git tag $VER failed"
+  git -C "$ROOT" tag "$VER" "$TARGET" || die "git tag $VER failed"
   git -C "$ROOT" push origin "$VER"    || die "git push origin $VER failed (tag was created locally — delete it with: git tag -d $VER)"
 else
   # Idempotent: make sure the remote has the tag (no-op when it already does).

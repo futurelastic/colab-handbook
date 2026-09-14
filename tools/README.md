@@ -950,6 +950,7 @@ Run `colab <cmd> --help` for full detail.
 | `promote [--repo P] [--message M] [--dry]` | **promotion** trunk → main (`--no-ff`). Gated by `deploy` + `promotion`; never tags/deploys directly (see *Promotion*) |
 | `doctor [--prune] [--ttl H] [--json] [--sync]` | heal dead worktrees / orphan + stale claims / orphan ports; report records whose branch or path cannot be resolved, including a zero-claim `pending` stub (no TTL — see *Records that cannot be acted on*); flip + sweep **merged** worktrees (see *Worktree lifecycle*); **list** shipped branches awaiting deletion (never deletes them); `--sync` also flags a worktree-less claim the tracker no longer shows assigned+in-progress (no TTL either) and spent `group:<key>` labels |
 | `release-notes [<range>] [--repo P] [--out F] [--headline "..."]` | grouped Markdown release summary from git history (see below) |
+| `release cut [--repo P] [--bump patch\|minor --reason "..."] [--dry] [--json]` | cut a release **candidate** `vX.Y.Z-rc.N` on `origin/main` where §6's rung allows it and all four conditions hold on that commit; never a final tag (see *Release cut*, below) |
 | `template [<name>] [--dest F] [--repo P] [--force]` | copy a handbook workflow template into a repo, **stamped** with the handbook version (see below) |
 | `update [<repo>...] [--apply] [--json] [--quiet]` | sweep the fleet registry for stamped copies that fell behind a changed template; `--apply` refreshes the **pristine** ones. Never commits; never touches a hand-edited copy (see below) |
 | `register [<path>] [--remove] [--list]` | add/remove a repo in **both** fleet registries at once; `--list` flags drift (see below) |
@@ -976,6 +977,43 @@ Composable — pipe straight into `gh`:
 ```sh
 colab release-notes v0.3.0..v0.4.0 | gh release create v0.4.0 --notes-file - --generate-notes
 ```
+
+### Release cut (candidates)
+
+`colab release cut [--repo P] [--bump patch|minor --reason "..."] [--dry] [--json]` (#338) cuts a
+release **candidate**, `vX.Y.Z-rc.N`, on `origin/main`'s head — the tooling behind CONVENTIONS.md
+[§6's release rung](../CONVENTIONS.md#6-releases). It never creates a final `vX.Y.Z`; finalizing a
+candidate after its test period belongs to the release skill (#339), and is a human act wherever
+the tag reaches production.
+
+Everything is measured **at the commit the tag would name**, not at the checkout: the workflows
+that would fire on the tag push are read from that commit, and a green trunk head later on does
+not count for it. Every check is reported, each by a stable `condition` name (`--json` keys on
+them), and any one failing refuses the cut:
+
+| condition | refuses when |
+|---|---|
+| `release-policy` | the rung row + the `release:` block leave candidates off, or the block is invalid — `tools/lib/release-policy.js`, the audit's own reading |
+| `prerelease-trigger` | a deploy workflow's tag trigger matches `v1.2.0-rc.1` — `tools/lib/workflow-triggers.js`, the audit's own check (#332), either severity |
+| `version` | no bump is owed, a major is (a breaking change on ≥1.0, `--bump major`, the 0.x → 1.0.0 step), there is no final tag yet, or the version is already final |
+| `already-candidate` | the commit already carries a candidate of that version |
+| `ci-green` | §6 condition 1: not every run at the commit finished with one success — `colab ship`'s whole-sha check |
+| `full-suite` | §6 condition 2: some workflow that ran at the commit has no successful run (a cancelled-only workflow never ran its tests; `ci-green` alone reads that as green) |
+| `schema-additive` | §6 condition 3: a migration since the last final tag is destructive — Laravel `database/migrations` with a drop/rename/`->change()` in `up()`, Prisma SQL with `DROP`/`RENAME`/`ALTER COLUMN` — or an existing migration was edited or deleted. Other layouts are not read |
+| `switch-dependencies` | §6 condition 4: a `colab:switch` marker is malformed, or a finished switch `needs` one that is not finished |
+
+The bump is `release-status`'s suggestion since the last **final** tag (candidates skipped): fix →
+patch, feat → minor, a breaking change → minor pre-1.0 and a refusal from 1.0 on. `--bump` may
+override it to patch or minor with a `--reason`; the chosen bump, the override and every condition's
+detail are recorded in the annotated tag's message. The tag is pushed to origin; if the push fails
+the local tag is deleted again, so a refusal or a failure never leaves a candidate behind.
+
+`schema-additive` is a heuristic and fails closed; it is not the §6 judgement about breaking
+changes the commit types do not reveal, which the release notes still owe.
+
+The handbook's own `scripts/release.sh` is the other half: it refuses a `-rc` version (candidates
+come from here), computes its notes range from the previous **final** tag, and tags a final on its
+version's newest candidate commit when one exists.
 
 ### Templates
 

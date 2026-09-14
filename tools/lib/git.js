@@ -587,7 +587,9 @@ function ghRunsForCommit(repo, branch, sha, limit = 10) {
   // the age backstop, databaseId to look up its job count (ghRunJobCount, below — a second call, made
   // lazily by the caller, never here: an ordinary green check must not pay for a read it never needs).
   const r = run('gh', ['run', 'list', '--branch', branch, '-L', String(limit),
-    '--json', 'headSha,status,conclusion,createdAt,databaseId'], { cwd: repo });
+    // workflowName is additive (#338): `colab release cut`'s full-suite condition groups the rows by
+    // workflow — a workflow whose only run at the sha was cancelled never ran its suite.
+    '--json', 'headSha,status,conclusion,createdAt,databaseId,workflowName'], { cwd: repo });
   if (!r.ok) return null;
   let runs;
   try { runs = JSON.parse(r.stdout); } catch (_) { return null; }

@@ -2902,8 +2902,11 @@ finalizes it.
 never a scheduler by itself
 ([*Scheduled drivers*](#scheduled-drivers--provenance-and-autonomy-meet-a-caller-that-is-not-a-person)),
 and never `colab ship`, `colab promote` or `code-ship`, none of which tags. This rung is
-the permission; the tooling that exercises it (#338, #339) lands after it, and until it
-does no agent tags by hand on the strength of this rung. A deploy must never fire on a
+the permission; the tooling exercises it. A candidate is cut by
+[`colab release cut`](tools/README.md#release-cut-candidates) (#338), which measures the four
+conditions on the commit and refuses naming each one that fails; finalizing is the release
+skill's (#339), and until that lands no agent cuts a final tag on the strength of this rung —
+nor a candidate by hand, around the command. A deploy must never fire on a
 candidate: [`templates/release-tag.yml`](templates/release-tag.yml) publishes `-rc` tags
 as pre-releases, the audit flags a deploy trigger that matches one, and every
 current-release read skips them.
@@ -3429,7 +3432,7 @@ gh issue edit N --remove-assignee @me --remove-label in-progress   # both halves
 
 # releasing — Tier A / exposure: released (who tags follows §6's release rung)
 git checkout main && git merge --no-ff dev && git push   # --no-ff, never squash
-git tag v1.3.0-rc.1 && git push origin v1.3.0-rc.1       # candidate — automatic once §6's four conditions hold
+colab release cut                                        # candidate v1.3.0-rc.N — refuses unless §6's four conditions hold
 git tag v1.3.0 && git push origin v1.3.0                 # final — automatic after 3 clean days where nothing deploys;
                                                          #   a human act where the tag deploys (deploy: tag / manual)
 # an agent picks patch or minor, never X.0.0; its reasoning goes in the release notes
