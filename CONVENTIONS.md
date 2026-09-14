@@ -2589,6 +2589,12 @@ variable, a config file, a build flag — is the repo's own, as its stack is; th
 subsection fixes only that one selector chooses between the two configurations, that
 its absence means release, and that each switch's identifier is its declared `name`.
 
+Two checks read these markers (#340). `code-triage` §2 reports each epic's switch state
+along with rule 3's and rule 6's findings, as findings and never as blockers. `code-ship`
+B1c grades a switched epic's children against rules 1, 2 and 5: an `add` or ordinary child
+must be dark with the switch off, and the `remove` child must remove the switch completely
+and perform the destructive steps it deferred.
+
 #### Delivery type — route, not start (#112)
 
 **Five labels — `delivery:code`, `delivery:content`, `delivery:ops`,
