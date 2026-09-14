@@ -320,7 +320,7 @@ const WRITES_VETO_MARKER = 'two-state VETO';
  * exists BECAUSE that advisory wanted to wait for a later, separate major bump — #239's own
  * text says this must not be deferred past the very next tag that carries #237. Reading for
  * the change's own landed text sidesteps having to invent a version number for a tag nobody
- * has cut yet (tagging stays a human act, CLAUDE.local.md).
+ * has cut yet (who tags follows CONVENTIONS §6's release rung).
  *
  * `verifiable: false` on the same terms as axesPredating: an unresolvable ref means stay
  * silent, never guess.

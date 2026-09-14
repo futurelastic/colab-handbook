@@ -1124,7 +1124,7 @@ or under `.claude/`, `.github/`, `.githooks/`; no binary, no symlink, not empty.
 assert it and nothing widens it ([CONVENTIONS §2](../CONVENTIONS.md#autonomy--the-docs-only-exception-345)). This
 gate has **no override** — `--force` does not exist on `ship`. Autonomy is a property of the repo a
 human configured, never a flag the caller can pass. `ship` **never** touches `main` when `trunk ≠
-main`, **never** tags, and **never** promotes — those remain human/`scripts/release.sh` territory.
+main`, **never** tags, and **never** promotes — those belong to `promote` and CONVENTIONS §6's release rung.
 
 **The caller here need not be a human-opened session.** A scheduled driver — a per-repo autopilot
 that ships and triages on a cadence — is a legitimate caller of `ship`, subject to this identical
@@ -1363,7 +1363,8 @@ A **generated** file is one matching `package-lock.json`,
 ### Promotion (`colab promote`) — trunk → main, split from release
 
 The ladder has three rungs with **separate permissions**: `ship` (branch → trunk) · `promote`
-(trunk → main, a `--no-ff` merge) · **release** (the tag — *always* human). `colab promote` is the
+(trunk → main, a `--no-ff` merge) · **release** (the tag — candidates automatic, final tag by
+exposure; CONVENTIONS §6). `colab promote` is the
 checked door for the middle rung. It **never tags and never deploys directly**; there is no
 `--tag`/`--release` flag.
 
@@ -1451,7 +1452,7 @@ either with a bare `git push` — the guard blocks trunk and main.
 - **Promotion is split from release.** `colab promote` (trunk → main) requires `COLAB_HUMAN=1` on a
   `deploy: push-main` repo (promotion *is* the production deploy) and allows an unattended main-loop
   run only on `deploy: tag` + `promotion: main-loop` (verification-only); unknown `deploy`/`promotion`
-  values fail closed to human. It never tags — release stays a human `git tag`. The guard also blocks
+  values fail closed to human. It never tags — the release rung is separate (CONVENTIONS §6). The guard also blocks
   raw pushes to `main` on tier-A repos without `COLAB_PROMOTE=1`/`COLAB_HUMAN=1` (`COLAB_SHIP` does not
   open main). See *Promotion* above.
 - `worktree rm` refuses if the worktree has uncommitted **tracked** changes, unless `--force`.

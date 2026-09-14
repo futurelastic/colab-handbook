@@ -121,7 +121,10 @@ What comes after a trunk merge follows
 legacy `tier` value the same way when that is all a repo declares (`A →
 released`, `C → live`, `B → null`):
 
-- **`released`** (legacy Tier A) — the tag is what ships it, human-only. Two
+- **`released`** (legacy Tier A) — the tag is what ships it. Every automatic
+  tag is a candidate `vX.Y.Z-rc.N`; its final tag is automatic after a clean test
+  period only where nothing deploys from it, and a human act wherever the tag
+  reaches production ([§6's release rung](CONVENTIONS.md#6-releases)). Two
   shapes, decided by `trunk:`, never by the legacy tier letter: `trunk: dev`
   (the ordinary two-branch case) is promotion `dev` → `main` (`--no-ff`, never
   squash) plus a `v*.*.*` tag; `trunk: main` (single-trunk, tag-gated) has no
@@ -152,9 +155,12 @@ path `.md`/`.mdx`/`.txt` or under a top-level `docs/`, none of them agent rules
 or config (`CLAUDE.md`, `AGENTS.md`, `.claude/`, `.github/`, `.githooks/`), no
 binary, no symlink, not empty. Ship computes this from the diff; you never
 assert it, and every other precondition still applies
-([§2](CONVENTIONS.md#autonomy--the-docs-only-exception-345)). This exception never
-extends to promotion, tags, or anything that deploys — those are human on
-every repo, with no field that can say otherwise. `deploy: manual` is not a
+([§2](CONVENTIONS.md#autonomy--the-docs-only-exception-345)). Neither exception
+extends to promotion, tags, or anything that deploys: neither `auto-trunk` nor
+the docs-only path authorizes any of them, and no field can say otherwise.
+Anything that deploys stays human; a tag is automatic only where
+[§6's release rung](CONVENTIONS.md#6-releases) says so, and never through
+`colab ship`. `deploy: manual` is not a
 loophole: with no automated gate after the promotion, it is the *strictest*
 case, and `colab promote` requires a human there exactly as it does on
 `push-main`. `exposure: live` is not a loophole either — `auto-trunk` there

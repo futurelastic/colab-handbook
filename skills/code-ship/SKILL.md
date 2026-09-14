@@ -29,14 +29,17 @@ the same regardless of `ceremony`.
 
 ## Principle
 
-**Agents prepare releases; humans perform them** — either directly, per run, or once,
-standing, through a grant the repo's own `project.yml` declares. A trunk merge here is
-always authorized, never inferred — see *What counts as "a human said go"*, below, for
-the two shapes that authorization takes depending on whether the repo carries
+**A trunk merge is authorized, never inferred; a release is never this skill's act.**
+Authorization comes from a human — either directly, per run, or once, standing, through a
+grant the repo's own `project.yml` declares; see *What counts as "a human said go"*,
+below, for the two shapes it takes depending on whether the repo carries
 `autonomy: auto-trunk`. Do not open a PR, push trunk, promote to `main`, or tag on your
 own initiative; **no authorization of either shape ever covers those** — both are scoped
-to the trunk-merge step (B2) alone, on every repo, on every tier, with no field able to
-say otherwise.
+to the trunk-merge step (B2) alone, on every tier, with no field able to say otherwise.
+Tagging is not this skill's under any rule: whether a tag may be cut without a human at
+all is [`CONVENTIONS.md` §6's release rung](../../CONVENTIONS.md#6-releases) (automatic
+candidates; a final tag automatic only where nothing deploys from it) — a separate act by
+a release skill in a coordinator session, never a step of this one.
 
 ## 0. Verify the hand-off contract — don't trust the report, re-derive it
 
@@ -148,10 +151,11 @@ graded branch sitting unshipped because the coordinator held out for evidence th
 already gave, once, in `project.yml`.
 
 **This carve-out is scoped exactly to the trunk-merge step (B2) and nothing past it.**
-It never authorises a promotion, a tag, or anything that deploys, on any repo, on any
-tier — those stay human-only regardless of `autonomy`, with no field able to say
-otherwise (`CONVENTIONS.md`, same section: "Never promotes and never tags, on any repo,
-on any tier"). And it widens *who* may act once the gates are clear — it does not
+It never authorises a promotion, a tag, or anything that deploys, on any tier — those
+are outside `autonomy` entirely, with no field able to say otherwise (`CONVENTIONS.md`,
+same section: a scheduler "never promotes … and never tags by itself"; whether a tag may
+be automatic at all is [§6's release rung](../../CONVENTIONS.md#6-releases), an act this
+skill never performs). And it widens *who* may act once the gates are clear — it does not
 loosen the gates themselves: a red trunk with no proven cure and no valid CI grant, an
 unresolved new migration, an open checklist item with no declared remainder, or any
 other precondition below failing is still a stop, exactly as it is for a human-triggered
@@ -1233,7 +1237,8 @@ Merging to trunk is **not** a release. What comes next follows
 legacy `tier` value the same way when that is all a repo declares (`A → released`,
 `C → live`, `B → null`):
 
-- **`released`** — the tag is what ships it, human-only, per `CONVENTIONS.md` [§6](../../CONVENTIONS.md#6-releases).
+- **`released`** — the tag is what ships it, and this skill never cuts it: whether a
+  candidate or final tag may be automatic follows `CONVENTIONS.md` [§6's release rung](../../CONVENTIONS.md#6-releases).
   Two shapes, decided by `<trunk>`, never by the legacy tier letter: `<trunk>: dev` (the
   ordinary two-branch case) is promotion `dev` → `main` (`--no-ff`, never squash)
   plus a `v*.*.*` tag; `<trunk>: main` (single-trunk, tag-gated — this repo's own

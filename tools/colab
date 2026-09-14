@@ -5125,8 +5125,8 @@ function cmdReleaseNotes(argv) {
 //
 // CONVENTIONS §6 tells an agent: "if you believe a release is overdue ... say so explicitly in
 // your report." Nothing computed whether one IS overdue — this does, read-only. It never promotes,
-// never tags, never suggests running a release ritual unattended: the release itself stays a
-// human's on every repo, exactly as everywhere else in this CLI (see `promote`, `ship` above).
+// never tags, never suggests running a release ritual unattended: who cuts a tag is
+// CONVENTIONS §6's release rung, never this command — exactly as `promote` and `ship` above never tag.
 //
 // THE MEASUREMENT GOTCHA THIS IS BUILT AROUND. On a dual-trunk repo (trunk `dev`, promoted into
 // `main`) tags live on `main` and are NOT ancestors of the trunk. `git describe` run from the trunk
@@ -5166,8 +5166,10 @@ function ccSummary(repoAbs, range) {
 }
 
 /**
- * feat -> minor, fix -> patch, a breaking change -> major. ADVISORY ONLY: the version number is
- * always the human's — this does arithmetic on Conventional-Commit types, never chooses a release.
+ * feat -> minor, fix -> patch, a breaking change -> major. An INPUT, not a verdict (CONVENTIONS §6):
+ * the coordinator cutting a candidate confirms or overrides it with a stated reason — pre-1.0 a
+ * `major` becomes a minor, and any X.0.0 is a human's call. This does arithmetic on
+ * Conventional-Commit types; it never chooses a release.
  */
 function semverSuggestion(cc) {
   if (cc.breaking) return { bump: 'major', why: 'a breaking change (! or BREAKING CHANGE:) since the last tag' };
@@ -5242,7 +5244,7 @@ const HELP_RELEASE_STATUS = `colab release-status [<repo> ...] [--repo <path>] [
 Read-only. Measures merged-but-UNRELEASED lag on tag-gated repos (deploy: tag) — the rung
 CONVENTIONS.md §6 asks a human to notice by eye ("if you believe a release is overdue, say so") and
 nothing computed until now. NEVER promotes, never tags, never suggests running a release ritual
-unattended — the release itself stays a human's on every repo, exactly as \`promote\`/\`ship\` above.
+unattended — who cuts a tag is CONVENTIONS §6's release rung, never this command (nor \`promote\`/\`ship\`).
 
   <repo> ...     limit a fleet sweep the same way \`colab update\` does — an absolute path, or a
                  trailing path segment ("my-repo", "company/project"). Ignored together with --repo.
@@ -5261,9 +5263,10 @@ Per tag-gated repo:
   flag              true when a fix:-typed (or breaking) commit sits in EITHER gap — the exact class
                      of commit CONVENTIONS §6 already singles out ("an unreleased production fix ...
                      has bitten before").
-  semverSuggestion  ADVISORY ONLY, from Conventional-Commit types since the last tag: a breaking
-                     change (! or a BREAKING CHANGE: footer) -> major, else feat -> minor, else
-                     fix -> patch, else no suggestion. The version number is always the human's.
+  semverSuggestion  from Conventional-Commit types since the last tag: a breaking change (! or a
+                     BREAKING CHANGE: footer) -> major, else feat -> minor, else fix -> patch,
+                     else no suggestion. An input the coordinator confirms or overrides with a
+                     stated reason (CONVENTIONS §6); an agent never cuts a major.
 
 Each row best-effort fetches \`origin/main\` (and \`origin/<trunk>\` on a dual-trunk repo) first; a
 fetch failure does not abort the row — it degrades to whatever is on disk and says so (stale: true)
@@ -5337,7 +5340,7 @@ function cmdReleaseStatus(argv) {
   if (flagged.length) {
     print(`${flagged.length} repo(s) FLAGGED — a fix or breaking commit is sitting unreleased/unpromoted:`);
     for (const r of flagged) print(`  ${r.repo}`);
-    print('Releasing is a human decision on every repo (CONVENTIONS §6) — this only measures the gap.');
+    print('Who cuts the tag follows the release rung of CONVENTIONS §6 — this only measures the gap.');
   } else {
     print('Nothing flagged.');
   }
@@ -6963,7 +6966,8 @@ function cmdUpdate(argv) {
 //
 // Autonomy is granted by the REPO (project.yml `autonomy: auto-trunk`), never by the caller: a
 // human decides which repos an agent may auto-merge, and --force cannot override that. ship never
-// touches main (when trunk != main), never tags, never promotes — those stay human. Every step is
+// touches main (when trunk != main), never tags, never promotes — promotion stays human, and a tag
+// follows CONVENTIONS §6's release rung, never ship. Every step is
 // gated; any failure aborts cleanly BEFORE the push, so the target is never left half-shipped.
 //
 // The target is the worktree's RECORDED BASE, which is trunk unless the session was cut from a
@@ -10017,7 +10021,7 @@ function cmdHolders(argv) {
 // ---------------------------------------------------------------------------
 // promote — the checked door for PROMOTION (trunk → main), distinct from RELEASE (the tag).
 //
-// The ladder is: ship (branch → trunk) · promote (trunk → main) · release (tag, always human).
+// The ladder is: ship (branch → trunk) · promote (trunk → main) · release (tag — by exposure, CONVENTIONS §6).
 // Promotion permission is split from release permission on purpose: advancing main can be a heavy
 // CI verification step (deploy: tag) that the main-loop may do unattended, OR a production deploy
 // (deploy: push-main) that always needs a human. `promote` NEVER tags and NEVER deploys directly.
@@ -10026,8 +10030,8 @@ function cmdHolders(argv) {
 const HELP_PROMOTE = `colab promote [--repo <path>] [--message "<msg>"] [--dry]
 
 Promote the trunk into main (a --no-ff merge). The SECOND rung after \`ship\`: ship lands work on
-trunk; promote advances main. It NEVER tags and NEVER deploys directly — RELEASE (the tag) stays a
-human step. There is no --tag/--release flag; promote only ever merges trunk→main and pushes main.
+trunk; promote advances main. It NEVER tags and NEVER deploys directly — RELEASE (the tag) is a
+separate rung (CONVENTIONS §6). There is no --tag/--release flag; promote only ever merges trunk→main and pushes main.
 
 Two gates, both must pass:
   • HARD SAFETY (from the repo's deploy semantics — no field or flag can lower it):

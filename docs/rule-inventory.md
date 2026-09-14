@@ -326,7 +326,7 @@ as an unticked row later — it just quietly stops existing.
 | 206 | A scheduler may complete a trunk merge only where the repo has granted `autonomy: auto-trunk`, and only through `colab ship`, subject to the identical gates as any other caller (CI green or valid CI grant, no new migrations or valid migration grant, no hand-merge conflict, no `--force`). | none | unknown | hard rule |
 | 207 | A repo without `autonomy: auto-trunk` gates a scheduler exactly as it gates every other agent — `ship` refuses, a human runs Phase B. | none | unknown | hard rule |
 | 208 | A genuinely red trunk with no valid CI grant is human-gated, not self-clearing — a scheduler must not queue and wait on it; it parks, states it once, and stops. | none | unknown | hard rule |
-| 209 | A scheduler never promotes (`colab promote`) and never tags, on any repo, on any tier, with no field able to say otherwise. | none | unknown | hard rule |
+| 209 | A scheduler never promotes (`colab promote`) and never tags by itself, on any tier; an automatic tag is only ever a release skill's act in a coordinator session, where §6's release rung permits it. *(amended #335)* | none | unknown | hard rule |
 | 210 | A scheduler must tell a self-clearing blocker (temporarily red CI, a billing outage, a regenerable merge conflict) apart from a human-gated one (no `auto-trunk` grant, an unresolved new migration, an `agent-filed` label still on, a claim held by someone else). | none | unknown | hard rule |
 | 211 | For a human-gated blocker, a scheduler states it once (a comment or a single log line) and then parks — never re-announcing the same unmet gate every cycle. | none | unknown | hard rule |
 | 212 | A migration grant is the one human-gated blocker a driver may watch for clearing without a person acting again mid-cycle — but the grant itself is still only ever created by a human. | none | unknown | hard rule |
@@ -439,7 +439,7 @@ as an unticked row later — it just quietly stops existing.
 | 274 | Tier C release: merge `dev` → `main` with `--no-ff` (never squash) — that merge *is* the deploy; there is no tag step and no "ship it later". | none | unknown | hard rule |
 | 275 | Tagging on Tier C is optional and harmless (nothing fires from it); wanting tags consistently is the signal the repo has earned Tier A. | none | unknown | advisory |
 | 276 | On a `deploy: manual` repo, the release sequence is the same with the last step performed by a person: promote, tag, then run the runbook — promotion there always requires a human, and `promotion: main-loop` cannot say otherwise. | none | unknown | hard rule |
-| 277 | The permission ladder has three rungs: ship (branch→trunk, gated by `autonomy:`), promote (trunk→main, gated by `deploy:` + `promotion:`, safe to automate only where deploy is tag-gated), release (the tag — always a human act, on every repo, with no field able to say otherwise). | none | unknown | hard rule |
+| 277 | The permission ladder has three rungs: ship (branch→trunk, gated by `autonomy:`), promote (trunk→main, gated by `deploy:` + `promotion:`, safe to automate only where deploy is tag-gated), release (the tag, gated by exposure — candidates `vX.Y.Z-rc.N` automatic; final automatic after a clean 3-day test period on `released` with no production, a human act where the tag deploys (`deploy: tag`/`manual`), no tags on `none`/`self`, `live` unchanged). *(amended #335)* | none | unknown | hard rule |
 | 278 | The `pre-push-guard` hook enforces the ship and promote rungs mechanically; `COLAB_SHIP` never opens `main`. | none | unknown | hard rule |
 | 279 | On Tier C the ladder has two rungs, not three, and the second (promotion) is the deploy — promotion always requires `COLAB_HUMAN=1` there; `promotion: main-loop` applies only where `deploy: tag` makes promotion verification-only, so it can never apply to C. | none | unknown | hard rule |
 | 280 | Versioning follows SemVer; patch for fixes, minor for features, major for breaking changes. Pre-1.0 repos use `v0.x.y`, treating minor as "meaningful increment". | none | unknown | default |
@@ -447,7 +447,7 @@ as an unticked row later — it just quietly stops existing.
 | 282 | When the automated release-notes workflow cannot run, the summary is still owed — the manual fallback is `colab release-notes v1.1.0..v1.2.0 \| gh release create v1.2.0 --notes-file - --generate-notes`. | none | unknown | hard rule |
 | 283 | Merged is not released — the gap must be measured (`colab release-status`), not noticed by eye, and it flags whichever gap holds a `fix:`-typed or breaking commit as the class that has bitten before (once, in payroll). | none | #81 | hard rule |
 | 284 | `colab release-status` measures the release lag against `main`, not `dev` — `git describe` run from a `dev` checkout answers a stale question. | none | #81 | hard rule |
-| 285 | `colab release-status`'s suggested next SemVer bump is advisory only — the version number stays the human's. | none | #81 | default |
+| 285 | `colab release-status`'s suggested next SemVer bump is an input the coordinator confirms or overrides with a stated reason; an agent never cuts a major. *(amended #335)* | none | #81 | default |
 | 286 | Do not tag from `dev`. Do not tag a commit that has not passed the full suite on `main`. | none | unknown | hard rule |
 
 ## §7 — CI and toolchain
@@ -636,7 +636,7 @@ with the row(s) they illustrate:
 | 390 | `autonomy:` is optional (`manual` default, or `auto-trunk`), controlling how much of Phase B (merge to trunk) an agent may perform alone. | none | unknown | hard rule |
 | 391 | `manual`/absent: an agent stops after Phase A; a human triggers the merge. | none | unknown | default |
 | 392 | `auto-trunk`: an agent may complete the trunk merge itself through `colab ship` only, and only when every precondition passes (trunk CI alive and green, no new DB migrations, no hand-code conflicts after sync-regen) — any ✗ falls back to asking a human. | none | unknown | hard rule |
-| 393 | `autonomy:` grants trunk autonomy only — promotion, tags, and anything that deploys remain human acts on every repo, always; the field cannot express otherwise. | none | unknown | hard rule |
+| 393 | `autonomy:` grants trunk autonomy only — never promotion, a tag, or anything that deploys; the field cannot express otherwise (tags follow §6's release rung). *(amended #335)* | none | unknown | hard rule |
 | 394 | The `autonomy:` grant lives in the repo file, not the caller's flags, so it is a property of the repo's risk profile, reviewed in a commit like any other change. | none | unknown | hard rule |
 | 395 | `ceremony:` is optional (`standard` default/omission changes nothing; `light` for beta/testing repos), a separate axis from `tier` — tier counts gates to production, ceremony answers whether anyone will ever comb through the audit trail. | none | unknown | hard rule |
 | 396 | `ceremony: light` relaxes three things: evidence & narration (Phase B evidence comments skipped, issue narration distills real gotchas only), readiness ceremony (skips the `deps-checked` labeling pass), and audit severity (memory-ceremony gaps downgrade to advisories). | none | unknown | hard rule |
@@ -645,7 +645,7 @@ with the row(s) they illustrate:
 | 399 | `ceremony: light` is incompatible with `autonomy: auto-trunk` — an unattended merge with no evidence trail is a closure nobody can audit. | none | unknown | hard rule |
 | 400 | The known drift risk for `ceremony: light` is a repo marked light "for now" that grows real users — rule 398 is the backstop, flagged the moment `production:` gains a URL. | none | unknown | advisory |
 | 401 | `ceremony: light` also enables solo flow, entry-gated by `colab solo`, which itself refuses outright on any repo not `ceremony: light`. | none | unknown | hard rule |
-| 402 | `promotion:` is optional (`human` default, or `main-loop`), naming who may run the trunk→main promotion without a per-instance human word — distinct from release (the tag), which is always human. | none | unknown | hard rule |
+| 402 | `promotion:` is optional (`human` default, or `main-loop`), naming who may run the trunk→main promotion without a per-instance human word — distinct from release (the tag), which follows §6's release rung by exposure. *(amended #335)* | none | unknown | hard rule |
 | 403 | `promotion: main-loop` applies only on a `deploy: tag` repo, where promotion is verification-only (nothing deploys from it); unknown values fail closed to `human`. | none | unknown | hard rule |
 | 404 | `promotion:` cannot lower the bar `deploy:` sets — on `push-main` promotion IS the deploy, on `manual` promotion is the human's signal to deploy, both always require `COLAB_HUMAN=1`; only `deploy: tag` makes promotion verification-only. | none | unknown | hard rule |
 | 405 | Nothing in `promotion:` ever authorizes tagging. | none | unknown | hard rule |

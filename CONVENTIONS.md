@@ -717,7 +717,8 @@ A refusal keeps the existing message and adds one line naming why the change is 
 A branch is measured **again after B0 sync**, before the squash, so a `pre-ship` hook that
 regenerated a file cannot carry code in behind the first verdict. The pre-push guard needs no
 change: the push still carries `COLAB_SHIP=1` because ship ran its own preconditions. It grants
-nothing past the trunk merge — promotion, tags and deploys stay human on every repo.
+nothing past the trunk merge — promotion and deploys stay human, and a tag follows
+[§6's release rung](#6-releases), never `colab ship`.
 
 **Nothing widens the allowlist.** No `project.yml` field, flag or environment variable can add
 to it: `tools/lib/docs-only.js` holds both lists as constants. Widening it is a handbook change,
@@ -2341,8 +2342,11 @@ self-clearing** — a scheduler must not queue and wait on it; it parks, states 
 and stops. A scheduler never mints a ci-grant itself either way — only the cure rule's
 mechanical door is available to it unattended, exactly as it is to any other caller.
 
-**Never promotes and never tags, on any repo, on any tier**, with no field able to say
-otherwise.
+**Never promotes, on any repo, on any tier**, with no field able to say otherwise — **and
+never tags by itself.** A tag is cut without a human only where
+[§6's release rung](#6-releases) allows it, and then by a release skill in a coordinator
+session that re-checks every condition — never by the driver directly, never through
+`colab ship`, and never a final tag where the tag deploys production.
 
 A scheduler must tell a **self-clearing** blocker (temporarily red CI, a billing outage,
 a regenerable merge conflict) apart from a **human-gated** one (no `auto-trunk` grant, an
@@ -2801,7 +2805,8 @@ the signal the repo has earned Tier A.
 
 On a `deploy: manual` repo the sequence is the same, the last step performed by a person:
 promote, tag, then run the runbook — promotion there always requires a human, and
-`promotion: main-loop` cannot say otherwise.
+`promotion: main-loop` cannot say otherwise. The final tag there is a human act too
+(*The release rung*, below).
 
 **Human gate count follows [exposure](#exposure--what-consumes-a-merge-here), not
 preference.** An up-front yes can authorize an intent; it cannot authorize a result
@@ -2810,13 +2815,15 @@ result share one reader, so [solo flow](#solo-flow--trunk-direct-issue-on-demand
 single decision-time authorization already covers the whole cycle — decide, lock, do,
 commit, record, unlock — with no separate look at the diff required. Where a merge
 reaches beyond the room (`live`, `released`), the two audiences differ, so the gates must
-too: approve the idea, then look at what actually shipped. The permission ladder below is
-that second case, at full length.
+too: approve the idea, then look at what actually shipped — on `released` with no
+production, that look is a candidate's test period and its veto. The permission ladder
+below is that second case, at full length.
 
 **The permission ladder, one rung per boundary:** **ship** (branch→trunk, gated by
 `autonomy:`) · **promote** (trunk→main, gated by `deploy:`+`promotion:` — safe to
-automate only where deploy is tag-gated) · **release** (the tag — always a human act, on
-every repo, with no field able to say otherwise). The `pre-push-guard` hook enforces the
+automate only where deploy is tag-gated) · **release** (the tag, gated by exposure:
+automatic candidates, and a final tag that is automatic only where nothing deploys from
+it — *The release rung*, below). The `pre-push-guard` hook enforces the
 first two mechanically; `COLAB_SHIP` never opens `main`.
 
 **`COLAB_SHIP` and `COLAB_PROMOTE` are process-identity assertions, not permissions — an
@@ -2850,8 +2857,72 @@ where `deploy: tag` makes promotion verification-only, so it can never apply to 
 Nothing about C widens what an agent may do: `autonomy: auto-trunk` still only ever
 merges into `dev`, which does not deploy.
 
+**The release rung — who cuts a tag follows exposure (#330).** An agent may cut a tag
+without a human only where this table says so. Every tag an agent cuts starts as a
+release candidate, `vX.Y.Z-rc.N`; the final `vX.Y.Z` is that candidate's commit, tagged
+final.
+
+| Repo | Candidate `vX.Y.Z-rc.N` | Final `vX.Y.Z` |
+|---|---|---|
+| `exposure: none` / `self` | no tags | no tags |
+| `exposure: released`, `production: null` (`deploy: none`) — adopters install it, nothing deploys | automatic, once every condition below holds | automatic after a clean test period; a human may veto during it |
+| `exposure: released`, `deploy: tag` — the tag deploys production | automatic; the agent prepares everything | a human act (one click) |
+| `exposure: released`, `deploy: manual` — a person deploys from the tag | automatic | a human act: the final tag marks what a person is about to deploy |
+| `exposure: live` (Tier C) | unchanged — no automatic tags; the promotion is the deploy and stays human; tagging stays optional | — |
+
+Anything the table does not name — an undeclared or unknown `exposure`, a bare legacy
+`tier: B`, a `released` repo whose `deploy` matches no row — gets no automatic tag: fail
+closed, a human tags. Legacy `tier: A` reads as `released` and takes the row its `deploy`
+names. Where the final tag is a human act, nothing in `project.yml` lowers that, and no
+field lets an agent cut a major (*Versioning*, below).
+
+**A candidate is cut only when all four hold, on the exact commit it names:**
+
+1. **CI green on that commit** — every run at that sha finished and one succeeded; a
+   green trunk head later on does not count for it.
+2. **The full suite passed on it** — the rule at the end of this section, unchanged.
+3. **Every schema change since the last final tag is additive**
+   ([*Switched epics*](#switched-epics--concurrent-unfinished-features-336), rule 5). A
+   release carrying a destructive one is not a candidate an agent cuts; a human decides it.
+4. **Switch dependencies are satisfied**
+   ([*Switched epics*](#switched-epics--concurrent-unfinished-features-336), rule 3).
+
+**The test period is 3 days, and it is clean only if trunk CI stayed green throughout
+and no regression against the candidate is open.** It matters only on the automatic-final
+row. A human vetoes by holding the candidate during it; a held candidate is not finalized.
+**Finalizing re-checks every condition above at the moment it runs** — a candidate that
+was clean when cut and is not now stays a candidate. Where the final tag is a human act,
+the agent's work ends with the candidate, its release notes, and the one command that
+finalizes it.
+
+**Who acts on this rung: a release skill run in a coordinator session** — no daemon,
+never a scheduler by itself
+([*Scheduled drivers*](#scheduled-drivers--provenance-and-autonomy-meet-a-caller-that-is-not-a-person)),
+and never `colab ship`, `colab promote` or `code-ship`, none of which tags. This rung is
+the permission; the tooling that exercises it (#338, #339) lands after it, and until it
+does no agent tags by hand on the strength of this rung. A deploy must never fire on a
+candidate: [`templates/release-tag.yml`](templates/release-tag.yml) publishes `-rc` tags
+as pre-releases, the audit flags a deploy trigger that matches one, and every
+current-release read skips them.
+
 **Versioning** — SemVer. Patch for fixes, minor for features, major for breaking changes.
 Pre-1.0 repos use `v0.x.y`, treating minor as "meaningful increment".
+
+**Which number an agent picks for a candidate:**
+
+- **fixes only** since the last final tag → **patch** (`1.2.0` → `1.2.1`);
+- **a finished epic** (its switch-removal child merged), or any other new feature →
+  **minor** (`1.2.1` → `1.3.0`);
+- **never a major.** `1.0.0` and every later `X.0.0` is a human decision; an agent that
+  finds a breaking change on a ≥1.0 repo cuts nothing and says so;
+- **pre-1.0, a breaking change ships as a minor** (SemVer §4 — anything may change at
+  `0.y.z`): `0.4.2` → `0.5.0`.
+
+**The judgement an agent owes is the breaking change the commit types don't reveal** — a
+destructive schema change, a config-format change, an API contract change, merged as
+`feat:` or `fix:` with no `!`. Read the diff since the last final tag, not only its
+subjects, and **put the reasoning in the release notes**: the bump chosen, why, and each
+breaking change found — or that none was, and what was checked.
 
 **An unfinished feature never waits for a release, and never reaches one switched on.** On
 a repo that tags, a feature landing over several merges is an epic behind a switch: it
@@ -2874,7 +2945,10 @@ colab release-notes v1.1.0..v1.2.0 | gh release create v1.2.0 --notes-file - --g
 `colab release-status [--repo P] [--json]` (#81) reports commits on `dev` not yet
 promoted, commits on `main` past the last `v*` tag (plus days since), and flags whichever
 gap holds a `fix:`-typed or breaking commit — exactly the class that has bitten before,
-in payroll. Its suggested SemVer bump is advisory only. Measured against `main`, never
+in payroll. Its suggested SemVer bump is an input, not a verdict: the coordinator
+confirms or overrides it and states the reason in the release notes — it reads commit
+types, so it cannot see a breaking change the types don't reveal, and its `major` is never
+an agent's to cut (pre-1.0 it becomes a minor). Measured against `main`, never
 `dev` — `git describe` from a `dev` checkout answers a stale question.
 
 Do not tag from `dev`. Do not tag a commit that has not passed the full suite on `main`.
@@ -3350,9 +3424,12 @@ colab landed --worktree <name>                    # landed → teardown, cargo �
 git checkout <base> && git merge --squash feat/<slug>-N   # base = trunk, or a declared line
 gh issue edit N --remove-assignee @me --remove-label in-progress   # both halves — one alone is a half-claim
 
-# releasing — TIER A ONLY
+# releasing — Tier A / exposure: released (who tags follows §6's release rung)
 git checkout main && git merge --no-ff dev && git push   # --no-ff, never squash
-git tag v1.2.0 && git push origin v1.2.0                 # the tag deploys
+git tag v1.3.0-rc.1 && git push origin v1.3.0-rc.1       # candidate — automatic once §6's four conditions hold
+git tag v1.3.0 && git push origin v1.3.0                 # final — automatic after 3 clean days where nothing deploys;
+                                                         #   a human act where the tag deploys (deploy: tag / manual)
+# an agent picks patch or minor, never X.0.0; its reasoning goes in the release notes
 ```
 
 ---

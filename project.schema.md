@@ -391,9 +391,10 @@ How much of a session's Phase B (merge to **trunk**) an agent may perform alone.
   DB migrations in the branch, no hand-code conflicts after sync-regen. Any ✗ falls
   back to asking a human.
 
-This grants **trunk** autonomy only. Promotion `dev` → `main`, tags, and anything
-that deploys remain human acts on every repo, always — the field cannot express
-otherwise. The grant lives in the repo file (not the caller's flags) so autonomy is
+This grants **trunk** autonomy only — never promotion, a tag, or anything that
+deploys; the field cannot express otherwise. Promotion follows
+[`promotion`](#promotion--optional) and `deploy`; a tag follows
+[CONVENTIONS §6's release rung](CONVENTIONS.md#6-releases). The grant lives in the repo file (not the caller's flags) so autonomy is
 a property of the repo's risk profile, reviewed in a commit like any other change.
 
 ### `room` — optional
@@ -808,7 +809,9 @@ promotion: main-loop     # human (default) · main-loop
 ```
 
 Who may run the **promotion** (`trunk → main`, via `colab promote`) without a
-per-instance human word. Distinct from **release** (the tag), which is always human.
+per-instance human word. Distinct from **release** (the tag), which follows exposure
+([CONVENTIONS §6](CONVENTIONS.md#6-releases)): automatic candidates, and a human final
+tag wherever the tag deploys production.
 
 - `human` (or absent) — promotion needs `COLAB_HUMAN=1`.
 - `main-loop` — the main loop may promote unattended, **but only on a
@@ -824,7 +827,8 @@ authorizes tagging.
 
 The full permission ladder, one rung per boundary:
 **ship** (branch→trunk, gated by `autonomy`) · **promote** (trunk→main, gated by
-`deploy`+`promotion`) · **release** (tag, always human).
+`deploy`+`promotion`) · **release** (tag — candidates automatic, final tag by exposure,
+[CONVENTIONS §6](CONVENTIONS.md#6-releases)).
 
 ### `generated` — optional
 

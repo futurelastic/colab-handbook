@@ -99,6 +99,8 @@ channels: [artifact]
 # no new migrations without a grant, no hand-code conflict). A refusal means a
 # human finishes, never that the tool improvises around it.
 # What it does NOT grant, on this repo or any other: promotion, tags, or anything
-# that reaches production. This repo is `exposure: released` — the tag that ships
-# it stays a human act, and no field can say otherwise.
+# that reaches production — `colab ship` never tags. This repo is `exposure: released`
+# with `production: null`, so under CONVENTIONS §6's release rung its candidates
+# finalize automatically after a clean test period unless a human vetoes — a
+# permission that comes from §6, never from this grant.
 autonomy: auto-trunk
