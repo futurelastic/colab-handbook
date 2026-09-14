@@ -2826,7 +2826,8 @@ Run it on a schedule; only genuine findings fail the exit code.
 ### How repos find out when the handbook changes
 
 The handbook is git-tagged `vX.Y.Z` (its current version is
-`git describe --tags --abbrev=0`; before the first tag it is treated as `v0` and stamp
+`git describe --tags --abbrev=0 --exclude '*-*'` — a pre-release tag such as `v1.3.0-rc.1` is
+never the current version, #334; before the first release tag it is treated as `v0` and stamp
 checks stay inactive). Templates are **copy-and-own**, never called remotely. Every copy
 is **stamped** with the handbook version it came from:
 

@@ -981,7 +981,8 @@ colab release-notes v0.3.0..v0.4.0 | gh release create v0.4.0 --notes-file - --g
 
 `colab template` copies a handbook workflow template (`../templates/*.yml`) into a repo
 and **prepends a version stamp** — `# colab-handbook: <name> @ <version>`, where the
-version is `git describe --tags` in the handbook checkout (`v0` before any tag). With no
+version is `git describe --tags` in the handbook checkout, pre-release tags excluded
+(`tools/lib/release-tag.js`, #334; `v0` before any release tag). With no
 name it lists the available templates; it refuses to overwrite an existing destination
 unless `--force` (and prints a `diff` hint instead). The stamp exists so
 `../audit/audit.mjs` can later tell an adopter that the source template has changed since
