@@ -24,6 +24,35 @@
 # noise when a release contains thirty commits. The grouped summary answers "what
 # actually changed" at a glance; the generated notes stay for full traceability.
 #
+# PRE-RELEASE TAGS (release candidates, `vX.Y.Z-rc.N`). This workflow fires on them —
+# GitHub's `*` matches `-` and `.`, so the `v*.*.*` trigger below matches `v1.3.0-rc.1`
+# as well as `v1.3.0`. That is deliberate HERE: a candidate deserves a record too. What
+# it must not do is pass for a final release, so both decisions come from the tag NAME,
+# never from a constant:
+#
+#   tag            GitHub Release        summary diffs against
+#   -------------  --------------------  -------------------------------------------------
+#   v1.3.0-rc.1    pre-release           the previous FINAL tag (e.g. v1.2.1) — never
+#                                        an earlier candidate, so rc.2 also lists
+#                                        everything since v1.2.1
+#   v1.3.0         full release          the previous FINAL tag (e.g. v1.2.1) — NOT
+#                                        v1.3.0-rc.1, which would list almost nothing
+#
+# "Pre-release" = the tag name contains a `-` (SemVer §9). "Previous final" = the nearest
+# `v*.*.*` tag reachable from the tag's parent whose name contains no `-`. None → the
+# summary covers all history, candidate or final alike.
+#
+# ⚠ YOUR DEPLOY WORKFLOW MUST NOT FIRE ON A CANDIDATE. The same `*` rule means a deploy
+# triggered on `v*.*.*` (or `v*`) deploys `v1.3.0-rc.1` to production — the first
+# candidate anyone cuts ships. Exclude pre-releases explicitly in deploy-*.yml; a `!`
+# pattern only removes what an EARLIER positive pattern in the same list matched:
+#
+#   on:
+#     push:
+#       tags:
+#         - "v*.*.*"        # every version tag…
+#         - "!v*.*.*-*"     # …except a pre-release (v1.3.0-rc.1, v2.0.0-beta.2)
+#
 # NO TOOLCHAIN RESOLUTION HERE. This workflow installs neither Node nor PHP — it is
 # git plus shell. There is no version to resolve, so there is nothing to declare.
 #
@@ -37,8 +66,10 @@ name: Release
 on:
   push:
     tags:
-      # EDIT: only if this repo uses a different tag shape. Keep it strict —
-      # the audit tool and the deploy workflow both key off v*.*.*
+      # EDIT: only if this repo uses a different tag shape. This pattern matches
+      # pre-release tags too (v1.3.0-rc.1) ON PURPOSE — see "PRE-RELEASE TAGS" above:
+      # a candidate gets a pre-release record here. A DEPLOY workflow must never copy
+      # this list as-is; it needs the "!v*.*.*-*" exclusion shown in the header.
       - "v*.*.*"
 
 env:
@@ -53,7 +84,8 @@ env:
   ARTIFACT_NAME: ""
   # EDIT: "true" to publish as a draft so a human edits before it goes out.
   RELEASE_DRAFT: "false"
-  RELEASE_PRERELEASE: "false"
+  # No RELEASE_PRERELEASE constant, on purpose: a fixed "false" published a candidate
+  # tag as a full release. Pre-release is derived from the tag name in the step below.
 
 jobs:
   release:
@@ -77,17 +109,30 @@ jobs:
           TAG="${GITHUB_REF_NAME}"
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
 
-          # Previous tag = nearest annotated/lightweight v* tag reachable from this
-          # one, excluding itself. Empty on the very first release.
-          PREV="$(git describe --tags --abbrev=0 --match 'v*.*.*' "${TAG}^" 2>/dev/null || true)"
+          # Pre-release = the tag name carries a SemVer pre-release suffix (`-rc.1`,
+          # `-beta.2`). Derived from the name, never a constant.
+          case "$TAG" in
+            *-*) PRERELEASE=true ;;
+            *)   PRERELEASE=false ;;
+          esac
+          echo "prerelease=$PRERELEASE" >> "$GITHUB_OUTPUT"
+
+          # Previous tag = nearest v*.*.* tag reachable from this tag's parent that is
+          # NOT itself a pre-release — for a candidate and a final alike. Without the
+          # --exclude, `v*.*.*` matches `v1.3.0-rc.1`, and the final v1.3.0's summary
+          # would diff against its own candidate and list almost nothing. Empty when no
+          # earlier final exists (first release).
+          PREV="$(git describe --tags --abbrev=0 --match 'v*.*.*' --exclude '*-*' "${TAG}^" 2>/dev/null || true)"
           echo "prev=$PREV" >> "$GITHUB_OUTPUT"
 
+          KIND="Release"
+          [ "$PRERELEASE" = true ] && KIND="Pre-release"
           if [ -n "$PREV" ]; then
             echo "range=${PREV}..${TAG}" >> "$GITHUB_OUTPUT"
-            echo "Release $TAG — comparing against $PREV"
+            echo "$KIND $TAG — comparing against previous final $PREV"
           else
             echo "range=$TAG" >> "$GITHUB_OUTPUT"
-            echo "Release $TAG — first release, summarising all history"
+            echo "$KIND $TAG — no earlier final tag, summarising all history"
           fi
 
       # MIRRORS the `colab release-notes` subcommand (tools/colab in this handbook). The two
@@ -95,7 +140,8 @@ jobs:
       # no Node) — so they are deliberate duplicates of the same grouping logic. If you change
       # the grouping or output format here, make the matching edit in tools/colab (and vice
       # versa). `colab release-notes` exists so this summary can be built by hand when CI can't
-      # run (e.g. an org billing-lock on Actions).
+      # run (e.g. an org billing-lock on Actions). The mirror is the GROUPING; which tag is
+      # "previous" is decided in the step above, and a pre-release must never be it.
       - name: Build grouped release summary
         id: notes
         env:
@@ -192,6 +238,8 @@ jobs:
           # Appends GitHub's own PR/contributor notes underneath our grouped summary.
           generate_release_notes: true
           draft: ${{ env.RELEASE_DRAFT == 'true' }}
-          prerelease: ${{ env.RELEASE_PRERELEASE == 'true' }}
+          # From the tag name (steps.tags) — a `-rc.N` tag is never published as a full,
+          # "Latest" release.
+          prerelease: ${{ steps.tags.outputs.prerelease == 'true' }}
           files: ${{ env.ATTACH_ARTIFACTS == 'true' && 'release-artifacts/**/*' || '' }}
           fail_on_unmatched_files: false
