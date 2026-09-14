@@ -129,16 +129,44 @@ function branchRefs(repo, branch) {
  * Local wins when both exist (it is the one a `git worktree add -b` would actually collide
  * with). Returns `{ ref, sha }` (sha short, 7 chars) or `null` when neither resolves.
  */
-function existingBranchRef(repo, branch) {
+function existingBranchRef(repo, branch, remoteName = claimRemote(repo) || 'origin') {
   if (!branch || typeof branch !== 'string') return null;
   const local = git(['rev-parse', '--verify', '--quiet', `refs/heads/${branch}`], repo);
   if (local.ok && local.stdout) return { ref: `refs/heads/${branch}`, sha: local.stdout.slice(0, 7) };
-  const remote = git(['ls-remote', '--exit-code', 'origin', `refs/heads/${branch}`], repo);
+  const remote = git(['ls-remote', '--exit-code', remoteName, `refs/heads/${branch}`], repo);
   if (remote.ok && remote.stdout) {
     const sha = remote.stdout.split(/\s+/)[0] || '';
-    return { ref: `refs/remotes/origin/${branch}`, sha: sha.slice(0, 7) };
+    return { ref: `refs/remotes/${remoteName}/${branch}`, sha: sha.slice(0, 7) };
   }
   return null;
+}
+
+/**
+ * The git remote a CLAIM is recorded on (#325) — the one place that answers "which remote", so #301
+ * (hardcoded `origin` everywhere) swaps a single function instead of hunting the claim path for
+ * literals. Today: `origin` when it resolves, else `null` — a repo with no remote at all, where the
+ * local record is the whole truth because nothing else could ever share the branch.
+ */
+function claimRemote(repo) {
+  return originUrl(repo) ? 'origin' : null;
+}
+
+/**
+ * Every branch head on `remoteName`, asked of the remote directly (`ls-remote --heads`, no fetch, no
+ * local cache) — the claim record another machine can read (#325). Unlike `existingBranchRef`, a
+ * failed ask is NOT "no branches": it returns `{ ok: false, stderr }` so the caller can refuse
+ * (fail closed) instead of reading an unreachable remote as clear ground.
+ * `{ ok: true, heads: [{ branch, sha }] }` otherwise, `sha` short (7).
+ */
+function remoteHeads(repo, remoteName) {
+  const r = git(['ls-remote', '--heads', remoteName], repo, { timeoutMs: 60_000 });
+  if (!r.ok) return { ok: false, stderr: r.stderr || (r.timedOut ? 'ls-remote timed out' : `exit ${r.code}`) };
+  const heads = [];
+  for (const line of String(r.stdout || '').split('\n')) {
+    const m = line.match(/^([0-9a-f]{7,})\s+refs\/heads\/(.+)$/);
+    if (m) heads.push({ branch: m[2], sha: m[1].slice(0, 7) });
+  }
+  return { ok: true, heads };
 }
 
 /** List worktree paths registered in a repo (porcelain). */
@@ -629,6 +657,7 @@ function ghAssignedIssues(repo) {
 
 module.exports = {
   run, git, repoRoot, mainRepoRoot, originUrl, detectTrunk, branchExists, branchRefs, existingBranchRef,
+  claimRemote, remoteHeads,
   worktreeList, worktreeListDetailed, resolveWorktreePathForBranch, gitFailureLine,
   dirtyTracked, dirtyUntracked, dirtyAny,
   ghAvailable, ghIssueEdit, ghListLabels, ghAssignedIssues,

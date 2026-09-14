@@ -3,15 +3,18 @@
 A tiny, portable CLI that lets **parallel coding sessions and agents on one machine** avoid
 collisions. Three independent capabilities, each usable on its own:
 
-1. **Issue claims** — so two sessions don't grab the same GitHub issue. Written to both local
-   state (fast) and GitHub (`gh issue edit --add-assignee @me --add-label in-progress`), because
-   GitHub is the cross-machine source of truth.
+1. **Issue claims** — so two sessions, on one machine or several, don't grab the same issue. The
+   claim's record is its **branch on the git remote**, pushed at cut and refused against from any
+   machine (#325); also written to local state (fast) and mirrored to GitHub for people
+   (`gh issue edit --add-assignee @me --add-label in-progress`).
 2. **Ports** — every dev server gets a unique port; a project's reserved trunk port is never handed
    to a worktree, even while that trunk server is down.
 3. **Worktrees** — *optional* git worktrees, with machine-specific setup delegated to repo hooks.
 
-Plain Node, **zero npm dependencies**. It shells out to `git` and `gh`. If `gh` is missing or a
-repo has no remote, everything degrades to local-only and says so — it never hard-fails on that.
+Plain Node, **zero npm dependencies**. It shells out to `git` and `gh`. If `gh` is missing, claims
+still stand and their tracker half is marked pending; a repo with **no remote at all** claims on
+this machine alone and says so. The one hard stop is a remote that exists but cannot be read — a
+claim then fails closed, because it could not be checked against another machine's (#325).
 
 This generalizes three machine-specific scripts (`issues.active`, `ports.reserved`,
 `worktree-new.sh`) so anyone, on any machine, in any repo, across any GitHub owner, can use them.
@@ -129,11 +132,19 @@ branch on it.
 Claims are **enforced, not advisory**. `colab claim` and `colab worktree new --issues` go through
 three gates; `colab release` and `colab worktree rm` close the loop.
 
-### 1. Refusal — check-then-refuse, two layers
+### 1. Refusal — check-then-refuse, three layers
 
-Before a claim is written, colab checks two layers and **refuses with exit 1** if either says the
+Before a claim is written, colab checks three layers and **refuses with exit 1** if any says the
 issue is taken:
 
+- **Remote** (#325, first): `git ls-remote --heads <remote>` — asked of the remote directly, so a
+  clone that never fetched sees what a fresh one would. A branch whose trailing number run
+  (`CONVENTIONS.md` §4) carries the issue, and that no worktree/claim record in *this machine's*
+  state names, is another machine's claim → refuse, naming `<remote>/<branch> @ sha` and the
+  commands to continue it. **Remote unreachable → refused** (no local-only fallback, no `--force`).
+  A repo with no remote at all skips this layer and says so. The branch is pushed by
+  `colab worktree new` at cut (`--force-with-lease=refs/heads/<b>:`, create-only); a failed push
+  with `--issues` removes the worktree + branch again and takes nothing.
 - **Local** (always): if the issue already has a live claim in `state.json` attached to a
   *different* worktree (or a trunk claim vs. a worktree claim), refuse and print the holder —
   worktree, branch, host, and the date since. Re-claiming onto the **same** worktree is idempotent
@@ -153,10 +164,36 @@ issue is taken:
     *your own* sessions on one machine. If a **live** `🔒 Claimed` comment exists from a *different*
     session under your own login+host, refuse and name it — `#N GitHub: live claim comment by
     <identity> (same account, different session)`.
+  - **Another machine** (#325, always on): the assignee set is keyed by login, so it cannot say
+    *which machine* holds the issue. A live `🔒 Claimed` comment under your own login from a
+    different machine (canonical id, #327 — below) refuses: `#N GitHub: live claim comment from
+    another machine (host …) — same account`.
   A failed/blank read is *skipped*, never treated as "free" (same rationale as `claims --sync` being
-  add-only). If `gh` is unavailable the check is **local-only** and says so.
+  add-only). If `gh` is unavailable this layer is skipped and the claim's tracker half is marked
+  **pending** (`trackerPending`, ⚠ in `colab claims`): the claim stands on the remote and locally,
+  and re-running the same claim once `gh` works posts the assign/label, comment and tie-break.
 
-`--force` overrides **both** layers and prints exactly what it takes over
+**One machine, one holder — whatever its hostname (#327).** Every claim and worktree record carries
+`machine`, the canonical id from `lib/machine.js` (hardware-bound, drift-proof), beside the raw
+`host` kept for display. Every comparison — the same-host upgrade, the co-tenant and other-machine
+checks, the tie-break — goes through `claim-identity.js` `sameHost`: machine ids when both sides
+have one, else the canonical hostname (`box.local` = `Box.` = `box.lan`). Legacy records without
+`machine` are canonicalised on read, no migration. `colab doctor` lists records whose host no longer
+matches this machine: *renamed* (same id) or *unproven* (no id / a different one — a pre-#327 rename,
+or a file-synced `~/.colab`). Report-only.
+
+**Planner claims (#326).** `colab claim N --session intent:<id>` holds an issue *before* the session
+that will work it exists — an autopilot on each machine claims, then spawns. It takes no worktree
+and no checkout place-claim, and needs `gh` (the tracker is its only cross-machine record — there is
+no branch yet). The spawned session's `colab claim N --worktree …` or `colab worktree new --issues N`
+from the **same machine** upgrades the record in place (one claim, real session + worktree; the
+tracker's assignee, label and comment are not re-posted). `colab claims` shows it as
+`intent:<id> (planner)`. One still carrying its intent id past `plannerClaimTTLMinutes` (default 30)
+is a spawn that never claimed: `colab doctor` flags it; `doctor --prune --sync` releases its tracker
+half and removes it (plain `--prune` keeps it — doctor only touches the tracker under `--sync`, and
+deleting the local record alone would strand the half other machines see).
+
+`--force` overrides **every** layer except an unreachable remote and prints exactly what it takes over
 (`--force: taking over #7 from worktree "A" …`) — a takeover is always visible, never silent. Every
 refusal ends by reminding you that stale claims from dead worktrees are freed by
 `colab doctor --prune`, so a crashed session can never block an issue forever.
@@ -167,10 +204,14 @@ On each successful claim (when `gh` is usable) colab posts **one** comment, in t
 stable, machine-greppable** format (the refusal path and future dashboards parse it — do not reword):
 
 ```
-🔒 Claimed — worktree `<name|->` · branch `<branch|->` · host `<hostname>` · <ISO timestamp>
+🔒 Claimed — worktree `<name|->` · branch `<branch|->` · host `<hostname>` · <ISO timestamp>[ · machine `m:<12 hex>`][ · session …]
 ```
 
-Both `worktree` and `branch` render as `-` when absent. `branch` used to render the word `trunk`
+Both `worktree` and `branch` render as `-` when absent. `machine` (#327) is appended after the
+timestamp — the four leading fields stay byte-stable for every older reader — and is a **digest**
+(`m:` + sha256 of the canonical id, 12 hex): the raw id is a hardware serial, and the comment is
+public on a public repo. It is omitted when no id resolved; a comment without it is compared by
+canonical hostname. `branch` used to render the word `trunk`
 for a claim that had none, which read as a branch name that never existed.
 
 **A re-claim can never DOWNGRADE a known value (#264).** `branch`, `session` and `sessionName` are

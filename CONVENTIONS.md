@@ -1473,7 +1473,31 @@ Parallel sessions and parallel agents must not collide on the same Issue. Two la
 
 ### Who holds this
 
-#### Source of truth — GitHub
+#### Record of a claim — the branch on the remote
+
+**The record of a claim is its branch on the git remote** — the branch whose name carries
+the issue number ([§4](#4-branches-and-commits)), **pushed the moment it is cut** at session
+start and again at wrap (#325). The git remote is the one store every machine already
+shares, whatever the tracker is, so it is what a claim is refused against: a branch on the
+remote carrying `#N` that is not this machine's refuses a second claim on `#N` from
+anywhere, naming the branch and how to continue it. Each machine sweeps its own worktrees.
+
+- **Remote unreachable → no claim.** Fail closed: a claim checked against nothing is not a
+  lock. A repo with **no remote at all** is the one exception — nothing else could ever share
+  its branches, so the machine's own record is the whole truth.
+- **Tracker unreachable → the claim still stands.** Its tracker half (below) is recorded as
+  *pending* and posted when the same claim is re-run.
+- One account on **two machines** is two holders: a live claim comment from the same login on
+  a different machine refuses too — the assignee set cannot say which machine holds it.
+- A claim names the machine by a canonical id, not its hostname (#327) — one machine spells
+  its hostname more than one way. The comment carries only a digest of that id: the raw id is
+  a hardware serial, and on a public repo the comment is published.
+- A **planner** may hold an issue before the session that will work it exists
+  (`--session intent:<id>`, no worktree, #326). That session's own claim from the same machine
+  upgrades it in place; a planner claim whose session never claimed is released after a short
+  window.
+
+#### Mirror for people — GitHub
 
 ```sh
 gh issue list --label in-progress                               # check, before taking work
@@ -1489,8 +1513,11 @@ until then, `--force` taking it over loudly like any other claim. Our own half-c
 the one exception: re-claiming completes it. Release therefore drops **both** halves;
 removing only the label is what leaves the assignee-only half-claim behind.
 
-Assignee plus `in-progress` is authoritative because it is **visible from any machine
-and to any person**. The label does not exist in a fresh repo — creating it is part of
+Assignee plus `in-progress` is the claim's **mirror for people**, not its lock: it is what a
+human reading the Issue sees, and the half-claim rule above still governs it exactly. It is
+no longer what a claim is refused against across machines — that is the branch on the remote,
+above — because a tracker can change or go down while the git remote is the store every
+machine already shares. The label does not exist in a fresh repo — creating it is part of
 adoption ([§9](#9-adopting-this)).
 
 #### Fast path — local cache
@@ -1498,7 +1525,9 @@ adoption ([§9](#9-adopting-this)).
 `colab` keeps a machine-local cache at `~/.colab/state.json` (override with
 `COLAB_HOME`), written automatically on claim/worktree-create — a zero-latency read for
 same-machine parallel sessions. **It is a cache, not the truth**: uncommitted,
-machine-local, cannot see work claimed elsewhere. **When cache and GitHub disagree,
+machine-local, cannot see work claimed elsewhere. It does answer one question nothing else
+can — *which branches on the remote are this machine's own* — which is why it is never
+file-synced between machines. **When cache and GitHub disagree about the assignee/label,
 GitHub wins.**
 
 ```sh
