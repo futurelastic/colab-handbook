@@ -7,8 +7,11 @@
  * `-rc` tag the audit would have called a deploying one is the two-places drift this repo exists
  * to kill (the release-policy.js precedent). audit.mjs consumes this through createRequire.
  *
- * CommonJS, zero dependencies, pure: text in, facts out.
+ * CommonJS, pure: text in, facts out. Its one in-repo dependency is stamp.js's provenance reading
+ * (#346), so "is this our release-tag template?" has one answer, the one drift reporting trusts.
  */
+
+const { parseWorkflowStamp, workflowProvenance } = require('./stamp.js');
 
 // -------------------------------------------------------- workflow `on:` triggers
 //
@@ -167,7 +170,8 @@ function workflowFiresOnTag(on, tag) {
 // GitHub's tag glob `*` matches `-`, so `v*.*.*` and `v*` both fire on `v1.2.0-rc.1`: the first
 // release-candidate tag would deploy. In scope: every deploy-*.yml, plus — when `deploy: tag` says a
 // tag IS the path to production — any other workflow carrying an explicit tag filter, whatever it is
-// named. Severity follows reach: `fail` under `deploy: tag` (production is reachable by that tag),
+// named, except a copy of the handbook's own release-tag template (isReleaseTagTemplateCopy, #346).
+// Severity follows reach: `fail` under `deploy: tag` (production is reachable by that tag),
 // `warn` elsewhere. The audit maps severity onto its fail/warn; `colab release cut` refuses on
 // either, because both mean "cutting a candidate runs a deploy".
 const PRERELEASE_TAG_PROBE = "v1.2.0-rc.1";
@@ -178,6 +182,31 @@ function isDeployWorkflow(file) {
 }
 
 /**
+ * Is this workflow a copy of the handbook's `release-tag` template, and NOT deploy-named? (#346)
+ *
+ * That template fires on `v*.*.*` ON PURPOSE, candidates included, so a `-rc.N` tag publishes as a
+ * GitHub pre-release (#333). It publishes a Release record and deploys nothing — its header says
+ * deployment does not belong in it. Under `deploy: tag` the scope rule below would otherwise fail it
+ * for the very trigger it exists to have, with a "fix" that undoes #333.
+ *
+ * Identity is provenance, never the file name: the template's stamp (`colab-handbook: release-tag @`)
+ * or its fingerprints in stamp.js (header marker, coined step names) — the evidence drift reporting
+ * already trusts. A file merely NAMED release.yml / release-tag.yml gets no exemption (an empty
+ * template-name set means a name can never stand in for lineage here).
+ *
+ * Guardrail (ruling on #346): a `deploy-*.yml` / `deploy.yml` stays in scope even if it carries the
+ * stamp — a deploy-named file is presumed to deploy, whatever it was copied from. Accepted edge: an
+ * adopter who adds a deploy step to their copied release.yml is exempted too. The template header
+ * already says deployment does not belong there; this exemption holds them to it, it does not check.
+ */
+function isReleaseTagTemplateCopy(file, text) {
+  if (!text || isDeployWorkflow(file)) return false;
+  const stamp = parseWorkflowStamp(text);
+  if (stamp) return stamp.name === "release-tag";
+  return workflowProvenance(text, file.replace(/\.ya?ml$/, ""), new Set()).template === "release-tag";
+}
+
+/**
  * `readFile(relPath)` returns a workflow's text (or null); `workflows` are file names under
  * .github/workflows/; `deploy` is project.yml's value. Returns [{ workflow, trigger, level, text }].
  */
@@ -185,7 +214,9 @@ function prereleaseTagTriggers({ readFile, workflows, deploy }) {
   const isTagDeploy = deploy === "tag";
   const out = [];
   for (const wf of workflows || []) {
-    const on = parseWorkflowOn(readFile(`.github/workflows/${wf}`));
+    const text = readFile(`.github/workflows/${wf}`);
+    if (isReleaseTagTemplateCopy(wf, text)) continue;
+    const on = parseWorkflowOn(text);
     const inScope = isDeployWorkflow(wf) || (isTagDeploy && (on.pushTags !== null || on.pushTagsIgnore !== null));
     if (!inScope || !workflowFiresOnTag(on, PRERELEASE_TAG_PROBE)) continue;
     const trigger = on.pushTags !== null
@@ -211,5 +242,5 @@ function prereleaseTagTriggers({ readFile, workflows, deploy }) {
 module.exports = {
   PRERELEASE_TAG_PROBE,
   parseWorkflowOn, listField, githubFilterRegex, githubFilterMatches, workflowFiresOnTag,
-  isDeployWorkflow, prereleaseTagTriggers,
+  isDeployWorkflow, isReleaseTagTemplateCopy, prereleaseTagTriggers,
 };
