@@ -84,6 +84,10 @@ const { evaluateExposure } = require("../tools/lib/exposure-shape.js");
 // #208's `writes` split precedence ladder — same shared-module reasoning as axisAuthority
 // above, reused for a second axis rather than a bespoke second mechanism.
 const writesAuthority = require("../tools/lib/writes-authority.js");
+// #337's `release:` block — CONVENTIONS §6's release rung as one derivation table, plus the
+// narrow-never-widen validation of what a repo declares. Shared with `colab release cut` (#338)
+// so the audit and the tool that cuts tags can never read the rung two ways.
+const releasePolicy = require("../tools/lib/release-policy.js");
 // #228's identity vocabulary — resolution, parsing, matching and REDACTION. Shared with the
 // conformance test that holds it and the shell hook (templates/pre-commit-identity) to the
 // same semantics; the shell scanner cannot require it (a template lands in repos with no
@@ -164,6 +168,11 @@ function die(msg) {
 // into encoding one in a string. Nesting of every other shape remains a finding — the
 // reader stays narrow on purpose, and the narrowness stays visible.
 //
+// ONE nested map is accepted too, and only under a key named in NESTED_MAP_KEYS: a single
+// level of `sub: scalar` pairs (#337's `release:` block). The allow-list is the check — a
+// nested map under any other key, a second level, or a list item under a map key is still
+// a finding, so this is one named exception, not a general loosening.
+//
 // (The `colab` CLI reads the same file through tools/lib/yaml.js, which accepts nested
 // maps as well. The two are deliberately NOT merged: this one's refusal to parse nesting
 // is a CHECK — it is how an over-clever descriptor gets reported instead of silently
@@ -179,12 +188,18 @@ function parseScalarValue(raw) {
   return val;
 }
 
+const NESTED_MAP_KEYS = new Set(["release"]);
+
 function parseFlatYaml(text) {
   const out = {};
   const problems = [];
   // The key whose block sequence may follow. Cleared by any column-0 line, so a `- item`
   // can never attach to a key it does not sit directly under.
   let listKey = null;
+  // The NESTED_MAP_KEYS key whose one-level map may follow, and the indent its first pair
+  // set — a pair at any other indent is a second level (or a stray), and is reported.
+  let mapKey = null;
+  let mapIndent = null;
   text.split(/\r?\n/).forEach((raw, idx) => {
     const line = raw.replace(/\t/g, "  ");
     if (!line.trim() || /^\s*#/.test(line)) return;
@@ -195,10 +210,25 @@ function parseFlatYaml(text) {
         out[listKey].push(parseScalarValue(item[1]));
         return;
       }
+      const pair = line.match(/^(\s+)([A-Za-z0-9_.-]+)\s*:\s*(.*)$/);
+      if (mapKey !== null && pair && !item) {
+        const [, indent, sub, subRaw] = pair;
+        if (mapIndent === null) mapIndent = indent.length;
+        const subTrimmed = subRaw.replace(/\s+#.*$/, "").trim();
+        if (indent.length === mapIndent && subTrimmed !== "" && !/^\[.*\]$/.test(subTrimmed)) {
+          if (out[mapKey] === null || typeof out[mapKey] !== "object") out[mapKey] = {};
+          out[mapKey][sub] = parseScalarValue(subRaw);
+          return;
+        }
+        problems.push(`line ${idx + 1}: "${mapKey}:" takes one level of "key: scalar" pairs — nothing deeper, and no lists`);
+        return;
+      }
       problems.push(`line ${idx + 1}: nested/indented YAML is not supported by this reader (flat key: value, or a "- item" list under a key)`);
       return;
     }
     listKey = null;
+    mapKey = null;
+    mapIndent = null;
     const m = line.match(/^([A-Za-z0-9_.-]+)\s*:\s*(.*)$/);
     if (!m) {
       problems.push(`line ${idx + 1}: not a "key: value" pair -> ${line.trim()}`);
@@ -214,7 +244,11 @@ function parseFlatYaml(text) {
     out[key] = parseScalarValue(rawVal);
     // A key with a genuinely empty value may open a block sequence on the next lines. It
     // stays `null` if none follows — `production:` must keep meaning null, not [].
-    if (trimmed === "") listKey = key;
+    // A NESTED_MAP_KEYS key opens a one-level map instead (and never a list).
+    if (trimmed === "") {
+      if (NESTED_MAP_KEYS.has(key)) mapKey = key;
+      else listKey = key;
+    }
   });
   return { data: out, problems };
 }
@@ -1300,6 +1334,20 @@ function auditRepo(target, ctx) {
       const durationLine = exposureAge && renderDuration(exposureAge);
       if (durationLine) {
         warn(`exposure: none has held for ${durationLine} (per the descriptor's own git history) — visible so a long-running transitional state does not go unnoticed`);
+      }
+    }
+
+    // ---- release: block (#337) -------------------------------------------------
+    // Gated on the key's presence: a descriptor with no `release:` does no work here and
+    // gets no finding — its policy is the default §6's release rung derives from exposure +
+    // deploy, which `colab release cut` (#338) reads through the same module. A declared
+    // block may narrow that default and never widen it; every widening attempt, bad value
+    // or unknown sub-key is a `fail`, because a silently ignored widening would make the
+    // rung's human gate a suggestion.
+    if ("release" in cfg) {
+      for (const f of releasePolicy.evaluateRelease(cfg).findings) {
+        if (f.level === "fail") fail(f.text);
+        else warn(f.text);
       }
     }
 

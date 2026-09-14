@@ -81,6 +81,14 @@
 #               `artifact`: adopters copy files out of a tagged release (the same fact
 #               already on record as exposure: released above). No deploy workflow, no
 #               in-repo or installed hook, no service definition serves this checkout.
+#   release     OPTIONAL. A one-level block: candidates auto|off · test-period <N>d ·
+#               final auto|human. Absent means the default DERIVED from exposure +
+#               deploy by CONVENTIONS §6's release rung (project.schema.md "release —
+#               optional", tools/lib/release-policy.js); a declared block may narrow that
+#               default and never widen it — the audit fails a widening attempt. This repo
+#               restates its default exactly, as the reference example: released with
+#               production null and deploy none, so candidates and the final tag are
+#               automatic after a 3-day test period. Narrowing it here is a human's call.
 #
 tier: B
 trunk: main
@@ -91,6 +99,10 @@ writes: free
 room: public
 exposure: released
 channels: [artifact]
+release:
+  candidates: auto
+  test-period: 3d
+  final: auto
 
 # Granted 2026-08-14 (#224), by the operator, after the matrix cell above it was
 # corrected — `serial-direct` + `auto-trunk` was forbidden until that ruling.

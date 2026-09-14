@@ -2874,7 +2874,10 @@ Anything the table does not name — an undeclared or unknown `exposure`, a bare
 `tier: B`, a `released` repo whose `deploy` matches no row — gets no automatic tag: fail
 closed, a human tags. Legacy `tier: A` reads as `released` and takes the row its `deploy`
 names. Where the final tag is a human act, nothing in `project.yml` lowers that, and no
-field lets an agent cut a major (*Versioning*, below).
+field lets an agent cut a major (*Versioning*, below). A repo may **narrow** its row —
+turn candidates off, make an automatic final human, lengthen the test period — with the
+[`release:` block](project.schema.md#release--optional) (#337); a block that tries to widen
+it is an audit failure, not an override.
 
 **A candidate is cut only when all four hold, on the exact commit it names:**
 

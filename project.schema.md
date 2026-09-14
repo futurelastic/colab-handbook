@@ -830,6 +830,57 @@ The full permission ladder, one rung per boundary:
 `deploy`+`promotion`) · **release** (tag — candidates automatic, final tag by exposure,
 [CONVENTIONS §6](CONVENTIONS.md#6-releases)).
 
+### `release` — optional
+
+```yaml
+release:
+  candidates: auto       # auto · off
+  test-period: 3d        # <N>d — never shorter than 3d
+  final: auto            # auto · human
+```
+
+How the **release** rung — the tag — runs on this repo:
+whether an agent cuts candidate tags `vX.Y.Z-rc.N`, how long a candidate's test period
+lasts, and whether its final `vX.Y.Z` is automatic. The one block that is a nested map; the
+audit's reader accepts it under this key and no other.
+
+**Absent means the default, and the default is derived — never declared.** It comes from
+`exposure` + `deploy` (+ `production`), exactly as
+[CONVENTIONS §6's release rung](CONVENTIONS.md#6-releases) tables it:
+
+| Descriptor | `candidates` | `test-period` | `final` |
+|---|---|---|---|
+| `exposure: none` / `self` | `off` — no tags | `3d` | `human` |
+| `exposure: released`, `production: null`, `deploy: none` — adopters install it | `auto` | `3d` | `auto` |
+| `exposure: released`, `deploy: tag` — the tag deploys production | `auto` | `3d` | `human` |
+| `exposure: released`, `deploy: manual` — a person deploys from the tag | `auto` | `3d` | `human` |
+| `exposure: live` | `off` — the promotion is the deploy | `3d` | `human` |
+| anything else — undeclared or unknown `exposure`, a bare `tier: B`, a `released` repo whose `deploy`/`production` match no row | `off` — fail closed | `3d` | `human` |
+
+Legacy `tier: A` reads as `released` and takes the row its `deploy` names; `tier: C` reads
+as `live` ([`tier`](#tier--optional-legacy)). `final` applies only to a candidate, so with
+`candidates: off` it has nothing to act on.
+
+**The block may narrow the default, never widen it.** Each key moves in one direction only:
+
+- `candidates` — `auto` → `off` is a narrowing; `auto` where the default is `off` is a
+  **failure**. A repo with no tags (`none`/`self`, `live`, or fail-closed) rejects
+  `candidates: auto`.
+- `final` — `auto` → `human` is a narrowing (a no-production repo that wants a person to
+  finalize each release may say so); `auto` where the default is `human` is a **failure**.
+  `final: auto` on a `deploy: tag` or `deploy: manual` repo is never an override — where the
+  final tag is a human act, nothing in `project.yml` lowers that.
+- `test-period` — a whole number of days, `<N>d`. Longer than `3d` narrows; shorter is a
+  **failure**.
+
+An unknown sub-key, a value outside its set, or a scalar `release:` is a failure too. None
+of these keys lets an agent cut a major — that stays a human decision on every repo
+([§6, *Versioning*](CONVENTIONS.md#6-releases)) and has no field.
+
+What reads it: the audit, and the release tooling (`colab release cut`, #338), both through
+`tools/lib/release-policy.js` — the one executable version of the table above. If this page
+and that module ever disagree, the module is what runs; report the drift.
+
 ### `generated` — optional
 
 ```yaml
@@ -1005,6 +1056,8 @@ the shape that shows it. One writer at a time says nothing about who reads the r
 | `channels` contains no duplicate member → **finding** | `[workflow, workflow]` passing silently as though it were a richer answer than `[workflow]` |
 | `channels: [none]` combined with another member, or `channels: []` → **finding** | an empty or self-contradicting answer read as a real one |
 | `channels: [none]` + (`production` non-null or `deploy` ≠ `none`) → **advisory** | the claim "nothing runs this" going unflagged against a fact already on record elsewhere in the same descriptor |
+| `release` is a one-level block of `candidates` ∈ {`auto`, `off`}, `test-period` `<N>d`, `final` ∈ {`auto`, `human`}, when set — no other sub-key | a misspelled knob silently read as the default |
+| `release` widening its derived default — `candidates: auto` where the rung cuts no tags, `final: auto` where the final tag is a human act (`deploy: tag`/`manual`), `test-period` under `3d` → **finding** | a descriptor lowering §6's human gate on a tag that deploys production |
 
 `push-main` on a Tier A repo **is a finding** — a mismatch between the
 mechanism and the tier's contract, not a judgement on the mechanism, and the

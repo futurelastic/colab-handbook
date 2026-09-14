@@ -287,6 +287,16 @@ the handbook's current version, so a scheduled run is self-documenting.
   (`CONVENTIONS.md` [§2](../CONVENTIONS.md#channels--by-what-path-does-code-reach-the-thing-that-runs-it), *Channels*, the same "declaring absence is a human act" asymmetry
   `exposure` carries).
 
+- **`release:` block (#337)** — an optional one-level block (`candidates`, `test-period`,
+  `final`; project.schema.md#release--optional) whose default is derived from `exposure` +
+  `deploy` exactly as `CONVENTIONS.md` [§6](../CONVENTIONS.md#6-releases)'s release rung
+  tables it, through `tools/lib/release-policy.js`. The block may narrow that default and
+  never widen it: `candidates: auto` where the rung cuts no tags, `final: auto` where the
+  final tag is a human act (`deploy: tag`/`manual`), a `test-period` under `3d`, an unknown
+  sub-key or an out-of-set value are each a **finding**. The only nested map this tool's
+  reader accepts, and only under `release:` — a second level, or a nested map under any
+  other key, is still a parse finding. No block → no work and no finding.
+
 - **`exposure`/`channels` falsifiers + duration report (#137)** — the checks above are all
   descriptor-internal: they can catch a `project.yml` contradicting *itself*, never a
   `project.yml` contradicting the working tree around it. This unit adds that half, for
