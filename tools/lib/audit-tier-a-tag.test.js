@@ -73,7 +73,7 @@ function audit(dir) {
 const hasText = (list, rx) => list.some((t) => rx.test(t));
 const PROD = 'https://example.invalid';
 const RUNBOOK = { 'docs/deploy.md': '# deploy\nthe poller fast-forwards `release` on the tag.\n' };
-const DEPLOY_WF = { '.github/workflows/deploy-x.yml': 'on:\n  push:\n    tags: ["v*"]\njobs: {}\n' };
+const DEPLOY_WF = { '.github/workflows/deploy-x.yml': 'on:\n  push:\n    tags: ["v*", "!v*.*.*-*"]\njobs: {}\n' };
 
 // --- the two shapes #51 is about: single trunk `main`, tag-gated ------------
 
