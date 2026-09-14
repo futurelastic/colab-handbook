@@ -182,9 +182,9 @@ test('#319: a same-session unattached claim the branch does NOT name is reported
 // #302 — colab ship --direct
 // =================================================================================================
 
-function directUnit(fx, num, { push = true } = {}) {
+function directUnit(fx, num, { push = true, file = `d${num}.txt` } = {}) {
   colab(fx, ['claim', String(num), '--repo', fx.work]);
-  fs.writeFileSync(path.join(fx.work, `d${num}.txt`), 'direct\n');
+  fs.writeFileSync(path.join(fx.work, file), 'direct\n');
   fx.g(fx.work, 'add', '-A');
   fx.g(fx.work, 'commit', '-q', '-m', `feat: direct unit (#${num})`);
   if (push) fx.g(fx.work, 'push', '-q', 'origin', 'main');
@@ -283,9 +283,9 @@ test('#302: writes: isolated vetoes trunk-direct', () => {
   assert.doesNotMatch(ghLog(fx), /issue close/);
 });
 
-test('#302: the autonomy gate is unchanged — absent autonomy refuses', () => {
+test('#302: the autonomy gate is unchanged — absent autonomy refuses a unit that is not docs-only', () => {
   const fx = fixture({ yml: 'tier: B\ntrunk: main\nproduction: null\ndeploy: none\nstack: node\n' });
-  directUnit(fx, 68);
+  directUnit(fx, 68, { file: 'd68.js' }); // #345: a .txt unit would be docs-only and close
   const r = colab(fx, ['ship', '--direct', '--repo', fx.work]);
   assert.strictEqual(r.code, 1, r.out + r.err);
   assert.match(r.err, /does not grant auto-trunk/);

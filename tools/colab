@@ -48,6 +48,7 @@ const writesAuthority = require('./lib/writes-authority');
 const claimIdentity = require('./lib/claim-identity');
 const machine = require('./lib/machine');
 const targetSync = require('./lib/ship-target-sync');
+const docsOnly = require('./lib/docs-only');
 const {
   HOST, UserError, normIssueNum, issueTag, claimKey, today, nowISO, hoursSince, humanAge,
   parseArgs, table, shortRepo,
@@ -7257,7 +7258,7 @@ The ONE sanctioned door for code-wrap Phase B: squash-merge a session branch int
 CUT FROM — trunk for an ordinary session, or the declared integration line recorded on its worktree
 (project.yml \`integration:\`). Autonomy is granted by the repo's .github/project.yml
 (\`autonomy: auto-trunk\`) — NOT by any flag. Without that grant, ship refuses and a human must run
-Phase B. ship NEVER touches main (when trunk≠main), NEVER tags, NEVER promotes.
+Phase B — unless the change is DOCS-ONLY, computed from git (#345, below). ship NEVER touches main (when trunk≠main), NEVER tags, NEVER promotes.
 
 Base and target are ONE decision. A branch cut from a long-lived line and shipped into trunk would
 drag the entire line in behind it, as a single squash commit that reads like a small change — so
@@ -7266,7 +7267,7 @@ refused outright, even under autonomy: auto-trunk: a long divergence meeting the
 promotes is an integration event of the same weight as a promotion, and stays human.
 
 Sequence (each step gated; any failure aborts before the push — the target is never half-shipped):
-  a. autonomy gate      repo must grant auto-trunk (no --force override)
+  a. autonomy gate      repo must grant auto-trunk (no --force override) — or the diff is docs-only (#345)
   b. preconditions      target CI alive+green (UNLESS the branch proves the CURE RULE, #281 — no
                         human step needed — OR every issue the branch carries holds a valid
                         \`colab ci-grant\` over trunk's CURRENT red sha, #105 — see below) · no new
@@ -7402,12 +7403,23 @@ history of every repo that adopts this. The gate: an issue is closed this way on
 carries a comment colab did not write (its own 🔒/✅/🚢/🔖 markers do not count). An issue without one
 is reported and LEFT OPEN while the rest proceed.
 
+DOCS-ONLY — the one exception to the autonomy gate (#345). Without \`autonomy: auto-trunk\`, ship
+still proceeds when EVERY path the change touches is documentation, computed from
+\`git diff <target>...<branch>\` with renames split into both names: an extension of .md, .mdx or
+.txt, or a path under a top-level docs/. Never documentation, even when matched: CLAUDE.md,
+CLAUDE.local.md, AGENTS.md, anything under .claude/, .github/ or .githooks/, a binary, a symlink,
+a submodule pointer. An empty diff is never docs-only (so a zero-commit evidence-close still needs
+auto-trunk). The row reads "docs-only (N files) — autonomy exception", and --dry --json adds
+\`autonomyGate: { via, docsOnly }\`. After B0 sync the diff is measured again before the squash.
+Every other precondition is unchanged. No flag, env var or project.yml field widens the list.
+
 TRUNK-DIRECT — \`colab ship --direct\` (#302). A unit committed straight to trunk has no branch and
 no worktree, so neither door above can find it, and evidence-close's own detection cannot fire
 (\`landed\` is \`unknown\` when base === branch). --direct is its close path: the claims are this
 session's claims in this repo with no worktree and no branch (identity REQUIRED — --session or
 COLAB_SESSION; a claim of another session is never touched, a same-session claim that names a
-branch is pointed at --branch). Preconditions: writes: not \`isolated\` · autonomy: auto-trunk ·
+branch is pointed at --branch). Preconditions: writes: not \`isolated\` · autonomy: auto-trunk (or
+docs-only: every trunk commit since the unit's earliest claim, by anyone, #345) ·
 trunk CI green · checklist close gate · trunk checked out and clean · local trunk not ahead of
 origin (the work is PUBLISHED). Then exactly evidence-close: evidence comment, close each issue
 (same gate — the issue must already carry a comment colab did not write; code-wrap A1's distill is
@@ -8192,12 +8204,14 @@ function cmdShipDryJson(opts) {
   // comment. ADVISORY ONLY: it enriches the ALREADY-COMPUTED 'trunk checkout ready' row's `detail`
   // string, never its `ok`, so this payload can be non-null on a row that still reads `ok: false`.
   let dirtyOwnersPayloadVal = null;
+  // #345: null until the autonomy gate is computed — then `{ via, docsOnly }`, see shipAutonomyGate.
+  let autonomyGatePayloadVal = null;
   const emit = (ok) => {
     print(JSON.stringify({
       ok, dry: true, repo: shortRepo(repoAbs), branch: sess.branch, worktree: sess.name || null,
       target, mode, issues: sess.issues, closeIssues, refsIssues, checklistFindings, checks,
       migrationGrant: migrationGrantPayload, ciGrant: ciGrantPayloadVal, ciCure: ciCurePayloadVal,
-      baseCi: baseCiPayloadVal, dirtyOwners: dirtyOwnersPayloadVal,
+      baseCi: baseCiPayloadVal, dirtyOwners: dirtyOwnersPayloadVal, autonomyGate: autonomyGatePayloadVal,
     }, null, 2));
     return ok ? 0 : 1;
   };
@@ -8230,10 +8244,9 @@ function cmdShipDryJson(opts) {
   checks.push({ name: 'declared base', ok: true, class: null, detail: target });
 
   // ---- (a) AUTONOMY GATE — does NOT short-circuit here; an unattended caller wants the whole table ----
-  const autonomy = doc.autonomy ? String(doc.autonomy) : 'manual';
-  const autonomyOk = autonomy === 'auto-trunk';
-  checks.push({ name: 'autonomy granted', ok: autonomyOk, class: autonomyOk ? null : HUMAN_GATED,
-    detail: autonomyOk ? 'auto-trunk' : `project.yml autonomy: ${doc.autonomy ? autonomy : 'absent'} — a human must trigger Phase B` });
+  const autonomyGate = shipAutonomyGate(doc, () => docsOnly.branchChanges(git, repoAbs, target, shipRefFor(repoAbs, sess.branch)));
+  autonomyGatePayloadVal = autonomyGatePayload(autonomyGate);
+  checks.push({ name: 'autonomy granted', ok: autonomyGate.ok, class: autonomyGate.ok ? null : HUMAN_GATED, detail: autonomyGate.detail });
 
   // ---- (b) the rest of the preconditions, same rules as the prose path ----
   const gh = isGhUsable(repoAbs);
@@ -8657,12 +8670,13 @@ function cmdShipDirect(opts) {
 
   const checks = []; // {name, ok, class, detail, advisory?}
   let closeIssues = [], refsIssues = [], refsSet = new Set(), checklistFindings = [], dirtyOwners = null;
+  let autonomyGatePayloadVal = null; // #345
   const emitJson = (ok) => {
     print(JSON.stringify({
       ok, dry: true, direct: true, repo: shortRepo(repoAbs), branch: null, worktree: null, target: trunk,
       mode: 'evidence-close', issues, closeIssues, refsIssues, checklistFindings,
       checks: checks.map(({ name, ok: rowOk, class: cls, detail }) => ({ name, ok: rowOk, class: cls, detail })),
-      migrationGrant: null, ciGrant: null, ciCure: null, baseCi: null, dirtyOwners,
+      migrationGrant: null, ciGrant: null, ciCure: null, baseCi: null, dirtyOwners, autonomyGate: autonomyGatePayloadVal,
     }, null, 2));
     return ok ? 0 : 1;
   };
@@ -8681,10 +8695,12 @@ function cmdShipDirect(opts) {
     detail: vetoed
       ? `project.yml writes: ${doc.writes} vetoes trunk-direct — every unit here has a branch; ship it with --worktree/--branch`
       : `writes: ${doc.writes ? String(doc.writes) : 'absent'} does not veto trunk-direct` });
-  const autonomy = doc.autonomy ? String(doc.autonomy) : 'manual';
-  const autonomyOk = autonomy === 'auto-trunk';
-  checks.push({ name: 'autonomy granted', ok: autonomyOk, class: autonomyOk ? null : HUMAN_GATED,
-    detail: autonomyOk ? 'auto-trunk' : `project.yml autonomy: ${doc.autonomy ? autonomy : 'absent'} — a human must trigger Phase B` });
+  // #345: a trunk-direct unit has no branch diff. Its change set is every trunk commit since its
+  // earliest claim — by anyone, so the verdict can only err toward refusing (lib/docs-only.js).
+  const since = claims.map((c) => c.created).filter(Boolean).sort()[0];
+  const autonomyGate = shipAutonomyGate(doc, () => docsOnly.directChanges(git, repoAbs, trunk, since));
+  autonomyGatePayloadVal = autonomyGatePayload(autonomyGate);
+  checks.push({ name: 'autonomy granted', ok: autonomyGate.ok, class: autonomyGate.ok ? null : HUMAN_GATED, detail: autonomyGate.detail });
 
   checks.push({ name: 'claims matched by session identity', ok: true, class: null,
     detail: `${issues.map((n) => '#' + n).join(' ')} claimed by "${label}", no worktree, no branch${othersNote}` });
@@ -8730,7 +8746,6 @@ function cmdShipDirect(opts) {
 
   // ---- advisory: which trunk commits name each issue since it was claimed. Never a gate — the
   // session writes those messages itself, so they cannot stand in for evidence.
-  const since = claims.map((c) => c.created).filter(Boolean).sort()[0];
   const logR = git.git(['log', trunk, '--format=%s%x1f%b%x1e', ...(since ? [`--since=${since}`] : ['-n', '200'])], repoAbs);
   const commits = logR.ok ? logR.stdout.split('\x1e').map((r) => r.trim()).filter(Boolean)
     .map((r) => { const [subject, body] = r.split('\x1f'); return { subject, body }; }) : [];
@@ -8747,11 +8762,13 @@ function cmdShipDirect(opts) {
   print(table(checks.map((c) => [c.advisory ? '·' : (c.ok ? '✓' : '✗'), c.name, c.detail]), ['', 'PRECONDITION', 'DETAIL']));
   print('');
   if (!syncOk && Array.isArray(sync.remedy)) { for (const line of sync.remedy) print(`  ${line}`); print(''); }
-  if (!autonomyOk) {
-    process.stderr.write(`✗ ${shortRepo(repoAbs)} does not grant auto-trunk (project.yml autonomy: ${doc.autonomy ? autonomy : 'absent'}).\n`);
+  if (!autonomyGate.ok) {
+    process.stderr.write(`✗ ${shortRepo(repoAbs)} does not grant auto-trunk (project.yml autonomy: ${autonomyGate.declared}).\n`);
     process.stderr.write('  A human must close this unit. (Autonomy is granted by the repo, not by a flag — --force cannot override.)\n');
+    process.stderr.write(`  The docs-only exception (#345) does not apply either: ${autonomyGate.docsOnly.reason}.\n`);
     return 1;
   }
+  if (autonomyGate.via === 'docs-only') print(`→ AUTONOMY: ${autonomyGate.detail} (#345) — project.yml autonomy: ${autonomyGate.declared}`);
   print(`→ MODE: evidence-close (trunk-direct — the work is already on ${trunk}; nothing to merge)`);
   if (opts.dry) {
     print(preOk ? '→ READY: preconditions pass. Re-run without --dry to close.' : '→ NOT READY: fix the ✗ rows above.');
@@ -8765,6 +8782,38 @@ function cmdShipDirect(opts) {
   const tip = shortSha(git.git(['rev-parse', trunk], repoAbs).stdout);
   const mode = { evidenceClose: true, direct: true, why: `trunk-direct unit — ${trunk}@${tip} is checked out clean and published to origin/${trunk}` };
   return shipEvidenceClose({ repoAbs, st, sess, target: trunk, trunk, gh, closeIssues, refsIssues, refsSet, mode, opts });
+}
+
+/**
+ * #345 — the autonomy gate, shared by every ship door (cmdShip, cmdShipDryJson, cmdShipDirect).
+ *
+ * `autonomy: auto-trunk` opens it, as before. Without that grant it opens for exactly one more
+ * case: a change `lib/docs-only.js` classifies as documentation only, measured from git. The
+ * caller asserts nothing. `readDocsOnly` is a thunk, so an auto-trunk repo never pays for the
+ * diff read. Every other precondition is untouched — this relaxes the autonomy gate, not the checks.
+ *
+ * Returns `{ ok, via: 'auto-trunk'|'docs-only'|null, declared, docsOnly: verdict|null, detail }`.
+ */
+function shipAutonomyGate(doc, readDocsOnly) {
+  const declared = doc.autonomy ? String(doc.autonomy) : 'absent';
+  if (declared === 'auto-trunk') return { ok: true, via: 'auto-trunk', declared, docsOnly: null, detail: 'auto-trunk' };
+  const verdict = readDocsOnly();
+  if (verdict.docsOnly) {
+    return { ok: true, via: 'docs-only', declared, docsOnly: verdict, detail: `${verdict.reason} — autonomy exception` };
+  }
+  return { ok: false, via: null, declared, docsOnly: verdict,
+    detail: `project.yml autonomy: ${declared} — a human must trigger Phase B (not docs-only: ${verdict.reason})` };
+}
+
+/** #345: the additive `autonomyGate` field of the `--dry --json` output. */
+function autonomyGatePayload(gate) {
+  return { via: gate.via, docsOnly: gate.docsOnly };
+}
+
+/** The sha a branch name resolves to, local first, else origin's copy (#324's remote-only shape). */
+function shipRefFor(repoAbs, branch) {
+  const r = git.branchRefs(repoAbs, branch);
+  return r.localSha || r.remoteSha || branch;
 }
 
 function cmdShip(argv) {
@@ -8834,16 +8883,19 @@ function cmdShip(argv) {
   }
 
   // ---- (a) AUTONOMY GATE — granted by the repo file, never by the caller ----
-  const autonomy = doc.autonomy ? String(doc.autonomy) : 'manual';
-  if (autonomy !== 'auto-trunk') {
-    process.stderr.write(`✗ ${shortRepo(repoAbs)} does not grant auto-trunk (project.yml autonomy: ${doc.autonomy ? autonomy : 'absent'}).\n`);
+  // #345: …or the branch's diff is documentation only, computed here from git — never asserted.
+  const autonomyGate = shipAutonomyGate(doc, () => docsOnly.branchChanges(git, repoAbs, target, shipRefFor(repoAbs, sess.branch)));
+  if (!autonomyGate.ok) {
+    process.stderr.write(`✗ ${shortRepo(repoAbs)} does not grant auto-trunk (project.yml autonomy: ${autonomyGate.declared}).\n`);
     process.stderr.write('  A human must trigger Phase B. (Autonomy is granted by the repo, not by a flag — --force cannot override.)\n');
+    process.stderr.write(`  The docs-only exception (#345) does not apply either: ${autonomyGate.docsOnly.reason}.\n`);
     return 1;
   }
 
   // ---- (b) PRECONDITIONS (report each ✓/✗) ----
   const gh = isGhUsable(repoAbs);
-  const checks = [];
+  // #345: the gate that passed is the table's first row, so a reader sees WHICH door opened it.
+  const checks = [['✓', 'autonomy granted', autonomyGate.detail]];
 
   // Which claimed issues are REFERENCED (Refs #N), not closed — three sources unioned by
   // resolveCloseRefsSplit (#48, #74): --refs, the tracking label, and #74's close gate (an
@@ -9220,6 +9272,17 @@ function cmdShip(argv) {
     }
   } else {
     print(`  branch is in sync with ${target}.`);
+  }
+
+  // #345: B0 may have changed what the squash lands (a pre-ship hook regenerating files). The
+  // exception is re-measured against the synced branch, never carried over from the table.
+  if (autonomyGate.via === 'docs-only') {
+    const again = docsOnly.branchChanges(git, repoAbs, mergeRef, sess.branch);
+    if (!again.docsOnly) {
+      cleanupEphemeral();
+      process.stderr.write(`✗ B1: the docs-only exception (#345) no longer holds after B0 sync — ${again.reason}. A human must trigger Phase B. Nothing pushed.\n`);
+      return 1;
+    }
   }
 
   // ---- (d) B1: re-verify CI, then squash-merge into the target ----

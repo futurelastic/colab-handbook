@@ -1117,7 +1117,11 @@ autonomy: auto-trunk   # colab ship may squash-merge session branches into trunk
 # autonomy: manual     # (or absent) — ship refuses; a human runs Phase B
 ```
 
-`auto-trunk` is the *only* value that enables `ship`. Anything else (or absent) → ship refuses. This
+`auto-trunk` is the *only* value that enables `ship` for any change. Anything else (or absent) → ship
+refuses, with one exception it computes itself: a **docs-only** diff (#345) — every changed path is
+`.md`/`.mdx`/`.txt` or under a top-level `docs/`; none is `CLAUDE.md`, `CLAUDE.local.md`, `AGENTS.md`
+or under `.claude/`, `.github/`, `.githooks/`; no binary, no symlink, not empty. The caller cannot
+assert it and nothing widens it ([CONVENTIONS §2](../CONVENTIONS.md#autonomy--the-docs-only-exception-345)). This
 gate has **no override** — `--force` does not exist on `ship`. Autonomy is a property of the repo a
 human configured, never a flag the caller can pass. `ship` **never** touches `main` when `trunk ≠
 main`, **never** tags, and **never** promotes — those remain human/`scripts/release.sh` territory.
@@ -1136,7 +1140,7 @@ Each step is checked; any failure aborts **before the push**, so trunk is never 
 
 | step | what | abort condition |
 |---|---|---|
-| a. autonomy | repo grants `auto-trunk` | not granted → refuse (no override) |
+| a. autonomy | repo grants `auto-trunk`, or the diff is docs-only (#345, computed, re-measured after B0) | neither → refuse (no override) |
 | a′. resolvable | the session's recorded branch resolves to a ref (locally or on `origin`) | it does not → refuse: everything below is keyed to that name, and a record nothing can act on silently costs the `Closes` |
 | a″. claim sanity | the branch resolves to at least one claimed issue | zero → **loud warning** (the squash will carry no `Closes #N`); zero **and** some claim in the repo names an unresolvable branch → refuse, because "no claims" is then a broken lookup |
 | b. preconditions | reported as a ✓/✗ table | any ✗ → abort |
