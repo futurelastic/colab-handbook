@@ -84,6 +84,16 @@ the handbook's current version, so a scheduled run is self-documenting.
 - Tier B must have `deploy: none`, no `production` URL, and no deploy workflow. (This
   was silently unchecked before — a tier B repo could quietly ship to production with
   none of the tier A gates.)
+- **A deploy trigger must not fire on a pre-release tag** (#332). GitHub's tag glob `*`
+  matches `-`, so `tags: ["v*.*.*"]` and `tags: ["v*"]` both fire on `v1.2.0-rc.1` — the
+  first release-candidate tag would deploy. Every `deploy-*.yml` (and, under `deploy: tag`,
+  any other workflow with an explicit `tags:`/`tags-ignore:` filter) has its push trigger
+  probed with `v1.2.0-rc.1`, evaluated the way GitHub does: `*` stops only at `/`, `?`/`+`
+  quantify the preceding character, and `!` patterns apply in order, a later positive
+  pattern re-including. An unfiltered `push` fires on every tag and counts. **✗ failure**
+  under `deploy: tag` (production is reachable), **⚠ finding** elsewhere; the message
+  names the file, the pattern and the fix — `"!v*.*.*-*"` after the pattern, or a strict
+  pattern such as `v[0-9]+.[0-9]+.[0-9]+`.
 - The declared `trunk` branch actually exists — checked against **local branch refs
   unioned with remote-tracking refs** (`refs/heads` ∪ `refs/remotes/*`, remote prefix
   stripped, deduped). A branch present only as `origin/<name>` still counts: `git clone

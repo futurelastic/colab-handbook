@@ -413,12 +413,12 @@ function checkStamps(src, hb, tmplNames, fail, warn, { ceremony = "standard", mi
 //
 // Returns { found, events:Set,
 //           pushBranches:[]|null, pushBranchesIgnore:[]|null, pushTags:[]|null,
-//           prBranches:[]|null }.
+//           pushTagsIgnore:[]|null, prBranches:[]|null }.
 // A null list means the filter is ABSENT. For push, absent branches + absent tags =
 // "all branches" (a bare `push:` fires on every branch). Absent branches but PRESENT
 // tags = "tags only" — no branch push at all (a release/tag workflow).
 function parseWorkflowOn(text) {
-  const res = { found: false, events: new Set(), pushBranches: null, pushBranchesIgnore: null, pushTags: null, prBranches: null };
+  const res = { found: false, events: new Set(), pushBranches: null, pushBranchesIgnore: null, pushTags: null, pushTagsIgnore: null, prBranches: null };
   if (!text) return res;
   const all = text.split(/\r?\n/);
   let start = -1;
@@ -465,6 +465,7 @@ function parseWorkflowOn(text) {
       res.pushBranches = listField(sub, "branches");
       res.pushBranchesIgnore = listField(sub, "branches-ignore");
       res.pushTags = listField(sub, "tags");
+      res.pushTagsIgnore = listField(sub, "tags-ignore");
     } else {
       const b = listField(sub, "branches");
       if (b !== null) res.prBranches = b;
@@ -510,6 +511,57 @@ function globMatch(pattern, name) {
   if (!/[*?[]/.test(pattern)) return pattern === name;
   const rx = "^" + pattern.replace(/[.+^${}()|\\]/g, "\\$&").replace(/\*/g, ".*").replace(/\?/g, ".") + "$";
   try { return new RegExp(rx).test(name); } catch { return false; }
+}
+
+// GitHub's filter-pattern glob, exactly (#332) — not the minimal globMatch above, because the
+// question this answers is whether a pre-release tag slips THROUGH a filter, and an approximation
+// errs silently. Per GitHub's "filter pattern cheat sheet": `*` is any run of characters except
+// `/` — so it DOES match `-`, which is the whole hazard (`v*.*.*` matches `v1.2.0-rc.1`); `**` is
+// any run including `/`; `?` and `+` are zero-or-one / one-or-more of the PRECEDING character (not
+// shell `?`); `[...]` is a character class; `\` escapes the next character. Everything else is
+// literal, including `.`. Returns null for a pattern that does not compile.
+function githubFilterRegex(pattern) {
+  const lit = (c) => c.replace(/[.*+?^${}()|[\]\\\/-]/g, "\\$&");
+  let rx = "";
+  for (let i = 0; i < pattern.length; i++) {
+    const c = pattern[i];
+    if (c === "\\" && i + 1 < pattern.length) { rx += lit(pattern[++i]); continue; }
+    if (c === "*") {
+      if (pattern[i + 1] === "*") { rx += ".*"; i++; } else rx += "[^/]*";
+      continue;
+    }
+    if ((c === "?" || c === "+") && rx) { rx += c; continue; }
+    if (c === "[") {
+      const close = pattern.indexOf("]", i + 1);
+      if (close > i + 1) { rx += "[" + pattern.slice(i + 1, close).replace(/\\/g, "\\\\") + "]"; i = close; continue; }
+    }
+    rx += lit(c);
+  }
+  try { return new RegExp("^" + rx + "$"); } catch { return null; }
+}
+
+// A GitHub include-filter list (`tags:`, `branches:`) evaluated the way GitHub does: patterns in
+// order, a `!` pattern excludes what it matches, a LATER positive pattern re-includes it. The last
+// pattern that matches decides; none matching means not included.
+function githubFilterMatches(patterns, ref) {
+  let included = false;
+  for (const raw of patterns) {
+    const neg = raw.startsWith("!");
+    const rx = githubFilterRegex(neg ? raw.slice(1) : raw);
+    if (rx && rx.test(ref)) included = !neg;
+  }
+  return included;
+}
+
+// Does a parsed `on:` block (parseWorkflowOn) fire on a push of tag `tag`? GitHub's rules: a
+// `tags:` list decides by inclusion; a `tags-ignore:` list fires on every tag it does not match; a
+// push with NO ref filter at all fires on every branch AND every tag; a push filtered by branches
+// only never fires on a tag.
+function workflowFiresOnTag(on, tag) {
+  if (!on.found || !on.events.has("push")) return false;
+  if (on.pushTags !== null) return githubFilterMatches(on.pushTags, tag);
+  if (on.pushTagsIgnore !== null) return !githubFilterMatches(on.pushTagsIgnore, tag);
+  return on.pushBranches === null && on.pushBranchesIgnore === null;
 }
 
 // ------------------------------------------------------------------- repo acquisition
@@ -1424,6 +1476,7 @@ function auditRepo(target, ctx) {
 
   // ---- deploy workflow presence -------------------------------------------
   const deployWorkflows = workflows.filter((f) => /^deploy[-.]/.test(f));
+  checkPrereleaseTagTrigger(src, workflows, deployWorkflows, deploy, fail, warn);
 
   const runbook = cfg && "runbook" in cfg ? cfg.runbook : null;
 
@@ -2162,6 +2215,35 @@ function checkClaudeMdSize(src, warn) {
 // caller is `deploy: manual` (a human runs it) or `deploy: tag` deployed OUTSIDE CI (a GitOps
 // poller runs it). Both share the same invariant: the deploy runs off no in-repo workflow, so the
 // path to production must be WRITTEN DOWN or nobody but its author can ship it.
+// ---- a deploy trigger that fires on a pre-release tag (#332) ---------------
+// GitHub's tag glob `*` matches `-`, so `v*.*.*` and `v*` both fire on `v1.2.0-rc.1`: the first
+// release-candidate tag would deploy. Unconditional (it reads workflows, not tier/exposure). In
+// scope: every deploy-*.yml, plus — when `deploy: tag` says a tag IS the path to production — any
+// other workflow carrying an explicit tag filter, whatever it is named. Severity follows reach:
+// `fail` under `deploy: tag` (production is reachable by that tag), `warn` elsewhere.
+const PRERELEASE_TAG_PROBE = "v1.2.0-rc.1";
+function checkPrereleaseTagTrigger(src, workflows, deployWorkflows, deploy, fail, warn) {
+  const isTagDeploy = deploy === "tag";
+  const report = isTagDeploy ? fail : warn;
+  for (const wf of workflows) {
+    const on = parseWorkflowOn(src.readFile(`.github/workflows/${wf}`));
+    const inScope = deployWorkflows.includes(wf) || (isTagDeploy && (on.pushTags !== null || on.pushTagsIgnore !== null));
+    if (!inScope || !workflowFiresOnTag(on, PRERELEASE_TAG_PROBE)) continue;
+    const trigger = on.pushTags !== null
+      ? `push.tags ${JSON.stringify(on.pushTags)}`
+      : on.pushTagsIgnore !== null
+        ? `push.tags-ignore ${JSON.stringify(on.pushTagsIgnore)}`
+        : "an unfiltered push trigger (fires on every tag)";
+    report(
+      `.github/workflows/${wf}: ${trigger} matches the pre-release tag ${PRERELEASE_TAG_PROBE} — ` +
+      "GitHub's tag glob `*` matches `-`, so a release-candidate tag " +
+      (isTagDeploy ? "would deploy to production" : "would run this deploy") +
+      `. Fix: add "!v*.*.*-*" after the pattern, or use a strict pattern that cannot match "-" ` +
+      "(e.g. v[0-9]+.[0-9]+.[0-9]+)",
+    );
+  }
+}
+
 function checkRunbook(src, runbook, fail, warn, why = "deploy: manual") {
   if (runbook === null || runbook === "") {
     fail(`${why} requires runbook: — name the committed doc that describes how production is reached (e.g. docs/deploy.md), or nobody but you can ship`);
