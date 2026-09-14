@@ -63,7 +63,11 @@ function fixture({ yml = 'tier: B\ntrunk: main\nproduction: null\ndeploy: none\n
     '#!/bin/sh',
     `echo "$*" >> "${ghLog}"`,
     'if [ "$1" = "--version" ]; then echo "gh version 0.0.0 (fixture)"; exit 0; fi',
+    // #344: `auth-broken` = the aggregate `gh auth status` exits 1 (a broken INACTIVE account) while the
+    // active credential works; `no-credential` = the active credential is broken too (`api user` fails).
+    `if [ "$1" = "auth" ] && [ "$2" = "status" ] && [ -f "${path.join(root, 'auth-broken')}" ]; then echo "X token in keyring is invalid (fixture)" >&2; exit 1; fi`,
     'if [ "$1" = "auth" ] && [ "$2" = "status" ]; then echo "Logged in (fixture)" >&2; exit 0; fi',
+    `if [ "$1" = "api" ] && [ "$2" = "user" ] && [ -f "${path.join(root, 'no-credential')}" ]; then echo "HTTP 401: Bad credentials (fixture)" >&2; exit 1; fi`,
     'if [ "$1" = "api" ] && [ "$2" = "user" ]; then echo "me"; exit 0; fi',
     'if [ "$1" = "run" ] && [ "$2" = "list" ]; then',
     '  BR=""; shift 2',
@@ -390,4 +394,96 @@ test('#324: --adopt on a branch it does not apply to is ignored, loudly, and rec
   assert.strictEqual(r.code, 0, r.out + r.err);
   assert.match(r.err, /--adopt ignored/);
   assert.doesNotMatch(fx.g(fx.work, 'log', '-1', '--format=%B', 'main'), /Colab-Adopted/);
+});
+
+// =================================================================================================
+// #343 — remote-only detection survives a git DWIM checkout that already made the local ref
+// =================================================================================================
+
+test('#343: a branch DWIM-created locally by `git checkout <b>` from origin is still REFUSED without --adopt', () => {
+  const fx = fixture();
+  pushFromAnotherMachine(fx, 'chore/bump-parser');
+  fx.g(fx.work, 'checkout', '-q', 'chore/bump-parser'); // DWIM: creates refs/heads/chore/bump-parser from origin
+  fx.g(fx.work, 'checkout', '-q', 'main');
+  assert.strictEqual(spawnSync('git', ['rev-parse', '--verify', '--quiet', 'refs/heads/chore/bump-parser'], { cwd: fx.work }).status, 0, 'precondition: DWIM made the local ref');
+  const mainBefore = fx.g(fx.work, 'rev-parse', 'main');
+  const r = colab(fx, ['ship', '--branch', 'chore/bump-parser', '--repo', fx.work]);
+  assert.strictEqual(r.code, 1, r.out + r.err);
+  assert.match(r.err, /came from origin/);
+  assert.match(r.err, /--adopt/);
+  assert.strictEqual(fx.g(fx.work, 'rev-parse', 'main'), mainBefore);
+});
+
+test('#343: --dry --json reports the DWIM-created branch as the same human-gated refusal', () => {
+  const fx = fixture();
+  pushFromAnotherMachine(fx, 'chore/bump-parser');
+  fx.g(fx.work, 'switch', '-q', 'chore/bump-parser');
+  fx.g(fx.work, 'switch', '-q', 'main');
+  const j = JSON.parse(colab(fx, ['ship', '--branch', 'chore/bump-parser', '--dry', '--json', '--repo', fx.work]).out);
+  const row = j.checks.find((c) => c.name === 'issues resolved (not zero-by-registry-gap)');
+  assert.ok(row, JSON.stringify(j.checks));
+  assert.strictEqual(row.ok, false);
+  assert.strictEqual(row.class, 'human-gated');
+  assert.match(row.detail, /came from origin/);
+});
+
+test('#343: --adopt ships a DWIM-created branch and records the adoption', () => {
+  const fx = fixture();
+  const sha = pushFromAnotherMachine(fx, 'chore/bump-parser');
+  fx.g(fx.work, 'checkout', '-q', 'chore/bump-parser');
+  fx.g(fx.work, 'checkout', '-q', 'main');
+  const r = colab(fx, ['ship', '--branch', 'chore/bump-parser', '--adopt', '--repo', fx.work]);
+  assert.strictEqual(r.code, 0, r.out + r.err);
+  assert.match(fx.g(fx.work, 'log', '-1', '--format=%B', 'main'), new RegExp(`Colab-Adopted: origin/chore/bump-parser @ ${sha}`));
+});
+
+test('#343: a branch made here with `checkout -b` and pushed is still a legit zero — the reflog says HEAD, not origin', () => {
+  const fx = fixture();
+  commitOnBranch(fx, 'chore/local-pushed', 'lp.txt', 'chore: local pushed');
+  fx.g(fx.work, 'push', '-q', '-u', 'origin', 'chore/local-pushed');
+  const r = colab(fx, ['ship', '--branch', 'chore/local-pushed', '--repo', fx.work]);
+  assert.strictEqual(r.code, 0, r.out + r.err);
+  assert.match(r.err, /Nothing contradicts it/);
+  assert.doesNotMatch(fx.g(fx.work, 'log', '-1', '--format=%B', 'main'), /Colab-Adopted/);
+});
+
+// =================================================================================================
+// #344 — gh usability is the ACTIVE credential, not the aggregate `gh auth status`
+// =================================================================================================
+
+function ciRow(fx) {
+  commitOnBranch(fx, 'chore/gh-probe', 'g.txt', 'chore: gh probe');
+  const j = JSON.parse(colab(fx, ['ship', '--branch', 'chore/gh-probe', '--dry', '--json', '--repo', fx.work]).out);
+  const row = j.checks.find((c) => /CI green$/.test(c.name));
+  assert.ok(row, JSON.stringify(j.checks));
+  return row;
+}
+
+test('#344: a broken INACTIVE account (`gh auth status` exit 1) with a working active credential — gh is usable, CI reads green', () => {
+  const fx = fixture();
+  fs.writeFileSync(path.join(fx.root, 'auth-broken'), '');
+  const row = ciRow(fx);
+  assert.strictEqual(row.ok, true, JSON.stringify(row));
+  assert.doesNotMatch(row.detail, /gh not usable/);
+});
+
+test('#344: no working credential at all — the refusal names the credential, not "no auth / no origin"', () => {
+  const fx = fixture();
+  fs.writeFileSync(path.join(fx.root, 'auth-broken'), '');
+  fs.writeFileSync(path.join(fx.root, 'no-credential'), '');
+  const row = ciRow(fx);
+  assert.strictEqual(row.ok, false);
+  assert.match(row.detail, /gh not usable \(gh has no working credential/);
+  assert.doesNotMatch(row.detail, /no origin/);
+});
+
+test('#344: gh fine but no origin remote — the refusal says so, and does not blame auth', () => {
+  const fx = fixture();
+  commitOnBranch(fx, 'chore/gh-probe', 'g.txt', 'chore: gh probe');
+  fx.g(fx.work, 'remote', 'remove', 'origin');
+  const j = JSON.parse(colab(fx, ['ship', '--branch', 'chore/gh-probe', '--dry', '--json', '--repo', fx.work]).out);
+  const row = j.checks.find((c) => /CI green$/.test(c.name));
+  assert.ok(row, JSON.stringify(j.checks));
+  assert.strictEqual(row.ok, false);
+  assert.match(row.detail, /gh not usable \(no origin remote\)/);
 });

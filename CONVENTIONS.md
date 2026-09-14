@@ -1380,6 +1380,10 @@ than guessed.
   on `origin`, with no issue number in its name and no local claim, is most likely another
   machine's work in flight; `colab ship` refuses it unless `--adopt` is passed, and an
   adopted squash carries a `Colab-Adopted:` trailer naming the remote sha and this machine.
+  A local ref does not make it this machine's (#343): when the ref's oldest reflog entry says
+  git created it from `origin/<same name>` (a DWIM `checkout`/`switch`/`worktree add`, or
+  `--track`), it reads the same as remote-only. Where no reflog survives, nothing contradicts
+  the local reading.
 - **Before merging to trunk, check that trunk's last CI run is green — and that it ran at
   all.** We once merged for 12 straight hours into repos whose CI was silently dead (org
   billing lockout) — every run "failed" without starting. **Ask by commit, not by recency
