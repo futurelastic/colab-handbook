@@ -49,6 +49,9 @@ const claimIdentity = require('./lib/claim-identity');
 const machine = require('./lib/machine');
 const targetSync = require('./lib/ship-target-sync');
 const docsOnly = require('./lib/docs-only');
+const releasePolicy = require('./lib/release-policy');
+const workflowTriggers = require('./lib/workflow-triggers');
+const releaseCut = require('./lib/release-cut');
 const {
   HOST, UserError, normIssueNum, issueTag, claimKey, today, nowISO, hoursSince, humanAge,
   parseArgs, table, shortRepo,
@@ -1154,6 +1157,7 @@ function cmdClaim(argv) {
 }
 
 const HELP_RELEASE = `colab release <issue> [--repo <path>]
+colab release cut [--repo <path>] [--bump patch|minor --reason "<why>"] [--dry] [--json]   (see: colab release cut --help)
 
 Release a single issue: removes the local claim and, if gh is usable, runs
   gh issue edit N --remove-assignee @me --remove-label in-progress
@@ -1169,7 +1173,189 @@ another machine, or one whose claim's GitHub release just failed, is left alone 
 said so. Worktree claims never held the checkout; \`colab worktree rm\` owns theirs.
 `;
 
+// ---------------------------------------------------------------------------
+// release cut — a release CANDIDATE vX.Y.Z-rc.N, where CONVENTIONS §6's release rung allows one (#338)
+//
+// The decision is tools/lib/release-cut.js (pure); this is the measuring half. Everything is read at
+// the commit the tag would name — origin/main's head, fetched first — never at whatever the checkout
+// has on disk: the workflows that would fire are the tagged commit's, and a green trunk head later
+// on does not count for an earlier commit (§6 condition 1). Candidates only: a final tag is the
+// release skill's (#339) and never this command's.
+// ---------------------------------------------------------------------------
+
+const HELP_RELEASE_CUT = `colab release cut [--repo <path>] [--bump patch|minor --reason "<why>"] [--dry] [--json]
+
+Cut a release CANDIDATE, vX.Y.Z-rc.N, on origin/main's head — only where CONVENTIONS.md §6's release
+rung lets an agent, and only once every condition below holds on that exact commit. Creates an
+annotated tag (the bump, its reason and every checked condition are recorded in its message) and
+pushes it to origin. NEVER creates a final vX.Y.Z tag — finalizing is the release skill's.
+
+Refuses, naming each failed condition (all are reported, not just the first):
+  release-policy       the rung row + the repo's release: block leave candidates off (a none/self/live
+                       or unmatched repo, or release: candidates: off), or the block is invalid
+  prerelease-trigger   a deploy workflow's tag trigger matches a pre-release tag — the same check as
+                       the audit's (#332), read from the workflows AT the commit being tagged
+  version              no bump owed (only docs/chore since the last final tag, and no --bump), a major
+                       (a breaking change on a >=1.0 repo; --bump major; the 0.x -> 1.0.0 step), no
+                       final tag yet (the first version is a human's), or the version is already final
+  already-candidate    this commit already carries a candidate of the same version
+  ci-green             every run at the commit finished and one succeeded — colab ship's whole-sha check
+  full-suite           every workflow that ran at the commit has a successful run (a cancelled-only
+                       workflow never ran its tests)
+  schema-additive      a migration since the last final tag is destructive (Laravel database/migrations
+                       up() drops/renames/->change(), Prisma DROP/RENAME/ALTER COLUMN) or an existing
+                       migration was edited/deleted. Other layouts are not read — the release notes
+                       still owe the §6 judgement on the diff
+  switch-dependencies  a colab:switch marker is malformed, or a finished switch needs one that is not
+
+The bump is release-status's semverSuggestion since the last final tag (candidates skipped): fix ->
+patch, feat -> minor; a breaking change is a minor pre-1.0 and a refusal from 1.0 on.
+  --bump patch|minor   override the computed bump — requires --reason, which is recorded on the tag
+  --reason "<why>"     why the override
+  --dry                measure and report; create and push nothing
+  --json               machine-readable: { ok, tag, created, checks: [{condition, ok, detail}], ... }
+  --repo <path>        the repo (default: the one you are in)
+
+Needs origin reachable (the tag is recorded there) and gh usable (CI, suite and switch markers are
+read from GitHub). Exit code: 0 when a candidate was cut (or, with --dry, would be); 1 when refused.
+`;
+
+/** Every issue with state + body, for the switch markers. null when the read failed or may be truncated. */
+function readAllIssuesForSwitches(repoAbs) {
+  const LIMIT = 5000;
+  const r = spawnSync('gh', ['issue', 'list', '--state', 'all', '--limit', String(LIMIT), '--json', 'number,state,stateReason,body'],
+    { cwd: repoAbs, encoding: 'utf8', maxBuffer: 512 * 1024 * 1024 });
+  if (r.status !== 0) return null;
+  try {
+    const list = JSON.parse(r.stdout);
+    // A full page may be a truncated one — an unread marker is not a cleared one.
+    return Array.isArray(list) && list.length < LIMIT ? list : null;
+  } catch (_) {
+    return null;
+  }
+}
+
+/** [{status, path, content}] for every path changed between `from` (null = the empty tree) and `sha`; null on a git failure. */
+function releaseCutChanges(repoAbs, from, sha) {
+  let base = from;
+  if (!base) {
+    const empty = git.git(['hash-object', '-t', 'tree', '--stdin'], repoAbs, { input: '' });
+    if (!empty.ok) return null;
+    base = empty.stdout;
+  }
+  const diff = git.git(['diff', '--name-status', base, sha], repoAbs);
+  if (!diff.ok) return null;
+  return diff.stdout.split('\n').filter(Boolean).map((line) => {
+    const parts = line.split('\t');
+    const status = parts[0];
+    const file = parts[parts.length - 1];
+    let content = null;
+    if (status.startsWith('A') && releaseCut.isMigrationPath(file)) {
+      const show = git.git(['show', `${sha}:${file}`], repoAbs);
+      content = show.ok ? show.stdout : '';
+    }
+    return { status, path: file, content };
+  });
+}
+
+function cmdReleaseCut(argv) {
+  const opts = parseArgs(argv, {
+    values: { '--repo': 'repo', '--bump': 'bump', '--reason': 'reason' },
+    flags: { '--dry': 'dry', '--json': 'json', '-h': 'help', '--help': 'help' },
+  });
+  if (opts.help) return print(HELP_RELEASE_CUT);
+  if (opts._.length) throw new UserError(`release cut takes no positional arguments (got: ${opts._.join(' ')})`);
+  if (opts.reason && !opts.bump) throw new UserError('--reason records why --bump overrode the computed bump — pass --bump with it');
+  const repoAbs = resolveRepo(opts);
+  const doc = projectDoc(repoAbs);
+  const policy = releasePolicy.evaluateRelease(doc);
+
+  const fetched = git.git(['fetch', '--tags', 'origin', 'main'], repoAbs);
+  if (!fetched.ok) {
+    throw new UserError(`git fetch --tags origin main failed — a candidate is recorded on origin, so nothing is cut without it (${(fetched.stderr || '').split('\n')[0] || fetched.code})`);
+  }
+  const shaR = git.git(['rev-parse', '--verify', '--quiet', 'refs/remotes/origin/main^{commit}'], repoAbs);
+  if (!shaR.ok || !shaR.stdout) throw new UserError('no origin/main — candidates are cut from main (CONVENTIONS.md §6: never from dev)');
+  const sha = shaR.stdout;
+  const at = `main@${shortSha(sha)}`;
+
+  const wf = git.git(['ls-tree', '--name-only', `${sha}:.github/workflows`], repoAbs);
+  const workflows = wf.ok ? wf.stdout.split('\n').map((s) => s.trim()).filter((f) => /\.ya?ml$/.test(f)) : [];
+  const triggers = workflowTriggers.prereleaseTagTriggers({
+    readFile: (rel) => { const r = git.git(['show', `${sha}:${rel}`], repoAbs); return r.ok ? r.stdout : null; },
+    workflows,
+    deploy: doc.deploy === undefined || doc.deploy === null ? 'none' : String(doc.deploy),
+  });
+
+  const lastFinal = releaseTag.latestReleaseTag(repoAbs, { ref: 'origin/main' });
+  const suggestion = lastFinal
+    ? semverSuggestion(ccSummary(repoAbs, `${lastFinal}..origin/main`))
+    : { bump: null, why: 'no final tag yet' };
+  const lines = (r) => (r.ok ? r.stdout.split('\n').map((s) => s.trim()).filter(Boolean) : []);
+  const tags = lines(git.git(['tag', '--list'], repoAbs));
+  const tagsAtSha = lines(git.git(['tag', '--points-at', sha], repoAbs));
+
+  let ci; let suite; let switches;
+  if (!isGhUsable(repoAbs)) {
+    const why = ghUnusableWhy(repoAbs);
+    ci = { ok: false, detail: `gh not usable (${why}) — cannot confirm CI at ${at}` };
+    suite = { ok: false, detail: `gh not usable (${why}) — cannot confirm the suite ran at ${at}` };
+    switches = { ok: false, detail: `gh not usable (${why}) — the colab:switch markers cannot be read` };
+  } else {
+    const run = git.ghRunForCommit(repoAbs, 'main', sha);
+    if (!run) ci = { ok: false, detail: `gh run list failed — cannot confirm CI at ${at}` };
+    else { const v = classifyCiRun(repoAbs, run, at); ci = { ok: v.ok, detail: v.detail }; }
+    suite = releaseCut.fullSuiteVerdict(git.ghRunsForCommit(repoAbs, 'main', sha), at);
+    switches = releaseCut.switchVerdict(readAllIssuesForSwitches(repoAbs));
+  }
+  const changes = releaseCutChanges(repoAbs, lastFinal, sha);
+  const schema = changes === null
+    ? { ok: false, detail: 'git diff failed — schema changes cannot be read' }
+    : releaseCut.schemaVerdict(changes, lastFinal || 'the first commit');
+
+  const verdict = releaseCut.decide({
+    policy, triggers, lastFinal, suggestion, tags, tagsAtSha, ci, suite, schema, switches,
+    override: opts.bump ? { bump: opts.bump, reason: opts.reason } : null,
+  });
+
+  let created = false;
+  if (verdict.ok && !opts.dry) {
+    const message = releaseCut.tagMessage(verdict, { sha, lastFinal });
+    const t = git.git(['tag', '-a', '--cleanup=verbatim', verdict.tag, sha, '-m', message], repoAbs);
+    if (!t.ok) throw new UserError(`git tag ${verdict.tag} failed: ${(t.stderr || '').split('\n')[0]}`);
+    const push = git.git(['push', 'origin', `refs/tags/${verdict.tag}`], repoAbs);
+    if (!push.ok) {
+      git.git(['tag', '-d', verdict.tag], repoAbs);
+      throw new UserError(`git push origin ${verdict.tag} failed — the local tag was deleted again, nothing is cut (${(push.stderr || '').split('\n')[0]})`);
+    }
+    created = true;
+  }
+
+  if (opts.json) {
+    print(JSON.stringify({
+      repo: shortRepo(repoAbs), sha, lastFinal, suggestion, dry: !!opts.dry,
+      ok: verdict.ok, tag: verdict.tag, created, version: verdict.version, bump: verdict.bump,
+      overridden: verdict.overridden, checks: verdict.checks,
+    }, null, 2));
+    return verdict.ok ? 0 : 1;
+  }
+
+  print(`colab release cut — ${shortRepo(repoAbs)} at ${at} (last final: ${lastFinal || 'none'})`);
+  const width = Math.max(...verdict.checks.map((c) => c.condition.length));
+  for (const c of verdict.checks) print(`  ${c.ok ? '✓' : '✗'} ${c.condition.padEnd(width)}  ${c.detail}`);
+  print('');
+  if (!verdict.ok) {
+    print(`✗ refused — ${verdict.refusals.length} condition(s) failed; nothing cut.`);
+    return 1;
+  }
+  if (opts.dry) print(`[--dry] would create ${verdict.tag} on ${at} and push it to origin. Nothing created.`);
+  else print(`✓ cut ${verdict.tag} on ${at} and pushed it to origin — a candidate, not a release; finalizing it is the release skill's.`);
+  return 0;
+}
+
 function cmdRelease(argv) {
+  // `release cut` (#338) shares the verb: an issue number is never the word "cut".
+  if (argv[0] === 'cut') return cmdReleaseCut(argv.slice(1));
   const opts = parseArgs(argv, {
     values: { '--repo': 'repo' }, flags: { '-h': 'help', '--help': 'help' },
   });
@@ -10359,6 +10545,8 @@ Commands:
   release-notes [<range>] [--repo P] [--out F] [--headline "..."]   grouped Markdown release summary
   release-status [<repo>...] [--repo P] [--json]   merged-but-UNRELEASED lag on tag-gated repos —
                                         read-only, never tags (#81)
+  release cut [--repo P] [--bump patch|minor --reason R] [--dry] [--json]   cut a release CANDIDATE
+                                        vX.Y.Z-rc.N where §6's rung allows it; never a final tag (#338)
   adopt [--repo P] [--json] [--no-verify] [--axis a,b] [--room R] [--exposure E]
         [--writes W] [--channels C] [--production U|none] [--deploy D] [--stack S]
         [--answered-by N] [--reason "..."]      detect + ask + derive + WRITE §9's five rows
