@@ -108,11 +108,37 @@ function branchExists(repo, branch) {
  * another machine's work, which `ship` must not adopt silently. Read it BEFORE anything that runs
  * `git worktree add <dir> <branch>`: git's DWIM checkout silently creates the local ref from the
  * remote one, after which the branch is indistinguishable from one this machine made.
+ *
+ * #343: "indistinguishable" by refs alone — but not by the branch's reflog. `localFromRemote` is true
+ * when the local ref's OLDEST reflog entry says it was created from origin's copy of the SAME name.
+ * Measured on git 2.55, one fixture per creation path:
+ *   git checkout <b> / git switch <b> / git worktree add <dir> <b>   (DWIM)
+ *                                            → `branch: Created from refs/remotes/origin/<b>`
+ *   git branch --track <b> origin/<b> / git worktree add -b <b> <dir> origin/<b> / checkout -b <b> origin/<b>
+ *                                            → `branch: Created from origin/<b>`
+ *   git checkout -b <b>                       → `branch: Created from HEAD`       (a local branch)
+ *   git checkout -b <b> origin/main           → `branch: Created from origin/main` (a local branch)
+ * The signal is one-directional: it can only turn a "local" reading into "came from origin", never
+ * the reverse. Where it is absent it degrades to the pre-#343 reading, silently — the known blind
+ * spots are an expired reflog (gc.reflogExpire, 90 days by default), `core.logAllRefUpdates=false`,
+ * and a ref created by `git fetch origin <b>:<b>` (reflog `fetch …: storing head`, deliberately not
+ * matched — its wording carries the refspec, not a "created from" source).
  */
 function branchRefs(repo, branch) {
-  if (!branch || typeof branch !== 'string') return { localSha: null, remoteSha: null };
+  if (!branch || typeof branch !== 'string') return { localSha: null, remoteSha: null, localFromRemote: false };
   const at = (ref) => { const r = git(['rev-parse', '--verify', '--quiet', ref], repo); return r.ok && r.stdout ? r.stdout : null; };
-  return { localSha: at(`refs/heads/${branch}`), remoteSha: at(`refs/remotes/origin/${branch}`) };
+  const localSha = at(`refs/heads/${branch}`);
+  const remoteSha = at(`refs/remotes/origin/${branch}`);
+  return { localSha, remoteSha, localFromRemote: localSha ? createdFromRemote(repo, branch) : false };
+}
+
+/** #343: is `refs/heads/<branch>`'s oldest reflog entry "Created from origin/<branch>"? See branchRefs. */
+function createdFromRemote(repo, branch) {
+  const r = git(['reflog', 'show', '--format=%gs', `refs/heads/${branch}`, '--'], repo);
+  if (!r.ok || !r.stdout) return false;
+  const lines = r.stdout.split('\n').filter(Boolean);
+  const oldest = lines[lines.length - 1] || '';
+  return oldest === `branch: Created from refs/remotes/origin/${branch}` || oldest === `branch: Created from origin/${branch}`;
 }
 
 /**
@@ -300,14 +326,35 @@ function dirtyAny(wtPath) {
 
 // ---- gh ----
 
-let _ghAvail = null;
+/**
+ * #344: is gh usable — and if not, WHY. `{ ok, reason }`, reason `null` | `'missing'` (no gh binary)
+ * | `'no-credential'` (gh is there, but the credential it would actually use does not work). Cached
+ * per process.
+ *
+ * A bare `gh auth status` is the wrong question: it exits 1 when ANY configured account is broken,
+ * even when the one gh actually uses is fine (measured: a valid `GH_TOKEN` plus an expired, inactive
+ * keyring account → `gh auth status` exit 1 while `gh api user` / `gh run list` work). That read gh
+ * as absent for the whole run — ship refused CI, claims went local-only — and flipped whenever the
+ * inactive token expired. So: `gh auth status --active` (only the account gh will use; present on
+ * gh 2.98, measured — absent on older builds)
+ * first, and when that fails — an older gh without the flag, or a genuinely broken active account —
+ * the decisive probe is the credential doing real work: `gh api user`.
+ */
+let _ghState = null;
+function ghState() {
+  if (_ghState) return _ghState;
+  if (!run('gh', ['--version']).ok) return (_ghState = { ok: false, reason: 'missing' });
+  if (run('gh', ['auth', 'status', '--active']).ok) return (_ghState = { ok: true, reason: null });
+  const who = run('gh', ['api', 'user', '-q', '.login']);
+  if (who.ok && who.stdout) {
+    if (_ghLogin === undefined) _ghLogin = who.stdout;
+    return (_ghState = { ok: true, reason: null });
+  }
+  return (_ghState = { ok: false, reason: 'no-credential' });
+}
+
 function ghAvailable() {
-  if (_ghAvail !== null) return _ghAvail;
-  const which = run('gh', ['--version']);
-  if (!which.ok) { _ghAvail = false; return false; }
-  const auth = run('gh', ['auth', 'status']);
-  _ghAvail = auth.ok;
-  return _ghAvail;
+  return ghState().ok;
 }
 
 /** gh issue edit — returns {ok, stderr}. cwd must be inside the repo so gh resolves the remote. */
@@ -660,7 +707,7 @@ module.exports = {
   claimRemote, remoteHeads,
   worktreeList, worktreeListDetailed, resolveWorktreePathForBranch, gitFailureLine,
   dirtyTracked, dirtyUntracked, dirtyAny,
-  ghAvailable, ghIssueEdit, ghListLabels, ghAssignedIssues,
+  ghAvailable, ghState, ghIssueEdit, ghListLabels, ghAssignedIssues,
   ghCurrentLogin, ghIssueView, ghIssueComment, ghRunForSha, ghRunForCommit, ghRunsForCommit,
   ghRunJobCount, ghRunJobs,
   ghIssueListByLabel, ghLabelDelete, ghLabelCreate,

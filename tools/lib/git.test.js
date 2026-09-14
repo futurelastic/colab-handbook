@@ -758,3 +758,70 @@ test('#321 ghRunJobs: null on a gh failure, an unparseable body, a shape with no
   assert.strictEqual(git.ghRunJobs(fx.work, null), null);
   assert.strictEqual(git.ghRunJobs(fx.work, undefined), null);
 });
+
+// ---------------------------------------------------------------------------------------------
+// #343 — branchRefs.localFromRemote: the reflog's creation entry, per creation path (real git)
+// ---------------------------------------------------------------------------------------------
+
+function dwimFixture() {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'colab-git-dwim-'));
+  const origin = path.join(root, 'origin.git');
+  const work = path.join(root, 'work');
+  const g = (...args) => execFileSync('git', args, { cwd: work, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
+  execFileSync('git', ['init', '-q', '--bare', '-b', 'main', origin]);
+  execFileSync('git', ['init', '-q', '-b', 'main', work]);
+  g('config', 'user.email', 't@example.invalid'); g('config', 'user.name', 't');
+  g('config', 'core.hooksPath', path.join(root, '.nohooks'));
+  g('remote', 'add', 'origin', origin);
+  fs.writeFileSync(path.join(work, 'f'), 'a\n');
+  g('add', 'f'); g('commit', '-q', '-m', 'init'); g('push', '-q', 'origin', 'main');
+  // every name below exists ONLY on origin until its creation path runs
+  for (const b of ['co', 'sw', 'wt', 'track', 'cbo', 'pushed-here']) {
+    if (b === 'pushed-here') continue;
+    g('branch', '-q', b); g('push', '-q', 'origin', b); g('branch', '-q', '-D', b);
+  }
+  g('fetch', '-q', 'origin');
+  return { root, work, g };
+}
+
+test('#343: every git path that makes the local ref FROM origin/<b> reads localFromRemote; a locally-made branch does not', () => {
+  const { root, work, g } = dwimFixture();
+  try {
+    g('checkout', '-q', 'co'); g('checkout', '-q', 'main');                 // DWIM checkout
+    g('switch', '-q', 'sw'); g('switch', '-q', 'main');                     // DWIM switch
+    g('worktree', 'add', '-q', path.join(root, 'wt1'), 'wt');               // DWIM worktree add
+    g('branch', '-q', '--track', 'track', 'origin/track');                  // explicit --track
+    g('checkout', '-q', '-b', 'cbo', 'origin/cbo');                         // checkout -b <b> origin/<b>
+    fs.writeFileSync(path.join(work, 'f'), 'b\n'); g('commit', '-q', '-am', 'local work on top');
+    g('checkout', '-q', 'main');
+    g('checkout', '-q', '-b', 'local'); g('checkout', '-q', 'main');         // checkout -b (HEAD)
+    g('checkout', '-q', '-b', 'off-main', 'origin/main'); g('checkout', '-q', 'main'); // other name off origin
+    g('checkout', '-q', '-b', 'pushed-here'); g('push', '-q', '-u', 'origin', 'pushed-here'); g('checkout', '-q', 'main');
+
+    for (const b of ['co', 'sw', 'wt', 'track', 'cbo']) {
+      const r = git.branchRefs(work, b);
+      assert.ok(r.localSha && r.remoteSha, `${b}: both refs resolve`);
+      assert.strictEqual(r.localFromRemote, true, `${b}: created from origin/${b}`);
+    }
+    for (const b of ['local', 'off-main', 'pushed-here']) {
+      assert.strictEqual(git.branchRefs(work, b).localFromRemote, false, `${b}: made here`);
+    }
+    const remoteOnly = git.branchRefs(work, 'nope');
+    assert.deepStrictEqual(remoteOnly, { localSha: null, remoteSha: null, localFromRemote: false });
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('#343: no reflog (core.logAllRefUpdates=false) degrades to the pre-#343 reading — local', () => {
+  const { root, work, g } = dwimFixture();
+  try {
+    g('config', 'core.logAllRefUpdates', 'false');
+    g('checkout', '-q', 'co'); g('checkout', '-q', 'main');
+    const r = git.branchRefs(work, 'co');
+    assert.ok(r.localSha);
+    assert.strictEqual(r.localFromRemote, false);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});

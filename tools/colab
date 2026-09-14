@@ -147,6 +147,18 @@ function isGhUsable(repoAbs) {
   return git.ghAvailable() && !!git.originUrl(repoAbs);
 }
 
+/**
+ * #344: the honest half of every "gh not usable" message — WHICH of isGhUsable's conditions failed.
+ * The old fixed text "(no auth / no origin)" blamed both at once, and pointed an operator whose
+ * active credential was fine at auth. Only meaningful when isGhUsable() is false.
+ */
+function ghUnusableWhy(repoAbs) {
+  const s = git.ghState();
+  if (!s.ok) return s.reason === 'missing' ? 'gh is not installed' : 'gh has no working credential — `gh api user` fails';
+  if (!git.originUrl(repoAbs)) return 'no origin remote';
+  return 'unknown';
+}
+
 // ---------------------------------------------------------------------------
 // claim ENFORCEMENT — refusal, claim comments, and the tie-break for the
 // simultaneous-claim race. See tools/README.md "Claim lifecycle" for the model.
@@ -961,7 +973,7 @@ function cmdClaim(argv) {
   const remoteConf = remoteCheck.conflicts;
   const localConf = localClaimConflicts(st0, repoAbs, nums, wtName);
   const ghConf = gh ? ghClaimConflicts(repoAbs, nums, myLogin, HOST, session, comps, myMachineId()) : [];
-  if (!gh && remoteCheck.mode === 'ok') warn('gh not usable here — refusal checked the remote and this machine; the tracker half will be PENDING');
+  if (!gh && remoteCheck.mode === 'ok') warn(`gh not usable here (${ghUnusableWhy(repoAbs)}) — refusal checked the remote and this machine; the tracker half will be PENDING`);
   if (remoteConf.length || localConf.length || ghConf.length) {
     if (!opts.force) { printRefusal(localConf, ghConf, remoteConf); return 1; }
     printTakeover(localConf, ghConf, remoteConf);
@@ -1185,7 +1197,7 @@ function cmdRelease(argv) {
     }
     postReleaseComment(repo, num); // "✅ Released" unless the issue is already CLOSED
   } else {
-    warn('gh not usable here — released LOCAL-ONLY');
+    warn(`gh not usable here (${ghUnusableWhy(repo)}) — released LOCAL-ONLY`);
   }
 
   let remaining = null;
@@ -1937,7 +1949,7 @@ function cmdReadiness(argv) {
   // can see it from any machine (CONVENTIONS.md §5). Writing it "local-only" would be invisible to
   // the one reader it exists for, so absent gh this command refuses instead of faking success.
   if (!isGhUsable(repoAbs)) {
-    throw new UserError(`gh not usable here (no gh auth or no origin remote) — the ${labels.READINESS_LABEL} marker lives on GitHub and cannot be written local-only`);
+    throw new UserError(`gh not usable here (${ghUnusableWhy(repoAbs)}) — the ${labels.READINESS_LABEL} marker lives on GitHub and cannot be written local-only`);
   }
 
   if (opts.mechanical) return cmdReadinessMechanical(repoAbs, num, opts);
@@ -2126,7 +2138,7 @@ function cmdBlocked(argv) {
   if (!repoAbs) throw new UserError('not inside a git repo — pass --repo <path>');
 
   if (!isGhUsable(repoAbs)) {
-    throw new UserError('gh not usable here (no gh auth or no origin remote) — the blocked_by edge lives on GitHub and cannot be written local-only');
+    throw new UserError(`gh not usable here (${ghUnusableWhy(repoAbs)}) — the blocked_by edge lives on GitHub and cannot be written local-only`);
   }
 
   return opts.clear
@@ -2363,7 +2375,7 @@ function cmdMigrationGrant(argv) {
   // machine than the one that granted). Writing or reading it local-only would be invisible to
   // the one reader it exists for.
   if (!isGhUsable(repoAbs)) {
-    throw new UserError('gh not usable here (no gh auth or no origin remote) — a migration grant lives on the tracker, visible from any machine to the gate that reads it, and there is deliberately no local-only fallback');
+    throw new UserError(`gh not usable here (${ghUnusableWhy(repoAbs)}) — a migration grant lives on the tracker, visible from any machine to the gate that reads it, and there is deliberately no local-only fallback`);
   }
 
   return opts.revoke ? cmdMigrationGrantRevoke(repoAbs, num) : cmdMigrationGrantCreate(repoAbs, num, opts);
@@ -2451,7 +2463,7 @@ function cmdMigrationGrantList(opts) {
   const repoAbs = opts.repo ? resolveRepo(opts) : (git.repoRoot(process.cwd()) || null);
   if (!repoAbs) throw new UserError('not inside a git repo — pass --repo <path>');
   if (!isGhUsable(repoAbs)) {
-    throw new UserError('gh not usable here (no gh auth or no origin remote) — cannot list migration grants');
+    throw new UserError(`gh not usable here (${ghUnusableWhy(repoAbs)}) — cannot list migration grants`);
   }
 
   // null (a failed read) MUST refuse rather than report an empty table — "no outstanding grants"
@@ -2573,7 +2585,7 @@ function cmdDecision(argv) {
   if (!repoAbs) throw new UserError('not inside a git repo — pass --repo <path>');
 
   if (!isGhUsable(repoAbs)) {
-    throw new UserError('gh not usable here (no gh auth or no origin remote) — a decision record lives on the tracker, visible from any machine to whatever reads it, and there is deliberately no local-only fallback');
+    throw new UserError(`gh not usable here (${ghUnusableWhy(repoAbs)}) — a decision record lives on the tracker, visible from any machine to whatever reads it, and there is deliberately no local-only fallback`);
   }
 
   let body = '';
@@ -2669,7 +2681,7 @@ function cmdDecisionList(opts) {
   const repoAbs = opts.repo ? resolveRepo(opts) : (git.repoRoot(process.cwd()) || null);
   if (!repoAbs) throw new UserError('not inside a git repo — pass --repo <path>');
   if (!isGhUsable(repoAbs)) {
-    throw new UserError('gh not usable here (no gh auth or no origin remote) — cannot list decisions');
+    throw new UserError(`gh not usable here (${ghUnusableWhy(repoAbs)}) — cannot list decisions`);
   }
 
   const hits = git.ghIssueListByLabel(repoAbs, labels.DECISION_RECORDED_LABEL, 'open', ['number', 'title']);
@@ -2869,7 +2881,7 @@ function cmdCiGrant(argv) {
   }
 
   if (!isGhUsable(repoAbs)) {
-    throw new UserError('gh not usable here (no gh auth or no origin remote) — a CI grant lives on the tracker, visible from any machine to the gate that reads it, and there is deliberately no local-only fallback');
+    throw new UserError(`gh not usable here (${ghUnusableWhy(repoAbs)}) — a CI grant lives on the tracker, visible from any machine to the gate that reads it, and there is deliberately no local-only fallback`);
   }
 
   return opts.revoke ? cmdCiGrantRevoke(repoAbs, num) : cmdCiGrantCreate(repoAbs, num, opts);
@@ -2984,7 +2996,7 @@ function cmdCiGrantList(opts) {
   const repoAbs = opts.repo ? resolveRepo(opts) : (git.repoRoot(process.cwd()) || null);
   if (!repoAbs) throw new UserError('not inside a git repo — pass --repo <path>');
   if (!isGhUsable(repoAbs)) {
-    throw new UserError('gh not usable here (no gh auth or no origin remote) — cannot list CI grants');
+    throw new UserError(`gh not usable here (${ghUnusableWhy(repoAbs)}) — cannot list CI grants`);
   }
 
   const hits = git.ghIssueListByLabel(repoAbs, labels.CI_GRANT_LABEL, 'open', ['number', 'title']);
@@ -3611,7 +3623,7 @@ function cmdWorktreeNew(argv) {
     if (remoteCheck.mode === 'no-remote') warn('no git remote — these claims are recorded on this machine only; no other machine can see them');
     const localConf = localClaimConflicts(st0, repoAbs, issues, name);
     const ghConf = gh ? ghClaimConflicts(repoAbs, issues, myLogin, HOST, session, comps, myMachineId()) : [];
-    if (!gh && remoteCheck.mode === 'ok') warn('gh not usable here — refusal checked the remote and this machine; the tracker half will be PENDING');
+    if (!gh && remoteCheck.mode === 'ok') warn(`gh not usable here (${ghUnusableWhy(repoAbs)}) — refusal checked the remote and this machine; the tracker half will be PENDING`);
     if (remoteCheck.conflicts.length || localConf.length || ghConf.length) {
       if (!opts.force) { printRefusal(localConf, ghConf, remoteCheck.conflicts); return 1; }
       printTakeover(localConf, ghConf, remoteCheck.conflicts);
@@ -5527,7 +5539,7 @@ function cmdLabels(argv) {
 
   const repoAbs = resolveRepo(opts);
   if (!isGhUsable(repoAbs)) {
-    throw new UserError('gh not usable here (no gh auth or no origin remote) — the label set lives on the tracker, and there is deliberately no local-only fallback');
+    throw new UserError(`gh not usable here (${ghUnusableWhy(repoAbs)}) — the label set lives on the tracker, and there is deliberately no local-only fallback`);
   }
 
   const present = git.ghListLabels(repoAbs);
@@ -7107,7 +7119,7 @@ function newMigrations(mainRoot, trunk, branch) {
 function shipMigrationGrants(repoAbs, gh, issues, branch) {
   if (!gh) {
     return { ok: false, granted: [],
-      missing: [{ issue: null, reason: 'gh not usable (no auth / no origin) — a migration grant lives on the tracker and cannot be confirmed' }] };
+      missing: [{ issue: null, reason: `gh not usable (${ghUnusableWhy(repoAbs)}) — a migration grant lives on the tracker and cannot be confirmed` }] };
   }
   const records = {};
   for (const n of issues) records[n] = git.ghIssueView(repoAbs, n, ['state', 'labels', 'comments']);
@@ -7728,7 +7740,7 @@ function resolveCloseRefsSplit(repoAbs, gh, issues, refsFromFlag) {
  */
 function shipCiCheck(repoAbs, gh, target, trunk, grantThunk, cureThunk) {
   const name = `${target === trunk ? 'trunk' : 'line'} CI green`;
-  if (!gh) return { name, ok: false, class: SELF_CLEARING, detail: 'gh not usable (no auth / no origin) — cannot confirm CI', grantVerdict: null, cureVerdict: null };
+  if (!gh) return { name, ok: false, class: SELF_CLEARING, detail: `gh not usable (${ghUnusableWhy(repoAbs)}) — cannot confirm CI`, grantVerdict: null, cureVerdict: null };
   let run = git.ghRunForSha(repoAbs, target);
   let via = target;
   if (run && run.status === 'none' && target !== trunk) {
@@ -7948,7 +7960,7 @@ function applyRedTrunkExemptions(raw, target, trunk, redSha, grantThunk, cureThu
 function shipCiGrants(repoAbs, gh, issues, branch, trunk, redSha) {
   if (!gh) {
     return { ok: false, granted: [],
-      missing: [{ issue: null, reason: 'gh not usable (no auth / no origin) — a CI grant lives on the tracker and cannot be confirmed' }] };
+      missing: [{ issue: null, reason: `gh not usable (${ghUnusableWhy(repoAbs)}) — a CI grant lives on the tracker and cannot be confirmed` }] };
   }
   const records = {};
   for (const n of issues) records[n] = git.ghIssueView(repoAbs, n, ['state', 'labels', 'comments']);
@@ -8021,7 +8033,7 @@ function ciGrantPayload(ciResult) {
  */
 function shipCiCure(repoAbs, gh, target, trunk, redSha, branch) {
   if (!gh) {
-    return { ok: false, reason: 'gh not usable (no auth / no origin) — the cure rule needs a measured CI run', redSha, evidenceSha: null };
+    return { ok: false, reason: `gh not usable (${ghUnusableWhy(repoAbs)}) — the cure rule needs a measured CI run`, redSha, evidenceSha: null };
   }
   const containsRedSha = git.git(['merge-base', '--is-ancestor', redSha, branch], repoAbs).ok;
   const evRun = git.ghRunForSha(repoAbs, branch);
@@ -8338,7 +8350,9 @@ function cmdShipDryJson(opts) {
     (records.branchProblem(c.branch) || (c.branch && !git.branchExists(repoAbs, c.branch))));
   // #324: same measurement, same moment-before-any-checkout, as the prose path.
   const dryRefs = git.branchRefs(repoAbs, sess.branch);
-  const dryRemoteOnly = !dryRefs.localSha && !!dryRefs.remoteSha;
+  // #343: a local ref git DWIM-created from origin's copy is still another machine's branch.
+  const dryRemoteOnly = !!dryRefs.remoteSha && (!dryRefs.localSha || dryRefs.localFromRemote);
+  const dryWhere = dryRefs.localSha ? 'came from origin (this machine\'s local ref was created from origin\'s copy — git DWIM checkout, #343)' : 'exists ONLY on origin';
   const dryZeroVerdict = shipguard.zeroClaimVerdict(sess.issues.length, sess.branch, dryBrokenClaims.length,
     { remoteOnly: dryRemoteOnly, adopt: !!opts.adopt });
   if (dryZeroVerdict.relevant) {
@@ -8348,9 +8362,9 @@ function cmdShipDryJson(opts) {
       : dryZeroVerdict.reason === 'branch-names-issues'
         ? `branch name claims ${dryZeroVerdict.named.map((n) => '#' + n).join(' ')} but this machine's ("${HOST}") registry has nothing for it (#153) — claim may live on another machine`
         : dryZeroVerdict.reason === 'remote-only-unclaimed'
-          ? `branch exists ONLY on origin (@ ${shortSha(dryRefs.remoteSha)}) and this machine's ("${HOST}") registry has nothing for it (#324) — likely another machine's work; ship from there, claim it here, or --adopt`
+          ? `branch ${dryWhere} (@ ${shortSha(dryRefs.remoteSha)}) and this machine's ("${HOST}") registry has nothing for it (#324) — likely another machine's work; ship from there, claim it here, or --adopt`
           : dryZeroVerdict.reason === 'adopted'
-            ? `branch exists ONLY on origin (@ ${shortSha(dryRefs.remoteSha)}) — adopted explicitly (--adopt); the squash will carry a Colab-Adopted: trailer (#324)`
+            ? `branch ${dryWhere} (@ ${shortSha(dryRefs.remoteSha)}) — adopted explicitly (--adopt); the squash will carry a Colab-Adopted: trailer (#324)`
             : 'branch name carries no issue numbers — a legitimate zero (chore / evidence-close)';
     checks.push({ name: 'issues resolved (not zero-by-registry-gap)', ok: okZero,
       class: okZero ? null : HUMAN_GATED, detail });
@@ -8506,7 +8520,7 @@ function shipEvidenceClose({ repoAbs, st, sess, target, trunk, gh, closeIssues, 
     ? `E1: evidence-close (trunk-direct) — no branch, no merge into ${target}, nothing to push.`
     : `E1: evidence-close — no merge into ${target}, nothing to push.`);
   if (!gh) {
-    process.stderr.write('✗ E1: gh is not usable (no auth / no origin), so neither the evidence check nor the\n');
+    process.stderr.write(`✗ E1: gh is not usable (${ghUnusableWhy(repoAbs)}), so neither the evidence check nor the\n`);
     process.stderr.write('  close can be performed. Nothing was changed. Fix gh and re-run.\n');
     return 1;
   }
@@ -8972,7 +8986,12 @@ function cmdShip(argv) {
   // #324: measured HERE, before B0's `git worktree add` — which would DWIM a local ref out of
   // origin's copy and erase the only evidence that this machine never held the branch.
   const shipRefs = git.branchRefs(repoAbs, sess.branch);
-  const remoteOnly = !shipRefs.localSha && !!shipRefs.remoteSha;
+  // #343: …and a local ref that DWIM already made out of origin's copy (reflog: "Created from origin/<b>")
+  // is the same evidence arriving one checkout later — read it as remote-only too.
+  const remoteOnly = !!shipRefs.remoteSha && (!shipRefs.localSha || shipRefs.localFromRemote);
+  const shipWhere = shipRefs.localSha
+    ? `came from origin — its local ref was created from origin/${sess.branch} by a git checkout here (reflog, #343) —`
+    : 'exists ONLY on origin';
   const zeroVerdict = shipguard.zeroClaimVerdict(sess.issues.length, sess.branch, brokenClaims.length, { remoteOnly, adopt: !!opts.adopt });
   let adoptInfo = null;
   if (zeroVerdict.reason === 'adopted') {
@@ -8980,7 +8999,7 @@ function cmdShip(argv) {
     try { machineId = (machine.localMachine() || {}).id || null; } catch (_) { /* unknown is recorded as such */ }
     adoptInfo = { branch: sess.branch, remoteSha: shipRefs.remoteSha, host: HOST, machine: machineId };
   } else if (opts.adopt) {
-    warn('--adopt ignored — it applies only to a branch that exists ONLY on origin, carries no issue number, and has no claim on this machine');
+    warn('--adopt ignored — it applies only to a branch that came from origin (no local ref, or one a git checkout here created from origin\'s copy — #343), carries no issue number, and has no claim on this machine');
   }
   if (zeroVerdict.relevant) {
     warn('this branch resolves to ZERO claimed issues — the squash will carry NO `Closes #N`,');
@@ -9012,7 +9031,7 @@ function cmdShip(argv) {
       return 1;
     }
     if (zeroVerdict.reason === 'remote-only-unclaimed') {
-      process.stderr.write(`✗ Refusing: "${sess.branch}" exists ONLY on origin (@ ${shortSha(shipRefs.remoteSha)}) and this machine's (\`${HOST}\`) ` +
+      process.stderr.write(`✗ Refusing: "${sess.branch}" ${shipWhere} (@ ${shortSha(shipRefs.remoteSha)}) and this machine's (\`${HOST}\`) ` +
         'claim registry has nothing for it (#324).\n');
       process.stderr.write('  A branch this machine never held is most likely ANOTHER MACHINE\'s work in flight — shipping it here\n');
       process.stderr.write('  would land it under this session with no issue closed and no claim released. So:\n');
@@ -10064,7 +10083,7 @@ function cmdPromote(argv) {
   git.git(['fetch', 'origin', trunk, MAIN], repoAbs); // best-effort: refresh both refs before comparing
 
   let ciOk = false;
-  if (!gh) checks.push(['✗', 'trunk CI green', 'gh not usable (no auth / no origin) — cannot confirm CI']);
+  if (!gh) checks.push(['✗', 'trunk CI green', `gh not usable (${ghUnusableWhy(repoAbs)}) — cannot confirm CI`]);
   else {
     const run = git.ghRunForSha(repoAbs, trunk);
     if (!run) checks.push(['✗', 'trunk CI green', 'gh run list failed']);
