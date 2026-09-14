@@ -200,6 +200,29 @@ test('refuses: a deploy workflow whose tag trigger matches a pre-release tag', (
   assertRefused(fx, cut(fx), 'prerelease-trigger', /deploy-site\.yml.*v1\.2\.0-rc\.1/);
 });
 
+// #346: `deploy: tag` + the handbook's own release-tag template (fires on `v*.*.*` on purpose, deploys
+// nothing) must not block a candidate; the same text under a deploy name still does.
+const TAG_DEPLOY_YML = 'trunk: main\nexposure: released\nproduction: https://example.invalid\ndeploy: tag\nstack: node\n';
+const RELEASE_TAG_TEMPLATE = fs.readFileSync(path.join(REPO_ROOT, 'templates', 'release-tag.yml'), 'utf8');
+const SAFE_DEPLOY = 'name: deploy\non:\n  push:\n    tags: ["v*.*.*", "!v*.*.*-*"]\njobs: {}\n';
+
+test('deploy: tag + a copied release-tag.yml on v*.*.* — the prerelease-trigger check passes (#346)', () => {
+  const fx = fixture({
+    projectYml: TAG_DEPLOY_YML,
+    files: { '.github/workflows/release.yml': RELEASE_TAG_TEMPLATE, '.github/workflows/deploy-prod.yml': SAFE_DEPLOY },
+  });
+  const r = cut(fx, ['--dry']);
+  assert.ok(r.body, `no JSON: ${r.out}${r.err}`);
+  const check = r.body.checks.find((c) => c.condition === 'prerelease-trigger');
+  assert.ok(check, `no prerelease-trigger check in ${JSON.stringify(r.body.checks)}`);
+  assert.strictEqual(check.ok, true, JSON.stringify(r.body.checks, null, 2));
+});
+
+test('refuses: deploy: tag + the release-tag template text in deploy-prod.yml (guardrail, #346)', () => {
+  const fx = fixture({ projectYml: TAG_DEPLOY_YML, files: { '.github/workflows/deploy-prod.yml': RELEASE_TAG_TEMPLATE } });
+  assertRefused(fx, cut(fx), 'prerelease-trigger', /deploy-prod\.yml.*v1\.2\.0-rc\.1/);
+});
+
 test('refuses: a breaking change on a >=1.0 repo', () => {
   const fx = fixture();
   commit(fx, 'api.txt', 'feat!: drop the v1 api');

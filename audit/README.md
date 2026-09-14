@@ -93,7 +93,15 @@ the handbook's current version, so a scheduled run is self-documenting.
   pattern re-including. An unfiltered `push` fires on every tag and counts. **✗ failure**
   under `deploy: tag` (production is reachable), **⚠ finding** elsewhere; the message
   names the file, the pattern and the fix — `"!v*.*.*-*"` after the pattern, or a strict
-  pattern such as `v[0-9]+.[0-9]+.[0-9]+`.
+  pattern such as `v[0-9]+.[0-9]+.[0-9]+`. **One exemption** (#346): a copy of the
+  handbook's own `templates/release-tag.yml` fires on candidates on purpose — it publishes
+  a pre-release record and deploys nothing — so a workflow identified as that template by
+  provenance (its `colab-handbook: release-tag @` stamp, or the template's header/step-name
+  fingerprints; a file name alone never counts) is not probed. A `deploy-*.yml` /
+  `deploy.yml` stays in scope even when it carries that stamp. `colab release cut` reads the
+  same rule (`tools/lib/workflow-triggers.js`), so it neither fails the audit nor refuses a
+  candidate. Keep deploy steps out of the copied release workflow: the exemption trusts the
+  template header's "deployment does not belong here", it does not check it.
 - The declared `trunk` branch actually exists — checked against **local branch refs
   unioned with remote-tracking refs** (`refs/heads` ∪ `refs/remotes/*`, remote prefix
   stripped, deduped). A branch present only as `origin/<name>` still counts: `git clone

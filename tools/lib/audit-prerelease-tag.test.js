@@ -150,3 +150,45 @@ test('without deploy: tag, a non-deploy workflow on v* is out of scope', () => {
   assert.deepStrictEqual(hazards(r.warns), []);
   assert.deepStrictEqual(hazards(r.fails), []);
 });
+
+// --- the handbook's own release-tag template (#346) ------------------------
+//
+// templates/release-tag.yml fires on `v*.*.*` ON PURPOSE (#333): a candidate publishes as a GitHub
+// pre-release, and nothing deploys. Under `deploy: tag` the scope rule above would fail it, so a copy
+// identified by provenance (stamp.js fingerprints, or its stamp) is exempt — unless it is deploy-named.
+
+const RELEASE_TAG_TEMPLATE = fs.readFileSync(path.join(REPO_ROOT, 'templates', 'release-tag.yml'), 'utf8');
+const SAFE_DEPLOY = wf('    tags: ["v*.*.*", "!v*.*.*-*"]\n');
+
+test('deploy: tag + a copied release-tag.yml on v*.*.* — no finding (#346)', () => {
+  const r = audit(fixture(TAG_YML, { ...SAFE_DEPLOY, '.github/workflows/release.yml': RELEASE_TAG_TEMPLATE }));
+  assert.deepStrictEqual(hazards(r.fails), []);
+  assert.deepStrictEqual(hazards(r.warns), []);
+});
+
+test('deploy: tag + a STAMPED release-tag copy with its header stripped — still exempt (#346)', () => {
+  const stripped = RELEASE_TAG_TEMPLATE.split('\n').filter((l) => !/TEMPLATE\. Copy me/.test(l)).join('\n');
+  const body = `# colab-handbook: release-tag @ v1.0.0\n${stripped}`;
+  const r = audit(fixture(TAG_YML, { ...SAFE_DEPLOY, '.github/workflows/release.yml': body }));
+  assert.deepStrictEqual(hazards(r.fails), []);
+});
+
+test('deploy: tag + the same template text in deploy-prod.yml — still fails (guardrail, #346)', () => {
+  const r = audit(fixture(TAG_YML, { '.github/workflows/deploy-prod.yml': RELEASE_TAG_TEMPLATE }));
+  const h = hazards(r.fails);
+  assert.strictEqual(h.length, 1, JSON.stringify(r.fails));
+  assert.match(h[0], /deploy-prod\.yml/);
+});
+
+test('deploy: tag + a hand-written release.yml on v*.*.* (name only, no provenance) — still fails (#346)', () => {
+  const r = audit(fixture(TAG_YML, { ...SAFE_DEPLOY, ...wf('    tags: ["v*.*.*"]\n', 'release.yml') }));
+  const h = hazards(r.fails);
+  assert.strictEqual(h.length, 1, JSON.stringify(r.fails));
+  assert.match(h[0], /release\.yml/);
+});
+
+test('deploy: tag + a workflow stamped as a DIFFERENT template on v*.*.* — still fails (#346)', () => {
+  const body = `# colab-handbook: ci-node @ v1.0.0\non:\n  push:\n    tags: ["v*.*.*"]\njobs: {}\n`;
+  const r = audit(fixture(TAG_YML, { ...SAFE_DEPLOY, '.github/workflows/ship.yml': body }));
+  assert.strictEqual(hazards(r.fails).length, 1, JSON.stringify(r.fails));
+});
