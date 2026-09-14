@@ -12,6 +12,9 @@
 # only the tag. This script publishes a FINAL vX.Y.Z and refuses a candidate version. When candidates
 # exist for the version, the final is tagged on the NEWEST candidate's commit (§6: "the final vX.Y.Z is
 # that candidate's commit, tagged final") — never on a later HEAD nobody tested as that candidate.
+# An AGENT finalizes only through `colab release finalize` (#339, the release-rung skill), which tags
+# and pushes the final; this script then finds the tag already there and resumes from the publish
+# step. Running it to create a final tag is a human's path.
 #
 # Usage:
 #   sh scripts/release.sh vX.Y.Z ["optional headline sentence"]

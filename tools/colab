@@ -52,6 +52,7 @@ const docsOnly = require('./lib/docs-only');
 const releasePolicy = require('./lib/release-policy');
 const workflowTriggers = require('./lib/workflow-triggers');
 const releaseCut = require('./lib/release-cut');
+const releaseFinalize = require('./lib/release-finalize');
 const {
   HOST, UserError, normIssueNum, issueTag, claimKey, today, nowISO, hoursSince, humanAge,
   parseArgs, table, shortRepo,
@@ -1158,6 +1159,7 @@ function cmdClaim(argv) {
 
 const HELP_RELEASE = `colab release <issue> [--repo <path>]
 colab release cut [--repo <path>] [--bump patch|minor --reason "<why>"] [--dry] [--json]   (see: colab release cut --help)
+colab release finalize [--repo <path>] [--tag vX.Y.Z-rc.N] [--answered-by <name>] [--dry] [--json]   (see: colab release finalize --help)
 
 Release a single issue: removes the local claim and, if gh is usable, runs
   gh issue edit N --remove-assignee @me --remove-label in-progress
@@ -1223,7 +1225,8 @@ read from GitHub). Exit code: 0 when a candidate was cut (or, with --dry, would 
 /** Every issue with state + body, for the switch markers. null when the read failed or may be truncated. */
 function readAllIssuesForSwitches(repoAbs) {
   const LIMIT = 5000;
-  const r = spawnSync('gh', ['issue', 'list', '--state', 'all', '--limit', String(LIMIT), '--json', 'number,state,stateReason,body'],
+  // title/labels/createdAt/url are additive (#339): `release finalize` finds its tracking issue in the same read.
+  const r = spawnSync('gh', ['issue', 'list', '--state', 'all', '--limit', String(LIMIT), '--json', 'number,state,stateReason,body,title,labels,createdAt,url'],
     { cwd: repoAbs, encoding: 'utf8', maxBuffer: 512 * 1024 * 1024 });
   if (r.status !== 0) return null;
   try {
@@ -1256,6 +1259,37 @@ function releaseCutChanges(repoAbs, from, sha) {
     }
     return { status, path: file, content };
   });
+}
+
+/**
+ * §6's four candidate conditions measured at `sha` — ci-green, full-suite, schema-additive,
+ * switch-dependencies. Shared by `release cut` and `release finalize` (#339): finalizing re-checks
+ * "every condition above at the moment it runs", and a second measuring copy would be the two-readings
+ * drift release-policy.js exists to prevent. `readRuns` returns the run rows at `sha` (null = failed)
+ * — by branch window for a fresh head (cut), by commit for an older candidate (finalize). Also
+ * returns the issue list it read (null when unread or gh unusable), so a caller does not read it twice.
+ */
+function measureCandidateConditions(repoAbs, { sha, lastFinal, at, readRuns }) {
+  let ci; let suite; let switches; let issues = null;
+  if (!isGhUsable(repoAbs)) {
+    const why = ghUnusableWhy(repoAbs);
+    ci = { ok: false, detail: `gh not usable (${why}) — cannot confirm CI at ${at}` };
+    suite = { ok: false, detail: `gh not usable (${why}) — cannot confirm the suite ran at ${at}` };
+    switches = { ok: false, detail: `gh not usable (${why}) — the colab:switch markers cannot be read` };
+  } else {
+    const rows = readRuns();
+    const run = git.summarizeRunsForCommit(rows, sha);
+    if (!run) ci = { ok: false, detail: `gh run list failed — cannot confirm CI at ${at}` };
+    else { const v = classifyCiRun(repoAbs, run, at); ci = { ok: v.ok, detail: v.detail }; }
+    suite = releaseCut.fullSuiteVerdict(rows, at);
+    issues = readAllIssuesForSwitches(repoAbs);
+    switches = releaseCut.switchVerdict(issues);
+  }
+  const changes = releaseCutChanges(repoAbs, lastFinal, sha);
+  const schema = changes === null
+    ? { ok: false, detail: 'git diff failed — schema changes cannot be read' }
+    : releaseCut.schemaVerdict(changes, lastFinal || 'the first commit');
+  return { ci, suite, schema, switches, issues };
 }
 
 function cmdReleaseCut(argv) {
@@ -1295,23 +1329,9 @@ function cmdReleaseCut(argv) {
   const tags = lines(git.git(['tag', '--list'], repoAbs));
   const tagsAtSha = lines(git.git(['tag', '--points-at', sha], repoAbs));
 
-  let ci; let suite; let switches;
-  if (!isGhUsable(repoAbs)) {
-    const why = ghUnusableWhy(repoAbs);
-    ci = { ok: false, detail: `gh not usable (${why}) — cannot confirm CI at ${at}` };
-    suite = { ok: false, detail: `gh not usable (${why}) — cannot confirm the suite ran at ${at}` };
-    switches = { ok: false, detail: `gh not usable (${why}) — the colab:switch markers cannot be read` };
-  } else {
-    const run = git.ghRunForCommit(repoAbs, 'main', sha);
-    if (!run) ci = { ok: false, detail: `gh run list failed — cannot confirm CI at ${at}` };
-    else { const v = classifyCiRun(repoAbs, run, at); ci = { ok: v.ok, detail: v.detail }; }
-    suite = releaseCut.fullSuiteVerdict(git.ghRunsForCommit(repoAbs, 'main', sha), at);
-    switches = releaseCut.switchVerdict(readAllIssuesForSwitches(repoAbs));
-  }
-  const changes = releaseCutChanges(repoAbs, lastFinal, sha);
-  const schema = changes === null
-    ? { ok: false, detail: 'git diff failed — schema changes cannot be read' }
-    : releaseCut.schemaVerdict(changes, lastFinal || 'the first commit');
+  const { ci, suite, schema, switches } = measureCandidateConditions(repoAbs, {
+    sha, lastFinal, at, readRuns: () => git.ghRunsForCommit(repoAbs, 'main', sha),
+  });
 
   const verdict = releaseCut.decide({
     policy, triggers, lastFinal, suggestion, tags, tagsAtSha, ci, suite, schema, switches,
@@ -1353,9 +1373,243 @@ function cmdReleaseCut(argv) {
   return 0;
 }
 
+// ---------------------------------------------------------------------------
+// release finalize — a candidate's next step under CONVENTIONS §6's release rung (#339)
+//
+// The decision is tools/lib/release-finalize.js (pure); this is the measuring and writing half. It
+// is the only path by which an agent tags a FINAL: automatic after a clean test period where the rung
+// row says so, and behind the human bar (COLAB_HUMAN=1 + --answered-by, the adopt precedent) where the
+// final tag reaches production. Run by the release-rung skill in a coordinator session — no daemon:
+// every run re-measures everything from git and GitHub, and the only stored state is the tracking
+// issue (contract: release-finalize.js header, tools/README.md *Release finalize*).
+// ---------------------------------------------------------------------------
+
+const HELP_RELEASE_FINALIZE = `colab release finalize [--repo <path>] [--tag vX.Y.Z-rc.N] [--answered-by <name>] [--dry] [--json]
+
+Take the newest release CANDIDATE (a vX.Y.Z-rc.N tag made by \`colab release cut\`) one step further
+under CONVENTIONS.md §6's release rung, re-checking everything at the moment it runs. Every run:
+
+  1. fetches tags, picks the newest open candidate (never a hand-made or off-main one);
+  2. finds — or, without --dry, opens — the version's tracking issue, "release: vX.Y.Z", whose body
+     starts <!-- colab:release version=vX.Y.Z --> (one per version, never per candidate);
+  3. measures, and ends in exactly one state:
+
+  no-candidate         nothing to finalize
+  already-final        the version is already tagged final (an open tracking issue is closed)
+  testing              the test period has not ended, or a trunk run in it is still in flight
+  held                 release-hold is on the tracking issue (or on a superseded open one) — a human
+                       veto; nothing here ever removes it
+  needs-new-candidate  a regression was fixed after the period began, or trunk went red during it —
+                       cut a new candidate once the fix is on main; its period starts afresh
+  refused              a check below failed that a later run may clear
+  candidate-ready      final is a human act on this row: nothing is tagged; the one command a human
+                       runs is printed and posted on the tracking issue
+  finalized            an annotated vX.Y.Z is tagged on the candidate's commit and pushed; the tracking
+                       issue is closed (with --dry: every check passed, nothing written)
+
+Conditions (--json checks[].condition; required:false means reported, not blocking, on this row):
+  release-policy  candidate  tracking-issue  release-hold  regressions  test-period  trunk-green
+  ci-green  full-suite  schema-additive  switch-dependencies  human
+
+  regressions   blocked_by edges on the tracking issue: open -> refused; closed after the period
+                began -> needs-new-candidate. Record one with: colab blocked <tracking> --by <issue>
+  test-period   from max(candidate tag date, tracking issue creation), release: test-period long
+  trunk-green   every main run since the period began, of the workflows that ran at the candidate,
+                none red — required only where the final is automatic
+
+  --tag <rc>          pin the candidate a human reviewed; refused unless it is the newest one
+  --answered-by <n>   with COLAB_HUMAN=1 and --tag: the human bar for a final that is a human act.
+                      No field, flag or project.yml value lowers it, and it never shortens a test period
+  --dry               measure and report; open, post, tag and close nothing
+  --json              { repo, row, final, testPeriodDays, lastFinal, dry, candidate, tracking,
+                        periodStart, periodEndsAt, state, tagged, finalTag, checks, handoff }
+
+Needs origin and gh (the tracking issue, runs and edges live on GitHub). Never cuts a candidate, never
+a major, never removes a label or an edge. Exit 0 when finalized (or would be) or candidate-ready; 1
+otherwise.
+`;
+
+/** The tracking issue's blocked_by edges as [{number, state, closedAt}], or null when unread. */
+function readRegressionEdges(repoAbs, num) {
+  const r = git.ghApi(repoAbs, [`repos/{owner}/{repo}/issues/${num}/dependencies/blocked_by`]);
+  if (!r.ok) return null;
+  try {
+    const list = JSON.parse(r.stdout);
+    if (!Array.isArray(list)) return null;
+    return list.map((i) => ({ number: i.number, state: i.state, closedAt: i.closed_at || null }));
+  } catch (_) {
+    return null;
+  }
+}
+
+function cmdReleaseFinalize(argv) {
+  const opts = parseArgs(argv, {
+    values: { '--repo': 'repo', '--tag': 'tag', '--answered-by': 'answeredBy' },
+    flags: { '--dry': 'dry', '--json': 'json', '-h': 'help', '--help': 'help' },
+  });
+  if (opts.help) return print(HELP_RELEASE_FINALIZE);
+  if (opts._.length) throw new UserError(`release finalize takes no positional arguments (got: ${opts._.join(' ')})`);
+  const humanBar = process.env.COLAB_HUMAN === '1' && !!opts.answeredBy;
+  if (humanBar && !opts.tag) {
+    throw new UserError('the human bar needs --tag <vX.Y.Z-rc.N>: it names the exact candidate the human reviewed, so a newer one cut meanwhile is never finalized in its place');
+  }
+  const repoAbs = resolveRepo(opts);
+  if (!isGhUsable(repoAbs)) throw new UserError(`gh not usable (${ghUnusableWhy(repoAbs)}) — the tracking issue, runs and regression edges live on GitHub`);
+  const doc = projectDoc(repoAbs);
+  const policy = releasePolicy.evaluateRelease(doc);
+  const now = new Date().toISOString();
+
+  const fetched = git.git(['fetch', '--tags', 'origin', 'main'], repoAbs);
+  if (!fetched.ok) throw new UserError(`git fetch --tags origin main failed — candidates and finals live on origin (${(fetched.stderr || '').split('\n')[0] || fetched.code})`);
+  const shaR = git.git(['rev-parse', '--verify', '--quiet', 'refs/remotes/origin/main^{commit}'], repoAbs);
+  if (!shaR.ok || !shaR.stdout) throw new UserError('no origin/main — releases are cut from main (CONVENTIONS.md §6)');
+  const mainSha = shaR.stdout;
+  const lastFinal = releaseTag.latestReleaseTag(repoAbs, { ref: 'origin/main' });
+
+  const fe = git.git(['for-each-ref', 'refs/tags', '--format=%(refname:short)%09%(objecttype)%09%(*objectname)%09%(objectname)%09%(taggerdate:iso-strict)%09%(contents:subject)'], repoAbs);
+  const tags = (fe.ok ? fe.stdout.split('\n').filter(Boolean) : []).map((l) => {
+    const [name, type, peeled, obj, date, subject] = l.split('\t');
+    const annotated = type === 'tag';
+    return { name, annotated, sha: annotated ? peeled : obj, date: annotated ? date : null, subject: annotated ? subject : '', onMain: false };
+  });
+  for (const t of tags) {
+    if (releaseFinalize.parseCandidate(t.name)) t.onMain = git.git(['merge-base', '--is-ancestor', t.sha, mainSha], repoAbs).ok;
+  }
+  const finals = new Set(tags.filter((t) => releaseFinalize.parseVersion(t.name)).map((t) => t.name));
+  const selection = releaseFinalize.selectCandidate(tags, opts.tag || null);
+  const cand = selection.kind === 'candidate' ? selection.candidate : null;
+
+  // ---- the conditions at the candidate's commit (also reads the issue list) ----
+  let conditions = { ci: null, suite: null, schema: null, switches: null, issues: null };
+  let suiteWorkflows = [];
+  if (cand) {
+    let rows;
+    conditions = measureCandidateConditions(repoAbs, {
+      sha: cand.sha,
+      lastFinal: releaseTag.latestReleaseTag(repoAbs, { ref: cand.sha }),
+      at: `${cand.tag}@${shortSha(cand.sha)}`,
+      readRuns: () => { rows = git.ghRunsAtCommit(repoAbs, cand.sha); return rows; },
+    });
+    suiteWorkflows = [...new Set((rows || []).map((r) => r.workflowName || '(unnamed workflow)'))];
+  } else {
+    conditions.issues = readAllIssuesForSwitches(repoAbs);
+  }
+
+  // ---- the tracking issue ----
+  const labelNames = (i) => (i.labels || []).map((l) => (typeof l === 'string' ? l : l.name));
+  const records = (conditions.issues || [])
+    .map((i) => ({ number: i.number, url: i.url || null, state: String(i.state || '').toUpperCase(), createdAt: i.createdAt || null, held: labelNames(i).includes(releaseFinalize.HOLD_LABEL), version: releaseFinalize.parseReleaseMarker(i.body) }))
+    .filter((r) => r.version);
+  const version = cand ? cand.version : (selection.version || null);
+  let tracking = null;
+  let trackingCreated = false;
+  if (conditions.issues === null) {
+    tracking = { error: 'the issue list could not be read (or may be truncated) — the tracking issue cannot be found' };
+  } else if (version) {
+    const mine = records.filter((r) => r.version === version);
+    const open = mine.filter((r) => r.state === 'OPEN');
+    if (open.length > 1) tracking = { error: `${open.length} open tracking issues for ${version} (${open.map((r) => `#${r.number}`).join(', ')}) — one per version; close the duplicate by hand` };
+    else if (open.length === 1) tracking = { ...open[0] };
+    else if (cand && mine.length) tracking = { error: `the tracking issue for ${version} (#${mine[0].number}) is closed but ${version} is not final — reopen it; a closed record is never silently replaced` };
+    else tracking = { number: null, createdAt: null, held: false, wouldCreate: !opts.dry };
+  }
+  const supersededHeld = records.filter((r) => r.state === 'OPEN' && r.held && r.version !== version && !finals.has(r.version)).map((r) => r.number);
+
+  if (cand && tracking && !tracking.error && !tracking.number && !opts.dry) {
+    const body = releaseFinalize.trackingBody({ version, row: policy.derived.row, final: policy.effective.final, testPeriodDays: policy.effective.testPeriodDays });
+    const c = spawnSync('gh', ['issue', 'create', '--title', releaseFinalize.trackingTitle(version), '--body', body], { cwd: repoAbs, encoding: 'utf8' });
+    const m = c.status === 0 ? /\/issues\/([0-9]+)/.exec(c.stdout || '') : null;
+    if (!m) tracking = { error: `could not open the tracking issue for ${version} (${String(c.stderr || '').split('\n')[0] || 'no issue URL returned'})` };
+    else { tracking = { number: Number(m[1]), url: (c.stdout || '').trim(), createdAt: now, held: false }; trackingCreated = true; }
+  }
+
+  // ---- period, trunk, regressions ----
+  let period = null; let trunk = null; let regressions = null;
+  if (cand) {
+    period = releaseFinalize.periodVerdict({ cutAt: cand.cutAt, trackingCreatedAt: tracking && tracking.createdAt, testPeriodDays: policy.effective.testPeriodDays, now });
+    const since = git.ghRunsSince(repoAbs, 'main', period.start.slice(0, 10));
+    trunk = releaseFinalize.trunkGreenVerdict(since ? since.runs : null, { periodStart: period.start, suiteWorkflows, truncated: !!(since && since.truncated) });
+    regressions = releaseFinalize.regressionVerdict(tracking && tracking.number ? readRegressionEdges(repoAbs, tracking.number) : [], { periodStart: period.start });
+  }
+
+  const verdict = releaseFinalize.decide({
+    policy, selection, tracking, supersededHeld, period, trunk, regressions,
+    ci: conditions.ci, suite: conditions.suite, schema: conditions.schema, switches: conditions.switches,
+    human: { bar: humanBar, answeredBy: opts.answeredBy || null },
+  });
+
+  // ---- writes ----
+  let tagged = false;
+  const comment = (num, fields, text) => {
+    const view = git.ghIssueView(repoAbs, num, ['comments']);
+    if (view && releaseFinalize.hasEvent(view.comments, fields)) return;
+    const r = git.ghIssueComment(repoAbs, num, `${releaseFinalize.eventMarker(fields)}\n${text}`);
+    if (!r.ok) warn(`could not comment on #${num}: ${String(r.stderr || '').split('\n')[0]}`);
+  };
+  const close = (num) => {
+    const r = spawnSync('gh', ['issue', 'close', String(num)], { cwd: repoAbs, encoding: 'utf8' });
+    if (r.status !== 0) warn(`could not close #${num}: ${String(r.stderr || '').split('\n')[0]}`);
+  };
+  if (!opts.dry) {
+    if (verdict.state === 'finalized') {
+      const actor = humanBar ? `${opts.answeredBy} (human bar: COLAB_HUMAN=1)` : 'automatic — clean test period (CONVENTIONS.md §6)';
+      const message = releaseFinalize.tagMessage(verdict, { candidate: cand, period, actor });
+      const t = git.git(['tag', '-a', '--cleanup=verbatim', cand.version, cand.sha, '-m', message], repoAbs);
+      if (!t.ok) throw new UserError(`git tag ${cand.version} failed: ${(t.stderr || '').split('\n')[0]}`);
+      const push = git.git(['push', 'origin', `refs/tags/${cand.version}`], repoAbs);
+      if (!push.ok) {
+        git.git(['tag', '-d', cand.version], repoAbs);
+        throw new UserError(`git push origin ${cand.version} failed — the local tag was deleted again, nothing is final (${(push.stderr || '').split('\n')[0]})`);
+      }
+      tagged = true;
+    }
+    if (cand && tracking && tracking.number) {
+      comment(tracking.number, { candidate: cand.tag },
+        `Candidate **${cand.tag}** (\`${shortSha(cand.sha)}\`) picked up — its test period runs ${period.start} → ${period.endsAt}. A new candidate restarts it.`);
+      if (verdict.state === 'candidate-ready') {
+        comment(tracking.number, { state: 'candidate-ready', candidate: cand.tag },
+          `**${cand.tag} is ready.** The final tag is a human act on this repo — the one command, run by a human:\n\n\`\`\`sh\n${verdict.handoff}\n\`\`\``);
+      }
+      if (tagged) {
+        comment(tracking.number, { state: 'finalized', tag: cand.version }, `**${cand.version}** tagged final on \`${shortSha(cand.sha)}\` (from ${cand.tag}).`);
+        close(tracking.number);
+      }
+      for (const r of records.filter((x) => x.state === 'OPEN' && !x.held && x.version !== version && !finals.has(x.version))) {
+        comment(r.number, { state: 'superseded', by: cand.version }, `Superseded by ${cand.version} — no final is owed for ${r.version}.`);
+        close(r.number);
+      }
+    }
+    if (verdict.state === 'already-final' && tracking && tracking.number) {
+      comment(tracking.number, { state: 'finalized', tag: version }, `**${version}** is already tagged final.`);
+      close(tracking.number);
+    }
+  }
+
+  const trackingOut = tracking && !tracking.error
+    ? { number: tracking.number || null, url: tracking.url || null, created: trackingCreated, held: !!tracking.held, supersededHeld }
+    : null;
+  if (opts.json) {
+    print(JSON.stringify({
+      repo: shortRepo(repoAbs), row: policy.derived.row, final: policy.effective.final, testPeriodDays: policy.effective.testPeriodDays,
+      lastFinal, dry: !!opts.dry, candidate: cand, tracking: trackingOut,
+      periodStart: period ? period.start : null, periodEndsAt: period ? period.endsAt : null,
+      state: verdict.state, tagged, finalTag: verdict.finalTag, checks: verdict.checks, handoff: verdict.handoff,
+    }, null, 2));
+  } else {
+    print(`colab release finalize — ${shortRepo(repoAbs)} (last final: ${lastFinal || 'none'}${cand ? `, candidate: ${cand.tag}` : ''})`);
+    const width = Math.max(...verdict.checks.map((c) => c.condition.length));
+    for (const c of verdict.checks) print(`  ${c.ok ? '✓' : (c.required ? '✗' : '·')} ${c.condition.padEnd(width)}  ${c.detail}`);
+    print('');
+    print(`state: ${verdict.state}${opts.dry ? ' [--dry: nothing written]' : ''}${tagged ? ` — tagged ${verdict.finalTag} and pushed it to origin` : ''}`);
+    if (verdict.handoff) print(`\nThe final is a human act here. The one command, for a human to run:\n  ${verdict.handoff}`);
+  }
+  return verdict.state === 'finalized' || verdict.state === 'candidate-ready' ? 0 : 1;
+}
+
 function cmdRelease(argv) {
   // `release cut` (#338) shares the verb: an issue number is never the word "cut".
   if (argv[0] === 'cut') return cmdReleaseCut(argv.slice(1));
+  if (argv[0] === 'finalize') return cmdReleaseFinalize(argv.slice(1));
   const opts = parseArgs(argv, {
     values: { '--repo': 'repo' }, flags: { '-h': 'help', '--help': 'help' },
   });
@@ -10547,6 +10801,9 @@ Commands:
                                         read-only, never tags (#81)
   release cut [--repo P] [--bump patch|minor --reason R] [--dry] [--json]   cut a release CANDIDATE
                                         vX.Y.Z-rc.N where §6's rung allows it; never a final tag (#338)
+  release finalize [--repo P] [--tag RC] [--answered-by N] [--dry] [--json]   a candidate's next step:
+                                        testing / held / new candidate owed / human handoff / final
+                                        tag — re-checked every run, tracking issue per version (#339)
   adopt [--repo P] [--json] [--no-verify] [--axis a,b] [--room R] [--exposure E]
         [--writes W] [--channels C] [--production U|none] [--deploy D] [--stack S]
         [--answered-by N] [--reason "..."]      detect + ask + derive + WRITE §9's five rows

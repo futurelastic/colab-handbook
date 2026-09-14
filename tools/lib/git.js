@@ -598,7 +598,42 @@ function ghRunsForCommit(repo, branch, sha, limit = 10) {
 }
 
 function ghRunForCommit(repo, branch, sha, limit = 10) {
-  const forSha = ghRunsForCommit(repo, branch, sha, limit);
+  return summarizeRunsForCommit(ghRunsForCommit(repo, branch, sha, limit), sha);
+}
+
+/**
+ * Every run at `sha` read by commit, not by branch recency (#339): `colab release finalize` checks
+ * a candidate that may be days and many trunk runs old, which a `--branch main -L 10` window no
+ * longer reaches. Same row shape as ghRunsForCommit; null on failure.
+ */
+function ghRunsAtCommit(repo, sha, limit = 100) {
+  if (!sha) return null;
+  const r = run('gh', ['run', 'list', '--commit', sha, '-L', String(limit),
+    '--json', 'headSha,status,conclusion,createdAt,databaseId,workflowName,event'], { cwd: repo });
+  if (!r.ok) return null;
+  let runs;
+  try { runs = JSON.parse(r.stdout); } catch (_) { return null; }
+  if (!Array.isArray(runs)) return null;
+  return runs.filter((x) => x && x.headSha === sha);
+}
+
+/**
+ * Runs on `branch` created on or after `sinceDay` (YYYY-MM-DD; a caller filters the exact instant
+ * locally) — #339's trunk-green-throughout read. Returns { runs, truncated } or null on failure;
+ * `truncated` is true when the read filled its limit, which a caller must treat as unread.
+ */
+function ghRunsSince(repo, branch, sinceDay, limit = 1000) {
+  const r = run('gh', ['run', 'list', '--branch', branch, '--created', `>=${sinceDay}`, '-L', String(limit),
+    '--json', 'headSha,status,conclusion,createdAt,databaseId,workflowName,event'], { cwd: repo });
+  if (!r.ok) return null;
+  let runs;
+  try { runs = JSON.parse(r.stdout); } catch (_) { return null; }
+  if (!Array.isArray(runs)) return null;
+  return { runs, truncated: runs.length >= limit };
+}
+
+/** ghRunForCommit's pick, over rows already read (null in -> null out). */
+function summarizeRunsForCommit(forSha, sha) {
   if (forSha === null) return null;
   if (forSha.length === 0) return { status: 'none', conclusion: null, sha, createdAt: null, databaseId: null, runCount: 0 };
 
@@ -710,7 +745,7 @@ module.exports = {
   worktreeList, worktreeListDetailed, resolveWorktreePathForBranch, gitFailureLine,
   dirtyTracked, dirtyUntracked, dirtyAny,
   ghAvailable, ghState, ghIssueEdit, ghListLabels, ghAssignedIssues,
-  ghCurrentLogin, ghIssueView, ghIssueComment, ghRunForSha, ghRunForCommit, ghRunsForCommit,
+  ghCurrentLogin, ghIssueView, ghIssueComment, ghRunForSha, ghRunForCommit, ghRunsForCommit, ghRunsAtCommit, ghRunsSince, summarizeRunsForCommit,
   ghRunJobCount, ghRunJobs,
   ghIssueListByLabel, ghLabelDelete, ghLabelCreate,
   ghApi, isGraphqlRateLimit, ghIssueRelease,

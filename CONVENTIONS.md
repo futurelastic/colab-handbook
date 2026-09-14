@@ -2904,9 +2904,16 @@ never a scheduler by itself
 and never `colab ship`, `colab promote` or `code-ship`, none of which tags. This rung is
 the permission; the tooling exercises it. A candidate is cut by
 [`colab release cut`](tools/README.md#release-cut-candidates) (#338), which measures the four
-conditions on the commit and refuses naming each one that fails; finalizing is the release
-skill's (#339), and until that lands no agent cuts a final tag on the strength of this rung —
-nor a candidate by hand, around the command. A deploy must never fire on a
+conditions on the commit and refuses naming each one that fails. A candidate's next step is
+[`colab release finalize`](tools/README.md#release-finalize) (#339), sequenced by the
+[`release-rung`](skills/release-rung/SKILL.md) skill. It keeps **one tracking issue per version**
+(`release: vX.Y.Z`, marker `<!-- colab:release version=vX.Y.Z -->`): a human holds a candidate by
+putting the **`release-hold`** label on it (only a human removes it), and a regression against the
+candidate is a `blocked_by` edge on it — open, the final waits; fixed after the test period began,
+a new `-rc.N+1` is owed and its period starts afresh. It tags the final itself only on the
+automatic-final row, re-checking every condition at that moment; wherever the final is a human act
+it stops at *candidate ready* and hands a human the one command. No agent cuts a final tag, or a
+candidate, by hand around these commands. A deploy must never fire on a
 candidate: [`templates/release-tag.yml`](templates/release-tag.yml) publishes `-rc` tags
 as pre-releases, the audit flags a deploy trigger that matches one, and every
 current-release read skips them.
@@ -3230,17 +3237,17 @@ only. Resolution order: `--config` flag > `~/.colab/repos.txt` > bundled example
    different row).
 2. **Write `.github/project.yml`** ([§3](#3-githubprojectyml--the-marker)) with the
    answers from step 1.
-3. **Create the whole label set — nineteen names, not a subset** (`in-progress`,
+3. **Create the whole label set — twenty names, not a subset** (`in-progress`,
    `deps-checked`, `agent-filed`, `epic`, `needs-decision`, `decision-recorded`,
    `needs-plan`, `migration-granted`, `needs-migration-grant`, `ci-granted`,
-   `low-priority`, the five `delivery:*`, and the three `deferred:*`):
+   `low-priority`, the five `delivery:*`, the three `deferred:*`, and `release-hold`):
    ```sh
    colab labels --ensure
    ```
    Idempotent by construction (#206) — reads the set from `tools/lib/labels.js`'s
    `CONVENTION_LABELS`, the one place it is actually defined, creates only what this
    repo is missing, and reports created vs already-there; safe to re-run because
-   partial adoption is normal. (No `colab` on this machine? The nineteen `gh label
+   partial adoption is normal. (No `colab` on this machine? The twenty `gh label
    create … || true` lines this replaced are recoverable from that file's history.)
 
    **This count is a hand-typed number restated in at least four places** (here, the

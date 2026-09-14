@@ -693,6 +693,12 @@ but for a different reason: it is not that someone else holds it, it is that the
 code to write for it directly. Still report it, in its own bucket, so it does not read as
 silently dropped — see §6.
 
+**A release tracking issue is a record, not a task** — the same treatment. An issue whose body
+opens with `<!-- colab:release version=vX.Y.Z -->` (title `release: vX.Y.Z`) is the version's
+record, opened and closed by `colab release finalize` (#339) and walked by the `release-rung`
+skill; it is never ranked, grouped, claimed or started. Its `blocked_by` edges are regressions
+against a candidate, not ordering between units of work. Report it in the epic bucket.
+
 **Non-code delivery — route, not start:**
 
 ```sh
