@@ -2425,6 +2425,103 @@ on it. An epic still gets closed and referenced exactly as any other issue once 
 children finish — the label only prevents a driver from mistaking the map for the
 territory.
 
+#### Switched epics — concurrent unfinished features (#336)
+
+*Epics*, above, decides how work is **filed**. This subsection decides how several
+unfinished features **coexist on one trunk** without any of them reaching a consumer
+half-built — the policy the release ladder in [§6](#6-releases) relies on. It carries
+the #330 ruling; the rules are numbered so a check can cite one.
+
+**Scope: repos that tag — `exposure: released`** (legacy `tier: A` reads the same way,
+`tools/lib/axis-authority.js`). On `none` and `self` nothing consumes a half-finished
+epic, so a switch there is pure cost and this subsection does not apply; a bare
+`tier: B` carries no exposure opinion and is not bound either. `exposure: live` is not
+bound: its promotion is a human act that can simply wait for an epic to finish. *This
+scope is the implementer's recommendation, recorded open on #336 and not yet ruled — if
+it is ruled otherwise, this paragraph changes, and nothing else here needs to.*
+
+1. **Every large feature is an epic; a multi-merge epic carries a switch.** The switch
+   lands in the epic's **first** child, and **removing it is the epic's last child** —
+   that removal is what "finished" means in code, not the closing of the parent.
+   **Single-merge work gets no switch** and rides the next release as it is.
+2. **Two configurations, never more.** A switch exists only while its feature is
+   unfinished, so every remaining switch is either off or on together: **release**
+   (every remaining switch off) and **development** (every remaining switch on). CI
+   runs the suite in **both** ([§7](#ci--what-it-is-follows-the-units-shape-how-much-follows-exposure));
+   an intermediate combination — one switch on, another off — is unsupported, and a bug
+   reproducible only there is not a bug to fix. **Absent a selector, the code runs the
+   release configuration**: a deploy that forgets to choose must get the dark build,
+   never the half-built one.
+3. **Switch dependencies are declared and enforced, following the issue graph.** If
+   epic B's feature needs epic A's, B's declaration names A (below) **and** B's
+   switch-removal child carries a native `blocked_by` edge on A's switch-removal child
+   (*Readiness*, above). With only two configurations, a dependency has exactly one
+   runtime consequence — B cannot finish while A is still switched — and the edge is
+   what makes that mechanical instead of remembered.
+4. **File-level collisions are not a switch's job.** Two epics' children touching one
+   file still serialize through *Grouping*, above; a switch hides behaviour, never a
+   merge conflict.
+5. **What a switch cannot hide stays backward-compatible while the epic is
+   unfinished.** Schema changes **add only**; old config files and old API responses
+   keep working; every destructive step — dropping a column, retiring a config key,
+   removing a response field — happens **in the switch-removal child**, and nowhere
+   earlier. A release built with the switch off must be indistinguishable, to anything
+   outside the repo, from one built before the epic started.
+6. **At most ~3 unfinished switched epics at once, and a switch older than ~4 weeks
+   surfaces for a decision.** Both are **findings for a human**, never blockers: the cap
+   exists because every open switch doubles what the development configuration hides
+   from the release one, and the age exists because a switch nobody removes has become
+   a permanent fork in the code under a temporary name. Age is measured from the merge
+   of the child that added the switch.
+7. **Releases are cut from trunk; versions live in tags only.** A `release/X.Y` branch
+   exists **only** when an older version needs a fix of its own, and is deleted with
+   that line's support. Never put a version in a branch name: a branch named `0.2.0-dev`
+   is itself a SemVer pre-release, and sorts **below** `0.2.0`. A `release/X.Y` branch is
+   neither an [`integration:`](project.schema.md#integration--optional) line (that axis
+   never reaches a tag, by construction) nor a
+   [`releaseBranch:`](project.schema.md#releasebranch--optional) (that one is overwritten
+   wholesale on every release) — no descriptor field declares it and no `colab` path cuts
+   from or ships into it today, so a fix on an older version is a human-run procedure
+   until one does.
+
+**How a switch is declared — the part a check reads.** One marker, in the family of
+`colab:evidence` / `colab:grade` / `colab:disposition` (*Rules*, above), on its own line
+in the **epic's body**:
+
+```md
+<!-- colab:switch name=bulk-import -->
+<!-- colab:switch name=bulk-export needs=bulk-import -->
+```
+
+and one on each of the two children that change the switch's existence, in **their**
+bodies — `role=add` on the first child, `role=remove` on the last:
+
+```md
+<!-- colab:switch name=bulk-import role=add -->
+<!-- colab:switch name=bulk-import role=remove -->
+```
+
+- **`name`** matches `^[a-z0-9][a-z0-9-]*$` and is **the literal identifier the code
+  reads**, so `git grep <name>` finds every read site. That is what makes rule 1's
+  "removed" checkable: after the removal child, the grep returns nothing.
+- **`needs`** (epic marker only, optional, comma-separated names) is rule 3's
+  declaration; the `blocked_by` edge is its enforcement. A `needs` with no matching edge,
+  or an edge with no `needs`, is a finding.
+- **`role`** (child marker only) is a **closed** set of two — `add` · `remove` — read by
+  equality. A child with no marker is an ordinary child of the epic.
+- **Read the way the rest of the family is read**: an unrecognised token, a malformed
+  name, or two markers on one issue disagreeing all mean **"not cleared"** — reported,
+  never defaulted. An epic with no marker is **not** declared single-merge; it is simply
+  undeclared, and whether it should have a switch is a question, not an answer.
+
+From these a check derives everything rule 6 and the release cut need, with no other
+record: a switch **exists** once its `role=add` child is closed by a merge, it is
+**finished** once its `role=remove` child is, it is **unfinished** in between, and its
+**age** is that `add` child's close date. How the code reads a switch — an environment
+variable, a config file, a build flag — is the repo's own, as its stack is; this
+subsection fixes only that one selector chooses between the two configurations, that
+its absence means release, and that each switch's identifier is its declared `name`.
+
 #### Delivery type — route, not start (#112)
 
 **Five labels — `delivery:code`, `delivery:content`, `delivery:ops`,
@@ -2693,6 +2790,13 @@ merges into `dev`, which does not deploy.
 **Versioning** — SemVer. Patch for fixes, minor for features, major for breaking changes.
 Pre-1.0 repos use `v0.x.y`, treating minor as "meaningful increment".
 
+**An unfinished feature never waits for a release, and never reaches one switched on.** On
+a repo that tags, a feature landing over several merges is an epic behind a switch: it
+ships **dark** in every release until its last child removes the switch, releases are cut
+from trunk with every remaining switch off, and a version lives in a tag, never in a
+branch name. The rules, the scope, and the marker a check reads:
+[*Switched epics*](#switched-epics--concurrent-unfinished-features-336).
+
 **Every tag gets a release summary** — a published GitHub Release grouping commits since
 the previous tag by Conventional-Commit type; `CHANGELOG.md` is not maintained by hand.
 [`templates/release-tag.yml`](templates/release-tag.yml) automates it. When the
@@ -2773,6 +2877,11 @@ day it is most expensive to.
 of the generator; for `live`/`released`, the promotion or release path is the product; for
 `self`, whatever would break the room's own ability to work. A generator's internal tests
 passing proves nothing about what ships, if nothing names who actually consumes it.
+
+**A repo holding an unfinished switched epic runs its suite twice** — once in the release
+configuration, once in development — because those are the only two it supports and the
+release one is what ships
+([*Switched epics*](#switched-epics--concurrent-unfinished-features-336), rule 2).
 
 **No `ci:` field.** A repo needing something its copied templates don't cover edits that
 workflow directly — copy-and-own already permits it, and the audit already classifies the
