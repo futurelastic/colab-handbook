@@ -951,6 +951,7 @@ Run `colab <cmd> --help` for full detail.
 | `doctor [--prune] [--ttl H] [--json] [--sync]` | heal dead worktrees / orphan + stale claims / orphan ports; report records whose branch or path cannot be resolved, including a zero-claim `pending` stub (no TTL — see *Records that cannot be acted on*); flip + sweep **merged** worktrees (see *Worktree lifecycle*); **list** shipped branches awaiting deletion (never deletes them); `--sync` also flags a worktree-less claim the tracker no longer shows assigned+in-progress (no TTL either) and spent `group:<key>` labels |
 | `release-notes [<range>] [--repo P] [--out F] [--headline "..."]` | grouped Markdown release summary from git history (see below) |
 | `release cut [--repo P] [--bump patch\|minor --reason "..."] [--dry] [--json]` | cut a release **candidate** `vX.Y.Z-rc.N` on `origin/main` where §6's rung allows it and all four conditions hold on that commit; never a final tag (see *Release cut*, below) |
+| `release finalize [--repo P] [--tag RC] [--answered-by N] [--dry] [--json]` | a candidate's next step under §6's rung — `testing` / `held` / `needs-new-candidate` / `refused` / `candidate-ready` / `finalized`, re-checked every run, one tracking issue per version; tags the final only where the rung row makes it automatic, or behind the human bar (see *Release finalize*, below) |
 | `template [<name>] [--dest F] [--repo P] [--force]` | copy a handbook workflow template into a repo, **stamped** with the handbook version (see below) |
 | `update [<repo>...] [--apply] [--json] [--quiet]` | sweep the fleet registry for stamped copies that fell behind a changed template; `--apply` refreshes the **pristine** ones. Never commits; never touches a hand-edited copy (see below) |
 | `register [<path>] [--remove] [--list]` | add/remove a repo in **both** fleet registries at once; `--list` flags drift (see below) |
@@ -983,8 +984,8 @@ colab release-notes v0.3.0..v0.4.0 | gh release create v0.4.0 --notes-file - --g
 `colab release cut [--repo P] [--bump patch|minor --reason "..."] [--dry] [--json]` (#338) cuts a
 release **candidate**, `vX.Y.Z-rc.N`, on `origin/main`'s head — the tooling behind CONVENTIONS.md
 [§6's release rung](../CONVENTIONS.md#6-releases). It never creates a final `vX.Y.Z`; finalizing a
-candidate after its test period belongs to the release skill (#339), and is a human act wherever
-the tag reaches production.
+candidate after its test period is `colab release finalize`'s (*Release finalize*, below), and is a
+human act wherever the tag reaches production.
 
 Everything is measured **at the commit the tag would name**, not at the checkout: the workflows
 that would fire on the tag push are read from that commit, and a green trunk head later on does
@@ -1013,7 +1014,63 @@ changes the commit types do not reveal, which the release notes still owe.
 
 The handbook's own `scripts/release.sh` is the other half: it refuses a `-rc` version (candidates
 come from here), computes its notes range from the previous **final** tag, and tags a final on its
-version's newest candidate commit when one exists.
+version's newest candidate commit when one exists — and, when an agent has already tagged the final
+through `colab release finalize`, resumes from its publish-and-reconcile step.
+
+### Release finalize
+
+`colab release finalize [--repo P] [--tag vX.Y.Z-rc.N] [--answered-by N] [--dry] [--json]` (#339)
+takes the newest candidate one step further under §6's release rung, and is run — repeatedly — by
+the [`release-rung`](../skills/release-rung/SKILL.md) skill in a coordinator session. There is no
+daemon: every run re-measures from git and GitHub, and the decision is `tools/lib/release-finalize.js`
+(pure). Every run ends in exactly one `state`:
+
+| state | meaning | exit |
+|---|---|---|
+| `no-candidate` | no `vX.Y.Z-rc.N` whose version is not final yet | 1 |
+| `already-final` | the version is already tagged final; an open tracking issue for it is closed | 1 |
+| `testing` | the test period has not ended, or a trunk run inside it is still in flight | 1 |
+| `held` | `release-hold` is on the tracking issue, or on a superseded version's still-open one | 1 |
+| `needs-new-candidate` | a regression was fixed after the period began, or (automatic-final row) trunk went red during it | 1 |
+| `refused` | a required check failed that a later run may clear | 1 |
+| `candidate-ready` | the final is a human act here: nothing tagged; `handoff` is the one command, also posted on the tracking issue | 0 |
+| `finalized` | an annotated `vX.Y.Z` is tagged on the candidate's commit and pushed, and the tracking issue closed (with `--dry`: would be) | 0 |
+
+**The per-candidate state contract** — stable; `futurelastic/hangar#125` reads it:
+
+- **Candidates** are annotated `vX.Y.Z-rc.N` tags on origin whose message's first line ends
+  `(colab release cut)` and whose commit is on `origin/main`. The newest open one (highest version,
+  then highest `N`) is the candidate; a lightweight or hand-made one is refused, never finalized.
+- **One tracking issue per version**, opened by the first non-`--dry` run for that version:
+  title `release: vX.Y.Z`, body's first line `<!-- colab:release version=vX.Y.Z -->` (only the
+  marker identifies it). Every `-rc.N` of the version reuses it. Two open ones for a version, or a
+  closed one for a version not yet final, refuse rather than guess. A superseded version's open,
+  un-held issue is closed with a "superseded" comment.
+- **Veto:** the `release-hold` label on it (a convention label — `colab labels --ensure`). No
+  command removes it.
+- **Regression:** a `blocked_by` edge on it (`colab blocked <tracking> --by <regression>`), read
+  from `issues/<n>/dependencies/blocked_by`: open → `refused`; closed after the period began →
+  `needs-new-candidate`; closed before → fine.
+- **Test period** starts at the later of the candidate tag's tagger date and the issue's
+  `createdAt`, and lasts the effective `release: test-period` (3 days by default).
+- **Events** are comments carrying `<!-- colab:release-event … -->` markers, each posted once:
+  `candidate=<rc>` (the period starts), `state=candidate-ready candidate=<rc>` (carries the
+  handoff), `state=finalized tag=<vX.Y.Z>`, `state=superseded by=<vX.Y.Z>`.
+
+| condition | what it checks | blocks |
+|---|---|---|
+| `release-policy` | the rung row is a `released-*` row and the `release:` block is valid | always |
+| `candidate` | a candidate exists, made by `colab release cut`, on `origin/main`; `--tag` names the newest | always |
+| `tracking-issue` | exactly one findable record for the version | always |
+| `release-hold` | no hold on it or on a superseded open record | always |
+| `regressions` | as above | always |
+| `test-period` | the period has ended | automatic-final row only |
+| `trunk-green` | every `main` run created since the period began, of the workflows that ran at the candidate (not `pull_request`), finished without going red — a `cancelled` one needs a later success; a read that hit its limit fails closed | automatic-final row only |
+| `ci-green` · `full-suite` · `schema-additive` · `switch-dependencies` | §6's four candidate conditions, re-measured at the candidate's commit by the same code `release cut` uses | always |
+| `human` | human-final row only: `COLAB_HUMAN=1` + `--answered-by` + `--tag` (the `adopt` gate's precedent) | reported; absent → `candidate-ready` |
+
+The human bar never shortens a test period and never overrides a hold. Where it is met, the final's
+annotated message records who answered.
 
 ### Templates
 

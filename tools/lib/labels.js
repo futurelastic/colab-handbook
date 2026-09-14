@@ -176,6 +176,14 @@
  * `deferred:*` label with no `review-by:<date>` and no `blockedBy` edge is not a defer at
  * all — it is a deprioritisation or a `wontfix` that should be said plainly, because an
  * unbounded park is a silent `wontfix`.
+ *
+ * `release-hold` joined the set in #339: the human veto on a release candidate (CONVENTIONS.md
+ * §6, *The release rung*). It sits on a release TRACKING issue (`release: vX.Y.Z`, marker
+ * `<!-- colab:release version=vX.Y.Z -->`), and while it is present `colab release finalize`
+ * does not tag that version's final. Provisioned, not opt-in, for the sharpest form of the
+ * malignant-absence reason above: the moment a human wants to veto is a test period that is
+ * already counting down, and a label the repo never created cannot be applied in that moment —
+ * the veto would silently not exist. Only a human removes it; no command in this repo does.
  */
 
 const CONVENTION_LABELS = [
@@ -198,6 +206,7 @@ const CONVENTION_LABELS = [
   { name: 'deferred:date', color: 'B08800', description: 'Parked until a specific date — pair with a review-by:<date> label naming it' },
   { name: 'deferred:measurement', color: '7C6F57', description: 'Parked until a metric crosses a threshold — name the metric and the threshold on the issue' },
   { name: 'deferred:external-party', color: '6E5494', description: 'Parked until someone outside this repo acts — name who, and pair with review-by:<date>' },
+  { name: 'release-hold', color: 'E11D21', description: 'Human veto on a release tracking issue: its candidate is not finalized while this is present' },
 ];
 
 // The DELIVERY label prefix (CONVENTIONS.md §5, Delivery type). Five fixed values, unlike
