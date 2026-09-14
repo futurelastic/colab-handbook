@@ -146,7 +146,13 @@ production bug fix is merged but unreleased), say so explicitly in your report
 **`colab ship` and no other path** — it checks the preconditions (CI alive and
 green, no new migrations, no hand-code conflicts) and refuses when any fail;
 a refusal means a human finishes, not that you improvise around it. Raw
-`git push` to the trunk is blocked by hook regardless. This exception never
+`git push` to the trunk is blocked by hook regardless. **Without that grant,
+`colab ship` still completes Phase B for a docs-only change** — every changed
+path `.md`/`.mdx`/`.txt` or under a top-level `docs/`, none of them agent rules
+or config (`CLAUDE.md`, `AGENTS.md`, `.claude/`, `.github/`, `.githooks/`), no
+binary, no symlink, not empty. Ship computes this from the diff; you never
+assert it, and every other precondition still applies
+([§2](CONVENTIONS.md#autonomy--the-docs-only-exception-345)). This exception never
 extends to promotion, tags, or anything that deploys — those are human on
 every repo, with no field that can say otherwise. `deploy: manual` is not a
 loophole: with no automated gate after the promotion, it is the *strictest*

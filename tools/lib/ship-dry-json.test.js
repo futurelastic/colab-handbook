@@ -88,7 +88,7 @@ test('--json without --dry is refused, not silently ignored', () => {
 test('plain --dry (no --json) keeps the ORIGINAL hard-refusal prose on a missing autonomy grant', () => {
   const fx = fixture(PROJECT_YML_NO_AUTONOMY); // no autonomy: auto-trunk
   fx.g(fx.work, 'checkout', '-q', '-b', 'feat/x-2');
-  fs.writeFileSync(path.join(fx.work, 'g.txt'), 'x\n');
+  fs.writeFileSync(path.join(fx.work, 'g.js'), 'x\n'); // #345: a code file — a .txt branch is docs-only and passes the gate
   fx.g(fx.work, 'add', '-A');
   fx.g(fx.work, 'commit', '-q', '-m', 'feat: x');
   fx.g(fx.work, 'checkout', '-q', 'main');
@@ -104,7 +104,7 @@ test('plain --dry (no --json) keeps the ORIGINAL hard-refusal prose on a missing
 test('--dry --json reports EVERY precondition even when autonomy already fails (no short-circuit)', () => {
   const fx = fixture(PROJECT_YML_NO_AUTONOMY);
   fx.g(fx.work, 'checkout', '-q', '-b', 'feat/x-3');
-  fs.writeFileSync(path.join(fx.work, 'g.txt'), 'x\n');
+  fs.writeFileSync(path.join(fx.work, 'g.js'), 'x\n'); // #345: a code file, as above
   fx.g(fx.work, 'add', '-A');
   fx.g(fx.work, 'commit', '-q', '-m', 'feat: x');
   fx.g(fx.work, 'checkout', '-q', 'main');

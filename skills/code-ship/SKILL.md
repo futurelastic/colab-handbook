@@ -1,6 +1,6 @@
 ---
 name: code-ship
-description: "Close the COORDINATOR half of a coding session, authorized: verify code-wrap's hand-off contract, grade the diff against the session's plan (or the Issue's stated ask), verify trunk CI is alive and green, harvest every issue the branch carried, squash-merge with Closes #N, post evidence on each issue (including the grade verdict), release every claim, tear the worktree down — and, if a plan file existed, journal one line about its usage and delete it. The release ritual — promotion plus tag on exposure: released, or the promotion itself on exposure: live — is a separate thing, never bundled in, and never authorized by anything below regardless of autonomy. Trigger phrases: 'ship it', 'merge to trunk', 'merge it', 'update the issue and merge'. Runs after code-wrap: on a repo without `autonomy: auto-trunk`, only once a human says go — a dashboard Merge click counts, an agent's own say-so never does; on a repo declaring that grant, the grant itself is the standing go-ahead for the trunk-merge step, re-verified against this skill's own mechanical gates every run."
+description: "Close the COORDINATOR half of a coding session, authorized: verify code-wrap's hand-off contract, grade the diff against the session's plan (or the Issue's stated ask), verify trunk CI is alive and green, harvest every issue the branch carried, squash-merge with Closes #N, post evidence on each issue (including the grade verdict), release every claim, tear the worktree down — and, if a plan file existed, journal one line about its usage and delete it. The release ritual — promotion plus tag on exposure: released, or the promotion itself on exposure: live — is a separate thing, never bundled in, and never authorized by anything below regardless of autonomy. Trigger phrases: 'ship it', 'merge to trunk', 'merge it', 'update the issue and merge'. Runs after code-wrap: on a repo without `autonomy: auto-trunk`, only once a human says go (or once `colab ship` itself measures the change docs-only, #345) — a dashboard Merge click counts, an agent's own say-so never does; on a repo declaring that grant, the grant itself is the standing go-ahead for the trunk-merge step, re-verified against this skill's own mechanical gates every run."
 ---
 
 # code-ship — merge a wrapped session: verify hand-off → grade → CI → squash → evidence → release → teardown
@@ -159,6 +159,16 @@ ship.
 
 ### Repo does NOT declare `autonomy: auto-trunk` — a fresh, auditable go-ahead is required
 
+**Except a docs-only change (#345).** When `colab ship --dry` (or `--dry --json`) reports
+the autonomy row as `docs-only (N files) — autonomy exception` (JSON: `autonomyGate.via:
+"docs-only"`), ship computed from git that every changed path is documentation. The
+autonomy gate then stands open with no human trigger, exactly as `auto-trunk` would open it,
+and this skill proceeds through `colab ship` under the identical gates. The verdict is
+ship's, never yours: do not argue a branch into it, and do not treat a diff you judge
+"basically docs" as covered. What counts is fixed in
+[CONVENTIONS.md §2](../../CONVENTIONS.md#autonomy--the-docs-only-exception-345). Any other
+row reading means the rest of this section applies.
+
 Typing it into the session is the ordinary form, not the only one. A click in an
 operator dashboard is a human decision too — provided the prompt that spawned you
 carries evidence of *when* and *which* click, so the authorisation can be audited
@@ -272,9 +282,11 @@ the work is **published** (trunk checked out, clean, not ahead of `origin`). Eve
 else is the branch door's: autonomy gate, trunk CI, the checklist close gate, and the same
 evidence gate (code-wrap A1's distill comment is the evidence). An issue left open keeps its
 claim, so a re-run finds it. A solo session with no claim has nothing to close and does not
-run this. Whether the evidence gate is the right gate for a `direct` unit is recorded in
-CONVENTIONS.md §2 as a proposed answer, ⚖ confirmation pending
-([#342](https://github.com/futurelastic/colab-handbook/issues/342)) — the code did not move it.
+run this. All three of those gates (evidence, autonomy, trunk CI) are ⚖ ruled for a `direct`
+unit — confirmed as built ([#342](https://github.com/futurelastic/colab-handbook/issues/342),
+CONVENTIONS.md §2). The autonomy gate's docs-only exception (#345) applies here too: without
+`auto-trunk`, the unit closes when every trunk commit since its earliest claim — by anyone —
+touches documentation only.
 
 **Never decide this by counting commits.** A squash-merge mints a new sha, so a
 shipped branch's own commits look permanently unmerged — a count-only check calls

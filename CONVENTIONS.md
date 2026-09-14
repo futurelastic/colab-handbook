@@ -584,7 +584,8 @@ evidence comment, the claim release, the plan journal — so the audit trail sta
 which was the point of the ruling. `writes: direct` is not required to use it: it grants no
 write, only a close, so any repo whose `writes:` does not veto trunk-direct may.
 
-**Two things this ruling deliberately does NOT settle** — they are open, not answered by
+**Two things this ruling deliberately did NOT settle** — the first has since been ruled (#342), the
+second is still open; neither is answered by
 silence:
 
 - **Evidence-close is gated** on the issue *already carrying a comment the tool did not
@@ -597,18 +598,21 @@ silence:
   trunk itself`, and `colab solo --done` neither posts evidence nor closes anything: the same
   26/30 hole option B was chosen to avoid. **[#302](https://github.com/futurelastic/colab-handbook/issues/302)
   built that door (`colab ship --direct`, above) and left the gate exactly as it is.**
-  Proposed answer of record — **⚖ confirmation pending, not ruled
-  ([#342](https://github.com/futurelastic/colab-handbook/issues/342))**: the gate is right for a
+  **⚖ Ruled 2026-09-14 ([#342](https://github.com/futurelastic/colab-handbook/issues/342),
+  option A: confirm all three readings #302 took)**: the gate is right for a
   `direct` unit too, because the two things answer different questions. The session-start
   instruction authorizes the *unit* to exist; the comment evidences its *delivery* — and
   Phase A, which applies to `direct` in full, writes that comment anyway (`code-wrap` A1).
   Counting trunk commits that mention `#N` as evidence was considered and rejected: the
-  session writes those messages itself, so the evidence would be self-declared. Two further
-  choices in #302 are interpretations a ruling may overturn, recorded here so nobody
-  discovers them by accident: the **autonomy gate still applies** to `--direct` (without
-  `autonomy: auto-trunk` a human closes the unit — reading "the bar moves to session-start"
-  as lifting it is policy, not implementation), and **trunk CI still gates the close**, as it
-  does a branch's evidence-close (the unit's own commit may be what turned it red).
+  session writes those messages itself, so the evidence would be self-declared. The same
+  ruling confirmed the two further choices #302 made: the **autonomy gate still applies** to
+  `--direct` (without `autonomy: auto-trunk` a human closes the unit — unless the unit is
+  docs-only, [the one exception](#autonomy--the-docs-only-exception-345), which applies to
+  this door exactly as to a branch), and **trunk CI still gates the close**, as it does a
+  branch's evidence-close (the unit's own commit may be what turned it red). Reading "the bar
+  moves to session-start" as lifting the autonomy gate would move merge authority to the
+  session-start instruction; relaxing any of the three gates is a separate change for a human,
+  brought with a measurement showing that gate cost something.
 - **Everything else about `direct`'s runtime stays deferred**, concurrency included. The
   ruling settles close-accounting only; it does not authorize any session to take
   trunk-direct anywhere the veto and the attendance bar do not already allow it.
@@ -664,6 +668,60 @@ repo that later grows into that shape without declaring the veto gets trunk-dire
 silently, and there a commit reaches users immediately; the audit reports the combination
 as an informational advisory (never a refusal) — `writes: isolated` is now the only way to
 say "not here."
+
+### Autonomy — the docs-only exception (#345)
+
+**⚖ Ruled by the repo owner, 2026-09-14 ([#345](https://github.com/futurelastic/colab-handbook/issues/345)).**
+On a repo that does **not** declare `autonomy: auto-trunk`, an agent may complete Phase B
+through `colab ship` for a change that is **documentation only**, with no human trigger. The
+"documentation only" judgement is **computed by `colab ship` from git** — never asserted by
+the caller.
+
+**Why.** Some branches carry nothing but text: path repoints, typo fixes, doc updates. Their
+failure mode is a wrong sentence, not wrong behaviour. Measured: several one-line doc-path
+branches sat graded-pass and merge-clean on such repos with nothing to do but wait for a click.
+The only other exit was a hand push, which is exactly what the pre-push guard exists to refuse.
+
+**The change set ship measures.**
+- A branch: `git diff <target>...<branch>`, the same three-dot diff the squash lands, with
+  renames split, so a rename is judged by **both** its old and its new name and a deletion by
+  the path it deletes.
+- A trunk-direct unit (`colab ship --direct`, which has no branch — ruled to carry this
+  exception by [#342](https://github.com/futurelastic/colab-handbook/issues/342)): every commit on
+  trunk since the unit's earliest claim, **by anyone**. Nothing mechanical ties a trunk commit to
+  a session, so this over-includes on purpose — another session's code commit in the window turns
+  the answer into a refusal, never the other way. The window is git's `--since`, which counts
+  whole seconds and includes the claim's own second.
+
+**Docs-only** when *every* path is **either**:
+- an extension in `.md`, `.mdx`, `.txt`, **or**
+- under a top-level `docs/`.
+
+**Never docs-only**, even if matched above:
+- `CLAUDE.md`, `CLAUDE.local.md`, `AGENTS.md`, `.claude/**`, `.github/**`, `.githooks/**` —
+  these are rules and config;
+- any binary or symlink change;
+- an empty diff.
+
+The tool reads the exclusions at the strict end wherever the list is silent. The three file
+names and three directories match **at any depth** (`pkg/CLAUDE.md` and `docs/.github/x.md` are
+excluded too). Extensions compare exactly (`README.MD` is not `.md`). A submodule pointer counts
+as a binary change. A zero-commit evidence-close has an empty diff, so it still needs
+`auto-trunk` or a human.
+
+**It relaxes the autonomy gate, and only that gate.** Every other precondition is unchanged:
+grade, trunk CI, migrations, writes, claims, and the `COLAB_SHIP=1` push. The autonomy row
+reads `docs-only (N files) — autonomy exception` in place of `auto-trunk`. `--dry --json` adds
+`autonomyGate: { via, docsOnly }`, with `via` one of `"auto-trunk"`, `"docs-only"` or `null`.
+A refusal keeps the existing message and adds one line naming why the change is not docs-only.
+A branch is measured **again after B0 sync**, before the squash, so a `pre-ship` hook that
+regenerated a file cannot carry code in behind the first verdict. The pre-push guard needs no
+change: the push still carries `COLAB_SHIP=1` because ship ran its own preconditions. It grants
+nothing past the trunk merge — promotion, tags and deploys stay human on every repo.
+
+**Nothing widens the allowlist.** No `project.yml` field, flag or environment variable can add
+to it: `tools/lib/docs-only.js` holds both lists as constants. Widening it is a handbook change,
+reviewed in a commit like this one.
 
 ### Solo flow — trunk-direct, issue-on-demand, entry-gated (a human must be at the keyboard)
 
@@ -2267,8 +2325,9 @@ stops applying; this is what a scheduler must additionally honour.
 `code-start` → work → `code-wrap` → where granted, `code-ship`) — it may not claim,
 label, comment, or merge directly.
 
-**It may complete a trunk merge only where the repo has granted `autonomy: auto-trunk`,
-and only through `colab ship`**, subject to the identical gates as any other caller (CI
+**It may complete a trunk merge only where the repo has granted `autonomy: auto-trunk`
+— or where `colab ship` itself measures the change as
+[docs-only](#autonomy--the-docs-only-exception-345) — and only through `colab ship`**, subject to the identical gates as any other caller (CI
 green, a proven cure, or a valid CI grant, no new migrations or valid migration grant,
 no hand-merge conflict, no `--force`). Without a proven cure or the grant, `ship`
 refuses and a human runs Phase B.

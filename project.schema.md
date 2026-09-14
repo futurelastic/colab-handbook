@@ -382,6 +382,10 @@ autonomy: auto-trunk     # manual (default) · auto-trunk
 How much of a session's Phase B (merge to **trunk**) an agent may perform alone.
 
 - `manual` (or absent) — an agent stops after Phase A; a human triggers the merge.
+  **One exception, computed rather than declared (#345):** a change `colab ship`
+  measures as documentation only passes the autonomy gate without this grant —
+  [CONVENTIONS.md §2, *Autonomy — the docs-only exception*](CONVENTIONS.md#autonomy--the-docs-only-exception-345).
+  No value of this field, or of any other, widens what counts as documentation.
 - `auto-trunk` — an agent may complete the trunk merge itself **through `colab ship`
   only**, and only when every precondition passes: trunk CI alive and green, no new
   DB migrations in the branch, no hand-code conflicts after sync-regen. Any ✗ falls
