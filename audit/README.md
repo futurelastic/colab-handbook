@@ -152,8 +152,9 @@ the handbook's current version, so a scheduled run is self-documenting.
   - The same comparison runs for a `CLAUDE.md` conventions block against
     `templates/repo-CLAUDE-block.md`.
 
-  Reconciliation needs the handbook's version = `git describe --tags --abbrev=0` in
-  this checkout (override the handbook location with `COLAB_HANDBOOK`). **Before any
+  Reconciliation needs the handbook's version = `git describe --tags --abbrev=0
+  --exclude '*-*'` in this checkout (a pre-release tag is never the version, #334;
+  `tools/lib/release-tag.js`) (override the handbook location with `COLAB_HANDBOOK`). **Before any
   tag exists** the version is treated as `v0` and stamp comparisons are **inactive**
   (the header says so) rather than failing.
 

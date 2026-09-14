@@ -17,6 +17,7 @@ const state = require('./lib/state');
 const git = require('./lib/git');
 const ports = require('./lib/ports');
 const stamp = require('./lib/stamp');
+const releaseTag = require('./lib/release-tag');
 const squash = require('./lib/squash');
 const procs = require('./lib/procs');
 const landed = require('./lib/landed');
@@ -5013,8 +5014,10 @@ Build a grouped Markdown release summary from git history — the same grouping 
 workflow (templates/release-tag.yml) produces, but runnable locally (e.g. when CI is down).
 
   <range>       a git revision range, e.g. v0.3.0..v0.4.0
-                Default: <most recent tag reachable from HEAD>..HEAD
-                If the repo has no tags and no range is given, this errors (it will not guess).
+                Default: <most recent RELEASE tag reachable from HEAD>..HEAD — pre-release tags
+                (anything with a '-', e.g. v1.3.0-rc.1) are skipped, so a final's notes cover
+                everything since the previous final. Pass a range to start from a candidate.
+                If the repo has no release tags and no range is given, this errors (it will not guess).
   --repo <path> repo root (default: git root of cwd)
   --out <file>  write to a file instead of stdout
   --headline "<text>"   one sentence inserted right after the commit-count line (e.g. the
@@ -5050,12 +5053,14 @@ function cmdReleaseNotes(argv) {
   if (range) {
     base = rangeBase(range);
   } else {
-    // Default: since the most recent tag reachable from HEAD.
-    const d = git.git(['describe', '--tags', '--abbrev=0'], repoAbs);
-    if (!d.ok || !d.stdout) {
-      throw new UserError('No tags in this repo — pass an explicit <range> (e.g. v0.1.0..HEAD). Refusing to guess.');
+    // Default: since the most recent RELEASE tag reachable from HEAD. Pre-release tags are skipped
+    // (#334) — a final's notes must cover everything since the previous final, not just since its
+    // own last candidate. Want notes since a candidate? Pass the range explicitly.
+    const tag = releaseTag.latestReleaseTag(repoAbs);
+    if (!tag) {
+      throw new UserError('No release tags in this repo (pre-release tags do not count) — pass an explicit <range> (e.g. v0.1.0..HEAD). Refusing to guess.');
     }
-    base = d.stdout;
+    base = tag;
     range = `${base}..HEAD`;
   }
 
@@ -5199,13 +5204,15 @@ function inspectReleaseStatus(repoAbs) {
   }
 
   // unreleased — always against main. See the measurement-gotcha note above the section header.
-  const describe = git.git(['describe', '--tags', '--abbrev=0', mainRef], repoAbs);
+  // Pre-release tags are skipped (#334): a waiting candidate does not release anything, so the
+  // commits under it stay counted as unreleased until the final is tagged.
+  const lastRelease = releaseTag.latestReleaseTag(repoAbs, { ref: mainRef });
   let unreleased;
   let suggestion = { bump: null, why: 'no tags yet — nothing to suggest against' };
-  if (!describe.ok || !describe.stdout) {
+  if (!lastRelease) {
     unreleased = { tag: null, commits: null, days: null, fixFlag: false, subjects: [] };
   } else {
-    const tag = describe.stdout;
+    const tag = lastRelease;
     const cc = ccSummary(repoAbs, `${tag}..${mainRef}`);
     const created = git.git(['for-each-ref', '--format=%(creatordate:iso-strict)', `refs/tags/${tag}`], repoAbs);
     const days = created.ok && created.stdout ? Math.floor((Date.now() - new Date(created.stdout).getTime()) / 86400000) : null;
@@ -5235,7 +5242,9 @@ not silently skipped; an owner/name slug (audit-only, no working tree here) is n
 
 Per tag-gated repo:
   unpromoted        dual-trunk repos only (trunk != main): commits on trunk not yet on main.
-  unreleased        commits on main past the last v* tag, plus days since that tag was created.
+  unreleased        commits on main past the last release tag, plus days since that tag was created.
+                     Pre-release tags (anything with a '-', e.g. v1.3.0-rc.1) are skipped: commits
+                     under a waiting candidate still count as unreleased.
   flag              true when a fix:-typed (or breaking) commit sits in EITHER gap — the exact class
                      of commit CONVENTIONS §6 already singles out ("an unreleased production fix ...
                      has bitten before").
@@ -6395,10 +6404,9 @@ function cmdVersion() {
   return print(`colab 1.0.0 — colab-handbook ${self.version} (${where})`);
 }
 
-/** Current handbook version = nearest tag; 'v0' before the first tag exists. */
+/** Current handbook version = nearest RELEASE tag (pre-releases skipped, #334); 'v0' before the first one. */
 function handbookVersion(root) {
-  const d = git.git(['describe', '--tags', '--abbrev=0'], root);
-  return d.ok && d.stdout ? d.stdout : 'v0';
+  return releaseTag.latestReleaseTag(root) || 'v0';
 }
 
 // *.yml/*.yaml are whole-file CI copies with a formulaic destination (.github/workflows/<name>.yml),
