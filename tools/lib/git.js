@@ -435,6 +435,32 @@ function ghIssueView(repo, issueNum, fields) {
  * the REST equivalent (`POST /repos/{owner}/{repo}/issues/{n}/comments`) — a separate quota, so a
  * GraphQL exhaustion says nothing about whether this can still land.
  */
+/**
+ * #350: the OPEN pull request whose head is `branch`, with its reviews, or null (none open, or the
+ * read failed — `{ error }` distinguishes the two). One call answers both "is there a PR?" and "has
+ * someone approved it?", so the core-path pause costs one read on the resume path.
+ */
+function ghPrForBranch(repo, branch) {
+  const r = run('gh', ['pr', 'list', '--head', branch, '--state', 'open', '--json', 'number,url,state,author,headRefOid,reviews'], { cwd: repo });
+  if (!r.ok) return { error: (r.stderr || '').split('\n')[0] || `gh pr list exited ${r.code}` };
+  try {
+    const list = JSON.parse(r.stdout || '[]');
+    return { pr: Array.isArray(list) && list.length ? list[0] : null };
+  } catch (_) { return { error: 'gh pr list returned unparseable JSON' }; }
+}
+
+/** #350: open a PR `head` → `base`. Returns {ok, url, stderr}; `url` is gh's printed PR URL. */
+function ghPrCreate(repo, { base, head, title, body }) {
+  const r = run('gh', ['pr', 'create', '--base', base, '--head', head, '--title', title, '--body', body], { cwd: repo });
+  const url = (r.stdout || '').split('\n').map((l) => l.trim()).filter(Boolean).pop() || null;
+  return { ok: r.ok, url, stderr: r.stderr };
+}
+
+/** #350: close a PR whose work landed by squash elsewhere, with a comment saying where. */
+function ghPrClose(repo, num, comment) {
+  return run('gh', ['pr', 'close', String(num), '--comment', comment], { cwd: repo });
+}
+
 function ghIssueComment(repo, issueNum, body) {
   const r = run('gh', ['issue', 'comment', String(issueNum), '--body', body], { cwd: repo });
   if (r.ok || !isGraphqlRateLimit(r.stderr)) return r;
@@ -749,4 +775,5 @@ module.exports = {
   ghRunJobCount, ghRunJobs,
   ghIssueListByLabel, ghLabelDelete, ghLabelCreate,
   ghApi, isGraphqlRateLimit, ghIssueRelease,
+  ghPrForBranch, ghPrCreate, ghPrClose,
 };

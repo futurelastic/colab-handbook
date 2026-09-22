@@ -348,7 +348,8 @@ production; it says nothing about whether anyone will ever comb through a repo's
 trail. [`ceremony: light`](project.schema.md#ceremony--optional) lets a repo opt into
 thinner Issue narration and skip Phase B evidence comments — never the rails that protect
 other sessions and the fleet (claim discipline, worktree isolation, reserved ports,
-squash + `Closes #N`, CI secret scan).
+squash + `Closes #N`, CI secret scan, and the
+[core-path PR pause](#core-paths--a-pr-and-a-non-author-approval-before-landing-350)).
 
 **Narration and recoverability are two different questions, and one rule used to weld
 them together.** The rule required `production: null` for `light`, reasoning that a live
@@ -723,6 +724,67 @@ nothing past the trunk merge — promotion and deploys stay human, and a tag fol
 **Nothing widens the allowlist.** No `project.yml` field, flag or environment variable can add
 to it: `tools/lib/docs-only.js` holds both lists as constants. Widening it is a handbook change,
 reviewed in a commit like this one.
+
+### Core paths — a PR and a non-author approval before landing (#350)
+
+Landing is machine-only: `colab ship` squashes a branch onto its target once the mechanical
+preconditions pass. **The one exception is the core.** A branch that touches a core path goes
+up as a pull request, and it lands only after an account other than its author has approved it.
+
+**The core is whatever the target's `CODEOWNERS` covers.** Write that file by kind, not by
+directory: the gate (CI workflows, test and typecheck config, gate scripts), merge behaviour
+(`.gitattributes`, merge drivers), permissions (`CODEOWNERS` itself), the repo descriptor, and
+irreversible state (migrations, deploy config). Application code, registries, docs and
+dependencies are not core. The test is: *if this lands wrong, does every other operator's next
+landing break, or does the meaning of "green" change?* The tool adds no list of its own; it
+reads the file the forge already reads. It uses the first of `.github/CODEOWNERS`,
+`CODEOWNERS` and `docs/CODEOWNERS`, applies the forge's pattern rules (the last match wins, and
+a line with no owner carves a path out), and reads the file **from the target, never from the
+branch**. A branch cannot exempt itself by editing the file. A branch that adds the first
+`CODEOWNERS` is inert for its own landing, because adding the file is what turns the rule on.
+
+**Inert while one account is alone.** With no `CODEOWNERS`, or one whose owners are all the
+author's own forge login (the login running ship, plus the `<login>/` of a
+[`branchPrefix: machine`](#4-branches-and-commits) branch), a single-operator repo lands exactly
+as before, with no extra `gh` call. The rule turns on when the file names someone else. A team
+(`@org/team`) or an email counts as someone else: a team cannot be expanded without a network
+call, and every doubt resolves toward review.
+
+**The pause.** When the rule is active and the branch touches a core path:
+
+1. The precondition table gains a `core-path review` row, marked `⏸`.
+2. Once every other precondition passes, ship pushes the branch, opens a PR to the target (or
+   reuses the open one), and prints `⏸ PR-PENDING`.
+3. It then stops with **exit 3** and merges nothing. Claims, worktree and branch are untouched.
+
+A paused ship is not a failed one. Exit 3 is this CLI's code for a human-gated outcome.
+`--dry --json` reports it ahead of time as `mode: "pr-pending"`, together with `coreReview`
+(the core paths, the PR and the approval verdict).
+
+**Resuming.** Re-run the same `colab ship`. It lands the branch when a review meets all of
+these:
+
+- its verdict is `APPROVED`;
+- it was given on the branch's **current head**. An approval of an older head is stale;
+- the reviewer is neither the PR's author nor the author logins above.
+
+Only the latest review from each reviewer counts, and any outstanding `CHANGES_REQUESTED`
+blocks the landing.
+
+The landing itself is still ship's squash, not the PR's merge button. That keeps the composed
+message, the B1 CI re-check, the place-claim and the push guard. After B0, the diff is measured
+again, and a core path the approval did not cover refuses. Once the push lands, ship closes the
+PR with the landed sha.
+
+**Operators who share one forge account cannot approve each other.** The forge already refuses
+an author's approval of their own PR, and this rule excludes the same logins. To the forge, one
+account is one operator, however many machines or agent fleets push from it. Telling those
+machines apart is what the `Machine:` trailer and the branch prefix are for
+([§4](#4-branches-and-commits)): they support measurement, not approval. A second operator
+needs a second account.
+
+**Not covered here:** escalating to the repo owner after a set wait, and `colab ship --direct`
+(a branchless unit has no PR to open). Both are separate changes.
 
 ### Solo flow — trunk-direct, issue-on-demand, entry-gated (a human must be at the keyboard)
 
@@ -1197,6 +1259,15 @@ reader (ship's harvest, the remote-claim check, the skills) anchors there, so no
 needs to know the prefix exists. The shapes cannot be confused — the slug has no `/`, so four
 segments can only be the prefixed shape. An opt-in CI check for either shape ships as
 `templates/branch-name.yml`.
+
+**The `Machine:` trailer (#350).** Every squash `colab ship` lands carries
+`Machine: <label>`, whether the message is composed or given with `--message`, and whether or
+not the repo declares a prefix. The label is the same normalised host label the prefix uses —
+a name, never a hardware identifier. It exists so that conflicts across machines can be
+measured from git alone:
+`git log --format='%h %(trailers:key=Machine,valueonly)' <trunk>` lists which machine landed
+each unit. It records where a landing ran. It is not an identity, and no gate reads it
+([§2, *Core paths*](#core-paths--a-pr-and-a-non-author-approval-before-landing-350)).
 
 **A branch may carry a group of related issues** — suffix them all:
 `fix/import-fixes-115-114-113`. Claim every issue in the group before starting, and
