@@ -32,6 +32,7 @@ const place = require('./lib/place');
 const checklist = require('./lib/checklist');
 const groupLabels = require('./lib/group-labels');
 const shipguard = require('./lib/shipguard');
+const branchName = require('./lib/branch-name');
 const migrationGrant = require('./lib/migration-grant');
 const decisionRecord = require('./lib/decision-record');
 const blockedBy = require('./lib/blocked-by');
@@ -3830,7 +3831,8 @@ dependency symlinking, dev-server restarts) live in OPTIONAL repo hooks, not her
         --ports N          allocate N consecutive ports for the worktree
         --at p1,p2,...     pin EXACTLY these ports (refuses if reserved/allocated); excludes --ports/--range
         --range A-B        port search window (default: repo project.yml worktreePorts, else config.portRange)
-        --name <name>      worktree dir name (default: branch after first '/')
+        --name <name>      worktree dir name (default: the branch's <slug>-<N> — what follows its
+                           <type>/, prefix or not; else the branch after its first '/')
         --trunk <name>     override trunk branch
         --repo <path>      repo root (default: git root of cwd)
         --session <url>    Claude session URL recorded on the worktree + its claims (env COLAB_SESSION)
@@ -4033,12 +4035,23 @@ function cmdWorktreeNew(argv) {
   const repoAbs = resolveRepo(opts);
   if (!git.repoRoot(repoAbs)) throw new UserError(`${repoAbs} is not a git repo`);
 
-  const branch = opts._[0];
   // "Never create a branch named `trunk`" is a convention (CONVENTIONS.md §4) that nothing used to
   // enforce — this command would happily have created one, and recorded it (#53).
-  const bp = records.branchProblem(branch);
-  if (bp) throw new UserError(`branch "${branch}": ${bp}`);
-  const name = opts.name || (branch.includes('/') ? branch.slice(branch.indexOf('/') + 1) : branch);
+  const bp = records.branchProblem(opts._[0]);
+  if (bp) throw new UserError(`branch "${opts._[0]}": ${bp}`);
+  const gh = isGhUsable(repoAbs);
+  const myLogin = gh ? git.ghCurrentLogin() : null;
+  // #348: a repo that declares `branchPrefix: machine` gets <login>/<machine>/<type>/<slug>-<N>, so
+  // the branch pushed at cut (below) names the account and machine holding the claim. The caller
+  // still passes the §4 name; the prefix is added here, once, so no skill has to spell it.
+  const prefixAdopted = String(projectDoc(repoAbs).branchPrefix || '') === 'machine';
+  const sb = branchName.sessionBranch(opts._[0], {
+    adopted: prefixAdopted, login: myLogin, machine: branchName.machineLabel(HOST),
+  });
+  if (sb.error) throw new UserError(sb.error);
+  const branch = sb.branch;
+  if (branch !== opts._[0]) print(`branchPrefix: machine → ${branch}`);
+  const name = opts.name || branchName.worktreeName(branch);
   const issues = opts.issues ? String(opts.issues).split(',').map(normIssueNum) : [];
   const portCount = opts.ports ? parseInt(opts.ports, 10) : 0;
   const atPorts = parseAtPorts(opts);
@@ -4049,8 +4062,6 @@ function cmdWorktreeNew(argv) {
   // #288: resolved before the mutate lock below, not inside it — an invalid --pid should refuse
   // the whole command the same way any other bad argument does, not surface from inside the lock.
   const anchor = resolvePlaceAnchor(opts);
-  const gh = isGhUsable(repoAbs);
-  const myLogin = gh ? git.ghCurrentLogin() : null;
   const idProblem = claimIdentity.claimIdentityProblem(config.claimIdentity);
   if (idProblem) warn(`config: ${idProblem} — using the coarse default (login,host) for this claim`);
   const comps = claimIdentity.components(config);
@@ -4130,7 +4141,15 @@ function cmdWorktreeNew(argv) {
   // 1. fetch + create worktree
   print(`fetch origin/${base} + create worktree "${name}" (branch ${branch})`);
   const fetch = git.git(['fetch', 'origin', base], repoAbs);
-  if (!fetch.ok) warn(`git fetch failed (${fetch.stderr.split('\n')[0]}) — creating from local origin/${base}`);
+  // #349: fail CLOSED. The whole point of cutting from origin/<base> is that the cut is origin's tip
+  // right now; a failed fetch used to warn and cut from the cached ref anyway — a branch silently
+  // behind by however stale that cache was. Nothing has been created yet, so refusing costs nothing.
+  if (!fetch.ok) {
+    throw new UserError(`git fetch origin ${base} failed (${String(fetch.stderr || '').split('\n')[0] || `exit ${fetch.code}`}) — ` +
+      `refusing to cut from the cached origin/${base}, which may be stale. Nothing was created.\n` +
+      `  Fix the remote and re-run. To cut from the cached ref anyway, knowingly: ` +
+      `git worktree add -b ${branch} ${wtPath} origin/${base}`);
+  }
   const add = git.git(['worktree', 'add', wtPath, '-b', branch, `origin/${base}`], repoAbs);
   if (!add.ok) throw new UserError(`git worktree add failed: ${add.stderr}`);
   const baseSha = git.git(['rev-parse', '--short', `origin/${base}`], repoAbs).stdout;

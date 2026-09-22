@@ -141,8 +141,11 @@ the handbook's current version, so a scheduled run is self-documenting.
   - The `on:` block is read by a small indentation-aware parser (not the flat
     project.yml reader): it handles flow lists (`branches: [main, dev]`), block lists,
     inline `on: push` / `on: [push, pull_request]`, and `branches-ignore`.
-- Branch names match `^(feat|fix|docs|chore|refactor|test|perf|design)/[a-z0-9._-]+$`
-  (integration branches `main`/`dev`/`master`/`trunk` exempt).
+- Branch names match `^([a-z0-9][a-z0-9-]*/[a-z0-9][a-z0-9-]*/)?(feat|fix|docs|chore|refactor|test|perf|design)/[a-z0-9._-]+$`
+  — both §4 shapes, with or without the `<login>/<machine>/` prefix; the regex is
+  `tools/lib/branch-name.js`'s, not a copy (integration branches
+  `main`/`dev`/`master`/`trunk` exempt).
+- `branchPrefix`, when set, is `machine`.
 - **Toolchain agreement** — flags when `project.yml`, the ecosystem manifest
   (`.nvmrc` / `engines.node` / `composer.json require.php`), and the versions the
   workflows actually pin disagree. It **reports**, it does not auto-resolve. Two

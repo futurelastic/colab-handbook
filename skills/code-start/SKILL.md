@@ -533,6 +533,10 @@ it reads `feat/oauth2-login-88` as issues 2 and 88. Put every number in one trai
 run (`fix/import-fixes-115-114-113`) and claim all of them in step 3; those are the
 same set, and B1b treats a number in one but not the other as a finding to chase.
 
+**A repo declaring `branchPrefix: machine`** (§4, #348) gets `<login>/<machine>/<type>/<slug>-$N`
+— still pass the unprefixed name below; `colab worktree new` adds the prefix itself and prints
+the name it cut. The numbers stay at the end either way, so nothing about the harvest changes.
+
 ### The invariant: the main checkout is on trunk at rest
 
 **Always. No exceptions.** Other things read that working tree — a dev server, a
@@ -551,10 +555,20 @@ colab worktree new <type>/<slug>-$N --issues $N --ports 1 \
   --session "$SESSION_URL" --session-name "<label>"     # claims AND creates — one command
 #   … add --base <line> ONLY for a line declared in project.yml `integration:`;
 #   the base is recorded on the worktree and is what `colab ship` merges into.
-# … else fall back to plain git (then claim by hand, step 3):
+# … else fall back to plain git (then claim by hand, step 3). Under branchPrefix: machine,
+#   spell the prefix yourself here: <login>/<machine>/<type>/<slug>-$N.
+git fetch --prune origin                     # the cut below must be origin's tip NOW, not a cache
 git worktree add -b <type>/<slug>-$N ../<slug>-$N origin/<trunk>
 git push -u origin <type>/<slug>-$N          # the claim record other machines read (#325)
 ```
+
+**Cut from a freshly fetched `origin/<trunk>`, never from local trunk (#349).** Local trunk
+is a mirror that only fast-forwards, and nothing on a machine among several guarantees it was
+pulled; `origin/<trunk>` right after a fetch is the one ref that is. Staleness then costs rebase
+size at ship, never correctness. **Evidence:** the `branch: … (base origin/<base> @ <sha>)` line
+`colab worktree new` prints — it fetches first and **refuses** rather than cut when the fetch
+fails (nothing is created), so that sha is origin's tip at the moment of the cut. On the
+plain-git fallback, compare against `git ls-remote origin <trunk>` yourself.
 
 `--issues` does the claiming, which is why step 3 tells you not to claim separately on
 this path. Pass **every** issue the branch will carry (`--issues 115,114,113`) — that

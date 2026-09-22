@@ -502,7 +502,9 @@ missing `Closes` line without amending a commit that is already on trunk.
 Commit bodies carry `#N`; branch names carry **bare** trailing digits
 (`fix/import-fixes-115-114-113`) — hence the two different extractions. Anchoring
 the branch half to the trailing group is deliberate: a plain `[0-9]+` sweep turns
-`feat/oauth2-login-88` into issues 2 and 88.
+`feat/oauth2-login-88` into issues 2 and 88. It also makes the optional
+`<login>/<machine>/` prefix (§4, #348) invisible here: `ada/box-a/fix/import-fixes-115-114-113`
+extracts the same three numbers.
 
 **On a trunk-direct unit with no branch — an attended solo-flow session, legal on any
 repo without the veto (⚖ #233) — the branch-name half of this extraction is empty by

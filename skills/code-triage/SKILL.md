@@ -831,7 +831,7 @@ Two writes per group, and both are needed: the label makes it *queryable*, the c
 carries the *evidence*.
 
 ```sh
-KEY=import-fixes            # the branch slug WITHOUT the trailing numbers
+KEY=import-fixes            # the branch slug WITHOUT the trailing numbers (or any <login>/<machine>/ prefix)
 gh label create "group:$KEY" --color 5319E7 \
   --description "Must share one branch — these issues touch the same files" 2>/dev/null || true
 for N in 115 114 113; do gh issue edit "$N" --add-label "group:$KEY"; done
