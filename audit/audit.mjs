@@ -810,7 +810,9 @@ function isHandbookItself(target) {
 
 // ------------------------------------------------------------------------- checks
 
-const BRANCH_RE = /^(feat|fix|docs|chore|refactor|test|perf|design)\/[a-z0-9._-]+$/;
+// §4's branch shape — both of them since #348 (`<type>/<slug>` and `<login>/<machine>/<type>/<slug>`)
+// — defined once in tools/lib/branch-name.js and shared with `colab worktree new`, which emits it.
+const { BRANCH_RE } = require("../tools/lib/branch-name.js");
 const INTEGRATION_BRANCHES = new Set(["main", "dev", "master", "trunk"]);
 // Tiers count the GATES between a merge and users: B has no production (0), C promotes and
 // that promotion IS the deploy (1), A promotes to verify and a tag deploys (2). They are
@@ -1150,6 +1152,12 @@ function auditRepo(target, ctx) {
     // one; until it does, `room` is a declared fact this check only spell-checks.
     const roomRaw = "room" in (cfg || {}) ? cfg.room : null;
     if (roomRaw !== null && !VALID_ROOM.has(roomRaw)) fail(`room is ${JSON.stringify(roomRaw)}, expected "solo", "team" or "public" (omit if undeclared)`);
+
+    // ---- branchPrefix (#348) ------------------------------------------------
+    // Enum sanity only, the room shape. One value today: `machine` — `colab worktree new` then cuts
+    // <login>/<machine>/<type>/<slug>-<N> (CONVENTIONS.md §4). Absent = the unprefixed default.
+    const prefixRaw = "branchPrefix" in (cfg || {}) ? cfg.branchPrefix : null;
+    if (prefixRaw !== null && prefixRaw !== "machine") fail(`branchPrefix is ${JSON.stringify(prefixRaw)}, expected "machine" (omit for the unprefixed default)`);
 
     // ---- exposure axis (#132) -------------------------------------------------
     // Enum sanity, plus exactly one pairing advisory — the same restrained shape as
@@ -1559,7 +1567,7 @@ function auditRepo(target, ctx) {
   if (branchesForNaming) {
     const bad = branchesForNaming.filter((b) => !exempt.has(b) && !BRANCH_RE.test(b));
     if (bad.length) {
-      warn(`branch name(s) off-convention: ${bad.slice(0, 4).join(", ")}${bad.length > 4 ? ` (+${bad.length - 4})` : ""} — want <type>/<slug>`);
+      warn(`branch name(s) off-convention: ${bad.slice(0, 4).join(", ")}${bad.length > 4 ? ` (+${bad.length - 4})` : ""} — want <type>/<slug>, or <login>/<machine>/<type>/<slug> (CONVENTIONS.md §4)`);
     }
   }
 

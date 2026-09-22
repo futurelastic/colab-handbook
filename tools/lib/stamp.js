@@ -425,6 +425,7 @@ const WORKFLOW_FINGERPRINTS = [
   { marker: 'CI (Python) — TEMPLATE. Copy me into your repo', kind: 'text', template: 'ci-python' },
   { marker: 'Release (tag) — TEMPLATE. Copy me into your repo', kind: 'text', template: 'release-tag' },
   { marker: 'Deploy (SSH/rsync to shared hosting) — TEMPLATE. Copy me into your repo', kind: 'text', template: 'deploy-xserver' },
+  { marker: 'Branch name — TEMPLATE. Copy me into your repo', kind: 'text', template: 'branch-name' },
   // The header convention itself, unattributed: this catches a copy of any template ADDED LATER
   // without anyone remembering to extend this list — provided the new template keeps the house
   // header. A template that omits it is invisible here, which is worth knowing when writing one.
@@ -445,6 +446,8 @@ const WORKFLOW_FINGERPRINTS = [
   // overwrite. Verified against all three before being added here.
   { marker: 'Resolve deploy toolchain', kind: 'step', template: 'deploy-xserver' },
   { marker: 'Verify the deployed site answers', kind: 'step', template: 'deploy-xserver' },
+  // branch-name (#348): its one step.
+  { marker: 'Check branch name (CONVENTIONS §4)', kind: 'step', template: 'branch-name' },
   // Shared by all three ci-* templates: proves derivation, cannot say from which. Note the exact
   // parenthetical — hand-written installers on this fleet say "(pinned binary)", which is why the
   // step NAME discriminates where the URL inside the step does not.

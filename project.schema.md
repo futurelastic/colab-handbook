@@ -420,6 +420,29 @@ than an honest "not yet answered." The audit enum-checks the value for typos exa
 may add one; until it does, this field is a fact a human writes down, not a fact anything
 derives or verifies.
 
+### `branchPrefix` — optional
+
+```yaml
+branchPrefix: machine   # colab worktree new cuts <login>/<machine>/<type>/<slug>-<N>
+```
+
+Whether session branches carry the account and machine that cut them
+([CONVENTIONS.md §4](CONVENTIONS.md#4-branches-and-commits)). One value today, `machine`;
+**absent means the unprefixed `<type>/<slug>-<N>` shape**, which stays conforming either way.
+With it declared, `colab worktree new` takes the ordinary §4 name and prepends
+`<login>/<machine>/` itself — the login from the forge (`gh api user`), the machine label from
+the host's name — so the branch it pushes at cut names who holds the claim, readable from the
+ref alone by any other machine.
+
+**Why a descriptor field, not a flag:** the pushed branch is a claim record every machine
+reads, so whether it carries the prefix has to be the same answer for every session in the
+repo. A per-call flag would depend on every skill and every human remembering to pass it.
+
+Readers never need this field: both shapes parse everywhere, because the issue numbers stay in
+the trailing `-<N>` run and the prefix is at the other end. The machine label is a **label**, not
+an identity — two hosts with the same short name share it; claim comparisons stay on the
+per-machine identity `colab` already records. The audit enum-checks the value, nothing more.
+
 ### `exposure` — optional
 
 ```yaml
@@ -1049,6 +1072,7 @@ the shape that shows it. One writer at a time says nothing about who reads the r
 | `ceremony: light` → not `autonomy: auto-trunk` | an unattended merge with no evidence trail nobody can audit |
 | `writes` ∈ {`free`, `direct`, `isolated`, `serial-direct`, `serial-gated`, `serial`} when set | a misspelled value silently read as coexistence (⚖ #233: never veto on an unrecognised value) |
 | `room` ∈ {`solo`, `team`, `public`} when set | a misspelled value silently read as undeclared |
+| `branchPrefix` = `machine` when set | a misspelled value silently read as the unprefixed default |
 | `exposure` ∈ {`none`, `self`, `live`, `released`} when set | a misspelled value silently read as undeclared |
 | `exposure: none` + `production: null` → **advisory** | the both-empty claim ("nothing consumes this, and there is nothing to point at") going unflagged |
 | `exposure: live` + `trunk: main` + no `writes: isolated` → **advisory** (⚖ #233, replacing the dropped deploy-shape prohibition) | a trunk-direct commit reaching users immediately, with the descriptor never naming the one field that vetoes it — dormant by construction today (measured: this shape already fails the `exposure: live` mechanism rule above, zero instances across 40 adopted descriptors), shipped anyway as the one finding that names the remedy |

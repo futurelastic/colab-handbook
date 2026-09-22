@@ -1,0 +1,51 @@
+# Branch name — TEMPLATE. Copy me into your repo at
+# .github/workflows/branch-name.yml. Copy-and-own, exactly like every other
+# workflow template in this directory — nothing calls this workflow remotely,
+# and nothing here updates itself. See templates/README.md.
+#
+# OPT-IN. Checks that a pull request's head branch matches CONVENTIONS.md §4:
+#
+#   <type>/<slug>-<N>                     the default shape
+#   <login>/<machine>/<type>/<slug>-<N>   the machine-carried shape, which
+#                                         `colab worktree new` cuts once the repo
+#                                         declares `branchPrefix: machine`
+#
+# Both pass as shipped. Branches that predate the convention are grandfathered by
+# §4 — this only ever sees a branch when someone opens a PR from it, so an old
+# branch nobody proposes is never checked.
+#
+# EDIT POINTS are marked `# EDIT:`.
+
+name: branch-name
+
+on:
+  pull_request:
+    # EDIT: your trunk (and any declared integration line) — the branches PRs target.
+    branches: [main, dev]
+
+jobs:
+  branch-name:
+    name: branch name (CONVENTIONS §4)
+    # Public repos stay on ubuntu-latest always (a fork PR must never execute on
+    # your own runner) — see templates/README.md "Runner policy".
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check branch name (CONVENTIONS §4)
+        env:
+          # Passed through env, never interpolated into the script: on a public repo
+          # the head branch name is chosen by whoever opened the PR.
+          BRANCH: ${{ github.head_ref }}
+        run: |
+          # EDIT: once this repo declares `branchPrefix: machine`, delete the `?`
+          # after the first group to REQUIRE the prefix. Kept byte-identical to the
+          # regex in CONVENTIONS.md §4 otherwise — do not hand-edit its body.
+          RE='^([a-z0-9][a-z0-9-]*/[a-z0-9][a-z0-9-]*/)?(feat|fix|docs|chore|refactor|test|perf|design)/[a-z0-9._-]+$'
+          case "$BRANCH" in
+            dependabot/*|renovate/*) echo "bot branch, exempt: $BRANCH"; exit 0 ;;
+          esac
+          if [[ "$BRANCH" =~ $RE ]]; then
+            echo "ok: $BRANCH"
+          else
+            echo "::error::branch \"$BRANCH\" does not match CONVENTIONS.md §4 — want <type>/<slug>-<N> or <login>/<machine>/<type>/<slug>-<N>"
+            exit 1
+          fi

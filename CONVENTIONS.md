@@ -1178,12 +1178,25 @@ the command inside it is still alive a second later.
 **Branch names:**
 
 ```
-^(feat|fix|docs|chore|refactor|test|perf|design)/[a-z0-9._-]+$
+^([a-z0-9][a-z0-9-]*/[a-z0-9][a-z0-9-]*/)?(feat|fix|docs|chore|refactor|test|perf|design)/[a-z0-9._-]+$
 ```
 
 Convention is `feat/<slug>-<issue-number>`, e.g. `feat/onboard-redesign-23` — the issue
 number in the name means the claim registry, the worktree, and the Issue line up without
 a lookup table.
+
+**The optional prefix — `<login>/<machine>/` (#348).** A repo that declares
+[`branchPrefix: machine`](project.schema.md#branchprefix--optional) gets session branches
+shaped `<login>/<machine>/<type>/<slug>-<issue-number>`, e.g.
+`ada/box-a/feat/onboard-redesign-23`: the forge account that holds the claim and the machine
+it was cut on. Pushed to origin at cut, **that branch is the machine's work claim**, readable
+from the ref alone by every other machine. `colab worktree new` adds the prefix itself — you
+still pass the unprefixed name. Undeclared, the unprefixed shape stays the default, and both
+shapes conform everywhere: the issue numbers stay in the **trailing** `-<N>` run, and every
+reader (ship's harvest, the remote-claim check, the skills) anchors there, so none of them
+needs to know the prefix exists. The shapes cannot be confused — the slug has no `/`, so four
+segments can only be the prefixed shape. An opt-in CI check for either shape ships as
+`templates/branch-name.yml`.
 
 **A branch may carry a group of related issues** — suffix them all:
 `fix/import-fixes-115-114-113`. Claim every issue in the group before starting, and
@@ -2375,7 +2388,7 @@ for N in 115 114 113; do gh issue edit "$N" --add-label "group:$KEY"; done
 gh issue list --label "group:$KEY"                 # the members, from any machine
 ```
 
-The key is the branch slug minus its trailing numbers. Each member also gets a comment
+The key is the branch slug minus its trailing numbers (and minus any `<login>/<machine>/` prefix, §4 — the key names the work, not who holds it). Each member also gets a comment
 with machine-readable lines — re-quoted from the current tree, since refs rot:
 
 ```
@@ -3431,7 +3444,7 @@ gh issue list --label group:<key>                 # must share one branch — st
 gh issue list --search "label:delivery:content,delivery:ops,delivery:docs-only,delivery:elsewhere"  # non-code-here — route, don't start
 gh issue list --search "label:deferred:date,deferred:measurement,deferred:external-party"  # parked — each must name a wake condition
 gh issue edit N --add-assignee @me --add-label in-progress
-git checkout -b feat/<slug>-N origin/<trunk>      # trunk = main (B) or dev (A)
+git fetch origin <trunk> && git checkout -b [<login>/<machine>/]feat/<slug>-N origin/<trunk>   # cut from a FRESH origin/<trunk>, never local trunk; prefix only under branchPrefix: machine
 
 # editing a file that already exists — who else is holding it, by file not by issue
 # fetches first, filters spent branches out via `landed`, and REFUSES (exit 2) to answer

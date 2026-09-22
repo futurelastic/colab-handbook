@@ -30,22 +30,11 @@
 
 const squash = require('./squash.js');
 
-/**
- * Issue numbers a branch NAME claims, per CONVENTIONS.md §4: the numbers live in one trailing run.
- *
- * Anchored to the trailing run deliberately — a naive sweep for every `\d+` reads
- * `feat/oauth2-login-88` as issues 2 and 88, and an invented issue number is exactly the class of
- * error this module exists to prevent. `fix/import-fixes-115-114-113` → [115, 114, 113].
- *
- * Returns [] for a branch that carries no trailing number group. That is not an error: plenty of
- * legitimate branches predate the rule (§4 grandfathers them), so callers must treat [] as "this
- * source has nothing to say", never as "this branch claims no issues".
- */
-function branchIssueNumbers(branchName) {
-  const m = /-(\d+(?:-\d+)*)$/.exec(String(branchName || ''));
-  if (!m) return [];
-  return m[1].split('-').map(Number).filter((n) => Number.isInteger(n) && n > 0);
-}
+// Issue numbers a branch NAME claims (CONVENTIONS.md §4: one trailing run). Defined in
+// lib/branch-name.js since #348 — the one module that knows both branch shapes — and re-exported
+// here so every existing caller keeps its import.
+const branchNameLib = require('./branch-name.js');
+const { branchIssueNumbers } = branchNameLib;
 
 /** Every `#N` mentioned in any commit subject or body on the branch, de-duplicated. */
 function commitIssueNumbers(commits) {
@@ -94,8 +83,14 @@ function corroborateIssues(issues, branchName, commits) {
   return { corroborated, uncorroborated, ok: uncorroborated.length === 0 };
 }
 
-/** A Conventional Commit type prefix on a BRANCH name (`fix/ship-close-path-87` → `fix`), or null. */
+/**
+ * A Conventional Commit type prefix on a BRANCH name (`fix/ship-close-path-87` → `fix`), or null.
+ * Both §4 shapes (#348): `ada/box-a/fix/x-87` → `fix`, never the login. A name conforming to
+ * neither keeps the old read — its first `/`-segment — so grandfathered names behave as before.
+ */
 function branchType(branchName) {
+  const p = branchNameLib.parse(branchName);
+  if (p) return p.type;
   const m = /^([a-z]+)\//.exec(String(branchName || ''));
   return m ? m[1] : null;
 }
