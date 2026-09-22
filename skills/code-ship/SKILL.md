@@ -861,6 +861,20 @@ is a human integration event of a promotion's weight.
   knowledge behind a closed-issue lookup (`CONVENTIONS.md` [§5](../../CONVENTIONS.md#tracking-issues--claimed-but-referenced-not-closed), *Tracking issues*). Through
   the blessed door this is automatic for an issue carrying the `tracking` label, or opt in
   per-ship with `colab ship --refs <N>`; the claim is still released either way.
+- **A core-path branch pauses here instead of merging — `⏸ PR-PENDING`, exit 3 (#350).**
+  When the target's `CODEOWNERS` names an account other than the author and the branch
+  touches a path it covers, `colab ship` pushes the branch, opens a PR (or reuses the open
+  one), and stops. Nothing is merged, and the claims, worktree and branch are kept
+  (`CONVENTIONS.md` [§2, *Core paths*](../../CONVENTIONS.md#core-paths--a-pr-and-a-non-author-approval-before-landing-350)).
+  - This is a pause, not a failure. Do not run B2b–B4. Post one comment on each carried
+    issue linking the PR, then stop.
+  - Resume by re-running the same `colab ship` once an account other than the author has
+    approved the branch's **current** head. It lands by the ordinary squash and closes the PR.
+  - Never press the PR's merge button, and never approve with the author's own account:
+    the forge refuses the second, and the first skips every gate ship re-checks.
+  - B1c's grade still runs before the PR is opened: a reject never reaches the pause.
+  - Every squash also carries a `Machine: <label>` trailer ([§4](../../CONVENTIONS.md#4-branches-and-commits)).
+    Leave it in place.
 - **Machine-specific trunk-side automation runs itself — `.colab/hooks/post-ship`.**
   Migrate the trunk DB, restart the trunk dev server, re-install dependencies: `colab
   ship` runs that hook on the trunk checkout right after the push, so this is no longer
@@ -1348,6 +1362,9 @@ so explicitly in your report; do not perform it.
   that set is still, correctly, held.
 - Worktree removed — or kept with the reason written in your report and its claims
   released by hand.
+- **Or the ship is paused at `⏸ PR-PENDING` (exit 3, #350).** In that case the checks above
+  are "not yet", not "failed": the PR is linked on every carried issue, the claims are still
+  held, and your report says which approval it is waiting for.
 - Every plan file in the harvested set is gone, and the journal line for it landed first.
 - **Your report names the branch you merged into.** Not "merged" — merged *into what*.
   It is the difference between shipped-to-trunk and parked-on-a-line, and only one of

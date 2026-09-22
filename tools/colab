@@ -50,6 +50,7 @@ const claimIdentity = require('./lib/claim-identity');
 const machine = require('./lib/machine');
 const targetSync = require('./lib/ship-target-sync');
 const docsOnly = require('./lib/docs-only');
+const codeowners = require('./lib/codeowners');
 const releasePolicy = require('./lib/release-policy');
 const workflowTriggers = require('./lib/workflow-triggers');
 const releaseCut = require('./lib/release-cut');
@@ -7752,6 +7753,13 @@ Sequence (each step gated; any failure aborts before the push — the target is 
                         (an integration line with NO runs at all borrows trunk's verdict, advisory —
                         an ungated line is a normal early state; a RED line still blocks; the cure
                         rule and ci-grant both cover trunk only, never a line)
+  b4. core-path review  (#350) the TARGET's CODEOWNERS (.github/, root, docs/) ∩ the branch's changed
+                        paths. Inert when there is no CODEOWNERS or it names only the author's forge
+                        login. Otherwise a core-touching branch is pushed, a PR is opened (or the open
+                        one reused), and ship PAUSES — "⏸ PR-PENDING", exit 3, nothing merged, claims
+                        and worktree untouched. Re-run the same command once an account other than the
+                        author approved the branch's CURRENT head: it lands by the ordinary squash below
+                        and closes the PR. Accounts sharing one login cannot approve each other.
   c. B0 sync            merge the target INTO the branch; non-generated conflict → abort (human merge);
                         generated-only conflict → repo's .colab/hooks/pre-ship regenerates, else abort
   d. B1 squash          re-check CI green, then squash-merge branch → target (Closes every claimed issue,
@@ -7919,6 +7927,8 @@ Options:
   --worktree <name>   the session worktree to ship (its branch + claims are used)
   --branch <br>       ship by branch name (its worktree, if any, is found in state)
   --message "<msg>"   subject for the squash commit (Closes/Refs trailer is always spliced in)
+                      Every squash — composed or --message — also carries "Machine: <label>" (#350),
+                      the same host label a branchPrefix: machine branch uses; never a hardware id.
   --refs <N[,M]>      reference these claimed issues (Refs #N) instead of closing them — for a
                       long-lived memory/tracking issue the branch touched but did not complete.
                       Comma-separated; each must be a claimed issue on the branch. An issue carrying
@@ -7943,7 +7953,7 @@ Options:
                       UNCHANGED by this flag — it is additive, never a second way to read the same run.
 
                         { "ok": bool, "dry": true, "repo": "...", "branch": "...", "target": "...",
-                          "worktree": "..." | null, "mode": "squash" | "evidence-close",
+                          "worktree": "..." | null, "mode": "squash" | "evidence-close" | "pr-pending",
                           "issues": [N, ...],
                           "closeIssues": [N, ...], "refsIssues": [N, ...],
                           "checklistFindings": [ { "issue": N, "unchecked": n, "total": n, "reason": "..." } ],
@@ -7951,7 +7961,10 @@ Options:
 
                       \`mode\` says which completion path this branch has (#90). "evidence-close"
                       means there is nothing to merge and ship will close the issues from evidence
-                      instead — an unattended caller must NOT read it as a no-op.
+                      instead — an unattended caller must NOT read it as a no-op. "pr-pending"
+                      (#350) means a real run would open/reuse a PR and PAUSE (exit 3) — additive
+                      keys \`coreReview\` ({ active, verdict, inertReason, codeownersPath, corePaths,
+                      headSha, pr, approval }) and \`machineTrailer\` ("Machine: <label>") say why.
 
                       \`checks\` has one entry per precondition — branch resolves, not an integration
                       line, autonomy granted, target CI alive+green, no new migrations, remainder
@@ -8681,12 +8694,15 @@ function cmdShipDryJson(opts) {
   let dirtyOwnersPayloadVal = null;
   // #345: null until the autonomy gate is computed — then `{ via, docsOnly }`, see shipAutonomyGate.
   let autonomyGatePayloadVal = null;
+  // #350: null until computed — then the core-path review; `mode` becomes "pr-pending" when it pauses.
+  let coreReviewPayloadVal = null;
   const emit = (ok) => {
     print(JSON.stringify({
       ok, dry: true, repo: shortRepo(repoAbs), branch: sess.branch, worktree: sess.name || null,
       target, mode, issues: sess.issues, closeIssues, refsIssues, checklistFindings, checks,
       migrationGrant: migrationGrantPayload, ciGrant: ciGrantPayloadVal, ciCure: ciCurePayloadVal,
       baseCi: baseCiPayloadVal, dirtyOwners: dirtyOwnersPayloadVal, autonomyGate: autonomyGatePayloadVal,
+      coreReview: coreReviewPayloadVal, machineTrailer: mode === 'squash' || mode === 'pr-pending' ? shipMachineTrailer() : null,
     }, null, 2));
     return ok ? 0 : 1;
   };
@@ -8803,6 +8819,12 @@ function cmdShipDryJson(opts) {
     ...(syncResultJson.ok ? {} : { remedy: syncResultJson.remedy }),
   });
 
+  // #350: same single producer as the prose path. 'pending' is not a failure — it is `mode`.
+  const coreReviewJson = shipCoreReview(repoAbs, gh, target, sess.branch);
+  coreReviewPayloadVal = coreReviewPayload(coreReviewJson);
+  checks.push({ name: 'core-path review (#350)', ok: coreReviewJson.verdict !== 'refuse',
+    class: coreReviewJson.verdict === 'refuse' ? SELF_CLEARING : null, detail: coreReviewJson.detail });
+
   // ---- (c) no hand-merge conflict — NEW: the plain --dry prose path never checks this today ----
   const generated = [...DEFAULT_GENERATED, ...(Array.isArray(doc.generated) ? doc.generated.map(String) : [])];
   const hasPreShip = fs.existsSync(path.join(repoAbs, '.colab', 'hooks', 'pre-ship'));
@@ -8860,6 +8882,7 @@ function cmdShipDryJson(opts) {
         `(landed verdict: ${dryMode.verdict.state} — ${dryMode.verdict.why}); a squash would stage nothing` });
   } else {
     checks.push({ name: 'branch has commits', ok: true, class: null, detail: `${dryCommits.length} vs ${target}` });
+    if (coreReviewJson.verdict === 'pending') mode = 'pr-pending';
   }
 
   // #149: the same inherited-closing-keyword scan the prose --dry path runs, mirrored here —
@@ -9262,6 +9285,126 @@ function cmdShipDirect(opts) {
 }
 
 /**
+ * #350: the core-path review rule (CONVENTIONS.md §2, "Core paths"). Reads the TARGET's CODEOWNERS
+ * (never the branch's: a branch must not be able to rewrite the file to exempt itself), intersects it
+ * with the branch's changed paths, and — only when the rule is active AND a core path is touched —
+ * looks up the branch's open PR and its reviews. Everything else costs zero `gh` calls.
+ *
+ * verdict: 'inert' | 'not-core' | 'approved' | 'pending' | 'refuse'. Only 'refuse' is a precondition
+ * failure (the rule applies and gh cannot answer it); 'pending' is the pause, decided after the table.
+ */
+function readTargetCodeowners(repoAbs, target) {
+  for (const p of codeowners.CODEOWNERS_PATHS) {
+    for (const ref of [`origin/${target}`, target]) {
+      const r = git.git(['show', `${ref}:${p}`], repoAbs);
+      if (r.ok) return { path: p, ref, text: r.stdout };
+    }
+  }
+  return null;
+}
+
+function branchChangedPathsNoRenames(repoAbs, base, ref) {
+  const r = git.git(['diff', '--name-only', '--no-renames', `${base}...${ref}`], repoAbs);
+  return r.ok ? r.stdout.split('\n').map((s) => s.trim()).filter(Boolean) : null;
+}
+
+function shipCoreReview(repoAbs, gh, target, branch) {
+  const out = { active: false, inertReason: null, codeownersPath: null, warnings: [], corePaths: [],
+    pr: null, approval: null, headSha: null, authors: [], verdict: 'inert', detail: '' };
+  const file = readTargetCodeowners(repoAbs, target);
+  if (!file) { out.inertReason = `no CODEOWNERS on ${target}`; out.detail = `inert: ${out.inertReason}`; return out; }
+  out.codeownersPath = file.path;
+  const { rules, warnings } = codeowners.parse(file.text);
+  out.warnings = warnings;
+  const parsed = branchName.parse(branch);
+  out.authors = [...new Set([gh ? git.ghCurrentLogin() : null, parsed && parsed.login].filter(Boolean))];
+  const inert = codeowners.inert(rules, out.authors);
+  if (inert.inert) { out.inertReason = inert.reason; out.detail = `inert: ${inert.reason}`; return out; }
+  out.active = true;
+  const ref = shipRefFor(repoAbs, branch);
+  out.headSha = git.git(['rev-parse', ref], repoAbs).stdout || null;
+  const changed = branchChangedPathsNoRenames(repoAbs, target, ref);
+  if (changed === null) { out.verdict = 'refuse'; out.detail = `could not diff ${branch} against ${target} to find core paths`; return out; }
+  out.corePaths = codeowners.corePaths(rules, changed);
+  if (!out.corePaths.length) { out.verdict = 'not-core'; out.detail = `no core path touched (${file.path}: ${inert.reason})`; return out; }
+  const list = out.corePaths.map((c) => c.path);
+  const shown = list.slice(0, 3).join(', ') + (list.length > 3 ? ` (+${list.length - 3})` : '');
+  if (!gh) {
+    out.verdict = 'refuse';
+    out.detail = `${list.length} core path(s): ${shown} — a PR is required and gh is not usable (${ghUnusableWhy(repoAbs)})`;
+    return out;
+  }
+  const found = git.ghPrForBranch(repoAbs, branch);
+  if (found.error) { out.verdict = 'refuse'; out.detail = `${list.length} core path(s): ${shown} — could not read the branch's PR: ${found.error}`; return out; }
+  out.pr = found.pr;
+  if (!out.pr) { out.verdict = 'pending'; out.detail = `${list.length} core path(s): ${shown} — no PR yet; ship opens one and pauses`; return out; }
+  out.approval = codeowners.approvalVerdict(out.pr.reviews, {
+    prAuthor: out.pr.author && out.pr.author.login, authors: out.authors, headSha: out.headSha,
+  });
+  if (out.approval.ok && out.pr.headRefOid && out.pr.headRefOid !== out.headSha) {
+    out.approval = { ok: false, by: null, reason: `PR head ${shortSha(out.pr.headRefOid)} is not the branch tip ${shortSha(out.headSha)} — push, then get it approved` };
+  }
+  out.verdict = out.approval.ok ? 'approved' : 'pending';
+  out.detail = out.approval.ok
+    ? `${list.length} core path(s) — PR #${out.pr.number} ${out.approval.reason}`
+    : `${list.length} core path(s): ${shown} — PR #${out.pr.number} awaiting a non-author approval (${out.approval.reason})`;
+  return out;
+}
+
+/** #350: the `Machine:` trailer line for a squash, or null (with a warning) when HOST normalises to nothing. */
+function shipMachineTrailer() {
+  const label = branchName.machineLabel(HOST);
+  if (!label) { warn(`could not derive a machine label from host "${HOST}" — the squash carries no Machine: trailer`); return null; }
+  return `Machine: ${label}`;
+}
+
+/** #350: the JSON shape of a core review, for `--dry --json`. */
+function coreReviewPayload(cr) {
+  if (!cr) return null;
+  return {
+    active: cr.active, verdict: cr.verdict, inertReason: cr.inertReason, codeownersPath: cr.codeownersPath,
+    corePaths: cr.corePaths.map((c) => c.path), headSha: cr.headSha,
+    pr: cr.pr ? { number: cr.pr.number, url: cr.pr.url, state: cr.pr.state } : null,
+    approval: cr.approval,
+  };
+}
+
+/**
+ * #350: the pause. Publish the branch tip, open the PR if none is open, and say how to resume. The
+ * PR is where the non-author approval happens; the landing itself stays `colab ship`'s squash, so the
+ * composed message, the B1 CI re-check, the place-claim and the push guard all apply unchanged.
+ */
+function shipOpenCorePr(repoAbs, cr, { target, branch, title, body }) {
+  const refs = git.branchRefs(repoAbs, branch);
+  if (refs.localSha && refs.localSha !== refs.remoteSha) {
+    const push = git.run('git', ['push', 'origin', `${branch}:refs/heads/${branch}`], { cwd: repoAbs });
+    if (!push.ok) {
+      process.stderr.write(`✗ core-path review: could not push ${branch} for its PR: ${git.gitFailureLine(push.stderr)}. Nothing merged.\n`);
+      return 1;
+    }
+    print(`  pushed ${branch} → origin (the PR shows this head)`);
+  }
+  let pr = cr.pr;
+  if (!pr) {
+    const made = git.ghPrCreate(repoAbs, { base: target, head: branch, title, body });
+    if (!made.ok) {
+      process.stderr.write(`✗ core-path review: could not open a PR for ${branch}: ${(made.stderr || '').split('\n')[0]}. Nothing merged.\n`);
+      return 1;
+    }
+    pr = { url: made.url };
+    print(`  opened PR ${made.url || '(url not printed)'}`);
+  }
+  print('');
+  print(`⏸ PR-PENDING: ${cr.corePaths.length} core path(s) need a non-author approval before ${branch} lands on ${target}.`);
+  for (const c of cr.corePaths.slice(0, 10)) print(`    ${c.path}  (${c.owners.join(' ')})`);
+  print(`  PR: ${pr.url || '#' + pr.number}`);
+  print('  Nothing was merged. Claims, worktree and branch are untouched. Once an account other than the');
+  print('  author approves the current head, re-run the same `colab ship` to land it.');
+  return 3;
+}
+
+
+/**
  * #345 — the autonomy gate, shared by every ship door (cmdShip, cmdShipDryJson, cmdShipDirect).
  *
  * `autonomy: auto-trunk` opens it, as before. Without that grant it opens for exactly one more
@@ -9468,11 +9611,19 @@ function cmdShip(argv) {
   const syncResult = targetSync.readTargetSync(git, repoAbs, target, { repoLabel: repoAbs });
   checks.push([syncResult.ok ? '✓' : '✗', syncResult.name, syncResult.detail]);
 
+  // #350: the core-path review. A 'pending' verdict is not a failed precondition — it is the pause,
+  // taken below once every real precondition has passed, so it is the ONLY thing between the branch
+  // and landing. Only 'refuse' (the rule applies and gh cannot answer it) fails the table.
+  const coreReview = shipCoreReview(repoAbs, gh, target, sess.branch);
+  const coreOk = coreReview.verdict !== 'refuse';
+  checks.push([coreOk ? (coreReview.verdict === 'pending' ? '⏸' : '✓') : '✗', 'core-path review (#350)', coreReview.detail]);
+  for (const w of coreReview.warnings) warn(`${coreReview.codeownersPath}: ${w}`);
+
   // #87 gates the ship: writing `Closes #N` for work that has not started is unrecoverable — the
   // issue can be reopened, but the false claim stays in trunk's immutable history, and GitHub will
   // have closed it the instant trunk was pushed. #263: gateOk joins the same list — an unticked
   // checklist with no declared remainder is exactly as unrecoverable once `Closes #N` ships.
-  const preOk = ciOk && migOk && treeOk && corr.ok && gateOk && syncResult.ok;
+  const preOk = ciOk && migOk && treeOk && corr.ok && gateOk && syncResult.ok && coreOk;
 
   // ---- report the table ----
   print(`ship ${shortRepo(repoAbs)} · branch ${sess.branch} → ${target}` +
@@ -9672,6 +9823,9 @@ function cmdShip(argv) {
       print('  Plan: no merge, no commit, no push · post evidence comment + CLOSE each issue · ' +
         (opts.keepWorktree ? 'keep worktree' : 'worktree rm') + ' (releases claims)');
       print('  Gate: every closing issue must already carry an evidence comment — checked at run time.');
+    } else if (coreReview.verdict === 'pending') {
+      print(`  Plan: push ${sess.branch} · ${coreReview.pr ? `PR #${coreReview.pr.number} already open` : 'open a PR → ' + target} · ` +
+        'PAUSE (⏸ exit 3, no squash) until an account other than the author approves the current head (#350)');
     } else {
     print(`  Plan: B0 sync ${target}→branch · B1 squash-merge → ` + target + ' · B2 push · B3 ' +
       (opts.keepWorktree ? 'keep worktree' : 'worktree rm') + ' + ' +
@@ -9699,6 +9853,22 @@ function cmdShip(argv) {
   if (mode.evidenceClose) return shipEvidenceClose({
     repoAbs, st, sess, target, trunk, gh, closeIssues, refsIssues, refsSet, mode, opts,
   });
+
+  // ---- (b4) #350: core-path review — open the PR and PAUSE, before anything is merged ----
+  if (coreReview.verdict === 'pending') {
+    const composed = opts.message ? null : buildSquashMessage(repoAbs, target, sess.branch, closeIssues, refsIssues);
+    const title = opts.message ? String(opts.message).split('\n')[0] : (composed ? composed.split('\n')[0] : sess.branch);
+    const body = [
+      `Held by \`colab ship\` (#350): this branch touches ${coreReview.corePaths.length} core path(s) covered by \`${coreReview.codeownersPath}\`:`,
+      '',
+      ...coreReview.corePaths.map((c) => `- \`${c.path}\` (${c.owners.join(' ')})`),
+      '',
+      'It lands only after an account other than the author approves the current head. The landing is still',
+      '`colab ship` (a squash onto the target), not this PR\'s merge button; ship closes this PR when it lands.',
+      ...(sess.issues.length ? ['', `Issues: ${sess.issues.map((n) => '#' + n).join(' ')}`] : []),
+    ].join('\n');
+    return shipOpenCorePr(repoAbs, coreReview, { target, branch: sess.branch, title, body });
+  }
 
   // ---- (c) B0: merge the TARGET into the branch (in the worktree, or an ephemeral one) ----
   const generated = [...DEFAULT_GENERATED, ...(Array.isArray(doc.generated) ? doc.generated.map(String) : [])];
@@ -9763,6 +9933,20 @@ function cmdShip(argv) {
     if (!again.docsOnly) {
       cleanupEphemeral();
       process.stderr.write(`✗ B1: the docs-only exception (#345) no longer holds after B0 sync — ${again.reason}. A human must trigger Phase B. Nothing pushed.\n`);
+      return 1;
+    }
+  }
+
+  // #350: B0 may have brought in paths (a pre-ship hook's regenerated files). The approval covered
+  // the core paths the table listed; a core path it did not list was never reviewed.
+  if (coreReview.verdict === 'approved') {
+    const reviewed = new Set(coreReview.corePaths.map((c) => c.path));
+    const nowChanged = branchChangedPathsNoRenames(repoAbs, mergeRef, sess.branch) || [];
+    const { rules } = codeowners.parse((readTargetCodeowners(repoAbs, target) || {}).text || '');
+    const unreviewed = codeowners.corePaths(rules, nowChanged).filter((c) => !reviewed.has(c.path));
+    if (unreviewed.length) {
+      cleanupEphemeral();
+      process.stderr.write(`✗ B1: after B0 the branch touches core path(s) the approval did not cover: ${unreviewed.map((c) => c.path).join(', ')}. Nothing pushed.\n`);
       return 1;
     }
   }
@@ -9903,7 +10087,10 @@ function cmdShip(argv) {
   const adoptTrailer = adoptInfo
     ? `Colab-Adopted: origin/${adoptInfo.branch} @ ${adoptInfo.remoteSha} on ${adoptInfo.host} (machine ${adoptInfo.machine || 'unknown'})`
     : null;
-  const ciTrailerLines = [ciTrailer, adoptTrailer].filter(Boolean);
+  // #350: which machine landed this — always written, so cross-machine conflicts are measurable from
+  // git alone (`git log --format='%(trailers:key=Machine,valueonly)'`). A label, never the hardware id.
+  const machineTrailer = shipMachineTrailer();
+  const ciTrailerLines = [ciTrailer, adoptTrailer, machineTrailer].filter(Boolean);
   if (opts.message) {
     // --message overrides the subject/body, but Closes is spliced in as its own paragraph — never
     // concatenated. Appending it welded ` — Closes #N` onto whatever the message ended with, which
@@ -9912,7 +10099,7 @@ function cmdShip(argv) {
     for (const tl of ciTrailerLines) {
       if (commitMsg.toLowerCase().includes(tl.toLowerCase())) continue;
       const lastLine = commitMsg.split('\n').pop().trim();
-      commitMsg += (/^(?:Co-authored-by|Signed-off-by|Claude-Session|Reviewed-by|CI-Grant|CI-Cure|Colab-Adopted):\s*\S/i.test(lastLine) ? '\n' : '\n\n') + tl;
+      commitMsg += (/^(?:Co-authored-by|Signed-off-by|Claude-Session|Reviewed-by|CI-Grant|CI-Cure|Colab-Adopted|Machine):\s*\S/i.test(lastLine) ? '\n' : '\n\n') + tl;
     }
   } else {
     // Preserve the branch's crafted commit (subject + footers); insert Closes/Refs above the footers.
@@ -10073,6 +10260,12 @@ function cmdShip(argv) {
   // a long ship these lines would otherwise scroll off above the `✓ Shipped` line — which is
   // exactly how #304's failure went unnoticed in the first place.
   deferredCollector = [];
+  // #350: the approved PR is spent — its work landed by squash, which the forge cannot see as a merge.
+  if (coreReview.verdict === 'approved' && coreReview.pr && gh) {
+    const closed = git.ghPrClose(repoAbs, coreReview.pr.number, `Landed on \`${target}\` as ${sha} by \`colab ship\` (#350), approved by ${coreReview.approval.by}.`);
+    if (closed.ok) print(`  closed PR #${coreReview.pr.number} (landed as ${sha})`);
+    else warnDeferred(`could not close PR #${coreReview.pr.number} (${(closed.stderr || '').split('\n')[0]}) — it landed as ${sha}; close it by hand`);
+  }
   // Only when the target IS the shared checkout. `ephemeralTarget === false` means
   // `targetDir === repoAbs` (see #234's note above); a declared integration line merged in a
   // throwaway worktree has no long-lived installed tree to go stale, so it is correctly out of
