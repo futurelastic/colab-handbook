@@ -49,6 +49,9 @@ test('cureVerdict: branch does not contain the red sha → refuses, names the re
   assert.match(v.reason, /does not contain/);
   assert.match(v.reason, new RegExp(RED_SHA));
   assert.match(v.reason, /rebas/);
+  // #353: the rebase remedy is for the patch only — a bystander must not read it as its own.
+  assert.match(v.reason, /IS the patch/);
+  assert.match(v.reason, /bystander .*waits for green/);
 });
 
 test('cureVerdict: containment is checked BEFORE evidence — a branch missing both fails on containment, not evidence', () => {
@@ -68,6 +71,9 @@ test('cureVerdict: evidence present but not ok (no successful run at current hea
   const v = cureVerdict(base({ evidence: badEvidence() }));
   assert.equal(v.ok, false);
   assert.match(v.reason, /no completed, successful CI run/);
+  // #353: the "open a PR" remedy is scoped to the branch carrying the fix, and says why.
+  assert.match(v.reason, /ONLY for the branch carrying the fix/);
+  assert.match(v.reason, /merge ref that includes the red trunk/);
 });
 
 test('cureVerdict: evidence checked before stacking/workflows — a branch failing all three still reports the evidence reason', () => {

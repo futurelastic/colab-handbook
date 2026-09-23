@@ -1522,6 +1522,24 @@ reading either sees the same spelling. Spell them exactly so, everywhere:
   trunk push and `pull_request`, and a wrap pushes a backup branch without opening a PR,
   so branch CI does not exist here before the merge — a normal state, not a missing
   measurement.
+- **At a red base, that `none` has one way out — and only the patch may take it (#353).**
+  "Proceed, the base's CI is the whole story" is a stop when the base is red, and the
+  *Cure rule* below needs the branch green at its own head — a run a trunk-push-only repo
+  produces for a branch **only through a PR**. A PR's run is against its merge ref, and
+  that merge ref **includes the red base**. So opening one is legitimate for exactly one
+  branch: the one **carrying the fix** — its head contains the red sha (cure condition 1)
+  and repairs it, so its run is fix-on-top-of-red, the verdict wanted. A **bystander** —
+  ready work that merely happens to be queued — waits for green: its PR inherits the red
+  through the merge ref, returns a red run that says nothing about the branch, and
+  spreads the failure signal. Both read the same remedy, so ask first: **is this branch
+  the patch?** — its title or issue says it repairs the red, or its head fixes the
+  failing test. Yes → it goes first, ahead of anything queued. No → it waits, and does
+  not rebase onto the red either: containment proves a cure only for a branch that is
+  one. Measured: a trunk went red on a docs-only merge — a test deferring against a
+  hardcoded date that real time walked past, a calendar bomb, no branch's regression.
+  Three branches waited reading one remedy; the one whose parent was the red sha and
+  which fixed the clock opened a PR, ran green, and cure-merged; the two bystanders
+  stayed parked until trunk was green, correctly.
 - **A class describes one sha.** Anything that moves the head — a sync merge of the base
   into the branch — invalidates it; read it again at the new head. A green inherited from
   an earlier sha is exactly the green-run-on-a-different-commit this section refuses.
@@ -2363,6 +2381,11 @@ and why the `timed_out` relaxation is deliberately left unwritten — is in
   branch forces a rebase onto red trunk, which moves the branch head and
   invalidates any prior green run — every cure pays one CI round at the new head.
   That is the price of the proof, not overhead to trim.
+- **Where workflows never fire for a branch ref, that round is a PR — for the patch
+  only (#353).** Condition 2 then has no other way to be measured, and the PR's merge
+  ref includes the red trunk, so only the branch carrying the fix gets a meaningful
+  run from it. A bystander does not rebase onto the red and does not open a PR: it
+  waits for green (*Branch CI*, above).
 - A cured merge carries a `CI-Cure:` trailer instead of `CI-Grant:` — unlike the
   grant's trailer it names no issue (the cure rule never reads the tracker at all,
   so it has none to name), only the branch, the red trunk sha it contained, and the

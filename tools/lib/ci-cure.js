@@ -348,7 +348,8 @@ function cureVerdict({ containsRedSha, evidence, redSha, stacking, workflowsTouc
   if (!containsRedSha) {
     return { ok: false,
       reason: `branch does not contain trunk's current red head \`${redSha}\` as an ancestor — ` +
-        'it cannot prove it cures this red without rebasing onto trunk first (this pays a fresh CI round, by design)' };
+        'it cannot prove it cures this red without rebasing onto trunk first (this pays a fresh CI round, by design). ' +
+        'Only if this branch IS the patch: a bystander does not rebase onto the red, it waits for green trunk (#353)' };
   }
   if (!evidence) {
     return { ok: false,
@@ -357,7 +358,9 @@ function cureVerdict({ containsRedSha, evidence, redSha, stacking, workflowsTouc
   if (!evidence.ok) {
     return { ok: false,
       reason: 'branch has no completed, successful CI run at its own current head — the cure rule requires ' +
-        'MEASURED evidence, never asserted, same bar a human ci-grant holds' };
+        'MEASURED evidence, never asserted, same bar a human ci-grant holds. Where the repo\'s workflows fire only on ' +
+        'trunk push / pull_request, a PR is the only way to get that run — open one ONLY for the branch carrying the fix; ' +
+        'a bystander\'s PR runs against a merge ref that includes the red trunk, so it waits for green instead (#353)' };
   }
   if (!stacking || !stacking.ok) {
     return { ok: false, reason: (stacking && stacking.reason) || 'anti-stacking verdict unavailable' };

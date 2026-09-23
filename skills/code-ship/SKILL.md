@@ -36,6 +36,9 @@ below, for the two shapes it takes depending on whether the repo carries
 `autonomy: auto-trunk`. Do not open a PR, push trunk, promote to `main`, or tag on your
 own initiative; **no authorization of either shape ever covers those** — both are scoped
 to the trunk-merge step (B2) alone, on every tier, with no field able to say otherwise.
+One PR is not initiative but the price of a proof: at a red trunk, the branch **carrying
+the fix** may need one to obtain the branch CI the cure rule measures — that branch only,
+never a bystander (B1, *Red trunk*).
 Tagging is not this skill's under any rule: whether a tag may be cut without a human at
 all is [`CONVENTIONS.md` §6's release rung](../../CONVENTIONS.md#6-releases) (automatic
 candidates; a final tag automatic only where nothing deploys from it) — a separate act by
@@ -78,7 +81,8 @@ git -C "$MAIN_REPO" status --porcelain -uall                 # trunk checkout st
 
   **This is the one thing the coordinator may do to the branch, and the boundary is
   source.** You may push a wrapped head, re-run an infra-class red run once, cure-merge,
-  and rebase a clean conflict. You may **not** edit source, add a commit, amend, or
+  open a PR to obtain branch CI for the branch that carries a red trunk's fix (that
+  branch only — B1, *Red trunk*), and rebase a clean conflict. You may **not** edit source, add a commit, amend, or
   force-push — the grader is not the fixer, and a coordinator that writes code is
   grading its own work one step later. Measured, 2026-09-05: a branch's head — the very
   commit whose message said the failure was resolved — sat unpushed for a day because
@@ -424,6 +428,37 @@ If `<base>` is a declared line with **no runs at all**, it is not yet CI-gated: 
 `<trunk>` instead and say so in the report. That is a normal early state for a line,
 not a green light — a line that *has* runs and is red still stops the ship.
 
+### Red trunk — first ask "is this branch the patch?" (#353)
+
+A red `<base>` stops the ship unless a door opens — the machine-checkable *Cure rule* or
+a human ci-grant (`CONVENTIONS.md` [§4, *Cure rule*](../../CONVENTIONS.md#cure-rule--the-machine-checkable-door-through-trunk-ci-green-281)).
+The cure needs the branch **green at its own head**, and on a repo whose workflows
+trigger only on trunk push (and `pull_request`) that run cannot exist until someone
+opens a PR — B1a then reads `none`, cannot-arrive. Opening one is legitimate **only for
+the branch carrying the fix**, and the reason is the merge ref: a PR's run is against
+trunk-plus-branch, so it **includes the red**.
+
+| branch | how you tell | what this skill does |
+|---|---|---|
+| **the patch** | its title or issue says it repairs the red (`TRUNK RED:`), or its head fixes the failing test; its head contains the red sha, or will once synced (B0) | goes **first**, ahead of anything else queued. Sync it onto the red if it does not yet contain it (cure condition 1 — pays one CI round, by design), push, open a PR if the repo cannot otherwise run CI for the branch, then re-read B1a at the new head. Green → the cure door opens at B2 |
+| **a bystander** | ready work that merely happens to be queued — nothing in it touches the red | **waits for green trunk.** No PR, no rebase onto the red: its PR's run inherits the red through the merge ref, says nothing about the branch, and spreads the failure signal. Record it as a defer — precondition: trunk red; clears on: a green run on `<base>`; re-measure trigger: that run |
+
+**Both read the same remedy** ("open a PR to obtain branch CI"; `colab ship`'s cure
+refusal), which is exactly why the cure looks equally available to both. Ask the
+question before offering the cure to anything. Measured: a trunk turned red on a
+docs-only merge — a test deferring against a hardcoded date that real time walked past,
+a calendar bomb, no branch's regression. Of three waiting branches, the one whose
+parent was the red sha and which fixed the clock opened a PR, ran green and
+cure-merged; the two bystanders stayed parked, correctly, and shipped once trunk was
+green.
+
+- **Not sure it is the patch?** It is a bystander. A wrong bystander costs one wait for
+  a green that the real patch is about to produce; a wrong patch opens a red PR, spends
+  a CI round, and teaches every reader of that run the failure is the branch's.
+- **Two branches both claim to be the patch?** Take the one whose head demonstrably
+  repairs the failing test; the other waits. The cure door opens once per continuous
+  red episode (anti-stacking), so a second "cure" is at best a no-op.
+
 ### B1a. Now read the BRANCH's CI too — beside `<base>`'s, not instead of it
 
 The check above answers *"is the thing I am merging into healthy?"*. It says nothing
@@ -454,7 +489,7 @@ step is in this skill:
 | class | what this skill does |
 |---|---|
 | `green` | proceed to B1b |
-| `none` | **Depends which `none` — check before you wait.** A run *queued or in flight* (including a slow sibling behind a green fast one, #307): wait, bounded. A run that **cannot arrive for this ref** — no workflows, or workflows triggering only on `pull_request` / `push` to trunk — is not pending: proceed, exactly as the no-runs line above already allows for `<base>`. A5 reports which; re-read the triggers if it did not |
+| `none` | **Depends which `none` — check before you wait.** A run *queued or in flight* (including a slow sibling behind a green fast one, #307): wait, bounded. A run that **cannot arrive for this ref** — no workflows, or workflows triggering only on `pull_request` / `push` to trunk — is not pending: proceed, exactly as the no-runs line above already allows for `<base>`. A5 reports which; re-read the triggers if it did not. **At a red `<base>`, "proceed" reaches B1's stop** — only the branch carrying the fix may open a PR to get a run (*Red trunk*, above); a bystander waits |
 | `red:infra` | **re-run it once** (`gh run rerun <databaseId> --failed`), then re-read. Identical failure twice ⇒ it is the runner, not the branch: hand it to the **ops lane** and stop. Do not merge, and do not send it back to the implementer — there is nothing in the diff for them to fix |
 | `red:finding` | **hand back to an implementer session, as a class** — the branch's own suite found something. Never a merge, never a re-run |
 
