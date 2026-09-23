@@ -1517,6 +1517,40 @@ reading either sees the same spelling. Spell them exactly so, everywhere:
   say which side of the line it fell on, and if that cannot be told, report `red:finding`.
   A wrong `red:finding` costs one hand-back to someone who can look; a wrong `red:infra`
   spends the one re-run and then parks the work in a lane nobody opened.
+- **Telling `red:infra` from `red:finding` is a test, not taste (#354).** The same test
+  reads a red **trunk** run, where it chooses between re-running once and filing a
+  `TRUNK RED:` issue — the choice this section's re-run permission otherwise leaves to
+  judgement at exactly the moment it matters. Where the repo separates exit 1 from exit
+  2, the exit code already answers; where it does not, apply this in order:
+  1. **At least one named failing assertion ⇒ `red:finding`**, whatever else the run
+     shows — a test name with an expected/received pair, an `assert` message, a count
+     like `794 pass / 37 fail`. **Never re-run it**: a green second run hides a real
+     defect, and a flaky one is a defect too.
+  2. **Otherwise it is `red:infra` when the tests demonstrably never ran**, shown by any
+     of: the run's **duration far below this repo's own norm** for that workflow
+     (compare `gh run list --workflow <w> --status success -L 10 --json startedAt,updatedAt`
+     — an order of magnitude short means it died in checkout, install or runner boot);
+     **`gh run view <id> --log-failed` returning nothing at all**; or failure text that
+     names the environment rather than the code — `EADDRINUSE`, `signal: killed`, a lost
+     runner, a job queued for hours and then failed with no log.
+  3. **Neither ⇒ `red:finding`** — the unclassifiable rule above, unchanged.
+
+  Two readings that the text alone gets wrong:
+  - **A timeout is `red:infra` only if the host was loaded.** Measured: two `Test timed
+    out in 5000ms` failures in a file that took 498 s for 49 tests, on a self-hosted
+    runner sitting at load 41 on 16 cores — re-ran green. The same text on an idle host
+    is a real slow-test bug. Check the host (load, swap, I/O pressure) before calling it
+    infra; no host evidence ⇒ `red:finding`.
+  - **Infra-shaped is not the same as harmless.** A port collision (`EADDRINUSE`) from a
+    single random draw with no retry is re-run once to clear the red **and** filed as a
+    defect — the re-run unblocks the base, the cause is still the code's. The two are
+    not exclusive.
+
+  Measured shapes, one repo: a build failed in **26 s** where the normal run is 20+
+  minutes and `--log-failed` returned nothing — re-ran green; a job queued ~2 h and failed
+  with no log while its self-hosted host had swap 100 % full — re-ran green. The contrast
+  in the same repo: 37 failures each naming an assertion, at normal duration — a real
+  regression that a re-run would have buried.
 - **Say which `none`.** A bare `none` turns a bounded wait into a wait for a run that was
   never coming. This handbook's own repo is the permanent shape: its workflow triggers on
   trunk push and `pull_request`, and a wrap pushes a backup branch without opening a PR,
