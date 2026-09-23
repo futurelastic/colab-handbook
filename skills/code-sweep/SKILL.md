@@ -1,6 +1,6 @@
 ---
 name: code-sweep
-description: "Clear out everything finished in ONE repo: find every worktree whose work has landed, every issue whose code shipped but is still open, and every claim outliving its session — then put each through code-wrap and code-ship in sequence, one at a time. Run it at end of day, or ping it whenever a session goes idle — cheap to re-run only when §0 is honoured first, a convention the executing agent follows and not a gate anything enforces (its fingerprint stays sensitive to branch tips, so the cheap path is rarer here than in code-triage — see §0). Sorts candidates into wrap / teardown-only / claim-only / place-claim / unrecorded / blocked / unlinked / spent-remote, because most do not need a full wrap+ship. Spent remote branches — refs left on origin by ships that kept the branch, whose issues are all closed — are listed for a human to delete, never deleted by the sweep. A candidate that fails mid-run is deferred and the run carries on to the next one; only a repo-wide blocker (trunk CI dead or red) or a destructive/unclassifiable failure stops the sweep. Before writing its cache record and reporting, it re-derives the candidate set once more, so a branch that finished its wrap while a long grade was running is processed or named, never left waiting on a notification that does not exist. Can be scoped to a set of issues or one session/worktree instead of the whole repo. Trigger phrases: 'sweep the repo', 'wrap everything finished', 'clean up the worktrees', 'close out the session work', 'tidy up finished work', 'wrap all the done branches', 'sweep the issues #95 #96', 'sweep the session <name>', 'ship these'; and — when this session's last act was a sweep — the re-ping forms 'again', 'anything new?', 'check again', 'anything to wrap yet?', or a bare 'go'. Composes code-wrap then code-ship per candidate; never batches merges."
+description: "Clear out everything finished in ONE repo: find every worktree whose work has landed, every issue whose code shipped but is still open, and every claim outliving its session — then put each through code-wrap and code-ship in sequence, one at a time. Run it at end of day, or ping it whenever a session goes idle — cheap to re-run only when §0 is honoured first, a convention the executing agent follows and not a gate anything enforces (its fingerprint stays sensitive to branch tips, so the cheap path is rarer here than in code-triage — see §0). Sorts candidates into wrap / teardown-only / claim-only / place-claim / unrecorded / blocked / unlinked / spent-remote / orphan-shippable, because most do not need a full wrap+ship. Orphan-shippable is wrapped work with no worktree — a pushed branch still carrying an open, claimed issue — which is shipped when `colab ship --dry --json` reads READY and reported with its failing precondition when it does not, never passed over. Spent remote branches — refs left on origin by ships that kept the branch, whose issues are all closed — are listed for a human to delete, never deleted by the sweep. A candidate that fails mid-run is deferred and the run carries on to the next one; only a repo-wide blocker (trunk CI dead or red) or a destructive/unclassifiable failure stops the sweep. Before writing its cache record and reporting, it re-derives the candidate set once more, so a branch that finished its wrap while a long grade was running is processed or named, never left waiting on a notification that does not exist. Can be scoped to a set of issues or one session/worktree instead of the whole repo. Trigger phrases: 'sweep the repo', 'wrap everything finished', 'clean up the worktrees', 'close out the session work', 'tidy up finished work', 'wrap all the done branches', 'sweep the issues #95 #96', 'sweep the session <name>', 'ship these'; and — when this session's last act was a sweep — the re-ping forms 'again', 'anything new?', 'check again', 'anything to wrap yet?', or a bare 'go'. Composes code-wrap then code-ship per candidate; never batches merges."
 ---
 
 # code-sweep — clear out everything finished, one at a time
@@ -9,6 +9,8 @@ After a few parallel sessions, two things drift apart:
 
 - **worktrees** — merged but never torn down (measured: **8 of 9**, 2.9 GB of orphans)
 - **issues** — shipped but still open, or closed but still holding a claim
+- **branches** — wrapped, pushed and green, but never shipped, because the session that
+  wrapped them held no worktree (#352)
 
 This sweeps one repo and reconciles both. It does not replace
 [`code-wrap`](../code-wrap/SKILL.md) and [`code-ship`](../code-ship/SKILL.md) — it
@@ -222,24 +224,26 @@ opt-in, the resolution of #17). Measured on this repo, 2026-09-12: 54 branches o
 ```sh
 TRUNK=main                                                    # the value of trunk: in project.yml
 S="$(mktemp)"; W="$(mktemp)"
-gh issue list --state all --limit 5000 --json number,state,stateReason \
-  -q '.[]|"\(.number) \(.state) \(.stateReason)"' > "$S"      # ONE call, not one per branch
+gh issue list --state all --limit 5000 --json number,state,stateReason,labels \
+  -q '.[]|"\(.number) \(.state) \(if any(.labels[]; .name=="in-progress") then "ip" else "-" end) \(.stateReason)"' \
+  > "$S"                                                      # ONE call, not one per branch
 git worktree list --porcelain | sed -n 's#^branch refs/heads/##p' > "$W"
 git ls-remote --heads origin | sed 's#.*refs/heads/##' |
   grep -vx "$TRUNK" | grep -v '^dependabot/' |                # also drop every integration: line
   awk -v S="$S" -v W="$W" '
-    BEGIN { while ((getline l < S) > 0) { split(l, a, " "); st[a[1]] = a[2]; rs[a[1]] = a[3] }
+    BEGIN { while ((getline l < S) > 0) { split(l, a, " "); st[a[1]] = a[2]; ip[a[1]] = a[3]; rs[a[1]] = a[4] }
             while ((getline l < W) > 0) wt[l] = 1 }
     { b = $0
       if (b in wt)                     { print "has-worktree", b; next }
       if (!match(b, /(-[0-9]+)+$/))    { print "no-number", b; next }
-      n = split(substr(b, RSTART + 1), num, "-"); ok = 1; note = ""
+      n = split(substr(b, RSTART + 1), num, "-"); ok = 1; held = 1; note = ""
       for (i = 1; i <= n; i++) {
         s = (num[i] in st) ? st[num[i]] : "NOT-HERE"
-        if (s != "CLOSED") { ok = 0; note = note " #" num[i] ":" s }
+        if (s != "OPEN" || ip[num[i]] != "ip") held = 0
+        if (s != "CLOSED") { ok = 0; note = note " #" num[i] ":" s (ip[num[i]] == "ip" ? "+in-progress" : "") }
         else if (rs[num[i]] != "COMPLETED") note = note " #" num[i] ":" rs[num[i]]
       }
-      print (ok ? "spent-remote" : "open-issue"), b, note }'
+      print (ok ? "spent-remote" : held ? "orphan-candidate" : "open-issue"), b, note }'
 rm -f "$S" "$W"
 ```
 
@@ -252,10 +256,23 @@ rm -f "$S" "$W"
   as CLOSED with the one-call form.
 - **`--limit` must exceed the repo's issue count.** A truncated list reads an old closed
   issue as `NOT-HERE`. That is a false *open*, the safe direction, but raise the limit anyway.
-- **Only `spent-remote` rows go to §3.** `open-issue` is a live branch, or a number from
-  another repo's tracker (`NOT-HERE`, #67's shape), and belongs to no bucket here. `no-number`
-  cannot be judged from its name, and `has-worktree` is already a candidate through §1. None
-  of these three becomes a finding just because it is not spent.
+- **Only `spent-remote` and `orphan-candidate` rows go to §3.** `open-issue` is a branch
+  with at least one number that is open and unclaimed, or from another repo's tracker
+  (`NOT-HERE`, #67's shape), and belongs to no bucket here. `no-number` cannot be judged from
+  its name, and `has-worktree` is already a candidate through §1. None of these three becomes
+  a finding just because it is not spent.
+- **`orphan-candidate` = every trailing number OPEN *and* `in-progress`, and no worktree on
+  this machine** (#352). That is someone's claimed work, sitting on origin, that no worktree
+  row will ever bring to this sweep. The shape is ordinary, not exotic: a session that worked
+  under a place-claim on the main checkout (CONVENTIONS.md, *Place-claims*) records its claim
+  with no worktree at all, so after it wraps, its pushed branch is the only trace of the
+  work. Before #352 this row printed as `open-issue` and went nowhere. It is a *candidate*,
+  not a verdict: §3's `orphan-shippable` decides with two more checks, content and hand-off.
+- **The issue-state filter is what makes "ahead of trunk" usable.** Most remote refs are
+  ahead of trunk by commit count because they were squash-merged, and neither a commit count
+  nor `merge-base --is-ancestor` can tell them apart from live work (`spent-remote`'s own
+  reasoning, above). Filtering to OPEN + `in-progress` first leaves a list short enough to
+  ask the content question of each one.
 - **"Remote-only" means remote-only from this machine.** `git worktree list` sees only this
   machine's checkouts, and a closed issue can still have a branch open on another machine.
   That is one more reason the bucket reports and never acts.
@@ -377,10 +394,10 @@ what state the work is *in*; `in-progress` says someone *believes they hold it*.
 disagree in both directions — claims outliving finished work, finished work never
 claimed — and the label remains the veto before any teardown.
 
-## 3. Sort into eight buckets — each gets a different action
+## 3. Sort into nine buckets — each gets a different action
 
 **These buckets are keyed off what §1 enumerated — worktrees, claims, places, and
-(for `spent-remote` only) origin's branch refs (§1.3) — which is complete for a repo declaring the veto (`writes: isolated`, every
+(for `spent-remote` and `orphan-shippable` only) origin's branch refs (§1.3) — which is complete for a repo declaring the veto (`writes: isolated`, every
 unit is a worktree) but only partial for a repo permitting trunk-direct (⚖ #233: any
 repo without the veto).** A finished solo/trunk-direct unit that never
 filed an Issue (CONVENTIONS.md, *Solo flow* — an Issue is filed on demand, not on
@@ -400,6 +417,7 @@ the third case — a scoped selector that names such a unit by issue number.
 | **blocked** | uncommitted work — tracked changes or untracked files — or genuinely unfinished | **report — never force** |
 | **unlinked** | `cargo` (or `unknown`), **zero** claimed issues | **report — do not wrap** (#92) |
 | **spent-remote** | on origin only — no worktree here, not trunk or an `integration:` line — and every trailing issue number CLOSED (§1.3) | **report only — never delete** (#331, keeps #17) |
+| **orphan-shippable** | on origin only, no worktree here; every trailing issue OPEN + `in-progress` (§1.3); `cargo`/`unknown` against its base; head committed before the issue's last hand-off comment — see below | `colab ship --branch <br> --dry --json` → `ok` ⇒ [`code-ship`](../code-ship/SKILL.md) through §4; not `ok` ⇒ **report the failing rows — never silence** (#352) |
 
 ### `spent-remote` — a shipped branch nobody deleted
 
@@ -427,6 +445,79 @@ look. `colab doctor` was the only mitigation before, and nobody schedules a doct
   the human's: `git push origin --delete <branch> …`. Do not run it. If the pile keeps
   growing after this bucket exists, the fix is to bring #331's option A (delete by default at
   ship) back to a human with the count. Quietly pruning from a sweep is not the fix.
+
+### `orphan-shippable` — wrapped work that no worktree will surface (#352)
+
+**The failure it closes.** A session wrapped under a place-claim on the main checkout: gate
+run, commit, push, distill comment ending *"ready for `code-ship`"*. Both of its claim
+comments recorded no worktree. Then nothing happened for about eight hours, until a human
+asked about it directly. `colab ship` passed every precondition on the first try, so the
+branch was never faulty. Nothing was red anywhere: the claim was held, the issue open, the
+session card idle and healthy, trunk CI green. The sweep enumerated the claim and sorted it
+into nothing, because every other bucket starts from a worktree (`wrap`, `teardown-only`),
+needs the work already shipped (`claim-only`) or needs the issues closed (`spent-remote`).
+`place-claim` was no help either: its action is right for a *live* holder and leaves a
+*finished* one unshipped and unreported. The same shape, claims with no worktree, sat on five
+issues of another adopting repo that day.
+
+**All three tests, in order. Fail one and the ref is not this bucket:**
+
+1. **§1.3 printed `orphan-candidate`.** On origin, no worktree on this machine, every
+   trailing number OPEN and `in-progress`.
+2. **Content: `colab landed --branch <br>` reads `cargo` or `unknown`.** It resolves an
+   origin-only name itself (#324). `landed` means the work is already on the base while the
+   issue stays open and claimed. That is `claim-only`, so send it there.
+3. **Hand-off: the head was committed before the newest non-bookkeeping comment on every
+   carried issue.** Since #325 every branch is pushed the moment it is cut, and a
+   place-claim session has no worktree to show that it is still working. So "on origin and
+   claimed" also describes a session that is live mid-work. A wrap ends with a distill
+   comment posted **after** the last commit. A head newer than that comment is work in
+   flight. Put it in `blocked` ("claimed, pushed, not wrapped"), never ship it.
+   ```sh
+   HEAD_AT=$(TZ=UTC git log -1 --date=format-local:%Y-%m-%dT%H:%M:%SZ --format=%cd "origin/$BR")
+   WRAP_AT=$(gh issue view "$N" --json comments -q '[.comments[]
+     | select(.body | test("^(🔒 Claimed|✅ Released|🚢 Shipped|🔖 Referenced)") | not)]
+     | last | .createdAt // ""')
+   awk -v h="$HEAD_AT" -v w="$WRAP_AT" 'BEGIN { exit !(w != "" && h < w) }' \
+     && echo handed-off || echo in-flight          # awk, not `[ \< ]`: zsh's `[` rejects `\<`
+   ```
+   **Normalise both timestamps to UTC before you compare them.** `%cI` prints the
+   committer's own offset (`-05:00`, `+09:00`) and `gh` prints `Z`. Compared as strings,
+   they are off by that offset. For a committer west of UTC, a head committed *after* the
+   comment then reads as *before* it, and that is the unsafe direction. `format-local` under
+   `TZ=UTC` gives the same shape `gh` uses, so a plain string compare is then correct.
+
+   This is a **proxy**, and it is one on purpose. The comment's text is not checked, and an
+   unrelated automated note posted after the commit would satisfy it. It only keeps obvious
+   work in flight out of the ship path. `code-ship` §0 re-derives the full hand-off
+   contract, and its grade compares the diff with the ask, so a branch that slips through
+   here still meets both of those checks.
+
+**Action: ask `colab ship` before you do anything.** `colab ship --branch <br> --dry --json`
+computes every precondition and changes nothing. `ok` + `checks[]` is the answer, and
+`checks[].class` separates `self-clearing` (retry on a later ping) from `human-gated` (a
+person must act):
+
+- **`ok: true`** ⇒ the candidate goes through §4 like a `wrap` candidate whose Phase A is
+  already done: per-candidate CI re-check, then [`code-ship`](../code-ship/SKILL.md). Its §0
+  verifies the hand-off from git and GitHub, and its grade still runs. `READY` is where
+  shipping starts. It does not replace the checks.
+- **`ok: false` with `autonomy granted` as the only failing row** ⇒ the repo has no
+  `autonomy: auto-trunk` grant and the diff is not docs-only (#345). Report it as `wrapped, awaiting a
+  human go`, naming the branch and issue. This is why autonomy is **not** one of the three
+  tests above. On a repo without the grant, the same orphan is just as invisible, and the
+  finding a human needs is the same finding. Only the next step differs.
+- **`ok: false` on `issues resolved (not zero-by-registry-gap)`** (#324: the branch
+  resolves only on origin and this machine's claim registry has nothing for it) ⇒ it is
+  most likely another machine's work. Report it as `orphan-shippable elsewhere` and name
+  the machine from the issue's newest `🔒 Claimed` comment. Never `--adopt` it from a sweep. `--adopt` exists for branches that
+  name no issue, and this one names issues.
+- **Any other `ok: false`** ⇒ one `orphan-shippable` line, naming the failing check and its
+  `class`. Never leave a candidate out of the report because it failed. Staying silent
+  about a failure is the exact bug this bucket was created to fix.
+
+**It merges, so it obeys §4's stops.** A dead or red trunk CI halts it together with the
+`wrap` candidates. Unlike `spent-remote`, it is not a report-only bucket that §4 can skip.
 
 ### `place-claim` — the one hold nothing else here sweeps
 
@@ -561,7 +652,8 @@ process, not unfinished work.
 
 ## 4. Run the wraps — one at a time, re-checking between
 
-For each **wrap** candidate, in order:
+For each **wrap** candidate, and each **orphan-shippable** candidate whose dry run read `ok`
+(§3), in order:
 
 1. **Re-check trunk CI.** Ask by commit, not by recency (`CONVENTIONS.md` [§4](../../CONVENTIONS.md#4-branches-and-commits), #92):
    does a completed, successful run exist for `<trunk>`'s current head sha? (`gh run
@@ -576,7 +668,12 @@ For each **wrap** candidate, in order:
    all, so this step has nothing to re-check for those.
 2. Run **code-wrap** for that candidate — distill/docs/gate/commit/push, if not
    already done for the cargo sitting on it — then **code-ship**: B0 sync against
-   the *current* trunk, harvest, grade, merge, evidence, release, teardown.
+   the *current* trunk, harvest, grade, merge, evidence, release, teardown. An
+   `orphan-shippable` candidate skips code-wrap. Its wrap already ran, and that is what
+   §3's hand-off test checked. There is also no worktree to run code-wrap in. It goes
+   straight to code-ship with `--branch <br>`, and code-ship's §0 is where a wrap that
+   did not in fact happen gets caught. Re-run the dry run first if trunk moved since
+   §3 sorted it.
 3. **Then** move to the next. Trunk has moved; the next B0 must see that.
 
 When the list runs out, the run is not over: [§5.1](#51-re-derive-once-more-before-you-stop-329)
@@ -744,6 +841,9 @@ blocked         #58                      → branch never pushed, 3 commits loca
 unlinked        fix/railquiet-fixture-trunk-red → 1 commit ahead of trunk, no issue claimed — not wrapped, not dropped
 spent-remote    56 refs on origin        → every trailing issue CLOSED; listed below for a human to delete, none deleted
                   fix/ship-reject-recommended-route-328, feat/dropped-idea-12 (#12: NOT_PLANNED — look first), …
+orphan-shippable docs/guide-refresh-81   → no worktree, wrapped 8h ago, dry run ok — shipped, trunk 7b3c2d1
+orphan-shippable fix/cache-key-44        → wrapped, awaiting a human go (no auto-trunk; not docs-only)
+orphan-shippable feat/importer-52        → orphan-shippable elsewhere — claimed from machine box-b; not adopted
 ripened         fix/late-wrap-77         → became a candidate at 11:30Z, mid-run; shipped in the §5.1 pass, trunk 9f8e7d6
 ripened         feat/late-thing-81       → became a candidate mid-run; not processed: merge loop stopped (trunk CI red)
 end-of-run      §5.1 re-derived 2x       → second pass found nothing new; fingerprint + conclusion written from it
@@ -807,6 +907,9 @@ the merge loop got, and that the non-merging work was **not** abandoned with it.
 - **§1.3's remote-ref list was read, and every `spent-remote` ref is named in the report**
   (or the report says there are none). A count with no names cannot be acted on. **No ref
   was deleted by this run** (#17, #331).
+- **Every `orphan-candidate` row from §1.3 reached a line of its own**: shipped, sent to
+  `claim-only`, `blocked` as not yet wrapped, or `orphan-shippable` with its failing check
+  named. A candidate that failed a check is never absent from the report (#352).
 - A selector that matched nothing said so — not "swept 0".
 - **One of the three required §0 outcome lines was printed, first, before anything else** —
   `unchanged` / `changed:<inputs>` / `no usable cache`.
