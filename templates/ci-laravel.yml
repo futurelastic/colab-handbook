@@ -52,6 +52,10 @@ env:
   # EDIT: arguments passed to `php artisan wayfinder:generate`.
   WAYFINDER_ARGS: "--with-form"
 
+# Self-hosted runner? The job layout below assumes GitHub-hosted capacity — a
+# fresh machine per job. With few self-hosted agents every job is a queue slot,
+# jobs from different runs interleave, and trunk can wait behind branch runs.
+# Read CONVENTIONS.md §7, "Self-hosted runners", before choosing a label.
 jobs:
   gitleaks:
     name: Secret scan (gitleaks)

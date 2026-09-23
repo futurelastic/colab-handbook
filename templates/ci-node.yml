@@ -39,6 +39,10 @@ env:
   # EDIT: npm script to build. Change for monorepos or non-standard scripts.
   BUILD_COMMAND: "build"
 
+# Self-hosted runner? The job layout below assumes GitHub-hosted capacity — a
+# fresh machine per job. With few self-hosted agents every job is a queue slot,
+# jobs from different runs interleave, and trunk can wait behind branch runs.
+# Read CONVENTIONS.md §7, "Self-hosted runners", before choosing a label.
 jobs:
   gitleaks:
     name: Secret scan (gitleaks)

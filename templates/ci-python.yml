@@ -53,6 +53,10 @@ env:
   # EDIT: the importable package/directory to byte-compile. Often `src` or the app name.
   PACKAGE_DIR: "."
 
+# Self-hosted runner? The job layout below assumes GitHub-hosted capacity — a
+# fresh machine per job. With few self-hosted agents every job is a queue slot,
+# jobs from different runs interleave, and trunk can wait behind branch runs.
+# Read CONVENTIONS.md §7, "Self-hosted runners", before choosing a label.
 jobs:
   gitleaks:
     name: Secret scan (gitleaks)

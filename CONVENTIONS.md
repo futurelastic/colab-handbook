@@ -3185,6 +3185,57 @@ workflow directly — copy-and-own already permits it, and the audit already cla
 edit as drift to reconcile, the same treatment every other stamped file gets. See
 [`project.schema.md`](project.schema.md#ci--deliberately-not-a-field).
 
+### Self-hosted runners — capacity is the agent count, not the machine (#355)
+
+The templates assume GitHub-hosted capacity: every job gets a fresh machine the moment
+it is queued. **A self-hosted runner breaks that assumption, and a flow copied unchanged
+spends most of its wall time waiting rather than working.** Measured on one busy repo
+with one self-hosted agent: a clean run did ~8.5 min of work, and runs under load took
+48–52 min. Nearly all of the difference was queue time.
+
+- **A repo's capacity is how many agents it has, not how big the host is.** One agent
+  runs one job at a time for that repo, whatever the host has spare. Jobs from different
+  runs interleave on it job by job: one trunk run's secret-scan job finished and its
+  build job then waited **33 min** behind other branches' jobs.
+- **Measure queue and work separately, at job and step level.** Run duration
+  (`created → updated`) adds the two together, so a slow suite and a starved runner read
+  identically. Compare each job's `startedAt` with the run's creation time, and each
+  step's duration with the job's, before you optimise either.
+- **Where the merge gate waits for a completed trunk run, give trunk its own agent.**
+  Branch runs that are informative only must not delay the one run a merge waits for.
+  Use **disjoint** label sets: trunk → a trunk-only label, everything else → the
+  general one, chosen in `runs-on` with an expression on `github.ref`. Two traps:
+  - **A label no online agent carries leaves the job queued forever, with no error.**
+    Register the agent before merging the routing, and change the routing in the same
+    change that retires the agent.
+  - **Route every job of a trunk run, including non-blocking ones.** A run is not
+    *completed* until its last job is, and `continue-on-error` does not change that.
+- **With few agents, every job is a queue slot.** A 13-second job (a secret scan) that
+  sits in its own job costs one more wait per run. Fold it into the main job as its
+  first steps; it still runs on every run and still fails the job before any test
+  starts. The main job must check out full history, which the scan needs. Split jobs
+  out again only when there are enough agents to run them side by side.
+- **Never run the same check twice in one job.** Measured: a typecheck step, then the
+  test script's own leading typecheck, run once per configuration (the switched-epic
+  double run above) — **three** typechecks per build. Drop the copy whose removal breaks
+  nothing; a test that pins the test script's shape decides which one that is.
+- **Test parallelism follows the cores the runner *exposes*.** Runners that size
+  their concurrency from `os.availableParallelism()` (node:test does) are capped by the
+  container's core limit, not by the host's. A 4-core container on a mostly idle
+  24-core host runs the suite at 4. On a memory-bound host, cores are usually the cheap
+  resource. Raise them before anything else.
+- **Before adding an agent, check the runner's disk as well as its memory.** Each agent
+  brings its own runner install and workspace (GBs for a Node repo). Measured: the
+  runner container's disk at 99 % was what blocked a second agent, not its memory. On a
+  memory-bound host, a second agent inside an existing runner container buys the same
+  concurrency as a new container, without a second OS's overhead.
+- **A persistent runner never resets, so tests must clean up after themselves.** A test
+  that makes a temp dir and never removes it leaks on every run. Measured: 5 000+
+  leaked dirs, 2.1 GB, in a `/tmp` shared by the agents of seven repos, where one
+  repo's leak can fill the disk every other repo's CI runs on. The same persistence
+  makes a hosted cache action redundant: the package cache is already on disk, and
+  restoring GitHub's copy of it cost ~37 s per job.
+
 ### Toolchain versions — strict precedence
 
 **Never hardcode a version in CI.** Resolve it, in this order:
