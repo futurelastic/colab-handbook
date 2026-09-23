@@ -3219,11 +3219,14 @@ with one self-hosted agent: a clean run did ~8.5 min of work, and runs under loa
   test script's own leading typecheck, run once per configuration (the switched-epic
   double run above) — **three** typechecks per build. Drop the copy whose removal breaks
   nothing; a test that pins the test script's shape decides which one that is.
-- **Test parallelism follows the cores the runner *exposes*.** Runners that size
-  their concurrency from `os.availableParallelism()` (node:test does) are capped by the
-  container's core limit, not by the host's. A 4-core container on a mostly idle
-  24-core host runs the suite at 4. On a memory-bound host, cores are usually the cheap
-  resource. Raise them before anything else.
+- **Test parallelism follows the cores the runner *exposes*, but more cores only help a
+  CPU-bound suite.** Runners that size their concurrency from `os.availableParallelism()`
+  (node:test does) are capped by the container's core limit, not by the host's. Raising
+  that limit is cheap on a memory-bound host, and it is not a speed-up you can assume.
+  Measured: a 536-file batch that reported 4 went to 8, and the batch went from 170 s to
+  160 s, about 5 %. It was bound by something other than CPU, such as process spawn or
+  disk. Before you count on a gain, compare the batch's wall time with the CPU it
+  actually used. Agent count (above) was the lever for wall time; core count was not.
 - **Before adding an agent, check the runner's disk as well as its memory.** Each agent
   brings its own runner install and workspace (GBs for a Node repo). Measured: the
   runner container's disk at 99 % was what blocked a second agent, not its memory. On a
