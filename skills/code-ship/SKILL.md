@@ -80,7 +80,8 @@ git -C "$MAIN_REPO" status --porcelain -uall                 # trunk checkout st
   gated. Stop there and hand back.
 
   **This is the one thing the coordinator may do to the branch, and the boundary is
-  source.** You may push a wrapped head, re-run an infra-class red run once, cure-merge,
+  source.** You may push a wrapped head, re-run an infra-class red run once (the test for
+  *infra-class*: B1a, *Telling infra from finding*), cure-merge,
   open a PR to obtain branch CI for the branch that carries a red trunk's fix (that
   branch only — B1, *Red trunk*), and rebase a clean conflict. You may **not** edit source, add a commit, amend, or
   force-push — the grader is not the fixer, and a coordinator that writes code is
@@ -428,7 +429,15 @@ If `<base>` is a declared line with **no runs at all**, it is not yet CI-gated: 
 `<trunk>` instead and say so in the report. That is a normal early state for a line,
 not a green light — a line that *has* runs and is red still stops the ship.
 
-### Red trunk — first ask "is this branch the patch?" (#353)
+### Red trunk — first ask "is the red real?", then "is this branch the patch?" (#353, #354)
+
+**Before anything below, classify `<base>`'s red run** with the same test B1a uses
+(*Telling infra from finding*, below). `red:infra` → re-run it once
+(`gh run rerun <databaseId> --failed`) and re-read B1; a second identical failure is the
+runner — hand it to the ops lane, the ship still stops. `red:finding` → the red is real:
+it needs a `TRUNK RED:` issue and a patch, and the rest of this section applies. Filing a
+`TRUNK RED:` issue for a run that died at setup sends someone hunting a regression that
+does not exist; re-running a red that names assertions buries one that does.
 
 A red `<base>` stops the ship unless a door opens — the machine-checkable *Cure rule* or
 a human ci-grant (`CONVENTIONS.md` [§4, *Cure rule*](../../CONVENTIONS.md#cure-rule--the-machine-checkable-door-through-trunk-ci-green-281)).
@@ -516,9 +525,23 @@ every step here runs in the coordinator's own worktree.
   exist here before the merge, and `<base>`'s own gate at B1 is the whole CI story.
   That is a normal state, not a degraded one; say so in the report rather than treating
   it as a missing measurement.
-- **Cannot separate `red:infra` from `red:finding`?** Read it as `red:finding` and hand
-  back (§4, *Branch CI*: a wrong hand-back costs one look, a wrong `red:infra` burns the
-  re-run and parks the work in a lane nobody is watching).
+- **Telling infra from finding — run the test, do not judge by feel** (§4, *Branch CI*,
+  #354; the exit code answers first where the repo separates 1 from 2). In order:
+  1. **Any named failing assertion ⇒ `red:finding`**, whatever else the run shows. Never
+     re-run it — a green second run hides the defect.
+  2. **Else `red:infra` if the tests never ran:** duration far below this repo's norm for
+     the workflow (`gh run list --workflow <w> --status success -L 10 --json startedAt,updatedAt`),
+     `gh run view <databaseId> --log-failed` empty, or environment text — `EADDRINUSE`,
+     `signal: killed`, a lost runner, queued for hours then failed with no log.
+  3. **Neither ⇒ `red:finding`.**
+
+  A **timeout** counts as infra only with evidence the host was loaded (load, swap, I/O
+  pressure) — on an idle host it is a slow-test bug. An **`EADDRINUSE`** red is re-run to
+  unblock and, if the collision is the code's own (a random port with no retry), filed as
+  a defect too; the re-run and the filing are not exclusive.
+- **Cannot separate `red:infra` from `red:finding` even so?** Read it as `red:finding` and
+  hand back (§4, *Branch CI*: a wrong hand-back costs one look, a wrong `red:infra` burns
+  the re-run and parks the work in a lane nobody is watching).
 
 ## B1b. Harvest every issue the branch carried
 

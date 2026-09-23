@@ -619,8 +619,11 @@ The four classes, their quantifiers and each one's next step are defined in
   say so and let `code-ship` route it, rather than silently reopening the work.
 - **Where the repo does not separate exit 1 from exit 2, you cannot infer the class
   from the conclusion alone** — `failure` is all GitHub reports. Read the failing job's
-  log far enough to say which side of the line it fell on; if it genuinely cannot be
-  told, it is `red:finding` (§4, *Branch CI*, gives the reason).
+  log far enough to say which side of the line it fell on — §4, *Branch CI*, gives the
+  ordered test (#354): a named failing assertion ⇒ `red:finding`; else a duration far
+  below the repo's norm, an empty `--log-failed`, or environment text (`EADDRINUSE`,
+  `signal: killed`, a timeout on a loaded host) ⇒ `red:infra`. If it genuinely cannot be
+  told, it is `red:finding` (§4 gives the reason).
 - **`none` splits two ways, and only one of them is worth waiting for.** Before
   reporting it, ask whether a run *can* arrive for this ref at all — read the triggers,
   do not assume:
