@@ -468,6 +468,21 @@ function ghIssueComment(repo, issueNum, body) {
 }
 
 /**
+ * #357: the created-at timestamps of every `labeled` event for `label` on one issue (issue
+ * events API, paginated), oldest-first — or null when the read failed. Null is "could not read",
+ * never "no events": tools/lib/decision-record.js pairVerdict keeps an unread timeline
+ * UNDETERMINED (surfaced as pending) rather than guessing.
+ */
+function ghIssueLabelEvents(repo, issueNum, label) {
+  const r = ghApi(repo, [
+    '--paginate', `repos/{owner}/{repo}/issues/${issueNum}/events`,
+    '--jq', `.[] | select(.event == "labeled" and .label.name == ${JSON.stringify(label)}) | .created_at`,
+  ]);
+  if (!r.ok) return null;
+  return String(r.stdout || '').split('\n').map((l) => l.trim()).filter(Boolean);
+}
+
+/**
  * The label names defined on a repo's tracker (`gh label list`), or null on any failure (gh
  * missing, no remote, network). Null means "could not read" — never "empty set", the same
  * contract as ghIssueView: a caller must not read absence as proof a label is missing.
@@ -774,6 +789,6 @@ module.exports = {
   ghCurrentLogin, ghIssueView, ghIssueComment, ghRunForSha, ghRunForCommit, ghRunsForCommit, ghRunsAtCommit, ghRunsSince, summarizeRunsForCommit,
   ghRunJobCount, ghRunJobs,
   ghIssueListByLabel, ghLabelDelete, ghLabelCreate,
-  ghApi, isGraphqlRateLimit, ghIssueRelease,
+  ghApi, isGraphqlRateLimit, ghIssueRelease, ghIssueLabelEvents,
   ghPrForBranch, ghPrCreate, ghPrClose,
 };

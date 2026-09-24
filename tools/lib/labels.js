@@ -192,7 +192,7 @@ const CONVENTION_LABELS = [
   { name: 'agent-filed', color: 'C5DEF5', description: 'Filed by an agent on its own initiative — not human-approved' },
   { name: 'epic', color: '3E4B9E', description: 'Container for sub-issues — informative, never a start candidate, never claimed as a unit of work' },
   { name: 'needs-decision', color: 'B60205', description: 'A human must answer a blocking question before this can start' },
-  { name: 'decision-recorded', color: '006B75', description: 'A human answered here — read the ⚖ Decision comment before re-applying needs-decision' },
+  { name: 'decision-recorded', color: '006B75', description: 'A human answered here — ask a new question via colab decision --reopen, never a hand-added label' },
   { name: 'needs-plan', color: '0052CC', description: 'Triage judged this hard — code-start should run code-plan before coding' },
   { name: 'migration-granted', color: 'D93F0B', description: "A human granted this issue's branch an exemption from ship's no-new-migrations gate" },
   { name: 'needs-migration-grant', color: 'D4C5F9', description: 'Agent-flagged: deliverable is a schema migration; surfaces the grant request for a human to Accept' },

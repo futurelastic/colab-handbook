@@ -2989,6 +2989,15 @@ Reopening removes \`${labels.DECISION_RECORDED_LABEL}\`, re-applies \`${labels.N
 and posts a \`${decisionRecord.REOPEN_MARK}\` receipt — every decision on that issue up to this
 point is superseded. Not scoped to the original ruler: any trusted account can reopen.
 
+A SECOND QUESTION on an already-decided issue goes through --reopen, never a hand-added
+\`${labels.NEEDS_DECISION_LABEL}\` (#357). Hand-adding it leaves the issue carrying BOTH labels — the
+same pair an interrupted --record leaves — and a reader resolving the pair as "interrupted, the
+gate is stale" hides the new question. The pair is resolved by time: a \`${labels.NEEDS_DECISION_LABEL}\`
+label event (or \`<!-- decision:options -->\` comment) newer than the newest live record is an OPEN
+question; otherwise an interrupted write; unprovable is treated as pending. --list names every
+such issue with its verdict and fix; --record over the pair REFUSES unless --answers says which
+question it answers.
+
 Ask-class \`ruling\` (CONVENTIONS.md §5, Ask) is a DIFFERENT vocabulary — it names why an issue was
 filed, and this command never touches it.
 
@@ -3042,11 +3051,48 @@ function cmdDecision(argv) {
     : cmdDecisionRecord(repoAbs, num, opts, body);
 }
 
+/**
+ * #357: the both-labels pair (`needs-decision` + a recorded decision) is ambiguous — an
+ * interrupted --record, or a second question someone asked by hand instead of --reopen. Reads
+ * the label timeline and resolves it through decisionRecord.pairVerdict; null when the pair is
+ * absent. The fix each verdict names is returned alongside so --record and --list say the same.
+ */
+function decisionPairFor(repoAbs, num, info) {
+  // Presence first, without the timeline — the events read is spent only on an issue that has
+  // the pair, never on every record/list row.
+  if (!decisionRecord.pairVerdict({ labels: info.labels, comments: info.comments })) return null;
+  const labelEvents = git.ghIssueLabelEvents(repoAbs, num, labels.NEEDS_DECISION_LABEL);
+  const pair = decisionRecord.pairVerdict({ labels: info.labels, comments: info.comments, labelEvents });
+  const V = decisionRecord.PAIR_VERDICTS;
+  const fix = pair.verdict === V.INTERRUPTED_WRITE
+    ? `finish the interrupted record: gh issue edit ${num} --remove-label ${labels.NEEDS_DECISION_LABEL}`
+    : `a second question on a decided issue goes through: colab decision ${num} --reopen --ruled-by <name>`;
+  return { ...pair, fix };
+}
+
+function describeDecisionPair(num, pair) {
+  const V = decisionRecord.PAIR_VERDICTS;
+  const when = `ask ${pair.askAt || 'unknown'}, ⚖ record ${pair.decidedAt || 'none'}`;
+  if (pair.verdict === V.OPEN_QUESTION) return `#${num} carries both ${labels.NEEDS_DECISION_LABEL} and ${labels.DECISION_RECORDED_LABEL} — an OPEN second question (${pair.why}; ${when}). Treat as pending.`;
+  if (pair.verdict === V.INTERRUPTED_WRITE) return `#${num} carries both ${labels.NEEDS_DECISION_LABEL} and ${labels.DECISION_RECORDED_LABEL} — an interrupted --record (${pair.why}; ${when}). The question is answered.`;
+  return `#${num} carries both ${labels.NEEDS_DECISION_LABEL} and ${labels.DECISION_RECORDED_LABEL} — cannot tell an open question from an interrupted write (${pair.why}; ${when}). Treat as pending.`;
+}
+
 function cmdDecisionRecord(repoAbs, num, opts, body) {
-  const info = git.ghIssueView(repoAbs, num, ['state', 'labels']);
+  const info = git.ghIssueView(repoAbs, num, ['state', 'labels', 'comments']);
   if (!info) throw new UserError(`could not read #${num} from the tracker — refusing to write a decision record blind`);
   if (info.state !== 'OPEN') {
     throw new UserError(`#${num} is ${info.state} — record the decision on the issue it actually answers before it closes`);
+  }
+
+  // #357: over the both-labels pair, a record must say WHICH question it answers. Without
+  // --answers, a second ⚖ record would read as answering whatever the first one answered, and
+  // the second question would be settled by nobody. The refusal comes before any write.
+  const pair = decisionPairFor(repoAbs, num, info);
+  if (pair && !opts.answers) {
+    throw new UserError(`${describeDecisionPair(num, pair)}
+  Recording over this pair must name the question it answers: re-run with --answers <decision:options comment id or URL>.
+  ${pair.fix}`);
   }
 
   const present = git.ghListLabels(repoAbs);
@@ -3134,8 +3180,16 @@ function cmdDecisionList(opts) {
 
   const decisions = [];
   const stale = [];
+  const pairs = []; // #357: needs-decision re-applied on a decided issue, resolved by pairVerdict
   for (const h of hits) {
     const info = git.ghIssueView(repoAbs, h.number, ['state', 'labels', 'comments']);
+    const pair = info ? decisionPairFor(repoAbs, h.number, info) : null;
+    if (pair) {
+      pairs.push({ issue: h.number, title: h.title, verdict: pair.verdict, askAt: pair.askAt, decidedAt: pair.decidedAt, pending: pair.verdict !== decisionRecord.PAIR_VERDICTS.INTERRUPTED_WRITE, fix: pair.fix });
+      // An open (or undetermined) question is NOT a live decision — listing it among them is
+      // exactly the misreading #357 measured. An interrupted write still is one.
+      if (pair.verdict !== decisionRecord.PAIR_VERDICTS.INTERRUPTED_WRITE) continue;
+    }
     const live = info ? decisionRecord.liveDecisions(info.comments) : [];
     if (live.length === 0) { stale.push(h.number); continue; }
     const d = live[live.length - 1];
@@ -3143,9 +3197,17 @@ function cmdDecisionList(opts) {
   }
 
   if (opts.json) {
-    return print(JSON.stringify({ repo: shortRepo(repoAbs), label: labels.DECISION_RECORDED_LABEL, decisions, stale }, null, 2));
+    return print(JSON.stringify({ repo: shortRepo(repoAbs), label: labels.DECISION_RECORDED_LABEL, decisions, stale, pairs }, null, 2));
   }
 
+  if (pairs.length) {
+    for (const p of pairs) {
+      warn(describeDecisionPair(p.issue, p));
+      warn(`  ${p.fix}`);
+    }
+    if (decisions.length === 0 && stale.length === 0) return 0;
+    print('');
+  }
   if (decisions.length === 0 && stale.length === 0) {
     print(`no outstanding decision records in ${shortRepo(repoAbs)}`);
     return 0;

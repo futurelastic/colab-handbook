@@ -15,6 +15,7 @@ const {
   decisionCommentBody, reopenCommentBody,
   liveDecisions, TRUSTED_ASSOCIATIONS,
   hasRecordedDecision, answeredOptionRefs,
+  PAIR_VERDICTS, pairVerdict,
   evaluateIssue,
 } = require('./decision-record.js');
 
@@ -210,4 +211,81 @@ test('evaluateIssue: tolerates missing labels/comments entirely', () => {
 test('TRUSTED_ASSOCIATIONS is re-exported from migration-grant.js, never a second copy', () => {
   const migrationGrant = require('./migration-grant.js');
   assert.strictEqual(TRUSTED_ASSOCIATIONS, migrationGrant.TRUSTED_ASSOCIATIONS);
+});
+
+// --- the both-labels pair (#357): open question vs interrupted write -------------------------
+//
+// Two histories leave the identical label set `needs-decision` + `decision-recorded`. An
+// interrupted `--record` (comment posted, label swap failed) is answered; a second question
+// added by hand is OPEN. Before #357, the only documented reading was "interrupted", which hid
+// a re-asked question for ~9 h in one adopter's decision inbox.
+
+const BOTH = ['needs-decision', 'decision-recorded'];
+const EARLY = '2026-08-06T09:00:00Z';
+
+test('pairVerdict: null when the pair is absent — gated alone, recorded alone, neither', () => {
+  assert.equal(pairVerdict({ labels: ['needs-decision'], comments: [] }), null);
+  assert.equal(pairVerdict({ labels: ['decision-recorded'], comments: [decisionComment('boss')] }), null);
+  assert.equal(pairVerdict({ labels: [], comments: [] }), null);
+});
+
+test('pairVerdict: needs-decision labeled AFTER the ⚖ record — an OPEN second question (the measured #357 case)', () => {
+  const v = pairVerdict({ labels: BOTH, comments: [decisionComment('boss', { at: NOW })], labelEvents: [EARLY, LATER] });
+  assert.equal(v.verdict, PAIR_VERDICTS.OPEN_QUESTION);
+  assert.equal(v.decidedAt, NOW);
+  assert.equal(v.askAt, new Date(LATER).toISOString());
+});
+
+test('pairVerdict: every needs-decision label event predates the ⚖ record — an INTERRUPTED write', () => {
+  const v = pairVerdict({ labels: BOTH, comments: [decisionComment('boss', { at: NOW })], labelEvents: [EARLY] });
+  assert.equal(v.verdict, PAIR_VERDICTS.INTERRUPTED_WRITE);
+});
+
+test('pairVerdict: a decision:options comment newer than the record is an OPEN question even with the label timeline unread', () => {
+  const v = pairVerdict({
+    labels: BOTH,
+    comments: [decisionComment('boss', { at: NOW }), comment('<!-- decision:options\nA: x\nB: y\n-->', { createdAt: LATER })],
+    labelEvents: null,
+  });
+  assert.equal(v.verdict, PAIR_VERDICTS.OPEN_QUESTION);
+});
+
+test('pairVerdict: label timeline NOT read and no newer options block — UNDETERMINED, never interrupted-write', () => {
+  const v = pairVerdict({ labels: BOTH, comments: [decisionComment('boss', { at: NOW })], labelEvents: null });
+  assert.equal(v.verdict, PAIR_VERDICTS.UNDETERMINED);
+});
+
+test('pairVerdict: timeline read but empty — UNDETERMINED (a present label with no labeled event is unexplained)', () => {
+  const v = pairVerdict({ labels: BOTH, comments: [decisionComment('boss', { at: NOW })], labelEvents: [] });
+  assert.equal(v.verdict, PAIR_VERDICTS.UNDETERMINED);
+});
+
+test('pairVerdict: decision-recorded label with NO live record behind it — OPEN (an interrupted --record always leaves the comment)', () => {
+  const v = pairVerdict({ labels: BOTH, comments: [], labelEvents: [EARLY] });
+  assert.equal(v.verdict, PAIR_VERDICTS.OPEN_QUESTION);
+  assert.equal(v.decidedAt, null);
+});
+
+test('pairVerdict: a live record reached via needs-decision alone (no decision-recorded label) is still the pair', () => {
+  const v = pairVerdict({ labels: ['needs-decision'], comments: [decisionComment('boss', { at: NOW })], labelEvents: [LATEST] });
+  assert.equal(v.verdict, PAIR_VERDICTS.OPEN_QUESTION);
+});
+
+test('pairVerdict: an untrusted ⚖ record does not answer anything — only the trusted one dates the decision', () => {
+  const v = pairVerdict({
+    labels: BOTH,
+    comments: [decisionComment('boss', { at: NOW }), decisionComment('drive-by', { at: LATEST, authorAssociation: 'NONE' })],
+    labelEvents: [LATER],
+  });
+  assert.equal(v.verdict, PAIR_VERDICTS.OPEN_QUESTION, 'the untrusted LATEST record must not outrank the LATER ask');
+});
+
+test('evaluateIssue: pending follows the pair verdict — open and undetermined are pending, interrupted is not', () => {
+  const rec = [decisionComment('boss', { at: NOW })];
+  assert.equal(evaluateIssue({ labels: BOTH, comments: rec, labelEvents: [LATER] }).pending, true);
+  assert.equal(evaluateIssue({ labels: BOTH, comments: rec, labelEvents: null }).pending, true);
+  assert.equal(evaluateIssue({ labels: BOTH, comments: rec, labelEvents: [EARLY] }).pending, false);
+  assert.equal(evaluateIssue({ labels: ['needs-decision'], comments: [] }).pending, true);
+  assert.equal(evaluateIssue({ labels: ['decision-recorded'], comments: rec }).pending, false);
+  assert.equal(evaluateIssue({ labels: ['decision-recorded'], comments: rec }).pair, null);
 });
