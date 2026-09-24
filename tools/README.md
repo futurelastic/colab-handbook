@@ -243,6 +243,14 @@ record — it is kept marked `releasePending` with a `releaseNote` (retry hint),
 shows a `⚠` instead of the claim silently vanishing while GitHub still shows `in-progress`. Retry
 with `colab release <N>`.
 
+**Release unassigns the claimer, not just `@me` (#363).** The release write reads who holds the
+claim from the issue — the account behind the latest `labeled in-progress` event, via two REST
+reads so a GraphQL-exhausted release can still make them — and unassigns it alongside the caller,
+printing a line when that is a different login. A claim taken under one account and released
+under another would otherwise lose its label and keep its assignee: a half-claim. Any other
+assignee is left alone. The yield path passes `selfOnly`, because there the latest labeler is the
+race's winner. A lookup that fails degrades to `@me` and warns that a half-claim may remain.
+
 ### 3. Tie-break — settling a true simultaneous race
 
 GitHub has no atomic check-and-set on labels/assignees, so two sessions can both pass the refusal

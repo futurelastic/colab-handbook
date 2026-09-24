@@ -391,23 +391,76 @@ function isGraphqlRateLimit(stderr) {
 }
 
 /**
- * Release an issue's tracker claim — unassign `@me` + remove the `in-progress` label. Primary
- * path is `gh issue edit` (GraphQL, one mutation for both). On a GraphQL-specific rate limit
- * (#164) it retries each half over REST instead, since the two quotas are independent:
+ * Who holds an issue's tracker claim, read from the issue itself (#363) — never assumed to be the
+ * caller. A fleet that works under more than one account (an operator login and an agent login,
+ * say) routinely claims under one and releases under the other; a release that only drops `@me`
+ * then removes `in-progress` and leaves the claimer assigned — a half-claim by §5's own
+ * definition, which nobody starts and nothing repairs.
+ *
+ * The claimer is the actor of the LATEST `labeled in-progress` event: the claim writes the label
+ * and the assignee in one call, by one account, so that actor is the account whose assignee is
+ * the claim's other half. The event survives the label's removal, so this also finds the claimer
+ * of an issue already reduced to an assignee-only half-claim — the repair case.
+ *
+ * Both reads are REST (`gh api`), deliberately: release has a REST fallback for a GraphQL-only
+ * rate limit (#164), and a lookup that spent GraphQL quota would fail in exactly that case.
+ * Returns {assignees, claimer}; either is null when it could not be read — "could not read",
+ * never "nobody", the same contract as ghIssueView.
+ */
+function ghClaimHolder(repo, issueNum) {
+  const a = ghApi(repo, [`repos/{owner}/{repo}/issues/${issueNum}`, '--jq', '.assignees[].login']);
+  const assignees = a.ok ? String(a.stdout || '').split('\n').map((l) => l.trim()).filter(Boolean) : null;
+  const e = ghApi(repo, [
+    '--paginate', `repos/{owner}/{repo}/issues/${issueNum}/events`,
+    '--jq', '.[] | select(.event == "labeled" and .label.name == "in-progress") | .actor.login',
+  ]);
+  const actors = e.ok ? String(e.stdout || '').split('\n').map((l) => l.trim()).filter(Boolean) : [];
+  const claimer = actors.length ? actors[actors.length - 1] : null;
+  return { assignees, claimer };
+}
+
+/**
+ * Release an issue's tracker claim — remove the `in-progress` label and the assignee that holds
+ * the claim. Primary path is `gh issue edit` (GraphQL, one mutation for both). On a GraphQL-specific
+ * rate limit (#164) it retries each half over REST instead, since the two quotas are independent:
  *   DELETE /repos/{owner}/{repo}/issues/{n}/labels/in-progress
- *   DELETE /repos/{owner}/{repo}/issues/{n}/assignees   (body: {assignees:[login]})
+ *   DELETE /repos/{owner}/{repo}/issues/{n}/assignees   (body: {assignees:[login,...]})
  * Any other kind of failure (network down, issue not found, ...) is NOT retried — a GraphQL
  * rate limit is the one case where "try a different transport" is actually a different question,
- * not a repeat of the same one. Returns {ok, stderr} in the same shape ghIssueEdit already returns.
+ * not a repeat of the same one.
+ *
+ * Which assignee (#363): the caller (`@me`, always — unassigning a login that is not assigned is a
+ * no-op) AND the claimer read from the issue by `ghClaimHolder`, when that is a different login
+ * still assigned. `opts.selfOnly` restricts it to `@me` — for the yield path, where the latest
+ * labeler may be the WINNER of the race, whose assignee must survive. A lookup that fails
+ * degrades to `@me` alone (the pre-#363 behaviour) and says so in `note`; it never blocks the
+ * release.
+ *
+ * Returns {ok, stderr, code, others, caller, note}: `others` = logins other than the caller that
+ * were unassigned (empty in the ordinary one-account case) — a caller prints them, because
+ * removing someone else's assignee is a thing a human should see happened.
  */
-function ghIssueRelease(repo, issueNum) {
-  const r = run('gh', ['issue', 'edit', String(issueNum), '--remove-assignee', '@me', '--remove-label', 'in-progress'], { cwd: repo });
-  if (r.ok || !isGraphqlRateLimit(r.stderr)) return r;
+function ghIssueRelease(repo, issueNum, opts = {}) {
+  const caller = ghCurrentLogin();
+  let others = [];
+  let note = '';
+  if (!opts.selfOnly) {
+    const h = ghClaimHolder(repo, issueNum);
+    if (h.claimer && h.claimer !== caller && (h.assignees === null || h.assignees.includes(h.claimer))) {
+      others = [h.claimer];
+    } else if (!h.claimer && h.assignees === null) {
+      note = 'could not read who holds the claim — unassigned @me only';
+    }
+  }
+  const r = run('gh', ['issue', 'edit', String(issueNum),
+    '--remove-assignee', ['@me', ...others].join(','), '--remove-label', 'in-progress'], { cwd: repo });
+  if (r.ok || !isGraphqlRateLimit(r.stderr)) return { ...r, others: r.ok ? others : [], caller, note };
 
   const label = ghApi(repo, ['-X', 'DELETE', `repos/{owner}/{repo}/issues/${issueNum}/labels/in-progress`]);
-  const login = ghCurrentLogin();
-  const assignee = login
-    ? ghApi(repo, ['-X', 'DELETE', `repos/{owner}/{repo}/issues/${issueNum}/assignees`, '-f', `assignees[]=${login}`])
+  const logins = [caller, ...others].filter(Boolean);
+  const assignee = logins.length
+    ? ghApi(repo, ['-X', 'DELETE', `repos/{owner}/{repo}/issues/${issueNum}/assignees`,
+      ...logins.flatMap((l) => ['-f', `assignees[]=${l}`])])
     : { ok: false, stderr: 'could not resolve current gh login for assignee removal (gh api user failed)' };
 
   const ok = label.ok && assignee.ok;
@@ -415,7 +468,7 @@ function ghIssueRelease(repo, issueNum) {
     !label.ok && `label removal: ${label.stderr.split('\n')[0] || label.code}`,
     !assignee.ok && `assignee removal: ${assignee.stderr.split('\n')[0] || assignee.code}`,
   ].filter(Boolean).join('; ');
-  return { ok, stderr, code: ok ? 0 : 1 };
+  return { ok, stderr, code: ok ? 0 : 1, others: assignee.ok ? others : [], caller, note };
 }
 
 /**
@@ -789,6 +842,6 @@ module.exports = {
   ghCurrentLogin, ghIssueView, ghIssueComment, ghRunForSha, ghRunForCommit, ghRunsForCommit, ghRunsAtCommit, ghRunsSince, summarizeRunsForCommit,
   ghRunJobCount, ghRunJobs,
   ghIssueListByLabel, ghLabelDelete, ghLabelCreate,
-  ghApi, isGraphqlRateLimit, ghIssueRelease, ghIssueLabelEvents,
+  ghApi, isGraphqlRateLimit, ghIssueRelease, ghClaimHolder, ghIssueLabelEvents,
   ghPrForBranch, ghPrCreate, ghPrClose,
 };
