@@ -2902,6 +2902,17 @@ A design ruling needs one more part: an **immutable visual record**.
    comment, immutable where the repo file is not. Rejected alternatives need never land
    on trunk — their screenshot on the Issue is the whole record.
 
+**A missing artifact never blocks a start.** Unit 2 lands on the branch that builds the
+surface (`code-wrap` A2), so it is normally absent before that branch exists. The design
+gate is `needs-decision`, and only that. A consumer's label description, agent prompt
+or local doc that says "needs an artifact before code" is stricter than this section.
+Following it stalls settled work, measured at about a day on three issues (#356).
+Consumer docs should link to [`code-triage`](skills/code-triage/SKILL.md) §6 (`design:`
+line) instead of restating it. A ruling given elsewhere and never recorded does not block
+either. That includes prose on the issue and a ruling on a linked issue. It still has
+to be written down as unit 1, with `colab decision --record --ruled-by <human>`. Triage
+reports that case; it does not treat it as a gate.
+
 The index of what lives under `docs/design/` belongs in that directory itself — never
 accreted into `CLAUDE.md`, which gets one pointer row.
 
