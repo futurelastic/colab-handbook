@@ -693,6 +693,22 @@ but for a different reason: it is not that someone else holds it, it is that the
 code to write for it directly. Still report it, in its own bucket, so it does not read as
 silently dropped — see §6.
 
+**An epic carrying `needs-decision`, or a `decision:options` block, is a finding (#361,
+`CONVENTIONS.md` [§5](../../CONVENTIONS.md#decision-gate--a-human-must-answer-first-122),
+*Decision gate*).** An epic never starts, so the gate on it holds nothing, and a decision
+inbox built on start gates may never show the question:
+
+```sh
+gh issue list --state open --label epic --limit 200 --json number,labels,comments \
+  -q '.[] | select(([.labels[].name]|index("needs-decision")) or
+                   ([.comments[].body]|any(test("<!-- decision:options")))) | .number'
+```
+
+Report each one in the epic bucket as a finding, and name where the question moves: its
+own issue carrying `needs-decision` (and the options block, if any), attached to the epic
+as a sub-issue, with a `blocked_by` edge from any child it holds back. Triage files
+neither the issue nor the edge for this, because the question is not triage's to restate.
+
 **A release tracking issue is a record, not a task** — the same treatment. An issue whose body
 opens with `<!-- colab:release version=vX.Y.Z -->` (title `release: vX.Y.Z`) is the version's
 record, opened and closed by `colab release finalize` (#339) and walked by the `release-rung`
@@ -771,6 +787,42 @@ as silently dropped. **No `delivery:*` label at all is NOT this bucket** — abs
 *not asked*, not non-code; an unlabelled issue proceeds through the rest of triage exactly
 as before this label set existed. `delivery:code` also proceeds normally — it is the
 explicit code affirmative, not a routing signal.
+
+**Held — a hold is not a start candidate (#360, `CONVENTIONS.md` [§5](../../CONVENTIONS.md#holds--every-label-that-stops-a-start-names-its-owner-and-its-wake-360), *Holds*).**
+A hold is one of the three `deferred:*` kinds, or any label the repo declares under
+`holds:` in `.github/project.yml`. Read the declared list from the descriptor. Never infer
+a hold from how a label is named:
+
+```sh
+HOLDS=$(awk '/^holds:/{v=$0;sub(/^holds:[ \t]*/,"",v);sub(/[ \t]+#.*$/,"",v)
+  if(v~/^\[/){gsub(/[][ \t"]/,"",v);n=split(v,a,",");for(i=1;i<=n;i++)if(a[i]!="")print a[i];exit};inl=1;next}
+  inl&&/^[ \t]+-/{sub(/^[ \t]+-[ \t]*/,"");sub(/[ \t]+#.*$/,"");gsub(/"/,"");if($0!="")print;next}
+  inl&&/^[^ \t#]/{exit}' .github/project.yml)       # flow [a, b] or block "- a"; empty = none declared
+for L in deferred:date deferred:measurement deferred:external-party $HOLDS; do
+  gh issue list --state open --label "$L" --json number,labels \
+    -q ".[] | select([.labels[].name]|index(\"in-progress\")|not) | \"#\(.number) $L\""
+done                                                 # claimed ones were handled under Taken, above
+gh issue view <N> --comments | grep -A1 '^Hold: '    # per held issue: the owner + wake record
+```
+
+Leave a held issue off the ranked list. Report it in the **blocked** bucket (§6), one line
+each, built from its newest `Hold:` line for that label:
+
+- **Owner and wake both named** → `HELD`, naming the label, the owner as the clearer, and
+  the wake. If the wake is `review-by:<date>` and the date has passed, say *wake due*.
+- **No `Hold:` line, or one missing `owner:` or `wake:`** → `STALL`, listed first. A park
+  with nobody named to clear it and no condition that ends it is a silent `wontfix`, so
+  it is a finding, never ready. This includes a `deferred:*` label with its wake but no
+  owner line.
+- **`wake: ruling`** → the `Because:` line is the ask. Quote it in the report so the
+  person who clears the hold can see what they are asked, not only that something waits.
+
+Triage never writes a `Hold:` line or removes a hold. Neither is one of §0.2's writes.
+Whoever parks the issue writes the line, and its owner clears it. A repo whose descriptor
+declares no `holds:` still gets the `deferred:*` half of this pass. One blind spot: a
+`Hold:` line posted *after* its label is a comment, and §0's fingerprint does not read
+comments. A `STALL` can therefore outlive its repair until something in the fingerprint
+moves.
 
 ## 3. Group — this is a correctness constraint, not tidiness
 
@@ -1003,17 +1055,33 @@ applied — never sorted in among them.** It is a throttle on position, not an i
 blast radius; see *Then rank low-priority groups last*, below §5, for the full check
 and what the report says about it.
 
+**A recorded queue order from a human outranks your own ordering among the groups it
+names (#361).** If a ruling on the issues, or on their epic, lists them in order ("start
+all of these, in this order"), keep those groups in that order relative to each other.
+Where they sit among the other groups, and every group the ruling does not name, is
+ranked as usual. Quote the ruling as the reason. Never turn the order into `blocked_by`
+edges (next section).
+
 State the reason next to each rank. "Ordered by priority" with no reasoning is not
 triage; it is a re-sorted list.
 
-### Then write the ordering down — as relationships, not just as report prose
+### Then write the dependencies down — as relationships, not just as report prose
 
 Triage is not only a *reader* of the dependency graph; it is the main thing that
 **writes** it. A sequence you worked out and left in a report is lost the moment the
 report scrolls away, and the next triage re-derives it from scratch — or doesn't.
 
-So when this pass concludes that one issue must wait for another, record it where a
-machine can read it back:
+So when this pass concludes that one issue **depends on** another, record it where a
+machine can read it back.
+
+**Only a dependency becomes an edge, never a queue position (#361, `CONVENTIONS.md`
+[§5](../../CONVENTIONS.md#readiness--open-and-unclaimed-is-not-enough), *Readiness*).**
+A dependency means B needs something A produces. A queue position means someone wants A
+before B, including a ruling like "start all of these, in this order". An order-only edge
+makes B inherit every wait later parked on A, and nothing re-threads the chain when that
+happens. Queue order stays a **ranking**: this section's ordering and its report, plus the
+ordered list in the ruling itself. When you cannot say what B needs from A, there is no
+edge to write:
 
 ```sh
 colab blocked <blocked> --by <blocker>                                    # add the edge
@@ -1065,9 +1133,9 @@ relationship is the part the readiness gate above (and any other tool) reads.
 - **Cross-repo edges are refused by `colab blocked`**, structurally — the blocker is
   always resolved in the current repo. A genuine cross-repo need falls back to the raw
   `gh api` form above.
-- **Triage still never claims and never touches trunk.** Its writes are exactly three, all
-  of them recordings of its own judgement about issues: `blocked_by` edges, the
-  `deps-checked` label, and the `group:` label plus its evidence comment (§3).
+- **Triage still never claims and never touches trunk.** Its writes are exactly the five
+  §0.2 lists, all of them recordings of its own judgement about issues. The `blocked_by`
+  edge is one of them, and only for a dependency.
 
 ### Single-issue mode
 
@@ -1215,6 +1283,38 @@ with the blocker named:
       caller checking a single issue outside a full triage pass. **Absence is not this
       gate** — an unlabelled issue and one explicitly `delivery:code` both pass through
       unaffected; only an explicit non-code value routes.
+- [ ] **Not held** — no `deferred:*` label, and no label the repo declares under
+      `holds:` (§2, *Held*; `CONVENTIONS.md` [§5](../../CONVENTIONS.md#holds--every-label-that-stops-a-start-names-its-owner-and-its-wake-360), *Holds*). A held issue
+      reports as `HELD`, or as `STALL` when its `Hold:` line names no owner or no wake.
+      It never reports as ready.
+
+### Every label that affects a start — who sets it, who clears it (#360)
+
+This READY list has to match what a conforming scheduler would start. So here is every
+label that keeps an issue off that list, or off an unattended start, in one place. A label
+not in this table and not declared under `holds:` does not block a start, whatever its
+name suggests.
+
+| Label | Blocks | Set by | Cleared by |
+|---|---|---|---|
+| `in-progress` (+ assignee) | everyone but the holder | the claiming session (`colab claim` / `colab worktree new`) | that session's wrap or ship, unconditionally |
+| `needs-decision` | every start | whoever finds the question: a designer producing a spec, a filer, or `colab decision --reopen` for a second question | the human who rules, recorded with `colab decision --record` (never removed by hand) |
+| `epic` | every start, permanently: a container | the filer | nobody; the epic closes once its children finish |
+| a non-code `delivery:*` value | the code pipeline (route, §2) | the filer or triage | whoever reclassifies it; it is never cleared just to start it |
+| `deferred:date` / `deferred:measurement` / `deferred:external-party` | every start | whoever parks it, with a `Hold:` line | the `Hold:` line's owner, once the wake fires |
+| each label under `holds:` in `project.yml` | every start | whoever parks it, with a `Hold:` line | the `Hold:` line's owner, once the wake fires |
+| `agent-filed` | **unattended** starts only; stays on the READY list | the filing agent | never cleared. A human's start is the approval |
+| `low-priority` | nothing; it ranks last (§6) | the filer or a human | a human, to release it to unattended starts |
+
+`agent-filed` gets one line of its own in a ready group's report, because an unattended
+reader must not start it:
+
+```
+       provenance: agent-filed — a human starts it; excluded from unattended starts
+```
+
+An open `blocked_by` edge and a half-claim also block. They are relationships and
+claim state, not labels, and the checklist above covers them.
 
 ### 5.1 An open blocker is not one verdict — look at what state it is in
 
@@ -1436,7 +1536,16 @@ Then, briefly:
   BLOCKED #501  needs-decision (layout A vs B) — clears: <maintainer>, ruling — dispatched: asked on #501, 2026-09-22
   STALL   #502  "design lane, then code" — clears: nobody named — dispatched: no
   BLOCKED #503  needs-decision, ruling exists, unrecorded (<link>) — clears: whoever takes it, via record: colab decision 503 --record --ruled-by <maintainer> … — dispatched: this line
+  STALL   #504  hold needs-rescope — no Hold: line (no owner, no wake) — clears: nobody named — dispatched: no
+  HELD    #505  hold needs-rescope — clears: @maintainer — wake: review-by:2026-10-01 — dispatched: Hold: line, 2026-09-24
+  HELD    #506  hold hold:manual — clears: @maintainer — wake: ruling, "grant the deploy key for staging" — dispatched: Hold: line, 2026-09-23
+  HELD    #507  deferred:date — clears: @maintainer — wake: review-by:2026-09-20, wake due — dispatched: Hold: line, 2026-09-01
   ```
+
+  - **Holds** (§2, *Held*) print as `HELD`, or `STALL` when the newest `Hold:` line for
+    that label names no owner or no wake. A `wake: ruling` line quotes its `Because:` ask.
+    A `review-by` date in the past adds *wake due*. Like `STALL`, `HELD` changes how the
+    line prints, and the issue stays in the `blocked` bucket of `$CACHE`.
 
   - **Dispatched** means someone can see the ask: a comment addressed to the person who
     clears it, a claim, an assignee, or a spawned session. Intending to ask does not
@@ -1462,6 +1571,9 @@ Then, briefly:
   `switch: bulk-import — unfinished since 2026-08-02 (add #43 merged; remove #47 open)`,
   or `declared, not landed`, `finished`, `undeclared — should it have one?`, or
   `not cleared: <defect>`.
+  An epic carrying `needs-decision` or a `decision:options` block (§2) gets a finding line
+  under it that names where the question moves:
+  `finding: needs-decision on an epic gates nothing — move the question to its own issue with needs-decision, attached as a sub-issue (#361)`.
 - **route** — one line each, naming the delivery type (`content` / `ops` / `docs-only`)
   and where it actually needs to go. Never a start candidate for the code pipeline; see §2.
 

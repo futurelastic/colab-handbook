@@ -194,6 +194,22 @@ test('decision --reopen: label swap succeeds but the receipt comment fails — t
   assert.match(r.err, /reopen receipt failed to post/);
 });
 
+// --- reopen: an epic never carries needs-decision (#361) -------------------------------------
+
+test('decision --reopen on an epic refuses before any write and names the decision-issue path', () => {
+  // Only `issue view` is scripted: an `issue edit` or `issue comment` would hit the fixture's
+  // "unscripted" exit, so reaching the refusal text proves no write was attempted.
+  const fx = fixture({
+    'issue view': { code: 0, stdout: JSON.stringify({ state: 'OPEN', labels: [{ name: 'epic' }, { name: 'decision-recorded' }], comments: [] }) + '\n' },
+  });
+  const r = colab(fx, ['decision', '7', '--reopen', '--ruled-by', 'boss', '--repo', fx.work]);
+  assert.notStrictEqual(r.code, 0, r.out + r.err);
+  assert.match(r.err, /#7 is an epic/);
+  assert.match(r.err, /sub-issue/);
+  assert.doesNotMatch(r.err, /unscripted/);
+  assert.doesNotMatch(r.out, /is restored/);
+});
+
 // --- list: a failed read never reports "no outstanding decision records" ----------------------
 
 test('decision --list never reports "no outstanding decision records" on a failed read', () => {

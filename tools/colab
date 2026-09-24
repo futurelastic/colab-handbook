@@ -3008,6 +3008,8 @@ resolves, when one exists — omit it when there was no options block.
 Reopening removes \`${labels.DECISION_RECORDED_LABEL}\`, re-applies \`${labels.NEEDS_DECISION_LABEL}\`,
 and posts a \`${decisionRecord.REOPEN_MARK}\` receipt — every decision on that issue up to this
 point is superseded. Not scoped to the original ruler: any trusted account can reopen.
+--reopen REFUSES on an \`epic\`-labelled issue (#361): an epic never starts, so the gate would hold
+nothing. A question about an epic goes on its own decision issue, attached as a sub-issue.
 
 A SECOND QUESTION on an already-decided issue goes through --reopen, never a hand-added
 \`${labels.NEEDS_DECISION_LABEL}\` (#357). Hand-adding it leaves the issue carrying BOTH labels — the
@@ -3159,6 +3161,11 @@ function cmdDecisionReopen(repoAbs, num, opts, body) {
   const info = git.ghIssueView(repoAbs, num, ['state', 'labels', 'comments']);
   if (!info) throw new UserError(`could not read #${num} from the tracker`);
   const labelNames = (info.labels || []).map((l) => (l && typeof l === 'object' ? l.name : l));
+  // #361: an epic never carries needs-decision. It is never a start candidate, so the gate would
+  // gate nothing, and an inbox built on start gates may never show it. Refuse before any write.
+  if (labelNames.includes('epic')) {
+    throw new UserError(`#${num} is an epic — an epic never carries ${labels.NEEDS_DECISION_LABEL}, because it never starts and the gate would hold nothing (CONVENTIONS.md §5, Decision gate). File the question as its own issue carrying ${labels.NEEDS_DECISION_LABEL}, attach it to #${num} as a sub-issue, and add a blocked_by edge from any child it holds back`);
+  }
   const hasLabel = labelNames.includes(labels.DECISION_RECORDED_LABEL);
   const live = decisionRecord.liveDecisions(info.comments);
 
