@@ -443,6 +443,27 @@ the trailing `-<N>` run and the prefix is at the other end. The machine label is
 an identity — two hosts with the same short name share it; claim comparisons stay on the
 per-machine identity `colab` already records. The audit enum-checks the value, nothing more.
 
+### `holds` — optional
+
+```yaml
+holds: [hold:manual, needs-rescope]   # labels this repo's scheduler treats as start holds
+```
+
+The labels, beyond the handbook's own start gates, that this repo treats as **start holds**
+([CONVENTIONS.md §5, *Holds*](CONVENTIONS.md#holds--every-label-that-stops-a-start-names-its-owner-and-its-wake-360)).
+`code-triage` reads the list and reports an issue carrying any of these labels as blocked,
+never ready. So its READY list matches what the repo's scheduler would start, and nobody
+has to guess a hold from its name. **Absent means none declared.** A label not in the
+list is not a hold to triage, whatever it is called.
+
+Declaring a label here does not relax the rule every hold follows: the issue still names
+an owner and a wake condition in a `Hold:` line when the label goes on. Nor does it add
+the label to the convention set. These names stay the repo's own, and `colab labels
+--ensure` never creates them.
+
+The audit checks the shape only: a list, and each member a non-empty string listed once.
+It does not check whether the labels exist on the tracker.
+
 ### `exposure` — optional
 
 ```yaml
@@ -1073,6 +1094,7 @@ the shape that shows it. One writer at a time says nothing about who reads the r
 | `writes` ∈ {`free`, `direct`, `isolated`, `serial-direct`, `serial-gated`, `serial`} when set | a misspelled value silently read as coexistence (⚖ #233: never veto on an unrecognised value) |
 | `room` ∈ {`solo`, `team`, `public`} when set | a misspelled value silently read as undeclared |
 | `branchPrefix` = `machine` when set | a misspelled value silently read as the unprefixed default |
+| `holds` is a list of non-empty strings, each listed once, when set → **finding** otherwise | a scalar or malformed list silently read as "no holds declared", so triage reports held work ready |
 | `exposure` ∈ {`none`, `self`, `live`, `released`} when set | a misspelled value silently read as undeclared |
 | `exposure: none` + `production: null` → **advisory** | the both-empty claim ("nothing consumes this, and there is nothing to point at") going unflagged |
 | `exposure: live` + `trunk: main` + no `writes: isolated` → **advisory** (⚖ #233, replacing the dropped deploy-shape prohibition) | a trunk-direct commit reaching users immediately, with the descriptor never naming the one field that vetoes it — dormant by construction today (measured: this shape already fails the `exposure: live` mechanism rule above, zero instances across 40 adopted descriptors), shipped anyway as the one finding that names the remedy |
