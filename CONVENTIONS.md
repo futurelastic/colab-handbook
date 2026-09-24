@@ -2170,6 +2170,38 @@ by `colab decision <N> --record --ruled-by <name>` — never `needs-decision` cl
 A reader checking whether an issue is decided looks for `decision-recorded` or the live
 comment marker, never merely for `needs-decision`'s absence.
 
+**A second question on an already-decided issue goes through `colab decision <N> --reopen
+--ruled-by <name>` — never a hand-added `needs-decision` (#357).** This is the rule above
+seen from the other side: the label is never *removed* by hand, and for the same reason it
+is never *re-added* by hand. A decided issue can need a second ruling — ruling one
+commissions a design, and later the finished design needs approving. `--reopen` removes
+`decision-recorded`, re-applies `needs-decision` and posts a `↩ Decision reopened` receipt,
+so the issue reads as open to every reader. A hand-added `needs-decision` does not: it
+leaves the issue with **both** labels. Measured in one adopting repo: one such hand-added
+label hid the second question from that repo's decision inbox for about nine hours. The
+human ruled in chat after noticing the question was missing.
+
+**Both labels at once is ambiguous, and a reader resolves it by time.** Two histories leave
+the same pair. An **interrupted write** is `--record` posting its `⚖` comment and then
+failing its label swap, so the question is answered. A **second question** is someone
+re-adding the label by hand, so the question is open. Compare the newest *ask* with the
+newest live, trusted `⚖ Decision recorded` marker. The ask is the newest `needs-decision`
+`labeled` event on the issue, or the newest `<!-- decision:options -->` comment, whichever
+is later.
+
+| Evidence | Reading |
+|---|---|
+| The ask is newer than the marker | an **open question** — pending |
+| No live marker at all, only the label | an **open question** — `--record` posts its comment first, so an interrupted write always leaves one |
+| The label timeline was read, and every ask predates the marker | an **interrupted write** — answered; finish it with `gh issue edit <N> --remove-label needs-decision` |
+| Anything the reader cannot prove (timeline unread, no event found) | **undetermined** — surfaced as **pending**, never hidden |
+
+This leans towards showing the issue, like *Readiness* does. Showing a settled question
+once more costs a glance. Hiding an open one costs a human's ruling. The reference reading
+is `pairVerdict` in `tools/lib/decision-record.js`. `colab decision --list` names every
+issue carrying the pair, with its verdict and fix. `colab decision --record` **refuses**
+over the pair unless `--answers <ref>` says which question the new record answers.
+
 #### Decision options — what a ruling chooses between (#126)
 
 The mechanics above make the **answer** to a `needs-decision` gate machine-readable.
@@ -2463,7 +2495,10 @@ stops applying; this is what a scheduler must additionally honour.
   above) — a scheduler may never infer an answer from content, age, or repeat proposal,
   and never treats the label's mere absence as an answer: it checks for
   `decision-recorded` or the live comment marker, since a cleared `needs-decision` with
-  neither present is the stale, not-yet-swept state, not a decided one.
+  neither present is the stale, not-yet-swept state, not a decided one. The converse
+  holds too: `needs-decision` *beside* `decision-recorded` is not an admission. It is
+  resolved by the pair rule in *Decision gate* (above), and anything but a proven
+  interrupted write stays excluded.
 - An `agent-filed` issue whose `Ask:` reads `ruling` or `permission` is excluded, for the
   same reason `needs-decision` is.
 

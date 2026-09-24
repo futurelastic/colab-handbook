@@ -1183,6 +1183,19 @@ with the blocker named:
       failure (#127: a ruling sat live in a comment, a triage pass saw no label and
       re-gated settled work). `colab decision --list` shows every issue with a live
       decision right now.
+      **Asking a second question on an issue that carries `decision-recorded`?** Run
+      `colab decision <N> --reopen --ruled-by <name>`. Never add `needs-decision` by
+      hand. This is the same rule as never removing the label by hand, seen from the
+      other side (`CONVENTIONS.md` §5, *Decision gate*, #357). A hand-added label leaves
+      the issue with **both** labels. That is the same pair an interrupted `--record`
+      leaves, so a reader can take the new question as settled and hide it.
+      **Found both labels already?** Resolve the pair by time, never by assumption. A
+      `needs-decision` label event or options block newer than the newest `⚖` record is
+      an **open question**. Report it `blocked`, with the `--reopen` command as the repair
+      and a ruling as what clears it. If every ask predates the record, it is an
+      interrupted write: the question is answered, and the fix is removing
+      `needs-decision`. If you cannot tell, report it as pending. `colab decision --list`
+      prints each pair with its verdict and fix.
       **Look for an answer given elsewhere before you report a decision as pending,
       too** (#356). A ruling can exist without ever passing through this gate. It may
       be prose on the issue itself, or a ruling on a linked or referenced issue in this

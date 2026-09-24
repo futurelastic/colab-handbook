@@ -153,30 +153,122 @@ function answeredOptionRefs(comments) {
     .map((d) => d.answers);
 }
 
+/** The question-side marker (CONVENTIONS.md §5, *Decision options*, #126). Only its PRESENCE
+ *  and its comment's createdAt matter here — the block's content is parsed by consumers. */
+const OPTIONS_RE = /<!--\s*decision:options\b/;
+
+const PAIR_VERDICTS = Object.freeze({
+  OPEN_QUESTION: 'open-question',
+  INTERRUPTED_WRITE: 'interrupted-write',
+  UNDETERMINED: 'undetermined',
+});
+
+function toMs(iso) {
+  const t = Date.parse(iso);
+  return Number.isFinite(t) ? t : null;
+}
+
+function newestMs(isoList) {
+  let best = null;
+  for (const iso of isoList) {
+    const t = toMs(iso);
+    if (t !== null && (best === null || t > best)) best = t;
+  }
+  return best;
+}
+
+/**
+ * The both-labels pair, resolved (#357). An issue carrying `needs-decision` AND a recorded
+ * decision (`decision-recorded` label, or a live ⚖ record) is AMBIGUOUS by construction — two
+ * different histories produce the identical label set:
+ *
+ *   - an INTERRUPTED WRITE: `colab decision --record` posted the ⚖ comment (step 1), then its
+ *     label swap failed (step 2), leaving the gate label behind. The question is answered.
+ *   - a SECOND QUESTION asked by hand: someone added `needs-decision` again to an issue that
+ *     was already decided, instead of `colab decision --reopen`. The question is OPEN — and a
+ *     reader that resolved the pair as "interrupted write, label is stale" hid it from the
+ *     human who had to answer it (measured: ~9 h invisible in an adopter's decision inbox).
+ *
+ * Time tells them apart. The ask is the newest `needs-decision` `labeled` event, or the newest
+ * `<!-- decision:options -->` comment, whichever is later; the answer is the newest live,
+ * trusted ⚖ record. Ask newer than answer ⇒ OPEN question. Ask not newer ⇒ interrupted write.
+ * Anything this function cannot prove ⇒ UNDETERMINED, which every caller surfaces as PENDING —
+ * showing a settled question once more costs a glance; hiding an open one costs a human's
+ * ruling (the fail-toward-visible posture of *Readiness*).
+ *
+ * `labelEvents` — the created-at ISO timestamps of every `labeled` event for `needs-decision`
+ * on this issue (the issue events API), or `null` when they were not read. `null` is NEVER
+ * "no events": an unread timeline can still be decided by a newer options block, and otherwise
+ * stays UNDETERMINED. An empty array read successfully is also undetermined — a label that is
+ * present but has no `labeled` event is something this function cannot explain.
+ *
+ * Returns null when the pair is not present (nothing to resolve).
+ */
+function pairVerdict({ labels, comments, labelEvents = null } = {}) {
+  const labelNames = new Set(
+    (labels || []).map((l) => (l && typeof l === 'object' ? l.name : l)),
+  );
+  const decisions = liveDecisions(comments).filter((d) => TRUSTED_ASSOCIATIONS.has(d.authorAssociation));
+  const gated = labelNames.has('needs-decision');
+  const recordedLabel = labelNames.has('decision-recorded');
+  if (!gated || (!recordedLabel && decisions.length === 0)) return null;
+
+  const optionsAts = (Array.isArray(comments) ? comments : [])
+    .filter((c) => OPTIONS_RE.test(String(c.body || '')))
+    .map((c) => c.createdAt);
+  const optionsMs = newestMs(optionsAts);
+  const labeledMs = Array.isArray(labelEvents) ? newestMs(labelEvents) : null;
+  const askMs = [optionsMs, labeledMs].filter((t) => t !== null).reduce((a, b) => (b > a ? b : a), null);
+  const askAt = askMs === null ? null : new Date(askMs).toISOString();
+
+  // The label with NO live record behind it can never be an interrupted --record: record posts
+  // the comment FIRST, so every interrupted write leaves a live ⚖ record. What is left is a gate
+  // on an issue whose decision was never (or is no longer) recorded — an open question.
+  if (decisions.length === 0) {
+    return { verdict: PAIR_VERDICTS.OPEN_QUESTION, askAt, decidedAt: null, why: 'needs-decision is applied and no live ⚖ record stands behind decision-recorded' };
+  }
+  const decidedAt = decisions[decisions.length - 1].at;
+  const decidedMs = toMs(decidedAt);
+
+  if (askMs !== null && decidedMs !== null && askMs > decidedMs) {
+    return { verdict: PAIR_VERDICTS.OPEN_QUESTION, askAt, decidedAt, why: 'the newest ask is newer than the newest ⚖ record — a second question' };
+  }
+  // Only a successfully-read, non-empty label timeline can prove the ask predates the record.
+  if (Array.isArray(labelEvents) && labeledMs !== null && decidedMs !== null) {
+    return { verdict: PAIR_VERDICTS.INTERRUPTED_WRITE, askAt, decidedAt, why: 'every needs-decision label event predates the ⚖ record — its label swap did not finish' };
+  }
+  return { verdict: PAIR_VERDICTS.UNDETERMINED, askAt, decidedAt, why: labelEvents === null ? 'the label timeline was not read' : 'no needs-decision label event could be read' };
+}
+
 /**
  * One issue's readiness verdict — the function `code-triage` (or any reader deciding whether
  * to apply/keep `needs-decision`) calls. `labels` is the issue's label list (bare strings or
  * `{name}` objects, same tolerant shape as tools/lib/labels.js); `comments` is what
  * `gh issue view --json comments` returns, or `[]`/`null` when unavailable — never treat a
  * failed read as "no decision"; that is the caller's job to distinguish, this function only
- * reports what it was given.
+ * reports what it was given. `labelEvents` is optional — see pairVerdict.
  *
- * Returns `{ recorded, gated, contradiction, decisions }`:
+ * Returns `{ recorded, gated, contradiction, pair, pending, decisions }`:
  *   - `recorded`      — a live, trusted DECISION_MARK exists (comment-side truth).
  *   - `gated`         — `needs-decision` label is present.
- *   - `contradiction` — BOTH true at once: the exact #127 failure state, now nameable. A
- *                        caller finding this should resolve toward "decided" (the label is
- *                        stale) and say so, never silently pick one.
+ *   - `contradiction` — BOTH true at once. Kept for existing readers; it is NOT a verdict. Until
+ *                        #357 this doc said to resolve it toward "decided" — that reading hid a
+ *                        second question asked on a decided issue. Read `pair`/`pending`.
+ *   - `pair`          — pairVerdict()'s result, or null when the pair is absent.
+ *   - `pending`       — whether a human still owes an answer: gated, unless the pair resolves
+ *                        to an interrupted write. UNDETERMINED is pending, by design.
  *   - `decisions`     — the full liveDecisions() list, for a caller that wants to show detail.
  */
-function evaluateIssue({ labels, comments } = {}) {
+function evaluateIssue({ labels, comments, labelEvents = null } = {}) {
   const labelNames = new Set(
     (labels || []).map((l) => (l && typeof l === 'object' ? l.name : l)),
   );
   const decisions = liveDecisions(comments).filter((d) => TRUSTED_ASSOCIATIONS.has(d.authorAssociation));
   const recorded = decisions.length > 0;
   const gated = labelNames.has('needs-decision');
-  return { recorded, gated, contradiction: recorded && gated, decisions };
+  const pair = pairVerdict({ labels, comments, labelEvents });
+  const pending = gated && !(pair && pair.verdict === PAIR_VERDICTS.INTERRUPTED_WRITE);
+  return { recorded, gated, contradiction: recorded && gated, pair, pending, decisions };
 }
 
 module.exports = {
@@ -184,5 +276,6 @@ module.exports = {
   decisionCommentBody, reopenCommentBody,
   liveDecisions, TRUSTED_ASSOCIATIONS,
   hasRecordedDecision, answeredOptionRefs,
+  OPTIONS_RE, PAIR_VERDICTS, pairVerdict,
   evaluateIssue,
 };

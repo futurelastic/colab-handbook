@@ -204,3 +204,98 @@ test('decision --list never reports "no outstanding decision records" on a faile
   assert.notStrictEqual(r.code, 0, r.out + r.err);
   assert.doesNotMatch(r.out, /no outstanding decision records/);
 });
+
+// --- #357: the both-labels pair — a second question vs an interrupted write -------------------
+
+const RECORD_AT = '2026-09-23T15:00:00Z';
+const RECORD_COMMENT = {
+  body: `⚖ Decision recorded — ruled-by \`boss\` · answers \`-\` · host \`box\` · ${RECORD_AT}`,
+  createdAt: RECORD_AT,
+  author: { login: 'maintainer' },
+  authorAssociation: 'OWNER',
+};
+const PAIR_VIEW = {
+  code: 0,
+  stdout: JSON.stringify({ state: 'OPEN', labels: [{ name: 'needs-decision' }, { name: 'decision-recorded' }], comments: [RECORD_COMMENT] }) + '\n',
+};
+const ASKED_AFTER = { code: 0, stdout: '2026-09-20T09:00:00Z\n2026-09-24T00:00:00Z\n' }; // newest > record
+const ASKED_BEFORE = { code: 0, stdout: '2026-09-20T09:00:00Z\n' };                      // all < record
+
+test('decision --record over the pair WITHOUT --answers refuses before any write, and names --reopen (an open second question)', () => {
+  const fx = fixture({
+    'issue view': PAIR_VIEW,
+    'api --paginate': ASKED_AFTER,
+    // no 'issue comment' / 'issue edit' — a write would hit "unscripted" and fail differently
+  });
+  const r = colab(fx, ['decision', '1', '--record', '--ruled-by', 'boss', '--repo', fx.work]);
+  assert.notStrictEqual(r.code, 0, r.out + r.err);
+  assert.match(r.err, /OPEN second question/);
+  assert.match(r.err, /--answers/);
+  assert.match(r.err, /colab decision 1 --reopen --ruled-by <name>/);
+  assert.doesNotMatch(r.err, /unscripted/);
+});
+
+test('decision --record over an interrupted write WITHOUT --answers refuses and names the label fix, not --reopen', () => {
+  const fx = fixture({ 'issue view': PAIR_VIEW, 'api --paginate': ASKED_BEFORE });
+  const r = colab(fx, ['decision', '1', '--record', '--ruled-by', 'boss', '--repo', fx.work]);
+  assert.notStrictEqual(r.code, 0, r.out + r.err);
+  assert.match(r.err, /interrupted --record/);
+  assert.match(r.err, /gh issue edit 1 --remove-label needs-decision/);
+});
+
+test('decision --record over the pair with an unreadable label timeline refuses as UNDETERMINED (never assumes interrupted)', () => {
+  const fx = fixture({ 'issue view': PAIR_VIEW, 'api --paginate': { code: 1, stderr: 'fixture: events failed\n' } });
+  const r = colab(fx, ['decision', '1', '--record', '--ruled-by', 'boss', '--repo', fx.work]);
+  assert.notStrictEqual(r.code, 0, r.out + r.err);
+  assert.match(r.err, /cannot tell an open question from an interrupted write/);
+  assert.match(r.err, /--reopen/);
+});
+
+test('decision --record over the pair WITH --answers proceeds — the record says which question it answers', () => {
+  const fx = fixture({
+    'issue view': PAIR_VIEW,
+    'api --paginate': ASKED_AFTER,
+    'label list': { code: 1, stderr: 'fixture: no labels\n' },
+    'issue comment': { code: 0, stdout: '' },
+    'issue edit': { code: 0, stdout: '' },
+  });
+  const r = colab(fx, ['decision', '1', '--record', '--ruled-by', 'boss', '--answers', 'issuecomment-2', '--repo', fx.work]);
+  assert.strictEqual(r.code, 0, r.out + r.err);
+  assert.match(r.out, /needs-decision cleared, decision-recorded applied/);
+});
+
+test('decision --list surfaces a hand-re-asked question as pending, NOT among the live decisions', () => {
+  const fx = fixture({
+    'issue list': { code: 0, stdout: JSON.stringify([{ number: 7, title: 'second question' }]) + '\n' },
+    'issue view': PAIR_VIEW,
+    'api --paginate': ASKED_AFTER,
+  });
+  const r = colab(fx, ['decision', '--list', '--json', '--repo', fx.work]);
+  assert.strictEqual(r.code, 0, r.out + r.err);
+  const j = JSON.parse(r.out);
+  assert.deepStrictEqual(j.decisions, []);
+  assert.strictEqual(j.pairs.length, 1);
+  assert.strictEqual(j.pairs[0].verdict, 'open-question');
+  assert.strictEqual(j.pairs[0].pending, true);
+  assert.match(j.pairs[0].fix, /--reopen/);
+
+  const t = colab(fx, ['decision', '--list', '--repo', fx.work]);
+  assert.strictEqual(t.code, 0, t.out + t.err);
+  assert.match(t.err, /#7 carries both needs-decision and decision-recorded — an OPEN second question/);
+  assert.doesNotMatch(t.out, /no outstanding decision records/);
+});
+
+test('decision --list keeps an interrupted write among the live decisions, and names the label fix', () => {
+  const fx = fixture({
+    'issue list': { code: 0, stdout: JSON.stringify([{ number: 7, title: 'interrupted' }]) + '\n' },
+    'issue view': PAIR_VIEW,
+    'api --paginate': ASKED_BEFORE,
+  });
+  const r = colab(fx, ['decision', '--list', '--json', '--repo', fx.work]);
+  assert.strictEqual(r.code, 0, r.out + r.err);
+  const j = JSON.parse(r.out);
+  assert.strictEqual(j.decisions.length, 1);
+  assert.strictEqual(j.pairs[0].verdict, 'interrupted-write');
+  assert.strictEqual(j.pairs[0].pending, false);
+  assert.match(j.pairs[0].fix, /--remove-label needs-decision/);
+});
