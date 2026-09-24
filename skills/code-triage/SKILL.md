@@ -1183,6 +1183,19 @@ with the blocker named:
       failure (#127: a ruling sat live in a comment, a triage pass saw no label and
       re-gated settled work). `colab decision --list` shows every issue with a live
       decision right now.
+      **Look for an answer given elsewhere before you report a decision as pending,
+      too** (#356). A ruling can exist without ever passing through this gate. It may
+      be prose on the issue itself, or a ruling on a linked or referenced issue in this
+      repo or a sibling one. In both cases `needs-decision` was never applied, so
+      `colab decision --record` never came up, and nothing marks the issue as settled.
+      Measured: three UI issues sat for about a day, reported twice as waiting on the
+      design lane, while their design had been ruled in exactly those two ways. An
+      issue like that is not waiting on a human. It is waiting on someone to write the
+      ruling down. §6's `design:` line says how to report it (`ruling exists,
+      unrecorded` plus a `record:` command). Never report it as waiting on a human.
+      If `needs-decision` is applied, the label is still a live gate and the group
+      stays `blocked`. Its blocked line then names the `record:` command as what clears
+      it, not a ruling someone still has to make.
 - [ ] **Delivery type is code, or not asked** — no `delivery:content` / `delivery:ops` /
       `delivery:docs-only` / `delivery:elsewhere` label (`CONVENTIONS.md` [§5](../../CONVENTIONS.md#delivery-type--route-not-start-112), *Delivery type*). This issue was
       already filtered out at §2 if it carries one; this bullet is the reminder for a
@@ -1342,21 +1355,89 @@ READY  feat/onboard-redesign-88   #88
        start: colab claim 88 --worktree onboard-redesign-88
 ```
 
-Three states, mirroring the ruling's table exactly:
+**No `design:` state moves a group out of ready** (#356). That holds here, and it holds
+for anything that restates this section. If a consumer's label description, agent
+prompt or local doc turns "no artifact yet" into "blocked, design lane first", that
+paraphrase is wrong. Follow this skill, not the paraphrase. The only design gate is
+`needs-decision`. The artifact is promoted by `code-wrap` A2 on the branch that builds
+the surface, so its absence before that branch exists is expected.
+
+Four states. The first three mirror the ruling's table exactly. The fourth is about
+the ruling's record, not the artifact:
 
 - **present** — name the file(s) found under `docs/design/` for this slug/issue.
 - **absent** — say so plainly. If nothing has applied `needs-decision` to this
   group yet, that is worth a human's attention before the session starts building
   — but absence is not a new gate to enforce here, it is the same `needs-decision`
-  gate §5 above already checks.
+  gate §5 above already checks. **Before you print `absent`, run the check below.**
 - **superseded** — the artifact exists but a later ruling replaced it; name both
   files so a session does not build against the stale one.
+- **ruling exists, unrecorded** — a member lacks `decision-recorded`, and a ruling for
+  its surface was nevertheless found. Link to it and print a `record:` line under it,
+  and keep the group in `ready`. If `needs-decision` is applied, the group is in
+  `blocked` (§5) and gets no `design:` line. Its blocked line carries the same link and
+  `record:` command as the thing that clears it.
+
+**The unrecorded-ruling check.** Run it for every member of a UI-affecting group that
+carries no `decision-recorded` label. Read the issue's own comments and every issue it
+links to or references: its parent, its `blocked_by` edges, and any `#N` or
+`owner/repo#N` in its body or comments. That costs one `gh issue view <N> --json
+comments` per member, plus one per linked issue. You pay it only for UI-affecting
+members with no record, which is a small share of a pass. Count a comment as a ruling
+only if it meets all three of these:
+
+1. A human wrote it, from an account `colab decision` trusts. An agent's proposal is not
+   a ruling.
+2. It picks a direction for this surface. A question, "looks good", or a thumbs-up does
+   not.
+3. Nothing later on the same thread replaces it.
+
+If you are unsure whether a comment qualifies, print it as a candidate: `design: ruling
+exists, unrecorded? — <link>`. Do not drop it, and do not report the group as blocked.
+
+```
+READY  feat/settings-panel-412   #412
+       why: server half shipped (#398); trunk CI green 1h ago
+       files: resources/js/Settings/*.tsx
+       design: ruling exists, unrecorded — <maintainer>'s comment on #412, 2026-09-20
+       record: colab decision 412 --record --ruled-by <maintainer> --body-file <file quoting and linking it>
+       start: colab claim 412 --worktree settings-panel-412
+```
+
+**Triage prints `record:`. It does not run it.** §0.2 lists every tracker write triage
+may make, and nothing outside that list is allowed. Deciding that someone's comment
+counts as a ruling is also a judgement about their words. It should be made once, by
+whoever signs `--ruled-by`, and a ping-when-idle loop must not be what clears a gate. The
+session that takes the group runs the `record:` line before its first build commit, the
+same way it runs `start:`. That is the ordinary agent case the command's own help
+describes: an agent writing down a ruling a human already made.
 
 Not UI-affecting → no `design:` line, same as `mechanical:` and `priority:` above.
 
 Then, briefly:
 
-- **blocked** — one line each, naming the blocker and who could clear it.
+- **blocked** — one line each. **Each line says what blocks it, who clears it, and whether
+  that person has been asked** (#356):
+
+  ```
+  BLOCKED #501  needs-decision (layout A vs B) — clears: <maintainer>, ruling — dispatched: asked on #501, 2026-09-22
+  STALL   #502  "design lane, then code" — clears: nobody named — dispatched: no
+  BLOCKED #503  needs-decision, ruling exists, unrecorded (<link>) — clears: whoever takes it, via record: colab decision 503 --record --ruled-by <maintainer> … — dispatched: this line
+  ```
+
+  - **Dispatched** means someone can see the ask: a comment addressed to the person who
+    clears it, a claim, an assignee, or a spawned session. Intending to ask does not
+    count.
+  - When the blocker is another issue (`blocked by #N`), whoever clears it is whoever holds
+    #N. If #N is on this report's ready list, its `start:` line is the dispatch.
+  - **No named clearer, or a clearer nobody has asked, is a stall.** Print the line as
+    `STALL` and list it first among the blocked lines. "X, then code" with nothing sent to
+    X is a stall, measured: it read as a wait for about a day, and in that time nobody
+    was assigned to X.
+  - `STALL` changes how the line prints, not where the issue is filed. It stays in the
+    `blocked` bucket of `$CACHE`, so there is no new bucket and no version bump.
+  - Triage does not dispatch anything itself, because none of §0.2's writes is a
+    dispatch. Naming the stall is what shows the gap to a reader who can dispatch.
 - **taken** — who holds it, and since when. A claim flagged *parked, wake condition due*
   (§2's `deferred:*` exception) gets its own line inside this bucket, not the ready list —
   name the `deferred:<kind>` and the `review-by:<date>` that passed, so a human can check
@@ -1669,6 +1750,13 @@ Hand the top group to **code-start**, which will re-verify the claim before taki
   soft-ready group says what it waits on and names the branch the code is already on.
 - No `blocked_by` edge was cleared merely because its blocker's code landed (`colab blocked
   --clear` refuses a closed blocker without `--force` — §4, #251).
+- No UI-affecting group ended up in `blocked` just because it had no artifact, or because
+  its ruling was never recorded (§6, `design:` line, #356). Every member with no
+  `decision-recorded` label had the unrecorded-ruling check run before `absent` was
+  printed. Every ruling found was reported with its link and a `record:` line, and
+  triage did not run `record:` itself.
+- Every blocked line says who clears it and whether they have been asked. Any line with
+  no one named, or no one asked, printed as `STALL`, first in the blocked list (#356).
 - Every "already shipped" call carries evidence (sha + `file:line`) — not a hunch.
 - Branch names carry all issue numbers in one trailing run.
 - Every group judged hard got `needs-plan` on its lead issue plus a one-line reason
