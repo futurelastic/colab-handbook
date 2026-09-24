@@ -425,6 +425,28 @@ function missingConventionLabels(present) {
   return conventionLabelNames().filter((n) => !have.has(n));
 }
 
+// Given the labels a repo actually has, WITH their descriptions, return every convention label
+// whose tracker description differs from CONVENTION_LABELS' text, in canonical order:
+// [{ name, have, want }]. #364: `colab labels --ensure` creates a missing label and never touches
+// an existing one, so a label created before the handbook reworded it keeps the old text for good
+// — and a human or agent reading the tracker sees a meaning the handbook has since changed.
+//   An entry with no readable description — a bare name string, or an object whose `description`
+// is not a string — is SKIPPED, never reported: a caller that only fetched names cannot know the
+// text, and "could not read" must never surface as "differs" (the same contract as a null set).
+// An empty-string description IS read, and differs, since every CONVENTION_LABELS entry has text.
+// Labels outside the convention set are ignored (#364 out of scope), as are colours.
+function staleConventionDescriptions(present) {
+  const want = new Map(CONVENTION_LABELS.map((l) => [l.name, l.description]));
+  const have = new Map();
+  for (const l of present || []) {
+    if (!l || typeof l !== 'object' || typeof l.description !== 'string') continue;
+    have.set(String(l.name), l.description);
+  }
+  return CONVENTION_LABELS
+    .filter((l) => have.has(l.name) && have.get(l.name) !== want.get(l.name))
+    .map((l) => ({ name: l.name, have: have.get(l.name), want: l.description }));
+}
+
 // A readiness ADD (`gh issue edit --add-label deps-checked`) fails for one recurring, diagnosable
 // reason: the repo adopted the conventions before `deps-checked` entered the set and never
 // back-filled it, so the label the write targets does not exist. Given the labels the repo
@@ -541,7 +563,7 @@ function groupLabelNames(present) {
 }
 
 module.exports = {
-  CONVENTION_LABELS, conventionLabelNames, missingConventionLabels,
+  CONVENTION_LABELS, conventionLabelNames, missingConventionLabels, staleConventionDescriptions,
   READINESS_LABEL, readinessLabelArgs, readinessMissingLabelHint,
   TRACKING_LABEL,
   MECHANICAL_READINESS_LABEL, mechanicalReadinessLabelArgs,

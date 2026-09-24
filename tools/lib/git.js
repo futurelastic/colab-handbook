@@ -583,6 +583,32 @@ function ghLabelCreate(repo, name, color, description) {
 }
 
 /**
+ * `gh label list` WITH descriptions → [{ name, description }], or null on failure — the same
+ * null-means-could-not-read contract as ghListLabels (which stays names-only for its many
+ * callers). Only `colab labels --ensure` needs the text, to find a convention label whose
+ * description has drifted from the handbook's (#364).
+ */
+function ghListLabelsDetailed(repo) {
+  const r = run('gh', ['label', 'list', '--limit', '500', '--json', 'name,description'], { cwd: repo });
+  if (!r.ok) return null;
+  try {
+    const rows = JSON.parse(r.stdout);
+    if (!Array.isArray(rows)) return null;
+    return rows.map((l) => ({ name: String(l.name), description: typeof l.description === 'string' ? l.description : '' }));
+  } catch (_) { return null; }
+}
+
+/**
+ * `gh label edit <name> --description <text>` — returns {ok, stderr}. Rewrites ONE label's
+ * description on the tracker; colour is deliberately never passed (#364 out of scope). Called
+ * only by `colab labels --ensure --refresh-descriptions`, for a name ghListLabelsDetailed just
+ * read with a differing description.
+ */
+function ghLabelEditDescription(repo, name, description) {
+  return run('gh', ['label', 'edit', name, '--description', description], { cwd: repo });
+}
+
+/**
  * CI verdict for a branch, judged by SHA rather than by recency (#92).
  *
  * The naive "read the newest run" reading breaks under the repo's own
@@ -841,7 +867,7 @@ module.exports = {
   ghAvailable, ghState, ghIssueEdit, ghListLabels, ghAssignedIssues,
   ghCurrentLogin, ghIssueView, ghIssueComment, ghRunForSha, ghRunForCommit, ghRunsForCommit, ghRunsAtCommit, ghRunsSince, summarizeRunsForCommit,
   ghRunJobCount, ghRunJobs,
-  ghIssueListByLabel, ghLabelDelete, ghLabelCreate,
+  ghIssueListByLabel, ghLabelDelete, ghLabelCreate, ghListLabelsDetailed, ghLabelEditDescription,
   ghApi, isGraphqlRateLimit, ghIssueRelease, ghClaimHolder, ghIssueLabelEvents,
   ghPrForBranch, ghPrCreate, ghPrClose,
 };

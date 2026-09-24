@@ -433,10 +433,13 @@ gh label list --limit 500 --json name,description | node -e '
   does not define. It is drift unless the `Local divergences:` list declares it.
 - **`meaning <name>`**: the label's description differs from the handbook's. This line is
   a lead. Read both texts before you conclude anything, because it has two readings:
-  - **Same meaning, older wording.** `colab labels --ensure` never overwrites an existing
-    description, so a label created before the handbook reworded it keeps the old text
-    forever. Refresh it with `gh label edit <name> --description "<handbook's text>"`.
-    This is a GitHub-side change, like the label back-fill above.
+  - **Same meaning, older wording.** `colab labels --ensure` never rewrites an existing
+    description unasked, so a label created before the handbook reworded it keeps the old
+    text until someone refreshes it. `colab labels --ensure` prints both texts for every
+    such label (the audit warns on the same list, #364). Refresh them with
+    `colab labels --ensure --refresh-descriptions`, adding `--keep <name>` for each label
+    that is a declared divergence. This is a GitHub-side change, like the label back-fill
+    above.
   - **A different meaning.** This is the divergence. It is drift unless declared.
 
 Measured on the consumer behind the rule: the command printed `value delivery:design` and
