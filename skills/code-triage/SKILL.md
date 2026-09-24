@@ -769,24 +769,32 @@ child that would push the count past the cap stays startable. Triage adds no lab
 no comment for any of it. The decision belongs to a human, and a finding re-posted on every
 ping would be exactly the repeated note that the issue-comment rules forbid.
 
-**Non-code delivery — route, not start:**
+**Non-code delivery — route or design, not a code start:**
 
 ```sh
-gh issue list --state open --search "label:delivery:content,delivery:ops,delivery:docs-only,delivery:elsewhere" \
-  --json number -q '.[].number'
+gh issue list --state open --search "label:delivery:content,delivery:ops,delivery:elsewhere" \
+  --json number -q '.[].number'      # route
+gh issue list --state open --label delivery:design --json number -q '.[].number'   # design
 ```
 
-An issue carrying `delivery:content`, `delivery:ops`, `delivery:docs-only` or
-`delivery:elsewhere` is real work whose completion is not a code commit *in this repo* — a
-content push, an ops/production check, a docs sync outside code review, or code that lands
-in a different repository (`CONVENTIONS.md` [§5](../../CONVENTIONS.md#delivery-type--route-not-start-112), *Delivery type*). Leave it off the ranked
-list the same way an epic is: not because someone holds it, but because there is nothing
-to branch on in *this* pipeline. Report it in its own **route** bucket, distinct from the
-epic bucket — see §6 — so a human sees where it actually needs to go instead of it reading
-as silently dropped. **No `delivery:*` label at all is NOT this bucket** — absence means
-*not asked*, not non-code; an unlabelled issue proceeds through the rest of triage exactly
-as before this label set existed. `delivery:code` also proceeds normally — it is the
-explicit code affirmative, not a routing signal.
+An issue carrying `delivery:content`, `delivery:ops` or `delivery:elsewhere` is real work
+whose completion is not a code commit *in this repo* — a content push, an ops/production
+check, or code that lands in a different repository (`CONVENTIONS.md` [§5](../../CONVENTIONS.md#delivery-type--route-not-start-112), *Delivery type*).
+Leave it off the ranked list the same way an epic is: not because someone holds it, but
+because there is nothing to branch on in *this* pipeline. Report it in its own **route**
+bucket, distinct from the epic bucket — see §6 — so a human sees where it actually needs to
+go instead of it reading as silently dropped.
+
+An issue carrying `delivery:design` (#359) is a new surface's design artifact — a design
+session's start, never the code pipeline's. Leave it off the ranked list too, but report it
+in its own **design** bucket (§6), not the route bucket: it is not going anywhere else, and
+the build issues its `blocked_by` edges hold back are waiting on it.
+
+**No `delivery:*` label at all is NOT either bucket** — absence means *not asked*, not
+non-code; an unlabelled issue proceeds through the rest of triage exactly as before this
+label set existed. `delivery:code` and `delivery:docs-only` also proceed normally — both are
+in-repo commits, the code lane (#358), not a routing signal. `docs-only` is not `colab
+ship`'s docs-only exception either; ship measures that from the diff, never from the label.
 
 **Held — a hold is not a start candidate (#360, `CONVENTIONS.md` [§5](../../CONVENTIONS.md#holds--every-label-that-stops-a-start-names-its-owner-and-its-wake-360), *Holds*).**
 A hold is one of the three `deferred:*` kinds, or any label the repo declares under
@@ -1277,12 +1285,13 @@ with the blocker named:
       If `needs-decision` is applied, the label is still a live gate and the group
       stays `blocked`. Its blocked line then names the `record:` command as what clears
       it, not a ruling someone still has to make.
-- [ ] **Delivery type is code, or not asked** — no `delivery:content` / `delivery:ops` /
-      `delivery:docs-only` / `delivery:elsewhere` label (`CONVENTIONS.md` [§5](../../CONVENTIONS.md#delivery-type--route-not-start-112), *Delivery type*). This issue was
+- [ ] **Delivery type is code, docs-only, or not asked** — no `delivery:content` /
+      `delivery:ops` / `delivery:elsewhere` / `delivery:design` label (`CONVENTIONS.md` [§5](../../CONVENTIONS.md#delivery-type--route-not-start-112), *Delivery type*). This issue was
       already filtered out at §2 if it carries one; this bullet is the reminder for a
       caller checking a single issue outside a full triage pass. **Absence is not this
-      gate** — an unlabelled issue and one explicitly `delivery:code` both pass through
-      unaffected; only an explicit non-code value routes.
+      gate** — an unlabelled issue and one explicitly `delivery:code` or
+      `delivery:docs-only` pass through unaffected (#358); only an explicit non-code
+      value routes, or goes to the design bucket.
 - [ ] **Not held** — no `deferred:*` label, and no label the repo declares under
       `holds:` (§2, *Held*; `CONVENTIONS.md` [§5](../../CONVENTIONS.md#holds--every-label-that-stops-a-start-names-its-owner-and-its-wake-360), *Holds*). A held issue
       reports as `HELD`, or as `STALL` when its `Hold:` line names no owner or no wake.
@@ -1300,7 +1309,7 @@ name suggests.
 | `in-progress` (+ assignee) | everyone but the holder | the claiming session (`colab claim` / `colab worktree new`) | that session's wrap or ship, unconditionally |
 | `needs-decision` | every start | whoever finds the question: a designer producing a spec, a filer, or `colab decision --reopen` for a second question | the human who rules, recorded with `colab decision --record` (never removed by hand) |
 | `epic` | every start, permanently: a container | the filer | nobody; the epic closes once its children finish |
-| a non-code `delivery:*` value | the code pipeline (route, §2) | the filer or triage | whoever reclassifies it; it is never cleared just to start it |
+| a non-code `delivery:*` value (`content` / `ops` / `elsewhere` / `design`) | the code pipeline (route or design bucket, §2) | the filer or triage | whoever reclassifies it; it is never cleared just to start it |
 | `deferred:date` / `deferred:measurement` / `deferred:external-party` | every start | whoever parks it, with a `Hold:` line | the `Hold:` line's owner, once the wake fires |
 | each label under `holds:` in `project.yml` | every start | whoever parks it, with a `Hold:` line | the `Hold:` line's owner, once the wake fires |
 | `agent-filed` | **unattended** starts only; stays on the READY list | the filing agent | never cleared. A human's start is the approval |
@@ -1472,8 +1481,15 @@ READY  feat/onboard-redesign-88   #88
 for anything that restates this section. If a consumer's label description, agent
 prompt or local doc turns "no artifact yet" into "blocked, design lane first", that
 paraphrase is wrong. Follow this skill, not the paraphrase. The only design gate is
-`needs-decision`. The artifact is promoted by `code-wrap` A2 on the branch that builds
-the surface, so its absence before that branch exists is expected.
+`needs-decision`. For a small change the artifact is promoted by `code-wrap` A2 on the
+branch that builds the surface, so its absence before that branch exists is expected. A
+**new surface** waits on its `delivery:design` issue (`CONVENTIONS.md` [§5](../../CONVENTIONS.md#design-conclusions-are-three-units-not-two), *Design
+work splits by size*, #359) through a `blocked_by` edge and only that — so it lands in
+`blocked` because §5's edge check says so, never because of this line:
+
+```
+BLOCKED #88  blocked by #87 (delivery:design, new surface) — clears: the design session, when #87 ships — dispatched: <who, or "not yet">
+```
 
 Four states. The first three mirror the ruling's table exactly. The fourth is about
 the ruling's record, not the artifact:
@@ -1483,6 +1499,12 @@ the ruling's record, not the artifact:
   group yet, that is worth a human's attention before the session starts building
   — but absence is not a new gate to enforce here, it is the same `needs-decision`
   gate §5 above already checks. **Before you print `absent`, run the check below.**
+  If the group looks like a **new surface** under §5's size test and no
+  `delivery:design` issue exists for it, say so on the line and leave the group ready:
+  `design: absent — looks like a new surface, no design issue filed`. Filing the design
+  issue and applying the label belong to the filer; neither is a §0.2 write. If both
+  issues exist and the edge between them is missing, triage may write it (§0.2 write 1,
+  `colab blocked <build> --by <design>`).
 - **superseded** — the artifact exists but a later ruling replaced it; name both
   files so a session does not build against the stale one.
 - **ruling exists, unrecorded** — a member lacks `decision-recorded`, and a ruling for
@@ -1574,8 +1596,12 @@ Then, briefly:
   An epic carrying `needs-decision` or a `decision:options` block (§2) gets a finding line
   under it that names where the question moves:
   `finding: needs-decision on an epic gates nothing — move the question to its own issue with needs-decision, attached as a sub-issue (#361)`.
-- **route** — one line each, naming the delivery type (`content` / `ops` / `docs-only`)
+- **route** — one line each, naming the delivery type (`content` / `ops` / `elsewhere`)
   and where it actually needs to go. Never a start candidate for the code pipeline; see §2.
+- **design** — one line each per `delivery:design` issue, with its claim state and the
+  build issues its `blocked_by` edges hold back:
+  `DESIGN #87  unclaimed — holds #88, #89`. A design session's start, never a code start
+  candidate; see §2.
 
 Then, **findings** — group-level, so they are not a bucket and do not compete with the
 rule below. One block per group that broke the one-branch contract (§3):
@@ -1648,7 +1674,7 @@ switches: not checked — exposure: self (CONVENTIONS §5 Switched epics binds `
 ```
 
 **Do not let an Issue vanish.** Every open number ends the pass in exactly one
-bucket — ready, blocked, taken, epic, route, or close-it. A number that quietly falls off
+bucket — ready, blocked, taken, epic, route, design, or close-it. A number that quietly falls off
 the list gets re-triaged from scratch next time, which is how the same work gets
 discovered three times.
 

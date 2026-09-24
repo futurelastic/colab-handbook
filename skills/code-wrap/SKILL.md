@@ -204,6 +204,17 @@ from nothing, as if the ruling never happened.
   lineage. Replacing an earlier ruling's file for the same surface adds the new
   one and marks the old one superseded; it does not overwrite or remove it.
 
+**Which branch carries the artifact follows the size rule** (`CONVENTIONS.md`
+[§5](../../CONVENTIONS.md#design-conclusions-are-three-units-not-two), *Design work
+splits by size*, #359):
+
+- **A small change to an already-designed surface** — promote it here, as above.
+- **A `delivery:design` branch** (a new surface's design issue) — the artifact *is* the
+  deliverable, not a promotion: commit it at A4 like any other deliverable path.
+- **The build branch for a new surface** — its artifact is already on trunk, landed by
+  the design issue this build was `blocked_by`. Build to it and promote nothing; mark an
+  artifact superseded only if a new ruling on this branch replaced it.
+
 No design ruling landed on this branch → skip this step silently, same as any
 other optional check A2 makes.
 

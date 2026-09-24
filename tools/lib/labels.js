@@ -106,18 +106,18 @@
  * parks forever with no signal until the moment it hits the wall.
  *
  * `delivery:*` joined the set in #112: a tracker mixes issues whose delivery is NOT a code
- * commit — a content push, an ops/production check, a docs sync outside code review — into a
+ * commit — a content push, an ops/production check, code for another repository — into a
  * pipeline whose every stage (worktree, gate, mergeable, squash, `Closes #N`) assumes one. Such
  * an issue can never reach a mergeable state, so it reads as eternally stuck, and — the expensive
  * half — it looks STARTABLE to triage and a scheduled driver alike, because no existing readiness
  * label says "this is real work, but not a diff" the way `epic` says "this is not a unit of work
- * at all". Five labels, one classifier, deliberately (still) THREE-VALUED rather than boolean
+ * at all". Six labels (five in #112, `design` in #359), one classifier, deliberately (still) THREE-VALUED rather than boolean
  * (CONVENTIONS.md §5, *Delivery type*): no `delivery:*` label at all reads as **not asked**, and
  * must behave exactly as before this label set existed — every issue in every tracker is
  * unlabelled the day this lands, so absence collapsing into "non-code" would freeze the start
  * gate for everyone on day one. `delivery:code` is the explicit affirmative for a code issue;
- * `content` / `ops` / `docs-only` / `elsewhere` are the explicit non-code types, which triage and
- * the readiness gate treat as route-not-start — a companion to the `epic` rule and the
+ * which values are non-code (route-not-start) and which are code-lane is spelled out in the
+ * #358/#359 paragraph below — the route rule itself is a companion to the `epic` rule and the
  * `needs-decision` gate, not a merge of either. It joins `CONVENTION_LABELS` for the same reason
  * `epic` did: an unattended decision (a scheduler's or triage's start-or-skip) depends on being
  * able to tell the states apart, and a repo that adopted before this set existed cannot create
@@ -127,15 +127,32 @@
  * trackers (21 issues, all hand-created — `colab labels --ensure` could never create a label
  * absent from `CONVENTION_LABELS`). It names an issue whose deliverable IS code, but code that
  * lands in a different repository than this tracker's own — so it belongs in the non-code-HERE
- * bucket for exactly the reason `content`/`ops`/`docs-only` do: this pipeline's worktree, gate,
+ * bucket for exactly the reason `content`/`ops` do: this pipeline's worktree, gate,
  * mergeable and squash machinery all assume the diff lands in the repo the issue lives in, and
  * an `elsewhere` issue breaks that assumption the same way a content push does. Before this
  * entry, `deliveryType()` returned `null` for it — byte-identical to an issue nobody ever
  * labelled — so `isRouteNotStart()` read `false` and every one of those 21 issues reported
  * STARTABLE to triage, the opposite of what applying the label was asking for.
  *
+ * #358 and #359 settled the lanes. `delivery:docs-only` was provisioned in #112 as a non-code
+ * type ("a docs sync outside code review, not a commit"), but a docs-only deliverable in THIS
+ * repo is an in-repo commit like any other — worktree, gate, `colab ship` — and a consumer's
+ * scheduler already read it that way, so triage withheld `deps-checked` from issues the
+ * scheduler would have started and they sat with no park and no decision (one for 6 days). It
+ * is now a CODE-LANE value: classified (`deliveryType` returns `'docs-only'`, never `null`) and
+ * never route-not-start. It is not ship's #345 docs-only exception either — that is measured
+ * from the diff (`docs-only.js`), never read from this label. `delivery:design` (#359) is the
+ * deliverable-is-a-design-artifact value for a new surface: never a code start, so it joins
+ * NON_CODE_DELIVERY_TYPES and `isRouteNotStart()` reads true for it; keeping it apart from the
+ * route bucket is a REPORTING job (code-triage's own design bucket), not a second classifier
+ * nobody in this repo would read. Before #359 two consumers hand-created it and `deliveryType()`
+ * returned `null` for it — the #274 failure again. So the value list `deliveryType()` walks is
+ * now DERIVED from CONVENTION_LABELS (`DELIVERY_TYPES`), never hand-typed: any provisioned
+ * `delivery:*` value is classified by construction, and a partition test forces each new one
+ * into exactly one lane (`CODE_LANE_DELIVERY_TYPES` or `NON_CODE_DELIVERY_TYPES`) on purpose.
+ *
  * `low-priority` joined the set in #268: it orders a queue, it does not remove work from
- * one — unlike `epic` and `delivery:*` above, a `low-priority` issue IS a start candidate,
+ * one — unlike `epic` and a non-code `delivery:*` value above, a `low-priority` issue IS a start candidate,
  * only ranked behind every other ready group (CONVENTIONS.md §5, *Priority*). It joins
  * CONVENTION_LABELS for the same reason `epic` and `delivery:*` did: a scheduled driver's
  * ordering decision depends on seeing the label, and a repo that adopted before it existed
@@ -201,22 +218,36 @@ const CONVENTION_LABELS = [
   { name: 'delivery:code', color: '1D76DB', description: 'Delivery is a code commit — the ordinary code pipeline applies' },
   { name: 'delivery:content', color: 'FEF2C0', description: 'Delivery is a content push, not a code commit — route, do not start in the code pipeline' },
   { name: 'delivery:ops', color: 'D4C5F9', description: 'Delivery is an ops/production check, not a code commit — route, do not start in the code pipeline' },
-  { name: 'delivery:docs-only', color: 'BFD4F2', description: "Delivery is a docs sync outside code review, not a commit — route, don't start" },
+  { name: 'delivery:docs-only', color: 'BFD4F2', description: 'Delivery is a docs-only commit in this repo — the ordinary code pipeline applies' },
   { name: 'delivery:elsewhere', color: 'F9D0C4', description: 'Delivery is code, but lands in a different repository — route, do not start here' },
+  { name: 'delivery:design', color: 'C39BD3', description: 'Delivery is a design artifact for a new surface — a design session works it, never a code start' },
   { name: 'deferred:date', color: 'B08800', description: 'Parked until a specific date — pair with a review-by:<date> label naming it' },
   { name: 'deferred:measurement', color: '7C6F57', description: 'Parked until a metric crosses a threshold — name the metric and the threshold on the issue' },
   { name: 'deferred:external-party', color: '6E5494', description: 'Parked until someone outside this repo acts — name who, and pair with review-by:<date>' },
   { name: 'release-hold', color: 'E11D21', description: 'Human veto on a release tracking issue: its candidate is not finalized while this is present' },
 ];
 
-// The DELIVERY label prefix (CONVENTIONS.md §5, Delivery type). Five fixed values, unlike
+// The DELIVERY label prefix (CONVENTIONS.md §5, Delivery type). Six fixed values, unlike
 // `group:<key>` — provisioned up front in CONVENTION_LABELS above, not created on demand.
 const DELIVERY_LABEL_PREFIX = 'delivery:';
 
+// Every provisioned delivery value, in CONVENTION_LABELS order — DERIVED, never hand-typed
+// (#358/#359): a value provisioned above is classified by `deliveryType()` by construction,
+// so a new one can never read as "not asked" the way `elsewhere` did before #274.
+const DELIVERY_TYPES = CONVENTION_LABELS
+  .map((l) => l.name)
+  .filter((n) => n.startsWith(DELIVERY_LABEL_PREFIX))
+  .map((n) => n.slice(DELIVERY_LABEL_PREFIX.length));
+
+// The code-lane delivery types — an in-repo commit through worktree, gate and `colab ship`.
+// `docs-only` is here since #358: a docs-only deliverable is still a commit. (It is NOT ship's
+// #345 docs-only exception, which is measured from the diff, never read from this label.)
+const CODE_LANE_DELIVERY_TYPES = ['code', 'docs-only'];
+
 // The four non-code delivery types — the ones triage and the readiness gate treat as
-// route-not-start. `delivery:code` is deliberately excluded: it is the explicit CODE
-// affirmative, not a non-code type.
-const NON_CODE_DELIVERY_TYPES = ['content', 'ops', 'docs-only', 'elsewhere'];
+// route-not-start. `design` (#359) is here because it is never a code start; code-triage
+// reports it in its own design bucket rather than the route bucket.
+const NON_CODE_DELIVERY_TYPES = ['content', 'ops', 'elsewhere', 'design'];
 
 /**
  * The three-valued delivery classifier (CONVENTIONS.md §5, *Delivery type*).
@@ -224,8 +255,9 @@ const NON_CODE_DELIVERY_TYPES = ['content', 'ops', 'docs-only', 'elsewhere'];
  * Returns one of:
  *   - `null`     — NOT ASKED. No `delivery:*` label present. Must read identically to how the
  *                  issue behaved before this label set existed — never as non-code.
- *   - `'code'`   — `delivery:code` present.
- *   - `'content' | 'ops' | 'docs-only' | 'elsewhere'` — the matching `delivery:*` label present.
+ *   - `'code' | 'docs-only'` — a code-lane value present (CODE_LANE_DELIVERY_TYPES).
+ *   - `'content' | 'ops' | 'elsewhere' | 'design'` — a non-code value present
+ *                  (NON_CODE_DELIVERY_TYPES).
  *
  * Tolerant of label objects or bare strings, the same shape every other helper in this file
  * accepts. If more than one `delivery:*` label is somehow present (a tracker mistake, not a
@@ -236,14 +268,15 @@ function deliveryType(present) {
   const have = new Set(
     (present || []).map((n) => (n && typeof n === 'object' ? n.name : n)).map((n) => String(n)),
   );
-  for (const type of ['code', ...NON_CODE_DELIVERY_TYPES]) {
+  for (const type of DELIVERY_TYPES) {
     if (have.has(`${DELIVERY_LABEL_PREFIX}${type}`)) return type;
   }
   return null;
 }
 
 // Is this issue's delivery type one triage/the readiness gate should route rather than start?
-// `null` (not asked) and `'code'` both read false here — only an explicit non-code type routes.
+// `null` (not asked) and a code-lane value (`'code'`, `'docs-only'`) read false here — only an
+// explicit non-code type routes.
 function isRouteNotStart(present) {
   return NON_CODE_DELIVERY_TYPES.includes(deliveryType(present));
 }
@@ -549,7 +582,8 @@ module.exports = {
   CI_GRANT_LABEL, ciGrantLabelArgs, ciGrantMissingLabelHint,
   NEEDS_DECISION_LABEL, DECISION_RECORDED_LABEL, decisionRecordedMissingLabelHint,
   GROUP_LABEL_PREFIX, isGroupLabel, groupLabelNames,
-  DELIVERY_LABEL_PREFIX, NON_CODE_DELIVERY_TYPES, deliveryType, isRouteNotStart,
+  DELIVERY_LABEL_PREFIX, DELIVERY_TYPES, CODE_LANE_DELIVERY_TYPES, NON_CODE_DELIVERY_TYPES,
+  deliveryType, isRouteNotStart,
   DEFERRED_LABEL_PREFIX, DEFERRED_KINDS, deferredKind, isDeferred,
   REVIEW_BY_LABEL_PREFIX, isReviewByLabel, reviewByLabelNames, parseReviewByDate,
 };
