@@ -3554,6 +3554,77 @@ label is missing it simply could not see. Label-set provisioning is idempotent
 (`|| true`) and safe to re-run on every sync — the mechanism by which a label added in a
 later handbook version reaches an earlier-adopted repo.
 
+### Upstream — a consumer that changes what a convention means files it here (#362)
+
+Everything above runs one way: the handbook changes, and adopters find out. The other
+direction had no rule. A **consumer** is anything that reads these conventions in order to
+act on them: a dashboard, a scheduler, a triage or ship prompt, a repo's own copy of a
+skill, a label description on a tracker. A consumer can change what a convention means
+with a commit in its own repo, and nothing made the handbook hear about it. Agents load
+both texts, so they obey whichever they read last. Measured: a consumer made
+`delivery:docs-only` a code-lane start candidate, and the handbook issue was filed 30 days
+later. In between, a triage pass that followed the handbook left an issue unstarted for
+about 6 days. A second consumer added a `delivery:*` value the handbook does not have. A
+third consumer lacked that value, filed design work under `docs-only` instead, and its
+scheduler sent the work to the code worker.
+
+**The rule.** A consumer change that does either of these carries a linked handbook issue:
+
+- **It alters what a convention label or value means.** That covers which lane starts an
+  issue carrying it, whether it gates a start, who may apply or clear it, and where it
+  routes the work.
+- **It adds a value inside a convention family** (`delivery:*`, `deferred:*`).
+
+A repo's own labels outside those families (`bug`, `area:billing`) are not conventions,
+and neither is a hand-edit to a copied template (that is copy-and-own, above).
+
+- **Who files it: the author of the consumer change**, as part of the same unit of work.
+  A later reviewer or a later sync does not own it.
+- **How fast: before the consumer change reaches its own trunk.** The consumer's issue or
+  merge message then carries a `Handbook: <issue URL>` line. A divergence discovered after
+  the fact, with no such line, is filed by whoever discovers it, in the same session. It
+  is never deferred to "the next sync".
+- **Its provenance is the consumer change's, not the filer's.** The upstream issue records
+  a decision a human already approved on the consumer side. It proposes nothing on an
+  agent's own initiative, so it carries **no `agent-filed` label**. Its `Filed-by:` line
+  names whoever approved the consumer change ([§5](#provenance--who-decided-the-work-should-exist)).
+  Measured: a fix filed under `agent-filed` waited for acceptance, and one filed without it
+  landed the same day. The upstream issue describes the consumer by shape. The link runs
+  consumer → handbook, never the reverse, because the handbook is public.
+- **The upstream issue ends in one of three outcomes:** the handbook adopts the meaning,
+  the handbook declines it and the consumer reverts, or the handbook rules it a legitimate
+  local variant.
+
+**Declared, or it is drift.** Until the upstream issue closes, the consumer declares the
+divergence in its `CLAUDE.md`, next to the handbook pointer block
+([§9](#9-adopting-this) step 5), as a `Local divergences:` list with one line per item.
+Each line gives the label or value, what it means here, and the handbook issue URL. This
+is also what settles the "whichever text I read last" problem: an agent reading this
+repo's instructions sees, next to the handbook pointer, which meaning wins here and why.
+When the issue closes, remove the line if the meaning was adopted or reverted. If the
+issue ruled it a local variant, keep the line and point it at that ruling. An undeclared
+consumer-local meaning or value is **drift, not a local customisation**. Copy-and-own
+protects a repo's edits to its *copies*. It never makes the *meaning* of a shared label
+the repo's to change.
+
+**Where a missing issue gets caught: `handbook-sync`.** This is the enforcement point,
+chosen over the two alternatives:
+
+- **The consumer's ship** sees one diff. It cannot tell which strings in that diff are
+  convention vocabulary without also loading the handbook.
+- **The handbook's triage** runs on the handbook's tracker. It never sees a consumer's
+  tooling.
+- **`handbook-sync`** is the one pass that stands inside the consumer with the handbook
+  loaded. It is also the only one of the three that sees **the reverse direction**: a
+  handbook change the consumer's own prompts never absorbed. Measured: a label made
+  monotonic upstream while a consumer's triage prompt still said clearing it "is often
+  correct". `colab labels --ensure` creates missing labels and leaves an existing
+  description exactly as it is, so a description can drift in either direction without
+  anything noticing.
+
+The filing obligation still sits with the change. `handbook-sync` is where a skipped one
+gets found (`skills/handbook-sync/SKILL.md` §7).
+
 ### The fleet registry is private
 
 The list of repos the audit sweeps lives at `~/.colab/repos.txt`, machine-local, never
