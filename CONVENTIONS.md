@@ -2024,7 +2024,7 @@ The four situations, and where each fact lives:
 | Needs a human answer | `needs-decision` (unchanged, see *Decision gate* below) |
 | Blocked by another issue | `blockedBy` edge (*Readiness*, above) — do **not** also clear `deps-checked` |
 | Waiting on a date / measurement / external party | `deferred:<kind>` + `review-by:<date>` |
-| Not code delivery | `delivery:*` (unchanged, *Delivery type*, below) |
+| Not code delivery | a non-code `delivery:*` value — `content`/`ops`/`elsewhere`/`design` (*Delivery type*, below) |
 
 Three fixed `deferred:*` kinds, each naming what the park is waiting on:
 
@@ -2935,19 +2935,48 @@ and perform the destructive steps it deferred.
 
 #### Delivery type — route, not start (#112)
 
-**Five labels — `delivery:code`, `delivery:content`, `delivery:ops`,
-`delivery:docs-only`, `delivery:elsewhere`** — name whether finishing an issue produces a
+**Six labels — `delivery:code`, `delivery:docs-only`, `delivery:content`, `delivery:ops`,
+`delivery:elsewhere`, `delivery:design`** — name whether finishing an issue produces a
 code commit *in this repo* at all. **Three-valued, not boolean:** no label = not asked
-(behaves as before); `delivery:code` = ordinary pipeline; the other four = non-code-here,
-route, do not start. **"Not asked" must never collapse into "non-code"** — every issue is
-unlabelled the day this set is adopted, and reading absence as non-code would freeze every
-scheduled driver on day one.
+(behaves as before); `delivery:code` and `delivery:docs-only` = the code lane, the ordinary
+pipeline; `content`/`ops`/`elsewhere`/`design` = non-code-here, not a code start.
+**"Not asked" must never collapse into "non-code"** — every issue is unlabelled the day
+this set is adopted, and reading absence as non-code would freeze every scheduled driver on
+day one.
 
-`content`/`ops`/`docs-only`/`elsewhere` gate exactly like `needs-decision` — not a start
-candidate for anyone. A session landing on one distills the finding onto the issue and
-ends the session. Whoever files or triages sets the label — no mechanical rule infers it
-from a title or body. `delivery:*` is in the provisioned label set because every adopting
-repo needs all five values before the first triage pass can classify anything.
+`content`/`ops`/`elsewhere` gate exactly like `needs-decision` — route, not a start
+candidate for anyone. `design` is not a code start either, but it is not routed away: it is
+a design session's start, reported in triage's own design bucket (below). A code session
+landing on any of the four distills the finding onto the issue and ends the session.
+Whoever files or triages sets the label — no mechanical rule infers it from a title or body.
+`delivery:*` is in the provisioned label set because every adopting repo needs all six
+values before the first triage pass can classify anything.
+
+**`delivery:docs-only` (#358)** is a code-lane value: the filer expects an in-repo commit
+whose diff is documentation only. It starts, is gated and ships exactly like
+`delivery:code` — worktree, the repo's gate, `colab ship` — and triage gives it
+`deps-checked` like any code issue once its blockers clear. It was provisioned in #112 as a
+non-code value ("a docs sync outside code review"), but a docs-only deliverable in the repo
+the issue lives in is still a commit, and a consumer's scheduler already read it that way;
+so triage withheld `deps-checked` from issues the scheduler would have started, and they sat
+with no park and no decision to say why — one measured case for 6 days. The label is **not**
+`colab ship`'s docs-only exception ([§2](#autonomy--the-docs-only-exception-345)): ship
+measures that from the diff and never reads this label, so a `docs-only` issue whose diff
+turns out to carry code or a binary simply ships under the normal autonomy gate. Nor is it
+a home for design work — a design artifact with screenshots is a binary change, and design
+work has its own value.
+
+**`delivery:design` (#359)** names an issue whose deliverable is a design artifact — unit 2
+of [*Design conclusions*](#design-conclusions-are-three-units-not-two), below — for a **new
+surface**, per the size rule there. A design session works it on the issue's own branch
+(`design/<slug>-<N>`), and it ships like any branch; the build issue that implements the
+surface waits on it through a `blocked_by` edge. It is never a code start candidate, and
+triage reports it in a bucket of its own — apart from code, from route, and from not
+asked. Two consumers hand-created the label before the handbook provisioned it, and a
+third, having no such value, filed design work under `delivery:docs-only`, where its
+scheduler started a code worker that refused the issue 5 times. Before #359
+`deliveryType()` returned `null` for it — the "not asked" case, the #274 failure below for
+a sixth value.
 
 **`delivery:elsewhere` (#274)** names an issue whose deliverable IS code, but code that
 lands in a different repository than the one the issue lives in — a consumer that read a
@@ -2956,15 +2985,15 @@ issues total, well before this convention adopted it. Before #274, an issue expl
 labelled `delivery:elsewhere` was byte-identical, to this repo's own classifier, to one
 nobody had ever labelled: `deliveryType()` returned `null` for it (the "not asked" case),
 so `isRouteNotStart()` read `false` and the issue reported startable — the opposite of what
-applying the label was asking for. It routes for the same reason `content`/`ops`/
-`docs-only` do: this pipeline's worktree, gate, mergeable and squash machinery all assume
+applying the label was asking for. It routes for the same reason `content`/`ops` do: this
+pipeline's worktree, gate, mergeable and squash machinery all assume
 the diff lands in the repo the issue lives in, and an `elsewhere` issue breaks that
 assumption identically to a content push.
 
 #### Priority — a throttle, not a veto (#268)
 
-**`low-priority` orders a queue; it does not remove work from one.** Unlike `epic` and
-`delivery:*` above, a `low-priority` issue **is** a start candidate — it passes the
+**`low-priority` orders a queue; it does not remove work from one.** Unlike `epic` and a
+non-code `delivery:*` value above, a `low-priority` issue **is** a start candidate — it passes the
 readiness gate exactly like any other issue and stays on the ready list. What the label
 changes is rank, not eligibility: `code-triage`'s ordering step ranks a `low-priority`
 group behind every other ready group, never off the ready list. Reading the label as a
@@ -3100,11 +3129,28 @@ A design ruling needs one more part: an **immutable visual record**.
    comment, immutable where the repo file is not. Rejected alternatives need never land
    on trunk — their screenshot on the Issue is the whole record.
 
-**A missing artifact never blocks a start.** Unit 2 lands on the branch that builds the
-surface (`code-wrap` A2), so it is normally absent before that branch exists. The design
+**Design work splits by size (#359) — one test, applied by whoever files or triages the
+issue:** *does building this need a screen, page or panel that no approved artifact under
+`docs/design/` already covers?* It is a judgement, like every other `delivery:*` value —
+never inferred mechanically from a title, a body or a file path.
+
+- **Yes — a new surface.** File a separate `delivery:design` issue first (*Delivery type*,
+  above). Its deliverable is unit 2, and the artifact lands on **that issue's own branch**,
+  worked by a design session. The build issue waits on it through a native `blocked_by`
+  edge (`colab blocked <build> --by <design>`), which *Readiness* already honours — and
+  through nothing else: no label, no artifact-presence check. When the design issue ships,
+  the edge clears and the build issue is an ordinary start candidate that builds to the
+  artifact now on trunk.
+- **No — a small change to an already-designed surface.** The paragraph below holds
+  unchanged.
+
+**A missing artifact never blocks a small change.** Unit 2 lands on the branch that builds
+the surface (`code-wrap` A2), so it is normally absent before that branch exists. The design
 gate is `needs-decision`, and only that. A consumer's label description, agent prompt
 or local doc that says "needs an artifact before code" is stricter than this section.
-Following it stalls settled work, measured at about a day on three issues (#356).
+Following it stalls settled work, measured at about a day on three issues (#356). A
+consumer that wants a build to wait on design files the new-surface design issue and its
+edge, above — never an artifact check.
 Consumer docs should link to [`code-triage`](skills/code-triage/SKILL.md) §6 (`design:`
 line) instead of restating it. A ruling given elsewhere and never recorded does not block
 either. That includes prose on the issue and a ruling on a linked issue. It still has
@@ -3120,9 +3166,13 @@ accreted into `CLAUDE.md`, which gets one pointer row.
 one is approved — filing is cheaper than a single mockup iteration, and it is what makes
 `<slug>-<N>-mockup.html` naming possible at all.
 
-A small feature continues on the same design Issue through implementation; a large one
-turns the design Issue into the `epic` parent, with implementation sub-issues arriving
-with their own sessions.
+There is one size rule — the new-surface test in *Design conclusions*, above — and
+exploration follows it. A small change explores on the issue that builds it. A new surface
+explores on its own `delivery:design` issue, filed before the first mockup. When the build
+spans several sessions, an `epic` parent holds the design issue and the build issues as
+children, each build child carrying its own `blocked_by` edge to the design issue. The
+design issue is never itself turned into the epic: an epic is never a start candidate, so
+its artifact would have no session to land it.
 
 `ceremony: light` repos are exempt from the file ceremony — a mockup lives as a preview
 link in conversation, and units 1 and 3 collapse into one screenshot-bearing Issue
@@ -3721,10 +3771,10 @@ only. Resolution order: `--config` flag > `~/.colab/repos.txt` > bundled example
    different row).
 2. **Write `.github/project.yml`** ([§3](#3-githubprojectyml--the-marker)) with the
    answers from step 1.
-3. **Create the whole label set — twenty names, not a subset** (`in-progress`,
+3. **Create the whole label set — twenty-one names, not a subset** (`in-progress`,
    `deps-checked`, `agent-filed`, `epic`, `needs-decision`, `decision-recorded`,
    `needs-plan`, `migration-granted`, `needs-migration-grant`, `ci-granted`,
-   `low-priority`, the five `delivery:*`, the three `deferred:*`, and `release-hold`):
+   `low-priority`, the six `delivery:*`, the three `deferred:*`, and `release-hold`):
    ```sh
    colab labels --ensure
    ```
@@ -3734,7 +3784,8 @@ only. Resolution order: `--config` flag > `~/.colab/repos.txt` > bundled example
    partial adoption is normal. It also names any existing convention label whose
    description differs from the handbook's, and rewrites it only when asked
    (`--refresh-descriptions`, #364) — a description may be a declared local divergence
-   ([§8, *Upstream*](#upstream--a-consumer-that-changes-what-a-convention-means-files-it-here-362)). (No `colab` on this machine? The twenty `gh label
+   ([§8, *Upstream*](#upstream--a-consumer-that-changes-what-a-convention-means-files-it-here-362)).
+   (No `colab` on this machine? The twenty-one `gh label
    create … || true` lines this replaced are recoverable from that file's history.)
 
    **This count is a hand-typed number restated in at least four places** (here, the
@@ -3758,7 +3809,7 @@ only. Resolution order: `--config` flag > `~/.colab/repos.txt` > bundled example
    (#230). `low-priority` — a triage pass has no way to say "startable, but ranked last",
    so a group meant to wait its turn is reported exactly like every other ready group
    (#268). `delivery:*` — a content push or ops check has no way to say "not a diff" and
-   jams the code pipeline. `deferred:*` — a triage pass has no way to say "parked, and
+   jams the code pipeline, and a new surface's design issue reads as a code start (#359). `deferred:*` — a triage pass has no way to say "parked, and
    here is what wakes it", so a deliberate park is indistinguishable from an unexamined
    issue — measured at 11 + 4 issues misreporting as untriaged across two repos (#279).
    This full set is provisioned again on every sync, not only at adoption.
@@ -3909,7 +3960,8 @@ gh issue list --label in-progress                 # what's taken
 gh issue list --label agent-filed                 # filed by an agent — no human approved it yet
 gh issue list --label epic                        # a container for sub-issues — never a start candidate
 gh issue list --label group:<key>                 # must share one branch — start them together
-gh issue list --search "label:delivery:content,delivery:ops,delivery:docs-only,delivery:elsewhere"  # non-code-here — route, don't start
+gh issue list --search "label:delivery:content,delivery:ops,delivery:elsewhere"  # non-code-here — route, don't start
+gh issue list --label delivery:design             # a new surface's design artifact — a design session's work, never a code start
 gh issue list --search "label:deferred:date,deferred:measurement,deferred:external-party"  # parked — each must name a wake condition
 gh issue edit N --add-assignee @me --add-label in-progress
 git fetch origin <trunk> && git checkout -b [<login>/<machine>/]feat/<slug>-N origin/<trunk>   # cut from a FRESH origin/<trunk>, never local trunk; prefix only under branchPrefix: machine

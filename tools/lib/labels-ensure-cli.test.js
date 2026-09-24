@@ -204,11 +204,13 @@ function escapeRe(s) { return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
 // #279 repeated the exact same pattern moving 16 -> 19 (three `deferred:*` labels, Disposition):
 // CONVENTIONS.md §9 step 3 count, and skills/handbook-sync/SKILL.md's "sixteen-name set", plus
 // this literal. #339 moved 19 -> 20 (`release-hold`) and moved the same sites together.
+// #358/#359 moved 20 -> 21 (`delivery:design`): CONVENTIONS.md §5 ("Six labels") and §9 step 3,
+// and skills/handbook-sync/SKILL.md, together again.
 // This assertion cannot make prose self-updating, but it is the one count a CI run
 // actually exercises — if you bump CONVENTION_LABELS.length again, this fails LOUDLY, and that
 // failure is the reminder to grep the prose sites above and move them all together.
 test('CONVENTION_LABELS is what --ensure iterates — the source this command must never restate', () => {
-  assert.strictEqual(conventionLabelNames().length, 20,
+  assert.strictEqual(conventionLabelNames().length, 21,
     'label count changed — also update the prose counts in CONVENTIONS.md §5/§9 and skills/handbook-sync/SKILL.md');
   for (const l of CONVENTION_LABELS) {
     assert.ok(l.name && l.color && l.description, `label ${JSON.stringify(l)} is missing a field --ensure needs to create it`);

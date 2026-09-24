@@ -23,15 +23,16 @@ const {
   CI_GRANT_LABEL, ciGrantLabelArgs, ciGrantMissingLabelHint,
   NEEDS_DECISION_LABEL, DECISION_RECORDED_LABEL, decisionRecordedMissingLabelHint,
   GROUP_LABEL_PREFIX, isGroupLabel, groupLabelNames,
-  DELIVERY_LABEL_PREFIX, NON_CODE_DELIVERY_TYPES, deliveryType, isRouteNotStart,
+  DELIVERY_LABEL_PREFIX, DELIVERY_TYPES, CODE_LANE_DELIVERY_TYPES, NON_CODE_DELIVERY_TYPES,
+  deliveryType, isRouteNotStart,
   DEFERRED_LABEL_PREFIX, DEFERRED_KINDS, deferredKind, isDeferred,
   REVIEW_BY_LABEL_PREFIX, isReviewByLabel, reviewByLabelNames, parseReviewByDate,
 } = require('./labels.js');
 
-test('the convention set is exactly the twenty labels §9 provisions, in canonical order', () => {
+test('the convention set is exactly the labels §9 provisions, in canonical order', () => {
   assert.deepStrictEqual(
     conventionLabelNames(),
-    ['in-progress', 'deps-checked', 'agent-filed', 'epic', 'needs-decision', 'decision-recorded', 'needs-plan', 'migration-granted', 'needs-migration-grant', 'ci-granted', 'low-priority', 'delivery:code', 'delivery:content', 'delivery:ops', 'delivery:docs-only', 'delivery:elsewhere', 'deferred:date', 'deferred:measurement', 'deferred:external-party', 'release-hold'],
+    ['in-progress', 'deps-checked', 'agent-filed', 'epic', 'needs-decision', 'decision-recorded', 'needs-plan', 'migration-granted', 'needs-migration-grant', 'ci-granted', 'low-priority', 'delivery:code', 'delivery:content', 'delivery:ops', 'delivery:docs-only', 'delivery:elsewhere', 'delivery:design', 'deferred:date', 'deferred:measurement', 'deferred:external-party', 'release-hold'],
   );
   // Each carries what a provisioner needs — a name, a color, a description — so the audit
   // and `gh label create` cannot disagree about how the label is meant to look.
@@ -46,7 +47,7 @@ test('the convention set is exactly the twenty labels §9 provisions, in canonic
 
 test('a repo with every label is not flagged', () => {
   assert.deepStrictEqual(
-    missingConventionLabels(['in-progress', 'deps-checked', 'agent-filed', 'epic', 'needs-decision', 'decision-recorded', 'needs-plan', 'migration-granted', 'needs-migration-grant', 'ci-granted', 'low-priority', 'delivery:code', 'delivery:content', 'delivery:ops', 'delivery:docs-only', 'delivery:elsewhere', 'deferred:date', 'deferred:measurement', 'deferred:external-party', 'release-hold', 'bug']),
+    missingConventionLabels(['in-progress', 'deps-checked', 'agent-filed', 'epic', 'needs-decision', 'decision-recorded', 'needs-plan', 'migration-granted', 'needs-migration-grant', 'ci-granted', 'low-priority', 'delivery:code', 'delivery:content', 'delivery:ops', 'delivery:docs-only', 'delivery:elsewhere', 'delivery:design', 'deferred:date', 'deferred:measurement', 'deferred:external-party', 'release-hold', 'bug']),
     [],
   );
 });
@@ -54,93 +55,100 @@ test('a repo with every label is not flagged', () => {
 test('the readiness label absent is reported — the exact gap that silently un-fills the column', () => {
   assert.deepStrictEqual(
     missingConventionLabels(['in-progress', 'bug']),
-    ['deps-checked', 'agent-filed', 'epic', 'needs-decision', 'decision-recorded', 'needs-plan', 'migration-granted', 'needs-migration-grant', 'ci-granted', 'low-priority', 'delivery:code', 'delivery:content', 'delivery:ops', 'delivery:docs-only', 'delivery:elsewhere', 'deferred:date', 'deferred:measurement', 'deferred:external-party', 'release-hold'],
+    ['deps-checked', 'agent-filed', 'epic', 'needs-decision', 'decision-recorded', 'needs-plan', 'migration-granted', 'needs-migration-grant', 'ci-granted', 'low-priority', 'delivery:code', 'delivery:content', 'delivery:ops', 'delivery:docs-only', 'delivery:elsewhere', 'delivery:design', 'deferred:date', 'deferred:measurement', 'deferred:external-party', 'release-hold'],
   );
 });
 
 test('a repo with the claim label only is missing everything else', () => {
   assert.deepStrictEqual(
     missingConventionLabels(['in-progress']),
-    ['deps-checked', 'agent-filed', 'epic', 'needs-decision', 'decision-recorded', 'needs-plan', 'migration-granted', 'needs-migration-grant', 'ci-granted', 'low-priority', 'delivery:code', 'delivery:content', 'delivery:ops', 'delivery:docs-only', 'delivery:elsewhere', 'deferred:date', 'deferred:measurement', 'deferred:external-party', 'release-hold'],
+    ['deps-checked', 'agent-filed', 'epic', 'needs-decision', 'decision-recorded', 'needs-plan', 'migration-granted', 'needs-migration-grant', 'ci-granted', 'low-priority', 'delivery:code', 'delivery:content', 'delivery:ops', 'delivery:docs-only', 'delivery:elsewhere', 'delivery:design', 'deferred:date', 'deferred:measurement', 'deferred:external-party', 'release-hold'],
   );
 });
 
 test('missing preserves canonical order regardless of the input order', () => {
-  assert.deepStrictEqual(missingConventionLabels(['epic', 'agent-filed']), ['in-progress', 'deps-checked', 'needs-decision', 'decision-recorded', 'needs-plan', 'migration-granted', 'needs-migration-grant', 'ci-granted', 'low-priority', 'delivery:code', 'delivery:content', 'delivery:ops', 'delivery:docs-only', 'delivery:elsewhere', 'deferred:date', 'deferred:measurement', 'deferred:external-party', 'release-hold']);
+  assert.deepStrictEqual(missingConventionLabels(['epic', 'agent-filed']), ['in-progress', 'deps-checked', 'needs-decision', 'decision-recorded', 'needs-plan', 'migration-granted', 'needs-migration-grant', 'ci-granted', 'low-priority', 'delivery:code', 'delivery:content', 'delivery:ops', 'delivery:docs-only', 'delivery:elsewhere', 'delivery:design', 'deferred:date', 'deferred:measurement', 'deferred:external-party', 'release-hold']);
 });
 
 test('a repo missing only epic (adopted before #78) is flagged for exactly that gap', () => {
   assert.deepStrictEqual(
-    missingConventionLabels(['in-progress', 'deps-checked', 'agent-filed', 'needs-decision', 'decision-recorded', 'needs-plan', 'migration-granted', 'needs-migration-grant', 'ci-granted', 'low-priority', 'delivery:code', 'delivery:content', 'delivery:ops', 'delivery:docs-only', 'delivery:elsewhere', 'deferred:date', 'deferred:measurement', 'deferred:external-party', 'release-hold']),
+    missingConventionLabels(['in-progress', 'deps-checked', 'agent-filed', 'needs-decision', 'decision-recorded', 'needs-plan', 'migration-granted', 'needs-migration-grant', 'ci-granted', 'low-priority', 'delivery:code', 'delivery:content', 'delivery:ops', 'delivery:docs-only', 'delivery:elsewhere', 'delivery:design', 'deferred:date', 'deferred:measurement', 'deferred:external-party', 'release-hold']),
     ['epic'],
   );
 });
 
 test('a repo missing only needs-decision (renamed from needs-ruling, #75/#122) is flagged for exactly that gap', () => {
   assert.deepStrictEqual(
-    missingConventionLabels(['in-progress', 'deps-checked', 'agent-filed', 'epic', 'decision-recorded', 'needs-plan', 'migration-granted', 'needs-migration-grant', 'ci-granted', 'low-priority', 'delivery:code', 'delivery:content', 'delivery:ops', 'delivery:docs-only', 'delivery:elsewhere', 'deferred:date', 'deferred:measurement', 'deferred:external-party', 'release-hold']),
+    missingConventionLabels(['in-progress', 'deps-checked', 'agent-filed', 'epic', 'decision-recorded', 'needs-plan', 'migration-granted', 'needs-migration-grant', 'ci-granted', 'low-priority', 'delivery:code', 'delivery:content', 'delivery:ops', 'delivery:docs-only', 'delivery:elsewhere', 'delivery:design', 'deferred:date', 'deferred:measurement', 'deferred:external-party', 'release-hold']),
     ['needs-decision'],
   );
 });
 
 test('a repo missing only decision-recorded (adopted before #121) is flagged for exactly that gap', () => {
   assert.deepStrictEqual(
-    missingConventionLabels(['in-progress', 'deps-checked', 'agent-filed', 'epic', 'needs-decision', 'needs-plan', 'migration-granted', 'needs-migration-grant', 'ci-granted', 'low-priority', 'delivery:code', 'delivery:content', 'delivery:ops', 'delivery:docs-only', 'delivery:elsewhere', 'deferred:date', 'deferred:measurement', 'deferred:external-party', 'release-hold']),
+    missingConventionLabels(['in-progress', 'deps-checked', 'agent-filed', 'epic', 'needs-decision', 'needs-plan', 'migration-granted', 'needs-migration-grant', 'ci-granted', 'low-priority', 'delivery:code', 'delivery:content', 'delivery:ops', 'delivery:docs-only', 'delivery:elsewhere', 'delivery:design', 'deferred:date', 'deferred:measurement', 'deferred:external-party', 'release-hold']),
     ['decision-recorded'],
   );
 });
 
 test('a repo missing only needs-plan (adopted before #94) is flagged for exactly that gap', () => {
   assert.deepStrictEqual(
-    missingConventionLabels(['in-progress', 'deps-checked', 'agent-filed', 'epic', 'needs-decision', 'decision-recorded', 'migration-granted', 'needs-migration-grant', 'ci-granted', 'low-priority', 'delivery:code', 'delivery:content', 'delivery:ops', 'delivery:docs-only', 'delivery:elsewhere', 'deferred:date', 'deferred:measurement', 'deferred:external-party', 'release-hold']),
+    missingConventionLabels(['in-progress', 'deps-checked', 'agent-filed', 'epic', 'needs-decision', 'decision-recorded', 'migration-granted', 'needs-migration-grant', 'ci-granted', 'low-priority', 'delivery:code', 'delivery:content', 'delivery:ops', 'delivery:docs-only', 'delivery:elsewhere', 'delivery:design', 'deferred:date', 'deferred:measurement', 'deferred:external-party', 'release-hold']),
     ['needs-plan'],
   );
 });
 
 test('a repo missing only migration-granted (adopted before #98) is flagged for exactly that gap', () => {
   assert.deepStrictEqual(
-    missingConventionLabels(['in-progress', 'deps-checked', 'agent-filed', 'epic', 'needs-decision', 'decision-recorded', 'needs-plan', 'needs-migration-grant', 'ci-granted', 'low-priority', 'delivery:code', 'delivery:content', 'delivery:ops', 'delivery:docs-only', 'delivery:elsewhere', 'deferred:date', 'deferred:measurement', 'deferred:external-party', 'release-hold']),
+    missingConventionLabels(['in-progress', 'deps-checked', 'agent-filed', 'epic', 'needs-decision', 'decision-recorded', 'needs-plan', 'needs-migration-grant', 'ci-granted', 'low-priority', 'delivery:code', 'delivery:content', 'delivery:ops', 'delivery:docs-only', 'delivery:elsewhere', 'delivery:design', 'deferred:date', 'deferred:measurement', 'deferred:external-party', 'release-hold']),
     ['migration-granted'],
   );
 });
 
 test('a repo missing only needs-migration-grant (adopted before #230) is flagged for exactly that gap', () => {
   assert.deepStrictEqual(
-    missingConventionLabels(['in-progress', 'deps-checked', 'agent-filed', 'epic', 'needs-decision', 'decision-recorded', 'needs-plan', 'migration-granted', 'ci-granted', 'low-priority', 'delivery:code', 'delivery:content', 'delivery:ops', 'delivery:docs-only', 'delivery:elsewhere', 'deferred:date', 'deferred:measurement', 'deferred:external-party', 'release-hold']),
+    missingConventionLabels(['in-progress', 'deps-checked', 'agent-filed', 'epic', 'needs-decision', 'decision-recorded', 'needs-plan', 'migration-granted', 'ci-granted', 'low-priority', 'delivery:code', 'delivery:content', 'delivery:ops', 'delivery:docs-only', 'delivery:elsewhere', 'delivery:design', 'deferred:date', 'deferred:measurement', 'deferred:external-party', 'release-hold']),
     ['needs-migration-grant'],
   );
 });
 
 test('a repo missing only ci-granted (adopted before #105) is flagged for exactly that gap', () => {
   assert.deepStrictEqual(
-    missingConventionLabels(['in-progress', 'deps-checked', 'agent-filed', 'epic', 'needs-decision', 'decision-recorded', 'needs-plan', 'migration-granted', 'needs-migration-grant', 'low-priority', 'delivery:code', 'delivery:content', 'delivery:ops', 'delivery:docs-only', 'delivery:elsewhere', 'deferred:date', 'deferred:measurement', 'deferred:external-party', 'release-hold']),
+    missingConventionLabels(['in-progress', 'deps-checked', 'agent-filed', 'epic', 'needs-decision', 'decision-recorded', 'needs-plan', 'migration-granted', 'needs-migration-grant', 'low-priority', 'delivery:code', 'delivery:content', 'delivery:ops', 'delivery:docs-only', 'delivery:elsewhere', 'delivery:design', 'deferred:date', 'deferred:measurement', 'deferred:external-party', 'release-hold']),
     ['ci-granted'],
   );
 });
 
 test('a repo missing only low-priority (adopted before #268) is flagged for exactly that gap', () => {
   assert.deepStrictEqual(
-    missingConventionLabels(['in-progress', 'deps-checked', 'agent-filed', 'epic', 'needs-decision', 'decision-recorded', 'needs-plan', 'migration-granted', 'needs-migration-grant', 'ci-granted', 'delivery:code', 'delivery:content', 'delivery:ops', 'delivery:docs-only', 'delivery:elsewhere', 'deferred:date', 'deferred:measurement', 'deferred:external-party', 'release-hold']),
+    missingConventionLabels(['in-progress', 'deps-checked', 'agent-filed', 'epic', 'needs-decision', 'decision-recorded', 'needs-plan', 'migration-granted', 'needs-migration-grant', 'ci-granted', 'delivery:code', 'delivery:content', 'delivery:ops', 'delivery:docs-only', 'delivery:elsewhere', 'delivery:design', 'deferred:date', 'deferred:measurement', 'deferred:external-party', 'release-hold']),
     ['low-priority'],
   );
 });
 
-test('a repo missing only the delivery:* set (adopted before #112, or before #274 for the fifth value) is flagged for exactly that gap', () => {
+test('a repo missing only the delivery:* set (adopted before #112, or before #274/#359 for the fifth/sixth value) is flagged for exactly that gap', () => {
   assert.deepStrictEqual(
     missingConventionLabels(['in-progress', 'deps-checked', 'agent-filed', 'epic', 'needs-decision', 'decision-recorded', 'needs-plan', 'migration-granted', 'needs-migration-grant', 'ci-granted', 'low-priority', 'deferred:date', 'deferred:measurement', 'deferred:external-party', 'release-hold']),
-    ['delivery:code', 'delivery:content', 'delivery:ops', 'delivery:docs-only', 'delivery:elsewhere'],
+    ['delivery:code', 'delivery:content', 'delivery:ops', 'delivery:docs-only', 'delivery:elsewhere', 'delivery:design'],
   );
 });
 
-test('a repo with the pre-#274 delivery:* set is flagged only for the fifth value', () => {
+test('a repo with the pre-#274 delivery:* set is flagged only for the fifth and sixth values', () => {
   assert.deepStrictEqual(
     missingConventionLabels(['in-progress', 'deps-checked', 'agent-filed', 'epic', 'needs-decision', 'decision-recorded', 'needs-plan', 'migration-granted', 'needs-migration-grant', 'ci-granted', 'low-priority', 'delivery:code', 'delivery:content', 'delivery:ops', 'delivery:docs-only', 'deferred:date', 'deferred:measurement', 'deferred:external-party', 'release-hold']),
-    ['delivery:elsewhere'],
+    ['delivery:elsewhere', 'delivery:design'],
+  );
+});
+
+test('a repo with the pre-#359 delivery:* set is flagged only for delivery:design', () => {
+  assert.deepStrictEqual(
+    missingConventionLabels(['in-progress', 'deps-checked', 'agent-filed', 'epic', 'needs-decision', 'decision-recorded', 'needs-plan', 'migration-granted', 'needs-migration-grant', 'ci-granted', 'low-priority', 'delivery:code', 'delivery:content', 'delivery:ops', 'delivery:docs-only', 'delivery:elsewhere', 'deferred:date', 'deferred:measurement', 'deferred:external-party', 'release-hold']),
+    ['delivery:design'],
   );
 });
 
 test('empty / null / undefined input reports the whole set (a bare repo, or unread labels)', () => {
-  const all = ['in-progress', 'deps-checked', 'agent-filed', 'epic', 'needs-decision', 'decision-recorded', 'needs-plan', 'migration-granted', 'needs-migration-grant', 'ci-granted', 'low-priority', 'delivery:code', 'delivery:content', 'delivery:ops', 'delivery:docs-only', 'delivery:elsewhere', 'deferred:date', 'deferred:measurement', 'deferred:external-party', 'release-hold'];
+  const all = ['in-progress', 'deps-checked', 'agent-filed', 'epic', 'needs-decision', 'decision-recorded', 'needs-plan', 'migration-granted', 'needs-migration-grant', 'ci-granted', 'low-priority', 'delivery:code', 'delivery:content', 'delivery:ops', 'delivery:docs-only', 'delivery:elsewhere', 'delivery:design', 'deferred:date', 'deferred:measurement', 'deferred:external-party', 'release-hold'];
   assert.deepStrictEqual(missingConventionLabels([]), all);
   assert.deepStrictEqual(missingConventionLabels(null), all);
   assert.deepStrictEqual(missingConventionLabels(undefined), all);
@@ -167,7 +175,7 @@ test('label OBJECTS count as present, not as always-missing', () => {
     { name: 'epic' }, { name: 'needs-decision' }, { name: 'decision-recorded' }, { name: 'needs-plan' }, { name: 'migration-granted' },
     { name: 'needs-migration-grant' }, { name: 'ci-granted' }, { name: 'low-priority' },
     { name: 'delivery:code' }, { name: 'delivery:content' }, { name: 'delivery:ops' }, { name: 'delivery:docs-only' },
-    { name: 'delivery:elsewhere' },
+    { name: 'delivery:elsewhere' }, { name: 'delivery:design' },
     { name: 'deferred:date' }, { name: 'deferred:measurement' }, { name: 'deferred:external-party' }, { name: 'release-hold' },
   ];
   assert.deepStrictEqual(missingConventionLabels(present), []);
@@ -250,7 +258,7 @@ test('graph-empty is not one of the provisioned convention labels', () => {
 
 test('a repo missing graph-empty is never reported by missingConventionLabels — it is not in the set', () => {
   assert.deepStrictEqual(
-    missingConventionLabels(['in-progress', 'deps-checked', 'agent-filed', 'epic', 'needs-decision', 'decision-recorded', 'needs-plan', 'migration-granted', 'needs-migration-grant', 'ci-granted', 'low-priority', 'delivery:code', 'delivery:content', 'delivery:ops', 'delivery:docs-only', 'delivery:elsewhere', 'deferred:date', 'deferred:measurement', 'deferred:external-party', 'release-hold']),
+    missingConventionLabels(['in-progress', 'deps-checked', 'agent-filed', 'epic', 'needs-decision', 'decision-recorded', 'needs-plan', 'migration-granted', 'needs-migration-grant', 'ci-granted', 'low-priority', 'delivery:code', 'delivery:content', 'delivery:ops', 'delivery:docs-only', 'delivery:elsewhere', 'delivery:design', 'deferred:date', 'deferred:measurement', 'deferred:external-party', 'release-hold']),
     [],
   );
 });
@@ -372,10 +380,10 @@ test('decisionRecordedMissingLabelHint returns null when the label set could not
   assert.match(decisionRecordedMissingLabelHint([]), /decision-recorded/);
 });
 
-// --- delivery type classifier (#112, widened #274) --------------------------------------------
+// --- delivery type classifier (#112, widened #274, lanes #358/#359) --------------------------
 // Three-valued by design (CONVENTIONS.md §5, *Delivery type*): "not asked" must never collapse
 // into "non-code", or the start gate freezes the day this label set lands on an unlabelled
-// tracker. These tests pin all five label values and the null/absent case.
+// tracker. These tests pin all six label values and the null/absent case.
 
 test('deliveryType is null — NOT ASKED — when no delivery:* label is present', () => {
   assert.equal(deliveryType([]), null);
@@ -384,25 +392,27 @@ test('deliveryType is null — NOT ASKED — when no delivery:* label is present
   assert.equal(deliveryType(['in-progress', 'bug']), null);
 });
 
-test('deliveryType reads each of the five explicit values', () => {
+test('deliveryType reads each of the six explicit values', () => {
   assert.equal(deliveryType(['delivery:code']), 'code');
   assert.equal(deliveryType(['delivery:content']), 'content');
   assert.equal(deliveryType(['delivery:ops']), 'ops');
   assert.equal(deliveryType(['delivery:docs-only']), 'docs-only');
   assert.equal(deliveryType(['delivery:elsewhere']), 'elsewhere');
+  assert.equal(deliveryType(['delivery:design']), 'design');
 });
 
 test('deliveryType accepts label OBJECTS, the shape gh issue view actually returns', () => {
   assert.equal(deliveryType([{ name: 'delivery:content' }]), 'content');
 });
 
-test('isRouteNotStart is false for NOT ASKED and for delivery:code — only the four non-code types route', () => {
+test('isRouteNotStart is false for NOT ASKED and for the code lane (code, docs-only) — only the four non-code types route', () => {
   assert.equal(isRouteNotStart([]), false);
   assert.equal(isRouteNotStart(['delivery:code']), false);
+  assert.equal(isRouteNotStart(['delivery:docs-only']), false);
   assert.equal(isRouteNotStart(['delivery:content']), true);
   assert.equal(isRouteNotStart(['delivery:ops']), true);
-  assert.equal(isRouteNotStart(['delivery:docs-only']), true);
   assert.equal(isRouteNotStart(['delivery:elsewhere']), true);
+  assert.equal(isRouteNotStart(['delivery:design']), true);
 });
 
 // #274 — an issue explicitly labelled delivery:elsewhere is byte-identical, before this fix, to
@@ -414,8 +424,49 @@ test('#274 regression: delivery:elsewhere is NOT confused with "not asked" — i
   assert.equal(isRouteNotStart(['deps-checked', 'delivery:elsewhere']), true);
 });
 
+// #358 — delivery:docs-only was a route-not-start value, but a docs-only deliverable is an
+// in-repo commit. Triage withheld deps-checked from such issues while a consumer's scheduler
+// read them as code, so they sat unstarted with no park and no decision. The trap in fixing it:
+// dropping docs-only from NON_CODE_DELIVERY_TYPES without widening the classifier's value list
+// makes deliveryType return null for it — "not asked", the #274 failure again.
+test('#358 regression: delivery:docs-only is a code-lane value — classified, never "not asked", never routes', () => {
+  assert.equal(deliveryType(['delivery:docs-only']), 'docs-only');
+  assert.notEqual(deliveryType(['delivery:docs-only']), null);
+  assert.equal(isRouteNotStart(['delivery:docs-only']), false);
+  assert.equal(isRouteNotStart(['deps-checked', 'delivery:docs-only']), false);
+  assert.ok(CODE_LANE_DELIVERY_TYPES.includes('docs-only'));
+  const docsOnly = CONVENTION_LABELS.find((l) => l.name === 'delivery:docs-only');
+  assert.doesNotMatch(docsOnly.description, /not a commit|route/,
+    'the provisioned description must not tell a reader to route a docs-only commit');
+});
+
+// #359 — two consumers hand-created delivery:design before the handbook provisioned it; before
+// this fix deliveryType returned null for it, so it read as "not asked" and startable by a code
+// session — the #274 failure for a sixth value.
+test('#359 regression: delivery:design is NOT confused with "not asked" — never a code start', () => {
+  assert.notEqual(deliveryType(['delivery:design']), null);
+  assert.equal(deliveryType(['delivery:design']), 'design');
+  assert.equal(isRouteNotStart(['delivery:design']), true);
+  assert.equal(isRouteNotStart(['deps-checked', 'delivery:design']), true);
+  const design = CONVENTION_LABELS.find((l) => l.name === 'delivery:design');
+  assert.ok(design, 'delivery:design must be provisioned, so colab labels --ensure creates it');
+});
+
+test('every provisioned delivery:* value is classified, and falls in exactly one lane', () => {
+  const provisioned = conventionLabelNames().filter((n) => n.startsWith(DELIVERY_LABEL_PREFIX));
+  assert.deepStrictEqual(DELIVERY_TYPES, provisioned.map((n) => n.slice(DELIVERY_LABEL_PREFIX.length)));
+  for (const name of provisioned) {
+    assert.notEqual(deliveryType([name]), null, `${name} reads as "not asked"`);
+  }
+  const lanes = [...CODE_LANE_DELIVERY_TYPES, ...NON_CODE_DELIVERY_TYPES];
+  assert.equal(new Set(lanes).size, lanes.length, 'a delivery value sits in both lanes');
+  assert.deepStrictEqual([...lanes].sort(), [...DELIVERY_TYPES].sort(),
+    'a provisioned delivery value is in neither lane — place it in CODE_LANE_ or NON_CODE_DELIVERY_TYPES');
+});
+
 test('NON_CODE_DELIVERY_TYPES excludes code and DELIVERY_LABEL_PREFIX matches the label set', () => {
-  assert.deepStrictEqual(NON_CODE_DELIVERY_TYPES, ['content', 'ops', 'docs-only', 'elsewhere']);
+  assert.deepStrictEqual(NON_CODE_DELIVERY_TYPES, ['content', 'ops', 'elsewhere', 'design']);
+  assert.deepStrictEqual(CODE_LANE_DELIVERY_TYPES, ['code', 'docs-only']);
   assert.equal(DELIVERY_LABEL_PREFIX, 'delivery:');
   for (const type of NON_CODE_DELIVERY_TYPES) {
     assert.ok(conventionLabelNames().includes(`${DELIVERY_LABEL_PREFIX}${type}`));

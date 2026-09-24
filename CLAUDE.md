@@ -113,7 +113,8 @@ that one ever disagree, `CONVENTIONS.md` wins — and report the discrepancy.
    outcome (a decision, an investigation, an artifact outside the repo) — run
    `colab ship`, which switches to evidence-close instead of refusing.
 5. Release your claim — both halves:
-   `gh issue edit <N> --remove-assignee @me --remove-label in-progress`.
+   `gh issue edit <N> --remove-assignee <claimer> --remove-label in-progress`
+   (`<claimer>` = `@me` only if you claimed it — [§5](CONVENTIONS.md#5-claiming-work--how-to-say-im-on-this)).
    Do this even if you didn't finish — a stale claim silently blocks others.
 
 ## Releases — the ritual follows `exposure`, and none of it is yours to perform
