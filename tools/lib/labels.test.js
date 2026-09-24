@@ -16,7 +16,7 @@ const test = require('node:test');
 const assert = require('node:assert');
 
 const {
-  CONVENTION_LABELS, conventionLabelNames, missingConventionLabels,
+  CONVENTION_LABELS, conventionLabelNames, missingConventionLabels, staleConventionDescriptions,
   READINESS_LABEL, readinessLabelArgs, readinessMissingLabelHint,
   MECHANICAL_READINESS_LABEL, mechanicalReadinessLabelArgs,
   MIGRATION_GRANT_LABEL, migrationGrantLabelArgs, migrationGrantMissingLabelHint,
@@ -579,4 +579,40 @@ test('parseReviewByDate rejects anything that is not a real calendar date, witho
   assert.equal(parseReviewByDate('deferred:date'), null);        // not a review-by label at all
   assert.equal(parseReviewByDate(null), null);
   assert.equal(parseReviewByDate(undefined), null);
+});
+
+// --- #364: staleConventionDescriptions — a reworded convention label must not drift silently ----
+
+test('#364: a tracker matching every handbook description has nothing stale', () => {
+  assert.deepStrictEqual(staleConventionDescriptions(CONVENTION_LABELS.map(({ name, description }) => ({ name, description }))), []);
+});
+
+test('#364: a differing description is returned with both texts, in canonical order regardless of input order', () => {
+  const want = (n) => CONVENTION_LABELS.find((l) => l.name === n).description;
+  assert.deepStrictEqual(
+    staleConventionDescriptions([
+      { name: 'migration-granted', description: 'old grant text' },
+      { name: 'epic', description: want('epic') },
+      { name: 'needs-decision', description: 'old decision text' },
+    ]),
+    [
+      { name: 'needs-decision', have: 'old decision text', want: want('needs-decision') },
+      { name: 'migration-granted', have: 'old grant text', want: want('migration-granted') },
+    ],
+  );
+});
+
+test('#364: an EMPTY description is read and differs — every convention label has text', () => {
+  assert.deepStrictEqual(staleConventionDescriptions([{ name: 'epic', description: '' }]).map((d) => d.name), ['epic']);
+});
+
+test('#364: a name with no readable description is skipped, never reported — "could not read" is not "differs"', () => {
+  assert.deepStrictEqual(staleConventionDescriptions(['needs-decision', 'epic']), []);
+  assert.deepStrictEqual(staleConventionDescriptions([{ name: 'epic' }, { name: 'needs-plan', description: null }]), []);
+  assert.deepStrictEqual(staleConventionDescriptions(null), []);
+  assert.deepStrictEqual(staleConventionDescriptions(undefined), []);
+});
+
+test('#364: labels outside the convention set, and absent convention labels, are never reported', () => {
+  assert.deepStrictEqual(staleConventionDescriptions([{ name: 'bug', description: 'anything' }]), []);
 });

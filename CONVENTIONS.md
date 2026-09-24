@@ -3679,9 +3679,12 @@ chosen over the two alternatives:
   loaded. It is also the only one of the three that sees **the reverse direction**: a
   handbook change the consumer's own prompts never absorbed. Measured: a label made
   monotonic upstream while a consumer's triage prompt still said clearing it "is often
-  correct". `colab labels --ensure` creates missing labels and leaves an existing
-  description exactly as it is, so a description can drift in either direction without
-  anything noticing.
+  correct". `colab labels --ensure` creates missing labels and never rewrites an existing
+  description on its own, so a description can drift in either direction. Since #364 the
+  drift is at least visible: `--ensure` and the audit both name every convention label
+  whose tracker description differs from the handbook's, and
+  `colab labels --ensure --refresh-descriptions` rewrites them on request (`--keep <name>`
+  spares a declared divergence).
 
 The filing obligation still sits with the change. `handbook-sync` is where a skipped one
 gets found (`skills/handbook-sync/SKILL.md` §7).
@@ -3778,7 +3781,11 @@ only. Resolution order: `--config` flag > `~/.colab/repos.txt` > bundled example
    Idempotent by construction (#206) — reads the set from `tools/lib/labels.js`'s
    `CONVENTION_LABELS`, the one place it is actually defined, creates only what this
    repo is missing, and reports created vs already-there; safe to re-run because
-   partial adoption is normal. (No `colab` on this machine? The twenty-one `gh label
+   partial adoption is normal. It also names any existing convention label whose
+   description differs from the handbook's, and rewrites it only when asked
+   (`--refresh-descriptions`, #364) — a description may be a declared local divergence
+   ([§8, *Upstream*](#upstream--a-consumer-that-changes-what-a-convention-means-files-it-here-362)).
+   (No `colab` on this machine? The twenty-one `gh label
    create … || true` lines this replaced are recoverable from that file's history.)
 
    **This count is a hand-typed number restated in at least four places** (here, the

@@ -66,9 +66,18 @@ function fixture() {
     'if [ "$1" = "auth" ] && [ "$2" = "status" ]; then echo "Logged in to github.com (fixture)" >&2; exit 0; fi',
     'if [ "$1" = "label" ] && [ "$2" = "list" ]; then',
     '  if [ "$FAKE_GH_LABEL_LIST_FAIL" = "1" ]; then echo "fixture gh: label list refused" >&2; exit 1; fi',
+    // #364: --ensure reads names AND descriptions (`--json name,description`); the colab() helper
+    // below always supplies the JSON form, derived from FAKE_GH_LABELS unless a test sets it.
+    '  case "$*" in *description*) printf "%s\\n" "$FAKE_GH_LABELS_JSON"; exit 0;; esac',
     '  OLDIFS=$IFS; IFS=","',
     '  for n in $FAKE_GH_LABELS; do echo "$n"; done',
     '  IFS=$OLDIFS',
+    '  exit 0',
+    'fi',
+    'if [ "$1" = "label" ] && [ "$2" = "edit" ]; then',
+    '  name="$3"',
+    '  if [ "$name" = "$FAKE_GH_LABEL_EDIT_FAIL" ]; then echo "fixture gh: label edit refused for $name" >&2; exit 1; fi',
+    '  shift 3; printf "%s\\t%s\\n" "$name" "$*" >> "$FAKE_GH_EDIT_LOG"',
     '  exit 0',
     'fi',
     'if [ "$1" = "label" ] && [ "$2" = "create" ]; then',
@@ -83,12 +92,27 @@ function fixture() {
   return { root, origin, work, home, bin };
 }
 
+// FAKE_GH_LABELS (names) is turned into the JSON `label list --json name,description` answers
+// with, each carrying the HANDBOOK's description — so a test that only names labels still means
+// "provisioned exactly as the handbook says". A test about drift passes FAKE_GH_LABELS_JSON itself.
+// Every `label edit` is appended to <root>/edits.log, read back with edits(fx).
 function colab(fx, args, extraEnv = {}) {
+  const want = new Map(CONVENTION_LABELS.map((l) => [l.name, l.description]));
+  const names = String(extraEnv.FAKE_GH_LABELS || '').split(',').filter(Boolean);
+  const json = JSON.stringify(names.map((name) => ({ name, description: want.get(name) || '' })));
   const r = spawnSync('node', [COLAB, ...args], {
     encoding: 'utf8',
-    env: { ...process.env, PATH: `${fx.bin}:${process.env.PATH}`, COLAB_HOME: fx.home, COLAB_SESSION: '', COLAB_SESSION_NAME: '', ...extraEnv },
+    env: {
+      ...process.env, PATH: `${fx.bin}:${process.env.PATH}`, COLAB_HOME: fx.home, COLAB_SESSION: '', COLAB_SESSION_NAME: '',
+      FAKE_GH_LABELS_JSON: json, FAKE_GH_EDIT_LOG: path.join(fx.root, 'edits.log'), ...extraEnv,
+    },
   });
   return { code: r.status, out: r.stdout || '', err: r.stderr || '' };
+}
+
+function edits(fx) {
+  const f = path.join(fx.root, 'edits.log');
+  return fs.existsSync(f) ? fs.readFileSync(f, 'utf8').split('\n').filter(Boolean) : [];
 }
 
 // --- bare / --help never touch a repo at all -------------------------------------------------
@@ -191,4 +215,94 @@ test('CONVENTION_LABELS is what --ensure iterates — the source this command mu
   for (const l of CONVENTION_LABELS) {
     assert.ok(l.name && l.color && l.description, `label ${JSON.stringify(l)} is missing a field --ensure needs to create it`);
   }
+});
+
+// --- #364: a reworded convention description is reported, and refreshed only on request -------
+
+/** Every convention label present, with the handbook's text except for the `drift` overrides. */
+function trackerJson(drift) {
+  return JSON.stringify(CONVENTION_LABELS.map((l) => ({
+    name: l.name, description: Object.prototype.hasOwnProperty.call(drift, l.name) ? drift[l.name] : l.description,
+  })).concat([{ name: 'bug', description: 'a label outside the set, never compared' }]));
+}
+
+const OLD = {
+  'needs-decision': 'Awaiting a maintainer ruling — blocks the issues wired blocked-by it',
+  'migration-granted': "Human-granted, per-issue exemption to ship's no-new-migrations precondition (#98)",
+};
+
+test('#364: without --refresh-descriptions a drifted description is REPORTED by name with both texts, never rewritten, exit 0', () => {
+  const fx = fixture();
+  const r = colab(fx, ['labels', '--ensure', '--repo', fx.work], { FAKE_GH_LABELS_JSON: trackerJson(OLD) });
+  assert.strictEqual(r.code, 0, r.err);
+  assert.match(r.out, /Description differs from the handbook's:/);
+  for (const [name, old] of Object.entries(OLD)) {
+    assert.match(r.out, new RegExp(`^  ${escapeRe(name)}$`, 'm'));
+    assert.ok(r.out.includes(`tracker:  ${JSON.stringify(old)}`), `old text of ${name} shown`);
+    const want = CONVENTION_LABELS.find((l) => l.name === name).description;
+    assert.ok(r.out.includes(`handbook: ${JSON.stringify(want)}`), `handbook text of ${name} shown`);
+  }
+  assert.doesNotMatch(r.out, /^  epic$/m, 'a label already matching is not listed');
+  assert.doesNotMatch(r.out, /bug/, 'a label outside the convention set is never compared');
+  assert.match(r.out, /--refresh-descriptions/);
+  assert.deepStrictEqual(edits(fx), [], 'report-only: no gh label edit ran');
+});
+
+test('#364: a tracker whose descriptions all match reports no difference', () => {
+  const fx = fixture();
+  const r = colab(fx, ['labels', '--ensure', '--repo', fx.work], { FAKE_GH_LABELS_JSON: trackerJson({}) });
+  assert.strictEqual(r.code, 0, r.err);
+  assert.doesNotMatch(r.out, /Description differs/);
+  assert.deepStrictEqual(edits(fx), []);
+});
+
+test('#364: --refresh-descriptions rewrites exactly the drifted labels to the handbook text — description only, never colour', () => {
+  const fx = fixture();
+  const r = colab(fx, ['labels', '--ensure', '--refresh-descriptions', '--repo', fx.work], { FAKE_GH_LABELS_JSON: trackerJson(OLD) });
+  assert.strictEqual(r.code, 0, r.err);
+  assert.match(r.out, /Description refreshed: needs-decision, migration-granted/);
+  assert.doesNotMatch(r.out, /Description differs/);
+  const want = (n) => CONVENTION_LABELS.find((l) => l.name === n).description;
+  assert.deepStrictEqual(edits(fx), [
+    `needs-decision\t--description ${want('needs-decision')}`,
+    `migration-granted\t--description ${want('migration-granted')}`,
+  ]);
+});
+
+test('#364: --keep leaves a declared divergence alone and still reports it; the rest are refreshed', () => {
+  const fx = fixture();
+  const r = colab(fx, ['labels', '--ensure', '--refresh-descriptions', '--keep', 'needs-decision', '--repo', fx.work],
+    { FAKE_GH_LABELS_JSON: trackerJson(OLD) });
+  assert.strictEqual(r.code, 0, r.err);
+  assert.match(r.out, /Description refreshed: migration-granted/);
+  assert.match(r.out, /Description differs from the handbook's \(kept by --keep\):\n  needs-decision\n/);
+  assert.deepStrictEqual(edits(fx).map((l) => l.split('\t')[0]), ['migration-granted']);
+});
+
+test('#364: a failed `gh label edit` is reported by name and fails the run; the other refresh still lands', () => {
+  const fx = fixture();
+  const r = colab(fx, ['labels', '--ensure', '--refresh-descriptions', '--repo', fx.work],
+    { FAKE_GH_LABELS_JSON: trackerJson(OLD), FAKE_GH_LABEL_EDIT_FAIL: 'needs-decision' });
+  assert.notStrictEqual(r.code, 0);
+  assert.match(r.out, /needs-decision — fixture gh: label edit refused for needs-decision/);
+  assert.match(r.out, /Description refreshed: migration-granted/);
+});
+
+test('#364: a created label is never also "refreshed" — creation already writes the handbook text', () => {
+  const fx = fixture();
+  const r = colab(fx, ['labels', '--ensure', '--refresh-descriptions', '--repo', fx.work], { FAKE_GH_LABELS: '' });
+  assert.strictEqual(r.code, 0, r.err);
+  assert.doesNotMatch(r.out, /Description refreshed/);
+  assert.deepStrictEqual(edits(fx), []);
+});
+
+test('#364: --keep without --refresh-descriptions, or naming a non-convention label, is refused before any gh call', () => {
+  const fx = fixture();
+  const a = colab(fx, ['labels', '--ensure', '--keep', 'needs-decision', '--repo', fx.work], { FAKE_GH_LABELS_JSON: trackerJson(OLD) });
+  assert.notStrictEqual(a.code, 0);
+  assert.match(a.err, /--keep only means something with --refresh-descriptions/);
+  const b = colab(fx, ['labels', '--ensure', '--refresh-descriptions', '--keep', 'bug', '--repo', fx.work], { FAKE_GH_LABELS_JSON: trackerJson(OLD) });
+  assert.notStrictEqual(b.code, 0);
+  assert.match(b.err, /outside the convention set: bug/);
+  assert.deepStrictEqual(edits(fx), []);
 });

@@ -64,7 +64,7 @@ const require = createRequire(import.meta.url);
 const stamp = require("../tools/lib/stamp.js");
 // The convention-label set is shared with adoption/sync (they provision what this reports),
 // so the three surfaces cannot drift about what the full set is. See tools/lib/labels.js.
-const { missingConventionLabels } = require("../tools/lib/labels.js");
+const { missingConventionLabels, staleConventionDescriptions } = require("../tools/lib/labels.js");
 // #144's authority-flip precedence ladder — shared with `tools/colab` for the same reason
 // every other cross-tool reading in this file is: two implementations of "which key governs"
 // is exactly the two-places-drift disease this handbook exists to kill.
@@ -504,10 +504,16 @@ function listRemoteTags(slug) {
 // (every git repo has them), labels are a GitHub-only concept and a remote-less or
 // offline audit legitimately cannot see them. A warn per offline repo would be noise,
 // and we cannot assert a label is missing when we could not read the set at all.
+//   Each entry is { name, description } (#364) — one JSON object per line from `--jq`, so a
+// paginated read never has to splice arrays. A line that does not parse makes the whole read
+// null: a half-read set would report the unread half as "missing".
 function listRemoteLabels(slug) {
   try {
-    const out = runGh(["api", `repos/${slug}/labels`, "--paginate", "--jq", ".[].name"]);
-    return out.split("\n").map((s) => s.trim()).filter(Boolean);
+    const out = runGh(["api", `repos/${slug}/labels`, "--paginate", "--jq", ".[] | {name, description}"]);
+    return out.split("\n").map((s) => s.trim()).filter(Boolean).map((line) => {
+      const l = JSON.parse(line);
+      return { name: String(l.name), description: typeof l.description === "string" ? l.description : "" };
+    });
   } catch {
     return null;
   }
@@ -1382,6 +1388,22 @@ function auditRepo(target, ctx) {
           `missing convention label(s): ${missing.join(", ")} — a repo adopted before a ` +
           `label entered the set never back-filled it, so the check it powers can never ` +
           `fire. Run \`colab labels --ensure\` to back-fill the whole set`,
+        );
+      }
+      // #364: the reverse gap. `--ensure` never overwrites an existing label, so a label
+      // created before the handbook reworded it keeps the old description forever and the
+      // tracker states a meaning the handbook has since changed. Same warn-not-fail reasoning
+      // as above. It cannot tell older wording from a declared local divergence (CONVENTIONS.md
+      // §8, Upstream) — that is a reading of both texts, which the fix command's own report
+      // prints; this line only makes the difference visible.
+      const stale = staleConventionDescriptions(labels);
+      if (stale.length) {
+        warn(
+          `convention label description(s) differ from the handbook's: ` +
+          `${stale.map((d) => d.name).join(", ")} — \`colab labels --ensure\` never rewrites ` +
+          `an existing label, so a reworded meaning never reached this tracker. Run ` +
+          `\`colab labels --ensure\` to see both texts, then \`--refresh-descriptions\` ` +
+          `(\`--keep <name>\` for a declared local divergence)`,
         );
       }
     }

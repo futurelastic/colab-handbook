@@ -6063,7 +6063,7 @@ const DELIVERY_LABEL_COUNT = labels.conventionLabelNames()
 const DEFERRED_LABEL_COUNT = labels.conventionLabelNames()
   .filter((n) => n.startsWith(labels.DEFERRED_LABEL_PREFIX)).length;
 
-const HELP_LABELS = `colab labels --ensure [--repo P]
+const HELP_LABELS = `colab labels --ensure [--refresh-descriptions [--keep a,b]] [--repo P]
 
 Create every convention label this repo is missing — CONVENTIONS.md §9 step 3, the ${labels.conventionLabelNames().length}-name set
 (${NON_DELIVERY_LABEL_NAMES.map((n) => `\`${n}\``).join(', ')}, the ${DELIVERY_LABEL_COUNT} \`delivery:*\` values, and the ${DEFERRED_LABEL_COUNT} \`deferred:*\` values),
@@ -6071,42 +6071,66 @@ read from ONE source (tools/lib/labels.js's CONVENTION_LABELS) — the same list
 every other label-writing command already read, instead of the three places §9 and this set
 used to be typed out by hand (#206).
 
-  --ensure       required — there is no bare "create", so a typo can never silently do nothing
-  --repo <path>  repo root (default: git root of cwd)
+  --ensure                 required — there is no bare "create", so a typo can never silently do nothing
+  --refresh-descriptions   also rewrite the description of every EXISTING convention label whose
+                           tracker text differs from CONVENTION_LABELS' (#364). Opt-in: a
+                           description may be a declared local divergence (CONVENTIONS.md §8,
+                           Upstream) — pass that label to --keep
+  --keep <a,b,...>         with --refresh-descriptions: leave these labels' descriptions alone and
+                           keep reporting them as differing
+  --repo <path>            repo root (default: git root of cwd)
 
-Idempotent: a label already present is left exactly as it is (no color/description overwrite)
-and reported under "already there", never re-created — partial adoption is the normal case
-(CONVENTIONS.md §9's own words), so this is safe to run on a repo that already has some of the
-set, or all of it.
+Idempotent: a label already present is never re-created and reported under "already there" —
+partial adoption is the normal case (CONVENTIONS.md §9's own words), so this is safe to run on a
+repo that already has some of the set, or all of it. Colour is never overwritten.
 
-Exit code is 0 when every label ends up present (created this run, or already there); non-zero
-if any \`gh label create\` call itself failed (auth, rate limit, a name \`gh\` rejects) — each
-failure is reported by name, not just a bare non-zero.
+Descriptions (#364): without --refresh-descriptions an existing label's description is left
+exactly as it is, but every convention label whose tracker text differs from the handbook's is
+REPORTED by name under "Description differs" — a reworded convention label no longer drifts
+silently. Read both texts before refreshing: the same meaning in older wording is refreshed; a
+different meaning is a divergence, drift unless declared (skills/handbook-sync/SKILL.md §7).
+
+Exit code is 0 when every label ends up present (created this run, or already there) and every
+requested refresh landed — a description difference only REPORTED is not a failure. Non-zero if
+any \`gh label create\` / \`gh label edit\` call itself failed (auth, rate limit, a name \`gh\`
+rejects) — each failure is reported by name, not just a bare non-zero.
 `;
 
 function cmdLabels(argv) {
   const opts = parseArgs(argv, {
-    values: { '--repo': 'repo' },
-    flags: { '--ensure': 'ensure', '-h': 'help', '--help': 'help' },
+    values: { '--repo': 'repo', '--keep': 'keep' },
+    flags: { '--ensure': 'ensure', '--refresh-descriptions': 'refresh', '-h': 'help', '--help': 'help' },
   });
   if (opts.help || !opts.ensure) return print(HELP_LABELS);
+  if (opts.keep !== undefined && !opts.refresh) {
+    throw new UserError('--keep only means something with --refresh-descriptions — without it no description is rewritten, so there is nothing to keep');
+  }
+  const keep = new Set(String(opts.keep || '').split(',').map((s) => s.trim()).filter(Boolean));
+  const unknownKeep = [...keep].filter((n) => !labels.conventionLabelNames().includes(n));
+  if (unknownKeep.length) {
+    throw new UserError(`--keep names a label outside the convention set: ${unknownKeep.join(', ')} — --refresh-descriptions never touches those anyway, so this is most likely a typo`);
+  }
 
   const repoAbs = resolveRepo(opts);
   if (!isGhUsable(repoAbs)) {
     throw new UserError(`gh not usable here (${ghUnusableWhy(repoAbs)}) — the label set lives on the tracker, and there is deliberately no local-only fallback`);
   }
 
-  const present = git.ghListLabels(repoAbs);
+  // Names AND descriptions in one read (#364) — the description is what the drift report compares.
+  const present = git.ghListLabelsDetailed(repoAbs);
   if (present === null) {
     throw new UserError('could not read this repo\'s current label set from the tracker — refusing to create blind (an existing label misread as absent would otherwise look freshly "created")');
   }
   // The missing set comes from the SAME function the audit and the readiness/grant hints already
   // read (labels.missingConventionLabels) — this command does not restate "which of the set does
-  // this repo lack", it asks the one place that already answers it.
+  // this repo lack", it asks the one place that already answers it. The same holds for the
+  // description drift below (labels.staleConventionDescriptions, also read by the audit).
   const missing = new Set(labels.missingConventionLabels(present));
   const existing = labels.conventionLabelNames().filter((n) => !missing.has(n));
+  const stale = labels.staleConventionDescriptions(present);
 
   const created = [];
+  const refreshed = [];
   const failed = [];
   for (const l of labels.CONVENTION_LABELS) {
     if (!missing.has(l.name)) continue;
@@ -6114,10 +6138,31 @@ function cmdLabels(argv) {
     if (r.ok) created.push(l.name);
     else failed.push({ name: l.name, error: (r.stderr || '').trim() || 'gh label create failed' });
   }
+  const differs = [];
+  for (const s of stale) {
+    if (!opts.refresh || keep.has(s.name)) { differs.push(s); continue; }
+    const r = git.ghLabelEditDescription(repoAbs, s.name, s.want);
+    if (r.ok) refreshed.push(s.name);
+    else failed.push({ name: s.name, error: (r.stderr || '').trim() || 'gh label edit failed' });
+  }
 
   if (created.length) print(`Created: ${created.join(', ')}`);
   if (existing.length) print(`Already there: ${existing.join(', ')}`);
+  if (refreshed.length) print(`Description refreshed: ${refreshed.join(', ')}`);
   if (!created.length && !failed.length) print('Nothing to create — the full label set is already present.');
+  if (differs.length) {
+    print(`Description differs from the handbook's${opts.refresh ? ' (kept by --keep)' : ''}:`);
+    for (const d of differs) {
+      print(`  ${d.name}`);
+      print(`    tracker:  ${JSON.stringify(d.have)}`);
+      print(`    handbook: ${JSON.stringify(d.want)}`);
+    }
+    if (!opts.refresh) {
+      print('Same meaning in older wording → re-run with --refresh-descriptions. A different meaning is a');
+      print('divergence: drift unless declared in CLAUDE.md "Local divergences:" — keep it with --keep <name>');
+      print('(CONVENTIONS.md §8, Upstream; skills/handbook-sync/SKILL.md §7).');
+    }
+  }
   if (failed.length) {
     print('Failed:');
     for (const f of failed) print(`  ${f.name} — ${f.error}`);
@@ -11119,7 +11164,9 @@ Commands:
                                         ones (never commits, never touches a hand-edited copy)
   register [<path>] [--remove] [--list]   add a repo to BOTH fleet registries (repos.txt + config.json)
   labels --ensure [--repo P]              create every missing convention label (§9 step 3, #206) —
-                                        idempotent, reports created vs already-there
+                                        idempotent, reports created vs already-there, and names every
+                                        label whose description drifted (#364); --refresh-descriptions
+                                        [--keep a,b] rewrites those to the handbook's text
   config [show|add-repo P|rm-repo P|set K V]
 
 State is machine-local at ~/.colab/ (override with COLAB_HOME). Run any command with
