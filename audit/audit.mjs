@@ -1159,6 +1159,22 @@ function auditRepo(target, ctx) {
     const prefixRaw = "branchPrefix" in (cfg || {}) ? cfg.branchPrefix : null;
     if (prefixRaw !== null && prefixRaw !== "machine") fail(`branchPrefix is ${JSON.stringify(prefixRaw)}, expected "machine" (omit for the unprefixed default)`);
 
+    // ---- holds (#360) ---------------------------------------------------------
+    // Shape only: the labels this repo's scheduler treats as start holds, read by code-triage
+    // so its READY list matches what the scheduler would start (CONVENTIONS.md §5, Holds). A
+    // malformed value would be read as "no holds declared" — held work then reports ready — so
+    // every shape defect is a fail. Whether the labels exist on the tracker is not checked.
+    if ("holds" in (cfg || {}) && cfg.holds !== null) {
+      const holdsRaw = cfg.holds;
+      if (!Array.isArray(holdsRaw)) {
+        fail(`holds is ${JSON.stringify(holdsRaw)}, expected a list of label names (e.g. [needs-rescope]) — a bare scalar is not a valid shape`);
+      } else if (holdsRaw.some((h) => typeof h !== "string" || h.trim() === "")) {
+        fail(`holds contains an empty or non-string member (${JSON.stringify(holdsRaw)}) — each member is one label name`);
+      } else if (new Set(holdsRaw).size !== holdsRaw.length) {
+        fail(`holds contains a duplicate member (${JSON.stringify(holdsRaw)}) — list each label once: ${JSON.stringify([...new Set(holdsRaw)])}`);
+      }
+    }
+
     // ---- exposure axis (#132) -------------------------------------------------
     // Enum sanity, plus exactly one pairing advisory — the same restrained shape as
     // room/writes above. `tier` stays authoritative in this unit; nothing here changes

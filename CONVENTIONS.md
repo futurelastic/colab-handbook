@@ -1851,7 +1851,28 @@ session and no tool can read them — measured: an epic tracking ~14 children by
 hand-edited checklist reported `subIssues.totalCount = 0`.
 
 **So dependencies are recorded in GitHub's own relationship model:** parent/child as
-sub-issues, sequence as blocked-by.
+sub-issues, a dependency as blocked-by.
+
+**A `blocked_by` edge records a dependency, never a queue position (#361).** A dependency
+means B needs something A produces: a table, an endpoint, a ruling, a design artifact. A
+queue position means someone wants A before B, with nothing flowing between them. Only a
+dependency is an edge. GitHub has one edge type, so an order-only edge looks exactly like
+a dependency to every reader. Readiness then holds B until A lands, and B inherits any
+wait parked on A even though it needs nothing from A. Nobody catches that inheritance
+when A parks. It is the hostage effect *Epics* (below) names for a shared claim, reached
+through a chain of edges instead. Measured in one adopting repo: a ruling to "start all,
+in queue order" was written as a 10-node `blocked_by` chain. About 13 h later one mid-chain
+node was parked on an outside party. A map comment called one section "unaffected and
+still moving". Yet four issues in that section, two design issues and the two UI issues
+behind them, reached the parked node only through queue edges. They inherit its outside
+wait as soon as the node before it lands. Nobody re-threaded the chain.
+
+**Queue order is a ranking, recorded as one.** Put it in the ruling itself, as an ordered
+list on the issue or epic where the ruling is recorded. `code-triage`'s ordering step
+reads that list and ranks ready groups by it. `low-priority` (*Priority*, below) is the
+label for "later". Rejected: an order-only edge that has to be re-threaded whenever a node
+parks. That re-threading is a manual step with no trigger, and the measured chain above
+is what happens when nobody does it.
 
 ```sh
 # read (repo-relative — no owner/name to get wrong)
@@ -2023,6 +2044,90 @@ scoped to filing time, and mechanically ungrepped anywhere in this repo's own to
 `deferred:<kind>` + `review-by:<date>` is a label pair any consumer can query and act on
 without parsing prose.
 
+##### Holds — every label that stops a start names its owner and its wake (#360)
+
+`deferred:*` is not the only way work gets parked. Adopting repos add hold labels of their
+own, and three kinds recur: a person's "not yet", set before any session touched the
+issue; "needs rescope", on an issue built on a model that has since changed; and "waiting
+on the operator", for an act only a human can perform. Their schedulers refuse to start
+an issue carrying one. Measured across adopting repos (2026-09-24):
+
+- None of the three appeared anywhere in this handbook. So a triage that followed
+  `code-triage` exactly reported those issues ready, and the scheduler refused them.
+- One repo parked 16 issues under a rescope label within one minute, with no named
+  rescoper and no date.
+- One repo held an issue under a "not yet" label for 14 days.
+- Two operator holds reached the operator's queue with no stated ask. The reason had not
+  been written in the one syntax that repo's reader parsed.
+
+**The three stay consumer-local. They are not adopted into the convention label set
+([§9](#9-adopting-this)).** Each one names a fact this section already has a carrier for,
+and a second name for the same fact is the two-carrier problem #279 measured with
+`deps-checked`:
+
+| Consumer hold | What it actually is | The handbook's carrier |
+|---|---|---|
+| "not yet" | a park | `deferred:date` + `review-by:<date>`, or `low-priority` (*Priority*, below) when it only means "later" |
+| "needs rescope" | the issue no longer says what done looks like | fails *Actionable* in `code-triage`'s readiness gate; rewriting the issue is the wake |
+| "waiting on the operator" | a human must act | `needs-decision` for a question (*Decision gate*, below); a hold for an act, such as a credential, a grant or a purchase |
+
+A repo that already uses its own names keeps them, because its scheduler depends on them.
+What this subsection adds is the rule every hold follows, whatever it is called.
+
+**Declare them in `.github/project.yml`, so no reader has to guess:**
+
+```yaml
+holds: [hold:manual, needs-rescope]     # labels this repo's scheduler treats as start holds
+```
+
+- **Every label listed under `holds:` blocks a start.** `code-triage` reports an issue
+  carrying one as blocked, never as ready. If a scheduler honours a hold that is not in
+  the list, it and triage disagree without saying so, which is the failure the list
+  exists to prevent.
+- **The list lives in the descriptor.** The descriptor is already the one
+  machine-readable answer to "what is this repo". It is copy-and-own. Changing it is a
+  trunk commit, which moves `code-triage`'s first fingerprint input, so the next ping sees
+  a newly declared hold. The audit checks the list's shape
+  ([project.schema.md, `holds`](project.schema.md#holds--optional)).
+- **Absent means none declared.** A label missing from the list is not a hold as far as
+  triage is concerned, whatever its name suggests. Nothing infers a hold from a name.
+
+**Every hold names an owner and a wake condition when it is applied.** This covers the
+declared ones and `deferred:*` alike. Write one comment with two lines, the same shape
+the `Group:`/`Because:` record uses (*Grouping*, below):
+
+```
+Hold: needs-rescope — owner: @maintainer — wake: review-by:2026-10-01
+Because: the import model changed in #88; the parser steps must be rewritten against it.
+```
+
+- **`owner:`** names who clears the hold: a login, or a role the repo's own docs define.
+  It is never blank. An owner is not an assignee: an assignee without `in-progress` is a
+  half-claim ([§5](#5-claiming-work--how-to-say-im-on-this)), so the owner lives on this
+  line.
+- **`wake:`** is exactly one of three:
+  - `review-by:<date>`: the `review-by:<date>` label is on the issue too. The label is
+    what a query reads. This line restates it.
+  - `#N`: a `blocked_by` edge to `#N` exists (*Readiness*, above).
+  - `ruling`: the hold waits on the owner's act. The `Because:` line is then the ask
+    itself, written as what the owner has to do or answer. **This is the one definition
+    of the "waiting on the operator" reason line.** A consumer's card reader parses this
+    line and does not invent a second syntax for it. If the ask is a question rather
+    than an act, it belongs under `needs-decision` instead, where the answer gets a
+    record of its own.
+- **The newest `Hold:` line for a label is the live one.** A new hold posts a new line.
+  Clearing a hold is the owner removing the label once the wake fires. The comment stays
+  as history.
+- **A hold that names no owner, or no wake, is a finding and never ready.** `code-triage`
+  prints it as a `STALL`, first among its blocked lines. This is the same rule that makes
+  any blocker with no named clearer a stall, and for the same reason: an unbounded park
+  is a silent `wontfix`. A `deferred:*` label that carries its wake but has no `Hold:`
+  line has no named owner, so it is a stall too.
+
+Nothing in this repo's tooling writes a `Hold:` line. The only mechanical part is the
+audit's shape check on `holds:`. Whoever parks the issue writes the line, and
+`code-triage` reads it (its §2, §5 and §6).
+
 #### Disposition — the marker, the seven kinds, and who may apply one (#315)
 
 The park above is one of seven ways a piece of work can end. This subsection names all
@@ -2142,6 +2247,47 @@ labels.
 **`needs-decision` blocks starting the issue** — a readiness gate exactly like an open
 hard blocker or a live claim — until a human answers and that answer is **recorded**
 (below). No session, manual or scheduled, starts an issue that still carries it.
+
+**On an issue whose deliverable is a design artifact, approving the artifact is not a
+question you can ask at filing (#361).** The gate blocks the start, and the start is
+the session that produces the artifact. Labelling the issue at filing, for an approval
+that needs the finished artifact, blocks the only session that could produce it. So:
+
+- **At filing**, `needs-decision` goes on such an issue only for a question that must be
+  answered *before* design work starts, such as which of two directions to explore, or
+  whether the surface should exist at all.
+- **Approval of the finished artifact** is asked once the artifact exists, by the session
+  that produced it. If a ruling is already recorded on the issue, for instance the one
+  that let it start, the approval goes through `colab decision <N> --reopen` (below),
+  never a hand-added label.
+
+Measured in one adopting repo: 11 design issues each got `needs-decision` within 2 s of
+being filed, and each one's acceptance list included the human approving the final
+screenshots. No artifact existed, so there was nothing to approve, and no design session
+could open. They stayed held for about 4 h. What freed them was a ruling to "start now",
+recorded on all 11. That ruling answers no design question, so every real approval now
+needs a `--reopen`. A sibling filed the same morning shows the working shape: claimed
+without the label, labelled once its screenshots existed about 40 min later, and ruled
+8 min after that.
+
+**An epic never carries `needs-decision`, and never a `decision:options` block (#361).**
+The label is a start gate, and an epic is never a start candidate (*Epics*, below), so on
+an epic the label gates nothing. A decision inbox built on start gates may also leave
+epics out by design. One adopting repo's inbox puts them in a collapsed "informative"
+lane, so a question posted there is one nobody is shown. Measured: four epics in one repo
+carried multi-option blocks that sat unanswered for 78–169 h. Four epics in another repo
+were labelled `needs-decision` with no question on them at all, until a human ruled that
+an epic never carries the label.
+
+**A question about an epic goes on its own decision issue**, the same shape as the third
+path below. Its body carries the question and, if there are options, the
+`decision:options` block. It carries `needs-decision`, and it is attached to the epic
+**as a sub-issue**. If the question holds back a specific child, that child also gets a
+`blocked_by` edge to the decision issue. Why a sub-issue: it keeps the question visible
+from the epic's own `subIssues`, and the decision issue is an ordinary issue, so every
+inbox and triage pass that reads start gates shows it. Once the ruling is recorded
+(`colab decision --record`), the decision issue closes with the record as its evidence.
+`colab decision --reopen` refuses on an `epic`-labelled issue and names this path.
 
 **A session discovering a significant design decision mid-work continues on the
 designer's spec** rather than stopping to request a ruling, and records
@@ -2668,6 +2814,11 @@ on it. An epic still gets closed and referenced exactly as any other issue once 
 children finish — the label only prevents a driver from mistaking the map for the
 territory.
 
+**For the same reason, an epic never carries `needs-decision`, and never a
+`decision:options` block.** A gate on something that never starts gates nothing. A
+question about an epic goes on its own decision issue, attached as a sub-issue (*Decision
+gate*, above, #361).
+
 #### Switched epics — concurrent unfinished features (#336)
 
 *Epics*, above, decides how work is **filed**. This subsection decides how several
@@ -2929,7 +3080,8 @@ A design ruling needs one more part: an **immutable visual record**.
 1. **The ruling** — on the Issue immediately, exactly as Step 1: chosen option, why, what
    was rejected. This is what clears `needs-decision` — recorded as the *Decision gate*
    section's `⚖ Decision recorded` marker (`colab decision --record`), never as prose
-   alone with the label cleared by hand.
+   alone with the label cleared by hand. Approval of a finished artifact is asked once
+   the artifact exists, never at filing (*Decision gate*, #361).
 2. **The artifact** — a repo file under `docs/design/`, named `<slug>-<N>-mockup.html` or
    `<slug>-<N>-spec.md`, landing via a claimed docs branch. **Superseded artifacts are
    marked, never deleted** — trunk carries the design lineage.
