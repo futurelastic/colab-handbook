@@ -1,6 +1,6 @@
 ---
 name: handbook-sync
-description: "Bring ONE repo up to the current colab-handbook, from inside that repo — including a repo that has never adopted it at all. Detects 'nothing adopted here yet' as a first-class state and drives first-time adoption to completion (tier, marker, claim label, topic, CLAUDE pointer, CI, and registration in the fleet). Otherwise classifies every copied artifact (CI workflows, the CLAUDE conventions block, guards), shows what upstream actually changed since your stamp, and grafts it in without destroying your local edits — because copy-and-own means the repo owns its copies. Also checks whether the axis model itself moved on. Trigger phrases: 'sync the handbook', 'update this repo to the latest handbook', 'adopt the handbook', 'this repo has no project.yml', 'onboard this repo to the conventions', 'register this repo', 'we are behind the handbook', 'handbook drift', 'reconcile conventions', 'colab update says we are behind'. Wrap it in code-start/code-wrap — this is a code change like any other."
+description: "Bring ONE repo up to the current colab-handbook, from inside that repo — including a repo that has never adopted it at all. Detects 'nothing adopted here yet' as a first-class state and drives first-time adoption to completion (tier, marker, claim label, topic, CLAUDE pointer, CI, and registration in the fleet). Otherwise classifies every copied artifact (CI workflows, the CLAUDE conventions block, guards), shows what upstream actually changed since your stamp, and grafts it in without destroying your local edits — because copy-and-own means the repo owns its copies. Also checks whether the axis model itself moved on, and reports a convention label meaning or value this repo changed without a linked handbook issue as drift, not customisation. Trigger phrases: 'sync the handbook', 'update this repo to the latest handbook', 'adopt the handbook', 'this repo has no project.yml', 'onboard this repo to the conventions', 'register this repo', 'we are behind the handbook', 'handbook drift', 'reconcile conventions', 'colab update says we are behind'. Wrap it in code-start/code-wrap — this is a code change like any other."
 ---
 
 # handbook-sync — bring this repo up to the current handbook
@@ -406,6 +406,68 @@ or `channels`' own) by deleting a key someone already declared. Declaring must
 never read as riskier than omitting — a rule that would flip that is a bug, not a
 tidy-up.
 
+### Convention drift — a meaning this repo changed, or never absorbed (#362)
+
+A convention label's *meaning* is not a copy this repo owns. The graft rules in §4–§6
+protect what the repo added to its copies. They do not cover a repo that changed which
+lane a `delivery:*` value starts in, or added a value the handbook does not have. That is
+**drift, not a local customisation**, unless the repo declares it
+([`CONVENTIONS.md` §8, *Upstream*](../../CONVENTIONS.md#upstream--a-consumer-that-changes-what-a-convention-means-files-it-here-362)).
+A declaration is a line in this repo's `CLAUDE.md` `Local divergences:` list that names
+the label or value, what it means here, and a handbook issue URL.
+
+**The mechanical half: compare the tracker's labels with the handbook's set.**
+
+```sh
+gh label list --limit 500 --json name,description | node -e '
+  const L = require(process.argv[1] + "/tools/lib/labels.js");
+  const want = new Map(L.CONVENTION_LABELS.map((l) => [l.name, l.description]));
+  const fams = [L.DELIVERY_LABEL_PREFIX, L.DEFERRED_LABEL_PREFIX];
+  for (const { name, description } of JSON.parse(require("fs").readFileSync(0, "utf8"))) {
+    if (!want.has(name)) { if (fams.some((p) => name.startsWith(p))) console.log(`value   ${name}`); }
+    else if (want.get(name) !== description) console.log(`meaning ${name}: "${description}"`);
+  }' "$COLAB_HANDBOOK"
+```
+
+- **`value <name>`**: this tracker has a `delivery:*` / `deferred:*` value the handbook
+  does not define. It is drift unless the `Local divergences:` list declares it.
+- **`meaning <name>`**: the label's description differs from the handbook's. This line is
+  a lead. Read both texts before you conclude anything, because it has two readings:
+  - **Same meaning, older wording.** `colab labels --ensure` never overwrites an existing
+    description, so a label created before the handbook reworded it keeps the old text
+    forever. Refresh it with `gh label edit <name> --description "<handbook's text>"`.
+    This is a GitHub-side change, like the label back-fill above.
+  - **A different meaning.** This is the divergence. It is drift unless declared.
+
+Measured on the consumer behind the rule: the command printed `value delivery:design` and
+a `meaning delivery:docs-only` line saying "on the ordinary code lane". Those are the two
+divergences the handbook heard about 7 and 30 days late.
+
+**The judgement half: this repo's own texts.** Labels are not the only place a meaning
+lives. Search this repo's prompts, copied skills, scheduler config and docs for each
+convention label name, and compare the rule each one states with `CONVENTIONS.md`'s.
+Both directions count:
+
+- **This repo says something the handbook does not.** Treat it the same as a `value` or
+  `meaning` hit.
+- **The handbook moved on and this repo still states the old rule.** Measured: a label
+  made monotonic upstream, while a consumer's triage prompt still said clearing it "is
+  often correct". Fix the repo's text in this sync's commit (§8). The handbook already
+  decided, so there is nothing to file upstream.
+
+**For each undeclared divergence**, pick one:
+
+1. **This repo is wrong.** Revert it to the handbook's meaning in this sync's commit.
+2. **The meaning should stay.** File the handbook issue now, in this session. Do not
+   defer it to the next sync. Describe the consumer by shape, since the handbook is public.
+   Use no `agent-filed` label, because it transcribes a decision already made here. Put
+   `Filed-by:` on the person who approved the change. Then add the `Local divergences:`
+   line to `CLAUDE.md` in this sync's commit. `CONVENTIONS.md` §8 *Upstream* is the rule
+   behind each of these choices. Link to it rather than restating it on the Issue.
+
+Never report an undeclared divergence as "local customisation, left as is". That verdict
+is how the two texts drifted apart for 30 days.
+
 Fix what is genuinely wrong; **report what you are unsure about** rather than
 guessing. A `project.yml` that contradicts reality is worse than one that admits it.
 
@@ -432,6 +494,9 @@ git show --stat                                                 # verify the fil
 - Every `unstamped` item is either stamped after checking lineage, or reported.
 - `audit.mjs --local .` is clean, or each remaining finding is explained.
 - `git show --stat` on your commits lists only files you meant to change.
+- The §7 convention-drift check ran. Every `value`/`meaning` hit and every divergent text
+  is reverted, refreshed, or declared in `Local divergences:` with a handbook issue URL.
+  None is left reported as a local customisation.
 
 **If this was an adoption (§2), additionally:**
 
