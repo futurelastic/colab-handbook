@@ -1701,7 +1701,7 @@ anywhere, naming the branch and how to continue it. Each machine sweeps its own 
 ```sh
 gh issue list --label in-progress                               # check, before taking work
 gh issue edit <N> --add-assignee @me --add-label in-progress    # claim, at session start
-gh issue edit <N> --remove-assignee @me --remove-label in-progress   # release, at session end
+gh issue edit <N> --remove-assignee <claimer> --remove-label in-progress   # release, at session end
 ```
 
 **A claim is both halves — the assignee *and* `in-progress`.** Either half alone is a
@@ -1711,6 +1711,17 @@ claim (adds the label) or drops the assignee (releases it) — and `colab claim`
 until then, `--force` taking it over loudly like any other claim. Our own half-claim is
 the one exception: re-claiming completes it. Release therefore drops **both** halves;
 removing only the label is what leaves the assignee-only half-claim behind.
+
+**Release removes the assignee who holds the claim, not the account releasing it** (#363).
+The claimer is the account that applied `in-progress` — the latest such event on the issue,
+which survives the label's removal. A fleet working under more than one account claims under
+one and releases under another as a matter of routine; a release that drops `@me` there
+removes the label and leaves the claimer assigned, which is the half-claim above arrived at
+by the release itself — measured twice on this repo, one of them still assigned 23 days on.
+`colab release` (and every path that releases through it) reads the claimer from the issue,
+unassigns it alongside the caller, and says so whenever that is a different login. By hand,
+`<claimer>` is `@me` only when you took the claim yourself. The one exception is yielding a
+lost race: there the latest labeler is the winner, whose assignee must stay.
 
 Assignee plus `in-progress` is the claim's **mirror for people**, not its lock: it is what a
 human reading the Issue sees, and the half-claim rule above still governs it exactly. It is
@@ -3682,7 +3693,7 @@ colab holders <path>
 # finishing work
 colab landed --worktree <name>                    # landed → teardown, cargo → merge
 git checkout <base> && git merge --squash feat/<slug>-N   # base = trunk, or a declared line
-gh issue edit N --remove-assignee @me --remove-label in-progress   # both halves — one alone is a half-claim
+gh issue edit N --remove-assignee <claimer> --remove-label in-progress   # both halves — one alone is a half-claim; <claimer> = @me only if you claimed it (§5)
 
 # releasing — Tier A / exposure: released (who tags follows §6's release rung)
 git checkout main && git merge --no-ff dev && git push   # --no-ff, never squash

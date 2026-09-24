@@ -601,6 +601,15 @@ if (isGraphqlOp) {
   return ok();
 }
 if (isApi && args.includes('user')) return ok('octofake\\n');
+// #363 claim-holder lookups — both REST reads. FAKE_GH_ASSIGNEES / FAKE_GH_LABELERS are
+// comma lists (labelers oldest first, as the events endpoint returns them); FAKE_GH_LOOKUP_FAIL
+// makes both reads fail, to prove the release still happens without them.
+const readPath = args.find((a) => String(a).startsWith('repos/{owner}/{repo}/issues/') && !String(a).includes('/labels') && !String(a).endsWith('/assignees') && !String(a).endsWith('/comments'));
+if (isApi && readPath && !args.includes('-X')) {
+  if (process.env.FAKE_GH_LOOKUP_FAIL) return fail('HTTP 502: Bad Gateway');
+  const list = (v) => String(v || '').split(',').filter(Boolean).map((l) => l + '\\n').join('');
+  return ok(readPath.endsWith('/events') ? list(process.env.FAKE_GH_LABELERS) : list(process.env.FAKE_GH_ASSIGNEES));
+}
 if (isApi) {
   if (behavior === 'graphql-rate-limit-both-fail') return fail('HTTP 403: API rate limit exceeded (rest)');
   return ok();
@@ -609,19 +618,18 @@ fail('fake gh: unhandled invocation ' + JSON.stringify(args));
 `;
   fs.writeFileSync(path.join(bin, 'gh'), script, { mode: 0o755 });
 
-  function withBehavior(behavior, fn) {
+  function withBehavior(behavior, fn, extraEnv = {}) {
     fs.writeFileSync(callsFile, '');
-    const prevPath = process.env.PATH;
-    const prevBehavior = process.env.FAKE_GH_BEHAVIOR;
-    const prevCalls = process.env.FAKE_GH_CALLS;
-    process.env.PATH = `${bin}:${prevPath}`;
-    process.env.FAKE_GH_BEHAVIOR = behavior;
-    process.env.FAKE_GH_CALLS = callsFile;
+    const env = { PATH: `${bin}:${process.env.PATH}`, FAKE_GH_BEHAVIOR: behavior, FAKE_GH_CALLS: callsFile,
+      FAKE_GH_ASSIGNEES: undefined, FAKE_GH_LABELERS: undefined, FAKE_GH_LOOKUP_FAIL: undefined, ...extraEnv };
+    const prev = {};
+    for (const [k, v] of Object.entries(env)) {
+      prev[k] = process.env[k];
+      if (v === undefined) delete process.env[k]; else process.env[k] = v;
+    }
     try { return fn(); }
     finally {
-      process.env.PATH = prevPath;
-      if (prevBehavior === undefined) delete process.env.FAKE_GH_BEHAVIOR; else process.env.FAKE_GH_BEHAVIOR = prevBehavior;
-      if (prevCalls === undefined) delete process.env.FAKE_GH_CALLS; else process.env.FAKE_GH_CALLS = prevCalls;
+      for (const [k, v] of Object.entries(prev)) { if (v === undefined) delete process.env[k]; else process.env[k] = v; }
     }
   }
 
@@ -666,12 +674,98 @@ test('ghIssueComment: a non-rate-limit GraphQL failure is NOT retried over REST'
   assert.strictEqual(fx.calls().length, 1, 'no REST fallback attempted for an unrelated error');
 });
 
-test('ghIssueRelease: GraphQL succeeds → one call, both label+assignee in it', () => {
+const editCalls = (calls) => calls.filter((c) => c[0] === 'issue' && c[1] === 'edit');
+const removedAssignees = (edit) => String(edit[edit.indexOf('--remove-assignee') + 1]).split(',');
+
+test('ghIssueRelease: GraphQL succeeds → one write, both label+assignee in it', () => {
   const fx = ghFallbackFixture();
   const r = fx.withBehavior('ok', () => git.ghIssueRelease(fx.repo, 164));
   assert.strictEqual(r.ok, true);
-  assert.strictEqual(fx.calls().length, 1);
-  assert.deepStrictEqual(fx.calls()[0].slice(0, 2), ['issue', 'edit']);
+  const edits = editCalls(fx.calls());
+  assert.strictEqual(edits.length, 1, 'one GraphQL write');
+  assert.ok(edits[0].includes('--remove-label') && edits[0].includes('--remove-assignee'));
+  assert.ok(fx.calls().every((c) => c[0] !== 'api' || !c.includes('-X')), 'no REST write on the happy path');
+});
+
+// --- #363: release removes the assignee who HOLDS the claim, read from the issue ------------
+//
+// The two incidents behind it: an issue claimed (label + assignee) under one account and released
+// under another. The old release dropped `@me` only, so the label went and the claimer stayed
+// assigned — a half-claim, "neither free nor taken", which nobody starts. The caller here is the
+// fake's `octofake`; the claim is taken as `alice`.
+
+test('#363 ghIssueRelease: claim by one login, release by another → unassigns the claimer too, and says so', () => {
+  const fx = ghFallbackFixture();
+  const r = fx.withBehavior('ok', () => git.ghIssueRelease(fx.repo, 297),
+    { FAKE_GH_ASSIGNEES: 'alice', FAKE_GH_LABELERS: 'alice' });
+  assert.strictEqual(r.ok, true, r.stderr);
+  const edits = editCalls(fx.calls());
+  assert.strictEqual(edits.length, 1);
+  assert.deepStrictEqual(removedAssignees(edits[0]).sort(), ['@me', 'alice']);
+  assert.deepStrictEqual(r.others, ['alice'], 'the caller learns it removed someone else');
+  assert.strictEqual(r.caller, 'octofake');
+});
+
+test('#363 ghIssueRelease: the LATEST in-progress labeler is the claimer, not the first', () => {
+  const fx = ghFallbackFixture();
+  const r = fx.withBehavior('ok', () => git.ghIssueRelease(fx.repo, 301),
+    { FAKE_GH_ASSIGNEES: 'bob', FAKE_GH_LABELERS: 'alice,bob' });
+  assert.deepStrictEqual(removedAssignees(editCalls(fx.calls())[0]).sort(), ['@me', 'bob']);
+  assert.deepStrictEqual(r.others, ['bob']);
+});
+
+test('#363 ghIssueRelease: claimed and released by the same login → @me only, nothing to report', () => {
+  const fx = ghFallbackFixture();
+  const r = fx.withBehavior('ok', () => git.ghIssueRelease(fx.repo, 1),
+    { FAKE_GH_ASSIGNEES: 'octofake', FAKE_GH_LABELERS: 'octofake' });
+  assert.deepStrictEqual(removedAssignees(editCalls(fx.calls())[0]), ['@me']);
+  assert.deepStrictEqual(r.others, []);
+  assert.strictEqual(r.note, '');
+});
+
+test('#363 ghIssueRelease: an assignee who is NOT the claimer is left alone', () => {
+  // An owner assigned for responsibility, not as a claim — the claimer (octofake) is the caller.
+  const fx = ghFallbackFixture();
+  const r = fx.withBehavior('ok', () => git.ghIssueRelease(fx.repo, 2),
+    { FAKE_GH_ASSIGNEES: 'owner,octofake', FAKE_GH_LABELERS: 'octofake' });
+  assert.deepStrictEqual(removedAssignees(editCalls(fx.calls())[0]), ['@me']);
+  assert.deepStrictEqual(r.others, []);
+});
+
+test('#363 ghIssueRelease: a claimer no longer assigned is not unassigned again', () => {
+  const fx = ghFallbackFixture();
+  const r = fx.withBehavior('ok', () => git.ghIssueRelease(fx.repo, 3),
+    { FAKE_GH_ASSIGNEES: '', FAKE_GH_LABELERS: 'alice' });
+  assert.deepStrictEqual(removedAssignees(editCalls(fx.calls())[0]), ['@me']);
+  assert.deepStrictEqual(r.others, []);
+});
+
+test('#363 ghIssueRelease: selfOnly (the yield path) never looks the claimer up — the winner keeps their assignee', () => {
+  const fx = ghFallbackFixture();
+  const r = fx.withBehavior('ok', () => git.ghIssueRelease(fx.repo, 4, { selfOnly: true }),
+    { FAKE_GH_ASSIGNEES: 'winner', FAKE_GH_LABELERS: 'winner' });
+  assert.deepStrictEqual(removedAssignees(editCalls(fx.calls())[0]), ['@me']);
+  assert.ok(!fx.calls().some((c) => c.some((a) => /\/events$/.test(String(a)))), 'no events read');
+  assert.deepStrictEqual(r.others, []);
+});
+
+test('#363 ghIssueRelease: lookup fails → still releases (@me), and the note says a half-claim may remain', () => {
+  const fx = ghFallbackFixture();
+  const r = fx.withBehavior('ok', () => git.ghIssueRelease(fx.repo, 5), { FAKE_GH_LOOKUP_FAIL: '1' });
+  assert.strictEqual(r.ok, true, r.stderr);
+  assert.deepStrictEqual(removedAssignees(editCalls(fx.calls())[0]), ['@me']);
+  assert.match(r.note, /could not read who holds the claim/);
+});
+
+test('#363 ghIssueRelease: GraphQL rate-limited → the REST assignee delete names the claimer too', () => {
+  const fx = ghFallbackFixture();
+  const r = fx.withBehavior('graphql-rate-limit-then-rest-ok', () => git.ghIssueRelease(fx.repo, 6),
+    { FAKE_GH_ASSIGNEES: 'alice', FAKE_GH_LABELERS: 'alice' });
+  assert.strictEqual(r.ok, true, r.stderr);
+  const del = fx.calls().find((c) => c[0] === 'api' && c.includes('DELETE') && c.some((a) => String(a).endsWith('/assignees')));
+  assert.ok(del, 'REST assignee delete issued');
+  assert.ok(del.includes('assignees[]=octofake') && del.includes('assignees[]=alice'), JSON.stringify(del));
+  assert.deepStrictEqual(r.others, ['alice']);
 });
 
 test('ghIssueRelease: GraphQL rate-limited → REST label delete + REST assignee delete both succeed', () => {
@@ -679,10 +773,12 @@ test('ghIssueRelease: GraphQL rate-limited → REST label delete + REST assignee
   const r = fx.withBehavior('graphql-rate-limit-then-rest-ok', () => git.ghIssueRelease(fx.repo, 164));
   assert.strictEqual(r.ok, true, r.stderr);
   const calls = fx.calls();
-  // GraphQL attempt, then `gh api user` to resolve the login, then the two REST deletes.
-  assert.deepStrictEqual(calls[0].slice(0, 2), ['issue', 'edit']);
-  const apiCalls = calls.slice(1).filter((c) => c[0] === 'api');
-  assert.ok(apiCalls.some((c) => c.includes('user')), 'resolved the login via gh api user');
+  // GraphQL attempt, then the two REST deletes. The login is resolved (`gh api user`, cached per
+  // process) BEFORE the write since #363, so it is asserted by what the delete names, not by a call.
+  const edit = calls.findIndex((c) => c[0] === 'issue' && c[1] === 'edit');
+  assert.ok(edit >= 0, 'GraphQL attempted first');
+  const apiCalls = calls.slice(edit + 1).filter((c) => c[0] === 'api');
+  assert.ok(apiCalls.some((c) => c.includes('assignees[]=octofake')), 'removed the caller by login over REST');
   assert.ok(apiCalls.some((c) => c.some((a) => String(a).includes('/labels/in-progress'))), 'deleted the label over REST');
   assert.ok(apiCalls.some((c) => c.some((a) => String(a).includes('/assignees'))), 'removed the assignee over REST');
 });
@@ -699,7 +795,7 @@ test('ghIssueRelease: a non-rate-limit GraphQL failure is NOT retried over REST'
   const fx = ghFallbackFixture();
   const r = fx.withBehavior('generic-fail', () => git.ghIssueRelease(fx.repo, 164));
   assert.strictEqual(r.ok, false);
-  assert.strictEqual(fx.calls().length, 1, 'no REST fallback attempted for an unrelated error');
+  assert.ok(!fx.calls().some((c) => c[0] === 'api' && c.includes('-X')), 'no REST fallback attempted for an unrelated error');
 });
 
 // --- ghRunsForCommit + ghRunJobs (#321) ------------------------------------------------------

@@ -732,6 +732,19 @@ function postReleaseComment(repoAbs, num) {
 }
 
 /**
+ * #363: say so when a release unassigned an account other than the caller — the claim was taken
+ * under one login and released under another. The removal is correct (it is the claim's other
+ * half), but removing someone else's assignee is a thing a human should see happened. A lookup
+ * that failed and degraded to `@me` only is said too, because then a half-claim may be left.
+ */
+function reportReleasedOthers(num, r) {
+  if (r && Array.isArray(r.others) && r.others.length) {
+    print(`  gh: #${num} was claimed as ${r.others.join(', ')}, not ${r.caller || 'the current gh login'} — unassigned ${r.others.length > 1 ? 'them' : 'that account'} too`);
+  }
+  if (r && r.note) warn(`#${num}: ${r.note} — if another account claimed it, it may still be assigned (a half-claim)`);
+}
+
+/**
  * We lost the race for #num → yield it. Removes our local claim, posts the yield notice, and
  * (only when the winner is a DIFFERENT GitHub user) removes our label + @me assignee. When the
  * winner shares our login (another machine of ours), the GitHub label/assignee is a single shared
@@ -748,7 +761,9 @@ function postReleaseComment(repoAbs, num) {
 function yieldIssue(repoAbs, num, winner, myLogin, session = null) {
   let ghFailed = false;
   if (winner.login !== myLogin) {
-    const r = git.ghIssueRelease(repoAbs, num);
+    // selfOnly (#363): the latest `in-progress` labeler here may be the race's WINNER — whose
+    // assignee is the claim they just won, and must survive our yield.
+    const r = git.ghIssueRelease(repoAbs, num, { selfOnly: true });
     if (!r.ok) {
       ghFailed = true;
       warn(`gh: could not remove our label/assignee on #${num} while yielding (${r.stderr.split('\n')[0] || r.code}) — local claim KEPT (releasePending) so a retry can find it`);
@@ -1163,8 +1178,12 @@ const HELP_RELEASE = `colab release <issue> [--repo <path>]
 colab release cut [--repo <path>] [--bump patch|minor --reason "<why>"] [--dry] [--json]   (see: colab release cut --help)
 colab release finalize [--repo <path>] [--tag vX.Y.Z-rc.N] [--answered-by <name>] [--dry] [--json]   (see: colab release finalize --help)
 
-Release a single issue: removes the local claim and, if gh is usable, runs
-  gh issue edit N --remove-assignee @me --remove-label in-progress
+Release a single issue: removes the local claim and, if gh is usable, removes the
+in-progress label and the assignee that holds the claim — read from the issue (the
+account that applied in-progress), not assumed to be you (#363). The equivalent of
+  gh issue edit N --remove-assignee <claimer> --remove-label in-progress
+where <claimer> is @me only when you took the claim yourself. When the claim was
+taken under a different login than the one releasing it, the output names it.
 Sibling claims on the same worktree stay alive (a group finishes issues one at a time).
 The worktree is NEVER auto-removed here (uncommitted work may exist); if this was the
 last claim, the output says the worktree now has zero claims.
@@ -1634,6 +1653,7 @@ function cmdRelease(argv) {
     const r = git.ghIssueRelease(repo, num); // GraphQL primary, REST fallback on a GraphQL rate limit (#164)
     if (r.ok) {
       print(`  gh: #${num} unassigned + label removed`);
+      reportReleasedOthers(num, r);
     } else {
       ghFailed = true;
       warn(`gh edit #${num} failed on both GraphQL and REST (${r.stderr.split('\n')[0] || r.code}) — local claim KEPT (releasePending) so a retry can find it`);
@@ -4446,6 +4466,7 @@ function cmdWorktreeRm(argv) {
   for (const num of attachedIssues) {
     if (gh) {
       const r = git.ghIssueRelease(repoAbs, num);
+      if (r.ok) reportReleasedOthers(num, r);
       if (!r.ok) {
         warnDeferred(`could not release tracker claim on #${num} (${r.stderr.split('\n')[0] || r.code}) — GitHub still shows in-progress; local claim record KEPT (not cleared) so a retry can find it`);
         trackerFailed.push(num);
@@ -4986,7 +5007,7 @@ function cmdDoctor(argv) {
       if (!isGhUsable(c.repo)) { intentReleased.set(k, false); continue; }
       const num = normIssueNum(c.issue);
       const r = git.ghIssueRelease(c.repo, num);
-      if (r.ok) postReleaseComment(c.repo, num);
+      if (r.ok) { reportReleasedOthers(num, r); postReleaseComment(c.repo, num); }
       intentReleased.set(k, !!r.ok);
     }
   }
