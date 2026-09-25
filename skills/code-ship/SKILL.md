@@ -1173,7 +1173,7 @@ catch because nobody could have: the surface did not look significant until some
 already building it. The session does not stop to request a ruling first — it continues
 on the designer's spec and lets the evidence comment carry the flag instead.
 
-## B2c. Update the parent epic — if, and only if, it is hand-maintained
+## B2c. Update the parent epic — close a native container with its last child; tick a hand-maintained one
 
 `code-triage` instructs its readers to **trust the epic's checklist table over its
 title**, on the grounds that only the table is maintained. Nothing in this family
@@ -1191,10 +1191,33 @@ this work rather than adding to it:
 gh issue view $N --json parent -q '.parent.number // "none"'
 ```
 
-- **A native parent (sub-issue link)** → **do nothing.** GitHub maintains
+- **A native parent (sub-issue link)** → **tick nothing.** GitHub maintains
   `subIssuesSummary` itself; the child closing *is* the update. Ticking a checklist
   line here would be inventing a second, hand-run source of truth beside a correct
-  automatic one.
+  automatic one. **But if that child was the parent's last open sub-issue, close the
+  parent in the same step (#371, `CONVENTIONS.md`
+  [§5](../../CONVENTIONS.md#epics--a-container-is-not-a-start-candidate), *Epics*).**
+  `colab ship` does this for you (its step i2). For every issue it closed, it reads the
+  native parent, and `tools/lib/container-close.js` decides. The parent is closed, with a
+  `📦 Closed by colab ship` evidence comment naming the child and the sha, only when it
+  carries `epic`, every native sub-issue is closed, its body lists no unticked `- [ ]`
+  item, and it is not a release tracking record. Then the same question goes to its own
+  parent. Any other shape stays open. A parent with no `epic` label, or one still listing
+  an unticked item, prints as a `container #P: …` warning for a human. Without `colab`,
+  do the same by hand:
+
+  ```sh
+  P=$(gh issue view $N --json parent -q '.parent.number // empty')
+  [ -n "$P" ] && gh issue view $P --json state,labels,body,subIssuesSummary
+  # close only on: OPEN · labels ∋ epic · subIssuesSummary.total > 0 and completed == total
+  #                · no unticked "- [ ]" line in body · body does not open with <!-- colab:release
+  gh issue comment $P --body "📦 Closed — its last open sub-issue #$N shipped at <sha>; all sub-issues closed (#371)."
+  gh issue close $P --reason completed
+  ```
+
+  `subIssuesSummary` can lag a child's auto-close by a moment. A lagging read looks like
+  an open child, so nothing closes. The next sibling ship or `code-sweep` §5 catches it.
+  Never retry in a loop.
 - **No native parent** → look for a hand-written checklist that references this issue:
 
 ```sh
@@ -1207,9 +1230,11 @@ sub-issues if the owner wants it — then this step stops applying forever.
 
 **Four things not to do** — each is a way this step turns destructive:
 
-1. **Never close the epic**, even when the last box ticks. Boxes running out does not
-   mean work running out: an epic can have two phases complete and two whose issues
-   are not written yet. Closing it buries the unwritten part.
+1. **Never close a hand-checklist epic**, even when the last box ticks. Boxes running
+   out does not mean work running out: an epic can have two phases complete and two
+   whose issues are not written yet. Closing it buries the unwritten part. (A native
+   container closes by the rule above. Its unticked-item check is this same
+   protection, and on native sub-issues "every child closed" is a fact GitHub maintains.)
 2. **Never rewrite the epic's prose.** Edit the one checklist line for the issue that
    just closed. The body is where the owner records decisions; a skill has no business
    editing there.

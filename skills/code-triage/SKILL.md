@@ -709,6 +709,26 @@ own issue carrying `needs-decision` (and the options block, if any), attached to
 as a sub-issue, with a `blocked_by` edge from any child it holds back. Triage files
 neither the issue nor the edge for this, because the question is not triage's to restate.
 
+**Two more epic findings, from the same list (#371, `CONVENTIONS.md` [§5](../../CONVENTIONS.md#epics--a-container-is-not-a-start-candidate), *Epics*):**
+
+```sh
+gh issue list --state open --label epic --limit 200 --json number,labels,subIssuesSummary \
+  -q '.[] | [.number, ([.labels[].name|select(startswith("delivery:"))]|join(",")),
+             .subIssuesSummary.total, .subIssuesSummary.completed] | @tsv'
+```
+
+- **A `delivery:*` label on an epic.** A container has no deliverable of its own, so the
+  label invites a scheduler to treat it as code work. Report it:
+  `finding: #N is a container carrying delivery:code — remove the label (#371)`.
+- **An open epic whose native sub-issues are all closed** (`total > 0`, `completed ==
+  total`). `colab ship` closes these when the last child ships (`code-ship` B2c), so one
+  still open closed its last child by some other route, or failed one of the close
+  conditions. Report it in the epic bucket with the reason from
+  `tools/lib/container-close.js` (an unticked item in its body, or a close that never
+  ran):
+  `finding: #N has all K sub-issues closed and is still open (<reason>) — code-sweep §5 closes it`.
+  Triage does not close it. Closing an issue is not one of its writes.
+
 **A release tracking issue is a record, not a task** — the same treatment. An issue whose body
 opens with `<!-- colab:release version=vX.Y.Z -->` (title `release: vX.Y.Z`) is the version's
 record, opened and closed by `colab release finalize` (#339) and walked by the `release-rung`
@@ -1126,6 +1146,28 @@ relationship is the part the readiness gate above (and any other tool) reads.
   recognises. On the raw form this read-back is a manual step you must not skip.
 - **Record only what you actually determined.** A sequence you inferred from titles is
   a guess; leave it unwritten and say so in the report.
+- **Never write an edge for file contention, and flag one you find (#371, `CONVENTIONS.md`
+  [§5](../../CONVENTIONS.md#readiness--open-and-unclaimed-is-not-enough), *File
+  contention is never an edge*).** Two issues that edit the same file do not need each
+  other's output. A real collision is a §3 group: one branch, one review cycle. A
+  `blocked_by` chain gives one review cycle per member. When an existing edge's only
+  justification is a shared file (the edge's comment or the ruling says "to avoid
+  conflicts on `<file>`", or the two issues share nothing but a path), report it:
+  `finding: #B blocked_by #A only for shared file <path> — contention is a group, not an edge`.
+  When the file is one that every issue in a set must edit (an index, a registry, a
+  README with one row per item), also report that the file itself is the defect: make it
+  a pointer, then the items run in parallel. Do not clear the edge yourself. The
+  guarded `--clear` is for an edge you judged false on this pass, and a human may have
+  wanted that sequence for a reason the record does not show.
+- **Split at the external-wait line — report it, do not block the whole issue (#371).**
+  When an issue's scope is only **partly** behind an outside party (another team's API, a
+  vendor, a ruling from outside the repo), a `blocked_by` edge or a
+  `deferred:external-party` park on the whole issue holds back the part the repo could
+  build today, and every issue built on that part. Report it as a structural finding in
+  the blocked bucket, naming the two halves:
+  `finding: #N split at the external-wait line — <buildable part> can start now; <part> waits on <party>`.
+  Triage does not split it. Filing issues is not one of its writes. A human or the
+  issue's filer files the buildable half and moves the edge or park onto the waiting half.
 - **Remove an edge only when the edge is false — not because the blocker moved.**
   `colab blocked <blocked> --by <blocker> --clear --reason "<why>"` requires the reason
   (colab cannot verify intent, so it records yours instead) and refuses by default when
@@ -1596,6 +1638,8 @@ Then, briefly:
   An epic carrying `needs-decision` or a `decision:options` block (§2) gets a finding line
   under it that names where the question moves:
   `finding: needs-decision on an epic gates nothing — move the question to its own issue with needs-decision, attached as a sub-issue (#361)`.
+  The two #371 findings from §2 go under their epic the same way: a `delivery:*` label on
+  the container, and an open epic whose native sub-issues are all closed.
 - **route** — one line each, naming the delivery type (`content` / `ops` / `elsewhere`)
   and where it actually needs to go. Never a start candidate for the code pipeline; see §2.
 - **design** — one line each per `delivery:design` issue, with its claim state and the
@@ -1901,6 +1945,10 @@ Hand the top group to **code-start**, which will re-verify the claim before taki
   soft-ready group says what it waits on and names the branch the code is already on.
 - No `blocked_by` edge was cleared merely because its blocker's code landed (`colab blocked
   --clear` refuses a closed blocker without `--force` — §4, #251).
+- No edge was written for file contention. Every contention-only edge found, and every
+  issue only partly behind an external wait, was reported as a finding, and none was
+  "fixed" by triage (§4, #371). Every epic carrying a `delivery:*` label, and every open
+  epic whose native sub-issues are all closed, was reported in the epic bucket (§2, #371).
 - No UI-affecting group ended up in `blocked` just because it had no artifact, or because
   its ruling was never recorded (§6, `design:` line, #356). Every member with no
   `decision-recorded` label had the unrecorded-ruling check run before `absent` was
