@@ -243,6 +243,10 @@ the handbook's current version, so a scheduled run is self-documenting.
   `agent-filed`, `epic` — `tools/lib/labels.js`) — **advisory**, and only when the repo
   is adopted (has a `project.yml`) and the label set could actually be read (remote-less
   or offline audits stay silent rather than claim a label is missing they could not see).
+  On a local checkout the tracker is read from the remote `colab` itself resolves
+  (`tools/README.md`, *Which remote*): `colab.remote`, then `origin`, then `pushDefault`,
+  then a sole remote. A checkout whose remote cannot be resolved gets an advisory naming
+  the fix instead of the silence an offline read gets — it is fixable in one command.
   A repo that adopted at an older handbook version never back-fills a label added later
   on its own; the check that label powers then silently cannot fire (`CONVENTIONS.md`
   [§8](../CONVENTIONS.md#labels-reconcile-too--not-just-stamped-files), *Labels reconcile too*).
@@ -414,6 +418,7 @@ same shape and cost as the label check already next to it.
 | metadata could not be read (`gh` absent, unauthenticated, offline, repo gone) | **fail** — "the identity scan did NOT run" | You asked for the scan. A check that cannot run must never report clean. This is deliberately stricter than the label check, which stays silent on the same failure: nothing there was requested, and an unreadable label set costs a nag rather than a missed disclosure. |
 | the repo is **private** | silent; `--json` says `not-applicable` | The harm answered here is *publication*. Reading `visibility` and finding "private" is a determination, not a failure to run — a different thing, reported differently. |
 | the repo has **no GitHub remote** | silent; `--json` says `not-applicable` | There is no repository metadata to scan. No API call is made. |
+| the checkout's remote **cannot be resolved** (several remotes, none `origin`, no `colab.remote`; or a `colab.remote` naming no such remote) | **fail**, naming the fix (`git config colab.remote <name>`) | Picking one of several remotes would scan a repo nobody chose. The remote comes from the same resolver `colab` uses (`tools/README.md`, *Which remote*), so a repo with an `origin` reads it exactly as before. |
 | no vocabulary, an unusable one, or an empty one | **exit 2**, before a single repo is audited | The check has exactly one input. Degrading the run would print "N clean" over a scan that never happened. |
 
 **Every run says whether it scanned**, in the header (`identity: repository metadata NOT
