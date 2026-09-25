@@ -11,7 +11,7 @@
 const test = require('node:test');
 const assert = require('node:assert');
 
-const { cureVerdict, redJobsProvenOnBranch, workflowCarveOut, shapeJobEvidence } = require('./ci-cure.js');
+const { cureVerdict, redJobsProvenOnBranch, workflowCarveOut, shapeJobEvidence, MANIFEST_SCRIPTS_REFUSAL } = require('./ci-cure.js');
 
 const RED_SHA = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
 const HEAD_SHA = 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';
@@ -21,6 +21,22 @@ function badStacking(reason) { return { ok: false, reason }; }
 function okEvidence(sha = HEAD_SHA) { return { ok: true, sha }; }
 function badEvidence(sha = HEAD_SHA) { return { ok: false, sha }; }
 
+const RED_STEPS = ['Set up job', 'Start services', 'Wait for MySQL'];
+
+function jobEvidence(over = {}) {
+  return {
+    redJobs: [{ name: 'browser', conclusion: 'failure', durationMs: 36000, ranSteps: RED_STEPS.slice() }],
+    branchJobs: [{
+      name: 'browser', status: 'completed', conclusion: 'success', durationMs: 668000,
+      steps: RED_STEPS.map((n) => ({ name: n, conclusion: 'success' }))
+        .concat([{ name: 'Run tests', conclusion: 'success' }]),
+    }],
+    ...over,
+  };
+}
+
+// Every case starts from a genuine cure: containment, a green run, the job red on trunk passing on
+// the branch (2b, #297), clean stacking, and a measured diff touching neither instrument path.
 function base(overrides = {}) {
   return {
     containsRedSha: true,
@@ -28,15 +44,20 @@ function base(overrides = {}) {
     redSha: RED_SHA,
     stacking: okStacking(),
     workflowsTouched: false,
+    manifestScriptsTouched: false,
+    manifestPaths: [],
+    jobEvidence: jobEvidence(),
     ...overrides,
   };
 }
 
 // --- the happy path -----------------------------------------------------------------------
 
-test('cureVerdict: all four conditions satisfied → ok, names the red sha and the evidence sha', () => {
+test('cureVerdict: every condition satisfied → ok, names the red sha and the evidence sha, and the proven red job(s)', () => {
   const v = cureVerdict(base());
   assert.equal(v.ok, true);
+  assert.deepEqual(v.provenJobs, ['browser']);
+  assert.equal(v.carveOut, undefined);
   assert.match(v.reason, new RegExp(RED_SHA));
   assert.match(v.reason, new RegExp(HEAD_SHA));
 });
@@ -97,7 +118,11 @@ test('cureVerdict: missing stacking argument entirely (undefined) → refuses, d
 // --- condition 4: no workflow-file changes --------------------------------------------------
 
 test('cureVerdict: branch touches .github/workflows/** → refuses even with containment+evidence+stacking all clean', () => {
-  const v = cureVerdict(base({ workflowsTouched: true }));
+  // 2b holds (the red job passed), but the branch's job ran none of the steps trunk's did, so the
+  // #321 carve-out cannot admit it — the plain condition-4 refusal is what remains.
+  const v = cureVerdict(base({ workflowsTouched: true, jobEvidence: jobEvidence({
+    branchJobs: [{ name: 'browser', status: 'completed', conclusion: 'success', durationMs: 668000, steps: [] }],
+  }) }));
   assert.equal(v.ok, false);
   assert.match(v.reason, /\.github\/workflows/);
   assert.match(v.reason, /human ci-grant/);
@@ -105,7 +130,7 @@ test('cureVerdict: branch touches .github/workflows/** → refuses even with con
 
 // --- ordering is stable and exhaustive: exactly one reason per failing case ----------------
 
-test('cureVerdict: all four conditions failing at once still returns exactly one reason (containment wins, cheapest check first)', () => {
+test('cureVerdict: every condition failing at once still returns exactly one reason (containment wins, cheapest check first)', () => {
   const v = cureVerdict({
     containsRedSha: false, evidence: null, redSha: RED_SHA,
     stacking: badStacking('stacked'), workflowsTouched: true,
@@ -205,20 +230,6 @@ test('shapeJobEvidence: a job with no steps array shapes to ranSteps/steps null 
 // MySQL service container. `browser` was SIGTERMed at "Wait for MySQL" after 36s on trunk; the
 // repair pinned the jobs to a correctly-networked pool and `browser` came back green at 11m8s.
 
-const RED_STEPS = ['Set up job', 'Start services', 'Wait for MySQL'];
-
-function jobEvidence(over = {}) {
-  return {
-    redJobs: [{ name: 'browser', conclusion: 'failure', durationMs: 36000, ranSteps: RED_STEPS.slice() }],
-    branchJobs: [{
-      name: 'browser', status: 'completed', conclusion: 'success', durationMs: 668000,
-      steps: RED_STEPS.map((n) => ({ name: n, conclusion: 'success' }))
-        .concat([{ name: 'Run tests', conclusion: 'success' }]),
-    }],
-    ...over,
-  };
-}
-
 function carving(over = {}) {
   return base({ workflowsTouched: true, jobEvidence: jobEvidence(over) });
 }
@@ -233,12 +244,24 @@ test('cureVerdict: the measured #321 case — workflow touch, every red job gree
   assert.deepEqual(v.carveOut, { jobs: [{ name: 'browser', redMs: 36000, branchMs: 668000 }] });
 });
 
-test('cureVerdict: workflow touch with NO job evidence at all (null) → refuses, keeps the plain condition-4 text', () => {
-  const v = cureVerdict(base({ workflowsTouched: true, jobEvidence: null }));
+test('cureVerdict: NO job evidence at all (null) → refuses at 2b, before the workflow block is ever reached (#297)', () => {
+  for (const wf of [false, true]) {
+    const v = cureVerdict(base({ workflowsTouched: wf, jobEvidence: null }));
+    assert.equal(v.ok, false);
+    assert.match(v.reason, /check trunk is red on is not proven here/);
+    assert.match(v.reason, /could not be measured/);
+    assert.match(v.reason, /#297/);
+    assert.equal(v.carveOut, undefined);
+  }
+});
+
+test('cureVerdict: workflow touch where 4a holds but the step list is unreadable → keeps the plain condition-4 text', () => {
+  const v = cureVerdict(carving({
+    branchJobs: [{ name: 'browser', status: 'completed', conclusion: 'success', durationMs: 668000, steps: null }],
+  }));
   assert.equal(v.ok, false);
   assert.match(v.reason, /\.github\/workflows/);
-  assert.match(v.reason, /could not be measured/);
-  assert.equal(v.carveOut, undefined);
+  assert.match(v.reason, /#321 carve-out does not admit it/);
 });
 
 test('cureVerdict: workflow touch with an EMPTY redJobs → refuses — a vacuous .every() must never read as a pass', () => {
@@ -370,12 +393,15 @@ test('cureVerdict: EVERY red job must be proven, not merely the first', () => {
   assert.match(v.reason, /job `ci`/);
 });
 
-test('cureVerdict: the carve-out is NEVER consulted when workflowsTouched is false — malformed evidence changes nothing', () => {
-  const withGarbage = cureVerdict(base({ workflowsTouched: false, jobEvidence: { redJobs: 'nonsense' } }));
-  const without = cureVerdict(base());
-  assert.deepEqual(withGarbage, without);
-  assert.equal(withGarbage.ok, true);
-  assert.equal(withGarbage.carveOut, undefined);
+test('cureVerdict: without a workflow touch only 2b applies — the carve-out\'s step (4b) and duration (4c) sub-tests are never consulted', () => {
+  // Steps skipped away and an implausibly fast job: both would fail the carve-out. On the ordinary
+  // path they change nothing, because only 4a is hoisted (as 2b) — see the module header for why.
+  const v = cureVerdict(base({ jobEvidence: jobEvidence({
+    branchJobs: [{ name: 'browser', status: 'completed', conclusion: 'success', durationMs: 1, steps: [] }],
+  }) }));
+  assert.equal(v.ok, true);
+  assert.equal(v.carveOut, undefined);
+  assert.equal(v.reason, cureVerdict(base()).reason);
 });
 
 test('cureVerdict: the carve-out never reorders the earlier conditions — containment still wins over a perfect carve-out', () => {
@@ -412,4 +438,125 @@ test('workflowCarveOut: on success returns the per-job audit detail the trailer 
   const r = workflowCarveOut(jobEvidence());
   assert.equal(r.ok, true);
   assert.deepEqual(r.jobs, [{ name: 'browser', redMs: 36000, branchMs: 668000 }]);
+});
+
+// --- #297 condition 2b: the check trunk is red on must pass on the branch --------------------
+
+test('2b: the red job is ABSENT from the branch runs (a paths: filter or matrix change) → refuses despite a green run', () => {
+  const v = cureVerdict(base({ jobEvidence: jobEvidence({
+    branchJobs: [{ name: 'lint', status: 'completed', conclusion: 'success', durationMs: 5000, steps: [] }],
+  }) }));
+  assert.equal(v.ok, false);
+  assert.match(v.reason, /check trunk is red on is not proven here/);
+  assert.match(v.reason, /job `browser` .*does not exist on the branch's run/);
+});
+
+test('2b: the red job concluded failure on the branch while the run read green (continue-on-error shape) → refuses', () => {
+  const v = cureVerdict(base({ jobEvidence: jobEvidence({
+    branchJobs: [{ name: 'browser', status: 'completed', conclusion: 'failure', durationMs: 668000, steps: [] }],
+  }) }));
+  assert.equal(v.ok, false);
+  assert.match(v.reason, /concluded `failure`/);
+});
+
+test('2b: the red job is still in flight on the branch → refuses', () => {
+  const v = cureVerdict(base({ jobEvidence: jobEvidence({
+    branchJobs: [{ name: 'browser', status: 'in_progress', conclusion: null, durationMs: null, steps: [] }],
+  }) }));
+  assert.equal(v.ok, false);
+  assert.match(v.reason, /has not COMPLETED/);
+});
+
+test('2b: no red JOB can be named on trunk (e.g. a startup failure) → refuses on the ordinary path too', () => {
+  const v = cureVerdict(base({ jobEvidence: jobEvidence({ redJobs: [] }) }));
+  assert.equal(v.ok, false);
+  assert.match(v.reason, /no red JOB could be named/);
+});
+
+test('2b ordering: containment before 2b, 2a before 2b, 2b before anti-stacking', () => {
+  assert.match(cureVerdict(base({ containsRedSha: false, jobEvidence: null })).reason, /does not contain/);
+  assert.match(cureVerdict(base({ evidence: badEvidence(), jobEvidence: null })).reason, /no completed, successful CI run/);
+  assert.match(cureVerdict(base({ jobEvidence: null, stacking: badStacking('stacked') })).reason, /not proven here/);
+});
+
+test('2b: jobs match per WORKFLOW — a passing `test` in another workflow never stands in for the red one', () => {
+  const ev = shapeJobEvidence({
+    redRunJobs: [rawJob('test', { conclusion: 'failure', workflowName: 'CI' })],
+    branchRunJobs: [rawJob('test', { workflowName: 'Nightly' })],
+  });
+  const v = cureVerdict(base({ jobEvidence: ev }));
+  assert.equal(v.ok, false);
+  assert.match(v.reason, /job `CI \/ test` .*does not exist/);
+
+  const ok = cureVerdict(base({ jobEvidence: shapeJobEvidence({
+    redRunJobs: [rawJob('test', { conclusion: 'failure', workflowName: 'CI' })],
+    branchRunJobs: [rawJob('test', { workflowName: 'Nightly', conclusion: 'failure' }), rawJob('test', { workflowName: 'CI' })],
+  }) }));
+  assert.equal(ok.ok, true);
+  assert.deepEqual(ok.provenJobs, ['test']);
+});
+
+test('2b: the same job twice at the branch head — cancelled + success passes, failure + success refuses', () => {
+  const red = [rawJob('test', { conclusion: 'failure', workflowName: 'CI' })];
+  const cancelledThenGreen = cureVerdict(base({ jobEvidence: shapeJobEvidence({
+    redRunJobs: red,
+    branchRunJobs: [rawJob('test', { workflowName: 'CI', conclusion: 'cancelled' }), rawJob('test', { workflowName: 'CI' })],
+  }) }));
+  assert.equal(cancelledThenGreen.ok, true);
+
+  const failedAndGreen = cureVerdict(base({ jobEvidence: shapeJobEvidence({
+    redRunJobs: red,
+    branchRunJobs: [rawJob('test', { workflowName: 'CI' }), rawJob('test', { workflowName: 'CI', conclusion: 'failure' })],
+  }) }));
+  assert.equal(failedAndGreen.ok, false);
+  assert.match(failedAndGreen.reason, /both passed and failed at one sha/);
+
+  const greenAndPending = cureVerdict(base({ jobEvidence: shapeJobEvidence({
+    redRunJobs: red,
+    branchRunJobs: [rawJob('test', { workflowName: 'CI' }), rawJob('test', { workflowName: 'CI', status: 'in_progress', conclusion: null })],
+  }) }));
+  assert.equal(greenAndPending.ok, false);
+  assert.match(greenAndPending.reason, /has not COMPLETED/);
+});
+
+test('shapeJobEvidence: carries workflowName on both sides, defaulting to empty (legacy rows still match)', () => {
+  const ev = shapeJobEvidence({
+    redRunJobs: [rawJob('a', { conclusion: 'failure', workflowName: 'CI' }), rawJob('b', { conclusion: 'failure' })],
+    branchRunJobs: [rawJob('a', { workflowName: 'CI' }), rawJob('b')],
+  });
+  assert.deepEqual(ev.redJobs.map((j) => j.workflowName), ['CI', '']);
+  assert.deepEqual(ev.branchJobs.map((j) => j.workflowName), ['CI', '']);
+  assert.equal(redJobsProvenOnBranch(ev).ok, true);
+});
+
+// --- #297 condition 5: package.json scripts are part of the instrument ------------------------
+
+test('condition 5: the diff changes a package.json scripts block → refuses, names the path and the ci-grant door', () => {
+  const v = cureVerdict(base({ manifestScriptsTouched: true, manifestPaths: ['package.json', 'packages/a/package.json'] }));
+  assert.equal(v.ok, false);
+  assert.ok(v.reason.startsWith(MANIFEST_SCRIPTS_REFUSAL));
+  assert.match(v.reason, /changed: package\.json, packages\/a\/package\.json/);
+  assert.match(v.reason, /human ci-grant/);
+  assert.match(v.reason, /no carve-out/);
+});
+
+test('condition 5 / 4: an unmeasured diff (null or undefined on either signal) → refuses, never reads as untouched', () => {
+  for (const over of [{ manifestScriptsTouched: null }, { manifestScriptsTouched: undefined }, { workflowsTouched: null }, { workflowsTouched: undefined }]) {
+    const v = cureVerdict(base(over));
+    assert.equal(v.ok, false, JSON.stringify(over));
+    assert.match(v.reason, /diff could not be measured/);
+  }
+});
+
+test('two doors: workflows AND manifest scripts touched, carve-out-admissible evidence → refuses on condition 5, no carveOut', () => {
+  const v = cureVerdict(carving({}));
+  assert.equal(v.ok, true, 'precondition: this evidence IS carve-out-admissible on its own');
+  const both = cureVerdict({ ...carving({}), manifestScriptsTouched: true, manifestPaths: ['package.json'] });
+  assert.equal(both.ok, false);
+  assert.ok(both.reason.startsWith(MANIFEST_SCRIPTS_REFUSAL));
+  assert.equal(both.carveOut, undefined);
+});
+
+test('the carve-out cure also carries provenJobs', () => {
+  assert.deepEqual(cureVerdict(carving({})).provenJobs, ['browser']);
 });

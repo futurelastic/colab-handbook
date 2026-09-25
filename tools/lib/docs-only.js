@@ -73,16 +73,21 @@ function classify(entries) {
   return { docsOnly: true, files, offenders: [], reason: `docs-only (${files} files)` };
 }
 
-/** Parse `git diff --raw -z --no-renames --no-abbrev` output into `[{ path, oldMode, newMode }]`. */
+/**
+ * Parse `git diff --raw -z --no-renames --no-abbrev` output into
+ * `[{ path, oldMode, newMode, oldSha, newSha, status }]`. The sha/status fields are additive
+ * (#297): the cure rule's manifest check (tools/lib/cure-diff.js) reads each side's blob by sha, so
+ * it reuses this parser rather than growing a second one that could disagree with it.
+ */
 function parseRaw(stdout) {
   const parts = String(stdout || '').split('\0');
   const out = [];
   for (let i = 0; i < parts.length; i++) {
     const head = parts[i].replace(/^\n+/, '');
     if (!head.startsWith(':')) continue;
-    const [oldMode, newMode] = head.slice(1).split(' ');
+    const [oldMode, newMode, oldSha, newSha, status] = head.slice(1).split(' ');
     const p = parts[i + 1];
-    if (p) out.push({ path: p, oldMode, newMode });
+    if (p) out.push({ path: p, oldMode, newMode, oldSha, newSha, status });
     i++;
   }
   return out;

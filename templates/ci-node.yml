@@ -231,6 +231,11 @@ jobs:
         id: scripts
         if: hashFiles('package.json') != ''
         run: |
+          # package.json's `scripts` decides what this job MEASURES: a missing script
+          # skips its step and the job still concludes success. So `colab ship`'s cure
+          # rule treats a scripts change as an instrument change and never lets such a
+          # branch cure a red trunk by itself (CONVENTIONS.md, Cure rule, condition 5).
+          #
           # node -e over grep: package.json is JSON, and a "typecheck" substring can
           # appear inside a dependency name or another script's body.
           has() {

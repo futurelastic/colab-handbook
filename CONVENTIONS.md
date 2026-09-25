@@ -2539,7 +2539,15 @@ ci-grant when any condition below is not met. Fires **iff**:
    containment: a branch cut from an OLDER, green base can carry a green run that
    proves nothing about the redness it is being exempted from.
 2. the branch's own CI is green **at its own current head**, measured, never
-   asserted — identical "ask by sha" discipline to ci-grant's evidence guard.
+   asserted — identical "ask by sha" discipline to ci-grant's evidence guard —
+   **and** (2b, #297) every job that is RED on trunk's runs at the red sha exists
+   in the branch's runs at that head, completed and concluded `success`, matched
+   per workflow. A green run alone never proved the check trunk is failing ran
+   here: a `paths:` filter, a matrix change or a renamed job leaves the run green
+   while the named check never ran. *"The one check that was failing now passes"*
+   is the claim, stated exactly. It is scoped to trunk's **red set**, so an
+   advisory job failing only on the branch does not refuse: the rule certifies
+   that the branch cures trunk's red, not that the branch is spotless.
 3. the **same anti-stacking guard** ci-grant uses holds — no prior grant OR cure
    already merged while trunk has stayed continuously red since. A repo that
    auto-cures once and stays red anyway must not auto-cure again on the same
@@ -2547,7 +2555,25 @@ ci-grant when any condition below is not met. Fires **iff**:
 4. the branch diff does **not** touch `.github/workflows/**` — a branch may not
    self-certify a change to the CI configuration that is grading it. This door
    stays behind a human ci-grant, **unless** the branch passes the carve-out
-   below.
+   below. The diff is read without rename detection, so moving a workflow file
+   out of the directory counts as touching it (#297).
+5. the branch diff does **not** change the `scripts` block of any `package.json`
+   (#297). The Node CI template does not hardcode what it measures: it asks
+   `package.json` whether `typecheck`, `lint` and `test` exist and **skips** each
+   step whose script is absent, and the job still concludes `success`. So
+   deleting `scripts.test` stops the failing suite from running without touching
+   a workflow file — the manifest is part of the instrument too. Any
+   `package.json` at any depth counts (the template's working directory is an
+   adopter's edit point, and workspace runners read nested scripts); key order
+   does not, a changed command does; deleting or renaming a manifest counts. There
+   is **no carve-out** for this condition — see below for why the #321 door cannot
+   adjudicate it.
+
+An unmeasurable diff — a failed read, a manifest that does not parse, a manifest
+that is a symlink — refuses, the same as any other unmeasured signal. Order of
+checks: 1 → 2 → 2b → 3 → diff measurable → 5 → 4 (with its carve-out). Condition 5
+comes before 4 because the carve-out *admits*: a check placed after it would never
+be reached by a branch touching both.
 
 **The workflow carve-out (#321) — one guarded door through condition 4, not a
 relaxation of it.** The repair for a CI-*infrastructure* outage is, by
@@ -2559,12 +2585,14 @@ may not be watching. Worse, the human is measurably the wrong judge here: a
 genuine repair and a "CI fix" that pins every job to a runner missing a shared
 library read identically in a one-line grant prompt, and granting the wrong one
 converts a 30-hour stall into a permanently red trunk. The CI evidence tells
-them apart. So a workflow-touching branch may still cure when, on top of 1-3,
-**all** of:
+them apart. So a workflow-touching branch may still cure when, on top of 1-3
+(2b included) and 5, **all** of:
 
 - **4a — job-name superset.** Every job RED on trunk's run at the red sha
   exists on the branch's own green run, completed and concluded `success`.
   *"I made the red job disappear"* — deleted, renamed, filtered away — fails here.
+  Since #297 this sub-test is condition 2b and applies to **every** cure; 4b and
+  4c stay the carve-out's alone.
 - **4b — executed-step superset.** For each of those jobs, every step that
   actually **ran** on trunk (reached a terminal, non-skipped conclusion) is
   present on the branch's job and concluded `success`. Steps *after* the failing
@@ -2616,13 +2644,25 @@ no label, and no tracker comment: nothing here is a human write.
   legitimately **renames** a job or a step fails 4a/4b, because the gate cannot
   distinguish a rename from a deletion. Expect this to be the most common benign
   refusal.
-- **`package.json`'s `scripts` block is not in scope of this carve-out, and must
-  not be folded into it.** The carve-out's evidence cannot adjudicate a
+- **#297 adds more accepted false refusals, in the same safe direction.** (iii) A
+  job with job-level `continue-on-error` that fails on trunk *persistently* is in
+  the red set, so it refuses every cure; step-level `continue-on-error` (what the
+  templates use) leaves the job `success` and is unaffected. Relaxing this is
+  left unwritten for the same reason as (i). (iv) A workflow red on trunk that
+  never runs for a branch (a deploy on push to trunk) has no branch counterpart,
+  so 2b refuses — correctly: the branch cannot prove trunk will go green. (v) A
+  red run with no job that can be named refuses on every path. (vi) Any nested
+  `package.json` scripts change during a red trunk refuses condition 5. (vii) A job
+  whose `name:` interpolates the event name differs between the push and the
+  `pull_request` run, so 2b cannot match it.
+- **`package.json`'s `scripts` block is condition 5, not part of this carve-out,
+  and must not be folded into it.** The carve-out's evidence cannot adjudicate a
   scripts-block weakening in the general case — it happens inside a step whose
   name and conclusion are unchanged and whose duration delta may sit below any
   signal, so 4b and 4c would both silently pass a change they are structurally
   unable to see. Two instrument paths, two different doors. What is named once
-  is the carve-out *predicate*, never the path list.
+  is the carve-out *predicate*, never the path list. Why only 4a was hoisted to
+  every cure, and 4b/4c were not: [`docs/adr/297-cure-rule-instrument-manifest-and-named-check-evidence.md`](docs/adr/297-cure-rule-instrument-manifest-and-named-check-evidence.md).
 
 The full reasoning — why the executed-step superset is the primary test and a
 bare duration threshold was rejected, what the two accepted false refusals cost,
@@ -2650,7 +2690,9 @@ and why the `timed_out` relaxation is deliberately left unwritten — is in
   widened door on a branch editing the CI config is a materially different fact
   from an ordinary one, and the commit is the only artifact that still says so
   after the runs age out. The `--grep=^CI-Cure:` scan is anchored on the prefix,
-  so the suffix never disturbs it.
+  so the suffix never disturbs it. `ciCure.provenJobs` (#297) lists the red jobs
+  2b proved passing on the branch — a consumer rendering cure eligibility reads
+  it (and `ok`/`reason`) rather than re-deriving a verdict from check-runs.
 - **Group branches get simpler under this door.** A ci-grant on a group branch
   requires a valid grant on every member issue; the cure's evidence is branch-level,
   so the all-or-nothing-per-branch property holds with zero per-issue paperwork.
