@@ -1220,6 +1220,10 @@ never read as "none". The same is true of
 and [`writes:`](#writes--the-trunk-direct-veto-and-the-two-things-that-make-a-branch-mandatory)
 — each optional, each read as undeclared rather than defaulted when absent, and `exposure`
 in particular never defaults to `none`, which is a *declared* claim, not the absence of one.
+A repo whose green work queues behind its trunk CI may declare
+[`ship-batch:`](project.schema.md#ship-batch--optional) to land up to three candidates per
+CI cycle ([§4, *Batch landing*](#batch-landing--one-combined-run-then-a-fast-forward-373));
+omitted, landing stays serial exactly as before.
 
 Mirror the tier as a GitHub **topic** (`tier-a` / `tier-b` / `tier-c`) so `gh repo list
 --topic tier-a` gives a fleet-wide view. The file is the source of truth; the topic is
@@ -1605,12 +1609,69 @@ reading either sees the same spelling. Spell them exactly so, everywhere:
 - **A class describes one sha.** Anything that moves the head — a sync merge of the base
   into the branch — invalidates it; read it again at the new head. A green inherited from
   an earlier sha is exactly the green-run-on-a-different-commit this section refuses.
+  The one sanctioned substitute for that re-read is a **batch's combined run** — one run at
+  a head that contains every member on top of the base, which grades each member's synced
+  state at once ([*Batch landing*](#batch-landing--one-combined-run-then-a-fast-forward-373),
+  below).
 - **A red class is data, not a failed wrap.** The implementer records it and stops; the
   table says who acts next. Only `red:finding` names the implementer, and only when the
   finding is the branch's own.
 - **One re-run per red episode, not per attempt** — and it is the only CI action the
   coordinator takes. A second identical failure is evidence; spending more re-runs on it
   just moves the wall further out.
+
+### Batch landing — one combined run, then a fast-forward (#373)
+
+Landing is serial by construction: every merge moves trunk, so the next candidate syncs
+the new trunk in and pays a whole CI cycle for its re-run, and trunk's own run for the
+last merge is still in flight when it asks. A queue of green work drains at **one change
+per trunk-CI cycle**. Measured on one repo with an 8–9 minute CI: six candidates green at
+their own heads, at most one landed per cycle — finished work waited hours behind the
+gate, not behind review.
+
+Every mature system that lands several changes per cycle (merge trains, merge queues,
+rollups, speculative pipelines) **tests the combined state before it becomes trunk**. None
+lands first and tests afterwards. So a repo that declares
+[`ship-batch: <N>`](project.schema.md#ship-batch--optional) (1–3; absent or 1 is serial,
+unchanged) may land through `colab ship --batch <b1,b2[,b3]>`:
+
+1. **Joining.** A member is `green` at its own head ([*Branch CI*](#branch-ci--the-candidates-own-run-read-as-a-class-314),
+   unchanged — or a `none` that cannot arrive), passes every gate its own serial ship would,
+   and is an ordinary squash into trunk through the `auto-trunk` grant. Anything special
+   ships serially, where its path already is: the docs-only door (judged per branch), a
+   migration, a ci-grant or cure, a core-path review, an adopted branch, a branch editing
+   `.github/workflows/**` (it would change what grades the batch). File-disjoint members
+   are preferred — only as a pre-filter that lowers eviction odds. **Disjointness is never
+   the correctness gate**: semantic conflicts need no shared file. The combined run is.
+2. **Building.** Trunk's current head — green exactly as the trunk gate requires — plus
+   one squash commit per member, **each its own commit with its own `Closes #N`**, so
+   per-issue evidence and revert stay one-to-one. A member that conflicts with those
+   already in drops to the next batch. The result is pushed to `ship-batch/<trunk-sha7>`.
+3. **One combined run** there must be `green`. It **replaces** each member's post-sync
+   re-run — not a skip justified by disjointness, but one run instead of N.
+4. **Landing.** Trunk fast-forwards to the batch head **only if trunk has not moved** since
+   the batch was built — by a plain, non-forced push, so a moved trunk makes the push fail
+   on its own. Moved → nothing lands and the batch is rebuilt on the new head. Each
+   member's evidence names the combined run.
+5. **A green batch run stands in for trunk's own run at that same sha** — while trunk's
+   run is still in flight — only when **the same workflows** ran there: the workflow files
+   firing on a trunk push and on a `ship-batch/**` push must be the same set. Otherwise
+   trunk waits for its own run, as always.
+6. **Failure.** `red:infra` → re-run once (unchanged). `red:finding`, or red again after
+   that one re-run → **land nothing** from the batch; the members ship serially, each with
+   its own sync run — for N ≤ 3 that *is* the bisection — and the one that goes red
+   returns to its implementer as a class, exactly as today.
+7. **Wiring.** If no workflow fires on a `ship-batch/**` push, the combined run can never
+   arrive: `colab ship` says so and declines to serial — it never waits for it. Consumer
+   CI opts in by adding `'ship-batch/**'` to a CI workflow's `push: branches:`.
+8. **A red trunk still stops everything** except the cure/grant doors, and those apply
+   **per member, never to a batch**: a red trunk declines the batch outright.
+
+`colab ship --batch` never waits: each call reads the remote, takes one step, and exits
+`0` landed · `3` paused (wait on the printed run, bounded as any other CI wait, then run
+the same command again) · `4` declined, nothing landed, ship the members one at a time.
+Declining is never a silent fall-through to the serial path: that path's sync commit
+still needs its own re-run, and landing it unseen is the thing this section exists to stop.
 
 ### Is a shipped half actually shippable? — the mechanical gate is not the judgement call (#263)
 

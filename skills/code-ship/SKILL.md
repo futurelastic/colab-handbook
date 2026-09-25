@@ -436,6 +436,42 @@ migrations run clean together. *(Machine-specific reconcile — e.g. deduping a
 migration against one already on trunk — hooks in here; the universal rule is
 "regen on the merged base, never hand-merge generated files".)*
 
+### Batch landing — several ready candidates, one combined run (#373)
+
+**Only where `.github/project.yml` declares `ship-batch: <N>` greater than 1.** Absent or 1,
+skip this subsection: every candidate ships alone, as below. With it, two or more candidates
+that are each **ready** — `green` at their own head (B1a's class, or the `none` that cannot
+arrive), merge-clean against trunk — land through one command instead of one ship each
+(`CONVENTIONS.md`
+[§4, *Batch landing*](../../CONVENTIONS.md#batch-landing--one-combined-run-then-a-fast-forward-373)):
+
+1. Run §0 through B1c **per member** as usual — hand-off contract, the already-shipped grep,
+   `landed`, B1b's harvest, B1c's grade. **Grading stays per member**; a batch never grades
+   a diff it did not read. A member that fails any of it leaves the batch.
+2. **Do not run B0's sync or B1a's post-sync re-run per member.** Instead:
+   ```sh
+   colab ship --batch <b1>,<b2>[,<b3>] --repo <repo>
+   ```
+   It re-reads each member's own ship gates, builds trunk + one squash commit per member on
+   `ship-batch/<trunk-sha7>`, and pushes it. That ref's **one combined run replaces every
+   member's post-sync re-run** (B1a, below).
+3. Read the exit code — it never waits for you:
+   - **`3` — paused.** The combined run (or trunk's own) is still going, or the batch was just
+     (re)built. Wait on the run id it printed with B1a's bound — `timeout 900 gh run watch
+     <id>`, 15 minutes — then run **the same command** again. The cap expiring is a defer
+     exactly as B1a records one; the batch ref stays for the next pass.
+   - **`0` — landed.** Trunk fast-forwarded to the tested head; each member's claim, worktree,
+     branch and 🚢 comment are handled as a serial ship handles them. Go to B2b for the
+     per-issue evidence (the 🚢 line already names the combined run).
+   - **`4` — declined; nothing landed.** The last line is `→ SERIAL: colab ship --branch …` —
+     ship those members one at a time from B0. If the reason was a **red combined run**, first
+     classify it like any branch red (B1a, *Telling infra from finding*): `red:infra` → run the
+     printed `gh run rerun <id> --failed` once, wait, and re-run the batch command; `red:finding`
+     → go serial, and the member that goes red on its own sync run returns to its implementer
+     as a class.
+4. A red trunk declines a batch outright: the cure and ci-grant doors (B1, *Red trunk*) apply to
+   one member at a time, never to a batch.
+
 ## B1. Verify CI on `<base>` is alive AND green — for the sha you are about to merge
 
 **Ask by commit, not by recency** (`CONVENTIONS.md` [§4](../../CONVENTIONS.md#4-branches-and-commits), #92). `gh run list --branch
@@ -585,6 +621,11 @@ every step here runs in the coordinator's own worktree.
   A5 measured is not the sha you are about to merge. Push the sync commit and read the
   class again for the new head — a green class inherited from a pre-sync sha is exactly
   the "green run on a different commit" this whole section exists to refuse.
+- **In a batch (#373), the combined run is that re-read — once, for every member.** Its head
+  is trunk plus each member's squash, so it grades each member's synced state; do not also
+  re-run each member. Read it through `colab ship --batch` (it applies the same all-runs rule
+  and counts the one re-run), wait on it with the same 15-minute bound, and classify its red
+  exactly as a branch red — only the one re-run belongs to the batch; after that, serial.
 - **Never wait out a bound on a repo whose workflows cannot fire for a branch ref.**
   This handbook's own repo is that shape (`push: branches: [main]` + `pull_request`),
   and `code-wrap` A5 does not open a PR by design — so branch CI genuinely does not
@@ -1044,7 +1085,9 @@ squash leaves no merge relation, which is why deleting the branch needs
 `git branch -D`, not `-d`).
 
 Evidence is three parts: **the `<base>` squash sha · `file:line` · what you checked and
-what came back.** When `<base>` is a declared line, say so in the comment: that code is
+what came back.** A member that landed in a batch (#373) cites **its own** squash
+commit, not the batch head — `colab ship --batch` already wrote that sha and the combined run
+into the 🚢 line. When `<base>` is a declared line, say so in the comment: that code is
 **not in trunk yet**, and an evidence comment that implies otherwise will be read as
 "this is in the next release".
 

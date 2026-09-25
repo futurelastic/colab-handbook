@@ -177,6 +177,32 @@ function workflowFiresOnTag(on, tag) {
 const PRERELEASE_TAG_PROBE = "v1.2.0-rc.1";
 
 /** Workflow file names that count as deploy workflows by name (`deploy-*.yml`, `deploy.yml`). */
+/**
+ * Does a workflow fire on a push to BRANCH `branch` (#373)? The branch-side sibling of
+ * workflowFiresOnTag, same filter semantics: `branches:` decides by inclusion, `branches-ignore:`
+ * fires on everything it does not match, a bare `push:` fires on every branch, and a push filtered
+ * by tags only (no branch filter) never fires on a branch at all.
+ */
+function workflowFiresOnBranchPush(on, branch) {
+  if (!on.found || !on.events.has("push")) return false;
+  if (on.pushBranches !== null) return githubFilterMatches(on.pushBranches, branch);
+  if (on.pushBranchesIgnore !== null) return !githubFilterMatches(on.pushBranchesIgnore, branch);
+  return on.pushTags === null && on.pushTagsIgnore === null;
+}
+
+/**
+ * The workflow files (names under .github/workflows/) that fire on a push to `branch` (#373).
+ * `readFile(relPath)` returns the text or null, exactly as prereleaseTagTriggers takes it.
+ */
+function workflowsFiringOnBranchPush({ readFile, workflows, branch }) {
+  const out = [];
+  for (const wf of workflows || []) {
+    const text = readFile(`.github/workflows/${wf}`);
+    if (text && workflowFiresOnBranchPush(parseWorkflowOn(text), branch)) out.push(wf);
+  }
+  return out;
+}
+
 function isDeployWorkflow(file) {
   return /^deploy[-.]/.test(file);
 }
@@ -242,5 +268,6 @@ function prereleaseTagTriggers({ readFile, workflows, deploy }) {
 module.exports = {
   PRERELEASE_TAG_PROBE,
   parseWorkflowOn, listField, githubFilterRegex, githubFilterMatches, workflowFiresOnTag,
+  workflowFiresOnBranchPush, workflowsFiringOnBranchPush,
   isDeployWorkflow, isReleaseTagTemplateCopy, prereleaseTagTriggers,
 };

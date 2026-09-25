@@ -88,7 +88,8 @@ const writesAuthority = require("../tools/lib/writes-authority.js");
 // narrow-never-widen validation of what a repo declares. Shared with `colab release cut` (#338)
 // so the audit and the tool that cuts tags can never read the rung two ways.
 const releasePolicy = require("../tools/lib/release-policy.js");
-const { parseWorkflowOn, workflowFiresOnTag, prereleaseTagTriggers } = require("../tools/lib/workflow-triggers.js");
+const { parseWorkflowOn, workflowFiresOnTag, prereleaseTagTriggers, workflowsFiringOnBranchPush } = require("../tools/lib/workflow-triggers.js");
+const shipBatch = require("../tools/lib/ship-batch.js");
 // #228's identity vocabulary — resolution, parsing, matching and REDACTION. Shared with the
 // conformance test that holds it and the shell hook (templates/pre-commit-identity) to the
 // same semantics; the shell scanner cannot require it (a template lands in repos with no
@@ -1164,6 +1165,22 @@ function auditRepo(target, ctx) {
     // <login>/<machine>/<type>/<slug>-<N> (CONVENTIONS.md §4). Absent = the unprefixed default.
     const prefixRaw = "branchPrefix" in (cfg || {}) ? cfg.branchPrefix : null;
     if (prefixRaw !== null && prefixRaw !== "machine") fail(`branchPrefix is ${JSON.stringify(prefixRaw)}, expected "machine" (omit for the unprefixed default)`);
+
+    // ---- ship-batch (#373) ------------------------------------------------------
+    // Batch landing's opt-in: an integer 1–3 (tools/lib/ship-batch.js parseShipBatch — the one reading
+    // `colab ship --batch` uses, so the two cannot disagree). A malformed value makes ship fail closed
+    // to serial, which is safe but silent, so it fails here. Two further shapes are inert rather than
+    // wrong, so they warn: no workflow fires on a `ship-batch/**` push (the combined run can never
+    // arrive), and no `autonomy: auto-trunk` (a batch lands in one unattended push, which needs it).
+    if ("ship-batch" in (cfg || {}) && cfg["ship-batch"] !== null) {
+      const sbCfg = shipBatch.parseShipBatch(cfg);
+      if (!sbCfg.valid) fail(sbCfg.reason);
+      else if (sbCfg.n > 1) {
+        const firing = workflowsFiringOnBranchPush({ readFile: (p) => src.readFile(p), workflows, branch: shipBatch.PROBE_REF });
+        if (!firing.length) warn(`ship-batch: ${sbCfg.n} but no workflow in .github/workflows fires on a push to ship-batch/** — colab ship --batch will always fall back to serial; add 'ship-batch/**' to a CI workflow's push: branches:`);
+        if (autonomy !== "auto-trunk") warn(`ship-batch: ${sbCfg.n} is inert without autonomy: auto-trunk — colab ship --batch lands every member in one unattended push`);
+      }
+    }
 
     // ---- holds (#360) ---------------------------------------------------------
     // Shape only: the labels this repo's scheduler treats as start holds, read by code-triage

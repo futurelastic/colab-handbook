@@ -397,6 +397,36 @@ deploys; the field cannot express otherwise. Promotion follows
 [CONVENTIONS §6's release rung](CONVENTIONS.md#6-releases). The grant lives in the repo file (not the caller's flags) so autonomy is
 a property of the repo's risk profile, reviewed in a commit like any other change.
 
+### `ship-batch` — optional
+
+```yaml
+ship-batch: 3     # 1–3; absent or 1 = serial landing (the default)
+```
+
+How many green candidates `colab ship --batch` may land at once
+([CONVENTIONS.md §4, *Batch landing*](CONVENTIONS.md#batch-landing--one-combined-run-then-a-fast-forward-373)).
+An integer from 1 to 3. **Absent or `1` keeps today's serial landing exactly** — every
+`--batch` call declines, and a plain `colab ship` is unchanged whatever this says. Any other
+value (`0`, `4`, `2.5`, a word) fails the audit, and `colab ship` fails closed to serial on it:
+a malformed opt-in must never widen what an unattended merge does. The cap stays at 3 until
+eviction data says otherwise — start low.
+
+With N > 1, `colab ship --batch <b1,b2[,b3]>` puts trunk's head plus one squash commit per
+member (each with its own `Closes #N`) on `ship-batch/<trunk-sha7>`, needs **one** combined CI
+run there to be green, and fast-forwards trunk to it only if trunk has not moved. Two things
+must also be true, and the audit warns when either is not:
+
+- **A CI workflow fires on a `ship-batch/**` push.** Consumer workflows must opt in — add
+  `'ship-batch/**'` to a CI workflow's `push: branches:`. Without it the combined run can never
+  arrive, so every `--batch` call says so and declines.
+- **`autonomy: auto-trunk`.** A batch lands every member in one unattended push; without the
+  grant the field is inert.
+
+`ship-batch/` is a ref namespace `colab ship` owns: it creates, force-replaces (only within that
+namespace, on a rebuild) and deletes those refs itself. Exit codes of `--batch`: `0` landed ·
+`3` paused (wait on the printed run, bounded, then run the same command again) · `4` declined —
+nothing landed, ship the members one at a time.
+
 ### `room` — optional
 
 ```yaml
@@ -1094,6 +1124,8 @@ the shape that shows it. One writer at a time says nothing about who reads the r
 | `writes` ∈ {`free`, `direct`, `isolated`, `serial-direct`, `serial-gated`, `serial`} when set | a misspelled value silently read as coexistence (⚖ #233: never veto on an unrecognised value) |
 | `room` ∈ {`solo`, `team`, `public`} when set | a misspelled value silently read as undeclared |
 | `branchPrefix` = `machine` when set | a misspelled value silently read as the unprefixed default |
+| `ship-batch` an integer 1–3 when set → **finding** otherwise | a misspelled opt-in silently read as serial by `colab ship` |
+| `ship-batch` > 1 with no workflow firing on a `ship-batch/**` push, or without `autonomy: auto-trunk` → **advisory** | a batch opt-in that can never land a batch |
 | `holds` is a list of non-empty strings, each listed once, when set → **finding** otherwise | a scalar or malformed list silently read as "no holds declared", so triage reports held work ready |
 | `exposure` ∈ {`none`, `self`, `live`, `released`} when set | a misspelled value silently read as undeclared |
 | `exposure: none` + `production: null` → **advisory** | the both-empty claim ("nothing consumes this, and there is nothing to point at") going unflagged |

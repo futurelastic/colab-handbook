@@ -52,6 +52,7 @@ const claimIdentity = require('./lib/claim-identity');
 const claimComments = require('./lib/claim-comments');
 const machine = require('./lib/machine');
 const targetSync = require('./lib/ship-target-sync');
+const shipBatch = require('./lib/ship-batch');
 const docsOnly = require('./lib/docs-only');
 const cureDiff = require('./lib/cure-diff');
 const codeowners = require('./lib/codeowners');
@@ -7811,6 +7812,7 @@ function ciCureTrailerLine(cureVerdict, branch, trunk) {
 }
 
 const HELP_SHIP = `colab ship [--repo <path>] [--worktree <name> | --branch <br> | --direct] [--message "<msg>"] [--refs <N[,M]>] [--keep-worktree] [--delete-branch | --keep-branch] [--adopt] [--session <id>] [--session-name <s>] [--dry] [--json]
+       colab ship --batch <b1,b2[,b3]> [--repo <path>] [--keep-worktree] [--delete-branch | --keep-branch] [--session <id>] [--session-name <s>] [--dry]
 
 The ONE sanctioned door for code-wrap Phase B: squash-merge a session branch into the BASE IT WAS
 CUT FROM — trunk for an ordinary session, or the declared integration line recorded on its worktree
@@ -8005,6 +8007,34 @@ that comment), release the claims and the checkout hold, journal the plan file. 
 keeps its claim so a re-run finds it. Cannot be combined with --worktree/--branch/--message/
 --delete-branch/--keep-branch/--keep-worktree/--adopt. \`writes: direct\` is not required. --dry and --dry --json
 work as usual (json: \`direct: true\`, \`branch: null\`, \`mode: "evidence-close"\`, \`coreReview\`).
+
+BATCH LANDING (--batch, #373) — opt-in per repo: \`ship-batch: <N>\` in project.yml, an integer 1–3;
+absent or 1 declines every --batch call. It tests up to N green candidates as ONE combined head, then
+fast-forwards trunk, so a queue of green work stops draining at one change per trunk-CI cycle:
+  - each member must be green at its OWN head (or have no run that could ever arrive), pass every
+    gate its own \`ship --dry --json\` reports, and be an ordinary squash into trunk through the
+    auto-trunk grant — the docs-only door, a migration, a ci-grant/cure, a core-path review, an
+    adopted branch and a branch editing .github/workflows/** all ship serially, where their path is;
+  - trunk head + one squash commit per member (its own Closes #N and a Ship-Batch: trailer) is pushed
+    to ship-batch/<trunk-sha7>; that ONE combined run replaces each member's post-sync re-run;
+  - green → trunk fast-forwards to the batch head by a plain, non-forced push, only if trunk has
+    not moved (a moved trunk deletes the ref and rebuilds on the new head);
+  - each member then gets the same tail a serial ship gets; its 🚢 comment names the combined run.
+  A green batch-ref run also counts as trunk-green for that same sha while trunk's own run is in
+  flight — only when the workflows firing on a trunk push and on a ship-batch/** push are the same set.
+It never waits: each call reads the remote, takes ONE step and exits —
+  0  landed
+  3  paused — the combined run (or trunk's) is still going, or the batch was just (re)built: wait on
+     it, bounded (code-ship B1a), and run the SAME command again
+  4  declined — nothing landed; the last line is "→ SERIAL: colab ship --branch <b1> · …". Causes:
+     not enabled, no auto-trunk, no workflow fires on ship-batch/** (the run could never arrive),
+     trunk CI red (the cure/grant doors apply per member, never to a batch), fewer than two members
+     can join, or the combined run is red — classify it: red:infra → the printed \`gh run rerun\`,
+     once; red:finding, or red again after that one re-run → serial
+  1  refused (a broken checkout, an unreadable remote)
+A member that conflicts with the members already in is dropped to the next batch; the rest go on.
+--dry builds the batch locally and prints it, pushing nothing. Consumer CI must opt in: add
+'ship-batch/**' to a CI workflow's push: branches:.
 
 B3 KEEPS the branch by default. Deleting refs from a shared remote is not something this command
 does unasked, however certain it is that the content landed: reporting is safe and reversible,
@@ -8365,6 +8395,13 @@ function shipCiCheck(repoAbs, gh, target, trunk, grantThunk, cureThunk) {
   if (!run) return { name, ok: false, class: SELF_CLEARING, detail: 'gh run list failed', grantVerdict: null, cureVerdict: null };
   const at = `${via}@${shortSha(run.sha)}`;
   const verdict = classifyCiRun(repoAbs, run, at);
+  // #373: trunk's own run not there yet or still in flight (never a finished red) — a batch that landed
+  // this exact sha may already have graded it on its ship-batch/** ref, with the same workflows.
+  // Inert (no gh call) unless project.yml declares ship-batch > 1.
+  if (!verdict.ok && target === trunk && (run.status === 'none' || verdict.class === SELF_CLEARING)) {
+    const sub = shipBatchTrunkSubstitute(repoAbs, trunk, run.sha);
+    if (sub) return { name, ...sub, grantVerdict: null, cureVerdict: null };
+  }
   if (verdict.ok || verdict.class !== HUMAN_GATED) return { name, ...verdict, grantVerdict: null, cureVerdict: null };
   return applyRedTrunkExemptions({ name, ...verdict }, target, trunk, run.sha, grantThunk, cureThunk);
 }
@@ -8851,14 +8888,17 @@ function cmdShipDryJson(opts) {
       include: d.include, reason: d.reason, visibility: d.visibility, room: d.room, failClosed: d.failClosed } };
   };
   const emit = (ok) => {
-    print(JSON.stringify({
+    const body = {
       ok, dry: true, repo: shortRepo(repoAbs), branch: sess.branch, worktree: sess.name || null,
       target, mode, issues: sess.issues, closeIssues, refsIssues, checklistFindings, checks,
       migrationGrant: migrationGrantPayload, ciGrant: ciGrantPayloadVal, ciCure: ciCurePayloadVal,
       baseCi: baseCiPayloadVal, dirtyOwners: dirtyOwnersPayloadVal, autonomyGate: autonomyGatePayloadVal,
       coreReview: coreReviewPayloadVal,
       ...machineTrailerPayload(mode === 'squash' || mode === 'pr-pending'),
-    }, null, 2));
+    };
+    // #373: `ship --batch` reads each member through this SAME function — handed the body, not stdout.
+    if (opts._report) opts._report.body = body;
+    else print(JSON.stringify(body, null, 2));
     return ok ? 0 : 1;
   };
 
@@ -9717,7 +9757,7 @@ function shipRefFor(repoAbs, branch) {
 
 function cmdShip(argv) {
   const opts = parseArgs(argv, {
-    values: { '--repo': 'repo', '--worktree': 'worktree', '--branch': 'branch', '--message': 'message', '--refs': 'refs', '--session': 'session', '--session-name': 'sessionName' },
+    values: { '--repo': 'repo', '--worktree': 'worktree', '--branch': 'branch', '--message': 'message', '--refs': 'refs', '--session': 'session', '--session-name': 'sessionName', '--batch': 'batch' },
     flags: { '--keep-worktree': 'keepWorktree', '--delete-branch': 'deleteBranch', '--keep-branch': 'keepBranch', '--dry': 'dry', '--json': 'json', '--direct': 'direct', '--adopt': 'adopt', '-h': 'help', '--help': 'help' },
   });
   if (opts.help) return print(HELP_SHIP);
@@ -9726,6 +9766,7 @@ function cmdShip(argv) {
   // — refuse the combination rather than silently ignore --json on a real ship.
   if (opts.json && !opts.dry) throw new UserError('--json currently only applies together with --dry — see `colab ship --help`');
   if (shippedBranch.conflictingFlags(opts)) throw new UserError('--delete-branch and --keep-branch contradict each other — pass one (see `colab ship --help`, #368)');
+  if (opts.batch) return cmdShipBatch(opts); // #373 — its own re-entrant path; nothing below changes
   // A fully separate code path, deliberately: the prose/table path below is unchanged by this
   // feature (CONVENTIONS/#77 requires it stay byte-identical), so --dry --json does its own
   // resolution rather than threading a json branch through the existing one.
@@ -10711,6 +10752,426 @@ function cmdShip(argv) {
   }
   deferredCollector = null;
   return 0;
+}
+
+// ---------------------------------------------------------------------------
+// ship --batch — batch landing (#373). The pure rules live in lib/ship-batch.js; this is the I/O.
+//
+// Re-entrant by design: every call reads the remote, takes ONE step, and exits. Nothing here waits
+// or polls — waiting stays with the caller, bounded exactly as code-ship B1a bounds a post-sync
+// re-run (#370). Exit 0 landed · 3 paused (wait, then run the same command again) · 4 batch declined,
+// ship the members one at a time (the last line names them) · 1 refused.
+//
+// Never falls through to the single-branch path by itself: that path's B0 sync commit needs the
+// caller's own B1a re-run, so a silent fall-through would land a sync CI never saw.
+
+/** The workflow files at `treeish` that fire on a push to `branch` — a static read, no CI involved. */
+function workflowsFiringAt(repoAbs, treeish, branch) {
+  const ls = git.git(['ls-tree', '--name-only', `${treeish}:.github/workflows`], repoAbs);
+  const workflows = ls.ok ? ls.stdout.split('\n').map((s) => s.trim()).filter((f) => /\.ya?ml$/.test(f)) : [];
+  const readFile = (rel) => { const r = git.git(['show', `${treeish}:${rel}`], repoAbs); return r.ok ? r.stdout : null; };
+  return workflowTriggers.workflowsFiringOnBranchPush({ readFile, workflows, branch });
+}
+
+/**
+ * #373: may a green run on a `ship-batch/**` ref stand in for trunk's OWN run at the same sha? Only
+ * on a repo that declared `ship-batch` > 1, only for a head commit a batch landed (its Ship-Batch:
+ * trailer names the ref), and only when the same workflows ran there — lib/ship-batch.js
+ * batchGreenCoversTrunk. With the field absent this returns null before any gh call.
+ */
+function shipBatchTrunkSubstitute(repoAbs, trunk, sha) {
+  if (shipBatch.parseShipBatch(projectDoc(repoAbs)).n <= 1 || !sha) return null;
+  const msg = git.git(['log', '-1', '--format=%B', sha], repoAbs);
+  if (!msg.ok) return null;
+  const tr = shipBatch.parseMemberTrailers([msg.stdout])[0];
+  if (!tr || !shipBatch.parseBatchRef(tr.ref)) return null;
+  const trunkRows = git.ghRunsForCommit(repoAbs, trunk, sha, 20);
+  const batchRows = git.ghRunsForRef(repoAbs, tr.ref, sha);
+  if (trunkRows === null || batchRows === null) return null;
+  const covers = shipBatch.batchGreenCoversTrunk({
+    trunkRows, batchRows,
+    trunkFires: workflowsFiringAt(repoAbs, sha, trunk),
+    batchFires: workflowsFiringAt(repoAbs, sha, shipBatch.PROBE_REF),
+  });
+  if (!covers) return null;
+  return { ok: true, class: null, detail: `${batchRows.length} runs at ${tr.ref}@${shortSha(sha)}: all success — same workflows as a trunk push (#373)` };
+}
+
+/** `colab ship --dry --json`'s body for one branch, without printing it — the SAME gates, not a copy. */
+function shipDryJsonReport(opts) {
+  const holder = {};
+  let code;
+  try { code = cmdShipDryJson({ ...opts, _report: holder }); }
+  catch (e) { if (e instanceof UserError) return { ok: false, body: null, error: e.message }; throw e; }
+  return { ok: code === 0, body: holder.body || null, error: null };
+}
+
+function cmdShipBatch(opts) {
+  for (const [key, flag] of [['direct', '--direct'], ['worktree', '--worktree'], ['branch', '--branch'], ['message', '--message'], ['refs', '--refs'], ['adopt', '--adopt'], ['json', '--json']]) {
+    if (opts[key]) throw new UserError(`--batch does not combine with ${flag} — each member ships with its own recorded claims and composed message (#373)`);
+  }
+  const repoAbs = resolveRepo(opts);
+  if (!git.repoRoot(repoAbs)) throw new UserError(`${repoAbs} is not a git repo`);
+  const doc = projectDoc(repoAbs);
+  const trunk = resolveTrunk(repoAbs, doc);
+  if (!trunk) throw new UserError('Could not determine trunk branch (set project.yml trunk:)');
+  const members = [...new Set(String(opts.batch === true ? '' : opts.batch).split(',').map((s) => s.trim()).filter(Boolean))];
+  if (members.includes(trunk)) throw new UserError(`Refusing: ${trunk} is the trunk itself — it cannot be a batch member`);
+  const serial = (why, list = members) => {
+    print(`✗ ship-batch: ${why}`);
+    print(shipBatch.serialLine(list));
+    return 4;
+  };
+
+  const cfg = shipBatch.parseShipBatch(doc);
+  if (cfg.n <= 1) return serial(`not enabled in project.yml (${cfg.reason}) — batch landing is opt-in (#373)`);
+  if (String(doc.autonomy || '') !== 'auto-trunk') {
+    return serial(`project.yml does not grant autonomy: auto-trunk — batch landing needs it (every member lands in one unattended push)`);
+  }
+  if (members.length < 2) return serial(`--batch names ${members.length} branch(es) — a batch needs at least two`);
+  if (members.length > cfg.n) warn(`--batch names ${members.length} branches; ship-batch: ${cfg.n} caps the batch — the rest wait for the next one`);
+
+  const remote = git.remoteFor(repoAbs);
+  const fetched = git.git(['fetch', '--prune', remote], repoAbs);
+  if (!fetched.ok) throw new UserError(`could not fetch ${remote}: ${git.gitFailureLine(fetched.stderr)} — a batch is never built from stale refs`);
+  const trunkRef = `${remote}/${trunk}`;
+
+  // ---- (a) wiring: could the combined run ever arrive? Decided BEFORE anything is pushed. ----
+  const fires = workflowsFiringAt(repoAbs, trunkRef, shipBatch.PROBE_REF);
+  if (!shipBatch.wiring(fires).wired) {
+    return serial('no workflow in .github/workflows fires on a push to ship-batch/** — the combined run could never arrive; landing serially instead');
+  }
+
+  const gh = isGhUsable(repoAbs);
+  if (!gh) throw new UserError(`gh not usable (${ghUnusableWhy(repoAbs)}) — a batch cannot read its combined run`);
+
+  // ---- (b) trunk CI, read with NO doors: the cure/grant doors apply per member, never to a batch ----
+  const tci = shipCiCheck(repoAbs, gh, trunk, trunk, null, null);
+  const trunkCi = tci.ok ? 'green' : (tci.class === SELF_CLEARING ? 'pending' : 'red');
+  if (trunkCi === 'red') {
+    return serial(`trunk CI not green (${tci.detail}) — a batch never passes the cure/grant doors; each member meets them on its own`);
+  }
+  if (trunkCi === 'pending') {
+    print(`⏸ ship-batch: trunk CI is still running (${tci.detail}) — wait on it (bounded, B1a), then run this command again.`);
+    return 3;
+  }
+
+  // ---- (c) an existing batch: resume it, or clear it when trunk has moved past it ----
+  const lsTrunk = git.git(['ls-remote', remote, `refs/heads/${trunk}`], repoAbs);
+  const trunkNow = lsTrunk.ok ? (lsTrunk.stdout.split('\t')[0] || '').trim() : '';
+  if (!trunkNow) throw new UserError(`could not read ${trunk} on ${remote}`);
+  const lsBatch = git.git(['ls-remote', remote, 'refs/heads/ship-batch/*'], repoAbs);
+  const batchRefs = (lsBatch.ok ? lsBatch.stdout.split('\n') : []).map((l) => l.split('\t'))
+    .map(([sha, ref]) => ({ sha: (sha || '').trim(), parsed: shipBatch.parseBatchRef((ref || '').trim()) }))
+    .filter((x) => x.sha && x.parsed);
+  const deleteRef = (ref) => {
+    const d = git.git(['push', remote, '--delete', ref], repoAbs);
+    if (!d.ok) warn(`could not delete ${remote}/${ref}: ${git.gitFailureLine(d.stderr)} — delete it by hand`);
+    return d.ok;
+  };
+  for (const b of batchRefs.filter((x) => !trunkNow.startsWith(x.parsed.base7))) {
+    print(`  trunk moved since ${b.parsed.ref} was built (${b.parsed.base7} → ${shortSha(trunkNow)}) — nothing landed; rebuilding`);
+    deleteRef(b.parsed.ref);
+  }
+  const atBase = batchRefs.find((x) => trunkNow.startsWith(x.parsed.base7)) || null;
+  let existing = null;
+  if (atBase) {
+    const log = git.git(['log', '--format=%B%x00', `${trunkNow}..${atBase.sha}`], repoAbs);
+    const inBatch = shipBatch.parseMemberTrailers(log.ok ? log.stdout.split('\0') : []).reverse();
+    const foreign = inBatch.filter((m) => !members.includes(m.branch));
+    if (foreign.length) {
+      print(`⏸ ship-batch: another batch is in flight at this base — ${atBase.parsed.ref} carries ${inBatch.map((m) => m.branch).join(', ')}.`);
+      print('  Wait for it to land or be declined, then run this command again.');
+      return 3;
+    }
+    const heads = inBatch.map((m) => ({ ...m, now: git.branchRefs(repoAbs, m.branch, remote).remoteSha }));
+    const matches = heads.length >= 2 && heads.every((m) => m.now && m.now.startsWith(m.sha));
+    existing = { ref: atBase.parsed.ref, base7: atBase.parsed.base7, sha: atBase.sha, members: inBatch, matches };
+  }
+  const verdict = existing && existing.matches ? shipBatch.combinedVerdict(git.ghRunsForRef(repoAbs, existing.ref, existing.sha)) : null;
+  let step = shipBatch.nextStep({ enabled: true, wired: true, trunkCi, eligibleCount: 2, existing, trunkNow, verdict });
+
+  if (step.step === 'rebuild') {
+    print(`  ${existing.ref} no longer carries the requested members at their current heads — rebuilding`);
+    deleteRef(existing.ref);
+    existing = null;
+    step = { step: 'build' };
+  }
+  if (step.step === 'wait-run') {
+    print(`⏸ BATCH-PENDING ${existing.ref}@${shortSha(existing.sha)} — combined run ${verdict && verdict.runIds.length ? verdict.runIds.join(', ') + ' ' : ''}${verdict ? verdict.why : ''}.`);
+    print(`  Wait on it (bounded, B1a: gh run watch <id>), then run this command again. Nothing landed.`);
+    return 3;
+  }
+  if (step.step === 'red-rerun-or-serial') {
+    const ids = verdict.runIds.join(', ') || '(id unread)';
+    print(`✗ ship-batch: the combined run is red at ${existing.ref}@${shortSha(existing.sha)} (${verdict.why}; run ${ids}). Nothing landed.`);
+    print('  Classify it first (CONVENTIONS §4, Branch CI):');
+    for (const id of verdict.runIds) print(`    red:infra   → gh run rerun ${id} --failed   then run this command again (one re-run only)`);
+    print('    red:finding → land nothing from this batch; ship the members one at a time, each with its own sync run:');
+    print(shipBatch.serialLine(existing.members.map((m) => m.branch)));
+    return 4;
+  }
+  if (step.step === 'red-serial') {
+    print(`✗ ship-batch: the combined run is red again after its one re-run (${verdict.why}) — nothing landed; ${existing.ref} deleted.`);
+    deleteRef(existing.ref);
+    print(shipBatch.serialLine(existing.members.map((m) => m.branch)));
+    return 4;
+  }
+  if (step.step === 'land') return shipBatchLand(repoAbs, doc, trunk, remote, trunkNow, existing, verdict, opts);
+
+  // ---- (d) pick the members — each through its OWN ship gates ----
+  const st = state.loadState();
+  const evaluated = [];
+  for (const b of members) {
+    const refs = git.branchRefs(repoAbs, b, remote);
+    let why = null, report = null, ciClass = null, files = [];
+    if (!refs.remoteSha) why = `not on ${remote} — push it first; its CI has never seen it`;
+    else if (refs.localSha && refs.localSha !== refs.remoteSha) why = `local ${shortSha(refs.localSha)} ≠ ${remote} ${shortSha(refs.remoteSha)} — its CI never saw this head`;
+    if (!why) {
+      const rep = shipDryJsonReport({ repo: repoAbs, branch: b, dry: true, json: true, session: opts.session, sessionName: opts.sessionName });
+      report = rep.body;
+      files = branchChangedFiles(repoAbs, trunkRef, refs.remoteSha);
+      ciClass = shipBatch.branchCiClass(git.ghRunForSha(repoAbs, b), workflowsFiringAt(repoAbs, refs.remoteSha, b).length > 0);
+      const el = rep.error ? { ok: false, why: rep.error } : shipBatch.memberEligibility(report, ciClass, {
+        trunk, touchesWorkflows: files.some((f) => f.startsWith('.github/workflows/')),
+      });
+      if (!el.ok) why = el.why;
+    }
+    evaluated.push({ branch: b, sha: refs.remoteSha, report, ciClass, files, ok: !why, why: why || `own head CI: ${ciClass}` });
+  }
+  const eligible = evaluated.filter((e) => e.ok);
+  const { selected, overflow } = shipBatch.selectMembers(eligible, cfg.n);
+  print(`ship --batch ${shortRepo(repoAbs)} → ${trunk} @ ${shortSha(trunkNow)}  (ship-batch: ${cfg.n})${opts.dry ? '  [DRY RUN]' : ''}`);
+  print(table(evaluated.map((e) => [e.ok ? (selected.includes(e) ? '✓' : '·') : '✗', e.branch,
+    e.ok && !selected.includes(e) ? `eligible — waits for the next batch (cap ${cfg.n})` : e.why]), ['', 'MEMBER', 'DETAIL']));
+  const notJoining = evaluated.filter((e) => !selected.includes(e)).map((e) => e.branch);
+  step = shipBatch.nextStep({ enabled: true, wired: true, trunkCi, eligibleCount: selected.length, existing: null, trunkNow });
+  if (step.step === 'serial') return serial(`${selected.length} member(s) can join — a batch needs at least two`);
+
+  // ---- (e) build: trunk head + one squash commit per member, in an ephemeral detached worktree ----
+  const ref = shipBatch.batchRefName(trunkNow);
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'colab-ship-batch-'));
+  const add = git.git(['worktree', 'add', '--detach', dir, trunkNow], repoAbs);
+  if (!add.ok) { try { fs.rmdirSync(dir); } catch (_) {} throw new UserError(`could not check out ${shortSha(trunkNow)} to build the batch: ${git.gitFailureLine(add.stderr)}`); }
+  const cleanup = () => git.git(['worktree', 'remove', '--force', dir], repoAbs);
+  const machineLine = shipMachineTrailerDecision(repoAbs, doc).line;
+  const built = [];
+  const dropped = [];
+  for (const m of selected) {
+    const sq = git.git(['merge', '--squash', m.sha], dir);
+    const unmerged = git.git(['diff', '--name-only', '--diff-filter=U'], dir).stdout.split('\n').filter(Boolean);
+    if (!sq.ok || unmerged.length) {
+      git.git(['reset', '--hard', 'HEAD'], dir);
+      dropped.push({ branch: m.branch, why: unmerged.length ? `conflicts with the members already in (${unmerged.join(', ')}) — next batch` : `squash failed: ${git.gitFailureLine(sq.stderr)}` });
+      continue;
+    }
+    if (!git.git(['diff', '--cached', '--name-only'], dir).stdout.trim()) {
+      git.git(['reset', '--hard', 'HEAD'], dir);
+      dropped.push({ branch: m.branch, why: 'stages nothing on top of the members already in' });
+      continue;
+    }
+    const closeIssues = m.report.closeIssues || [];
+    const refsIssues = m.report.refsIssues || [];
+    const conflicts = [];
+    const msg = buildSquashMessage(repoAbs, trunkRef, m.sha, closeIssues, refsIssues, conflicts,
+      [machineLine, shipBatch.memberTrailer({ ref, branch: m.branch, sha: m.sha })].filter(Boolean));
+    const coverage = msg ? shipguard.closesCoverage({ message: msg, closeIssues, refsIssues, commits: branchCommits(repoAbs, trunkRef, m.sha) }) : { ok: false, missing: [] };
+    const inherited = msg && refsIssues.length ? squash.inheritedClosingKeywordConflicts(msg, refsIssues) : [];
+    if (!msg || !coverage.ok || inherited.length) {
+      git.git(['reset', '--hard', 'HEAD'], dir);
+      dropped.push({ branch: m.branch, why: !msg ? 'no commit of its own to take a squash subject from' : 'its composed message does not close exactly what it claims — ship it alone to see why' });
+      continue;
+    }
+    const c = git.run('git', ['commit', '-q', '-m', msg], { cwd: dir });
+    if (!c.ok) { git.git(['reset', '--hard', 'HEAD'], dir); dropped.push({ branch: m.branch, why: `commit failed: ${git.gitFailureLine(c.stderr)}` }); continue; }
+    built.push({ ...m, commit: git.git(['rev-parse', 'HEAD'], dir).stdout });
+  }
+  for (const d of dropped) print(`  ✗ ${d.branch}: ${d.why}`);
+  const head = git.git(['rev-parse', 'HEAD'], dir).stdout;
+  if (built.length < 2) {
+    cleanup();
+    return serial(`${built.length} member(s) survived the build — a batch needs at least two`, members);
+  }
+  if (opts.dry) {
+    cleanup();
+    print(`→ READY: would push ${ref} = ${shortSha(trunkNow)} + ${built.length} squash commit(s): ${built.map((b) => b.branch).join(', ')}`);
+    print('  then wait on ONE combined run, and fast-forward trunk to it only if trunk has not moved.');
+    if (notJoining.length || dropped.length) print(`  not in this batch: ${[...new Set([...notJoining, ...dropped.map((d) => d.branch)])].join(', ')}`);
+    return 0;
+  }
+  // --force only ever inside our own namespace: a rebuild on the same base replaces its own ref.
+  const push = git.run('git', ['push', '--force', remote, `${head}:refs/heads/${ref}`], { cwd: repoAbs });
+  cleanup();
+  if (!push.ok) throw new UserError(`could not push ${ref}: ${git.gitFailureLine(push.stderr)} — nothing landed`);
+  print(`  pushed ${ref} = ${shortSha(trunkNow)} + ${built.length} commit(s) @ ${shortSha(head)} (${built.map((b) => b.branch).join(', ')})`);
+  if (overflow.length) print(`  eligible but over the cap (next batch): ${overflow.map((o) => o.branch).join(', ')}`);
+  print(`⏸ BATCH-PENDING ${ref}@${shortSha(head)} — wait on the combined run (bounded, B1a), then run this command again. Nothing landed yet.`);
+  return 3;
+}
+
+/**
+ * (g) Land a green batch: fast-forward trunk to the batch head — only if trunk has not moved — with a
+ * plain, NON-forced push, so a trunk that moved makes the push itself fail (the atomic check). Then
+ * each member gets the tail every serial ship gets.
+ */
+function shipBatchLand(repoAbs, doc, trunk, remote, base, existing, verdict, opts) {
+  const head = existing.sha;
+  const headBranch = git.git(['rev-parse', '--abbrev-ref', 'HEAD'], repoAbs).stdout;
+  if (headBranch !== trunk || git.dirtyTracked(repoAbs)) {
+    throw new UserError(`the main checkout is not on a clean ${trunk} ("${headBranch}"${git.dirtyTracked(repoAbs) ? ', dirty' : ''}) — the batch is green and waiting; fix the checkout and run this command again`);
+  }
+  const sync = targetSync.readTargetSync(git, repoAbs, trunk, { repoLabel: repoAbs });
+  if (!sync.ok) {
+    print(`✗ ship-batch: ${sync.detail}`);
+    for (const l of sync.remedy || []) print(`  ${l}`);
+    return 1;
+  }
+
+  // The trunk-checkout place-claim — the same guard B1 takes before it writes into the main checkout.
+  const syncProblem = place.syncedStateProblem(state.COLAB_DIR);
+  if (syncProblem) { process.stderr.write(`✗ ship-batch: ${syncProblem}\n`); return 1; }
+  const loadedPlace = placeState('ship a batch into the trunk checkout');
+  if (!loadedPlace.ok) { process.stderr.write(`✗ ship-batch: ${loadedPlace.message}\n`); return 1; }
+  const session = resolveSession(opts);
+  const sessionName = resolveSessionName(opts);
+  const placeCls = place.classify(loadedPlace.st, repoAbs, { session });
+  if (placeCls.conflict) {
+    process.stderr.write(`✗ ship-batch: refusing — class: ${placeCls.cls} — ${placeCls.conflict.message}\n  ${placeCls.remedy}\n`);
+    return 1;
+  }
+  let acquired = false;
+  if (placeCls.cls !== 'own') {
+    const anchor = resolvePlaceAnchor(opts);
+    const written = placeAcquireLocked('ship a batch into the trunk checkout', {
+      pathAbs: repoAbs, repo: repoAbs, branch: null, host: HOST,
+      session, sessionName, pid: anchor.pid, pidKind: anchor.pidKind, anchorProof: anchor.proof,
+    });
+    if (!written.ok) { process.stderr.write(`✗ ship-batch: ${written.message}\n`); return 1; }
+    acquired = true;
+  }
+  const release = () => {
+    if (!acquired) return;
+    try { state.mutate((s) => { if (s.places) delete s.places[place.placeKey(repoAbs)]; }); } catch (_) { /* colab doctor reports a stuck hold */ }
+    acquired = false;
+  };
+
+  const preMergeSha = git.git(['rev-parse', 'HEAD'], repoAbs).stdout;
+  print(`ship-batch: fast-forwarding ${trunk} ${shortSha(base)} → ${shortSha(head)} (${existing.members.length} commits, one push) …`);
+  const ff = git.git(['merge', '--ff-only', head], repoAbs);
+  if (!ff.ok) { release(); process.stderr.write(`✗ ship-batch: ${trunk} cannot fast-forward to ${shortSha(head)}: ${git.gitFailureLine(ff.stderr)}. Nothing pushed.\n`); return 1; }
+  const push = git.run('git', ['push', remote, trunk], { cwd: repoAbs, env: { ...process.env, COLAB_SHIP: '1' } });
+  if (!push.ok) {
+    const headNow = git.git(['rev-parse', 'HEAD'], repoAbs).stdout;
+    if (headNow === head) git.git(['reset', '--hard', preMergeSha], repoAbs); // #322: our own merge, put back
+    release();
+    print(`⏸ ship-batch: trunk moved during land (${git.gitFailureLine(push.stderr)}) — nothing landed; ${trunk} rolled back to ${shortSha(preMergeSha)}.`);
+    print('  Run this command again: it sees the moved trunk and rebuilds the batch on it.');
+    return 3;
+  }
+  print('  pushed.');
+  deferredCollector = [];
+  if (!git.git(['push', remote, '--delete', existing.ref], repoAbs).ok) warnDeferred(`could not delete ${remote}/${existing.ref} — delete it by hand (it has landed)`);
+
+  // The post-ship hook runs ONCE, over the whole batch — it is a trunk-checkout event, not a member one.
+  const changed = git.git(['diff', '--name-only', `${base}..${head}`], repoAbs);
+  const hits = changed.ok ? lockfileDrift.changedLockfiles(changed.stdout.split('\n').filter(Boolean)) : [];
+  const allIssues = [];
+  const st0 = state.loadState();
+  const sessions = existing.members.map((m) => {
+    const sess = resolveShipSession(st0, repoAbs, { branch: m.branch, session: opts.session, sessionName: opts.sessionName });
+    allIssues.push(...sess.issues);
+    return sess;
+  });
+  const hook = runHook(repoAbs, 'post-ship', {
+    wtPath: repoAbs, name: '', branch: existing.ref, ports: [], trunk, base: trunk, issues: allIssues, cwd: repoAbs,
+    extraEnv: { COLAB_TARGET: trunk, COLAB_SHA: shortSha(head), COLAB_LOCKFILES: hits.map((h) => h.path).join(',') },
+  });
+  if (hook.ran && !hook.ok) warnDeferred(`post-ship hook failed — ${trunk} IS merged and pushed at ${shortSha(head)}; do NOT re-run ship. Finish whatever the hook does by hand.`);
+  if (hits.length && !hook.ran) warnDeferred(lockfileDrift.driftWarning(hits));
+  release();
+
+  // Which commit is whose — read from the trailers, never from position alone.
+  const log = git.git(['log', '--format=%H%x01%B%x00', `${base}..${head}`], repoAbs);
+  const commitOf = new Map();
+  for (const rec of (log.ok ? log.stdout.split('\0') : [])) {
+    const [sha, body] = rec.replace(/^\n+/, '').split('\x01');
+    const tr = shipBatch.parseMemberTrailers([body || ''])[0];
+    if (sha && tr) commitOf.set(tr.branch, { sha: sha.trim(), body: body || '' });
+  }
+  const gh = isGhUsable(repoAbs);
+  const suffix = shipBatch.evidenceSuffix({ n: existing.members.length, ref: existing.ref, headSha: head, runIds: verdict.runIds });
+  existing.members.forEach((m, i) => {
+    const c = commitOf.get(m.branch) || { sha: head, body: '' };
+    const closed = new Set(squash.closedIssueNumbers(c.body).map(Number));
+    const sess = sessions[i];
+    const closeIssues = sess.issues.filter((n) => closed.has(n));
+    const refsIssues = sess.issues.filter((n) => !closed.has(n));
+    shipBatchMemberTail({ repoAbs, doc, trunk, sess, sha: shortSha(c.sha), closeIssues, refsIssues, suffix, opts, gh });
+  });
+
+  print('');
+  print(`✓ Shipped batch → ${trunk} @ ${shortSha(head)} (${existing.members.length} commits, one fast-forward): ${existing.members.map((m) => m.branch).join(', ')}`);
+  if (deferredCollector && deferredCollector.length) {
+    print(`  ${deferredCollector.length} post-merge write(s) need attention:`);
+    for (const msg of deferredCollector) print(`    ! ${msg}`);
+  }
+  deferredCollector = null;
+  return 0;
+}
+
+/**
+ * One batch member's post-merge tail. The SAME helper calls, in the SAME order, as cmdShip's B3–i2
+ * (worktree teardown, unattached claims, the shipped branch, B4 verify + comment, plan journal, group
+ * labels, container close) — kept as a sibling rather than extracted from cmdShip while another live
+ * branch edits that block; fold the two into one helper once it has landed.
+ */
+function shipBatchMemberTail({ repoAbs, doc, trunk, sess, sha, closeIssues, refsIssues, suffix, opts, gh }) {
+  const refsSet = new Set(refsIssues);
+  if (sess.name) state.mutate((st) => { if (st.worktrees[sess.name]) st.worktrees[sess.name].status = 'merged'; });
+  pushEvent('ship', {
+    repo: repoAbs, worktree: sess.name, session: sess.session,
+    issue: sess.issues.length === 1 ? sess.issues[0] : undefined,
+    payload: { state: 'merged', branch: sess.branch, target: trunk, sha, issues: sess.issues, batch: true },
+  });
+  for (const num of closeIssues) pushEvent('issue-merged', { repo: repoAbs, issue: num, payload: { sha } });
+
+  const worktreeKept = !!(sess.name && opts.keepWorktree);
+  if (sess.name && !opts.keepWorktree) {
+    print(`B3: removing worktree ${sess.name} …`);
+    try { cmdWorktreeRm([sess.name, '--repo', repoAbs, '--force']); }
+    catch (e) { warnDeferred(`worktree rm reported: ${e.message}`); }
+  }
+  if (!worktreeKept) shipReleaseUnattachedClaims(repoAbs, sess);
+  const disposition = shippedBranch.shippedBranchDisposition({ closeIssues, refsIssues, deleteBranch: opts.deleteBranch, keepBranch: opts.keepBranch });
+  handleShippedBranch(repoAbs, trunk, sess.branch, { disposition, worktreeKept, integration: resolveIntegration(repoAbs, doc, trunk) });
+
+  const groupLabelsCarried = new Set();
+  const closedByShip = [];
+  if (gh) {
+    for (const num of sess.issues) {
+      const isRef = refsSet.has(num);
+      const info = git.ghIssueView(repoAbs, num, ['state', 'labels']);
+      if (!isRef && info && info.state !== 'CLOSED') warn(`#${num} did not auto-close (state=${info.state}) — close it by hand if ${trunk} isn't the default branch`);
+      if (isRef && info && info.state === 'CLOSED') warn(`#${num} was meant to stay open (Refs) but is CLOSED — reopen it by hand`);
+      for (const gl of labels.groupLabelNames(info && info.labels)) groupLabelsCarried.add(gl);
+      if (!isRef && info && info.state === 'CLOSED') closedByShip.push(num);
+      const shipSess = sessionCommentSuffix(sess.session, sess.sessionName);
+      const body = isRef
+        ? `🔖 Referenced by colab ship (kept open — tracking issue) — ${sha}${suffix}${shipSess}`
+        : `🚢 Shipped to ${trunk} by colab ship — ${sha}${suffix}${shipSess}`;
+      if (!git.ghIssueComment(repoAbs, num, body).ok) warnDeferred(`could not post ship comment on #${num}`);
+    }
+  }
+  shipJournalPlanFiles(repoAbs, sess.issues);
+  if (gh) {
+    for (const gl of groupLabelsCarried) {
+      const openMembers = git.ghIssueListByLabel(repoAbs, gl, 'open', ['number']);
+      if (openMembers === null || openMembers.length > 0) continue;
+      if (git.ghLabelDelete(repoAbs, gl).ok) print(`  deleted spent group label ${gl} (every member now closed)`);
+    }
+    shipCloseSpentContainers(repoAbs, closedByShip, { sha, target: trunk });
+  }
+  print(`  ✓ ${sess.branch} → ${trunk} @ ${sha}${sess.issues.length ? ' (' + sess.issues.map((n) => '#' + n).join(' ') + ')' : ''}`);
 }
 
 // ---------------------------------------------------------------------------
