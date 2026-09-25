@@ -132,5 +132,5 @@ test('pre-push-guard: the trunk refusal also says what to do about a commit ALRE
   const text = fs.readFileSync(GUARD, 'utf8');
   const spoken = text.split('\n').filter((l) => /^\s*echo .*>&2/.test(l)).join('\n');
   assert.match(spoken, /branch <type>\/<slug>-<issue>/);
-  assert.match(spoken, /reset --hard origin/);
+  assert.match(spoken, /reset --hard \$remote\//); // the resolved remote (#376), not a literal origin
 });

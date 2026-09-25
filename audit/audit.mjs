@@ -533,6 +533,9 @@ function listRemoteLabels(slug) {
 //                            operator explicitly asked for an identity scan is a scan that
 //                            silently did not happen.
 //   { status: "no-remote" }  (local sources only) nothing on GitHub to have metadata.
+//   { status: "remote-unresolved", reason }  (local sources only, #376) the checkout's remotes
+//                            are ambiguous or its `colab.remote` override is broken — the caller
+//                            fails with `reason`, which names the fix. Never guessed.
 function readRemoteMetadata(slug) {
   try {
     const out = runGh(["api", `repos/${slug}`]);
@@ -550,6 +553,15 @@ function githubSlugFromRemote(url) {
   const m = String(url).trim().match(/github\.com[:/]+([^/]+)\/(.+?)(?:\.git)?\/?$/);
   return m ? `${m[1]}/${m[2]}` : null;
 }
+
+// Which git remote a LOCAL checkout's GitHub URL is read from (#376) — the same resolver every
+// `colab` command uses since #301 (tools/lib/git.js `remoteInfo`; rule order in tools/README.md,
+// "Which remote"), so the audit and the CLI can never pick two different remotes in one clone. A
+// repo with an `origin` resolves to it, so it reads exactly the URL it read before this existed.
+// Ambiguous remotes (several, none `origin`, no override) resolve to NO url and are REPORTED by
+// the checks below through `remoteProblem()` — never guessed. Imported here rather than in the
+// block above: it serves makeSource alone.
+const gitRemote = require("../tools/lib/git.js");
 
 // A uniform accessor so every check below is written once and works for both a local
 // path and a remote slug.
@@ -711,28 +723,29 @@ function makeSource(target) {
           return false;
         }
       },
+      // The refusal text when this checkout's remote cannot be resolved (ambiguous, or a
+      // `colab.remote` override naming a remote that does not exist), else null. The checks
+      // that read the remote's URL report it instead of passing silently (#376).
+      remoteProblem: () => gitRemote.remoteProblem(gitRemote.remoteInfo(root)),
       // A local checkout has no labels of its own — they live on its GitHub remote, if it
-      // has one. Resolve the origin slug and read them there; a repo with no GitHub origin
-      // returns null and contributes no label finding.
+      // has one. Resolve the remote's slug (#376: the resolved remote, not the literal
+      // `origin`) and read them there; a repo with no GitHub remote returns null and
+      // contributes no label finding.
       labels: () => {
-        let url;
-        try {
-          url = execFileSync("git", ["-C", root, "remote", "get-url", "origin"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim();
-        } catch {
-          return null;
-        }
+        const url = gitRemote.remoteUrl(root);
+        if (!url) return null;
         const slug = githubSlugFromRemote(url);
         return slug ? listRemoteLabels(slug) : null;
       },
-      // Same origin-slug resolution as labels() above, one API call, and only when the
+      // Same remote-slug resolution as labels() above, one API call, and only when the
       // identity scan was explicitly asked for — see readRemoteMetadata for the contract.
+      // An unresolvable remote is its own status, not "no-remote": the scan was asked for
+      // and did not run, which the caller reports as a fail naming the fix.
       metadata: () => {
-        let url;
-        try {
-          url = execFileSync("git", ["-C", root, "remote", "get-url", "origin"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim();
-        } catch {
-          return { status: "no-remote" };
-        }
+        const problem = gitRemote.remoteProblem(gitRemote.remoteInfo(root));
+        if (problem) return { status: "remote-unresolved", reason: problem };
+        const url = gitRemote.remoteUrl(root);
+        if (!url) return { status: "no-remote" };
         const slug = githubSlugFromRemote(url);
         return slug ? readRemoteMetadata(slug) : { status: "no-remote" };
       },
@@ -1381,6 +1394,10 @@ function auditRepo(target, ctx) {
   // --ensure` (#206), it breaks no build and it does not make the descriptor lie.
   if (cfg) {
     const labels = src.labels();
+    // #376: an unresolvable remote is not "offline" — the operator can fix it in one command, and
+    // staying silent would read as a clean label set. Reported, never guessed. Same warn level.
+    const remoteProblem = !labels && src.remoteProblem ? src.remoteProblem() : null;
+    if (remoteProblem) warn(`convention labels: not checked — ${remoteProblem}`);
     if (labels) {
       const missing = missingConventionLabels(labels);
       if (missing.length) {
@@ -1687,6 +1704,11 @@ function checkIdentityMetadata(src, vocab, info, fail) {
 
   if (meta.status === "no-remote") {
     info.identityMetadata = { status: "not-applicable", reason: "no GitHub remote — no repository metadata exists" };
+    return;
+  }
+  if (meta.status === "remote-unresolved") {
+    info.identityMetadata = { status: "unreadable", reason: meta.reason };
+    fail(`repository metadata: ${meta.reason} — the identity scan did NOT run`);
     return;
   }
   if (meta.status !== "ok" || !meta.data) {

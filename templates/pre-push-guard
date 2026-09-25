@@ -73,14 +73,26 @@ done
 # gate. Typed by hand it asserts that falsely and skips the grade, the branch-CI check, the claim
 # release and the evidence comment. There is no case where typing it is the right next step.
 
+# The remote the remedy text below names (#376). git hands a pre-push hook the remote it is pushing
+# to as $1 — the name when the push went through a configured remote, the bare URL when it did not.
+# A name is used as-is: it is the remote this push actually targets, and the one whose tracking ref
+# the reader has. A URL push has no tracking ref of its own, so it falls back to the per-clone
+# override colab itself reads (`git config colab.remote`, tools/README.md "Which remote"), then to
+# `origin`. Message-only: nothing below decides anything on this value.
+remote=${1:-}
+if [ -z "$remote" ] || ! git config --get "remote.$remote.url" >/dev/null 2>&1; then
+  remote=$(git config --get colab.remote 2>/dev/null || true)
+  [ -z "$remote" ] && remote=origin
+fi
+
 # TRUNK guard (also covers tier B, where trunk == main).
 if [ "$pushing_trunk" -eq 1 ] && [ "${COLAB_SHIP:-}" != "1" ] && [ "${COLAB_HUMAN:-}" != "1" ]; then
   echo "pre-push-guard: refusing raw push to trunk '$trunk'." >&2
   echo "  Ship the branch instead:  colab ship --branch <your-branch>" >&2
   echo "  Already committed onto '$trunk' by hand? That commit belongs on a branch, not here:" >&2
-  echo "    git log --oneline origin/$trunk..$trunk        # what is actually there" >&2
+  echo "    git log --oneline $remote/$trunk..$trunk        # what is actually there" >&2
   echo "    git branch <type>/<slug>-<issue> $trunk        # keep it, on a branch" >&2
-  echo "    git reset --hard origin/$trunk                 # return the checkout to at-rest" >&2
+  echo "    git reset --hard $remote/$trunk                 # return the checkout to at-rest" >&2
   echo "  then claim its issue and ship that branch." >&2
   exit 1
 fi
