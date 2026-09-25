@@ -153,4 +153,56 @@ function approvalVerdict(reviews, { prAuthor, authors = [], headSha }) {
   return { ok: false, by: null, reason: 'no approval yet' };
 }
 
-module.exports = { CODEOWNERS_PATHS, parse, compile, ownerOf, corePaths, inert, approvalVerdict };
+/**
+ * #351 — the core-path verdict for a BRANCHLESS trunk-direct unit (`colab ship --direct`).
+ *
+ * A branch that touches a core path pauses on a PR (#350). A trunk-direct unit has no branch and so no
+ * PR, and its commits are already on trunk. Ruling A on #351: `ship --direct` refuses to close such a
+ * unit, and the operator redoes the change on a branch, where #350's review applies. So there are
+ * only three verdicts here: 'inert' | 'not-core' | 'refuse'. No 'pending', no 'approved'.
+ *
+ * `files`: the CODEOWNERS to honour, as `{ path, ref, text }` or null. The caller passes the one on
+ * trunk BEFORE the unit's first commit and the one on trunk NOW. For `--direct` the target already
+ * contains the unit, so reading only the current file would let a unit exempt itself by deleting or
+ * narrowing CODEOWNERS in its own commit. So a path is core if EITHER active file covers it, and the
+ * rule is inert only when every file present is inert. Identical texts count once.
+ * `changed`: every path the unit's commits touched, or null when they could not be listed. Null
+ * refuses while the rule is active: an unbounded unit cannot be shown to avoid core paths.
+ */
+function directVerdict({ files, authors, changed }) {
+  const out = { active: false, inertReason: null, codeownersPath: null, warnings: [], corePaths: [], verdict: 'inert', detail: '' };
+  const seen = new Set();
+  const present = (files || []).filter((f) => f && !seen.has(f.text) && seen.add(f.text));
+  if (!present.length) { out.inertReason = 'no CODEOWNERS on trunk before or after the unit'; out.detail = `inert: ${out.inertReason}`; return out; }
+  const byPath = new Map();
+  const inertReasons = [];
+  const activeReasons = [];
+  for (const f of present) {
+    const { rules, warnings } = parse(f.text);
+    for (const w of warnings) out.warnings.push(`${f.path}@${f.ref}: ${w}`);
+    const iv = inert(rules, authors);
+    if (iv.inert) { inertReasons.push(`${f.path}@${f.ref}: ${iv.reason}`); continue; }
+    out.active = true;
+    if (!out.codeownersPath) out.codeownersPath = f.path;
+    activeReasons.push(iv.reason);
+    for (const c of corePaths(rules, changed || [])) {
+      const prev = byPath.get(c.path);
+      byPath.set(c.path, prev ? [...new Set([...prev, ...c.owners])] : c.owners);
+    }
+  }
+  if (!out.active) { out.inertReason = inertReasons.join('; '); out.detail = `inert: ${out.inertReason}`; return out; }
+  if (changed === null || changed === undefined) {
+    out.verdict = 'refuse';
+    out.detail = `the core-path rule is active (${activeReasons[0]}) and the unit's commits could not be listed — cannot show it avoids core paths`;
+    return out;
+  }
+  out.corePaths = [...byPath].map(([p, owners]) => ({ path: p, owners }));
+  if (!out.corePaths.length) { out.verdict = 'not-core'; out.detail = `no core path touched (${activeReasons[0]})`; return out; }
+  const list = out.corePaths.map((c) => c.path);
+  const shown = list.slice(0, 3).join(', ') + (list.length > 3 ? ` (+${list.length - 3})` : '');
+  out.verdict = 'refuse';
+  out.detail = `${list.length} core path(s): ${shown} — a trunk-direct unit has no PR to review them; redo the change on a branch (#351)`;
+  return out;
+}
+
+module.exports = { CODEOWNERS_PATHS, parse, compile, ownerOf, corePaths, inert, approvalVerdict, directVerdict };

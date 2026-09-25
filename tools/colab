@@ -8041,13 +8041,16 @@ session's claims in this repo with no worktree and no branch (identity REQUIRED 
 COLAB_SESSION; a claim of another session is never touched, a same-session claim that names a
 branch is pointed at --branch). Preconditions: writes: not \`isolated\` · autonomy: auto-trunk (or
 docs-only: every trunk commit since the unit's earliest claim, by anyone, #345) ·
+core-path review (#351: where #350's rule is active, a unit whose commits in that same window touch
+a core path is REFUSED — there is no PR to pause on; redo it on a branch. CODEOWNERS is read both
+before the unit's first commit and on trunk now, so the unit cannot exempt itself) ·
 trunk CI green · checklist close gate · trunk checked out and clean · local trunk not ahead of
 origin (the work is PUBLISHED). Then exactly evidence-close: evidence comment, close each issue
 (same gate — the issue must already carry a comment colab did not write; code-wrap A1's distill is
 that comment), release the claims and the checkout hold, journal the plan file. An issue left open
 keeps its claim so a re-run finds it. Cannot be combined with --worktree/--branch/--message/
 --delete-branch/--keep-branch/--keep-worktree/--adopt. \`writes: direct\` is not required. --dry and --dry --json
-work as usual (json: \`direct: true\`, \`branch: null\`, \`mode: "evidence-close"\`).
+work as usual (json: \`direct: true\`, \`branch: null\`, \`mode: "evidence-close"\`, \`coreReview\`).
 
 B3 KEEPS the branch by default. Deleting refs from a shared remote is not something this command
 does unasked, however certain it is that the content landed: reporting is safe and reversible,
@@ -9349,12 +9352,17 @@ function cmdShipDirect(opts) {
   const checks = []; // {name, ok, class, detail, advisory?}
   let closeIssues = [], refsIssues = [], refsSet = new Set(), checklistFindings = [], dirtyOwners = null;
   let autonomyGatePayloadVal = null; // #345
+  let coreReview = null; // #351
   const emitJson = (ok) => {
     print(JSON.stringify({
       ok, dry: true, direct: true, repo: shortRepo(repoAbs), branch: null, worktree: null, target: trunk,
       mode: 'evidence-close', issues, closeIssues, refsIssues, checklistFindings,
       checks: checks.map(({ name, ok: rowOk, class: cls, detail }) => ({ name, ok: rowOk, class: cls, detail })),
       migrationGrant: null, ciGrant: null, ciCure: null, baseCi: null, dirtyOwners, autonomyGate: autonomyGatePayloadVal,
+      coreReview: coreReview && {
+        active: coreReview.active, verdict: coreReview.verdict, inertReason: coreReview.inertReason,
+        codeownersPath: coreReview.codeownersPath, corePaths: coreReview.corePaths.map((c) => c.path),
+      },
     }, null, 2));
     return ok ? 0 : 1;
   };
@@ -9380,12 +9388,21 @@ function cmdShipDirect(opts) {
   autonomyGatePayloadVal = autonomyGatePayload(autonomyGate);
   checks.push({ name: 'autonomy granted', ok: autonomyGate.ok, class: autonomyGate.ok ? null : HUMAN_GATED, detail: autonomyGate.detail });
 
+  // ---- #351 (ruling A): the core-path rule (#350) has no PR to pause on here, and the unit is already
+  // on trunk. So a unit touching a core path is refused a close, and the remedy is a branch. Same
+  // change set as the autonomy door above, same bias: when in doubt, refuse. A human-gated refusal:
+  // no flag clears it, because the review it stands in for is a non-author's.
+  const gh = isGhUsable(repoAbs);
+  coreReview = shipDirectCoreReview(repoAbs, gh, trunk, since);
+  const coreOk = coreReview.verdict !== 'refuse';
+  checks.push({ name: 'core-path review (#350/#351)', ok: coreOk, class: coreOk ? null : HUMAN_GATED, detail: coreReview.detail });
+  if (!json) for (const w of coreReview.warnings) warn(w);
+
   checks.push({ name: 'claims matched by session identity', ok: true, class: null,
     detail: `${issues.map((n) => '#' + n).join(' ')} claimed by "${label}", no worktree, no branch${othersNote}` });
 
   // ---- trunk CI: a gate, exactly as it is for a branch's evidence-close. The unit's own trunk commit
   // may be what turned it red. No grant/cure doors: both are defined over a candidate BRANCH.
-  const gh = isGhUsable(repoAbs);
   const ci = shipCiCheck(repoAbs, gh, trunk, trunk, null, null);
   checks.push({ name: ci.name, ok: ci.ok, class: ci.class, detail: ci.detail });
 
@@ -9446,6 +9463,14 @@ function cmdShipDirect(opts) {
     process.stderr.write(`  The docs-only exception (#345) does not apply either: ${autonomyGate.docsOnly.reason}.\n`);
     return 1;
   }
+  if (!coreOk && coreReview.corePaths.length) {
+    process.stderr.write(`✗ core-path review: this trunk-direct unit touches ${coreReview.corePaths.length} core path(s) covered by \`${coreReview.codeownersPath}\` (#351):\n`);
+    for (const c of coreReview.corePaths.slice(0, 10)) process.stderr.write(`    ${c.path}  (${c.owners.join(' ')})\n`);
+    process.stderr.write(`  A trunk-direct unit has no PR, so no non-author can review it. Redo the change on a branch\n`);
+    process.stderr.write(`  (\`colab worktree new <type>/<slug>-<N> --issues <N>\`) and ship that: #350 opens the PR and pauses.\n`);
+    process.stderr.write('  The window is every trunk commit since the earliest claim, by anyone — if these paths are another\n');
+    process.stderr.write('  unit\'s reviewed landing, a human closes this issue by hand.\n');
+  }
   if (autonomyGate.via === 'docs-only') print(`→ AUTONOMY: ${autonomyGate.detail} (#345) — project.yml autonomy: ${autonomyGate.declared}`);
   print(`→ MODE: evidence-close (trunk-direct — the work is already on ${trunk}; nothing to merge)`);
   if (opts.dry) {
@@ -9484,6 +9509,47 @@ function readTargetCodeowners(repoAbs, target) {
 function branchChangedPathsNoRenames(repoAbs, base, ref) {
   const r = git.git(['diff', '--name-only', '--no-renames', `${base}...${ref}`], repoAbs);
   return r.ok ? r.stdout.split('\n').map((s) => s.trim()).filter(Boolean) : null;
+}
+
+/** CODEOWNERS as it stood at one commit-ish, in the forge's own lookup order — or null. */
+function readCodeownersAt(repoAbs, ref) {
+  for (const p of codeowners.CODEOWNERS_PATHS) {
+    const r = git.git(['show', `${ref}:${p}`], repoAbs);
+    if (r.ok) return { path: p, ref, text: r.stdout };
+  }
+  return null;
+}
+
+/**
+ * #351 (ruling A): the core-path rule for a BRANCHLESS trunk-direct unit. The unit's change set is
+ * the same one #345's docs-only door uses: every trunk commit since the earliest claim, by anyone.
+ * That can only err toward refusing. CODEOWNERS is read twice, before the unit's first commit and on
+ * trunk now, so the unit's own commits cannot rewrite the file to exempt themselves
+ * (lib/codeowners.js `directVerdict`). Zero `gh` calls beyond the login lookup.
+ */
+function shipDirectCoreReview(repoAbs, gh, trunk, since) {
+  const authors = [gh ? git.ghCurrentLogin() : null].filter(Boolean);
+  let changed = null;
+  let before = null;
+  if (since) {
+    const revs = git.git(['rev-list', `--since=${since}`, trunk], repoAbs);
+    if (revs.ok) {
+      const shas = revs.stdout.split('\n').map((s) => s.trim()).filter(Boolean);
+      const paths = new Set();
+      let ok = true;
+      for (const sha of shas) {
+        const r = git.git(['diff-tree', '-r', '--no-commit-id', '--name-only', '--no-renames', '--root', '-m', sha], repoAbs);
+        if (!r.ok) { ok = false; break; }
+        for (const p of r.stdout.split('\n').map((s) => s.trim()).filter(Boolean)) paths.add(p);
+      }
+      if (ok) changed = [...paths];
+      if (shas.length) {
+        const parent = git.git(['rev-parse', '--verify', '-q', `${shas[shas.length - 1]}^`], repoAbs);
+        if (parent.ok && parent.stdout) before = readCodeownersAt(repoAbs, shortSha(parent.stdout));
+      }
+    }
+  }
+  return codeowners.directVerdict({ files: [before, readTargetCodeowners(repoAbs, trunk)], authors, changed });
 }
 
 function shipCoreReview(repoAbs, gh, target, branch) {

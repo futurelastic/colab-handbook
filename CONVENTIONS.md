@@ -783,8 +783,22 @@ machines apart is what the `Machine:` trailer and the branch prefix are for
 ([§4](#4-branches-and-commits)): they support measurement, not approval. A second operator
 needs a second account.
 
-**Not covered here:** escalating to the repo owner after a set wait, and `colab ship --direct`
-(a branchless unit has no PR to open). Both are separate changes.
+**A trunk-direct unit that touches a core path is refused, not paused (#351).** `colab ship
+--direct` closes a branchless unit whose commits are already on trunk, so there is no branch to
+open a PR from and nothing left to hold back. When the rule is active and the unit touched a core
+path, `--direct` refuses to close it. The precondition table gains a `core-path review` row,
+marked `✗` and human-gated, and nothing is closed. The remedy is to redo the change on a branch
+and ship that, so the pause above applies. The unit's change set is the one the docs-only
+exception uses: every trunk commit since its earliest claim, by anyone. That can only err toward
+refusing. When the paths belong to another unit's reviewed landing, a human closes the issue by
+hand. `CODEOWNERS` is read twice: from trunk as it stood before the unit's first commit, and from
+trunk now. A path is core if either file covers it, and the rule is inert only when both files
+are. For `--direct` the target already contains the unit, so reading the current file alone would
+let a unit exempt itself by deleting or narrowing it. The door that makes the trunk-direct commit
+in the first place (`colab solo`) does not check core paths. That would be a separate change,
+taken only if a bypass is ever measured, because `--direct` is attended by construction.
+
+**Not covered here:** escalating to the repo owner after a set wait. That is a separate change.
 
 ### Solo flow — trunk-direct, issue-on-demand, entry-gated (a human must be at the keyboard)
 
