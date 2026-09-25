@@ -31,6 +31,7 @@ const solo = require('./lib/solo');
 const place = require('./lib/place');
 const checklist = require('./lib/checklist');
 const groupLabels = require('./lib/group-labels');
+const containerClose = require('./lib/container-close');
 const shipguard = require('./lib/shipguard');
 const branchName = require('./lib/branch-name');
 const machineTrailer = require('./lib/machine-trailer');
@@ -7862,6 +7863,11 @@ Sequence (each step gated; any failure aborts before the push — the target is 
   i. group teardown     for every group:<key> label the branch's issues carried, delete the
                         LABEL OBJECT once no open issue carries it anymore (#82) — a live member
                         elsewhere leaves it in place
+  i2. container close   for every issue this ship closed, close its native parent too — with an
+                        evidence comment — when lib/container-close.js says so: labelled epic,
+                        every sub-issue closed, no unticked item in its body, not a release
+                        record; then ask the same of ITS parent. Anything else stays open; an
+                        unlabelled or unticked-item parent prints as a finding (#371)
 
 CLAIMS ARE CROSS-CHECKED AGAINST GIT before anything closes (#87). The set ship would close comes
 from the claim registry, read AT SHIP TIME — so a claim a co-tenant session wrote onto this branch
@@ -9115,6 +9121,45 @@ function shipMode(repoAbs, target, branch, commits) {
  * written. Verdict is always `pass`: a `reject` grade from B1c ends the coordinator's run before it
  * ever reaches a ship, on either completion path.
  */
+/**
+ * #371: close a container with its last child — the step after an issue closes. For every issue
+ * this ship actually closed, read its NATIVE parent and let lib/container-close.js decide; close
+ * the parent with an evidence comment only on `close`, then ask the same question of ITS parent
+ * (an epic of epics empties from the bottom up). Every other verdict leaves the parent exactly as
+ * it is; the ones a human should see (`not-container`, `unfiled-items`, `unknown`) are printed as
+ * findings. Best-effort like every post-merge write: a failure here warns, never fails the ship —
+ * the merge already landed. A lagging `subIssuesSummary` reads as `children-open` and is caught by
+ * the next ship of a sibling or by code-sweep §5, never by guessing.
+ */
+function shipCloseSpentContainers(repoAbs, closedIssues, { sha, target } = {}) {
+  const seen = new Set();
+  for (const start of closedIssues || []) {
+    let child = start;
+    for (let depth = 0; depth < 5; depth++) {
+      const view = git.ghIssueView(repoAbs, child, ['parent']);
+      const pnum = view && view.parent && Number.isInteger(view.parent.number) ? view.parent.number : null;
+      if (pnum === null || seen.has(pnum)) break;
+      seen.add(pnum);
+      const parent = git.ghIssueView(repoAbs, pnum, ['number', 'state', 'labels', 'body', 'subIssuesSummary']);
+      const c = containerClose.classifyContainer(parent || null);
+      if (c.verdict !== 'close') {
+        const finding = containerClose.containerFinding({ ...c, number: c.number === null ? pnum : c.number });
+        if (finding) warn(`container ${finding}`);
+        break;
+      }
+      const body = containerClose.containerCloseComment({ child, sha, total: c.total, target });
+      const cm = git.ghIssueComment(repoAbs, pnum, body);
+      if (!cm.ok) warnDeferred(`could not post the container-close comment on #${pnum} — left OPEN`);
+      if (!cm.ok) break;
+      const r = git.run('gh', ['issue', 'close', String(pnum), '--reason', 'completed'], { cwd: repoAbs });
+      if (!r.ok) { warnDeferred(`could not close container #${pnum}: ${(r.stderr || '').split('\n')[0]}`); break; }
+      print(`  closed container #${pnum} — all ${c.total} sub-issue(s) closed (#371)`);
+      for (const d of containerClose.containerDeliveryLabels(parent.labels)) warn(`container #${pnum} carried ${d} — a container has no deliverable of its own (#371)`);
+      child = pnum;
+    }
+  }
+}
+
 function shipJournalPlanFiles(repoAbs, issues) {
   const plansDir = path.join(repoAbs, '.claude', 'plans');
   let entries;
@@ -9244,6 +9289,9 @@ function shipEvidenceClose({ repoAbs, st, sess, target, trunk, gh, closeIssues, 
   // #193: the same (h2) B4 step the merge path runs — this exit used to skip it entirely, leaving
   // a zero-diff session's plan file on disk with no journal line for the mechanism's own tuning data.
   shipJournalPlanFiles(repoAbs, sess.issues);
+
+  // #371: a container whose last child this evidence-close just closed closes with it.
+  shipCloseSpentContainers(repoAbs, closed, { sha: head, target });
 
   if (skipped.length) {
     process.stderr.write(`✗ evidence-close finished with ${skipped.length} issue(s) still open (see above).\n`);
@@ -10596,6 +10644,7 @@ function cmdShip(argv) {
 
   // ---- (g/h) B4 verify + post summary per issue ----
   const groupLabelsCarried = new Set(); // union across every issue this branch carried — for (i) below
+  const closedByShip = []; // the issues this ship actually closed — for (i2) below (#371)
   if (gh) {
     for (const num of sess.issues) {
       const isRef = refsSet.has(num);
@@ -10608,6 +10657,7 @@ function cmdShip(argv) {
       if (!isRef && info && info.state !== 'CLOSED') warn(`#${num} did not auto-close (state=${info.state}) — the Closes trailer needs a push to the DEFAULT branch; close it by hand if ${target} isn't default`);
       if (isRef && info && info.state === 'CLOSED') warn(`#${num} was meant to stay open (Refs, tracking issue) but is CLOSED — a commit body likely carries "Closes #${num}"; reopen it by hand`);
       for (const gl of labels.groupLabelNames(info && info.labels)) groupLabelsCarried.add(gl);
+      if (!isRef && info && info.state === 'CLOSED') closedByShip.push(num); // for (i2) below, #371
       const shipSess = sessionCommentSuffix(sess.session, sess.sessionName); // markdown link when both present
       // Name the branch it actually landed on. An issue whose code is on a long-lived line is NOT
       // in trunk, and a comment saying otherwise would be read as "this is in the next release".
@@ -10642,6 +10692,11 @@ function cmdShip(argv) {
       else warn(`could not delete spent group label ${gl}: ${del.stderr || 'gh label delete failed'}`);
     }
   }
+
+  // ---- (i2) container close (#371) ----
+  // An epic whose last open sub-issue this ship closed is closed with it, with evidence —
+  // lib/container-close.js decides; everything but its `close` verdict leaves the parent alone.
+  if (gh) shipCloseSpentContainers(repoAbs, closedByShip, { sha, target });
 
   print('');
   print(`✓ Shipped ${sess.branch} → ${target} @ ${sha}${sess.issues.length ? ' (' + sess.issues.map((n) => '#' + n).join(' ') + ')' : ''}`);

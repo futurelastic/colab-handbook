@@ -830,9 +830,32 @@ Worktrees are only half of it. Also:
   `code-triage`'s opening principle. The epic is the source triage is *instructed* to trust, so a wrong line
   there does not merely annoy; it throws away a session.
 
-  Same four limits as `code-ship` B2c: never close the epic on a full table, never
-  rewrite its prose, never build a table that does not exist, never infer parentage
-  from a title.
+  Same four limits as `code-ship` B2c: never close a hand-checklist epic on a full
+  table, never rewrite its prose, never build a table that does not exist, never infer
+  parentage from a title.
+- **Open containers whose native sub-issues are all closed** → close each one with
+  evidence, by the same rule `colab ship` applies at merge (#371, `code-ship` B2c,
+  `tools/lib/container-close.js`). The ship path only fires when the last child closes
+  through a ship. A child closed by hand, by a bulk close, or before #371 leaves its
+  container open, and this sweep catches it:
+
+  ```sh
+  gh issue list --state open --label epic --limit 200 \
+    --json number,body,subIssuesSummary \
+    -q '.[] | select(.subIssuesSummary.total > 0 and .subIssuesSummary.completed == .subIssuesSummary.total)
+            | select((.body // "") | test("(?m)^\\s*[-*]\\s*\\[ \\]") | not)
+            | select((.body // "") | test("^\\s*<!--\\s*colab:release") | not) | .number'
+  ```
+
+  The `(?m)` is load-bearing: gh's built-in jq anchors a bare `^` to the start of the
+  body only, so without it an unticked item further down slips through. (Measured on this
+  repo: an epic with 9 of 9 sub-issues closed and 9 unticked plan lines passed the filter
+  without the flag.) Each number printed gets a comment naming the evidence (all K sub-issues closed, the
+  last one and when) and `gh issue close <P> --reason completed`. An epic that fails only
+  the unticked-item check is reported with the unticked lines, never closed. The same
+  goes for a parent with all sub-issues closed but no `epic` label. A `delivery:*` label
+  on any container is reported too (a container has no deliverable). Remove it only if
+  the sweep was asked to reconcile labels.
 
 ### 5.1 Re-derive once more before you stop (#329)
 

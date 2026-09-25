@@ -1932,6 +1932,30 @@ label for "later". Rejected: an order-only edge that has to be re-threaded whene
 parks. That re-threading is a manual step with no trigger, and the measured chain above
 is what happens when nobody does it.
 
+**File contention is never an edge (#371).** Two issues that edit the same file have no
+dependency: neither needs anything the other produces. So an edge between them is a queue
+position, which the rule above already forbids. It is stated separately because it was the
+commonest wrong edge in a measured backlog review. One adopting repo linked six design
+issues `blocked_by` one after another only to serialize edits to one shared docs index.
+One merge conflict became six serial review cycles. Contention has its own two answers:
+
+- **A real collision → *Grouping*** (below): one `group:<key>` label, one branch, one review
+  cycle. It is never recorded as a chain of edges.
+- **A shared file that every unit of work must edit is a design defect. Fix the file; do not
+  serialize the work.** The measured case was fixed this way: the index became a pointer
+  to the per-item folders, and each item's status moved into that item's own file. The
+  items then touch disjoint files and run in parallel, with nothing left to group.
+
+**Split an issue at the external-wait line (#371).** When only part of an issue waits on
+an outside party (another team's API, a vendor, a ruling from outside the repo), neither
+the edge nor the `deferred:external-party` park may hold the whole issue. Split it. The
+part the repo can build now becomes its own issue and can start. The part behind the wait
+keeps the edge or the park. Measured: one issue bundled a surface the repo owned, whose
+design had already shipped, with a mode that needed an outside party's API. Blocking the
+whole issue held back the only buildable UI path and the two issues built on top of it.
+`code-triage` reports the split as a structural finding. It does not split the issue
+itself: filing issues is not one of its writes.
+
 ```sh
 # read (repo-relative — no owner/name to get wrong)
 gh issue view <N> --json blockedBy,blocking,parent,subIssues,subIssuesSummary
@@ -2787,7 +2811,10 @@ nowhere to record it outside the terminal.
 
 **Neither existing mechanism has the right shape:** sub-issues are hierarchical (asserts
 a false parent); mutual blocked-by would mean the readiness gate never reports either
-member ready. A group needs a symmetric, flat relationship.
+member ready. A group needs a symmetric, flat relationship. A one-way `blocked_by` chain
+is wrong too: it turns one shared branch and one review into one review cycle per member
+(*File contention is never an edge*, under *Readiness* above, #371). And when the only
+overlap is a file that every unit must edit, fix the file before grouping on it.
 
 ```sh
 KEY=import-fixes    # the branch slug WITHOUT the numbers: fix/import-fixes-115-114-113
@@ -2913,6 +2940,31 @@ convention label set (unlike `tracking`) because an unattended driver's decision
 on it. An epic still gets closed and referenced exactly as any other issue once its
 children finish — the label only prevents a driver from mistaking the map for the
 territory.
+
+**A container closes with its last child (#371).** A child's merge closes the child. Before
+#371 nothing closed the parent, and a backlog review found five open containers whose
+children were all closed. So `colab ship`, after it closes an issue, reads the issue's
+native parent and closes it in the same step, with an evidence comment, when all of these
+hold:
+
+- it carries the `epic` label;
+- it has native sub-issues, and every one of them is closed;
+- its body lists no unticked checklist item (`- [ ]`). An unticked item on an epic is work
+  someone listed and nobody filed yet, and closing over it would bury that work;
+- it is not a release tracking record, which `colab release finalize` closes.
+
+Then it asks the same question of that parent's own parent. Any other shape is left open.
+A parent whose sub-issues are all closed but which has no `epic` label, or which still
+lists an unticked item, is reported as a finding for a human. A hand-written checklist
+with no native sub-issues is never closed this way, because a table of boxes running out
+does not prove the work ran out (`code-ship` B2c). `code-sweep` §5 closes containers whose
+last child closed by some other route, using the same conditions
+(`tools/lib/container-close.js`).
+
+**A container never carries a `delivery:*` label (#371).** It has no deliverable of its
+own; its children do. In the same review, one closed-out container still carried
+`delivery:code`, so a scheduler could have read it as code work. `code-triage` reports one
+as a finding in its epic bucket.
 
 **For the same reason, an epic never carries `needs-decision`, and never a
 `decision:options` block.** A gate on something that never starts gates nothing. A
