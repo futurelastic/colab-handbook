@@ -1531,7 +1531,7 @@ reading either sees the same spelling. Spell them exactly so, everywhere:
 | class | what the runs at the head sha show | next step |
 |---|---|---|
 | `green` | **every** run `completed`, at least one `success`, none `failure` | nothing owed — this precondition passes |
-| `none` | no run exists, or **any** run is still in flight | a run queued or in flight has not passed, it has **not run**: wait, bounded. A run that **cannot arrive** for this ref — no workflows, or workflows triggering only on `pull_request` / trunk push — is not pending: proceed, and the base's own CI is the whole CI story |
+| `none` | no run exists, or **any** run is still in flight | a run queued or in flight has not passed, it has **not run**: wait, bounded — **15 minutes per candidate** by default, then a defer carrying a re-measure trigger, never an open-ended poll (#370). A run that **cannot arrive** for this ref — no workflows, or workflows triggering only on `pull_request` / trunk push — is not pending: proceed, and the base's own CI is the whole CI story |
 | `red:infra` | a run failed **before** the suite could judge the branch — runner boot, browser install, billing lockout, dependency fetch. **Exit 2** where the repo separates them | re-run **once**; an identical failure twice is the runner, not the branch — hand it to the ops lane. Never merged past, never sent back to the implementer: there is nothing in the diff to fix |
 | `red:finding` | the suite ran and something in it failed. **Exit 1** where separated | back to an implementer session, **as a class**. Never merged past, never re-run |
 
@@ -1667,6 +1667,25 @@ base's tree at all?**
 - **Asked against the branch's base**, trunk only by default — a branch cut from a
   declared line, measured against trunk, looks like enormous unshipped cargo.
 - **`unknown` is a real answer and means cargo.** Verdicts never round up to `landed`.
+
+**Before shipping a candidate, also ask the base's history whether it already shipped under
+another sha (#370).** A squash followed by base movement reads `unknown`, and a kept ref from
+such a ship then looks exactly like unshipped work — measured: 3 of 8 "candidates" in one
+repository were already on trunk, and one read CONFLICT only because its own content was
+already there. The squash message carries the answer the tree cannot:
+
+```sh
+git log origin/<base> -i -E --format='%h %cI %s' \
+  --grep="(close[sd]?|fix(e[sd])?|resolve[sd]?) #<N>([^0-9]|$)"
+```
+
+The `([^0-9]|$)` tail is load-bearing: a bare `--grep="#37"` also matches `#370`. A match for
+**every** issue the branch carries, with each issue CLOSED and no commit on the branch newer
+than the matching squash, means **shipped** — the phantom case: evidence, release, teardown,
+never a second merge. Anything short of all three (an issue reopened since, a commit after
+the squash, a `Refs #N` only) is a continuation or a partial ship and stays cargo. This
+answers *did a ship already happen*; it never answers *is the content on base* — `colab
+landed` still owns that, and an unmatched grep never rounds a verdict toward `landed`.
 
 **Git state and claim state are two signals, and neither replaces the other.** The
 `in-progress` label answers *does someone believe they hold this*; git answers *what

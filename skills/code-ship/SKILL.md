@@ -215,6 +215,14 @@ inventing a stop condition.
   author's judgement (B0's non-generated-file conflict path), or a missing human gate
   (the go-ahead itself, `autonomy`, a `needs-decision` answer). If you cannot name which
   of these three a deferral is, it is not a deferral — go do the step.
+- **Which of two same-file siblings lands first is never a missing human gate (#370).**
+  The order is mechanical — earlier wrap first, tie → smaller diff (`code-sweep`
+  [§4.0](../code-sweep/SKILL.md#40-order-the-pass-by-readiness--ready-work-first-370)).
+  Measured: four such pairs in 72 h sat 35–143 min each waiting for a human to pick the
+  order; nobody answered, and each cleared on its own the moment its sibling landed. Land
+  the first, record the order on both issues, then take the second through B0 against the
+  new `<base>`. A conflict *there* is B0's ordinary conflict path, not a reason to have
+  asked first.
 - **The blast radius is never just this one branch.** A finish-before-start gate reads a
   session holding an unfinished worktree as a reason to refuse *new* starts across the
   whole repo — one wrongly deferred branch can make a large share of a ready backlog
@@ -243,6 +251,35 @@ one squash commit.
 ```sh
 colab worktrees --json     # .worktrees["<name>"].base — trunk if it has none (shape: #67)
 ```
+
+**Then ask whether it already shipped under another sha — before you grade anything
+(#370).** A squash followed by `<base>` movement reads `unknown` below, so a ref kept
+after an earlier ship looks exactly like unshipped work. Measured: 3 of 8 candidates in
+one repository's ship queue were already on trunk; one read CONFLICT only because its own
+content was already there, and grading it would have spent a full review on nothing. The
+squash message carries what the tree cannot (`CONVENTIONS.md`
+[§4](../../CONVENTIONS.md#has-it-landed--the-one-rule-because-the-obvious-one-is-wrong),
+*Has it landed?*):
+
+```sh
+git fetch origin <base>
+for N in <every issue the branch carries>; do
+  git log origin/<base> -i -E --format="#$N %h %cI %s" \
+    --grep="(close[sd]?|fix(e[sd])?|resolve[sd]?) #$N([^0-9]|$)"
+done
+git log -1 --format=%cI <branch>     # the branch's newest commit, to compare against
+```
+
+- **Every issue matched, every issue CLOSED, and no branch commit newer than its matching
+  squash** → **shipped already.** Do not grade, sync or merge. Go to B2b (post evidence
+  only where the issue has none), B3 and B4, and say in the report which squash sha it
+  shipped in — a phantom candidate is a finding about whoever kept the ref, not a failure
+  of this branch.
+- **A match, but the issue is OPEN again, or the branch has commits after the squash** →
+  a continuation. It is cargo; ship it normally, and grade only what came after the squash.
+- **No match** → nothing learned; the landed question below decides. The grep only ever
+  moves a candidate *out* of the queue — its absence never rounds a verdict toward
+  `landed`.
 
 **Then ask whether there is anything left to ship:**
 
@@ -503,7 +540,7 @@ step is in this skill:
 | class | what this skill does |
 |---|---|
 | `green` | proceed to B1b |
-| `none` | **Depends which `none` — check before you wait.** A run *queued or in flight* (including a slow sibling behind a green fast one, #307): wait, bounded. A run that **cannot arrive for this ref** — no workflows, or workflows triggering only on `pull_request` / `push` to trunk — is not pending: proceed, exactly as the no-runs line above already allows for `<base>`. A5 reports which; re-read the triggers if it did not. **At a red `<base>`, "proceed" reaches B1's stop** — only the branch carrying the fix may open a PR to get a run (*Red trunk*, above); a bystander waits |
+| `none` | **Depends which `none` — check before you wait.** A run *queued or in flight* (including a slow sibling behind a green fast one, #307): wait, **bounded — 15 minutes for this candidate, then defer it** (below, *The wait is bounded*, #370). A run that **cannot arrive for this ref** — no workflows, or workflows triggering only on `pull_request` / `push` to trunk — is not pending: proceed, exactly as the no-runs line above already allows for `<base>`. A5 reports which; re-read the triggers if it did not. **At a red `<base>`, "proceed" reaches B1's stop** — only the branch carrying the fix may open a PR to get a run (*Red trunk*, above); a bystander waits |
 | `red:infra` | **re-run it once** (`gh run rerun <databaseId> --failed`), then re-read. Identical failure twice ⇒ it is the runner, not the branch: hand it to the **ops lane** and stop. Do not merge, and do not send it back to the implementer — there is nothing in the diff for them to fix |
 | `red:finding` | **hand back to an implementer session, as a class** — the branch's own suite found something. Never a merge, never a re-run |
 
@@ -516,6 +553,30 @@ run on `<base>`; re-measure trigger: that run. What is still never a defer is un
 originating session's composer, silence or parked state enters this decision at all —
 every step here runs in the coordinator's own worktree.
 
+- **The wait is bounded — 15 minutes per candidate, then a defer (#370).** A coordinator
+  once stayed in one turn for 1 h 40 min, hand-polling `gh run list` for three branches,
+  while two other candidates were already green at their head and merge-clean. A ship
+  pass that never ends also keeps the repository's trunk lock, so no fresh pass can
+  start either. Watch the run instead of polling it, with a wall-clock cap:
+
+  ```sh
+  RUN=$(gh run list --branch <branch> --limit 20 --json headSha,status,databaseId \
+    -q "[.[] | select(.headSha == \"$BHEAD\" and .status != \"completed\")][0].databaseId")
+  timeout 900 gh run watch "$RUN" --exit-status   # macOS: gtimeout (coreutils), or the
+                                                  # agent harness's own 15-min call timeout
+  ```
+
+  Exit 0 → re-read the class (it is `green` only if **every** run at the head sha is).
+  Non-zero from the run → classify the red as below. **The cap expired** → record a
+  defer with the clock *What a defer is for* requires — precondition: branch CI in flight
+  at `<sha>`; clears on: that run completing `green`; re-measure trigger: run
+  `<databaseId>` completing — and **end this candidate's turn**. That is the legitimate
+  kind of defer, a precondition the coordinator cannot itself clear; it is never a reason
+  to hold the pass open. Under `code-sweep`, the pass moves on to the next candidate and
+  the deferred one is re-measured by its run id on the next ping (`code-sweep` §0,
+  §4.0), not by waiting here. Fifteen minutes covers one ordinary CI run plus queueing;
+  a repo whose normal run is longer than the cap should expect its candidates to defer
+  once per push — say so, rather than raising the cap silently.
 - **Re-running is mechanical, and it is the only CI action permitted here** — same
   boundary as §0's push rule. One re-run per red episode, not per attempt: a second
   identical failure is evidence, and spending re-runs on it just moves the wall further
@@ -895,6 +956,14 @@ overrules first. An `escalate` waits on the one bounded automatic retry the mark
 records, and falls back to waiting on a human the moment that retry rejects too.
 
 ## B2. Squash-merge with `Closes #N`
+
+**Re-check that it is still unshipped, immediately before the merge (#370).** Run B0's
+already-shipped grep again against a fresh `git fetch origin <base>`. Grading and CI take
+minutes, and the branch's own session may ship it in the meantime — measured on an
+`auto-trunk` repository: the implementer ran `colab ship` itself 5 s before the
+coordinator's verification finished. A match now means someone else landed it: **do not
+merge.** Stop the merge path and go to B2b–B4 for whatever that ship left undone (evidence,
+claims, worktree), naming the squash sha it landed in.
 
 ```sh
 git checkout <base> && git pull
