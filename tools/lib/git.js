@@ -838,6 +838,22 @@ function ghRunsForCommit(repo, branch, sha, limit = 10) {
   return runs.filter((x) => x && x.headSha === sha);
 }
 
+/**
+ * Every run on `ref` at `sha`, WITH its `attempt` (#373). A sibling of ghRunsForCommit, not a change
+ * to its field list: batch landing needs the attempt number to enforce "re-run a red:infra ONCE", and
+ * nothing else reads it. Null on a gh/parse failure or a missing sha — never "no runs".
+ */
+function ghRunsForRef(repo, ref, sha, limit = 20) {
+  if (!sha) return null;
+  const r = run('gh', ['run', 'list', '--branch', ref, '-L', String(limit),
+    '--json', 'headSha,status,conclusion,createdAt,databaseId,workflowName,attempt'], { cwd: repo });
+  if (!r.ok) return null;
+  let runs;
+  try { runs = JSON.parse(r.stdout); } catch (_) { return null; }
+  if (!Array.isArray(runs)) return null;
+  return runs.filter((x) => x && x.headSha === sha);
+}
+
 function ghRunForCommit(repo, branch, sha, limit = 10) {
   return summarizeRunsForCommit(ghRunsForCommit(repo, branch, sha, limit), sha);
 }
@@ -987,7 +1003,7 @@ module.exports = {
   worktreeList, worktreeListDetailed, resolveWorktreePathForBranch, gitFailureLine,
   dirtyTracked, dirtyUntracked, dirtyAny,
   ghAvailable, ghState, ghIssueEdit, ghListLabels, ghAssignedIssues,
-  ghCurrentLogin, ghIssueView, ghIssueComment, ghRunForSha, ghRunForCommit, ghRunsForCommit, ghRunsAtCommit, ghRunsSince, summarizeRunsForCommit,
+  ghCurrentLogin, ghIssueView, ghIssueComment, ghRunForSha, ghRunForCommit, ghRunsForCommit, ghRunsForRef, ghRunsAtCommit, ghRunsSince, summarizeRunsForCommit,
   ghRunJobCount, ghRunJobs,
   ghIssueListByLabel, ghLabelDelete, ghLabelCreate, ghListLabelsDetailed, ghLabelEditDescription,
   ghApi, isGraphqlRateLimit, ghIssueRelease, ghClaimHolder, ghIssueLabelEvents,
