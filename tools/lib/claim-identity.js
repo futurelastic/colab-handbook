@@ -1,8 +1,8 @@
 'use strict';
 /**
  * Claim-record IDENTITY shape — the single decision #264 and #267 both need, so the writer
- * (`cmdClaim`, tools/colab:542) and the two readers (`tieBreakVerdict` :403, `ghClaimConflicts`
- * :324) apply ONE rule instead of two independently-evolving ones. Full design in
+ * (`cmdClaim`, tools/colab) and the two readers (`tieBreakVerdict` in claim-comments.js,
+ * `ghClaimConflicts` in tools/colab) apply ONE rule instead of two independently-evolving ones. Full design in
  * `.claude/plans/issue-264.md` (issues #264, #267); this module holds only the decidable, pure
  * parts — the same split every other tools/lib/*.js module keeps from its tools/colab caller
  * (records.js, place.js, solo.js, blocked-by.js, …).
@@ -112,7 +112,9 @@ function sameHost(a, b) {
     if (digested) return machine.machineToken(am) === machine.machineToken(bm);
     if (machineScheme(am) === machineScheme(bm)) return am === bm;
   }
-  return machine.canonHost(a && a.host) === machine.canonHost(b && b.host);
+  // #369: a host field may be an `h:` token (a comment on a public destination) — sameHostName
+  // compares tokens then, and canonHost exactly as before otherwise.
+  return machine.sameHostName(a && a.host, b && b.host);
 }
 
 function machineScheme(id) {

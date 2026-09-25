@@ -2,7 +2,7 @@
 /** #367: unit tests for tools/lib/machine-trailer.js — pure, no git, no network. */
 const test = require('node:test');
 const assert = require('node:assert');
-const { decide, adoptedTrailer } = require('./machine-trailer');
+const { decide, mayNameHost, adoptedTrailer } = require('./machine-trailer');
 
 test('public forge → omitted, whatever the room says', () => {
   for (const room of [null, 'solo', 'team', 'public']) {
@@ -56,4 +56,26 @@ test('adoptedTrailer keeps branch + sha always, host tail only where Machine: ma
 test('#301: the Colab-Adopted: trailer names the remote the branch was adopted from; absent, origin as before', () => {
   assert.strictEqual(adoptedTrailer({ branch: 'chore/x', remoteSha: 'abc123', remote: 'upstream' }, null), 'Colab-Adopted: upstream/chore/x @ abc123');
   assert.strictEqual(adoptedTrailer({ branch: 'chore/x', remoteSha: 'abc123' }, null), 'Colab-Adopted: origin/chore/x @ abc123');
+});
+
+// --- #369: mayNameHost — the same destination rule, for comments and committed provenance ---
+
+test('#369 mayNameHost: the five rows of #367, in the same order', () => {
+  assert.strictEqual(mayNameHost({ visibility: 'PUBLIC', room: 'solo' }).include, false, 'public forge wins over a private room');
+  assert.strictEqual(mayNameHost({ visibility: 'PRIVATE', room: 'public' }).include, false, 'room: public wins over a private forge');
+  assert.strictEqual(mayNameHost({ visibility: 'private', room: null }).include, true);
+  assert.strictEqual(mayNameHost({ visibility: 'INTERNAL' }).include, true);
+  assert.strictEqual(mayNameHost({ visibility: null, room: 'team' }).include, true);
+  const closed = mayNameHost({ visibility: null, room: undefined });
+  assert.strictEqual(closed.include, false);
+  assert.strictEqual(closed.failClosed, true);
+  assert.strictEqual(mayNameHost({ visibility: 'WEIRD', room: '' }).failClosed, true);
+});
+
+test('#369 mayNameHost agrees with decide on include for every row', () => {
+  for (const visibility of ['PUBLIC', 'PRIVATE', 'INTERNAL', null, 'WEIRD']) {
+    for (const room of ['public', 'solo', 'team', null]) {
+      assert.strictEqual(mayNameHost({ visibility, room }).include, decide({ label: 'box', visibility, room }).include, `${visibility}/${room}`);
+    }
+  }
 });

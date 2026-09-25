@@ -623,6 +623,11 @@ test('provenanceComment: interactive mode names the host and date, not a flag', 
   assert.strictEqual(c, '# exposure: answered interactively (build-box-01, 2026-08-11)');
 });
 
+test('#369 provenanceComment: interactive mode with no nameable host keeps the date and drops the host', () => {
+  const c = provenanceComment('exposure', { mode: 'interactive', host: null, date: '2026-08-11' });
+  assert.strictEqual(c, '# exposure: answered interactively (2026-08-11)');
+});
+
 test('provenanceComment: flag mode names the flag(s), and COLAB_HUMAN/--answered-by when present', () => {
   const c = provenanceComment('exposure', { mode: 'flag', flags: ['--exposure'], date: '2026-08-11', colabHuman: true, answeredBy: 'Alex' });
   assert.strictEqual(c, '# exposure: supplied by --exposure, COLAB_HUMAN=1, --answered-by "Alex" (2026-08-11)');

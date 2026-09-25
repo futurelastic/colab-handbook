@@ -145,3 +145,37 @@ test('localMachine: memoized — repeated calls return the identical object, not
 test('isLocal: a record with neither host nor machine is always local (falsy-host behaviour)', () => {
   assert.strictEqual(machine.isLocal({}), true);
 });
+
+// --- #369: hostToken / sameHostName — the public form of a hostname -------------------------
+
+test('#369 hostToken: every spelling of one machine digests to one opaque token, and never contains the name', () => {
+  const t = machine.hostToken('devbox');
+  assert.match(t, /^h:[0-9a-f]{12}$/);
+  for (const spelling of ['Devbox.local.', 'devbox.local', 'devbox.lan', ' DEVBOX ']) {
+    assert.strictEqual(machine.hostToken(spelling), t, spelling);
+  }
+  assert.ok(!t.includes('devbox'));
+  assert.notStrictEqual(machine.hostToken('otherbox'), t);
+});
+
+test('#369 hostToken: idempotent on a token, blank for blank', () => {
+  const t = machine.hostToken('devbox');
+  assert.strictEqual(machine.hostToken(t), t);
+  assert.strictEqual(machine.hostToken(''), '');
+  assert.strictEqual(machine.hostToken(null), '');
+});
+
+test('#369 sameHostName: raw vs token, token vs token, raw vs raw (canonHost unchanged)', () => {
+  const t = machine.hostToken('devbox');
+  assert.strictEqual(machine.sameHostName('devbox.local', t), true);
+  assert.strictEqual(machine.sameHostName(t, 'Devbox.'), true);
+  assert.strictEqual(machine.sameHostName(t, machine.hostToken('devbox.lan')), true);
+  assert.strictEqual(machine.sameHostName('otherbox', t), false);
+  assert.strictEqual(machine.sameHostName('devbox.local', 'DEVBOX'), true);
+  assert.strictEqual(machine.sameHostName('', ''), true);
+});
+
+test('#369 sameMachineWith: a record carrying an h: token is local to the machine it digests', () => {
+  assert.strictEqual(machine.sameMachineWith({ host: machine.hostToken('devbox') }, { id: null, host: 'devbox.local' }), true);
+  assert.strictEqual(machine.sameMachineWith({ host: machine.hostToken('devbox') }, { id: null, host: 'other' }), false);
+});

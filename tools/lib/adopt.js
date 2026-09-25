@@ -753,7 +753,8 @@ function writesGateVerdict({ writes, effExposure, isTTY, colabHuman, answeredBy 
  * header note), only as an audit trail a false claim would have to be written deliberately into. */
 function provenanceComment(key, meta) {
   if (meta.mode === 'interactive') {
-    return `# ${key}: answered interactively (${meta.host}, ${meta.date})`;
+    // #369: `host` is null where the destination may not name it — the comment keeps the date.
+    return `# ${key}: answered interactively (${meta.host ? `${meta.host}, ` : ''}${meta.date})`;
   }
   const bits = [`supplied by ${meta.flags.join(', ')}`];
   if (meta.colabHuman) bits.push('COLAB_HUMAN=1');

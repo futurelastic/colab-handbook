@@ -227,8 +227,21 @@ On each successful claim (when `gh` is usable) colab posts **one** comment, in t
 stable, machine-greppable** format (the refusal path and future dashboards parse it — do not reword):
 
 ```
-🔒 Claimed — worktree `<name|->` · branch `<branch|->` · host `<hostname>` · <ISO timestamp>[ · machine `m:<12 hex>`][ · session …]
+🔒 Claimed — worktree `<name|->` · branch `<branch|->` · host `<hostname|h:<12 hex>>` · <ISO timestamp>[ · machine `m:<12 hex>`][ · session …]
 ```
+
+**`host` names the machine only where the destination may (#369).** The same rule #367 applies to
+a squash's `Machine:` trailer (`tools/lib/machine-trailer.js` `mayNameHost`): a forge that reads
+PUBLIC, or `room: public`, gets the opaque token `h:` + sha256 of the canonical hostname (12 hex,
+`tools/lib/machine.js` `hostToken`) in the same field instead of the name; a private forge — or an
+unreadable one with `room: solo|team` — keeps the raw name; unreadable with no `room:` fails closed
+to the token. The field keeps its place, so every older parser still reads the comment, and the
+tie-break compares a token with a raw name by digesting the name (`sameHostName`). The token is
+opaque, not secret: a hostname is guessable, and a guess can be confirmed against it. The same
+value goes into every other comment colab posts with a `host` field — migration and CI grants and
+their revokes (and the revoke hints printed when that post fails), decision records, dependency-edge
+receipts — and a yield names its winner by the token too. `colab adopt` drops the host from the
+provenance comments it commits into `.github/project.yml` under the same rule.
 
 Both `worktree` and `branch` render as `-` when absent. `machine` (#327) is appended after the
 timestamp — the four leading fields stay byte-stable for every older reader — and is a **digest**
@@ -281,9 +294,19 @@ gate in the same instant and both assign themselves. The claim comment is the su
 the tie **deterministically**, so both racers independently reach the *same* verdict:
 
 1. After posting our claim comment, re-read the issue's comments.
-2. Compute the **live** claims: every `🔒 Claimed` comment **not** followed by a later `✅ Released`
-   from the **same author**. Each carries `login`, `host`, `session` (parsed from the comment body),
-   and the comment's authoritative GitHub `createdAt`.
+2. Compute the **live** claims: every `🔒 Claimed` comment not cancelled by a later release (#375):
+   - a plain `✅ Released` cancels **every** earlier claim, **whoever** posted either — colab's
+     release already clears the label and the claimer's assignee whatever account took it (#363),
+     so the comment layer agrees with the label layer. Keyed on the release's author, a claim
+     released under a second account stayed live in the comments forever and later "won" a race
+     against a fresh claim on free work;
+   - a yield, `✅ Released (yielded — earlier claim by <who> wins)`, cancels only its **own
+     author's** earlier claims, and **never** the claim it names as the winner — a yield is one
+     racer standing down, not a release of the issue.
+
+   Each live claim carries `login`, `host`, `machine`, `session` (parsed from the comment body), and
+   the comment's authoritative GitHub `createdAt`. The rule is a pure function of the comment list
+   (`tools/lib/claim-comments.js`), so every reader of the same comments gets the same live set.
 3. Identify **ours** = the **earliest** live claim that is the *same claimant* as us (see *Identity
    granularity* below) — **earliest**, not latest: a same-holder correction comment (the previous
    section) must never restart our own priority and cost us a race our first comment had already won.
