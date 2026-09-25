@@ -120,7 +120,8 @@ function releaseComments(sorted) {
  *      layer that the cross-machine refusal (#325) reads went blank the moment X won.
  *
  * Pure function of the comment list: every reader of the same comments computes the same live
- * set, which is what `tieBreakVerdict`'s convergence rests on.
+ * set, which is what `tieBreakVerdict`'s convergence rests on. Alternatives weighed:
+ * docs/adr/375-release-cancels-any-earlier-claim.md.
  */
 function liveClaimComments(comments, comps) {
   comps = comps || claimIdentity.DEFAULT_COMPONENTS;
