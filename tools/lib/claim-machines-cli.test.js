@@ -429,3 +429,41 @@ test('#325: single machine, nothing elsewhere → worktree new claims exactly as
   assert.deepStrictEqual(is.assignees, ['me']);
   assert.strictEqual(is.comments.length, 1);
 });
+
+// --- #369: no raw hostname on a destination that may not name it ---------------------------------
+
+test('#369: forge unreadable + no room: → the claim comment carries the h: token, and a re-claim still reads it as ours', () => {
+  const fx = fixture(); // the fake gh cannot answer `repo view`, and PROJECT_YML declares no room: → fail closed
+  const r = colab(fx, ['claim', '9', '--session', 's1']);
+  assert.strictEqual(r.code, 0, r.out + r.err);
+  const body = issueState(fx, 9).comments[0].body;
+  assert.ok(body.includes(`host \`${machine.hostToken(HOST)}\``), body);
+  assert.ok(!body.includes(`host \`${HOST}\``), 'the raw hostname must not be posted');
+  const r2 = colab(fx, ['worktree', 'new', 'feat/a-9', '--issues', '9', '--session', 's1']);
+  assert.strictEqual(r2.code, 0, r2.out + r2.err);
+  assert.ok(!/Yielded/.test(r2.out + r2.err), 'our own redacted comment must never read as a rival');
+});
+
+test('#369: room: team (a private room, forge unreadable) keeps the raw hostname, as before', () => {
+  const fx = fixture();
+  fs.writeFileSync(path.join(fx.work, '.github', 'project.yml'), `${PROJECT_YML}room: team\n`);
+  const r = colab(fx, ['claim', '9', '--session', 's1']);
+  assert.strictEqual(r.code, 0, r.out + r.err);
+  assert.ok(issueState(fx, 9).comments[0].body.includes(`host \`${HOST}\``));
+});
+
+// --- #375: a release by another account cancels the claim comment --------------------------------
+
+test('#375: a claim this account took on another machine, released under a DIFFERENT account, no longer wins the race', () => {
+  const fx = fixture();
+  seedIssue(fx, 9, {
+    comments: [
+      { createdAt: fakeIso(0), author: { login: 'me' }, body: claimBody({ wt: 'old', host: 'far-away', iso: fakeIso(0), machineTok: FOREIGN_TOKEN }) },
+      { createdAt: fakeIso(120), author: { login: 'someone-else' }, body: '✅ Released' },
+    ],
+  });
+  const r = colab(fx, ['claim', '9', '--worktree', 'w', '--session', 's1']);
+  assert.strictEqual(r.code, 0, r.out + r.err);
+  assert.ok(!/Yielded/.test(r.out + r.err), r.out + r.err);
+  assert.strictEqual(claimsFor(fx.home, 9).length, 1, 'the claim stands');
+});

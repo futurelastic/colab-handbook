@@ -35,26 +35,38 @@ const PRIVATE_ROOMS = new Set(['solo', 'team']);
  *             reason: string, failClosed: boolean }}
  */
 function decide({ label, visibility, room }) {
+  const d = mayNameHost({ visibility, room });
+  const base = { visibility: d.visibility, room: d.room, failClosed: d.failClosed };
+  if (!d.include) {
+    return { ...base, include: false, line: null, reason: d.failClosed
+      ? `${d.reason} — omitted, failing closed (#367); declare room: solo|team to keep it`
+      : `${d.reason} — a hostname in a squash would be ${d.visibility === 'PUBLIC' ? 'published permanently' : 'published with it'} (#367)` };
+  }
+  if (!label) {
+    return { ...base, include: false, line: null, reason: `${d.reason}, but no machine label could be derived from the host name` };
+  }
+  return { ...base, include: true, line: `Machine: ${label}`, reason: `${d.reason} — the squash names the machine that landed it (#350)` };
+}
+
+/**
+ * #369: the destination rule on its own, for every writer that is not a squash trailer — claim,
+ * grant, decision and receipt comments on an issue, and `colab adopt`'s provenance comments in
+ * `.github/project.yml`. Same five rows as `decide` above, same order, same fail-closed default;
+ * what a caller does with `include: false` is its own (a comment writes an opaque `h:` token in the
+ * host field, a provenance comment drops the host). Pure.
+ *
+ * @returns {{ include: boolean, visibility: string|null, room: string|null, failClosed: boolean, reason: string }}
+ */
+function mayNameHost({ visibility, room }) {
   const vis = visibility ? String(visibility).toUpperCase() : null;
   const rm = room === undefined || room === null || room === '' ? null : String(room);
   const base = { visibility: vis, room: rm, failClosed: false };
-  if (vis && VISIBLE.has(vis)) {
-    return { ...base, include: false, line: null, reason: 'repository is public — a hostname in a squash would be published permanently (#367)' };
-  }
-  if (rm === 'public') {
-    return { ...base, include: false, line: null, reason: 'project.yml declares room: public — a hostname in a squash would be published with it (#367)' };
-  }
-  let why;
-  if (vis && HIDDEN.has(vis)) why = `repository is ${vis.toLowerCase()}`;
-  else if (rm && PRIVATE_ROOMS.has(rm)) why = `visibility unreadable; project.yml declares room: ${rm}`;
-  else {
-    return { ...base, failClosed: true, include: false, line: null,
-      reason: `visibility ${vis ? `"${vis}" not recognised` : 'could not be read'} and project.yml declares no private room: — omitted, failing closed (#367); declare room: solo|team to keep it` };
-  }
-  if (!label) {
-    return { ...base, include: false, line: null, reason: `${why}, but no machine label could be derived from the host name` };
-  }
-  return { ...base, include: true, line: `Machine: ${label}`, reason: `${why} — the squash names the machine that landed it (#350)` };
+  if (vis && VISIBLE.has(vis)) return { ...base, include: false, reason: 'repository is public' };
+  if (rm === 'public') return { ...base, include: false, reason: 'project.yml declares room: public' };
+  if (vis && HIDDEN.has(vis)) return { ...base, include: true, reason: `repository is ${vis.toLowerCase()}` };
+  if (rm && PRIVATE_ROOMS.has(rm)) return { ...base, include: true, reason: `visibility unreadable; project.yml declares room: ${rm}` };
+  return { ...base, include: false, failClosed: true,
+    reason: `visibility ${vis ? `"${vis}" not recognised` : 'could not be read'} and project.yml declares no private room:` };
 }
 
 /**
@@ -68,4 +80,4 @@ function adoptedTrailer(adopt, decision) {
   return `${head} on ${adopt.host} (machine ${adopt.machine || 'unknown'})`;
 }
 
-module.exports = { decide, adoptedTrailer };
+module.exports = { decide, mayNameHost, adoptedTrailer };

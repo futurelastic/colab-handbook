@@ -48,6 +48,7 @@ const consumerEvidence = require('./lib/consumer-evidence');
 const axisAuthority = require('./lib/axis-authority');
 const writesAuthority = require('./lib/writes-authority');
 const claimIdentity = require('./lib/claim-identity');
+const claimComments = require('./lib/claim-comments');
 const machine = require('./lib/machine');
 const targetSync = require('./lib/ship-target-sync');
 const docsOnly = require('./lib/docs-only');
@@ -182,24 +183,30 @@ function ghUnusableWhy(repoAbs) {
 // GitHub offers no atomic check-and-set on labels/assignees.
 // ---------------------------------------------------------------------------
 
-// The claim/release comment markers. These strings are a STABLE WIRE FORMAT: the refusal
-// path, the tie-break, and future dashboards grep them. Do not reword casually.
-const CLAIM_MARK = '🔒 Claimed';
-const RELEASE_MARK = '✅ Released';
-// Parses a claim comment body back into {worktree, branch, host, date}. The `· <host>` field
-// is what lets the tie-break tell two machines of the SAME GitHub user apart. The optional
-// trailing `· session <value>` (added 2026-07) is captured separately by SESSION_RE so this
-// regex — and every existing parser — stays byte-stable for session-less comments.
-const CLAIM_RE = /🔒 Claimed — worktree `([^`]*)` · branch `([^`]*)` · host `([^`]*)` · (\S+)/;
-// The `· session <field>` tail, captured as the rest of the line. parseSessionField() then decodes
-// the THREE shapes it can take — `[name](url)`, a bare URL, or a bare name — plus the legacy
-// plain-URL form written before sessionName existed.
-const SESSION_RE = /· session (.+)$/;
-// #327: the claimant's machine, as the public `m:` digest (tools/lib/machine.js `machineToken`),
-// written AFTER the timestamp and BEFORE the session suffix — so CLAIM_RE's four groups and
-// SESSION_RE's end anchor both parse a new comment exactly as they parse a legacy one, and a legacy
-// comment (no such field) simply has no machine and is compared by canonical hostname.
-const MACHINE_RE = /· machine `(m:[0-9a-f]{12})`/;
+// The claim/release comment markers and parsers live in tools/lib/claim-comments.js (#369/#375) —
+// a STABLE WIRE FORMAT the refusal path, the tie-break and dashboards grep. Do not reword casually.
+const { CLAIM_MARK, RELEASE_MARK, liveClaimComments, tieBreakVerdict } = claimComments;
+
+/**
+ * #369: may a comment colab posts to THIS repo's tracker name the host in its `host` field? The
+ * same destination rule #367 applies to squash trailers (machine-trailer.js `mayNameHost`): forge
+ * PUBLIC or `room: public` → no; private forge, or unreadable with a private `room:` → yes;
+ * unreadable with no `room:` → no, failing closed. A "no" writes the opaque `h:` token
+ * (machine.js `hostToken`) in the same field — the field stays, so every parser (and the
+ * tie-break's machine comparison, `sameHostName`) still reads it. One `gh repo view` per repo per
+ * run, memoized.
+ */
+const commentHostCache = new Map();
+function commentHostDecision(repoAbs) {
+  if (commentHostCache.has(repoAbs)) return commentHostCache.get(repoAbs);
+  const d = machineTrailer.mayNameHost({ visibility: git.ghRepoVisibility(repoAbs), room: projectDoc(repoAbs).room });
+  commentHostCache.set(repoAbs, d);
+  return d;
+}
+/** The value a tracker comment on `repoAbs` writes for `host` — HOST, or its `h:` token (#369). */
+function commentHost(repoAbs) {
+  return commentHostDecision(repoAbs).include ? HOST : machine.hostToken(HOST);
+}
 
 /** This machine's canonical id (#327), or null when every resolution scheme failed. Lazy: one
  *  `ioreg` spawn only for commands that actually write or compare a claim. */
@@ -378,24 +385,6 @@ function sessionCommentSuffix(session, sessionName) {
 }
 
 /**
- * Decode the `· session <field>` tail of a claim comment into { sessionName, session }. Accepts:
- *   `[name](url)`  → both;  bare `https://…`/`session_…` → url only;  any other bare token → name.
- * The bare-URL branch is exactly the LEGACY format written before sessionName existed, so old
- * comments keep parsing. Returns empty strings when there is no session tail.
- */
-function parseSessionField(body) {
-  const m = String(body).match(SESSION_RE);
-  if (!m) return { sessionName: '', session: '' };
-  const v = m[1].trim();
-  const link = v.match(/^\[([^\]]*)\]\((.*)\)$/);
-  if (link) return { sessionName: link[1], session: link[2] };
-  // #306: the shape test moved to claimIdentity.looksLikeSessionId — same expressions, one copy.
-  // `warnWeakIdentity` needs the identical rule at write time, and a second regex would drift.
-  if (claimIdentity.looksLikeSessionId(v)) return { sessionName: '', session: v };
-  return { sessionName: v, session: '' };
-}
-
-/**
  * Worktree lifecycle status, backfilled-on-read: entries created before this field existed (or by
  * an older colab) render as `running`. Values: `running` (default, at create) → `merged` (branch
  * landed on trunk + no live claims; set by ship after B1, or auto-detected by doctor). "Killed" is
@@ -404,12 +393,13 @@ function parseSessionField(body) {
 function wtStatus(wt) { return (wt && wt.status) || 'running'; }
 
 /** The exact claim-comment body. Keep in lockstep with CLAIM_RE/parseSessionField and the README. */
-function claimCommentBody(wtName, branch, session, sessionName) {
+function claimCommentBody(wtName, branch, session, sessionName, host = HOST) {
   // `-` for "no branch", matching the worktree field beside it. It used to be the word `trunk`,
   // which read as a branch name that never existed (#53).
-  const base = `${CLAIM_MARK} — worktree \`${wtName || '-'}\` · branch \`${branch || '-'}\` · host \`${HOST}\` · ${nowISO()}`;
-  // #327: `host` stays the raw hostname (display, and byte-stable for every older reader); the
-  // comparable identity is the machine digest beside it. Omitted when no id resolved.
+  const base = `${CLAIM_MARK} — worktree \`${wtName || '-'}\` · branch \`${branch || '-'}\` · host \`${host}\` · ${nowISO()}`;
+  // #327: `host` is the raw hostname where the destination may name it, the `h:` token where it
+  // may not (#369, `commentHost`); the comparable identity is the machine digest beside it.
+  // Omitted when no id resolved.
   const token = machine.machineToken(myMachineId());
   const mach = token ? ` · machine \`${token}\`` : '';
   return base + mach + sessionCommentSuffix(session, sessionName);
@@ -646,79 +636,9 @@ function printTakeover(localConf, ghConf, remoteConf = []) {
   }
 }
 
-/**
- * Live claim comments on an issue = every `🔒 Claimed` not cancelled by a LATER `✅ Released`
- * from the SAME GitHub author. Returns [{login, host, session, sessionName, at, identity}], `at` =
- * the comment's real GitHub createdAt (authoritative, sub-second). `identity` is built from `comps`
- * (tools/lib/claim-identity.js `components()` — `[login,host]` by default, `[login,host,session]`
- * opt-in, #267) so a caller comparing on `identity` alone already sees the configured granularity;
- * `login`/`host`/`session` are still returned raw for callers (`tieBreakVerdict`) that need
- * `sameClaimant`'s degrade-on-missing comparison rather than a flat string match.
- */
-function liveClaimComments(comments, comps) {
-  comps = comps || claimIdentity.DEFAULT_COMPONENTS;
-  const sorted = [...comments].sort((a, b) => (a.createdAt < b.createdAt ? -1 : a.createdAt > b.createdAt ? 1 : 0));
-  // releases per author login (release comments carry no host — cancellation is by author, per spec)
-  const releasesByLogin = new Map();
-  for (const c of sorted) {
-    if (String(c.body || '').trim().startsWith(RELEASE_MARK)) {
-      const login = (c.author && c.author.login) || '';
-      if (!releasesByLogin.has(login)) releasesByLogin.set(login, []);
-      releasesByLogin.get(login).push(c.createdAt);
-    }
-  }
-  const live = [];
-  for (const c of sorted) {
-    const body = String(c.body || '').trim();
-    const m = body.match(CLAIM_RE);
-    if (!m) continue;
-    const login = (c.author && c.author.login) || '';
-    const host = m[3];
-    const { session, sessionName } = parseSessionField(body); // handles [name](url) / url / name / legacy
-    const mm = body.match(MACHINE_RE); // #327 — absent on a legacy comment: compared by canonical host
-    const machineTok = mm ? mm[1] : '';
-    const at = c.createdAt;
-    const cancelled = (releasesByLogin.get(login) || []).some((r) => r > at);
-    if (!cancelled) live.push({ login, host, machine: machineTok, session, sessionName, at, identity: claimIdentity.identityString({ login, host, session }, comps) });
-  }
-  return live;
-}
-
-/**
- * Deterministic verdict on the simultaneous-claim race. Given the issue's comments and our own
- * identity (`myLogin`/`myHost`/`mySession`): if a live claim that is NOT us under `comps`
- * (tools/lib/claim-identity.js `sameClaimant`, #267) is EARLIER than our own earliest live claim →
- * we lost (returns the winner). Exact-timestamp ties break on identity string (lexicographically
- * smaller identity wins), so both racers, reading the same comments, reach the same verdict
- * independently.
- *
- * Anchors on our EARLIEST live claim, not the latest (#264/#267 together): a re-claim that corrects
- * a record (#264's `updated` path) posts a SECOND comment from us, and anchoring on the latest of
- * those would let that correction restart our own priority — costing us a race we had already won.
- * Under the coarse default this only changes the verdict when we hold more than one live claim, and
- * only ever in the "yield less" direction.
- */
-function tieBreakVerdict(comments, myLogin, myHost, mySession, comps, myMachine = null) {
-  comps = comps || claimIdentity.DEFAULT_COMPONENTS;
-  const live = liveClaimComments(comments, comps);
-  const me = { login: myLogin, host: myHost, session: mySession || '', machine: myMachine || '' };
-  const mine = live
-    .filter((c) => claimIdentity.sameClaimant(c, me, comps))
-    .sort((a, b) => (a.at < b.at ? -1 : a.at > b.at ? 1 : 0))[0]; // our EARLIEST live claim
-  if (!mine) return { lost: false }; // our own comment not visible yet → don't yield to a phantom
-  let winner = null;
-  for (const c of live) {
-    if (claimIdentity.sameClaimant(c, me, comps)) continue; // never yield to ourselves
-    const earlier = c.at < mine.at || (c.at === mine.at && c.identity < mine.identity);
-    if (!earlier) continue;
-    if (!winner || c.at < winner.at || (c.at === winner.at && c.identity < winner.identity)) winner = c;
-  }
-  return winner ? { lost: true, winner } : { lost: false };
-}
-
 /** Post the claim comment (best-effort: a failure warns but never fails the claim). */
 function postClaimComment(repoAbs, num, wtName, branch, session, sessionName) {
-  const r = git.ghIssueComment(repoAbs, num, claimCommentBody(wtName, branch, session, sessionName));
+  const r = git.ghIssueComment(repoAbs, num, claimCommentBody(wtName, branch, session, sessionName, commentHost(repoAbs)));
   if (!r.ok) warn(`could not post claim comment on #${num} (${r.stderr.split('\n')[0] || r.code}) — claim stands`);
 }
 
@@ -774,7 +694,7 @@ function yieldIssue(repoAbs, num, winner, myLogin, session = null) {
       warn(`gh: could not remove our label/assignee on #${num} while yielding (${r.stderr.split('\n')[0] || r.code}) — local claim KEPT (releasePending) so a retry can find it`);
     }
   }
-  const rc = git.ghIssueComment(repoAbs, num, `${RELEASE_MARK} (yielded — earlier claim by ${winner.identity} wins)`);
+  const rc = git.ghIssueComment(repoAbs, num, claimComments.yieldReleaseBody(winner, { redact: !commentHostDecision(repoAbs).include }));
   if (!rc.ok) warn(`could not post yield comment on #${num} (${rc.stderr.split('\n')[0] || rc.code})`);
   let placeOutcome = null;
   state.mutate((st) => {
@@ -2742,7 +2662,7 @@ function cmdBlockedClear(repoAbs, blocked, blocker, opts) {
 
   // Best-effort receipt — the delete already landed (safe), so a failed comment WARNS rather
   // than flips the exit code (mirrors decision --reopen / migration-grant --revoke's precedent).
-  const commentR = git.ghIssueComment(repoAbs, blocked, blockedBy.removalReceiptBody(blocker, HOST, nowISO(), opts.reason));
+  const commentR = git.ghIssueComment(repoAbs, blocked, blockedBy.removalReceiptBody(blocker, commentHost(repoAbs), nowISO(), opts.reason));
   if (!commentR.ok) {
     warn(`the removal receipt failed to post on #${blocked} (${commentR.stderr.split('\n')[0] || commentR.code}) — the edge IS cleared; the WHY is not recorded on the tracker. Post it by hand if it matters.`);
   }
@@ -2882,7 +2802,7 @@ function cmdMigrationGrantCreate(repoAbs, num, opts) {
   // in ship, which is the worst of both: looks done, does nothing. Roll the label back rather than
   // leave that state.
   const iso = nowISO();
-  const commentR = git.ghIssueComment(repoAbs, num, migrationGrant.grantCommentBody(opts.branch, HOST, iso));
+  const commentR = git.ghIssueComment(repoAbs, num, migrationGrant.grantCommentBody(opts.branch, commentHost(repoAbs), iso));
   if (!commentR.ok) {
     git.ghIssueEdit(repoAbs, num, labels.migrationGrantLabelArgs({ clear: true }));
     throw new UserError(`label applied but the grant comment failed to post (${commentR.stderr.split('\n')[0] || commentR.code}) — rolled the label back so this does not read as granted. Re-run.`);
@@ -2919,10 +2839,10 @@ function cmdMigrationGrantRevoke(repoAbs, num) {
   }
 
   const branch = live.length ? live[live.length - 1].branch : '(no live grant found)';
-  const commentR = git.ghIssueComment(repoAbs, num, migrationGrant.revokeCommentBody(branch, HOST, nowISO()));
+  const commentR = git.ghIssueComment(repoAbs, num, migrationGrant.revokeCommentBody(branch, commentHost(repoAbs), nowISO()));
   if (!commentR.ok) {
     warn(`label removed (the ship gate IS restored) but the revoke receipt failed to post (${commentR.stderr.split('\n')[0] || commentR.code}) — post it by hand for the audit trail:`);
-    warn(`  gh issue comment ${num} --body "${migrationGrant.REVOKE_MARK} — branch \\\`${branch}\\\` · host \\\`${HOST}\\\` · ${nowISO()}"`);
+    warn(`  gh issue comment ${num} --body "${migrationGrant.REVOKE_MARK} — branch \\\`${branch}\\\` · host \\\`${commentHost(repoAbs)}\\\` · ${nowISO()}"`);
   }
 
   print(`Revoked #${num}'s migration grant in ${shortRepo(repoAbs)} — the ship gate is restored.`);
@@ -3134,7 +3054,7 @@ function cmdDecisionRecord(repoAbs, num, opts, body) {
   // record live with the gate still on: over-blocking, safe, visible. The reverse order would
   // reproduce #127 exactly (gate cleared, no record) — see HELP_DECISION.
   const iso = nowISO();
-  const commentBody = decisionRecord.decisionCommentBody(opts.ruledBy, opts.answers, HOST, iso, body);
+  const commentBody = decisionRecord.decisionCommentBody(opts.ruledBy, opts.answers, commentHost(repoAbs), iso, body);
   const commentR = git.ghIssueComment(repoAbs, num, commentBody);
   if (!commentR.ok) {
     throw new UserError(`could not post the decision comment on #${num} (${commentR.stderr.split('\n')[0] || commentR.code}) — nothing was written, safe to retry`);
@@ -3191,7 +3111,7 @@ function cmdDecisionReopen(repoAbs, num, opts, body) {
     throw new UserError(`could not swap labels on #${num} (${editR.stderr.split('\n')[0] || editR.code}) — the gate is NOT yet restored; retry`);
   }
 
-  const commentR = git.ghIssueComment(repoAbs, num, decisionRecord.reopenCommentBody(opts.ruledBy, HOST, nowISO(), body));
+  const commentR = git.ghIssueComment(repoAbs, num, decisionRecord.reopenCommentBody(opts.ruledBy, commentHost(repoAbs), nowISO(), body));
   if (!commentR.ok) {
     warn(`labels swapped (the gate IS restored) but the reopen receipt failed to post (${commentR.stderr.split('\n')[0] || commentR.code}) — post it by hand for the audit trail.`);
   }
@@ -3487,7 +3407,7 @@ function cmdCiGrantCreate(repoAbs, num, opts) {
 
   const iso = nowISO();
   const commentR = git.ghIssueComment(repoAbs, num,
-    ciGrant.grantCommentBody(opts.branch, trunk, redSha, evidenceSha, HOST, iso));
+    ciGrant.grantCommentBody(opts.branch, trunk, redSha, evidenceSha, commentHost(repoAbs), iso));
   if (!commentR.ok) {
     git.ghIssueEdit(repoAbs, num, labels.ciGrantLabelArgs({ clear: true }));
     throw new UserError(`label applied but the grant comment failed to post (${commentR.stderr.split('\n')[0] || commentR.code}) — rolled the label back so this does not read as granted. Re-run.`);
@@ -3521,10 +3441,10 @@ function cmdCiGrantRevoke(repoAbs, num) {
   }
 
   const branch = live.length ? live[live.length - 1].branch : '(no live grant found)';
-  const commentR = git.ghIssueComment(repoAbs, num, ciGrant.revokeCommentBody(branch, HOST, nowISO()));
+  const commentR = git.ghIssueComment(repoAbs, num, ciGrant.revokeCommentBody(branch, commentHost(repoAbs), nowISO()));
   if (!commentR.ok) {
     warn(`label removed (the ship gate IS restored) but the revoke receipt failed to post (${commentR.stderr.split('\n')[0] || commentR.code}) — post it by hand for the audit trail:`);
-    warn(`  gh issue comment ${num} --body "${ciGrant.REVOKE_MARK} — branch \\\`${branch}\\\` · host \\\`${HOST}\\\` · ${nowISO()}"`);
+    warn(`  gh issue comment ${num} --body "${ciGrant.REVOKE_MARK} — branch \\\`${branch}\\\` · host \\\`${commentHost(repoAbs)}\\\` · ${nowISO()}"`);
   }
 
   print(`Revoked #${num}'s CI grant in ${shortRepo(repoAbs)} — the ship gate is restored.`);
@@ -6887,8 +6807,16 @@ async function cmdAdopt(argv) {
   // Build the append entries. Order follows QUESTIONS (tier's production/deploy pair first).
   const entries = [];
   const nowDate = today();
+  // #369: the provenance comments below are COMMITTED into .github/project.yml — on a public repo,
+  // permanent history. Same destination rule as a squash trailer (#367): name the host only where
+  // the forge reads private, or reads nothing and the room (this run's answer, else the one on
+  // record) is private. Otherwise the comment keeps its date and drops the host.
+  const provenanceHost = machineTrailer.mayNameHost({
+    visibility: git.ghRepoVisibility(repoAbs),
+    room: answers.room ? answers.room.values.room : cfg.room,
+  }).include ? HOST : null;
   const meta = (a) => (a.mode === 'interactive'
-    ? { mode: 'interactive', host: HOST, date: nowDate }
+    ? { mode: 'interactive', host: provenanceHost, date: nowDate }
     : { mode: 'flag', flags: a.flags, date: nowDate, colabHuman: process.env.COLAB_HUMAN === '1', answeredBy: opts.answeredBy || null });
 
   if (answers.tier) {
@@ -6945,7 +6873,7 @@ async function cmdAdopt(argv) {
     if (!('stack' in cfg)) {
       if (opts.stack !== undefined) {
         const stackNote = stackAnsweredInteractively
-          ? `answered interactively (${HOST}, ${nowDate})`
+          ? `answered interactively (${provenanceHost ? `${provenanceHost}, ` : ''}${nowDate})`
           : `supplied by --stack (${nowDate})`;
         entries.push({ key: 'stack', value: opts.stack, comment: `# stack: ${stackNote}` });
       } else if (report.detected.stackCandidates.length === 1) {

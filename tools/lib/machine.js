@@ -175,7 +175,7 @@ function sameMachineWith(rec, local) {
   if (r.machine && l.id && idScheme(r.machine) === idScheme(l.id)) {
     return r.machine === l.id;
   }
-  return canonHost(r.host) === canonHost(l.host);
+  return sameHostName(r.host, l.host);
 }
 
 /** `sameMachineWith(rec, localMachine())` — the impure convenience wrapper every caller reaches for. */
@@ -199,4 +199,40 @@ function machineToken(id) {
   return `m:${crypto.createHash('sha256').update(s).digest('hex').slice(0, 12)}`;
 }
 
-module.exports = { canonHost, localMachine, sameMachineWith, isLocal, resolveMachineId, machineToken };
+const HOST_TOKEN_RE = /^h:[0-9a-f]{12}$/;
+
+/**
+ * The PUBLIC form of a HOSTNAME (#369) — `h:` + the first 12 hex chars of sha256(canonHost(h)).
+ * What a claim/grant/decision comment carries in its `host` field when it lands on a public
+ * destination (machine-trailer.js `mayNameHost`): the raw name is an internal hostname, and an
+ * issue comment on a public repository publishes it. Hashed AFTER `canonHost`, so every spelling
+ * one machine gives itself (`box.local`, `Box.`, `box.lan`) still digests to one token — the same
+ * drift-proofing `canonHost` gives the raw comparison. Idempotent on an existing token; blank → ''.
+ *
+ * Opaque, not secret: a hostname is low-entropy, so a guess can be confirmed against the token.
+ * It keeps the name out of the page and out of search, which is what a public comment needs; it
+ * is not a defence against someone who already suspects the name.
+ */
+function hostToken(h) {
+  const s = String(h || '').trim();
+  if (!s) return '';
+  if (HOST_TOKEN_RE.test(s)) return s;
+  const c = canonHost(s);
+  if (!c) return '';
+  return `h:${crypto.createHash('sha256').update(c).digest('hex').slice(0, 12)}`;
+}
+
+/**
+ * Do two HOST fields name the same machine (#369)? Either side an `h:` token → compare tokens (a
+ * raw name digests to the token a public comment carries, so a redacted comment and a local raw
+ * record still match); otherwise the #327 `canonHost` comparison, unchanged. Blank on both sides
+ * compares equal, as `'' === ''` always did.
+ */
+function sameHostName(a, b) {
+  const as = String(a || '').trim();
+  const bs = String(b || '').trim();
+  if (HOST_TOKEN_RE.test(as) || HOST_TOKEN_RE.test(bs)) return hostToken(as) === hostToken(bs);
+  return canonHost(as) === canonHost(bs);
+}
+
+module.exports = { canonHost, localMachine, sameMachineWith, isLocal, resolveMachineId, machineToken, hostToken, sameHostName };
