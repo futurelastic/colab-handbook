@@ -253,8 +253,11 @@ const NON_CODE_DELIVERY_TYPES = ['content', 'ops', 'elsewhere', 'design'];
  * The three-valued delivery classifier (CONVENTIONS.md §5, *Delivery type*).
  *
  * Returns one of:
- *   - `null`     — NOT ASKED. No `delivery:*` label present. Must read identically to how the
- *                  issue behaved before this label set existed — never as non-code.
+ *   - `null`     — NOT ASKED. No `delivery:*` label present, or only a value the handbook does
+ *                  not define (a consumer-local one, e.g. `delivery:elsewhere-partial`, #366 —
+ *                  handbook-sync reports those as `value` drift; this classifier guesses no
+ *                  meaning for them). Must read identically to how the issue behaved before
+ *                  this label set existed — never as non-code.
  *   - `'code' | 'docs-only'` — a code-lane value present (CODE_LANE_DELIVERY_TYPES).
  *   - `'content' | 'ops' | 'elsewhere' | 'design'` — a non-code value present
  *                  (NON_CODE_DELIVERY_TYPES).

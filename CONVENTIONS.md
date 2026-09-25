@@ -3018,6 +3018,26 @@ pipeline's worktree, gate, mergeable and squash machinery all assume
 the diff lands in the repo the issue lives in, and an `elsewhere` issue breaks that
 assumption identically to a content push.
 
+**A `delivery:*` value outside these six has no handbook meaning (#366).** The measured
+case is `delivery:elsewhere-partial`. One consumer tracker uses it, and nobody has stated
+what it means there. The handbook does not adopt it with a guessed meaning, because a
+value copied from one consumer's usage is the drift
+[*Upstream*](#upstream--a-consumer-that-changes-what-a-convention-means-files-it-here-362)
+exists to prevent. So it is **consumer-local**, and it works like this:
+
+- **The classifier reads it as not asked.** `deliveryType()` knows only the provisioned
+  values. An issue whose only `delivery:*` label is an undefined value classifies exactly
+  like an unlabelled one: no lane, startable by a code session. Next to a provisioned
+  value, the provisioned value alone decides the lane.
+- **`handbook-sync` reports it as `value` drift, not as a gap.** It is drift until the
+  consumer declares it in its `Local divergences:` list with a handbook issue that states
+  its meaning. If the consumer wants it adopted, it files that issue, and adoption is
+  ruled on the stated meaning.
+- **The shape it seems to name has a handbook answer: split the issue.** When part of the
+  deliverable is code in another repository and part is here, file two issues. One carries
+  `delivery:elsewhere`. The other goes in the ordinary lane. Link them with a `blocked_by`
+  edge only where one needs the other's output.
+
 #### Priority — a throttle, not a veto (#268)
 
 **`low-priority` orders a queue; it does not remove work from one.** Unlike `epic` and a
