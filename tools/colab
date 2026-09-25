@@ -8220,7 +8220,7 @@ function handleShippedBranch(repoAbs, trunk, branch, { disposition, worktreeKept
     if (disposition.reason === 'refs-only') {
       warn(`${branch} NOT deleted: its worktree was kept (--keep-worktree), so the branch is still checked out. ` +
         `It carries still-open ${disposition.refs.map((n) => `#${n}`).join(', ')} and will read as live work on it — ` +
-        `after \`colab worktree rm\`, delete it: git branch -D ${branch} && git push origin --delete ${branch}`);
+        `after \`colab worktree rm\`, delete it: git branch -D ${branch} && git push ${git.remoteInfo(repoAbs).name || 'origin'} --delete ${branch}`);
     } else {
       warn(`--delete-branch ignored for ${branch}: its worktree was kept (--keep-worktree), so the branch is still checked out`);
     }
