@@ -452,6 +452,22 @@ test('#359 regression: delivery:design is NOT confused with "not asked" — neve
   assert.ok(design, 'delivery:design must be provisioned, so colab labels --ensure creates it');
 });
 
+// #366 — one consumer tracker carries `delivery:elsewhere-partial`, a value the handbook does
+// not provision, and nobody stated what it means there. The ruling declares it consumer-local
+// instead of adopting it with a guessed meaning: the classifier reads it as "not asked" exactly
+// like any other undefined value, and handbook-sync reports it as `value` drift. This pin fails
+// the moment someone adopts it without a new ruling, which is the step the ruling reserves for
+// the consumer filing its meaning upstream.
+test('#366: delivery:elsewhere-partial is consumer-local — not provisioned, reads as "not asked"', () => {
+  assert.ok(!conventionLabelNames().includes('delivery:elsewhere-partial'),
+    'adopting elsewhere-partial needs a new ruling with a stated meaning (#366 ruled it consumer-local)');
+  assert.ok(!DELIVERY_TYPES.includes('elsewhere-partial'));
+  assert.equal(deliveryType(['delivery:elsewhere-partial']), null);
+  assert.equal(isRouteNotStart(['delivery:elsewhere-partial']), false);
+  // Next to a provisioned value, the provisioned value alone decides the lane.
+  assert.equal(deliveryType(['delivery:elsewhere-partial', 'delivery:elsewhere']), 'elsewhere');
+});
+
 test('every provisioned delivery:* value is classified, and falls in exactly one lane', () => {
   const provisioned = conventionLabelNames().filter((n) => n.startsWith(DELIVERY_LABEL_PREFIX));
   assert.deepStrictEqual(DELIVERY_TYPES, provisioned.map((n) => n.slice(DELIVERY_LABEL_PREFIX.length)));

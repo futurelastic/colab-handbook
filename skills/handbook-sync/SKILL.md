@@ -430,7 +430,11 @@ gh label list --limit 500 --json name,description | node -e '
 ```
 
 - **`value <name>`**: this tracker has a `delivery:*` / `deferred:*` value the handbook
-  does not define. It is drift unless the `Local divergences:` list declares it.
+  does not define. It is drift unless the `Local divergences:` list declares it. Do not
+  read it as a gap the handbook forgot to fill, and do not guess a meaning for it:
+  `delivery:elsewhere-partial` was ruled consumer-local in #366 for exactly that reason
+  (`CONVENTIONS.md` §5, *Delivery type*). Until it is declared, the handbook's classifier
+  reads it as not asked.
 - **`meaning <name>`**: the label's description differs from the handbook's. This line is
   a lead. Read both texts before you conclude anything, because it has two readings:
   - **Same meaning, older wording.** `colab labels --ensure` never rewrites an existing
