@@ -51,6 +51,7 @@ const claimIdentity = require('./lib/claim-identity');
 const machine = require('./lib/machine');
 const targetSync = require('./lib/ship-target-sync');
 const docsOnly = require('./lib/docs-only');
+const cureDiff = require('./lib/cure-diff');
 const codeowners = require('./lib/codeowners');
 const releasePolicy = require('./lib/release-policy');
 const workflowTriggers = require('./lib/workflow-triggers');
@@ -7988,11 +7989,15 @@ THE CURE RULE (#281) is a SECOND, MACHINE-CHECKABLE door through the same precon
 human step at all — tried FIRST, before ci-grant is even consulted. It fires only when ALL of:
 (1) the branch CONTAINS trunk's current red head sha as an ancestor (proof it was built against the
 exact failure, not merely conflict-free with it — a stronger claim than a ci-grant's evidence check
-makes today); (2) the branch's own CI is green AT ITS OWN CURRENT HEAD, measured, never asserted;
+makes today); (2) the branch's own CI is green AT ITS OWN CURRENT HEAD, measured, never asserted —
+and (2b, #297) every job RED on trunk at the red sha exists in the branch's runs at that head,
+completed and \`success\` (a green run in which the failing check never ran proves nothing);
 (3) the same anti-stacking guard ci-grant uses holds (no prior grant OR cure merged while trunk has
 stayed continuously red since); (4) the branch diff does not touch \`.github/workflows/**\` (a branch
-may not self-certify a change to the CI configuration grading it) — UNLESS it passes the #321
-CARVE-OUT below. A cured merge carries a \`CI-Cure:\` trailer instead of \`CI-Grant:\`. Honest limit:
+may not self-certify a change to the CI configuration grading it; renames count) — UNLESS it passes
+the #321 CARVE-OUT below; (5, #297) the branch diff does not change the \`scripts\` block of any
+\`package.json\` — CI templates read that block to decide which checks run, so it is part of the
+instrument too, and it has NO carve-out. An unmeasurable diff refuses. A cured merge carries a \`CI-Cure:\` trailer instead of \`CI-Grant:\`. Honest limit:
 test-file self-weakening (gutting the failing tests) is invisible at this gate either way —
 condition 4 closes only the CI-config door, not the test-content one. Falls through to ci-grant
 automatically when any condition fails — the
@@ -8679,16 +8684,18 @@ function ciGrantPayload(ciResult) {
  *      `ghRunForSha` the raw CI check and `shipCiGrants` both use.
  *   3. anti-stacking — `computeAntiStacking`, the SAME function `cmdCiGrantCreate` calls, so a cure
  *      and a human grant can never independently disagree about whether trunk is mid-stack.
- *   4. workflow-file changes — `git diff --name-only <trunk>...<branch>` (merge-base-relative, the
- *      same idiom `shipMergeConflictCheck`'s diff-review paths use elsewhere in this file), filtered
- *      for any path under `.github/workflows/`.
- *   5. job-level evidence for the #321 carve-out — measured ONLY when step 4 found a workflow touch,
- *      because that is the only case a verdict can be changed by it. Every other ship — an ordinary
- *      cure, and every green-trunk ship — makes ZERO of these calls, preserving the lazy-read
- *      discipline `ghRunJobCount`'s own doc comment already establishes. On the carve-out path it
- *      costs one `gh run list` (all runs at the red sha, not just the one picked row — a sha can
- *      carry several workflow runs and a red job could hide in the one not picked) plus one
- *      `gh run view` per not-green red run, plus one for the branch's own evidence run.
+ *   4. the diff signals — tools/lib/cure-diff.js's `cureDiffSignals` over `<trunk>...<branch>`
+ *      (merge-base-relative, the tree a squash lands), `--no-renames` so a workflow file or
+ *      manifest MOVED away still counts (#297 — the old `--name-only` read listed only a rename's
+ *      new path). It yields `workflowsTouched` (condition 4) and `manifestScriptsTouched`
+ *      (condition 5: any `package.json` whose `scripts` block changed). A failed read is `null`,
+ *      which refuses — it used to fall back to "nothing touched".
+ *   5. job-level evidence — measured on EVERY cure attempt that has passed containment and 2a
+ *      (#297: condition 2b needs it, not only the #321 carve-out). Every green-trunk ship still
+ *      makes ZERO of these calls, since this whole function is reached only on the red-trunk path.
+ *      It costs one `gh run list` for the red sha (all runs, not the one picked row — a red job can
+ *      hide in the run not picked), one `gh run view` per not-green red run, one `gh run list` for
+ *      the branch head, and one `gh run view` per run at that head.
  *
  * The raw job rows are shaped by ci-cure.js's PURE `shapeJobEvidence`, not here: the red-job
  * selection rule is a judgement and belongs where it can be unit-tested, leaving this function's
@@ -8716,17 +8723,20 @@ function shipCiCure(repoAbs, gh, target, trunk, redSha, branch) {
   const evRun = git.ghRunForSha(repoAbs, branch);
   const evidence = !evRun ? null : { ok: evRun.status === 'completed' && evRun.conclusion === 'success', sha: evRun.sha };
   const stacking = computeAntiStacking(repoAbs, trunk, true /* trunkIsRed: shipCiCure is only ever reached from a HUMAN_GATED raw verdict */);
-  const diffR = git.git(['diff', '--name-only', `${trunk}...${branch}`], repoAbs);
-  const changed = diffR.ok ? diffR.stdout.split('\n').filter(Boolean) : [];
-  const workflowsTouched = changed.some((f) => f.startsWith('.github/workflows/'));
-  const jobEvidence = workflowsTouched ? shipCureJobEvidence(repoAbs, trunk, redSha, branch, evRun) : null;
-  const verdict = ciCure.cureVerdict({ containsRedSha, evidence, redSha, stacking, workflowsTouched, jobEvidence });
+  const diff = cureDiff.cureDiffSignals(git, repoAbs, trunk, branch);
+  // Measured only past containment + 2a: a verdict that already refuses on either never reads it,
+  // so a branch that cannot cure pays no job-level `gh` calls for it.
+  const jobEvidence = (containsRedSha && evidence && evidence.ok)
+    ? shipCureJobEvidence(repoAbs, trunk, redSha, branch, evRun) : null;
+  const verdict = ciCure.cureVerdict({ containsRedSha, evidence, redSha, stacking, jobEvidence,
+    workflowsTouched: diff.workflowsTouched,
+    manifestScriptsTouched: diff.manifestScriptsTouched, manifestPaths: diff.manifestPaths });
   return { ...verdict, redSha, evidenceSha: evidence ? evidence.sha : null };
 }
 
 /**
- * The job-level read behind the #321 carve-out — the ONLY caller is `shipCiCure` above, and only
- * when the branch actually touches `.github/workflows/**`. Everything it returns is raw: the
+ * The job-level read behind condition 2b (#297) and the #321 carve-out — the ONLY caller is
+ * `shipCiCure` above, on every cure attempt past containment and 2a. Everything it returns is raw: the
  * judgement (which jobs count as red, what a step "running" means, how a duration is derived) lives
  * in ci-cure.js's pure `shapeJobEvidence`, so it can be tested without a live `gh`.
  *
@@ -8734,11 +8744,14 @@ function shipCiCure(repoAbs, gh, target, trunk, redSha, branch) {
  * "unmeasurable", which refuses and falls through to the ordinary human ci-grant — the same
  * fail-closed direction every other unmeasured signal in this subsystem takes.
  *
- * `evRun` is the branch's own evidence run, already read by the caller — its `databaseId` is reused
- * rather than re-resolved, so the branch side costs one `gh run view` and no second `run list`.
+ * The branch side reads EVERY run at the evidence run's sha (#297), not only the one green row
+ * `ghRunForSha` picked: with 2b applied to every cure, a job that is red on trunk in a SIBLING
+ * workflow would otherwise read as absent on the branch and refuse a genuine cure. Each job row is
+ * tagged with the `workflowName` of the run it came from, on both sides, so ci-cure.js matches jobs
+ * per workflow and a passing `test` in one workflow can never stand in for another's.
  */
 function shipCureJobEvidence(repoAbs, trunk, redSha, branch, evRun) {
-  if (!evRun || evRun.databaseId === null || evRun.databaseId === undefined) return null;
+  if (!evRun || !evRun.sha) return null;
 
   // ALL runs at the red sha, not the single row `ghRunForCommit` would pick: a red job can sit in a
   // sibling workflow the picker never returned, and admitting a carve-out while that job is still
@@ -8755,11 +8768,17 @@ function shipCureJobEvidence(repoAbs, trunk, redSha, branch, evRun) {
   for (const r of notGreen) {
     const jobs = git.ghRunJobs(repoAbs, r.databaseId);
     if (jobs === null) return null;
-    redRunJobs.push(...jobs);
+    redRunJobs.push(...jobs.map((j) => ({ ...j, workflowName: r.workflowName || '' })));
   }
 
-  const branchRunJobs = git.ghRunJobs(repoAbs, evRun.databaseId);
-  if (branchRunJobs === null) return null;
+  const branchRuns = git.ghRunsForCommit(repoAbs, branch, evRun.sha);
+  if (branchRuns === null || branchRuns.length === 0) return null;
+  const branchRunJobs = [];
+  for (const r of branchRuns) {
+    const jobs = git.ghRunJobs(repoAbs, r.databaseId);
+    if (jobs === null) return null;
+    branchRunJobs.push(...jobs.map((j) => ({ ...j, workflowName: r.workflowName || '' })));
+  }
 
   return ciCure.shapeJobEvidence({ redRunJobs, branchRunJobs });
 }
@@ -8781,6 +8800,9 @@ function ciCurePayload(ciResult) {
   return {
     ok: c.ok, reason: c.reason, redSha: c.redSha, evidenceSha: c.evidenceSha,
     via: c.carveOut ? 'workflow-carve-out' : 'ordinary',
+    // The red job(s) condition 2b proved passing on the branch (#297) — null on a refusal. A consumer
+    // rendering cure eligibility reads this instead of re-deriving it from check-runs.
+    provenJobs: c.provenJobs || null,
     carveOut: c.carveOut
       ? { jobs: c.carveOut.jobs.map((j) => ({ name: j.name, redDurationMs: j.redMs, branchDurationMs: j.branchMs })) }
       : null,

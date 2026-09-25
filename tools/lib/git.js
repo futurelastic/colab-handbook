@@ -816,8 +816,9 @@ function ghRunForSha(repo, branch, limit = 10, remote = remoteInfo(repo).name ||
  * WHY A CALLER WOULD WANT ALL OF THEM. `ghRunForCommit` answers "is this sha green", for which one
  * picked row is the right answer. It is the WRONG answer for "which jobs are red at this sha": a
  * sha can carry several workflow runs, so building a red-job set from the one picked row could
- * miss a second failing workflow entirely. tools/lib/ci-cure.js's #321 carve-out needs the full
- * set for exactly that reason.
+ * miss a second failing workflow entirely. tools/lib/ci-cure.js's cure rule — condition 2b (#297)
+ * and the #321 carve-out — needs the full set for exactly that reason, on both the red sha and the
+ * branch head.
  */
 function ghRunsForCommit(repo, branch, sha, limit = 10) {
   if (!sha) return null;
@@ -939,10 +940,10 @@ function ghRunJobCount(repo, runDatabaseId) {
  * wedge-detection hot path, and rewriting it as `ghRunJobs(...).length` would be churn with real
  * regression surface for no gain here.
  *
- * Costs one `gh run view` per run, so callers fetch it LAZILY — tools/lib/ci-cure.js's #321
- * carve-out is the only caller today, and `colab ship` reaches it only for a branch that both
- * touches `.github/workflows/**` and is already blocked by a red trunk. Every other ship path
- * makes zero of these calls.
+ * Costs one `gh run view` per run, so callers fetch it LAZILY — tools/lib/ci-cure.js's cure rule
+ * (condition 2b, #297, and the #321 carve-out) is the only caller today, and `colab ship` reaches
+ * it only for a branch that is already blocked by a red trunk and has passed containment and a
+ * green run of its own. Every other ship path makes zero of these calls.
  *
  * Step-level detail is the whole point: GitHub reports a job whose steps were all SKIPPED as
  * `conclusion: success`, so run- and job-level conclusions are blind to exactly the fast-exit the

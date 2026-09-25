@@ -189,16 +189,28 @@ test('#321: a branch that TOUCHES .github/workflows/** still reads not-ok here, 
   assert.strictEqual(body.ciGrant, null);
 });
 
-test('#321: shipCiCure pays for NO job-level gh read on the ordinary path — the calls sit inside the workflowsTouched guard', () => {
+test('#297: shipCiCure reads job evidence on every cure past containment + 2a, and hands the verdict both diff signals', () => {
   // Read as source, not behaviour: the fixture can never reach the cure rule (see the banner), so
-  // the only honest oracle for "costs nothing when not needed" is that the two job-level readers
-  // are lexically inside the guard. A regression that hoisted them would make every red-trunk ship
-  // pay a `gh run view` per run.
+  // the honest oracle for the wiring is lexical. #321 gated the job-level read on a workflow touch;
+  // #297 made condition 2b read it on EVERY cure, so the gate moved to containment + a green run —
+  // still never paid by a branch that cannot cure, and never by a green-trunk ship (this whole
+  // function is only reached on the red-trunk path).
   const src = fs.readFileSync(path.join(REPO_ROOT, 'tools', 'colab'), 'utf8');
   const fn = src.slice(src.indexOf('function shipCiCure('), src.indexOf('function shipCureJobEvidence('));
   assert.ok(fn.length > 0, 'shipCiCure/shipCureJobEvidence not found — this assertion needs updating, not deleting');
   assert.doesNotMatch(fn, /ghRunJobs|ghRunsForCommit/, 'job-level reads must not sit in shipCiCure itself');
-  assert.match(fn, /workflowsTouched \? shipCureJobEvidence\(/, 'the job-level read must be gated on workflowsTouched');
+  assert.doesNotMatch(fn, /workflowsTouched \? shipCureJobEvidence\(/, '2b needs job evidence on the ordinary path too');
+  assert.match(fn, /\(containsRedSha && evidence && evidence\.ok\)\s*\? shipCureJobEvidence\(/, 'the job-level read is gated on containment + 2a');
+  assert.match(fn, /cureDiff\.cureDiffSignals\(/, 'the diff is read through cure-diff (--no-renames, fail-closed)');
+  assert.doesNotMatch(fn, /'--name-only'/, 'the rename-blind --name-only read is gone');
+  assert.match(fn, /manifestScriptsTouched: diff\.manifestScriptsTouched/, 'condition 5 is fed to the verdict');
+});
+
+test('#297: shipCureJobEvidence reads EVERY run at the branch head and tags each job with its workflow', () => {
+  const src = fs.readFileSync(path.join(REPO_ROOT, 'tools', 'colab'), 'utf8');
+  const fn = src.slice(src.indexOf('function shipCureJobEvidence('), src.indexOf('function ciCurePayload('));
+  assert.match(fn, /git\.ghRunsForCommit\(repoAbs, branch, evRun\.sha\)/);
+  assert.equal((fn.match(/workflowName: r\.workflowName/g) || []).length, 2, 'both sides tag their jobs');
 });
 
 test('#321: the CI-Cure trailer keeps its anchored `CI-Cure:` prefix — computeAntiStacking greps on it', () => {
@@ -222,4 +234,5 @@ test('#321: ciCurePayload reports WHICH door fired — `via` on every cure row, 
   assert.match(body, /redDurationMs: j\.redMs/);
   assert.match(body, /branchDurationMs: j\.branchMs/);
   assert.match(body, /: null,/, 'carveOut must be null, not absent, on the ordinary path');
+  assert.match(body, /provenJobs: c\.provenJobs \|\| null/, '#297: the 2b-proven jobs ride the payload');
 });

@@ -14,13 +14,17 @@
  *      green, but never containment — a branch cut from an OLDER, green base can carry a
  *      green run that proves nothing about the redness it is being exempted from.
  *   2. EVIDENCE — the branch's own CI is green AT ITS OWN CURRENT HEAD, measured (never
- *      asserted), same "ask by sha" discipline ci-grant.js already uses.
+ *      asserted), same "ask by sha" discipline ci-grant.js already uses (2a) — AND, since #297,
+ *      every job that is RED on trunk at the red sha exists in the branch's runs at that head,
+ *      completed and concluded `success` (2b, `redJobsProvenOnBranch`). A green run alone never
+ *      proved the check trunk is failing ran here: a `paths:` filter, a matrix change or a
+ *      renamed job leaves the run green while the named check never ran.
  *
  * Containment + evidence TOGETHER mean the branch's tree passed the full suite INCLUDING the
  * tests trunk is currently failing — merging it provably turns trunk green. That is the one
  * thing the human click on a ci-grant is supposed to certify, mechanically checkable instead.
  *
- * TWO CONDITIONS THIS RULE ADDS ON TOP, deliberately narrowing it rather than trusting
+ * THREE CONDITIONS THIS RULE ADDS ON TOP, deliberately narrowing it rather than trusting
  * containment+evidence alone:
  *
  *   3. ANTI-STACKING — the identical guard ci-grant.js's stackingVerdict already computes,
@@ -33,7 +37,13 @@
  *   4. NO WORKFLOW-FILE CHANGES — the branch diff must not touch `.github/workflows/**`. A
  *      branch that edits the CI configuration doing the grading is not allowed to grade itself;
  *      that door stays behind a human ci-grant (condition 4 in the original proposal, #281).
- *      ONE GUARDED CARVE-OUT (#321), below, is the single way through it.
+ *      ONE GUARDED CARVE-OUT (#321), below, is the single way through it. The diff is read with
+ *      `--no-renames` (tools/lib/cure-diff.js, #297), so moving a workflow file away counts.
+ *   5. NO MANIFEST-SCRIPTS CHANGES (#297) — the branch diff must not change the `scripts` block of
+ *      any `package.json`. The Node CI template decides from that block whether typecheck, lint
+ *      and test run at all, and a skipped step leaves the job `success` — so deleting
+ *      `scripts.test` weakens the instrument without touching a workflow file. No carve-out: see
+ *      below for why the #321 door cannot adjudicate it.
  *
  * THE WORKFLOW CARVE-OUT (#321) — why condition 4 could not simply stay absolute. The repair for
  * a CI-INFRASTRUCTURE outage is, by construction, a workflow change: when trunk goes red because
@@ -71,15 +81,22 @@
  * trusting the conclusion, and it is the same shape #297's `package.json`-scripts scenario
  * produces.
  *
- * WHY `package.json`'s `scripts` BLOCK MUST ARRIVE AS A SIBLING CONDITION, NOT A WIDENED
- * `workflowsTouched` (a seam left deliberately for #297). It is tempting to fold every path that
+ * WHY `package.json`'s `scripts` BLOCK IS A SIBLING CONDITION (5), NOT A WIDENED
+ * `workflowsTouched` (the seam #321 left, filled by #297 in exactly this shape). It is tempting to fold every path that
  * forms "the instrument" into one boolean and let this carve-out serve them all. It must not be:
  * the carve-out's evidence CANNOT adjudicate a `package.json`-scripts weakening in the general
  * case — that change happens inside a step whose name and conclusion are unchanged and whose
  * duration delta may sit below any signal, so 4b and 4c would both silently pass a change they
  * are structurally unable to see. Two instrument paths, two different doors. What this module
  * names once is the carve-out PREDICATE (`workflowCarveOut`, `redJobsProvenOnBranch`), never the
- * path list.
+ * path list. Condition 5 is checked BEFORE the workflow block (see `cureVerdict`), because that
+ * block returns success when the carve-out admits — a branch touching both must still meet door 5.
+ *
+ * WHY ONLY 4a IS HOISTED (as 2b), NOT 4b/4c (#297). The executed-step superset refuses genuine
+ * cures often on the ordinary path — a cache-conditional step that ran on trunk is skipped on a
+ * cache hit, and a push-only step that ran on trunk is skipped on the `pull_request` run a branch
+ * frequently offers as evidence. It would catch the scripts case, but condition 5 already does,
+ * without those false refusals. 4b/4c stay the carve-out's, where the workflow itself changed.
  *
  * HONEST LIMIT, stated rather than glossed (same posture as the #281 proposal): test-file
  * self-weakening is not detectable at this gate. A branch can go green by gutting the failing
@@ -126,6 +143,17 @@ const WORKFLOW_REFUSAL =
   'branch diff touches .github/workflows/** — the cure rule refuses to let a branch self-certify ' +
   'a change to the CI configuration that is grading it; a human ci-grant is the door for this case';
 
+/**
+ * The condition-5 refusal (#297) — the text a branch gets when its diff changes the `scripts` block
+ * of any `package.json`. No carve-out follows it, deliberately: the #321 carve-out's evidence (job
+ * names, executed steps, duration) cannot see a scripts weakening, which happens INSIDE a step whose
+ * name and conclusion are unchanged.
+ */
+const MANIFEST_SCRIPTS_REFUSAL =
+  'branch diff changes the `scripts` block of package.json — CI templates read that block to decide which ' +
+  'checks run, so it is part of the instrument grading this branch and the cure rule will not let a branch ' +
+  'change it and grade itself; there is no carve-out for this case, a human ci-grant is the door';
+
 /** Conclusions that do NOT make a completed job red. Inverted allowlist, the same shape (and for
  *  the same reason) as tools/lib/git.js's run-level rule: a denylist gets chased value by value,
  *  an allowlist closes the family once. `skipped` joins the run-level pair here because a job that
@@ -167,7 +195,12 @@ function usableMs(v) {
  * and building the red set from one picked row could miss a second failing workflow and admit a
  * carve-out while a job is still red.
  *
- * `branchRunJobs` — every job of the branch's own green evidence run.
+ * `branchRunJobs` — every job of EVERY run at the branch's own head, concatenated (#297). Not just
+ * the one green row the evidence read picked: once 2b applies to every cure, a red job living in a
+ * sibling workflow would otherwise read as "absent on the branch" and refuse a genuine cure.
+ *
+ * Each row may carry `workflowName` (the caller tags it from the run it came from); it is carried
+ * through on both sides so jobs are matched per workflow, never by bare name across workflows.
  *
  * Returns `null` — meaning "unmeasurable", which every consumer below fails closed on — when
  * either input is not an array, or when ANY trunk job at the red sha has not COMPLETED. A
@@ -182,6 +215,7 @@ function shapeJobEvidence({ redRunJobs, branchRunJobs } = {}) {
     .filter((j) => !NOT_RED_CONCLUSIONS.has(j.conclusion))
     .map((j) => ({
       name: j.name,
+      workflowName: j.workflowName || '',
       conclusion: j.conclusion,
       durationMs: durationMs(j.startedAt, j.completedAt),
       ranSteps: Array.isArray(j.steps) ? j.steps.filter(stepRan).map((s) => s.name) : null,
@@ -189,6 +223,7 @@ function shapeJobEvidence({ redRunJobs, branchRunJobs } = {}) {
 
   const branchJobs = branchRunJobs.map((j) => ({
     name: j && j.name,
+    workflowName: (j && j.workflowName) || '',
     status: j && j.status,
     conclusion: j && j.conclusion,
     durationMs: j ? durationMs(j.startedAt, j.completedAt) : null,
@@ -198,17 +233,54 @@ function shapeJobEvidence({ redRunJobs, branchRunJobs } = {}) {
   return { redJobs, branchJobs };
 }
 
+/** How a job is named in a reason string: `workflow / job` when the workflow is known. */
+function jobLabel(j) {
+  return j.workflowName ? `${j.workflowName} / ${j.name}` : j.name;
+}
+
+/** The matching key: workflow AND job name (#297). A bare-name key over the union of every run at
+ *  the branch head would let a passing `test` in one workflow stand in for a missing or failed
+ *  `test` in another — fail-open. A row with no workflow name keys under `''` on both sides. */
+function jobKey(j) {
+  return `${j.workflowName || ''}\u0000${j.name}`;
+}
+
 /**
- * Sub-test 4a alone (#321) — every job RED on trunk exists on the branch's green run, completed
- * and successful.
+ * Index the branch's jobs by `jobKey`. The same key legitimately appears more than once — the push
+ * and the `pull_request` run of one workflow at one sha, or a cancelled attempt beside a green one.
+ * The instance kept is a completed `success` one when any exists; `hasRed` records that ANY instance
+ * completed with a red conclusion, and `hasPending` that any instance has not completed. Both refuse
+ * in `redJobsProvenOnBranch`: a job that passed once and failed once at the same sha has not proven
+ * anything, and one still in flight has not passed.
+ */
+function indexBranchJobs(branchJobs) {
+  const idx = new Map();
+  for (const j of branchJobs) {
+    if (!j || !j.name) continue;
+    const k = jobKey(j);
+    const prev = idx.get(k);
+    const isRed = j.status === 'completed' && !NOT_RED_CONCLUSIONS.has(j.conclusion);
+    const isPending = j.status !== 'completed';
+    if (!prev) { idx.set(k, { job: j, hasRed: isRed, hasPending: isPending }); continue; }
+    const better = j.status === 'completed' && j.conclusion === 'success'
+      && !(prev.job.status === 'completed' && prev.job.conclusion === 'success');
+    idx.set(k, { job: better ? j : prev.job, hasRed: prev.hasRed || isRed, hasPending: prev.hasPending || isPending });
+  }
+  return idx;
+}
+
+/**
+ * Sub-test 4a (#321), and — since #297 — condition 2b of EVERY cure: every job RED on trunk exists
+ * on the branch's runs at its own head, completed and successful.
  *
- * Exported on its own, and deliberately NOT hoisted to run on every cure, because #297 wants
- * exactly this predicate for a DIFFERENT purpose: tightening condition 2 from "the branch's run
- * is green" to "the named check that failed on trunk is present in the branch's run and passed".
- * That is the same measurement applied to every cure rather than only workflow-touching ones —
- * one call inserted after the condition-2 block, reusing this function, instead of a second
- * independent check-runs reader that would drift from this one. Whether to hoist it is #297's
- * call to make with its own reasoning, not something to inherit silently from here.
+ * WHY HOISTED (#297). Condition 2 used to read a single run-level conclusion. That is weaker than
+ * the rule's own claim — "the branch's tree provably turns trunk green" — because nothing checked
+ * that the check trunk is red ON ran here and passed: a `paths:` filter, a matrix change, or a job
+ * that simply no longer exists can leave a run green while the named check never ran. "The one
+ * check that was failing must now pass" is the claim stated exactly. It is scoped to trunk's RED
+ * set, so it never inherits a fold-every-check-run consumer's sensitivity to an advisory failure
+ * that exists only on the branch: this certifies that the branch cures trunk's red, not that the
+ * branch is spotless.
  *
  * Returns `{ok, reason, jobs}` — `jobs` is the list of red job names proven on the branch.
  * Every unmeasurable input is a refusal, never a pass.
@@ -227,25 +299,30 @@ function redJobsProvenOnBranch(jobEvidence) {
   if (!Array.isArray(branchJobs) || branchJobs.length === 0) {
     return { ok: false, jobs: [], reason: "the branch's own run reported no jobs to compare against" };
   }
-  const byName = new Map();
-  for (const j of branchJobs) if (j && j.name) byName.set(j.name, j);
+  const idx = indexBranchJobs(branchJobs);
 
   for (const red of redJobs) {
     if (!red || !red.name) {
       return { ok: false, jobs: [], reason: 'a job red on trunk has no name — it cannot be matched on the branch' };
     }
-    const mine = byName.get(red.name);
-    if (!mine) {
+    const label = jobLabel(red);
+    const entry = idx.get(jobKey(red));
+    if (!entry) {
       return { ok: false, jobs: [],
-        reason: `job \`${red.name}\` is red on trunk and does not exist on the branch's run — a cure may not make the failing job disappear (deleted, renamed, or filtered away)` };
+        reason: `job \`${label}\` is red on trunk and does not exist on the branch's run — a cure may not make the failing job disappear (deleted, renamed, or filtered away)` };
     }
-    if (mine.status !== 'completed') {
+    const mine = entry.job;
+    if (mine.status !== 'completed' || entry.hasPending) {
       return { ok: false, jobs: [],
-        reason: `job \`${red.name}\` is red on trunk and has not COMPLETED on the branch's run — a job still in flight has not passed` };
+        reason: `job \`${label}\` is red on trunk and has not COMPLETED on the branch's run — a job still in flight has not passed` };
     }
     if (mine.conclusion !== 'success') {
       return { ok: false, jobs: [],
-        reason: `job \`${red.name}\` is red on trunk and concluded \`${mine.conclusion}\` on the branch's run — every red job must pass, not merely exist` };
+        reason: `job \`${label}\` is red on trunk and concluded \`${mine.conclusion}\` on the branch's run — every red job must pass, not merely exist` };
+    }
+    if (entry.hasRed) {
+      return { ok: false, jobs: [],
+        reason: `job \`${label}\` is red on trunk and failed in another run at the branch's own head — a job that both passed and failed at one sha has proven nothing` };
     }
   }
   return { ok: true, jobs: redJobs.map((r) => r.name), reason: '' };
@@ -264,12 +341,11 @@ function workflowCarveOut(jobEvidence) {
   const proven = redJobsProvenOnBranch(jobEvidence);
   if (!proven.ok) return { ok: false, jobs: [], reason: proven.reason };
 
-  const byName = new Map();
-  for (const j of jobEvidence.branchJobs) if (j && j.name) byName.set(j.name, j);
+  const idx = indexBranchJobs(jobEvidence.branchJobs);
 
   const jobs = [];
   for (const red of jobEvidence.redJobs) {
-    const mine = byName.get(red.name);
+    const mine = idx.get(jobKey(red)).job; // present: redJobsProvenOnBranch above refused otherwise
 
     // 4b — executed-step superset.
     if (!Array.isArray(red.ranSteps)) {
@@ -328,23 +404,35 @@ function workflowCarveOut(jobEvidence) {
  * verbatim (condition 3) — this module never recomputes it.
  *
  * `workflowsTouched` — bool, whether the branch's diff against trunk touches any path under
- * `.github/workflows/` (the caller's `git diff --name-only` filter, condition 4).
+ * `.github/workflows/` (condition 4 — tools/lib/cure-diff.js, `--no-renames`). `null` means the
+ * diff could not be measured, and refuses.
  *
- * `jobEvidence` — the carve-out signal (#321): `shapeJobEvidence(...)`'s output, or `null`. Read
- * ONLY when `workflowsTouched` is truthy, so a caller that measured nothing (the ordinary case,
- * which must pay no `gh` calls for a door it will not open) is never penalised for it. `null`, an
- * empty `redJobs`, an empty `branchJobs`, an unreadable step list and an unusable duration ALL
- * refuse — the carve-out only ever widens the door on evidence, never on the absence of it.
+ * `manifestScriptsTouched` — bool, whether the diff changes the `scripts` block of any
+ * `package.json` (condition 5, #297 — tools/lib/cure-diff.js). `null`/`undefined` = unmeasured,
+ * which refuses: a caller that did not measure it has not shown the instrument is intact.
+ * `manifestPaths` — the manifests whose scripts changed, named in the refusal.
+ *
+ * `jobEvidence` — `shapeJobEvidence(...)`'s output, or `null`. Read on EVERY cure since #297 —
+ * condition 2b (`redJobsProvenOnBranch`) — and again by the #321 carve-out when workflows were
+ * touched. `null`, an empty `redJobs`, an empty `branchJobs`, an unreadable step list and an
+ * unusable duration ALL refuse — evidence widens a door, the absence of it never does. The caller
+ * measures it only once containment and 2a have passed, so an ordinary green-trunk ship still pays
+ * no job-level `gh` calls.
  *
  * Order of checks: cheapest/most-fundamental first, each with a distinct actionable reason —
- * identical posture to ci-grant.js's evaluateIssue.
+ * identical posture to ci-grant.js's evaluateIssue: containment → 2a (run green) → 2b (the red jobs
+ * pass here) → anti-stacking → diff measurable → condition 5 (manifest scripts) → condition 4 with
+ * its carve-out. Condition 5 sits BEFORE the workflow block, not after it: that block RETURNS
+ * `ok: true` when the carve-out admits, so a check placed after it would never be reached by a
+ * branch touching both — exactly the "two instrument paths, two doors" composition #321 asked for.
  *
- * Returns `{ok, reason}`, plus — and ONLY on a successful cure that went through the carve-out —
- * an additive `carveOut: {jobs}`. An ordinary cure's success shape is byte-identical to what it
- * was before #321, which is what lets the caller answer "which door was this?" by presence rather
- * than by re-deriving it.
+ * Returns `{ok, reason}`; on success also `provenJobs` (the red job names 2b proved, additive,
+ * #297) and — ONLY on a cure that went through the carve-out — `carveOut: {jobs}`. The ordinary
+ * cure's reason text is unchanged, which is what lets the caller answer "which door was this?" by
+ * the presence of `carveOut` rather than by re-deriving it.
  */
-function cureVerdict({ containsRedSha, evidence, redSha, stacking, workflowsTouched, jobEvidence }) {
+function cureVerdict({ containsRedSha, evidence, redSha, stacking, workflowsTouched, jobEvidence,
+  manifestScriptsTouched, manifestPaths }) {
   if (!containsRedSha) {
     return { ok: false,
       reason: `branch does not contain trunk's current red head \`${redSha}\` as an ancestor — ` +
@@ -362,8 +450,22 @@ function cureVerdict({ containsRedSha, evidence, redSha, stacking, workflowsTouc
         'trunk push / pull_request, a PR is the only way to get that run — open one ONLY for the branch carrying the fix; ' +
         'a bystander\'s PR runs against a merge ref that includes the red trunk, so it waits for green instead (#353)' };
   }
+  const proven = redJobsProvenOnBranch(jobEvidence);
+  if (!proven.ok) {
+    return { ok: false,
+      reason: `branch's run is green, but the check trunk is red on is not proven here: ${proven.reason} — ` +
+        'a cure must pass the named failing job(s), not merely produce a green run (#297)' };
+  }
   if (!stacking || !stacking.ok) {
     return { ok: false, reason: (stacking && stacking.reason) || 'anti-stacking verdict unavailable' };
+  }
+  if (typeof workflowsTouched !== 'boolean' || typeof manifestScriptsTouched !== 'boolean') {
+    return { ok: false,
+      reason: 'branch diff could not be measured (which CI files and manifests it touches) — an unmeasured diff is never a cure' };
+  }
+  if (manifestScriptsTouched) {
+    const named = Array.isArray(manifestPaths) && manifestPaths.length ? manifestPaths.join(', ') : 'package.json';
+    return { ok: false, reason: `${MANIFEST_SCRIPTS_REFUSAL} (changed: ${named})` };
   }
   if (workflowsTouched) {
     const carve = workflowCarveOut(jobEvidence);
@@ -371,12 +473,12 @@ function cureVerdict({ containsRedSha, evidence, redSha, stacking, workflowsTouc
       return { ok: false, reason: `${WORKFLOW_REFUSAL}. The #321 carve-out does not admit it either: ${carve.reason}` };
     }
     const detail = carve.jobs.map((j) => `\`${j.name}\` (${j.redMs}ms red on trunk, ${j.branchMs}ms passing here)`).join(', ');
-    return { ok: true, carveOut: { jobs: carve.jobs },
+    return { ok: true, provenJobs: proven.jobs, carveOut: { jobs: carve.jobs },
       reason: `branch contains red \`${redSha}\` as an ancestor AND is green at its own current head (\`${evidence.sha}\`) — proven cure, ` +
         `admitted through the #321 workflow carve-out: every job red on trunk ran to success here with every step it took on trunk — ${detail}` };
   }
-  return { ok: true,
+  return { ok: true, provenJobs: proven.jobs,
     reason: `branch contains red \`${redSha}\` as an ancestor AND is green at its own current head (\`${evidence.sha}\`) — proven cure` };
 }
 
-module.exports = { cureVerdict, redJobsProvenOnBranch, workflowCarveOut, shapeJobEvidence };
+module.exports = { cureVerdict, redJobsProvenOnBranch, workflowCarveOut, shapeJobEvidence, WORKFLOW_REFUSAL, MANIFEST_SCRIPTS_REFUSAL };
