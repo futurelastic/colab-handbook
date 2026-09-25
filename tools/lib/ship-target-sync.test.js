@@ -336,3 +336,40 @@ test('after a rolled-back B2 the branch still carries the work, so a re-run is a
   const files = fx.g(fx.work, 'ls-tree', '--name-only', 'feat/work-22').split('\n');
   assert.ok(files.includes('g.txt'), files.join(','));
 });
+
+/** #301: a work repo whose ONLY remote is a bare repo named `upstream`, seeded with main. */
+function upstreamOnlyRepo() {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'colab-upstream-'));
+  const work = path.join(root, 'work');
+  const bare = path.join(root, 'upstream.git');
+  const run = (...args) => execFileSync('git', args, { cwd: work, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
+  execFileSync('git', ['init', '-q', '--bare', '-b', 'main', bare]);
+  execFileSync('git', ['init', '-q', '-b', 'main', work]);
+  run('config', 'user.email', 't@example.invalid'); run('config', 'user.name', 't');
+  run('config', 'core.hooksPath', path.join(root, '.nohooks'));
+  run('remote', 'add', 'upstream', bare);
+  fs.writeFileSync(path.join(work, 'f'), 'a\n');
+  run('add', 'f'); run('commit', '-q', '-m', 'init'); run('push', '-q', 'upstream', 'main');
+  return { root, work, run };
+}
+
+test('#301: readTargetSync fetches and compares against the resolved remote, not the literal origin', () => {
+  const { root, work, run } = upstreamOnlyRepo();
+  try {
+    const git = require('./git');
+    git._resetRemoteCache();
+    const v = sync.readTargetSync(git, work, 'main', { repoLabel: '<repo>' });
+    assert.strictEqual(v.ok, true, v.detail);
+    assert.strictEqual(v.detail, 'local main == upstream/main');
+    fs.writeFileSync(path.join(work, 'f'), 'b\n'); run('commit', '-q', '-am', 'local');
+    const ahead = sync.readTargetSync(git, work, 'main', { repoLabel: '<repo>' });
+    assert.strictEqual(ahead.cls, 'ahead');
+    assert.match(ahead.detail, /upstream\/main does not/);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test('#301: classifyTargetSync names the remote it is given; absent, it still says origin', () => {
+  assert.strictEqual(sync.classifyTargetSync({ target: 'main', fetched: true, remote: 'upstream' }).detail, 'local main == upstream/main');
+  assert.strictEqual(sync.classifyTargetSync({ target: 'main', fetched: true }).detail, 'local main == origin/main');
+  assert.ok(sync.classifyTargetSync({ target: 'main', fetched: false, remote: 'upstream', why: 'x' }).remedy.some((l) => l.includes('fetch upstream main')));
+});

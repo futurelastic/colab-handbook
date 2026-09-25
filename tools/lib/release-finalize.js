@@ -112,7 +112,7 @@ function trackingBody({ version, row, final, testPeriodDays }) {
  *   { kind: 'refused', detail }
  *   { kind: 'candidate', candidate: { tag, version, n, sha, cutAt }, superseded: [version], detail }
  */
-function selectCandidate(tags, pin) {
+function selectCandidate(tags, pin, remote = 'origin') {
   const all = tags || [];
   const finals = new Set(all.filter((t) => parseVersion(t.name)).map((t) => t.name));
   const rcs = all.map((t) => ({ t, p: parseCandidate(t.name) })).filter((x) => x.p);
@@ -120,7 +120,7 @@ function selectCandidate(tags, pin) {
   if (pin) {
     const p = parseCandidate(pin);
     if (!p) return { kind: 'refused', detail: `--tag ${pin} is not a candidate tag (vX.Y.Z-rc.N)` };
-    if (!all.some((t) => t.name === pin)) return { kind: 'refused', detail: `--tag ${pin} does not exist on origin` };
+    if (!all.some((t) => t.name === pin)) return { kind: 'refused', detail: `--tag ${pin} does not exist on ${remote}` };
     if (finals.has(p.version)) return { kind: 'already-final', version: p.version, detail: `${p.version} is already a final tag` };
   }
 
@@ -143,7 +143,7 @@ function selectCandidate(tags, pin) {
   if (!t.annotated || !String(t.subject || '').endsWith(CUT_SUBJECT_SUFFIX)) {
     return { kind: 'refused', detail: `${t.name} was not made by \`colab release cut\` (not an annotated tag whose message ends "${CUT_SUBJECT_SUFFIX}") — a candidate cut by hand is never finalized (CONVENTIONS.md §6)` };
   }
-  if (!t.onMain) return { kind: 'refused', detail: `${t.name} (${String(t.sha).slice(0, 7)}) is not on origin/main — candidates are cut from main` };
+  if (!t.onMain) return { kind: 'refused', detail: `${t.name} (${String(t.sha).slice(0, 7)}) is not on ${remote}/main — candidates are cut from main` };
   if (!t.date || Number.isNaN(Date.parse(t.date))) return { kind: 'refused', detail: `${t.name} has no readable tagger date — the test period cannot be placed` };
 
   return {

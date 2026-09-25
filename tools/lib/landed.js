@@ -212,15 +212,15 @@ function classifyUnresolvable(why) {
  * true only when the fallback fired, so the caller can say — in the verdict, not just in this
  * function — that the answer came from the remote ref, not the one named.
  */
-function resolveBranchRef(repoAbs, branch) {
+function resolveBranchRef(repoAbs, branch, remote = git.remoteInfo(repoAbs).name || 'origin') {
   if (typeof branch !== 'string' || !branch) return { ok: false, ref: branch, viaRemote: false };
   if (git.git(['rev-parse', '--verify', '--quiet', branch], repoAbs).ok) {
     return { ok: true, ref: branch, viaRemote: false };
   }
-  if (branch.startsWith('origin/') || branch.startsWith('refs/')) {
+  if (branch.startsWith(`${remote}/`) || branch.startsWith('refs/')) {
     return { ok: false, ref: branch, viaRemote: false }; // already remote-qualified — no further guessing
   }
-  const remoteRef = `origin/${branch}`;
+  const remoteRef = `${remote}/${branch}`; // #301: the resolved remote — `origin` in an origin repo
   if (git.git(['rev-parse', '--verify', '--quiet', remoteRef], repoAbs).ok) {
     return { ok: true, ref: remoteRef, viaRemote: true };
   }

@@ -220,3 +220,54 @@ test('#348: a prefixed branch on origin is another machine\'s claim — machine 
   assert.notStrictEqual(r.code, 0, r.out + r.err);
   assert.ok((r.out + r.err).includes(`me/${LABEL}/feat/x-9`), 'the refusal names the prefixed branch holding the claim\n' + r.out + r.err);
 });
+
+// ---------------------------------------------------------------------------
+// #301 — a repo whose remote is not named `origin`
+// ---------------------------------------------------------------------------
+
+test('#301: the only remote is `upstream` — worktree new fetches, cuts from and pushes the claim to upstream', () => {
+  const fx = fixture();
+  g(fx.work, 'remote', 'rename', 'origin', 'upstream');
+  const tip = sha(fx.work, 'upstream/main');
+  const r = colab(fx, ['worktree', 'new', 'feat/x-9', '--issues', '9', '--session', 's1']);
+  assert.strictEqual(r.code, 0, r.out + r.err);
+  assert.strictEqual(sha(fx.work, 'feat/x-9'), tip);
+  assert.ok(r.out.includes(`base upstream/main @ ${tip.slice(0, 7)}`), r.out);
+  assert.ok(r.out.includes('pushed feat/x-9 → upstream'), r.out);
+  const heads = g(fx.work, 'ls-remote', '--heads', 'upstream');
+  assert.match(heads, /refs\/heads\/feat\/x-9$/m);
+  assert.ok(fs.existsSync(path.join(fx.work, '.worktrees', 'x-9')));
+  assert.ok(Object.values(readState(fx.home).claims || {}).some((c) => c.issue === '#9'), 'claim recorded');
+});
+
+test('#301: two remotes, neither origin — worktree new refuses, names both and the fix, and creates nothing', () => {
+  const fx = fixture();
+  g(fx.work, 'remote', 'rename', 'origin', 'a');
+  const b = path.join(fx.root, 'b.git');
+  execFileSync('git', ['init', '-q', '--bare', '-b', 'main', b]);
+  g(fx.work, 'remote', 'add', 'b', b);
+  const r = colab(fx, ['worktree', 'new', 'feat/x-9', '--issues', '9', '--session', 's1']);
+  assert.notStrictEqual(r.code, 0, r.out + r.err);
+  assert.match(r.err, /\(a, b\)/);
+  assert.match(r.err, /git config colab\.remote <name>/);
+  assert.ok(!fs.existsSync(path.join(fx.work, '.worktrees', 'x-9')), 'no worktree directory');
+  assert.strictEqual(spawnSync('git', ['rev-parse', '--verify', '--quiet', 'refs/heads/feat/x-9'], { cwd: fx.work }).status, 1, 'no local branch');
+  const st = readState(fx.home);
+  assert.ok(!st || !Object.keys(st.worktrees || {}).length, 'no worktree record');
+  assert.ok(!st || !Object.keys(st.claims || {}).length, 'no claim record');
+  assert.ok(!fs.existsSync(path.join(fx.ghState, 'issue-9.json')), 'nothing written to the tracker');
+});
+
+test('#301: two remotes resolved by `git config colab.remote` — the cut and the push go to the named one', () => {
+  const fx = fixture();
+  g(fx.work, 'remote', 'rename', 'origin', 'a');
+  const b = path.join(fx.root, 'b.git');
+  execFileSync('git', ['init', '-q', '--bare', '-b', 'main', b]);
+  g(fx.work, 'remote', 'add', 'b', b);
+  g(fx.work, 'config', 'colab.remote', 'a');
+  const r = colab(fx, ['worktree', 'new', 'feat/x-9', '--issues', '9', '--session', 's1']);
+  assert.strictEqual(r.code, 0, r.out + r.err);
+  assert.ok(r.out.includes('base a/main @'), r.out);
+  assert.match(g(fx.work, 'ls-remote', '--heads', 'a'), /refs\/heads\/feat\/x-9$/m);
+  assert.strictEqual(g(fx.work, 'ls-remote', '--heads', 'b').trim(), '', 'nothing pushed to the other remote');
+});

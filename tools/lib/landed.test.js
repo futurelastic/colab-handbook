@@ -311,3 +311,30 @@ test('classify: a content answer still wins even when the two-signal facts are a
   assert.strictEqual(classify({ containment: CONTAINED }).state, 'landed');
   assert.strictEqual(classify({ containment: DIVERGED }).state, 'cargo');
 });
+
+/** #301: a work repo whose ONLY remote is a bare repo named `upstream`, seeded with main. */
+function upstreamOnlyRepo() {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'colab-upstream-'));
+  const work = path.join(root, 'work');
+  const bare = path.join(root, 'upstream.git');
+  const run = (...args) => execFileSync('git', args, { cwd: work, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
+  execFileSync('git', ['init', '-q', '--bare', '-b', 'main', bare]);
+  execFileSync('git', ['init', '-q', '-b', 'main', work]);
+  run('config', 'user.email', 't@example.invalid'); run('config', 'user.name', 't');
+  run('config', 'core.hooksPath', path.join(root, '.nohooks'));
+  run('remote', 'add', 'upstream', bare);
+  fs.writeFileSync(path.join(work, 'f'), 'a\n');
+  run('add', 'f'); run('commit', '-q', '-m', 'init'); run('push', '-q', 'upstream', 'main');
+  return { root, work, run };
+}
+
+test('#301: resolveBranchRef falls back to <remote>/<branch> for a repo whose remote is `upstream`', () => {
+  const { root, work, run } = upstreamOnlyRepo();
+  try {
+    run('branch', '-q', 'feat/y-2'); run('push', '-q', 'upstream', 'feat/y-2'); run('branch', '-q', '-D', 'feat/y-2');
+    run('fetch', '-q', 'upstream');
+    assert.deepStrictEqual(resolveBranchRef(work, 'feat/y-2'), { ok: true, ref: 'upstream/feat/y-2', viaRemote: true });
+    // an already-remote-qualified name is not guessed further
+    assert.strictEqual(resolveBranchRef(work, 'upstream/nope').viaRemote, false);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});

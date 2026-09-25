@@ -921,3 +921,95 @@ test('#343: no reflog (core.logAllRefUpdates=false) degrades to the pre-#343 rea
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
+
+// ---------------------------------------------------------------------------
+// #301 — which remote. One resolver; `origin` repos keep their exact path; ambiguity is refused.
+// ---------------------------------------------------------------------------
+
+/** A work repo with one bare remote per name in `remotes` (each seeded with `main`), plus config. */
+function remotesFixture(remotes, config = {}) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'colab-git-remote-'));
+  const work = path.join(root, 'work');
+  const g = (...args) => execFileSync('git', args, { cwd: work, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
+  execFileSync('git', ['init', '-q', '-b', 'main', work]);
+  g('config', 'user.email', 't@example.invalid'); g('config', 'user.name', 't');
+  g('config', 'core.hooksPath', path.join(root, '.nohooks'));
+  fs.writeFileSync(path.join(work, 'f'), 'a\n');
+  g('add', 'f'); g('commit', '-q', '-m', 'init');
+  for (const name of remotes) {
+    const bare = path.join(root, `${name}.git`);
+    execFileSync('git', ['init', '-q', '--bare', '-b', 'main', bare]);
+    g('remote', 'add', name, bare);
+    g('push', '-q', name, 'main');
+  }
+  for (const [k, v] of Object.entries(config)) g('config', k, v);
+  git._resetRemoteCache();
+  return { root, work, g };
+}
+
+const RESOLUTION_CASES = [
+  // [remotes, config, expected name, expected source]
+  [['origin'], {}, 'origin', 'origin'],
+  [['upstream'], {}, 'upstream', 'single'],
+  [['origin', 'upstream'], { 'remote.pushDefault': 'upstream' }, 'origin', 'origin'], // origin outranks pushDefault
+  [['a', 'b'], { 'remote.pushDefault': 'b' }, 'b', 'pushDefault'],
+  [['a', 'b'], { 'colab.remote': 'b' }, 'b', 'config'],
+  [['origin', 'b'], { 'colab.remote': 'b' }, 'b', 'config'],                         // the override wins over origin
+  [[], {}, null, 'none'],
+];
+
+for (const [remotes, config, name, source] of RESOLUTION_CASES) {
+  test(`#301: remotes [${remotes.join(',')}] + ${JSON.stringify(config)} resolve to ${name} (${source})`, () => {
+    const { root, work } = remotesFixture(remotes, config);
+    try {
+      const info = git.remoteInfo(work);
+      assert.strictEqual(info.name, name);
+      assert.strictEqual(info.source, source);
+      assert.strictEqual(git.remoteName(work), name);
+      assert.strictEqual(git.remoteFor(work), name || 'origin'); // no remote → the literal, so git fails exactly as before
+      assert.strictEqual(git.claimRemote(work), name);
+      assert.strictEqual(git.remoteProblem(info), null);
+    } finally { fs.rmSync(root, { recursive: true, force: true }); }
+  });
+}
+
+test('#301: two remotes, neither origin nor pushDefault — remoteName refuses loudly, naming both and the fix; remoteInfo does not throw', () => {
+  const { root, work } = remotesFixture(['a', 'b']);
+  try {
+    const info = git.remoteInfo(work);
+    assert.strictEqual(info.name, null);
+    assert.strictEqual(info.source, 'ambiguous');
+    assert.deepStrictEqual(info.remotes, ['a', 'b']);
+    for (const fn of [git.remoteName, git.remoteFor, git.claimRemote]) {
+      assert.throws(() => fn(work), (e) => /\ba\b/.test(e.message) && /\bb\b/.test(e.message) && /git config colab\.remote/.test(e.message));
+    }
+    // read-only helpers never throw — they degrade exactly as a remote-less repo does
+    assert.strictEqual(git.remoteUrl(work), null);
+    assert.strictEqual(git.branchExists(work, 'nope'), false);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test('#301: colab.remote naming a remote that does not exist is refused, never a fall-through to origin', () => {
+  const { root, work } = remotesFixture(['origin'], { 'colab.remote': 'nope' });
+  try {
+    assert.strictEqual(git.remoteInfo(work).source, 'config-missing');
+    assert.throws(() => git.remoteName(work), /colab\.remote names "nope".*no such remote/);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test('#301: in a repo whose only remote is `upstream`, the branch helpers read refs/remotes/upstream/*', () => {
+  const { root, work, g } = remotesFixture(['upstream']);
+  try {
+    g('branch', '-q', 'feat/x-1'); g('push', '-q', 'upstream', 'feat/x-1'); g('branch', '-q', '-D', 'feat/x-1');
+    g('fetch', '-q', 'upstream');
+    g('remote', 'set-head', 'upstream', 'main');
+    const up = g('rev-parse', 'refs/remotes/upstream/feat/x-1');
+    assert.strictEqual(git.branchExists(work, 'feat/x-1'), true);
+    assert.deepStrictEqual(git.branchRefs(work, 'feat/x-1'), { localSha: null, remoteSha: up, localFromRemote: false });
+    assert.deepStrictEqual(git.existingBranchRef(work, 'feat/x-1'), { ref: 'refs/remotes/upstream/feat/x-1', sha: up.slice(0, 7) });
+    assert.strictEqual(git.detectTrunk(work), 'main');
+    assert.strictEqual(git.remoteUrl(work), path.join(root, 'upstream.git'));
+    g('checkout', '-q', 'feat/x-1'); g('checkout', '-q', 'main'); // DWIM from upstream/<b>
+    assert.strictEqual(git.branchRefs(work, 'feat/x-1').localFromRemote, true);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});

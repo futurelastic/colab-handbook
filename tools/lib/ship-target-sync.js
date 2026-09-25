@@ -50,12 +50,14 @@ const NAME = 'target in sync with origin';
  * @param {number} [a.ahead]     - commits on local `<target>` that `origin/<target>` does not have
  * @param {number} [a.behind]    - commits on `origin/<target>` that local `<target>` does not have
  * @param {string} [a.repoLabel] - what to put after `git -C` in the remedy (default `<repo>`)
+ * @param {string} [a.remote]    - the repo's resolved remote (#301; default `origin`)
  * @returns {{ok: boolean, cls: string, name: string, detail: string, remedy: string[]}}
  */
 function classifyTargetSync(a) {
   const target = a.target;
   const repo = a.repoLabel || '<repo>';
-  const remote = `origin/${target}`;
+  const remoteName = a.remote || 'origin';
+  const remote = `${remoteName}/${target}`;
 
   if (!a.fetched) {
     return {
@@ -66,7 +68,7 @@ function classifyTargetSync(a) {
       remedy: [
         `Cannot tell whether ${target} is publishable, and a merge that cannot be pushed is the`,
         'state this check exists to prevent. Restore the comparison, then re-run this ship:',
-        `    git -C ${repo} fetch origin ${target}`,
+        `    git -C ${repo} fetch ${remoteName} ${target}`,
       ],
     };
   }
@@ -140,33 +142,39 @@ function classifyTargetSync(a) {
 function readTargetSync(git, repoAbs, target, opts = {}) {
   const repoLabel = opts.repoLabel || repoAbs;
   const base = { target, repoLabel };
-
-  if (!git.originUrl(repoAbs)) {
+  // #301: the repo's resolved remote, not the literal `origin`. An unresolvable one (ambiguous, or a
+  // broken `colab.remote`) is reported as the comparison failing, with the fix, never guessed through.
+  const info = git.remoteInfo(repoAbs);
+  const problem = git.remoteProblem(info);
+  if (problem) return classifyTargetSync({ ...base, fetched: false, why: problem });
+  if (!info.name || !git.remoteUrl(repoAbs)) {
     return classifyTargetSync({ ...base, fetched: false, why: 'this repo has no `origin` remote' });
   }
+  const remote = info.name;
+  base.remote = remote;
   if (opts.fetch !== false) {
-    const f = git.git(['fetch', 'origin', target], repoAbs, { timeoutMs: 60000 });
+    const f = git.git(['fetch', remote, target], repoAbs, { timeoutMs: 60000 });
     if (!f.ok) {
       return classifyTargetSync({
         ...base, fetched: false,
-        why: `git fetch origin ${target} failed: ${(f.stderr || 'unknown error').split('\n')[0]}`,
+        why: `git fetch ${remote} ${target} failed: ${(f.stderr || 'unknown error').split('\n')[0]}`,
       });
     }
   }
   // `--count --left-right A...B` → "<behind-of-A>\t<ahead-of-A>" is the reading that trips people
   // up; spell the two sides out rather than rely on remembering which column is which.
-  const counts = git.git(['rev-list', '--left-right', '--count', `origin/${target}...${target}`], repoAbs);
+  const counts = git.git(['rev-list', '--left-right', '--count', `${remote}/${target}...${target}`], repoAbs);
   if (!counts.ok) {
     return classifyTargetSync({
       ...base, fetched: false,
-      why: `could not count commits against origin/${target}: ${(counts.stderr || 'unknown error').split('\n')[0]}`,
+      why: `could not count commits against ${remote}/${target}: ${(counts.stderr || 'unknown error').split('\n')[0]}`,
     });
   }
   const parts = counts.stdout.split(/\s+/).filter(Boolean).map(Number);
   if (parts.length !== 2 || parts.some((n) => !Number.isFinite(n))) {
     return classifyTargetSync({ ...base, fetched: false, why: `unreadable rev-list output: "${counts.stdout}"` });
   }
-  // left = origin/<target> side = commits local is BEHIND by; right = local side = AHEAD by.
+  // left = <remote>/<target> side = commits local is BEHIND by; right = local side = AHEAD by.
   return classifyTargetSync({ ...base, fetched: true, behind: parts[0], ahead: parts[1] });
 }
 

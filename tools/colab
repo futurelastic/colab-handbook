@@ -153,7 +153,7 @@ function findClaim(st, num, repoAbs) {
 }
 
 function isGhUsable(repoAbs) {
-  return git.ghAvailable() && !!git.originUrl(repoAbs);
+  return git.ghAvailable() && !!git.remoteUrl(repoAbs);
 }
 
 /**
@@ -164,7 +164,9 @@ function isGhUsable(repoAbs) {
 function ghUnusableWhy(repoAbs) {
   const s = git.ghState();
   if (!s.ok) return s.reason === 'missing' ? 'gh is not installed' : 'gh has no working credential — `gh api user` fails';
-  if (!git.originUrl(repoAbs)) return 'no origin remote';
+  const rp = git.remoteProblem(git.remoteInfo(repoAbs)); // #301: ambiguous remotes / a broken colab.remote
+  if (rp) return rp;
+  if (!git.remoteUrl(repoAbs)) return 'no origin remote';
   return 'unknown';
 }
 
@@ -1326,13 +1328,14 @@ function cmdReleaseCut(argv) {
   const repoAbs = resolveRepo(opts);
   const doc = projectDoc(repoAbs);
   const policy = releasePolicy.evaluateRelease(doc);
+  const remote = git.remoteFor(repoAbs); // #301
 
-  const fetched = git.git(['fetch', '--tags', 'origin', 'main'], repoAbs);
+  const fetched = git.git(['fetch', '--tags', remote, 'main'], repoAbs);
   if (!fetched.ok) {
-    throw new UserError(`git fetch --tags origin main failed — a candidate is recorded on origin, so nothing is cut without it (${(fetched.stderr || '').split('\n')[0] || fetched.code})`);
+    throw new UserError(`git fetch --tags ${remote} main failed — a candidate is recorded on ${remote}, so nothing is cut without it (${(fetched.stderr || '').split('\n')[0] || fetched.code})`);
   }
-  const shaR = git.git(['rev-parse', '--verify', '--quiet', 'refs/remotes/origin/main^{commit}'], repoAbs);
-  if (!shaR.ok || !shaR.stdout) throw new UserError('no origin/main — candidates are cut from main (CONVENTIONS.md §6: never from dev)');
+  const shaR = git.git(['rev-parse', '--verify', '--quiet', `refs/remotes/${remote}/main^{commit}`], repoAbs);
+  if (!shaR.ok || !shaR.stdout) throw new UserError(`no ${remote}/main — candidates are cut from main (CONVENTIONS.md §6: never from dev)`);
   const sha = shaR.stdout;
   const at = `main@${shortSha(sha)}`;
 
@@ -1344,9 +1347,9 @@ function cmdReleaseCut(argv) {
     deploy: doc.deploy === undefined || doc.deploy === null ? 'none' : String(doc.deploy),
   });
 
-  const lastFinal = releaseTag.latestReleaseTag(repoAbs, { ref: 'origin/main' });
+  const lastFinal = releaseTag.latestReleaseTag(repoAbs, { ref: `${remote}/main` });
   const suggestion = lastFinal
-    ? semverSuggestion(ccSummary(repoAbs, `${lastFinal}..origin/main`))
+    ? semverSuggestion(ccSummary(repoAbs, `${lastFinal}..${remote}/main`))
     : { bump: null, why: 'no final tag yet' };
   const lines = (r) => (r.ok ? r.stdout.split('\n').map((s) => s.trim()).filter(Boolean) : []);
   const tags = lines(git.git(['tag', '--list'], repoAbs));
@@ -1366,10 +1369,10 @@ function cmdReleaseCut(argv) {
     const message = releaseCut.tagMessage(verdict, { sha, lastFinal });
     const t = git.git(['tag', '-a', '--cleanup=verbatim', verdict.tag, sha, '-m', message], repoAbs);
     if (!t.ok) throw new UserError(`git tag ${verdict.tag} failed: ${(t.stderr || '').split('\n')[0]}`);
-    const push = git.git(['push', 'origin', `refs/tags/${verdict.tag}`], repoAbs);
+    const push = git.git(['push', remote, `refs/tags/${verdict.tag}`], repoAbs);
     if (!push.ok) {
       git.git(['tag', '-d', verdict.tag], repoAbs);
-      throw new UserError(`git push origin ${verdict.tag} failed — the local tag was deleted again, nothing is cut (${(push.stderr || '').split('\n')[0]})`);
+      throw new UserError(`git push ${remote} ${verdict.tag} failed — the local tag was deleted again, nothing is cut (${(push.stderr || '').split('\n')[0]})`);
     }
     created = true;
   }
@@ -1391,8 +1394,8 @@ function cmdReleaseCut(argv) {
     print(`✗ refused — ${verdict.refusals.length} condition(s) failed; nothing cut.`);
     return 1;
   }
-  if (opts.dry) print(`[--dry] would create ${verdict.tag} on ${at} and push it to origin. Nothing created.`);
-  else print(`✓ cut ${verdict.tag} on ${at} and pushed it to origin — a candidate, not a release; finalizing it is the release skill's.`);
+  if (opts.dry) print(`[--dry] would create ${verdict.tag} on ${at} and push it to ${remote}. Nothing created.`);
+  else print(`✓ cut ${verdict.tag} on ${at} and pushed it to ${remote} — a candidate, not a release; finalizing it is the release skill's.`);
   return 0;
 }
 
@@ -1481,13 +1484,14 @@ function cmdReleaseFinalize(argv) {
   const doc = projectDoc(repoAbs);
   const policy = releasePolicy.evaluateRelease(doc);
   const now = new Date().toISOString();
+  const remote = git.remoteFor(repoAbs); // #301
 
-  const fetched = git.git(['fetch', '--tags', 'origin', 'main'], repoAbs);
-  if (!fetched.ok) throw new UserError(`git fetch --tags origin main failed — candidates and finals live on origin (${(fetched.stderr || '').split('\n')[0] || fetched.code})`);
-  const shaR = git.git(['rev-parse', '--verify', '--quiet', 'refs/remotes/origin/main^{commit}'], repoAbs);
-  if (!shaR.ok || !shaR.stdout) throw new UserError('no origin/main — releases are cut from main (CONVENTIONS.md §6)');
+  const fetched = git.git(['fetch', '--tags', remote, 'main'], repoAbs);
+  if (!fetched.ok) throw new UserError(`git fetch --tags ${remote} main failed — candidates and finals live on ${remote} (${(fetched.stderr || '').split('\n')[0] || fetched.code})`);
+  const shaR = git.git(['rev-parse', '--verify', '--quiet', `refs/remotes/${remote}/main^{commit}`], repoAbs);
+  if (!shaR.ok || !shaR.stdout) throw new UserError(`no ${remote}/main — releases are cut from main (CONVENTIONS.md §6)`);
   const mainSha = shaR.stdout;
-  const lastFinal = releaseTag.latestReleaseTag(repoAbs, { ref: 'origin/main' });
+  const lastFinal = releaseTag.latestReleaseTag(repoAbs, { ref: `${remote}/main` });
 
   const fe = git.git(['for-each-ref', 'refs/tags', '--format=%(refname:short)%09%(objecttype)%09%(*objectname)%09%(objectname)%09%(taggerdate:iso-strict)%09%(contents:subject)'], repoAbs);
   const tags = (fe.ok ? fe.stdout.split('\n').filter(Boolean) : []).map((l) => {
@@ -1499,7 +1503,7 @@ function cmdReleaseFinalize(argv) {
     if (releaseFinalize.parseCandidate(t.name)) t.onMain = git.git(['merge-base', '--is-ancestor', t.sha, mainSha], repoAbs).ok;
   }
   const finals = new Set(tags.filter((t) => releaseFinalize.parseVersion(t.name)).map((t) => t.name));
-  const selection = releaseFinalize.selectCandidate(tags, opts.tag || null);
+  const selection = releaseFinalize.selectCandidate(tags, opts.tag || null, remote);
   const cand = selection.kind === 'candidate' ? selection.candidate : null;
 
   // ---- the conditions at the candidate's commit (also reads the issue list) ----
@@ -1579,10 +1583,10 @@ function cmdReleaseFinalize(argv) {
       const message = releaseFinalize.tagMessage(verdict, { candidate: cand, period, actor });
       const t = git.git(['tag', '-a', '--cleanup=verbatim', cand.version, cand.sha, '-m', message], repoAbs);
       if (!t.ok) throw new UserError(`git tag ${cand.version} failed: ${(t.stderr || '').split('\n')[0]}`);
-      const push = git.git(['push', 'origin', `refs/tags/${cand.version}`], repoAbs);
+      const push = git.git(['push', remote, `refs/tags/${cand.version}`], repoAbs);
       if (!push.ok) {
         git.git(['tag', '-d', cand.version], repoAbs);
-        throw new UserError(`git push origin ${cand.version} failed — the local tag was deleted again, nothing is final (${(push.stderr || '').split('\n')[0]})`);
+        throw new UserError(`git push ${remote} ${cand.version} failed — the local tag was deleted again, nothing is final (${(push.stderr || '').split('\n')[0]})`);
       }
       tagged = true;
     }
@@ -1623,7 +1627,7 @@ function cmdReleaseFinalize(argv) {
     const width = Math.max(...verdict.checks.map((c) => c.condition.length));
     for (const c of verdict.checks) print(`  ${c.ok ? '✓' : (c.required ? '✗' : '·')} ${c.condition.padEnd(width)}  ${c.detail}`);
     print('');
-    print(`state: ${verdict.state}${opts.dry ? ' [--dry: nothing written]' : ''}${tagged ? ` — tagged ${verdict.finalTag} and pushed it to origin` : ''}`);
+    print(`state: ${verdict.state}${opts.dry ? ' [--dry: nothing written]' : ''}${tagged ? ` — tagged ${verdict.finalTag} and pushed it to ${remote}` : ''}`);
     if (verdict.handoff) print(`\nThe final is a human act here. The one command, for a human to run:\n  ${verdict.handoff}`);
   }
   return verdict.state === 'finalized' || verdict.state === 'candidate-ready' ? 0 : 1;
@@ -3445,7 +3449,7 @@ function cmdCiGrantCreate(repoAbs, num, opts) {
   if (!trunk) throw new UserError('Could not determine trunk branch (set project.yml trunk:)');
 
   // ---- GUARD 2 (anti-stacking) FIRST — cheaper to fail here than after measuring evidence ----
-  git.git(['fetch', 'origin', trunk], repoAbs);
+  git.git(['fetch', git.remoteFor(repoAbs), trunk], repoAbs);
   const trunkRun = git.ghRunForSha(repoAbs, trunk);
   if (!trunkRun) throw new UserError(`could not read ${trunk}'s CI status (gh run list failed) — refusing to grant blind`);
   // #155 fix 1+2: SAME classifier `shipCiCheck` uses (classifyCiRun), not an independent inline
@@ -3633,14 +3637,16 @@ function cmdClaims(argv) {
 function syncClaims({ prune = false } = {}) {
   if (!git.ghAvailable()) { warn('gh not available — --sync skipped'); return; }
   const st = state.loadState();
-  // repos represented locally + repos with an origin
+  // repos represented locally + repos with a resolvable remote (#301: not necessarily `origin`)
   const repos = new Set(Object.values(st.claims).map((c) => c.repo));
   const cur = git.repoRoot(process.cwd());
   if (cur) repos.add(cur);
 
   const added = [], removed = [];
   for (const repoAbs of repos) {
-    if (!git.originUrl(repoAbs)) continue;
+    const rp = git.remoteProblem(git.remoteInfo(repoAbs));
+    if (rp) { warn(`${shortRepo(repoAbs)}: ${rp} — --sync skipped this repo`); continue; }
+    if (!git.remoteUrl(repoAbs)) continue;
     const assigned = git.ghAssignedIssues(repoAbs);
     // A repo gh can't reach is SKIPPED — never treated as "GitHub shows no claims"
     // (that guard is exactly why removal must be opt-in: a partial/failed read must not delete).
@@ -4126,6 +4132,9 @@ function cmdWorktreeNew(argv) {
   const config = state.loadConfig();
   const repoAbs = resolveRepo(opts);
   if (!git.repoRoot(repoAbs)) throw new UserError(`${repoAbs} is not a git repo`);
+  // #301: which remote this repo fetches from and pushes to — resolved FIRST, so an ambiguous one
+  // refuses before anything (claim, worktree, branch, state record) is created.
+  const remote = git.remoteFor(repoAbs);
 
   // "Never create a branch named `trunk`" is a convention (CONVENTIONS.md §4) that nothing used to
   // enforce — this command would happily have created one, and recorded it (#53).
@@ -4174,7 +4183,7 @@ function cmdWorktreeNew(argv) {
     }
   }
 
-  // trunk: project.yml → origin/HEAD
+  // trunk: project.yml → <remote>/HEAD
   let trunk = opts.trunk;
   if (!trunk) {
     const pj = path.join(repoAbs, '.github', 'project.yml');
@@ -4219,7 +4228,7 @@ function cmdWorktreeNew(argv) {
       `a fresh branch over it, which would silently discard its history.\n` +
       `  To resume that branch: git worktree add ${wtPath} ${branch}\n` +
       `  If it is genuinely stale and you want a fresh branch of the same name: delete the ref first ` +
-      `(git branch -D ${branch} / git push origin --delete ${branch}), then re-run this command.`);
+      `(git branch -D ${branch} / git push ${remote} --delete ${branch}), then re-run this command.`);
   }
 
   // Never acquired from a file-synced location (CONVENTIONS.md, Place-claims) — the same guard
@@ -4231,20 +4240,20 @@ function cmdWorktreeNew(argv) {
   if (syncProblem) throw new UserError(syncProblem);
 
   // 1. fetch + create worktree
-  print(`fetch origin/${base} + create worktree "${name}" (branch ${branch})`);
-  const fetch = git.git(['fetch', 'origin', base], repoAbs);
+  print(`fetch ${remote}/${base} + create worktree "${name}" (branch ${branch})`);
+  const fetch = git.git(['fetch', remote, base], repoAbs);
   // #349: fail CLOSED. The whole point of cutting from origin/<base> is that the cut is origin's tip
   // right now; a failed fetch used to warn and cut from the cached ref anyway — a branch silently
   // behind by however stale that cache was. Nothing has been created yet, so refusing costs nothing.
   if (!fetch.ok) {
-    throw new UserError(`git fetch origin ${base} failed (${String(fetch.stderr || '').split('\n')[0] || `exit ${fetch.code}`}) — ` +
-      `refusing to cut from the cached origin/${base}, which may be stale. Nothing was created.\n` +
+    throw new UserError(`git fetch ${remote} ${base} failed (${String(fetch.stderr || '').split('\n')[0] || `exit ${fetch.code}`}) — ` +
+      `refusing to cut from the cached ${remote}/${base}, which may be stale. Nothing was created.\n` +
       `  Fix the remote and re-run. To cut from the cached ref anyway, knowingly: ` +
-      `git worktree add -b ${branch} ${wtPath} origin/${base}`);
+      `git worktree add -b ${branch} ${wtPath} ${remote}/${base}`);
   }
-  const add = git.git(['worktree', 'add', wtPath, '-b', branch, `origin/${base}`], repoAbs);
+  const add = git.git(['worktree', 'add', wtPath, '-b', branch, `${remote}/${base}`], repoAbs);
   if (!add.ok) throw new UserError(`git worktree add failed: ${add.stderr}`);
-  const baseSha = git.git(['rev-parse', '--short', `origin/${base}`], repoAbs).stdout;
+  const baseSha = git.git(['rev-parse', '--short', `${remote}/${base}`], repoAbs).stdout;
 
   // #325: push at cut. The branch on the remote IS the claim record another machine reads — before
   // this the first push happened at code-wrap, hours after the claim, and triage named "an unpushed
@@ -4277,7 +4286,7 @@ function cmdWorktreeNew(argv) {
   // expected to diverge; a refusal (or a warning with a number in it) would fire on every healthy
   // session and be tuned out within a week.
   if (base !== trunk) {
-    const behind = git.git(['rev-list', '--count', `origin/${base}..origin/${trunk}`], repoAbs);
+    const behind = git.git(['rev-list', '--count', `${remote}/${base}..${remote}/${trunk}`], repoAbs);
     print(`  base is the declared line "${base}"` +
       (behind.ok ? `, ${behind.stdout} commit(s) behind ${trunk} (expected for a long-lived line)` : ''));
     print(`  this worktree ships back into ${base}; merging ${base} → ${trunk} stays a human act.`);
@@ -4383,7 +4392,7 @@ function cmdWorktreeNew(argv) {
   print('');
   print(`✓ Worktree ready`);
   print(`  path:     ${wtPath}`);
-  print(`  branch:   ${branch}  (base origin/${base} @ ${baseSha})${base === trunk ? '' : '  [declared line]'}`);
+  print(`  branch:   ${branch}  (base ${remote}/${base} @ ${baseSha})${base === trunk ? '' : '  [declared line]'}`);
   print(`  env:      ${envCopied.join(' ') || '—'}`);
   print(`  ports:    ${alloc.chosenPorts.join(', ') || '—'}`);
   const keptIssues = issues.filter((n) => !lostIssues.includes(n));
@@ -4948,8 +4957,9 @@ function shippedBranches(repos, st) {
       if (checkedOut.has(branch)) continue;
       if ((liveByRepo.get(repo) || EMPTY_SET).has(branch)) continue;
       if (!branchContainedInTrunk(repo, branch).contained) continue;
-      const onRemote = git.git(['rev-parse', '--verify', '--quiet', `refs/remotes/origin/${branch}`], repo).ok;
-      out.push({ repo: shortRepo(repo), repoAbs: repo, branch, trunk, remote: onRemote });
+      const remoteName = git.remoteInfo(repo).name || 'origin'; // #301 — never throws in a fleet-wide loop
+      const onRemote = git.git(['rev-parse', '--verify', '--quiet', `refs/remotes/${remoteName}/${branch}`], repo).ok;
+      out.push({ repo: shortRepo(repo), repoAbs: repo, branch, trunk, remote: onRemote, remoteName });
     }
   }
   return out;
@@ -4992,7 +5002,7 @@ function cmdDoctor(argv) {
     const preview = state.loadState();
     const repos = new Set(Object.values(preview.claims).filter((c) => !c.worktree).map((c) => c.repo));
     for (const repoAbs of repos) {
-      if (!git.ghAvailable() || !git.originUrl(repoAbs)) { trackerCache.set(repoAbs, null); continue; }
+      if (!git.ghAvailable() || !git.remoteUrl(repoAbs)) { trackerCache.set(repoAbs, null); continue; }
       const assigned = git.ghAssignedIssues(repoAbs);
       trackerCache.set(repoAbs, assigned === null ? null : new Set(assigned));
     }
@@ -5485,13 +5495,13 @@ function cmdDoctor(argv) {
     print('');
     print(`Shipped branches you can delete when convenient (${report.shippedBranches.length}) — content is already in trunk:`);
     for (const b of report.shippedBranches) {
-      print(`  ${b.branch} [${b.repo}] → in ${b.trunk}${b.remote ? ' · also on origin' : ''}`);
+      print(`  ${b.branch} [${b.repo}] → in ${b.trunk}${b.remote ? ` · also on ${b.remoteName || 'origin'}` : ''}`);
     }
     print('  Routine, not drift: `ship` keeps branches by default, so one lands here per session.');
     print('  Listed here because `git branch --merged` cannot see them — a squash leaves no ancestry.');
     print('  doctor never deletes a ref, --prune included. To remove one:');
     const ex = report.shippedBranches[0];
-    print(`    git -C <repo> branch -D ${ex.branch}${ex.remote ? `  &&  git -C <repo> push origin --delete ${ex.branch}` : ''}`);
+    print(`    git -C <repo> branch -D ${ex.branch}${ex.remote ? `  &&  git -C <repo> push ${ex.remoteName || 'origin'} --delete ${ex.branch}` : ''}`);
     print('  NOT exhaustive: a branch whose work trunk later rewrote can conflict against trunk');
     print('  instead of matching it, and is omitted here rather than risk calling unmerged work spent.');
   }
@@ -5688,9 +5698,9 @@ function cmdReleaseNotes(argv) {
 // against the trunk checkout's HEAD, whatever ref happens to be checked out when this runs.
 // ---------------------------------------------------------------------------
 
-/** `origin/<name>` if it resolves, else the local `<name>`, else null. Never guesses a third ref. */
-function bestRef(repoAbs, name) {
-  if (git.git(['rev-parse', '--verify', '--quiet', `refs/remotes/origin/${name}`], repoAbs).ok) return `origin/${name}`;
+/** `<remote>/<name>` if it resolves, else the local `<name>`, else null. Never guesses a third ref. */
+function bestRef(repoAbs, name, remote = git.remoteInfo(repoAbs).name || 'origin') {
+  if (git.git(['rev-parse', '--verify', '--quiet', `refs/remotes/${remote}/${name}`], repoAbs).ok) return `${remote}/${name}`;
   if (git.git(['rev-parse', '--verify', '--quiet', `refs/heads/${name}`], repoAbs).ok) return name;
   return null;
 }
@@ -5753,14 +5763,19 @@ function inspectReleaseStatus(repoAbs) {
   // Best-effort refresh. A read-only status command must still degrade to whatever is on disk
   // rather than fail the whole row when offline — it says so (`stale: true`) instead of reporting
   // nothing, the same asymmetry `landed.js` and B0's CI re-check apply elsewhere in this file.
-  const fetchMain = git.git(['fetch', 'origin', 'main'], repoAbs);
-  const fetchTrunk = dualTrunk ? git.git(['fetch', 'origin', trunk], repoAbs) : { ok: true };
+  // #301: a fleet-wide status must not abort on one repo's ambiguous remotes — that row says so instead.
+  const rinfo = git.remoteInfo(repoAbs);
+  const rproblem = git.remoteProblem(rinfo);
+  if (rproblem) return { repo: label, path: repoAbs, applicable: false, reason: rproblem };
+  const remote = rinfo.name || 'origin';
+  const fetchMain = git.git(['fetch', remote, 'main'], repoAbs);
+  const fetchTrunk = dualTrunk ? git.git(['fetch', remote, trunk], repoAbs) : { ok: true };
   const stale = !fetchMain.ok || !fetchTrunk.ok;
 
-  const mainRef = bestRef(repoAbs, 'main');
-  if (!mainRef) return { repo: label, path: repoAbs, applicable: false, reason: 'no "main" ref found locally or on origin — tags are expected to live there' };
-  const trunkRef = dualTrunk ? bestRef(repoAbs, trunk) : mainRef;
-  if (dualTrunk && !trunkRef) return { repo: label, path: repoAbs, applicable: false, reason: `no "${trunk}" ref found locally or on origin` };
+  const mainRef = bestRef(repoAbs, 'main', remote);
+  if (!mainRef) return { repo: label, path: repoAbs, applicable: false, reason: `no "main" ref found locally or on ${remote} — tags are expected to live there` };
+  const trunkRef = dualTrunk ? bestRef(repoAbs, trunk, remote) : mainRef;
+  if (dualTrunk && !trunkRef) return { repo: label, path: repoAbs, applicable: false, reason: `no "${trunk}" ref found locally or on ${remote}` };
 
   // unpromoted — dual-trunk only. A single-trunk tag-gated repo (deploy: tag, trunk: main) has
   // nothing that "isn't on main yet" by construction: promotion isn't a step it has.
@@ -5886,7 +5901,7 @@ function cmdReleaseStatus(argv) {
   const staleRepos = printable.filter((r) => r.stale);
   if (staleRepos.length) {
     print('');
-    warn(`${staleRepos.length} repo(s) could not fetch origin — numbers reflect what is on disk, may be stale: ${staleRepos.map((r) => r.repo).join(', ')}`);
+    warn(`${staleRepos.length} repo(s) could not fetch their remote — numbers reflect what is on disk, may be stale: ${staleRepos.map((r) => r.repo).join(', ')}`);
   }
   print('');
   if (flagged.length) {
@@ -8205,7 +8220,7 @@ function handleShippedBranch(repoAbs, trunk, branch, { disposition, worktreeKept
     if (disposition.reason === 'refs-only') {
       warn(`${branch} NOT deleted: its worktree was kept (--keep-worktree), so the branch is still checked out. ` +
         `It carries still-open ${disposition.refs.map((n) => `#${n}`).join(', ')} and will read as live work on it — ` +
-        `after \`colab worktree rm\`, delete it: git branch -D ${branch} && git push origin --delete ${branch}`);
+        `after \`colab worktree rm\`, delete it: git branch -D ${branch} && git push ${git.remoteInfo(repoAbs).name || 'origin'} --delete ${branch}`);
     } else {
       warn(`--delete-branch ignored for ${branch}: its worktree was kept (--keep-worktree), so the branch is still checked out`);
     }
@@ -8217,11 +8232,12 @@ function handleShippedBranch(repoAbs, trunk, branch, { disposition, worktreeKept
 
   // Remote: only if it is actually there. Checked against the local remote-tracking ref rather than
   // the network, so an offline ship still finishes instead of hanging on ls-remote.
-  const onRemote = git.git(['rev-parse', '--verify', '--quiet', `refs/remotes/origin/${branch}`], repoAbs).ok;
+  const remote = git.remoteFor(repoAbs); // #301
+  const onRemote = git.git(['rev-parse', '--verify', '--quiet', `refs/remotes/${remote}/${branch}`], repoAbs).ok;
   if (!onRemote) return;
-  const rdel = git.run('git', ['push', 'origin', '--delete', branch], { cwd: repoAbs, env: { ...process.env, COLAB_SHIP: '1' } });
-  if (rdel.ok) print(`  deleted origin/${branch}`);
-  else warn(`could not delete origin/${branch}: ${rdel.stderr.split('\n')[0] || 'unknown error'} — delete it by hand`);
+  const rdel = git.run('git', ['push', remote, '--delete', branch], { cwd: repoAbs, env: { ...process.env, COLAB_SHIP: '1' } });
+  if (rdel.ok) print(`  deleted ${remote}/${branch}`);
+  else warn(`could not delete ${remote}/${branch}: ${rdel.stderr.split('\n')[0] || 'unknown error'} — delete it by hand`);
 }
 
 /** Resolve the session (branch, worktree name/path, claimed issue numbers) from --worktree/--branch. */
@@ -8476,7 +8492,8 @@ function classifyCiRun(repoAbs, run, at) {
  */
 function baseCiAdvisory(repoAbs, gh, base, branch) {
   if (!gh) return null;
-  const baseName = String(base).replace(/^origin\//, '');
+  const remote = git.remoteInfo(repoAbs).name || 'origin'; // #301
+  const baseName = String(base).startsWith(`${remote}/`) ? String(base).slice(remote.length + 1) : String(base);
   const mb = git.git(['merge-base', base, branch], repoAbs);
   if (!mb.ok || !mb.stdout) return null;
   const baseSha = mb.stdout.trim();
@@ -8789,8 +8806,9 @@ function shipMergeConflictCheck(repoAbs, target, branch, generated, hasPreShip) 
     return { ok: false, unknown: true, detail: `could not preview the merge: ${add.stderr.split('\n')[0] || 'worktree add failed'}` };
   }
   try {
-    git.git(['fetch', 'origin', target], tmp);
-    let mergeRef = `origin/${target}`;
+    const remote = git.remoteFor(repoAbs); // #301
+    git.git(['fetch', remote, target], tmp);
+    let mergeRef = `${remote}/${target}`;
     if (!git.git(['rev-parse', '--verify', '--quiet', mergeRef], tmp).ok) mergeRef = target;
     const merge = git.git(['merge', '--no-commit', '--no-edit', mergeRef], tmp);
     const uf = git.git(['diff', '--name-only', '--diff-filter=U'], tmp).stdout.split('\n').filter(Boolean);
@@ -9028,7 +9046,8 @@ function cmdShipDryJson(opts) {
   const dryRefs = git.branchRefs(repoAbs, sess.branch);
   // #343: a local ref git DWIM-created from origin's copy is still another machine's branch.
   const dryRemoteOnly = !!dryRefs.remoteSha && (!dryRefs.localSha || dryRefs.localFromRemote);
-  const dryWhere = dryRefs.localSha ? 'came from origin (this machine\'s local ref was created from origin\'s copy — git DWIM checkout, #343)' : 'exists ONLY on origin';
+  const dryRemote = git.remoteInfo(repoAbs).name || 'origin'; // #301
+  const dryWhere = dryRefs.localSha ? `came from ${dryRemote} (this machine's local ref was created from ${dryRemote}'s copy — git DWIM checkout, #343)` : `exists ONLY on ${dryRemote}`;
   const dryZeroVerdict = shipguard.zeroClaimVerdict(sess.issues.length, sess.branch, dryBrokenClaims.length,
     { remoteOnly: dryRemoteOnly, adopt: !!opts.adopt });
   if (dryZeroVerdict.relevant) {
@@ -9458,7 +9477,7 @@ function cmdShipDirect(opts) {
   if (!preOk) { process.stderr.write('✗ Aborting: one or more preconditions failed (see ✗ above). Nothing was closed.\n'); return 1; }
 
   const tip = shortSha(git.git(['rev-parse', trunk], repoAbs).stdout);
-  const mode = { evidenceClose: true, direct: true, why: `trunk-direct unit — ${trunk}@${tip} is checked out clean and published to origin/${trunk}` };
+  const mode = { evidenceClose: true, direct: true, why: `trunk-direct unit — ${trunk}@${tip} is checked out clean and published to ${git.remoteInfo(repoAbs).name || 'origin'}/${trunk}` };
   return shipEvidenceClose({ repoAbs, st, sess, target: trunk, trunk, gh, closeIssues, refsIssues, refsSet, mode, opts });
 }
 
@@ -9473,7 +9492,7 @@ function cmdShipDirect(opts) {
  */
 function readTargetCodeowners(repoAbs, target) {
   for (const p of codeowners.CODEOWNERS_PATHS) {
-    for (const ref of [`origin/${target}`, target]) {
+    for (const ref of [`${git.remoteInfo(repoAbs).name || 'origin'}/${target}`, target]) {
       const r = git.git(['show', `${ref}:${p}`], repoAbs);
       if (r.ok) return { path: p, ref, text: r.stdout };
     }
@@ -9572,12 +9591,13 @@ function coreReviewPayload(cr) {
 function shipOpenCorePr(repoAbs, cr, { target, branch, title, body }) {
   const refs = git.branchRefs(repoAbs, branch);
   if (refs.localSha && refs.localSha !== refs.remoteSha) {
-    const push = git.run('git', ['push', 'origin', `${branch}:refs/heads/${branch}`], { cwd: repoAbs });
+    const remote = git.remoteFor(repoAbs); // #301
+    const push = git.run('git', ['push', remote, `${branch}:refs/heads/${branch}`], { cwd: repoAbs });
     if (!push.ok) {
       process.stderr.write(`✗ core-path review: could not push ${branch} for its PR: ${git.gitFailureLine(push.stderr)}. Nothing merged.\n`);
       return 1;
     }
-    print(`  pushed ${branch} → origin (the PR shows this head)`);
+    print(`  pushed ${branch} → ${remote} (the PR shows this head)`);
   }
   let pr = cr.pr;
   if (!pr) {
@@ -9851,15 +9871,16 @@ function cmdShip(argv) {
   // #343: …and a local ref that DWIM already made out of origin's copy (reflog: "Created from origin/<b>")
   // is the same evidence arriving one checkout later — read it as remote-only too.
   const remoteOnly = !!shipRefs.remoteSha && (!shipRefs.localSha || shipRefs.localFromRemote);
+  const shipRemote = git.remoteFor(repoAbs); // #301 — every fetch/push below goes to this remote
   const shipWhere = shipRefs.localSha
-    ? `came from origin — its local ref was created from origin/${sess.branch} by a git checkout here (reflog, #343) —`
-    : 'exists ONLY on origin';
+    ? `came from ${shipRemote} — its local ref was created from ${shipRemote}/${sess.branch} by a git checkout here (reflog, #343) —`
+    : `exists ONLY on ${shipRemote}`;
   const zeroVerdict = shipguard.zeroClaimVerdict(sess.issues.length, sess.branch, brokenClaims.length, { remoteOnly, adopt: !!opts.adopt });
   let adoptInfo = null;
   if (zeroVerdict.reason === 'adopted') {
     let machineId = null;
     try { machineId = (machine.localMachine() || {}).id || null; } catch (_) { /* unknown is recorded as such */ }
-    adoptInfo = { branch: sess.branch, remoteSha: shipRefs.remoteSha, host: HOST, machine: machineId };
+    adoptInfo = { branch: sess.branch, remoteSha: shipRefs.remoteSha, host: HOST, machine: machineId, remote: shipRemote };
   } else if (opts.adopt) {
     warn('--adopt ignored — it applies only to a branch that came from origin (no local ref, or one a git checkout here created from origin\'s copy — #343), carries no issue number, and has no claim on this machine');
   }
@@ -9903,7 +9924,7 @@ function cmdShip(argv) {
       return 1;
     }
     if (adoptInfo) {
-      warn(`  --adopt: shipping origin/${sess.branch} @ ${shortSha(adoptInfo.remoteSha)}, a branch this machine never held — the squash carries a Colab-Adopted: trailer.`);
+      warn(`  --adopt: shipping ${shipRemote}/${sess.branch} @ ${shortSha(adoptInfo.remoteSha)}, a branch this machine never held — the squash carries a Colab-Adopted: trailer.`);
     } else {
       warn('  Nothing contradicts it, so ship continues. If this branch was meant to close an issue,');
       warn(`  stop now and:  ${claimRemedy}`);
@@ -10082,8 +10103,8 @@ function cmdShip(argv) {
   const cleanupEphemeral = () => { if (ephemeral) git.git(['worktree', 'remove', '--force', branchDir], repoAbs); };
 
   print(`B0: syncing ${target} into the branch …`);
-  git.git(['fetch', 'origin', target], branchDir);
-  let mergeRef = `origin/${target}`;
+  git.git(['fetch', shipRemote, target], branchDir);
+  let mergeRef = `${shipRemote}/${target}`;
   if (!git.git(['rev-parse', '--verify', '--quiet', mergeRef], branchDir).ok) mergeRef = target;
   const merge = git.git(['merge', '--no-edit', mergeRef], branchDir);
   if (!merge.ok) {
@@ -10403,7 +10424,7 @@ function cmdShip(argv) {
   }
   const commit = git.run('git', ['commit', '-m', commitMsg], { cwd: targetDir });
   if (!commit.ok) {
-    git.git(['reset', '--hard', `origin/${target}`], targetDir); cleanupEphemeral(); cleanupTarget();
+    git.git(['reset', '--hard', `${shipRemote}/${target}`], targetDir); cleanupEphemeral(); cleanupTarget();
     // if there was genuinely nothing to commit, say so plainly
     process.stderr.write(`✗ B1: commit failed (${commit.stderr.split('\n')[0] || 'nothing to commit?'}). ${target} reset, nothing pushed.\n`);
     return 1;
@@ -10416,7 +10437,7 @@ function cmdShip(argv) {
 
   // ---- (e) B2: push the target with COLAB_SHIP=1 (the sanctioned-path signal for pre-push-guard) ----
   print(`B2: pushing ${target} …`);
-  const push = git.run('git', ['push', 'origin', target], { cwd: targetDir, env: { ...process.env, COLAB_SHIP: '1' } });
+  const push = git.run('git', ['push', shipRemote, target], { cwd: targetDir, env: { ...process.env, COLAB_SHIP: '1' } });
   if (!push.ok) {
     // #322: UNDO THE MERGE, and never name the variable that would publish it by hand.
     //
@@ -10437,12 +10458,12 @@ function cmdShip(argv) {
     const rolled = ours ? git.git(['reset', '--hard', preMergeSha], targetDir).ok : false;
     process.stderr.write(`✗ B2: push failed: ${push.stderr.split('\n')[0]}\n`);
     if (rolled) {
-      process.stderr.write(`  ${target} rolled back to ${shortSha(preMergeSha)} — the merge did NOT land, locally or on origin.\n`);
+      process.stderr.write(`  ${target} rolled back to ${shortSha(preMergeSha)} — the merge did NOT land, locally or on ${shipRemote}.\n`);
       process.stderr.write(`  Nothing is lost: ${sess.branch} still carries the work. Re-run \`colab ship\` (B0 re-syncs first).\n`);
     } else {
       process.stderr.write(`  ${target} is committed locally at ${sha} and NOT pushed, and could not be rolled back automatically.\n`);
       process.stderr.write(`  Put the checkout back before anything else reads it, then re-run \`colab ship\`:\n`);
-      process.stderr.write(`      git -C ${targetDir} reset --hard ${preMergeSha || `origin/${target}`}\n`);
+      process.stderr.write(`      git -C ${targetDir} reset --hard ${preMergeSha || `${shipRemote}/${target}`}\n`);
       process.stderr.write(`  Do not publish it from here by hand — ${target} is push-guarded on purpose, and the branch\n`);
       process.stderr.write('  can produce this same merge again.\n');
     }
@@ -10608,7 +10629,7 @@ function cmdShip(argv) {
 
   print('');
   print(`✓ Shipped ${sess.branch} → ${target} @ ${sha}${sess.issues.length ? ' (' + sess.issues.map((n) => '#' + n).join(' ') + ')' : ''}`);
-  if (adoptInfo) print(`  adopted from origin/${adoptInfo.branch} @ ${shortSha(adoptInfo.remoteSha)} — recorded in the Colab-Adopted: trailer (#324)`);
+  if (adoptInfo) print(`  adopted from ${adoptInfo.remote || 'origin'}/${adoptInfo.branch} @ ${shortSha(adoptInfo.remoteSha)} — recorded in the Colab-Adopted: trailer (#324)`);
   if (target !== trunk) print(`  "${target}" is a declared line: this work is NOT in ${trunk} until a human merges the line.`);
   // #114: everything deferred since the push (e2, #304) lands here, AFTER the success line — not scattered above it
   // where a long ship scrolls it out of view. The merge itself already landed either way; this is
@@ -10673,10 +10694,11 @@ No network by default: fetch first if the base ref may be stale. --ci is the one
 function landedBaseTrunk(repoAbs) {
   const doc = projectDoc(repoAbs);
   if (doc && doc.trunk) return String(doc.trunk);
-  const head = git.git(['symbolic-ref', '--short', 'refs/remotes/origin/HEAD'], repoAbs);
-  if (head.ok && head.stdout) return head.stdout.replace(/^origin\//, '');
+  const remote = git.remoteInfo(repoAbs).name || 'origin'; // #301
+  const head = git.git(['symbolic-ref', '--short', `refs/remotes/${remote}/HEAD`], repoAbs);
+  if (head.ok && head.stdout) return head.stdout.startsWith(`${remote}/`) ? head.stdout.slice(remote.length + 1) : head.stdout;
   throw new UserError(
-    'Could not determine the base: no .github/project.yml `trunk:` and no local origin/HEAD. ' +
+    `Could not determine the base: no .github/project.yml \`trunk:\` and no local ${remote}/HEAD. ` +
     'Pass --base <branch>. (It is never assumed to be "main" — guessing the base is how a branch ' +
     'gets measured against the wrong one.)');
 }
@@ -10818,7 +10840,12 @@ function cmdHolders(argv) {
   const repoAbs = resolveRepo(opts);
   if (!git.repoRoot(repoAbs)) throw new UserError(`${repoAbs} is not a git repo`);
   const filePath = opts._[0];
-  const baseRef = opts.base ? String(opts.base) : `origin/${landedBaseTrunk(repoAbs)}`;
+  // #301: the resolved remote. Unresolvable (ambiguous / broken colab.remote) takes the same refusal
+  // path as "could not fetch" below — never an answer read off a guessed remote.
+  const rinfo = git.remoteInfo(repoAbs);
+  const rproblem = git.remoteProblem(rinfo);
+  const remote = rinfo.name || 'origin';
+  const baseRef = opts.base ? String(opts.base) : `${remote}/${landedBaseTrunk(repoAbs)}`;
 
   // Freshness, established BEFORE the enumeration reads any ref. Bounded: a fetch against an
   // unreachable remote otherwise hangs with no output, which would turn the safety step into the
@@ -10828,12 +10855,14 @@ function cmdHolders(argv) {
   let staleWhy = '';
   if (opts.noFetch) {
     staleWhy = '--no-fetch was passed';
-  } else if (!git.git(['remote', 'get-url', 'origin'], repoAbs).ok) {
+  } else if (rproblem) {
+    staleWhy = rproblem;
+  } else if (!rinfo.name || !git.git(['remote', 'get-url', remote], repoAbs).ok) {
     staleWhy = 'this repo has no `origin` remote to fetch from';
   } else {
-    const f = git.git(['fetch', '--prune', 'origin'], repoAbs, { timeoutMs: 60000 });
+    const f = git.git(['fetch', '--prune', remote], repoAbs, { timeoutMs: 60000 });
     if (f.ok) fresh = true;
-    else staleWhy = `git fetch --prune origin failed: ${(f.stderr || 'unknown error').split('\n')[0]}`;
+    else staleWhy = `git fetch --prune ${remote} failed: ${(f.stderr || 'unknown error').split('\n')[0]}`;
   }
 
   const log = git.git(['log', '--all', '--not', baseRef, '--source', '--format=%S', '--', filePath], repoAbs);
@@ -11007,7 +11036,8 @@ function cmdPromote(argv) {
   // ---- PRECONDITIONS (✓/✗) ----
   const gh = isGhUsable(repoAbs);
   const checks = [];
-  git.git(['fetch', 'origin', trunk, MAIN], repoAbs); // best-effort: refresh both refs before comparing
+  const remote = git.remoteFor(repoAbs); // #301
+  git.git(['fetch', remote, trunk, MAIN], repoAbs); // best-effort: refresh both refs before comparing
 
   let ciOk = false;
   if (!gh) checks.push(['✗', 'trunk CI green', `gh not usable (${ghUnusableWhy(repoAbs)}) — cannot confirm CI`]);
@@ -11019,15 +11049,15 @@ function cmdPromote(argv) {
   }
 
   const localTrunk = git.git(['rev-parse', trunk], repoAbs);
-  const originTrunk = git.git(['rev-parse', `origin/${trunk}`], repoAbs);
+  const originTrunk = git.git(['rev-parse', `${remote}/${trunk}`], repoAbs);
   const trunkSyncOk = localTrunk.ok && originTrunk.ok && localTrunk.stdout === originTrunk.stdout;
-  checks.push([trunkSyncOk ? '✓' : '✗', `${trunk} == origin/${trunk}`, trunkSyncOk ? 'in sync' : 'local trunk differs from origin (push/pull first)']);
+  checks.push([trunkSyncOk ? '✓' : '✗', `${trunk} == ${remote}/${trunk}`, trunkSyncOk ? 'in sync' : `local trunk differs from ${remote} (push/pull first)`]);
 
   const localMain = git.git(['rev-parse', MAIN], repoAbs);
-  const originMain = git.git(['rev-parse', `origin/${MAIN}`], repoAbs);
+  const originMain = git.git(['rev-parse', `${remote}/${MAIN}`], repoAbs);
   const mainSyncOk = localMain.ok && originMain.ok && localMain.stdout === originMain.stdout;
-  checks.push([mainSyncOk ? '✓' : '✗', `${MAIN} == origin/${MAIN}`,
-    !localMain.ok ? 'no local main branch (create it tracking origin/main)' : (mainSyncOk ? 'in sync' : 'local main differs from origin')]);
+  checks.push([mainSyncOk ? '✓' : '✗', `${MAIN} == ${remote}/${MAIN}`,
+    !localMain.ok ? `no local main branch (create it tracking ${remote}/main)` : (mainSyncOk ? 'in sync' : `local main differs from ${remote}`)]);
 
   // main checkout usable: reuse the repo checkout only if it is ON main and clean; else a temp worktree.
   const headBranch = git.git(['rev-parse', '--abbrev-ref', 'HEAD'], repoAbs).stdout;
@@ -11052,7 +11082,7 @@ function cmdPromote(argv) {
   print('');
 
   const nextRelease = deployIsTag
-    ? '  Release is a SEPARATE human step: git tag vX.Y.Z && git push origin vX.Y.Z'
+    ? `  Release is a SEPARATE human step: git tag vX.Y.Z && git push ${remote} vX.Y.Z`
     : deploy === 'manual'
       ? `  Deploy is a SEPARATE human step and this command does NOT perform it: promoting moves main only.\n  Production stays on the old code until a human runs the runbook${doc.runbook ? ` (${doc.runbook})` : ' — and project.yml names none'}.`
       : '  (deploy: push-main — this promotion IS the deploy; there is no separate tag step)';
@@ -11134,7 +11164,7 @@ function cmdPromote(argv) {
   const sha = git.git(['rev-parse', '--short', 'HEAD'], mainDir).stdout;
 
   print(`push ${MAIN} …`);
-  const push = git.run('git', ['push', 'origin', MAIN], { cwd: mainDir, env: { ...process.env, COLAB_PROMOTE: '1' } });
+  const push = git.run('git', ['push', remote, MAIN], { cwd: mainDir, env: { ...process.env, COLAB_PROMOTE: '1' } });
   if (!push.ok) {
     cleanup();
     process.stderr.write(`✗ push failed: ${push.stderr.split('\n')[0]}. main merged locally at ${sha} but NOT pushed — resolve and push by hand (COLAB_HUMAN=1).\n`);
