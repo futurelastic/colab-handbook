@@ -10672,6 +10672,33 @@ function cmdShip(argv) {
   // last — see warnDeferred's own comment for why this is scoped to exactly this window. The
   // window itself now OPENS at the push (e2, #304), not here: post-ship's warnings belong in the
   // same block, and re-assigning the collector here would silently discard them.
+  shipLandedTail({ repoAbs, sess, target, trunk, gh, sha, closeIssues, refsIssues, refsSet, integration, opts });
+
+  print('');
+  print(`✓ Shipped ${sess.branch} → ${target} @ ${sha}${sess.issues.length ? ' (' + sess.issues.map((n) => '#' + n).join(' ') + ')' : ''}`);
+  if (adoptInfo) print(`  adopted from ${adoptInfo.remote || 'origin'}/${adoptInfo.branch} @ ${shortSha(adoptInfo.remoteSha)} — recorded in the Colab-Adopted: trailer (#324)`);
+  if (target !== trunk) print(`  "${target}" is a declared line: this work is NOT in ${trunk} until a human merges the line.`);
+  // #114: everything deferred since the push (e2, #304) lands here, AFTER the success line — not scattered above it
+  // where a long ship scrolls it out of view. The merge itself already landed either way; this is
+  // strictly "what post-merge writes still need a human's attention", never a reason to re-run.
+  if (deferredCollector && deferredCollector.length) {
+    print(`  ${deferredCollector.length} post-merge write(s) need attention:`);
+    for (const msg of deferredCollector) print(`    ! ${msg}`);
+  }
+  deferredCollector = null;
+  return 0;
+}
+
+
+/**
+ * The post-merge tail every landed branch gets — cmdShip's B3 through i2, moved here unchanged (#373)
+ * so a batch member gets exactly the same steps in the same order: worktree teardown (B3), the claims
+ * worktree rm cannot reach (#319), the shipped branch (#368), B4's per-issue verify + 🚢 comment, the
+ * plan journal (#94), spent group labels (#82) and container close (#371). `evidenceExtra` is the one
+ * addition — '' on a serial ship (so its comment is byte-identical), the combined-run clause for a
+ * batch member.
+ */
+function shipLandedTail({ repoAbs, sess, target, trunk, gh, sha, closeIssues, refsIssues, refsSet, integration, opts, evidenceExtra = '' }) {
   const worktreeKept = !!(sess.name && opts.keepWorktree);
   if (sess.name && !opts.keepWorktree) {
     print(`B3: removing worktree ${sess.name} …`);
@@ -10715,8 +10742,8 @@ function cmdShip(argv) {
       // in trunk, and a comment saying otherwise would be read as "this is in the next release".
       const onLine = target === trunk ? '' : ` (a declared integration line — NOT yet in ${trunk})`;
       const body = isRef
-        ? `🔖 Referenced by colab ship (kept open — tracking issue) — ${sha}${onLine}${shipSess}`
-        : `🚢 Shipped to ${target} by colab ship — ${sha}${onLine}${shipSess}`;
+        ? `🔖 Referenced by colab ship (kept open — tracking issue) — ${sha}${onLine}${evidenceExtra}${shipSess}`
+        : `🚢 Shipped to ${target} by colab ship — ${sha}${onLine}${evidenceExtra}${shipSess}`;
       const r = git.ghIssueComment(repoAbs, num, body);
       if (!r.ok) warnDeferred(`could not post ship comment on #${num}`);
     }
@@ -10749,20 +10776,6 @@ function cmdShip(argv) {
   // An epic whose last open sub-issue this ship closed is closed with it, with evidence —
   // lib/container-close.js decides; everything but its `close` verdict leaves the parent alone.
   if (gh) shipCloseSpentContainers(repoAbs, closedByShip, { sha, target });
-
-  print('');
-  print(`✓ Shipped ${sess.branch} → ${target} @ ${sha}${sess.issues.length ? ' (' + sess.issues.map((n) => '#' + n).join(' ') + ')' : ''}`);
-  if (adoptInfo) print(`  adopted from ${adoptInfo.remote || 'origin'}/${adoptInfo.branch} @ ${shortSha(adoptInfo.remoteSha)} — recorded in the Colab-Adopted: trailer (#324)`);
-  if (target !== trunk) print(`  "${target}" is a declared line: this work is NOT in ${trunk} until a human merges the line.`);
-  // #114: everything deferred since the push (e2, #304) lands here, AFTER the success line — not scattered above it
-  // where a long ship scrolls it out of view. The merge itself already landed either way; this is
-  // strictly "what post-merge writes still need a human's attention", never a reason to re-run.
-  if (deferredCollector && deferredCollector.length) {
-    print(`  ${deferredCollector.length} post-merge write(s) need attention:`);
-    for (const msg of deferredCollector) print(`    ! ${msg}`);
-  }
-  deferredCollector = null;
-  return 0;
 }
 
 // ---------------------------------------------------------------------------
@@ -11131,13 +11144,11 @@ function shipBatchLand(repoAbs, doc, trunk, remote, base, existing, verdict, opt
 }
 
 /**
- * One batch member's post-merge tail. The SAME helper calls, in the SAME order, as cmdShip's B3–i2
- * (worktree teardown, unattached claims, the shipped branch, B4 verify + comment, plan journal, group
- * labels, container close) — kept as a sibling rather than extracted from cmdShip while another live
- * branch edits that block; fold the two into one helper once it has landed.
+ * One batch member's post-merge tail: what cmdShip does between its push and B3 (the worktree's
+ * merged status, the ship + issue-merged events), then the SAME shipLandedTail every serial ship runs
+ * — its 🚢 comment gains only the combined-run clause.
  */
 function shipBatchMemberTail({ repoAbs, doc, trunk, sess, sha, closeIssues, refsIssues, suffix, opts, gh }) {
-  const refsSet = new Set(refsIssues);
   if (sess.name) state.mutate((st) => { if (st.worktrees[sess.name]) st.worktrees[sess.name].status = 'merged'; });
   pushEvent('ship', {
     repo: repoAbs, worktree: sess.name, session: sess.session,
@@ -11145,43 +11156,10 @@ function shipBatchMemberTail({ repoAbs, doc, trunk, sess, sha, closeIssues, refs
     payload: { state: 'merged', branch: sess.branch, target: trunk, sha, issues: sess.issues, batch: true },
   });
   for (const num of closeIssues) pushEvent('issue-merged', { repo: repoAbs, issue: num, payload: { sha } });
-
-  const worktreeKept = !!(sess.name && opts.keepWorktree);
-  if (sess.name && !opts.keepWorktree) {
-    print(`B3: removing worktree ${sess.name} …`);
-    try { cmdWorktreeRm([sess.name, '--repo', repoAbs, '--force']); }
-    catch (e) { warnDeferred(`worktree rm reported: ${e.message}`); }
-  }
-  if (!worktreeKept) shipReleaseUnattachedClaims(repoAbs, sess);
-  const disposition = shippedBranch.shippedBranchDisposition({ closeIssues, refsIssues, deleteBranch: opts.deleteBranch, keepBranch: opts.keepBranch });
-  handleShippedBranch(repoAbs, trunk, sess.branch, { disposition, worktreeKept, integration: resolveIntegration(repoAbs, doc, trunk) });
-
-  const groupLabelsCarried = new Set();
-  const closedByShip = [];
-  if (gh) {
-    for (const num of sess.issues) {
-      const isRef = refsSet.has(num);
-      const info = git.ghIssueView(repoAbs, num, ['state', 'labels']);
-      if (!isRef && info && info.state !== 'CLOSED') warn(`#${num} did not auto-close (state=${info.state}) — close it by hand if ${trunk} isn't the default branch`);
-      if (isRef && info && info.state === 'CLOSED') warn(`#${num} was meant to stay open (Refs) but is CLOSED — reopen it by hand`);
-      for (const gl of labels.groupLabelNames(info && info.labels)) groupLabelsCarried.add(gl);
-      if (!isRef && info && info.state === 'CLOSED') closedByShip.push(num);
-      const shipSess = sessionCommentSuffix(sess.session, sess.sessionName);
-      const body = isRef
-        ? `🔖 Referenced by colab ship (kept open — tracking issue) — ${sha}${suffix}${shipSess}`
-        : `🚢 Shipped to ${trunk} by colab ship — ${sha}${suffix}${shipSess}`;
-      if (!git.ghIssueComment(repoAbs, num, body).ok) warnDeferred(`could not post ship comment on #${num}`);
-    }
-  }
-  shipJournalPlanFiles(repoAbs, sess.issues);
-  if (gh) {
-    for (const gl of groupLabelsCarried) {
-      const openMembers = git.ghIssueListByLabel(repoAbs, gl, 'open', ['number']);
-      if (openMembers === null || openMembers.length > 0) continue;
-      if (git.ghLabelDelete(repoAbs, gl).ok) print(`  deleted spent group label ${gl} (every member now closed)`);
-    }
-    shipCloseSpentContainers(repoAbs, closedByShip, { sha, target: trunk });
-  }
+  shipLandedTail({
+    repoAbs, sess, target: trunk, trunk, gh, sha, closeIssues, refsIssues, refsSet: new Set(refsIssues),
+    integration: resolveIntegration(repoAbs, doc, trunk), opts, evidenceExtra: suffix,
+  });
   print(`  ✓ ${sess.branch} → ${trunk} @ ${sha}${sess.issues.length ? ' (' + sess.issues.map((n) => '#' + n).join(' ') + ')' : ''}`);
 }
 
