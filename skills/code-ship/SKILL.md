@@ -932,7 +932,9 @@ is a human integration event of a promotion's weight.
     the forge refuses the second, and the first skips every gate ship re-checks.
   - B1c's grade still runs before the PR is opened: a reject never reaches the pause.
   - Every squash also carries a `Machine: <label>` trailer ([§4](../../CONVENTIONS.md#4-branches-and-commits)).
-    Leave it in place.
+    Leave it in place, and do not add it back where ship left it out. On a public repository,
+    or one whose visibility ship could not read, it is omitted on purpose (#367). A commit
+    message is permanent, and that label is a hostname. `--dry` prints which way it will go.
 - **Machine-specific trunk-side automation runs itself — `.colab/hooks/post-ship`.**
   Migrate the trunk DB, restart the trunk dev server, re-install dependencies: `colab
   ship` runs that hook on the trunk checkout right after the push, so this is no longer

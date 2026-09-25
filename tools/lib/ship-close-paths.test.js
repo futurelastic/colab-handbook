@@ -69,6 +69,8 @@ function fixture({ yml = 'tier: B\ntrunk: main\nproduction: null\ndeploy: none\n
     'if [ "$1" = "auth" ] && [ "$2" = "status" ]; then echo "Logged in (fixture)" >&2; exit 0; fi',
     `if [ "$1" = "api" ] && [ "$2" = "user" ] && [ -f "${path.join(root, 'no-credential')}" ]; then echo "HTTP 401: Bad credentials (fixture)" >&2; exit 1; fi`,
     'if [ "$1" = "api" ] && [ "$2" = "user" ]; then echo "me"; exit 0; fi',
+    // #367: the forge's visibility — PRIVATE unless the test drops a `public` marker.
+    `if [ "$1" = "repo" ] && [ "$2" = "view" ]; then if [ -f "${path.join(root, 'public')}" ]; then echo PUBLIC; else echo PRIVATE; fi; exit 0; fi`,
     'if [ "$1" = "run" ] && [ "$2" = "list" ]; then',
     '  BR=""; shift 2',
     '  while [ $# -gt 0 ]; do if [ "$1" = "--branch" ]; then BR="$2"; fi; shift; done',
@@ -365,6 +367,27 @@ test('#324: --adopt ships it and the squash records the adoption', () => {
   const body = fx.g(fx.work, 'log', '-1', '--format=%B', 'main');
   assert.match(body, new RegExp(`Colab-Adopted: origin/chore/bump-parser @ ${sha}`));
   assert.match(r.out, /adopted from origin\/chore\/bump-parser/);
+});
+
+test('#367: on a PUBLIC repo the Colab-Adopted: trailer keeps branch + sha but drops the host', () => {
+  const fx = fixture();
+  fs.writeFileSync(path.join(fx.root, 'public'), '');
+  const sha = pushFromAnotherMachine(fx, 'chore/bump-parser');
+  const r = colab(fx, ['ship', '--branch', 'chore/bump-parser', '--adopt', '--repo', fx.work]);
+  assert.strictEqual(r.code, 0, r.out + r.err);
+  const body = fx.g(fx.work, 'log', '-1', '--format=%B', 'main');
+  assert.match(body, new RegExp(`^Colab-Adopted: origin/chore/bump-parser @ ${sha}$`, 'm'));
+  assert.doesNotMatch(body, /^Machine:/m);
+});
+
+test('#367: on a PRIVATE repo the Colab-Adopted: trailer still names the host (#324 unchanged)', () => {
+  const fx = fixture();
+  const sha = pushFromAnotherMachine(fx, 'chore/bump-parser');
+  const r = colab(fx, ['ship', '--branch', 'chore/bump-parser', '--adopt', '--repo', fx.work]);
+  assert.strictEqual(r.code, 0, r.out + r.err);
+  const body = fx.g(fx.work, 'log', '-1', '--format=%B', 'main');
+  assert.match(body, new RegExp(`^Colab-Adopted: origin/chore/bump-parser @ ${sha} on \\S+ \\(machine `, 'm'));
+  assert.match(body, /^Machine: /m);
 });
 
 test('#324: a LOCAL digit-less unclaimed branch is still a legit zero — unchanged', () => {

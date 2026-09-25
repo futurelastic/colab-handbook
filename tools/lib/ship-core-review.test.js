@@ -26,7 +26,9 @@ const CORE_OWNED = '/.github/workflows/ @other\n/.github/CODEOWNERS @other\n';
 const TMP = [];
 process.on('exit', () => { for (const dir of TMP) { try { fs.rmSync(dir, { recursive: true, force: true }); } catch (_) {} } });
 
-function fixture(codeownersText = CORE_OWNED) {
+// #367: `visibility` is what the fixture `gh repo view` answers — null makes that read FAIL, the
+// shape of a non-GitHub remote or an offline gh. `yml` overrides the descriptor (e.g. to add room:).
+function fixture(codeownersText = CORE_OWNED, { visibility = 'PRIVATE', yml = YML } = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'colab-core-review-'));
   TMP.push(root);
   const origin = path.join(root, 'origin.git');
@@ -43,7 +45,7 @@ function fixture(codeownersText = CORE_OWNED) {
   g(work, 'config', 'core.hooksPath', path.join(root, '.nohooks'));
   g(work, 'remote', 'add', 'origin', origin);
   fs.mkdirSync(path.join(work, '.github', 'workflows'), { recursive: true });
-  fs.writeFileSync(path.join(work, '.github', 'project.yml'), YML);
+  fs.writeFileSync(path.join(work, '.github', 'project.yml'), yml);
   fs.writeFileSync(path.join(work, '.github', 'workflows', 'ci.yml'), 'on: push\n');
   if (codeownersText !== null) fs.writeFileSync(path.join(work, '.github', 'CODEOWNERS'), codeownersText);
   fs.writeFileSync(path.join(work, 'f.js'), 'base\n');
@@ -59,6 +61,7 @@ function fixture(codeownersText = CORE_OWNED) {
     'if [ "$1" = "--version" ]; then echo "gh version 0.0.0 (fixture)"; exit 0; fi',
     'if [ "$1" = "auth" ] && [ "$2" = "status" ]; then echo "Logged in (fixture)" >&2; exit 0; fi',
     'if [ "$1" = "api" ] && [ "$2" = "user" ]; then echo "me"; exit 0; fi',
+    ...(visibility ? [`if [ "$1" = "repo" ] && [ "$2" = "view" ]; then echo "${visibility}"; exit 0; fi`] : []),
     'if [ "$1" = "run" ] && [ "$2" = "list" ]; then',
     '  BR=""; shift 2',
     '  while [ $# -gt 0 ]; do if [ "$1" = "--branch" ]; then BR="$2"; fi; shift; done',
@@ -203,4 +206,76 @@ test('#350 (g): a self-approval, or an approval of an older head, stays pending'
   assert.match(stale.out, /stale/);
   assert.strictEqual(originMain(fx), before);
   assert.doesNotMatch(log(fx), /pr create/, 'an open PR is reused, never duplicated');
+});
+
+// =================================================================================================
+// #367 — the Machine: trailer names a host; a public repo's squash must never carry it
+// =================================================================================================
+
+const machineLines = (msg) => msg.split('\n').filter((l) => /^Machine:/i.test(l));
+
+test('#367 (a): a PUBLIC repo — composed and --message squashes carry no Machine: trailer', () => {
+  const fx = fixture(CORE_OWNED, { visibility: 'PUBLIC' });
+  branch(fx, 'feat/app-101', 101, { 'f.js': 'x\n' });
+  const r = colab(fx, ['ship', '--branch', 'feat/app-101', '--repo', fx.work]);
+  assert.strictEqual(r.code, 0, r.out + r.err);
+  assert.deepStrictEqual(machineLines(originMsg(fx)), []);
+  assert.match(originMsg(fx), /Closes #101/);
+  assert.match(r.out, /Machine trailer omitted — repository is public/);
+  branch(fx, 'feat/app-102', 102, { 'f.js': 'y\n' });
+  const m = colab(fx, ['ship', '--branch', 'feat/app-102', '--repo', fx.work, '--message', 'feat: by hand']);
+  assert.strictEqual(m.code, 0, m.out + m.err);
+  assert.match(originMsg(fx), /^feat: by hand/);
+  assert.deepStrictEqual(machineLines(originMsg(fx)), []);
+});
+
+test('#367 (b): a PRIVATE repo is unchanged — the squash still carries Machine: <label>', () => {
+  const fx = fixture(CORE_OWNED, { visibility: 'PRIVATE' });
+  branch(fx, 'feat/app-103', 103, { 'f.js': 'x\n' });
+  const r = colab(fx, ['ship', '--branch', 'feat/app-103', '--repo', fx.work]);
+  assert.strictEqual(r.code, 0, r.out + r.err);
+  assert.strictEqual(machineLines(originMsg(fx)).length, 1);
+  assert.match(originMsg(fx), /^Machine: [a-z0-9-]+$/m);
+  assert.doesNotMatch(r.out + r.err, /Machine trailer omitted/);
+});
+
+test('#367 (c): room: public in project.yml omits it even where the forge reads private', () => {
+  const fx = fixture(CORE_OWNED, { visibility: 'PRIVATE', yml: YML + 'room: public\n' });
+  branch(fx, 'feat/app-104', 104, { 'f.js': 'x\n' });
+  const r = colab(fx, ['ship', '--branch', 'feat/app-104', '--repo', fx.work]);
+  assert.strictEqual(r.code, 0, r.out + r.err);
+  assert.deepStrictEqual(machineLines(originMsg(fx)), []);
+  assert.match(r.out, /room: public/);
+});
+
+test('#367 (d): visibility unreadable — fails closed with a warning; a declared private room keeps it', () => {
+  const closed = fixture(CORE_OWNED, { visibility: null });
+  branch(closed, 'feat/app-105', 105, { 'f.js': 'x\n' });
+  const r = colab(closed, ['ship', '--branch', 'feat/app-105', '--repo', closed.work]);
+  assert.strictEqual(r.code, 0, r.out + r.err);
+  assert.deepStrictEqual(machineLines(originMsg(closed)), []);
+  assert.match(r.err, /Machine trailer omitted — visibility could not be read.*failing closed/);
+
+  const team = fixture(CORE_OWNED, { visibility: null, yml: YML + 'room: team\n' });
+  branch(team, 'feat/app-106', 106, { 'f.js': 'x\n' });
+  const t = colab(team, ['ship', '--branch', 'feat/app-106', '--repo', team.work]);
+  assert.strictEqual(t.code, 0, t.out + t.err);
+  assert.match(originMsg(team), /^Machine: [a-z0-9-]+$/m);
+});
+
+test('#367 (e): --dry and --dry --json say which way it will go, and change nothing', () => {
+  for (const [visibility, include] of [['PUBLIC', false], ['PRIVATE', true]]) {
+    const fx = fixture(CORE_OWNED, { visibility });
+    branch(fx, 'feat/app-107', 107, { 'f.js': 'x\n' });
+    const before = originMain(fx);
+    const j = JSON.parse(colab(fx, ['ship', '--branch', 'feat/app-107', '--repo', fx.work, '--dry', '--json']).out);
+    assert.strictEqual(j.machineTrailerDecision.include, include);
+    assert.strictEqual(j.machineTrailerDecision.visibility, visibility);
+    if (include) assert.match(j.machineTrailer, /^Machine: /);
+    else assert.strictEqual(j.machineTrailer, null);
+    const prose = colab(fx, ['ship', '--branch', 'feat/app-107', '--repo', fx.work, '--dry']);
+    assert.strictEqual(prose.code, 0, prose.out + prose.err);
+    assert.match(prose.out, include ? /Machine trailer: Machine: [a-z0-9-]+ — repository is private/ : /Machine trailer: omitted — repository is public/);
+    assert.strictEqual(originMain(fx), before, '--dry must not move origin');
+  }
 });
