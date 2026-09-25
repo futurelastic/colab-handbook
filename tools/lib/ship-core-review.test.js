@@ -50,7 +50,11 @@ function fixture(codeownersText = CORE_OWNED, { visibility = 'PRIVATE', yml = YM
   if (codeownersText !== null) fs.writeFileSync(path.join(work, '.github', 'CODEOWNERS'), codeownersText);
   fs.writeFileSync(path.join(work, 'f.js'), 'base\n');
   g(work, 'add', '-A');
-  g(work, 'commit', '-q', '-m', 'chore: fixture');
+  // Backdated, so a trunk-direct unit's --since window (whole seconds) never includes it (#351).
+  execFileSync('git', ['commit', '-q', '-m', 'chore: fixture'], {
+    cwd: work, stdio: ['ignore', 'pipe', 'pipe'],
+    env: { ...process.env, GIT_AUTHOR_DATE: '2020-01-01T00:00:00Z', GIT_COMMITTER_DATE: '2020-01-01T00:00:00Z' },
+  });
   g(work, 'push', '-q', 'origin', 'main');
 
   const bin = path.join(root, 'bin');
@@ -278,4 +282,72 @@ test('#367 (e): --dry and --dry --json say which way it will go, and change noth
     assert.match(prose.out, include ? /Machine trailer: Machine: [a-z0-9-]+ — repository is private/ : /Machine trailer: omitted — repository is public/);
     assert.strictEqual(originMain(fx), before, '--dry must not move origin');
   }
+});
+
+// ---- #351 (ruling A): a trunk-direct unit touching a core path is refused a close -------------
+
+/** Claim `num` with no branch, commit `files` straight to main (null = delete), push. */
+function directUnit(fx, num, files) {
+  assert.strictEqual(colab(fx, ['claim', String(num), '--repo', fx.work]).code, 0);
+  for (const [p, body] of Object.entries(files)) {
+    const abs = path.join(fx.work, p);
+    if (body === null) { fs.rmSync(abs); continue; }
+    fs.mkdirSync(path.dirname(abs), { recursive: true });
+    fs.writeFileSync(abs, body);
+  }
+  fx.g(fx.work, 'add', '-A');
+  fx.g(fx.work, 'commit', '-q', '-m', `feat: direct unit (#${num})`);
+  fx.g(fx.work, 'push', '-q', 'origin', 'main');
+}
+const dryJson = (fx) => {
+  const r = colab(fx, ['ship', '--direct', '--repo', fx.work, '--dry', '--json']);
+  return { r, j: JSON.parse(r.out) };
+};
+const coreRow = (j) => j.checks.find((c) => c.name === 'core-path review (#350/#351)');
+
+test('#351: ship --direct refuses a trunk-direct unit that touched a core path — nothing closed', () => {
+  const fx = fixture();
+  directUnit(fx, 101, { '.github/workflows/ci.yml': 'on: [push, pull_request]\n' });
+  const r = colab(fx, ['ship', '--direct', '--repo', fx.work]);
+  assert.strictEqual(r.code, 1, r.out + r.err);
+  assert.match(r.err, /core-path review: this trunk-direct unit touches 1 core path/);
+  assert.match(r.err, /\.github\/workflows\/ci\.yml\s+\(@other\)/);
+  assert.match(r.err, /Redo the change on a branch/);
+  assert.match(r.err, /Nothing was closed/);
+  assert.doesNotMatch(log(fx), /issue close/);
+  assert.doesNotMatch(log(fx), /pr create/, 'a trunk-direct unit never opens a PR');
+  assert.match(colab(fx, ['claims']).out, /101/, 'the claim survives the refusal');
+
+  const { r: d, j } = dryJson(fx);
+  assert.strictEqual(d.code, 1);
+  assert.strictEqual(j.coreReview.verdict, 'refuse');
+  assert.deepStrictEqual(j.coreReview.corePaths, ['.github/workflows/ci.yml']);
+  assert.strictEqual(coreRow(j).ok, false);
+  assert.strictEqual(coreRow(j).class, 'human-gated');
+});
+
+test('#351: ship --direct passes the core-path row when the unit touched no core path', () => {
+  const fx = fixture();
+  directUnit(fx, 102, { 'f.js': 'changed\n' });
+  const { j } = dryJson(fx);
+  assert.strictEqual(j.coreReview.active, true);
+  assert.strictEqual(j.coreReview.verdict, 'not-core');
+  assert.strictEqual(coreRow(j).ok, true);
+});
+
+test('#351: ship --direct is unaffected where the rule is inert (CODEOWNERS names only the author)', () => {
+  const fx = fixture('/.github/workflows/ @me\n');
+  directUnit(fx, 103, { '.github/workflows/ci.yml': 'on: [push]\n' });
+  const { r, j } = dryJson(fx);
+  assert.strictEqual(j.coreReview.verdict, 'inert');
+  assert.strictEqual(coreRow(j).ok, true);
+  assert.strictEqual(r.code, 0, r.out + r.err);
+});
+
+test('#351: a unit cannot exempt itself by deleting CODEOWNERS in its own commit', () => {
+  const fx = fixture();
+  directUnit(fx, 104, { '.github/CODEOWNERS': null, '.github/workflows/ci.yml': 'on: [push]\n' });
+  const { j } = dryJson(fx);
+  assert.strictEqual(j.coreReview.verdict, 'refuse');
+  assert.deepStrictEqual(j.coreReview.corePaths.sort(), ['.github/CODEOWNERS', '.github/workflows/ci.yml']);
 });

@@ -295,7 +295,12 @@ run this. All three of those gates (evidence, autonomy, trunk CI) are ⚖ ruled 
 unit — confirmed as built ([#342](https://github.com/futurelastic/colab-handbook/issues/342),
 CONVENTIONS.md §2). The autonomy gate's docs-only exception (#345) applies here too: without
 `auto-trunk`, the unit closes when every trunk commit since its earliest claim — by anyone —
-touches documentation only.
+touches documentation only. **The core-path rule (#350) refuses here instead of pausing (#351):**
+a trunk-direct unit has no PR, so when the rule is active and that same window touched a core path,
+`--direct` refuses with a human-gated `core-path review` row and closes nothing. Redo the change on
+a branch and ship that. If the paths are another unit's reviewed landing, a human closes the issue
+by hand. Never route around the refusal
+(`CONVENTIONS.md` [§2, *Core paths*](../../CONVENTIONS.md#core-paths--a-pr-and-a-non-author-approval-before-landing-350)).
 
 **Never decide this by counting commits.** A squash-merge mints a new sha, so a
 shipped branch's own commits look permanently unmerged — a count-only check calls

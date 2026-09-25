@@ -101,3 +101,37 @@ test('#350 approval: latest review per reviewer wins; changes requested blocks; 
   assert.strictEqual(recovered.ok, true);
   assert.strictEqual(co.approvalVerdict([], { prAuthor: 'me', headSha: 'abc' }).reason, 'no approval yet');
 });
+
+// ---- #351: directVerdict, the trunk-direct unit's verdict ------------------------------------
+
+const cf = (text, ref = 'main') => ({ path: '.github/CODEOWNERS', ref, text });
+
+test('#351 directVerdict: no CODEOWNERS before or after is inert', () => {
+  const v = co.directVerdict({ files: [null, null], authors: ['me'], changed: ['a.js'] });
+  assert.strictEqual(v.verdict, 'inert');
+  assert.strictEqual(v.active, false);
+});
+
+test('#351 directVerdict: an owned path touched refuses; an unowned one does not', () => {
+  const f = cf('/gate/ @other\n');
+  assert.strictEqual(co.directVerdict({ files: [f, f], authors: ['me'], changed: ['gate/x.js'] }).verdict, 'refuse');
+  assert.strictEqual(co.directVerdict({ files: [f, f], authors: ['me'], changed: ['src/x.js'] }).verdict, 'not-core');
+});
+
+test('#351 directVerdict: the file BEFORE the unit counts, so narrowing it in the unit does not exempt', () => {
+  const before = cf('/gate/ @other\n', 'abc1234');
+  const after = cf('/gate/ @me\n');
+  const v = co.directVerdict({ files: [before, after], authors: ['me'], changed: ['gate/x.js'] });
+  assert.strictEqual(v.verdict, 'refuse');
+  assert.deepStrictEqual(v.corePaths, [{ path: 'gate/x.js', owners: ['@other'] }]);
+});
+
+test('#351 directVerdict: an active rule with an unlistable change set refuses; an inert one does not', () => {
+  assert.strictEqual(co.directVerdict({ files: [cf('* @other\n')], authors: ['me'], changed: null }).verdict, 'refuse');
+  assert.strictEqual(co.directVerdict({ files: [cf('* @me\n')], authors: ['me'], changed: null }).verdict, 'inert');
+});
+
+test('#351 directVerdict: owners of the same path merge across the two files', () => {
+  const v = co.directVerdict({ files: [cf('/g @a\n', 'old'), cf('/g @b\n')], authors: ['me'], changed: ['g'] });
+  assert.deepStrictEqual(v.corePaths, [{ path: 'g', owners: ['@a', '@b'] }]);
+});
