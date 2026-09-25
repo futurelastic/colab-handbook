@@ -540,7 +540,7 @@ step is in this skill:
 | class | what this skill does |
 |---|---|
 | `green` | proceed to B1b |
-| `none` | **Depends which `none` — check before you wait.** A run *queued or in flight* (including a slow sibling behind a green fast one, #307): wait, **bounded — 15 minutes for this candidate, then defer it** (below, *The wait is bounded*, #370). A run that **cannot arrive for this ref** — no workflows, or workflows triggering only on `pull_request` / `push` to trunk — is not pending: proceed, exactly as the no-runs line above already allows for `<base>`. A5 reports which; re-read the triggers if it did not. **At a red `<base>`, "proceed" reaches B1's stop** — only the branch carrying the fix may open a PR to get a run (*Red trunk*, above); a bystander waits |
+| `none` | **Depends which `none` — check before you wait.** A run *queued or in flight* (including a slow sibling behind a green fast one, #307): wait, **bounded — 15 minutes for this candidate, then defer it** (below, *The wait is bounded*, #370). A run that **cannot arrive for this ref** — no workflows, or workflows triggering only on `pull_request` / `push` to trunk — is not pending: proceed, exactly as the no-runs line above already allows for `<base>` — and **B2a then reads the trunk run at your squash before any evidence is posted**, because that run is this change's first. A5 reports which; re-read the triggers if it did not. **At a red `<base>`, "proceed" reaches B1's stop** — only the branch carrying the fix may open a PR to get a run (*Red trunk*, above); a bystander waits |
 | `red:infra` | **re-run it once** (`gh run rerun <databaseId> --failed`), then re-read. Identical failure twice ⇒ it is the runner, not the branch: hand it to the **ops lane** and stop. Do not merge, and do not send it back to the implementer — there is nothing in the diff for them to fix |
 | `red:finding` | **hand back to an implementer session, as a class** — the branch's own suite found something. Never a merge, never a re-run |
 
@@ -590,7 +590,8 @@ every step here runs in the coordinator's own worktree.
   and `code-wrap` A5 does not open a PR by design — so branch CI genuinely does not
   exist here before the merge, and `<base>`'s own gate at B1 is the whole CI story.
   That is a normal state, not a degraded one; say so in the report rather than treating
-  it as a missing measurement.
+  it as a missing measurement. The story does not end at the merge, though: the trunk
+  run at the squash sha is this change's first run, and B2a reads it before B2b.
 - **Telling infra from finding — run the test, do not judge by feel** (§4, *Branch CI*,
   #354; the exit code answers first where the repo separates 1 from 2). In order:
   1. **Any named failing assertion ⇒ `red:finding`**, whatever else the run shows. Never
@@ -962,7 +963,7 @@ already-shipped grep again against a fresh `git fetch origin <base>`. Grading an
 minutes, and the branch's own session may ship it in the meantime — measured on an
 `auto-trunk` repository: the implementer ran `colab ship` itself 5 s before the
 coordinator's verification finished. A match now means someone else landed it: **do not
-merge.** Stop the merge path and go to B2b–B4 for whatever that ship left undone (evidence,
+merge.** Stop the merge path and go to B2a–B4 for whatever that ship left undone (evidence,
 claims, worktree), naming the squash sha it landed in.
 
 ```sh
@@ -998,7 +999,7 @@ is a human integration event of a promotion's weight.
   touches a path it covers, `colab ship` pushes the branch, opens a PR (or reuses the open
   one), and stops. Nothing is merged, and the claims, worktree and branch are kept
   (`CONVENTIONS.md` [§2, *Core paths*](../../CONVENTIONS.md#core-paths--a-pr-and-a-non-author-approval-before-landing-350)).
-  - This is a pause, not a failure. Do not run B2b–B4. Post one comment on each carried
+  - This is a pause, not a failure. Do not run B2a–B4. Post one comment on each carried
     issue linking the PR, then stop.
   - Resume by re-running the same `colab ship` once an account other than the author has
     approved the branch's **current** head. It lands by the ordinary squash and closes the PR.
@@ -1027,6 +1028,58 @@ is a human integration event of a promotion's weight.
   command; `colab` never runs a package manager on a checkout itself. If you see that
   warning, run the install before you walk away.
 
+## B2a. Branch CI could not arrive? Read the trunk run at your squash before any evidence (#374)
+
+B1a let this merge through on a `none` that **cannot arrive** — the repo's workflows fire
+only on a trunk push and `pull_request`, so no run could ever exist at the branch's head —
+with the words "the base's own CI is the whole CI story". That story is told **after** the
+merge: the trunk run at the squash sha B2 just pushed is the change's **first** run on the
+runner. Nothing before this section read it. Measured 2026-09-25 on one repository: the
+coordinator merged, then posted `colab:evidence` and `colab:grade verdict=pass` on both
+carried issues **19 s after** the trunk run for its own squash had completed red (2 failing
+tests of 929, `red:finding`). No `TRUNK RED:` issue was filed, and the red sat unnoticed for
+~40 min until something else happened to open the run.
+
+**So when B1a read the cannot-arrive `none`, watch the trunk run at the squash sha before
+B2b posts anything.** When B1a read `green` the branch's own run already judged the change —
+skip this section. This adds no gate before the merge — the merge has already happened. It
+closes the loop B1a opened.
+
+```sh
+SQUASH=<the squash sha B2 pushed>   # from B2's commit or `colab ship`'s output — not
+                                    # origin/<base>'s tip, another ship may land on top
+gh run list --commit "$SQUASH" --limit 20 \
+  --json databaseId,workflowName,status,conclusion   # one row per workflow at that sha
+timeout 900 gh run watch <databaseId> --exit-status  # each run still in flight; one
+                                                     # 15-min cap across all of them
+```
+
+- **Same bound as B1a — 15 minutes, a cap across every run at the sha, not 15 per run**
+  (*The wait is bounded*, #370). Under `code-sweep` this is not an extra wait: the next
+  candidate's B1 needs this same run green at the new trunk head before it can merge.
+- **Same quantifier as B1:** the squash is `green` only when **every** run at `$SQUASH` has
+  completed and none failed. A fast workflow already green does not answer for a slow one.
+- **No run listed yet?** A push takes a few seconds to register — look again for up to a
+  minute. If the workflows do trigger on a push to `<base>` and still nothing appears, trunk
+  CI is dead, which is B1's *a failure that never started still means stop*. It stops the
+  **next** ship, not this one. Say so in the evidence. A repo with no workflows at all, or
+  with `pull_request` only, never produces a run here: say that instead and go to B2b.
+
+Classify what you see with B1a's test (*Telling infra from finding*):
+
+| trunk run at `$SQUASH` | what this skill does |
+|---|---|
+| `green` | **B2b as usual, citing that run** — its id beside the squash sha in each evidence comment. The claim "CI passed" now names the run that passed |
+| `red:finding` | **File `TRUNK RED: <sha> (#N) fails <what>` in the same pass**, before any evidence comment. Put in it the failing test names, the run link, the squash sha and every issue the squash carried. Then post B2b's evidence with the red noted and that issue linked. **The grade stays the grade** — B1c judged the diff against the plan, not trunk's CI, so `verdict=pass` is still true and is still emitted. Do not revert and do not push a fix from here: the `TRUNK RED:` issue is the patch's work, and the next ship's B1 (*Red trunk*) orders it first |
+| `red:infra` | **Re-run once** (`gh run rerun <databaseId> --failed`, §4) and read it again inside the same 15-minute bound. The same failure twice ⇒ the runner, not the change: hand it to the ops lane and say in the evidence that trunk CI for `$SQUASH` is unverified, for that reason |
+| cap expired | **Say so in the evidence** — "trunk run `<databaseId>` for `<sha>` still running at `<ts>`" — and leave the re-measure trigger: that run completing. The next ship pass or `code-sweep` ping reads it by id. A red there is filed as `TRUNK RED:` exactly as above, by whichever session finds it |
+
+The measured failure was one of **order**, not of skill. The coordinator could read a red
+run perfectly well; it wrote "pass" 19 s before the red it had caused existed. So no
+evidence comment for a cannot-arrive merge goes out ahead of this read. An evidence
+comment that says `pass` beside a red trunk it never looked at tells every later reader
+that trunk was fine.
+
 ## B2b. Post evidence on EVERY issue — including the auto-closed ones
 
 **`ceremony: light` repo? Skip this whole step.** The squash's `Closes #N` is the
@@ -1044,7 +1097,8 @@ squash leaves no merge relation, which is why deleting the branch needs
 `git branch -D`, not `-d`).
 
 Evidence is three parts: **the `<base>` squash sha · `file:line` · what you checked and
-what came back.** When `<base>` is a declared line, say so in the comment: that code is
+what came back.** After a cannot-arrive merge, what came back includes B2a's trunk run at
+that sha — green by id, the `TRUNK RED:` issue, or "still running at `<ts>`". When `<base>` is a declared line, say so in the comment: that code is
 **not in trunk yet**, and an evidence comment that implies otherwise will be read as
 "this is in the next release".
 
@@ -1519,6 +1573,9 @@ so explicitly in your report; do not perform it.
   left dangling.
 - Every one of those issues has an evidence comment — **including the ones `Closes #N`
   auto-closed**, which attach nothing on their own.
+- **Branch CI could not arrive?** B2a read the trunk run at the squash sha before any
+  evidence went out. Each evidence comment cites that run as green, or links the
+  `TRUNK RED:` issue filed in this pass, or says the run was still in flight and names it.
 - `git log --oneline -5 <base>` shows the squash-merge; **every** claim released
   (unconditionally, finished or not) — unless B1c rejected, in which case every claim in
   that set is still, correctly, held.

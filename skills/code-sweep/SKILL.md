@@ -678,7 +678,7 @@ plus `orphan-shippable` whose dry run read `ok`:
 
 1. **Drop the phantoms.** Run `code-ship` B0's already-shipped grep for each candidate's
    issues. A candidate that already shipped under another sha leaves the merge queue: its
-   leftovers (evidence, claim, worktree) are `code-ship` B2b–B4, and nothing is graded.
+   leftovers (evidence, claim, worktree) are `code-ship` B2a–B4, and nothing is graded.
 2. **Ready now — land these first.** The branch's class at its head is `green` (or the
    `none` that *cannot arrive* on this repo — `CONVENTIONS.md`
    [§4, *Branch CI*](../../CONVENTIONS.md#branch-ci--the-candidates-own-run-read-as-a-class-314)),
