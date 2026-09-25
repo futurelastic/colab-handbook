@@ -33,6 +33,7 @@ const checklist = require('./lib/checklist');
 const groupLabels = require('./lib/group-labels');
 const shipguard = require('./lib/shipguard');
 const branchName = require('./lib/branch-name');
+const machineTrailer = require('./lib/machine-trailer');
 const migrationGrant = require('./lib/migration-grant');
 const decisionRecord = require('./lib/decision-record');
 const blockedBy = require('./lib/blocked-by');
@@ -8064,6 +8065,11 @@ Options:
   --message "<msg>"   subject for the squash commit (Closes/Refs trailer is always spliced in)
                       Every squash — composed or --message — also carries "Machine: <label>" (#350),
                       the same host label a branchPrefix: machine branch uses; never a hardware id.
+                      #367: NOT on a public repository (gh says PUBLIC, or project.yml room: public)
+                      — a commit message is permanent, so that would publish an internal hostname;
+                      the host tail of Colab-Adopted: is dropped there too. Visibility unreadable
+                      and no room: solo|team declared → omitted as well (fails closed, with a
+                      warning). --dry prints "Machine trailer: …" saying which way it will go.
   --refs <N[,M]>      reference these claimed issues (Refs #N) instead of closing them — for a
                       long-lived memory/tracking issue the branch touched but did not complete.
                       Comma-separated; each must be a claimed issue on the branch. An issue carrying
@@ -8100,6 +8106,9 @@ Options:
                       (#350) means a real run would open/reuse a PR and PAUSE (exit 3) — additive
                       keys \`coreReview\` ({ active, verdict, inertReason, codeownersPath, corePaths,
                       headSha, pr, approval }) and \`machineTrailer\` ("Machine: <label>") say why.
+                      \`machineTrailer\` is null whenever the trailer is omitted (#367), and
+                      \`machineTrailerDecision\` ({ include, reason, visibility, room, failClosed },
+                      null on evidence-close) says which way the squash will go and why.
 
                       \`checks\` has one entry per precondition — branch resolves, not an integration
                       line, autonomy granted, target CI alive+green, no new migrations, remainder
@@ -8831,13 +8840,22 @@ function cmdShipDryJson(opts) {
   let autonomyGatePayloadVal = null;
   // #350: null until computed — then the core-path review; `mode` becomes "pr-pending" when it pauses.
   let coreReviewPayloadVal = null;
+  // #367: `machineTrailer` stays the trailer line (or null) it always was; `machineTrailerDecision`
+  // says which way it went and why — omitted on a public repo, failing closed when unreadable.
+  const machineTrailerPayload = (squashing) => {
+    if (!squashing) return { machineTrailer: null, machineTrailerDecision: null };
+    const d = shipMachineTrailerDecision(repoAbs, doc);
+    return { machineTrailer: d.line, machineTrailerDecision: {
+      include: d.include, reason: d.reason, visibility: d.visibility, room: d.room, failClosed: d.failClosed } };
+  };
   const emit = (ok) => {
     print(JSON.stringify({
       ok, dry: true, repo: shortRepo(repoAbs), branch: sess.branch, worktree: sess.name || null,
       target, mode, issues: sess.issues, closeIssues, refsIssues, checklistFindings, checks,
       migrationGrant: migrationGrantPayload, ciGrant: ciGrantPayloadVal, ciCure: ciCurePayloadVal,
       baseCi: baseCiPayloadVal, dirtyOwners: dirtyOwnersPayloadVal, autonomyGate: autonomyGatePayloadVal,
-      coreReview: coreReviewPayloadVal, machineTrailer: mode === 'squash' || mode === 'pr-pending' ? shipMachineTrailer() : null,
+      coreReview: coreReviewPayloadVal,
+      ...machineTrailerPayload(mode === 'squash' || mode === 'pr-pending'),
     }, null, 2));
     return ok ? 0 : 1;
   };
@@ -9486,11 +9504,28 @@ function shipCoreReview(repoAbs, gh, target, branch) {
   return out;
 }
 
-/** #350: the `Machine:` trailer line for a squash, or null (with a warning) when HOST normalises to nothing. */
-function shipMachineTrailer() {
-  const label = branchName.machineLabel(HOST);
-  if (!label) { warn(`could not derive a machine label from host "${HOST}" — the squash carries no Machine: trailer`); return null; }
-  return `Machine: ${label}`;
+/**
+ * #350 + #367: may this repo's squash carry `Machine: <label>` (and the host tail of Colab-Adopted:)?
+ * Reads the destination — the forge's visibility, then project.yml `room:` — never the machine: a
+ * PUBLIC repo gets no hostname in any trailer, a private one is unchanged, and an unreadable one
+ * fails closed (tools/lib/machine-trailer.js). One `gh repo view` per repo per run, memoized, so
+ * --dry and the real run can never disagree about which way it went.
+ */
+const shipMachineTrailerCache = new Map();
+function shipMachineTrailerDecision(repoAbs, doc) {
+  if (shipMachineTrailerCache.has(repoAbs)) return shipMachineTrailerCache.get(repoAbs);
+  const d = machineTrailer.decide({
+    label: branchName.machineLabel(HOST),
+    visibility: git.ghRepoVisibility(repoAbs),
+    room: doc && doc.room,
+  });
+  shipMachineTrailerCache.set(repoAbs, d);
+  return d;
+}
+
+/** #367: the one-line human reading of a trailer decision, shared by --dry and the real run. */
+function machineTrailerSummary(d) {
+  return d.include ? `${d.line} — ${d.reason}` : `omitted — ${d.reason}`;
 }
 
 /** #350: the JSON shape of a core review, for `--dry --json`. */
@@ -9975,6 +10010,7 @@ function cmdShip(argv) {
     // say that plainly rather than printing a blank line that reads like a rendering glitch.
     if (!mode.evidenceClose) {
       print('  Squash subject: ' + subjectLine);
+      print('  Machine trailer: ' + machineTrailerSummary(shipMachineTrailerDecision(repoAbs, doc)));
       for (const c of dryClosingConflicts) {
         print(`  ✗ "${c.keyword} #${c.num}" would close #${c.num} on merge — kept open by --refs; reword the commit before shipping.`);
       }
@@ -10219,13 +10255,21 @@ function cmdShip(argv) {
     ciCureTrailerLine(ciCureForTrailer, sess.branch, target);
   // #324: an adopted remote-only branch records WHOSE work this was — there is no issue to comment
   // on (a zero-claim ship by definition), so the immutable squash is the one place it survives.
-  const adoptTrailer = adoptInfo
-    ? `Colab-Adopted: origin/${adoptInfo.branch} @ ${adoptInfo.remoteSha} on ${adoptInfo.host} (machine ${adoptInfo.machine || 'unknown'})`
-    : null;
-  // #350: which machine landed this — always written, so cross-machine conflicts are measurable from
-  // git alone (`git log --format='%(trailers:key=Machine,valueonly)'`). A label, never the hardware id.
-  const machineTrailer = shipMachineTrailer();
-  const ciTrailerLines = [ciTrailer, adoptTrailer, machineTrailer].filter(Boolean);
+  // #367: on a public repo the host tail is dropped — the branch and sha stay, they are the audit trail.
+  const trailerDecision = shipMachineTrailerDecision(repoAbs, doc);
+  const adoptTrailer = machineTrailer.adoptedTrailer(adoptInfo, trailerDecision);
+  // #350: which machine landed this, so cross-machine conflicts are measurable from git alone
+  // (`git log --format='%(trailers:key=Machine,valueonly)'`). A label, never the hardware id.
+  // #367: never on a public repo, and never when visibility is unreadable with no private room: —
+  // a commit message cannot be edited once pushed, so the hostname would be published for good.
+  // An omission on a public repo is the rule working — print it. Any other omission (fail-closed,
+  // or no derivable label) is a lost traceability line someone may want back — warn.
+  if (!trailerDecision.include) {
+    const publicOmit = trailerDecision.visibility === 'PUBLIC' || trailerDecision.room === 'public';
+    (publicOmit ? (m) => print(`  ${m}`) : warn)(`Machine trailer ${machineTrailerSummary(trailerDecision)}`);
+  }
+  const machineLine = trailerDecision.line;
+  const ciTrailerLines = [ciTrailer, adoptTrailer, machineLine].filter(Boolean);
   if (opts.message) {
     // --message overrides the subject/body, but Closes is spliced in as its own paragraph — never
     // concatenated. Appending it welded ` — Closes #N` onto whatever the message ended with, which

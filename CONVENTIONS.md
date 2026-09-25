@@ -1269,6 +1269,20 @@ measured from git alone:
 each unit. It records where a landing ran. It is not an identity, and no gate reads it
 ([§2, *Core paths*](#core-paths--a-pr-and-a-non-author-approval-before-landing-350)).
 
+**Not on a public repository (#367).** The label is a hostname, and a commit message cannot be
+edited once it is pushed. On a public repository the trailer would publish an internal hostname
+permanently, once per ship. So `colab ship` reads the destination first. If the forge reports
+the repository as public, or `project.yml` declares `room: public`, the squash carries no
+`Machine:` trailer, and the `Colab-Adopted:` trailer (#324) keeps its branch and sha but drops
+its `on <host> (machine <id>)` tail. A private repository is unchanged. When the visibility
+cannot be read (no forge CLI, a remote that is not on the forge, offline) and `room:` does not
+declare `solo` or `team`, ship **omits** the trailer and warns. It fails closed because a missing
+line costs one traceability record and a published hostname cannot be taken back. Declaring
+`room:` restores it. `colab ship --dry` prints `Machine trailer: …` with the decision, and
+`--dry --json` reports it as `machineTrailerDecision`. The cross-machine measurement above
+therefore covers private repositories only. A `branchPrefix: machine` branch name still carries
+the label too, and that stays a deliberate choice for the repo that declares it.
+
 **A branch may carry a group of related issues** — suffix them all:
 `fix/import-fixes-115-114-113`. Claim every issue in the group before starting, and
 **release every claim in the group together at wrap** — unconditionally, including
