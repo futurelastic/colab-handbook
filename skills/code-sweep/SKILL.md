@@ -1,6 +1,6 @@
 ---
 name: code-sweep
-description: "Clear out everything finished in ONE repo: find every worktree whose work has landed, every issue whose code shipped but is still open, and every claim outliving its session — then put each through code-wrap and code-ship in sequence, one at a time. Run it at end of day, or ping it whenever a session goes idle — cheap to re-run only when §0 is honoured first, a convention the executing agent follows and not a gate anything enforces (its fingerprint stays sensitive to branch tips, so the cheap path is rarer here than in code-triage — see §0). Sorts candidates into wrap / teardown-only / claim-only / place-claim / unrecorded / blocked / unlinked / spent-remote / orphan-shippable, because most do not need a full wrap+ship. Orphan-shippable is wrapped work with no worktree — a pushed branch still carrying an open, claimed issue — which is shipped when `colab ship --dry --json` reads READY and reported with its failing precondition when it does not, never passed over. Spent remote branches — refs left on origin by ships that kept the branch, whose issues are all closed — are listed for a human to delete, never deleted by the sweep. A candidate that fails mid-run is deferred and the run carries on to the next one; only a repo-wide blocker (trunk CI dead or red) or a destructive/unclassifiable failure stops the sweep. Before writing its cache record and reporting, it re-derives the candidate set once more, so a branch that finished its wrap while a long grade was running is processed or named, never left waiting on a notification that does not exist. Can be scoped to a set of issues or one session/worktree instead of the whole repo. Trigger phrases: 'sweep the repo', 'wrap everything finished', 'clean up the worktrees', 'close out the session work', 'tidy up finished work', 'wrap all the done branches', 'sweep the issues #95 #96', 'sweep the session <name>', 'ship these'; and — when this session's last act was a sweep — the re-ping forms 'again', 'anything new?', 'check again', 'anything to wrap yet?', or a bare 'go'. Composes code-wrap then code-ship per candidate; never batches merges."
+description: "Clear out everything finished in ONE repo: find every worktree whose work has landed, every issue whose code shipped but is still open, and every claim outliving its session — then put each through code-wrap and code-ship in sequence, one at a time. Run it at end of day, or ping it whenever a session goes idle — cheap to re-run only when §0 is honoured first, a convention the executing agent follows and not a gate anything enforces (its fingerprint stays sensitive to branch tips, so the cheap path is rarer here than in code-triage — see §0). Sorts candidates into wrap / teardown-only / claim-only / place-claim / unrecorded / blocked / unlinked / spent-remote / orphan-shippable, because most do not need a full wrap+ship. Orphan-shippable is wrapped work with no worktree — a pushed branch still carrying an open, claimed issue — which is shipped when `colab ship --dry --json` reads READY and reported with its failing precondition when it does not, never passed over. Spent remote branches — refs left on origin by ships that kept the branch, whose issues are all closed — are listed for a human to delete, never deleted by the sweep. A candidate that fails mid-run is deferred and the run carries on to the next one; only a repo-wide blocker (trunk CI dead or red) or a destructive/unclassifiable failure stops the sweep. Before writing its cache record and reporting, it re-derives the candidate set once more, so a branch that finished its wrap while a long grade was running is processed or named, never left waiting on a notification that does not exist. Can be scoped to a set of issues or one session/worktree instead of the whole repo. Trigger phrases: 'sweep the repo', 'wrap everything finished', 'clean up the worktrees', 'close out the session work', 'tidy up finished work', 'wrap all the done branches', 'sweep the issues #95 #96', 'sweep the session <name>', 'ship these'; and — when this session's last act was a sweep — the re-ping forms 'again', 'anything new?', 'check again', 'anything to wrap yet?', or a bare 'go'. Orders the merge pass by readiness — candidates green at their head and merge-clean against trunk land first, a CI wait is capped at 15 minutes per candidate and then deferred with its run id so the pass ends and the trunk lock releases, same-file siblings land in a mechanical order (earlier wrap, tie → smaller diff) instead of waiting on a human, and a candidate whose issues already shipped under another sha is dropped before grading. Composes code-wrap then code-ship per candidate; never batches merges."
 ---
 
 # code-sweep — clear out everything finished, one at a time
@@ -67,6 +67,14 @@ and a shared file would make one skill's conclusion look like the other's.
 
 **Fingerprint unchanged AND no interrupted sweep recorded** ⇒ report `nothing has changed
 since <ts>`, name the candidates that were left standing last time and why, and stop.
+
+**One exception, and it costs one call per entry: a `ci-wait` deferral (§4.0, #370).** A
+CI run finishing moves no tip, so the fingerprint cannot see it — and a candidate deferred
+because its run was still in flight would otherwise never be re-measured by a ping. For each
+`conclusion.deferred` entry whose reason is `ci-wait`, read its run
+(`gh run view <databaseId> --json status,conclusion`). Any run now `completed` ⇒ print
+`changed:deferred-ci` and take the full path; all still in flight ⇒ the short-circuit
+stands, and the report names them as still waiting.
 
 - **`colab landed --all` is part of the deterministic 90%,** and its inputs are the trunk
   sha and the branch tips. Cache the classification against both; a new trunk sha discards
@@ -139,7 +147,7 @@ code-triage's own `/2` record plus the bounded `interrupted` block this section 
   },
   "lastRun": { "decision": "full", "moved": ["branchTips"], "calls": 27 },
   "interrupted": { "completed": ["…"], "stoppedOn": "…", "stopReason": "…" },
-  "conclusion": { "wrapped": ["…"], "deferred": [{ "candidate": "…", "reason": "…" }], "blocked": ["…"], "ripened": [{ "candidate": "…", "processed": false, "reason": "…" }], "…": "…" }
+  "conclusion": { "wrapped": ["…"], "deferred": [{ "candidate": "…", "reason": "…", "run": "<databaseId — ci-wait only>" }], "blocked": ["…"], "ripened": [{ "candidate": "…", "processed": false, "reason": "…" }], "…": "…" }
 }
 ```
 
@@ -657,8 +665,63 @@ process, not unfinished work.
 
 ## 4. Run the wraps — one at a time, re-checking between
 
-For each **wrap** candidate, and each **orphan-shippable** candidate whose dry run read `ok`
-(§3), in order:
+### 4.0 Order the pass by readiness — ready work first (#370)
+
+**One at a time is not first-come-first-served.** Measured across 179 ship-pass cycles in
+13 repositories over 72 h: finished work usually waited far longer than the 5–45 min the
+ship itself took, and the causes were ordering, not review. A coordinator stayed in one turn
+for 1 h 40 min hand-polling CI for three branches while two others were green and
+merge-clean; four same-file pairs sat 35–143 min each waiting for a human to pick an order
+nobody picked; 3 of 8 "candidates" in one repository were already on trunk. So before the
+first merge, and again after each one (trunk moved), sort the merge candidates — `wrap`,
+plus `orphan-shippable` whose dry run read `ok`:
+
+1. **Drop the phantoms.** Run `code-ship` B0's already-shipped grep for each candidate's
+   issues. A candidate that already shipped under another sha leaves the merge queue: its
+   leftovers (evidence, claim, worktree) are `code-ship` B2b–B4, and nothing is graded.
+2. **Ready now — land these first.** The branch's class at its head is `green` (or the
+   `none` that *cannot arrive* on this repo — `CONVENTIONS.md`
+   [§4, *Branch CI*](../../CONVENTIONS.md#branch-ci--the-candidates-own-run-read-as-a-class-314)),
+   **and** it merges clean against the current trunk:
+
+   ```sh
+   git merge-tree --write-tree origin/<trunk> <branch> >/dev/null && echo clean  # exit 1 = conflicts
+   ```
+
+   Clean here is a *sort key*, not a verdict — `code-ship` B0 still syncs and B1a still
+   reads the new head. Its only job is to keep a candidate with a known wall from standing
+   in front of one without.
+3. **Waiting on CI** — a run queued or in flight at the head. These go after every ready
+   candidate, and each gets `code-ship` B1a's bounded wait (15 min), then a defer recorded
+   as `ci-wait` with the run's id (§4, *A failure defers*; §0 re-measures it). Never poll
+   one while a ready candidate is still unlanded.
+4. **Everything else** — a conflict against trunk, `red:*` — goes through `code-ship` as
+   usual and meets its own candidate-scoped outcome (hand-back, re-run, defer). It is
+   last because it is the likeliest to stop, not because it matters less.
+
+**Same-file siblings: the order is mechanical, never a human gate.** Two ready candidates
+whose diffs touch a common path (`git diff --name-only origin/<trunk>...<branch>`,
+intersected) must land in sequence, and the sequence is:
+
+1. **Earlier wrap first** — the older head commit (`git log -1 --format=%cI <branch>`): its
+   wrap pushed that head, and it has waited longest.
+2. **Tie → smaller diff** — fewer changed lines against the merge base (`git diff --shortstat
+   origin/<trunk>...<branch>`, insertions + deletions): the cheaper rebase goes second.
+3. **Tie again → ref name**, so a re-run prints the same order.
+
+A `group:` label covering both is not this rule's case — `code-triage`'s carrier order
+already names the sequence for a group, and wins. Record the order once on **both** issues
+(one comment each: the two refs, the shared path, the rule that decided it), land the first,
+then take the second through `code-ship` B0 against the new trunk. A conflict it meets there
+is B0's ordinary conflict path. The pairs measured above cleared the moment their sibling
+landed, which is the whole case for not asking.
+
+**The pass must end.** A pass that waits on a run it could have deferred keeps the trunk lock
+and blocks every fresh pass; a pass that defers and ends lets the next ping pick the run up.
+When the ready bucket is empty and every CI wait has either resolved or been deferred, go to
+§5 — do not re-enter a wait.
+
+For each candidate, in the order 4.0 set:
 
 1. **Re-check trunk CI.** Ask by commit, not by recency (`CONVENTIONS.md` [§4](../../CONVENTIONS.md#4-branches-and-commits), #92):
    does a completed, successful run exist for `<trunk>`'s current head sha? (`gh run
@@ -679,7 +742,9 @@ For each **wrap** candidate, and each **orphan-shippable** candidate whose dry r
    straight to code-ship with `--branch <br>`, and code-ship's §0 is where a wrap that
    did not in fact happen gets caught. Re-run the dry run first if trunk moved since
    §3 sorted it.
-3. **Then** move to the next. Trunk has moved; the next B0 must see that.
+3. **Then** move to the next — and re-sort (§4.0) first. Trunk has moved: the next B0
+   must see that, a candidate that was merge-clean may not be any more, and one that was
+   waiting on CI may have gone green in the meantime.
 
 When the list runs out, the run is not over: [§5.1](#51-re-derive-once-more-before-you-stop-329)
 re-derives it once more. The list you started with is not the list the repo has now.
@@ -691,8 +756,9 @@ classes, and they divide on **scope**, not on severity — which of the three a 
 falls into is what decides whether the run continues:
 
 - **Candidate-scoped** — a conflict needing judgment, this branch's gate failing for
-  reasons unrelated to trunk, a rejected grade on one issue set. It blocks *that*
-  candidate and says nothing about the next one. **Defer it, record why, continue.**
+  reasons unrelated to trunk, a rejected grade on one issue set, a branch run still in
+  flight when `code-ship` B1a's 15-minute cap expired (`ci-wait`, §4.0 — record its run
+  id). It blocks *that* candidate and says nothing about the next one. **Defer it, record why, continue.**
   [`code-ship`](../code-ship/SKILL.md) already scopes its own refusals exactly this way
   — *"a rejected grade — either class — ends this skill's run **for that issue set**"* —
   and it was only this section that escalated a per-candidate refusal into a run-level
