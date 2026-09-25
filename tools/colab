@@ -60,6 +60,7 @@ const workflowTriggers = require('./lib/workflow-triggers');
 const releaseCut = require('./lib/release-cut');
 const releaseFinalize = require('./lib/release-finalize');
 const shippedBranch = require('./lib/shipped-branch');
+const shipRoles = require('./lib/ship-roles'); // #372
 const {
   HOST, UserError, normIssueNum, issueTag, claimKey, today, nowISO, hoursSince, humanAge,
   parseArgs, table, shortRepo,
@@ -8233,12 +8234,18 @@ function resolveShipSession(st, repoAbs, opts) {
     const withId = claims.find((c) => c.session || c.sessionName);
     if (withId) { session = withId.session || ''; sessionName = withId.sessionName || ''; }
   }
+  // #372: the two ROLES, captured before the fallback below blends them. `holder` is whoever holds
+  // the worktree/claim — the implementer; `shipper` is whoever is running this command. The ship
+  // and evidence-close comments name both (tools/lib/ship-roles.js): printing the blended `session`
+  // alone read as "the implementer shipped its own work" on every correct coordinator ship.
+  const holder = { session, sessionName };
+  const shipper = { session: resolveSession(opts), sessionName: resolveSessionName(opts) };
   // #319: …and then to the ship's OWN identity. Without it a claimless ship presented a blank
   // session downstream, so B1's place classification could not recognise a hold this same session
-  // took (#317) and the evidence/ship comments carried no session at all.
-  if (!session) session = resolveSession(opts);
-  if (!sessionName) sessionName = resolveSessionName(opts);
-  return { name, branch, wtPath, issues, session, sessionName, claims, unadopted: unadopted.sort((a, b) => a - b) };
+  // took (#317).
+  if (!session) session = shipper.session;
+  if (!sessionName) sessionName = shipper.sessionName;
+  return { name, branch, wtPath, issues, session, sessionName, holder, shipper, claims, unadopted: unadopted.sort((a, b) => a - b) };
 }
 
 /**
@@ -9231,7 +9238,7 @@ function shipEvidenceClose({ repoAbs, st, sess, target, trunk, gh, closeIssues, 
       skipped.push({ num, why: 'no evidence comment — only colab\'s own markers' });
       continue;
     }
-    const shipSess = sessionCommentSuffix(sess.session, sess.sessionName);
+    const shipSess = shipRoles.shipRolesSuffix(sess.holder, sess.shipper); // #372: both roles, never one
     const body = sess.direct
       ? `✅ Closed by colab ship — **evidence-close (trunk-direct, #302)**: this unit was committed straight to ` +
         `\`${target}\` (now @ ${head}), so there is no branch, no merge commit and no \`Closes #${num}\` to carry.\n\n` +
@@ -9358,7 +9365,11 @@ function cmdShipDirect(opts) {
   const othersCount = Object.values(st.claims)
     .filter((c) => c.repo === repoAbs && !c.worktree && !c.branch && c.session !== session).length;
   const issues = [...new Set(claims.map((c) => normIssueNum(c.issue)))].sort((a, b) => a - b);
-  const sess = { name: null, branch: null, wtPath: null, issues, session, sessionName, claims, unadopted: [], direct: true };
+  // #372: a trunk-direct unit's claims are matched BY the shipper's identity, so holder and shipper
+  // are one session by construction — and the comment says so plainly.
+  const holder = { session, sessionName: (claims.find((c) => c.sessionName) || {}).sessionName || sessionName };
+  const sess = { name: null, branch: null, wtPath: null, issues, session, sessionName,
+    holder, shipper: { session, sessionName }, claims, unadopted: [], direct: true };
   const label = sessionName || session;
 
   for (const c of onBranch) {
@@ -10658,7 +10669,7 @@ function cmdShip(argv) {
       if (isRef && info && info.state === 'CLOSED') warn(`#${num} was meant to stay open (Refs, tracking issue) but is CLOSED — a commit body likely carries "Closes #${num}"; reopen it by hand`);
       for (const gl of labels.groupLabelNames(info && info.labels)) groupLabelsCarried.add(gl);
       if (!isRef && info && info.state === 'CLOSED') closedByShip.push(num); // for (i2) below, #371
-      const shipSess = sessionCommentSuffix(sess.session, sess.sessionName); // markdown link when both present
+      const shipSess = shipRoles.shipRolesSuffix(sess.holder, sess.shipper); // #372: implementer AND shipper
       // Name the branch it actually landed on. An issue whose code is on a long-lived line is NOT
       // in trunk, and a comment saying otherwise would be read as "this is in the next release".
       const onLine = target === trunk ? '' : ` (a declared integration line — NOT yet in ${trunk})`;
