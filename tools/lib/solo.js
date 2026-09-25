@@ -30,13 +30,13 @@ const writesAuthority = require('./writes-authority.js');
  * something here" fact solo flow's entry gate exists to catch, and it would be invisible to a check
  * that only looked at HEAD.
  */
-function unpushedBranches(repoAbs, trunk) {
+function unpushedBranches(repoAbs, trunk, remote = git.remoteInfo(repoAbs).name || 'origin') {
   const r = git.git(['for-each-ref', '--format=%(refname:short)', 'refs/heads/'], repoAbs);
   if (!r.ok) return [];
   const out = [];
   for (const b of r.stdout.split('\n').map((s) => s.trim()).filter(Boolean)) {
     const up = git.git(['rev-parse', '--abbrev-ref', '--symbolic-full-name', `${b}@{u}`], repoAbs);
-    const remoteRef = up.ok && up.stdout ? up.stdout : `origin/${trunk}`;
+    const remoteRef = up.ok && up.stdout ? up.stdout : `${remote}/${trunk}`;
     if (!git.git(['rev-parse', '--verify', '--quiet', remoteRef], repoAbs).ok) {
       out.push({ branch: b, reason: `no upstream and no ${remoteRef} — never pushed` });
       continue;
@@ -105,7 +105,7 @@ function entryProblems(st, repoAbs, trunk) {
  * to `origin/<trunk>`. Deliberately narrower than the entry gate — `--done` is closing THIS
  * checkout's work, not re-auditing every local branch in the repo.
  */
-function exitProblems(repoAbs, trunk) {
+function exitProblems(repoAbs, trunk, remote = git.remoteInfo(repoAbs).name || 'origin') {
   const problems = [];
 
   const dirty = fullyDirty(repoAbs);
@@ -113,7 +113,7 @@ function exitProblems(repoAbs, trunk) {
 
   const cur = git.git(['branch', '--show-current'], repoAbs);
   const branchName = cur.ok && cur.stdout ? cur.stdout : trunk;
-  const upstreamRef = `origin/${trunk}`;
+  const upstreamRef = `${remote}/${trunk}`;
   if (git.git(['rev-parse', '--verify', '--quiet', upstreamRef], repoAbs).ok) {
     const ahead = git.git(['rev-list', '--count', `${upstreamRef}..${branchName}`], repoAbs);
     const n = ahead.ok ? (parseInt(ahead.stdout, 10) || 0) : 0;

@@ -65,21 +65,129 @@ function mainRepoRoot(cwd) {
   return repoRoot(cwd);
 }
 
-/** origin remote URL, or null. */
-function originUrl(repo) {
-  const r = git(['remote', 'get-url', 'origin'], repo);
+// ---------------------------------------------------------------------------
+// Which remote (#301) — the ONE place colab decides it. Every fetch, push, ls-remote,
+// remote-tracking ref and remote-naming message routes through here instead of the literal
+// `origin`. The first matching rule wins:
+//   1. `git config colab.remote <name>`  — the explicit, per-clone override. Wins even over
+//      `origin`. Naming a remote that does not exist is an error, never a fall-through to a guess.
+//   2. a remote named `origin`            — the parity rule: every repo that worked before #301
+//      takes byte-for-byte the same path it took then.
+//   3. `remote.pushDefault`, if it names an existing remote.
+//   4. exactly one remote                 — that one.
+//   5. no remote at all                   — null (a local-only repo; callers keep their
+//      "no remote" behavior).
+//   6. anything else is AMBIGUOUS         — refused with the remotes named and the fix. colab
+//      never picks one of several remotes by itself.
+// `origin` ranks above `pushDefault` on purpose: pushDefault is a push-only knob used in fork
+// (triangular) setups, and letting it outrank `origin` would silently move where trunk is fetched
+// from and where claims are pushed in a repo that works today. `colab.remote` is the one
+// deliberate way off `origin`. It lives in git config, not project.yml: the remote name belongs to
+// one clone, not to the repo.
+// ---------------------------------------------------------------------------
+
+const REMOTE_OVERRIDE_KEY = 'colab.remote';
+const remoteCache = new Map();
+
+/** Test hook: forget every cached resolution (a test that adds/renames remotes after resolving). */
+function _resetRemoteCache() { remoteCache.clear(); }
+
+function listRemotes(repo) {
+  const r = git(['remote'], repo);
+  return r.ok && r.stdout ? r.stdout.split('\n').map((x) => x.trim()).filter(Boolean) : [];
+}
+
+function configValue(repo, key) {
+  const r = git(['config', '--get', key], repo);
   return r.ok && r.stdout ? r.stdout : null;
 }
 
-/** Trunk branch name from origin/HEAD, best-effort. */
-function detectTrunk(repo) {
-  let r = git(['symbolic-ref', '--short', 'refs/remotes/origin/HEAD'], repo);
-  if (r.ok && r.stdout) return r.stdout.replace(/^origin\//, '');
-  r = git(['remote', 'show', 'origin'], repo);
+/**
+ * How this repo's remote resolves — `{ name, source, remotes }`. NEVER throws (this module's
+ * contract: an environment without something is an answer, not an exception); `name` is null for
+ * `none`, `ambiguous` and `config-missing`. `source` ∈ config | origin | pushDefault | single |
+ * none | ambiguous | config-missing. Cached per resolved repo path for the life of the process —
+ * a linked worktree and its main checkout share config, so either path answers the same.
+ */
+function remoteInfo(repo) {
+  const key = path.resolve(repo || process.cwd());
+  if (remoteCache.has(key)) return remoteCache.get(key);
+  const remotes = listRemotes(repo);
+  const has = (n) => remotes.includes(n);
+  let info;
+  const override = configValue(repo, REMOTE_OVERRIDE_KEY);
+  const pushDefault = configValue(repo, 'remote.pushDefault');
+  if (override) info = has(override) ? { name: override, source: 'config' } : { name: null, source: 'config-missing', override };
+  else if (has('origin')) info = { name: 'origin', source: 'origin' };
+  else if (pushDefault && has(pushDefault)) info = { name: pushDefault, source: 'pushDefault' };
+  else if (remotes.length === 1) info = { name: remotes[0], source: 'single' };
+  else if (remotes.length === 0) info = { name: null, source: 'none' };
+  else info = { name: null, source: 'ambiguous' };
+  info.remotes = remotes;
+  remoteCache.set(key, info);
+  return info;
+}
+
+/** The refusal text for an unresolvable remote, or null when it resolves (or there is none). */
+function remoteProblem(info) {
+  if (info.source === 'ambiguous') {
+    return `this repo has ${info.remotes.length} git remotes (${info.remotes.join(', ')}) and none is named origin — ` +
+      `colab will not guess which one to fetch from and push to. Pick one: git config ${REMOTE_OVERRIDE_KEY} <name>`;
+  }
+  if (info.source === 'config-missing') {
+    return `git config ${REMOTE_OVERRIDE_KEY} names "${info.override}", but this repo has no such remote ` +
+      `(remotes: ${info.remotes.length ? info.remotes.join(', ') : 'none'}). Fix it: git config ${REMOTE_OVERRIDE_KEY} <name>, ` +
+      `or git config --unset ${REMOTE_OVERRIDE_KEY}`;
+  }
+  return null;
+}
+
+/**
+ * The remote colab uses in this repo, or null when there is none. THROWS a UserError (loudly,
+ * naming the remotes and the fix) when the remotes are ambiguous or the override is broken —
+ * the one case this module throws for, because silently guessing a remote is worse than stopping.
+ */
+function remoteName(repo) {
+  const info = remoteInfo(repo);
+  const problem = remoteProblem(info);
+  if (problem) {
+    const { UserError } = require('./util'); // lazy: util must stay free of a git.js dependency
+    throw new UserError(problem);
+  }
+  return info.name;
+}
+
+/**
+ * For call sites that used the literal `'origin'` unconditionally: the resolved remote, or the
+ * literal `'origin'` when the repo has none — so a local-only repo fails at git exactly as it did
+ * before #301 (same command, same error), instead of in some new way. Throws like remoteName.
+ */
+function remoteFor(repo) {
+  return remoteName(repo) || 'origin';
+}
+
+/** URL of the resolved remote, or null (no remote, or unresolvable — never throws). */
+function remoteUrl(repo) {
+  const { name } = remoteInfo(repo);
+  if (!name) return null;
+  const r = git(['remote', 'get-url', name], repo);
+  return r.ok && r.stdout ? r.stdout : null;
+}
+
+/** Pre-#301 name, kept as an alias: the resolved remote's URL (it was `origin`'s, which is still what an origin repo gets). */
+function originUrl(repo) {
+  return remoteUrl(repo);
+}
+
+/** Trunk branch name from <remote>/HEAD, best-effort. Never throws: an unresolvable remote reads as `origin`, as before #301. */
+function detectTrunk(repo, remote = remoteInfo(repo).name || 'origin') {
+  let r = git(['symbolic-ref', '--short', `refs/remotes/${remote}/HEAD`], repo);
+  if (r.ok && r.stdout) return r.stdout.startsWith(`${remote}/`) ? r.stdout.slice(remote.length + 1) : r.stdout;
+  r = git(['remote', 'show', remote], repo);
   if (r.ok) {
     const m = r.stdout.match(/HEAD branch:\s*(\S+)/);
     if (m) {
-      git(['remote', 'set-head', 'origin', m[1]], repo); // cache it
+      git(['remote', 'set-head', remote, m[1]], repo); // cache it
       return m[1];
     }
   }
@@ -94,9 +202,9 @@ function detectTrunk(repo) {
  * knows this name", which is the only claim strong enough to refuse a ship over. A falsy branch
  * (null = "no branch") is false without asking git.
  */
-function branchExists(repo, branch) {
+function branchExists(repo, branch, remote = remoteInfo(repo).name || 'origin') {
   if (!branch || typeof branch !== 'string') return false;
-  for (const ref of [`refs/heads/${branch}`, `refs/remotes/origin/${branch}`]) {
+  for (const ref of [`refs/heads/${branch}`, `refs/remotes/${remote}/${branch}`]) {
     if (git(['rev-parse', '--verify', '--quiet', ref], repo).ok) return true;
   }
   return false;
@@ -124,21 +232,21 @@ function branchExists(repo, branch) {
  * and a ref created by `git fetch origin <b>:<b>` (reflog `fetch …: storing head`, deliberately not
  * matched — its wording carries the refspec, not a "created from" source).
  */
-function branchRefs(repo, branch) {
+function branchRefs(repo, branch, remote = remoteInfo(repo).name || 'origin') {
   if (!branch || typeof branch !== 'string') return { localSha: null, remoteSha: null, localFromRemote: false };
   const at = (ref) => { const r = git(['rev-parse', '--verify', '--quiet', ref], repo); return r.ok && r.stdout ? r.stdout : null; };
   const localSha = at(`refs/heads/${branch}`);
-  const remoteSha = at(`refs/remotes/origin/${branch}`);
-  return { localSha, remoteSha, localFromRemote: localSha ? createdFromRemote(repo, branch) : false };
+  const remoteSha = at(`refs/remotes/${remote}/${branch}`);
+  return { localSha, remoteSha, localFromRemote: localSha ? createdFromRemote(repo, branch, remote) : false };
 }
 
-/** #343: is `refs/heads/<branch>`'s oldest reflog entry "Created from origin/<branch>"? See branchRefs. */
-function createdFromRemote(repo, branch) {
+/** #343: is `refs/heads/<branch>`'s oldest reflog entry "Created from <remote>/<branch>"? See branchRefs. */
+function createdFromRemote(repo, branch, remote = remoteInfo(repo).name || 'origin') {
   const r = git(['reflog', 'show', '--format=%gs', `refs/heads/${branch}`, '--'], repo);
   if (!r.ok || !r.stdout) return false;
   const lines = r.stdout.split('\n').filter(Boolean);
   const oldest = lines[lines.length - 1] || '';
-  return oldest === `branch: Created from refs/remotes/origin/${branch}` || oldest === `branch: Created from origin/${branch}`;
+  return oldest === `branch: Created from refs/remotes/${remote}/${branch}` || oldest === `branch: Created from ${remote}/${branch}`;
 }
 
 /**
@@ -155,26 +263,26 @@ function createdFromRemote(repo, branch) {
  * Local wins when both exist (it is the one a `git worktree add -b` would actually collide
  * with). Returns `{ ref, sha }` (sha short, 7 chars) or `null` when neither resolves.
  */
-function existingBranchRef(repo, branch, remoteName = claimRemote(repo) || 'origin') {
+function existingBranchRef(repo, branch, remote = remoteFor(repo)) {
   if (!branch || typeof branch !== 'string') return null;
   const local = git(['rev-parse', '--verify', '--quiet', `refs/heads/${branch}`], repo);
   if (local.ok && local.stdout) return { ref: `refs/heads/${branch}`, sha: local.stdout.slice(0, 7) };
-  const remote = git(['ls-remote', '--exit-code', remoteName, `refs/heads/${branch}`], repo);
-  if (remote.ok && remote.stdout) {
-    const sha = remote.stdout.split(/\s+/)[0] || '';
-    return { ref: `refs/remotes/${remoteName}/${branch}`, sha: sha.slice(0, 7) };
+  const r = git(['ls-remote', '--exit-code', remote, `refs/heads/${branch}`], repo);
+  if (r.ok && r.stdout) {
+    const sha = r.stdout.split(/\s+/)[0] || '';
+    return { ref: `refs/remotes/${remote}/${branch}`, sha: sha.slice(0, 7) };
   }
   return null;
 }
 
 /**
- * The git remote a CLAIM is recorded on (#325) — the one place that answers "which remote", so #301
- * (hardcoded `origin` everywhere) swaps a single function instead of hunting the claim path for
- * literals. Today: `origin` when it resolves, else `null` — a repo with no remote at all, where the
- * local record is the whole truth because nothing else could ever share the branch.
+ * The git remote a CLAIM is recorded on (#325). Since #301 this is `remoteName` — the same resolver
+ * every other remote-touching command uses — so claims live on the remote everything else fetches
+ * from. `null` = a repo with no remote at all, where the local record is the whole truth because
+ * nothing else could ever share the branch. Throws on ambiguous remotes, like remoteName.
  */
 function claimRemote(repo) {
-  return originUrl(repo) ? 'origin' : null;
+  return remoteName(repo);
 }
 
 /**
@@ -644,7 +752,7 @@ function ghLabelEditDescription(repo, name, description) {
  *   - the head sha has no run in the recent window     → {status:'none', conclusion:null, sha}
  *     (still not green — this is also how a billing-style fail-to-start reads: no run was ever
  *     created for the commit that would need one)
- *   - the branch does not exist on origin, or `git`/`gh` failed → null
+ *   - the branch does not exist on the remote (#301: the resolved one, `origin` in an origin repo), or `git`/`gh` failed → null
  * `runCount` (#176) is additive on every non-null branch — the number of workflow rows found at
  * that sha (0 for the 'none' case) — so a caller can report a verdict that names its own sample
  * size instead of a bare singular that hides how many workflows were actually consulted.
@@ -671,11 +779,11 @@ function ghLabelEditDescription(repo, name, description) {
  * when tools/lib/ci-verdict.js finds the run WEDGED rather than merely slow. Nothing here waits or
  * polls — it reports what is true at read time and lets the caller decide.
  */
-function ghRunForSha(repo, branch, limit = 10) {
-  const head = run('git', ['ls-remote', 'origin', `refs/heads/${branch}`], { cwd: repo });
+function ghRunForSha(repo, branch, limit = 10, remote = remoteInfo(repo).name || 'origin') {
+  const head = run('git', ['ls-remote', remote, `refs/heads/${branch}`], { cwd: repo });
   if (!head.ok) return null;
   const sha = (head.stdout.split('\n')[0] || '').split('\t')[0].trim();
-  if (!sha) return null; // branch does not exist on origin
+  if (!sha) return null; // branch does not exist on the remote
   return ghRunForCommit(repo, branch, sha, limit);
 }
 
@@ -872,7 +980,8 @@ function ghAssignedIssues(repo) {
 }
 
 module.exports = {
-  run, git, repoRoot, mainRepoRoot, originUrl, detectTrunk, branchExists, branchRefs, existingBranchRef,
+  run, git, repoRoot, mainRepoRoot, originUrl, remoteInfo, remoteName, remoteFor, remoteUrl, remoteProblem, _resetRemoteCache,
+  detectTrunk, branchExists, branchRefs, existingBranchRef,
   claimRemote, remoteHeads,
   worktreeList, worktreeListDetailed, resolveWorktreePathForBranch, gitFailureLine,
   dirtyTracked, dirtyUntracked, dirtyAny,

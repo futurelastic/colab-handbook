@@ -127,6 +127,29 @@ branch on it.
   whole line in with it inside a single squash commit. Shipping a declared line itself into
   trunk is refused in every configuration, `autonomy: auto-trunk` included.
 
+### Which remote (#301)
+
+colab never assumes the remote is called `origin`. One resolver (`lib/git.js` `remoteInfo`)
+picks it per repo, and every fetch, push, `ls-remote` and remote-tracking ref goes through it.
+The first rule that matches wins:
+
+1. `git config colab.remote <name>`, the explicit per-clone override. It wins even over
+   `origin`. If it names a remote that does not exist, colab refuses.
+2. A remote named `origin`. Every repo that has one behaves exactly as before.
+3. `remote.pushDefault`, if it names an existing remote.
+4. The only remote, when there is exactly one.
+5. No remote at all: local-only. Commands keep their existing "no remote" behavior.
+
+Anything else (several remotes, none of them `origin`, no `pushDefault`) is refused. The
+message names the remotes and the fix, `git config colab.remote <name>`; colab never guesses.
+`pushDefault` ranks below `origin` on purpose. It is a push-only setting used in fork setups,
+and ranking it higher would silently move where trunk is fetched from in a repo that works
+today. Fleet-wide commands (`doctor --sync`, `release status`) skip an ambiguous repo with
+that message instead of aborting.
+
+Elsewhere in this document, `origin` means "the repo's resolved remote". `gh` picks its
+GitHub repo by its own rules (`gh repo set-default`), independently of this setting.
+
 ## Claim lifecycle (enforced)
 
 Claims are **enforced, not advisory**. `colab claim` and `colab worktree new --issues` go through

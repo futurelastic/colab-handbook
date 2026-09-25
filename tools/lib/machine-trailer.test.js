@@ -52,3 +52,8 @@ test('adoptedTrailer keeps branch + sha always, host tail only where Machine: ma
     'Colab-Adopted: origin/chore/x @ abc123 on box-a.lan (machine M1)');
   assert.strictEqual(adoptedTrailer(null, null), null);
 });
+
+test('#301: the Colab-Adopted: trailer names the remote the branch was adopted from; absent, origin as before', () => {
+  assert.strictEqual(adoptedTrailer({ branch: 'chore/x', remoteSha: 'abc123', remote: 'upstream' }, null), 'Colab-Adopted: upstream/chore/x @ abc123');
+  assert.strictEqual(adoptedTrailer({ branch: 'chore/x', remoteSha: 'abc123' }, null), 'Colab-Adopted: origin/chore/x @ abc123');
+});

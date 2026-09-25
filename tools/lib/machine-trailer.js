@@ -63,7 +63,7 @@ function decide({ label, visibility, room }) {
  */
 function adoptedTrailer(adopt, decision) {
   if (!adopt) return null;
-  const head = `Colab-Adopted: origin/${adopt.branch} @ ${adopt.remoteSha}`;
+  const head = `Colab-Adopted: ${adopt.remote || 'origin'}/${adopt.branch} @ ${adopt.remoteSha}`;
   if (!decision || !decision.include) return head;
   return `${head} on ${adopt.host} (machine ${adopt.machine || 'unknown'})`;
 }
