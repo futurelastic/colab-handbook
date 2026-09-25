@@ -258,7 +258,12 @@ rm -f "$S" "$W"
   issue as `NOT-HERE`. That is a false *open*, the safe direction, but raise the limit anyway.
 - **Only `spent-remote` and `orphan-candidate` rows go to §3.** `open-issue` is a branch
   with at least one number that is open and unclaimed, or from another repo's tracker
-  (`NOT-HERE`, #67's shape), and belongs to no bucket here. `no-number` cannot be judged from
+  (`NOT-HERE`, #67's shape), and belongs to no bucket here. One shape of it used to be a ship's
+  leftover: a **Refs-only** ship (every number `Refs #N`, the issue kept open) whose kept ref read
+  as live work on that open issue indefinitely. Since #368 `colab ship` deletes that ref itself, so
+  a new one appears only after `--keep-branch` or `--keep-worktree`. Refs left before #368 still
+  land here — an `open-issue` row whose issue carries a `🔖 Referenced by colab ship` comment is
+  one; name it in the report for a human to judge, never delete it from the sweep. `no-number` cannot be judged from
   its name, and `has-worktree` is already a candidate through §1. None of these three becomes
   a finding just because it is not spent.
 - **`orphan-candidate` = every trailing number OPEN *and* `in-progress`, and no worktree on
