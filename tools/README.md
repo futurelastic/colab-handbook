@@ -977,7 +977,7 @@ Run `colab <cmd> --help` for full detail.
 | `worktree rm <name> [--force] [--repo P]` | remove a worktree; release its group; free its ports. Refuses on uncommitted work — tracked changes **or** untracked, non-ignored files (the latter is the only category with no copy in the index, a commit, or the remote; ignored build output and copied `.env` files never block) — **or** processes the worktree owns (cwd inside it); `--force` overrides both, terminating the owned processes. Ports still bound afterwards are reported as such, never as freed. Directory removal (and the pre-remove hook) is bounded at 5min (`COLAB_TEARDOWN_TIMEOUT_MS`); a failed or timed-out removal leaves the claim(s) and state record in place for a retry instead of releasing them anyway, unless `--force`. A directory missing `.git` (an earlier removal interrupted partway) is recognized as a **husk** and finished by hand rather than re-fought with `git worktree remove`, which can never succeed against it |
 | `worktree tag <name> --session S [--session-name S]` | **repair** session identity on an existing worktree **and its claims** (see *Session identity*) |
 | `worktrees [--json]` | list worktrees (status + on-disk liveness); also reports directories git never linked at all (no `.git`) but that look worktree-shaped (`CLAUDE.md` + `.github/project.yml`) — reports only, never prunes (#99) |
-| `ship [--worktree N \| --branch B \| --direct] [--message M] [--keep-worktree] [--delete-branch] [--adopt] [--session S] [--dry]` | `code-ship`: squash-merge a session branch → trunk. The branch is **kept** unless `--delete-branch`. Gated by repo autonomy (see *Phase B autonomy ladder*). `--direct` (#302): evidence-close for a branchless trunk-direct unit — this session's no-worktree, no-branch claims, once the work is published. `--adopt` (#324): required to ship a no-digit branch that exists only on origin with no local claim — or whose local ref a git checkout here created from origin's copy (reflog, #343); the squash records a `Colab-Adopted:` trailer |
+| `ship [--worktree N \| --branch B \| --direct] [--message M] [--keep-worktree] [--delete-branch \| --keep-branch] [--adopt] [--session S] [--dry]` | `code-ship`: squash-merge a session branch → trunk. The branch is **kept** unless `--delete-branch` — except a Refs-only ship (nothing closed), which deletes it unless `--keep-branch` (#368). Gated by repo autonomy (see *Phase B autonomy ladder*). `--direct` (#302): evidence-close for a branchless trunk-direct unit — this session's no-worktree, no-branch claims, once the work is published. `--adopt` (#324): required to ship a no-digit branch that exists only on origin with no local claim — or whose local ref a git checkout here created from origin's copy (reflog, #343); the squash records a `Colab-Adopted:` trailer |
 | `promote [--repo P] [--message M] [--dry]` | **promotion** trunk → main (`--no-ff`). Gated by `deploy` + `promotion`; never tags/deploys directly (see *Promotion*) |
 | `doctor [--prune] [--ttl H] [--json] [--sync]` | heal dead worktrees / orphan + stale claims / orphan ports; report records whose branch or path cannot be resolved, including a zero-claim `pending` stub (no TTL — see *Records that cannot be acted on*); flip + sweep **merged** worktrees (see *Worktree lifecycle*); **list** shipped branches awaiting deletion (never deletes them); `--sync` also flags a worktree-less claim the tracker no longer shows assigned+in-progress (no TTL either) and spent `group:<key>` labels |
 | `release-notes [<range>] [--repo P] [--out F] [--headline "..."]` | grouped Markdown release summary from git history (see below) |
@@ -1278,7 +1278,7 @@ Each step is checked; any failure aborts **before the push**, so trunk is never 
 | d. B1 squash | re-verify CI green, then squash-merge branch → trunk | CI no longer green / squash fails |
 | e. B2 push | push trunk with `COLAB_SHIP=1` in the env | push rejected → the squash is **rolled back** to the target's pre-merge sha (#322), so nothing is left locally that only a guard bypass could publish; the branch still carries the work, so `colab ship` is re-runnable. Rollback impossible (something else moved the target) → says so and prints the exact `reset --hard`, never an environment variable |
 | e2. post-ship | trunk targets only: run the repo's `.colab/hooks/post-ship` on the trunk checkout (re-install deps, migrate, restart). With no hook, a merge that changed a dependency lockfile warns, naming the install command | **never aborts** — the push already landed (#304) |
-| f. B3 teardown | `colab worktree rm` (releases claims + ports + `✅` comments) unless `--keep-worktree`; claims with **no** worktree are released through `colab release` (#319). The **branch is kept**; `--delete-branch` removes it local + remote | branch deletion is best-effort — a failure warns, it never fails a ship that already pushed |
+| f. B3 teardown | `colab worktree rm` (releases claims + ports + `✅` comments) unless `--keep-worktree`; claims with **no** worktree are released through `colab release` (#319). The **branch is kept**; `--delete-branch` removes it local + remote. A **Refs-only** ship deletes it unless `--keep-branch` (#368) | branch deletion is best-effort — a failure warns, it never fails a ship that already pushed |
 | g/h. B4 + summary | verify each issue auto-closed; post `🚢 Shipped to <trunk> by colab ship — <sha>` | non-closing issues are reported, not fatal |
 
 #### If `ship` exits non-zero — establish which step it reached, don't guess
@@ -1455,7 +1455,8 @@ subject fails silently and cannot be corrected once it is inside a published tag
 
 #### Why B3 keeps the branch
 
-**The branch survives a ship. `--delete-branch` opts into removing it.**
+**The branch survives a ship. `--delete-branch` opts into removing it** — with one exception, a
+Refs-only ship (below).
 
 An agent deleting refs from a **shared remote** is the wrong default however well-verified the
 deletion is: reporting is safe and reversible, deleting is neither. Nobody is harmed by a branch
@@ -1473,6 +1474,23 @@ content is durable before the ref goes), with `branch -D` since `-d` refuses a s
 the same missing-ancestry reason. Best-effort — a failure warns rather than failing a ship that
 already succeeded. Passing it with `--keep-worktree` is refused with a warning, because git will not
 delete a branch that is still checked out.
+
+**The exception: a Refs-only ship deletes the branch (#368).** Everything above assumes a kept
+branch is harmless clutter. It is, while every number it carries is closed: every name-keyed reader
+sees a closed issue and moves on, and `code-sweep` lists the ref as `spent-remote`. A ship that
+closes **nothing** — every issue it names is `Refs #N`, via `--refs` or the `tracking` label — breaks
+that. Its issue stays open by design, so the kept ref carries the number of an **open** issue for as
+long as that issue lives, and triage's ref enumeration, `git branch -a --list '*<n>*'` and a
+scheduler's file-hold check all read it as live work on it. Nothing downstream can tell otherwise:
+the squash left no ancestry, and the ship has just released the claim, so `code-sweep`'s
+`orphan-candidate` bucket (which needs `in-progress`) never sees it either. Measured: one such ref
+held a file against a scheduler's start check for about eight hours, until a human deleted it by
+hand. So on a Refs-only ship B3 deletes it — same mechanics as `--delete-branch` — at the one moment
+the tool knows for certain the content landed. A ship that closes even one issue keeps the default.
+`--keep-branch` keeps a Refs-only branch (a next slice will be cut from it); passing it with
+`--delete-branch` is refused. With `--keep-worktree` nothing can be deleted, so ship warns, naming
+the open issue and the two commands that clear the ref once the worktree goes. The decision lives in
+`tools/lib/shipped-branch.js`.
 
 This premise has been wrong twice, in opposite directions — first a comment claiming a deletion that
 never happened, then a deletion the operator did not want. It is now a decision with a flag and a

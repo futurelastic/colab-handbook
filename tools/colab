@@ -56,6 +56,7 @@ const releasePolicy = require('./lib/release-policy');
 const workflowTriggers = require('./lib/workflow-triggers');
 const releaseCut = require('./lib/release-cut');
 const releaseFinalize = require('./lib/release-finalize');
+const shippedBranch = require('./lib/shipped-branch');
 const {
   HOST, UserError, normIssueNum, issueTag, claimKey, today, nowISO, hoursSince, humanAge,
   parseArgs, table, shortRepo,
@@ -7879,7 +7880,7 @@ function ciCureTrailerLine(cureVerdict, branch, trunk) {
   return `CI-Cure: branch ${branch} over-red ${trunk}@${shortSha(cureVerdict.redSha)} evidence ${shortSha(cureVerdict.evidenceSha)}${via}`;
 }
 
-const HELP_SHIP = `colab ship [--repo <path>] [--worktree <name> | --branch <br> | --direct] [--message "<msg>"] [--refs <N[,M]>] [--keep-worktree] [--delete-branch] [--adopt] [--session <id>] [--session-name <s>] [--dry] [--json]
+const HELP_SHIP = `colab ship [--repo <path>] [--worktree <name> | --branch <br> | --direct] [--message "<msg>"] [--refs <N[,M]>] [--keep-worktree] [--delete-branch | --keep-branch] [--adopt] [--session <id>] [--session-name <s>] [--dry] [--json]
 
 The ONE sanctioned door for code-wrap Phase B: squash-merge a session branch into the BASE IT WAS
 CUT FROM — trunk for an ordinary session, or the declared integration line recorded on its worktree
@@ -7926,7 +7927,8 @@ Sequence (each step gated; any failure aborts before the push — the target is 
   f. B3 teardown        colab worktree rm (releases claims + ports + ✅ comments) unless --keep-worktree.
                         Claims with NO worktree (--branch-keyed, or unattached) are released too,
                         through colab release (#319) — ship alone leaves the registry consistent.
-                        The BRANCH IS KEPT — pass --delete-branch to remove it (local + remote).
+                        The BRANCH IS KEPT — pass --delete-branch to remove it (local + remote) —
+                        EXCEPT a Refs-only ship (nothing closed), which deletes it (#368, below).
   g. B4 verify + h.     confirm each issue auto-closed; post "🚢 Shipped to <trunk>" per issue
   i. group teardown     for every group:<key> label the branch's issues carried, delete the
                         LABEL OBJECT once no open issue carries it anymore (#82) — a live member
@@ -8059,7 +8061,7 @@ origin (the work is PUBLISHED). Then exactly evidence-close: evidence comment, c
 (same gate — the issue must already carry a comment colab did not write; code-wrap A1's distill is
 that comment), release the claims and the checkout hold, journal the plan file. An issue left open
 keeps its claim so a re-run finds it. Cannot be combined with --worktree/--branch/--message/
---delete-branch/--keep-worktree/--adopt. \`writes: direct\` is not required. --dry and --dry --json
+--delete-branch/--keep-branch/--keep-worktree/--adopt. \`writes: direct\` is not required. --dry and --dry --json
 work as usual (json: \`direct: true\`, \`branch: null\`, \`mode: "evidence-close"\`).
 
 B3 KEEPS the branch by default. Deleting refs from a shared remote is not something this command
@@ -8072,6 +8074,15 @@ find them. Treat that list as routine maintenance, not as an alarm.
 squashed branch is not "merged" as far as git is concerned). Best-effort — a failure warns rather
 than failing a ship that already succeeded. Passing it together with --keep-worktree is refused
 with a warning, because git will not delete a branch that is still checked out.
+
+#368 — a REFS-ONLY ship DELETES the branch by default. When the ship closes nothing and references
+at least one issue (--refs, or the "tracking" label), that issue stays open by design — so a kept
+ref carries the number of an OPEN issue for as long as the issue lives, and every name-keyed reader
+(triage's ref enumeration, a scheduler's file-hold check) reads it as live work. Nothing can tell
+it is spent: a squash leaves no ancestry, and the ship has just released the claim. So ship deletes
+it at the one moment it knows for certain the content landed (same mechanics as --delete-branch).
+A ship that closes even one issue keeps the default above. \`--keep-branch\` keeps a Refs-only
+branch (e.g. the next slice is cut from it); it and --delete-branch together are refused.
 
 Options:
   --repo <path>       repo root (default: git root of cwd)
@@ -8101,7 +8112,9 @@ Options:
                       under those three is the post-push "did not auto-close" check, by which point
                       the commit is already permanent in trunk's history.
   --keep-worktree     do not remove the worktree after shipping
-  --delete-branch     delete the branch (local + remote) after shipping — off by default
+  --delete-branch     delete the branch (local + remote) after shipping — off by default, except
+                      on a Refs-only ship (#368), which deletes unless --keep-branch
+  --keep-branch       keep the branch even on a Refs-only ship (#368); refused with --delete-branch
   --dry               print the plan + precondition table and change NOTHING
   --json              with --dry ONLY: emit ONE machine-readable JSON object instead of the prose
                       table, for an unattended caller (#70's scheduled drivers) that must act on the
@@ -8166,7 +8179,10 @@ Options:
 /**
  * B3 (second half): what happens to the branch whose content has just landed on trunk.
  *
- * THE DEFAULT IS TO KEEP IT. Deleting requires an explicit `--delete-branch`.
+ * THE DEFAULT IS TO KEEP IT. Deleting requires an explicit `--delete-branch` — EXCEPT a Refs-only
+ * ship (#368: closes nothing, references at least one still-open issue), which deletes unless
+ * `--keep-branch`. The decision itself lives in tools/lib/shipped-branch.js, with its reasons;
+ * this function only carries it out.
  *
  * This premise has now been wrong twice in opposite directions, so state it exactly. Originally a
  * comment in buildSquashMessage justified preserving the newest commit verbatim by claiming "the
@@ -8185,12 +8201,13 @@ Options:
  * every failure is a warning — a protected branch or a missing remote must not fail a ship that
  * already succeeded.
  */
-function handleShippedBranch(repoAbs, trunk, branch, { deleteBranch = false, worktreeKept = false, integration = [] } = {}) {
+function handleShippedBranch(repoAbs, trunk, branch, { disposition, worktreeKept = false, integration = [] } = {}) {
   if (!branch) return;
-  if (!deleteBranch) {
-    print(`  keeping branch ${branch} (default; --delete-branch to remove it, or \`colab doctor\` to list what has accumulated)`);
+  if (!disposition.delete) {
+    print(`  keeping branch ${branch} (${disposition.detail})`);
     return;
   }
+  if (disposition.reason === 'refs-only') print(`  deleting branch ${branch}: ${disposition.detail}`);
   if (branch === trunk || branch === 'main' || integration.includes(branch)) { // belt-and-braces; cmdShip already refuses these
     warn(`refusing to delete "${branch}" — it is the trunk, main, or a declared integration line`);
     return;
@@ -8198,7 +8215,15 @@ function handleShippedBranch(repoAbs, trunk, branch, { deleteBranch = false, wor
   if (worktreeKept) {
     // Both flags passed. git will not delete a checked-out branch, so honour the safer one and say
     // why, rather than attempting a delete that is guaranteed to fail.
-    warn(`--delete-branch ignored for ${branch}: its worktree was kept (--keep-worktree), so the branch is still checked out`);
+    // A Refs-only ship (#368) is the case where keeping the ref is NOT harmless, so say what is left
+    // behind and how to clear it, instead of the flag-shaped message.
+    if (disposition.reason === 'refs-only') {
+      warn(`${branch} NOT deleted: its worktree was kept (--keep-worktree), so the branch is still checked out. ` +
+        `It carries still-open ${disposition.refs.map((n) => `#${n}`).join(', ')} and will read as live work on it — ` +
+        `after \`colab worktree rm\`, delete it: git branch -D ${branch} && git push origin --delete ${branch}`);
+    } else {
+      warn(`--delete-branch ignored for ${branch}: its worktree was kept (--keep-worktree), so the branch is still checked out`);
+    }
     return;
   }
   const del = git.git(['branch', '-D', branch], repoAbs);
@@ -9310,7 +9335,7 @@ function shipEvidenceClose({ repoAbs, st, sess, target, trunk, gh, closeIssues, 
  */
 function cmdShipDirect(opts) {
   const clash = [['worktree', '--worktree'], ['branch', '--branch'], ['message', '--message'],
-    ['deleteBranch', '--delete-branch'], ['keepWorktree', '--keep-worktree'], ['adopt', '--adopt']]
+    ['deleteBranch', '--delete-branch'], ['keepBranch', '--keep-branch'], ['keepWorktree', '--keep-worktree'], ['adopt', '--adopt']]
     .filter(([k]) => opts[k]).map(([, f]) => f);
   if (clash.length) throw new UserError(`--direct ships no branch and no worktree — it cannot be combined with ${clash.join(', ')}`);
   const repoAbs = resolveRepo(opts);
@@ -9629,13 +9654,14 @@ function shipRefFor(repoAbs, branch) {
 function cmdShip(argv) {
   const opts = parseArgs(argv, {
     values: { '--repo': 'repo', '--worktree': 'worktree', '--branch': 'branch', '--message': 'message', '--refs': 'refs', '--session': 'session', '--session-name': 'sessionName' },
-    flags: { '--keep-worktree': 'keepWorktree', '--delete-branch': 'deleteBranch', '--dry': 'dry', '--json': 'json', '--direct': 'direct', '--adopt': 'adopt', '-h': 'help', '--help': 'help' },
+    flags: { '--keep-worktree': 'keepWorktree', '--delete-branch': 'deleteBranch', '--keep-branch': 'keepBranch', '--dry': 'dry', '--json': 'json', '--direct': 'direct', '--adopt': 'adopt', '-h': 'help', '--help': 'help' },
   });
   if (opts.help) return print(HELP_SHIP);
   // --json is scoped to --dry only (#77): a machine-readable READ of the preconditions. Reporting
   // the PERFORMED result of a real ship as JSON is a different, not-yet-built feature (see HELP_SHIP)
   // — refuse the combination rather than silently ignore --json on a real ship.
   if (opts.json && !opts.dry) throw new UserError('--json currently only applies together with --dry — see `colab ship --help`');
+  if (shippedBranch.conflictingFlags(opts)) throw new UserError('--delete-branch and --keep-branch contradict each other — pass one (see `colab ship --help`, #368)');
   // A fully separate code path, deliberately: the prose/table path below is unchanged by this
   // feature (CONVENTIONS/#77 requires it stay byte-identical), so --dry --json does its own
   // resolution rather than threading a json branch through the existing one.
@@ -10020,7 +10046,8 @@ function cmdShip(argv) {
     } else {
     print(`  Plan: B0 sync ${target}→branch · B1 squash-merge → ` + target + ' · B2 push · B3 ' +
       (opts.keepWorktree ? 'keep worktree' : 'worktree rm') + ' + ' +
-      (opts.deleteBranch && !opts.keepWorktree ? 'delete branch (local+remote)' : 'keep branch') +
+      (shippedBranch.shippedBranchDisposition({ closeIssues, refsIssues, deleteBranch: opts.deleteBranch, keepBranch: opts.keepBranch }).delete && !opts.keepWorktree
+        ? (opts.deleteBranch ? 'delete branch (local+remote)' : 'delete branch (local+remote) — Refs-only ship, #368') : 'keep branch') +
       ' · B4 verify closed · post 🚢 summary');
     }
     // Show the subject the squash WOULD get. The whole point of issue #17 was that a wrong subject
@@ -10547,7 +10574,9 @@ function cmdShip(argv) {
 
   // B3 (cont.) — the shipped branch. Kept by default; --delete-branch opts in. MUST come after the
   // worktree removal above: git refuses to delete a branch checked out in a worktree.
-  handleShippedBranch(repoAbs, target, sess.branch, { deleteBranch: opts.deleteBranch, worktreeKept, integration });
+  // #368: a Refs-only ship deletes unless --keep-branch — see tools/lib/shipped-branch.js.
+  const disposition = shippedBranch.shippedBranchDisposition({ closeIssues, refsIssues, deleteBranch: opts.deleteBranch, keepBranch: opts.keepBranch });
+  handleShippedBranch(repoAbs, target, sess.branch, { disposition, worktreeKept, integration });
 
   // ---- (g/h) B4 verify + post summary per issue ----
   const groupLabelsCarried = new Set(); // union across every issue this branch carried — for (i) below
