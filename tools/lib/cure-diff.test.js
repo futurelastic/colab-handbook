@@ -15,7 +15,7 @@ const os = require('os');
 const path = require('path');
 const { execFileSync } = require('child_process');
 const git = require('./git');
-const { cureDiffSignals, scriptsBlockDiffers, ABSENT } = require('./cure-diff');
+const { cureDiffSignals, scriptsBlockDiffers, isPythonManifest, pythonIncludes, ABSENT } = require('./cure-diff');
 
 const PKG = { name: 'app', version: '1.0.0', scripts: { lint: 'eslint .', test: 'node --test' }, dependencies: { a: '1.0.0' } };
 const json = (o) => `${JSON.stringify(o, null, 2)}\n`;
@@ -33,6 +33,13 @@ function repo() {
   fs.writeFileSync(path.join(dir, 'package.json'), json(PKG));
   fs.writeFileSync(path.join(dir, 'packages/a/package.json'), json({ name: 'a', scripts: { test: 'vitest' } }));
   fs.writeFileSync(path.join(dir, 'src.js'), 'x\n');
+  // A Python half (#377): the manifests the Python template installs from, and one file reached
+  // only through an include, so the include closure is exercised against an UNCHANGED includer.
+  fs.mkdirSync(path.join(dir, 'svc/deps'), { recursive: true });
+  fs.writeFileSync(path.join(dir, 'svc/pyproject.toml'), '[project]\nname = "svc"\ndependencies = ["fastapi"]\n');
+  fs.writeFileSync(path.join(dir, 'svc/requirements-dev.txt'), '-r deps/test.txt\nruff==0.6.0\n');
+  fs.writeFileSync(path.join(dir, 'svc/deps/test.txt'), 'pytest==8.3.0\n');
+  fs.writeFileSync(path.join(dir, 'svc/app.py'), 'x = 1\n');
   g('add', '-A'); g('commit', '-q', '-m', 'base');
   g('checkout', '-q', '-b', 'b');
   const write = (p, text) => fs.writeFileSync(path.join(dir, p), text);
@@ -150,12 +157,84 @@ test('an ordinary workflow edit → workflowsTouched', () => withRepo((r) => {
   assert.equal(r.signals().workflowsTouched, true);
 }));
 
-test('an unreadable range → ok:false with both flags null, never throws', () => withRepo((r) => {
+test('an unreadable range → ok:false with every flag null, never throws', () => withRepo((r) => {
   const s = cureDiffSignals(git, r.dir, 'main', 'no-such-branch');
   assert.equal(s.ok, false);
   assert.equal(s.workflowsTouched, null);
   assert.equal(s.manifestScriptsTouched, null);
+  assert.equal(s.pythonManifestTouched, null);
 }));
+
+// --- #377 condition 6: Python dependency manifests -------------------------------------------
+
+test('the #377 case: pytest dropped from requirements-dev.txt → Python manifest touched, named, and neither other door sees it', () => withRepo((r) => {
+  r.write('svc/requirements-dev.txt', 'ruff==0.6.0\n'); r.commit('drop the test include');
+  const s = r.signals();
+  assert.equal(s.pythonManifestTouched, true);
+  assert.deepEqual(s.pythonManifestPaths, ['svc/requirements-dev.txt']);
+  assert.equal(s.workflowsTouched, false);
+  assert.equal(s.manifestScriptsTouched, false);
+}));
+
+test('a file reached only through an unchanged -r include → touched (the include closure, not the name)', () => withRepo((r) => {
+  r.write('svc/deps/test.txt', '# pytest removed\n'); r.commit('gut the included file');
+  const s = r.signals();
+  assert.equal(s.pythonManifestTouched, true);
+  assert.deepEqual(s.pythonManifestPaths, ['svc/deps/test.txt']);
+}));
+
+test('an include deleted WITH its target → both touched (the base side still sees the include)', () => withRepo((r) => {
+  r.write('svc/requirements-dev.txt', 'ruff==0.6.0\n');
+  r.g('rm', '-q', 'svc/deps/test.txt'); r.commit('drop both');
+  assert.deepEqual(r.signals().pythonManifestPaths.sort(), ['svc/deps/test.txt', 'svc/requirements-dev.txt']);
+}));
+
+test('pyproject.toml dependencies edited → touched (whole-file: a version pin counts, the accepted false refusal)', () => withRepo((r) => {
+  r.write('svc/pyproject.toml', '[project]\nname = "svc"\ndependencies = ["fastapi<0.100"]\n'); r.commit('pin');
+  assert.deepEqual(r.signals().pythonManifestPaths, ['svc/pyproject.toml']);
+}));
+
+test('a [tool.setuptools.dynamic] file = target → touched through the pyproject include', () => withRepo((r) => {
+  r.write('svc/pyproject.toml', '[project]\nname = "svc"\ndynamic = ["dependencies"]\n[tool.setuptools.dynamic]\ndependencies = {file = ["deps/runtime.list"]}\n');
+  r.write('svc/deps/runtime.list', 'fastapi\n'); r.commit('dynamic deps');
+  r.g('checkout', '-q', 'main'); r.g('merge', '-q', '--ff-only', 'b'); r.g('checkout', '-q', 'b');
+  r.write('svc/deps/runtime.list', 'fastapi\nhttpx\n'); r.commit('edit the dynamic file');
+  assert.deepEqual(r.signals().pythonManifestPaths, ['svc/deps/runtime.list']);
+}));
+
+test('a requirements file ADDED, and one RENAMED away → both touched', () => withRepo((r) => {
+  r.write('requirements.txt', 'flask\n'); r.g('mv', 'svc/requirements-dev.txt', 'svc/dev.txt.off'); r.commit('add + move');
+  const s = r.signals();
+  assert.equal(s.pythonManifestTouched, true);
+  assert.ok(s.pythonManifestPaths.includes('requirements.txt'));
+  assert.ok(s.pythonManifestPaths.includes('svc/requirements-dev.txt'), 'the deleted side of the move counts');
+}));
+
+test('Python code, a README.txt and a lockfile changing → not a Python manifest touch', () => withRepo((r) => {
+  r.write('svc/app.py', 'x = 2\n'); r.write('README.txt', 'hi\n'); r.write('svc/poetry.lock', 'x\n'); r.commit('code');
+  const s = r.signals();
+  assert.equal(s.pythonManifestTouched, false);
+  assert.deepEqual(s.pythonManifestPaths, []);
+}));
+
+test('a chmod-only change to requirements-dev.txt → not touched', () => withRepo((r) => {
+  fs.chmodSync(path.join(r.dir, 'svc/requirements-dev.txt'), 0o755); r.commit('chmod');
+  assert.equal(r.signals().pythonManifestTouched, false);
+}));
+
+test('isPythonManifest / pythonIncludes: the pure name and include rules', () => {
+  for (const p of ['pyproject.toml', 'a/setup.py', 'a/setup.cfg', 'requirements.txt', 'x/dev-requirements.in',
+    'requirements/test.txt', 'svc/requirements/base.in']) assert.equal(isPythonManifest(p), true, p);
+  for (const p of ['README.txt', 'poetry.lock', 'uv.lock', 'Pipfile.lock', 'docs/requirements.md', 'app.py']) {
+    assert.equal(isPythonManifest(p), false, p);
+  }
+  assert.deepEqual(pythonIncludes('a/requirements-dev.txt',
+    '-r base.txt\n-c ../constraints.txt  # pin\n--requirement=deps/t.txt\n-rfoo.txt\npytest\n-r https://x/y.txt\n# -r ignored.txt\n-r ../../escape.txt\n'),
+  ['a/base.txt', 'constraints.txt', 'a/deps/t.txt', 'a/foo.txt']);
+  assert.deepEqual(pythonIncludes('pyproject.toml',
+    '[project]\nreadme = {file = "README.md"}\n[tool.setuptools.dynamic]\ndependencies = {file = ["req.in", "sub/b.txt"]}\n[tool.other]\nx = {file = "no.txt"}\n'),
+  ['req.in', 'sub/b.txt'], 'only [tool.setuptools.dynamic] files — a readme include is not an install input');
+});
 
 test('scriptsBlockDiffers: the pure comparator', () => {
   assert.equal(scriptsBlockDiffers(ABSENT, ABSENT), false);

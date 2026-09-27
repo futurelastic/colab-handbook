@@ -11,7 +11,8 @@
 const test = require('node:test');
 const assert = require('node:assert');
 
-const { cureVerdict, redJobsProvenOnBranch, workflowCarveOut, shapeJobEvidence, MANIFEST_SCRIPTS_REFUSAL } = require('./ci-cure.js');
+const { cureVerdict, redJobsProvenOnBranch, workflowCarveOut, shapeJobEvidence, MANIFEST_SCRIPTS_REFUSAL,
+  PYTHON_MANIFEST_REFUSAL } = require('./ci-cure.js');
 
 const RED_SHA = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
 const HEAD_SHA = 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';
@@ -46,6 +47,8 @@ function base(overrides = {}) {
     workflowsTouched: false,
     manifestScriptsTouched: false,
     manifestPaths: [],
+    pythonManifestTouched: false,
+    pythonManifestPaths: [],
     jobEvidence: jobEvidence(),
     ...overrides,
   };
@@ -555,6 +558,38 @@ test('two doors: workflows AND manifest scripts touched, carve-out-admissible ev
   assert.equal(both.ok, false);
   assert.ok(both.reason.startsWith(MANIFEST_SCRIPTS_REFUSAL));
   assert.equal(both.carveOut, undefined);
+});
+
+// --- #377 condition 6: Python dependency manifests are part of the instrument ---------------
+
+test('condition 6: the diff changes a Python dependency manifest → refuses, names the path and the ci-grant door', () => {
+  const v = cureVerdict(base({ pythonManifestTouched: true, pythonManifestPaths: ['requirements-dev.txt'] }));
+  assert.equal(v.ok, false);
+  assert.ok(v.reason.startsWith(PYTHON_MANIFEST_REFUSAL));
+  assert.match(v.reason, /changed: requirements-dev\.txt/);
+  assert.match(v.reason, /human ci-grant/);
+  assert.match(v.reason, /no carve-out/);
+});
+
+test('condition 6: unmeasured (null or undefined) → refuses as an unmeasured diff, never reads as untouched', () => {
+  for (const over of [{ pythonManifestTouched: null }, { pythonManifestTouched: undefined }]) {
+    const v = cureVerdict(base(over));
+    assert.equal(v.ok, false, JSON.stringify(over));
+    assert.match(v.reason, /diff could not be measured/);
+  }
+});
+
+test('condition 6 sits before the workflow block: a carve-out-admissible branch that also changes a Python manifest refuses, no carveOut', () => {
+  const v = cureVerdict({ ...carving({}), pythonManifestTouched: true, pythonManifestPaths: ['pyproject.toml'] });
+  assert.equal(v.ok, false);
+  assert.ok(v.reason.startsWith(PYTHON_MANIFEST_REFUSAL));
+  assert.equal(v.carveOut, undefined);
+});
+
+test('conditions 5 and 6 both hit → condition 5 reports first (order is 5 → 6 → 4)', () => {
+  const v = cureVerdict(base({ manifestScriptsTouched: true, manifestPaths: ['package.json'],
+    pythonManifestTouched: true, pythonManifestPaths: ['requirements.txt'] }));
+  assert.ok(v.reason.startsWith(MANIFEST_SCRIPTS_REFUSAL));
 });
 
 test('the carve-out cure also carries provenJobs', () => {
