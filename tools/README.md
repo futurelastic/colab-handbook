@@ -1074,7 +1074,7 @@ them), and any one failing refuses the cut:
 | `already-candidate` | the commit already carries a candidate of that version |
 | `ci-green` | §6 condition 1: not every run at the commit finished with one success — `colab ship`'s whole-sha check |
 | `full-suite` | §6 condition 2: some workflow that ran at the commit has no successful run (a cancelled-only workflow never ran its tests; `ci-green` alone reads that as green) |
-| `schema-additive` | §6 condition 3: a migration since the last final tag is destructive — Laravel `database/migrations` with a drop/rename/`->change()` in `up()`, Prisma SQL with `DROP`/`RENAME`/`ALTER COLUMN` — or an existing migration was edited or deleted. Other layouts are not read |
+| `schema-additive` | §6 condition 3: a migration since the last final tag is destructive — Laravel `database/migrations` with a drop/rename/`->change()` in `up()`, Prisma SQL with `DROP`/`RENAME`/`ALTER COLUMN` — or an existing migration was edited or deleted. `.php`/`.sql` under a `project.yml` `migrations:` prefix are read the same way; a declared migration in another format is named in the detail for a human read (#383). Other layouts are not read |
 | `switch-dependencies` | §6 condition 4: a `colab:switch` marker is malformed, or a finished switch `needs` one that is not finished |
 
 The bump is `release-status`'s suggestion since the last **final** tag (candidates skipped): fix →
@@ -1314,7 +1314,7 @@ Each step is checked; any failure aborts **before the push**, so trunk is never 
 | a″. claim sanity | the branch resolves to at least one claimed issue | zero → **loud warning** (the squash will carry no `Closes #N`); zero **and** some claim in the repo names an unresolvable branch → refuse, because "no claims" is then a broken lookup |
 | b. preconditions | reported as a ✓/✗ table | any ✗ → abort |
 | | · trunk CI alive **and** green (`gh run list --branch <trunk> -L 1`) | not `completed`+`success`, UNLESS every claimed issue holds a valid `colab ci-grant` over trunk's CURRENT red sha (#105, below) → human must run Phase B (billing fail-to-start counts as ✗ regardless — never exempted, see below) |
-| | · **no new migration files** on the branch (`database/migrations/`, `prisma/migrations/`) | any present, UNLESS every claimed issue holds a valid `colab migration-grant` for this branch (#98, below) → human must run Phase B |
+| | · **no new migration files** on the branch (`database/migrations/`, `prisma/migrations/`, plus every `project.yml` `migrations:` prefix — trunk's and the branch's, #383) | any present, UNLESS every claimed issue holds a valid `colab migration-grant` for this branch (#98, below) → human must run Phase B |
 | | · trunk checkout is on trunk and clean | wrong branch / dirty tracked tree |
 | | · the local merge target agrees with `origin/<target>` (#322) | **behind** → self-clearing, the remedy is one `git merge --ff-only`; **ahead / diverged** → human-gated: those are unpublished commits on a push-guarded branch, to be moved onto a session branch, never published from there. Unmeasurable (no `origin`, fetch failed) is a ✗ too — a merge that cannot be pushed is the state this row exists to prevent |
 | c. B0 sync | merge trunk **into** the branch | conflict in a **non-generated** file → abort (hand-merge); generated-only conflict → the repo's `.colab/hooks/pre-ship` regenerates, else abort |

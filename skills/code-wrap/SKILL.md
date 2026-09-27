@@ -532,8 +532,9 @@ installed → skip this call; A3's own verdict (above) is still what governs A4/
 
 ### A3b. Request a migration grant, if this branch needs one
 
-`colab ship` refuses, unconditionally, any branch touching `database/migrations/` or
-`prisma/migrations/` unless every claimed issue already carries a live
+`colab ship` refuses, unconditionally, any branch touching `database/migrations/`,
+`prisma/migrations/`, or a prefix `project.yml` declares under `migrations:` (#383)
+unless every claimed issue already carries a live
 `migration-granted` exemption (`CONVENTIONS.md` [§5](../../CONVENTIONS.md#migration-exemption--a-narrow-human-created-door-through-no-new-migrations-98),
 *Migration exemption*) — human-only, so creating that grant is never yours to do here.
 What **is** yours: making sure the *request* gets filed, so the human with the
@@ -543,6 +544,8 @@ later `ship` (often days later, often a different session) refuses it.
 
 ```sh
 git diff --name-only <base>...HEAD | grep -E '(^|/)(database|prisma)/migrations/'
+# … plus every prefix the repo declares — `migrations: [backend/migrations/]` adds:
+git diff --name-only <base>...HEAD | grep -E '^backend/migrations/'
 ```
 
 - **No matches** → nothing to do, skip to A4.

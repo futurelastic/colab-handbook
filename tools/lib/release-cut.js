@@ -31,6 +31,8 @@
  * act on every row where a tag reaches production.
  */
 
+const migrationPaths = require('./migration-paths');
+
 const VERSION_RE = /^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$/;
 const BUMPS = Object.freeze(['patch', 'minor']);
 
@@ -153,9 +155,13 @@ function fullSuiteVerdict(rows, at) {
 
 // ---- §6 condition 3: schema changes are additive -----------------------------------------------
 
-/** The migration layouts `colab ship`'s migration gate reads (Laravel + Prisma) — one rule for both. */
-function isMigrationPath(f) {
-  return /(^|\/)database\/migrations\//.test(f) || /(^|\/)prisma\/migrations\//.test(f);
+/**
+ * The migration layouts `colab ship`'s migration gate reads — one rule for both, and it lives in
+ * migration-paths.js (#383): the two defaults plus whatever project.yml `migrations:` declares
+ * (`declared` = that module's normalised prefixes; omitted = the defaults alone).
+ */
+function isMigrationPath(f, declared) {
+  return migrationPaths.isMigrationPath(f, declared);
 }
 
 // Laravel schema-builder calls that destroy or rewrite existing structure. Read only inside `up()`:
@@ -182,10 +188,22 @@ function laravelUpBody(text) {
  * already run is not an add. A false positive costs a human cutting the candidate; a false negative
  * is the §6 judgement the release notes still owe (read the diff, not only this).
  */
-function schemaVerdict(changes, since) {
-  const migrations = (changes || []).filter((c) => isMigrationPath(c.path) && /\.(php|sql)$/.test(c.path));
-  const scope = 'Laravel database/migrations + Prisma prisma/migrations — other layouts are not read';
-  if (!migrations.length) return { ok: true, detail: `no migration file changed since ${since} (${scope})` };
+function schemaVerdict(changes, since, declared) {
+  const inPaths = (changes || []).filter((c) => isMigrationPath(c.path, declared));
+  const migrations = inPaths.filter((c) => /\.(php|sql)$/.test(c.path));
+  // #383: a declared path widens what COUNTS as a migration, not what this heuristic can READ. A
+  // declared migration in any other format (a Node boot migration, a Go file) is named in the
+  // detail, so the §6 judgement the release notes owe knows exactly which files it still has to
+  // read by hand — never silently folded into "none destructive". Only for DECLARED paths: under
+  // the defaults a non-php/sql file is Prisma's migration_lock.toml and the like, as it always was.
+  const unread = (declared && declared.length)
+    ? inPaths.filter((c) => !/\.(php|sql)$/.test(c.path) && !migrationPaths.isMigrationPath(c.path, []))
+    : [];
+  const scope = `Laravel database/migrations + Prisma prisma/migrations${declared && declared.length ? ` + declared ${declared.join(', ')} (php/sql only)` : ''} — other layouts are not read`;
+  const unreadNote = unread.length
+    ? `; ${unread.length} declared migration file(s) in a format this check does not read — a human reads them: ${unread.map((c) => c.path).join(', ')}`
+    : '';
+  if (!migrations.length) return { ok: true, detail: `no migration file changed since ${since} (${scope})${unreadNote}` };
   const findings = [];
   for (const c of migrations) {
     const st = String(c.status || '').charAt(0);
@@ -203,7 +221,7 @@ function schemaVerdict(changes, since) {
   if (findings.length) {
     return { ok: false, detail: `destructive schema change since ${since} — a release carrying one is a human's to cut (CONVENTIONS.md §6, Switched epics rule 5): ${findings.join('; ')}` };
   }
-  return { ok: true, detail: `${migrations.length} migration file(s) added since ${since}, none destructive (${scope})` };
+  return { ok: true, detail: `${migrations.length} migration file(s) added since ${since}, none destructive (${scope})${unreadNote}` };
 }
 
 // ---- §6 condition 4: switch dependencies -------------------------------------------------------
