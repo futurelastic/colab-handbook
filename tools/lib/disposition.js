@@ -54,6 +54,7 @@
  */
 
 const { axisOfRecord } = require('./axis-authority');
+const { parseWakeLine } = require('./wake');
 
 // ---------------------------------------------------------------------------------------------
 // Vocabulary
@@ -210,6 +211,17 @@ function fencedClasses(skipFence) {
   return skipFence.filter((c) => typeof c === 'string' && c.trim() !== '');
 }
 
+// Does this wake fact name something that ends the park? A `review-by:<date>`, a real `blockedBy`
+// edge, or — since #382 — a `wake:` value from the closed vocabulary (tools/lib/wake.js):
+// `conditions` is the value as written on the Hold: line, or an array of condition strings. One
+// piece outside the vocabulary refuses the whole value, exactly as wake.js does — prose is not a
+// wake, however specific it sounds.
+function namesAWake(w) {
+  if ((typeof w.reviewBy === 'string' && w.reviewBy.trim() !== '') || w.blockedBy === true) return true;
+  if (w.conditions === undefined || w.conditions === null) return false;
+  return parseWakeLine(w.conditions).ok;
+}
+
 function verdict(kind, authority, applicable, why, blockers, extra) {
   return Object.assign({ kind, authority, applicable, why, blockers: blockers || [] }, extra || {});
 }
@@ -233,7 +245,7 @@ function verdict(kind, authority, applicable, why, blockers, extra) {
  * Facts (all optional; absent reads as unproven, never as satisfied):
  *   kind | token, exposure | project, skipFence[], evidence{what,command,result,remains},
  *   crossCheck, acceptance{ticked,remainderDeclared}, gateNode,
- *   wake{reviewBy,blockedBy,ageDays,movedSince}, subIssue{filed,delivery,wake,evidenceCopied},
+ *   wake{reviewBy,blockedBy,conditions,ageDays,movedSince}, subIssue{filed,delivery,wake,evidenceCopied},
  *   routedTo{ref,linksBack}, supersededBy{ref,state,referencesThis}
  */
 function classify(facts) {
@@ -303,11 +315,10 @@ function classify(facts) {
 
     case 'hold': {
       const w = f.wake && typeof f.wake === 'object' ? f.wake : {};
-      const hasWake = (typeof w.reviewBy === 'string' && w.reviewBy.trim() !== '') || w.blockedBy === true;
-      if (!hasWake) {
+      if (!namesAWake(w)) {
         return verdict(kind, AGENT, false,
           'a park with no wake condition is not a hold — it is a silent wontfix, and should be said plainly',
-          ['no review-by:<date> and no blockedBy edge']);
+          ['no review-by:<date>, no blockedBy edge, and no wake: condition from the closed vocabulary']);
       }
       const stale = Number.isFinite(w.ageDays) && w.ageDays > HOLD_STALE_DAYS && w.movedSince !== true;
       return stale
@@ -343,8 +354,7 @@ function classify(facts) {
       // is a finding — an issue on its fourth session with no disposition is a brief problem, not
       // a measurement problem. (A human may still leave with a reason; that reason is the wake.)
       const w = f.wake && typeof f.wake === 'object' ? f.wake : {};
-      const nameable = (typeof w.reviewBy === 'string' && w.reviewBy.trim() !== '') || w.blockedBy === true;
-      if (!nameable) {
+      if (!namesAWake(w)) {
         return verdict(kind, HUMAN, false,
           'no wake condition can be named — this is a finding about the brief, not a disposition',
           ['leave proposed with nothing to wake on'], { converted: 'finding' });

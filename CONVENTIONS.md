@@ -2163,12 +2163,14 @@ Three fixed `deferred:*` kinds, each naming what the park is waiting on:
 - **`deferred:date`** — parked until a specific date. Pair with `review-by:<date>`.
 - **`deferred:measurement`** — parked until a metric crosses a threshold. Name the metric
   and the threshold on the issue.
-- **`deferred:external-party`** — parked until someone outside this repo acts. Name who,
-  and pair with `review-by:<date>` when there is one.
+- **`deferred:external-party`** — parked until someone outside this repo acts. Name who.
+  When that act is tracked somewhere, point the wake at it (`issueClosed:<owner>/<repo>#<n>`,
+  *Holds* below). When it is not, pair the park with `review-by:<date>`.
 
-**A defer must name its wake condition.** A `deferred:*` label with no `review-by:<date>`
-and no `blockedBy` edge is not a defer at all — it is a deprioritisation or a `wontfix`,
-and should be said plainly instead. An unbounded park is a silent `wontfix`.
+**A defer must name its wake condition.** A `deferred:*` label with no `review-by:<date>`,
+no `blockedBy` edge, and no checkable `wake:` (*Holds*, below) is not a defer at all — it
+is a deprioritisation or a `wontfix`, and should be said plainly instead. An unbounded
+park is a silent `wontfix`.
 
 `review-by:<date>` is created **on demand**, the same way `group:<key>` is — the date
 varies per issue, so there is no fixed set to provision up front.
@@ -2248,28 +2250,92 @@ Because: the import model changed in #88; the parser steps must be rewritten aga
   It is never blank. An owner is not an assignee: an assignee without `in-progress` is a
   half-claim ([§5](#5-claiming-work--how-to-say-im-on-this)), so the owner lives on this
   line.
-- **`wake:`** is exactly one of three:
-  - `review-by:<date>`: the `review-by:<date>` label is on the issue too. The label is
-    what a query reads. This line restates it.
-  - `#N`: a `blocked_by` edge to `#N` exists (*Readiness*, above).
-  - `ruling`: the hold waits on the owner's act. The `Because:` line is then the ask
-    itself, written as what the owner has to do or answer. **This is the one definition
-    of the "waiting on the operator" reason line.** A consumer's card reader parses this
-    line and does not invent a second syntax for it. If the ask is a question rather
-    than an act, it belongs under `needs-decision` instead, where the answer gets a
-    record of its own.
+- **`wake:`** is drawn from a small **closed** vocabulary (below). Nothing outside it
+  is ever evaluated, and free text is never a wake.
 - **The newest `Hold:` line for a label is the live one.** A new hold posts a new line.
   Clearing a hold is the owner removing the label once the wake fires. The comment stays
   as history.
-- **A hold that names no owner, or no wake, is a finding and never ready.** `code-triage`
+- **A hold that names no owner, or no wake, is a finding and never ready.** A `wake:`
+  outside the vocabulary names no wake. `code-triage`
   prints it as a `STALL`, first among its blocked lines. This is the same rule that makes
   any blocker with no named clearer a stall, and for the same reason: an unbounded park
   is a silent `wontfix`. A `deferred:*` label that carries its wake but has no `Hold:`
   line has no named owner, so it is a stall too.
 
-Nothing in this repo's tooling writes a `Hold:` line. The only mechanical part is the
-audit's shape check on `holds:`. Whoever parks the issue writes the line, and
-`code-triage` reads it (its §2, §5 and §6).
+###### The `wake:` vocabulary — a wake a scheduler can check (#382)
+
+Until #382, `wake:` was one of three forms, and anything else could only be written as
+prose in `Because:`, backed by a `review-by:` date: "until the fix is deployed", "when that
+capability lands". Nobody reads that prose before the date. Measured across adopting
+repos, 2026-09-25 → 26:
+
+- A deferred issue waited on another repo's issue number **that did not exist**. The real
+  fix had landed and been deployed the day before, and the park would have slept another
+  13 days.
+- A deferred issue's condition was met by a commit in the same repo. The issue sat about
+  7 more hours.
+- A deferred issue's measurement condition had been true for 4 days.
+- A manual hold's stated preconditions were all met, and it stayed held until someone
+  asked.
+
+Each hold was right when it was set. What failed was **release**: the condition came true
+and nothing noticed, because the only machine-readable part was the date. So `wake:` is
+now one of these, and a scheduler can evaluate every form on every beat:
+
+| `wake:` | Met when |
+|---|---|
+| `review-by:<date>` | the date is reached. The `review-by:<date>` label is on the issue too. The label is what a query reads, and this line restates it |
+| `#N` | the issue behind the `blocked_by` edge to `#N` closes (*Readiness*, above). The edge must exist |
+| `ruling` | the owner acts. `Because:` is the ask (below). No fact makes this one "met": the owner's act *is* removing the label |
+| `issueClosed:<owner>/<repo>#<n>` | that issue is closed. Use it for another repo's issue when no cross-repo edge is set. `issueClosed:<n>` (no owner/repo) names this repo's own, but a same-repo wait should normally be a `#N` edge instead |
+| `branchLanded:<ref>` | `<ref>`, resolved as written, is an ancestor of trunk. A squash-merge never makes a branch tip an ancestor, so where branches land by squash, wait on the branch's issue (`#N`, `issueClosed:`) or on the landed commit (`trunkAt:`) instead |
+| `trunkAt:<sha>` | trunk contains `<sha>` (7–40 hex) |
+| `labelPresent:<label>` | the held issue carries `<label>` |
+| `after:<date>` | the date is reached. Same meaning as `review-by:`, in the form a scheduler stores |
+
+**`ruling` is the one definition of the "waiting on the operator" reason line.** When the
+wake is `ruling`, the `Because:` line is the ask itself, written as what the owner has to
+do or answer. A consumer's card reader parses this line and does not invent a second
+syntax for it. If the ask is a question rather than an act, it belongs under
+`needs-decision` instead, where the answer gets a record of its own.
+
+**One spelling, not two.** Every checkable name above is spelled exactly the way the one
+adopting scheduler that evaluates wakes already spells it, argument rules included. That
+scheduler also accepts two kinds about a live session (a claim released, a session gone).
+Those describe a session, not a tracker fact that a hold on an issue can wait on, so the
+handbook does not adopt them. The direction is one way: a consumer that evaluates a
+`wake:` never invents a second spelling for a name on this list.
+`tools/lib/wake.js` is the parser and evaluator, and its tests pin the list.
+
+The rules:
+
+1. **Several conditions on one line are ANDed:**
+   `wake: issueClosed:owner/repo#12, trunkAt:abc1234`. A hold never wakes early on part of
+   its condition, and a line with one piece outside the vocabulary names no wake at all.
+   It is never read as its checkable rest.
+2. **A wait on other work must use one of the checkable forms.** If that work has no
+   issue yet, file one and point the hold at it. Only a wait that has no checkable form
+   at all stays prose in `Because:`, such as a vendor or a person outside the repo. That
+   wait **must** carry `review-by:<date>`.
+3. **A `wake:` that names an issue or ref that does not exist is a finding when it is
+   written**, not at the review date. A park waiting on nothing is the silent `wontfix`
+   again, with a date attached.
+4. **A met wake does not lift the hold by itself.** A scheduler that evaluates wakes
+   posts once that the condition is met and hands the issue to triage. Triage reads the
+   newest ruling or `Hold:` line, because a later ruling may have tightened the condition,
+   and reports the hold as *wake met, lift?*. The owner removes the label, as above. The
+   evaluator proposes; it never clears.
+5. **Wakes are re-checked on every triage pass**, not only once `review-by:` is reached
+   (`code-triage` §0, §2, §5). A wake that comes true between two passes is noticed on the
+   next one, whether or not anything else in the backlog moved.
+
+This applies to `deferred:*` and to every label declared under `holds:` alike, because
+both carry the same `Hold:` line.
+
+Nothing in this repo's tooling writes a `Hold:` line. The mechanical parts are the
+audit's shape check on `holds:` and `tools/lib/wake.js`, which parses a `wake:` value and
+evaluates it against facts a caller has already gathered. Whoever parks the issue writes
+the line, and `code-triage` reads it (its §0, §2, §5 and §6).
 
 #### Disposition — the marker, the seven kinds, and who may apply one (#315)
 
@@ -2307,7 +2373,7 @@ close-reason spelling, because that is the string the close is made with; its to
 | `done` | `done` | The ask was executed **and** cross-checked; acceptance ticked, or a remainder declared | closes with evidence |
 | `split` | `split` | Part landed; the remainder is filed as a native sub-issue carrying the same `delivery:` and a wake condition, evidence copied across | closes with evidence |
 | `routed-out` | `routed-out` | The work belongs to another repo; `<other-repo>#N` exists and links back | closes with evidence |
-| `hold` | `hold` | Parked on a named wake condition | `deferred:<kind>` + `review-by:<date>` (above) |
+| `hold` | `hold` | Parked on a named wake condition | `deferred:<kind>` + a `Hold:` line whose `wake:` is from the closed vocabulary (above) |
 | `needs-boss` | `needs-boss` | A human must answer before anything else can happen | a recorded decision (*Decision gate*, below) |
 | `not planned` | `not-planned` | Superseded, or the direction was abandoned | closes as `not planned` |
 | `leave` | `leave` | Nothing decided | **never applied by an agent** — a nameable wake ⇒ `hold`; nothing to name ⇒ a *finding* |
@@ -2347,7 +2413,7 @@ neither input reaches them.
 | `done` | evidence in the fixed shape **∧** a re-runnable cross-check recorded **∧** acceptance ticked or a remainder declared **∧** the issue gates nothing still open **∧** the axis permits **∧** no skip-fence class | the axis does not permit · a skip-fence class · no cross-check possible · the issue is a gate node for something open |
 | `split` | the remainder is filed as a native sub-issue with the same `delivery:` and a wake condition, evidence copied across | never — filing is mechanical |
 | `routed-out` | `<other-repo>#N` exists **and** links back to this issue | never — but the filing itself obeys the destination repo's own language rule |
-| `hold` | a wake condition is present — `review-by:<date>` **or** a real `blockedBy` edge | the wake has stood **30 d** (a PROPOSAL, unmeasured) with no movement ⇒ a human confirms it is still wanted, else `not planned` |
+| `hold` | a wake condition is present — `review-by:<date>`, a real `blockedBy` edge, **or** a `wake:` from *Holds*' closed vocabulary | the wake has stood **30 d** (a PROPOSAL, unmeasured) with no movement ⇒ a human confirms it is still wanted, else `not planned` |
 | `needs-boss` | **never** — the agent *records* the question and moves on (record-first) | always; the answer returns the issue to intake |
 | `not planned` | superseded by a **merged or closed** replacement that references this issue | an abandoned direction — a human judgement, always |
 | `leave` | **never** — the agent converts it (see above) | a human may leave with a reason |

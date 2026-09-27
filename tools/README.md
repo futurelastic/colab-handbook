@@ -532,6 +532,19 @@ Evidence is a **pushed branch with real commits**. An active session on the bloc
 (intent, not code — one measured session was already dead ten minutes in, having never claimed its
 issue), nor is an unpushed branch, nor an empty one.
 
+## Hold wakes (`lib/wake.js`) — the closed `wake:` vocabulary, parsed and evaluated (#382)
+
+A hold's `Hold: … — wake: …` line (`CONVENTIONS.md` §5, *Holds*) names what ends it, from a closed
+vocabulary: `review-by:<date>` · `#N` · `ruling` · `issueClosed:<n|owner/repo#n>` ·
+`branchLanded:<ref>` · `trunkAt:<sha>` · `labelPresent:<label>` · `after:<date>`. `lib/wake.js`
+parses a `wake:` value (commas AND several conditions; one piece outside the vocabulary refuses the
+whole value) and evaluates it against facts a caller gathered — `true` met, `false` not yet, `null`
+unmeasured, never guessed. It is **pure**, like `readiness.js`, and has no command: `code-triage`
+§2 is the manual procedure that reaches the same verdicts. The checkable names are spelled exactly
+as the one adopting scheduler that evaluates wakes spells them; `lib/wake.test.js` pins the list, so
+a second spelling fails CI rather than drifting. `lib/disposition.js` reads it too: a `hold` whose
+wake is a vocabulary `wake:` is a hold, and prose is not.
+
 ## Dependency edges (`lib/blocked-by.js`) — the `blocked_by` write, owned (#251)
 
 The `blocked_by` dependency edge was the one write in `CONVENTIONS.md` [§5](../CONVENTIONS.md#readiness--open-and-unclaimed-is-not-enough)
