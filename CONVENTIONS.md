@@ -2762,12 +2762,25 @@ ci-grant when any condition below is not met. Fires **iff**:
    does not, a changed command does; deleting or renaming a manifest counts. There
    is **no carve-out** for this condition — see below for why the #321 door cannot
    adjudicate it.
+6. the branch diff does **not** change a Python dependency manifest (#377). The
+   Python CI template runs ruff, mypy and pytest only when the tool is installed,
+   and what is installed comes from the files it installs from — so dropping
+   `pytest` from `requirements-dev.txt` skips the Test step and the job still
+   concludes `success`. What counts, at any depth: `pyproject.toml`, `setup.py`,
+   `setup.cfg`; any `.txt`/`.in` whose name contains `requirements` or that sits
+   under a `requirements/` directory; and any file one of those pulls in (a `-r`/`-c`
+   include, a `[tool.setuptools.dynamic]` `file =`), read from both sides of the
+   diff. The whole file counts, not a block: in Python the dependency list *is* the
+   switch, and a tool can arrive transitively, which no block-level read can
+   measure. So a version pin refuses too — the accepted false refusal, falling
+   through to the ci-grant. Lockfiles are not read by the template and do not
+   count. **No carve-out**, for the same reason as 5.
 
 An unmeasurable diff — a failed read, a manifest that does not parse, a manifest
 that is a symlink — refuses, the same as any other unmeasured signal. Order of
-checks: 1 → 2 → 2b → 3 → diff measurable → 5 → 4 (with its carve-out). Condition 5
-comes before 4 because the carve-out *admits*: a check placed after it would never
-be reached by a branch touching both.
+checks: 1 → 2 → 2b → 3 → diff measurable → 5 → 6 → 4 (with its carve-out).
+Conditions 5 and 6 come before 4 because the carve-out *admits*: a check placed
+after it would never be reached by a branch touching both.
 
 **The workflow carve-out (#321) — one guarded door through condition 4, not a
 relaxation of it.** The repair for a CI-*infrastructure* outage is, by
@@ -2849,6 +2862,12 @@ no label, and no tracker comment: nothing here is a human write.
   `package.json` scripts change during a red trunk refuses condition 5. (vii) A job
   whose `name:` interpolates the event name differs between the push and the
   `pull_request` run, so 2b cannot match it.
+- **#377 adds one more, same direction.** (viii) Any change to a Python dependency
+  manifest during a red trunk — a "pin the broken upstream" cure included — refuses
+  condition 6. Narrowing it to "a requirement name disappeared" is deliberately
+  unmade: a version change can drop a transitively installed tool, and that is not
+  measurable at this gate. Reasoning:
+  [`docs/adr/377-cure-rule-python-dependency-manifests.md`](docs/adr/377-cure-rule-python-dependency-manifests.md).
 - **`package.json`'s `scripts` block is condition 5, not part of this carve-out,
   and must not be folded into it.** The carve-out's evidence cannot adjudicate a
   scripts-block weakening in the general case — it happens inside a step whose

@@ -44,6 +44,12 @@
  *      and test run at all, and a skipped step leaves the job `success` — so deleting
  *      `scripts.test` weakens the instrument without touching a workflow file. No carve-out: see
  *      below for why the #321 door cannot adjudicate it.
+ *   6. NO PYTHON DEPENDENCY-MANIFEST CHANGES (#377) — the branch diff must not change a file the
+ *      Python CI template installs from (`pyproject.toml`/`setup.py`/`setup.cfg`, `requirements*`
+ *      files and what they include — tools/lib/cure-diff.js names the set). That template runs
+ *      ruff/mypy/pytest only when the tool is importable after install, so removing `pytest` from
+ *      `requirements-dev.txt` skips the Test step and leaves the job `success`. Same shape as 5, a
+ *      sibling door with no carve-out, for the same reason.
  *
  * THE WORKFLOW CARVE-OUT (#321) — why condition 4 could not simply stay absolute. The repair for
  * a CI-INFRASTRUCTURE outage is, by construction, a workflow change: when trunk goes red because
@@ -153,6 +159,17 @@ const MANIFEST_SCRIPTS_REFUSAL =
   'branch diff changes the `scripts` block of package.json — CI templates read that block to decide which ' +
   'checks run, so it is part of the instrument grading this branch and the cure rule will not let a branch ' +
   'change it and grade itself; there is no carve-out for this case, a human ci-grant is the door';
+
+/**
+ * The condition-6 refusal (#377) — a branch whose diff changes a Python dependency manifest. No
+ * carve-out, for the same reason as condition 5: the skip happens inside a job whose name and
+ * conclusion are unchanged.
+ */
+const PYTHON_MANIFEST_REFUSAL =
+  'branch diff changes a Python dependency manifest — the Python CI template runs lint, typecheck and test only ' +
+  'when the tool is installed from those files, so they are part of the instrument grading this branch and the cure ' +
+  'rule will not let a branch change them and grade itself (a version pin counts too); there is no carve-out for ' +
+  'this case, a human ci-grant is the door';
 
 /** Conclusions that do NOT make a completed job red. Inverted allowlist, the same shape (and for
  *  the same reason) as tools/lib/git.js's run-level rule: a denylist gets chased value by value,
@@ -412,6 +429,10 @@ function workflowCarveOut(jobEvidence) {
  * which refuses: a caller that did not measure it has not shown the instrument is intact.
  * `manifestPaths` — the manifests whose scripts changed, named in the refusal.
  *
+ * `pythonManifestTouched` — bool, whether the diff changes a Python dependency manifest the Python
+ * template installs from (condition 6, #377). `null`/`undefined` = unmeasured, which refuses.
+ * `pythonManifestPaths` — those files, named in the refusal.
+ *
  * `jobEvidence` — `shapeJobEvidence(...)`'s output, or `null`. Read on EVERY cure since #297 —
  * condition 2b (`redJobsProvenOnBranch`) — and again by the #321 carve-out when workflows were
  * touched. `null`, an empty `redJobs`, an empty `branchJobs`, an unreadable step list and an
@@ -421,8 +442,8 @@ function workflowCarveOut(jobEvidence) {
  *
  * Order of checks: cheapest/most-fundamental first, each with a distinct actionable reason —
  * identical posture to ci-grant.js's evaluateIssue: containment → 2a (run green) → 2b (the red jobs
- * pass here) → anti-stacking → diff measurable → condition 5 (manifest scripts) → condition 4 with
- * its carve-out. Condition 5 sits BEFORE the workflow block, not after it: that block RETURNS
+ * pass here) → anti-stacking → diff measurable → condition 5 (manifest scripts) → condition 6 (Python
+ * manifests) → condition 4 with its carve-out. Conditions 5 and 6 sit BEFORE the workflow block, not after it: that block RETURNS
  * `ok: true` when the carve-out admits, so a check placed after it would never be reached by a
  * branch touching both — exactly the "two instrument paths, two doors" composition #321 asked for.
  *
@@ -432,7 +453,7 @@ function workflowCarveOut(jobEvidence) {
  * the presence of `carveOut` rather than by re-deriving it.
  */
 function cureVerdict({ containsRedSha, evidence, redSha, stacking, workflowsTouched, jobEvidence,
-  manifestScriptsTouched, manifestPaths }) {
+  manifestScriptsTouched, manifestPaths, pythonManifestTouched, pythonManifestPaths }) {
   if (!containsRedSha) {
     return { ok: false,
       reason: `branch does not contain trunk's current red head \`${redSha}\` as an ancestor — ` +
@@ -459,13 +480,19 @@ function cureVerdict({ containsRedSha, evidence, redSha, stacking, workflowsTouc
   if (!stacking || !stacking.ok) {
     return { ok: false, reason: (stacking && stacking.reason) || 'anti-stacking verdict unavailable' };
   }
-  if (typeof workflowsTouched !== 'boolean' || typeof manifestScriptsTouched !== 'boolean') {
+  if (typeof workflowsTouched !== 'boolean' || typeof manifestScriptsTouched !== 'boolean'
+    || typeof pythonManifestTouched !== 'boolean') {
     return { ok: false,
       reason: 'branch diff could not be measured (which CI files and manifests it touches) — an unmeasured diff is never a cure' };
   }
   if (manifestScriptsTouched) {
     const named = Array.isArray(manifestPaths) && manifestPaths.length ? manifestPaths.join(', ') : 'package.json';
     return { ok: false, reason: `${MANIFEST_SCRIPTS_REFUSAL} (changed: ${named})` };
+  }
+  if (pythonManifestTouched) {
+    const named = Array.isArray(pythonManifestPaths) && pythonManifestPaths.length
+      ? pythonManifestPaths.join(', ') : 'a Python dependency manifest';
+    return { ok: false, reason: `${PYTHON_MANIFEST_REFUSAL} (changed: ${named})` };
   }
   if (workflowsTouched) {
     const carve = workflowCarveOut(jobEvidence);
@@ -481,4 +508,5 @@ function cureVerdict({ containsRedSha, evidence, redSha, stacking, workflowsTouc
     reason: `branch contains red \`${redSha}\` as an ancestor AND is green at its own current head (\`${evidence.sha}\`) — proven cure` };
 }
 
-module.exports = { cureVerdict, redJobsProvenOnBranch, workflowCarveOut, shapeJobEvidence, WORKFLOW_REFUSAL, MANIFEST_SCRIPTS_REFUSAL };
+module.exports = { cureVerdict, redJobsProvenOnBranch, workflowCarveOut, shapeJobEvidence, WORKFLOW_REFUSAL, MANIFEST_SCRIPTS_REFUSAL,
+  PYTHON_MANIFEST_REFUSAL };

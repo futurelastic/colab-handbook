@@ -8846,7 +8846,8 @@ function ciGrantPayload(ciResult) {
  *      (merge-base-relative, the tree a squash lands), `--no-renames` so a workflow file or
  *      manifest MOVED away still counts (#297 — the old `--name-only` read listed only a rename's
  *      new path). It yields `workflowsTouched` (condition 4) and `manifestScriptsTouched`
- *      (condition 5: any `package.json` whose `scripts` block changed). A failed read is `null`,
+ *      (condition 5: any `package.json` whose `scripts` block changed) and `pythonManifestTouched`
+ *      (condition 6, #377: a Python dependency manifest the Python template installs from). A failed read is `null`,
  *      which refuses — it used to fall back to "nothing touched".
  *   5. job-level evidence — measured on EVERY cure attempt that has passed containment and 2a
  *      (#297: condition 2b needs it, not only the #321 carve-out). Every green-trunk ship still
@@ -8888,7 +8889,8 @@ function shipCiCure(repoAbs, gh, target, trunk, redSha, branch) {
     ? shipCureJobEvidence(repoAbs, trunk, redSha, branch, evRun) : null;
   const verdict = ciCure.cureVerdict({ containsRedSha, evidence, redSha, stacking, jobEvidence,
     workflowsTouched: diff.workflowsTouched,
-    manifestScriptsTouched: diff.manifestScriptsTouched, manifestPaths: diff.manifestPaths });
+    manifestScriptsTouched: diff.manifestScriptsTouched, manifestPaths: diff.manifestPaths,
+    pythonManifestTouched: diff.pythonManifestTouched, pythonManifestPaths: diff.pythonManifestPaths });
   return { ...verdict, redSha, evidenceSha: evidence ? evidence.sha : null };
 }
 

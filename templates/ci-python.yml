@@ -249,6 +249,12 @@ jobs:
         run: |
           # EDIT: add the tools this repo uses. Each is optional so a repo without it
           # is not forced to adopt one to keep CI green.
+          # Because a tool missing here SKIPS its step and the job still concludes
+          # `success`, the files installed from above and here are part of the
+          # instrument: `colab ship`'s cure rule refuses a branch that changes them
+          # while trunk is red (CONVENTIONS.md §5, cure rule condition 6, #377). Installing
+          # from a file this template does not name (a lockfile, a new include)?
+          # Extend that rule's list, or accept that the cure rule cannot see it.
           if [ -f requirements-dev.txt ]; then pip install -r requirements-dev.txt; fi
           for t in ruff mypy pytest; do
             if python -m "$t" --version >/dev/null 2>&1; then
