@@ -152,6 +152,25 @@ function changedProblems(before, afterState) {
   return out;
 }
 
+/**
+ * Problems that applying `patch` to one worktree record would INTRODUCE — the same codes-compared
+ * rule `changedProblems` applies to a whole-state mutation, asked ahead of time about a single write.
+ * Returns human-readable strings; empty means the write would pass the state guard.
+ *
+ * WHY (#389): `colab ship` flips its worktree to `status: merged` only AFTER the push to trunk, and
+ * that write goes through the guard. A `pending` stub with `path: null` passes every precondition
+ * and then refuses exactly that flip ("path is null while status is merged") — with trunk already
+ * moved, so every bookkeeping step after the push was skipped. A write the real run would refuse
+ * must be a failed precondition, measured before anything irreversible, so it is asked here.
+ */
+function flipProblems(name, rec, patch) {
+  if (!rec) return [];
+  const had = new Set(worktreeProblems(rec).map((p) => p.code));
+  return worktreeProblems({ ...rec, ...patch })
+    .filter((p) => !had.has(p.code))
+    .map((p) => `worktree "${name}": ${p.message}`);
+}
+
 /** The refusal text for a non-empty changedProblems() list. */
 function refusalMessage(problems) {
   return ['Refusing to write ~/.colab/state.json — the change would record something nothing can act on:']
@@ -162,5 +181,5 @@ function refusalMessage(problems) {
 
 module.exports = {
   ROLE_WORDS, PENDING, statusOf, branchProblem, pathProblem,
-  worktreeProblems, claimProblems, placeProblems, snapshot, changedProblems, refusalMessage,
+  worktreeProblems, claimProblems, placeProblems, snapshot, changedProblems, flipProblems, refusalMessage,
 };
