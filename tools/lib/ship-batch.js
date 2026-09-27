@@ -135,15 +135,20 @@ function memberEligibility(report, ciClass, { trunk, touchesWorkflows = false } 
  * Pick up to `n` from eligible candidates `[{ branch, files: [] }]`, in the order given. File-disjoint
  * candidates are taken first; the rest fill any remaining slot in order. Only a pre-sort: a member
  * sharing a file is still admitted when a slot is free — the build's merge and the combined run decide.
+ *
+ * `opts.isGenerated(path)` (#387): a path the repo regenerates rather than authors is not an overlap —
+ * the build regenerates it on the combined head, exactly as B0 does for one branch — so sharing only
+ * such paths leaves two candidates disjoint.
  */
-function selectMembers(candidates, n) {
+function selectMembers(candidates, n, opts = {}) {
+  const isGenerated = typeof opts.isGenerated === 'function' ? opts.isGenerated : () => false;
   const list = Array.isArray(candidates) ? candidates : [];
   const selected = [];
   const used = new Set();
   const seen = new Set();
   for (const c of list) {
     if (selected.length >= n) break;
-    const files = c.files || [];
+    const files = (c.files || []).filter((f) => !isGenerated(f));
     if (files.some((f) => used.has(f))) continue;
     selected.push(c); seen.add(c.branch);
     for (const f of files) used.add(f);

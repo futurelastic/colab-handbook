@@ -454,7 +454,11 @@ arrive), merge-clean against trunk — land through one command instead of one s
    ```
    It re-reads each member's own ship gates, builds trunk + one squash commit per member on
    `ship-batch/<trunk-sha7>`, and pushes it. That ref's **one combined run replaces every
-   member's post-sync re-run** (B1a, below).
+   member's post-sync re-run** (B1a, below). A member whose overlap with those already in is
+   confined to `generated:` paths is **not** dropped: the build runs `.colab/hooks/pre-ship` on
+   the combined head, B0's rule, and prints a `↻ <member>: … regenerated` line naming the
+   files (#387). Only an overlap outside `generated:` — or no hook to regenerate with — drops
+   a member to the next batch (`✗ <member>: …`).
 3. Read the exit code — it never waits for you:
    - **`3` — paused.** The combined run (or trunk's own) is still going, or the batch was just
      (re)built. Wait on the run id it printed with B1a's bound — `timeout 900 gh run watch

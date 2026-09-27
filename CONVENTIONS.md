@@ -1687,7 +1687,13 @@ unchanged) may land through `colab ship --batch <b1,b2[,b3]>`:
 2. **Building.** Trunk's current head — green exactly as the trunk gate requires — plus
    one squash commit per member, **each its own commit with its own `Closes #N`**, so
    per-issue evidence and revert stay one-to-one. A member that conflicts with those
-   already in drops to the next batch. The result is pushed to `ship-batch/<trunk-sha7>`.
+   already in drops to the next batch — **unless every conflicting path is
+   [`generated`](project.schema.md#generated--optional)** (#387): then the build does what
+   B0 does for one branch, running `.colab/hooks/pre-ship` on the combined head to
+   regenerate them, and the member stays in (the combined run is still the gate). With no
+   hook to regenerate, or a hook that fails, it drops as before. Sharing only generated
+   paths does not count against disjointness in step 1's pre-filter either. The result is
+   pushed to `ship-batch/<trunk-sha7>`.
 3. **One combined run** there must be `green`. It **replaces** each member's post-sync
    re-run — not a skip justified by disjointness, but one run instead of N.
 4. **Landing.** Trunk fast-forwards to the batch head **only if trunk has not moved** since

@@ -1000,7 +1000,9 @@ generated: ["resources/js/routes/**", "schemas/lock.json"]
 
 Path globs that are **regenerated, not authored** (codegen output, lockfiles).
 `colab ship` treats a sync-merge conflict confined to these as resolvable by the
-repo's `.colab/hooks/pre-ship` regen step instead of forcing a human. Extends the
+repo's `.colab/hooks/pre-ship` regen step instead of forcing a human — on a single
+branch's sync (B0) and equally inside a `ship --batch` build, where it regenerates on the
+combined head rather than dropping the member (#387). Extends the
 built-in default set (`package-lock.json`, `pnpm-lock.yaml`, `yarn.lock`,
 `composer.lock`, `Cargo.lock`, `go.sum`, `dist/`, `build/`, `public/build/`, `.astro/`).
 
