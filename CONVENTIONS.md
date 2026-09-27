@@ -2028,6 +2028,12 @@ One merge conflict became six serial review cycles. Contention has its own two a
   to the per-item folders, and each item's status moved into that item's own file. The
   items then touch disjoint files and run in parallel, with nothing left to group.
 
+**Contention between an issue and a live branch is recorded in the issue text (#386).** An
+issue names the files it will edit on a `Touches:` line in its body. A scheduler that
+brakes on files reads that line, not a comment, so a collision written only as prose never
+reaches it. When `code-triage` measures an issue's file held by a live branch, it appends
+that path to `Touches:` in the same step it reports the collision.
+
 **Split an issue at the external-wait line (#371).** When only part of an issue waits on
 an outside party (another team's API, a vendor, a ruling from outside the repo), neither
 the edge nor the `deferred:external-party` park may hold the whole issue. Split it. The
@@ -2282,6 +2288,14 @@ Because: the import model changed in #88; the parser steps must be rewritten aga
   any blocker with no named clearer a stall, and for the same reason: an unbounded park
   is a silent `wontfix`. A `deferred:*` label that carries its wake but has no `Hold:`
   line has no named owner, so it is a stall too.
+- **A legacy hold already on record is transcribed, not stalled (#386).** Some holds
+  predate the `Hold:` line: the label, a `review-by:<date>` label, and a reason naming who
+  clears it are all on the issue, just not on one line. Writing that line decides
+  nothing, so `code-triage` writes it: owner from the reason, `wake: review-by:<date>`,
+  and `Because:` summarising the reason with a link to it. It reports the hold as fixed,
+  not as a stall. The `wake:` holds only the date. Conditions on one line are ANDed, so an
+  "or" in the reason belongs in `Because:`. If the date, the reason or the owner is
+  missing, the hold stays a stall for a human.
 
 ###### The `wake:` vocabulary — a wake a scheduler can check (#382)
 
