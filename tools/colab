@@ -63,6 +63,7 @@ const releaseCut = require('./lib/release-cut');
 const releaseFinalize = require('./lib/release-finalize');
 const shippedBranch = require('./lib/shipped-branch');
 const shipRoles = require('./lib/ship-roles'); // #372
+const refsBrake = require('./lib/refs-brake'); // #385
 const {
   HOST, UserError, normIssueNum, issueTag, claimKey, today, nowISO, hoursSince, humanAge,
   parseArgs, table, shortRepo,
@@ -8254,6 +8255,13 @@ Options:
                       Comma-separated; each must be a claimed issue on the branch. An issue carrying
                       the "tracking" label is treated this way automatically, no flag needed. The
                       claim is still released either way — only Closes→Refs changes.
+                      #385: a --refs'd issue whose body still has an unticked "- [ ]" box (under
+                      any heading) and carries nothing that stops a start (deferred:*,
+                      needs-decision, a non-code delivery:*, tracking, or a project.yml holds:
+                      label) gets a REMINDER, never a refusal: park it in the same step
+                      (deferred:<kind> + review-by:<date> + a Hold: line) when the leftover is not
+                      code, or prefer Remainder: #M when it is. Otherwise it reads as startable
+                      code work the moment this ship releases its claim.
                       #149: refuses BEFORE the push (real run and --dry alike) if the composed
                       squash message carries a GitHub closing keyword (close/closes/closed/fix/
                       fixes/fixed/resolve/resolves/resolved, with or without a colon, e.g. "Closes:
@@ -8279,6 +8287,7 @@ Options:
                           "issues": [N, ...],
                           "closeIssues": [N, ...], "refsIssues": [N, ...],
                           "checklistFindings": [ { "issue": N, "unchecked": n, "total": n, "reason": "..." } ],
+                          "refsBrakeFindings": [ { "issue": N, "unticked": n, "total": n, "reason": "..." } ],
                           "checks": [ { "name": "...", "ok": bool, "class": "..." | null, "detail": "..." } ] }
 
                       \`mode\` says which completion path this branch has (#90). "evidence-close"
@@ -8320,6 +8329,10 @@ Options:
                       ok:false, class:human-gated — it blocks this ship, exactly like a real
                       precondition failure, until the boxes are ticked, a \`Remainder: #M\` is
                       declared, or the issue is explicitly \`--refs\`'d.
+
+                      \`refsBrakeFindings\` (#385) is ADVISORY and never flips \`ok\`: each --refs'd
+                      issue left open with an unticked box and no start-stopping label. When
+                      non-empty it also appears as an ok:true \`checks\` row ("ref'd issues braked").
 
                       \`migrationGrant\` (#98) is \`null\` when the branch adds no migration file (the
                       ordinary case). Otherwise: \`{ branch, files: [...], granted: [{issue,by,at}],
@@ -8517,11 +8530,25 @@ const HUMAN_GATED = 'human-gated';     // autonomy absent, a real failure, a dec
  * and REFUSE THE MERGE on it, same as a red CI run. The declaration (tick the boxes, add
  * `Remainder: #M`, or explicit `--refs`/the `tracking` label) becomes a precondition of shipping,
  * not a request that a downgraded `Refs #N` already satisfied silently.
+ *
+ * Returns `brakeFindings` too (#385): one entry per issue kept open by the `--refs` FLAG that still
+ * has an unticked box and carries nothing that stops a start (lib/refs-brake.js). ADVISORY — never
+ * a refusal: `--refs` stays a deliberate, ungated choice (§4). It exists because that choice left
+ * an issue open, `deps-checked` and unbraked, so a scheduler re-took it as code work.
+ * `declaredHolds` is the descriptor's `holds:` list (§5, *Holds*).
  */
-function resolveCloseRefsSplit(repoAbs, gh, issues, refsFromFlag) {
+function resolveCloseRefsSplit(repoAbs, gh, issues, refsFromFlag, declaredHolds = []) {
   const refsSet = new Set(issues.filter((n) => refsFromFlag.has(n)));
   const gateFindings = [];
+  const brakeFindings = [];
   if (gh) {
+    for (const num of issues) {
+      if (!refsFromFlag.has(num)) continue;
+      const info = git.ghIssueView(repoAbs, num, ['body', 'labels']);
+      if (!info) continue; // read failed — a reminder never fires on a read we could not attempt
+      const f = refsBrake.refsBrakeFinding({ issue: num, body: info.body, labels: info.labels, declaredHolds });
+      if (f) brakeFindings.push(f);
+    }
     for (const num of issues) {
       if (refsSet.has(num)) continue;
       const info = git.ghIssueView(repoAbs, num, ['labels']);
@@ -8544,7 +8571,13 @@ function resolveCloseRefsSplit(repoAbs, gh, issues, refsFromFlag) {
   }
   const closeIssues = issues.filter((n) => !refsSet.has(n));
   const refsIssues = issues.filter((n) => refsSet.has(n));
-  return { closeIssues, refsIssues, refsSet, gateFindings };
+  return { closeIssues, refsIssues, refsSet, gateFindings, brakeFindings };
+}
+
+/** `holds:` from a parsed descriptor, as a list of label names — anything malformed reads as none. */
+function descriptorHolds(doc) {
+  const h = doc && doc.holds;
+  return Array.isArray(h) ? h.filter((x) => typeof x === 'string' && x.trim()).map((x) => x.trim()) : [];
 }
 
 /**
@@ -9042,6 +9075,8 @@ function cmdShipDryJson(opts) {
   // and therefore DOES flip `ok`, same as a red CI run: an unticked `## Plan` checklist with no
   // declared remainder is now a precondition failure, not a silent Closes→Refs redirect.
   let closeIssues = sess.issues, refsIssues = [], checklistFindings = [];
+  // #385: advisory — `--refs`'d issues left open with unticked boxes and no hold. Never flips `ok`.
+  let refsBrakeFindings = [];
   // #90: `mode` is additive and tells an unattended caller WHICH completion path this branch has —
   // "squash" or "evidence-close". Without it, a zero-commit branch read `ok: true` and then hit
   // B1's wall, because `checks[]` had no "branch has commits" precondition at all.
@@ -9079,7 +9114,7 @@ function cmdShipDryJson(opts) {
   const emit = (ok) => {
     const body = {
       ok, dry: true, repo: shortRepo(repoAbs), branch: sess.branch, worktree: sess.name || null,
-      target, mode, issues: sess.issues, closeIssues, refsIssues, checklistFindings, checks,
+      target, mode, issues: sess.issues, closeIssues, refsIssues, checklistFindings, refsBrakeFindings, checks,
       migrationGrant: migrationGrantPayload, ciGrant: ciGrantPayloadVal, ciCure: ciCurePayloadVal,
       baseCi: baseCiPayloadVal, dirtyOwners: dirtyOwnersPayloadVal, autonomyGate: autonomyGatePayloadVal,
       coreReview: coreReviewPayloadVal,
@@ -9145,8 +9180,15 @@ function cmdShipDryJson(opts) {
   const refsFromFlagJson = new Set(
     String(opts.refs || '').split(',').map((s) => s.trim().replace(/^#/, '')).filter(Boolean).map(Number),
   );
-  const split = resolveCloseRefsSplit(repoAbs, gh, sess.issues, refsFromFlagJson);
+  const split = resolveCloseRefsSplit(repoAbs, gh, sess.issues, refsFromFlagJson, descriptorHolds(doc));
   closeIssues = split.closeIssues; refsIssues = split.refsIssues; checklistFindings = split.gateFindings;
+  refsBrakeFindings = split.brakeFindings;
+  // #385: ADVISORY row, always ok:true (same posture as #293's base-CI row) — `--refs` stays ungated.
+  if (refsBrakeFindings.length) {
+    checks.push({ name: 'ref\'d issues braked (advisory, #385)', ok: true, class: null,
+      detail: `${refsBrakeFindings.map((f) => `#${f.issue} (${f.unticked}/${f.total} unticked)`).join(', ')} — ` +
+        'kept open with no hold label: add deferred:<kind> + review-by:<date> + a Hold: line, or use Remainder: #M if the leftover is code' });
+  }
 
   // #263: the close gate now REFUSES the merge, not just the close. `checklistFindings` here is
   // strictly the CHECKLIST gate's own findings (not --refs, not the tracking label — see
@@ -9601,12 +9643,13 @@ function cmdShipDirect(opts) {
 
   const checks = []; // {name, ok, class, detail, advisory?}
   let closeIssues = [], refsIssues = [], refsSet = new Set(), checklistFindings = [], dirtyOwners = null;
+  let refsBrakeFindings = []; // #385, advisory
   let autonomyGatePayloadVal = null; // #345
   let coreReview = null; // #351
   const emitJson = (ok) => {
     print(JSON.stringify({
       ok, dry: true, direct: true, repo: shortRepo(repoAbs), branch: null, worktree: null, target: trunk,
-      mode: 'evidence-close', issues, closeIssues, refsIssues, checklistFindings,
+      mode: 'evidence-close', issues, closeIssues, refsIssues, checklistFindings, refsBrakeFindings,
       checks: checks.map(({ name, ok: rowOk, class: cls, detail }) => ({ name, ok: rowOk, class: cls, detail })),
       migrationGrant: null, ciGrant: null, ciCure: null, baseCi: null, dirtyOwners, autonomyGate: autonomyGatePayloadVal,
       coreReview: coreReview && {
@@ -9662,9 +9705,11 @@ function cmdShipDirect(opts) {
   for (const n of refsFromFlag) {
     if (!issues.includes(n)) warn(`--refs #${n} is not a claimed issue of this unit — ignored`);
   }
-  const split = resolveCloseRefsSplit(repoAbs, gh, issues, refsFromFlag);
+  const split = resolveCloseRefsSplit(repoAbs, gh, issues, refsFromFlag, descriptorHolds(doc));
   ({ closeIssues, refsIssues, refsSet } = split);
   checklistFindings = split.gateFindings;
+  refsBrakeFindings = split.brakeFindings;
+  if (!opts.json) for (const f of refsBrakeFindings) for (const l of refsBrake.reminderLines(f)) warn(l); // #385, advisory
   const gateOk = checklistFindings.length === 0;
   for (const f of checklistFindings) warn(`#${f.issue}: ${f.reason} — refusing to close until this is resolved.`);
   checks.push({ name: 'remainder declared for unticked issues', ok: gateOk, class: gateOk ? null : HUMAN_GATED,
@@ -10041,7 +10086,12 @@ function cmdShip(argv) {
   for (const n of refsFromFlag) {
     if (!sess.issues.includes(n)) warn(`--refs #${n} is not a claimed issue on this branch — ignored`);
   }
-  const { closeIssues, refsIssues, refsSet, gateFindings } = resolveCloseRefsSplit(repoAbs, gh, sess.issues, refsFromFlag);
+  const { closeIssues, refsIssues, refsSet, gateFindings, brakeFindings } =
+    resolveCloseRefsSplit(repoAbs, gh, sess.issues, refsFromFlag, descriptorHolds(doc));
+  // #385: ADVISORY, never a refusal — `--refs` stays a deliberate, ungated choice. It names the
+  // other half of that choice: an issue kept open for a non-code leftover must carry a hold, or a
+  // scheduler re-takes it as code work the moment this ship releases its claim.
+  for (const f of brakeFindings) for (const l of refsBrake.reminderLines(f)) warn(l);
   // #74/#263: a checklist-gated issue is a SURPRISE the operator did not ask for (unlike --refs or
   // a tracking label, both deliberate) — call it out on its own, loud, not folded silently into
   // the "issues:" line's "(ref — kept open)" annotation below. #263: this is now a REFUSAL, not a

@@ -743,7 +743,22 @@ any `- [ ]` line with no `Remainder: #M` anywhere in that output means **Partial
 not **Done** — file the remainder issue and tick what shipped (B2b's evidence
 template below) *before* you write `Closes #N`; do not squash-merge this issue
 until you have. Ticking the remaining boxes, or an explicit, deliberate
-`colab ship --refs $N`, both clear it too. A `## Plan` with no checkboxes at
+`colab ship --refs $N`, both clear it too — **but `--refs` is only half a choice
+(#385).** It keeps $N open, and once B3 releases the claim an open, unheld issue
+reads as startable code work again. So in the **same step** as the ship:
+
+- **Leftover is not code** (a live proof, an ops check, a measurement) → park it:
+  ```sh
+  gh issue edit $N --add-label deferred:measurement --add-label review-by:<YYYY-MM-DD>
+  gh issue comment $N --body $'Hold: deferred:measurement — owner: <who posts the proof> — wake: review-by:<YYYY-MM-DD>\nBecause: <what is left, and why no code session can produce it>'
+  ```
+  (`deferred:date` / `deferred:external-party` when that is what it waits on —
+  CONVENTIONS.md [§5](../../CONVENTIONS.md#disposition--a-park-must-name-its-wake-condition-279), *Disposition* and *Holds*.)
+- **Leftover is code** → prefer `Remainder: #M` over `--refs`, and let $N close.
+
+`colab ship` warns when a `--refs`'d issue still has an unticked box and carries
+no start-stopping label (`refsBrakeFindings` in `--dry --json`). The warning is a
+reminder, not a gate; treat it as a step you skipped, not noise. A `## Plan` with no checkboxes at
 all — written as prose — cannot be checked this way; that shape is itself a
 finding, worth a line in the Issue, but it does not block the close (nothing
 here can predate this convention and be held to it retroactively).
@@ -1034,7 +1049,9 @@ is a human integration event of a promotion's weight.
   items you touched but did not complete — reference it, don't close it, or you bury its
   knowledge behind a closed-issue lookup (`CONVENTIONS.md` [§5](../../CONVENTIONS.md#tracking-issues--claimed-but-referenced-not-closed), *Tracking issues*). Through
   the blessed door this is automatic for an issue carrying the `tracking` label, or opt in
-  per-ship with `colab ship --refs <N>`; the claim is still released either way. When
+  per-ship with `colab ship --refs <N>`; the claim is still released either way. A
+  `--refs`'d issue kept open for a non-code leftover gets its hold in this same step
+  (B1b above, #385). A `tracking`-labelled one needs none. When
   that issue is finished later — its live check passed, its last item done — close it
   with `colab close <N> --comment "<evidence>"`, never a bare `gh issue close`: the bare
   close leaves any claim standing and tells no observer, which kept a closed issue
