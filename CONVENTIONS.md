@@ -1471,6 +1471,27 @@ than guessed.
   judgement writes an artifact to the tracker nobody asked for, while requiring the
   human (or session) that already knows what was left out to write the one line keeps
   authorship where the judgement actually lives. The smaller change, taken on purpose.
+- **`--refs` keeps an issue open, so the same step must also stop it being started
+  (#385).** `--refs #N` is still a deliberate choice and still ungated. But after the ship,
+  #N is open, possibly `deps-checked`, and unclaimed. If nothing on it says "do not start",
+  a scheduler picks it up again as code work. In the measured case, the only unticked items
+  were a live end-to-end proof that only a human-driven session could produce. The
+  re-started implementer found nothing to do and held a concurrency slot for about an hour,
+  until a human-side watch parked the issue. So when you choose `--refs` over closing:
+  - **The leftover is not code** (a live proof, an ops check, a measurement): park #N in
+    the same ship. Add `deferred:<kind>` + `review-by:<date>`, plus a `Hold:` line naming
+    who posts the proof (*Disposition* and *Holds*, §5).
+  - **The leftover is code**: prefer `Remainder: #M` and let #N close. The remainder
+    issue is a start candidate of its own and can carry its own hold. #N kept open for
+    code is a second start candidate for the same work.
+
+  `colab ship` prints a **reminder, never a refusal**, when a `--refs`'d issue still has
+  an unticked `- [ ]` box under any heading and carries nothing that stops a start:
+  `deferred:*`, `needs-decision`, a non-code `delivery:*`, `tracking`, or a label declared
+  under `holds:`. `--dry --json` reports the same thing as `refsBrakeFindings` and as an
+  `ok: true` advisory row. The tool never applies the hold itself. Which kind, whose wake
+  and which date are the shipper's call, for the same reason the gate does not file the
+  remainder issue.
 - **Every closed issue must be corroborated by git, not the claim registry alone (#87).**
   Measured: a branch carrying #71 and #76 resolved to `[71, 74, 76]` because a co-tenant
   claimed #74 onto the same worktree minutes after merge authorisation, with nothing on
@@ -1914,7 +1935,9 @@ instead of `Closes #N`.
 
 - **A `tracking` label** — declarative and durable; any session claiming a labelled
   issue references it automatically.
-- **`colab ship --refs <N[,M]>`** — explicit, per-ship, for an unlabelled issue.
+- **`colab ship --refs <N[,M]>`** — explicit, per-ship, for an unlabelled issue. An
+  issue kept open this way for a leftover that is **not** code must also be parked in the
+  same step, or it reads as startable again (#385, §4 *Merging*).
 
 The claim is released unconditionally either way. `tracking` is deliberately **not** in
 the convention label set ([§9](#9-adopting-this)) — its absence breaks no check, so adoption does not
