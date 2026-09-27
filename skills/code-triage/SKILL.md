@@ -441,7 +441,7 @@ skill performs has to be idempotent.
 
 **This skill's tracker writes are exhaustive — the list below is all of them, and nothing
 else is authorised.** An enumeration of "which writes must be careful" reads, by omission,
-as permission for anything unlisted; it is not. If a write is not one of the five below, it
+as permission for anything unlisted; it is not. If a write is not one of the seven below, it
 is not a triage write, no matter how naturally it seems to belong on the issue:
 
 1. `blocked_by` dependency edges, via `colab blocked` (§4, #251)
@@ -449,12 +449,21 @@ is not a triage write, no matter how naturally it seems to belong on the issue:
 3. the `group:<key>` label plus its one evidence comment (§3)
 4. the `needs-plan` label plus its one reason comment (§6)
 5. the `mechanical-lane` label plus its one reason comment (§6)
+6. a transcribed `Hold:` line for a legacy hold whose reason and date are already recorded
+   (§2, *Held*, #386)
+7. measured file names appended to an issue's `Touches:` line, when this pass measures a
+   live branch holding them (§3, *Record a measured collision where the brake reads it*,
+   #386)
+
+Writes 6 and 7 are transcriptions: each copies a fact already on the tracker, or already
+measured this pass, into the one place a scheduler reads it. Neither records a judgement
+of triage's own, and neither lifts, applies or re-dates anything.
 
 **§6's report is console output.** It is what the human or session reading this triage
 directly sees; it is never posted to the issue tracker as a comment, in whole or in part —
 not the ranked list, not a single group's verdict, not a restatement of "still ready,
 unchanged." Measured: one issue collected nine near-identical narrative verdict comments in
-under four hours from a ping-when-idle loop inventing exactly this unauthorised sixth write,
+under four hours from a ping-when-idle loop inventing exactly this unauthorised extra write,
 burying the one human ruling that actually mattered on that issue under six copies of a
 machine re-confirming what it had already confirmed. If a durable per-issue verdict is
 genuinely wanted, that is a new write needing its own idempotence rule — proposing one is
@@ -465,7 +474,7 @@ Re-running a full pass is not license to re-post the group / needs-plan / mechan
 records if their conclusion did not move — each carries its own grep-before-post check
 below; run it before every post, and when nothing changed, post nothing. A verdict that
 CHANGED or REVERSED since the last pass is still §6 console output: "this is an update, not
-a duplicate" does not convert the unauthorised sixth write into an authorised one. Banned
+a duplicate" does not convert the unauthorised extra write into an authorised one. Banned
 forms include, by name: "Triage at trunk `<sha>` — …", "Triage re-measure — verdict
 CHANGED/REVERSED", corrections to either, and "final state of this pass" summaries. A
 verdict stamped to a trunk sha goes stale the next time trunk moves — minutes, in an active
@@ -488,6 +497,14 @@ repo — which is exactly why the tracker is the wrong home for it.
   `subIssuesSummary`, §3) instead. `comments`, `labels` and `assignees` are plain arrays,
   so `| length` is correct on those.
 - **Already-shipped closes:** an issue already closed is not re-closed and not re-evidenced.
+- **Transcribed `Hold:` lines: read before posting.** Post only when the issue has **no**
+  `Hold:` line for that label at all (`gh issue view <N> --comments | grep '^Hold: <label>'`
+  comes back empty). Any existing line, well-formed or not, is a human's record, and a second
+  line would become the newest and silently supersede it. A malformed one stays `STALL`.
+- **`Touches:` appends: add only what is missing.** Read the body first and append only the
+  measured paths the line does not already name. When every path is already there, write
+  nothing. Editing the body moves §0 input 2 once, so the next ping takes one full pass. It
+  must not move it again on the pass after that; if it does, the append is not idempotent.
 - **Group records: the label is idempotent, the comment is not.** Re-applying `group:<key>`
   changes nothing; re-posting its evidence comment stacks a duplicate every idle cycle.
   Grep the existing comments for the key before posting (§3).
@@ -927,7 +944,34 @@ rules. Measure each condition with facts this pass already holds, or one read ea
 
 Then print exactly one of:
 
-- **No `Hold:` line, one missing `owner:` or `wake:`, or a `wake:` outside the vocabulary**
+- **No `Hold:` line, but the hold is already on record** → transcribe it and print `FIXED`
+  (#386). A legacy hold often predates the `Hold:` shape: its reason and its date are on the
+  issue, just not on one line a scheduler can read. Writing that line is a transcription,
+  not a decision, so triage writes it (§0.2, write 6). All three must be there:
+  1. the hold label itself;
+  2. a `review-by:<date>` label on the same issue — the date the parker already chose;
+  3. a **recorded reason** in the issue body or a comment, stating why the issue waits
+     **and** who clears it (a login, or a role the repo's docs define).
+
+  Post one comment in the ordinary two-line shape, then read it back:
+  ```
+  Hold: <label> — owner: <who the reason names> — wake: review-by:<date>
+  Because: <one-sentence summary of the recorded reason> (transcribed by triage from <link to it>)
+  ```
+  - `wake:` is **only** the date. Conditions on one `wake:` line are ANDed, so a reason
+    that says "until X, or by the date" cannot put X there as well — that would turn "or"
+    into "and". X goes into `Because:`, in the reason's own words.
+  - The owner comes from the recorded reason, never from who applied the label or who is
+    assigned. A reason that names nobody is missing its owner, so the issue stays `STALL`.
+    The same goes for a missing date or no recorded reason: a gap is a human's to fill.
+  - The link in `Because:` points to where the reason was found, so the owner can check
+    the summary against it.
+  - `FIXED` prints with the `STALL` lines, first. Its line names the label, the owner, the
+    wake and the comment just posted. From the next pass on, the issue reads as `HELD` or
+    `WAKE` like any other hold. §0's fingerprint does not read comments, so it will not
+    force that pass (the blind spot below).
+- **No `Hold:` line and the record above is incomplete, one missing `owner:` or `wake:`, or
+  a `wake:` outside the vocabulary**
   → `STALL`, listed first. A park with nobody named to clear it and no condition that ends
   it is a silent `wontfix`, so it is a finding, never ready. This includes a `deferred:*`
   label with its wake but no owner line, and a prose wait written into `wake:` instead of
@@ -949,13 +993,15 @@ Then print exactly one of:
 Record every `HELD` line's `wake:` value in `$CACHE.wakes` (§0.1), so a later
 short-circuited ping can still see a date come due or another repo's issue close.
 
-Triage never writes a `Hold:` line or removes a hold — not even on a met wake. Neither is
-one of §0.2's writes; *wake met, lift?* is a proposal for the owner, never a lift.
-Whoever parks the issue writes the line, and its owner clears it. A repo whose descriptor
-declares no `holds:` still gets the `deferred:*` half of this pass. One blind spot: a
-`Hold:` line posted *after* its label is a comment, and §0's fingerprint does not read
-comments. A `STALL` can therefore outlive its repair until something in the fingerprint
-moves.
+Triage never removes a hold, not even on a met wake. That is not one of §0.2's writes;
+*wake met, lift?* is a proposal for the owner, never a lift. Triage writes a `Hold:` line
+in exactly one case, the `FIXED` transcription above. It never writes one that changes
+what a human recorded: no new owner, no new date, no condition that was not already
+written down. Otherwise whoever parks the issue writes the line, and its owner clears it.
+A repo whose descriptor declares no `holds:` still gets the `deferred:*` half of this
+pass. One blind spot: a `Hold:` line posted *after* its label is a comment, and §0's
+fingerprint does not read comments. A `STALL` can therefore outlive its repair until
+something in the fingerprint moves.
 
 ## 3. Group — this is a correctness constraint, not tidiness
 
@@ -1159,9 +1205,38 @@ in descending member count; each rebases onto the new trunk sha **after** the ca
 lands.
 
 **Triage reports this order. It never performs it.** Rebasing, pushing, deleting a ref or
-editing a branch are not among §0.2's five authorised writes, and they are not writes this
+editing a branch are not among §0.2's seven authorised writes, and they are not writes this
 skill may invent — see §6 for the printed shape, and `code-ship` B0 for the half that
 actually does the landing.
+
+### Record a measured collision where the brake reads it (#386)
+
+A scheduler that brakes on files decides from the **issue text**: it starts an issue only
+when no live branch writes a file the issue names. By convention the issue names them on a
+`Touches:` line in its body. Triage's report is console output, so a collision this pass
+measures and only *prints* is invisible to that brake. Measured on an adopting repo: triage
+found an issue's files held by a live branch twice, and wrote it as prose both times. The
+brake could not see it, so a code session started on the issue and refused on the
+collision. The refusal counted as a strike and blocked the issue, and the block outlived
+the collision.
+
+So when this pass **measures** that a file an issue will edit is written by a live branch
+that is not the issue's own, append those paths to the issue's `Touches:` line in the same
+step that reports the collision (§0.2, write 7):
+
+- **Measured means a path you can name from git.** It comes from `git diff --name-only
+  origin/<trunk>...<branch>` against a live branch, or a `cargo` row from `colab holders`
+  (§3's second net). An `unknown` row, or a guess from the issue's title, is not
+  measured, so nothing is appended.
+- **Append, never rewrite.** Add each measured path as a code span to the existing
+  `Touches:` line. If the body has no such line, add one at its end. Never remove a path:
+  once the branch lands the brake reads the file as free again, and the file list is
+  still true of the issue.
+- **The report still says it.** The console line names the branch and the paths as
+  before, plus the fact that they went onto `Touches:`.
+- **It is not a group.** An issue colliding with a branch for unrelated work is still one
+  unit of work. A real collision between two open issues is §3's group, recorded with the
+  `group:` label; this line only makes the file brake see what triage saw.
 
 ## 4. Order by blast radius, not by number
 
@@ -1546,11 +1621,11 @@ another is how a group gets started into a wall, or left in a queue it could hav
 
 **This report is console output, not a tracker write.** Print it to whoever is reading this
 session; never post it, or any per-beat summary of it, as an issue comment. §0.2 names the
-five writes this skill is authorised to make — a narrative verdict is not one of them, even
+seven writes this skill is authorised to make — a narrative verdict is not one of them, even
 when the verdict is genuinely new information. If a group's verdict changed in a way worth
-recording durably, that lands through one of the five named writes (the label, the evidence
-comment, the plan/lane reason), never through a fresh prose comment invented for the
-occasion.
+recording durably, that lands through one of the seven named writes (the label, the evidence
+comment, the plan/lane reason, a transcribed record), never through a fresh prose comment
+invented for the occasion.
 
 **A dry pass is a finding (#380).** When the ranked list is empty (no ready and no
 soft-ready group), the report **opens** with that fact, before any bucket. It then lists
@@ -1574,7 +1649,7 @@ DRY    0 of 22 open issues startable (trunk e31a896) — what unsticks each:
   lines still applies. `STALL` and `WAKE` lines stay first.
 - When one blocker holds every issue, as a red trunk CI does (§5), print it once as the
   `all` line instead of repeating it per issue. Triage still does not re-run the job or
-  file an issue for it. Neither is one of §0.2's five writes. Naming who unsticks it is
+  file an issue for it. Neither is one of §0.2's seven writes. Naming who unsticks it is
   what this line is for.
 - `N` in the header counts every open issue. If none of them gets a line (all epics, all
   taken, or all route), the header still prints, followed by one line saying so.
@@ -1755,6 +1830,7 @@ Then, briefly:
   BLOCKED #503  needs-decision, ruling exists, unrecorded (<link>) — clears: whoever takes it, via record: colab decision 503 --record --ruled-by <maintainer> … — dispatched: this line
   BLOCKED #508  needs-decision, finding: ask in neither shape — filer adds a Mockup: line or an options block — clears: <filer>, then <maintainer> — dispatched: this line
   STALL   #504  hold needs-rescope — no Hold: line (no owner, no wake) — clears: nobody named — dispatched: no
+  FIXED   #510  hold needs-rescope — Hold: line transcribed (owner: @maintainer, wake: review-by:2026-10-05, reason from #510 body) — clears: @maintainer — dispatched: Hold: line, this pass
   HELD    #505  hold needs-rescope — clears: @maintainer — wake: review-by:2026-10-01 — dispatched: Hold: line, 2026-09-24
   HELD    #506  hold hold:manual — clears: @maintainer — wake: ruling, "grant the deploy key for staging" — dispatched: Hold: line, 2026-09-23
   WAKE    #507  deferred:date — wake met, lift? review-by:2026-09-20 (reached) — clears: @maintainer — dispatched: Hold: line, 2026-09-01
@@ -1764,7 +1840,9 @@ Then, briefly:
 
   - **Holds** (§2, *Held*) print as `HELD`, as `WAKE` when every condition on the newest
     `Hold:` line's `wake:` is measured met, or as `STALL` when that line names no owner, no
-    wake, a wake outside the vocabulary, or a reference that does not resolve. A `wake:
+    wake, a wake outside the vocabulary, or a reference that does not resolve. A legacy
+    hold whose `Hold:` line this pass transcribed from its recorded reason and
+    `review-by:` date prints as `FIXED`, with the `STALL` lines. A `wake:
     ruling` line quotes its `Because:` ask. A `WAKE` line says *wake met, lift?* and names
     the evidence, so the owner can lift it without re-measuring; list it right after the
     `STALL` lines, because it is the other kind of line that someone can act on today.
@@ -2065,7 +2143,7 @@ Hand the top group to **code-start**, which will re-verify the claim before taki
 
 ## Verify complete
 
-- **No write outside §0.2's five landed on the tracker.** In particular: no per-beat
+- **No write outside §0.2's seven landed on the tracker.** In particular: no per-beat
   narrative verdict comment, no "Triage at trunk `<sha>`" note, no "re-measure — verdict
   CHANGED/REVERSED" update, no correction to any of these, no restated §6 report, no
   "still ready, unchanged" note — the report went to the console and nowhere else. A
@@ -2096,13 +2174,18 @@ Hand the top group to **code-start**, which will re-verify the claim before taki
 - Every second live branch found is reported as a **finding** naming the carrier and the
   rebase order, and a group with a live carrier got a `continue:` line rather than a
   `start:` one that `colab worktree new` would refuse (#124).
+- **Every `Hold:` line this pass posted was a `FIXED` transcription** (§2, *Held*): the
+  hold label, a `review-by:<date>` label and a recorded reason naming the owner were all
+  there, no `Hold:` line for that label existed before, and `wake:` holds only the date.
+  **Every `Touches:` append names a path measured against a live branch** (§3), and nothing
+  already on the line was rewritten or removed.
 - **No ref was rebased, pushed, deleted or otherwise edited by this pass.** Triage names
-  the order; `code-ship` B0 performs it. Neither is among §0.2's five authorised writes.
+  the order; `code-ship` B0 performs it. Neither is among §0.2's seven authorised writes.
 - **The findings limits line was printed — clean or not** — and it claims only pass-time
   knowledge, naming what it is blind to. A findings section that reads as a guarantee of no
   second branch is a fail, not a wording nit: nothing here polls.
 - The finding went to the console and to `$CACHE`'s `conclusion.findings`, and **nowhere on
-  the tracker**. It is not a sixth write.
+  the tracker**. It is not one of §0.2's writes, and not an eighth.
 - Every open Issue is accounted for in exactly one bucket.
 - The verdicts were **persisted, not only printed**: every free group got its
   `colab readiness` marker, every blocked group was left unset (or cleared if
