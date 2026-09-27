@@ -279,7 +279,8 @@ gh issue view $N --comments                      # prior-session log
 > git log --oneline --all --grep="#$N"          # already merged?
 > grep -rl "<thing the issue describes>" <paths>  # already in the code?
 > ```
-> Already shipped → close it with evidence (sha + `file:line`), pick other work.
+> Already shipped → `colab close $N --comment "<sha + file:line>"` (closes, releases any
+> claim, tells the observer — never a bare `gh issue close`, #381), pick other work.
 > Partly shipped → narrow the task to what's actually missing before starting.
 
 ### Two tiers of memory — know which one you're reading

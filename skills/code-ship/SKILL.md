@@ -336,7 +336,7 @@ touches documentation only. **The core-path rule (#350) refuses here instead of 
 a trunk-direct unit has no PR, so when the rule is active and that same window touched a core path,
 `--direct` refuses with a human-gated `core-path review` row and closes nothing. Redo the change on
 a branch and ship that. If the paths are another unit's reviewed landing, a human closes the issue
-by hand. Never route around the refusal
+(`colab close <N> --comment "<evidence>"`). Never route around the refusal
 (`CONVENTIONS.md` [§2, *Core paths*](../../CONVENTIONS.md#core-paths--a-pr-and-a-non-author-approval-before-landing-350)).
 
 **Never decide this by counting commits.** A squash-merge mints a new sha, so a
@@ -1034,7 +1034,11 @@ is a human integration event of a promotion's weight.
   items you touched but did not complete — reference it, don't close it, or you bury its
   knowledge behind a closed-issue lookup (`CONVENTIONS.md` [§5](../../CONVENTIONS.md#tracking-issues--claimed-but-referenced-not-closed), *Tracking issues*). Through
   the blessed door this is automatic for an issue carrying the `tracking` label, or opt in
-  per-ship with `colab ship --refs <N>`; the claim is still released either way.
+  per-ship with `colab ship --refs <N>`; the claim is still released either way. When
+  that issue is finished later — its live check passed, its last item done — close it
+  with `colab close <N> --comment "<evidence>"`, never a bare `gh issue close`: the bare
+  close leaves any claim standing and tells no observer, which kept a closed issue
+  offered as startable for ~10 minutes (#381).
 - **A core-path branch pauses here instead of merging — `⏸ PR-PENDING`, exit 3 (#350).**
   When the target's `CODEOWNERS` names an account other than the author and the branch
   touches a path it covers, `colab ship` pushes the branch, opens a PR (or reuses the open
@@ -1301,16 +1305,16 @@ gh issue view $N --json parent -q '.parent.number // "none"'
   carries `epic`, every native sub-issue is closed, its body lists no unticked `- [ ]`
   item, and it is not a release tracking record. Then the same question goes to its own
   parent. Any other shape stays open. A parent with no `epic` label, or one still listing
-  an unticked item, prints as a `container #P: …` warning for a human. Without `colab`,
-  do the same by hand:
+  an unticked item, prints as a `container #P: …` warning for a human. Deciding by hand
+  (a parent `colab ship` did not reach) — the reads are `gh`, the close is `colab close`,
+  which also releases any claim on the parent and tells the observer (#381):
 
   ```sh
   P=$(gh issue view $N --json parent -q '.parent.number // empty')
   [ -n "$P" ] && gh issue view $P --json state,labels,body,subIssuesSummary
   # close only on: OPEN · labels ∋ epic · subIssuesSummary.total > 0 and completed == total
   #                · no unticked "- [ ]" line in body · body does not open with <!-- colab:release
-  gh issue comment $P --body "📦 Closed — its last open sub-issue #$N shipped at <sha>; all sub-issues closed (#371)."
-  gh issue close $P --reason completed
+  colab close $P --comment "📦 Closed — its last open sub-issue #$N shipped at <sha>; all sub-issues closed (#371)."
   ```
 
   `subIssuesSummary` can lag a child's auto-close by a moment. A lagging read looks like

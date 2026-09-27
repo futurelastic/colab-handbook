@@ -660,7 +660,8 @@ grep -rl "<the thing the issue describes>" <paths>      # or present in the code
 Grep for what the Issue *describes* — the column, route, UI string, function — not
 for its number. A commit mentioning `#88` proves someone typed `#88`.
 
-- **Fully shipped** → close it with evidence (trunk sha + `file:line`) and take it
+- **Fully shipped** → close it with evidence (trunk sha + `file:line`) through
+  `colab close <N> --comment "<evidence>"` — never a bare `gh issue close` (#381) — and take it
   off the list. That is real triage output, not a detour.
 - **Partly shipped** → narrow it to what is actually missing before queueing, so
   nobody re-does the finished half.

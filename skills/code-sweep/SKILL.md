@@ -347,7 +347,7 @@ none:**
    A match → report `landed trunk-direct: <sha>`, a fourth, distinct outcome — not
    `selector matched nothing`, and not one of §3's buckets either, since there is
    no worktree to tear down and no claim to release. If the issue is still open, close it
-   with that evidence per §5.
+   with that evidence: `colab close <N> --comment "landed trunk-direct: <sha>"`.
 
    **No match does NOT mean clear — say so, do not let the grep look conclusive.** Solo
    flow files an Issue **on demand**, not on entry (CONVENTIONS.md, *Solo flow*: "an Issue
@@ -428,8 +428,8 @@ the third case — a scoped selector that names such a unit by issue number.
 | Bucket | What it looks like | Action |
 |---|---|---|
 | **wrap** | `cargo` (or `unknown`), **and** at least one claimed issue | full [`code-wrap`](../code-wrap/SKILL.md) then [`code-ship`](../code-ship/SKILL.md) |
-| **teardown-only** | `landed` — content already on its base, worktree lingering | remove worktree, release claims; close via `colab ship` when it has zero commits (evidence-close, #90), else close by hand with evidence |
-| **claim-only** | no worktree; `in-progress` on work already shipped | release the claim, close the issue with evidence |
+| **teardown-only** | `landed` — content already on its base, worktree lingering | remove worktree, release claims; close via `colab ship` when it has zero commits (evidence-close, #90), else `colab close <N> --comment "<evidence>"` |
+| **claim-only** | no worktree; `in-progress` on work already shipped | `colab close <N> --comment "<evidence>"` — closes and releases the claim in one step (#381) |
 | **place-claim** | `colab places` lists a hold whose session is not this sweep's — see below | **check liveness, report — never force-release a live holder** |
 | **unrecorded** | on disk, `colab worktrees`'s `unrecorded` list — no claim, no ports | **report only** — see below, never `code-wrap`/`code-ship` |
 | **blocked** | uncommitted work — tracked changes or untracked files — or genuinely unfinished | **report — never force** |
@@ -862,7 +862,8 @@ Worktrees are only half of it. Also:
   body only, so without it an unticked item further down slips through. (Measured on this
   repo: an epic with 9 of 9 sub-issues closed and 9 unticked plan lines passed the filter
   without the flag.) Each number printed gets a comment naming the evidence (all K sub-issues closed, the
-  last one and when) and `gh issue close <P> --reason completed`. An epic that fails only
+  last one and when), posted and closed in one step: `colab close <P> --comment "<that evidence>"`
+  (#381 — a bare `gh issue close` would leave any claim on it and tell no observer). An epic that fails only
   the unticked-item check is reported with the unticked lines, never closed. The same
   goes for a parent with all sub-issues closed but no `epic` label. A `delivery:*` label
   on any container is reported too (a container has no deliverable). Remove it only if

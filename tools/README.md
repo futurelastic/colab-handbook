@@ -616,6 +616,7 @@ colab config set notifyUrl ""      # unset — same state on disk as never havin
 | `ship` (after the push succeeds) | `worktree.state-changed` |
 | `readiness <N>` / `readiness <N> --clear` | `readiness.marked` (payload `{state: 'checked'\|'unchecked'}`; `--mechanical` emits nothing — see below) |
 | `ship`, once per issue the merge carried | `issue.merged` (payload `{sha}`) |
+| `close <N>` — a close outside a ship (#381) | `issue.closed` (payload `{reason: 'completed'\|'not-planned'}`), once per close, after the close and the claim release; a dead receiver never fails the close |
 | `issue-filed <N>` | `issue.filed` — the ONLY command here with no local write of its own; it exists purely to notify after a raw `gh issue create` (#102) |
 | `gate-recorded [--fail]` | `gate.recorded` (payload `{ok, sha}`, keyed by repo + worktree name) — no local write of its own either; run right after code-wrap's own A3 quality-gate step (#116) |
 
@@ -985,6 +986,7 @@ Run `colab <cmd> --help` for full detail.
 |---|---|
 | `claim <issue>... [--worktree N] [--branch B] [--session S] [--session-name S] [--force] [--repo P]` | claim one or many issues (atomic; onto one worktree). **Enforced** — see *Claim lifecycle* below |
 | `release <issue> [--repo P]` | release a single issue; siblings + worktree survive. A no-worktree claim's **checkout place-claim** is given back too, but only on the LAST such claim this session holds there, and only when the claim record's own session matches the hold (#305) |
+| `close <issue> [--comment T \| --comment-file F] [--reason completed\|not-planned] [--repo P]` | close an issue **outside a ship** (#381) — a `Refs #N` issue whose follow-up finished, a spent container, a claim-only sweep bucket. Posts the evidence comment, closes, releases the claim exactly as `release` does (local record, label, the claimer's assignee #363, a worktree-less claim's checkout hold #305; with no local claim, a leftover `in-progress` label is still removed), then emits `issue.closed`. Refuses, changing nothing, when the issue would end up with no comment colab did not write (the #90 evidence gate). A worktree left with zero claims is reported, never removed. An already-closed issue is not an error — the release and the event still run. The one verb for this; skills never say bare `gh issue close` |
 | `issue-filed <issue> [--repo P]` | notify-only event (`issue.filed`, #102) for an issue a raw `gh issue create` just made — no state.json entry, no label, no gh call of its own |
 | `gate-recorded [--sha S] [--fail] [--worktree N] [--repo P]` | notify-only event (`gate.recorded`, #116) for code-wrap's own A3 quality-gate step — no state.json entry, no label, no gh call of its own |
 | `solo [--force] [--session S] [--session-name S] [--repo P]` \| `solo --done [--repo P]` | entry-gated trunk-direct flow — `writes: serial` only, no issue/claim/worktree (see *Solo flow*, CONVENTIONS.md) |
