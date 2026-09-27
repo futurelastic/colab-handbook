@@ -1575,6 +1575,23 @@ function cmdRelease(argv) {
   const st0 = state.loadState();
   const found = findClaim(st0, num, repoAbs);
   if (!found) throw new UserError(`No local claim for #${num}` + (repoAbs ? ` in ${shortRepo(repoAbs)}` : ''));
+  releaseFoundClaim(num, found);
+  return 0;
+}
+
+/**
+ * The whole of `colab release` once a local claim is found: both tracker halves (label + the
+ * claimer's assignee, #363 — GraphQL, REST fallback #164), the local record (or `releasePending`
+ * when GitHub refused), the checkout place-claim a worktree-less claim holds (#305), the
+ * `claim.released` event, and the zero-claims worktree NOTE — never a worktree removal.
+ *
+ * Shared with `colab close` (#381) so a close cannot release "almost the same way": two copies of
+ * this sequence would drift exactly where #164/#305/#363 each had to be fixed once.
+ * `opts.skipComment` — the caller already said everything on the issue (a close carries its own
+ * evidence comment, and postReleaseComment would only no-op on the now-CLOSED issue anyway).
+ * Returns { ghFailed, worktree, remaining }.
+ */
+function releaseFoundClaim(num, found, opts = {}) {
   const repo = found.claim.repo;
   const wtName = found.claim.worktree;
 
@@ -1588,7 +1605,7 @@ function cmdRelease(argv) {
       ghFailed = true;
       warn(`gh edit #${num} failed on both GraphQL and REST (${r.stderr.split('\n')[0] || r.code}) — local claim KEPT (releasePending) so a retry can find it`);
     }
-    postReleaseComment(repo, num); // "✅ Released" unless the issue is already CLOSED
+    if (!opts.skipComment) postReleaseComment(repo, num); // "✅ Released" unless the issue is already CLOSED
   } else {
     warn(`gh not usable here (${ghUnusableWhy(repo)}) — released LOCAL-ONLY`);
   }
@@ -1661,7 +1678,7 @@ function cmdRelease(argv) {
   } else if (!ghFailed && wtName) {
     print(`  worktree "${wtName}" still has ${remaining} claim(s)`);
   }
-  return 0;
+  return { ghFailed, worktree: wtName || null, remaining };
 }
 
 // ---------------------------------------------------------------------------
@@ -1703,6 +1720,128 @@ function cmdIssueFiled(argv) {
 
   pushEvent('issue-filed', { repo: repoAbs, issue: num });
   print(`Notified: #${num} filed in ${shortRepo(repoAbs)} (issue.filed) — best-effort, no local state changed`);
+  return 0;
+}
+
+// ---------------------------------------------------------------------------
+// close — close an issue OUTSIDE a ship (#381): evidence comment, close, claim release, event.
+//
+// Every other close colab performs sits inside `colab ship` (Closes #N at merge, evidence-close,
+// container close). A close anywhere else — a `Refs #N` issue whose live check finished, a spent
+// epic, a claim-only sweep bucket, "already shipped" found at start/triage — used to be a bare
+// `gh issue close`: the observer was never told (it kept showing the issue as startable until its
+// own cache expired, measured ~10 minutes), and the claim outlived the work until a human released
+// it. This verb owns all three halves, so no skill has to spell them out by hand.
+// ---------------------------------------------------------------------------
+
+const HELP_CLOSE = `colab close <issue> [--comment <text> | --comment-file <f>] [--reason completed|not-planned] [--repo <path>]
+
+Close an issue outside a ship (#381) — for a close that has no merge to carry \`Closes #N\`:
+a \`Refs #N\` issue whose follow-up check finished, a spent epic, a claim-only sweep bucket,
+work found already shipped at start or triage. Never use a bare \`gh issue close\` for these.
+
+In order, stopping at the first failure so nothing half-happens:
+  1. posts the evidence comment (--comment / --comment-file), if given;
+  2. closes the issue (reason: completed, the default, or not-planned);
+  3. releases the claim if one is still held — exactly as \`colab release\` does (local
+     record, the in-progress label, the claimer's assignee #363, a worktree-less claim's
+     checkout place-claim #305). With no local claim, an in-progress label still on the
+     issue is removed the same way. A worktree left with zero claims is REPORTED, never
+     removed — it may hold uncommitted work (\`colab worktree rm <name>\` is yours to run);
+  4. emits \`issue.closed\` (payload {reason}) — best-effort: a dead or absent receiver
+     never fails the close.
+
+The evidence gate is the one evidence-close uses (#90): the issue must end up carrying a
+comment colab did not write. Pass --comment, or have recorded the evidence beforehand —
+an issue carrying only colab's own markers is refused, and nothing is changed.
+
+An issue that is ALREADY closed (someone ran \`gh issue close\`) is not an error: the
+close is skipped, and the claim release and the event still run — the repair path.
+
+  colab close 118 --comment "Live check passed on <sha>; nothing left open."
+  colab close 42 --comment-file evidence.md --reason not-planned
+`;
+
+const CLOSE_REASONS = { 'completed': 'completed', 'not-planned': 'not planned', 'not_planned': 'not planned' };
+
+function cmdClose(argv) {
+  const opts = parseArgs(argv, {
+    values: { '--repo': 'repo', '--comment': 'comment', '--comment-file': 'commentFile', '--reason': 'reason' },
+    flags: { '-h': 'help', '--help': 'help' },
+  });
+  if (opts.help || opts._.length === 0) return print(HELP_CLOSE);
+  const num = normIssueNum(opts._[0]);
+  const repoAbs = resolveRepo(opts);
+  if (opts.comment != null && opts.commentFile != null) throw new UserError('pass --comment OR --comment-file, not both');
+  const reasonKey = opts.reason == null ? 'completed' : String(opts.reason);
+  const ghReason = CLOSE_REASONS[reasonKey];
+  if (!ghReason) throw new UserError(`--reason must be completed or not-planned (got "${reasonKey}")`);
+  let body = opts.comment != null ? String(opts.comment) : null;
+  if (opts.commentFile != null) {
+    try { body = fs.readFileSync(path.resolve(opts.commentFile), 'utf8'); }
+    catch (e) { throw new UserError(`cannot read --comment-file ${opts.commentFile}: ${e.message}`); }
+  }
+  if (body != null && !body.trim()) throw new UserError('the evidence comment is empty');
+
+  if (!isGhUsable(repoAbs)) {
+    throw new UserError(`gh is not usable here (${ghUnusableWhy(repoAbs)}) — cannot close #${num}. Nothing was changed.`);
+  }
+  const info = git.ghIssueView(repoAbs, num, ['state', 'comments', 'labels']);
+  if (!info) throw new UserError(`could not read #${num} (gh issue view failed) — nothing was changed`);
+  const already = info.state === 'CLOSED';
+
+  // 1. evidence — the #90 gate, same definition as evidence-close.
+  if (!already && body == null && !shipguard.hasEvidence(info.comments)) {
+    process.stderr.write(`✗ #${num} carries no evidence comment — only colab's own markers (or none).\n`);
+    process.stderr.write(`  Say what was delivered: colab close ${num} --comment "<what, where: sha + file:line>"\n`);
+    process.stderr.write('  Nothing was changed.\n');
+    return 1;
+  }
+  if (body != null) {
+    const c = git.ghIssueComment(repoAbs, num, body);
+    if (!c.ok) {
+      process.stderr.write(`✗ could not post the evidence comment on #${num} (${(c.stderr || '').split('\n')[0] || c.code}) — NOT closed, claim untouched.\n`);
+      return 1;
+    }
+    print(`  gh: evidence comment posted on #${num}`);
+  }
+
+  // 2. close.
+  if (already) {
+    print(`  #${num} is already closed — skipping the close; releasing and notifying anyway`);
+  } else {
+    const r = git.run('gh', ['issue', 'close', String(num), '--reason', ghReason], { cwd: repoAbs });
+    if (!r.ok) {
+      process.stderr.write(`✗ gh issue close #${num} failed (${(r.stderr || '').split('\n')[0] || r.code}) — claim untouched.\n`);
+      return 1;
+    }
+    print(`  gh: #${num} closed (${ghReason})`);
+  }
+
+  // 3. release — the claim does not outlive the work.
+  let releaseFailed = false;
+  const found = findClaim(state.loadState(), num, repoAbs);
+  if (found) {
+    releaseFailed = releaseFoundClaim(num, found, { skipComment: true }).ghFailed;
+  } else {
+    const labels = Array.isArray(info.labels) ? info.labels.map((l) => l && l.name) : [];
+    if (labels.includes('in-progress')) {
+      const r = git.ghIssueRelease(repoAbs, num); // no local record: the tracker half alone
+      if (r.ok) { print(`  gh: #${num} unassigned + in-progress removed (no local claim on this machine)`); reportReleasedOthers(num, r); }
+      else { releaseFailed = true; warn(`gh: could not remove in-progress/assignee on #${num} (${(r.stderr || '').split('\n')[0] || r.code}) — remove it by hand`); }
+    } else {
+      print(`  no claim held on #${num}`);
+    }
+  }
+
+  // 4. event — after the real work, never able to fail it.
+  pushEvent('issue-closed', { repo: repoAbs, issue: num, payload: { reason: reasonKey === 'not_planned' ? 'not-planned' : reasonKey } });
+
+  if (releaseFailed) {
+    print(`Closed #${num} in ${shortRepo(repoAbs)} — but the claim release FAILED (see above); retry: colab close ${num}`);
+    return 1;
+  }
+  print(`Closed #${num} in ${shortRepo(repoAbs)}`);
   return 0;
 }
 
@@ -11722,6 +11861,9 @@ Three independent capabilities (each works standalone):
 Commands:
   claim <issue> [<issue>...] [--worktree N] [--branch B] [--repo P]   claim issue(s)
   release <issue> [--repo P]                                          release one issue
+  close <issue> [--comment T | --comment-file F] [--reason completed|not-planned] [--repo P]
+                                        close an issue OUTSIDE a ship (#381): evidence, close,
+                                        claim release, issue.closed — never a bare gh issue close
   issue-filed <issue> [--repo P]                       notify event only, right after a raw
                                         \`gh issue create\` returns its number (#102) — no colab
                                         state written, no gh call of its own
@@ -11824,6 +11966,7 @@ function main(argv) {
     case 'claim': return cmdClaim(rest);
     case 'release': return cmdRelease(rest);
     case 'issue-filed': return cmdIssueFiled(rest);
+    case 'close': return cmdClose(rest);
     case 'gate-recorded': return cmdGateRecorded(rest);
     case 'solo': return cmdSolo(rest);
     case 'place': return cmdPlace(rest);

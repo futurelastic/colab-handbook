@@ -134,6 +134,7 @@ test('buildEvent: kinds come from the closed map, never from the action name', (
   assert.equal(buildEvent('issue-merged', {}).kind, 'issue.merged');
   assert.equal(buildEvent('issue-filed', {}).kind, 'issue.filed');
   assert.equal(buildEvent('gate-recorded', {}).kind, 'gate.recorded');
+  assert.equal(buildEvent('issue-closed', {}).kind, 'issue.closed');
   // Guard the shape of the map itself: a kind added here without agreeing it with the receiver
   // first is the exact drift the closed vocabulary exists to prevent.
   assert.deepEqual(Object.keys(ACTION_KIND).sort(), [...ACTIONS].sort());

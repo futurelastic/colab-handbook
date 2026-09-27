@@ -28,6 +28,7 @@ const NOT_IN_NEXT = {
   version: 'provenance query, not a setup step — README step 3 covers it',
   claim: 'per-session flow, driven by the code-start skill',
   release: 'per-session flow, driven by code-wrap / code-ship',
+  close: 'per-issue close outside a ship, driven by the skills (#381)',
   claims: 'per-session flow, read by code-triage',
   'issue-filed': 'notify event emitted by code-start, never typed by a new user',
   'gate-recorded': 'notify event emitted by the skills, never typed by a new user',

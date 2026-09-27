@@ -3,7 +3,7 @@
  * notify.js — OPTIONAL, best-effort event push to an external observer.
  *
  * Configure `notifyUrl` in ~/.colab/config.json and the state-changing commands (claim, release,
- * ship, worktree new, worktree rm, readiness) each POST one small JSON event as they succeed. Leave it unset
+ * close, ship, worktree new, worktree rm, readiness) each POST one small JSON event as they succeed. Leave it unset
  * and this module makes no network call of any kind — that is the default and it is absolute.
  *
  * ── What this is NOT ──────────────────────────────────────────────────────────────────────────
@@ -88,6 +88,15 @@ const ACTION_KIND = Object.freeze({
   // Payload is { ok: boolean, sha: string }; repo + worktree ride the envelope as the join key, and
   // worktree must match exactly what `colab worktrees` lists for it.
   'gate-recorded': 'gate.recorded',
+  // issue-closed reports a close colab performed OUTSIDE a ship (#381, `colab close`): a `Refs #N`
+  // issue whose follow-up finished, a spent container, a claim-only sweep bucket. `ship` already
+  // tells the receiver about the closes it performs (`issue.merged`, and the `ship` event's issue
+  // list on evidence-close); a close anywhere else used to be a bare `gh issue close` the receiver
+  // never heard about, so it kept offering the closed issue as startable until its own cache
+  // expired (~10 minutes, measured). Provider-side fact, same staleness class as `readiness`.
+  // Payload is { reason: 'completed' | 'not-planned' }; repo + issue ride the envelope. Sender-first
+  // is safe: until the receiver adds this kind to its vocabulary it 400s and drops it, inertly.
+  'issue-closed': 'issue.closed',
 });
 
 /** Actions this module knows how to report. Exported so a caller can be checked against it. */
