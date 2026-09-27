@@ -190,9 +190,10 @@
  * deliberately NOT in `CONVENTION_LABELS` — same treatment as `group:<key>`: the date
  * varies per issue, so there is no fixed set to provision up front, and it is created on
  * demand by whoever applies the park. "A defer must name its wake condition" (#279): a
- * `deferred:*` label with no `review-by:<date>` and no `blockedBy` edge is not a defer at
- * all — it is a deprioritisation or a `wontfix` that should be said plainly, because an
- * unbounded park is a silent `wontfix`.
+ * `deferred:*` label with no `review-by:<date>`, no `blockedBy` edge and no checkable `wake:`
+ * (the closed vocabulary in tools/lib/wake.js, #382) is not a defer at all — it is a
+ * deprioritisation or a `wontfix` that should be said plainly, because an unbounded park is a
+ * silent `wontfix`.
  *
  * `release-hold` joined the set in #339: the human veto on a release candidate (CONVENTIONS.md
  * §6, *The release rung*). It sits on a release TRACKING issue (`release: vX.Y.Z`, marker

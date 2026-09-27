@@ -117,9 +117,44 @@ printf '%s\n' "$(printf '%s\n' "$MATCHED" | grep '^B ' | sort)" \
 rm -f "$GITDIR/.triage-branches.tmp"
 ```
 
-All five equal to the stored run ⇒ **report `nothing has changed since <ts>`, re-print the
-stored conclusion (§0.1), and stop.** Three calls instead of fifty. Input 2 is not an extra
-cost on a run that *does* proceed — §1 needs that list anyway.
+All five equal to the stored run, **and no pending wake is now met (below)** ⇒ **report
+`nothing has changed since <ts>`, re-print the stored conclusion (§0.1), and stop.** Three
+calls instead of fifty. Input 2 is not an extra cost on a run that *does* proceed — §1
+needs that list anyway.
+
+**Then re-check the pending wakes — the one thing the five inputs cannot see move (#382).**
+A hold's `wake:` (`CONVENTIONS.md` [§5](../../CONVENTIONS.md#holds--every-label-that-stops-a-start-names-its-owner-and-its-wake-360), *Holds*) is re-checked on **every** pass, a
+short-circuited one included, or a wake that came true while nothing else moved is hidden
+behind a re-print that still says `HELD`. Most forms need nothing extra, because an input
+above already moves when they come true:
+
+| `wake:` form | Seen by |
+|---|---|
+| `#N` (an edge, either repo) | input 3 — the `BY` line carries the blocker's state |
+| `issueClosed:<n>` (this repo) · `labelPresent:<label>` | input 2 — the open set and every label |
+| `trunkAt:<sha>` | input 1 — trunk has to move for it to become true |
+| `ruling` | nothing — it is never mechanically met (the owner's act is removing the label) |
+
+Three forms move with **no** input: a date reached (`review-by:` / `after:`), a branch that
+became an ancestor of trunk without trunk moving (`branchLanded:`, a branch reset onto
+trunk), and another repo's issue closing (`issueClosed:<owner>/<repo>#<n>` with no edge).
+The last full pass stored every held issue's unmet wake line in `$CACHE.wakes` (§0.1). Re-check
+only those:
+
+```sh
+TODAY=$(date -u +%F)
+# review-by:<date> / after:<date>  → met when <date> <= $TODAY                     (0 calls)
+# branchLanded:<ref>                → git merge-base --is-ancestor "$REF" origin/<trunk>  (0 calls, the fetch in input 1 already ran)
+# issueClosed:<owner>/<repo>#<n>    → one read per DISTINCT ref:
+gh issue view <n> -R <owner>/<repo> --json state -q .state         # CLOSED ⇒ that condition is met
+```
+
+A stored line is **met** only when every condition on it is met (the line is ANDed). Any line
+met ⇒ `§0 changed: wakes — full pass`. A cross-repo read that fails, or a ref that no longer
+resolves, is **not** "unchanged": print `§0 changed: wakes (unreadable <ref>) — full pass`, so
+§2 reports it (a wake waiting on nothing is a `STALL`). Cost: zero calls for a repo with no
+cross-repo wakes pending, one per distinct pending ref otherwise — `lastRun.calls` records the
+real number, and the outcome line below prints it rather than a fixed three.
 
 **Every run — short-circuited or not — opens by printing exactly one of three outcome
 lines, before anything else.** This is the one thing #244 established a docs repo actually
@@ -129,8 +164,8 @@ compliance question into a line any reader — human, an orchestrator's transcri
 later census — can check for.
 
 ```
-§0 unchanged since <ts> · fingerprint <16hex> · 3 calls — re-printing stored conclusion (scope: <scope>)
-§0 changed: <input names that moved, e.g. trunkSha,branches> — full pass
+§0 unchanged since <ts> · fingerprint <16hex> · <n> calls — re-printing stored conclusion (scope: <scope>)
+§0 changed: <input names that moved, e.g. trunkSha,branches — or wakes> — full pass
 §0 no usable cache: <missing | version <v> unrecognised | unparseable | truncated | empty read on input <n>> — full pass
 ```
 
@@ -338,7 +373,7 @@ half-matching:
 
 ```json
 {
-  "version": "code-triage/4",
+  "version": "code-triage/5",
   "scope": "whole-repo",
   "ranAt": "<ISO8601>",
   "fingerprint": {
@@ -354,7 +389,10 @@ half-matching:
   "issues": {
     "115": { "key": "<16hex>", "group": "import-fixes", "bucket": "ready" },
     "247":  { "key": "<16hex>", "group": null, "bucket": "blocked" }
-  }
+  },
+  "wakes": [
+    { "issue": 507, "label": "deferred:external-party", "wake": "issueClosed:owner/repo#12, review-by:2026-10-09" }
+  ]
 }
 ```
 
@@ -387,6 +425,14 @@ half-matching:
   a conclusion that silently omits the finding. Like `issues`, `findings` is
   required-when-present: an empty list on a repo where no group broke the contract is the
   ordinary state, not a corrupt record.
+- **`wakes` bumped `/4` to `/5` (#382), under the same rule and at the same one-time cost.**
+  One entry per held issue whose newest `Hold:` line carries a parseable `wake:` that was
+  **not** met at the end of this pass: the issue, the hold label, and the `wake:` value
+  exactly as written. It is what §0's wake re-check reads, and a `/4` record has no way to
+  say whether a date or another repo's issue has come due since. Store every unmet line,
+  not only the three uncovered forms — the re-check picks those out itself, and a line
+  mixing a covered and an uncovered condition still needs the uncovered half re-read.
+  Required-when-present: an empty list means nothing is held on a wake that could move.
 
 ### 0.2 Running this twice must change nothing
 
@@ -508,13 +554,16 @@ not a group"). So reuse N's stored verdict only when **all** of:
    skip checking.
 4. No member of N's stored group **closed or left the open set** since the stored verdict —
    closing shrinks the group, and a shrunk group can need its label removed (§3).
+5. N is not a held issue whose stored `wakes` line §0's wake re-check just found met — a
+   date, a branch landing or another repo's issue closing moves nothing in `KEY_N`, so
+   without this the one issue the pass proceeded *for* would be re-printed as `HELD`.
 
 An issue with **no stored entry at all** — the first pass to see it, or one the previous
-pass's prune (below) dropped — has nothing to compare against, so conditions 1-4 do not
+pass's prune (below) dropped — has nothing to compare against, so conditions 1-5 do not
 apply; it is derived fresh by definition, same as today.
 
-Fails any of 1-4 ⇒ re-derive N (and, by 2/4, its whole group) exactly as an un-cached pass
-would: §2's discard check, §3's grouping, §4's ordering, §5's readiness gate. Passes all four
+Fails any of 1-5 ⇒ re-derive N (and, by 2/4, its whole group) exactly as an un-cached pass
+would: §2's discard check, §3's grouping, §4's ordering, §5's readiness gate. Passes all five
 ⇒ re-print N's stored verdict (§6) and skip re-deriving §2-§5 for it. This is safe to skip
 even on a re-run: §3/§4/§5's writes are already idempotent (§0.2), so a pass that *would*
 have re-reached the same conclusion loses nothing by not re-reaching it.
@@ -623,7 +672,7 @@ A claim carries who holds it. If it looks stale, that is a **finding to raise**,
 permission to take the work.
 
 **Exception — a `deferred:*` claim whose wake condition has resolved is re-surfaced, not
-silently discarded (#290).** `deferred:date` / `deferred:measurement` /
+silently discarded (#290, #382).** `deferred:date` / `deferred:measurement` /
 `deferred:external-party` (`CONVENTIONS.md` [§5](../../CONVENTIONS.md#disposition--a-park-must-name-its-wake-condition-279), *Disposition*) mark a claim genuinely
 parked on something outside this repo — a human-gated permission it is still waiting on,
 not abandoned. A bare `in-progress` can't tell "actively worked" apart from "parked,
@@ -635,16 +684,26 @@ gh issue list --label in-progress --search "label:deferred:date,deferred:measure
   --json number,labels -q '.[] | {number, labels: [.labels[].name]}'
 ```
 
-- **`review-by:<date>` present and past** — the wake condition is due for a look. Do not
-  discard it under Taken, and do not silently restart the work either — the claim's holder
-  may still be the right owner. Flag it in the report as *parked, wake condition due*
-  (§6) so a human or the holder re-checks whether the gate actually cleared; never fold it
-  into the ranked start list as if it were unclaimed.
-- **No `review-by:<date>`** — *Disposition* allows an unbounded `deferred:external-party`
-  park (no date, someone else's action is the only wake signal); that can't be resolved
-  mechanically, so it discards under the ordinary Taken rule same as before — but note it
-  in the report, so a park with no clearing signal is at least visible rather than silently
+Evaluate the wake on **every** pass, not only once a `review-by:` date is reached (#382).
+Read it from the newest `Hold:` line for the `deferred:*` label (*Held*, below, has the
+command); fall back to the `review-by:<date>` label when there is no `Hold:` line. A later
+ruling may have tightened the condition, so the newest line is the one that counts.
+
+- **The wake is met** — every condition on the line, measured the way *Held* below
+  measures it, or a `review-by:<date>` that is reached. Do not discard it under Taken, and
+  do not silently restart the work either — the claim's holder may still be the right
+  owner. Flag it in the report as *parked, wake met* (§6), naming the condition and the
+  evidence, so a human or the holder checks whether the gate actually cleared and lifts
+  the park; never fold it into the ranked start list as if it were unclaimed.
+- **The wake names an issue or ref that does not resolve** — the park waits on nothing
+  (`CONVENTIONS.md` *Holds*, rule 3). Flag it as *parked, wake unresolvable*, naming the
+  reference, and list it first in the bucket.
+- **No wake at all** — no `Hold:` line with a parseable `wake:`, and no `review-by:<date>`.
+  A wait with no checkable form must carry a date (*Holds*, rule 2), so this is an unbounded
+  park. It discards under the ordinary Taken rule same as before — but note it in the
+  report, so a park with no clearing signal is at least visible rather than silently
   re-discarded forever.
+- **The wake is not met yet** — ordinary Taken rule.
 - **No `deferred:*` label at all** — ordinary Taken rule, unchanged.
 
 This never re-runs the discarded issue's own work; it only stops a claim from staying
@@ -834,18 +893,51 @@ gh issue view <N> --comments | grep -A1 '^Hold: '    # per held issue: the owner
 ```
 
 Leave a held issue off the ranked list. Report it in the **blocked** bucket (§6), one line
-each, built from its newest `Hold:` line for that label:
+each, built from its newest `Hold:` line for that label.
 
-- **Owner and wake both named** → `HELD`, naming the label, the owner as the clearer, and
-  the wake. If the wake is `review-by:<date>` and the date has passed, say *wake due*.
-- **No `Hold:` line, or one missing `owner:` or `wake:`** → `STALL`, listed first. A park
-  with nobody named to clear it and no condition that ends it is a silent `wontfix`, so
-  it is a finding, never ready. This includes a `deferred:*` label with its wake but no
-  owner line.
+**Evaluate the wake on every pass (#382).** `wake:` comes from a closed vocabulary
+(`CONVENTIONS.md` *Holds*, *The `wake:` vocabulary*); several conditions on one line are
+ANDed, and a line with one piece outside the vocabulary names no wake at all.
+`tools/lib/wake.js` parses and evaluates it, if you would rather call it than read the
+rules. Measure each condition with facts this pass already holds, or one read each:
+
+| Condition | Met when | Read |
+|---|---|---|
+| `review-by:<date>` · `after:<date>` | the date is on or before today (UTC) | none |
+| `#N` | the `BY` line for this edge (§0 input 3) says `CLOSED` | none — already in hand |
+| `issueClosed:<n>` | `#<n>` is not in the open set (§0 input 2) | none — already in hand |
+| `issueClosed:<owner>/<repo>#<n>` | that issue's state is `CLOSED` | `gh issue view <n> -R <owner>/<repo> --json state` |
+| `branchLanded:<ref>` | `git merge-base --is-ancestor <ref> origin/<trunk>` exits 0 (`<ref>` as written; exit 1 = not yet, any other exit = does not resolve) | none — local, after the fetch |
+| `trunkAt:<sha>` | `git merge-base --is-ancestor <sha> origin/<trunk>` exits 0 | none — local |
+| `labelPresent:<label>` | the held issue's labels (§0 input 2) include `<label>` | none — already in hand |
+| `ruling` | never mechanically — the owner's act is removing the label | none |
+
+Then print exactly one of:
+
+- **No `Hold:` line, one missing `owner:` or `wake:`, or a `wake:` outside the vocabulary**
+  → `STALL`, listed first. A park with nobody named to clear it and no condition that ends
+  it is a silent `wontfix`, so it is a finding, never ready. This includes a `deferred:*`
+  label with its wake but no owner line, and a prose wait written into `wake:` instead of
+  into `Because:` with a `review-by:` date.
+- **A condition names an issue, branch or sha that does not resolve** → `STALL`, naming the
+  reference. The park waits on nothing (*Holds*, rule 3), and a date alone would have hidden
+  that until it came due.
+- **Every condition measured met** → `WAKE`, listed right after the `STALL` lines: *wake
+  met, lift?*, naming the condition, the evidence for it (the closing issue, the trunk sha)
+  and the owner who lifts it. The issue is still held — the owner removes the label, and a
+  newer `Hold:` line may have tightened the condition, so read the newest one before
+  calling it met. `WAKE` changes how the line prints; the issue stays in the `blocked`
+  bucket of `$CACHE`, like `STALL`.
+- **Owner and wake both named, not met yet** → `HELD`, naming the label, the owner as the
+  clearer, and the wake.
 - **`wake: ruling`** → the `Because:` line is the ask. Quote it in the report so the
   person who clears the hold can see what they are asked, not only that something waits.
 
-Triage never writes a `Hold:` line or removes a hold. Neither is one of §0.2's writes.
+Record every `HELD` line's `wake:` value in `$CACHE.wakes` (§0.1), so a later
+short-circuited ping can still see a date come due or another repo's issue close.
+
+Triage never writes a `Hold:` line or removes a hold — not even on a met wake. Neither is
+one of §0.2's writes; *wake met, lift?* is a proposal for the owner, never a lift.
 Whoever parks the issue writes the line, and its owner clears it. A repo whose descriptor
 declares no `holds:` still gets the `deferred:*` half of this pass. One blind spot: a
 `Hold:` line posted *after* its label is a comment, and §0's fingerprint does not read
@@ -1336,7 +1428,10 @@ with the blocker named:
       value routes, or goes to the design bucket.
 - [ ] **Not held** — no `deferred:*` label, and no label the repo declares under
       `holds:` (§2, *Held*; `CONVENTIONS.md` [§5](../../CONVENTIONS.md#holds--every-label-that-stops-a-start-names-its-owner-and-its-wake-360), *Holds*). A held issue
-      reports as `HELD`, or as `STALL` when its `Hold:` line names no owner or no wake.
+      reports as `HELD`; as `WAKE` (*wake met, lift?*) when every condition on its `wake:`
+      measures met this pass; or as `STALL` when its `Hold:` line names no owner, no wake,
+      a wake outside the vocabulary, or a reference that does not resolve. A met wake is
+      still not ready: the owner lifts the hold, and only then does the issue start.
       It never reports as ready.
 
 ### Every label that affects a start — who sets it, who clears it (#360)
@@ -1603,13 +1698,19 @@ Then, briefly:
   STALL   #504  hold needs-rescope — no Hold: line (no owner, no wake) — clears: nobody named — dispatched: no
   HELD    #505  hold needs-rescope — clears: @maintainer — wake: review-by:2026-10-01 — dispatched: Hold: line, 2026-09-24
   HELD    #506  hold hold:manual — clears: @maintainer — wake: ruling, "grant the deploy key for staging" — dispatched: Hold: line, 2026-09-23
-  HELD    #507  deferred:date — clears: @maintainer — wake: review-by:2026-09-20, wake due — dispatched: Hold: line, 2026-09-01
+  WAKE    #507  deferred:date — wake met, lift? review-by:2026-09-20 (reached) — clears: @maintainer — dispatched: Hold: line, 2026-09-01
+  WAKE    #508  deferred:external-party — wake met, lift? issueClosed:owner/repo#12 (closed 2026-09-25) — clears: @maintainer — dispatched: no
+  STALL   #509  hold hold:manual — wake: issueClosed:owner/repo#999 does not resolve — clears: @maintainer — dispatched: no
   ```
 
-  - **Holds** (§2, *Held*) print as `HELD`, or `STALL` when the newest `Hold:` line for
-    that label names no owner or no wake. A `wake: ruling` line quotes its `Because:` ask.
-    A `review-by` date in the past adds *wake due*. Like `STALL`, `HELD` changes how the
-    line prints, and the issue stays in the `blocked` bucket of `$CACHE`.
+  - **Holds** (§2, *Held*) print as `HELD`, as `WAKE` when every condition on the newest
+    `Hold:` line's `wake:` is measured met, or as `STALL` when that line names no owner, no
+    wake, a wake outside the vocabulary, or a reference that does not resolve. A `wake:
+    ruling` line quotes its `Because:` ask. A `WAKE` line says *wake met, lift?* and names
+    the evidence, so the owner can lift it without re-measuring; list it right after the
+    `STALL` lines, because it is the other kind of line that someone can act on today.
+    Like `STALL`, `HELD` and `WAKE` change how the line prints, and the issue stays in the
+    `blocked` bucket of `$CACHE`.
 
   - **Dispatched** means someone can see the ask: a comment addressed to the person who
     clears it, a claim, an assignee, or a spawned session. Intending to ask does not
@@ -1624,10 +1725,11 @@ Then, briefly:
     `blocked` bucket of `$CACHE`, so there is no new bucket and no version bump.
   - Triage does not dispatch anything itself, because none of §0.2's writes is a
     dispatch. Naming the stall is what shows the gap to a reader who can dispatch.
-- **taken** — who holds it, and since when. A claim flagged *parked, wake condition due*
-  (§2's `deferred:*` exception) gets its own line inside this bucket, not the ready list —
-  name the `deferred:<kind>` and the `review-by:<date>` that passed, so a human can check
-  whether the gate actually cleared instead of finding this by manual audit.
+- **taken** — who holds it, and since when. A claim flagged *parked, wake met* or *parked,
+  wake unresolvable* (§2's `deferred:*` exception) gets its own line inside this bucket, not
+  the ready list — name the `deferred:<kind>`, the `wake:` condition, and the evidence that
+  it came true (or the reference that did not resolve), so a human can check whether the
+  gate actually cleared instead of finding this by manual audit.
 - **close these** — already shipped, with the evidence you found.
 - **epics** — one line each, naming the container and (if its table is hand-maintained)
   whether it looks current. Never a start candidate; see §2. Where §2's switch read ran,

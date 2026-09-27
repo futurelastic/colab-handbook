@@ -212,6 +212,18 @@ test('hold: a review-by date, or a real blockedBy edge, is a wake — agent appl
   assert.equal(d.classify({ kind: 'hold', wake: { blockedBy: true } }).authority, d.AGENT);
 });
 
+test('hold: a wake: from the closed vocabulary is a wake too (#382) — prose is not', () => {
+  assert.equal(d.classify({ kind: 'hold', wake: { conditions: 'issueClosed:o/r#12' } }).applicable, true);
+  assert.equal(d.classify({ kind: 'hold', wake: { conditions: ['branchLanded:fix/x-1', 'trunkAt:abc1234'] } }).authority, d.AGENT);
+  const prose = d.classify({ kind: 'hold', wake: { conditions: 'until the fix is deployed' } });
+  assert.equal(prose.applicable, false);
+  assert.match(prose.blockers[0], /closed vocabulary/);
+  assert.equal(d.classify({ kind: 'hold', wake: { conditions: 'issueClosed:o/r#12, when it ships' } }).applicable, false,
+    'one piece of prose refuses the whole value — a hold never wakes on part of its condition');
+  assert.equal(d.classify({ kind: 'leave', wake: { conditions: 'labelPresent:ready' } }).converted, 'hold');
+  assert.equal(d.classify({ kind: 'leave', wake: { conditions: 'someday' } }).converted, 'finding');
+});
+
 test('hold: no wake condition is not a hold — a silent wontfix, applicable to nobody', () => {
   const v = d.classify({ kind: 'hold', wake: {} });
   assert.equal(v.applicable, false);
