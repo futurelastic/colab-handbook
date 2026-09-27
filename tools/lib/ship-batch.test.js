@@ -104,6 +104,16 @@ test('selectMembers takes file-disjoint members first, fills from the rest, caps
   assert.deepStrictEqual(r.overflow.map((m) => m.branch), ['d']);
 });
 
+test('selectMembers (#387): sharing only generated paths leaves candidates disjoint', () => {
+  const a = { branch: 'a', files: ['a.txt', 'allow.json'] };
+  const b = { branch: 'b', files: ['b.txt', 'allow.json'] };
+  const c = { branch: 'c', files: ['c.txt'] };
+  let r = sb.selectMembers([a, b, c], 2);
+  assert.deepStrictEqual(r.selected.map((x) => x.branch), ['a', 'c'], 'without the predicate the allowlist is an overlap');
+  r = sb.selectMembers([a, b, c], 2, { isGenerated: (f) => f === 'allow.json' });
+  assert.deepStrictEqual(r.selected.map((x) => x.branch), ['a', 'b']);
+});
+
 test('wiring: no workflow firing on ship-batch/** means the run can never arrive', () => {
   assert.deepStrictEqual(sb.wiring([]), { wired: false, fires: [] });
   assert.deepStrictEqual(sb.wiring(['ci.yml']), { wired: true, fires: ['ci.yml'] });
