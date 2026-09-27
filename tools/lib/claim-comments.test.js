@@ -1,8 +1,8 @@
 'use strict';
 /**
  * Pure tests for tools/lib/claim-comments.js — the claim tie-break's input (`liveClaimComments`)
- * and verdict (`tieBreakVerdict`), after #369 (host tokens on public destinations) and #375 (which
- * release cancels which claim). The property every test here protects in the end is CONVERGENCE:
+ * and verdict (`tieBreakVerdict`), after #369 (host tokens on public destinations), #375 (which
+ * release cancels which claim) and #378 (the race window). The property every test here protects in the end is CONVERGENCE:
  * two racers reading the same comments reach the same verdict, so exactly one of them yields.
  *
  * Run: `node --test tools/lib/*.test.js`.
@@ -24,6 +24,7 @@ function claim(login, host, at, { machineTok = '', session = '' } = {}) {
   return { author: { login }, createdAt: T(at), body };
 }
 function release(login, at) { return { author: { login }, createdAt: T(at), body: '✅ Released' }; }
+function prose(login, at, text) { return { author: { login }, createdAt: T(at), body: text }; }
 function yielded(login, at, winnerId) {
   return { author: { login }, createdAt: T(at), body: `✅ Released (yielded — earlier claim by ${winnerId} wins)` };
 }
@@ -82,6 +83,58 @@ test('#375: a fine-setting co-tenant yield cancels the yielder, not the named se
     yielded('alice', 2, 'alice@box#session_s1'),
   ];
   assert.deepStrictEqual(cc.liveClaimComments(comments, claimIdentity.FINE_COMPONENTS).map((c) => c.session), ['session_s1']);
+});
+
+// --- #378: the tie-break is bounded to a race window --------------------------------------------
+
+const WINDOW_S = cc.RACE_WINDOW_MS / 1000;
+
+test('#378: the window is a named 10-minute constant', () => {
+  assert.strictEqual(cc.RACE_WINDOW_MS, 10 * 60 * 1000);
+});
+
+test('#378 measured (#297 shape): a claim never released with a marker does not win a race 27 days later', () => {
+  const comments = [
+    claim('alice', 'box-a', 0),                                   // account A claims
+    prose('alice', 3 * DAY, 'Claim released — handing this back.'), // released in PROSE only, no marker
+    claim('bob', 'box-b', 27 * DAY),                              // account B claims free work
+  ];
+  // The comment layer still reads A's claim as live — the window lives in the tie-break, not here.
+  assert.deepStrictEqual(cc.liveClaimComments(comments).map((c) => c.login), ['alice', 'bob']);
+  const v = cc.tieBreakVerdict(comments, 'bob', 'box-b', '', null, null);
+  assert.strictEqual(v.lost, false, 'the fresh claim keeps the issue instead of yielding to a stale one');
+});
+
+test('#378: an abandoned claim loses to a fresh one on the SAME account from another machine', () => {
+  const comments = [claim('alice', 'box-x', 0, { machineTok: MX }), claim('alice', 'box-y', 5 * DAY, { machineTok: MY })];
+  assert.strictEqual(cc.tieBreakVerdict(comments, 'alice', 'box-y', '', null, MY).lost, false);
+});
+
+test('#378: an earlier claim INSIDE the window still wins — a real race is settled as before', () => {
+  const comments = [claim('alice', 'a', 0), claim('bob', 'b', 9 * 60)];
+  const v = cc.tieBreakVerdict(comments, 'bob', 'b', '', null, null);
+  assert.strictEqual(v.lost, true);
+  assert.strictEqual(v.winner.login, 'alice');
+});
+
+test('#378: the window edge — exactly RACE_WINDOW_MS earlier is a race, one second more is not', () => {
+  assert.strictEqual(cc.tieBreakVerdict([claim('alice', 'a', 0), claim('bob', 'b', WINDOW_S)], 'bob', 'b', '', null, null).lost, true);
+  assert.strictEqual(cc.tieBreakVerdict([claim('alice', 'a', 0), claim('bob', 'b', WINDOW_S + 1)], 'bob', 'b', '', null, null).lost, false);
+});
+
+test('#378 convergence: two racers behind a stale claim ignore it alike — exactly one yields, to the other', () => {
+  const racers = [{ login: 'bob', host: 'b' }, { login: 'carol', host: 'c' }];
+  for (const [tb, tc] of [[0, 1], [1, 0], [0, 0]]) {
+    const comments = [
+      claim('alice', 'a', 0),                // stale, never marker-released
+      claim('bob', 'b', 20 * DAY + tb),
+      claim('carol', 'c', 20 * DAY + tc),
+    ];
+    const [vb, vc] = verdicts(comments, racers);
+    assert.strictEqual([vb.lost, vc.lost].filter(Boolean).length, 1, `@ ${tb}/${tc}: exactly one yields`);
+    const loser = vb.lost ? vb : vc;
+    assert.notStrictEqual(loser.winner.login, 'alice', `@ ${tb}/${tc}: never to the stale claim`);
+  }
 });
 
 // --- convergence ---------------------------------------------------------------------------------

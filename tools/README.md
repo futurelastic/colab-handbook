@@ -311,8 +311,13 @@ the tie **deterministically**, so both racers independently reach the *same* ver
    granularity* below) — **earliest**, not latest: a same-holder correction comment (the previous
    section) must never restart our own priority and cost us a race our first comment had already won.
 4. If any **other** live claim (not the same claimant) has an **earlier** `createdAt` than ours,
-   **we lost**. Exact-timestamp ties break on the identity string — the lexicographically smaller
-   identity wins — so the verdict is fully deterministic even at equal timestamps.
+   by **no more than the race window** (`RACE_WINDOW_MS`, 10 minutes, #378), **we lost**.
+   Exact-timestamp ties break on the identity string — the lexicographically smaller identity
+   wins — so the verdict is fully deterministic even at equal timestamps. A live claim older than
+   the window is not a race: it is one nobody released with a marker (abandoned, or released in
+   prose only), and unbounded it won every later tie-break on the issue. A claim genuinely still
+   held never gets this far — the refusal gate above refuses it first. The window reads comment
+   timestamps only, so the verdict stays a pure function of the comment list.
 5. On a loss we **yield automatically**: remove our local claim, post
    `✅ Released (yielded — earlier claim by <who> wins)`, and exit 1 telling the caller to pick
    another issue. We remove our GitHub `in-progress` label + `@me` assignee **only when the winner
