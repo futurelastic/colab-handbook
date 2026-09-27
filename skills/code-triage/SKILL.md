@@ -1296,7 +1296,7 @@ ready? Run §2 and the §5 gate against it alone, then leave the answer **where 
 reads it** — either a `blocked_by` edge naming the blocker, or the `deps-checked` label:
 
 ```sh
-colab readiness <N>              # verified: no open blocker  (clear it again with --clear)
+colab readiness <N>              # records the review; prints the open blockedBy count  (--clear to undo)
 gh issue edit <N> --add-label deps-checked      # … the raw form, if colab is not installed
 ```
 

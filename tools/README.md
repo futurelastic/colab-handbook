@@ -526,7 +526,7 @@ the "written but unmerged?" half from `lib/landed.js` rather than counting commi
 and it fails toward `blocked` in the same way `landed` fails toward `cargo`: neither will give the
 optimistic answer from facts it could not measure. The **classifier** deliberately has no command —
 computing the verdict needs facts gathered by `gh` reads this CLI does not otherwise make. But the
-one input a human supplies, the `deps-checked` marker meaning "I looked, no open blocker", **is**
+one input a human supplies, the `deps-checked` marker meaning "I reviewed the dependencies", **is**
 now owned by a command: `colab readiness <N>` (and `--clear`). Owning the write in colab makes it
 journaled like every other action, gives the label name a single source (`lib/labels.js`, shared
 with the audit), and is the site the observer event will emit from once its kind is agreed with the
@@ -1010,7 +1010,7 @@ Run `colab <cmd> --help` for full detail.
 | `solo [--force] [--session S] [--session-name S] [--repo P]` \| `solo --done [--repo P]` | entry-gated trunk-direct flow — `writes: serial` only, no issue/claim/worktree (see *Solo flow*, CONVENTIONS.md) |
 | `place acquire\|check\|release <path> [--repo P] [--session S] [--session-name S] [--force]` | path-scoped, machine-local checkout hold `writes: serial` needs (see *Place-claims*, CONVENTIONS.md; #136). `check` exits 0/1/2 (free-or-mine / held-by-a-live-other / liveness-unknown-or-lock-unreachable); releasing someone else's hold requires `COLAB_HUMAN=1` |
 | `places [--json]` | list every place-claim on this machine, liveness resolved right now (never a stored flag) |
-| `readiness <issue> [--clear] [--repo P]` | own the `deps-checked` marker ([§5](../CONVENTIONS.md#5-claiming-work--how-to-say-im-on-this)): add it after verifying no open blocker, `--clear` on a new blocker or reopen. Journaled; refuses when `gh` is unusable (the marker has no local-only form) |
+| `readiness <issue> [--clear] [--repo P]` | own the `deps-checked` marker ([§5](../CONVENTIONS.md#5-claiming-work--how-to-say-im-on-this)): add it after reviewing the dependencies — the success line then reports the open `blockedBy` count it read (never "verified", never refusing on it, #388) — `--clear` on a new blocker or reopen. Journaled; refuses when `gh` is unusable (the marker has no local-only form) |
 | `blocked <blocked> --by <blocker> [--clear --reason R [--force]] [--repo P]` | own the `blocked_by` dependency-edge write (#251): numbers only, resolves the database id itself, reads before writing, reads back to confirm. `--clear` requires `--reason` and refuses a closed blocker without `--force`. Refuses cross-repo; refuses when `gh` is unusable |
 | `claims [--json] [--sync [--prune]]` | list (grouped by worktree); `--sync` **adds** claims found on GitHub (assigned + in-progress); `--prune` also **removes** local claims GitHub no longer shows |
 | `port alloc [--count N] [--range A-B \| --at p1,p2,...] [--worktree N \| --claim I \| --label S]` | allocate consecutive free ports, or pin exact ports with `--at` |

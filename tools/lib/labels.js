@@ -426,6 +426,28 @@ function readinessLabelArgs({ clear } = {}) {
     : ['--add-label', READINESS_LABEL];
 }
 
+// #388: the success line `colab readiness <N>` prints after ADDING deps-checked. It used to say
+// "verified: no open blocker" unconditionally — a claim the default path never checked (only
+// --mechanical reads blockedBy), printed verbatim even on issues with open blockers, and the one
+// line operators copy into reports. It now says what was DONE (the review was recorded) and what
+// the graph holds, from one blockedBy read (`summary` = blocked-by.js openBlockerSummary, or
+// null/{ok:false} when the read failed). It never says "verified" and never "no open blocker":
+// deps-checked is a review record, and an open edge carries the block on its own (§5, #279).
+function readinessMarkedMessage({ num, repo, summary } = {}) {
+  const head = `Marked #${num} in ${repo} ${READINESS_LABEL} — dependencies reviewed`;
+  if (!summary || !summary.ok) {
+    return `${head}; blockedBy: unread (the label records your review, not a graph read)`;
+  }
+  const { total, read, open, unknownState } = summary;
+  const truncated = read < total;
+  let tail = `blockedBy: ${truncated ? '≥' : ''}${open} open`;
+  if (total > 0) tail += ` of ${total}`;
+  if (unknownState > 0) tail += `, ${unknownState} with unread state`;
+  if (truncated) tail += `, only ${read} read`;
+  if (open > 0) tail += ' (an open edge carries the block — this label does not lift it)';
+  return `${head}; ${tail}`;
+}
+
 // The `gh issue edit` label arguments for owning the MECHANICAL readiness marker. Same shape as
 // readinessLabelArgs, kept as a separate function rather than a parameter on that one: the two
 // markers must never be writable through the same call site, or a caller could flip one when it
@@ -601,7 +623,7 @@ function groupLabelNames(present) {
 
 module.exports = {
   CONVENTION_LABELS, conventionLabelNames, missingConventionLabels, staleConventionDescriptions,
-  READINESS_LABEL, readinessLabelArgs, readinessMissingLabelHint,
+  READINESS_LABEL, readinessLabelArgs, readinessMissingLabelHint, readinessMarkedMessage,
   TRACKING_LABEL,
   MECHANICAL_READINESS_LABEL, mechanicalReadinessLabelArgs,
   MIGRATION_GRANT_LABEL, migrationGrantLabelArgs, migrationGrantMissingLabelHint,
