@@ -844,6 +844,13 @@ Worktrees are only half of it. Also:
   Same four limits as `code-ship` B2c: never close a hand-checklist epic on a full
   table, never rewrite its prose, never build a table that does not exist, never infer
   parentage from a title.
+- **`needs-decision` issues whose ask is in neither shape** → report each one, naming its
+  filer (#379, `CONVENTIONS.md` §5, *Design-approval ask*). A pending question with no
+  `<!-- decision:options` block and no `Mockup: <url>` body line is one no decision view
+  can render, so it sits in the queue unseen by the human who rules. Use `code-triage`
+  §5's one-read `gh issue list --label needs-decision` query. Report only. Never add the
+  line or the block, never remove the label, and never record anything: the question is
+  the filer's to state and the ruling is a human's.
 - **Open containers whose native sub-issues are all closed** → close each one with
   evidence, by the same rule `colab ship` applies at merge (#371, `code-ship` B2c,
   `tools/lib/container-close.js`). The ship path only fires when the last child closes
@@ -950,6 +957,7 @@ spent-remote    56 refs on origin        → every trailing issue CLOSED; listed
 orphan-shippable docs/guide-refresh-81   → no worktree, wrapped 8h ago, dry run ok — shipped, trunk 7b3c2d1
 orphan-shippable fix/cache-key-44        → wrapped, awaiting a human go (no auto-trunk; not docs-only)
 orphan-shippable feat/importer-52        → orphan-shippable elsewhere — claimed from machine box-b; not adopted
+unshaped ask    #508                     → needs-decision with neither a Mockup: line nor an options block — reported to its filer, untouched
 ripened         fix/late-wrap-77         → became a candidate at 11:30Z, mid-run; shipped in the §5.1 pass, trunk 9f8e7d6
 ripened         feat/late-thing-81       → became a candidate mid-run; not processed: merge loop stopped (trunk CI red)
 end-of-run      §5.1 re-derived 2x       → second pass found nothing new; fingerprint + conclusion written from it
