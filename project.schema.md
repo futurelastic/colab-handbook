@@ -417,7 +417,8 @@ run there to be green, and fast-forwards trunk to it only if trunk has not moved
 must also be true, and the audit warns when either is not:
 
 - **A CI workflow fires on a `ship-batch/**` push.** Consumer workflows must opt in — add
-  `'ship-batch/**'` to a CI workflow's `push: branches:`. Without it the combined run can never
+  `'ship-batch/**'` to a CI workflow's `push: branches:` (a copy of the current CI templates
+  already does: their `'**'` covers it, #384). Without it the combined run can never
   arrive, so every `--batch` call says so and declines.
 - **`autonomy: auto-trunk`.** A batch lands every member in one unattended push; without the
   grant the field is inert.

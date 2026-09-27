@@ -1583,6 +1583,26 @@ reading either sees the same spelling. Spell them exactly so, everywhere:
   with no log while its self-hosted host had swap 100 % full — re-ran green. The contrast
   in the same repo: 37 failures each naming an assertion, at normal duration — a real
   regression that a re-run would have buried.
+- **Give the branch a run of its own — but only where trunk runs have their own capacity
+  (#384).** A workflow triggering on trunk push and `pull_request` alone leaves every
+  PR-less session branch at the cannot-arrive `none`: its first real run is the post-merge
+  trunk run, so a red there is a `TRUNK RED:` for everyone instead of a hand-back to one
+  implementer, and the ship pass waits on that run before it can post evidence. Measured
+  across one fleet over two weeks (~830 landings, 14 repos): CI wait was the second-largest
+  source of wait inside ship passes (186 waits, median 7.4 min), and only the repos that had
+  hand-edited their copy to `push: branches: ['**']` got a branch signal before the merge.
+  So the CI templates now trigger on **every** branch push, with a per-ref `concurrency`
+  group that cancels a superseded run on the same branch and **never** a trunk run — every
+  trunk sha keeps a completed run of its own, which is what the trunk half of the gate
+  reads. That is the default **only where trunk has capacity of its own**: GitHub-hosted
+  runners, a runner pool, or a trunk-only runner label chosen in `runs-on` on `github.ref`
+  ([*Self-hosted runners*](#self-hosted-runners--capacity-is-the-agent-count-not-the-machine-355)).
+  On a **single self-hosted agent shared with trunk**, keep trunk-only triggers until a
+  trunk lane exists — measured there (#355), branch pushes queued a trunk build job 33 min
+  behind other branches' jobs, delaying the one run a merge waits for. The cancel list
+  names the repo's trunk and release branch by name; a trunk missing from it has each run
+  cancelled by the next merge, leaving that squash sha with no completed run of its own for
+  the by-commit trunk read (#92) or the post-merge read (`code-ship` B2a) to find.
 - **Say which `none`.** A bare `none` turns a bounded wait into a wait for a run that was
   never coming. This handbook's own repo is the permanent shape: its workflow triggers on
   trunk push and `pull_request`, and a wrap pushes a backup branch without opening a PR,
@@ -1663,7 +1683,8 @@ unchanged) may land through `colab ship --batch <b1,b2[,b3]>`:
    returns to its implementer as a class, exactly as today.
 7. **Wiring.** If no workflow fires on a `ship-batch/**` push, the combined run can never
    arrive: `colab ship` says so and declines to serial — it never waits for it. Consumer
-   CI opts in by adding `'ship-batch/**'` to a CI workflow's `push: branches:`.
+   CI opts in by adding `'ship-batch/**'` to a CI workflow's `push: branches:` — a copy of
+   the current CI templates already fires there, since their `'**'` covers it (#384).
 8. **A red trunk still stops everything** except the cure/grant doors, and those apply
    **per member, never to a batch**: a red trunk declines the batch outright.
 
@@ -3754,7 +3775,9 @@ with one self-hosted agent: a clean run did ~8.5 min of work, and runs under loa
 - **Where the merge gate waits for a completed trunk run, give trunk its own agent.**
   Branch runs that are informative only must not delay the one run a merge waits for.
   Use **disjoint** label sets: trunk → a trunk-only label, everything else → the
-  general one, chosen in `runs-on` with an expression on `github.ref`. Two traps:
+  general one, chosen in `runs-on` with an expression on `github.ref`. Until that lane
+  exists, a single shared agent is also why a copied template's every-branch trigger
+  goes back to trunk-only ([*Branch CI*](#branch-ci--the-candidates-own-run-read-as-a-class-314), #384). Two traps:
   - **A label no online agent carries leaves the job queued forever, with no error.**
     Register the agent before merging the routing, and change the routing in the same
     change that retires the agent.
