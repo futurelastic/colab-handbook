@@ -962,6 +962,9 @@ function cmdClaim(argv) {
     }
   }
 
+  // #389: measured outside the lock (git, not state) — see the attach branch inside the mutation.
+  const existingDir = wtName ? existingWorktreeFor(repoAbs, wtName, branch) : null;
+  let attached = null;
   // ---- claim locally (idempotent on same worktree; --force overwrites a different holder) ----
   let res;
   try {
@@ -977,7 +980,23 @@ function cmdClaim(argv) {
         });
         if (!got.ok) { const e = new UserError(`${got.conflict.message}${PLACE_RACE_NOTE}`); e.placeRace = got.conflict; throw e; }
       }
-      if (wtName && !st.worktrees[wtName]) {
+      // #389: the worktree may ALREADY exist on disk with no record — a wrap released the last
+      // claim, so `colab worktrees` lists it `unrecorded`. A stub here would claim no directory for a
+      // worktree git can see, and `ship`'s post-push `merged` flip then refuses that record with
+      // trunk already moved. Attach what git reports instead: the real path and the branch actually
+      // checked out there. Only a directory no OTHER record already names is adopted.
+      const onDisk = existingDir && !Object.values(st.worktrees).some((w) => w.name !== wtName &&
+        w.path && path.resolve(w.path) === existingDir.path) ? existingDir : null;
+      if (wtName && !st.worktrees[wtName] && onDisk) {
+        st.worktrees[wtName] = { name: wtName, repo: repoAbs, branch: branch || onDisk.branch, path: onDisk.path, ports: [], host: HOST, machine: myMachineId(), session, sessionName, status: 'running', created: nowISO() };
+        attached = onDisk.path;
+      } else if (wtName && st.worktrees[wtName] && !st.worktrees[wtName].path &&
+        st.worktrees[wtName].status === records.PENDING && onDisk) {
+        // #389: a stub written before this fix (or before the directory existed) that git can now
+        // resolve — upgrade it in place rather than leaving a record the ship flip would refuse.
+        Object.assign(st.worktrees[wtName], { path: onDisk.path, branch: st.worktrees[wtName].branch || branch || onDisk.branch, status: 'running' });
+        attached = onDisk.path;
+      } else if (wtName && !st.worktrees[wtName]) {
         // A stub for a worktree that will be created later. It exists so the claim is not read as
         // an orphan; `colab worktree new` overwrites it with the real record. `status: pending` is
         // what makes the null path HONEST rather than a record claiming a directory it does not
@@ -1051,6 +1070,7 @@ function cmdClaim(argv) {
     throw e; // not a place-claim write — unchanged behaviour from before this branch
   }
 
+  if (attached) print(`worktree "${wtName}" attached to the directory git already has for it: ${attached} (#389)`);
   for (const num of res.reclaimed) print(`#${num} already claimed by this worktree — OK (idempotent)`);
   for (const num of res.upgraded) print(`#${num} planner claim upgraded in place → worktree "${wtName}" (tracker unchanged)`);
   // #264: a same-holder correction — something the record asserts (branch/session/sessionName)
@@ -1101,6 +1121,22 @@ function cmdClaim(argv) {
   for (const num of res.upgraded) pushEvent('claim', { repo: repoAbs, issue: num, worktree: wtName, session, payload: { branch, upgradedFromIntent: true } });
   // Lost any issue to the tie-break → non-zero so the caller picks another.
   return lost.length ? 1 : 0;
+}
+
+/**
+ * #389: the directory git already has checked out for a worktree a claim is about to name, or null.
+ * Keyed by BRANCH when one is given (git's own branch → path pairing, the same ground truth
+ * `resolveWorktreePathForBranch` reads); otherwise by the directory's basename equalling the
+ * worktree name, and only when exactly one linked worktree matches. The main checkout is never a
+ * candidate. A detached or bare entry names no branch and is never adopted.
+ */
+function existingWorktreeFor(repoAbs, wtName, branch) {
+  const main = path.resolve(repoAbs);
+  const linked = git.worktreeListDetailed(repoAbs)
+    .filter((w) => !w.bare && w.branch && path.resolve(w.path) !== main);
+  const hits = branch ? linked.filter((w) => w.branch === branch)
+    : linked.filter((w) => path.basename(w.path) === wtName);
+  return hits.length === 1 ? { path: path.resolve(hits[0].path), branch: hits[0].branch } : null;
 }
 
 const HELP_RELEASE = `colab release <issue> [--repo <path>]
@@ -8296,7 +8332,8 @@ Options:
                       declared for unticked issues (#263 — see below), trunk checkout ready, no
                       hand-merge conflict (a real preview merge, done in a throwaway detached
                       worktree — nothing on disk here is touched by it), claims corroborated by git
-                      (#87), and branch has commits (#90 — TRUE, not false, when the branch
+                      (#87), worktree record writable (#389 — the post-push \`status: merged\`
+                      write would pass the state guard; human-gated), and branch has commits (#90 — TRUE, not false, when the branch
                       qualifies for evidence-close: it is a different path, not a failure). \`class\`
                       is set ONLY on a failing check, from a CLOSED, STABLE-WIRE-FORMAT vocabulary:
                         self-clearing   CI still running, a transient gh/preview read failure — an
@@ -8394,6 +8431,45 @@ function handleShippedBranch(repoAbs, trunk, branch, { disposition, worktreeKept
 }
 
 /** Resolve the session (branch, worktree name/path, claimed issue numbers) from --worktree/--branch. */
+/**
+ * #389: problems the post-push `status: merged` write would hit, measured before anything
+ * irreversible. That write goes through the state guard; a record it refuses (a `pending` stub with
+ * `path: null`, left by a force-claim onto an unrecorded worktree) used to pass every precondition,
+ * push trunk, and only then throw — skipping evidence, claim release and teardown.
+ */
+function shipRecordProblems(st, sess) {
+  if (!sess.name || !st.worktrees[sess.name]) return [];
+  return records.flipProblems(sess.name, st.worktrees[sess.name], { status: 'merged' });
+}
+
+/** #389: the LINKED worktree (never the main checkout) that has `branch` checked out, or null. */
+function localWorktreeDir(repoAbs, branch) {
+  if (!branch) return null;
+  const dir = git.resolveWorktreePathForBranch(repoAbs, branch);
+  return dir && path.resolve(dir) !== path.resolve(repoAbs) ? path.resolve(dir) : null;
+}
+
+function shipRecordRemedy(sess) {
+  return `re-claim onto the directory git has for ${sess.branch}: ` +
+    `colab claim <N> --worktree ${sess.name} --branch ${sess.branch} --force (attaches the real path, #389), ` +
+    'or `colab doctor --prune` when the directory sits at the default worktree location';
+}
+
+/**
+ * The post-push flip. Never allowed to abort the ship tail: trunk has already moved, so a throw
+ * here would skip every bookkeeping step after it (#389). The precondition above is what should
+ * stop a bad record; this is the belt to that brace.
+ */
+function markShipMerged(sess) {
+  if (!sess.name) return;
+  try {
+    state.mutate((st) => { if (st.worktrees[sess.name]) st.worktrees[sess.name].status = 'merged'; });
+  } catch (e) {
+    warnDeferred(`could not record worktree "${sess.name}" as merged (${String(e.message).split('\n')[0]}) — ` +
+      'the merge IS pushed; the rest of the ship continues. Fix the record with `colab doctor`.');
+  }
+}
+
 function resolveShipSession(st, repoAbs, opts) {
   let name = null, branch = null, wtPath = null;
   let session = '', sessionName = '';
@@ -9209,6 +9285,13 @@ function cmdShipDryJson(opts) {
   checks.push({ name: 'core-path review (#350)', ok: coreReviewJson.verdict !== 'refuse',
     class: coreReviewJson.verdict === 'refuse' ? SELF_CLEARING : null, detail: coreReviewJson.detail });
 
+  // #389: same measurement as the prose path — a record the post-push flip would refuse fails here.
+  const dryRecProblems = shipRecordProblems(st, sess);
+  checks.push({ name: 'worktree record writable (#389)', ok: dryRecProblems.length === 0,
+    class: dryRecProblems.length ? HUMAN_GATED : null,
+    detail: dryRecProblems.length ? `${dryRecProblems.join('; ')} — ${shipRecordRemedy(sess)}`
+      : (sess.name ? `"${sess.name}" can take status merged` : 'no worktree record to update') });
+
   // ---- (c) no hand-merge conflict — NEW: the plain --dry prose path never checks this today ----
   const generated = [...DEFAULT_GENERATED, ...(Array.isArray(doc.generated) ? doc.generated.map(String) : [])];
   const hasPreShip = fs.existsSync(path.join(repoAbs, '.colab', 'hooks', 'pre-ship'));
@@ -9236,6 +9319,7 @@ function cmdShipDryJson(opts) {
   const dryRemoteOnly = !!dryRefs.remoteSha && (!dryRefs.localSha || dryRefs.localFromRemote);
   const dryRemote = git.remoteInfo(repoAbs).name || 'origin'; // #301
   const dryWhere = dryRefs.localSha ? `came from ${dryRemote} (this machine's local ref was created from ${dryRemote}'s copy — git DWIM checkout, #343)` : `exists ONLY on ${dryRemote}`;
+  const dryLocalDir = localWorktreeDir(repoAbs, sess.branch); // #389
   const dryZeroVerdict = shipguard.zeroClaimVerdict(sess.issues.length, sess.branch, dryBrokenClaims.length,
     { remoteOnly: dryRemoteOnly, adopt: !!opts.adopt });
   if (dryZeroVerdict.relevant) {
@@ -9243,7 +9327,9 @@ function cmdShipDryJson(opts) {
     const detail = dryZeroVerdict.reason === 'broken-claims'
       ? `${dryBrokenClaims.length} claim(s) in this repo name a branch that resolves to no ref — registry is broken, not the branch`
       : dryZeroVerdict.reason === 'branch-names-issues'
-        ? `branch name claims ${dryZeroVerdict.named.map((n) => '#' + n).join(' ')} but this machine's ("${HOST}") registry has nothing for it (#153) — claim may live on another machine`
+        ? `branch name claims ${dryZeroVerdict.named.map((n) => '#' + n).join(' ')} but this machine's ("${HOST}") registry has nothing for it (#153) — ` +
+          (dryLocalDir ? `the branch IS checked out on this machine (${dryLocalDir}); only the claim record is missing, most likely released by a wrap (#389) — re-claim: colab claim <N> --worktree ${sess.name || path.basename(dryLocalDir)} --branch ${sess.branch} --session <id>`
+            : 'claim may live on another machine')
         : dryZeroVerdict.reason === 'remote-only-unclaimed'
           ? `branch ${dryWhere} (@ ${shortSha(dryRefs.remoteSha)}) and this machine's ("${HOST}") registry has nothing for it (#324) — likely another machine's work; ship from there, claim it here, or --adopt`
           : dryZeroVerdict.reason === 'adopted'
@@ -10133,11 +10219,18 @@ function cmdShip(argv) {
   checks.push([coreOk ? (coreReview.verdict === 'pending' ? '⏸' : '✓') : '✗', 'core-path review (#350)', coreReview.detail]);
   for (const w of coreReview.warnings) warn(`${coreReview.codeownersPath}: ${w}`);
 
+  // #389: the record this ship will write after the push must be writable NOW.
+  const recProblems = shipRecordProblems(st, sess);
+  const recOk = recProblems.length === 0;
+  checks.push([recOk ? '✓' : '✗', 'worktree record writable (#389)', recOk
+    ? (sess.name ? `"${sess.name}" can take status merged` : 'no worktree record to update')
+    : `${recProblems.join('; ')} — ${shipRecordRemedy(sess)}`]);
+
   // #87 gates the ship: writing `Closes #N` for work that has not started is unrecoverable — the
   // issue can be reopened, but the false claim stays in trunk's immutable history, and GitHub will
   // have closed it the instant trunk was pushed. #263: gateOk joins the same list — an unticked
   // checklist with no declared remainder is exactly as unrecoverable once `Closes #N` ships.
-  const preOk = ciOk && migOk && treeOk && corr.ok && gateOk && syncResult.ok && coreOk;
+  const preOk = ciOk && migOk && treeOk && corr.ok && gateOk && syncResult.ok && coreOk && recOk;
 
   // ---- report the table ----
   print(`ship ${shortRepo(repoAbs)} · branch ${sess.branch} → ${target}` +
@@ -10160,8 +10253,13 @@ function cmdShip(argv) {
   // #242: the no-worktree branch mints the trunk-checkout place-claim and now REQUIRES a
   // session id up front — append the same placeholder to both forms rather than only the one
   // that strictly needs it, so a caller copying either line gets a runnable command either way.
-  const claimRemedy = sess.name
-    ? `colab claim <N> --worktree ${sess.name} --branch ${sess.branch} --session <id>`
+  // #389: the branch may be checked out RIGHT HERE with no record (a wrap released the last claim,
+  // so the worktree reads `unrecorded`). Then the claim is not on another machine, and the remedy
+  // names that directory's worktree so the re-claim attaches it rather than minting a place-claim.
+  const localDir = localWorktreeDir(repoAbs, sess.branch);
+  const remedyWt = sess.name || (localDir ? path.basename(localDir) : null);
+  const claimRemedy = remedyWt
+    ? `colab claim <N> --worktree ${remedyWt} --branch ${sess.branch} --session <id>`
     : `colab claim <N> --branch ${sess.branch} --session <id>`;
   // #324: measured HERE, before B0's `git worktree add` — which would DWIM a local ref out of
   // origin's copy and erase the only evidence that this machine never held the branch.
@@ -10200,7 +10298,12 @@ function cmdShip(argv) {
         `but this machine's (\`${HOST}\`) claim registry has nothing for this branch (#153).\n`);
       process.stderr.write('  Claims are written to both local state and GitHub, but this resolution reads only the local\n');
       process.stderr.write(`  registry, so "no claims" here has THREE possible causes:\n`);
-      process.stderr.write(`    - the claim lives on ANOTHER MACHINE — ship from there, or\n`);
+      if (localDir) {
+        process.stderr.write(`    - the branch IS checked out on this machine (${localDir}) and only its claim record is\n`);
+        process.stderr.write(`      missing — most likely released by a wrap (#389). Not another machine. Re-claim it here, or\n`);
+      } else {
+        process.stderr.write(`    - the claim lives on ANOTHER MACHINE — ship from there, or\n`);
+      }
       process.stderr.write(`    - take the claim over here:  ${claimRemedy}, or\n`);
       // #172: the parser cannot tell an issue number from a version/count suffix — a branch like
       // `chore/bump-node-22` reads `22` as a trailing issue number the same way `fix/x-1` reads `1`.
@@ -10774,7 +10877,7 @@ function cmdShip(argv) {
   // here rather than right after B1 (#322): between the two, the push can still fail and be rolled
   // back, and a `status: merged` record written before that point outlives a merge that never
   // happened — inviting a later sweep to tear down a branch whose work is still only on the branch.
-  if (sess.name) state.mutate((st) => { if (st.worktrees[sess.name]) st.worktrees[sess.name].status = 'merged'; });
+  markShipMerged(sess);
 
   // ---- (e2) POST-SHIP: the target checkout's installed tree may now be stale (#304) ----
   // The merge has landed and is pushed. Nothing below may fail the ship: there is nothing left to
@@ -11331,7 +11434,7 @@ function shipBatchLand(repoAbs, doc, trunk, remote, base, existing, verdict, opt
  * — its 🚢 comment gains only the combined-run clause.
  */
 function shipBatchMemberTail({ repoAbs, doc, trunk, sess, sha, closeIssues, refsIssues, suffix, opts, gh }) {
-  if (sess.name) state.mutate((st) => { if (st.worktrees[sess.name]) st.worktrees[sess.name].status = 'merged'; });
+  markShipMerged(sess);
   pushEvent('ship', {
     repo: repoAbs, worktree: sess.name, session: sess.session,
     issue: sess.issues.length === 1 ? sess.issues[0] : undefined,
