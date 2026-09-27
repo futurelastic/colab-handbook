@@ -27,6 +27,7 @@ const {
   deliveryType, isRouteNotStart,
   DEFERRED_LABEL_PREFIX, DEFERRED_KINDS, deferredKind, isDeferred,
   REVIEW_BY_LABEL_PREFIX, isReviewByLabel, reviewByLabelNames, parseReviewByDate,
+  readinessMarkedMessage,
 } = require('./labels.js');
 
 test('the convention set is exactly the labels §9 provisions, in canonical order', () => {
@@ -631,4 +632,35 @@ test('#364: a name with no readable description is skipped, never reported — "
 
 test('#364: labels outside the convention set, and absent convention labels, are never reported', () => {
   assert.deepStrictEqual(staleConventionDescriptions([{ name: 'bug', description: 'anything' }]), []);
+});
+
+// #388: the deps-checked success line says what was done and what the graph holds — never
+// "verified", never "no open blocker" (a claim the default path used to print unchecked).
+test('#388: readinessMarkedMessage never claims verification, in any read outcome', () => {
+  const cases = [
+    null,
+    { ok: false },
+    { ok: true, total: 0, read: 0, open: 0, unknownState: 0 },
+    { ok: true, total: 3, read: 3, open: 3, unknownState: 0 },
+    { ok: true, total: 2, read: 2, open: 0, unknownState: 0 },
+  ];
+  for (const summary of cases) {
+    const m = readinessMarkedMessage({ num: 7, repo: 'o/r', summary });
+    assert.match(m, /^Marked #7 in o\/r deps-checked — dependencies reviewed; blockedBy: /);
+    assert.doesNotMatch(m, /verified|no open blocker/);
+  }
+});
+
+test('#388: readinessMarkedMessage reports the open count, and the block caveat only when one is open', () => {
+  const msg = (summary) => readinessMarkedMessage({ num: 7, repo: 'o/r', summary });
+  assert.match(msg({ ok: true, total: 0, read: 0, open: 0, unknownState: 0 }), /blockedBy: 0 open$/);
+  assert.match(msg({ ok: true, total: 2, read: 2, open: 0, unknownState: 0 }), /blockedBy: 0 open of 2$/);
+  assert.match(msg({ ok: true, total: 3, read: 3, open: 2, unknownState: 0 }), /blockedBy: 2 open of 3 \(an open edge carries the block — this label does not lift it\)$/);
+  assert.match(msg({ ok: false }), /blockedBy: unread/);
+  assert.match(msg(null), /blockedBy: unread/);
+});
+
+test('#388: a truncated page reports a FLOOR, and unread states are named — never folded into a count', () => {
+  const m = readinessMarkedMessage({ num: 7, repo: 'o/r', summary: { ok: true, total: 150, read: 100, open: 4, unknownState: 1 } });
+  assert.match(m, /blockedBy: ≥4 open of 150, 1 with unread state, only 100 read/);
 });

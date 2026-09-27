@@ -47,6 +47,15 @@ function repoSlugFromUrl(url) {
   return m ? m[1] : null;
 }
 
+/** #388: an issue's html `url` -> "owner/name", or null. `gh issue view --json blockedBy` nodes
+ *  carry `url` (https://<host>/<owner>/<name>/issues/<n>) and NO `repository` field — measured
+ *  live 2026-09-27; the node keys are id/number/state/title/url. Without this fallback every real
+ *  non-empty `gh issue view` read failed normaliseEdges, i.e. read as "unreadable". */
+function repoSlugFromHtmlUrl(url) {
+  const m = /^https:\/\/[^/]+\/([^/]+\/[^/]+)\/(?:issues|pull)\/\d+\/?$/.exec(String(url || ''));
+  return m ? m[1] : null;
+}
+
 function edgeKey(e) { return `${e && e.repo}#${e && e.number}`; }
 
 /**
@@ -81,7 +90,7 @@ function normaliseEdges(raw) {
     if (!Number.isInteger(number)) return { ok: false, edges: null };
     const repo = item.repository_url
       ? repoSlugFromUrl(item.repository_url)
-      : (item.repository && item.repository.nameWithOwner) || null;
+      : (item.repository && item.repository.nameWithOwner) || repoSlugFromHtmlUrl(item.url);
     if (!repo) return { ok: false, edges: null };
     const id = Number.isInteger(item.id) ? item.id : null;
     const state = item.state != null ? String(item.state).toLowerCase() : null;
@@ -104,6 +113,36 @@ function edgePresent(edges, target) {
 function foreignEdges(edges, thisRepo) {
   if (!Array.isArray(edges)) return [];
   return edges.filter((e) => e.repo && e.repo !== thisRepo);
+}
+
+/**
+ * #388: what a `gh issue view --json blockedBy` read says about OPEN blockers — a report, never a
+ * gate. `colab readiness <N>` (the deps-checked path) reads this once so its success line can say
+ * what the graph holds instead of asserting "no open blocker" it never checked; it does NOT refuse
+ * on a non-empty count (that is `--mechanical`'s job): under §5 (#279) an open edge carries the
+ * block by itself, and deps-checked records only that a reasoning session reviewed the deps.
+ *
+ * Returns `{ ok:false }` for an unreadable/malformed read (null means "could not read", never
+ * "empty" — the same contract as normaliseEdges), else
+ *   { ok:true, total, read, open, unknownState }
+ * `total` is the connection's totalCount when present (falls back to the nodes read); `read` is
+ * how many nodes came back — fewer than `total` means the page was truncated, so `open` is a floor.
+ * `unknownState` counts nodes with no `state` field: they are neither open nor closed as far as
+ * this read can tell, and the caller must not fold them into either.
+ */
+function openBlockerSummary(raw) {
+  const n = normaliseEdges(raw);
+  if (!n.ok) return { ok: false };
+  const edges = n.edges;
+  const tc = raw && raw.blockedBy && Number.isInteger(raw.blockedBy.totalCount) ? raw.blockedBy.totalCount : null;
+  const total = tc != null && tc >= edges.length ? tc : edges.length;
+  return {
+    ok: true,
+    total,
+    read: edges.length,
+    open: edges.filter((e) => e.state === 'open').length,
+    unknownState: edges.filter((e) => e.state == null).length,
+  };
 }
 
 /**
@@ -214,10 +253,10 @@ function removalReceiptBody(blockerNumber, host, iso, reason) {
 }
 
 module.exports = {
-  normaliseEdges, edgePresent, foreignEdges,
+  normaliseEdges, edgePresent, foreignEdges, openBlockerSummary,
   argProblem, resolvedBlockerProblem, clearProblem,
   confirmVerdict, ADD_CONFIRMED, ADD_WRONG, ADD_MISSING, ADD_UNCONFIRMED,
   removalReceiptBody, REMOVAL_MARK, REMOVAL_RE,
   // exported for tests / a caller building its own target key consistently
-  edgeKey, repoSlugFromUrl,
+  edgeKey, repoSlugFromUrl, repoSlugFromHtmlUrl,
 };

@@ -2434,14 +2434,24 @@ function cmdPlaces(argv) {
 
 const HELP_READINESS = `colab readiness <issue> [--clear] [--mechanical] [--repo <path>]
 
-Own the readiness marker (§5) — the deps-checked label meaning "dependencies verified,
-no open blocker". Making colab the writer (rather than a raw \`gh issue edit\`) is the point:
-the write is journaled like every other colab action, the label name comes from one place
-(tools/lib/labels.js, shared with the audit), and the observer event falls out of the same
-pushEvent() path the other state changes use (kind readiness.marked, agreed with the receiver).
+Own the readiness marker (§5) — the deps-checked label, meaning "a reasoning session reviewed
+this issue's dependencies" (#279). It does NOT mean "no open blocker": an open blockedBy edge
+carries the block by itself, and this label never lifts it. Making colab the writer (rather
+than a raw \`gh issue edit\`) is the point: the write is journaled like every other colab
+action, the label name comes from one place (tools/lib/labels.js, shared with the audit), and
+the observer event falls out of the same pushEvent() path the other state changes use (kind
+readiness.marked, agreed with the receiver).
 
   colab readiness <N>            add deps-checked    (set ONLY after actually looking)
   colab readiness <N> --clear    remove deps-checked (a genuinely new blocker, or the issue reopened)
+
+On an ADD it then reads \`blockedBy\` once (the same read --mechanical makes) and REPORTS what it
+holds, never refusing on it (#388):
+  Marked #N in <repo> deps-checked — dependencies reviewed; blockedBy: 0 open
+  Marked #N in <repo> deps-checked — dependencies reviewed; blockedBy: 2 open of 3 (an open edge …)
+  Marked #N in <repo> deps-checked — dependencies reviewed; blockedBy: unread (…)
+It never prints "verified" or "no open blocker" — that is --mechanical's claim, below, and only
+there is it actually checked. A failed read is "unread", never zero.
 
 Runs the label edit for you:  gh issue edit N --add-label deps-checked  (or --remove-label).
 The marker lives on GitHub, visible from any machine to the readiness gate that reads it, so
@@ -2451,7 +2461,7 @@ repo never got the deps-checked label (adopted before it entered the set), the a
 an actionable message pointing at handbook-sync — never a success on a write that did not land.
 
 deps-checked is MONOTONIC (CONVENTIONS.md §5, "Readiness"): once set, it stays set. It
-records that a reasoning session looked and found no open blocker, not that the issue is
+records that a reasoning session looked at the dependencies, not that the issue is
 startable today. --clear means a genuinely NEW blocker appeared, or the issue reopened —
 never "not startable right now". That fact is already carried by the blockedBy edge, so
 stripping this label on top of it adds nothing; a defer waiting on a date, a measurement,
@@ -2502,9 +2512,16 @@ function cmdReadiness(argv) {
     const hint = opts.clear ? null : labels.readinessMissingLabelHint(git.ghListLabels(repoAbs));
     throw new UserError(hint || `gh edit #${num} failed (${r.stderr.split('\n')[0] || r.code})`);
   }
-  print(opts.clear
-    ? `Cleared ${labels.READINESS_LABEL} on #${num} in ${shortRepo(repoAbs)} — readiness is now UNCHECKED`
-    : `Marked #${num} in ${shortRepo(repoAbs)} ${labels.READINESS_LABEL} — verified: no open blocker`);
+  if (opts.clear) {
+    print(`Cleared ${labels.READINESS_LABEL} on #${num} in ${shortRepo(repoAbs)} — readiness is now UNCHECKED`);
+  } else {
+    // #388: say what was done, not what was never checked. One blockedBy read — the same read
+    // --mechanical makes — REPORTED, never gated on: under §5 (#279) an open edge carries the
+    // block by itself, and deps-checked only records that a reasoning session reviewed the deps.
+    // A failed read is reported as "unread", never as zero; the label above has already landed.
+    const summary = blockedBy.openBlockerSummary(git.ghIssueView(repoAbs, num, ['blockedBy']));
+    print(labels.readinessMarkedMessage({ num, repo: shortRepo(repoAbs), summary }));
+  }
 
   // colab is now the writer of the deps-checked marker, so it owns the event too. The receiver has
   // agreed the kind `readiness.marked` and ingests this as an optimistic "ready" hint that bridges

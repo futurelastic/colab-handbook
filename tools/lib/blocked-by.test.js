@@ -18,6 +18,7 @@ const {
   confirmVerdict, ADD_CONFIRMED, ADD_WRONG, ADD_MISSING, ADD_UNCONFIRMED,
   removalReceiptBody, REMOVAL_MARK, REMOVAL_RE,
   edgeKey, repoSlugFromUrl,
+  openBlockerSummary,
 } = require('./blocked-by.js');
 
 // --- repoSlugFromUrl --------------------------------------------------------------------------
@@ -220,4 +221,42 @@ test('removalReceiptBody: carries the mark, the blocker number, host, timestamp 
 
 test('edgeKey: repo#number', () => {
   assert.strictEqual(edgeKey({ repo: 'a/b', number: 5 }), 'a/b#5');
+});
+
+// #388: openBlockerSummary — a report, never a gate.
+test('#388: openBlockerSummary counts OPEN edges only, case-insensitively', () => {
+  const n = (number, state) => ({ number, state, repository: { nameWithOwner: 'o/r' } });
+  assert.deepStrictEqual(
+    openBlockerSummary({ blockedBy: { nodes: [n(1, 'OPEN'), n(2, 'CLOSED'), n(3, 'open')], totalCount: 3 } }),
+    { ok: true, total: 3, read: 3, open: 2, unknownState: 0 },
+  );
+  assert.deepStrictEqual(openBlockerSummary({ blockedBy: { nodes: [], totalCount: 0 } }),
+    { ok: true, total: 0, read: 0, open: 0, unknownState: 0 });
+});
+
+test('#388: openBlockerSummary — unreadable is ok:false, never an empty count', () => {
+  assert.deepStrictEqual(openBlockerSummary(null), { ok: false });
+  assert.deepStrictEqual(openBlockerSummary({}), { ok: false });
+  assert.deepStrictEqual(openBlockerSummary({ blockedBy: { totalCount: 0 } }), { ok: false });
+});
+
+test('#388: openBlockerSummary — a truncated page keeps totalCount; a missing state is counted apart', () => {
+  const r = openBlockerSummary({ blockedBy: { nodes: [{ number: 1, repository: { nameWithOwner: 'o/r' } }], totalCount: 5 } });
+  assert.deepStrictEqual(r, { ok: true, total: 5, read: 1, open: 0, unknownState: 1 });
+});
+
+test('#388: normaliseEdges accepts the REAL gh issue view node shape (url, no repository field)', () => {
+  const raw = { blockedBy: { nodes: [{ id: 'I_kwDOabc', number: 297, state: 'CLOSED', title: 't', url: 'https://github.com/o/r/issues/297' }], totalCount: 1 } };
+  const n = normaliseEdges(raw);
+  assert.equal(n.ok, true);
+  assert.deepStrictEqual(n.edges, [{ id: null, number: 297, repo: 'o/r', state: 'closed' }]);
+  assert.deepStrictEqual(openBlockerSummary(raw), { ok: true, total: 1, read: 1, open: 0, unknownState: 0 });
+});
+
+test('#388: repoSlugFromHtmlUrl — html issue/pull urls only', () => {
+  const { repoSlugFromHtmlUrl } = require('./blocked-by.js');
+  assert.equal(repoSlugFromHtmlUrl('https://github.com/o/r/issues/12'), 'o/r');
+  assert.equal(repoSlugFromHtmlUrl('https://ghe.example/o/r/pull/3'), 'o/r');
+  assert.equal(repoSlugFromHtmlUrl('https://api.github.com/repos/o/r'), null);
+  assert.equal(repoSlugFromHtmlUrl(undefined), null);
 });
