@@ -90,6 +90,9 @@ const writesAuthority = require("../tools/lib/writes-authority.js");
 const releasePolicy = require("../tools/lib/release-policy.js");
 const { parseWorkflowOn, workflowFiresOnTag, prereleaseTagTriggers, workflowsFiringOnBranchPush } = require("../tools/lib/workflow-triggers.js");
 const shipBatch = require("../tools/lib/ship-batch.js");
+// #383: where migrations live — the one rule `colab ship`'s gate and `release cut` read; the audit
+// validates the `migrations:` declaration against it and reports a `*/migrations/` dir it misses.
+const migrationPaths = require("../tools/lib/migration-paths.js");
 // #228's identity vocabulary — resolution, parsing, matching and REDACTION. Shared with the
 // conformance test that holds it and the shell hook (templates/pre-commit-identity) to the
 // same semantics; the shell scanner cannot require it (a template lands in repos with no
@@ -763,6 +766,16 @@ function makeSource(target) {
           return [];
         }
       },
+      // Every path under a directory named `migrations` (#383's undeclared-layout check). null =
+      // git could not list — the check then says nothing rather than reporting a clean tree.
+      migrationDirFiles: () => {
+        try {
+          const out = execFileSync("git", ["-C", root, "ls-files", "--", ":(glob)**/migrations/**"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], maxBuffer: 64 * 1024 * 1024 });
+          return out.split("\n").map((s) => s.trim()).filter(Boolean);
+        } catch {
+          return null;
+        }
+      },
     };
   }
   return {
@@ -780,6 +793,9 @@ function makeSource(target) {
     // scans nothing and emits nothing for a remote source, matching checkRunbook's
     // "would rather under-report than invent" posture for API-backed reads.
     markdownFiles: () => [],
+    // Same cost argument as markdownFiles: a recursive tree listing per repo per sweep. null = not
+    // enumerated, so #383's undeclared-migration-layout check is local-only, silently.
+    migrationDirFiles: () => null,
     tags: () => listRemoteTags(target.slug),
     metadata: () => readRemoteMetadata(target.slug),
     // The duration report (#137) needs a per-commit walk over historical blobs
@@ -1192,6 +1208,27 @@ function auditRepo(target, ctx) {
         const firing = workflowsFiringOnBranchPush({ readFile: (p) => src.readFile(p), workflows, branch: shipBatch.PROBE_REF });
         if (!firing.length) warn(`ship-batch: ${sbCfg.n} but no workflow in .github/workflows fires on a push to ship-batch/** — colab ship --batch will always fall back to serial; add 'ship-batch/**' to a CI workflow's push: branches:`);
         if (autonomy !== "auto-trunk") warn(`ship-batch: ${sbCfg.n} is inert without autonomy: auto-trunk — colab ship --batch lands every member in one unattended push`);
+      }
+    }
+
+    // ---- migrations (#383) ----------------------------------------------------
+    // Where the repo's migrations live, beyond the two defaults (database/migrations/,
+    // prisma/migrations/) — tools/lib/migration-paths.js is the one reading, shared with
+    // `colab ship`'s no-new-migrations gate and `release cut`'s schema-additive check, so the
+    // three cannot disagree. An invalid entry fails: ship reads it leniently only in the stricter
+    // direction, and a declaration nobody can trust is not an answer. Redundancy only warns.
+    // Then the half no declaration can answer for itself: a tracked `*/migrations/` directory
+    // that NO rule covers is most likely a layout the gate cannot see — the exact shape that let
+    // a production backfill read `no new migrations ✓`. Advisory: a `docs/migrations/` guide is
+    // a false positive, and only a human can tell the two apart. Local-only (see migrationDirFiles).
+    const migCfg = migrationPaths.parseMigrationPaths(cfg);
+    migCfg.problems.forEach((p) => fail(p));
+    migCfg.notes.forEach((p) => warn(p));
+    const migFiles = src.migrationDirFiles();
+    if (migFiles) {
+      const undeclared = migrationPaths.undeclaredMigrationDirs(migFiles, migCfg.paths);
+      if (undeclared.length) {
+        warn(`migration-shaped director${undeclared.length === 1 ? "y" : "ies"} outside every declared path: ${undeclared.join(", ")} — colab ship's no-new-migrations gate does not see ${undeclared.length === 1 ? "it" : "them"}; declare in project.yml (migrations: [${undeclared.join(", ")}]) if these are migrations`);
       }
     }
 

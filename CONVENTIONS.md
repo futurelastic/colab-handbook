@@ -2647,7 +2647,10 @@ are what make a violation *legible* after the fact, not what makes one impossibl
 #### Migration exemption — a narrow, human-created door through no-new-migrations (#98)
 
 `colab ship` refuses, by default with no flag/env/field to lower the bar, any branch
-touching `database/migrations/` or `prisma/migrations/`.
+touching `database/migrations/` or `prisma/migrations/` — or any prefix the repo declares in
+`project.yml` `migrations:` (#383, [`project.schema.md`](project.schema.md#migrations--optional)).
+A declaration only ever widens what the gate sees, never narrows it; a repo keeping migrations
+elsewhere without declaring them is a repo whose gate reads `no new migrations ✓` on a backfill.
 
 **A migration grant is a narrow, per-issue, branch-bound, human-only, expiring
 exemption** — deliberately not a repo- or tier-level switch.

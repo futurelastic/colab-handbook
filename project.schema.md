@@ -427,6 +427,42 @@ namespace, on a rebuild) and deletes those refs itself. Exit codes of `--batch`:
 `3` paused (wait on the printed run, bounded, then run the same command again) · `4` declined —
 nothing landed, ship the members one at a time.
 
+### `migrations` — optional
+
+```yaml
+migrations: [backend/migrations/]   # repo-relative prefixes; absent = the two defaults alone
+```
+
+Where this repo's migrations live, **beyond** the two layouts every reader already knows —
+Laravel `database/migrations/` and Prisma `prisma/migrations/`, both matched anywhere in the
+path. `colab ship`'s no-new-migrations gate
+([CONVENTIONS.md §5, *Migration exemption*](CONVENTIONS.md#migration-exemption--a-narrow-human-created-door-through-no-new-migrations-98))
+and `colab release cut`'s `schema-additive` check read this one list (`tools/lib/migration-paths.js`);
+neither keeps a regex of its own. **Absent changes nothing** — a repo that declares nothing is
+gated exactly as before.
+
+Without it, a repo whose migrations live anywhere else (a Node service's boot migrations in
+`backend/migrations/`, a Go service's `migrations/`) is invisible to the gate: `colab ship --dry`
+reported `no new migrations ✓` on a branch adding a production data backfill, and the human-only
+grant never engaged. Measured on an adopting repo before this key existed.
+
+- **Entries are repo-relative directory prefixes**, matched from the repo root. `./` and a
+  missing trailing `/` are normalised away; an absolute path, a `..`, a glob, or the repo root
+  itself is a finding — a prefix match would silently mean something other than what was written.
+- **Additive, never a replacement.** The defaults always apply; restating one is harmless (an
+  advisory). There is deliberately no opt-out of the defaults: an opt-out can only make a
+  human-only gate see *less*, and that waits for a repo that genuinely needs it.
+- **Ship reads trunk's declaration and the branch's, unioned.** A branch that adds its own
+  declaration is gated by it; a branch that deletes trunk's is still gated by trunk's.
+- **`release cut` reads `.php`/`.sql` under a declared prefix** with the same destructive
+  heuristic as the defaults. A declared migration in any other format (`.mjs`, `.go`) is *named*
+  in the check's detail — the heuristic cannot read it, so the §6 judgement owes it a human read —
+  never folded silently into "none destructive".
+- **The audit reports a tracked `*/migrations/` directory no rule covers** (advisory, local
+  audits only): the likely undeclared layout. A `docs/migrations/` upgrade guide is a false
+  positive only a human can tell apart; committed dependency trees (`node_modules/`, `vendor/`)
+  are skipped.
+
 ### `room` — optional
 
 ```yaml
@@ -1126,6 +1162,9 @@ the shape that shows it. One writer at a time says nothing about who reads the r
 | `branchPrefix` = `machine` when set | a misspelled value silently read as the unprefixed default |
 | `ship-batch` an integer 1–3 when set → **finding** otherwise | a misspelled opt-in silently read as serial by `colab ship` |
 | `ship-batch` > 1 with no workflow firing on a `ship-batch/**` push, or without `autonomy: auto-trunk` → **advisory** | a batch opt-in that can never land a batch |
+| `migrations` a list of repo-relative prefixes when set — an absolute path, `..`, glob, the repo root, or a non-list → **finding** | a declaration the migration gate cannot honestly read |
+| `migrations` empty, restating a default, or naming one prefix twice → **advisory** | redundancy, harmless |
+| a tracked `*/migrations/` directory outside the defaults and every declared prefix → **advisory** (local only) | a migration layout `colab ship`'s gate cannot see |
 | `holds` is a list of non-empty strings, each listed once, when set → **finding** otherwise | a scalar or malformed list silently read as "no holds declared", so triage reports held work ready |
 | `exposure` ∈ {`none`, `self`, `live`, `released`} when set | a misspelled value silently read as undeclared |
 | `exposure: none` + `production: null` → **advisory** | the both-empty claim ("nothing consumes this, and there is nothing to point at") going unflagged |

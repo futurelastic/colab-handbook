@@ -36,6 +36,7 @@ const shipguard = require('./lib/shipguard');
 const branchName = require('./lib/branch-name');
 const machineTrailer = require('./lib/machine-trailer');
 const migrationGrant = require('./lib/migration-grant');
+const migrationPaths = require('./lib/migration-paths');
 const decisionRecord = require('./lib/decision-record');
 const blockedBy = require('./lib/blocked-by');
 const ciGrant = require('./lib/ci-grant');
@@ -1154,9 +1155,11 @@ Refuses, naming each failed condition (all are reported, not just the first):
   full-suite           every workflow that ran at the commit has a successful run (a cancelled-only
                        workflow never ran its tests)
   schema-additive      a migration since the last final tag is destructive (Laravel database/migrations
-                       up() drops/renames/->change(), Prisma DROP/RENAME/ALTER COLUMN) or an existing
-                       migration was edited/deleted. Other layouts are not read — the release notes
-                       still owe the §6 judgement on the diff
+                       up() drops/renames/->change(), Prisma DROP/RENAME/ALTER COLUMN, and .php/.sql
+                       under a project.yml \`migrations:\` prefix) or an existing migration was
+                       edited/deleted. Other layouts are not read — a declared migration in another
+                       format is NAMED in the detail, and the release notes still owe the §6
+                       judgement on the diff
   switch-dependencies  a colab:switch marker is malformed, or a finished switch needs one that is not
 
 The bump is release-status's semverSuggestion since the last final tag (candidates skipped): fix ->
@@ -1188,7 +1191,7 @@ function readAllIssuesForSwitches(repoAbs) {
 }
 
 /** [{status, path, content}] for every path changed between `from` (null = the empty tree) and `sha`; null on a git failure. */
-function releaseCutChanges(repoAbs, from, sha) {
+function releaseCutChanges(repoAbs, from, sha, declared) {
   let base = from;
   if (!base) {
     const empty = git.git(['hash-object', '-t', 'tree', '--stdin'], repoAbs, { input: '' });
@@ -1202,7 +1205,7 @@ function releaseCutChanges(repoAbs, from, sha) {
     const status = parts[0];
     const file = parts[parts.length - 1];
     let content = null;
-    if (status.startsWith('A') && releaseCut.isMigrationPath(file)) {
+    if (status.startsWith('A') && releaseCut.isMigrationPath(file, declared)) {
       const show = git.git(['show', `${sha}:${file}`], repoAbs);
       content = show.ok ? show.stdout : '';
     }
@@ -1234,10 +1237,13 @@ function measureCandidateConditions(repoAbs, { sha, lastFinal, at, readRuns }) {
     issues = readAllIssuesForSwitches(repoAbs);
     switches = releaseCut.switchVerdict(issues);
   }
-  const changes = releaseCutChanges(repoAbs, lastFinal, sha);
+  // #383: the declared migration prefixes as committed at the candidate AND on disk, unioned — the
+  // same one rule the ship gate reads (tools/lib/migration-paths.js), never a second regex.
+  const declared = migrationPaths.unionPaths(projectDoc(repoAbs), projectDocAt(repoAbs, sha));
+  const changes = releaseCutChanges(repoAbs, lastFinal, sha, declared);
   const schema = changes === null
     ? { ok: false, detail: 'git diff failed — schema changes cannot be read' }
-    : releaseCut.schemaVerdict(changes, lastFinal || 'the first commit');
+    : releaseCut.schemaVerdict(changes, lastFinal || 'the first commit', declared);
   return { ci, suite, schema, switches, issues };
 }
 
@@ -7785,12 +7791,29 @@ function branchContainedInTrunk(repoAbs, branch, base) {
   return { contained: verdict.state === 'landed', ambiguous: verdict.state === 'unknown', verdict };
 }
 
-/** New migration files introduced on <branch> vs <trunk> (Laravel + Prisma layouts). */
+/**
+ * project.yml as committed at `ref` (a branch, a sha), parsed — {} when the ref has no descriptor or
+ * git cannot read it. The working-tree reader above (`projectDoc`) answers for the checkout on disk;
+ * this answers for a commit the checkout may not be on.
+ */
+function projectDocAt(repoAbs, ref) {
+  const r = git.git(['show', `${ref}:.github/project.yml`], repoAbs);
+  if (!r.ok) return {};
+  try { return require('./lib/yaml').parse(r.stdout) || {}; } catch (_) { return {}; }
+}
+
+/**
+ * New migration files introduced on <branch> vs <trunk> (#383): the two default layouts (Laravel
+ * `database/migrations/`, Prisma `prisma/migrations/`) plus every prefix project.yml `migrations:`
+ * declares — tools/lib/migration-paths.js is the one rule. The declaration is read from BOTH the
+ * checkout (trunk at rest) and the branch, and unioned: a branch that adds its own declaration is
+ * gated by it, and a branch that deletes trunk's declaration is still gated by trunk's.
+ */
 function newMigrations(mainRoot, trunk, branch) {
   const r = git.git(['diff', '--name-only', `${trunk}...${branch}`], mainRoot);
   if (!r.ok) return [];
-  return r.stdout.split('\n').filter(Boolean)
-    .filter((f) => /(^|\/)database\/migrations\//.test(f) || /(^|\/)prisma\/migrations\//.test(f));
+  const declared = migrationPaths.unionPaths(projectDoc(mainRoot), projectDocAt(mainRoot, trunk), projectDocAt(mainRoot, branch));
+  return r.stdout.split('\n').filter(Boolean).filter((f) => migrationPaths.isMigrationPath(f, declared));
 }
 
 /**
@@ -7971,9 +7994,10 @@ Sequence (each step gated; any failure aborts before the push — the target is 
   b. preconditions      target CI alive+green (UNLESS the branch proves the CURE RULE, #281 — no
                         human step needed — OR every issue the branch carries holds a valid
                         \`colab ci-grant\` over trunk's CURRENT red sha, #105 — see below) · no new
-                        migrations on branch (UNLESS every issue holds a valid \`colab migration-grant\`,
-                        #98 — see below) · trunk checkout clean · every closing claim corroborated by
-                        git (see below)
+                        migrations on branch — database/migrations/, prisma/migrations/, plus every
+                        prefix project.yml \`migrations:\` declares (#383) — (UNLESS every issue holds a
+                        valid \`colab migration-grant\`, #98 — see below) · trunk checkout clean ·
+                        every closing claim corroborated by git (see below)
                         (an integration line with NO runs at all borrows trunk's verdict, advisory —
                         an ungated line is a normal early state; a RED line still blocks; the cure
                         rule and ci-grant both cover trunk only, never a line)
