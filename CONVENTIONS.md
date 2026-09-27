@@ -3331,7 +3331,9 @@ surface**, per the size rule there. A design session works it on the issue's own
 (`design/<slug>-<N>`), and it ships like any branch; the build issue that implements the
 surface waits on it through a `blocked_by` edge. It is never a code start candidate, and
 triage reports it in a bucket of its own — apart from code, from route, and from not
-asked. Two consumers hand-created the label before the handbook provisioned it, and a
+asked. Being off the code start list does not take it off the readiness marker. When its
+`blocked_by` edges are all closed, or it has none, triage stamps `deps-checked` on it by
+the same bar as a code issue, because a design lane gates on that marker too (#380). Two consumers hand-created the label before the handbook provisioned it, and a
 third, having no such value, filed design work under `delivery:docs-only`, where its
 scheduler started a code worker that refused the issue 5 times. Before #359
 `deliveryType()` returned `null` for it — the "not asked" case, the #274 failure below for

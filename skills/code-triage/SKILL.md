@@ -870,6 +870,18 @@ session's start, never the code pipeline's. Leave it off the ranked list too, bu
 in its own **design** bucket (§6), not the route bucket: it is not going anywhere else, and
 the build issues its `blocked_by` edges hold back are waiting on it.
 
+**Off the ranked list does not mean off the readiness pass (#380).** A design lane gates on
+`deps-checked` the same way the code lane does, so a design issue left unstamped stays held
+with nothing wrong, and every build issue `blocked_by` it waits too. Measured twice in one
+day on one consumer: a design issue whose blockers had all closed, and one with no
+`blocked_by` edge at all, both unstamped, each holding a build issue behind it. So run §5's
+first gate on every unclaimed `delivery:design` issue that carries no hold, by the same bar
+as a code issue. Read the edges (`gh issue view <N> --json blockedBy`), judge any open
+blocker's state (§5.1), then write or clear the marker exactly as §6's *persist* step does
+for a code group. Only that gate applies. The others ask whether a *code* branch can start,
+and a design issue never gets one from triage. A design issue with no edge is free once you
+have looked. That is the case the marker exists to record.
+
 **No `delivery:*` label at all is NOT either bucket** — absence means *not asked*, not
 non-code; an unlabelled issue proceeds through the rest of triage exactly as before this
 label set existed. `delivery:code` and `delivery:docs-only` also proceed normally — both are
@@ -1540,6 +1552,34 @@ recording durably, that lands through one of the five named writes (the label, t
 comment, the plan/lane reason), never through a fresh prose comment invented for the
 occasion.
 
+**A dry pass is a finding (#380).** When the ranked list is empty (no ready and no
+soft-ready group), the report **opens** with that fact, before any bucket. It then lists
+every open issue that is not taken, not an epic and not a close candidate, one line each:
+the one thing that would make it startable, and who holds that thing. Measured: a repo sat
+with 22 open issues and 0 startable for hours, and no session worked it. Two of its holds
+were already stale, and a report that read "nothing ready" was taken to mean "nothing to
+do". Its first line is fixed, so a reader cannot mistake it for a clean result:
+
+```
+DRY    0 of 22 open issues startable (trunk e31a896) — what unsticks each:
+       #501  ruling on layout A vs B — <maintainer> — asked on #501, 2026-09-22
+       #502  nobody named — STALL
+       #507  lift deferred:date, wake met — @maintainer — not asked
+       #87   design session start — nobody claimed it — DESIGN, free
+       all   trunk CI red at e31a896 (test job) — whoever re-runs it or files the patch — not asked
+```
+
+- Each line is the same fact the matching blocked, taken, design or route line carries,
+  reduced to *what* and *who*. It adds no judgement of its own, so every rule on those
+  lines still applies. `STALL` and `WAKE` lines stay first.
+- When one blocker holds every issue, as a red trunk CI does (§5), print it once as the
+  `all` line instead of repeating it per issue. Triage still does not re-run the job or
+  file an issue for it. Neither is one of §0.2's five writes. Naming who unsticks it is
+  what this line is for.
+- `N` in the header counts every open issue. If none of them gets a line (all epics, all
+  taken, or all route), the header still prints, followed by one line saying so.
+- The `DRY` block is console output like the rest of §6. It is never posted to the tracker.
+
 For each **ready** group, give the four things a session needs to begin. The fourth,
 `start:`, is **always the claim-and-worktree command** — ⚖ #233 makes this true on
 every repo now, not just `writes: isolated` ones: triage's own output is consumed by
@@ -1764,9 +1804,11 @@ Then, briefly:
 - **route** — one line each, naming the delivery type (`content` / `ops` / `elsewhere`)
   and where it actually needs to go. Never a start candidate for the code pipeline; see §2.
 - **design** — one line each per `delivery:design` issue, with its claim state and the
-  build issues its `blocked_by` edges hold back:
-  `DESIGN #87  unclaimed — holds #88, #89`. A design session's start, never a code start
-  candidate; see §2.
+  build issues its `blocked_by` edges hold back, and its readiness verdict from this pass
+  (#380):
+  `DESIGN #87  unclaimed, free (deps-checked) — holds #88, #89`, or
+  `DESIGN #90  unclaimed, blocked by #86 — holds #91`. A design session's start, never a
+  code start candidate; see §2.
 
 Then, **findings** — group-level, so they are not a bucket and do not compete with the
 rule below. One block per group that broke the one-branch contract (§3):
@@ -1877,6 +1919,13 @@ whole-repo path, not a new one:
 Prefer `colab readiness` over a raw `gh` edit for the reason §4 gives: colab
 owns the write, so it is journaled and the `readiness.marked` event fires from
 the same site — the single signal the event-driven consumer actually receives.
+
+**The design bucket is persisted too, not only the ranked list (#380).** Every
+unclaimed, unheld `delivery:design` issue gets the same three-way write, keyed to
+its own §5.1 verdict (§2, *Non-code delivery*): free → `colab readiness <N>`,
+blocked → unset (or `--clear` if stale), soft-ready → unmarked. It is off the
+ranked list, but a design scheduler reads the same marker, so skipping it here
+parks the design session and everything built behind it.
 
 **This is also where §0.3's per-issue cache gets written, once per pass.** After the
 `$CACHE` fingerprint and `conclusion` writes (§0.1), write the pruned `issues` map: one
@@ -2075,6 +2124,11 @@ Hand the top group to **code-start**, which will re-verify the claim before taki
   `decision-recorded` label had the unrecorded-ruling check run before `absent` was
   printed. Every ruling found was reported with its link and a `record:` line, and
   triage did not run `record:` itself.
+- Every unclaimed, unheld `delivery:design` issue went through §5's first gate and got the
+  same marker write as a free code group, or had a stale marker cleared (§2, §6, #380).
+  Being off the ranked list did not exempt it.
+- A pass with an empty ranked list opened with the `DRY` block. Every listed issue named
+  what would make it startable and who holds that (§6, #380).
 - Every blocked line says who clears it and whether they have been asked. Any line with
   no one named, or no one asked, printed as `STALL`, first in the blocked list (#356).
 - Every "already shipped" call carries evidence (sha + `file:line`) — not a hunch.
