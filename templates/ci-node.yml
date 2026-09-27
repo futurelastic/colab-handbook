@@ -24,14 +24,35 @@ name: CI
 
 on:
   push:
-    # EDIT: keep only the branches this repo actually has.
-    # Tier A and C have both dev (trunk) and main (release). Tier B has main only.
-    # Do NOT drop `dev` on a Tier A or C repo: dev is the trunk, so a main-only
-    # trigger runs zero checks on the branch you actually merge into — and nothing
-    # looks broken (CONVENTIONS.md §7).
-    branches: [main, dev]
+    # Every branch, not only trunk (#384). Sessions push branches without opening a
+    # PR, so a trunk-only trigger leaves a candidate with no run of its own before the
+    # merge: its first run is the post-merge trunk run, and a red there is everyone's
+    # TRUNK RED instead of one implementer's hand-back (CONVENTIONS.md §4, "Branch
+    # CI"). '**' also covers `ship-batch/**`, the batch-landing opt-in.
+    #
+    # EDIT: on ONE self-hosted agent shared with trunk, go back to trunk-only until
+    # trunk has its own lane — branch runs queue ahead of the one trunk run a merge
+    # waits for (CONVENTIONS.md §7, "Self-hosted runners", #355). GitHub-hosted
+    # runners, a runner pool, or a trunk-only label picked in `runs-on` on
+    # github.ref all have that capacity; keep '**' there. Trunk-only means the
+    # branches this repo actually has — and never drop `dev` on a Tier A or C repo:
+    # dev is the trunk, so a main-only trigger runs zero checks on the branch you
+    # merge into, and nothing looks broken (CONVENTIONS.md §7).
+    branches: ['**']
   pull_request:
+    # EDIT: keep only the branches this repo actually has (Tier A and C: dev is the
+    # trunk, main the release; Tier B: main only).
     branches: [main, dev]
+
+# One live run per branch: a new push cancels the superseded run on the same ref.
+# Trunk is NEVER cancelled — every trunk sha keeps a completed run of its own, which
+# is what the merge gate reads (CONVENTIONS.md §4, "Branch CI"). Pull-request runs
+# group under refs/pull/<n>/merge, apart from the branch's push runs.
+# EDIT: name exactly this repo's trunk (and release branch) here. A Tier C trunk
+# may carry any name; one left off this list gets its trunk runs cancelled.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' && github.ref != 'refs/heads/dev' }}
 
 env:
   # EDIT: bump deliberately, not automatically.
