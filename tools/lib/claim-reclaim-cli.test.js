@@ -117,7 +117,9 @@ function fixture() {
     "  const n = argv[2]; const bodyIdx = argv.indexOf('--body'); const body = argv[bodyIdx + 1];",
     "  const st = load(n);",
     "  const c = counter();",
-    "  const iso = new Date(Date.UTC(2020, 0, 1) + (1000 + c) * 1000).toISOString();",
+    // 100s after the seeds, not 1000s: a seeded rival claim is meant to be a RACE, and a gap wider
+    // than claim-comments.js RACE_WINDOW_MS (10 min, #378) would put it outside the tie-break.
+    "  const iso = new Date(Date.UTC(2020, 0, 1) + (100 + c) * 1000).toISOString();",
     "  st.comments.push({ createdAt: iso, author: { login: 'me' }, body });",
     "  save(n, st); process.exit(0);",
     "}",

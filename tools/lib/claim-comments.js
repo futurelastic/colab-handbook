@@ -16,6 +16,10 @@ const machine = require('./machine');
 
 const CLAIM_MARK = '🔒 Claimed';
 const RELEASE_MARK = '✅ Released';
+// #378: how far BEFORE our own claim a rival's live claim can be and still count as "simultaneous".
+// Racers post within seconds of each other; 10 minutes is deliberately generous so a slow `gh` never
+// splits a real race, while a claim weeks old — abandoned, or released only in prose — is not a race.
+const RACE_WINDOW_MS = 10 * 60 * 1000;
 // Parses a claim comment body back into {worktree, branch, host, date}. The `· <host>` field is
 // what lets the tie-break tell two machines of the SAME GitHub user apart. On a public destination
 // it carries an opaque `h:` token instead of the raw name (#369, machine.js `hostToken`) — same
@@ -149,9 +153,17 @@ function liveClaimComments(comments, comps) {
 /**
  * Deterministic verdict on the simultaneous-claim race. Given the issue's comments and our own
  * identity (`myLogin`/`myHost`/`mySession`/`myMachine`): if a live claim that is NOT us under
- * `comps` (`sameClaimant`, #267) is EARLIER than our own earliest live claim → we lost (returns the
- * winner). Exact-timestamp ties break on identity string (lexicographically smaller identity wins),
- * so both racers, reading the same comments, reach the same verdict independently.
+ * `comps` (`sameClaimant`, #267) is EARLIER than our own earliest live claim, by no more than
+ * `RACE_WINDOW_MS` → we lost (returns the winner). Exact-timestamp ties break on identity string
+ * (lexicographically smaller identity wins), so both racers, reading the same comments, reach the
+ * same verdict independently.
+ *
+ * The window (#378): a live claim posted more than `RACE_WINDOW_MS` before ours is not a rival in a
+ * race — it is a claim nobody released with a marker (abandoned, or released in prose only), and
+ * without the bound it won every later tie-break on the issue, forever. A claim that is really still
+ * held never reaches this function: the refusal gate (`in-progress` + assignee, and #325's
+ * other-machine check) refuses it first. Comment timestamps only — still a pure function of the
+ * comment list, so convergence holds. docs/adr/378-tie-break-race-window.md.
  *
  * `myHost` is the RAW hostname; our own comment may carry its `h:` token (#369, public
  * destination) — `sameClaimant` → `sameHost` → `sameHostName` matches the two.
@@ -173,6 +185,7 @@ function tieBreakVerdict(comments, myLogin, myHost, mySession, comps, myMachine 
     if (claimIdentity.sameClaimant(c, me, comps)) continue; // never yield to ourselves
     const earlier = c.at < mine.at || (c.at === mine.at && c.identity < mine.identity);
     if (!earlier) continue;
+    if (Date.parse(mine.at) - Date.parse(c.at) > RACE_WINDOW_MS) continue; // #378: not a race
     if (!winner || c.at < winner.at || (c.at === winner.at && c.identity < winner.identity)) winner = c;
   }
   return winner ? { lost: true, winner } : { lost: false };
@@ -194,6 +207,6 @@ function yieldReleaseBody(winner, { redact = false } = {}) {
 }
 
 module.exports = {
-  CLAIM_MARK, RELEASE_MARK, CLAIM_RE, SESSION_RE, MACHINE_RE, YIELD_RE,
+  CLAIM_MARK, RELEASE_MARK, RACE_WINDOW_MS, CLAIM_RE, SESSION_RE, MACHINE_RE, YIELD_RE,
   parseSessionField, parseIdentity, isNamedWinner, liveClaimComments, tieBreakVerdict, yieldReleaseBody,
 };
