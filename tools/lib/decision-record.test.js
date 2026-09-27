@@ -289,3 +289,43 @@ test('evaluateIssue: pending follows the pair verdict — open and undetermined 
   assert.equal(evaluateIssue({ labels: ['decision-recorded'], comments: rec }).pending, false);
   assert.equal(evaluateIssue({ labels: ['decision-recorded'], comments: rec }).pair, null);
 });
+
+// --- #379: the design-approval ask shape ----------------------------------------------------
+
+const { mockupUrls, askShape, ASK_SHAPES } = require('./decision-record.js');
+
+test('mockupUrls: reads every line-anchored Mockup: line in the body, in order', () => {
+  const body = 'Design for the settings page.\n\nMockup: https://example.invalid/a.png\nMockup:https://example.invalid/b.png  \r\nmore text\n';
+  assert.deepStrictEqual(mockupUrls(body), ['https://example.invalid/a.png', 'https://example.invalid/b.png']);
+});
+
+test('mockupUrls: an indented, inline, or empty Mockup: is not a declaration', () => {
+  assert.deepStrictEqual(mockupUrls('  Mockup: https://example.invalid/a.png'), []);
+  assert.deepStrictEqual(mockupUrls('see Mockup: https://example.invalid/a.png'), []);
+  assert.deepStrictEqual(mockupUrls('Mockup:\nnext line'), []);
+  assert.deepStrictEqual(mockupUrls('Mockup: two words'), []);
+  assert.deepStrictEqual(mockupUrls(undefined), []);
+});
+
+test('askShape: options block (body or comment) wins, Mockup line next, else null', () => {
+  const opts = '<!-- decision:options\nA: x\nB: y\n-->';
+  assert.strictEqual(askShape({ body: opts }).shape, ASK_SHAPES.OPTIONS);
+  assert.strictEqual(askShape({ body: 'q', comments: [{ body: opts }] }).shape, ASK_SHAPES.OPTIONS);
+  assert.strictEqual(askShape({ body: 'Mockup: https://example.invalid/a.png' }).shape, ASK_SHAPES.MOCKUP);
+  assert.strictEqual(askShape({ body: 'Mockup: https://example.invalid/a.png\n' + opts }).shape, ASK_SHAPES.OPTIONS);
+  // The measured failure: screenshots posted in a review COMMENT, nothing in the body.
+  const r = askShape({ body: 'Design the page.', comments: [{ body: 'Mockup: https://example.invalid/a.png' }] });
+  assert.strictEqual(r.shape, null);
+  assert.deepStrictEqual(r.mockups, []);
+});
+
+test('evaluateIssue: unshapedAsk flags a pending question in neither shape, and only when the body was read', () => {
+  const labels = ['needs-decision'];
+  assert.strictEqual(evaluateIssue({ labels, comments: [] }).unshapedAsk, null);
+  assert.strictEqual(evaluateIssue({ labels, comments: [] }).ask, null);
+  assert.strictEqual(evaluateIssue({ labels, comments: [], body: 'approve the design?' }).unshapedAsk, true);
+  const shaped = evaluateIssue({ labels, comments: [], body: 'Mockup: https://example.invalid/a.png' });
+  assert.strictEqual(shaped.unshapedAsk, false);
+  assert.strictEqual(shaped.pending, true, 'the shape never changes whether the question is pending');
+  assert.strictEqual(evaluateIssue({ labels: [], comments: [], body: 'no gate' }).unshapedAsk, false);
+});

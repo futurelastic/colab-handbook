@@ -157,6 +157,42 @@ function answeredOptionRefs(comments) {
  *  and its comment's createdAt matter here — the block's content is parsed by consumers. */
 const OPTIONS_RE = /<!--\s*decision:options\b/;
 
+/** The design-approval ask (CONVENTIONS.md §5, *Decision options*, #379): the second
+ *  machine-readable question shape, beside the options block. A design issue whose finished
+ *  artifact awaits approval carries `Mockup: <url of the frozen image>` in its BODY, anchored at
+ *  the start of a line — never a comment, so a reader finds it with one field and no timeline.
+ *  A set reviewed together carries one line in each member's body; the review comment keeps the
+ *  full gallery. Leading whitespace disqualifies the line on purpose: an indented `Mockup:` is
+ *  quoted or nested text, not the filer's declaration. */
+const MOCKUP_RE = /^Mockup:[ \t]*(\S+)[ \t]*$/gm;
+
+/** Every `Mockup:` URL declared in an issue body, in order. Empty when none (or no body). */
+function mockupUrls(body) {
+  if (typeof body !== 'string' || body === '') return [];
+  const out = [];
+  for (const m of body.replace(/\r\n/g, '\n').matchAll(MOCKUP_RE)) out.push(m[1]);
+  return out;
+}
+
+const ASK_SHAPES = Object.freeze({ OPTIONS: 'options', MOCKUP: 'mockup' });
+
+/**
+ * Which machine-readable shape the question on a `needs-decision` issue takes (#379):
+ *   - `options` — a `<!-- decision:options` block, in the body or any comment (#126);
+ *   - `mockup`  — at least one `Mockup:` line in the body (design approval);
+ *   - `null`    — neither: a question no consumer can render. Triage and sweep report that as
+ *                 a finding for its filer (CONVENTIONS.md §5) — it is never a new gate, and it
+ *                 never changes whether the issue is pending.
+ * Both present reads as `options`: a pick-one block is the more specific ask.
+ */
+function askShape({ body = '', comments = [] } = {}) {
+  const hasOptions = OPTIONS_RE.test(typeof body === 'string' ? body : '') ||
+    (Array.isArray(comments) ? comments : []).some((c) => c && OPTIONS_RE.test(c.body || ''));
+  const mockups = mockupUrls(body);
+  const shape = hasOptions ? ASK_SHAPES.OPTIONS : (mockups.length ? ASK_SHAPES.MOCKUP : null);
+  return { shape, options: hasOptions, mockups };
+}
+
 const PAIR_VERDICTS = Object.freeze({
   OPEN_QUESTION: 'open-question',
   INTERRUPTED_WRITE: 'interrupted-write',
@@ -258,8 +294,11 @@ function pairVerdict({ labels, comments, labelEvents = null } = {}) {
  *   - `pending`       — whether a human still owes an answer: gated, unless the pair resolves
  *                        to an interrupted write. UNDETERMINED is pending, by design.
  *   - `decisions`     — the full liveDecisions() list, for a caller that wants to show detail.
+ *   - `ask`           — askShape()'s result when the caller passed `body`, else null (#379).
+ *   - `unshapedAsk`   — true when a pending question takes neither shape: a finding for its
+ *                        filer, never a gate. null when `body` was not passed (unknown, not false).
  */
-function evaluateIssue({ labels, comments, labelEvents = null } = {}) {
+function evaluateIssue({ labels, comments, labelEvents = null, body } = {}) {
   const labelNames = new Set(
     (labels || []).map((l) => (l && typeof l === 'object' ? l.name : l)),
   );
@@ -268,7 +307,11 @@ function evaluateIssue({ labels, comments, labelEvents = null } = {}) {
   const gated = labelNames.has('needs-decision');
   const pair = pairVerdict({ labels, comments, labelEvents });
   const pending = gated && !(pair && pair.verdict === PAIR_VERDICTS.INTERRUPTED_WRITE);
-  return { recorded, gated, contradiction: recorded && gated, pair, pending, decisions };
+  // #379: only judged when the caller passed the body — an unread body is "unknown", never
+  // "unshaped", so a caller that never fetched it is not handed a false finding.
+  const ask = body === undefined ? null : askShape({ body, comments });
+  const unshapedAsk = ask === null ? null : (pending && ask.shape === null);
+  return { recorded, gated, contradiction: recorded && gated, pair, pending, decisions, ask, unshapedAsk };
 }
 
 module.exports = {
@@ -277,5 +320,6 @@ module.exports = {
   liveDecisions, TRUSTED_ASSOCIATIONS,
   hasRecordedDecision, answeredOptionRefs,
   OPTIONS_RE, PAIR_VERDICTS, pairVerdict,
+  MOCKUP_RE, mockupUrls, ASK_SHAPES, askShape,
   evaluateIssue,
 };

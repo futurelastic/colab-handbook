@@ -1420,6 +1420,23 @@ with the blocker named:
       If `needs-decision` is applied, the label is still a live gate and the group
       stays `blocked`. Its blocked line then names the `record:` command as what clears
       it, not a ruling someone still has to make.
+      **Is the question itself machine-readable?** (#379, `CONVENTIONS.md` §5,
+      *Design-approval ask*). A pending `needs-decision` takes one of two shapes: a
+      `<!-- decision:options` block (body or comment), or a `Mockup: <url>` line at the
+      start of a line in the **body**. In neither shape, no decision view can render it,
+      so the human who rules is never shown it. It stays `blocked` as before, and its
+      blocked line gains `finding: ask in neither shape — filer adds a Mockup: line or an
+      options block` and names the filer. Do not write the line or the block yourself.
+      The question is the filer's to state. The reference reading is `askShape` in
+      `tools/lib/decision-record.js`. One read for the whole repo:
+      ```sh
+      gh issue list --state open --label needs-decision --limit 200 --json number,body,comments \
+        -q '.[] | select(((.body // "") | test("<!--\\s*decision:options") | not)
+                     and ([.comments[].body] | any(test("<!--\\s*decision:options")) | not)
+                     and ((.body // "") | test("(?m)^Mockup:[ \\t]*\\S+[ \\t]*$") | not)) | .number'
+      ```
+      This lists the unshaped ones among **every** open `needs-decision` issue. Skip an
+      epic here: §2's epic finding already covers it, with a different fix.
 - [ ] **Delivery type is code, docs-only, or not asked** — no `delivery:content` /
       `delivery:ops` / `delivery:elsewhere` / `delivery:design` label (`CONVENTIONS.md` [§5](../../CONVENTIONS.md#delivery-type--route-not-start-112), *Delivery type*). This issue was
       already filtered out at §2 if it carries one; this bullet is the reminder for a
@@ -1696,6 +1713,7 @@ Then, briefly:
   BLOCKED #501  needs-decision (layout A vs B) — clears: <maintainer>, ruling — dispatched: asked on #501, 2026-09-22
   STALL   #502  "design lane, then code" — clears: nobody named — dispatched: no
   BLOCKED #503  needs-decision, ruling exists, unrecorded (<link>) — clears: whoever takes it, via record: colab decision 503 --record --ruled-by <maintainer> … — dispatched: this line
+  BLOCKED #508  needs-decision, finding: ask in neither shape — filer adds a Mockup: line or an options block — clears: <filer>, then <maintainer> — dispatched: this line
   STALL   #504  hold needs-rescope — no Hold: line (no owner, no wake) — clears: nobody named — dispatched: no
   HELD    #505  hold needs-rescope — clears: @maintainer — wake: review-by:2026-10-01 — dispatched: Hold: line, 2026-09-24
   HELD    #506  hold hold:manual — clears: @maintainer — wake: ruling, "grant the deploy key for staging" — dispatched: Hold: line, 2026-09-23

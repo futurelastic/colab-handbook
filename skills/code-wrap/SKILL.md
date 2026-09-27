@@ -215,6 +215,15 @@ splits by size*, #359):
   the design issue this build was `blocked_by`. Build to it and promote nothing; mark an
   artifact superseded only if a new ruling on this branch replaced it.
 
+**The ruling must postdate the review (#379, `CONVENTIONS.md`
+[§5](../../CONVENTIONS.md#decision-gate--a-human-must-answer-first-122), *Decision gate*).**
+A `decision-recorded` label, or a `⚖` marker, recorded *before* the artifact was put up
+for approval answers an earlier question, such as "start this work". It is not approval of
+the artifact. Compare the newest live `⚖ Decision recorded` marker with the review: the
+comment that posted the frozen screenshots, or the `--reopen` receipt that asked. The
+marker must be the later of the two. If it is not, the approval is still pending. Do not
+promote; say so in the wrap report, and leave the artifact where it is.
+
 No design ruling landed on this branch → skip this step silently, same as any
 other optional check A2 makes.
 

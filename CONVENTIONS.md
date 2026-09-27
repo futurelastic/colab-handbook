@@ -2487,9 +2487,16 @@ that needs the finished artifact, blocks the only session that could produce it.
   answered *before* design work starts, such as which of two directions to explore, or
   whether the surface should exist at all.
 - **Approval of the finished artifact** is asked once the artifact exists, by the session
-  that produced it. If a ruling is already recorded on the issue, for instance the one
-  that let it start, the approval goes through `colab decision <N> --reopen` (below),
-  never a hand-added label.
+  that produced it, with a `Mockup:` line in the issue body (*Design-approval ask*, below,
+  #379). If a ruling is already recorded on the issue, for instance the one that let it
+  start, the approval goes through `colab decision <N> --reopen` (below), never a
+  hand-added label.
+- **A `decision-recorded` that predates the review is not approval of the artifact
+  (#379).** It answers the question it was recorded for, such as "start this work", and
+  nothing asked after it. Promoting the artifact to `docs/design/` (`code-wrap` A2) waits
+  for a ruling recorded **after** the review. Measured in one adopting repo: a design issue
+  carrying an earlier "start" ruling got a hand-added `needs-decision` for its approval,
+  and the design lane then read the earlier `decision-recorded` as the approval.
 
 Measured in one adopting repo: 11 design issues each got `needs-decision` within 2 s of
 being filed, and each one's acceptance list included the human approving the final
@@ -2625,7 +2632,48 @@ and that reference is what a consumer cross-checks against (`answeredOptionRefs`
 
 **Absent block means "options not declared"** — exactly as an absent `Ask:` line reads
 as `backlog` (above): no backfill, no new failure state for issues filed before this
-existed.
+existed. The one exception is the design-approval ask below: a `needs-decision` question
+in neither shape is reported to its filer as a finding (#379). That is a report, never a
+gate, and it never changes whether the question is pending.
+
+#### Design-approval ask — the `Mockup:` line (#379)
+
+The options block is the shape for a pick-one question. The other common ask, approving
+a finished design artifact (*Design conclusions are three units*, below), is a yes/no on
+an image, and had no machine-readable shape at all. The design lane did what the text
+said: it posted the frozen screenshots in a review comment and added `needs-decision`. A
+consumer that renders decisions then had nothing to render. Measured in one consumer (a
+decisions view): 7 design-approval asks on one repo, from two workflow sets, read as
+unstructured ("malformed, needs its filer") for about 4.5 h. None counted as waiting on
+the ruler, and they gated 7 build issues until a line was backfilled into each body by
+hand.
+
+**The design issue's body carries the ask as one line:**
+
+```
+Mockup: https://…/frozen-screenshot.png
+```
+
+- **In the body, never only in a comment.** A reader finds it with one field and no
+  timeline walk. The session that produced the artifact edits the body when it asks.
+- **Anchored at the start of a line**: `Mockup:`, then the URL of the frozen image. An
+  indented or inline `Mockup:` is quoted text, not a declaration. The image is the same
+  frozen evidence unit 3 attaches to the ruling.
+- **A set reviewed together** (one review per workflow set) puts one `Mockup:` line in
+  **each** member's body, pointing at that member's image. The review comment keeps the
+  full gallery and the per-page A/B lines.
+- **Several lines are allowed** when one issue's approval covers several frozen images.
+- **Both shapes present** read as the options block: a pick-one question is the more
+  specific ask.
+- **On an issue that already carries `decision-recorded`**, the ask still goes through
+  `colab decision <N> --reopen` (*Decision gate*, above). The `Mockup:` line says *what*
+  is asked. `--reopen` is what makes it read as asked.
+
+**A `needs-decision` issue whose ask is in neither shape is a finding for its filer**, not
+an item left in the queue. `code-triage` and `code-sweep` report it and name the filer.
+They do not rewrite the ask, because the question is not theirs to restate. The reference
+reading is `askShape` in `tools/lib/decision-record.js`, which `evaluateIssue` reports as
+`unshapedAsk` when it is given the body.
 
 #### The human flag — what `COLAB_HUMAN=1` asserts
 
@@ -3433,7 +3481,10 @@ A design ruling needs one more part: an **immutable visual record**.
    was rejected. This is what clears `needs-decision` — recorded as the *Decision gate*
    section's `⚖ Decision recorded` marker (`colab decision --record`), never as prose
    alone with the label cleared by hand. Approval of a finished artifact is asked once
-   the artifact exists, never at filing (*Decision gate*, #361).
+   the artifact exists, never at filing (*Decision gate*, #361), with a `Mockup:` line in
+   the issue body (*Design-approval ask*, #379). Only a ruling recorded **after** that
+   review approves the artifact. An earlier one, such as the ruling that let the work
+   start, does not.
 2. **The artifact** — a repo file under `docs/design/`, named `<slug>-<N>-mockup.html` or
    `<slug>-<N>-spec.md`, landing via a claimed docs branch. **Superseded artifacts are
    marked, never deleted** — trunk carries the design lineage.
