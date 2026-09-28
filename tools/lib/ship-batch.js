@@ -222,6 +222,19 @@ function nextStep({ enabled, wired, trunkCi, eligibleCount = 0, existing = null,
 }
 
 /**
+ * #391: a batch ref sits at the current base carrying a member set OTHER than the one now asked
+ * for. Is it still in flight, or already declined? Only a pending/green (or not-yet-run) batch is in
+ * flight and may make the new request wait; a red one — first attempt or after its re-run — has
+ * been declined (`red-rerun-or-serial` keeps its ref so the one re-run stays possible), and keeping
+ * it would block every later batch at this base until trunk moved. So:
+ *   clear  its combined run is red → delete the ref, then build the requested batch
+ *   wait   anything else (pending, none, green, unreadable) → exit 3, exactly as before
+ */
+function foreignBatchStep(verdict) {
+  return verdict && verdict.state === 'red' ? { step: 'clear', why: verdict.why } : { step: 'wait' };
+}
+
+/**
  * Does a green run on the batch ref count as trunk-green for the SAME sha (trunk fast-forwarded to
  * the batch head, so the sha is identical)? Only when the same workflows ran there — a workflow that
  * fires on a trunk push but not on `ship-batch/**` never graded that sha, and its absence is not a
@@ -257,6 +270,6 @@ function serialLine(branches) {
 module.exports = {
   MAX_BATCH, REF_PREFIX, PROBE_REF, TRAILER_KEY,
   parseShipBatch, batchRefName, parseBatchRef, memberTrailer, parseMemberTrailers,
-  branchCiClass, memberEligibility, selectMembers, wiring, combinedVerdict, nextStep,
+  branchCiClass, memberEligibility, selectMembers, wiring, combinedVerdict, nextStep, foreignBatchStep,
   batchGreenCoversTrunk, evidenceSuffix, serialLine,
 };

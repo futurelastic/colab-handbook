@@ -155,6 +155,14 @@ test('nextStep: an existing batch — trunk moved, members changed, pending, red
   assert.deepStrictEqual(sb.nextStep({ ...base, trunkNow: 'fffffff000', existing: ex, verdict: { state: 'green' } }).step, 'rebuild');
 });
 
+test('foreignBatchStep (#391): only a red batch is declined and cleared; everything else waits', () => {
+  assert.strictEqual(sb.foreignBatchStep({ state: 'red', attempt: 1, why: 'x' }).step, 'clear');
+  assert.strictEqual(sb.foreignBatchStep({ state: 'red', attempt: 2, why: 'x' }).step, 'clear');
+  for (const state of ['pending', 'none', 'green']) assert.strictEqual(sb.foreignBatchStep({ state }).step, 'wait');
+  assert.strictEqual(sb.foreignBatchStep(null).step, 'wait');
+  assert.strictEqual(sb.foreignBatchStep(sb.combinedVerdict(null)).step, 'wait', 'an unreadable run list never clears');
+});
+
 test('batchGreenCoversTrunk: only green, same workflows, enough rows, and no real trunk red', () => {
   const g = (id) => ({ status: 'completed', conclusion: 'success', databaseId: id });
   const args = { trunkRows: [{ status: 'in_progress' }], batchRows: [g(1)], trunkFires: ['ci.yml'], batchFires: ['ci.yml'] };
