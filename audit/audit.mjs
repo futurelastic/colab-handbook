@@ -64,7 +64,9 @@ const require = createRequire(import.meta.url);
 const stamp = require("../tools/lib/stamp.js");
 // The convention-label set is shared with adoption/sync (they provision what this reports),
 // so the three surfaces cannot drift about what the full set is. See tools/lib/labels.js.
-const { missingConventionLabels, staleConventionDescriptions } = require("../tools/lib/labels.js");
+const { missingConventionLabels, staleConventionDescriptions, MINIMAL_LABEL_NAMES } = require("../tools/lib/labels.js");
+// #393: "adopted locally, not committed" — one classifier, shared with `colab adopt --local`.
+const { localAdoptionState } = require("../tools/lib/local-adopt.js");
 // #144's authority-flip precedence ladder — shared with `tools/colab` for the same reason
 // every other cross-tool reading in this file is: two implementations of "which key governs"
 // is exactly the two-places-drift disease this handbook exists to kill.
@@ -569,6 +571,22 @@ const gitRemote = require("../tools/lib/git.js");
 
 // A uniform accessor so every check below is written once and works for both a local
 // path and a remote slug.
+/** #393: the git facts `localAdoptionState` classifies — tracked / ignored are null outside a
+ * git checkout (nothing to say), never guessed. */
+function gitDescriptorFacts(root, exists) {
+  const run = (args) => {
+    try { execFileSync("git", ["-C", root, ...args], { stdio: ["ignore", "ignore", "ignore"] }); return true; }
+    catch (e) { return e && typeof e.status === "number" ? false : null; }
+  };
+  const inGit = run(["rev-parse", "--git-dir"]);
+  if (!inGit) return { exists, tracked: null, ignored: null };
+  return {
+    exists,
+    tracked: run(["ls-files", "--error-unmatch", "--", ".github/project.yml"]),
+    ignored: run(["check-ignore", "-q", "--", ".github/project.yml"]),
+  };
+}
+
 function makeSource(target) {
   if (target.kind === "local") {
     const root = resolve(target.path);
@@ -1034,7 +1052,7 @@ function auditRepo(target, ctx) {
   // report (and in --json) so the row reads as source-of-truth rather than clean-by-luck:
   // a silent skip is indistinguishable from a check that quietly stopped working.
   const isSelf = isHandbookItself(target);
-  const info = { repo: src.label, kind: src.kind, tier: null, exposure: null, channels: null, self: isSelf, findings: [] };
+  const info = { repo: src.label, kind: src.kind, tier: null, exposure: null, channels: null, self: isSelf, adoption: null, findings: [] };
 
   const fail = (t) => findings.push({ level: "fail", text: t });
   const warn = (t) => findings.push({ level: "warn", text: t });
@@ -1064,6 +1082,22 @@ function auditRepo(target, ctx) {
     const missing = required.filter((k) => !(k in data));
     if (missing.length) fail(`project.yml: missing key(s): ${missing.join(", ")}`);
   }
+
+  // ---- local-only adoption (#393) -------------------------------------------
+  // A repo the fleet does not own carries its descriptor in the local clone only, hidden by
+  // .git/info/exclude (CONVENTIONS.md §9, "Working in a repo you don't own"). That is a real
+  // adoption state, not "not adopted" — name it, and narrow the checks whose fix would be a
+  // commit to the owner's repo. A descriptor untracked but NOT excluded is the accident the
+  // mechanism exists to prevent: the next `git add -A` commits it into someone else's history.
+  // Only a local audit can see this; a remote one reads the forge, where the file never exists.
+  if (src.kind === "local") {
+    info.adoption = localAdoptionState(gitDescriptorFacts(resolve(target.path), rawCfg !== null));
+    if (info.adoption === "untracked") {
+      warn(".github/project.yml is untracked and NOT excluded — `git status` shows it and the next `git add -A` commits it. " +
+        "Commit it (an ordinary adoption), or, in a repo you don't own, hide it via .git/info/exclude (`colab adopt --local`)");
+    }
+  }
+  const locallyAdopted = info.adoption === "local";
 
   // Read once, early, so both the tier/deploy checks further down AND the exposure/
   // channels falsifiers (#137) can reuse the same listing — the falsifiers' F5 evidence
@@ -1453,8 +1487,14 @@ function auditRepo(target, ctx) {
     const remoteProblem = !labels && src.remoteProblem ? src.remoteProblem() : null;
     if (remoteProblem) warn(`convention labels: not checked — ${remoteProblem}`);
     if (labels) {
-      const missing = missingConventionLabels(labels);
-      if (missing.length) {
+      // #393: a locally adopted repo owes only the load-bearing subset — the rest is opt-in by use
+      // on a tracker the fleet does not own.
+      const inScope = (n) => !locallyAdopted || MINIMAL_LABEL_NAMES.includes(n);
+      const missing = missingConventionLabels(labels).filter(inScope);
+      if (missing.length && locallyAdopted) {
+        warn(`missing load-bearing label(s): ${missing.join(", ")} — a locally adopted repo needs only ` +
+          `${MINIMAL_LABEL_NAMES.join(", ")}. Run \`colab labels --ensure --minimal\``);
+      } else if (missing.length) {
         warn(
           `missing convention label(s): ${missing.join(", ")} — a repo adopted before a ` +
           `label entered the set never back-filled it, so the check it powers can never ` +
@@ -1467,7 +1507,7 @@ function auditRepo(target, ctx) {
       // as above. It cannot tell older wording from a declared local divergence (CONVENTIONS.md
       // §8, Upstream) — that is a reading of both texts, which the fix command's own report
       // prints; this line only makes the difference visible.
-      const stale = staleConventionDescriptions(labels);
+      const stale = staleConventionDescriptions(labels).filter((d) => inScope(d.name));
       if (stale.length) {
         warn(
           `convention label description(s) differ from the handbook's: ` +
@@ -1683,7 +1723,14 @@ function auditRepo(target, ctx) {
   // ---- trunk is CI-gated ---------------------------------------------------
   // Merges land on the trunk as PUSHES; if no CI workflow triggers on push to the
   // declared trunk, every merge runs zero CI while everyone believes it is gated.
-  checkTrunkCiGated(src, trunk, workflows, branches, fail, warn, { integration, exempt });
+  // #393: in a locally adopted repo the workflows are the OWNER's — gating the fleet's integration
+  // branch would be a commit to his repo — so an ungated trunk is an advisory there, not a failure.
+  // It is still stated, because it is not cosmetic: `colab ship` reads "no run at trunk's head" as
+  // human-gated, so every ship onto that branch will need a ci-granted exemption.
+  const trunkCiFail = locallyAdopted
+    ? (t) => warn(`${t} — locally adopted: the workflows are the owner's, so this is not yours to fix by commit, but every \`colab ship\` onto it stays human-gated (ci-granted) until a workflow runs there`)
+    : fail;
+  checkTrunkCiGated(src, trunk, workflows, branches, trunkCiFail, warn, { integration, exempt });
 
   // ---- toolchain agreement -------------------------------------------------
   // Report disagreement; never auto-resolve. Three sources can disagree: the
@@ -2585,6 +2632,7 @@ function report(results, opts, ctx) {
     // would read as clean-by-luck, which is indistinguishable from a check that
     // quietly stopped working.
     if (r.self) lines.push("⌂ handbook source — every rule applies except its own stamps (it has nothing to copy from)");
+    else if (r.adoption === "local") lines.push(`⌂ adopted locally, not committed — descriptor hidden by .git/info/exclude; a repo the fleet does not own (CONVENTIONS.md §9)${r.clean ? " ✓" : ""}`);
     else if (r.clean) lines.push("✓");
     r.findings.forEach((f) => lines.push(`${f.level === "fail" ? "⚠" : "·"} ${f.text}`));
 

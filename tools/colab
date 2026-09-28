@@ -64,6 +64,7 @@ const releaseFinalize = require('./lib/release-finalize');
 const shippedBranch = require('./lib/shipped-branch');
 const shipRoles = require('./lib/ship-roles'); // #372
 const refsBrake = require('./lib/refs-brake'); // #385
+const localAdopt = require('./lib/local-adopt'); // #393
 const {
   HOST, UserError, normIssueNum, issueTag, claimKey, today, nowISO, hoursSince, humanAge,
   parseArgs, table, shortRepo,
@@ -6218,6 +6219,10 @@ used to be typed out by hand (#206).
                            Upstream) — pass that label to --keep
   --keep <a,b,...>         with --refresh-descriptions: leave these labels' descriptions alone and
                            keep reporting them as differing
+  --minimal                only the load-bearing subset a session itself writes (#393):
+                           ${labels.MINIMAL_LABEL_NAMES.map((n) => `\`${n}\``).join(', ')}. For a repo the fleet does not own
+                           (CONVENTIONS.md §9, "Working in a repo you don't own") — every other
+                           label is opt-in by use there, not provisioned on someone else's tracker
   --repo <path>            repo root (default: git root of cwd)
 
 Idempotent: a label already present is never re-created and reported under "already there" —
@@ -6239,7 +6244,7 @@ rejects) — each failure is reported by name, not just a bare non-zero.
 function cmdLabels(argv) {
   const opts = parseArgs(argv, {
     values: { '--repo': 'repo', '--keep': 'keep' },
-    flags: { '--ensure': 'ensure', '--refresh-descriptions': 'refresh', '-h': 'help', '--help': 'help' },
+    flags: { '--ensure': 'ensure', '--refresh-descriptions': 'refresh', '--minimal': 'minimal', '-h': 'help', '--help': 'help' },
   });
   if (opts.help || !opts.ensure) return print(HELP_LABELS);
   if (opts.keep !== undefined && !opts.refresh) {
@@ -6265,9 +6270,14 @@ function cmdLabels(argv) {
   // read (labels.missingConventionLabels) — this command does not restate "which of the set does
   // this repo lack", it asks the one place that already answers it. The same holds for the
   // description drift below (labels.staleConventionDescriptions, also read by the audit).
-  const missing = new Set(labels.missingConventionLabels(present));
-  const existing = labels.conventionLabelNames().filter((n) => !missing.has(n));
-  const stale = labels.staleConventionDescriptions(present);
+  // --minimal (#393): the same computation, narrowed to the load-bearing subset — a repo the
+  // fleet does not own gets the four labels a session writes and nothing else, drift reporting
+  // included (an owner's own wording of a label we never asked him to carry is not ours to report).
+  const scope = opts.minimal ? new Set(labels.MINIMAL_LABEL_NAMES) : null;
+  const inScope = (n) => !scope || scope.has(n);
+  const missing = new Set(labels.missingConventionLabels(present).filter(inScope));
+  const existing = labels.conventionLabelNames().filter((n) => inScope(n) && !missing.has(n));
+  const stale = labels.staleConventionDescriptions(present).filter((x) => inScope(x.name));
 
   const created = [];
   const refreshed = [];
@@ -6289,7 +6299,11 @@ function cmdLabels(argv) {
   if (created.length) print(`Created: ${created.join(', ')}`);
   if (existing.length) print(`Already there: ${existing.join(', ')}`);
   if (refreshed.length) print(`Description refreshed: ${refreshed.join(', ')}`);
-  if (!created.length && !failed.length) print('Nothing to create — the full label set is already present.');
+  if (!created.length && !failed.length) print(`Nothing to create — the ${opts.minimal ? 'minimal' : 'full'} label set is already present.`);
+  if (opts.minimal) {
+    const skipped = labels.conventionLabelNames().filter((n) => !inScope(n));
+    print(`Not ensured (--minimal): ${skipped.length} opt-in label(s) — create one only where its mechanic is used, or drop --minimal for the full set.`);
+  }
   if (differs.length) {
     print(`Description differs from the handbook's${opts.refresh ? ' (kept by --keep)' : ''}:`);
     for (const d of differs) {
@@ -6456,6 +6470,7 @@ function cmdConfig(argv) {
 // ---------------------------------------------------------------------------
 
 const HELP_ADOPT = `colab adopt [--repo <path>] [--json] [--no-verify] [--axis a,b,...]
+                 [--local --trunk <integration-branch> [--no-labels]]
                  [--room <solo|team|public>] [--exposure <none|self|live|released>]
                  [--writes <free|direct|isolated>] [--channels <c1,c2,...>]
                  [--production <url>|none] [--deploy <push-main|tag|manual|none>]
@@ -6564,6 +6579,26 @@ The verify step runs audit/audit.mjs from THIS handbook checkout, when it is ava
 install (~/.colab/bin/colab) carries tools/ only, not audit/, and degrades to a note rather than
 failing, the same way \`colab template\` degrades when templates/ is missing.
 
+LOCAL-ONLY ADOPTION (--local, #393) — for a repo the fleet does NOT own, where committing handbook
+files is not an option (CONVENTIONS.md §9, "Working in a repo you don't own"):
+
+  colab adopt --local --trunk <integration-branch> [--exposure self --answered-by <name>]
+              [--production none --deploy none --stack "<text>"] [--no-labels]
+
+  1. refuses if .github/project.yml is TRACKED (then the repo is adopted — use plain adopt), if
+     --trunk is missing, or if --trunk names the owner's own default branch;
+  2. appends /.github/project.yml, /CLAUDE.local.md, /.claude/plans/ and the worktree subdir
+     (/.worktrees/ by default — the owner's .gitignore does not hide it) to .git/info/exclude (the
+     shared common dir — never .gitignore, which is itself a tracked file) BEFORE writing, and
+     keeps them even if a later check refuses (idempotent, local, hides nothing that exists);
+  3. writes the descriptor into the MAIN checkout (where every worktree's colab reads it), with
+     trunk = the integration branch. exposure MUST end the run declared — the legacy tier
+     fallback (B) requires trunk "main" — and is usually \`self\`, human-gated as always;
+  4. writes a stub CLAUDE.local.md (only if absent), ensures the four load-bearing labels
+     (colab labels --ensure --minimal) unless --no-labels, proves \`git status\` shows none of
+     the handbook paths, and prints what it deliberately did NOT do (CI, CODEOWNERS, CLAUDE.md
+     block, topic, register, autopilot) and why.
+
 Boundary: adopt writes the descriptor and nothing else — no labels, no topic, no CI template, no
 CLAUDE block, no \`colab register\`, and it never commits. It ends with the machine-readable
 "remaining §9 steps" list so the next step is a to-do, not a paraphrase.
@@ -6638,11 +6673,169 @@ function adoptVerify(repoAbs) {
   }
 }
 
+// ---- adopt --local (#393) ------------------------------------------------------------------
+// A repo the fleet does not own: the descriptor and an operating note live in the local clone
+// only, hidden by .git/info/exclude; trunk names the fleet's own integration branch. The pure
+// half (exclude text, the stub, the NOT_DONE list, the state classifier) is tools/lib/local-adopt.js.
+
+/** Absolute path of the repo's shared `info/exclude` — the COMMON dir, so one write covers the
+ * main checkout and every linked worktree (a worktree's own `.git` is a file, not a directory). */
+function gitExcludePath(repoAbs) {
+  const r = git.git(['rev-parse', '--path-format=absolute', '--git-common-dir'], repoAbs);
+  if (!r.ok || !r.stdout) return null;
+  return path.join(r.stdout, 'info', 'exclude');
+}
+
+function gitTracks(repoAbs, rel) {
+  return git.git(['ls-files', '--error-unmatch', '--', rel], repoAbs).ok;
+}
+
+/**
+ * Everything --local must settle BEFORE the ordinary adopt flow runs: refusals (a descriptor the
+ * owner already commits; no integration branch named; the integration branch IS the owner's
+ * trunk; a --trunk contradicting one already declared), then the exclude lines — written FIRST, so
+ * there is never a moment the new descriptor shows up in `git status`.
+ * Returns `{ trunk, ownerTrunk, excludeAdded, remoteHasTrunk }` or `{ exit }` on refusal.
+ */
+function adoptLocalPrepare(repoAbs, opts) {
+  if (gitTracks(repoAbs, '.github/project.yml')) {
+    warn('.github/project.yml is TRACKED here — this repo already commits its descriptor, so it is adopted, '
+      + 'not a repo you don\'t own. Run plain `colab adopt` (no --local).');
+    return { exit: 1 };
+  }
+  const declared = projectDoc(repoAbs).trunk;
+  const declaredTrunk = declared === undefined || declared === null ? null : String(declared);
+  const integ = opts.trunk !== undefined ? String(opts.trunk).trim() : declaredTrunk;
+  if (!integ) {
+    warn('--local needs --trunk <branch>: the fleet\'s OWN integration branch (e.g. <prefix>/integration), '
+      + 'which sessions branch off and `colab ship` merges into. Never the owner\'s default branch.');
+    return { exit: 1 };
+  }
+  if (declaredTrunk && opts.trunk !== undefined && declaredTrunk !== integ) {
+    warn(`project.yml already declares trunk "${declaredTrunk}", and --trunk says "${integ}" — edit the local file by hand if the integration branch really moved; adopt never overwrites a declared key.`);
+    return { exit: 1 };
+  }
+  const ownerTrunk = git.detectTrunk(repoAbs);
+  if (ownerTrunk && integ === ownerTrunk) {
+    warn(`--trunk "${integ}" is the owner's own default branch — the whole point of --local is that the fleet `
+      + 'never lands there. Name the fleet\'s integration branch instead; the owner\'s trunk is reached by a pull request.');
+    return { exit: 1 };
+  }
+  const remote = git.remoteInfo(repoAbs).name || 'origin';
+  const ls = git.git(['ls-remote', '--heads', remote, integ], repoAbs);
+  const remoteHasTrunk = ls.ok ? !!ls.stdout.trim() : null;
+
+  const excludeFile = gitExcludePath(repoAbs);
+  if (!excludeFile) { warn('not a git checkout — --local hides its files with .git/info/exclude, so it needs one'); return { exit: 1 }; }
+  let before = null;
+  try { before = fs.readFileSync(excludeFile, 'utf8'); } catch (_) { /* absent */ }
+  const excludePaths = localAdopt.localExcludePaths(worktreeSubdir(state.loadConfig()));
+  const excludeAdded = localAdopt.missingExcludeLines(before, excludePaths);
+  const append = localAdopt.excludeAppendText(before, excludePaths);
+  if (append) {
+    fs.mkdirSync(path.dirname(excludeFile), { recursive: true });
+    fs.appendFileSync(excludeFile, append);
+  }
+  return { trunk: integ, ownerTrunk: ownerTrunk || null, excludeFile, excludeAdded, excludePaths, remote, remoteHasTrunk };
+}
+
+/**
+ * The --local steps AFTER the descriptor: the CLAUDE.local.md stub (only when absent and not
+ * tracked), the minimal label set (unless --no-labels), and the proof — `git status` shows none of
+ * the handbook paths. `ok` is false only when that proof fails or a label create failed.
+ */
+function adoptLocalFinish(repoAbs, local, opts) {
+  const out = {
+    trunk: local.trunk, ownerTrunk: local.ownerTrunk, excludeFile: local.excludeFile,
+    excludeAdded: local.excludeAdded, remoteHasTrunk: local.remoteHasTrunk, remote: local.remote,
+    claudeLocal: null, labels: null, checkout: null, statusLeaks: [], notDone: localAdopt.NOT_DONE, ok: true,
+  };
+  const noteFile = path.join(repoAbs, 'CLAUDE.local.md');
+  if (gitTracks(repoAbs, 'CLAUDE.local.md')) out.claudeLocal = 'tracked by the owner — left alone; keep the local rules somewhere excluded instead';
+  else if (fs.existsSync(noteFile)) out.claudeLocal = 'already present — kept';
+  else {
+    fs.writeFileSync(noteFile, localAdopt.claudeLocalStub({ trunk: local.trunk, ownerTrunk: local.ownerTrunk }));
+    out.claudeLocal = 'written (stub — edit it)';
+  }
+
+  if (opts.noLabels) out.labels = { skipped: '--no-labels' };
+  else if (!isGhUsable(repoAbs)) out.labels = { skipped: `gh not usable (${ghUnusableWhy(repoAbs)}) — run \`colab labels --ensure --minimal\` once it is` };
+  else {
+    const present = git.ghListLabelsDetailed(repoAbs);
+    if (present === null) { out.labels = { failed: [{ name: '*', error: 'could not read the label set' }] }; out.ok = false; }
+    else {
+      const want = new Set(labels.MINIMAL_LABEL_NAMES);
+      const missing = labels.missingConventionLabels(present).filter((n) => want.has(n));
+      const created = []; const failed = [];
+      for (const l of labels.minimalConventionLabels()) {
+        if (!missing.includes(l.name)) continue;
+        const r = git.ghLabelCreate(repoAbs, l.name, l.color, l.description);
+        if (r.ok) created.push(l.name); else failed.push({ name: l.name, error: (r.stderr || '').trim() || 'gh label create failed' });
+      }
+      out.labels = { created, present: labels.MINIMAL_LABEL_NAMES.filter((n) => !missing.includes(n)), failed };
+      if (failed.length) out.ok = false;
+    }
+  }
+
+  // The main checkout rests on trunk (CONVENTIONS.md §4) — here the INTEGRATION branch, while a
+  // fresh clone sits on the owner's default branch, and `colab ship` refuses with "trunk checkout
+  // not ready" until it moves (measured on the #393 fixture). Switch it, but only when that cannot
+  // lose anything: the tree is clean and the branch exists on the remote. Otherwise say how.
+  const head = git.git(['rev-parse', '--abbrev-ref', 'HEAD'], repoAbs);
+  const onBranch = head.ok ? head.stdout : null;
+  if (onBranch === local.trunk) out.checkout = `already on ${local.trunk}`;
+  else {
+    const dirty = git.git(['status', '--porcelain'], repoAbs);
+    const clean = dirty.ok && !dirty.stdout.trim();
+    if (clean && local.remoteHasTrunk) {
+      const sw = git.git(['switch', local.trunk], repoAbs); // DWIM: creates the tracking branch from <remote>/<trunk>
+      out.checkout = sw.ok ? `switched ${onBranch || '(detached)'} → ${local.trunk}` : `could not switch: ${(sw.stderr || '').trim()} — run \`git switch ${local.trunk}\``;
+      if (!sw.ok) out.ok = false;
+    } else {
+      out.checkout = `still on ${onBranch || '(detached)'} — ${clean ? `create ${local.remote}/${local.trunk} first, then` : 'the tree is dirty; once it is clean,'} run \`git switch ${local.trunk}\` (colab ship refuses until the main checkout rests on trunk)`;
+      out.ok = false;
+    }
+  }
+
+  const st = git.git(['status', '--porcelain', '-uall'], repoAbs);
+  if (st.ok) {
+    const watched = local.excludePaths.map((p) => p.replace(/^\//, ''));
+    out.statusLeaks = st.stdout.split('\n').filter(Boolean).map((l) => l.slice(3))
+      .filter((f) => watched.some((w) => (w.endsWith('/') ? f.startsWith(w) : f === w)));
+    if (out.statusLeaks.length) out.ok = false;
+  }
+  return out;
+}
+
+function printAdoptLocal(lf) {
+  print('Local-only adoption (--local) — nothing here is committed to the owner\'s repo:');
+  print(`  trunk          ${lf.trunk} (the fleet's integration branch)${lf.ownerTrunk ? ` — owner's trunk "${lf.ownerTrunk}" is reached only by a PR` : ''}`);
+  if (lf.remoteHasTrunk === false) {
+    print(`  ⚠ ${lf.remote}/${lf.trunk} does not exist yet — \`colab worktree new\` cuts from it. Create it first:`);
+    print(`      git push ${lf.remote} ${lf.ownerTrunk ? `${lf.remote}/${lf.ownerTrunk}` : '<start-point>'}:refs/heads/${lf.trunk}`);
+  }
+  print(`  exclude        ${lf.excludeAdded.length ? `added ${lf.excludeAdded.join(', ')}` : 'already carries every line'} (${lf.excludeFile})`);
+  print(`  CLAUDE.local.md ${lf.claudeLocal}`);
+  print(`  main checkout  ${lf.checkout}`);
+  const lb = lf.labels || {};
+  if (lb.skipped) print(`  labels         skipped — ${lb.skipped}`);
+  else {
+    print(`  labels         created: ${(lb.created || []).join(', ') || '—'} · already there: ${(lb.present || []).join(', ') || '—'}`);
+    for (const f of lb.failed || []) print(`    ✗ ${f.name} — ${f.error}`);
+  }
+  print(lf.statusLeaks.length
+    ? `  ✗ git status shows handbook paths: ${lf.statusLeaks.join(', ')} — they would be committed; check the exclude file`
+    : '  ✓ git status shows none of the handbook paths');
+  print('');
+  print('Deliberately NOT done, and why:');
+  for (const n of lf.notDone) print(`  - ${n.what}: ${n.why}`);
+}
+
 function fmtVal(v) { return v === null || v === undefined ? '—' : (typeof v === 'string' ? v : JSON.stringify(v)); }
 
 /** Text report — shared by the "already complete, nothing to do" path and the post-write path
  * (called again against a fresh detect() so the printed state reflects what was just written). */
-function printAdoptReport(report, repoAbs, verify) {
+function printAdoptReport(report, repoAbs, verify, localFinish) {
   print(`colab adopt — ${repoAbs}`);
   print(report.descriptorExists ? '.github/project.yml exists.' : 'No .github/project.yml — nothing declared yet.');
   print('');
@@ -6655,7 +6848,8 @@ function printAdoptReport(report, repoAbs, verify) {
   ));
   print('');
   const t = report.detected.trunk;
-  const trunkSourceNote = t.source === 'current-branch-fallback' ? ' (current branch — no origin remote)' : '';
+  const trunkSourceNote = t.source === 'current-branch-fallback' ? ' (current branch — no origin remote)'
+    : t.source === 'local-integration' ? ' (--trunk — the fleet\'s integration branch)' : '';
   print(`detected trunk: ${t.detected || '(unknown)'}${trunkSourceNote}${t.declared !== null ? `  (declared: ${t.declared}${t.agree === false ? ' ⚠ disagrees with detected' : ''})` : ''}`);
   print(`stack candidates: ${report.detected.stackCandidates.length ? report.detected.stackCandidates.join(', ') : '(none found)'}`);
   print(`declared ports: ${fmtVal(report.detected.ports)}`);
@@ -6671,8 +6865,12 @@ function printAdoptReport(report, repoAbs, verify) {
   print(`  branch mandatory        ${c.branchMandatory}`);
   print(`  recovery obligation     ${c.recoveryObligation ?? '(undetermined — exposure has no axis of record)'}`);
   print('');
-  print('Remaining §9 steps — this command performs none of them:');
-  for (const s of report.remaining) print(`  ${s.n}. ${s.text}`);
+  if (localFinish) {
+    printAdoptLocal(localFinish);
+  } else {
+    print('Remaining §9 steps — this command performs none of them:');
+    for (const s of report.remaining) print(`  ${s.n}. ${s.text}`);
+  }
 
   if (verify) {
     print('');
@@ -6852,14 +7050,28 @@ async function cmdAdopt(argv) {
       '--repo': 'repo', '--axis': 'axis', '--room': 'room', '--exposure': 'exposure',
       '--writes': 'writes', '--channels': 'channels', '--production': 'production',
       '--deploy': 'deploy', '--stack': 'stack', '--answered-by': 'answeredBy', '--reason': 'reason',
+      '--trunk': 'trunk',
     },
-    flags: { '--json': 'json', '--no-verify': 'noVerify', '-h': 'help', '--help': 'help' },
+    flags: { '--json': 'json', '--no-verify': 'noVerify', '--local': 'local', '--no-labels': 'noLabels', '-h': 'help', '--help': 'help' },
   });
   if (opts.help) return print(HELP_ADOPT);
+  if (opts.trunk !== undefined && !opts.local) {
+    throw new UserError('--trunk only means something with --local — on an ordinary adoption trunk is DETECTED, never asked (CONVENTIONS.md §9)');
+  }
+  if (opts.noLabels && !opts.local) throw new UserError('--no-labels only means something with --local — plain adopt never touches labels');
 
-  const repoAbs = resolveWorkingRepo(opts);
+  // --local (#393): the descriptor is machine state, not a committable source file — it lives in
+  // the MAIN checkout (where every worktree's `colab` call reads project.yml from, via
+  // resolveRepo/mainRepoRoot), never in whichever linked worktree the caller happens to stand in.
+  const repoAbs = opts.local ? resolveRepo(opts) : resolveWorkingRepo(opts);
+  let local = null;
+  if (opts.local) {
+    local = adoptLocalPrepare(repoAbs, opts);
+    if (local.exit !== undefined) return local.exit;
+  }
   const io = adoptIo(repoAbs);
   const extra = adoptGitExtras(repoAbs);
+  if (local) { extra.trunk = local.trunk; extra.trunkSource = 'local-integration'; }
   const report = adopt.detect(io, extra);
   const cfg = report.cfg;
   const descriptorFile = path.join(repoAbs, '.github', 'project.yml');
@@ -6870,14 +7082,20 @@ async function cmdAdopt(argv) {
     if (!adopt.ROW_NAMES.includes(a)) throw new UserError(`Unknown --axis "${a}" — expected one of: ${adopt.ROW_NAMES.join(', ')}`);
   }
   const forcedAxes = new Set(requestedAxes);
-  const axesToAsk = adopt.ROW_NAMES.filter((a) => forcedAxes.has(a) || adopt.axisMissing(cfg, a));
+  let axesToAsk = adopt.ROW_NAMES.filter((a) => forcedAxes.has(a) || adopt.axisMissing(cfg, a));
+  // --local re-run (#393): once exposure is on record, a bare `adopt --local` (no answer flags, no
+  // --axis) is the idempotent re-apply — exclude lines, stub, labels, checkout — never a prompt for
+  // the optional rows (room/writes/channels), which --local leaves to the operator by design.
+  const localAnswerFlag = ['room', 'exposure', 'writes', 'channels', 'production', 'deploy', 'stack'].some((k) => opts[k] !== undefined);
+  if (local && !localAnswerFlag && !requestedAxes.length && axisAuthority.axisOfRecord(cfg).source === 'exposure') axesToAsk = [];
 
   // Already complete (and nothing forced): report, write nothing, exit 0.
   if (axesToAsk.length === 0 && opts.stack === undefined) {
     const verify = opts.noVerify ? null : adoptVerify(repoAbs);
-    if (opts.json) { print(JSON.stringify({ repo: repoAbs, ...report, verify }, null, 2)); return 0; }
-    printAdoptReport(report, repoAbs, verify);
-    return 0;
+    const lf = local ? adoptLocalFinish(repoAbs, local, opts) : undefined;
+    if (opts.json) { print(JSON.stringify({ repo: repoAbs, ...report, verify, local: lf }, null, 2)); return lf && !lf.ok ? 1 : 0; }
+    printAdoptReport(report, repoAbs, verify, lf);
+    return lf && !lf.ok ? 1 : 0;
   }
 
   // `trunk` is DETECTED, never asked — no answer flag can supply it, and asking a human "what is
@@ -6945,6 +7163,18 @@ async function cmdAdopt(argv) {
 
   const workflows = io.listDir('.github/workflows').filter((f) => /\.ya?ml$/.test(f));
   const trunk = extra.trunk;
+
+  // --local (#393): exposure MUST end this run declared. Without it the fallback below derives a
+  // legacy tier letter from (production, deploy) — B for an integration line nothing deploys — and
+  // `tier: B` requires trunk "main", which the fleet's own integration branch never is. Refuse the
+  // whole write rather than hand back a descriptor the audit fails.
+  if (local && !answers.exposure && axisAuthority.axisOfRecord(cfg).source !== 'exposure') {
+    warn('--local needs exposure answered this run: an integration-branch trunk is not "main", so the legacy '
+      + 'tier fallback (B) would fail the audit. Usually `self` — a merge onto the fleet\'s integration branch '
+      + 'reaches only the fleet; the owner\'s pull-request review is the next gate. `self` is human-gated '
+      + '(CONVENTIONS.md §2): answer it at a terminal, or --exposure self with COLAB_HUMAN=1 --answered-by <name>.');
+    return 1;
+  }
 
   // Exposure gate — the only axis with a human bar. Everything else below is validated but
   // never gated. Checked (and, on refusal, the WHOLE run stops here) before anything is
@@ -7067,9 +7297,11 @@ async function cmdAdopt(argv) {
   // and is reported, never guessed.
   if (entries.length > 0 || opts.stack !== undefined) {
     if (!('trunk' in cfg) && extra.trunk) {
-      const trunkNote = extra.trunkSource === 'current-branch-fallback'
-        ? `detected — current branch, no origin remote yet, ${nowDate}`
-        : `detected (the repo's default branch, ${nowDate})`;
+      const trunkNote = extra.trunkSource === 'local-integration'
+        ? `the fleet's integration branch (colab adopt --local, ${nowDate}) — the owner's trunk${local.ownerTrunk ? ` "${local.ownerTrunk}"` : ''} is reached only by a pull request he merges`
+        : extra.trunkSource === 'current-branch-fallback'
+          ? `detected — current branch, no origin remote yet, ${nowDate}`
+          : `detected (the repo's default branch, ${nowDate})`;
       entries.push({ key: 'trunk', value: extra.trunk, comment: `# trunk: ${trunkNote}` });
     }
     if (!('stack' in cfg)) {
@@ -7088,25 +7320,29 @@ async function cmdAdopt(argv) {
   if (entries.length === 0) {
     warn('nothing to write — every requested row was already answered, or nothing was supplied to answer it.');
     const verify = opts.noVerify ? null : adoptVerify(repoAbs);
-    if (opts.json) { print(JSON.stringify({ repo: repoAbs, ...report, verify, written: [] }, null, 2)); return 0; }
-    printAdoptReport(report, repoAbs, verify);
-    return 0;
+    const lf = local ? adoptLocalFinish(repoAbs, local, opts) : undefined;
+    if (opts.json) { print(JSON.stringify({ repo: repoAbs, ...report, verify, written: [], local: lf }, null, 2)); return lf && !lf.ok ? 1 : 0; }
+    printAdoptReport(report, repoAbs, verify, lf);
+    return lf && !lf.ok ? 1 : 0;
   }
 
   const newText = adopt.renderDescriptor(rawTextBefore, entries);
   fs.mkdirSync(path.dirname(descriptorFile), { recursive: true });
   fs.writeFileSync(descriptorFile, newText);
 
-  const after = adopt.detect(adoptIo(repoAbs), adoptGitExtras(repoAbs));
+  const afterExtra = adoptGitExtras(repoAbs);
+  if (local) { afterExtra.trunk = local.trunk; afterExtra.trunkSource = 'local-integration'; }
+  const after = adopt.detect(adoptIo(repoAbs), afterExtra);
   const verify = opts.noVerify ? null : adoptVerify(repoAbs);
+  const lf = local ? adoptLocalFinish(repoAbs, local, opts) : undefined;
   if (opts.json) {
-    print(JSON.stringify({ repo: repoAbs, ...after, verify, written: entries.map((e) => ({ key: e.key, value: e.value })) }, null, 2));
-    return 0;
+    print(JSON.stringify({ repo: repoAbs, ...after, verify, written: entries.map((e) => ({ key: e.key, value: e.value })), local: lf }, null, 2));
+    return lf && !lf.ok ? 1 : 0;
   }
   for (const e of entries) print(`✓ wrote ${e.key}: ${fmtVal(e.value)}`);
   print('');
-  printAdoptReport(after, repoAbs, verify);
-  return 0;
+  printAdoptReport(after, repoAbs, verify, lf);
+  return lf && !lf.ok ? 1 : 0;
 }
 
 // ---------------------------------------------------------------------------

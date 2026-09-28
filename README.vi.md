@@ -233,6 +233,11 @@ Bản rút gọn — checklist đầy đủ ở
 
 Nhánh có sẵn từ trước được **giữ nguyên** (grandfathered). Đừng đổi tên gì cả.
 
+**Làm việc trong repo không phải của mình?** Nếu không thể commit các file này vào đó,
+`colab adopt --local` giữ mọi thứ trong bản clone local của bạn, không có gì lọt vào lịch sử
+của chủ repo — xem
+[*Working in a repo you don't own*](CONVENTIONS.md#working-in-a-repo-you-dont-own).
+
 ## Vì sao ép buộc ít vậy
 
 Các repo private của chúng ta nằm trên gói GitHub không có branch protection —

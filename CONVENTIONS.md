@@ -4299,6 +4299,82 @@ unused tag ritual decays exactly like an unused branch.
 The reverse — **A → C**, the fix when a repo declares `tier: A` with `deploy: push-main`
 — is descriptor-only: set `tier: C`, leave the pipeline exactly as it is, swap the topic.
 
+### Working in a repo you don't own
+
+Everything above assumes the repo's **owner** is the one adopting. Sometimes that is not
+the case. The fleet has to build in a repository whose owner has not adopted this
+handbook, who reviews and merges changes himself, and where committing handbook files is
+not an option. That repo can still be driven by `code-start` → `code-wrap` → `colab ship`,
+and nothing lands in the owner's history (#393). The measured case: a private repo owned
+by another developer, default branch `master`, no handbook files, with the fleet building
+a service layer on a long-lived branch of its own.
+
+**The minimum is small, and all of it stays out of the owner's repo:**
+
+| need | where it lives | why it works |
+|---|---|---|
+| `.github/project.yml` — `trunk`, `production`, `deploy`, `stack`, `exposure` | the local clone's **main checkout** only, hidden by `.git/info/exclude` | every reader (`colab`, `adopt`, the audit's local source, `code-start`'s `cat`) reads the working tree, not git. `git status --porcelain -uall` does not report an excluded file, so the dirty-checkout and drift checks stay quiet. Same mechanism as the plan files (`.claude/plans/`) |
+| labels `in-progress`, `deps-checked`, `agent-filed`, `epic` | the tracker (metadata, not files) | the load-bearing subset a session itself writes. Every other convention label is opt-in by use (`colab labels --ensure --minimal`) |
+| an operating note, `CLAUDE.local.md` | the local clone, excluded | carries the rules the owner's repo cannot: "our trunk is the integration branch; never touch the owner's trunk; autopilot stays off" |
+| the worktree subdir (`.worktrees/`) | excluded | an adopted repo hides it in its committed `.gitignore`; the owner's repo does not, so without this line every worktree shows up in the main checkout's `git status` |
+| registry entry | the operator's machine | already local |
+| CI templates, CODEOWNERS, the `CLAUDE.md` block, the topic | **not needed** | nothing in claim, start or ship gates on them, and each would be a commit or setting the owner never asked for |
+
+**The pattern: `trunk:` names the fleet's own integration branch** (e.g.
+`<prefix>/integration`), never the owner's default branch. Claims, worktrees, grading and
+`colab ship` then work unchanged. Sessions branch off the integration branch, `ship`
+merges into it, and the owner's trunk is reached only by a pull request he reviews and
+merges himself. Declare **`exposure: self`**: a merge onto the integration branch reaches
+only the fleet, and the owner's review is the next gate. `self` is human-gated
+([§2](#2-tiers)), as always. The legacy fallback does not work here, because it would
+derive `tier: B`, which requires trunk `main`, and the integration branch is never `main`.
+
+**One command does it** (a human answers the exposure row, at a terminal or with
+`COLAB_HUMAN=1 --answered-by <name>`):
+
+```sh
+git push origin <owner-trunk>:refs/heads/<prefix>/integration   # once, if it doesn't exist yet
+colab adopt --local --trunk <prefix>/integration --production none --deploy none \
+  --exposure self --stack "<text>"
+```
+
+It refuses when the descriptor is **tracked** (the repo is adopted, so use plain `adopt`),
+when `--trunk` is missing, and when `--trunk` names the owner's own trunk. It appends the
+exclude lines *before* writing anything, writes the descriptor into the main checkout
+(where every worktree's `colab` reads it — a linked worktree never carries the file),
+writes a stub `CLAUDE.local.md`, ensures the four labels, moves the main checkout onto the
+integration branch when the tree is clean, and checks that `git status` shows none of it.
+It then prints what it deliberately did **not** do, and why. A bare re-run is the
+idempotent re-apply.
+
+**Traps, each measured:**
+
+- **A `.gitignore` entry is itself a tracked file.** Hiding the descriptor that way is
+  exactly the commit you are avoiding. The local-only mechanism is `.git/info/exclude`
+  (in the common git dir, so it covers every worktree).
+- **Scheduled autopilot must stay OFF on such a repo.** It would triage and start the
+  **owner's** issues, not only the fleet's, and there is no way today to scope it to the
+  fleet's issues.
+- **`colab ship` still gates on CI at the integration branch's head.** The workflows are
+  the owner's. If none runs on push to the integration branch, every ship reads "no run"
+  as human-gated and needs a `ci-granted` exemption per branch. Find out which case you
+  are in before the first ship. The audit reports an ungated integration branch as an
+  advisory here, not a failure, because the fix would be a commit to his repo.
+- **The main checkout must rest on the integration branch**, not on the owner's trunk
+  where a fresh clone lands. Otherwise `ship` refuses with "trunk checkout not ready".
+- **A dashboard's cached repo scan does not pick the repo up** until it is refreshed.
+
+**The audit recognises the state.** A local audit reports `⌂ adopted locally, not
+committed` instead of "not adopted", and asks only for the four labels. It flags the
+accident the mechanism exists to prevent: a descriptor that is untracked but **not**
+excluded, one `git add -A` away from the owner's history. A remote audit reads the forge,
+where the file never exists, so only a local audit can see this state.
+
+**Prefer full adoption instead** whenever the owner is willing to carry the files. It is
+the only way the conventions reach anyone who clones the repo without this machine's
+local state: a teammate, CI, the owner's own agents. Local adoption is a working
+arrangement for one operator's clones, not a substitute.
+
 ### Fixtures and examples use invented values
 
 **Test fixtures, sample data and documentation examples MUST use invented values.**
