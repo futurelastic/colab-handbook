@@ -381,6 +381,21 @@ function conventionLabelNames() {
   return CONVENTION_LABELS.map((l) => l.name);
 }
 
+// The LOAD-BEARING subset (#393) — the labels a session's own start/claim/file path writes, and
+// therefore the only ones a repo the fleet does not own has to carry for code-start → code-wrap →
+// colab ship to work there: `in-progress` (the claim's tracker mirror), `deps-checked` (readiness
+// — without it no issue ever leaves "nobody looked"), `agent-filed` (provenance), `epic` (a
+// container is never a start candidate). Everything else in CONVENTION_LABELS is opt-in by USE:
+// it only has to exist where its mechanic is used, and creating 20+ labels on someone else's
+// tracker is noise its owner never asked for. `colab labels --ensure --minimal` reads this list.
+const MINIMAL_LABEL_NAMES = ['in-progress', 'deps-checked', 'agent-filed', 'epic'];
+
+/** The CONVENTION_LABELS entries for MINIMAL_LABEL_NAMES, canonical order and definitions. */
+function minimalConventionLabels() {
+  const want = new Set(MINIMAL_LABEL_NAMES);
+  return CONVENTION_LABELS.filter((l) => want.has(l.name));
+}
+
 // The readiness marker, named once. CONVENTIONS.md §5 (Readiness) is the prose source; the
 // audit, the provisioner and now `colab readiness` all read the name from HERE rather than
 // spelling the string themselves — a second literal is a second thing to typo, and a readiness
@@ -623,6 +638,7 @@ function groupLabelNames(present) {
 
 module.exports = {
   CONVENTION_LABELS, conventionLabelNames, missingConventionLabels, staleConventionDescriptions,
+  MINIMAL_LABEL_NAMES, minimalConventionLabels,
   READINESS_LABEL, readinessLabelArgs, readinessMissingLabelHint, readinessMarkedMessage,
   TRACKING_LABEL,
   MECHANICAL_READINESS_LABEL, mechanicalReadinessLabelArgs,

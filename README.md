@@ -263,6 +263,11 @@ The short version — the full checklist is
 
 Pre-existing branches are **grandfathered**. Do not rename anything.
 
+**Working in a repo you don't own?** If committing these files there is not an option,
+`colab adopt --local` keeps everything in your local clone instead, and nothing lands in
+the owner's history — see
+[*Working in a repo you don't own*](CONVENTIONS.md#working-in-a-repo-you-dont-own).
+
 ## Why so little enforcement
 
 Our private repos sit on a GitHub plan without branch protection — pushes to

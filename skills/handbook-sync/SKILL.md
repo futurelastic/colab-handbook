@@ -66,6 +66,18 @@ degrades to a no-op that looks like a clean bill of health. If `colab update .` 
 or the audit says **"no `.github/project.yml` — repo is undescribed"**, go to **§2**
 and do not walk the reconciliation states.
 
+**Adopted locally, not committed, is a third state, not "not adopted" (#393).** A repo
+the fleet does not own carries its descriptor in the local clone only, hidden by
+`.git/info/exclude` ([`CONVENTIONS.md` §9, *Working in a repo you don't
+own*](../../CONVENTIONS.md#working-in-a-repo-you-dont-own)). There the audit prints
+**`⌂ adopted locally, not committed`**, and `colab update .` still says `n-a` /
+"nothing adopted here yet", because nothing stamped was ever copied, on purpose. **Do not
+run §2 on it.** Adoption there would mean committing handbook files to someone else's
+repo. The only sync such a repo takes is a bare `colab adopt --local` (the idempotent
+re-apply: exclude lines, stub, the four labels, checkout) plus whatever the audit asks for.
+The reverse case: the audit warns that the descriptor is **untracked and not excluded**.
+Decide which of the two it is (commit it, or `colab adopt --local`) before anything else.
+
 **`behind` does not mean "your file is old".** It means the *template* moved. If the
 template never changed, a stamp from three releases ago is still current — which is
 why this check compares template history, not version strings.
@@ -77,6 +89,11 @@ no `.github/project.yml`** — the largest single cohort in it, and every one in
 to the conformance checks by construction. A repo missing from the registry entirely
 is worse off still: it appears in no sweep, so nothing will ever tell you it needs
 this. **It can only be adopted from inside, by someone standing in it.** That is you.
+
+**First, is the repo yours to adopt?** If its owner has not adopted the handbook and will
+not carry its files, stop here: nothing in this section applies. Use `colab adopt --local`
+([`CONVENTIONS.md` §9, *Working in a repo you don't
+own*](../../CONVENTIONS.md#working-in-a-repo-you-dont-own)) instead, which commits nothing.
 
 ### The checklist is not in this file, on purpose
 
