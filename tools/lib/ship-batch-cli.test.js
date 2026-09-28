@@ -204,6 +204,50 @@ test('#373 oracle 2: a red combined run lands nothing; one re-run, then serial; 
   assert.match(r4.out, /fix\/b-12\s+red at its own head/);
 });
 
+test('#391: a declined batch at the base does not block a --batch of the survivors', () => {
+  const fx = fixture();
+  for (const b of MEMBERS) member(fx, b);
+  const T = fx.originSha('main');
+  const ref = `ship-batch/${T.slice(0, 7)}`;
+  assert.strictEqual(batch(fx).code, 3);
+  const declinedSha = fx.originSha(ref);
+
+  fx.setStatus(ref, 'completed failure 1');
+  const r2 = batch(fx);
+  assert.strictEqual(r2.code, 4, r2.out + r2.err);
+  assert.deepStrictEqual(fx.batchRefs(), [ref], 'declined on its first attempt — the ref is kept for the one re-run');
+
+  // the two clean members, as a new batch at the SAME base: not "in flight", a fresh build
+  const r3 = batch(fx, ['fix/b-12', 'fix/c-13']);
+  assert.strictEqual(r3.code, 3, r3.out + r3.err);
+  assert.doesNotMatch(r3.out, /in flight/);
+  assert.match(r3.out, /was declined/);
+  assert.match(r3.out, /BATCH-PENDING/);
+  assert.deepStrictEqual(fx.batchRefs(), [ref]);
+  assert.notStrictEqual(fx.originSha(ref), declinedSha, 'the ref now holds the rebuilt batch');
+  const carried = fx.g(fx.origin, 'log', '--format=%s', `${T}..${ref}`);
+  assert.match(carried, /b-12/);
+  assert.match(carried, /c-13/);
+  assert.doesNotMatch(carried, /a-11/);
+  assert.strictEqual(fx.originSha('main'), T, 'nothing landed');
+});
+
+test('#391: a pending or green batch with other members still refuses as in flight', () => {
+  for (const status of ['in_progress none 1', 'completed success 1']) {
+    const fx = fixture();
+    for (const b of MEMBERS) member(fx, b);
+    const T = fx.originSha('main');
+    const ref = `ship-batch/${T.slice(0, 7)}`;
+    assert.strictEqual(batch(fx).code, 3);
+    const sha = fx.originSha(ref);
+    fx.setStatus(ref, status);
+    const r = batch(fx, ['fix/b-12', 'fix/c-13']);
+    assert.strictEqual(r.code, 3, r.out + r.err);
+    assert.match(r.out, /another batch is in flight at this base/);
+    assert.strictEqual(fx.originSha(ref), sha, `${status}: the in-flight batch is left alone`);
+  }
+});
+
 test('#373 oracle 3: trunk moves during the combined run → no fast-forward; the batch is rebuilt', () => {
   const fx = fixture();
   for (const b of MEMBERS) member(fx, b);

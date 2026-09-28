@@ -8250,6 +8250,9 @@ It never waits: each call reads the remote, takes ONE step and exits —
      can join, or the combined run is red — classify it: red:infra → the printed \`gh run rerun\`,
      once; red:finding, or red again after that one re-run → serial
   1  refused (a broken checkout, an unreadable remote)
+One batch per base: a batch at this base carrying OTHER members is waited on (exit 3) while its run
+is pending or green, but a declined one — its combined run red — is deleted and the batch you asked
+for is built in its place, so the survivors of a decline can batch without landing serially first (#391).
 A member that conflicts with the members already in is dropped to the next batch; the rest go on —
 unless every conflicting path is generated (defaults + project.yml generated:): then .colab/hooks/pre-ship
 regenerates them on the combined head and the member stays in (#387). No hook, or a failing one → dropped.
@@ -11240,14 +11243,22 @@ function cmdShipBatch(opts) {
     const log = git.git(['log', '--format=%B%x00', `${trunkNow}..${atBase.sha}`], repoAbs);
     const inBatch = shipBatch.parseMemberTrailers(log.ok ? log.stdout.split('\0') : []).reverse();
     const foreign = inBatch.filter((m) => !members.includes(m.branch));
-    if (foreign.length) {
+    // #391: a DECLINED batch (combined run red) is not in flight — clear it and build the one asked for.
+    const foreignStep = foreign.length ? shipBatch.foreignBatchStep(shipBatch.combinedVerdict(git.ghRunsForRef(repoAbs, atBase.parsed.ref, atBase.sha))) : null;
+    if (foreignStep && foreignStep.step === 'wait') {
       print(`⏸ ship-batch: another batch is in flight at this base — ${atBase.parsed.ref} carries ${inBatch.map((m) => m.branch).join(', ')}.`);
       print('  Wait for it to land or be declined, then run this command again.');
       return 3;
     }
-    const heads = inBatch.map((m) => ({ ...m, now: git.branchRefs(repoAbs, m.branch, remote).remoteSha }));
-    const matches = heads.length >= 2 && heads.every((m) => m.now && m.now.startsWith(m.sha));
-    existing = { ref: atBase.parsed.ref, base7: atBase.parsed.base7, sha: atBase.sha, members: inBatch, matches };
+    if (foreignStep) {
+      print(`  ${atBase.parsed.ref} (${inBatch.map((m) => m.branch).join(', ')}) was declined — its combined run is red (${foreignStep.why}); nothing landed from it. Deleting it and building the requested batch.`);
+      if (!opts.dry && !deleteRef(atBase.parsed.ref)) throw new UserError(`could not clear the declined ${atBase.parsed.ref} — delete it by hand, then run this command again`);
+    }
+    if (!foreignStep) {
+      const heads = inBatch.map((m) => ({ ...m, now: git.branchRefs(repoAbs, m.branch, remote).remoteSha }));
+      const matches = heads.length >= 2 && heads.every((m) => m.now && m.now.startsWith(m.sha));
+      existing = { ref: atBase.parsed.ref, base7: atBase.parsed.base7, sha: atBase.sha, members: inBatch, matches };
+    }
   }
   const verdict = existing && existing.matches ? shipBatch.combinedVerdict(git.ghRunsForRef(repoAbs, existing.ref, existing.sha)) : null;
   let step = shipBatch.nextStep({ enabled: true, wired: true, trunkCi, eligibleCount: 2, existing, trunkNow, verdict });
