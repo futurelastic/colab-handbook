@@ -136,6 +136,15 @@ test('an issue holding ONLY colab markers has no evidence — must not auto-clos
   assert.deepStrictEqual(g.evidenceComments(comments), []);
 });
 
+test('#409: a coordinator send-back is bookkeeping, not evidence', () => {
+  const comments = [
+    { body: '🔒 Claimed — worktree `x` · branch `y`' },
+    { body: '↩️ Sent back — the hand-off does not verify: uncommitted work. Commit the deliverable paths, run `code-wrap`, stop.' },
+  ];
+  assert.strictEqual(g.hasEvidence(comments), false);
+  assert.deepStrictEqual(g.evidenceComments(comments), []);
+});
+
 test('one comment colab did not write IS the evidence the ruling asks for', () => {
   const comments = [
     { body: '🔒 Claimed — worktree `x` · branch `y` · host `z` · 2026-08-01' },

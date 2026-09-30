@@ -104,6 +104,8 @@ const migrationGrant = require("../tools/lib/migration-grant.js");
 const trustHumansLib = require("../tools/lib/trust-humans.js");
 // #403: the `live-env:` key — read through the same module `colab gate-hermetic` uses.
 const hermeticLib = require("../tools/lib/hermetic.js");
+// #410: the optional `gate:` block — read through the same module the skills name.
+const gateLib = require("../tools/lib/gate.js");
 // #228's identity vocabulary — resolution, parsing, matching and REDACTION. Shared with the
 // conformance test that holds it and the shell hook (templates/pre-commit-identity) to the
 // same semantics; the shell scanner cannot require it (a template lands in repos with no
@@ -185,7 +187,7 @@ function die(msg) {
 // reader stays narrow on purpose, and the narrowness stays visible.
 //
 // ONE nested map is accepted too, and only under a key named in NESTED_MAP_KEYS: a single
-// level of `sub: scalar` pairs (#337's `release:` block). The allow-list is the check — a
+// level of `sub: scalar` pairs (#337's `release:` block, #394's `owner:`, #410's `gate:`). The allow-list is the check — a
 // nested map under any other key, a second level, or a list item under a map key is still
 // a finding, so this is one named exception, not a general loosening.
 //
@@ -204,7 +206,7 @@ function parseScalarValue(raw) {
   return val;
 }
 
-const NESTED_MAP_KEYS = new Set(["release", "owner"]); // owner: #394
+const NESTED_MAP_KEYS = new Set(["release", "owner", "gate"]); // owner: #394 · gate: #410
 
 function parseFlatYaml(text) {
   const out = {};
@@ -1308,6 +1310,21 @@ function auditRepo(target, ctx) {
       const le = hermeticLib.parseLiveEnv(cfg);
       info.liveEnv = le.declared ? le.value : null;
       if (!le.valid) fail(le.reason);
+    }
+
+    // ---- gate (#410) ----------------------------------------------------------
+    // Local = a fast smoke check, branch CI = the one authoritative gate. tools/lib/gate.js
+    // parseGate is the one reading. An invalid block fails: the reader falls back to the local full
+    // gate, so the declaration silently does nothing. `authoritative: ci` with no workflow firing on
+    // a feature-branch push warns: the verdict can never arrive, so every reader stays on local.
+    {
+      const gt = gateLib.parseGate(cfg);
+      info.gate = gt.declared && gt.valid ? { smoke: gt.smoke, authoritative: gt.authoritative } : null;
+      if (!gt.valid) fail(gt.reason);
+      else if (gt.authoritative === "ci") {
+        const firing = workflowsFiringOnBranchPush({ readFile: (p) => src.readFile(p), workflows, branch: gateLib.PROBE_REF });
+        if (!firing.length) warn("gate: authoritative ci but no workflow in .github/workflows fires on a push to a feature branch — branch CI can never arrive, so code-wrap and code-ship stay on the local full gate; add a push: branches trigger covering session branches");
+      }
     }
 
     // ---- holds (#360) ---------------------------------------------------------
