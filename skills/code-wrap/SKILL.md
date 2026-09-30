@@ -525,6 +525,29 @@ test step reads the environment in the way this catches.
 - **Not a substitute for A5's branch-CI read.** Runners differ in more than environment
   (OS, toolchain, a browser to boot). This closes one cause before the push. A5 still
   reads the rest after it.
+- **The reverse does hold: a green branch-CI run can stand in for the local hermetic run
+  (#408).** Where the repo's CI runs on this branch, A5's read can supply the verdict
+  instead, and you record it as **`branch-ci <sha7>`**. All three conditions must hold,
+  and you check each one, not assume it:
+  1. A5 reads **`green`** at the branch's current head sha. The sha you record is that head.
+  2. That run's workflow **runs the same test command** as this gate. Read the workflow
+     file's `run:` steps; a job that only lints or builds does not count.
+  3. Its runner **does not share a developer's machine**: a hosted runner or an ephemeral
+     container runner. A self-hosted runner running in someone's login session inherits
+     their `HOME` and daemons, so it proves nothing about `live-env`.
+
+  In any other case, run `colab gate-hermetic` locally as above: no CI trigger for this
+  branch (for example a workflow that runs only on `pull_request` with no PR open), a class
+  other than `green`, or a workflow that does not run the tests. Taking this path means the
+  normal local run in A3 still happens, but the hermetic half waits for A5; if A5 then reads
+  anything but `green`, run `colab gate-hermetic` before you hand off. Why: on a repo whose
+  suite takes 6–10 minutes locally and about 2 on CI, the local repeat was the largest single
+  cost of a ship pass (up to 23 minutes of gate runs in one pass) and added no evidence the
+  CI run at the same sha had not already given.
+- **Run a long suite once, with its output teed to a file; grep the file for each question
+  after that** (`<test command> 2>&1 | tee "$TMPDIR/gate.log"`, with `set -o pipefail` so the
+  pipe keeps the suite's exit code). Never re-run the suite to read a different slice of its
+  output. Two measured ship passes re-ran a 7-minute suite only for that.
 - No `colab` on this machine → do the same by hand and say so: `env -i HOME="$(mktemp -d)"
   PATH="$PATH" <test command>`, network left on (say that too).
 
@@ -741,7 +764,8 @@ never by trusting this session's word for it:
 - [ ] distill comment posted on each carried issue (A1)
 - [ ] gate result recorded — green, or red-for-an-unrelated-reason reported (A3) — and
       the hermetic verdict word from `colab gate-hermetic` (`green` · `skipped` · `red` ·
-      `live-env`) recorded beside it. A `live-env` verdict is a red gate, not a pass (#403)
+      `live-env`) recorded beside it, or `branch-ci <sha7>` when a green branch-CI run at
+      the head sha stood in for it (A3, #408). A `live-env` verdict is a red gate, not a pass (#403)
 - [ ] migration-grant REQUEST filed on every carried issue whose branch touches a
       migration path and didn't already carry the signal (A3b) — or N/A, no migration
       files on this branch

@@ -1560,6 +1560,20 @@ hermetic run is its own verdict, `live-env`, and it is not green. The only exemp
 ([schema](project.schema.md#live-env--optional)). The branch-CI read below still applies:
 runners differ in more ways than a stripped environment can reproduce.
 
+**A green branch-CI run can *be* that hermetic run (#408).** A run is one when all three hold:
+it is `green` at the branch's current head sha (the class below), its workflow runs the
+same test command the local gate runs, and its runner does not share a developer's machine
+(a hosted runner, or an ephemeral container runner, but never a self-hosted runner that
+runs in someone's login session with their `HOME` and daemons). That run already had no
+developer `HOME` and no local daemon, at the exact commit being merged, so repeating it
+locally adds minutes and no evidence. Measured on this repo's own ship passes: the local
+suite took 6–10 minutes per run and was repeated up to six times in one pass (23 minutes),
+while branch CI ran the same tests in about 2 minutes. So the hermetic verdict may be
+recorded as `branch-ci` with that run's sha, and `colab gate-hermetic` runs locally only
+when branch CI cannot arrive (no trigger for the branch), is not `green`, or does not run
+the tests. The same holds after a sync: push and read the new branch run before
+re-running the suite locally.
+
 **Read the runs at the branch's current head sha, and report the result as one of four
 classes — not as pass/fail.** The names are shared vocabulary: the implementer records
 one when it pushes, the coordinator re-derives it before merging, and a fleet planner

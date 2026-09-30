@@ -99,10 +99,20 @@ git -C "$MAIN_REPO" status --porcelain -uall                 # trunk checkout st
   on most repos — trust the report here, but if anything else on this list is off, treat
   the gate claim as unverified too and re-run it (`code-wrap` A3) before proceeding.
   **The gate claim must carry the hermetic verdict (#403)** — the word `colab
-  gate-hermetic` printed: `green`, or `skipped` (trunk declares `live-env: none`). A
-  hand-off that says only "gate green", with no hermetic verdict, has not shown the
-  test step passing without this machine. Re-run `colab gate-hermetic -- <test command>`
-  in the worktree before proceeding. **`live-env` is a red gate**: hand it back to the
+  gate-hermetic` printed: `green`, or `skipped` (trunk declares `live-env: none`), or
+  `branch-ci <sha7>` (#408). A hand-off that says only "gate green", with no hermetic
+  verdict, has not shown the test step passing without this machine. **Before re-running
+  anything locally, check whether branch CI already answers it** (`code-wrap` A3's
+  conditions): B1a's class is `green` at the current head sha, that workflow runs the same
+  test command, and its runner does not share a developer's machine (hosted or ephemeral,
+  never a self-hosted runner in someone's login session). If all three hold, that run is
+  the hermetic verdict. Record `branch-ci <sha7>` and do not run the suite again. A
+  `branch-ci` verdict naming a sha other than the current head is stale; read the branch
+  run at the new head instead. Only when branch CI cannot arrive (no trigger for the
+  branch), is not `green`, or does not run the tests, re-run
+  `colab gate-hermetic -- <test command>` in the worktree before proceeding. On a repo
+  whose suite takes 6–10 minutes locally, that repeat was measured as the largest single
+  cost of a ship pass. **`live-env` is a red gate**: hand it back to the
   implementer the same way as any other red. Never read it as an advisory, and never
   merge past it.
   **The branch-CI class A5 reports is the opposite case — it *does* re-derive, and B1a
@@ -444,7 +454,14 @@ commit.
 
 Re-run the gate (`code-wrap` A3, the hermetic second run included — its verdict must be
 `green` or `skipped`, never `live-env`, #403) — a fresh-migrate test must pass, proving both branches'
-migrations run clean together. *(Machine-specific reconcile — e.g. deduping a
+migrations run clean together. **Where branch CI exists, prefer push-then-read over a local
+repeat for the hermetic half (#408):** the sync moved the head, so the old `branch-ci`
+verdict is stale, but pushing the sync commit starts a new branch run at the new head. B1a's
+bounded wait then reads it, and a `green` class there, meeting `code-wrap` A3's three
+conditions, is the hermetic verdict (`branch-ci <new sha7>`). Run `colab gate-hermetic`
+locally only when that run cannot arrive (no trigger for the branch), comes back other than
+`green`, or its workflow does not run the tests. Run the suite once and tee its output to a
+file; grep the file afterwards rather than re-running the suite to read another slice. *(Machine-specific reconcile — e.g. deduping a
 migration against one already on trunk — hooks in here; the universal rule is
 "regen on the merged base, never hand-merge generated files".)*
 
