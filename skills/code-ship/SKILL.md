@@ -898,8 +898,9 @@ ask) as a whole:
   list with no written reason anywhere in the plan file. **Do not merge, and do not
   proceed to B2 on this pass, whichever reject class below applies.** Post a comment on
   the issue naming specifically what falls short — not "does not match the plan," the
-  actual gap, and carry a `<!-- colab:grade verdict=reject-decision round=<n> -->` or
-  `verdict=reject-escalate round=<n>` marker per the classification below — same
+  actual gap, and carry a `<!-- colab:grade verdict=reject-decision round=<n> -->`,
+  `verdict=reject-escalate round=<n>` or `verdict=rework round=1` marker per the
+  classification below (`rework` is the direction-bearing `decision`, #406) — same
   grammar and reading rule as B2b's `pass` marker (*The grade verdict is a marker, not
   a sentence to parse*). Every claim in the harvested set stays held; this is never an
   automatic revert of the branch and never a silent merge-anyway.
@@ -986,7 +987,7 @@ rule broken and the `file:line` of the unguarded path, grep hit, or destructive 
 **On a pass**, B2b's evidence comment says in prose which switch question was graded and on
 what evidence. For example: `switch: bulk-import role=add — dark with the switch off
 (release-config job green at a1b2c3d; diff read, no unguarded path)`. The `colab:grade`
-marker keeps its three tokens.
+marker keeps its closed set of four tokens.
 
 When the repo is out of scope, or no harvested issue belongs to a switched epic, this clause
 adds nothing, and the grade is exactly what it was before.
@@ -1083,9 +1084,18 @@ asked there as well, but an unattended session (autopilot, a scheduled driver, a
 with nobody typing to it) never waits on an interactive prompt. The comment is where
 the human will look, and a modal holds up every candidate queued behind this one.
 
-**Your recommended route needs none of them** → still `reject-decision`. The route
-adds no new marker token, keeps every claim held, merges nothing and never proceeds
-to B2. Only the comment's shape changes, and no prompt is raised at all:
+**Your recommended route needs none of them** → still a `decision`-class reject, but
+its marker is the whole token **`rework`**, not `reject-decision` (#406):
+`<!-- colab:grade verdict=rework round=1 -->`. The token is what lets a rework router
+(something that sends a rework verdict back to the session owning the branch) tell
+"the rework is decided, go" from "this waits on a human" by equality alone. Before it
+existed both comments carried `reject-decision`, and the only difference was in prose
+no reader may parse, so one adopter's router had to keep its ship-grade lane dark
+rather than send human-waiting work back to the author. Everything else is unchanged:
+`rework` keeps every claim held, merges nothing and never proceeds to B2. It is
+**held**, never cleared, and a reader that predates it sees an unrecognised token,
+which is held too. Only the comment's shape and its token change, and no prompt is
+raised at all:
 
 1. **State the route as the direction**, meaning the rework to do. Cite the ruling it
    applies, which is what makes it the author's to follow and not yours to invent.
@@ -1098,18 +1108,29 @@ to B2. Only the comment's shape changes, and no prompt is raised at all:
    `escalate`. Whatever routes rework in this fleet (or a human, when nothing does)
    picks up the held claim and carries this comment as its brief.
 
-**Bounded, and on the same marker.** A direction may only ride on a `round=1` reject:
-no `colab:grade verdict=reject-*` marker, and no legacy `colab:reject escalate=1`,
-already on the harvested set. If the rework that followed a direction is rejected
-again, a human reads it. Two direction-bearing rejects in a row are how a coordinator
+```sh
+gh issue comment 88 -b "<!-- colab:grade verdict=rework round=1 -->
+Rejected: \`lib/sync.js:41\` adds a network poll outside the three openings ruled in
+\`docs/network.md:12\`.
+Direction: move the refresh onto the existing daily fetch (\`lib/fetch.js:88\`) and delete
+the new slot. Applies the ruling in \`docs/network.md:12\`; no boundary change.
+Declined: rule a 4th network opening — a human act. Overrule here to take it instead."
+```
+
+**Bounded, and on the same marker.** `rework` may only be emitted at `round=1`: no
+`colab:grade verdict=reject-*` or `verdict=rework` marker, and no legacy
+`colab:reject escalate=1`, already on the harvested set. A direction-bearing reject
+posted before #406 carries `reject-decision`, and the `reject-*` half of that test
+already sees it. If the rework that followed a direction is rejected again, that
+reject is a plain `reject-decision` and a human reads it. Two direction-bearing rejects in a row are how a coordinator
 and an author loop on each other's judgement with nobody deciding. The round number
 already records this, so nothing new has to be parsed.
 
 A rejected grade, of any class, ends this skill's run for that issue set: nothing
-past B1c executes on this pass. What differs is what happens next. A `decision`
-waits on a human who has seen the comment and said what happens next, or, when it
-carries a direction, waits on the rework the direction names unless a human
-overrules first. An `escalate` waits on the one bounded automatic retry the marker
+past B1c executes on this pass. What differs is what happens next. A
+`reject-decision` waits on a human who has seen the comment and said what happens
+next. A `rework` waits on the rework its direction names, unless a human overrules
+first. An `escalate` waits on the one bounded automatic retry the marker
 records, and falls back to waiting on a human the moment that retry rejects too.
 
 ## B2. Squash-merge with `Closes #N`
@@ -1357,9 +1378,10 @@ fixed marker**, and the prose next to it is decoration a consumer never has to t
 <!-- colab:grade verdict=<token> round=<n> -->
 ```
 
-- **Exactly three tokens are ever emitted here**: `pass` (B2b, this section) ·
-  `reject-decision` · `reject-escalate` (both B1c, on the reject comment — see B1c
-  below). No token is a prefix of another and none is a decorated variant of another —
+- **Exactly four tokens are ever emitted here**: `pass` (B2b, this section) ·
+  `reject-decision` · `reject-escalate` · `rework` (all three B1c, on the reject
+  comment — `rework` is the direction-bearing `decision`, *A reject that already
+  carries its answer*, and only ever at `round=1`). No token is a prefix of another and none is a decorated variant of another —
   a qualified outcome is a different whole token, never `pass` with a suffix. Free prose
   around the marker (a heading, an emoji, "held one round") is exactly that: prose. It
   can say anything; it changes what no consumer reads.
@@ -1368,12 +1390,22 @@ fixed marker**, and the prose next to it is decoration a consumer never has to t
 - **Reading rule, so two adopters written independently agree:** match the marker
   anywhere in the comment body, never by heading text or line position. Compare the
   `verdict` token by **equality**, never by prefix or substring. Four states follow:
-  **cleared** (token is exactly `pass`) · **held** (a recognised non-`pass` token) ·
+  **cleared** (token is exactly `pass`) · **held** (a recognised non-`pass` token —
+  `rework` included: "the rework is decided" is not "cleared") ·
   **unrecognised** (marker present, token not in the reader's set) · **absent** (no
   marker at all). Unrecognised and absent both mean "do not treat this as cleared" —
   never a silent default to the safe-looking value. Absent is not a failure either
   (*Degrade, never gate*, above): an older ship, a hand-written comment, or a
   `ceremony: light` repo carries no marker and that is not evidence of anything wrong.
+- **Attributes are read by name, never by position.** `verdict=rework round=1` and
+  `round=1 verdict=rework` are the same marker. One optional attribute is defined:
+  **`reviewer=<lane>`**, naming which review produced the verdict, so one marker grammar
+  can serve more than one reviewer (a migration review's REWORK, for one). **Absent means
+  the ship grade**, and this skill never writes it: every marker above is the ship
+  grade's. A reader that routes only ship-grade verdicts treats a marker whose
+  `reviewer` is present and is not a lane it knows as not its own, never as the ship
+  grade's. An attribute a reader does not know is ignored; an unknown `verdict` token is
+  still unrecognised.
 - **An adopter needing an outcome this skill doesn't emit mints its own whole token**
   (e.g. `hold`) rather than qualifying an existing one — because *unrecognised* is
   defined as never-cleared, a new token is safe by construction at every consumer that
@@ -1737,10 +1769,10 @@ so explicitly in your report; do not perform it.
   or GitHub, any gap fixed or escalated before continuing.
 - B1c's grade verdict is recorded — `pass`, carried into B2b's evidence comment as a
   `<!-- colab:grade verdict=pass round=<n> -->` marker, or `reject-decision`/
-  `reject-escalate`, marked the same way on the reject comment, with nothing past it
+  `reject-escalate`/`rework`, marked the same way on the reject comment, with nothing past it
   executed for that issue set on this pass. An unattended run raised **no interactive
   prompt**. A reject whose recommended route needed no new authority posted that route
-  as the direction, together with the alternative a human may pick instead
+  as the direction under a `verdict=rework round=1` marker, together with the alternative a human may pick instead
   (B1c, *A reject that already carries its answer*).
 - `gh issue view $N`: checklist ticked (inherited from `code-wrap`), and now closed
   with evidence, or left open with the next step written into it.
