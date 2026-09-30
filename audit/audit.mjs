@@ -90,6 +90,9 @@ const writesAuthority = require("../tools/lib/writes-authority.js");
 // narrow-never-widen validation of what a repo declares. Shared with `colab release cut` (#338)
 // so the audit and the tool that cuts tags can never read the rung two ways.
 const releasePolicy = require("../tools/lib/release-policy.js");
+// #394: the owner's-branch block — shape and collisions, shared with `colab deliver` and every
+// push-site guard in the CLI, so the audit and the tool can never disagree about what it means.
+const ownerBranchLib = require("../tools/lib/owner-branch.js");
 const { parseWorkflowOn, workflowFiresOnTag, prereleaseTagTriggers, workflowsFiringOnBranchPush } = require("../tools/lib/workflow-triggers.js");
 const shipBatch = require("../tools/lib/ship-batch.js");
 // #383: where migrations live — the one rule `colab ship`'s gate and `release cut` read; the audit
@@ -197,7 +200,7 @@ function parseScalarValue(raw) {
   return val;
 }
 
-const NESTED_MAP_KEYS = new Set(["release"]);
+const NESTED_MAP_KEYS = new Set(["release", "owner"]); // owner: #394
 
 function parseFlatYaml(text) {
   const out = {};
@@ -1713,7 +1716,19 @@ function auditRepo(target, ctx) {
   // in `colab doctor` (tools/colab), which otherwise reads it as a spent branch between
   // releases and advises deleting a live deploy target (#63).
   const releaseBranch = checkReleaseBranch(cfg, trunk, branches, fail, warn, deploy);
-  const exemptList = releaseBranch ? [...integration, releaseBranch] : integration;
+
+  // ---- owner's branch (optional, #394) ----
+  // A repo the fleet builds in but does not own may name the owner's branch; trunk stays the
+  // fleet's integration branch and the owner's branch is reached only by a PR he merges
+  // (`colab deliver`). Gated on the key's presence — no key, no work, no finding. It may not
+  // collide with anything a colab command pushes to.
+  for (const f of ownerBranchLib.evaluate(cfg, { trunk, integration, releaseBranch, branches: Array.isArray(branches) ? branches : null })) {
+    if (f.level === "fail") fail(f.text);
+    else warn(f.text);
+  }
+  const ownerDeclared = ownerBranchLib.read(cfg);
+  const ownerExempt = ownerDeclared.branch && !ownerDeclared.problems.length ? [ownerDeclared.branch] : [];
+  const exemptList = [...integration, ...(releaseBranch ? [releaseBranch] : []), ...ownerExempt];
   const exempt = exemptList.length ? new Set([...INTEGRATION_BRANCHES, ...exemptList]) : INTEGRATION_BRANCHES;
 
   // ---- branch naming -------------------------------------------------------
