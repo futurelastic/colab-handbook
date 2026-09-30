@@ -590,7 +590,7 @@ unless every claimed issue already carries a live
 `migration-granted` exemption of a role the repo accepts (`CONVENTIONS.md` [§5](../../CONVENTIONS.md#migration-exemption--a-narrow-door-through-no-new-migrations-opened-by-a-role-98-402),
 *Migration exemption*): a human grant on any repo, or — only where `project.yml` declares
 `migration-grant: reviewer` — a reviewer grant bound to this branch's exact HEAD. Either
-role is minted by a human (`COLAB_HUMAN=1`), so creating a grant is never yours to do
+role is minted by a human (the human flag, never set by an agent), so creating a grant is never yours to do
 here, and neither is running the review in this session: it is the bound reviewer's job
 ([`migration-review`](../migration-review/SKILL.md)), against the HEAD you push.
 What **is** yours: making sure the *request* gets filed, so the human with the
