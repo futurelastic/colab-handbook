@@ -45,7 +45,8 @@ below against it produces confusing no-ops.
 
 The solo exit is its own, short path:
 
-1. **Run the quality gate anyway** (A3) — solo flow relaxes ceremony, never the gate.
+1. **Run the quality gate anyway** (A3), hermetic second run included — solo flow relaxes
+   ceremony, never the gate.
 2. **Distill onto an Issue only if a decision emerged** this sitting (A1's spirit,
    not its letter) — solo flow's whole premise is that the commit *is* the memory
    when nothing needs to outlive the session; do not manufacture a narration Issue
@@ -485,6 +486,48 @@ scope creep, not diligence. If the plan file (`$PLAN`, when one exists) names th
 oracle, that is what "done" means for this session; a green gate that satisfies it is
 the signal to move to A4, not a reason to keep going.
 
+#### Run the test step a second time, hermetically — mandatory (#403)
+
+The gate is **not** green until the test step has also passed with this machine taken
+away. Run the repo's test command through `colab gate-hermetic`, which runs it twice and
+prints one verdict:
+
+```sh
+colab gate-hermetic -- <the repo's test command>     # e.g. -- npm test
+                                                      #      -- sh -c 'php artisan test --compact'
+```
+
+It runs the test step once as-is, then again with a fresh empty `HOME`, every variable
+whose name marks a service address, credential, socket, proxy or agent/dashboard/daemon
+runtime unset (`*_URL`, `*_TOKEN`, `*_KEY`, `COLAB_*` and the rest are listed in
+`colab gate-hermetic --help`), and the network off where the platform allows it. It
+always prints which network mode it used. Lint and type checks are not rerun — only the
+test step reads the environment in the way this catches.
+
+| verdict | means | A3 is |
+|---|---|---|
+| `green` | both runs passed | green |
+| `skipped` | trunk's `project.yml` declares `live-env: none`; the skip is printed | green if the normal run is |
+| `red` | the normal run fails — an ordinary red gate | red — fix it as above |
+| `live-env` | normal green, hermetic red: the named tests depend on **this machine** | **red** — they will fail on every runner |
+
+- **`live-env` is a red gate, not an advisory.** Fix the test so it builds its own
+  fixture: a temp `HOME` it creates, a server it starts itself, an env var it sets for
+  its own child process. Do not add `--keep` to make it pass. `--keep` exists for a
+  variable the suite genuinely needs, such as a toolchain path. Each kept variable is
+  printed, so name it and say why in the distill comment.
+- **Record the verdict word in A1's distill and in the hand-off**, not only "gate green".
+  `code-ship` §0 reads it.
+- **Why this is a command and not a sentence here:** a test once read its author's home
+  config and a local fleet daemon. It was green in every local wrap and red on every CI
+  runner, and the red trunk then blocked the repo's sweep. The lesson was written down in
+  prose and the same class recurred two days later. Prose did not stop it; a gate does.
+- **Not a substitute for A5's branch-CI read.** Runners differ in more than environment
+  (OS, toolchain, a browser to boot). This closes one cause before the push. A5 still
+  reads the rest after it.
+- No `colab` on this machine → do the same by hand and say so: `env -i HOME="$(mktemp -d)"
+  PATH="$PATH" <test command>`, network left on (say that too).
+
 #### Read the verdict, not the transcript
 
 On a repo with a real suite, the gate's raw output is not a rounding error next to
@@ -688,7 +731,9 @@ never by trusting this session's word for it:
       sha — `green` · `none` · `red:infra` · `red:finding`, naming the sha (A5). A red
       class does not fail this box; an unrecorded one does
 - [ ] distill comment posted on each carried issue (A1)
-- [ ] gate result recorded — green, or red-for-an-unrelated-reason reported (A3)
+- [ ] gate result recorded — green, or red-for-an-unrelated-reason reported (A3) — and
+      the hermetic verdict word from `colab gate-hermetic` (`green` · `skipped` · `red` ·
+      `live-env`) recorded beside it. A `live-env` verdict is a red gate, not a pass (#403)
 - [ ] migration-grant REQUEST filed on every carried issue whose branch touches a
       migration path and didn't already carry the signal (A3b) — or N/A, no migration
       files on this branch

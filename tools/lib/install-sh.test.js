@@ -32,6 +32,7 @@ const NOT_IN_NEXT = {
   claims: 'per-session flow, read by code-triage',
   'issue-filed': 'notify event emitted by code-start, never typed by a new user',
   'gate-recorded': 'notify event emitted by the skills, never typed by a new user',
+  'gate-hermetic': 'per-session test run, driven by code-wrap A3 (#403)',
   solo: 'per-session entry gate, needs a live human — not a setup step',
   place: 'per-session place-claim primitive',
   places: 'per-session place-claim listing',

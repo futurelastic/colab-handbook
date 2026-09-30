@@ -1082,6 +1082,36 @@ combined head rather than dropping the member (#387). Extends the
 built-in default set (`package-lock.json`, `pnpm-lock.yaml`, `yarn.lock`,
 `composer.lock`, `Cargo.lock`, `go.sum`, `dist/`, `build/`, `public/build/`, `.astro/`).
 
+### `live-env` — optional
+
+```yaml
+live-env: none      # absent = code-wrap A3's hermetic second test run is required
+```
+
+Declares that this repo's tests read **no live environment** — nothing from the user's home
+directory, no local daemon or dashboard, no token from the shell. It is the only way to skip the
+hermetic second run of the test step that `code-wrap` A3 requires (`colab gate-hermetic`, #403):
+a fresh empty `HOME`, every service-address/credential/socket variable unset, network off where
+the platform allows it. **Absent means the run happens** — the default is the check, not the
+exemption.
+
+Why the run exists: a test read its author's home config and a local fleet daemon. It was green
+in every local wrap and red on every CI runner, and the red trunk then blocked the repo's sweep.
+The lesson was written down in prose and the same class recurred two days later. Measured before
+this key existed.
+
+- **`none` is the only value.** Anything else is a finding. The reader treats it as absent, so
+  the hermetic run still happens, but a declaration that silently does nothing is not an answer.
+- **Only trunk's value counts.** `colab gate-hermetic` reads `live-env` from `origin/<trunk>`
+  (else the local `<trunk>`), never from the branch being gated — a branch cannot opt its own
+  tests out. A branch-only declaration is named in the output and the run still happens.
+- **Declare it only when it is true, and cheap to keep true.** The hermetic run costs one extra
+  pass of the test step. Skipping it trades that for the class of failure above, on every branch,
+  forever. A repo whose suite is too slow to run twice is a better candidate for a faster split
+  test step than for this key.
+- The one reading is `tools/lib/hermetic.js` `parseLiveEnv`; the audit reports the value
+  (`--json`: `liveEnv`).
+
 ### `node`, `php`, `python` — optional toolchain pins
 
 ```yaml
@@ -1246,6 +1276,7 @@ the shape that shows it. One writer at a time says nothing about who reads the r
 | `migrations` empty, restating a default, or naming one prefix twice → **advisory** | redundancy, harmless |
 | a tracked `*/migrations/` directory outside the defaults and every declared prefix → **advisory** (local only) | a migration layout `colab ship`'s gate cannot see |
 | `migration-grant` ∈ {`human`, `reviewer`} when set → **finding** otherwise | a misspelled policy silently read as `human` |
+| `live-env` = `none` when set → **finding** otherwise | a misspelled opt-out read as absent, so it silently does nothing |
 | `holds` is a list of non-empty strings, each listed once, when set → **finding** otherwise | a scalar or malformed list silently read as "no holds declared", so triage reports held work ready |
 | `exposure` ∈ {`none`, `self`, `live`, `released`} when set | a misspelled value silently read as undeclared |
 | `exposure: none` + `production: null` → **advisory** | the both-empty claim ("nothing consumes this, and there is nothing to point at") going unflagged |

@@ -339,14 +339,28 @@ test('syncedStateProblem: a directory with no sync markers up to $HOME is clean'
   }
 });
 
+// syncedStateProblem walks up from the colab dir only while it is still at least as long as
+// os.homedir() — so these two tests used to pass only because the machine's real HOME happened to be
+// a shorter path than the temp dir. A hermetic run (fresh HOME, itself under the temp root, #403)
+// made HOME the longer one and both went red. Pin HOME to the fixture's parent for the call, so the
+// walk's precondition is what the test sets up, not what the machine happens to have.
+function pinHomeAbove(dir) {
+  const had = Object.prototype.hasOwnProperty.call(process.env, 'HOME');
+  const old = process.env.HOME;
+  process.env.HOME = path.dirname(dir);
+  return () => { if (had) process.env.HOME = old; else delete process.env.HOME; };
+}
+
 test('syncedStateProblem: a ".sync" marker beside the colab dir is flagged (Resilio)', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'place-sync-test-'));
   fs.mkdirSync(path.join(dir, '.sync'));
+  const restoreHome = pinHomeAbove(dir);
   try {
     const problem = place.syncedStateProblem(dir);
     assert.ok(problem);
     assert.match(problem, /file-synced/);
   } finally {
+    restoreHome();
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
@@ -354,9 +368,11 @@ test('syncedStateProblem: a ".sync" marker beside the colab dir is flagged (Resi
 test('syncedStateProblem: a ".stfolder" marker is flagged (Syncthing)', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'place-sync-test-'));
   fs.mkdirSync(path.join(dir, '.stfolder'));
+  const restoreHome = pinHomeAbove(dir);
   try {
     assert.ok(place.syncedStateProblem(dir));
   } finally {
+    restoreHome();
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });

@@ -98,6 +98,13 @@ git -C "$MAIN_REPO" status --porcelain -uall                 # trunk checkout st
 - **Gate result** has no independent artifact to re-derive from outside the report itself
   on most repos — trust the report here, but if anything else on this list is off, treat
   the gate claim as unverified too and re-run it (`code-wrap` A3) before proceeding.
+  **The gate claim must carry the hermetic verdict (#403)** — the word `colab
+  gate-hermetic` printed: `green`, or `skipped` (trunk declares `live-env: none`). A
+  hand-off that says only "gate green", with no hermetic verdict, has not shown the
+  test step passing without this machine. Re-run `colab gate-hermetic -- <test command>`
+  in the worktree before proceeding. **`live-env` is a red gate**: hand it back to the
+  implementer the same way as any other red. Never read it as an advisory, and never
+  merge past it.
   **The branch-CI class A5 reports is the opposite case — it *does* re-derive, and B1a
   below re-derives it rather than reading it here.** A missing class in the hand-off is
   a wrap that skipped a step, worth saying in the report; it is not a blocker, because
@@ -431,7 +438,8 @@ guard: stop, do not proceed to the gate or the ship, and re-derive the merge
 from a fresh `git merge --abort` + retry rather than trying to patch the bad
 commit.
 
-Re-run the gate (`code-wrap` A3) — a fresh-migrate test must pass, proving both branches'
+Re-run the gate (`code-wrap` A3, the hermetic second run included — its verdict must be
+`green` or `skipped`, never `live-env`, #403) — a fresh-migrate test must pass, proving both branches'
 migrations run clean together. *(Machine-specific reconcile — e.g. deduping a
 migration against one already on trunk — hooks in here; the universal rule is
 "regen on the merged base, never hand-merge generated files".)*
