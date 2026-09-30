@@ -1960,6 +1960,166 @@ function cmdGateRecorded(argv) {
 }
 
 // ---------------------------------------------------------------------------
+// gate-hermetic — code-wrap A3's mandatory second run of the TEST STEP, with the machine taken
+// away (#403). A test once read the author's home config and a local fleet daemon: green in every
+// local wrap, red on every CI runner. Prose did not stop it recurring two days later; this does.
+// The gate is green only when both runs are. Pure logic: tools/lib/hermetic.js.
+//
+// A command rather than a shipped script because every skill already calls `colab` from A3
+// (`gate-recorded`), it resolves project.yml the same way every other command does, and it is
+// covered by the same test runner — a loose script would be a second, untested reader of
+// `live-env:`.
+// ---------------------------------------------------------------------------
+
+const HELP_GATE_HERMETIC = `colab gate-hermetic [--net auto|on] [--keep VAR,...] [--json] [--verbose] [--repo <path>] -- <test command...>
+
+Runs the repo's TEST STEP twice and gives one verdict (#403, code-wrap A3):
+
+  1. normal     — your environment as-is (minus a leaked NODE_TEST_CONTEXT, #154)
+  2. hermetic   — HOME = a fresh empty temp dir (XDG_* re-pointed into it); every variable whose
+                  name marks a service address, credential, socket, proxy, or an agent/dashboard/
+                  daemon/fleet runtime unset (*_URL *_HOST *_PORT *_TOKEN *_KEY *_SECRET *_SOCK
+                  COLAB_* CLAUDE* GH_* …); network off where the platform allows it —
+                  macOS sandbox-exec, Linux unshare --net (loopback stays up in both) — and the
+                  line saying which is always printed.
+
+Verdicts (exit 0 = may count as green, 1 = not):
+  green     both runs passed                                                      exit 0
+  skipped   .github/project.yml on trunk declares \`live-env: none\`; normal run
+            alone decides, and the skip is printed                                 exit 0/1
+  red       the normal run fails — an ordinary red gate; hermetic not attempted    exit 1
+  live-env  normal green, hermetic red: the tests depend on THIS machine. Named
+            failing tests are printed. This will be red on CI. Not green.          exit 1
+
+\`live-env: none\` is honoured only when trunk's project.yml declares it (origin/<trunk>, else the
+local <trunk>): a branch cannot opt its own tests out. The command runs directly (no shell) —
+pass \`-- sh -c '…'\` for pipes or &&.
+
+  --net on          do not cut the network (reported); default auto = best effort
+  --keep A,B        pass these variables through to the hermetic run anyway — printed in the
+                    verdict, so a pass-through is never silent
+  --json            one JSON object instead of the text verdict
+  --verbose         print each run's full output (default: failing names + a short tail on red)
+  --repo <path>     working tree to run in (default: cwd)
+
+  colab gate-hermetic -- npm test
+  colab gate-hermetic -- node --test tools/lib/*.test.js
+  colab gate-hermetic -- sh -c 'php artisan test --compact'
+`;
+
+function cmdGateHermetic(argv) {
+  const dd = argv.indexOf('--');
+  const own = dd === -1 ? argv : argv.slice(0, dd);
+  const cmd = dd === -1 ? [] : argv.slice(dd + 1);
+  const opts = parseArgs(own, {
+    values: { '--repo': 'repo', '--net': 'net', '--keep': 'keep' },
+    flags: { '--json': 'json', '--verbose': 'verbose', '-h': 'help', '--help': 'help' },
+  });
+  if (opts.help) return print(HELP_GATE_HERMETIC);
+  if (opts._.length) throw new UserError(`unexpected argument "${opts._[0]}" — the test command goes after \`--\` (see --help)`);
+  if (!cmd.length) throw new UserError('no test command — pass it after `--`, e.g. `colab gate-hermetic -- npm test`');
+  const netMode = opts.net || 'auto';
+  if (netMode !== 'auto' && netMode !== 'on') throw new UserError(`--net must be auto or on, got "${netMode}"`);
+  const keep = opts.keep ? String(opts.keep).split(',').map((s) => s.trim()).filter(Boolean) : [];
+  const hermetic = require('./lib/hermetic');
+  const yaml = require('./lib/yaml');
+
+  const cwd = opts.repo ? path.resolve(opts.repo) : process.cwd();
+  const root = git.repoRoot(cwd) || cwd;
+
+  // live-env: trunk's declaration is the one that counts (same posture as migration-grant: a
+  // branch cannot lower its own gate). Branch-only declaration → run anyway, and say so.
+  const readYml = (text) => { try { return yaml.parse(text) || {}; } catch (_) { return null; } };
+  let branchDoc = null;
+  try { branchDoc = readYml(fs.readFileSync(path.join(root, '.github', 'project.yml'), 'utf8')); } catch (_) { /* no descriptor */ }
+  const trunk = (branchDoc && typeof branchDoc.trunk === 'string' && branchDoc.trunk) || 'main';
+  let trunkDoc = null;
+  let trunkSource = null;
+  for (const ref of [`origin/${trunk}`, trunk]) {
+    const r = git.git(['show', `${ref}:.github/project.yml`], root);
+    if (r.ok) { trunkDoc = readYml(r.stdout); trunkSource = ref; break; }
+  }
+  const trunkLive = hermetic.parseLiveEnv(trunkDoc || (trunkSource ? {} : branchDoc));
+  const branchLive = hermetic.parseLiveEnv(branchDoc);
+  const skip = trunkLive.skip;
+  const notes = [];
+  if (!trunkLive.valid) notes.push(trunkLive.reason);
+  if (!skip && branchLive.skip && trunkSource) notes.push(`live-env: none is declared on this branch but not on ${trunkSource} — only trunk's declaration counts, so the hermetic run happens`);
+
+  const runOnce = (env, prefix) => {
+    const argvFull = [...prefix, ...cmd];
+    const r = spawnSync(argvFull[0], argvFull.slice(1), { cwd: root, env, encoding: 'utf8', maxBuffer: 512 * 1024 * 1024 });
+    const output = `${r.stdout || ''}${r.stderr || ''}${r.error ? `\n${r.error.message}\n` : ''}`;
+    return { ok: r.status === 0 && !r.error, exit: r.error ? null : r.status, signal: r.signal || null, output };
+  };
+
+  const normal = runOnce(hermetic.normalEnv(process.env), []);
+  let herm = null;
+  let homeDir = null;
+  let envInfo = null;
+  let net = null;
+  if (normal.ok && !skip) {
+    homeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'colab-hermetic-home-'));
+    try {
+      envInfo = hermetic.hermeticEnv(process.env, homeDir, keep);
+      net = hermetic.probeNetworkIsolation({
+        platform: process.platform, mode: netMode,
+        run: (c, a) => spawnSync(c, a, { stdio: 'ignore' }),
+      });
+      herm = runOnce(envInfo.env, net.prefix);
+    } finally {
+      try { fs.rmSync(homeDir, { recursive: true, force: true }); } catch (_) { /* best effort */ }
+    }
+  }
+
+  const verdict = hermetic.classify({ skipped: skip, normalOk: normal.ok, hermeticOk: herm ? herm.ok : false });
+  const failing = verdict === 'red' ? hermetic.parseFailures(normal.output) : verdict === 'live-env' ? hermetic.parseFailures(herm.output) : [];
+  const exitCode = (verdict === 'green' || verdict === 'skipped') ? 0 : 1;
+
+  if (opts.json) {
+    print(JSON.stringify({
+      verdict, ok: exitCode === 0, command: cmd,
+      liveEnv: { skip, trunkSource, value: trunkLive.value },
+      normal: { ok: normal.ok, exit: normal.exit },
+      hermetic: herm ? { ok: herm.ok, exit: herm.exit, stripped: envInfo.stripped, kept: envInfo.kept, network: net.note } : null,
+      failing, notes,
+    }, null, 2));
+    return exitCode;
+  }
+
+  const lines = [];
+  lines.push(`normal run:   ${normal.ok ? 'green' : 'RED'} (exit ${normal.exit === null ? 'none' : normal.exit}${normal.signal ? `, ${normal.signal}` : ''})`);
+  if (skip) {
+    lines.push(`hermetic run: SKIPPED — ${trunkSource || 'project.yml'} declares live-env: none`);
+  } else if (herm) {
+    lines.push(`hermetic run: ${herm.ok ? 'green' : 'RED'} (exit ${herm.exit === null ? 'none' : herm.exit}${herm.signal ? `, ${herm.signal}` : ''})`);
+    lines.push(`  HOME=<fresh empty dir>; unset ${envInfo.stripped.length} var(s)${envInfo.stripped.length ? `: ${envInfo.stripped.join(' ')}` : ''}`);
+    if (envInfo.kept.length) lines.push(`  --keep passed through: ${envInfo.kept.join(' ')}`);
+    lines.push(`  ${net.note}`);
+  } else {
+    lines.push('hermetic run: not attempted (normal run is red)');
+  }
+  for (const n of notes) lines.push(`note: ${n}`);
+  if (opts.verbose) {
+    lines.push('', '--- normal run output ---', normal.output.trimEnd());
+    if (herm) lines.push('', '--- hermetic run output ---', herm.output.trimEnd());
+  }
+  if (verdict === 'red' || verdict === 'live-env') {
+    const out = verdict === 'red' ? normal.output : herm.output;
+    if (failing.length) {
+      lines.push('', `failing ${verdict === 'live-env' ? 'under the hermetic run' : 'tests'}:`);
+      for (const f of failing) lines.push(`  - ${f}`);
+    } else if (!opts.verbose) {
+      lines.push('', 'no runner-recognised failure names; last lines of output:');
+      for (const l of hermetic.tail(out)) lines.push(`  | ${l}`);
+    }
+  }
+  lines.push('', `VERDICT: ${verdict} — ${hermetic.VERDICT_TEXT[verdict]}`);
+  print(lines.join('\n'));
+  return exitCode;
+}
+
+// ---------------------------------------------------------------------------
 // solo — the entry gate for solo flow (CONVENTIONS.md, Solo flow; #83).
 //
 // #237 (⚖ Decision on #233): solo flow is legal wherever `writes:` does NOT veto trunk-direct
@@ -12745,6 +12905,9 @@ Commands:
   gate-recorded [--sha S] [--fail] [--worktree N] [--repo P]         notify event only, from
                                         code-wrap's A3 quality-gate step (#116) — no colab state
                                         written, no gh call of its own
+  gate-hermetic [--net auto|on] [--keep V,..] [--json] -- <test cmd>  code-wrap A3's second,
+                                        hermetic test run (#403): fresh HOME, daemon/token vars
+                                        unset, network off best-effort — green only if both pass
   solo [--force] [--repo P] | solo --done [--repo P]                 entry-gated trunk-direct
                                         flow, \`writes: serial-direct\` only (legacy alias
                                         \`serial\` included) — no issue/claim/worktree (#83)
@@ -12845,6 +13008,7 @@ function main(argv) {
     case 'issue-filed': return cmdIssueFiled(rest);
     case 'close': return cmdClose(rest);
     case 'gate-recorded': return cmdGateRecorded(rest);
+    case 'gate-hermetic': return cmdGateHermetic(rest);
     case 'solo': return cmdSolo(rest);
     case 'place': return cmdPlace(rest);
     case 'places': return cmdPlaces(rest);

@@ -100,6 +100,8 @@ const shipBatch = require("../tools/lib/ship-batch.js");
 const migrationPaths = require("../tools/lib/migration-paths.js");
 // #398: the `migration-grant:` policy key — read through the same module `colab migration-grant` uses.
 const migrationGrant = require("../tools/lib/migration-grant.js");
+// #403: the `live-env:` key — read through the same module `colab gate-hermetic` uses.
+const hermeticLib = require("../tools/lib/hermetic.js");
 // #228's identity vocabulary — resolution, parsing, matching and REDACTION. Shared with the
 // conformance test that holds it and the shell hook (templates/pre-commit-identity) to the
 // same semantics; the shell scanner cannot require it (a template lands in repos with no
@@ -1282,6 +1284,17 @@ function auditRepo(target, ctx) {
       const pol = migrationGrant.parseGrantPolicy(cfg);
       info.migrationGrant = pol.policy;
       if (!pol.valid) fail(pol.reason);
+    }
+
+    // ---- live-env (#403) ------------------------------------------------------
+    // `live-env: none` is the one declaration that skips code-wrap A3's hermetic second test run
+    // (`colab gate-hermetic`). tools/lib/hermetic.js parseLiveEnv is the one reading. An invalid
+    // value fails: the reader treats it as absent (the stricter direction — the run still happens),
+    // so the declaration silently does nothing, and a declaration nobody can trust is not an answer.
+    {
+      const le = hermeticLib.parseLiveEnv(cfg);
+      info.liveEnv = le.declared ? le.value : null;
+      if (!le.valid) fail(le.reason);
     }
 
     // ---- holds (#360) ---------------------------------------------------------

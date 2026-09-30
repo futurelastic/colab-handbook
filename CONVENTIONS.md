@@ -1548,6 +1548,17 @@ Measured, 2026-09-05: a branch sat red three times on its remote run while its w
 recorded a clean local gate, and no step between the implementer's wrap and the merge was
 reading that run at all.
 
+**One cause of that disagreement is closed before the push, not read after it (#403).** A
+test that reads its author's machine (the home directory's config, a local daemon, a token
+in the shell) is green locally and red on every runner. So the local gate is green only when
+the test step has passed twice: once as-is, and once **hermetically**, with a fresh empty
+`HOME`, every service-address and credential variable unset, and the network off where the
+platform allows it (`colab gate-hermetic`, `code-wrap` A3). A green normal run with a red
+hermetic run is its own verdict, `live-env`, and it is not green. The only exemption is a
+`live-env: none` declaration on trunk's `project.yml`
+([schema](project.schema.md#live-env--optional)). The branch-CI read below still applies:
+runners differ in more ways than a stripped environment can reproduce.
+
 **Read the runs at the branch's current head sha, and report the result as one of four
 classes — not as pass/fail.** The names are shared vocabulary: the implementer records
 one when it pushes, the coordinator re-derives it before merging, and a fleet planner
