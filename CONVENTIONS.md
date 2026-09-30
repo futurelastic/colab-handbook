@@ -1574,6 +1574,32 @@ when branch CI cannot arrive (no trigger for the branch), is not `green`, or doe
 the tests. The same holds after a sync: push and read the new branch run before
 re-running the suite locally.
 
+**Local is a smoke check; branch CI is the one gate (#410).** A repo whose branch CI can
+arrive may say so in `project.yml` (`gate:` with `smoke:` and `authoritative: ci`,
+[schema](project.schema.md#gate--optional)). There, `code-wrap` A3 runs the declared smoke
+check once (lint, types, the tests for what changed — a few minutes, no hermetic second pass)
+and pushes; the verdict is the branch-CI run at the pushed head sha, read as the class below,
+and the hand-off names that run's id. `code-ship` reads the run and never re-runs the suite
+locally. A clean CI runner is the hermetic run by construction, so `colab gate-hermetic`
+stays only where the local gate is still the verdict. While iterating, run the tests for what
+you changed; the full suite runs once, where the verdict comes from. The fallback is today's
+rule, unchanged: no `gate:`, `authoritative: local`, or no workflow firing on a session-branch
+push ⇒ the local full gate plus the hermetic run. Measured on shared agent workstations
+(load ≈ 22 on 16 cores): full local suites took 6–10 min and failed on timeouts, then were
+re-run, while the same suites took 2–7 min in branch CI on clean runners — and the #403
+hermetic rule doubled each local run. No source recommends running the full suite both
+locally and in CI:
+
+- Fowler, *Continuous Integration* (2024 rev.) — the CI build is the final check; keep the
+  commit build under ~10 min. <https://martinfowler.com/articles/continuousIntegration.html>
+- *Software Engineering at Google*, ch. 23 (2020) — presubmit runs only fast, reliable tests;
+  larger suites run after. <https://abseil.io/resources/swe-book/html/ch23.html>
+- Humble & Farley, *Continuous Delivery*, ch. 7 (2010) — commit stage under 5 min, never over 10.
+- Machalica et al., *Predictive Test Selection* (ICSE-SEIP 2019) — server-side selection
+  halves cost and still catches > 99.9% of faulty changes. <https://arxiv.org/abs/1810.05286>
+- Lam et al., *The Effects of Computational Resources on Flaky Tests* (2024) — 46.5% of flaky
+  tests are resource-affected, CPU most. <https://arxiv.org/pdf/2310.12132>
+
 **Read the runs at the branch's current head sha, and report the result as one of four
 classes — not as pass/fail.** The names are shared vocabulary: the implementer records
 one when it pushes, the coordinator re-derives it before merging, and a fleet planner
@@ -1584,7 +1610,7 @@ reading either sees the same spelling. Spell them exactly so, everywhere:
 | `green` | **every** run `completed`, at least one `success`, none `failure` | nothing owed — this precondition passes |
 | `none` | no run exists, or **any** run is still in flight | a run queued or in flight has not passed, it has **not run**: wait, bounded — **15 minutes per candidate** by default, then a defer carrying a re-measure trigger, never an open-ended poll (#370). A run that **cannot arrive** for this ref — no workflows, or workflows triggering only on `pull_request` / trunk push — is not pending: proceed, and the base's own CI is the whole CI story — so the trunk run at the squash sha is read after the merge, before any evidence is posted, and a red there is filed as `TRUNK RED:` in the same pass (`code-ship` B2a, #374) |
 | `red:infra` | a run failed **before** the suite could judge the branch — runner boot, browser install, billing lockout, dependency fetch. **Exit 2** where the repo separates them | re-run **once**; an identical failure twice is the runner, not the branch — hand it to the ops lane. Never merged past, never sent back to the implementer: there is nothing in the diff to fix |
-| `red:finding` | the suite ran and something in it failed. **Exit 1** where separated | back to an implementer session, **as a class**. Never merged past, never re-run |
+| `red:finding` | the suite ran and something in it failed. **Exit 1** where separated | back to an implementer session, **as a class** — a [send-back](#who-may-touch-a-branch--the-coordinator-never-edits-implementer-work-409), never a coordinator fix. Never merged past, never re-run |
 
 - **The run must have seen the current base (#395).** A class read at a head that does not
   contain the base's current tip is **`stale-base`**, whatever its runs say: two branches
@@ -1696,6 +1722,38 @@ reading either sees the same spelling. Spell them exactly so, everywhere:
 - **One re-run per red episode, not per attempt** — and it is the only CI action the
   coordinator takes. A second identical failure is evidence; spending more re-runs on it
   just moves the wall further out.
+
+### Who may touch a branch — the coordinator never edits implementer work (#409)
+
+The owner's ruling: *"Ship session should never code. Should ask the code session to
+rework."* The coordinator — a ship or sweep session — never edits, commits, wraps or gates
+an implementer's work. Measured: a coordinator asked to wrap a candidate its implementer
+had left uncommitted spent ~40 min running the full test gate on a shared, loaded
+workstation, and the repo's single ship lane landed nothing else meanwhile.
+
+**What stays the coordinator's — git mechanics, not new code.** Three are owner-ruled:
+
+1. **Sync** the base into a branch that has fallen behind it (`code-ship` B0).
+2. **Regenerate a generated file** after taking one side of a conflict on it — the
+   `generated:` globs and the built-in lockfiles, through the `pre-ship` hook.
+3. **Resolve a purely mechanical conflict** — one whose resolution keeps both sides' hunks
+   unchanged, adds no line of its own and picks no winner (two appends to the same list,
+   two adjacent edits that do not touch each other's lines).
+
+Plus the acts `code-ship` §0 already names: push a wrapped head unchanged, re-run an
+infra-class red once, cure-merge, open the red-trunk-fix PR, re-take a released claim. The
+coordinator runs a gate only on a commit it made itself — the sync commit — never the
+implementer's gate on the implementer's behalf.
+
+**Everything else is a send-back.** A conflict that needs judgement, a hand-off that does not
+verify (uncommitted work, an unpushed head, no distill comment newer than the head, no gate
+verdict), a `red:finding` or `live-env` verdict: the coordinator posts **one** Issue comment
+beginning with the fixed marker `↩️ Sent back`, addressed to the branch's implementer —
+*commit the deliverable paths, run `code-wrap`, stop* — plus the specific gap, reports the
+candidate as sent back, and moves on. The marker is bookkeeping: it is not evidence for an
+evidence-close, and it is not a hand-off comment, so it can neither close the issue nor make
+the branch read as wrapped. Posted once per head: if a send-back already stands and the head
+has not moved since, it is not repeated.
 
 ### Batch landing — one combined run, then a fast-forward (#373)
 

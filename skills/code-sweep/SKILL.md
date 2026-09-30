@@ -1,6 +1,6 @@
 ---
 name: code-sweep
-description: "Clear out everything finished in ONE repo: find every worktree whose work has landed, every issue whose code shipped but is still open, and every claim outliving its session — then put each through code-wrap and code-ship in sequence, one at a time. Run it at end of day, or ping it whenever a session goes idle — cheap to re-run only when §0 is honoured first, a convention the executing agent follows and not a gate anything enforces (its fingerprint stays sensitive to branch tips, so the cheap path is rarer here than in code-triage — see §0). Sorts candidates into wrap / teardown-only / claim-only / place-claim / unrecorded / blocked / unlinked / spent-remote / orphan-shippable, because most do not need a full wrap+ship. Orphan-shippable is wrapped work with no worktree — a pushed branch still carrying an open, claimed issue — which is shipped when `colab ship --dry --json` reads READY and reported with its failing precondition when it does not, never passed over. Spent remote branches — refs left on origin by ships that kept the branch, whose issues are all closed — are listed for a human to delete, never deleted by the sweep. A candidate that fails mid-run is deferred and the run carries on to the next one; only a repo-wide blocker (trunk CI dead or red) or a destructive/unclassifiable failure stops the sweep. Before writing its cache record and reporting, it re-derives the candidate set once more, so a branch that finished its wrap while a long grade was running is processed or named, never left waiting on a notification that does not exist. Can be scoped to a set of issues or one session/worktree instead of the whole repo. Trigger phrases: 'sweep the repo', 'wrap everything finished', 'clean up the worktrees', 'close out the session work', 'tidy up finished work', 'wrap all the done branches', 'sweep the issues #95 #96', 'sweep the session <name>', 'ship these'; and — when this session's last act was a sweep — the re-ping forms 'again', 'anything new?', 'check again', 'anything to wrap yet?', or a bare 'go'. Orders the merge pass by readiness — candidates green at their head and merge-clean against trunk land first, a CI wait is capped at 15 minutes per candidate and then deferred with its run id so the pass ends and the trunk lock releases, same-file siblings land in a mechanical order (earlier wrap, tie → smaller diff) instead of waiting on a human, and a candidate whose issues already shipped under another sha is dropped before grading. Composes code-wrap then code-ship per candidate; batches merges only through `colab ship --batch`, and only where project.yml declares `ship-batch`."
+description: "Clear out everything finished in ONE repo: find every worktree whose work has landed, every issue whose code shipped but is still open, and every claim outliving its session — then ship the wrapped and send the unwrapped back to their implementer, one at a time. Run it at end of day, or ping it whenever a session goes idle — cheap to re-run only when §0 is honoured first, a convention the executing agent follows and not a gate anything enforces (its fingerprint stays sensitive to branch tips, so the cheap path is rarer here than in code-triage — see §0). Sorts candidates into ship / send-back / teardown-only / claim-only / place-claim / unrecorded / blocked / unlinked / spent-remote / orphan-shippable, because most need neither a wrap nor a ship, and the sweep never codes: unwrapped work goes back to its implementer with one Issue comment. Orphan-shippable is wrapped work with no worktree — a pushed branch still carrying an open, claimed issue — which is shipped when `colab ship --dry --json` reads READY and reported with its failing precondition when it does not, never passed over. Spent remote branches — refs left on origin by ships that kept the branch, whose issues are all closed — are listed for a human to delete, never deleted by the sweep. A candidate that fails mid-run is deferred and the run carries on to the next one; only a repo-wide blocker (trunk CI dead or red) or a destructive/unclassifiable failure stops the sweep. Before writing its cache record and reporting, it re-derives the candidate set once more, so a branch that finished its wrap while a long grade was running is processed or named, never left waiting on a notification that does not exist. Can be scoped to a set of issues or one session/worktree instead of the whole repo. Trigger phrases: 'sweep the repo', 'wrap everything finished', 'clean up the worktrees', 'close out the session work', 'tidy up finished work', 'wrap all the done branches', 'sweep the issues #95 #96', 'sweep the session <name>', 'ship these'; and — when this session's last act was a sweep — the re-ping forms 'again', 'anything new?', 'check again', 'anything to wrap yet?', or a bare 'go'. Orders the merge pass by readiness — candidates green at their head and merge-clean against trunk land first, a CI wait is capped at 15 minutes per candidate and then deferred with its run id so the pass ends and the trunk lock releases, same-file siblings land in a mechanical order (earlier wrap, tie → smaller diff) instead of waiting on a human, and a candidate whose issues already shipped under another sha is dropped before grading. Composes code-ship per candidate; never runs code-wrap (a coordinator never edits or commits implementer work, #409); batches merges only through `colab ship --batch`, and only where project.yml declares `ship-batch`."
 ---
 
 # code-sweep — clear out everything finished, one at a time
@@ -14,9 +14,12 @@ After a few parallel sessions, two things drift apart:
 
 This sweeps one repo and reconciles both. It does not replace
 [`code-wrap`](../code-wrap/SKILL.md) and [`code-ship`](../code-ship/SKILL.md) — it
-finds the candidates and runs them, in sequence, per candidate.
+finds the candidates, runs [`code-ship`](../code-ship/SKILL.md) on the wrapped ones in
+sequence, and **sends the unwrapped ones back** to their implementer. It never runs
+`code-wrap` itself: the coordinator never edits or commits implementer work
+([CONVENTIONS](../../CONVENTIONS.md#who-may-touch-a-branch--the-coordinator-never-edits-implementer-work-409), #409).
 
-## Principle — sequential, and most candidates do not need a full wrap+ship
+## Principle — sequential, and most candidates do not need a ship
 
 **One at a time.** Every merge moves trunk, so the next candidate must sync against
 the *new* trunk (code-ship B0). Batching merges "to save time" produces exactly the
@@ -28,8 +31,8 @@ candidates as one combined run followed by one fast-forward (code-ship B0, *Batc
 CI as a whole. Anything else still goes one at a time.
 
 **Sort before acting.** A worktree whose branch already landed needs teardown, not a
-wrap. Running a full wrap on it re-does distillation nobody needs and risks a second
-merge of the same content.
+ship. Shipping it again re-does grading nobody needs and risks a second merge of the same
+content.
 
 **Run it as often as you like.** This used to be described as the end-of-day job after
 several parallel sessions, which read as a prohibition on running it more often — and the
@@ -42,7 +45,7 @@ Nothing below gets cheaper by being skipped — least of all the per-merge CI re
 
 Same problem and same fingerprint as [`code-triage` §0](../code-triage/SKILL.md) — read it
 there; only the differences are repeated here. A full sweep is a fixed floor of 3 network
-calls plus a CI re-check and a full `code-wrap` + `code-ship` per candidate, so a ping
+calls plus a CI re-check and a full `code-ship` per candidate, so a ping
 with nothing new is worth refusing to start.
 
 **Measured, #244: median 27 calls (p90 59) over 372 runs in one adopting fleet's census —
@@ -152,7 +155,7 @@ code-triage's own `/2` record plus the bounded `interrupted` block this section 
   },
   "lastRun": { "decision": "full", "moved": ["branchTips"], "calls": 27 },
   "interrupted": { "completed": ["…"], "stoppedOn": "…", "stopReason": "…" },
-  "conclusion": { "wrapped": ["…"], "deferred": [{ "candidate": "…", "reason": "…", "run": "<databaseId — ci-wait only>" }], "blocked": ["…"], "ripened": [{ "candidate": "…", "processed": false, "reason": "…" }], "…": "…" }
+  "conclusion": { "wrapped": ["…"], "sentBack": [{ "candidate": "…", "since": "<ISO8601 of the ↩️ Sent back comment>", "headSha": "<sha it was sent back at>" }], "deferred": [{ "candidate": "…", "reason": "…", "run": "<databaseId — ci-wait only>" }], "blocked": ["…"], "ripened": [{ "candidate": "…", "processed": false, "reason": "…" }], "…": "…" }
 }
 ```
 
@@ -299,7 +302,7 @@ rm -f "$S" "$W"
 
 `code-triage` has single-issue mode; this had nothing between "the whole repo" and calling
 `code-wrap`/`code-ship` by hand — and calling either directly skips the bucketing that
-decides wrap vs teardown-only vs claim-only, which is the judgement this skill exists to
+decides ship vs send-back vs teardown-only vs claim-only, which is the judgement this skill exists to
 add. A shipping session handed three issue numbers deserves neither of those options.
 
     sweep the issues #95 #96          → candidates whose claims or branch name carry 95 or 96
@@ -312,7 +315,7 @@ Both selectors are natural because §1 already enumerates claims (issue-keyed) a
 what makes the next three rules possible, and it costs nothing extra — §1's commands do not
 take a selector anyway.
 
-Everything downstream is unchanged: the four buckets, the sequential wraps, the per-merge
+Everything downstream is unchanged: the buckets, the sequential ships, the per-merge
 CI re-check, the refusal to batch. Scoping narrows *which* candidates are considered; it
 must never weaken what happens to each one.
 
@@ -412,7 +415,7 @@ what state the work is *in*; `in-progress` says someone *believes they hold it*.
 disagree in both directions — claims outliving finished work, finished work never
 claimed — and the label remains the veto before any teardown.
 
-## 3. Sort into nine buckets — each gets a different action
+## 3. Sort into ten buckets — each gets a different action
 
 **These buckets are keyed off what §1 enumerated — worktrees, claims, places, and
 (for `spent-remote` and `orphan-shippable` only) origin's branch refs (§1.3) — which is complete for a repo declaring the veto (`writes: isolated`, every
@@ -427,15 +430,43 @@ the third case — a scoped selector that names such a unit by issue number.
 
 | Bucket | What it looks like | Action |
 |---|---|---|
-| **wrap** | `cargo` (or `unknown`), **and** at least one claimed issue | full [`code-wrap`](../code-wrap/SKILL.md) then [`code-ship`](../code-ship/SKILL.md) |
+| **ship** | `cargo` (or `unknown`), at least one claimed issue, **and** the hand-off verifies: clean worktree, local head == origin head, head older than the newest non-bookkeeping comment on every carried issue (test 3 below) | [`code-ship`](../code-ship/SKILL.md) only (§4) |
+| **send-back** | `cargo`/`unknown`/dirty with a claimed issue whose hand-off does **not** verify: uncommitted work, unpushed head, no distill comment newer than the head | post ONE `↩️ Sent back` comment to the implementer, report it as sent back, continue — see below. **Never run `code-wrap`** |
 | **teardown-only** | `landed` — content already on its base, worktree lingering | remove worktree, release claims; close via `colab ship` when it has zero commits (evidence-close, #90), else `colab close <N> --comment "<evidence>"` |
 | **claim-only** | no worktree; `in-progress` on work already shipped | `colab close <N> --comment "<evidence>"` — closes and releases the claim in one step (#381) |
 | **place-claim** | `colab places` lists a hold whose session is not this sweep's — see below | **check liveness, report — never force-release a live holder** |
 | **unrecorded** | on disk, `colab worktrees`'s `unrecorded` list — no claim, no ports | **report only** — see below, never `code-wrap`/`code-ship` |
-| **blocked** | uncommitted work — tracked changes or untracked files — or genuinely unfinished | **report — never force** |
+| **blocked** | genuinely unfinished with no implementer to address (no claimed issue, nothing to comment on) | **report — never force** |
 | **unlinked** | `cargo` (or `unknown`), **zero** claimed issues | **report — do not wrap** (#92) |
 | **spent-remote** | on origin only — no worktree here, not trunk or an `integration:` line — and every trailing issue number CLOSED (§1.3) | **report only — never delete** (#331, keeps #17) |
 | **orphan-shippable** | on origin only, no worktree here; every trailing issue OPEN + `in-progress` (§1.3); `cargo`/`unknown` against its base; head committed before the issue's last hand-off comment — see below | `colab ship --branch <br> --dry --json` → `ok` ⇒ [`code-ship`](../code-ship/SKILL.md) through §4; not `ok` ⇒ **report the failing rows — never silence** (#352) |
+
+### `send-back` — the coordinator never codes (#409)
+
+Owner ruling: *"Ship session should never code. Should ask the code session to rework."* The
+sweep is a coordinator. It never edits, commits or wraps implementer work; the rule is stated
+once in [CONVENTIONS, *Who may touch a branch*](../../CONVENTIONS.md#who-may-touch-a-branch--the-coordinator-never-edits-implementer-work-409). A candidate whose hand-off does not
+verify is therefore not wrapped here, it is **sent back**.
+
+**Hand-off verifies** (⇒ `ship`) only if all three hold: the worktree is clean (no tracked
+changes, no untracked files), the local head equals the origin head, and the head is older
+than the newest non-bookkeeping comment on every carried issue (§3's test 3). Fail any one
+and the candidate is `send-back`, provided it carries a claimed issue.
+
+**The action is ONE Issue comment**, body starting with the fixed marker `↩️ Sent back`
+(colab treats it as bookkeeping: it does not count as evidence and is not a hand-off comment).
+It is addressed to the branch's implementer and says: commit the deliverable paths, run
+[`code-wrap`](../code-wrap/SKILL.md), stop; plus the **specific gap found** (which files are
+uncommitted, which commits are unpushed, or that no distill comment postdates the head).
+Then report the candidate as sent back and continue with the next one.
+
+- **Idempotent.** If a `↩️ Sent back` comment already exists on the issue and the branch head
+  has not moved since it, post nothing; report `sent-back (pending since <ts>)`. A new commit
+  on the branch re-arms it.
+- **A conflict needing judgment is a send-back too** (§4): the author rebases and resolves,
+  the sweep does not.
+- **`blocked` keeps what no implementer can be addressed about:** no claimed issue, or an
+  issue that is not this repo's (see `unlinked`, `unrecorded`).
 
 ### `spent-remote` — a shipped branch nobody deleted
 
@@ -490,7 +521,7 @@ issues of another adopting repo that day.
    place-claim session has no worktree to show that it is still working. So "on origin and
    claimed" also describes a session that is live mid-work. A wrap ends with a distill
    comment posted **after** the last commit. A head newer than that comment is work in
-   flight. Put it in `blocked` ("claimed, pushed, not wrapped"), never ship it.
+   flight. Put it in `send-back` ("claimed, pushed, not wrapped"), never ship it.
    ```sh
    HEAD_AT=$(TZ=UTC git log -1 --date=format-local:%Y-%m-%dT%H:%M:%SZ --format=%cd "origin/$BR")
    WRAP_AT=$(gh issue view "$N" --json comments -q '[.comments[]
@@ -516,8 +547,7 @@ computes every precondition and changes nothing. `ok` + `checks[]` is the answer
 `checks[].class` separates `self-clearing` (retry on a later ping) from `human-gated` (a
 person must act):
 
-- **`ok: true`** ⇒ the candidate goes through §4 like a `wrap` candidate whose Phase A is
-  already done: per-candidate CI re-check, then [`code-ship`](../code-ship/SKILL.md). Its §0
+- **`ok: true`** ⇒ the candidate goes through §4 like a `ship` candidate: per-candidate CI re-check, then [`code-ship`](../code-ship/SKILL.md). Its §0
   verifies the hand-off from git and GitHub, and its grade still runs. `READY` is where
   shipping starts. It does not replace the checks.
 - **`ok: false` with `autonomy granted` as the only failing row** ⇒ the repo has no
@@ -541,7 +571,7 @@ person must act):
   about a failure is the exact bug this bucket was created to fix.
 
 **It merges, so it obeys §4's stops.** A dead or red trunk CI halts it together with the
-`wrap` candidates. Unlike `spent-remote`, it is not a report-only bucket that §4 can skip.
+`ship` candidates. Unlike `spent-remote`, it is not a report-only bucket that §4 can skip.
 
 ### `place-claim` — the one hold nothing else here sweeps
 
@@ -645,7 +675,7 @@ convention decision is overdue, not a cue to improvise one per sweep.**
 
 ### `unlinked` — cargo whose issue numbers are nobody's here
 
-**`unlinked` is its own bucket, not a subset of `wrap` (#92).** `colab worktrees`
+**`unlinked` is its own bucket, not a subset of `ship` (#92).** `colab worktrees`
 enumerates by worktree, not by issue, so a branch with real unlanded commits and no
 issue attached still surfaces at §1 — it is not invisible. But wrapping it the normal
 way is the wrong action even though `landed` reports `cargo`: `--issues` is empty,
@@ -653,13 +683,13 @@ so the squash carries no `Closes #N`, B2c's evidence-posting step has nothing to
 to, and the branch content can be *better* than whatever DID ship (a genuine measured
 case: a one-line fix stranded this way outclassed the fix that landed through a
 different door — the residue is not clutter). Do not silently fold this case into
-`wrap` on the theory that "cargo → wrap" always holds; the theory holds only when a
+`ship` on the theory that "cargo → ship" always holds; the theory holds only when a
 `Closes #N` is possible. Do not silently drop it either — an un-named residue class is
 how a better patch sits unreachable indefinitely while a worse one ships.
 
 Report it and stop there. Two reasonable next steps exist and this skill does not
 choose between them: file (or reopen) an issue for the branch so it becomes an
-ordinary `wrap` candidate next sweep, or leave it named so a human decides. Never
+ordinary `ship` or `send-back` candidate next sweep, or leave it named so a human decides. Never
 open the issue automatically — that is a judgement call about what the branch is
 *for*, which this skill has no way to make from git state alone.
 
@@ -674,7 +704,7 @@ re-run, or `--force` to have it terminate them — it kills only what the worktr
 owns by cwd. Do **not** reclassify such a candidate as `blocked`: it is a live
 process, not unfinished work.
 
-## 4. Run the wraps — one at a time, re-checking between
+## 4. Ship the wrapped — one at a time, re-checking between
 
 ### 4.0 Order the pass by readiness — ready work first (#370)
 
@@ -684,7 +714,7 @@ ship itself took, and the causes were ordering, not review. A coordinator stayed
 for 1 h 40 min hand-polling CI for three branches while two others were green and
 merge-clean; four same-file pairs sat 35–143 min each waiting for a human to pick an order
 nobody picked; 3 of 8 "candidates" in one repository were already on trunk. So before the
-first merge, and again after each one (trunk moved), sort the merge candidates — `wrap`,
+first merge, and again after each one (trunk moved), sort the merge candidates — `ship`,
 plus `orphan-shippable` whose dry run read `ok`:
 
 1. **Drop the phantoms.** Run `code-ship` B0's already-shipped grep for each candidate's
@@ -746,16 +776,15 @@ For each candidate, in the order 4.0 set:
    can outrank a passing run on the same commit under `cancel-in-progress`.) Not
    once at the start — trunk CI can die mid-sweep (billing lockout, runner outage),
    and a failure that never started still means stop. A sweep can take an hour.
-   This re-check is about the **branched** `wrap` candidates below — the merge each
+   This re-check is about the **branched** `ship` candidates below — the merge each
    is about to go through depends on it being alive, at whatever thoroughness its
    `exposure` demands ([§7, *CI*](../../CONVENTIONS.md#ci--what-it-is-follows-the-units-shape-how-much-follows-exposure)).
    A `place-claim` or `landed trunk-direct` candidate never merges through here at
    all, so this step has nothing to re-check for those.
-2. Run **code-wrap** for that candidate — distill/docs/gate/commit/push, if not
-   already done for the cargo sitting on it — then **code-ship**: B0 sync against
-   the *current* trunk, harvest, grade, merge, evidence, release, teardown. An
-   `orphan-shippable` candidate skips code-wrap. Its wrap already ran, and that is what
-   §3's hand-off test checked. There is also no worktree to run code-wrap in. It goes
+2. Run **code-ship** for that candidate: B0 sync against the *current* trunk, harvest,
+   grade, merge, evidence, release, teardown. **Never run code-wrap here** — a candidate
+   reaches §4 only because §3 verified its hand-off, and one that does not verify was
+   sent back instead (#409). An `orphan-shippable` candidate has no worktree; it goes
    straight to code-ship with `--branch <br>`, and code-ship's §0 is where a wrap that
    did not in fact happen gets caught. Re-run the dry run first if trunk moved since
    §3 sorted it.
@@ -772,7 +801,9 @@ This was one paragraph reading *stop the sweep there* on any failure. It is now 
 classes, and they divide on **scope**, not on severity — which of the three a failure
 falls into is what decides whether the run continues:
 
-- **Candidate-scoped** — a conflict needing judgment, this branch's gate failing for
+- **Candidate-scoped** — a conflict needing judgment (a send-back to the author: one
+  `↩️ Sent back` comment naming the conflicting paths, never a resolution by the sweep),
+  this branch's gate failing for
   reasons unrelated to trunk, a rejected grade on one issue set, a branch run still in
   flight when `code-ship` B1a's 15-minute cap expired (`ci-wait`, §4.0 — record its run
   id). It blocks *that* candidate and says nothing about the next one. **Defer it, record why, continue.**
@@ -783,7 +814,7 @@ falls into is what decides whether the run continues:
 - **Repo-wide** — trunk CI dead or red. **Stop the merge loop** and say what would clear
   it, routing to the cure rule (`CONVENTIONS.md` [§5, *Cure rule*](../../CONVENTIONS.md#cure-rule--the-machine-checkable-door-through-trunk-ci-green-281), #281). Continuing
   here is not conservatism, it is spinning: step 1 above re-checks trunk CI per
-  candidate, so every remaining wrap refuses at the same wall. **Nothing in this section
+  candidate, so every remaining ship refuses at the same wall. **Nothing in this section
   is license to merge onto a red trunk** — the two doors through that precondition are
   the cure rule and a human ci-grant, both defined elsewhere, neither of them this
   skill's to open. (`colab ship` fires the cure automatically per branch, so the
@@ -917,7 +948,7 @@ Measured twice, on an `auto-trunk` repo with autopilot-spawned sweeps:
    few calls, and the step ends there.
 2. **Something else moved ⇒ re-run §1 and §3 in full.** Classify every candidate the run
    has not already handled, plus any handled candidate whose tip moved after it was sorted.
-   A deferred branch that got a fix commit, or a `blocked` worktree whose files were
+   A deferred branch that got a fix commit, or a `send-back` or `blocked` worktree whose files were
    committed and pushed, is a new candidate now, not the same candidate as before.
 3. **Process what ripened, through §4 and §5 as usual** — one at a time, with a CI re-check
    before each merge. Then go back to rung 1. The run ends only when a re-derive finds
@@ -957,14 +988,15 @@ Then the run ends. It does not end on a wait.
 ```
 swept 4, left 3
 
-wrapped         fix/import-115-114-113   → trunk a1b2c3d, #115 #114 closed, #113 split
+shipped         fix/import-115-114-113   → trunk a1b2c3d, #115 #114 closed, #113 split
 teardown-only   feat/console-shell-28    → content already on trunk, worktree removed
 claim-only      #26                      → shipped in e4f5g6h, claim released
 deferred        fix/oauth-scope-31       → gate red on an unrelated lint rule; run continued
 place-claim     . (trunk checkout)       → holder session unknown-liveness — reported, not released
 unrecorded      .worktrees/orphan-1      → landed vs main, no claim — removed by hand
-blocked         feat/session-types-26    → 2 untracked files never committed — needs a human
-blocked         #58                      → branch never pushed, 3 commits local-only — needs a human
+sent-back       feat/session-types-26    → 2 untracked files never committed — ↩️ Sent back posted on #26, implementer to commit + wrap
+sent-back       fix/cache-key-44         → sent-back (pending since 2026-07-21T09:10Z), head unmoved — not re-posted
+blocked         #58                      → no claimed issue in this repo, 3 commits local-only — needs a human
 unlinked        fix/railquiet-fixture-trunk-red → 1 commit ahead of trunk, no issue claimed — not wrapped, not dropped
 spent-remote    56 refs on origin        → every trailing issue CLOSED; listed below for a human to delete, none deleted
                   fix/ship-reject-recommended-route-328, feat/dropped-idea-12 (#12: NOT_PLANNED — look first), …
@@ -987,8 +1019,7 @@ Say what you left and why. A worktree kept for a stated reason is fine; a worktr
 kept silently is the 8-of-9 statistic repeating.
 
 **`deferred` and `blocked` are different outcomes — never collapse them into one line.**
-`blocked` is a candidate §3 never sent into §4 at all (uncommitted work, genuinely
-unfinished); `deferred` is one §4 *tried*, failed on, and moved past. So a `deferred` line
+`blocked` is a candidate §3 never sent into §4 at all (genuinely unfinished, no implementer to address; work that only needs its implementer to wrap is `send-back`); `deferred` is one §4 *tried*, failed on, and moved past. So a `deferred` line
 owes the reader two things a `blocked` line does not: what failed, and what would clear it.
 Those two facts are the whole record the old run-level stop used to provide, now carried
 per candidate.
@@ -1036,8 +1067,9 @@ the merge loop got, and that the non-merging work was **not** abandoned with it.
   (or the report says there are none). A count with no names cannot be acted on. **No ref
   was deleted by this run** (#17, #331).
 - **Every `orphan-candidate` row from §1.3 reached a line of its own**: shipped, sent to
-  `claim-only`, `blocked` as not yet wrapped, or `orphan-shippable` with its failing check
+  `claim-only`, `send-back` as not yet wrapped, or `orphan-shippable` with its failing check
   named. A candidate that failed a check is never absent from the report (#352).
+- **No `code-wrap` ran and no implementer file was edited or committed by this run** (#409). Every candidate with an unverified hand-off got one `↩️ Sent back` comment (or a `sent-back (pending since <ts>)` line when one already stood at the same head), and `conclusion.sentBack` lists them.
 - A selector that matched nothing said so — not "swept 0".
 - **One of the three required §0 outcome lines was printed, first, before anything else** —
   `unchanged` / `changed:<inputs>` / `no usable cache`.

@@ -639,6 +639,19 @@ can read it back.
   the worktree starts bare; set up only what you personally need and do not bake
   it into this flow. *(Machine-specific automation hooks in here: `.colab/hooks/`.)*
 
+### While you work — targeted tests, not the full suite (#410)
+
+While iterating, run the tests for what you changed — the file, the module, the filter your
+runner offers (`node --test <file>`, `php artisan test --filter …`, `pytest <path>`). The full
+suite runs **once**, where the verdict comes from: in branch CI after the push when trunk's
+`project.yml` declares `gate:` with `authoritative: ci`, otherwise at `code-wrap` A3. Measured
+across two fleet workstations over 48 h: implementer sessions ran the full suite far more often
+than ship sessions did (roughly 340 runs against 50 in the two heaviest repos, hours of shared
+CPU), while CI's job queue stayed under two minutes at p90 on every repo — moving the full run
+to CI fits today's runners. `CONVENTIONS.md`
+[§4, *Branch CI*](../../CONVENTIONS.md#branch-ci--the-candidates-own-run-read-as-a-class-314)
+has the rule and its sources.
+
 ## 5. Report
 
 - Issue URL (`gh issue view $N --json url -q .url`) or the notes-file path, and

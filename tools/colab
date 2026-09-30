@@ -12215,7 +12215,7 @@ function shipBatchMemberTail({ repoAbs, doc, trunk, sess, sha, closeIssues, refs
 // ---------------------------------------------------------------------------
 // landed — "has this branch's work landed on its base?", the one shared answer.
 //
-// code-sweep sorts candidates into wrap / teardown-only / claim-only / blocked / unlinked, and code-wrap
+// code-sweep sorts candidates into ship / send-back / teardown-only / claim-only / blocked / unlinked, and code-wrap
 // Phase B decides the same thing for one branch. Both used to decide it by prose and judgement,
 // and the obvious rule (count the commits ahead) misreports every squash-merge — see lib/landed.js
 // for the measurement and for exactly what the rule does and does not cover.

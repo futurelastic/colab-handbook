@@ -178,8 +178,10 @@ function bodyShaClaims(message) {
  * forever. The fleet owner's ruling: an agent may perform the close WHEN the issue carries an
  * evidence comment describing what was delivered.
  *
- * "Evidence" is deliberately defined as *a comment the tool did not write itself*. colab's own
- * markers (🔒 Claimed / ✅ Released / 🚢 Shipped / 🔖 Referenced) are bookkeeping — an issue holding
+ * "Evidence" is deliberately defined as *a comment the tool did not write itself*. The coordinator
+ * bookkeeping markers (colab's 🔒 Claimed / ✅ Released / 🚢 Shipped / 🔖 Referenced, and the
+ * skills' ↩️ Sent back — #409: a coordinator asking the implementer to wrap its own work records
+ * that nothing was delivered yet, never that something was) are bookkeeping — an issue holding
  * only those has had a session attached and nothing recorded, which is precisely the state that must
  * NOT auto-close. Anything else is a human or an agent having written down what happened, which is
  * the whole standard being asked for.
@@ -187,7 +189,7 @@ function bodyShaClaims(message) {
  * The zero-diff fact itself is measured from git by the caller, never declared by the session — so
  * an issue that carries no delivery-type label is still covered.
  */
-const TOOL_MARKS = ['🔒 Claimed', '✅ Released', '🚢 Shipped', '🔖 Referenced'];
+const TOOL_MARKS = ['🔒 Claimed', '✅ Released', '🚢 Shipped', '🔖 Referenced', '↩️ Sent back'];
 function evidenceComments(comments) {
   return (Array.isArray(comments) ? comments : []).filter((c) => {
     const body = String((c && c.body) || '').trim();

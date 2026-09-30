@@ -77,13 +77,17 @@ git -C "$MAIN_REPO" status --porcelain -uall                 # trunk checkout st
 
   If the local head is **not** the wrapped commit, that is a different problem —
   somebody committed after the wrap, and this skill has no idea whether that work was
-  gated. Stop there and hand back.
+  gated. Stop there and **send it back** (below).
 
   **This is the one thing the coordinator may do to the branch, and the boundary is
-  source.** You may push a wrapped head, re-run an infra-class red run once (the test for
+  source** — stated once in `CONVENTIONS.md`
+  [§4, *Who may touch a branch*](../../CONVENTIONS.md#who-may-touch-a-branch--the-coordinator-never-edits-implementer-work-409)
+  (#409). You may push a wrapped head, re-run an infra-class red run once (the test for
   *infra-class*: B1a, *Telling infra from finding*), cure-merge,
   open a PR to obtain branch CI for the branch that carries a red trunk's fix (that
-  branch only — B1, *Red trunk*), and rebase a clean conflict. You may **not** edit source, add a commit, amend, or
+  branch only — B1, *Red trunk*), and — in B0 only — sync the base in, regenerate a
+  generated file after taking one side, and resolve a purely mechanical conflict. You may
+  **not** edit source, add a commit of your own beyond that sync, amend, or
   force-push — the grader is not the fixer, and a coordinator that writes code is
   grading its own work one step later. Measured, 2026-09-05: a branch's head — the very
   commit whose message said the failure was resolved — sat unpushed for a day because
@@ -91,13 +95,25 @@ git -C "$MAIN_REPO" status --porcelain -uall                 # trunk checkout st
   lines below told the same reader to *"re-push"* before continuing. Nobody pushed, no
   CI run ever validated the fix, and the contradiction was doing the blocking.
 - **No recent distill comment** → A1 did not happen, or happened somewhere this can't
-  see. Ask, don't assume it was verbal.
+  see. **Send it back** — the distill is the implementer's knowledge, not the
+  coordinator's to reconstruct (#409). Don't assume it was verbal.
 - **Claim released already** → someone (or something) other than this skill let it go.
   That is a finding — B3 below is supposed to be the only unconditional release — chase
   it before merging over a claim that may no longer mean what it used to.
-- **Gate result** has no independent artifact to re-derive from outside the report itself
-  on most repos — trust the report here, but if anything else on this list is off, treat
-  the gate claim as unverified too and re-run it (`code-wrap` A3) before proceeding.
+- **Gate result, `gate: authoritative: ci` repos (#410)** — trunk's `project.yml` declares
+  `gate:` with `authoritative: ci` and a workflow fires on a session-branch push
+  (`tools/lib/gate.js` `gateMode` → `ci`). Then the hand-off names a **branch-CI run id**,
+  not a local gate claim, and this is the whole check: `gh run view <id> --json
+  headSha,conclusion` — its `headSha` must equal the branch's current head, and B1a
+  re-derives the class from GitHub anyway. **Never run the suite locally here.** A run id
+  at another sha is stale: read the run at the current head (B1a's bounded wait). No run
+  id, or a `red:finding` class → send back. There is no hermetic verdict to look for: a
+  clean CI runner is that run by construction.
+- **Gate result, every other repo** (no `gate:`, `authoritative: local`, or no branch
+  trigger) has no independent artifact to re-derive from outside the report itself on
+  most repos — trust the report here, but if anything else on this list is off, treat the
+  gate claim as unverified too and **send it back** rather than re-running the
+  implementer's gate yourself (#409).
   **The gate claim must carry the hermetic verdict (#403)** — the word `colab
   gate-hermetic` printed: `green`, or `skipped` (trunk declares `live-env: none`), or
   `branch-ci <sha7>` (#408). A hand-off that says only "gate green", with no hermetic
@@ -109,10 +125,11 @@ git -C "$MAIN_REPO" status --porcelain -uall                 # trunk checkout st
   the hermetic verdict. Record `branch-ci <sha7>` and do not run the suite again. A
   `branch-ci` verdict naming a sha other than the current head is stale; read the branch
   run at the new head instead. Only when branch CI cannot arrive (no trigger for the
-  branch), is not `green`, or does not run the tests, re-run
-  `colab gate-hermetic -- <test command>` in the worktree before proceeding. On a repo
-  whose suite takes 6–10 minutes locally, that repeat was measured as the largest single
-  cost of a ship pass. **`live-env` is a red gate**: hand it back to the
+  branch), is not `green`, or does not run the tests is the hermetic verdict genuinely
+  missing — and then it is a **send-back**, not a coordinator re-run of
+  `colab gate-hermetic` (#409: the coordinator never runs the implementer's gate for it).
+  On a repo whose suite takes 6–10 minutes locally, that repeat was measured as the
+  largest single cost of a ship pass. **`live-env` is a red gate**: send it back to the
   implementer the same way as any other red. Never read it as an advisory, and never
   merge past it.
   **The branch-CI class A5 reports is the opposite case — it *does* re-derive, and B1a
@@ -134,11 +151,27 @@ git -C "$MAIN_REPO" status --porcelain -uall                 # trunk checkout st
   on, not a reason to bypass it.
 
 A contract that fails to verify is not a reason to skip the merge — it is a reason to
-fix the gap before continuing, or to hand back to an implementer session rather than
-papering over it here. **"Fix the gap" is mechanical only, and it is exactly the three
-above**: re-push a wrapped head, re-comment a missing distill, re-claim a released
-claim. Anything that needs a line of source changed is a hand-back, never a fix from
-here — see the push bullet above for why that boundary is written twice.
+fix the gap before continuing, or to **send it back** to the implementer rather than
+papering over it here. **"Fix the gap" is mechanical only, and it is exactly two
+things**: re-push a wrapped head, re-claim a released claim. Everything else — a missing
+distill, an unwrapped or uncommitted change, a missing or red gate verdict, anything that
+needs a line of source changed — is a send-back, never a fix from here (#409; see the push
+bullet above for why that boundary is written twice).
+
+**A send-back is one Issue comment, and it is how this skill hands work back** —
+`CONVENTIONS.md`
+[§4, *Who may touch a branch*](../../CONVENTIONS.md#who-may-touch-a-branch--the-coordinator-never-edits-implementer-work-409):
+
+```sh
+gh issue comment $N --body "↩️ Sent back — <the gap, e.g. uncommitted work in <worktree>;
+no gate verdict at <sha7>>. To the implementer of <branch>: commit the deliverable paths,
+run \`code-wrap\`, stop."
+```
+
+The `↩️ Sent back` prefix is load-bearing: colab reads it as bookkeeping (`shipguard`
+`TOOL_MARKS`), so it is never mistaken for evidence or for a hand-off comment. Post it
+once per head — if one already stands and the branch head has not moved since, do not
+repeat it. Report the candidate as sent back and stop working on it; never wrap it here.
 
 ## What counts as "a human said go"
 
@@ -372,7 +405,11 @@ contact with the branch's originating session.** `git fetch` and `git merge` nee
 nothing from that session: not a running process, not a reachable prompt, not an empty
 composer. Being unable to deliver a message into it changes nothing about this step —
 see *What a defer is for*, above, before treating anything about that session's state as
-a reason to stop here.
+a reason to stop here. It is also the first of the three owner-ruled mechanics the
+coordinator keeps under #409's "never codes" rule (`CONVENTIONS.md`
+[§4, *Who may touch a branch*](../../CONVENTIONS.md#who-may-touch-a-branch--the-coordinator-never-edits-implementer-work-409)):
+sync, regenerate a generated file, resolve a purely mechanical conflict. Nothing else in
+this section writes to the branch.
 
 **Now sync.** Merge conflicts here are almost always **generated files** (codegen
 locks, duplicate-timestamp migrations, generated route/type files) — they happen when
@@ -398,9 +435,19 @@ self-consistent. Only the diff against `<base>` tells the two apart:
 git diff --name-only --diff-filter=U        # unmerged paths right now
 ```
 
-- **Non-empty** → real conflicts. Resolve them (generated files: regen below;
-  anything else: read the region, see the incident in this file's history),
-  `git add` the resolved paths, then commit explicitly — never `add -A` blind,
+- **Non-empty** → real conflicts. Sort each conflicted path into exactly one of three
+  (#409), reading the region, never resolving mechanically by side:
+  - **Generated file** (`generated:` globs, built-in lockfiles) → take one side, then the
+    regen below overwrites it.
+  - **Purely mechanical** → the resolution keeps both sides' hunks unchanged, adds no
+    line of its own and picks no winner (two appends to one list, two adjacent edits that
+    do not touch each other's lines). Resolve it.
+  - **Anything that needs judgement** — a line both sides changed, a rule one side reversed
+    that the other still carries as context (see the incident in this file's history) →
+    `git merge --abort`, **send it back** to the branch's author (§0, *send-back*), and
+    defer the candidate. Never pick a winner from here.
+
+  Then `git add` the resolved paths and commit explicitly — never `add -A` blind,
   it will also stage unrelated working-tree cruft into the merge commit.
 - **Empty, and `git merge` reported failure** → the merge never ran. **Do not
   commit.** Fix the transient cause (retry after the index lock clears, `git
@@ -452,10 +499,14 @@ guard: stop, do not proceed to the gate or the ship, and re-derive the merge
 from a fresh `git merge --abort` + retry rather than trying to patch the bad
 commit.
 
-Re-run the gate (`code-wrap` A3, the hermetic second run included — its verdict must be
-`green` or `skipped`, never `live-env`, #403) — a fresh-migrate test must pass, proving both branches'
-migrations run clean together. **Where branch CI exists, prefer push-then-read over a local
-repeat for the hermetic half (#408):** the sync moved the head, so the old `branch-ci`
+**Gate the sync commit — the one gate the coordinator runs, because it is the one commit it
+made (#409).** On a `gate: authoritative: ci` repo (#410): push the sync commit and let B1a's
+bounded wait read the branch run at the new head — that run **is** the verdict; run nothing
+locally. Everywhere else, re-run the gate (`code-wrap` A3, the hermetic second run included —
+its verdict must be `green` or `skipped`, never `live-env`, #403) — a fresh-migrate test must
+pass, proving both branches' migrations run clean together. Either way, a `red:finding` at the
+post-sync head is a **send-back**, never a fix from here. **Where branch CI exists, prefer
+push-then-read over a local repeat for the hermetic half (#408):** the sync moved the head, so the old `branch-ci`
 verdict is stale, but pushing the sync commit starts a new branch run at the new head. B1a's
 bounded wait then reads it, and a `green` class there, meeting `code-wrap` A3's three
 conditions, is the hermetic verdict (`branch-ci <new sha7>`). Run `colab gate-hermetic`
@@ -611,7 +662,7 @@ step is in this skill:
 | `green` | proceed to B1b |
 | `none` | **Depends which `none` — check before you wait.** A run *queued or in flight* (including a slow sibling behind a green fast one, #307): wait, **bounded — 15 minutes for this candidate, then defer it** (below, *The wait is bounded*, #370). A run that **cannot arrive for this ref** — no workflows, or workflows triggering only on `pull_request` / `push` to trunk — is not pending: proceed, exactly as the no-runs line above already allows for `<base>` — and **B2a then reads the trunk run at your squash before any evidence is posted**, because that run is this change's first. A5 reports which; re-read the triggers if it did not. **At a red `<base>`, "proceed" reaches B1's stop** — only the branch carrying the fix may open a PR to get a run (*Red trunk*, above); a bystander waits |
 | `red:infra` | **re-run it once** (`gh run rerun <databaseId> --failed`), then re-read. Identical failure twice ⇒ it is the runner, not the branch: hand it to the **ops lane** and stop. Do not merge, and do not send it back to the implementer — there is nothing in the diff for them to fix |
-| `red:finding` | **hand back to an implementer session, as a class** — the branch's own suite found something. Never a merge, never a re-run |
+| `red:finding` | **send back to the implementer, as a class** (§0, *send-back*, #409) — the branch's own suite found something. Never a merge, never a re-run, never a fix from here |
 
 **How this lands against *What a defer is for* (#257) — it does not loosen it.** A twice-
 identical `red:infra` is precisely that section's first legitimate case: *a red or dead

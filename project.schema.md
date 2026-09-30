@@ -849,6 +849,9 @@ decides this now); how thorough it must be is derived from `exposure`. A `ci:` f
 let either drift from what already answers it, the identical failure every other axis on
 this page exists to prevent.
 
+[`gate`](#gate--optional) is not that field: it declares the fast **local** command and which
+verdict the skills read (#410), never what CI is or how thorough it must be.
+
 A repo needing something its copied workflow doesn't cover edits that file directly.
 Copy-and-own already permits this, and the audit already classifies the edit as drift to
 reconcile, not a violation — the same treatment [`templates/`](templates/) gives every
@@ -1146,6 +1149,39 @@ this key existed.
 - The one reading is `tools/lib/hermetic.js` `parseLiveEnv`; the audit reports the value
   (`--json`: `liveEnv`).
 
+### `gate` — optional
+
+```yaml
+gate:
+  smoke: npm run smoke     # the fast local check code-wrap A3 runs once (lint, types, changed tests)
+  authoritative: ci        # ci | local — absent = local
+```
+
+Where the gate's **verdict** comes from (#410). With `authoritative: ci`, `code-wrap` A3 runs
+`smoke` once — no hermetic second pass — and pushes; the verdict is the branch-CI run at the
+pushed head sha, which the hand-off names by run id and `code-ship` reads instead of re-running
+tests locally. A clean CI runner is the hermetic run by construction. **Absent, or
+`authoritative: local`, means today's gate exactly**: the local full gate plus
+`colab gate-hermetic` (`live-env` above).
+
+Why: on shared agent workstations full local suites took 6–10 min and flaked on timeouts, while
+the same suites took 2–7 min in branch CI on clean runners, and the hermetic rule doubled every
+local run (sources: `CONVENTIONS.md`
+[§4, *Branch CI*](CONVENTIONS.md#branch-ci--the-candidates-own-run-read-as-a-class-314)).
+
+- **`ci` needs branch CI that can arrive.** It takes effect only where a workflow fires on a push
+  to a session branch (`tools/lib/gate.js` `gateMode`); a repo whose CI runs on PRs and trunk
+  pushes alone stays on the local gate however it is declared, and the audit warns. #408's other
+  two conditions still apply, and the skill checks them: the workflow runs the tests, on a runner
+  that does not share a developer's machine.
+- **A block, not an inline map.** `gate: { smoke: … }` is not parsed by this descriptor's readers
+  and is a finding. `smoke` is required; `authoritative` is `ci` or `local`; any other key is a
+  finding. A `#` in the command starts a comment — wrap the command in a script if it needs one.
+  Every defect is read as absent (local full gate) while the audit fails it.
+- **Only trunk's value counts**, as with `live-env` — a branch cannot move its own verdict to CI.
+- The one reading is `tools/lib/gate.js` `parseGate`; the audit reports the value (`--json`:
+  `gate`).
+
 ### `node`, `php`, `python` — optional toolchain pins
 
 ```yaml
@@ -1312,6 +1348,7 @@ the shape that shows it. One writer at a time says nothing about who reads the r
 | `migration-grant` ∈ {`human`, `reviewer`} when set → **finding** otherwise | a misspelled policy silently read as `human` |
 | `trust-humans` a non-empty list of GitHub logins when set → **finding** otherwise | a malformed list read as "nobody is human", so every human grant and ruling silently stops counting |
 | `live-env` = `none` when set → **finding** otherwise | a misspelled opt-out read as absent, so it silently does nothing |
+| `gate` a block with `smoke` + `authoritative` ∈ {`ci`,`local`} when set → **finding** otherwise; `ci` with no branch-push trigger → **warn** | a malformed block is read as absent, so it silently does nothing; a `ci` verdict that can never arrive leaves every reader on the local gate |
 | `holds` is a list of non-empty strings, each listed once, when set → **finding** otherwise | a scalar or malformed list silently read as "no holds declared", so triage reports held work ready |
 | `exposure` ∈ {`none`, `self`, `live`, `released`} when set | a misspelled value silently read as undeclared |
 | `exposure: none` + `production: null` → **advisory** | the both-empty claim ("nothing consumes this, and there is nothing to point at") going unflagged |

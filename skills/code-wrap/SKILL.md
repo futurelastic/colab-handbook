@@ -468,6 +468,30 @@ machine-local, not a guarantee every adopter's `.gitignore` repeats it.
 
 ### A3. Run the repo's own quality gate
 
+**First, which gate is the verdict here — local, or branch CI (#410)?** Read `gate:` from
+**trunk's** `project.yml` (only trunk's value counts, as with `live-env`), then whether any
+workflow fires on a push to this branch:
+
+```sh
+git show origin/<trunk>:.github/project.yml | sed -n '/^gate:/,/^[^ ]/p'
+sed -n '/^on:/,/^jobs:/p' .github/workflows/*.yml     # a push: trigger covering this branch?
+```
+
+- **`ci` mode** — `gate:` declares `authoritative: ci` **and** a workflow fires on this
+  branch's push (`tools/lib/gate.js` `gateMode`), **and** that workflow runs the tests on a
+  runner that does not share a developer's machine (#408's conditions 2 and 3 below). Then
+  A3 is **one run of `gate.smoke`**, teed to a file (target ≤ 3 min: lint, types, the tests
+  for what you changed), with **no** `colab gate-hermetic` pass — a clean CI runner is the
+  hermetic run by construction. Smoke red → fix it. Smoke green → A4, and the **verdict**
+  comes from A5's branch-CI read, which in this mode you wait for. Skip the rest of A3's
+  full-gate text below.
+- **`local` mode** — everything else: no `gate:`, `authoritative: local`, or no branch
+  trigger (this handbook's own repo is that shape). The rest of A3 applies unchanged: the
+  full gate, plus the hermetic second run.
+
+Either way, **while iterating, run the tests for what you changed, not the full suite**
+(`code-start`, *While you work*). The full suite runs once, where the verdict comes from.
+
 Run whatever this repo's CI runs — resolve it from the repo, don't assume:
 
 ```sh
@@ -742,9 +766,16 @@ The four classes, their quantifiers and each one's next step are defined in
 
   Collapsing these into a bare `none` is what turns a bounded wait into a wait for a run
   that was never coming.
-- Do not block the wrap waiting for a run to finish. Report `none`, say the run was in
-  flight, and let `code-ship` do the bounded wait — it is the step that actually needs
-  the answer.
+- **`local` mode:** do not block the wrap waiting for a run to finish. Report `none`,
+  say the run was in flight, and let `code-ship` do the bounded wait — it is the step that
+  actually needs the answer.
+- **`ci` mode (#410): this read IS the gate, so wait for it — bounded, 15 minutes, the same
+  bound as `code-ship` B1a.** `green` → the gate is green; record
+  `branch-ci <sha7> run <databaseId>`. `red:finding` → the gate is red: fix, commit, re-push,
+  re-read (a new head needs a new run). `red:infra`, or still in flight at the cap → hand off
+  with the run id and the class; `code-ship` B1a re-runs an infra red once and does the rest
+  of the wait. Never fall back to running the full suite locally to "save" the wait — that
+  is the double run #410 removed.
 
 ## Hand off — assert the contract, then stop
 
@@ -762,6 +793,9 @@ never by trusting this session's word for it:
       sha — `green` · `none` · `red:infra` · `red:finding`, naming the sha (A5). A red
       class does not fail this box; an unrecorded one does
 - [ ] distill comment posted on each carried issue (A1)
+- [ ] **`ci` mode (#410):** smoke green (A3) **and** the branch-CI run id + class at the
+      pushed head (`branch-ci <sha7> run <databaseId>`, A5) — `code-ship` reads that run
+      and never re-runs tests locally. **`local` mode:** as below
 - [ ] gate result recorded — green, or red-for-an-unrelated-reason reported (A3) — and
       the hermetic verdict word from `colab gate-hermetic` (`green` · `skipped` · `red` ·
       `live-env`) recorded beside it, or `branch-ci <sha7>` when a green branch-CI run at
