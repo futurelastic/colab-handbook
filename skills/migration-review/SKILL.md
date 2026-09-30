@@ -6,7 +6,7 @@ description: "Review the database migrations a branch carries, as the repo's mig
 # migration-review — read the migration, reach one verdict, leave evidence
 
 The repo's `colab ship` refuses a branch that adds a migration unless a grant opens that door
-([CONVENTIONS.md §5, *Migration exemption*](../../CONVENTIONS.md#migration-exemption--a-narrow-human-created-door-through-no-new-migrations-98)).
+([CONVENTIONS.md §5, *Migration exemption*](../../CONVENTIONS.md#migration-exemption--a-narrow-door-through-no-new-migrations-opened-by-a-role-98-402)).
 A grant from a human says *someone looked*. A grant from the `migration-reviewer` role has to
 say *what was looked at* — the review record — and it covers only the commit that was
 reviewed. This skill is the looking.
@@ -165,7 +165,7 @@ pattern fits ([rework-brief.md §3](rework-brief.md#3-the-fix-pattern-catalogue)
 ### GRANT — a review record and the command that records it
 
 The record is the one `colab migration-grant` validates
-([CONVENTIONS.md §5](../../CONVENTIONS.md#migration-exemption--a-narrow-human-created-door-through-no-new-migrations-98),
+([CONVENTIONS.md §5](../../CONVENTIONS.md#migration-exemption--a-narrow-door-through-no-new-migrations-opened-by-a-role-98-402),
 `tools/lib/migration-grant.js` `REVIEW_RECORD_FIELDS`). Every value below is fixed for a
 GRANT except the reviewer id, the head and the optional CI run:
 
@@ -180,7 +180,7 @@ colab migration-grant <N> --branch <branch> \
 
 - **The command is human-gated today, for every grant role** — `colab migration-grant` refuses
   unless a human asserts attendance
-  ([CONVENTIONS.md §5](../../CONVENTIONS.md#migration-exemption--a-narrow-human-created-door-through-no-new-migrations-98)).
+  ([CONVENTIONS.md §5](../../CONVENTIONS.md#migration-exemption--a-narrow-door-through-no-new-migrations-opened-by-a-role-98-402)).
   The reviewer never makes that assertion itself: it posts the review (below) and hands the
   command to whoever may run it. The review is the reviewer's; the recording is the tool's rule.
 - **Post the review as an issue comment too** — the rung, one line per migration, and the

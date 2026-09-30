@@ -656,6 +656,20 @@ function ghIssueLabelEvents(repo, issueNum, label) {
 }
 
 /**
+ * #407: the actor login of every `labeled` event for `label` on one issue, oldest-first — or null
+ * when the read failed ("could not read", never "nobody applied it"). tools/lib/trust-humans.js
+ * labelApplierIsHuman reads the LAST one. Only called when a repo declares trust-humans.
+ */
+function ghIssueLabelActors(repo, issueNum, label) {
+  const r = ghApi(repo, [
+    '--paginate', `repos/{owner}/{repo}/issues/${issueNum}/events`,
+    '--jq', `.[] | select(.event == "labeled" and .label.name == ${JSON.stringify(label)}) | .actor.login`,
+  ]);
+  if (!r.ok) return null;
+  return String(r.stdout || '').split('\n').map((l) => l.trim()).filter(Boolean);
+}
+
+/**
  * The label names defined on a repo's tracker (`gh label list`), or null on any failure (gh
  * missing, no remote, network). Null means "could not read" — never "empty set", the same
  * contract as ghIssueView: a caller must not read absence as proof a label is missing.
@@ -1006,6 +1020,6 @@ module.exports = {
   ghCurrentLogin, ghIssueView, ghIssueComment, ghRunForSha, ghRunForCommit, ghRunsForCommit, ghRunsForRef, ghRunsAtCommit, ghRunsSince, summarizeRunsForCommit,
   ghRunJobCount, ghRunJobs,
   ghIssueListByLabel, ghLabelDelete, ghLabelCreate, ghListLabelsDetailed, ghLabelEditDescription,
-  ghApi, isGraphqlRateLimit, ghIssueRelease, ghClaimHolder, ghIssueLabelEvents,
+  ghApi, isGraphqlRateLimit, ghIssueRelease, ghClaimHolder, ghIssueLabelEvents, ghIssueLabelActors,
   ghPrForBranch, ghPrCreate, ghPrClose, ghRepoVisibility,
 };

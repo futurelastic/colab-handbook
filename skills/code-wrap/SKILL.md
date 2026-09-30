@@ -587,8 +587,12 @@ installed → skip this call; A3's own verdict (above) is still what governs A4/
 `colab ship` refuses, unconditionally, any branch touching `database/migrations/`,
 `prisma/migrations/`, or a prefix `project.yml` declares under `migrations:` (#383)
 unless every claimed issue already carries a live
-`migration-granted` exemption (`CONVENTIONS.md` [§5](../../CONVENTIONS.md#migration-exemption--a-narrow-human-created-door-through-no-new-migrations-98),
-*Migration exemption*) — human-only, so creating that grant is never yours to do here.
+`migration-granted` exemption of a role the repo accepts (`CONVENTIONS.md` [§5](../../CONVENTIONS.md#migration-exemption--a-narrow-door-through-no-new-migrations-opened-by-a-role-98-402),
+*Migration exemption*): a human grant on any repo, or — only where `project.yml` declares
+`migration-grant: reviewer` — a reviewer grant bound to this branch's exact HEAD. Either
+role is minted by a human (`COLAB_HUMAN=1`), so creating a grant is never yours to do
+here, and neither is running the review in this session: it is the bound reviewer's job
+([`migration-review`](../migration-review/SKILL.md)), against the HEAD you push.
 What **is** yours: making sure the *request* gets filed, so the human with the
 authority to grant it is actually asked — instead of a session finishing, wrapping,
 reporting success, and going idle, with the un-shippable branch discovered only when a
@@ -614,7 +618,10 @@ git diff --name-only <base>...HEAD | grep -E '^backend/migrations/'
   - **Confirmed present** → done. State it in the wrap report — which issue(s) got the
     label — and note that a human still has to run
     `colab migration-grant <issue> --branch <branch>` (human-gated — no agent may set the
-    env assertion that authorizes it) before `code-ship` can merge this branch.
+    env assertion that authorizes it) before `code-ship` can merge this branch. On a repo
+    declaring `migration-grant: reviewer`, say that a reviewer grant is the other route:
+    it needs a review of the HEAD you just pushed, so **any later commit voids it** — push
+    everything before asking for the review, not after.
   - **Still absent after the add** → this repo adopted the conventions before
     `needs-migration-grant` entered the set (#230) and never back-filled it, so the ADD
     landed on a label that does not exist — the same doubly-silent failure
@@ -631,7 +638,8 @@ git diff --name-only <base>...HEAD | grep -E '^backend/migrations/'
 This is mechanical, not a judgement call — a file-path diff, and a label *application*
 gated on nothing but ordinary `gh` access, no `COLAB_HUMAN`, no schema review. It never
 defines the label and never substitutes for the grant; only a human minting
-`migration-granted` still authorizes anything.
+`migration-granted` — as a human grant, or as a reviewer grant where the repo's policy
+accepts one — still authorizes anything.
 
 ### A4. Commit only the deliverable paths
 

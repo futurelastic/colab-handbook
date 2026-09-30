@@ -31,8 +31,10 @@
  * WHO IS ALLOWED TO WRITE THE COMMENT is a DIFFERENT question from who is allowed to APPLY the
  * label, and this module answers only the second by requiring TRUSTED_ASSOCIATIONS on read —
  * closing the "drive-by comment on a public repo" hole the label already narrows but does not, by
- * itself, close (a repo collaborator could still be a machine account; that is a policy question
- * for the repo, not this module). The human-only property on the WRITE path (nobody but a person
+ * itself, close. A repo collaborator can still be a machine account — an agent under its own login
+ * reports `MEMBER` exactly like the operator — and the repo states that policy with `trust-humans`
+ * in project.yml (#407, tools/lib/trust-humans.js): when set, only a listed login's grant is human,
+ * and the label's latest applier must be listed too. The human-only property on the WRITE path (nobody but a person
  * may run `colab migration-grant`) is enforced in tools/colab via COLAB_HUMAN=1 — the identical
  * bar `cmdPromote` already holds a production promotion to. This module has no opinion on how the
  * comment got posted; it only judges whether what's on the tracker, right now, is a live grant
@@ -118,7 +120,7 @@ function liveGrants(comments) {
  *  This closes a DIFFERENT hole than COLAB_HUMAN (tools/colab): that gates WHO MAY WRITE the
  *  comment (a human, via the CLI); this gates WHOSE COMMENT ship WILL HONOR ON READ — closing the
  *  gap a public repo has by default, where anyone can post a perfectly-formed comment by hand. */
-const TRUSTED_ASSOCIATIONS = new Set(['OWNER', 'MEMBER', 'COLLABORATOR']);
+const { TRUSTED_ASSOCIATIONS, authorIsHuman, labelApplierIsHuman } = require('./trust-humans.js');
 
 /**
  * One issue's verdict for a branch about to ship. `record` is exactly what
@@ -133,8 +135,14 @@ const TRUSTED_ASSOCIATIONS = new Set(['OWNER', 'MEMBER', 'COLLABORATOR']);
  * Order of checks is deliberate: cheapest/most-fundamental failures first, and each has a distinct,
  * actionable reason string — an operator or a scheduled driver's park-and-say-once log reads this
  * directly, so vague reasons cost a person re-deriving what to do.
+ *
+ * `opts` (#407) — OPTIONAL `{ trust, labelActors }`. `trust` is trust-humans.js parseTrustHumans()
+ * of the TARGET's project.yml; absent/undeclared keeps the association check byte-identical. When
+ * declared, the grant's author must be a listed login, and `labelActors(issue)` — the logins of
+ * every `labeled` event for the label, or null on a failed read — must end in a listed login too.
  */
-function evaluateIssue(record, branch, issueNum, labelName) {
+function evaluateIssue(record, branch, issueNum, labelName, opts) {
+  const trust = opts && opts.trust;
   const issue = issueNum;
   if (!record) {
     return { issue, ok: false, grant: null,
@@ -159,9 +167,19 @@ function evaluateIssue(record, branch, issueNum, labelName) {
     return { issue, ok: false, grant: g,
       reason: `#${issue}'s grant is bound to branch "${g.branch}", not "${branch}"` };
   }
-  if (!TRUSTED_ASSOCIATIONS.has(g.authorAssociation)) {
+  const who = authorIsHuman(g, trust);
+  if (!who.ok) {
     return { issue, ok: false, grant: g,
-      reason: `#${issue}'s grant was posted by ${g.login || '(unknown)'} (${g.authorAssociation || 'unknown association'}) — not a repo owner/member/collaborator` };
+      reason: trust && trust.declared
+        ? `#${issue}'s grant is not a human's: ${who.reason}`
+        : `#${issue}'s grant was posted by ${who.reason}` };
+  }
+  if (trust && trust.declared) {
+    // #407 Wanted 2 — read only here: key declared, and every cheaper check already passed.
+    let actors = null;
+    try { actors = opts && typeof opts.labelActors === 'function' ? opts.labelActors(issue) : null; } catch (_) { actors = null; }
+    const lab = labelApplierIsHuman(actors, trust, labelName);
+    if (!lab.ok) return { issue, ok: false, grant: g, reason: `#${issue}: ${lab.reason}` };
   }
   return { issue, ok: true, grant: g, reason: '' };
 }
@@ -190,6 +208,8 @@ function evaluateIssue(record, branch, issueNum, labelName) {
  * R is a THUNK, called at most once per set and only once some issue has cleared P, M and HEAD —
  * so a no-migration, human-granted or already-failing ship pays for no CI read. A thunk returning
  * anything but `{ ok: true }` (including `null`, a failed read) fails R closed.
+ * `ctx.trust` / `ctx.labelActors` (#407) are evaluateIssue's opts — they decide only what a HUMAN
+ * grant is; a reviewer grant is judged by P · M · HEAD · R alone, never by the human list.
  * Every `missing` entry then names the condition that failed in `failed`
  * (`issue` | `human` | `policy` | `marker` | `head` | `roundtrip`), and its reason says so.
  */
@@ -206,7 +226,7 @@ function evaluateShipSet(issues, records, branch, labelName, ctx) {
   const pending = []; // cleared P+M+HEAD, awaiting R
   for (const n of list) {
     const rec = records ? records[n] : null;
-    const h = evaluateIssue(rec, branch, n, labelName);
+    const h = evaluateIssue(rec, branch, n, labelName, { trust: ctx.trust, labelActors: ctx.labelActors });
     if (h.ok) {
       granted.push({ issue: n, role: 'human', branch: h.grant.branch, by: h.grant.login, at: h.grant.at });
       continue;

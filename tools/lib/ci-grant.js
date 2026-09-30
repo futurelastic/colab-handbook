@@ -139,7 +139,7 @@ function liveGrants(comments) {
 
 /** Association values this module treats as trustworthy enough to write a permission a scheduled
  *  driver will rely on — identical set and identical reasoning to migration-grant.js's. */
-const TRUSTED_ASSOCIATIONS = new Set(['OWNER', 'MEMBER', 'COLLABORATOR']);
+const { TRUSTED_ASSOCIATIONS, authorIsHuman, labelApplierIsHuman } = require('./trust-humans.js');
 
 /**
  * One issue's verdict for a branch about to ship, against the trunk sha it is CURRENTLY red at
@@ -160,8 +160,13 @@ const TRUSTED_ASSOCIATIONS = new Set(['OWNER', 'MEMBER', 'COLLABORATOR']);
  * dependency beyond its own two regexes — identical reasoning to migration-grant.js.
  *
  * Order of checks: cheapest/most-fundamental first, each with a distinct actionable reason string.
+ *
+ * `opts` (#407) — OPTIONAL `{ trust, labelActors }`, the same contract as migration-grant.js's
+ * evaluateIssue: absent/undeclared trust keeps the association check byte-identical; declared, the
+ * grant author and the label's latest applier must both be listed in trust-humans.
  */
-function evaluateIssue(record, branch, trunk, redTrunkSha, evidence, issueNum, labelName) {
+function evaluateIssue(record, branch, trunk, redTrunkSha, evidence, issueNum, labelName, opts) {
+  const trust = opts && opts.trust;
   const issue = issueNum;
   if (!record) {
     return { issue, ok: false, grant: null,
@@ -186,9 +191,12 @@ function evaluateIssue(record, branch, trunk, redTrunkSha, evidence, issueNum, l
     return { issue, ok: false, grant: g,
       reason: `#${issue}'s grant is bound to branch "${g.branch}", not "${branch}"` };
   }
-  if (!TRUSTED_ASSOCIATIONS.has(g.authorAssociation)) {
+  const who = authorIsHuman(g, trust);
+  if (!who.ok) {
     return { issue, ok: false, grant: g,
-      reason: `#${issue}'s grant was posted by ${g.login || '(unknown)'} (${g.authorAssociation || 'unknown association'}) — not a repo owner/member/collaborator` };
+      reason: trust && trust.declared
+        ? `#${issue}'s grant is not a human's: ${who.reason}`
+        : `#${issue}'s grant was posted by ${who.reason}` };
   }
   if (g.trunk !== trunk || g.redSha !== redTrunkSha) {
     return { issue, ok: false, grant: g,
@@ -206,6 +214,13 @@ function evaluateIssue(record, branch, trunk, redTrunkSha, evidence, issueNum, l
     return { issue, ok: false, grant: g,
       reason: `#${issue}'s grant was reviewed against evidence run \`${g.evidenceSha}\`, but \`${branch}\`'s head is now \`${evidence.sha}\` — the branch moved since the human reviewed it` };
   }
+  if (trust && trust.declared) {
+    // #407 Wanted 2 — the label applier, read last: only once the grant would otherwise pass.
+    let actors = null;
+    try { actors = opts && typeof opts.labelActors === 'function' ? opts.labelActors(issue) : null; } catch (_) { actors = null; }
+    const lab = labelApplierIsHuman(actors, trust, labelName);
+    if (!lab.ok) return { issue, ok: false, grant: g, reason: `#${issue}: ${lab.reason}` };
+  }
   return { issue, ok: true, grant: g, reason: '' };
 }
 
@@ -220,7 +235,7 @@ function evaluateIssue(record, branch, trunk, redTrunkSha, evidence, issueNum, l
  * `records` maps issue number → the `ghIssueView` result for that issue, or `null` on a failed
  * read (the caller's job, not this function's).
  */
-function evaluateShipSet(issues, records, branch, trunk, redTrunkSha, evidence, labelName) {
+function evaluateShipSet(issues, records, branch, trunk, redTrunkSha, evidence, labelName, opts) {
   const list = Array.isArray(issues) ? issues : [];
   if (list.length === 0) {
     return { ok: false, granted: [],
@@ -229,7 +244,7 @@ function evaluateShipSet(issues, records, branch, trunk, redTrunkSha, evidence, 
   const granted = [];
   const missing = [];
   for (const n of list) {
-    const v = evaluateIssue(records ? records[n] : null, branch, trunk, redTrunkSha, evidence, n, labelName);
+    const v = evaluateIssue(records ? records[n] : null, branch, trunk, redTrunkSha, evidence, n, labelName, opts);
     if (v.ok) granted.push({ issue: n, branch: v.grant.branch, by: v.grant.login, at: v.grant.at, redSha: v.grant.redSha, evidenceSha: v.grant.evidenceSha });
     else missing.push({ issue: n, reason: v.reason });
   }

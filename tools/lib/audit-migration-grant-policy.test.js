@@ -48,6 +48,7 @@ function audit(dir) {
   const r = JSON.parse(stdout).results[0];
   return {
     migrationGrant: r.migrationGrant,
+    trustHumans: r.trustHumans,
     fails: r.findings.filter((f) => f.level === 'fail').map((f) => f.text),
     warns: r.findings.filter((f) => f.level === 'warn').map((f) => f.text),
   };
@@ -86,4 +87,28 @@ test('the list-shaped migrations: key beside it is unaffected', () => {
   const r = audit(fixture(`${BASE}migrations: [backend/migrations/]\nmigration-grant: human\n`));
   assert.strictEqual(r.migrationGrant, 'human');
   assert.deepStrictEqual([...r.fails, ...r.warns].filter((t) => /^migrations/.test(t)), []);
+});
+
+// --- #407: the `trust-humans` list, read through tools/lib/trust-humans.js ------------------
+
+const trustMentions = (r) => [...r.fails, ...r.warns].filter((t) => /trust-humans/.test(t));
+
+test('trust-humans absent → reported as null, no finding', () => {
+  const r = audit(fixture(BASE));
+  assert.strictEqual(r.trustHumans, null);
+  assert.deepStrictEqual(trustMentions(r), []);
+});
+
+test('trust-humans: a valid list → reported lowercased, no finding', () => {
+  const r = audit(fixture(`${BASE}trust-humans:\n  - Operator-A\n  - second-human\n`));
+  assert.deepStrictEqual(r.trustHumans, ['operator-a', 'second-human']);
+  assert.deepStrictEqual(trustMentions(r), []);
+});
+
+test('trust-humans: every malformed shape fails — the reader treats nobody as human', () => {
+  for (const v of ['trust-humans: operator-a', 'trust-humans: []', 'trust-humans: [not a login]', 'trust-humans: [ok, -bad]']) {
+    const r = audit(fixture(`${BASE}${v}\n`));
+    assert.strictEqual(r.trustHumans, null, v);
+    assert.ok(r.fails.some((t) => /^trust-humans .*nobody is human/.test(t)), `${v}: ${r.fails.join(' | ')}`);
+  }
 });
