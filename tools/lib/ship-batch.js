@@ -117,7 +117,9 @@ function memberEligibility(report, ciClass, { trunk, touchesWorkflows = false } 
   if (!report.autonomyGate || report.autonomyGate.via !== 'auto-trunk') {
     return no('it lands through the docs-only door (#345), which is judged per branch');
   }
-  if (report.migrationGrant) return no('it carries migrations — a per-member human door');
+  // Any migration refuses, granted or not, whichever role granted it (#401) — the grant is a
+  // per-member door judged against ONE head, never a batch.
+  if (report.migrationGrant) return no('it carries migrations (granted or not) — a per-member door, never a batch');
   if (report.ciGrant || report.ciCure) return no('trunk CI passes for it only through a grant/cure door — per member, never a batch');
   if (report.coreReview && (report.coreReview.verdict === 'pending' || report.coreReview.verdict === 'approved')) {
     return no('it touches a core path under review (#350)');

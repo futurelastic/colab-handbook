@@ -2812,10 +2812,29 @@ hold it together:
   comment. The label's write permission and the trusted-author check are still the only
   anti-forgery properties, so a gate must re-verify CI for the recorded HEAD itself.
 
-**`colab ship` does not honour a reviewer grant yet.** Its gate reads human grants only,
-and the reviewer marker is built so that reader can never match it. The format and the
-policy are defined ahead of their consumer. Until that consumer lands, a reviewer grant
-is recorded, listed and inert.
+**`colab ship` honours a reviewer grant only when four conditions hold together (#401).**
+Per issue, a live human grant is checked first and passes unchanged; it wins wherever
+both roles exist. Otherwise a reviewer grant passes only when all four hold:
+
+- **P, policy.** `migration-grant: reviewer` in `project.yml` at the tip of the branch
+  being merged into. The branch's own copy never counts.
+- **M, record.** A live reviewer marker from a trusted author, bound to this branch,
+  with a valid review record that passes.
+- **HEAD.** The record's head is exactly the branch's head on the remote, and the local
+  branch agrees with it.
+- **R, round-trip.** The live CI round-trip passed on that HEAD. Ship re-reads CI itself
+  and never trusts the recorded `ci-roundtrip:` value. The job is found by the name
+  prefix `Migration round-trip` (the legs of `templates/ci-laravel.yml`). Every leg
+  needs a run that completed with success and ran at least one step. A repo without that
+  job cannot pass R, and a branch that edits `.github/workflows/` cannot pass it either,
+  because a branch must not rewrite the job that grades it. Those branches ship on a
+  human grant.
+
+If any condition fails, the gate behaves exactly as it does without a reviewer grant: a
+human runs Phase B. The refusal says which condition failed (`reviewer grant [HEAD]: …`).
+One function makes this decision for every ship path — `--dry`, `--dry --json`, a real
+ship and the auto-trunk path — so no path can accept a grant another refuses. `--batch`
+still refuses every member that carries a migration, granted or not.
 
 **`needs-migration-grant` is this gate's plan-time half, not a second gate (#230).**
 It is provisioned in `CONVENTION_LABELS` alongside `migration-granted` for the same

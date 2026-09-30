@@ -2933,8 +2933,10 @@ It is minted only when ALL of these hold, checked before any network call:
   - the branch is pushed, and --head (if given) equals origin's tip — the grant binds that tip;
   - this checkout's project.yml declares \`migration-grant: reviewer\` (#398; absent = human).
 COLAB_HUMAN=1 is still required for every role. The reviewer identity is DECLARED, not attested.
-\`colab ship\` does NOT honour reviewer grants yet: today its gate reads human grants only, so a
-reviewer grant is recorded, listed and inert.
+\`colab ship\` honours a reviewer grant only when ALL of (#401): P the target's project.yml says
+\`migration-grant: reviewer\` · M this record is live, trusted and passing · HEAD its head is the
+branch's exact remote head · R the live "${migrationGrant.ROUNDTRIP_JOB_PREFIX}" CI job passed on that
+HEAD (re-read by ship, never taken from the record). Any condition failing → a human runs Phase B.
 
 Options:
   --branch <branch>  required for --branch grants; a grant is never inferred from HEAD
@@ -3111,7 +3113,7 @@ function cmdMigrationGrantCreate(repoAbs, num, opts) {
   if (opts.reviewRecord) {
     print(`Recorded a ${migrationGrant.REVIEWER_ROLE} grant on #${num} in ${shortRepo(repoAbs)} — reviewer "${opts.reviewRecord.reviewer}", branch "${opts.branch}" @ ${opts.reviewRecord.head.slice(0, 12)}.`);
     print('  Bound to that HEAD: any new commit voids it. It expires the moment the issue closes.');
-    print('  colab ship does not honour reviewer grants yet — its gate still reads human grants only.');
+    print(`  colab ship honours it only while the "${migrationGrant.ROUNDTRIP_JOB_PREFIX}" CI job has passed on that HEAD and the policy still says reviewer.`);
     print(`  Revoke any time: colab migration-grant ${num} --revoke`);
     return 0;
   }
@@ -8217,42 +8219,97 @@ function newMigrations(mainRoot, trunk, branch) {
 }
 
 /**
- * Migration-grant verdict for a ship's whole claimed issue set (#98) — read from the tracker,
- * validated by tools/lib/migration-grant.js's evaluateShipSet. ONLY called when `newMigrations()`
- * already found at least one migration file: on the ordinary no-migration ship this costs zero
- * extra `gh` reads and the ✓ row stays byte-identical to before this feature existed.
+ * The `no new migrations` row, whole (#98, #401) — the ONE function every ship path calls:
+ * `ship --dry`, a real or auto-trunk `ship` (both cmdShip), and `ship --dry --json` (cmdShipDryJson,
+ * which batch reads its members through). No path recomputes any part of the rule, so no path can
+ * accept a grant another refuses. Returns { migrations, ok, text, payload }.
+ *
+ * On the ordinary no-migration ship it makes no `gh` call and the ✓ row stays byte-identical.
  *
  * Validates over `issues` — the branch's FULL claimed set, not `closeIssues` — deliberately: a
  * group branch carries several issues and a migration cannot be mechanically attributed to one of
  * them (#98 requirement 5), and `closeIssues` is *narrowed* by `--refs`, which would otherwise let
  * a caller-supplied flag shrink a safety gate — the one thing `ship` refuses everywhere else.
+ *
+ * The reviewer half (#401) reads three more things, all through tools/lib/migration-grant.js's
+ * evaluateShipSet ctx: the policy (P) from project.yml AT THE TARGET TIP — what the branch merges
+ * into, not a working file the branch could have edited; the HEAD — the branch's remote head (what
+ * CI ran), which must equal the local ref (what the squash takes), or no reviewer grant can bind;
+ * and R lazily — every job of every run at that HEAD, read only once some issue clears P+M+HEAD.
  */
-function shipMigrationGrants(repoAbs, gh, issues, branch) {
+function shipMigrationGate(repoAbs, gh, target, branch, issues) {
+  const migrations = newMigrations(repoAbs, target, branch);
+  if (migrations.length === 0) return { migrations, ok: true, ...migDetail(migrations, null, target, branch, null) };
+  let grants;
+  let ctx = null;
   if (!gh) {
-    return { ok: false, granted: [],
+    grants = { ok: false, granted: [],
       missing: [{ issue: null, reason: `gh not usable (${ghUnusableWhy(repoAbs)}) — a migration grant lives on the tracker and cannot be confirmed` }] };
+  } else {
+    const records = {};
+    for (const n of issues) records[n] = git.ghIssueView(repoAbs, n, ['state', 'labels', 'comments']);
+    ctx = shipMigrationCtx(repoAbs, gh, target, branch);
+    grants = migrationGrant.evaluateShipSet(issues, records, branch, labels.MIGRATION_GRANT_LABEL, ctx);
   }
-  const records = {};
-  for (const n of issues) records[n] = git.ghIssueView(repoAbs, n, ['state', 'labels', 'comments']);
-  return migrationGrant.evaluateShipSet(issues, records, branch, labels.MIGRATION_GRANT_LABEL);
+  return { migrations, ok: grants.ok, ...migDetail(migrations, grants, target, branch, ctx) };
+}
+
+/** P, HEAD and the R thunk for shipMigrationGate. The thunk memoises its one verdict on the ctx
+ *  (`roundtripResult`) so the payload can report what R saw without a second read. */
+function shipMigrationCtx(repoAbs, gh, target, branch) {
+  const policy = migrationGrant.parseGrantPolicy(projectDocAt(repoAbs, target)).policy;
+  const remote = git.remoteInfo(repoAbs).name || 'origin';
+  const ls = git.git(['ls-remote', remote, `refs/heads/${branch}`], repoAbs);
+  const remoteSha = ls.ok ? ((ls.stdout.split('\n')[0] || '').split('\t')[0].trim() || null) : null;
+  const localSha = git.branchRefs(repoAbs, branch, remote).localSha;
+  let headSha = null;
+  let headNote = '';
+  if (!remoteSha) headNote = `${branch} could not be read on ${remote} — CI cannot have run a HEAD nobody can see`;
+  else if (localSha && localSha !== remoteSha) headNote = `local ${branch} is ${localSha.slice(0, 7)}, ${remote} is ${remoteSha.slice(0, 7)} — push or pull until they agree`;
+  else headSha = remoteSha;
+  const ctx = { policy, headSha, headNote, roundtripResult: null };
+  ctx.roundtrip = () => {
+    const d = git.git(['diff', '--name-only', `${target}...${branch}`], repoAbs);
+    const workflowsTouched = !d.ok || d.stdout.split('\n').some((f) => f.startsWith('.github/workflows/'));
+    let jobs = null;
+    const runs = git.ghRunsForCommit(repoAbs, branch, headSha, 20);
+    if (Array.isArray(runs)) {
+      jobs = [];
+      for (const r of runs) {
+        const js = git.ghRunJobs(repoAbs, r.databaseId);
+        if (!js) { jobs = null; break; }
+        for (const j of js) jobs.push({ ...j, workflowName: r.workflowName || null });
+      }
+    }
+    ctx.roundtripResult = migrationGrant.roundtripVerdict(jobs, { headSha, workflowsTouched });
+    return ctx.roundtripResult;
+  };
+  return ctx;
 }
 
 /**
  * The `no new migrations` row's detail string, and the migrationGrant JSON payload for --dry
  * --json — one function so the two paths (prose table + JSON) can never read differently. `grants`
- * is null when there are no migrations (the ordinary case; grants is never computed then).
+ * is null when there are no migrations (the ordinary case; grants is never computed then). `ctx`
+ * is shipMigrationCtx's, or null when gh was unusable — the reviewer fields are then null too.
  */
-function migDetail(migrations, grants, target, branch) {
+function migDetail(migrations, grants, target, branch, ctx) {
   if (migrations.length === 0) return { text: `none vs ${target}`, payload: null };
   const files = migrations.join(', ');
   const payload = {
     branch, files: [...migrations],
-    granted: grants.granted.map((g) => ({ issue: g.issue, by: g.by, at: g.at })),
-    missing: grants.missing.map((m) => ({ issue: m.issue, reason: m.reason })),
+    policy: ctx ? ctx.policy : null,
+    headSha: ctx ? ctx.headSha : null,
+    roundtrip: ctx && ctx.roundtripResult ? { ok: ctx.roundtripResult.ok, reason: ctx.roundtripResult.reason } : null,
+    granted: grants.granted.map((g) => ({ issue: g.issue, role: g.role || 'human', by: g.by, at: g.at,
+      ...(g.role === 'reviewer' ? { reviewer: g.reviewer, head: g.head } : {}) })),
+    missing: grants.missing.map((m) => ({ issue: m.issue, failed: m.failed || null,
+      reason: m.failed === 'head' && ctx && ctx.headNote ? `${m.reason} (${ctx.headNote})` : m.reason })),
   };
   if (grants.ok) {
-    const by = grants.granted.map((g) => '#' + g.issue).join(' ');
-    return { text: `${migrations.length} present, exempted by a human grant on ${by} for branch "${branch}" — ${files}`, payload };
+    const by = grants.granted.map((g) => (g.role === 'reviewer' ? `#${g.issue} (reviewer ${g.reviewer} @ ${String(g.head).slice(0, 7)}, CI round-trip passed)` : '#' + g.issue)).join(' ');
+    const roles = [...new Set(grants.granted.map((g) => g.role || 'human'))].join('+');
+    return { text: `${migrations.length} present, exempted by a ${roles} grant on ${by} for branch "${branch}" — ${files}`, payload };
   }
   // Each missing entry already carries its own specific, actionable reason (evaluateShipSet) —
   // report those verbatim rather than just an issue tag, so an operator or a scheduled driver's
@@ -8260,7 +8317,7 @@ function migDetail(migrations, grants, target, branch) {
   // two distinct causes (a failed gh read of the whole set, or zero claimed issues to grant at
   // all) and both already say so in their own `reason` string — never paper over either with a
   // placeholder like "(unreadable)" that would misname the zero-issues case.
-  const reasons = grants.missing.map((m) => m.reason).join('; ');
+  const reasons = payload.missing.map((m) => m.reason).join('; ');
   return { text: `${migrations.length} present, human must run Phase B: ${files} — ${reasons}`, payload };
 }
 
@@ -8477,6 +8534,10 @@ grant is bound to ONE issue and ONE branch, and expires the instant that issue c
 branch EVERY claimed issue needs a valid grant for THIS branch — one granted issue never smuggles
 an unreviewed migration in for its siblings. Revoke with \`--revoke\` (same COLAB_HUMAN=1 bar);
 list what is outstanding with \`--list\`. See \`colab migration-grant --help\` for the full design.
+Under \`migration-grant: reviewer\` (#401) a REVIEWER grant also passes the gate, but only with all
+four of: P that policy at the target tip · M a live, trusted, passing review record · HEAD the
+record's head equals the branch's remote head · R the live "Migration round-trip" CI job passed on
+that HEAD. The refusal names which one failed; --dry, --dry --json and a real ship read it alike.
 
 CI GRANTS (#105) are the ONE narrow, human-created exception to the trunk-CI-green precondition —
 for the case where trunk is GENUINELY red and the candidate branch IS the fix, so it cannot reach
@@ -8728,8 +8789,10 @@ Options:
                       non-empty it also appears as an ok:true \`checks\` row ("ref'd issues braked").
 
                       \`migrationGrant\` (#98) is \`null\` when the branch adds no migration file (the
-                      ordinary case). Otherwise: \`{ branch, files: [...], granted: [{issue,by,at}],
-                      missing: [{issue,reason}] }\` — validated over EVERY issue the branch carries
+                      ordinary case). Otherwise: \`{ branch, files: [...], policy, headSha, roundtrip,
+                      granted: [{issue,role,by,at[,reviewer,head]}], missing: [{issue,failed,reason}] }\`
+                      (#401: \`role\` human|reviewer; \`failed\` issue|human|policy|marker|head|roundtrip;
+                      \`roundtrip\` is {ok,reason} once R was read, else null) — validated over EVERY issue the branch carries
                       (\`issues\`, not \`closeIssues\`: \`--refs\` must never shrink a safety gate), so a
                       group branch with one ungranted member reports \`ok:false\` here with that
                       member named in \`missing\`, even though the OTHERS are fully granted.
@@ -9672,13 +9735,11 @@ function cmdShipDryJson(opts) {
       : `${checklistFindings.map((f) => `#${f.issue} (${f.unchecked}/${f.total} unticked)`).join(', ')} — ` +
         'tick what shipped, file `Remainder: #M` for the rest, or pass --refs to keep it open deliberately' });
 
-  const migrations = newMigrations(repoAbs, target, sess.branch);
-  const migGrants = migrations.length ? shipMigrationGrants(repoAbs, gh, sess.issues, sess.branch) : null;
-  const migOk = migrations.length === 0 || migGrants.ok;
-  const migDetailed = migDetail(migrations, migGrants, target, sess.branch);
-  migrationGrantPayload = migDetailed.payload;
+  const migGate = shipMigrationGate(repoAbs, gh, target, sess.branch, sess.issues);
+  const migOk = migGate.ok;
+  migrationGrantPayload = migGate.payload;
   checks.push({ name: 'no new migrations', ok: migOk, class: migOk ? null : HUMAN_GATED,
-    detail: migDetailed.text });
+    detail: migGate.text });
 
   const headBranch = git.git(['rev-parse', '--abbrev-ref', 'HEAD'], repoAbs).stdout;
   const onTrunk = headBranch === trunk;
@@ -10619,12 +10680,12 @@ function cmdShip(argv) {
   if (baseCiResult) checks.push(['·', 'base CI verdict (advisory, #293)', baseCiResult.why]);
 
   // No new migrations on the branch, measured against what it will merge into — UNLESS every
-  // issue the branch carries holds a live, branch-bound migration grant (#98). Grants are read
-  // from the tracker only when a migration actually exists, so the ordinary ship pays nothing.
-  const migrations = newMigrations(repoAbs, target, sess.branch);
-  const migGrants = migrations.length ? shipMigrationGrants(repoAbs, gh, sess.issues, sess.branch) : null;
-  const migOk = migrations.length === 0 || migGrants.ok;
-  checks.push([migOk ? '✓' : '✗', 'no new migrations', migDetail(migrations, migGrants, target, sess.branch).text]);
+  // issue the branch carries holds a live migration grant: a branch-bound human grant (#98), or a
+  // reviewer grant under P+M+HEAD+R (#401). Grants are read from the tracker only when a migration
+  // actually exists, so the ordinary ship pays nothing. Same function as --dry --json's row.
+  const migGate = shipMigrationGate(repoAbs, gh, target, sess.branch, sess.issues);
+  const migOk = migGate.ok;
+  checks.push([migOk ? '✓' : '✗', 'no new migrations', migGate.text]);
 
   // #263: the close gate's own row — folded into the precondition table, not just a warning. Only
   // the CHECKLIST gate's own findings count here (not --refs, not the tracking label, both

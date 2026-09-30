@@ -177,14 +177,82 @@ function evaluateIssue(record, branch, issueNum, labelName) {
  * a human to have reviewed against. Refuses explicitly rather than falling through an empty loop.
  *
  * `records` maps issue number → the `ghIssueView` result for that issue, or `null` on a failed
- * read (the caller's job, not this function's — see tools/colab's shipMigrationGrants).
+ * read (the caller's job, not this function's — see tools/colab's shipMigrationGate).
+ *
+ * `ctx` (#401) — OPTIONAL, and absent means exactly the pre-#401 behaviour (human grants only,
+ * byte-identical output). Given, it is `{ policy, headSha, roundtrip }` and the ONE rule every
+ * ship path shares (`--dry`, `--dry --json`, a real/auto-trunk ship, and batch — which reads
+ * through `--dry --json`) — so no path can accept a grant another refuses. Per issue:
+ *   1. a live human grant passes, unchanged — it wins where both roles exist;
+ *   2. otherwise a reviewer grant passes only when ALL of: P policy is `reviewer` · M a valid,
+ *      passing, trusted, branch-bound reviewer marker + record · HEAD the record's head equals
+ *      `headSha` · R `roundtrip()` says the live CI round-trip passed on that HEAD.
+ * R is a THUNK, called at most once per set and only once some issue has cleared P, M and HEAD —
+ * so a no-migration, human-granted or already-failing ship pays for no CI read. A thunk returning
+ * anything but `{ ok: true }` (including `null`, a failed read) fails R closed.
+ * Every `missing` entry then names the condition that failed in `failed`
+ * (`issue` | `human` | `policy` | `marker` | `head` | `roundtrip`), and its reason says so.
  */
-function evaluateShipSet(issues, records, branch, labelName) {
+function evaluateShipSet(issues, records, branch, labelName, ctx) {
   const list = Array.isArray(issues) ? issues : [];
   if (list.length === 0) {
     return { ok: false, granted: [],
       missing: [{ issue: null, reason: 'no claimed issue on this branch could carry a grant' }] };
   }
+  if (!ctx) return evaluateHumanOnly(list, records, branch, labelName);
+  const policy = ctx.policy === 'reviewer' ? 'reviewer' : 'human';
+  const granted = [];
+  const missing = [];
+  const pending = []; // cleared P+M+HEAD, awaiting R
+  for (const n of list) {
+    const rec = records ? records[n] : null;
+    const h = evaluateIssue(rec, branch, n, labelName);
+    if (h.ok) {
+      granted.push({ issue: n, role: 'human', branch: h.grant.branch, by: h.grant.login, at: h.grant.at });
+      continue;
+    }
+    // Failures no grant of any role can get past: the issue itself cannot carry one.
+    if (!rec || rec.state !== 'OPEN' || !labelNamesOf(rec).includes(labelName)) {
+      missing.push({ issue: n, failed: 'issue', reason: h.reason });
+      continue;
+    }
+    const hasReviewer = liveGrantRecords(rec.comments).some((g) => g.role !== 'human');
+    if (!hasReviewer) {
+      missing.push({ issue: n, failed: 'human',
+        reason: policy === 'reviewer' ? `${h.reason}, and no live reviewer grant either` : h.reason });
+      continue;
+    }
+    const r = evaluateReviewerGrant(rec, { branch, headSha: ctx.headSha, issueNum: n, labelName, policy });
+    if (!r.ok) {
+      const failed = !r.checks.policy ? 'policy' : !r.checks.marker ? 'marker' : 'head';
+      missing.push({ issue: n, failed, reason: `reviewer grant [${SHIP_CONDITION_TAG[failed]}]: ${r.reason}` });
+      continue;
+    }
+    pending.push({ n, g: r.grant });
+  }
+  if (pending.length > 0) {
+    let rt = null;
+    try { rt = typeof ctx.roundtrip === 'function' ? ctx.roundtrip() : null; } catch (_) { rt = null; }
+    const ok = !!rt && rt.ok === true;
+    const why = rt && rt.reason ? rt.reason : 'the CI round-trip could not be read — an unread result is never a pass';
+    for (const { n, g } of pending) {
+      if (ok) {
+        granted.push({ issue: n, role: 'reviewer', reviewer: g.reviewer, head: g.head,
+          branch: g.branch, by: g.login, at: g.at });
+      } else {
+        missing.push({ issue: n, failed: 'roundtrip',
+          reason: `reviewer grant [${SHIP_CONDITION_TAG.roundtrip}]: #${n}: ${why}` });
+      }
+    }
+  }
+  const order = new Map(list.map((n, i) => [n, i]));
+  granted.sort((a, b) => order.get(a.issue) - order.get(b.issue));
+  missing.sort((a, b) => order.get(a.issue) - order.get(b.issue));
+  return { ok: missing.length === 0, granted, missing };
+}
+
+/** The pre-#401 verdict, kept verbatim so a caller passing no ctx sees no change at all. */
+function evaluateHumanOnly(list, records, branch, labelName) {
   const granted = [];
   const missing = [];
   for (const n of list) {
@@ -193,6 +261,73 @@ function evaluateShipSet(issues, records, branch, labelName) {
     else missing.push({ issue: n, reason: v.reason });
   }
   return { ok: missing.length === 0, granted, missing };
+}
+
+function labelNamesOf(record) {
+  return ((record && record.labels) || []).map((l) => (l && typeof l === 'object' ? l.name : l));
+}
+
+/** The condition names a refusal is prefixed with — P · M · HEAD · R in the issue's own words. */
+const SHIP_CONDITION_TAG = Object.freeze({ policy: 'P policy', marker: 'M record', head: 'HEAD', roundtrip: 'R round-trip' });
+
+/**
+ * The CI round-trip job (#399's `templates/ci-laravel.yml`) is found by NAME PREFIX: its matrix
+ * legs are named `Migration round-trip (<engine>)`. Nothing in project.yml names it today (#401
+ * risk 1) — a repo that renames the job, or has no such job, cannot pass R, and ships a migration
+ * on a human grant exactly as before. STABLE: renaming the template's job breaks this reader.
+ */
+const ROUNDTRIP_JOB_PREFIX = 'Migration round-trip';
+
+/**
+ * R — did the live CI round-trip pass on the shipped HEAD? Pure: `jobs` is every job of every run
+ * at that sha (git.ghRunJobs rows, flattened), or null when any read failed. Passes only when:
+ *   - the branch does not edit `.github/workflows/**` (`workflowsTouched`) — a branch that can
+ *     rewrite the job that grades it is not graded by it (the same refusal ci-cure makes);
+ *   - at least one job named `ROUNDTRIP_JOB_PREFIX…` exists at the sha;
+ *   - every distinct leg name has an instance that completed `success` with at least one step that
+ *     actually ran (an all-skipped leg proves nothing). A leg that only failed, is still running,
+ *     or only skipped fails R and is named. Duplicate instances (a push run and a PR run, or a
+ *     cancelled straggler) are fine as long as one instance of the leg genuinely passed.
+ * Returns { ok, reason, legs }.
+ */
+function roundtripVerdict(jobs, opts) {
+  const o = opts || {};
+  const sha = o.headSha ? String(o.headSha).slice(0, 7) : 'this HEAD';
+  if (o.workflowsTouched) {
+    return { ok: false, legs: [], reason: `this branch edits .github/workflows/ — a round-trip it can rewrite does not grade it; ship it on a human grant` };
+  }
+  if (!Array.isArray(jobs)) {
+    return { ok: false, legs: [], reason: `the CI jobs at ${sha} could not be read — an unread result is never a pass` };
+  }
+  const byLeg = new Map();
+  for (const j of jobs) {
+    if (!j || typeof j.name !== 'string' || !j.name.startsWith(ROUNDTRIP_JOB_PREFIX)) continue;
+    if (!byLeg.has(j.name)) byLeg.set(j.name, []);
+    byLeg.get(j.name).push(j);
+  }
+  if (byLeg.size === 0) {
+    return { ok: false, legs: [], reason: `no "${ROUNDTRIP_JOB_PREFIX}" job ran at ${sha}` };
+  }
+  const legs = [];
+  const bad = [];
+  for (const [name, inst] of byLeg) {
+    const passed = inst.some((j) => j.status === 'completed' && j.conclusion === 'success'
+      && Array.isArray(j.steps) && j.steps.some(stepRanOk));
+    legs.push({ name, ok: passed });
+    if (!passed) {
+      const seen = inst.map((j) => (j.status === 'completed'
+        ? (j.conclusion === 'success' ? 'success with no step run' : j.conclusion || 'no conclusion')
+        : j.status || 'unknown')).join(', ');
+      bad.push(`"${name}" did not pass (${seen})`);
+    }
+  }
+  if (bad.length) return { ok: false, legs, reason: `the CI round-trip at ${sha} failed: ${bad.join('; ')}` };
+  return { ok: true, legs, reason: '' };
+}
+
+/** A step that reached a terminal conclusion other than skipped/cancelled — ci-cure.js stepRan. */
+function stepRanOk(s) {
+  return !!s && s.status === 'completed' && s.conclusion !== 'skipped' && s.conclusion !== 'cancelled';
 }
 
 // ============================================================================================
@@ -205,11 +340,11 @@ function evaluateShipSet(issues, records, branch, labelName) {
 // escalation condition was checked, the CI round-trip result, the reviewed HEAD) — so a later
 // reader can check the review rather than trust the comment.
 //
-// NOTHING IN THIS BLOCK OPENS `colab ship`'s GATE. liveGrants()/evaluateIssue()/evaluateShipSet()
-// above read ONLY the human marker, and the reviewer marker is built so GRANT_RE can never match
-// it (different leading emoji — the same collision discipline as grant vs revoke). The accessor
-// below, evaluateReviewerGrant(), is exported for the ship-side reader to call once it exists;
-// until then a reviewer grant is recorded, listed, and inert.
+// HOW SHIP READS IT (#401). liveGrants()/evaluateIssue() above read ONLY the human marker, and the
+// reviewer marker is built so GRANT_RE can never match it (different leading emoji — the same
+// collision discipline as grant vs revoke). evaluateShipSet() above honours a reviewer grant only
+// when given a ctx, and then only with all four of P (policy) · M (this block's record) · HEAD ·
+// R (live CI round-trip) — evaluateReviewerGrant() below is its P/M/HEAD half.
 //
 // THE REVIEWER IDENTITY IS DECLARED, NOT ATTESTED. The only anti-forgery properties are the same
 // two the human grant has — the label needs write/triage permission, and TRUSTED_ASSOCIATIONS on
@@ -434,8 +569,8 @@ function parseGrantPolicy(doc) {
 }
 
 /**
- * The reviewer-grant verdict for one issue — the accessor the ship-side reader will call. NOT
- * called by `colab ship` today. `ctx` = { branch, headSha, issueNum, labelName, policy } where
+ * The reviewer-grant verdict for one issue — P, M and HEAD of the ship rule; evaluateShipSet()
+ * (#401) calls it and adds R. `ctx` = { branch, headSha, issueNum, labelName, policy } where
  * `policy` is parseGrantPolicy(...).policy. Checks, cheapest/most-fundamental first, each with its
  * own reason: read failed · not open · no label · policy not `reviewer` · no live reviewer grant ·
  * branch mismatch · untrusted author · record invalid · record not passing · HEAD binding.
@@ -481,4 +616,6 @@ module.exports = {
   liveGrantRecords, grantHeadBinding, evaluateReviewerGrant,
   // #398 — repo policy
   GRANT_POLICIES, parseGrantPolicy,
+  // #401 — ship honours a reviewer grant
+  ROUNDTRIP_JOB_PREFIX, roundtripVerdict, SHIP_CONDITION_TAG,
 };

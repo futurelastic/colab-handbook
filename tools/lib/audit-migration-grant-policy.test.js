@@ -3,7 +3,7 @@
  * Tests for the audit's `migration-grant:` policy key (audit/audit.mjs) — issue #398.
  *
  * Real descriptors through the real audit. Absent and `human` are clean and report `human`;
- * `reviewer` is reported and warns (no ship reader honours reviewer grants yet); anything else
+ * `reviewer` is reported and clean (colab ship honours it under P+M+HEAD+R, #401); anything else
  * fails, because the reader falls back to `human` silently. The list-shaped `migrations:` key next
  * to it is untouched — the policy is a separate flat key on purpose.
  *
@@ -68,11 +68,10 @@ test('migration-grant: human → reported, no finding', () => {
   assert.deepStrictEqual(mentions(r), []);
 });
 
-test('migration-grant: reviewer → reported, and warns that no ship reader honours it yet', () => {
+test('migration-grant: reviewer → reported and clean — ship honours it now (#401)', () => {
   const r = audit(fixture(`${BASE}migration-grant: reviewer\n`));
   assert.strictEqual(r.migrationGrant, 'reviewer');
-  assert.deepStrictEqual(r.fails.filter((t) => /migration-grant/.test(t)), []);
-  assert.ok(r.warns.some((t) => /^migration-grant: reviewer declared — colab ship does not honour reviewer grants yet/.test(t)), r.warns.join(' | '));
+  assert.deepStrictEqual(mentions(r), []);
 });
 
 test('every malformed migration-grant value fails and is reported as the fallback, human', () => {

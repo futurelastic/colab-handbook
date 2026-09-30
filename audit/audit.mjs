@@ -1277,12 +1277,11 @@ function auditRepo(target, ctx) {
     // read by three consumers). tools/lib/migration-grant.js parseGrantPolicy is the one reading, so
     // `colab migration-grant` and the audit cannot disagree. The value is always reported
     // (info.migrationGrant). An invalid value fails: the reader falls back to `human`, which is safe
-    // but silent. `reviewer` warns while no ship reader honours reviewer grants — declared, inert.
+    // but silent. `reviewer` is clean: colab ship honours it under P+M+HEAD+R (#401).
     {
       const pol = migrationGrant.parseGrantPolicy(cfg);
       info.migrationGrant = pol.policy;
       if (!pol.valid) fail(pol.reason);
-      else if (pol.policy === "reviewer") warn("migration-grant: reviewer declared — colab ship does not honour reviewer grants yet; its no-new-migrations gate still requires a human grant");
     }
 
     // ---- holds (#360) ---------------------------------------------------------

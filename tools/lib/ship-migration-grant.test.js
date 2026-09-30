@@ -337,6 +337,43 @@ test('ship: a branch with NO migrations is entirely unaffected — no gh reads a
   assert.strictEqual(body.migrationGrant, null); // never computed when there is nothing to grant
 });
 
+// --- #401: one rule for every ship path, under migration-grant: reviewer ---------------------
+
+test('#401: under migration-grant: reviewer, --dry, --dry --json and a real ship all refuse with the same row detail', () => {
+  const fx = fixture(PROJECT_YML_AUTO_TRUNK + 'migration-grant: reviewer\n');
+  addMigrationBranch(fx, 'feat/x-401');
+  // Claim BEFORE pushing: a pushed branch carrying #401 is itself a claim record (#325).
+  const cl = colab(fx, ['claim', '401', '--branch', 'feat/x-401', '--repo', fx.work]);
+  assert.strictEqual(cl.code, 0, cl.out + cl.err);
+  fx.g(fx.work, 'push', '-q', 'origin', 'feat/x-401');
+  const head = fx.g(fx.work, 'rev-parse', 'feat/x-401').trim();
+
+  const j = colab(fx, ['ship', '--branch', 'feat/x-401', '--repo', fx.work, '--dry', '--json']);
+  assert.strictEqual(j.code, 1, j.out + j.err);
+  const body = JSON.parse(j.out);
+  const mig = body.checks.find((c) => c.name === 'no new migrations');
+  assert.strictEqual(mig.ok, false);
+  assert.strictEqual(mig.class, 'human-gated');
+  assert.strictEqual(body.migrationGrant.policy, 'reviewer');
+  assert.strictEqual(body.migrationGrant.headSha, head);
+  assert.strictEqual(body.migrationGrant.roundtrip, null, 'R is never read when no issue cleared P+M+HEAD');
+  assert.strictEqual(body.migrationGrant.missing[0].issue, 401);
+  assert.strictEqual(body.migrationGrant.missing[0].failed, 'issue');
+
+  const rowOf = (out) => (out.split('\n').find((l) => /no new migrations/.test(l)) || '').replace(/^\s*✗\s+no new migrations\s*/, '').trim();
+  const dry = colab(fx, ['ship', '--branch', 'feat/x-401', '--repo', fx.work, '--dry']);
+  assert.notStrictEqual(dry.code, 0);
+  assert.match(dry.out, /✗\s+no new migrations/);
+  const real = colab(fx, ['ship', '--branch', 'feat/x-401', '--repo', fx.work]);
+  assert.notStrictEqual(real.code, 0, 'a real ship refuses on the same row');
+  assert.match(real.out + real.err, /✗\s+no new migrations/);
+  assert.strictEqual(rowOf(real.out + real.err), rowOf(dry.out));
+  assert.ok(rowOf(dry.out).includes(mig.detail.slice(0, 60)), `prose "${rowOf(dry.out)}" vs json "${mig.detail}"`);
+  // Nothing landed: origin's main is untouched.
+  assert.strictEqual(fx.g(fx.work, 'ls-remote', 'origin', 'refs/heads/main').split('\t')[0],
+    fx.g(fx.work, 'rev-parse', 'main').trim());
+});
+
 // --- regression: the pre-existing ship-dry-json contract is untouched -----------------------
 
 test('regression: every documented precondition name (from ship-dry-json.test.js\'s own list) is still present', () => {

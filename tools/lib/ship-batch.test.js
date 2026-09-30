@@ -72,6 +72,8 @@ test('memberEligibility sends every special member serial, naming why', () => {
     [okReport({ target: 'next' }), 'green', /base is "next"/],
     [okReport({ autonomyGate: { via: 'docs-only' } }), 'green', /docs-only/],
     [okReport({ migrationGrant: { ok: true } }), 'green', /migrations/],
+    // #401: a reviewer-granted member (P+M+HEAD+R all held) is still never a batch member.
+    [okReport({ migrationGrant: { policy: 'reviewer', granted: [{ issue: 1, role: 'reviewer' }], missing: [] } }), 'green', /migrations \(granted or not\)/],
     [okReport({ ciGrant: { ok: true } }), 'green', /grant\/cure/],
     [okReport({ ciCure: { ok: true } }), 'green', /grant\/cure/],
     [okReport({ coreReview: { verdict: 'approved' } }), 'green', /core path/],

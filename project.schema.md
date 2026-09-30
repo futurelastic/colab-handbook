@@ -533,9 +533,11 @@ The one reading is `tools/lib/migration-grant.js` `parseGrantPolicy`.
   never the branch, so a branch cannot raise its own policy.
 - **An invalid value falls back to `human`.** That is the stricter reading, and the audit
   fails it.
-- **It is inert today.** `colab ship` does not honour reviewer grants yet, so declaring
-  `reviewer` changes what can be *recorded*, not what can *ship*. The audit gives an
-  advisory saying so.
+- **`colab ship` honours a reviewer grant only with P + M + HEAD + R** (#401). Ship reads
+  this key at the tip of the branch being merged into, and also needs a passing review
+  record bound to the branch's exact HEAD, plus a live, passing `Migration round-trip`
+  CI job on that HEAD. See [CONVENTIONS.md §5, *Migration exemption*](CONVENTIONS.md#migration-exemption--a-narrow-human-created-door-through-no-new-migrations-98).
+  A repo with no such job can declare `reviewer`, but every reviewer grant there fails R.
 - **The audit always reports the value.** It appears in `--json` as `migrationGrant`.
 
 ### `room` — optional
@@ -1244,7 +1246,6 @@ the shape that shows it. One writer at a time says nothing about who reads the r
 | `migrations` empty, restating a default, or naming one prefix twice → **advisory** | redundancy, harmless |
 | a tracked `*/migrations/` directory outside the defaults and every declared prefix → **advisory** (local only) | a migration layout `colab ship`'s gate cannot see |
 | `migration-grant` ∈ {`human`, `reviewer`} when set → **finding** otherwise | a misspelled policy silently read as `human` |
-| `migration-grant: reviewer` → **advisory** while no ship reader honours reviewer grants | a policy that reads as enabling something it does not yet enable |
 | `holds` is a list of non-empty strings, each listed once, when set → **finding** otherwise | a scalar or malformed list silently read as "no holds declared", so triage reports held work ready |
 | `exposure` ∈ {`none`, `self`, `live`, `released`} when set | a misspelled value silently read as undeclared |
 | `exposure: none` + `production: null` → **advisory** | the both-empty claim ("nothing consumes this, and there is nothing to point at") going unflagged |
