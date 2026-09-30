@@ -464,6 +464,31 @@ grant never engaged. Measured on an adopting repo before this key existed.
   positive only a human can tell apart; committed dependency trees (`node_modules/`, `vendor/`)
   are skipped.
 
+### `migration-grant` — optional
+
+```yaml
+migration-grant: human      # absent = human — today's behaviour
+migration-grant: reviewer   # a migration-reviewer grant may also be minted
+```
+
+This key decides who may open the no-new-migrations door
+([CONVENTIONS.md §5, *Migration exemption*](CONVENTIONS.md#migration-exemption--a-narrow-human-created-door-through-no-new-migrations-98)).
+`human` accepts only the human grant. `reviewer` also lets `colab migration-grant --role
+migration-reviewer` mint a grant that carries a review record and is bound to one HEAD.
+The one reading is `tools/lib/migration-grant.js` `parseGrantPolicy`.
+
+- **It is a separate flat key, not nested under `migrations:`.** `migrations:` stays a list
+  of path prefixes because three readers depend on that shape. Where the gate looks and who
+  may open it are unrelated settings.
+- **Only the trunk checkout's value counts.** `colab migration-grant` reads the checkout,
+  never the branch, so a branch cannot raise its own policy.
+- **An invalid value falls back to `human`.** That is the stricter reading, and the audit
+  fails it.
+- **It is inert today.** `colab ship` does not honour reviewer grants yet, so declaring
+  `reviewer` changes what can be *recorded*, not what can *ship*. The audit gives an
+  advisory saying so.
+- **The audit always reports the value.** It appears in `--json` as `migrationGrant`.
+
 ### `room` — optional
 
 ```yaml
@@ -1168,6 +1193,8 @@ the shape that shows it. One writer at a time says nothing about who reads the r
 | `migrations` a list of repo-relative prefixes when set — an absolute path, `..`, glob, the repo root, or a non-list → **finding** | a declaration the migration gate cannot honestly read |
 | `migrations` empty, restating a default, or naming one prefix twice → **advisory** | redundancy, harmless |
 | a tracked `*/migrations/` directory outside the defaults and every declared prefix → **advisory** (local only) | a migration layout `colab ship`'s gate cannot see |
+| `migration-grant` ∈ {`human`, `reviewer`} when set → **finding** otherwise | a misspelled policy silently read as `human` |
+| `migration-grant: reviewer` → **advisory** while no ship reader honours reviewer grants | a policy that reads as enabling something it does not yet enable |
 | `holds` is a list of non-empty strings, each listed once, when set → **finding** otherwise | a scalar or malformed list silently read as "no holds declared", so triage reports held work ready |
 | `exposure` ∈ {`none`, `self`, `live`, `released`} when set | a misspelled value silently read as undeclared |
 | `exposure: none` + `production: null` → **advisory** | the both-empty claim ("nothing consumes this, and there is nothing to point at") going unflagged |

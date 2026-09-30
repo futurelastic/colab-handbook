@@ -243,3 +243,175 @@ test('evaluateShipSet: a failed read for one issue in the set is reported, never
   assert.deepStrictEqual(v.missing.map((m) => m.issue), [2]);
   assert.match(v.missing[0].reason, /could not be read/);
 });
+
+// --- #397 role-tagged grants · #398 policy ---------------------------------------------------
+
+const mg = require('./migration-grant.js');
+
+const HEAD = 'a'.repeat(40);
+const HEAD2 = 'b'.repeat(40);
+const BRANCH = 'feat/schema-change-1';
+
+function rec(over = {}) {
+  return {
+    v: '1', role: 'migration-reviewer', reviewer: 'bot-a', head: HEAD,
+    verdict: 'approve', checklist: 'pass', 'checklist-items': '7/7',
+    escalation: 'destructive-ddl', 'escalation-result': 'clear', 'ci-roundtrip': 'pass', ...over,
+  };
+}
+
+function reviewComment(r = rec(), opts = {}) {
+  const at = opts.at || NOW;
+  return comment(mg.reviewGrantCommentBody(opts.branch || BRANCH, opts.host || HOST, at, r), { ...opts, createdAt: at });
+}
+
+const CTX = { branch: BRANCH, headSha: HEAD, issueNum: 1, labelName: LABEL, policy: 'reviewer' };
+
+test('reviewGrantCommentBody round-trips through REVIEW_GRANT_RE + parseReviewGrant', () => {
+  const body = mg.reviewGrantCommentBody(BRANCH, HOST, NOW, rec({ 'ci-run': 'https://ci.example.invalid/run/9' }));
+  const p = mg.parseReviewGrant(body);
+  assert.ok(p, body);
+  assert.deepEqual(p.problems, []);
+  assert.equal(p.marker.role, 'migration-reviewer');
+  assert.equal(p.marker.reviewer, 'bot-a');
+  assert.equal(p.marker.branch, BRANCH);
+  assert.equal(p.marker.head, HEAD);
+  assert.equal(p.record['ci-run'], 'https://ci.example.invalid/run/9');
+  assert.match(body, /any new commit voids it/);
+});
+
+test('three-way mark collision: grant / revoke / review bodies match only their own RE', () => {
+  const g = grantCommentBody(BRANCH, HOST, NOW);
+  const r = revokeCommentBody(BRANCH, HOST, NOW);
+  const v = mg.reviewGrantCommentBody(BRANCH, HOST, NOW, rec());
+  assert.ok(GRANT_RE.test(g) && !REVOKE_RE.test(g) && !mg.REVIEW_GRANT_RE.test(g));
+  assert.ok(!GRANT_RE.test(r) && REVOKE_RE.test(r) && !mg.REVIEW_GRANT_RE.test(r));
+  assert.ok(!GRANT_RE.test(v) && !REVOKE_RE.test(v) && mg.REVIEW_GRANT_RE.test(v));
+});
+
+test('the human grant body is unchanged and reads as role human', () => {
+  assert.equal(grantCommentBody('feat/x-1', HOST, NOW),
+    '🛢 Migration grant — branch `feat/x-1` · host `build-box-01` · 2026-08-02T10:00:00Z — this exempts THIS BRANCH only, and expires when this issue closes.');
+  const live = mg.liveGrantRecords([grantComment('feat/x-1')]);
+  assert.equal(live.length, 1);
+  assert.equal(live[0].role, 'human');
+});
+
+test('liveGrants ignores reviewer grants — the ship gate is unchanged', () => {
+  assert.deepEqual(liveGrants([reviewComment()]), []);
+});
+
+test('evaluateIssue: the label plus only a reviewer grant refuses (no live human grant)', () => {
+  const v = evaluateIssue(openRecord({ comments: [reviewComment()] }), BRANCH, 1, LABEL);
+  assert.equal(v.ok, false);
+  assert.match(v.reason, /no live grant comment/);
+  const s = evaluateShipSet([1], { 1: openRecord({ comments: [reviewComment()] }) }, BRANCH, LABEL);
+  assert.equal(s.ok, false);
+});
+
+test('a revoke cancels an earlier reviewer grant; a later one is live again', () => {
+  const c = [reviewComment(rec(), { at: NOW }), revokeComment(BRANCH, { at: LATER })];
+  assert.equal(mg.liveGrantRecords(c).length, 0);
+  assert.equal(mg.evaluateReviewerGrant(openRecord({ comments: c }), CTX).ok, false);
+  c.push(reviewComment(rec(), { at: LATEST }));
+  assert.equal(mg.evaluateReviewerGrant(openRecord({ comments: c }), CTX).ok, true);
+});
+
+test('validateReviewRecord: missing key, unknown key, bad enum, bad sha → problems', () => {
+  const cases = [
+    [(() => { const r = rec(); delete r.verdict; return r; })(), /missing "verdict"/],
+    [rec({ extra: 'x' }), /unknown key "extra"/],
+    [rec({ verdict: 'yes' }), /"verdict" is "yes"/],
+    [rec({ head: 'abc1234' }), /"head" is "abc1234"/],
+    [rec({ reviewer: 'has space' }), /"reviewer"/],
+    [rec({ 'checklist-items': '8/7' }), /N must be ≤ M/],
+    [rec({ v: '2' }), /"v" is "2"/],
+  ];
+  for (const [r, rx] of cases) {
+    const v = mg.validateReviewRecord(r);
+    assert.equal(v.valid, false, JSON.stringify(r));
+    assert.ok(v.problems.some((p) => rx.test(p)), `${rx}: ${v.problems.join(' | ')}`);
+  }
+  assert.deepEqual(mg.validateReviewRecord(rec()), { valid: true, passing: true, problems: [] });
+});
+
+test('validateReviewRecord: a well-formed failing review is valid but not passing', () => {
+  for (const over of [{ verdict: 'reject' }, { checklist: 'fail' }, { 'escalation-result': 'escalated' }, { 'ci-roundtrip': 'pending' }]) {
+    const v = mg.validateReviewRecord(rec(over));
+    assert.equal(v.valid, true, JSON.stringify(over));
+    assert.equal(v.passing, false, JSON.stringify(over));
+    assert.ok(mg.reviewRecordFailure(rec(over)).length > 0);
+  }
+});
+
+test('parseReviewGrant: record head or reviewer differing from the marker is a problem', () => {
+  const body = mg.reviewGrantCommentBody(BRANCH, HOST, NOW, rec()).replace(`head: ${HEAD}`, `head: ${HEAD2}`);
+  assert.ok(mg.parseReviewGrant(body).problems.some((p) => /differs from the marker's head/.test(p)));
+  const body2 = mg.reviewGrantCommentBody(BRANCH, HOST, NOW, rec()).replace('reviewer: bot-a', 'reviewer: bot-b');
+  assert.ok(mg.parseReviewGrant(body2).problems.some((p) => /differs from the marker's reviewer/.test(p)));
+});
+
+test('parseReviewGrant: a marker with no record block is a problem, never a grant', () => {
+  const firstLine = mg.reviewGrantCommentBody(BRANCH, HOST, NOW, rec()).split('\n')[0];
+  const p = mg.parseReviewGrant(firstLine);
+  assert.equal(p.record, null);
+  assert.match(p.problems[0], /without its review record/);
+  const v = mg.evaluateReviewerGrant(openRecord({ comments: [comment(firstLine)] }), CTX);
+  assert.equal(v.ok, false);
+  assert.match(v.reason, /invalid review record/);
+});
+
+test('parseReviewGrant: text outside the fenced block is ignored; a duplicate key is a problem', () => {
+  const body = mg.reviewGrantCommentBody(BRANCH, HOST, NOW, rec()) + '\n\nnotes: verdict: reject';
+  assert.deepEqual(mg.parseReviewGrant(body).problems, []);
+  const dup = mg.reviewGrantCommentBody(BRANCH, HOST, NOW, rec()).replace('verdict: approve', 'verdict: approve\nverdict: reject');
+  assert.ok(mg.parseReviewGrant(dup).problems.some((p) => /appears twice/.test(p)));
+});
+
+test('grantHeadBinding: equal → ok; new commit → void; short/missing sha → not ok; human → unbound', () => {
+  const g = { role: 'migration-reviewer', head: HEAD };
+  assert.deepEqual(mg.grantHeadBinding(g, HEAD), { bound: true, ok: true, reason: '' });
+  assert.deepEqual(mg.grantHeadBinding(g, HEAD.toUpperCase()).ok, true);
+  const moved = mg.grantHeadBinding(g, HEAD2);
+  assert.equal(moved.ok, false);
+  assert.match(moved.reason, /a new commit voids it/);
+  assert.equal(mg.grantHeadBinding(g, HEAD.slice(0, 7)).ok, false);
+  assert.equal(mg.grantHeadBinding(g, '').ok, false);
+  assert.deepEqual(mg.grantHeadBinding({ role: 'human', branch: 'x' }, ''), { bound: false, ok: true, reason: '' });
+});
+
+test('evaluateReviewerGrant: policy human refuses first, even with a perfect record', () => {
+  const v = mg.evaluateReviewerGrant(openRecord({ comments: [reviewComment()] }), { ...CTX, policy: 'human' });
+  assert.equal(v.ok, false);
+  assert.match(v.reason, /policy is "human"/);
+  assert.deepEqual(v.checks, { policy: false, marker: false, head: false });
+});
+
+test('evaluateReviewerGrant: the full pass, and each refusal in order', () => {
+  const ok = mg.evaluateReviewerGrant(openRecord({ comments: [reviewComment()] }), CTX);
+  assert.equal(ok.ok, true, ok.reason);
+  assert.deepEqual(ok.checks, { policy: true, marker: true, head: true });
+  assert.match(mg.evaluateReviewerGrant(null, CTX).reason, /could not be read/);
+  assert.match(mg.evaluateReviewerGrant({ ...openRecord({ comments: [reviewComment()] }), state: 'CLOSED' }, CTX).reason, /CLOSED/);
+  assert.match(mg.evaluateReviewerGrant(openRecord({ labels: [], comments: [reviewComment()] }), CTX).reason, /does not carry/);
+  assert.match(mg.evaluateReviewerGrant(openRecord({ comments: [grantComment(BRANCH)] }), CTX).reason, /no live reviewer grant/);
+  assert.match(mg.evaluateReviewerGrant(openRecord({ comments: [reviewComment(rec(), { branch: 'feat/other-2' })] }), CTX).reason, /bound to branch/);
+  assert.match(mg.evaluateReviewerGrant(openRecord({ comments: [reviewComment(rec(), { authorAssociation: 'NONE' })] }), CTX).reason, /not a repo owner/);
+  assert.match(mg.evaluateReviewerGrant(openRecord({ comments: [reviewComment(rec({ 'ci-roundtrip': 'fail' }))] }), CTX).reason, /does not pass: CI round-trip fail/);
+  const moved = mg.evaluateReviewerGrant(openRecord({ comments: [reviewComment()] }), { ...CTX, headSha: HEAD2 });
+  assert.match(moved.reason, /a new commit voids it/);
+  assert.deepEqual(moved.checks, { policy: true, marker: true, head: false });
+});
+
+test('parseGrantPolicy: absent/null → human; human; reviewer (trimmed); anything else invalid → human', () => {
+  assert.deepEqual(mg.parseGrantPolicy({}), { policy: 'human', declared: false, valid: true, reason: 'migration-grant absent — human grants only' });
+  assert.equal(mg.parseGrantPolicy({ 'migration-grant': null }).declared, false);
+  assert.equal(mg.parseGrantPolicy(null).policy, 'human');
+  assert.equal(mg.parseGrantPolicy({ 'migration-grant': 'human' }).policy, 'human');
+  assert.equal(mg.parseGrantPolicy({ 'migration-grant': ' reviewer ' }).policy, 'reviewer');
+  for (const bad of ['Reviewer', 'yes', true, [], 1, '']) {
+    const p = mg.parseGrantPolicy({ 'migration-grant': bad });
+    assert.equal(p.valid, false, JSON.stringify(bad));
+    assert.equal(p.policy, 'human', JSON.stringify(bad));
+  }
+});

@@ -2881,6 +2881,7 @@ function cmdBlockedClear(repoAbs, blocked, blocker, opts) {
 // ---------------------------------------------------------------------------
 
 const HELP_MIGRATION_GRANT = `colab migration-grant <issue> --branch <branch> [--repo <path>]
+colab migration-grant <issue> --branch <branch> --role migration-reviewer --reviewer <id> <record flags> [--repo <path>]
 colab migration-grant <issue> --revoke [--repo <path>]
 colab migration-grant --list [--json] [--repo <path>]
 
@@ -2919,17 +2920,49 @@ fail toward "closed" if either half only partially lands.
 There is deliberately no local-only fallback: without a usable \`gh\`, every subcommand here REFUSES
 rather than write (or read) something invisible to the machine \`ship\` might later run on.
 
+ROLE-TAGGED GRANTS (#397). --role defaults to \`human\` — the grant above, unchanged. With
+--role ${migrationGrant.REVIEWER_ROLE} the comment is a \`${migrationGrant.REVIEW_GRANT_MARK}\` instead:
+it names the declared reviewer and carries a REVIEW RECORD (a \`\`\`${migrationGrant.REVIEW_RECORD_FENCE}
+block — verdict, checklist result, the escalation condition checked, the CI round-trip result, and
+the reviewed HEAD sha). A reviewer grant is bound to that HEAD: any new commit on the branch voids it.
+It is minted only when ALL of these hold, checked before any network call:
+  - the record is well-formed AND passing (approve · checklist pass · escalation clear · CI pass) —
+    a grant carrying a failing review is a contradiction, so it is refused, not recorded;
+  - the branch is pushed, and --head (if given) equals origin's tip — the grant binds that tip;
+  - this checkout's project.yml declares \`migration-grant: reviewer\` (#398; absent = human).
+COLAB_HUMAN=1 is still required for every role. The reviewer identity is DECLARED, not attested.
+\`colab ship\` does NOT honour reviewer grants yet: today its gate reads human grants only, so a
+reviewer grant is recorded, listed and inert.
+
 Options:
   --branch <branch>  required for --branch grants; a grant is never inferred from HEAD
-  --revoke           revoke instead of grant
+  --revoke           revoke instead of grant (cancels every live grant of every role)
   --list             list every issue with a live grant, instead of granting/revoking
   --json             (with --list) machine-readable output
   --repo <path>       repo root (default: git root of cwd)
+
+Reviewer-grant options (with --role ${migrationGrant.REVIEWER_ROLE}):
+  --role <role>                 human (default) | ${migrationGrant.REVIEWER_ROLE}
+  --reviewer <id>               the reviewer's declared identity (letters, digits, . _ @ -)
+  --verdict <v>                 approve | reject
+  --checklist <r>               pass | fail
+  --checklist-items <N/M>       optional, e.g. 7/7
+  --escalation <condition-id>   which escalation condition was checked (lowercase-hyphenated)
+  --escalation-result <r>       clear | escalated
+  --ci-roundtrip <r>            pass | fail | pending
+  --ci-run <id-or-url>          optional
+  --head <sha>                  optional; must equal the pushed branch tip (default: that tip)
 `;
 
 function cmdMigrationGrant(argv) {
   const opts = parseArgs(argv, {
-    values: { '--repo': 'repo', '--branch': 'branch' },
+    values: {
+      '--repo': 'repo', '--branch': 'branch',
+      // #397 reviewer-grant record flags
+      '--role': 'role', '--reviewer': 'reviewer', '--verdict': 'verdict', '--checklist': 'checklist',
+      '--checklist-items': 'checklistItems', '--escalation': 'escalation', '--escalation-result': 'escalationResult',
+      '--ci-roundtrip': 'ciRoundtrip', '--ci-run': 'ciRun', '--head': 'head',
+    },
     flags: { '--revoke': 'revoke', '--list': 'list', '--json': 'json', '-h': 'help', '--help': 'help' },
   });
   if (opts.help) return print(HELP_MIGRATION_GRANT);
@@ -2962,6 +2995,12 @@ function cmdMigrationGrant(argv) {
   if (!opts.revoke && !git.branchExists(repoAbs, opts.branch)) {
     throw new UserError(`branch "${opts.branch}" does not resolve to a ref (locally or on origin) — refusing to bind a grant to a name nothing exists at`);
   }
+  // #397: the role, and for a reviewer grant its whole record — all answerable locally, so all
+  // before the gh gate, for the same reason as the checks above.
+  if (!opts.revoke) opts.reviewRecord = migrationGrantReviewRecord(repoAbs, opts);
+  else if (opts.role !== undefined || opts.reviewer !== undefined) {
+    throw new UserError('--revoke takes no --role/--reviewer — a revoke cancels every live grant on the issue, whatever its role');
+  }
 
   // No local fallback, on purpose — same reasoning as `colab readiness`: the grant lives on
   // GitHub, visible from any machine to the gate that reads it (ship may run on a DIFFERENT
@@ -2972,6 +3011,59 @@ function cmdMigrationGrant(argv) {
   }
 
   return opts.revoke ? cmdMigrationGrantRevoke(repoAbs, num) : cmdMigrationGrantCreate(repoAbs, num, opts);
+}
+
+/**
+ * #397: resolve the grant's role and, for a reviewer grant, build and check its review record.
+ * Returns null for a human grant (the unchanged path). Throws UserError on anything a reviewer
+ * grant must not be minted with. Local only — no gh — so it runs before cmdMigrationGrant's gh gate.
+ */
+function migrationGrantReviewRecord(repoAbs, opts) {
+  const role = opts.role === undefined ? 'human' : String(opts.role);
+  if (!migrationGrant.GRANT_ROLES.includes(role)) {
+    throw new UserError(`--role is "${role}", expected ${migrationGrant.GRANT_ROLES.join(' | ')}`);
+  }
+  const recordFlags = ['reviewer', 'verdict', 'checklist', 'checklistItems', 'escalation', 'escalationResult', 'ciRoundtrip', 'ciRun', 'head'];
+  if (role === 'human') {
+    const stray = recordFlags.filter((k) => opts[k] !== undefined);
+    if (stray.length) {
+      throw new UserError(`review-record flags (${stray.map((k) => '--' + k.replace(/[A-Z]/g, (c) => '-' + c.toLowerCase())).join(', ')}) need --role ${migrationGrant.REVIEWER_ROLE} — a human grant carries no record`);
+    }
+    return null;
+  }
+
+  // Policy first: under the default (human) a reviewer grant would do nothing and mislead. Read from
+  // THIS checkout (trunk at rest), never the branch — a branch must not raise its own grant policy.
+  const pol = migrationGrant.parseGrantPolicy(projectDoc(repoAbs));
+  if (!pol.valid) throw new UserError(`${pol.reason} — fix project.yml before minting a reviewer grant`);
+  if (pol.policy !== 'reviewer') {
+    throw new UserError(`this repo's migration-grant policy is "${pol.policy}"${pol.declared ? '' : ' (absent = human)'} — a reviewer grant is minted only where project.yml declares migration-grant: reviewer`);
+  }
+
+  // HEAD binding: the grant covers exactly the commit on origin. An unpushed branch has no tip any
+  // other machine can check against, so it is refused rather than bound to a local-only sha.
+  const refs = git.branchRefs(repoAbs, opts.branch);
+  if (!refs.remoteSha) {
+    throw new UserError(`branch "${opts.branch}" is not on origin — a reviewer grant binds the pushed HEAD, so push it first`);
+  }
+  const tip = refs.remoteSha.toLowerCase();
+  if (opts.head !== undefined && String(opts.head).toLowerCase() !== tip) {
+    throw new UserError(`--head ${String(opts.head).slice(0, 12)} is not origin's tip of "${opts.branch}" (${tip.slice(0, 12)}) — the review covers a commit the grant would not bind; re-review the tip`);
+  }
+
+  const rec = {
+    v: '1', role, reviewer: opts.reviewer, head: tip,
+    verdict: opts.verdict, checklist: opts.checklist, 'checklist-items': opts.checklistItems,
+    escalation: opts.escalation, 'escalation-result': opts.escalationResult,
+    'ci-roundtrip': opts.ciRoundtrip, 'ci-run': opts.ciRun,
+  };
+  for (const k of Object.keys(rec)) if (rec[k] === undefined) delete rec[k];
+  const v = migrationGrant.validateReviewRecord(rec);
+  if (!v.valid) throw new UserError(`the review record is invalid: ${v.problems.join('; ')}`);
+  if (!v.passing) {
+    throw new UserError(`the review does not pass (${migrationGrant.reviewRecordFailure(rec)}) — a grant carrying a failing review is a contradiction; nothing was posted`);
+  }
+  return rec;
 }
 
 function cmdMigrationGrantCreate(repoAbs, num, opts) {
@@ -3005,12 +3097,22 @@ function cmdMigrationGrantCreate(repoAbs, num, opts) {
   // in ship, which is the worst of both: looks done, does nothing. Roll the label back rather than
   // leave that state.
   const iso = nowISO();
-  const commentR = git.ghIssueComment(repoAbs, num, migrationGrant.grantCommentBody(opts.branch, commentHost(repoAbs), iso));
+  const body = opts.reviewRecord
+    ? migrationGrant.reviewGrantCommentBody(opts.branch, commentHost(repoAbs), iso, opts.reviewRecord)
+    : migrationGrant.grantCommentBody(opts.branch, commentHost(repoAbs), iso);
+  const commentR = git.ghIssueComment(repoAbs, num, body);
   if (!commentR.ok) {
     git.ghIssueEdit(repoAbs, num, labels.migrationGrantLabelArgs({ clear: true }));
     throw new UserError(`label applied but the grant comment failed to post (${commentR.stderr.split('\n')[0] || commentR.code}) — rolled the label back so this does not read as granted. Re-run.`);
   }
 
+  if (opts.reviewRecord) {
+    print(`Recorded a ${migrationGrant.REVIEWER_ROLE} grant on #${num} in ${shortRepo(repoAbs)} — reviewer "${opts.reviewRecord.reviewer}", branch "${opts.branch}" @ ${opts.reviewRecord.head.slice(0, 12)}.`);
+    print('  Bound to that HEAD: any new commit voids it. It expires the moment the issue closes.');
+    print('  colab ship does not honour reviewer grants yet — its gate still reads human grants only.');
+    print(`  Revoke any time: colab migration-grant ${num} --revoke`);
+    return 0;
+  }
   print(`Granted #${num} in ${shortRepo(repoAbs)} a migration exemption for branch "${opts.branch}".`);
   print(`  This covers ONLY this branch, and expires the moment #${num} closes.`);
   print(`  Revoke any time: colab migration-grant ${num} --revoke`);
@@ -3024,7 +3126,8 @@ function cmdMigrationGrantRevoke(repoAbs, num) {
   if (!info) throw new UserError(`could not read #${num} from the tracker`);
   const labelNames = (info.labels || []).map((l) => (l && typeof l === 'object' ? l.name : l));
   const hasLabel = labelNames.includes(labels.MIGRATION_GRANT_LABEL);
-  const live = migrationGrant.liveGrants(info.comments);
+  // Every role (#397): a revoke cancels reviewer grants too, so a reviewer-only issue is not "nothing to revoke".
+  const live = migrationGrant.liveGrantRecords(info.comments);
 
   if (!hasLabel && live.length === 0) {
     print(`No live migration grant on #${num} in ${shortRepo(repoAbs)} — nothing to revoke.`);
@@ -3070,10 +3173,13 @@ function cmdMigrationGrantList(opts) {
   const stale = [];
   for (const h of hits) {
     const info = git.ghIssueView(repoAbs, h.number, ['state', 'labels', 'comments']);
-    const live = info ? migrationGrant.liveGrants(info.comments) : [];
+    const live = info ? migrationGrant.liveGrantRecords(info.comments) : [];
     if (live.length === 0) { stale.push(h.number); continue; }
     const g = live[live.length - 1];
-    grants.push({ issue: h.number, title: h.title, branch: g.branch, by: g.login, authorAssociation: g.authorAssociation, at: g.at });
+    const row = { issue: h.number, title: h.title, branch: g.branch, by: g.login, authorAssociation: g.authorAssociation, at: g.at, role: g.role };
+    // #397 — additive fields, reviewer grants only.
+    if (g.role !== 'human') Object.assign(row, { reviewer: g.reviewer, head: g.head, valid: g.valid, passing: g.passing });
+    grants.push(row);
   }
 
   if (opts.json) {
@@ -3085,8 +3191,8 @@ function cmdMigrationGrantList(opts) {
     return 0;
   }
   print(table(
-    grants.map((g) => [String(g.issue), g.branch, g.by || '(unknown)', g.at, g.title]),
-    ['ISSUE', 'BRANCH', 'GRANTED BY', 'WHEN', 'TITLE'],
+    grants.map((g) => [String(g.issue), g.branch, g.role === 'human' ? 'human' : `${g.role}:${g.reviewer || '?'}@${String(g.head || '').slice(0, 7)}${g.valid ? '' : ' (invalid)'}`, g.by || '(unknown)', g.at, g.title]),
+    ['ISSUE', 'BRANCH', 'ROLE', 'GRANTED BY', 'WHEN', 'TITLE'],
   ));
   if (stale.length) {
     print('');

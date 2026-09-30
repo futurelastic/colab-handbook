@@ -195,9 +195,290 @@ function evaluateShipSet(issues, records, branch, labelName) {
   return { ok: missing.length === 0, granted, missing };
 }
 
+// ============================================================================================
+// ROLE-TAGGED GRANTS (#397) and the repo policy that says whether a reviewer may grant (#398).
+//
+// WHAT THIS ADDS, AND WHAT IT DELIBERATELY DOES NOT. A human grant (above) is a label plus a
+// comment, and the comment says nothing about WHO decided: one minted through a dashboard is
+// byte-identical to one any trusted account could post. The reviewer role gives that decision a
+// shape — a declared reviewer identity, and a REVIEW RECORD (verdict, checklist result, which
+// escalation condition was checked, the CI round-trip result, the reviewed HEAD) — so a later
+// reader can check the review rather than trust the comment.
+//
+// NOTHING IN THIS BLOCK OPENS `colab ship`'s GATE. liveGrants()/evaluateIssue()/evaluateShipSet()
+// above read ONLY the human marker, and the reviewer marker is built so GRANT_RE can never match
+// it (different leading emoji — the same collision discipline as grant vs revoke). The accessor
+// below, evaluateReviewerGrant(), is exported for the ship-side reader to call once it exists;
+// until then a reviewer grant is recorded, listed, and inert.
+//
+// THE REVIEWER IDENTITY IS DECLARED, NOT ATTESTED. The only anti-forgery properties are the same
+// two the human grant has — the label needs write/triage permission, and TRUSTED_ASSOCIATIONS on
+// read. A reader must not treat `reviewer:` as proof of who reviewed; it is who the grant SAYS
+// reviewed. Likewise `ci-roundtrip:` is the reviewer's report — a gate should re-verify CI for
+// `head` itself rather than rely on the recorded value.
+// ============================================================================================
+
+/** The reviewer grant's first-line mark. STABLE WIRE FORMAT. Distinct leading emoji on purpose:
+ *  GRANT_RE (the human marker, the one today's ship gate reads) must never match a reviewer grant. */
+const REVIEW_GRANT_MARK = '🔎 Migration review grant';
+const REVIEWER_ROLE = 'migration-reviewer';
+const GRANT_ROLES = Object.freeze(['human', REVIEWER_ROLE]);
+
+const REVIEW_GRANT_RE = /^🔎 Migration review grant — role `([^`]*)` · reviewer `([^`]*)` · branch `([^`]*)` · head `([^`]*)` · host `([^`]*)` · (\S+)/;
+
+/** The fenced block's info string — the record is found by it, never by position. */
+const REVIEW_RECORD_FENCE = 'migration-review';
+const REVIEW_RECORD_VERSION = '1';
+
+const SHA40_RE = /^[0-9a-f]{40}$/;
+const REVIEWER_ID_RE = /^[A-Za-z0-9._@-]+$/;
+const CONDITION_ID_RE = /^[a-z0-9][a-z0-9-]*$/;
+
+/** Every key a v1 record may carry, and what each accepts. `required: false` keys may be absent.
+ *  Order here is the order reviewGrantCommentBody() writes them in. */
+const REVIEW_RECORD_FIELDS = Object.freeze([
+  { key: 'v', required: true, values: [REVIEW_RECORD_VERSION] },
+  { key: 'role', required: true, values: [REVIEWER_ROLE] },
+  { key: 'reviewer', required: true, re: REVIEWER_ID_RE, hint: 'letters, digits, . _ @ -' },
+  { key: 'head', required: true, re: SHA40_RE, hint: 'a full 40-hex commit sha' },
+  { key: 'verdict', required: true, values: ['approve', 'reject'] },
+  { key: 'checklist', required: true, values: ['pass', 'fail'] },
+  { key: 'checklist-items', required: false, re: /^\d+\/\d+$/, hint: 'N/M, e.g. 7/7' },
+  { key: 'escalation', required: true, re: CONDITION_ID_RE, hint: 'a condition id, lowercase-hyphenated' },
+  { key: 'escalation-result', required: true, values: ['clear', 'escalated'] },
+  { key: 'ci-roundtrip', required: true, values: ['pass', 'fail', 'pending'] },
+  { key: 'ci-run', required: false, re: /^\S+$/, hint: 'a run id or URL, no spaces' },
+]);
+const REVIEW_RECORD_KEYS = new Set(REVIEW_RECORD_FIELDS.map((f) => f.key));
+
+/**
+ * Validate a record object (key → string) — from a parsed comment or from CLI flags, the SAME
+ * function for both, so the mint path and the read path can never disagree about what is valid.
+ * `marker` (optional) is the parsed first line; when given, `head` and `reviewer` must agree with
+ * it — a record reviewing one sha under a marker naming another is not a review of anything.
+ *
+ * Returns { valid, passing, problems }. VALID = well-formed. PASSING = valid AND the review said
+ * yes on every axis (approve · checklist pass · escalation clear · CI round-trip pass). The two are
+ * separate because a well-formed failing review is a real, recordable outcome — just never a grant.
+ */
+function validateReviewRecord(rec, marker) {
+  const problems = [];
+  const r = rec && typeof rec === 'object' ? rec : {};
+  for (const k of Object.keys(r)) {
+    if (!REVIEW_RECORD_KEYS.has(k)) problems.push(`unknown key "${k}" — a v${REVIEW_RECORD_VERSION} review record has no such field`);
+  }
+  for (const f of REVIEW_RECORD_FIELDS) {
+    const has = Object.prototype.hasOwnProperty.call(r, f.key) && r[f.key] !== undefined && r[f.key] !== null && String(r[f.key]) !== '';
+    if (!has) {
+      if (f.required) problems.push(`missing "${f.key}"`);
+      continue;
+    }
+    const v = String(r[f.key]);
+    if (f.values && !f.values.includes(v)) problems.push(`"${f.key}" is ${JSON.stringify(v)}, expected ${f.values.join(' | ')}`);
+    if (f.re && !f.re.test(v)) problems.push(`"${f.key}" is ${JSON.stringify(v)}, expected ${f.hint}`);
+  }
+  if (r['checklist-items'] && /^\d+\/\d+$/.test(r['checklist-items'])) {
+    const [a, b] = String(r['checklist-items']).split('/').map(Number);
+    if (b === 0 || a > b) problems.push(`"checklist-items" is ${r['checklist-items']} — N must be ≤ M and M > 0`);
+  }
+  if (marker) {
+    if (r.head && marker.head !== r.head) problems.push(`record head ${String(r.head).slice(0, 7)} differs from the marker's head ${String(marker.head).slice(0, 7)}`);
+    if (r.reviewer && marker.reviewer !== r.reviewer) problems.push(`record reviewer "${r.reviewer}" differs from the marker's reviewer "${marker.reviewer}"`);
+    if (marker.role !== REVIEWER_ROLE) problems.push(`marker role is "${marker.role}", expected "${REVIEWER_ROLE}"`);
+    if (!SHA40_RE.test(String(marker.head || ''))) problems.push(`marker head "${marker.head}" is not a full 40-hex sha`);
+  }
+  const valid = problems.length === 0;
+  const passing = valid && r.verdict === 'approve' && r.checklist === 'pass'
+    && r['escalation-result'] === 'clear' && r['ci-roundtrip'] === 'pass';
+  return { valid, passing, problems };
+}
+
+/** Why a VALID record is not passing, as one line — or '' when it passes. */
+function reviewRecordFailure(rec) {
+  const why = [];
+  if (rec.verdict !== 'approve') why.push(`verdict ${rec.verdict}`);
+  if (rec.checklist !== 'pass') why.push(`checklist ${rec.checklist}`);
+  if (rec['escalation-result'] !== 'clear') why.push(`escalation ${rec.escalation} ${rec['escalation-result']}`);
+  if (rec['ci-roundtrip'] !== 'pass') why.push(`CI round-trip ${rec['ci-roundtrip']}`);
+  return why.join(', ');
+}
+
+/**
+ * The exact reviewer-grant comment body: marker line, blank line, fenced record. Keep in lockstep
+ * with REVIEW_GRANT_RE and parseReviewRecord. `rec` must carry at least role/reviewer/head; the
+ * caller (tools/colab) validates it with validateReviewRecord BEFORE calling this.
+ */
+function reviewGrantCommentBody(branch, host, iso, rec) {
+  const head = `${REVIEW_GRANT_MARK} — role \`${rec.role}\` · reviewer \`${rec.reviewer}\` · branch \`${branch}\``
+    + ` · head \`${rec.head}\` · host \`${host}\` · ${iso}`
+    + ' — bound to this HEAD: any new commit voids it; expires when this issue closes.';
+  const lines = [];
+  for (const f of REVIEW_RECORD_FIELDS) {
+    const v = rec[f.key];
+    if (v === undefined || v === null || String(v) === '') continue;
+    lines.push(`${f.key}: ${v}`);
+  }
+  return `${head}\n\n\`\`\`${REVIEW_RECORD_FENCE}\n${lines.join('\n')}\n\`\`\``;
+}
+
+/**
+ * Parse a reviewer-grant comment body → { marker, record, problems } or null when the first line
+ * is not a reviewer-grant marker at all. The record is the FIRST fenced block whose info string is
+ * exactly `migration-review`; text outside it is ignored. A marker with no such block, or a block
+ * with a malformed line, returns problems — never a record silently missing fields.
+ */
+function parseReviewGrant(body) {
+  const text = String(body || '').replace(/\r\n/g, '\n').trim();
+  const m = text.match(REVIEW_GRANT_RE);
+  if (!m) return null;
+  const marker = { role: m[1], reviewer: m[2], branch: m[3], head: m[4], host: m[5], at: m[6] };
+  const problems = [];
+  const fence = new RegExp('^```' + REVIEW_RECORD_FENCE + '[ \\t]*\\n([\\s\\S]*?)^```[ \\t]*$', 'm');
+  const fm = text.match(fence);
+  if (!fm) {
+    problems.push(`no \`\`\`${REVIEW_RECORD_FENCE} block — a reviewer grant without its review record is not a grant`);
+    return { marker, record: null, problems };
+  }
+  const record = {};
+  for (const raw of fm[1].split('\n')) {
+    const line = raw.trim();
+    if (line === '') continue;
+    const kv = line.match(/^([a-z][a-z-]*):\s*(.*)$/);
+    if (!kv) { problems.push(`record line ${JSON.stringify(line)} is not "key: value"`); continue; }
+    if (Object.prototype.hasOwnProperty.call(record, kv[1])) { problems.push(`"${kv[1]}" appears twice`); continue; }
+    record[kv[1]] = kv[2].trim();
+  }
+  const v = validateReviewRecord(record, marker);
+  problems.push(...v.problems);
+  return { marker, record, problems };
+}
+
+/**
+ * Every live grant of EVERY role — the human ones liveGrants() returns, plus reviewer grants —
+ * after the same revoke rule (a revoke cancels every earlier grant, whichever role, whoever posted
+ * it). Oldest-first. Reviewer entries carry { role, reviewer, head, record, problems, valid,
+ * passing }; human entries carry role 'human'. For listing and for evaluateReviewerGrant — the
+ * ship gate's evaluateIssue deliberately keeps reading liveGrants() (human only).
+ */
+function liveGrantRecords(comments) {
+  const list = Array.isArray(comments) ? comments : [];
+  const sorted = [...list].sort((a, b) => (a.createdAt < b.createdAt ? -1 : a.createdAt > b.createdAt ? 1 : 0));
+  let lastRevokeAt = null;
+  for (const c of sorted) {
+    if (REVOKE_RE.test(String(c.body || '').trim())) {
+      if (lastRevokeAt === null || c.createdAt > lastRevokeAt) lastRevokeAt = c.createdAt;
+    }
+  }
+  const out = [];
+  for (const c of sorted) {
+    const at = c.createdAt;
+    if (lastRevokeAt !== null && lastRevokeAt > at) continue;
+    const body = String(c.body || '').trim();
+    const base = { at, login: (c.author && c.author.login) || '', authorAssociation: c.authorAssociation || '' };
+    const h = body.match(GRANT_RE);
+    if (h) { out.push({ role: 'human', branch: h[1], host: h[2], ...base }); continue; }
+    const r = parseReviewGrant(body);
+    if (r) {
+      const v = r.record ? validateReviewRecord(r.record, r.marker) : { valid: false, passing: false };
+      out.push({
+        role: r.marker.role, reviewer: r.marker.reviewer, branch: r.marker.branch, head: r.marker.head,
+        host: r.marker.host, ...base, record: r.record, problems: r.problems,
+        valid: r.problems.length === 0 && v.valid, passing: r.problems.length === 0 && v.passing,
+      });
+    }
+  }
+  return out;
+}
+
+/**
+ * HEAD binding. A human grant is branch-bound, not HEAD-bound (unchanged since #98) → unbound, ok.
+ * A reviewer grant covers exactly the commit it reviewed: ok only when `branchHeadSha` is a full
+ * 40-hex sha equal (case-insensitively) to the grant's head. A short or missing sha is NOT ok —
+ * "could not confirm the HEAD" is never read as "the HEAD matches", and never a prefix match.
+ */
+function grantHeadBinding(grant, branchHeadSha) {
+  if (!grant || grant.role === 'human' || grant.role === undefined) return { bound: false, ok: true, reason: '' };
+  const want = String(grant.head || '').toLowerCase();
+  const have = String(branchHeadSha || '').toLowerCase();
+  if (!SHA40_RE.test(have)) {
+    return { bound: true, ok: false, reason: `cannot confirm the branch HEAD (${have ? `"${have}" is not a full sha` : 'no sha given'}) — a reviewer grant is bound to one commit` };
+  }
+  if (want !== have) {
+    return { bound: true, ok: false, reason: `reviewer grant is bound to ${want.slice(0, 7)}, branch is at ${have.slice(0, 7)} — a new commit voids it` };
+  }
+  return { bound: true, ok: true, reason: '' };
+}
+
+/** `migration-grant:` values, in project.yml (#398). Absent = human, today's behaviour. */
+const GRANT_POLICIES = Object.freeze(['human', 'reviewer']);
+
+/**
+ * `migration-grant:` from a parsed project.yml → { policy, declared, valid, reason }. A flat key,
+ * NOT nested under `migrations:` (which stays a list of path prefixes — three readers depend on
+ * that shape, and a map there would fail every descriptor not yet migrated). An invalid value is
+ * read as `human` — the stricter reading, same posture as parseShipBatch — and `valid: false` so
+ * the audit fails it.
+ */
+function parseGrantPolicy(doc) {
+  const has = !!doc && Object.prototype.hasOwnProperty.call(doc, 'migration-grant');
+  const raw = has ? doc['migration-grant'] : undefined;
+  if (!has || raw === null || raw === undefined) {
+    return { policy: 'human', declared: false, valid: true, reason: 'migration-grant absent — human grants only' };
+  }
+  const v = typeof raw === 'string' ? raw.trim() : raw;
+  if (typeof v === 'string' && GRANT_POLICIES.includes(v)) {
+    return { policy: v, declared: true, valid: true, reason: `migration-grant: ${v}` };
+  }
+  return { policy: 'human', declared: true, valid: false,
+    reason: `migration-grant is ${JSON.stringify(raw)}, expected ${GRANT_POLICIES.join(' | ')} (omit for human)` };
+}
+
+/**
+ * The reviewer-grant verdict for one issue — the accessor the ship-side reader will call. NOT
+ * called by `colab ship` today. `ctx` = { branch, headSha, issueNum, labelName, policy } where
+ * `policy` is parseGrantPolicy(...).policy. Checks, cheapest/most-fundamental first, each with its
+ * own reason: read failed · not open · no label · policy not `reviewer` · no live reviewer grant ·
+ * branch mismatch · untrusted author · record invalid · record not passing · HEAD binding.
+ * The CI round-trip is checked here only as RECORDED; re-verifying it against live CI for `head`
+ * is the gate's job. Returns { ok, grant, reason, checks: { policy, marker, head } }.
+ */
+function evaluateReviewerGrant(record, ctx) {
+  const c = ctx || {};
+  const issue = c.issueNum;
+  const checks = { policy: false, marker: false, head: false };
+  const no = (reason, grant = null) => ({ issue, ok: false, grant, reason, checks });
+  if (!record) return no(`#${issue} could not be read from the tracker — a failed read is never a grant`);
+  if (record.state !== 'OPEN') return no(`#${issue} is ${record.state || 'not open'} — a grant expires when its issue closes`);
+  const labelNames = (record.labels || []).map((l) => (l && typeof l === 'object' ? l.name : l));
+  if (!labelNames.includes(c.labelName)) return no(`#${issue} does not carry the \`${c.labelName}\` label`);
+  if (c.policy !== 'reviewer') return no(`this repo's migration-grant policy is "${c.policy || 'human'}" — a reviewer grant is honoured only under migration-grant: reviewer`);
+  checks.policy = true;
+  const reviewer = liveGrantRecords(record.comments).filter((g) => g.role !== 'human');
+  if (reviewer.length === 0) return no(`#${issue} has no live reviewer grant (revoked, or never posted)`);
+  const g = reviewer[reviewer.length - 1];
+  if (g.branch !== c.branch) return no(`#${issue}'s reviewer grant is bound to branch "${g.branch}", not "${c.branch}"`, g);
+  if (!TRUSTED_ASSOCIATIONS.has(g.authorAssociation)) {
+    return no(`#${issue}'s reviewer grant was posted by ${g.login || '(unknown)'} (${g.authorAssociation || 'unknown association'}) — not a repo owner/member/collaborator`, g);
+  }
+  if (!g.valid) return no(`#${issue}'s reviewer grant has an invalid review record: ${(g.problems || []).join('; ') || 'unreadable'}`, g);
+  if (!g.passing) return no(`#${issue}'s review record does not pass: ${reviewRecordFailure(g.record)}`, g);
+  checks.marker = true;
+  const hb = grantHeadBinding(g, c.headSha);
+  if (!hb.ok) return no(`#${issue}: ${hb.reason}`, g);
+  checks.head = true;
+  return { issue, ok: true, grant: g, reason: '', checks };
+}
+
 module.exports = {
   GRANT_MARK, REVOKE_MARK, GRANT_RE, REVOKE_RE,
   grantCommentBody, revokeCommentBody,
   liveGrants, TRUSTED_ASSOCIATIONS,
   evaluateIssue, evaluateShipSet,
+  // #397 — role-tagged grants
+  REVIEW_GRANT_MARK, REVIEW_GRANT_RE, REVIEWER_ROLE, GRANT_ROLES,
+  REVIEW_RECORD_FENCE, REVIEW_RECORD_FIELDS,
+  validateReviewRecord, reviewRecordFailure, reviewGrantCommentBody, parseReviewGrant,
+  liveGrantRecords, grantHeadBinding, evaluateReviewerGrant,
+  // #398 — repo policy
+  GRANT_POLICIES, parseGrantPolicy,
 };

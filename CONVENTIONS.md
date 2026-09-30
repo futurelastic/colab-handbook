@@ -2781,6 +2781,32 @@ exemption** — deliberately not a repo- or tier-level switch.
 - **Never weakens any other precondition** — CI green, claim corroboration, trunk-checkout
   check, and hand-merge conflict check all still run in full on a granted branch.
 
+**A grant carries a role (#397), and the repo declares which roles it accepts (#398).**
+The grant above is role `human`, and its comment is unchanged. A second role,
+`migration-reviewer`, uses a distinct marker (`🔎 Migration review grant`) that names the
+reviewer's **declared** identity and carries a **review record**: a fenced
+`` ```migration-review `` block giving the verdict, the checklist result, the escalation
+condition checked, the CI round-trip result, and the reviewed HEAD sha. Four properties
+hold it together:
+
+- **Bound to one commit.** A reviewer grant covers only the HEAD it reviewed, so a new
+  commit voids it. A human grant stays branch-bound, as before.
+- **Opt-in per repo.** Reviewer grants need `project.yml`
+  [`migration-grant: reviewer`](project.schema.md#migration-grant--optional), read from the
+  trunk checkout (a branch cannot raise its own policy). The default is `human`, and
+  `colab migration-grant` refuses to mint a reviewer grant anywhere else.
+- **Recorded only if the review passed.** The record must approve, pass the checklist,
+  clear the escalation and pass the CI round-trip. A failing review is refused, not
+  recorded. `COLAB_HUMAN=1` is still required for every role.
+- **Not attested.** The reviewer id and the recorded CI result are claims made in the
+  comment. The label's write permission and the trusted-author check are still the only
+  anti-forgery properties, so a gate must re-verify CI for the recorded HEAD itself.
+
+**`colab ship` does not honour a reviewer grant yet.** Its gate reads human grants only,
+and the reviewer marker is built so that reader can never match it. The format and the
+policy are defined ahead of their consumer. Until that consumer lands, a reviewer grant
+is recorded, listed and inert.
+
 **`needs-migration-grant` is this gate's plan-time half, not a second gate (#230).**
 It is provisioned in `CONVENTION_LABELS` alongside `migration-granted` for the same
 malignant-absence reason, but nothing in this repo's own tooling reads it — a

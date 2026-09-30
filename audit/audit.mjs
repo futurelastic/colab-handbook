@@ -95,6 +95,8 @@ const shipBatch = require("../tools/lib/ship-batch.js");
 // #383: where migrations live — the one rule `colab ship`'s gate and `release cut` read; the audit
 // validates the `migrations:` declaration against it and reports a `*/migrations/` dir it misses.
 const migrationPaths = require("../tools/lib/migration-paths.js");
+// #398: the `migration-grant:` policy key — read through the same module `colab migration-grant` uses.
+const migrationGrant = require("../tools/lib/migration-grant.js");
 // #228's identity vocabulary — resolution, parsing, matching and REDACTION. Shared with the
 // conformance test that holds it and the shell hook (templates/pre-commit-identity) to the
 // same semantics; the shell scanner cannot require it (a template lands in repos with no
@@ -1264,6 +1266,20 @@ function auditRepo(target, ctx) {
       if (undeclared.length) {
         warn(`migration-shaped director${undeclared.length === 1 ? "y" : "ies"} outside every declared path: ${undeclared.join(", ")} — colab ship's no-new-migrations gate does not see ${undeclared.length === 1 ? "it" : "them"}; declare in project.yml (migrations: [${undeclared.join(", ")}]) if these are migrations`);
       }
+    }
+
+    // ---- migration-grant (#398) -----------------------------------------------
+    // Who may open the no-new-migrations door: `human` (absent — today's behaviour) or `reviewer`.
+    // A flat key, deliberately NOT nested under `migrations:` (that stays a list of path prefixes,
+    // read by three consumers). tools/lib/migration-grant.js parseGrantPolicy is the one reading, so
+    // `colab migration-grant` and the audit cannot disagree. The value is always reported
+    // (info.migrationGrant). An invalid value fails: the reader falls back to `human`, which is safe
+    // but silent. `reviewer` warns while no ship reader honours reviewer grants — declared, inert.
+    {
+      const pol = migrationGrant.parseGrantPolicy(cfg);
+      info.migrationGrant = pol.policy;
+      if (!pol.valid) fail(pol.reason);
+      else if (pol.policy === "reviewer") warn("migration-grant: reviewer declared — colab ship does not honour reviewer grants yet; its no-new-migrations gate still requires a human grant");
     }
 
     // ---- holds (#360) ---------------------------------------------------------

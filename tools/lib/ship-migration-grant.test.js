@@ -355,3 +355,91 @@ test('regression: every documented precondition name (from ship-dry-json.test.js
     assert.ok(names.includes(n), `missing check "${n}" in ${JSON.stringify(names)}`);
   }
 });
+
+// --- #397/#398: the reviewer role's mint path — every refusal lands BEFORE any gh call -----------
+// A reviewer grant cannot be WRITTEN here any more than a human one can (see the file banner), so
+// the positive case below proves only that every local check passed and the command then reached
+// the real tracker read — never a local-only success. That a reviewer grant on the tracker does not
+// open ship's gate is pinned in migration-grant.test.js ("liveGrants ignores reviewer grants"),
+// because injecting a granted read here would need exactly the fake-gh backdoor this file refuses.
+
+const PROJECT_YML_REVIEWER = PROJECT_YML_AUTO_TRUNK + 'migration-grant: reviewer\n';
+const REVIEW_FLAGS = ['--role', 'migration-reviewer', '--reviewer', 'bot-a', '--verdict', 'approve', '--checklist', 'pass',
+  '--escalation', 'destructive-ddl', '--escalation-result', 'clear', '--ci-roundtrip', 'pass'];
+
+function pushedMigrationBranch(fx, branch) {
+  addMigrationBranch(fx, branch);
+  fx.g(fx.work, 'push', '-q', 'origin', branch);
+  return fx.g(fx.work, 'rev-parse', branch).trim();
+}
+
+test('reviewer grant: refused under the default policy (migration-grant absent = human)', () => {
+  const fx = fixture(PROJECT_YML_AUTO_TRUNK);
+  pushedMigrationBranch(fx, 'feat/x-1');
+  const r = colab(fx, ['migration-grant', '1', '--branch', 'feat/x-1', ...REVIEW_FLAGS, '--repo', fx.work], { COLAB_HUMAN: '1' });
+  assert.notStrictEqual(r.code, 0);
+  assert.match(r.err, /migration-grant policy is "human" \(absent = human\)/);
+});
+
+test('reviewer grant: still requires COLAB_HUMAN=1, whatever the policy', () => {
+  const fx = fixture(PROJECT_YML_REVIEWER);
+  pushedMigrationBranch(fx, 'feat/x-1');
+  const r = colab(fx, ['migration-grant', '1', '--branch', 'feat/x-1', ...REVIEW_FLAGS, '--repo', fx.work], { COLAB_HUMAN: '' });
+  assert.notStrictEqual(r.code, 0);
+  assert.match(r.err, /requires a human/);
+});
+
+test('reviewer grant: an unpushed branch is refused — the grant binds origin\'s tip', () => {
+  const fx = fixture(PROJECT_YML_REVIEWER);
+  addMigrationBranch(fx, 'feat/x-1');
+  const r = colab(fx, ['migration-grant', '1', '--branch', 'feat/x-1', ...REVIEW_FLAGS, '--repo', fx.work], { COLAB_HUMAN: '1' });
+  assert.notStrictEqual(r.code, 0);
+  assert.match(r.err, /is not on origin/);
+});
+
+test('reviewer grant: --head differing from origin\'s tip is refused', () => {
+  const fx = fixture(PROJECT_YML_REVIEWER);
+  pushedMigrationBranch(fx, 'feat/x-1');
+  const r = colab(fx, ['migration-grant', '1', '--branch', 'feat/x-1', ...REVIEW_FLAGS, '--head', 'f'.repeat(40), '--repo', fx.work], { COLAB_HUMAN: '1' });
+  assert.notStrictEqual(r.code, 0);
+  assert.match(r.err, /is not origin's tip/);
+});
+
+test('reviewer grant: an invalid record is refused before any gh call', () => {
+  const fx = fixture(PROJECT_YML_REVIEWER);
+  pushedMigrationBranch(fx, 'feat/x-1');
+  const flags = REVIEW_FLAGS.filter((f, i, a) => f !== '--verdict' && a[i - 1] !== '--verdict');
+  const r = colab(fx, ['migration-grant', '1', '--branch', 'feat/x-1', ...flags, '--repo', fx.work], { COLAB_HUMAN: '1' });
+  assert.notStrictEqual(r.code, 0);
+  assert.match(r.err, /review record is invalid: missing "verdict"/);
+  assert.doesNotMatch(r.err, /could not read #1/);
+});
+
+test('reviewer grant: a well-formed FAILING review is refused — never recorded as a grant', () => {
+  const fx = fixture(PROJECT_YML_REVIEWER);
+  pushedMigrationBranch(fx, 'feat/x-1');
+  const flags = REVIEW_FLAGS.map((f, i, a) => (a[i - 1] === '--ci-roundtrip' ? 'pending' : f));
+  const r = colab(fx, ['migration-grant', '1', '--branch', 'feat/x-1', ...flags, '--repo', fx.work], { COLAB_HUMAN: '1' });
+  assert.notStrictEqual(r.code, 0);
+  assert.match(r.err, /does not pass \(CI round-trip pending\)/);
+});
+
+test('reviewer grant: every local check passing still reaches the real tracker read, never a local success', () => {
+  const fx = fixture(PROJECT_YML_REVIEWER);
+  const sha = pushedMigrationBranch(fx, 'feat/x-1');
+  const r = colab(fx, ['migration-grant', '1', '--branch', 'feat/x-1', ...REVIEW_FLAGS, '--head', sha, '--repo', fx.work], { COLAB_HUMAN: '1' });
+  assert.notStrictEqual(r.code, 0, r.out + r.err);
+  assert.doesNotMatch(r.out, /Recorded/);
+  assert.match(r.err, /could not read #1 from the tracker — refusing to write a grant blind/);
+});
+
+test('role flags: an unknown role, record flags on a human grant, and --role on --revoke all refuse', () => {
+  const fx = fixture(PROJECT_YML_REVIEWER);
+  pushedMigrationBranch(fx, 'feat/x-1');
+  const bad = colab(fx, ['migration-grant', '1', '--branch', 'feat/x-1', '--role', 'robot', '--repo', fx.work], { COLAB_HUMAN: '1' });
+  assert.match(bad.err, /--role is "robot", expected human \| migration-reviewer/);
+  const stray = colab(fx, ['migration-grant', '1', '--branch', 'feat/x-1', '--reviewer', 'bot-a', '--ci-roundtrip', 'pass', '--repo', fx.work], { COLAB_HUMAN: '1' });
+  assert.match(stray.err, /\(--reviewer, --ci-roundtrip\) need --role migration-reviewer/);
+  const rev = colab(fx, ['migration-grant', '1', '--revoke', '--role', 'migration-reviewer', '--repo', fx.work], { COLAB_HUMAN: '1' });
+  assert.match(rev.err, /--revoke takes no --role/);
+});
