@@ -6,8 +6,22 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    # Every branch, not only trunk (#411) — the same trigger shape #384 gave the
+    # templates. Sessions push branches without opening a PR, so a main-only trigger
+    # leaves every candidate with branch CI class `none`: the green-branch-run stand-in
+    # for the hermetic verdict never applies here, and a red first surfaces as a TRUNK
+    # red after the merge (CONVENTIONS.md §4, "Branch CI"). GitHub-hosted runners, so
+    # branch runs never queue ahead of a trunk run (§7, "Self-hosted runners").
+    branches: ['**']
   pull_request:
+
+# One live run per ref: a new push cancels the superseded run on the same branch.
+# `main` is NEVER cancelled — every trunk sha keeps a completed run of its own, which
+# is what the merge gate reads. Pull-request runs group under refs/pull/<n>/merge,
+# apart from the branch's push runs.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
   gitleaks:
