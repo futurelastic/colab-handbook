@@ -100,3 +100,22 @@ test('nowMs is injectable for deterministic tests, independent of Date.now()', (
 test('a null run is not wedged — degrade, never throw', () => {
   assert.deepStrictEqual(v.wedgedVerdict(null), { wedged: false, reason: null });
 });
+
+// --- #413: emptyReadVerdict — the grace window for "no run yet" -------------------------------
+
+test('#413 emptyReadVerdict: a sha committed minutes ago is fresh (a run may not exist yet)', () => {
+  const now = Date.parse('2026-09-30T12:00:00Z');
+  const r = v.emptyReadVerdict(now - 3 * 60000, { nowMs: now });
+  assert.strictEqual(r.fresh, true);
+  assert.strictEqual(Math.round(r.minutes), 3);
+});
+
+test('#413 emptyReadVerdict: past the grace window an empty read is not fresh', () => {
+  const now = Date.parse('2026-09-30T12:00:00Z');
+  assert.strictEqual(v.emptyReadVerdict(now - (v.EMPTY_READ_GRACE_MINUTES + 1) * 60000, { nowMs: now }).fresh, false);
+});
+
+test('#413 emptyReadVerdict: unknown age never manufactures a grace', () => {
+  assert.deepStrictEqual(v.emptyReadVerdict(null), { fresh: false, minutes: null });
+  assert.deepStrictEqual(v.emptyReadVerdict(NaN), { fresh: false, minutes: null });
+});
