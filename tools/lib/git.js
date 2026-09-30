@@ -851,7 +851,16 @@ function ghRunsForCommit(repo, branch, sha, limit = 10) {
   let runs;
   try { runs = JSON.parse(r.stdout); } catch (_) { return null; }
   if (!Array.isArray(runs)) return null;
-  return runs.filter((x) => x && x.headSha === sha);
+  const forSha = runs.filter((x) => x && x.headSha === sha);
+  // #413: an empty filter over a sha that HAS a green run was measured intermittently and never
+  // reproduced. Opt-in trace of what the read actually returned, so the next occurrence says
+  // whether gh answered nothing, answered other shas, or failed in a way that parsed as [].
+  if (forSha.length === 0 && process.env.COLAB_DEBUG_CI) {
+    const heads = runs.slice(0, 5).map((x) => (x && x.headSha ? String(x.headSha).slice(0, 7) : '?')).join(',');
+    process.stderr.write(`colab debug-ci: gh run list --branch ${branch} -L ${limit} → ok=${r.ok} rows=${runs.length} ` +
+      `none at ${String(sha).slice(0, 7)} (first heads: ${heads || '-'})\n`);
+  }
+  return forSha;
 }
 
 /**
@@ -888,6 +897,29 @@ function ghRunsAtCommit(repo, sha, limit = 100) {
   try { runs = JSON.parse(r.stdout); } catch (_) { return null; }
   if (!Array.isArray(runs)) return null;
   return runs.filter((x) => x && x.headSha === sha);
+}
+
+/**
+ * ghRunForCommit's verdict over a BY-COMMIT read (#413) — every run at `sha` whatever ref it ran
+ * on, instead of `--branch <ref> -L N`. The second opinion `colab ship` asks for before it calls an
+ * empty trunk read `none`: the branch-filtered list was measured returning nothing for a trunk sha
+ * whose green run existed, and clearing on its own a minute later. Null on failure, as elsewhere.
+ */
+function ghRunForCommitAnyRef(repo, sha, limit = 50) {
+  return summarizeRunsForCommit(ghRunsAtCommit(repo, sha, limit), sha);
+}
+
+/**
+ * Committer time of `sha` in epoch ms, or null when the object is not local or git failed (#413).
+ * The committer time of a trunk squash is the moment it was merged, so this is how young a trunk
+ * sha is — the window in which "no run yet" is the ordinary state, not a missing workflow.
+ */
+function commitTimeMs(repo, sha) {
+  if (!sha) return null;
+  const r = run('git', ['show', '-s', '--format=%ct', sha], { cwd: repo });
+  if (!r.ok) return null;
+  const n = Number(r.stdout.trim());
+  return Number.isFinite(n) && n > 0 ? n * 1000 : null;
 }
 
 /**
@@ -1019,7 +1051,7 @@ module.exports = {
   worktreeList, worktreeListDetailed, resolveWorktreePathForBranch, gitFailureLine,
   dirtyTracked, dirtyUntracked, dirtyAny,
   ghAvailable, ghState, ghIssueEdit, ghListLabels, ghAssignedIssues,
-  ghCurrentLogin, ghIssueView, ghIssueComment, ghRunForSha, ghRunForCommit, ghRunsForCommit, ghRunsForRef, ghRunsAtCommit, ghRunsSince, summarizeRunsForCommit,
+  ghCurrentLogin, ghIssueView, ghIssueComment, ghRunForSha, ghRunForCommit, ghRunsForCommit, ghRunsForRef, ghRunsAtCommit, ghRunForCommitAnyRef, commitTimeMs, ghRunsSince, summarizeRunsForCommit,
   ghRunJobCount, ghRunJobs,
   ghIssueListByLabel, ghLabelDelete, ghLabelCreate, ghListLabelsDetailed, ghLabelEditDescription,
   ghApi, isGraphqlRateLimit, ghIssueRelease, ghClaimHolder, ghIssueLabelEvents, ghIssueLabelActors,

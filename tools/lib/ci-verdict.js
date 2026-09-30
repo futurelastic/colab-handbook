@@ -90,4 +90,24 @@ function wedgedVerdict(run, opts = {}) {
   return { wedged: false, reason: null };
 }
 
-module.exports = { WEDGE_AGE_HOURS, ZERO_JOBS_AGE_FLOOR_MINUTES, wedgedVerdict };
+// #413: how long after a trunk commit "no run at this sha" is still the ordinary state. GitHub
+// creates a push run seconds after the push, but a ship reading trunk right after another ship
+// landed it can get there first. Ten minutes covers queueing on a busy account; past it, an empty
+// read goes back to meaning what it always meant — CI is not wired, or never started.
+const EMPTY_READ_GRACE_MINUTES = 10;
+
+/**
+ * Is an empty CI read of a sha still inside the window where a run may simply not exist YET (#413)?
+ * `committedAtMs` is the sha's committer time (null when unknown). Unknown age never manufactures a
+ * grace — same posture as wedgedVerdict's missing createdAt: a missing signal must not flip a class.
+ *
+ * Returns `{ fresh, minutes }` — `minutes` is the measured age, or null when unknown.
+ */
+function emptyReadVerdict(committedAtMs, opts = {}) {
+  if (committedAtMs == null || !Number.isFinite(committedAtMs)) return { fresh: false, minutes: null };
+  const now = opts.nowMs != null ? opts.nowMs : Date.now();
+  const minutes = (now - committedAtMs) / 60000;
+  return { fresh: minutes >= 0 && minutes < EMPTY_READ_GRACE_MINUTES, minutes };
+}
+
+module.exports = { WEDGE_AGE_HOURS, ZERO_JOBS_AGE_FLOOR_MINUTES, EMPTY_READ_GRACE_MINUTES, wedgedVerdict, emptyReadVerdict };

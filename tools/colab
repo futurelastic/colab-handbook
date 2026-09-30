@@ -9333,8 +9333,30 @@ function shipCiCheck(repoAbs, gh, target, trunk, grantThunk, cureThunk) {
     via = `${trunk} (line "${target}" has no runs — ungated, advisory)`;
   }
   if (!run) return { name, ok: false, class: SELF_CLEARING, detail: 'gh run list failed', grantVerdict: null, cureVerdict: null };
+  // #413: an empty BRANCH-filtered read of trunk's head is a second opinion away from `none`. It was
+  // measured coming back empty for a trunk sha whose green run existed, then clearing a minute later
+  // — and `none` classes HUMAN_GATED, so a transient read parked a ready candidate for a human.
+  // Re-read the same sha by commit (the read `release finalize` already trusts, #339) before
+  // believing it. A failed re-read changes nothing: the branch read's `none` stands.
+  if (run.status === 'none' && target === trunk) {
+    const byCommit = git.ghRunForCommitAnyRef(repoAbs, run.sha);
+    if (byCommit && byCommit.status !== 'none') {
+      run = byCommit;
+      via = `${trunk} (by commit — the branch-filtered read was empty)`;
+    }
+  }
   const at = `${via}@${shortSha(run.sha)}`;
-  const verdict = classifyCiRun(repoAbs, run, at);
+  let verdict = classifyCiRun(repoAbs, run, at);
+  // #413: still no run anywhere at a trunk sha committed minutes ago — the run may not exist YET
+  // (a ship reading trunk right after another ship landed it). That clears on its own: SELF_CLEARING,
+  // never HUMAN_GATED, until the grace window has passed. Age unknown keeps the old class.
+  if (run.status === 'none' && target === trunk) {
+    const fresh = ciVerdict.emptyReadVerdict(git.commitTimeMs(repoAbs, run.sha));
+    if (fresh.fresh) {
+      verdict = { ok: false, class: SELF_CLEARING,
+        detail: `no run yet for ${at} — committed ${fresh.minutes.toFixed(1)}m ago, inside the ${ciVerdict.EMPTY_READ_GRACE_MINUTES}m grace; retry later` };
+    }
+  }
   // #373: trunk's own run not there yet or still in flight (never a finished red) — a batch that landed
   // this exact sha may already have graded it on its ship-batch/** ref, with the same workflows.
   // Inert (no gh call) unless project.yml declares ship-batch > 1.
