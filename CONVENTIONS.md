@@ -1560,6 +1560,16 @@ reading either sees the same spelling. Spell them exactly so, everywhere:
 | `red:infra` | a run failed **before** the suite could judge the branch — runner boot, browser install, billing lockout, dependency fetch. **Exit 2** where the repo separates them | re-run **once**; an identical failure twice is the runner, not the branch — hand it to the ops lane. Never merged past, never sent back to the implementer: there is nothing in the diff to fix |
 | `red:finding` | the suite ran and something in it failed. **Exit 1** where separated | back to an implementer session, **as a class**. Never merged past, never re-run |
 
+- **The run must have seen the current base (#395).** A class read at a head that does not
+  contain the base's current tip is **`stale-base`**, whatever its runs say: two branches
+  each green alone can combine red when neither run saw the other, and a textually clean
+  merge re-runs nothing. Measured: one branch changed a shared test base class that a
+  second branch's new tests also relied on; both were green, trunk went red on landing.
+  The next step is mechanical — sync the base in, push, wait on the new run (the same
+  15-minute bound), then land; `colab ship` refuses with this verdict, `self-clearing`. A
+  head with no run at all is not stale (the `none` row above governs it). Skipping the
+  re-run because the base's new commits "touch nothing the branch's tests import" is only
+  ever allowed on a measurement, never on a guess — and no generic measurement exists today.
 - **The quantifiers are the trunk rule's, unchanged (#92, #307).** `every … completed`: a
   fast sibling already green never answers for a slow one still running — that sha is
   `none`, not `green`. `cancelled` is `completed` and not a `failure`, so a cancelled
