@@ -15,7 +15,7 @@ Starting points you **copy into your own repo**. That is the entire model.
 | File | Copy to | For | Notes |
 |---|---|---|---|
 | `ci-node.yml` | `.github/workflows/ci.yml` | Pure Node repos: Vite SPA, node libs, Astro static, **Capacitor apps** | Resolves Node version from `project.yml` → `.nvmrc`/`engines` → **fails**. Never a default. |
-| `ci-laravel.yml` | `.github/workflows/ci.yml` | Laravel + Inertia + Vite fullstack (with route/type codegen) | Same resolution for **both** PHP and Node. Includes the sqlite bootstrap + explicit wayfinder step. |
+| `ci-laravel.yml` | `.github/workflows/ci.yml` | Laravel + Inertia + Vite fullstack (with route/type codegen) | Same resolution for **both** PHP and Node. Includes the sqlite bootstrap + explicit wayfinder step, and a `migrations` job that round-trips the schema (migrate → rollback → seed → migrate, schema compared) on the test engine **and** the deploy engine (a MariaDB/MySQL service container at production's version). Its data-dependent checks need `ROUNDTRIP_SEEDER` — see *Migration round-trip* below. |
 | `ci-python.yml` | `.github/workflows/ci.yml` | Python: FastAPI/Flask services, CLIs, libraries | Resolves Python from `project.yml` → `.python-version`/`requires-python` → **fails**. `requirements.txt` does not count. **Hybrid** Python+Node repo: copy this, then paste `ci-node.yml`'s `build:` job alongside — see the template header. |
 | `release-tag.yml` | `.github/workflows/release.yml` | Any repo cutting `v*.*.*` releases | Triggers on tag push. Publishes a grouped GitHub Release — a `-rc.N` tag as a pre-release, every summary since the previous *final* tag. No toolchain, no deploy; its header shows the `!v*.*.*-*` exclusion a deploy trigger needs. |
 | `deploy-xserver.yml` | `.github/workflows/deploy-xserver.yml` | PHP-framework + Vite apps shipped to **shared hosting over SSH** (no root, no Docker): build on a runner, rsync, migrate on the server | Derived from three independently-written copies. Resolves Node the same way the CI templates do — all three hardcoded it, and one shipped on a different major than its CI built on. Migrates **production**; keeps a **mandatory** smoke test. Does **not** change your tier. |
@@ -25,6 +25,31 @@ Starting points you **copy into your own repo**. That is the entire model.
 | `docs-lint.mjs` | anywhere in-repo (e.g. `tools/docs-lint.mjs`) | Every repo — checks the STRUCTURE of the doc graph (router integrity, orphans, drafts-in-`docs/`, router size budget, dated files, §-citation resolution, `gotchas.d/` registry discipline, two-surface linkage) | Zero-dependency, plain Node — but it does **shell out to `git check-ignore`** once per enumeration, so that a git-ignored scratch file (your `.claude/plans/` plan file, say) can never fail a structural check on your repo (#310). No git, or no repo, and it filters nothing and lints exactly as before. **Enumerated by `colab template` and DOES take an automatic version stamp** (colab-handbook #252): `colab template docs-lint.mjs --dest tools/docs-lint.mjs` copies it stamped on its **second** line (`// colab-handbook: docs-lint @ <version>`, after the `#!/usr/bin/env node` shebang — a bare `#` on any other line is a JS syntax error, unlike the YAML templates above) — `--dest` is required, since this file has no formulaic destination the way a workflow does. Pairs with `docs-lint.yml`. Also runs from `code-wrap`'s docs step and a weekly fleet sweep (colab-handbook #249) — this row is the third of its three seats. |
 | `docs-lint.yml` | `.github/workflows/docs-lint.yml` | Every repo that copied `docs-lint.mjs` | Advisory job — `continue-on-error: true` on the lint step, so a finding never blocks a merge until a repo deliberately removes that line. Requires `docs-lint.mjs` to already be in the repo; does not vendor it. |
 | `branch-name.yml` | `.github/workflows/branch-name.yml` | Opt-in — any repo that wants §4's branch shape checked on every PR | One step, no dependencies: the PR's head branch against CONVENTIONS.md §4's regex, both shapes (`<type>/<slug>-<N>` and the `<login>/<machine>/` prefixed one) passing as shipped. Once the repo declares `branchPrefix: machine`, delete the `?` after the regex's first group to require the prefix. The head ref reaches the script through `env:`, never interpolated — on a public repo it is attacker-chosen. |
+
+### Migration round-trip — what the Laravel job proves, and what it cannot
+
+`ci-laravel.yml`'s `migrations` job runs every migration **twice per engine**: once from
+zero, then — after rolling back the migrations the change adds and seeding rows at the
+schema *before* the change — once more, the way a deploy lands new migrations on data
+that predates them. The schema after both passes must match. Two things to know before
+trusting a green run:
+
+- **Both legs matter.** The engines disagree: a `NOT NULL` column added without a default
+  fails on sqlite when rows exist, while MariaDB accepts it and silently writes `''` into
+  every existing row. A deploy-engine leg at a version production does not run proves
+  nothing about production — set the image to the exact version.
+- **Without `ROUNDTRIP_SEEDER`, the data traps pass.** A foreign key over orphan rows,
+  `->change()` dropping an unrestated `nullable`, lossy numeric conversion and the
+  `NOT NULL` case all need rows to fire; on empty tables every one is green on both
+  engines. The seeder runs against the pre-change schema, so it writes the way old data
+  looks — raw `DB::table()` inserts into long-lived columns, not factories.
+
+**Prisma.** No Prisma stack template exists here, so there is no Prisma job to add. The
+round-trip does not translate directly anyway: Prisma Migrate has no down migrations. A
+Prisma repo's nearest equivalent is applying its migrations to an empty deploy-engine
+database (`prisma migrate deploy`) and then asserting no drift
+(`prisma migrate diff --from-migrations … --to-schema-datamodel … --exit-code`) — worth a
+template of its own once a Prisma stack is adopted.
 
 ### Hooks — the same model, copied by hand
 

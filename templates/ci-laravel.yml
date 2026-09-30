@@ -24,6 +24,29 @@
 #   2. RUNNING WAYFINDER EXPLICITLY, before Vite. The Vite plugin swallows stderr and
 #      reports only "Command failed", which is unusable for debugging. Running the
 #      artisan command ourselves first means a codegen failure shows its real error.
+#
+# A third job, `migrations`, round-trips the schema (migrate -> rollback -> migrate)
+# on the TEST engine (sqlite) AND the DEPLOY engine (a MariaDB/MySQL service
+# container). Every case below was measured, and the engines disagree on several of
+# them — so either engine alone passes a migration the other refuses:
+#
+#   - A down() whose statements sqlite cannot run: only the sqlite leg goes red —
+#     and only if down() is ever executed, which nothing else in CI does.
+#   - A down() that does not undo its up(): the schema after the second migrate
+#     differs from the first, on either leg.
+#   - NOT NULL without a default: sqlite refuses the ALTER when the table holds
+#     rows; MariaDB accepts it and silently fills '' into every existing row. Only
+#     the sqlite leg goes red.
+#   - A foreign key added over orphan rows, ->change() silently dropping a modifier
+#     it did not restate (nullable, default, unsigned), lossy numeric conversion:
+#     the deploy engine's strict mode refuses these. sqlite catches some of them
+#     too, through its table rebuild — never count on it for the rest.
+#
+# The last two bullets fire ONLY when rows exist — on an empty table every one of
+# them passes on both engines. Set ROUNDTRIP_SEEDER below, or they go unchecked.
+#
+# Not gated on RUN_TESTS: a bad migration is cheapest to fix on the branch that adds
+# it, so this runs on every push, not only on main.
 
 name: CI
 
@@ -120,6 +143,9 @@ jobs:
   build:
     name: Build (Laravel + Vite)
     runs-on: ubuntu-latest # EDIT: self-hosted label if this repo needs one.
+    # Re-exported so the migrations job below resolves PHP exactly once, here.
+    outputs:
+      php-version: ${{ steps.toolchain.outputs.php-version }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
@@ -300,3 +326,212 @@ jobs:
             echo "::error::RUN_TESTS is true but neither vendor/bin/pest nor vendor/bin/phpunit exists. Add a test runner, or set RUN_TESTS: false."
             exit 1
           fi
+
+  # ---------------------------------------------------------------------------
+  # Migration round-trip — see the header for what each engine catches.
+  #
+  #   1. migrate            from zero                                (schema snapshot A)
+  #   2. migrate:rollback   the migrations THIS change adds — every down() among them
+  #                         runs (all migrations when the change adds none)
+  #   3. seed               only if ROUNDTRIP_SEEDER is set, and only when the change
+  #                         adds migrations: rows land at the PRE-change schema
+  #   4. migrate            again — the new migrations land on those rows (snapshot B)
+  #   5. compare            B must equal A — a down() that does not exactly undo its
+  #                         up() leaves a schema that differs on the second pass
+  #
+  # Steps 2-4 are the shape of a real deploy: new migrations landing on tables that
+  # already hold rows written before they existed. That is why the seed sits BETWEEN
+  # the rollback and the second migrate — rows seeded after the new migrations would
+  # already satisfy them (a NOT NULL column filled, a narrowed number in range) and
+  # every data-dependent trap would pass.
+  # ---------------------------------------------------------------------------
+  migrations:
+    name: Migration round-trip (${{ matrix.engine }})
+    needs: build
+    runs-on: ubuntu-latest # EDIT: self-hosted label if this repo needs one.
+    strategy:
+      fail-fast: false
+      matrix:
+        # EDIT: one row for the engine the tests run on, one for the engine PRODUCTION
+        # runs on, at production's exact version. Deploy engine is sqlite too? Delete
+        # the server row. MySQL, not MariaDB? Swap in the commented row. A server row
+        # whose version differs from production proves nothing about production.
+        include:
+          - engine: sqlite
+            connection: sqlite
+            image: ''            # empty image = no service container for this row
+            health: 'true'
+          - engine: mariadb
+            connection: mariadb  # Laravel 11+; use `mysql` on older frameworks
+            image: mariadb:11.4  # EDIT: the version the deploy target runs
+            health: healthcheck.sh --connect --innodb_initialized
+          # - engine: mysql
+          #   connection: mysql
+          #   image: mysql:8.4   # EDIT: the version the deploy target runs
+          #   health: mysqladmin ping -h 127.0.0.1 -proot
+    services:
+      db:
+        image: ${{ matrix.image }}
+        env:
+          # A disposable server inside one job; this password never leaves the runner.
+          MYSQL_ROOT_PASSWORD: root
+          MYSQL_DATABASE: roundtrip
+        # Container port only, no fixed host port: a shared self-hosted runner may
+        # already listen on 3306 (README, "Self-hosted patterns"). The host port is
+        # read back from job.services below.
+        ports:
+          - 3306
+        options: >-
+          --health-cmd "${{ matrix.health }}"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 30
+    env:
+      # EDIT: a seeder class that leaves REPRESENTATIVE rows — NULLs where a column
+      # allows them, rows a new foreign key would orphan, numbers near a column's
+      # limits. Empty = no seeding, and the data-dependent traps in the header pass.
+      # It runs against the schema BEFORE this change, so it writes the way old data
+      # looks: raw DB::table() inserts into long-lived columns, not factories that
+      # fill whatever columns the models know about today.
+      ROUNDTRIP_SEEDER: ""
+      # EDIT: where this repo keeps migrations.
+      MIGRATIONS_PATH: database/migrations
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          # Full history: step 3 counts the migrations this change adds against trunk.
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ needs.build.outputs.php-version }}
+          extensions: mbstring, sqlite3, pdo_sqlite, pdo_mysql, bcmath, intl # EDIT: add what this app needs.
+          coverage: none
+
+      - name: Composer install
+        # Dev dependencies included: seeders usually build rows through factories.
+        run: composer install --no-interaction --prefer-dist --no-scripts
+
+      - name: Point the app at this row's engine
+        env:
+          ENGINE: ${{ matrix.engine }}
+          CONNECTION: ${{ matrix.connection }}
+          DB_SERVICE_PORT: ${{ job.services.db.ports['3306'] }}
+        run: |
+          set -euo pipefail
+          cp .env.example .env
+          php artisan key:generate --force
+          # Real environment variables win over .env (Laravel loads it immutably), so
+          # the connection is set here rather than by rewriting .env.example's lines.
+          # DB_URL is blanked: when set, it overrides every DB_* below.
+          {
+            echo "DB_CONNECTION=$CONNECTION"
+            echo "DB_URL="
+          } >> "$GITHUB_ENV"
+          if [ "$ENGINE" = sqlite ]; then
+            : > database/roundtrip.sqlite   # truncate: a reused workspace must still start from zero
+            echo "DB_DATABASE=$PWD/database/roundtrip.sqlite" >> "$GITHUB_ENV"
+          else
+            {
+              echo "DB_HOST=127.0.0.1"
+              echo "DB_PORT=$DB_SERVICE_PORT"
+              echo "DB_DATABASE=roundtrip"
+              echo "DB_USERNAME=root"
+              echo "DB_PASSWORD=root"
+            } >> "$GITHUB_ENV"
+          fi
+
+      - name: Discover packages
+        run: php artisan package:discover --ansi
+
+      - name: Count the migrations this change adds
+        env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          set -euo pipefail
+          # Trunk from .github/project.yml, else the repo's default branch. A pull
+          # request compares against its own base instead.
+          trunk="$(sed -nE 's/^trunk:[[:space:]]*"?([^"#[:space:]]+)"?.*/\1/p' .github/project.yml 2>/dev/null | head -1 || true)"
+          base_ref="origin/${GITHUB_BASE_REF:-${trunk:-$DEFAULT_BRANCH}}"
+          base=""
+          if git rev-parse -q --verify "$base_ref" >/dev/null; then
+            base="$(git merge-base HEAD "$base_ref")"
+            # On trunk itself the merge-base is HEAD: judge the commit that just landed.
+            if [ "$base" = "$(git rev-parse HEAD)" ]; then
+              base="$(git rev-parse -q --verify 'HEAD^' || true)"
+            fi
+          fi
+          steps=0
+          if [ -n "$base" ]; then
+            steps="$(git diff --name-only --diff-filter=A "$base" HEAD -- "$MIGRATIONS_PATH" | grep -c '\.php$' || true)"
+          fi
+          echo "ROLLBACK_STEPS=$steps" >> "$GITHUB_ENV"
+          if [ "$steps" -gt 0 ]; then
+            echo "This change adds $steps migration(s) (vs ${base_ref}); step 3 rolls back exactly those."
+          else
+            echo "This change adds no migrations (vs ${base_ref:-nothing}); step 3 rolls back all of them."
+          fi
+
+      - name: Write the schema snapshot script
+        run: |
+          # Tables, columns, indexes and foreign keys through the framework's own schema
+          # builder (Laravel 11+), so the same script reads sqlite and MariaDB/MySQL and
+          # needs no mysqldump/sqlite3 client on the runner. The migrations table is
+          # left out: its batch numbers differ between passes by design.
+          cat > "$RUNNER_TEMP/schema-snapshot.php" <<'PHP'
+          <?php
+          require getcwd() . '/vendor/autoload.php';
+          $app = require getcwd() . '/bootstrap/app.php';
+          $app->make(Illuminate\Contracts\Console\Kernel::class)->bootstrap();
+          $schema = Illuminate\Support\Facades\Schema::connection(null);
+          $m = config('database.migrations');
+          $skip = is_array($m) ? ($m['table'] ?? 'migrations') : ($m ?: 'migrations');
+          $current = method_exists($schema, 'getCurrentSchemaName') ? $schema->getCurrentSchemaName() : null;
+          $out = [];
+          foreach ($schema->getTables() as $t) {
+              $name = $t['name'];
+              if ($name === $skip || str_starts_with($name, 'sqlite_')) continue;
+              if ($current !== null && isset($t['schema']) && $t['schema'] !== $current) continue;
+              $idx = $schema->getIndexes($name);
+              usort($idx, fn ($a, $b) => strcmp($a['name'], $b['name']));
+              $fks = $schema->getForeignKeys($name);
+              usort($fks, fn ($a, $b) => strcmp(json_encode($a), json_encode($b)));
+              $out[$name] = ['columns' => $schema->getColumns($name), 'indexes' => $idx, 'foreign_keys' => $fks];
+          }
+          ksort($out);
+          echo json_encode($out, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES), "\n";
+          PHP
+
+      - name: 1. migrate from zero
+        run: |
+          php artisan migrate --force
+          php "$RUNNER_TEMP/schema-snapshot.php" > "$RUNNER_TEMP/schema-a.json"
+
+      - name: 2. roll back
+        run: |
+          if [ "$ROLLBACK_STEPS" -gt 0 ]; then
+            php artisan migrate:rollback --step="$ROLLBACK_STEPS" --force
+          else
+            # Everything ran in one batch at step 1, so this rolls all of it back.
+            php artisan migrate:rollback --force
+          fi
+
+      - name: 3. seed rows at the pre-change schema
+        # No new migrations = nothing lands on the rows, and the schema is empty anyway.
+        if: env.ROUNDTRIP_SEEDER != '' && env.ROLLBACK_STEPS != '0'
+        run: php artisan db:seed --class="$ROUNDTRIP_SEEDER" --force
+
+      - name: 4. migrate again
+        run: |
+          php artisan migrate --force
+          php "$RUNNER_TEMP/schema-snapshot.php" > "$RUNNER_TEMP/schema-b.json"
+
+      - name: 5. the second pass must leave the same schema as the first
+        run: |
+          if ! diff -u "$RUNNER_TEMP/schema-a.json" "$RUNNER_TEMP/schema-b.json"; then
+            echo "::error::Schema after rollback + re-migrate differs from the first migrate (${{ matrix.engine }}). A down() does not exactly undo its up(); the diff above shows what the second pass left different."
+            exit 1
+          fi
+          echo "Round-trip clean on ${{ matrix.engine }}."
