@@ -6887,7 +6887,10 @@ files is not an option (CONVENTIONS.md §9, "Working in a repo you don't own"):
      keeps them even if a later check refuses (idempotent, local, hides nothing that exists);
   3. writes the descriptor into the MAIN checkout (where every worktree's colab reads it), with
      trunk = the integration branch. exposure MUST end the run declared — the legacy tier
-     fallback (B) requires trunk "main" — and is usually \`self\`, human-gated as always;
+     fallback (B) requires trunk "main" — and is usually \`self\`, human-gated as always.
+     When the owner's default branch was detected and no owner: is declared, it also writes
+     \`owner: { branch: <detected> }\` (#405) — \`colab deliver\`'s target, and the branch every
+     push site refuses; a bare re-run backfills it on a clone adopted before that;
   4. writes a stub CLAUDE.local.md (only if absent), ensures the four load-bearing labels
      (colab labels --ensure --minimal) unless --no-labels, proves \`git status\` shows none of
      the handbook paths, and prints what it deliberately did NOT do (CI, CODEOWNERS, CLAUDE.md
@@ -7031,6 +7034,22 @@ function adoptLocalPrepare(repoAbs, opts) {
     fs.appendFileSync(excludeFile, append);
   }
   return { trunk: integ, ownerTrunk: ownerTrunk || null, excludeFile, excludeAdded, excludePaths, remote, remoteHasTrunk };
+}
+
+/**
+ * #405: the `owner:` block #394 reads, for a --local adoption. adoptLocalPrepare already DETECTED
+ * the owner's branch (it refuses --trunk equal to it) — this writes it down, so `colab deliver`
+ * works and the push-site guards protect that branch from the first ship. `null` unless --local,
+ * a branch was detected, and no `owner` key is declared: a declared block — even a malformed one,
+ * which is the audit's finding — is never touched, and nothing is guessed when detection failed.
+ */
+function localOwnerEntry(local, cfg, date) {
+  if (!local || !local.ownerTrunk || Object.prototype.hasOwnProperty.call(cfg, 'owner')) return null;
+  return {
+    key: 'owner',
+    value: { branch: local.ownerTrunk },
+    comment: `# owner: detected (${local.remote}'s default branch, colab adopt --local, ${date}) — reached only by \`colab deliver\`'s pull request; no colab command moves it`,
+  };
 }
 
 /**
@@ -7383,11 +7402,17 @@ async function cmdAdopt(argv) {
   const localAnswerFlag = ['room', 'exposure', 'writes', 'channels', 'production', 'deploy', 'stack'].some((k) => opts[k] !== undefined);
   if (local && !localAnswerFlag && !requestedAxes.length && axisAuthority.axisOfRecord(cfg).source === 'exposure') axesToAsk = [];
 
-  // Already complete (and nothing forced): report, write nothing, exit 0.
+  // Already complete (and nothing forced): report, write nothing, exit 0 — except the one key a
+  // bare --local re-run still owes (#405): the `owner:` block, for a clone adopted before it existed.
   if (axesToAsk.length === 0 && opts.stack === undefined) {
+    const backfill = localOwnerEntry(local, cfg, today());
+    if (backfill) {
+      fs.writeFileSync(descriptorFile, adopt.renderDescriptor(rawTextBefore, [backfill]));
+      if (!opts.json) print(`✓ wrote owner: ${fmtVal(backfill.value)}`);
+    }
     const verify = opts.noVerify ? null : adoptVerify(repoAbs);
     const lf = local ? adoptLocalFinish(repoAbs, local, opts) : undefined;
-    if (opts.json) { print(JSON.stringify({ repo: repoAbs, ...report, verify, local: lf }, null, 2)); return lf && !lf.ok ? 1 : 0; }
+    if (opts.json) { print(JSON.stringify({ repo: repoAbs, ...report, verify, ...(backfill ? { written: [{ key: backfill.key, value: backfill.value }] } : {}), local: lf }, null, 2)); return lf && !lf.ok ? 1 : 0; }
     printAdoptReport(report, repoAbs, verify, lf);
     return lf && !lf.ok ? 1 : 0;
   }
@@ -7581,6 +7606,9 @@ async function cmdAdopt(argv) {
       });
     }
   }
+
+  const ownerEntry = localOwnerEntry(local, cfg, nowDate); // #405
+  if (ownerEntry) entries.push(ownerEntry);
 
   // `trunk` and `stack` are DETECTED, never asked (CONVENTIONS.md §9) — but a repo's descriptor
   // still needs them as literal keys (audit/audit.mjs's required list), so whenever this run is

@@ -186,7 +186,9 @@ function detectTrunk(repo, remote = remoteInfo(repo).name || 'origin') {
   r = git(['remote', 'show', remote], repo);
   if (r.ok) {
     const m = r.stdout.match(/HEAD branch:\s*(\S+)/);
-    if (m) {
+    // `(unknown)` is git's placeholder when the remote's HEAD names a branch that does not exist —
+    // not a branch. Returned verbatim it became a trunk/owner name (#405).
+    if (m && m[1] !== '(unknown)') {
       git(['remote', 'set-head', remote, m[1]], repo); // cache it
       return m[1];
     }

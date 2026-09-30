@@ -190,3 +190,82 @@ test('audit: "adopted locally", and an untracked-but-not-excluded descriptor is 
   assert.strictEqual(res.adoption, 'untracked');
   assert.ok(res.findings.some((f) => /untracked and NOT excluded/.test(f.text)));
 });
+
+// ---- #405: the owner: block --------------------------------------------------
+
+const ownerBranch = require('./owner-branch');
+const adoptLib = require('./adopt');
+
+function readDoc(fx) {
+  const colabYaml = require('./yaml');
+  return colabYaml.parse(fs.readFileSync(path.join(fx.clone, '.github', 'project.yml'), 'utf8'));
+}
+
+test('#405 renderDescriptor: a plain-object value is a one-level block map, comment under the key', () => {
+  const out = adoptLib.renderDescriptor('trunk: x\n', [{ key: 'owner', value: { branch: 'master' }, comment: '# owner: why' }]);
+  assert.strictEqual(out, 'trunk: x\nowner:\n  # owner: why\n  branch: master\n');
+});
+
+test('#405 stub names colab deliver as the way to reach the owner', () => {
+  const t = la.claudeLocalStub({ trunk: 'fleet/integration', ownerTrunk: 'master' });
+  assert.match(t, /colab deliver --dry/);
+  assert.match(t, /owner: \{ branch: master \}/);
+});
+
+test('#405 adopt --local writes owner: { branch: <detected> }, readable by #394 and passing the audit', () => {
+  const fx = fixture();
+  const r = colab(fx, ADOPT, { COLAB_HUMAN: '1' });
+  assert.strictEqual(r.status, 0, r.stderr + r.stdout);
+  const doc = readDoc(fx);
+  const o = ownerBranch.read(doc);
+  assert.deepStrictEqual([o.declared, o.branch, o.problems], [true, 'master', []]);
+  assert.ok(ownerBranch.refuseMove(doc, 'master'), 'the owner\'s branch is guarded from the first ship');
+  assert.strictEqual(ownerBranch.refuseMove(doc, 'fleet/integration'), null);
+  assert.match(r.stdout, /wrote owner/);
+  const a = spawnSync('node', [AUDIT, '--local', fx.clone, '--json'], { encoding: 'utf8' });
+  const res = JSON.parse(a.stdout).results[0];
+  assert.ok(res.ok, JSON.stringify(res.findings));
+  // deliver now has a target (read-only --dry; no gh in the fixture, so only the "no owner" refusal is ruled out).
+  const d = colab(fx, ['deliver', '--dry']);
+  assert.doesNotMatch(d.stderr + d.stdout, /declares no owner/);
+  // Idempotent: a re-run writes no second block.
+  const r2 = colab(fx, ['adopt', '--local', '--no-labels', '--no-verify']);
+  assert.strictEqual(r2.status, 0, r2.stderr + r2.stdout);
+  const yml = fs.readFileSync(path.join(fx.clone, '.github', 'project.yml'), 'utf8');
+  assert.strictEqual((yml.match(/^owner:/mg) || []).length, 1);
+  assert.doesNotMatch(r2.stdout, /wrote owner/);
+});
+
+test('#405 a declared owner: is never overwritten', () => {
+  const fx = fixture();
+  fs.mkdirSync(path.join(fx.clone, '.github'));
+  fs.writeFileSync(path.join(fx.clone, '.github', 'project.yml'), 'owner:\n  branch: release\n');
+  const r = colab(fx, ADOPT, { COLAB_HUMAN: '1' });
+  assert.strictEqual(r.status, 0, r.stderr + r.stdout);
+  const yml = fs.readFileSync(path.join(fx.clone, '.github', 'project.yml'), 'utf8');
+  assert.strictEqual((yml.match(/^owner:/mg) || []).length, 1);
+  assert.strictEqual(ownerBranch.read(readDoc(fx)).branch, 'release');
+});
+
+test('#405 a bare re-run backfills owner: on a clone adopted before it existed', () => {
+  const fx = fixture();
+  assert.strictEqual(colab(fx, ADOPT, { COLAB_HUMAN: '1' }).status, 0);
+  const f = path.join(fx.clone, '.github', 'project.yml');
+  fs.writeFileSync(f, fs.readFileSync(f, 'utf8').replace(/^owner:\n(  .*\n)+/m, ''));
+  assert.strictEqual(ownerBranch.read(readDoc(fx)).declared, false, 'fixture: pre-#405 shape');
+  const r = colab(fx, ['adopt', '--local', '--no-labels', '--no-verify']);
+  assert.strictEqual(r.status, 0, r.stderr + r.stdout);
+  assert.match(r.stdout, /wrote owner/);
+  assert.strictEqual(ownerBranch.read(readDoc(fx)).branch, 'master');
+});
+
+test('#405 no detectable owner branch → no owner: block, nothing guessed', () => {
+  const fx = fixture();
+  // The owner's remote HEAD names a branch that does not exist: `git remote show` then prints
+  // "HEAD branch: (unknown)", which detectTrunk used to return as if it were a branch name.
+  fx.g(path.join(fx.dir, 'owner.git'), 'symbolic-ref', 'HEAD', 'refs/heads/nope');
+  fx.g(fx.clone, 'remote', 'set-head', 'origin', '-d');
+  const r = colab(fx, ADOPT, { COLAB_HUMAN: '1' });
+  assert.strictEqual(r.status, 0, r.stderr + r.stdout);
+  assert.strictEqual(ownerBranch.read(readDoc(fx)).declared, false);
+});

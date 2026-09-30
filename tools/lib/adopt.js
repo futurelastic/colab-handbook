@@ -773,6 +773,10 @@ function yamlScalar(v) {
   return s;
 }
 
+function isBlockMap(v) {
+  return v !== null && typeof v === 'object' && !Array.isArray(v);
+}
+
 function yamlFlowSeq(arr) {
   return `[${arr.map((v) => yamlScalar(v)).join(', ')}]`;
 }
@@ -780,6 +784,7 @@ function yamlFlowSeq(arr) {
 /**
  * Append-only. `entries` — `[{ key, value, comment? }]` — are rendered in order and added to the
  * END of `rawText` (which may be `null`/`''`/absent for a repo adopting for the first time).
+ * A plain-object `value` renders as a one-level block map of scalars (#405's `owner:` block).
  * Never re-parses, never re-serialises, never touches a byte already present: this repo's own
  * descriptor is ~60 lines of comment over 9 keys, and a parse-and-reserialise pass would destroy
  * every one of them. `tools/lib/adopt-cli.test.js` asserts `git diff` shows only appended lines.
@@ -788,6 +793,14 @@ function renderDescriptor(rawText, entries) {
   const base = rawText === null || rawText === undefined ? '' : rawText;
   const lines = [];
   for (const e of entries) {
+    if (isBlockMap(e.value)) {
+      // A one-level block map (#405: `owner:` / `  branch: master`). The comment sits right after
+      // `key:`, indented like the sub-keys — after them it would read as describing only the last.
+      lines.push(`${e.key}:`);
+      if (e.comment) lines.push(`  ${e.comment}`);
+      for (const [k, v] of Object.entries(e.value)) lines.push(`  ${k}: ${Array.isArray(v) ? yamlFlowSeq(v) : yamlScalar(v)}`);
+      continue;
+    }
     const valueStr = Array.isArray(e.value) ? yamlFlowSeq(e.value) : yamlScalar(e.value);
     lines.push(`${e.key}: ${valueStr}`);
     if (e.comment) lines.push(e.comment);

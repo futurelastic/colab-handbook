@@ -79,7 +79,9 @@ are hidden by \`.git/info/exclude\` and must never be committed here.
   \`colab ship\` merges into it, exactly as on any adopted repo.
 - **\`${owner}\` is the owner's trunk. Never push to it, merge into it, or open work on it
   directly.** It is reached only by a pull request from \`${trunk}\` that the owner reviews and
-  merges himself.
+  merges himself — \`colab deliver --dry\` shows what is pending, \`COLAB_HUMAN=1 colab deliver\`
+  opens (or refreshes) that one PR (needs \`owner: { branch: ${owner} }\` in the local
+  \`.github/project.yml\`, which \`colab adopt --local\` writes when it detects the branch).
 
 ## What stays off
 
