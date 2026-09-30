@@ -43,6 +43,7 @@ const ciGrant = require('./lib/ci-grant');
 const ciCure = require('./lib/ci-cure');
 const ciVerdict = require('./lib/ci-verdict');
 const baseCiVerdict = require('./lib/base-ci-verdict');
+const staleBase = require('./lib/stale-base');
 const dirtyOwner = require('./lib/dirty-owner');
 const lockfileDrift = require('./lib/lockfile-drift');
 const adopt = require('./lib/adopt');
@@ -8396,7 +8397,12 @@ Sequence (each step gated; any failure aborts before the push — the target is 
                         migrations on branch — database/migrations/, prisma/migrations/, plus every
                         prefix project.yml \`migrations:\` declares (#383) — (UNLESS every issue holds a
                         valid \`colab migration-grant\`, #98 — see below) · trunk checkout clean ·
-                        every closing claim corroborated by git (see below)
+                        every closing claim corroborated by git (see below) · the branch's own run,
+                        where one exists at its pushed head, measured on a head CONTAINING the
+                        target's current tip — else STALE-BASE (#395): B0 below syncs locally and
+                        never re-runs CI, so two green branches could land into a red trunk. Remedy:
+                        merge the target in, push, wait on the new run, re-run ship. No run at the
+                        head (workflows that cannot fire for a branch ref) → nothing to be stale
                         (an integration line with NO runs at all borrows trunk's verdict, advisory —
                         an ungated line is a normal early state; a RED line still blocks; the cure
                         rule and ci-grant both cover trunk only, never a line)
@@ -9138,6 +9144,37 @@ function baseCiAdvisory(repoAbs, gh, base, branch) {
 }
 
 /**
+ * #395: does the branch's CI verdict cover the CURRENT `base`? A PRECONDITION, unlike
+ * `baseCiAdvisory` above: serial ship syncs the base in locally (B0) and squashes without the synced
+ * head ever running, so a green run measured on a head cut before the base moved used to land on
+ * that older verdict whenever the merge was textually clean — two green branches, red trunk.
+ *
+ * Measures the branch's head ON THE REMOTE (what CI ran), the run summary there, and whether the
+ * base's remote-tracking tip is its ancestor. Call it AFTER `readTargetSync` — that fetch is what
+ * makes `<remote>/<base>` current; this adds no fetch of its own. The judgement is
+ * tools/lib/stale-base.js's pure `staleBaseVerdict`.
+ */
+function shipStaleBaseCheck(repoAbs, gh, base, branch) {
+  const remote = git.remoteInfo(repoAbs).name || 'origin';
+  const ls = git.git(['ls-remote', remote, `refs/heads/${branch}`], repoAbs);
+  const headSha = ls.ok ? ((ls.stdout.split('\n')[0] || '').split('\t')[0].trim() || null) : null;
+  const tipR = git.git(['rev-parse', '--verify', '-q', `${remote}/${base}^{commit}`], repoAbs);
+  const baseTip = tipR.ok && tipR.stdout ? tipR.stdout : null;
+  let contains = null, behind = null, run = null;
+  if (headSha && baseTip && git.git(['cat-file', '-e', `${headSha}^{commit}`], repoAbs).ok) {
+    const anc = git.git(['merge-base', '--is-ancestor', baseTip, headSha], repoAbs);
+    contains = anc.code === 0 ? true : (anc.code === 1 ? false : null);
+    const cnt = git.git(['rev-list', '--count', `${headSha}..${baseTip}`], repoAbs);
+    behind = cnt.ok ? Number(cnt.stdout) : null;
+    // A head that introduces no change against the base lands nothing (evidence-close, #90) — a
+    // stale verdict there grades nothing, so it must not block the close.
+    if (contains === false && git.git(['diff', '--quiet', `${baseTip}...${headSha}`], repoAbs).code === 0) contains = 'no-change';
+  }
+  if (headSha && gh) run = git.ghRunForCommit(repoAbs, branch, headSha);
+  return staleBase.staleBaseVerdict({ headSha, run, baseTip, contains, behind, base, ghUsable: !!gh });
+}
+
+/**
  * #294: WHICH paths are dirty in the trunk checkout, and — where the signal is strong enough — a
  * likely owner. Never a precondition: it enriches the ALREADY-COMPUTED "trunk checkout ready"
  * check's `detail` string (and, on the JSON path, an additive `dirtyOwners` field) — it never
@@ -9677,6 +9714,18 @@ function cmdShipDryJson(opts) {
     detail: syncResultJson.detail,
     ...(syncResultJson.ok ? {} : { remedy: syncResultJson.remedy }),
   });
+
+  // #395: after the sync row — its fetch is what makes the base's tip current. A --batch member
+  // read is exempt: the batch grades the COMBINED head (trunk + every member), which is exactly the
+  // re-run this row demands of a serial land, so a member behind trunk is the ordinary case there.
+  const staleJson = shipStaleBaseCheck(repoAbs, gh, target, sess.branch);
+  if (opts._batchMember) {
+    checks.push({ name: 'branch run contains current base (#395)', ok: true, class: null, verdict: staleJson.verdict,
+      detail: `batch member — the combined run grades it (${staleJson.detail})` });
+  } else {
+    checks.push({ name: 'branch run contains current base (#395)', ok: staleJson.ok,
+      class: staleJson.ok ? null : SELF_CLEARING, verdict: staleJson.verdict, detail: staleJson.detail });
+  }
 
   // #350: same single producer as the prose path. 'pending' is not a failure — it is `mode`.
   const coreReviewJson = shipCoreReview(repoAbs, gh, target, sess.branch);
@@ -10619,6 +10668,11 @@ function cmdShip(argv) {
   const syncResult = targetSync.readTargetSync(git, repoAbs, target, { repoLabel: repoAbs });
   checks.push([syncResult.ok ? '✓' : '✗', syncResult.name, syncResult.detail]);
 
+  // #395: the branch's run must have been measured on a head that contains the base's CURRENT tip —
+  // B0 below syncs locally and never re-runs CI, so this is the only place a stale verdict is caught.
+  const staleResult = shipStaleBaseCheck(repoAbs, gh, target, sess.branch);
+  checks.push([staleResult.ok ? '✓' : '✗', 'branch run contains current base (#395)', staleResult.detail]);
+
   // #350: the core-path review. A 'pending' verdict is not a failed precondition — it is the pause,
   // taken below once every real precondition has passed, so it is the ONLY thing between the branch
   // and landing. Only 'refuse' (the rule applies and gh cannot answer it) fails the table.
@@ -10638,7 +10692,7 @@ function cmdShip(argv) {
   // issue can be reopened, but the false claim stays in trunk's immutable history, and GitHub will
   // have closed it the instant trunk was pushed. #263: gateOk joins the same list — an unticked
   // checklist with no declared remainder is exactly as unrecoverable once `Closes #N` ships.
-  const preOk = ciOk && migOk && treeOk && corr.ok && gateOk && syncResult.ok && coreOk && recOk;
+  const preOk = ciOk && migOk && treeOk && corr.ok && gateOk && syncResult.ok && staleResult.ok && coreOk && recOk;
 
   // ---- report the table ----
   print(`ship ${shortRepo(repoAbs)} · branch ${sess.branch} → ${target}` +
@@ -11519,7 +11573,7 @@ function shipBatchTrunkSubstitute(repoAbs, trunk, sha) {
 function shipDryJsonReport(opts) {
   const holder = {};
   let code;
-  try { code = cmdShipDryJson({ ...opts, _report: holder }); }
+  try { code = cmdShipDryJson({ ...opts, _report: holder, _batchMember: true }); }
   catch (e) { if (e instanceof UserError) return { ok: false, body: null, error: e.message }; throw e; }
   return { ok: code === 0, body: holder.body || null, error: null };
 }

@@ -625,6 +625,20 @@ every step here runs in the coordinator's own worktree.
   A5 measured is not the sha you are about to merge. Push the sync commit and read the
   class again for the new head — a green class inherited from a pre-sync sha is exactly
   the "green run on a different commit" this whole section exists to refuse.
+- **A green class on a head that lacks the current `<base>` tip is `stale-base`, not
+  `green` (#395).** `colab ship`'s own B0 merges `<base>` in *locally* and squashes without
+  that synced head ever running, so a textually clean merge used to land on a verdict that
+  never saw what `<base>` gained since. Measured:
+  two branches, each green alone — one changed a shared test base class the other's new
+  tests also relied on, and trunk went red on the combination. `colab ship` (dry and real)
+  now refuses with a `branch run contains current base (#395)` row, class `self-clearing`,
+  whenever a branch run exists at the pushed head and that head does not contain
+  `<base>`'s tip. The fix is mechanical and yours: B0 (merge `<base>` in), push, wait on the
+  new run under the same 15-minute bound, re-run ship. A head with **no** run (workflows
+  that cannot fire for a branch ref) is not stale — B2a covers it. A batch member is exempt:
+  the combined run is its re-read. Skipping the re-run because "the new `<base>` commits
+  touch nothing this branch's tests import" is **not** allowed — that cannot be measured
+  generically, and a guess is exactly what produced the incident.
 - **In a batch (#373), the combined run is that re-read — once, for every member.** Its head
   is trunk plus each member's squash, so it grades each member's synced state; do not also
   re-run each member. Read it through `colab ship --batch` (it applies the same all-runs rule
