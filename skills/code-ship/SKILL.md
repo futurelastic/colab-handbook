@@ -725,9 +725,10 @@ every step here runs in the coordinator's own worktree.
   and counts the one re-run), wait on it with the same 15-minute bound, and classify its red
   exactly as a branch red — only the one re-run belongs to the batch; after that, serial.
 - **Never wait out a bound on a repo whose workflows cannot fire for a branch ref.**
-  This handbook's own repo is that shape (`push: branches: [main]` + `pull_request`),
-  and `code-wrap` A5 does not open a PR by design — so branch CI genuinely does not
-  exist here before the merge, and `<base>`'s own gate at B1 is the whole CI story.
+  That shape is a workflow that triggers only on `push: branches: [<trunk>]` and
+  `pull_request`: `code-wrap` A5 does not open a PR by design, so branch CI genuinely
+  does not exist there before the merge, and `<base>`'s own gate at B1 is the whole CI
+  story.
   That is a normal state, not a degraded one; say so in the report rather than treating
   it as a missing measurement. The story does not end at the merge, though: the trunk
   run at the squash sha is this change's first run, and B2a reads it before B2b.
