@@ -100,6 +100,8 @@ const shipBatch = require("../tools/lib/ship-batch.js");
 const migrationPaths = require("../tools/lib/migration-paths.js");
 // #398: the `migration-grant:` policy key — read through the same module `colab migration-grant` uses.
 const migrationGrant = require("../tools/lib/migration-grant.js");
+// #407: the optional `trust-humans` list — read through the same module every grant reader uses.
+const trustHumansLib = require("../tools/lib/trust-humans.js");
 // #403: the `live-env:` key — read through the same module `colab gate-hermetic` uses.
 const hermeticLib = require("../tools/lib/hermetic.js");
 // #228's identity vocabulary — resolution, parsing, matching and REDACTION. Shared with the
@@ -1284,6 +1286,17 @@ function auditRepo(target, ctx) {
       const pol = migrationGrant.parseGrantPolicy(cfg);
       info.migrationGrant = pol.policy;
       if (!pol.valid) fail(pol.reason);
+    }
+
+    // ---- trust-humans (#407) --------------------------------------------------
+    // Which logins count as HUMAN for a grant or a ruling. Absent = the association class, as
+    // before. tools/lib/trust-humans.js parseTrustHumans is the one reading. A malformed value
+    // fails: the reader then treats NOBODY as human (fail closed), which blocks every human grant
+    // until fixed — loud here rather than discovered at the next migration ship.
+    {
+      const tr = trustHumansLib.parseTrustHumans(cfg);
+      info.trustHumans = tr.declared && tr.valid ? [...tr.humans] : null;
+      if (!tr.valid) fail(tr.reason);
     }
 
     // ---- live-env (#403) ------------------------------------------------------

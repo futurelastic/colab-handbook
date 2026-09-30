@@ -40,6 +40,7 @@ const migrationPaths = require('./lib/migration-paths');
 const decisionRecord = require('./lib/decision-record');
 const blockedBy = require('./lib/blocked-by');
 const ciGrant = require('./lib/ci-grant');
+const trustHumans = require('./lib/trust-humans');
 const ciCure = require('./lib/ci-cure');
 const ciVerdict = require('./lib/ci-verdict');
 const baseCiVerdict = require('./lib/base-ci-verdict');
@@ -3479,17 +3480,24 @@ function cmdDecision(argv) {
  * the label timeline and resolves it through decisionRecord.pairVerdict; null when the pair is
  * absent. The fix each verdict names is returned alongside so --record and --list say the same.
  */
-function decisionPairFor(repoAbs, num, info) {
+function decisionPairFor(repoAbs, num, info, trust) {
   // Presence first, without the timeline — the events read is spent only on an issue that has
   // the pair, never on every record/list row.
-  if (!decisionRecord.pairVerdict({ labels: info.labels, comments: info.comments })) return null;
+  const t = trust === undefined ? decisionTrust(repoAbs) : trust;
+  if (!decisionRecord.pairVerdict({ labels: info.labels, comments: info.comments, trust: t })) return null;
   const labelEvents = git.ghIssueLabelEvents(repoAbs, num, labels.NEEDS_DECISION_LABEL);
-  const pair = decisionRecord.pairVerdict({ labels: info.labels, comments: info.comments, labelEvents });
+  const pair = decisionRecord.pairVerdict({ labels: info.labels, comments: info.comments, labelEvents, trust: t });
   const V = decisionRecord.PAIR_VERDICTS;
   const fix = pair.verdict === V.INTERRUPTED_WRITE
     ? `finish the interrupted record: gh issue edit ${num} --remove-label ${labels.NEEDS_DECISION_LABEL}`
     : `a second question on a decided issue goes through: colab decision ${num} --reopen --ruled-by <name>`;
   return { ...pair, fix };
+}
+
+/** trust-humans for rulings (#407), read from TRUNK's committed project.yml — a ruling is not
+ *  branch-scoped, and no branch may name its own author human. */
+function decisionTrust(repoAbs) {
+  return trustAt(repoAbs, resolveTrunk(repoAbs, projectDoc(repoAbs)));
 }
 
 function describeDecisionPair(num, pair) {
@@ -3608,23 +3616,39 @@ function cmdDecisionList(opts) {
   const decisions = [];
   const stale = [];
   const pairs = []; // #357: needs-decision re-applied on a decided issue, resolved by pairVerdict
+  const untrusted = []; // #407: live records whose author trust-humans does not list
+  const trust = decisionTrust(repoAbs);
   for (const h of hits) {
     const info = git.ghIssueView(repoAbs, h.number, ['state', 'labels', 'comments']);
-    const pair = info ? decisionPairFor(repoAbs, h.number, info) : null;
+    const pair = info ? decisionPairFor(repoAbs, h.number, info, trust) : null;
     if (pair) {
       pairs.push({ issue: h.number, title: h.title, verdict: pair.verdict, askAt: pair.askAt, decidedAt: pair.decidedAt, pending: pair.verdict !== decisionRecord.PAIR_VERDICTS.INTERRUPTED_WRITE, fix: pair.fix });
       // An open (or undetermined) question is NOT a live decision — listing it among them is
       // exactly the misreading #357 measured. An interrupted write still is one.
       if (pair.verdict !== decisionRecord.PAIR_VERDICTS.INTERRUPTED_WRITE) continue;
     }
-    const live = info ? decisionRecord.liveDecisions(info.comments) : [];
+    // Undeclared trust-humans keeps the pre-#407 listing byte-identical (every live record);
+    // declared, a record by an unlisted author is not a human's ruling and is reported apart.
+    const all = info ? decisionRecord.liveDecisions(info.comments) : [];
+    const live = trust.declared ? all.filter((d) => trustHumans.authorIsHuman(d, trust).ok) : all;
+    const notHuman = all.filter((d) => !live.includes(d));
+    if (notHuman.length) {
+      const d = notHuman[notHuman.length - 1];
+      untrusted.push({ issue: h.number, title: h.title, login: d.login, reason: trustHumans.authorIsHuman(d, trust).reason });
+    }
     if (live.length === 0) { stale.push(h.number); continue; }
     const d = live[live.length - 1];
     decisions.push({ issue: h.number, title: h.title, ruledBy: d.ruledBy, answers: d.answers, authorAssociation: d.authorAssociation, at: d.at });
   }
 
   if (opts.json) {
-    return print(JSON.stringify({ repo: shortRepo(repoAbs), label: labels.DECISION_RECORDED_LABEL, decisions, stale, pairs }, null, 2));
+    const out = { repo: shortRepo(repoAbs), label: labels.DECISION_RECORDED_LABEL, decisions, stale, pairs };
+    if (trust.declared) out.untrusted = untrusted;
+    return print(JSON.stringify(out, null, 2));
+  }
+
+  for (const u of untrusted) {
+    warn(`#${u.issue} carries a ⚖ record that is not a human's: ${u.reason}`);
   }
 
   if (pairs.length) {
@@ -8365,6 +8389,15 @@ function projectDocAt(repoAbs, ref) {
 }
 
 /**
+ * `trust-humans` (#407) as committed at `ref` — ALWAYS the merge target / trunk, never the branch
+ * being judged, so a branch that adds its own author to the list does not change what its own ship
+ * (or its own ruling) reads. Editing the list is a human act, like lowering exposure (CONVENTIONS §5).
+ */
+function trustAt(repoAbs, ref) {
+  return trustHumans.parseTrustHumans(projectDocAt(repoAbs, ref));
+}
+
+/**
  * New migration files introduced on <branch> vs <trunk> (#383): the two default layouts (Laravel
  * `database/migrations/`, Prisma `prisma/migrations/`) plus every prefix project.yml `migrations:`
  * declares — tools/lib/migration-paths.js is the one rule. The declaration is read from BOTH the
@@ -8427,7 +8460,9 @@ function shipMigrationCtx(repoAbs, gh, target, branch) {
   if (!remoteSha) headNote = `${branch} could not be read on ${remote} — CI cannot have run a HEAD nobody can see`;
   else if (localSha && localSha !== remoteSha) headNote = `local ${branch} is ${localSha.slice(0, 7)}, ${remote} is ${remoteSha.slice(0, 7)} — push or pull until they agree`;
   else headSha = remoteSha;
-  const ctx = { policy, headSha, headNote, roundtripResult: null };
+  const trust = trustAt(repoAbs, target);
+  const ctx = { policy, headSha, headNote, roundtripResult: null, trust,
+    labelActors: (n) => git.ghIssueLabelActors(repoAbs, n, labels.MIGRATION_GRANT_LABEL) };
   ctx.roundtrip = () => {
     const d = git.git(['diff', '--name-only', `${target}...${branch}`], repoAbs);
     const workflowsTouched = !d.ok || d.stdout.split('\n').some((f) => f.startsWith('.github/workflows/'));
@@ -8460,6 +8495,8 @@ function migDetail(migrations, grants, target, branch, ctx) {
     branch, files: [...migrations],
     policy: ctx ? ctx.policy : null,
     headSha: ctx ? ctx.headSha : null,
+    // #407: the human list as read from the TARGET — null when undeclared (association class).
+    trustHumans: ctx && ctx.trust && ctx.trust.declared ? [...ctx.trust.humans] : null,
     roundtrip: ctx && ctx.roundtripResult ? { ok: ctx.roundtripResult.ok, reason: ctx.roundtripResult.reason } : null,
     granted: grants.granted.map((g) => ({ issue: g.issue, role: g.role || 'human', by: g.by, at: g.at,
       ...(g.role === 'reviewer' ? { reviewer: g.reviewer, head: g.head } : {}) })),
@@ -9525,7 +9562,10 @@ function shipCiGrants(repoAbs, gh, issues, branch, trunk, redSha) {
   for (const n of issues) records[n] = git.ghIssueView(repoAbs, n, ['state', 'labels', 'comments']);
   const evRun = git.ghRunForSha(repoAbs, branch);
   const evidence = !evRun ? null : { ok: evRun.status === 'completed' && evRun.conclusion === 'success', sha: evRun.sha };
-  return ciGrant.evaluateShipSet(issues, records, branch, trunk, redSha, evidence, labels.CI_GRANT_LABEL);
+  return ciGrant.evaluateShipSet(issues, records, branch, trunk, redSha, evidence, labels.CI_GRANT_LABEL, {
+    trust: trustAt(repoAbs, trunk),
+    labelActors: (n) => git.ghIssueLabelActors(repoAbs, n, labels.CI_GRANT_LABEL),
+  });
 }
 
 /**

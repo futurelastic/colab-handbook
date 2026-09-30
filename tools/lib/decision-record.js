@@ -133,12 +133,22 @@ function liveDecisions(comments) {
  *  migration-grant.js's TRUSTED_ASSOCIATIONS — re-exported from there rather than duplicated,
  *  so the two never drift about who counts as trusted. */
 const { TRUSTED_ASSOCIATIONS } = require('./migration-grant.js');
+const { authorIsHuman } = require('./trust-humans.js');
+
+/** The live decisions a reader may act on (#407). `trust` is trust-humans.js parseTrustHumans()
+ *  of trunk's project.yml, or absent — absent/undeclared keeps the association check exactly as
+ *  before; declared, a ruling counts only when its author's login is listed in trust-humans. A
+ *  ruling is a human's by definition, so the human list — not the association class — decides. */
+function trustedDecisions(comments, trust) {
+  return liveDecisions(comments).filter((d) => authorIsHuman(d, trust).ok);
+}
 
 /** True when `comments` carries at least one live (non-reopened) DECISION_MARK from a
- *  trusted association. Does not check labels — pure comment-side signal, for a caller that
- *  wants "was this actually answered" independent of whatever label state it finds. */
-function hasRecordedDecision(comments) {
-  return liveDecisions(comments).some((d) => TRUSTED_ASSOCIATIONS.has(d.authorAssociation));
+ *  trusted association (or, with `trust` declared, a listed human — #407). Does not check labels
+ *  — pure comment-side signal, for a caller that wants "was this actually answered" independent
+ *  of whatever label state it finds. */
+function hasRecordedDecision(comments, trust) {
+  return trustedDecisions(comments, trust).length > 0;
 }
 
 /** The `<!-- decision:options -->` block references every live decision on this issue claims
@@ -147,9 +157,9 @@ function hasRecordedDecision(comments) {
  *  *Decision options*, which #126 finally wrote — until then this comment cited
  *  code-triage/SKILL.md, which has never contained the convention: the format was
  *  implemented here and specified nowhere). */
-function answeredOptionRefs(comments) {
-  return liveDecisions(comments)
-    .filter((d) => TRUSTED_ASSOCIATIONS.has(d.authorAssociation) && d.answers && d.answers !== '-')
+function answeredOptionRefs(comments, trust) {
+  return trustedDecisions(comments, trust)
+    .filter((d) => d.answers && d.answers !== '-')
     .map((d) => d.answers);
 }
 
@@ -240,11 +250,11 @@ function newestMs(isoList) {
  *
  * Returns null when the pair is not present (nothing to resolve).
  */
-function pairVerdict({ labels, comments, labelEvents = null } = {}) {
+function pairVerdict({ labels, comments, labelEvents = null, trust } = {}) {
   const labelNames = new Set(
     (labels || []).map((l) => (l && typeof l === 'object' ? l.name : l)),
   );
-  const decisions = liveDecisions(comments).filter((d) => TRUSTED_ASSOCIATIONS.has(d.authorAssociation));
+  const decisions = trustedDecisions(comments, trust);
   const gated = labelNames.has('needs-decision');
   const recordedLabel = labelNames.has('decision-recorded');
   if (!gated || (!recordedLabel && decisions.length === 0)) return null;
@@ -298,14 +308,14 @@ function pairVerdict({ labels, comments, labelEvents = null } = {}) {
  *   - `unshapedAsk`   — true when a pending question takes neither shape: a finding for its
  *                        filer, never a gate. null when `body` was not passed (unknown, not false).
  */
-function evaluateIssue({ labels, comments, labelEvents = null, body } = {}) {
+function evaluateIssue({ labels, comments, labelEvents = null, body, trust } = {}) {
   const labelNames = new Set(
     (labels || []).map((l) => (l && typeof l === 'object' ? l.name : l)),
   );
-  const decisions = liveDecisions(comments).filter((d) => TRUSTED_ASSOCIATIONS.has(d.authorAssociation));
+  const decisions = trustedDecisions(comments, trust);
   const recorded = decisions.length > 0;
   const gated = labelNames.has('needs-decision');
-  const pair = pairVerdict({ labels, comments, labelEvents });
+  const pair = pairVerdict({ labels, comments, labelEvents, trust });
   const pending = gated && !(pair && pair.verdict === PAIR_VERDICTS.INTERRUPTED_WRITE);
   // #379: only judged when the caller passed the body — an unread body is "unknown", never
   // "unshaped", so a caller that never fetched it is not handed a false finding.
@@ -317,7 +327,7 @@ function evaluateIssue({ labels, comments, labelEvents = null, body } = {}) {
 module.exports = {
   DECISION_MARK, REOPEN_MARK, DECISION_RE, REOPEN_RE,
   decisionCommentBody, reopenCommentBody,
-  liveDecisions, TRUSTED_ASSOCIATIONS,
+  liveDecisions, TRUSTED_ASSOCIATIONS, trustedDecisions,
   hasRecordedDecision, answeredOptionRefs,
   OPTIONS_RE, PAIR_VERDICTS, pairVerdict,
   MOCKUP_RE, mockupUrls, ASK_SHAPES, askShape,

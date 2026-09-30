@@ -486,7 +486,7 @@ migrations: [backend/migrations/]   # repo-relative prefixes; absent = the two d
 Where this repo's migrations live, **beyond** the two layouts every reader already knows —
 Laravel `database/migrations/` and Prisma `prisma/migrations/`, both matched anywhere in the
 path. `colab ship`'s no-new-migrations gate
-([CONVENTIONS.md §5, *Migration exemption*](CONVENTIONS.md#migration-exemption--a-narrow-human-created-door-through-no-new-migrations-98))
+([CONVENTIONS.md §5, *Migration exemption*](CONVENTIONS.md#migration-exemption--a-narrow-door-through-no-new-migrations-opened-by-a-role-98-402))
 and `colab release cut`'s `schema-additive` check read this one list (`tools/lib/migration-paths.js`);
 neither keeps a regex of its own. **Absent changes nothing** — a repo that declares nothing is
 gated exactly as before.
@@ -521,7 +521,7 @@ migration-grant: reviewer   # a migration-reviewer grant may also be minted
 ```
 
 This key decides who may open the no-new-migrations door
-([CONVENTIONS.md §5, *Migration exemption*](CONVENTIONS.md#migration-exemption--a-narrow-human-created-door-through-no-new-migrations-98)).
+([CONVENTIONS.md §5, *Migration exemption*](CONVENTIONS.md#migration-exemption--a-narrow-door-through-no-new-migrations-opened-by-a-role-98-402)).
 `human` accepts only the human grant. `reviewer` also lets `colab migration-grant --role
 migration-reviewer` mint a grant that carries a review record and is bound to one HEAD.
 The one reading is `tools/lib/migration-grant.js` `parseGrantPolicy`.
@@ -536,9 +536,43 @@ The one reading is `tools/lib/migration-grant.js` `parseGrantPolicy`.
 - **`colab ship` honours a reviewer grant only with P + M + HEAD + R** (#401). Ship reads
   this key at the tip of the branch being merged into, and also needs a passing review
   record bound to the branch's exact HEAD, plus a live, passing `Migration round-trip`
-  CI job on that HEAD. See [CONVENTIONS.md §5, *Migration exemption*](CONVENTIONS.md#migration-exemption--a-narrow-human-created-door-through-no-new-migrations-98).
+  CI job on that HEAD. See [CONVENTIONS.md §5, *Migration exemption*](CONVENTIONS.md#migration-exemption--a-narrow-door-through-no-new-migrations-opened-by-a-role-98-402).
   A repo with no such job can declare `reviewer`, but every reviewer grant there fails R.
 - **The audit always reports the value.** It appears in `--json` as `migrationGrant`.
+
+### `trust-humans` — optional
+
+```yaml
+trust-humans: [operator-login, second-operator]   # absent = the association class decides
+```
+
+This key names the logins that count as **human** for a grant (`migration-granted`,
+`ci-granted`) or a ruling (`⚖ Decision recorded`)
+([CONVENTIONS.md §5, *Migration exemption*](CONVENTIONS.md#migration-exemption--a-narrow-door-through-no-new-migrations-opened-by-a-role-98-402)).
+Declare it when your agents run under their own GitHub account. The association class
+(`OWNER`/`MEMBER`/`COLLABORATOR`) cannot tell that account from a person, so without the
+list an agent-posted grant reads as a human's. The one reading is
+`tools/lib/trust-humans.js` `parseTrustHumans`.
+
+- **Absent → nothing changes.** A trusted association counts as human, as before.
+- **Declared → only listed logins are human.** A grant or ruling by any other author is
+  refused, and the reason names the login. The author must also still hold a trusted
+  association. For the two grant labels, the account that last applied the label must be
+  listed too. Logins compare case-insensitively.
+- **Read from the target, never the branch.** `colab ship` reads it at the tip of the
+  branch being merged into; rulings read trunk's. A branch that adds its own author changes
+  nothing for its own ship. Editing the list is a human act, like lowering exposure.
+- **A reviewer grant is not judged by it.** A `migration-reviewer` grant passes or fails on
+  its own four conditions. The list only decides what a *human* grant is.
+- **A flat key holding a list, not `trust: { humans: … }`.** The audit's descriptor reader
+  refuses nested shapes on purpose, and a list inside a map is one of them. Both list
+  spellings work: `[a, b]` or a `- a` block sequence.
+- **A malformed value means nobody is human.** An empty list, a non-list, or an entry that
+  is not a GitHub login blocks every human grant and ruling until it is fixed, and the audit
+  fails it. Falling back to the association class would quietly reopen the hole the key
+  was declared to close.
+- **The audit always reports the value.** It appears in `--json` as `trustHumans`
+  (lowercased), or `null` when absent or malformed.
 
 ### `room` — optional
 
@@ -1276,6 +1310,7 @@ the shape that shows it. One writer at a time says nothing about who reads the r
 | `migrations` empty, restating a default, or naming one prefix twice → **advisory** | redundancy, harmless |
 | a tracked `*/migrations/` directory outside the defaults and every declared prefix → **advisory** (local only) | a migration layout `colab ship`'s gate cannot see |
 | `migration-grant` ∈ {`human`, `reviewer`} when set → **finding** otherwise | a misspelled policy silently read as `human` |
+| `trust-humans` a non-empty list of GitHub logins when set → **finding** otherwise | a malformed list read as "nobody is human", so every human grant and ruling silently stops counting |
 | `live-env` = `none` when set → **finding** otherwise | a misspelled opt-out read as absent, so it silently does nothing |
 | `holds` is a list of non-empty strings, each listed once, when set → **finding** otherwise | a scalar or malformed list silently read as "no holds declared", so triage reports held work ready |
 | `exposure` ∈ {`none`, `self`, `live`, `released`} when set | a misspelled value silently read as undeclared |

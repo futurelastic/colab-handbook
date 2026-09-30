@@ -458,6 +458,12 @@ and the audit is what catches it:
   raise it if the repo's own owner asks whether it qualifies for `light`, and never
   set it yourself as part of a routine sync.
 
+- **Agents with their own GitHub account → ask about `trust-humans:` (#407).** If this
+  repo's agents post under a login separate from the operator's, both report `MEMBER`, and
+  without the key an agent-posted grant or ruling reads as a human's
+  ([project.schema.md](../../project.schema.md#trust-humans--optional)). Ask the owner which
+  logins are human, and write only the answer. Never list logins yourself.
+
 **The `ceremony:` rule above is one instance of a general one: asking is not
 writing.** A sync puts a question to a human and records the human's answer; it
 never fills a gap on its own initiative, and it never "cleans up" an advisory

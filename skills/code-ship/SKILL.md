@@ -154,8 +154,12 @@ looking for a second, human one that was never meant to exist per run.
 So on a repo declaring `autonomy: auto-trunk`, this skill may complete B2 (the
 trunk-merge step, and only that step) once every precondition elsewhere in this skill
 has independently passed on its own terms: the hand-off contract (§0), CI green for the
-exact sha (B1), the checklist/remainder check (B1b), no unresolved new migration
-(`CONVENTIONS.md` [§*Migration exemption*](../../CONVENTIONS.md#migration-exemption--a-narrow-human-created-door-through-no-new-migrations-98)),
+exact sha (B1), the checklist/remainder check (B1b), no new migration without a live
+grant of a role the repo accepts — a human grant, or a reviewer grant under
+`migration-grant: reviewer` with its policy, record, HEAD and CI round-trip all holding,
+and with `trust-humans` declared, a human grant only from a listed login
+(`CONVENTIONS.md` [§*Migration exemption*](../../CONVENTIONS.md#migration-exemption--a-narrow-door-through-no-new-migrations-opened-by-a-role-98-402);
+`colab ship` alone decides this — never infer a grant from a label or comment you read),
 no unresolved hand-merge conflict (B0), no `--force`. No additional per-run human
 instruction is required, and waiting for one that was never going to arrive is not
 caution — it is the exact failure this issue was filed over: a fully green, fully
@@ -996,8 +1000,9 @@ So when you reject and have a recommended route, check whether that route needs
   the repo does not already record. "The ruling already exists" means you can cite it:
   a file and line, a `⚖ Decision recorded` comment, or an issue number. A pattern you
   inferred and cannot cite counts as a new ruling.
-- **a grant**: `migration-granted`, a `decision-recorded` label, a go-ahead, or
-  anything else this skill reads as a human act;
+- **a grant**: `migration-granted` (of either role — a reviewer grant is still minted
+  by a human), a `decision-recorded` label, a go-ahead, or anything else this skill reads
+  as a human act;
 - **a migration, promotion, tag or deploy**, or anything security, money or
   non-undoable (the `decision` list above, unchanged);
 - **a change of scope or oracle**, meaning a fix that stops answering the issue's

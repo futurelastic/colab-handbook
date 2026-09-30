@@ -480,3 +480,40 @@ test('role flags: an unknown role, record flags on a human grant, and --role on 
   const rev = colab(fx, ['migration-grant', '1', '--revoke', '--role', 'migration-reviewer', '--repo', fx.work], { COLAB_HUMAN: '1' });
   assert.match(rev.err, /--revoke takes no --role/);
 });
+
+// --- #407: trust-humans is read from the TARGET, never from the branch being shipped ---------
+
+/** Branch fx.work onto <branch>, add a migration AND rewrite project.yml, commit, return to main. */
+function addMigrationBranchEditingDescriptor(fx, branch, projectYml) {
+  fx.g(fx.work, 'checkout', '-q', '-b', branch);
+  fs.mkdirSync(path.join(fx.work, 'database', 'migrations'), { recursive: true });
+  fs.writeFileSync(path.join(fx.work, 'database', 'migrations', '2026_01_01_x.php'), 'x\n');
+  fs.writeFileSync(path.join(fx.work, '.github', 'project.yml'), projectYml);
+  fx.g(fx.work, 'add', '-A');
+  fx.g(fx.work, 'commit', '-q', '-m', 'feat: a migration, and a descriptor edit');
+  fx.g(fx.work, 'checkout', '-q', 'main');
+}
+
+function shipJson(fx, branch, issue) {
+  const cl = colab(fx, ['claim', String(issue), '--branch', branch, '--repo', fx.work]);
+  assert.strictEqual(cl.code, 0, cl.out + cl.err);
+  fx.g(fx.work, 'push', '-q', 'origin', branch);
+  const j = colab(fx, ['ship', '--branch', branch, '--repo', fx.work, '--dry', '--json']);
+  assert.strictEqual(j.code, 1, j.out + j.err);
+  return JSON.parse(j.out).migrationGrant;
+}
+
+test('#407: a branch that adds its own author to trust-humans does not change what its ship reads', () => {
+  const trunkYml = PROJECT_YML_AUTO_TRUNK + 'trust-humans: [operator-a]\n';
+  const fx = fixture(trunkYml);
+  addMigrationBranchEditingDescriptor(fx, 'feat/x-407', trunkYml.replace('[operator-a]', '[operator-a, agent-bot]'));
+  const mg = shipJson(fx, 'feat/x-407', 407);
+  assert.deepStrictEqual(mg.trustHumans, ['operator-a'], 'the list comes from the target, not the branch');
+});
+
+test('#407: a branch that DECLARES trust-humans where trunk has none still ships under the association class', () => {
+  const fx = fixture(PROJECT_YML_AUTO_TRUNK);
+  addMigrationBranchEditingDescriptor(fx, 'feat/y-408', PROJECT_YML_AUTO_TRUNK + 'trust-humans:\n  - agent-bot\n');
+  const mg = shipJson(fx, 'feat/y-408', 408);
+  assert.strictEqual(mg.trustHumans, null);
+});

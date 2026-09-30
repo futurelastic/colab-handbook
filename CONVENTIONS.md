@@ -711,7 +711,8 @@ as a binary change. A zero-commit evidence-close has an empty diff, so it still 
 `auto-trunk` or a human.
 
 **It relaxes the autonomy gate, and only that gate.** Every other precondition is unchanged:
-grade, trunk CI, migrations, writes, claims, and the `COLAB_SHIP=1` push. The autonomy row
+grade, trunk CI, migrations (still opened only by a grant of a role the repo accepts), writes,
+claims, and the `COLAB_SHIP=1` push. The autonomy row
 reads `docs-only (N files) — autonomy exception` in place of `auto-trunk`. `--dry --json` adds
 `autonomyGate: { via, docsOnly }`, with `via` one of `"auto-trunk"`, `"docs-only"` or `null`.
 A refusal keeps the existing message and adds one line naming why the change is not docs-only.
@@ -2777,7 +2778,7 @@ terms above beyond the discipline of everyone honoring them (#150, parked: a str
 mechanism would need an out-of-band attestation this fleet does not have). The two terms
 are what make a violation *legible* after the fact, not what makes one impossible.
 
-#### Migration exemption — a narrow, human-created door through no-new-migrations (#98)
+#### Migration exemption — a narrow door through no-new-migrations, opened by a role (#98, #402)
 
 `colab ship` refuses, by default with no flag/env/field to lower the bar, any branch
 touching `database/migrations/` or `prisma/migrations/` — or any prefix the repo declares in
@@ -2785,47 +2786,88 @@ touching `database/migrations/` or `prisma/migrations/` — or any prefix the re
 A declaration only ever widens what the gate sees, never narrows it; a repo keeping migrations
 elsewhere without declaring them is a repo whose gate reads `no new migrations ✓` on a backfill.
 
-**A migration grant is a narrow, per-issue, branch-bound, human-only, expiring
-exemption** — deliberately not a repo- or tier-level switch.
+**A migration grant is a narrow, per-issue, branch-bound, expiring exemption, and every
+grant names the role that decided it** — deliberately not a repo- or tier-level switch.
+There are two roles. The repo says which ones it accepts (#397, #398):
 
-- **Human-only to create.** `colab migration-grant` refuses (exit 1) unless
-  `COLAB_HUMAN=1`, checked before any network call — no agent may create or infer one.
+| Role | Who decided | Marker | Bound to | Accepted |
+|---|---|---|---|---|
+| `human` | a person | `🛢 Migration grant` | the branch | on every repo — the default |
+| `migration-reviewer` | a declared reviewer, with a review record | `🔎 Migration review grant` | the branch's exact HEAD, plus a live CI round-trip on it | only under [`migration-grant: reviewer`](project.schema.md#migration-grant--optional) |
+
+**On trunk, where the repo's policy allows it and a reviewer is bound, a reviewer grant with
+evidence satisfies the gate just as a human grant does.** Nothing else moves with it:
+`COLAB_HUMAN=1`, promotion, release and production stay human on every repo, under every
+policy.
+
+**What holds for every role:**
+
+- **Minting is a human act.** `colab migration-grant` refuses (exit 1) unless
+  `COLAB_HUMAN=1`, checked before any network call, for either role — no agent may create
+  or infer one ([*The human flag*](#the-human-flag--what-colab-human1-asserts), above).
+  The reviewer role changes what a grant must *prove*, not who may post it.
 - **Two required parts**: a `migration-granted` label (requires write/triage permission)
   and a comment naming the exact branch (labels cap at 50 chars, cannot carry a branch
   name). Never authorises a migration arriving on a different branch later.
 - **Expires the instant its issue closes** — `ship` reads the issue's live open/closed
   state, never a separate expiry.
 - Visible from any machine — no local-only fallback.
-- **Covers the whole ship set**, never narrowed by `--refs`.
+- **Covers the whole ship set**, never narrowed by `--refs`. One issue without a valid
+  grant fails the set: a migration cannot be attributed to one member of a group branch.
 - `--revoke` removes the label first (gate restored immediately), then posts a receipt.
+  A revoke cancels every earlier grant on the issue, of either role, whoever posted it.
   `colab migration-grant --list` names every live grant.
 - **Never weakens any other precondition** — CI green, claim corroboration, trunk-checkout
   check, and hand-merge conflict check all still run in full on a granted branch.
+  `--batch` still refuses every member that carries a migration, granted or not.
 
-**A grant carries a role (#397), and the repo declares which roles it accepts (#398).**
-The grant above is role `human`, and its comment is unchanged. A second role,
-`migration-reviewer`, uses a distinct marker (`🔎 Migration review grant`) that names the
-reviewer's **declared** identity and carries a **review record**: a fenced
-`` ```migration-review `` block giving the verdict, the checklist result, the escalation
-condition checked, the CI round-trip result, and the reviewed HEAD sha. Four properties
-hold it together:
+**Who counts as a human — `trust-humans` (#407).** By default a grant (or a ruling,
+[*Decision gate*](#decision-gate--a-human-must-answer-first-122), above) counts as a
+human's when its author's GitHub association is `OWNER`, `MEMBER` or `COLLABORATOR`. That
+class cannot tell a person from an agent that runs under **its own** account: both report
+`MEMBER`. Measured in one adopting fleet, where the agents had their own login with write
+access: 97 of one repo's latest 100 comments were the agent's, every one `MEMBER`. A repo
+in that position lists its humans:
+
+- **Declared** ([`trust-humans:`](project.schema.md#trust-humans--optional)) → a human
+  grant or ruling counts only when its author's login is listed (and still holds that
+  association). For `migration-granted` and `ci-granted`, the account that **last applied
+  the label** must be listed too, so a label re-added by an agent does not ride on a
+  human's old comment. An unlisted, unknown or unreadable author is not human, and the
+  refusal names the login.
+- **Absent** → the association class decides, exactly as before. Nothing changes for a
+  repo that does not declare it.
+- **Read from the target, never the branch.** Ship reads the list from `project.yml` at
+  the tip of the branch being merged into, and rulings read trunk's — a branch cannot
+  add its own author. **Editing the list is a human act**, like lowering exposure. As
+  with every other human-only rule here, #150's limit applies to *enforcing* that: the
+  handbook cannot stop an account with write access from editing the file. The list only
+  stops the readers from throwing away a difference the platform already has.
+- **A reviewer grant is not judged by this list.** It passes or fails on the policy, the
+  review record, the HEAD and the round-trip below. The list decides only what a *human*
+  grant is.
+
+**The human role** is unchanged since #98: branch-bound, not HEAD-bound, and honoured on
+every repo. Where both roles are live on an issue, a valid human grant wins.
+
+**The reviewer role** names the reviewer's **declared** identity and carries a **review
+record**: a fenced `` ```migration-review `` block giving the verdict, the checklist
+result, the escalation condition checked, the CI round-trip result, and the reviewed HEAD
+sha. Four properties hold it together:
 
 - **Bound to one commit.** A reviewer grant covers only the HEAD it reviewed, so a new
-  commit voids it. A human grant stays branch-bound, as before.
-- **Opt-in per repo.** Reviewer grants need `project.yml`
-  [`migration-grant: reviewer`](project.schema.md#migration-grant--optional), read from the
-  trunk checkout (a branch cannot raise its own policy). The default is `human`, and
+  commit voids it.
+- **Opt-in per repo.** `migration-grant: reviewer` is read from the trunk checkout when a
+  grant is minted, so a branch cannot raise its own policy. The default is `human`, and
   `colab migration-grant` refuses to mint a reviewer grant anywhere else.
 - **Recorded only if the review passed.** The record must approve, pass the checklist,
   clear the escalation and pass the CI round-trip. A failing review is refused, not
-  recorded. `COLAB_HUMAN=1` is still required for every role.
+  recorded.
 - **Not attested.** The reviewer id and the recorded CI result are claims made in the
-  comment. The label's write permission and the trusted-author check are still the only
-  anti-forgery properties, so a gate must re-verify CI for the recorded HEAD itself.
+  comment. The label's write permission and the trusted-author check are the only
+  anti-forgery properties, so a gate re-verifies CI for the recorded HEAD itself.
 
-**`colab ship` honours a reviewer grant only when four conditions hold together (#401).**
-Per issue, a live human grant is checked first and passes unchanged; it wins wherever
-both roles exist. Otherwise a reviewer grant passes only when all four hold:
+**`colab ship` honours a reviewer grant only when four conditions hold together (#401):**
 
 - **P, policy.** `migration-grant: reviewer` in `project.yml` at the tip of the branch
   being merged into. The branch's own copy never counts.
@@ -2842,10 +2884,10 @@ both roles exist. Otherwise a reviewer grant passes only when all four hold:
   human grant.
 
 If any condition fails, the gate behaves exactly as it does without a reviewer grant: a
-human runs Phase B. The refusal says which condition failed (`reviewer grant [HEAD]: …`).
-One function makes this decision for every ship path — `--dry`, `--dry --json`, a real
-ship and the auto-trunk path — so no path can accept a grant another refuses. `--batch`
-still refuses every member that carries a migration, granted or not.
+human grant, or a human running Phase B. The refusal says which condition failed
+(`reviewer grant [HEAD]: …`). One function makes this decision for every ship path —
+`--dry`, `--dry --json`, a real ship and the auto-trunk path — so no path can accept a
+grant another refuses.
 
 **`needs-migration-grant` is this gate's plan-time half, not a second gate (#230).**
 It is provisioned in `CONVENTION_LABELS` alongside `migration-granted` for the same
@@ -2853,7 +2895,7 @@ malignant-absence reason, but nothing in this repo's own tooling reads it — a
 downstream consumer (the fleet dashboard) applies it at plan/triage time, as soon as
 it can tell an issue's deliverable IS a schema migration, so the grant request
 surfaces before `ship` ever has a reason to refuse. It authorises nothing by itself;
-only a human minting `migration-granted` above does that.
+only a grant minted as above does that.
 
 #### A red trunk with no patch — never parked in silence (#390)
 
@@ -3133,7 +3175,8 @@ label, comment, or merge directly.
 **It may complete a trunk merge only where the repo has granted `autonomy: auto-trunk`
 — or where `colab ship` itself measures the change as
 [docs-only](#autonomy--the-docs-only-exception-345) — and only through `colab ship`**, subject to the identical gates as any other caller (CI
-green, a proven cure, or a valid CI grant, no new migrations or valid migration grant,
+green, a proven cure, or a valid CI grant, no new migrations or a valid migration grant
+of a role the repo accepts ([*Migration exemption*](#migration-exemption--a-narrow-door-through-no-new-migrations-opened-by-a-role-98-402)),
 no hand-merge conflict, no `--force`). Without a proven cure or the grant, `ship`
 refuses and a human runs Phase B.
 
@@ -3160,8 +3203,9 @@ a regenerable merge conflict) apart from a **human-gated** one (no `auto-trunk` 
 unresolved new migration, an `agent-filed` label still on, a claim held by someone else).
 For a human-gated blocker it states it once and parks — never re-announcing the same
 unmet gate every cycle. A migration grant is the one human-gated blocker a driver may
-watch for clearing without a person acting again mid-cycle — the grant itself is still
-only ever created by a human.
+watch for clearing without a person acting again mid-cycle — whichever role it carries,
+the grant itself is still only ever minted by a human (`COLAB_HUMAN=1`), and a reviewer
+grant clears the gate only where the repo's policy accepts that role.
 
 #### Grouping — issues that must share one branch
 

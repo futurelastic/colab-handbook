@@ -530,6 +530,12 @@ person must act):
   most likely another machine's work. Report it as `orphan-shippable elsewhere` and name
   the machine from the issue's newest `🔒 Claimed` comment. Never `--adopt` it from a sweep. `--adopt` exists for branches that
   name no issue, and this one names issues.
+- **`ok: false` on `no new migrations`** ⇒ `human-gated` whichever role could open it.
+  Report `orphan-shippable, awaiting a migration grant` and quote the row's reason — it
+  names the failing condition (`human`, or a reviewer grant's `P`/`M`/`HEAD`/`R`). On a
+  repo declaring `migration-grant: reviewer`, name the reviewer route
+  ([`migration-review`](../migration-review/SKILL.md)) beside the human one. Mint neither:
+  both need the human flag (`CONVENTIONS.md` [§5, *Migration exemption*](../../CONVENTIONS.md#migration-exemption--a-narrow-door-through-no-new-migrations-opened-by-a-role-98-402)).
 - **Any other `ok: false`** ⇒ one `orphan-shippable` line, naming the failing check and its
   `class`. Never leave a candidate out of the report because it failed. Staying silent
   about a failure is the exact bug this bucket was created to fix.
