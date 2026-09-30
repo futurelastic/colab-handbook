@@ -46,6 +46,65 @@ skipped the escalation is honest; one that pretends is not.
 
 ## 1. Build the seed
 
+### First: is there already a fresh plan? Reuse it (#404)
+
+The planning pass is the most expensive single call in the code-* family, and nothing
+about re-running it against an unchanged tree buys a better plan. Measured: three
+planning-subagent calls on one branch inside 36 minutes, with no repo change between them
+that could have invalidated the first — the same plan, paid for three times. So before
+you spawn anything, read `$PLAN` and ask one mechanical question: **has any file the plan
+names been committed to since the plan was drafted?**
+
+```sh
+BASE=<the session's base branch — trunk, unless code-start recorded an integration line>
+git fetch -q origin "$BASE" 2>/dev/null || true      # best-effort: a trunk commit counts too
+DRAFTED_AT=$(grep -E '^drafted-at: *[0-9]+ *$' "$PLAN" 2>/dev/null | tail -1 | tr -cd '0-9')
+FILES=$(awk '/^## Files/{f=1;next} /^## /{f=0} f' "$PLAN" 2>/dev/null \
+        | grep -oE '`[^`]+`' | tr -d '`' | sed -E 's/:[0-9].*$//')
+LAST=$(git log -1 --format=%ct HEAD "origin/$BASE" -- $(printf '%s\n' "$FILES") 2>/dev/null)
+if [ -z "$DRAFTED_AT" ]; then echo "no rung-2 plan with drafted-at → spawn"
+elif [ -z "$LAST" ] || [ "$LAST" -le "$DRAFTED_AT" ]; then echo "existing plan reused"
+else echo "stale — commits since the plan was drafted:"
+     git log --format='  %h %cI %s' --since="@$DRAFTED_AT" HEAD "origin/$BASE" -- $(printf '%s\n' "$FILES")
+fi
+```
+
+- **`drafted-at` is the plan's clock**, a Unix-epoch line in the rung-2 frontmatter (§3) —
+  epoch rather than parsing the ISO `drafted` line, because turning an ISO string back into
+  seconds is `date -d` on one platform and `date -j -f` on another. The newest `drafted-at`
+  in the file wins (`tail -1`), so a re-spawned section supersedes the one before it.
+- **"Files the plan names"** = every backticked token in the plan's `## Files` section,
+  `file:line` suffixes stripped. A token that is not a path matches nothing and costs
+  nothing. A `## Files` section with no backticked paths at all leaves `$FILES` empty, and
+  `git log -- ` then reads *any* commit — the conservative direction on purpose: a plan
+  that does not say what it covers cannot claim nothing it covers moved.
+- **`$(printf …)`, not a bare `$FILES`**: zsh — the shell many agent harnesses run — does
+  not word-split an unquoted parameter, so a bare `-- $FILES` hands git every path as *one*
+  pathspec that matches nothing, and the check reports "reused" forever. Command
+  substitution is split in both zsh and POSIX sh. (Measured while writing this: the bare
+  form passed under `sh` and silently failed under zsh.)
+- **Both `HEAD` and `origin/<base>`**: a commit on this branch *and* one another session
+  landed on the base can each move the ground the plan was drafted against. Uncommitted
+  edits in the worktree are the session's own work in progress, not invalidation — they
+  are not read.
+
+Three outcomes, one each:
+
+- **No rung-2 section, or one without a `drafted-at` line** (drafted before #404) → this is
+  a first plan, or one whose age cannot be judged: build the seed below and spawn.
+- **`existing plan reused`** → **do not spawn.** If the calling session needs the plan
+  adjusted (a detail the stub-to-now work turned up), amend it in place yourself — add an
+  `amended: <ISO timestamp> — <what, and why>` line under the frontmatter, and leave
+  `drafted-at` alone: it dates the analysis, and an in-place edit did not redo the analysis.
+  Report exactly `existing plan reused` (§4), so a reader of the session can count the call
+  that did not happen.
+- **Stale** → re-spawn, and **the reason is the commit list the check just printed** (or,
+  equally valid, something git cannot see: the Issue's scope was edited, a ruling landed in
+  a comment since `drafted`). Put that reason in the seed as its first line, **and put the
+  existing plan file in the seed too** — the subagent revises the plan it is handed, it does
+  not start over. A re-spawn with no stated reason is the failure this subsection exists to
+  prevent; if you cannot say what changed, the plan is fresh — reuse it.
+
 Everything the subagent needs, and nothing it has to re-fetch:
 
 ```sh
@@ -65,7 +124,8 @@ gh issue view $N --json title,body,labels,comments
   same one sentence a triage pass would have left. Put it in the seed anyway; the
   subagent should not have to infer why it was called.
 - The rung-1 stub already in the plan file, if one exists — the subagent expands it, it
-  does not start from nothing.
+  does not start from nothing. **On a stale re-spawn, the whole existing rung-2 plan plus
+  the stated reason** instead — the subagent revises it against what changed.
 - Relevant file paths the Issue points at. **Do not sweep the codebase** — the whole
   point of this family is spending as little context as possible; hand the subagent
   the paths you already know from the Issue, and let it read only those plus what its
@@ -81,7 +141,12 @@ stub's four lines with more words — it earns rung 2 by covering what a stub ca
   shape* rather than an alternative. This is the part a stub skips and a hard issue needs.
 - **Files expected to move**, with enough specificity that a diff wildly outside this list
   is itself a signal (to the implementer, and later to `code-ship`'s grading step) that the
-  plan and the work diverged.
+  plan and the work diverged. **Each path in backticks** — §1's reuse check reads exactly
+  the backticked tokens in this section, so a path written bare is a path whose change can
+  never mark the plan stale.
+- **A machine-readable clock** — the `drafted-at:` Unix-epoch line in the frontmatter
+  (§3), written by `date +%s` at the moment the plan is written. Without it §1 cannot tell
+  a fresh plan from a stale one, and falls back to spawning every time.
 - **Risks / open questions** — what could make this the wrong approach, and what would
   have to be true for it to be wrong. Not hedging for its own sake; a hard issue got flagged
   because something about it is genuinely uncertain, and burying that uncertainty produces
@@ -102,6 +167,8 @@ rung: 2
 cause: flagged | self-escalated
 model: <planning agent/model actually used> | self, no subagent available
 drafted: <ISO timestamp>
+drafted-at: <Unix epoch seconds — `date +%s`; §1's reuse check reads this line>
+respawn-reason: <only on a stale re-spawn — what changed, e.g. the commit list §1 printed>
 ---
 
 ## Intent
@@ -131,21 +198,32 @@ drafted: <ISO timestamp>
 - **Never overwrite a rung-1 stub silently.** Keep its four lines above the rung-2 content
   (or in a short "started as" note) — the divergence between what was assumed at session
   start and what turned out to be true is itself worth keeping.
+- **A re-spawn appends, it does not overwrite.** The revised plan goes in as a new rung-2
+  section with its own frontmatter (fresh `drafted-at`, plus `respawn-reason`) below the
+  old one; §1 reads the newest `drafted-at`, and the superseded section stays as the record
+  of what the first pass assumed.
 - **This file is disposable.** It dies at `code-ship` teardown, same breath as the
   worktree and the claim. Anything from it worth keeping past this session belongs on the
   Issue at `code-wrap` A1 — this skill does not write to the Issue itself.
 
 ## 4. Hand back to the calling session
 
-Report the rung (now 2), the cause, and a one-line summary of the approach — the calling
+Report the rung (now 2), the cause, and which of §1's three outcomes this run took —
+`spawned (first plan)`, `existing plan reused`, or `re-spawned: <reason>` — spelled that way,
+so a count of planning calls per issue can be read off the session without guessing. Then a
+one-line summary of the approach — the calling
 session continues coding from the file, it does not need this skill's own output restated
 in the conversation.
 
 ## Verify complete
 
+- §1's reuse check ran **before** any spawn: a fresh plan (no commit to a named file, on
+  `HEAD` or `origin/<base>`, since its `drafted-at`) was reused with zero planning calls; a
+  re-spawn carried a stated reason and the existing plan in its seed.
 - The plan file exists at `$PLAN` (`.claude/plans/issue-$N.md` in the **main checkout**,
   resolved via `--git-common-dir`, never a bare relative path — #113), outside any
-  worktree, with valid frontmatter (`issue`, `rung: 2`, `cause`, `model`, `drafted`).
+  worktree, with valid frontmatter (`issue`, `rung: 2`, `cause`, `model`, `drafted`, `drafted-at`), and every
+  path in `## Files` is backticked.
 - The acceptance oracle is stated precisely enough to grade a diff against later — if you
   cannot imagine `code-ship` reading it and reaching a verdict, it is not precise enough.
 - A flagged run quoted the triage reason line; a self-escalated run wrote its own,
