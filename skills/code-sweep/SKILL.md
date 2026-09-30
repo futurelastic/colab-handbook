@@ -822,6 +822,14 @@ Worktrees are only half of it. Also:
 - **Closed issues still holding a claim** → release. Closing and releasing are
   separate acts and only one is automatic.
 - **Claims whose worktree is gone** → `colab doctor --prune` reports and removes them.
+- **The repo declares `owner:`** (a repo the fleet does not own, #394) → run
+  `colab deliver --dry` once and put its state line in the report: `waiting-on-owner` (a
+  PR is open, nothing to do), `ready` (work landed since the last delivery — a human runs
+  `colab deliver`), `rejected` (the owner closed the last PR unmerged — a human
+  reads why) or `nothing-to-deliver`. Report only: the sweep never opens, edits or merges
+  that PR, and never touches the owner's branch. Delivered work is read from PR state, so a
+  squash-merged delivery does not make trunk look undelivered
+  (`CONVENTIONS.md` [§9, *Working in a repo you don't own*](../../CONVENTIONS.md#working-in-a-repo-you-dont-own)).
 - **Epic checklist lines that contradict reality** → fix the line, and say why you did.
   This is the cheapest possible place to catch them: the sweep has already read every
   issue's true state, so this compares what is already in hand and scans nothing new.

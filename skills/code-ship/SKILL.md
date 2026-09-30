@@ -1073,6 +1073,17 @@ is a human integration event of a promotion's weight.
     the forge refuses the second, and the first skips every gate ship re-checks.
   - B1c's grade still runs before the PR is opened: a reject never reaches the pause.
   - Every squash also carries a `Machine: <label>` trailer ([§4](../../CONVENTIONS.md#4-branches-and-commits)).
+- **A repo declaring `owner:` lands exactly as above — onto trunk, never onto the owner's
+  branch (#394).** `trunk:` there is the fleet's integration branch; the owner's branch is
+  reached only by `colab deliver`, a separate step that opens or refreshes ONE pull request
+  from trunk and never merges it (`CONVENTIONS.md` [§9, *Working in a repo you don't own*](../../CONVENTIONS.md#working-in-a-repo-you-dont-own)).
+  - It is not part of Phase B and never runs from here. Opening or editing that PR is a
+    human's act; this skill's go-ahead is for the trunk merge, not for an outward act on
+    the owner's repo.
+  - Your issues close on the trunk landing, as everywhere. After the ship, say in the
+    report that the work now waits on delivery, and give `colab deliver --dry`'s state line.
+  - `colab ship` and `colab promote` refuse a target that is `owner.branch`. That refusal is
+    final: do not route around it.
     Leave it in place, and do not add it back where ship left it out. On a public repository,
     or one whose visibility ship could not read, it is omitted on purpose (#367). A commit
     message is permanent, and that label is a hostname. `--dry` prints which way it will go.

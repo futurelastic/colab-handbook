@@ -3081,6 +3081,13 @@ never tags by itself.** A tag is cut without a human only where
 session that re-checks every condition — never by the driver directly, never through
 `colab ship`, and never a final tag where the tag deploys production.
 
+**Never acts on an owner's branch.** On a repo declaring `owner:` (a repo the fleet does
+not own, #394), a scheduler may run `colab deliver --dry` and report its state, and nothing
+more: opening or editing the delivery PR needs a human, and no colab command moves the
+owner's branch at all ([§9, *Working in a repo you don't own*](#working-in-a-repo-you-dont-own)).
+An open delivery PR reads as **waiting on the owner** — human-gated, stated once, never
+re-announced — not as work waiting to ship.
+
 A scheduler must tell a **self-clearing** blocker (temporarily red CI, a billing outage,
 a regenerable merge conflict) apart from a **human-gated** one (no `auto-trunk` grant, an
 unresolved new migration, an `agent-filed` label still on, a claim held by someone else).
@@ -4350,7 +4357,7 @@ a service layer on a long-lived branch of its own.
 `<prefix>/integration`), never the owner's default branch. Claims, worktrees, grading and
 `colab ship` then work unchanged. Sessions branch off the integration branch, `ship`
 merges into it, and the owner's trunk is reached only by a pull request he reviews and
-merges himself. Declare **`exposure: self`**: a merge onto the integration branch reaches
+merges himself — `colab deliver`, below. Declare **`exposure: self`**: a merge onto the integration branch reaches
 only the fleet, and the owner's review is the next gate. `self` is human-gated
 ([§2](#2-tiers)), as always. The legacy fallback does not work here, because it would
 derive `tier: B`, which requires trunk `main`, and the integration branch is never `main`.
@@ -4372,6 +4379,44 @@ writes a stub `CLAUDE.local.md`, ensures the four labels, moves the main checkou
 integration branch when the tree is clean, and checks that `git status` shows none of it.
 It then prints what it deliberately did **not** do, and why. A bare re-run is the
 idempotent re-apply.
+
+**Delivering to the owner: one pull request, `colab deliver`** (#394). Declare the owner's
+branch in the same local descriptor:
+
+```yaml
+owner:
+  branch: master     # the owner's branch; `remote:` optional, the repo's own when absent
+```
+
+Per-issue landing does not change: each session still ships onto the integration branch,
+and its issues close there. Delivery is a **separate, batch-shaped step**:
+
+```sh
+colab deliver --dry                 # read-only: what is pending, and the delivery state
+COLAB_HUMAN=1 colab deliver         # open (or refresh) ONE PR integration → owner's branch
+```
+
+- **It never merges.** The owner merges by merge commit, squash or rebase — his call. No
+  colab command moves his branch: `ship`, the ship batch and `promote` refuse a push to it,
+  and `COLAB_HUMAN=1` does not lower that.
+- **Delivered is read from PR state.** After a squash or rebase no integration commit is an
+  ancestor of the owner's branch, so ancestry cannot answer "was this delivered". The last
+  merged delivery PR's head is the boundary; the next run offers only what landed after it,
+  in a fresh PR. An open PR is refreshed (its head follows the integration branch on its
+  own), never duplicated.
+- **A rejection stops it.** If the newest delivery PR was closed without a merge, `deliver`
+  reports it (exit 3) and opens nothing until a human re-offers the batch with `--reopen`.
+- **The PR carries no closing keywords.** Its issues already closed when their work landed
+  on the integration branch; the body lists them as "carried".
+- **Opening or editing the PR needs a human** — it is an outward act on somebody else's
+  repo. A scheduled driver may run `--dry` and read the state (`waiting-on-owner`,
+  `nothing-to-deliver`, `ready`, `rejected`); it never acts on the owner's branch.
+- **The core-path rule still applies on top** ([§4](#4-branches-and-commits), #350): a branch
+  touching a CODEOWNERS path needs a non-author approval before it lands on the integration
+  branch.
+
+A PR per issue that the owner merges one by one is a different shape, deferred until a repo
+asks for it; the measured case wants the batch.
 
 **Traps, each measured:**
 

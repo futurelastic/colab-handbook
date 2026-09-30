@@ -320,6 +320,55 @@ Validity: an entry may not be `trunk`'s value, may not be `main`, may not be the
 rule as `integration:` — a malformed entry is dropped rather than honoured, and the
 audit reports it as a finding rather than silently leaving the real branch unprotected.
 
+### `owner` — optional
+
+```yaml
+trunk: fleet/integration   # the fleet's own integration branch
+exposure: self
+owner:
+  branch: master           # required when the block is present
+  remote: origin           # optional; the repo's own remote when absent
+```
+
+For a repo the fleet builds in but **does not own**
+([CONVENTIONS.md §9, *Working in a repo you don't own*](CONVENTIONS.md#working-in-a-repo-you-dont-own)).
+It names the **owner's branch**: the one only the owner merges into. Absent is the normal
+case, and absent means today's behaviour, byte for byte (#394).
+
+What it changes, and what it does not:
+
+- **Per-issue landing is unchanged.** `colab ship` keeps squashing each branch onto
+  `trunk:`, closing its issues and releasing its claims. `trunk:` stays the fleet's
+  integration branch.
+- **The owner's branch is reached by one pull request, never by a push.** `colab deliver`
+  opens (or refreshes) a single PR from `trunk:` to `owner.branch`, listing the commits and
+  issues it carries, and stops. The owner merges it by any method. The PR is batch-shaped:
+  everything landed on trunk since the last delivery, not one PR per issue.
+- **Delivered is read from PR state, not ancestry.** A merged delivery PR counts whether the
+  owner used a merge commit, squash or rebase; the next `colab deliver` treats that PR's
+  head as the boundary and offers only what landed after it. A PR the owner closed unmerged
+  is reported as a rejection, and nothing new is opened without `--reopen`.
+- **No colab command moves `owner.branch`.** `ship`, the ship batch and `promote` refuse a
+  push to it, whatever the grant — `COLAB_HUMAN=1` does not lower this. A worktree may not be
+  cut from it even if `integration:` lists it.
+- **A write to the owner's repo needs a human.** Opening or editing the PR requires
+  `COLAB_HUMAN=1`; `colab deliver --dry` only reads, so a scheduled driver may run it and read
+  the state (`waiting-on-owner` / `nothing-to-deliver` / `ready` / `rejected`), and never
+  acts on the owner's branch unattended.
+- **The core-path rule stays on top.** A branch touching a CODEOWNERS path still needs a
+  non-author approval before `colab ship` lands it on trunk ([`CONVENTIONS.md` §4](CONVENTIONS.md#4-branches-and-commits), #350).
+
+**Why `owner`, not `upstream`:** "upstream" already means something else twice — a
+consumer filing a changed convention meaning back to the handbook
+([CONVENTIONS.md §8, *Upstream*](CONVENTIONS.md#upstream--a-consumer-that-changes-what-a-convention-means-files-it-here-362)), and git's tracking ref. A third
+meaning of the same word would be misread.
+
+Validity: `branch` is required and is not the word `trunk`; only `branch` and `remote` are
+defined sub-keys; `branch` may not equal `trunk:`, appear in `integration:`, or equal
+`releaseBranch:`. `colab deliver` supports only the case where the owner's branch lives on
+the same remote trunk is pushed to (a fork delivery is refused, not guessed). A malformed
+block fails closed: every branch-moving push refuses until it is fixed.
+
 ### Per-host deploy target — deliberately not a field
 
 Not modeled here, on purpose ([CONVENTIONS.md §2](CONVENTIONS.md#2-tiers)). "Which branch does
@@ -1182,6 +1231,7 @@ the shape that shows it. One writer at a time says nothing about who reads the r
 | declared `trunk` branch actually exists | docs describing a repo that doesn't exist |
 | every `integration` entry exists, and is not `trunk` / `main` / the word `trunk` | a dev-side line acquiring a path to production |
 | declared `releaseBranch` exists, and is not `trunk` / `main` / the word `trunk` | `colab doctor` misreading a live deploy target as a spent branch and advising its deletion |
+| declared `owner` has a `branch`, only `branch`/`remote` sub-keys, and its branch is not trunk, an `integration` line or the `releaseBranch` | a colab command reaching the branch only the owner merges into (#394) |
 | toolchain pin vs manifest agreement | building on one version, deploying on another |
 | `ceremony` ∈ {`standard`, `light`} when set | a misspelled value silently read as `standard` |
 | `ceremony: light` → not `autonomy: auto-trunk` | an unattended merge with no evidence trail nobody can audit |

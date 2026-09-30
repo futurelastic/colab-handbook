@@ -65,6 +65,7 @@ const shippedBranch = require('./lib/shipped-branch');
 const shipRoles = require('./lib/ship-roles'); // #372
 const refsBrake = require('./lib/refs-brake'); // #385
 const localAdopt = require('./lib/local-adopt'); // #393
+const ownerBranch = require('./lib/owner-branch'); // #394
 const {
   HOST, UserError, normIssueNum, issueTag, claimKey, today, nowISO, hoursSince, humanAge,
   parseArgs, table, shortRepo,
@@ -8111,7 +8112,9 @@ function resolveIntegration(repoAbs, doc, trunk) {
   if (!Array.isArray(raw)) return [];
   return raw
     .map((b) => (b === null || b === undefined ? '' : String(b).trim()))
-    .filter((b) => b && b !== trunk && b !== 'main' && b !== 'trunk');
+    .filter((b) => b && b !== trunk && b !== 'main' && b !== 'trunk')
+    // #394: the owner's branch is never a base or a ship target, whatever integration: says.
+    .filter((b) => !ownerBranch.refuseMove(doc, b));
 }
 
 /** The set of refs a worktree may legitimately be based on: trunk ∪ integration. */
@@ -9575,6 +9578,13 @@ function cmdShipDryJson(opts) {
     return emit(false);
   }
   checks.push({ name: 'declared base', ok: true, class: null, detail: target });
+  // #394: a row only where owner: is declared, so a repo without the key reads exactly as before.
+  if (ownerBranch.read(doc).declared) {
+    const why = ownerBranch.refuseMove(doc, target);
+    checks.push({ name: "not the owner's branch", ok: !why, class: why ? HUMAN_GATED : null,
+      detail: why || `lands on ${target}; the owner's branch is reached by \`colab deliver\` (#394)` });
+    if (why) return emit(false);
+  }
 
   // ---- (a) AUTONOMY GATE — does NOT short-circuit here; an unattended caller wants the whole table ----
   const autonomyGate = shipAutonomyGate(doc, () => docsOnly.branchChanges(git, repoAbs, target, shipRefFor(repoAbs, sess.branch)));
@@ -10484,6 +10494,7 @@ function cmdShip(argv) {
     return 1;
   }
   const target = resolveBase(st, repoAbs, sess.name, trunk);
+  assertNotOwnerBranch(repoAbs, target); // #394: never a ship onto the owner's branch
   if (target !== trunk && !integration.includes(target)) {
     // The worktree records a base the repo no longer declares (the line was merged and dropped, or
     // project.yml was edited mid-session). Fail closed: silently retargeting at trunk is the exact
@@ -11235,6 +11246,7 @@ function cmdShip(argv) {
 
   // ---- (e) B2: push the target with COLAB_SHIP=1 (the sanctioned-path signal for pre-push-guard) ----
   print(`B2: pushing ${target} …`);
+  assertNotOwnerBranch(repoAbs, target); // #394: last line before the push
   const push = git.run('git', ['push', shipRemote, target], { cwd: targetDir, env: { ...process.env, COLAB_SHIP: '1' } });
   if (!push.ok) {
     // #322: UNDO THE MERGE, and never name the variable that would publish it by hand.
@@ -11804,6 +11816,7 @@ function shipBatchLand(repoAbs, doc, trunk, remote, base, existing, verdict, opt
   print(`ship-batch: fast-forwarding ${trunk} ${shortSha(base)} → ${shortSha(head)} (${existing.members.length} commits, one push) …`);
   const ff = git.git(['merge', '--ff-only', head], repoAbs);
   if (!ff.ok) { release(); process.stderr.write(`✗ ship-batch: ${trunk} cannot fast-forward to ${shortSha(head)}: ${git.gitFailureLine(ff.stderr)}. Nothing pushed.\n`); return 1; }
+  assertNotOwnerBranch(repoAbs, trunk); // #394
   const push = git.run('git', ['push', remote, trunk], { cwd: repoAbs, env: { ...process.env, COLAB_SHIP: '1' } });
   if (!push.ok) {
     const headNow = git.git(['rev-parse', 'HEAD'], repoAbs).stdout;
@@ -12158,6 +12171,167 @@ function cmdHolders(argv) {
 // (deploy: push-main) that always needs a human. `promote` NEVER tags and NEVER deploys directly.
 // ---------------------------------------------------------------------------
 
+// ---- deliver (#394, ruled D) ------------------------------------------------------------------
+// A repo the fleet builds in but does not own declares the owner's branch in project.yml `owner:`.
+// Per-issue landing is untouched — `colab ship` squashes onto trunk (the fleet's integration
+// branch), closes the issues, releases the claims. `colab deliver` is the separate, batch-shaped
+// step: it opens (or refreshes) ONE pull request from trunk to the owner's branch and stops. It
+// never merges it and never pushes the owner's branch — the owner presses the button, by whatever
+// method he likes. The pure half is tools/lib/owner-branch.js.
+
+const HELP_DELIVER = `colab deliver [--repo <path>] [--dry] [--json] [--reopen]
+
+Deliver trunk to the owner's branch as ONE pull request the owner merges (#394). Only for a repo
+whose .github/project.yml declares
+
+    owner:
+      branch: <the owner's branch>     # required
+      remote: <remote>                 # optional — the repo's own remote when absent
+
+What it does, in order:
+  1. fetches trunk and the owner's branch;
+  2. reads every PR from trunk to the owner's branch, in any state;
+  3. works out what is not yet delivered: trunk commits since the head of the last MERGED
+     delivery PR (read from PR state — a squash or rebase by the owner leaves no ancestry to
+     follow), or since the owner's branch when nothing was ever delivered;
+  4. an open PR → refreshes its title and body (the PR head follows trunk on its own);
+     no open PR and something pending → opens a fresh one;
+     the newest PR was CLOSED unmerged → reports the rejection and opens nothing (exit 3)
+     unless --reopen.
+
+It NEVER merges, and no colab command can move the owner's branch: ship, the ship batch and
+promote all refuse a push to it. The PR body lists the carried commits and issues, with no
+closing keywords — those issues already closed when their work landed on trunk.
+
+Writes (opening or editing the PR) are an outward act on somebody else's repo, so they need a
+human: COLAB_HUMAN=1. --dry reads and reports only, and is what a scheduled driver may run: it
+prints the state as "waiting-on-owner" / "nothing-to-deliver" / "ready" / "rejected".
+
+Options:
+  --dry       read and report only — no PR is opened or edited, no human needed
+  --json      machine-readable result (with or without --dry)
+  --reopen    offer the batch again after the owner closed the last PR without merging
+
+Exit: 0 delivered / refreshed / nothing to do / waiting on the owner; 3 the owner rejected the
+last PR (nothing opened); 1 refused (no owner: key, malformed key, no gh, no human for a write).
+`;
+
+function cmdDeliver(argv) {
+  const opts = parseArgs(argv, {
+    values: { '--repo': 'repo' },
+    flags: { '--dry': 'dry', '--json': 'json', '--reopen': 'reopen', '-h': 'help', '--help': 'help' },
+  });
+  if (opts.help) return print(HELP_DELIVER);
+  const repoAbs = resolveRepo(opts);
+  if (!git.repoRoot(repoAbs)) throw new UserError(`${repoAbs} is not a git repo`);
+  const doc = projectDoc(repoAbs);
+  const owner = ownerBranch.read(doc);
+  const fail = (msg) => {
+    if (opts.json) print(JSON.stringify({ repo: repoAbs, ok: false, error: msg }, null, 2));
+    else process.stderr.write(`✗ ${msg}\n`);
+    return 1;
+  };
+  if (!owner.declared) return fail(`${shortRepo(repoAbs)}: project.yml declares no owner: — there is no owner's branch to deliver to. Per-issue landing is \`colab ship\`.`);
+  if (owner.problems.length) return fail(`${shortRepo(repoAbs)}: project.yml owner: is malformed — ${owner.problems.join('; ')}`);
+  const trunk = resolveTrunk(repoAbs, doc);
+  if (!trunk) return fail('Could not determine trunk branch (set project.yml trunk:)');
+  if (trunk === owner.branch) return fail(`owner.branch is the trunk ("${trunk}") — the owner's branch must be a different branch from the one \`colab ship\` merges into`);
+  const remote = git.remoteFor(repoAbs);
+  const ownerRemote = owner.remote || remote;
+  if (ownerRemote !== remote) {
+    return fail(`owner.remote "${ownerRemote}" is not this repo's remote "${remote}" — delivery opens the PR on the remote trunk is pushed to; a cross-remote (fork) delivery is not supported yet`);
+  }
+  if (!isGhUsable(repoAbs)) return fail(`gh not usable (${ghUnusableWhy(repoAbs)}) — delivery reads and opens pull requests`);
+  const human = process.env.COLAB_HUMAN === '1';
+
+  // 1. fetch both refs — the answer must be the forge's, not a stale cache
+  const f = git.git(['fetch', remote, `+refs/heads/${trunk}:refs/remotes/${remote}/${trunk}`, `+refs/heads/${owner.branch}:refs/remotes/${remote}/${owner.branch}`], repoAbs, { timeoutMs: 120_000 });
+  if (!f.ok) return fail(`could not fetch ${trunk} and ${owner.branch} from ${remote}: ${git.gitFailureLine(f.stderr)}`);
+  const tip = git.git(['rev-parse', `${remote}/${trunk}`], repoAbs).stdout;
+  const ownerTip = git.git(['rev-parse', `${remote}/${owner.branch}`], repoAbs).stdout;
+  if (!tip || !ownerTip) return fail(`${remote}/${trunk} or ${remote}/${owner.branch} does not resolve after the fetch`);
+
+  // 2. every delivery PR, any state
+  const r = git.run('gh', ['pr', 'list', '--base', owner.branch, '--head', trunk, '--state', 'all', '--limit', '50',
+    '--json', 'number,url,state,mergedAt,headRefOid,title'], { cwd: repoAbs });
+  if (!r.ok) return fail(`could not list pull requests: ${(r.stderr || '').split('\n')[0]}`);
+  let list;
+  try { list = JSON.parse(r.stdout || '[]'); } catch (_) { return fail('gh pr list returned unparseable JSON'); }
+  const prs = ownerBranch.classifyPrs(list);
+
+  // 3. the undelivered range: since the last merged delivery's head when that head is still on
+  // trunk's line, else since the owner's branch (first delivery, or trunk was rewritten)
+  let since = `${remote}/${owner.branch}`;
+  let sinceWhy = `the owner's branch ${owner.branch}`;
+  const boundary = prs.lastMerged && prs.lastMerged.headRefOid;
+  if (boundary && git.git(['merge-base', '--is-ancestor', boundary, tip], repoAbs).ok) {
+    since = boundary;
+    sinceWhy = `PR #${prs.lastMerged.number}'s head ${shortSha(boundary)} (merged)`;
+  }
+  const lg = git.git(['log', '--reverse', '--format=%H%x1f%s%x1f%b%x1e', `${since}..${tip}`], repoAbs);
+  if (!lg.ok) return fail(`could not read ${since}..${remote}/${trunk}: ${git.gitFailureLine(lg.stderr)}`);
+  const pending = String(lg.stdout || '').split('\x1e').map((s) => s.replace(/^\n/, '')).filter((s) => s.trim())
+    .map((s) => { const [sha, subject, body] = s.split('\x1f'); return { sha, subject, body: (body || '').trim() }; });
+
+  // 4. decide, then (maybe) act
+  const d = ownerBranch.decide({ pending, prs, headSha: tip, reopen: !!opts.reopen });
+  const text = ownerBranch.prText({ trunk, ownerBranch: owner.branch, pending, lastMerged: prs.lastMerged });
+  const out = {
+    repo: repoAbs, ok: true, dry: !!opts.dry, trunk, owner: { branch: owner.branch, remote: ownerRemote },
+    state: d.state, action: d.action, detail: d.detail, since: sinceWhy,
+    pending: pending.map((c) => ({ sha: c.sha, subject: c.subject })),
+    issues: ownerBranch.issueRefs(pending.map((c) => `${c.subject}\n${c.body}`)),
+    pr: prs.open ? { number: prs.open.number, url: prs.open.url } : null,
+    lastMerged: prs.lastMerged ? { number: prs.lastMerged.number, url: prs.lastMerged.url, mergedAt: prs.lastMerged.mergedAt || null, headSha: prs.lastMerged.headRefOid || null } : null,
+    lastClosed: prs.lastClosed ? { number: prs.lastClosed.number, url: prs.lastClosed.url } : null,
+    done: null,
+  };
+  const report = () => {
+    if (opts.json) return print(JSON.stringify(out, null, 2));
+    print(`colab deliver — ${shortRepo(repoAbs)}: ${trunk} → ${owner.branch}`);
+    if (out.lastMerged) print(`  delivered: PR #${out.lastMerged.number}${out.lastMerged.mergedAt ? ` merged ${out.lastMerged.mergedAt}` : ''} (read from PR state, not ancestry)`);
+    print(`  pending:   ${pending.length} commit(s) since ${sinceWhy}`);
+    for (const c of pending.slice(0, 20)) print(`    ${shortSha(c.sha)} ${c.subject}`);
+    if (pending.length > 20) print(`    … +${pending.length - 20} more`);
+    print(`  state:     ${d.state} — ${d.detail}`);
+    if (out.done) print(`  ${out.done}`);
+    return 0;
+  };
+  const exitFor = () => (d.state === 'rejected' ? 3 : 0);
+
+  if (opts.dry || d.action === 'none') { report(); return exitFor(); }
+  if (!human) {
+    out.ok = false;
+    out.error = `a human must ${d.action === 'create' ? 'open' : 'edit'} the delivery PR — re-run with COLAB_HUMAN=1 (--dry needs none)`;
+    if (opts.json) print(JSON.stringify(out, null, 2));
+    else { report(); process.stderr.write(`✗ ${out.error}\n  Delivering is an outward act on the owner's repo; no field or flag lowers this bar.\n`); }
+    return 1;
+  }
+  if (d.action === 'refresh') {
+    const e = git.run('gh', ['pr', 'edit', String(prs.open.number), '--title', text.title, '--body', text.body], { cwd: repoAbs });
+    if (!e.ok) return fail(`could not refresh PR #${prs.open.number}: ${(e.stderr || '').split('\n')[0]}`);
+    out.done = `refreshed PR #${prs.open.number} (${prs.open.url || ''}) — waiting on the owner`;
+  } else {
+    const made = git.ghPrCreate(repoAbs, { base: owner.branch, head: trunk, title: text.title, body: text.body });
+    if (!made.ok) return fail(`could not open the delivery PR: ${(made.stderr || '').split('\n')[0]}`);
+    out.pr = { number: null, url: made.url };
+    out.state = 'waiting-on-owner';
+    out.done = `opened ${made.url || 'the delivery PR'} — waiting on the owner. Nothing was merged.`;
+  }
+  report();
+  return 0;
+}
+
+/**
+ * #394: the one question every branch-moving push site asks. Throws a UserError naming why when
+ * `branch` is the declared owner's branch (or when owner: is malformed — fail closed). Absent key:
+ * a no-op, so a repo without `owner:` behaves byte for byte as before.
+ */
+function assertNotOwnerBranch(repoAbs, branch) {
+  const why = ownerBranch.refuseMove(projectDoc(repoAbs), branch);
+  if (why) throw new UserError(why);
+}
+
 const HELP_PROMOTE = `colab promote [--repo <path>] [--message "<msg>"] [--dry]
 
 Promote the trunk into main (a --no-ff merge). The SECOND rung after \`ship\`: ship lands work on
@@ -12241,6 +12415,9 @@ function cmdPromote(argv) {
   const trunk = resolveTrunk(repoAbs, doc);
   if (!trunk) throw new UserError('Could not determine trunk branch (set project.yml trunk:)');
   const MAIN = 'main';
+  // #394: on a repo declaring owner.branch "main", promotion would merge into the owner's branch.
+  // No colab command moves it — and COLAB_HUMAN does not lower that: the owner merges a PR.
+  assertNotOwnerBranch(repoAbs, MAIN);
 
   // Tier B: trunk IS main → there is no promotion to run.
   if (trunk === MAIN) {
@@ -12406,6 +12583,7 @@ function cmdPromote(argv) {
   const sha = git.git(['rev-parse', '--short', 'HEAD'], mainDir).stdout;
 
   print(`push ${MAIN} …`);
+  assertNotOwnerBranch(repoAbs, MAIN); // #394
   const push = git.run('git', ['push', remote, MAIN], { cwd: mainDir, env: { ...process.env, COLAB_PROMOTE: '1' } });
   if (!push.ok) {
     cleanup();
@@ -12488,6 +12666,8 @@ Commands:
                                         have not landed on the base (filters the raw git-log
                                         one-liner through \`landed\`'s content classification)
   promote [--repo P] [--message M] [--dry]   trunk → main (--no-ff); gated by deploy + promotion; never tags
+  deliver [--repo P] [--dry] [--json] [--reopen]   project.yml owner: only — open/refresh ONE PR
+                                        trunk → the owner's branch; never merges it (#394)
   doctor [--prune] [--ttl H] [--json] [--sync]
                                         heal dead worktrees / orphan + stale claims / orphan ports
                                         (--sync also: spent group:<key> labels)
@@ -12567,6 +12747,7 @@ function main(argv) {
     case 'landed': return cmdLanded(rest);
     case 'holders': return cmdHolders(rest);
     case 'promote': return cmdPromote(rest);
+    case 'deliver': return cmdDeliver(rest);
     case 'doctor': return cmdDoctor(rest);
     case 'release-notes': return cmdReleaseNotes(rest);
     case 'release-status': return cmdReleaseStatus(rest);
