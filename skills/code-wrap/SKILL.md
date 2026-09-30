@@ -486,8 +486,8 @@ sed -n '/^on:/,/^jobs:/p' .github/workflows/*.yml     # a push: trigger covering
   comes from A5's branch-CI read, which in this mode you wait for. Skip the rest of A3's
   full-gate text below.
 - **`local` mode** — everything else: no `gate:`, `authoritative: local`, or no branch
-  trigger (this handbook's own repo is that shape). The rest of A3 applies unchanged: the
-  full gate, plus the hermetic second run.
+  trigger (workflows firing only on a trunk push and `pull_request`). The rest of A3
+  applies unchanged: the full gate, plus the hermetic second run.
 
 Either way, **while iterating, run the tests for what you changed, not the full suite**
 (`code-start`, *While you work*). The full suite runs once, where the verdict comes from.
@@ -755,9 +755,8 @@ The four classes, their quantifiers and each one's next step are defined in
   ```
 
   A workflow that fires on `push: branches: [<trunk>]` and `pull_request` produces **no
-  run for a feature-branch push**, ever — and this handbook's own repo is exactly that
-  shape, which is how this bullet got written. Since A5 pushes a backup branch and
-  explicitly does **not** open a PR, `none` there is permanent, not pending. Say which
+  run for a feature-branch push**, ever. Since A5 pushes a backup branch and explicitly
+  does **not** open a PR, `none` on a repo of that shape is permanent, not pending. Say which
   one you measured:
   - `none (no workflow triggers on a branch push here — CI runs on PR/trunk)` → nothing
     to wait for; `code-ship` proceeds on it.

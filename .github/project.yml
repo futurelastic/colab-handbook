@@ -81,6 +81,14 @@
 #               `artifact`: adopters copy files out of a tagged release (the same fact
 #               already on record as exposure: released above). No deploy workflow, no
 #               in-repo or installed hook, no service definition serves this checkout.
+#   gate        OPTIONAL. A block: smoke <command> · authoritative ci|local. Absent means
+#               the local full gate plus the hermetic second run (project.schema.md "gate —
+#               optional", tools/lib/gate.js). This repo declares `authoritative: ci` (#412):
+#               since #411 its ci.yml fires on every branch push, on GitHub-hosted runners,
+#               and runs the unit tests and the self-audit, so all three of #408's conditions
+#               hold and the branch-CI run at the pushed head is the verdict. code-wrap A3 runs
+#               scripts/smoke.sh once (syntax, control bytes, self-audit, the tests for the
+#               tools/lib modules the branch changed) and no hermetic pass.
 #   release     OPTIONAL. A one-level block: candidates auto|off · test-period <N>d ·
 #               final auto|human. Absent means the default DERIVED from exposure +
 #               deploy by CONVENTIONS §6's release rung (project.schema.md "release —
@@ -99,6 +107,9 @@ writes: free
 room: public
 exposure: released
 channels: [artifact]
+gate:
+  smoke: sh scripts/smoke.sh
+  authoritative: ci
 release:
   candidates: auto
   test-period: 3d

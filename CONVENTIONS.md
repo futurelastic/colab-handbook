@@ -1687,10 +1687,9 @@ reading either sees the same spelling. Spell them exactly so, everywhere:
   cancelled by the next merge, leaving that squash sha with no completed run of its own for
   the by-commit trunk read (#92) or the post-merge read (`code-ship` B2a) to find.
 - **Say which `none`.** A bare `none` turns a bounded wait into a wait for a run that was
-  never coming. This handbook's own repo is the permanent shape: its workflow triggers on
-  trunk push and `pull_request`, and a wrap pushes a backup branch without opening a PR,
-  so branch CI does not exist here before the merge — a normal state, not a missing
-  measurement.
+  never coming. A repo whose workflows trigger only on a trunk push and `pull_request` is
+  the permanent shape: a wrap pushes a backup branch without opening a PR, so branch CI
+  does not exist there before the merge — a normal state, not a missing measurement.
 - **At a red base, that `none` has one way out — and only the patch may take it (#353).**
   "Proceed, the base's CI is the whole story" is a stop when the base is red, and the
   *Cure rule* below needs the branch green at its own head — a run a trunk-push-only repo
