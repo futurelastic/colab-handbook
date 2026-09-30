@@ -441,7 +441,7 @@ skill performs has to be idempotent.
 
 **This skill's tracker writes are exhaustive — the list below is all of them, and nothing
 else is authorised.** An enumeration of "which writes must be careful" reads, by omission,
-as permission for anything unlisted; it is not. If a write is not one of the seven below, it
+as permission for anything unlisted; it is not. If a write is not one of the eight below, it
 is not a triage write, no matter how naturally it seems to belong on the issue:
 
 1. `blocked_by` dependency edges, via `colab blocked` (§4, #251)
@@ -454,10 +454,29 @@ is not a triage write, no matter how naturally it seems to belong on the issue:
 7. measured file names appended to an issue's `Touches:` line, when this pass measures a
    live branch holding them (§3, *Record a measured collision where the brake reads it*,
    #386)
+8. a `TRUNK RED: <sha> fails <check>` issue — or, where an open issue already tracks that
+   failure's flake class, one comment on it recording this occurrence (§5.2, #390). All
+   four bounds must hold, and the list is the whole of them:
+   - trunk CI is **red** at `<trunk>`'s current head sha (§5, asked by commit);
+   - **no open `TRUNK RED:` issue exists** in this repo — one open red is one patch in
+     flight, and a second filing splits it;
+   - the **mechanical re-run has already been attempted** for this sha, or **cannot
+     apply** — the red commit touches more than the docs lane, or no scheduled driver
+     runs this repo;
+   - **at most one filing per red sha** — the issue, or the one comment, never both and
+     never twice.
 
 Writes 6 and 7 are transcriptions: each copies a fact already on the tracker, or already
 measured this pass, into the one place a scheduler reads it. Neither records a judgement
-of triage's own, and neither lifts, applies or re-dates anything.
+of triage's own, and neither lifts, applies or re-dates anything. Write 8 is the one that
+creates an issue, and it is bounded so that it records only a measurement — a red sha and
+the check failing on it — never a diagnosis.
+
+**Triage never re-runs a CI job.** Re-running is not a tracker write and not on this list,
+and it stays that way on purpose: a red sha gets **one** re-run actor, the repo's scheduled
+driver, where one exists. Two actors each allowed "one re-run per sha" is two re-runs, and
+a green second run can bury a real defect (`CONVENTIONS.md` §4, *Telling `red:infra` from
+`red:finding`*).
 
 **§6's report is console output.** It is what the human or session reading this triage
 directly sees; it is never posted to the issue tracker as a comment, in whole or in part —
@@ -497,6 +516,12 @@ repo — which is exactly why the tracker is the wrong home for it.
   `subIssuesSummary`, §3) instead. `comments`, `labels` and `assignees` are plain arrays,
   so `| length` is correct on those.
 - **Already-shipped closes:** an issue already closed is not re-closed and not re-evidenced.
+- **`TRUNK RED:` filings: read before filing, keyed by sha.** Before write 8, list open
+  issues titled `TRUNK RED:` (`gh issue list --state open --search 'in:title "TRUNK RED:"'`)
+  — any hit means write nothing new; print it on the `DRY` `all` line instead. Then grep
+  the flake-class issue's comments, and every `TRUNK RED:` title including closed ones, for
+  the red sha: a hit means this sha was already filed, so write nothing. The sha is the
+  key, so a re-ping on the same red is a no-op and a new red sha is a new filing.
 - **Transcribed `Hold:` lines: read before posting.** Post only when the issue has **no**
   `Hold:` line for that label at all (`gh issue view <N> --comments | grep '^Hold: <label>'`
   comes back empty). Any existing line, well-formed or not, is a human's record, and a second
@@ -1205,7 +1230,7 @@ in descending member count; each rebases onto the new trunk sha **after** the ca
 lands.
 
 **Triage reports this order. It never performs it.** Rebasing, pushing, deleting a ref or
-editing a branch are not among §0.2's seven authorised writes, and they are not writes this
+editing a branch are not among §0.2's eight authorised writes, and they are not writes this
 skill may invent — see §6 for the printed shape, and `code-ship` B0 for the half that
 actually does the landing.
 
@@ -1452,6 +1477,8 @@ with the blocker named:
       gate — so being ready to start means nothing is already sounding it, and
       thoroughness is a question `exposure` answers, not a pre-merge check that
       structurally cannot exist.
+      **Red, and no patch yet?** That is not only a blocked gate — it is §5.2's step,
+      run once for the repo before ordering, not once per group.
 - [ ] **No live worktree owns those files** — `colab worktrees`, and
       `git branch -a --list '*<n>*'` after `git fetch --prune`. A clean label does
       not prove clean ground: claims are released unconditionally at wrap, so an
@@ -1617,13 +1644,63 @@ Report the four states apart — `blocked by #N` · `soft: waiting on #N (code p
 unmerged)` · `free (checked)` · `dependencies unchecked`. Collapsing any of them into
 another is how a group gets started into a wall, or left in a queue it could have left.
 
+### 5.2 A red trunk with no patch yet — file it, never re-run it (#390)
+
+`code-ship`'s red-trunk ordering, the cure rule and the red-trunk exemption all cover **landing** a
+patch for a red trunk. None of them **creates** one. Measured: trunk went red on a
+docs-only commit, from a known timing-flake class; the triage session was re-pinged four
+times over 1 h 45 min and did nothing, because it had no step for this; a finished, green
+branch sat parked behind the red the whole time, and one re-run cleared it.
+
+The re-run half now has an actor: **the repo's scheduled driver, where one exists**,
+re-runs a red trunk's failed jobs once per red sha, when the red commit's diff is
+docs-lane-only and no `TRUNK RED:` issue is open. What remains is the filing, and that
+is triage's §0.2 write 8. Run this once per pass, before §4's ordering, whenever the §5
+trunk-CI read comes back red:
+
+```sh
+RED=$(git rev-parse origin/<trunk>)                       # the red head sha, from §5's read
+gh issue list --state open --search 'in:title "TRUNK RED:"' --json number,title
+gh run list --commit "$RED" --json databaseId,workflowName,attempt,status,conclusion
+gh run view <failed-run-id> --log-failed | head -80       # the failing check, and its class
+git diff --name-only "$RED^" "$RED"                        # does it touch more than docs?
+```
+
+1. **An open `TRUNK RED:` issue exists** → write nothing. The `DRY` `all` line (§6) names
+   it, and whether its patch is claimed.
+2. **The re-run is still the driver's to make** — a scheduled driver runs this repo, the
+   red commit is docs-lane-only (the same test as `CONVENTIONS.md` §2, *Autonomy — the
+   docs-only exception*), and no run at `$RED` shows `attempt` above 1 → write nothing
+   yet. The `all` line says it waits on that re-run. A re-run **in flight** waits the
+   same way. The next ping reads the result. **Cannot tell whether a driver runs this
+   repo?** Wait exactly one ping; if the sha still shows `attempt` 1 then, nothing is
+   driving it — go to step 3. An early filing is not harmless: the driver skips a red
+   that already has an open `TRUNK RED:` issue, so filing first cancels the re-run.
+3. **Otherwise** — the re-run finished red, or cannot apply (the commit touches more than
+   docs, or nothing drives this repo) → classify the failure with `CONVENTIONS.md` §4's
+   test (*Telling `red:infra` from `red:finding`*), then:
+   - an **open** issue already tracks this failure's flake class (search open issues for
+     the failing test or check name) → **one comment** there: the sha, the run link, the
+     failing check. The durable fix collects in one place.
+   - none does → **file** `TRUNK RED: <sha> fails <check>`: the failing test names, the
+     run link, the red class and the evidence behind it, the commit that went red, and
+     whether a re-run was tried. It carries **no `agent-filed` label**: a red trunk's
+     repair is never a proposal awaiting acceptance, and `code-ship` orders it first.
+4. **Grep for the sha first, either way** (§0.2's idempotence bullet). This sha already
+   filed or commented ⇒ write nothing.
+
+Triage **never re-runs** a job, at any step — not when nothing drives the repo, not when
+the failure looks infra-shaped. That repo gets the issue, and whoever takes it decides
+about a re-run. One re-run actor per red sha is what keeps a second green run from
+burying a real defect.
+
 ## 6. Report — make it directly actionable
 
 **This report is console output, not a tracker write.** Print it to whoever is reading this
 session; never post it, or any per-beat summary of it, as an issue comment. §0.2 names the
-seven writes this skill is authorised to make — a narrative verdict is not one of them, even
+eight writes this skill is authorised to make — a narrative verdict is not one of them, even
 when the verdict is genuinely new information. If a group's verdict changed in a way worth
-recording durably, that lands through one of the seven named writes (the label, the evidence
+recording durably, that lands through one of the eight named writes (the label, the evidence
 comment, the plan/lane reason, a transcribed record), never through a fresh prose comment
 invented for the occasion.
 
@@ -1641,16 +1718,18 @@ DRY    0 of 22 open issues startable (trunk e31a896) — what unsticks each:
        #502  nobody named — STALL
        #507  lift deferred:date, wake met — @maintainer — not asked
        #87   design session start — nobody claimed it — DESIGN, free
-       all   trunk CI red at e31a896 (test job) — whoever re-runs it or files the patch — not asked
+       all   trunk CI red at e31a896 (test job) — TRUNK RED: #512, filed this pass — patch unclaimed
 ```
 
 - Each line is the same fact the matching blocked, taken, design or route line carries,
   reduced to *what* and *who*. It adds no judgement of its own, so every rule on those
   lines still applies. `STALL` and `WAKE` lines stay first.
 - When one blocker holds every issue, as a red trunk CI does (§5), print it once as the
-  `all` line instead of repeating it per issue. Triage still does not re-run the job or
-  file an issue for it. Neither is one of §0.2's seven writes. Naming who unsticks it is
-  what this line is for.
+  `all` line instead of repeating it per issue. Once a `TRUNK RED:` issue exists — filed
+  by this pass under §0.2 write 8, or already open — **the line names it**, and says
+  whether its patch is claimed. Before it exists, the line names what it waits on: the
+  scheduled driver's re-run in flight, or the §5.2 bound that stopped the filing. Triage
+  still never re-runs the job (§0.2).
 - `N` in the header counts every open issue. If none of them gets a line (all epics, all
   taken, or all route), the header still prints, followed by one line saying so.
 - The `DRY` block is console output like the rest of §6. It is never posted to the tracker.
@@ -2143,7 +2222,7 @@ Hand the top group to **code-start**, which will re-verify the claim before taki
 
 ## Verify complete
 
-- **No write outside §0.2's seven landed on the tracker.** In particular: no per-beat
+- **No write outside §0.2's eight landed on the tracker.** In particular: no per-beat
   narrative verdict comment, no "Triage at trunk `<sha>`" note, no "re-measure — verdict
   CHANGED/REVERSED" update, no correction to any of these, no restated §6 report, no
   "still ready, unchanged" note — the report went to the console and nowhere else. A
@@ -2180,12 +2259,12 @@ Hand the top group to **code-start**, which will re-verify the claim before taki
   **Every `Touches:` append names a path measured against a live branch** (§3), and nothing
   already on the line was rewritten or removed.
 - **No ref was rebased, pushed, deleted or otherwise edited by this pass.** Triage names
-  the order; `code-ship` B0 performs it. Neither is among §0.2's seven authorised writes.
+  the order; `code-ship` B0 performs it. Neither is among §0.2's eight authorised writes.
 - **The findings limits line was printed — clean or not** — and it claims only pass-time
   knowledge, naming what it is blind to. A findings section that reads as a guarantee of no
   second branch is a fail, not a wording nit: nothing here polls.
 - The finding went to the console and to `$CACHE`'s `conclusion.findings`, and **nowhere on
-  the tracker**. It is not one of §0.2's writes, and not an eighth.
+  the tracker**. It is not one of §0.2's writes, and not a ninth.
 - Every open Issue is accounted for in exactly one bucket.
 - The verdicts were **persisted, not only printed**: every free group got its
   `colab readiness` marker, every blocked group was left unset (or cleared if
@@ -2210,6 +2289,10 @@ Hand the top group to **code-start**, which will re-verify the claim before taki
 - Every unclaimed, unheld `delivery:design` issue went through §5's first gate and got the
   same marker write as a free code group, or had a stale marker cleared (§2, §6, #380).
   Being off the ranked list did not exempt it.
+- **A red trunk got a `TRUNK RED:` issue, or a named reason it did not** (§5.2, #390): an
+  open one already existed, the scheduled driver's re-run was still pending for this sha,
+  or this sha was already filed. No CI job was re-run by this pass, and no sha was filed
+  twice.
 - A pass with an empty ranked list opened with the `DRY` block. Every listed issue named
   what would make it startable and who holds that (§6, #380).
 - Every blocked line says who clears it and whether they have been asked. Any line with

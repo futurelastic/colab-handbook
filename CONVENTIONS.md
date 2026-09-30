@@ -2815,6 +2815,33 @@ it can tell an issue's deliverable IS a schema migration, so the grant request
 surfaces before `ship` ever has a reason to refuse. It authorises nothing by itself;
 only a human minting `migration-granted` above does that.
 
+#### A red trunk with no patch — never parked in silence (#390)
+
+The two doors below, and `code-ship`'s red-trunk ordering, cover **landing** a patch for
+a red trunk. Something has to **create** one first. The invariant:
+
+> **A green, finished branch is never parked behind trunk CI while there is neither an
+> open `TRUNK RED:` issue nor a re-run in flight.**
+
+Two actors hold it, one per half, and neither does the other's:
+
+- **The re-run — the repo's scheduled driver, where one exists.** Once per red sha,
+  only when the red commit's diff is docs-lane-only
+  ([§2](#autonomy--the-docs-only-exception-345)) and no `TRUNK RED:` issue is open. It is
+  the **only** re-run actor for a red trunk: two actors each allowed one re-run per sha
+  make two, and a green second run can bury a real defect ([§4](#4-branches-and-commits),
+  *Telling `red:infra` from `red:finding`*).
+- **The filing — triage.** When the re-run has been tried for that sha, or cannot apply
+  (the commit touches more than docs, or nothing drives the repo), and no `TRUNK RED:`
+  issue is open, triage files `TRUNK RED: <sha> fails <check>` — or comments the
+  occurrence on an open issue for the same flake class — at most once per red sha. It is
+  one of triage's authorised writes (`skills/code-triage` §0.2, write 8), and triage
+  never re-runs a job itself.
+
+Measured: a red from a known flake class, on a docs-only commit, parked a green branch for
+1 h 45 min across four triage pings that could see it and had no step to act. One re-run
+cleared it.
+
 #### Red-trunk exemption — the one-shot door through trunk-CI-green (#105)
 
 Same shape as a migration grant, strictly **more dangerous** — a bad migration grant
