@@ -4562,8 +4562,9 @@ integration branch when the tree is clean, and checks that `git status` shows no
 It then prints what it deliberately did **not** do, and why. A bare re-run is the
 idempotent re-apply.
 
-**Delivering to the owner: one pull request, `colab deliver`** (#394). Declare the owner's
-branch in the same local descriptor:
+**Delivering to the owner: one pull request, `colab deliver`** (#394). The owner's branch
+is declared in the same local descriptor — `colab adopt --local` writes this block itself
+when it detects the owner's default branch (#405), and never overwrites one already there:
 
 ```yaml
 owner:

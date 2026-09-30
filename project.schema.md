@@ -333,7 +333,8 @@ owner:
 For a repo the fleet builds in but **does not own**
 ([CONVENTIONS.md §9, *Working in a repo you don't own*](CONVENTIONS.md#working-in-a-repo-you-dont-own)).
 It names the **owner's branch**: the one only the owner merges into. Absent is the normal
-case, and absent means today's behaviour, byte for byte (#394).
+case, and absent means today's behaviour, byte for byte (#394). `colab adopt --local` writes
+the block when it detects the owner's default branch, and never overwrites a declared one (#405).
 
 What it changes, and what it does not:
 
