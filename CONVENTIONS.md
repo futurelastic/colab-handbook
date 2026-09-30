@@ -2010,8 +2010,12 @@ colab doctor --prune     # free claims whose worktrees no longer exist
   evidence; no consumer may treat its absence as "no evidence exists". `code-ship`'s grade
   verdict (B1c) uses the same family of marker, on its own line: `<!-- colab:grade
   verdict=<token> round=<n> -->`, `<token>` one of a **closed** set (`pass` ·
-  `reject-decision` · `reject-escalate` — no token a prefix or decorated variant of
-  another, so a qualifier can never be mistaken for `pass`). Read by equality, never by
+  `reject-decision` · `reject-escalate` · `rework` — no token a prefix or decorated variant of
+  another, so a qualifier can never be mistaken for `pass`). `rework` is a reject whose
+  recommended fix needs no authority the coordinator lacks, posted as a direction the author
+  follows unless a human overrules (#328, #406). It is emitted only at `round=1`, and it is
+  held, never cleared. Attributes are read by name, never position; an optional
+  `reviewer=<lane>` names which review produced the verdict, and absent means the ship grade. Read by equality, never by
   prefix or heading text; an unrecognised token or a missing marker both mean "not
   cleared", never a silent default to the safe-looking value — the same *degrade, never
   gate* posture applies to its absence. A **third** member of the family, `<!-- colab:disposition
