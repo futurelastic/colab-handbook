@@ -169,7 +169,7 @@ them:
 - A long-lived gotcha (bites again, not tied to one feature) → **one file per
   gotcha**, `docs/gotchas.d/<issue>-<slug>.md` (create the directory if
   missing) — never append it into whichever file is already in your context,
-  which is always `CLAUDE.md`.
+  which is always the repo's instruction file (`AGENTS.md`, else `CLAUDE.md`).
 
 The last two share one naming rule — see below — because they share one defect.
 
@@ -302,6 +302,13 @@ never the same line. Already proven this way on two repos in the fleet —
 
 #### `CLAUDE.md` is a router, not an archive
 
+"`CLAUDE.md`" in this section means **the repo's instruction file** — `AGENTS.md` where
+the repo has one, else `CLAUDE.md` — together with everything `CLAUDE.md` `@`-imports,
+because that whole set is what is loaded. Where `CLAUDE.md` is a thin shell
+(`@AGENTS.md` plus tool blocks — `CONVENTIONS.md` [§9](../../CONVENTIONS.md#9-adopting-this) step 5, #417), edit the prose in
+`AGENTS.md`; the blocks left in `CLAUDE.md` (the Conventions block and its stamp, other
+tool-managed blocks) are maintained by their tools and are never edited as prose.
+
 It holds conventions, trunk (and the legacy tier, when that's all a repo declares),
 ports, run commands, and **pointers** to the docs
 that carry the depth. It is also the one file loaded in full into **every** session
@@ -332,8 +339,8 @@ This paragraph used to be enforcement-by-prose only, and that failed silently: a
 was measured at 112,382 bytes / 197 lines — the line count read as healthy while one
 "pointer" row alone had grown to 68,350 bytes (60.8% of the file), because nothing
 mechanical was watching bytes. `audit/audit.mjs` now flags this — a `CLAUDE.md` over
-~40 KB, or any single physical line more than 6x the file's median and over 2 KB — as
-an advisory (`audit/README.md`, #64). It is a starting-point threshold, not a hard
+~40 KB **counting every in-repo file it `@`-imports** (#417), or any single physical line
+more than 6x its own file's median and over 2 KB — as an advisory (`audit/README.md`, #64). It is a starting-point threshold, not a hard
 gate, but it means a session no longer has to catch this by eye.
 
 #### A *new rule* is a follow-up unit, not a line in this session's diff
@@ -352,7 +359,7 @@ Issue now and get written by a claimed unit of their own (`CONVENTIONS.md` [§5]
 Do not use this to postpone A2's actual job. "This doc is now wrong" is this session;
 "here is something new we decided" is the next one.
 
-**Touched `CLAUDE.md`? Re-check its pointer section against `ls docs/`.** An index
+**Touched the instruction file? Re-check its pointer section against `ls docs/`.** An index
 that omits half the docs is worse than no index, because a reader trusts it and
 stops looking. Measured: one repo's pointer section lists a session-notes file and
 the README while omitting four docs totalling 120 KB — this step grew the body for

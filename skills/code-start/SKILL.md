@@ -207,7 +207,9 @@ gh issue view $N --comments                      # prior-session log
   Never open a parallel Issue for a feature that already has one; two half-memories
   are worse than one, because neither reader knows the other exists.
 - **Issue exists** → this is your whole context. Read only the paths it points
-  to, plus the repo's `CLAUDE.md` if present. Do not sweep the codebase.
+  to, plus the repo's instruction file (`AGENTS.md`, else `CLAUDE.md`) if present — where
+  `CLAUDE.md` is a thin shell over `AGENTS.md`, the prose is in `AGENTS.md` and only the
+  tool blocks (the Conventions block, its stamp) stay in `CLAUDE.md`. Do not sweep the codebase.
 - **No Issue** → create one and put the plan in it (this is the memory the next
   session reloads):
   ```sh

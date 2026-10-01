@@ -99,6 +99,19 @@ function colab(fx, args, envOverrides = {}) {
   return { code: r.status, out: r.stdout || '', err: r.stderr || '' };
 }
 
+/**
+ * `verify.ok`, modulo ONE release-state finding (#417). On a fresh repo adopt now writes the
+ * thin-shell CLAUDE.md, stamped with the handbook's latest release tag. Whenever the handbook's
+ * own checkout carries a template change committed after that tag, the audit reports the copy
+ * as "template changed since" — true of every copy stamped at that tag, decided by when the
+ * handbook was last tagged, not by anything adopt did. Every other fail still fails the test.
+ */
+function assertVerifyOk(verify) {
+  assert.ok(verify && verify.ran, 'verify should have run');
+  const fails = verify.findings.filter((f) => f.level === 'fail' && !/^CLAUDE block copied @ (\S+) — template changed since \(\1\)/.test(f.text));
+  assert.deepStrictEqual(fails, [], JSON.stringify(verify.findings));
+}
+
 /** A full, self-consistent descriptor — override/delete individual keys to build a fixture
  * missing exactly what a test wants missing. `undefined` deletes a key from the base. */
 function fullYml(overrides = {}) {
@@ -226,7 +239,7 @@ test('fresh fixture + full flags + COLAB_HUMAN=1: exit 0, written, audit reports
   const parsed = JSON.parse(r.out);
   assert.strictEqual(Object.prototype.hasOwnProperty.call(parsed.cfg, 'tier'), false);
   assert.ok(parsed.verify && parsed.verify.ran, 'verify should have run (audit/ is available in this checkout)');
-  assert.strictEqual(parsed.verify.ok, true, JSON.stringify(parsed.verify.findings));
+  assertVerifyOk(parsed.verify);
 });
 
 // #208: the split's current vocabulary is a legal --writes flag value too, not just the
@@ -243,7 +256,7 @@ test('#208: --writes serial-direct (current vocabulary, not the legacy alias): e
   const parsed = JSON.parse(r.out);
   assert.strictEqual(parsed.cfg.writes, 'serial-direct');
   assert.ok(parsed.verify && parsed.verify.ran, 'verify should have run (audit/ is available in this checkout)');
-  assert.strictEqual(parsed.verify.ok, true, JSON.stringify(parsed.verify.findings));
+  assertVerifyOk(parsed.verify);
 });
 
 test('same fresh fixture, same flags, WITHOUT COLAB_HUMAN=1: non-zero, class human-gated, file does not exist', () => {
@@ -371,7 +384,7 @@ test('DEFECT 1 regression: the same manifest-less repo + --stack writes, and the
   const parsed = JSON.parse(r.out);
   assert.strictEqual(parsed.cfg.stack, 'docs');
   assert.ok(parsed.verify && parsed.verify.ran);
-  assert.strictEqual(parsed.verify.ok, true, JSON.stringify(parsed.verify.findings));
+  assertVerifyOk(parsed.verify);
 });
 
 test('DEFECT 2 regression: a repo with NO origin remote at all falls back to the current branch as trunk, writes, audit ok:true', () => {
@@ -386,7 +399,7 @@ test('DEFECT 2 regression: a repo with NO origin remote at all falls back to the
   assert.strictEqual(parsed.cfg.trunk, 'main');
   assert.strictEqual(parsed.detected.trunk.source, 'current-branch-fallback');
   assert.ok(parsed.verify && parsed.verify.ran);
-  assert.strictEqual(parsed.verify.ok, true, JSON.stringify(parsed.verify.findings));
+  assertVerifyOk(parsed.verify);
   const raw = fs.readFileSync(path.join(fx.work, '.github', 'project.yml'), 'utf8');
   assert.match(raw, /trunk: main/);
   assert.match(raw, /no origin remote yet/);
@@ -462,7 +475,7 @@ test('#283: --writes free writes a literal `writes: free` line with provenance, 
   assert.match(raw, /^writes: free$/m);
   const parsed = JSON.parse(r.out);
   assert.ok(parsed.verify && parsed.verify.ran);
-  assert.strictEqual(parsed.verify.ok, true, JSON.stringify(parsed.verify.findings));
+  assertVerifyOk(parsed.verify);
 });
 
 test('#283: --writes serial (legacy spelling) is still writable as-is, audit ok:true', () => {
@@ -472,7 +485,7 @@ test('#283: --writes serial (legacy spelling) is still writable as-is, audit ok:
   const parsed = JSON.parse(r.out);
   assert.strictEqual(parsed.cfg.writes, 'serial');
   assert.ok(parsed.verify && parsed.verify.ran);
-  assert.strictEqual(parsed.verify.ok, true, JSON.stringify(parsed.verify.findings));
+  assertVerifyOk(parsed.verify);
 });
 
 test('#283: --writes direct on an exposure: none repo, with COLAB_HUMAN + --answered-by: exit 0, written, audit ok:true', () => {
@@ -484,7 +497,7 @@ test('#283: --writes direct on an exposure: none repo, with COLAB_HUMAN + --answ
   const parsed = JSON.parse(r.out);
   assert.strictEqual(parsed.cfg.writes, 'direct');
   assert.ok(parsed.verify && parsed.verify.ran);
-  assert.strictEqual(parsed.verify.ok, true, JSON.stringify(parsed.verify.findings));
+  assertVerifyOk(parsed.verify);
 });
 
 test('#283: --writes direct with no COLAB_HUMAN and no TTY: exit 3, nothing written', () => {
@@ -570,4 +583,66 @@ test('colab adopt --help documents the command; root help lists it', () => {
   const root = colab({ root: os.tmpdir() }, ['--help']);
   assert.strictEqual(root.code, 0, root.err);
   assert.match(root.out, /\n\s*adopt \[--repo/);
+});
+
+// --------------------------------------------------------------- #417 — the thin-shell CLAUDE.md
+
+const FRESH_FLAGS = [
+  '--production', 'none', '--deploy', 'none', '--stack', 'docs',
+  '--room', 'solo', '--writes', 'serial', '--channels', 'none',
+  '--exposure', 'self', '--answered-by', 'Test Human',
+];
+
+test('#417: fresh repo + full flags: writes the CLAUDE.md shell and an AGENTS.md stub; audit ok:true', () => {
+  const fx = fixture(undefined);
+  const r = colab(fx, ['adopt', '--repo', fx.work, '--json', ...FRESH_FLAGS], { COLAB_HUMAN: '1' });
+  assert.strictEqual(r.code, 0, r.err);
+  const parsed = JSON.parse(r.out);
+  assert.deepStrictEqual(parsed.shell, { claude: 'written', agents: 'written' });
+  const claude = fs.readFileSync(path.join(fx.work, 'CLAUDE.md'), 'utf8');
+  assert.strictEqual(claude.split('\n')[0], '@AGENTS.md');
+  assert.match(claude, /<!-- colab-handbook @ v\d+\.\d+\.\d+ -->/);
+  assert.match(claude, /\*\*Trunk:\*\* `main`/);
+  assert.match(claude, /\*\*Tier:\*\* `B`/);
+  assert.doesNotMatch(claude, /<version>|<dev\|main>|<A\|B\|C>|Paste this/);
+  assert.ok(fs.existsSync(path.join(fx.work, 'AGENTS.md')));
+  assertVerifyOk(parsed.verify);
+  assert.ok(!parsed.verify.findings.some((f) => /Conventions block|tool block|advisory ceiling/.test(f.text || f)), JSON.stringify(parsed.verify.findings));
+});
+
+test('#417: fresh repo with an existing AGENTS.md: AGENTS.md left byte-identical, shell written', () => {
+  const fx = fixture(undefined);
+  const mine = '# My agent rules\n\nRun `make test`.\n';
+  fs.writeFileSync(path.join(fx.work, 'AGENTS.md'), mine);
+  const r = colab(fx, ['adopt', '--repo', fx.work, '--json', '--no-verify', ...FRESH_FLAGS], { COLAB_HUMAN: '1' });
+  assert.strictEqual(r.code, 0, r.err);
+  assert.deepStrictEqual(JSON.parse(r.out).shell, { claude: 'written', agents: 'exists' });
+  assert.strictEqual(fs.readFileSync(path.join(fx.work, 'AGENTS.md'), 'utf8'), mine);
+});
+
+test('#417: an existing CLAUDE.md is left byte-identical and no AGENTS.md is created', () => {
+  const fx = fixture(undefined);
+  const mine = '# CLAUDE.md\n\nHand-written.\n';
+  fs.writeFileSync(path.join(fx.work, 'CLAUDE.md'), mine);
+  const r = colab(fx, ['adopt', '--repo', fx.work, '--json', '--no-verify', ...FRESH_FLAGS], { COLAB_HUMAN: '1' });
+  assert.strictEqual(r.code, 0, r.err);
+  assert.strictEqual(JSON.parse(r.out).shell.claude, 'exists');
+  assert.strictEqual(fs.readFileSync(path.join(fx.work, 'CLAUDE.md'), 'utf8'), mine);
+  assert.strictEqual(fs.existsSync(path.join(fx.work, 'AGENTS.md')), false);
+});
+
+test('#417: a repo that already had a descriptor gets no shell, even with no CLAUDE.md', () => {
+  const fx = fixture(fullYml({ channels: undefined }));
+  const r = colab(fx, ['adopt', '--repo', fx.work, '--channels', 'workflow', '--no-verify']);
+  assert.strictEqual(r.code, 0, r.err);
+  assert.strictEqual(fs.existsSync(path.join(fx.work, 'CLAUDE.md')), false);
+  assert.strictEqual(fs.existsSync(path.join(fx.work, 'AGENTS.md')), false);
+});
+
+test('#417: a refusal writes neither file', () => {
+  const fx = fixture(undefined);
+  const r = colab(fx, ['adopt', '--repo', fx.work, '--no-verify', ...FRESH_FLAGS]); // no COLAB_HUMAN
+  assert.notStrictEqual(r.code, 0);
+  assert.strictEqual(fs.existsSync(path.join(fx.work, 'CLAUDE.md')), false);
+  assert.strictEqual(fs.existsSync(path.join(fx.work, 'AGENTS.md')), false);
 });
