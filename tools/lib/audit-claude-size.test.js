@@ -35,7 +35,7 @@ process.on('exit', () => { for (const d of TMP) { try { fs.rmSync(d, { recursive
  * project.yml so every other audit rule stays silent and a finding in the result is
  * unambiguously the one under test.
  */
-function fixture(claudeMd) {
+function fixture(claudeMd, extra = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'audit-claude-size-'));
   TMP.push(dir);
   const g = (...args) => execFileSync('git', args, { cwd: dir, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
@@ -51,6 +51,10 @@ function fixture(claudeMd) {
     'tier: B\ntrunk: main\nproduction: null\ndeploy: none\nstack: node\n',
   );
   if (claudeMd !== null) fs.writeFileSync(path.join(dir, 'CLAUDE.md'), claudeMd);
+  for (const [rel, body] of Object.entries(extra)) {
+    fs.mkdirSync(path.dirname(path.join(dir, rel)), { recursive: true });
+    fs.writeFileSync(path.join(dir, rel), body);
+  }
   g('add', '-A');
   g('commit', '-q', '-m', 'chore: fixture');
   return dir;
@@ -199,4 +203,36 @@ test('a stray colab:derived:end with no matching start is reported and the conte
   const r = audit(fixture(body));
   assert.ok(hasText(r.warns, /malformed colab:derived marker.*no matching start/), r.warns.join(' | '));
   assert.ok(!hasText(r.warns, /CLAUDE\.md is \d+ bytes/), r.warns.join(' | '));
+});
+
+// --- #417: a thin-shell CLAUDE.md is measured with everything it @-imports -------
+
+const BIG_AGENTS = '# AGENTS.md\n\n' + '- `docs/topic.md` — a router line describing where the depth actually lives.\n'.repeat(1300); // ~100 KB
+
+test('a thin shell importing a 100 KB AGENTS.md warns, naming both files (#417)', () => {
+  const r = audit(fixture('@AGENTS.md\n\n## Conventions\n', { 'AGENTS.md': BIG_AGENTS }));
+  assert.ok(hasText(r.warns, /CLAUDE\.md plus its @-imports \(AGENTS\.md\) is \d+ bytes.*advisory ceiling \(#64\)/), r.warns.join(' | '));
+  assert.deepStrictEqual(r.fails, []);
+});
+
+test('an @import inside a code span is not followed (#417)', () => {
+  const r = audit(fixture('Write `@AGENTS.md` on the first line.\n', { 'AGENTS.md': BIG_AGENTS }));
+  assert.ok(!hasText(r.warns, /advisory ceiling/), r.warns.join(' | '));
+});
+
+test('an import escaping the repo is not counted (#417)', () => {
+  const r = audit(fixture('@../AGENTS.md\n@~/AGENTS.md\n'));
+  assert.ok(!hasText(r.warns, /advisory ceiling/), r.warns.join(' | '));
+});
+
+test('a monster line in an imported file is reported against that file (#417)', () => {
+  const agents = '# AGENTS.md\n\n' + 'short line\n'.repeat(20) + 'x'.repeat(5000) + '\n';
+  const r = audit(fixture('@AGENTS.md\n', { 'AGENTS.md': agents }));
+  assert.ok(hasText(r.warns, /^AGENTS\.md has a single line of 5000 bytes/), r.warns.join(' | '));
+});
+
+test('a derived span inside an imported file is excluded per file (#417)', () => {
+  const agents = '# AGENTS.md\n<!-- colab:derived:start id=toc -->\n' + 'y'.repeat(80) .concat('\n').repeat(700) + '<!-- colab:derived:end -->\n';
+  const r = audit(fixture('@AGENTS.md\n', { 'AGENTS.md': agents }));
+  assert.ok(!hasText(r.warns, /advisory ceiling/), r.warns.join(' | '));
 });

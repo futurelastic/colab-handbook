@@ -671,3 +671,24 @@ test('renderDescriptor: multiple entries, each on its own line, in the order giv
   ]);
   assert.strictEqual(text, 'production: null\n# c1\ndeploy: none\n# c2\n');
 });
+
+// --------------------------------------------------------------- #417 — the thin-shell CLAUDE.md
+
+test('renderClaudeShell: first line @AGENTS.md, stamp/trunk/tier filled, no placeholder or paste note left', () => {
+  const { renderClaudeShell } = require('./adopt.js');
+  const tmpl = require('fs').readFileSync(require('path').join(__dirname, '..', '..', 'templates', 'repo-CLAUDE-block.md'), 'utf8');
+  const out = renderClaudeShell(tmpl, { version: 'v1.2.3', trunk: 'dev', tier: 'A' });
+  assert.strictEqual(out.split('\n')[0], '@AGENTS.md');
+  assert.match(out, /<!-- colab-handbook @ v1\.2\.3 -->/);
+  assert.match(out, /\*\*Trunk:\*\* `dev`/);
+  assert.match(out, /\*\*Tier:\*\* `A` — a tag deploys/);
+  assert.doesNotMatch(out, /<version>|<dev\|main>|<A\|B\|C>|Paste this|Delete this line/);
+  assert.ok(require('./instruction-file.js').isThinShell(out));
+  assert.ok(require('./stamp.js').parseClaudeStamp(out), 'the stamp must stay readable by the audit');
+});
+
+test('renderClaudeShell: a null tier leaves the placeholder for a human, never a guess', () => {
+  const { renderClaudeShell } = require('./adopt.js');
+  const out = renderClaudeShell('## Conventions\n\n- **Tier:** `<A|B|C>` — <A = x · C = y · B = z>\n', { version: 'v1', trunk: 'main', tier: null });
+  assert.match(out, /`<A\|B\|C>`/);
+});

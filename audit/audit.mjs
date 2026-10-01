@@ -106,6 +106,9 @@ const trustHumansLib = require("../tools/lib/trust-humans.js");
 const hermeticLib = require("../tools/lib/hermetic.js");
 // #410: the optional `gate:` block — read through the same module the skills name.
 const gateLib = require("../tools/lib/gate.js");
+// #417: CLAUDE.md as a thin shell over AGENTS.md — the @-import resolver and the tool-block table,
+// shared with `colab adopt` so the shell it writes and the shape the audit checks are one shape.
+const instructionFile = require("../tools/lib/instruction-file.js");
 // #228's identity vocabulary — resolution, parsing, matching and REDACTION. Shared with the
 // conformance test that holds it and the shell hook (templates/pre-commit-identity) to the
 // same semantics; the shell scanner cannot require it (a template lands in repos with no
@@ -1585,6 +1588,9 @@ function auditRepo(target, ctx) {
   // Unconditional: this is a repo-doc concern, not a tier/deploy one, and it applies to
   // the handbook's OWN CLAUDE.md too (not a stamp check, so it is not gated on !isSelf).
   checkClaudeMdSize(src, warn);
+  // #417: same posture — a tool block loaded twice, or the Conventions block moved out of the
+  // file tools look it up in, is a repo-doc concern on every repo, the handbook's own included.
+  checkInstructionFileBlocks(src, warn);
 
   // ---- markdown anchor links resolve (#158) --------------------------------
   // Unconditional, same posture as checkClaudeMdSize above: general markdown hygiene,
@@ -2048,7 +2054,8 @@ function checkReleaseBranch(cfg, trunk, branches, fail, warn, deploy) {
 }
 
 // `CLAUDE.md` is the router (code-wrap A2), loaded in full into EVERY session before any
-// work starts. Issue #64: A2's rule was prose-only, and its own worst-case citation is
+// work starts — together with every in-repo file it @-imports (#417: a thin-shell CLAUDE.md
+// that imports AGENTS.md is measured as the whole loaded set, not as the shell alone). Issue #64: A2's rule was prose-only, and its own worst-case citation is
 // framed in LINES — which is structurally blind to the failure that actually occurred. A
 // repo audited clean at 197 lines carried 112,382 bytes because a single "pointer" row had
 // grown into a hand-maintained paraphrase of the whole document it was meant to point at:
@@ -2301,27 +2308,39 @@ function checkAnchorLinks(src, fail) {
 }
 
 function checkClaudeMdSize(src, warn) {
-  const text = src.readFile("CLAUDE.md");
-  if (text === null) return; // no CLAUDE.md here — a separate concern (project.yml already covers "undescribed")
+  // #417: measure what is LOADED, not one file. A thin-shell CLAUDE.md (`@AGENTS.md` plus the
+  // by-name tool blocks) is tiny by construction, so measuring it alone would neuter this guard
+  // while a bloated AGENTS.md rides in behind it on every turn. The loaded set is CLAUDE.md plus
+  // every in-repo file it @-imports, recursively (tools/lib/instruction-file.js).
+  const { files } = instructionFile.collectLoaded((p) => src.readFile(p), "CLAUDE.md");
+  if (!files.length) return; // no CLAUDE.md here — a separate concern (project.yml already covers "undescribed")
 
-  const bytes = Buffer.byteLength(text, "utf8");
-  const { authoredLines, malformed } = splitDerivedSpans(text);
-  for (const problem of malformed) {
-    warn(`CLAUDE.md has a malformed colab:derived marker (${problem}) — treating the affected span as authored, not derived, until it's fixed`);
+  let bytes = 0;
+  let authoredBytes = 0;
+  const perFile = [];
+  for (const f of files) {
+    const { authoredLines, malformed } = splitDerivedSpans(f.text); // markers pair within one file
+    for (const problem of malformed) {
+      warn(`${f.path} has a malformed colab:derived marker (${problem}) — treating the affected span as authored, not derived, until it's fixed`);
+    }
+    const fileAuthored = Buffer.byteLength(authoredLines.join("\n"), "utf8");
+    bytes += Buffer.byteLength(f.text, "utf8");
+    authoredBytes += fileAuthored;
+    perFile.push({ path: f.path, authoredLines, authoredBytes: fileAuthored });
   }
-
-  const authoredText = authoredLines.join("\n");
-  const authoredBytes = Buffer.byteLength(authoredText, "utf8");
   const derivedBytes = Math.max(0, bytes - authoredBytes);
 
   if (authoredBytes > CLAUDE_MD_MAX_BYTES) {
     const totalNote = derivedBytes > 0
       ? ` (of ${bytes} bytes total; ${derivedBytes} bytes are marked colab:derived and excluded — #117)`
       : "";
+    const subject = files.length === 1
+      ? "CLAUDE.md is"
+      : `CLAUDE.md plus its @-imports (${files.slice(1).map((f) => f.path).join(", ")}) is`;
     warn(
-      `CLAUDE.md is ${authoredBytes} bytes (~${(authoredBytes / 1024).toFixed(1)} KB)${totalNote} — over the ` +
+      `${subject} ${authoredBytes} bytes (~${(authoredBytes / 1024).toFixed(1)} KB)${totalNote} — over the ` +
       `${CLAUDE_MD_MAX_BYTES / 1024} KB advisory ceiling (#64). It is loaded in full into every session before ` +
-      `any work starts; if the knowledge belongs in docs/, the CLAUDE.md change is a pointer, not a copy (code-wrap A2)`,
+      `any work starts; if the knowledge belongs in docs/, the ${files.length === 1 ? "CLAUDE.md" : "instruction-file"} change is a pointer, not a copy (code-wrap A2)`,
     );
   }
 
@@ -2329,17 +2348,69 @@ function checkClaudeMdSize(src, warn) {
   // that never wrapped, so a line-count-based reader (like A2's own cited metric) never
   // sees it either. Excluding derived lines here too: a generated block can legitimately
   // contain a long row, and that is not the "pointer became a copy" signature this hunts.
-  const lens = authoredLines.filter((l) => l.length > 0).map((l) => Buffer.byteLength(l, "utf8")).sort((a, b) => a - b);
-  if (lens.length < 2) return; // no meaningful median from 0 or 1 lines
-  const median = lens[Math.floor(lens.length / 2)];
-  const worst = lens[lens.length - 1];
-  if (median > 0 && worst > CLAUDE_MD_LINE_ABS_FLOOR && worst > median * CLAUDE_MD_LINE_MULTIPLE) {
-    const pct = ((worst / authoredBytes) * 100).toFixed(1);
-    warn(
-      `CLAUDE.md has a single line of ${worst} bytes — ${(worst / median).toFixed(1)}x the file's median line ` +
-      `(${median} bytes), ${pct}% of authored content (#64). That is the "pointer became a copy" signature: a ` +
-      `router line should name where the depth lives, not reproduce it`,
-    );
+  // Per FILE (#417): each file against its own median, so a fat imported file is blamed by name.
+  for (const f of perFile) {
+    const lens = f.authoredLines.filter((l) => l.length > 0).map((l) => Buffer.byteLength(l, "utf8")).sort((a, b) => a - b);
+    if (lens.length < 2) continue; // no meaningful median from 0 or 1 lines
+    const median = lens[Math.floor(lens.length / 2)];
+    const worst = lens[lens.length - 1];
+    if (median > 0 && worst > CLAUDE_MD_LINE_ABS_FLOOR && worst > median * CLAUDE_MD_LINE_MULTIPLE) {
+      const pct = ((worst / f.authoredBytes) * 100).toFixed(1);
+      warn(
+        `${f.path} has a single line of ${worst} bytes — ${(worst / median).toFixed(1)}x the file's median line ` +
+        `(${median} bytes), ${pct}% of authored content (#64). That is the "pointer became a copy" signature: a ` +
+        `router line should name where the depth lives, not reproduce it`,
+      );
+    }
+  }
+}
+
+// #417: CLAUDE.md as a thin shell over AGENTS.md. Two silent failures that shape invites:
+//
+//   1. A tool-generated block (one framework's guidelines generator writes the same ~200-line
+//      block into BOTH files) sits in CLAUDE.md and in AGENTS.md. Once CLAUDE.md imports
+//      AGENTS.md that block is loaded twice into every session, and the generator re-adds it
+//      after any hand cleanup — the fix is the generator's target config, not an edit.
+//   2. The handbook's Conventions block is moved into AGENTS.md along with the prose. Its stamp
+//      is then invisible to this audit's drift check, `colab update` and handbook-sync, which all
+//      look for it in CLAUDE.md BY NAME — the repo silently reads as never adopted.
+//
+// Both WARN, never FAIL: neither stops anything working, they cost tokens or drift tracking.
+// Byte-identical CLAUDE.md and AGENTS.md (a symlinked or copied pair) are ONE file here, or
+// every symlinked repo would warn on a duplicate it does not have.
+function checkInstructionFileBlocks(src, warn) {
+  const read = (p) => src.readFile(p);
+  const loaded = instructionFile.collectLoaded(read, "CLAUDE.md").files;
+  const claude = loaded.find((f) => f.path === "CLAUDE.md");
+  const scan = loaded.map((f) => ({ path: f.path, text: f.text }));
+  const agents = read("AGENTS.md");
+  if (agents !== null && !scan.some((f) => f.path === "AGENTS.md")) scan.push({ path: "AGENTS.md", text: agents });
+  if (scan.length < 2) return;
+  if (claude && agents !== null && claude.text === agents) return; // one file under two names
+
+  const loadedPaths = new Set(loaded.map((f) => f.path));
+  for (const { id, paths } of instructionFile.duplicateToolBlocks(scan)) {
+    const both = paths.join(" and ");
+    if (paths.every((p) => loadedPaths.has(p))) {
+      warn(
+        `tool block "${id}" appears in both ${both}, and CLAUDE.md imports the other, so it is loaded twice into ` +
+        `every session — configure the generator to write AGENTS.md only, then delete the CLAUDE.md copy (#417)`,
+      );
+    } else {
+      warn(`tool block "${id}" appears in both ${both} — keep one copy, in AGENTS.md, and configure the generator to write only there (#417)`);
+    }
+  }
+
+  const hasBlock = (t) => !!(parseClaudeStamp(t) || looksLikeHandbookClaude(t));
+  if (!(claude && hasBlock(claude.text))) {
+    const elsewhere = scan.filter((f) => f.path !== "CLAUDE.md" && hasBlock(f.text)).map((f) => f.path);
+    if (elsewhere.length) {
+      warn(
+        `the colab-handbook Conventions block is in ${elsewhere.join(", ")}, not CLAUDE.md — the audit, handbook-sync ` +
+        `and \`colab update\` look for it in CLAUDE.md by name, so its stamp is invisible there; move it back into ` +
+        `CLAUDE.md, next to the @AGENTS.md import (#417)`,
+      );
+    }
   }
 }
 

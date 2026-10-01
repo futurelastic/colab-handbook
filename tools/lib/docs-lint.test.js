@@ -282,3 +282,35 @@ test('docs-lint: exits 1 when any FAIL fired, 0 when only warnings (or nothing) 
   const warnDir = mkfixture({ 'CLAUDE.md': '# R\n', 'docs/orphan.md': '# O\n' });
   execFileSync('node', [SCRIPT, '--repo', warnDir], { stdio: 'pipe' }); // must not throw
 });
+
+// --- #417: CLAUDE.md as a thin shell over AGENTS.md --------------------------------
+// The inline parser in templates/docs-lint.mjs mirrors tools/lib/instruction-file.js
+// `parseImports`; these cases match tools/lib/instruction-file.test.js.
+
+test('docs-lint: default router is the @-import target when CLAUDE.md is a shell (#417)', () => {
+  const dir = mkfixture({ 'CLAUDE.md': '@AGENTS.md\n\n## Conventions\n', 'AGENTS.md': '# Rules\n\n- [a](docs/a.md)\n', 'docs/a.md': '# A\n' });
+  const report = run(dir);
+  assert.equal(report.config.router, 'AGENTS.md');
+  assert.deepEqual(findingsFor(report, '1 router-integrity').filter((f) => f.level === 'fail'), []);
+  assert.deepEqual(findingsFor(report, '2 orphans'), []);
+});
+
+test('docs-lint: router: config still overrides the shell default (#417)', () => {
+  const dir = mkfixture({ 'CLAUDE.md': '@AGENTS.md\n', 'AGENTS.md': '# Rules\n', 'README.md': '# R\n', '.github/project.yml': 'docs_lint:\n  router: README.md\n' });
+  assert.equal(run(dir).config.router, 'README.md');
+});
+
+test('docs-lint: a shell whose import is missing falls back to CLAUDE.md (#417)', () => {
+  const dir = mkfixture({ 'CLAUDE.md': '@AGENTS.md\n' });
+  assert.equal(run(dir).config.router, 'CLAUDE.md');
+});
+
+test('docs-lint: AGENTS.md is the router when there is no CLAUDE.md (#417)', () => {
+  const dir = mkfixture({ 'AGENTS.md': '# Rules\n', 'README.md': '# R\n' });
+  assert.equal(run(dir).config.router, 'AGENTS.md');
+});
+
+test('docs-lint: an @-mention in a code span, an escaping path, or user@host is not a shell import (#417)', () => {
+  const dir = mkfixture({ 'CLAUDE.md': 'Use `@AGENTS.md`; mail me@AGENTS.md; @../AGENTS.md\n', 'AGENTS.md': '# Rules\n' });
+  assert.equal(run(dir).config.router, 'CLAUDE.md');
+});

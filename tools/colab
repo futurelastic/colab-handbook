@@ -6897,7 +6897,10 @@ files is not an option (CONVENTIONS.md §9, "Working in a repo you don't own"):
      block, topic, register, autopilot) and why.
 
 Boundary: adopt writes the descriptor and nothing else — no labels, no topic, no CI template, no
-CLAUDE block, no \`colab register\`, and it never commits. It ends with the machine-readable
+\`colab register\`, and it never commits. One exception (#417): on a repo with no descriptor before
+the run and no CLAUDE.md, plain adopt also writes the thin-shell CLAUDE.md (\`@AGENTS.md\` + the
+filled Conventions block) and an AGENTS.md stub if none exists; an existing CLAUDE.md is never
+touched, and --local never writes either. It ends with the machine-readable
 "remaining §9 steps" list so the next step is a to-do, not a paraphrase.
 `;
 
@@ -7655,16 +7658,58 @@ async function cmdAdopt(argv) {
   const afterExtra = adoptGitExtras(repoAbs);
   if (local) { afterExtra.trunk = local.trunk; afterExtra.trunkSource = 'local-integration'; }
   const after = adopt.detect(adoptIo(repoAbs), afterExtra);
+  // #417: a NEW repo (no descriptor before this run, plain adopt) gets the thin-shell CLAUDE.md
+  // and an AGENTS.md stub — written before verify so the audit sees them. Never --local (a repo
+  // we do not own gets no committable files), never over an existing CLAUDE.md.
+  const shell = local || rawTextBefore !== null ? null : adoptWriteShell(repoAbs, after);
   const verify = opts.noVerify ? null : adoptVerify(repoAbs);
   const lf = local ? adoptLocalFinish(repoAbs, local, opts) : undefined;
   if (opts.json) {
-    print(JSON.stringify({ repo: repoAbs, ...after, verify, written: entries.map((e) => ({ key: e.key, value: e.value })), local: lf }, null, 2));
+    print(JSON.stringify({ repo: repoAbs, ...after, verify, written: entries.map((e) => ({ key: e.key, value: e.value })), ...(shell ? { shell } : {}), local: lf }, null, 2));
     return lf && !lf.ok ? 1 : 0;
   }
   for (const e of entries) print(`✓ wrote ${e.key}: ${fmtVal(e.value)}`);
+  if (shell) {
+    if (shell.claude === 'written') print('✓ wrote CLAUDE.md — the thin shell: @AGENTS.md + the Conventions block (§9 step 5, #417)');
+    else if (shell.claude === 'skipped') print(`· CLAUDE.md not written — ${shell.reason}`);
+    if (shell.agents === 'written') print('✓ wrote AGENTS.md — a stub; the repo\'s own instructions go here');
+  }
   print('');
   printAdoptReport(after, repoAbs, verify, lf);
   return lf && !lf.ok ? 1 : 0;
+}
+
+/**
+ * #417 — write the thin-shell CLAUDE.md (`@AGENTS.md` + the filled Conventions block) and an
+ * AGENTS.md stub on a repo adopting for the first time. Returns what happened per file:
+ * `{ claude: 'written'|'exists'|'skipped', agents: 'written'|'exists'|null, reason? }`.
+ * An existing CLAUDE.md is never touched (that repo's migration is its own change); an existing
+ * AGENTS.md is kept byte-identical. Run from a frozen copy with no templates/ beside it, the
+ * block source is unavailable — skipped with a note, the same degradation `colab template` has.
+ */
+function adoptWriteShell(repoAbs, after) {
+  const claudeAbs = path.join(repoAbs, CLAUDE_FILE);
+  const agentsAbs = path.join(repoAbs, 'AGENTS.md');
+  if (fs.existsSync(claudeAbs)) return { claude: 'exists', agents: fs.existsSync(agentsAbs) ? 'exists' : null };
+  const { root, templatesDir } = handbookPaths();
+  const blockFile = path.join(templatesDir, 'repo-CLAUDE-block.md');
+  if (!fs.existsSync(blockFile)) {
+    return { claude: 'skipped', agents: null, reason: 'no templates/ beside this colab (a frozen copy?) — paste templates/repo-CLAUDE-block.md by hand, §9 step 5' };
+  }
+  const cfg = (after && after.cfg) || {};
+  const t = (after && after.detected && after.detected.trunk) || {};
+  const trunk = cfg.trunk || t.declared || t.detected || null;
+  const tier = cfg.tier || adopt.deriveTier(cfg.production, cfg.deploy);
+  // The stamp names a release, so the block is rendered from the template AS OF that release —
+  // the stamp then tells the truth about lineage. Working-tree template only when the tag cannot
+  // be read (no tags yet: 'v0').
+  const version = handbookVersion(root);
+  const atTag = version === 'v0' ? null : stamp.gitIn(root, ['show', `${version}:templates/repo-CLAUDE-block.md`]);
+  const blockText = atTag && atTag.ok && atTag.out ? atTag.out : fs.readFileSync(blockFile, 'utf8');
+  fs.writeFileSync(claudeAbs, adopt.renderClaudeShell(blockText, { version, trunk, tier }));
+  let agents = 'exists';
+  if (!fs.existsSync(agentsAbs)) { fs.writeFileSync(agentsAbs, adopt.renderAgentsStub()); agents = 'written'; }
+  return { claude: 'written', agents };
 }
 
 // ---------------------------------------------------------------------------
@@ -7909,6 +7954,8 @@ function cmdTemplate(argv) {
 // ---------------------------------------------------------------------------
 
 /** Repo-relative candidates for the CLAUDE conventions block. */
+// #417: stays CLAUDE.md even when the repo's prose lives in AGENTS.md — the Conventions block is a
+// by-name tool block and lives in the thin shell, so this lookup never follows the import.
 const CLAUDE_FILE = 'CLAUDE.md';
 
 /**

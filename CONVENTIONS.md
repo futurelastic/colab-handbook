@@ -4306,7 +4306,8 @@ and neither is a hand-edit to a copied template (that is copy-and-own, above).
 
 **Declared, or it is drift.** Until the upstream issue closes, the consumer declares the
 divergence in its `CLAUDE.md`, next to the handbook pointer block
-([§9](#9-adopting-this) step 5), as a `Local divergences:` list with one line per item.
+([§9](#9-adopting-this) step 5) — in `CLAUDE.md` even when that file is a thin shell over
+`AGENTS.md`, because the list belongs beside the block it qualifies, as a `Local divergences:` list with one line per item.
 Each line gives the label or value, what it means here, and the handbook issue URL. This
 is also what settles the "whichever text I read last" problem: an agent reading this
 repo's instructions sees, next to the handbook pointer, which meaning wins here and why.
@@ -4466,7 +4467,29 @@ only. Resolution order: `--config` flag > `~/.colab/repos.txt` > bundled example
 5. **Add the handbook pointer to `CLAUDE.md`** — copy
    [`templates/repo-CLAUDE-block.md`](templates/repo-CLAUDE-block.md); create the file if
    none exists. **Do not skip this** — it is the only reason a future agent discovers
-   these conventions.
+   these conventions. `colab adopt` writes it for you on a repo adopting for the first
+   time that has no `CLAUDE.md` yet, in the shape below.
+
+   **The instruction-file shape (#417).** Most agent tools read `AGENTS.md`; one reads
+   `CLAUDE.md` by name. So:
+   - **Repo prose goes in `AGENTS.md`** — what the repo is, how to run and test it,
+     pointers into `docs/`. It is the repo's *instruction file*: the one you edit.
+   - **`CLAUDE.md` is a thin shell:** `@AGENTS.md` on its first line, plus the blocks tools
+     look up in `CLAUDE.md` by name — this Conventions block with its stamp, any
+     `Local divergences:` list beside it, and any other tool-managed block that is found by
+     filename. The stamp only works there: the audit, `handbook-sync` and `colab update`
+     never follow the import to find it.
+   - **No block lives in both files.** A framework generator that supports targets is
+     configured to write `AGENTS.md` **only** (Laravel Boost: its agent/target config). A
+     block in both is loaded twice into every session once `CLAUDE.md` imports `AGENTS.md`,
+     and a generator writing both re-adds the copy after any hand cleanup.
+   - A repo with only a `CLAUDE.md` is still conforming — the shell is the shape for new
+     repos and the target for migrations, not a reason to fail an existing one.
+
+   The audit holds this shape: its size advisory measures `CLAUDE.md` **plus every in-repo
+   file it `@`-imports**, so a bloated `AGENTS.md` behind a tiny shell is still caught; it
+   warns when a tool block appears in both files, and when the Conventions block sits
+   anywhere but `CLAUDE.md`.
 6. **Make sure CI meets [§7](#7-ci-and-toolchain)'s outcome** — copy a template via
    `colab template <name>`, which stamps for reconciliation.
 7. **Register the repo** — `colab register`, updating both the audit fleet list and the

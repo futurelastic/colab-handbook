@@ -220,7 +220,7 @@ function remainingSteps() {
   return [
     { n: 3, text: 'Create the full label set (13 names) — `colab labels --ensure`, CONVENTIONS.md §9 step 3 (#206)' },
     { n: 4, text: 'Add the tier topic to the GitHub repo — `gh repo edit --add-topic tier-<b|c|a>`, step 4' },
-    { n: 5, text: 'Add the handbook pointer to CLAUDE.md — copy templates/repo-CLAUDE-block.md, step 5' },
+    { n: 5, text: 'Make CLAUDE.md the thin shell — `@AGENTS.md` plus templates/repo-CLAUDE-block.md, repo prose in AGENTS.md (adopt writes both on a new repo, #417), step 5' },
     { n: 6, text: "Make sure CI meets §7's outcome — `colab template <name>`, step 6" },
     { n: 7, text: 'Register the repo — `colab register`, step 7' },
     { n: 8, text: 'Leave existing branches alone — nothing to do, step 8' },
@@ -811,7 +811,47 @@ function renderDescriptor(rawText, entries) {
   return base + (needsNewline ? '\n' : '') + block;
 }
 
+// ---------------------------------------------------------------------- the CLAUDE.md shell (#417)
+
+/**
+ * The thin-shell CLAUDE.md `colab adopt` writes on a new repo: an `@AGENTS.md` import on the
+ * first line, then the Conventions block from templates/repo-CLAUDE-block.md with its
+ * placeholders filled. The block stays in CLAUDE.md on purpose — the audit, handbook-sync and
+ * `colab update` find it there by name (tools/lib/stamp.js); repo prose belongs in AGENTS.md.
+ *
+ * `tier` may be null (a shape with no legacy letter): the placeholder is then left for a human,
+ * never guessed — the same rule deriveTier itself follows.
+ */
+function renderClaudeShell(blockTemplate, { version, trunk, tier }) {
+  let block = String(blockTemplate).replace(/^\s*<!--[\s\S]*?-->\s*/, ''); // the paste note
+  block = block.replace('<!-- colab-handbook @ <version> -->', `<!-- colab-handbook @ ${version} -->`);
+  if (trunk) {
+    block = block.replace('`<dev|main>`', `\`${trunk}\``);
+    block = block.replace(/^[ \t]*<!-- Tier A and C both use[^\n]*-->[ \t]*\n/m, '');
+  }
+  if (tier) {
+    block = block.replace('`<A|B|C>`', `\`${tier}\``);
+    // `<A = … · C = … · B = …>` → the one gloss that applies.
+    block = block.replace(/<A = ([^·>]+?) · C = ([^·>]+?) · B = ([^>]+?)>/, (m, a, c, b) => ({ A: a, B: b, C: c })[tier] || m);
+  }
+  return `@AGENTS.md\n\n${block.replace(/\s*$/, '\n')}`;
+}
+
+/** The AGENTS.md stub written beside a new shell, only when no AGENTS.md exists. */
+function renderAgentsStub() {
+  return [
+    '# AGENTS.md',
+    '',
+    "This repo's instructions for coding agents: what it is, how to run and test it, and pointers",
+    'into `docs/` for anything deeper. It is the file you edit — CLAUDE.md only imports it',
+    '(`@AGENTS.md`) and holds the tool-managed blocks that tools look up there by name.',
+    '',
+  ].join('\n');
+}
+
 module.exports = {
+  renderClaudeShell,
+  renderAgentsStub,
   ROW_NAMES,
   readDescriptor,
   detectStack,

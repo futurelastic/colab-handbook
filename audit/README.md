@@ -204,6 +204,24 @@ the handbook's current version, so a scheduled run is self-documenting.
   start) fails open: the audit warns about the malformed marker separately and counts the
   affected span as authored, so a broken marker can never hide real prose from the ceiling
   it exists to inform.
+  **The loaded set, not one file (#417).** Where `CLAUDE.md` `@`-imports other files (the
+  thin shell over `AGENTS.md`, CONVENTIONS §9 step 5), the byte ceiling is measured over
+  `CLAUDE.md` plus every **in-repo** file it imports, recursively (depth 5, each file once),
+  because that is what is loaded. Imports inside code spans or fences, absolute, `~` and
+  repo-escaping paths are not followed; a missing target is ignored. The per-line check and
+  derived markers stay per file, and a finding names the file it is about. Resolver:
+  `tools/lib/instruction-file.js`.
+
+- **Instruction-file blocks (#417)** — two advisory (`warn`) checks for the `AGENTS.md`
+  shape, on every repo including this one:
+  - **A tool block in both `CLAUDE.md` and `AGENTS.md`** — a tool-generated block, found
+    by its open/close tags (`<laravel-boost-guidelines>`…`</laravel-boost-guidelines>`, or
+    any `<!-- BEGIN:<name> -->`…`<!-- END:<name> -->` pair). When `CLAUDE.md` imports
+    `AGENTS.md` it is loaded twice per session; the fix is the generator's target config.
+    Byte-identical files (a symlinked pair) count as one.
+  - **The Conventions block outside `CLAUDE.md`** — its stamp is read from `CLAUDE.md` by
+    name (here, `handbook-sync`, `colab update`), so a block moved into `AGENTS.md` makes
+    the repo read as unstamped.
 
 - **Markdown anchor links resolve (#158)** — section numbers used to be cited by
   number (`§5`) from ~20 files, and nothing checked them: a renumber broke every

@@ -32,7 +32,9 @@
 //
 // Config (all optional — .github/project.yml):
 //   docs_lint:
-//     router: CLAUDE.md          # default: CLAUDE.md if present, else README.md
+//     router: CLAUDE.md          # default: the in-repo file CLAUDE.md @-imports when it is a
+//                                 #   thin shell (e.g. AGENTS.md), else CLAUDE.md, else AGENTS.md,
+//                                 #   else README.md
 //     docs_dir: docs
 //     log_dir: log
 //     gotchas_dir: docs/gotchas.d
@@ -46,6 +48,9 @@
 //   - `.sync/`-style mirror copies (Resilio Sync, etc.) are never enumerated —
 //     a synced duplicate of a real doc is not an "orphan" or a "dead path".
 //   - a repo may use README.md as its router instead of CLAUDE.md.
+//   - a CLAUDE.md that is a thin shell (`@AGENTS.md` plus tool blocks — colab-handbook
+//     #417) is not the router; the file it imports is, so checks 1/2/4 read the prose
+//     a human actually maintains, not the shell.
 //   - `*-log.md`-named files are not "dated files" by name alone — only a
 //     literal `YYYY-MM-DD` substring in the filename counts (see check 5).
 //   - a link target containing `...`, `<...>`, or `{...}` is a template
@@ -136,11 +141,41 @@ function readDocsLintConfigBlock(repoRoot) {
   return cfg;
 }
 
+// #417 — CLAUDE.md as a thin shell over AGENTS.md. One-level, inline copy of the import
+// parser in colab-handbook's tools/lib/instruction-file.js (this template is copy-and-own and
+// imports nothing): an `@<path>` token at line start or after whitespace, outside fenced
+// blocks and inline code spans, trailing punctuation stripped, resolved relative to the repo
+// root, in-repo only. Keep the two in step; both are tested on the same cases.
+function claudeImports(text) {
+  const out = [];
+  for (const line of blankFences(text)) {
+    const bare = line.replace(/(`+)[\s\S]*?\1/g, (m) => " ".repeat(m.length));
+    for (const m of bare.matchAll(/(^|\s)@([^\s]+)/g)) {
+      const raw = m[2].replace(/[),;:!?]+$/, "").replace(/\.$/, "");
+      if (!raw || raw.startsWith("~") || raw.startsWith("/") || raw.startsWith("\\") || /^[A-Za-z]:[\\/]/.test(raw)) continue;
+      const parts = [];
+      let escapes = false;
+      for (const seg of raw.replace(/\\/g, "/").split("/")) {
+        if (seg === "" || seg === ".") continue;
+        if (seg === "..") { if (!parts.length) { escapes = true; break; } parts.pop(); continue; }
+        parts.push(seg);
+      }
+      if (!escapes && parts.length) out.push(parts.join("/"));
+    }
+  }
+  return out;
+}
+
 function buildConfig(repoRoot) {
   const block = readDocsLintConfigBlock(repoRoot);
   const hasClaude = existsSync(join(repoRoot, "CLAUDE.md"));
+  const hasAgents = existsSync(join(repoRoot, "AGENTS.md"));
   const hasReadme = existsSync(join(repoRoot, "README.md"));
-  const defaultRouter = block.router ?? (hasClaude ? "CLAUDE.md" : hasReadme ? "README.md" : null);
+  const shellTarget = hasClaude
+    ? claudeImports(readFileSafeText(join(repoRoot, "CLAUDE.md")) ?? "").find((p) => existsSync(join(repoRoot, p))) ?? null
+    : null;
+  const defaultRouter = block.router ??
+    (shellTarget ?? (hasClaude ? "CLAUDE.md" : hasAgents ? "AGENTS.md" : hasReadme ? "README.md" : null));
   return {
     router: defaultRouter,
     docsDir: block.docs_dir ?? "docs",
@@ -433,7 +468,7 @@ function checkRouterIntegrity(ctx) {
   const check = "1 router-integrity";
 
   if (!config.router) {
-    findings.warn(check, "no router found — neither CLAUDE.md nor README.md exists at the repo root");
+    findings.warn(check, "no router found — none of CLAUDE.md, AGENTS.md or README.md exists at the repo root");
     return { receipt };
   }
   const routerPath = config.router;

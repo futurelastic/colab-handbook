@@ -1,5 +1,9 @@
 <!-- Paste this into your repo's own CLAUDE.md. It is how an agent working in the repo
      discovers the handbook — nothing else points here. Fill the <placeholders>.
+     Shape (CONVENTIONS.md §9 step 5): keep CLAUDE.md a thin shell — `@AGENTS.md` on its
+     first line, the repo's own prose in AGENTS.md — and keep THIS block in CLAUDE.md, not
+     AGENTS.md: the audit and `colab update` find the stamp here by name. No block belongs
+     in both files. `colab adopt` writes this shell on a new repo.
      Set the stamp below to the handbook version you copied at (`colab template` prints
      the current version, or run `git describe --tags` in the handbook). The audit reads
      this stamp to tell you when the conventions have moved on since — keep it, don't

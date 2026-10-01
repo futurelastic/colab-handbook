@@ -203,7 +203,8 @@ colab adopt --repo . --no-verify        # step 2 — one command: which of the f
                                          #   tree already detects, what still needs asking
 gh label list --search in-progress      # step 3
 gh repo view --json repositoryTopics    # step 4 — tier-a / tier-b / tier-c
-grep -c "colab-handbook @" CLAUDE.md    # step 5 — the pointer block and its stamp
+grep -c "colab-handbook @" CLAUDE.md    # step 5 — the pointer block and its stamp (always in
+                                         #   CLAUDE.md, even when it is a thin shell over AGENTS.md)
 ls .github/workflows/                   # step 6
 colab register --list                   # step 7 — is this repo in BOTH registries?
 ```
@@ -396,12 +397,20 @@ name. Re-copying over it destroys work that never came from the handbook.
 
 ## 6. The CLAUDE conventions block — always a graft
 
-**Never regenerate this block.** It sits inside a hand-written `CLAUDE.md`, and the
+**Never regenerate this block.** It sits inside `CLAUDE.md` — a thin shell importing
+`AGENTS.md` (`CONVENTIONS.md` [§9](../../CONVENTIONS.md#9-adopting-this) step 5, #417), or a hand-written file — and the
 template ships placeholders (`<A|B|C>`, `<dev|main>`) that an adopter fills in. Two
 independent reasons not to automate it:
 
 - Regenerating would replace your repo's real tier and trunk with angle brackets.
 - Most repos have *extended* the block well past the template (measured: 6 of 7).
+
+**Moving a repo to the `AGENTS.md` shape?** Move the prose, never the block: the repo's own
+instructions go to `AGENTS.md`, `CLAUDE.md` keeps `@AGENTS.md` plus this block (and its
+`Local divergences:` list, and any other tool-managed block found by filename). A block moved
+into `AGENTS.md` hides its stamp from the audit and `colab update` — the audit warns on it.
+A framework generator that writes into both files is re-pointed at `AGENTS.md` only, so no
+block is loaded twice.
 
 So diff the template between your stamp and now, and graft:
 
@@ -479,7 +488,8 @@ protect what the repo added to its copies. They do not cover a repo that changed
 lane a `delivery:*` value starts in, or added a value the handbook does not have. That is
 **drift, not a local customisation**, unless the repo declares it
 ([`CONVENTIONS.md` §8, *Upstream*](../../CONVENTIONS.md#upstream--a-consumer-that-changes-what-a-convention-means-files-it-here-362)).
-A declaration is a line in this repo's `CLAUDE.md` `Local divergences:` list that names
+A declaration is a line in this repo's `CLAUDE.md` `Local divergences:` list (in `CLAUDE.md`
+beside the block, even where the repo's prose lives in `AGENTS.md`) that names
 the label or value, what it means here, and a handbook issue URL.
 
 **The mechanical half: compare the tracker's labels with the handbook's set.**
