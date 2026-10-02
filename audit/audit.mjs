@@ -1604,6 +1604,7 @@ function auditRepo(target, ctx) {
   // ---- deploy workflow presence -------------------------------------------
   const deployWorkflows = workflows.filter((f) => /^deploy[-.]/.test(f));
   checkPrereleaseTagTrigger(src, workflows, deploy, fail, warn);
+  checkReleaseAuto(src, workflows, cfg, warn);
 
   const runbook = cfg && "runbook" in cfg ? cfg.runbook : null;
 
@@ -2477,6 +2478,48 @@ function checkPrereleaseTagTrigger(src, workflows, deploy, fail, warn) {
   for (const f of prereleaseTagTriggers({ readFile: (p) => src.readFile(p), workflows, deploy })) {
     (f.level === "fail" ? fail : warn)(f.text);
   }
+}
+
+// ---- the release workflow: colab release cut/finalize --auto (#425) -----------
+// Recognises any workflow that runs `colab release cut --auto` or `release finalize --auto` —
+// a copy of templates/release-auto.yml or a hand-written one, by what it RUNS, not by its name.
+// Three advisories, each a way such a workflow silently does nothing or does too much:
+//   1. the release rung leaves candidates off here, so every cut is a refusal;
+//   2. it tags but publishes nothing itself while another workflow waits on the tag push — a tag
+//      pushed with GITHUB_TOKEN never triggers another workflow, so no Release ever appears;
+//   3. it commits or pushes something other than a tag — the release workflow reads and creates
+//      tags, never commits.
+// Warn, never fail: each is a judgement about a file the repo owns.
+const RELEASE_AUTO_RUN = /\brelease\s+(cut|finalize)\s+--auto\b/;
+function releaseAutoFindings({ readFile, workflows, cfg }) {
+  const out = [];
+  const effective = cfg ? releasePolicy.evaluateRelease(cfg).effective : null;
+  for (const wf of workflows || []) {
+    const text = readFile(`.github/workflows/${wf}`);
+    if (!text || !RELEASE_AUTO_RUN.test(text)) continue;
+    const runsCut = /\brelease\s+cut\s+--auto\b/.test(text);
+    if (runsCut && effective && effective.candidates === "off") {
+      out.push(`${wf} runs \`colab release cut --auto\`, but the release rung leaves candidates off on this descriptor (${effective.route === null ? "no route" : `route ${effective.route}`}) — every run refuses; remove the workflow, or change exposure/deploy/release: deliberately (CONVENTIONS.md §6)`);
+    }
+    const publishesHere = /\bgh\s+release\s+create\b/.test(text) || /action-gh-release/.test(text) || /uses:\s*\.\/\.github\/workflows\//.test(text);
+    if (!publishesHere) {
+      const waiting = workflows.filter((o) => o !== wf).filter((o) => {
+        const t = readFile(`.github/workflows/${o}`);
+        return t && workflowFiresOnTag(parseWorkflowOn(t), "v1.2.0");
+      });
+      if (waiting.length) {
+        out.push(`${wf} creates release tags but publishes nothing in its own run, while ${waiting.join(", ")} fires on the tag push — a tag pushed with GITHUB_TOKEN triggers no other workflow, so that never runs; publish in the same run (templates/release-auto.yml) or call it via workflow_call`);
+      }
+    }
+    const pushesNonTag = text.split("\n").some((l) => /\bgit\s+push\b/.test(l) && !/--tags|refs\/tags|\$TAG\b|\$\{TAG\}/.test(l));
+    if (/\bgit\s+commit\b/.test(text) || pushesNonTag) {
+      out.push(`${wf} runs \`colab release … --auto\` and also commits or pushes a non-tag ref — the release workflow reads and creates tags, never commits; move that step elsewhere`);
+    }
+  }
+  return out;
+}
+function checkReleaseAuto(src, workflows, cfg, warn) {
+  for (const text of releaseAutoFindings({ readFile: (p) => src.readFile(p), workflows, cfg })) warn(text);
 }
 
 function checkRunbook(src, runbook, fail, warn, why = "deploy: manual") {

@@ -3272,6 +3272,10 @@ not `colab ship`, not a hand-typed `git tag`. **It may never finalize a tag on a
 the routes keep, and `finalize --auto` stops at *candidate ready* there by construction.
 A candidate a human has put `release-hold` on is held for the workflow exactly as it is for
 a person.
+The handbook ships one to copy, [`templates/release-auto.yml`](templates/release-auto.yml)
+(#425): cut on a green trunk run, finalize daily, and **publish in the same run** — a tag
+pushed with `GITHUB_TOKEN` triggers no other workflow, so a Release left to a tag-push
+workflow is never published. It reads and creates tags and never pushes a commit.
 
 **Never acts on an owner's branch.** On a repo declaring `owner:` (a repo the fleet does
 not own, #394), a scheduler may run `colab deliver --dry` and report its state, and nothing

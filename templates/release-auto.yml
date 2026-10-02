@@ -1,0 +1,207 @@
+# Release (auto) — TEMPLATE. Copy me into your repo at .github/workflows/release-auto.yml.
+#
+# This is a starting point, not a dependency. Once you copy it, YOU OWN THIS FILE.
+# Edit it freely; nothing calls it remotely and nothing will update it for you.
+#
+# EDIT POINTS are marked `# EDIT:` — walk them once after copying.
+#
+# WHAT IT DOES. It runs CONVENTIONS.md §6's release rung so nobody has to remember to:
+#
+#   trigger                                   step
+#   ----------------------------------------  ------------------------------------------------
+#   your CI workflow finished green on main   colab release cut --auto       → vX.Y.Z-rc.N
+#   a daily schedule                          colab release finalize --auto  → vX.Y.Z (or a
+#                                                                              hand-off where
+#                                                                              the final is a
+#                                                                              human's)
+#   workflow_dispatch                         both, in that order
+#
+# Every decision — whether a candidate is owed, which bump, whether the test period
+# elapsed clean, whether the final is automatic on this repo at all — is the colab CLI's,
+# read from .github/project.yml's release rung. This file only schedules it and publishes
+# what it tagged. Where the rung leaves candidates off, every run is a recorded refusal.
+#
+# WHERE IT FITS. `colab release cut` tags origin/main, so this is for a repo whose release
+# tags land on `main`: `trunk: main` with `deploy: tag` or `deploy: none`. It does not fit
+# a `trunk: dev` repo (the promotion is a human act there) or `exposure: live` (no tags).
+#
+# PUBLISHING HAPPENS IN THIS RUN — deliberately. A tag pushed with GITHUB_TOKEN does NOT
+# trigger other workflows (GitHub suppresses it to prevent loops). So "cut the tag here and
+# let release.yml fire on the tag push" silently does nothing: the tag exists, no Release
+# is ever published. The last step below publishes whatever this run tagged, itself.
+# The same suppression means a deploy workflow on `v*.*.*` does not fire for a tag this
+# workflow pushes either — on a `deploy: tag` repo the final is a human act anyway, and
+# finalize --auto only posts the command for it.
+#
+# IT READS TAGS AND CREATES TAGS. IT NEVER PUSHES COMMITS. No step here commits, and the
+# only refs pushed are the tags `colab release cut` / `colab release finalize` create
+# (annotated, their checks recorded in the tag message). `-rc.N` tags are published as
+# pre-releases, never "Latest". The audit's pre-release deploy-trigger check (#332) still
+# applies to your deploy workflows exactly as before.
+#
+# A REFUSAL IS NOT A FAILURE. `colab release cut --auto` refusing (nothing owed, a check
+# failed) is the ordinary output of most runs; it is printed to the run summary as a
+# warning and the job stays green, so a refusal never paints main red for `colab ship`.
+# Only a run that produced no verdict at all (a crash, gh unusable, bad flags) fails.
+#
+# THE CLI IGNORES THIS WORKFLOW'S OWN RUNS when it reads CI at a commit (GITHUB_WORKFLOW,
+# #425) — otherwise its own in-progress run would read as "CI not finished" forever. So
+# never fold these steps into the workflow that runs your test suite: that suite's runs
+# would be ignored with it.
+#
+# NO TOOLCHAIN RESOLUTION. It runs the colab CLI (zero-dependency Node) on the runner's
+# preinstalled Node and gh. Nothing of your project is built here.
+
+name: Release (auto)
+
+on:
+  workflow_run:
+    # EDIT: the `name:` of the workflow that runs your test suite on main.
+    workflows: ["CI"]
+    types: [completed]
+    branches: [main]
+  schedule:
+    # EDIT: when the daily finalize runs (UTC). Off the hour on purpose — the top of the
+    # hour is when scheduled runs queue longest.
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+
+# One release run at a time; a second one waits rather than racing the first for the same
+# candidate number. Never cancelled mid-run: a half-finished run may have pushed a tag
+# without publishing it.
+concurrency:
+  group: release-auto
+  cancel-in-progress: false
+
+permissions: {}
+
+env:
+  # EDIT: the handbook version whose colab CLI makes the release decisions. Pin a tag;
+  # moving it is a deliberate act, like re-copying a template.
+  HANDBOOK_REF: "v1.11.0"
+  HANDBOOK_REPO: "https://github.com/futurelastic/colab-handbook.git"
+
+jobs:
+  release:
+    name: Cut, finalize, publish
+    # A red CI run on main is not a candidate; skip rather than refuse.
+    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest # EDIT: self-hosted label if this repo needs one.
+    permissions:
+      contents: write # push the tags, publish the GitHub Release
+      issues: write # finalize opens / comments on / closes the "release: vX.Y.Z" tracking issue
+      actions: read # read the runs at a commit (ci-green, full-suite, trunk-green)
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          ref: main
+          # Full history plus tags: versions, bumps and "previous final" are all read from
+          # git, and the on-trunk check refuses a shallow checkout outright.
+          fetch-depth: 0
+          # Left on deliberately: `colab release cut` / `finalize` push their tag over the
+          # checkout's origin. The token is this job's, scoped by `permissions:` above.
+          persist-credentials: true
+
+      - name: Fetch the colab CLI
+        run: |
+          set -euo pipefail
+          git clone --quiet --depth 1 --branch "$HANDBOOK_REF" "$HANDBOOK_REPO" "$RUNNER_TEMP/colab-handbook"
+          echo "COLAB=$RUNNER_TEMP/colab-handbook/tools/colab" >> "$GITHUB_ENV"
+          # The tags are annotated; git needs an identity to write one.
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Cut a candidate (colab release cut --auto)
+        id: cut
+        if: github.event_name == 'workflow_run' || github.event_name == 'workflow_dispatch'
+        run: |
+          set -uo pipefail
+          OUT="$RUNNER_TEMP/cut.json"
+          rc=0
+          node "$COLAB" release cut --auto --json > "$OUT" || rc=$?
+          # A verdict is JSON carrying `ok`; anything else is a run that never decided.
+          if ! jq -e 'has("ok")' "$OUT" > /dev/null 2>&1; then
+            echo "::error::colab release cut produced no verdict (exit $rc)"
+            cat "$OUT"
+            exit 1
+          fi
+          {
+            echo "### colab release cut --auto"
+            echo
+            jq -r '.checks[]? | "- \(if .ok then "✓" else "✗" end) **\(.condition)** — \(.detail)"' "$OUT"
+            echo
+          } >> "$GITHUB_STEP_SUMMARY"
+          if [ "$(jq -r '.created' "$OUT")" = "true" ]; then
+            TAG="$(jq -r '.tag' "$OUT")"
+            echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+            echo "Cut $TAG" | tee -a "$GITHUB_STEP_SUMMARY"
+          elif [ "$(jq -r '.noop' "$OUT")" = "true" ]; then
+            echo "No-op: nothing owed, or inside the cadence window." | tee -a "$GITHUB_STEP_SUMMARY"
+          elif [ "$(jq -r '.ok' "$OUT")" = "true" ]; then
+            echo "Verdict ok but nothing created." | tee -a "$GITHUB_STEP_SUMMARY"
+          else
+            echo "::warning::colab release cut refused: $(jq -r '[.checks[]? | select(.ok | not) | .condition] | join(", ")' "$OUT")"
+          fi
+
+      - name: Finalize the newest clean candidate (colab release finalize --auto)
+        id: finalize
+        if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+        run: |
+          set -uo pipefail
+          OUT="$RUNNER_TEMP/finalize.json"
+          rc=0
+          node "$COLAB" release finalize --auto --json > "$OUT" || rc=$?
+          if ! jq -e 'has("state")' "$OUT" > /dev/null 2>&1; then
+            echo "::error::colab release finalize produced no verdict (exit $rc)"
+            cat "$OUT"
+            exit 1
+          fi
+          STATE="$(jq -r '.state' "$OUT")"
+          {
+            echo "### colab release finalize --auto — $STATE"
+            echo
+            jq -r '.checks[]? | "- \(if .ok then "✓" else "✗" end) **\(.condition)** — \(.detail)"' "$OUT"
+            echo
+          } >> "$GITHUB_STEP_SUMMARY"
+          if [ "$(jq -r '.tagged' "$OUT")" = "true" ]; then
+            TAG="$(jq -r '.finalTag' "$OUT")"
+            echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+            echo "Finalized $TAG" | tee -a "$GITHUB_STEP_SUMMARY"
+          else
+            case "$STATE" in
+              refused|needs-new-candidate|held) echo "::warning::colab release finalize: $STATE" ;;
+              *) echo "Finalize: $STATE" ;;
+            esac
+          fi
+
+      # Publishes every tag THIS run created. In this run, never via a tag-push workflow:
+      # see "PUBLISHING HAPPENS IN THIS RUN" in the header.
+      - name: Publish GitHub Release (same run)
+        if: steps.cut.outputs.tag != '' || steps.finalize.outputs.tag != ''
+        env:
+          TAGS: ${{ steps.cut.outputs.tag }} ${{ steps.finalize.outputs.tag }}
+        run: |
+          set -euo pipefail
+          for TAG in $TAGS; do
+            if gh release view "$TAG" > /dev/null 2>&1; then
+              echo "$TAG already has a Release — skipping"
+              continue
+            fi
+            # Notes since the previous FINAL tag, candidate or final alike — never since an
+            # earlier candidate (the same rule as release-tag.yml).
+            PREV="$(git describe --tags --abbrev=0 --match 'v*.*.*' --exclude '*-*' "${TAG}^" 2>/dev/null || true)"
+            NOTES="$RUNNER_TEMP/notes-$TAG.md"
+            if [ -n "$PREV" ]; then
+              node "$COLAB" release-notes "${PREV}..${TAG}" --out "$NOTES"
+            else
+              printf '## %s\n\nFirst release.\n' "$TAG" > "$NOTES"
+            fi
+            case "$TAG" in
+              *-*) KIND=(--prerelease --latest=false) ;;
+              *)   KIND=(--latest) ;;
+            esac
+            gh release create "$TAG" --verify-tag --title "$TAG" --notes-file "$NOTES" --generate-notes "${KIND[@]}"
+            echo "Published $TAG" | tee -a "$GITHUB_STEP_SUMMARY"
+          done
