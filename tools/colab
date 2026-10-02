@@ -1426,7 +1426,7 @@ function cmdReleaseCut(argv) {
   const tagsAtSha = lines(git.git(['tag', '--points-at', sha], repoAbs));
 
   const { ci, suite, schema, switches, issues } = measureCandidateConditions(repoAbs, {
-    sha, lastFinal, at, readRuns: () => git.ghRunsForCommit(repoAbs, 'main', sha),
+    sha, lastFinal, at, readRuns: () => releaseCut.withoutOwnWorkflow(git.ghRunsForCommit(repoAbs, 'main', sha)), // #425
   });
   const { manifests, ancestry } = measurePreTag(repoAbs, sha, `${remote}/main`); // #424
 
@@ -1650,12 +1650,13 @@ function cmdReleaseFinalize(argv) {
       sha: cand.sha,
       lastFinal: releaseTag.latestReleaseTag(repoAbs, { ref: cand.sha }),
       at: `${cand.tag}@${shortSha(cand.sha)}`,
-      readRuns: () => { rows = git.ghRunsAtCommit(repoAbs, cand.sha); return rows; },
+      readRuns: () => { rows = releaseCut.withoutOwnWorkflow(git.ghRunsAtCommit(repoAbs, cand.sha)); return rows; }, // #425
       issues,
     });
     const suiteWorkflows = [...new Set((rows || []).map((r) => r.workflowName || '(unnamed workflow)'))];
     const period = releaseFinalize.periodVerdict({ cutAt: cand.cutAt, trackingCreatedAt: tracking && tracking.createdAt, testPeriodDays: policy.effective.testPeriodDays, now });
-    const since = git.ghRunsSince(repoAbs, 'main', period.start.slice(0, 10));
+    const sinceRaw = git.ghRunsSince(repoAbs, 'main', period.start.slice(0, 10));
+    const since = sinceRaw ? { ...sinceRaw, runs: releaseCut.withoutOwnWorkflow(sinceRaw.runs) } : sinceRaw; // #425
     const trunk = releaseFinalize.trunkGreenVerdict(since ? since.runs : null, {
       periodStart: period.start, periodEnd: walk ? period.endsAt : null, suiteWorkflows, truncated: !!(since && since.truncated),
     });

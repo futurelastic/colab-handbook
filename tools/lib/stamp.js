@@ -424,6 +424,7 @@ const WORKFLOW_FINGERPRINTS = [
   { marker: 'CI (Laravel) — TEMPLATE. Copy me into your repo', kind: 'text', template: 'ci-laravel' },
   { marker: 'CI (Python) — TEMPLATE. Copy me into your repo', kind: 'text', template: 'ci-python' },
   { marker: 'Release (tag) — TEMPLATE. Copy me into your repo', kind: 'text', template: 'release-tag' },
+  { marker: 'Release (auto) — TEMPLATE. Copy me into your repo', kind: 'text', template: 'release-auto' },
   { marker: 'Deploy (SSH/rsync to shared hosting) — TEMPLATE. Copy me into your repo', kind: 'text', template: 'deploy-xserver' },
   { marker: 'Branch name — TEMPLATE. Copy me into your repo', kind: 'text', template: 'branch-name' },
   // The header convention itself, unattributed: this catches a copy of any template ADDED LATER
@@ -439,6 +440,10 @@ const WORKFLOW_FINGERPRINTS = [
   { marker: 'Detect optional tooling', kind: 'step', template: 'ci-python' },
   { marker: 'Build grouped release summary', kind: 'step', template: 'release-tag' },
   { marker: 'Resolve tag and previous tag', kind: 'step', template: 'release-tag' },
+  // release-auto (#425): its two decision steps. The publish step's name is deliberately not a
+  // marker — "Publish GitHub Release" is release-tag's too, and would attribute a copy to both.
+  { marker: 'Cut a candidate (colab release cut --auto)', kind: 'step', template: 'release-auto' },
+  { marker: 'Finalize the newest clean candidate (colab release finalize --auto)', kind: 'step', template: 'release-auto' },
   // deploy-xserver. These two were CHOSEN to differ from the step names in the hand-written deploy
   // workflows this template was derived from ("Setup Node", "Smoke test (…)"), which is the same
   // admission test as above read from the other end: those files must keep classifying as

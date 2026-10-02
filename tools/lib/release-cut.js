@@ -393,6 +393,23 @@ function fullSuiteVerdict(rows, at) {
   return { ok: true, detail: `${byWorkflow.size} workflow(s) at ${at}, each with a successful run` };
 }
 
+/**
+ * The run rows minus the CALLING workflow's own runs (#425). Inside the release workflow
+ * (templates/release-auto.yml) `release cut` / `release finalize` read the runs at the very commit
+ * that workflow is running on — and its own run is one of them, still in progress. Counted, it makes
+ * ci-green "not every run finished" and full-suite "no successful run" forever, and a refused run's
+ * red conclusion would poison the next run's read the same way. The release workflow is never part of
+ * the suite it judges, so its rows are dropped — keyed on GITHUB_WORKFLOW (the running workflow's
+ * `name:`), and only when GITHUB_ACTIONS says we are inside Actions. Off Actions: rows unchanged.
+ * null (a failed read) passes through untouched.
+ */
+function withoutOwnWorkflow(rows, env = process.env) {
+  if (!Array.isArray(rows)) return rows;
+  const own = env && env.GITHUB_ACTIONS === 'true' ? String(env.GITHUB_WORKFLOW || '') : '';
+  if (!own) return rows;
+  return rows.filter((r) => (r && r.workflowName) !== own);
+}
+
 // ---- §6 condition 3: schema changes are additive -----------------------------------------------
 
 /**
@@ -668,7 +685,7 @@ module.exports = {
   CONDITIONS, BUMPS, MIGRATION_FILE,
   parseVersion, formatVersion, candidateNumbers, nextCandidateNumber, decideVersion,
   parseGuardOutput, exportsDiff, switchRemovalsSince, autoSignals, parseMigrationSection, decideAutoVersion, cadenceVerdict,
-  fullSuiteVerdict, isMigrationPath, schemaVerdict,
+  fullSuiteVerdict, withoutOwnWorkflow, isMigrationPath, schemaVerdict,
   parseSwitchMarkers, switchVerdict,
   decide, tagMessage,
 };

@@ -1083,6 +1083,13 @@ them), and any one failing refuses the cut:
 | `outranks-final` | #424: the version is not strictly greater than the **highest** final tag by SemVer — not the nearest one — so "latest" never moves backwards |
 | `cadence` | `--auto` only (#422): the route's `candidates-per-day` cap is reached over the last 24h. A **no-op**, not a refusal: exit 0, `noop: true` |
 
+**Inside Actions, the calling workflow's own runs are not read** (#425). With `GITHUB_ACTIONS=true`,
+the runs at the commit — for `release cut`, and for `release finalize`'s candidate and trunk-green
+reads — drop every row whose workflow name equals `GITHUB_WORKFLOW`. The release workflow
+(`templates/release-auto.yml`) runs at the very commit it judges; counted, its own in-progress run
+would read as *CI not finished* forever, and a refused run's red one would poison the next read.
+So never run these commands from the workflow that runs the suite: that suite would be dropped too.
+
 **`--auto` (#422)** is the release workflow's mode: the bump is computed with no human input and
 `--bump`/`--reason` are refused beside it. Since the last final tag — fixes and chores → patch (any
 commit at all owes one); a `feat`, or a switch-removal child (`role=remove`) closed since then →
