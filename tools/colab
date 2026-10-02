@@ -8187,20 +8187,31 @@ function readFrozenStamp(dir) {
 function selfProvenance() {
   const st = readFrozenStamp(__dirname);
   if (st && st.name === stamp.FROZEN_STAMP_NAME) {
-    return { frozen: true, version: st.version, source: __dirname, branch: null };
+    return { kind: 'frozen', frozen: true, version: st.version, source: __dirname, branch: null };
   }
   const { root } = handbookPaths();
+  // A registry install (npx, npm i) — before the git read below, which has no repo of its own to
+  // answer from there and would walk up into whatever repo the npx cache happens to sit inside (#444).
+  const pkg = stamp.npmPackageInfo(root);
+  if (pkg) return { kind: 'npm', frozen: false, version: pkg.version, source: root, branch: null };
   const hb = stamp.handbookInfo(root);
   const br = stamp.gitIn(root, ['rev-parse', '--abbrev-ref', 'HEAD']);
-  return { frozen: false, version: hb.version, source: root, branch: br.ok && br.out ? br.out : null };
+  return { kind: 'working-tree', frozen: false, version: hb.version, source: root, branch: br.ok && br.out ? br.out : null };
+}
+
+/**
+ * One version, from whichever provenance applies — there used to be a second, hard-coded
+ * `colab 1.0.0` in front of it that no release ever moved (#444).
+ */
+function versionLine(self) {
+  const where = self.kind === 'frozen' ? `frozen copy: ${self.source}`
+    : self.kind === 'npm' ? `npm package: ${self.source}`
+      : `working tree: ${self.source}${self.branch ? `, branch ${self.branch}` : ''}`;
+  return `colab ${self.version} (${where})`;
 }
 
 function cmdVersion() {
-  const self = selfProvenance();
-  const where = self.frozen
-    ? `frozen copy: ${self.source}`
-    : `working tree: ${self.source}${self.branch ? `, branch ${self.branch}` : ''}`;
-  return print(`colab 1.0.0 — colab-handbook ${self.version} (${where})`);
+  return print(versionLine(selfProvenance()));
 }
 
 /** Current handbook version = nearest RELEASE tag (pre-releases skipped, #334); 'v0' before the first one. */
