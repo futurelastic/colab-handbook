@@ -40,6 +40,17 @@
  *
  * Before ANY final, the three #424 pre-tag checks (release-tag.js preTagChecks) are required:
  * manifest-version, on-trunk, outranks-final.
+ *
+ * ANNOUNCING THE FINAL ON THE ISSUES IT CARRIES (#426). For a repo others install, merged is not
+ * delivered: the reporter of a fixed bug needs to know which VERSION has the fix. Once a final is
+ * tagged, every issue the version carries gets one comment, `Released in vX.Y.Z`. "Carries" is read
+ * from git, not from the tracker: every commit in (previous final, the final's commit] whose message
+ * holds a GitHub closing keyword (`Closes #N`, `Fixes #N`, … — the vocabulary GitHub itself honours,
+ * the same one lib/squash.js CLOSING_KEYWORD_RE scans) — i.e. exactly the issues trunk closed. Each
+ * comment carries `<!-- colab:release-event released=vX.Y.Z -->`, so a re-run (or the `already-final`
+ * resume after a run died between the tag push and the comments) posts nothing twice. With no
+ * previous final there is no lower bound; the first version announces nothing rather than every
+ * issue the repo ever closed.
  */
 
 const releaseTag = require('./release-tag');
@@ -364,6 +375,44 @@ function decide(facts) {
   return out('finalized', { finalTag: cand.version });
 }
 
+// ---- announcing the final (#426) ----------------------------------------------------------------
+
+// GitHub's closing-keyword vocabulary — kept identical to lib/squash.js CLOSING_KEYWORD_RE.
+const CARRIED_RE = /\b(?:close|closes|closed|fix|fixes|fixed|resolve|resolves|resolved)\s*:?\s*#(\d+)\b/gi;
+
+/**
+ * The issue numbers a release carries: every closing reference in `messages` (the commit messages in
+ * the version's range), deduplicated, ascending, minus `exclude` (the release tracking issues — a
+ * record, never something a release "fixes").
+ */
+function carriedIssues(messages, { exclude = [] } = {}) {
+  const skip = new Set((exclude || []).map(Number));
+  const out = new Set();
+  for (const msg of messages || []) {
+    CARRIED_RE.lastIndex = 0;
+    let m;
+    while ((m = CARRIED_RE.exec(String(msg || '')))) {
+      const n = Number(m[1]);
+      if (n > 0 && !skip.has(n)) out.add(n);
+    }
+  }
+  return [...out].sort((a, b) => a - b);
+}
+
+/** The highest final tag strictly below `version`, or null — the lower bound of what `version` carries. */
+function previousFinal(tagNames, version) {
+  const below = (tagNames || []).filter((t) => parseVersion(t) && compareVersions(t, version) < 0).sort(compareVersions);
+  return below.length ? below[below.length - 1] : null;
+}
+
+/** The event fields of a "released in" comment — one per issue per version. */
+function releasedEvent(version) { return { released: version }; }
+
+/** The comment body posted on each carried issue (marker included). */
+function releasedComment(version, sha) {
+  return `${eventMarker(releasedEvent(version))}\nReleased in **${version}** (\`${String(sha || '').slice(0, 7)}\`).`;
+}
+
 /** The final tag's annotated message: which candidate, which period, every condition, who. */
 function tagMessage(verdict, { candidate, period, actor }) {
   return [
@@ -385,4 +434,5 @@ module.exports = {
   parseReleaseMarker, releaseMarker, eventMarker, hasEvent, trackingTitle, trackingBody,
   selectCandidate, openCandidates, pickNewestClean, periodVerdict, trunkGreenVerdict, regressionVerdict,
   handoffCommand, decide, tagMessage,
+  carriedIssues, previousFinal, releasedEvent, releasedComment,
 };

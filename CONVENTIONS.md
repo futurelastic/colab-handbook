@@ -3991,7 +3991,10 @@ putting the **`release-hold`** label on it (only a human removes it), and a regr
 candidate is a `blocked_by` edge on it — open, the final waits; fixed after the test period began,
 a new `-rc.N+1` is owed and its period starts afresh. The final is tagged automatically only on a
 route whose final is automatic, re-checking every condition at that moment; on `deploy-tag` it
-stops at *candidate ready* and hands a human the one click. No agent cuts a final tag, or a
+stops at *candidate ready* and hands a human the one click. **Merged is not delivered** for a
+repo others install, so once a final is tagged every issue the version carries — each `Closes`/
+`Fixes`/`Resolves #N` in a commit since the previous final — gets one comment, `Released in
+vX.Y.Z`, telling its reporter which version has the fix (#426). No agent cuts a final tag, or a
 candidate, by hand around these commands. A deploy must never fire on a
 candidate: [`templates/release-tag.yml`](templates/release-tag.yml) publishes `-rc` tags
 as pre-releases, the audit flags a deploy trigger that matches one, and every

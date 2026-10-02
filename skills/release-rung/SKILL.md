@@ -1,20 +1,44 @@
 ---
 name: release-rung
-description: "Walk ONE repo's release rung (CONVENTIONS.md §6) from a coordinator session: decide whether a release is owed and at what bump, cut the -rc candidate through `colab release cut`, watch its test period, respect a human's release-hold veto, cut a new candidate when a regression lands, and take the final — tagged by `colab release finalize` where the rung row makes it automatic, handed to a human as one command where the final reaches production. No daemon: every run re-measures from git and GitHub, and the only stored state is the version's tracking issue. Never tags by hand, never a major, never removes release-hold. Trigger phrases: 'cut a release', 'is a release owed', 'release candidate', 'finalize the release', 'check the release', 'how is the candidate doing', 'is the test period over', 'tag the final'; and — when this session's last act was a release-rung pass — the re-ping forms 'again', 'check again', or a bare 'go'. Scoped to the repo the session runs in. Separate from code-ship, which never tags."
+description: "The MANUAL FALLBACK and explainer for ONE repo's release rung (CONVENTIONS.md §6). The driver is the release workflow (templates/release-auto.yml: `colab release cut --auto` on green trunk, `colab release finalize --auto` daily, publish in the same run); run this skill only when that workflow cannot run — not copied in yet, disabled, a runner outage, a failed run to finish, or a human asking what the rung is doing and why. Walks it from a coordinator session: decide whether a release is owed and at what bump, cut the -rc candidate through `colab release cut`, watch its test period, respect a human's release-hold veto, cut a new candidate when a regression lands, and take the final — tagged by `colab release finalize` where the rung row makes it automatic, handed to a human as one command where the final reaches production. No daemon: every run re-measures from git and GitHub, and the only stored state is the version's tracking issue. Never tags by hand, never a major, never removes release-hold. Trigger phrases: 'cut a release', 'is a release owed', 'release candidate', 'finalize the release', 'check the release', 'how is the candidate doing', 'is the test period over', 'tag the final'; and — when this session's last act was a release-rung pass — the re-ping forms 'again', 'check again', or a bare 'go'. Scoped to the repo the session runs in. Separate from code-ship, which never tags."
 ---
 
 # release-rung — trigger → bump → candidate → test period → final
 
 The release rung of [`CONVENTIONS.md` §6](../../CONVENTIONS.md#6-releases) says who may cut a tag.
-This skill is the coordinator that exercises it. **The commands decide; this skill sequences
-them and writes the judgement they cannot.**
+**The release workflow drives it; this skill is the manual fallback and the explainer** (#426).
+The commands decide either way; this skill sequences them by hand and writes the judgement they
+cannot.
+
+## Fallback, not driver — check the workflow first
+
+A repo that tags carries [`templates/release-auto.yml`](../../templates/release-auto.yml):
+a green CI run on trunk tries a candidate (`colab release cut --auto`), a daily run tries to
+finalize (`colab release finalize --auto`), and the same run publishes what it tagged. When that
+workflow is in place and running, it is the release rung, and a hand-driven pass beside it only
+races it.
+
+**Before stage 0, look:** `gh run list --workflow release-auto.yml -L 5` (or whatever the repo
+named its copy).
+
+| What you find | What this skill does |
+|---|---|
+| Recent runs, finishing | **Explain, don't drive.** Read `colab release finalize --dry --json` and report the state (stage 3's table says what each one means). Cut nothing, finalize nothing. |
+| No such workflow in the repo | Drive stages 0–4 by hand, and say in the report that the workflow is missing — copying it in is the durable fix ([`handbook-sync`](../handbook-sync/SKILL.md)). |
+| Present but disabled, or not run for longer than its schedule | Drive by hand; report that it is not running. |
+| Its last run failed with no verdict (a crash, `gh` unusable) | Drive by hand from the stage its output reached; report the failure. A *refusal* is not a failure — that is the workflow's ordinary output, and it means there is nothing to do. |
+
+Driving by hand runs the same commands the workflow runs, re-checked at the moment they run, so
+the next workflow run picks up from where this pass left off. The two paths never disagree about
+the state; they can only race on a write, which is why "explain, don't drive" is the default
+whenever the workflow is alive.
 
 - [`colab release cut`](../../tools/README.md#release-cut-candidates) makes a candidate.
 - [`colab release finalize`](../../tools/README.md#release-finalize) takes it the rest of the way.
 
 Nothing here tags on its own authority, and no step works around a refusal.
 
-**Who runs it.** A coordinator session scoped to one repo. A scheduler may *start* such a session
+**Who runs it.** A coordinator session scoped to one repo, when the table above says to. A scheduler may *start* such a session
 ([*Scheduled drivers*](../../CONVENTIONS.md#scheduled-drivers--provenance-and-autonomy-meet-a-caller-that-is-not-a-person)),
 but the scheduler never tags anything itself. `code-ship` never runs this skill as a side effect:
 ship merges branches, and this skill cuts tags.
@@ -134,6 +158,12 @@ names the candidate. It **never clears one**.
 - **Does:** when stage 3 reads `finalized` in a `--dry` run, run `colab release finalize --json`
   for real. It re-checks everything at that moment. Then it tags an annotated `vX.Y.Z` on the
   candidate's commit, pushes it, and closes the tracking issue.
+- **It also tells every issue the version carries** — each `Closes`/`Fixes`/`Resolves #N` in a
+  commit since the previous final — with one comment, `Released in vX.Y.Z` (#426). For a repo
+  others install, merged is not delivered; that comment is how a reporter learns which version
+  has the fix. The command posts it, never you, and its `--json` `announced` field lists who was
+  told and who could not be read. A run that died between the tag push and these comments is
+  finished by the next run, which reads `already-final` and posts only what is missing.
 - **Then publish the GitHub Release:**
   - A repo carrying `templates/release-tag.yml` publishes it on the tag push.
   - On the handbook itself, run `scripts/release.sh vX.Y.Z`, which finds the tag already pushed
@@ -152,6 +182,8 @@ narrowed it):
 ## Never
 
 - `git tag` or a tag push by hand, for a candidate or a final. The commands are the only path.
+- Drive the rung by hand while the release workflow is alive — explain its state instead.
+- Post `Released in vX.Y.Z` on an issue by hand. `colab release finalize` posts it, once.
 - Set the human flag yourself, or finalize a human-final row on a human's behalf.
 - Remove `release-hold`, clear a `blocked_by` edge, or close a tracking issue by hand.
 - Cut a major, including the pre-1.0 → `1.0.0` step.
@@ -161,11 +193,12 @@ narrowed it):
 ## Report
 
 One block per run:
+- whether the release workflow is running, and so whether this pass explained or drove;
 - the repo and its rung row (`final: auto|human`);
 - the candidate tag and the tracking issue number;
 - the `state`;
 - for `testing`, the period end; for `held`, `refused` or `needs-new-candidate`, each failing
-  check's detail; for `candidate-ready`, the handoff command; for `finalized`, the final tag
-  and where its Release was published.
+  check's detail; for `candidate-ready`, the handoff command; for `finalized`, the final tag,
+  where its Release was published, and which issues were told `Released in` it.
 
 A run that changed nothing since the last one says so in one line.

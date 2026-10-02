@@ -1517,7 +1517,9 @@ under CONVENTIONS.md §6's release rung, re-checking everything at the moment it
   candidate-ready      final is a human act on this row: nothing is tagged; the one command a human
                        runs is printed and posted on the tracking issue
   finalized            an annotated vX.Y.Z is tagged on the candidate's commit and pushed; the tracking
-                       issue is closed (with --dry: every check passed, nothing written)
+                       issue is closed, and every issue the version carries (a Closes/Fixes/Resolves #N
+                       in a commit since the previous final) gets one comment: "Released in vX.Y.Z"
+                       (with --dry: every check passed, nothing written)
 
 Conditions (--json checks[].condition; required:false means reported, not blocking, on this row):
   release-policy  candidate  tracking-issue  release-hold  regressions  test-period  trunk-green
@@ -1547,7 +1549,8 @@ Conditions (--json checks[].condition; required:false means reported, not blocki
   --dry               measure and report; open, post, tag and close nothing
   --json              { repo, row, route, final, testPeriodDays, lastFinal, dry, auto, candidate, tracking,
                         periodStart, periodEndsAt, state, tagged, finalTag, checks, handoff,
-                        skipped (--auto: [{tag, state, detail?}] — the other open candidates) }
+                        skipped (--auto: [{tag, state, detail?}] — the other open candidates),
+                        announced (null, or {range, issues, posted, skipped} — the "Released in" comments) }
 
 Needs origin and gh (the tracking issue, runs and edges live on GitHub). Never cuts a candidate, never
 a major, never removes a label or an edge. Exit 0 when finalized (or would be) or candidate-ready; 1
@@ -1712,6 +1715,25 @@ function cmdReleaseFinalize(argv) {
     const r = spawnSync('gh', ['issue', 'close', String(num)], { cwd: repoAbs, encoding: 'utf8' });
     if (r.status !== 0) warn(`could not close #${num}: ${String(r.stderr || '').split('\n')[0]}`);
   };
+  // #426: one "Released in vX.Y.Z" comment on every issue the version carries (release-finalize.js
+  // carriedIssues — the closing references in (previous final, sha]). Idempotent by event marker.
+  let announced = null;
+  const announceRelease = (version, sha) => {
+    const prev = releaseFinalize.previousFinal(tagNames, version);
+    if (!prev) return { range: null, issues: [], posted: [], skipped: [], detail: 'no previous final — the first version announces nothing' };
+    const log = git.git(['log', '--format=%B%x00', `${prev}..${sha}`], repoAbs);
+    if (!log.ok) { warn(`could not read ${prev}..${shortSha(sha)} — no issue told it was released in ${version}`); return { range: `${prev}..${version}`, issues: [], posted: [], skipped: [], detail: 'git log failed' }; }
+    const nums = releaseFinalize.carriedIssues(log.stdout.split('\0'), { exclude: records.map((r) => r.number) });
+    const posted = []; const skipped = [];
+    for (const n of nums) {
+      const view = git.ghIssueView(repoAbs, n, ['comments']);
+      if (!view) { skipped.push(n); continue; }
+      if (releaseFinalize.hasEvent(view.comments, releaseFinalize.releasedEvent(version))) continue;
+      const r = git.ghIssueComment(repoAbs, n, releaseFinalize.releasedComment(version, sha));
+      if (r.ok) posted.push(n); else { skipped.push(n); warn(`could not comment on #${n}: ${String(r.stderr || '').split('\n')[0]}`); }
+    }
+    return { range: `${prev}..${version}`, issues: nums, posted, skipped };
+  };
   if (!opts.dry) {
     if (verdict.state === 'finalized') {
       const actor = humanBar ? `${opts.answeredBy} (human bar: COLAB_HUMAN=1)` : `automatic — clean test period (CONVENTIONS.md §6)${walk ? ', newest candidate clean on its own clock (--auto)' : ''}`;
@@ -1743,6 +1765,9 @@ function cmdReleaseFinalize(argv) {
         close(tracking.number);
       }
     }
+    // #426: every issue the final carries hears which version has it — on the run that tags, and on
+    // the already-final resume (a run that died between the tag push and these comments finishes them).
+    if (tagged) announced = announceRelease(cand.version, cand.sha);
     // Superseded records. Without --auto: every other open, unheld, non-final version (the newest one
     // is the only one ever finalized). With --auto: only versions BELOW one just tagged — a newer
     // version's candidates are still on their own clocks.
@@ -1754,6 +1779,8 @@ function cmdReleaseFinalize(argv) {
       }
     }
     if (verdict.state === 'already-final' && tracking && tracking.number) {
+      const finalTag = tags.find((t) => t.name === version0);
+      if (finalTag) announced = announceRelease(version0, finalTag.sha);
       comment(tracking.number, { state: 'finalized', tag: version0 }, `**${version0}** is already tagged final.`);
       close(tracking.number);
     }
@@ -1769,7 +1796,7 @@ function cmdReleaseFinalize(argv) {
       lastFinal, dry: !!opts.dry, auto: !!opts.auto, candidate: cand, tracking: trackingOut,
       periodStart: period ? period.start : null, periodEndsAt: period ? period.endsAt : null,
       state: verdict.state, tagged, finalTag: verdict.finalTag, checks: verdict.checks, handoff: verdict.handoff,
-      skipped: walk ? skipped : undefined,
+      skipped: walk ? skipped : undefined, announced,
     }, null, 2));
   } else {
     print(`colab release finalize${opts.auto ? ' --auto' : ''} — ${shortRepo(repoAbs)} (last final: ${lastFinal || 'none'}${cand ? `, candidate: ${cand.tag}` : ''})`);
@@ -1781,6 +1808,7 @@ function cmdReleaseFinalize(argv) {
     }
     print('');
     print(`state: ${verdict.state}${opts.dry ? ' [--dry: nothing written]' : ''}${tagged ? ` — tagged ${verdict.finalTag} and pushed it to ${remote}` : ''}`);
+    if (announced && announced.issues.length) print(`released in ${verdict.finalTag || version0}: told ${announced.posted.length ? announced.posted.map((n) => `#${n}`).join(', ') : 'nobody new'} (carried: ${announced.issues.map((n) => `#${n}`).join(', ')}${announced.skipped.length ? `; unreadable: ${announced.skipped.map((n) => `#${n}`).join(', ')}` : ''})`);
     if (verdict.handoff) print(`\nThe final is a human act here. The one command, for a human to run:\n  ${verdict.handoff}`);
   }
   // #423: on --auto, "nothing to do yet" (still testing, no candidate) is the workflow's ordinary output.
