@@ -406,3 +406,69 @@ test('decide: each pre-tag check refuses under its own name', () => {
   const unmeasured = rc.decide(facts({ manifests: undefined, ancestry: undefined }));
   assert.deepStrictEqual(unmeasured.refusals.map((c) => c.condition), ['manifest-version', 'on-trunk']);
 });
+
+// ---- #443: the newest candidate always names trunk's head --------------------------------------
+
+test('#443 --auto: head already carrying a candidate is a no-op, not a refusal (the schedule re-runs safely)', () => {
+  const v = rc.decide(autoFacts({ tags: ['v1.2.0', 'v1.2.1-rc.1'], tagsAtSha: ['v1.2.1-rc.1'] }));
+  assert.strictEqual(v.ok, false);
+  assert.strictEqual(v.noop, true);
+  assert.strictEqual(v.tag, null);
+  // without --auto it is still a refusal — a human asking for a second candidate on one commit
+  assert.strictEqual(rc.decide(facts({ tags: ['v1.2.0', 'v1.2.1-rc.1'], tagsAtSha: ['v1.2.1-rc.1'] })).noop, false);
+});
+
+test('#443 burst: with no cap every green head is cut — four merges, four candidates', () => {
+  const tags = ['v1.2.0'];
+  const cut = [];
+  for (let i = 0; i < 4; i++) {
+    const cad = rc.cadenceVerdict({ candidates: cut, perDay: null, now: `2026-10-02T12:0${i}:00.000Z` });
+    const v = rc.decide(autoFacts({ tags: [...tags], tagsAtSha: [], cadence: cad }));
+    assert.strictEqual(v.ok, true, `merge ${i}`);
+    tags.push(v.tag);
+    cut.push({ name: v.tag, date: `2026-10-02T12:0${i}:00.000Z` });
+  }
+  assert.deepStrictEqual(tags.slice(1), ['v1.2.1-rc.1', 'v1.2.1-rc.2', 'v1.2.1-rc.3', 'v1.2.1-rc.4']);
+});
+
+test('#443 declared cap: blocked inside the window, the first run after it cuts the head', () => {
+  const cut = [{ name: 'v1.2.1-rc.1', date: '2026-10-02T01:00:00.000Z' }];
+  const inside = rc.cadenceVerdict({ candidates: cut, perDay: 1, now: '2026-10-02T13:00:00.000Z' });
+  assert.strictEqual(inside.ok, false);
+  assert.match(inside.detail, /first run from 2026-10-03T01:00:00\.000Z cuts main's head, never an older commit/);
+  assert.strictEqual(rc.decide(autoFacts({ tags: ['v1.2.0', 'v1.2.1-rc.1'], cadence: inside })).noop, true);
+  // the scheduled run after the window: head (which carries no tag yet) is cut
+  const after = rc.cadenceVerdict({ candidates: cut, perDay: 1, now: '2026-10-03T03:17:00.000Z' });
+  const v = rc.decide(autoFacts({ tags: ['v1.2.0', 'v1.2.1-rc.1'], tagsAtSha: [], cadence: after }));
+  assert.strictEqual(v.ok, true);
+  assert.strictEqual(v.tag, 'v1.2.1-rc.2');
+});
+
+test('#443 headCandidateVerdict: flags a head green for longer than one CI cycle with no tag', () => {
+  const run = (o) => ({ status: 'completed', conclusion: 'success', event: 'push', createdAt: '2026-10-02T12:00:00Z', updatedAt: '2026-10-02T12:05:00Z', ...o });
+  const base = { candidatesAuto: true, sha: 'abcdef1234', tagsAtSha: [], owed: 3, runs: [run()], promotion: null };
+  const at = (now, over = {}) => rc.headCandidateVerdict({ ...base, now, ...over });
+  assert.strictEqual(at('2026-10-02T12:08:00Z').state, 'pending'); // 3m after green, cycle 5m
+  const late = at('2026-10-02T12:11:00Z');
+  assert.strictEqual(late.state, 'untagged');
+  assert.strictEqual(late.flag, true);
+  assert.match(late.detail, /head not a candidate/);
+  assert.strictEqual(late.cycleMs, 300000);
+  assert.strictEqual(at('2026-10-02T13:00:00Z', { tagsAtSha: ['v1.2.1-rc.3'] }).state, 'named');
+  assert.strictEqual(at('2026-10-02T13:00:00Z', { tagsAtSha: ['v1.3.0'] }).state, 'named');
+  assert.strictEqual(at('2026-10-02T13:00:00Z', { owed: 0 }).state, 'nothing-owed');
+  assert.strictEqual(at('2026-10-02T13:00:00Z', { owed: null }).state, 'nothing-owed');
+  assert.strictEqual(at('2026-10-02T13:00:00Z', { candidatesAuto: false }).state, 'off');
+  assert.strictEqual(at('2026-10-02T13:00:00Z', { runs: null }).state, 'unread');
+  assert.strictEqual(at('2026-10-02T13:00:00Z', { runs: [run({ conclusion: 'failure' })] }).state, 'not-green');
+  assert.strictEqual(at('2026-10-02T13:00:00Z', { runs: [run({ status: 'in_progress', conclusion: null })] }).state, 'not-green');
+  assert.strictEqual(at('2026-10-02T13:00:00Z', { promotion: { ok: false, detail: 'a hotfix' } }).state, 'not-promotion');
+  // the release workflow's own run (workflow_run) is downstream of the suite — a failed one does not hide the flag
+  const withRelease = at('2026-10-02T13:00:00Z', { runs: [run(), run({ event: 'workflow_run', conclusion: 'failure' })] });
+  assert.strictEqual(withRelease.state, 'untagged');
+});
+
+test('#443 prereleaseArgs: a published pre-release that never becomes Latest', () => {
+  assert.deepStrictEqual(rc.prereleaseArgs('v1.2.1-rc.1', '/tmp/n.md'),
+    ['release', 'create', 'v1.2.1-rc.1', '--verify-tag', '--title', 'v1.2.1-rc.1', '--notes-file', '/tmp/n.md', '--prerelease', '--latest=false']);
+});

@@ -61,6 +61,7 @@ function fixture({ projectYml = RELEASED_YML, files = {}, lastFinal = 'v1.2.0' }
 
   const runsFile = path.join(root, 'runs.json');
   const issuesFile = path.join(root, 'issues.json');
+  const releasesFile = path.join(root, 'releases.log');
   fs.writeFileSync(issuesFile, '[]');
   fs.writeFileSync(path.join(bin, 'gh'), [
     '#!/bin/sh',
@@ -68,11 +69,15 @@ function fixture({ projectYml = RELEASED_YML, files = {}, lastFinal = 'v1.2.0' }
     'if [ "$1" = "auth" ] && [ "$2" = "status" ]; then exit 0; fi',
     `if [ "$1" = "run" ] && [ "$2" = "list" ]; then cat "${runsFile}"; exit 0; fi`,
     `if [ "$1" = "issue" ] && [ "$2" = "list" ]; then cat "${issuesFile}"; exit 0; fi`,
+    // #443: `release cut` publishes the candidate's pre-release itself. view answers from the log of
+    // what create was called with; create records its argv and the notes file it was handed.
+    `if [ "$1" = "release" ] && [ "$2" = "view" ]; then grep -q "^create $3 " "${releasesFile}" 2>/dev/null && exit 0; exit 1; fi`,
+    `if [ "$1" = "release" ] && [ "$2" = "create" ]; then [ -f "${root}/release-create-fails" ] && { echo "HTTP 403" >&2; exit 1; }; shift; echo "$*" >> "${releasesFile}"; while [ $# -gt 0 ]; do if [ "$1" = "--notes-file" ]; then cat "$2" > "${root}/notes-last.md"; fi; shift; done; exit 0; fi`,
     'echo "fixture gh: refusing $*" >&2',
     'exit 1',
   ].join('\n') + '\n', { mode: 0o755 });
 
-  const fx = { root, origin, work, home, bin, g, runsFile, issuesFile };
+  const fx = { root, origin, work, home, bin, g, runsFile, issuesFile, releasesFile };
   commit(fx, 'fix.txt', 'fix: a bug');
   return fx;
 }
@@ -347,8 +352,25 @@ test('--auto: a removed package.json export is breaking', () => {
   assert.ok(r.body.signals.some((l) => /removed export\(s\): package\.json exports \.\/old/.test(l)));
 });
 
-test('--auto: inside rapid-app\'s one-a-day window the run is a no-op (exit 0, nothing cut)', () => {
+test('#443 --auto: rapid-app has no cap — a second green head gets its own candidate', () => {
   const fx = fixture({ projectYml: `${RELEASED_YML}release:\n  route: rapid-app\n` });
+  const first = cut(fx, ['--auto']);
+  assert.strictEqual(first.code, 0, first.out + first.err);
+  assert.strictEqual(first.body.tag, 'v1.2.1-rc.1');
+  commit(fx, 'fix2.txt', 'fix: another');
+  const second = cut(fx, ['--auto']);
+  assert.strictEqual(second.code, 0, second.out + second.err);
+  assert.strictEqual(second.body.tag, 'v1.2.1-rc.2');
+  assert.match(second.body.checks.find((c) => c.condition === 'cadence').detail, /no candidates-per-day cap/);
+  // a re-run on the same head (the daily schedule) is a no-op, not a refusal
+  const again = cut(fx, ['--auto']);
+  assert.strictEqual(again.code, 0, again.out + again.err);
+  assert.strictEqual(again.body.noop, true);
+  assert.deepStrictEqual(originTags(fx), ['v1.2.0', 'v1.2.1-rc.1', 'v1.2.1-rc.2']);
+});
+
+test('--auto: inside a declared candidates-per-day window the run is a no-op (exit 0, nothing cut)', () => {
+  const fx = fixture({ projectYml: `${RELEASED_YML}release:\n  route: rapid-app\n  candidates-per-day: 1\n` });
   const first = cut(fx, ['--auto']);
   assert.strictEqual(first.code, 0, first.out + first.err);
   assert.strictEqual(first.body.tag, 'v1.2.1-rc.1');
@@ -357,7 +379,7 @@ test('--auto: inside rapid-app\'s one-a-day window the run is a no-op (exit 0, n
   assert.strictEqual(second.code, 0, second.out + second.err);
   assert.strictEqual(second.body.noop, true);
   assert.strictEqual(second.body.created, false);
-  assert.match(second.body.checks.find((c) => c.condition === 'cadence').detail, /caps at 1 a day/);
+  assert.match(second.body.checks.find((c) => c.condition === 'cadence').detail, /caps at 1 a day; the first run from .* cuts main's head/);
   assert.deepStrictEqual(originTags(fx), ['v1.2.0', 'v1.2.1-rc.1']);
 });
 
@@ -520,4 +542,35 @@ test('trunk: main --auto (#429): no promotion check, no trunk key — the shape 
   assert.strictEqual(r.code, 0, r.out + r.err);
   assert.ok(!check(r, 'promotion'));
   assert.ok(!('trunk' in r.body));
+});
+
+// ---- #443: a manual cut publishes its pre-release ----------------------------------------------
+
+test('#443: a manual release cut publishes a GitHub pre-release — notes are the summary plus the tag message', () => {
+  const fx = fixture();
+  const dry = cut(fx, ['--dry']);
+  assert.strictEqual(dry.body.published, null, '--dry publishes nothing');
+  assert.ok(!fs.existsSync(fx.releasesFile));
+
+  const r = cut(fx);
+  assert.strictEqual(r.code, 0, r.out + r.err);
+  assert.deepStrictEqual(r.body.published, { ok: true, detail: 'published the GitHub pre-release v1.2.1-rc.1' });
+  const log = fs.readFileSync(fx.releasesFile, 'utf8');
+  assert.match(log, /^create v1\.2\.1-rc\.1 --verify-tag --title v1\.2\.1-rc\.1 --notes-file \S+ --prerelease --latest=false$/m);
+  const notes = fs.readFileSync(path.join(fx.root, 'notes-last.md'), 'utf8');
+  assert.match(notes, /## Release summary/);
+  assert.match(notes, /- fix: a bug/);
+  assert.match(notes, /### Candidate record/);
+  assert.match(notes, /v1\.2\.1-rc\.1 — release candidate \(colab release cut\)/);
+});
+
+test('#443: a failed publish is reported, never undoes the cut', () => {
+  const fx = fixture();
+  fs.writeFileSync(path.join(fx.root, 'release-create-fails'), '');
+  const r = cut(fx);
+  assert.strictEqual(r.code, 0, r.out + r.err);
+  assert.strictEqual(r.body.created, true);
+  assert.strictEqual(r.body.published.ok, false);
+  assert.match(r.body.published.detail, /pre-release NOT published: gh release create v1\.2\.1-rc\.1 failed \(HTTP 403\)/);
+  assert.deepStrictEqual(originTags(fx), ['v1.2.0', 'v1.2.1-rc.1']);
 });

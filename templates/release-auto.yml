@@ -14,7 +14,8 @@
 #   `promotion: main-loop` only; a no-op                                       main (#440)
 #   everywhere else)
 #   your CI workflow finished green on main   colab release cut --auto       → vX.Y.Z-rc.N
-#   (on `trunk: dev`: the promotion's push)
+#   (on `trunk: dev`: the promotion's push),  (#443: the newest candidate always names main's
+#   and the daily schedule                     head; a head already carrying one is a no-op)
 #   a daily schedule                          colab release finalize --auto  → vX.Y.Z (or a
 #                                                                              hand-off where
 #                                                                              the final is a
@@ -207,9 +208,13 @@ jobs:
             echo "::warning::colab promote --auto refused: $(jq -r '.reason' "$OUT")"
           fi
 
+      # #443: the newest candidate always names main's head. The scheduled run cuts too, so a head a
+      # declared release.candidates-per-day window held back is tagged once the window ends, even
+      # with no new merge to fire workflow_run. A head already carrying a candidate is a no-op. Not
+      # right after this run promoted: that head has no CI yet — the dispatched run cuts it.
       - name: Cut a candidate (colab release cut --auto)
         id: cut
-        if: github.event_name == 'workflow_run' || github.event_name == 'workflow_dispatch'
+        if: (github.event_name == 'workflow_run' || github.event_name == 'workflow_dispatch' || github.event_name == 'schedule') && steps.promote.outputs.promoted != 'true'
         run: |
           set -uo pipefail
           OUT="$RUNNER_TEMP/cut.json"
@@ -232,7 +237,7 @@ jobs:
             echo "tag=$TAG" >> "$GITHUB_OUTPUT"
             echo "Cut $TAG" | tee -a "$GITHUB_STEP_SUMMARY"
           elif [ "$(jq -r '.noop' "$OUT")" = "true" ]; then
-            echo "No-op: nothing owed, inside the cadence window, or main's head is not a promotion." | tee -a "$GITHUB_STEP_SUMMARY"
+            echo "No-op: nothing owed, head already a candidate, inside a declared cadence window, or main's head is not a promotion." | tee -a "$GITHUB_STEP_SUMMARY"
           elif [ "$(jq -r '.ok' "$OUT")" = "true" ]; then
             echo "Verdict ok but nothing created." | tee -a "$GITHUB_STEP_SUMMARY"
           else

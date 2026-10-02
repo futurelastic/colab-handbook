@@ -95,10 +95,11 @@
 #               optional", tools/lib/release-policy.js); a declared block may narrow that
 #               default and never widen it — the audit fails a widening attempt. This repo
 #               restates its default exactly, as the reference example: released with
-#               production null and deploy none (route public-tool), so candidates are cut
-#               automatically at most once a day and the final tag is automatic after a 3-day
-#               test period. The daily cap is #439: before it, one candidate per green trunk
-#               run cut four in 51 minutes (2026-10-02). Narrowing it here is a human's call.
+#               production null and deploy none (route public-tool), so every green trunk head
+#               gets a candidate and the final tag is automatic after a 3-day test period. No
+#               candidates-per-day cap (#443, reversing #439's): a cap kept four merges out of any
+#               tag for a day (2026-10-02), and the newest candidate must always name trunk's
+#               head. A cap stays an opt-in narrowing; declaring one here is a human's call.
 #
 tier: B
 trunk: main
@@ -114,7 +115,6 @@ gate:
   authoritative: ci
 release:
   candidates: auto
-  candidates-per-day: 1
   test-period: 3d
   final: auto
 

@@ -213,3 +213,76 @@ test('breaking-change commit (!) since the last tag suggests a major bump', () =
   assert.strictEqual(row.unreleased.fixFlag, true); // breaking counts as flag-worthy too
   assert.strictEqual(r.code, 1);
 });
+
+// ---- #443: the newest candidate names trunk's head --------------------------------------------
+
+/**
+ * A `released` public-tool repo (deploy: none — not tag-gated, candidates automatic) with v1.0.0
+ * final and one `fix:` commit on main, plus a `gh` stub answering `run list` from a file.
+ */
+function publicToolFixture() {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'colab-relstatus-head-'));
+  TMP.push(root);
+  const origin = path.join(root, 'origin.git');
+  const work = path.join(root, 'work');
+  const bin = path.join(root, 'bin');
+  fs.mkdirSync(bin);
+  execFileSync('git', ['init', '-q', '--bare', '-b', 'main', origin], { encoding: 'utf8' });
+  execFileSync('git', ['init', '-q', '-b', 'main', work], { encoding: 'utf8' });
+  g(work, 'config', 'user.email', 'test@example.invalid');
+  g(work, 'config', 'user.name', 'colab release-status test');
+  g(work, 'config', 'core.hooksPath', path.join(root, '.nohooks'));
+  g(work, 'remote', 'add', 'origin', origin);
+  fs.mkdirSync(path.join(work, '.github'), { recursive: true });
+  fs.writeFileSync(path.join(work, '.github', 'project.yml'), 'trunk: main\nexposure: released\nproduction: null\ndeploy: none\nstack: node\n');
+  fs.writeFileSync(work + '/f.txt', 'base\n');
+  g(work, 'add', '-A'); g(work, 'commit', '-q', '-m', 'chore: fixture');
+  g(work, 'tag', '-a', 'v1.0.0', '-m', 'v1.0.0');
+  fs.writeFileSync(work + '/fix.txt', 'fix\n');
+  g(work, 'add', '-A'); g(work, 'commit', '-q', '-m', 'fix: a bug');
+  g(work, 'push', '-q', 'origin', 'main', '--tags');
+  const runsFile = path.join(root, 'runs.json');
+  fs.writeFileSync(path.join(bin, 'gh'), [
+    '#!/bin/sh',
+    'if [ "$1" = "--version" ]; then echo "gh version 0.0.0 (fixture)"; exit 0; fi',
+    'if [ "$1" = "auth" ] && [ "$2" = "status" ]; then exit 0; fi',
+    `if [ "$1" = "run" ] && [ "$2" = "list" ]; then cat "${runsFile}"; exit 0; fi`,
+    'exit 1',
+  ].join('\n') + '\n', { mode: 0o755 });
+  const setRuns = (rows) => fs.writeFileSync(runsFile, JSON.stringify(rows));
+  const status = () => {
+    const r = spawnSync('node', [COLAB, 'release-status', '--repo', work, '--json'], {
+      encoding: 'utf8', env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, COLAB_HOME: homeDir(root) },
+    });
+    return { code: r.status, body: JSON.parse(r.stdout), err: r.stderr };
+  };
+  return { root, work, setRuns, status };
+}
+
+test('#443: a green head untagged for longer than one CI cycle is flagged "head not a candidate"', () => {
+  const fx = publicToolFixture();
+  const green = (min) => ({ status: 'completed', conclusion: 'success', event: 'push', workflowName: 'CI',
+    createdAt: new Date(Date.now() - (min + 4) * 60000).toISOString(), updatedAt: new Date(Date.now() - min * 60000).toISOString() });
+
+  fx.setRuns([green(60)]); // green an hour ago, a 4-minute cycle
+  const late = fx.status();
+  const row = late.body.rows[0];
+  assert.strictEqual(row.applicable, true, 'automatic candidates make a deploy: none repo assessable');
+  assert.strictEqual(row.tagGated, false);
+  assert.strictEqual(row.headCandidate.state, 'untagged');
+  assert.match(row.headCandidate.detail, /head not a candidate/);
+  assert.strictEqual(row.flag, true);
+  assert.strictEqual(late.code, 1);
+
+  fx.setRuns([green(1)]); // inside one cycle — the release run may still be tagging it
+  const pending = fx.status();
+  assert.strictEqual(pending.body.rows[0].headCandidate.state, 'pending');
+  assert.strictEqual(pending.body.rows[0].flag, false, 'a fix under a pending head is not lag on a non-tag-gated repo');
+  assert.strictEqual(pending.code, 0);
+
+  fx.setRuns([green(60)]);
+  g(fx.work, 'tag', '-a', 'v1.0.1-rc.1', '-m', 'v1.0.1-rc.1 — release candidate (colab release cut)');
+  const named = fx.status();
+  assert.strictEqual(named.body.rows[0].headCandidate.state, 'named');
+  assert.strictEqual(named.code, 0);
+});

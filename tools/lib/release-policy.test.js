@@ -177,7 +177,7 @@ test('every descriptor row derives a route its row permits, and the route\'s own
 test('the routes table: six routes, the human final only where a tag deploys or nothing is tagged', () => {
   assert.deepEqual([...ROUTES], ['none', 'rapid-app', 'public-tool', 'library-fast', 'deploy-tag', 'live']);
   assert.deepEqual(eff({ route: 'rapid-app', ...ROUTE_POLICY['rapid-app'] }), { route: 'rapid-app', candidates: 'auto', testPeriodDays: 3, final: 'auto' });
-  assert.equal(ROUTE_POLICY['rapid-app'].candidatesPerDay, 1);
+  assert.equal(ROUTE_POLICY['rapid-app'].candidatesPerDay, null);
   assert.equal(ROUTE_POLICY['rapid-app'].finalize, 'newest-clean');
   assert.equal(ROUTE_POLICY['public-tool'].finalize, 'after-test-period');
   assert.deepEqual([ROUTE_POLICY['library-fast'].candidates, ROUTE_POLICY['library-fast'].testPeriodDays, ROUTE_POLICY['library-fast'].final], ['off', null, 'auto']);
@@ -208,7 +208,7 @@ test('a no-production released repo may choose rapid-app or library-fast', () =>
   const rapid = evaluateRelease({ ...base, release: { route: 'rapid-app' } });
   assert.deepEqual(rapid.findings, []);
   assert.equal(rapid.effective.route, 'rapid-app');
-  assert.equal(rapid.effective.candidatesPerDay, 1);
+  assert.equal(rapid.effective.candidatesPerDay, null);
   assert.equal(rapid.effective.finalize, 'newest-clean');
   const lib = evaluateRelease({ ...base, release: { route: 'library-fast' } });
   assert.deepEqual(lib.findings, []);
@@ -252,14 +252,15 @@ test('narrowing keys apply to the chosen route, not the derived one', () => {
   assert.equal(libHuman.effective.final, 'human');
 });
 
-test('candidates-per-day narrows a cap, never raises it', () => {
+test('candidates-per-day is an opt-in cap — no route has one by default (#443), so any positive value narrows', () => {
   const base = { exposure: 'released', deploy: 'none', production: null };
   const texts = (release) => evaluateRelease({ ...base, release }).findings.map((f) => f.text).join('|');
-  assert.match(texts({ route: 'rapid-app', 'candidates-per-day': 2 }), /release\.candidates-per-day: 2 widens the release route.*at most 1 a day/);
+  assert.equal(texts({ route: 'rapid-app', 'candidates-per-day': 2 }), '');
   assert.equal(texts({ route: 'rapid-app', 'candidates-per-day': 1 }), '');
-  // #439: public-tool is capped at one a day too — 4 widens it, 1 restates it.
-  assert.match(texts({ 'candidates-per-day': 4 }), /release\.candidates-per-day: 4 widens the release route — on exposure: released, route public-tool: at most 1 a day/);
+  // #443 reverses #439's derived public-tool cap: 4 and 1 are both a repo's own narrowing now.
+  assert.equal(texts({ 'candidates-per-day': 4 }), '');
   assert.equal(texts({ 'candidates-per-day': 1 }), '');
+  assert.equal(evaluateRelease({ ...base, release: { 'candidates-per-day': 1 } }).effective.candidatesPerDay, 1);
   // uncapped route (deploy-tag): any positive cap narrows
   const r = evaluateRelease({ exposure: 'released', deploy: 'tag', production: 'https://x.example', release: { 'candidates-per-day': 4 } });
   assert.deepEqual(r.findings, []);
@@ -336,11 +337,11 @@ test('npm: fits only public-tool — a deploying tag, rapid-app and library-fast
   }
 });
 
-test('#439: the public-tool route derives at most one candidate a day', () => {
-  assert.equal(ROUTE_POLICY['public-tool'].candidatesPerDay, 1);
+test('#443: no route derives a candidates-per-day cap — the newest candidate always names trunk head', () => {
+  for (const route of Object.keys(ROUTE_POLICY)) assert.equal(ROUTE_POLICY[route].candidatesPerDay, null, route);
   const r = evaluateRelease({ exposure: 'released', deploy: 'none', production: null });
   assert.equal(r.effective.route, 'public-tool');
-  assert.equal(r.effective.candidatesPerDay, 1);
+  assert.equal(r.effective.candidatesPerDay, null);
 });
 
 test('#438: version-source is tag | manifest, defaults to manifest, and widens nothing', () => {

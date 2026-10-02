@@ -3952,8 +3952,8 @@ commit, tagged final.
 | Route | For | Candidate `vX.Y.Z-rc.N` | Final `vX.Y.Z` |
 |---|---|---|---|
 | `none` | `exposure: none` / `self` — nothing consumes a tag | no tags | no tags |
-| `rapid-app` | a fast-moving app with few installers | automatic, at most 1 a day | automatic: the **newest** candidate clean for the test period; a newer candidate does not restart an older one's clock |
-| `public-tool` | a public CLI or handbook — adopters install it, nothing deploys | automatic, at most 1 a day (#439) | automatic after a clean test period |
+| `rapid-app` | a fast-moving app with few installers | automatic, on every green trunk head | automatic: the **newest** candidate clean for the test period; a newer candidate does not restart an older one's clock |
+| `public-tool` | a public CLI or handbook — adopters install it, nothing deploys | automatic, on every green trunk head (#443) | automatic after a clean test period |
 | `library-fast` | a library released per merge, its consumers pin | none | the tag itself triggers the publish; the route's checks still apply |
 | `deploy-tag` | `deploy: tag` / `deploy: manual` — the tag deploys production | automatic; the agent prepares everything | **a human act (one click)** — automatic only on a `deploy: tag` repo the operator granted it (#441) |
 | `live` | `exposure: live` (Tier C) — the merge is the deploy | unchanged — no automatic tags; the promotion is the deploy and stays human; tagging stays optional | — |
@@ -3971,9 +3971,27 @@ derives **no route** and fails closed: no automatic tag, a human tags. Legacy `t
 reads as `released` and takes the route its `deploy` names. Where the final tag is a human
 act, no value in `project.yml` lowers that — the one way is an operator's recorded grant,
 below, which is a human act and not a value. A repo may **narrow** its route — turn
-candidates off, cap candidates per day lower, make an automatic final human, lengthen the
+candidates off, cap candidates per day, make an automatic final human, lengthen the
 test period — with the [`release:` block](project.schema.md#release--optional) (#337); a
 block that tries to widen it is an audit failure, not an override.
+
+**The newest candidate always names trunk's head (#443).** Wherever candidates are automatic,
+once trunk CI is green on `main`'s head, the newest candidate is that head: every green trunk
+run whose head carries no candidate cuts one, and no route caps how many a day. A burst of
+merges therefore gets a candidate on each green head — what an adopter installs from `next` is
+never behind what trunk proved. Measured the day a one-a-day cap shipped (#439): four merges
+landed 40 minutes after a candidate, the cap kept them out of any tag until the next day, and a
+catch-up candidate had to be cut by hand. A repo may still declare
+`release.candidates-per-day` as a **narrowing**, and it keeps the guarantee: inside the window
+the run is a no-op, and the first run after the window closes — the next green CI, or the daily
+scheduled run, which cuts too — cuts **the head**, never an older commit. A head that already
+carries a candidate is a no-op, so the schedule re-runs safely. **Finals are unchanged:** a
+final is still the newest candidate whose own test period is clean, so a final lags head by at
+least the test period, by design. `colab release-status` reads the guarantee back and flags
+*head not a candidate* when a green head has stayed untagged for longer than one CI cycle (the
+longest suite run at that sha). And every candidate has a release page however it was cut:
+`colab release cut` publishes the GitHub pre-release itself, notes = the summary since the last
+final plus the tag's own message, so a cut run outside the workflow no longer leaves a bare tag.
 
 **A candidate is cut only when all four hold, on the exact commit it names:**
 
@@ -3997,7 +4015,7 @@ pre-filled — that finalizes it.
 
 **A trigger runs it — not a person, and not a session.** Each repo that tags carries a
 **release workflow** ([*Scheduled drivers*](#scheduled-drivers--provenance-and-autonomy-meet-a-caller-that-is-not-a-person)):
-a green CI run on `main` tries a candidate (`colab release cut --auto`) — on `trunk: main` every
+a green CI run on `main` — and the daily scheduled run (#443) — tries a candidate (`colab release cut --auto`) — on `trunk: main` every
 trunk push, on `trunk: dev` the human promotion's push (#429), where the bump reads the promoted
 commits and a `main` head that is not a promotion (a hotfix pushed straight to `main`) cuts
 nothing: the next promotion carries it, or a human cuts it by hand — a daily run
