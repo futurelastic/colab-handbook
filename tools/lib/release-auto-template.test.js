@@ -32,10 +32,10 @@ function tmpdir(prefix) {
 }
 
 /** The dedented body of the `run: |` block belonging to the step named `name`. */
-function stepScript(name) {
-  const lines = TEXT.split('\n');
+function stepScript(name, text = TEXT) {
+  const lines = text.split('\n');
   const at = lines.findIndex((l) => l.trim() === `- name: ${name}`);
-  assert.ok(at >= 0, `step "${name}" not found in the template`);
+  assert.ok(at >= 0, `step "${name}" not found`);
   const stepIndent = lines[at].indexOf('-');
   let runAt = -1;
   for (let i = at + 1; i < lines.length; i++) {
@@ -213,4 +213,56 @@ test('audit: a release workflow that commits', () => {
   const committing = BARE_CUT.replace('      - run: colab release cut --auto\n', '      - run: colab release cut --auto\n      - run: git commit -am bump && git push origin main\n');
   const dir = fixture(RELEASED, { '.github/workflows/auto.yml': committing });
   assert.ok(warns(dir).some((t) => /^auto\.yml runs `colab release … --auto` and also commits or pushes a non-tag ref/.test(t)));
+});
+
+// ---------------------------------------------------------------------------------------------
+// The handbook's OWN copy (#428): .github/workflows/release-auto.yml. It differs from the template
+// in exactly two ways — it runs this checkout's tools/colab instead of a pinned HANDBOOK_REF clone
+// (ruling on #428), and it gates a red CI run in a step so the run never concludes `skipped`. The
+// cut / finalize / publish steps stay the template's, verbatim.
+
+const OWN = fs.readFileSync(path.join(REPO_ROOT, '.github', 'workflows', 'release-auto.yml'), 'utf8');
+const CI_NAME = /^name:\s*(.+?)\s*$/m.exec(fs.readFileSync(path.join(REPO_ROOT, '.github', 'workflows', 'ci.yml'), 'utf8'))[1];
+
+test("own copy: triggers on ci.yml's own workflow name, on main", () => {
+  const m = /workflow_run:\s*\n(?:\s*#.*\n)*\s*workflows:\s*\[([^\]]*)\]/.exec(OWN);
+  assert.ok(m, 'no workflow_run.workflows list');
+  const names = m[1].split(',').map((x) => x.trim().replace(/^["']|["']$/g, ''));
+  assert.ok(names.includes(CI_NAME), `workflows ${JSON.stringify(names)} does not name ci.yml's "${CI_NAME}"`);
+  assert.match(OWN, /branches: \[main\]/);
+});
+
+test("own copy: runs this checkout's tools/colab — no pinned ref, no clone", () => {
+  assert.doesNotMatch(OWN, /^\s*HANDBOOK_REF:/m);
+  assert.doesNotMatch(OWN, /git clone/);
+  assert.match(OWN, /COLAB=\$GITHUB_WORKSPACE\/tools\/colab/);
+  assert.match(OWN, /ref: main\n/);
+  assert.match(OWN, /fetch-depth: 0/);
+});
+
+test('own copy: cut, finalize and publish are the template\'s steps verbatim', () => {
+  for (const step of [CUT, FIN, 'Publish GitHub Release (same run)']) {
+    assert.strictEqual(stepScript(step, OWN), stepScript(step), `step "${step}" drifted from the template`);
+  }
+});
+
+test('own copy: no job-level if — a red CI run is gated in a step, so the run never concludes skipped', () => {
+  assert.doesNotMatch(OWN, /^ {4}if:/m);
+  assert.match(OWN, /if: steps\.gate\.outputs\.cut == 'true'/);
+  const gate = stepScript('Gate on the triggering CI run', OWN);
+  const run = (env) => {
+    const dir = tmpdir('release-auto-gate-');
+    const out = path.join(dir, 'output');
+    fs.writeFileSync(out, '');
+    const r = spawnSync('bash', ['-c', gate], { cwd: dir, encoding: 'utf8', env: { ...process.env, ...env, GITHUB_OUTPUT: out, GITHUB_STEP_SUMMARY: path.join(dir, 'summary') } });
+    return { status: r.status, out: fs.readFileSync(out, 'utf8') };
+  };
+  assert.deepStrictEqual(run({ EVENT: 'workflow_run', CONCLUSION: 'failure', HEAD_SHA: 'abc' }), { status: 0, out: 'cut=false\n' });
+  assert.deepStrictEqual(run({ EVENT: 'workflow_run', CONCLUSION: 'success', HEAD_SHA: 'abc' }), { status: 0, out: 'cut=true\n' });
+  assert.deepStrictEqual(run({ EVENT: 'schedule', CONCLUSION: '', HEAD_SHA: '' }), { status: 0, out: 'cut=true\n' });
+});
+
+test('own copy: the self-audit reads it as a release-auto workflow with nothing to warn about', () => {
+  const r = spawnSync('node', [AUDIT, '--local', REPO_ROOT], { encoding: 'utf8' });
+  assert.doesNotMatch(r.stdout + r.stderr, /release-auto\.yml/);
 });
