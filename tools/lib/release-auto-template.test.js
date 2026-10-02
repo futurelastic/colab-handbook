@@ -273,7 +273,10 @@ test("own copy: the npm target and publish steps are the template's, and the job
 
 test('own copy: the self-audit reads it as a release-auto workflow with nothing to warn about', () => {
   const r = spawnSync('node', [AUDIT, '--local', REPO_ROOT], { encoding: 'utf8' });
-  assert.doesNotMatch(r.stdout + r.stderr, /release-auto\.yml/);
+  // Not the visibility advisory: it names the npm job's lines whenever the audit cannot read the
+  // repository's visibility (no gh auth on a runner) — environment, not a finding about the workflow.
+  const text = (r.stdout + r.stderr).split('\n').filter((l) => !/repository visibility could not be read/.test(l)).join('\n');
+  assert.doesNotMatch(text, /release-auto\.yml/);
 });
 
 // ---------------------------------------------------------------------------------------------
