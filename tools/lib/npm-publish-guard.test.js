@@ -88,6 +88,7 @@ test('audit end to end: a repo with no GitHub remote and an npm gap warns instea
     const g = (...a) => execFileSync('git', a, { cwd: dir, stdio: 'ignore' });
     g('init', '-q', '-b', 'main', '.');
     g('config', 'user.email', 't@example.invalid'); g('config', 'user.name', 't');
+    g('config', 'core.hooksPath', path.join(dir, '.nohooks'));
     fs.mkdirSync(path.join(dir, '.github'));
     fs.writeFileSync(path.join(dir, '.github', 'project.yml'), 'tier: B\ntrunk: main\nproduction: null\ndeploy: none\nstack: node\n');
     fs.writeFileSync(path.join(dir, 'package.json'), pkg({ name: 'x' }));
