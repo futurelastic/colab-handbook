@@ -9,13 +9,17 @@
 #
 #   trigger                                   step
 #   ----------------------------------------  ------------------------------------------------
+#   a daily schedule, first                   colab promote --auto           → dev → main, then
+#   (`trunk: dev` + `deploy: tag` +                                            CI dispatched on
+#   `promotion: main-loop` only; a no-op                                       main (#440)
+#   everywhere else)
 #   your CI workflow finished green on main   colab release cut --auto       → vX.Y.Z-rc.N
 #   (on `trunk: dev`: the promotion's push)
 #   a daily schedule                          colab release finalize --auto  → vX.Y.Z (or a
 #                                                                              hand-off where
 #                                                                              the final is a
 #                                                                              human's)
-#   workflow_dispatch                         both, in that order
+#   workflow_dispatch                         all three, in that order
 #   any of the above tagged something, and    npm publish (job `npm`, #433) — candidates to
 #   project.yml declares release.npm          dist-tag `next`, finals to `latest`; see the
 #                                             comment above that job
@@ -29,9 +33,9 @@
 # trunk shape — so the same file, unchanged, fits two kinds of repo:
 #
 #   `trunk: main` + `deploy: tag | none`   every green CI run on main may cut a candidate.
-#   `trunk: dev`  + `deploy: tag`          main only moves when a human promotes dev → main,
-#                                          so the green CI run on that promotion's push is the
-#                                          trigger. The CLI reads `trunk:` and cuts only when
+#   `trunk: dev`  + `deploy: tag`          main only moves when dev is promoted into main (by
+#                                          a human, or unattended below), so the green CI run
+#                                          on that promotion is the trigger. The CLI reads `trunk:` and cuts only when
 #                                          main's head IS a promotion of dev (a --no-ff merge
 #                                          whose later parent is on dev, or a fast-forward);
 #                                          any other head — a hotfix straight on main — is a
@@ -42,9 +46,23 @@
 #                                          version is read on main's promotion commit, so a
 #                                          version bump must reach main through the promotion.
 #                                          Finalize only posts the one-click hand-off: a final
-#                                          is a human act wherever a tag deploys. Who may
-#                                          promote does not change. Needs a HANDBOOK_REF that
-#                                          carries #429; older CLIs cut on any green main head.
+#                                          is a human act wherever a tag deploys. Needs a
+#                                          HANDBOOK_REF that carries #429; older CLIs cut on
+#                                          any green main head.
+#
+# UNATTENDED PROMOTION (#440). Who may promote is project.yml's `promotion:`, read by the CLI. Where
+# it says `main-loop` — and only on `deploy: tag`, where promotion verifies and deploys nothing —
+# the daily run first runs `colab promote --auto`: when dev's head CI is green and dev is ahead of
+# main it merges dev → main (`--no-ff`) and pushes main, then dispatches your CI workflow on main.
+# The dispatch is needed because a push made with GITHUB_TOKEN triggers no workflow; a
+# workflow_dispatch is the documented exception. That CI run's green completion fires this
+# workflow again, and the cut step cuts the candidate exactly as it does for a human promotion. So
+# your CI workflow must accept `workflow_dispatch:` (the handbook's CI templates do), and main
+# must accept a push from this job's token (a ruleset on main that blocks it turns every promotion
+# into a recorded refusal). Everywhere else — `promotion: human` or absent, `deploy: push-main`,
+# `manual`, `none`, `trunk: main` — the step is a no-op and nothing promotes. The final tag stays
+# the human click. Needs a HANDBOOK_REF that carries #440; an older CLI gives no verdict, which is
+# a warning, never a failed run.
 #
 # Your CI workflow must run on pushes to main for the trigger to fire — the handbook's CI
 # templates run on every branch. It does not fit `exposure: live` (no tags: the promotion
@@ -58,9 +76,10 @@
 # workflow pushes either — on a `deploy: tag` repo the final is a human act anyway, and
 # finalize --auto only posts the command for it.
 #
-# IT READS TAGS AND CREATES TAGS. IT NEVER PUSHES COMMITS. No step here commits, and the
-# only refs pushed are the tags `colab release cut` / `colab release finalize` create
-# (annotated, their checks recorded in the tag message). The npm job never moves git either. `-rc.N` tags are published as
+# IT READS TAGS AND CREATES TAGS. IT NEVER WRITES A COMMIT. No step here commits; the refs
+# pushed are the tags `colab release cut` / `colab release finalize` create (annotated, their
+# checks recorded in the tag message) and — only on a repo granting unattended promotion — the
+# promotion merge `colab promote --auto` pushes to main. The npm job never moves git either. `-rc.N` tags are published as
 # pre-releases, never "Latest". The audit's pre-release deploy-trigger check (#332) still
 # applies to your deploy workflows exactly as before.
 #
@@ -116,9 +135,9 @@ jobs:
     if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest # EDIT: self-hosted label if this repo needs one.
     permissions:
-      contents: write # push the tags, publish the GitHub Release
+      contents: write # push the tags (and, with promotion: main-loop, the promotion), publish the GitHub Release
       issues: write # finalize opens / comments on / closes the "release: vX.Y.Z" tracking issue
-      actions: read # read the runs at a commit (ci-green, full-suite, trunk-green)
+      actions: write # read the runs at a commit (ci-green, full-suite, trunk-green); dispatch CI after a promotion
     # What the npm job below needs (#433) — empty / publish=false unless this run tagged something
     # AND .github/project.yml opts in with release.npm.
     outputs:
@@ -148,6 +167,45 @@ jobs:
           # The tags are annotated; git needs an identity to write one.
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      # #440: where project.yml grants `promotion: main-loop` on `deploy: tag`, promote a green dev
+      # into main, then dispatch CI there — its green run fires this workflow again to cut the
+      # candidate. Everywhere else the CLI answers a no-op. A refusal (dev CI not green, a push
+      # rejected) is a warning; the job stays green.
+      - name: Promote unattended (colab promote --auto)
+        id: promote
+        if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+        env:
+          # EDIT: your test-suite workflow — the same one `workflow_run.workflows` names above.
+          CI_WORKFLOW: "CI"
+        run: |
+          set -uo pipefail
+          OUT="$RUNNER_TEMP/promote.json"
+          rc=0
+          node "$COLAB" promote --auto --json > "$OUT" || rc=$?
+          if ! jq -e 'has("promoted")' "$OUT" > /dev/null 2>&1; then
+            echo "::warning::colab promote --auto gave no verdict (exit $rc; a HANDBOOK_REF older than #440?) — nothing was promoted"
+            exit 0
+          fi
+          {
+            echo "### colab promote --auto"
+            echo
+            jq -r '.checks[]? | "- \(if .ok then "✓" else "✗" end) **\(.condition)** — \(.detail)"' "$OUT"
+            echo
+          } >> "$GITHUB_STEP_SUMMARY"
+          if [ "$(jq -r '.promoted' "$OUT")" = "true" ]; then
+            echo "promoted=true" >> "$GITHUB_OUTPUT"
+            echo "Promoted to main @ $(jq -r '.sha' "$OUT")" | tee -a "$GITHUB_STEP_SUMMARY"
+            if gh workflow run "$CI_WORKFLOW" --ref main; then
+              echo "Dispatched $CI_WORKFLOW on main — its green run cuts the candidate." | tee -a "$GITHUB_STEP_SUMMARY"
+            else
+              echo "::warning::promoted, but could not dispatch $CI_WORKFLOW on main (does it declare workflow_dispatch:?) — run it by hand to cut the candidate"
+            fi
+          elif [ "$(jq -r '.noop' "$OUT")" = "true" ]; then
+            echo "No promotion: $(jq -r '.reason' "$OUT")" | tee -a "$GITHUB_STEP_SUMMARY"
+          else
+            echo "::warning::colab promote --auto refused: $(jq -r '.reason' "$OUT")"
+          fi
 
       - name: Cut a candidate (colab release cut --auto)
         id: cut

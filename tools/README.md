@@ -1022,7 +1022,7 @@ Run `colab <cmd> --help` for full detail.
 | `worktree tag <name> --session S [--session-name S]` | **repair** session identity on an existing worktree **and its claims** (see *Session identity*) |
 | `worktrees [--json]` | list worktrees (status + on-disk liveness); also reports directories git never linked at all (no `.git`) but that look worktree-shaped (`CLAUDE.md` + `.github/project.yml`) — reports only, never prunes (#99) |
 | `ship [--worktree N \| --branch B \| --direct \| --batch B1,B2[,B3]] [--message M] [--keep-worktree] [--delete-branch \| --keep-branch] [--adopt] [--session S] [--dry]` | `code-ship`: squash-merge a session branch → trunk. `--batch` (#373): up to `ship-batch:` green branches tested as one combined head, then one fast-forward (see *Batch landing*). The branch is **kept** unless `--delete-branch` — except a Refs-only ship (nothing closed), which deletes it unless `--keep-branch` (#368). Gated by repo autonomy (see *Phase B autonomy ladder*). `--direct` (#302): evidence-close for a branchless trunk-direct unit — this session's no-worktree, no-branch claims, once the work is published; refused where #350's core-path rule is active and the unit touched a core path (#351 — redo it on a branch). `--adopt` (#324): required to ship a no-digit branch that exists only on origin with no local claim — or whose local ref a git checkout here created from origin's copy (reflog, #343); the squash records a `Colab-Adopted:` trailer. After it closes an issue, it also closes that issue's native parent, with an evidence comment, when `lib/container-close.js` says the container is spent: labelled `epic`, every sub-issue closed, no unticked item in its body (#371) |
-| `promote [--repo P] [--message M] [--dry]` | **promotion** trunk → main (`--no-ff`). Gated by `deploy` + `promotion`; never tags/deploys directly (see *Promotion*) |
+| `promote [--repo P] [--message M] [--dry] [--auto] [--json]` | **promotion** trunk → main (`--no-ff`). Gated by `deploy` + `promotion`; never tags/deploys directly. `--auto` is the release workflow's unattended mode (see *Promotion*) |
 | `deliver [--repo P] [--dry] [--json] [--reopen]` | **delivery** to the owner's branch, only where `project.yml` declares `owner:` (#394): opens or refreshes ONE PR trunk → `owner.branch`, never merges it. Delivered is read from PR state (squash/rebase safe); a rejected last PR stops it (exit 3). Writes need `COLAB_HUMAN=1`; `--dry` is read-only |
 | `doctor [--prune] [--ttl H] [--json] [--sync]` | heal dead worktrees / orphan + stale claims / orphan ports; report records whose branch or path cannot be resolved, including a zero-claim `pending` stub (no TTL — see *Records that cannot be acted on*); flip + sweep **merged** worktrees (see *Worktree lifecycle*); **list** shipped branches awaiting deletion (never deletes them); `--sync` also flags a worktree-less claim the tracker no longer shows assigned+in-progress (no TTL either) and spent `group:<key>` labels |
 | `release-notes [<range>] [--repo P] [--out F] [--headline "..."]` | grouped Markdown release summary from git history (see below) |
@@ -1691,6 +1691,19 @@ temporary worktree). The merge message is `--message` (full override) or
 `release: <trunk> → main — <date> (promotion via colab promote)`; the push carries `COLAB_PROMOTE=1`.
 After a successful promotion on a `deploy: tag` repo it prints the release reminder:
 `git tag vX.Y.Z && git push origin vX.Y.Z`. `--dry` shows the table + plan and changes nothing.
+
+**`--auto` — the release workflow's unattended mode (#440).** `templates/release-auto.yml` runs
+`colab promote --auto --json` on its daily schedule, before the cut. It promotes **only** where
+`deploy: tag` **and** `promotion: main-loop`; every other descriptor — `trunk: main`, `deploy:
+push-main` / `manual` / `none`, `promotion: human` or absent — is a no-op (`noop: true`, exit 0),
+and `COLAB_HUMAN` is ignored in both directions (it never makes a repo eligible; an eligible repo
+never needs it). It is also a no-op when `origin/<trunk>` has nothing `origin/main` lacks, adds the
+precondition `<trunk> ahead of main`, and — on a runner that checked out `main` alone — creates the
+local trunk branch at `origin/<trunk>` (an existing one is never moved). It never tags: the workflow
+dispatches CI on `main` after a promotion (a `GITHUB_TOKEN` push triggers no workflow), and that
+run's green completion cuts the candidate. `--json` prints one verdict on stdout — `{ ok, promoted,
+noop, auto, dry, reason, from, into, deploy, promotion, checks: [{condition, ok, detail}], sha }` —
+and the human table on stderr; exit 1 on any refusal, which the workflow records as a warning.
 
 On a **`deploy: manual`** repo a *successful* promotion prints a block, not a line, because it is
 the one case where finishing the command does not finish the job: `main` moved, **production did

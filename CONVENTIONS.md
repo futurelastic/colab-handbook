@@ -3260,7 +3260,8 @@ self-clearing** — a scheduler must not queue and wait on it; it parks, states 
 and stops. A scheduler never mints a ci-grant itself either way — only the cure rule's
 mechanical door is available to it unattended, exactly as it is to any other caller.
 
-**Never promotes, on any repo, on any tier**, with no field able to say otherwise — **and
+**Never promotes, on any repo, on any tier — except the release workflow, through `colab
+promote --auto`, on a repo declaring `deploy: tag` and `promotion: main-loop` (#440)** — **and
 never tags by any path but the release workflow's two commands.** A **release workflow**
 (#420) is the one scheduled caller that may tag: it may run `colab release cut --auto` and
 `colab release finalize --auto`, unattended, because both **refuse on any failed
@@ -3278,10 +3279,23 @@ a person.
 The handbook ships one to copy, [`templates/release-auto.yml`](templates/release-auto.yml)
 (#425): cut on a green CI run on `main`, finalize daily, and **publish in the same run** — a tag
 pushed with `GITHUB_TOKEN` triggers no other workflow, so a Release left to a tag-push
-workflow is never published. It reads and creates tags and never pushes a commit. The same
+workflow is never published. It reads and creates tags and writes no commit. The same
 file fits `trunk: main` and `trunk: dev` + `deploy: tag` (#429): on the latter `main` moves only
-when a human promotes, so the promotion's green CI run is the trigger, and the CLI cuts only when
-`main`'s head is a promotion of trunk — who may promote does not change.
+when trunk is promoted, so the promotion's green CI run is the trigger, and the CLI cuts only when
+`main`'s head is a promotion of trunk.
+
+**Who promotes is `promotion:`, and the release workflow honours it (#440).** Where a `deploy:
+tag` repo declares `promotion: main-loop`, the workflow's daily run first runs `colab promote
+--auto`: when trunk's head CI is green and trunk is ahead of `main`, it merges trunk into `main`
+(`--no-ff`) and pushes, then dispatches CI on `main` — a push made with `GITHUB_TOKEN` triggers
+no workflow, a `workflow_dispatch` is the documented exception — and that run's green completion
+cuts the candidate as it would for a human promotion. So a candidate needs no human; the final
+tag, which deploys, still does. This is the one cell where a scheduled caller may promote, and it
+is safe there for the reason the field already gives: on `deploy: tag` a promotion only runs the
+heavy suite on `main` and deploys nothing. Everywhere else `--auto` is a recorded no-op —
+`promotion: human` or absent, `deploy: push-main` (the promotion *is* the deploy), `manual` (it
+signals a human deploy), `none`, and `trunk: main` (nothing to promote). `COLAB_HUMAN` changes
+nothing in either direction: a workflow is not a human, and the grant is the descriptor's.
 
 **Never acts on an owner's branch.** On a repo declaring `owner:` (a repo the fleet does
 not own, #394), a scheduler may run `colab deliver --dry` and report its state, and nothing
@@ -3990,8 +4004,8 @@ nothing: the next promotion carries it, or a human cuts it by hand — a daily r
 tries to finalize clean candidates (`colab release finalize --auto`), and publishing happens
 inside the same run. It may do this unattended because both commands **refuse on any
 failed condition** — the route is the permission, the commands measure it, and a refusal
-is the workflow's whole output. Never `colab ship`, `colab promote` or `code-ship`, none of
-which tags. A candidate is cut by
+is the workflow's whole output. Never `colab ship` or `code-ship`, and `colab promote` only as
+`--auto` where `promotion: main-loop` grants it (*Scheduled drivers*) — none of them tags. A candidate is cut by
 [`colab release cut`](tools/README.md#release-cut-candidates) (#338), which measures the four
 conditions on the commit and refuses naming each one that fails; its next step is
 [`colab release finalize`](tools/README.md#release-finalize) (#339). The
