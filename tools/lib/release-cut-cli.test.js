@@ -369,6 +369,19 @@ test('refuses (#424): a manifest version that disagrees with the tag', () => {
   assert.strictEqual(ok.code, 0, ok.out + ok.err);
 });
 
+test('#438: version-source: tag — a VERSION that differs is derivable, the candidate is cut and the tag names it; manifest refuses as before', () => {
+  const fromTag = fixture({ projectYml: `${RELEASED_YML}release:\n  version-source: tag\n`, files: { VERSION: '0.0.0-dev\n' } });
+  const r = cut(fromTag);
+  assert.strictEqual(r.code, 0, r.out + r.err);
+  assert.strictEqual(r.body.tag, 'v1.2.1-rc.1');
+  assert.match(r.body.checks.find((c) => c.condition === 'manifest-version').detail, /derivable \(release\.version-source: tag.*\): VERSION/);
+  const message = fromTag.g('for-each-ref', '--format=%(contents)', 'refs/tags/v1.2.1-rc.1');
+  assert.match(message, /Derivable manifests \(release\.version-source: tag, not checked against the tag\): VERSION/);
+
+  const fromManifest = fixture({ projectYml: `${RELEASED_YML}release:\n  version-source: manifest\n`, files: { VERSION: '0.0.0-dev\n' } });
+  assertRefused(fromManifest, cut(fromManifest), 'manifest-version', /VERSION says 0\.0\.0-dev.*version-source: tag/);
+});
+
 test('refuses (#424): a version that does not outrank the highest final', () => {
   const fx = fixture();
   // A higher final exists off main (a hotfix line); the computed v1.2.1 would move "latest" backwards.

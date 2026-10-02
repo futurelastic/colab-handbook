@@ -1205,7 +1205,9 @@ Refuses, naming each failed condition (all are reported, not just the first):
   switch-dependencies  a colab:switch marker is malformed, or a finished switch needs one that is not
   manifest-version     the tag does not equal the version a manifest declares (VERSION, package.json,
                        Cargo.toml [package], pyproject.toml [project]/[tool.poetry]) — none declared
-                       passes: the tag is the version (#424)
+                       passes: the tag is the version (#424). With release.version-source: tag (#438)
+                       a differing manifest is DERIVABLE — skipped, named in the tag message, and
+                       stamped from the tag by the repo's own release step (never on trunk)
   on-trunk             the commit is not an ancestor of main, or the checkout is shallow (#424)
   outranks-final       the version is not strictly greater than the highest final tag (#424)
 
@@ -1312,7 +1314,10 @@ function measureCandidateConditions(repoAbs, { sha, lastFinal, at, readRuns, iss
   const schema = changes === null
     ? { ok: false, detail: 'git diff failed — schema changes cannot be read' }
     : releaseCut.schemaVerdict(changes, lastFinal || 'the first commit', declared);
-  return { ci, suite, schema, switches, issues };
+  // #441: every migration file since the last final, destructive or not — an operator-granted
+  // automatic final refuses an ungranted one (release-finalize.js migrationGrantVerdict).
+  const migrations = changes === null ? null : changes.filter((c) => releaseCut.isMigrationPath(c.path, declared)).map((c) => c.path);
+  return { ci, suite, schema, switches, issues, migrations };
 }
 
 /**
@@ -1582,7 +1587,7 @@ under CONVENTIONS.md §6's release rung, re-checking everything at the moment it
 
 Conditions (--json checks[].condition; required:false means reported, not blocking, on this row):
   release-policy  candidate  tracking-issue  release-hold  regressions  test-period  trunk-green
-  ci-green  full-suite  schema-additive  switch-dependencies  human
+  ci-green  full-suite  schema-additive  switch-dependencies  final-grant  migration-grant  human
 
   regressions   blocked_by edges on the tracking issue: open -> refused; closed after the period
                 began -> needs-new-candidate. Record one with: colab blocked <tracking> --by <issue>
@@ -1592,7 +1597,15 @@ Conditions (--json checks[].condition; required:false means reported, not blocki
 
   manifest-version  on-trunk  outranks-final — #424's pre-tag checks, required before any final:
                 the final equals every declared manifest version, its commit is on main (a shallow
-                checkout refuses), and it outranks the highest final tag
+                checkout refuses), and it outranks the highest final tag. With release.version-source:
+                tag (#438) a manifest that differs is skipped as derivable and named, not refused
+
+  final-grant  migration-grant — #441, only where release.final-grant lets a deploy-tag final be
+                automatic: the decision issue it names must still carry a recorded, trusted, not
+                reopened ruling, and every migration file since the last final needs a grant on the
+                version's tracking issue (COLAB_HUMAN=1 colab migration-grant <tracking> --branch
+                vX.Y.Z). Either failing takes the automatic final away — the run stops at
+                candidate-ready and hands over the human command; it never refuses the release
 
   --auto              the release workflow's mode (#423). Where the final is automatic, walk the open
                       candidates newest-first and finalize the newest one whose OWN test period
@@ -1609,7 +1622,8 @@ Conditions (--json checks[].condition; required:false means reported, not blocki
   --json              { repo, row, route, final, testPeriodDays, lastFinal, dry, auto, candidate, tracking,
                         periodStart, periodEndsAt, state, tagged, finalTag, checks, handoff,
                         skipped (--auto: [{tag, state, detail?}] — the other open candidates),
-                        announced (null, or {range, issues, posted, skipped} — the "Released in" comments) }
+                        announced (null, or {range, issues, posted, skipped} — the "Released in" comments),
+                        grant (null, or {issue, ruledBy} — the operator grant that made this final automatic) }
 
 Needs origin and gh (the tracking issue, runs and edges live on GitHub). Never cuts a candidate, never
 a major, never removes a label or an edge. Exit 0 when finalized (or would be) or candidate-ready; 1
@@ -1702,6 +1716,15 @@ function cmdReleaseFinalize(argv) {
     else { trackings.set(version0, { number: Number(m[1]), url: (c.stdout || '').trim(), createdAt: now, held: false }); trackingCreated = true; }
   }
 
+  // #441: an operator-granted automatic final — the decision it names is resolved once per run, from
+  // the tracker, against trunk's trust-humans (never a branch's), and re-read on every run: a
+  // reopened decision or a deleted grant line revokes it at the next finalize.
+  const grantDecl = policy.effective.finalGrant;
+  const trust = grantDecl ? trustAt(repoAbs, `${remote}/main`) : null;
+  const finalGrant = grantDecl
+    ? releasePolicy.finalGrantVerdict(git.ghIssueView(repoAbs, grantDecl.issue, ['state', 'labels', 'comments']), { issue: grantDecl.issue, trust })
+    : undefined;
+
   // ---- judge one candidate: every condition at its commit, its own period, its own trunk window ----
   const judge = (cand, sel) => {
     if (!trackings.has(cand.version)) trackings.set(cand.version, trackingFor(cand.version, { isCandidate: true }));
@@ -1724,10 +1747,19 @@ function cmdReleaseFinalize(argv) {
     });
     const regressions = releaseFinalize.regressionVerdict(tracking && tracking.number ? readRegressionEdges(repoAbs, tracking.number) : [], { periodStart: period.start });
     const { manifests, ancestry } = measurePreTag(repoAbs, cand.sha, `${remote}/main`); // #424
+    let migrations;
+    if (grantDecl) {
+      // #441: a migration since the last final needs a grant on THIS version's tracking issue.
+      const rec = tracking && tracking.number ? git.ghIssueView(repoAbs, tracking.number, ['state', 'labels', 'comments']) : null;
+      const mg = tracking && tracking.number
+        ? migrationGrant.evaluateIssue(rec, cand.version, tracking.number, labels.MIGRATION_GRANT_LABEL, { trust })
+        : { ok: false, reason: 'no tracking issue yet to carry a grant' };
+      migrations = releaseFinalize.migrationGrantVerdict({ paths: conditions.migrations, grant: mg, since: releaseTag.latestReleaseTag(repoAbs, { ref: cand.sha }) });
+    }
     const verdict = releaseFinalize.decide({
       policy, selection: sel, tracking, supersededHeld, period, trunk, regressions,
       ci: conditions.ci, suite: conditions.suite, schema: conditions.schema, switches: conditions.switches,
-      manifests, ancestry, tags: tagNames,
+      manifests, ancestry, tags: tagNames, finalGrant, migrations,
       human: { bar: humanBar, answeredBy: opts.answeredBy || null },
     });
     return { candidate: cand, verdict, period, tracking };
@@ -1795,7 +1827,7 @@ function cmdReleaseFinalize(argv) {
   };
   if (!opts.dry) {
     if (verdict.state === 'finalized') {
-      const actor = humanBar ? `${opts.answeredBy} (human bar: COLAB_HUMAN=1)` : `automatic — clean test period (CONVENTIONS.md §6)${walk ? ', newest candidate clean on its own clock (--auto)' : ''}`;
+      const actor = humanBar && !verdict.grant ? `${opts.answeredBy} (human bar: COLAB_HUMAN=1)` : `automatic — clean test period (CONVENTIONS.md §6)${verdict.grant ? `, by the operator's grant (decision #${verdict.grant.issue})` : ''}${walk ? ', newest candidate clean on its own clock (--auto)' : ''}`;
       const message = releaseFinalize.tagMessage(verdict, { candidate: cand, period, actor });
       const t = git.git(['tag', '-a', '--cleanup=verbatim', cand.version, cand.sha, '-m', message], repoAbs);
       if (!t.ok) throw new UserError(`git tag ${cand.version} failed: ${(t.stderr || '').split('\n')[0]}`);
@@ -1855,7 +1887,7 @@ function cmdReleaseFinalize(argv) {
       lastFinal, dry: !!opts.dry, auto: !!opts.auto, candidate: cand, tracking: trackingOut,
       periodStart: period ? period.start : null, periodEndsAt: period ? period.endsAt : null,
       state: verdict.state, tagged, finalTag: verdict.finalTag, checks: verdict.checks, handoff: verdict.handoff,
-      skipped: walk ? skipped : undefined, announced,
+      skipped: walk ? skipped : undefined, announced, grant: verdict.grant || null,
     }, null, 2));
   } else {
     print(`colab release finalize${opts.auto ? ' --auto' : ''} — ${shortRepo(repoAbs)} (last final: ${lastFinal || 'none'}${cand ? `, candidate: ${cand.tag}` : ''})`);
