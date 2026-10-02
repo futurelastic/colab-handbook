@@ -172,6 +172,37 @@ test('auto row: --dry writes nothing; a run opens ONE tracking issue and tests; 
   assert.strictEqual(tracking(fx).length, 1);
 });
 
+test('#426: the final tells every issue it carries "Released in vX.Y.Z" — once, and a resume finishes it', () => {
+  const fx = fixture();
+  writeState(fx, (s) => {
+    for (const n of [7, 8]) s.issues.push({ number: n, title: `bug ${n}`, body: '', state: 'CLOSED', stateReason: 'COMPLETED', labels: [], createdAt: ago(10), url: 'https://github.com/o/r/issues/' + n, comments: [] });
+  });
+  commit(fx, 'a.txt', 'fix: first bug\n\nCloses #7');
+  commit(fx, 'b.txt', 'fix: second bug\n\nFixes: #8\nCloses #9');
+  cutCandidate(fx, 5);
+  assert.strictEqual(finalize(fx).body.state, 'testing');
+  ageTracking(fx, 4);
+  writeState(fx, (s) => { for (const n of [7, 8]) s.issues.find((i) => i.number === n).createdAt = ago(10); });
+
+  const done = finalize(fx);
+  assert.strictEqual(done.body.state, 'finalized', done.out + done.err);
+  assert.deepStrictEqual(done.body.announced.issues, [7, 8, 9]);
+  assert.deepStrictEqual(done.body.announced.posted, [7, 8]);
+  assert.deepStrictEqual(done.body.announced.skipped, [9], 'an issue the tracker cannot read is reported, not fatal');
+  const said = (n) => readState(fx).issues.find((i) => i.number === n).comments.filter((c) => c.body.includes('<!-- colab:release-event released=v1.2.1 -->'));
+  assert.strictEqual(said(7).length, 1);
+  assert.match(said(8)[0].body, /Released in \*\*v1\.2\.1\*\*/);
+  assert.strictEqual(tracking(fx)[0].comments.filter((c) => /Released in/.test(c.body)).length, 0, 'the tracking record is not something the release carries');
+
+  // Resume: reopen the record as if the run had died after the tag push — nothing is posted twice.
+  writeState(fx, (s) => { for (const i of s.issues) if (/colab:release version=/.test(i.body)) i.state = 'OPEN'; });
+  const resumed = finalize(fx);
+  assert.strictEqual(resumed.body.state, 'already-final');
+  assert.deepStrictEqual(resumed.body.announced.posted, []);
+  assert.strictEqual(said(7).length, 1);
+  assert.strictEqual(said(8).length, 1);
+});
+
 test('auto row: release-hold stops the final — no tag reaches origin, the label stays', () => {
   const fx = fixture();
   cutCandidate(fx, 5);

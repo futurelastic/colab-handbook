@@ -1129,8 +1129,10 @@ through `colab release finalize`, resumes from its publish-and-reconcile step.
 ### Release finalize
 
 `colab release finalize [--repo P] [--auto | --tag vX.Y.Z-rc.N [--answered-by N]] [--dry] [--json]` (#339)
-takes the newest candidate one step further under §6's release rung, and is run — repeatedly — by
-the [`release-rung`](../skills/release-rung/SKILL.md) skill in a coordinator session. There is no
+takes the newest candidate one step further under §6's release rung. It is run — repeatedly — by
+the release workflow ([`templates/release-auto.yml`](../templates/release-auto.yml), `--auto`, daily);
+the [`release-rung`](../skills/release-rung/SKILL.md) skill is the manual fallback that runs the same
+commands from a coordinator session when that workflow cannot (#426). There is no
 daemon: every run re-measures from git and GitHub, and the decision is `tools/lib/release-finalize.js`
 (pure). Every run ends in exactly one `state`:
 
@@ -1143,7 +1145,7 @@ daemon: every run re-measures from git and GitHub, and the decision is `tools/li
 | `needs-new-candidate` | a regression was fixed after the period began, or (automatic-final row) trunk went red during it | 1 |
 | `refused` | a required check failed that a later run may clear | 1 |
 | `candidate-ready` | the final is a human act here: nothing tagged; `handoff` is the one command, also posted on the tracking issue | 0 |
-| `finalized` | an annotated `vX.Y.Z` is tagged on the candidate's commit and pushed, and the tracking issue closed (with `--dry`: would be) | 0 |
+| `finalized` | an annotated `vX.Y.Z` is tagged on the candidate's commit and pushed, the tracking issue closed, and every issue the version carries told `Released in vX.Y.Z` (with `--dry`: would be) | 0 |
 
 **The per-candidate state contract** — stable; `futurelastic/hangar#125` reads it:
 
@@ -1165,6 +1167,14 @@ daemon: every run re-measures from git and GitHub, and the decision is `tools/li
 - **Events** are comments carrying `<!-- colab:release-event … -->` markers, each posted once:
   `candidate=<rc>` (the period starts), `state=candidate-ready candidate=<rc>` (carries the
   handoff), `state=finalized tag=<vX.Y.Z>`, `state=superseded by=<vX.Y.Z>`.
+- **Released-in (#426):** once a final is tagged, every issue the version *carries* gets one
+  comment `Released in **vX.Y.Z**`, marked `<!-- colab:release-event released=vX.Y.Z -->`.
+  "Carries" is read from git, not the tracker: each GitHub closing keyword (`Closes`/`Fixes`/
+  `Resolves #N`, any tense, optional colon) in a commit message in `(previous final, final]`,
+  tracking issues excluded. The first version (no previous final) announces nothing rather than
+  every issue ever closed. An `already-final` run finishes a set a crashed run left half-posted; the
+  marker keeps every re-run from posting twice. `--json` reports it as `announced`
+  (`{range, issues, posted, skipped}` — `skipped` is an issue the tracker could not read).
 
 | condition | what it checks | blocks |
 |---|---|---|

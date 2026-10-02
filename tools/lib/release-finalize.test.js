@@ -299,3 +299,29 @@ test('decide: each pre-tag check refuses a final under its own name', () => {
   assert.strictEqual(back.state, 'refused');
   assert.deepStrictEqual(name(back), ['outranks-final']);
 });
+
+// ---- announcing the final (#426) ----------------------------------------------------------------
+
+test('carriedIssues: every GitHub closing keyword, deduplicated and sorted, tracking issues excluded', () => {
+  const msgs = [
+    'fix: a bug (#40)\n\nCloses #12',
+    'feat: thing\n\nFixes: #3\nresolved #12\nRefs #77',
+    'chore: release record\n\nCloses #100',
+    '',
+  ];
+  assert.deepStrictEqual(rf.carriedIssues(msgs, { exclude: [100] }), [3, 12]);
+  assert.deepStrictEqual(rf.carriedIssues(['docs: mentions #5 and (#6)']), [], 'a bare reference is not carried — only what trunk closed');
+});
+
+test('previousFinal: the highest final strictly below the version, never a candidate', () => {
+  const tags = ['v1.1.0', 'v1.2.0', 'v1.2.1-rc.1', 'v1.3.0', 'v1.2.1'];
+  assert.strictEqual(rf.previousFinal(tags, 'v1.3.0'), 'v1.2.1');
+  assert.strictEqual(rf.previousFinal(tags, 'v1.1.0'), null);
+});
+
+test('releasedComment: carries the per-version event marker hasEvent finds', () => {
+  const body = rf.releasedComment('v1.3.0', 'abcdef1234567');
+  assert.match(body, /Released in \*\*v1\.3\.0\*\* \(`abcdef1`\)/);
+  assert.ok(rf.hasEvent([{ body }], rf.releasedEvent('v1.3.0')));
+  assert.ok(!rf.hasEvent([{ body }], rf.releasedEvent('v1.3.1')));
+});
