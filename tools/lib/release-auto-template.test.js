@@ -247,7 +247,9 @@ test('own copy: cut, finalize and publish are the template\'s steps verbatim', (
 });
 
 test('own copy: no job-level if — a red CI run is gated in a step, so the run never concludes skipped', () => {
-  assert.doesNotMatch(OWN, /^ {4}if:/m);
+  // Only the `release` job: the npm jobs (#434) are skipped by a job-level `if:` on purpose — the
+  // run still concludes success through `release`, so no skipped row can keep a sha red.
+  assert.doesNotMatch(OWN.slice(0, OWN.indexOf('\n  npm:')), /^ {4}if:/m);
   assert.match(OWN, /if: steps\.gate\.outputs\.cut == 'true'/);
   const gate = stepScript('Gate on the triggering CI run', OWN);
   const run = (env) => {
@@ -260,6 +262,13 @@ test('own copy: no job-level if — a red CI run is gated in a step, so the run 
   assert.deepStrictEqual(run({ EVENT: 'workflow_run', CONCLUSION: 'failure', HEAD_SHA: 'abc' }), { status: 0, out: 'cut=false\n' });
   assert.deepStrictEqual(run({ EVENT: 'workflow_run', CONCLUSION: 'success', HEAD_SHA: 'abc' }), { status: 0, out: 'cut=true\n' });
   assert.deepStrictEqual(run({ EVENT: 'schedule', CONCLUSION: '', HEAD_SHA: '' }), { status: 0, out: 'cut=true\n' });
+});
+
+test("own copy: the npm target and publish steps are the template's, and the job runs on a GitHub-hosted runner (#434)", () => {
+  assert.strictEqual(stepScript('Read the npm target (colab release npm)', OWN), stepScript('Read the npm target (colab release npm)'));
+  assert.strictEqual(stepScript('Publish each tag (npm publish --provenance)', OWN), stepScript('Publish each tag (npm publish --provenance)'));
+  assert.match(OWN, /\n  npm:\n[\s\S]*?runs-on: ubuntu-latest[\s\S]*?id-token: write/);
+  assert.doesNotMatch(OWN.split('\n').filter((l) => !/^\s*#/.test(l)).join('\n'), /^\s*(NODE_AUTH_TOKEN|NPM_TOKEN):|\$\{\{\s*secrets\./m);
 });
 
 test('own copy: the self-audit reads it as a release-auto workflow with nothing to warn about', () => {

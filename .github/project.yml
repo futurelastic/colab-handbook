@@ -117,6 +117,8 @@ release:
   candidates: auto
   test-period: 3d
   final: auto
+  npm: .
+  npm-gate: node scripts/check-pack-allowlist.mjs
 
 # Granted 2026-08-14 (#224), by the operator, after the matrix cell above it was
 # corrected — `serial-direct` + `auto-trunk` was forbidden until that ruling.
