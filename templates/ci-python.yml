@@ -57,6 +57,9 @@ on:
     # EDIT: keep only the branches this repo actually has (Tier A and C: dev is the
     # trunk, main the release; Tier B: main only).
     branches: [main, dev]
+  # A promotion pushed by the release workflow's token triggers no push run, so that workflow
+  # dispatches this one on main instead (templates/release-auto.yml, #440). Harmless elsewhere.
+  workflow_dispatch:
 
 # One live run per branch: a new push cancels the superseded run on the same ref.
 # Trunk is NEVER cancelled — every trunk sha keeps a completed run of its own, which

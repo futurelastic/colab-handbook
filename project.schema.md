@@ -1041,7 +1041,11 @@ tag wherever the tag deploys production.
 - `human` (or absent) — promotion needs `COLAB_HUMAN=1`.
 - `main-loop` — the main loop may promote unattended, **but only on a
   `deploy: tag` repo**, where promotion is verification-only (main runs the heavy
-  suite; nothing deploys).
+  suite; nothing deploys). The release workflow
+  ([`templates/release-auto.yml`](templates/release-auto.yml)) acts on it too (#440):
+  its daily run runs `colab promote --auto`, which promotes a green trunk that is
+  ahead of `main` and dispatches CI there, so the candidate is cut with no human
+  step. The final tag stays a human click. Without this value, `--auto` is a no-op.
 
 Unknown values fail closed to `human`. This field **cannot** lower the bar set by
 `deploy:` — on a `deploy: push-main` repo promotion *is* the production deploy, and

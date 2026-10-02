@@ -13087,10 +13087,23 @@ step, because finishing it does not finish the job.
 
 Preconditions (✓/✗): trunk CI green · trunk == origin/trunk · main == origin/main · main checkout usable.
 
+--auto (#440) — the release workflow's unattended mode (templates/release-auto.yml, on its schedule).
+  Promotes ONLY where deploy: tag AND promotion: main-loop; everywhere else — trunk: main, deploy
+  push-main / manual / none, promotion human — it is a no-op, exit 0. COLAB_HUMAN is ignored in both
+  directions: it never makes a repo eligible, and an eligible repo never needs it. Also a no-op when
+  origin/trunk has nothing origin/main lacks. Adds one precondition (trunk ahead of main) and, on a
+  checkout with no local trunk branch (a runner that checked out main), creates it at origin/trunk.
+  It never tags: the promotion's green CI run on main is what cuts the candidate.
+
 Options:
   --repo <path>     repo root (default: git root of cwd)
   --message "<msg>" full override of the merge commit message (default: the release: line)
   --dry             print the precondition table + plan; change nothing
+  --auto            unattended mode, above
+  --json            one verdict object on stdout, human lines on stderr:
+                    { ok, promoted, noop, auto, dry, reason, from, into, deploy, promotion,
+                      checks: [{condition, ok, detail}], sha }
+                    Exit 0 when promoted, ready (--dry) or a no-op; 1 on any refusal.
 `;
 
 // The post-promotion notice for `deploy: manual`, as an array of lines (pure — testable).
@@ -13137,9 +13150,11 @@ function manualDeployBlock(runbookRaw, mainName) {
 function cmdPromote(argv) {
   const opts = parseArgs(argv, {
     values: { '--repo': 'repo', '--message': 'message' },
-    flags: { '--dry': 'dry', '-h': 'help', '--help': 'help' },
+    flags: { '--dry': 'dry', '--auto': 'auto', '--json': 'json', '-h': 'help', '--help': 'help' },
   });
   if (opts.help) return print(HELP_PROMOTE);
+  // --json: stdout carries ONE verdict object; every human line goes to stderr instead (#440).
+  const say = opts.json ? (s) => process.stderr.write(`${s}\n`) : print;
   const repoAbs = resolveRepo(opts);
   if (!git.repoRoot(repoAbs)) throw new UserError(`${repoAbs} is not a git repo`);
   const doc = projectDoc(repoAbs);
@@ -13150,24 +13165,53 @@ function cmdPromote(argv) {
   // No colab command moves it — and COLAB_HUMAN does not lower that: the owner merges a PR.
   assertNotOwnerBranch(repoAbs, MAIN);
 
-  // Tier B: trunk IS main → there is no promotion to run.
-  if (trunk === MAIN) {
-    process.stderr.write(`✗ ${shortRepo(repoAbs)}: trunk is "main" (Tier B) — no promotion exists on this repo. Ship goes straight to main.\n`);
-    return 1;
-  }
-
   const deploy = doc.deploy ? String(doc.deploy) : '';
   const promotion = doc.promotion === 'main-loop' ? 'main-loop' : 'human'; // fail-closed on unknown
   const human = process.env.COLAB_HUMAN === '1';
   const deployIsTag = deploy === 'tag';
 
+  // --auto (#440): the release workflow's unattended mode. Every refusal and no-op is a VERDICT —
+  // `{ ok, promoted, noop, reason, checks }` under --json — so a scheduled run records it and stays
+  // green; only a run that produced no verdict fails. The descriptor alone decides: COLAB_HUMAN is
+  // ignored here in BOTH directions — it never makes an ineligible repo eligible (a workflow is no
+  // human), and an eligible repo never needs it.
+  const verdict = (v) => {
+    const out = { ok: v.ok, promoted: !!v.promoted, noop: !!v.noop, auto: !!opts.auto, dry: !!opts.dry,
+      reason: v.reason || null, from: trunk, into: MAIN, deploy: deploy || null, promotion,
+      checks: v.checks || [], sha: v.sha || null };
+    if (opts.json) process.stdout.write(`${JSON.stringify(out, null, 2)}\n`);
+    return v.code;
+  };
+  const toChecks = (rows) => rows.map((c) => ({ condition: c[1], ok: c[0] === '✓', detail: c[2] }));
+
+  // Tier B: trunk IS main → there is no promotion to run.
+  if (trunk === MAIN) {
+    if (opts.auto) {
+      say(`– ${shortRepo(repoAbs)}: trunk is "main" — no promotion exists on this repo; nothing to do.`);
+      return verdict({ ok: true, noop: true, reason: 'trunk is main — no promotion exists', code: 0 });
+    }
+    process.stderr.write(`✗ ${shortRepo(repoAbs)}: trunk is "main" (Tier B) — no promotion exists on this repo. Ship goes straight to main.\n`);
+    return verdict({ ok: false, reason: 'trunk is main — no promotion exists', code: 1 });
+  }
+
   // ---- GATE (returns before any table, like ship's autonomy gate) ----
-  if (deployIsTag) {
+  if (opts.auto) {
+    // Unattended promotion exists in exactly one cell: deploy: tag (promotion verifies, deploys
+    // nothing) AND promotion: main-loop (the repo granted it). Anywhere else nothing promotes — a
+    // no-op, not a refusal: the same workflow file runs on every repo shape.
+    if (!deployIsTag || promotion !== 'main-loop') {
+      const why = !deployIsTag
+        ? `deploy=${deploy || '(absent)'} — only deploy: tag makes promotion verification-only; promotion stays human here`
+        : `promotion=${doc.promotion ? promotion : 'human (default)'} — this repo has not granted promotion: main-loop`;
+      say(`– ${shortRepo(repoAbs)}: no unattended promotion: ${why}.`);
+      return verdict({ ok: true, noop: true, reason: why, code: 0 });
+    }
+  } else if (deployIsTag) {
     // verification-only promotion: main-loop may run it, else a human must.
     if (promotion !== 'main-loop' && !human) {
       process.stderr.write(`✗ ${shortRepo(repoAbs)}: promotion=${doc.promotion ? promotion : 'human (default)'} — a human must promote ${trunk}→main.\n`);
       process.stderr.write('  Re-run with COLAB_HUMAN=1, or set project.yml promotion: main-loop (deploy is by tag, so promotion is verification-only).\n');
-      return 1;
+      return verdict({ ok: false, reason: 'a human must promote', code: 1 });
     }
   } else {
     // push-main (or unknown/absent) → promoting main is a production deploy → human required, always.
@@ -13179,7 +13223,7 @@ function cmdPromote(argv) {
           : `deploy=${deploy || '(absent)'} — promoting ${trunk}→main may deploy to production (fail-closed)`;
       process.stderr.write(`✗ ${shortRepo(repoAbs)}: ${why}.\n`);
       process.stderr.write('  This requires a human: re-run with COLAB_HUMAN=1. (No field or flag can lower this bar.)\n');
-      return 1;
+      return verdict({ ok: false, reason: why, code: 1 });
     }
   }
 
@@ -13188,6 +13232,21 @@ function cmdPromote(argv) {
   const checks = [];
   const remote = git.remoteFor(repoAbs); // #301
   git.git(['fetch', remote, trunk, MAIN], repoAbs); // best-effort: refresh both refs before comparing
+  // #440: a release-workflow runner checks out main alone, so there is no local trunk branch to
+  // merge. --auto creates it at the just-fetched remote tip — a new local ref, nothing moved, and
+  // the sync check below still compares the two. An EXISTING local trunk is never touched here.
+  if (opts.auto && !git.git(['rev-parse', '--verify', '--quiet', `refs/heads/${trunk}`], repoAbs).ok
+    && git.git(['rev-parse', '--verify', '--quiet', `${remote}/${trunk}`], repoAbs).ok) {
+    git.git(['branch', trunk, `${remote}/${trunk}`], repoAbs);
+  }
+
+  // #440: is there anything to promote? Read on the remote refs — what main would actually gain.
+  const aheadRead = git.git(['rev-list', '--count', `${remote}/${MAIN}..${remote}/${trunk}`], repoAbs);
+  const ahead = aheadRead.ok ? Number(aheadRead.stdout) : null;
+  if (opts.auto && ahead === 0) {
+    say(`– ${shortRepo(repoAbs)}: ${remote}/${trunk} has nothing ${remote}/${MAIN} lacks — nothing to promote.`);
+    return verdict({ ok: true, noop: true, reason: `${trunk} is not ahead of ${MAIN}`, code: 0 });
+  }
 
   let ciOk = false;
   if (!gh) checks.push(['✗', 'trunk CI green', `gh not usable (${ghUnusableWhy(repoAbs)}) — cannot confirm CI`]);
@@ -13222,14 +13281,19 @@ function cmdPromote(argv) {
   }
   checks.push([checkoutOk ? '✓' : '✗', 'main checkout usable', checkoutDetail]);
 
-  const preOk = ciOk && trunkSyncOk && mainSyncOk && checkoutOk;
+  if (opts.auto) {
+    checks.push([ahead > 0 ? '✓' : '✗', `${trunk} ahead of ${MAIN}`,
+      ahead > 0 ? `${ahead} commit(s) to promote` : `could not count ${remote}/${MAIN}..${remote}/${trunk}`]);
+  }
+
+  const preOk = ciOk && trunkSyncOk && mainSyncOk && checkoutOk && (!opts.auto || ahead > 0);
 
   // ---- report ----
-  print(`promote ${shortRepo(repoAbs)} · ${trunk} → ${MAIN}` + (opts.dry ? '  [DRY RUN]' : ''));
-  print(`  deploy: ${deploy || '(absent)'} · promotion: ${promotion}${human ? ' · COLAB_HUMAN=1' : ''}`);
-  print('');
-  print(table(checks.map((c) => [c[0], c[1], c[2]]), ['', 'PRECONDITION', 'DETAIL']));
-  print('');
+  say(`promote ${shortRepo(repoAbs)} · ${trunk} → ${MAIN}` + (opts.dry ? '  [DRY RUN]' : ''));
+  say(`  deploy: ${deploy || '(absent)'} · promotion: ${promotion}${human ? ' · COLAB_HUMAN=1' : ''}`);
+  say('');
+  say(table(checks.map((c) => [c[0], c[1], c[2]]), ['', 'PRECONDITION', 'DETAIL']));
+  say('');
 
   const nextRelease = deployIsTag
     ? `  Release is a SEPARATE human step: git tag vX.Y.Z && git push ${remote} vX.Y.Z`
@@ -13238,12 +13302,15 @@ function cmdPromote(argv) {
       : '  (deploy: push-main — this promotion IS the deploy; there is no separate tag step)';
 
   if (opts.dry) {
-    print(preOk ? '→ READY: preconditions pass. Re-run without --dry to promote.' : '→ NOT READY: fix the ✗ rows above.');
-    print(`  Plan: git merge --no-ff ${trunk} into ${MAIN} · push ${MAIN} (COLAB_PROMOTE=1)`);
-    print(nextRelease);
-    return preOk ? 0 : 1;
+    say(preOk ? '→ READY: preconditions pass. Re-run without --dry to promote.' : '→ NOT READY: fix the ✗ rows above.');
+    say(`  Plan: git merge --no-ff ${trunk} into ${MAIN} · push ${MAIN} (COLAB_PROMOTE=1)`);
+    say(nextRelease);
+    return verdict({ ok: preOk, reason: preOk ? null : 'a precondition failed', checks: toChecks(checks), code: preOk ? 0 : 1 });
   }
-  if (!preOk) { process.stderr.write('✗ Aborting: one or more preconditions failed (see ✗ above). Nothing was pushed.\n'); return 1; }
+  if (!preOk) {
+    process.stderr.write('✗ Aborting: one or more preconditions failed (see ✗ above). Nothing was pushed.\n');
+    return verdict({ ok: false, reason: 'a precondition failed', checks: toChecks(checks), code: 1 });
+  }
 
   // ---- ACTION: merge --no-ff trunk → main, push main (never tag, never anything else) ----
   let mainDir = useRepoDir ? repoAbs : null, ephemeral = false;
@@ -13264,9 +13331,9 @@ function cmdPromote(argv) {
   let acquiredTrunkPlace = false;
   if (!ephemeral) {
     const syncProblem = place.syncedStateProblem(state.COLAB_DIR);
-    if (syncProblem) { process.stderr.write(`✗ ${syncProblem}\n`); return 1; }
+    if (syncProblem) { process.stderr.write(`✗ ${syncProblem}\n`); return verdict({ ok: false, reason: syncProblem, checks: toChecks(checks), code: 1 }); }
     const loadedPlace = placeState('promote into the main checkout');
-    if (!loadedPlace.ok) { process.stderr.write(`✗ ${loadedPlace.message}\n`); return 1; }
+    if (!loadedPlace.ok) { process.stderr.write(`✗ ${loadedPlace.message}\n`); return verdict({ ok: false, reason: loadedPlace.message, checks: toChecks(checks), code: 1 }); }
     // #288: resolved once, reused for the write below too — no --pid flag on `promote` itself, but
     // COLAB_PLACE_PID and the same agent-session auto-detection still apply.
     const anchor = resolvePlaceAnchor(opts);
@@ -13278,10 +13345,10 @@ function cmdPromote(argv) {
       process.stderr.write('  Never --force here: a live foreign hold on the main checkout stays behind the same\n');
       process.stderr.write('  human bar as everywhere else in Place-claims. Wait for it to clear, or once you have\n');
       process.stderr.write(`  confirmed that session is gone: ${placeCls.remedy}\n`);
-      return 1;
+      return verdict({ ok: false, reason: `main checkout held: ${placeCls.cls}`, checks: toChecks(checks), code: 1 });
     }
     if (placeCls.cls === 'own') {
-      print(`  main checkout already held by this session ("${place.holderLabel(placeCls.rec)}", ` +
+      say(`  main checkout already held by this session ("${place.holderLabel(placeCls.rec)}", ` +
         `held ${place.holdAge(placeCls.rec)}) — left in place, not re-taken, and not released at the end.`);
     } else {
       warnWeakIdentity(promoteSession, promoteSessionName, 'trunk-checkout place-claim', null);
@@ -13291,7 +13358,7 @@ function cmdPromote(argv) {
       });
       // #285: a new exit path — `ephemeral` is false in this branch, so there is no worktree to tear
       // down here (`cleanup` below is defined after this point and owns that for every later exit).
-      if (!written.ok) { process.stderr.write(`✗ ${written.message}\n`); return 1; }
+      if (!written.ok) { process.stderr.write(`✗ ${written.message}\n`); return verdict({ ok: false, reason: written.message, checks: toChecks(checks), code: 1 }); }
       acquiredTrunkPlace = true;
     }
   }
@@ -13303,39 +13370,42 @@ function cmdPromote(argv) {
     }
   };
 
-  const msg = opts.message || `release: ${trunk} → main — ${today()} (promotion via colab promote)`;
-  print(`merge --no-ff ${trunk} → ${MAIN} …`);
+  const msg = opts.message || `release: ${trunk} → main — ${today()} (promotion via colab promote${opts.auto ? ' --auto, unattended' : ''})`;
+  say(`merge --no-ff ${trunk} → ${MAIN} …`);
   const merge = git.run('git', ['merge', '--no-ff', trunk, '-m', msg], { cwd: mainDir });
   if (!merge.ok) {
     git.git(['merge', '--abort'], mainDir); cleanup();
     process.stderr.write(`✗ merge --no-ff failed: ${merge.stderr.split('\n')[0]}. Nothing pushed.\n`);
-    return 1;
+    return verdict({ ok: false, reason: `merge --no-ff failed: ${merge.stderr.split('\n')[0]}`, checks: toChecks(checks), code: 1 });
   }
-  const sha = git.git(['rev-parse', '--short', 'HEAD'], mainDir).stdout;
+  const fullSha = git.git(['rev-parse', 'HEAD'], mainDir).stdout;
+  const sha = shortSha(fullSha);
 
-  print(`push ${MAIN} …`);
+  say(`push ${MAIN} …`);
   assertNotOwnerBranch(repoAbs, MAIN); // #394
   const push = git.run('git', ['push', remote, MAIN], { cwd: mainDir, env: { ...process.env, COLAB_PROMOTE: '1' } });
   if (!push.ok) {
     cleanup();
     process.stderr.write(`✗ push failed: ${push.stderr.split('\n')[0]}. main merged locally at ${sha} but NOT pushed — resolve and push by hand (COLAB_HUMAN=1).\n`);
-    return 1;
+    return verdict({ ok: false, reason: `push failed: ${push.stderr.split('\n')[0]}`, checks: toChecks(checks), code: 1 });
   }
   cleanup();
 
-  print('');
-  print(`✓ Promoted ${trunk} → ${MAIN} @ ${sha}`);
+  say('');
+  say(`✓ Promoted ${trunk} → ${MAIN} @ ${sha}`);
 
   if (deploy === 'manual') {
-    manualDeployBlock(doc.runbook, MAIN).forEach(print);
-    return 0;
+    manualDeployBlock(doc.runbook, MAIN).forEach(say);
+    return verdict({ ok: true, promoted: true, checks: toChecks(checks), sha: fullSha, code: 0 });
   }
 
-  print(deployIsTag
+  say(deployIsTag
     ? '  main CI now runs the heavy verification suite (no deploy — deploy is by tag).'
     : '  main push will now DEPLOY to production (deploy: push-main).');
-  print(nextRelease);
-  return 0;
+  say(opts.auto
+    ? `  The candidate is the release workflow's: a green CI run on this ${MAIN} head cuts it (colab release cut --auto); the final tag stays a human click.`
+    : nextRelease);
+  return verdict({ ok: true, promoted: true, checks: toChecks(checks), sha: fullSha, code: 0 });
 }
 
 // ---------------------------------------------------------------------------

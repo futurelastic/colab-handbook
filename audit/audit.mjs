@@ -2490,7 +2490,8 @@ function checkPrereleaseTagTrigger(src, workflows, deploy, fail, warn) {
 //   2. it tags but publishes nothing itself while another workflow waits on the tag push — a tag
 //      pushed with GITHUB_TOKEN never triggers another workflow, so no Release ever appears;
 //   3. it commits or pushes something other than a tag — the release workflow reads and creates
-//      tags, never commits.
+//      tags, never commits. The one non-tag push it may make is a promotion, and only through
+//      `colab promote --auto` (#440), whose gate is the descriptor — never a hand-written push.
 // Warn, never fail: each is a judgement about a file the repo owns.
 const RELEASE_AUTO_RUN = /\brelease\s+(cut|finalize)\s+--auto\b/;
 function releaseAutoFindings({ readFile, workflows, cfg }) {
