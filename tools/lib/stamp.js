@@ -76,6 +76,16 @@ function gitIn(root, args) {
   }
 }
 
+/** `version` of `<root>/package.json` when this root is a published package (not a git checkout), else null. */
+function packageVersion(root) {
+  try {
+    const j = JSON.parse(require('fs').readFileSync(require('path').join(root, 'package.json'), 'utf8'));
+    return typeof j.version === 'string' && /^\d+\.\d+\.\d+$/.test(j.version) ? j.version : null;
+  } catch (_) {
+    return null;
+  }
+}
+
 /**
  * The handbook's own identity: { root, hasGit, untagged, version }.
  * Before the first tag exists the version is 'v0' and `untagged` is true, which DEACTIVATES stamp
@@ -95,6 +105,11 @@ function gitIn(root, args) {
 function handbookInfo(root) {
   const top = gitIn(root, ['rev-parse', '--show-toplevel']);
   if (!top.ok || realPath(top.out) !== realPath(require('path').resolve(root))) {
+    // An npm install (#431) has no git of its own: the registry copy's version is its package.json,
+    // which the publish job stamps from the release tag. Without this a copy installed from the
+    // registry would stamp every adopter's files `v0`.
+    const pkgVersion = packageVersion(root);
+    if (pkgVersion) return { root, hasGit: false, untagged: false, version: `v${pkgVersion}` };
     return { root, hasGit: false, untagged: true, version: 'v0' };
   }
   // Pre-release tags are not a version (#334): a candidate must never become what adopters are
