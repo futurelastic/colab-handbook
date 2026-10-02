@@ -87,8 +87,8 @@ test('green path: every check ok, tag is the next candidate', () => {
   const v = rc.decide(facts({ tags: ['v1.2.0', 'v1.2.1-rc.1'] }));
   assert.strictEqual(v.ok, true, JSON.stringify(v.refusals));
   assert.strictEqual(v.tag, 'v1.2.1-rc.2');
-  // `cadence` is reported only under --auto (#422).
-  assert.deepStrictEqual(v.checks.map((c) => c.condition), rc.CONDITIONS.filter((c) => c !== 'cadence'));
+  // `cadence` is reported only under --auto (#422); `promotion` only under --auto off trunk: main (#429).
+  assert.deepStrictEqual(v.checks.map((c) => c.condition), rc.CONDITIONS.filter((c) => c !== 'cadence' && c !== 'promotion'));
 });
 
 test('candidates off — derived (self) and narrowed (release: candidates: off) — refuse on release-policy', () => {
@@ -124,7 +124,7 @@ test('the tag message records the bump, the override reason and every condition'
   const msg = rc.tagMessage(v, { sha: 'abc123', lastFinal: 'v1.2.0' });
   assert.match(msg, /^v1\.2\.1-rc\.1 — release candidate/);
   assert.match(msg, /reason: adopters read the docs/);
-  for (const c of rc.CONDITIONS.filter((x) => x !== 'cadence')) assert.match(msg, new RegExp(`- ${c}: `));
+  for (const c of rc.CONDITIONS.filter((x) => x !== 'cadence' && x !== 'promotion')) assert.match(msg, new RegExp(`- ${c}: `));
 });
 
 // ---- full suite -------------------------------------------------------------------------------
@@ -216,13 +216,14 @@ test('switches: an unfinished dependent is fine (it ships dark); an undeclared d
 
 const CC = (counts, extra = {}) => ({ total: Object.values(counts).reduce((a, b) => a + b, 0), counts, breaking: false, ...extra });
 const noExports = { removed: [], detail: 'no export removed' };
-function autoFacts({ cc = CC({ fix: 1 }), guard = null, exports: ex = noExports, switchRemovals = [], migration, cadence, ...over } = {}) {
+function autoFacts({ cc = CC({ fix: 1 }), guard = null, exports: ex = noExports, switchRemovals = [], migration, cadence, promotion = null, ...over } = {}) {
   return facts({
     suggestion: null,
     auto: {
       signals: rc.autoSignals({ cc, guard, exports: ex, switchRemovals }),
       migration: migration || ((v) => ({ ok: false, section: null, detail: `no MIGRATION.md for ${v}` })),
       cadence: cadence || { ok: true, detail: 'uncapped' },
+      promotion,
     },
     ...over,
   });
@@ -323,6 +324,74 @@ test('switchRemovalsSince: only role=remove children closed done after the last 
     { number: 4, state: 'CLOSED', stateReason: 'COMPLETED', closedAt: '2026-09-10T00:00:00Z', body: '<!-- colab:switch name=y role=add -->' },
   ];
   assert.deepStrictEqual(rc.switchRemovalsSince(issues, '2026-09-01T00:00:00Z'), [{ number: 1, name: 'nav' }]);
+});
+
+test('switchRemovalsSince { only } (#429): carried removals count whatever their close date; uncarried ones never', () => {
+  const issues = [
+    { number: 1, state: 'CLOSED', stateReason: 'COMPLETED', closedAt: '2026-08-01T00:00:00Z', body: '<!-- colab:switch name=nav role=remove -->' },
+    { number: 2, state: 'CLOSED', stateReason: 'COMPLETED', closedAt: '2026-09-10T00:00:00Z', body: '<!-- colab:switch name=old role=remove -->' },
+  ];
+  assert.deepStrictEqual(rc.switchRemovalsSince(issues, '2026-09-01T00:00:00Z', { only: new Set([1]) }), [{ number: 1, name: 'nav' }]);
+  assert.deepStrictEqual(rc.switchRemovalsSince(issues, '2026-09-01T00:00:00Z', { only: new Set() }), []);
+});
+
+// ---- promotion (#429) -------------------------------------------------------------------------
+
+const SHA = 'a'.repeat(40); const P1 = 'b'.repeat(40); const P2 = 'c'.repeat(40);
+
+test('promotionVerdict: a --no-ff merge whose later parent is on trunk is a promotion', () => {
+  const v = rc.promotionVerdict({ trunk: 'dev', sha: SHA, parents: [P1, P2], headOnTrunk: false, mergedFromTrunk: P2 });
+  assert.strictEqual(v.ok, true);
+  assert.match(v.detail, /main@aaaaaaa promotes dev@ccccccc/);
+});
+
+test('promotionVerdict: a fast-forward head on trunk is a promotion', () => {
+  assert.strictEqual(rc.promotionVerdict({ trunk: 'dev', sha: SHA, parents: [P1], headOnTrunk: true }).ok, true);
+});
+
+test('promotionVerdict: a direct commit, or a merge of a branch not on trunk, is not — and is not unread', () => {
+  for (const parents of [[P1], [P1, P2]]) {
+    const v = rc.promotionVerdict({ trunk: 'dev', sha: SHA, parents, headOnTrunk: false, mergedFromTrunk: false });
+    assert.strictEqual(v.ok, false);
+    assert.ok(!v.unread);
+    assert.match(v.detail, /not a promotion of dev/);
+    assert.match(v.detail, /colab release cut/);
+  }
+  assert.match(rc.promotionVerdict({ trunk: 'dev', sha: SHA, parents: [P1] }).detail, /a direct commit/);
+  assert.match(rc.promotionVerdict({ trunk: 'dev', sha: SHA, parents: [P1, P2] }).detail, /a merge of a branch not on dev/);
+});
+
+test('promotionVerdict: an unreadable trunk is unread', () => {
+  const v = rc.promotionVerdict({ trunk: 'dev', sha: SHA, error: 'no origin/dev' });
+  assert.strictEqual(v.ok, false);
+  assert.strictEqual(v.unread, true);
+});
+
+test('decide --auto (#429): a non-promotion head is a no-op, not a refusal', () => {
+  const v = rc.decide(autoFacts({ promotion: { ok: false, detail: 'main@x is not a promotion of dev (a direct commit)' } }));
+  assert.strictEqual(v.ok, false);
+  assert.strictEqual(v.noop, true);
+  assert.strictEqual(v.tag, null);
+  assert.strictEqual(v.checks.find((c) => c.condition === 'promotion').ok, false);
+});
+
+test('decide --auto (#429): an unread promotion refuses', () => {
+  const v = rc.decide(autoFacts({ promotion: { ok: false, unread: true, detail: 'origin/dev could not be read' } }));
+  assert.strictEqual(v.ok, false);
+  assert.strictEqual(v.noop, false);
+});
+
+test('decide --auto (#429): a promotion head cuts; no promotion fact (trunk: main) adds no promotion check', () => {
+  const v = rc.decide(autoFacts({ promotion: { ok: true, detail: 'main@x promotes dev@y' } }));
+  assert.strictEqual(v.tag, 'v1.2.1-rc.1', JSON.stringify(v.refusals));
+  assert.ok(v.checks.some((c) => c.condition === 'promotion' && c.ok));
+  assert.ok(rc.decide(autoFacts()).checks.every((c) => c.condition !== 'promotion'));
+});
+
+test('RELEASE_BRANCH is main: the on-trunk check reads the release branch, never project.yml trunk', () => {
+  assert.strictEqual(rc.RELEASE_BRANCH, 'main');
+  const v = rc.decide(facts({ ancestry: { ok: false, shallow: false, detail: 'x is not an ancestor of origin/main' } }));
+  assert.match(v.checks.find((c) => c.condition === 'on-trunk').detail, /main/);
 });
 
 // ---- pre-tag checks (#424) ---------------------------------------------------------------------

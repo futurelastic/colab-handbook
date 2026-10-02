@@ -3273,9 +3273,12 @@ the routes keep, and `finalize --auto` stops at *candidate ready* there by const
 A candidate a human has put `release-hold` on is held for the workflow exactly as it is for
 a person.
 The handbook ships one to copy, [`templates/release-auto.yml`](templates/release-auto.yml)
-(#425): cut on a green trunk run, finalize daily, and **publish in the same run** — a tag
+(#425): cut on a green CI run on `main`, finalize daily, and **publish in the same run** — a tag
 pushed with `GITHUB_TOKEN` triggers no other workflow, so a Release left to a tag-push
-workflow is never published. It reads and creates tags and never pushes a commit.
+workflow is never published. It reads and creates tags and never pushes a commit. The same
+file fits `trunk: main` and `trunk: dev` + `deploy: tag` (#429): on the latter `main` moves only
+when a human promotes, so the promotion's green CI run is the trigger, and the CLI cuts only when
+`main`'s head is a promotion of trunk — who may promote does not change.
 
 **Never acts on an owner's branch.** On a repo declaring `owner:` (a repo the fleet does
 not own, #394), a scheduler may run `colab deliver --dry` and report its state, and nothing
@@ -3975,7 +3978,10 @@ pre-filled — that finalizes it.
 
 **A trigger runs it — not a person, and not a session.** Each repo that tags carries a
 **release workflow** ([*Scheduled drivers*](#scheduled-drivers--provenance-and-autonomy-meet-a-caller-that-is-not-a-person)):
-a trunk push with green CI tries a candidate (`colab release cut --auto`), a daily run
+a green CI run on `main` tries a candidate (`colab release cut --auto`) — on `trunk: main` every
+trunk push, on `trunk: dev` the human promotion's push (#429), where the bump reads the promoted
+commits and a `main` head that is not a promotion (a hotfix pushed straight to `main`) cuts
+nothing: the next promotion carries it, or a human cuts it by hand — a daily run
 tries to finalize clean candidates (`colab release finalize --auto`), and publishing happens
 inside the same run. It may do this unattended because both commands **refuse on any
 failed condition** — the route is the permission, the commands measure it, and a refusal
@@ -4050,7 +4056,9 @@ types, so it cannot see a breaking change the types don't reveal — the compute
 carries (pre-1.0 a major becomes a minor). Measured against `main`, never
 `dev` — `git describe` from a `dev` checkout answers a stale question.
 
-Do not tag from `dev`. Do not tag a commit that has not passed the full suite on `main`.
+Do not tag from `dev`. Do not tag a commit that has not passed the full suite on `main`. On a
+`trunk: dev` repo the candidate is cut on the promotion merge, and its manifest version is read
+there — a version bump reaches `main` through the promotion, never after it.
 
 ---
 

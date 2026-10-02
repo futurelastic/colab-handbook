@@ -1082,6 +1082,7 @@ them), and any one failing refuses the cut:
 | `on-trunk` | #424: the commit is not an ancestor of `origin/main`, or the checkout is **shallow** and cannot answer (a release workflow needs `fetch-depth: 0`) |
 | `outranks-final` | #424: the version is not strictly greater than the **highest** final tag by SemVer — not the nearest one — so "latest" never moves backwards |
 | `cadence` | `--auto` only (#422): the route's `candidates-per-day` cap is reached over the last 24h. A **no-op**, not a refusal: exit 0, `noop: true` |
+| `promotion` | `--auto` only, and only where `project.yml`'s `trunk:` is not `main` (#429): `main`'s head is not a promotion of trunk — neither a `--no-ff` merge whose later parent is on `origin/<trunk>` nor a fast-forward onto it. A **no-op** like `cadence` (a hotfix straight on `main` is carried by the next promotion, or cut by hand without `--auto`); an unreadable `origin/<trunk>` **refuses**. Absent on `trunk: main`, so that `--json` is unchanged |
 
 **Inside Actions, the calling workflow's own runs are not read** (#425). With `GITHUB_ACTIONS=true`,
 the runs at the commit — for `release cut`, and for `release finalize`'s candidate and trunk-green
@@ -1111,6 +1112,16 @@ A major is refused unless `MIGRATION.md` at the commit has a heading naming the 
 the tag. Every signal and detector result — breaking or not — is printed and written into the
 annotated tag's `Signals` block, so the reason for the bump is recorded mechanically. Nothing merged
 since the last final is a no-op (exit 0), as is the cadence window above.
+
+**On `trunk: dev`** (+ `deploy: tag`, #429) the candidate is still cut on `origin/main`'s head —
+there, the promotion merge — and `--json` carries `trunk`. The bump reads `<last final>..<merge>`
+with merges skipped, which is exactly the trunk commits promoted since the last final: never the
+merge subject, never trunk commits not yet promoted. A switch-removal child counts when its
+`Closes #N` is in that promoted range rather than by its close date, because an issue closes when
+it merges to trunk, not when it is promoted. `manifest-version` reads the promotion commit, so a
+version bump must reach `main` through the promotion. Topology, not the subject line, says what a
+promotion is: `colab promote --message` overrides the subject and a hand-run `git merge --no-ff`
+writes git's own.
 
 Without `--auto`, the bump is `release-status`'s suggestion since the last **final** tag (candidates skipped): fix →
 patch, feat → minor, a breaking change → minor pre-1.0 and a refusal from 1.0 on. `--bump` may
