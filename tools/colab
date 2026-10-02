@@ -1176,7 +1176,7 @@ said so. Worktree claims never held the checkout; \`colab worktree rm\` owns the
 // release skill's (#339) and never this command's.
 // ---------------------------------------------------------------------------
 
-const HELP_RELEASE_CUT = `colab release cut [--repo <path>] [--bump patch|minor --reason "<why>"] [--dry] [--json]
+const HELP_RELEASE_CUT = `colab release cut [--repo <path>] [--auto | --bump patch|minor --reason "<why>"] [--dry] [--json]
 
 Cut a release CANDIDATE, vX.Y.Z-rc.N, on origin/main's head — only where CONVENTIONS.md §6's release
 rung lets an agent, and only once every condition below holds on that exact commit. Creates an
@@ -1202,8 +1202,26 @@ Refuses, naming each failed condition (all are reported, not just the first):
                        format is NAMED in the detail, and the release notes still owe the §6
                        judgement on the diff
   switch-dependencies  a colab:switch marker is malformed, or a finished switch needs one that is not
+  manifest-version     the tag does not equal the version a manifest declares (VERSION, package.json,
+                       Cargo.toml [package], pyproject.toml [project]/[tool.poetry]) — none declared
+                       passes: the tag is the version (#424)
+  on-trunk             the commit is not an ancestor of main, or the checkout is shallow (#424)
+  outranks-final       the version is not strictly greater than the highest final tag (#424)
 
-The bump is release-status's semverSuggestion since the last final tag (candidates skipped): fix ->
+--auto (#422) — the release workflow's mode; no human input, majors included:
+  fixes/chores -> patch; a feat, or a switch-removal child (role=remove) closed since the last final
+  -> minor; a breaking change -> minor below 1.0, major from 1.0. Breaking is any of: ! or BREAKING
+  CHANGE: in a commit; the repo guard reporting breaking — project.yml release.guard-run (a command,
+  run at the repo root with COLAB_RELEASE_FROM / COLAB_RELEASE_SHA set; the working tree must be at
+  the commit) or release.guard-result (a file a CI step wrote), either printing
+  {"breaking": bool, "findings": [string]}; a removed package.json exports subpath or bin name, or a
+  removed line of the release.exports list. A guard or list that cannot be read refuses.
+  A major is refused unless MIGRATION.md at the commit has a heading naming vX.0.0 whose section
+  carries a non-empty "Measured cost:" line. Every signal is printed and written into the tag.
+  cadence              the route's candidates-per-day cap over the last 24h — inside it, and when
+                       nothing was merged since the last final, the run is a NO-OP (exit 0)
+
+The bump (without --auto) is release-status's semverSuggestion since the last final tag (candidates skipped): fix ->
 patch, feat -> minor; a breaking change is a minor pre-1.0 and a refusal from 1.0 on.
   --bump patch|minor   override the computed bump — requires --reason, which is recorded on the tag
   --reason "<why>"     why the override
@@ -1212,14 +1230,15 @@ patch, feat -> minor; a breaking change is a minor pre-1.0 and a refusal from 1.
   --repo <path>        the repo (default: the one you are in)
 
 Needs origin reachable (the tag is recorded there) and gh usable (CI, suite and switch markers are
-read from GitHub). Exit code: 0 when a candidate was cut (or, with --dry, would be); 1 when refused.
+read from GitHub). Exit code: 0 when a candidate was cut (or, with --dry, would be), or an --auto
+no-op; 1 when refused.
 `;
 
 /** Every issue with state + body, for the switch markers. null when the read failed or may be truncated. */
 function readAllIssuesForSwitches(repoAbs) {
   const LIMIT = 5000;
   // title/labels/createdAt/url are additive (#339): `release finalize` finds its tracking issue in the same read.
-  const r = spawnSync('gh', ['issue', 'list', '--state', 'all', '--limit', String(LIMIT), '--json', 'number,state,stateReason,body,title,labels,createdAt,url'],
+  const r = spawnSync('gh', ['issue', 'list', '--state', 'all', '--limit', String(LIMIT), '--json', 'number,state,stateReason,body,title,labels,createdAt,closedAt,url'],
     { cwd: repoAbs, encoding: 'utf8', maxBuffer: 512 * 1024 * 1024 });
   if (r.status !== 0) return null;
   try {
@@ -1262,7 +1281,7 @@ function releaseCutChanges(repoAbs, from, sha, declared) {
  * — by branch window for a fresh head (cut), by commit for an older candidate (finalize). Also
  * returns the issue list it read (null when unread or gh unusable), so a caller does not read it twice.
  */
-function measureCandidateConditions(repoAbs, { sha, lastFinal, at, readRuns }) {
+function measureCandidateConditions(repoAbs, { sha, lastFinal, at, readRuns, issues: knownIssues }) {
   let ci; let suite; let switches; let issues = null;
   if (!isGhUsable(repoAbs)) {
     const why = ghUnusableWhy(repoAbs);
@@ -1275,7 +1294,8 @@ function measureCandidateConditions(repoAbs, { sha, lastFinal, at, readRuns }) {
     if (!run) ci = { ok: false, detail: `gh run list failed — cannot confirm CI at ${at}` };
     else { const v = classifyCiRun(repoAbs, run, at); ci = { ok: v.ok, detail: v.detail }; }
     suite = releaseCut.fullSuiteVerdict(rows, at);
-    issues = readAllIssuesForSwitches(repoAbs);
+    // #423: an --auto finalize judges several candidates in one run — the issue list is read once.
+    issues = knownIssues !== undefined ? knownIssues : readAllIssuesForSwitches(repoAbs);
     switches = releaseCut.switchVerdict(issues);
   }
   // #383: the declared migration prefixes as committed at the candidate AND on disk, unioned — the
@@ -1288,13 +1308,92 @@ function measureCandidateConditions(repoAbs, { sha, lastFinal, at, readRuns }) {
   return { ci, suite, schema, switches, issues };
 }
 
+/**
+ * #424's pre-tag facts at `sha`: every manifest version, and whether `sha` is on `${remote}/main` — a
+ * shallow checkout cannot answer that, and says so rather than guessing.
+ */
+function measurePreTag(repoAbs, sha, mainRef) {
+  const manifests = releaseTag.manifestVersions((rel) => {
+    const r = git.git(['show', `${sha}:${rel}`], repoAbs);
+    return r.ok ? r.stdout : null;
+  });
+  const shallowR = git.git(['rev-parse', '--is-shallow-repository'], repoAbs);
+  const shallow = !shallowR.ok || shallowR.stdout.trim() === 'true';
+  const anc = git.git(['merge-base', '--is-ancestor', sha, mainRef], repoAbs);
+  return {
+    manifests,
+    ancestry: { ok: anc.ok, shallow, detail: anc.ok ? `${shortSha(sha)} is an ancestor of ${mainRef}` : `${shortSha(sha)} is not an ancestor of ${mainRef}` },
+  };
+}
+
+/** Every candidate `colab release cut` made, as [{ name, date }] — what the cadence window counts (#422). */
+function cutCandidates(repoAbs) {
+  const fe = git.git(['for-each-ref', 'refs/tags', '--format=%(refname:short)%09%(objecttype)%09%(taggerdate:iso-strict)%09%(contents:subject)'], repoAbs);
+  return (fe.ok ? fe.stdout.split('\n').filter(Boolean) : []).map((l) => l.split('\t'))
+    .filter(([name, type, , subject]) => type === 'tag' && /-rc\.[1-9][0-9]*$/.test(name) && String(subject || '').endsWith('(colab release cut)'))
+    .map(([name, , date]) => ({ name, date }));
+}
+
+/**
+ * --auto's bump inputs (#422) at `sha` since `lastFinal`: commit types, the declared guard, the
+ * exports diff, switch-removal children, and the migration-section reader for a major.
+ */
+function measureAutoSignals(repoAbs, { doc, sha, lastFinal, remote, issues }) {
+  const rel = (doc && doc.release && typeof doc.release === 'object') ? doc.release : {};
+  const at = (ref, file) => { const r = git.git(['show', `${ref}:${file}`], repoAbs); return r.ok ? r.stdout : null; };
+  const cc = lastFinal ? ccSummary(repoAbs, `${lastFinal}..${sha}`) : { total: 0, counts: {}, breaking: false };
+
+  let guard = null;
+  const headR = git.git(['rev-parse', 'HEAD'], repoAbs);
+  const atSha = headR.ok && headR.stdout.trim() === sha;
+  if (rel['guard-run'] || rel['guard-result']) {
+    const name = rel['guard-run'] ? `guard-run (${rel['guard-run']})` : `guard-result (${rel['guard-result']})`;
+    if (!atSha) {
+      guard = { name, error: `${name} reads the working tree, which is at ${headR.ok ? shortSha(headR.stdout.trim()) : 'an unreadable HEAD'}, not the commit being tagged (${shortSha(sha)}) — check it out first` };
+    } else if (rel['guard-run']) {
+      const r = spawnSync('sh', ['-c', rel['guard-run']], {
+        cwd: repoAbs, encoding: 'utf8', timeout: 10 * 60 * 1000, maxBuffer: 64 * 1024 * 1024,
+        env: { ...process.env, COLAB_RELEASE_FROM: lastFinal || '', COLAB_RELEASE_SHA: sha },
+      });
+      guard = r.status === 0
+        ? releaseCut.parseGuardOutput(name, r.stdout)
+        : { name, error: `${name} exited ${r.status === null ? `on ${r.signal || 'a timeout'}` : r.status}${r.stderr ? ` (${String(r.stderr).trim().split('\n')[0]})` : ''}` };
+    } else {
+      const file = path.resolve(repoAbs, rel['guard-result']);
+      guard = fs.existsSync(file)
+        ? releaseCut.parseGuardOutput(name, fs.readFileSync(file, 'utf8'))
+        : { name, error: `${name}: ${rel['guard-result']} does not exist — the step that writes it did not run` };
+    }
+  }
+
+  const listFile = rel.exports || null;
+  const exports = releaseCut.exportsDiff({
+    before: lastFinal ? { pkg: at(lastFinal, 'package.json'), list: listFile ? at(lastFinal, listFile) : null } : { pkg: null, list: null },
+    after: { pkg: at(sha, 'package.json'), list: listFile ? at(sha, listFile) : null },
+    listFile,
+  });
+
+  let switchRemovals = [];
+  let switchesUnread = null;
+  if (issues === null || issues === undefined) switchesUnread = 'the issue list could not be read — switch-removal children cannot be counted';
+  else {
+    const dateR = lastFinal ? git.git(['log', '-1', '--format=%cI', lastFinal], repoAbs) : null;
+    switchRemovals = releaseCut.switchRemovalsSince(issues, dateR && dateR.ok ? dateR.stdout.trim() : null);
+  }
+  const signals = releaseCut.autoSignals({ cc, guard, exports, switchRemovals });
+  if (switchesUnread) { signals.unread.push(switchesUnread); signals.lines.push(`switches: UNREAD — ${switchesUnread}`); }
+  const migrationText = at(sha, releaseCut.MIGRATION_FILE);
+  return { signals, migration: (v) => releaseCut.parseMigrationSection(migrationText, v) };
+}
+
 function cmdReleaseCut(argv) {
   const opts = parseArgs(argv, {
     values: { '--repo': 'repo', '--bump': 'bump', '--reason': 'reason' },
-    flags: { '--dry': 'dry', '--json': 'json', '-h': 'help', '--help': 'help' },
+    flags: { '--dry': 'dry', '--json': 'json', '--auto': 'auto', '-h': 'help', '--help': 'help' },
   });
   if (opts.help) return print(HELP_RELEASE_CUT);
   if (opts._.length) throw new UserError(`release cut takes no positional arguments (got: ${opts._.join(' ')})`);
+  if (opts.auto && (opts.bump || opts.reason)) throw new UserError('--auto computes the bump with no human input — --bump/--reason cannot be combined with it');
   if (opts.reason && !opts.bump) throw new UserError('--reason records why --bump overrode the computed bump — pass --bump with it');
   const repoAbs = resolveRepo(opts);
   const doc = projectDoc(repoAbs);
@@ -1326,12 +1425,20 @@ function cmdReleaseCut(argv) {
   const tags = lines(git.git(['tag', '--list'], repoAbs));
   const tagsAtSha = lines(git.git(['tag', '--points-at', sha], repoAbs));
 
-  const { ci, suite, schema, switches } = measureCandidateConditions(repoAbs, {
+  const { ci, suite, schema, switches, issues } = measureCandidateConditions(repoAbs, {
     sha, lastFinal, at, readRuns: () => git.ghRunsForCommit(repoAbs, 'main', sha),
   });
+  const { manifests, ancestry } = measurePreTag(repoAbs, sha, `${remote}/main`); // #424
+
+  let auto = null; // #422
+  if (opts.auto) {
+    const { signals, migration } = measureAutoSignals(repoAbs, { doc, sha, lastFinal, remote, issues });
+    const cadence = releaseCut.cadenceVerdict({ candidates: cutCandidates(repoAbs), perDay: policy.effective.candidatesPerDay, now: new Date().toISOString() });
+    auto = { signals, migration, cadence };
+  }
 
   const verdict = releaseCut.decide({
-    policy, triggers, lastFinal, suggestion, tags, tagsAtSha, ci, suite, schema, switches,
+    policy, triggers, lastFinal, suggestion, tags, tagsAtSha, ci, suite, schema, switches, manifests, ancestry, auto,
     override: opts.bump ? { bump: opts.bump, reason: opts.reason } : null,
   });
 
@@ -1350,17 +1457,25 @@ function cmdReleaseCut(argv) {
 
   if (opts.json) {
     print(JSON.stringify({
-      repo: shortRepo(repoAbs), sha, lastFinal, suggestion, dry: !!opts.dry,
-      ok: verdict.ok, tag: verdict.tag, created, version: verdict.version, bump: verdict.bump,
-      overridden: verdict.overridden, checks: verdict.checks,
+      repo: shortRepo(repoAbs), sha, lastFinal, suggestion, dry: !!opts.dry, auto: !!opts.auto,
+      ok: verdict.ok, noop: !!verdict.noop, tag: verdict.tag, created, version: verdict.version, bump: verdict.bump,
+      overridden: verdict.overridden, signals: verdict.signals ? verdict.signals.lines : null, checks: verdict.checks,
     }, null, 2));
-    return verdict.ok ? 0 : 1;
+    return verdict.ok || verdict.noop ? 0 : 1;
   }
 
-  print(`colab release cut — ${shortRepo(repoAbs)} at ${at} (last final: ${lastFinal || 'none'})`);
+  print(`colab release cut${opts.auto ? ' --auto' : ''} — ${shortRepo(repoAbs)} at ${at} (last final: ${lastFinal || 'none'})`);
+  if (verdict.signals) {
+    print('  signals:');
+    for (const l of verdict.signals.lines) print(`    · ${l}`);
+  }
   const width = Math.max(...verdict.checks.map((c) => c.condition.length));
   for (const c of verdict.checks) print(`  ${c.ok ? '✓' : '✗'} ${c.condition.padEnd(width)}  ${c.detail}`);
   print('');
+  if (verdict.noop) {
+    print('· no-op — nothing owed, or inside the route\'s cadence window; nothing cut.');
+    return 0;
+  }
   if (!verdict.ok) {
     print(`✗ refused — ${verdict.refusals.length} condition(s) failed; nothing cut.`);
     return 1;
@@ -1381,7 +1496,7 @@ function cmdReleaseCut(argv) {
 // issue (contract: release-finalize.js header, tools/README.md *Release finalize*).
 // ---------------------------------------------------------------------------
 
-const HELP_RELEASE_FINALIZE = `colab release finalize [--repo <path>] [--tag vX.Y.Z-rc.N] [--answered-by <name>] [--dry] [--json]
+const HELP_RELEASE_FINALIZE = `colab release finalize [--repo <path>] [--auto | --tag vX.Y.Z-rc.N [--answered-by <name>]] [--dry] [--json]
 
 Take the newest release CANDIDATE (a vX.Y.Z-rc.N tag made by \`colab release cut\`) one step further
 under CONVENTIONS.md §6's release rung, re-checking everything at the moment it runs. Every run:
@@ -1414,12 +1529,25 @@ Conditions (--json checks[].condition; required:false means reported, not blocki
   trunk-green   every main run since the period began, of the workflows that ran at the candidate,
                 none red — required only where the final is automatic
 
+  manifest-version  on-trunk  outranks-final — #424's pre-tag checks, required before any final:
+                the final equals every declared manifest version, its commit is on main (a shallow
+                checkout refuses), and it outranks the highest final tag
+
+  --auto              the release workflow's mode (#423). Where the final is automatic, walk the open
+                      candidates newest-first and finalize the newest one whose OWN test period
+                      elapsed clean — a newer candidate never restarts an older one's clock, and
+                      trunk-green is read over that candidate's own window. release-hold and the
+                      regression rule are unchanged. Where the final is a human act (deploy-tag) it
+                      never tags: it stops at candidate-ready and posts the one command, number
+                      pre-filled. Never combines with --tag/--answered-by. testing / no-candidate /
+                      already-final exit 0 (nothing to do yet is the ordinary output)
   --tag <rc>          pin the candidate a human reviewed; refused unless it is the newest one
   --answered-by <n>   with COLAB_HUMAN=1 and --tag: the human bar for a final that is a human act.
                       No field, flag or project.yml value lowers it, and it never shortens a test period
   --dry               measure and report; open, post, tag and close nothing
-  --json              { repo, row, final, testPeriodDays, lastFinal, dry, candidate, tracking,
-                        periodStart, periodEndsAt, state, tagged, finalTag, checks, handoff }
+  --json              { repo, row, route, final, testPeriodDays, lastFinal, dry, auto, candidate, tracking,
+                        periodStart, periodEndsAt, state, tagged, finalTag, checks, handoff,
+                        skipped (--auto: [{tag, state, detail?}] — the other open candidates) }
 
 Needs origin and gh (the tracking issue, runs and edges live on GitHub). Never cuts a candidate, never
 a major, never removes a label or an edge. Exit 0 when finalized (or would be) or candidate-ready; 1
@@ -1442,11 +1570,14 @@ function readRegressionEdges(repoAbs, num) {
 function cmdReleaseFinalize(argv) {
   const opts = parseArgs(argv, {
     values: { '--repo': 'repo', '--tag': 'tag', '--answered-by': 'answeredBy' },
-    flags: { '--dry': 'dry', '--json': 'json', '-h': 'help', '--help': 'help' },
+    flags: { '--dry': 'dry', '--json': 'json', '--auto': 'auto', '-h': 'help', '--help': 'help' },
   });
   if (opts.help) return print(HELP_RELEASE_FINALIZE);
   if (opts._.length) throw new UserError(`release finalize takes no positional arguments (got: ${opts._.join(' ')})`);
-  const humanBar = process.env.COLAB_HUMAN === '1' && !!opts.answeredBy;
+  // #423: --auto is the release workflow's mode. The human bar names one reviewed candidate; --auto
+  // picks among them — the two never combine, so an unattended run can never carry a human's assertion.
+  if (opts.auto && (opts.tag || opts.answeredBy)) throw new UserError('--auto picks the candidate itself and never carries the human bar — drop --tag/--answered-by, or drop --auto');
+  const humanBar = !opts.auto && process.env.COLAB_HUMAN === '1' && !!opts.answeredBy;
   if (humanBar && !opts.tag) {
     throw new UserError('the human bar needs --tag <vX.Y.Z-rc.N>: it names the exact candidate the human reviewed, so a newer one cut meanwhile is never finalized in its place');
   }
@@ -1473,68 +1604,100 @@ function cmdReleaseFinalize(argv) {
   for (const t of tags) {
     if (releaseFinalize.parseCandidate(t.name)) t.onMain = git.git(['merge-base', '--is-ancestor', t.sha, mainSha], repoAbs).ok;
   }
+  const tagNames = tags.map((t) => t.name);
   const finals = new Set(tags.filter((t) => releaseFinalize.parseVersion(t.name)).map((t) => t.name));
   const selection = releaseFinalize.selectCandidate(tags, opts.tag || null, remote);
-  const cand = selection.kind === 'candidate' ? selection.candidate : null;
+  // The newest open candidate — the one whose tracking issue this run keeps, on either path.
+  const newest = selection.kind === 'candidate' ? selection.candidate : null;
+  // #423: on a route whose final is automatic, --auto judges every open candidate on its own clock.
+  const walk = opts.auto && policy.effective.final === 'auto' && newest;
 
-  // ---- the conditions at the candidate's commit (also reads the issue list) ----
-  let conditions = { ci: null, suite: null, schema: null, switches: null, issues: null };
-  let suiteWorkflows = [];
-  if (cand) {
+  // ---- the tracking records (one issue read for the whole run) ----
+  const issues = readAllIssuesForSwitches(repoAbs);
+  const labelNames = (i) => (i.labels || []).map((l) => (typeof l === 'string' ? l : l.name));
+  const records = (issues || [])
+    .map((i) => ({ number: i.number, url: i.url || null, state: String(i.state || '').toUpperCase(), createdAt: i.createdAt || null, held: labelNames(i).includes(releaseFinalize.HOLD_LABEL), version: releaseFinalize.parseReleaseMarker(i.body) }))
+    .filter((r) => r.version);
+  const trackingFor = (version, { isCandidate }) => {
+    if (issues === null) return { error: 'the issue list could not be read (or may be truncated) — the tracking issue cannot be found' };
+    const mine = records.filter((r) => r.version === version);
+    const open = mine.filter((r) => r.state === 'OPEN');
+    if (open.length > 1) return { error: `${open.length} open tracking issues for ${version} (${open.map((r) => `#${r.number}`).join(', ')}) — one per version; close the duplicate by hand` };
+    if (open.length === 1) return { ...open[0] };
+    if (isCandidate && mine.length) return { error: `the tracking issue for ${version} (#${mine[0].number}) is closed but ${version} is not final — reopen it; a closed record is never silently replaced` };
+    return { number: null, createdAt: null, held: false, wouldCreate: !opts.dry };
+  };
+  const version0 = newest ? newest.version : (selection.version || null);
+  const trackings = new Map(); // version -> tracking
+  if (version0) trackings.set(version0, trackingFor(version0, { isCandidate: !!newest }));
+  let trackingCreated = false;
+  const t0 = version0 ? trackings.get(version0) : null;
+  if (newest && t0 && !t0.error && !t0.number && !opts.dry) {
+    const body = releaseFinalize.trackingBody({ version: version0, row: policy.derived.row, final: policy.effective.final, testPeriodDays: policy.effective.testPeriodDays });
+    const c = spawnSync('gh', ['issue', 'create', '--title', releaseFinalize.trackingTitle(version0), '--body', body], { cwd: repoAbs, encoding: 'utf8' });
+    const m = c.status === 0 ? /\/issues\/([0-9]+)/.exec(c.stdout || '') : null;
+    if (!m) trackings.set(version0, { error: `could not open the tracking issue for ${version0} (${String(c.stderr || '').split('\n')[0] || 'no issue URL returned'})` });
+    else { trackings.set(version0, { number: Number(m[1]), url: (c.stdout || '').trim(), createdAt: now, held: false }); trackingCreated = true; }
+  }
+
+  // ---- judge one candidate: every condition at its commit, its own period, its own trunk window ----
+  const judge = (cand, sel) => {
+    if (!trackings.has(cand.version)) trackings.set(cand.version, trackingFor(cand.version, { isCandidate: true }));
+    const tracking = trackings.get(cand.version);
+    const supersededHeld = records.filter((r) => r.state === 'OPEN' && r.held && r.version !== cand.version && !finals.has(r.version)).map((r) => r.number);
     let rows;
-    conditions = measureCandidateConditions(repoAbs, {
+    const conditions = measureCandidateConditions(repoAbs, {
       sha: cand.sha,
       lastFinal: releaseTag.latestReleaseTag(repoAbs, { ref: cand.sha }),
       at: `${cand.tag}@${shortSha(cand.sha)}`,
       readRuns: () => { rows = git.ghRunsAtCommit(repoAbs, cand.sha); return rows; },
+      issues,
     });
-    suiteWorkflows = [...new Set((rows || []).map((r) => r.workflowName || '(unnamed workflow)'))];
-  } else {
-    conditions.issues = readAllIssuesForSwitches(repoAbs);
-  }
-
-  // ---- the tracking issue ----
-  const labelNames = (i) => (i.labels || []).map((l) => (typeof l === 'string' ? l : l.name));
-  const records = (conditions.issues || [])
-    .map((i) => ({ number: i.number, url: i.url || null, state: String(i.state || '').toUpperCase(), createdAt: i.createdAt || null, held: labelNames(i).includes(releaseFinalize.HOLD_LABEL), version: releaseFinalize.parseReleaseMarker(i.body) }))
-    .filter((r) => r.version);
-  const version = cand ? cand.version : (selection.version || null);
-  let tracking = null;
-  let trackingCreated = false;
-  if (conditions.issues === null) {
-    tracking = { error: 'the issue list could not be read (or may be truncated) — the tracking issue cannot be found' };
-  } else if (version) {
-    const mine = records.filter((r) => r.version === version);
-    const open = mine.filter((r) => r.state === 'OPEN');
-    if (open.length > 1) tracking = { error: `${open.length} open tracking issues for ${version} (${open.map((r) => `#${r.number}`).join(', ')}) — one per version; close the duplicate by hand` };
-    else if (open.length === 1) tracking = { ...open[0] };
-    else if (cand && mine.length) tracking = { error: `the tracking issue for ${version} (#${mine[0].number}) is closed but ${version} is not final — reopen it; a closed record is never silently replaced` };
-    else tracking = { number: null, createdAt: null, held: false, wouldCreate: !opts.dry };
-  }
-  const supersededHeld = records.filter((r) => r.state === 'OPEN' && r.held && r.version !== version && !finals.has(r.version)).map((r) => r.number);
-
-  if (cand && tracking && !tracking.error && !tracking.number && !opts.dry) {
-    const body = releaseFinalize.trackingBody({ version, row: policy.derived.row, final: policy.effective.final, testPeriodDays: policy.effective.testPeriodDays });
-    const c = spawnSync('gh', ['issue', 'create', '--title', releaseFinalize.trackingTitle(version), '--body', body], { cwd: repoAbs, encoding: 'utf8' });
-    const m = c.status === 0 ? /\/issues\/([0-9]+)/.exec(c.stdout || '') : null;
-    if (!m) tracking = { error: `could not open the tracking issue for ${version} (${String(c.stderr || '').split('\n')[0] || 'no issue URL returned'})` };
-    else { tracking = { number: Number(m[1]), url: (c.stdout || '').trim(), createdAt: now, held: false }; trackingCreated = true; }
-  }
-
-  // ---- period, trunk, regressions ----
-  let period = null; let trunk = null; let regressions = null;
-  if (cand) {
-    period = releaseFinalize.periodVerdict({ cutAt: cand.cutAt, trackingCreatedAt: tracking && tracking.createdAt, testPeriodDays: policy.effective.testPeriodDays, now });
+    const suiteWorkflows = [...new Set((rows || []).map((r) => r.workflowName || '(unnamed workflow)'))];
+    const period = releaseFinalize.periodVerdict({ cutAt: cand.cutAt, trackingCreatedAt: tracking && tracking.createdAt, testPeriodDays: policy.effective.testPeriodDays, now });
     const since = git.ghRunsSince(repoAbs, 'main', period.start.slice(0, 10));
-    trunk = releaseFinalize.trunkGreenVerdict(since ? since.runs : null, { periodStart: period.start, suiteWorkflows, truncated: !!(since && since.truncated) });
-    regressions = releaseFinalize.regressionVerdict(tracking && tracking.number ? readRegressionEdges(repoAbs, tracking.number) : [], { periodStart: period.start });
-  }
+    const trunk = releaseFinalize.trunkGreenVerdict(since ? since.runs : null, {
+      periodStart: period.start, periodEnd: walk ? period.endsAt : null, suiteWorkflows, truncated: !!(since && since.truncated),
+    });
+    const regressions = releaseFinalize.regressionVerdict(tracking && tracking.number ? readRegressionEdges(repoAbs, tracking.number) : [], { periodStart: period.start });
+    const { manifests, ancestry } = measurePreTag(repoAbs, cand.sha, `${remote}/main`); // #424
+    const verdict = releaseFinalize.decide({
+      policy, selection: sel, tracking, supersededHeld, period, trunk, regressions,
+      ci: conditions.ci, suite: conditions.suite, schema: conditions.schema, switches: conditions.switches,
+      manifests, ancestry, tags: tagNames,
+      human: { bar: humanBar, answeredBy: opts.answeredBy || null },
+    });
+    return { candidate: cand, verdict, period, tracking };
+  };
 
-  const verdict = releaseFinalize.decide({
-    policy, selection, tracking, supersededHeld, period, trunk, regressions,
-    ci: conditions.ci, suite: conditions.suite, schema: conditions.schema, switches: conditions.switches,
-    human: { bar: humanBar, answeredBy: opts.answeredBy || null },
-  });
+  let cand = null; let verdict; let period = null; let tracking = version0 ? trackings.get(version0) : null;
+  let skipped = [];
+  if (walk) {
+    const MAX_JUDGED = 10;
+    const evals = [];
+    for (const c of releaseFinalize.openCandidates(tags, remote)) {
+      if (c.refused) { skipped.push({ tag: c.tag, state: 'refused', detail: c.refused }); continue; }
+      const tr = trackings.has(c.version) ? trackings.get(c.version) : trackingFor(c.version, { isCandidate: true });
+      const p = releaseFinalize.periodVerdict({ cutAt: c.cutAt, trackingCreatedAt: tr && tr.createdAt, testPeriodDays: policy.effective.testPeriodDays, now });
+      // Cheap skip: a younger candidate whose own period has not elapsed cannot finalize — only the newest is judged regardless, so the report has a state.
+      if (!p.elapsed && evals.length) { skipped.push({ tag: c.tag, state: 'testing', detail: p.detail }); continue; }
+      const e = judge(c, { kind: 'candidate', candidate: c, superseded: [], detail: `${c.tag} at ${shortSha(c.sha)}, cut ${c.cutAt} (--auto: judged on its own clock)` });
+      evals.push(e);
+      if (e.verdict.state === 'finalized' || e.verdict.state === 'held' || evals.length >= MAX_JUDGED) break;
+    }
+    const pick = releaseFinalize.pickNewestClean(evals);
+    const chosen = evals.find((e) => e.candidate === pick.candidate);
+    if (chosen) {
+      ({ candidate: cand, verdict, period, tracking } = chosen);
+      skipped = [...pick.skipped, ...skipped];
+    } else {
+      verdict = releaseFinalize.decide({ policy, selection: { kind: 'refused', detail: `no open candidate can be finalized: ${skipped.map((x) => `${x.tag} — ${x.detail}`).join('; ')}` } });
+    }
+  } else if (newest) {
+    ({ candidate: cand, verdict, period, tracking } = judge(newest, selection));
+  } else {
+    verdict = releaseFinalize.decide({ policy, selection, tracking, supersededHeld: [] });
+  }
 
   // ---- writes ----
   let tagged = false;
@@ -1550,7 +1713,7 @@ function cmdReleaseFinalize(argv) {
   };
   if (!opts.dry) {
     if (verdict.state === 'finalized') {
-      const actor = humanBar ? `${opts.answeredBy} (human bar: COLAB_HUMAN=1)` : 'automatic — clean test period (CONVENTIONS.md §6)';
+      const actor = humanBar ? `${opts.answeredBy} (human bar: COLAB_HUMAN=1)` : `automatic — clean test period (CONVENTIONS.md §6)${walk ? ', newest candidate clean on its own clock (--auto)' : ''}`;
       const message = releaseFinalize.tagMessage(verdict, { candidate: cand, period, actor });
       const t = git.git(['tag', '-a', '--cleanup=verbatim', cand.version, cand.sha, '-m', message], repoAbs);
       if (!t.ok) throw new UserError(`git tag ${cand.version} failed: ${(t.stderr || '').split('\n')[0]}`);
@@ -1561,9 +1724,15 @@ function cmdReleaseFinalize(argv) {
       }
       tagged = true;
     }
+    // The newest candidate is announced on its version's issue — on --auto with its own clock.
+    const tNew = version0 ? trackings.get(version0) : null;
+    if (newest && tNew && tNew.number) {
+      const pNew = releaseFinalize.periodVerdict({ cutAt: newest.cutAt, trackingCreatedAt: tNew.createdAt, testPeriodDays: policy.effective.testPeriodDays, now });
+      comment(tNew.number, { candidate: newest.tag }, walk
+        ? `Candidate **${newest.tag}** (\`${shortSha(newest.sha)}\`) picked up — its own test period runs ${pNew.start} → ${pNew.endsAt}. A newer candidate does not restart an older one's clock: the newest candidate clean for its own period is finalized (\`--auto\`).`
+        : `Candidate **${newest.tag}** (\`${shortSha(newest.sha)}\`) picked up — its test period runs ${pNew.start} → ${pNew.endsAt}. A new candidate restarts it.`);
+    }
     if (cand && tracking && tracking.number) {
-      comment(tracking.number, { candidate: cand.tag },
-        `Candidate **${cand.tag}** (\`${shortSha(cand.sha)}\`) picked up — its test period runs ${period.start} → ${period.endsAt}. A new candidate restarts it.`);
       if (verdict.state === 'candidate-ready') {
         comment(tracking.number, { state: 'candidate-ready', candidate: cand.tag },
           `**${cand.tag} is ready.** The final tag is a human act on this repo — the one command, run by a human:\n\n\`\`\`sh\n${verdict.handoff}\n\`\`\``);
@@ -1572,35 +1741,49 @@ function cmdReleaseFinalize(argv) {
         comment(tracking.number, { state: 'finalized', tag: cand.version }, `**${cand.version}** tagged final on \`${shortSha(cand.sha)}\` (from ${cand.tag}).`);
         close(tracking.number);
       }
-      for (const r of records.filter((x) => x.state === 'OPEN' && !x.held && x.version !== version && !finals.has(x.version))) {
+    }
+    // Superseded records. Without --auto: every other open, unheld, non-final version (the newest one
+    // is the only one ever finalized). With --auto: only versions BELOW one just tagged — a newer
+    // version's candidates are still on their own clocks.
+    if (cand && (!walk || tagged)) {
+      for (const r of records.filter((x) => x.state === 'OPEN' && !x.held && x.version !== cand.version && !finals.has(x.version)
+        && (!walk || releaseFinalize.compareVersions(x.version, cand.version) < 0))) {
         comment(r.number, { state: 'superseded', by: cand.version }, `Superseded by ${cand.version} — no final is owed for ${r.version}.`);
         close(r.number);
       }
     }
     if (verdict.state === 'already-final' && tracking && tracking.number) {
-      comment(tracking.number, { state: 'finalized', tag: version }, `**${version}** is already tagged final.`);
+      comment(tracking.number, { state: 'finalized', tag: version0 }, `**${version0}** is already tagged final.`);
       close(tracking.number);
     }
   }
 
+  const supersededHeld = records.filter((r) => r.state === 'OPEN' && r.held && r.version !== (cand ? cand.version : version0) && !finals.has(r.version)).map((r) => r.number);
   const trackingOut = tracking && !tracking.error
-    ? { number: tracking.number || null, url: tracking.url || null, created: trackingCreated, held: !!tracking.held, supersededHeld }
+    ? { number: tracking.number || null, url: tracking.url || null, created: trackingCreated && (!cand || cand.version === version0), held: !!tracking.held, supersededHeld }
     : null;
   if (opts.json) {
     print(JSON.stringify({
-      repo: shortRepo(repoAbs), row: policy.derived.row, final: policy.effective.final, testPeriodDays: policy.effective.testPeriodDays,
-      lastFinal, dry: !!opts.dry, candidate: cand, tracking: trackingOut,
+      repo: shortRepo(repoAbs), row: policy.derived.row, route: policy.effective.route, final: policy.effective.final, testPeriodDays: policy.effective.testPeriodDays,
+      lastFinal, dry: !!opts.dry, auto: !!opts.auto, candidate: cand, tracking: trackingOut,
       periodStart: period ? period.start : null, periodEndsAt: period ? period.endsAt : null,
       state: verdict.state, tagged, finalTag: verdict.finalTag, checks: verdict.checks, handoff: verdict.handoff,
+      skipped: walk ? skipped : undefined,
     }, null, 2));
   } else {
-    print(`colab release finalize — ${shortRepo(repoAbs)} (last final: ${lastFinal || 'none'}${cand ? `, candidate: ${cand.tag}` : ''})`);
+    print(`colab release finalize${opts.auto ? ' --auto' : ''} — ${shortRepo(repoAbs)} (last final: ${lastFinal || 'none'}${cand ? `, candidate: ${cand.tag}` : ''})`);
     const width = Math.max(...verdict.checks.map((c) => c.condition.length));
     for (const c of verdict.checks) print(`  ${c.ok ? '✓' : (c.required ? '✗' : '·')} ${c.condition.padEnd(width)}  ${c.detail}`);
+    if (walk && skipped.length) {
+      print('  other open candidates:');
+      for (const x of skipped) print(`    · ${x.tag}: ${x.state}${x.detail ? ` — ${x.detail}` : ''}`);
+    }
     print('');
     print(`state: ${verdict.state}${opts.dry ? ' [--dry: nothing written]' : ''}${tagged ? ` — tagged ${verdict.finalTag} and pushed it to ${remote}` : ''}`);
     if (verdict.handoff) print(`\nThe final is a human act here. The one command, for a human to run:\n  ${verdict.handoff}`);
   }
+  // #423: on --auto, "nothing to do yet" (still testing, no candidate) is the workflow's ordinary output.
+  if (opts.auto && ['testing', 'no-candidate', 'already-final'].includes(verdict.state)) return 0;
   return verdict.state === 'finalized' || verdict.state === 'candidate-ready' ? 0 : 1;
 }
 

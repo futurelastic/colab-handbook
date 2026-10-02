@@ -144,6 +144,7 @@ function facts(over = {}) {
     trunk: { ok: true, permanent: false, pending: false, detail: 'green' },
     regressions: { ok: true, permanent: false, detail: 'none' },
     ci: OK, suite: OK, schema: OK, switches: OK,
+    manifests: [], ancestry: { ok: true, shallow: false }, tags: ['v1.2.0', 'v1.2.1-rc.1'],
     human: { bar: false, answeredBy: null },
     ...over,
   };
@@ -210,4 +211,91 @@ test('handoff and tag message', () => {
   assert.match(msg.split('\n')[0], /^v1\.2\.1 — release \(colab release finalize\)$/);
   assert.match(msg, /Candidate: v1\.2\.1-rc\.1/);
   assert.match(msg, /- trunk-green: ok/);
+});
+
+// ---- --auto: newest clean candidate, each on its own clock (#423) -------------------------------
+
+/**
+ * A repo cutting one candidate a day: rc.1 at day 0, rc.2 at day 1, … rc.K at day K-1, all v1.3.0
+ * (the version only moves on a feat). Judges each the way the CLI's --auto walk does: its own
+ * period from its own cut, trunk read over its own window, then pickNewestClean.
+ */
+function dailyWalk({ days, now, redAt = null, regressions = [], held = false }) {
+  const tags = [{ name: 'v1.2.0', annotated: true, sha: 'f'.repeat(40), date: at(-10), subject: 'v1.2.0', onMain: true }];
+  for (let d = 0; d < days; d++) tags.push(rcTag(`v1.3.0-rc.${d + 1}`, { date: at(d), sha: String(d).repeat(40).slice(0, 40) }));
+  const runs = [];
+  for (let d = 0; d <= now; d += 0.25) runs.push({ workflowName: 'ci', status: 'completed', conclusion: redAt !== null && Math.abs(d - redAt) < 0.01 ? 'failure' : 'success', createdAt: at(d), headSha: 'x', event: 'push' });
+  const evals = [];
+  for (const c of rf.openCandidates(tags)) {
+    const period = rf.periodVerdict({ cutAt: c.cutAt, trackingCreatedAt: T0, testPeriodDays: 3, now: at(now) });
+    if (!period.elapsed && evals.length) continue;
+    const trunk = rf.trunkGreenVerdict(runs, { periodStart: period.start, periodEnd: period.endsAt, suiteWorkflows: ['ci'] });
+    const verdict = rf.decide(facts({
+      selection: { kind: 'candidate', candidate: c, superseded: [], detail: c.tag },
+      tracking: { number: 12, createdAt: T0, held }, period, trunk,
+      regressions: rf.regressionVerdict(regressions, { periodStart: period.start }), tags: tags.map((t) => t.name),
+    }));
+    evals.push({ candidate: c, verdict });
+  }
+  return rf.pickNewestClean(evals);
+}
+
+test('--auto: with a candidate cut every day, a final still lands every test period', () => {
+  // day 3: rc.1 (cut day 0) has had its full 3 days; rc.2..rc.4 are younger. Before #423 the newest
+  // (rc.4) was the only one judged, and it is always < 3 days old — no final, ever.
+  const p = dailyWalk({ days: 4, now: 3.1 });
+  assert.strictEqual(p.verdict.state, 'finalized');
+  assert.strictEqual(p.candidate.tag, 'v1.3.0-rc.1');
+  // day 6: rc.4 (cut day 3) is the newest one whose own period elapsed — newer ones do not restart it.
+  const later = dailyWalk({ days: 7, now: 6.1 });
+  assert.strictEqual(later.candidate.tag, 'v1.3.0-rc.4');
+  assert.strictEqual(later.verdict.state, 'finalized');
+  // day 2: nobody's period elapsed yet — the newest is reported testing.
+  assert.strictEqual(dailyWalk({ days: 3, now: 2 }).verdict.state, 'testing');
+});
+
+test('--auto: a red trunk run inside a candidate\'s own window disqualifies it, not older or newer ones outside it', () => {
+  // red at day 3.5: rc.4 (window day 3..6) saw it; rc.3 (window day 2..5) saw it; rc.1 (0..3) did not.
+  const p = dailyWalk({ days: 7, now: 6.1, redAt: 3.5 });
+  assert.notStrictEqual(p.candidate.tag, 'v1.3.0-rc.4');
+  assert.strictEqual(p.verdict.state, 'finalized');
+  assert.strictEqual(p.candidate.tag, 'v1.3.0-rc.1');
+});
+
+test('--auto: the hold and the regression rules are unchanged', () => {
+  assert.strictEqual(dailyWalk({ days: 4, now: 3.1, held: true }).verdict.state, 'held');
+  const open = dailyWalk({ days: 4, now: 3.1, regressions: [{ number: 7, state: 'open' }] });
+  assert.notStrictEqual(open.verdict.state, 'finalized');
+  // fixed at day 1.5: rc.1/rc.2 periods began before the fix (not in them) — rc.3 (cut day 2) carries it.
+  const fixed = dailyWalk({ days: 6, now: 5.1, regressions: [{ number: 7, state: 'closed', closedAt: at(1.5) }] });
+  assert.strictEqual(fixed.candidate.tag, 'v1.3.0-rc.3');
+  assert.strictEqual(fixed.verdict.state, 'finalized');
+});
+
+test('openCandidates: newest first; a hand-made or off-main one is listed with its refusal', () => {
+  const c = rf.openCandidates([rcTag('v1.2.1-rc.1'), rcTag('v1.2.1-rc.2', { onMain: false }), rcTag('v1.3.0-rc.1', { subject: 'mine' }), { name: 'v1.2.0', annotated: true, sha: 'b', date: T0, subject: 'x', onMain: true }]);
+  assert.deepStrictEqual(c.map((x) => x.tag), ['v1.3.0-rc.1', 'v1.2.1-rc.2', 'v1.2.1-rc.1']);
+  assert.match(c[0].refused, /not made by/);
+  assert.match(c[1].refused, /not on origin\/main/);
+  assert.strictEqual(c[2].refused, null);
+});
+
+test('trunkGreenVerdict: periodEnd bounds the window', () => {
+  const runs = [{ workflowName: 'ci', status: 'completed', conclusion: 'failure', createdAt: at(5), headSha: 'x', event: 'push' }];
+  assert.strictEqual(rf.trunkGreenVerdict(runs, { periodStart: at(0), suiteWorkflows: ['ci'] }).ok, false);
+  assert.strictEqual(rf.trunkGreenVerdict(runs, { periodStart: at(0), periodEnd: at(3), suiteWorkflows: ['ci'] }).ok, true);
+});
+
+// ---- pre-tag checks before a final (#424) -------------------------------------------------------
+
+test('decide: each pre-tag check refuses a final under its own name', () => {
+  const name = (v) => v.checks.filter((c) => c.required && !c.ok).map((c) => c.condition);
+  const man = rf.decide(facts({ manifests: [{ file: 'VERSION', version: '1.2.0' }] }));
+  assert.strictEqual(man.state, 'refused');
+  assert.deepStrictEqual(name(man), ['manifest-version']);
+  const shallow = rf.decide(facts({ ancestry: { ok: false, shallow: true } }));
+  assert.deepStrictEqual(name(shallow), ['on-trunk']);
+  const back = rf.decide(facts({ tags: ['v1.2.0', 'v1.4.0', 'v1.2.1-rc.1'] }));
+  assert.strictEqual(back.state, 'refused');
+  assert.deepStrictEqual(name(back), ['outranks-final']);
 });

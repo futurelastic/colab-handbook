@@ -68,4 +68,141 @@ function latestReleaseTag(root, { ref = null, includePrerelease = false } = {}) 
   }
 }
 
-module.exports = { PRERELEASE_TAG_GLOB, isPrereleaseTag, describeArgs, latestReleaseTag };
+// ---- pre-tag checks (#424) — fail closed before ANY candidate or final -------------------------
+//
+// Learned from a library that releases on every merge and publishes to a registry. Three checks, each
+// with its own named reason, run by `colab release cut` and `colab release finalize` before a tag is
+// created — pure (facts in, verdicts out); the CLI measures:
+//
+//   manifest-version  the tag equals the version every declared manifest carries
+//   on-trunk          the tagged commit is an ancestor of trunk; a shallow checkout cannot answer
+//   outranks-final    the version is strictly greater than the highest final tag, so "latest" never
+//                     moves backwards
+
+const PRE_TAG_CONDITIONS = Object.freeze(['manifest-version', 'on-trunk', 'outranks-final']);
+
+/** The manifests read, in this order. A manifest that exists but declares no version is not a declaration. */
+const MANIFESTS = Object.freeze(['VERSION', 'package.json', 'Cargo.toml', 'pyproject.toml']);
+
+const SEMVER_RE = /^v?(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:-([0-9A-Za-z.-]+))?$/;
+
+/** `vX.Y.Z[-pre]` or `X.Y.Z[-pre]` -> { major, minor, patch, pre }, or null. */
+function parseSemver(v) {
+  const m = SEMVER_RE.exec(String(v || '').trim());
+  return m ? { major: Number(m[1]), minor: Number(m[2]), patch: Number(m[3]), pre: m[4] || null } : null;
+}
+
+/** Compare the X.Y.Z cores only (a pre-release suffix is ignored). */
+function compareCore(a, b) {
+  return (a.major - b.major) || (a.minor - b.minor) || (a.patch - b.patch);
+}
+
+/** The `key = "value"` of one TOML table, or undefined / { dynamic } / { workspace }. Deliberately small: a version line, not a TOML parser. */
+function tomlTableVersion(text, table) {
+  const lines = String(text).split(/\r?\n/);
+  let inTable = false;
+  for (const raw of lines) {
+    const line = raw.replace(/#.*$/, '').trim();
+    const h = /^\[([^\]]+)\]$/.exec(line);
+    if (h) { inTable = h[1].trim() === table; continue; }
+    if (!inTable) continue;
+    if (/^version\.workspace\s*=\s*true$/.test(line) || /^version\s*=\s*\{\s*workspace\s*=\s*true\s*\}$/.test(line)) return { workspace: true };
+    const m = /^version\s*=\s*"([^"]*)"$/.exec(line) || /^version\s*=\s*'([^']*)'$/.exec(line);
+    if (m) return { value: m[1] };
+    if (/^dynamic\s*=.*["']version["']/.test(line)) return { dynamic: true };
+  }
+  return undefined;
+}
+
+/**
+ * Every version the repo's manifests declare, read through `readFile(rel)` (string, or null when the
+ * file is absent). Returns [{ file, version } | { file, error } | { file, dynamic: true }]. Absent
+ * files and manifests with no version field are omitted — they declare nothing.
+ */
+function manifestVersions(readFile) {
+  const out = [];
+  for (const file of MANIFESTS) {
+    const text = readFile(file);
+    if (text === null || text === undefined) continue;
+    if (file === 'VERSION') {
+      const v = String(text).trim();
+      if (!v) out.push({ file, error: 'VERSION is empty' });
+      else out.push({ file, version: v.replace(/^v/, '') });
+    } else if (file === 'package.json') {
+      let j;
+      try { j = JSON.parse(text); } catch (e) { out.push({ file, error: `package.json does not parse (${e.message})` }); continue; }
+      if (j && typeof j.version === 'string') out.push({ file, version: j.version });
+      else if (j && j.version !== undefined) out.push({ file, error: `package.json version is ${JSON.stringify(j.version)}, not a string` });
+    } else if (file === 'Cargo.toml') {
+      const v = tomlTableVersion(text, 'package');
+      if (!v) continue;
+      if (v.workspace) out.push({ file, error: 'Cargo.toml takes version.workspace = true — the workspace root\'s version is not read here' });
+      else out.push({ file, version: v.value });
+    } else if (file === 'pyproject.toml') {
+      const v = tomlTableVersion(text, 'project') || tomlTableVersion(text, 'tool.poetry');
+      if (!v) continue;
+      if (v.dynamic) out.push({ file, dynamic: true });
+      else out.push({ file, version: v.value });
+    }
+  }
+  return out;
+}
+
+/**
+ * The three pre-tag checks for `tag` (a candidate `vX.Y.Z-rc.N` or a final `vX.Y.Z`).
+ *
+ *   manifests   manifestVersions(...) at the tagged commit, or null when it could not be read
+ *   ancestry    { ok, shallow, detail? } — is the commit an ancestor of `trunk`; shallow = the
+ *               checkout cannot answer (null = not measured)
+ *   tags        every tag name in the repo — the finals among them are what the version must outrank
+ *   trunk       the trunk name, for the detail text
+ *
+ * Returns [{ condition, ok, detail }] in PRE_TAG_CONDITIONS order. Every unknown is a refusal.
+ */
+function preTagChecks({ tag, manifests, ancestry, tags, trunk = 'main' }) {
+  const checks = [];
+  const add = (condition, ok, detail) => checks.push({ condition, ok: !!ok, detail });
+  const t = parseSemver(tag);
+  const core = t ? `${t.major}.${t.minor}.${t.patch}` : null;
+
+  // 1. manifest-version
+  if (!t) add('manifest-version', false, `${tag} is not a vX.Y.Z tag — nothing to compare a manifest against`);
+  else if (manifests === null || manifests === undefined) add('manifest-version', false, 'the manifests could not be read at the tagged commit — an unread version is not a matching one');
+  else {
+    const accepted = t.pre ? [core, `${core}-${t.pre}`] : [core];
+    const bad = [];
+    const good = [];
+    for (const m of manifests) {
+      if (m.error) bad.push(`${m.file}: ${m.error}`);
+      else if (m.dynamic) good.push(`${m.file} (dynamic — derived from the tag)`);
+      else if (!accepted.includes(String(m.version).replace(/^v/, ''))) bad.push(`${m.file} says ${m.version}`);
+      else good.push(`${m.file} ${m.version}`);
+    }
+    if (bad.length) add('manifest-version', false, `the tag ${tag} does not equal the manifest version — ${bad.join('; ')}. Bump the manifest on trunk first; a tag that disagrees with what the package says it is publishes a lie`);
+    else if (!good.length) add('manifest-version', true, `no version manifest declared (${MANIFESTS.join(', ')}) — the tag is the version`);
+    else add('manifest-version', true, `${tag} matches ${good.join(', ')}`);
+  }
+
+  // 2. on-trunk
+  if (!ancestry) add('on-trunk', false, `ancestry not measured — cannot confirm the commit is on ${trunk}`);
+  else if (ancestry.shallow) add('on-trunk', false, `a shallow checkout cannot answer whether the commit is on ${trunk} — fetch full history (fetch-depth: 0) and re-run`);
+  else if (!ancestry.ok) add('on-trunk', false, ancestry.detail || `the tagged commit is not an ancestor of ${trunk}`);
+  else add('on-trunk', true, ancestry.detail || `the tagged commit is an ancestor of ${trunk}`);
+
+  // 3. outranks-final
+  if (!t) add('outranks-final', false, `${tag} is not a vX.Y.Z tag`);
+  else {
+    const finals = (tags || []).map((n) => ({ n, v: parseSemver(n) })).filter((x) => x.v && !x.v.pre && /^v/.test(x.n));
+    finals.sort((a, b) => compareCore(a.v, b.v));
+    const top = finals.length ? finals[finals.length - 1] : null;
+    if (!top) add('outranks-final', true, 'no final tag yet — nothing to outrank');
+    else if (compareCore(t, top.v) <= 0) add('outranks-final', false, `v${core} does not outrank the latest final ${top.n} — "latest" would move backwards`);
+    else add('outranks-final', true, `v${core} > latest final ${top.n}`);
+  }
+  return checks;
+}
+
+module.exports = {
+  PRERELEASE_TAG_GLOB, isPrereleaseTag, describeArgs, latestReleaseTag,
+  PRE_TAG_CONDITIONS, MANIFESTS, parseSemver, manifestVersions, preTagChecks,
+};

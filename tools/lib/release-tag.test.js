@@ -215,3 +215,53 @@ test('release-status: a waiting candidate does not reset the unreleased gap (#81
   assert.strictEqual(row.flag, true);
   assert.strictEqual(r.code, 1);
 });
+
+// ---- pre-tag checks (#424) ---------------------------------------------------------------------
+
+{
+  const rt = require('./release-tag.js');
+  const files = (map) => (rel) => (Object.prototype.hasOwnProperty.call(map, rel) ? map[rel] : null);
+  const okAnc = { ok: true, shallow: false };
+  const byName = (checks) => Object.fromEntries(checks.map((c) => [c.condition, c]));
+
+  test('manifestVersions: VERSION, package.json, Cargo.toml [package], pyproject [project]/[tool.poetry]', () => {
+    const m = rt.manifestVersions(files({
+      VERSION: 'v1.3.0\n',
+      'package.json': '{"name":"x","version":"1.3.0"}',
+      'Cargo.toml': '[workspace]\nmembers=[]\n[package]\nname = "x"\nversion = "1.3.0" # pinned\n',
+      'pyproject.toml': '[tool.poetry]\nversion = "1.3.0"\n',
+    }));
+    assert.deepStrictEqual(m.map((x) => [x.file, x.version]), [['VERSION', '1.3.0'], ['package.json', '1.3.0'], ['Cargo.toml', '1.3.0'], ['pyproject.toml', '1.3.0']]);
+    assert.deepStrictEqual(rt.manifestVersions(files({ 'package.json': '{"private":true}' })), [], 'no version field declares nothing');
+    assert.match(rt.manifestVersions(files({ 'package.json': '{' }))[0].error, /does not parse/);
+    assert.match(rt.manifestVersions(files({ 'Cargo.toml': '[package]\nversion.workspace = true\n' }))[0].error, /workspace/);
+    assert.strictEqual(rt.manifestVersions(files({ 'pyproject.toml': '[project]\ndynamic = ["version"]\n' }))[0].dynamic, true);
+  });
+
+  test('preTagChecks: manifest-version — the tag must equal every declared manifest', () => {
+    const ok = byName(rt.preTagChecks({ tag: 'v1.3.0-rc.2', manifests: [{ file: 'package.json', version: '1.3.0' }], ancestry: okAnc, tags: ['v1.2.0'] }));
+    assert.strictEqual(ok['manifest-version'].ok, true);
+    const bad = byName(rt.preTagChecks({ tag: 'v1.3.0', manifests: [{ file: 'package.json', version: '1.2.0' }], ancestry: okAnc, tags: ['v1.2.0'] }));
+    assert.strictEqual(bad['manifest-version'].ok, false);
+    assert.match(bad['manifest-version'].detail, /does not equal the manifest version — package\.json says 1\.2\.0/);
+    assert.strictEqual(byName(rt.preTagChecks({ tag: 'v1.3.0', manifests: [], ancestry: okAnc, tags: [] }))['manifest-version'].ok, true);
+    assert.strictEqual(byName(rt.preTagChecks({ tag: 'v1.3.0', manifests: null, ancestry: okAnc, tags: [] }))['manifest-version'].ok, false);
+    assert.strictEqual(byName(rt.preTagChecks({ tag: 'v1.3.0', manifests: [{ file: 'Cargo.toml', error: 'x' }], ancestry: okAnc, tags: [] }))['manifest-version'].ok, false);
+  });
+
+  test('preTagChecks: on-trunk — not an ancestor, shallow and unmeasured each refuse', () => {
+    const c = (ancestry) => byName(rt.preTagChecks({ tag: 'v1.3.0', manifests: [], ancestry, tags: [] }))['on-trunk'];
+    assert.strictEqual(c(okAnc).ok, true);
+    assert.match(c({ ok: false, shallow: false }).detail, /not an ancestor of main/);
+    assert.match(c({ ok: true, shallow: true }).detail, /shallow checkout cannot answer/);
+    assert.strictEqual(c(null).ok, false);
+  });
+
+  test('preTagChecks: outranks-final — strictly greater than the highest final, candidates ignored', () => {
+    const c = (tag, tags) => byName(rt.preTagChecks({ tag, manifests: [], ancestry: okAnc, tags }))['outranks-final'];
+    assert.strictEqual(c('v1.3.0', ['v1.2.0', 'v1.9.0-rc.1']).ok, true);
+    assert.match(c('v1.3.0', ['v1.2.0', 'v1.4.0']).detail, /does not outrank the latest final v1\.4\.0/);
+    assert.strictEqual(c('v1.3.0-rc.1', ['v1.3.0']).ok, false, 'equal is not greater');
+    assert.strictEqual(c('v1.3.0', []).ok, true);
+  });
+}

@@ -13,6 +13,9 @@
  *     candidates-per-day: 1   # positive integer, never above the route's own cap
  *     test-period: 3d         # <N>d, never below the route's 3 days
  *     final: auto             # auto | human
+ *     guard-run: <command>    # #422 — a breaking-change detector `release cut --auto` runs
+ *     guard-result: <path>    # #422 — or the file an earlier CI step wrote its result to
+ *     exports: <path>         # #422 — a committed list of public symbols, one per line
  *
  * Two layers. The descriptor's ROW (exposure + deploy + production) is a fact about the repo; the
  * ROUTE is how releases run on it. A row permits a fixed set of routes (ROW_ROUTES) and derives one
@@ -37,7 +40,11 @@
 
 const axisAuthority = require('./axis-authority.js');
 
-const KEYS = Object.freeze(['route', 'candidates', 'candidates-per-day', 'test-period', 'final']);
+const KEYS = Object.freeze(['route', 'candidates', 'candidates-per-day', 'test-period', 'final', 'guard-run', 'guard-result', 'exports']);
+// #422: the bump inputs `release cut --auto` reads. Not a narrowing or a widening — they add evidence
+// to the computed number, never permission — so they only have to be non-empty strings. One of
+// guard-run / guard-result, never both: two detectors answering one question is two readings.
+const INPUT_KEYS = Object.freeze(['guard-run', 'guard-result', 'exports']);
 const CANDIDATES = Object.freeze(['auto', 'off']);
 const FINAL = Object.freeze(['auto', 'human']);
 // The routes' own test period (CONVENTIONS.md §6: "The test period is 3 days"). A floor, not a
@@ -153,7 +160,7 @@ function evaluateRelease(cfg) {
   if (raw === undefined || raw === null) return { declared: null, derived, effective, findings };
 
   if (typeof raw !== 'object' || Array.isArray(raw)) {
-    fail(`release is ${JSON.stringify(raw)}, expected a block of route / candidates / candidates-per-day / test-period / final (omit it for the default ${derived.axis} derives)`);
+    fail(`release is ${JSON.stringify(raw)}, expected a block of route / candidates / candidates-per-day / test-period / final / guard-run / guard-result / exports (omit it for the default ${derived.axis} derives)`);
     return { declared: raw, derived, effective, findings };
   }
 
@@ -161,6 +168,11 @@ function evaluateRelease(cfg) {
   for (const key of Object.keys(raw)) {
     if (!KEYS.includes(key)) fail(`release.${key} is not a release: key — expected one of: ${KEYS.join(', ')}`);
   }
+
+  for (const key of INPUT_KEYS) {
+    if (key in raw && (typeof raw[key] !== 'string' || !raw[key].trim())) fail(`release.${key} is ${JSON.stringify(raw[key])}, expected a non-empty string`);
+  }
+  if ('guard-run' in raw && 'guard-result' in raw) fail('release.guard-run and release.guard-result are both declared — one detector answers whether the release breaks, so declare one');
 
   // 1. The route — chosen among the ones this descriptor's row permits.
   let why = derived.why;
@@ -224,6 +236,6 @@ function evaluateRelease(cfg) {
 }
 
 module.exports = {
-  KEYS, CANDIDATES, FINAL, TEST_PERIOD_DAYS, ROUTES, ROUTE_POLICY, ROW_ROUTES,
+  KEYS, INPUT_KEYS, CANDIDATES, FINAL, TEST_PERIOD_DAYS, ROUTES, ROUTE_POLICY, ROW_ROUTES,
   deriveDefault, evaluateRelease, parseTestPeriod, routePolicy,
 };

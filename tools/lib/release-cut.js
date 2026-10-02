@@ -27,19 +27,35 @@
  *   switch-dependencies  §6 condition 4 — the colab:switch markers are readable, and no finished
  *                        switch needs one that is still unfinished
  *
+ *   manifest-version     #424 — the tag equals every declared manifest's version (release-tag.js)
+ *   on-trunk             #424 — the commit is an ancestor of main; a shallow checkout is a refusal
+ *   outranks-final       #424 — the version is strictly greater than the highest final tag
+ *   cadence              #422, --auto only — the route's candidates-per-day cap; inside the window
+ *                        the run is a NO-OP (verdict.noop), not a refusal
+ *
+ * `--auto` (#422) computes the bump with no human input (autoSignals + decideAutoVersion): commit
+ * types, a repo guard's result and an exports diff, majors included — a major only with a migration
+ * section carrying its measured cost (parseMigrationSection). Every signal is written into the tag
+ * message, so the reason for the bump is recorded mechanically.
+ *
  * Never a final tag. Finalizing a candidate is the release skill's (#339), and a final is a human
  * act on every row where a tag reaches production.
  */
 
 const migrationPaths = require('./migration-paths');
+const releaseTag = require('./release-tag');
 
 const VERSION_RE = /^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$/;
 const BUMPS = Object.freeze(['patch', 'minor']);
 
 const CONDITIONS = Object.freeze([
-  'release-policy', 'prerelease-trigger', 'version', 'already-candidate',
+  'release-policy', 'cadence', 'prerelease-trigger', 'version', 'already-candidate',
+  ...releaseTag.PRE_TAG_CONDITIONS,
   'ci-green', 'full-suite', 'schema-additive', 'switch-dependencies',
 ]);
+
+/** The file a major's migration section is read from, at the candidate commit (#422). */
+const MIGRATION_FILE = 'MIGRATION.md';
 
 /** `vX.Y.Z` -> { major, minor, patch }, or null for anything else (a candidate included). */
 function parseVersion(tag) {
@@ -124,6 +140,230 @@ function decideVersion({ lastFinal, suggestion, override, tags }) {
     ? `${lastFinal} -> ${version} (${bump}, overridden from ${computed || 'no bump'}: ${overridden.reason})`
     : `${lastFinal} -> ${version} (${bump}: ${why})`;
   return { ok: true, detail, version, bump, why, overridden };
+}
+
+// ---- --auto: the computed bump (#422) ---------------------------------------------------------
+//
+// CONVENTIONS.md §6, *Versioning*: fixes/chores -> patch; a feature or an epic's switch-removal child
+// -> minor; a breaking change -> minor below 1.0, major from 1.0. Breaking is read from three places,
+// because the break that bites is the one the commit types do not reveal:
+//
+//   commits   `!` / `BREAKING CHANGE:` since the last final
+//   guard     a repo-declared detector (project.yml `release.guard-run` — a command — or
+//             `release.guard-result` — a file an earlier CI step wrote). THE CONTRACT: one JSON object
+//             { "breaking": true|false, "findings": ["<one line each>"] } on stdout / in the file.
+//             Exit non-zero, unparseable output or a missing file is a REFUSAL — an unread guard is
+//             not a clean one. The command runs at the repo root with COLAB_RELEASE_FROM (the last
+//             final tag) and COLAB_RELEASE_SHA (the commit being tagged) in its environment.
+//   exports   a removed or renamed public export since the last final: package.json `exports`
+//             subpaths and `bin` names, plus — when `release.exports` names one — a committed list
+//             of public symbols, one per line (`#` comments allowed); a line gone is a break (a
+//             rename is a removal plus an addition).
+
+/** Validate one guard's raw output against the contract. Returns { name, breaking, findings } or { name, error }. */
+function parseGuardOutput(name, text) {
+  let j;
+  try { j = JSON.parse(String(text || '').trim()); } catch (e) {
+    return { name, error: `${name} output is not JSON (${e.message}) — expected {"breaking": bool, "findings": [string]}` };
+  }
+  if (!j || typeof j !== 'object' || Array.isArray(j) || typeof j.breaking !== 'boolean') {
+    return { name, error: `${name} output has no boolean "breaking" — expected {"breaking": bool, "findings": [string]}` };
+  }
+  const findings = j.findings === undefined ? [] : j.findings;
+  if (!Array.isArray(findings) || findings.some((f) => typeof f !== 'string')) {
+    return { name, error: `${name} "findings" is not a list of strings` };
+  }
+  return { name, breaking: j.breaking, findings };
+}
+
+function pkgExportKeys(pkg) {
+  const keys = new Set();
+  if (!pkg || typeof pkg !== 'object') return keys;
+  const ex = pkg.exports;
+  if (typeof ex === 'string' || Array.isArray(ex)) keys.add('exports:.');
+  else if (ex && typeof ex === 'object') {
+    const sub = Object.keys(ex).filter((k) => k.startsWith('.'));
+    if (sub.length) for (const k of sub) keys.add(`exports:${k}`);
+    else keys.add('exports:.'); // a conditions-only map is the root export
+  }
+  if (typeof pkg.bin === 'string') keys.add(`bin:${pkg.name || '(package name)'}`);
+  else if (pkg.bin && typeof pkg.bin === 'object') for (const k of Object.keys(pkg.bin)) keys.add(`bin:${k}`);
+  return keys;
+}
+
+function listLines(text) {
+  return new Set(String(text || '').split(/\r?\n/).map((l) => l.trim()).filter((l) => l && !l.startsWith('#')));
+}
+
+/**
+ * Removed public exports between the last final (`before`) and the candidate (`after`).
+ *   before/after  { pkg: string|null, list: string|null } — package.json text and the declared list
+ *                 file's text at each side (null = absent)
+ *   listFile      release.exports, or null
+ * Returns { removed: [string], detail } or { error }.
+ */
+function exportsDiff({ before, after, listFile }) {
+  const parse = (t, side) => {
+    if (t === null || t === undefined) return { pkg: null };
+    try { return { pkg: JSON.parse(t) }; } catch (e) { return { error: `package.json at ${side} does not parse (${e.message})` }; }
+  };
+  const b = parse(before && before.pkg, 'the last final');
+  const a = parse(after && after.pkg, 'the candidate');
+  if (b.error || a.error) return { error: b.error || a.error };
+  const removed = [];
+  const bk = pkgExportKeys(b.pkg); const ak = pkgExportKeys(a.pkg);
+  for (const k of bk) if (!ak.has(k)) removed.push(`package.json ${k.replace(':', ' ')}`);
+  const read = ['package.json exports/bin'];
+  if (listFile) {
+    if (!after || after.list === null || after.list === undefined) {
+      return { error: `release.exports names ${listFile}, which does not exist at the candidate — an unread export list is not a clean one` };
+    }
+    if (before && before.list !== null && before.list !== undefined) {
+      const al = listLines(after.list);
+      for (const l of listLines(before.list)) if (!al.has(l)) removed.push(`${listFile}: ${l}`);
+      read.push(listFile);
+    } else read.push(`${listFile} (new since the last final — no baseline)`);
+  }
+  return { removed, detail: removed.length ? `removed export(s): ${removed.join('; ')}` : `no export removed (read: ${read.join(', ')})` };
+}
+
+/** Switch-removal children (`role=remove`) closed done after `sinceIso` — each one makes the release a minor. */
+function switchRemovalsSince(issues, sinceIso) {
+  const since = Date.parse(sinceIso || '');
+  const out = [];
+  for (const issue of issues || []) {
+    if (!closedDone(issue)) continue;
+    const closed = Date.parse(issue.closedAt || '');
+    if (!Number.isNaN(since) && !(closed > since)) continue;
+    const { markers } = parseSwitchMarkers(issue.body);
+    for (const mk of markers) if (mk.role === 'remove') out.push({ number: issue.number, name: mk.name });
+  }
+  return out;
+}
+
+/**
+ * Every bump signal, gathered — the input decideAutoVersion reads and the lines the release notes
+ * print. `cc` is ccSummary's shape { total, counts, breaking }; `guard` is null (none declared) or a
+ * parseGuardOutput result; `exports` an exportsDiff result; `switchRemovals` switchRemovalsSince's.
+ * Returns { total, breaking: [why], minor: [why], patch: [why], unread: [why], lines: [string] }.
+ */
+function autoSignals({ cc, guard, exports: ex, switchRemovals }) {
+  const c = cc || { total: 0, counts: {}, breaking: false };
+  const counts = c.counts || {};
+  const sig = { total: c.total || 0, breaking: [], minor: [], patch: [], unread: [], lines: [] };
+  const line = (s) => sig.lines.push(s);
+
+  if (c.breaking) { sig.breaking.push('a commit marked breaking (! or BREAKING CHANGE:)'); line('commits: breaking — a commit marked ! or BREAKING CHANGE:'); }
+  else line('commits: no commit marked breaking');
+  if (counts.feat) sig.minor.push(`${counts.feat} feat commit(s)`);
+  if (sig.total) {
+    const parts = Object.entries(counts).filter(([, n]) => n).map(([t, n]) => `${n} ${t}`);
+    line(`commits: ${sig.total} since the last final (${parts.join(', ') || 'none typed'})`);
+    if (!counts.feat) sig.patch.push(`${sig.total} commit(s), none a feature`);
+  } else line('commits: none since the last final');
+
+  const sw = switchRemovals || [];
+  if (sw.length) {
+    sig.minor.push(`switch-removal child merged: ${sw.map((s) => `#${s.number} (${s.name})`).join(', ')}`);
+    line(`switches: removed — ${sw.map((s) => `#${s.number} ${s.name}`).join(', ')}`);
+  } else line('switches: no switch-removal child merged');
+
+  if (!guard) line('guard: none declared (release.guard-run / release.guard-result)');
+  else if (guard.error) { sig.unread.push(`guard ${guard.error}`); line(`guard: UNREAD — ${guard.error}`); }
+  else {
+    if (guard.breaking) sig.breaking.push(`guard ${guard.name} reported a breaking change`);
+    line(`guard ${guard.name}: ${guard.breaking ? 'BREAKING' : 'not breaking'}${guard.findings.length ? ` — ${guard.findings.join('; ')}` : ''}`);
+  }
+
+  if (!ex) line('exports: not read');
+  else if (ex.error) { sig.unread.push(`exports: ${ex.error}`); line(`exports: UNREAD — ${ex.error}`); }
+  else {
+    if (ex.removed.length) sig.breaking.push(`${ex.removed.length} public export(s) removed or renamed`);
+    line(`exports: ${ex.detail}`);
+  }
+  return sig;
+}
+
+/**
+ * The section of MIGRATION.md for `version` (vX.0.0): a heading naming it, up to the next heading of
+ * the same or a higher level, carrying a non-empty `Measured cost:` line. Returns { ok, section, detail }.
+ */
+function parseMigrationSection(text, version) {
+  if (text === null || text === undefined) {
+    return { ok: false, section: null, detail: `no ${MIGRATION_FILE} at the candidate commit — a major needs a migration section for ${version} with its measured cost (CONVENTIONS.md §6, Versioning)` };
+  }
+  const lines = String(text).split(/\r?\n/);
+  const want = escapeRe(version);
+  let start = -1; let level = 0;
+  for (let i = 0; i < lines.length; i++) {
+    const h = /^(#{1,6})\s+(.*)$/.exec(lines[i]);
+    if (h && new RegExp(`(^|[^0-9A-Za-z.])${want}([^0-9A-Za-z.-]|$)`).test(h[2])) { start = i; level = h[1].length; break; }
+  }
+  if (start === -1) return { ok: false, section: null, detail: `${MIGRATION_FILE} has no heading naming ${version} — a major needs its own migration section` };
+  let end = lines.length;
+  for (let i = start + 1; i < lines.length; i++) {
+    const h = /^(#{1,6})\s/.exec(lines[i]);
+    if (h && h[1].length <= level) { end = i; break; }
+  }
+  const section = lines.slice(start, end).join('\n').trim();
+  if (!/^\s*(?:[-*]\s*)?\**Measured cost:?\**:?\s*\S/im.test(section)) {
+    return { ok: false, section, detail: `${MIGRATION_FILE}'s ${version} section has no non-empty "Measured cost:" line — a major states what adopters must change and how much of it was measured` };
+  }
+  return { ok: true, section, detail: `${MIGRATION_FILE} carries a ${version} migration section with its measured cost` };
+}
+
+/**
+ * --auto's version: the bump from `signals` (autoSignals), no override possible.
+ *   migration  (version) => parseMigrationSection result — asked only when the bump is a major
+ * Returns decideVersion's shape plus { signals, migration }.
+ */
+function decideAutoVersion({ lastFinal, signals, migration, tags }) {
+  const refuse = (detail, extra = {}) => ({ ok: false, detail, ...extra });
+  const s = signals || { total: 0, breaking: [], minor: [], patch: [], unread: [] };
+  if (s.unread && s.unread.length) return refuse(`a bump signal could not be read — fail closed: ${s.unread.join('; ')}`);
+  if (!lastFinal) return refuse('no final release tag (vX.Y.Z) on main yet — the first version is a human decision, not a computed bump');
+  const last = parseVersion(lastFinal);
+  if (!last) return refuse(`the last release tag ${lastFinal} is not vX.Y.Z — cannot compute a bump from it`);
+  if (!s.total && !s.breaking.length && !s.minor.length) return refuse(`nothing merged since ${lastFinal} — nothing to cut`, { nothing: true });
+
+  let bump; let why;
+  if (s.breaking.length) {
+    if (last.major === 0) { bump = 'minor'; why = `${s.breaking.join('; ')} — pre-1.0, a breaking change ships as a minor (SemVer §4)`; }
+    else { bump = 'major'; why = s.breaking.join('; '); }
+  } else if (s.minor.length) { bump = 'minor'; why = s.minor.join('; '); }
+  else { bump = 'patch'; why = s.patch.join('; ') || 'fixes/chores only'; }
+
+  const next = bump === 'major' ? { major: last.major + 1, minor: 0, patch: 0 }
+    : bump === 'minor' ? { major: last.major, minor: last.minor + 1, patch: 0 }
+      : { major: last.major, minor: last.minor, patch: last.patch + 1 };
+  const version = formatVersion(next);
+  let mig = null;
+  if (bump === 'major') {
+    mig = typeof migration === 'function' ? migration(version) : (migration || null);
+    if (!mig || !mig.ok) {
+      return refuse(`${lastFinal} -> ${version} is a major (${why}), refused: ${mig ? mig.detail : `no migration section read for ${version}`}`, { bump, migration: mig });
+    }
+  }
+  if ((tags || []).includes(version)) return refuse(`${version} is already a final tag — a candidate for a released version is meaningless`);
+  return { ok: true, detail: `${lastFinal} -> ${version} (${bump}, computed: ${why})`, version, bump, why, overridden: null, migration: mig };
+}
+
+// ---- --auto: cadence (#422) ------------------------------------------------------------------
+
+/**
+ * The route's candidates-per-day cap as a rolling 24h window. `candidates` is [{ name, date }] for
+ * every candidate `colab release cut` made (date = tagger date); `perDay` null = uncapped.
+ * Returns { ok, detail, nextAt }. Not ok is a NO-OP for the caller, never a refusal.
+ */
+function cadenceVerdict({ candidates, perDay, now }) {
+  if (perDay === null || perDay === undefined) return { ok: true, detail: 'no candidates-per-day cap on this route', nextAt: null };
+  const nowMs = Date.parse(now);
+  const recent = (candidates || []).map((c) => ({ ...c, ms: Date.parse(c.date) }))
+    .filter((c) => !Number.isNaN(c.ms) && c.ms > nowMs - 86400000 && c.ms <= nowMs)
+    .sort((a, b) => a.ms - b.ms);
+  if (recent.length < perDay) return { ok: true, detail: `${recent.length} candidate(s) in the last 24h, cap ${perDay}`, nextAt: null };
+  const nextAt = new Date(recent[recent.length - perDay].ms + 86400000).toISOString();
+  return { ok: false, detail: `${recent.length} candidate(s) in the last 24h (${recent.map((c) => c.name).join(', ')}) — the route caps at ${perDay} a day; next one from ${nextAt}`, nextAt };
 }
 
 // ---- §6 condition 2: the full suite ------------------------------------------------------------
@@ -351,15 +591,27 @@ function decide(facts) {
       ? 'release: candidates: off — this repo narrowed its rung row to no automatic candidates'
       : `candidates are off on ${p.derived.axis}: ${p.derived.why} (CONVENTIONS.md §6, The release rung)`);
   } else {
-    add('release-policy', true, `${p.derived.axis} (${p.derived.row}): candidates auto, final ${p.effective.final}, test period ${p.effective.testPeriodDays}d`);
+    add('release-policy', true, `${p.derived.axis} (${p.derived.row}${p.effective.route ? `, route ${p.effective.route}` : ''}): candidates auto, final ${p.effective.final}, test period ${p.effective.testPeriodDays}d`);
+  }
+
+  // #422: --auto honours the route's cadence. Inside the window the run is a no-op, not a refusal.
+  let noop = false;
+  if (f.auto) {
+    const cad = f.auto.cadence || { ok: false, detail: 'cadence not measured' };
+    add('cadence', cad.ok, cad.detail);
+    if (!cad.ok) noop = !!f.auto.cadence;
   }
 
   const trig = f.triggers || [];
   if (trig.length) add('prerelease-trigger', false, `a deploy would fire on a candidate tag: ${trig.map((t) => t.text).join('; ')}`);
   else add('prerelease-trigger', true, 'no deploy workflow fires on a pre-release tag');
 
-  const v = decideVersion({ lastFinal: f.lastFinal, suggestion: f.suggestion, override: f.override, tags: f.tags });
+  const v = f.auto
+    ? decideAutoVersion({ lastFinal: f.lastFinal, signals: f.auto.signals, migration: f.auto.migration, tags: f.tags })
+    : decideVersion({ lastFinal: f.lastFinal, suggestion: f.suggestion, override: f.override, tags: f.tags });
   add('version', v.ok, v.detail);
+  // "Nothing merged since the last final" is a no-op for the release workflow, not a failure.
+  if (f.auto && v.nothing) noop = true;
 
   let tag = null;
   if (v.ok) {
@@ -371,6 +623,14 @@ function decide(facts) {
     }
   }
 
+  // #424: the three pre-tag checks, on the tag this run would create.
+  if (tag) {
+    for (const c of releaseTag.preTagChecks({ tag, manifests: f.manifests, ancestry: f.ancestry, tags: f.tags, trunk: 'main' })) add(c.condition, c.ok, c.detail);
+  } else if (f.ancestry && f.ancestry.shallow) {
+    // A shallow checkout cannot even find the last final, so no tag is computed — name the cause.
+    add('on-trunk', false, 'a shallow checkout cannot answer whether the commit is on main (nor find the last final tag) — fetch full history (fetch-depth: 0) and re-run');
+  }
+
   for (const [condition, verdict] of [['ci-green', f.ci], ['full-suite', f.suite], ['schema-additive', f.schema], ['switch-dependencies', f.switches]]) {
     if (!verdict) add(condition, false, 'not measured');
     else add(condition, verdict.ok, verdict.detail);
@@ -378,7 +638,11 @@ function decide(facts) {
 
   const refusals = checks.filter((c) => !c.ok);
   const ok = refusals.length === 0 && !!tag;
-  return { ok, checks, refusals, version: v.ok ? v.version : null, tag: ok ? tag : null, bump: v.ok ? v.bump : null, overridden: v.ok ? v.overridden : null };
+  return {
+    ok, noop: !ok && noop, checks, refusals, version: v.ok ? v.version : null, tag: ok ? tag : null,
+    bump: v.ok ? v.bump : (v.bump || null), overridden: v.ok ? v.overridden : null,
+    signals: f.auto ? f.auto.signals || null : null, migration: v.migration || null,
+  };
 }
 
 /** The annotated tag's message — where the chosen bump, its reason and every checked condition are recorded. */
@@ -388,8 +652,10 @@ function tagMessage(verdict, { sha, lastFinal }) {
     '',
     `Commit: ${sha}`,
     `Since: ${lastFinal}`,
-    `Bump: ${verdict.bump}${verdict.overridden ? ` (overridden from ${verdict.overridden.from || 'no bump'} — reason: ${verdict.overridden.reason})` : ''}`,
+    `Bump: ${verdict.bump}${verdict.overridden ? ` (overridden from ${verdict.overridden.from || 'no bump'} — reason: ${verdict.overridden.reason})` : ''}${verdict.signals ? ' (computed by --auto)' : ''}`,
     '',
+    ...(verdict.signals ? ['Signals (every input the bump read):', ...verdict.signals.lines.map((l) => `- ${l}`), ''] : []),
+    ...(verdict.migration && verdict.migration.section ? ['Migration:', '', verdict.migration.section, ''] : []),
     'Conditions (CONVENTIONS.md §6):',
     ...verdict.checks.map((c) => `- ${c.condition}: ${c.detail}`),
     '',
@@ -399,8 +665,9 @@ function tagMessage(verdict, { sha, lastFinal }) {
 }
 
 module.exports = {
-  CONDITIONS, BUMPS,
+  CONDITIONS, BUMPS, MIGRATION_FILE,
   parseVersion, formatVersion, candidateNumbers, nextCandidateNumber, decideVersion,
+  parseGuardOutput, exportsDiff, switchRemovalsSince, autoSignals, parseMigrationSection, decideAutoVersion, cadenceVerdict,
   fullSuiteVerdict, isMigrationPath, schemaVerdict,
   parseSwitchMarkers, switchVerdict,
   decide, tagMessage,

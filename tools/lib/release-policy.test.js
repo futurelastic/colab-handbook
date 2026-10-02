@@ -271,3 +271,14 @@ test('an unknown route value is a failure', () => {
   assert.match(r.findings.map((f) => f.text).join('|'), /release\.route is "yolo", expected one of: none, rapid-app/);
   assert.equal(r.effective.route, 'public-tool');
 });
+
+test('#422 bump inputs: guard-run / guard-result / exports are non-empty strings, one detector at most', () => {
+  const base = { trunk: 'main', exposure: 'released', production: null, deploy: 'none' };
+  const ok = evaluateRelease({ ...base, release: { 'guard-run': 'node scripts/guard.mjs', exports: 'api.txt' } });
+  assert.deepStrictEqual(ok.findings, []);
+  assert.strictEqual(ok.effective.candidates, 'auto', 'an input key never changes the route policy');
+  const empty = evaluateRelease({ ...base, release: { exports: '' } });
+  assert.match(empty.findings[0].text, /release\.exports is "", expected a non-empty string/);
+  const both = evaluateRelease({ ...base, release: { 'guard-run': 'a', 'guard-result': 'b.json' } });
+  assert.match(both.findings[0].text, /both declared/);
+});
