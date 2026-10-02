@@ -87,12 +87,12 @@ test('narrowing: final: human on a no-production released repo is allowed', () =
 
 test('widening: final: auto on deploy: tag fails', () => {
   const r = audit(fixture(`${RELEASED_TAG}release:\n  final: auto\n`, DEPLOY_WF));
-  assert.ok(hasText(r.fails, /release\.final: auto widens the release rung — on exposure: released/), r.fails.join(' | '));
+  assert.ok(hasText(r.fails, /release\.final: auto widens the release route — on exposure: released/), r.fails.join(' | '));
 });
 
 test('widening: candidates: auto on exposure: self fails', () => {
   const r = audit(fixture('trunk: main\nproduction: null\ndeploy: none\nstack: node\nexposure: self\nrelease:\n  candidates: auto\n'));
-  assert.ok(hasText(r.fails, /release\.candidates: auto widens the release rung — on exposure: self/), r.fails.join(' | '));
+  assert.ok(hasText(r.fails, /release\.candidates: auto widens the release route — on exposure: self/), r.fails.join(' | '));
 });
 
 test('widening: a test period below 3d fails', () => {

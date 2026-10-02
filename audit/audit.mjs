@@ -86,9 +86,9 @@ const { evaluateExposure } = require("../tools/lib/exposure-shape.js");
 // #208's `writes` split precedence ladder — same shared-module reasoning as axisAuthority
 // above, reused for a second axis rather than a bespoke second mechanism.
 const writesAuthority = require("../tools/lib/writes-authority.js");
-// #337's `release:` block — CONVENTIONS §6's release rung as one derivation table, plus the
+// #337's `release:` block — CONVENTIONS §6's release routes (#421) as one derivation table, plus the
 // narrow-never-widen validation of what a repo declares. Shared with `colab release cut` (#338)
-// so the audit and the tool that cuts tags can never read the rung two ways.
+// so the audit and the tool that cuts tags can never read the routes two ways.
 const releasePolicy = require("../tools/lib/release-policy.js");
 // #394: the owner's-branch block — shape and collisions, shared with `colab deliver` and every
 // push-site guard in the CLI, so the audit and the tool can never disagree about what it means.
