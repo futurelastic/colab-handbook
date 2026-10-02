@@ -103,3 +103,26 @@ test('isThinShell: recognises the @AGENTS.md import, not a mention in code', () 
   assert.ok(inst.isThinShell('@AGENTS.md\n\n## Conventions\n'));
   assert.ok(!inst.isThinShell('Write `@AGENTS.md` on line one.'));
 });
+
+test('findToolBlocks: <name>:start/end pair with a trailing note on the open line (#419)', () => {
+  const text = '<!-- ui-kit:start (managed by a package) -->\nx\n<!-- ui-kit:end -->\n<!-- colab:derived:start id=toc -->\ny\n<!-- colab:derived:end -->\n';
+  assert.deepStrictEqual(inst.findToolBlocks(text), [
+    { id: 'ui-kit', startLine: 1, endLine: 3 },
+    { id: 'colab:derived', startLine: 4, endLine: 6 },
+  ]);
+});
+
+test('conventionsBlock: heading above the stamp to the next same-level heading; a title heading is not the block (#419)', () => {
+  const text = '@AGENTS.md\n\n## Conventions\n\n<!-- colab-handbook @ v1 -->\n\n- bullet\n\n## Other\nprose\n';
+  assert.deepStrictEqual(inst.conventionsBlock(text), { startLine: 3, endLine: 7 });
+  assert.strictEqual(inst.conventionsBlock('# CLAUDE.md\n\nA repo that follows the colab-handbook conventions.\n'), null);
+  assert.deepStrictEqual(inst.conventionsBlock('# Title\n<!-- colab-handbook @ v1 -->\n- b\n### sub\n'), { startLine: 2, endLine: 3 });
+});
+
+test('shellResidue + lineRanges: imports, blanks, tool blocks and the Conventions block are not prose (#419)', () => {
+  const text = '@AGENTS.md @docs/extra.md\n\n## Conventions\n<!-- colab-handbook @ v1 -->\n- b\n\n## Mine\na\n\nb\n<!-- BEGIN:x -->\nz\n<!-- END:x -->\nc\n';
+  const residue = inst.shellResidue(text);
+  assert.deepStrictEqual(residue, [7, 8, 10, 14]);
+  assert.strictEqual(inst.lineRanges(residue), '7-8, 10, 14');
+  assert.strictEqual(inst.lineRanges(residue, text), '7-10, 14');
+});

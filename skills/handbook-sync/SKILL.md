@@ -405,12 +405,34 @@ independent reasons not to automate it:
 - Regenerating would replace your repo's real tier and trunk with angle brackets.
 - Most repos have *extended* the block well past the template (measured: 6 of 7).
 
-**Moving a repo to the `AGENTS.md` shape?** Move the prose, never the block: the repo's own
-instructions go to `AGENTS.md`, `CLAUDE.md` keeps `@AGENTS.md` plus this block (and its
-`Local divergences:` list, and any other tool-managed block found by filename). A block moved
-into `AGENTS.md` hides its stamp from the audit and `colab update` — the audit warns on it.
-A framework generator that writes into both files is re-pointed at `AGENTS.md` only, so no
-block is loaded twice.
+**Moving a repo to the `AGENTS.md` shape — the graft step (#419).** Offer it whenever the
+audit reports `prose-in-claude-md` (it names the line ranges) or `no-agents-md`. It is an offer,
+not a precondition: both are warnings, and a repo migrates when its owner takes the step. Move
+the prose, never the block:
+
+1. **Sort `CLAUDE.md`'s lines into two piles.** *Stays:* the `@AGENTS.md` import, this
+   Conventions block (from its heading to the next heading of the same level — bullets the repo
+   added inside it are the block's), its `Local divergences:` list, and every paired tool block
+   (`<!-- BEGIN:<name> -->`…`<!-- END:<name> -->`, `<!-- <name>:start … -->`…`<!-- <name>:end -->`,
+   `<laravel-boost-guidelines>`…). *Moves:* everything else — the ranges the audit printed.
+2. **No `AGENTS.md` yet** (the legacy prose-only file) → `git mv CLAUDE.md AGENTS.md` so the
+   prose keeps its history, cut the "stays" pile out of `AGENTS.md`, and write a new
+   `CLAUDE.md`: `@AGENTS.md`, a blank line, then the "stays" pile verbatim. Retitle the moved
+   file's `# CLAUDE.md — …` heading if it has one.
+   **`AGENTS.md` already exists** → append the "moves" pile to it, under the heading it had,
+   dropping only lines `AGENTS.md` already says; then delete them from `CLAUDE.md` and make sure
+   `@AGENTS.md` is its first line.
+3. **A block in both files** is the generator's doing, not yours to merge by hand: re-point the
+   generator at `AGENTS.md` only (the duplicate-block warning names it), then delete the
+   `CLAUDE.md` copy.
+4. **Verify** — `node "$COLAB_HANDBOOK/audit/audit.mjs" --local .` reports neither
+   `prose-in-claude-md` nor `no-agents-md`, and still finds the stamp (no "unstamped" row, no
+   "Conventions block is in AGENTS.md" warning). The loaded size is unchanged give or take the
+   moved headings: this is a move, not an edit — rewording rides in a separate commit.
+
+A block moved into `AGENTS.md` hides its stamp from the audit and `colab update` — the audit
+warns on it. An agent session cannot do step 2's `CLAUDE.md` write with prose in it anyway: a
+hook blocks repo prose in `CLAUDE.md`, so a half-done move fails loudly rather than silently.
 
 So diff the template between your stamp and now, and graft:
 

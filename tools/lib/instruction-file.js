@@ -49,6 +49,8 @@ const SHELL_IMPORT = '@AGENTS.md';
 const ENTRY = 'CLAUDE.md';
 const AUTHORED = 'AGENTS.md';
 
+const escapeRe = (str) => str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
 const FENCE_RE = /^\s{0,3}(`{3,}|~{3,})/;
 
 /** Every line with fenced-block content and inline code spans blanked (line numbers kept). */
@@ -157,7 +159,11 @@ function authoredRouter(readFile) {
  */
 const TOOL_BLOCKS = [
   { id: 'laravel-boost', open: /^\s*<laravel-boost-guidelines>\s*$/, close: /^\s*<\/laravel-boost-guidelines>\s*$/ },
-  { id: 'begin-end', open: /^\s*<!--\s*BEGIN:(\S+)\s*-->\s*$/, close: (name) => new RegExp(`^\\s*<!--\\s*END:${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*-->\\s*$`) },
+  { id: 'begin-end', open: /^\s*<!--\s*BEGIN:(\S+)\s*-->\s*$/, close: (name) => new RegExp(`^\\s*<!--\\s*END:${escapeRe(name)}\\s*-->\\s*$`) },
+  // #419: `<!-- <name>:start … -->` … `<!-- <name>:end -->` — a UI package writes its workflow block
+  // this way, with a trailing note on the open line (`(managed by … — edit … instead)`); the
+  // colab:derived span (#117) has the same shape. The name is everything before the LAST `:start`.
+  { id: 'start-end', open: /^\s*<!--\s*(\S+?):start(?:\s.*)?-->\s*$/, close: (name) => new RegExp(`^\\s*<!--\\s*${escapeRe(name)}:end(?:\\s.*)?-->\\s*$`) },
 ];
 
 /** `[{ id, startLine, endLine }]` for every paired tool block in `text`. */
@@ -168,7 +174,7 @@ function findToolBlocks(text) {
     for (const row of TOOL_BLOCKS) {
       const m = lines[i].match(row.open);
       if (!m) continue;
-      const id = row.id === 'begin-end' ? m[1] : row.id;
+      const id = row.id === 'laravel-boost' ? row.id : m[1];
       const close = typeof row.close === 'function' ? row.close(m[1]) : row.close;
       for (let j = i + 1; j < lines.length; j++) {
         if (close.test(lines[j])) { found.push({ id, startLine: i + 1, endLine: j + 1 }); i = j; break; }
@@ -197,6 +203,85 @@ function isThinShell(text) {
   return parseImports(text).some((i) => i.raw === AUTHORED || i.raw === './' + AUTHORED);
 }
 
+/**
+ * The handbook's Conventions block in a CLAUDE.md: `{ startLine, endLine }` (1-based, inclusive)
+ * or null. It has no close tag, so its extent is structural: it opens at the `## Conventions`-style
+ * level-2+ heading directly above its stamp (or at the stamp — or, unstamped, the template's
+ * "This repo follows the [colab-handbook]" sentence — when there is no such heading) and runs
+ * to the line before the next heading of the same or a higher level, else to EOF. A repo that appended its own bullets to the block keeps them inside it — those are
+ * the block's to carry.
+ */
+const STAMP_RE = /<!--\s*colab-handbook\s*@/;
+const FOLLOWS_RE = /^\s*This repo follows the \[colab-handbook\]/; // the template's own sentence, not any mention
+const HEADING_RE = /^(#{1,6})\s/;
+function conventionsBlock(text) {
+  const lines = String(text).split(/\r?\n/);
+  const code = stripCode(text);
+  let anchor = lines.findIndex((l) => STAMP_RE.test(l));
+  if (anchor < 0) anchor = code.findIndex((l) => FOLLOWS_RE.test(l));
+  if (anchor < 0) return null;
+  let start = anchor;
+  let level = 7; // no heading: the block ends at the next heading of any level
+  for (let i = anchor - 1; i >= 0; i--) {
+    if (!lines[i].trim()) continue;
+    const h = code[i].match(HEADING_RE);
+    if (h && h[1].length >= 2) { start = i; level = h[1].length; } // a level-1 heading is the file's title
+    break; // only the nearest non-blank line above may be the block's heading
+  }
+  let end = lines.length - 1;
+  for (let i = anchor + 1; i < lines.length; i++) {
+    const h = code[i].match(HEADING_RE);
+    if (h && h[1].length <= level) { end = i - 1; break; }
+  }
+  while (end > anchor && !lines[end].trim()) end--;
+  return { startLine: start + 1, endLine: end + 1 };
+}
+
+/**
+ * Lines of a CLAUDE.md that the thin-shell shape does not allow (#419): `[lineNo]`, 1-based.
+ * Allowed: blank lines, lines made only of @-import tokens, paired tool blocks (TOOL_BLOCKS), and
+ * the Conventions block. Everything else is repo prose, which belongs in AGENTS.md.
+ */
+function shellResidue(text) {
+  const lines = String(text).split(/\r?\n/);
+  if (lines.length && lines[lines.length - 1] === '') lines.pop();
+  const allowed = new Set();
+  const cover = (a, b) => { for (let n = a; n <= b; n++) allowed.add(n); };
+  for (const b of findToolBlocks(text)) cover(b.startLine, b.endLine);
+  const conv = conventionsBlock(text);
+  if (conv) cover(conv.startLine, conv.endLine);
+  const out = [];
+  lines.forEach((line, i) => {
+    const n = i + 1;
+    if (allowed.has(n) || !line.trim()) return;
+    if (line.trim().split(/\s+/).every((tok) => /^@\S+$/.test(tok))) return;
+    out.push(n);
+  });
+  return out;
+}
+
+/**
+ * `[3,4,5,9]` → `"3-5, 9"`. With `text`, a run also spans lines that are blank in it, so prose
+ * paragraphs separated by empty lines read as one range (`1-249`, not forty fragments).
+ */
+function lineRanges(nums, text = null) {
+  const lines = text === null ? null : String(text).split(/\r?\n/);
+  const bridges = (a, b) => {
+    if (b === a + 1) return true;
+    if (!lines) return false;
+    for (let n = a + 1; n < b; n++) if ((lines[n - 1] || '').trim()) return false;
+    return true;
+  };
+  const parts = [];
+  for (let i = 0; i < nums.length; i++) {
+    let j = i;
+    while (j + 1 < nums.length && bridges(nums[j], nums[j + 1])) j++;
+    parts.push(j > i ? `${nums[i]}-${nums[j]}` : `${nums[i]}`);
+    i = j;
+  }
+  return parts.join(', ');
+}
+
 module.exports = {
   IMPORT_MAX_DEPTH,
   SHELL_IMPORT,
@@ -211,4 +296,7 @@ module.exports = {
   findToolBlocks,
   duplicateToolBlocks,
   isThinShell,
+  conventionsBlock,
+  shellResidue,
+  lineRanges,
 };
