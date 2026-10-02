@@ -1028,6 +1028,7 @@ Run `colab <cmd> --help` for full detail.
 | `release-notes [<range>] [--repo P] [--out F] [--headline "..."]` | grouped Markdown release summary from git history (see below) |
 | `release cut [--repo P] [--auto \| --bump patch\|minor --reason "..."] [--dry] [--json]` | cut a release **candidate** `vX.Y.Z-rc.N` on `origin/main` where §6's routes allow it and all four conditions plus the three pre-tag checks hold on that commit; `--auto` computes the bump (majors included) and honours the route's cadence; never a final tag (see *Release cut*, below) |
 | `release finalize [--repo P] [--auto \| --tag RC [--answered-by N]] [--dry] [--json]` | a candidate's next step under §6's routes; `--auto` finalizes the newest candidate clean on its own clock — `testing` / `held` / `needs-new-candidate` / `refused` / `candidate-ready` / `finalized`, re-checked every run, one tracking issue per version; tags the final only where the rung row makes it automatic, or behind the human bar (see *Release finalize*, below) |
+| `release npm [--repo P] [--json]` | whether release-auto.yml's `npm` job publishes this repo, and what: the package, its directory and the gate, read from `release.npm` / `release.npm-gate`; read-only (see *Release npm*, below) |
 | `template [<name>] [--dest F] [--repo P] [--force]` | copy a handbook workflow template into a repo, **stamped** with the handbook version (see below) |
 | `update [<repo>...] [--apply] [--json] [--quiet]` | sweep the fleet registry for stamped copies that fell behind a changed template; `--apply` refreshes the **pristine** ones. Never commits; never touches a hand-edited copy (see below) |
 | `register [<path>] [--remove] [--list]` | add/remove a repo in **both** fleet registries at once; `--list` flags drift (see below) |
@@ -1216,6 +1217,20 @@ the run. On `deploy-tag` it never tags: it stops at `candidate-ready` and posts 
 number pre-filled. `--auto` never combines with `--tag`/`--answered-by`, and `testing`,
 `no-candidate` and `already-final` exit 0 under it — nothing to do yet is the workflow's ordinary
 output.
+
+### Release npm
+
+`colab release npm [--repo P] [--json]` (#433) is the one input of
+[`templates/release-auto.yml`](../templates/release-auto.yml)'s `npm` job: the workflow asks it
+rather than parse `.github/project.yml` in shell, so the `release:` block has one reading
+(`tools/lib/release-policy.js`). It publishes nothing and reads no network.
+
+`--json` prints `{ publish, dir, gate, package, why, findings }`. `publish` is true only when
+`release.npm` and `release.npm-gate` are both declared, valid, on route `public-tool`, and
+`<npm>/package.json` names a package that is not `"private": true`. Exit 0 with a verdict either
+way (publishing, or nothing declared); exit 1 when the npm keys are declared but cannot publish —
+the workflow turns that into a warning and no npm publish, never a failed release. Repository
+visibility is the workflow's check, not this one: the file does not say it.
 
 ### Templates
 

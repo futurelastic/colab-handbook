@@ -282,3 +282,53 @@ test('#422 bump inputs: guard-run / guard-result / exports are non-empty strings
   const both = evaluateRelease({ ...base, release: { 'guard-run': 'a', 'guard-result': 'b.json' } });
   assert.match(both.findings[0].text, /both declared/);
 });
+
+// --- npm (#433) ------------------------------------------------------------------------------
+
+const PUBLIC_TOOL = { exposure: 'released', deploy: 'none', production: null };
+
+test('npm: absent means no npm publish', () => {
+  assert.equal(evaluateRelease(PUBLIC_TOOL).effective.npm, null);
+  assert.equal(evaluateRelease({ ...PUBLIC_TOOL, release: { final: 'human' } }).effective.npm, null);
+});
+
+test('npm: the pair on a public-tool route is the package directory and its gate', () => {
+  const r = evaluateRelease({ ...PUBLIC_TOOL, release: { npm: '.', 'npm-gate': 'node scripts/check-pack-allowlist.mjs' } });
+  assert.deepEqual(r.findings, []);
+  assert.deepEqual(r.effective.npm, { dir: '.', gate: 'node scripts/check-pack-allowlist.mjs' });
+  const sub = evaluateRelease({ ...PUBLIC_TOOL, release: { npm: 'packages/cli/', 'npm-gate': 'npm run pack-check' } });
+  assert.deepEqual(sub.effective.npm, { dir: 'packages/cli', gate: 'npm run pack-check' });
+});
+
+test('npm: one key without the other is a failure, and nothing publishes', () => {
+  const noGate = evaluateRelease({ ...PUBLIC_TOOL, release: { npm: '.' } });
+  assert.equal(noGate.effective.npm, null);
+  assert.match(noGate.findings[0].text, /release\.npm is declared without release\.npm-gate/);
+  const noDir = evaluateRelease({ ...PUBLIC_TOOL, release: { 'npm-gate': 'x' } });
+  assert.equal(noDir.effective.npm, null);
+  assert.match(noDir.findings[0].text, /release\.npm-gate is declared without release\.npm/);
+});
+
+test('npm: a directory outside the repo, or an empty value, is a failure', () => {
+  for (const npm of ['/abs', '../sibling', 'a/../../b', '', 7]) {
+    const r = evaluateRelease({ ...PUBLIC_TOOL, release: { npm, 'npm-gate': 'x' } });
+    assert.equal(r.effective.npm, null, JSON.stringify(npm));
+    assert.ok(r.findings.some((f) => f.text.startsWith('release.npm is')), JSON.stringify(npm));
+  }
+});
+
+test('npm: fits only public-tool — a deploying tag, rapid-app and library-fast refuse it', () => {
+  const pair = { npm: '.', 'npm-gate': 'x' };
+  const cases = [
+    { exposure: 'released', deploy: 'tag', production: 'https://x.example', release: pair },
+    { ...PUBLIC_TOOL, release: { route: 'rapid-app', ...pair } },
+    { ...PUBLIC_TOOL, release: { route: 'library-fast', ...pair } },
+    { ...PUBLIC_TOOL, release: { route: 'none', ...pair } },
+    { exposure: 'none', deploy: 'none', production: null, release: pair },
+  ];
+  for (const cfg of cases) {
+    const r = evaluateRelease(cfg);
+    assert.equal(r.effective.npm, null);
+    assert.ok(r.findings.some((f) => /fits only route public-tool/.test(f.text)), JSON.stringify(cfg));
+  }
+});

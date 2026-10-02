@@ -1147,6 +1147,7 @@ function existingWorktreeFor(repoAbs, wtName, branch) {
 const HELP_RELEASE = `colab release <issue> [--repo <path>]
 colab release cut [--repo <path>] [--bump patch|minor --reason "<why>"] [--dry] [--json]   (see: colab release cut --help)
 colab release finalize [--repo <path>] [--tag vX.Y.Z-rc.N] [--answered-by <name>] [--dry] [--json]   (see: colab release finalize --help)
+colab release npm [--repo <path>] [--json]   (see: colab release npm --help)
 
 Release a single issue: removes the local claim and, if gh is usable, removes the
 in-progress label and the assignee that holds the claim — read from the issue (the
@@ -1536,6 +1537,24 @@ function cmdReleaseCut(argv) {
 // issue (contract: release-finalize.js header, tools/README.md *Release finalize*).
 // ---------------------------------------------------------------------------
 
+const HELP_RELEASE_NPM = `colab release npm [--repo <path>] [--json]
+
+Say whether release-auto.yml's npm job publishes this repo, and what (#433). Read-only: it
+publishes nothing, tags nothing, and needs no network. The answer comes from the release: block
+of .github/project.yml — the same reading \`colab release cut\` and the audit use:
+
+  release:
+    npm: .                                         # the package directory (\`.\` = repo root)
+    npm-gate: node scripts/check-pack-allowlist.mjs   # run before every publish
+
+Publishes only when both keys are declared, valid, on route public-tool, and <npm>/package.json
+names a package that is not "private": true. Repository visibility is not in that file, so the
+workflow refuses a private repo itself.
+
+--json prints { publish, dir, gate, package, why, findings }. Exit 0 with a verdict either way
+(publish true, or nothing declared); exit 1 when the npm keys are declared but cannot publish.
+`;
+
 const HELP_RELEASE_FINALIZE = `colab release finalize [--repo <path>] [--auto | --tag vX.Y.Z-rc.N [--answered-by <name>]] [--dry] [--json]
 
 Take the newest release CANDIDATE (a vX.Y.Z-rc.N tag made by \`colab release cut\`) one step further
@@ -1856,10 +1875,56 @@ function cmdReleaseFinalize(argv) {
   return verdict.state === 'finalized' || verdict.state === 'candidate-ready' ? 0 : 1;
 }
 
+/**
+ * `colab release npm` (#433) — the npm job's one input: publish or not, which directory, which gate.
+ * The workflow reads this instead of parsing project.yml itself, so there is one reading of the
+ * release: block (release-policy.js), not a second one in shell.
+ */
+function cmdReleaseNpm(argv) {
+  const opts = parseArgs(argv, {
+    values: { '--repo': 'repo' }, flags: { '--json': 'json', '-h': 'help', '--help': 'help' },
+  });
+  if (opts.help) return print(HELP_RELEASE_NPM);
+  if (opts._.length) throw new UserError(`release npm takes no positional arguments (got: ${opts._.join(' ')})`);
+  const repoAbs = resolveRepo(opts);
+  const policy = releasePolicy.evaluateRelease(projectDoc(repoAbs));
+  const declared = policy.declared && typeof policy.declared === 'object' && !Array.isArray(policy.declared)
+    && releasePolicy.NPM_KEYS.some((k) => k in policy.declared);
+  const findings = policy.findings.filter((f) => f.text.startsWith('release.npm')).map((f) => f.text);
+  const out = { publish: false, dir: null, gate: null, package: null, why: '', findings };
+  const npm = policy.effective.npm;
+  if (!declared) {
+    out.why = 'no release.npm in .github/project.yml — this repo does not publish to npm';
+  } else if (!npm) {
+    out.why = 'release.npm is declared but invalid';
+  } else {
+    out.dir = npm.dir;
+    out.gate = npm.gate;
+    let manifest = null;
+    try { manifest = JSON.parse(fs.readFileSync(path.join(repoAbs, npm.dir, 'package.json'), 'utf8')); } catch (_) {}
+    if (!manifest || typeof manifest !== 'object') out.findings.push(`release.npm: ${npm.dir}/package.json is missing or not JSON`);
+    else if (typeof manifest.name !== 'string' || !manifest.name) out.findings.push(`release.npm: ${npm.dir}/package.json has no name`);
+    else if (manifest.private === true) out.findings.push(`release.npm: ${npm.dir}/package.json is "private": true — npm refuses to publish it`);
+    else out.package = manifest.name;
+    if (out.findings.length) out.why = 'release.npm is declared but cannot publish';
+    else {
+      out.publish = true;
+      out.why = `publishes ${out.package} from ${npm.dir} — candidates to dist-tag next, finals to latest`;
+    }
+  }
+  if (opts.json) process.stdout.write(JSON.stringify(out) + '\n');
+  else {
+    print(`${out.publish ? '✓' : '·'} ${out.why}`);
+    for (const f of out.findings) print(`  ✗ ${f}`);
+  }
+  return declared && !out.publish ? 1 : 0;
+}
+
 function cmdRelease(argv) {
   // `release cut` (#338) shares the verb: an issue number is never the word "cut".
   if (argv[0] === 'cut') return cmdReleaseCut(argv.slice(1));
   if (argv[0] === 'finalize') return cmdReleaseFinalize(argv.slice(1));
+  if (argv[0] === 'npm') return cmdReleaseNpm(argv.slice(1));
   const opts = parseArgs(argv, {
     values: { '--repo': 'repo' }, flags: { '-h': 'help', '--help': 'help' },
   });

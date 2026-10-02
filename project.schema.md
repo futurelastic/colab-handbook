@@ -1066,6 +1066,8 @@ release:
   final: auto             # auto · human
   guard-run: node scripts/breaking-guard.mjs   # optional — a breaking-change detector (or guard-result: <file>)
   exports: api/public-symbols.txt              # optional — the committed public-symbol list
+  npm: .                                       # optional — publish this package directory to npm (public-tool only)
+  npm-gate: node scripts/check-pack-allowlist.mjs   # required with npm — the pack-allowlist gate
 ```
 
 How the **release** — the tag — runs on this repo: which
@@ -1136,6 +1138,27 @@ widen nothing, so each only has to be a non-empty string:
 
 A guard that cannot be read refuses the cut — the contract and the rest of the computation:
 [`tools/README.md`, *Release cut*](tools/README.md#release-cut-candidates).
+
+**Two keys opt a `public-tool` repo into publishing to npm** (#433) — the `npm` job of
+[`templates/release-auto.yml`](templates/release-auto.yml), in the same run that tagged
+([CONVENTIONS §6](CONVENTIONS.md#6-releases)):
+
+- `npm` — the package directory, relative to the repo root (`.` for the root). Its `package.json`
+  must name a package and must not be `"private": true`; it needs no `version`, which the job
+  stamps from the tag.
+- `npm-gate` — the command run at the repo root, after the version stamp and before every
+  `npm publish`, that fails when the tarball would carry a file nobody meant to ship (a
+  pack-allowlist check). It is not optional: a publish with no gate is the stray-local-file
+  leak the gate exists to stop.
+
+They are a pair — one without the other is a **failure** — and they fit only the
+`public-tool` route: on any other route, declared or derived, they are a **failure**, since an
+app's tag deploys and `rapid-app` / `library-fast` are not published by this workflow. A
+directory outside the repo (absolute, or through `..`) is a failure too. Absent, nothing
+publishes to npm. Repository visibility is not in this file, so a private repo declaring them
+passes here and is refused by the workflow itself — and failed by the audit's public-npm check
+(#432). `colab release npm` prints what the job would do
+([`tools/README.md`, *Release npm*](tools/README.md#release-npm)).
 
 An unknown sub-key, a value outside its set, or a scalar `release:` is a failure too. **No
 key picks or approves a version number** — every number is computed, majors included, and a

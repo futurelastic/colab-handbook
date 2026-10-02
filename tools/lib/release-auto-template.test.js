@@ -266,3 +266,179 @@ test('own copy: the self-audit reads it as a release-auto workflow with nothing 
   const r = spawnSync('node', [AUDIT, '--local', REPO_ROOT], { encoding: 'utf8' });
   assert.doesNotMatch(r.stdout + r.stderr, /release-auto\.yml/);
 });
+
+// ---------------------------------------------------------------------------------------------
+// The npm job (#433): opt-in, GitHub-hosted, trusted publishing only, rc -> next, final -> latest,
+// never moves git, refuses a private repo, gates the tarball, records the outcome on the Release.
+// Its run blocks are lifted and run against stub `npm` / `gh` / `colab` on PATH.
+
+const NPM_TARGET = 'Read the npm target (colab release npm)';
+const REFUSE = 'Refuse a private repository, and any npm token';
+const PUBLISH_NPM = 'Publish each tag (npm publish --provenance)';
+const RECORD = 'Record the npm outcome';
+
+/** Runs a lifted template step with shell stubs on PATH. `stubs` maps a command to a shell body. */
+function runStep(step, { env = {}, stubs = {}, cwd } = {}) {
+  const dir = tmpdir('release-auto-npm-');
+  const bin = path.join(dir, 'bin');
+  fs.mkdirSync(bin);
+  for (const [cmd, body] of Object.entries(stubs)) {
+    fs.writeFileSync(path.join(bin, cmd), `#!/bin/bash\n${body}\n`, { mode: 0o755 });
+  }
+  const out = path.join(dir, 'output');
+  const summary = path.join(dir, 'summary');
+  fs.writeFileSync(out, '');
+  const r = spawnSync('bash', ['-c', stepScript(step)], {
+    cwd: cwd || dir,
+    encoding: 'utf8',
+    env: { ...process.env, NODE_AUTH_TOKEN: '', NPM_TOKEN: '', ...env, PATH: `${bin}:${process.env.PATH}`, RUNNER_TEMP: dir, GITHUB_OUTPUT: out, GITHUB_STEP_SUMMARY: summary, LOG: path.join(dir, 'log') },
+  });
+  const o = {};
+  for (const line of fs.readFileSync(out, 'utf8').split('\n')) {
+    const eq = line.indexOf('=');
+    if (eq > 0) o[line.slice(0, eq)] = line.slice(eq + 1);
+  }
+  const log = path.join(dir, 'log');
+  return { status: r.status, output: o, stdout: r.stdout, stderr: r.stderr, dir, log: fs.existsSync(log) ? fs.readFileSync(log, 'utf8') : '' };
+}
+
+function colabStub(dir, stdout) {
+  const stub = path.join(dir, 'colab-stub.js');
+  fs.writeFileSync(stub, `process.stdout.write(${JSON.stringify(stdout)});\n`);
+  return stub;
+}
+
+test('npm target: a publishing verdict hands tags, directory, gate and package to the npm job', { skip: !HAS_JQ && 'jq not installed' }, () => {
+  const d = tmpdir('npm-target-');
+  const COLAB = colabStub(d, JSON.stringify({ publish: true, dir: '.', gate: 'node scripts/check-pack-allowlist.mjs', package: '@o/p', why: 'x', findings: [] }));
+  const r = runStep(NPM_TARGET, { env: { COLAB, TAGS: 'v1.3.0-rc.1 ' } });
+  assert.strictEqual(r.status, 0);
+  assert.deepStrictEqual(r.output, { publish: 'true', tags: 'v1.3.0-rc.1', dir: '.', gate: 'node scripts/check-pack-allowlist.mjs', package: '@o/p' });
+});
+
+test('npm target: not declared, declared-but-broken, or an old CLI — no publish, and the release stays green', { skip: !HAS_JQ && 'jq not installed' }, () => {
+  const d = tmpdir('npm-target-');
+  const off = runStep(NPM_TARGET, { env: { COLAB: colabStub(d, JSON.stringify({ publish: false, findings: [] })), TAGS: 'v1.3.0' } });
+  assert.deepStrictEqual([off.status, off.output], [0, { publish: 'false' }]);
+  assert.doesNotMatch(off.stdout, /::warning::/);
+
+  const broken = runStep(NPM_TARGET, { env: { COLAB: colabStub(tmpdir('n-'), JSON.stringify({ publish: false, findings: ['release.npm: ./package.json has no name'] })), TAGS: 'v1.3.0' } });
+  assert.deepStrictEqual([broken.status, broken.output], [0, { publish: 'false' }]);
+  assert.match(broken.stdout, /::warning::not publishing to npm: release\.npm: \.\/package\.json has no name/);
+
+  const old = runStep(NPM_TARGET, { env: { COLAB: colabStub(tmpdir('n-'), 'Usage: colab release <issue>'), TAGS: 'v1.3.0' } });
+  assert.deepStrictEqual([old.status, old.output], [0, { publish: 'false' }]);
+  assert.match(old.stdout, /::warning::colab release npm gave no verdict/);
+});
+
+test('npm job: a private repository, an unreadable visibility, or a token in the environment is refused', () => {
+  const gh = (v) => (v === null ? 'exit 1' : `echo ${v}`);
+  assert.strictEqual(runStep(REFUSE, { stubs: { gh: gh('false') }, env: { REPO: 'o/p' } }).status, 0);
+  const priv = runStep(REFUSE, { stubs: { gh: gh('true') }, env: { REPO: 'o/p' } });
+  assert.notStrictEqual(priv.status, 0);
+  assert.match(priv.stdout, /::error::o\/p is private.*never publishes to public npm/);
+  assert.notStrictEqual(runStep(REFUSE, { stubs: { gh: gh(null) }, env: { REPO: 'o/p' } }).status, 0, 'unknown visibility fails closed');
+  for (const t of ['NODE_AUTH_TOKEN', 'NPM_TOKEN']) {
+    const r = runStep(REFUSE, { stubs: { gh: gh('false') }, env: { REPO: 'o/p', [t]: 'npm_xxx' } });
+    assert.notStrictEqual(r.status, 0, t);
+    assert.match(r.stdout, /trusted publishing \(OIDC\) only and never with a token/);
+  }
+});
+
+/** A package repo with a candidate and its final tagged, the way release-auto leaves it. */
+function packageRepo() {
+  const dir = tmpdir('npm-pkg-');
+  const g = (...a) => execFileSync('git', a, { cwd: dir, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+  g('init', '-q', '-b', 'main', '.');
+  g('config', 'user.email', 'test@example.invalid');
+  g('config', 'user.name', 'npm test');
+  g('config', 'core.hooksPath', path.join(dir, '.nohooks'));
+  fs.writeFileSync(path.join(dir, 'package.json'), '{ "name": "@o/p" }\n');
+  g('add', '-A');
+  g('commit', '-q', '-m', 'feat: x');
+  g('tag', 'v1.3.0-rc.1');
+  g('tag', 'v1.3.0');
+  return dir;
+}
+
+// npm stub: logs every call; `npm view` says "not published" unless $PUBLISHED names the version.
+// `npm pkg set version=X` really stamps package.json, so the gate can be shown to see the stamped version.
+const NPM_STUB = 'echo "npm $*" >> "$LOG"; if [ "$1" = pkg ]; then node -e \'const j=require(process.cwd()+"/package.json");j.version=process.argv[1].split("=")[1];require("fs").writeFileSync("package.json",JSON.stringify(j))\' "$3"; exit 0; fi; if [ "$1" = view ]; then case " ${PUBLISHED:-} " in *" ${2##*@} "*) echo "${2##*@}"; exit 0 ;; esac; exit 1; fi; exit 0';
+
+test('npm job: a candidate goes to next and a final to latest, with provenance, gate after the version stamp, git untouched', () => {
+  const repo = packageRepo();
+  const head = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: repo, encoding: 'utf8' });
+  const r = runStep(PUBLISH_NPM, {
+    cwd: repo, stubs: { npm: NPM_STUB },
+    env: { TAGS: 'v1.3.0-rc.1 v1.3.0', PKG_DIR: '.', PACKAGE: '@o/p', GATE: 'echo "gate $(node -p "require(\'./package.json\').version")" >> "$LOG"' },
+  });
+  assert.strictEqual(r.status, 0, r.stderr);
+  const calls = r.log.trim().split('\n');
+  assert.deepStrictEqual(calls, [
+    'npm view @o/p@1.3.0-rc.1 version',
+    'npm pkg set version=1.3.0-rc.1',
+    'gate 1.3.0-rc.1',
+    'npm publish --tag next --provenance --access public --ignore-scripts',
+    'npm view @o/p@1.3.0 version',
+    'npm pkg set version=1.3.0',
+    'gate 1.3.0',
+    'npm publish --tag latest --provenance --access public --ignore-scripts',
+  ]);
+  assert.strictEqual(execFileSync('git', ['for-each-ref', '--format=%(refname)'], { cwd: repo, encoding: 'utf8' }).trim().split('\n').sort().join(','),
+    'refs/heads/main,refs/tags/v1.3.0,refs/tags/v1.3.0-rc.1', 'no ref created or moved');
+  assert.strictEqual(execFileSync('git', ['rev-parse', 'refs/heads/main'], { cwd: repo, encoding: 'utf8' }), head);
+});
+
+test('npm job: a version already on npm is skipped, so a re-run never double-publishes', () => {
+  const repo = packageRepo();
+  const r = runStep(PUBLISH_NPM, { cwd: repo, stubs: { npm: NPM_STUB }, env: { TAGS: 'v1.3.0-rc.1', PKG_DIR: '.', PACKAGE: '@o/p', GATE: 'true', PUBLISHED: '1.3.0-rc.1' } });
+  assert.strictEqual(r.status, 0, r.stderr);
+  assert.doesNotMatch(r.log, /npm publish/);
+  assert.match(r.stdout, /@o\/p@1\.3\.0-rc\.1 is already on npm — skipping/);
+});
+
+test('npm job: a failing gate stops the publish and fails the job', () => {
+  const repo = packageRepo();
+  const r = runStep(PUBLISH_NPM, { cwd: repo, stubs: { npm: NPM_STUB }, env: { TAGS: 'v1.3.0-rc.1', PKG_DIR: '.', PACKAGE: '@o/p', GATE: 'exit 1' } });
+  assert.notStrictEqual(r.status, 0);
+  assert.doesNotMatch(r.log, /npm publish/);
+});
+
+test('npm-record: published, or tagged-not-published with the re-run hint — replacing its own earlier line', () => {
+  const ghStub = 'if [ "$1 $2" = "release view" ]; then cat "$BODY_FILE"; exit 0; fi; if [ "$1 $2" = "release edit" ]; then for a; do [ -n "${next:-}" ] && cp "$a" "$LOG.notes" && exit 0; [ "$a" = --notes-file ] && next=1; done; fi; exit 1';
+  const body = path.join(tmpdir('rec-'), 'body');
+  fs.writeFileSync(body, '## v1.3.0-rc.1\n\nnotes\n');
+  const base = { TAGS: 'v1.3.0-rc.1', REPO: 'o/p', PACKAGE: '@o/p', RUN_URL: 'https://example.invalid/run/1', BODY_FILE: body };
+
+  const failed = runStep(RECORD, { stubs: { gh: ghStub }, env: { ...base, RESULT: 'failure' } });
+  assert.strictEqual(failed.status, 0, failed.stderr);
+  const failedNotes = fs.readFileSync(path.join(failed.dir, 'log.notes'), 'utf8');
+  assert.match(failedNotes, /^## v1\.3\.0-rc\.1\n\nnotes\n/);
+  assert.match(failedNotes, /\*\*npm: tagged, not published\*\* \(`@o\/p@1\.3\.0-rc\.1`, job failure\)\. Re-run the failed `npm` job of https:\/\/example\.invalid\/run\/1/);
+
+  fs.writeFileSync(body, failedNotes);
+  const ok = runStep(RECORD, { stubs: { gh: ghStub }, env: { ...base, RESULT: 'success' } });
+  const okNotes = fs.readFileSync(path.join(ok.dir, 'log.notes'), 'utf8');
+  assert.match(okNotes, /npm: published `@o\/p@1\.3\.0-rc\.1` \(dist-tag `next`\)\./);
+  assert.doesNotMatch(okNotes, /not published/, 'the re-run replaces the earlier line');
+  assert.strictEqual((okNotes.match(/<!-- colab:npm -->/g) || []).length, 1);
+});
+
+test('npm job: GitHub-hosted, OIDC only, opt-in, and no token anywhere in the template', () => {
+  const lines = TEXT.split('\n');
+  const job = (name) => {
+    const at = lines.indexOf(`  ${name}:`);
+    assert.ok(at >= 0, `job ${name} not found`);
+    const end = lines.findIndex((l, i) => i > at && /^ {2}[a-z][\w-]*:\s*$/.test(l));
+    return lines.slice(at, end < 0 ? undefined : end).join('\n');
+  };
+  const npm = job('npm');
+  assert.match(npm, /^ {4}runs-on: ubuntu-latest\b/m, 'npm trusted publishing does not support self-hosted runners');
+  assert.match(npm, /^ {4}if: needs\.release\.outputs\.npm == 'true'$/m, 'opt-in');
+  assert.match(npm, /id-token: write/);
+  assert.doesNotMatch(job('release'), /id-token/, 'the OIDC grant lives on the npm job alone');
+  assert.doesNotMatch(job('npm-record'), /id-token/);
+  const code = lines.filter((l) => !/^\s*#/.test(l)).map((l) => l.replace(/\s#.*$/, '')).join('\n');
+  assert.doesNotMatch(code, /secrets\./, 'no stored secret is read — no token fallback');
+  assert.doesNotMatch(code, /registry-url/, 'setup-node registry-url writes an .npmrc expecting a token');
+});

@@ -4006,6 +4006,30 @@ candidate: [`templates/release-tag.yml`](templates/release-tag.yml) publishes `-
 as pre-releases, the audit flags a deploy trigger that matches one, and every
 current-release read skips them.
 
+**On `public-tool`, the same run may publish to npm (#433).** A repo opts in with
+[`release.npm` + `release.npm-gate`](project.schema.md#release--optional) — the package directory
+and the command that proves its tarball holds only what was meant to ship — and
+[`templates/release-auto.yml`](templates/release-auto.yml)'s `npm` job then publishes every tag the
+run created: a candidate `vX.Y.Z-rc.N` to dist-tag `next`, a final `vX.Y.Z` to `latest`, both with
+provenance; `latest` never moves to a candidate. Finals publish automatically like the tag they
+follow — the route's one human gate (a final that deploys production) never applies here, since
+npm is offered on `public-tool` alone and is an audit failure on any other route. Four rules
+hold the shape:
+
+- **Trusted publishing (OIDC) only.** No npm token is stored, read, or offered as a fallback; the
+  job refuses to run with one in its environment. npm trusted publishing does not support
+  self-hosted runners, so this job runs **GitHub-hosted** even where the rest of the workflow is
+  self-hosted. (npm ends direct publishing with 2FA-bypass tokens in January 2027; nothing here
+  depends on one.)
+- **Same run, never a tag-triggered workflow** — the reason the GitHub Release is published in
+  the same run: a tag pushed with `GITHUB_TOKEN` triggers nothing.
+- **A private repository never publishes to public npm** (#432). Visibility is not in
+  `project.yml`, so the job reads it from the API and refuses a private or unreadable one.
+- **It never moves git.** The version comes from the tag (the manifest carries none) and is
+  stamped into the checkout, then the gate runs, then `npm publish`. If publishing fails, the tag
+  stands, the Release says *tagged, not published*, and re-running the failed job publishes the
+  existing tag; a version already on npm is skipped.
+
 **Versioning** — SemVer. Patch for fixes, minor for features, major for breaking changes.
 Pre-1.0 repos use `v0.x.y`, treating minor as "meaningful increment".
 

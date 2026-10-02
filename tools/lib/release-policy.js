@@ -16,6 +16,8 @@
  *     guard-run: <command>    # #422 — a breaking-change detector `release cut --auto` runs
  *     guard-result: <path>    # #422 — or the file an earlier CI step wrote its result to
  *     exports: <path>         # #422 — a committed list of public symbols, one per line
+ *     npm: <dir>              # #433 — publish this package directory to npm from release-auto.yml
+ *     npm-gate: <command>     # #433 — the pack-allowlist gate, run before every npm publish
  *
  * Two layers. The descriptor's ROW (exposure + deploy + production) is a fact about the repo; the
  * ROUTE is how releases run on it. A row permits a fixed set of routes (ROW_ROUTES) and derives one
@@ -40,7 +42,14 @@
 
 const axisAuthority = require('./axis-authority.js');
 
-const KEYS = Object.freeze(['route', 'candidates', 'candidates-per-day', 'test-period', 'final', 'guard-run', 'guard-result', 'exports']);
+const KEYS = Object.freeze(['route', 'candidates', 'candidates-per-day', 'test-period', 'final', 'guard-run', 'guard-result', 'exports', 'npm', 'npm-gate']);
+// #433: the npm opt-in. `npm` names the package directory release-auto.yml publishes (`.` for the
+// root); `npm-gate` the command that proves the tarball holds only what was meant to ship. They are
+// a pair — a publish with no gate is the stray-local-file leak the gate exists to stop — and they
+// fit only the public-tool route: an app's tag deploys, and a private repo never publishes to
+// public npm (#432; the workflow refuses that case itself, since visibility is not in this file).
+const NPM_KEYS = Object.freeze(['npm', 'npm-gate']);
+const NPM_ROUTES = Object.freeze(['public-tool']);
 // #422: the bump inputs `release cut --auto` reads. Not a narrowing or a widening — they add evidence
 // to the computed number, never permission — so they only have to be non-empty strings. One of
 // guard-run / guard-result, never both: two detectors answering one question is two readings.
@@ -139,17 +148,19 @@ function parseTestPeriod(v) {
  * Validate the declared `release:` block against the derived default.
  * Returns { declared, derived, effective, findings } — `declared` is the raw block (null when
  * absent), `effective` is what a tool acts on: { route, candidates, candidatesPerDay,
- * testPeriodDays, final, finalize } — the declared route when its row permits it, else the
+ * testPeriodDays, final, finalize, npm } — the declared route when its row permits it, else the
  * derived one, narrowed by every VALID declared key. An invalid or widening key never reaches
  * `effective`; it is a finding instead. `findings` are { level: 'fail', text } — every problem
  * here is a failure: a block that could widen silently would make the routes a suggestion.
+ * `effective.npm` is `{ dir, gate }` only when the npm pair is declared, valid, and on a route that
+ * may publish (#433) — anything short of that is null, so the workflow publishes nothing.
  */
 function evaluateRelease(cfg) {
   const c = cfg || {};
   const derived = deriveDefault(c);
   const fromDerived = () => ({
     route: derived.route, candidates: derived.candidates, candidatesPerDay: derived.candidatesPerDay,
-    testPeriodDays: derived.testPeriodDays, final: derived.final, finalize: derived.finalize,
+    testPeriodDays: derived.testPeriodDays, final: derived.final, finalize: derived.finalize, npm: null,
   });
   let effective = fromDerived();
   const findings = [];
@@ -160,7 +171,7 @@ function evaluateRelease(cfg) {
   if (raw === undefined || raw === null) return { declared: null, derived, effective, findings };
 
   if (typeof raw !== 'object' || Array.isArray(raw)) {
-    fail(`release is ${JSON.stringify(raw)}, expected a block of route / candidates / candidates-per-day / test-period / final / guard-run / guard-result / exports (omit it for the default ${derived.axis} derives)`);
+    fail(`release is ${JSON.stringify(raw)}, expected a block of route / candidates / candidates-per-day / test-period / final / guard-run / guard-result / exports / npm / npm-gate (omit it for the default ${derived.axis} derives)`);
     return { declared: raw, derived, effective, findings };
   }
 
@@ -171,6 +182,18 @@ function evaluateRelease(cfg) {
 
   for (const key of INPUT_KEYS) {
     if (key in raw && (typeof raw[key] !== 'string' || !raw[key].trim())) fail(`release.${key} is ${JSON.stringify(raw[key])}, expected a non-empty string`);
+  }
+  for (const key of NPM_KEYS) {
+    if (key in raw && (typeof raw[key] !== 'string' || !raw[key].trim())) fail(`release.${key} is ${JSON.stringify(raw[key])}, expected a non-empty string`);
+  }
+  if (typeof raw.npm === 'string' && raw.npm.trim()) {
+    const dir = raw.npm.trim();
+    if (dir.startsWith('/') || dir.split('/').includes('..')) fail(`release.npm is ${JSON.stringify(raw.npm)}, expected a directory inside the repo (\`.\` for the root)`);
+  }
+  if (('npm' in raw) !== ('npm-gate' in raw)) {
+    fail('npm' in raw
+      ? 'release.npm is declared without release.npm-gate — every npm publish runs a pack-allowlist gate first, so declare the command that proves the tarball holds only what was meant to ship'
+      : 'release.npm-gate is declared without release.npm — there is no package to gate; declare the package directory or remove the key');
   }
   if ('guard-run' in raw && 'guard-result' in raw) fail('release.guard-run and release.guard-result are both declared — one detector answers whether the release breaks, so declare one');
 
@@ -232,10 +255,20 @@ function evaluateRelease(cfg) {
     } else effective.testPeriodDays = days;
   }
 
+  // 3. npm (#433) — only on a route where a tag publishes to adopters and deploys nothing.
+  effective.npm = null;
+  if ('npm' in raw || 'npm-gate' in raw) {
+    if (!NPM_ROUTES.includes(effective.route)) {
+      fail(`release.npm publishes to npm, which fits only route ${NPM_ROUTES.join(' / ')} — ${route} is not one (${routes}). ` +
+        'A tag that deploys an app is not a package release; remove the npm keys');
+    }
+    if (!findings.some((f) => f.text.startsWith('release.npm'))) effective.npm = { dir: raw.npm.trim().replace(/\/+$/, '') || '.', gate: raw['npm-gate'].trim() };
+  }
+
   return { declared: raw, derived, effective, findings };
 }
 
 module.exports = {
-  KEYS, INPUT_KEYS, CANDIDATES, FINAL, TEST_PERIOD_DAYS, ROUTES, ROUTE_POLICY, ROW_ROUTES,
+  KEYS, INPUT_KEYS, NPM_KEYS, NPM_ROUTES, CANDIDATES, FINAL, TEST_PERIOD_DAYS, ROUTES, ROUTE_POLICY, ROW_ROUTES,
   deriveDefault, evaluateRelease, parseTestPeriod, routePolicy,
 };

@@ -16,6 +16,9 @@
 #                                                                              the final is a
 #                                                                              human's)
 #   workflow_dispatch                         both, in that order
+#   any of the above tagged something, and    npm publish (job `npm`, #433) — candidates to
+#   project.yml declares release.npm          dist-tag `next`, finals to `latest`; see the
+#                                             comment above that job
 #
 # Every decision — whether a candidate is owed, which bump, whether the test period
 # elapsed clean, whether the final is automatic on this repo at all — is the colab CLI's,
@@ -57,7 +60,7 @@
 #
 # IT READS TAGS AND CREATES TAGS. IT NEVER PUSHES COMMITS. No step here commits, and the
 # only refs pushed are the tags `colab release cut` / `colab release finalize` create
-# (annotated, their checks recorded in the tag message). `-rc.N` tags are published as
+# (annotated, their checks recorded in the tag message). The npm job never moves git either. `-rc.N` tags are published as
 # pre-releases, never "Latest". The audit's pre-release deploy-trigger check (#332) still
 # applies to your deploy workflows exactly as before.
 #
@@ -72,7 +75,10 @@
 # would be ignored with it.
 #
 # NO TOOLCHAIN RESOLUTION. It runs the colab CLI (zero-dependency Node) on the runner's
-# preinstalled Node and gh. Nothing of your project is built here.
+# preinstalled Node and gh. Nothing of your project is built here — except in the opt-in
+# `npm` job, which sets up its own Node for npm's trusted publishing (EDIT point there for
+# a package that needs a build). The npm job needs a HANDBOOK_REF that carries #433; an
+# older CLI gives no npm verdict and nothing is published to npm.
 
 name: Release (auto)
 
@@ -113,6 +119,14 @@ jobs:
       contents: write # push the tags, publish the GitHub Release
       issues: write # finalize opens / comments on / closes the "release: vX.Y.Z" tracking issue
       actions: read # read the runs at a commit (ci-green, full-suite, trunk-green)
+    # What the npm job below needs (#433) — empty / publish=false unless this run tagged something
+    # AND .github/project.yml opts in with release.npm.
+    outputs:
+      tags: ${{ steps.npm-target.outputs.tags }}
+      npm: ${{ steps.npm-target.outputs.publish }}
+      npm-dir: ${{ steps.npm-target.outputs.dir }}
+      npm-gate: ${{ steps.npm-target.outputs.gate }}
+      npm-package: ${{ steps.npm-target.outputs.package }}
     env:
       GH_TOKEN: ${{ github.token }}
     steps:
@@ -198,6 +212,38 @@ jobs:
             esac
           fi
 
+      # Whether the npm job publishes what this run tagged — `colab release npm` reads the
+      # release: block (one reading, the same as cut/finalize). A CLI older than #433 gives no
+      # verdict; that is a warning and no npm publish, never a failed release.
+      - name: Read the npm target (colab release npm)
+        id: npm-target
+        if: steps.cut.outputs.tag != '' || steps.finalize.outputs.tag != ''
+        env:
+          TAGS: ${{ steps.cut.outputs.tag }} ${{ steps.finalize.outputs.tag }}
+        run: |
+          set -uo pipefail
+          OUT="$RUNNER_TEMP/npm.json"
+          node "$COLAB" release npm --json > "$OUT" 2> /dev/null || true
+          if ! jq -e 'has("publish")' "$OUT" > /dev/null 2>&1; then
+            echo "::warning::colab release npm gave no verdict (a HANDBOOK_REF older than #433?) — nothing is published to npm"
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if [ "$(jq -r '.publish' "$OUT")" != "true" ]; then
+            if [ "$(jq -r '.findings | length' "$OUT")" != "0" ]; then
+              echo "::warning::not publishing to npm: $(jq -r '.findings | join("; ")' "$OUT")"
+            fi
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          {
+            echo "publish=true"
+            echo "tags=$(echo $TAGS)"
+            echo "dir=$(jq -r '.dir' "$OUT")"
+            echo "gate=$(jq -r '.gate' "$OUT")"
+            echo "package=$(jq -r '.package' "$OUT")"
+          } >> "$GITHUB_OUTPUT"
+
       # Publishes every tag THIS run created. In this run, never via a tag-push workflow:
       # see "PUBLISHING HAPPENS IN THIS RUN" in the header.
       - name: Publish GitHub Release (same run)
@@ -226,4 +272,136 @@ jobs:
             esac
             gh release create "$TAG" --verify-tag --title "$TAG" --notes-file "$NOTES" --generate-notes "${KIND[@]}"
             echo "Published $TAG" | tee -a "$GITHUB_STEP_SUMMARY"
+          done
+
+  # ---------------------------------------------------------------------------------------------
+  # npm (#433) — publishes what the release job tagged, in this same run. Opt-in: it runs only when
+  # .github/project.yml declares release.npm + release.npm-gate on the public-tool route, so a repo
+  # without them never gets this job.
+  #
+  #   candidate vX.Y.Z-rc.N  ->  npm publish --tag next   --provenance
+  #   final     vX.Y.Z       ->  npm publish --tag latest --provenance   (latest never moves to an rc)
+  #
+  # TRUSTED PUBLISHING (OIDC) ONLY. No npm token is stored, read, or offered as a fallback — the
+  # job refuses to run with one in its environment. npm ends direct publishing with 2FA-bypass
+  # tokens in January 2027; this design never used one. One-time setup on npmjs.com: the package's
+  # Settings -> Trusted publishing -> GitHub Actions, this repository, workflow file
+  # `release-auto.yml` (the file's name, not its `name:`).
+  #
+  # GITHUB-HOSTED, ALWAYS. npm trusted publishing does not support self-hosted runners, so this job
+  # stays on GitHub-hosted even where `release` above runs self-hosted (free on a public repo — the
+  # only kind that publishes here; a private repo is refused outright, #432).
+  #
+  # IT NEVER MOVES GIT. It checks out the tag, stamps the version from the tag into package.json
+  # (the manifest carries none — the tag is the version), runs the gate, publishes. Nothing is
+  # committed or pushed. If it fails, the tag stands, `npm-record` writes "tagged, not published"
+  # on the Release, and re-running the failed job publishes the existing tag; a version already on
+  # npm is skipped, so a re-run never double-publishes.
+  npm:
+    name: Publish to npm (trusted publishing)
+    needs: release
+    if: needs.release.outputs.npm == 'true'
+    runs-on: ubuntu-latest # NEVER self-hosted: npm trusted publishing does not support it.
+    permissions:
+      contents: read # check out the tag; read the repository's visibility
+      id-token: write # the OIDC token npm exchanges for a one-time publish credential
+    env:
+      GH_TOKEN: ${{ github.token }}
+      REPO: ${{ github.repository }}
+      TAGS: ${{ needs.release.outputs.tags }}
+      PKG_DIR: ${{ needs.release.outputs.npm-dir }}
+      GATE: ${{ needs.release.outputs.npm-gate }}
+      PACKAGE: ${{ needs.release.outputs.npm-package }}
+    steps:
+      - name: Refuse a private repository, and any npm token
+        run: |
+          set -uo pipefail
+          # Visibility from the API, never assumed: unknown is refused like private.
+          PRIVATE="$(gh api "repos/$REPO" --jq '.private' 2> /dev/null || echo unknown)"
+          if [ "$PRIVATE" != "false" ]; then
+            echo "::error::$REPO is private (or its visibility could not be read: $PRIVATE) — a private repository never publishes to public npm (#432). Remove release.npm, or install from git."
+            exit 1
+          fi
+          if [ -n "${NODE_AUTH_TOKEN:-}${NPM_TOKEN:-}" ]; then
+            echo "::error::an npm token is set in this job's environment — this workflow publishes through trusted publishing (OIDC) only and never with a token. Remove it."
+            exit 1
+          fi
+
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false # nothing here pushes
+
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
+        with:
+          node-version: 24 # no registry-url: that writes an .npmrc expecting a token
+
+      - name: npm new enough for trusted publishing (>= 11.5.1)
+        run: |
+          set -euo pipefail
+          if ! node -e 'const [a,b,c]=process.argv[1].split(".").map(Number);process.exit(a>11||(a===11&&(b>5||(b===5&&c>=1)))?0:1)' "$(npm --version)"; then
+            npm install --global npm@11
+          fi
+          npm --version
+
+      # EDIT: a package that needs a build step builds here, BEFORE the gate — the gate measures
+      # what ships, and the publish below runs with --ignore-scripts so nothing changes after it.
+      - name: Publish each tag (npm publish --provenance)
+        run: |
+          set -euo pipefail
+          for TAG in $TAGS; do
+            VERSION="${TAG#v}"
+            case "$VERSION" in
+              *-*) DIST=next ;;
+              *)   DIST=latest ;;
+            esac
+            if npm view "$PACKAGE@$VERSION" version > /dev/null 2>&1; then
+              echo "$PACKAGE@$VERSION is already on npm — skipping" | tee -a "$GITHUB_STEP_SUMMARY"
+              continue
+            fi
+            git checkout --quiet --force "refs/tags/$TAG"
+            git clean -fdxq
+            (cd "$PKG_DIR" && npm pkg set "version=$VERSION")
+            sh -c "$GATE"
+            (cd "$PKG_DIR" && npm publish --tag "$DIST" --provenance --access public --ignore-scripts)
+            echo "Published $PACKAGE@$VERSION to npm (dist-tag $DIST)" | tee -a "$GITHUB_STEP_SUMMARY"
+          done
+
+  # Writes the npm outcome onto each GitHub Release the run published, replacing its own earlier
+  # line on a re-run: "published" once it is, "tagged, not published" with the re-run hint until then.
+  npm-record:
+    name: Record the npm outcome on the Release
+    needs: [release, npm]
+    if: always() && needs.release.outputs.npm == 'true'
+    runs-on: ubuntu-latest # EDIT: self-hosted label if this repo needs one.
+    permissions:
+      contents: write # edit the Release notes
+    env:
+      GH_TOKEN: ${{ github.token }}
+      REPO: ${{ github.repository }}
+      TAGS: ${{ needs.release.outputs.tags }}
+      PACKAGE: ${{ needs.release.outputs.npm-package }}
+      RESULT: ${{ needs.npm.result }}
+      RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+    steps:
+      - name: Record the npm outcome
+        run: |
+          set -euo pipefail
+          for TAG in $TAGS; do
+            BODY="$(gh release view "$TAG" --repo "$REPO" --json body --jq '.body' 2> /dev/null)" || {
+              echo "$TAG has no Release — nothing to record on"
+              continue
+            }
+            VERSION="${TAG#v}"
+            case "$VERSION" in *-*) DIST=next ;; *) DIST=latest ;; esac
+            if [ "$RESULT" = "success" ]; then
+              LINE="npm: published \`$PACKAGE@$VERSION\` (dist-tag \`$DIST\`)."
+            else
+              LINE="**npm: tagged, not published** (\`$PACKAGE@$VERSION\`, job $RESULT). Re-run the failed \`npm\` job of $RUN_URL — it publishes this existing tag; nothing in git moves."
+            fi
+            NOTES="$RUNNER_TEMP/notes-$TAG.md"
+            printf '%s\n' "$BODY" | sed '/^<!-- colab:npm -->$/,/^<!-- \/colab:npm -->$/d' > "$NOTES"
+            printf '\n<!-- colab:npm -->\n%s\n<!-- /colab:npm -->\n' "$LINE" >> "$NOTES"
+            gh release edit "$TAG" --repo "$REPO" --notes-file "$NOTES" > /dev/null
+            echo "$TAG: $LINE" | tee -a "$GITHUB_STEP_SUMMARY"
           done
