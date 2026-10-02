@@ -116,6 +116,12 @@ function originTags(fx) {
   return out.split('\n').filter(Boolean).map((l) => l.split('\t')[1].replace(/^refs\/tags\//, '')).filter((t) => !t.endsWith('^{}')).sort();
 }
 
+/** Where a release channel branch (#445) points on origin, or null when it does not exist. */
+function originBranch(fx, name) {
+  const out = execFileSync('git', ['ls-remote', '--heads', fx.origin, `refs/heads/${name}`], { encoding: 'utf8' }).trim();
+  return out ? out.split('\t')[0] : null;
+}
+
 /** Assert a refusal on `condition`, and that nothing reached origin. */
 function assertRefused(fx, r, condition, pattern) {
   assert.strictEqual(r.code, 1, r.out + r.err);
@@ -139,6 +145,8 @@ test('green path: -rc.1, then a new fix on main gives -rc.2 of the same version;
   assert.strictEqual(dry.body.tag, 'v1.2.1-rc.1');
   assert.strictEqual(dry.body.created, false);
   assert.deepStrictEqual(originTags(fx), ['v1.2.0'], '--dry creates nothing');
+  assert.match(dry.body.channel.detail, /^\[--dry\] would be: next created/);
+  assert.strictEqual(originBranch(fx, 'next'), null, '--dry moves no channel');
 
   const first = cut(fx);
   assert.strictEqual(first.code, 0, first.out + first.err);
@@ -147,6 +155,9 @@ test('green path: -rc.1, then a new fix on main gives -rc.2 of the same version;
   assert.deepStrictEqual(originTags(fx), ['v1.2.0', 'v1.2.1-rc.1']);
   const rc1Sha = fx.g('rev-list', '-n', '1', 'v1.2.1-rc.1');
   assert.strictEqual(rc1Sha, fx.g('rev-parse', 'origin/main'));
+  // #445: the cut moves the `next` channel to the candidate it pushed.
+  assert.strictEqual(first.body.channel.action, 'create', JSON.stringify(first.body.channel));
+  assert.strictEqual(originBranch(fx, 'next'), rc1Sha);
   const message = fx.g('for-each-ref', '--format=%(contents)', 'refs/tags/v1.2.1-rc.1');
   assert.match(message, /Bump: patch/);
   assert.match(message, /- ci-green: /);
@@ -163,6 +174,9 @@ test('green path: -rc.1, then a new fix on main gives -rc.2 of the same version;
   assert.strictEqual(second.body.tag, 'v1.2.1-rc.2');
   assert.deepStrictEqual(originTags(fx), ['v1.2.0', 'v1.2.1-rc.1', 'v1.2.1-rc.2']);
   assert.ok(!originTags(fx).includes('v1.2.1'), 'never a final tag');
+  assert.strictEqual(second.body.channel.action, 'move', 'next fast-forwards to the newest candidate');
+  assert.strictEqual(originBranch(fx, 'next'), fx.g('rev-list', '-n', '1', 'v1.2.1-rc.2'));
+  assert.strictEqual(originBranch(fx, 'stable'), null, 'a cut never moves stable');
 });
 
 test('an override is honoured only with a reason, and the reason is recorded on the tag', () => {

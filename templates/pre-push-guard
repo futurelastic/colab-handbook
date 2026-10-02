@@ -9,10 +9,14 @@
 #     COLAB_SHIP does NOT open main — ship is trunk/line-only by design.
 #     The guard keys on `trunk != main`, never on the tier letter, so tier C is covered
 #     automatically — main there is what promotion deploys, so it needs the gate most.
+#   RELEASE CHANNELS `next` and `stable` (#445): allowed by COLAB_RELEASE=1 (`colab release cut` moves
+#     `next`, `colab release finalize` moves `stable`) or COLAB_HUMAN=1. Nothing else writes them —
+#     they name the newest candidate and the newest final, and a hand push makes them lie. A repo that
+#     uses a branch of either name for something else edits its copy of this hook (copy-and-own).
 # On tier B (trunk == main) the trunk rule already covers main. Non-protected pushes always pass.
 # Missing .github/project.yml → degrade to ALLOW (with a warning) rather than block work.
 #
-# The two variables named above are set BY A TOOL (`colab ship`, `colab promote`) or BY A PERSON at
+# The variables named above are set BY A TOOL (`colab ship`, `colab promote`, `colab release`) or BY A PERSON at
 # the keyboard — never by an agent reading this file or one of the refusals below. COLAB_SHIP is a
 # process-identity assertion, not a permission: typed by hand it claims preconditions nothing ran.
 # The refusal messages below therefore name the remedy and not the variable (#322) — this header is
@@ -51,10 +55,13 @@ integration=$(awk '
 pushing_trunk=0
 pushing_main=0
 pushing_line=""
+pushing_channel=""
 while read -r _localref _localsha remoteref _remotesha; do
   case "${remoteref:-}" in
     refs/heads/"$trunk") pushing_trunk=1 ;;
     refs/heads/main)     pushing_main=1 ;;
+    refs/heads/next)     pushing_channel=next ;;
+    refs/heads/stable)   pushing_channel=stable ;;
   esac
   for line in $integration; do
     if [ "${remoteref:-}" = "refs/heads/$line" ]; then pushing_line="$line"; fi
@@ -102,6 +109,19 @@ if [ -n "$pushing_line" ] && [ "${COLAB_SHIP:-}" != "1" ] && [ "${COLAB_HUMAN:-}
   echo "pre-push-guard: refusing raw push to integration line '$pushing_line'." >&2
   echo "  Ship the branch instead (it merges into the base the branch was cut from):" >&2
   echo "    colab ship --branch <your-branch>" >&2
+  exit 1
+fi
+
+# RELEASE-CHANNEL guard (#445) — `next` / `stable` move only with a release, forward only.
+if [ -n "$pushing_channel" ] && [ "${COLAB_RELEASE:-}" != "1" ] && [ "${COLAB_HUMAN:-}" != "1" ]; then
+  echo "pre-push-guard: refusing raw push to release channel '$pushing_channel'." >&2
+  echo "  It names the newest $( [ "$pushing_channel" = next ] && echo candidate || echo final ) and moves only with one:" >&2
+  if [ "$pushing_channel" = next ]; then
+    echo "    colab release cut            # a new candidate fast-forwards 'next'" >&2
+  else
+    echo "    colab release finalize       # a new final fast-forwards 'stable'" >&2
+  fi
+  echo "  To follow a different version, pin its tag where you consume it; the channel stays where it is." >&2
   exit 1
 fi
 

@@ -63,6 +63,7 @@ const releasePolicy = require('./lib/release-policy');
 const workflowTriggers = require('./lib/workflow-triggers');
 const releaseCut = require('./lib/release-cut');
 const releaseFinalize = require('./lib/release-finalize');
+const releaseChannel = require('./lib/release-channel');
 const shippedBranch = require('./lib/shipped-branch');
 const shipRoles = require('./lib/ship-roles'); // #372
 const refsBrake = require('./lib/refs-brake'); // #385
@@ -1244,6 +1245,11 @@ Every cut also publishes the candidate's GitHub pre-release (#443): notes = the 
 since the last final plus the tag message. Best-effort — a failure warns (--json published.ok false)
 and never undoes the pushed tag.
 
+Every cut also fast-forwards the release channel \`next\` — a branch, always the newest candidate
+(#445) — to the candidate's commit, pushed with COLAB_RELEASE=1 (what pre-push-guard lets through).
+Forward only, never forced: a \`next\` that is not an ancestor of the candidate is reported and left
+alone. Best-effort like the pre-release (--json channel.ok false); the tag stands either way.
+
 Needs origin reachable (the tag is recorded there) and gh usable (CI, suite and switch markers are
 read from GitHub). Exit code: 0 when a candidate was cut (or, with --dry, would be), or an --auto
 no-op; 1 when refused.
@@ -1508,11 +1514,16 @@ function cmdReleaseCut(argv) {
     created = true;
     published = publishPrerelease(repoAbs, { tag: verdict.tag, lastFinal, message });
   }
+  // #445: the `next` channel names the newest candidate — fast-forwarded in the run that pushed it.
+  // Best-effort like the pre-release: the tag already stands, so a channel that cannot move is reported.
+  const channel = verdict.ok && verdict.tag
+    ? releaseChannel.moveChannel(repoAbs, { remote, channel: releaseChannel.CHANNELS.next, sha, label: verdict.tag, dry: !!opts.dry })
+    : null;
 
   if (opts.json) {
     print(JSON.stringify({
       repo: shortRepo(repoAbs), sha, ...(offTrunk ? { trunk } : {}), lastFinal, suggestion, dry: !!opts.dry, auto: !!opts.auto,
-      ok: verdict.ok, noop: !!verdict.noop, tag: verdict.tag, created, published, version: verdict.version, bump: verdict.bump,
+      ok: verdict.ok, noop: !!verdict.noop, tag: verdict.tag, created, published, channel, version: verdict.version, bump: verdict.bump,
       overridden: verdict.overridden, signals: verdict.signals ? verdict.signals.lines : null, checks: verdict.checks,
     }, null, 2));
     return verdict.ok || verdict.noop ? 0 : 1;
@@ -1534,12 +1545,14 @@ function cmdReleaseCut(argv) {
     print(`✗ refused — ${verdict.refusals.length} condition(s) failed; nothing cut.`);
     return 1;
   }
-  if (opts.dry) print(`[--dry] would create ${verdict.tag} on ${at}, push it to ${remote} and publish its GitHub pre-release. Nothing created.`);
+  if (opts.dry) print(`[--dry] would create ${verdict.tag} on ${at}, push it to ${remote}, publish its GitHub pre-release and move the next channel. Nothing created.`);
   else {
     print(`✓ cut ${verdict.tag} on ${at} and pushed it to ${remote} — a candidate, not a release; finalizing it is the release skill's.`);
     if (published && published.ok) print(`✓ ${published.detail}`);
     else if (published) warn(`${published.detail} — the tag stands; publish it by hand: gh release create ${verdict.tag} --verify-tag --prerelease --latest=false`);
   }
+  if (channel && channel.ok) print(`${opts.dry ? '·' : '✓'} ${channel.detail}`);
+  else if (channel) warn(`${channel.detail} — the tag stands`);
   return 0;
 }
 
@@ -1627,6 +1640,10 @@ under CONVENTIONS.md §6's release rung, re-checking everything at the moment it
                        in a commit since the previous final) gets one comment: "Released in vX.Y.Z"
                        (with --dry: every check passed, nothing written)
 
+  A final also fast-forwards the release channel \`stable\` — a branch, always the newest final (#445)
+  — to its commit; already-final repairs a \`stable\` a dead run left behind. Forward only, never
+  forced, best-effort (--json channel); the final tag stands either way.
+
 Conditions (--json checks[].condition; required:false means reported, not blocking, on this row):
   release-policy  candidate  tracking-issue  release-hold  regressions  test-period  trunk-green
   ci-green  full-suite  schema-additive  switch-dependencies  final-grant  migration-grant  human
@@ -1664,6 +1681,7 @@ Conditions (--json checks[].condition; required:false means reported, not blocki
   --json              { repo, row, route, final, testPeriodDays, lastFinal, dry, auto, candidate, tracking,
                         periodStart, periodEndsAt, state, tagged, finalTag, checks, handoff,
                         skipped (--auto: [{tag, state, detail?}] — the other open candidates),
+                        channel (null, or {channel, ok, action, detail} — the stable move, #445),
                         announced (null, or {range, issues, posted, skipped} — the "Released in" comments),
                         grant (null, or {issue, ruledBy} — the operator grant that made this final automatic) }
 
@@ -1838,6 +1856,7 @@ function cmdReleaseFinalize(argv) {
 
   // ---- writes ----
   let tagged = false;
+  let channel = null; // #445: { channel, ok, action, detail } once `stable` was (or could not be) moved
   const comment = (num, fields, text) => {
     const view = git.ghIssueView(repoAbs, num, ['comments']);
     if (view && releaseFinalize.hasEvent(view.comments, fields)) return;
@@ -1879,6 +1898,13 @@ function cmdReleaseFinalize(argv) {
         throw new UserError(`git push ${remote} ${cand.version} failed — the local tag was deleted again, nothing is final (${(push.stderr || '').split('\n')[0]})`);
       }
       tagged = true;
+    }
+    // #445: the `stable` channel names the newest final — moved by the run that tags it, and repaired
+    // on the already-final resume (a run that died between the tag push and the move finishes it).
+    if (tagged) channel = releaseChannel.moveChannel(repoAbs, { remote, channel: releaseChannel.CHANNELS.stable, sha: cand.sha, label: cand.version });
+    else if (verdict.state === 'already-final' && version0) {
+      const finalTag = tags.find((t) => t.name === version0);
+      if (finalTag) channel = releaseChannel.moveChannel(repoAbs, { remote, channel: releaseChannel.CHANNELS.stable, sha: finalTag.sha, label: version0 });
     }
     // The newest candidate is announced on its version's issue — on --auto with its own clock.
     const tNew = version0 ? trackings.get(version0) : null;
@@ -1929,7 +1955,7 @@ function cmdReleaseFinalize(argv) {
       lastFinal, dry: !!opts.dry, auto: !!opts.auto, candidate: cand, tracking: trackingOut,
       periodStart: period ? period.start : null, periodEndsAt: period ? period.endsAt : null,
       state: verdict.state, tagged, finalTag: verdict.finalTag, checks: verdict.checks, handoff: verdict.handoff,
-      skipped: walk ? skipped : undefined, announced, grant: verdict.grant || null,
+      skipped: walk ? skipped : undefined, announced, grant: verdict.grant || null, channel,
     }, null, 2));
   } else {
     print(`colab release finalize${opts.auto ? ' --auto' : ''} — ${shortRepo(repoAbs)} (last final: ${lastFinal || 'none'}${cand ? `, candidate: ${cand.tag}` : ''})`);
@@ -1942,6 +1968,8 @@ function cmdReleaseFinalize(argv) {
     print('');
     print(`state: ${verdict.state}${opts.dry ? ' [--dry: nothing written]' : ''}${tagged ? ` — tagged ${verdict.finalTag} and pushed it to ${remote}` : ''}`);
     if (announced && announced.issues.length) print(`released in ${verdict.finalTag || version0}: told ${announced.posted.length ? announced.posted.map((n) => `#${n}`).join(', ') : 'nobody new'} (carried: ${announced.issues.map((n) => `#${n}`).join(', ')}${announced.skipped.length ? `; unreadable: ${announced.skipped.map((n) => `#${n}`).join(', ')}` : ''})`);
+    if (channel && channel.ok) print(`✓ ${channel.detail}`);
+    else if (channel) warn(`${channel.detail} — the final tag stands`);
     if (verdict.handoff) print(`\nThe final is a human act here. The one command, for a human to run:\n  ${verdict.handoff}`);
   }
   // #423: on --auto, "nothing to do yet" (still testing, no candidate) is the workflow's ordinary output.

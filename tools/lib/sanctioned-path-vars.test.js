@@ -43,6 +43,7 @@ process.on('exit', () => { for (const d of TMP) { try { fs.rmSync(d, { recursive
 const SETTERS = {
   COLAB_SHIP: [/COLAB_SHIP\s*=\s*1/, /COLAB_SHIP=['"]?1/],
   COLAB_PROMOTE: [/COLAB_PROMOTE\s*=\s*1/, /COLAB_PROMOTE=['"]?1/],
+  COLAB_RELEASE: [/COLAB_RELEASE\s*=\s*1/, /COLAB_RELEASE=['"]?1/],
 };
 
 function skillFilesSetting(repoRoot, varName) {
@@ -74,6 +75,14 @@ test('process-identity property: no file under skills/ sets COLAB_PROMOTE=1 (#32
   assert.deepStrictEqual(offenders, [],
     'a skill sets COLAB_PROMOTE=1 — promotion is human on every repo, with no field able to say ' +
     `otherwise: ${offenders.join(', ')}`);
+});
+
+test('process-identity property: no file under skills/ sets COLAB_RELEASE=1 (#445)', () => {
+  const offenders = skillFilesSetting(REPO_ROOT, 'COLAB_RELEASE');
+  assert.deepStrictEqual(offenders, [],
+    'a skill sets COLAB_RELEASE=1 — that variable asserts "`colab release cut`/`finalize` is moving ' +
+    'a release channel"; a hand-set one points `next`/`stable` at whatever was pushed: ' +
+    `${offenders.join(', ')}`);
 });
 
 // Pin the boundary, not just the happy path — and pin that it has NO solo-flow carve-out, which is
@@ -111,6 +120,8 @@ test('pre-push-guard: every refusal message names a `colab` command to run', () 
   const spoken = messages.join('\n');
   assert.match(spoken, /colab ship/);
   assert.match(spoken, /colab promote/);
+  assert.match(spoken, /colab release cut/);
+  assert.match(spoken, /colab release finalize/);
 });
 
 test('pre-push-guard: NO refusal message names an environment variable — the guard must not teach its own bypass (#322)', () => {
@@ -119,7 +130,7 @@ test('pre-push-guard: NO refusal message names an environment variable — the g
   // purpose: a person looks that up deliberately, and an agent reading an error message does not.
   const offenders = text.split('\n')
     .filter((l) => /^\s*echo .*>&2/.test(l))
-    .filter((l) => /COLAB_(SHIP|HUMAN|PROMOTE)/.test(l));
+    .filter((l) => /COLAB_(SHIP|HUMAN|PROMOTE|RELEASE)/.test(l));
   assert.deepStrictEqual(offenders, [],
     'a pre-push-guard refusal names the variable that defeats it. Two sessions typed exactly what ' +
     `this message told them, one day apart, neither having read it in a skill:\n${offenders.join('\n')}`);

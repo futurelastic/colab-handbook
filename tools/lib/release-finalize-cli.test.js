@@ -123,6 +123,12 @@ function cutCandidate(fx, daysAgo) {
 
 const finalize = (fx, args = [], opts) => colab(fx, ['finalize', ...args], opts);
 
+/** Where a release channel branch (#445) points on origin, or null when it does not exist. */
+function originBranch(fx, name) {
+  const out = execFileSync('git', ['ls-remote', '--heads', fx.origin, `refs/heads/${name}`], { encoding: 'utf8' }).trim();
+  return out ? out.split('\t')[0] : null;
+}
+
 function originTags(fx) {
   const out = execFileSync('git', ['ls-remote', '--tags', fx.origin], { encoding: 'utf8' });
   return out.split('\n').filter(Boolean).map((l) => l.split('\t')[1].replace(/^refs\/tags\//, '')).filter((t) => !t.endsWith('^{}')).sort();
@@ -164,12 +170,23 @@ test('auto row: --dry writes nothing; a run opens ONE tracking issue and tests; 
   fx.g('fetch', '-q', '--tags', 'origin');
   assert.strictEqual(fx.g('cat-file', '-t', 'v1.2.1'), 'tag', 'the final is annotated');
   assert.strictEqual(fx.g('rev-parse', 'v1.2.1^{commit}'), rcSha, 'the final names the candidate commit');
+  // #445: the final moves the `stable` channel to its commit.
+  assert.strictEqual(done.body.channel.action, 'create', JSON.stringify(done.body.channel));
+  assert.strictEqual(originBranch(fx, 'stable'), rcSha);
   issues = tracking(fx);
   assert.strictEqual(issues[0].state, 'CLOSED');
 
   const after = finalize(fx);
   assert.strictEqual(after.body.state, 'already-final');
   assert.strictEqual(tracking(fx).length, 1);
+  assert.strictEqual(after.body.channel.action, 'noop', 'stable is already there');
+
+  // A run that died between the tag push and the channel move: already-final repairs stable.
+  execFileSync('git', ['push', '-q', 'origin', '--delete', 'stable'], { cwd: fx.work, env: { ...process.env, COLAB_HUMAN: '1' } });
+  const repaired = finalize(fx);
+  assert.strictEqual(repaired.body.state, 'already-final');
+  assert.strictEqual(repaired.body.channel.action, 'create');
+  assert.strictEqual(originBranch(fx, 'stable'), rcSha);
 });
 
 test('#426: the final tells every issue it carries "Released in vX.Y.Z" — once, and a resume finishes it', () => {

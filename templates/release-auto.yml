@@ -124,9 +124,14 @@ concurrency:
 permissions: {}
 
 env:
-  # EDIT: the handbook version whose colab CLI makes the release decisions. Pin a tag;
-  # moving it is a deliberate act, like re-copying a template.
-  HANDBOOK_REF: "v1.11.0"
+  # EDIT: the handbook ref whose colab CLI makes the release decisions — a CHANNEL or a
+  # version tag (CONVENTIONS.md §6, *Release channels*, #445):
+  #   stable     the newest final release — the default; it moves forward as finals are cut,
+  #              and that release's notes say what changed
+  #   next       the newest candidate (vX.Y.Z-rc.N) — the fast channel
+  #   vX.Y.Z     an exact version tag — frozen; moving it is a deliberate act, like re-copying
+  #              a template
+  HANDBOOK_REF: "stable"
   HANDBOOK_REPO: "https://github.com/futurelastic/colab-handbook.git"
 
 jobs:
