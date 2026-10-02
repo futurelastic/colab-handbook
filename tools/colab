@@ -1220,6 +1220,12 @@ Refuses, naming each failed condition (all are reported, not just the first):
   carries a non-empty "Measured cost:" line. Every signal is printed and written into the tag.
   cadence              the route's candidates-per-day cap over the last 24h — inside it, and when
                        nothing was merged since the last final, the run is a NO-OP (exit 0)
+  promotion            only where project.yml's trunk: is not main (trunk: dev + deploy: tag, #429):
+                       main's head must be a promotion of trunk — a --no-ff merge whose later parent
+                       is on trunk, or a fast-forward onto it. Any other head (a hotfix straight on
+                       main) is a NO-OP; cut it by hand without --auto. An unreadable trunk refuses.
+                       There the bump reads the promoted commits (main's merge subject is skipped),
+                       and a switch-removal child counts when its Closes #N was promoted.
 
 The bump (without --auto) is release-status's semverSuggestion since the last final tag (candidates skipped): fix ->
 patch, feat -> minor; a breaking change is a minor pre-1.0 and a refusal from 1.0 on.
@@ -1326,6 +1332,25 @@ function measurePreTag(repoAbs, sha, mainRef) {
   };
 }
 
+/**
+ * #429: is `main@sha` a promotion of `trunk`? Measured by topology against `${remote}/${trunk}` —
+ * the verdict is releaseCut.promotionVerdict's. `fetched` is the trunk fetch's result.
+ */
+function measurePromotion(repoAbs, { sha, trunk, remote, fetched }) {
+  const ref = `${remote}/${trunk}`;
+  const refR = git.git(['rev-parse', '--verify', '--quiet', `refs/remotes/${ref}^{commit}`], repoAbs);
+  if ((fetched && !fetched.ok) || !refR.ok || !refR.stdout) {
+    const why = fetched && !fetched.ok ? `git fetch ${remote} ${trunk} failed: ${(fetched.stderr || '').split('\n')[0] || fetched.code}` : `no ${ref}`;
+    return releaseCut.promotionVerdict({ trunk, sha, error: why });
+  }
+  const pr = git.git(['rev-list', '--parents', '-n', '1', sha], repoAbs);
+  const parents = pr.ok ? pr.stdout.trim().split(/\s+/).slice(1) : [];
+  const isAnc = (c) => git.git(['merge-base', '--is-ancestor', c, ref], repoAbs).ok;
+  const headOnTrunk = isAnc(sha);
+  const merged = headOnTrunk ? null : parents.slice(1).find(isAnc);
+  return releaseCut.promotionVerdict({ trunk, sha, parents, headOnTrunk, mergedFromTrunk: merged || false });
+}
+
 /** Every candidate `colab release cut` made, as [{ name, date }] — what the cadence window counts (#422). */
 function cutCandidates(repoAbs) {
   const fe = git.git(['for-each-ref', 'refs/tags', '--format=%(refname:short)%09%(objecttype)%09%(taggerdate:iso-strict)%09%(contents:subject)'], repoAbs);
@@ -1338,7 +1363,7 @@ function cutCandidates(repoAbs) {
  * --auto's bump inputs (#422) at `sha` since `lastFinal`: commit types, the declared guard, the
  * exports diff, switch-removal children, and the migration-section reader for a major.
  */
-function measureAutoSignals(repoAbs, { doc, sha, lastFinal, remote, issues }) {
+function measureAutoSignals(repoAbs, { doc, sha, lastFinal, remote, issues, trunk }) {
   const rel = (doc && doc.release && typeof doc.release === 'object') ? doc.release : {};
   const at = (ref, file) => { const r = git.git(['show', `${ref}:${file}`], repoAbs); return r.ok ? r.stdout : null; };
   const cc = lastFinal ? ccSummary(repoAbs, `${lastFinal}..${sha}`) : { total: 0, counts: {}, breaking: false };
@@ -1377,8 +1402,18 @@ function measureAutoSignals(repoAbs, { doc, sha, lastFinal, remote, issues }) {
   let switchesUnread = null;
   if (issues === null || issues === undefined) switchesUnread = 'the issue list could not be read — switch-removal children cannot be counted';
   else {
-    const dateR = lastFinal ? git.git(['log', '-1', '--format=%cI', lastFinal], repoAbs) : null;
-    switchRemovals = releaseCut.switchRemovalsSince(issues, dateR && dateR.ok ? dateR.stdout.trim() : null);
+    // #429: off `trunk: main`, an issue closes when it merges to trunk, not when it is promoted — so
+    // a removal counts when its closing keyword is in the promoted range, not by its close date.
+    let only = null;
+    if (trunk && trunk !== releaseCut.RELEASE_BRANCH && lastFinal) {
+      const log = git.git(['log', '--format=%B%x00', `${lastFinal}..${sha}`], repoAbs);
+      if (log.ok) only = new Set(releaseFinalize.carriedIssues(log.stdout.split('\0')).map(Number));
+      else switchesUnread = `git log ${lastFinal}..${shortSha(sha)} failed — the promoted switch-removal children cannot be counted`;
+    }
+    if (!switchesUnread) {
+      const dateR = lastFinal ? git.git(['log', '-1', '--format=%cI', lastFinal], repoAbs) : null;
+      switchRemovals = releaseCut.switchRemovalsSince(issues, dateR && dateR.ok ? dateR.stdout.trim() : null, { only });
+    }
   }
   const signals = releaseCut.autoSignals({ cc, guard, exports, switchRemovals });
   if (switchesUnread) { signals.unread.push(switchesUnread); signals.lines.push(`switches: UNREAD — ${switchesUnread}`); }
@@ -1399,11 +1434,16 @@ function cmdReleaseCut(argv) {
   const doc = projectDoc(repoAbs);
   const policy = releasePolicy.evaluateRelease(doc);
   const remote = git.remoteFor(repoAbs); // #301
+  // #429: on `trunk:` other than main (`trunk: dev` + `deploy: tag`), --auto cuts only when main's
+  // head is a promotion of trunk — the same trunk `colab promote` reads.
+  const trunk = resolveTrunk(repoAbs, doc);
+  const offTrunk = !!trunk && trunk !== releaseCut.RELEASE_BRANCH;
 
   const fetched = git.git(['fetch', '--tags', remote, 'main'], repoAbs);
   if (!fetched.ok) {
     throw new UserError(`git fetch --tags ${remote} main failed — a candidate is recorded on ${remote}, so nothing is cut without it (${(fetched.stderr || '').split('\n')[0] || fetched.code})`);
   }
+  const trunkFetch = offTrunk && opts.auto ? git.git(['fetch', remote, trunk], repoAbs) : null;
   const shaR = git.git(['rev-parse', '--verify', '--quiet', `refs/remotes/${remote}/main^{commit}`], repoAbs);
   if (!shaR.ok || !shaR.stdout) throw new UserError(`no ${remote}/main — candidates are cut from main (CONVENTIONS.md §6: never from dev)`);
   const sha = shaR.stdout;
@@ -1432,9 +1472,9 @@ function cmdReleaseCut(argv) {
 
   let auto = null; // #422
   if (opts.auto) {
-    const { signals, migration } = measureAutoSignals(repoAbs, { doc, sha, lastFinal, remote, issues });
+    const { signals, migration } = measureAutoSignals(repoAbs, { doc, sha, lastFinal, remote, issues, trunk });
     const cadence = releaseCut.cadenceVerdict({ candidates: cutCandidates(repoAbs), perDay: policy.effective.candidatesPerDay, now: new Date().toISOString() });
-    auto = { signals, migration, cadence };
+    auto = { signals, migration, cadence, promotion: offTrunk ? measurePromotion(repoAbs, { sha, trunk, remote, fetched: trunkFetch }) : null };
   }
 
   const verdict = releaseCut.decide({
@@ -1457,7 +1497,7 @@ function cmdReleaseCut(argv) {
 
   if (opts.json) {
     print(JSON.stringify({
-      repo: shortRepo(repoAbs), sha, lastFinal, suggestion, dry: !!opts.dry, auto: !!opts.auto,
+      repo: shortRepo(repoAbs), sha, ...(offTrunk ? { trunk } : {}), lastFinal, suggestion, dry: !!opts.dry, auto: !!opts.auto,
       ok: verdict.ok, noop: !!verdict.noop, tag: verdict.tag, created, version: verdict.version, bump: verdict.bump,
       overridden: verdict.overridden, signals: verdict.signals ? verdict.signals.lines : null, checks: verdict.checks,
     }, null, 2));
@@ -1473,7 +1513,7 @@ function cmdReleaseCut(argv) {
   for (const c of verdict.checks) print(`  ${c.ok ? '✓' : '✗'} ${c.condition.padEnd(width)}  ${c.detail}`);
   print('');
   if (verdict.noop) {
-    print('· no-op — nothing owed, or inside the route\'s cadence window; nothing cut.');
+    print('· no-op — nothing owed, inside the route\'s cadence window, or main\'s head is not a promotion of trunk; nothing cut.');
     return 0;
   }
   if (!verdict.ok) {

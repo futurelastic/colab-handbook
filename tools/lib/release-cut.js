@@ -28,10 +28,15 @@
  *                        switch needs one that is still unfinished
  *
  *   manifest-version     #424 — the tag equals every declared manifest's version (release-tag.js)
- *   on-trunk             #424 — the commit is an ancestor of main; a shallow checkout is a refusal
+ *   on-trunk             #424 — the commit is an ancestor of the release branch, `main` — on every
+ *                        trunk shape (§6: never tag from `dev`); a shallow checkout is a refusal
  *   outranks-final       #424 — the version is strictly greater than the highest final tag
  *   cadence              #422, --auto only — the route's candidates-per-day cap; inside the window
  *                        the run is a NO-OP (verdict.noop), not a refusal
+ *   promotion            #429, --auto on `trunk:` other than `main` only — `main`'s head is a promotion
+ *                        of trunk (a --no-ff merge whose later parent is on trunk, or a fast-forward
+ *                        onto trunk). Any other head is a NO-OP, like cadence; an unread trunk refuses.
+ *                        Absent entirely on `trunk: main`, so that repo's --json is unchanged.
  *
  * `--auto` (#422) computes the bump with no human input (autoSignals + decideAutoVersion): commit
  * types, a repo guard's result and an exports diff, majors included — a major only with a migration
@@ -48,8 +53,15 @@ const releaseTag = require('./release-tag');
 const VERSION_RE = /^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$/;
 const BUMPS = Object.freeze(['patch', 'minor']);
 
+/**
+ * The branch a candidate is cut on and a final is tagged on — `main`, whatever `trunk:` says (§6:
+ * "Do not tag from `dev`"). This is NOT project.yml's `trunk:`; on `trunk: dev` the two differ and
+ * the candidate is cut on the promotion merge (#429).
+ */
+const RELEASE_BRANCH = 'main';
+
 const CONDITIONS = Object.freeze([
-  'release-policy', 'cadence', 'prerelease-trigger', 'version', 'already-candidate',
+  'release-policy', 'cadence', 'promotion', 'prerelease-trigger', 'version', 'already-candidate',
   ...releaseTag.PRE_TAG_CONDITIONS,
   'ci-green', 'full-suite', 'schema-additive', 'switch-dependencies',
 ]);
@@ -227,14 +239,23 @@ function exportsDiff({ before, after, listFile }) {
   return { removed, detail: removed.length ? `removed export(s): ${removed.join('; ')}` : `no export removed (read: ${read.join(', ')})` };
 }
 
-/** Switch-removal children (`role=remove`) closed done after `sinceIso` — each one makes the release a minor. */
-function switchRemovalsSince(issues, sinceIso) {
+/**
+ * Switch-removal children (`role=remove`) closed done after `sinceIso` — each one makes the release a
+ * minor. `only` (#429), a Set of issue numbers, replaces the date filter: on `trunk:` other than
+ * `main` an issue closes when it merges to trunk, not when it is promoted, so the caller passes the
+ * issues whose closing keyword is in the promoted range and the close date stops deciding.
+ */
+function switchRemovalsSince(issues, sinceIso, { only = null } = {}) {
   const since = Date.parse(sinceIso || '');
   const out = [];
   for (const issue of issues || []) {
     if (!closedDone(issue)) continue;
-    const closed = Date.parse(issue.closedAt || '');
-    if (!Number.isNaN(since) && !(closed > since)) continue;
+    if (only) {
+      if (!only.has(Number(issue.number))) continue;
+    } else {
+      const closed = Date.parse(issue.closedAt || '');
+      if (!Number.isNaN(since) && !(closed > since)) continue;
+    }
     const { markers } = parseSwitchMarkers(issue.body);
     for (const mk of markers) if (mk.role === 'remove') out.push({ number: issue.number, name: mk.name });
   }
@@ -581,6 +602,29 @@ function switchVerdict(issues) {
   return { ok: true, detail: `${declared.size} switch(es) declared — ${finished.size} finished, ${unfinished.length} unfinished (dark in this release); every declared dependency satisfied` };
 }
 
+/**
+ * #429 — is `main@sha` a promotion of `trunk`? Topology, not the subject line: `colab promote
+ * --message` overrides the subject and a hand-run `git merge --no-ff dev` writes git's own.
+ *   trunk            project.yml's `trunk:` (never `main` here — the caller skips the check there)
+ *   sha, parents     the head and its parent shas, first parent first
+ *   headOnTrunk      sha is an ancestor of origin/<trunk> (a fast-forward promotion)
+ *   mergedFromTrunk  some non-first parent is an ancestor of origin/<trunk> (the --no-ff merge)
+ *   error            origin/<trunk> could not be read — an unread trunk is not a clean one
+ * Returns { ok, detail, unread }. Not-a-promotion is `ok: false` without `unread`: decide() reads it
+ * as a no-op, because a hotfix on `main` is cut by the next promotion or by hand.
+ */
+function promotionVerdict({ trunk, sha, parents, headOnTrunk, mergedFromTrunk, error } = {}) {
+  const short = (x) => String(x || '').slice(0, 7);
+  if (error) return { ok: false, unread: true, detail: `origin/${trunk} could not be read (${error}) — whether \`${RELEASE_BRANCH}\` is a promotion is unknown, and an unread trunk is not a clean one` };
+  if (headOnTrunk) return { ok: true, detail: `${RELEASE_BRANCH}@${short(sha)} is on ${trunk} — a fast-forward promotion` };
+  const ps = parents || [];
+  if (ps.length >= 2 && mergedFromTrunk) {
+    return { ok: true, detail: `${RELEASE_BRANCH}@${short(sha)} promotes ${trunk}@${short(mergedFromTrunk === true ? ps[ps.length - 1] : mergedFromTrunk)}` };
+  }
+  const what = ps.length >= 2 ? `a merge of a branch not on ${trunk}` : 'a direct commit';
+  return { ok: false, detail: `${RELEASE_BRANCH}@${short(sha)} is not a promotion of ${trunk} (${what}) — the next promotion's range carries it; to release it now, cut by hand with \`colab release cut\`` };
+}
+
 // ---- the verdict ------------------------------------------------------------------------------
 
 /**
@@ -617,6 +661,12 @@ function decide(facts) {
     const cad = f.auto.cadence || { ok: false, detail: 'cadence not measured' };
     add('cadence', cad.ok, cad.detail);
     if (!cad.ok) noop = !!f.auto.cadence;
+    // #429: on `trunk:` other than main, only a promotion head is a candidate; anything else no-ops.
+    const pr = f.auto.promotion;
+    if (pr) {
+      add('promotion', pr.ok, pr.detail);
+      if (!pr.ok && !pr.unread) noop = true;
+    }
   }
 
   const trig = f.triggers || [];
@@ -642,7 +692,7 @@ function decide(facts) {
 
   // #424: the three pre-tag checks, on the tag this run would create.
   if (tag) {
-    for (const c of releaseTag.preTagChecks({ tag, manifests: f.manifests, ancestry: f.ancestry, tags: f.tags, trunk: 'main' })) add(c.condition, c.ok, c.detail);
+    for (const c of releaseTag.preTagChecks({ tag, manifests: f.manifests, ancestry: f.ancestry, tags: f.tags, trunk: RELEASE_BRANCH })) add(c.condition, c.ok, c.detail);
   } else if (f.ancestry && f.ancestry.shallow) {
     // A shallow checkout cannot even find the last final, so no tag is computed — name the cause.
     add('on-trunk', false, 'a shallow checkout cannot answer whether the commit is on main (nor find the last final tag) — fetch full history (fetch-depth: 0) and re-run');
@@ -682,10 +732,10 @@ function tagMessage(verdict, { sha, lastFinal }) {
 }
 
 module.exports = {
-  CONDITIONS, BUMPS, MIGRATION_FILE,
+  CONDITIONS, BUMPS, MIGRATION_FILE, RELEASE_BRANCH,
   parseVersion, formatVersion, candidateNumbers, nextCandidateNumber, decideVersion,
   parseGuardOutput, exportsDiff, switchRemovalsSince, autoSignals, parseMigrationSection, decideAutoVersion, cadenceVerdict,
   fullSuiteVerdict, withoutOwnWorkflow, isMigrationPath, schemaVerdict,
   parseSwitchMarkers, switchVerdict,
-  decide, tagMessage,
+  promotionVerdict, decide, tagMessage,
 };

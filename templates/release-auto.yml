@@ -10,6 +10,7 @@
 #   trigger                                   step
 #   ----------------------------------------  ------------------------------------------------
 #   your CI workflow finished green on main   colab release cut --auto       → vX.Y.Z-rc.N
+#   (on `trunk: dev`: the promotion's push)
 #   a daily schedule                          colab release finalize --auto  → vX.Y.Z (or a
 #                                                                              hand-off where
 #                                                                              the final is a
@@ -21,9 +22,30 @@
 # read from .github/project.yml's release rung. This file only schedules it and publishes
 # what it tagged. Where the rung leaves candidates off, every run is a recorded refusal.
 #
-# WHERE IT FITS. `colab release cut` tags origin/main, so this is for a repo whose release
-# tags land on `main`: `trunk: main` with `deploy: tag` or `deploy: none`. It does not fit
-# a `trunk: dev` repo (the promotion is a human act there) or `exposure: live` (no tags).
+# WHERE IT FITS. `colab release cut` tags origin/main — release tags land on `main` on every
+# trunk shape — so the same file, unchanged, fits two kinds of repo:
+#
+#   `trunk: main` + `deploy: tag | none`   every green CI run on main may cut a candidate.
+#   `trunk: dev`  + `deploy: tag`          main only moves when a human promotes dev → main,
+#                                          so the green CI run on that promotion's push is the
+#                                          trigger. The CLI reads `trunk:` and cuts only when
+#                                          main's head IS a promotion of dev (a --no-ff merge
+#                                          whose later parent is on dev, or a fast-forward);
+#                                          any other head — a hotfix straight on main — is a
+#                                          no-op, carried by the next promotion or cut by hand
+#                                          with `colab release cut`. The bump reads the
+#                                          promoted dev commits (never the merge subject, never
+#                                          dev commits not yet promoted), and the manifest
+#                                          version is read on main's promotion commit, so a
+#                                          version bump must reach main through the promotion.
+#                                          Finalize only posts the one-click hand-off: a final
+#                                          is a human act wherever a tag deploys. Who may
+#                                          promote does not change. Needs a HANDBOOK_REF that
+#                                          carries #429; older CLIs cut on any green main head.
+#
+# Your CI workflow must run on pushes to main for the trigger to fire — the handbook's CI
+# templates run on every branch. It does not fit `exposure: live` (no tags: the promotion
+# itself is the deploy).
 #
 # PUBLISHING HAPPENS IN THIS RUN — deliberately. A tag pushed with GITHUB_TOKEN does NOT
 # trigger other workflows (GitHub suppresses it to prevent loops). So "cut the tag here and
@@ -138,7 +160,7 @@ jobs:
             echo "tag=$TAG" >> "$GITHUB_OUTPUT"
             echo "Cut $TAG" | tee -a "$GITHUB_STEP_SUMMARY"
           elif [ "$(jq -r '.noop' "$OUT")" = "true" ]; then
-            echo "No-op: nothing owed, or inside the cadence window." | tee -a "$GITHUB_STEP_SUMMARY"
+            echo "No-op: nothing owed, inside the cadence window, or main's head is not a promotion." | tee -a "$GITHUB_STEP_SUMMARY"
           elif [ "$(jq -r '.ok' "$OUT")" = "true" ]; then
             echo "Verdict ok but nothing created." | tee -a "$GITHUB_STEP_SUMMARY"
           else

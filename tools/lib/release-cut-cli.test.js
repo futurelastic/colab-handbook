@@ -394,3 +394,117 @@ test('refuses (#424): a shallow checkout cannot answer on-trunk', () => {
   assert.ok(check, JSON.stringify(body.checks));
   assert.match(check.detail, /shallow checkout cannot answer/);
 });
+
+// ---- trunk: dev + deploy: tag — cut on the promotion (#429) ------------------------------------
+
+const DEV_TAG_YML = 'trunk: dev\nexposure: released\nproduction: https://example.invalid\ndeploy: tag\nstack: node\n';
+
+/**
+ * A `trunk: dev` + `deploy: tag` repo: fixture()'s main (v1.2.0 + a fix), then `dev` cut from it and
+ * pushed. The working tree is left on dev; devCommit() lands work there, promote() merges it to main.
+ */
+function devFixture(opts = {}) {
+  const fx = fixture({ projectYml: DEV_TAG_YML, ...opts });
+  fx.g('checkout', '-q', '-b', 'dev');
+  fx.g('push', '-q', 'origin', 'dev');
+  return fx;
+}
+
+function devCommit(fx, file, message, content = `${message}\n`) {
+  fs.mkdirSync(path.join(fx.work, path.dirname(file)), { recursive: true });
+  fs.writeFileSync(path.join(fx.work, file), content);
+  fx.g('add', '-A');
+  fx.g('commit', '-q', '-m', message);
+  fx.g('push', '-q', 'origin', 'dev');
+}
+
+/** The human promotion: `--no-ff` dev -> main, pushed; CI green on the merge (the run that triggers the workflow). */
+function promote(fx, subject = 'release: dev → main — 2026-01-01 (promotion via colab promote)') {
+  fx.g('checkout', '-q', 'main');
+  fx.g('merge', '-q', '--no-ff', 'dev', '-m', subject);
+  fx.g('push', '-q', 'origin', 'main');
+  setRuns(fx, [{}]);
+  fx.g('checkout', '-q', 'dev');
+}
+
+const check = (r, condition) => (r.body && r.body.checks || []).find((c) => c.condition === condition);
+
+test('trunk: dev --auto (#429): the promotion is cut; the bump reads promoted dev commits, not the merge subject', () => {
+  const fx = devFixture();
+  devCommit(fx, 'a.txt', 'fix: on dev');
+  promote(fx);
+  devCommit(fx, 'b.txt', 'feat: still only on dev');
+  const r = cut(fx, ['--auto']);
+  assert.strictEqual(r.code, 0, r.out + r.err);
+  assert.strictEqual(r.body.trunk, 'dev');
+  assert.strictEqual(r.body.tag, 'v1.2.1-rc.1', 'the unpromoted feat is not read');
+  assert.strictEqual(fx.g('rev-list', '-n', '1', 'v1.2.1-rc.1'), fx.g('rev-parse', 'origin/main'), 'cut on the promotion merge, not dev');
+  assert.ok(r.body.signals.some((l) => /^commits: 2 since the last final \(2 fix\)/.test(l)), JSON.stringify(r.body.signals));
+  assert.strictEqual(check(r, 'promotion').ok, true);
+  assert.match(check(r, 'promotion').detail, /promotes dev@/);
+});
+
+test('trunk: dev --auto (#429): a promoted feat cuts a minor', () => {
+  const fx = devFixture();
+  devCommit(fx, 'a.txt', 'feat: a feature');
+  promote(fx, "Merge branch 'dev'");
+  const r = cut(fx, ['--auto', '--dry']);
+  assert.strictEqual(r.code, 0, r.out + r.err);
+  assert.strictEqual(r.body.tag, 'v1.3.0-rc.1');
+});
+
+test('trunk: dev --auto (#429): a direct push to main is a no-op — and a human can still cut it by hand', () => {
+  const fx = devFixture();
+  devCommit(fx, 'a.txt', 'fix: on dev');
+  promote(fx);
+  fx.g('checkout', '-q', 'main');
+  commit(fx, 'hot.txt', 'fix: hotfix straight on main');
+  const r = cut(fx, ['--auto']);
+  assert.strictEqual(r.code, 0, r.out + r.err);
+  assert.strictEqual(r.body.noop, true);
+  assert.strictEqual(r.body.created, false);
+  assert.strictEqual(check(r, 'promotion').ok, false);
+  assert.match(check(r, 'promotion').detail, /not a promotion of dev \(a direct commit\)/);
+  assert.deepStrictEqual(originTags(fx).filter((t) => t.includes('-rc.')), []);
+  const byHand = cut(fx);
+  assert.strictEqual(byHand.code, 0, byHand.out + byHand.err);
+  assert.strictEqual(byHand.body.created, true);
+  assert.ok(!check(byHand, 'promotion'), 'no promotion check without --auto');
+});
+
+test('trunk: dev (#429): manifest-version reads main\'s promotion commit, not dev', () => {
+  const fx = devFixture({ files: { VERSION: '1.2.0\n' } });
+  devCommit(fx, 'VERSION', 'fix: ship 1.2.1', '1.2.1\n');
+  promote(fx);
+  devCommit(fx, 'VERSION', 'chore: start 1.9.9 on dev', '1.9.9\n');
+  const r = cut(fx, ['--auto', '--dry']);
+  assert.strictEqual(r.code, 0, r.out + r.err);
+  assert.strictEqual(r.body.tag, 'v1.2.1-rc.1');
+  assert.strictEqual(check(r, 'manifest-version').ok, true, JSON.stringify(r.body.checks));
+});
+
+test('trunk: dev --auto (#429): a switch-removal child counts only once its Closes #N was promoted', () => {
+  const fx = devFixture();
+  fs.writeFileSync(fx.issuesFile, JSON.stringify([
+    { number: 6, state: 'CLOSED', stateReason: 'COMPLETED', closedAt: '2026-01-01T00:00:00Z', body: '<!-- colab:switch name=nav role=add -->' },
+    { number: 7, state: 'CLOSED', stateReason: 'COMPLETED', closedAt: '2099-01-01T00:00:00Z', body: '<!-- colab:switch name=nav role=remove -->' },
+  ]));
+  devCommit(fx, 'a.txt', 'fix: on dev');
+  promote(fx);
+  devCommit(fx, 'nav.txt', 'chore: drop the nav switch\n\nCloses #7');
+  const before = cut(fx, ['--auto', '--dry']);
+  assert.strictEqual(before.code, 0, before.out + before.err);
+  assert.strictEqual(before.body.tag, 'v1.2.1-rc.1', 'closed on dev, not promoted — not a minor yet');
+  promote(fx);
+  const after = cut(fx, ['--auto', '--dry']);
+  assert.strictEqual(after.code, 0, after.out + after.err);
+  assert.strictEqual(after.body.tag, 'v1.3.0-rc.1');
+});
+
+test('trunk: main --auto (#429): no promotion check, no trunk key — the shape is unchanged', () => {
+  const fx = fixture();
+  const r = cut(fx, ['--auto', '--dry']);
+  assert.strictEqual(r.code, 0, r.out + r.err);
+  assert.ok(!check(r, 'promotion'));
+  assert.ok(!('trunk' in r.body));
+});
