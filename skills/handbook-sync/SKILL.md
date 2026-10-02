@@ -456,6 +456,13 @@ and the audit is what catches it:
   record" (`CONVENTIONS.md` [§2](../../CONVENTIONS.md#2-tiers)) — which this sync should close by putting [§9](../../CONVENTIONS.md#9-adopting-this)'s
   question set to the repo's own owner, never by guessing an answer.
 - Toolchain pins must still agree between `project.yml` and the manifest.
+- **A private repo must not be able to publish to public npm (#432).** The audit fails a
+  *private* repository (visibility read from the GitHub API, never guessed) when any
+  `package.json` — root or workspace member — lacks `"private": true`, when
+  `publishConfig.registry` points at `registry.npmjs.org`, or when a workflow runs
+  `npm publish` / `pnpm publish` / `yarn npm publish` / `JS-DevTools/npm-publish`. Unknown
+  visibility is a warning, not a pass. Fix: set `"private": true`, delete the publish step,
+  and ship the app from git (`npx github:<org>/<repo>#<tag>`). A public repo is unaffected.
 - A workflow may trigger on branches that no longer exist — CI passing on nothing.
 - **A convention label may have been added since this repo adopted.** The label set
   is part of the model, and a repo that adopted at an older version never back-filled
