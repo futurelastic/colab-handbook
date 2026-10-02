@@ -216,14 +216,15 @@ window between a CLI commit and the next tag, and the advertised remedy copies
 *from* that same working tree — so on a machine developing the handbook it
 advised services to adopt untagged code.) It never rewrites the copy, not even
 with `--apply`: that is the toolchain your running services are executing.
-`colab --version` says which of the two you are talking to. The frozen copy carries
+`colab --version` says which of the two you are talking to (or `npm package` for an
+`npx`/`npm i` install), and prints that install's version. The frozen copy carries
 `tools/` only, so `colab template` refuses there — run it from the working tree.
 
 **3. Verify, and register your repos.**
 
 ```sh
 colab --help                  # not found? fix your PATH — step 2 prints the exact line
-colab --version               # which colab is this: the working tree, or the frozen copy?
+colab --version               # which colab is this — working tree, frozen copy, or npm package — and its version
 colab register /path/to/repo  # once per repo — writes repos.txt AND config.json, so they agree
 node audit/audit.mjs          # a conformance report across the whole fleet
 colab update                  # stamped copies that fell behind — the frozen CLI included

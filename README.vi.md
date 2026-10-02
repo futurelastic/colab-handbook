@@ -208,13 +208,14 @@ mọi máy bị đánh dấu cũ suốt quãng từ lúc commit CLI tới tag k�
 phục được quảng cáo lại copy *từ* chính cây làm việc đó — nên trên máy đang phát
 triển handbook, nó khuyên các service nạp code chưa phát hành.) Nó không bao giờ
 ghi đè bản copy, kể cả với `--apply`: đó là bộ công cụ mà các service đang chạy
-của bạn đang thực thi. `colab --version` cho biết bạn đang nói chuyện với bản nào.
+của bạn đang thực thi. `colab --version` cho biết bạn đang nói chuyện với bản nào (hoặc `npm package` khi
+cài qua `npx`/`npm i`), kèm phiên bản của chính bản đó.
 
 **3. Kiểm lại, rồi chỉ cho audit biết phải soi repo nào.**
 
 ```sh
 colab --help                 # không thấy lệnh? sửa PATH — bước 2 in sẵn dòng cần thêm
-colab --version              # colab nào đây: bản working tree hay bản đóng băng?
+colab --version              # colab nào đây — working tree, bản đóng băng hay npm package — và phiên bản của nó
 $EDITOR ~/.colab/repos.txt   # thay các dòng ví dụ bằng repo của bạn
 node audit/audit.mjs         # báo cáo conformance cho toàn bộ fleet
 colab update                 # các bản copy có đóng dấu đã tụt lại — kể cả CLI đóng băng

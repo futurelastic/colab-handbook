@@ -86,6 +86,43 @@ function packageVersion(root) {
   }
 }
 
+/** The npm name this CLI publishes under — must equal the root package.json's `name` (a test pins it). */
+const PACKAGE_NAME = '@futurelastic/colab-handbook';
+
+/** True when `root` is its own git checkout — the toplevel git finds IS `root`, not an enclosing repo. */
+function ownsGit(root) {
+  const top = gitIn(root, ['rev-parse', '--show-toplevel']);
+  return top.ok && realPath(top.out) === realPath(require('path').resolve(root));
+}
+
+/**
+ * `{ root, version }` when `root` is THIS CLI installed from the npm registry, else null (#444).
+ *
+ * Three conditions, all required:
+ *   - no git of its own (an enclosing repo does not count — see handbookInfo);
+ *   - `<root>/package.json` names this package, so an unrelated package.json never qualifies;
+ *   - `root` sits under a `node_modules/` directory. Without this, a handbook working tree that is
+ *     file-synced to another machine with its `.git` deliberately left behind would pass the first
+ *     two and be reported as a registry install. npx, `npm i` and `npm i -g` all install there.
+ *
+ * `version` is package.json's verbatim — a candidate's `1.12.0-rc.8` included. That is the point:
+ * this answers "which build is running", where handbookInfo answers "what may I stamp with", and a
+ * candidate is never the latter (#334) — so its stricter packageVersion is right for it, wrong here.
+ */
+function npmPackageInfo(root) {
+  const p = require('path');
+  if (!p.resolve(root).split(p.sep).includes('node_modules')) return null;
+  let j;
+  try {
+    j = JSON.parse(require('fs').readFileSync(p.join(root, 'package.json'), 'utf8'));
+  } catch (_) {
+    return null;
+  }
+  if (!j || j.name !== PACKAGE_NAME || typeof j.version !== 'string' || !j.version) return null;
+  if (ownsGit(root)) return null;
+  return { root, version: j.version };
+}
+
 /**
  * The handbook's own identity: { root, hasGit, untagged, version }.
  * Before the first tag exists the version is 'v0' and `untagged` is true, which DEACTIVATES stamp
@@ -693,7 +730,7 @@ module.exports = {
   FROZEN_STAMP_NAME, FROZEN_STAMP_FILE, FROZEN_SOURCES, classifyFrozen,
   AUTHORITY_FLIP_VERSION,
   gitIn, gitCommonDir, isHandbookItself,
-  handbookInfo, freezeVersion, templateNames, templateFiles, templateChangedSince, templateAt,
+  handbookInfo, PACKAGE_NAME, npmPackageInfo, freezeVersion, templateNames, templateFiles, templateChangedSince, templateAt,
   AXES, axesPredating,
   WRITES_VETO_MARKER, writesRulingKnownAt,
   stampLine, stampCommentPrefix, insertStamp, parseWorkflowStamp, parseClaudeStamp,
