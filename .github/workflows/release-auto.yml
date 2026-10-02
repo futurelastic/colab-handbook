@@ -118,7 +118,7 @@ jobs:
             echo "tag=$TAG" >> "$GITHUB_OUTPUT"
             echo "Cut $TAG" | tee -a "$GITHUB_STEP_SUMMARY"
           elif [ "$(jq -r '.noop' "$OUT")" = "true" ]; then
-            echo "No-op: nothing owed, or inside the cadence window." | tee -a "$GITHUB_STEP_SUMMARY"
+            echo "No-op: nothing owed, inside the cadence window, or main's head is not a promotion." | tee -a "$GITHUB_STEP_SUMMARY"
           elif [ "$(jq -r '.ok' "$OUT")" = "true" ]; then
             echo "Verdict ok but nothing created." | tee -a "$GITHUB_STEP_SUMMARY"
           else
