@@ -166,7 +166,7 @@ test('colab template (handbookVersion) and colab version report the final, not t
   assert.doesNotMatch(t.out, /rc\.1/);
 
   const v = colab(fx.bin, ['version']);
-  assert.match(v.out, /colab-handbook v1\.2\.0 /, v.out + v.err);
+  assert.match(v.out, /^colab v1\.2\.0 \(working tree: /, v.out + v.err); // one version since #444
 });
 
 test('release-notes default range starts at the final, covering the commits under the candidate', () => {
