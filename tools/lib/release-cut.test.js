@@ -24,6 +24,7 @@ function facts(over = {}) {
     tags: ['v1.2.0'],
     tagsAtSha: [],
     ci: green, suite: green, schema: green, switches: green,
+    manifests: [], ancestry: { ok: true, shallow: false },
     ...over,
   };
 }
@@ -86,7 +87,8 @@ test('green path: every check ok, tag is the next candidate', () => {
   const v = rc.decide(facts({ tags: ['v1.2.0', 'v1.2.1-rc.1'] }));
   assert.strictEqual(v.ok, true, JSON.stringify(v.refusals));
   assert.strictEqual(v.tag, 'v1.2.1-rc.2');
-  assert.deepStrictEqual(v.checks.map((c) => c.condition), rc.CONDITIONS);
+  // `cadence` is reported only under --auto (#422).
+  assert.deepStrictEqual(v.checks.map((c) => c.condition), rc.CONDITIONS.filter((c) => c !== 'cadence'));
 });
 
 test('candidates off — derived (self) and narrowed (release: candidates: off) — refuse on release-policy', () => {
@@ -122,7 +124,7 @@ test('the tag message records the bump, the override reason and every condition'
   const msg = rc.tagMessage(v, { sha: 'abc123', lastFinal: 'v1.2.0' });
   assert.match(msg, /^v1\.2\.1-rc\.1 — release candidate/);
   assert.match(msg, /reason: adopters read the docs/);
-  for (const c of rc.CONDITIONS) assert.match(msg, new RegExp(`- ${c}: `));
+  for (const c of rc.CONDITIONS.filter((x) => x !== 'cadence')) assert.match(msg, new RegExp(`- ${c}: `));
 });
 
 // ---- full suite -------------------------------------------------------------------------------
@@ -208,4 +210,130 @@ test('switches: an unfinished dependent is fine (it ships dark); an undeclared d
   ];
   assert.strictEqual(rc.switchVerdict(dark).ok, true);
   assert.match(rc.switchVerdict([issue(20, 'OPEN', '<!-- colab:switch name=b needs=ghost -->')]).detail, /which no issue declares/);
+});
+
+// ---- --auto: the computed bump (#422) ---------------------------------------------------------
+
+const CC = (counts, extra = {}) => ({ total: Object.values(counts).reduce((a, b) => a + b, 0), counts, breaking: false, ...extra });
+const noExports = { removed: [], detail: 'no export removed' };
+function autoFacts({ cc = CC({ fix: 1 }), guard = null, exports: ex = noExports, switchRemovals = [], migration, cadence, ...over } = {}) {
+  return facts({
+    suggestion: null,
+    auto: {
+      signals: rc.autoSignals({ cc, guard, exports: ex, switchRemovals }),
+      migration: migration || ((v) => ({ ok: false, section: null, detail: `no MIGRATION.md for ${v}` })),
+      cadence: cadence || { ok: true, detail: 'uncapped' },
+    },
+    ...over,
+  });
+}
+
+test('--auto: fixes/chores -> patch; a chore alone still owes a patch', () => {
+  assert.strictEqual(rc.decide(autoFacts({ cc: CC({ fix: 2 }) })).tag, 'v1.2.1-rc.1');
+  assert.strictEqual(rc.decide(autoFacts({ cc: CC({ chore: 1 }) })).tag, 'v1.2.1-rc.1');
+});
+
+test('--auto: a feature, or a switch-removal child merged, -> minor', () => {
+  assert.strictEqual(rc.decide(autoFacts({ cc: CC({ feat: 1, fix: 3 }) })).tag, 'v1.3.0-rc.1');
+  const sw = rc.decide(autoFacts({ cc: CC({ chore: 1 }), switchRemovals: [{ number: 9, name: 'new-nav' }] }));
+  assert.strictEqual(sw.tag, 'v1.3.0-rc.1');
+  assert.match(sw.checks.find((c) => c.condition === 'version').detail, /switch-removal child merged: #9 \(new-nav\)/);
+});
+
+test('--auto: nothing merged is a no-op, not a refusal', () => {
+  const v = rc.decide(autoFacts({ cc: CC({}) }));
+  assert.strictEqual(v.ok, false);
+  assert.strictEqual(v.noop, true);
+});
+
+test('--auto: each breaking signal — commit, guard, exports — makes a major from 1.0, a minor below', () => {
+  const signals = {
+    commit: { cc: CC({ fix: 1 }, { breaking: true }) },
+    guard: { guard: rc.parseGuardOutput('schema-guard', '{"breaking": true, "findings": ["users.legacy dropped"]}') },
+    exports: { exports: { removed: ['package.json exports ./old'], detail: 'removed export(s): package.json exports ./old' } },
+  };
+  for (const [name, sig] of Object.entries(signals)) {
+    const pre = rc.decide(autoFacts({ ...sig, lastFinal: 'v0.4.2', tags: ['v0.4.2'] }));
+    assert.strictEqual(pre.tag, 'v0.5.0-rc.1', `${name} pre-1.0`);
+    const ok = rc.decide(autoFacts({ ...sig, migration: (v) => rc.parseMigrationSection(`## ${v}\n\nRename X.\n\nMeasured cost: 3 call sites in 2 adopters.\n`, v) }));
+    assert.strictEqual(ok.tag, 'v2.0.0-rc.1', `${name} from 1.0`);
+    assert.strictEqual(ok.bump, 'major');
+  }
+});
+
+test('--auto: a major without a migration section carrying its measured cost is refused', () => {
+  const brk = { cc: CC({ feat: 1 }, { breaking: true }) };
+  const none = rc.decide(autoFacts(brk));
+  assert.strictEqual(none.ok, false);
+  assert.strictEqual(none.noop, false);
+  assert.match(none.checks.find((c) => c.condition === 'version').detail, /is a major .* refused/);
+  const noCost = rc.decide(autoFacts({ ...brk, migration: (v) => rc.parseMigrationSection(`## ${v}\n\nRename X.\n`, v) }));
+  assert.match(noCost.checks.find((c) => c.condition === 'version').detail, /Measured cost/);
+  const wrongVersion = rc.parseMigrationSection('## v3.0.0\n\nMeasured cost: 1\n', 'v2.0.0');
+  assert.strictEqual(wrongVersion.ok, false);
+  assert.strictEqual(rc.parseMigrationSection(null, 'v2.0.0').ok, false);
+});
+
+test('--auto: an unread guard or exports list fails closed', () => {
+  const g = rc.decide(autoFacts({ guard: rc.parseGuardOutput('g', 'not json') }));
+  assert.strictEqual(g.ok, false);
+  assert.match(g.checks.find((c) => c.condition === 'version').detail, /could not be read — fail closed/);
+  assert.match(rc.parseGuardOutput('g', '{"findings": []}').error, /boolean "breaking"/);
+  const e = rc.decide(autoFacts({ exports: rc.exportsDiff({ before: { pkg: null, list: 'a\n' }, after: { pkg: null, list: null }, listFile: 'api.txt' }) }));
+  assert.strictEqual(e.ok, false);
+});
+
+test('exportsDiff: removed subpaths, bin names and list lines are breaks; additions are not', () => {
+  const before = { pkg: JSON.stringify({ name: 'p', exports: { '.': './i.js', './old': './o.js' }, bin: { tool: 'b.js' } }), list: 'foo\nbar\n# comment\n' };
+  const after = { pkg: JSON.stringify({ name: 'p', exports: { '.': './i.js', './new': './n.js' }, bin: { tool: 'b.js' } }), list: 'foo\nbaz\n' };
+  const d = rc.exportsDiff({ before, after, listFile: 'api.txt' });
+  assert.deepStrictEqual(d.removed, ['package.json exports ./old', 'api.txt: bar']);
+  const add = rc.exportsDiff({ before: { pkg: '{"bin":"x.js","name":"p"}', list: null }, after: { pkg: '{"bin":{"p":"x.js","q":"y.js"},"name":"p"}', list: null }, listFile: null });
+  assert.deepStrictEqual(add.removed, []);
+});
+
+test('--auto: every signal and detector result is written into the tag message', () => {
+  const v = rc.decide(autoFacts({ cc: CC({ feat: 1 }), guard: rc.parseGuardOutput('schema-guard', '{"breaking": false, "findings": ["2 tables read"]}') }));
+  const msg = rc.tagMessage(v, { sha: 'abc', lastFinal: 'v1.2.0' });
+  assert.match(msg, /Signals \(every input the bump read\):/);
+  assert.match(msg, /- guard schema-guard: not breaking — 2 tables read/);
+  assert.match(msg, /- exports: no export removed/);
+  assert.match(msg, /- switches: no switch-removal child merged/);
+  assert.match(msg, /- cadence: uncapped/);
+});
+
+test('--auto cadence: at most N candidates per rolling day — inside the window is a no-op', () => {
+  const now = '2026-10-02T12:00:00.000Z';
+  const cad = rc.cadenceVerdict({ candidates: [{ name: 'v1.2.1-rc.1', date: '2026-10-02T01:00:00.000Z' }], perDay: 1, now });
+  assert.strictEqual(cad.ok, false);
+  assert.strictEqual(cad.nextAt, '2026-10-03T01:00:00.000Z');
+  const v = rc.decide(autoFacts({ cadence: cad }));
+  assert.strictEqual(v.ok, false);
+  assert.strictEqual(v.noop, true);
+  assert.strictEqual(v.tag, null);
+  assert.strictEqual(rc.cadenceVerdict({ candidates: [{ name: 'x', date: '2026-10-01T11:00:00.000Z' }], perDay: 1, now }).ok, true);
+  assert.strictEqual(rc.cadenceVerdict({ candidates: [], perDay: null, now }).ok, true);
+});
+
+test('switchRemovalsSince: only role=remove children closed done after the last final', () => {
+  const issues = [
+    { number: 1, state: 'CLOSED', stateReason: 'COMPLETED', closedAt: '2026-09-10T00:00:00Z', body: '<!-- colab:switch name=nav role=remove -->' },
+    { number: 2, state: 'CLOSED', stateReason: 'COMPLETED', closedAt: '2026-08-01T00:00:00Z', body: '<!-- colab:switch name=old role=remove -->' },
+    { number: 3, state: 'CLOSED', stateReason: 'NOT_PLANNED', closedAt: '2026-09-10T00:00:00Z', body: '<!-- colab:switch name=x role=remove -->' },
+    { number: 4, state: 'CLOSED', stateReason: 'COMPLETED', closedAt: '2026-09-10T00:00:00Z', body: '<!-- colab:switch name=y role=add -->' },
+  ];
+  assert.deepStrictEqual(rc.switchRemovalsSince(issues, '2026-09-01T00:00:00Z'), [{ number: 1, name: 'nav' }]);
+});
+
+// ---- pre-tag checks (#424) ---------------------------------------------------------------------
+
+test('decide: each pre-tag check refuses under its own name', () => {
+  const man = rc.decide(facts({ manifests: [{ file: 'package.json', version: '1.2.0' }] }));
+  assert.deepStrictEqual(man.refusals.map((c) => c.condition), ['manifest-version']);
+  const shallow = rc.decide(facts({ ancestry: { ok: false, shallow: true } }));
+  assert.deepStrictEqual(shallow.refusals.map((c) => c.condition), ['on-trunk']);
+  const back = rc.decide(facts({ tags: ['v1.2.0', 'v1.5.0'] }));
+  assert.deepStrictEqual(back.refusals.map((c) => c.condition), ['outranks-final']);
+  const unmeasured = rc.decide(facts({ manifests: undefined, ancestry: undefined }));
+  assert.deepStrictEqual(unmeasured.refusals.map((c) => c.condition), ['manifest-version', 'on-trunk']);
 });

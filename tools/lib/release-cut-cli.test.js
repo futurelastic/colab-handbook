@@ -290,3 +290,107 @@ test('refuses: no final tag yet — the first version is a human decision', () =
   const fx = fixture({ lastFinal: null });
   assertRefused(fx, cut(fx), 'version', /first version/);
 });
+
+// ---- --auto (#422) and the pre-tag checks (#424) ----------------------------------------------
+
+test('--auto: a fix cuts a patch candidate and writes every signal into the tag', () => {
+  const fx = fixture();
+  const r = cut(fx, ['--auto']);
+  assert.strictEqual(r.code, 0, r.out + r.err);
+  assert.strictEqual(r.body.tag, 'v1.2.1-rc.1');
+  assert.ok(r.body.signals.some((l) => /^exports: no export removed/.test(l)), JSON.stringify(r.body.signals));
+  const message = fx.g('for-each-ref', '--format=%(contents)', 'refs/tags/v1.2.1-rc.1');
+  assert.match(message, /Signals \(every input the bump read\):/);
+  assert.match(message, /- guard: none declared/);
+  assert.match(message, /- cadence: /);
+  assert.match(message, /- manifest-version: /);
+});
+
+test('--auto: refuses --bump, and a docs-only change still owes a patch', () => {
+  const fx = fixture();
+  assert.strictEqual(cut(fx, ['--auto', '--bump', 'minor', '--reason', 'x']).code, 1);
+  fx.g('tag', '-d', 'v1.2.0');
+  fx.g('push', '-q', 'origin', ':refs/tags/v1.2.0');
+  fx.g('tag', '-a', 'v1.2.0', '-m', 'v1.2.0');
+  fx.g('push', '-q', 'origin', 'v1.2.0');
+  commit(fx, 'README.md', 'docs: typo');
+  const r = cut(fx, ['--auto', '--dry']);
+  assert.strictEqual(r.code, 0, r.out + r.err);
+  assert.strictEqual(r.body.tag, 'v1.2.1-rc.1');
+});
+
+test('--auto: a breaking guard result on >=1.0 is a major only with MIGRATION.md\'s measured cost', () => {
+  const guard = 'release:\n  guard-run: echo \'{"breaking": true, "findings": ["config key renamed"]}\'\n';
+  const fx = fixture({ projectYml: RELEASED_YML + guard });
+  const refused = cut(fx, ['--auto']);
+  assertRefused(fx, refused, 'version', /v2\.0\.0 is a major .*refused: no MIGRATION\.md/);
+  commit(fx, 'MIGRATION.md', 'docs: migration notes', '# Migrations\n\n## v2.0.0\n\nRename `a` to `b`.\n\nMeasured cost: 4 call sites across 2 adopters.\n');
+  const ok = cut(fx, ['--auto']);
+  assert.strictEqual(ok.code, 0, ok.out + ok.err);
+  assert.strictEqual(ok.body.tag, 'v2.0.0-rc.1');
+  const message = fx.g('for-each-ref', '--format=%(contents)', 'refs/tags/v2.0.0-rc.1');
+  assert.match(message, /guard guard-run .*: BREAKING — config key renamed/);
+  assert.match(message, /Measured cost: 4 call sites/);
+});
+
+test('--auto: a guard that fails to run refuses — an unread guard is not a clean one', () => {
+  const fx = fixture({ projectYml: `${RELEASED_YML}release:\n  guard-run: exit 3\n` });
+  assertRefused(fx, cut(fx, ['--auto']), 'version', /fail closed: guard guard-run \(exit 3\) exited 3/);
+});
+
+test('--auto: a removed package.json export is breaking', () => {
+  const fx = fixture({ lastFinal: 'v0.3.0', files: { 'package.json': '{"name":"p","exports":{".":"./i.js","./old":"./o.js"}}' } });
+  commit(fx, 'package.json', 'fix: tidy exports', '{"name":"p","exports":{".":"./i.js"}}');
+  const r = cut(fx, ['--auto']);
+  assert.strictEqual(r.code, 0, r.out + r.err);
+  assert.strictEqual(r.body.tag, 'v0.4.0-rc.1', 'pre-1.0: breaking -> minor');
+  assert.ok(r.body.signals.some((l) => /removed export\(s\): package\.json exports \.\/old/.test(l)));
+});
+
+test('--auto: inside rapid-app\'s one-a-day window the run is a no-op (exit 0, nothing cut)', () => {
+  const fx = fixture({ projectYml: `${RELEASED_YML}release:\n  route: rapid-app\n` });
+  const first = cut(fx, ['--auto']);
+  assert.strictEqual(first.code, 0, first.out + first.err);
+  assert.strictEqual(first.body.tag, 'v1.2.1-rc.1');
+  commit(fx, 'fix2.txt', 'fix: another');
+  const second = cut(fx, ['--auto']);
+  assert.strictEqual(second.code, 0, second.out + second.err);
+  assert.strictEqual(second.body.noop, true);
+  assert.strictEqual(second.body.created, false);
+  assert.match(second.body.checks.find((c) => c.condition === 'cadence').detail, /caps at 1 a day/);
+  assert.deepStrictEqual(originTags(fx), ['v1.2.0', 'v1.2.1-rc.1']);
+});
+
+test('refuses (#424): a manifest version that disagrees with the tag', () => {
+  const fx = fixture({ files: { 'package.json': '{"name":"p","version":"1.2.0"}' } });
+  assertRefused(fx, cut(fx), 'manifest-version', /package\.json says 1\.2\.0/);
+  commit(fx, 'package.json', 'chore: bump to 1.2.1', '{"name":"p","version":"1.2.1"}');
+  const ok = cut(fx);
+  assert.strictEqual(ok.code, 0, ok.out + ok.err);
+});
+
+test('refuses (#424): a version that does not outrank the highest final', () => {
+  const fx = fixture();
+  // A higher final exists off main (a hotfix line); the computed v1.2.1 would move "latest" backwards.
+  fx.g('checkout', '-q', '-b', 'hotfix', 'v1.2.0');
+  fs.writeFileSync(path.join(fx.work, 'h.txt'), 'h\n');
+  fx.g('add', '-A'); fx.g('commit', '-q', '-m', 'fix: hotfix');
+  fx.g('tag', '-a', 'v1.5.0', '-m', 'v1.5.0');
+  fx.g('push', '-q', 'origin', 'v1.5.0');
+  fx.g('checkout', '-q', 'main');
+  assertRefused(fx, cut(fx), 'outranks-final', /does not outrank the latest final v1\.5\.0/);
+});
+
+test('refuses (#424): a shallow checkout cannot answer on-trunk', () => {
+  const fx = fixture();
+  const shallow = path.join(fx.root, 'shallow');
+  execFileSync('git', ['clone', '-q', '--depth', '1', `file://${fx.origin}`, shallow]);
+  const r = spawnSync('node', [COLAB, 'release', 'cut', '--repo', shallow, '--json', '--dry'], {
+    encoding: 'utf8', env: { ...process.env, PATH: `${fx.bin}:${process.env.PATH}`, COLAB_HOME: fx.home },
+  });
+  const body = JSON.parse(r.stdout);
+  assert.strictEqual(r.status, 1, r.stdout + r.stderr);
+  const check = body.checks.find((c) => c.condition === 'on-trunk');
+  assert.ok(check, JSON.stringify(body.checks));
+  assert.match(check.detail, /shallow checkout cannot answer/);
+});

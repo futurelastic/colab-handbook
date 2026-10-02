@@ -252,3 +252,89 @@ test('human row: an agent run stops at candidate-ready with the handoff; the hum
   fx.g('fetch', '-q', '--tags', 'origin');
   assert.match(fx.g('tag', '-l', '--format=%(contents)', 'v1.2.1'), /Finalized by: Ops/);
 });
+
+// ---- --auto (#423) ------------------------------------------------------------------------------
+
+/** One fix commit + one candidate per entry of `daysAgo`; every candidate's commit stays green. */
+function dailyCandidates(fx, daysAgo) {
+  const rows = [];
+  const tags = [];
+  daysAgo.forEach((d, i) => {
+    if (i > 0) commit(fx, `fix-${i}.txt`, `fix: daily ${i}`);
+    const sha = fx.g('rev-parse', 'HEAD');
+    rows.push({ headSha: sha, status: 'completed', conclusion: 'success', workflowName: 'ci', event: 'push', createdAt: new Date().toISOString(), databaseId: 10 + i });
+    writeState(fx, (s) => { s.runsAtCommit = rows; });
+    tags.push(cutCandidate(fx, d));
+  });
+  return tags;
+}
+
+test('--auto: a candidate cut every day still finalizes — the newest one clean on its own clock', () => {
+  const fx = fixture();
+  const tags = dailyCandidates(fx, [6, 5, 4, 2, 1, 0.01]);
+  assert.deepStrictEqual(tags, ['v1.2.1-rc.1', 'v1.2.1-rc.2', 'v1.2.1-rc.3', 'v1.2.1-rc.4', 'v1.2.1-rc.5', 'v1.2.1-rc.6']);
+
+  // Without --auto the newest (rc.6, minutes old) is the only one judged: testing, forever.
+  const plain = finalize(fx, ['--dry']);
+  assert.strictEqual(plain.body.state, 'testing');
+
+  const first = finalize(fx, ['--auto']); // opens the tracking issue — its creation places every clock
+  assert.strictEqual(first.code, 0, first.out + first.err);
+  assert.strictEqual(tracking(fx).length, 1);
+  ageTracking(fx, 7);
+
+  const r = finalize(fx, ['--auto']);
+  assert.strictEqual(r.code, 0, r.out + r.err);
+  assert.strictEqual(r.body.state, 'finalized', JSON.stringify(r.body.checks, null, 2));
+  assert.strictEqual(r.body.candidate.tag, 'v1.2.1-rc.3', 'cut 4 days ago: the newest whose own 3d period elapsed');
+  assert.ok(originTags(fx).includes('v1.2.1'));
+  assert.strictEqual(fx.g('rev-parse', 'v1.2.1^{commit}'), fx.g('rev-parse', 'v1.2.1-rc.3^{commit}'));
+  assert.deepStrictEqual(r.body.skipped.map((x) => x.tag), ['v1.2.1-rc.6', 'v1.2.1-rc.5', 'v1.2.1-rc.4']);
+  const t = tracking(fx)[0];
+  assert.strictEqual(t.state, 'CLOSED');
+  assert.ok(t.comments.some((c) => /does not restart an older one's clock/.test(c.body)));
+});
+
+test('--auto: release-hold still vetoes, whichever candidate would have been clean', () => {
+  const fx = fixture();
+  dailyCandidates(fx, [6, 0.01]);
+  finalize(fx, ['--auto']);
+  ageTracking(fx, 7);
+  writeState(fx, (s) => { for (const i of s.issues) i.labels = [{ name: 'release-hold' }]; });
+  const r = finalize(fx, ['--auto']);
+  assert.strictEqual(r.body.state, 'held');
+  assert.ok(!originTags(fx).includes('v1.2.1'));
+});
+
+test('--auto on a deploy-tag route never tags — it hands over the one click, number pre-filled', () => {
+  const fx = fixture(HUMAN_YML);
+  dailyCandidates(fx, [6]);
+  finalize(fx, ['--auto']);
+  ageTracking(fx, 7);
+  const r = finalize(fx, ['--auto']);
+  assert.strictEqual(r.code, 0, r.out + r.err);
+  assert.strictEqual(r.body.state, 'candidate-ready');
+  assert.match(r.body.handoff, /--tag v1\.2\.1-rc\.1/);
+  assert.ok(!originTags(fx).includes('v1.2.1'));
+  assert.ok(tracking(fx)[0].comments.some((c) => /v1\.2\.1-rc\.1 is ready/.test(c.body)));
+});
+
+test('--auto never combines with the human bar', () => {
+  const fx = fixture();
+  const r = finalize(fx, ['--auto', '--tag', 'v1.2.1-rc.1', '--answered-by', 'Ops'], { env: { COLAB_HUMAN: '1' } });
+  assert.strictEqual(r.code, 1);
+  assert.match(r.err, /never carries the human bar/);
+});
+
+test('#424: a manifest that disagrees with the version refuses at the cut, before any final can exist', () => {
+  const fx = fixture();
+  dailyCandidates(fx, [6]);
+  // A VERSION file that disagrees with the computed version: the cut refuses under the same named
+  // check finalize runs (release-finalize.test.js covers the final's side of it).
+  fs.writeFileSync(path.join(fx.work, 'VERSION'), '9.9.9\n');
+  fx.g('add', '-A'); fx.g('commit', '-q', '-m', 'fix: version file'); fx.g('push', '-q', 'origin', 'main');
+  writeState(fx, (s) => { s.runsAtCommit = [{ headSha: fx.g('rev-parse', 'HEAD'), status: 'completed', conclusion: 'success', workflowName: 'ci', event: 'push', createdAt: new Date().toISOString(), databaseId: 99 }]; });
+  const cutR = colab(fx, ['cut'], { env: { GIT_COMMITTER_DATE: ago(5) } });
+  assert.strictEqual(cutR.code, 1, 'the cut itself refuses on the same check');
+  assert.strictEqual(cutR.body.checks.find((c) => c.condition === 'manifest-version').ok, false);
+});

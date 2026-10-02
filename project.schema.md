@@ -1064,6 +1064,8 @@ release:
   candidates-per-day: 1   # positive integer — never above the route's own cap
   test-period: 3d         # <N>d — never shorter than 3d
   final: auto             # auto · human
+  guard-run: node scripts/breaking-guard.mjs   # optional — a breaking-change detector (or guard-result: <file>)
+  exports: api/public-symbols.txt              # optional — the committed public-symbol list
 ```
 
 How the **release** — the tag — runs on this repo: which
@@ -1120,6 +1122,20 @@ direction only, measured against the route — declared, or derived:
   production, nothing in `project.yml` lowers that.
 - `test-period` — a whole number of days, `<N>d`. Longer than `3d` narrows; shorter is a
   **failure**. On `library-fast`, which has no test period, it is a failure too.
+
+**Three keys add evidence to the computed version, never permission** (#422) — they narrow and
+widen nothing, so each only has to be a non-empty string:
+
+- `guard-run` — a command `colab release cut --auto` runs at the repo root (with
+  `COLAB_RELEASE_FROM` / `COLAB_RELEASE_SHA` set) to detect a breaking change the commit types do
+  not reveal; it prints one JSON object, `{"breaking": true|false, "findings": [string]}`.
+- `guard-result` — instead, the path of a file an earlier CI step wrote in that same shape. One
+  detector or the other: declaring both is a failure.
+- `exports` — a committed list of public symbols, one per line; a line removed since the last final
+  tag is a breaking change (`package.json` `exports`/`bin` are read without it).
+
+A guard that cannot be read refuses the cut — the contract and the rest of the computation:
+[`tools/README.md`, *Release cut*](tools/README.md#release-cut-candidates).
 
 An unknown sub-key, a value outside its set, or a scalar `release:` is a failure too. **No
 key picks or approves a version number** — every number is computed, majors included, and a

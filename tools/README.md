@@ -1026,8 +1026,8 @@ Run `colab <cmd> --help` for full detail.
 | `deliver [--repo P] [--dry] [--json] [--reopen]` | **delivery** to the owner's branch, only where `project.yml` declares `owner:` (#394): opens or refreshes ONE PR trunk → `owner.branch`, never merges it. Delivered is read from PR state (squash/rebase safe); a rejected last PR stops it (exit 3). Writes need `COLAB_HUMAN=1`; `--dry` is read-only |
 | `doctor [--prune] [--ttl H] [--json] [--sync]` | heal dead worktrees / orphan + stale claims / orphan ports; report records whose branch or path cannot be resolved, including a zero-claim `pending` stub (no TTL — see *Records that cannot be acted on*); flip + sweep **merged** worktrees (see *Worktree lifecycle*); **list** shipped branches awaiting deletion (never deletes them); `--sync` also flags a worktree-less claim the tracker no longer shows assigned+in-progress (no TTL either) and spent `group:<key>` labels |
 | `release-notes [<range>] [--repo P] [--out F] [--headline "..."]` | grouped Markdown release summary from git history (see below) |
-| `release cut [--repo P] [--bump patch\|minor --reason "..."] [--dry] [--json]` | cut a release **candidate** `vX.Y.Z-rc.N` on `origin/main` where §6's rung allows it and all four conditions hold on that commit; never a final tag (see *Release cut*, below) |
-| `release finalize [--repo P] [--tag RC] [--answered-by N] [--dry] [--json]` | a candidate's next step under §6's rung — `testing` / `held` / `needs-new-candidate` / `refused` / `candidate-ready` / `finalized`, re-checked every run, one tracking issue per version; tags the final only where the rung row makes it automatic, or behind the human bar (see *Release finalize*, below) |
+| `release cut [--repo P] [--auto \| --bump patch\|minor --reason "..."] [--dry] [--json]` | cut a release **candidate** `vX.Y.Z-rc.N` on `origin/main` where §6's routes allow it and all four conditions plus the three pre-tag checks hold on that commit; `--auto` computes the bump (majors included) and honours the route's cadence; never a final tag (see *Release cut*, below) |
+| `release finalize [--repo P] [--auto \| --tag RC [--answered-by N]] [--dry] [--json]` | a candidate's next step under §6's routes; `--auto` finalizes the newest candidate clean on its own clock — `testing` / `held` / `needs-new-candidate` / `refused` / `candidate-ready` / `finalized`, re-checked every run, one tracking issue per version; tags the final only where the rung row makes it automatic, or behind the human bar (see *Release finalize*, below) |
 | `template [<name>] [--dest F] [--repo P] [--force]` | copy a handbook workflow template into a repo, **stamped** with the handbook version (see below) |
 | `update [<repo>...] [--apply] [--json] [--quiet]` | sweep the fleet registry for stamped copies that fell behind a changed template; `--apply` refreshes the **pristine** ones. Never commits; never touches a hand-edited copy (see below) |
 | `register [<path>] [--remove] [--list]` | add/remove a repo in **both** fleet registries at once; `--list` flags drift (see below) |
@@ -1057,7 +1057,7 @@ colab release-notes v0.3.0..v0.4.0 | gh release create v0.4.0 --notes-file - --g
 
 ### Release cut (candidates)
 
-`colab release cut [--repo P] [--bump patch|minor --reason "..."] [--dry] [--json]` (#338) cuts a
+`colab release cut [--repo P] [--auto | --bump patch|minor --reason "..."] [--dry] [--json]` (#338) cuts a
 release **candidate**, `vX.Y.Z-rc.N`, on `origin/main`'s head — the tooling behind CONVENTIONS.md
 [§6's release rung](../CONVENTIONS.md#6-releases). It never creates a final `vX.Y.Z`; finalizing a
 candidate after its test period is `colab release finalize`'s (*Release finalize*, below), and is a
@@ -1078,8 +1078,34 @@ them), and any one failing refuses the cut:
 | `full-suite` | §6 condition 2: some workflow that ran at the commit has no successful run (a cancelled-only workflow never ran its tests; `ci-green` alone reads that as green) |
 | `schema-additive` | §6 condition 3: a migration since the last final tag is destructive — Laravel `database/migrations` with a drop/rename/`->change()` in `up()`, Prisma SQL with `DROP`/`RENAME`/`ALTER COLUMN` — or an existing migration was edited or deleted. `.php`/`.sql` under a `project.yml` `migrations:` prefix are read the same way; a declared migration in another format is named in the detail for a human read (#383). Other layouts are not read |
 | `switch-dependencies` | §6 condition 4: a `colab:switch` marker is malformed, or a finished switch `needs` one that is not finished |
+| `manifest-version` | #424: the tag does not equal the version a manifest declares — `VERSION`, `package.json` `version`, `Cargo.toml` `[package]`, `pyproject.toml` `[project]`/`[tool.poetry]` (a `dynamic` version is derived from the tag and passes). A manifest that does not parse, or a workspace-inherited Cargo version, refuses; no manifest declaring a version passes — the tag is the version |
+| `on-trunk` | #424: the commit is not an ancestor of `origin/main`, or the checkout is **shallow** and cannot answer (a release workflow needs `fetch-depth: 0`) |
+| `outranks-final` | #424: the version is not strictly greater than the **highest** final tag by SemVer — not the nearest one — so "latest" never moves backwards |
+| `cadence` | `--auto` only (#422): the route's `candidates-per-day` cap is reached over the last 24h. A **no-op**, not a refusal: exit 0, `noop: true` |
 
-The bump is `release-status`'s suggestion since the last **final** tag (candidates skipped): fix →
+**`--auto` (#422)** is the release workflow's mode: the bump is computed with no human input and
+`--bump`/`--reason` are refused beside it. Since the last final tag — fixes and chores → patch (any
+commit at all owes one); a `feat`, or a switch-removal child (`role=remove`) closed since then →
+minor; a breaking change → minor below 1.0, **major from 1.0**. Breaking is any of:
+
+- **commits** — `!` or `BREAKING CHANGE:`;
+- **the repo's guard** — `release.guard-run` (a command, run at the repo root with
+  `COLAB_RELEASE_FROM` = the last final and `COLAB_RELEASE_SHA` = the commit; the working tree must
+  be at that commit) or `release.guard-result` (a file an earlier CI step wrote). Either yields one
+  JSON object, `{"breaking": true|false, "findings": ["<one line each>"]}` — the contract a repo
+  plugs its own detectors into (a destructive schema, a config format, an API response). A non-zero
+  exit, unparseable output or a missing file **refuses**: an unread guard is not a clean one;
+- **exports** — a removed `package.json` `exports` subpath or `bin` name, or a line removed from the
+  committed public-symbol list `release.exports` names (one per line, `#` comments; a rename is a
+  removal plus an addition).
+
+A major is refused unless `MIGRATION.md` at the commit has a heading naming the version
+(`## v2.0.0`) whose section carries a non-empty `Measured cost:` line; that section is copied into
+the tag. Every signal and detector result — breaking or not — is printed and written into the
+annotated tag's `Signals` block, so the reason for the bump is recorded mechanically. Nothing merged
+since the last final is a no-op (exit 0), as is the cadence window above.
+
+Without `--auto`, the bump is `release-status`'s suggestion since the last **final** tag (candidates skipped): fix →
 patch, feat → minor, a breaking change → minor pre-1.0 and a refusal from 1.0 on. `--bump` may
 override it to patch or minor with a `--reason`; the chosen bump, the override and every condition's
 detail are recorded in the annotated tag's message. The tag is pushed to origin; if the push fails
@@ -1095,7 +1121,7 @@ through `colab release finalize`, resumes from its publish-and-reconcile step.
 
 ### Release finalize
 
-`colab release finalize [--repo P] [--tag vX.Y.Z-rc.N] [--answered-by N] [--dry] [--json]` (#339)
+`colab release finalize [--repo P] [--auto | --tag vX.Y.Z-rc.N [--answered-by N]] [--dry] [--json]` (#339)
 takes the newest candidate one step further under §6's release rung, and is run — repeatedly — by
 the [`release-rung`](../skills/release-rung/SKILL.md) skill in a coordinator session. There is no
 daemon: every run re-measures from git and GitHub, and the decision is `tools/lib/release-finalize.js`
@@ -1143,10 +1169,25 @@ daemon: every run re-measures from git and GitHub, and the decision is `tools/li
 | `test-period` | the period has ended | automatic-final row only |
 | `trunk-green` | every `main` run created since the period began, of the workflows that ran at the candidate (not `pull_request`), finished without going red — a `cancelled` one needs a later success; a read that hit its limit fails closed | automatic-final row only |
 | `ci-green` · `full-suite` · `schema-additive` · `switch-dependencies` | §6's four candidate conditions, re-measured at the candidate's commit by the same code `release cut` uses | always |
+| `manifest-version` · `on-trunk` · `outranks-final` | #424's pre-tag checks (see *Release cut*), on the final `vX.Y.Z` | always |
 | `human` | human-final row only: `COLAB_HUMAN=1` + `--answered-by` + `--tag` (the `adopt` gate's precedent) | reported; absent → `candidate-ready` |
 
 The human bar never shortens a test period and never overrides a hold. Where it is met, the final's
 annotated message records who answered.
+
+**`--auto` (#423)** is the release workflow's daily run, and changes only *which* candidate is
+judged. Without it, the newest candidate is the one judged — so on a repo cutting a candidate every
+day, its period never elapses and no candidate ever finishes one. With it, on a route whose final is
+automatic, the open candidates are walked newest-first and the **newest one whose own test period
+has elapsed clean** is finalized: each candidate on its own clock (its own tag date, its version's
+tracking issue), a newer candidate never restarting an older one's, and `trunk-green` read over
+that candidate's own window `[start, endsAt)` — a red run after it closed is about newer code. Younger
+candidates are listed under `skipped`; a superseded record is closed only for a version *below* one
+just tagged. `release-hold` and the regression rule are unchanged — a hold on any open record stops
+the run. On `deploy-tag` it never tags: it stops at `candidate-ready` and posts the one command,
+number pre-filled. `--auto` never combines with `--tag`/`--answered-by`, and `testing`,
+`no-candidate` and `already-final` exit 0 under it — nothing to do yet is the workflow's ordinary
+output.
 
 ### Templates
 
