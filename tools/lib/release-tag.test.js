@@ -265,3 +265,21 @@ test('release-status: a waiting candidate does not reset the unreleased gap (#81
     assert.strictEqual(c('v1.3.0', []).ok, true);
   });
 }
+
+test('#438: preTagChecks with versionSource tag skips a differing manifest as derivable, still refuses an unreadable one', () => {
+  const rt = require('./release-tag.js');
+  const base = { tag: 'v1.3.0-rc.1', ancestry: { ok: true, shallow: false }, tags: ['v1.2.0'] };
+  const mv = (o) => rt.preTagChecks({ ...base, ...o }).find((c) => c.condition === 'manifest-version');
+  const differing = [{ file: 'VERSION', version: '0.0.0' }, { file: 'package.json', version: '1.3.0' }];
+  const refused = mv({ manifests: differing });
+  assert.strictEqual(refused.ok, false);
+  assert.deepStrictEqual(refused.derivable, []);
+  const skipped = mv({ manifests: differing, versionSource: 'tag' });
+  assert.strictEqual(skipped.ok, true);
+  assert.deepStrictEqual(skipped.derivable, ['VERSION']);
+  assert.match(skipped.detail, /matches package\.json 1\.3\.0; derivable .*: VERSION/);
+  const only = mv({ manifests: [{ file: 'VERSION', version: '0.0.0' }], versionSource: 'tag' });
+  assert.strictEqual(only.ok, true);
+  assert.match(only.detail, /is the version; derivable/);
+  assert.strictEqual(mv({ manifests: [{ file: 'package.json', error: 'package.json does not parse (x)' }], versionSource: 'tag' }).ok, false);
+});

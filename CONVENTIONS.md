@@ -3270,7 +3270,10 @@ command measures it on the exact commit, and a refusal is the run's whole output
 reason to retry around it. Nothing else a scheduler runs tags: not the driver directly,
 not `colab ship`, not a hand-typed `git tag`. **It may never finalize a tag on a
 `deploy-tag` route** — where the tag deploys production, the final is the one human click
-the routes keep, and `finalize --auto` stops at *candidate ready* there by construction.
+the routes keep, and `finalize --auto` stops at *candidate ready* there by construction —
+**unless the operator granted that repo an automatic final** ([§6, *An operator-granted
+automatic final*](#6-releases), #441): a recorded human ruling, re-read on every run, which
+adds conditions (no ungranted migration) and is revoked the moment it is reopened.
 A candidate a human has put `release-hold` on is held for the workflow exactly as it is for
 a person.
 The handbook ships one to copy, [`templates/release-auto.yml`](templates/release-auto.yml)
@@ -3941,7 +3944,8 @@ merges into `dev`, which does not deploy.
 rung*, #330 — tool messages citing that name mean this paragraph).** Every version number is computed, every candidate is cut by a trigger, and a human
 is asked exactly once: **for the final tag on a repo where that tag deploys production**
 (`deploy: tag`, and `deploy: manual`, where a person deploys from it) — one click, number
-pre-filled. Everything else is automatic, and a human can still veto any candidate with
+pre-filled — unless the operator has granted one `deploy: tag` repo an automatic final
+(*An operator-granted automatic final*, below). Everything else is automatic, and a human can still veto any candidate with
 `release-hold`. Every candidate is `vX.Y.Z-rc.N`; the final `vX.Y.Z` is that candidate's
 commit, tagged final.
 
@@ -3949,9 +3953,9 @@ commit, tagged final.
 |---|---|---|---|
 | `none` | `exposure: none` / `self` — nothing consumes a tag | no tags | no tags |
 | `rapid-app` | a fast-moving app with few installers | automatic, at most 1 a day | automatic: the **newest** candidate clean for the test period; a newer candidate does not restart an older one's clock |
-| `public-tool` | a public CLI or handbook — adopters install it, nothing deploys | automatic | automatic after a clean test period |
+| `public-tool` | a public CLI or handbook — adopters install it, nothing deploys | automatic, at most 1 a day (#439) | automatic after a clean test period |
 | `library-fast` | a library released per merge, its consumers pin | none | the tag itself triggers the publish; the route's checks still apply |
-| `deploy-tag` | `deploy: tag` / `deploy: manual` — the tag deploys production | automatic; the agent prepares everything | **a human act (one click)** |
+| `deploy-tag` | `deploy: tag` / `deploy: manual` — the tag deploys production | automatic; the agent prepares everything | **a human act (one click)** — automatic only on a `deploy: tag` repo the operator granted it (#441) |
 | `live` | `exposure: live` (Tier C) — the merge is the deploy | unchanged — no automatic tags; the promotion is the deploy and stays human; tagging stays optional | — |
 
 **A repo declares its route as `release.route`; absent, it is derived from `exposure` +
@@ -3965,7 +3969,8 @@ repo really changed. Anything the table does not name — an undeclared or unkno
 `exposure`, a bare legacy `tier: B`, a `released` repo whose `deploy` matches no row —
 derives **no route** and fails closed: no automatic tag, a human tags. Legacy `tier: A`
 reads as `released` and takes the route its `deploy` names. Where the final tag is a human
-act, nothing in `project.yml` lowers that. A repo may **narrow** its route — turn
+act, no value in `project.yml` lowers that — the one way is an operator's recorded grant,
+below, which is a human act and not a value. A repo may **narrow** its route — turn
 candidates off, cap candidates per day lower, make an automatic final human, lengthen the
 test period — with the [`release:` block](project.schema.md#release--optional) (#337); a
 block that tries to widen it is an audit failure, not an override.
@@ -4019,6 +4024,42 @@ candidate, by hand around these commands. A deploy must never fire on a
 candidate: [`templates/release-tag.yml`](templates/release-tag.yml) publishes `-rc` tags
 as pre-releases, the audit flags a deploy trigger that matches one, and every
 current-release read skips them.
+
+**An operator-granted automatic final (#441).** The default above stands: a final that deploys
+production is a human act. The operator may choose otherwise for **one repo at a time** — *"in
+some cases I want the release to deploy too; only some cases, but possible when I choose"*. The
+grant is a human act, recorded the way an `autonomy` grant is, and checked on every read:
+
+- **Recorded, never written by an agent.** The operator rules on a decision issue
+  (`colab decision <N> --record --ruled-by <human>`) and the repo names it with
+  [`release.final: auto` + `release.final-grant: <N>`](project.schema.md#release--optional).
+  `final: auto` on `deploy-tag` without that line is the widening failure it always was. The
+  audit reads the decision issue and **fails** a grant that is unreadable, never recorded, not
+  recorded by a trusted human, or **reopened**.
+- **`deploy: tag` only.** On `deploy: manual` a person runs the deploy anyway, so its final
+  stays human; a grant there, or on any route but `deploy-tag`, is an audit failure.
+- **Per repo, revocable at once.** Deleting the line, `final: human`, or `colab decision <N>
+  --reopen` revokes it; the next `colab release finalize` reads the new state.
+- **More conditions, never fewer.** On top of everything a candidate's final already needs —
+  the clean test period, trunk green throughout, no `release-hold` on any open tracking issue,
+  no open regression — an automatically deployed final carries **no database migration since
+  the last final** unless the release itself is granted one: migration stays a human gate
+  (`COLAB_HUMAN=1 colab migration-grant <tracking issue> --branch vX.Y.Z`, on the version's
+  tracking issue). An unresolved grant or an ungranted migration does not refuse the release —
+  it takes the automatic final away, so `finalize --auto` stops at *candidate ready* and hands
+  the operator the one command, exactly as on an ungranted repo.
+- **Every automatic deploy says whose choice made it so.** The final tag's message names the
+  grant and its decision issue, and who ruled it.
+
+**A manifest's version may be derivable (#438).** By default the pre-tag check refuses a tag
+that disagrees with any declared manifest (`VERSION`, `package.json`, `Cargo.toml`,
+`pyproject.toml`) at the tagged commit, so a human bumps the manifest on trunk first. A repo
+whose number exists only once the tag does — computed versions, a `VERSION` baked into an image
+— declares [`release.version-source: tag`](project.schema.md#release--optional): the check
+skips a differing manifest, names it, and the tag message records it as derivable. The repo's
+own release or deploy step stamps the number from the tag — on a deploy-only ref, or at build
+time — **never as a commit on trunk**: the release workflow never pushes one, and a stamp on
+trunk would put a version in the tree before the release it names exists.
 
 **On `public-tool`, the same run may publish to npm (#433).** A repo opts in with
 [`release.npm` + `release.npm-gate`](project.schema.md#release--optional) — the package directory

@@ -156,12 +156,20 @@ function manifestVersions(readFile) {
  *               checkout cannot answer (null = not measured)
  *   tags        every tag name in the repo — the finals among them are what the version must outrank
  *   trunk       the trunk name, for the detail text
+ *   versionSource  #438 — 'manifest' (default): every declared manifest must equal the tag. 'tag'
+ *               (`release.version-source: tag`): the manifests are DERIVABLE — the repo's own
+ *               release/deploy step stamps them from the tag, never on trunk — so a manifest that
+ *               differs is skipped and named, not refused. A manifest that cannot be read at all
+ *               (unparsable package.json, an empty VERSION) still refuses: "derivable" says where
+ *               a number comes from, not that a broken file is fine.
  *
- * Returns [{ condition, ok, detail }] in PRE_TAG_CONDITIONS order. Every unknown is a refusal.
+ * Returns [{ condition, ok, detail }] in PRE_TAG_CONDITIONS order — the manifest-version entry also
+ * carries `derivable: [file]` (the manifests skipped as derivable; empty on 'manifest'). Every
+ * unknown is a refusal.
  */
-function preTagChecks({ tag, manifests, ancestry, tags, trunk = 'main' }) {
+function preTagChecks({ tag, manifests, ancestry, tags, trunk = 'main', versionSource = 'manifest' }) {
   const checks = [];
-  const add = (condition, ok, detail) => checks.push({ condition, ok: !!ok, detail });
+  const add = (condition, ok, detail, extra) => checks.push({ condition, ok: !!ok, detail, ...(extra || {}) });
   const t = parseSemver(tag);
   const core = t ? `${t.major}.${t.minor}.${t.patch}` : null;
 
@@ -170,17 +178,26 @@ function preTagChecks({ tag, manifests, ancestry, tags, trunk = 'main' }) {
   else if (manifests === null || manifests === undefined) add('manifest-version', false, 'the manifests could not be read at the tagged commit — an unread version is not a matching one');
   else {
     const accepted = t.pre ? [core, `${core}-${t.pre}`] : [core];
+    const fromTag = versionSource === 'tag';
     const bad = [];
     const good = [];
+    const derivable = [];
     for (const m of manifests) {
       if (m.error) bad.push(`${m.file}: ${m.error}`);
       else if (m.dynamic) good.push(`${m.file} (dynamic — derived from the tag)`);
-      else if (!accepted.includes(String(m.version).replace(/^v/, ''))) bad.push(`${m.file} says ${m.version}`);
-      else good.push(`${m.file} ${m.version}`);
+      else if (!accepted.includes(String(m.version).replace(/^v/, ''))) {
+        if (fromTag) derivable.push(m.file);
+        else bad.push(`${m.file} says ${m.version}`);
+      } else good.push(`${m.file} ${m.version}`);
     }
-    if (bad.length) add('manifest-version', false, `the tag ${tag} does not equal the manifest version — ${bad.join('; ')}. Bump the manifest on trunk first; a tag that disagrees with what the package says it is publishes a lie`);
-    else if (!good.length) add('manifest-version', true, `no version manifest declared (${MANIFESTS.join(', ')}) — the tag is the version`);
-    else add('manifest-version', true, `${tag} matches ${good.join(', ')}`);
+    const skipped = derivable.length ? `; derivable (release.version-source: tag — stamped from the tag by the repo's release step, never on trunk): ${derivable.join(', ')}` : '';
+    if (bad.length) {
+      add('manifest-version', false, fromTag
+        ? `the tag ${tag} cannot be checked against a manifest — ${bad.join('; ')}. Derivable or not, a manifest that does not read is fixed on trunk first`
+        : `the tag ${tag} does not equal the manifest version — ${bad.join('; ')}. Bump the manifest on trunk first, or declare release.version-source: tag if the release stamps it; a tag that disagrees with what the package says it is publishes a lie`, { derivable });
+    } else if (!good.length && !derivable.length) add('manifest-version', true, `no version manifest declared (${MANIFESTS.join(', ')}) — the tag is the version`, { derivable });
+    else if (!good.length) add('manifest-version', true, `${tag} is the version${skipped}`, { derivable });
+    else add('manifest-version', true, `${tag} matches ${good.join(', ')}${skipped}`, { derivable });
   }
 
   // 2. on-trunk

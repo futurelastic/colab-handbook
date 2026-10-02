@@ -1079,7 +1079,7 @@ them), and any one failing refuses the cut:
 | `full-suite` | §6 condition 2: some workflow that ran at the commit has no successful run (a cancelled-only workflow never ran its tests; `ci-green` alone reads that as green) |
 | `schema-additive` | §6 condition 3: a migration since the last final tag is destructive — Laravel `database/migrations` with a drop/rename/`->change()` in `up()`, Prisma SQL with `DROP`/`RENAME`/`ALTER COLUMN` — or an existing migration was edited or deleted. `.php`/`.sql` under a `project.yml` `migrations:` prefix are read the same way; a declared migration in another format is named in the detail for a human read (#383). Other layouts are not read |
 | `switch-dependencies` | §6 condition 4: a `colab:switch` marker is malformed, or a finished switch `needs` one that is not finished |
-| `manifest-version` | #424: the tag does not equal the version a manifest declares — `VERSION`, `package.json` `version`, `Cargo.toml` `[package]`, `pyproject.toml` `[project]`/`[tool.poetry]` (a `dynamic` version is derived from the tag and passes). A manifest that does not parse, or a workspace-inherited Cargo version, refuses; no manifest declaring a version passes — the tag is the version |
+| `manifest-version` | #424: the tag does not equal the version a manifest declares — `VERSION`, `package.json` `version`, `Cargo.toml` `[package]`, `pyproject.toml` `[project]`/`[tool.poetry]` (a `dynamic` version is derived from the tag and passes). A manifest that does not parse, or a workspace-inherited Cargo version, refuses; no manifest declaring a version passes — the tag is the version. With `release.version-source: tag` (#438) a manifest that differs is **derivable**: skipped, named in the detail and in the tag message (`Derivable manifests …`), and stamped from the tag by the repo's own release step, never on trunk |
 | `on-trunk` | #424: the commit is not an ancestor of `origin/main`, or the checkout is **shallow** and cannot answer (a release workflow needs `fetch-depth: 0`) |
 | `outranks-final` | #424: the version is not strictly greater than the **highest** final tag by SemVer — not the nearest one — so "latest" never moves backwards |
 | `cadence` | `--auto` only (#422): the route's `candidates-per-day` cap is reached over the last 24h. A **no-op**, not a refusal: exit 0, `noop: true` |
@@ -1199,10 +1199,15 @@ daemon: every run re-measures from git and GitHub, and the decision is `tools/li
 | `trunk-green` | every `main` run created since the period began, of the workflows that ran at the candidate (not `pull_request`), finished without going red — a `cancelled` one needs a later success; a read that hit its limit fails closed | automatic-final row only |
 | `ci-green` · `full-suite` · `schema-additive` · `switch-dependencies` | §6's four candidate conditions, re-measured at the candidate's commit by the same code `release cut` uses | always |
 | `manifest-version` · `on-trunk` · `outranks-final` | #424's pre-tag checks (see *Release cut*), on the final `vX.Y.Z` | always |
+| `final-grant` | #441: the decision issue `release.final-grant` names still carries a recorded, trusted, not-reopened ruling (`decision-recorded` label + live `⚖ Decision recorded` comment) | granted `deploy-tag` only; reported — failing takes the automatic final away (→ `candidate-ready`) |
+| `migration-grant` | #441: no migration file (any, destructive or not) since the last final, or a live migration grant on the version's tracking issue bound to `vX.Y.Z` (`COLAB_HUMAN=1 colab migration-grant <tracking> --branch vX.Y.Z`) | granted `deploy-tag` only; reported — failing takes the automatic final away (→ `candidate-ready`) |
 | `human` | human-final row only: `COLAB_HUMAN=1` + `--answered-by` + `--tag` (the `adopt` gate's precedent) | reported; absent → `candidate-ready` |
 
 The human bar never shortens a test period and never overrides a hold. Where it is met, the final's
-annotated message records who answered.
+annotated message records who answered. On a granted `deploy-tag` repo (#441) the final is automatic
+only while both grant checks pass; the tag message then names the grant and its decision issue
+(`Automatic final granted by: …`), and `--json` carries it as `grant: {issue, ruledBy}`. A human bar
+there takes the human path, never the grant's.
 
 **`--auto` (#423)** is the release workflow's daily run, and changes only *which* candidate is
 judged. Without it, the newest candidate is the one judged — so on a repo cutting a candidate every

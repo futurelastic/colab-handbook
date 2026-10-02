@@ -124,3 +124,64 @@ test('parser: a key after the block is read as a top-level key again', () => {
   const r = audit(fixture(`trunk: main\nproduction: null\ndeploy: none\nrelease:\n  final: human\nstack: docs\nexposure: released\nchannels: [artifact]\n`));
   assert.ok(!hasText(r.fails, /missing key|nested|takes one level|release[.:]/), r.fails.join(' | '));
 });
+
+// ---- #441: an operator-granted automatic final on deploy-tag -------------------------------------
+
+/** A fake `gh` answering only `issue view <num> --repo an-owner/a-repo …` with `record` (null = fail). */
+function fakeGhIssue(num, record) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'audit-release-grant-bin-'));
+  TMP.push(dir);
+  const payload = path.join(dir, 'issue.json');
+  if (record) fs.writeFileSync(payload, JSON.stringify(record));
+  fs.writeFileSync(path.join(dir, 'gh'), [
+    '#!/bin/sh',
+    `if [ "$1" = "issue" ] && [ "$2" = "view" ] && [ "$3" = "${num}" ]; then`,
+    record ? `  cat "${payload}"; exit 0` : '  exit 1',
+    'fi',
+    'exit 1',
+  ].join('\n'), { mode: 0o755 });
+  return dir;
+}
+
+function auditWithGh(dir, ghDir) {
+  execFileSync('git', ['remote', 'add', 'origin', 'https://github.com/an-owner/a-repo.git'], { cwd: dir });
+  let stdout;
+  try {
+    stdout = execFileSync('node', [AUDIT, '--json', '--local', dir], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], env: { ...process.env, PATH: `${ghDir}:${process.env.PATH}` } });
+  } catch (err) { stdout = err.stdout || ''; }
+  const r = JSON.parse(stdout).results[0];
+  return { fails: r.findings.filter((f) => f.level === 'fail').map((f) => f.text) };
+}
+
+const DECISION = { body: '⚖ Decision recorded — ruled-by `Operator` · answers `-` · host `box` · 2026-10-02T00:00:00Z', createdAt: '2026-10-02T00:00:00Z', authorAssociation: 'OWNER', author: { login: 'op' } };
+const REOPEN = { body: '↩ Decision reopened — ruled-by `Operator` · host `box` · 2026-10-03T00:00:00Z — every decision on this issue up to this point is superseded.', createdAt: '2026-10-03T00:00:00Z', authorAssociation: 'OWNER', author: { login: 'op' } };
+const GRANTED = `${RELEASED_TAG}release:\n  final: auto\n  final-grant: 7\n`;
+
+test('#441: final: auto on deploy-tag with a recorded grant passes the audit', () => {
+  const r = auditWithGh(fixture(GRANTED, DEPLOY_WF), fakeGhIssue(7, { state: 'CLOSED', labels: [{ name: 'decision-recorded' }], comments: [DECISION] }));
+  assert.ok(!hasText(r.fails, /release\./), r.fails.join(' | '));
+});
+
+test('#441 (d): a grant whose decision was reopened fails the audit', () => {
+  const r = auditWithGh(fixture(GRANTED, DEPLOY_WF), fakeGhIssue(7, { state: 'OPEN', labels: [{ name: 'decision-recorded' }], comments: [DECISION, REOPEN] }));
+  assert.ok(hasText(r.fails, /release\.final: auto on deploy-tag has no resolvable operator grant — release\.final-grant #7 does not grant an automatic final: its decision was reopened/), r.fails.join(' | '));
+});
+
+test('#441: an unreadable grant fails closed', () => {
+  const r = auditWithGh(fixture(GRANTED, DEPLOY_WF), fakeGhIssue(7, null));
+  assert.ok(hasText(r.fails, /no resolvable operator grant — release\.final-grant #7 could not be read/), r.fails.join(' | '));
+});
+
+test('#441: final: auto on deploy-tag with no grant line still fails as a widening', () => {
+  const r = audit(fixture(`${RELEASED_TAG}release:\n  final: auto\n`, DEPLOY_WF));
+  assert.ok(hasText(r.fails, /release\.final: auto widens the release route.*release\.final-grant: <N>/), r.fails.join(' | '));
+});
+
+test('#439: an unquoted whole number under release: is a number — candidates-per-day: 1 passes, as colab release cut reads it', () => {
+  const r = audit(fixture(`${RELEASED_NO_PROD}release:\n  candidates-per-day: 1\n`));
+  assert.ok(!hasText(all(r), /release[.:]/), all(r).join(' | '));
+  const quoted = audit(fixture(`${RELEASED_NO_PROD}release:\n  candidates-per-day: "1"\n`));
+  assert.ok(hasText(quoted.fails, /release\.candidates-per-day is "1", expected a positive whole number/), quoted.fails.join(' | '));
+  const widened = audit(fixture(`${RELEASED_NO_PROD}release:\n  candidates-per-day: 4\n`));
+  assert.ok(hasText(widened.fails, /release\.candidates-per-day: 4 widens the release route.*at most 1 a day/), widened.fails.join(' | '));
+});

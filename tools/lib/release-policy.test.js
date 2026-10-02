@@ -257,8 +257,11 @@ test('candidates-per-day narrows a cap, never raises it', () => {
   const texts = (release) => evaluateRelease({ ...base, release }).findings.map((f) => f.text).join('|');
   assert.match(texts({ route: 'rapid-app', 'candidates-per-day': 2 }), /release\.candidates-per-day: 2 widens the release route.*at most 1 a day/);
   assert.equal(texts({ route: 'rapid-app', 'candidates-per-day': 1 }), '');
-  // uncapped route: any positive cap narrows
-  const r = evaluateRelease({ ...base, release: { 'candidates-per-day': 4 } });
+  // #439: public-tool is capped at one a day too — 4 widens it, 1 restates it.
+  assert.match(texts({ 'candidates-per-day': 4 }), /release\.candidates-per-day: 4 widens the release route — on exposure: released, route public-tool: at most 1 a day/);
+  assert.equal(texts({ 'candidates-per-day': 1 }), '');
+  // uncapped route (deploy-tag): any positive cap narrows
+  const r = evaluateRelease({ exposure: 'released', deploy: 'tag', production: 'https://x.example', release: { 'candidates-per-day': 4 } });
   assert.deepEqual(r.findings, []);
   assert.equal(r.effective.candidatesPerDay, 4);
   assert.match(texts({ 'candidates-per-day': 0 }), /expected a positive whole number/);
@@ -331,4 +334,79 @@ test('npm: fits only public-tool — a deploying tag, rapid-app and library-fast
     assert.equal(r.effective.npm, null);
     assert.ok(r.findings.some((f) => /fits only route public-tool/.test(f.text)), JSON.stringify(cfg));
   }
+});
+
+test('#439: the public-tool route derives at most one candidate a day', () => {
+  assert.equal(ROUTE_POLICY['public-tool'].candidatesPerDay, 1);
+  const r = evaluateRelease({ exposure: 'released', deploy: 'none', production: null });
+  assert.equal(r.effective.route, 'public-tool');
+  assert.equal(r.effective.candidatesPerDay, 1);
+});
+
+test('#438: version-source is tag | manifest, defaults to manifest, and widens nothing', () => {
+  const base = { exposure: 'released', deploy: 'tag', production: 'https://x.example' };
+  assert.equal(evaluateRelease(base).effective.versionSource, 'manifest');
+  const tag = evaluateRelease({ ...base, release: { 'version-source': 'tag' } });
+  assert.deepEqual(tag.findings, []);
+  assert.equal(tag.effective.versionSource, 'tag');
+  assert.equal(tag.effective.final, 'human');
+  const bad = evaluateRelease({ ...base, release: { 'version-source': 'git' } });
+  assert.match(bad.findings.map((f) => f.text).join('|'), /release\.version-source is "git", expected "tag" or "manifest"/);
+  assert.equal(bad.effective.versionSource, 'manifest');
+  // carried through a declared route too
+  const routed = evaluateRelease({ exposure: 'released', deploy: 'none', production: null, release: { route: 'rapid-app', 'version-source': 'tag' } });
+  assert.equal(routed.effective.versionSource, 'tag');
+});
+
+test('#441: final: auto on deploy-tag stands only with an operator grant', () => {
+  const base = { exposure: 'released', deploy: 'tag', production: 'https://x.example' };
+  // (a) no grant: still a widening, and the finding names the way to grant it
+  const none = evaluateRelease({ ...base, release: { final: 'auto' } });
+  assert.match(none.findings.map((f) => f.text).join('|'), /release\.final: auto widens the release route.*release\.final-grant/);
+  assert.equal(none.effective.final, 'human');
+  assert.equal(none.effective.finalGrant, null);
+  // (b) a grant: automatic final, the grant carried for the tracker check
+  for (const g of [123, '123', '#123']) {
+    const ok = evaluateRelease({ ...base, release: { final: 'auto', 'final-grant': g } });
+    assert.deepEqual(ok.findings, [], String(g));
+    assert.equal(ok.effective.final, 'auto');
+    assert.equal(ok.effective.finalize, 'after-test-period');
+    assert.deepEqual(ok.effective.finalGrant, { issue: 123 });
+  }
+  // revocable: final: human, or no final key, leaves the grant inert
+  for (const release of [{ final: 'human', 'final-grant': 123 }, { 'final-grant': 123 }]) {
+    const r = evaluateRelease({ ...base, release });
+    assert.deepEqual(r.findings, []);
+    assert.equal(r.effective.final, 'human');
+    assert.equal(r.effective.finalGrant, null);
+  }
+  // bad value
+  assert.match(evaluateRelease({ ...base, release: { final: 'auto', 'final-grant': 'soon' } }).findings.map((f) => f.text).join('|'), /release\.final-grant is "soon"/);
+  // deploy: manual stays human, grant or not
+  const manual = evaluateRelease({ exposure: 'released', deploy: 'manual', production: 'https://x.example', runbook: 'r.md', release: { final: 'auto', 'final-grant': 5 } });
+  const mt = manual.findings.map((f) => f.text).join('|');
+  assert.match(mt, /release\.final-grant fits only route deploy-tag on deploy: tag.*a person runs the deploy anyway/);
+  assert.match(mt, /release\.final: auto widens/);
+  assert.equal(manual.effective.final, 'human');
+  // a grant on a route that deploys nothing is meaningless
+  assert.match(evaluateRelease({ exposure: 'released', deploy: 'none', production: null, release: { 'final-grant': 5 } }).findings.map((f) => f.text).join('|'), /release\.final-grant fits only route deploy-tag/);
+  // route: none on a deploy-tag row — no grant there either
+  assert.match(evaluateRelease({ ...base, release: { route: 'none', 'final-grant': 5 } }).findings.map((f) => f.text).join('|'), /release\.final-grant fits only route deploy-tag/);
+});
+
+test('#441: finalGrantVerdict — a live, trusted, labelled decision grants; a reopened one does not', () => {
+  const { finalGrantVerdict } = require('./release-policy.js');
+  const decision = { body: '⚖ Decision recorded — ruled-by `Boss` · answers `-` · host `box` · 2026-10-02T00:00:00Z', createdAt: '2026-10-02T00:00:00Z', authorAssociation: 'OWNER', author: { login: 'op' } };
+  const reopen = { body: '↩ Decision reopened — ruled-by `Boss` · host `box` · 2026-10-03T00:00:00Z — every decision on this issue up to this point is superseded.', createdAt: '2026-10-03T00:00:00Z', authorAssociation: 'OWNER', author: { login: 'op' } };
+  const labels = [{ name: 'decision-recorded' }];
+  const ok = finalGrantVerdict({ state: 'CLOSED', labels, comments: [decision] }, { issue: 7 });
+  assert.equal(ok.ok, true);
+  assert.equal(ok.ruledBy, 'Boss');
+  assert.equal(finalGrantVerdict(null, { issue: 7 }).ok, false);
+  const re = finalGrantVerdict({ state: 'OPEN', labels, comments: [decision, reopen] }, { issue: 7 });
+  assert.equal(re.ok, false);
+  assert.match(re.detail, /its decision was reopened/);
+  assert.match(finalGrantVerdict({ state: 'OPEN', labels: [], comments: [decision] }, { issue: 7 }).detail, /no `decision-recorded` label/);
+  assert.match(finalGrantVerdict({ state: 'OPEN', labels, comments: [{ ...decision, authorAssociation: 'NONE' }] }, { issue: 7 }).detail, /not recorded by a trusted human/);
+  assert.match(finalGrantVerdict({ state: 'OPEN', labels, comments: [] }, { issue: 7 }).detail, /carries no recorded decision/);
 });
