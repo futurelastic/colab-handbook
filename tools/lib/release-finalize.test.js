@@ -325,3 +325,60 @@ test('releasedComment: carries the per-version event marker hasEvent finds', () 
   assert.ok(rf.hasEvent([{ body }], rf.releasedEvent('v1.3.0')));
   assert.ok(!rf.hasEvent([{ body }], rf.releasedEvent('v1.3.1')));
 });
+
+// ---- #441: an operator-granted automatic final on deploy-tag -------------------------------------
+
+const GRANTED = releasePolicy.evaluateRelease({ trunk: 'main', exposure: 'released', production: 'https://x.invalid', deploy: 'tag', release: { final: 'auto', 'final-grant': 77 } });
+const GRANT_OK = { ok: true, ruledBy: 'Operator', detail: 'release.final-grant #77: decision recorded, ruled by Operator' };
+const NO_MIGRATION = rf.migrationGrantVerdict({ paths: [], grant: null, since: 'v1.2.0' });
+
+test('#441 (a): deploy-tag with no grant -> a human final, as today', () => {
+  const v = rf.decide(facts({ policy: HUMAN }));
+  assert.strictEqual(v.state, 'candidate-ready');
+  assert.strictEqual(v.grant, null);
+  assert.ok(!v.checks.some((c) => c.condition === 'final-grant'));
+});
+
+test('#441 (b): a valid grant -> an automatic final, and the tag message names whose choice it was', () => {
+  assert.deepStrictEqual(GRANTED.findings, []);
+  const f = facts({ policy: GRANTED, finalGrant: GRANT_OK, migrations: NO_MIGRATION });
+  const v = rf.decide(f);
+  assert.strictEqual(v.state, 'finalized');
+  assert.strictEqual(v.finalTag, 'v1.2.1');
+  assert.deepStrictEqual(v.grant, { issue: 77, ruledBy: 'Operator' });
+  for (const c of v.checks) assert.ok(rf.CONDITIONS.includes(c.condition), c.condition);
+  const msg = rf.tagMessage(v, { candidate: f.selection.candidate, period: f.period, actor: 'automatic' });
+  assert.match(msg, /Automatic final granted by: release\.final-grant -> decision #77, ruled by Operator/);
+  // the auto conditions still apply: before the period ends it is testing, a hold still holds
+  assert.strictEqual(rf.decide({ ...f, period: rf.periodVerdict({ cutAt: T0, trackingCreatedAt: T0, testPeriodDays: 3, now: at(1) }) }).state, 'testing');
+  assert.strictEqual(rf.decide({ ...f, tracking: { number: 12, createdAt: T0, held: true } }).state, 'held');
+});
+
+test('#441 (c): a valid grant + an ungranted migration -> no automatic final; the human command is handed over', () => {
+  const migrations = rf.migrationGrantVerdict({ paths: ['database/migrations/2026_10_02_add_x.php'], grant: { issue: 12, ok: false, reason: '#12 does not carry the `migration-granted` label' }, since: 'v1.2.0' });
+  assert.strictEqual(migrations.ok, false);
+  const v = rf.decide(facts({ policy: GRANTED, finalGrant: GRANT_OK, migrations }));
+  assert.strictEqual(v.state, 'candidate-ready');
+  assert.strictEqual(v.finalTag, null);
+  assert.strictEqual(v.grant, null);
+  assert.match(v.handoff, /COLAB_HUMAN=1 colab release finalize --tag v1\.2\.1-rc\.1/);
+  const m = v.checks.find((c) => c.condition === 'migration-grant');
+  assert.strictEqual(m.ok, false);
+  assert.match(m.detail, /add_x\.php.*falls back to a human act/);
+  // granted on the tracking issue -> automatic again
+  const granted = rf.migrationGrantVerdict({ paths: ['database/migrations/2026_10_02_add_x.php'], grant: { issue: 12, ok: true }, since: 'v1.2.0' });
+  assert.strictEqual(rf.decide(facts({ policy: GRANTED, finalGrant: GRANT_OK, migrations: granted })).state, 'finalized');
+  // unread migrations never count as none
+  assert.strictEqual(rf.migrationGrantVerdict({ paths: null }).ok, false);
+});
+
+test('#441: a grant that no longer resolves (reopened, unread) falls back to a human final; the human bar still works', () => {
+  const reopened = { ok: false, ruledBy: null, detail: 'release.final-grant #77 does not grant an automatic final: its decision was reopened' };
+  const v = rf.decide(facts({ policy: GRANTED, finalGrant: reopened, migrations: NO_MIGRATION }));
+  assert.strictEqual(v.state, 'candidate-ready');
+  assert.match(v.checks.find((c) => c.condition === 'final-grant').detail, /reopened — the final falls back to a human act/);
+  assert.strictEqual(rf.decide(facts({ policy: GRANTED, migrations: NO_MIGRATION })).state, 'candidate-ready', 'unresolved = no grant');
+  const human = rf.decide(facts({ policy: GRANTED, finalGrant: GRANT_OK, migrations: NO_MIGRATION, human: { bar: true, answeredBy: 'Ops' } }));
+  assert.strictEqual(human.state, 'finalized');
+  assert.strictEqual(human.grant, null, 'a human-bar final is the human\'s, not the grant\'s');
+});

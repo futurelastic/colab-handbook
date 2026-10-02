@@ -681,6 +681,7 @@ function decide(facts) {
   if (f.auto && v.nothing) noop = true;
 
   let tag = null;
+  let derivable = [];
   if (v.ok) {
     const here = candidateNumbers(f.tagsAtSha || [], v.version);
     if (here.length) add('already-candidate', false, `this commit is already ${v.version}-rc.${here[here.length - 1]} — a second candidate for the same commit tests nothing new`);
@@ -692,7 +693,10 @@ function decide(facts) {
 
   // #424: the three pre-tag checks, on the tag this run would create.
   if (tag) {
-    for (const c of releaseTag.preTagChecks({ tag, manifests: f.manifests, ancestry: f.ancestry, tags: f.tags, trunk: RELEASE_BRANCH })) add(c.condition, c.ok, c.detail);
+    for (const c of releaseTag.preTagChecks({ tag, manifests: f.manifests, ancestry: f.ancestry, tags: f.tags, trunk: RELEASE_BRANCH, versionSource: versionSourceOf(p) })) {
+      add(c.condition, c.ok, c.detail);
+      if (c.derivable && c.derivable.length) derivable = c.derivable;
+    }
   } else if (f.ancestry && f.ancestry.shallow) {
     // A shallow checkout cannot even find the last final, so no tag is computed — name the cause.
     add('on-trunk', false, 'a shallow checkout cannot answer whether the commit is on main (nor find the last final tag) — fetch full history (fetch-depth: 0) and re-run');
@@ -709,7 +713,13 @@ function decide(facts) {
     ok, noop: !ok && noop, checks, refusals, version: v.ok ? v.version : null, tag: ok ? tag : null,
     bump: v.ok ? v.bump : (v.bump || null), overridden: v.ok ? v.overridden : null,
     signals: f.auto ? f.auto.signals || null : null, migration: v.migration || null,
+    derivable,
   };
+}
+
+/** #438: the policy's version source — 'manifest' when there is no policy to read. */
+function versionSourceOf(policy) {
+  return policy && policy.effective && policy.effective.versionSource === 'tag' ? 'tag' : 'manifest';
 }
 
 /** The annotated tag's message — where the chosen bump, its reason and every checked condition are recorded. */
@@ -723,6 +733,7 @@ function tagMessage(verdict, { sha, lastFinal }) {
     '',
     ...(verdict.signals ? ['Signals (every input the bump read):', ...verdict.signals.lines.map((l) => `- ${l}`), ''] : []),
     ...(verdict.migration && verdict.migration.section ? ['Migration:', '', verdict.migration.section, ''] : []),
+    ...(verdict.derivable && verdict.derivable.length ? [`Derivable manifests (release.version-source: tag, not checked against the tag): ${verdict.derivable.join(', ')}`, ''] : []),
     'Conditions (CONVENTIONS.md §6):',
     ...verdict.checks.map((c) => `- ${c.condition}: ${c.detail}`),
     '',
@@ -737,5 +748,5 @@ module.exports = {
   parseGuardOutput, exportsDiff, switchRemovalsSince, autoSignals, parseMigrationSection, decideAutoVersion, cadenceVerdict,
   fullSuiteVerdict, withoutOwnWorkflow, isMigrationPath, schemaVerdict,
   parseSwitchMarkers, switchVerdict,
-  promotionVerdict, decide, tagMessage,
+  promotionVerdict, decide, tagMessage, versionSourceOf,
 };

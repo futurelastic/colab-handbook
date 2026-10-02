@@ -67,7 +67,7 @@ const STATES = Object.freeze([
 const CONDITIONS = Object.freeze([
   'release-policy', 'candidate', 'tracking-issue', 'release-hold', 'regressions', 'test-period', 'trunk-green',
   'ci-green', 'full-suite', 'schema-additive', 'switch-dependencies',
-  ...releaseTag.PRE_TAG_CONDITIONS, 'human',
+  ...releaseTag.PRE_TAG_CONDITIONS, 'final-grant', 'migration-grant', 'human',
 ]);
 
 // A completed run with one of these conclusions does not make trunk red.
@@ -291,6 +291,27 @@ function regressionVerdict(edges, { periodStart }) {
   return { ok: true, permanent: false, detail: edges.length ? `${edges.length} regression edge(s), all closed before the test period began` : 'no regression recorded against the candidate' };
 }
 
+// ---- an operator-granted automatic final (#441) ------------------------------------------------
+
+/**
+ * On a deploy-tag route whose final the operator granted automatic (release.final-grant), a final
+ * that deploys production must not carry a database migration nobody granted: migration stays a
+ * human gate. `paths` is every migration file changed since the last final (null = unread);
+ * `grant` is migration-grant.js evaluateIssue() of the version's TRACKING issue, bound to the
+ * version (`colab migration-grant <tracking> --branch vX.Y.Z`), or null when there was nothing to
+ * evaluate. Returns { ok, detail }.
+ */
+function migrationGrantVerdict({ paths, grant, since }) {
+  if (paths === null || paths === undefined) return { ok: false, detail: 'the migration files since the last final could not be read — an unread migration is not an absent one' };
+  if (!paths.length) return { ok: true, detail: `no migration file changed since ${since || 'the first commit'}` };
+  const list = paths.join(', ');
+  if (grant && grant.ok) return { ok: true, detail: `${paths.length} migration file(s) since ${since || 'the first commit'} (${list}), granted on the tracking issue #${grant.issue}` };
+  return {
+    ok: false,
+    detail: `${paths.length} migration file(s) since ${since || 'the first commit'} (${list}) and no migration grant on the release${grant && grant.reason ? ` (${grant.reason})` : ''} — an automatically deployed final never carries an ungranted migration; a human finalizes, or grants it first (COLAB_HUMAN=1 colab migration-grant <tracking issue> --branch <version>)`,
+  };
+}
+
 // ---- the verdict --------------------------------------------------------------------------------
 
 /** The one command a human runs to finalize — printed and posted, never written into a skill. */
@@ -308,15 +329,25 @@ function handoffCommand(tag) {
  *   trunk        trunkGreenVerdict(...)
  *   regressions  regressionVerdict(...)
  *   ci, suite, schema, switches   { ok, detail }
+ *   finalGrant   #441 — release-policy.js finalGrantVerdict() of policy.effective.finalGrant (only
+ *                read when the policy carries one; absent = unresolved, never a grant)
+ *   migrations   #441 — migrationGrantVerdict() (only read when the policy carries a grant)
  *   human        { bar: bool, answeredBy }
  *
- * Returns { state, checks: [{ condition, ok, required, detail }], finalTag, handoff }.
+ * Returns { state, checks: [{ condition, ok, required, detail }], finalTag, handoff, grant }.
+ *
+ * #441: where the final is automatic only by an operator's grant (deploy-tag + release.final-grant),
+ * the grant must still resolve AND no ungranted migration may ride along. Either one failing does not
+ * refuse the release — it takes the automatic final away, so the run stops at candidate-ready and
+ * hands a human the one command, exactly as on an ungranted deploy-tag repo. A human running the
+ * bar on a granted repo takes the human path too: the grant adds a way to finalize, never removes one.
+ * `grant` in the verdict is { issue, ruledBy } when a granted automatic final was reached, else null.
  */
 function decide(facts) {
   const f = facts || {};
   const checks = [];
   const add = (condition, ok, detail, required = true) => checks.push({ condition, ok: !!ok, required, detail });
-  const out = (state, extra = {}) => ({ state, checks, finalTag: null, handoff: null, ...extra });
+  const out = (state, extra = {}) => ({ state, checks, finalTag: null, handoff: null, grant: null, ...extra });
 
   const p = f.policy;
   const finalMode = p && p.effective ? p.effective.final : 'human';
@@ -343,7 +374,19 @@ function decide(facts) {
     ? `${HOLD_LABEL} on ${held.map((n) => `#${n}`).join(', ')} — a human veto; not finalized while it is present, and no command removes it`
     : `no ${HOLD_LABEL} on the tracking issue${(f.supersededHeld || []).length ? '' : ' or any superseded open one'}`);
 
-  const auto = finalMode === 'auto';
+  const h = f.human || { bar: false };
+  // #441: an automatic final that deploys production exists only by the operator's grant.
+  const granted = p.effective.finalGrant || null;
+  let auto = finalMode === 'auto';
+  let grantUsed = null;
+  if (granted && auto) {
+    const g = f.finalGrant || { ok: false, detail: `release.final-grant #${granted.issue} was not resolved — an unresolved grant is not a grant` };
+    add('final-grant', g.ok, `${g.detail}${g.ok ? '' : ' — the final falls back to a human act'}`, false);
+    const mig = f.migrations || { ok: false, detail: 'migrations since the last final were not measured' };
+    add('migration-grant', mig.ok, `${mig.detail}${mig.ok || !g.ok ? '' : ' — the final falls back to a human act'}`, false);
+    if (!g.ok || !mig.ok || h.bar) auto = false;
+    else grantUsed = { issue: granted.issue, ruledBy: g.ruledBy || null };
+  }
   const reg = f.regressions || { ok: false, permanent: false, detail: 'not measured' };
   add('regressions', reg.ok, reg.detail);
   const per = f.period || { elapsed: false, detail: 'not measured' };
@@ -354,8 +397,7 @@ function decide(facts) {
     add(condition, v && v.ok, v ? v.detail : 'not measured');
   }
   // #424: before any final — the tag equals the manifests, the commit is on trunk, the version outranks the latest final.
-  for (const c of releaseTag.preTagChecks({ tag: cand.version, manifests: f.manifests, ancestry: f.ancestry, tags: f.tags, trunk: 'main' })) add(c.condition, c.ok, c.detail);
-  const h = f.human || { bar: false };
+  for (const c of releaseTag.preTagChecks({ tag: cand.version, manifests: f.manifests, ancestry: f.ancestry, tags: f.tags, trunk: 'main', versionSource: p.effective.versionSource === 'tag' ? 'tag' : 'manifest' })) add(c.condition, c.ok, c.detail);
   if (!auto) {
     add('human', h.bar, h.bar
       ? `human bar met — answered by ${h.answeredBy}`
@@ -369,7 +411,7 @@ function decide(facts) {
   if (auto) {
     if (!tr.ok && !tr.pending) return out('refused');
     if (!per.elapsed || tr.pending) return out('testing');
-    return out('finalized', { finalTag: cand.version });
+    return out('finalized', { finalTag: cand.version, grant: grantUsed });
   }
   if (!h.bar) return out('candidate-ready', { handoff: handoffCommand(cand.tag) });
   return out('finalized', { finalTag: cand.version });
@@ -422,6 +464,7 @@ function tagMessage(verdict, { candidate, period, actor }) {
     `Commit: ${candidate.sha}`,
     period ? `Test period: ${period.start} -> ${period.endsAt}` : null,
     `Finalized by: ${actor}`,
+    verdict.grant ? `Automatic final granted by: release.final-grant -> decision #${verdict.grant.issue}${verdict.grant.ruledBy ? `, ruled by ${verdict.grant.ruledBy}` : ''} (an operator's per-repo grant; deleting it, or final: human, revokes it)` : null,
     '',
     'Conditions (CONVENTIONS.md §6):',
     ...verdict.checks.map((c) => `- ${c.condition}: ${c.ok ? 'ok' : (c.required ? 'FAILED' : 'informational')} — ${c.detail}`),
@@ -433,6 +476,6 @@ module.exports = {
   parseVersion, compareVersions, parseCandidate,
   parseReleaseMarker, releaseMarker, eventMarker, hasEvent, trackingTitle, trackingBody,
   selectCandidate, openCandidates, pickNewestClean, periodVerdict, trunkGreenVerdict, regressionVerdict,
-  handoffCommand, decide, tagMessage,
+  handoffCommand, decide, tagMessage, migrationGrantVerdict,
   carriedIssues, previousFinal, releasedEvent, releasedComment,
 };

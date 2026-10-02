@@ -239,7 +239,12 @@ function parseFlatYaml(text) {
         const subTrimmed = subRaw.replace(/\s+#.*$/, "").trim();
         if (indent.length === mapIndent && subTrimmed !== "" && !/^\[.*\]$/.test(subTrimmed)) {
           if (out[mapKey] === null || typeof out[mapKey] !== "object") out[mapKey] = {};
-          out[mapKey][sub] = parseScalarValue(subRaw);
+          // #439: an unquoted whole number under `release:` is a number, as the CLI's YAML reader
+          // reads it (`candidates-per-day: 1`, `final-grant: 7`) — kept a string, the one reading
+          // in release-policy.js failed a valid declaration that colab release cut accepts. A
+          // quoted "1" stays a string on both readers, and fails on both.
+          const scalar = parseScalarValue(subRaw);
+          out[mapKey][sub] = mapKey === "release" && typeof scalar === "string" && /^[0-9]+$/.test(subTrimmed) ? Number(scalar) : scalar;
           return;
         }
         problems.push(`line ${idx + 1}: "${mapKey}:" takes one level of "key: scalar" pairs — nothing deeper, and no lists`);
@@ -557,6 +562,16 @@ function listRemoteLabels(slug) {
 //   { status: "remote-unresolved", reason }  (local sources only, #376) the checkout's remotes
 //                            are ambiguous or its `colab.remote` override is broken — the caller
 //                            fails with `reason`, which names the fix. Never guessed.
+// One issue's state, labels and comments (#441 — a release.final-grant's decision issue), or null
+// when it could not be read. null is never "no decision": the caller fails closed on it.
+function readRemoteIssue(slug, num) {
+  try {
+    return JSON.parse(runGh(["issue", "view", String(num), "--repo", slug, "--json", "state,labels,comments"]));
+  } catch {
+    return null;
+  }
+}
+
 function readRemoteMetadata(slug) {
   try {
     const out = runGh(["api", `repos/${slug}`]);
@@ -774,6 +789,13 @@ function makeSource(target) {
         const slug = githubSlugFromRemote(url);
         return slug ? listRemoteLabels(slug) : null;
       },
+      // #441: a release.final-grant's decision issue, on the same resolved remote as labels().
+      // Read only when the descriptor declares a grant; no GitHub remote = unreadable (null).
+      issue: (num) => {
+        const url = gitRemote.remoteUrl(root);
+        const slug = url ? githubSlugFromRemote(url) : null;
+        return slug ? readRemoteIssue(slug, num) : null;
+      },
       // Same remote-slug resolution as labels() above, one API call, and only when the
       // identity scan was explicitly asked for — see readRemoteMetadata for the contract.
       // An unresolvable remote is its own status, not "no-remote": the scan was asked for
@@ -821,6 +843,7 @@ function makeSource(target) {
     currentBranch: () => null,
     isLinkedWorktree: () => false,
     labels: () => listRemoteLabels(target.slug),
+    issue: (num) => readRemoteIssue(target.slug, num),
     // Anchor-link check is local-only by design (#158) — enumerating markdown remotely
     // would be N `gh api` calls per repo across a fleet sweep. Empty list = the check
     // scans nothing and emits nothing for a remote source, matching checkRunbook's
@@ -1394,9 +1417,20 @@ function auditRepo(target, ctx) {
     // or unknown sub-key is a `fail`, because a silently ignored widening would make the
     // rung's human gate a suggestion.
     if ("release" in cfg) {
-      for (const f of releasePolicy.evaluateRelease(cfg).findings) {
+      const rel = releasePolicy.evaluateRelease(cfg);
+      for (const f of rel.findings) {
         if (f.level === "fail") fail(f.text);
         else warn(f.text);
+      }
+      // #441: `final: auto` on deploy-tag stands only on an operator's grant, and the grant is a
+      // tracker fact — the decision issue it names must carry a recorded, trusted ruling that has
+      // not been reopened. Unreadable fails closed: an automatic production deploy nobody can
+      // trace to a human's choice is exactly what the grant exists to rule out.
+      const grant = rel.effective.finalGrant;
+      if (grant) {
+        const v = releasePolicy.finalGrantVerdict(src.issue ? src.issue(grant.issue) : null, { issue: grant.issue, trust: trustHumansLib.parseTrustHumans(cfg) });
+        info.releaseFinalGrant = { issue: grant.issue, ok: v.ok, ruledBy: v.ruledBy };
+        if (!v.ok) fail(`release.final: auto on deploy-tag has no resolvable operator grant — ${v.detail} (CONVENTIONS.md §6, An operator-granted automatic final)`);
       }
     }
 

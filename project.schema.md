@@ -1068,6 +1068,8 @@ release:
   exports: api/public-symbols.txt              # optional — the committed public-symbol list
   npm: .                                       # optional — publish this package directory to npm (public-tool only)
   npm-gate: node scripts/check-pack-allowlist.mjs   # required with npm — the pack-allowlist gate
+  version-source: manifest                     # optional — manifest · tag (#438)
+  final-grant: 123                             # optional — deploy-tag only: the operator's recorded grant (#441)
 ```
 
 How the **release** — the tag — runs on this repo: which
@@ -1083,8 +1085,8 @@ as [CONVENTIONS §6's release routes](CONVENTIONS.md#6-releases) table them:
 | Descriptor | Derived `route` | May declare | `candidates` | `candidates-per-day` | `test-period` | `final` |
 |---|---|---|---|---|---|---|
 | `exposure: none` / `self` | `none` | `none` | `off` — no tags | — | `3d` | `human` |
-| `exposure: released`, `production: null`, `deploy: none` — adopters install it | `public-tool` | `public-tool` · `rapid-app` · `library-fast` · `none` | `auto` | uncapped | `3d` | `auto` |
-| `exposure: released`, `deploy: tag` — the tag deploys production | `deploy-tag` | `deploy-tag` · `none` | `auto` | uncapped | `3d` | `human` |
+| `exposure: released`, `production: null`, `deploy: none` — adopters install it | `public-tool` | `public-tool` · `rapid-app` · `library-fast` · `none` | `auto` | `1` | `3d` | `auto` |
+| `exposure: released`, `deploy: tag` — the tag deploys production | `deploy-tag` | `deploy-tag` · `none` | `auto` | uncapped | `3d` | `human` — `auto` only by an operator's grant (`final-grant`, below) |
 | `exposure: released`, `deploy: manual` — a person deploys from the tag | `deploy-tag` | `deploy-tag` · `none` | `auto` | uncapped | `3d` | `human` |
 | `exposure: live` | `live` | `live` · `none` | `off` — the promotion is the deploy | — | `3d` | `human` |
 | anything else — undeclared or unknown `exposure`, a bare `tier: B`, a `released` repo whose `deploy`/`production` match no row | none — fail closed | `none` | `off` | — | `3d` | `human` |
@@ -1116,12 +1118,15 @@ direction only, measured against the route — declared, or derived:
   **failure**. `none`, `live`, `library-fast` and a fail-closed descriptor reject
   `candidates: auto`.
 - `candidates-per-day` — a positive whole number. Below the route's cap (or any value on an
-  uncapped route) narrows; above it is a **failure** (`rapid-app` caps at `1`). On a route
-  with no candidates it has nothing to cap and is a failure too.
+  uncapped route) narrows; above it is a **failure** (`rapid-app` and `public-tool` cap at
+  `1` — #439: a public tool cutting one candidate per green trunk run published four in 51
+  minutes, and a candidate an hour tests nothing a daily one would not). On a route with no
+  candidates it has nothing to cap and is a failure too.
 - `final` — `auto` → `human` is a narrowing (a no-production repo that wants a person to
   finalize each release may say so); `auto` where the route says `human` is a **failure**.
   `final: auto` on a `deploy-tag` route is never an override — where the final tag deploys
-  production, nothing in `project.yml` lowers that.
+  production, no key *on its own* lowers that. The one exception is the operator's grant,
+  `final-grant` below, and it is a recorded human act, not a value.
 - `test-period` — a whole number of days, `<N>d`. Longer than `3d` narrows; shorter is a
   **failure**. On `library-fast`, which has no test period, it is a failure too.
 
@@ -1159,6 +1164,39 @@ publishes to npm. Repository visibility is not in this file, so a private repo d
 passes here and is refused by the workflow itself — and failed by the audit's public-npm check
 (#432). `colab release npm` prints what the job would do
 ([`tools/README.md`, *Release npm*](tools/README.md#release-npm)).
+
+**`version-source` says where the tag's version comes from** (#438) — `manifest` (the default)
+or `tag`. It narrows and widens nothing; it only decides which file the number lives in:
+
+- `manifest` — every declared manifest (`VERSION`, `package.json`, `Cargo.toml`,
+  `pyproject.toml`) must already equal the tag at the tagged commit, or `colab release cut` /
+  `finalize` refuse at `manifest-version`. With no manifest declared the tag is the version
+  either way, so the default costs a manifest-less repo nothing.
+- `tag` — the manifests are **derivable**: `manifest-version` skips one that differs and names
+  it, and the tag message records it (`Derivable manifests …`). The repo's own release or deploy
+  step stamps the number from the tag — on a deploy-only ref, or at build time — **never as a
+  commit on trunk**, which the release workflow never pushes. A manifest that cannot be read at
+  all (an unparsable `package.json`, an empty `VERSION`) still refuses: derivable says where a
+  number comes from, not that a broken file is fine.
+
+**`final-grant` lets an operator make one `deploy-tag` repo's final automatic** (#441). The
+default stays: a final tag that deploys production is a human act. An operator who chooses
+otherwise for a repo records that ruling on a decision issue (`colab decision <N> --record
+--ruled-by <human>`) and names it here, with `final: auto`:
+
+- **Shape and place.** The decision issue's number (`123` or `"#123"`), on the `deploy-tag`
+  route of a `deploy: tag` repo only — anywhere else it is a **failure**. `deploy: manual` stays
+  human: a person runs that deploy anyway. `final: auto` on `deploy-tag` without it remains the
+  widening failure above.
+- **A tracker fact, checked on every read.** The audit and every `colab release finalize` read
+  the decision issue: it must carry the `decision-recorded` label and a live `⚖ Decision
+  recorded` comment by a trusted human (`trust-humans`, when declared). Unreadable, reopened, or
+  never recorded → the audit **fails**, and finalize falls back to the human final.
+- **Revocable at once.** Deleting the line, or `final: human`, revokes it; so does
+  `colab decision <N> --reopen`. The next finalize reads the new state.
+- **An agent never writes it.** The grant is the operator's choice, transcribed; the
+  conditions an automatic deploying final adds on top of a candidate's are in
+  [CONVENTIONS §6](CONVENTIONS.md#6-releases).
 
 An unknown sub-key, a value outside its set, or a scalar `release:` is a failure too. **No
 key picks or approves a version number** — every number is computed, majors included, and a
@@ -1423,7 +1461,7 @@ the shape that shows it. One writer at a time says nothing about who reads the r
 | `channels: [none]` combined with another member, or `channels: []` → **finding** | an empty or self-contradicting answer read as a real one |
 | `channels: [none]` + (`production` non-null or `deploy` ≠ `none`) → **advisory** | the claim "nothing runs this" going unflagged against a fact already on record elsewhere in the same descriptor |
 | `release` is a one-level block of `candidates` ∈ {`auto`, `off`}, `test-period` `<N>d`, `final` ∈ {`auto`, `human`}, when set — no other sub-key | a misspelled knob silently read as the default |
-| `release` widening its derived default — `candidates: auto` where the rung cuts no tags, `final: auto` where the final tag is a human act (`deploy: tag`/`manual`), `test-period` under `3d` → **finding** | a descriptor lowering §6's human gate on a tag that deploys production |
+| `release` widening its derived default — `candidates: auto` where the rung cuts no tags, `final: auto` where the final tag is a human act (`deploy: tag` without a resolvable `final-grant`, or `manual`), `test-period` under `3d` → **finding** | a descriptor lowering §6's human gate on a tag that deploys production |
 
 `push-main` on a Tier A repo **is a finding** — a mismatch between the
 mechanism and the tier's contract, not a judgement on the mechanism, and the

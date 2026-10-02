@@ -18,6 +18,8 @@
  *     exports: <path>         # #422 — a committed list of public symbols, one per line
  *     npm: <dir>              # #433 — publish this package directory to npm from release-auto.yml
  *     npm-gate: <command>     # #433 — the pack-allowlist gate, run before every npm publish
+ *     version-source: tag     # #438 — tag | manifest: is a manifest's version checked, or derivable?
+ *     final-grant: 123        # #441 — an operator's recorded decision letting deploy-tag's final be automatic
  *
  * Two layers. The descriptor's ROW (exposure + deploy + production) is a fact about the repo; the
  * ROUTE is how releases run on it. A row permits a fixed set of routes (ROW_ROUTES) and derives one
@@ -42,7 +44,18 @@
 
 const axisAuthority = require('./axis-authority.js');
 
-const KEYS = Object.freeze(['route', 'candidates', 'candidates-per-day', 'test-period', 'final', 'guard-run', 'guard-result', 'exports', 'npm', 'npm-gate']);
+const KEYS = Object.freeze(['route', 'candidates', 'candidates-per-day', 'test-period', 'final', 'guard-run', 'guard-result', 'exports', 'npm', 'npm-gate', 'version-source', 'final-grant']);
+// #438: where the version a tag names comes from. `manifest` (the default) — every declared manifest
+// (VERSION, package.json, Cargo.toml, pyproject.toml) must already equal the tag, so a human bumps it
+// on trunk first. `tag` — the tag is the version and the manifests are DERIVABLE: the pre-tag check
+// skips them, and the repo's own release/deploy step stamps the number from the tag (on a deploy-only
+// ref or at build time — never a commit on trunk). Neither widens nor narrows a route: it decides
+// which file is the source of a number, never whether a tag is cut.
+const VERSION_SOURCES = Object.freeze(['manifest', 'tag']);
+// #441: the one route whose final may become automatic by an operator's grant, and the row it must
+// sit on — `deploy: tag` only. `deploy: manual` stays human: a person runs that deploy anyway.
+const GRANTABLE_ROUTE = 'deploy-tag';
+const GRANTABLE_ROW = 'released-tag';
 // #433: the npm opt-in. `npm` names the package directory release-auto.yml publishes (`.` for the
 // root); `npm-gate` the command that proves the tarball holds only what was meant to ship. They are
 // a pair — a publish with no gate is the stray-local-file leak the gate exists to stop — and they
@@ -74,7 +87,7 @@ const TEST_PERIOD_DAYS = 3;
 const ROUTE_POLICY = Object.freeze({
   'none': Object.freeze({ candidates: 'off', candidatesPerDay: null, testPeriodDays: TEST_PERIOD_DAYS, final: 'human', finalize: 'none', why: 'nothing consumes a tag here, so no tags are cut' }),
   'rapid-app': Object.freeze({ candidates: 'auto', candidatesPerDay: 1, testPeriodDays: TEST_PERIOD_DAYS, final: 'auto', finalize: 'newest-clean', why: 'a fast-moving app with few installers: at most one candidate a day, and the newest clean candidate finalizes automatically' }),
-  'public-tool': Object.freeze({ candidates: 'auto', candidatesPerDay: null, testPeriodDays: TEST_PERIOD_DAYS, final: 'auto', finalize: 'after-test-period', why: 'adopters install it and nothing deploys, so the final tag is automatic after a clean test period' }),
+  'public-tool': Object.freeze({ candidates: 'auto', candidatesPerDay: 1, testPeriodDays: TEST_PERIOD_DAYS, final: 'auto', finalize: 'after-test-period', why: 'adopters install it and nothing deploys: at most one candidate a day, and the final tag is automatic after a clean test period' }),
   'library-fast': Object.freeze({ candidates: 'off', candidatesPerDay: null, testPeriodDays: null, final: 'auto', finalize: 'on-tag', why: 'a library released per merge and pinned by its consumers: no candidates, the tag triggers the publish and the route\'s checks still apply' }),
   'deploy-tag': Object.freeze({ candidates: 'auto', candidatesPerDay: null, testPeriodDays: TEST_PERIOD_DAYS, final: 'human', finalize: 'human-click', why: 'the tag deploys production, so the final tag is a human act' }),
   'live': Object.freeze({ candidates: 'off', candidatesPerDay: null, testPeriodDays: TEST_PERIOD_DAYS, final: 'human', finalize: 'none', why: 'the promotion is the deploy and stays human; no automatic tags' }),
@@ -136,7 +149,7 @@ function deriveDefault(cfg) {
 /** A route's policy as an effective-shaped object (no `why`). */
 function routePolicy(route) {
   const p = ROUTE_POLICY[route];
-  return p ? { route, candidates: p.candidates, candidatesPerDay: p.candidatesPerDay, testPeriodDays: p.testPeriodDays, final: p.final, finalize: p.finalize } : null;
+  return p ? { route, candidates: p.candidates, candidatesPerDay: p.candidatesPerDay, testPeriodDays: p.testPeriodDays, final: p.final, finalize: p.finalize, npm: null, versionSource: 'manifest', finalGrant: null } : null;
 }
 
 function parseTestPeriod(v) {
@@ -161,6 +174,7 @@ function evaluateRelease(cfg) {
   const fromDerived = () => ({
     route: derived.route, candidates: derived.candidates, candidatesPerDay: derived.candidatesPerDay,
     testPeriodDays: derived.testPeriodDays, final: derived.final, finalize: derived.finalize, npm: null,
+    versionSource: 'manifest', finalGrant: null,
   });
   let effective = fromDerived();
   const findings = [];
@@ -171,7 +185,7 @@ function evaluateRelease(cfg) {
   if (raw === undefined || raw === null) return { declared: null, derived, effective, findings };
 
   if (typeof raw !== 'object' || Array.isArray(raw)) {
-    fail(`release is ${JSON.stringify(raw)}, expected a block of route / candidates / candidates-per-day / test-period / final / guard-run / guard-result / exports / npm / npm-gate (omit it for the default ${derived.axis} derives)`);
+    fail(`release is ${JSON.stringify(raw)}, expected a block of ${KEYS.join(' / ')} (omit it for the default ${derived.axis} derives)`);
     return { declared: raw, derived, effective, findings };
   }
 
@@ -235,11 +249,34 @@ function evaluateRelease(cfg) {
     else effective.candidatesPerDay = v;
   }
 
+  // #441: the operator's grant. Read before `final`, because only a valid grant lets `final: auto`
+  // stand on deploy-tag. Its VALIDITY here is shape and place only — that the decision it names is
+  // recorded, by a human, and not reopened is a tracker fact: the audit and `colab release finalize`
+  // resolve it (finalGrantVerdict), never this pure reading.
+  let grant = null;
+  if ('final-grant' in raw) {
+    const n = parseGrantIssue(raw['final-grant']);
+    if (n === null) fail(`release.final-grant is ${JSON.stringify(raw['final-grant'])}, expected the number of the decision issue that records the operator's ruling (e.g. 123 or "#123")`);
+    else if (effective.route !== GRANTABLE_ROUTE || derived.row !== GRANTABLE_ROW) {
+      fail(`release.final-grant fits only route ${GRANTABLE_ROUTE} on deploy: tag — ${route} on ${derived.axis} is not that (${routes}). ` +
+        (derived.row === 'released-manual' ? 'On deploy: manual a person runs the deploy anyway, so its final stays human' : 'Its final is not a deploying human act, so there is nothing to grant'));
+    } else grant = { issue: n };
+  }
+
   if ('final' in raw) {
     const v = raw.final;
     if (!FINAL.includes(v)) fail(`release.final is ${JSON.stringify(v)}, expected "auto" or "human"`);
-    else if (v === 'auto' && effective.final === 'human') widen('final', v, `${why}. Remove the key or set final: human`);
-    else {
+    else if (v === 'auto' && effective.final === 'human' && grant) {
+      // #441: an automatic final that deploys production — permitted only by the recorded grant.
+      effective.final = 'auto';
+      effective.finalize = 'after-test-period';
+      effective.finalGrant = grant;
+    } else if (v === 'auto' && effective.final === 'human') {
+      widen('final', v, `${why}. Remove the key or set final: human` +
+        (effective.route === GRANTABLE_ROUTE && derived.row === GRANTABLE_ROW
+          ? ' — or, if the operator chose an automatic final for this repo, record it (colab decision <N> --record --ruled-by <human>) and name it in release.final-grant: <N>'
+          : ''));
+    } else {
       if (v === 'human' && effective.final === 'auto') effective.finalize = effective.finalize === 'on-tag' ? 'on-tag' : 'human-click';
       effective.final = v;
     }
@@ -255,6 +292,13 @@ function evaluateRelease(cfg) {
     } else effective.testPeriodDays = days;
   }
 
+  // #438: where the tag's version comes from.
+  if ('version-source' in raw) {
+    const v = raw['version-source'];
+    if (!VERSION_SOURCES.includes(v)) fail(`release.version-source is ${JSON.stringify(v)}, expected "tag" or "manifest"`);
+    else effective.versionSource = v;
+  }
+
   // 3. npm (#433) — only on a route where a tag publishes to adopters and deploys nothing.
   effective.npm = null;
   if ('npm' in raw || 'npm-gate' in raw) {
@@ -268,7 +312,45 @@ function evaluateRelease(cfg) {
   return { declared: raw, derived, effective, findings };
 }
 
+/** `123`, `"123"` or `"#123"` -> 123; anything else -> null. */
+function parseGrantIssue(v) {
+  if (Number.isInteger(v) && v > 0) return v;
+  const m = typeof v === 'string' ? /^#?([1-9][0-9]*)$/.exec(v.trim()) : null;
+  return m ? Number(m[1]) : null;
+}
+
+/**
+ * #441: does the decision issue a `release.final-grant` names still carry the operator's ruling?
+ * `record` is `gh issue view <N> --json state,labels,comments` (null = the read failed — never a
+ * grant). Valid only when the issue carries the `decision-recorded` label (applying it needs write
+ * permission) AND a live, trusted `⚖ Decision recorded` comment — one not superseded by a later
+ * `↩ Decision reopened` (decision-record.js, the same reading every decision consumer uses). A
+ * reopened decision revokes the grant at once. `trust` is trust-humans.js parseTrustHumans() of the
+ * repo's project.yml, or absent. Returns { ok, ruledBy, detail }.
+ */
+function finalGrantVerdict(record, { issue, trust } = {}) {
+  const decisionRecord = require('./decision-record.js');
+  const ref = `release.final-grant #${issue}`;
+  if (!record) return { ok: false, ruledBy: null, detail: `${ref} could not be read from the tracker — an unread grant is not a grant` };
+  const labels = (record.labels || []).map((l) => (l && typeof l === 'object' ? l.name : l));
+  const all = decisionRecord.liveDecisions(record.comments);
+  const live = decisionRecord.trustedDecisions(record.comments, trust);
+  const reopened = (record.comments || []).some((c) => decisionRecord.REOPEN_RE.test(String((c && c.body) || '').trim()));
+  if (!live.length) {
+    const why = reopened && !all.length ? 'its decision was reopened'
+      : all.length ? 'its decision was not recorded by a trusted human'
+        : 'it carries no recorded decision (colab decision --record)';
+    return { ok: false, ruledBy: null, detail: `${ref} does not grant an automatic final: ${why}. The final tag stays a human act until a human records the ruling again` };
+  }
+  if (!labels.includes('decision-recorded')) {
+    return { ok: false, ruledBy: null, detail: `${ref} has a decision comment but no \`decision-recorded\` label — an interrupted record is not a grant` };
+  }
+  const d = live[live.length - 1];
+  return { ok: true, ruledBy: d.ruledBy, detail: `${ref}: decision recorded, ruled by ${d.ruledBy} (${d.at})` };
+}
+
 module.exports = {
+  VERSION_SOURCES, GRANTABLE_ROUTE, GRANTABLE_ROW, parseGrantIssue, finalGrantVerdict,
   KEYS, INPUT_KEYS, NPM_KEYS, NPM_ROUTES, CANDIDATES, FINAL, TEST_PERIOD_DAYS, ROUTES, ROUTE_POLICY, ROW_ROUTES,
   deriveDefault, evaluateRelease, parseTestPeriod, routePolicy,
 };
