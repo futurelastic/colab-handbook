@@ -1065,7 +1065,7 @@ The full permission ladder, one rung per boundary:
 release:
   route: public-tool      # none · rapid-app · public-tool · library-fast · deploy-tag · live
   candidates: auto        # auto · off
-  candidates-per-day: 1   # positive integer — never above the route's own cap
+  candidates-per-day: 1   # optional — a positive integer; no route has a cap by default (#443)
   test-period: 3d         # <N>d — never shorter than 3d
   final: auto             # auto · human
   guard-run: node scripts/breaking-guard.mjs   # optional — a breaking-change detector (or guard-result: <file>)
@@ -1078,7 +1078,7 @@ release:
 
 How the **release** — the tag — runs on this repo: which
 [release route](CONVENTIONS.md#6-releases) it takes, whether candidate tags
-`vX.Y.Z-rc.N` are cut automatically and how many a day, how long a candidate's test period
+`vX.Y.Z-rc.N` are cut automatically (and, if this repo opts in, at most how many a day), how long a candidate's test period
 lasts, and whether its final `vX.Y.Z` is automatic. The one block that is a nested map; the
 audit's reader accepts it under this key and no other.
 
@@ -1089,7 +1089,7 @@ as [CONVENTIONS §6's release routes](CONVENTIONS.md#6-releases) table them:
 | Descriptor | Derived `route` | May declare | `candidates` | `candidates-per-day` | `test-period` | `final` |
 |---|---|---|---|---|---|---|
 | `exposure: none` / `self` | `none` | `none` | `off` — no tags | — | `3d` | `human` |
-| `exposure: released`, `production: null`, `deploy: none` — adopters install it | `public-tool` | `public-tool` · `rapid-app` · `library-fast` · `none` | `auto` | `1` | `3d` | `auto` |
+| `exposure: released`, `production: null`, `deploy: none` — adopters install it | `public-tool` | `public-tool` · `rapid-app` · `library-fast` · `none` | `auto` | uncapped | `3d` | `auto` |
 | `exposure: released`, `deploy: tag` — the tag deploys production | `deploy-tag` | `deploy-tag` · `none` | `auto` | uncapped | `3d` | `human` — `auto` only by an operator's grant (`final-grant`, below) |
 | `exposure: released`, `deploy: manual` — a person deploys from the tag | `deploy-tag` | `deploy-tag` · `none` | `auto` | uncapped | `3d` | `human` |
 | `exposure: live` | `live` | `live` · `none` | `off` — the promotion is the deploy | — | `3d` | `human` |
@@ -1099,7 +1099,7 @@ The two routes only a no-production `released` repo may choose, and what they ch
 
 | Route | `candidates` | `candidates-per-day` | `test-period` | `final` |
 |---|---|---|---|---|
-| `rapid-app` | `auto` | `1` | `3d`, newest clean candidate finalizes; a newer one does not restart its clock | `auto` |
+| `rapid-app` | `auto` | uncapped | `3d`, newest clean candidate finalizes; a newer one does not restart its clock | `auto` |
 | `library-fast` | `off` — the tag triggers the publish | — | none | `auto` |
 
 Legacy `tier: A` reads as `released` and takes the route its `deploy` names; `tier: C` reads
@@ -1121,11 +1121,13 @@ direction only, measured against the route — declared, or derived:
 - `candidates` — `auto` → `off` is a narrowing; `auto` where the route cuts none is a
   **failure**. `none`, `live`, `library-fast` and a fail-closed descriptor reject
   `candidates: auto`.
-- `candidates-per-day` — a positive whole number. Below the route's cap (or any value on an
-  uncapped route) narrows; above it is a **failure** (`rapid-app` and `public-tool` cap at
-  `1` — #439: a public tool cutting one candidate per green trunk run published four in 51
-  minutes, and a candidate an hour tests nothing a daily one would not). On a route with no
-  candidates it has nothing to cap and is a failure too.
+- `candidates-per-day` — a positive whole number, an **opt-in** cap. No route carries one by
+  default (#443, reversing #439's derived cap of `1` on `rapid-app` and `public-tool`): the
+  newest candidate always names trunk's head, and a cap of one kept four merges out of any tag
+  for a day. So any value narrows. A repo that declares one still gets the guarantee: inside
+  the rolling 24h window `colab release cut --auto` is a no-op, and the first run after it —
+  a merge's green CI or the daily schedule — cuts **main's head**, never an older commit. On a
+  route with no candidates it has nothing to cap and is a **failure**.
 - `final` — `auto` → `human` is a narrowing (a no-production repo that wants a person to
   finalize each release may say so); `auto` where the route says `human` is a **failure**.
   `final: auto` on a `deploy-tag` route is never an override — where the final tag deploys

@@ -10,7 +10,7 @@
  *   release:
  *     route: public-tool      # none | rapid-app | public-tool | library-fast | deploy-tag | live
  *     candidates: auto        # auto | off
- *     candidates-per-day: 1   # positive integer, never above the route's own cap
+ *     candidates-per-day: 1   # positive integer — an opt-in cap; no route has one by default (#443)
  *     test-period: 3d         # <N>d, never below the route's 3 days
  *     final: auto             # auto | human
  *     guard-run: <command>    # #422 — a breaking-change detector `release cut --auto` runs
@@ -76,7 +76,9 @@ const TEST_PERIOD_DAYS = 3;
 /**
  * Each route's own policy — CONVENTIONS.md §6, *Release routes*, row for row.
  *   candidates        'auto' | 'off'   — are candidate tags vX.Y.Z-rc.N cut automatically?
- *   candidatesPerDay  number | null    — the cap on automatic candidates per day (null = uncapped)
+ *   candidatesPerDay  number | null    — the cap on automatic candidates per day (null = uncapped).
+ *                                        Null on every route since #443: the newest candidate always
+ *                                        names trunk's head, so a cap is only ever a repo's own narrowing
  *   testPeriodDays    number | null    — a candidate's test period (null = the route has none)
  *   final             'auto' | 'human' — is the final vX.Y.Z automatic?
  *   finalize          how a final is reached: 'none' (no tags), 'after-test-period' (each clean
@@ -86,8 +88,8 @@ const TEST_PERIOD_DAYS = 3;
  */
 const ROUTE_POLICY = Object.freeze({
   'none': Object.freeze({ candidates: 'off', candidatesPerDay: null, testPeriodDays: TEST_PERIOD_DAYS, final: 'human', finalize: 'none', why: 'nothing consumes a tag here, so no tags are cut' }),
-  'rapid-app': Object.freeze({ candidates: 'auto', candidatesPerDay: 1, testPeriodDays: TEST_PERIOD_DAYS, final: 'auto', finalize: 'newest-clean', why: 'a fast-moving app with few installers: at most one candidate a day, and the newest clean candidate finalizes automatically' }),
-  'public-tool': Object.freeze({ candidates: 'auto', candidatesPerDay: 1, testPeriodDays: TEST_PERIOD_DAYS, final: 'auto', finalize: 'after-test-period', why: 'adopters install it and nothing deploys: at most one candidate a day, and the final tag is automatic after a clean test period' }),
+  'rapid-app': Object.freeze({ candidates: 'auto', candidatesPerDay: null, testPeriodDays: TEST_PERIOD_DAYS, final: 'auto', finalize: 'newest-clean', why: 'a fast-moving app with few installers: every green trunk head gets a candidate, and the newest clean candidate finalizes automatically' }),
+  'public-tool': Object.freeze({ candidates: 'auto', candidatesPerDay: null, testPeriodDays: TEST_PERIOD_DAYS, final: 'auto', finalize: 'after-test-period', why: 'adopters install it and nothing deploys: every green trunk head gets a candidate, and the final tag is automatic after a clean test period' }),
   'library-fast': Object.freeze({ candidates: 'off', candidatesPerDay: null, testPeriodDays: null, final: 'auto', finalize: 'on-tag', why: 'a library released per merge and pinned by its consumers: no candidates, the tag triggers the publish and the route\'s checks still apply' }),
   'deploy-tag': Object.freeze({ candidates: 'auto', candidatesPerDay: null, testPeriodDays: TEST_PERIOD_DAYS, final: 'human', finalize: 'human-click', why: 'the tag deploys production, so the final tag is a human act' }),
   'live': Object.freeze({ candidates: 'off', candidatesPerDay: null, testPeriodDays: TEST_PERIOD_DAYS, final: 'human', finalize: 'none', why: 'the promotion is the deploy and stays human; no automatic tags' }),

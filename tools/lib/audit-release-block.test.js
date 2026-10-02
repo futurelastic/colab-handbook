@@ -182,6 +182,7 @@ test('#439: an unquoted whole number under release: is a number — candidates-p
   assert.ok(!hasText(all(r), /release[.:]/), all(r).join(' | '));
   const quoted = audit(fixture(`${RELEASED_NO_PROD}release:\n  candidates-per-day: "1"\n`));
   assert.ok(hasText(quoted.fails, /release\.candidates-per-day is "1", expected a positive whole number/), quoted.fails.join(' | '));
-  const widened = audit(fixture(`${RELEASED_NO_PROD}release:\n  candidates-per-day: 4\n`));
-  assert.ok(hasText(widened.fails, /release\.candidates-per-day: 4 widens the release route.*at most 1 a day/), widened.fails.join(' | '));
+  // #443: no route derives a cap, so a declared 4 is a narrowing like any other — no finding.
+  const four = audit(fixture(`${RELEASED_NO_PROD}release:\n  candidates-per-day: 4\n`));
+  assert.ok(!hasText(all(four), /release[.:]/), all(four).join(' | '));
 });

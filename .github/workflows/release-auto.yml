@@ -93,9 +93,11 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
+      # #443: the scheduled run cuts too — a head held back by a declared candidates-per-day window
+      # is tagged once the window ends; a head already carrying a candidate is a no-op.
       - name: Cut a candidate (colab release cut --auto)
         id: cut
-        if: steps.gate.outputs.cut == 'true' && (github.event_name == 'workflow_run' || github.event_name == 'workflow_dispatch')
+        if: steps.gate.outputs.cut == 'true' && (github.event_name == 'workflow_run' || github.event_name == 'workflow_dispatch' || github.event_name == 'schedule')
         run: |
           set -uo pipefail
           OUT="$RUNNER_TEMP/cut.json"
@@ -118,7 +120,7 @@ jobs:
             echo "tag=$TAG" >> "$GITHUB_OUTPUT"
             echo "Cut $TAG" | tee -a "$GITHUB_STEP_SUMMARY"
           elif [ "$(jq -r '.noop' "$OUT")" = "true" ]; then
-            echo "No-op: nothing owed, inside the cadence window, or main's head is not a promotion." | tee -a "$GITHUB_STEP_SUMMARY"
+            echo "No-op: nothing owed, head already a candidate, inside a declared cadence window, or main's head is not a promotion." | tee -a "$GITHUB_STEP_SUMMARY"
           elif [ "$(jq -r '.ok' "$OUT")" = "true" ]; then
             echo "Verdict ok but nothing created." | tee -a "$GITHUB_STEP_SUMMARY"
           else

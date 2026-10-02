@@ -31,8 +31,11 @@
  *   on-trunk             #424 — the commit is an ancestor of the release branch, `main` — on every
  *                        trunk shape (§6: never tag from `dev`); a shallow checkout is a refusal
  *   outranks-final       #424 — the version is strictly greater than the highest final tag
- *   cadence              #422, --auto only — the route's candidates-per-day cap; inside the window
- *                        the run is a NO-OP (verdict.noop), not a refusal
+ *   cadence              #422, --auto only — a declared release.candidates-per-day cap (no route has
+ *                        one by default since #443); inside the window the run is a NO-OP
+ *                        (verdict.noop), not a refusal, and the first run after it cuts main's head
+ *   already-candidate    (above) under --auto, head already carrying a candidate is a NO-OP (#443):
+ *                        the newest candidate names head, which is the guarantee holding
  *   promotion            #429, --auto on `trunk:` other than `main` only — `main`'s head is a promotion
  *                        of trunk (a --no-ff merge whose later parent is on trunk, or a fast-forward
  *                        onto trunk). Any other head is a NO-OP, like cadence; an unread trunk refuses.
@@ -384,7 +387,69 @@ function cadenceVerdict({ candidates, perDay, now }) {
     .sort((a, b) => a.ms - b.ms);
   if (recent.length < perDay) return { ok: true, detail: `${recent.length} candidate(s) in the last 24h, cap ${perDay}`, nextAt: null };
   const nextAt = new Date(recent[recent.length - perDay].ms + 86400000).toISOString();
-  return { ok: false, detail: `${recent.length} candidate(s) in the last 24h (${recent.map((c) => c.name).join(', ')}) — the route caps at ${perDay} a day; next one from ${nextAt}`, nextAt };
+  return { ok: false, detail: `${recent.length} candidate(s) in the last 24h (${recent.map((c) => c.name).join(', ')}) — release.candidates-per-day caps at ${perDay} a day; the first run from ${nextAt} cuts main's head, never an older commit`, nextAt };
+}
+
+// ---- #443: the newest candidate names trunk's head -------------------------------------------
+
+/** Events that run DOWNSTREAM of the suite (the release workflow itself) — never part of "head is green". */
+const DOWNSTREAM_EVENTS = Object.freeze(['workflow_run', 'schedule', 'workflow_dispatch']);
+
+/**
+ * #443's guarantee, read back: once main's head is green, the newest candidate names it. `colab
+ * release-status` flags a head that has been green for longer than one CI cycle and carries no tag.
+ *
+ *   candidatesAuto   the effective policy says candidates: auto (else nothing is owed: 'off')
+ *   sha              main's head
+ *   tagsAtSha        every tag pointing at it — a candidate OR a final names it
+ *   owed             commits on main since the last final (0 = nothing to release; null = no final yet)
+ *   runs             `gh run list --commit <sha>` rows: {status, conclusion, event, createdAt,
+ *                    updatedAt}; null when the read failed
+ *   promotion        on `trunk:` other than main, measurePromotion's verdict — a head that is not a
+ *                    promotion is cut by hand, never by --auto, so it is not flagged (null elsewhere)
+ *   now              ISO timestamp (the module stays clock-free)
+ *
+ * "One CI cycle" is measured, not configured: the longest suite run at this sha (updatedAt -
+ * createdAt). The release workflow fires when the suite completes, so a head still untagged one
+ * whole suite-duration after it went green is one the release run did not tag.
+ *
+ * Returns { state, flag, detail, greenAt, cycleMs } — state is one of: off · named · nothing-owed ·
+ * not-promotion · unread · not-green · pending · untagged. Only `untagged` flags.
+ */
+function headCandidateVerdict({ candidatesAuto, sha, tagsAtSha, owed, runs, promotion, now }) {
+  const at = `main@${String(sha || '').slice(0, 7)}`;
+  const out = (state, detail, extra = {}) => ({ state, flag: state === 'untagged', detail, greenAt: null, cycleMs: null, ...extra });
+  if (!candidatesAuto) return out('off', 'candidates are not automatic here — nothing names the head by itself');
+  const named = (tagsAtSha || []).filter((t) => /^v[0-9]+\.[0-9]+\.[0-9]+(-rc\.[1-9][0-9]*)?$/.test(t));
+  if (named.length) return out('named', `${at} is ${named.join(', ')}`);
+  if (owed === 0) return out('nothing-owed', `nothing merged on main since the last final — no candidate is owed`);
+  if (owed === null || owed === undefined) return out('nothing-owed', 'no final tag yet — the first version is a human decision, so no candidate is owed');
+  if (promotion && !promotion.ok) return out('not-promotion', `${at} is not a promotion of trunk — --auto never cuts it (${promotion.detail})`);
+  if (!Array.isArray(runs)) return out('unread', `gh run list failed — cannot tell whether ${at} is green`);
+  const suite = runs.filter((r) => r && !DOWNSTREAM_EVENTS.includes(r.event));
+  if (!suite.length) return out('not-green', `no suite run at ${at} yet — nothing is owed until it is green`);
+  if (suite.some((r) => r.status !== 'completed')) return out('not-green', `a suite run at ${at} is still in flight`);
+  if (suite.some((r) => r.conclusion !== 'success' && r.conclusion !== 'cancelled')) return out('not-green', `${at} is not green — no candidate is owed for a red head`);
+  const ok = suite.filter((r) => r.conclusion === 'success');
+  if (!ok.length) return out('not-green', `no successful suite run at ${at}`);
+  const ms = (x) => Date.parse(x);
+  const greenMs = Math.max(...ok.map((r) => ms(r.updatedAt)).filter((n) => !Number.isNaN(n)));
+  const cycleMs = Math.max(0, ...ok.map((r) => ms(r.updatedAt) - ms(r.createdAt)).filter((n) => !Number.isNaN(n)));
+  if (!Number.isFinite(greenMs)) return out('unread', `the suite runs at ${at} carry no completion time`);
+  const greenAt = new Date(greenMs).toISOString();
+  const untaggedMs = ms(now) - greenMs;
+  const mins = (n) => `${Math.round(n / 60000)}m`;
+  if (untaggedMs <= cycleMs) return out('pending', `${at} went green at ${greenAt}; inside one CI cycle (${mins(cycleMs)}) — the release run may still tag it`, { greenAt, cycleMs });
+  return out('untagged', `${at} has been green since ${greenAt} (${mins(untaggedMs)}, longer than one CI cycle of ${mins(cycleMs)}) and carries no candidate — head not a candidate`, { greenAt, cycleMs });
+}
+
+/**
+ * The GitHub pre-release a candidate gets (#443): `gh release create` arguments, notes = the tag's
+ * own message. The release workflow publishes its own; a candidate cut by hand published none, so
+ * the CLI now does it for every cut — the workflow's publish step then finds it and skips.
+ */
+function prereleaseArgs(tag, notesFile) {
+  return ['release', 'create', tag, '--verify-tag', '--title', tag, '--notes-file', notesFile, '--prerelease', '--latest=false'];
 }
 
 // ---- §6 condition 2: the full suite ------------------------------------------------------------
@@ -684,8 +749,12 @@ function decide(facts) {
   let derivable = [];
   if (v.ok) {
     const here = candidateNumbers(f.tagsAtSha || [], v.version);
-    if (here.length) add('already-candidate', false, `this commit is already ${v.version}-rc.${here[here.length - 1]} — a second candidate for the same commit tests nothing new`);
-    else {
+    if (here.length) {
+      add('already-candidate', false, `this commit is already ${v.version}-rc.${here[here.length - 1]} — a second candidate for the same commit tests nothing new`);
+      // #443: under --auto, main's head already carrying a candidate is the guarantee HOLDING — the
+      // newest candidate names head — so a re-run (the daily schedule, a CI re-run) is a no-op.
+      if (f.auto) noop = true;
+    } else {
       tag = `${v.version}-rc.${nextCandidateNumber(f.tags, v.version)}`;
       add('already-candidate', true, `next candidate: ${tag}`);
     }
@@ -749,4 +818,5 @@ module.exports = {
   fullSuiteVerdict, withoutOwnWorkflow, isMigrationPath, schemaVerdict,
   parseSwitchMarkers, switchVerdict,
   promotionVerdict, decide, tagMessage, versionSourceOf,
+  DOWNSTREAM_EVENTS, headCandidateVerdict, prereleaseArgs,
 };

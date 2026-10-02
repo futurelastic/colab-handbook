@@ -1221,8 +1221,10 @@ Refuses, naming each failed condition (all are reported, not just the first):
   removed line of the release.exports list. A guard or list that cannot be read refuses.
   A major is refused unless MIGRATION.md at the commit has a heading naming vX.0.0 whose section
   carries a non-empty "Measured cost:" line. Every signal is printed and written into the tag.
-  cadence              the route's candidates-per-day cap over the last 24h — inside it, and when
-                       nothing was merged since the last final, the run is a NO-OP (exit 0)
+  cadence              a declared release.candidates-per-day cap over the last 24h (no route has one
+                       by default, #443) — inside it, when nothing was merged since the last final,
+                       or when main's head already carries a candidate, the run is a NO-OP (exit 0);
+                       the first run after the window cuts main's head, never an older commit
   promotion            only where project.yml's trunk: is not main (trunk: dev + deploy: tag, #429):
                        main's head must be a promotion of trunk — a --no-ff merge whose later parent
                        is on trunk, or a fast-forward onto it. Any other head (a hotfix straight on
@@ -1237,6 +1239,10 @@ patch, feat -> minor; a breaking change is a minor pre-1.0 and a refusal from 1.
   --dry                measure and report; create and push nothing
   --json               machine-readable: { ok, tag, created, checks: [{condition, ok, detail}], ... }
   --repo <path>        the repo (default: the one you are in)
+
+Every cut also publishes the candidate's GitHub pre-release (#443): notes = the release-notes summary
+since the last final plus the tag message. Best-effort — a failure warns (--json published.ok false)
+and never undoes the pushed tag.
 
 Needs origin reachable (the tag is recorded there) and gh usable (CI, suite and switch markers are
 read from GitHub). Exit code: 0 when a candidate was cut (or, with --dry, would be), or an --auto
@@ -1489,6 +1495,7 @@ function cmdReleaseCut(argv) {
   });
 
   let created = false;
+  let published = null; // #443: { ok, detail } once a tag was created — null when nothing was cut
   if (verdict.ok && !opts.dry) {
     const message = releaseCut.tagMessage(verdict, { sha, lastFinal });
     const t = git.git(['tag', '-a', '--cleanup=verbatim', verdict.tag, sha, '-m', message], repoAbs);
@@ -1499,12 +1506,13 @@ function cmdReleaseCut(argv) {
       throw new UserError(`git push ${remote} ${verdict.tag} failed — the local tag was deleted again, nothing is cut (${(push.stderr || '').split('\n')[0]})`);
     }
     created = true;
+    published = publishPrerelease(repoAbs, { tag: verdict.tag, lastFinal, message });
   }
 
   if (opts.json) {
     print(JSON.stringify({
       repo: shortRepo(repoAbs), sha, ...(offTrunk ? { trunk } : {}), lastFinal, suggestion, dry: !!opts.dry, auto: !!opts.auto,
-      ok: verdict.ok, noop: !!verdict.noop, tag: verdict.tag, created, version: verdict.version, bump: verdict.bump,
+      ok: verdict.ok, noop: !!verdict.noop, tag: verdict.tag, created, published, version: verdict.version, bump: verdict.bump,
       overridden: verdict.overridden, signals: verdict.signals ? verdict.signals.lines : null, checks: verdict.checks,
     }, null, 2));
     return verdict.ok || verdict.noop ? 0 : 1;
@@ -1526,9 +1534,43 @@ function cmdReleaseCut(argv) {
     print(`✗ refused — ${verdict.refusals.length} condition(s) failed; nothing cut.`);
     return 1;
   }
-  if (opts.dry) print(`[--dry] would create ${verdict.tag} on ${at} and push it to ${remote}. Nothing created.`);
-  else print(`✓ cut ${verdict.tag} on ${at} and pushed it to ${remote} — a candidate, not a release; finalizing it is the release skill's.`);
+  if (opts.dry) print(`[--dry] would create ${verdict.tag} on ${at}, push it to ${remote} and publish its GitHub pre-release. Nothing created.`);
+  else {
+    print(`✓ cut ${verdict.tag} on ${at} and pushed it to ${remote} — a candidate, not a release; finalizing it is the release skill's.`);
+    if (published && published.ok) print(`✓ ${published.detail}`);
+    else if (published) warn(`${published.detail} — the tag stands; publish it by hand: gh release create ${verdict.tag} --verify-tag --prerelease --latest=false`);
+  }
   return 0;
+}
+
+/**
+ * #443: every candidate gets a GitHub pre-release page however it was cut. Before this, only the
+ * release workflow's own publish step made one, so a `release cut` run by hand left a bare tag. The
+ * notes are the release-notes summary since the last final (what the workflow publishes) plus the
+ * tag's own message — the recorded bump, signals and conditions. A page that already exists (the
+ * workflow raced us) is left alone. Best-effort: the tag is already on origin, so a failure here is
+ * reported, never a reason to undo the cut.
+ */
+function publishPrerelease(repoAbs, { tag, lastFinal, message }) {
+  if (!isGhUsable(repoAbs)) return { ok: false, detail: `pre-release NOT published: gh not usable (${ghUnusableWhy(repoAbs)})` };
+  const view = spawnSync('gh', ['release', 'view', tag, '--json', 'tagName'], { cwd: repoAbs, encoding: 'utf8' });
+  if (view.status === 0) return { ok: true, detail: `${tag} already has a GitHub Release — left as it is` };
+  let notes;
+  try {
+    notes = lastFinal ? buildReleaseNotes(repoAbs, `${lastFinal}..${tag}`, lastFinal).out : `## ${tag}\n\nFirst release.\n`;
+  } catch (e) {
+    notes = `## ${tag}\n\n(release notes unavailable: ${e.message})\n`;
+  }
+  notes += `\n### Candidate record\n\n\`\`\`\n${message}\`\`\`\n`;
+  const file = path.join(os.tmpdir(), `colab-release-notes-${process.pid}-${tag}.md`);
+  fs.writeFileSync(file, notes);
+  try {
+    const r = spawnSync('gh', releaseCut.prereleaseArgs(tag, file), { cwd: repoAbs, encoding: 'utf8' });
+    if (r.status !== 0) return { ok: false, detail: `pre-release NOT published: gh release create ${tag} failed (${(r.stderr || '').split('\n')[0] || r.status})` };
+    return { ok: true, detail: `published the GitHub pre-release ${tag}` };
+  } finally {
+    try { fs.unlinkSync(file); } catch (_) { /* best-effort */ }
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -6380,6 +6422,47 @@ function rangeBase(range) {
   return m[0] || null;                      // guard against "..HEAD"
 }
 
+/**
+ * The grouped Markdown summary for `range` — `colab release-notes`' output, and (#443) the body of
+ * the GitHub pre-release `colab release cut` publishes. Throws UserError when git log fails.
+ */
+function buildReleaseNotes(repoAbs, range, base, headline) {
+  // Non-merge commit subjects in the range. A merge subject carries no Conventional Commit
+  // meaning and would double-count its own commits, so --no-merges (same as the workflow).
+  const log = git.git(['log', range, '--no-merges', '--format=%s'], repoAbs);
+  if (!log.ok) {
+    throw new UserError(`git log ${range} failed: ${log.stderr.split('\n')[0] || `exit ${log.code}`}`);
+  }
+  const subjects = log.stdout.split('\n').filter(Boolean);
+
+  // Group by type. Match 'feat: x', 'feat(scope): x', and the breaking 'feat!: x' / 'feat(x)!: y'.
+  const groups = Object.fromEntries(CC_TYPES.map((t) => [t, []]));
+  const other = [];
+  const re = new RegExp(`^(${CC_TYPES.join('|')})(\\([^)]*\\))?!?:`);
+  for (const s of subjects) {
+    const m = s.match(re);
+    if (m) groups[m[1]].push(s); else other.push(s);
+  }
+
+  // Build Markdown.
+  let out = `## Release summary\n\n`;
+  out += base
+    ? `${subjects.length} commits since \`${base}\`.\n`
+    : `${subjects.length} commits.\n`;
+  if (headline) out += `\n${headline}\n`;
+  out += `\n`;
+  for (const t of CC_TYPES) {
+    if (!groups[t].length) continue;
+    out += `### ${t} (${groups[t].length})\n`;
+    out += groups[t].map((s) => `- ${s}`).join('\n') + '\n\n';
+  }
+  if (other.length) {
+    out += `### Other (${other.length})\n`;
+    out += other.map((s) => `- ${s}`).join('\n') + '\n\n';
+  }
+  return { out, subjects };
+}
+
 function cmdReleaseNotes(argv) {
   const opts = parseArgs(argv, {
     values: { '--repo': 'repo', '--out': 'out', '--headline': 'headline' },
@@ -6406,39 +6489,7 @@ function cmdReleaseNotes(argv) {
     range = `${base}..HEAD`;
   }
 
-  // Non-merge commit subjects in the range. A merge subject carries no Conventional Commit
-  // meaning and would double-count its own commits, so --no-merges (same as the workflow).
-  const log = git.git(['log', range, '--no-merges', '--format=%s'], repoAbs);
-  if (!log.ok) {
-    throw new UserError(`git log ${range} failed: ${log.stderr.split('\n')[0] || `exit ${log.code}`}`);
-  }
-  const subjects = log.stdout.split('\n').filter(Boolean);
-
-  // Group by type. Match 'feat: x', 'feat(scope): x', and the breaking 'feat!: x' / 'feat(x)!: y'.
-  const groups = Object.fromEntries(CC_TYPES.map((t) => [t, []]));
-  const other = [];
-  const re = new RegExp(`^(${CC_TYPES.join('|')})(\\([^)]*\\))?!?:`);
-  for (const s of subjects) {
-    const m = s.match(re);
-    if (m) groups[m[1]].push(s); else other.push(s);
-  }
-
-  // Build Markdown.
-  let out = `## Release summary\n\n`;
-  out += base
-    ? `${subjects.length} commits since \`${base}\`.\n`
-    : `${subjects.length} commits.\n`;
-  if (opts.headline) out += `\n${opts.headline}\n`;
-  out += `\n`;
-  for (const t of CC_TYPES) {
-    if (!groups[t].length) continue;
-    out += `### ${t} (${groups[t].length})\n`;
-    out += groups[t].map((s) => `- ${s}`).join('\n') + '\n\n';
-  }
-  if (other.length) {
-    out += `### Other (${other.length})\n`;
-    out += other.map((s) => `- ${s}`).join('\n') + '\n\n';
-  }
+  const { out, subjects } = buildReleaseNotes(repoAbs, range, base, opts.headline);
 
   if (opts.out) {
     fs.writeFileSync(opts.out, out.endsWith('\n') ? out : out + '\n');
@@ -6521,8 +6572,11 @@ function inspectReleaseStatus(repoAbs) {
   }
   const doc = projectDoc(repoAbs);
   const deploy = doc.deploy ? String(doc.deploy) : '';
-  if (deploy !== 'tag') {
-    return { repo: label, path: repoAbs, applicable: false, reason: `not tag-gated (deploy: ${deploy || 'absent'})` };
+  // #443: a repo whose candidates are automatic is assessed too, tag-gated or not — the guarantee
+  // "the newest candidate names trunk's head" is read back here (headCandidate, below).
+  const candidatesAuto = (() => { try { return releasePolicy.evaluateRelease(doc).effective.candidates === 'auto'; } catch (_) { return false; } })();
+  if (deploy !== 'tag' && !candidatesAuto) {
+    return { repo: label, path: repoAbs, applicable: false, reason: `not tag-gated (deploy: ${deploy || 'absent'}) and no automatic candidates` };
   }
   const trunk = resolveTrunk(repoAbs, doc) || 'main';
   const dualTrunk = trunk !== 'main';
@@ -6569,13 +6623,41 @@ function inspectReleaseStatus(repoAbs) {
     suggestion = semverSuggestion(cc);
   }
 
-  const flag = !!(unreleased.fixFlag || (unpromoted && unpromoted.fixFlag));
-  return { repo: label, path: repoAbs, applicable: true, trunk, dualTrunk, stale, unpromoted, unreleased, flag, semverSuggestion: suggestion };
+  const headCandidate = measureHeadCandidate(repoAbs, { candidatesAuto, mainRef, lastRelease, owed: unreleased.commits, dualTrunk, trunk, remote, fetchTrunk });
+  // The fix-lag flag is the tag-gated question (a fix waiting on a human's final). Where the final is
+  // automatic and nothing deploys, a fix under a candidate is the test period working, not lag — only
+  // the head-candidate guarantee flags there.
+  const tagGated = deploy === 'tag';
+  const flag = !!((tagGated && (unreleased.fixFlag || (unpromoted && unpromoted.fixFlag))) || headCandidate.flag);
+  return { repo: label, path: repoAbs, applicable: true, tagGated, trunk, dualTrunk, stale, unpromoted, unreleased, headCandidate, flag, semverSuggestion: suggestion };
+}
+
+/**
+ * #443: does the newest candidate name main's head? The decision is release-cut.js
+ * headCandidateVerdict (pure); this reads the tags at head and the suite runs there.
+ */
+function measureHeadCandidate(repoAbs, { candidatesAuto, mainRef, lastRelease, owed, dualTrunk, trunk, remote, fetchTrunk }) {
+  const shaR = git.git(['rev-parse', `${mainRef}^{commit}`], repoAbs);
+  const sha = shaR.ok ? shaR.stdout.trim() : null;
+  if (!candidatesAuto || !sha) return releaseCut.headCandidateVerdict({ candidatesAuto: candidatesAuto && !!sha, sha, now: nowISO() });
+  const tagsR = git.git(['tag', '--points-at', sha], repoAbs);
+  const tagsAtSha = tagsR.ok ? tagsR.stdout.split('\n').map((t) => t.trim()).filter(Boolean) : [];
+  let runs = null;
+  if (isGhUsable(repoAbs)) {
+    const r = spawnSync('gh', ['run', 'list', '--branch', 'main', '--commit', sha, '-L', '50', '--json', 'status,conclusion,event,createdAt,updatedAt,workflowName'],
+      { cwd: repoAbs, encoding: 'utf8' });
+    if (r.status === 0) { try { const j = JSON.parse(r.stdout); runs = Array.isArray(j) ? j : null; } catch (_) { runs = null; } }
+  }
+  const promotion = dualTrunk ? measurePromotion(repoAbs, { sha, trunk, remote, fetched: fetchTrunk }) : null;
+  return releaseCut.headCandidateVerdict({
+    candidatesAuto, sha, tagsAtSha, owed: lastRelease ? owed : null, runs, promotion, now: nowISO(),
+  });
 }
 
 const HELP_RELEASE_STATUS = `colab release-status [<repo> ...] [--repo <path>] [--json]
 
-Read-only. Measures merged-but-UNRELEASED lag on tag-gated repos (deploy: tag) — the rung
+Read-only. Measures merged-but-UNRELEASED lag on tag-gated repos (deploy: tag), and on any repo whose
+release route cuts candidates automatically (#443) — the rung
 CONVENTIONS.md §6 asks a human to notice by eye ("if you believe a release is overdue, say so") and
 nothing computed until now. NEVER promotes, never tags, never suggests running a release ritual
 unattended — who cuts a tag is CONVENTIONS §6's release rung, never this command (nor \`promote\`/\`ship\`).
@@ -6586,7 +6668,7 @@ unattended — who cuts a tag is CONVENTIONS §6's release rung, never this comm
   --json         machine-readable
 
 FLEET MODE (default, no --repo): sweeps every repo in <COLAB_HOME>/repos.txt — the same registry
-\`colab update\` sweeps. A repo whose project.yml isn't \`deploy: tag\` is reported n-a with a reason,
+\`colab update\` sweeps. A repo whose project.yml is neither \`deploy: tag\` nor automatic-candidates is n-a with a reason,
 not silently skipped; an owner/name slug (audit-only, no working tree here) is n-a too.
 
 Per tag-gated repo:
@@ -6597,6 +6679,11 @@ Per tag-gated repo:
   flag              true when a fix:-typed (or breaking) commit sits in EITHER gap — the exact class
                      of commit CONVENTIONS §6 already singles out ("an unreleased production fix ...
                      has bitten before").
+  headCandidate     #443, where candidates are automatic: { state, flag, detail } — whether the newest
+                     candidate names main's head. Flags (state untagged, "head not a candidate") when
+                     head has been green for longer than one CI cycle — the longest suite run at that
+                     sha — and carries no tag. Other states: named · nothing-owed · not-green ·
+                     pending (inside one cycle) · not-promotion (trunk: dev, a hotfix head) · unread · off.
   semverSuggestion  from Conventional-Commit types since the last tag: a breaking change (! or a
                      BREAKING CHANGE: footer) -> major, else feat -> minor, else fix -> patch,
                      else no suggestion. An input the coordinator confirms or overrides with a
@@ -6606,8 +6693,8 @@ Each row best-effort fetches \`origin/main\` (and \`origin/<trunk>\` on a dual-t
 fetch failure does not abort the row — it degrades to whatever is on disk and says so (stale: true)
 rather than reporting nothing.
 
-Exit code: 0 when nothing is flagged, 1 when at least one tag-gated repo is (an unpromoted or
-unreleased fix/breaking commit) — same posture as \`colab update\`'s "behind" tally.
+Exit code: 0 when nothing is flagged, 1 when at least one repo is (an unpromoted or unreleased
+fix/breaking commit, or a green head that is not a candidate) — same posture as \`colab update\`'s "behind" tally.
 `;
 
 function cmdReleaseStatus(argv) {
@@ -6656,9 +6743,10 @@ function cmdReleaseStatus(argv) {
     const tableRows = printable.map((r) => {
       const up = r.unpromoted ? `${r.unpromoted.commits}${r.unpromoted.fixFlag ? ' ⚠' : ''}` : '—';
       const un = r.unreleased.tag ? `${r.unreleased.commits}${r.unreleased.fixFlag ? ' ⚠' : ''} (${r.unreleased.days}d since ${r.unreleased.tag})` : 'no tags yet';
-      return [r.repo, up, un, r.semverSuggestion.bump || '—', r.flag ? '⚠ FLAGGED' : ''];
+      const hc = r.headCandidate ? (r.headCandidate.flag ? '⚠ not a candidate' : r.headCandidate.state) : '—';
+      return [r.repo, up, un, hc, r.semverSuggestion.bump || '—', r.flag ? '⚠ FLAGGED' : ''];
     });
-    print(table(tableRows, ['REPO', 'UNPROMOTED', 'UNRELEASED', 'SUGGEST', '']));
+    print(table(tableRows, ['REPO', 'UNPROMOTED', 'UNRELEASED', 'HEAD', 'SUGGEST', '']));
   }
   if (skipped.length) {
     print('');
@@ -6672,8 +6760,8 @@ function cmdReleaseStatus(argv) {
   }
   print('');
   if (flagged.length) {
-    print(`${flagged.length} repo(s) FLAGGED — a fix or breaking commit is sitting unreleased/unpromoted:`);
-    for (const r of flagged) print(`  ${r.repo}`);
+    print(`${flagged.length} repo(s) FLAGGED — a fix or breaking commit is sitting unreleased/unpromoted, or a green head is not a candidate:`);
+    for (const r of flagged) print(`  ${r.repo}${r.headCandidate && r.headCandidate.flag ? `  —  ${r.headCandidate.detail}` : ''}`);
     print('Who cuts the tag follows the release rung of CONVENTIONS §6 — this only measures the gap.');
   } else {
     print('Nothing flagged.');

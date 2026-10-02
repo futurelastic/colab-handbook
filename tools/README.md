@@ -1074,7 +1074,7 @@ them), and any one failing refuses the cut:
 | `release-policy` | the rung row + the `release:` block leave candidates off, or the block is invalid — `tools/lib/release-policy.js`, the audit's own reading |
 | `prerelease-trigger` | a deploy workflow's tag trigger matches `v1.2.0-rc.1` — `tools/lib/workflow-triggers.js`, the audit's own check (#332), either severity |
 | `version` | no bump is owed, a major is (a breaking change on ≥1.0, `--bump major`, the 0.x → 1.0.0 step), there is no final tag yet, or the version is already final |
-| `already-candidate` | the commit already carries a candidate of that version |
+| `already-candidate` | the commit already carries a candidate of that version. Under `--auto` a **no-op** (#443): main's head already being a candidate is the guarantee holding, so the daily schedule and a CI re-run are safe |
 | `ci-green` | §6 condition 1: not every run at the commit finished with one success — `colab ship`'s whole-sha check |
 | `full-suite` | §6 condition 2: some workflow that ran at the commit has no successful run (a cancelled-only workflow never ran its tests; `ci-green` alone reads that as green) |
 | `schema-additive` | §6 condition 3: a migration since the last final tag is destructive — Laravel `database/migrations` with a drop/rename/`->change()` in `up()`, Prisma SQL with `DROP`/`RENAME`/`ALTER COLUMN` — or an existing migration was edited or deleted. `.php`/`.sql` under a `project.yml` `migrations:` prefix are read the same way; a declared migration in another format is named in the detail for a human read (#383). Other layouts are not read |
@@ -1082,7 +1082,7 @@ them), and any one failing refuses the cut:
 | `manifest-version` | #424: the tag does not equal the version a manifest declares — `VERSION`, `package.json` `version`, `Cargo.toml` `[package]`, `pyproject.toml` `[project]`/`[tool.poetry]` (a `dynamic` version is derived from the tag and passes). A manifest that does not parse, or a workspace-inherited Cargo version, refuses; no manifest declaring a version passes — the tag is the version. With `release.version-source: tag` (#438) a manifest that differs is **derivable**: skipped, named in the detail and in the tag message (`Derivable manifests …`), and stamped from the tag by the repo's own release step, never on trunk |
 | `on-trunk` | #424: the commit is not an ancestor of `origin/main`, or the checkout is **shallow** and cannot answer (a release workflow needs `fetch-depth: 0`) |
 | `outranks-final` | #424: the version is not strictly greater than the **highest** final tag by SemVer — not the nearest one — so "latest" never moves backwards |
-| `cadence` | `--auto` only (#422): the route's `candidates-per-day` cap is reached over the last 24h. A **no-op**, not a refusal: exit 0, `noop: true` |
+| `cadence` | `--auto` only (#422): a declared `release.candidates-per-day` cap is reached over the last 24h — no route has one by default (#443). A **no-op**, not a refusal: exit 0, `noop: true`; the first run after the window cuts `main`'s head, never an older commit |
 | `promotion` | `--auto` only, and only where `project.yml`'s `trunk:` is not `main` (#429): `main`'s head is not a promotion of trunk — neither a `--no-ff` merge whose later parent is on `origin/<trunk>` nor a fast-forward onto it. A **no-op** like `cadence` (a hotfix straight on `main` is carried by the next promotion, or cut by hand without `--auto`); an unreadable `origin/<trunk>` **refuses**. Absent on `trunk: main`, so that `--json` is unchanged |
 
 **Inside Actions, the calling workflow's own runs are not read** (#425). With `GITHUB_ACTIONS=true`,
@@ -1129,6 +1129,14 @@ patch, feat → minor, a breaking change → minor pre-1.0 and a refusal from 1.
 override it to patch or minor with a `--reason`; the chosen bump, the override and every condition's
 detail are recorded in the annotated tag's message. The tag is pushed to origin; if the push fails
 the local tag is deleted again, so a refusal or a failure never leaves a candidate behind.
+
+**Every cut publishes its GitHub pre-release** (#443) — before, only the release workflow's own
+publish step made one, so a `release cut` run by hand left a bare tag with no release page. The
+notes are the `release-notes` summary since the last final plus the tag's own message (bump,
+signals, conditions), under `### Candidate record`; the release is `--prerelease --latest=false`.
+A tag that already has a Release is left as it is (so the workflow's publish step, finding it, skips).
+Publishing is best-effort: the tag is already on origin, so a failure is a warning — `--json`
+`published: { ok, detail }`, `null` when nothing was cut — and never undoes the cut.
 
 `schema-additive` is a heuristic and fails closed; it is not the §6 judgement about breaking
 changes the commit types do not reveal, which the release notes still owe.
