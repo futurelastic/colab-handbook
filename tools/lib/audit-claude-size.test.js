@@ -236,3 +236,59 @@ test('a derived span inside an imported file is excluded per file (#417)', () =>
   const r = audit(fixture('@AGENTS.md\n', { 'AGENTS.md': agents }));
   assert.ok(!hasText(r.warns, /advisory ceiling/), r.warns.join(' | '));
 });
+
+// --- #419: CLAUDE.md holds only the import, blank lines and tool blocks -----------
+
+const CONV_BLOCK = '## Conventions\n\n<!-- colab-handbook @ v1.11.0 -->\n\n' +
+  'This repo follows the [colab-handbook](https://example.invalid/CONVENTIONS.md) conventions.\n\n' +
+  '- **Tier:** `B` — no production target.\n- **Trunk:** `main`.\n';
+const AGENTS_STUB = { 'AGENTS.md': '# AGENTS.md\n\nRepo prose lives here.\n' };
+const prose = (r) => r.warns.filter((t) => t.startsWith('prose-in-claude-md:'));
+const noAgents = (r) => r.warns.filter((t) => t.startsWith('no-agents-md:'));
+
+test('a bare @AGENTS.md stub passes (#419)', () => {
+  const r = audit(fixture('@AGENTS.md\n', AGENTS_STUB));
+  assert.deepStrictEqual(prose(r), [], r.warns.join(' | '));
+  assert.deepStrictEqual(noAgents(r), [], r.warns.join(' | '));
+});
+
+test('a stub plus the Conventions block passes, repo bullets inside the block included (#419)', () => {
+  const r = audit(fixture('@AGENTS.md\n\n' + CONV_BLOCK + '- **Deploy:** a repo-specific bullet\n  that wraps.\n', AGENTS_STUB));
+  assert.deepStrictEqual(prose(r), [], r.warns.join(' | '));
+  assert.ok(!hasText(r.fails, /#419/), r.fails.join(' | '));
+});
+
+test('a stub plus paired tool blocks (BEGIN/END and <name>:start/end) passes (#419)', () => {
+  const body = '<!-- ui-kit:start (managed by a package — edit elsewhere) -->\n## UI\nrules\n<!-- ui-kit:end -->\n' +
+    '@AGENTS.md\n\n<!-- BEGIN:framework-rules -->\nframework text\n<!-- END:framework-rules -->\n';
+  const r = audit(fixture(body, AGENTS_STUB));
+  assert.deepStrictEqual(prose(r), [], r.warns.join(' | '));
+});
+
+test('a stub plus prose warns, naming the prose line range only (#419)', () => {
+  const body = '@AGENTS.md\n\n' + CONV_BLOCK + '\n## Content\nRead docs/a.md first.\n\nThen docs/b.md.\n';
+  // lines: 1 import · 3-10 block · 11 blank · 12-15 prose
+  const r = audit(fixture(body, AGENTS_STUB));
+  assert.strictEqual(prose(r).length, 1, r.warns.join(' | '));
+  assert.match(prose(r)[0], /CLAUDE\.md lines 12-15 carry repo prose next to its @AGENTS\.md import/);
+  assert.ok(!hasText(r.fails, /#419/), r.fails.join(' | '));
+});
+
+test('a legacy prose-only CLAUDE.md warns prose-in-claude-md AND no-agents-md, never fails (#419)', () => {
+  const r = audit(fixture('# CLAUDE.md\n\nSome router text.\n\n- docs/a.md — thing a\n'));
+  assert.strictEqual(prose(r).length, 1, r.warns.join(' | '));
+  assert.match(prose(r)[0], /lines 1-5 carry repo prose and it has no @AGENTS\.md import/);
+  assert.strictEqual(noAgents(r).length, 1, r.warns.join(' | '));
+  assert.ok(!hasText(r.fails, /#419/), r.fails.join(' | '));
+});
+
+test('a repo with no instruction file at all gets neither finding (#419)', () => {
+  const r = audit(fixture(null));
+  assert.deepStrictEqual(prose(r).concat(noAgents(r)), [], r.warns.join(' | '));
+});
+
+test('byte-identical CLAUDE.md and AGENTS.md are one file — no prose finding (#419)', () => {
+  const body = '# Rules\n\nProse.\n';
+  const r = audit(fixture(body, { 'AGENTS.md': body }));
+  assert.deepStrictEqual(prose(r).concat(noAgents(r)), [], r.warns.join(' | '));
+});

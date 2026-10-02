@@ -4488,8 +4488,10 @@ only. Resolution order: `--config` flag > `~/.colab/repos.txt` > bundled example
 
    The audit holds this shape: its size advisory measures `CLAUDE.md` **plus every in-repo
    file it `@`-imports**, so a bloated `AGENTS.md` behind a tiny shell is still caught; it
-   warns when a tool block appears in both files, and when the Conventions block sits
-   anywhere but `CLAUDE.md`.
+   warns when a tool block appears in both files, when the Conventions block sits
+   anywhere but `CLAUDE.md`, when `CLAUDE.md` carries repo prose (`prose-in-claude-md`, with
+   the line ranges) and when there is no `AGENTS.md` (`no-agents-md`) — #419. All warnings,
+   never failures; `handbook-sync` carries the move as a graft step.
 6. **Make sure CI meets [§7](#7-ci-and-toolchain)'s outcome** — copy a template via
    `colab template <name>`, which stamps for reconciliation.
 7. **Register the repo** — `colab register`, updating both the audit fleet list and the
