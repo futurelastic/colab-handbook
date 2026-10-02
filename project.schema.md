@@ -444,7 +444,7 @@ How much of a session's Phase B (merge to **trunk**) an agent may perform alone.
 This grants **trunk** autonomy only — never promotion, a tag, or anything that
 deploys; the field cannot express otherwise. Promotion follows
 [`promotion`](#promotion--optional) and `deploy`; a tag follows
-[CONVENTIONS §6's release rung](CONVENTIONS.md#6-releases). The grant lives in the repo file (not the caller's flags) so autonomy is
+[CONVENTIONS §6's release routes](CONVENTIONS.md#6-releases). The grant lives in the repo file (not the caller's flags) so autonomy is
 a property of the repo's risk profile, reviewed in a commit like any other change.
 
 ### `ship-batch` — optional
@@ -1059,51 +1059,76 @@ The full permission ladder, one rung per boundary:
 
 ```yaml
 release:
-  candidates: auto       # auto · off
-  test-period: 3d        # <N>d — never shorter than 3d
-  final: auto            # auto · human
+  route: public-tool      # none · rapid-app · public-tool · library-fast · deploy-tag · live
+  candidates: auto        # auto · off
+  candidates-per-day: 1   # positive integer — never above the route's own cap
+  test-period: 3d         # <N>d — never shorter than 3d
+  final: auto             # auto · human
 ```
 
-How the **release** rung — the tag — runs on this repo:
-whether an agent cuts candidate tags `vX.Y.Z-rc.N`, how long a candidate's test period
+How the **release** — the tag — runs on this repo: which
+[release route](CONVENTIONS.md#6-releases) it takes, whether candidate tags
+`vX.Y.Z-rc.N` are cut automatically and how many a day, how long a candidate's test period
 lasts, and whether its final `vX.Y.Z` is automatic. The one block that is a nested map; the
 audit's reader accepts it under this key and no other.
 
-**Absent means the default, and the default is derived — never declared.** It comes from
-`exposure` + `deploy` (+ `production`), exactly as
-[CONVENTIONS §6's release rung](CONVENTIONS.md#6-releases) tables it:
+**Absent means the default, and the default is derived — never declared.** The route comes
+from `exposure` + `deploy` (+ `production`), and each route carries its own policy, exactly
+as [CONVENTIONS §6's release routes](CONVENTIONS.md#6-releases) table them:
 
-| Descriptor | `candidates` | `test-period` | `final` |
-|---|---|---|---|
-| `exposure: none` / `self` | `off` — no tags | `3d` | `human` |
-| `exposure: released`, `production: null`, `deploy: none` — adopters install it | `auto` | `3d` | `auto` |
-| `exposure: released`, `deploy: tag` — the tag deploys production | `auto` | `3d` | `human` |
-| `exposure: released`, `deploy: manual` — a person deploys from the tag | `auto` | `3d` | `human` |
-| `exposure: live` | `off` — the promotion is the deploy | `3d` | `human` |
-| anything else — undeclared or unknown `exposure`, a bare `tier: B`, a `released` repo whose `deploy`/`production` match no row | `off` — fail closed | `3d` | `human` |
+| Descriptor | Derived `route` | May declare | `candidates` | `candidates-per-day` | `test-period` | `final` |
+|---|---|---|---|---|---|---|
+| `exposure: none` / `self` | `none` | `none` | `off` — no tags | — | `3d` | `human` |
+| `exposure: released`, `production: null`, `deploy: none` — adopters install it | `public-tool` | `public-tool` · `rapid-app` · `library-fast` · `none` | `auto` | uncapped | `3d` | `auto` |
+| `exposure: released`, `deploy: tag` — the tag deploys production | `deploy-tag` | `deploy-tag` · `none` | `auto` | uncapped | `3d` | `human` |
+| `exposure: released`, `deploy: manual` — a person deploys from the tag | `deploy-tag` | `deploy-tag` · `none` | `auto` | uncapped | `3d` | `human` |
+| `exposure: live` | `live` | `live` · `none` | `off` — the promotion is the deploy | — | `3d` | `human` |
+| anything else — undeclared or unknown `exposure`, a bare `tier: B`, a `released` repo whose `deploy`/`production` match no row | none — fail closed | `none` | `off` | — | `3d` | `human` |
 
-Legacy `tier: A` reads as `released` and takes the row its `deploy` names; `tier: C` reads
-as `live` ([`tier`](#tier--optional-legacy)). `final` applies only to a candidate, so with
-`candidates: off` it has nothing to act on.
+The two routes only a no-production `released` repo may choose, and what they change:
 
-**The block may narrow the default, never widen it.** Each key moves in one direction only:
+| Route | `candidates` | `candidates-per-day` | `test-period` | `final` |
+|---|---|---|---|---|
+| `rapid-app` | `auto` | `1` | `3d`, newest clean candidate finalizes; a newer one does not restart its clock | `auto` |
+| `library-fast` | `off` — the tag triggers the publish | — | none | `auto` |
 
-- `candidates` — `auto` → `off` is a narrowing; `auto` where the default is `off` is a
-  **failure**. A repo with no tags (`none`/`self`, `live`, or fail-closed) rejects
+Legacy `tier: A` reads as `released` and takes the route its `deploy` names; `tier: C` reads
+as `live` ([`tier`](#tier--optional-legacy)). `final` applies only to a candidate (or, on
+`library-fast`, to the tag itself), so with `candidates: off` elsewhere it has nothing to act
+on.
+
+**`route` chooses; it never widens.** A declared route must be one the descriptor's row
+permits (the *May declare* column). A route outside that set is a **failure**, and the
+derived route stays in effect — `public-tool` on a `deploy: tag` repo would hand a
+production deploy's final to a machine, and `deploy-tag` on a repo where nothing deploys
+describes a repo that does not exist. If the repo really changed, change
+`exposure`/`deploy` first. `none` is permitted everywhere: turning releases off is always a
+narrowing.
+
+**The other keys may narrow the route in effect, never widen it.** Each moves in one
+direction only, measured against the route — declared, or derived:
+
+- `candidates` — `auto` → `off` is a narrowing; `auto` where the route cuts none is a
+  **failure**. `none`, `live`, `library-fast` and a fail-closed descriptor reject
   `candidates: auto`.
+- `candidates-per-day` — a positive whole number. Below the route's cap (or any value on an
+  uncapped route) narrows; above it is a **failure** (`rapid-app` caps at `1`). On a route
+  with no candidates it has nothing to cap and is a failure too.
 - `final` — `auto` → `human` is a narrowing (a no-production repo that wants a person to
-  finalize each release may say so); `auto` where the default is `human` is a **failure**.
-  `final: auto` on a `deploy: tag` or `deploy: manual` repo is never an override — where the
-  final tag is a human act, nothing in `project.yml` lowers that.
+  finalize each release may say so); `auto` where the route says `human` is a **failure**.
+  `final: auto` on a `deploy-tag` route is never an override — where the final tag deploys
+  production, nothing in `project.yml` lowers that.
 - `test-period` — a whole number of days, `<N>d`. Longer than `3d` narrows; shorter is a
-  **failure**.
+  **failure**. On `library-fast`, which has no test period, it is a failure too.
 
-An unknown sub-key, a value outside its set, or a scalar `release:` is a failure too. None
-of these keys lets an agent cut a major — that stays a human decision on every repo
-([§6, *Versioning*](CONVENTIONS.md#6-releases)) and has no field.
+An unknown sub-key, a value outside its set, or a scalar `release:` is a failure too. **No
+key picks or approves a version number** — every number is computed, majors included, and a
+major without a migration section carrying its measured cost is refused
+([§6, *Versioning*](CONVENTIONS.md#6-releases)).
 
-What reads it: the audit, and the release tooling (`colab release cut`, #338), both through
-`tools/lib/release-policy.js` — the one executable version of the table above. If this page
+What reads it: the audit, and the release tooling (`colab release cut` #338, `colab release
+finalize` #339, and the release workflow that runs both), all through
+`tools/lib/release-policy.js` — the one executable version of the tables above. If this page
 and that module ever disagree, the module is what runs; report the drift.
 
 ### `generated` — optional

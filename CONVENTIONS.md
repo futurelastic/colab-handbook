@@ -720,7 +720,7 @@ A branch is measured **again after B0 sync**, before the squash, so a `pre-ship`
 regenerated a file cannot carry code in behind the first verdict. The pre-push guard needs no
 change: the push still carries `COLAB_SHIP=1` because ship ran its own preconditions. It grants
 nothing past the trunk merge — promotion and deploys stay human, and a tag follows
-[§6's release rung](#6-releases), never `colab ship`.
+[§6's release routes](#6-releases), never `colab ship`.
 
 **Nothing widens the allowlist.** No `project.yml` field, flag or environment variable can add
 to it: `tools/lib/docs-only.js` holds both lists as constants. Widening it is a handbook change,
@@ -3261,10 +3261,17 @@ and stops. A scheduler never mints a ci-grant itself either way — only the cur
 mechanical door is available to it unattended, exactly as it is to any other caller.
 
 **Never promotes, on any repo, on any tier**, with no field able to say otherwise — **and
-never tags by itself.** A tag is cut without a human only where
-[§6's release rung](#6-releases) allows it, and then by a release skill in a coordinator
-session that re-checks every condition — never by the driver directly, never through
-`colab ship`, and never a final tag where the tag deploys production.
+never tags by any path but the release workflow's two commands.** A **release workflow**
+(#420) is the one scheduled caller that may tag: it may run `colab release cut --auto` and
+`colab release finalize --auto`, unattended, because both **refuse on any failed
+condition** — the route ([§6, *Release routes*](#6-releases)) is the permission, each
+command measures it on the exact commit, and a refusal is the run's whole output, never a
+reason to retry around it. Nothing else a scheduler runs tags: not the driver directly,
+not `colab ship`, not a hand-typed `git tag`. **It may never finalize a tag on a
+`deploy-tag` route** — where the tag deploys production, the final is the one human click
+the routes keep, and `finalize --auto` stops at *candidate ready* there by construction.
+A candidate a human has put `release-hold` on is held for the workflow exactly as it is for
+a person.
 
 **Never acts on an owner's branch.** On a repo declaring `owner:` (a repo the fleet does
 not own, #394), a scheduler may run `colab deliver --dry` and report its state, and nothing
@@ -3858,7 +3865,7 @@ the signal the repo has earned Tier A.
 On a `deploy: manual` repo the sequence is the same, the last step performed by a person:
 promote, tag, then run the runbook — promotion there always requires a human, and
 `promotion: main-loop` cannot say otherwise. The final tag there is a human act too
-(*The release rung*, below).
+(*Release routes*, below).
 
 **Human gate count follows [exposure](#exposure--what-consumes-a-merge-here), not
 preference.** An up-front yes can authorize an intent; it cannot authorize a result
@@ -3875,7 +3882,7 @@ below is that second case, at full length.
 `autonomy:`) · **promote** (trunk→main, gated by `deploy:`+`promotion:` — safe to
 automate only where deploy is tag-gated) · **release** (the tag, gated by exposure:
 automatic candidates, and a final tag that is automatic only where nothing deploys from
-it — *The release rung*, below). The `pre-push-guard` hook enforces the
+it — *Release routes*, below). The `pre-push-guard` hook enforces the
 first two mechanically; `COLAB_SHIP` never opens `main`.
 
 **`COLAB_SHIP` and `COLAB_PROMOTE` are process-identity assertions, not permissions — an
@@ -3909,27 +3916,38 @@ where `deploy: tag` makes promotion verification-only, so it can never apply to 
 Nothing about C widens what an agent may do: `autonomy: auto-trunk` still only ever
 merges into `dev`, which does not deploy.
 
-**The release rung — who cuts a tag follows exposure (#330).** An agent may cut a tag
-without a human only where this table says so. Every tag an agent cuts starts as a
-release candidate, `vX.Y.Z-rc.N`; the final `vX.Y.Z` is that candidate's commit, tagged
-final.
+**Release routes — how a repo releases, and the one human gate (#420; formerly *The release
+rung*, #330 — tool messages citing that name mean this paragraph).** Every version number is computed, every candidate is cut by a trigger, and a human
+is asked exactly once: **for the final tag on a repo where that tag deploys production**
+(`deploy: tag`, and `deploy: manual`, where a person deploys from it) — one click, number
+pre-filled. Everything else is automatic, and a human can still veto any candidate with
+`release-hold`. Every candidate is `vX.Y.Z-rc.N`; the final `vX.Y.Z` is that candidate's
+commit, tagged final.
 
-| Repo | Candidate `vX.Y.Z-rc.N` | Final `vX.Y.Z` |
-|---|---|---|
-| `exposure: none` / `self` | no tags | no tags |
-| `exposure: released`, `production: null` (`deploy: none`) — adopters install it, nothing deploys | automatic, once every condition below holds | automatic after a clean test period; a human may veto during it |
-| `exposure: released`, `deploy: tag` — the tag deploys production | automatic; the agent prepares everything | a human act (one click) |
-| `exposure: released`, `deploy: manual` — a person deploys from the tag | automatic | a human act: the final tag marks what a person is about to deploy |
-| `exposure: live` (Tier C) | unchanged — no automatic tags; the promotion is the deploy and stays human; tagging stays optional | — |
+| Route | For | Candidate `vX.Y.Z-rc.N` | Final `vX.Y.Z` |
+|---|---|---|---|
+| `none` | `exposure: none` / `self` — nothing consumes a tag | no tags | no tags |
+| `rapid-app` | a fast-moving app with few installers | automatic, at most 1 a day | automatic: the **newest** candidate clean for the test period; a newer candidate does not restart an older one's clock |
+| `public-tool` | a public CLI or handbook — adopters install it, nothing deploys | automatic | automatic after a clean test period |
+| `library-fast` | a library released per merge, its consumers pin | none | the tag itself triggers the publish; the route's checks still apply |
+| `deploy-tag` | `deploy: tag` / `deploy: manual` — the tag deploys production | automatic; the agent prepares everything | **a human act (one click)** |
+| `live` | `exposure: live` (Tier C) — the merge is the deploy | unchanged — no automatic tags; the promotion is the deploy and stays human; tagging stays optional | — |
 
-Anything the table does not name — an undeclared or unknown `exposure`, a bare legacy
-`tier: B`, a `released` repo whose `deploy` matches no row — gets no automatic tag: fail
-closed, a human tags. Legacy `tier: A` reads as `released` and takes the row its `deploy`
-names. Where the final tag is a human act, nothing in `project.yml` lowers that, and no
-field lets an agent cut a major (*Versioning*, below). A repo may **narrow** its row —
-turn candidates off, make an automatic final human, lengthen the test period — with the
-[`release:` block](project.schema.md#release--optional) (#337); a block that tries to widen
-it is an audit failure, not an override.
+**A repo declares its route as `release.route`; absent, it is derived from `exposure` +
+`deploy`** — `none`/`self` → `none`; `live` → `live`; `released` with `deploy: tag` or
+`deploy: manual` → `deploy-tag`; `released` with `production: null` and `deploy: none` →
+`public-tool`. That last row is the only one that offers a choice: it may declare
+`rapid-app` or `library-fast` instead. Any row may declare `none`. A declared route its row
+does not permit — `public-tool` on a repo whose tag deploys, `deploy-tag` where nothing
+deploys — is an audit failure, never an override: change `exposure`/`deploy` first if the
+repo really changed. Anything the table does not name — an undeclared or unknown
+`exposure`, a bare legacy `tier: B`, a `released` repo whose `deploy` matches no row —
+derives **no route** and fails closed: no automatic tag, a human tags. Legacy `tier: A`
+reads as `released` and takes the route its `deploy` names. Where the final tag is a human
+act, nothing in `project.yml` lowers that. A repo may **narrow** its route — turn
+candidates off, cap candidates per day lower, make an automatic final human, lengthen the
+test period — with the [`release:` block](project.schema.md#release--optional) (#337); a
+block that tries to widen it is an audit failure, not an override.
 
 **A candidate is cut only when all four hold, on the exact commit it names:**
 
@@ -3943,28 +3961,33 @@ it is an audit failure, not an override.
    ([*Switched epics*](#switched-epics--concurrent-unfinished-features-336), rule 3).
 
 **The test period is 3 days, and it is clean only if trunk CI stayed green throughout
-and no regression against the candidate is open.** It matters only on the automatic-final
-row. A human vetoes by holding the candidate during it; a held candidate is not finalized.
+and no regression against the candidate is open.** It matters only on a route whose final
+is automatic (`rapid-app`, `public-tool`); `library-fast` has none, because it cuts no
+candidate. A route may lengthen it, never shorten it. A human vetoes by holding the candidate during it; a held candidate is not finalized.
 **Finalizing re-checks every condition above at the moment it runs** — a candidate that
 was clean when cut and is not now stays a candidate. Where the final tag is a human act,
-the agent's work ends with the candidate, its release notes, and the one command that
-finalizes it.
+the agent's work ends with the candidate, its release notes, and the one click — number
+pre-filled — that finalizes it.
 
-**Who acts on this rung: a release skill run in a coordinator session** — no daemon,
-never a scheduler by itself
-([*Scheduled drivers*](#scheduled-drivers--provenance-and-autonomy-meet-a-caller-that-is-not-a-person)),
-and never `colab ship`, `colab promote` or `code-ship`, none of which tags. This rung is
-the permission; the tooling exercises it. A candidate is cut by
+**A trigger runs it — not a person, and not a session.** Each repo that tags carries a
+**release workflow** ([*Scheduled drivers*](#scheduled-drivers--provenance-and-autonomy-meet-a-caller-that-is-not-a-person)):
+a trunk push with green CI tries a candidate (`colab release cut --auto`), a daily run
+tries to finalize clean candidates (`colab release finalize --auto`), and publishing happens
+inside the same run. It may do this unattended because both commands **refuse on any
+failed condition** — the route is the permission, the commands measure it, and a refusal
+is the workflow's whole output. Never `colab ship`, `colab promote` or `code-ship`, none of
+which tags. A candidate is cut by
 [`colab release cut`](tools/README.md#release-cut-candidates) (#338), which measures the four
-conditions on the commit and refuses naming each one that fails. A candidate's next step is
-[`colab release finalize`](tools/README.md#release-finalize) (#339), sequenced by the
-[`release-rung`](skills/release-rung/SKILL.md) skill. It keeps **one tracking issue per version**
+conditions on the commit and refuses naming each one that fails; its next step is
+[`colab release finalize`](tools/README.md#release-finalize) (#339). The
+[`release-rung`](skills/release-rung/SKILL.md) skill is the same sequence run by hand — the
+fallback when the workflow cannot run. Either way keeps **one tracking issue per version**
 (`release: vX.Y.Z`, marker `<!-- colab:release version=vX.Y.Z -->`): a human holds a candidate by
 putting the **`release-hold`** label on it (only a human removes it), and a regression against the
 candidate is a `blocked_by` edge on it — open, the final waits; fixed after the test period began,
-a new `-rc.N+1` is owed and its period starts afresh. It tags the final itself only on the
-automatic-final row, re-checking every condition at that moment; wherever the final is a human act
-it stops at *candidate ready* and hands a human the one command. No agent cuts a final tag, or a
+a new `-rc.N+1` is owed and its period starts afresh. The final is tagged automatically only on a
+route whose final is automatic, re-checking every condition at that moment; on `deploy-tag` it
+stops at *candidate ready* and hands a human the one click. No agent cuts a final tag, or a
 candidate, by hand around these commands. A deploy must never fire on a
 candidate: [`templates/release-tag.yml`](templates/release-tag.yml) publishes `-rc` tags
 as pre-releases, the audit flags a deploy trigger that matches one, and every
@@ -3973,21 +3996,24 @@ current-release read skips them.
 **Versioning** — SemVer. Patch for fixes, minor for features, major for breaking changes.
 Pre-1.0 repos use `v0.x.y`, treating minor as "meaningful increment".
 
-**Which number an agent picks for a candidate:**
+**Every version number is computed — majors included. No human picks or approves a
+number.** Since the last final tag:
 
-- **fixes only** since the last final tag → **patch** (`1.2.0` → `1.2.1`);
-- **a finished epic** (its switch-removal child merged), or any other new feature →
-  **minor** (`1.2.1` → `1.3.0`);
-- **never a major.** `1.0.0` and every later `X.0.0` is a human decision; an agent that
-  finds a breaking change on a ≥1.0 repo cuts nothing and says so;
-- **pre-1.0, a breaking change ships as a minor** (SemVer §4 — anything may change at
-  `0.y.z`): `0.4.2` → `0.5.0`.
+- **fixes / chores only** → **patch** (`1.2.0` → `1.2.1`);
+- **any feature, or an epic's switch-removal child merged** → **minor** (`1.2.1` → `1.3.0`);
+- **a breaking change** → **minor below 1.0** (SemVer §4 — anything may change at `0.y.z`:
+  `0.4.2` → `0.5.0`), **major from 1.0** (`1.3.0` → `2.0.0`). Breaking means any of: `!` or
+  `BREAKING CHANGE:` in a commit; a repo guard reporting a destructive schema,
+  config-format or API-response change; a removed or renamed export.
+- **A major must carry a migration section with the measured cost** — what an adopter or
+  consumer has to change, and how much of it was measured — **or it is refused.** A major
+  with no migration section is not cut, by the workflow or by hand.
 
-**The judgement an agent owes is the breaking change the commit types don't reveal** — a
-destructive schema change, a config-format change, an API contract change, merged as
-`feat:` or `fix:` with no `!`. Read the diff since the last final tag, not only its
-subjects, and **put the reasoning in the release notes**: the bump chosen, why, and each
-breaking change found — or that none was, and what was checked.
+The computation reads more than commit subjects precisely because the breaking change that
+bites is the one the types don't reveal — a destructive schema change or a renamed export
+merged as `feat:` or `fix:` with no `!`. **Put the reasoning in the release notes**: the
+bump computed, which input decided it, and each breaking change found — or that none was,
+and what was checked.
 
 **An unfinished feature never waits for a release, and never reaches one switched on.** On
 a repo that tags, a feature landing over several merges is an epic behind a switch: it
@@ -4012,8 +4038,9 @@ promoted, commits on `main` past the last `v*` tag (plus days since), and flags 
 gap holds a `fix:`-typed or breaking commit — exactly the class that has bitten before,
 in payroll. Its suggested SemVer bump is an input, not a verdict: the coordinator
 confirms or overrides it and states the reason in the release notes — it reads commit
-types, so it cannot see a breaking change the types don't reveal, and its `major` is never
-an agent's to cut (pre-1.0 it becomes a minor). Measured against `main`, never
+types, so it cannot see a breaking change the types don't reveal — the computed number
+(*Versioning*, above) also reads guard results and exports, and is the one a candidate
+carries (pre-1.0 a major becomes a minor). Measured against `main`, never
 `dev` — `git describe` from a `dev` checkout answers a stale question.
 
 Do not tag from `dev`. Do not tag a commit that has not passed the full suite on `main`.
@@ -4762,12 +4789,12 @@ colab landed --worktree <name>                    # landed → teardown, cargo �
 git checkout <base> && git merge --squash feat/<slug>-N   # base = trunk, or a declared line
 gh issue edit N --remove-assignee <claimer> --remove-label in-progress   # both halves — one alone is a half-claim; <claimer> = @me only if you claimed it (§5)
 
-# releasing — Tier A / exposure: released (who tags follows §6's release rung)
+# releasing — Tier A / exposure: released (who tags follows §6's release routes)
 git checkout main && git merge --no-ff dev && git push   # --no-ff, never squash
 colab release cut                                        # candidate v1.3.0-rc.N — refuses unless §6's four conditions hold
 git tag v1.3.0 && git push origin v1.3.0                 # final — automatic after 3 clean days where nothing deploys;
                                                          #   a human act where the tag deploys (deploy: tag / manual)
-# an agent picks patch or minor, never X.0.0; its reasoning goes in the release notes
+# the number is computed (majors too, with a migration section); its reasoning goes in the release notes
 ```
 
 ---
