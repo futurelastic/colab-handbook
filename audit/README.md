@@ -223,6 +223,20 @@ the handbook's current version, so a scheduled run is self-documenting.
     name (here, `handbook-sync`, `colab update`), so a block moved into `AGENTS.md` makes
     the repo read as unstamped.
 
+- **Instruction-file shape (#419)** — two more advisory (`warn`) checks, each opening with a
+  stable token so it can be grepped:
+  - **`prose-in-claude-md`** — `CLAUDE.md` holds anything but `@`-import lines, blank lines
+    and recognised blocks: the Conventions block (from its heading above the stamp to the next
+    heading of the same level), and paired tool blocks — the two pairs above plus any
+    `<!-- <name>:start … -->`…`<!-- <name>:end -->` pair (a UI package's workflow block, the
+    `colab:derived` span). The finding names the line ranges (blank-line gaps bridged) and
+    says whether the file is a thin shell with prose added or a legacy prose-only file.
+  - **`no-agents-md`** — the repo has a `CLAUDE.md` but no `AGENTS.md`. A repo with neither
+    file gets neither finding.
+  Byte-identical `CLAUDE.md`/`AGENTS.md` (a symlinked pair) count as one file and get no
+  prose finding. Warn, never fail: repos migrate over time, through `handbook-sync`'s graft
+  step (§6).
+
 - **Markdown anchor links resolve (#158)** — section numbers used to be cited by
   number (`§5`) from ~20 files, and nothing checked them: a renumber broke every
   reference silently, no CI failure, no advisory. The fix is anchor links, which

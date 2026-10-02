@@ -1591,6 +1591,8 @@ function auditRepo(target, ctx) {
   // #417: same posture — a tool block loaded twice, or the Conventions block moved out of the
   // file tools look it up in, is a repo-doc concern on every repo, the handbook's own included.
   checkInstructionFileBlocks(src, warn);
+  // #419: and prose left in CLAUDE.md / no AGENTS.md at all — same posture, same reason.
+  checkInstructionFileShape(src, warn);
 
   // ---- markdown anchor links resolve (#158) --------------------------------
   // Unconditional, same posture as checkClaudeMdSize above: general markdown hygiene,
@@ -2412,6 +2414,45 @@ function checkInstructionFileBlocks(src, warn) {
       );
     }
   }
+}
+
+// #419: the rule #417 documented, reported. CLAUDE.md holds only the `@AGENTS.md` import, blank
+// lines and recognised tool blocks (the Conventions block, paired `BEGIN:`/`<name>:start` blocks);
+// every line of repo prose belongs in AGENTS.md. Two findings, each named by a stable token at the
+// start of its text so a reader can grep for it:
+//
+//   prose-in-claude-md — CLAUDE.md carries anything else; the line ranges are named. Covers both
+//                        the legacy prose-only file and a thin shell with prose added next to the
+//                        import.
+//   no-agents-md       — the repo has a CLAUDE.md but no AGENTS.md, so its prose has nowhere to go.
+//                        A repo with neither file is not this check's business (no instruction
+//                        file at all is an adoption gap, reported elsewhere).
+//
+// WARN, never FAIL: existing repos migrate over time (handbook-sync's graft step moves the prose).
+// Byte-identical CLAUDE.md and AGENTS.md (a symlinked or copied pair) are one file here, as in
+// checkInstructionFileBlocks: there is nothing to move, and the prose is loaded once.
+function checkInstructionFileShape(src, warn) {
+  const claude = src.readFile("CLAUDE.md");
+  if (claude === null || claude === undefined) return;
+  const agents = src.readFile("AGENTS.md");
+  if (agents === null || agents === undefined) {
+    warn(
+      `no-agents-md: the repo has a CLAUDE.md but no AGENTS.md — repo prose belongs in AGENTS.md, with CLAUDE.md ` +
+      `reduced to \`@AGENTS.md\` plus tool blocks (CONVENTIONS.md §9 step 5; handbook-sync's graft step does the move) (#419)`,
+    );
+  } else if (agents === claude) {
+    return;
+  }
+  const residue = instructionFile.shellResidue(claude);
+  if (!residue.length) return;
+  const shape = instructionFile.isThinShell(claude)
+    ? "next to its @AGENTS.md import"
+    : "and it has no @AGENTS.md import (a legacy prose-only file)";
+  warn(
+    `prose-in-claude-md: CLAUDE.md lines ${instructionFile.lineRanges(residue, claude)} carry repo prose ${shape} — move ` +
+    `them to AGENTS.md and keep CLAUDE.md to the import, blank lines and tool blocks such as the Conventions ` +
+    `block (CONVENTIONS.md §9 step 5; handbook-sync's graft step does the move) (#419)`,
+  );
 }
 
 // `deploy: manual` promises that the hand-deploy procedure is written down and findable.
