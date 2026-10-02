@@ -4103,6 +4103,31 @@ hold the shape:
   stands, the Release says *tagged, not published*, and re-running the failed job publishes the
   existing tag; a version already on npm is skipped.
 
+**Release channels — consumers follow `stable` or `next`, not a hand-bumped pin (#445).** Two
+branches name the newest release of each kind, the git counterpart of npm's `latest` / `next`:
+
+- **`next`** — always the newest **candidate** (`vX.Y.Z-rc.N`). `colab release cut`, automatic or
+  by hand, fast-forwards it to the candidate's commit in the run that pushes the tag.
+- **`stable`** — always the newest **final** (`vX.Y.Z`). `colab release finalize`, automatic or
+  the human's final command, fast-forwards it to the final's commit; a later run that finds the
+  version already final repairs a `stable` a dead run left behind.
+
+**They are branches, not tags.** A moving tag is refused by every clone that already fetched it
+(`would clobber existing tag`), and a non-semver tag is read as "the newest version" by tag
+readers (`git describe --tags`, stamps). A branch moves cleanly and no tag reader sees it, so
+version tags stay immutable. **Nothing else writes them:** both move **forward only**, never
+forced — a channel that is not an ancestor of the new commit is reported and left alone, never
+overwritten — and [`pre-push-guard`](templates/pre-push-guard) refuses a hand push to either
+(the release commands push with their own process-identity variable, the `colab ship`
+precedent). `stable` sitting on an older commit than `next` is the design, not drift. A channel
+move is best-effort like the GitHub pre-release: the tag is already on the remote, so a channel
+that cannot move is a warning, never a reason to undo the tag.
+
+**What a consumer pins.** [`templates/release-auto.yml`](templates/release-auto.yml)'s
+`HANDBOOK_REF` defaults to `stable`; a repo may pin `next` (the fast channel) or an exact version
+tag (frozen — the one way to stop moving). When `stable` moves, that final's release notes say
+what changed.
+
 **Versioning** — SemVer. Patch for fixes, minor for features, major for breaking changes.
 Pre-1.0 repos use `v0.x.y`, treating minor as "meaningful increment".
 

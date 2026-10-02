@@ -1146,6 +1146,13 @@ come from here), computes its notes range from the previous **final** tag, and t
 version's newest candidate commit when one exists — and, when an agent has already tagged the final
 through `colab release finalize`, resumes from its publish-and-reconcile step.
 
+**The `next` channel (#445).** Every cut also fast-forwards the branch `next` — always the newest
+candidate — to the candidate's commit (`tools/lib/release-channel.js`), pushed with `COLAB_RELEASE=1`
+so `pre-push-guard` lets it through. Forward only, never forced: a `next` that is not an ancestor of
+the candidate is refused and left where it is. Best-effort like the pre-release: the tag already
+stands, so a failure is a warning and `--json` `channel: { channel, ok, action, detail }` says
+`ok: false`. `--dry` reports the move it would make. CONVENTIONS.md §6, *Release channels*.
+
 ### Release finalize
 
 `colab release finalize [--repo P] [--auto | --tag vX.Y.Z-rc.N [--answered-by N]] [--dry] [--json]` (#339)
@@ -1159,13 +1166,13 @@ daemon: every run re-measures from git and GitHub, and the decision is `tools/li
 | state | meaning | exit |
 |---|---|---|
 | `no-candidate` | no `vX.Y.Z-rc.N` whose version is not final yet | 1 |
-| `already-final` | the version is already tagged final; an open tracking issue for it is closed | 1 |
+| `already-final` | the version is already tagged final; an open tracking issue for it is closed, and a `stable` channel left behind is fast-forwarded to it (#445) | 1 |
 | `testing` | the test period has not ended, or a trunk run inside it is still in flight | 1 |
 | `held` | `release-hold` is on the tracking issue, or on a superseded version's still-open one | 1 |
 | `needs-new-candidate` | a regression was fixed after the period began, or (automatic-final row) trunk went red during it | 1 |
 | `refused` | a required check failed that a later run may clear | 1 |
 | `candidate-ready` | the final is a human act here: nothing tagged; `handoff` is the one command, also posted on the tracking issue | 0 |
-| `finalized` | an annotated `vX.Y.Z` is tagged on the candidate's commit and pushed, the tracking issue closed, and every issue the version carries told `Released in vX.Y.Z` (with `--dry`: would be) | 0 |
+| `finalized` | an annotated `vX.Y.Z` is tagged on the candidate's commit and pushed, the tracking issue closed, and every issue the version carries told `Released in vX.Y.Z`; the `stable` channel is fast-forwarded to it (#445) (with `--dry`: would be) | 0 |
 
 **The per-candidate state contract** — stable; `futurelastic/hangar#125` reads it:
 
@@ -1721,7 +1728,7 @@ UNKNOWN` rather than an empty path — silence there would read as "nothing furt
 which is precisely the misreading (a promoted `main` everyone believes is live) this exists to
 prevent.
 
-### `pre-push-guard` — trunk (and main) are push-protected locally
+### `pre-push-guard` — trunk, main and the release channels are push-protected locally
 
 `templates/pre-push-guard` is a POSIX-sh git `pre-push` hook that **refuses raw pushes to protected
 branches** (read from `.github/project.yml`):
@@ -1729,6 +1736,11 @@ branches** (read from `.github/project.yml`):
 - **trunk** — unless `COLAB_SHIP=1` (set by `colab ship`) or `COLAB_HUMAN=1`.
 - **main**, only where `trunk != main` (tiers A and C) — unless `COLAB_PROMOTE=1` (set by `colab promote`)
   or `COLAB_HUMAN=1`. `COLAB_SHIP` does **not** open main — `ship` is trunk-only by design.
+- **`next` and `stable`**, the release channels (#445) — unless `COLAB_RELEASE=1` (set by
+  `colab release cut` / `finalize` when they move a channel) or `COLAB_HUMAN=1`. Like the two
+  above, `COLAB_RELEASE` is a process-identity assertion no agent sets by hand
+  (`tools/lib/sanctioned-path-vars.test.js`). A repo that uses a branch of either name for
+  something else edits its copy of the hook.
 
 **`COLAB_SHIP` and `COLAB_PROMOTE` are process-identity assertions, not permissions, and no agent
 ever sets either by hand.** They mean "`colab ship`/`colab promote` ran its preconditions" — a
