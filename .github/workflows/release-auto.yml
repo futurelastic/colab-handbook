@@ -1,0 +1,187 @@
+# Release (auto) — the handbook's OWN copy of templates/release-auto.yml (#428, rollout wave 1).
+#
+# The template's header explains what this workflow does and why (cut on green trunk, finalize
+# daily, publish in the same run, a refusal is a warning). Read it there; this header records only
+# how this copy DIFFERS from the template, and why.
+#
+# 1. IT RUNS THIS CHECKOUT'S OWN tools/colab, NOT A PINNED HANDBOOK_REF (ruling on #428). The
+#    handbook is the one repo that ships the CLI it releases with, so it releases with the CLI at
+#    the sha being released. The checkout is `ref: main`, the same commit `colab release cut`
+#    fetches and tags (origin/main's head), so the CLI that decides is the commit it tags. No
+#    clone, no branch ref. Adopters keep the template's pin and move it to the first final that
+#    carries `release --auto`.
+#
+# 2. A RED CI RUN IS GATED IN A STEP, NOT A JOB-LEVEL `if:`. A run whose only job is skipped by
+#    `if:` concludes `skipped`, and the trunk read (`summarizeRunsForCommit`, tools/lib/git.js)
+#    counts any completed conclusion other than success/cancelled as not-green — so a skipped
+#    Release row would keep a sha red after a CI re-run turned it green. The gate step below ends
+#    green and switches the cut step off instead.
+#
+# 3. The route is not edited here: .github/project.yml (exposure: released, deploy: none,
+#    production: null) derives `public-tool` — candidates automatic, final automatic after a clean
+#    3-day test period (CONVENTIONS.md §6). The fleet reconciliation that scripts/release.sh runs
+#    after a final is NOT run here (no fleet clones on a runner); a human runs it afterwards.
+
+name: Release (auto)
+
+on:
+  workflow_run:
+    # ci.yml's `name:` (pinned by tools/lib/release-auto-template.test.js).
+    workflows: ["CI"]
+    types: [completed]
+    branches: [main]
+  schedule:
+    # The daily finalize (UTC). Off the hour on purpose — the top of the hour is when
+    # scheduled runs queue longest.
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+
+# One release run at a time; a second one waits rather than racing the first for the same
+# candidate number. Never cancelled mid-run: a half-finished run may have pushed a tag
+# without publishing it.
+concurrency:
+  group: release-auto
+  cancel-in-progress: false
+
+permissions: {}
+
+jobs:
+  release:
+    name: Cut, finalize, publish
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # push the tags, publish the GitHub Release
+      issues: write # finalize opens / comments on / closes the "release: vX.Y.Z" tracking issue
+      actions: read # read the runs at a commit (ci-green, full-suite, trunk-green)
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          ref: main
+          # Full history plus tags: versions, bumps and "previous final" are all read from
+          # git, and the on-trunk check refuses a shallow checkout outright.
+          fetch-depth: 0
+          # Left on deliberately: `colab release cut` / `finalize` push their tag over the
+          # checkout's origin. The token is this job's, scoped by `permissions:` above.
+          persist-credentials: true
+
+      # A red CI run on main is not a candidate. Gated here rather than by a job-level `if:` so
+      # this run concludes success, never `skipped` (header, point 2).
+      - name: Gate on the triggering CI run
+        id: gate
+        env:
+          EVENT: ${{ github.event_name }}
+          CONCLUSION: ${{ github.event.workflow_run.conclusion }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT" = "workflow_run" ] && [ "$CONCLUSION" != "success" ]; then
+            echo "cut=false" >> "$GITHUB_OUTPUT"
+            echo "CI concluded \`$CONCLUSION\` at $HEAD_SHA — nothing to cut." | tee -a "$GITHUB_STEP_SUMMARY"
+          else
+            echo "cut=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      # This checkout's own CLI, at the commit being released (header, point 1).
+      - name: Use this checkout's colab CLI
+        run: |
+          set -euo pipefail
+          echo "COLAB=$GITHUB_WORKSPACE/tools/colab" >> "$GITHUB_ENV"
+          echo "colab CLI at $(git rev-parse HEAD)" | tee -a "$GITHUB_STEP_SUMMARY"
+          # The tags are annotated; git needs an identity to write one.
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Cut a candidate (colab release cut --auto)
+        id: cut
+        if: steps.gate.outputs.cut == 'true' && (github.event_name == 'workflow_run' || github.event_name == 'workflow_dispatch')
+        run: |
+          set -uo pipefail
+          OUT="$RUNNER_TEMP/cut.json"
+          rc=0
+          node "$COLAB" release cut --auto --json > "$OUT" || rc=$?
+          # A verdict is JSON carrying `ok`; anything else is a run that never decided.
+          if ! jq -e 'has("ok")' "$OUT" > /dev/null 2>&1; then
+            echo "::error::colab release cut produced no verdict (exit $rc)"
+            cat "$OUT"
+            exit 1
+          fi
+          {
+            echo "### colab release cut --auto"
+            echo
+            jq -r '.checks[]? | "- \(if .ok then "✓" else "✗" end) **\(.condition)** — \(.detail)"' "$OUT"
+            echo
+          } >> "$GITHUB_STEP_SUMMARY"
+          if [ "$(jq -r '.created' "$OUT")" = "true" ]; then
+            TAG="$(jq -r '.tag' "$OUT")"
+            echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+            echo "Cut $TAG" | tee -a "$GITHUB_STEP_SUMMARY"
+          elif [ "$(jq -r '.noop' "$OUT")" = "true" ]; then
+            echo "No-op: nothing owed, or inside the cadence window." | tee -a "$GITHUB_STEP_SUMMARY"
+          elif [ "$(jq -r '.ok' "$OUT")" = "true" ]; then
+            echo "Verdict ok but nothing created." | tee -a "$GITHUB_STEP_SUMMARY"
+          else
+            echo "::warning::colab release cut refused: $(jq -r '[.checks[]? | select(.ok | not) | .condition] | join(", ")' "$OUT")"
+          fi
+
+      - name: Finalize the newest clean candidate (colab release finalize --auto)
+        id: finalize
+        if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+        run: |
+          set -uo pipefail
+          OUT="$RUNNER_TEMP/finalize.json"
+          rc=0
+          node "$COLAB" release finalize --auto --json > "$OUT" || rc=$?
+          if ! jq -e 'has("state")' "$OUT" > /dev/null 2>&1; then
+            echo "::error::colab release finalize produced no verdict (exit $rc)"
+            cat "$OUT"
+            exit 1
+          fi
+          STATE="$(jq -r '.state' "$OUT")"
+          {
+            echo "### colab release finalize --auto — $STATE"
+            echo
+            jq -r '.checks[]? | "- \(if .ok then "✓" else "✗" end) **\(.condition)** — \(.detail)"' "$OUT"
+            echo
+          } >> "$GITHUB_STEP_SUMMARY"
+          if [ "$(jq -r '.tagged' "$OUT")" = "true" ]; then
+            TAG="$(jq -r '.finalTag' "$OUT")"
+            echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+            echo "Finalized $TAG" | tee -a "$GITHUB_STEP_SUMMARY"
+          else
+            case "$STATE" in
+              refused|needs-new-candidate|held) echo "::warning::colab release finalize: $STATE" ;;
+              *) echo "Finalize: $STATE" ;;
+            esac
+          fi
+
+      # Publishes every tag THIS run created. In this run, never via a tag-push workflow:
+      # see "PUBLISHING HAPPENS IN THIS RUN" in the header.
+      - name: Publish GitHub Release (same run)
+        if: steps.cut.outputs.tag != '' || steps.finalize.outputs.tag != ''
+        env:
+          TAGS: ${{ steps.cut.outputs.tag }} ${{ steps.finalize.outputs.tag }}
+        run: |
+          set -euo pipefail
+          for TAG in $TAGS; do
+            if gh release view "$TAG" > /dev/null 2>&1; then
+              echo "$TAG already has a Release — skipping"
+              continue
+            fi
+            # Notes since the previous FINAL tag, candidate or final alike — never since an
+            # earlier candidate (the same rule as release-tag.yml).
+            PREV="$(git describe --tags --abbrev=0 --match 'v*.*.*' --exclude '*-*' "${TAG}^" 2>/dev/null || true)"
+            NOTES="$RUNNER_TEMP/notes-$TAG.md"
+            if [ -n "$PREV" ]; then
+              node "$COLAB" release-notes "${PREV}..${TAG}" --out "$NOTES"
+            else
+              printf '## %s\n\nFirst release.\n' "$TAG" > "$NOTES"
+            fi
+            case "$TAG" in
+              *-*) KIND=(--prerelease --latest=false) ;;
+              *)   KIND=(--latest) ;;
+            esac
+            gh release create "$TAG" --verify-tag --title "$TAG" --notes-file "$NOTES" --generate-notes "${KIND[@]}"
+            echo "Published $TAG" | tee -a "$GITHUB_STEP_SUMMARY"
+          done
