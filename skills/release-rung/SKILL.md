@@ -166,8 +166,10 @@ names the candidate. It **never clears one**.
   finished by the next run, which reads `already-final` and posts only what is missing.
 - **Then publish the GitHub Release:**
   - A repo carrying `templates/release-tag.yml` publishes it on the tag push.
-  - On the handbook itself, run `scripts/release.sh vX.Y.Z`, which finds the tag already pushed
-    and resumes from its publish-and-reconcile step.
+  - A repo carrying `templates/release-auto.yml` already published it in the run that tagged.
+  - On the handbook itself, its own `release-auto.yml` publishes in the same run (#428);
+    `scripts/release.sh vX.Y.Z` is the fallback and the fleet reconciliation — it finds the tag
+    (and any Release) already there and resumes from its publish-and-reconcile step.
   - Anywhere else, use §6's manual fallback line.
 
 **Human row** (`final: human`: `deploy: tag`, `deploy: manual`, or a `release:` block that
