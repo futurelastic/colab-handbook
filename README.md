@@ -129,6 +129,18 @@ normative file** — everything else in the repo serves it.
 | [`skills/`](skills/) | Portable session flow: `code-triage` (pick the next task, flagging hard ones for a plan) → `code-start` (open a session; runs `code-plan` when flagged) → `code-wrap` (distill + gate + hand off) → `code-ship` (grade + merge, human-authorized), plus `code-sweep` (clear out everything ALREADY DONE in one repo — or just a named set of issues or one session — running `code-wrap`+`code-ship` on each) `handbook-sync` (bring ONE repo up to the latest handbook, run from inside it), and `release-rung` (the manual fallback and explainer for the release workflow, which is the driver: walk one repo's release rung from a coordinator session — candidate, test period, `release-hold` veto, final — through `colab release cut`/`finalize`, never by hand), and `migration-review` (for whoever a repo binds to the migration-reviewer role: review a branch's migrations against the deploy engine and end in one verdict — GRANT with a review record, REWORK with a brief, or ESCALATE to a human — with a blind test set to run before binding a new reviewer). Installed as Claude Code skills by [`install.sh`](install.sh) — see *Setting up a machine* below. |
 | [`install.sh`](install.sh) | Sets up **your machine**: skills, the `colab` CLI, the pre-commit hook, the fleet list. Idempotent, and `--dry` shows you everything first. |
 
+## Install the CLI from npm
+
+The `colab` CLI is also published as a public npm package, **`@futurelastic/colab-handbook`**. The command you type stays `colab`.
+
+```sh
+npx @futurelastic/colab-handbook <command>      # one-off, nothing installed, no npm account needed
+npm i -g @futurelastic/colab-handbook           # then: colab <command>
+npm i -g @futurelastic/colab-handbook@next      # release candidates (vX.Y.Z-rc.N) instead of finals
+```
+
+The package carries what `colab` reads at runtime — the CLI, its `lib/`, `templates/` and `audit/audit.mjs` — and nothing else; `colab template` and `colab adopt` work from the registry copy and stamp the package's own version. The skills are **not** in it: they install with `./install.sh` from a clone (below), because they must symlink into `~/.claude/skills/`. Every tarball is checked file by file against an allowlist in CI (`scripts/check-pack-allowlist.mjs`).
+
 ## Setting up a machine
 
 Once per machine, before you adopt anything into a repo.

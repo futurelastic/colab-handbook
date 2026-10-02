@@ -18,6 +18,7 @@ for f in .githooks/install.sh templates/pre-commit-identity templates/pre-commit
          .githooks/pre-commit .githooks/pre-commit.d/*; do sh -n "$f"; done
 node scripts/check-text-bytes.mjs
 node audit/audit.mjs --local . >/dev/null
+node scripts/check-pack-allowlist.mjs
 
 base="$(git merge-base HEAD origin/main 2>/dev/null || echo HEAD)"
 tests=""
