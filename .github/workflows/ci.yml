@@ -114,6 +114,16 @@ jobs:
       # tests, git diff and the audit all stayed green. Cheap byte scan, catches the whole class.
       - name: No stray control bytes in tracked text files
         run: node scripts/check-text-bytes.mjs
+      # The npm tarball (#431): `npm pack --dry-run`, every packed file compared against an
+      # allowlist AND required to be tracked — a stray local file under an allowed directory fails.
+      # The second step proves the gate can fail: it plants a file and expects a refusal, so a gate
+      # that quietly stopped measuring cannot stay green.
+      - name: npm pack allowlist (privacy gate)
+        run: |
+          node scripts/check-pack-allowlist.mjs
+          echo stray > templates/zz-planted-stray.local
+          if node scripts/check-pack-allowlist.mjs; then echo "gate passed with a planted stray file"; exit 1; fi
+          rm -f templates/zz-planted-stray.local
       # The stamp heuristic decides whether a repo's file is "ours". A false positive there ends in
       # advice to overwrite that file, so it is the one piece of logic here with unit tests.
       #

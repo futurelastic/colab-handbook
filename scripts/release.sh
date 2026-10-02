@@ -3,9 +3,15 @@
 #
 # The handbook deliberately ships NO .github/workflows/release-tag.yml of its own
 # (release-tag.yml is a TEMPLATE it hands to other repos, not something it runs on itself).
-# THIS SCRIPT IS THE HANDBOOK'S RELEASE PATH: it tags, pushes the tag, publishes a GitHub
+# Since #428 the handbook runs its own copy of templates/release-auto.yml
+# (.github/workflows/release-auto.yml): it cuts candidates on green trunk, finalizes after the
+# clean test period, and publishes each Release in the same run — with this checkout's own CLI.
+# THIS SCRIPT IS THE HUMAN AND FALLBACK PATH: it tags, pushes the tag, publishes a GitHub
 # Release whose body is built by `colab release-notes`, and then — the whole point — runs the
 # fleet audit as a reconciliation report so a release is also the moment the fleet is checked.
+# The workflow cannot run that reconciliation (no fleet clones on a runner), so after an
+# automatic final a human runs this script for it: it finds the tag and the Release already
+# there and resumes at the reconciliation step.
 #
 # Candidates and finals are two paths (#338). A release CANDIDATE, vX.Y.Z-rc.N, is cut by
 # `colab release cut` — it checks CONVENTIONS.md §6's four conditions on the exact commit and pushes

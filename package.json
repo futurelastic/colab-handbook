@@ -1,0 +1,18 @@
+{
+  "name": "@futurelastic/colab-handbook",
+  "description": "colab CLI — issue claims, worktrees, releases and handbook adoption for parallel agent/human sessions. Zero dependencies.",
+  "license": "MIT",
+  "homepage": "https://github.com/futurelastic/colab-handbook#readme",
+  "repository": { "type": "git", "url": "git+https://github.com/futurelastic/colab-handbook.git" },
+  "bugs": { "url": "https://github.com/futurelastic/colab-handbook/issues" },
+  "bin": { "colab": "./tools/colab" },
+  "files": [
+    "tools/colab",
+    "tools/lib/*.js",
+    "!tools/lib/*.test.js",
+    "templates/",
+    "audit/audit.mjs"
+  ],
+  "publishConfig": { "access": "public", "provenance": true },
+  "engines": { "node": ">=18" }
+}

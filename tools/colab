@@ -8020,7 +8020,9 @@ function cmdVersion() {
 
 /** Current handbook version = nearest RELEASE tag (pre-releases skipped, #334); 'v0' before the first one. */
 function handbookVersion(root) {
-  return releaseTag.latestReleaseTag(root) || 'v0';
+  // Through handbookInfo, not a bare git call: a registry install (#431) has no git of its own and
+  // carries its version in package.json — handbookInfo knows both, and refuses a parent repo's tags.
+  return stamp.handbookInfo(root).version;
 }
 
 // *.yml/*.yaml are whole-file CI copies with a formulaic destination (.github/workflows/<name>.yml),

@@ -127,6 +127,18 @@ duy nhất** — mọi thứ còn lại trong repo chỉ phục vụ nó.
 | [`skills/`](skills/) | Flow phiên làm việc portable: `code-triage` (chọn việc tiếp theo, gắn cờ việc khó cần plan) → `code-start` (mở phiên; chạy `code-plan` khi có cờ) → `code-wrap` (chưng cất + gate + bàn giao) → `code-ship` (chấm điểm + merge, cần người xác nhận), cộng `code-sweep` (dọn sạch mọi việc ĐÃ XONG trong một repo — hoặc chỉ một nhóm issue hay một phiên được chỉ định — chạy `code-wrap`+`code-ship` từng cái) `handbook-sync` (kéo MỘT repo lên bản handbook mới nhất, chạy từ trong repo đó), và `release-rung` (đường dự phòng thủ công và phần giải thích cho release workflow — workflow mới là thứ tự chạy: đi hết nấc release của một repo từ phiên điều phối — candidate, thời gian thử, quyền phủ quyết `release-hold`, bản final — qua `colab release cut`/`finalize`, không bao giờ tag tay), và `migration-review` (cho người/agent mà repo gán vai migration-reviewer: review migration của một nhánh theo engine deploy thật và chốt đúng một verdict — GRANT kèm review record, REWORK kèm brief sửa, hoặc ESCALATE lên người — kèm bộ test mù phải chạy trước khi gán reviewer mới). [`install.sh`](install.sh) cài chúng thành skill Claude Code — xem mục *Cài đặt máy* ngay dưới. |
 | [`install.sh`](install.sh) | Cài đặt cho **máy của bạn**: skills, CLI `colab`, hook pre-commit, danh sách repo cho audit. Idempotent, và `--dry` cho xem trước mọi thứ. |
 
+## Cài CLI từ npm
+
+CLI `colab` còn được phát hành dạng package npm công khai **`@futurelastic/colab-handbook`**. Lệnh bạn gõ vẫn là `colab`.
+
+```sh
+npx @futurelastic/colab-handbook <lệnh>         # chạy một lần, không cài gì, không cần tài khoản npm
+npm i -g @futurelastic/colab-handbook           # rồi: colab <lệnh>
+npm i -g @futurelastic/colab-handbook@next      # bản ứng viên (vX.Y.Z-rc.N) thay vì bản final
+```
+
+Package chỉ chứa những gì `colab` đọc lúc chạy — CLI, `lib/`, `templates/` và `audit/audit.mjs` — không gì khác; `colab template` và `colab adopt` chạy được từ bản trên registry và đóng dấu đúng version của package. Các skill **không** nằm trong đó: chúng cài bằng `./install.sh` từ một bản clone (xem bên dưới), vì phải symlink vào `~/.claude/skills/`. Mỗi tarball được CI đối chiếu từng file với allowlist (`scripts/check-pack-allowlist.mjs`).
+
 ## Cài đặt máy
 
 Làm một lần cho mỗi máy, trước khi adopt handbook vào repo nào.
