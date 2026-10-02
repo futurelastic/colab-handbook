@@ -93,6 +93,7 @@ const releasePolicy = require("../tools/lib/release-policy.js");
 // #394: the owner's-branch block — shape and collisions, shared with `colab deliver` and every
 // push-site guard in the CLI, so the audit and the tool can never disagree about what it means.
 const ownerBranchLib = require("../tools/lib/owner-branch.js");
+const npmGuard = require("../tools/lib/npm-publish-guard.js");
 const { parseWorkflowOn, workflowFiresOnTag, prereleaseTagTriggers, workflowsFiringOnBranchPush } = require("../tools/lib/workflow-triggers.js");
 const shipBatch = require("../tools/lib/ship-batch.js");
 // #383: where migrations live — the one rule `colab ship`'s gate and `release cut` read; the audit
@@ -1605,6 +1606,7 @@ function auditRepo(target, ctx) {
   const deployWorkflows = workflows.filter((f) => /^deploy[-.]/.test(f));
   checkPrereleaseTagTrigger(src, workflows, deploy, fail, warn);
   checkReleaseAuto(src, workflows, cfg, warn);
+  checkPrivateNpm(src, workflows, fail, warn);
 
   const runbook = cfg && "runbook" in cfg ? cfg.runbook : null;
 
@@ -2520,6 +2522,20 @@ function releaseAutoFindings({ readFile, workflows, cfg }) {
 }
 function checkReleaseAuto(src, workflows, cfg, warn) {
   for (const text of releaseAutoFindings({ readFile: (p) => src.readFile(p), workflows, cfg })) warn(text);
+}
+
+// ---- a private repo never publishes to public npm (#432) ---------------------
+// Visibility is read from the GitHub API, and only when the repo has an npm surface at all (so an
+// npm-free repo costs no API call). Unreadable / no remote → reported as a warn, never passed.
+function checkPrivateNpm(src, workflows, fail, warn) {
+  const reader = { readFile: (p) => src.readFile(p), listDir: (p) => src.listDir(p), workflows };
+  if (!npmGuard.exposure(reader).problems.length) return;
+  const meta = src.metadata ? src.metadata() : { status: "unreadable" };
+  let visibility = null;
+  if (meta.status === "ok" && meta.data) {
+    visibility = meta.data.visibility || (meta.data.private === true ? "private" : meta.data.private === false ? "public" : null);
+  }
+  for (const f of npmGuard.findings({ ...reader, visibility })) (f.level === "fail" ? fail : warn)(f.text);
 }
 
 function checkRunbook(src, runbook, fail, warn, why = "deploy: manual") {
