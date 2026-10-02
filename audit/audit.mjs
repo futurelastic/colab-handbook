@@ -2562,15 +2562,24 @@ function checkReleaseAuto(src, workflows, cfg, warn) {
 // ---- a private repo never publishes to public npm (#432) ---------------------
 // Visibility is read from the GitHub API, and only when the repo has an npm surface at all (so an
 // npm-free repo costs no API call). Unreadable / no remote → reported as a warn, never passed.
+//
+// #442 rides on the same visibility read: a private repo whose workflows upload GitHub Release
+// assets is installing from somewhere other than npx — advisory (warn), never a failure.
 function checkPrivateNpm(src, workflows, fail, warn) {
   const reader = { readFile: (p) => src.readFile(p), listDir: (p) => src.listDir(p), workflows };
-  if (!npmGuard.exposure(reader).problems.length) return;
+  const npmSurface = npmGuard.exposure(reader).problems.length > 0;
+  const assetSurface = npmGuard.releaseAssetUploads(workflows, reader.readFile).length > 0;
+  if (!npmSurface && !assetSurface) return;
   const meta = src.metadata ? src.metadata() : { status: "unreadable" };
   let visibility = null;
   if (meta.status === "ok" && meta.data) {
     visibility = meta.data.visibility || (meta.data.private === true ? "private" : meta.data.private === false ? "public" : null);
   }
-  for (const f of npmGuard.findings({ ...reader, visibility })) (f.level === "fail" ? fail : warn)(f.text);
+  const all = [
+    ...(npmSurface ? npmGuard.findings({ ...reader, visibility }) : []),
+    ...(assetSurface ? npmGuard.assetFindings({ ...reader, visibility }) : []),
+  ];
+  for (const f of all) (f.level === "fail" ? fail : warn)(f.text);
 }
 
 function checkRunbook(src, runbook, fail, warn, why = "deploy: manual") {

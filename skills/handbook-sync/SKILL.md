@@ -463,6 +463,11 @@ and the audit is what catches it:
   `npm publish` / `pnpm publish` / `yarn npm publish` / `JS-DevTools/npm-publish`. Unknown
   visibility is a warning, not a pass. Fix: set `"private": true`, delete the publish step,
   and ship the app from git (`npx github:<org>/<repo>#<tag>`). A public repo is unaffected.
+- **A private repo's install path is npx, never a GitHub Release asset (#442, advisory).** The
+  audit warns when a *private* repository's workflows upload Release assets (`gh release upload`,
+  `gh release create <tag> <files>`, a release action given `files:`). A compiled tool moves its
+  binaries to dist refs (`templates/dist-refs.yml` + `templates/npx-launcher.mjs`, CONVENTIONS.md
+  §6 *Distribution*); an asset that is only a by-product (an SBOM) can stay — it is a warning.
 - A workflow may trigger on branches that no longer exist — CI passing on nothing.
 - **A convention label may have been added since this repo adopted.** The label set
   is part of the model, and a repo that adopted at an older version never back-filled

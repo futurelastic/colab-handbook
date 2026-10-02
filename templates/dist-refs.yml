@@ -1,0 +1,177 @@
+# Dist refs — TEMPLATE. Copy me into your repo at .github/workflows/dist-refs.yml.
+#
+# This is a starting point, not a dependency. Once you copy it, YOU OWN THIS FILE.
+# Edit it freely; nothing calls it remotely and nothing will update it for you.
+#
+# It is a `workflow_call` workflow, but only ever called from INSIDE your own repo
+# (`uses: ./.github/workflows/dist-refs.yml`) — never from the handbook. Copy-and-own still
+# holds: the file lives, in full, in the repo that runs it (templates/README.md).
+#
+# WHAT IT IS FOR. CONVENTIONS.md §6, *Distribution* (#442): every distributed tool installs with
+# `npx`. A PRIVATE repo shipping a COMPILED tool cannot use npm platform packages (`@<org>` on
+# public npm is always public, #432), and GitHub Release assets are not an install path. So the
+# binaries live in the same repo, as DIST REFS:
+#
+#   refs/tags/dist/vX.Y.Z/<os>-<arch>     one orphan commit per platform, holding exactly the
+#                                         files of that platform's build artifact plus a
+#                                         SHA256SUMS over them. No parent: it never touches
+#                                         trunk history, and nothing on trunk ever points at it.
+#
+# `npx github:<org>/<repo>#vX.Y.Z` then installs the repo's root package.json, whose `bin` is
+# templates/npx-launcher.mjs: it fetches exactly one of these refs with the git credentials npx
+# just used, verifies SHA256SUMS, installs the binary to a stable per-user path, and execs it.
+# Repository read access is the only lock — the same lock as the source.
+#
+# <os>-<arch> is Node's own `${process.platform}-${process.arch}` (darwin-arm64, linux-x64,
+# win32-x64, …) — the same names npm's `os`/`cpu` fields use, and what the launcher computes.
+#
+# HOW TO CALL IT — from the SAME run that cut the release tag. A tag pushed with GITHUB_TOKEN
+# triggers no other workflow, so "build on the tag push" silently never runs for a tag your
+# release workflow made (CONVENTIONS.md §6). Build every platform in that run, upload one
+# artifact per platform named `<artifact-prefix><os>-<arch>`, then:
+#
+#   dist:
+#     needs: [build]                       # your matrix build, one upload-artifact per platform
+#     uses: ./.github/workflows/dist-refs.yml
+#     permissions:
+#       contents: write
+#     with:
+#       version: ${{ needs.release.outputs.tag }}            # vX.Y.Z or vX.Y.Z-rc.N
+#       platforms: darwin-arm64 darwin-x64 linux-x64 linux-arm64 win32-x64
+#       bin: mytool                                          # EDIT: the launcher's binary name
+#
+# Each artifact must hold the binary at its top level, named `<bin>` (`<bin>.exe` on win32-*).
+# Anything else in the artifact rides along in the same ref and is covered by SHA256SUMS.
+#
+# REFUSALS — each is a red run with the reason, never a silent partial:
+#   - the repository is public, or its visibility cannot be read. A public compiled tool ships
+#     per-platform npm packages instead (CONVENTIONS.md §6, *Distribution*); a binary pushed
+#     into a public repo's refs is a download anyone can take.
+#   - `version` is not vX.Y.Z / vX.Y.Z-rc.N, or that tag does not exist on origin. A dist ref
+#     names a release; it never invents one.
+#   - a listed platform has no artifact, or its artifact lacks the binary.
+#
+# IT NEVER MOVES A REF. A dist ref that already exists is left alone and reported — like a
+# release tag, it is immutable once published (re-running a failed job pushes only the missing
+# ones). It never writes a commit to any branch.
+#
+# COST TO KNOW. Dist refs are tags, so a plain `git clone` of the repo (which fetches every
+# tag) downloads every platform of every release; later plain fetches do not (a tag is followed
+# only into fetched history, and an orphan is never in it). The launcher's own fetch is
+# `--depth 1 --no-tags` of one ref and pays for one binary. Contributors who mind clone with
+# `--no-tags`.
+#
+# The push step below is plain bash over git plumbing, with every input in `env:` — that is
+# what lets tools/lib/dist-refs-template.test.js run this exact script against a local origin.
+
+name: Dist refs
+
+on:
+  workflow_call:
+    inputs:
+      version:
+        description: 'Release tag the binaries belong to: vX.Y.Z or vX.Y.Z-rc.N. Must already exist on origin.'
+        required: true
+        type: string
+      platforms:
+        description: 'Space-separated <os>-<arch> list (Node process.platform-process.arch), one artifact each.'
+        required: true
+        type: string
+      bin:
+        description: 'Binary name inside each artifact (win32-* adds .exe).'
+        required: true
+        type: string
+      artifact-prefix:
+        description: 'Artifact name = <artifact-prefix><os>-<arch>.'
+        required: false
+        type: string
+        default: 'dist-'
+
+permissions:
+  contents: write
+
+jobs:
+  push:
+    name: Push dist refs
+    runs-on: ubuntu-latest
+    steps:
+      # Visibility from the API, never guessed: `github.event.repository.private` is absent on
+      # some caller events (schedule), and an absent value must refuse, not pass.
+      - name: Refuse a public (or unreadable) repository
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          vis="$(gh api "repos/${REPO}" --jq '.visibility' 2>/dev/null || true)"
+          case "$vis" in
+            private|internal) echo "repository visibility: $vis — dist refs allowed" ;;
+            public) echo "::error::${REPO} is public. Dist refs are for PRIVATE compiled tools; a public one ships per-platform npm packages (CONVENTIONS.md §6, Distribution)."; exit 1 ;;
+            *) echo "::error::could not read ${REPO}'s visibility (got '${vis}') — refusing rather than guessing (CONVENTIONS.md §6, Distribution)."; exit 1 ;;
+          esac
+
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          fetch-depth: 1
+
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: ${{ inputs.artifact-prefix }}*
+          path: dist-in
+
+      - name: Push one orphan ref per platform
+        env:
+          VERSION: ${{ inputs.version }}
+          PLATFORMS: ${{ inputs.platforms }}
+          BIN: ${{ inputs.bin }}
+          PREFIX: ${{ inputs.artifact-prefix }}
+          ARTIFACTS: dist-in
+          REMOTE: origin
+          GIT_AUTHOR_NAME: github-actions[bot]
+          GIT_AUTHOR_EMAIL: 41898282+github-actions[bot]@users.noreply.github.com
+          GIT_COMMITTER_NAME: github-actions[bot]
+          GIT_COMMITTER_EMAIL: 41898282+github-actions[bot]@users.noreply.github.com
+        run: |
+          set -euo pipefail
+          # --- dist-refs push script (begin) ---
+          if ! printf '%s' "$VERSION" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(-rc\.[0-9]+)?$'; then
+            echo "::error::version '$VERSION' is not vX.Y.Z or vX.Y.Z-rc.N"; exit 1
+          fi
+          if [ -z "$(git ls-remote --tags "$REMOTE" "refs/tags/$VERSION")" ]; then
+            echo "::error::tag $VERSION does not exist on $REMOTE — dist refs name a release, they never invent one"; exit 1
+          fi
+          [ -n "$PLATFORMS" ] || { echo "::error::no platforms given"; exit 1; }
+
+          # Check every platform before pushing any, so a missing artifact never leaves a partial set.
+          for plat in $PLATFORMS; do
+            dir="$ARTIFACTS/$PREFIX$plat"
+            exe="$BIN"; case "$plat" in win32-*) exe="$BIN.exe" ;; esac
+            [ -f "$dir/$exe" ] || { echo "::error::$plat: no $exe in artifact $PREFIX$plat ($dir)"; exit 1; }
+          done
+
+          pushed=0; kept=0
+          for plat in $PLATFORMS; do
+            ref="refs/tags/dist/$VERSION/$plat"
+            if [ -n "$(git ls-remote "$REMOTE" "$ref")" ]; then
+              echo "::notice::$ref already exists — left alone (dist refs never move)"
+              kept=$((kept + 1)); continue
+            fi
+            dir="$ARTIFACTS/$PREFIX$plat"
+            sums="$(mktemp)"; tree_in="$(mktemp)"
+            # Top-level files only, sorted, so the tree and SHA256SUMS are deterministic.
+            for f in $(cd "$dir" && find . -maxdepth 1 -type f ! -name SHA256SUMS | sed 's|^\./||' | LC_ALL=C sort); do
+              sha="$(sha256sum "$dir/$f" | cut -d' ' -f1)"
+              printf '%s  %s\n' "$sha" "$f" >> "$sums"
+              blob="$(git hash-object -w "$dir/$f")"
+              printf '100755 blob %s\t%s\n' "$blob" "$f" >> "$tree_in"
+            done
+            printf '100644 blob %s\tSHA256SUMS\n' "$(git hash-object -w "$sums")" >> "$tree_in"
+            tree="$(LC_ALL=C sort -k4 "$tree_in" | git mktree)"
+            commit="$(git commit-tree "$tree" -m "dist $VERSION $plat")"   # no -p: an orphan
+            git push "$REMOTE" "$commit:$ref"
+            echo "pushed $ref -> $commit"
+            pushed=$((pushed + 1))
+            rm -f "$sums" "$tree_in"
+          done
+          echo "dist refs for $VERSION: $pushed pushed, $kept already present"
+          # --- dist-refs push script (end) ---

@@ -101,3 +101,77 @@ test('audit end to end: a repo with no GitHub remote and an npm gap warns instea
     assert.strictEqual(texts[0].level, 'warn');
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
+
+// ---- #442: GitHub Release assets are not an install path (advisory) ---------------------------
+const assets = (files, visibility) => guard.assetFindings({ ...reader(files), visibility });
+const wf = (body) => ({ '.github/workflows/rel.yml': body });
+
+test('#442 private repo uploading Release assets warns — every upload spelling', () => {
+  for (const body of [
+    'steps:\n  - run: gh release upload "$TAG" dist/tool-linux-x64\n',
+    'steps:\n  - run: gh release create "$TAG" --title "$TAG" dist/*\n',
+    'steps:\n  - run: gh release create v1.0.0 tool.tar.gz --notes "x"\n',
+    'steps:\n  - uses: softprops/action-gh-release@v2\n    with:\n      files: dist/*\n',
+    'steps:\n  - uses: ncipollo/release-action@v1\n    with:\n      artifacts: "dist/*.zip"\n',
+    'steps:\n  - uses: svenstaro/upload-release-action@v2\n',
+    'steps:\n  - uses: actions/upload-release-asset@v1\n',
+  ]) {
+    const f = assets(wf(body), 'private');
+    assert.strictEqual(f.length, 1, body);
+    assert.strictEqual(f[0].level, 'warn', 'advisory, never a failure');
+    assert.match(f[0].text, /rel\.yml:\d+ .*Release asset.*dist refs/);
+  }
+});
+
+test('#442 notes-only releases are not asset uploads (the handbook\'s own release templates)', () => {
+  for (const body of [
+    'steps:\n  - run: gh release create "$TAG" --verify-tag --title "$TAG" --notes-file "$NOTES" --generate-notes "${KIND[@]}"\n',
+    'steps:\n  - run: gh release create v1.0.0 --notes "a.b release" -t "v1.0.0"\n',
+    'steps:\n  - uses: softprops/action-gh-release@v2\n    with:\n      body_path: NOTES.md\n  - name: next\n    with:\n      files: other.txt\n',
+    'steps:\n  - run: echo ok # gh release upload v1 x.tgz\n',
+  ]) {
+    assert.deepStrictEqual(assets(wf(body), 'private'), [], body);
+  }
+  for (const t of ['release-auto.yml', 'release-tag.yml']) {
+    const text = fs.readFileSync(path.join(__dirname, '..', '..', 'templates', t), 'utf8');
+    assert.deepStrictEqual(assets({ [`.github/workflows/${t}`]: text }, 'private'), [], t);
+  }
+});
+
+test('#442 public repos pass; unknown visibility is one warn naming every site', () => {
+  const body = 'steps:\n  - run: gh release upload v1 a.tgz\n  - run: gh release upload v1 b.tgz\n';
+  assert.deepStrictEqual(assets(wf(body), 'public'), []);
+  const f = assets(wf(body), null);
+  assert.strictEqual(f.length, 1);
+  assert.match(f[0].text, /could not be read.*rel\.yml:2.*rel\.yml:3/);
+  assert.deepStrictEqual(assets({ 'README.md': 'hi' }, null), []);
+});
+
+test('#442 audit end to end: a no-remote repo uploading Release assets warns', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'asset-guard-'));
+  try {
+    const g = (...a) => execFileSync('git', a, { cwd: dir, stdio: 'ignore' });
+    g('init', '-q', '-b', 'main', '.');
+    g('config', 'user.email', 't@example.invalid'); g('config', 'user.name', 't');
+    g('config', 'core.hooksPath', path.join(dir, '.nohooks'));
+    fs.mkdirSync(path.join(dir, '.github', 'workflows'), { recursive: true });
+    fs.writeFileSync(path.join(dir, '.github', 'project.yml'), 'tier: B\ntrunk: main\nproduction: null\ndeploy: none\nstack: go\n');
+    fs.writeFileSync(path.join(dir, '.github', 'workflows', 'rel.yml'), 'on: push\njobs:\n  r:\n    runs-on: ubuntu-latest\n    steps:\n      - run: gh release upload v1 dist/tool\n');
+    g('add', '-A'); g('commit', '-q', '-m', 'chore: fixture');
+    let out;
+    try { out = execFileSync('node', [path.join(__dirname, '..', '..', 'audit', 'audit.mjs'), '--json', '--local', dir], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }); }
+    catch (e) { out = e.stdout; }
+    const hits = JSON.parse(out).results[0].findings.filter((f) => /Release-asset install rule/.test(f.text));
+    assert.strictEqual(hits.length, 1);
+    assert.strictEqual(hits[0].level, 'warn');
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('#442 release-tag.yml\'s ATTACH_ARTIFACTS switch: off as shipped, reported once turned on', () => {
+  const text = fs.readFileSync(path.join(__dirname, '..', '..', 'templates', 'release-tag.yml'), 'utf8');
+  assert.match(text, /ATTACH_ARTIFACTS: "false"/, 'the template ships the switch off');
+  const on = text.replace('ATTACH_ARTIFACTS: "false"', 'ATTACH_ARTIFACTS: "true"');
+  const f = assets({ '.github/workflows/release.yml': on }, 'private');
+  assert.strictEqual(f.length, 1);
+  assert.match(f[0].text, /softprops\/action-gh-release/);
+});

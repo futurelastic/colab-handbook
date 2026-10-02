@@ -4139,6 +4139,68 @@ Do not tag from `dev`. Do not tag a commit that has not passed the full suite on
 `trunk: dev` repo the candidate is cut on the promotion merge, and its manifest version is read
 there — a version bump reaches `main` through the promotion, never after it.
 
+### Distribution — one install surface: npx (#442)
+
+The release route decides *when* a version exists (the rung above); this decides *how anyone
+installs it*. **Every distributed tool installs with `npx`**, so installing looks the same
+everywhere and no user needs the `gh` CLI or a token. **GitHub Releases are not an install
+path** — a Release carries the summary, never the bits a user runs (owner ruling, 2026-10-02).
+
+| Repository | Install command | Where compiled binaries come from |
+|---|---|---|
+| public, JS | `npx @<org>/<pkg>` | (none) |
+| public, compiled | `npx @<org>/<pkg>` | per-platform npm packages (`optionalDependencies`, each with `os`/`cpu`) — no `postinstall` download |
+| private, JS | `npx github:<org>/<repo>#vX.Y.Z` | (none — built by `prepare` if it needs building) |
+| private, compiled | `npx github:<org>/<repo>#vX.Y.Z` | **dist refs** in the same repo (below) |
+
+A private repo never reaches public npm — `@<org>` there is always public (#432, above) — so
+both private rows install from git, where repository read access is the access control.
+
+**Dist refs — how a private compiled tool ships its binaries.** The release run builds every
+platform and pushes one **orphan** commit per platform to `refs/tags/dist/vX.Y.Z/<os>-<arch>`,
+holding just that platform's binary and a `SHA256SUMS` over it. `<os>-<arch>` is Node's
+`process.platform`-`process.arch` (`darwin-arm64`, `linux-x64`, `win32-x64`), the names npm's
+`os`/`cpu` use. The commits have no parent, so they never touch trunk history. The repo's root
+`package.json` (`"private": true`) carries a small launcher as its `bin`. At `#vX.Y.Z`, the
+launcher fetches exactly one ref, `git fetch --depth 1 --no-tags <origin> refs/tags/dist/vX.Y.Z/<os>-<arch>`,
+**with the same git and the same URL npx just cloned from** — so with the same credentials —
+verifies the checksum, copies the binary to a stable per-user path, and execs it. Repository read
+access is the only lock, exactly as for the source. Both halves are templates:
+[`templates/dist-refs.yml`](templates/dist-refs.yml) (a `workflow_call` workflow the repo's own
+release workflow calls; it refuses a public or unreadable repository, a version that is not a
+tag, and a platform without its binary, and never moves a dist ref that exists) and
+[`templates/npx-launcher.mjs`](templates/npx-launcher.mjs) (Node ≥ 18, zero dependencies).
+
+- **The launcher installs the release npx was asked for.** It reads the `#vX.Y.Z` committish from
+  the installing project's own record of the package, not from the manifest — a candidate
+  `#vX.Y.Z-rc.N` and its final carry the same manifest version, and only the committish tells
+  them apart. Where no record exists (a global install), the manifest version is the fallback; an
+  environment variable overrides both; with none of them it refuses rather than guessing.
+- **The checksum proves the bytes, not the publisher.** `SHA256SUMS` lives in the same ref as the
+  binary, so it catches a truncated or corrupted fetch. The trust anchor is write access to the
+  repository, as it is for the source npx just ran.
+- **A dist ref is a tag, and a full clone pays for it.** A plain `git clone` fetches every tag,
+  including every platform of every release; later plain fetches do not (a tag is followed only
+  into fetched history, and an orphan is never in it). Contributors who mind clone with
+  `--no-tags`. npm's own tag-to-version parsing ignores dist refs (`v0.4.0-rc.1/darwin-x64` is not
+  a valid version), so a `#semver:` install range is unaffected.
+
+**Rules that apply to every row:**
+
+- **Publish or push in the same run as the release cut.** A tag made with `GITHUB_TOKEN` triggers
+  no other workflow, so a "build on tag push" workflow never runs for a tag the release workflow
+  made — the same reason the Release itself is published in that run.
+- **Trusted publishing (OIDC) for npm, never a token** — the npm job's first rule, above.
+- **A long-running tool never runs from npx's cache.** npm may prune that cache under a live
+  process. A tool that runs as a service has an `init`/`install` step that copies it to a stable
+  path first and points the service there. The launcher already runs every binary from its stable
+  path, and prints it on `--print-path` for exactly this wiring.
+
+The audit reports a **private** repository whose workflows upload GitHub Release assets
+(`gh release upload`, `gh release create <tag> <files>`, a release action given `files:`) as
+**advisory** (`warn`): an asset can be a legitimate by-product — an SBOM, a checksum list — so it is
+never a failure, but an asset that is the install path asks every user for `gh`.
+
 ---
 
 ## 7. CI and toolchain
