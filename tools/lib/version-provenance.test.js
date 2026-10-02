@@ -52,6 +52,7 @@ test('working tree: the git-derived version and branch, as before', () => {
   copyCli(path.join(root, 'tools'));
   fs.writeFileSync(path.join(root, 'package.json'), JSON.stringify({ name: stamp.PACKAGE_NAME, version: '9.9.9' }));
   git(root, 'init', '-q', '-b', 'main');
+  git(root, 'config', 'core.hooksPath', path.join(root, '.nohooks'));
   git(root, 'add', '-A');
   git(root, 'commit', '-q', '-m', 'init');
   git(root, 'tag', 'v1.2.3');
