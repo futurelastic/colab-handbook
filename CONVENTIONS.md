@@ -3314,6 +3314,19 @@ file fits `trunk: main` and `trunk: dev` + `deploy: tag` (#429): on the latter `
 when trunk is promoted, so the promotion's green CI run is the trigger, and the CLI cuts only when
 `main`'s head is a promotion of trunk.
 
+**On a private repo the release workflow runs on the repo's own runners (#453).** It fires on
+every green CI run on `main`, so a job of it that fails is a failed run at `main`'s head, and
+`colab ship` reads that as trunk not green. On a private (or internal) repo GitHub-hosted minutes
+are billed, and a billing refusal stops a hosted job before it starts — measured twice in a row on
+one adopting repo, the release workflow being the only one on its trunk still on hosted runners.
+So its jobs run on the self-hosted label the repo's CI already uses; `ubuntu-latest` is right only
+on a public repo, where hosted minutes are free. The npm publish job is the one exception, hosted
+everywhere because npm trusted publishing requires it, and it only ever runs on a public repo
+(below). The label is a literal edit point in the template, not an expression keyed on visibility:
+a scheduled run's payload carries no repository, so such a switch would quietly pick hosted on the
+daily run. The audit flags a private repo whose release workflow still runs a hosted job and names
+the label its other workflows use (advisory; unreadable visibility reports nothing).
+
 **Who promotes is `promotion:`, and the release workflow honours it (#440).** Where a `deploy:
 tag` repo declares `promotion: main-loop`, the workflow's daily run first runs `colab promote
 --auto`: when trunk's head CI is green and trunk is ahead of `main`, it merges trunk into `main`

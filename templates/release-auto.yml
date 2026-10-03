@@ -113,6 +113,26 @@
 # `npm` job, which sets up its own Node for npm's trusted publishing (EDIT point there for
 # a package that needs a build). The npm job needs a HANDBOOK_REF that carries #433; an
 # older CLI gives no npm verdict and nothing is published to npm.
+#
+# RUNNERS — ON A PRIVATE REPO, YOUR OWN (#453). This workflow fires on every green CI run on main,
+# so any of its jobs failing is a failed run at main's head, and `colab ship` reads that as main
+# not green. On a PRIVATE (or internal) repo GitHub-hosted minutes are billed, and when the
+# owner's billing fails GitHub refuses a hosted job before it starts: main goes red, every landing
+# is refused until a human steps in — measured twice in a row on one adopting repo, where this was
+# the only workflow on main still on hosted runners. So:
+#   private / internal repo   `release`, `npm-record` (and `deploy`, if you enable it) run on the
+#                             SAME self-hosted label your ci.yml's trunk jobs use. The runner needs
+#                             git, node, gh and jq on its PATH (GitHub-hosted images have all four).
+#   public repo               `ubuntu-latest` is fine — hosted minutes are free there.
+#   the `npm` job             GitHub-hosted on every repo: npm trusted publishing requires it. It only
+#                             runs on a public repo (a private one is refused outright, #432), so it
+#                             is never billed.
+# The trade-off, stated: a self-hosted release job queues behind your own runners, and an offline
+# pool delays a candidate — it never paints main red the way a refused hosted job does. The label
+# is a literal EDIT point, not an expression keyed on visibility: `github.event.repository` is not
+# in a scheduled run's payload, so a visibility switch would silently pick hosted on exactly the
+# daily run. `colab audit` flags a private repo whose release workflow still runs hosted, naming
+# the label your other workflows already use.
 
 name: Release (auto)
 
@@ -156,7 +176,9 @@ jobs:
     # the whole run as `skipped` at that main sha, and `colab ship` reads any finished run that is
     # neither success nor cancelled as "not green". Re-run CI green on that sha and the skipped
     # Release (auto) row would still sit beside it, refusing every ship until main moves.
-    runs-on: ubuntu-latest # EDIT: self-hosted label if this repo needs one.
+    # EDIT: PRIVATE repo → your ci.yml's self-hosted trunk label, e.g. [self-hosted, linux]
+    # (RUNNERS, above). ubuntu-latest only on a public repo.
+    runs-on: ubuntu-latest
     permissions:
       contents: write # push the tags (and, with promotion: main-loop, the promotion), publish the GitHub Release
       issues: write # finalize opens / comments on / closes the "release: vX.Y.Z" tracking issue
@@ -484,7 +506,8 @@ jobs:
     name: Record the npm outcome on the Release
     needs: [release, npm]
     if: always() && needs.release.outputs.npm == 'true'
-    runs-on: ubuntu-latest # EDIT: self-hosted label if this repo needs one.
+    # EDIT: the same label as `release` above — PRIVATE repo → self-hosted (RUNNERS, above).
+    runs-on: ubuntu-latest
     permissions:
       contents: write # edit the Release notes
     env:
@@ -533,7 +556,7 @@ jobs:
     name: Deploy the final (deploy-tag-fast)
     needs: release
     if: needs.release.outputs.deploy-tag != ''
-    runs-on: ubuntu-latest # EDIT: the runner your deploy needs (self-hosted label, etc.).
+    runs-on: ubuntu-latest # EDIT: the runner your deploy needs — self-hosted on a PRIVATE repo (RUNNERS, above).
     environment: production # EDIT: the GitHub environment holding your deploy secrets, or remove.
     permissions:
       contents: read # check out the tag
