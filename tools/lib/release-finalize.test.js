@@ -117,6 +117,39 @@ test('trunkGreenVerdict: a foreign workflow or a pull_request run cannot veto; u
   assert.strictEqual(rf.trunkGreenVerdict([], TG).ok, true, 'no run in the window is clean');
 });
 
+test('#437 windowBranches: main alone on trunk: main; trunk: dev reads dev AND main', () => {
+  assert.deepStrictEqual(rf.windowBranches('main'), ['main']);
+  assert.deepStrictEqual(rf.windowBranches(undefined), ['main'], 'no trunk: declared reads main, as before');
+  assert.deepStrictEqual(rf.windowBranches('dev'), ['dev', 'main']);
+  assert.deepStrictEqual(rf.windowBranches('develop'), ['develop', 'main'], 'any trunk: spelling, not a fixed one');
+});
+
+test('#437 mergeWindowRuns: tags each row with its branch, dedups by databaseId, fails closed on any unread branch', () => {
+  const m = rf.mergeWindowRuns([
+    { branch: 'dev', read: { runs: [run({ databaseId: 1 }), run({ databaseId: 2 })], truncated: false } },
+    { branch: 'main', read: { runs: [run({ databaseId: 2 }), run({ databaseId: 3 })], truncated: false } },
+  ]);
+  assert.deepStrictEqual(m.runs.map((r) => [r.databaseId, r.branch]), [[1, 'dev'], [2, 'dev'], [3, 'main']]);
+  assert.strictEqual(m.truncated, false);
+  assert.strictEqual(rf.mergeWindowRuns([{ branch: 'dev', read: null }, { branch: 'main', read: { runs: [], truncated: false } }]), null, 'a window missing one branch is not clean');
+  assert.strictEqual(rf.mergeWindowRuns([{ branch: 'dev', read: { runs: [], truncated: true } }, { branch: 'main', read: { runs: [], truncated: false } }]).truncated, true);
+  assert.strictEqual(rf.mergeWindowRuns([]), null);
+});
+
+test('#437 trunkGreenVerdict over dev + main: a red dev run vetoes; a later run on another branch never settles a cancellation', () => {
+  const B = { ...TG, branches: ['dev', 'main'] };
+  const red = rf.trunkGreenVerdict([run({ branch: 'main' }), run({ branch: 'dev', conclusion: 'failure' })], B);
+  assert.deepStrictEqual([red.ok, red.permanent], [false, true]);
+  assert.match(red.detail, /failure on dev/);
+  const cross = rf.trunkGreenVerdict([run({ branch: 'dev', conclusion: 'cancelled' }), run({ branch: 'main', createdAt: at(1.1) })], B);
+  assert.strictEqual(cross.ok, false, 'main\'s later success tested other code than the cancelled dev run');
+  assert.match(cross.detail, /cancelled on dev/);
+  const same = rf.trunkGreenVerdict([run({ branch: 'dev', conclusion: 'cancelled' }), run({ branch: 'dev', createdAt: at(1.1) })], B);
+  assert.strictEqual(same.ok, true);
+  assert.match(same.detail, /on dev \+ main/);
+  assert.match(rf.trunkGreenVerdict(null, B).detail, /on dev \+ main failed/);
+});
+
 // ---- regressions --------------------------------------------------------------------------------
 
 test('regressionVerdict: open refuses; closed after the start needs a new candidate; closed before is fine', () => {

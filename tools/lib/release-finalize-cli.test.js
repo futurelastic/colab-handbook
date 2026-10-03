@@ -40,7 +40,7 @@ const flag = (n) => { const i = a.indexOf(n); return i === -1 ? null : a[i + 1];
 st.calls.push(a.join(' ')); save();
 if (a[0] === '--version') out('gh version 0.0.0 (fixture)');
 if (a[0] === 'auth' && a[1] === 'status') process.exit(0);
-if (a[0] === 'run' && a[1] === 'list') out(a.includes('--created') ? st.runsSince : st.runsAtCommit);
+if (a[0] === 'run' && a[1] === 'list') out(a.includes('--created') ? ((st.runsSinceByBranch || {})[flag('--branch')] || st.runsSince) : st.runsAtCommit);
 if (a[0] === 'issue' && a[1] === 'list') out(st.issues);
 if (a[0] === 'issue' && a[1] === 'create') {
   const number = st.next++;
@@ -385,4 +385,43 @@ test('#424: a manifest that disagrees with the version refuses at the cut, befor
   const cutR = colab(fx, ['cut'], { env: { GIT_COMMITTER_DATE: ago(5) } });
   assert.strictEqual(cutR.code, 1, 'the cut itself refuses on the same check');
   assert.strictEqual(cutR.body.checks.find((c) => c.condition === 'manifest-version').ok, false);
+});
+
+// ---- trunk: dev + deploy: tag — the trunk-green window reads dev too (#437) ---------------------
+
+const DEV_TAG_YML = 'trunk: dev\nexposure: released\nproduction: https://example.invalid\ndeploy: tag\nstack: node\n';
+
+test('#437 trunk: dev: the trunk-green window reads dev AND main — a red dev run during the period is reported', () => {
+  const fx = fixture(DEV_TAG_YML);
+  cutCandidate(fx, 5);
+  finalize(fx);
+  ageTracking(fx, 4);
+  writeState(fx, (s) => {
+    s.runsSinceByBranch = {
+      main: [{ headSha: 'a'.repeat(40), status: 'completed', conclusion: 'success', workflowName: 'ci', event: 'push', createdAt: ago(3), databaseId: 50 }],
+      dev: [{ headSha: 'b'.repeat(40), status: 'completed', conclusion: 'failure', workflowName: 'ci', event: 'push', createdAt: ago(2), databaseId: 51 }],
+    };
+    s.calls = [];
+  });
+  const r = finalize(fx, ['--dry']);
+  const tg = r.body.checks.find((c) => c.condition === 'trunk-green');
+  assert.strictEqual(tg.ok, false, r.out + r.err);
+  assert.match(tg.detail, /ci failure on dev at bbbbbbb/);
+  assert.strictEqual(r.body.state, 'candidate-ready', 'a human-final row still hands over the click — the claim it carries is now an honest one');
+  const listed = readState(fx).calls.filter((c) => /^run list --branch \S+ --created/.test(c)).map((c) => c.split(' ')[3]);
+  assert.deepStrictEqual(listed.sort(), ['dev', 'main']);
+
+  writeState(fx, (s) => { s.runsSinceByBranch.dev[0].conclusion = 'success'; });
+  const ok = finalize(fx, ['--dry']).body.checks.find((c) => c.condition === 'trunk-green');
+  assert.strictEqual(ok.ok, true);
+  assert.match(ok.detail, /2 run\(s\) on dev \+ main/);
+});
+
+test('#437 trunk: main still reads main alone', () => {
+  const fx = fixture();
+  cutCandidate(fx, 5);
+  writeState(fx, (s) => { s.calls = []; });
+  finalize(fx, ['--dry']);
+  const listed = readState(fx).calls.filter((c) => /^run list --branch \S+ --created/.test(c)).map((c) => c.split(' ')[3]);
+  assert.deepStrictEqual(listed, ['main']);
 });
