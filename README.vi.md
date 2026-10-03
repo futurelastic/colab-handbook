@@ -185,6 +185,7 @@ nếu bạn thật sự chỉ cần bấy nhiêu.
 | `--hooks` | Trỏ git của clone này vào `.githooks/`, ở đó `pre-commit` chạy lần lượt mọi check trong `pre-commit.d/` — quét secret bằng gitleaks, và quét danh tính (identity) vốn cần một danh sách từ khoá do bạn cấp bằng đường dẫn và giữ NGOÀI mọi repo (xem [`templates/README.md`](templates/README.md)). `core.hooksPath` nằm trong `.git/config` nên là cấu hình per-clone, per-máy, không đi theo repo. |
 | `--fleet` | Tạo `~/.colab/repos.txt` từ `audit/repos.txt`, chỉ khi file chưa tồn tại. Danh sách đó cố tình nằm ngoài repo: nó ghi tên các repo private của bạn, còn repo này thì public. |
 | `--all` | `--tools --hooks --fleet`. |
+| `--notify-url <url>` | Ghi `notifyUrl` vào `~/.colab/config.json` bằng URL nhận event của một observer chạy trên máy, chỉ khi khoá đó chưa có — giá trị đang có không bao giờ bị ghi đè. Không truyền flag thì `--tools` lấy URL từ `~/.colab/notify-endpoint` nếu observer trên máy đã khai ở đó; không có thì in rõ `notifyUrl` đang trống và sẽ mất những event nào. Xem [`tools/README.md`](tools/README.md#notifyurl--optional-event-push-off-by-default). |
 | `--dry` | In ra sẽ làm gì, không thay đổi gì. Ghép được với mọi flag trên. |
 
 **Service luôn-bật phải gọi `~/.colab/bin/colab`.** Bản CLI symlink chạy theo

@@ -302,3 +302,43 @@ test('install.sh --tools --fleet creates an empty state file, never overwrites o
   assert.strictEqual(tpl.status, 1);
   assert.match(tpl.stderr, /frozen copy .* no templates\//);
 });
+
+// #414 — a new machine with a local observer either gets notifyUrl or is told plainly it did not.
+test('install.sh --tools seeds notifyUrl from a declared endpoint; says plainly when there is none', (t) => {
+  const bare = tmp(t);
+  const r0 = runInstall(bare, ['--tools']);
+  assert.strictEqual(r0.status, 0, r0.stdout + r0.stderr);
+  assert.match(r0.stdout, /notifyUrl is UNSET/);
+  const cfg0 = path.join(bare, '.colab', 'config.json');
+  assert.ok(!fs.existsSync(cfg0) || !JSON.parse(fs.readFileSync(cfg0, 'utf8')).notifyUrl, 'seeded with nothing to seed from');
+
+  const home = tmp(t);
+  fs.mkdirSync(path.join(home, '.colab'), { recursive: true });
+  fs.writeFileSync(path.join(home, '.colab', 'notify-endpoint'), 'http://127.0.0.1:9000/api/events\n');
+  const r = runInstall(home, ['--tools']);
+  assert.strictEqual(r.status, 0, r.stdout + r.stderr);
+  assert.match(r.stdout, /notifyUrl seeded: http:\/\/127\.0\.0\.1:9000\/api\/events/);
+  const cfg = JSON.parse(fs.readFileSync(path.join(home, '.colab', 'config.json'), 'utf8'));
+  assert.strictEqual(cfg.notifyUrl, 'http://127.0.0.1:9000/api/events');
+});
+
+test('install.sh --notify-url seeds without --tools and never overwrites an existing value', (t) => {
+  const home = tmp(t);
+  const r = runInstall(home, ['--notify-url', 'http://127.0.0.1:9000/api/events']);
+  assert.strictEqual(r.status, 0, r.stdout + r.stderr);
+  const cfgFile = path.join(home, '.colab', 'config.json');
+  assert.strictEqual(JSON.parse(fs.readFileSync(cfgFile, 'utf8')).notifyUrl, 'http://127.0.0.1:9000/api/events');
+
+  const again = runInstall(home, ['--notify-url=http://127.0.0.1:9001/api/events']);
+  assert.strictEqual(again.status, 0, again.stdout + again.stderr);
+  assert.match(again.stdout, /NOT applied/);
+  assert.strictEqual(JSON.parse(fs.readFileSync(cfgFile, 'utf8')).notifyUrl, 'http://127.0.0.1:9000/api/events');
+});
+
+test('install.sh --notify-url refuses a non-http value before installing anything', (t) => {
+  const home = tmp(t);
+  const r = runInstall(home, ['--tools', '--notify-url', 'localhost:9000']);
+  assert.strictEqual(r.status, 2);
+  assert.match(r.stderr, /must be an http\(s\) URL/);
+  assert.ok(!fs.existsSync(path.join(home, '.claude')), 'installed skills before refusing');
+});
