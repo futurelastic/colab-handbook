@@ -2960,10 +2960,16 @@ sha. Four properties hold it together:
   `colab migration-grant` refuses to mint a reviewer grant anywhere else.
 - **Recorded only if the review passed.** The record must approve, pass the checklist,
   clear the escalation and pass the CI round-trip. A failing review is refused, not
-  recorded.
+  recorded. A *claimed* pass is checked too, before anything is written (#457): the CI
+  round-trip job must have run and passed at the recorded HEAD, a cited run must be one of
+  that HEAD's runs and carry the job, and a checklist count must be out of the checklist the
+  review skill walks today, every item passed. A repo whose CI has no round-trip job cannot
+  mint a reviewer grant at all — it adopts the template's job or ships on a human grant.
 - **Not attested.** The reviewer id and the recorded CI result are claims made in the
   comment. The label's write permission and the trusted-author check are the only
-  anti-forgery properties, so a gate re-verifies CI for the recorded HEAD itself.
+  anti-forgery properties, so a gate re-verifies CI for the recorded HEAD itself — the
+  mint-time check only keeps an honest tool from writing a false record; it proves nothing
+  about a comment posted by hand.
 
 **`colab ship` honours a reviewer grant only when four conditions hold together (#401):**
 

@@ -345,6 +345,61 @@ function roundtripVerdict(jobs, opts) {
   return { ok: true, legs, reason: '' };
 }
 
+/**
+ * #457 — the MINT-time half of R. `colab ship` re-reads the round-trip at the head (roundtripVerdict
+ * above, through shipMigrationCtx), so a false `ci-roundtrip: pass` never opened the gate — but the
+ * grant record itself could still assert a fact its cited run does not contain, and the issue then
+ * sat looking "granted" until a ship pass measured it. This applies the same verdict when the record
+ * is WRITTEN, so a record that says `pass` is refused unless CI agrees at `rec.head`.
+ *
+ * Pure: `runs` is every run at the head — `[{ databaseId, workflowName, jobs }]`, `jobs` being
+ * git.ghRunJobs rows — or null when the run list could not be read (a run with `jobs: null` is an
+ * unread run). Checks, in order:
+ *   - the run list and every run's jobs were read (an unread result is never a pass);
+ *   - roundtripVerdict over all their jobs is ok — the exact rule ship applies, workflows guard
+ *     included, so a record mint can never accept what ship would refuse;
+ *   - `ci-run`, when given, resolves to a run id (bare digits, or a `/runs/<id>` URL), names one of
+ *     those runs, and that run itself carries a round-trip job — a record must not cite a run that
+ *     does not contain the evidence it is cited for, even when a sibling run does.
+ * A record whose `ci-roundtrip` is not `pass` is not this function's to judge (it never mints).
+ * Returns { ok, reason, verdict }.
+ */
+function mintRoundtripCheck(rec, runs, opts) {
+  const o = opts || {};
+  const r = rec || {};
+  if (r['ci-roundtrip'] !== 'pass') return { ok: true, reason: '', verdict: null };
+  const sha = r.head ? String(r.head).slice(0, 7) : 'the head';
+  const no = (reason, verdict = null) => ({ ok: false, reason, verdict });
+  let jobs = null;
+  if (Array.isArray(runs) && runs.every((x) => x && Array.isArray(x.jobs))) {
+    jobs = [];
+    for (const x of runs) for (const j of x.jobs) jobs.push({ ...j, workflowName: x.workflowName || null });
+  }
+  const verdict = roundtripVerdict(jobs, { headSha: r.head, workflowsTouched: !!o.workflowsTouched });
+  if (!verdict.ok) {
+    const hint = verdict.reason.startsWith('no "') ? ` — this repo's CI must run the template's migrations job before a reviewer grant can record a pass` : '';
+    return no(`the record says ci-roundtrip: pass, but ${verdict.reason}${hint}`, verdict);
+  }
+  if (r['ci-run'] !== undefined && r['ci-run'] !== null && String(r['ci-run']) !== '') {
+    const id = parseRunId(r['ci-run']);
+    if (id === null) return no(`ci-run "${r['ci-run']}" does not name a run id (digits, or a URL ending /runs/<id>) — a cited run nobody can look up proves nothing`, verdict);
+    const cited = runs.find((x) => String(x.databaseId) === id);
+    if (!cited) return no(`ci-run ${id} is not a run at ${sha} — the record must cite the run that graded the head it binds`, verdict);
+    if (!cited.jobs.some((j) => j && typeof j.name === 'string' && j.name.startsWith(ROUNDTRIP_JOB_PREFIX))) {
+      return no(`ci-run ${id} has no "${ROUNDTRIP_JOB_PREFIX}" job — cite the run that carries the round-trip`, verdict);
+    }
+  }
+  return { ok: true, reason: '', verdict };
+}
+
+/** A run id from a `ci-run` value — bare digits, or the `/runs/<id>` segment of a run URL — or null. */
+function parseRunId(v) {
+  const s = String(v).trim();
+  if (/^\d+$/.test(s)) return s;
+  const m = s.match(/\/runs\/(\d+)(?:[/?#]|$)/);
+  return m ? m[1] : null;
+}
+
 /** A step that reached a terminal conclusion other than skipped/cancelled — ci-cure.js stepRan. */
 function stepRanOk(s) {
   return !!s && s.status === 'completed' && s.conclusion !== 'skipped' && s.conclusion !== 'cancelled';
@@ -446,6 +501,37 @@ function validateReviewRecord(rec, marker) {
   const passing = valid && r.verdict === 'approve' && r.checklist === 'pass'
     && r['escalation-result'] === 'clear' && r['ci-roundtrip'] === 'pass';
   return { valid, passing, problems };
+}
+
+/** #457 — the checklist the migration-review skill walks has this many items, so a record's
+ *  `checklist-items` is `<passed>/10`. Kept in step with skills/migration-review/SKILL.md (a test
+ *  reads the skill and pins it). */
+const REVIEW_CHECKLIST_ITEMS = 10;
+
+/**
+ * #457 — record checks that apply only when a grant is MINTED, never when one is read. They are
+ * kept out of validateReviewRecord on purpose: that function is also ship's read path, and a
+ * grant recorded under an older, shorter checklist must not change meaning after the fact (ship
+ * re-verifies everything that matters — HEAD and the live round-trip — on its own). A new record,
+ * though, must be counted against the checklist that exists today:
+ *   - `checklist-items`, when given, has denominator REVIEW_CHECKLIST_ITEMS;
+ *   - `checklist: pass` with `checklist-items` N/M needs N = M — a pass with an item failing is a
+ *     contradiction, the same way a grant carrying a failing review is.
+ * Returns a list of problems ([] = fine).
+ */
+function mintRecordProblems(rec) {
+  const r = rec || {};
+  const problems = [];
+  const items = r['checklist-items'];
+  if (items === undefined || items === null || !/^\d+\/\d+$/.test(String(items))) return problems;
+  const [a, b] = String(items).split('/').map(Number);
+  if (b !== REVIEW_CHECKLIST_ITEMS) {
+    problems.push(`"checklist-items" is ${items} — the migration-review checklist has ${REVIEW_CHECKLIST_ITEMS} items, so the record is <passed>/${REVIEW_CHECKLIST_ITEMS}`);
+  }
+  if (r.checklist === 'pass' && a !== b) {
+    problems.push(`"checklist" is pass but "checklist-items" is ${items} — a pass means every item passed`);
+  }
+  return problems;
 }
 
 /** Why a VALID record is not passing, as one line — or '' when it passes. */
@@ -638,4 +724,6 @@ module.exports = {
   GRANT_POLICIES, parseGrantPolicy,
   // #401 — ship honours a reviewer grant
   ROUNDTRIP_JOB_PREFIX, roundtripVerdict, SHIP_CONDITION_TAG,
+  // #457 — the mint-time checks
+  REVIEW_CHECKLIST_ITEMS, mintRecordProblems, mintRoundtripCheck, parseRunId,
 };

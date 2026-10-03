@@ -3660,7 +3660,13 @@ It is minted only when ALL of these hold, checked before any network call:
   - the record is well-formed AND passing (approve · checklist pass · escalation clear · CI pass) —
     a grant carrying a failing review is a contradiction, so it is refused, not recorded;
   - the branch is pushed, and --head (if given) equals origin's tip — the grant binds that tip;
-  - this checkout's project.yml declares \`migration-grant: reviewer\` (#398; absent = human).
+  - this checkout's project.yml declares \`migration-grant: reviewer\` (#398; absent = human);
+  - checklist-items, when given, is <passed>/${migrationGrant.REVIEW_CHECKLIST_ITEMS} and, with checklist pass, every item
+    passed (#457) — the record counts against the checklist the migration-review skill walks today.
+Then, read from CI after the tracker read and before anything is written (#457):
+  - ci-roundtrip pass is TRUE at the head: the "${migrationGrant.ROUNDTRIP_JOB_PREFIX}" job ran and
+    passed there (the rule ship applies), and --ci-run, when given, is one of the runs at that
+    head and carries the job. A repo whose CI has no such job cannot mint a reviewer grant at all.
 COLAB_HUMAN=1 is still required for every role. The reviewer identity is DECLARED, not attested.
 \`colab ship\` honours a reviewer grant only when ALL of (#401): P the target's project.yml says
 \`migration-grant: reviewer\` · M this record is live, trusted and passing · HEAD its head is the
@@ -3796,7 +3802,34 @@ function migrationGrantReviewRecord(repoAbs, opts) {
   if (!v.passing) {
     throw new UserError(`the review does not pass (${migrationGrant.reviewRecordFailure(rec)}) — a grant carrying a failing review is a contradiction; nothing was posted`);
   }
+  // #457: checks only a NEW record faces (the checklist denominator) — local, so before the gh gate.
+  const mintProblems = migrationGrant.mintRecordProblems(rec);
+  if (mintProblems.length) throw new UserError(`the review record is invalid: ${mintProblems.join('; ')}`);
   return rec;
+}
+
+/**
+ * #457: the record says `ci-roundtrip: pass` — read CI at its head and refuse unless the round-trip
+ * job is really there and passed (tools/lib/migration-grant.js mintRoundtripCheck: the same
+ * roundtripVerdict `colab ship` applies, plus the cited `ci-run` must carry the job). Needs gh, so
+ * it runs in cmdMigrationGrantCreate after the tracker read and BEFORE the label is applied —
+ * nothing is written when it refuses. The workflows guard diffs trunk against the reviewed head;
+ * an unreadable diff counts as touched, failing closed exactly as shipMigrationCtx does.
+ */
+function migrationGrantRoundtripCheck(repoAbs, branch, rec) {
+  if (rec['ci-roundtrip'] !== 'pass') return;
+  const trunk = resolveTrunk(repoAbs, projectDoc(repoAbs));
+  const remote = git.remoteInfo(repoAbs).name || 'origin';
+  let d = trunk ? git.git(['diff', '--name-only', `${remote}/${trunk}...${rec.head}`], repoAbs) : { ok: false };
+  if (!d.ok && trunk) d = git.git(['diff', '--name-only', `${trunk}...${rec.head}`], repoAbs);
+  const workflowsTouched = !d.ok || d.stdout.split('\n').some((f) => f.startsWith('.github/workflows/'));
+  let runs = null;
+  const list = git.ghRunsForCommit(repoAbs, branch, rec.head, 20);
+  if (Array.isArray(list)) {
+    runs = list.map((r) => ({ databaseId: r.databaseId, workflowName: r.workflowName || null, jobs: git.ghRunJobs(repoAbs, r.databaseId) }));
+  }
+  const c = migrationGrant.mintRoundtripCheck(rec, runs, { workflowsTouched });
+  if (!c.ok) throw new UserError(`${c.reason}; nothing was posted`);
 }
 
 function cmdMigrationGrantCreate(repoAbs, num, opts) {
@@ -3821,6 +3854,9 @@ function cmdMigrationGrantCreate(repoAbs, num, opts) {
     throw new UserError(labels.migrationGrantMissingLabelHint(present)
       || `this repo has no \`${labels.MIGRATION_GRANT_LABEL}\` label`);
   }
+
+  // #457: a record claiming a CI round-trip pass is checked against CI BEFORE anything is written.
+  if (opts.reviewRecord) migrationGrantRoundtripCheck(repoAbs, opts.branch, opts.reviewRecord);
 
   const editR = git.ghIssueEdit(repoAbs, num, labels.migrationGrantLabelArgs({}));
   if (!editR.ok) throw new UserError(`gh edit #${num} failed (${editR.stderr.split('\n')[0] || editR.code})`);
