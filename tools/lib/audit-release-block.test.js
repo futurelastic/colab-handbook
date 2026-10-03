@@ -231,3 +231,39 @@ test('#446: the candidates-off advisory is not raised on the fast route', () => 
   const warns = all(r).filter((t) => /leaves candidates off/.test(t));
   assert.deepStrictEqual(warns, []);
 });
+
+// ---- #452: health-url is shared with deploy-tag; the container deploy is one path -----------------
+
+const CONTAINER = fs.readFileSync(path.join(__dirname, '..', '..', 'templates', 'deploy-container.yml'), 'utf8');
+/** release-auto.yml with its placeholder `deploy` job swapped for the commented deploy-container one. */
+function withContainerJob(text) {
+  const start = text.indexOf('\n  # ---------------------------------------------------------------------------------------------\n  # deploy (#446)');
+  const alt = text.indexOf('\n  # deploy:\n');
+  assert.ok(start > 0 && alt > start, 'the deploy job or its commented alternative was not found');
+  const job = text.slice(alt + 1).split('\n').filter((l) => l.startsWith('  # ')).map((l) => `  ${l.slice(4)}`).join('\n');
+  return `${text.slice(0, start)}\n${job}\n`;
+}
+
+test('#452: health-url on route deploy-tag passes; on a route nothing deploys from it fails', () => {
+  const ok = audit(fixture(`${RELEASED_TAG}release:\n  health-url: https://app.example.com/version\n`, DEPLOY_WF));
+  assert.ok(!hasText(ok.fails, /release\./), ok.fails.join(' | '));
+  const bad = audit(fixture(`${RELEASED_NO_PROD}release:\n  health-url: https://app.example.com/version\n`));
+  assert.ok(hasText(bad.fails, /release\.health-url fits only route deploy-tag or deploy-tag-fast/), bad.fails.join(' | '));
+});
+
+test('#452: the fast route reaching deploy-container.yml through the commented job passes', () => {
+  const wf = withContainerJob(TEMPLATE);
+  assert.match(wf, /\n {2}deploy:\n[\s\S]*uses: \.\/\.github\/workflows\/deploy-container\.yml/);
+  assert.doesNotMatch(wf, /was never edited/);
+  const files = { ...fastFiles(wf), '.github/workflows/deploy-container.yml': CONTAINER };
+  const r = auditWithGh(fixture(FAST, files), fakeGhIssue(7, RECORDED));
+  assert.ok(!hasText(r.fails, /release\.|deploy-tag-fast/), r.fails.join(' | '));
+  assert.ok(!hasText(r.warns, /deploy-container-run, but release\.health-url/), r.warns.join(' | '));
+});
+
+test('#452: a deploy-container copy with no release.health-url is an advisory', () => {
+  const r = audit(fixture(RELEASED_TAG, { '.github/workflows/deploy-container.yml': CONTAINER }));
+  assert.ok(hasText(r.warns, /deploy-container\.yml deploys through deploy-container-run, but release\.health-url is not declared/), r.warns.join(' | '));
+  const declared = audit(fixture(`${RELEASED_TAG}release:\n  health-url: https://app.example.com/version\n`, { '.github/workflows/deploy-container.yml': CONTAINER }));
+  assert.ok(!hasText(all(declared), /deploy-container-run, but release\.health-url/), all(declared).join(' | '));
+});
