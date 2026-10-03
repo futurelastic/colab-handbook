@@ -517,6 +517,28 @@ function prereleaseArgs(tag, notesFile) {
   return ['release', 'create', tag, '--verify-tag', '--title', tag, '--notes-file', notesFile, '--prerelease', '--latest=false'];
 }
 
+/** #446: a deploy-tag-fast final's GitHub Release — a full release, marked latest. */
+function finalReleaseArgs(tag, notesFile) {
+  return ['release', 'create', tag, '--verify-tag', '--title', tag, '--notes-file', notesFile, '--latest'];
+}
+
+/**
+ * #446: the tracking issue a fast-route migration hand-off opens. Same marker as release-finalize's
+ * (`<!-- colab:release version=… -->`), so every reader finds it; the text says what is owed here —
+ * a migration grant, not a candidate's test period.
+ */
+function handoffTrackingBody(version) {
+  return [
+    `<!-- colab:release version=${version} -->`,
+    '',
+    `Release tracking record for **${version}** — opened by \`colab release cut --auto\` on route \`deploy-tag-fast\` (CONVENTIONS.md §6). A record, not a unit of work: never claimed, never started.`,
+    '',
+    '- The final is automatic on every green head, by the operator\'s grant — but a database migration since the last final never rides an automatic deploy ungranted.',
+    `- **To let it ride:** a human runs \`COLAB_HUMAN=1 colab migration-grant <this issue> --branch ${version}\`; the next green run tags and deploys ${version}.`,
+    `- **Veto:** add the \`${HOLD_LABEL}\` label to any open issue. While it is present no final is tagged; only a human removes it.`,
+  ].join('\n') + '\n';
+}
+
 // ---- §6 condition 2: the full suite ------------------------------------------------------------
 
 /**
@@ -924,5 +946,5 @@ module.exports = {
   fullSuiteVerdict, withoutOwnWorkflow, isMigrationPath, schemaVerdict,
   parseSwitchMarkers, switchVerdict,
   promotionVerdict, decide, tagMessage, versionSourceOf,
-  DOWNSTREAM_EVENTS, headCandidateVerdict, prereleaseArgs,
+  DOWNSTREAM_EVENTS, headCandidateVerdict, prereleaseArgs, finalReleaseArgs, handoffTrackingBody,
 };
