@@ -20,7 +20,7 @@
  *     npm-gate: <command>     # #433 — the pack-allowlist gate, run before every npm publish
  *     version-source: tag     # #438 — tag | manifest: is a manifest's version checked, or derivable?
  *     final-grant: 123        # #441 — an operator's recorded decision letting deploy-tag's final be automatic
- *     health-url: https://…   # #446 — deploy-tag-fast only: the public endpoint reporting the running version
+ *     health-url: https://…   # #446/#452 — deploy-tag or deploy-tag-fast (required there): the public endpoint reporting the running version
  *     rollback: auto          # #446 — deploy-tag-fast only: the deploy rolls itself back when that check fails
  *     final-spacing: 1h       # #446 — deploy-tag-fast only: minimum time between finals (<N>h | <N>d, ≥ 1h)
  *
@@ -67,6 +67,12 @@ const GRANTABLE_ROW = 'released-tag';
 const FAST_ROUTE = 'deploy-tag-fast';
 const GRANTABLE_ROUTES = Object.freeze([GRANTABLE_ROUTE, FAST_ROUTE]);
 const FAST_KEYS = Object.freeze(['health-url', 'rollback', 'final-spacing']);
+// #452: `health-url` is the one verify key every deploy shares — #446's health gate and the container
+// deploy template's verify step (templates/deploy-container.yml) read the same line. It is legal on
+// both deploying-tag routes and required only on the fast one; `rollback` and `final-spacing` stay
+// the fast route's alone.
+const FAST_ONLY_KEYS = Object.freeze(['rollback', 'final-spacing']);
+const HEALTH_URL_ROUTES = Object.freeze([GRANTABLE_ROUTE, FAST_ROUTE]);
 const ROLLBACK = Object.freeze(['auto']);
 // The minimum spacing between two finals on deploy-tag-fast: both the default and the floor. A burst
 // of merges then deploys at most once an hour; a repo may lengthen it, never shorten it.
@@ -168,7 +174,7 @@ function deriveDefault(cfg) {
 /** A route's policy as an effective-shaped object (no `why`). */
 function routePolicy(route) {
   const p = ROUTE_POLICY[route];
-  return p ? { route, candidates: p.candidates, candidatesPerDay: p.candidatesPerDay, testPeriodDays: p.testPeriodDays, final: p.final, finalize: p.finalize, npm: null, versionSource: 'manifest', finalGrant: null, healthGate: null, finalSpacingHours: null } : null;
+  return p ? { route, candidates: p.candidates, candidatesPerDay: p.candidatesPerDay, testPeriodDays: p.testPeriodDays, final: p.final, finalize: p.finalize, npm: null, versionSource: 'manifest', finalGrant: null, healthGate: null, healthUrl: null, finalSpacingHours: null } : null;
 }
 
 /** `6h` -> 6, `2d` -> 48; anything else (including `30m`, `0h`) -> null. */
@@ -221,7 +227,7 @@ function evaluateRelease(cfg) {
   const fromDerived = () => ({
     route: derived.route, candidates: derived.candidates, candidatesPerDay: derived.candidatesPerDay,
     testPeriodDays: derived.testPeriodDays, final: derived.final, finalize: derived.finalize, npm: null,
-    versionSource: 'manifest', finalGrant: null, healthGate: null, finalSpacingHours: null,
+    versionSource: 'manifest', finalGrant: null, healthGate: null, healthUrl: null, finalSpacingHours: null,
   });
   let effective = fromDerived();
   const findings = [];
@@ -359,10 +365,19 @@ function evaluateRelease(cfg) {
     else effective.versionSource = v;
   }
 
-  // #446: the fast route's own keys — only there, and the floor on spacing.
-  const fastKeys = FAST_KEYS.filter((k) => k in raw);
+  // #446: the fast route's own keys — only there, and the floor on spacing. #452: `health-url` is
+  // shared with deploy-tag, where it is optional and only names the version a deploy waits for.
+  const fastKeys = FAST_ONLY_KEYS.filter((k) => k in raw);
+  if ('health-url' in raw && effective.route === GRANTABLE_ROUTE) {
+    if (!validHealthUrl(raw['health-url'])) fail(`release.health-url is ${JSON.stringify(raw['health-url'])}, expected an absolute https:// URL that reports the running version`);
+    else effective.healthUrl = raw['health-url'].trim();
+  } else if ('health-url' in raw && effective.route !== FAST_ROUTE && raw.route !== FAST_ROUTE) {
+    fail(`release.health-url fits only route ${HEALTH_URL_ROUTES.join(' or ')} — ${route} on ${derived.axis} is not that (${routes}). ` +
+      'Nothing deploys from a tag here, so there is no running version to check. Remove the key');
+  }
   if (effective.route === FAST_ROUTE) {
     effective.healthGate = { url: raw['health-url'].trim(), rollback: raw.rollback };
+    effective.healthUrl = raw['health-url'].trim();
     effective.finalSpacingHours = FINAL_SPACING_HOURS;
     if ('final-spacing' in raw) {
       const h = parseSpacing(raw['final-spacing']);
@@ -425,7 +440,7 @@ function finalGrantVerdict(record, { issue, trust } = {}) {
 }
 
 module.exports = {
-  VERSION_SOURCES, GRANTABLE_ROUTE, GRANTABLE_ROW, GRANTABLE_ROUTES, FAST_ROUTE, FAST_KEYS, ROLLBACK, FINAL_SPACING_HOURS,
+  VERSION_SOURCES, GRANTABLE_ROUTE, GRANTABLE_ROW, GRANTABLE_ROUTES, FAST_ROUTE, FAST_KEYS, FAST_ONLY_KEYS, HEALTH_URL_ROUTES, ROLLBACK, FINAL_SPACING_HOURS,
   parseGrantIssue, finalGrantVerdict, parseSpacing, validHealthUrl, fastRoutePrerequisites,
   KEYS, INPUT_KEYS, NPM_KEYS, NPM_ROUTES, CANDIDATES, FINAL, TEST_PERIOD_DAYS, ROUTES, ROUTE_POLICY, ROW_ROUTES,
   deriveDefault, evaluateRelease, parseTestPeriod, routePolicy,

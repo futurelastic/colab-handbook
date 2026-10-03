@@ -84,7 +84,10 @@
 # `colab release cut --auto` tags the FINAL vX.Y.Z on every green main head — no candidate, no
 # test period — and the `deploy` job below deploys that tag in this same run, then polls
 # release.health-url until it reports the version. Its deploy step is an EDIT point: replace it
-# with your deploy (it fails loudly until you do). On every other route the job is skipped and the
+# with your deploy (it fails loudly until you do) — or, for a container app, replace the whole job
+# with the commented one under it, which calls templates/deploy-container.yml (#452): the same
+# deploy a human-pushed final runs on route deploy-tag, so both routes share one deploy path, with
+# its own health check and rollback. On every other route the job is skipped and the
 # run still concludes on the `release` job. EDIT: on this route, a cron more frequent than daily
 # tags a head that release.final-spacing held back sooner.
 #
@@ -570,3 +573,23 @@ jobs:
             fi
             sleep 10
           done
+
+  # ON deploy-container.yml (#452): replace the whole `deploy` job above with this one. It calls the
+  # same workflow a human-pushed final runs (`push: tags`), so the fast route and route deploy-tag
+  # share ONE deploy path — build once, run exactly the tag, verify release.health-url, roll back.
+  # Commented because a live `uses:` of a file your repo does not have breaks this workflow.
+  # A reusable workflow's permissions are capped by the calling job's, hence the three below.
+  #
+  # deploy:
+  #   name: Deploy the final (deploy-tag-fast)
+  #   needs: release
+  #   if: needs.release.outputs.deploy-tag != ''
+  #   permissions:
+  #     contents: read
+  #     packages: write
+  #     issues: write
+  #   uses: ./.github/workflows/deploy-container.yml
+  #   with:
+  #     tag: ${{ needs.release.outputs.deploy-tag }}
+  #     health-url: ${{ needs.release.outputs.health-url }}
+  #   secrets: inherit

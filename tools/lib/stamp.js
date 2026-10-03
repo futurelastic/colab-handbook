@@ -479,6 +479,7 @@ const WORKFLOW_FINGERPRINTS = [
   { marker: 'Release (auto) — TEMPLATE. Copy me into your repo', kind: 'text', template: 'release-auto' },
   { marker: 'Deploy (SSH/rsync to shared hosting) — TEMPLATE. Copy me into your repo', kind: 'text', template: 'deploy-xserver' },
   { marker: 'Branch name — TEMPLATE. Copy me into your repo', kind: 'text', template: 'branch-name' },
+  { marker: 'Deploy (container, platform adapter) — TEMPLATE. Copy me into your repo', kind: 'text', template: 'deploy-container' },
   // The header convention itself, unattributed: this catches a copy of any template ADDED LATER
   // without anyone remembering to extend this list — provided the new template keeps the house
   // header. A template that omits it is invisible here, which is worth knowing when writing one.
@@ -503,6 +504,10 @@ const WORKFLOW_FINGERPRINTS = [
   // overwrite. Verified against all three before being added here.
   { marker: 'Resolve deploy toolchain', kind: 'step', template: 'deploy-xserver' },
   { marker: 'Verify the deployed site answers', kind: 'step', template: 'deploy-xserver' },
+  // deploy-container (#452): its one coined step. "Resolve the tag to deploy" is deliberately not a
+  // marker — a phrase a hand-written deploy workflow could carry, and an over-eager marker invites
+  // an overwrite.
+  { marker: 'Build once, run exactly this tag, verify (deploy-container-run)', kind: 'step', template: 'deploy-container' },
   // branch-name (#348): its one step.
   { marker: 'Check branch name (CONVENTIONS §4)', kind: 'step', template: 'branch-name' },
   // Shared by all three ci-* templates: proves derivation, cannot say from which. Note the exact

@@ -1647,6 +1647,7 @@ function auditRepo(target, ctx) {
   checkPrereleaseTagTrigger(src, workflows, deploy, fail, warn);
   checkReleaseAuto(src, workflows, cfg, warn);
   checkFastRouteDeploy(src, workflows, cfg, fail);
+  checkDeployContainer(src, workflows, cfg, warn);
   checkPrivateNpm(src, workflows, fail, warn);
 
   const runbook = cfg && "runbook" in cfg ? cfg.runbook : null;
@@ -2601,6 +2602,30 @@ function fastRouteDeployFindings({ readFile, workflows, cfg }) {
 }
 function checkFastRouteDeploy(src, workflows, cfg, fail) {
   for (const text of fastRouteDeployFindings({ readFile: (p) => src.readFile(p), workflows, cfg })) fail(text);
+}
+
+// ---- a deploy-container copy needs a version to wait for (#452) ---------------------------------
+// templates/deploy-container.yml is green only on a verified running version, read from
+// release.health-url (or a HEALTH_URL the repo set in its own copy). A copy with neither fails every
+// deploy at its first step — advisory, not a failure: the repo owns the file, and may have wired
+// the URL in by hand.
+function deployContainerFindings({ readFile, workflows, cfg }) {
+  const effective = cfg ? releasePolicy.evaluateRelease(cfg).effective : null;
+  if (effective && effective.healthUrl) return [];
+  const out = [];
+  for (const wf of workflows || []) {
+    const text = readFile(`.github/workflows/${wf}`);
+    if (!text) continue;
+    const stamp = parseWorkflowStamp(text);
+    const isCopy = (stamp && stamp.name === "deploy-container") || /deploy-container-run\.mjs/.test(text);
+    if (!isCopy) continue;
+    if (/^\s*HEALTH_URL:\s*["']?https:\/\//m.test(text)) continue;
+    out.push(`${wf} deploys through deploy-container-run, but release.health-url is not declared — its verify step has no version to wait for, so every deploy fails; declare release.health-url (route deploy-tag or deploy-tag-fast)`);
+  }
+  return out;
+}
+function checkDeployContainer(src, workflows, cfg, warn) {
+  for (const text of deployContainerFindings({ readFile: (p) => src.readFile(p), workflows, cfg })) warn(text);
 }
 
 // ---- a private repo never publishes to public npm (#432) ---------------------
