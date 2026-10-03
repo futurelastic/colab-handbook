@@ -3404,7 +3404,7 @@ spawn.** Two enforcement points, and neither may be mistaken for the other:
 
 `code-start` is not a third enforcement point — it is the reader that honours the offer.
 
-Measured on coding-dashboard, 2026-09-05 — that repo's ADR
+Measured on a downstream session orchestrator, 2026-09-05 — its ADR
 `docs/adr/1530-ship-lanes-reorg.md`, section 2 L5 and section 7 item 7:
 `group:cockpit-fidelity`, whose evidence line read "collide on CockpitView.tsx",
 held 6 open issues and 3+ live parallel branches; two overlapped on
