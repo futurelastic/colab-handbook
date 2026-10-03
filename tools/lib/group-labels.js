@@ -115,6 +115,71 @@ function reportableLabels(verdicts) {
   return (verdicts || []).filter((v) => v && v.verdict !== 'mid-flight');
 }
 
+/**
+ * #448: the second read before a destructive delete. Measured in an adopting repo: ship's (i)
+ * teardown deleted `group:<key>` while a fourth, deliberately-unshipped member still carried it
+ * OPEN — the open-member listing had come back empty 29 s after the squash closed the other three.
+ * That listing is `gh issue list --label`, which `gh` serves through GraphQL `search(...)`
+ * (verified with GH_DEBUG=api), and the search index lags the issues table: a burst of closes and
+ * label writes can leave it answering "0 open" for a label still on an open issue.
+ *
+ * `gh label delete` is repo-wide and cannot be undone per issue, so "0 open" from search alone is
+ * not enough to act on. The confirming read is the REST issues list (`ghOpenIssueNumbersByLabel`),
+ * which reads the issues table, not the index. The two failures are asymmetric exactly as
+ * isOpenMember's note says — keeping a spent label costs one stale picker entry until the next
+ * ship or `doctor --sync --prune`; deleting a live one strips a grouping from work in flight — so
+ * every case but "both reads agree on zero" keeps the label.
+ *
+ * @param {Array|null} searchOpen   open members per the search-backed listing; null = could not read
+ * @param {Array|null} confirmOpen  open member NUMBERS per the non-search read; null = could not read
+ * @returns {{action:'delete'|'keep', reason:string, open:number[]}}
+ *   reason ∈ unread · open · unconfirmed · disagree · spent
+ */
+function spentLabelDecision(searchOpen, confirmOpen) {
+  if (searchOpen === null || searchOpen === undefined) return { action: 'keep', reason: 'unread', open: [] };
+  if (Array.isArray(searchOpen) && searchOpen.length > 0) return { action: 'keep', reason: 'open', open: [] };
+  if (confirmOpen === null || confirmOpen === undefined || !Array.isArray(confirmOpen)) {
+    return { action: 'keep', reason: 'unconfirmed', open: [] };
+  }
+  if (confirmOpen.length > 0) {
+    const nums = confirmOpen.map((m) => (m && typeof m === 'object' ? m.number : m))
+      .filter((n) => n !== undefined && n !== null);
+    return { action: 'keep', reason: 'disagree', open: nums };
+  }
+  return { action: 'delete', reason: 'spent', open: [] };
+}
+
+/**
+ * The I/O shell around spentLabelDecision, with every call injected so the delete path is pinned by
+ * a test with no network (#448). `searchOpen` may be passed pre-read (doctor already has the
+ * membership from its classify pass) or as a function; `confirmOpen` and `deleteLabel` are always
+ * functions and are only CALLED when needed — the confirm read only when search said zero, the
+ * delete only when both reads agree.
+ *
+ * @returns {{action:'delete'|'keep', reason:string, open:number[], deleted:boolean, error:string|null}}
+ */
+function teardownSpentGroupLabel(name, { searchOpen, confirmOpen, deleteLabel }) {
+  if (!isGroupLabel(name)) return { action: 'keep', reason: 'unread', open: [], deleted: false, error: null };
+  const s = typeof searchOpen === 'function' ? searchOpen(name) : searchOpen;
+  const needConfirm = Array.isArray(s) && s.length === 0;
+  const c = needConfirm ? confirmOpen(name) : null;
+  const d = spentLabelDecision(s, needConfirm ? c : null);
+  if (d.action !== 'delete') return { ...d, deleted: false, error: null };
+  const r = deleteLabel(name) || {};
+  return { ...d, deleted: !!r.ok, error: r.ok ? null : (r.stderr || 'gh label delete failed') };
+}
+
+/** One human line for a kept label — the CLI and its test read the same words. */
+function keptReason(name, d) {
+  switch (d.reason) {
+    case 'unread': return `could not check membership of ${name} — left in place`;
+    case 'unconfirmed': return `${name} reads 0 open members by search but the confirming (non-search) read failed — left in place`;
+    case 'disagree': return `${name} reads 0 open members by search, but #${d.open.join(', #')} still carr${d.open.length === 1 ? 'ies' : 'y'} it open (non-search read) — left in place; the search index is lagging (#448)`;
+    default: return '';
+  }
+}
+
 module.exports = {
   isOpenMember, classifyGroupLabel, classifyGroupLabels, deletableLabels, reportableLabels,
+  spentLabelDecision, teardownSpentGroupLabel, keptReason,
 };

@@ -696,6 +696,25 @@ function ghIssueListByLabel(repo, label, state, fields) {
 }
 
 /**
+ * #448: the open issues carrying `label`, as numbers, read through the REST issues list — NOT
+ * search. `gh issue list --label` (ghIssueListByLabel above) is served by GraphQL `search(...)`,
+ * whose index can lag a burst of closes and answer "0 open" for a label still on an open issue;
+ * this endpoint reads the issues table directly. Pull requests share the endpoint and are dropped.
+ * Null on any failure — "could not read", never "none open", same contract as ghIssueListByLabel.
+ * Used as the confirming read before a `group:` label is deleted (group-labels.js
+ * teardownSpentGroupLabel).
+ */
+function ghOpenIssueNumbersByLabel(repo, label) {
+  const r = ghApi(repo, [
+    '--method', 'GET', '--paginate', 'repos/{owner}/{repo}/issues',
+    '-f', `labels=${label}`, '-f', 'state=open', '-f', 'per_page=100',
+    '--jq', '.[] | select(.pull_request == null) | .number',
+  ]);
+  if (!r.ok) return null;
+  return String(r.stdout || '').split('\n').map((l) => l.trim()).filter(Boolean).map(Number);
+}
+
+/**
  * `gh label delete <name> --yes` — returns {ok, stderr}. Deletes the LABEL OBJECT from the
  * repo's tracker, not one issue's use of it — every issue that carried it loses it. Callers
  * that mean "remove this label from one issue" want ghIssueEdit(..., ['--remove-label', name])
@@ -1050,7 +1069,7 @@ module.exports = {
   claimRemote, remoteHeads,
   worktreeList, worktreeListDetailed, resolveWorktreePathForBranch, gitFailureLine,
   dirtyTracked, dirtyUntracked, dirtyAny,
-  ghAvailable, ghState, ghIssueEdit, ghListLabels, ghAssignedIssues,
+  ghAvailable, ghState, ghIssueEdit, ghListLabels, ghOpenIssueNumbersByLabel, ghAssignedIssues,
   ghCurrentLogin, ghIssueView, ghIssueComment, ghRunForSha, ghRunForCommit, ghRunsForCommit, ghRunsForRef, ghRunsAtCommit, ghRunForCommitAnyRef, commitTimeMs, ghRunsSince, summarizeRunsForCommit,
   ghRunJobCount, ghRunJobs,
   ghIssueListByLabel, ghLabelDelete, ghLabelCreate, ghListLabelsDetailed, ghLabelEditDescription,
