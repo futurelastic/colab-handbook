@@ -984,14 +984,82 @@ function excludedRunSummary(rows) {
  * were, the result carries an additive `excluded` list naming them, so a caller can say what it
  * did not count. When nothing is left the sha reads `none`, exactly as if no run had existed —
  * a repo-owned red is never affected, since only `dynamic` rows are dropped.
+ *
+ * #461: the repo-owned rows are then reduced to the newest run per workflow (newestRunPerWorkflow,
+ * below); the rows that reduction set aside ride along as an additive `superseded` list, same shape
+ * as `excluded`, present only when non-empty. Every quantifier below runs over the reduced set.
  */
 function summarizeRunsForCommit(allForSha, sha) {
   if (allForSha === null) return null;
   const dropped = allForSha.filter((x) => !isRepoOwnedRun(x));
-  const forSha = dropped.length ? allForSha.filter(isRepoOwnedRun) : allForSha;
-  const extra = dropped.length ? { excluded: excludedRunSummary(dropped) } : {};
-  const r = summarizeRepoOwnedRuns(forSha, sha);
+  const owned = dropped.length ? allForSha.filter(isRepoOwnedRun) : allForSha;
+  const { heads, superseded } = newestRunPerWorkflow(owned);
+  const extra = {
+    ...(dropped.length ? { excluded: excludedRunSummary(dropped) } : {}),
+    ...(superseded.length ? { superseded: excludedRunSummary(superseded) } : {}),
+  };
+  const r = summarizeRepoOwnedRuns(heads, sha);
   return { ...r, ...extra };
+}
+
+/** Sort key for "which run of one workflow is newer": createdAt, then databaseId; null = unknown. */
+function runRecency(x) {
+  const t = x && x.createdAt ? Date.parse(x.createdAt) : NaN;
+  const id = x && x.databaseId != null ? Number(x.databaseId) : NaN;
+  return { t: Number.isFinite(t) ? t : null, id: Number.isFinite(id) ? id : null };
+}
+
+/** True when `a` is provably newer than `b`; false when older OR when neither key can tell. */
+function isNewerRun(a, b) {
+  const ra = runRecency(a); const rb = runRecency(b);
+  if (ra.t !== null && rb.t !== null && ra.t !== rb.t) return ra.t > rb.t;
+  if (ra.id !== null && rb.id !== null && ra.id !== rb.id) return ra.id > rb.id;
+  return false;
+}
+
+/**
+ * #461: each workflow is judged by its NEWEST run at the sha — an earlier attempt of the SAME
+ * workflow that a later one superseded no longer vetoes it. Measured: a `workflow_run`-triggered
+ * workflow fired once per CI attempt at one trunk sha; the two red CI attempts gave it two
+ * `skipped` runs, the green third attempt a `success`, and the two stale rows held the sha
+ * not-green forever (a re-run replays the original payload and skips again).
+ *
+ * Grouped by `workflowName` ONLY. A row with no workflowName (an older read, a hand-built fixture)
+ * is its own group — absence of the field never collapses anything, so every verdict that could be
+ * computed before #461 without the field is computed identically now. Rows of DIFFERENT workflows
+ * are never reduced: a failing workflow beside a passing one still reads not-green (#146/#162).
+ *
+ * `cancelled` never supersedes: a cancelled run executed nothing and has always been neutral here
+ * (#92), so it cannot stand for its workflow while that workflow has any non-cancelled run at the
+ * sha — otherwise a cancel-in-progress straggler created after the passing run would turn #92's
+ * green back into "every run was cancelled". It still counts when it is all a workflow has.
+ *
+ * Newest = later createdAt, then higher databaseId; when neither key separates two rows, gh's
+ * newest-first order decides (the first row seen is kept). An unfinished newest run still blocks
+ * green (#307): it is the head, so the all-finished quantifier sees it.
+ *
+ * Returns the heads in their original order (callers' newest-first `forSha[0]` pick relies on it)
+ * plus the rows they superseded.
+ */
+function newestRunPerWorkflow(rows) {
+  const best = new Map();
+  rows.forEach((x, i) => {
+    const name = x && x.workflowName;
+    if (!name) return;
+    const cur = best.get(name);
+    if (cur === undefined) { best.set(name, i); return; }
+    const c = rows[cur];
+    const xCancelled = x.conclusion === 'cancelled';
+    const cCancelled = c.conclusion === 'cancelled';
+    if (xCancelled !== cCancelled) { if (cCancelled) best.set(name, i); return; }
+    if (isNewerRun(x, c)) best.set(name, i);
+  });
+  const heads = []; const superseded = [];
+  rows.forEach((x, i) => {
+    const name = x && x.workflowName;
+    if (!name || best.get(name) === i) heads.push(x); else superseded.push(x);
+  });
+  return { heads, superseded };
 }
 
 function summarizeRepoOwnedRuns(forSha, sha) {
@@ -1001,6 +1069,8 @@ function summarizeRepoOwnedRuns(forSha, sha) {
   // report "N runs at <sha>: all success" instead of a singular verdict that hides how many
   // workflows actually agreed. It is the row count BEFORE any of the picks below, not "how many
   // succeeded" — the picked row already tells the caller the conclusion; this tells it the sample size.
+  // Since #461 that is the count of rows JUDGED (one per named workflow, after superseded attempts
+  // are set aside) — "3 runs: all success" must never count two skipped attempts it did not judge.
   const runCount = forSha.length;
 
   // A completed sibling whose conclusion is anything but success or cancelled makes the sha

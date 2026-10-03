@@ -1535,6 +1535,13 @@ than guessed.
   Only runs of workflows the repo owns count (#451): a run with `event: dynamic`
   (Dependabot Updates and GitHub's other dynamic workflows) never executes the sha, so it is
   dropped before the verdict and named in its detail; if nothing is left, the sha reads `none`.
+  Each workflow is then judged by its **newest** run at the sha (#461): an earlier attempt of
+  the *same* workflow that a later one superseded is set aside and named in the detail, so a
+  `workflow_run`-triggered workflow that skipped for two red CI attempts and passed for the
+  green third no longer holds the sha red forever. A newer run decides in both directions — a
+  newer failure vetoes an older success, a newer run still in flight blocks (#307) — except
+  that a `cancelled` run never supersedes, because it ran nothing (#92). Runs of *different*
+  workflows are never reduced: a failing one beside a passing one is still not green.
   That is the half of the question about what is merged **into**; the branch's own run
   is the other half — see *Branch CI*, below.
 - **That resolves a FALSE red — a real one has two different doors, one of them
