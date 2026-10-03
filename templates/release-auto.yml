@@ -24,6 +24,8 @@
 #   any of the above tagged something, and    npm publish (job `npm`, #433) — candidates to
 #   project.yml declares release.npm          dist-tag `next`, finals to `latest`; see the
 #                                             comment above that job
+#   the cut tagged a FINAL — route            deploy + health check (job `deploy`, #446) — see
+#   deploy-tag-fast only                      "DEPLOYING IN THIS RUN" below
 #
 # Every decision — whether a candidate is owed, which bump, whether the test period
 # elapsed clean, whether the final is automatic on this repo at all — is the colab CLI's,
@@ -76,6 +78,15 @@
 # The same suppression means a deploy workflow on `v*.*.*` does not fire for a tag this
 # workflow pushes either — on a `deploy: tag` repo the final is a human act anyway, and
 # finalize --auto only posts the command for it.
+#
+# DEPLOYING IN THIS RUN (deploy-tag-fast, #446). On a `deploy: tag` repo whose operator granted
+# route `deploy-tag-fast` (release.final-grant + release.health-url + release.rollback: auto),
+# `colab release cut --auto` tags the FINAL vX.Y.Z on every green main head — no candidate, no
+# test period — and the `deploy` job below deploys that tag in this same run, then polls
+# release.health-url until it reports the version. Its deploy step is an EDIT point: replace it
+# with your deploy (it fails loudly until you do). On every other route the job is skipped and the
+# run still concludes on the `release` job. EDIT: on this route, a cron more frequent than daily
+# tags a head that release.final-spacing held back sooner.
 #
 # IT READS TAGS AND CREATES TAGS. IT NEVER WRITES A COMMIT. No step here commits; the refs
 # pushed are the tags `colab release cut` / `colab release finalize` create (annotated, their
@@ -155,6 +166,9 @@ jobs:
       npm-dir: ${{ steps.npm-target.outputs.dir }}
       npm-gate: ${{ steps.npm-target.outputs.gate }}
       npm-package: ${{ steps.npm-target.outputs.package }}
+      # What the deploy job below needs (#446) — empty unless this run tagged a deploy-tag-fast final.
+      deploy-tag: ${{ steps.cut.outputs.final }}
+      health-url: ${{ steps.cut.outputs.health-url }}
     env:
       GH_TOKEN: ${{ github.token }}
     steps:
@@ -261,6 +275,12 @@ jobs:
             TAG="$(jq -r '.tag' "$OUT")"
             echo "tag=$TAG" >> "$GITHUB_OUTPUT"
             echo "Cut $TAG" | tee -a "$GITHUB_STEP_SUMMARY"
+            # #446: on route deploy-tag-fast the cut IS the final, and the deploy job deploys it in
+            # this run (a tag pushed with GITHUB_TOKEN starts no `push: tags` workflow).
+            if [ "$(jq -r '.final // false' "$OUT")" = "true" ]; then
+              echo "final=$TAG" >> "$GITHUB_OUTPUT"
+              echo "health-url=$(jq -r '.deploy.healthUrl // ""' "$OUT")" >> "$GITHUB_OUTPUT"
+            fi
           elif [ "$(jq -r '.noop' "$OUT")" = "true" ]; then
             echo "No-op: nothing owed, head already a candidate, inside a declared cadence window, or main's head is not a promotion." | tee -a "$GITHUB_STEP_SUMMARY"
           elif [ "$(jq -r '.ok' "$OUT")" = "true" ]; then
@@ -492,4 +512,61 @@ jobs:
             printf '\n<!-- colab:npm -->\n%s\n<!-- /colab:npm -->\n' "$LINE" >> "$NOTES"
             gh release edit "$TAG" --repo "$REPO" --notes-file "$NOTES" > /dev/null
             echo "$TAG: $LINE" | tee -a "$GITHUB_STEP_SUMMARY"
+          done
+
+  # ---------------------------------------------------------------------------------------------
+  # deploy (#446) — route deploy-tag-fast only: deploys the final the release job just tagged, in
+  # this same run, then verifies it. Skipped on every other route (deploy-tag stays empty).
+  #
+  # Same run, never a tag-triggered deploy workflow: a tag pushed with GITHUB_TOKEN starts no
+  # `push: tags` run, so a separate deploy-on-tag workflow would never fire for this final.
+  #
+  # The health check is the handbook's half of the "health-gated deploy with automatic rollback"
+  # the route requires: it fails this job when release.health-url does not report the version in
+  # time. The ROLLBACK is your deploy's own (release.rollback: auto is your statement that it has
+  # one) — this job does not roll anything back. A failed deploy leaves the tag standing and this
+  # run red; fix forward, or re-run the failed job to deploy the same tag again.
+  deploy:
+    name: Deploy the final (deploy-tag-fast)
+    needs: release
+    if: needs.release.outputs.deploy-tag != ''
+    runs-on: ubuntu-latest # EDIT: the runner your deploy needs (self-hosted label, etc.).
+    environment: production # EDIT: the GitHub environment holding your deploy secrets, or remove.
+    permissions:
+      contents: read # check out the tag
+    env:
+      TAG: ${{ needs.release.outputs.deploy-tag }}
+      HEALTH_URL: ${{ needs.release.outputs.health-url }}
+      HEALTH_TIMEOUT_SECONDS: "600" # EDIT: how long the new version may take to report itself.
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          ref: refs/tags/${{ needs.release.outputs.deploy-tag }}
+          persist-credentials: false # nothing here pushes
+
+      # EDIT: replace this step's body with your deploy of "$TAG" (an image push + rollout, an
+      # SSH script, a platform CLI). It must roll back by itself when the new version fails its
+      # health check — that is what release.rollback: auto declares. Until edited it fails, so a
+      # final is never reported deployed when nothing deployed it.
+      - name: Deploy the final (EDIT)
+        run: |
+          set -euo pipefail
+          echo "::error::the deploy step of release-auto.yml was never edited — $TAG is tagged and published but NOT deployed. Replace this step with your deploy (templates/release-auto.yml, DEPLOYING IN THIS RUN)."
+          exit 1
+
+      - name: Verify the health endpoint reports the final
+        run: |
+          set -uo pipefail
+          VERSION="${TAG#v}"
+          DEADLINE=$(( $(date +%s) + HEALTH_TIMEOUT_SECONDS ))
+          while :; do
+            BODY="$(curl -fsS --max-time 10 "$HEALTH_URL" 2> /dev/null || true)"
+            case "$BODY" in
+              *"$VERSION"*) echo "$HEALTH_URL reports $VERSION — $TAG is live" | tee -a "$GITHUB_STEP_SUMMARY"; exit 0 ;;
+            esac
+            if [ "$(date +%s)" -ge "$DEADLINE" ]; then
+              echo "::error::$HEALTH_URL did not report $VERSION within ${HEALTH_TIMEOUT_SECONDS}s — the deploy's own rollback should have restored the previous version; $TAG stays tagged"
+              exit 1
+            fi
+            sleep 10
           done

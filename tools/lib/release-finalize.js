@@ -397,6 +397,13 @@ function decide(facts) {
   else if (!/^released-/.test(row)) add('release-policy', false, `${p.derived.axis}: ${p.derived.why} — nothing to finalize here (CONVENTIONS.md §6, The release rung)`);
   else add('release-policy', true, `${p.derived.axis} (${row}): final ${finalMode}, test period ${p.effective.testPeriodDays}d`);
   if (!checks[0].ok) return out('refused');
+  // #446: route deploy-tag-fast tags its finals in `release cut --auto`, with no candidate. A leftover
+  // candidate from an earlier route is superseded by the next final — never finalized here, where the
+  // grant would otherwise finalize an old -rc days after the operator chose the fast route.
+  if (p.effective.finalize === 'on-green-head') {
+    add('candidate', false, 'route deploy-tag-fast cuts its finals in `colab release cut --auto` on every green head — there is no candidate to finalize; one left over from an earlier route is superseded by the next final');
+    return out('no-candidate');
+  }
 
   const s = f.selection || { kind: 'none', detail: 'no candidate selected' };
   if (s.kind === 'none') { add('candidate', false, s.detail); return out('no-candidate'); }

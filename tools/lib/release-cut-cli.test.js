@@ -588,3 +588,103 @@ test('#443: a failed publish is reported, never undoes the cut', () => {
   assert.match(r.body.published.detail, /pre-release NOT published: gh release create v1\.2\.1-rc\.1 failed \(HTTP 403\)/);
   assert.deepStrictEqual(originTags(fx), ['v1.2.0', 'v1.2.1-rc.1']);
 });
+
+// ---- #446: deploy-tag-fast — a final on every green head, end to end ----------------------------
+
+const FAST_YML = 'trunk: main\nexposure: released\nproduction: https://app.example\ndeploy: tag\nstack: node\n' +
+  'release:\n  route: deploy-tag-fast\n  final-grant: 7\n  health-url: https://app.example/health\n  rollback: auto\n';
+const GRANT_RECORD = {
+  state: 'CLOSED', labels: [{ name: 'decision-recorded' }],
+  comments: [{ body: '⚖ Decision recorded — ruled-by `Operator` · answers `A` · host `box` · 2026-10-02T00:00:00Z', createdAt: '2026-10-02T00:00:00Z', authorAssociation: 'OWNER', author: { login: 'op' } }],
+};
+
+/** A fast-route fixture: the gh stub also answers `issue view` from view-<N>.json and logs create/comment/close. */
+function fastFixture(opts = {}) {
+  const fx = fixture({ projectYml: FAST_YML, ...opts });
+  const ghPath = path.join(fx.bin, 'gh');
+  const log = path.join(fx.root, 'gh-writes.log');
+  const extra = [
+    `if [ "$1" = "issue" ] && [ "$2" = "view" ]; then [ -f "${fx.root}/view-$3.json" ] && { cat "${fx.root}/view-$3.json"; exit 0; }; echo '{"comments":[]}'; exit 0; fi`,
+    `if [ "$1" = "issue" ] && [ "$2" = "create" ]; then echo "create $*" >> "${log}"; echo "https://github.invalid/o/r/issues/90"; exit 0; fi`,
+    `if [ "$1" = "issue" ] && [ "$2" = "comment" ]; then echo "comment $3 $5" >> "${log}"; exit 0; fi`,
+    `if [ "$1" = "issue" ] && [ "$2" = "close" ]; then echo "close $3" >> "${log}"; exit 0; fi`,
+  ];
+  const lines = fs.readFileSync(ghPath, 'utf8').split('\n');
+  lines.splice(3, 0, ...extra);
+  fs.writeFileSync(ghPath, lines.join('\n'), { mode: 0o755 });
+  fs.writeFileSync(path.join(fx.root, 'view-7.json'), JSON.stringify(GRANT_RECORD));
+  // The fixture's only final is a moment old — backdate it past the 1h spacing.
+  fx.g('tag', '-d', 'v1.2.0');
+  execFileSync('git', ['-C', fx.work, 'tag', '-a', 'v1.2.0', 'HEAD~1', '-m', 'v1.2.0'], { env: { ...process.env, GIT_COMMITTER_DATE: '2026-01-01T00:00:00Z' } });
+  fx.g('push', '-q', '-f', 'origin', 'refs/tags/v1.2.0');
+  fx.writes = () => (fs.existsSync(log) ? fs.readFileSync(log, 'utf8') : '');
+  return fx;
+}
+
+test('#446 deploy-tag-fast --auto: a green head is tagged final v1.2.1 — no -rc, a full Release, stable moved, deploy facts in --json', () => {
+  const fx = fastFixture();
+  const r = cut(fx, ['--auto']);
+  assert.strictEqual(r.code, 0, r.out + r.err);
+  assert.strictEqual(r.body.ok, true, JSON.stringify(r.body.checks, null, 2));
+  assert.strictEqual(r.body.tag, 'v1.2.1');
+  assert.strictEqual(r.body.final, true);
+  assert.deepStrictEqual(r.body.deploy, { healthUrl: 'https://app.example/health', rollback: 'auto' });
+  assert.deepStrictEqual(r.body.grant, { issue: 7, ruledBy: 'Operator' });
+  assert.deepStrictEqual(originTags(fx), ['v1.2.0', 'v1.2.1']);
+  const created = fs.readFileSync(fx.releasesFile, 'utf8');
+  assert.match(created, /^create v1\.2\.1 .*--latest/m);
+  assert.doesNotMatch(created, /--prerelease/);
+  assert.strictEqual(originBranch(fx, 'stable'), fx.g('rev-parse', 'HEAD'));
+  assert.strictEqual(originBranch(fx, 'next'), null);
+  const msg = fx.g('tag', '-l', '--format=%(contents)', 'v1.2.1');
+  assert.match(msg, /deploy-tag-fast/);
+  assert.match(msg, /decision #7, ruled by Operator/);
+  // Re-run on the same head: the route holding, not a second final.
+  const again = cut(fx, ['--auto']);
+  assert.strictEqual(again.code, 0, again.out + again.err);
+  assert.strictEqual(again.body.noop, true);
+});
+
+test('#446 deploy-tag-fast without --auto refuses — finals come only from the workflow', () => {
+  const fx = fastFixture();
+  const r = cut(fx);
+  assertRefused(fx, r, 'release-policy', /only from the release workflow/);
+  assert.deepStrictEqual(originTags(fx), ['v1.2.0']);
+});
+
+test('#446 deploy-tag-fast: a reopened grant refuses and tags nothing', () => {
+  const fx = fastFixture();
+  fs.writeFileSync(path.join(fx.root, 'view-7.json'), JSON.stringify({ ...GRANT_RECORD, comments: [...GRANT_RECORD.comments, { body: '↩ Decision reopened — ruled-by `Operator` · host `box` · 2026-10-03T00:00:00Z', createdAt: '2026-10-03T00:00:00Z', authorAssociation: 'OWNER', author: { login: 'op' } }] }));
+  const r = cut(fx, ['--auto']);
+  assertRefused(fx, r, 'final-grant');
+  assert.deepStrictEqual(originTags(fx), ['v1.2.0']);
+});
+
+test('#446 deploy-tag-fast: an open release-hold refuses', () => {
+  const fx = fastFixture();
+  fs.writeFileSync(fx.issuesFile, JSON.stringify([{ number: 12, state: 'OPEN', body: '', title: 'x', labels: [{ name: 'release-hold' }] }]));
+  assertRefused(fx, cut(fx, ['--auto']), 'release-hold', /#12/);
+});
+
+test('#446 deploy-tag-fast: a migration opens the tracking issue and posts one hand-off; nothing is tagged', () => {
+  const fx = fastFixture();
+  commit(fx, 'database/migrations/2026_10_01_000000_add_x.php', 'fix: add a column',
+    "<?php\nreturn new class { public function up() { Schema::table('t', fn ($t) => $t->string('x')->nullable()); } };\n");
+  const r = cut(fx, ['--auto']);
+  assertRefused(fx, r, 'migration-grant');
+  assert.strictEqual(r.body.handoff, 'COLAB_HUMAN=1 colab migration-grant 90 --branch v1.2.1');
+  assert.match(fx.writes(), /^create issue create --title release: v1\.2\.1/m);
+  assert.match(fx.writes(), /^comment 90 /m);
+  assert.deepStrictEqual(originTags(fx), ['v1.2.0']);
+});
+
+test('#446 deploy-tag-fast: inside final-spacing the run is a no-op (exit 0, nothing tagged)', () => {
+  const fx = fastFixture();
+  // The fixture's last final is dated 2026-01-01; a ten-year spacing keeps any test date inside it.
+  commit(fx, '.github/project.yml', 'fix: spacing', FAST_YML + '  final-spacing: 3650d\n');
+  const r = cut(fx, ['--auto']);
+  assert.strictEqual(r.code, 0, r.out + r.err);
+  assert.strictEqual(r.body.noop, true, JSON.stringify(r.body.checks, null, 2));
+  assert.strictEqual(r.body.checks.find((c) => c.condition === 'spacing').ok, false);
+  assert.deepStrictEqual(originTags(fx), ['v1.2.0']);
+});

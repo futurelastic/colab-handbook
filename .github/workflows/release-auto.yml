@@ -134,6 +134,12 @@ jobs:
             TAG="$(jq -r '.tag' "$OUT")"
             echo "tag=$TAG" >> "$GITHUB_OUTPUT"
             echo "Cut $TAG" | tee -a "$GITHUB_STEP_SUMMARY"
+            # #446: on route deploy-tag-fast the cut IS the final, and the deploy job deploys it in
+            # this run (a tag pushed with GITHUB_TOKEN starts no `push: tags` workflow).
+            if [ "$(jq -r '.final // false' "$OUT")" = "true" ]; then
+              echo "final=$TAG" >> "$GITHUB_OUTPUT"
+              echo "health-url=$(jq -r '.deploy.healthUrl // ""' "$OUT")" >> "$GITHUB_OUTPUT"
+            fi
           elif [ "$(jq -r '.noop' "$OUT")" = "true" ]; then
             echo "No-op: nothing owed, head already a candidate, inside a declared cadence window, or main's head is not a promotion." | tee -a "$GITHUB_STEP_SUMMARY"
           elif [ "$(jq -r '.ok' "$OUT")" = "true" ]; then

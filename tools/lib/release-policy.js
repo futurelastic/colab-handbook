@@ -8,7 +8,7 @@
  * declare to CHOOSE a route its row permits and to NARROW it:
  *
  *   release:
- *     route: public-tool      # none | rapid-app | public-tool | library-fast | deploy-tag | live
+ *     route: public-tool      # none | rapid-app | public-tool | library-fast | deploy-tag | deploy-tag-fast | live
  *     candidates: auto        # auto | off
  *     candidates-per-day: 1   # positive integer — an opt-in cap; no route has one by default (#443)
  *     test-period: 3d         # <N>d, never below the route's 3 days
@@ -20,6 +20,9 @@
  *     npm-gate: <command>     # #433 — the pack-allowlist gate, run before every npm publish
  *     version-source: tag     # #438 — tag | manifest: is a manifest's version checked, or derivable?
  *     final-grant: 123        # #441 — an operator's recorded decision letting deploy-tag's final be automatic
+ *     health-url: https://…   # #446 — deploy-tag-fast only: the public endpoint reporting the running version
+ *     rollback: auto          # #446 — deploy-tag-fast only: the deploy rolls itself back when that check fails
+ *     final-spacing: 1h       # #446 — deploy-tag-fast only: minimum time between finals (<N>h | <N>d, ≥ 1h)
  *
  * Two layers. The descriptor's ROW (exposure + deploy + production) is a fact about the repo; the
  * ROUTE is how releases run on it. A row permits a fixed set of routes (ROW_ROUTES) and derives one
@@ -44,7 +47,7 @@
 
 const axisAuthority = require('./axis-authority.js');
 
-const KEYS = Object.freeze(['route', 'candidates', 'candidates-per-day', 'test-period', 'final', 'guard-run', 'guard-result', 'exports', 'npm', 'npm-gate', 'version-source', 'final-grant']);
+const KEYS = Object.freeze(['route', 'candidates', 'candidates-per-day', 'test-period', 'final', 'guard-run', 'guard-result', 'exports', 'npm', 'npm-gate', 'version-source', 'final-grant', 'health-url', 'rollback', 'final-spacing']);
 // #438: where the version a tag names comes from. `manifest` (the default) — every declared manifest
 // (VERSION, package.json, Cargo.toml, pyproject.toml) must already equal the tag, so a human bumps it
 // on trunk first. `tag` — the tag is the version and the manifests are DERIVABLE: the pre-tag check
@@ -56,6 +59,18 @@ const VERSION_SOURCES = Object.freeze(['manifest', 'tag']);
 // sit on — `deploy: tag` only. `deploy: manual` stays human: a person runs that deploy anyway.
 const GRANTABLE_ROUTE = 'deploy-tag';
 const GRANTABLE_ROW = 'released-tag';
+// #446: the route that cuts a FINAL on every green trunk head — no candidate, no test period — and
+// deploys it in the same run. It exists only on deploy: tag, only with the operator's recorded grant
+// (the #441 reader, unchanged), and only where the repo declares a health-gated deploy that rolls
+// itself back: those two declarations stand in for the test period it does not have. Its own keys —
+// `health-url`, `rollback`, `final-spacing` — fit this route alone.
+const FAST_ROUTE = 'deploy-tag-fast';
+const GRANTABLE_ROUTES = Object.freeze([GRANTABLE_ROUTE, FAST_ROUTE]);
+const FAST_KEYS = Object.freeze(['health-url', 'rollback', 'final-spacing']);
+const ROLLBACK = Object.freeze(['auto']);
+// The minimum spacing between two finals on deploy-tag-fast: both the default and the floor. A burst
+// of merges then deploys at most once an hour; a repo may lengthen it, never shorten it.
+const FINAL_SPACING_HOURS = 1;
 // #433: the npm opt-in. `npm` names the package directory release-auto.yml publishes (`.` for the
 // root); `npm-gate` the command that proves the tarball holds only what was meant to ship. They are
 // a pair — a publish with no gate is the stray-local-file leak the gate exists to stop — and they
@@ -84,7 +99,8 @@ const TEST_PERIOD_DAYS = 3;
  *   finalize          how a final is reached: 'none' (no tags), 'after-test-period' (each clean
  *                     candidate on its own clock), 'newest-clean' (the newest candidate clean for
  *                     the period; a newer candidate does not restart an older one's clock),
- *                     'on-tag' (the tag itself triggers the publish; no candidate), 'human-click'.
+ *                     'on-tag' (the tag itself triggers the publish; no candidate), 'human-click',
+ *                     'on-green-head' (#446: `release cut --auto` tags the final itself; no candidate).
  */
 const ROUTE_POLICY = Object.freeze({
   'none': Object.freeze({ candidates: 'off', candidatesPerDay: null, testPeriodDays: TEST_PERIOD_DAYS, final: 'human', finalize: 'none', why: 'nothing consumes a tag here, so no tags are cut' }),
@@ -92,6 +108,7 @@ const ROUTE_POLICY = Object.freeze({
   'public-tool': Object.freeze({ candidates: 'auto', candidatesPerDay: null, testPeriodDays: TEST_PERIOD_DAYS, final: 'auto', finalize: 'after-test-period', why: 'adopters install it and nothing deploys: every green trunk head gets a candidate, and the final tag is automatic after a clean test period' }),
   'library-fast': Object.freeze({ candidates: 'off', candidatesPerDay: null, testPeriodDays: null, final: 'auto', finalize: 'on-tag', why: 'a library released per merge and pinned by its consumers: no candidates, the tag triggers the publish and the route\'s checks still apply' }),
   'deploy-tag': Object.freeze({ candidates: 'auto', candidatesPerDay: null, testPeriodDays: TEST_PERIOD_DAYS, final: 'human', finalize: 'human-click', why: 'the tag deploys production, so the final tag is a human act' }),
+  'deploy-tag-fast': Object.freeze({ candidates: 'off', candidatesPerDay: null, testPeriodDays: null, final: 'auto', finalize: 'on-green-head', why: 'the operator granted a final on every green trunk head, deployed in the same run behind a health-gated deploy that rolls itself back' }),
   'live': Object.freeze({ candidates: 'off', candidatesPerDay: null, testPeriodDays: TEST_PERIOD_DAYS, final: 'human', finalize: 'none', why: 'the promotion is the deploy and stays human; no automatic tags' }),
 });
 const ROUTES = Object.freeze(Object.keys(ROUTE_POLICY));
@@ -105,7 +122,7 @@ const ROW_ROUTES = Object.freeze({
   'no-tags': Object.freeze(['none']),
   'live': Object.freeze(['live', 'none']),
   'released-no-production': Object.freeze(['public-tool', 'rapid-app', 'library-fast', 'none']),
-  'released-tag': Object.freeze(['deploy-tag', 'none']),
+  'released-tag': Object.freeze(['deploy-tag', 'deploy-tag-fast', 'none']),
   'released-manual': Object.freeze(['deploy-tag', 'none']),
   'unmatched': Object.freeze(['none']),
 });
@@ -151,7 +168,35 @@ function deriveDefault(cfg) {
 /** A route's policy as an effective-shaped object (no `why`). */
 function routePolicy(route) {
   const p = ROUTE_POLICY[route];
-  return p ? { route, candidates: p.candidates, candidatesPerDay: p.candidatesPerDay, testPeriodDays: p.testPeriodDays, final: p.final, finalize: p.finalize, npm: null, versionSource: 'manifest', finalGrant: null } : null;
+  return p ? { route, candidates: p.candidates, candidatesPerDay: p.candidatesPerDay, testPeriodDays: p.testPeriodDays, final: p.final, finalize: p.finalize, npm: null, versionSource: 'manifest', finalGrant: null, healthGate: null, finalSpacingHours: null } : null;
+}
+
+/** `6h` -> 6, `2d` -> 48; anything else (including `30m`, `0h`) -> null. */
+function parseSpacing(v) {
+  const m = typeof v === 'string' ? /^([0-9]+)([hd])$/.exec(v.trim()) : null;
+  if (!m) return null;
+  const n = parseInt(m[1], 10) * (m[2] === 'd' ? 24 : 1);
+  return n > 0 ? n : null;
+}
+
+/** A health URL is an absolute https:// URL with a host. */
+function validHealthUrl(v) {
+  if (typeof v !== 'string' || !/^https:\/\/[^\s/]+/.test(v.trim())) return false;
+  try { return new URL(v.trim()).protocol === 'https:'; } catch { return false; }
+}
+
+/**
+ * #446: what a declared `deploy-tag-fast` still lacks — the operator's grant, the health URL, the
+ * rollback declaration. Empty array = all three present (shape only; the grant's tracker state is
+ * finalGrantVerdict's).
+ */
+function fastRoutePrerequisites(raw) {
+  const r = raw || {};
+  const missing = [];
+  if (parseGrantIssue(r['final-grant']) === null) missing.push("release.final-grant: <N> — the operator's recorded decision (colab decision <N> --record --ruled-by <human>)");
+  if (!validHealthUrl(r['health-url'])) missing.push('release.health-url: https://… — the public endpoint that reports the running version');
+  if (!ROLLBACK.includes(r.rollback)) missing.push('release.rollback: auto — the deploy rolls itself back when the health check fails');
+  return missing;
 }
 
 function parseTestPeriod(v) {
@@ -176,7 +221,7 @@ function evaluateRelease(cfg) {
   const fromDerived = () => ({
     route: derived.route, candidates: derived.candidates, candidatesPerDay: derived.candidatesPerDay,
     testPeriodDays: derived.testPeriodDays, final: derived.final, finalize: derived.finalize, npm: null,
-    versionSource: 'manifest', finalGrant: null,
+    versionSource: 'manifest', finalGrant: null, healthGate: null, finalSpacingHours: null,
   });
   let effective = fromDerived();
   const findings = [];
@@ -222,6 +267,11 @@ function evaluateRelease(cfg) {
     else if (!allowed.includes(v)) {
       fail(`release.route: ${v} does not fit ${derived.axis} — that descriptor permits ${allowed.join(' or ')} (${routes}). ` +
         'A route is chosen among the ones exposure + deploy permit; change those first if the repo really changed');
+    } else if (v === FAST_ROUTE && fastRoutePrerequisites(raw).length) {
+      // Fail closed: without its grant and its health gate the fast route would be an automatic,
+      // untested deploy nobody chose. The derived route (deploy-tag, human final) stays in effect.
+      fail(`release.route: ${FAST_ROUTE} needs the operator's grant and a declared health-gated deploy before it may stand — missing: ` +
+        `${fastRoutePrerequisites(raw).join('; ')} (${routes}). Until then the final stays a human act on route ${derived.route}`);
     } else {
       effective = routePolicy(v);
       why = ROUTE_POLICY[v].why;
@@ -259,8 +309,14 @@ function evaluateRelease(cfg) {
   if ('final-grant' in raw) {
     const n = parseGrantIssue(raw['final-grant']);
     if (n === null) fail(`release.final-grant is ${JSON.stringify(raw['final-grant'])}, expected the number of the decision issue that records the operator's ruling (e.g. 123 or "#123")`);
-    else if (effective.route !== GRANTABLE_ROUTE || derived.row !== GRANTABLE_ROW) {
-      fail(`release.final-grant fits only route ${GRANTABLE_ROUTE} on deploy: tag — ${route} on ${derived.axis} is not that (${routes}). ` +
+    else if (effective.route === FAST_ROUTE) {
+      // #446: the route itself is the automatic final, so the grant takes effect from this line alone.
+      grant = { issue: n };
+      effective.finalGrant = grant;
+    } else if (raw.route === FAST_ROUTE) {
+      // The route was refused above; its grant line is not a second finding.
+    } else if (effective.route !== GRANTABLE_ROUTE || derived.row !== GRANTABLE_ROW) {
+      fail(`release.final-grant fits only route ${GRANTABLE_ROUTE} on deploy: tag (or ${FAST_ROUTE}) — ${route} on ${derived.axis} is not that (${routes}). ` +
         (derived.row === 'released-manual' ? 'On deploy: manual a person runs the deploy anyway, so its final stays human' : 'Its final is not a deploying human act, so there is nothing to grant'));
     } else grant = { issue: n };
   }
@@ -268,7 +324,9 @@ function evaluateRelease(cfg) {
   if ('final' in raw) {
     const v = raw.final;
     if (!FINAL.includes(v)) fail(`release.final is ${JSON.stringify(v)}, expected "auto" or "human"`);
-    else if (v === 'auto' && effective.final === 'human' && grant) {
+    else if (effective.route === FAST_ROUTE) {
+      if (v === 'human') fail(`release.final: human on route ${FAST_ROUTE} — that route has no candidate for a human to finalize; use route deploy-tag for a human final`);
+    } else if (v === 'auto' && effective.final === 'human' && grant) {
       // #441: an automatic final that deploys production — permitted only by the recorded grant.
       effective.final = 'auto';
       effective.finalize = 'after-test-period';
@@ -288,7 +346,7 @@ function evaluateRelease(cfg) {
     const v = raw['test-period'];
     const days = parseTestPeriod(v);
     if (days === null) fail(`release.test-period is ${JSON.stringify(v)}, expected a whole number of days like "${TEST_PERIOD_DAYS}d"`);
-    else if (effective.testPeriodDays === null) fail(`release.test-period: ${v} has no period to set — ${route} finalizes on the tag itself, with no candidate. Remove the key`);
+    else if (effective.testPeriodDays === null) fail(`release.test-period: ${v} has no period to set — ${route} cuts no candidate, so there is no test period. Remove the key`);
     else if (days < effective.testPeriodDays) {
       widen('test-period', v, `the test period is ${effective.testPeriodDays}d, and a shorter one finalizes a candidate before the route's own window has passed. Set ${effective.testPeriodDays}d or longer`);
     } else effective.testPeriodDays = days;
@@ -299,6 +357,21 @@ function evaluateRelease(cfg) {
     const v = raw['version-source'];
     if (!VERSION_SOURCES.includes(v)) fail(`release.version-source is ${JSON.stringify(v)}, expected "tag" or "manifest"`);
     else effective.versionSource = v;
+  }
+
+  // #446: the fast route's own keys — only there, and the floor on spacing.
+  const fastKeys = FAST_KEYS.filter((k) => k in raw);
+  if (effective.route === FAST_ROUTE) {
+    effective.healthGate = { url: raw['health-url'].trim(), rollback: raw.rollback };
+    effective.finalSpacingHours = FINAL_SPACING_HOURS;
+    if ('final-spacing' in raw) {
+      const h = parseSpacing(raw['final-spacing']);
+      if (h === null) fail(`release.final-spacing is ${JSON.stringify(raw['final-spacing'])}, expected hours or days like "${FINAL_SPACING_HOURS}h" or "1d"`);
+      else if (h < FINAL_SPACING_HOURS) widen('final-spacing', raw['final-spacing'], `finals are at least ${FINAL_SPACING_HOURS}h apart. Set ${FINAL_SPACING_HOURS}h or longer`);
+      else effective.finalSpacingHours = h;
+    }
+  } else if (fastKeys.length && raw.route !== FAST_ROUTE) {
+    fail(`release.${fastKeys.join(' / release.')} fits only route ${FAST_ROUTE} — ${route} on ${derived.axis} is not that (${routes}). Remove the key${fastKeys.length > 1 ? 's' : ''}`);
   }
 
   // 3. npm (#433) — only on a route where a tag publishes to adopters and deploys nothing.
@@ -352,7 +425,8 @@ function finalGrantVerdict(record, { issue, trust } = {}) {
 }
 
 module.exports = {
-  VERSION_SOURCES, GRANTABLE_ROUTE, GRANTABLE_ROW, parseGrantIssue, finalGrantVerdict,
+  VERSION_SOURCES, GRANTABLE_ROUTE, GRANTABLE_ROW, GRANTABLE_ROUTES, FAST_ROUTE, FAST_KEYS, ROLLBACK, FINAL_SPACING_HOURS,
+  parseGrantIssue, finalGrantVerdict, parseSpacing, validHealthUrl, fastRoutePrerequisites,
   KEYS, INPUT_KEYS, NPM_KEYS, NPM_ROUTES, CANDIDATES, FINAL, TEST_PERIOD_DAYS, ROUTES, ROUTE_POLICY, ROW_ROUTES,
   deriveDefault, evaluateRelease, parseTestPeriod, routePolicy,
 };

@@ -1432,7 +1432,11 @@ function auditRepo(target, ctx) {
       if (grant) {
         const v = releasePolicy.finalGrantVerdict(src.issue ? src.issue(grant.issue) : null, { issue: grant.issue, trust: trustHumansLib.parseTrustHumans(cfg) });
         info.releaseFinalGrant = { issue: grant.issue, ok: v.ok, ruledBy: v.ruledBy };
-        if (!v.ok) fail(`release.final: auto on deploy-tag has no resolvable operator grant — ${v.detail} (CONVENTIONS.md §6, An operator-granted automatic final)`);
+        if (!v.ok) {
+          fail(rel.effective.route === releasePolicy.FAST_ROUTE
+            ? `route: deploy-tag-fast has no resolvable operator grant — ${v.detail} (CONVENTIONS.md §6, A final on every green head)`
+            : `release.final: auto on deploy-tag has no resolvable operator grant — ${v.detail} (CONVENTIONS.md §6, An operator-granted automatic final)`);
+        }
       }
     }
 
@@ -1642,6 +1646,7 @@ function auditRepo(target, ctx) {
   const deployWorkflows = workflows.filter((f) => /^deploy[-.]/.test(f));
   checkPrereleaseTagTrigger(src, workflows, deploy, fail, warn);
   checkReleaseAuto(src, workflows, cfg, warn);
+  checkFastRouteDeploy(src, workflows, cfg, fail);
   checkPrivateNpm(src, workflows, fail, warn);
 
   const runbook = cfg && "runbook" in cfg ? cfg.runbook : null;
@@ -2537,7 +2542,8 @@ function releaseAutoFindings({ readFile, workflows, cfg }) {
     const text = readFile(`.github/workflows/${wf}`);
     if (!text || !RELEASE_AUTO_RUN.test(text)) continue;
     const runsCut = /\brelease\s+cut\s+--auto\b/.test(text);
-    if (runsCut && effective && effective.candidates === "off") {
+    // #446: on deploy-tag-fast candidates are off by design — `cut --auto` tags the final itself.
+    if (runsCut && effective && effective.candidates === "off" && effective.finalize !== "on-green-head") {
       out.push(`${wf} runs \`colab release cut --auto\`, but the release rung leaves candidates off on this descriptor (${effective.route === null ? "no route" : `route ${effective.route}`}) — every run refuses; remove the workflow, or change exposure/deploy/release: deliberately (CONVENTIONS.md §6)`);
     }
     const publishesHere = /\bgh\s+release\s+create\b/.test(text) || /action-gh-release/.test(text) || /uses:\s*\.\/\.github\/workflows\//.test(text);
@@ -2559,6 +2565,42 @@ function releaseAutoFindings({ readFile, workflows, cfg }) {
 }
 function checkReleaseAuto(src, workflows, cfg, warn) {
   for (const text of releaseAutoFindings({ readFile: (p) => src.readFile(p), workflows, cfg })) warn(text);
+}
+
+// ---- route deploy-tag-fast: the final is deployed in the run that tags it (#446) ----------------
+// A tag pushed with GITHUB_TOKEN starts no `push: tags` workflow, so on this route the workflow that
+// runs `colab release cut --auto` must itself deploy what it tagged — templates/release-auto.yml's
+// `deploy` job reads the cut step's `final` output. Fail, not warn: without it every final reaches
+// the Release page and `stable` while production never moves, and nothing says so. Also fails the
+// template's deploy step left unedited (it fails every run by design, but the audit says why first).
+// What the audit cannot check is that the deploy really rolls back on a failed health check —
+// release.rollback: auto is the operator's statement of that, which is why the grant is required.
+const FAST_DEPLOY_CONSUMER = /outputs\.(final|deploy-tag)\b|\.final\s*\/\/|jq -r '\.final\b/;
+const FAST_DEPLOY_UNEDITED = /the deploy step of release-auto\.yml was never edited/;
+function fastRouteDeployFindings({ readFile, workflows, cfg }) {
+  const effective = cfg ? releasePolicy.evaluateRelease(cfg).effective : null;
+  if (!effective || effective.finalize !== "on-green-head") return [];
+  const cutters = (workflows || []).filter((wf) => {
+    const t = readFile(`.github/workflows/${wf}`);
+    return t && /\brelease\s+cut\s+--auto\b/.test(t);
+  });
+  if (!cutters.length) {
+    return ["route: deploy-tag-fast but no workflow runs `colab release cut --auto` — nothing tags or deploys a final; copy templates/release-auto.yml (CONVENTIONS.md §6, A final on every green head)"];
+  }
+  const out = [];
+  const deploying = cutters.filter((wf) => FAST_DEPLOY_CONSUMER.test(readFile(`.github/workflows/${wf}`)));
+  if (!deploying.length) {
+    out.push(`route: deploy-tag-fast, but ${cutters.join(", ")} runs \`colab release cut --auto\` and deploys nothing from its result — a tag pushed with GITHUB_TOKEN starts no \`push: tags\` run, so the final would never deploy; deploy in the same run (templates/release-auto.yml, job \`deploy\`)`);
+  }
+  for (const wf of deploying) {
+    if (FAST_DEPLOY_UNEDITED.test(readFile(`.github/workflows/${wf}`))) {
+      out.push(`route: deploy-tag-fast, but ${wf}'s deploy step is still the template's unedited placeholder — every final would be tagged and published but not deployed; replace it with your deploy (templates/release-auto.yml, DEPLOYING IN THIS RUN)`);
+    }
+  }
+  return out;
+}
+function checkFastRouteDeploy(src, workflows, cfg, fail) {
+  for (const text of fastRouteDeployFindings({ readFile: (p) => src.readFile(p), workflows, cfg })) fail(text);
 }
 
 // ---- a private repo never publishes to public npm (#432) ---------------------

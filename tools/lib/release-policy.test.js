@@ -174,8 +174,8 @@ test('every descriptor row derives a route its row permits, and the route\'s own
   }
 });
 
-test('the routes table: six routes, the human final only where a tag deploys or nothing is tagged', () => {
-  assert.deepEqual([...ROUTES], ['none', 'rapid-app', 'public-tool', 'library-fast', 'deploy-tag', 'live']);
+test('the routes table: seven routes, the human final only where a tag deploys or nothing is tagged', () => {
+  assert.deepEqual([...ROUTES], ['none', 'rapid-app', 'public-tool', 'library-fast', 'deploy-tag', 'deploy-tag-fast', 'live']);
   assert.deepEqual(eff({ route: 'rapid-app', ...ROUTE_POLICY['rapid-app'] }), { route: 'rapid-app', candidates: 'auto', testPeriodDays: 3, final: 'auto' });
   assert.equal(ROUTE_POLICY['rapid-app'].candidatesPerDay, null);
   assert.equal(ROUTE_POLICY['rapid-app'].finalize, 'newest-clean');
@@ -185,10 +185,18 @@ test('the routes table: six routes, the human final only where a tag deploys or 
   for (const r of ['none', 'live']) assert.deepEqual([ROUTE_POLICY[r].candidates, ROUTE_POLICY[r].final], ['off', 'human']);
 });
 
-test('no route ever finalizes automatically where the tag deploys production', () => {
+test('no route finalizes automatically where the tag deploys production — except deploy-tag-fast, which only an operator grant opens (#446)', () => {
   for (const deploy of ['tag', 'manual']) {
-    for (const route of ROW_ROUTES[`released-${deploy}`]) assert.equal(ROUTE_POLICY[route].final, 'human', `${deploy}/${route}`);
+    for (const route of ROW_ROUTES[`released-${deploy}`]) {
+      if (route === 'deploy-tag-fast') continue;
+      assert.equal(ROUTE_POLICY[route].final, 'human', `${deploy}/${route}`);
+    }
   }
+  assert.ok(!ROW_ROUTES['released-manual'].includes('deploy-tag-fast'));
+  // Declared bare, the fast route does not stand: the derived human final stays.
+  const bare = evaluateRelease({ exposure: 'released', deploy: 'tag', production: 'https://app.example', release: { route: 'deploy-tag-fast' } });
+  assert.equal(bare.effective.route, 'deploy-tag');
+  assert.equal(bare.effective.final, 'human');
 });
 
 test('unmatched descriptors derive no route and permit only none', () => {
@@ -410,4 +418,89 @@ test('#441: finalGrantVerdict — a live, trusted, labelled decision grants; a r
   assert.match(finalGrantVerdict({ state: 'OPEN', labels: [], comments: [decision] }, { issue: 7 }).detail, /no `decision-recorded` label/);
   assert.match(finalGrantVerdict({ state: 'OPEN', labels, comments: [{ ...decision, authorAssociation: 'NONE' }] }, { issue: 7 }).detail, /not recorded by a trusted human/);
   assert.match(finalGrantVerdict({ state: 'OPEN', labels, comments: [] }, { issue: 7 }).detail, /carries no recorded decision/);
+});
+
+// ---- #446: deploy-tag-fast ----------------------------------------------------------------------
+const FAST_BASE = { exposure: 'released', deploy: 'tag', production: 'https://app.example' };
+const FAST = { route: 'deploy-tag-fast', 'final-grant': 7, 'health-url': 'https://app.example/health', rollback: 'auto' };
+const texts = (r) => r.findings.map((f) => f.text).join('|');
+
+test('#446 a granted, health-gated deploy-tag-fast stands: final on every green head, no candidate', () => {
+  const r = evaluateRelease({ ...FAST_BASE, release: { ...FAST } });
+  assert.deepEqual(r.findings, []);
+  const e = r.effective;
+  assert.deepEqual(
+    { route: e.route, candidates: e.candidates, testPeriodDays: e.testPeriodDays, final: e.final, finalize: e.finalize, finalGrant: e.finalGrant, healthGate: e.healthGate, finalSpacingHours: e.finalSpacingHours },
+    { route: 'deploy-tag-fast', candidates: 'off', testPeriodDays: null, final: 'auto', finalize: 'on-green-head', finalGrant: { issue: 7 }, healthGate: { url: 'https://app.example/health', rollback: 'auto' }, finalSpacingHours: 1 },
+  );
+  // final: auto restates the route and is harmless.
+  assert.deepEqual(evaluateRelease({ ...FAST_BASE, release: { ...FAST, final: 'auto' } }).findings, []);
+});
+
+test('#446 without its grant the fast route fails closed to deploy-tag with a human final', () => {
+  const { 'final-grant': _g, ...noGrant } = FAST;
+  const r = evaluateRelease({ ...FAST_BASE, release: noGrant });
+  assert.match(texts(r), /deploy-tag-fast needs the operator's grant.*release\.final-grant/);
+  assert.equal(r.effective.route, 'deploy-tag');
+  assert.equal(r.effective.final, 'human');
+  assert.equal(r.effective.finalGrant, null);
+  assert.equal(r.effective.healthGate, null);
+});
+
+test('#446 the health gate is required: health-url (https only) and rollback: auto', () => {
+  for (const [label, release] of [
+    ['no health-url', { ...FAST, 'health-url': undefined }],
+    ['http url', { ...FAST, 'health-url': 'http://app.example/health' }],
+    ['not a url', { ...FAST, 'health-url': 'app.example/health' }],
+    ['no rollback', { ...FAST, rollback: undefined }],
+    ['rollback manual', { ...FAST, rollback: 'manual' }],
+  ]) {
+    const clean = Object.fromEntries(Object.entries(release).filter(([, v]) => v !== undefined));
+    const r = evaluateRelease({ ...FAST_BASE, release: clean });
+    assert.match(texts(r), /deploy-tag-fast needs/, label);
+    assert.equal(r.effective.route, 'deploy-tag', label);
+    assert.equal(r.effective.final, 'human', label);
+  }
+});
+
+test('#446 the fast route fits deploy: tag only — not deploy: manual, not a no-production repo', () => {
+  const manual = evaluateRelease({ exposure: 'released', deploy: 'manual', production: 'https://app.example', runbook: 'r.md', release: { ...FAST } });
+  assert.match(texts(manual), /release\.route: deploy-tag-fast does not fit/);
+  assert.equal(manual.effective.final, 'human');
+  const lib = evaluateRelease({ exposure: 'released', deploy: 'none', production: null, release: { ...FAST } });
+  assert.match(texts(lib), /release\.route: deploy-tag-fast does not fit/);
+  // library-fast keeps its meaning: still not offered where the tag deploys.
+  assert.ok(!ROW_ROUTES['released-tag'].includes('library-fast'));
+  assert.equal(deriveDefault(FAST_BASE).route, 'deploy-tag');
+});
+
+test('#446 final-spacing: hours or days, never below 1h', () => {
+  const at = (v) => evaluateRelease({ ...FAST_BASE, release: { ...FAST, 'final-spacing': v } });
+  assert.equal(at('6h').effective.finalSpacingHours, 6);
+  assert.equal(at('2d').effective.finalSpacingHours, 48);
+  assert.equal(at('1h').effective.finalSpacingHours, 1);
+  for (const bad of ['30m', '0h', 'abc', 3]) {
+    const r = at(bad);
+    assert.match(texts(r), /release\.final-spacing/, String(bad));
+    assert.equal(r.effective.finalSpacingHours, 1, String(bad));
+  }
+});
+
+test('#446 the fast keys fit only the fast route', () => {
+  const r = evaluateRelease({ ...FAST_BASE, release: { 'health-url': 'https://app.example/health', rollback: 'auto', 'final-spacing': '2h' } });
+  assert.match(texts(r), /release\.health-url \/ release\.rollback \/ release\.final-spacing fits only route deploy-tag-fast/);
+  assert.equal(r.effective.healthGate, null);
+});
+
+test('#446 a candidate key, a test period or a human final on the fast route fail', () => {
+  for (const [k, v, re] of [
+    ['test-period', '3d', /release\.test-period: 3d has no period/],
+    ['candidates', 'auto', /release\.candidates: auto widens/],
+    ['candidates-per-day', 2, /release\.candidates-per-day: 2 has nothing to cap/],
+    ['final', 'human', /release\.final: human on route deploy-tag-fast/],
+  ]) {
+    const r = evaluateRelease({ ...FAST_BASE, release: { ...FAST, [k]: v } });
+    assert.match(texts(r), re, k);
+    assert.equal(r.effective.final, 'auto', k);
+  }
 });

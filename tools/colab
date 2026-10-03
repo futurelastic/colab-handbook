@@ -1235,6 +1235,20 @@ Refuses, naming each failed condition (all are reported, not just the first):
                        There the bump reads the promoted commits (main's merge subject is skipped),
                        and a switch-removal child counts when its Closes #N was promoted.
 
+Route deploy-tag-fast (#446) — a deploy: tag repo with the operator's grant and a declared health gate:
+  --auto tags the FINAL vX.Y.Z on main's green head — no candidate, no test period — publishes it as
+  the latest GitHub Release, moves the stable channel, and prints final/deploy in --json so the
+  release workflow's deploy job deploys it in the same run. Without --auto it refuses: a final cut by
+  hand would reach production with no deploy job behind it. Five more conditions there:
+  spacing              release.final-spacing (default and floor 1h) since the newest final — inside
+                       it the run is a NO-OP; the first run after it tags main's head
+  already-final        main's head already carries a final — a NO-OP
+  final-grant          release.final-grant's decision still resolves (recorded, trusted, not reopened)
+  release-hold         an open issue carries the release-hold label (a human veto)
+  migration-grant      a migration since the last final with no grant on the version's tracking
+                       issue — refused; a non-dry run opens "release: vX.Y.Z" if needed and posts the
+                       one human command (COLAB_HUMAN=1 colab migration-grant <N> --branch vX.Y.Z)
+
 The bump (without --auto) is release-status's semverSuggestion since the last final tag (candidates skipped): fix ->
 patch, feat -> minor; a breaking change is a minor pre-1.0 and a refusal from 1.0 on.
   --bump patch|minor   override the computed bump — requires --reason, which is recorded on the tag
@@ -1441,6 +1455,75 @@ function measureAutoSignals(repoAbs, { doc, sha, lastFinal, remote, issues, trun
   return { signals, migration: (v) => releaseCut.parseMigrationSection(migrationText, v) };
 }
 
+/** #446: every final `vX.Y.Z` tag as [{ name, date }] — what release.final-spacing counts. A human's final counts too. */
+function finalTags(repoAbs) {
+  const fe = git.git(['for-each-ref', 'refs/tags', '--format=%(refname:short)%09%(creatordate:iso-strict)'], repoAbs);
+  return (fe.ok ? fe.stdout.split('\n').filter(Boolean) : []).map((l) => l.split('\t'))
+    .filter(([name]) => releaseCut.parseVersion(name)).map(([name, date]) => ({ name, date }));
+}
+
+/**
+ * #446: what route deploy-tag-fast keeps in place of a test period, measured — the operator's grant
+ * (the #441 reader, against trunk's trust-humans), the repo-wide release-hold veto, every migration
+ * since the last final against a grant on the computed version's tracking issue, and the spacing
+ * since the newest final. The version is computed here only to find that tracking issue; decide()
+ * computes it again from the same inputs, so the two cannot disagree.
+ */
+function measureFastRoute(repoAbs, { policy, remote, issues, lastFinal, tags, auto, migrationPaths: paths }) {
+  const grantDecl = policy.effective.finalGrant;
+  const trust = trustAt(repoAbs, `${remote}/main`);
+  const finalGrant = isGhUsable(repoAbs)
+    ? releasePolicy.finalGrantVerdict(git.ghIssueView(repoAbs, grantDecl.issue, ['state', 'labels', 'comments']), { issue: grantDecl.issue, trust })
+    : { ok: false, ruledBy: null, detail: `release.final-grant #${grantDecl.issue} could not be read: gh not usable (${ghUnusableWhy(repoAbs)})` };
+  const holds = releaseCut.holdsVerdict(issues);
+  let tracking = null;
+  let grant = null;
+  const v = auto ? releaseCut.decideAutoVersion({ lastFinal, signals: auto.signals, migration: auto.migration, tags }) : null;
+  if (v && v.ok && issues) {
+    const open = issues.filter((i) => String(i.state || '').toUpperCase() === 'OPEN' && releaseFinalize.parseReleaseMarker(i.body) === v.version);
+    if (open.length) tracking = { number: open[0].number };
+  }
+  if (paths && paths.length) {
+    grant = tracking
+      ? migrationGrant.evaluateIssue(git.ghIssueView(repoAbs, tracking.number, ['state', 'labels', 'comments']), v.version, tracking.number, labels.MIGRATION_GRANT_LABEL, { trust })
+      : { ok: false, reason: 'no tracking issue yet to carry a grant' };
+    if (grant && grant.ok) grant = { ...grant, issue: tracking.number };
+  }
+  const migrations = { ...releaseFinalize.migrationGrantVerdict({ paths, grant, since: lastFinal }), paths: paths || null };
+  const spacing = releaseCut.spacingVerdict({ finals: finalTags(repoAbs), spacingHours: policy.effective.finalSpacingHours, now: new Date().toISOString() });
+  return { finalGrant, holds, migrations, spacing, tracking };
+}
+
+/** Post `text` on issue `num` once — idempotent by release-finalize's event marker. */
+function commentOnce(repoAbs, num, fields, text) {
+  const view = git.ghIssueView(repoAbs, num, ['comments']);
+  if (view && releaseFinalize.hasEvent(view.comments, fields)) return;
+  const r = git.ghIssueComment(repoAbs, num, `${releaseFinalize.eventMarker(fields)}\n${text}`);
+  if (!r.ok) warn(`could not comment on #${num}: ${String(r.stderr || '').split('\n')[0]}`);
+}
+
+/**
+ * #426: one "Released in vX.Y.Z" comment on every issue the version carries — the closing references
+ * in (previous final, sha], minus `exclude` (the release tracking issues). Idempotent by event marker.
+ * Shared by `release finalize` and, on route deploy-tag-fast (#446), `release cut`.
+ */
+function announceCarried(repoAbs, { tagNames, exclude, version, sha }) {
+  const prev = releaseFinalize.previousFinal(tagNames, version);
+  if (!prev) return { range: null, issues: [], posted: [], skipped: [], detail: 'no previous final — the first version announces nothing' };
+  const log = git.git(['log', '--format=%B%x00', `${prev}..${sha}`], repoAbs);
+  if (!log.ok) { warn(`could not read ${prev}..${shortSha(sha)} — no issue told it was released in ${version}`); return { range: `${prev}..${version}`, issues: [], posted: [], skipped: [], detail: 'git log failed' }; }
+  const nums = releaseFinalize.carriedIssues(log.stdout.split('\0'), { exclude });
+  const posted = []; const skipped = [];
+  for (const n of nums) {
+    const view = git.ghIssueView(repoAbs, n, ['comments']);
+    if (!view) { skipped.push(n); continue; }
+    if (releaseFinalize.hasEvent(view.comments, releaseFinalize.releasedEvent(version))) continue;
+    const r = git.ghIssueComment(repoAbs, n, releaseFinalize.releasedComment(version, sha));
+    if (r.ok) posted.push(n); else { skipped.push(n); warn(`could not comment on #${n}: ${String(r.stderr || '').split('\n')[0]}`); }
+  }
+  return { range: `${prev}..${version}`, issues: nums, posted, skipped };
+}
+
 function cmdReleaseCut(argv) {
   const opts = parseArgs(argv, {
     values: { '--repo': 'repo', '--bump': 'bump', '--reason': 'reason' },
@@ -1485,7 +1568,7 @@ function cmdReleaseCut(argv) {
   const tags = lines(git.git(['tag', '--list'], repoAbs));
   const tagsAtSha = lines(git.git(['tag', '--points-at', sha], repoAbs));
 
-  const { ci, suite, schema, switches, issues } = measureCandidateConditions(repoAbs, {
+  const { ci, suite, schema, switches, issues, migrations: migrationPathsSince } = measureCandidateConditions(repoAbs, {
     sha, lastFinal, at, readRuns: () => releaseCut.withoutOwnWorkflow(git.ghRunsForCommit(repoAbs, 'main', sha)), // #425
   });
   const { manifests, ancestry } = measurePreTag(repoAbs, sha, `${remote}/main`); // #424
@@ -1497,9 +1580,17 @@ function cmdReleaseCut(argv) {
     auto = { signals, migration, cadence, promotion: offTrunk ? measurePromotion(repoAbs, { sha, trunk, remote, fetched: trunkFetch }) : null };
   }
 
+  // #446: route deploy-tag-fast — the grant, the human veto, the migration gate and the spacing are
+  // measured only there, so every candidate route's run is what it was.
+  const fast = releaseCut.isFastRoute(policy) && !policy.findings.length;
+  const fastFacts = fast ? measureFastRoute(repoAbs, { policy, remote, issues, lastFinal, tags, auto, migrationPaths: migrationPathsSince }) : {};
+  if (fast && auto) auto.spacing = fastFacts.spacing;
+
   const verdict = releaseCut.decide({
     policy, triggers, lastFinal, suggestion, tags, tagsAtSha, ci, suite, schema, switches, manifests, ancestry, auto,
     override: opts.bump ? { bump: opts.bump, reason: opts.reason } : null,
+    finalGrant: fastFacts.finalGrant, holds: fastFacts.holds, migrations: fastFacts.migrations,
+    trackingIssue: fastFacts.tracking ? fastFacts.tracking.number : null,
   });
 
   let created = false;
@@ -1514,19 +1605,54 @@ function cmdReleaseCut(argv) {
       throw new UserError(`git push ${remote} ${verdict.tag} failed — the local tag was deleted again, nothing is cut (${(push.stderr || '').split('\n')[0]})`);
     }
     created = true;
-    published = publishPrerelease(repoAbs, { tag: verdict.tag, lastFinal, message });
+    published = publishPrerelease(repoAbs, { tag: verdict.tag, lastFinal, message, final: !!verdict.final });
   }
   // #445: the `next` channel names the newest candidate — fast-forwarded in the run that pushed it.
   // Best-effort like the pre-release: the tag already stands, so a channel that cannot move is reported.
+  // #446: a fast-route final moves `stable` instead — it is the newest final, and there is no candidate.
   const channel = verdict.ok && verdict.tag
-    ? releaseChannel.moveChannel(repoAbs, { remote, channel: releaseChannel.CHANNELS.next, sha, label: verdict.tag, dry: !!opts.dry })
+    ? releaseChannel.moveChannel(repoAbs, { remote, channel: verdict.final ? releaseChannel.CHANNELS.stable : releaseChannel.CHANNELS.next, sha, label: verdict.tag, dry: !!opts.dry })
     : null;
+
+  // #446: the fast route's own writes. A final: every issue it carries hears which version has it, and
+  // an open tracking record for the version is closed. An ungranted migration: the hand-off is posted
+  // on the version's tracking issue (opened if there is none), for a human to grant.
+  let announced = null;
+  let handoff = verdict.handoff || null;
+  if (fast && !opts.dry) {
+    if (created) {
+      const exclude = (issues || []).filter((i) => releaseFinalize.parseReleaseMarker(i.body)).map((i) => i.number);
+      announced = announceCarried(repoAbs, { tagNames: [...tags, verdict.tag], exclude, version: verdict.tag, sha });
+      if (fastFacts.tracking) {
+        commentOnce(repoAbs, fastFacts.tracking.number, { state: 'finalized', tag: verdict.tag }, `**${verdict.tag}** tagged final on \`${shortSha(sha)}\` by route deploy-tag-fast — the release workflow deploys it in this run.`);
+        const r = spawnSync('gh', ['issue', 'close', String(fastFacts.tracking.number)], { cwd: repoAbs, encoding: 'utf8' });
+        if (r.status !== 0) warn(`could not close #${fastFacts.tracking.number}: ${String(r.stderr || '').split('\n')[0]}`);
+      }
+    } else if (handoff && verdict.version) {
+      let num = fastFacts.tracking ? fastFacts.tracking.number : null;
+      if (!num && issues !== null) {
+        const c = spawnSync('gh', ['issue', 'create', '--title', releaseFinalize.trackingTitle(verdict.version), '--body', releaseCut.handoffTrackingBody(verdict.version)], { cwd: repoAbs, encoding: 'utf8' });
+        const m = c.status === 0 ? /\/issues\/([0-9]+)/.exec(c.stdout || '') : null;
+        if (m) num = Number(m[1]);
+        else warn(`could not open the tracking issue for ${verdict.version} (${String(c.stderr || '').split('\n')[0] || 'no issue URL returned'}) — the hand-off is printed here only`);
+      }
+      if (num) {
+        handoff = releaseCut.migrationHandoff(num, verdict.version);
+        commentOnce(repoAbs, num, { state: 'migration-handoff', version: verdict.version },
+          `**${verdict.version} carries a database migration**, and route deploy-tag-fast never deploys an ungranted one. The one command, run by a human, lets it ride — the next green run then tags and deploys it:\n\n\`\`\`sh\n${handoff}\n\`\`\``);
+      }
+    }
+  }
 
   if (opts.json) {
     print(JSON.stringify({
       repo: shortRepo(repoAbs), sha, ...(offTrunk ? { trunk } : {}), lastFinal, suggestion, dry: !!opts.dry, auto: !!opts.auto,
       ok: verdict.ok, noop: !!verdict.noop, tag: verdict.tag, created, published, channel, version: verdict.version, bump: verdict.bump,
       overridden: verdict.overridden, signals: verdict.signals ? verdict.signals.lines : null, checks: verdict.checks,
+      // #446: present on every route, so the workflow reads one shape — final only on deploy-tag-fast.
+      final: !!verdict.final,
+      deploy: verdict.final && verdict.healthGate ? { healthUrl: verdict.healthGate.url, rollback: verdict.healthGate.rollback } : null,
+      grant: verdict.grant || null, handoff, ...(fast ? { announced } : {}),
     }, null, 2));
     return verdict.ok || verdict.noop ? 0 : 1;
   }
@@ -1540,14 +1666,25 @@ function cmdReleaseCut(argv) {
   for (const c of verdict.checks) print(`  ${c.ok ? '✓' : '✗'} ${c.condition.padEnd(width)}  ${c.detail}`);
   print('');
   if (verdict.noop) {
-    print('· no-op — nothing owed, inside the route\'s cadence window, or main\'s head is not a promotion of trunk; nothing cut.');
+    print(fast
+      ? '· no-op — nothing owed, inside release.final-spacing, or main\'s head already carries a final; nothing tagged.'
+      : '· no-op — nothing owed, inside the route\'s cadence window, or main\'s head is not a promotion of trunk; nothing cut.');
     return 0;
   }
   if (!verdict.ok) {
     print(`✗ refused — ${verdict.refusals.length} condition(s) failed; nothing cut.`);
+    if (handoff) print(`\nA migration rides this release. The one command, for a human to run:\n  ${handoff}`);
     return 1;
   }
-  if (opts.dry) print(`[--dry] would create ${verdict.tag} on ${at}, push it to ${remote}, publish its GitHub pre-release and move the next channel. Nothing created.`);
+  if (verdict.final) {
+    if (opts.dry) print(`[--dry] would tag the final ${verdict.tag} on ${at}, push it to ${remote}, publish its GitHub Release and move the stable channel — the workflow's deploy job would then deploy it and check ${verdict.healthGate.url}. Nothing created.`);
+    else {
+      print(`✓ tagged the final ${verdict.tag} on ${at} and pushed it to ${remote} — route deploy-tag-fast, by the operator's grant (decision #${verdict.grant.issue}); the release workflow deploys it in this run.`);
+      if (published && published.ok) print(`✓ ${published.detail}`);
+      else if (published) warn(`${published.detail} — the tag stands; publish it by hand: gh release create ${verdict.tag} --verify-tag --latest`);
+      if (announced && announced.issues.length) print(`released in ${verdict.tag}: told ${announced.posted.length ? announced.posted.map((n) => `#${n}`).join(', ') : 'nobody new'}`);
+    }
+  } else if (opts.dry) print(`[--dry] would create ${verdict.tag} on ${at}, push it to ${remote}, publish its GitHub pre-release and move the next channel. Nothing created.`);
   else {
     print(`✓ cut ${verdict.tag} on ${at} and pushed it to ${remote} — a candidate, not a release; finalizing it is the release skill's.`);
     if (published && published.ok) print(`✓ ${published.detail}`);
@@ -1566,8 +1703,10 @@ function cmdReleaseCut(argv) {
  * workflow raced us) is left alone. Best-effort: the tag is already on origin, so a failure here is
  * reported, never a reason to undo the cut.
  */
-function publishPrerelease(repoAbs, { tag, lastFinal, message }) {
-  if (!isGhUsable(repoAbs)) return { ok: false, detail: `pre-release NOT published: gh not usable (${ghUnusableWhy(repoAbs)})` };
+function publishPrerelease(repoAbs, { tag, lastFinal, message, final = false }) {
+  // #446: a deploy-tag-fast final is published as a full release, marked latest.
+  const kind = final ? 'release' : 'pre-release';
+  if (!isGhUsable(repoAbs)) return { ok: false, detail: `${kind} NOT published: gh not usable (${ghUnusableWhy(repoAbs)})` };
   const view = spawnSync('gh', ['release', 'view', tag, '--json', 'tagName'], { cwd: repoAbs, encoding: 'utf8' });
   if (view.status === 0) return { ok: true, detail: `${tag} already has a GitHub Release — left as it is` };
   let notes;
@@ -1576,13 +1715,13 @@ function publishPrerelease(repoAbs, { tag, lastFinal, message }) {
   } catch (e) {
     notes = `## ${tag}\n\n(release notes unavailable: ${e.message})\n`;
   }
-  notes += `\n### Candidate record\n\n\`\`\`\n${message}\`\`\`\n`;
+  notes += `\n### ${final ? 'Release' : 'Candidate'} record\n\n\`\`\`\n${message}\`\`\`\n`;
   const file = path.join(os.tmpdir(), `colab-release-notes-${process.pid}-${tag}.md`);
   fs.writeFileSync(file, notes);
   try {
-    const r = spawnSync('gh', releaseCut.prereleaseArgs(tag, file), { cwd: repoAbs, encoding: 'utf8' });
-    if (r.status !== 0) return { ok: false, detail: `pre-release NOT published: gh release create ${tag} failed (${(r.stderr || '').split('\n')[0] || r.status})` };
-    return { ok: true, detail: `published the GitHub pre-release ${tag}` };
+    const r = spawnSync('gh', final ? releaseCut.finalReleaseArgs(tag, file) : releaseCut.prereleaseArgs(tag, file), { cwd: repoAbs, encoding: 'utf8' });
+    if (r.status !== 0) return { ok: false, detail: `${kind} NOT published: gh release create ${tag} failed (${(r.stderr || '').split('\n')[0] || r.status})` };
+    return { ok: true, detail: `published the GitHub ${kind} ${tag}` };
   } finally {
     try { fs.unlinkSync(file); } catch (_) { /* best-effort */ }
   }
@@ -1877,22 +2016,7 @@ function cmdReleaseFinalize(argv) {
   // #426: one "Released in vX.Y.Z" comment on every issue the version carries (release-finalize.js
   // carriedIssues — the closing references in (previous final, sha]). Idempotent by event marker.
   let announced = null;
-  const announceRelease = (version, sha) => {
-    const prev = releaseFinalize.previousFinal(tagNames, version);
-    if (!prev) return { range: null, issues: [], posted: [], skipped: [], detail: 'no previous final — the first version announces nothing' };
-    const log = git.git(['log', '--format=%B%x00', `${prev}..${sha}`], repoAbs);
-    if (!log.ok) { warn(`could not read ${prev}..${shortSha(sha)} — no issue told it was released in ${version}`); return { range: `${prev}..${version}`, issues: [], posted: [], skipped: [], detail: 'git log failed' }; }
-    const nums = releaseFinalize.carriedIssues(log.stdout.split('\0'), { exclude: records.map((r) => r.number) });
-    const posted = []; const skipped = [];
-    for (const n of nums) {
-      const view = git.ghIssueView(repoAbs, n, ['comments']);
-      if (!view) { skipped.push(n); continue; }
-      if (releaseFinalize.hasEvent(view.comments, releaseFinalize.releasedEvent(version))) continue;
-      const r = git.ghIssueComment(repoAbs, n, releaseFinalize.releasedComment(version, sha));
-      if (r.ok) posted.push(n); else { skipped.push(n); warn(`could not comment on #${n}: ${String(r.stderr || '').split('\n')[0]}`); }
-    }
-    return { range: `${prev}..${version}`, issues: nums, posted, skipped };
-  };
+  const announceRelease = (version, sha) => announceCarried(repoAbs, { tagNames, exclude: records.map((r) => r.number), version, sha });
   if (!opts.dry) {
     if (verdict.state === 'finalized') {
       const actor = humanBar && !verdict.grant ? `${opts.answeredBy} (human bar: COLAB_HUMAN=1)` : `automatic — clean test period (CONVENTIONS.md §6)${verdict.grant ? `, by the operator's grant (decision #${verdict.grant.issue})` : ''}${walk ? ', newest candidate clean on its own clock (--auto)' : ''}`;
