@@ -655,6 +655,7 @@ function forkFixture({ claude = true, agents = true } = {}) {
   const fx = fixture(undefined);
   const up = path.join(fx.root, 'upstream.git');
   execFileSync('git', ['init', '-q', '--bare', '-b', 'main', up], { encoding: 'utf8' });
+  fx.g(fx.work, 'config', 'core.hooksPath', path.join(fx.root, '.nohooks')); // fixture() set it already; restated so the commit below is visibly neutralised (fixture-hooks-lint)
   fx.g(fx.work, 'remote', 'add', 'upstream', up);
   const w = (rel, text) => { fs.mkdirSync(path.dirname(path.join(fx.work, rel)), { recursive: true }); fs.writeFileSync(path.join(fx.work, rel), text); };
   if (claude) w('CLAUDE.md', '# Upstream project\n\nUpstream prose the fork must not rewrite.\n');
