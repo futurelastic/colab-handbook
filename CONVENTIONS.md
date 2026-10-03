@@ -1627,6 +1627,21 @@ reading either sees the same spelling. Spell them exactly so, everywhere:
   `none`, not `green`. `cancelled` is `completed` and not a `failure`, so a cancelled
   straggler beside a real `success` is still `green`; the ladder must not reintroduce the
   deadlock #92 fixed.
+- **A claim's first push is `green` from a guard run, not a second suite run (#418).** A
+  claim pushes its branch at trunk's head (§5, *Record of a claim*), so that first push sits
+  on a sha the same workflow has usually already tested. The CI templates (and this repo's own
+  workflow) open with a `dedupe` job that runs only on a ref's **first** push, checks nothing
+  out, and asks the platform one thing: does *this* workflow already have a completed,
+  `success`, non-pull-request run at *this* sha? Yes ⇒ every other job is skipped, and the run
+  concludes `success` — the branch reads `green`, truthfully, because the same workflow passed
+  at the same sha. Trunk's run still in flight or red, no `gh` on the runner, or any API error
+  ⇒ the suite runs as before (fail-open). Every later push skips the guard at scheduling time,
+  so the session's first real commit always gets the full suite at its own sha. Two shapes are
+  deliberately not used. Skipping every job on `github.event.created` leaves a run whose jobs
+  were *all* skipped; it concludes `skipped`, which is not green under the quantifiers above.
+  Waiting in the guard for trunk's in-flight run holds the runner slot that run is queued for.
+  Measured before the change, across five adopting repos over 24 h: ~19% of all CI runs
+  (~104 a day, ~660 runner-minutes) re-ran a trunk-tested sha on a freshly claimed branch.
 - **An unclassifiable red is `red:finding`.** Where a repo does not separate exit 1 from
   exit 2, `failure` is all the platform reports: read the failing job's log far enough to
   say which side of the line it fell on, and if that cannot be told, report `red:finding`.

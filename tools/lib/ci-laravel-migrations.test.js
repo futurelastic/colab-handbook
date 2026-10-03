@@ -67,8 +67,10 @@ test('ci-laravel.yml has a migrations job', () => {
 });
 
 test('the job is not gated on RUN_TESTS (runs on every branch push)', () => {
+  // A job-level if: is allowed — #418's `!cancelled() && needs.build.result == 'success'` is
+  // what keeps this job running when the `dedupe` guard is skipped — but never on RUN_TESTS.
   const jobIf = block.find((l) => /^ {4}if:/.test(l));
-  assert.strictEqual(jobIf, undefined, 'no job-level if:');
+  assert.ok(!/RUN_TESTS/.test(jobIf || ''), `job-level if: is not gated on RUN_TESTS (${jobIf})`);
   for (const s of steps) {
     assert.ok(!/RUN_TESTS/.test(s.if || ''), `step "${s.name}" is not gated on RUN_TESTS`);
   }
