@@ -514,6 +514,58 @@ test('gh failing returns null, distinct from "no runs for this sha"', () => {
   assert.strictEqual(result, null);
 });
 
+// --- #451: runs from workflows the repo does not own (`event: dynamic`) are not trunk's CI ------
+
+test('#451: only dynamic (Dependabot) runs at the sha, all red — reads none, and names what it dropped', () => {
+  const fx = fixture();
+  const result = fx.withFakeGh([
+    { headSha: fx.sha, status: 'completed', conclusion: 'failure', event: 'dynamic', workflowName: 'Dependabot Updates', databaseId: 11 },
+    { headSha: fx.sha, status: 'completed', conclusion: 'failure', event: 'dynamic', workflowName: 'Dependabot Updates', databaseId: 12 },
+  ], () => git.ghRunForCommit(fx.work, 'main', fx.sha));
+  assert.strictEqual(result.status, 'none');
+  assert.strictEqual(result.runCount, 0);
+  assert.deepStrictEqual(result.excluded.map((x) => [x.workflowName, x.conclusion, x.databaseId]),
+    [['Dependabot Updates', 'failure', 11], ['Dependabot Updates', 'failure', 12]]);
+});
+
+test('#451: a dynamic red beside a repo-owned success reads green — the dropped row is not a sibling', () => {
+  const fx = fixture();
+  const result = fx.withFakeGh([
+    { headSha: fx.sha, status: 'completed', conclusion: 'failure', event: 'dynamic', workflowName: 'Dependabot Updates' },
+    { headSha: fx.sha, status: 'completed', conclusion: 'success', event: 'push', workflowName: 'ci' },
+  ], () => git.ghRunForSha(fx.work, 'main'));
+  assert.strictEqual(result.conclusion, 'success');
+  assert.strictEqual(result.runCount, 1);
+  assert.strictEqual(result.excluded.length, 1);
+});
+
+test('#451: a repo-owned red still blocks exactly as before, whatever the dynamic rows say', () => {
+  const fx = fixture();
+  const result = fx.withFakeGh([
+    { headSha: fx.sha, status: 'completed', conclusion: 'success', event: 'dynamic', workflowName: 'Dependabot Updates' },
+    { headSha: fx.sha, status: 'completed', conclusion: 'failure', event: 'push', workflowName: 'ci' },
+  ], () => git.ghRunForSha(fx.work, 'main'));
+  assert.strictEqual(result.status, 'completed');
+  assert.strictEqual(result.conclusion, 'failure');
+});
+
+test('#451: an in-flight dynamic run does not hold a repo-owned green back (#307 counts repo runs only)', () => {
+  const fx = fixture();
+  const result = fx.withFakeGh([
+    { headSha: fx.sha, status: 'in_progress', conclusion: null, event: 'dynamic', workflowName: 'Dependabot Updates' },
+    { headSha: fx.sha, status: 'completed', conclusion: 'success', event: 'push', workflowName: 'ci' },
+  ], () => git.ghRunForSha(fx.work, 'main'));
+  assert.strictEqual(result.conclusion, 'success');
+});
+
+test('#451: no dynamic row — the shape is unchanged, no `excluded` key appears', () => {
+  const r = git.summarizeRunsForCommit([{ headSha: 'a', status: 'completed', conclusion: 'success', event: 'push' }], 'a');
+  assert.ok(!('excluded' in r));
+  const missingEvent = git.summarizeRunsForCommit([{ headSha: 'a', status: 'completed', conclusion: 'failure' }], 'a');
+  assert.strictEqual(missingEvent.conclusion, 'failure', 'a row with no event field is never dropped');
+  assert.strictEqual(git.summarizeRunsForCommit(null, 'a'), null);
+});
+
 // --- ghRunForCommit (#293) — the same verdict, for a sha that is NOT necessarily the branch's
 // current remote head (the merge-base a feature branch was cut from, almost always trunk history).
 

@@ -126,3 +126,38 @@ test('#413 the ordinary green branch read never pays for the by-commit read (its
   assert.strictEqual(ci.ok, true, JSON.stringify(ci));
   assert.doesNotMatch(ci.detail, /by commit/);
 });
+
+// --- #451: trunk red ONLY from runs the repo does not own (event: dynamic) ----------------------
+
+const dependabotRed = (sha) => [
+  { headSha: sha, status: 'completed', conclusion: 'failure', createdAt: '2026-10-03T10:00:00Z', databaseId: 71, workflowName: 'Dependabot Updates', event: 'dynamic' },
+  { headSha: sha, status: 'completed', conclusion: 'failure', createdAt: '2026-10-03T09:00:00Z', databaseId: 72, workflowName: 'Dependabot Updates', event: 'dynamic' },
+];
+
+test('#451 the measured case: only Dependabot runs at trunk, all red → trunk reads none (not red), the dropped runs named', () => {
+  const fx = fixture(60);
+  fx.setRows(dependabotRed(fx.sha), dependabotRed(fx.sha));
+  const ci = trunkCiRow(fx);
+  assert.doesNotMatch(ci.detail, /conclusion=failure/, JSON.stringify(ci));
+  assert.match(ci.detail, /no run for main@/);
+  assert.match(ci.detail, /excluded 2 runs from workflows this repo does not own \(event: dynamic, #451\)/);
+  assert.match(ci.detail, /Dependabot Updates \(failure, run 71\)/);
+});
+
+test('#451 a Dependabot red beside the repo\'s own green → green, and the detail still says what it did not count', () => {
+  const fx = fixture(60);
+  fx.setRows([...dependabotRed(fx.sha), ...green(fx.sha)], []);
+  const ci = trunkCiRow(fx);
+  assert.strictEqual(ci.ok, true, JSON.stringify(ci));
+  assert.match(ci.detail, /1 run at main@\w+: success — excluded 2 runs/);
+});
+
+test('#451 a repo-owned red still blocks, Dependabot rows or not', () => {
+  const fx = fixture(60);
+  const ownRed = [{ headSha: fx.sha, status: 'completed', conclusion: 'failure', createdAt: '2026-10-03T11:00:00Z', databaseId: 9, workflowName: 'CI', event: 'push' }];
+  fx.setRows([...dependabotRed(fx.sha), ...ownRed], []);
+  const ci = trunkCiRow(fx);
+  assert.strictEqual(ci.ok, false);
+  assert.strictEqual(ci.class, 'human-gated');
+  assert.match(ci.detail, /conclusion=failure/);
+});

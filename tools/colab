@@ -10105,7 +10105,7 @@ function shipCiCheck(repoAbs, gh, target, trunk, grantThunk, cureThunk) {
     const fresh = ciVerdict.emptyReadVerdict(git.commitTimeMs(repoAbs, run.sha));
     if (fresh.fresh) {
       verdict = { ok: false, class: SELF_CLEARING,
-        detail: `no run yet for ${at} — committed ${fresh.minutes.toFixed(1)}m ago, inside the ${ciVerdict.EMPTY_READ_GRACE_MINUTES}m grace; retry later` };
+        detail: `no run yet for ${at} — committed ${fresh.minutes.toFixed(1)}m ago, inside the ${ciVerdict.EMPTY_READ_GRACE_MINUTES}m grace; retry later${excludedRunsNote(run)}` };
     }
   }
   // #373: trunk's own run not there yet or still in flight (never a finished red) — a batch that landed
@@ -10142,6 +10142,23 @@ function shipCiCheck(repoAbs, gh, target, trunk, grantThunk, cureThunk) {
  * the detail string still reads sensibly rather than "undefined runs".
  */
 function classifyCiRun(repoAbs, run, at) {
+  const v = classifyCiRunRaw(repoAbs, run, at);
+  return { ...v, detail: v.detail + excludedRunsNote(run) };
+}
+
+/**
+ * #451: the runs a verdict did NOT count, named in its detail — runs from workflows the repo does
+ * not own (`event: dynamic`, e.g. Dependabot Updates) are dropped by git.summarizeRunsForCommit
+ * before the verdict is computed, and a reader must be able to see what was dropped. '' when none.
+ */
+function excludedRunsNote(run) {
+  const ex = run && Array.isArray(run.excluded) ? run.excluded : [];
+  if (!ex.length) return '';
+  const names = ex.map((x) => `${x.workflowName || 'unnamed'} (${x.conclusion || x.status || '?'}${x.databaseId ? `, run ${x.databaseId}` : ''})`);
+  return ` — excluded ${ex.length} run${ex.length === 1 ? '' : 's'} from workflows this repo does not own (event: dynamic, #451): ${names.join(', ')}`;
+}
+
+function classifyCiRunRaw(repoAbs, run, at) {
   if (run.status === 'completed') {
     if (run.conclusion === 'success') {
       const n = run.runCount == null ? 1 : run.runCount;
@@ -10476,7 +10493,10 @@ function shipCureJobEvidence(repoAbs, trunk, redSha, branch, evRun) {
   // ALL runs at the red sha, not the single row `ghRunForCommit` would pick: a red job can sit in a
   // sibling workflow the picker never returned, and admitting a carve-out while that job is still
   // red is exactly the failure this evidence exists to prevent.
-  const redRuns = git.ghRunsForCommit(repoAbs, trunk, redSha);
+  // #451: a run from a workflow the repo does not own is not part of trunk's red — same drop the
+  // verdict itself makes (git.summarizeRunsForCommit), so cure evidence never chases its jobs.
+  const redRunsAll = git.ghRunsForCommit(repoAbs, trunk, redSha);
+  const redRuns = redRunsAll === null ? null : redRunsAll.filter(git.isRepoOwnedRun);
   if (redRuns === null || redRuns.length === 0) return null;
 
   // Same inverted allowlist git.js uses at run level (#146/#165): only `success`/`cancelled` are
