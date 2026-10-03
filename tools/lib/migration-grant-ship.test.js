@@ -245,3 +245,70 @@ test('tools/colab: evaluateShipSet and newMigrations are called only inside ship
   assert.match(fnBody('cmdShip'), /shipMigrationGate\(/);
   assert.match(fnBody('cmdShipDryJson'), /shipMigrationGate\(/);
 });
+
+// ---- #457: the mint-time checks --------------------------------------------------------------
+
+const runAt = (id, jobs, over = {}) => ({ databaseId: id, workflowName: 'CI', jobs, ...over });
+
+test('mintRoundtripCheck: ci-roundtrip pass with a passing round-trip job at the head → ok', () => {
+  const c = mg.mintRoundtripCheck(rec({ 'ci-run': '42' }), [runAt(42, [job('Gitleaks'), job('Migration round-trip (mysql)')])]);
+  assert.equal(c.ok, true, c.reason);
+});
+
+test('mintRoundtripCheck: the observed case — a pass whose run has only a secret scan and a build → refused, names the missing job and the fix', () => {
+  const c = mg.mintRoundtripCheck(rec({ 'ci-run': '42' }), [runAt(42, [job('Gitleaks'), job('Build')])]);
+  assert.equal(c.ok, false);
+  assert.match(c.reason, /ci-roundtrip: pass, but no "Migration round-trip" job ran at aaaaaaa/);
+  assert.match(c.reason, /must run the template's migrations job/);
+});
+
+test('mintRoundtripCheck: a failed or pending leg, unread runs, unread jobs, a workflows-editing branch → refused', () => {
+  assert.equal(mg.mintRoundtripCheck(rec(), [runAt(1, [job('Migration round-trip (mysql)', { conclusion: 'failure' })])]).ok, false);
+  assert.equal(mg.mintRoundtripCheck(rec(), [runAt(1, [job('Migration round-trip (mysql)', { status: 'in_progress', conclusion: null })])]).ok, false);
+  assert.match(mg.mintRoundtripCheck(rec(), null).reason, /could not be read/);
+  assert.match(mg.mintRoundtripCheck(rec(), [runAt(1, null)]).reason, /could not be read/);
+  assert.match(mg.mintRoundtripCheck(rec(), []).reason, /no "Migration round-trip" job/);
+  assert.match(mg.mintRoundtripCheck(rec(), [runAt(1, [job('Migration round-trip (mysql)')])], { workflowsTouched: true }).reason, /\.github\/workflows\//);
+});
+
+test('mintRoundtripCheck: ci-run must resolve, be a run at the head, and itself carry the job', () => {
+  const runs = [runAt(7, [job('Build')]), runAt(8, [job('Migration round-trip (mysql)')])];
+  assert.equal(mg.mintRoundtripCheck(rec({ 'ci-run': 'https://github.com/o/r/actions/runs/8' }), runs).ok, true);
+  assert.match(mg.mintRoundtripCheck(rec({ 'ci-run': 'latest' }), runs).reason, /does not name a run id/);
+  assert.match(mg.mintRoundtripCheck(rec({ 'ci-run': '9' }), runs).reason, /ci-run 9 is not a run at aaaaaaa/);
+  assert.match(mg.mintRoundtripCheck(rec({ 'ci-run': '7' }), runs).reason, /ci-run 7 has no "Migration round-trip" job/);
+  assert.equal(mg.mintRoundtripCheck(rec(), runs).ok, true, 'ci-run stays optional');
+});
+
+test('mintRoundtripCheck: a record not claiming pass is not its to judge', () => {
+  assert.equal(mg.mintRoundtripCheck(rec({ 'ci-roundtrip': 'pending' }), null).ok, true);
+});
+
+test('parseRunId: digits, or a /runs/<id> URL — anything else is null', () => {
+  assert.equal(mg.parseRunId('123'), '123');
+  assert.equal(mg.parseRunId('https://github.com/o/r/actions/runs/123/job/9'), '123');
+  assert.equal(mg.parseRunId('https://github.com/o/r/actions/runs/123?pr=1'), '123');
+  assert.equal(mg.parseRunId('run-123'), null);
+  assert.equal(mg.parseRunId('https://ci.example.invalid/run/9'), null);
+});
+
+test('mintRecordProblems: denominator must be the checklist size; checklist pass needs N = M; absent is fine', () => {
+  assert.deepEqual(mg.mintRecordProblems(rec({ 'checklist-items': '10/10' })), []);
+  assert.deepEqual(mg.mintRecordProblems(rec({ 'checklist-items': undefined })), []);
+  assert.match(mg.mintRecordProblems(rec({ 'checklist-items': '4/4' })).join(';'), /checklist has 10 items/);
+  assert.match(mg.mintRecordProblems(rec({ 'checklist-items': '9/10' })).join(';'), /a pass means every item passed/);
+  assert.deepEqual(mg.mintRecordProblems(rec({ checklist: 'fail', 'checklist-items': '9/10' })), []);
+});
+
+test('mintRecordProblems stays off the READ path — an older 7/7 record still validates and passes for ship', () => {
+  const v = mg.validateReviewRecord(rec({ 'checklist-items': '7/7' }));
+  assert.equal(v.valid, true);
+  assert.equal(v.passing, true);
+});
+
+test('REVIEW_CHECKLIST_ITEMS matches the checklist the migration-review skill documents', () => {
+  const skill = fs.readFileSync(path.join(__dirname, '..', '..', 'skills', 'migration-review', 'SKILL.md'), 'utf8');
+  assert.match(skill, new RegExp(`\`checklist-items\` in the record is \`<passed>/${mg.REVIEW_CHECKLIST_ITEMS}\``));
+  const rows = skill.split('## The checklist')[1].split('\n---')[0].match(/^\| \d+ \|/gm) || [];
+  assert.equal(rows.length, mg.REVIEW_CHECKLIST_ITEMS);
+});

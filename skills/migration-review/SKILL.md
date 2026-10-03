@@ -85,6 +85,14 @@ a REWORK dressed up to avoid asking.
    round-trip seeder writes rows into every table this branch touches
    ([templates/README.md, *Migration round-trip*](../../templates/README.md#migration-round-trip--what-the-laravel-job-proves-and-what-it-cannot)).
    Pending → no verdict yet; come back when it finishes. The grant needs `pass`.
+   **No round-trip job at that HEAD at all** — the repo's CI has no `Migration round-trip`
+   job (only, say, a secret scan and a build) → item 10 (*Proof*) cannot pass, so there is
+   **no GRANT**, and nothing to wait for. Report that the repo's CI must adopt the template's `migrations` job
+   ([templates/README.md, *Migration round-trip*](../../templates/README.md#migration-round-trip--what-the-laravel-job-proves-and-what-it-cannot));
+   until it does, the reviewer route is structurally closed and the migration ships on a
+   human grant. Never record `ci-roundtrip: pass` for a run that does not contain the job —
+   `colab migration-grant` reads CI at the head and refuses such a record, and `colab ship`
+   re-reads it anyway.
 8. **Apply the escalation rule**, then the verdict rule. Output exactly one verdict.
 
 ---
@@ -186,6 +194,11 @@ colab migration-grant <N> --branch <branch> \
 - **Post the review as an issue comment too** — the rung, one line per migration, and the
   checklist results with file:line. The grant record says *that* each item passed; the
   comment says *why*, and it is what the next reviewer of a similar migration reads.
+- **The tool checks the record against CI before it writes anything** (#457): `--ci-roundtrip
+  pass` is refused unless a `Migration round-trip` job ran and passed at `--head`, `--ci-run`
+  must be one of the runs at that head and carry the job, and `--checklist-items` must be
+  `<passed>/10` with every item passed. A refusal means the review is not a GRANT yet — fix the
+  fact, not the flags.
 - The grant covers that HEAD only. Any later commit on the branch means a new review.
 
 ### REWORK — one brief per failure
