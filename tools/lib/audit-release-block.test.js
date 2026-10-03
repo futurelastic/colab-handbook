@@ -150,7 +150,7 @@ function auditWithGh(dir, ghDir) {
     stdout = execFileSync('node', [AUDIT, '--json', '--local', dir], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], env: { ...process.env, PATH: `${ghDir}:${process.env.PATH}` } });
   } catch (err) { stdout = err.stdout || ''; }
   const r = JSON.parse(stdout).results[0];
-  return { fails: r.findings.filter((f) => f.level === 'fail').map((f) => f.text) };
+  return { fails: r.findings.filter((f) => f.level === 'fail').map((f) => f.text), warns: r.findings.filter((f) => f.level === 'warn').map((f) => f.text) };
 }
 
 const DECISION = { body: '⚖ Decision recorded — ruled-by `Operator` · answers `-` · host `box` · 2026-10-02T00:00:00Z', createdAt: '2026-10-02T00:00:00Z', authorAssociation: 'OWNER', author: { login: 'op' } };
@@ -185,4 +185,49 @@ test('#439: an unquoted whole number under release: is a number — candidates-p
   // #443: no route derives a cap, so a declared 4 is a narrowing like any other — no finding.
   const four = audit(fixture(`${RELEASED_NO_PROD}release:\n  candidates-per-day: 4\n`));
   assert.ok(!hasText(all(four), /release[.:]/), all(four).join(' | '));
+});
+
+// ---- #446: route deploy-tag-fast ------------------------------------------------------------------
+
+const FAST = `${RELEASED_TAG}release:\n  route: deploy-tag-fast\n  final-grant: 7\n  health-url: https://app.example.com/health\n  rollback: auto\n`;
+const TEMPLATE = fs.readFileSync(path.join(__dirname, '..', '..', 'templates', 'release-auto.yml'), 'utf8');
+const EDITED = TEMPLATE.replace(/echo "::error::the deploy step of release-auto\.yml was never edited[^\n]*\n\s*exit 1/, './scripts/deploy.sh "$TAG"');
+const RECORDED = { state: 'CLOSED', labels: [{ name: 'decision-recorded' }], comments: [DECISION] };
+const fastFiles = (wf) => ({ ...DEPLOY_WF, ...(wf ? { '.github/workflows/release-auto.yml': wf } : {}) });
+
+test('#446: a granted, health-gated deploy-tag-fast with an edited same-run deploy passes', () => {
+  assert.notStrictEqual(EDITED, TEMPLATE, 'the placeholder deploy step was not found in the template');
+  const r = auditWithGh(fixture(FAST, fastFiles(EDITED)), fakeGhIssue(7, RECORDED));
+  assert.ok(!hasText(r.fails, /release\.|deploy-tag-fast/), r.fails.join(' | '));
+});
+
+test('#446: a reopened or unreadable grant fails, named for the route', () => {
+  const reopened = auditWithGh(fixture(FAST, fastFiles(EDITED)), fakeGhIssue(7, { ...RECORDED, state: 'OPEN', comments: [DECISION, REOPEN] }));
+  assert.ok(hasText(reopened.fails, /route: deploy-tag-fast has no resolvable operator grant — release\.final-grant #7 does not grant an automatic final: its decision was reopened/), reopened.fails.join(' | '));
+  const unread = auditWithGh(fixture(FAST, fastFiles(EDITED)), fakeGhIssue(7, null));
+  assert.ok(hasText(unread.fails, /route: deploy-tag-fast has no resolvable operator grant — release\.final-grant #7 could not be read/), unread.fails.join(' | '));
+});
+
+test('#446: no health-url, or deploy: manual, fails', () => {
+  const noHealth = audit(fixture(FAST.replace(/  health-url: [^\n]+\n/, ''), fastFiles(EDITED)));
+  assert.ok(hasText(noHealth.fails, /release\.route: deploy-tag-fast needs .*release\.health-url/), noHealth.fails.join(' | '));
+  const manual = audit(fixture(FAST.replace('deploy: tag', 'deploy: manual\nrunbook: docs/deploy.md'), { ...fastFiles(EDITED), 'docs/deploy.md': 'x\n' }));
+  assert.ok(hasText(manual.fails, /release\.route: deploy-tag-fast does not fit/), manual.fails.join(' | '));
+});
+
+test('#446: a release workflow that deploys nothing, an unedited deploy step, or no release workflow at all — each fails', () => {
+  const noDeploy = TEMPLATE.slice(0, TEMPLATE.indexOf('\n  # ---------------------------------------------------------------------------------------------\n  # deploy (#446)'))
+    .replace(/deploy-tag: \$\{\{ steps\.cut\.outputs\.final \}\}/, '').replace(/echo "final=\$TAG"[^\n]*\n/, '').replace(/jq -r '\.final \/\/ false'/, 'jq -r \'.x\'');
+  const r1 = auditWithGh(fixture(FAST, fastFiles(noDeploy)), fakeGhIssue(7, RECORDED));
+  assert.ok(hasText(r1.fails, /deploys nothing from its result — a tag pushed with GITHUB_TOKEN starts no `push: tags` run/), r1.fails.join(' | '));
+  const r2 = auditWithGh(fixture(FAST, fastFiles(TEMPLATE)), fakeGhIssue(7, RECORDED));
+  assert.ok(hasText(r2.fails, /deploy step is still the template's unedited placeholder/), r2.fails.join(' | '));
+  const r3 = auditWithGh(fixture(FAST, fastFiles(null)), fakeGhIssue(7, RECORDED));
+  assert.ok(hasText(r3.fails, /no workflow runs `colab release cut --auto`/), r3.fails.join(' | '));
+});
+
+test('#446: the candidates-off advisory is not raised on the fast route', () => {
+  const r = auditWithGh(fixture(FAST, fastFiles(EDITED)), fakeGhIssue(7, RECORDED));
+  const warns = all(r).filter((t) => /leaves candidates off/.test(t));
+  assert.deepStrictEqual(warns, []);
 });
