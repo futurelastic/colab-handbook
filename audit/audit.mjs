@@ -94,6 +94,7 @@ const releasePolicy = require("../tools/lib/release-policy.js");
 // push-site guard in the CLI, so the audit and the tool can never disagree about what it means.
 const ownerBranchLib = require("../tools/lib/owner-branch.js");
 const npmGuard = require("../tools/lib/npm-publish-guard.js");
+const releaseRunner = require("../tools/lib/release-runner.js"); // #453
 const { parseWorkflowOn, workflowFiresOnTag, prereleaseTagTriggers, workflowsFiringOnBranchPush } = require("../tools/lib/workflow-triggers.js");
 const shipBatch = require("../tools/lib/ship-batch.js");
 // #383: where migrations live — the one rule `colab ship`'s gate and `release cut` read; the audit
@@ -572,13 +573,20 @@ function readRemoteIssue(slug, num) {
   }
 }
 
+// Memoized per slug: several checks read visibility (#432, #453) and one audit run must not pay
+// one API call per check.
+const remoteMetadataCache = new Map();
 function readRemoteMetadata(slug) {
+  if (remoteMetadataCache.has(slug)) return remoteMetadataCache.get(slug);
+  let r;
   try {
     const out = runGh(["api", `repos/${slug}`]);
-    return { status: "ok", data: JSON.parse(out) };
+    r = { status: "ok", data: JSON.parse(out) };
   } catch {
-    return { status: "unreadable" };
+    r = { status: "unreadable" };
   }
+  remoteMetadataCache.set(slug, r);
+  return r;
 }
 
 // github.com/owner/name, git@github.com:owner/name.git → "owner/name". Non-GitHub or
@@ -1649,6 +1657,7 @@ function auditRepo(target, ctx) {
   checkFastRouteDeploy(src, workflows, cfg, fail);
   checkDeployContainer(src, workflows, cfg, warn);
   checkPrivateNpm(src, workflows, fail, warn);
+  checkReleaseRunner(src, workflows, warn);
 
   const runbook = cfg && "runbook" in cfg ? cfg.runbook : null;
 
@@ -2649,6 +2658,22 @@ function checkPrivateNpm(src, workflows, fail, warn) {
     ...(assetSurface ? npmGuard.assetFindings({ ...reader, visibility }) : []),
   ];
   for (const f of all) (f.level === "fail" ? fail : warn)(f.text);
+}
+
+// ---- the release workflow runs on the repo's own runners when private (#453) -------------------
+// A hosted job on a private repo is billed, and a billing refusal fails the release run at trunk's
+// head — `colab ship` then reads trunk as red. Visibility from the GitHub API, read only when a
+// release workflow exists; unreadable → nothing reported (advisory, never invented).
+function checkReleaseRunner(src, workflows, warn) {
+  const readFile = (p) => src.readFile(p);
+  const hasRelease = (workflows || []).some((wf) => releaseRunner.RELEASE_AUTO_RUN.test(readFile(`.github/workflows/${wf}`) || ""));
+  if (!hasRelease) return;
+  const meta = src.metadata ? src.metadata() : { status: "unreadable" };
+  let visibility = null;
+  if (meta.status === "ok" && meta.data) {
+    visibility = meta.data.visibility || (meta.data.private === true ? "private" : meta.data.private === false ? "public" : null);
+  }
+  for (const text of releaseRunner.findings({ readFile, workflows, visibility })) warn(text);
 }
 
 function checkRunbook(src, runbook, fail, warn, why = "deploy: manual") {
