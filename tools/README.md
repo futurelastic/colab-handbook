@@ -1042,7 +1042,7 @@ Run `colab <cmd> --help` for full detail.
 | `deliver [--repo P] [--dry] [--json] [--reopen]` | **delivery** to the owner's branch, only where `project.yml` declares `owner:` (#394): opens or refreshes ONE PR trunk → `owner.branch`, never merges it. Delivered is read from PR state (squash/rebase safe); a rejected last PR stops it (exit 3). Writes need `COLAB_HUMAN=1`; `--dry` is read-only |
 | `doctor [--prune] [--ttl H] [--json] [--sync]` | heal dead worktrees / orphan + stale claims / orphan ports; report records whose branch or path cannot be resolved, including a zero-claim `pending` stub (no TTL — see *Records that cannot be acted on*); flip + sweep **merged** worktrees (see *Worktree lifecycle*); **list** shipped branches awaiting deletion (never deletes them); `--sync` also flags a worktree-less claim the tracker no longer shows assigned+in-progress (no TTL either) and spent `group:<key>` labels |
 | `release-notes [<range>] [--repo P] [--out F] [--headline "..."]` | grouped Markdown release summary from git history (see below) |
-| `release cut [--repo P] [--auto \| --bump patch\|minor --reason "..."] [--dry] [--json]` | cut a release **candidate** `vX.Y.Z-rc.N` on `origin/main` where §6's routes allow it and all four conditions plus the three pre-tag checks hold on that commit; `--auto` computes the bump (majors included) and honours the route's cadence; never a final tag (see *Release cut*, below) |
+| `release cut [--repo P] [--auto \| --bump patch\|minor --reason "..."] [--dry] [--json]` | cut a release **candidate** `vX.Y.Z-rc.N` on `origin/main` where §6's routes allow it and all four conditions plus the three pre-tag checks hold on that commit; `--auto` computes the bump (majors included) and honours the route's cadence; never a final tag — except on route `deploy-tag-fast`, where `--auto` tags the final itself (#446) (see *Release cut*, below) |
 | `release finalize [--repo P] [--auto \| --tag RC [--answered-by N]] [--dry] [--json]` | a candidate's next step under §6's routes; `--auto` finalizes the newest candidate clean on its own clock — `testing` / `held` / `needs-new-candidate` / `refused` / `candidate-ready` / `finalized`, re-checked every run, one tracking issue per version; tags the final only where the rung row makes it automatic, or behind the human bar (see *Release finalize*, below) |
 | `release npm [--repo P] [--json]` | whether release-auto.yml's `npm` job publishes this repo, and what: the package, its directory and the gate, read from `release.npm` / `release.npm-gate`; read-only (see *Release npm*, below) |
 | `template [<name>] [--dest F] [--repo P] [--force]` | copy a handbook workflow template into a repo, **stamped** with the handbook version (see below) |
@@ -1168,6 +1168,32 @@ so `pre-push-guard` lets it through. Forward only, never forced: a `next` that i
 the candidate is refused and left where it is. Best-effort like the pre-release: the tag already
 stands, so a failure is a warning and `--json` `channel: { channel, ok, action, detail }` says
 `ok: false`. `--dry` reports the move it would make. CONVENTIONS.md §6, *Release channels*.
+
+**Route `deploy-tag-fast` — the cut is the final (#446).** On a `deploy: tag` repo that declares
+`release.route: deploy-tag-fast` with the operator's grant and a health gate
+([`project.schema.md`](../project.schema.md#release--optional)), `--auto` tags the **final**
+`vX.Y.Z` on main's green head — no candidate, no test period — publishes it as the latest GitHub
+Release (`### Release record`), moves `stable` instead of `next`, posts `Released in vX.Y.Z` on every
+issue it carries (#426, the same helper `release finalize` uses) and closes an open tracking issue
+for the version. `--json` adds `final: true`, `deploy: { healthUrl, rollback }`, `grant: { issue,
+ruledBy }` and `handoff`; the keys are present on every route (`final: false`, `deploy: null`
+elsewhere), so the release workflow reads one shape. Without `--auto` it **refuses**: a final cut by
+hand would reach production with no deploy job behind it. In place of `already-candidate` and on top
+of every condition above:
+
+| condition | refuses when |
+|---|---|
+| `spacing` | `--auto` only: the newest final (a human's counts) is younger than `release.final-spacing` (default and floor `1h`). A **no-op**: the first run after it tags main's head |
+| `already-final` | main's head already carries a final — a **no-op** under `--auto` |
+| `final-grant` | `release.final-grant`'s decision issue does not resolve — the #441 reader, unchanged: recorded, trusted, not reopened |
+| `release-hold` | an open issue carries `release-hold` — repo-wide, since this route has no candidate issue to put it on; an unread issue list refuses |
+| `migration-grant` | a migration file changed since the last final and the version's tracking issue (`release: vX.Y.Z`) carries no migration grant. A non-dry run opens that issue when it is missing and posts the one human command once (`COLAB_HUMAN=1 colab migration-grant <N> --branch vX.Y.Z`); the next green run after the grant tags it |
+
+The template's `deploy` job deploys the final in the same run and polls `health-url` for the
+version — a tag pushed with `GITHUB_TOKEN` starts no `push: tags` workflow
+([`templates/release-auto.yml`](../templates/release-auto.yml), *DEPLOYING IN THIS RUN*).
+`release finalize` on this route always reports `no-candidate`: a candidate left over from an
+earlier route is superseded by the next final, never finalized.
 
 ### Release finalize
 

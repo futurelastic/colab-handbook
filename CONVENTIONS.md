@@ -3300,7 +3300,10 @@ not `colab ship`, not a hand-typed `git tag`. **It may never finalize a tag on a
 the routes keep, and `finalize --auto` stops at *candidate ready* there by construction —
 **unless the operator granted that repo an automatic final** ([§6, *An operator-granted
 automatic final*](#6-releases), #441): a recorded human ruling, re-read on every run, which
-adds conditions (no ungranted migration) and is revoked the moment it is reopened.
+adds conditions (no ungranted migration) and is revoked the moment it is reopened. On a repo
+the operator moved to route `deploy-tag-fast` under the same kind of grant (#446),
+`cut --auto` itself tags the final on a green head and the same run deploys it ([§6, *A final
+on every green head*](#6-releases)).
 A candidate a human has put `release-hold` on is held for the workflow exactly as it is for
 a person.
 The handbook ships one to copy, [`templates/release-auto.yml`](templates/release-auto.yml)
@@ -3972,9 +3975,10 @@ rung*, #330 — tool messages citing that name mean this paragraph).** Every ver
 is asked exactly once: **for the final tag on a repo where that tag deploys production**
 (`deploy: tag`, and `deploy: manual`, where a person deploys from it) — one click, number
 pre-filled — unless the operator has granted one `deploy: tag` repo an automatic final
-(*An operator-granted automatic final*, below). Everything else is automatic, and a human can still veto any candidate with
+(*An operator-granted automatic final*, below), or a final on every green head with no
+candidate at all (*A final on every green head*, below). Everything else is automatic, and a human can still veto any candidate with
 `release-hold`. Every candidate is `vX.Y.Z-rc.N`; the final `vX.Y.Z` is that candidate's
-commit, tagged final.
+commit, tagged final — on every route but `deploy-tag-fast`, which cuts no candidate.
 
 | Route | For | Candidate `vX.Y.Z-rc.N` | Final `vX.Y.Z` |
 |---|---|---|---|
@@ -3983,13 +3987,16 @@ commit, tagged final.
 | `public-tool` | a public CLI or handbook — adopters install it, nothing deploys | automatic, on every green trunk head (#443) | automatic after a clean test period |
 | `library-fast` | a library released per merge, its consumers pin | none | the tag itself triggers the publish; the route's checks still apply |
 | `deploy-tag` | `deploy: tag` / `deploy: manual` — the tag deploys production | automatic; the agent prepares everything | **a human act (one click)** — automatic only on a `deploy: tag` repo the operator granted it (#441) |
+| `deploy-tag-fast` | `deploy: tag` with the operator's grant and a declared health-gated deploy (#446) | none | automatic on every green trunk head, deployed in the same run, finals at least `final-spacing` apart |
 | `live` | `exposure: live` (Tier C) — the merge is the deploy | unchanged — no automatic tags; the promotion is the deploy and stays human; tagging stays optional | — |
 
 **A repo declares its route as `release.route`; absent, it is derived from `exposure` +
 `deploy`** — `none`/`self` → `none`; `live` → `live`; `released` with `deploy: tag` or
 `deploy: manual` → `deploy-tag`; `released` with `production: null` and `deploy: none` →
 `public-tool`. That last row is the only one that offers a choice: it may declare
-`rapid-app` or `library-fast` instead. Any row may declare `none`. A declared route its row
+`rapid-app` or `library-fast` instead. The `deploy: tag` row may declare `deploy-tag-fast`,
+and only with the operator's grant and a health gate (*A final on every green head*, below) —
+missing either, the route is an audit failure and `deploy-tag` stays in effect. Any row may declare `none`. A declared route its row
 does not permit — `public-tool` on a repo whose tag deploys, `deploy-tag` where nothing
 deploys — is an audit failure, never an override: change `exposure`/`deploy` first if the
 repo really changed. Anything the table does not name — an undeclared or unknown
@@ -4037,8 +4044,8 @@ candidates are cut, and the `trunk:` branch where that is a different one (`trun
 #437): there `main` receives CI only at promotions, so a `main`-only reading would hold
 little beyond the promotion's own run, while `trunk:` is where the code actually moved
 during the period. It matters only on a route whose final
-is automatic (`rapid-app`, `public-tool`); `library-fast` has none, because it cuts no
-candidate. A route may lengthen it, never shorten it. A human vetoes by holding the candidate during it; a held candidate is not finalized.
+is automatic (`rapid-app`, `public-tool`); `library-fast` and `deploy-tag-fast` have none,
+because they cut no candidate. A route may lengthen it, never shorten it. A human vetoes by holding the candidate during it; a held candidate is not finalized.
 **Finalizing re-checks every condition above at the moment it runs** — a candidate that
 was clean when cut and is not now stays a candidate. Where the final tag is a human act,
 the agent's work ends with the candidate, its release notes, and the one click — number
@@ -4099,6 +4106,42 @@ grant is a human act, recorded the way an `autonomy` grant is, and checked on ev
   the operator the one command, exactly as on an ungranted repo.
 - **Every automatic deploy says whose choice made it so.** The final tag's message names the
   grant and its decision issue, and who ruled it.
+
+**A final on every green head — `deploy-tag-fast` (#446).** Some repos have nobody to test a
+candidate: an app whose only user is its operator, where a 3-day period only measures "nothing
+new merged for 3 days". For such a repo the operator may choose route `deploy-tag-fast`: on
+every green trunk head `colab release cut --auto` tags the **final** `vX.Y.Z` directly — no
+`-rc`, no test period — and the release workflow deploys it in the same run. The version tags
+stay; only the candidate step goes. It replaces the test period with two declarations and keeps
+every gate that does not depend on one:
+
+- **The operator's grant, read exactly as #441's.** `release.final-grant: <N>` names a recorded
+  decision, re-read on every run by the audit and by `cut`; unreadable, untrusted or reopened →
+  no tag, and the audit fails. Deleting the line, or `route: deploy-tag`, revokes it.
+- **A health-gated deploy that rolls itself back.** `release.health-url` (an `https://` endpoint
+  reporting the running version) and `release.rollback: auto`. The release workflow polls the
+  URL after its deploy and fails the run when the version does not appear; the rollback is the
+  deploy's own, and `rollback: auto` is the operator's statement that it exists. The audit checks
+  that both are declared and that the release workflow deploys what it tags; it cannot prove the
+  rollback works, which is exactly why the grant is required beside it.
+- **`deploy: tag` only.** Not `deploy: manual` (a person deploys anyway), not a no-production
+  repo — `library-fast` keeps its meaning: nothing it tags reaches production. Missing the grant
+  or the health gate, the route is an audit failure and `deploy-tag` stays in effect, final human.
+- **The gates that stay:** trunk CI green on the head and every other candidate condition above
+  (full suite, additive schema, switch dependencies, the pre-tag checks); no open issue carrying
+  `release-hold` (repo-wide — there is no candidate issue to put it on); and **no database
+  migration since the last final** unless the version's tracking issue carries a migration grant
+  — otherwise the run refuses, opens `release: vX.Y.Z` if needed, and posts the one human command
+  (`COLAB_HUMAN=1 colab migration-grant <N> --branch vX.Y.Z`); the next green run after it tags.
+- **A minimum spacing between finals.** `release.final-spacing` (default and floor `1h`; longer
+  narrows) — a burst of merges deploys at most once per window. Inside it a run is a no-op, and
+  the first run after it tags the head, never an older commit.
+- **Deployed in the same run, never by a tag-push workflow.** A tag pushed with `GITHUB_TOKEN`
+  starts no `push: tags` run, so a separate deploy-on-tag workflow would never fire for this
+  final. [`templates/release-auto.yml`](templates/release-auto.yml)'s `deploy` job deploys it
+  (an edit point the adopter fills) and checks the health URL; a cut by hand refuses on this
+  route, because it would have no deploy behind it. `colab release finalize` here always reports
+  *no candidate*: one left over from an earlier route is superseded by the next final.
 
 **A manifest's version may be derivable (#438).** By default the pre-tag check refuses a tag
 that disagrees with any declared manifest (`VERSION`, `package.json`, `Cargo.toml`,

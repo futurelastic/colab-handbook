@@ -1085,7 +1085,7 @@ The full permission ladder, one rung per boundary:
 
 ```yaml
 release:
-  route: public-tool      # none · rapid-app · public-tool · library-fast · deploy-tag · live
+  route: public-tool      # none · rapid-app · public-tool · library-fast · deploy-tag · deploy-tag-fast · live
   candidates: auto        # auto · off
   candidates-per-day: 1   # optional — a positive integer; no route has a cap by default (#443)
   test-period: 3d         # <N>d — never shorter than 3d
@@ -1095,7 +1095,10 @@ release:
   npm: .                                       # optional — publish this package directory to npm (public-tool only)
   npm-gate: node scripts/check-pack-allowlist.mjs   # required with npm — the pack-allowlist gate
   version-source: manifest                     # optional — manifest · tag (#438)
-  final-grant: 123                             # optional — deploy-tag only: the operator's recorded grant (#441)
+  final-grant: 123                             # optional — deploy-tag / deploy-tag-fast only: the operator's recorded grant (#441, #446)
+  health-url: https://app.example.com/health   # deploy-tag-fast only — the endpoint reporting the running version (#446)
+  rollback: auto                               # deploy-tag-fast only — the deploy rolls itself back on a failed check (#446)
+  final-spacing: 1h                            # deploy-tag-fast only — minimum time between finals, <N>h · <N>d, never under 1h (#446)
 ```
 
 How the **release** — the tag — runs on this repo: which
@@ -1112,7 +1115,7 @@ as [CONVENTIONS §6's release routes](CONVENTIONS.md#6-releases) table them:
 |---|---|---|---|---|---|---|
 | `exposure: none` / `self` | `none` | `none` | `off` — no tags | — | `3d` | `human` |
 | `exposure: released`, `production: null`, `deploy: none` — adopters install it | `public-tool` | `public-tool` · `rapid-app` · `library-fast` · `none` | `auto` | uncapped | `3d` | `auto` |
-| `exposure: released`, `deploy: tag` — the tag deploys production | `deploy-tag` | `deploy-tag` · `none` | `auto` | uncapped | `3d` | `human` — `auto` only by an operator's grant (`final-grant`, below) |
+| `exposure: released`, `deploy: tag` — the tag deploys production | `deploy-tag` | `deploy-tag` · `deploy-tag-fast` (grant + health gate only, below) · `none` | `auto` | uncapped | `3d` | `human` — `auto` only by an operator's grant (`final-grant`, below) |
 | `exposure: released`, `deploy: manual` — a person deploys from the tag | `deploy-tag` | `deploy-tag` · `none` | `auto` | uncapped | `3d` | `human` |
 | `exposure: live` | `live` | `live` · `none` | `off` — the promotion is the deploy | — | `3d` | `human` |
 | anything else — undeclared or unknown `exposure`, a bare `tier: B`, a `released` repo whose `deploy`/`production` match no row | none — fail closed | `none` | `off` | — | `3d` | `human` |
@@ -1123,6 +1126,13 @@ The two routes only a no-production `released` repo may choose, and what they ch
 |---|---|---|---|---|
 | `rapid-app` | `auto` | uncapped | `3d`, newest clean candidate finalizes; a newer one does not restart its clock | `auto` |
 | `library-fast` | `off` — the tag triggers the publish | — | none | `auto` |
+
+And the one route a `deploy: tag` repo may choose besides its derived `deploy-tag` — only with
+the operator's grant and a declared health gate (*`deploy-tag-fast`*, below):
+
+| Route | `candidates` | `candidates-per-day` | `test-period` | `final` |
+|---|---|---|---|---|
+| `deploy-tag-fast` | `off` — `release cut --auto` tags the final itself | — | none — finals at least `final-spacing` apart | `auto`, on every green trunk head, deployed in the same run |
 
 Legacy `tier: A` reads as `released` and takes the route its `deploy` names; `tier: C` reads
 as `live` ([`tier`](#tier--optional-legacy)). `final` applies only to a candidate (or, on
@@ -1156,7 +1166,8 @@ direction only, measured against the route — declared, or derived:
   production, no key *on its own* lowers that. The one exception is the operator's grant,
   `final-grant` below, and it is a recorded human act, not a value.
 - `test-period` — a whole number of days, `<N>d`. Longer than `3d` narrows; shorter is a
-  **failure**. On `library-fast`, which has no test period, it is a failure too.
+  **failure**. On `library-fast` and `deploy-tag-fast`, which have no test period, it is a
+  failure too.
 
 **Three keys add evidence to the computed version, never permission** (#422) — they narrow and
 widen nothing, so each only has to be a non-empty string:
@@ -1225,6 +1236,32 @@ otherwise for a repo records that ruling on a decision issue (`colab decision <N
 - **An agent never writes it.** The grant is the operator's choice, transcribed; the
   conditions an automatic deploying final adds on top of a candidate's are in
   [CONVENTIONS §6](CONVENTIONS.md#6-releases).
+
+**`deploy-tag-fast` — a final on every green head, for a `deploy: tag` repo the operator chose
+it for** (#446). No candidate and no test period: `colab release cut --auto` tags `vX.Y.Z` on
+main's green head and the release workflow deploys it in the same run. Three keys stand in for
+the test period it does not have, and the route stands only with all of them:
+
+- `final-grant` — the operator's recorded ruling, read exactly as above (the same reader, the
+  same audit failure, the same revocation). On this route it needs no `final: auto` beside it:
+  the route itself is the automatic final. `final: human` here is a **failure** — there is no
+  candidate for a human to finalize; declare `route: deploy-tag` for that.
+- `health-url` — an absolute `https://` URL the release workflow polls after the deploy until it
+  reports the version (the template's `deploy` job). Anything else is a **failure**.
+- `rollback: auto` — the only accepted value: the operator's statement that the deploy restores
+  the previous version by itself when that check fails. The audit can check that the URL and the
+  wiring are there; it cannot prove the rollback works, which is why the grant is required too.
+
+Missing any of the three → the route is a **failure** and the derived `deploy-tag` stays in
+effect, final human — it fails closed, never into an untested automatic deploy. Only on
+`deploy: tag`: `deploy: manual` and a no-production repo reject it (`library-fast` keeps its
+meaning — nothing it tags reaches production). `final-spacing` — `<N>h` or `<N>d`, default and
+floor `1h` — keeps two finals at least that far apart; inside it a run is a no-op and the first
+run after it tags the head. Shorter, `0h` or a minute value is a **failure**. All three
+`deploy-tag-fast` keys on any other route are a **failure**, and so are `candidates`,
+`candidates-per-day` and `test-period` on this one. The gates it keeps — trunk CI green, no
+`release-hold`, no ungranted migration since the last final — are in
+[CONVENTIONS §6](CONVENTIONS.md#6-releases).
 
 An unknown sub-key, a value outside its set, or a scalar `release:` is a failure too. **No
 key picks or approves a version number** — every number is computed, majors included, and a
@@ -1490,6 +1527,7 @@ the shape that shows it. One writer at a time says nothing about who reads the r
 | `channels: [none]` + (`production` non-null or `deploy` ≠ `none`) → **advisory** | the claim "nothing runs this" going unflagged against a fact already on record elsewhere in the same descriptor |
 | `release` is a one-level block of `candidates` ∈ {`auto`, `off`}, `test-period` `<N>d`, `final` ∈ {`auto`, `human`}, when set — no other sub-key | a misspelled knob silently read as the default |
 | `release` widening its derived default — `candidates: auto` where the rung cuts no tags, `final: auto` where the final tag is a human act (`deploy: tag` without a resolvable `final-grant`, or `manual`), `test-period` under `3d` → **finding** | a descriptor lowering §6's human gate on a tag that deploys production |
+| `route: deploy-tag-fast` without a resolvable `final-grant`, `health-url` and `rollback: auto`, or whose release workflow deploys nothing from the final it tags (#446) → **finding** | a final on every green head that nobody chose, or that reaches the Release page while production never moves |
 
 `push-main` on a Tier A repo **is a finding** — a mismatch between the
 mechanism and the tier's contract, not a judgement on the mechanism, and the
