@@ -487,3 +487,53 @@ test('npm job: GitHub-hosted, OIDC only, opt-in, and no token anywhere in the te
   assert.doesNotMatch(code, /secrets\./, 'no stored secret is read — no token fallback');
   assert.doesNotMatch(code, /registry-url/, 'setup-node registry-url writes an .npmrc expecting a token');
 });
+
+// ---- #446: deploy-tag-fast — the final is deployed in this run ------------------------------------
+
+const DEPLOY_STEP = 'Deploy the final (EDIT)';
+const HEALTH_STEP = 'Verify the health endpoint reports the final';
+
+test('#446 cut step: a fast-route final writes final= and health-url=; a candidate writes neither', { skip: !HAS_JQ && 'jq not installed' }, () => {
+  const fin = runWithStub(CUT, { stdout: JSON.stringify({ ok: true, created: true, tag: 'v1.2.1', final: true, deploy: { healthUrl: 'https://app.example/health', rollback: 'auto' }, checks: [] }), exit: 0 });
+  assert.strictEqual(fin.status, 0);
+  assert.strictEqual(fin.output.tag, 'v1.2.1');
+  assert.strictEqual(fin.output.final, 'v1.2.1');
+  assert.strictEqual(fin.output['health-url'], 'https://app.example/health');
+  const cand = runWithStub(CUT, { stdout: JSON.stringify({ ok: true, created: true, tag: 'v1.2.1-rc.1', final: false, deploy: null, checks: [] }), exit: 0 });
+  assert.strictEqual(cand.output.tag, 'v1.2.1-rc.1');
+  assert.strictEqual(cand.output.final, undefined);
+  // An older CLI prints no `final` key at all — still a candidate.
+  const old = runWithStub(CUT, { stdout: JSON.stringify({ ok: true, created: true, tag: 'v1.2.1-rc.1', checks: [] }), exit: 0 });
+  assert.strictEqual(old.output.final, undefined);
+});
+
+test('#446 template: the deploy job needs release, runs only on a fast final, reads no secret, checks out the tag', () => {
+  const job = TEXT.slice(TEXT.indexOf('\n  deploy:\n'));
+  assert.ok(job.length > 1, 'no deploy job');
+  assert.match(job, /^ {4}needs: release$/m);
+  assert.match(job, /^ {4}if: needs\.release\.outputs\.deploy-tag != ''$/m);
+  assert.match(job, /contents: read/);
+  assert.doesNotMatch(job, /secrets\./);
+  assert.match(job, /ref: refs\/tags\/\$\{\{ needs\.release\.outputs\.deploy-tag \}\}/);
+  assert.match(TEXT, /deploy-tag: \$\{\{ steps\.cut\.outputs\.final \}\}/);
+  assert.match(TEXT, /health-url: \$\{\{ steps\.cut\.outputs\.health-url \}\}/);
+  // The own copy is public-tool: it carries the cut step's change but no deploy job.
+  assert.doesNotMatch(OWN, /\n {2}deploy:\n/);
+});
+
+test('#446 deploy step: unedited, it fails loudly — a final is never reported deployed when nothing deployed it', () => {
+  const r = runStep(DEPLOY_STEP, { env: { TAG: 'v1.2.1' } });
+  assert.strictEqual(r.status, 1);
+  assert.match(r.stdout, /never edited — v1\.2\.1 is tagged and published but NOT deployed/);
+});
+
+test('#446 health step: passes once the endpoint reports the version, fails at the timeout', () => {
+  const ok = runStep(HEALTH_STEP, { env: { TAG: 'v1.2.1', HEALTH_URL: 'https://app.example/health', HEALTH_TIMEOUT_SECONDS: '0' }, stubs: { curl: 'echo \'{"version":"1.2.1"}\'' } });
+  assert.strictEqual(ok.status, 0, ok.stdout + ok.stderr);
+  assert.match(ok.stdout, /reports 1\.2\.1/);
+  const stale = runStep(HEALTH_STEP, { env: { TAG: 'v1.2.1', HEALTH_URL: 'https://app.example/health', HEALTH_TIMEOUT_SECONDS: '0' }, stubs: { curl: 'echo \'{"version":"1.2.0"}\'' } });
+  assert.strictEqual(stale.status, 1);
+  assert.match(stale.stdout, /did not report 1\.2\.1 within 0s/);
+  const down = runStep(HEALTH_STEP, { env: { TAG: 'v1.2.1', HEALTH_URL: 'https://app.example/health', HEALTH_TIMEOUT_SECONDS: '0' }, stubs: { curl: 'exit 7' } });
+  assert.strictEqual(down.status, 1);
+});
