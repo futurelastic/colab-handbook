@@ -628,7 +628,7 @@ pass/fail counts and failing test names, not the runner's default default verbos
 
 #### Notify the dashboard, best-effort
 
-Once the verdict is known, report it to the dev-dashboard's hand-off checklist mark
+Once the verdict is known, report it to a session dashboard's hand-off checklist, when one is configured, mark
 ("does this branch have a recorded quality-gate result?") — read-side and persistence
 already live there; this is the only write call site (#116):
 
