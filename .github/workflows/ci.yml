@@ -24,8 +24,59 @@ concurrency:
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
+  # Already tested at this sha? (#418) — the claim push.
+  # A session's claim pushes its branch at the moment it is cut (CONVENTIONS.md §5, the
+  # claim record), so the branch's first push sits on a sha trunk has usually already
+  # run. Without this job that push re-runs the whole suite on a tested commit (~19% of
+  # all runs, measured across five adopting repos). This job runs ONLY on a ref's first
+  # push (`github.event.created`), checks nothing out, and asks one question: does THIS
+  # workflow already have a completed, green, non-PR run at THIS exact sha? Yes → every
+  # other job is skipped and the run concludes `success` — a branch-CI `green` that is
+  # true, because the same workflow passed at the same sha. Anything else — trunk still
+  # running, red, never run, `gh` missing, the API failing — and the suite runs as
+  # before (fail-open: this job never fails the run). Every later push has
+  # `created == false`, so a real commit always gets the full suite, with no extra hop.
+  # Why not simply `if: !github.event.created` on every job: a run whose jobs are ALL
+  # skipped concludes `skipped`, which `colab ship` reads as not-green (CONVENTIONS.md
+  # §4, "Branch CI"). This job is the one that ends green.
+  dedupe:
+    name: Already tested at this sha?
+    if: github.event_name == 'push' && github.event.created
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+    outputs:
+      tested: ${{ steps.check.outputs.tested }}
+    steps:
+      - name: Look for a green run of this workflow at this sha
+        id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          RUN_ID: ${{ github.run_id }}
+          SHA: ${{ github.sha }}
+        run: |
+          tested=false
+          if ! command -v gh >/dev/null 2>&1; then
+            echo "::notice::gh is not installed on this runner — running the full suite (#418)."
+          elif ! WFID="$(gh api "repos/$REPO/actions/runs/$RUN_ID" --jq .workflow_id 2>/dev/null)" || [ -z "$WFID" ]; then
+            echo "::notice::Could not read this run's workflow id — running the full suite (#418)."
+          elif ! N="$(gh api "repos/$REPO/actions/workflows/$WFID/runs?head_sha=$SHA&status=success&per_page=20" \
+                 --jq "[.workflow_runs[] | select(.id != $RUN_ID and .event != \"pull_request\")] | length" 2>/dev/null)"; then
+            echo "::notice::Could not list this workflow's runs at $SHA — running the full suite (#418)."
+          elif [ "${N:-0}" -ge 1 ] 2>/dev/null; then
+            tested=true
+            echo "This workflow already passed at $SHA ($N green run(s)) — skipping the suite (#418)."
+            echo "Already tested: this workflow has a green run at \`$SHA\` — suite skipped (#418)." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "No green run of this workflow at $SHA yet — running the full suite."
+          fi
+          echo "tested=$tested" >> "$GITHUB_OUTPUT"
+
   gitleaks:
     name: Secret scan (gitleaks)
+    needs: dedupe
+    if: ${{ !cancelled() && needs.dedupe.outputs.tested != 'true' }}
     runs-on: ubuntu-latest
     env:
       GITLEAKS_VERSION: "8.30.1"
@@ -48,6 +99,8 @@ jobs:
 
   actionlint:
     name: Schema-lint workflow templates (actionlint)
+    needs: dedupe
+    if: ${{ !cancelled() && needs.dedupe.outputs.tested != 'true' }}
     runs-on: ubuntu-latest
     env:
       ACTIONLINT_VERSION: "1.7.12"
@@ -84,6 +137,8 @@ jobs:
 
   self-check:
     name: Self-audit + syntax
+    needs: dedupe
+    if: ${{ !cancelled() && needs.dedupe.outputs.tested != 'true' }}
     runs-on: ubuntu-latest
     steps:
       # fetch-depth: 0 so the audit's trunk-existence check can see real local branch

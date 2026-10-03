@@ -31,6 +31,25 @@ Starting points you **copy into your own repo**. That is the entire model.
 | `docs-lint.yml` | `.github/workflows/docs-lint.yml` | Every repo that copied `docs-lint.mjs` | Advisory job — `continue-on-error: true` on the lint step, so a finding never blocks a merge until a repo deliberately removes that line. Requires `docs-lint.mjs` to already be in the repo; does not vendor it. |
 | `branch-name.yml` | `.github/workflows/branch-name.yml` | Opt-in — any repo that wants §4's branch shape checked on every PR | One step, no dependencies: the PR's head branch against CONVENTIONS.md §4's regex, both shapes (`<type>/<slug>-<N>` and the `<login>/<machine>/` prefixed one) passing as shipped. Once the repo declares `branchPrefix: machine`, delete the `?` after the regex's first group to require the prefix. The head ref reaches the script through `env:`, never interpolated — on a public repo it is attacker-chosen. |
 
+### The `dedupe` job — why a claimed branch's first run skips the suite (#418)
+
+All three CI templates open with a `dedupe` job. It runs only on the push that **creates** a
+ref, which is what a session claim does: it pushes the new branch at trunk's head. It checks
+nothing out, needs `permissions: actions: read`, and asks whether this same workflow already
+has a green, non-pull-request run at this exact sha. If one exists, every other job is
+skipped and the run still concludes `success`. If not, or if the check cannot run, the suite
+runs as before. Every later push skips the guard, so real commits always get the full suite.
+Two things to keep in a copy:
+
+- **The guard calls `gh`.** GitHub-hosted images have it. On a self-hosted image without
+  `gh`, the guard prints a notice and the suite runs, so nothing breaks, but nothing is saved
+  either.
+- **Every other job needs `!cancelled()` in its `if:`.** Without it, a job inherits the
+  implicit `success()`, which reads every ancestor, `dedupe` included. A job that only needs
+  `dedupe` indirectly would then be skipped on every ordinary push. That is why the Laravel
+  `migrations` job checks `needs.build.result == 'success'` explicitly. Add the same pair of
+  conditions to any job you add.
+
 ### Migration round-trip — what the Laravel job proves, and what it cannot
 
 `ci-laravel.yml`'s `migrations` job runs every migration **twice per engine**: once from
