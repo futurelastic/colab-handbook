@@ -338,10 +338,14 @@ seed_notify() {
     warn "node not found — notifyUrl was not checked or seeded."
     return
   fi
-  local args=(seed --colab-home "$COLAB_DIR")
-  [ "$NOTIFY_FLAG" = 1 ] && args+=(--url "$NOTIFY_URL")
-  [ "$DRY" = 1 ] && args+=(--dry)
-  node "$DIR/tools/lib/notify-endpoint.js" "${args[@]}" || exit $?
+  # POSIX only — no arrays: CI syntax-checks this file with `sh -n`, which is dash on Linux.
+  local dry=""
+  [ "$DRY" = 1 ] && dry="--dry"
+  if [ "$NOTIFY_FLAG" = 1 ]; then
+    node "$DIR/tools/lib/notify-endpoint.js" seed --colab-home "$COLAB_DIR" --url "$NOTIFY_URL" $dry || exit $?
+  else
+    node "$DIR/tools/lib/notify-endpoint.js" seed --colab-home "$COLAB_DIR" $dry || exit $?
+  fi
 }
 
 echo "== colab-handbook install ($([ "$DRY" = 1 ] && echo dry-run || echo apply)) =="
