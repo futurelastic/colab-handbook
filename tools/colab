@@ -7293,6 +7293,7 @@ const HELP_ADOPT = `colab adopt [--repo <path>] [--json] [--no-verify] [--axis a
                  [--writes <free|direct|isolated>] [--channels <c1,c2,...>]
                  [--production <url>|none] [--deploy <push-main|tag|manual|none>]
                  [--stack "<text>"] [--answered-by <name>] [--reason "<text>"]
+                 [--fork | --no-fork]
 
 Detects what a repo already states in .github/project.yml, ASKS a human only what could not be
 detected (flags, or a forced multiple-choice menu at a TTY — every row is a numbered choice,
@@ -7314,6 +7315,14 @@ accepted and reads as free — no adopter's descriptor breaks, and none is re-as
   --answered-by N   who is answering, alongside COLAB_HUMAN=1 (see THE HUMAN GATE below)
   --reason "..."    required alongside a lowered or evidence-contradicted exposure answer;
                     written into the file, next to the key it justifies
+  --fork / --no-fork
+                    a repo you own that tracks an upstream you don't (#449) is DETECTED — a
+                    remote named \`upstream\` whose URL differs from origin's. Assert it with
+                    --fork when the upstream remote is named otherwise; deny it with --no-fork.
+                    On a fork, step 5 of the remaining list is the append-only Conventions block
+                    (never the thin-shell conversion), the upstream's own agent workflow is
+                    named, and a new CLAUDE.md gets no AGENTS.md stub (CONVENTIONS.md §9,
+                    "A fork of an upstream")
 
 Any answer flag (--room/--exposure/--writes/--channels/--production/--deploy/--stack) makes the
 whole run NON-INTERACTIVE — it never half-prompts. With no answer flags and no TTY, and something
@@ -7442,7 +7451,7 @@ const ADOPT_ROW_ORDER = ['tier', 'room', 'exposure', 'writes', 'channels'];
  * read from a remote's HEAD, and the report says so (`detected.trunk.source`), never presented
  * as though it were.
  */
-function adoptGitExtras(repoAbs) {
+function adoptGitExtras(repoAbs, opts = {}) {
   let trunk = git.detectTrunk(repoAbs);
   let trunkSource = trunk ? 'origin-head' : null;
   if (!trunk) {
@@ -7456,7 +7465,26 @@ function adoptGitExtras(repoAbs) {
   const hooksPath = hp.ok && hp.stdout ? hp.stdout : null;
   let hooksDirFiles = [];
   try { hooksDirFiles = fs.readdirSync(path.join(repoAbs, '.githooks')); } catch (_) { /* absent */ }
-  return { trunk, trunkSource, hooksPath, hooksDirFiles };
+  // #449: `git ls-files` for the migrations candidate scan (adopt never asks `migrations:`).
+  const ls = git.git(['ls-files'], repoAbs);
+  const trackedFiles = ls.ok ? ls.stdout.split('\n').filter(Boolean) : undefined;
+  return { trunk, trunkSource, hooksPath, hooksDirFiles, trackedFiles, fork: adoptDetectFork(repoAbs, opts) };
+}
+
+/**
+ * #449 — is this a repo you own that tracks an upstream you don't? DETECTED, never asked (§9):
+ * a remote named `upstream` whose URL differs from origin's (the conventional name for the repo a
+ * fork tracks). `--fork` asserts it when the upstream remote is named otherwise; `--no-fork`
+ * denies it when a remote named `upstream` means something else. Returns null when not a fork.
+ */
+function adoptDetectFork(repoAbs, opts = {}) {
+  if (opts.noFork) return null;
+  const up = git.git(['remote', 'get-url', 'upstream'], repoAbs);
+  const origin = git.git(['remote', 'get-url', 'origin'], repoAbs);
+  const upUrl = up.ok && up.stdout ? up.stdout : null;
+  if (upUrl && !(origin.ok && origin.stdout === upUrl)) return { remote: 'upstream', url: upUrl, source: opts.fork ? 'flag' : 'upstream-remote' };
+  if (opts.fork) return { remote: null, url: null, source: 'flag' };
+  return null;
 }
 
 /** The `{ readFile, listDir, tags }` adapter tools/lib/adopt.js asks for — matching the local
@@ -7693,6 +7721,7 @@ function printAdoptReport(report, repoAbs, verify, localFinish) {
   print(`detected trunk: ${t.detected || '(unknown)'}${trunkSourceNote}${t.declared !== null ? `  (declared: ${t.declared}${t.agree === false ? ' ⚠ disagrees with detected' : ''})` : ''}`);
   print(`stack candidates: ${report.detected.stackCandidates.length ? report.detected.stackCandidates.join(', ') : '(none found)'}`);
   print(`declared ports: ${fmtVal(report.detected.ports)}`);
+  if (report.fork) print(`fork of an upstream: yes — ${report.fork.source === 'flag' ? '--fork' : `remote "${report.fork.remote}" ${report.fork.url}`} (step 5 is the append-only block, §9 "A fork of an upstream")`);
   print(`legacy tier letter, derived from (production, deploy): ${report.legacyTierLetter ?? '(undetermined — production is set but deploy matches none of push-main/tag/manual)'}`);
   print('');
   print('Derived consequences:');
@@ -7892,9 +7921,10 @@ async function cmdAdopt(argv) {
       '--deploy': 'deploy', '--stack': 'stack', '--answered-by': 'answeredBy', '--reason': 'reason',
       '--trunk': 'trunk',
     },
-    flags: { '--json': 'json', '--no-verify': 'noVerify', '--local': 'local', '--no-labels': 'noLabels', '-h': 'help', '--help': 'help' },
+    flags: { '--json': 'json', '--no-verify': 'noVerify', '--local': 'local', '--no-labels': 'noLabels', '--fork': 'fork', '--no-fork': 'noFork', '-h': 'help', '--help': 'help' },
   });
   if (opts.help) return print(HELP_ADOPT);
+  if (opts.fork && opts.noFork) throw new UserError('--fork and --no-fork contradict each other — pass one');
   if (opts.trunk !== undefined && !opts.local) {
     throw new UserError('--trunk only means something with --local — on an ordinary adoption trunk is DETECTED, never asked (CONVENTIONS.md §9)');
   }
@@ -7910,7 +7940,7 @@ async function cmdAdopt(argv) {
     if (local.exit !== undefined) return local.exit;
   }
   const io = adoptIo(repoAbs);
-  const extra = adoptGitExtras(repoAbs);
+  const extra = adoptGitExtras(repoAbs, opts);
   if (local) { extra.trunk = local.trunk; extra.trunkSource = 'local-integration'; }
   const report = adopt.detect(io, extra);
   const cfg = report.cfg;
@@ -8179,7 +8209,7 @@ async function cmdAdopt(argv) {
   fs.mkdirSync(path.dirname(descriptorFile), { recursive: true });
   fs.writeFileSync(descriptorFile, newText);
 
-  const afterExtra = adoptGitExtras(repoAbs);
+  const afterExtra = adoptGitExtras(repoAbs, opts);
   if (local) { afterExtra.trunk = local.trunk; afterExtra.trunkSource = 'local-integration'; }
   const after = adopt.detect(adoptIo(repoAbs), afterExtra);
   // #417: a NEW repo (no descriptor before this run, plain adopt) gets the thin-shell CLAUDE.md
@@ -8194,7 +8224,8 @@ async function cmdAdopt(argv) {
   }
   for (const e of entries) print(`✓ wrote ${e.key}: ${fmtVal(e.value)}`);
   if (shell) {
-    if (shell.claude === 'written') print('✓ wrote CLAUDE.md — the thin shell: @AGENTS.md + the Conventions block (§9 step 5, #417)');
+    if (shell.claude === 'written' && shell.fork) print('✓ wrote CLAUDE.md — the Conventions block alone: a fork with no upstream AGENTS.md gets no stub (§9 "A fork of an upstream", #449)');
+    else if (shell.claude === 'written') print('✓ wrote CLAUDE.md — the thin shell: @AGENTS.md + the Conventions block (§9 step 5, #417)');
     else if (shell.claude === 'skipped') print(`· CLAUDE.md not written — ${shell.reason}`);
     if (shell.agents === 'written') print('✓ wrote AGENTS.md — a stub; the repo\'s own instructions go here');
   }
@@ -8230,6 +8261,14 @@ function adoptWriteShell(repoAbs, after) {
   const version = handbookVersion(root);
   const atTag = version === 'v0' ? null : stamp.gitIn(root, ['show', `${version}:templates/repo-CLAUDE-block.md`]);
   const blockText = atTag && atTag.ok && atTag.out ? atTag.out : fs.readFileSync(blockFile, 'utf8');
+  // #449: on a fork, every file adopt creates is one the upstream may add later — a merge conflict
+  // forever after. So no AGENTS.md stub there: with the upstream's own AGENTS.md the shell imports
+  // it, without one CLAUDE.md is the block alone.
+  const forkNoAgents = !!(after && after.fork) && !fs.existsSync(agentsAbs);
+  if (forkNoAgents) {
+    fs.writeFileSync(claudeAbs, adopt.renderClaudeShell(blockText, { version, trunk, tier, importAgents: false }));
+    return { claude: 'written', agents: null, fork: true };
+  }
   fs.writeFileSync(claudeAbs, adopt.renderClaudeShell(blockText, { version, trunk, tier }));
   let agents = 'exists';
   if (!fs.existsSync(agentsAbs)) { fs.writeFileSync(agentsAbs, adopt.renderAgentsStub()); agents = 'written'; }

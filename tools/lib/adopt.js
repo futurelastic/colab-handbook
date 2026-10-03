@@ -18,7 +18,8 @@
  *   listDir(relPath)  -> string[]         non-recursive listing, [] if unreadable/absent
  *   tags()            -> string[] | null  every git tag, or null if undeterminable
  *
- * Git facts that are NOT plain file reads (trunk, `core.hooksPath`) are passed in separately via
+ * Git facts that are NOT plain file reads (trunk, `core.hooksPath`, the fork remote and `git ls-files`
+ * for #449) are passed in separately via
  * `extra`, rather than folded into `io` — `detectTrunk()` already lives in `tools/lib/git.js` and
  * belongs to the CLI layer, not duplicated here.
  *
@@ -210,22 +211,108 @@ function deriveConsequences({ exposure, writes, room }) {
 
 // ---------------------------------------------------------------------- §9 remainder checklist
 
+const migrationPaths = require('./migration-paths.js');
+
 /**
- * §9's steps 3-9, unconditionally — this commit never performs any of them (Boundary, #199's
- * plan: "adopt writes the descriptor and nothing else"), so the remainder is the same regardless
- * of what the descriptor already states. Handed back as data, not prose, so a caller (a report
- * printer, or a future `handbook-sync` call site) does not grow its own paraphrase of these steps.
+ * #449 — the agent workflow an upstream ships inside the fork: entries under `.claude/skills/`
+ * and `.claude/commands/`, plus a committed `AGENTS.md`. Upstream-owned files compete with the
+ * `code-*` skills, and deleting or editing them is a fork patch that conflicts on every upstream
+ * merge — so adopt only NAMES them, for the precedence line the appended block carries.
  */
-function remainingSteps() {
-  return [
-    { n: 3, text: 'Create the full label set (13 names) — `colab labels --ensure`, CONVENTIONS.md §9 step 3 (#206)' },
+function detectUpstreamAgentFiles(io) {
+  const out = [];
+  for (const dir of ['.claude/skills', '.claude/commands']) {
+    for (const e of io.listDir(dir).slice().sort()) {
+      if (e.startsWith('.')) continue;
+      out.push(`${dir}/${e}`);
+    }
+  }
+  return out;
+}
+
+/**
+ * #449 — where this repo's migrations might live, beyond what `migrations:` and the two defaults
+ * already cover. Two heuristics over `git ls-files`, both CANDIDATES for a human, never written:
+ * a `migrations/` directory nothing covers (the audit's own rule, `undeclaredMigrationDirs`), and
+ * a directory holding tracked `*.sql` files nothing covers (a fork whose upstream keeps them in
+ * `modules/<name>/sql/` — measured: the no-new-migrations gate was blind there). The `.sql` rule
+ * over-reports seeds and fixtures on purpose: a false candidate costs a glance, a missed layout
+ * leaves a human-only gate seeing nothing.
+ */
+function detectMigrationCandidates(cfg, trackedFiles) {
+  const parsed = migrationPaths.parseMigrationPaths(cfg);
+  const declared = parsed.paths;
+  const files = trackedFiles || [];
+  const dirs = new Set(migrationPaths.undeclaredMigrationDirs(files, declared));
+  for (const file of files) {
+    if (!/\.sql$/i.test(file)) continue;
+    const segs = String(file).split('/');
+    if (segs.length < 2) continue;                       // a root-level .sql is not a layout
+    if (segs.some((s) => s === 'node_modules' || s === 'vendor')) continue;
+    if (migrationPaths.isMigrationPath(file, declared)) continue;
+    const dir = `${segs.slice(0, -1).join('/')}/`;
+    if ([...dirs].some((d) => dir.startsWith(d))) continue;
+    dirs.add(dir);
+  }
+  return { declared: parsed.declared ? declared : null, candidates: [...dirs].sort() };
+}
+
+const MIGRATION_CANDIDATES_SHOWN = 6;
+
+/** The step-2 remainder line about `migrations:` — adopt never asks it, so it always reports it. */
+function migrationsStepText(m) {
+  const tail = 'project.schema.md `migrations`; `colab adopt` does not ask it, step 2';
+  if (m && m.declared && m.declared.length) {
+    const extra = m.candidates.length ? ` — still uncovered, check: ${listShort(m.candidates)}` : '';
+    return `\`migrations:\` declared (${m.declared.join(', ')})${extra} — ${tail}`;
+  }
+  if (m && m.candidates.length) {
+    return `Declare \`migrations:\` in .github/project.yml — candidate layouts outside database/migrations/ and prisma/migrations/: ${listShort(m.candidates)}. Until declared, the no-new-migrations gate cannot see them — ${tail}`;
+  }
+  return `Declare \`migrations:\` in .github/project.yml if this repo keeps migrations anywhere but database/migrations/ or prisma/migrations/ (none detected) — ${tail}`;
+}
+
+function listShort(items) {
+  const shown = items.slice(0, MIGRATION_CANDIDATES_SHOWN).join(', ');
+  return items.length > MIGRATION_CANDIDATES_SHOWN ? `${shown} (+${items.length - MIGRATION_CANDIDATES_SHOWN} more)` : shown;
+}
+
+/**
+ * §9's remainder, as data, not prose, so a caller (a report printer, or a future `handbook-sync`
+ * call site) does not grow its own paraphrase of these steps. Adopt writes the descriptor and
+ * nothing else (Boundary, #199's plan), so steps 3-9 are always listed.
+ *
+ * `ctx` (all optional, #449):
+ *   migrations      — `detectMigrationCandidates()`'s result; adds the step-2 `migrations:` line
+ *                      (absent ctx = the pre-#449 list, steps 3-9 only)
+ *   fork            — `{ remote, url, source }` when this repo tracks an upstream it does not own:
+ *                      step 5 becomes the append-only block instead of the thin-shell conversion
+ *                      (CONVENTIONS.md §9, *A fork of an upstream*)
+ *   upstreamAgentFiles — on a fork, the upstream's own agent workflow, named for the precedence line
+ */
+function remainingSteps(ctx = {}) {
+  const steps = [];
+  if (ctx.migrations) steps.push({ n: 2, text: migrationsStepText(ctx.migrations) });
+  steps.push(
+    { n: 3, text: 'Create the full label set (21 names) — `colab labels --ensure`, CONVENTIONS.md §9 step 3 (#206)' },
     { n: 4, text: 'Add the tier topic to the GitHub repo — `gh repo edit --add-topic tier-<b|c|a>`, step 4' },
-    { n: 5, text: 'Make CLAUDE.md the thin shell — `@AGENTS.md` plus templates/repo-CLAUDE-block.md, repo prose in AGENTS.md (adopt writes both on a new repo, #417), step 5' },
+  );
+  if (ctx.fork) {
+    steps.push({ n: 5, text: `Fork of an upstream (${ctx.fork.source === 'flag' ? '--fork' : `remote "${ctx.fork.remote}"`}): do NOT make CLAUDE.md the thin shell — append templates/repo-CLAUDE-block.md at the END of the upstream's CLAUDE.md (create it only if upstream has none), record that append as a fork patch, leave AGENTS.md and the upstream prose untouched; CONVENTIONS.md §9 "A fork of an upstream", step 5` });
+    const agentFiles = ctx.upstreamAgentFiles || [];
+    if (agentFiles.length) {
+      steps.push({ n: 5, text: `Upstream ships its own agent workflow (${listShort(agentFiles)}): leave it in place, and say in the appended block that fork work runs code-start → code-wrap → code-ship, not that workflow — §9 "A fork of an upstream", step 5` });
+    }
+  } else {
+    steps.push({ n: 5, text: 'Make CLAUDE.md the thin shell — `@AGENTS.md` plus templates/repo-CLAUDE-block.md, repo prose in AGENTS.md (adopt writes both on a new repo, #417), step 5' });
+  }
+  steps.push(
     { n: 6, text: "Make sure CI meets §7's outcome — `colab template <name>`, step 6" },
     { n: 7, text: 'Register the repo — `colab register`, step 7' },
     { n: 8, text: 'Leave existing branches alone — nothing to do, step 8' },
     { n: 9, text: 'Do not create `dev` unless genuinely Tier A or Tier C — nothing to do, step 9' },
-  ];
+  );
+  return steps;
 }
 
 // ---------------------------------------------------------------------- row state
@@ -321,6 +408,16 @@ function detect(io, extra = {}) {
   // from a remote's HEAD — tools/colab's adoptGitExtras() is the only place that computes it.
   const trunkSource = (extra && extra.trunkSource) || null;
 
+  // #449: a repo you own that tracks an upstream you don't. The CLI detects it (a remote named
+  // `upstream` whose URL differs from origin's) or takes `--fork`/`--no-fork`; null = not a fork.
+  const fork = (extra && extra.fork) || null;
+  const upstreamAgentFiles = fork ? detectUpstreamAgentFiles(io) : [];
+  // Only when the CLI handed over `git ls-files` — a pure-io caller without it gets no step-2 line
+  // rather than a false "none detected".
+  const migrations = extra && Array.isArray(extra.trackedFiles)
+    ? detectMigrationCandidates(cfg, extra.trackedFiles)
+    : null;
+
   return {
     descriptorExists: io.readFile('.github/project.yml') !== null,
     cfg,
@@ -335,7 +432,10 @@ function detect(io, extra = {}) {
     },
     legacyTierLetter,
     consequences,
-    remaining: remainingSteps(),
+    fork,
+    upstreamAgentFiles,
+    migrations,
+    remaining: remainingSteps({ migrations, fork, upstreamAgentFiles }),
   };
 }
 
@@ -822,7 +922,7 @@ function renderDescriptor(rawText, entries) {
  * `tier` may be null (a shape with no legacy letter): the placeholder is then left for a human,
  * never guessed — the same rule deriveTier itself follows.
  */
-function renderClaudeShell(blockTemplate, { version, trunk, tier }) {
+function renderClaudeShell(blockTemplate, { version, trunk, tier, importAgents = true }) {
   let block = String(blockTemplate).replace(/^\s*<!--[\s\S]*?-->\s*/, ''); // the paste note
   block = block.replace('<!-- colab-handbook @ <version> -->', `<!-- colab-handbook @ ${version} -->`);
   if (trunk) {
@@ -834,7 +934,10 @@ function renderClaudeShell(blockTemplate, { version, trunk, tier }) {
     // `<A = … · C = … · B = …>` → the one gloss that applies.
     block = block.replace(/<A = ([^·>]+?) · C = ([^·>]+?) · B = ([^>]+?)>/, (m, a, c, b) => ({ A: a, B: b, C: c })[tier] || m);
   }
-  return `@AGENTS.md\n\n${block.replace(/\s*$/, '\n')}`;
+  // #449: a fork with no upstream AGENTS.md gets the block alone — no import of a file adopt
+  // must not create there.
+  const body = block.replace(/\s*$/, '\n');
+  return importAgents ? `@AGENTS.md\n\n${body}` : body;
 }
 
 /** The AGENTS.md stub written beside a new shell, only when no AGENTS.md exists. */
@@ -859,6 +962,8 @@ module.exports = {
   deriveTier,
   deriveConsequences,
   remainingSteps,
+  detectUpstreamAgentFiles,
+  detectMigrationCandidates,
   detect,
   // commit 2
   VALID_ROOM,

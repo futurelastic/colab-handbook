@@ -4676,7 +4676,13 @@ only. Resolution order: `--config` flag > `~/.colab/repos.txt` > bundled example
    other four have none, so declining them would just recreate #282's shape under a
    different row).
 2. **Write `.github/project.yml`** ([§3](#3-githubprojectyml--the-marker)) with the
-   answers from step 1.
+   answers from step 1 — **and declare `migrations:`** when the repo keeps migrations
+   anywhere but `database/migrations/` or `prisma/migrations/`
+   ([`project.schema.md`](project.schema.md#migrations--optional)). None of the five
+   questions asks it, so `colab adopt` lists it as the first remaining step, naming the
+   candidate layouts it found (`git ls-files`: an uncovered `migrations/` directory, or a
+   directory of tracked `*.sql` files). Until it is declared, the no-new-migrations gate
+   cannot see those files (#449).
 3. **Create the whole label set — twenty-one names, not a subset** (`in-progress`,
    `deps-checked`, `agent-filed`, `epic`, `needs-decision`, `decision-recorded`,
    `needs-plan`, `migration-granted`, `needs-migration-grant`, `ci-granted`,
@@ -4742,6 +4748,9 @@ only. Resolution order: `--config` flag > `~/.colab/repos.txt` > bundled example
      and a generator writing both re-adds the copy after any hand cleanup.
    - A repo with only a `CLAUDE.md` is still conforming — the shell is the shape for new
      repos and the target for migrations, not a reason to fail an existing one.
+   - **A fork of an upstream you don't own does not take this shape** — the thin-shell
+     conversion would rewrite a file the upstream keeps editing. Its step 5 is the
+     append-only block in [*A fork of an upstream*](#a-fork-of-an-upstream--a-repo-you-own-that-tracks-one-you-dont-449), below.
 
    The audit holds this shape: its size advisory measures `CLAUDE.md` **plus every in-repo
    file it `@`-imports**, so a bloated `AGENTS.md` behind a tiny shell is still caught; it
@@ -4914,6 +4923,61 @@ where the file never exists, so only a local audit can see this state.
 the only way the conventions reach anyone who clones the repo without this machine's
 local state: a teammate, CI, the owner's own agents. Local adoption is a working
 arrangement for one operator's clones, not a substitute.
+
+### A fork of an upstream — a repo you own that tracks one you don't (#449)
+
+The two paths above cover a repo you own and a repo you don't. A third shape sits between
+them: **a fork you own that keeps merging from an upstream you don't.** The fork is yours, so
+it adopts in full — descriptor, labels, CI, registration, all committed. But some files in it
+belong to the upstream: its `CLAUDE.md`, its `AGENTS.md`, and often an agent workflow of its
+own. Every edit to one of those is a patch the fork carries forever and re-resolves on every
+upstream merge.
+
+**`colab adopt` detects it, never asks.** It looks for a remote named `upstream` whose URL
+differs from `origin`'s. `--fork` asserts the shape when the upstream remote has another name,
+and `--no-fork` denies it when a remote called `upstream` means something else. Nothing is
+written to the descriptor: the remote is the fact, and a key would be a second copy of it that
+could drift.
+
+Three things change from [*Any repo, first-time adoption*](#any-repo-first-time-adoption):
+
+1. **Step 5 is append-only.** Paste [`templates/repo-CLAUDE-block.md`](templates/repo-CLAUDE-block.md)
+   at the **end** of the upstream's `CLAUDE.md`. Leave the upstream's prose where it is, leave
+   `AGENTS.md` alone, and record the append in whatever list the fork keeps of its patches
+   against the upstream. One appended block, at the end, touches no upstream line, so a merge
+   only conflicts if the upstream edits its own last lines. Measured: a block appended this way
+   survived a 588-commit upstream merge untouched. The thin-shell conversion moves every upstream
+   line instead, and conflicts on each upstream change to that file.
+   - **Upstream has no `CLAUDE.md`?** `colab adopt` writes one. With an upstream `AGENTS.md` it is
+     the usual shell (`@AGENTS.md` plus the block). Without one it is the block alone, and adopt
+     writes **no** `AGENTS.md` stub. Every file adopt creates is a file the upstream may add later,
+     and then it conflicts.
+   - **`CLAUDE.local.md` instead** only when the fork must stay byte-identical to the upstream
+     (a pure mirror). That file is never committed, so a teammate, CI or the upstream's own
+     agents cloning the fork never see the conventions. That is the same cost as
+     [*Working in a repo you don't own*](#working-in-a-repo-you-dont-own), paid on a repo you do own.
+   - The audit's `prose-in-claude-md` and `no-agents-md` warnings are expected on a fork, and so
+     is `handbook-sync`'s offer of the `AGENTS.md` graft. Leave the upstream's files alone and
+     decline the graft. Both are warnings, never failures.
+2. **The upstream's agent workflow stays where it is, and the appended block says which flow
+   governs.** An upstream can ship skills and commands under `.claude/skills/` and
+   `.claude/commands/`. Measured: one such skill fired on any "fix / implement / refactor"
+   request, wrote four files per change into the upstream's own spec folder, and opened a pull
+   request. That competes directly with `code-start` → `code-wrap` → `code-ship`. Deleting or
+   editing it is a fork patch with the same merge cost as step 5, so don't. Add one line inside
+   the appended block instead: *work on this fork runs the `code-*` flow; the upstream's
+   workflow is how changes are contributed back to the upstream, not how this fork ships.* An
+   agent reads the upstream's instructions and then this block, so the block is what settles
+   the competition. `colab adopt` names the upstream's skill and command entries in its
+   remaining steps so that this line gets written.
+3. **Declare `migrations:` (step 2) before the first ship.** An upstream's layout is usually
+   not one of the two defaults (measured: `modules/*/sql/*.sql`), and an undeclared layout
+   leaves the no-new-migrations gate blind. This is true of any repo, but a fork inherits
+   someone else's layout and is the likeliest to miss it.
+
+Everything else in §9 applies unchanged: the five questions, labels, the topic, CI and
+registration. `trunk:` names a branch of the fork, the one its sessions merge into. Upstream
+merges come into the fork, and nothing is pushed to the upstream's branches.
 
 ### Fixtures and examples use invented values
 

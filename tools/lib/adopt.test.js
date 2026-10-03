@@ -15,6 +15,7 @@ const assert = require('node:assert');
 
 const {
   deriveTier, deriveConsequences, detectStack, detectChannelCandidates, remainingSteps, detect,
+  detectMigrationCandidates, detectUpstreamAgentFiles, renderClaudeShell,
   QUESTIONS, axisMissing, ROW_NAMES, EXPOSURE_RANK, GATE_CLASS, EXIT_CODE,
   exposureShapeVerdict, gateVerdict, writesGateVerdict, provenanceComment, renderDescriptor,
   renderMenu, resolveChoice,
@@ -226,6 +227,75 @@ test('remainingSteps returns §9 steps 3-9, unconditionally (commit 1 performs n
   const steps = remainingSteps();
   assert.strictEqual(steps.length, 7);
   assert.deepStrictEqual(steps.map((s) => s.n), [3, 4, 5, 6, 7, 8, 9]);
+});
+
+test('#449: remainingSteps on a fork — step 5 is the append-only block, never the thin shell', () => {
+  const steps = remainingSteps({ fork: { remote: 'upstream', url: 'https://example.invalid/up.git', source: 'upstream-remote' } });
+  const five = steps.filter((s) => s.n === 5);
+  assert.strictEqual(five.length, 1);
+  assert.match(five[0].text, /append templates\/repo-CLAUDE-block\.md at the END/);
+  assert.match(five[0].text, /do NOT make CLAUDE\.md the thin shell/);
+  assert.match(five[0].text, /remote "upstream"/);
+  assert.ok(!steps.some((s) => /^Make CLAUDE\.md the thin shell/.test(s.text)));
+});
+
+test('#449: remainingSteps on a fork with an upstream agent workflow names it for the precedence line', () => {
+  const steps = remainingSteps({ fork: { source: 'flag' }, upstreamAgentFiles: ['.claude/skills/spec-flow', '.claude/commands/fix.md'] });
+  const five = steps.filter((s) => s.n === 5);
+  assert.strictEqual(five.length, 2);
+  assert.match(five[0].text, /\(--fork\)/);
+  assert.match(five[1].text, /\.claude\/skills\/spec-flow, \.claude\/commands\/fix\.md/);
+  assert.match(five[1].text, /code-start → code-wrap → code-ship/);
+});
+
+test('#449: remainingSteps with a migrations scan leads with a step-2 line, in all three shapes', () => {
+  const none = remainingSteps({ migrations: { declared: null, candidates: [] } });
+  assert.deepStrictEqual(none.map((s) => s.n), [2, 3, 4, 5, 6, 7, 8, 9]);
+  assert.match(none[0].text, /none detected/);
+  const found = remainingSteps({ migrations: { declared: null, candidates: ['modules/billing/sql/'] } });
+  assert.match(found[0].text, /candidate layouts .*modules\/billing\/sql\//);
+  const declared = remainingSteps({ migrations: { declared: ['db/'], candidates: [] } });
+  assert.match(declared[0].text, /`migrations:` declared \(db\/\)/);
+});
+
+test('#449: detectMigrationCandidates — uncovered migrations/ and *.sql dirs, defaults and declared prefixes skipped', () => {
+  const files = [
+    'modules/billing/sql/001_init.sql', 'modules/billing/sql/002_add.sql', 'modules/users/sql/001.sql',
+    'database/migrations/2024_01_01_x.php', 'backend/migrations/001.js', 'db/schema.sql',
+    'vendor/lib/sql/x.sql', 'node_modules/a/migrations/1.js', 'root.sql', 'README.md',
+  ];
+  const r = detectMigrationCandidates({}, files);
+  assert.strictEqual(r.declared, null);
+  assert.deepStrictEqual(r.candidates, ['backend/migrations/', 'db/', 'modules/billing/sql/', 'modules/users/sql/']);
+  const d = detectMigrationCandidates({ migrations: ['modules/'] }, files);
+  assert.deepStrictEqual(d.declared, ['modules/']);
+  assert.deepStrictEqual(d.candidates, ['backend/migrations/', 'db/']);
+});
+
+test('#449: detectUpstreamAgentFiles lists .claude/skills and .claude/commands entries, dotfiles skipped', () => {
+  const r = detectUpstreamAgentFiles(io({ dirs: { '.claude/skills': ['spec-flow', '.DS_Store'], '.claude/commands': ['fix.md'] } }));
+  assert.deepStrictEqual(r, ['.claude/skills/spec-flow', '.claude/commands/fix.md']);
+});
+
+test('#449: detect — fork + trackedFiles reach the report; without them the pre-#449 list is unchanged', () => {
+  const d = io({ dirs: { '.claude/skills': ['spec-flow'] } });
+  const plain = detect(d);
+  assert.strictEqual(plain.fork, null);
+  assert.strictEqual(plain.migrations, null);
+  assert.deepStrictEqual(plain.upstreamAgentFiles, []);
+  assert.deepStrictEqual(plain.remaining.map((s) => s.n), [3, 4, 5, 6, 7, 8, 9]);
+  const fork = detect(d, { fork: { remote: 'upstream', url: 'u', source: 'upstream-remote' }, trackedFiles: ['modules/a/sql/1.sql'] });
+  assert.deepStrictEqual(fork.upstreamAgentFiles, ['.claude/skills/spec-flow']);
+  assert.deepStrictEqual(fork.migrations.candidates, ['modules/a/sql/']);
+  assert.deepStrictEqual(fork.remaining.map((s) => s.n), [2, 3, 4, 5, 5, 6, 7, 8, 9]);
+});
+
+test('#449: renderClaudeShell with importAgents:false is the block alone — no @AGENTS.md line', () => {
+  const tpl = '<!-- Paste this -->\n## Conventions\n<!-- colab-handbook @ <version> -->\n';
+  const out = renderClaudeShell(tpl, { version: 'v1.0.0', trunk: 'main', tier: 'B', importAgents: false });
+  assert.ok(!out.includes('@AGENTS.md'));
+  assert.match(out, /^## Conventions/);
+  assert.match(renderClaudeShell(tpl, { version: 'v1.0.0', trunk: 'main', tier: 'B' }), /^@AGENTS\.md\n\n## Conventions/);
 });
 
 // --------------------------------------------------------------- detect() — the whole report

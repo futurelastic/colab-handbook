@@ -646,3 +646,72 @@ test('#417: a refusal writes neither file', () => {
   assert.strictEqual(fs.existsSync(path.join(fx.work, 'CLAUDE.md')), false);
   assert.strictEqual(fs.existsSync(path.join(fx.work, 'AGENTS.md')), false);
 });
+
+// --------------------------------------------------------------- #449: a fork of an upstream
+
+/** A fixture shaped like a fork: an `upstream` remote (a second bare repo), an upstream-shipped
+ * CLAUDE.md + AGENTS.md + agent workflow, and SQL migrations in a non-default layout. */
+function forkFixture({ claude = true, agents = true } = {}) {
+  const fx = fixture(undefined);
+  const up = path.join(fx.root, 'upstream.git');
+  execFileSync('git', ['init', '-q', '--bare', '-b', 'main', up], { encoding: 'utf8' });
+  fx.g(fx.work, 'remote', 'add', 'upstream', up);
+  const w = (rel, text) => { fs.mkdirSync(path.dirname(path.join(fx.work, rel)), { recursive: true }); fs.writeFileSync(path.join(fx.work, rel), text); };
+  if (claude) w('CLAUDE.md', '# Upstream project\n\nUpstream prose the fork must not rewrite.\n');
+  if (agents) w('AGENTS.md', '# Upstream agents\n');
+  w('.claude/skills/spec-flow/SKILL.md', '---\nname: spec-flow\n---\n');
+  w('.claude/commands/fix.md', 'fix\n');
+  w('modules/billing/sql/001_init.sql', 'create table t (id int);\n');
+  fx.g(fx.work, 'add', '-A');
+  fx.g(fx.work, 'commit', '-q', '-m', 'chore: upstream files');
+  return fx;
+}
+
+test('#449: a fork (upstream remote) gets the append-only step 5, its agent workflow named, a migrations line', () => {
+  const fx = forkFixture();
+  const before = fs.readFileSync(path.join(fx.work, 'CLAUDE.md'), 'utf8');
+  const r = colab(fx, ['adopt', '--repo', fx.work, '--no-verify', ...FRESH_FLAGS], { COLAB_HUMAN: '1' });
+  assert.strictEqual(r.code, 0, r.err);
+  assert.match(r.out, /fork of an upstream: yes — remote "upstream"/);
+  assert.match(r.out, /5\. Fork of an upstream \(remote "upstream"\): do NOT make CLAUDE\.md the thin shell/);
+  assert.doesNotMatch(r.out, /5\. Make CLAUDE\.md the thin shell/);
+  assert.match(r.out, /5\. Upstream ships its own agent workflow \(\.claude\/skills\/spec-flow, \.claude\/commands\/fix\.md\)/);
+  assert.match(r.out, /2\. Declare `migrations:` .*modules\/billing\/sql\//);
+  assert.strictEqual(fs.readFileSync(path.join(fx.work, 'CLAUDE.md'), 'utf8'), before, 'upstream CLAUDE.md untouched');
+});
+
+test('#449: --no-fork on the same repo gives back the ordinary thin-shell step 5', () => {
+  const fx = forkFixture();
+  const r = colab(fx, ['adopt', '--repo', fx.work, '--no-verify', '--no-fork', ...FRESH_FLAGS], { COLAB_HUMAN: '1' });
+  assert.strictEqual(r.code, 0, r.err);
+  assert.match(r.out, /5\. Make CLAUDE\.md the thin shell/);
+  assert.doesNotMatch(r.out, /fork of an upstream: yes/);
+});
+
+test('#449: --fork asserts a fork with no upstream remote; --fork with --no-fork refuses', () => {
+  const fx = fixture(undefined);
+  const r = colab(fx, ['adopt', '--repo', fx.work, '--no-verify', '--fork', ...FRESH_FLAGS], { COLAB_HUMAN: '1' });
+  assert.strictEqual(r.code, 0, r.err);
+  assert.match(r.out, /5\. Fork of an upstream \(--fork\)/);
+  const both = colab(fx, ['adopt', '--repo', fx.work, '--no-verify', '--fork', '--no-fork']);
+  assert.notStrictEqual(both.code, 0);
+  assert.match(both.err + both.out, /contradict/);
+});
+
+test('#449: a fork with no CLAUDE.md and no AGENTS.md gets the block alone — no @AGENTS.md, no stub', () => {
+  const fx = forkFixture({ claude: false, agents: false });
+  const r = colab(fx, ['adopt', '--repo', fx.work, '--json', '--no-verify', ...FRESH_FLAGS], { COLAB_HUMAN: '1' });
+  assert.strictEqual(r.code, 0, r.err);
+  assert.deepStrictEqual(JSON.parse(r.out).shell, { claude: 'written', agents: null, fork: true });
+  const claude = fs.readFileSync(path.join(fx.work, 'CLAUDE.md'), 'utf8');
+  assert.ok(!claude.includes('@AGENTS.md'));
+  assert.match(claude, /<!-- colab-handbook @ v\d+\.\d+\.\d+ -->/);
+  assert.strictEqual(fs.existsSync(path.join(fx.work, 'AGENTS.md')), false);
+});
+
+test('#449: a non-fork repo with no extra migrations still gets the step-2 reminder, "none detected"', () => {
+  const fx = fixture(fullYml());
+  const r = colab(fx, ['adopt', '--repo', fx.work, '--no-verify']);
+  assert.strictEqual(r.code, 0, r.err);
+  assert.match(r.out, /2\. Declare `migrations:` .*\(none detected\)/);
+});
