@@ -88,9 +88,44 @@ test('template: concurrency never cancels a deploy half-way, and its group does 
 
 test('template: reads only the named secrets', () => {
   const secrets = [...new Set([...TEXT.matchAll(/secrets\.([A-Z_]+)/g)].map((m) => m[1]))].sort();
-  assert.deepEqual(secrets, ['PORTAINER_API_KEY', 'REGISTRY_PASSWORD']);
+  assert.deepEqual(secrets, ['HEALTH_AUTH_HEADER', 'HEALTH_BASIC_AUTH', 'PORTAINER_API_KEY', 'REGISTRY_PASSWORD']);
+  // Every secret it reads, a workflow_call caller can pass (secrets: inherit or by name).
+  const call = TEXT.slice(TEXT.indexOf('  workflow_call:'), TEXT.indexOf('\nconcurrency:'));
+  for (const sname of secrets) assert.match(call, new RegExp(`^ {6}${sname}:\\n {8}required: false$`, 'm'), sname);
   // The tag reaches the driver through env, never interpolated into the shell line.
-  assert.match(TEXT, /run: node \.github\/deploy\/deploy-container-run\.mjs --tag "\$TAG"$/m);
+  assert.match(TEXT, /run: node \.github\/deploy\/deploy-container-run\.mjs --tag "\$TAG" --publish-only$/m);
+  assert.match(TEXT, /run: node \.github\/deploy\/deploy-container-run\.mjs --tag "\$TAG" --deploy-only$/m);
+});
+
+/** The text of one top-level job, `  <name>:` up to the next job or the end. */
+function job(name) {
+  const at = TEXT.indexOf(`\n  ${name}:\n`, TEXT.indexOf('\njobs:\n'));
+  assert.ok(at >= 0, `job ${name}`);
+  const rest = TEXT.slice(at + 1);
+  const next = rest.slice(1).search(/\n {2}[a-z][a-z0-9_-]*:\n/);
+  return next < 0 ? rest : rest.slice(0, next + 1);
+}
+
+test('template (#460): publish runs on every final, ungated; deploy needs it and never builds', () => {
+  const pub = job('publish');
+  const dep = job('deploy');
+  assert.doesNotMatch(pub, /^ {4}if:/m, 'publish is never gated on the platform');
+  assert.doesNotMatch(pub, /^ {4}environment:/m, 'publish needs no platform environment');
+  assert.doesNotMatch(pub, /PORTAINER|HEALTH_/, 'publish reads no platform or health configuration');
+  assert.match(pub, /--publish-only/);
+  assert.match(pub, /^ {6}packages: write/m);
+  assert.match(pub, /^ {6}tag: \$\{\{ steps\.tag\.outputs\.tag \}\}$/m, 'publish hands the resolved tag on');
+  assert.match(dep, /^ {4}needs: publish$/m);
+  assert.match(dep, /--deploy-only/);
+  assert.doesNotMatch(dep, /--publish-only|- name: Resolve the tag/);
+  assert.match(dep, /^ {6}packages: read/m, 'deploy only reads the registry');
+  assert.match(dep, /ref: refs\/tags\/\$\{\{ needs\.publish\.outputs\.tag \}\}/);
+  assert.match(dep, /TAG: \$\{\{ needs\.publish\.outputs\.tag \}\}/);
+  // Images and build args are written once, read by both jobs.
+  const wfEnv = TEXT.slice(TEXT.indexOf('\nenv:\n'), TEXT.indexOf('\njobs:\n'));
+  assert.match(wfEnv, /^ {2}DEPLOY_IMAGES: \|$/m);
+  assert.match(wfEnv, /^ {2}DEPLOY_BUILD_ARGS: ""/m);
+  assert.doesNotMatch(TEXT.slice(TEXT.indexOf('\njobs:\n')), /DEPLOY_IMAGES:|DEPLOY_BUILD_ARGS:/);
 });
 
 test('template: recognised as a deploy-container copy, and its scripts sit beside it under .github/deploy/', () => {
