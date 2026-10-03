@@ -467,7 +467,7 @@ git add -A && git commit -m "chore(sync): merge <base> + regen generated files"
 **`<base>` is the only ref this step may merge — never a sibling member's branch.** If
 this branch carries a `group:` label and a sibling still has unmerged work you want, the
 answer is to sequence behind it or group onto it (`CONVENTIONS.md` [§5](../../CONVENTIONS.md#grouping--issues-that-must-share-one-branch), *Grouping*),
-never to pull it in here. Measured on coding-dashboard, 2026-09-05 — that repo's ADR
+never to pull it in here. Measured on a downstream session orchestrator, 2026-09-05 — its ADR
 `docs/adr/1530-ship-lanes-reorg.md`, section 2 L5: one branch in `group:cockpit-fidelity`
 carried **8 `chore(sync)` commits** pulling siblings' fixes ahead of their own trunk
 merge. The cost is not the noise — it is that a branch holding a sibling's unlanded
