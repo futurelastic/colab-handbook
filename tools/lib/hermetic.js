@@ -51,6 +51,70 @@ const TEST_RUNNER_LEAKS = ['NODE_TEST_CONTEXT', 'NODE_TEST_WORKER_ID'];
 // HOME-derived locations re-pointed INTO the fresh home, so nothing reaches the real one through them.
 const XDG_DIRS = { XDG_CONFIG_HOME: '.config', XDG_DATA_HOME: '.local/share', XDG_CACHE_HOME: '.cache', XDG_STATE_HOME: '.local/state' };
 
+// Toolchain-manager homes (#447). A version manager's proxy (`cargo`/`rustc` from rustup, a pyenv
+// or asdf shim, …) finds its installed toolchain through ONE variable whose default is under
+// $HOME. With HOME swapped for an empty dir the proxy finds nothing, tries to install a toolchain,
+// and — network off — fails; the verdict then read `live-env` and blamed the code for a machine
+// dependency it does not have (measured: a rustup-managed Rust workspace, `live-env` locally,
+// green on CI where the container brings its own toolchain). An installed toolchain is the
+// compiler/interpreter the test step runs ON, not live state the tests READ, so the variable is
+// pinned to the real directory BEFORE HOME moves — only when the caller has not set it already
+// (a set value passes through untouched: none of these names match a strip rule) and only when
+// that directory actually exists (nothing is invented). Every pin is printed in the verdict, the
+// same visibility rule as --keep. The cost, stated: such a home also holds the manager's own
+// config and package cache (~/.cargo/config.toml, ~/.cargo/registry, ~/go/pkg/mod), and a test
+// reading THOSE is not caught — `--no-pin` restores the strict run for a suite suspected of it.
+const TOOLCHAIN_HOMES = [
+  { name: 'RUSTUP_HOME', rel: '.rustup', manager: 'rustup' },
+  { name: 'CARGO_HOME', rel: '.cargo', manager: 'rustup/cargo' },
+  { name: 'PYENV_ROOT', rel: '.pyenv', manager: 'pyenv' },
+  { name: 'RBENV_ROOT', rel: '.rbenv', manager: 'rbenv' },
+  { name: 'ASDF_DATA_DIR', rel: '.asdf', manager: 'asdf' },
+  { name: 'NVM_DIR', rel: '.nvm', manager: 'nvm' },
+  { name: 'VOLTA_HOME', rel: '.volta', manager: 'volta' },
+  // mise follows XDG_DATA_HOME, which the hermetic run re-points — so its default must be resolved
+  // against the CALLER's XDG_DATA_HOME, not the fresh one.
+  { name: 'MISE_DATA_DIR', rel: '.local/share/mise', xdg: ['XDG_DATA_HOME', 'mise'], manager: 'mise' },
+  { name: 'GOPATH', rel: 'go', manager: 'go (GOTOOLCHAIN downloads + module cache)' },
+];
+
+/**
+ * Which toolchain homes to pin → `[{ name, value, manager }]`. `exists(path)` is injected so this
+ * stays pure; the CLI passes a real directory check. A variable already set in `env` is never in
+ * the list — it reaches the hermetic run unchanged anyway.
+ */
+function toolchainPins(env, exists) {
+  const home = env.HOME;
+  const pins = [];
+  for (const t of TOOLCHAIN_HOMES) {
+    if (env[t.name]) continue;
+    let dir = null;
+    if (t.xdg && env[t.xdg[0]]) dir = `${env[t.xdg[0]].replace(/\/+$/, '')}/${t.xdg[1]}`;
+    else if (home) dir = `${home.replace(/\/+$/, '')}/${t.rel}`;
+    if (dir && exists(dir)) pins.push({ name: t.name, value: dir, manager: t.manager });
+  }
+  return pins;
+}
+
+// The output shapes of a version manager that could not find its toolchain — what a missed pin
+// looks like. Used only for a hint line under a `live-env` verdict; the verdict itself is unchanged.
+const TOOLCHAIN_MISS_PATTERNS = [
+  /syncing channel updates for/i,                         // rustup proxy installing a toolchain
+  /static\.rust-lang\.org/i,
+  /rustup could not choose a version|no default toolchain/i,
+  /pyenv: version .* is not installed/i,
+  /rbenv: version .* is not installed/i,
+  /No version is set for command|No preset version installed/i, // asdf
+  /mise .*(is not installed|missing:)/i,
+  /go: downloading go\d|toolchain not available/i,
+];
+
+/** True when a failed run's output looks like a toolchain manager missing its install. */
+function looksLikeToolchainMiss(output) {
+  const s = String(output || '');
+  return TOOLCHAIN_MISS_PATTERNS.some((re) => re.test(s));
+}
+
 function shouldStrip(name) {
   if (name === 'HOME' || name === 'PATH') return false;
   if (STRIP_EXACT.has(name) || STRIP_EXACT.has(name.toLowerCase())) return true;
@@ -65,15 +129,17 @@ function normalEnv(env) {
 }
 
 /**
- * The hermetic run's env → `{ env, stripped, kept }`. `home` is the fresh directory the caller
- * created. `keep` names variables the caller explicitly passes through anyway — every one is
- * echoed in the verdict, so a pass-through is visible, never silent.
+ * The hermetic run's env → `{ env, stripped, kept, pinned }`. `home` is the fresh directory the
+ * caller created. `keep` names variables the caller explicitly passes through anyway — every one is
+ * echoed in the verdict, so a pass-through is visible, never silent. `pins` (from `toolchainPins`)
+ * are toolchain-manager homes set to their real directories before HOME moves (#447) — echoed too.
  */
-function hermeticEnv(env, home, keep = []) {
+function hermeticEnv(env, home, keep = [], { pins = [] } = {}) {
   const keepSet = new Set(keep);
   const out = {};
   const stripped = [];
   const kept = [];
+  for (const p of pins) out[p.name] = p.value;
   for (const [k, v] of Object.entries(env)) {
     if (TEST_RUNNER_LEAKS.includes(k)) continue;
     if (keepSet.has(k)) { out[k] = v; if (shouldStrip(k)) kept.push(k); continue; }
@@ -83,7 +149,7 @@ function hermeticEnv(env, home, keep = []) {
   }
   out.HOME = home;
   for (const [k, rel] of Object.entries(XDG_DIRS)) if (!keepSet.has(k)) out[k] = `${home}/${rel}`;
-  return { env: out, stripped: stripped.sort(), kept: kept.sort() };
+  return { env: out, stripped: stripped.sort(), kept: kept.sort(), pinned: pins.map((p) => p.name) };
 }
 
 // ---- the network ----------------------------------------------------------------------------
@@ -188,6 +254,6 @@ const VERDICT_TEXT = {
 };
 
 module.exports = {
-  parseLiveEnv, shouldStrip, normalEnv, hermeticEnv, probeNetworkIsolation, parseFailures, tail,
+  parseLiveEnv, shouldStrip, normalEnv, hermeticEnv, toolchainPins, looksLikeToolchainMiss, TOOLCHAIN_HOMES, probeNetworkIsolation, parseFailures, tail,
   classify, VERDICT_TEXT, DARWIN_PROFILE, LINUX_WRAPPER, TEST_RUNNER_LEAKS,
 };

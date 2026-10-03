@@ -44,6 +44,18 @@ require('http').get(url, (res) => {
   res.resume();
 }).on('error', () => { console.log('not ok 1 - talks to the fleet daemon'); process.exitCode = 1; });
 `;
+// A stand-in for rustup's cargo proxy (#447): it finds its toolchain through RUSTUP_HOME, else
+// $HOME/.rustup — and, missing both, tries to download one, exactly the way the real proxy fails.
+const TOOLCHAIN_PROXY = `
+const fs = require('fs'), os = require('os'), path = require('path');
+const dir = process.env.RUSTUP_HOME || path.join(os.homedir(), '.rustup');
+if (fs.existsSync(path.join(dir, 'toolchains'))) { console.log('ok 1 - pure arithmetic under the toolchain'); }
+else {
+  console.log("info: syncing channel updates for 'stable-x86_64-unknown-linux-gnu'");
+  console.log("error: could not download file from 'https://static.rust-lang.org/dist/channel-rust-stable.toml.sha256'");
+  process.exit(1);
+}
+`;
 const SELF_CONTAINED = `console.log('ok 1 - pure arithmetic'); if (1 + 1 !== 2) process.exit(1);`;
 const PLAIN_RED = `console.log('not ok 1 - genuinely broken'); process.exit(1);`;
 
@@ -155,6 +167,40 @@ test('--json carries the verdict, the stripped names and the network note', asyn
   assert.deepStrictEqual(j.failing, ['reads home config']);
   assert.ok(j.hermetic.stripped.includes('SOME_SERVICE_URL'));
   assert.strictEqual(typeof j.hermetic.network, 'string');
+});
+
+/** A real home with a rustup install in it — the toolchain, and nothing a test reads. */
+function rustupHome() {
+  const home = fakeRealHome();
+  fs.mkdirSync(path.join(home, '.rustup', 'toolchains'), { recursive: true });
+  return home;
+}
+const noToolchainVars = (e) => { delete e.RUSTUP_HOME; delete e.CARGO_HOME; return e; };
+
+test('#447: rustup-managed toolchain at the default home → pinned, printed, verdict green', async () => {
+  const repo = makeRepo({ script: TOOLCHAIN_PROXY });
+  const r = await runColab(['gate-hermetic', '--', process.execPath, 'fixture.test.js'], { cwd: repo, env: noToolchainVars(baseEnv(rustupHome())) });
+  assert.strictEqual(r.code, 0, r.out);
+  assert.match(r.out, /toolchain homes pinned to their real dirs: .*RUSTUP_HOME/);
+  assert.match(r.out, /VERDICT: green/);
+});
+
+test('#447: --no-pin restores the strict run → live-env, with the toolchain hint', async () => {
+  const repo = makeRepo({ script: TOOLCHAIN_PROXY });
+  const r = await runColab(['gate-hermetic', '--no-pin', '--', process.execPath, 'fixture.test.js'], { cwd: repo, env: noToolchainVars(baseEnv(rustupHome())) });
+  assert.strictEqual(r.code, 1, r.out);
+  assert.match(r.out, /toolchain homes: NOT pinned \(--no-pin\)/);
+  assert.match(r.out, /hint: the hermetic failure looks like a toolchain manager/);
+  assert.match(r.out, /VERDICT: live-env/);
+});
+
+test('#447: a pin never reaches the home a test READS — the home-config fixture is still live-env', async () => {
+  const repo = makeRepo({ script: READS_HOME });
+  const r = await runColab(['gate-hermetic', '--json', '--', process.execPath, 'fixture.test.js'], { cwd: repo, env: noToolchainVars(baseEnv(rustupHome())) });
+  const j = JSON.parse(r.out);
+  assert.strictEqual(j.verdict, 'live-env');
+  assert.ok(j.hermetic.pinned.includes('RUSTUP_HOME'));
+  assert.ok(!r.out.includes('hint:'), 'json mode prints no prose');
 });
 
 test('usage: no command after -- is refused', async () => {

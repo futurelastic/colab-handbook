@@ -1554,7 +1554,9 @@ test that reads its author's machine (the home directory's config, a local daemo
 in the shell) is green locally and red on every runner. So the local gate is green only when
 the test step has passed twice: once as-is, and once **hermetically**, with a fresh empty
 `HOME`, every service-address and credential variable unset, and the network off where the
-platform allows it (`colab gate-hermetic`, `code-wrap` A3). A green normal run with a red
+platform allows it (`colab gate-hermetic`, `code-wrap` A3). A toolchain manager's home is
+the one thing carried across, pinned to its real path and printed (#447): the toolchain is
+what the tests run on, not state they read. A green normal run with a red
 hermetic run is its own verdict, `live-env`, and it is not green. The only exemption is a
 `live-env: none` declaration on trunk's `project.yml`
 ([schema](project.schema.md#live-env--optional)). The branch-CI read below still applies:

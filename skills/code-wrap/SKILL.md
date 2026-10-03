@@ -533,7 +533,13 @@ whose name marks a service address, credential, socket, proxy or agent/dashboard
 runtime unset (`*_URL`, `*_TOKEN`, `*_KEY`, `COLAB_*` and the rest are listed in
 `colab gate-hermetic --help`), and the network off where the platform allows it. It
 always prints which network mode it used. Lint and type checks are not rerun — only the
-test step reads the environment in the way this catches.
+test step reads the environment in the way this catches. A toolchain manager's home
+(`RUSTUP_HOME`, `CARGO_HOME`, `PYENV_ROOT`, `GOPATH`, … — the list is in `--help`) is
+pinned to its real directory before `HOME` moves, when you have not set it and the
+directory exists, and each pin is printed (#447). The toolchain is what the tests run
+**on**, not something they read: without the pin a rustup proxy in an empty `HOME` tries
+to download a toolchain with the network off, and the verdict blamed the code for it.
+`--no-pin` gives the strict run back.
 
 | verdict | means | A3 is |
 |---|---|---|
@@ -545,8 +551,10 @@ test step reads the environment in the way this catches.
 - **`live-env` is a red gate, not an advisory.** Fix the test so it builds its own
   fixture: a temp `HOME` it creates, a server it starts itself, an env var it sets for
   its own child process. Do not add `--keep` to make it pass. `--keep` exists for a
-  variable the suite genuinely needs, such as a toolchain path. Each kept variable is
-  printed, so name it and say why in the distill comment.
+  variable the suite genuinely needs and the name rules strip. Each kept variable is
+  printed, so name it and say why in the distill comment. A `live-env` that prints the
+  toolchain `hint:` is a manager whose install is not at its default home: export its
+  home variable and re-run. That is not a reason to `--keep` something else.
 - **Record the verdict word in A1's distill and in the hand-off**, not only "gate green".
   `code-ship` §0 reads it.
 - **Why this is a command and not a sentence here:** a test once read its author's home

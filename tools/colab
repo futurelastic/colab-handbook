@@ -2398,7 +2398,7 @@ function cmdGateRecorded(argv) {
 // `live-env:`.
 // ---------------------------------------------------------------------------
 
-const HELP_GATE_HERMETIC = `colab gate-hermetic [--net auto|on] [--keep VAR,...] [--json] [--verbose] [--repo <path>] -- <test command...>
+const HELP_GATE_HERMETIC = `colab gate-hermetic [--net auto|on] [--keep VAR,...] [--no-pin] [--json] [--verbose] [--repo <path>] -- <test command...>
 
 Runs the repo's TEST STEP twice and gives one verdict (#403, code-wrap A3):
 
@@ -2408,7 +2408,11 @@ Runs the repo's TEST STEP twice and gives one verdict (#403, code-wrap A3):
                   daemon/fleet runtime unset (*_URL *_HOST *_PORT *_TOKEN *_KEY *_SECRET *_SOCK
                   COLAB_* CLAUDE* GH_* …); network off where the platform allows it —
                   macOS sandbox-exec, Linux unshare --net (loopback stays up in both) — and the
-                  line saying which is always printed.
+                  line saying which is always printed. Toolchain-manager homes you have NOT set
+                  (RUSTUP_HOME CARGO_HOME PYENV_ROOT RBENV_ROOT ASDF_DATA_DIR NVM_DIR VOLTA_HOME
+                  MISE_DATA_DIR GOPATH) are pinned to their real directory first, when it exists,
+                  so a rustup/pyenv/asdf proxy still finds the installed toolchain instead of
+                  trying to download one (#447). Every pin is printed.
 
 Verdicts (exit 0 = may count as green, 1 = not):
   green     both runs passed                                                      exit 0
@@ -2425,6 +2429,8 @@ pass \`-- sh -c '…'\` for pipes or &&.
   --net on          do not cut the network (reported); default auto = best effort
   --keep A,B        pass these variables through to the hermetic run anyway — printed in the
                     verdict, so a pass-through is never silent
+  --no-pin          do not pin toolchain-manager homes: the strict run, for a suite suspected of
+                    reading a manager's own config or package cache (~/.cargo/config.toml, …)
   --json            one JSON object instead of the text verdict
   --verbose         print each run's full output (default: failing names + a short tail on red)
   --repo <path>     working tree to run in (default: cwd)
@@ -2440,7 +2446,7 @@ function cmdGateHermetic(argv) {
   const cmd = dd === -1 ? [] : argv.slice(dd + 1);
   const opts = parseArgs(own, {
     values: { '--repo': 'repo', '--net': 'net', '--keep': 'keep' },
-    flags: { '--json': 'json', '--verbose': 'verbose', '-h': 'help', '--help': 'help' },
+    flags: { '--json': 'json', '--verbose': 'verbose', '--no-pin': 'noPin', '-h': 'help', '--help': 'help' },
   });
   if (opts.help) return print(HELP_GATE_HERMETIC);
   if (opts._.length) throw new UserError(`unexpected argument "${opts._[0]}" — the test command goes after \`--\` (see --help)`);
@@ -2488,7 +2494,10 @@ function cmdGateHermetic(argv) {
   if (normal.ok && !skip) {
     homeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'colab-hermetic-home-'));
     try {
-      envInfo = hermetic.hermeticEnv(process.env, homeDir, keep);
+      const pins = opts.noPin ? [] : hermetic.toolchainPins(process.env, (d) => {
+        try { return fs.statSync(d).isDirectory(); } catch (_) { return false; }
+      });
+      envInfo = hermetic.hermeticEnv(process.env, homeDir, keep, { pins });
       net = hermetic.probeNetworkIsolation({
         platform: process.platform, mode: netMode,
         run: (c, a) => spawnSync(c, a, { stdio: 'ignore' }),
@@ -2508,7 +2517,7 @@ function cmdGateHermetic(argv) {
       verdict, ok: exitCode === 0, command: cmd,
       liveEnv: { skip, trunkSource, value: trunkLive.value },
       normal: { ok: normal.ok, exit: normal.exit },
-      hermetic: herm ? { ok: herm.ok, exit: herm.exit, stripped: envInfo.stripped, kept: envInfo.kept, network: net.note } : null,
+      hermetic: herm ? { ok: herm.ok, exit: herm.exit, stripped: envInfo.stripped, kept: envInfo.kept, pinned: envInfo.pinned, network: net.note } : null,
       failing, notes,
     }, null, 2));
     return exitCode;
@@ -2522,6 +2531,8 @@ function cmdGateHermetic(argv) {
     lines.push(`hermetic run: ${herm.ok ? 'green' : 'RED'} (exit ${herm.exit === null ? 'none' : herm.exit}${herm.signal ? `, ${herm.signal}` : ''})`);
     lines.push(`  HOME=<fresh empty dir>; unset ${envInfo.stripped.length} var(s)${envInfo.stripped.length ? `: ${envInfo.stripped.join(' ')}` : ''}`);
     if (envInfo.kept.length) lines.push(`  --keep passed through: ${envInfo.kept.join(' ')}`);
+    if (envInfo.pinned.length) lines.push(`  toolchain homes pinned to their real dirs: ${envInfo.pinned.join(' ')}`);
+    else if (opts.noPin) lines.push('  toolchain homes: NOT pinned (--no-pin)');
     lines.push(`  ${net.note}`);
   } else {
     lines.push('hermetic run: not attempted (normal run is red)');
@@ -2540,6 +2551,13 @@ function cmdGateHermetic(argv) {
       lines.push('', 'no runner-recognised failure names; last lines of output:');
       for (const l of hermetic.tail(out)) lines.push(`  | ${l}`);
     }
+  }
+  if (verdict === 'live-env' && hermetic.looksLikeToolchainMiss(herm.output)) {
+    lines.push('', 'hint: the hermetic failure looks like a toolchain manager that could not find its install',
+      '  (a proxy trying to download a toolchain with the network off) — not necessarily the tests. Its',
+      '  default homes under $HOME are pinned already, so its install lives elsewhere (or --no-pin was given):',
+      '  export the manager\'s home variable (e.g. RUSTUP_HOME, CARGO_HOME) so it passes through, and re-run.',
+      '  Name it in the distill comment (#447).');
   }
   lines.push('', `VERDICT: ${verdict} — ${hermetic.VERDICT_TEXT[verdict]}`);
   print(lines.join('\n'));
