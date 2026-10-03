@@ -182,3 +182,11 @@ test('evidenceSuffix and serialLine', () => {
     ' · landed in a batch of 3 — combined run 9001 at ship-batch/abcdef0@1234567 (#373)');
   assert.strictEqual(sb.serialLine(['fix/a-11', 'fix/b-12']), '→ SERIAL: colab ship --branch fix/a-11 · colab ship --branch fix/b-12');
 });
+
+test('#415 notStaged: requested branches the staged batch does not carry, in request order', () => {
+  const staged = [{ branch: 'fix/a-11' }, { branch: 'fix/b-12' }];
+  assert.deepStrictEqual(sb.notStaged(['fix/a-11', 'fix/b-12', 'fix/c-13'], staged), ['fix/c-13']);
+  assert.deepStrictEqual(sb.notStaged(['fix/b-12', 'fix/a-11'], staged), []);
+  assert.deepStrictEqual(sb.notStaged(['fix/c-13', 'fix/c-13'], []), ['fix/c-13']);
+  assert.deepStrictEqual(sb.notStaged(null, staged), []);
+});

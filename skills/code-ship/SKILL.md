@@ -537,8 +537,12 @@ arrive), merge-clean against trunk — land through one command instead of one s
    member's post-sync re-run** (B1a, below). A member whose overlap with those already in is
    confined to `generated:` paths is **not** dropped: the build runs `.colab/hooks/pre-ship` on
    the combined head, B0's rule, and prints a `↻ <member>: … regenerated` line naming the
-   files (#387). Only an overlap outside `generated:` — or no hook to regenerate with — drops
-   a member to the next batch (`✗ <member>: …`).
+   files (#387). Only an overlap outside `generated:` — or no hook to regenerate with, or a hook
+   that exits 0 but leaves conflict markers staged (#436) — drops a member to the next batch
+   (`✗ <member>: …`). Re-running on a staged batch lands **only the members it carries**; a branch
+   you name that it does not carry is printed as `NOT in the staged batch` — ship it afterwards,
+   it was not forgotten silently (#415). `--dry` is a read on every path, including a staged green
+   batch: it prints what would land and writes nothing.
 3. Read the exit code — it never waits for you:
    - **`3` — paused.** The combined run (or trunk's own) is still going, or the batch was just
      (re)built. Wait on the run id it printed with B1a's bound — `timeout 900 gh run watch

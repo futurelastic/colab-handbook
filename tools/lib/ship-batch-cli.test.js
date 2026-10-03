@@ -423,3 +423,131 @@ test('#373: --batch refuses flags that belong to one branch', () => {
   assert.notStrictEqual(r.code, 0);
   assert.match(r.err, /--batch does not combine with --branch/);
 });
+
+/** Everything a land would touch, read off disk: trunk on origin + in the checkout, batch refs, colab state. */
+function snapshot(fx) {
+  const st = path.join(fx.home, 'state.json');
+  return {
+    originMain: fx.originSha('main'), workMain: fx.g(fx.work, 'rev-parse', 'main'), refs: fx.batchRefs(),
+    state: fs.existsSync(st) ? fs.readFileSync(st, 'utf8') : '',
+    worktrees: fx.g(fx.work, 'worktree', 'list', '--porcelain'),
+  };
+}
+const writesIn = (log) => log.split('\n').filter((l) => /^issue (comment|edit|close)|^label /.test(l));
+
+test('#415: --dry on a staged batch whose combined run is green lands nothing and writes nothing', () => {
+  const fx = fixture();
+  for (const b of MEMBERS) member(fx, b);
+  const T = fx.originSha('main');
+  const ref = `ship-batch/${T.slice(0, 7)}`;
+  assert.strictEqual(batch(fx).code, 3);
+  fx.setStatus(ref, 'completed success 1');
+  const before = snapshot(fx);
+  const logBefore = writesIn(ghLog(fx)).length;
+
+  const r = batch(fx, MEMBERS, ['--dry']);
+  assert.strictEqual(r.code, 0, r.out + r.err);
+  assert.match(r.out, /\[DRY RUN\]/);
+  assert.match(r.out, new RegExp(`→ READY: would fast-forward main ${T.slice(0, 7)} → ${fx.originSha(ref).slice(0, 7)} — ${ref.replace('/', '\\/')}, combined run 9001`));
+  assert.match(r.out, /would land 3 member\(s\), one squash each: fix\/a-11, fix\/b-12, fix\/c-13/);
+  assert.doesNotMatch(r.out, /Shipped batch|pushed\./);
+  assert.deepStrictEqual(snapshot(fx), before, 'trunk, batch ref, claims and worktrees are untouched');
+  assert.strictEqual(writesIn(ghLog(fx)).length, logBefore, 'no issue comment, edit or label write');
+
+  // the same command without --dry still lands it — the dry run changed nothing it depends on
+  const staged = fx.originSha(ref);
+  const real = batch(fx);
+  assert.strictEqual(real.code, 0, real.out + real.err);
+  assert.strictEqual(fx.originSha('main'), staged, 'trunk is the staged batch head');
+});
+
+test('#415: --dry never deletes a batch ref — trunk-moved and red-after-rerun paths only say they would', () => {
+  const fx = fixture();
+  for (const b of MEMBERS) member(fx, b);
+  const T = fx.originSha('main');
+  const ref = `ship-batch/${T.slice(0, 7)}`;
+  assert.strictEqual(batch(fx).code, 3);
+
+  fx.setStatus(ref, 'completed failure 2');
+  const red = batch(fx, MEMBERS, ['--dry']);
+  assert.strictEqual(red.code, 4, red.out + red.err);
+  assert.match(red.out, /\[dry\] would delete origin\/ship-batch\//);
+  assert.match(red.out, /would be deleted \[DRY RUN\]/);
+  assert.deepStrictEqual(fx.batchRefs(), [ref]);
+
+  fs.writeFileSync(path.join(fx.work, 'moved.txt'), 'M\n');
+  fx.g(fx.work, 'add', '-A');
+  fx.g(fx.work, 'commit', '-q', '-m', 'chore: trunk moved');
+  fx.g(fx.work, 'push', '-q', 'origin', 'main');
+  const moved = batch(fx, MEMBERS, ['--dry']);
+  assert.strictEqual(moved.code, 0, moved.out + moved.err);
+  assert.match(moved.out, /trunk moved since/);
+  assert.match(moved.out, /\[dry\] would delete origin\/ship-batch\//);
+  assert.match(moved.out, /→ READY: would push/);
+  assert.deepStrictEqual(fx.batchRefs(), [ref], 'the stale ref is still there — dry deleted nothing');
+});
+
+test('#415: a member list that differs from the staged batch is named, never silently replaced', () => {
+  const fx = fixture();
+  for (const b of MEMBERS.slice(0, 2)) member(fx, b);
+  const T = fx.originSha('main');
+  const ref = `ship-batch/${T.slice(0, 7)}`;
+  assert.strictEqual(batch(fx, MEMBERS.slice(0, 2)).code, 3);
+  fx.setStatus(ref, 'completed success 1');
+  member(fx, 'fix/c-13');
+
+  const dry = batch(fx, MEMBERS, ['--dry']);
+  assert.strictEqual(dry.code, 0, dry.out + dry.err);
+  assert.match(dry.out, new RegExp(`${ref.replace('/', '\\/')} was staged with fix\\/a-11, fix\\/b-12; this command named fix\\/a-11, fix\\/b-12, fix\\/c-13`));
+  assert.match(dry.out, /NOT in the staged batch, so it does not land with it: fix\/c-13/);
+  assert.strictEqual(fx.originSha('main'), T);
+
+  const r = batch(fx, MEMBERS);
+  assert.strictEqual(r.code, 0, r.out + r.err);
+  assert.match(r.out, /NOT in the staged batch, so it does not land with it: fix\/c-13/);
+  assert.match(r.out, /✓ Shipped batch → main .*: fix\/a-11, fix\/b-12$/m);
+  assert.doesNotMatch(fx.g(fx.origin, 'log', '--format=%B', `${T}..main`), /c-13/, 'the unstaged member did not land');
+});
+
+/** #436: a pre-ship hook that exits 0 after `git add`ing allow.txt WITHOUT resolving it. */
+function lyingPreShipHook(fx) {
+  const dir = path.join(fx.work, '.colab', 'hooks');
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, 'pre-ship'), '#!/bin/sh\nset -e\ncd "$1"\ngit add allow.txt\n', { mode: 0o755 });
+  fx.g(fx.work, 'add', '-A');
+  fx.g(fx.work, 'commit', '-q', '-m', 'chore: pre-ship hook');
+  fx.g(fx.work, 'push', '-q', 'origin', 'main');
+}
+
+test('#436: batch — a pre-ship hook that exits 0 but leaves conflict markers staged drops the member', () => {
+  const fx = fixture({ yml: YML('ship-batch: 3\ngenerated: [allow.txt]\n') });
+  lyingPreShipHook(fx);
+  member(fx, 'fix/a-11', { file: 'allow.txt', content: 'a\n' });
+  member(fx, 'fix/b-12');
+  member(fx, 'fix/c-13', { file: 'allow.txt', content: 'c\n' });
+  const r = batch(fx, MEMBERS, ['--dry']);
+  assert.strictEqual(r.code, 0, r.out + r.err);
+  assert.match(r.out, /✗ fix\/c-13: \.colab\/hooks\/pre-ship exited 0 but left conflict markers staged in allow\.txt:1,\d+ on the combined head — treated as a failing hook, next batch/);
+  assert.doesNotMatch(r.out, /↻ fix\/c-13/);
+  assert.match(r.out, /READY: would push .* 2 squash commit\(s\): fix\/a-11, fix\/b-12/);
+});
+
+test('#436: serial B0 — a pre-ship hook that exits 0 but leaves conflict markers is a failing hook; nothing pushed', () => {
+  const fx = fixture({ yml: YML('generated: [allow.txt]\n') });
+  lyingPreShipHook(fx);
+  member(fx, 'fix/a-11', { file: 'allow.txt', content: 'a\n' });
+  fs.writeFileSync(path.join(fx.work, 'allow.txt'), 'trunk\n');
+  fx.g(fx.work, 'add', '-A');
+  fx.g(fx.work, 'commit', '-q', '-m', 'chore: trunk regenerates allow.txt');
+  fx.g(fx.work, 'push', '-q', 'origin', 'main');
+  const T = fx.originSha('main');
+  const B = fx.originSha('fix/a-11');
+  // no branch run → #395's stale-base row passes (Branch CI `none`), the only way B0 meets a conflict
+  fx.setStatus('fix/a-11', 'none');
+
+  const r = colab(fx, ['ship', '--branch', 'fix/a-11', '--repo', fx.work]);
+  assert.strictEqual(r.code, 1, r.out + r.err);
+  assert.match(r.out + r.err, /✗ B0: pre-ship hook exited 0 but left conflict markers staged in allow\.txt:1,\d+ — treated as a failing hook\. Nothing pushed\./);
+  assert.strictEqual(fx.originSha('main'), T, 'trunk untouched');
+  assert.strictEqual(fx.originSha('fix/a-11'), B, 'the branch was not pushed with the markers');
+});

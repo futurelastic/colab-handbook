@@ -1784,7 +1784,10 @@ unchanged) may land through `colab ship --batch <b1,b2[,b3]>`:
    [`generated`](project.schema.md#generated--optional)** (#387): then the build does what
    B0 does for one branch, running `.colab/hooks/pre-ship` on the combined head to
    regenerate them, and the member stays in (the combined run is still the gate). With no
-   hook to regenerate, or a hook that fails, it drops as before. Sharing only generated
+   hook to regenerate, or a hook that fails, it drops as before — and a hook that exits 0
+   but leaves a `<<<<<<<`/`>>>>>>>` line staged in a path it was handed **has failed**: its
+   exit code is a claim, the index is the proof, and serial B0 reads it the same way (#436).
+   Sharing only generated
    paths does not count against disjointness in step 1's pre-filter either. The result is
    pushed to `ship-batch/<trunk-sha7>`.
 3. **One combined run** there must be `green`. It **replaces** each member's post-sync
