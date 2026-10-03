@@ -537,3 +537,27 @@ test('#446 health step: passes once the endpoint reports the version, fails at t
   const down = runStep(HEALTH_STEP, { env: { TAG: 'v1.2.1', HEALTH_URL: 'https://app.example/health', HEALTH_TIMEOUT_SECONDS: '0' }, stubs: { curl: 'exit 7' } });
   assert.strictEqual(down.status, 1);
 });
+
+test('#459 health step: boundary-aware, accepting and rejecting exactly the bodies reportsVersion does', async () => {
+  const { reportsVersion } = await import(require('url').pathToFileURL(path.join(REPO_ROOT, 'templates', 'deploy-container-run.mjs')).href);
+  const bodies = [
+    ['{"version":"1.2.1"}', true],
+    ['running v1.2.1.', true],
+    ['1.2.1', true],
+    ['{"status":"ok"}\n{"version":"1.2.1"}\n', true],
+    ['version 1.2.1.\nnext', true],
+    ['{"version":"1.2.10"}', false],
+    ['{"version":"11.2.1"}', false],
+    ['{"version":"1.2.1.4"}', false],
+    ['{"version":"1.2.0"}', false],
+    ['{"version":"1x2y1"}', false],
+    ['{"version":"0.1.2.1"}', false],
+  ];
+  for (const [body, want] of bodies) {
+    assert.strictEqual(reportsVersion(body, '1.2.1'), want, `reportsVersion on ${JSON.stringify(body)}`);
+    const file = path.join(tmpdir('release-auto-health-'), 'body');
+    fs.writeFileSync(file, body);
+    const r = runStep(HEALTH_STEP, { env: { TAG: 'v1.2.1', HEALTH_URL: 'https://app.example/health', HEALTH_TIMEOUT_SECONDS: '0' }, stubs: { curl: `cat '${file}'` } });
+    assert.strictEqual(r.status, want ? 0 : 1, `health step on ${JSON.stringify(body)}: ${r.stdout}${r.stderr}`);
+  }
+});

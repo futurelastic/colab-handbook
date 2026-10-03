@@ -584,12 +584,17 @@ jobs:
         run: |
           set -uo pipefail
           VERSION="${TAG#v}"
+          # Boundary-aware, the same rule as deploy-container-run.mjs `reportsVersion` (#459): the
+          # version (optionally `v`-prefixed) must not touch a digit or `.` before it, nor a digit or
+          # `.`+digit after it — so 1.2.1 never matches 1.2.10, 11.2.1 or 1.2.1.4. A substring
+          # `case` match accepted all three. grep is line-based; a newline is neither, so it agrees.
+          PATTERN="(^|[^0-9.])v?${VERSION//./\\.}([^0-9.]|\\.([^0-9]|\$)|\$)"
           DEADLINE=$(( $(date +%s) + HEALTH_TIMEOUT_SECONDS ))
           while :; do
             BODY="$(curl -fsS --max-time 10 "$HEALTH_URL" 2> /dev/null || true)"
-            case "$BODY" in
-              *"$VERSION"*) echo "$HEALTH_URL reports $VERSION — $TAG is live" | tee -a "$GITHUB_STEP_SUMMARY"; exit 0 ;;
-            esac
+            if printf '%s\n' "$BODY" | grep -Eq -- "$PATTERN"; then
+              echo "$HEALTH_URL reports $VERSION — $TAG is live" | tee -a "$GITHUB_STEP_SUMMARY"; exit 0
+            fi
             if [ "$(date +%s)" -ge "$DEADLINE" ]; then
               echo "::error::$HEALTH_URL did not report $VERSION within ${HEALTH_TIMEOUT_SECONDS}s — the deploy's own rollback should have restored the previous version; $TAG stays tagged"
               exit 1
