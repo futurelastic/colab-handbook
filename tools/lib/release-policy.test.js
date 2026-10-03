@@ -486,10 +486,57 @@ test('#446 final-spacing: hours or days, never below 1h', () => {
   }
 });
 
-test('#446 the fast keys fit only the fast route', () => {
+test('#446 the fast-only keys fit only the fast route (#452: health-url is shared with deploy-tag)', () => {
   const r = evaluateRelease({ ...FAST_BASE, release: { 'health-url': 'https://app.example/health', rollback: 'auto', 'final-spacing': '2h' } });
-  assert.match(texts(r), /release\.health-url \/ release\.rollback \/ release\.final-spacing fits only route deploy-tag-fast/);
+  assert.match(texts(r), /release\.rollback \/ release\.final-spacing fits only route deploy-tag-fast/);
+  assert.doesNotMatch(texts(r), /release\.health-url/);
   assert.equal(r.effective.healthGate, null);
+  assert.equal(r.effective.healthUrl, 'https://app.example/health');
+});
+
+// ---- #452: health-url is the one verify key, legal on deploy-tag --------------------------------
+test('#452 health-url on deploy-tag: no finding, effective.healthUrl set, the fast gate untouched', () => {
+  for (const [label, cfg] of [
+    ['deploy: tag (derived)', { ...FAST_BASE, release: { 'health-url': ' https://app.example/version ' } }],
+    ['deploy: tag (declared route)', { ...FAST_BASE, release: { route: 'deploy-tag', 'health-url': 'https://app.example/version' } }],
+    ['deploy: manual', { exposure: 'released', deploy: 'manual', production: 'https://app.example', runbook: 'r.md', release: { 'health-url': 'https://app.example/version' } }],
+  ]) {
+    const r = evaluateRelease(cfg);
+    assert.deepEqual(r.findings, [], label);
+    assert.equal(r.effective.route, 'deploy-tag', label);
+    assert.equal(r.effective.healthUrl, 'https://app.example/version', label);
+    assert.equal(r.effective.healthGate, null, label);
+    assert.equal(r.effective.final, 'human', label);
+  }
+});
+
+test('#452 health-url on deploy-tag must still be an absolute https URL', () => {
+  for (const bad of ['http://app.example/version', 'app.example/version', 42]) {
+    const r = evaluateRelease({ ...FAST_BASE, release: { 'health-url': bad } });
+    assert.match(texts(r), /release\.health-url is .*expected an absolute https:\/\/ URL/, String(bad));
+    assert.equal(r.effective.healthUrl, null, String(bad));
+  }
+});
+
+test('#452 health-url on a route nothing deploys from fails', () => {
+  for (const [label, cfg] of [
+    ['public-tool', { exposure: 'released', deploy: 'none', production: null }],
+    ['none', { exposure: 'none', deploy: 'none', production: null }],
+    ['live', { exposure: 'live', deploy: 'push-main', production: 'https://app.example' }],
+  ]) {
+    const r = evaluateRelease({ ...cfg, release: { 'health-url': 'https://app.example/version' } });
+    assert.match(texts(r), /release\.health-url fits only route deploy-tag or deploy-tag-fast/, label);
+    assert.equal(r.effective.healthUrl, null, label);
+  }
+});
+
+test('#452 the fast route sets healthUrl beside its gate, and still requires the key', () => {
+  assert.equal(evaluateRelease({ ...FAST_BASE, release: { ...FAST } }).effective.healthUrl, 'https://app.example/health');
+  const { 'health-url': _h, ...noUrl } = FAST;
+  const r = evaluateRelease({ ...FAST_BASE, release: noUrl });
+  assert.match(texts(r), /deploy-tag-fast needs.*release\.health-url/);
+  assert.equal(r.effective.route, 'deploy-tag');
+  assert.equal(r.effective.final, 'human');
 });
 
 test('#446 a candidate key, a test period or a human final on the fast route fail', () => {
