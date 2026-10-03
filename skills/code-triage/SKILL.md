@@ -117,7 +117,8 @@ printf '%s\n' "$(printf '%s\n' "$MATCHED" | grep '^B ' | sort)" \
 rm -f "$GITDIR/.triage-branches.tmp"
 ```
 
-All five equal to the stored run, **and no pending wake is now met (below)** ⇒ **report
+All five equal to the stored run, **and no pending wake is now met, and trunk is not red
+with nobody owning it (both below)** ⇒ **report
 `nothing has changed since <ts>`, re-print the stored conclusion (§0.1), and stop.** Three
 calls instead of fifty. Input 2 is not an extra cost on a run that *does* proceed — §1
 needs that list anyway.
@@ -156,6 +157,53 @@ resolves, is **not** "unchanged": print `§0 changed: wakes (unreadable <ref>) �
 cross-repo wakes pending, one per distinct pending ref otherwise — `lastRun.calls` records the
 real number, and the outcome line below prints it rather than a fixed three.
 
+**Then check for a red trunk that nobody owns — a state, not an input (#430).** Trunk CI is
+never part of the fingerprint (*What is deliberately NOT in the fingerprint*, below), so a
+trunk that goes red with no code change moves none of the five inputs. The same goes for a
+diagnosis already in the backlog under the wrong title. Measured: a trunk went red on a
+re-run (code unchanged, live data drifted, a static check failed). A session filed the
+diagnosis as an issue, but the title had no `TRUNK RED:` prefix and the issue was
+`agent-filed`. Two triage pings in the next ~25 minutes printed `unchanged` and stopped.
+Every ship candidate in the repo stayed parked on "trunk red has no owner" for about 40
+minutes, until someone outside triage retitled the issue and accepted it.
+
+So check this on **every** pass, a short-circuited one included. The red trunk is
+**owned** when either of these holds:
+
+- an open issue's title starts with `TRUNK RED:` **and** it is **accepted**, meaning it
+  does not carry `agent-filed` (`CONVENTIONS.md` [§5](../../CONVENTIONS.md#provenance--who-decided-the-work-should-exist),
+  *Provenance*); or
+- the stored record's `redTrunk` (§0.1) names this same sha **and** an issue that is still
+  open and accepted in input 2. That is §5.2 step 3's comment on an open flake-class issue,
+  which owns this red without a `TRUNK RED:` title.
+
+```sh
+TRUNK=$(git rev-parse origin/<trunk>)                              # input 1, already fetched
+printf '%s\n' "$OUT2" | grep '^I ' | awk -F'\t' '$2 ~ /^TRUNK RED:/ {
+  split($1, f, " "); if (("," f[4] ",") !~ /,agent-filed,/) print f[2] }'
+                                                                    # owned by title: any number ⇒ stop here, 0 calls
+gh run list --commit "$TRUNK" --json status,conclusion -q '
+  if length == 0 then "NONE"
+  elif any(.status != "completed") then "PENDING"
+  elif any(.conclusion == "success") then "GREEN"
+  else "RED" end'                                                   # 1 call, only when no title owns it
+```
+
+Input 2 is already in hand, so the title test costs nothing. The CI read happens only when
+no title owns the red. Read it **by commit**, exactly as §5's *Trunk CI is alive* bullet
+does. Trunk is `RED` when every run at `$TRUNK` has completed and none succeeded. `PENDING`
+(a run still in flight) is not red yet, and neither is `NONE`. `RED`, owned by neither rule ⇒
+`§0 changed: unownedRedTrunk — full pass`. The full pass then reaches §5.2, which adopts a
+mis-titled or unaccepted diagnosis, or files one. A failed CI read is not "green": print
+`§0 changed: unownedRedTrunk (unreadable) — full pass`.
+
+The condition **re-arms only while nobody owns the red**. Once a prefixed, accepted issue
+exists, or §5.2 has recorded its flake-class comment for this sha, the next ping costs
+nothing extra. While trunk is red and unowned, every ping is a full pass. That is the point:
+it also covers the ping that must read the driver's re-run result (§5.2 step 2), which a
+short-circuit would otherwise skip. What is cached here is §5.2's act, not the CI verdict.
+CI is still re-read on every pass that needs it.
+
 **Every run — short-circuited or not — opens by printing exactly one of three outcome
 lines, before anything else.** This is the one thing #244 established a docs repo actually
 *can* ship toward "verified to have fired": not an enforced gate (nothing here executes a
@@ -165,7 +213,7 @@ later census — can check for.
 
 ```
 §0 unchanged since <ts> · fingerprint <16hex> · <n> calls — re-printing stored conclusion (scope: <scope>)
-§0 changed: <input names that moved, e.g. trunkSha,branches — or wakes> — full pass
+§0 changed: <input names that moved, e.g. trunkSha,branches — or wakes, unownedRedTrunk> — full pass
 §0 no usable cache: <missing | version <v> unrecognised | unparseable | truncated | empty read on input <n>> — full pass
 ```
 
@@ -373,7 +421,7 @@ half-matching:
 
 ```json
 {
-  "version": "code-triage/5",
+  "version": "code-triage/6",
   "scope": "whole-repo",
   "ranAt": "<ISO8601>",
   "fingerprint": {
@@ -392,7 +440,8 @@ half-matching:
   },
   "wakes": [
     { "issue": 507, "label": "deferred:external-party", "wake": "issueClosed:owner/repo#12, review-by:2026-10-09" }
-  ]
+  ],
+  "redTrunk": { "sha": "<40hex>", "issue": 512 }
 }
 ```
 
@@ -433,6 +482,13 @@ half-matching:
   not only the three uncovered forms — the re-check picks those out itself, and a line
   mixing a covered and an uncovered condition still needs the uncovered half re-read.
   Required-when-present: an empty list means nothing is held on a wake that could move.
+- **`redTrunk` bumped `/5` to `/6` (#430), under the same rule and at the same one-time
+  cost.** Written only by §5.2 step 3's flake-class branch: the red sha it commented on and
+  the issue that took the comment. §0's unowned-red check reads it so that a red owned by a
+  flake-class issue does not force a full pass on every ping. It is not a CI verdict: it
+  says only that §5.2 already acted on this sha. It counts only while that issue is still
+  open and accepted in input 2. Required-when-present: absent or `null` is the ordinary
+  state, and any other sha means nothing about the current one.
 
 ### 0.2 Running this twice must change nothing
 
@@ -455,16 +511,19 @@ is not a triage write, no matter how naturally it seems to belong on the issue:
    live branch holding them (§3, *Record a measured collision where the brake reads it*,
    #386)
 8. a `TRUNK RED: <sha> fails <check>` issue — or, where an open issue already tracks that
-   failure's flake class, one comment on it recording this occurrence (§5.2, #390). All
-   four bounds must hold, and the list is the whole of them:
+   failure's flake class, one comment on it recording this occurrence (§5.2, #390) — or
+   the **adoption** of an open issue that already diagnoses this red sha: its retitle to
+   that form, the removal of `agent-filed`, and one comment (§5.2 step 3, #430). All four
+   bounds must hold, and the list is the whole of them:
    - trunk CI is **red** at `<trunk>`'s current head sha (§5, asked by commit);
-   - **no open `TRUNK RED:` issue exists** in this repo — one open red is one patch in
-     flight, and a second filing splits it;
+   - **no open, accepted `TRUNK RED:` issue exists** in this repo (accepted = no
+     `agent-filed` label) — one open red is one patch in flight, and a second filing
+     splits it;
    - the **mechanical re-run has already been attempted** for this sha, or **cannot
      apply** — the red commit touches more than the docs lane, or no scheduled driver
      runs this repo;
-   - **at most one filing per red sha** — the issue, or the one comment, never both and
-     never twice.
+   - **at most one filing per red sha** — the issue, the one comment, or the adoption;
+     never two of them and never twice.
 
 Writes 6 and 7 are transcriptions: each copies a fact already on the tracker, or already
 measured this pass, into the one place a scheduler reads it. Neither records a judgement
@@ -518,7 +577,10 @@ repo — which is exactly why the tracker is the wrong home for it.
 - **Already-shipped closes:** an issue already closed is not re-closed and not re-evidenced.
 - **`TRUNK RED:` filings: read before filing, keyed by sha.** Before write 8, list open
   issues titled `TRUNK RED:` (`gh issue list --state open --search 'in:title "TRUNK RED:"'`)
-  — any hit means write nothing new; print it on the `DRY` `all` line instead. Then grep
+  — any **accepted** hit (no `agent-filed`) means write nothing new; print it on the `DRY`
+  `all` line instead. An unaccepted hit, or an open issue naming the red sha under another
+  title, is adopted rather than filed beside (§5.2 step 3) — and an adoption already made
+  shows as a `TRUNK RED:` title with no `agent-filed`, so a re-ping finds it here. Then grep
   the flake-class issue's comments, and every `TRUNK RED:` title including closed ones, for
   the red sha: a hit means this sha was already filed, so write nothing. The sha is the
   key, so a re-ping on the same red is a no-op and a new red sha is a new filing.
@@ -1660,14 +1722,15 @@ trunk-CI read comes back red:
 
 ```sh
 RED=$(git rev-parse origin/<trunk>)                       # the red head sha, from §5's read
-gh issue list --state open --search 'in:title "TRUNK RED:"' --json number,title
+gh issue list --state open --search 'in:title "TRUNK RED:"' --json number,title,labels
+gh issue list --state open --search "${RED:0:7}" --json number,title,labels   # a diagnosis under another title
 gh run list --commit "$RED" --json databaseId,workflowName,attempt,status,conclusion
 gh run view <failed-run-id> --log-failed | head -80       # the failing check, and its class
 git diff --name-only "$RED^" "$RED"                        # does it touch more than docs?
 ```
 
-1. **An open `TRUNK RED:` issue exists** → write nothing. The `DRY` `all` line (§6) names
-   it, and whether its patch is claimed.
+1. **An open, accepted `TRUNK RED:` issue exists** (no `agent-filed` label) → write
+   nothing. The `DRY` `all` line (§6) names it, and whether its patch is claimed.
 2. **The re-run is still the driver's to make** — a scheduled driver runs this repo, the
    red commit is docs-lane-only (the same test as `CONVENTIONS.md` §2, *Autonomy — the
    docs-only exception*), and no run at `$RED` shows `attempt` above 1 → write nothing
@@ -1676,12 +1739,31 @@ git diff --name-only "$RED^" "$RED"                        # does it touch more 
    repo?** Wait exactly one ping; if the sha still shows `attempt` 1 then, nothing is
    driving it — go to step 3. An early filing is not harmless: the driver skips a red
    that already has an open `TRUNK RED:` issue, so filing first cancels the re-run.
+   An open `TRUNK RED:` issue that is not yet accepted already makes the driver skip
+   this red, so the re-run cannot apply → go to step 3, which adopts it.
 3. **Otherwise** — the re-run finished red, or cannot apply (the commit touches more than
    docs, or nothing drives this repo) → classify the failure with `CONVENTIONS.md` §4's
    test (*Telling `red:infra` from `red:finding`*), then:
-   - an **open** issue already tracks this failure's flake class (search open issues for
+   - an **open** issue already diagnoses this red but is not owned yet — its title or body
+     names the red sha (7 or more leading hex digits), or was opened after the red run
+     finished and names its failing check, and it lacks the `TRUNK RED:` title
+     prefix, or carries `agent-filed`, or both (#430) → **adopt it**, and file nothing.
+     Retitle it `TRUNK RED: <sha> fails <check>` if it lacks the prefix. Remove
+     `agent-filed` if it carries it: a red trunk's repair is never a proposal awaiting
+     acceptance (the last bullet here), so the label cannot hold it back. Post **one**
+     comment saying it was adopted, with the old title. Never remove any other label: a
+     `blocked:*` hold has its own owner, who lifts it (`CONVENTIONS.md` [§5](../../CONVENTIONS.md#holds--every-label-that-stops-a-start-names-its-owner-and-its-wake-360),
+     *Holds*). More than one match → adopt the oldest and comment its number on the
+     others. Measured: a diagnosis filed with no prefix and `agent-filed` sat for about 40
+     minutes while every ship candidate stayed parked on "trunk red has no owner". Triage
+     pings saw nothing to do, and the issue was adopted from outside triage.
+   - an **open**, accepted issue already tracks this failure's flake class (search open issues for
      the failing test or check name) → **one comment** there: the sha, the run link, the
-     failing check. The durable fix collects in one place.
+     failing check. The durable fix collects in one place. Record it as `redTrunk`
+     (`{sha, issue}`) in the §0.1 record, so §0 counts the red as owned while that issue
+     stays open and accepted. A flake-class issue that still carries `agent-filed` does
+     not take the comment: it proposes a durable fix nobody has accepted, and adopting it
+     would accept that proposal as well. File for this sha instead (the next bullet).
    - none does → **file** `TRUNK RED: <sha> fails <check>`: the failing test names, the
      run link, the red class and the evidence behind it, the commit that went red, and
      whether a re-run was tried. It carries **no `agent-filed` label**: a red trunk's

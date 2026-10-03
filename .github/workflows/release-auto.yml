@@ -15,7 +15,9 @@
 #    `if:` concludes `skipped`, and the trunk read (`summarizeRunsForCommit`, tools/lib/git.js)
 #    counts any completed conclusion other than success/cancelled as not-green — so a skipped
 #    Release row would keep a sha red after a CI re-run turned it green. The gate step below ends
-#    green and switches the cut step off instead.
+#    green and switches the cut step off instead. NO LONGER A DIFFERENCE since #435: the template
+#    adopted this same gate step after a run that red CI triggered was measured concluding
+#    `skipped`. Kept here so the step's `header, point 2` reference still resolves.
 #
 # 3. THE `npm` JOBS ARE THE TEMPLATE'S, UNEDITED (#434) — publishing to npm by trusted publishing, opted in
 #    by release.npm in .github/project.yml. The npm trusted publisher is bound to THIS file's name,

@@ -2996,7 +2996,13 @@ The two doors below, and `code-ship`'s red-trunk ordering, cover **landing** a p
 a red trunk. Something has to **create** one first. The invariant:
 
 > **A green, finished branch is never parked behind trunk CI while there is neither an
-> open `TRUNK RED:` issue nor a re-run in flight.**
+> open, accepted `TRUNK RED:` issue nor a re-run in flight.**
+
+An issue that diagnoses the red under another title, or still carries `agent-filed`, does
+not count: nobody will pick it up as the patch. Triage's §0 therefore treats "trunk red,
+and no open accepted `TRUNK RED:` issue" as a change that forces a full pass, even when
+none of its fingerprint inputs moved. The full pass adopts such an issue: it retitles it
+and drops `agent-filed` (#430).
 
 Two actors hold it, one per half, and neither does the other's:
 
@@ -3007,9 +3013,10 @@ Two actors hold it, one per half, and neither does the other's:
   make two, and a green second run can bury a real defect ([§4](#4-branches-and-commits),
   *Telling `red:infra` from `red:finding`*).
 - **The filing — triage.** When the re-run has been tried for that sha, or cannot apply
-  (the commit touches more than docs, or nothing drives the repo), and no `TRUNK RED:`
-  issue is open, triage files `TRUNK RED: <sha> fails <check>` — or comments the
-  occurrence on an open issue for the same flake class — at most once per red sha. It is
+  (the commit touches more than docs, or nothing drives the repo), and no accepted
+  `TRUNK RED:` issue is open, triage files `TRUNK RED: <sha> fails <check>` — or comments
+  the occurrence on an open issue for the same flake class, or adopts an open issue that
+  already diagnoses the sha — at most once per red sha. It is
   one of triage's authorised writes (`skills/code-triage` §0.2, write 8), and triage
   never re-runs a job itself.
 
