@@ -1651,7 +1651,8 @@ Conditions (--json checks[].condition; required:false means reported, not blocki
   regressions   blocked_by edges on the tracking issue: open -> refused; closed after the period
                 began -> needs-new-candidate. Record one with: colab blocked <tracking> --by <issue>
   test-period   from max(candidate tag date, tracking issue creation), release: test-period long
-  trunk-green   every main run since the period began, of the workflows that ran at the candidate,
+  trunk-green   every run since the period began on main — and on project.yml's trunk: when that is
+                another branch (trunk: dev, #437) — of the workflows that ran at the candidate,
                 none red — required only where the final is automatic
 
   manifest-version  on-trunk  outranks-final — #424's pre-tag checks, required before any final:
@@ -1721,6 +1722,7 @@ function cmdReleaseFinalize(argv) {
   if (!isGhUsable(repoAbs)) throw new UserError(`gh not usable (${ghUnusableWhy(repoAbs)}) — the tracking issue, runs and regression edges live on GitHub`);
   const doc = projectDoc(repoAbs);
   const policy = releasePolicy.evaluateRelease(doc);
+  const windowBranches = releaseFinalize.windowBranches(doc && doc.trunk); // #437
   const now = new Date().toISOString();
   const remote = git.remoteFor(repoAbs); // #301
 
@@ -1800,10 +1802,13 @@ function cmdReleaseFinalize(argv) {
     });
     const suiteWorkflows = [...new Set((rows || []).map((r) => r.workflowName || '(unnamed workflow)'))];
     const period = releaseFinalize.periodVerdict({ cutAt: cand.cutAt, trackingCreatedAt: tracking && tracking.createdAt, testPeriodDays: policy.effective.testPeriodDays, now });
-    const sinceRaw = git.ghRunsSince(repoAbs, 'main', period.start.slice(0, 10));
-    const since = sinceRaw ? { ...sinceRaw, runs: releaseCut.withoutOwnWorkflow(sinceRaw.runs) } : sinceRaw; // #425
+    // #437: the window is main plus project.yml's trunk: when that is another branch (trunk: dev).
+    const since = releaseFinalize.mergeWindowRuns(windowBranches.map((branch) => {
+      const raw = git.ghRunsSince(repoAbs, branch, period.start.slice(0, 10));
+      return { branch, read: raw ? { ...raw, runs: releaseCut.withoutOwnWorkflow(raw.runs) } : null }; // #425
+    }));
     const trunk = releaseFinalize.trunkGreenVerdict(since ? since.runs : null, {
-      periodStart: period.start, periodEnd: walk ? period.endsAt : null, suiteWorkflows, truncated: !!(since && since.truncated),
+      periodStart: period.start, periodEnd: walk ? period.endsAt : null, suiteWorkflows, truncated: !!(since && since.truncated), branches: windowBranches,
     });
     const regressions = releaseFinalize.regressionVerdict(tracking && tracking.number ? readRegressionEdges(repoAbs, tracking.number) : [], { periodStart: period.start });
     const { manifests, ancestry } = measurePreTag(repoAbs, cand.sha, `${remote}/main`); // #424

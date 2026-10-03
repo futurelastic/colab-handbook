@@ -26,7 +26,8 @@
  *     issue opened late can never shorten the window a human had to veto in;
  *   - events are comments on the issue carrying `<!-- colab:release-event k=v … -->` markers.
  *
- * Nothing else is stored: trunk-green-throughout is re-measured from GitHub's run list on every run.
+ * Nothing else is stored: trunk-green-throughout is re-measured from GitHub's run list on every run —
+ * over `main` and, where project.yml's `trunk:` is another branch, that branch too (#437, windowBranches).
  *
  * `--auto` (#423) changes WHICH candidate a run judges, nothing else: instead of always the newest
  * one (whose clock a daily cut keeps restarting, so on a repo cutting a candidate every day no
@@ -238,20 +239,22 @@ function periodVerdict({ cutAt, trackingCreatedAt, testPeriodDays, now }) {
 }
 
 /**
- * Trunk CI green THROUGHOUT the period. `runs` is `gh run list --branch main` rows (null = unread),
- * `truncated` true when the read hit its limit. Only runs created at/after `periodStart`, of a
+ * Trunk CI green THROUGHOUT the period. `runs` is the window's `gh run list --branch <b>` rows, merged
+ * across windowBranches() by mergeWindowRuns() (null = unread), `truncated` true when a read hit its
+ * limit, `branches` the branches read (named in the detail). Only runs created at/after `periodStart`, of a
  * workflow in `suiteWorkflows` (the workflows that vetted the candidate — an unrelated scheduled
  * workflow cannot veto a release), and not `pull_request` events, count.
  *
  * Returns { ok, permanent, pending, detail }:
  *   - a completed run that failed (anything but success/skipped/neutral/cancelled) -> permanent:
  *     trunk was red during this candidate's period, and nothing later un-reds it;
- *   - cancelled -> fine when a LATER run of the same workflow succeeded or is still running
+ *   - cancelled -> fine when a LATER run of the same workflow ON THE SAME BRANCH succeeded or is still running
  *     (pending), otherwise not clean (not permanent: a re-run can settle it);
  *   - a run still queued/in progress -> pending.
  */
-function trunkGreenVerdict(runs, { periodStart, periodEnd = null, suiteWorkflows, truncated }) {
-  if (runs === null || runs === undefined) return { ok: false, permanent: false, pending: false, detail: 'gh run list failed — cannot confirm trunk stayed green' };
+function trunkGreenVerdict(runs, { periodStart, periodEnd = null, suiteWorkflows, truncated, branches = ['main'] }) {
+  const on = (branches && branches.length ? branches : ['main']).join(' + ');
+  if (runs === null || runs === undefined) return { ok: false, permanent: false, pending: false, detail: `gh run list on ${on} failed — cannot confirm trunk stayed green` };
   if (truncated) return { ok: false, permanent: false, pending: false, detail: 'the run list hit its read limit — cannot confirm trunk stayed green' };
   const startMs = Date.parse(periodStart);
   // #423: --auto bounds the window to the candidate's own period — a run after it closed is about newer code.
@@ -260,19 +263,56 @@ function trunkGreenVerdict(runs, { periodStart, periodEnd = null, suiteWorkflows
   const inWindow = runs.filter((r) => r && Date.parse(r.createdAt) >= startMs && Date.parse(r.createdAt) < endMs && suite.has(r.workflowName || '(unnamed workflow)') && r.event !== 'pull_request');
   const red = inWindow.filter((r) => r.status === 'completed' && !NOT_RED.has(r.conclusion) && r.conclusion !== 'cancelled');
   if (red.length) {
-    return { ok: false, permanent: true, pending: false, detail: `trunk went red during the test period: ${red.map((r) => `${r.workflowName} ${r.conclusion} at ${String(r.headSha).slice(0, 7)} (${r.createdAt})`).join('; ')}` };
+    return { ok: false, permanent: true, pending: false, detail: `trunk went red during the test period: ${red.map((r) => `${r.workflowName} ${r.conclusion}${r.branch ? ` on ${r.branch}` : ''} at ${String(r.headSha).slice(0, 7)} (${r.createdAt})`).join('; ')}` };
   }
   const unsettled = [];
   let pending = inWindow.some((r) => r.status !== 'completed');
   for (const c of inWindow.filter((r) => r.status === 'completed' && r.conclusion === 'cancelled')) {
-    const later = inWindow.filter((r) => r.workflowName === c.workflowName && Date.parse(r.createdAt) > Date.parse(c.createdAt));
+    // #437: a later run on ANOTHER branch tested other code — it never settles this one's cancellation.
+    const later = inWindow.filter((r) => r.workflowName === c.workflowName && (r.branch || null) === (c.branch || null) && Date.parse(r.createdAt) > Date.parse(c.createdAt));
     if (later.some((r) => r.status === 'completed' && r.conclusion === 'success')) continue;
     if (later.some((r) => r.status !== 'completed')) { pending = true; continue; }
-    unsettled.push(`${c.workflowName} cancelled at ${String(c.headSha).slice(0, 7)} with no later run`);
+    unsettled.push(`${c.workflowName} cancelled${c.branch ? ` on ${c.branch}` : ''} at ${String(c.headSha).slice(0, 7)} with no later run`);
   }
   if (unsettled.length) return { ok: false, permanent: false, pending: false, detail: `not settled: ${unsettled.join('; ')}` };
   if (pending) return { ok: false, permanent: false, pending: true, detail: 'a trunk run in the test period is still in flight' };
-  return { ok: true, permanent: false, pending: false, detail: `${inWindow.length} trunk run(s) of the candidate's workflows since ${periodStart}${periodEnd ? ` until ${periodEnd}` : ''}, none red` };
+  return { ok: true, permanent: false, pending: false, detail: `${inWindow.length} run(s) on ${on} of the candidate's workflows since ${periodStart}${periodEnd ? ` until ${periodEnd}` : ''}, none red` };
+}
+
+/**
+ * #437: the branches whose runs make up the trunk-green window. Candidates are cut from `main`, so
+ * `main` is always read; where project.yml's `trunk:` is another branch (`trunk: dev` + `deploy: tag`)
+ * it is read too. On that shape `main` receives CI only at promotions, so a `main`-only window holds
+ * little beyond the promotion's own run and "trunk stayed green" would be close to vacuous — `trunk:`
+ * is where the code under test actually moves during the period. A red run there counts exactly as a
+ * red run on `main` does on `trunk: main`, where every run after the cut is newer code too.
+ */
+function windowBranches(trunk) {
+  const t = String(trunk || '').trim();
+  return t && t !== 'main' ? [t, 'main'] : ['main'];
+}
+
+/**
+ * #437: `reads` is [{ branch, read }] where `read` is ghRunsSince()'s { runs, truncated } or null. Returns
+ * { runs, truncated } with every row tagged `branch` (deduplicated by databaseId, first read wins), or
+ * null when ANY branch could not be read — a window missing one branch is not a window that was clean.
+ */
+function mergeWindowRuns(reads) {
+  const list = reads || [];
+  if (!list.length || list.some((x) => !x || !x.read || !Array.isArray(x.read.runs))) return null;
+  const seen = new Set();
+  const runs = [];
+  for (const { branch, read } of list) {
+    for (const r of read.runs) {
+      if (!r) continue;
+      if (r.databaseId !== undefined && r.databaseId !== null) {
+        if (seen.has(r.databaseId)) continue;
+        seen.add(r.databaseId);
+      }
+      runs.push({ ...r, branch });
+    }
+  }
+  return { runs, truncated: list.some((x) => !!x.read.truncated) };
 }
 
 /**
@@ -475,7 +515,7 @@ module.exports = {
   STATES, CONDITIONS, HOLD_LABEL, CUT_SUBJECT_SUFFIX,
   parseVersion, compareVersions, parseCandidate,
   parseReleaseMarker, releaseMarker, eventMarker, hasEvent, trackingTitle, trackingBody,
-  selectCandidate, openCandidates, pickNewestClean, periodVerdict, trunkGreenVerdict, regressionVerdict,
+  selectCandidate, openCandidates, pickNewestClean, periodVerdict, trunkGreenVerdict, windowBranches, mergeWindowRuns, regressionVerdict,
   handoffCommand, decide, tagMessage, migrationGrantVerdict,
   carriedIssues, previousFinal, releasedEvent, releasedComment,
 };

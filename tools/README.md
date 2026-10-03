@@ -1211,7 +1211,7 @@ daemon: every run re-measures from git and GitHub, and the decision is `tools/li
 | `release-hold` | no hold on it or on a superseded open record | always |
 | `regressions` | as above | always |
 | `test-period` | the period has ended | automatic-final row only |
-| `trunk-green` | every `main` run created since the period began, of the workflows that ran at the candidate (not `pull_request`), finished without going red — a `cancelled` one needs a later success; a read that hit its limit fails closed | automatic-final row only |
+| `trunk-green` | every run created since the period began on `main` — and on `trunk:` too where that is another branch (`trunk: dev`, #437: there `main` gets CI only at promotions, so a `main`-only window is close to vacuous) — of the workflows that ran at the candidate (not `pull_request`), finished without going red — a `cancelled` one needs a later success; a read that hit its limit fails closed | automatic-final row only |
 | `ci-green` · `full-suite` · `schema-additive` · `switch-dependencies` | §6's four candidate conditions, re-measured at the candidate's commit by the same code `release cut` uses | always |
 | `manifest-version` · `on-trunk` · `outranks-final` | #424's pre-tag checks (see *Release cut*), on the final `vX.Y.Z` | always |
 | `final-grant` | #441: the decision issue `release.final-grant` names still carries a recorded, trusted, not-reopened ruling (`decision-recorded` label + live `⚖ Decision recorded` comment) | granted `deploy-tag` only; reported — failing takes the automatic final away (→ `candidate-ready`) |
