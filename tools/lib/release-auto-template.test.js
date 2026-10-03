@@ -216,13 +216,46 @@ test('audit: a release workflow that commits', () => {
 });
 
 // ---------------------------------------------------------------------------------------------
-// The handbook's OWN copy (#428): .github/workflows/release-auto.yml. It differs from the template
-// in exactly two ways — it runs this checkout's tools/colab instead of a pinned HANDBOOK_REF clone
-// (ruling on #428), and it gates a red CI run in a step so the run never concludes `skipped`. The
-// cut / finalize / publish steps stay the template's, verbatim.
+// The handbook's OWN copy (#428): .github/workflows/release-auto.yml. It runs this checkout's
+// tools/colab instead of a pinned HANDBOOK_REF clone (ruling on #428). It also gated a red CI run
+// in a step, so the run never concludes `skipped`. That second difference ended in #435, when the
+// template adopted the same gate. The gate, cut, finalize and publish steps are the template's,
+// verbatim.
 
 const OWN = fs.readFileSync(path.join(REPO_ROOT, '.github', 'workflows', 'release-auto.yml'), 'utf8');
 const CI_NAME = /^name:\s*(.+?)\s*$/m.exec(fs.readFileSync(path.join(REPO_ROOT, '.github', 'workflows', 'ci.yml'), 'utf8'))[1];
+
+// #435: measured on GitHub, a workflow_run-triggered run whose every job a job-level `if:`
+// skipped concludes `skipped` at the run level, not `success`. summarizeRunsForCommit reads that
+// as not-green, so a red-then-re-run-green trunk sha stayed blocked for `colab ship`. The template
+// therefore gates in a step, exactly as the handbook's own copy does.
+const GATE = 'Gate on the triggering CI run';
+
+function runGate(env, text = TEXT) {
+  const dir = tmpdir('release-auto-gate-');
+  const out = path.join(dir, 'output');
+  fs.writeFileSync(out, '');
+  const r = spawnSync('bash', ['-c', stepScript(GATE, text)], { cwd: dir, encoding: 'utf8', env: { ...process.env, ...env, GITHUB_OUTPUT: out, GITHUB_STEP_SUMMARY: path.join(dir, 'summary') } });
+  return { status: r.status, out: fs.readFileSync(out, 'utf8') };
+}
+
+test('template: the release job has no job-level if — a red CI run is gated in a step, so the run never concludes skipped (#435)', () => {
+  const release = TEXT.slice(TEXT.indexOf('\n  release:\n'), TEXT.indexOf('\n  npm:'));
+  assert.ok(release.length > 0, 'release job not found');
+  assert.doesNotMatch(release, /^ {4}if:/m, 'job-level if: on the release job');
+  // The gate comes before anything that could tag, and the cut step is switched off by it.
+  assert.ok(release.indexOf(`- name: ${GATE}`) >= 0, 'no gate step');
+  assert.ok(release.indexOf(`- name: ${GATE}`) < release.indexOf(`- name: ${CUT}`), 'gate after cut');
+  assert.match(release, /- name: Cut a candidate \(colab release cut --auto\)\n\s+id: cut\n\s+if: steps\.gate\.outputs\.cut == 'true' && /);
+});
+
+test('template: the gate step ends green either way — red switches the cut off, green or a non-workflow_run event leaves it on (#435)', () => {
+  assert.deepStrictEqual(runGate({ EVENT: 'workflow_run', CONCLUSION: 'failure', HEAD_SHA: 'abc' }), { status: 0, out: 'cut=false\n' });
+  assert.deepStrictEqual(runGate({ EVENT: 'workflow_run', CONCLUSION: 'cancelled', HEAD_SHA: 'abc' }), { status: 0, out: 'cut=false\n' });
+  assert.deepStrictEqual(runGate({ EVENT: 'workflow_run', CONCLUSION: 'success', HEAD_SHA: 'abc' }), { status: 0, out: 'cut=true\n' });
+  assert.deepStrictEqual(runGate({ EVENT: 'schedule', CONCLUSION: '', HEAD_SHA: '' }), { status: 0, out: 'cut=true\n' });
+  assert.deepStrictEqual(runGate({ EVENT: 'workflow_dispatch', CONCLUSION: '', HEAD_SHA: '' }), { status: 0, out: 'cut=true\n' });
+});
 
 test("own copy: triggers on ci.yml's own workflow name, on main", () => {
   const m = /workflow_run:\s*\n(?:\s*#.*\n)*\s*workflows:\s*\[([^\]]*)\]/.exec(OWN);
@@ -240,8 +273,8 @@ test("own copy: runs this checkout's tools/colab — no pinned ref, no clone", (
   assert.match(OWN, /fetch-depth: 0/);
 });
 
-test('own copy: cut, finalize and publish are the template\'s steps verbatim', () => {
-  for (const step of [CUT, FIN, 'Publish GitHub Release (same run)']) {
+test('own copy: gate, cut, finalize and publish are the template\'s steps verbatim', () => {
+  for (const step of [GATE, CUT, FIN, 'Publish GitHub Release (same run)']) {
     assert.strictEqual(stepScript(step, OWN), stepScript(step), `step "${step}" drifted from the template`);
   }
 });
