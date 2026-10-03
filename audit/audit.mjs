@@ -1660,6 +1660,13 @@ function auditRepo(target, ctx) {
   checkReleaseRunner(src, workflows, warn);
 
   const runbook = cfg && "runbook" in cfg ? cfg.runbook : null;
+  // #454: on route deploy-tag-fast the release workflow's own `deploy` job ships the final (a tag
+  // pushed with GITHUB_TOKEN starts no `push: tags` run, so it cannot be a deploy-*.yml). A cutter
+  // that deploys what it tagged IS the in-repo path to production — it is not an external deployer,
+  // and owes no runbook. One whose deploy step is still the placeholder counts too: the path is in
+  // the repo, unfinished, and checkFastRouteDeploy above already fails it by name.
+  const fastDeployers = (fastRouteCutters({ readFile: (p) => src.readFile(p), workflows, cfg }) || {}).deploying || [];
+  const inRepoDeploy = deployWorkflows.length > 0 || fastDeployers.length > 0;
 
   // ---- gate contract, dispatched by axis of record (#144) ------------------
   // `authority` is null only when project.yml itself did not parse (already failed above,
@@ -1680,12 +1687,14 @@ function auditRepo(target, ctx) {
       //                                    runbook documents that path. A deploy: tag repo whose own
       //                                    CI holds the deploy job keeps its deploy-*.yml and needs no
       //                                    runbook — the workflow already commits the answer.
-      const externalTagDeploy = deploy === "tag" && !deployWorkflows.length;
+      //                                    So does a deploy-tag-fast repo whose release workflow
+      //                                    deploys the final it cut (#454).
+      const externalTagDeploy = deploy === "tag" && !inRepoDeploy;
       if (deploy === "manual") {
         checkRunbook(src, runbook, fail, warn, "deploy: manual");
       } else if (externalTagDeploy) {
         checkRunbook(src, runbook, fail, warn, "deploy: tag deployed outside CI (an external GitOps poller)");
-      } else if (!deployWorkflows.length) {
+      } else if (!inRepoDeploy) {
         fail("tier A but no .github/workflows/deploy-*.yml — the path to production is not in the repo (use deploy: manual + runbook: if it ships by hand, or deploy: tag + runbook: when a GitOps poller deploys the tag from outside CI)");
       }
       if (production === null || production === "") fail("tier A but production is null — set the live URL, or drop to tier B");
@@ -1761,7 +1770,7 @@ function auditRepo(target, ctx) {
     // construction (CONVENTIONS.md §2: no mechanism rule applies to it, not even trunk shape).
     // A `runbook`-kind entry defers to `checkRunbook` here (this file can read the repo and tell
     // "missing" from "unreadable via the API"); every other entry is a ready `fail` message.
-    const shapeCtx = { trunk, hasProduction, deploy, hasDeployWorkflow: deployWorkflows.length > 0, deployWorkflowNames: deployWorkflows };
+    const shapeCtx = { trunk, hasProduction, deploy, hasDeployWorkflow: inRepoDeploy, deployWorkflowNames: [...deployWorkflows, ...fastDeployers] };
     for (const entry of evaluateExposure(exp, shapeCtx)) {
       if (entry.kind === "runbook") checkRunbook(src, runbook, fail, warn, entry.why);
       else fail(entry.message);
@@ -2587,18 +2596,27 @@ function checkReleaseAuto(src, workflows, cfg, warn) {
 // release.rollback: auto is the operator's statement of that, which is why the grant is required.
 const FAST_DEPLOY_CONSUMER = /outputs\.(final|deploy-tag)\b|\.final\s*\/\/|jq -r '\.final\b/;
 const FAST_DEPLOY_UNEDITED = /the deploy step of release-auto\.yml was never edited/;
-function fastRouteDeployFindings({ readFile, workflows, cfg }) {
+// The cutters and, of those, the ones that deploy the final the cut produced. Null when the effective
+// route does not finalize on a green head (not the fast route). Shared by the findings below and by
+// the deploy-presence rule (#454), which counts a deploying cutter as the in-repo deploy path.
+function fastRouteCutters({ readFile, workflows, cfg }) {
   const effective = cfg ? releasePolicy.evaluateRelease(cfg).effective : null;
-  if (!effective || effective.finalize !== "on-green-head") return [];
+  if (!effective || effective.finalize !== "on-green-head") return null;
   const cutters = (workflows || []).filter((wf) => {
     const t = readFile(`.github/workflows/${wf}`);
     return t && /\brelease\s+cut\s+--auto\b/.test(t);
   });
+  const deploying = cutters.filter((wf) => FAST_DEPLOY_CONSUMER.test(readFile(`.github/workflows/${wf}`)));
+  return { cutters, deploying };
+}
+function fastRouteDeployFindings({ readFile, workflows, cfg }) {
+  const found = fastRouteCutters({ readFile, workflows, cfg });
+  if (!found) return [];
+  const { cutters, deploying } = found;
   if (!cutters.length) {
     return ["route: deploy-tag-fast but no workflow runs `colab release cut --auto` — nothing tags or deploys a final; copy templates/release-auto.yml (CONVENTIONS.md §6, A final on every green head)"];
   }
   const out = [];
-  const deploying = cutters.filter((wf) => FAST_DEPLOY_CONSUMER.test(readFile(`.github/workflows/${wf}`)));
   if (!deploying.length) {
     out.push(`route: deploy-tag-fast, but ${cutters.join(", ")} runs \`colab release cut --auto\` and deploys nothing from its result — a tag pushed with GITHUB_TOKEN starts no \`push: tags\` run, so the final would never deploy; deploy in the same run (templates/release-auto.yml, job \`deploy\`)`);
   }

@@ -226,7 +226,10 @@ file documents it:
   runs it (a GitOps poller fast-forwards a release branch on the tag). Required
   there because the tag's path to production is otherwise written down nowhere. A
   `deploy: tag` repo whose own CI holds the deploy job documents itself in that
-  workflow and needs no runbook.
+  workflow and needs no runbook. On route `deploy-tag-fast` that workflow is the
+  release workflow itself — its `deploy` job ships the final the cut tagged, since
+  a tag pushed with `GITHUB_TOKEN` starts no `deploy-*.yml` — so it counts as the
+  in-repo deploy path the same way (#454).
 
 It is required because an out-of-CI deploy nobody wrote down is how a repo ends
 up with exactly one person — or one poller nobody can find — able to ship it.

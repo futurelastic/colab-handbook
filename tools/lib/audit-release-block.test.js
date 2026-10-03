@@ -232,6 +232,29 @@ test('#446: the candidates-off advisory is not raised on the fast route', () => 
   assert.deepStrictEqual(warns, []);
 });
 
+// ---- #454: on the fast route the release workflow IS the in-repo deploy path ------------------------
+
+test('#454: deploy-tag-fast deploying from release-auto.yml with no deploy-*.yml raises no runbook failure', () => {
+  const only = { '.github/workflows/release-auto.yml': EDITED };
+  const r = auditWithGh(fixture(FAST, only), fakeGhIssue(7, RECORDED));
+  assert.ok(!hasText(r.fails, /runbook|no \.github\/workflows\/deploy-\*\.yml/), r.fails.join(' | '));
+  // Same on the legacy axis: tier: A reads as released.
+  const legacy = auditWithGh(fixture(FAST.replace('exposure: released', 'tier: A'), only), fakeGhIssue(7, RECORDED));
+  assert.ok(!hasText(legacy.fails, /runbook|no \.github\/workflows\/deploy-\*\.yml/), legacy.fails.join(' | '));
+});
+
+test('#454: a release workflow that does not deploy the final is no deploy path — the external-deploy runbook is still owed', () => {
+  const noDeploy = TEMPLATE.slice(0, TEMPLATE.indexOf('\n  # ---------------------------------------------------------------------------------------------\n  # deploy (#446)'))
+    .replace(/deploy-tag: \$\{\{ steps\.cut\.outputs\.final \}\}/, '').replace(/echo "final=\$TAG"[^\n]*\n/, '').replace(/jq -r '\.final \/\/ false'/, 'jq -r \'.x\'');
+  const r = auditWithGh(fixture(FAST, { '.github/workflows/release-auto.yml': noDeploy }), fakeGhIssue(7, RECORDED));
+  assert.ok(hasText(r.fails, /deploy: tag deployed outside CI \(an external GitOps poller\) requires runbook:/), r.fails.join(' | '));
+});
+
+test('#454: plain deploy: tag with a release-auto.yml and no deploy-*.yml still owes the external-deploy runbook', () => {
+  const r = audit(fixture(RELEASED_TAG, { '.github/workflows/release-auto.yml': EDITED }));
+  assert.ok(hasText(r.fails, /deploy: tag deployed outside CI \(an external GitOps poller\) requires runbook:/), r.fails.join(' | '));
+});
+
 // ---- #452: health-url is shared with deploy-tag; the container deploy is one path -----------------
 
 const CONTAINER = fs.readFileSync(path.join(__dirname, '..', '..', 'templates', 'deploy-container.yml'), 'utf8');
