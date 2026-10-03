@@ -257,6 +257,16 @@ function batchGreenCoversTrunk({ trunkRows, batchRows, trunkFires, batchFires })
   return (batchRows || []).length >= a.length;
 }
 
+/**
+ * #415: branches the command line names that a staged batch does not carry, in command-line order.
+ * `staged` is parseMemberTrailers' `[{ branch }]`. Not a refusal on its own: a branch over the cap or
+ * dropped at build is EXPECTED to be missing on resume — the caller must say so, never stay silent.
+ */
+function notStaged(requested, staged) {
+  const have = new Set((staged || []).map((m) => m && m.branch).filter(Boolean));
+  return [...new Set(requested || [])].filter((b) => b && !have.has(b));
+}
+
 /** The clause each member's 🚢 evidence comment gains: which combined run graded it. */
 function evidenceSuffix({ n, ref, headSha, runIds }) {
   const runs = (runIds || []).length ? (runIds || []).join(', ') : '(id unread)';
@@ -273,5 +283,5 @@ module.exports = {
   MAX_BATCH, REF_PREFIX, PROBE_REF, TRAILER_KEY,
   parseShipBatch, batchRefName, parseBatchRef, memberTrailer, parseMemberTrailers,
   branchCiClass, memberEligibility, selectMembers, wiring, combinedVerdict, nextStep, foreignBatchStep,
-  batchGreenCoversTrunk, evidenceSuffix, serialLine,
+  batchGreenCoversTrunk, evidenceSuffix, serialLine, notStaged,
 };
