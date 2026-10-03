@@ -156,6 +156,7 @@ jobs:
         run: |
           node --check tools/colab
           for f in tools/lib/*.js audit/audit.mjs; do node --check "$f"; done
+          for f in templates/*.mjs; do node --check "$f"; done
           sh -n install.sh
           # Every shell artifact this repo ships or runs. The hook templates are `sh`, and an
           # unbalanced quote inside an embedded awk program parses as a shell quote — one such

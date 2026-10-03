@@ -13,6 +13,7 @@ cd "$(git rev-parse --show-toplevel)"
 
 node --check tools/colab
 for f in tools/lib/*.js audit/audit.mjs; do node --check "$f"; done
+for f in templates/*.mjs; do node --check "$f"; done
 sh -n install.sh
 for f in .githooks/install.sh templates/pre-commit-identity templates/pre-commit-dispatch \
          .githooks/pre-commit .githooks/pre-commit.d/*; do sh -n "$f"; done
