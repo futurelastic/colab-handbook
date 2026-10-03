@@ -504,10 +504,12 @@ const WORKFLOW_FINGERPRINTS = [
   // overwrite. Verified against all three before being added here.
   { marker: 'Resolve deploy toolchain', kind: 'step', template: 'deploy-xserver' },
   { marker: 'Verify the deployed site answers', kind: 'step', template: 'deploy-xserver' },
-  // deploy-container (#452): its one coined step. "Resolve the tag to deploy" is deliberately not a
-  // marker — a phrase a hand-written deploy workflow could carry, and an over-eager marker invites
-  // an overwrite.
-  { marker: 'Build once, run exactly this tag, verify (deploy-container-run)', kind: 'step', template: 'deploy-container' },
+  // deploy-container (#452, split into publish + deploy jobs by #460): its two coined steps.
+  // "Resolve the tag to deploy" is deliberately not a marker — a phrase a hand-written deploy
+  // workflow could carry, and an over-eager marker invites an overwrite. A copy taken before #460
+  // (one step, "Build once, run exactly this tag, verify …") still matches on the header text marker.
+  { marker: 'Build once and push (deploy-container-run --publish-only)', kind: 'step', template: 'deploy-container' },
+  { marker: 'Run exactly this tag, verify (deploy-container-run --deploy-only)', kind: 'step', template: 'deploy-container' },
   // branch-name (#348): its one step.
   { marker: 'Check branch name (CONVENTIONS §4)', kind: 'step', template: 'branch-name' },
   // Shared by all three ci-* templates: proves derivation, cannot say from which. Note the exact
