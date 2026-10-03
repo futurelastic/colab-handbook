@@ -457,9 +457,31 @@ How many green candidates `colab ship --batch` may land at once
 ([CONVENTIONS.md §4, *Batch landing*](CONVENTIONS.md#batch-landing--one-combined-run-then-a-fast-forward-373)).
 An integer from 1 to 3. **Absent or `1` keeps today's serial landing exactly** — every
 `--batch` call declines, and a plain `colab ship` is unchanged whatever this says. Any other
-value (`0`, `4`, `2.5`, a word) fails the audit, and `colab ship` fails closed to serial on it:
-a malformed opt-in must never widen what an unattended merge does. The cap stays at 3 until
-eviction data says otherwise — start low.
+value (`0`, `4`, `2.5`, a word) fails the audit **and the CI templates' descriptor check**
+(#416), and `colab ship` fails closed to serial on it: a malformed opt-in must never widen what
+an unattended merge does. Failing in CI is the part that matters. The audit is something a
+person runs by hand, and the fail-closed is silent. So without the CI step, an adopting repo
+raised the value to 5, its CI stayed green, and every landing went back to serial until a
+ship dry run noticed. A copy of the CI templates older than #416 lacks the step. Copy it in.
+
+**Why the cap is 3, deliberately.** A red combined run lands nothing, and the members then
+ship one at a time, each with its own sync run. There is no bisection step: that serial
+fallback *is* the bisection, and it only stays cheap for a small N.
+
+- **Cost of a red batch.** It grows linearly with N: the wasted combined run plus N serial
+  cycles. At 3 that is four cycles, the same as a three-way bisect. At 8 it is nine, which is
+  hours on a 27-minute CI.
+- **Chance of a red batch.** It grows with N too: each member brings its own chance of a
+  semantic conflict or a flake. So the bad case gets both more likely and more expensive at
+  the same time.
+- **Builds have to start again.** Trunk moving mid-run sends a batch back to be rebuilt
+  ([§4](CONVENTIONS.md#batch-landing--one-combined-run-then-a-fast-forward-373), step 4).
+  A wider batch spends longer being built and run, so more of its runs end up thrown away.
+
+Raising the cap means first building what it lacks: a real bisection (split a red batch and
+re-run its halves), so a red stays logarithmic rather than linear, plus eviction data from
+batches of 2–3 showing how often they actually go red. Until then, a queue longer than 3
+drains as consecutive batches of 3, which is still three landings per cycle instead of one.
 
 With N > 1, `colab ship --batch <b1,b2[,b3]>` puts trunk's head plus one squash commit per
 member (each with its own `Closes #N`) on `ship-batch/<trunk-sha7>`, needs **one** combined CI

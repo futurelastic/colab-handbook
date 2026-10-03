@@ -1270,12 +1270,14 @@ function auditRepo(target, ctx) {
     // ---- ship-batch (#373) ------------------------------------------------------
     // Batch landing's opt-in: an integer 1–3 (tools/lib/ship-batch.js parseShipBatch — the one reading
     // `colab ship --batch` uses, so the two cannot disagree). A malformed value makes ship fail closed
-    // to serial, which is safe but silent, so it fails here. Two further shapes are inert rather than
+    // to serial, which is safe but silent, so it fails here — and, since this audit is run by hand, in
+    // the CI templates' descriptor check too (#416, held to this same parser by
+    // tools/lib/ci-template-descriptor-check.test.js). Two further shapes are inert rather than
     // wrong, so they warn: no workflow fires on a `ship-batch/**` push (the combined run can never
     // arrive), and no `autonomy: auto-trunk` (a batch lands in one unattended push, which needs it).
     if ("ship-batch" in (cfg || {}) && cfg["ship-batch"] !== null) {
       const sbCfg = shipBatch.parseShipBatch(cfg);
-      if (!sbCfg.valid) fail(sbCfg.reason);
+      if (!sbCfg.valid) fail(`${sbCfg.reason} — the cap is deliberate, see project.schema.md, ship-batch`);
       else if (sbCfg.n > 1) {
         const firing = workflowsFiringOnBranchPush({ readFile: (p) => src.readFile(p), workflows, branch: shipBatch.PROBE_REF });
         if (!firing.length) warn(`ship-batch: ${sbCfg.n} but no workflow in .github/workflows fires on a push to ship-batch/** — colab ship --batch will always fall back to serial; add 'ship-batch/**' to a CI workflow's push: branches:`);

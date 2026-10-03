@@ -155,6 +155,31 @@ jobs:
           persist-credentials: false
 
       # ---------------------------------------------------------------------------
+      # Descriptor check (#416). A value `colab ship` cannot use does not fail there —
+      # it fails closed to the safe default, silently. `ship-batch: 5` (the cap is 3)
+      # once turned every landing in a busy repo back to serial while this CI stayed
+      # green; only a ship dry run noticed. So the value fails HERE, where the person
+      # who changed project.yml is looking. Same rule as `colab ship` and the audit
+      # (tools/lib/ship-batch.js parseShipBatch): absent/empty/null, or 1–3. Why the
+      # cap is 3: project.schema.md, `ship-batch`.
+      # ---------------------------------------------------------------------------
+      - name: Descriptor check (.github/project.yml)
+        working-directory: ${{ github.workspace }}
+        run: |
+          [ -f .github/project.yml ] || exit 0
+          line="$(grep -E '^ship-batch[[:space:]]*:' .github/project.yml | head -1 || true)"
+          [ -n "$line" ] || exit 0
+          v="$(printf '%s\n' "$line" | sed -E -e 's/^ship-batch[[:space:]]*:[[:space:]]*//' \
+                -e 's/[[:space:]]+#.*$//' -e 's/[[:space:]]+$//' \
+                -e 's/^"(.*)"$/\1/' -e "s/^'(.*)'\$/\\1/")"
+          case "$v" in
+            ''|'~'|null|1|2|3) echo "ship-batch: ${v:-absent} — ok" ;;
+            *)
+              echo "::error file=.github/project.yml::ship-batch is '$v', expected an integer 1-3 (omit for serial). colab ship ignores any other value and lands serially. Why the cap is 3: project.schema.md, ship-batch."
+              exit 1 ;;
+          esac
+
+      # ---------------------------------------------------------------------------
       # Toolchain resolution. Precedence, highest first:
       #   PHP :  1. .github/project.yml -> php:      2. composer.json -> require.php
       #   Node:  1. .github/project.yml -> node:     2. .nvmrc, else package.json engines.node
