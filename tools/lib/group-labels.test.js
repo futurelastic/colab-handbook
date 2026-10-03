@@ -133,3 +133,87 @@ test('the three labels measured spent on the tracker in #85 all classify as dele
   const verdicts = classifyGroupLabels(all, (n) => members[n]);
   assert.deepStrictEqual(deletableLabels(verdicts).map((v) => v.name), all);
 });
+
+// --- #448: the second read before ship / doctor --prune deletes a label -------------------
+
+const { spentLabelDecision, teardownSpentGroupLabel, keptReason } = require('./group-labels.js');
+
+function stubs({ search, confirm, del = { ok: true } }) {
+  const calls = { search: 0, confirm: 0, del: 0 };
+  return {
+    calls,
+    deps: {
+      searchOpen: () => { calls.search++; return search; },
+      confirmOpen: () => { calls.confirm++; return confirm; },
+      deleteLabel: () => { calls.del++; return del; },
+    },
+  };
+}
+
+test('#448 the measured case: search lists 0 open, the issues-table read still shows #4 → NOT deleted', () => {
+  const { calls, deps } = stubs({ search: [], confirm: [4] });
+  const t = teardownSpentGroupLabel('group:k', deps);
+  assert.strictEqual(t.action, 'keep');
+  assert.strictEqual(t.reason, 'disagree');
+  assert.deepStrictEqual(t.open, [4]);
+  assert.strictEqual(calls.del, 0, 'gh label delete must not run when the two reads disagree');
+  assert.match(keptReason('group:k', t), /#4 still carries it open/);
+});
+
+test('#448 both reads agree on zero → deleted', () => {
+  const { calls, deps } = stubs({ search: [], confirm: [] });
+  const t = teardownSpentGroupLabel('group:k', deps);
+  assert.strictEqual(t.action, 'delete');
+  assert.strictEqual(t.deleted, true);
+  assert.strictEqual(calls.del, 1);
+});
+
+test('#448 confirming read fails → kept, never "none open"', () => {
+  const { calls, deps } = stubs({ search: [], confirm: null });
+  const t = teardownSpentGroupLabel('group:k', deps);
+  assert.strictEqual(t.reason, 'unconfirmed');
+  assert.strictEqual(calls.del, 0);
+});
+
+test('#448 search shows open members → kept silently, confirm read never spent', () => {
+  const { calls, deps } = stubs({ search: [{ number: 9 }], confirm: [] });
+  const t = teardownSpentGroupLabel('group:k', deps);
+  assert.strictEqual(t.reason, 'open');
+  assert.strictEqual(calls.confirm, 0);
+  assert.strictEqual(calls.del, 0);
+  assert.strictEqual(keptReason('group:k', t), '');
+});
+
+test('#448 search read fails → kept as unread', () => {
+  const { calls, deps } = stubs({ search: null, confirm: [] });
+  assert.strictEqual(teardownSpentGroupLabel('group:k', deps).reason, 'unread');
+  assert.strictEqual(calls.confirm + calls.del, 0);
+});
+
+test('#448 pre-read search membership (doctor path) still gets confirmed', () => {
+  const { calls, deps } = stubs({ confirm: [12] });
+  const t = teardownSpentGroupLabel('group:k', { ...deps, searchOpen: [] });
+  assert.strictEqual(t.reason, 'disagree');
+  assert.strictEqual(calls.confirm, 1);
+  assert.strictEqual(calls.del, 0);
+});
+
+test('#448 delete itself fails → reported, not claimed', () => {
+  const { deps } = stubs({ search: [], confirm: [], del: { ok: false, stderr: 'HTTP 403' } });
+  const t = teardownSpentGroupLabel('group:k', deps);
+  assert.strictEqual(t.deleted, false);
+  assert.strictEqual(t.error, 'HTTP 403');
+});
+
+test('#448 not a group label → never deleted', () => {
+  const { calls, deps } = stubs({ search: [], confirm: [] });
+  assert.strictEqual(teardownSpentGroupLabel('in-progress', deps).action, 'keep');
+  assert.strictEqual(calls.del, 0);
+});
+
+test('#448 spentLabelDecision is total over the input space', () => {
+  assert.strictEqual(spentLabelDecision([], []).action, 'delete');
+  for (const [s, c] of [[null, []], [[1], []], [[], null], [[], [3]], [[], undefined]]) {
+    assert.strictEqual(spentLabelDecision(s, c).action, 'keep', JSON.stringify([s, c]));
+  }
+});
