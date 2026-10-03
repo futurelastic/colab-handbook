@@ -57,6 +57,7 @@ const claimComments = require('./lib/claim-comments');
 const machine = require('./lib/machine');
 const targetSync = require('./lib/ship-target-sync');
 const shipBatch = require('./lib/ship-batch');
+const conflictMarkers = require('./lib/conflict-markers');
 const docsOnly = require('./lib/docs-only');
 const cureDiff = require('./lib/cure-diff');
 const codeowners = require('./lib/codeowners');
@@ -4872,6 +4873,19 @@ function worktreeSubdir(config) { return config.worktreeSubdir || '.worktrees'; 
 // slow-but-working. Overridable per-machine/per-repo for a legitimately slow teardown.
 const TEARDOWN_TIMEOUT_MS = Number(process.env.COLAB_TEARDOWN_TIMEOUT_MS) || 5 * 60 * 1000;
 
+/**
+ * #436: after a pre-ship hook exits 0, which of the paths it was handed still carry conflict markers
+ * in the index — i.e. would be committed with `<<<<<<<` in them. Untrimmed git output, so the line
+ * numbers in the message are the file's own.
+ */
+function stagedConflictMarkers(dir, paths) {
+  const rawGit = (args, cwd) => {
+    const r = spawnSync('git', args, { cwd, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
+    return { ok: r.status === 0, stdout: r.stdout || '' };
+  };
+  return conflictMarkers.stagedMarkerPaths(rawGit, dir, paths);
+}
+
 function runHook(repoAbs, name, ctx) {
   const hook = path.join(repoAbs, '.colab', 'hooks', name);
   try {
@@ -9439,8 +9453,12 @@ for is built in its place, so the survivors of a decline can batch without landi
 A member that conflicts with the members already in is dropped to the next batch; the rest go on —
 unless every conflicting path is generated (defaults + project.yml generated:): then .colab/hooks/pre-ship
 regenerates them on the combined head and the member stays in (#387). No hook, or a failing one → dropped.
---dry builds the batch locally and prints it, pushing nothing. Consumer CI must opt in: add
-'ship-batch/**' to a CI workflow's push: branches:.
+A hook that exits 0 but leaves a <<<<<<< / >>>>>>> line staged in a path it was handed counts as failing (#436).
+Resuming a staged batch: a branch you name that the staged batch does not carry (over the cap, dropped
+at build, added since) is NOT landed with it — the command names both lists and says so (#415).
+--dry pushes, deletes, lands, comments and releases nothing on EVERY path (#415): a fresh batch is built
+locally and printed; a staged green batch prints what would land (members, combined run, target sha).
+Consumer CI must opt in: add 'ship-batch/**' to a CI workflow's push: branches:.
 
 B3 KEEPS the branch by default. Deleting refs from a shared remote is not something this command
 does unasked, however certain it is that the content landed: reporting is safe and reversible,
@@ -11849,6 +11867,14 @@ function cmdShip(argv) {
     }
     if (hasPreShip) {
       const hk = runHook(repoAbs, 'pre-ship', { wtPath: branchDir, name: sess.name || sess.branch, branch: sess.branch, ports: [], trunk, base: target, issues: sess.issues });
+      // #436: exit 0 is the hook's claim; the index is the proof. Markers left in a path it was
+      // handed make it a failing hook, checked BEFORE the commit so nothing carrying them is pushed.
+      const markers = hk.ran && hk.ok ? stagedConflictMarkers(branchDir, uf) : [];
+      if (markers.length) {
+        git.git(['merge', '--abort'], branchDir); cleanupEphemeral();
+        process.stderr.write(`✗ B0: pre-ship hook exited 0 but left conflict markers staged in ${conflictMarkers.describe(markers)} — treated as a failing hook. Nothing pushed.\n`);
+        return 1;
+      }
       const committed = hk.ran && hk.ok && git.git(['commit', '--no-edit'], branchDir).ok;
       if (!committed) {
         git.git(['merge', '--abort'], branchDir); cleanupEphemeral();
@@ -12493,7 +12519,9 @@ function cmdShipBatch(opts) {
   const batchRefs = (lsBatch.ok ? lsBatch.stdout.split('\n') : []).map((l) => l.split('\t'))
     .map(([sha, ref]) => ({ sha: (sha || '').trim(), parsed: shipBatch.parseBatchRef((ref || '').trim()) }))
     .filter((x) => x.sha && x.parsed);
+  // #415: every write on the resume path goes through here or shipBatchLand — under --dry, neither writes.
   const deleteRef = (ref) => {
+    if (opts.dry) { print(`  [dry] would delete ${remote}/${ref}`); return true; }
     const d = git.git(['push', remote, '--delete', ref], repoAbs);
     if (!d.ok) warn(`could not delete ${remote}/${ref}: ${git.gitFailureLine(d.stderr)} — delete it by hand`);
     return d.ok;
@@ -12523,6 +12551,14 @@ function cmdShipBatch(opts) {
       const heads = inBatch.map((m) => ({ ...m, now: git.branchRefs(repoAbs, m.branch, remote).remoteSha }));
       const matches = heads.length >= 2 && heads.every((m) => m.now && m.now.startsWith(m.sha));
       existing = { ref: atBase.parsed.ref, base7: atBase.parsed.base7, sha: atBase.sha, members: inBatch, matches };
+      // #415: the command line and the staged batch can name different sets. A requested branch the
+      // staged batch does not carry (over the cap, dropped at build, or added since) does NOT ride
+      // along — say so, naming both lists, instead of resuming as if the two were the same.
+      const notStaged = shipBatch.notStaged(members, inBatch);
+      if (notStaged.length) {
+        print(`  ! ${atBase.parsed.ref} was staged with ${inBatch.map((m) => m.branch).join(', ')}; this command named ${members.join(', ')}.`);
+        print(`    NOT in the staged batch, so it does not land with it: ${notStaged.join(', ')} — ship it after this batch (next batch, or colab ship --branch <b>).`);
+      }
     }
   }
   const verdict = existing && existing.matches ? shipBatch.combinedVerdict(git.ghRunsForRef(repoAbs, existing.ref, existing.sha)) : null;
@@ -12549,7 +12585,7 @@ function cmdShipBatch(opts) {
     return 4;
   }
   if (step.step === 'red-serial') {
-    print(`✗ ship-batch: the combined run is red again after its one re-run (${verdict.why}) — nothing landed; ${existing.ref} deleted.`);
+    print(`✗ ship-batch: the combined run is red again after its one re-run (${verdict.why}) — nothing landed; ${existing.ref} ${opts.dry ? 'would be deleted [DRY RUN]' : 'deleted'}.`);
     deleteRef(existing.ref);
     print(shipBatch.serialLine(existing.members.map((m) => m.branch)));
     return 4;
@@ -12616,8 +12652,13 @@ function cmdShipBatch(opts) {
           issues: (m.report && m.report.closeIssues) || [],
         });
         const left = hk.ran ? unmergedIn() : unmerged;
+        // #436: a hook that exits 0 and `git add`s a path still holding markers clears the unmerged
+        // state, so `left` reads empty — read the staged content itself before trusting it.
+        const markers = hk.ran && hk.ok && !left.length ? stagedConflictMarkers(dir, unmerged) : [];
         if (!hk.ran || !hk.ok || left.length) {
           why = `.colab/hooks/pre-ship could not regenerate ${unmerged.join(', ')} on the combined head${left.length && hk.ok ? ` (still unmerged: ${left.join(', ')})` : ''} — next batch`;
+        } else if (markers.length) {
+          why = `.colab/hooks/pre-ship exited 0 but left conflict markers staged in ${conflictMarkers.describe(markers)} on the combined head — treated as a failing hook, next batch`;
         } else regenerated = unmerged;
       }
       if (why) {
@@ -12684,6 +12725,14 @@ function cmdShipBatch(opts) {
  */
 function shipBatchLand(repoAbs, doc, trunk, remote, base, existing, verdict, opts) {
   const head = existing.sha;
+  // #415: a staged green batch reached under --dry is a read: what WOULD land, and nothing else —
+  // no fast-forward, no push, no ref delete, no hook, no worktree teardown, no claim, no comment.
+  if (opts.dry) {
+    print(`ship --batch ${shortRepo(repoAbs)} → ${trunk} @ ${shortSha(base)}  [DRY RUN]`);
+    print(`→ READY: would fast-forward ${trunk} ${shortSha(base)} → ${shortSha(head)} — ${existing.ref}, combined run ${(verdict.runIds || []).join(', ') || '(id unread)'} ${verdict.why || verdict.state}`);
+    print(`  would land ${existing.members.length} member(s), one squash each: ${existing.members.map((m) => m.branch).join(', ')}`);
+    return 0;
+  }
   const headBranch = git.git(['rev-parse', '--abbrev-ref', 'HEAD'], repoAbs).stdout;
   if (headBranch !== trunk || git.dirtyTracked(repoAbs)) {
     throw new UserError(`the main checkout is not on a clean ${trunk} ("${headBranch}"${git.dirtyTracked(repoAbs) ? ', dirty' : ''}) — the batch is green and waiting; fix the checkout and run this command again`);
