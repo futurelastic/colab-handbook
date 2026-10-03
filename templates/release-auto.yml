@@ -137,8 +137,11 @@ env:
 jobs:
   release:
     name: Cut, finalize, publish
-    # A red CI run on main is not a candidate; skip rather than refuse.
-    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
+    # No job-level `if:` here, on purpose (#435): a red CI run is gated in the first step below,
+    # so this run concludes success. A job-level `if:` would skip every job, GitHub would record
+    # the whole run as `skipped` at that main sha, and `colab ship` reads any finished run that is
+    # neither success nor cancelled as "not green". Re-run CI green on that sha and the skipped
+    # Release (auto) row would still sit beside it, refusing every ship until main moves.
     runs-on: ubuntu-latest # EDIT: self-hosted label if this repo needs one.
     permissions:
       contents: write # push the tags (and, with promotion: main-loop, the promotion), publish the GitHub Release
@@ -164,6 +167,23 @@ jobs:
           # Left on deliberately: `colab release cut` / `finalize` push their tag over the
           # checkout's origin. The token is this job's, scoped by `permissions:` above.
           persist-credentials: true
+
+      # A red CI run on main is not a candidate. Gated here rather than by a job-level `if:` so
+      # this run concludes success, never `skipped` (#435; the comment on the job above).
+      - name: Gate on the triggering CI run
+        id: gate
+        env:
+          EVENT: ${{ github.event_name }}
+          CONCLUSION: ${{ github.event.workflow_run.conclusion }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT" = "workflow_run" ] && [ "$CONCLUSION" != "success" ]; then
+            echo "cut=false" >> "$GITHUB_OUTPUT"
+            echo "CI concluded \`$CONCLUSION\` at $HEAD_SHA — nothing to cut." | tee -a "$GITHUB_STEP_SUMMARY"
+          else
+            echo "cut=true" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Fetch the colab CLI
         run: |
@@ -219,7 +239,7 @@ jobs:
       # right after this run promoted: that head has no CI yet — the dispatched run cuts it.
       - name: Cut a candidate (colab release cut --auto)
         id: cut
-        if: (github.event_name == 'workflow_run' || github.event_name == 'workflow_dispatch' || github.event_name == 'schedule') && steps.promote.outputs.promoted != 'true'
+        if: steps.gate.outputs.cut == 'true' && (github.event_name == 'workflow_run' || github.event_name == 'workflow_dispatch' || github.event_name == 'schedule') && steps.promote.outputs.promoted != 'true'
         run: |
           set -uo pipefail
           OUT="$RUNNER_TEMP/cut.json"
