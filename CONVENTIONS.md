@@ -1532,6 +1532,9 @@ than guessed.
   one of them succeed? `colab ship` asks it that way. Both halves are load-bearing: a
   sibling that is merely still in progress has not passed either (#307), so a fast
   workflow finishing green must never answer for a slow one that has not run yet.
+  Only runs of workflows the repo owns count (#451): a run with `event: dynamic`
+  (Dependabot Updates and GitHub's other dynamic workflows) never executes the sha, so it is
+  dropped before the verdict and named in its detail; if nothing is left, the sha reads `none`.
   That is the half of the question about what is merged **into**; the branch's own run
   is the other half — see *Branch CI*, below.
 - **That resolves a FALSE red — a real one has two different doors, one of them

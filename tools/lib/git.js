@@ -865,7 +865,9 @@ function ghRunsForCommit(repo, branch, sha, limit = 10) {
   const r = run('gh', ['run', 'list', '--branch', branch, '-L', String(limit),
     // workflowName is additive (#338): `colab release cut`'s full-suite condition groups the rows by
     // workflow — a workflow whose only run at the sha was cancelled never ran its suite.
-    '--json', 'headSha,status,conclusion,createdAt,databaseId,workflowName'], { cwd: repo });
+    // event is additive (#451): summarizeRunsForCommit drops `dynamic` rows (workflows the repo
+    // does not own) before it computes a verdict, and can only do that if the row says so.
+    '--json', 'headSha,status,conclusion,createdAt,databaseId,workflowName,event'], { cwd: repo });
   if (!r.ok) return null;
   let runs;
   try { runs = JSON.parse(r.stdout); } catch (_) { return null; }
@@ -956,9 +958,43 @@ function ghRunsSince(repo, branch, sinceDay, limit = 1000) {
   return { runs, truncated: runs.length >= limit };
 }
 
-/** ghRunForCommit's pick, over rows already read (null in -> null out). */
-function summarizeRunsForCommit(forSha, sha) {
-  if (forSha === null) return null;
+/**
+ * #451: a run whose `event` is `dynamic` comes from a workflow the repo does not own — GitHub's
+ * dynamic workflows (Dependabot Updates, code scanning default setup, …), which never execute the
+ * code at the sha they are filed against. Such a row is not evidence about that sha, so it is
+ * dropped before any verdict is computed. A row with no `event` field (an older read, a hand-built
+ * fixture) is kept: absence of the field never excludes anything.
+ */
+function isRepoOwnedRun(x) {
+  return !(x && x.event === 'dynamic');
+}
+
+/** The dropped rows, in the compact shape a verdict detail names them by. */
+function excludedRunSummary(rows) {
+  return rows.map((x) => ({
+    workflowName: x.workflowName || null, status: x.status || null,
+    conclusion: x.conclusion || null, databaseId: x.databaseId || null,
+  }));
+}
+
+/**
+ * ghRunForCommit's pick, over rows already read (null in -> null out).
+ *
+ * #451: rows from workflows the repo does not own (`event: dynamic`) are dropped first; when any
+ * were, the result carries an additive `excluded` list naming them, so a caller can say what it
+ * did not count. When nothing is left the sha reads `none`, exactly as if no run had existed —
+ * a repo-owned red is never affected, since only `dynamic` rows are dropped.
+ */
+function summarizeRunsForCommit(allForSha, sha) {
+  if (allForSha === null) return null;
+  const dropped = allForSha.filter((x) => !isRepoOwnedRun(x));
+  const forSha = dropped.length ? allForSha.filter(isRepoOwnedRun) : allForSha;
+  const extra = dropped.length ? { excluded: excludedRunSummary(dropped) } : {};
+  const r = summarizeRepoOwnedRuns(forSha, sha);
+  return { ...r, ...extra };
+}
+
+function summarizeRepoOwnedRuns(forSha, sha) {
   if (forSha.length === 0) return { status: 'none', conclusion: null, sha, createdAt: null, databaseId: null, runCount: 0 };
 
   // runCount (#176) is additive: how many sibling workflow rows exist at this sha, so a caller can
@@ -1070,7 +1106,7 @@ module.exports = {
   worktreeList, worktreeListDetailed, resolveWorktreePathForBranch, gitFailureLine,
   dirtyTracked, dirtyUntracked, dirtyAny,
   ghAvailable, ghState, ghIssueEdit, ghListLabels, ghOpenIssueNumbersByLabel, ghAssignedIssues,
-  ghCurrentLogin, ghIssueView, ghIssueComment, ghRunForSha, ghRunForCommit, ghRunsForCommit, ghRunsForRef, ghRunsAtCommit, ghRunForCommitAnyRef, commitTimeMs, ghRunsSince, summarizeRunsForCommit,
+  ghCurrentLogin, ghIssueView, ghIssueComment, ghRunForSha, ghRunForCommit, ghRunsForCommit, ghRunsForRef, ghRunsAtCommit, ghRunForCommitAnyRef, commitTimeMs, ghRunsSince, summarizeRunsForCommit, isRepoOwnedRun,
   ghRunJobCount, ghRunJobs,
   ghIssueListByLabel, ghLabelDelete, ghLabelCreate, ghListLabelsDetailed, ghLabelEditDescription,
   ghApi, isGraphqlRateLimit, ghIssueRelease, ghClaimHolder, ghIssueLabelEvents, ghIssueLabelActors,
