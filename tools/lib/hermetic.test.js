@@ -93,3 +93,40 @@ test('classify: the four verdicts, and a red normal run outranks everything', ()
   assert.strictEqual(h.classify({ skipped: true, normalOk: false, hermeticOk: false }), 'red');
   assert.strictEqual(h.classify({ skipped: false, normalOk: false, hermeticOk: true }), 'red');
 });
+
+test('toolchainPins (#447): unset + real dir exists → pinned to the REAL home; set or missing → not pinned', () => {
+  const dirs = new Set(['/Users/real/.rustup', '/Users/real/.cargo', '/Users/real/.pyenv', '/xdg/data/mise', '/Users/real/go']);
+  const exists = (d) => dirs.has(d);
+  const env = { HOME: '/Users/real/', PYENV_ROOT: '/opt/pyenv', XDG_DATA_HOME: '/xdg/data' };
+  const pins = h.toolchainPins(env, exists);
+  const byName = Object.fromEntries(pins.map((p) => [p.name, p.value]));
+  assert.deepStrictEqual(byName, {
+    RUSTUP_HOME: '/Users/real/.rustup',
+    CARGO_HOME: '/Users/real/.cargo',
+    MISE_DATA_DIR: '/xdg/data/mise', // resolved against the CALLER's XDG_DATA_HOME, not the fresh one
+    GOPATH: '/Users/real/go',
+  });
+  assert.ok(!('PYENV_ROOT' in byName), 'a variable the caller already set is never re-pinned');
+  assert.deepStrictEqual(h.toolchainPins({ HOME: '/nowhere' }, () => false), [], 'nothing is invented');
+  assert.deepStrictEqual(h.toolchainPins({}, () => true), [], 'no HOME → nothing to resolve against');
+});
+
+test('hermeticEnv with pins (#447): pins land in the env, survive the XDG re-point, and are reported', () => {
+  const env = { HOME: '/Users/real', PATH: '/bin', XDG_DATA_HOME: '/Users/real/.local/share', GH_TOKEN: 't' };
+  const pins = [{ name: 'RUSTUP_HOME', value: '/Users/real/.rustup' }, { name: 'MISE_DATA_DIR', value: '/Users/real/.local/share/mise' }];
+  const r = h.hermeticEnv(env, '/tmp/fresh', [], { pins });
+  assert.strictEqual(r.env.HOME, '/tmp/fresh');
+  assert.strictEqual(r.env.RUSTUP_HOME, '/Users/real/.rustup');
+  assert.strictEqual(r.env.MISE_DATA_DIR, '/Users/real/.local/share/mise');
+  assert.strictEqual(r.env.XDG_DATA_HOME, '/tmp/fresh/.local/share');
+  assert.deepStrictEqual(r.pinned, ['RUSTUP_HOME', 'MISE_DATA_DIR']);
+  assert.deepStrictEqual(h.hermeticEnv(env, '/tmp/fresh').pinned, [], 'no pins unless asked — the pure default stays strict');
+});
+
+test('looksLikeToolchainMiss (#447): the rustup download shape matches; an ordinary failure does not', () => {
+  assert.ok(h.looksLikeToolchainMiss("info: syncing channel updates for 'stable-aarch64-apple-darwin'\nerror: could not download file from 'https://static.rust-lang.org/dist/channel-rust-stable.toml.sha256'"));
+  assert.ok(h.looksLikeToolchainMiss('pyenv: version `3.12.4\' is not installed (set by /repo/.python-version)'));
+  assert.ok(h.looksLikeToolchainMiss('No version is set for command python'));
+  assert.ok(!h.looksLikeToolchainMiss('not ok 1 - reads home config'));
+  assert.ok(!h.looksLikeToolchainMiss(''));
+});
