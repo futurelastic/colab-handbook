@@ -161,3 +161,20 @@ test('#451 a repo-owned red still blocks, Dependabot rows or not', () => {
   assert.strictEqual(ci.class, 'human-gated');
   assert.match(ci.detail, /conclusion=failure/);
 });
+
+// --- #461: a superseded attempt of the same workflow no longer vetoes its later success ----------
+
+test('#461 the measured case: release skipped twice then success at trunk → green, superseded runs named', () => {
+  const fx = fixture(60);
+  const rows = [
+    { headSha: fx.sha, status: 'completed', conclusion: 'success', createdAt: '2026-10-03T12:00:00Z', databaseId: 30, workflowName: 'release', event: 'workflow_run' },
+    { headSha: fx.sha, status: 'completed', conclusion: 'success', createdAt: '2026-10-03T11:55:00Z', databaseId: 29, workflowName: 'CI', event: 'push' },
+    { headSha: fx.sha, status: 'completed', conclusion: 'skipped', createdAt: '2026-10-03T11:00:00Z', databaseId: 20, workflowName: 'release', event: 'workflow_run' },
+    { headSha: fx.sha, status: 'completed', conclusion: 'skipped', createdAt: '2026-10-03T10:00:00Z', databaseId: 10, workflowName: 'release', event: 'workflow_run' },
+  ];
+  fx.setRows(rows, rows);
+  const ci = trunkCiRow(fx);
+  assert.strictEqual(ci.ok, true, JSON.stringify(ci));
+  assert.doesNotMatch(ci.detail, /conclusion=skipped/);
+  assert.match(ci.detail, /2 runs at main@\w+: all success — set aside 2 superseded runs \(a newer run of the same workflow decides, #461\): release \(skipped, run 20\), release \(skipped, run 10\)/);
+});

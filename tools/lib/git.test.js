@@ -566,6 +566,114 @@ test('#451: no dynamic row — the shape is unchanged, no `excluded` key appears
   assert.strictEqual(git.summarizeRunsForCommit(null, 'a'), null);
 });
 
+// --- #461: each workflow is judged by its NEWEST run at the sha -------------------------------
+// Measured shape: a workflow_run-triggered release workflow fired once per CI attempt at one trunk
+// sha — two `skipped` runs for the two red attempts, then a `success` for the green third. The
+// stale skipped rows held the sha not-green forever.
+
+const S461 = 'a';
+function wf(name, conclusion, createdAt, databaseId, status = 'completed') {
+  return { headSha: S461, status, conclusion, createdAt, databaseId, workflowName: name, event: 'workflow_run' };
+}
+
+test('#461: same workflow skipped, skipped, then success at one sha reads green', () => {
+  const rows = [ // gh newest-first
+    wf('release', 'success', '2026-10-03T12:00:00Z', 30),
+    wf('ci', 'success', '2026-10-03T11:50:00Z', 29),
+    wf('release', 'skipped', '2026-10-03T11:00:00Z', 20),
+    wf('release', 'skipped', '2026-10-03T10:00:00Z', 10),
+  ];
+  const r = git.summarizeRunsForCommit(rows, S461);
+  assert.strictEqual(r.status, 'completed');
+  assert.strictEqual(r.conclusion, 'success');
+  assert.strictEqual(r.runCount, 2, 'runCount counts the judged heads, not the superseded attempts');
+  assert.deepStrictEqual(r.superseded.map((x) => x.databaseId), [20, 10]);
+});
+
+test('#461: order-independent — the superseded rows listed first still lose to the newer success', () => {
+  const r = git.summarizeRunsForCommit([
+    wf('release', 'skipped', '2026-10-03T10:00:00Z', 10),
+    wf('release', 'success', '2026-10-03T12:00:00Z', 30),
+  ], S461);
+  assert.strictEqual(r.conclusion, 'success');
+  assert.strictEqual(r.databaseId, 30);
+});
+
+test('#461: a DIFFERENT workflow failing beside a success still reads not-green', () => {
+  const r = git.summarizeRunsForCommit([
+    wf('release', 'success', '2026-10-03T12:00:00Z', 30),
+    wf('ci', 'failure', '2026-10-03T10:00:00Z', 10),
+  ], S461);
+  assert.strictEqual(r.conclusion, 'failure');
+  assert.ok(!('superseded' in r), 'nothing superseded across workflows');
+});
+
+test('#461: a NEWER failure of the same workflow vetoes an older success — newest wins both ways', () => {
+  const r = git.summarizeRunsForCommit([
+    wf('ci', 'failure', '2026-10-03T12:00:00Z', 30),
+    wf('ci', 'success', '2026-10-03T10:00:00Z', 10),
+  ], S461);
+  assert.strictEqual(r.conclusion, 'failure');
+});
+
+test('#461 + #307: a newer run of the same workflow still in flight blocks green', () => {
+  const r = git.summarizeRunsForCommit([
+    wf('ci', null, '2026-10-03T12:00:00Z', 30, 'in_progress'),
+    wf('ci', 'success', '2026-10-03T10:00:00Z', 10),
+  ], S461);
+  assert.strictEqual(r.status, 'in_progress');
+});
+
+test('#461 + #92: a NEWER cancelled run of the same workflow never supersedes its success', () => {
+  const r = git.summarizeRunsForCommit([
+    wf('ci', 'cancelled', '2026-10-03T12:00:00Z', 30),
+    wf('ci', 'success', '2026-10-03T10:00:00Z', 10),
+  ], S461);
+  assert.strictEqual(r.conclusion, 'success');
+});
+
+test('#461: every run of a workflow cancelled — still not green, as before', () => {
+  const r = git.summarizeRunsForCommit([
+    wf('ci', 'cancelled', '2026-10-03T12:00:00Z', 30),
+    wf('ci', 'cancelled', '2026-10-03T10:00:00Z', 10),
+  ], S461);
+  assert.notStrictEqual(r.conclusion, 'success');
+});
+
+test('#461: no createdAt — databaseId orders; neither — gh newest-first order decides', () => {
+  const byId = git.summarizeRunsForCommit([
+    { headSha: S461, status: 'completed', conclusion: 'skipped', databaseId: 10, workflowName: 'release' },
+    { headSha: S461, status: 'completed', conclusion: 'success', databaseId: 30, workflowName: 'release' },
+  ], S461);
+  assert.strictEqual(byId.conclusion, 'success');
+  const byOrder = git.summarizeRunsForCommit([
+    { headSha: S461, status: 'completed', conclusion: 'success', workflowName: 'release' },
+    { headSha: S461, status: 'completed', conclusion: 'skipped', workflowName: 'release' },
+  ], S461);
+  assert.strictEqual(byOrder.conclusion, 'success');
+});
+
+test('#461: rows with no workflowName are never collapsed — the pre-#461 verdict is unchanged', () => {
+  const r = git.summarizeRunsForCommit([
+    { headSha: S461, status: 'completed', conclusion: 'success', createdAt: '2026-10-03T12:00:00Z' },
+    { headSha: S461, status: 'completed', conclusion: 'skipped', createdAt: '2026-10-03T10:00:00Z' },
+  ], S461);
+  assert.strictEqual(r.conclusion, 'skipped');
+  assert.strictEqual(r.runCount, 2);
+  assert.ok(!('superseded' in r));
+});
+
+test('#461 + #451: a dynamic row is excluded before the per-workflow reduction', () => {
+  const r = git.summarizeRunsForCommit([
+    { ...wf('Dependabot Updates', 'failure', '2026-10-03T12:00:00Z', 40), event: 'dynamic' },
+    wf('release', 'success', '2026-10-03T12:00:00Z', 30),
+    wf('release', 'skipped', '2026-10-03T10:00:00Z', 10),
+  ], S461);
+  assert.strictEqual(r.conclusion, 'success');
+  assert.strictEqual(r.excluded.length, 1);
+  assert.strictEqual(r.superseded.length, 1);
+});
+
 // --- ghRunForCommit (#293) — the same verdict, for a sha that is NOT necessarily the branch's
 // current remote head (the merge-base a feature branch was cut from, almost always trunk history).
 

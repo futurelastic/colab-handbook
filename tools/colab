@@ -10179,7 +10179,19 @@ function shipCiCheck(repoAbs, gh, target, trunk, grantThunk, cureThunk) {
  */
 function classifyCiRun(repoAbs, run, at) {
   const v = classifyCiRunRaw(repoAbs, run, at);
-  return { ...v, detail: v.detail + excludedRunsNote(run) };
+  return { ...v, detail: v.detail + excludedRunsNote(run) + supersededRunsNote(run) };
+}
+
+/**
+ * #461: earlier runs of the same workflow at this sha that a newer run of it superseded — set aside
+ * by git.summarizeRunsForCommit before the verdict, and named here so the reader sees what the
+ * verdict did not judge. '' when none.
+ */
+function supersededRunsNote(run) {
+  const sup = run && Array.isArray(run.superseded) ? run.superseded : [];
+  if (!sup.length) return '';
+  const names = sup.map((x) => `${x.workflowName || 'unnamed'} (${x.conclusion || x.status || '?'}${x.databaseId ? `, run ${x.databaseId}` : ''})`);
+  return ` — set aside ${sup.length} superseded run${sup.length === 1 ? '' : 's'} (a newer run of the same workflow decides, #461): ${names.join(', ')}`;
 }
 
 /**
