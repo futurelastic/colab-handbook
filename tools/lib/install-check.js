@@ -25,6 +25,7 @@ const fs = require('fs');
 const path = require('path');
 const { execFileSync } = require('child_process');
 const stamp = require('./stamp');
+const notifyEndpoint = require('./notify-endpoint');
 
 const OK = 'ok';
 const WARN = 'warn';
@@ -218,6 +219,23 @@ function checkHooks({ root, colabHome, home, env }) {
   return rows;
 }
 
+/**
+ * notifyUrl against a DECLARED local observer (#414). Silent unless something says an observer runs
+ * here: a machine with no <COLAB_HOME>/notify-endpoint gets no row at all — unset is the right default
+ * there, and a ⚠ on every such machine would teach people to ignore the row. ⚠ rather than ✗: the
+ * key is something never set up, not something installed that went stale.
+ */
+function checkNotify({ colabHome }) {
+  let cfg = {};
+  try { cfg = JSON.parse(readText(path.join(colabHome, 'config.json')) || '{}'); } catch (_) { /* reported by colab itself */ }
+  const st = notifyEndpoint.status(cfg, colabHome);
+  if (st.state === 'unset') return [];
+  if (st.state === 'set' && !st.declared) {
+    return [{ area: 'notify', severity: OK, text: `notifyUrl = ${st.url}` }];
+  }
+  return [{ area: 'notify', severity: WARN, text: notifyEndpoint.healthLine(st) }];
+}
+
 function runChecks(opts) {
   const o = { env: process.env, ...opts };
   return [
@@ -226,6 +244,7 @@ function runChecks(opts) {
     checkState(o),
     ...checkFleet(o),
     ...checkHooks(o),
+    ...checkNotify(o),
   ];
 }
 
@@ -255,5 +274,5 @@ if (require.main === module) {
 
 module.exports = {
   OK, WARN, FAIL,
-  dispatchedCommands, checkLink, checkFrozen, checkState, checkFleet, checkHooks, runChecks, render,
+  dispatchedCommands, checkLink, checkFrozen, checkState, checkFleet, checkHooks, checkNotify, runChecks, render,
 };

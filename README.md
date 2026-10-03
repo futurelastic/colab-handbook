@@ -187,6 +187,7 @@ you want.
 | `--hooks` | Point this clone's git at `.githooks/`, whose `pre-commit` runs every check in `pre-commit.d/` — a gitleaks secret scan, and an identity scan that needs a vocabulary you supply by path and keep outside every repo (see [`templates/README.md`](templates/README.md)). `core.hooksPath` lives in `.git/config`, so it is per-clone, per-machine, and never travels with the repo. |
 | `--fleet` | Seed `~/.colab/repos.txt` from `audit/repos.txt`, only if it is absent. The seed is format notes and commented placeholders — it registers **nothing**; `colab register <path>` (step 3) is what fills it. That list stays machine-local on purpose: it names your private repos, and this repo is public. |
 | `--all` | `--tools --hooks --fleet`. |
+| `--notify-url <url>` | Seed `notifyUrl` in `~/.colab/config.json` with a local observer's events URL, only when the key is absent — an existing value is never overwritten. Without the flag, `--tools` seeds it from `~/.colab/notify-endpoint` when a local observer declared its URL there, and otherwise prints that `notifyUrl` is unset and which events that drops. See [`tools/README.md`](tools/README.md#notifyurl--optional-event-push-off-by-default). |
 | `--dry` | Print what would happen, change nothing. Combines with all of the above. |
 | `--check` | **Read-only** health report on what an earlier install left behind — see *Checking an install* below. Takes no other flag; exit 1 on any ✗ row. |
 
@@ -246,8 +247,9 @@ A frozen copy never breaks — it gets **old**, and an old complete copy answers
 normally for every command it knows until something asks for one added after it
 was frozen. `--check` is the report nothing else gives: whether the frozen copy is
 behind the latest release, **which commands it does not dispatch**, whether the
-state file exists, whether anything is registered, and whether both pre-commit
-hooklets can actually run (gitleaks, and the identity vocabulary). ✗ means
+state file exists, whether anything is registered, whether both pre-commit
+hooklets can actually run (gitleaks, and the identity vocabulary), and whether
+`notifyUrl` is unset while a local observer declared an endpoint. ✗ means
 something installed here is stale or unusable; ⚠ means something was never set
 up, which may be deliberate. It never refreshes anything — re-freezing stays your
 call: `./install.sh --tools`.

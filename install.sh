@@ -12,6 +12,12 @@
 #   ./install.sh --fleet  ALSO seed ~/.colab/repos.txt from audit/repos.txt —
 #                         only when absent; an existing fleet list is never touched.
 #   ./install.sh --all    = --tools --hooks --fleet (the recommended first run).
+#   ./install.sh --notify-url <url>
+#                         seed notifyUrl in ~/.colab/config.json with a local observer's
+#                         events URL — only when the key is absent; never overwrites.
+#                         Without the flag, --tools seeds it from <COLAB_HOME>/notify-endpoint
+#                         when a local observer declared one there, and otherwise says
+#                         plainly that notifyUrl is unset and which events that drops.
 #   ./install.sh --dry    print what would happen; change nothing. Combines with
 #                         any of the above.
 #   ./install.sh --check  READ-ONLY health report of what an earlier install left
@@ -57,9 +63,15 @@ FROZEN_DIR="$COLAB_DIR/bin"
 FROZEN_BIN="$FROZEN_DIR/colab"
 FROZEN_STAMP="$FROZEN_DIR/STAMP"
 
-WITH_TOOLS=0; WITH_HOOKS=0; WITH_FLEET=0; DRY=0; CHECK=0
-for a in "$@"; do
+WITH_TOOLS=0; WITH_HOOKS=0; WITH_FLEET=0; DRY=0; CHECK=0; NOTIFY_URL=""; NOTIFY_FLAG=0
+NARGS=$#
+while [ $# -gt 0 ]; do
+  a="$1"; shift
   case "$a" in
+    --notify-url=*) NOTIFY_URL="${a#--notify-url=}"; NOTIFY_FLAG=1 ;;
+    --notify-url)
+      [ $# -gt 0 ] || { echo "--notify-url needs a URL" >&2; exit 2; }
+      NOTIFY_URL="$1"; NOTIFY_FLAG=1; shift ;;
     --check) CHECK=1 ;;
     --tools) WITH_TOOLS=1 ;;
     --hooks) WITH_HOOKS=1 ;;
@@ -76,7 +88,14 @@ for a in "$@"; do
 done
 # --check is a report about what an earlier run left behind. Combined with an install flag it would
 # report on a machine this same invocation is about to change — refuse rather than pick an order.
-if [ "$CHECK" = 1 ] && [ $# -gt 1 ]; then
+# Refuse a bad URL BEFORE anything is installed, not halfway through the run.
+if [ "$NOTIFY_FLAG" = 1 ]; then
+  case "$NOTIFY_URL" in
+    http://*|https://*|HTTP://*|HTTPS://*) ;;
+    *) echo "--notify-url must be an http(s) URL, got: '$NOTIFY_URL'" >&2; exit 2 ;;
+  esac
+fi
+if [ "$CHECK" = 1 ] && [ "$NARGS" -gt 1 ]; then
   echo "--check takes no other flag: it only reads. Run the install first, then ./install.sh --check" >&2
   exit 2
 fi
@@ -308,6 +327,27 @@ seed_state() {
   fi
 }
 
+# seed_notify — notifyUrl is optional and off by default (#36), but a machine that runs a local
+# observer depends on its pushes: some kinds (issue.merged, issue.closed, …) never reach the observer
+# any other way, and an unset key there is a silent outage (#414). The logic lives in
+# tools/lib/notify-endpoint.js so it is unit-tested; it seeds only an ABSENT key, from --notify-url or
+# the observer's own <COLAB_HOME>/notify-endpoint, and otherwise prints that the key is unset.
+seed_notify() {
+  echo "events → notifyUrl"
+  if ! have node; then
+    warn "node not found — notifyUrl was not checked or seeded."
+    return
+  fi
+  # POSIX only — no arrays: CI syntax-checks this file with `sh -n`, which is dash on Linux.
+  local dry=""
+  [ "$DRY" = 1 ] && dry="--dry"
+  if [ "$NOTIFY_FLAG" = 1 ]; then
+    node "$DIR/tools/lib/notify-endpoint.js" seed --colab-home "$COLAB_DIR" --url "$NOTIFY_URL" $dry || exit $?
+  else
+    node "$DIR/tools/lib/notify-endpoint.js" seed --colab-home "$COLAB_DIR" $dry || exit $?
+  fi
+}
+
 echo "== colab-handbook install ($([ "$DRY" = 1 ] && echo dry-run || echo apply)) =="
 
 preflight
@@ -351,8 +391,11 @@ if [ "$WITH_TOOLS" = 1 ]; then
   esac
   freeze_cli
   seed_state
+  seed_notify
 else
   echo "tools: skipped (pass --tools to symlink colab onto your PATH + freeze a copy for services)"
+  # An explicit --notify-url is a request in its own right; honour it without --tools.
+  [ "$NOTIFY_FLAG" = 1 ] && seed_notify
 fi
 
 # --- optional: git hooks in THIS clone ---

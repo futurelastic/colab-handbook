@@ -659,6 +659,22 @@ the timestamp from *within a tick* to *the second it happened*, and records whic
 Unset, none of this exists: `notify()` returns before it can resolve a host, and the test suite
 asserts that no process is spawned for any action.
 
+**Unset is right on a machine with no observer — and a silent outage on one that has one (#414).**
+`issue.merged`, `issue.closed`, `readiness.marked` and `gate.recorded` reach an observer only by
+push. Measured on two machines running the same observer: the one configured by hand recorded 2 292
+`issue.merged` events; the one set up a month later with `install.sh` recorded 0, and nothing said
+so. So an observer announces itself, and colab reads the announcement instead of guessing a port:
+
+- **`<COLAB_HOME>/notify-endpoint`** — written by the observer, never by colab: its events URL on
+  the first non-comment line (`#` starts a comment).
+- **`install.sh --tools`** seeds `notifyUrl` from that file when the key is absent;
+  **`install.sh --notify-url <url>`** seeds it from the flag (the flag wins). An existing value is
+  never overwritten. With nothing to seed from, install prints that `notifyUrl` is unset and which
+  events that drops.
+- **`colab doctor`** and **`install.sh --check`** report `notifyUrl: unset` when the file exists and
+  the key does not (and a note when the two disagree). No file, no line: silence stays the default
+  for a machine with no observer. Logic: `lib/notify-endpoint.js`.
+
 **Two senses of the word "journal", and they are not the same thing.** Whatever a `notifyUrl`
 receiver keeps on its own side is *its* record: remote, someone else's, and possibly empty, since
 delivery here is undependable by design. The `journal` key below is *local*: a file on this machine,

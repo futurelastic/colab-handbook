@@ -22,6 +22,7 @@ const squash = require('./lib/squash');
 const procs = require('./lib/procs');
 const landed = require('./lib/landed');
 const notify = require('./lib/notify');
+const notifyEndpoint = require('./lib/notify-endpoint'); // #414
 const journal = require('./lib/journal');
 const labels = require('./lib/labels');
 const records = require('./lib/records');
@@ -5713,6 +5714,11 @@ claims from.
     "contained in trunk" between releases BY CONSTRUCTION, which this heuristic would otherwise
     misread as spent and advise deleting, silently breaking GitOps deploys (#63).
 
+  - \`notifyUrl: unset\` is reported (read-only, never pruned, not part of the verdict) when a
+    local observer declared its events URL in <COLAB_HOME>/notify-endpoint and notifyUrl is not
+    set — that observer then receives no issue.merged / issue.closed / readiness.marked /
+    gate.recorded event (#414). No declared endpoint, no line: unset is the right default there.
+
 This exists because claims made without a worktree were never auto-healed before, and a
 real repo accumulated 17 stale same-day claims. Run \`colab doctor\` regularly; \`--prune\`
 in a cleanup cron.
@@ -6203,6 +6209,11 @@ function cmdDoctor(argv) {
     }
   }
 
+  // 10. notifyUrl against a DECLARED local observer (#414). Read-only, never pruned, never counted in
+  //     the verdict — it is configuration, not state drift. Silent on a machine with no
+  //     <COLAB_HOME>/notify-endpoint: unset is the right default where no observer runs.
+  report.notify = notifyEndpoint.status(config, state.COLAB_DIR);
+
   if (opts.json) { print(JSON.stringify(report, null, 2)); return 0; }
 
   const verb = opts.prune ? 'Pruned' : 'Found';
@@ -6406,6 +6417,11 @@ function cmdDoctor(argv) {
     print('  declare it so it stops reporting: add its port to `extraReserved` in ~/.colab/config.json,');
     print('  which also stops colab handing it to a worktree. A "cwd DELETED" line above is the real');
     print('  orphan and wants killing, not reserving.');
+  }
+  const notifyLine = notifyEndpoint.healthLine(report.notify);
+  if (notifyLine) {
+    print('');
+    print(notifyLine);
   }
   return 0;
 }
