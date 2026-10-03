@@ -3426,11 +3426,10 @@ spawn.** Two enforcement points, and neither may be mistaken for the other:
 
 `code-start` is not a third enforcement point — it is the reader that honours the offer.
 
-Measured on a downstream session orchestrator, 2026-09-05 — its ADR
-`docs/adr/1530-ship-lanes-reorg.md`, section 2 L5 and section 7 item 7:
-`group:cockpit-fidelity`, whose evidence line read "collide on CockpitView.tsx",
-held 6 open issues and 3+ live parallel branches; two overlapped on
-`src/console/CockpitView.tsx`, `src/i18n/messages/cockpit.ts` and `CLAUDE.md`, and one
+Measured on a downstream session orchestrator, 2026-09-05 — its own ADR on reorganising
+its ship lanes, section 2 L5 and section 7 item 7: one `group:` label, whose evidence line
+named a single view component as the collision, held 6 open issues and 3+ live parallel
+branches; two overlapped on that view component, its i18n message file and `CLAUDE.md`, and one
 carried **8 `chore(sync)` commits** pulling siblings' fixes ahead of their own trunk
 merge. They burned CI rebasing around each other and none converged. Nothing had read the
 label: the dashboard's `planShipOrder` never consulted it, and its pairwise conflict check

@@ -1219,7 +1219,7 @@ daemon: every run re-measures from git and GitHub, and the decision is `tools/li
 | `candidate-ready` | the final is a human act here: nothing tagged; `handoff` is the one command, also posted on the tracking issue | 0 |
 | `finalized` | an annotated `vX.Y.Z` is tagged on the candidate's commit and pushed, the tracking issue closed, and every issue the version carries told `Released in vX.Y.Z`; the `stable` channel is fast-forwarded to it (#445) (with `--dry`: would be) | 0 |
 
-**The per-candidate state contract** — stable; `futurelastic/hangar#125` reads it:
+**The per-candidate state contract** — stable; a downstream dashboard's release view reads it:
 
 - **Candidates** are annotated `vX.Y.Z-rc.N` tags on origin whose message's first line ends
   `(colab release cut)` and whose commit is on `origin/main`. The newest open one (highest version,

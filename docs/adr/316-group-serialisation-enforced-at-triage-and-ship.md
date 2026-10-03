@@ -8,10 +8,10 @@ happily offered each member as its own start candidate; `code-start` told a sess
 take the whole group but checked for an existing branch using *its own* issue number
 only; `code-ship` said nothing about groups at all.
 
-Measured on coding-dashboard, 2026-09-05 (that repo's ADR
-`docs/adr/1530-ship-lanes-reorg.md`, section 2 L5 and section 7 item 7):
-`group:cockpit-fidelity` held 6 open issues and 3+ live parallel branches. Two overlapped
-on `src/console/CockpitView.tsx`, `src/i18n/messages/cockpit.ts` and `CLAUDE.md`. One
+Measured on a downstream session orchestrator, 2026-09-05 (that repo's own ADR on
+reorganising its ship lanes, section 2 L5 and section 7 item 7): one `group:` label held
+6 open issues and 3+ live parallel branches. Two overlapped on a view component, its
+i18n message file and `CLAUDE.md`. One
 carried 8 `chore(sync)` commits pulling siblings' fixes ahead of their own trunk merge.
 They burned CI rebasing around each other and none converged.
 

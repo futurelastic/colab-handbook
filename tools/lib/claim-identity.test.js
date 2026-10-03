@@ -132,7 +132,7 @@ test('looksLikeSessionId: a real session URL, and a bare session_ token, both pa
 });
 
 test('looksLikeSessionId: a session NAME in the URL slot fails — the #306 live case', () => {
-  assert.strictEqual(ci.looksLikeSessionId('ops-coding-dashboard-1480'), false);
+  assert.strictEqual(ci.looksLikeSessionId('ops-example-orchestrator-1480'), false);
   assert.strictEqual(ci.looksLikeSessionId('colab-handbook-305-306'), false);
 });
 

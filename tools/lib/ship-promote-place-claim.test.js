@@ -205,7 +205,7 @@ test('#317: a ship whose session STRING does not match is still its own holder u
   // and ship presents a blank/other identity. The branch name deliberately carries no issue number,
   // for the same reason: this is the specimen, where ship and its own claim never met.
   const agent = { CLAUDE_PID: String(process.pid) };
-  const claimed = colab(fx, ['claim', '8', '--repo', fx.work, '--session', 'coding-dashboard-1545'], agent);
+  const claimed = colab(fx, ['claim', '8', '--repo', fx.work, '--session', 'example-orchestrator-1545'], agent);
   assert.strictEqual(claimed.code, 0, claimed.out + claimed.err);
   const key = fs.realpathSync(fx.work);
   assert.strictEqual(readState(fx).places[key].anchorProof, 'verified');
@@ -217,7 +217,7 @@ test('#317: a ship whose session STRING does not match is still its own holder u
     { ...agent, COLAB_SESSION: 'a-session-string-the-hold-does-not-carry' });
   assert.strictEqual(r.code, 0, r.out + r.err);
   assert.match(r.out, /already held by this session/);
-  assert.strictEqual(readState(fx).places[key].session, 'coding-dashboard-1545', 'not overwritten either');
+  assert.strictEqual(readState(fx).places[key].session, 'example-orchestrator-1545', 'not overwritten either');
 });
 
 test('ship proceeds when the only place record on the checkout is a DEAD holder (pid gone) — liveness is re-derived, not trusted', () => {

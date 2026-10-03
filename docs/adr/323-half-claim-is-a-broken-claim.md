@@ -13,7 +13,7 @@ filled that gap in opposite directions:
 
 - **`code-triage`** read "taken" from the `in-progress` label and live claims
   only. An assignee without the label read as **free**.
-- **The dashboard** (then `coding-dashboard`, now `futurelastic/hangar`) read an
+- **A downstream session dashboard** read an
   assignee without the label as a **real claim**. It has a deliberate test for
   this: "forgot to attach the label -> still a real claim, must not invite
   someone else in."
@@ -72,7 +72,7 @@ picking a winner between the two tools.
 - `colab claim` used to let a foreign assignee-only issue through to the
   tie-break. It now refuses it. That is stricter, never looser.
 - **Not done here:** the dashboard still reads an assignee alone as taken, in
-  `futurelastic/hangar`. That is compatible with C's "nobody starts", but it
+  its own repo. That is compatible with C's "nobody starts", but it
   still cannot show the half-claim as a repair finding, and its readiness
   overlay still has no state for it (#323 body). Changing it needs a
   cross-repo go-ahead.

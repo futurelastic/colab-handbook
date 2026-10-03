@@ -360,7 +360,7 @@ test('a claim minted with a wrong-SHAPE session still releases its own hold (#30
   // holds already stranded on disk by the live incident are cured too. Note `cmdRelease` takes no
   // --session flag at all: ownership is proved from the claim record, never from the ambient shell.
   const fx = fixture();
-  const claimed = colab(fx, ['claim', '907', '--repo', fx.work, '--session', 'ops-coding-dashboard-1480']);
+  const claimed = colab(fx, ['claim', '907', '--repo', fx.work, '--session', 'ops-example-orchestrator-1480']);
   assert.strictEqual(claimed.code, 0, claimed.err);
   assert.match(claimed.err, /does not look like a session URL/, 'warned at write time (#306)');
   assert.strictEqual(places(fx).length, 1);
