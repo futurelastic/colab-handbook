@@ -407,7 +407,10 @@ independent reasons not to automate it:
 
 **Moving a repo to the `AGENTS.md` shape — the graft step (#419).** Offer it whenever the
 audit reports `prose-in-claude-md` (it names the line ranges) or `no-agents-md`. It is an offer,
-not a precondition: both are warnings, and a repo migrates when its owner takes the step. Move
+not a precondition: both are warnings, and a repo migrates when its owner takes the step. **Never
+on a fork of an upstream** (a remote named `upstream`, or the repo says it tracks one): there
+the prose belongs to the upstream, both warnings are expected, and the block stays appended at
+the end of the upstream's `CLAUDE.md` (`CONVENTIONS.md` [§9, *A fork of an upstream*](../../CONVENTIONS.md#a-fork-of-an-upstream--a-repo-you-own-that-tracks-one-you-dont-449), #449). Move
 the prose, never the block:
 
 1. **Sort `CLAUDE.md`'s lines into two piles.** *Stays:* the `@AGENTS.md` import, this
