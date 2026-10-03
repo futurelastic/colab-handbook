@@ -46,8 +46,22 @@
  * section carrying its measured cost (parseMigrationSection). Every signal is written into the tag
  * message, so the reason for the bump is recorded mechanically.
  *
- * Never a final tag. Finalizing a candidate is the release skill's (#339), and a final is a human
- * act on every row where a tag reaches production.
+ * Never a final tag — with ONE exception, `deploy-tag-fast` (#446): there the operator granted a
+ * final on every green trunk head, so `--auto` tags `vX.Y.Z` directly (no candidate, no test period)
+ * and the release workflow deploys it in the same run. That branch adds five checks, all in the
+ * same closed vocabulary:
+ *
+ *   spacing              --auto only — finals at least release.final-spacing apart; inside the window
+ *                        the run is a NO-OP, and the first run after it tags main's head
+ *   already-final        replaces already-candidate — a head already carrying a final is a NO-OP
+ *   final-grant          the operator's recorded decision still resolves (release-policy.js
+ *                        finalGrantVerdict — the #441 reader, unchanged)
+ *   release-hold         no open issue carries the human veto label
+ *   migration-grant      no migration since the last final unless the version's tracking issue is
+ *                        granted one — otherwise a refusal whose `handoff` names the human command
+ *
+ * Elsewhere finalizing a candidate is the release skill's (#339), and a final is a human act on
+ * every row where a tag reaches production.
  */
 
 const migrationPaths = require('./migration-paths');
@@ -64,10 +78,22 @@ const BUMPS = Object.freeze(['patch', 'minor']);
 const RELEASE_BRANCH = 'main';
 
 const CONDITIONS = Object.freeze([
-  'release-policy', 'cadence', 'promotion', 'prerelease-trigger', 'version', 'already-candidate',
+  'release-policy', 'cadence', 'spacing', 'promotion', 'prerelease-trigger', 'version', 'already-candidate', 'already-final',
   ...releaseTag.PRE_TAG_CONDITIONS,
   'ci-green', 'full-suite', 'schema-additive', 'switch-dependencies',
+  'final-grant', 'release-hold', 'migration-grant',
 ]);
+
+/** #446: the conditions only route deploy-tag-fast reports. */
+const FAST_CONDITIONS = Object.freeze(['spacing', 'already-final', 'final-grant', 'release-hold', 'migration-grant']);
+
+/** #446: the label a human puts on an issue to veto a release — the same one release-finalize reads. */
+const HOLD_LABEL = 'release-hold';
+
+/** #446: is this policy the fast route, where `cut --auto` tags the final itself? */
+function isFastRoute(policy) {
+  return !!(policy && policy.effective && policy.effective.finalize === 'on-green-head');
+}
 
 /** The file a major's migration section is read from, at the candidate commit (#422). */
 const MIGRATION_FILE = 'MIGRATION.md';
@@ -390,6 +416,45 @@ function cadenceVerdict({ candidates, perDay, now }) {
   return { ok: false, detail: `${recent.length} candidate(s) in the last 24h (${recent.map((c) => c.name).join(', ')}) — release.candidates-per-day caps at ${perDay} a day; the first run from ${nextAt} cuts main's head, never an older commit`, nextAt };
 }
 
+// ---- #446: deploy-tag-fast — spacing and holds ------------------------------------------------
+
+/**
+ * Finals at least `spacingHours` apart. `finals` is [{ name, date }] for every final tag (tagger
+ * date) — a human's final counts as much as an automatic one. Returns { ok, detail, nextAt }; not ok
+ * is a NO-OP for the caller, never a refusal, so the first run after the window tags main's head.
+ */
+function spacingVerdict({ finals, spacingHours, now }) {
+  if (!spacingHours) return { ok: true, detail: 'no final spacing on this route', nextAt: null };
+  const nowMs = Date.parse(now);
+  const dated = (finals || []).map((f) => ({ ...f, ms: Date.parse(f.date) }))
+    .filter((f) => !Number.isNaN(f.ms) && f.ms <= nowMs).sort((a, b) => a.ms - b.ms);
+  if (!dated.length) return { ok: true, detail: 'no earlier final to space from', nextAt: null };
+  const last = dated[dated.length - 1];
+  const nextMs = last.ms + spacingHours * 3600000;
+  if (nowMs >= nextMs) return { ok: true, detail: `last final ${last.name} at ${new Date(last.ms).toISOString()}, spacing ${spacingHours}h`, nextAt: null };
+  const nextAt = new Date(nextMs).toISOString();
+  return { ok: false, detail: `last final ${last.name} at ${new Date(last.ms).toISOString()} — release.final-spacing keeps finals ${spacingHours}h apart; the first run from ${nextAt} tags main's head`, nextAt };
+}
+
+/**
+ * The human veto, repo-wide: `issues` is the open-issue list (null = unread — never "no hold").
+ * Any open issue carrying `release-hold` holds the next final; the fast route has no candidate issue
+ * to put the label on, so a human may put it on any issue, and only a human removes it.
+ */
+function holdsVerdict(issues) {
+  if (issues === null || issues === undefined) return { ok: false, detail: `the open issues could not be read — an unread ${HOLD_LABEL} is not an absent one` };
+  const held = issues.filter((i) => i && (!i.state || String(i.state).toUpperCase() === 'OPEN')
+    && (i.labels || []).some((l) => (l && typeof l === 'object' ? l.name : l) === HOLD_LABEL)).map((i) => i.number);
+  return held.length
+    ? { ok: false, detail: `${HOLD_LABEL} on ${held.map((n) => `#${n}`).join(', ')} — a human veto; no final is tagged while it is present, and no command removes it` }
+    : { ok: true, detail: `no open issue carries ${HOLD_LABEL}` };
+}
+
+/** The command a human runs to let a migration ride an automatic final on the fast route. */
+function migrationHandoff(tracking, version) {
+  return `COLAB_HUMAN=1 colab migration-grant ${tracking || '<tracking issue>'} --branch ${version}`;
+}
+
 // ---- #443: the newest candidate names trunk's head -------------------------------------------
 
 /** Events that run DOWNSTREAM of the suite (the release workflow itself) — never part of "head is green". */
@@ -709,9 +774,14 @@ function decide(facts) {
   const add = (condition, ok, detail) => checks.push({ condition, ok: !!ok, detail });
 
   const p = f.policy;
+  const fast = isFastRoute(p) && !(p.findings && p.findings.length);
   if (!p) add('release-policy', false, 'no release policy was evaluated');
   else if (p.findings && p.findings.length) add('release-policy', false, `the release: block is invalid — ${p.findings.map((x) => x.text).join('; ')}`);
-  else if (p.effective.candidates !== 'auto') {
+  else if (fast && !f.auto) {
+    add('release-policy', false, 'route deploy-tag-fast tags its finals only from the release workflow (`colab release cut --auto`), where the deploy runs in the same run — a final cut by hand would reach production with no deploy job behind it');
+  } else if (fast) {
+    add('release-policy', true, `${p.derived.axis} (${p.derived.row}, route deploy-tag-fast): a final on every green head, granted by decision #${p.effective.finalGrant.issue}, health gate ${p.effective.healthGate.url} (rollback: ${p.effective.healthGate.rollback}), spacing ${p.effective.finalSpacingHours}h`);
+  } else if (p.effective.candidates !== 'auto') {
     const narrowed = p.declared && p.declared.candidates === 'off' && p.derived.candidates === 'auto';
     add('release-policy', false, narrowed
       ? 'release: candidates: off — this repo narrowed its rung row to no automatic candidates'
@@ -726,6 +796,11 @@ function decide(facts) {
     const cad = f.auto.cadence || { ok: false, detail: 'cadence not measured' };
     add('cadence', cad.ok, cad.detail);
     if (!cad.ok) noop = !!f.auto.cadence;
+    if (fast) {
+      const sp = f.auto.spacing || { ok: false, detail: 'final spacing not measured' };
+      add('spacing', sp.ok, sp.detail);
+      if (!sp.ok && f.auto.spacing) noop = true;
+    }
     // #429: on `trunk:` other than main, only a promotion head is a candidate; anything else no-ops.
     const pr = f.auto.promotion;
     if (pr) {
@@ -747,7 +822,16 @@ function decide(facts) {
 
   let tag = null;
   let derivable = [];
-  if (v.ok) {
+  if (v.ok && fast) {
+    const finalHere = (f.tagsAtSha || []).filter((t) => VERSION_RE.test(t));
+    if (finalHere.length) {
+      add('already-final', false, `this commit is already the final ${finalHere.join(', ')} — a head that carries a final is the route holding`);
+      if (f.auto) noop = true;
+    } else {
+      tag = v.version;
+      add('already-final', true, `next final: ${tag} (no candidate — route deploy-tag-fast)`);
+    }
+  } else if (v.ok) {
     const here = candidateNumbers(f.tagsAtSha || [], v.version);
     if (here.length) {
       add('already-candidate', false, `this commit is already ${v.version}-rc.${here[here.length - 1]} — a second candidate for the same commit tests nothing new`);
@@ -776,6 +860,20 @@ function decide(facts) {
     else add(condition, verdict.ok, verdict.detail);
   }
 
+  // #446: what the fast route keeps in place of the test period it does not have.
+  let handoff = null;
+  let grant = null;
+  if (fast) {
+    const g = f.finalGrant || { ok: false, detail: `release.final-grant #${p.effective.finalGrant.issue} was not resolved — an unresolved grant is not a grant` };
+    add('final-grant', g.ok, g.detail);
+    if (g.ok) grant = { issue: p.effective.finalGrant.issue, ruledBy: g.ruledBy || null };
+    const h = f.holds || { ok: false, detail: `${HOLD_LABEL} was not measured` };
+    add('release-hold', h.ok, h.detail);
+    const mig = f.migrations || { ok: false, detail: 'migrations since the last final were not measured' };
+    add('migration-grant', mig.ok, mig.detail);
+    if (!mig.ok && v.ok && mig.paths && mig.paths.length) handoff = migrationHandoff(f.trackingIssue, v.version);
+  }
+
   const refusals = checks.filter((c) => !c.ok);
   const ok = refusals.length === 0 && !!tag;
   return {
@@ -783,6 +881,8 @@ function decide(facts) {
     bump: v.ok ? v.bump : (v.bump || null), overridden: v.ok ? v.overridden : null,
     signals: f.auto ? f.auto.signals || null : null, migration: v.migration || null,
     derivable,
+    final: fast, grant, handoff,
+    healthGate: fast ? p.effective.healthGate : null,
   };
 }
 
@@ -793,8 +893,11 @@ function versionSourceOf(policy) {
 
 /** The annotated tag's message — where the chosen bump, its reason and every checked condition are recorded. */
 function tagMessage(verdict, { sha, lastFinal }) {
+  // #446: a fast-route final. Its subject deliberately does NOT end in "(colab release cut)", so no
+  // reader of candidates (cutCandidates, finalize's CUT_SUBJECT_SUFFIX) ever mistakes it for one.
+  const fast = !!verdict.final;
   const lines = [
-    `${verdict.tag} — release candidate (colab release cut)`,
+    fast ? `${verdict.tag} — release (colab release cut, deploy-tag-fast)` : `${verdict.tag} — release candidate (colab release cut)`,
     '',
     `Commit: ${sha}`,
     `Since: ${lastFinal}`,
@@ -802,17 +905,20 @@ function tagMessage(verdict, { sha, lastFinal }) {
     '',
     ...(verdict.signals ? ['Signals (every input the bump read):', ...verdict.signals.lines.map((l) => `- ${l}`), ''] : []),
     ...(verdict.migration && verdict.migration.section ? ['Migration:', '', verdict.migration.section, ''] : []),
+    ...(fast && verdict.grant ? [`Automatic final granted by: release.final-grant -> decision #${verdict.grant.issue}${verdict.grant.ruledBy ? `, ruled by ${verdict.grant.ruledBy}` : ''} (an operator's per-repo grant; deleting it, or route: deploy-tag, revokes it)`] : []),
+    ...(fast && verdict.healthGate ? [`Health gate: ${verdict.healthGate.url} (rollback: ${verdict.healthGate.rollback}) — the release workflow deploys this tag in the same run and verifies it there`, ''] : []),
     ...(verdict.derivable && verdict.derivable.length ? [`Derivable manifests (release.version-source: tag, not checked against the tag): ${verdict.derivable.join(', ')}`, ''] : []),
     'Conditions (CONVENTIONS.md §6):',
     ...verdict.checks.map((c) => `- ${c.condition}: ${c.detail}`),
     '',
-    'A candidate, never a final: finalizing it is the release skill\'s, after its test period.',
+    fast ? 'A final with no candidate: route deploy-tag-fast, by the operator\'s grant (CONVENTIONS.md §6).' : 'A candidate, never a final: finalizing it is the release skill\'s, after its test period.',
   ];
   return lines.join('\n') + '\n';
 }
 
 module.exports = {
-  CONDITIONS, BUMPS, MIGRATION_FILE, RELEASE_BRANCH,
+  CONDITIONS, FAST_CONDITIONS, BUMPS, MIGRATION_FILE, RELEASE_BRANCH, HOLD_LABEL,
+  isFastRoute, spacingVerdict, holdsVerdict, migrationHandoff,
   parseVersion, formatVersion, candidateNumbers, nextCandidateNumber, decideVersion,
   parseGuardOutput, exportsDiff, switchRemovalsSince, autoSignals, parseMigrationSection, decideAutoVersion, cadenceVerdict,
   fullSuiteVerdict, withoutOwnWorkflow, isMigrationPath, schemaVerdict,

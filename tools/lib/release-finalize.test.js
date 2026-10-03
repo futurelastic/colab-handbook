@@ -415,3 +415,15 @@ test('#441: a grant that no longer resolves (reopened, unread) falls back to a h
   assert.strictEqual(human.state, 'finalized');
   assert.strictEqual(human.grant, null, 'a human-bar final is the human\'s, not the grant\'s');
 });
+
+// ---- #446: deploy-tag-fast has no candidate to finalize --------------------------------------------
+
+test('#446 deploy-tag-fast: finalize reports no-candidate and never finalizes a leftover -rc', () => {
+  const fast = releasePolicy.evaluateRelease({ trunk: 'main', exposure: 'released', production: 'https://x.invalid', deploy: 'tag',
+    release: { route: 'deploy-tag-fast', 'final-grant': 77, 'health-url': 'https://x.invalid/health', rollback: 'auto' } });
+  assert.deepStrictEqual(fast.findings, []);
+  const v = rf.decide(facts({ policy: fast, finalGrant: GRANT_OK, migrations: NO_MIGRATION }));
+  assert.strictEqual(v.state, 'no-candidate');
+  assert.strictEqual(v.finalTag, null);
+  assert.match(v.checks.find((c) => c.condition === 'candidate').detail, /deploy-tag-fast cuts its finals/);
+});

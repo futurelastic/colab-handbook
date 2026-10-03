@@ -88,7 +88,7 @@ test('green path: every check ok, tag is the next candidate', () => {
   assert.strictEqual(v.ok, true, JSON.stringify(v.refusals));
   assert.strictEqual(v.tag, 'v1.2.1-rc.2');
   // `cadence` is reported only under --auto (#422); `promotion` only under --auto off trunk: main (#429).
-  assert.deepStrictEqual(v.checks.map((c) => c.condition), rc.CONDITIONS.filter((c) => c !== 'cadence' && c !== 'promotion'));
+  assert.deepStrictEqual(v.checks.map((c) => c.condition), rc.CONDITIONS.filter((c) => c !== 'cadence' && c !== 'promotion' && !rc.FAST_CONDITIONS.includes(c)));
 });
 
 test('candidates off — derived (self) and narrowed (release: candidates: off) — refuse on release-policy', () => {
@@ -124,7 +124,7 @@ test('the tag message records the bump, the override reason and every condition'
   const msg = rc.tagMessage(v, { sha: 'abc123', lastFinal: 'v1.2.0' });
   assert.match(msg, /^v1\.2\.1-rc\.1 — release candidate/);
   assert.match(msg, /reason: adopters read the docs/);
-  for (const c of rc.CONDITIONS.filter((x) => x !== 'cadence' && x !== 'promotion')) assert.match(msg, new RegExp(`- ${c}: `));
+  for (const c of rc.CONDITIONS.filter((x) => x !== 'cadence' && x !== 'promotion' && !rc.FAST_CONDITIONS.includes(x))) assert.match(msg, new RegExp(`- ${c}: `));
 });
 
 // ---- full suite -------------------------------------------------------------------------------
@@ -471,4 +471,97 @@ test('#443 headCandidateVerdict: flags a head green for longer than one CI cycle
 test('#443 prereleaseArgs: a published pre-release that never becomes Latest', () => {
   assert.deepStrictEqual(rc.prereleaseArgs('v1.2.1-rc.1', '/tmp/n.md'),
     ['release', 'create', 'v1.2.1-rc.1', '--verify-tag', '--title', 'v1.2.1-rc.1', '--notes-file', '/tmp/n.md', '--prerelease', '--latest=false']);
+});
+
+// ---- #446: deploy-tag-fast — a final on every green head ----------------------------------------
+
+const FAST_DESC = { trunk: 'main', exposure: 'released', production: 'https://app.example', deploy: 'tag',
+  release: { route: 'deploy-tag-fast', 'final-grant': 7, 'health-url': 'https://app.example/health', rollback: 'auto' } };
+const NOW = '2026-10-03T12:00:00Z';
+function fastFacts({ spacing, finalGrant, holds, migrations, ...over } = {}) {
+  const f = autoFacts({
+    policy: releasePolicy.evaluateRelease(FAST_DESC),
+    finalGrant: finalGrant === undefined ? { ok: true, ruledBy: 'Op', detail: 'decision recorded' } : finalGrant,
+    holds: holds === undefined ? rc.holdsVerdict([]) : holds,
+    migrations: migrations === undefined ? { ok: true, paths: [], detail: 'no migration' } : migrations,
+    ...over,
+  });
+  f.auto.spacing = spacing === undefined ? { ok: true, detail: 'spaced' } : spacing;
+  return f;
+}
+
+test('#446 a green fast head tags the final directly — no -rc, final: true, grant and health gate on the verdict', () => {
+  const v = rc.decide(fastFacts());
+  assert.strictEqual(v.ok, true, JSON.stringify(v.refusals));
+  assert.strictEqual(v.tag, 'v1.2.1');
+  assert.strictEqual(v.final, true);
+  assert.deepStrictEqual(v.grant, { issue: 7, ruledBy: 'Op' });
+  assert.deepStrictEqual(v.healthGate, { url: 'https://app.example/health', rollback: 'auto' });
+  for (const c of ['spacing', 'already-final', 'final-grant', 'release-hold', 'migration-grant']) assert.ok(refusal(v, c), c);
+  assert.strictEqual(refusal(v, 'already-candidate'), undefined);
+  const msg = rc.tagMessage(v, { sha: 'abc123', lastFinal: 'v1.2.0' });
+  assert.match(msg, /^v1\.2\.1 — release \(colab release cut, deploy-tag-fast\)/);
+  assert.doesNotMatch(msg.split('\n')[0], /\(colab release cut\)$/);
+  assert.match(msg, /decision #7, ruled by Op/);
+  assert.match(msg, /Health gate: https:\/\/app\.example\/health \(rollback: auto\)/);
+  assert.doesNotMatch(msg, /A candidate, never a final/);
+});
+
+test('#446 the fast route refuses a hand cut: finals come only from the workflow, where the deploy runs', () => {
+  const v = rc.decide(facts({ policy: releasePolicy.evaluateRelease(FAST_DESC), finalGrant: { ok: true, detail: 'x' }, holds: rc.holdsVerdict([]), migrations: { ok: true, paths: [], detail: 'x' } }));
+  assert.strictEqual(v.ok, false);
+  assert.match(refusal(v, 'release-policy').detail, /only from the release workflow/);
+});
+
+test('#446 an unresolved grant, a release-hold, an unread issue list each refuse', () => {
+  const g = rc.decide(fastFacts({ finalGrant: { ok: false, detail: 'its decision was reopened' } }));
+  assert.strictEqual(g.ok, false);
+  assert.strictEqual(refusal(g, 'final-grant').ok, false);
+  assert.strictEqual(g.noop, false);
+  const held = rc.decide(fastFacts({ holds: rc.holdsVerdict([{ number: 12, state: 'OPEN', labels: [{ name: 'release-hold' }] }]) }));
+  assert.strictEqual(held.ok, false);
+  assert.match(refusal(held, 'release-hold').detail, /release-hold on #12/);
+  assert.strictEqual(rc.decide(fastFacts({ holds: rc.holdsVerdict(null) })).ok, false);
+  assert.strictEqual(rc.decide(fastFacts({ finalGrant: null })).ok, false);
+});
+
+test('#446 an ungranted migration refuses with a hand-off; a granted one passes', () => {
+  const v = rc.decide(fastFacts({ migrations: { ok: false, paths: ['db/1.sql'], detail: '1 migration file' }, trackingIssue: 40 }));
+  assert.strictEqual(v.ok, false);
+  assert.strictEqual(refusal(v, 'migration-grant').ok, false);
+  assert.strictEqual(v.handoff, 'COLAB_HUMAN=1 colab migration-grant 40 --branch v1.2.1');
+  assert.strictEqual(rc.decide(fastFacts({ migrations: { ok: true, paths: ['db/1.sql'], detail: 'granted' } })).ok, true);
+});
+
+test('#446 spacing and an already-final head are no-ops, not refusals', () => {
+  const sp = rc.decide(fastFacts({ spacing: rc.spacingVerdict({ finals: [{ name: 'v1.2.0', date: '2026-10-03T11:30:00Z' }], spacingHours: 1, now: NOW }) }));
+  assert.strictEqual(sp.ok, false);
+  assert.strictEqual(sp.noop, true);
+  assert.match(refusal(sp, 'spacing').detail, /2026-10-03T12:30:00\.000Z/);
+  const done = rc.decide(fastFacts({ tagsAtSha: ['v1.2.0'] }));
+  assert.strictEqual(done.ok, false);
+  assert.strictEqual(done.noop, true);
+  assert.strictEqual(refusal(done, 'already-final').ok, false);
+});
+
+test('#446 the candidate gates still apply: red CI and a destructive migration refuse', () => {
+  assert.strictEqual(refusal(rc.decide(fastFacts({ ci: { ok: false, detail: 'red' } })), 'ci-green').ok, false);
+  assert.strictEqual(refusal(rc.decide(fastFacts({ schema: { ok: false, detail: 'DROP TABLE' } })), 'schema-additive').ok, false);
+});
+
+test('#446 spacingVerdict and holdsVerdict', () => {
+  assert.strictEqual(rc.spacingVerdict({ finals: [], spacingHours: 1, now: NOW }).ok, true);
+  assert.strictEqual(rc.spacingVerdict({ finals: [{ name: 'v1.0.0', date: '2026-10-03T09:00:00Z' }], spacingHours: 1, now: NOW }).ok, true);
+  const in6 = rc.spacingVerdict({ finals: [{ name: 'v1.0.0', date: '2026-10-03T09:00:00Z' }, { name: 'v0.9.0', date: '2026-10-01T00:00:00Z' }], spacingHours: 6, now: NOW });
+  assert.strictEqual(in6.ok, false);
+  assert.strictEqual(in6.nextAt, '2026-10-03T15:00:00.000Z');
+  assert.strictEqual(rc.holdsVerdict([{ number: 3, labels: ['bug'] }]).ok, true);
+  assert.strictEqual(rc.holdsVerdict([{ number: 3, state: 'CLOSED', labels: ['release-hold'] }]).ok, true);
+  assert.strictEqual(rc.holdsVerdict([{ number: 3, labels: ['release-hold'] }]).ok, false);
+});
+
+test('#446 a candidate route is unchanged: no fast condition reported, final: false', () => {
+  const v = rc.decide(autoFacts());
+  assert.strictEqual(v.final, false);
+  for (const c of rc.FAST_CONDITIONS) assert.strictEqual(refusal(v, c), undefined, c);
 });
