@@ -4123,7 +4123,9 @@ every gate that does not depend on one:
   URL after its deploy and fails the run when the version does not appear; the rollback is the
   deploy's own, and `rollback: auto` is the operator's statement that it exists. The audit checks
   that both are declared and that the release workflow deploys what it tags; it cannot prove the
-  rollback works, which is exactly why the grant is required beside it.
+  rollback works, which is exactly why the grant is required beside it. `release.health-url` is
+  the one verify key every deploy shares (#452): required here, and also legal on `deploy-tag`,
+  where the container deploy below waits for it.
 - **`deploy: tag` only.** Not `deploy: manual` (a person deploys anyway), not a no-production
   repo — `library-fast` keeps its meaning: nothing it tags reaches production. Missing the grant
   or the health gate, the route is an audit failure and `deploy-tag` stays in effect, final human.
@@ -4142,6 +4144,35 @@ every gate that does not depend on one:
   (an edit point the adopter fills) and checks the health URL; a cut by hand refuses on this
   route, because it would have no deploy behind it. `colab release finalize` here always reports
   *no candidate*: one left over from an earlier route is superseded by the next final.
+
+**A container deploy — one contract, two entry points (#452).** A container app on a host whose
+platform has an API deploys through [`templates/deploy-container.yml`](templates/deploy-container.yml)
+and its two scripts, on every host the same way:
+
+1. CI builds every image the repo lists **once** per final tag (`vX.Y.Z` and the commit sha) and
+   pushes it.
+2. A per-repo pre-deploy step (a database snapshot, say) runs next; its failure stops the deploy
+   before anything changes.
+3. A **platform adapter** tells the platform "run exactly `vX.Y.Z`", every image in one call.
+4. The deploy is green only on a **verified running version**: the platform's own state (the
+   stack settled, the commit it deployed, the image its containers run), then
+   `release.health-url` reporting `X.Y.Z`. An HTTP 200 from the platform is never the evidence —
+   a platform can accept a deploy it then refuses to run.
+5. A failure after the platform accepted the call rolls back to what ran before (the previous
+   final), checks that, and still fails the run. A manual rollback is the same workflow run with
+   the previous tag. The outcome — `running vX.Y.Z at <time>`, or the failure — is recorded in the
+   run summary and on the release issue when one exists.
+
+It is the existing `deploy: tag` shape with an in-repo deploy workflow (`channels: [workflow]`),
+so no rule changes; the template is what was missing. **There is one deploy path, reached two
+ways:** on `deploy-tag` a human-pushed final starts it (`push: tags`, finals only); on
+`deploy-tag-fast` the release workflow's `deploy` job calls the same file through
+`workflow_call` (the commented job in `templates/release-auto.yml`), because the final it tags
+starts no `push: tags` run. Portainer is the first adapter; another platform is another adapter
+file exporting the same functions, and a consuming workflow changes one variable. **One platform
+key per app**, for a non-admin user owning only that app's stack — never an admin key. Every
+server runs its own platform instance, so the configuration is that host's URL, environment and
+stack, by DNS name. Every redeploy recreates the containers, even with an unchanged compose file.
 
 **A manifest's version may be derivable (#438).** By default the pre-tag check refuses a tag
 that disagrees with any declared manifest (`VERSION`, `package.json`, `Cargo.toml`,
@@ -4323,7 +4354,11 @@ never a failure, but an asset that is the install path asks every user for `gh`.
 ## 7. CI and toolchain
 
 **Your CI lives in your repo and belongs to you.** [`templates/`](templates/) ships
-copyable starting points — nothing is called remotely, nothing is mandatory.
+copyable starting points — nothing is called remotely, nothing is mandatory. That includes the
+deploy templates (`deploy-xserver.yml`, and `deploy-container.yml` with its driver and platform
+adapter, #452 — [§6](#6-releases)): the handbook checks its own copies with `actionlint` and the
+container deploy's logic with hermetic tests against a fake platform, and a copy is the
+adopter's to keep green from then on.
 
 The required **outcome**: every pull request must run, at minimum, a **secret scan** and
 a **build** — a committed credential is the one failure that cannot be undone by

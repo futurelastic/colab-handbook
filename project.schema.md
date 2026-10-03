@@ -1096,7 +1096,7 @@ release:
   npm-gate: node scripts/check-pack-allowlist.mjs   # required with npm — the pack-allowlist gate
   version-source: manifest                     # optional — manifest · tag (#438)
   final-grant: 123                             # optional — deploy-tag / deploy-tag-fast only: the operator's recorded grant (#441, #446)
-  health-url: https://app.example.com/health   # deploy-tag-fast only — the endpoint reporting the running version (#446)
+  health-url: https://app.example.com/health   # deploy-tag / deploy-tag-fast (required there) — the endpoint reporting the running version (#446, #452)
   rollback: auto                               # deploy-tag-fast only — the deploy rolls itself back on a failed check (#446)
   final-spacing: 1h                            # deploy-tag-fast only — minimum time between finals, <N>h · <N>d, never under 1h (#446)
 ```
@@ -1247,7 +1247,9 @@ the test period it does not have, and the route stands only with all of them:
   the route itself is the automatic final. `final: human` here is a **failure** — there is no
   candidate for a human to finalize; declare `route: deploy-tag` for that.
 - `health-url` — an absolute `https://` URL the release workflow polls after the deploy until it
-  reports the version (the template's `deploy` job). Anything else is a **failure**.
+  reports the version (the template's `deploy` job). Anything else is a **failure**. It is the
+  one verify key every deploy shares (#452): also legal on `deploy-tag` (below), never required
+  there.
 - `rollback: auto` — the only accepted value: the operator's statement that the deploy restores
   the previous version by itself when that check fails. The audit can check that the URL and the
   wiring are there; it cannot prove the rollback works, which is why the grant is required too.
@@ -1257,11 +1259,21 @@ effect, final human — it fails closed, never into an untested automatic deploy
 `deploy: tag`: `deploy: manual` and a no-production repo reject it (`library-fast` keeps its
 meaning — nothing it tags reaches production). `final-spacing` — `<N>h` or `<N>d`, default and
 floor `1h` — keeps two finals at least that far apart; inside it a run is a no-op and the first
-run after it tags the head. Shorter, `0h` or a minute value is a **failure**. All three
-`deploy-tag-fast` keys on any other route are a **failure**, and so are `candidates`,
+run after it tags the head. Shorter, `0h` or a minute value is a **failure**. `rollback` and
+`final-spacing` on any other route are a **failure**, and so are `candidates`,
 `candidates-per-day` and `test-period` on this one. The gates it keeps — trunk CI green, no
 `release-hold`, no ungranted migration since the last final — are in
 [CONVENTIONS §6](CONVENTIONS.md#6-releases).
+
+**`health-url` on `deploy-tag` — the container deploy's version check** (#452). On route
+`deploy-tag` (`deploy: tag` or `deploy: manual`) `health-url` is optional and grants nothing: it
+names the URL [`templates/deploy-container.yml`](templates/deploy-container.yml) waits on until
+it reports the version just deployed, and the deploy is green only then. Same shape rule (an
+absolute `https://` URL, else a **failure**). On a route nothing deploys from — `public-tool`,
+`rapid-app`, `library-fast`, `none`, `live` — it is a **failure**: there is no running version to
+check. A workflow running the container deploy with no `health-url` declared (and no
+`HEALTH_URL` set in the copy) is an audit **advisory**: every one of its deploys would fail its
+first step.
 
 An unknown sub-key, a value outside its set, or a scalar `release:` is a failure too. **No
 key picks or approves a version number** — every number is computed, majors included, and a

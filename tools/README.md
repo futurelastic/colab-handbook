@@ -1191,7 +1191,10 @@ of every condition above:
 
 The template's `deploy` job deploys the final in the same run and polls `health-url` for the
 version — a tag pushed with `GITHUB_TOKEN` starts no `push: tags` workflow
-([`templates/release-auto.yml`](../templates/release-auto.yml), *DEPLOYING IN THIS RUN*).
+([`templates/release-auto.yml`](../templates/release-auto.yml), *DEPLOYING IN THIS RUN*). A
+container app can point that job at
+[`templates/deploy-container.yml`](../templates/deploy-container.yml) instead (#452), the same
+deploy a human-pushed final runs on route `deploy-tag`.
 `release finalize` on this route always reports `no-candidate`: a candidate left over from an
 earlier route is superseded by the next final, never finalized.
 
