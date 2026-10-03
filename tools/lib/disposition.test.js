@@ -191,13 +191,13 @@ test('split stays the agent\'s even on a released repo behind a skip fence — i
 });
 
 test('routed-out: a destination that exists and links back — agent applies', () => {
-  const v = d.classify({ kind: 'routed-out', routedTo: { ref: 'coding-dashboard#1568', linksBack: true } });
+  const v = d.classify({ kind: 'routed-out', routedTo: { ref: 'example-orchestrator#1568', linksBack: true } });
   assert.equal(v.authority, d.AGENT);
   assert.equal(v.applicable, true);
 });
 
 test('routed-out: a one-way route is not a route', () => {
-  const v = d.classify({ kind: 'routed-out', routedTo: { ref: 'coding-dashboard#1568' } });
+  const v = d.classify({ kind: 'routed-out', routedTo: { ref: 'example-orchestrator#1568' } });
   assert.equal(v.authority, d.AGENT);
   assert.equal(v.applicable, false);
   assert.match(v.blockers.join(' '), /link back/);

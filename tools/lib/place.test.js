@@ -607,10 +607,10 @@ test('#317 ownsPlace: either proof alone is enough, and neither present is not',
 // --- #317: conflict — the specimen, and the population it must keep refusing -------------------
 
 test('#317 conflict: a session locked out by its OWN hold is no longer a conflict (the specimen)', () => {
-  // coding-dashboard, 2026-09-05: a ship session's own no-worktree claim held the checkout under
-  // `coding-dashboard-1545`; the ship then presented a BLANK session and was refused by its own
+  // A downstream session orchestrator, 2026-09-05: a ship session's own no-worktree claim held the
+  // checkout under `example-orchestrator-1545`; the ship then presented a BLANK session and was refused by its own
   // lock for 8.5 hours. Blank never matched then, and still never matches — the anchor does.
-  const st = { places: { [place.placeKey('/tmp/repo')]: ownRec({ session: 'coding-dashboard-1545' }) } };
+  const st = { places: { [place.placeKey('/tmp/repo')]: ownRec({ session: 'example-orchestrator-1545' }) } };
   const anchorOpts = { pid: 12345, alive: () => true, isAncestor: ANC };
   assert.strictEqual(place.conflict(st, '/tmp/repo', { session: '', anchorOpts }, ALIVE), null);
   assert.strictEqual(place.conflict(st, '/tmp/repo', { session: 'a-different-string', anchorOpts }, ALIVE), null);

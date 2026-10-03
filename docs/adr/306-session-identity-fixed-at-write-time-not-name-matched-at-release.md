@@ -17,7 +17,7 @@ later released with its real URL therefore failed its own ownership check and wa
 routed into the `COLAB_HUMAN=1` branch: a genuine owner, refused, with no way to see
 why short of diffing `colab places --json` against what it had just presented.
 
-Measured live on 2026-09-04 (coding-dashboard ops sessions #1480/#1481). The session
+Measured live on 2026-09-04 (two ops sessions of a downstream session orchestrator). The session
 correctly declined to set `COLAB_HUMAN=1` for an unattended release, and the only
 thing that worked was re-presenting the exact wrong string on file — which confirms
 this was an identity-matching defect, not a gate doing its job.

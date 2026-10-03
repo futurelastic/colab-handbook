@@ -10,9 +10,9 @@ same session. Two measured failures say it cannot be relied on to be:
 - **#306 (2026-09-04)** — a session claimed with its *name* in `--session` and
   released with its real URL. Genuine owner, refused, routed to `COLAB_HUMAN=1`. The
   fix was a write-time warning; the identity model was deliberately left alone.
-- **#317 (coding-dashboard, 2026-09-05)** — the autopilot ship session
-  `ship-coding-dashboard🤖` (pid 80601) recovered #1545 with a **no-worktree** claim,
-  which minted a checkout hold under the identity `coding-dashboard-1545`. It shipped,
+- **#317 (a downstream session orchestrator, 2026-09-05)** — that repo's autopilot
+  ship session (pid 80601) recovered #1545 with a **no-worktree** claim, which minted
+  a checkout hold under an identity of the form `<repo>-1545`. It shipped,
   then every later squash-merge on that repo was refused **by its own lock**.
   `resolveShipSession` (`tools/colab:7048`) resolves identity from the worktree record
   or a **branch-keyed** claim, and a no-worktree claim carries `branch: null` — so the

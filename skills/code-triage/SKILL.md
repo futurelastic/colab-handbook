@@ -2053,11 +2053,11 @@ Then, **findings** — group-level, so they are not a bucket and do not compete 
 rule below. One block per group that broke the one-branch contract (§3):
 
 ```
-FINDING group:cockpit-fidelity — 3 live branches in one group (contract: one)
-        members:  #1530 #1531 #1533 #1536 #1540 #1542 (6 open)
-        collide on: src/console/CockpitView.tsx, src/i18n/messages/cockpit.ts
-        carrier:  fix/cockpit-fidelity-1530-1531-1533  (covers 3 members, cargo)
-        then:     feat/cockpit-beat-1536 (1), fix/cockpit-i18n-1540 (1)
+FINDING group:panel-fidelity — 3 live branches in one group (contract: one)
+        members:  #210 #211 #213 #216 #220 #222 (6 open)
+        collide on: src/ui/PanelView.tsx, src/i18n/messages/panel.ts
+        carrier:  fix/panel-fidelity-210-211-213  (covers 3 members, cargo)
+        then:     feat/panel-beat-216 (1), fix/panel-i18n-220 (1)
         land one at a time: each rebases onto trunk AFTER the carrier lands
         seen-at:  trunk e31a896, 2026-09-06T09:12Z
 ```

@@ -592,7 +592,7 @@ function ownsHold(rec, session) {
  * (#317.)
  *
  * WHY THIS EXISTS. A ship session recovered an issue with a no-worktree claim, which minted a
- * checkout hold under the identity string `coding-dashboard-1545`. It then shipped, and every later
+ * checkout hold under the identity string `example-orchestrator-1545`. It then shipped, and every later
  * squash-merge was refused by ITS OWN hold: the identity `colab ship` resolves comes from the
  * worktree record or a branch-keyed claim, and a no-worktree claim carries `branch: null`, so the
  * session presented a blank one. `ownsHold` is exact string equality and blank never matches, so a
@@ -663,7 +663,7 @@ function ownsPlace(rec, session, anchorOpts = {}) {
  * no two consumers disagree (#317). Returns `{cls, rec, live, reason, remedy, conflict}`.
  *
  * The live specimen this closes was not a wrong answer; it was an UNCLASSIFIED one. `colab ship`
- * printed `place "…" is held by session "coding-dashboard-1545"` and stopped — true, and useless:
+ * printed `place "…" is held by session "example-orchestrator-1545"` and stopped — true, and useless:
  * the reader could not tell from it whether the holder was itself, a corpse, or a live sibling, and
  * those three need three different next moves. The refusal now names the class and the exact next
  * command, and two of the six classes are not refusals at all.

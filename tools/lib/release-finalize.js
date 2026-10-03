@@ -9,8 +9,8 @@
  * PURE BY CONSTRUCTION, the release-cut.js posture: no git, no network, no `gh`, no clock (`now` is
  * passed in). The CLI in tools/colab is the measuring half.
  *
- * WHERE PER-CANDIDATE STATE LIVES (the contract futurelastic/hangar#125 reads — change it and every
- * consumer breaks, so it is frozen here and documented in tools/README.md, *Release finalize*):
+ * WHERE PER-CANDIDATE STATE LIVES (the contract a downstream dashboard's release view reads — change
+ * it and every consumer breaks, so it is frozen here and documented in tools/README.md, *Release finalize*):
  *
  *   - the candidates are the annotated `vX.Y.Z-rc.N` tags on origin that `colab release cut` made
  *     (first line of the tag message ends `(colab release cut)`); nothing else stores them;
