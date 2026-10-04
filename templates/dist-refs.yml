@@ -25,6 +25,12 @@
 # <os>-<arch> is Node's own `${process.platform}-${process.arch}` (darwin-arm64, linux-x64,
 # win32-x64, …) — the same names npm's `os`/`cpu` fields use, and what the launcher computes.
 #
+# A PREBUILT JS APP (one whose build cannot run on the target, #470) uses the same workflow with
+# the platform-neutral name `any`: `platforms: any`, `bin: <tool>.tgz`, and an artifact
+# `<artifact-prefix>any` holding that one tarball (`tar -czf <tool>.tgz -C <build-output> .`).
+# templates/npx-service.mjs with KIND 'dist' fetches refs/tags/dist/vX.Y.Z/any, verifies the
+# tarball against its SHA256SUMS and unpacks it beside the running version.
+#
 # HOW TO CALL IT — from the SAME run that cut the release tag. A tag pushed with GITHUB_TOKEN
 # triggers no other workflow, so "build on the tag push" silently never runs for a tag your
 # release workflow made (CONVENTIONS.md §6). Build every platform in that run, upload one

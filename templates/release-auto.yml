@@ -198,6 +198,9 @@ env:
   #   next       the newest candidate (vX.Y.Z-rc.N) — the fast channel
   #   vX.Y.Z     an exact version tag — frozen; moving it is a deliberate act, like re-copying
   #              a template
+  # A ref the handbook does not carry (e.g. `stable` before its first final, or on a mirror)
+  # falls back to the newest final tag new enough for this template, else `next`, with a warning —
+  # it never fails the run (#480).
   HANDBOOK_REF: "stable"
   HANDBOOK_REPO: "https://github.com/futurelastic/colab-handbook.git"
   # A TRANSIENT UPSTREAM ERROR NEVER TURNS MAIN RED (#464). This run fires on every landing, and a
@@ -306,6 +309,23 @@ jobs:
         run: |
           set -euo pipefail
           eval "$RETRY_TRANSIENT"
+          # A HANDBOOK_REF the handbook does not carry falls back instead of failing (#480): `stable`
+          # exists only once a final has been cut, and a fork or mirror may never have it. The
+          # fallback is the newest final vX.Y.Z tag at or above MIN_FINAL, else `next`, and it says
+          # so. MIN_FINAL is the first final carrying every CLI verb this template calls (`--auto`,
+          # #422–#425): an older final rejects them, and that is a red run too (#427). A ref that
+          # does exist is always used as written; a failed listing fails the step, never guesses.
+          MIN_FINAL="v1.12.0"
+          REFS="$(retry_transient git ls-remote --heads --tags "$HANDBOOK_REPO")"
+          if ! grep -Eq "[[:space:]]refs/(heads|tags)/${HANDBOOK_REF//./\\.}$" <<< "$REFS"; then
+            FALLBACK="next"
+            for t in $(sed -nE 's#^[0-9a-f]+[[:space:]]+refs/tags/(v[0-9]+\.[0-9]+\.[0-9]+)$#\1#p' <<< "$REFS" | sort -V); do
+              [ "$(printf '%s\n' "$MIN_FINAL" "$t" | sort -V | head -n 1)" = "$MIN_FINAL" ] && FALLBACK="$t"
+            done
+            echo "::warning::HANDBOOK_REF \"$HANDBOOK_REF\" is not a branch or tag of $HANDBOOK_REPO — using \"$FALLBACK\" (the newest final tag from $MIN_FINAL on, else next). Set HANDBOOK_REF to silence this."
+            echo "HANDBOOK_REF \`$HANDBOOK_REF\` does not exist upstream — fetched \`$FALLBACK\` instead (#480)." >> "${GITHUB_STEP_SUMMARY:-/dev/null}"
+            HANDBOOK_REF="$FALLBACK"
+          fi
           # A clone that died half-way leaves a directory a second clone refuses — start clean each try.
           fetch_cli() { rm -rf "$RUNNER_TEMP/colab-handbook"; git clone --quiet --depth 1 --branch "$HANDBOOK_REF" "$HANDBOOK_REPO" "$RUNNER_TEMP/colab-handbook"; }
           retry_transient fetch_cli

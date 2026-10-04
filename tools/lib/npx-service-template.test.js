@@ -16,11 +16,15 @@
  *   - `update --check` writes nothing at all; `update` switches and records `previous`;
  *   - an unhealthy update switches back and exits 1; `rollback` toggles;
  *   - `--version` pins; refusals change nothing.
+ *   - KIND 'dist' (#470): the prebuilt tarball comes from `dist/vX.Y.Z/any`, verified, unpacked
+ *     into vX.Y.Z/app/; a missing ref or an entry outside the root installs nothing;
+ *   - auto-update (#471) is a timer whose command IS `update` — run as a real subprocess, it updates;
+ *   - uninstall (#472) removes timer, unit, shim and data; keeps config + state unless --purge.
  */
 
 const test = require('node:test');
 const assert = require('node:assert');
-const { execFileSync, spawnSync } = require('child_process');
+const { execFileSync, spawn, spawnSync } = require('child_process');
 const fs = require('fs');
 const http = require('http');
 const os = require('os');
@@ -474,4 +478,249 @@ test('the launcher alone runs a channel: #stable → the final, #next → the ca
   r = spawnSync(process.execPath, [path.join(mainDir, 'npx-launcher.mjs')], { encoding: 'utf8', env: fx.env });
   assert.notStrictEqual(r.status, 0);
   assert.match(r.stderr, /PROBE_SVC_DIST_VERSION/);
+});
+
+// ---- #470 KIND 'dist' -------------------------------------------------------------------------
+
+/** A platform-neutral dist ref for `version` holding <NAME>.tgz, whose server.mjs prints its version. */
+function pushAnyRef(fx, version, { file = `${NAME}.tgz`, evil = false } = {}) {
+  const src = fs.mkdtempSync(path.join(fx.base, 'app-'));
+  fs.writeFileSync(path.join(src, 'server.mjs'), `console.log('app ${version}: ' + process.argv.slice(2).join(' '));\n`);
+  fs.mkdirSync(path.join(src, 'lib'));
+  fs.writeFileSync(path.join(src, 'lib', 'x.js'), '1\n');
+  const tgz = path.join(fx.base, `${version}-${file}`);
+  if (evil) execFileSync('tar', ['-czPf', tgz, '-C', src, '.', path.join(src, 'server.mjs')]);
+  else execFileSync('tar', ['-czf', tgz, '-C', src, '.']);
+  const body = fs.readFileSync(tgz);
+  const sum = require('crypto').createHash('sha256').update(body).digest('hex');
+  const blob = git(fx.work, 'hash-object', '-w', tgz);
+  const sums = gitIn(fx.work, `${sum}  ${file}\n`, 'hash-object', '-w', '--stdin');
+  const tree = gitIn(fx.work, [`100644 blob ${sums}\tSHA256SUMS`, `100755 blob ${blob}\t${file}`].sort((a, b) => a.split('\t')[1].localeCompare(b.split('\t')[1])).join('\n') + '\n', 'mktree');
+  const commit = git(fx.work, 'commit-tree', tree, '-m', `dist ${version} any`);
+  git(fx.work, 'push', '-q', '-f', 'origin', `${commit}:refs/tags/dist/${version}/any`);
+}
+
+test('pure helpers for #470-#472: intervals, tarball entries, dist unit + shim, args', async () => {
+  const S = await load();
+  assert.deepStrictEqual(['6h', '30m', '1d', '900', '900s', '59', 'x', '', '6w'].map(S.parseInterval), [21600, 1800, 86400, 900, 900, null, null, null, null]);
+  assert.deepStrictEqual([21600, 1800, 86400, 90].map(S.formatInterval), ['6h', '30m', '1d', '90s']);
+  assert.strictEqual(S.unsafeEntry('./\n./server.mjs\n./lib/x.js\n'), null);
+  assert.strictEqual(S.unsafeEntry('./server.mjs\n../etc/passwd\n'), '../etc/passwd');
+  assert.strictEqual(S.unsafeEntry('/abs/server.mjs\n'), '/abs/server.mjs');
+  assert.strictEqual(S.unsafeEntry('a/b/../../c\n'), 'a/b/../../c');
+  const spec = S.unitSpec({ kind: 'dist', tool: 'probe', name: 'probe', root: '/d/probe', state: '/s', config: '/c', execPath: '/n/node', plat: 'x', envPath: '', label: null, args: ['serve'], entry: 'server.mjs' });
+  assert.deepStrictEqual(spec.programArgs, ['/n/node', '/d/probe/current/app/server.mjs', 'serve']);
+  assert.match(S.renderShim({ kind: 'dist', root: '/d/probe', tool: 'probe', name: 'probe', plat: 'x', execPath: '/n/node', entry: 'server.mjs', serviceRel: 's.mjs' }), /^exec '\/n\/node' "\$ROOT\/current"\/app\/server\.mjs "\$@"$/m);
+  assert.match(S.renderShim({ kind: 'binary', root: '/d', tool: 'probe', name: 'probe', plat: 'x', execPath: '/n', serviceRel: 's.mjs' }), /\|uninstall\) exec/);
+  assert.deepStrictEqual(S.parseArgs(['--purge', '--auto-update', '6h', '--no-auto-update']).flags, { purge: true, autoUpdate: '6h', noAutoUpdate: true });
+
+  // the timer: runs `update` through `current`, carries the XDG bases, never KeepAlive
+  const p = S.paths({ env: { XDG_DATA_HOME: '/x/data', XDG_CONFIG_HOME: '/x/cfg', XDG_STATE_HOME: '/x/st' }, home: '/h', tool: 'probe' });
+  const base = S.unitSpec({ kind: 'binary', tool: 'probe', name: 'probe', root: p.root, state: p.state, config: p.config, execPath: '/n/node', plat: 'x', envPath: '/usr/bin', label: null, args: [] });
+  const t = S.timerSpec({ spec: base, tool: 'probe', name: 'probe', p, execPath: '/n/node', serviceRel: 'bin/service.mjs', interval: 21600 });
+  assert.deepStrictEqual(t.programArgs, ['/n/node', '/x/data/probe/current/pkg/node_modules/probe/bin/service.mjs', 'update']);
+  assert.strictEqual(t.env.XDG_DATA_HOME, '/x/data');
+  assert.strictEqual(t.env.XDG_STATE_HOME, '/x/st');
+  assert.strictEqual(t.logOut, '/x/st/probe/update.out.log');
+  const plist = S.renderLaunchd(t);
+  assert.match(plist, /<key>StartInterval<\/key>\n {2}<integer>21600<\/integer>/);
+  assert.ok(!plist.includes('KeepAlive'), 'an interval job is not kept alive');
+  assert.match(plist, /<string>update<\/string>/);
+  if (process.platform === 'darwin' && spawnSync('plutil', ['-help']).status !== null) {
+    const f = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'plist-')), 'x.plist');
+    fs.writeFileSync(f, plist);
+    assert.strictEqual(spawnSync('plutil', ['-lint', f]).status, 0, 'timer plist lints');
+  }
+  const lin = S.timerCommands('linux', { uid: 1, tspec: t, p });
+  assert.deepStrictEqual(lin.files.map(([f]) => path.basename(f)), ['probe-update.service', 'probe-update.timer']);
+  const [oneshot, timer] = lin.files.map(([, x]) => x);
+  assert.match(oneshot, /^Type=oneshot$/m);
+  assert.ok(!/Restart=|\[Install\]/.test(oneshot), 'the oneshot is started by the timer, never enabled itself');
+  assert.match(oneshot, /^ExecStart=\/n\/node \/x\/data\/probe\/current\/pkg\/node_modules\/probe\/bin\/service\.mjs update$/m);
+  assert.match(timer, /^OnUnitActiveSec=21600s$/m);
+  assert.match(timer, /^Unit=probe-update\.service$/m);
+  assert.deepStrictEqual(lin.load.at(-1), ['systemctl', '--user', 'enable', '--now', 'probe-update.timer']);
+  const mac = S.timerCommands('darwin', { uid: 501, tspec: t, p });
+  assert.strictEqual(mac.files[0][0], '/h/Library/LaunchAgents/local.probe.update.plist');
+});
+
+test('dist service (#470): init + update unpack the verified tarball from dist/vX.Y.Z/any; refusals install nothing', { skip: !posix }, async () => {
+  const S = await load();
+  const fx = fixture();
+  pushAnyRef(fx, 'v1.0.0');
+  pushAnyRef(fx, 'v1.1.0');
+  const h = await healthServer(fx);
+  try {
+    fx.env.PROBE_SVC_HEALTH_URL = h.url;
+    const pkgDir = npxLayout(fx, 'v1.0.0');
+    const o = { ...opts(pkgDir), kind: 'dist', entry: 'server.mjs' };
+    let t = makeIo(S, fx);
+    assert.strictEqual(await S.run('init', [], o, t.io), 0, t.err.join('\n'));
+    const app = path.join(fx.root, 'current', 'app', 'server.mjs');
+    assert.strictEqual(execFileSync(process.execPath, [app, 'hi'], { encoding: 'utf8' }).trim(), 'app v1.0.0: hi');
+    assert.ok(fs.existsSync(path.join(fx.root, 'v1.0.0', 'app', 'lib', 'x.js')), 'the whole tree is unpacked');
+    assert.ok(!fs.existsSync(path.join(fx.root, 'v1.0.0', PLAT)), 'dist kind fetches no binary');
+    assert.ok(fs.existsSync(path.join(fx.root, 'v1.0.0', 'pkg', 'node_modules', NAME, 'service.mjs')), 'the manager is still installed beside it');
+    const unit = fs.readFileSync(path.join(fx.home, 'config', 'systemd', 'user', `${NAME}.service`), 'utf8');
+    assert.match(unit, /current\/app\/server\.mjs serve/);
+    const shim = path.join(fx.home, '.local', 'bin', NAME);
+    assert.strictEqual(execFileSync(shim, ['yo'], { encoding: 'utf8', env: fx.env }).trim(), 'app v1.0.0: yo', 'shim runs the unpacked app');
+
+    t = makeIo(S, fx);
+    assert.strictEqual(await S.run('update', [], o, t.io), 0, t.err.join('\n'));
+    assert.strictEqual(execFileSync(process.execPath, [app], { encoding: 'utf8' }).trim(), 'app v1.1.0:');
+    assert.deepStrictEqual(fs.readdirSync(path.join(fx.root, 'v1.1.0')).sort(), ['app', 'pkg'], 'no tarball left behind');
+
+    // a release with no `any` ref: fails before the switch
+    release(fx.work, 'v1.3.0');
+    moveChannel(fx.work, 'stable', 'v1.3.0');
+    t = makeIo(S, fx);
+    assert.strictEqual(await S.run('update', [], o, t.io), 1);
+    assert.match(t.err.join('\n'), /could not fetch refs\/tags\/dist\/v1\.3\.0\/any[\s\S]*nothing switched — still on v1\.1\.0/);
+    assert.ok(!fs.existsSync(path.join(fx.root, 'v1.3.0')));
+
+    // a tarball with an absolute entry: refused before unpacking, nothing installed
+    pushAnyRef(fx, 'v1.3.0', { evil: true });
+    t = makeIo(S, fx);
+    assert.strictEqual(await S.run('update', [], o, t.io), 1);
+    assert.match(t.err.join('\n'), /has an entry outside its root[\s\S]*nothing switched/);
+    assert.ok(!fs.existsSync(path.join(fx.root, 'v1.3.0')));
+    assert.deepStrictEqual(fs.readdirSync(fx.root).filter((n) => n.startsWith('.')), [], 'no temp dirs or tarballs left');
+    assert.strictEqual(link(fx, 'current'), 'v1.1.0');
+  } finally { h.close(); }
+});
+
+// ---- #471 auto-update timer ---------------------------------------------------------------------
+
+function runAsync(argv, env) {
+  return new Promise((resolve) => {
+    const c = spawn(argv[0], argv.slice(1), { env });
+    let out = ''; let err = '';
+    c.stdout.on('data', (d) => { out += d; });
+    c.stderr.on('data', (d) => { err += d; });
+    c.on('close', (status) => resolve({ status, out, err }));
+  });
+}
+
+test('auto-update (#471): init writes a timer whose command is `update` — run, it updates; --no-auto-update removes it', { skip: !posix }, async () => {
+  const S = await load();
+  const fx = fixture();
+  const h = await healthServer(fx);
+  try {
+    const pkgDir = npxLayout(fx, 'v1.0.0');
+    let t = makeIo(S, fx);
+    assert.strictEqual(await S.run('init', ['--auto-update', '6h', '--health-url', h.url], opts(pkgDir), t.io), 0, t.err.join('\n'));
+    assert.match(t.out.join('\n'), /auto-update: `update` every 6h/);
+    const sd = path.join(fx.home, 'config', 'systemd', 'user');
+    const oneshot = fs.readFileSync(path.join(sd, `${NAME}-update.service`), 'utf8');
+    assert.match(fs.readFileSync(path.join(sd, `${NAME}-update.timer`), 'utf8'), /OnUnitActiveSec=21600s/);
+    assert.ok(ctlLines(fx).includes(`systemctl --user enable --now ${NAME}-update.timer`));
+    assert.strictEqual(JSON.parse(fs.readFileSync(path.join(fx.home, 'config', NAME, 'install.json'), 'utf8')).autoUpdate, 21600);
+    t = makeIo(S, fx);
+    await S.run('status', [], opts(pkgDir), t.io);
+    assert.match(t.out.join('\n'), /auto-update: every 6h/);
+
+    // The timer's job, exactly as the unit states it, as a real process with only the unit's env.
+    const exec = oneshot.match(/^ExecStart=(.*)$/m)[1].split(' ');
+    const env = { HOME: fx.home, PROBE_SVC_HEALTH_TIMEOUT_MS: '3000' };
+    for (const m of oneshot.matchAll(/^Environment="?([A-Z_]+)=(.*?)"?$/gm)) env[m[1]] = m[2];
+    assert.strictEqual(env.XDG_DATA_HOME, path.join(fx.home, 'data'));
+    const r = await runAsync(exec, { ...GIT_ENV, ...env });
+    assert.strictEqual(r.status, 0, r.err);
+    assert.match(r.out, /updated: v1\.0\.0 -> v1\.1\.0 \(stable\)/);
+    assert.strictEqual(link(fx, 'current'), 'v1.1.0');
+
+    // an update leaves an unchanged timer alone; re-running init with --no-auto-update removes it
+    const loads = ctlLines(fx).filter((l) => l.includes('-update.timer')).length;
+    t = makeIo(S, fx);
+    assert.strictEqual(await S.run('update', ['--channel', 'next'], opts(pkgDir), t.io), 0, t.err.join('\n'));
+    assert.strictEqual(ctlLines(fx).filter((l) => l.includes('-update.timer')).length, loads, 'timer not reloaded when unchanged');
+    const initDir = npxLayout(fx, 'v1.2.0-rc.1');
+    t = makeIo(S, fx);
+    assert.strictEqual(await S.run('init', ['--no-auto-update'], opts(initDir), t.io), 0, t.err.join('\n'));
+    assert.ok(!fs.existsSync(path.join(sd, `${NAME}-update.service`)) && !fs.existsSync(path.join(sd, `${NAME}-update.timer`)));
+    assert.ok(ctlLines(fx).includes(`systemctl --user disable --now ${NAME}-update.timer`));
+    assert.strictEqual(JSON.parse(fs.readFileSync(path.join(fx.home, 'config', NAME, 'install.json'), 'utf8')).autoUpdate, undefined);
+
+    // bad values refuse before anything is written
+    for (const argv of [['--auto-update', '10s'], ['--auto-update', '1h', '--no-auto-update']]) {
+      t = makeIo(S, fx);
+      assert.strictEqual(await S.run('init', argv, opts(initDir), t.io), 1);
+      assert.match(t.err.join('\n'), /--auto-update/);
+    }
+
+    // macOS: a second launchd agent with StartInterval
+    t = makeIo(S, fx, { platform: 'darwin' });
+    assert.strictEqual(await S.run('init', ['--auto-update', '30m'], opts(initDir), t.io), 0, t.err.join('\n'));
+    const plist = fs.readFileSync(path.join(fx.home, 'Library', 'LaunchAgents', `local.${NAME}.update.plist`), 'utf8');
+    assert.match(plist, /<integer>1800<\/integer>/);
+    assert.ok(ctlLines(fx).includes(`launchctl bootstrap gui/501 ${path.join(fx.home, 'Library', 'LaunchAgents', `local.${NAME}.update.plist`)}`));
+  } finally { h.close(); }
+});
+
+// ---- #472 uninstall -----------------------------------------------------------------------------
+
+test('uninstall (#472): removes timer, unit, shim and every version; keeps config + state unless --purge', { skip: !posix }, async () => {
+  const S = await load();
+  const fx = fixture();
+  const h = await healthServer(fx);
+  try {
+    fx.env.PROBE_SVC_HEALTH_URL = h.url;
+    const pkgDir = npxLayout(fx, 'v1.0.0');
+    let t = makeIo(S, fx);
+    assert.strictEqual(await S.run('init', ['--auto-update', '1h'], opts(pkgDir), t.io), 0, t.err.join('\n'));
+    t = makeIo(S, fx);
+    assert.strictEqual(await S.run('update', [], opts(pkgDir), t.io), 0, t.err.join('\n'));
+    const cfg = path.join(fx.home, 'config', NAME);
+    fs.writeFileSync(path.join(cfg, 'secret.env'), 'X=1\n', { mode: 0o600 });
+    const sd = path.join(fx.home, 'config', 'systemd', 'user');
+    const shim = path.join(fx.home, '.local', 'bin', NAME);
+
+    t = makeIo(S, fx);
+    assert.strictEqual(await S.run('uninstall', [], opts(pkgDir), t.io), 0, t.err.join('\n'));
+    const r = { stdout: t.out.join('\n') };
+    assert.match(r.stdout, /uninstalled/);
+    for (const f of [shim, fx.root, path.join(sd, `${NAME}.service`), path.join(sd, `${NAME}-update.service`), path.join(sd, `${NAME}-update.timer`)]) {
+      assert.ok(!fs.existsSync(f), `${f} removed`);
+    }
+    const lines = ctlLines(fx);
+    const iTimer = lines.lastIndexOf(`systemctl --user disable --now ${NAME}-update.timer`);
+    const iUnit = lines.lastIndexOf(`systemctl --user disable --now ${NAME}.service`);
+    assert.ok(iTimer >= 0 && iUnit > iTimer, 'timer stopped before the service');
+    assert.strictEqual(lines.at(-1), 'systemctl --user daemon-reload');
+    assert.ok(fs.existsSync(path.join(cfg, 'secret.env')) && fs.existsSync(path.join(fx.home, 'state', NAME)), 'config and state kept');
+    assert.match(r.stdout, /kept \(config and state/);
+    assert.ok(!fs.existsSync(path.join(fx.home, 'state', NAME, 'update.lock')), 'lock released');
+
+    // re-run: nothing left to remove (config/state are not an install)
+    t = makeIo(S, fx);
+    assert.strictEqual(await S.run('uninstall', [], opts(pkgDir), t.io), 0, t.err.join('\n'));
+    assert.match(t.out.join('\n'), /nothing to uninstall/);
+
+    // --purge takes config and state too
+    t = makeIo(S, fx);
+    assert.strictEqual(await S.run('uninstall', ['--purge'], opts(pkgDir), t.io), 0, t.err.join('\n'));
+    assert.ok(!fs.existsSync(cfg) && !fs.existsSync(path.join(fx.home, 'state', NAME)));
+
+    // a shim this template did not write is left in place
+    fs.mkdirSync(path.dirname(shim), { recursive: true });
+    fs.writeFileSync(shim, '#!/bin/sh\necho mine\n', { mode: 0o755 });
+    t = makeIo(S, fx, { env: { ...fx.env, PROBE_SVC_SERVICE_MANAGER: 'none' } });
+    assert.strictEqual(await S.run('init', [], opts(pkgDir), t.io), 0, t.err.join('\n'));
+    fs.writeFileSync(shim, '#!/bin/sh\necho mine\n', { mode: 0o755 });
+    t = makeIo(S, fx, { env: { ...fx.env, PROBE_SVC_SERVICE_MANAGER: 'none' } });
+    assert.strictEqual(await S.run('uninstall', [], opts(pkgDir), t.io), 0, t.err.join('\n'));
+    assert.strictEqual(fs.readFileSync(shim, 'utf8'), '#!/bin/sh\necho mine\n');
+    assert.match(t.out.join('\n'), /left .* in place — this template did not write it/);
+    assert.ok(!fs.existsSync(fx.root));
+
+    // through the real shim, as a user runs it: the manager deletes the very tree it runs from
+    fs.rmSync(shim);
+    const noMgr = { ...fx.env, PROBE_SVC_SERVICE_MANAGER: 'none' };
+    t = makeIo(S, fx, { env: noMgr });
+    assert.strictEqual(await S.run('init', [], opts(pkgDir), t.io), 0, t.err.join('\n'));
+    const sub = spawnSync(shim, ['uninstall', '--purge'], { encoding: 'utf8', env: noMgr });
+    assert.strictEqual(sub.status, 0, sub.stderr);
+    assert.ok(!fs.existsSync(shim) && !fs.existsSync(fx.root) && !fs.existsSync(cfg), sub.stdout);
+  } finally { h.close(); }
 });
