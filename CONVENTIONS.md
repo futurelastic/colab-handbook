@@ -4438,6 +4438,15 @@ The audit reports a **private** repository whose workflows upload GitHub Release
 **advisory** (`warn`): an asset can be a legitimate by-product — an SBOM, a checksum list — so it is
 never a failure, but an asset that is the install path asks every user for `gh`.
 
+A repository that **declares** it distributes a tool — `distribution: js` or `distribution:
+compiled` in `project.yml` ([schema](project.schema.md#distribution--optional)) — is checked for
+its row's install route: a publish step plus a non-private `bin` (public JS; per-platform
+`optionalDependencies` too when compiled), a root `bin` (private JS), or a root `bin` plus a
+workflow calling a dist-refs workflow (private compiled). A missing route is **advisory** (`warn`):
+a publish in a reusable workflow outside the repository is invisible to the check. An undeclared
+repository is never checked — nothing in a repository tells a tool from a library, so the audit
+does not guess (#469).
+
 
 ### Services over npx — init, update, rollback (#465)
 

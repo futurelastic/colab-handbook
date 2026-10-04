@@ -865,6 +865,36 @@ deliberate deferral**, not an oversight: `audit/README.md` states why for each. 
 stays descriptor-internal-only in one sense and world-facing in another; it is never paired
 with `exposure` regardless — no rule reads one key to decide the other's finding.
 
+### `distribution` — optional
+
+```yaml
+distribution: js          # this repository ships a JS tool people install with npx
+distribution: compiled    # … a compiled tool (binaries per platform)
+```
+
+Says that this repository **distributes a tool**, and which column of CONVENTIONS.md §6
+*Distribution*'s table it sits in. The values are that table's own words. The other dimension,
+public or private, is read from the GitHub API, never declared. **Omission means undeclared, not
+"no tool"**: nothing in a repository mechanically tells a tool from a library or from an app
+nobody installs — a root `bin`, a build matrix and a release workflow are each just as true of
+those — so the audit checks only a declared value and never infers one (#469). There is no
+`none` value; nothing would read it.
+
+What the audit accepts as the install route, per row:
+
+| declared | visibility | route present when |
+|---|---|---|
+| `js` | public | a workflow step publishes to npm **and** a manifest (root or workspace member) without `"private": true` has a `bin` |
+| `js` | private / internal | the root `package.json` has a non-empty `bin` (the `npx github:<org>/<repo>#vX.Y.Z` entry point) |
+| `compiled` | public | a workflow step publishes to npm **and** a non-private manifest has a `bin` and non-empty `optionalDependencies` (the per-platform packages, usually generated in CI and so not checked themselves) |
+| `compiled` | private / internal | the root `package.json` has a `bin` **and** a workflow calls (`uses: ./.github/workflows/<f>`) a workflow that pushes `refs/tags/dist/` — the [`dist-refs`](templates/dist-refs.yml) template or a renamed copy; a non-reusable workflow pushing them itself counts too. A copy nothing calls is not a route |
+| either | unreadable / no remote | either row's route above |
+
+An unknown value is a **finding** (`fail`), like every enum. A declared tool with no route is
+**advisory** (`warn`): the evidence is text in this repository's workflows, so a publish step
+in a reusable workflow that lives elsewhere is invisible to it. Not coupled to `exposure` —
+§6 says *every* distributed tool installs with npx, a team-only tool included.
+
 ### `ci` — deliberately not a field
 
 Not modeled here, on purpose
@@ -1540,6 +1570,8 @@ the shape that shows it. One writer at a time says nothing about who reads the r
 | `channels` contains no duplicate member → **finding** | `[workflow, workflow]` passing silently as though it were a richer answer than `[workflow]` |
 | `channels: [none]` combined with another member, or `channels: []` → **finding** | an empty or self-contradicting answer read as a real one |
 | `channels: [none]` + (`production` non-null or `deploy` ≠ `none`) → **advisory** | the claim "nothing runs this" going unflagged against a fact already on record elsewhere in the same descriptor |
+| `distribution` ∈ {`js`, `compiled`}, when set → else **finding** (#469) | a misspelled value silently read as undeclared, and the tool never checked |
+| `distribution` declared, but no install route §6 recognises for its row → **advisory** (#469) | a tool nobody can install the way §6 says every tool installs |
 | `release` is a one-level block of `candidates` ∈ {`auto`, `off`}, `test-period` `<N>d`, `final` ∈ {`auto`, `human`}, when set — no other sub-key | a misspelled knob silently read as the default |
 | `release` widening its derived default — `candidates: auto` where the rung cuts no tags, `final: auto` where the final tag is a human act (`deploy: tag` without a resolvable `final-grant`, or `manual`), `test-period` under `3d` → **finding** | a descriptor lowering §6's human gate on a tag that deploys production |
 | `route: deploy-tag-fast` without a resolvable `final-grant`, `health-url` and `rollback: auto`, or whose release workflow deploys nothing from the final it tags (#446) → **finding** | a final on every green head that nobody chose, or that reaches the Release page while production never moves |
