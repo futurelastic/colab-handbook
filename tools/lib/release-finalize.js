@@ -202,18 +202,102 @@ function openCandidates(tags, remote = 'origin') {
 }
 
 /**
- * --auto (#423): `evaluations` is [{ candidate, verdict }] NEWEST FIRST, one decide() per candidate
- * judged. Returns { candidate, verdict, skipped: [{ tag, state }] }:
+ * #468: the one check that explains a verdict's state, as `<condition>: <detail>` — or null when the
+ * state needs no explaining (finalized, already-final). What a reader of a run needs is WHY this
+ * candidate did not finalize, not the whole checklist again.
+ */
+function stateDetail(verdict) {
+  const v = verdict || {};
+  const checks = v.checks || [];
+  const failing = (name) => checks.find((c) => c.condition === name && !c.ok);
+  const fmt = (c) => (c ? `${c.condition}: ${c.detail}` : null);
+  switch (v.state) {
+    case 'finalized': case 'already-final': return null;
+    case 'held': return fmt(failing('release-hold'));
+    case 'needs-new-candidate': return fmt(failing('regressions') || failing('trunk-green'));
+    case 'testing': return fmt(failing('test-period') || failing('trunk-green'));
+    case 'candidate-ready': return fmt(failing('human'));
+    default: return fmt(checks.find((c) => c.required !== false && !c.ok) || checks.find((c) => !c.ok));
+  }
+}
+
+/**
+ * --auto (#423): `evaluations` is [{ candidate, verdict, period? }] NEWEST FIRST, one decide() per
+ * candidate judged. Returns { candidate, verdict, skipped: [{ tag, state, detail, endsAt }] }:
  *   - any `held` verdict wins outright — a human veto is never walked around;
  *   - else the first `finalized` (the newest candidate clean on its own clock);
  *   - else the newest candidate's verdict (testing, refused …), with the older ones listed as skipped.
+ * #468: each skipped entry says why (stateDetail) and when its own period ends, so a run that
+ * finalizes nothing can say which candidate finals first — the fallback to the newest candidate
+ * otherwise reads exactly like "only the newest candidate is considered".
  */
 function pickNewestClean(evaluations) {
   const ev = evaluations || [];
   if (!ev.length) return { candidate: null, verdict: null, skipped: [] };
   const held = ev.find((e) => e.verdict.state === 'held');
   const pick = held || ev.find((e) => e.verdict.state === 'finalized') || ev[0];
-  return { candidate: pick.candidate, verdict: pick.verdict, skipped: ev.filter((e) => e !== pick).map((e) => ({ tag: e.candidate.tag, state: e.verdict.state })) };
+  return {
+    candidate: pick.candidate,
+    verdict: pick.verdict,
+    skipped: ev.filter((e) => e !== pick).map((e) => ({
+      tag: e.candidate.tag, state: e.verdict.state, detail: stateDetail(e.verdict), endsAt: e.period ? e.period.endsAt : null,
+    })),
+  };
+}
+
+/**
+ * #468: is any red trunk run (`redAts`, ISO createdAt times from trunkGreenVerdict's `redAt`) inside
+ * this candidate's own window [start, endsAt)? The window is half-open exactly as trunkGreenVerdict
+ * reads it. True means the candidate would read `needs-new-candidate` — IF the red run's workflow is
+ * among the ones that vetted it; that is only known after a full judge, so a true here may be wrong
+ * in the safe direction only: a final delayed, never one made.
+ */
+function windowHasRed(period, redAts) {
+  if (!period) return null;
+  const startMs = Date.parse(period.start);
+  const endMs = Date.parse(period.endsAt);
+  return (redAts || []).find((t) => { const ms = Date.parse(t); return ms >= startMs && ms < endMs; }) || null;
+}
+
+/**
+ * #468: why a run produced no final, in one line, plus the candidate that finals first.
+ *   state, candidate, checks   the picked verdict (and its candidate) — the run's reported state
+ *   period                     the picked candidate's own period, or null
+ *   skipped                    pickNewestClean's skipped list, the cheap-skipped testing ones included
+ *   now                        ISO timestamp (the module stays clock-free)
+ * Returns null when a final was made (or the version is already final); else { line, next } where
+ * `next` = { tag, endsAt, hoursLeft } for the TESTING candidate whose own period ends soonest, or null.
+ */
+function whyNoFinal({ state, candidate, checks, period, skipped, now } = {}) {
+  if (state === 'finalized' || state === 'already-final') return null;
+  const nowMs = Date.parse(now);
+  const testing = [
+    ...(state === 'testing' && candidate && period ? [{ tag: candidate.tag, endsAt: period.endsAt }] : []),
+    ...(skipped || []).filter((x) => x.state === 'testing' && x.endsAt),
+  ].filter((x) => !Number.isNaN(Date.parse(x.endsAt)));
+  testing.sort((a, b) => Date.parse(a.endsAt) - Date.parse(b.endsAt) || String(a.tag).localeCompare(String(b.tag)));
+  const first = testing[0] || null;
+  const next = first
+    ? { tag: first.tag, endsAt: first.endsAt, hoursLeft: Number.isNaN(nowMs) ? null : Math.max(0, Math.ceil((Date.parse(first.endsAt) - nowMs) / 3600000)) }
+    : null;
+  const nextText = next ? `${next.tag} is first, its own test period ends ${next.endsAt}${next.hoursLeft !== null ? ` (${next.hoursLeft}h left)` : ''}` : null;
+  const why = stateDetail({ state, checks });
+  const tag = candidate ? candidate.tag : 'no candidate';
+  let line;
+  if (state === 'no-candidate') line = `no open candidate to finalize${why ? ` — ${why}` : ''}`;
+  else if (state === 'testing') {
+    const allTesting = (skipped || []).every((x) => x.state === 'testing');
+    line = allTesting && nextText
+      ? `no candidate's own test period has elapsed clean — ${nextText}`
+      : `${tag} is still testing (${why || 'test period'})${nextText ? `; ${nextText}` : ''}`;
+  } else line = `${tag}: ${state}${why ? ` — ${why}` : ''}${nextText ? `; ${nextText}` : ''}`;
+  const older = (skipped || []).filter((x) => x.state !== 'testing');
+  if (older.length && state === 'testing') {
+    const counts = {};
+    for (const x of older) counts[x.state] = (counts[x.state] || 0) + 1;
+    line += `; older candidates: ${Object.entries(counts).map(([k, n]) => `${n} ${k}`).join(', ')}`;
+  }
+  return { line, next };
 }
 
 // ---- the test period ----------------------------------------------------------------------------
@@ -263,7 +347,9 @@ function trunkGreenVerdict(runs, { periodStart, periodEnd = null, suiteWorkflows
   const inWindow = runs.filter((r) => r && Date.parse(r.createdAt) >= startMs && Date.parse(r.createdAt) < endMs && suite.has(r.workflowName || '(unnamed workflow)') && r.event !== 'pull_request');
   const red = inWindow.filter((r) => r.status === 'completed' && !NOT_RED.has(r.conclusion) && r.conclusion !== 'cancelled');
   if (red.length) {
-    return { ok: false, permanent: true, pending: false, detail: `trunk went red during the test period: ${red.map((r) => `${r.workflowName} ${r.conclusion}${r.branch ? ` on ${r.branch}` : ''} at ${String(r.headSha).slice(0, 7)} (${r.createdAt})`).join('; ')}` };
+    // #468: redAt — when each red run started — lets an --auto walk skip older candidates whose
+    // window holds the same red run without paying a full judge for each (windowHasRed).
+    return { ok: false, permanent: true, pending: false, redAt: red.map((r) => r.createdAt), detail: `trunk went red during the test period: ${red.map((r) => `${r.workflowName} ${r.conclusion}${r.branch ? ` on ${r.branch}` : ''} at ${String(r.headSha).slice(0, 7)} (${r.createdAt})`).join('; ')}` };
   }
   const unsettled = [];
   let pending = inWindow.some((r) => r.status !== 'completed');
@@ -342,7 +428,7 @@ function regressionVerdict(edges, { periodStart }) {
  * evaluate. Returns { ok, detail }.
  */
 function migrationGrantVerdict({ paths, grant, since }) {
-  if (paths === null || paths === undefined) return { ok: false, detail: 'the migration files since the last final could not be read — an unread migration is not an absent one' };
+  if (paths === null || paths === undefined) return { ok: false, unread: true, detail: 'the migration files since the last final could not be read — an unread migration is not an absent one' };
   if (!paths.length) return { ok: true, detail: `no migration file changed since ${since || 'the first commit'}` };
   const list = paths.join(', ');
   if (grant && grant.ok) return { ok: true, detail: `${paths.length} migration file(s) since ${since || 'the first commit'} (${list}), granted on the tracking issue #${grant.issue}` };
@@ -522,7 +608,7 @@ module.exports = {
   STATES, CONDITIONS, HOLD_LABEL, CUT_SUBJECT_SUFFIX,
   parseVersion, compareVersions, parseCandidate,
   parseReleaseMarker, releaseMarker, eventMarker, hasEvent, trackingTitle, trackingBody,
-  selectCandidate, openCandidates, pickNewestClean, periodVerdict, trunkGreenVerdict, windowBranches, mergeWindowRuns, regressionVerdict,
+  selectCandidate, openCandidates, pickNewestClean, stateDetail, windowHasRed, whyNoFinal, periodVerdict, trunkGreenVerdict, windowBranches, mergeWindowRuns, regressionVerdict,
   handoffCommand, decide, tagMessage, migrationGrantVerdict,
   carriedIssues, previousFinal, releasedEvent, releasedComment,
 };

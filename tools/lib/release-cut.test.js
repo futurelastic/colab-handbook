@@ -479,7 +479,12 @@ test('#443 headCandidateVerdict: flags a head green for longer than one CI cycle
   assert.strictEqual(at('2026-10-02T13:00:00Z', { tagsAtSha: ['v1.2.1-rc.3'] }).state, 'named');
   assert.strictEqual(at('2026-10-02T13:00:00Z', { tagsAtSha: ['v1.3.0'] }).state, 'named');
   assert.strictEqual(at('2026-10-02T13:00:00Z', { owed: 0 }).state, 'nothing-owed');
-  assert.strictEqual(at('2026-10-02T13:00:00Z', { owed: null }).state, 'nothing-owed');
+  // #467: no final at all is a stall, not "nothing owed" — every --auto cut refuses until a human tags one.
+  const noFinal = at('2026-10-02T13:00:00Z', { owed: null });
+  assert.strictEqual(noFinal.state, 'no-final');
+  assert.strictEqual(noFinal.flag, true);
+  assert.match(noFinal.detail, /no final tag yet/);
+  assert.strictEqual(at('2026-10-02T13:00:00Z', { owed: 0 }).flag, false);
   assert.strictEqual(at('2026-10-02T13:00:00Z', { candidatesAuto: false }).state, 'off');
   assert.strictEqual(at('2026-10-02T13:00:00Z', { runs: null }).state, 'unread');
   assert.strictEqual(at('2026-10-02T13:00:00Z', { runs: [run({ conclusion: 'failure' })] }).state, 'not-green');
@@ -586,4 +591,55 @@ test('#446 a candidate route is unchanged: no fast condition reported, final: fa
   const v = rc.decide(autoFacts());
   assert.strictEqual(v.final, false);
   for (const c of rc.FAST_CONDITIONS) assert.strictEqual(refusal(v, c), undefined, c);
+});
+
+// ---- #467: a standing refusal is told apart from a transient one --------------------------------
+
+test('#467 standing: no final tag under --auto is a standing refusal, never a no-op', () => {
+  const v = rc.decide(autoFacts({ lastFinal: null, tags: [] }));
+  assert.strictEqual(v.ok, false);
+  assert.strictEqual(v.noop, false);
+  assert.deepStrictEqual(v.standing, ['version']);
+});
+
+test('#467 standing: an unread bump signal fails version, but transiently', () => {
+  const v = rc.decide(autoFacts({ guard: { error: 'guard exited 2' } }));
+  assert.strictEqual(refusal(v, 'version').ok, false);
+  assert.deepStrictEqual(v.standing, []);
+});
+
+test('#467 standing: red or unfinished CI is transient; a malformed switch marker is standing, an unread issue list is not', () => {
+  assert.deepStrictEqual(rc.decide(autoFacts({ ci: { ok: false, detail: 'in flight' }, suite: { ok: false, detail: 'red' } })).standing, []);
+  const malformed = rc.switchVerdict([{ number: 7, state: 'OPEN', body: '<!-- colab:switch name=Bad! -->' }]);
+  assert.strictEqual(malformed.ok, false);
+  assert.deepStrictEqual(rc.decide(autoFacts({ switches: malformed })).standing, ['switch-dependencies']);
+  const unread = rc.switchVerdict(null);
+  assert.strictEqual(unread.unread, true);
+  assert.deepStrictEqual(rc.decide(autoFacts({ switches: unread })).standing, []);
+  assert.deepStrictEqual(rc.decide(autoFacts({ switches: undefined })).standing, [], 'not measured is a read, not a fact');
+});
+
+test('#467 standing: a no-op and an ok cut carry none', () => {
+  const nothing = rc.decide(autoFacts({ cc: CC({}) }));
+  assert.strictEqual(nothing.noop, true);
+  assert.deepStrictEqual(nothing.standing, []);
+  const already = rc.decide(autoFacts({ tags: ['v1.2.0', 'v1.2.1-rc.1'], tagsAtSha: ['v1.2.1-rc.1'] }));
+  assert.strictEqual(already.noop, true);
+  assert.deepStrictEqual(already.standing, []);
+  const ok = rc.decide(autoFacts());
+  assert.strictEqual(ok.ok, true);
+  assert.deepStrictEqual(ok.standing, []);
+});
+
+test('#467 standing: a wrong manifest is standing, an unread one is not', () => {
+  const wrong = rc.decide(autoFacts({ manifests: [{ file: 'package.json', version: '9.9.9' }] }));
+  assert.deepStrictEqual(wrong.standing, ['manifest-version']);
+  assert.deepStrictEqual(rc.decide(autoFacts({ manifests: null })).standing, []);
+});
+
+test('#467 every standing condition is one decide() can report', () => {
+  for (const c of rc.STANDING_CONDITIONS) assert.ok(rc.CONDITIONS.includes(c), c);
+  for (const c of ['ci-green', 'full-suite', 'release-hold', 'cadence', 'spacing', 'promotion', 'already-candidate', 'already-final']) {
+    assert.ok(!rc.STANDING_CONDITIONS.includes(c), `${c} must be transient or a no-op`);
+  }
 });

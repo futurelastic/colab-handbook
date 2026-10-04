@@ -427,3 +427,60 @@ test('#446 deploy-tag-fast: finalize reports no-candidate and never finalizes a 
   assert.strictEqual(v.finalTag, null);
   assert.match(v.checks.find((c) => c.condition === 'candidate').detail, /deploy-tag-fast cuts its finals/);
 });
+
+// ---- #468: why no final -------------------------------------------------------------------------
+
+test('#468 trunkGreenVerdict carries redAt; windowHasRed reads the same half-open window', () => {
+  const red = rf.trunkGreenVerdict([run({ conclusion: 'failure', createdAt: at(1) })], TG);
+  assert.deepStrictEqual(red.redAt, [at(1)]);
+  const period = { start: at(0), endsAt: at(1) };
+  assert.strictEqual(rf.windowHasRed(period, [at(0.5)]), at(0.5));
+  assert.strictEqual(rf.windowHasRed(period, [at(0)]), at(0), 'the start is inside');
+  assert.strictEqual(rf.windowHasRed(period, [at(1)]), null, 'endsAt is outside, as in trunkGreenVerdict');
+  assert.strictEqual(rf.windowHasRed(period, []), null);
+});
+
+test('#468 pickNewestClean: every skipped candidate says why, and when its own period ends', () => {
+  const p = dailyWalk({ days: 4, now: 2 }); // nothing has elapsed yet
+  assert.strictEqual(p.verdict.state, 'testing');
+  // dailyWalk judges only the newest when none elapsed — so evaluate several by hand.
+  const evals = ['v1.3.0-rc.3', 'v1.3.0-rc.2'].map((tag, i) => ({
+    candidate: { tag },
+    verdict: { state: i ? 'needs-new-candidate' : 'testing', checks: [
+      { condition: 'test-period', ok: !!i, required: true, detail: '3d test period … (20h left)' },
+      { condition: 'trunk-green', ok: !i, required: true, detail: 'trunk went red at X' },
+    ] },
+    period: { start: at(i), endsAt: at(3 + i) },
+  }));
+  const pick = rf.pickNewestClean(evals);
+  assert.deepStrictEqual(pick.skipped, [{ tag: 'v1.3.0-rc.2', state: 'needs-new-candidate', detail: 'trunk-green: trunk went red at X', endsAt: at(4) }]);
+});
+
+test('#468 whyNoFinal: all testing names the earliest end; a stuck state names its check; a final explains nothing', () => {
+  const checks = [{ condition: 'test-period', ok: false, required: true, detail: 'ends later (40h left)' }];
+  const testing = rf.whyNoFinal({
+    state: 'testing', candidate: { tag: 'v1.3.0-rc.5' }, checks, period: { endsAt: at(5) },
+    skipped: [{ tag: 'v1.3.0-rc.4', state: 'testing', endsAt: at(4.5) }, { tag: 'v1.3.0-rc.1', state: 'testing', endsAt: at(3) }],
+    now: at(2),
+  });
+  assert.deepStrictEqual(testing.next, { tag: 'v1.3.0-rc.1', endsAt: at(3), hoursLeft: 24 });
+  assert.match(testing.line, /^no candidate's own test period has elapsed clean — v1\.3\.0-rc\.1 is first, its own test period ends .* \(24h left\)$/);
+
+  const mixed = rf.whyNoFinal({
+    state: 'testing', candidate: { tag: 'v1.3.0-rc.5' }, checks, period: { endsAt: at(5) },
+    skipped: [{ tag: 'v1.3.0-rc.2', state: 'needs-new-candidate', endsAt: at(4) }], now: at(2),
+  });
+  assert.match(mixed.line, /v1\.3\.0-rc\.5 is still testing \(test-period: ends later \(40h left\)\); v1\.3\.0-rc\.5 is first.*; older candidates: 1 needs-new-candidate$/);
+
+  const stuck = rf.whyNoFinal({
+    state: 'needs-new-candidate', candidate: { tag: 'v1.3.0-rc.5' },
+    checks: [{ condition: 'trunk-green', ok: false, required: true, detail: 'trunk went red during the test period: ci failure' }],
+    skipped: [], now: at(2),
+  });
+  assert.strictEqual(stuck.next, null);
+  assert.strictEqual(stuck.line, 'v1.3.0-rc.5: needs-new-candidate — trunk-green: trunk went red during the test period: ci failure');
+
+  assert.strictEqual(rf.whyNoFinal({ state: 'finalized', now: at(2) }), null);
+  assert.strictEqual(rf.whyNoFinal({ state: 'already-final', now: at(2) }), null);
+  assert.match(rf.whyNoFinal({ state: 'no-candidate', checks: [{ condition: 'candidate', ok: false, detail: 'no rc tag' }], now: at(2) }).line, /^no open candidate to finalize — candidate: no rc tag$/);
+});

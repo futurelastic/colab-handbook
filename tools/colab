@@ -1324,7 +1324,7 @@ function measureCandidateConditions(repoAbs, { sha, lastFinal, at, readRuns, iss
     const why = ghUnusableWhy(repoAbs);
     ci = { ok: false, detail: `gh not usable (${why}) — cannot confirm CI at ${at}` };
     suite = { ok: false, detail: `gh not usable (${why}) — cannot confirm the suite ran at ${at}` };
-    switches = { ok: false, detail: `gh not usable (${why}) — the colab:switch markers cannot be read` };
+    switches = { ok: false, unread: true, detail: `gh not usable (${why}) — the colab:switch markers cannot be read` };
   } else {
     const rows = readRuns();
     const run = git.summarizeRunsForCommit(rows, sha);
@@ -1340,7 +1340,7 @@ function measureCandidateConditions(repoAbs, { sha, lastFinal, at, readRuns, iss
   const declared = migrationPaths.unionPaths(projectDoc(repoAbs), projectDocAt(repoAbs, sha));
   const changes = releaseCutChanges(repoAbs, lastFinal, sha, declared);
   const schema = changes === null
-    ? { ok: false, detail: 'git diff failed — schema changes cannot be read' }
+    ? { ok: false, unread: true, detail: 'git diff failed — schema changes cannot be read' }
     : releaseCut.schemaVerdict(changes, lastFinal || 'the first commit', declared);
   // #441: every migration file since the last final, destructive or not — an operator-granted
   // automatic final refuses an ungranted one (release-finalize.js migrationGrantVerdict).
@@ -1474,7 +1474,7 @@ function measureFastRoute(repoAbs, { policy, remote, issues, lastFinal, tags, au
   const trust = trustAt(repoAbs, `${remote}/main`);
   const finalGrant = isGhUsable(repoAbs)
     ? releasePolicy.finalGrantVerdict(git.ghIssueView(repoAbs, grantDecl.issue, ['state', 'labels', 'comments']), { issue: grantDecl.issue, trust })
-    : { ok: false, ruledBy: null, detail: `release.final-grant #${grantDecl.issue} could not be read: gh not usable (${ghUnusableWhy(repoAbs)})` };
+    : { ok: false, unread: true, ruledBy: null, detail: `release.final-grant #${grantDecl.issue} could not be read: gh not usable (${ghUnusableWhy(repoAbs)})` };
   const holds = releaseCut.holdsVerdict(issues);
   let tracking = null;
   let grant = null;
@@ -1647,7 +1647,7 @@ function cmdReleaseCut(argv) {
   if (opts.json) {
     print(JSON.stringify({
       repo: shortRepo(repoAbs), sha, ...(offTrunk ? { trunk } : {}), lastFinal, suggestion, dry: !!opts.dry, auto: !!opts.auto,
-      ok: verdict.ok, noop: !!verdict.noop, tag: verdict.tag, created, published, channel, version: verdict.version, bump: verdict.bump,
+      ok: verdict.ok, noop: !!verdict.noop, standing: verdict.standing || [], tag: verdict.tag, created, published, channel, version: verdict.version, bump: verdict.bump,
       overridden: verdict.overridden, signals: verdict.signals ? verdict.signals.lines : null, checks: verdict.checks,
       // #446: present on every route, so the workflow reads one shape — final only on deploy-tag-fast.
       final: !!verdict.final,
@@ -1673,6 +1673,8 @@ function cmdReleaseCut(argv) {
   }
   if (!verdict.ok) {
     print(`✗ refused — ${verdict.refusals.length} condition(s) failed; nothing cut.`);
+    // #467: a refusal no further run clears by itself is a stall — say so, so nobody waits on it.
+    if (verdict.standing && verdict.standing.length) print(`  release stalled — ${verdict.standing.join(', ')} will not clear by itself; a human act is owed (the next run refuses the same way).`);
     if (handoff) print(`\nA migration rides this release. The one command, for a human to run:\n  ${handoff}`);
     return 1;
   }
@@ -1968,7 +1970,7 @@ function cmdReleaseFinalize(argv) {
       manifests, ancestry, tags: tagNames, finalGrant, migrations,
       human: { bar: humanBar, answeredBy: opts.answeredBy || null },
     });
-    return { candidate: cand, verdict, period, tracking };
+    return { candidate: cand, verdict, period, tracking, trunk };
   };
 
   let cand = null; let verdict; let period = null; let tracking = version0 ? trackings.get(version0) : null;
@@ -1976,14 +1978,23 @@ function cmdReleaseFinalize(argv) {
   if (walk) {
     const MAX_JUDGED = 10;
     const evals = [];
+    // #468: every red trunk run a judged candidate's window held. One red run puts every candidate cut
+    // in the test period before it into needs-new-candidate; on a repo cutting several a day, judging
+    // each one in full spent MAX_JUDGED on them and the walk stopped before the older clean one.
+    const knownRed = [];
     for (const c of releaseFinalize.openCandidates(tags, remote)) {
-      if (c.refused) { skipped.push({ tag: c.tag, state: 'refused', detail: c.refused }); continue; }
+      if (c.refused) { skipped.push({ tag: c.tag, state: 'refused', detail: c.refused, endsAt: null }); continue; }
       const tr = trackings.has(c.version) ? trackings.get(c.version) : trackingFor(c.version, { isCandidate: true });
       const p = releaseFinalize.periodVerdict({ cutAt: c.cutAt, trackingCreatedAt: tr && tr.createdAt, testPeriodDays: policy.effective.testPeriodDays, now });
       // Cheap skip: a younger candidate whose own period has not elapsed cannot finalize — only the newest is judged regardless, so the report has a state.
-      if (!p.elapsed && evals.length) { skipped.push({ tag: c.tag, state: 'testing', detail: p.detail }); continue; }
+      if (!p.elapsed && evals.length) { skipped.push({ tag: c.tag, state: 'testing', detail: `test-period: ${p.detail}`, endsAt: p.endsAt }); continue; }
+      // #468: cheap skip, the second kind — a red run already seen inside this candidate's own window.
+      // Not counted toward MAX_JUDGED. May be wrong only in the safe direction (windowHasRed).
+      const seenRed = evals.length ? releaseFinalize.windowHasRed(p, knownRed) : null;
+      if (seenRed) { skipped.push({ tag: c.tag, state: 'needs-new-candidate', detail: `trunk-green: trunk went red at ${seenRed}, inside its own test period (seen judging a newer candidate)`, endsAt: p.endsAt }); continue; }
       const e = judge(c, { kind: 'candidate', candidate: c, superseded: [], detail: `${c.tag} at ${shortSha(c.sha)}, cut ${c.cutAt} (--auto: judged on its own clock)` });
       evals.push(e);
+      if (e.trunk && Array.isArray(e.trunk.redAt)) knownRed.push(...e.trunk.redAt);
       if (e.verdict.state === 'finalized' || e.verdict.state === 'held' || evals.length >= MAX_JUDGED) break;
     }
     const pick = releaseFinalize.pickNewestClean(evals);
@@ -2080,13 +2091,16 @@ function cmdReleaseFinalize(argv) {
   const trackingOut = tracking && !tracking.error
     ? { number: tracking.number || null, url: tracking.url || null, created: trackingCreated && (!cand || cand.version === version0), held: !!tracking.held, supersededHeld }
     : null;
+  // #468: why this run made no final, and which candidate finals first — the line the release
+  // workflow prints, so "no final" never has to be reconstructed from a checklist.
+  const why = releaseFinalize.whyNoFinal({ state: verdict.state, candidate: cand, checks: verdict.checks, period, skipped: walk ? skipped : [], now });
   if (opts.json) {
     print(JSON.stringify({
       repo: shortRepo(repoAbs), row: policy.derived.row, route: policy.effective.route, final: policy.effective.final, testPeriodDays: policy.effective.testPeriodDays,
       lastFinal, dry: !!opts.dry, auto: !!opts.auto, candidate: cand, tracking: trackingOut,
       periodStart: period ? period.start : null, periodEndsAt: period ? period.endsAt : null,
       state: verdict.state, tagged, finalTag: verdict.finalTag, checks: verdict.checks, handoff: verdict.handoff,
-      skipped: walk ? skipped : undefined, announced, grant: verdict.grant || null, channel,
+      skipped: walk ? skipped : undefined, why, next: why ? why.next : null, announced, grant: verdict.grant || null, channel,
     }, null, 2));
   } else {
     print(`colab release finalize${opts.auto ? ' --auto' : ''} — ${shortRepo(repoAbs)} (last final: ${lastFinal || 'none'}${cand ? `, candidate: ${cand.tag}` : ''})`);
@@ -2098,6 +2112,7 @@ function cmdReleaseFinalize(argv) {
     }
     print('');
     print(`state: ${verdict.state}${opts.dry ? ' [--dry: nothing written]' : ''}${tagged ? ` — tagged ${verdict.finalTag} and pushed it to ${remote}` : ''}`);
+    if (why) print(`why no final: ${why.line}`);
     if (announced && announced.issues.length) print(`released in ${verdict.finalTag || version0}: told ${announced.posted.length ? announced.posted.map((n) => `#${n}`).join(', ') : 'nobody new'} (carried: ${announced.issues.map((n) => `#${n}`).join(', ')}${announced.skipped.length ? `; unreadable: ${announced.skipped.map((n) => `#${n}`).join(', ')}` : ''})`);
     if (channel && channel.ok) print(`✓ ${channel.detail}`);
     else if (channel) warn(`${channel.detail} — the final tag stands`);
@@ -6929,7 +6944,9 @@ Per tag-gated repo:
   headCandidate     #443, where candidates are automatic: { state, flag, detail } — whether the newest
                      candidate names main's head. Flags (state untagged, "head not a candidate") when
                      head has been green for longer than one CI cycle — the longest suite run at that
-                     sha — and carries no tag. Other states: named · nothing-owed · not-green ·
+                     sha — and carries no tag. Also flags (state no-final, #467) when there is no final tag
+                     at all: \`release cut --auto\` refuses every run until a human tags the first version,
+                     a stall that otherwise reads green. Other states: named · nothing-owed · not-green ·
                      pending (inside one cycle) · not-promotion (trunk: dev, a hotfix head) · unread · off.
   semverSuggestion  from Conventional-Commit types since the last tag: a breaking change (! or a
                      BREAKING CHANGE: footer) -> major, else feat -> minor, else fix -> patch,
@@ -6941,7 +6958,7 @@ fetch failure does not abort the row — it degrades to whatever is on disk and 
 rather than reporting nothing.
 
 Exit code: 0 when nothing is flagged, 1 when at least one repo is (an unpromoted or unreleased
-fix/breaking commit, or a green head that is not a candidate) — same posture as \`colab update\`'s "behind" tally.
+fix/breaking commit, a green head that is not a candidate, or no final tag at all) — same posture as \`colab update\`'s "behind" tally.
 `;
 
 function cmdReleaseStatus(argv) {
@@ -6990,7 +7007,7 @@ function cmdReleaseStatus(argv) {
     const tableRows = printable.map((r) => {
       const up = r.unpromoted ? `${r.unpromoted.commits}${r.unpromoted.fixFlag ? ' ⚠' : ''}` : '—';
       const un = r.unreleased.tag ? `${r.unreleased.commits}${r.unreleased.fixFlag ? ' ⚠' : ''} (${r.unreleased.days}d since ${r.unreleased.tag})` : 'no tags yet';
-      const hc = r.headCandidate ? (r.headCandidate.flag ? '⚠ not a candidate' : r.headCandidate.state) : '—';
+      const hc = r.headCandidate ? (r.headCandidate.flag ? (r.headCandidate.state === 'no-final' ? '⚠ no final' : '⚠ not a candidate') : r.headCandidate.state) : '—';
       return [r.repo, up, un, hc, r.semverSuggestion.bump || '—', r.flag ? '⚠ FLAGGED' : ''];
     });
     print(table(tableRows, ['REPO', 'UNPROMOTED', 'UNRELEASED', 'HEAD', 'SUGGEST', '']));
@@ -7007,7 +7024,7 @@ function cmdReleaseStatus(argv) {
   }
   print('');
   if (flagged.length) {
-    print(`${flagged.length} repo(s) FLAGGED — a fix or breaking commit is sitting unreleased/unpromoted, or a green head is not a candidate:`);
+    print(`${flagged.length} repo(s) FLAGGED — a fix or breaking commit is sitting unreleased/unpromoted, a green head is not a candidate, or there is no final for candidates to follow:`);
     for (const r of flagged) print(`  ${r.repo}${r.headCandidate && r.headCandidate.flag ? `  —  ${r.headCandidate.detail}` : ''}`);
     print('Who cuts the tag follows the release rung of CONVENTIONS §6 — this only measures the gap.');
   } else {

@@ -85,6 +85,20 @@ const CONDITIONS = Object.freeze([
   'final-grant', 'release-hold', 'migration-grant',
 ]);
 
+/**
+ * #467: the refusals that do NOT clear by themselves. A run refused on one of these refuses again on
+ * the next run and the one after — nothing but a human act (a first final tag, a fixed marker, a
+ * fixed manifest, a recorded grant) moves it — so the release workflow reports it as a STALL, an
+ * error annotation, never as the routine warning a CI-still-running refusal gets. The rest are
+ * transient: `ci-green` / `full-suite` (a run in flight, a red run the next merge fixes), an UNREAD
+ * anything (a read that failed — the next run reads again), and `release-hold` (a deliberate human
+ * veto is not a stall; it is the system working). Classified in decide() as `standing`.
+ */
+const STANDING_CONDITIONS = Object.freeze([
+  'release-policy', 'prerelease-trigger', 'version', 'schema-additive', 'switch-dependencies',
+  ...releaseTag.PRE_TAG_CONDITIONS, 'final-grant', 'migration-grant',
+]);
+
 /** #446: the conditions only route deploy-tag-fast reports. */
 const FAST_CONDITIONS = Object.freeze(['spacing', 'already-final', 'final-grant', 'release-hold', 'migration-grant']);
 
@@ -371,7 +385,7 @@ function parseMigrationSection(text, version) {
 function decideAutoVersion({ lastFinal, signals, migration, tags }) {
   const refuse = (detail, extra = {}) => ({ ok: false, detail, ...extra });
   const s = signals || { total: 0, breaking: [], minor: [], patch: [], unread: [] };
-  if (s.unread && s.unread.length) return refuse(`a bump signal could not be read — fail closed: ${s.unread.join('; ')}`);
+  if (s.unread && s.unread.length) return refuse(`a bump signal could not be read — fail closed: ${s.unread.join('; ')}`, { unread: true });
   if (!lastFinal) return refuse('no final release tag (vX.Y.Z) on main yet — the first version is a human decision, not a computed bump');
   const last = parseVersion(lastFinal);
   if (!last) return refuse(`the last release tag ${lastFinal} is not vX.Y.Z — cannot compute a bump from it`);
@@ -443,7 +457,7 @@ function spacingVerdict({ finals, spacingHours, now }) {
  * to put the label on, so a human may put it on any issue, and only a human removes it.
  */
 function holdsVerdict(issues) {
-  if (issues === null || issues === undefined) return { ok: false, detail: `the open issues could not be read — an unread ${HOLD_LABEL} is not an absent one` };
+  if (issues === null || issues === undefined) return { ok: false, unread: true, detail: `the open issues could not be read — an unread ${HOLD_LABEL} is not an absent one` };
   const held = issues.filter((i) => i && (!i.state || String(i.state).toUpperCase() === 'OPEN')
     && (i.labels || []).some((l) => (l && typeof l === 'object' ? l.name : l) === HOLD_LABEL)).map((i) => i.number);
   return held.length
@@ -480,16 +494,22 @@ const DOWNSTREAM_EVENTS = Object.freeze(['workflow_run', 'schedule', 'workflow_d
  * whole suite-duration after it went green is one the release run did not tag.
  *
  * Returns { state, flag, detail, greenAt, cycleMs } — state is one of: off · named · nothing-owed ·
- * not-promotion · unread · not-green · pending · untagged. Only `untagged` flags.
+ * no-final · not-promotion · unread · not-green · pending · untagged. `untagged` and `no-final` flag.
+ *
+ * `no-final` (#467): candidates are automatic but there is no final tag to compute a bump from, so
+ * `release cut --auto` refuses on every run, forever, until a human tags the first version. That is a
+ * stall, not "nothing owed" — reading it as nothing-owed is how a repo sat green for days with no tag.
  */
 function headCandidateVerdict({ candidatesAuto, sha, tagsAtSha, owed, runs, promotion, now }) {
   const at = `main@${String(sha || '').slice(0, 7)}`;
-  const out = (state, detail, extra = {}) => ({ state, flag: state === 'untagged', detail, greenAt: null, cycleMs: null, ...extra });
+  const out = (state, detail, extra = {}) => ({ state, flag: state === 'untagged' || state === 'no-final', detail, greenAt: null, cycleMs: null, ...extra });
   if (!candidatesAuto) return out('off', 'candidates are not automatic here — nothing names the head by itself');
   const named = (tagsAtSha || []).filter((t) => /^v[0-9]+\.[0-9]+\.[0-9]+(-rc\.[1-9][0-9]*)?$/.test(t));
   if (named.length) return out('named', `${at} is ${named.join(', ')}`);
   if (owed === 0) return out('nothing-owed', `nothing merged on main since the last final — no candidate is owed`);
-  if (owed === null || owed === undefined) return out('nothing-owed', 'no final tag yet — the first version is a human decision, so no candidate is owed');
+  if (owed === null || owed === undefined) {
+    return out('no-final', 'no final tag yet — `release cut --auto` refuses every run until a human tags the first version (CONVENTIONS.md §6, Versioning); release stalled');
+  }
   if (promotion && !promotion.ok) return out('not-promotion', `${at} is not a promotion of trunk — --auto never cuts it (${promotion.detail})`);
   if (!Array.isArray(runs)) return out('unread', `gh run list failed — cannot tell whether ${at} is green`);
   const suite = runs.filter((r) => r && !DOWNSTREAM_EVENTS.includes(r.event));
@@ -725,7 +745,7 @@ function closedDone(issue) {
  * here: this is the release-time consequence, not the edge audit.
  */
 function switchVerdict(issues) {
-  if (issues === null || issues === undefined) return { ok: false, detail: 'the issue list could not be read — switch dependencies cannot be cleared' };
+  if (issues === null || issues === undefined) return { ok: false, unread: true, detail: 'the issue list could not be read — switch dependencies cannot be cleared' };
   const problems = [];
   const needsOf = new Map(); // name -> { needs: [..], from: #N }
   const declared = new Set();
@@ -799,11 +819,18 @@ function promotionVerdict({ trunk, sha, parents, headOnTrunk, mergedFromTrunk, e
 function decide(facts) {
   const f = facts || {};
   const checks = [];
-  const add = (condition, ok, detail) => checks.push({ condition, ok: !!ok, detail });
+  // #467: `unread` marks a failure that is a failed READ, not a measured fact — the next run reads
+  // again, so it is never a standing refusal. Kept out of the check rows (their shape is frozen).
+  const unreadSet = new Set();
+  const add = (condition, ok, detail, unread) => {
+    checks.push({ condition, ok: !!ok, detail });
+    if (!ok && unread) unreadSet.add(condition);
+  };
+  const isUnread = (verdict) => !!(verdict && verdict.unread);
 
   const p = f.policy;
   const fast = isFastRoute(p) && !(p.findings && p.findings.length);
-  if (!p) add('release-policy', false, 'no release policy was evaluated');
+  if (!p) add('release-policy', false, 'no release policy was evaluated', true);
   else if (p.findings && p.findings.length) add('release-policy', false, `the release: block is invalid — ${p.findings.map((x) => x.text).join('; ')}`);
   else if (fast && !f.auto) {
     add('release-policy', false, 'route deploy-tag-fast tags its finals only from the release workflow (`colab release cut --auto`), where the deploy runs in the same run — a final cut by hand would reach production with no deploy job behind it');
@@ -822,7 +849,7 @@ function decide(facts) {
   let noop = false;
   if (f.auto) {
     const cad = f.auto.cadence || { ok: false, detail: 'cadence not measured' };
-    add('cadence', cad.ok, cad.detail);
+    add('cadence', cad.ok, cad.detail, !f.auto.cadence);
     if (!cad.ok) noop = !!f.auto.cadence;
     if (fast) {
       const sp = f.auto.spacing || { ok: false, detail: 'final spacing not measured' };
@@ -832,7 +859,7 @@ function decide(facts) {
     // #429: on `trunk:` other than main, only a promotion head is a candidate; anything else no-ops.
     const pr = f.auto.promotion;
     if (pr) {
-      add('promotion', pr.ok, pr.detail);
+      add('promotion', pr.ok, pr.detail, isUnread(pr));
       if (!pr.ok && !pr.unread) noop = true;
     }
   }
@@ -844,7 +871,7 @@ function decide(facts) {
   const v = f.auto
     ? decideAutoVersion({ lastFinal: f.lastFinal, signals: f.auto.signals, migration: f.auto.migration, tags: f.tags })
     : decideVersion({ lastFinal: f.lastFinal, suggestion: f.suggestion, override: f.override, tags: f.tags });
-  add('version', v.ok, v.detail);
+  add('version', v.ok, v.detail, isUnread(v));
   // "Nothing merged since the last final" is a no-op for the release workflow, not a failure.
   if (f.auto && v.nothing) noop = true;
 
@@ -875,7 +902,10 @@ function decide(facts) {
   // #424: the three pre-tag checks, on the tag this run would create.
   if (tag) {
     for (const c of releaseTag.preTagChecks({ tag, manifests: f.manifests, ancestry: f.ancestry, tags: f.tags, trunk: RELEASE_BRANCH, versionSource: versionSourceOf(p) })) {
-      add(c.condition, c.ok, c.detail);
+      // An unread manifest list or an unmeasured ancestry is a failed read, not a wrong manifest.
+      const unreadPre = (c.condition === 'manifest-version' && (f.manifests === null || f.manifests === undefined))
+        || (c.condition === 'on-trunk' && !f.ancestry);
+      add(c.condition, c.ok, c.detail, unreadPre);
       if (c.derivable && c.derivable.length) derivable = c.derivable;
     }
   } else if (f.ancestry && f.ancestry.shallow) {
@@ -884,8 +914,8 @@ function decide(facts) {
   }
 
   for (const [condition, verdict] of [['ci-green', f.ci], ['full-suite', f.suite], ['schema-additive', f.schema], ['switch-dependencies', f.switches]]) {
-    if (!verdict) add(condition, false, 'not measured');
-    else add(condition, verdict.ok, verdict.detail);
+    if (!verdict) add(condition, false, 'not measured', true);
+    else add(condition, verdict.ok, verdict.detail, isUnread(verdict));
   }
 
   // #446: what the fast route keeps in place of the test period it does not have.
@@ -893,19 +923,24 @@ function decide(facts) {
   let grant = null;
   if (fast) {
     const g = f.finalGrant || { ok: false, detail: `release.final-grant #${p.effective.finalGrant.issue} was not resolved — an unresolved grant is not a grant` };
-    add('final-grant', g.ok, g.detail);
+    add('final-grant', g.ok, g.detail, !f.finalGrant || isUnread(g));
     if (g.ok) grant = { issue: p.effective.finalGrant.issue, ruledBy: g.ruledBy || null };
     const h = f.holds || { ok: false, detail: `${HOLD_LABEL} was not measured` };
-    add('release-hold', h.ok, h.detail);
+    add('release-hold', h.ok, h.detail, !f.holds || isUnread(h));
     const mig = f.migrations || { ok: false, detail: 'migrations since the last final were not measured' };
-    add('migration-grant', mig.ok, mig.detail);
+    add('migration-grant', mig.ok, mig.detail, !f.migrations || isUnread(mig));
     if (!mig.ok && v.ok && mig.paths && mig.paths.length) handoff = migrationHandoff(f.trackingIssue, v.version);
   }
 
   const refusals = checks.filter((c) => !c.ok);
   const ok = refusals.length === 0 && !!tag;
+  // #467: the refusals that will not clear by themselves — empty on ok and on a no-op, whose
+  // "failures" (cadence, nothing merged, head already a candidate) are the route holding.
+  const standing = ok || noop ? [] : refusals
+    .filter((c) => STANDING_CONDITIONS.includes(c.condition) && !unreadSet.has(c.condition))
+    .map((c) => c.condition);
   return {
-    ok, noop: !ok && noop, checks, refusals, version: v.ok ? v.version : null, tag: ok ? tag : null,
+    ok, noop: !ok && noop, standing, checks, refusals, version: v.ok ? v.version : null, tag: ok ? tag : null,
     bump: v.ok ? v.bump : (v.bump || null), overridden: v.ok ? v.overridden : null,
     signals: f.auto ? f.auto.signals || null : null, migration: v.migration || null,
     derivable,
@@ -945,7 +980,7 @@ function tagMessage(verdict, { sha, lastFinal }) {
 }
 
 module.exports = {
-  CONDITIONS, FAST_CONDITIONS, BUMPS, MIGRATION_FILE, RELEASE_BRANCH, HOLD_LABEL,
+  CONDITIONS, FAST_CONDITIONS, STANDING_CONDITIONS, BUMPS, MIGRATION_FILE, RELEASE_BRANCH, HOLD_LABEL,
   isFastRoute, spacingVerdict, holdsVerdict, migrationHandoff,
   parseVersion, formatVersion, candidateNumbers, nextCandidateNumber, decideVersion,
   parseGuardOutput, exportsDiff, switchRemovalsSince, autoSignals, parseMigrationSection, decideAutoVersion, cadenceVerdict,

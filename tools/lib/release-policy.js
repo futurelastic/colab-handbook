@@ -421,7 +421,7 @@ function parseGrantIssue(v) {
 function finalGrantVerdict(record, { issue, trust } = {}) {
   const decisionRecord = require('./decision-record.js');
   const ref = `release.final-grant #${issue}`;
-  if (!record) return { ok: false, ruledBy: null, detail: `${ref} could not be read from the tracker — an unread grant is not a grant` };
+  if (!record) return { ok: false, unread: true, ruledBy: null, detail: `${ref} could not be read from the tracker — an unread grant is not a grant` };
   const labels = (record.labels || []).map((l) => (l && typeof l === 'object' ? l.name : l));
   const all = decisionRecord.liveDecisions(record.comments);
   const live = decisionRecord.trustedDecisions(record.comments, trust);

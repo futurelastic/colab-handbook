@@ -425,3 +425,43 @@ test('#437 trunk: main still reads main alone', () => {
   const listed = readState(fx).calls.filter((c) => /^run list --branch \S+ --created/.test(c)).map((c) => c.split(' ')[3]);
   assert.deepStrictEqual(listed, ['main']);
 });
+
+// ---- #468: a run that makes no final says why, and the walk survives a busy repo -----------------
+
+test('#468 --auto: a run with every candidate still testing names the one that finals first, and why each other is waiting', () => {
+  const fx = fixture();
+  dailyCandidates(fx, [0.5, 0.4, 0.3]);
+  const r = finalize(fx, ['--auto']);
+  assert.strictEqual(r.code, 0, r.out + r.err);
+  assert.strictEqual(r.body.state, 'testing');
+  assert.ok(r.body.why && r.body.why.next, JSON.stringify(r.body.why));
+  assert.strictEqual(r.body.why.next.tag, 'v1.2.1-rc.1', 'every clock starts at the tracking issue: the tie goes to the oldest');
+  assert.match(r.body.why.line, /no candidate's own test period has elapsed clean — v1\.2\.1-rc\.1 is first/);
+  assert.deepStrictEqual(r.body.next, r.body.why.next);
+  for (const x of r.body.skipped) {
+    assert.match(x.detail || '', /^test-period: /, JSON.stringify(x));
+    assert.ok(x.endsAt, JSON.stringify(x));
+  }
+});
+
+test('#468 --auto: one red run inside many candidates\' windows does not exhaust the walk — the older clean one still finalizes', () => {
+  const fx = fixture();
+  // rc.1 cut 20 days ago (its window closed long before the red run); rc.2…rc.12 cut ~10 days ago,
+  // every one of their 3-day windows holding the same red run 8.5 days ago.
+  const days = [20, ...Array.from({ length: 11 }, (_, i) => 10 - i * 0.05)];
+  const tags = dailyCandidates(fx, days);
+  assert.strictEqual(tags.length, 12);
+  finalize(fx, ['--auto']); // opens the tracking issue
+  ageTracking(fx, 30);
+  writeState(fx, (s) => { s.runsSince = [{ headSha: 'd'.repeat(40), status: 'completed', conclusion: 'failure', workflowName: 'ci', event: 'push', createdAt: ago(8.5) }]; });
+
+  const r = finalize(fx, ['--auto', '--dry']);
+  assert.strictEqual(r.body.state, 'finalized', `${r.out}${r.err}`);
+  assert.strictEqual(r.body.candidate.tag, 'v1.2.1-rc.1');
+  assert.strictEqual(r.body.why, null);
+  const nnc = r.body.skipped.filter((x) => x.state === 'needs-new-candidate');
+  assert.strictEqual(nnc.length, 11, JSON.stringify(r.body.skipped, null, 2));
+  for (const x of nnc) assert.match(x.detail, /^trunk-green: /);
+  // At most one of them paid for a full judge: the rest were skipped on the red run already seen.
+  assert.ok(nnc.filter((x) => /seen judging a newer candidate/.test(x.detail)).length >= 10);
+});

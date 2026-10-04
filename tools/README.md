@@ -1108,6 +1108,19 @@ reads — drop every row whose workflow name equals `GITHUB_WORKFLOW`. The relea
 would read as *CI not finished* forever, and a refused run's red one would poison the next read.
 So never run these commands from the workflow that runs the suite: that suite would be dropped too.
 
+**A standing refusal is told apart from a transient one (#467).** `--json` carries `standing: [condition]`
+— the failed conditions no later run clears by itself: `release-policy`, `prerelease-trigger`,
+`version` (above all: no final tag yet, so `--auto` has nothing to bump from), `schema-additive`,
+`switch-dependencies`, the three pre-tag checks, `final-grant`, `migration-grant`
+(`STANDING_CONDITIONS` in `tools/lib/release-cut.js`). Never standing: `ci-green` / `full-suite` (a run in
+flight, a red run the next merge fixes), `release-hold` (a deliberate human veto is the system working),
+and any condition that failed because a **read** failed — an unread bump signal, issue list, manifest
+list, grant, or diff — which the next run reads again. Empty on `ok` and on a no-op. The release
+workflow turns a non-empty `standing` into an `::error title=Release stalled::` annotation and a
+summary banner, and still exits 0: a red release run at main's head makes trunk not-green and refuses
+the very ship that clears the stall. `colab release-status` flags the commonest case on its own,
+`headCandidate.state: no-final` — candidates automatic, no final tag at all.
+
 **`--auto` (#422)** is the release workflow's mode: the bump is computed with no human input and
 `--bump`/`--reason` are refused beside it. Since the last final tag — fixes and chores → patch (any
 commit at all owes one); a `feat`, or a switch-removal child (`role=remove`) closed since then →
@@ -1282,6 +1295,20 @@ the run. On `deploy-tag` it never tags: it stops at `candidate-ready` and posts 
 number pre-filled. `--auto` never combines with `--tag`/`--answered-by`, and `testing`,
 `no-candidate` and `already-final` exit 0 under it — nothing to do yet is the workflow's ordinary
 output.
+
+**Why no final (#468).** A run that makes no final says why. `--json` carries `why: { line, next }`
+(`null` once a final is tagged or the version is already final) and `next: { tag, endsAt, hoursLeft }`
+— the **testing** candidate whose own period ends soonest, i.e. the one that finals first if nothing
+goes red; each `skipped` entry carries `detail` (the one check that explains its state,
+`<condition>: <detail>`) and `endsAt`. Without it, a run that falls back to reporting the newest
+candidate (because none elapsed) reads exactly like "only the newest candidate is considered". The
+release workflow prints the line and up to ten other open candidates in its summary. The walk also
+skips, without a full judge and without counting toward its judged-candidate cap, every older
+candidate whose own window holds a red trunk run it already saw (`trunk-green`'s `redAt`,
+`windowHasRed`) — one red run on a repo cutting several candidates a day otherwise used up the cap on
+candidates all owing a new candidate, and the walk stopped before the older clean one. That skip
+assumes the red run's workflow vetted the older candidate too, so it can only delay a final, never
+make one.
 
 ### Release npm
 

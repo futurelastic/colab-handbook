@@ -177,7 +177,21 @@ jobs:
           elif [ "$(jq -r '.ok' "$OUT")" = "true" ]; then
             echo "Verdict ok but nothing created." | tee -a "$GITHUB_STEP_SUMMARY"
           else
-            echo "::warning::colab release cut refused: $(jq -r '[.checks[]? | select(.ok | not) | .condition] | join(", ")' "$OUT")"
+            # #467: a refusal no later run clears by itself (no first final, a malformed marker, a
+            # wrong manifest) is a STALL — an error annotation and a summary banner, still exit 0: a red
+            # release run at main's head would make trunk not-green and refuse the very ship that fixes it.
+            STANDING="$(jq -r '(.standing // []) | join(", ")' "$OUT")"
+            if [ -n "$STANDING" ]; then
+              echo "::error title=Release stalled::colab release cut refused on a condition that does not clear by itself: $(jq -r '. as $v | [$v.checks[]? | select(.ok | not) | select(.condition as $c | any(($v.standing // [])[]; . == $c)) | "\(.condition) — \(.detail)"] | join("; ")' "$OUT")"
+              {
+                echo "#### ⚠ Release stalled"
+                echo
+                echo "\`colab release cut --auto\` refused on **$STANDING** — the next run refuses the same way until a human acts (the ✗ rows above say what). The run stays green on purpose, so it never blocks the ship that fixes it."
+                echo
+              } >> "$GITHUB_STEP_SUMMARY"
+            else
+              echo "::warning::colab release cut refused: $(jq -r '[.checks[]? | select(.ok | not) | .condition] | join(", ")' "$OUT")"
+            fi
           fi
 
       - name: Finalize the newest clean candidate (colab release finalize --auto)
@@ -196,11 +210,21 @@ jobs:
             exit 1
           fi
           STATE="$(jq -r '.state' "$OUT")"
+          # #468: why no final, and every other open candidate with its own reason — the checklist
+          # above it is only the picked candidate's, which alone reads as "only the newest counts".
+          WHY="$(jq -r '.why.line // empty' "$OUT")"
           {
             echo "### colab release finalize --auto — $STATE"
             echo
             jq -r '.checks[]? | "- \(if .ok then "✓" else "✗" end) **\(.condition)** — \(.detail)"' "$OUT"
             echo
+            if [ -n "$WHY" ]; then echo "**Why no final:** $WHY"; echo; fi
+            if [ "$(jq -r '(.skipped // []) | length' "$OUT")" != "0" ]; then
+              echo "Other open candidates:"
+              jq -r '(.skipped // [])[:10][] | "- \(.tag): \(.state)\(if .detail then " — \(.detail)" else "" end)"' "$OUT"
+              jq -r '(.skipped // []) | if length > 10 then "- … \(length - 10) more" else empty end' "$OUT"
+              echo
+            fi
           } >> "$GITHUB_STEP_SUMMARY"
           if [ "$(jq -r '.tagged' "$OUT")" = "true" ]; then
             TAG="$(jq -r '.finalTag' "$OUT")"
@@ -208,8 +232,8 @@ jobs:
             echo "Finalized $TAG" | tee -a "$GITHUB_STEP_SUMMARY"
           else
             case "$STATE" in
-              refused|needs-new-candidate|held) echo "::warning::colab release finalize: $STATE" ;;
-              *) echo "Finalize: $STATE" ;;
+              refused|needs-new-candidate|held) echo "::warning::colab release finalize: $STATE${WHY:+ — $WHY}" ;;
+              *) echo "Finalize: $STATE${WHY:+ — $WHY}" ;;
             esac
           fi
 
