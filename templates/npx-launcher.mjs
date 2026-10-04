@@ -50,7 +50,7 @@ import {
   chmodSync, closeSync, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, realpathSync, renameSync, rmSync,
 } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
-import { dirname, join, resolve } from 'node:path';
+import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 // EDIT: the binary's name inside each dist ref (dist-refs.yml's `bin` input). null = this
@@ -223,10 +223,12 @@ function git(args, opts = {}) {
 }
 
 /**
- * Fetch the dist ref into a throwaway repo, verify, install atomically. Returns the binary path.
- * Throws on any refusal (main() turns that into a message + exit 1; the service template reports it).
+ * Fetch ONE file out of the dist ref `refs/tags/dist/<version>/<plat>` into a throwaway repo,
+ * verify it against that ref's SHA256SUMS, and move it into place at `dest` atomically. Returns
+ * `dest`. Throws on any refusal. `plat` is `<os>-<arch>` for a binary, or `any` for a
+ * platform-neutral artifact (a prebuilt JS app's tarball — templates/npx-service.mjs KIND 'dist').
  */
-export function install({ origin, version, plat, exe, dir }) {
+export function fetchDistFile({ origin, version, plat, file, dest, mode = 0o755 }) {
   const ref = `refs/tags/dist/${version}/${plat}`;
   const fail = (msg) => { throw new Error(msg); };
   const tmp = mkdtempSync(join(tmpdir(), 'npx-launcher-'));
@@ -237,26 +239,36 @@ export function install({ origin, version, plat, exe, dir }) {
       fail(`could not fetch ${ref} from ${origin} — is ${version} released for ${plat}?\n${(f.stderr || '').trim()}`);
     }
     const sums = git(['-C', tmp, 'cat-file', 'blob', `FETCH_HEAD:SHA256SUMS`]);
-    if (sums.status !== 0) fail(`${ref} carries no SHA256SUMS — refusing an unverifiable binary`);
-    const want = expectedSum(sums.stdout, exe);
-    if (!want) fail(`${ref}'s SHA256SUMS has no line for ${exe}`);
+    if (sums.status !== 0) fail(`${ref} carries no SHA256SUMS — refusing an unverifiable download`);
+    const want = expectedSum(sums.stdout, file);
+    if (!want) fail(`${ref}'s SHA256SUMS has no line for ${file}`);
 
+    const dir = dirname(dest);
     mkdirSync(dir, { recursive: true });
-    const part = join(dir, `.${exe}.part-${process.pid}`);
+    const part = join(dir, `.${basename(dest)}.part-${process.pid}`);
     const fd = openSync(part, 'w');
     let r;
     try {
-      r = spawnSync('git', ['-C', tmp, 'cat-file', 'blob', `FETCH_HEAD:${exe}`], { stdio: ['ignore', fd, 'pipe'] });
+      r = spawnSync('git', ['-C', tmp, 'cat-file', 'blob', `FETCH_HEAD:${file}`], { stdio: ['ignore', fd, 'pipe'] });
     } finally { closeSync(fd); }
-    if (r.error || r.status !== 0) { rmSync(part, { force: true }); fail(`${ref} has no ${exe}`); }
+    if (r.error || r.status !== 0) { rmSync(part, { force: true }); fail(`${ref} has no ${file}`); }
     const got = sha256(part);
-    if (got !== want) { rmSync(part, { force: true }); fail(`checksum mismatch for ${exe} in ${ref}: expected ${want}, got ${got}`); }
-    chmodSync(part, 0o755);
-    renameSync(part, join(dir, exe));
-    return join(dir, exe);
+    if (got !== want) { rmSync(part, { force: true }); fail(`checksum mismatch for ${file} in ${ref}: expected ${want}, got ${got}`); }
+    chmodSync(part, mode);
+    renameSync(part, dest);
+    return dest;
   } finally {
     rmSync(tmp, { recursive: true, force: true });
   }
+}
+
+/**
+ * Fetch the platform's binary from its dist ref, verify, install atomically. Returns the binary
+ * path. Throws on any refusal (main() turns that into a message + exit 1; the service template
+ * reports it).
+ */
+export function install({ origin, version, plat, exe, dir }) {
+  return fetchDistFile({ origin, version, plat, file: exe, dest: join(dir, exe) });
 }
 
 export function main(argv, start = here) {
