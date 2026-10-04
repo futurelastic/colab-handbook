@@ -34,6 +34,13 @@
  *      trailer scan that feeds this (tools/colab's computeAntiStacking) to recognise BOTH a
  *      prior `CI-Grant:` trailer and a prior `CI-Cure:` trailer as "an exemption already merged
  *      against this red" — a cure and a grant are both exemptions for this guard's purposes.
+ *      ONE NARROW ADMISSION (#477): PROGRESS. When the guard refuses because a prior exemption
+ *      already merged on this continuous red, a further cure is still admitted iff trunk's red-job
+ *      set at the current red sha is a STRICT subset of the red-job set at the red sha the prior
+ *      exemption was measured against (`redSetShrank`, below). A fix that repaired one of two red
+ *      jobs, or two independent failures healed by two successive fixes, then needs no human step;
+ *      a cure that left the set unchanged — or grew it — still stops the chain, which is the loop
+ *      condition 3 exists to break. Every other condition still applies to the remaining set.
  *   4. NO WORKFLOW-FILE CHANGES — the branch diff must not touch `.github/workflows/**`. A
  *      branch that edits the CI configuration doing the grading is not allowed to grade itself;
  *      that door stays behind a human ci-grant (condition 4 in the original proposal, #281).
@@ -584,6 +591,90 @@ function dryRunDispatchPlan(jobEvidence, dryRunCapable) {
 }
 
 /**
+ * The prior exemption's red sha (#477), read off its merge commit's message: both trailers carry
+ * `over-red <trunk>@<sha>` — `CI-Grant:` (#105) and `CI-Cure:` (#281) — and that sha is what the
+ * prior exemption was measured against. Returns the hex string as written (usually short) or `null`
+ * when no such trailer line is present. Only a line STARTING with one of the two prefixes counts,
+ * the same anchoring `computeAntiStacking`'s `--grep` uses, so prose quoting a trailer cannot feed it.
+ */
+function priorRedShaFromMessage(message) {
+  if (typeof message !== 'string') return null;
+  for (const line of message.split('\n')) {
+    const m = /^CI-(?:Grant|Cure):.*\bover-red \S*@([0-9a-f]{7,40})\b/.exec(line.trim());
+    if (m) return m[1];
+  }
+  return null;
+}
+
+/**
+ * The red-job SET at one trunk sha (#477), from the raw job rows of every not-green run there —
+ * the same selection `shapeJobEvidence` makes (an incomplete job → `null`, unmeasurable), reduced
+ * to `{name, workflowName}` identities.
+ */
+function redJobSet(redRunJobs) {
+  const shaped = shapeJobEvidence({ redRunJobs, branchRunJobs: [] });
+  if (!shaped) return null;
+  return shaped.redJobs.map((j) => ({ name: j.name, workflowName: j.workflowName }));
+}
+
+/**
+ * Progress past condition 3 (#477) — PURE. `prior` is the red-job set at the red sha the most recent
+ * exemption on this continuous red was measured against; `current` the red-job set at trunk's red
+ * sha now (the `redJobs` of `shapeJobEvidence`). Jobs are compared by `jobKey` — workflow AND name,
+ * the same identity 2b matches on.
+ *
+ * ok only when `current` is a STRICT subset of `prior`: every job red now was already red then, and
+ * at least one job red then is not red now. An equal set is no progress (the prior exemption fixed
+ * nothing that stayed fixed); a job red now that was not red then is a NEW failure and refuses even
+ * if another job was repaired — admitting it would let a chain of cures trade one red for another
+ * forever. Either set unmeasured (`null`, non-array) or empty refuses: an empty `prior` cannot have
+ * been the basis of an exemption, and an empty `current` on a red trunk is unmeasurable (same
+ * posture as 2b).
+ */
+function redSetShrank(prior, current) {
+  if (!Array.isArray(prior) || !Array.isArray(current)) {
+    return { ok: false, reason: 'the red-job set at the prior exemption\'s red sha could not be measured' };
+  }
+  if (!prior.length || !current.length) {
+    return { ok: false, reason: 'a red-job set to compare was empty — an unmeasurable red set is never progress' };
+  }
+  const before = new Map(prior.map((j) => [jobKey(j), j]));
+  const now = new Map(current.map((j) => [jobKey(j), j]));
+  const added = [...now.keys()].filter((k) => !before.has(k)).map((k) => jobLabel(now.get(k)));
+  const healed = [...before.keys()].filter((k) => !now.has(k)).map((k) => jobLabel(before.get(k)));
+  const still = [...now.values()].map(jobLabel);
+  if (added.length) {
+    return { ok: false, added, healed, still,
+      reason: `trunk's red set did not shrink: ${added.map((n) => `\`${n}\``).join(', ')} is red now and was not at the prior exemption's red sha — a new failure is not progress` };
+  }
+  if (!healed.length) {
+    return { ok: false, added, healed, still,
+      reason: `trunk's red set is unchanged since the prior exemption (${still.map((n) => `\`${n}\``).join(', ')}) — no progress` };
+  }
+  return { ok: true, added, healed, still,
+    reason: `trunk's red set shrank since the prior exemption: ${healed.map((n) => `\`${n}\``).join(', ')} healed, ` +
+      `${still.map((n) => `\`${n}\``).join(', ')} still red` };
+}
+
+/**
+ * Condition 3 as `cureVerdict` applies it (#477): the caller's `stacking` verdict, widened ONLY on
+ * its stacked refusal (`stacking.stacked`, set by ci-grant.js's stackingVerdict) and only by
+ * measured progress. Returns `{ok, reason, progress}` — `progress` is the `redSetShrank` result
+ * whenever it was consulted, so the success path can carry it into the trailer.
+ */
+function stackingWithProgress(stacking, priorRedJobs, jobEvidence) {
+  if (stacking && stacking.ok) return { ok: true, reason: '', progress: null };
+  const base = (stacking && stacking.reason) || 'anti-stacking verdict unavailable';
+  if (!stacking || !stacking.stacked) return { ok: false, reason: base, progress: null };
+  const current = jobEvidence && Array.isArray(jobEvidence.redJobs) ? jobEvidence.redJobs : null;
+  const progress = redSetShrank(priorRedJobs, current);
+  if (!progress.ok) {
+    return { ok: false, progress, reason: `${base} The progress admission (#477) does not admit it either: ${progress.reason}` };
+  }
+  return { ok: true, reason: '', progress };
+}
+
+/**
  * The cure verdict for one branch's attempt to ship into a red trunk.
  *
  * `containsRedSha` — bool, whether the branch's tree contains the red trunk sha as an ancestor
@@ -599,7 +690,11 @@ function dryRunDispatchPlan(jobEvidence, dryRunCapable) {
  * (the caller already used it to compute `containsRedSha` and `evidence`).
  *
  * `stacking` — `{ok, reason}`, the caller's `ciGrant.stackingVerdict(...)` result, reused
- * verbatim (condition 3) — this module never recomputes it.
+ * verbatim (condition 3) — this module never recomputes it. Its stacked refusal carries
+ * `stacked: true`; only that refusal can be lifted, by progress (#477).
+ *
+ * `priorRedJobs` (#477) — `redJobSet(...)` at the red sha the prior exemption named in its trailer,
+ * or `null` when unmeasured. Consulted only on a stacked refusal; compared with `jobEvidence.redJobs`.
  *
  * `workflowsTouched` — bool, whether the branch's diff against trunk touches any path under
  * `.github/workflows/` (condition 4 — tools/lib/cure-diff.js, `--no-renames`). `null` means the
@@ -637,14 +732,15 @@ function dryRunDispatchPlan(jobEvidence, dryRunCapable) {
  *
  * Returns `{ok, reason}`; on success also `provenJobs` (the red job names 2b proved, additive,
  * #297), `admitted` (#475/#476 — `{scripts: [{path, added}], pins: [{path, pins}]}`, present only
- * when a manifest admission was used) and — ONLY on a cure that went through the carve-out —
+ * when a manifest admission was used), `progress` (#477 — `{healed, still}`, present only when condition 3
+ * was passed by progress past a prior exemption) and — ONLY on a cure that went through the carve-out —
  * `carveOut: {jobs}`. The ordinary
  * cure's reason text is unchanged, which is what lets the caller answer "which door was this?" by
  * the presence of `carveOut` rather than by re-deriving it.
  */
 function cureVerdict({ containsRedSha, evidence, redSha, stacking, workflowsTouched, jobEvidence,
   manifestScriptsTouched, manifestPaths, manifestScriptsAddOnly, pythonManifestTouched, pythonManifestPaths,
-  pythonPinOnly, dryRunCapable }) {
+  pythonPinOnly, dryRunCapable, priorRedJobs }) {
   if (!containsRedSha) {
     return { ok: false,
       reason: `branch does not contain trunk's current red head \`${redSha}\` as an ancestor — ` +
@@ -663,6 +759,7 @@ function cureVerdict({ containsRedSha, evidence, redSha, stacking, workflowsTouc
         'a bystander\'s PR runs against a merge ref that includes the red trunk, so it waits for green instead (#353)' };
   }
   const proven = redJobsProvenOnBranch(jobEvidence);
+  const cond3 = stackingWithProgress(stacking, priorRedJobs, jobEvidence);
   if (!proven.ok) {
     const out = { ok: false,
       reason: `branch's run is green, but the check trunk is red on is not proven here: ${proven.reason} — ` +
@@ -676,7 +773,7 @@ function cureVerdict({ containsRedSha, evidence, redSha, stacking, workflowsTouc
       || (manifestScriptsTouched === true && Array.isArray(manifestScriptsAddOnly) && manifestScriptsAddOnly.length > 0);
     const pythonOk = pythonManifestTouched === false
       || (pythonManifestTouched === true && Array.isArray(pythonPinOnly) && pythonPinOnly.length > 0);
-    if (wanted.length && stacking && stacking.ok && scriptsOk && pythonOk
+    if (wanted.length && cond3.ok && scriptsOk && pythonOk
       && typeof workflowsTouched === 'boolean') {
       out.dryRunWanted = wanted;
     }
@@ -684,9 +781,11 @@ function cureVerdict({ containsRedSha, evidence, redSha, stacking, workflowsTouc
   }
   const dry = proven.dryRunJobs && proven.dryRunJobs.length ? { jobs: proven.dryRunJobs } : null;
   const drySuffix = dry ? ` — the main-only job(s) ${dry.jobs.map((n) => `\`${n}\``).join(', ')} proven by a dry run on the branch (#474)` : '';
-  if (!stacking || !stacking.ok) {
-    return { ok: false, reason: (stacking && stacking.reason) || 'anti-stacking verdict unavailable' };
+  if (!cond3.ok) {
+    return { ok: false, reason: cond3.reason };
   }
+  const prog = cond3.progress ? { progress: { healed: cond3.progress.healed, still: cond3.progress.still } } : {};
+  const progSuffix = cond3.progress ? `; past a prior exemption on this red because ${cond3.progress.reason} (#477)` : '';
   if (typeof workflowsTouched !== 'boolean' || typeof manifestScriptsTouched !== 'boolean'
     || typeof pythonManifestTouched !== 'boolean') {
     return { ok: false,
@@ -728,12 +827,12 @@ function cureVerdict({ containsRedSha, evidence, redSha, stacking, workflowsTouc
     }
     const detail = carve.jobs.map((j) => `\`${j.name}\` (${j.redMs}ms red on trunk, ${j.branchMs}ms passing here)`).join(', ');
     return { ok: true, provenJobs: proven.jobs, carveOut: { jobs: carve.jobs }, ...(dry ? { dryRun: dry } : {}),
-      ...(via ? { admitted } : {}),
+      ...(via ? { admitted } : {}), ...prog,
       reason: `branch contains red \`${redSha}\` as an ancestor AND is green at its own current head (\`${evidence.sha}\`) — proven cure, ` +
-        `admitted through the #321 workflow carve-out: every job red on trunk ran to success here with every step it took on trunk — ${detail}${drySuffix}${via}` };
+        `admitted through the #321 workflow carve-out: every job red on trunk ran to success here with every step it took on trunk — ${detail}${drySuffix}${via}${progSuffix}` };
   }
-  return { ok: true, provenJobs: proven.jobs, ...(dry ? { dryRun: dry } : {}), ...(via ? { admitted } : {}),
-    reason: `branch contains red \`${redSha}\` as an ancestor AND is green at its own current head (\`${evidence.sha}\`) — proven cure${drySuffix}${via}` };
+  return { ok: true, provenJobs: proven.jobs, ...(dry ? { dryRun: dry } : {}), ...(via ? { admitted } : {}), ...prog,
+    reason: `branch contains red \`${redSha}\` as an ancestor AND is green at its own current head (\`${evidence.sha}\`) — proven cure${drySuffix}${via}${progSuffix}` };
 }
 
 /** The reason-text suffix naming which manifest admission(s) a cure used (#475/#476), or ''. */
@@ -749,4 +848,5 @@ function admittedText(admitted) {
 }
 
 module.exports = { cureVerdict, redJobsProvenOnBranch, workflowCarveOut, manifestStepProof, shapeJobEvidence, dryRunDispatchPlan,
+  priorRedShaFromMessage, redJobSet, redSetShrank,
   WORKFLOW_REFUSAL, MANIFEST_SCRIPTS_REFUSAL, PYTHON_MANIFEST_REFUSAL, PUBLISH_STEP_MARKER, DRY_RUN_STEP };

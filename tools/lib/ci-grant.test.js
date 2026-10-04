@@ -411,3 +411,13 @@ test('stackingVerdict: permits a NEW grant when trunk went green at some point a
   });
   assert.equal(v.ok, true, v.reason);
 });
+
+test('#477 stackingVerdict: the stacked refusal is tagged (stacked + prior) so the cure rule can tell it from "not red"', () => {
+  const prior = { sha: 'abc', at: '2026-10-01T00:00:00Z', redSha: 'def1234' };
+  const v = stackingVerdict({ trunkIsRed: true, priorGrantMerge: prior, redContinuousSincePriorGrant: true });
+  assert.equal(v.ok, false);
+  assert.equal(v.stacked, true);
+  assert.deepEqual(v.prior, prior);
+  const notRed = stackingVerdict({ trunkIsRed: false, priorGrantMerge: prior, redContinuousSincePriorGrant: true });
+  assert.equal(notRed.stacked, undefined);
+});

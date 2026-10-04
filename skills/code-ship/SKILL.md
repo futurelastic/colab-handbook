@@ -642,7 +642,10 @@ green.
   a CI round, and teaches every reader of that run the failure is the branch's.
 - **Two branches both claim to be the patch?** Take the one whose head demonstrably
   repairs the failing test; the other waits. The cure door opens once per continuous
-  red episode (anti-stacking), so a second "cure" is at best a no-op.
+  red episode (anti-stacking), and again only when trunk's red-job set has strictly
+  shrunk since (`CONVENTIONS.md` §4, *Cure rule*, condition 3, #477) — so a second
+  "cure" of the same failure is at best a no-op, while a fix for a *different* still-red
+  job can cure in turn.
 
 ### B1a. Now read the BRANCH's CI too — beside `<base>`'s, not instead of it
 

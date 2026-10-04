@@ -251,6 +251,24 @@ test('#475/#476: the CI-Cure trailer and the payload name a manifest admission',
   assert.match(pay.slice(0, pay.indexOf('\n}\n')), /admitted: c\.admitted \|\| null/);
 });
 
+test('#477: the CI-Cure trailer and the payload name a progress admission; the prior red set is measured only when stacked', () => {
+  const src = fs.readFileSync(path.join(REPO_ROOT, 'tools', 'colab'), 'utf8');
+  const fn = src.slice(src.indexOf('function ciCureTrailerLine('));
+  const body = fn.slice(0, fn.indexOf('\n}\n') + 3);
+  // eslint-disable-next-line no-new-func
+  const trailer = new Function('shortSha', `${body}; return ciCureTrailerLine;`)((s) => String(s).slice(0, 7));
+  const v = { ok: true, redSha: 'a'.repeat(40), evidenceSha: 'b'.repeat(40), progress: { healed: ['unit', 'lint'], still: ['browser'] } };
+  const line = trailer(v, 'fix/x-1', 'main');
+  assert.equal(line, 'CI-Cure: branch fix/x-1 over-red main@aaaaaaa evidence bbbbbbb after-progress healed unit,lint');
+  // The next cure on this red reads its prior red sha back off this very line.
+  assert.equal(require('./ci-cure.js').priorRedShaFromMessage(`fix: x\n\n${line}`), 'aaaaaaa');
+  const pay = src.slice(src.indexOf('function ciCurePayload('));
+  assert.match(pay.slice(0, pay.indexOf('\n}\n')), /progress: c\.progress \?/);
+  const cure = src.slice(src.indexOf('function shipCiCure('), src.indexOf('function shipCureJobEvidence('));
+  assert.match(cure, /jobEvidence && stacking && stacking\.stacked \? priorExemptionRedJobs\(/);
+  assert.match(cure, /priorRedJobs,/);
+});
+
 // --- #474: dry-run evidence wiring ---------------------------------------------------------------
 
 test('#474: shipCiCure only MEASURES the dry-run plan; the one dispatch sits on the real path, after the --dry return', () => {

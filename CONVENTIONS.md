@@ -3093,7 +3093,19 @@ ci-grant when any condition below is not met. Fires **iff**:
 3. the **same anti-stacking guard** ci-grant uses holds — no prior grant OR cure
    already merged while trunk has stayed continuously red since. A repo that
    auto-cures once and stays red anyway must not auto-cure again on the same
-   continuous red.
+   continuous red. **One admission — progress (#477):** a further cure passes
+   condition 3 when trunk's red-job set at its current red sha is a **strict
+   subset** of the red-job set at the red sha the prior exemption was measured
+   against (the `over-red` sha its `CI-Grant:` / `CI-Cure:` trailer names), jobs
+   matched per workflow as in 2b. A trunk with two independent failures, or a fix
+   that repaired one of two red jobs, then heals by successive fixes with no human
+   step. An **unchanged** set refuses (the prior exemption fixed nothing that
+   stayed fixed), and so does a set with **any new** red job, even if another
+   healed — trading one red for another is the loop this condition exists to
+   break. Either set unmeasurable (runs aged out, a job still in flight) refuses.
+   The candidate must still cure the remaining set under every other condition.
+   The admission belongs to the cure rule only; a human `ci-grant` create keeps
+   the plain guard.
 4. the branch diff does **not** touch `.github/workflows/**` — a branch may not
    self-certify a change to the CI configuration that is grading it. This door
    stays behind a human ci-grant, **unless** the branch passes the carve-out
@@ -3316,7 +3328,8 @@ and why the `timed_out` relaxation is deliberately left unwritten — is in
   admitted through the carve-out appends ` via workflow-carve-out jobs <a,b>` to
   its trailer and reports `ciCure.via: "workflow-carve-out"` (with per-job
   durations) instead of `"ordinary"`. This is not decoration: anti-stacking
-  permits exactly **one** exemption per continuous red episode, so a later reader
+  permits **one** exemption per continuous red episode (more only on progress,
+  condition 3), so a later reader
   has to be able to tell which door spent it — a cure that went through the
   widened door on a branch editing the CI config is a materially different fact
   from an ordinary one, and the commit is the only artifact that still says so
@@ -3329,7 +3342,10 @@ and why the `timed_out` relaxation is deliberately left unwritten — is in
   it (and `ok`/`reason`) rather than re-deriving a verdict from check-runs. A
   cure that changed a manifest under #475/#476's admissions appends ` admitted
   add-only-scripts` and/or `pin-only-requirements` to the trailer, and reports
-  `ciCure.admitted: {scripts?, pins?}` (null otherwise), for the same reason.
+  `ciCure.admitted: {scripts?, pins?}` (null otherwise), for the same reason. A
+  cure that passed condition 3 by progress (#477) appends ` after-progress healed
+  <a,b>` and reports `ciCure.progress: {healed, still}` (null otherwise); its own
+  `over-red` sha is what the next cure on the same red compares against.
 - **Group branches get simpler under this door.** A ci-grant on a group branch
   requires a valid grant on every member issue; the cure's evidence is branch-level,
   so the all-or-nothing-per-branch property holds with zero per-issue paperwork.
