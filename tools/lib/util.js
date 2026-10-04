@@ -51,12 +51,19 @@ function humanAge(iso) {
  *   spec.flags   : { '--json': 'json', '--force': 'force' }   boolean flags
  *   spec.values  : { '--repo': 'repo', '--count': 'count' }   flags that take a value
  *   spec.aliases : { '--issue': '--issues' }                  map an alias to its canonical flag
+ *   spec.lists   : { '--refs': 'refs' }                       value flags that ACCUMULATE: a repeat is
+ *                  joined onto the earlier value(s) with ',' — the same as one comma list (#479)
+ *   spec.once    : true                                       a repeated `values` flag is a usage error
+ *                  instead of last-one-wins (#479). Off by default: most commands keep the old
+ *                  overwrite, where a dropped value is harmless; turn it on where it is not.
  * Positionals collected into result._ .
  */
 function parseArgs(argv, spec = {}) {
   const flags = spec.flags || {};
   const values = spec.values || {};
   const aliases = spec.aliases || {};
+  const lists = spec.lists || {};
+  const seen = new Set();
   const out = { _: [] };
   for (let i = 0; i < argv.length; i++) {
     let a = argv[i];
@@ -66,9 +73,18 @@ function parseArgs(argv, spec = {}) {
     const eq = a.indexOf('=');
     if (a.startsWith('--') && eq !== -1) { inlineVal = a.slice(eq + 1); a = a.slice(0, eq); }
     if (flags[a]) { out[flags[a]] = true; }
-    else if (values[a]) {
+    else if (lists[a]) {
       const v = inlineVal !== null ? inlineVal : argv[++i];
       if (v === undefined) throw new UserError(`Option ${a} needs a value`);
+      const k = lists[a];
+      out[k] = out[k] === undefined ? v : `${out[k]},${v}`;
+    } else if (values[a]) {
+      const v = inlineVal !== null ? inlineVal : argv[++i];
+      if (v === undefined) throw new UserError(`Option ${a} needs a value`);
+      if (spec.once && seen.has(values[a])) {
+        throw new UserError(`Option ${a} given more than once — only one value is accepted; pass it once`);
+      }
+      seen.add(values[a]);
       out[values[a]] = v;
     } else if (a.startsWith('-') && a !== '-') {
       throw new UserError(`Unknown option: ${a}`);
