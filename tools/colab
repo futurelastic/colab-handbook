@@ -9453,7 +9453,11 @@ function ciCureTrailerLine(cureVerdict, branch, trunk) {
   const via = (cureVerdict.carveOut
     ? ` via workflow-carve-out jobs ${cureVerdict.carveOut.jobs.map((j) => j.name).join(',')}`
     : '') + (cureVerdict.dryRun ? ` via dry-run jobs ${cureVerdict.dryRun.jobs.join(',')}` : '');
-  return `CI-Cure: branch ${branch} over-red ${trunk}@${shortSha(cureVerdict.redSha)} evidence ${shortSha(cureVerdict.evidenceSha)}${via}`;
+  // #475/#476: a cure that changed a manifest under an admission says which, for the same reason.
+  const adm = cureVerdict.admitted || {};
+  const manifest = [adm.scripts ? 'add-only-scripts' : null, adm.pins ? 'pin-only-requirements' : null].filter(Boolean);
+  const admittedSuffix = manifest.length ? ` admitted ${manifest.join(',')}` : '';
+  return `CI-Cure: branch ${branch} over-red ${trunk}@${shortSha(cureVerdict.redSha)} evidence ${shortSha(cureVerdict.evidenceSha)}${via}${admittedSuffix}`;
 }
 
 const HELP_SHIP = `colab ship [--repo <path>] [--worktree <name> | --branch <br> | --direct] [--message "<msg>"] [--refs <N[,M]>] [--keep-worktree] [--delete-branch | --keep-branch] [--adopt] [--session <id>] [--session-name <s>] [--dry] [--json]
@@ -10555,7 +10559,9 @@ function shipCiCure(repoAbs, gh, target, trunk, redSha, branch) {
   const verdict = ciCure.cureVerdict({ containsRedSha, evidence, redSha, stacking, jobEvidence,
     workflowsTouched: diff.workflowsTouched,
     manifestScriptsTouched: diff.manifestScriptsTouched, manifestPaths: diff.manifestPaths,
+    manifestScriptsAddOnly: diff.manifestScriptsAddOnly,
     pythonManifestTouched: diff.pythonManifestTouched, pythonManifestPaths: diff.pythonManifestPaths,
+    pythonPinOnly: diff.pythonPinOnly,
     dryRunCapable: capable.map((w) => w.name) });
   // The dispatch plan carries the FILE and the exact command, so the refusal can name it and the
   // real ship path can run it — measurement only here; nothing is dispatched by this function.
@@ -10648,6 +10654,8 @@ function ciCurePayload(ciResult) {
     // #474: on a refusal, the dry run(s) that would supply the missing 2b evidence — what the real
     // ship dispatches; `--dry --json` only reports it. null when none would help.
     dryRunWanted: c.dryRunDispatch ? c.dryRunDispatch.map((d) => ({ ...d })) : null,
+    // #475/#476: the manifest change a cure was admitted with — `{scripts?, pins?}` — or null.
+    admitted: c.admitted || null,
   };
 }
 
