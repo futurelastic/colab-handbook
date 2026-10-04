@@ -179,6 +179,9 @@ function wiring(fires) {
  * databaseId}`). Same all-runs rule as summarizeRunsForCommit: any finished not-green row (cancelled
  * aside) makes it red; any unfinished row keeps it pending; green needs every row finished and at
  * least one success. `attempt` is the highest run attempt seen — how many times it was re-run.
+ * Unlike summarizeRunsForCommit it does NOT reduce to the newest run per workflow (#461): a batch
+ * ref is built fresh and re-run in place (same run, higher `attempt`), so it carries no superseded
+ * attempts of a workflow for that reduction to set aside.
  */
 function combinedVerdict(rows) {
   const list = Array.isArray(rows) ? rows : null;
