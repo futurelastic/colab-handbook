@@ -265,9 +265,57 @@ function prereleaseTagTriggers({ readFile, workflows, deploy }) {
   return out;
 }
 
+// --------------------------------------------------- workflow_dispatch inputs (#474)
+//
+// The names declared under `on: workflow_dispatch: inputs:`, in order. `[]` for a bare
+// `workflow_dispatch:` (or one with no inputs), and for a workflow with no dispatch trigger at all —
+// a caller asking "can this be dispatched with dry_run?" needs the same answer for both. Same
+// pragmatic, indentation-aware scan as parseWorkflowOn; the inline `on:` forms carry no inputs.
+function workflowDispatchInputs(text) {
+  if (!text) return [];
+  const all = text.split(/\r?\n/);
+  const start = all.findIndex((l) => /^(on|["']on["'])\s*:\s*(#.*)?$/.test(l));
+  if (start === -1) return [];
+  const body = [];
+  for (let i = start + 1; i < all.length; i++) {
+    if (/^\S/.test(all[i])) break;
+    body.push(all[i]);
+  }
+  const indentOf = (l) => l.match(/^(\s*)/)[1].length;
+  const meaningful = (l) => l.trim() && !/^\s*#/.test(l);
+  const block = (from, parentIndent) => {
+    const out = [];
+    for (let j = from; j < body.length; j++) {
+      if (!meaningful(body[j])) continue;
+      if (indentOf(body[j]) <= parentIndent) break;
+      out.push(j);
+    }
+    return out;
+  };
+  const wd = body.findIndex((l) => /^\s*workflow_dispatch\s*:/.test(l));
+  if (wd === -1) return [];
+  const wdIndent = indentOf(body[wd]);
+  const inp = block(wd + 1, wdIndent).find((j) => /^\s*inputs\s*:\s*(#.*)?$/.test(body[j]));
+  if (inp === undefined) return [];
+  const lines = block(inp + 1, indentOf(body[inp]));
+  if (!lines.length) return [];
+  const keyIndent = Math.min(...lines.map((j) => indentOf(body[j])));
+  return lines.filter((j) => indentOf(body[j]) === keyIndent)
+    .map((j) => (body[j].match(/^\s*([A-Za-z_][\w-]*)\s*:/) || [])[1]).filter(Boolean);
+}
+
+// A workflow's top-level `name:` — what the runs API reports as `workflowName` — or null.
+function workflowNameOf(text) {
+  if (!text) return null;
+  const m = text.match(/^name:\s*(.+?)\s*$/m);
+  if (!m) return null;
+  return m[1].replace(/\s+#.*$/, '').replace(/^["']|["']$/g, '').trim() || null;
+}
+
 module.exports = {
   PRERELEASE_TAG_PROBE,
   parseWorkflowOn, listField, githubFilterRegex, githubFilterMatches, workflowFiresOnTag,
   workflowFiresOnBranchPush, workflowsFiringOnBranchPush,
   isDeployWorkflow, isReleaseTagTemplateCopy, prereleaseTagTriggers,
+  workflowDispatchInputs, workflowNameOf,
 };

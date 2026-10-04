@@ -236,3 +236,47 @@ test('#321: ciCurePayload reports WHICH door fired — `via` on every cure row, 
   assert.match(body, /: null,/, 'carveOut must be null, not absent, on the ordinary path');
   assert.match(body, /provenJobs: c\.provenJobs \|\| null/, '#297: the 2b-proven jobs ride the payload');
 });
+
+// --- #474: dry-run evidence wiring ---------------------------------------------------------------
+
+test('#474: shipCiCure only MEASURES the dry-run plan; the one dispatch sits on the real path, after the --dry return', () => {
+  // Source-level for the same reason as the #321 tests above: the fixture never reaches the cure rule.
+  const src = fs.readFileSync(path.join(REPO_ROOT, 'tools', 'colab'), 'utf8');
+  const cure = src.slice(src.indexOf('function shipCiCure('), src.indexOf('function shipCureJobEvidence('));
+  assert.match(cure, /dryRunCapable: capable\.map\(\(w\) => w\.name\)/, 'the capable set is handed to the pure verdict');
+  assert.doesNotMatch(cure, /shipDispatchDryRuns\(|ghWorkflowDispatch\(/, 'measurement runs up to three times per ship — it must never dispatch');
+  const calls = src.match(/(?<!function )shipDispatchDryRuns\(/g) || [];
+  assert.strictEqual(calls.length, 1, 'exactly one dispatch site');
+  const ship = src.slice(src.indexOf('function cmdShip('));
+  const at = ship.indexOf('shipDispatchDryRuns(repoAbs, sess');
+  assert.ok(at > 0, 'the dispatch site is inside cmdShip');
+  assert.ok(ship.lastIndexOf('if (opts.dry) {', at) > 0 && ship.indexOf('return dryOk ? 0 : 1;') < at, 'the dispatch comes after the --dry branch returned');
+  const dryJson = src.slice(src.indexOf('function cmdShipDryJson('), src.indexOf('function cmdShipDryJson(') + 20000);
+  assert.doesNotMatch(dryJson.slice(0, dryJson.indexOf('\n}\n')), /shipDispatchDryRuns|ghWorkflowDispatch/, '--dry --json never dispatches');
+});
+
+test('#474: ciCurePayload carries dryRun and dryRunWanted, null when absent', () => {
+  const src = fs.readFileSync(path.join(REPO_ROOT, 'tools', 'colab'), 'utf8');
+  const fn = src.slice(src.indexOf('function ciCurePayload('));
+  const body = fn.slice(0, fn.indexOf('\n}\n') + 3);
+  assert.match(body, /dryRun: c\.dryRun \? \{ jobs: c\.dryRun\.jobs\.slice\(\) \} : null/);
+  assert.match(body, /dryRunWanted: c\.dryRunDispatch \? .* : null/);
+});
+
+test('#474: a dispatch is gated on a static read of the BRANCH copy — name, dry_run input and sentinel step', () => {
+  const src = fs.readFileSync(path.join(REPO_ROOT, 'tools', 'colab'), 'utf8');
+  const fn = src.slice(src.indexOf('function dryRunCapableWorkflows('));
+  const body = fn.slice(0, fn.indexOf('\n}\n') + 3);
+  assert.match(body, /ciCure\.DRY_RUN_STEP/);
+  assert.match(body, /workflowDispatchInputs\(r\.stdout\)\.includes\(DRY_RUN_INPUT\)/);
+  assert.match(body, /workflowNameOf\(r\.stdout\)/);
+});
+
+test('#474: ship --dry --json on the self-clearing fixture reports no dry-run fields and never calls `gh workflow run`', () => {
+  const fx = fixture(PROJECT_YML_AUTO_TRUNK);
+  addCommitBranch(fx, 'feat/dry-474');
+  const r = colab(fx, ['ship', '--branch', 'feat/dry-474', '--repo', fx.work, '--dry', '--json']);
+  const body = JSON.parse(r.out);
+  assert.strictEqual(body.ciCure, null);
+  assert.doesNotMatch(r.err, /refusing workflow run/);
+});

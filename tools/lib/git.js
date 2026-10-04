@@ -1158,6 +1158,25 @@ function ghRunJobs(repo, runDatabaseId) {
 }
 
 /**
+ * Dispatch `workflowFile` on `ref` (#474) — `gh workflow run <file> --ref <ref> -f k=v…`. Returns
+ * `{ok, withInputs, detail}`. If the call with inputs is refused (GitHub can validate inputs against
+ * a workflow file that does not declare them yet), it is retried ONCE without them: the release-auto
+ * template forces dry mode on any ref other than main, so an input-less dispatch of a capable file is
+ * still a dry run. The caller only ever dispatches a file it read as dry-run capable at that ref.
+ * Never waits for the run.
+ */
+function ghWorkflowDispatch(repo, workflowFile, ref, inputs = {}) {
+  const flags = [];
+  for (const [k, v] of Object.entries(inputs)) flags.push('-f', `${k}=${v}`);
+  const first = run('gh', ['workflow', 'run', workflowFile, '--ref', ref, ...flags], { cwd: repo });
+  if (first.ok) return { ok: true, withInputs: true, detail: '' };
+  if (!flags.length) return { ok: false, withInputs: false, detail: (first.stderr || first.stdout || '').trim().split('\n')[0] || 'gh workflow run failed' };
+  const second = run('gh', ['workflow', 'run', workflowFile, '--ref', ref], { cwd: repo });
+  if (second.ok) return { ok: true, withInputs: false, detail: (first.stderr || '').trim().split('\n')[0] || '' };
+  return { ok: false, withInputs: false, detail: (second.stderr || second.stdout || '').trim().split('\n')[0] || 'gh workflow run failed' };
+}
+
+/**
  * Issues claimed by the current gh user in a repo = assigned to @me AND labeled in-progress
  * (that pairing is exactly what `colab claim` writes). Returns array of numbers, or null on failure.
  */
@@ -1177,7 +1196,7 @@ module.exports = {
   dirtyTracked, dirtyUntracked, dirtyAny,
   ghAvailable, ghState, ghIssueEdit, ghListLabels, ghOpenIssueNumbersByLabel, ghAssignedIssues,
   ghCurrentLogin, ghIssueView, ghIssueComment, ghRunForSha, ghRunForCommit, ghRunsForCommit, ghRunsForRef, ghRunsAtCommit, ghRunForCommitAnyRef, commitTimeMs, ghRunsSince, summarizeRunsForCommit, isRepoOwnedRun,
-  ghRunJobCount, ghRunJobs,
+  ghRunJobCount, ghRunJobs, ghWorkflowDispatch,
   ghIssueListByLabel, ghLabelDelete, ghLabelCreate, ghListLabelsDetailed, ghLabelEditDescription,
   ghApi, isGraphqlRateLimit, ghIssueRelease, ghClaimHolder, ghIssueLabelEvents, ghIssueLabelActors,
   ghPrForBranch, ghPrCreate, ghPrClose, ghRepoVisibility,

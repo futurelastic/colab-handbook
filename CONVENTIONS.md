@@ -3170,6 +3170,50 @@ Anything unmeasurable — no job evidence, an empty red-job set, an unreadable
 step list, a missing duration — **refuses**, exactly as before. The carve-out
 only ever widens the door on evidence, never on the absence of it.
 
+**Dry-run evidence for a main-only workflow (#474).** Some workflows never run on
+a branch at all. `release-auto.yml` fires after trunk CI or on a schedule, so 2b
+refused every fix for a red in it (the job is absent on the branch), and a human
+ci-grant was the only door, even for a mechanical defect such as a moved runner
+label or a `HANDBOOK_REF` naming a missing branch. The template therefore offers a
+**dry run**: dispatched on the fix branch (`gh workflow run release-auto.yml --ref
+<branch> -f dry_run=true`; a dispatch on any ref other than `main` is dry with or
+without the input), it checks out the branch and runs the same job with every
+external write off. Each decision runs with `--dry`. No promotion, tag, Release,
+push or dispatch happens. Only steps whose names end in `[publish]` are skipped. A
+sentinel step, *Dry run — nothing is tagged, released or published*, runs only in
+that mode, and it is what marks a job instance as a dry run. Such an instance is
+the job's 2b (and 4a) evidence only when, on top of 2b:
+
+- **D1** — both step lists are measurable: trunk's ran-steps and the dry run's steps.
+- **D2** — every step that **ran** on trunk, the failing one included, concluded
+  `success` in the dry run. This is 4b, applied to dry-run instances on every path.
+  It is also what keeps the dry run from being a back door: a red **inside** a
+  `[publish]` step can never be cured this way, because the dry run skips exactly
+  that step.
+- **D3** — every step the dry run did not run to success is a skipped `[publish]`
+  step. A dry run that also skipped an ordinary step past trunk's failure point
+  has run part of the job, not the job.
+
+The marker is a step **name** on purpose. Steps are matched by exact name, so
+marking the very step that failed on trunk renames it, and D2 then reads it as
+absent and refuses. A list declared inside the workflow would be read from the
+branch, which is the party being graded. A green ordinary instance of the same job
+outranks a dry one, so the D-rules apply only when a dry run is the sole evidence.
+
+When a cure refuses at 2b only because such a workflow's red job is absent on the
+branch, and every later condition already holds, `colab ship` dispatches the dry
+run **once**. It skips any workflow that already has a run at the branch head. It
+never waits, and it never dispatches from `--dry` or `--dry --json`, which only
+report the command. Re-run ship once the run completes (code-ship B1a's bounded
+wait). Dispatch is gated on a static read of the **branch's** copy: it must have a
+`name:`, a `dry_run` input and the sentinel step. A copy older than #474 has no
+forced dry mode and would really publish if dispatched. The **limit**: a red in a
+`[publish]` step, or in the `npm`/`deploy` jobs (which never run without a tag),
+cannot be cured by a dry run and stays a ci-grant. So does a red job that ran
+**zero** steps (a runner that never picked it up) on the carve-out path, because
+4c has no usable duration for it. Reasoning:
+[`docs/adr/474-cure-rule-dry-run-evidence.md`](docs/adr/474-cure-rule-dry-run-evidence.md).
+
 Conditions 1+2 together mean the branch's tree passed the full suite **including
 the tests trunk is currently failing** — merging it provably turns trunk green.
 That is the one thing the human click on a ci-grant is supposed to certify,
@@ -3205,7 +3249,8 @@ no label, and no tracker comment: nothing here is a human write.
   templates use) leaves the job `success` and is unaffected. Relaxing this is
   left unwritten for the same reason as (i). (iv) A workflow red on trunk that
   never runs for a branch (a deploy on push to trunk) has no branch counterpart,
-  so 2b refuses — correctly: the branch cannot prove trunk will go green. (v) A
+  so 2b refuses — correctly: the branch cannot prove trunk will go green —
+  **unless the workflow offers dry-run evidence (#474, above)**, which gives it one. (v) A
   red run with no job that can be named refuses on every path. (vi) Any nested
   `package.json` scripts change during a red trunk refuses condition 5. (vii) A job
   whose `name:` interpolates the event name differs between the push and the
@@ -3251,7 +3296,10 @@ and why the `timed_out` relaxation is deliberately left unwritten — is in
   widened door on a branch editing the CI config is a materially different fact
   from an ordinary one, and the commit is the only artifact that still says so
   after the runs age out. The `--grep=^CI-Cure:` scan is anchored on the prefix,
-  so the suffix never disturbs it. `ciCure.provenJobs` (#297) lists the red jobs
+  so the suffix never disturbs it. A cure proven by a dry run (#474) appends
+  ` via dry-run jobs <a,b>` the same way and reports `ciCure.dryRun: {jobs}`; on a
+  refusal, `ciCure.dryRunWanted` names the dry run(s) that would supply the missing
+  evidence, each with its workflow, file and exact command. `ciCure.provenJobs` (#297) lists the red jobs
   2b proved passing on the branch — a consumer rendering cure eligibility reads
   it (and `ok`/`reason`) rather than re-deriving a verdict from check-runs.
 - **Group branches get simpler under this door.** A ci-grant on a group branch
