@@ -3632,6 +3632,12 @@ bodies — `role=add` on the first child, `role=remove` on the last:
   name, or two markers on one issue disagreeing all mean **"not cleared"** — reported,
   never defaulted. An epic with no marker is **not** declared single-merge; it is simply
   undeclared, and whether it should have a switch is a question, not an answer.
+- **A marker quoted inside code is not a marker.** Text in an inline code span or a
+  fenced block — like the examples above, or prose that names the family as
+  `` `<!-- colab:switch -->` `` — is documentation and is never read as a marker (#466).
+  We measured one closed issue whose body only described the family this way, and every
+  release-cut candidate in that repo was refused as a malformed marker until someone
+  reworded the issue.
 
 From these a check derives everything rule 6 and the release cut need, with no other
 record: a switch **exists** once its `role=add` child is closed by a merge, it is

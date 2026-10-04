@@ -283,6 +283,7 @@ function lineRanges(nums, text = null) {
 }
 
 module.exports = {
+  stripCode,
   IMPORT_MAX_DEPTH,
   SHELL_IMPORT,
   ENTRY,
