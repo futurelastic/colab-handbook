@@ -12,7 +12,7 @@ const test = require('node:test');
 const assert = require('node:assert');
 
 const { cureVerdict, redJobsProvenOnBranch, workflowCarveOut, manifestStepProof, shapeJobEvidence, MANIFEST_SCRIPTS_REFUSAL,
-  PYTHON_MANIFEST_REFUSAL } = require('./ci-cure.js');
+  PYTHON_MANIFEST_REFUSAL, priorRedShaFromMessage, redJobSet, redSetShrank } = require('./ci-cure.js');
 
 const RED_SHA = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
 const HEAD_SHA = 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';
@@ -892,4 +892,107 @@ test('#475/#476 × #474: an admissible manifest change still gets the dry-run di
   assert.deepEqual(ask({ pythonManifestTouched: true, pythonPinOnly: [{ path: 'r.txt', pins: ['x'] }] }), [REL_WF]);
   assert.equal(ask({ manifestScriptsTouched: true, manifestScriptsAddOnly: null }), undefined);
   assert.equal(ask({ pythonManifestTouched: true, pythonPinOnly: null }), undefined);
+});
+
+// --- #477: condition 3's progress admission — the red-job set strictly shrank -----------------
+
+function stacked() {
+  return { ok: false, stacked: true, prior: { sha: 'c'.repeat(40), at: '2026-10-01T00:00:00Z', redSha: 'ddddddd' },
+    reason: 'a CI grant already merged X against this red trunk and trunk has been red ever since.' };
+}
+const BROWSER = { name: 'browser', workflowName: '' };
+const UNIT = { name: 'unit', workflowName: '' };
+
+test('#477 redSetShrank: strict subset → ok, naming healed and still-red jobs', () => {
+  const v = redSetShrank([BROWSER, UNIT], [BROWSER]);
+  assert.equal(v.ok, true);
+  assert.deepEqual(v.healed, ['unit']);
+  assert.deepEqual(v.still, ['browser']);
+});
+
+test('#477 redSetShrank: an UNCHANGED set is no progress', () => {
+  const v = redSetShrank([BROWSER, UNIT], [UNIT, BROWSER]);
+  assert.equal(v.ok, false);
+  assert.match(v.reason, /unchanged/);
+});
+
+test('#477 redSetShrank: a NEW red job refuses even when another healed (no trading one red for another)', () => {
+  const v = redSetShrank([BROWSER, UNIT], [BROWSER, { name: 'lint', workflowName: '' }]);
+  assert.equal(v.ok, false);
+  assert.deepEqual(v.added, ['lint']);
+  assert.match(v.reason, /new failure/);
+});
+
+test('#477 redSetShrank: jobs match per workflow — the same job name in another workflow is a different job', () => {
+  const v = redSetShrank([{ name: 'test', workflowName: 'CI' }, UNIT], [{ name: 'test', workflowName: 'Release' }]);
+  assert.equal(v.ok, false);
+  assert.deepEqual(v.added, ['Release / test']);
+});
+
+test('#477 redSetShrank: unmeasured or empty sets refuse', () => {
+  assert.equal(redSetShrank(null, [BROWSER]).ok, false);
+  assert.equal(redSetShrank([BROWSER], null).ok, false);
+  assert.equal(redSetShrank([], [BROWSER]).ok, false);
+  assert.equal(redSetShrank([BROWSER, UNIT], []).ok, false);
+});
+
+test('#477 priorRedShaFromMessage: reads the over-red sha off either trailer, anchored at line start', () => {
+  assert.equal(priorRedShaFromMessage('fix: x (#1)\n\nCloses #1\n\nCI-Cure: branch fix/x-1 over-red main@abc1234 evidence 1111111'), 'abc1234');
+  assert.equal(priorRedShaFromMessage('fix: y\n\nCI-Grant: #2 branch fix/y-2 over-red dev@def5678 evidence 2222222'), 'def5678');
+  assert.equal(priorRedShaFromMessage('docs: quoting it — see "CI-Cure: branch b over-red main@abc1234"'), null);
+  assert.equal(priorRedShaFromMessage(''), null);
+  assert.equal(priorRedShaFromMessage(undefined), null);
+});
+
+test('#477 redJobSet: the red identities at a sha; an incomplete job is unmeasurable', () => {
+  const rows = [
+    { name: 'browser', workflowName: 'CI', status: 'completed', conclusion: 'failure' },
+    { name: 'unit', workflowName: 'CI', status: 'completed', conclusion: 'success' },
+  ];
+  assert.deepEqual(redJobSet(rows), [{ name: 'browser', workflowName: 'CI' }]);
+  assert.equal(redJobSet([{ name: 'browser', status: 'in_progress' }]), null);
+});
+
+test('#477 cureVerdict: a two-failure trunk — the second fix cures with no human step once the first healed one job', () => {
+  // The prior exemption was measured against {browser, unit}; trunk is now red on browser only, and
+  // this branch proves browser passing — an ordinary cure in every other respect.
+  const v = cureVerdict(base({ stacking: stacked(), priorRedJobs: [BROWSER, UNIT] }));
+  assert.equal(v.ok, true, v.reason);
+  assert.deepEqual(v.progress, { healed: ['unit'], still: ['browser'] });
+  assert.match(v.reason, /red set shrank/);
+});
+
+test('#477 cureVerdict: a prior cure that left the red set unchanged cannot be followed by another cure', () => {
+  const v = cureVerdict(base({ stacking: stacked(), priorRedJobs: [BROWSER] }));
+  assert.equal(v.ok, false);
+  assert.match(v.reason, /already merged/, 'the stacking reason is kept');
+  assert.match(v.reason, /unchanged/, 'and says why progress does not admit it');
+});
+
+test('#477 cureVerdict: stacked with the prior red set unmeasured → the stacked refusal stands', () => {
+  const v = cureVerdict(base({ stacking: stacked(), priorRedJobs: null }));
+  assert.equal(v.ok, false);
+  assert.match(v.reason, /could not be measured/);
+});
+
+test('#477 cureVerdict: only the STACKED refusal can be lifted — a non-stacked one (e.g. trunk not red) never is', () => {
+  const v = cureVerdict(base({ stacking: badStacking('trunk is not currently red'), priorRedJobs: [BROWSER, UNIT] }));
+  assert.equal(v.ok, false);
+  assert.equal(v.reason, 'trunk is not currently red');
+});
+
+test('#477 cureVerdict: progress does not bypass the other conditions — the remaining set must still be cured', () => {
+  const v = cureVerdict(base({ stacking: stacked(), priorRedJobs: [BROWSER, UNIT], manifestScriptsTouched: true,
+    manifestPaths: ['package.json'] }));
+  assert.equal(v.ok, false);
+  assert.match(v.reason, /scripts/);
+  const noProof = cureVerdict(base({ stacking: stacked(), priorRedJobs: [BROWSER, UNIT], jobEvidence: null }));
+  assert.equal(noProof.ok, false);
+  assert.match(noProof.reason, /not proven here/);
+});
+
+test('#477 cureVerdict: an ordinary (non-stacked) cure carries no progress field', () => {
+  const v = cureVerdict(base());
+  assert.equal(v.ok, true);
+  assert.equal('progress' in v, false);
 });

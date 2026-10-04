@@ -294,7 +294,9 @@ function stackingVerdict({ trunkIsRed, priorGrantMerge, redContinuousSincePriorG
     return { ok: false, reason: 'trunk is not currently red — nothing for a CI grant to exempt' };
   }
   if (priorGrantMerge && redContinuousSincePriorGrant) {
-    return { ok: false, reason: `a CI grant already merged ${priorGrantMerge.sha} against this red trunk and trunk has been red ever since — a second exemption is how a permanently broken repo ships anyway. Revert the bad merge or fix trunk by hand instead of granting again.` };
+    // `stacked`/`prior` are additive (#477): the cure rule may lift THIS refusal — and only this
+    // one — on measured progress (tools/lib/ci-cure.js redSetShrank); the grant CREATE path ignores them.
+    return { ok: false, stacked: true, prior: priorGrantMerge, reason: `a CI grant already merged ${priorGrantMerge.sha} against this red trunk and trunk has been red ever since — a second exemption is how a permanently broken repo ships anyway. Revert the bad merge or fix trunk by hand instead of granting again.` };
   }
   return { ok: true, reason: '' };
 }
