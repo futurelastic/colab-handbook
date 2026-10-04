@@ -798,3 +798,51 @@ test('#464 npm-record: a missing Release is a skip, a transient read is retried,
   assert.notStrictEqual(dead.status, 0, 'a read that kept failing is not "no Release"');
   assert.match(dead.stderr, /HTTP 503/);
 });
+
+// ---- #467 / #468: a stall is visible without opening the run log; no final says why ------------
+
+test('#467 cut: a standing refusal is an error annotation and a summary banner — and still exit 0', { skip: !HAS_JQ && 'jq not installed' }, () => {
+  const r = runWithStub(CUT, { exit: 1, stdout: JSON.stringify({ ok: false, noop: false, standing: ['version'], created: false, tag: null, checks: [check('ci-green', true), check('version', false), check('full-suite', false)] }) });
+  assert.strictEqual(r.status, 0, 'a red release run would block the ship that clears the stall');
+  assert.strictEqual(r.output.tag, undefined);
+  assert.match(r.stdout, /::error title=Release stalled::colab release cut refused on a condition that does not clear by itself: version — version detail$/m);
+  assert.doesNotMatch(r.stdout, /full-suite — /, 'only the standing conditions are named in the annotation');
+  assert.doesNotMatch(r.stdout, /::warning::colab release cut refused/);
+  assert.match(r.summary, /#### ⚠ Release stalled/);
+  assert.match(r.summary, /refused on \*\*version\*\*/);
+});
+
+test('#467 cut: a transient refusal (empty standing, or an older CLI with none) stays a warning', { skip: !HAS_JQ && 'jq not installed' }, () => {
+  for (const standing of [[], undefined]) {
+    const r = runWithStub(CUT, { exit: 1, stdout: JSON.stringify({ ok: false, noop: false, ...(standing ? { standing } : {}), created: false, tag: null, checks: [check('ci-green', false)] }) });
+    assert.strictEqual(r.status, 0);
+    assert.match(r.stdout, /::warning::colab release cut refused: ci-green/);
+    assert.doesNotMatch(r.stdout, /Release stalled/);
+    assert.doesNotMatch(r.summary, /Release stalled/);
+  }
+});
+
+test('#468 finalize: the summary says why no final, and lists the other open candidates — at most ten', { skip: !HAS_JQ && 'jq not installed' }, () => {
+  const skipped = (n) => Array.from({ length: n }, (_, i) => ({ tag: `v1.3.0-rc.${n - i}`, state: 'testing', detail: `test-period: ${i}h left`, endsAt: '2026-10-06T00:00:00Z' }));
+  const three = runWithStub(FIN, { exit: 0, stdout: JSON.stringify({ state: 'testing', tagged: false, finalTag: null, checks: [], why: { line: 'no candidate\'s own test period has elapsed clean — v1.3.0-rc.1 is first', next: null }, skipped: skipped(3) }) });
+  assert.strictEqual(three.status, 0);
+  assert.match(three.summary, /\*\*Why no final:\*\* no candidate's own test period has elapsed clean — v1\.3\.0-rc\.1 is first/);
+  assert.strictEqual((three.summary.match(/^- v1\.3\.0-rc\.\d+: testing — test-period: /gm) || []).length, 3);
+  assert.doesNotMatch(three.summary, /more$/m);
+  assert.match(three.stdout, /Finalize: testing — no candidate's own test period/);
+
+  const many = runWithStub(FIN, { exit: 0, stdout: JSON.stringify({ state: 'testing', tagged: false, finalTag: null, checks: [], why: { line: 'x', next: null }, skipped: skipped(15) }) });
+  assert.strictEqual((many.summary.match(/^- v1\.3\.0-rc\.\d+: /gm) || []).length, 10);
+  assert.match(many.summary, /^- … 5 more$/m);
+
+  const stuck = runWithStub(FIN, { exit: 1, stdout: JSON.stringify({ state: 'needs-new-candidate', tagged: false, finalTag: null, checks: [], why: { line: 'v1.3.0-rc.4: needs-new-candidate — trunk-green: red', next: null }, skipped: [] }) });
+  assert.strictEqual(stuck.status, 0);
+  assert.match(stuck.stdout, /::warning::colab release finalize: needs-new-candidate — v1\.3\.0-rc\.4: needs-new-candidate — trunk-green: red/);
+});
+
+test('#468 finalize: an older CLI with no why and no skipped prints exactly what it did before', { skip: !HAS_JQ && 'jq not installed' }, () => {
+  const r = runWithStub(FIN, { exit: 0, stdout: JSON.stringify({ state: 'testing', tagged: false, finalTag: null, checks: [check('test-period', false)] }) });
+  assert.strictEqual(r.status, 0);
+  assert.match(r.stdout, /^Finalize: testing$/m);
+  assert.doesNotMatch(r.summary, /Why no final|Other open candidates/);
+});
