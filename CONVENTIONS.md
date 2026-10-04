@@ -4710,6 +4710,33 @@ with one self-hosted agent: a clean run did ~8.5 min of work, and runs under loa
   160 s, about 5 %. It was bound by something other than CPU, such as process spawn or
   disk. Before you count on a gain, compare the batch's wall time with the CPU it
   actually used. Agent count (above) was the lever for wall time; core count was not.
+- **Cap test-runner workers in CI with a fixed number. Size it to the slot's memory,
+  not to the CPUs the job can see (#478).** The bullet above assumes the slot limits
+  cores. Many slots limit only memory: they run as a memory-capped cgroup, and the
+  job's tmpfs work dir (`node_modules` included) counts against that cap. The job
+  still sees every CPU on the host. A runner that sizes its pool from
+  `os.availableParallelism()` (vitest, jest, node:test, playwright; pytest-xdist
+  `-n auto` and parallel PHPUnit do the same) then starts one worker per *host*
+  core, so the worker count changes when someone upgrades the host.
+  - Measured: a pool host went from 12 to 16 cores, and one repo's vitest went from
+    11 to 15 jsdom workers per slot. That crossed the slot's ~5 GiB soft cap. The
+    kernel throttled the job by reclaiming memory instead of killing it, so there
+    was no OOM and no message saying why. Each slot logged over a million
+    memory-high events and stalled for up to 24 min, imports took 4–28× their
+    baseline, and tests timed out at 5–15 s. Trunk went red with no code change.
+    The same suite had been green two days earlier, and longer per-test timeouts
+    did not help.
+  - The fix is a cap in the test config, read from CI so that local runs keep
+    their full parallelism: vitest `maxWorkers: process.env.CI ? 4 : undefined`,
+    jest `--maxWorkers=4`, node:test `--test-concurrency=4`, playwright
+    `workers: process.env.CI ? 4 : undefined`. Pick the number from the slot's
+    memory divided by one worker's peak, with room left for the work dir. Do not
+    use the core count.
+  - If a suite that used to be green starts timing out on a self-hosted pool with
+    no code change, check the slot's memory pressure (`memory.events` `high`) and
+    the worker count before you widen any timeout. Throttling stalls every test
+    the same way, so the failures look like flaky tests even though nothing in
+    them changed.
 - **Before adding an agent, check the runner's disk as well as its memory.** Each agent
   brings its own runner install and workspace (GBs for a Node repo). Measured: the
   runner container's disk at 99 % was what blocked a second agent, not its memory. On a
