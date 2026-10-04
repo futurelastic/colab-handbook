@@ -4346,7 +4346,11 @@ that cannot move is a warning, never a reason to undo the tag.
 **What a consumer pins.** [`templates/release-auto.yml`](templates/release-auto.yml)'s
 `HANDBOOK_REF` defaults to `stable`; a repo may pin `next` (the fast channel) or an exact version
 tag (frozen — the one way to stop moving). When `stable` moves, that final's release notes say
-what changed. A tool installed **with npx** follows a channel the same way, with one difference:
+what changed. A pinned ref the handbook does not carry — `stable` before its first final, or any
+channel on a fork or mirror that lacks it — is not a failure: the fetch step falls back to the
+newest final tag no older than the first final carrying every verb the template calls, else
+`next`, and says so in a warning (#480). Falling back to an older final would only move the red
+run one step later, to the first `--auto` call it rejects (#427). A tool installed **with npx** follows a channel the same way, with one difference:
 the channel is resolved to the release tag on it before anything is installed, never installed as
 a ref — a per-machine service through its `update` verb, a one-shot command through the launcher
 ([*Services over npx*](#services-over-npx--init-update-rollback-465), below).
@@ -4465,6 +4469,15 @@ The audit reports a **private** repository whose workflows upload GitHub Release
 (`gh release upload`, `gh release create <tag> <files>`, a release action given `files:`) as
 **advisory** (`warn`): an asset can be a legitimate by-product — an SBOM, a checksum list — so it is
 never a failure, but an asset that is the install path asks every user for `gh`.
+
+A repository that **declares** it distributes a tool — `distribution: js` or `distribution:
+compiled` in `project.yml` ([schema](project.schema.md#distribution--optional)) — is checked for
+its row's install route: a publish step plus a non-private `bin` (public JS; per-platform
+`optionalDependencies` too when compiled), a root `bin` (private JS), or a root `bin` plus a
+workflow calling a dist-refs workflow (private compiled). A missing route is **advisory** (`warn`):
+a publish in a reusable workflow outside the repository is invisible to the check. An undeclared
+repository is never checked — nothing in a repository tells a tool from a library, so the audit
+does not guess (#469).
 
 
 ### Services over npx — init, update, rollback (#465)

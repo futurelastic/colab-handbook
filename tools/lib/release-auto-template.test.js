@@ -930,3 +930,100 @@ test('#474 dry run: promote passes --dry and never dispatches CI, even on a prom
   assert.ok(real.calls.some((c) => /^gh workflow run CI --ref main$/.test(c)), real.calls.join('\n'));
   assert.strictEqual(real.output.promoted, 'true');
 });
+
+// #480: a HANDBOOK_REF the handbook does not carry falls back — newest final tag, else `next` — with a
+// warning, instead of failing the run (and with it, `colab trunk-ci` at the adopter's trunk).
+function handbookUpstream({ branches = [], tags = [] }) {
+  const dir = tmpdir('release-auto-upstream-');
+  const g = (...a) => execFileSync('git', a, { cwd: dir, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+  g('init', '-q', '-b', 'main');
+  g('config', 'user.email', 't@t'); g('config', 'user.name', 't');
+  const commit = (label) => {
+    fs.mkdirSync(path.join(dir, 'tools'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'tools', 'colab'), `${label}\n`);
+    g('add', '-A'); g('commit', '-q', '-m', label);
+  };
+  commit('main');
+  for (const b of branches) { g('checkout', '-q', '-b', b, 'main'); commit(b); }
+  for (const t of tags) { g('checkout', '-q', 'main'); commit(t); g('tag', '-a', '-m', t, t); }
+  g('checkout', '-q', 'main');
+  return dir;
+}
+function fetchCli(repo, ref) {
+  const dir = tmpdir('release-auto-fetch-');
+  execFileSync('git', ['init', '-q'], { cwd: dir }); // the runner's checkout: the step sets the tag identity in it
+  const summary = path.join(dir, 'summary');
+  const env = path.join(dir, 'env');
+  const r = spawnSync('bash', ['-c', stepScript('Fetch the colab CLI')], {
+    cwd: dir,
+    encoding: 'utf8',
+    env: { ...process.env, ...RETRY_ENV, HANDBOOK_REF: ref, HANDBOOK_REPO: `file://${repo}`, RUNNER_TEMP: dir, GITHUB_ENV: env, GITHUB_STEP_SUMMARY: summary, GIT_CONFIG_GLOBAL: path.join(dir, 'gitconfig') },
+  });
+  const cli = path.join(dir, 'colab-handbook', 'tools', 'colab');
+  return {
+    status: r.status, stderr: r.stderr, stdout: r.stdout,
+    got: fs.existsSync(cli) ? fs.readFileSync(cli, 'utf8').trim() : null,
+    summary: fs.existsSync(summary) ? fs.readFileSync(summary, 'utf8') : '',
+  };
+}
+
+test('#480 fetch the CLI: a ref that exists is used as written, with no warning', () => {
+  const repo = handbookUpstream({ branches: ['stable', 'next'], tags: ['v1.2.0', 'v1.3.0-rc.1'] });
+  for (const [ref, want] of [['stable', 'stable'], ['next', 'next'], ['v1.2.0', 'v1.2.0'], ['v1.3.0-rc.1', 'v1.3.0-rc.1']]) {
+    const r = fetchCli(repo, ref);
+    assert.strictEqual(r.status, 0, r.stderr);
+    assert.strictEqual(r.got, want, ref);
+    assert.doesNotMatch(r.stdout, /::warning::/, ref);
+    assert.strictEqual(r.summary, '', ref);
+  }
+});
+
+test('#480 fetch the CLI: a missing ref falls back to the newest FINAL tag — never a candidate — with a warning', () => {
+  const repo = handbookUpstream({ branches: ['next'], tags: ['v1.12.0', 'v1.12.9', 'v1.12.10', 'v1.13.0-rc.2'] });
+  const r = fetchCli(repo, 'stable');
+  assert.strictEqual(r.status, 0, r.stderr);
+  assert.strictEqual(r.got, 'v1.12.10', 'sorted as versions: v1.12.10 > v1.12.9, and an rc tag is not a final');
+  assert.match(r.stdout, /::warning::HANDBOOK_REF "stable" is not a branch or tag .* using "v1\.12\.10"/);
+  assert.match(r.summary, /`stable` does not exist upstream — fetched `v1\.12\.10`/);
+});
+
+test('#480 fetch the CLI: a missing ref with no final tag yet falls back to next, with a warning', () => {
+  const repo = handbookUpstream({ branches: ['next'], tags: ['v1.12.0-rc.9'] });
+  const r = fetchCli(repo, 'stable');
+  assert.strictEqual(r.status, 0, r.stderr);
+  assert.strictEqual(r.got, 'next');
+  assert.match(r.stdout, /::warning::HANDBOOK_REF "stable" .* using "next"/);
+});
+
+test('#480/#427 fetch the CLI: a final older than MIN_FINAL is never a fallback — it rejects --auto', () => {
+  // Today's upstream shape: finals up to v1.11.0 (no `--auto`), the channel era only as candidates.
+  const repo = handbookUpstream({ branches: ['next'], tags: ['v1.9.0', 'v1.10.0', 'v1.11.0', 'v1.12.0-rc.9'] });
+  const r = fetchCli(repo, 'stable');
+  assert.strictEqual(r.status, 0, r.stderr);
+  assert.strictEqual(r.got, 'next');
+  // MIN_FINAL names a final whose CLI carries what the template calls: pin it to the first one that does.
+  const min = /MIN_FINAL="(v\d+\.\d+\.\d+)"/.exec(stepScript('Fetch the colab CLI'));
+  assert.ok(min, 'MIN_FINAL not declared');
+  assert.strictEqual(min[1], 'v1.12.0');
+  assert.match(fs.readFileSync(path.join(REPO_ROOT, 'tools', 'colab'), 'utf8'), /--auto/);
+});
+
+test('#480 fetch the CLI: a name that only prefixes or contains a real ref is still missing', () => {
+  const repo = handbookUpstream({ branches: ['next', 'stable-old'], tags: ['v1.12.0'] });
+  const r = fetchCli(repo, 'stable');
+  assert.strictEqual(r.status, 0, r.stderr);
+  assert.strictEqual(r.got, 'v1.12.0');
+  assert.match(r.stdout, /::warning::/);
+});
+
+test('#480 fetch the CLI: an upstream that cannot be listed fails the step — it never guesses a fallback', () => {
+  const r = fetchCli(path.join(os.tmpdir(), 'no-such-handbook-480.git'), 'stable');
+  assert.notStrictEqual(r.status, 0);
+  assert.strictEqual(r.got, null);
+});
+
+test('#480 the template\'s ref listing goes through retry_transient, before the clone', () => {
+  const body = stepScript('Fetch the colab CLI');
+  assert.match(body, /retry_transient git ls-remote --heads --tags "\$HANDBOOK_REPO"/);
+  assert.ok(body.indexOf('git ls-remote') < body.indexOf('retry_transient fetch_cli'));
+});

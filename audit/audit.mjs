@@ -94,6 +94,7 @@ const releasePolicy = require("../tools/lib/release-policy.js");
 // push-site guard in the CLI, so the audit and the tool can never disagree about what it means.
 const ownerBranchLib = require("../tools/lib/owner-branch.js");
 const npmGuard = require("../tools/lib/npm-publish-guard.js");
+const installRoute = require("../tools/lib/install-route.js");
 const releaseRunner = require("../tools/lib/release-runner.js"); // #453
 const { parseWorkflowOn, workflowFiresOnTag, prereleaseTagTriggers, workflowsFiringOnBranchPush } = require("../tools/lib/workflow-triggers.js");
 const shipBatch = require("../tools/lib/ship-batch.js");
@@ -1511,6 +1512,13 @@ function auditRepo(target, ctx) {
       }
     }
 
+    // ---- distribution (#469) -----------------------------------------------------
+    // Optional, raw, no default: absent means undeclared — nothing in a repository tells a tool
+    // from a library, so only a declared value is ever checked (checkInstallRoute, below).
+    if ("distribution" in cfg && !installRoute.VALID_DISTRIBUTION.has(cfg.distribution)) {
+      fail(`distribution is ${JSON.stringify(cfg.distribution)}, expected "js" or "compiled" — omit the key if this repository distributes no tool`);
+    }
+
     // ---- axis of record (#144) -----------------------------------------------
     // Which key governs gate count: `exposure` when declared (it wins outright — see
     // tools/lib/axis-authority.js for why this is a function, not a bijection, of `tier`),
@@ -1657,6 +1665,7 @@ function auditRepo(target, ctx) {
   checkFastRouteDeploy(src, workflows, cfg, fail);
   checkDeployContainer(src, workflows, cfg, warn);
   checkPrivateNpm(src, workflows, fail, warn);
+  checkInstallRoute(src, workflows, cfg, warn);
   checkReleaseRunner(src, workflows, warn);
 
   const runbook = cfg && "runbook" in cfg ? cfg.runbook : null;
@@ -2676,6 +2685,23 @@ function checkPrivateNpm(src, workflows, fail, warn) {
     ...(assetSurface ? npmGuard.assetFindings({ ...reader, visibility }) : []),
   ];
   for (const f of all) (f.level === "fail" ? fail : warn)(f.text);
+}
+
+// ---- a declared distributed tool has an install route (#469) -------------------
+// CONVENTIONS.md §6, Distribution. Runs only when project.yml declares `distribution: js|compiled`,
+// so an undeclared repository costs no read and no API call. Visibility from the GitHub API, same
+// derivation as checkPrivateNpm; unreadable → the module accepts either row's route. Advisory:
+// a publish step in a reusable workflow outside this repository is invisible to it.
+function checkInstallRoute(src, workflows, cfg, warn) {
+  const distribution = cfg && "distribution" in cfg ? cfg.distribution : null;
+  if (!installRoute.VALID_DISTRIBUTION.has(distribution)) return;
+  const meta = src.metadata ? src.metadata() : { status: "unreadable" };
+  let visibility = null;
+  if (meta.status === "ok" && meta.data) {
+    visibility = meta.data.visibility || (meta.data.private === true ? "private" : meta.data.private === false ? "public" : null);
+  }
+  const reader = { readFile: (p) => src.readFile(p), listDir: (p) => src.listDir(p), workflows };
+  for (const f of installRoute.findings({ distribution, ...reader, visibility })) warn(f.text);
 }
 
 // ---- the release workflow runs on the repo's own runners when private (#453) -------------------
