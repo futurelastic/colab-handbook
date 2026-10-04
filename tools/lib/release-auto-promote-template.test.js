@@ -24,6 +24,15 @@ const TEXT = fs.readFileSync(path.join(REPO_ROOT, 'templates', 'release-auto.yml
 const PROMOTE = 'Promote unattended (colab promote --auto)';
 const CUT = 'Cut a candidate (colab release cut --auto)';
 const HAS_JQ = spawnSync('jq', ['--version']).status === 0;
+// #464: every network step evals the workflow-level retry helper; lift it the same way the steps are.
+const RETRY_TRANSIENT = (() => {
+  const lines = TEXT.split('\n');
+  const at = lines.indexOf('  RETRY_TRANSIENT: |');
+  assert.ok(at >= 0, 'env RETRY_TRANSIENT not found');
+  const body = [];
+  for (let i = at + 1; i < lines.length && (lines[i] === '' || lines[i].startsWith('    ')); i++) body.push(lines[i].slice(4));
+  return body.join('\n');
+})();
 
 const TMP = [];
 process.on('exit', () => { for (const d of TMP) { try { fs.rmSync(d, { recursive: true, force: true }); } catch (_) {} } });
@@ -69,7 +78,7 @@ function runPromote({ stdout, exit, ghExit = 0 }) {
   const r = spawnSync('bash', ['-c', stepScript(PROMOTE)], {
     cwd: dir,
     encoding: 'utf8',
-    env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, COLAB: stub, CI_WORKFLOW: 'CI', RUNNER_TEMP: dir, GITHUB_OUTPUT: out, GITHUB_STEP_SUMMARY: summary },
+    env: { ...process.env, RETRY_TRANSIENT, RETRY_DELAY: '0', PATH: `${bin}:${process.env.PATH}`, COLAB: stub, CI_WORKFLOW: 'CI', RUNNER_TEMP: dir, GITHUB_OUTPUT: out, GITHUB_STEP_SUMMARY: summary },
   });
   return {
     status: r.status,

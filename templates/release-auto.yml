@@ -167,6 +167,33 @@ env:
   #              a template
   HANDBOOK_REF: "stable"
   HANDBOOK_REPO: "https://github.com/futurelastic/colab-handbook.git"
+  # A TRANSIENT UPSTREAM ERROR NEVER TURNS MAIN RED (#464). This run fires on every landing, and a
+  # red run at main's head blocks every `colab ship` — so a GitHub / registry 5xx, a 429, a timeout
+  # or a dropped connection must not fail a step that a plain re-run would pass. Every step that
+  # talks to the network runs its call through `retry_transient` (each step `eval`s this block):
+  # the command is re-run with backoff while its output names a transient error, up to
+  # RETRY_ATTEMPTS times, and the last attempt's output and exit code are what the step sees. A
+  # persistent transient error still fails, with its message; anything else fails at once.
+  # Retrying is only safe because every retried call is idempotent — a read, or a write whose
+  # re-run after success is a no-op (`colab release cut/finalize/promote` read a head already done
+  # as a no-op; a Release or npm version that already exists is a skip). Keep that true if you add one.
+  RETRY_ATTEMPTS: "4" # EDIT: tries per call; backoff 5s, 10s, 20s between them.
+  RETRY_TRANSIENT: |
+    exec 3>&2
+    TRANSIENT_PATTERN='HTTP (5[0-9][0-9]|429)|returned error: (5[0-9][0-9]|429)|No server is currently available|Service Unavailable|Bad Gateway|Gateway Time-?out|Internal Server Error|secondary rate limit|rate limit exceeded|ETIMEDOUT|ECONNRESET|EAI_AGAIN|socket hang up|i/o timeout|TLS handshake timeout|connection reset|Could not resolve host|remote end hung up|early EOF|RPC failed|code E(5[0-9][0-9]|429)'
+    retry_transient() {
+      local attempt=1 max="${RETRY_ATTEMPTS:-4}" delay="${RETRY_DELAY:-5}" rc out err
+      out="$(mktemp)"; err="$(mktemp)"
+      while :; do
+        rc=0
+        "$@" > "$out" 2> "$err" || rc=$?
+        if [ "$rc" -eq 0 ] || [ "$attempt" -ge "$max" ] || ! cat "$err" "$out" | grep -Eiq "$TRANSIENT_PATTERN"; then
+          cat "$out"; cat "$err" >&2; rm -f "$out" "$err"; return "$rc"
+        fi
+        echo "::warning::$1: transient error (attempt $attempt/$max), retrying in ${delay}s — $(cat "$err" "$out" | grep -Eim1 "$TRANSIENT_PATTERN")" >&3
+        sleep "$delay"; attempt=$((attempt + 1)); delay=$((delay * 2))
+      done
+    }
 
 jobs:
   release:
@@ -227,7 +254,10 @@ jobs:
       - name: Fetch the colab CLI
         run: |
           set -euo pipefail
-          git clone --quiet --depth 1 --branch "$HANDBOOK_REF" "$HANDBOOK_REPO" "$RUNNER_TEMP/colab-handbook"
+          eval "$RETRY_TRANSIENT"
+          # A clone that died half-way leaves a directory a second clone refuses — start clean each try.
+          fetch_cli() { rm -rf "$RUNNER_TEMP/colab-handbook"; git clone --quiet --depth 1 --branch "$HANDBOOK_REF" "$HANDBOOK_REPO" "$RUNNER_TEMP/colab-handbook"; }
+          retry_transient fetch_cli
           echo "COLAB=$RUNNER_TEMP/colab-handbook/tools/colab" >> "$GITHUB_ENV"
           # The tags are annotated; git needs an identity to write one.
           git config user.name "github-actions[bot]"
@@ -245,9 +275,10 @@ jobs:
           CI_WORKFLOW: "CI"
         run: |
           set -uo pipefail
+          eval "$RETRY_TRANSIENT"
           OUT="$RUNNER_TEMP/promote.json"
           rc=0
-          node "$COLAB" promote --auto --json > "$OUT" || rc=$?
+          retry_transient node "$COLAB" promote --auto --json > "$OUT" || rc=$?
           if ! jq -e 'has("promoted")' "$OUT" > /dev/null 2>&1; then
             echo "::warning::colab promote --auto gave no verdict (exit $rc; a HANDBOOK_REF older than #440?) — nothing was promoted"
             exit 0
@@ -261,7 +292,7 @@ jobs:
           if [ "$(jq -r '.promoted' "$OUT")" = "true" ]; then
             echo "promoted=true" >> "$GITHUB_OUTPUT"
             echo "Promoted to main @ $(jq -r '.sha' "$OUT")" | tee -a "$GITHUB_STEP_SUMMARY"
-            if gh workflow run "$CI_WORKFLOW" --ref main; then
+            if retry_transient gh workflow run "$CI_WORKFLOW" --ref main; then
               echo "Dispatched $CI_WORKFLOW on main — its green run cuts the candidate." | tee -a "$GITHUB_STEP_SUMMARY"
             else
               echo "::warning::promoted, but could not dispatch $CI_WORKFLOW on main (does it declare workflow_dispatch:?) — run it by hand to cut the candidate"
@@ -281,12 +312,14 @@ jobs:
         if: steps.gate.outputs.cut == 'true' && (github.event_name == 'workflow_run' || github.event_name == 'workflow_dispatch' || github.event_name == 'schedule') && steps.promote.outputs.promoted != 'true'
         run: |
           set -uo pipefail
+          eval "$RETRY_TRANSIENT"
           OUT="$RUNNER_TEMP/cut.json"
           rc=0
-          node "$COLAB" release cut --auto --json > "$OUT" || rc=$?
+          retry_transient node "$COLAB" release cut --auto --json > "$OUT" || rc=$?
           # A verdict is JSON carrying `ok`; anything else is a run that never decided.
           if ! jq -e 'has("ok")' "$OUT" > /dev/null 2>&1; then
             echo "::error::colab release cut produced no verdict (exit $rc)"
+            echo "colab release cut produced no verdict (exit $rc) — the reason is in this step's log." >> "$GITHUB_STEP_SUMMARY"
             cat "$OUT"
             exit 1
           fi
@@ -319,11 +352,13 @@ jobs:
         if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
         run: |
           set -uo pipefail
+          eval "$RETRY_TRANSIENT"
           OUT="$RUNNER_TEMP/finalize.json"
           rc=0
-          node "$COLAB" release finalize --auto --json > "$OUT" || rc=$?
+          retry_transient node "$COLAB" release finalize --auto --json > "$OUT" || rc=$?
           if ! jq -e 'has("state")' "$OUT" > /dev/null 2>&1; then
             echo "::error::colab release finalize produced no verdict (exit $rc)"
+            echo "colab release finalize produced no verdict (exit $rc) — the reason is in this step's log." >> "$GITHUB_STEP_SUMMARY"
             cat "$OUT"
             exit 1
           fi
@@ -385,6 +420,7 @@ jobs:
           TAGS: ${{ steps.cut.outputs.tag }} ${{ steps.finalize.outputs.tag }}
         run: |
           set -euo pipefail
+          eval "$RETRY_TRANSIENT"
           for TAG in $TAGS; do
             if gh release view "$TAG" > /dev/null 2>&1; then
               echo "$TAG already has a Release — skipping"
@@ -406,9 +442,10 @@ jobs:
             # The view above is a check, not a lock: `colab release cut` publishes a candidate's
             # pre-release itself, and the API can still answer 404 for it seconds later (#462 — a
             # trunk went red on exactly that 422). So a create refused because the Release already
-            # exists is the skip case too, decided from the create's own answer.
+            # exists is the skip case too, decided from the create's own answer. That also covers a
+            # create the API applied but answered 5xx for: the retry's 422 is that skip (#464).
             ERR="$RUNNER_TEMP/create-$TAG.err"
-            if ! gh release create "$TAG" --verify-tag --title "$TAG" --notes-file "$NOTES" --generate-notes "${KIND[@]}" 2> "$ERR"; then
+            if ! retry_transient gh release create "$TAG" --verify-tag --title "$TAG" --notes-file "$NOTES" --generate-notes "${KIND[@]}" 2> "$ERR"; then
               cat "$ERR" >&2
               if grep -qiE 'already[ _]exists' "$ERR"; then
                 echo "$TAG already has a Release (published while this step ran) — skipping"
@@ -461,10 +498,14 @@ jobs:
       - name: Refuse a private repository, and any npm token
         run: |
           set -uo pipefail
-          # Visibility from the API, never assumed: unknown is refused like private.
-          PRIVATE="$(gh api "repos/$REPO" --jq '.private' 2> /dev/null || echo unknown)"
+          eval "$RETRY_TRANSIENT"
+          # Visibility from the API, never assumed: unknown is refused like private. A transient
+          # error on this read is retried (#464) — one 5xx here once turned a trunk red.
+          ERR="$RUNNER_TEMP/visibility.err"
+          PRIVATE="$(retry_transient gh api "repos/$REPO" --jq '.private' 2> "$ERR")" || PRIVATE=unknown
           if [ "$PRIVATE" != "false" ]; then
-            echo "::error::$REPO is private (or its visibility could not be read: $PRIVATE) — a private repository never publishes to public npm (#432). Remove release.npm, or install from git."
+            WHY="$(grep -v '^::warning::' "$ERR" 2> /dev/null | tail -n 1)"
+            echo "::error::$REPO is private (or its visibility could not be read: $PRIVATE${WHY:+ — $WHY}) — a private repository never publishes to public npm (#432). Remove release.npm, or install from git."
             exit 1
           fi
           if [ -n "${NODE_AUTH_TOKEN:-}${NPM_TOKEN:-}" ]; then
@@ -484,8 +525,9 @@ jobs:
       - name: npm new enough for trusted publishing (>= 11.5.1)
         run: |
           set -euo pipefail
+          eval "$RETRY_TRANSIENT"
           if ! node -e 'const [a,b,c]=process.argv[1].split(".").map(Number);process.exit(a>11||(a===11&&(b>5||(b===5&&c>=1)))?0:1)' "$(npm --version)"; then
-            npm install --global npm@11
+            retry_transient npm install --global npm@11
           fi
           npm --version
 
@@ -494,13 +536,15 @@ jobs:
       - name: Publish each tag (npm publish --provenance)
         run: |
           set -euo pipefail
+          eval "$RETRY_TRANSIENT"
           for TAG in $TAGS; do
             VERSION="${TAG#v}"
             case "$VERSION" in
               *-*) DIST=next ;;
               *)   DIST=latest ;;
             esac
-            if npm view "$PACKAGE@$VERSION" version > /dev/null 2>&1; then
+            # A 404 is "not published" and answers at once; a transient error is retried first (#464).
+            if retry_transient npm view "$PACKAGE@$VERSION" version > /dev/null 2>&1; then
               echo "$PACKAGE@$VERSION is already on npm — skipping" | tee -a "$GITHUB_STEP_SUMMARY"
               continue
             fi
@@ -508,7 +552,18 @@ jobs:
             git clean -fdxq
             (cd "$PKG_DIR" && npm pkg set "version=$VERSION")
             sh -c "$GATE"
-            (cd "$PKG_DIR" && npm publish --tag "$DIST" --provenance --access public --ignore-scripts)
+            # The view above is a check, not a lock: a publish the registry applied but answered 5xx
+            # for, or one that landed between the view and here, is refused as a republish — the skip
+            # case again, decided from the publish's own answer (#464, the same shape as #462).
+            ERR="$RUNNER_TEMP/npm-publish-$VERSION.err"
+            if ! (cd "$PKG_DIR" && retry_transient npm publish --tag "$DIST" --provenance --access public --ignore-scripts) 2> "$ERR"; then
+              cat "$ERR" >&2
+              if grep -qiE 'EPUBLISHCONFLICT|cannot publish over (the )?previously published' "$ERR"; then
+                echo "$PACKAGE@$VERSION is already on npm (published while this step ran) — skipping" | tee -a "$GITHUB_STEP_SUMMARY"
+                continue
+              fi
+              exit 1
+            fi
             echo "Published $PACKAGE@$VERSION to npm (dist-tag $DIST)" | tee -a "$GITHUB_STEP_SUMMARY"
           done
 
@@ -533,10 +588,17 @@ jobs:
       - name: Record the npm outcome
         run: |
           set -euo pipefail
+          eval "$RETRY_TRANSIENT"
           for TAG in $TAGS; do
-            BODY="$(gh release view "$TAG" --repo "$REPO" --json body --jq '.body' 2> /dev/null)" || {
-              echo "$TAG has no Release — nothing to record on"
-              continue
+            ERR="$RUNNER_TEMP/record-$TAG.err"
+            BODY="$(retry_transient gh release view "$TAG" --repo "$REPO" --json body --jq '.body' 2> "$ERR")" || {
+              # Only a Release that is not there is nothing to record on; a read that kept failing is a failure.
+              if grep -qiE 'release not found|HTTP 404|Not Found' "$ERR"; then
+                echo "$TAG has no Release — nothing to record on"
+                continue
+              fi
+              cat "$ERR" >&2
+              exit 1
             }
             VERSION="${TAG#v}"
             case "$VERSION" in *-*) DIST=next ;; *) DIST=latest ;; esac
@@ -548,7 +610,8 @@ jobs:
             NOTES="$RUNNER_TEMP/notes-$TAG.md"
             printf '%s\n' "$BODY" | sed '/^<!-- colab:npm -->$/,/^<!-- \/colab:npm -->$/d' > "$NOTES"
             printf '\n<!-- colab:npm -->\n%s\n<!-- /colab:npm -->\n' "$LINE" >> "$NOTES"
-            gh release edit "$TAG" --repo "$REPO" --notes-file "$NOTES" > /dev/null
+            # Idempotent: the block between the colab:npm markers is replaced, never appended twice.
+            retry_transient gh release edit "$TAG" --repo "$REPO" --notes-file "$NOTES" > /dev/null
             echo "$TAG: $LINE" | tee -a "$GITHUB_STEP_SUMMARY"
           done
 

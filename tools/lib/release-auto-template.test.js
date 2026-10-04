@@ -57,6 +57,18 @@ function stepScript(name, text = TEXT) {
 
 const HAS_JQ = spawnSync('jq', ['--version']).status === 0;
 
+/** The dedented value of the workflow-level `env:` block scalar `name: |` (#464's retry helper). */
+function envBlock(name, text = TEXT) {
+  const lines = text.split('\n');
+  const at = lines.findIndex((l) => l === `  ${name}: |`);
+  assert.ok(at >= 0, `env ${name} not found`);
+  const body = [];
+  for (let i = at + 1; i < lines.length && (lines[i] === '' || lines[i].startsWith('    ')); i++) body.push(lines[i].slice(4));
+  return body.join('\n').trimEnd() + '\n';
+}
+/** What every lifted step needs from the workflow's env: the helper, and no real backoff in a test. */
+const RETRY_ENV = { RETRY_TRANSIENT: envBlock('RETRY_TRANSIENT'), RETRY_ATTEMPTS: '3', RETRY_DELAY: '0' };
+
 /** Runs a lifted step with a stub colab printing `stdout` and exiting `exit`. */
 function runWithStub(step, { stdout, exit }) {
   const dir = tmpdir('release-auto-');
@@ -68,7 +80,7 @@ function runWithStub(step, { stdout, exit }) {
   const r = spawnSync('bash', ['-c', stepScript(step)], {
     cwd: dir,
     encoding: 'utf8',
-    env: { ...process.env, COLAB: stub, RUNNER_TEMP: dir, GITHUB_OUTPUT: out, GITHUB_STEP_SUMMARY: summary },
+    env: { ...process.env, ...RETRY_ENV, COLAB: stub, RUNNER_TEMP: dir, GITHUB_OUTPUT: out, GITHUB_STEP_SUMMARY: summary },
   });
   const o = {};
   for (const line of fs.readFileSync(out, 'utf8').split('\n')) {
@@ -126,7 +138,7 @@ test('finalize: a final tag is handed to the publish step; testing / held are no
 });
 
 test('the template publishes in its own run and never pushes commits', () => {
-  assert.match(TEXT, /^\s+if ! gh release create "\$TAG" --verify-tag/m);
+  assert.match(TEXT, /^\s+if ! retry_transient gh release create "\$TAG" --verify-tag/m);
   assert.match(TEXT, /\*-\*\) KIND=\(--prerelease --latest=false\)/, 'a candidate must be a pre-release, never Latest');
   const code = TEXT.split('\n').filter((l) => !/^\s*#/.test(l)).join('\n');
   assert.doesNotMatch(code, /\bgit\s+commit\b/);
@@ -151,7 +163,7 @@ function runPublish(tags, { viewExit, createExit, createErr = '' }) {
   const r = spawnSync('bash', ['-c', stepScript('Publish GitHub Release (same run)')], {
     cwd: dir,
     encoding: 'utf8',
-    env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, TAGS: tags, COLAB: '/nonexistent', RUNNER_TEMP: dir, GITHUB_STEP_SUMMARY: summary },
+    env: { ...process.env, ...RETRY_ENV, PATH: `${bin}:${process.env.PATH}`, TAGS: tags, COLAB: '/nonexistent', RUNNER_TEMP: dir, GITHUB_STEP_SUMMARY: summary },
   });
   return { status: r.status, stdout: r.stdout, stderr: r.stderr, calls: fs.existsSync(log) ? fs.readFileSync(log, 'utf8').trim().split('\n') : [] };
 }
@@ -325,6 +337,14 @@ test('own copy: gate, cut, finalize and publish are the template\'s steps verbat
   }
 });
 
+test('own copy: the retry helper and every npm-job step are the template\'s verbatim (#464)', () => {
+  assert.strictEqual(envBlock('RETRY_TRANSIENT', OWN), envBlock('RETRY_TRANSIENT'));
+  assert.match(OWN, /^ {2}RETRY_ATTEMPTS: "4"/m);
+  for (const step of ['Refuse a private repository, and any npm token', 'npm new enough for trusted publishing (>= 11.5.1)', 'Record the npm outcome']) {
+    assert.strictEqual(stepScript(step, OWN), stepScript(step), `step "${step}" drifted from the template`);
+  }
+});
+
 test('own copy: no job-level if — a red CI run is gated in a step, so the run never concludes skipped', () => {
   // Only the `release` job: the npm jobs (#434) are skipped by a job-level `if:` on purpose — the
   // run still concludes success through `release`, so no skipped row can keep a sha red.
@@ -382,7 +402,7 @@ function runStep(step, { env = {}, stubs = {}, cwd } = {}) {
   const r = spawnSync('bash', ['-c', stepScript(step)], {
     cwd: cwd || dir,
     encoding: 'utf8',
-    env: { ...process.env, NODE_AUTH_TOKEN: '', NPM_TOKEN: '', ...env, PATH: `${bin}:${process.env.PATH}`, RUNNER_TEMP: dir, GITHUB_OUTPUT: out, GITHUB_STEP_SUMMARY: summary, LOG: path.join(dir, 'log') },
+    env: { ...process.env, ...RETRY_ENV, NODE_AUTH_TOKEN: '', NPM_TOKEN: '', ...env, PATH: `${bin}:${process.env.PATH}`, RUNNER_TEMP: dir, GITHUB_OUTPUT: out, GITHUB_STEP_SUMMARY: summary, LOG: path.join(dir, 'log') },
   });
   const o = {};
   for (const line of fs.readFileSync(out, 'utf8').split('\n')) {
@@ -606,4 +626,175 @@ test('#459 health step: boundary-aware, accepting and rejecting exactly the bodi
     const r = runStep(HEALTH_STEP, { env: { TAG: 'v1.2.1', HEALTH_URL: 'https://app.example/health', HEALTH_TIMEOUT_SECONDS: '0' }, stubs: { curl: `cat '${file}'` } });
     assert.strictEqual(r.status, want ? 0 : 1, `health step on ${JSON.stringify(body)}: ${r.stdout}${r.stderr}`);
   }
+});
+
+// ---- #464: every step is safe to re-run, and a transient upstream error is retried ----------------
+// A stub that fails its first `FAIL_TIMES` calls with `FAIL_MSG` on stderr, then runs `then`. The
+// call count lives in a file, so it survives the separate processes the retry loop spawns.
+const flaky = (then) => `n=$(cat "$LOG.n" 2>/dev/null || echo 0); n=$((n+1)); echo $n > "$LOG.n"; echo "$(basename "$0") $*" >> "$LOG"; if [ "$n" -le "\${FAIL_TIMES:-0}" ]; then echo "$FAIL_MSG" >&2; exit 1; fi; ${then}`;
+const calls = (r) => r.log.trim().split('\n').filter(Boolean);
+const HTTP503 = 'HTTP 503: No server is currently available to service your request. Sorry about that. (https://api.github.com/repos/o/p)';
+
+test('#464 retry_transient: retries a transient error, stops at once on any other, and a persistent one fails with its message', () => {
+  const run = (env) => {
+    const dir = tmpdir('release-auto-retry-');
+    const bin = path.join(dir, 'bin');
+    fs.mkdirSync(bin);
+    fs.writeFileSync(path.join(bin, 'probe'), `#!/bin/bash\n${flaky('echo payload')}\n`, { mode: 0o755 });
+    const r = spawnSync('bash', ['-c', 'set -uo pipefail\neval "$RETRY_TRANSIENT"\nOUT="$(retry_transient probe arg)"; rc=$?\necho "out=[$OUT] rc=$rc"'], {
+      encoding: 'utf8', env: { ...process.env, ...RETRY_ENV, ...env, PATH: `${bin}:${process.env.PATH}`, LOG: path.join(dir, 'log') },
+    });
+    const log = fs.existsSync(path.join(dir, 'log')) ? fs.readFileSync(path.join(dir, 'log'), 'utf8') : '';
+    return { ...r, log };
+  };
+  for (const msg of [HTTP503, 'HTTP 502: Bad Gateway', 'HTTP 429: secondary rate limit', 'npm error code E503', 'fatal: unable to access: The requested URL returned error: 504', 'read tcp: i/o timeout', 'npm error code ECONNRESET']) {
+    const r = run({ FAIL_TIMES: '2', FAIL_MSG: msg });
+    assert.match(r.stdout, /out=\[payload\] rc=0/, `${msg}: ${r.stdout}${r.stderr}`);
+    assert.strictEqual(calls(r).length, 3, msg);
+    assert.match(r.stderr, /::warning::probe: transient error \(attempt 1\/3\)/);
+    assert.doesNotMatch(r.stdout, /warning/, 'the retry notice never lands in captured stdout');
+  }
+  const persistent = run({ FAIL_TIMES: '9', FAIL_MSG: HTTP503 });
+  assert.match(persistent.stdout, /out=\[\] rc=1/);
+  assert.strictEqual(calls(persistent).length, 3, 'RETRY_ATTEMPTS bounds the tries');
+  assert.match(persistent.stderr, /HTTP 503: No server is currently available/, 'the last error reaches the log');
+  const real = run({ FAIL_TIMES: '9', FAIL_MSG: 'HTTP 404: Not Found' });
+  assert.match(real.stdout, /rc=1/);
+  assert.strictEqual(calls(real).length, 1, 'a non-transient error is not retried');
+});
+
+test('#464 every workflow-level network call goes through retry_transient', () => {
+  const code = TEXT.split('\n').filter((l) => !/^\s*#/.test(l)).join('\n');
+  for (const call of [
+    /retry_transient fetch_cli/, /retry_transient node "\$COLAB" promote --auto/, /retry_transient gh workflow run/,
+    /retry_transient node "\$COLAB" release cut --auto/, /retry_transient node "\$COLAB" release finalize --auto/,
+    /retry_transient gh release create/, /retry_transient gh api "repos\/\$REPO"/, /retry_transient npm install --global/,
+    /retry_transient npm view/, /retry_transient npm publish/, /retry_transient gh release view "\$TAG" --repo/, /retry_transient gh release edit/,
+  ]) assert.match(code, call);
+  // Each step that calls it defines it first.
+  const lines = TEXT.split('\n');
+  for (const name of [...TEXT.matchAll(/^ {6}- name: (.+)$/gm)].map((m) => m[1])) {
+    const at = lines.findIndex((l) => l.trim() === `- name: ${name}`);
+    if (!/^ {8}run: \|/m.test(lines.slice(at + 1, at + 8).join('\n'))) continue;
+    let body;
+    try { body = stepScript(name); } catch (_) { continue; }
+    if (/retry_transient/.test(body)) assert.ok(body.indexOf('eval "$RETRY_TRANSIENT"') < body.indexOf('retry_transient'), `step "${name}" calls the helper before defining it`);
+  }
+});
+
+test('#464 fetch the CLI: a clone that died half-way is cleaned up and retried', () => {
+  const r = runStep('Fetch the colab CLI', {
+    stubs: { git: `if [ "$1" = clone ]; then ${flaky('mkdir -p "${@: -1}/tools"; echo cli > "${@: -1}/tools/colab"; exit 0')}; fi; exit 0` },
+    env: { HANDBOOK_REF: 'stable', HANDBOOK_REPO: 'https://example.invalid/h.git', GITHUB_ENV: '/dev/null', FAIL_TIMES: '1', FAIL_MSG: 'error: RPC failed; HTTP 503 curl 22 The requested URL returned error: 503' },
+  });
+  assert.strictEqual(r.status, 0, r.stderr);
+  assert.strictEqual(calls(r).filter((c) => c.startsWith('git clone')).length, 2);
+  assert.ok(fs.existsSync(path.join(r.dir, 'colab-handbook', 'tools', 'colab')));
+});
+
+test('#464 cut / finalize: a CLI that died on a transient error is re-run; a re-run after success is a no-op', { skip: !HAS_JQ && 'jq not installed' }, () => {
+  const lift = (step, verdict) => {
+    const dir = tmpdir('release-auto-flaky-cli-');
+    const stub = path.join(dir, 'colab');
+    // Dies with gh's 503 on its first call — no JSON — then prints `verdict`.
+    fs.writeFileSync(stub, `const fs=require('fs');const f=${JSON.stringify(path.join(dir, 'n'))};const n=(fs.existsSync(f)?+fs.readFileSync(f,'utf8'):0)+1;fs.writeFileSync(f,String(n));
+if(n<=+(process.env.FAIL_TIMES||0)){process.stderr.write(${JSON.stringify(HTTP503)}+'\\n');process.exitCode=1;}else{process.stdout.write(${JSON.stringify(JSON.stringify(verdict))});}\n`);
+    const out = path.join(dir, 'output');
+    fs.writeFileSync(out, '');
+    return (failTimes) => {
+      fs.rmSync(path.join(dir, 'n'), { force: true });
+      const r = spawnSync('bash', ['-c', stepScript(step)], { cwd: dir, encoding: 'utf8', env: { ...process.env, ...RETRY_ENV, FAIL_TIMES: String(failTimes), COLAB: stub, RUNNER_TEMP: dir, GITHUB_OUTPUT: out, GITHUB_STEP_SUMMARY: path.join(dir, 'summary') } });
+      return { status: r.status, stderr: r.stderr, out: fs.readFileSync(out, 'utf8'), summary: fs.existsSync(path.join(dir, 'summary')) ? fs.readFileSync(path.join(dir, 'summary'), 'utf8') : '', tries: +fs.readFileSync(path.join(dir, 'n'), 'utf8') };
+    };
+  };
+  const cut = lift(CUT, { ok: true, created: true, tag: 'v1.2.0-rc.1', checks: [] });
+  const healed = cut(1);
+  assert.strictEqual(healed.status, 0, healed.stderr);
+  assert.strictEqual(healed.tries, 2);
+  assert.match(healed.out, /tag=v1\.2\.0-rc\.1/);
+  const dead = cut(9);
+  assert.strictEqual(dead.status, 1, 'a persistent transient error still fails');
+  assert.strictEqual(dead.tries, 3);
+  assert.match(dead.stderr, /HTTP 503/);
+  assert.match(dead.summary, /produced no verdict \(exit 1\)/, 'the failure is named in the step summary');
+
+  // Re-run after success: the CLI reads a head already carrying the candidate as a no-op (#443).
+  const again = lift(CUT, { ok: true, created: false, noop: true, checks: [check('already-candidate', true)] })(0);
+  assert.strictEqual(again.status, 0);
+  assert.doesNotMatch(again.out, /tag=/);
+
+  const fin = lift(FIN, { state: 'finalized', tagged: true, finalTag: 'v1.2.0', checks: [] })(1);
+  assert.strictEqual(fin.status, 0, fin.stderr);
+  assert.match(fin.out, /tag=v1\.2\.0/);
+  const finAgain = lift(FIN, { state: 'already-final', tagged: false, checks: [] })(0);
+  assert.strictEqual(finAgain.status, 0);
+  assert.doesNotMatch(finAgain.out, /tag=/);
+});
+
+test('#464 publish Release: a 5xx on create is retried; a create the API applied before its 5xx reads as the skip', () => {
+  const PUB = 'Publish GitHub Release (same run)';
+  // Fails once with 503, then succeeds.
+  const healed = runStep(PUB, { stubs: { gh: `if [ "$1 $2" = "release view" ]; then exit 1; fi; ${flaky('exit 0')}` }, env: { TAGS: 'v1.2.0-rc.1', COLAB: '/nonexistent', FAIL_TIMES: '1', FAIL_MSG: HTTP503 } });
+  assert.strictEqual(healed.status, 0, healed.stderr);
+  assert.match(healed.stdout, /Published v1\.2\.0-rc\.1/);
+  assert.strictEqual(calls(healed).length, 2);
+  // Applied, then answered 503: the retry is refused as "already exists" — the #462 skip.
+  const applied = runStep(PUB, { stubs: { gh: `if [ "$1 $2" = "release view" ]; then exit 1; fi; ${flaky('echo "HTTP 422: Validation Failed\nRelease.tag_name already exists" >&2; exit 1')}` }, env: { TAGS: 'v1.2.0-rc.1', COLAB: '/nonexistent', FAIL_TIMES: '1', FAIL_MSG: HTTP503 } });
+  assert.strictEqual(applied.status, 0, applied.stderr);
+  assert.match(applied.stdout, /already has a Release \(published while this step ran\) — skipping/);
+  // Persistent: fails, with the message.
+  const dead = runStep(PUB, { stubs: { gh: `if [ "$1 $2" = "release view" ]; then exit 1; fi; ${flaky('exit 0')}` }, env: { TAGS: 'v1.2.0-rc.1', COLAB: '/nonexistent', FAIL_TIMES: '9', FAIL_MSG: HTTP503 } });
+  assert.notStrictEqual(dead.status, 0);
+  assert.match(dead.stderr, /HTTP 503/);
+});
+
+test('#464 npm job: the visibility read is retried; a persistent error still refuses, naming the error', () => {
+  const ghVis = flaky('echo false');
+  const healed = runStep(REFUSE, { stubs: { gh: ghVis }, env: { REPO: 'o/p', FAIL_TIMES: '2', FAIL_MSG: HTTP503 } });
+  assert.strictEqual(healed.status, 0, healed.stdout + healed.stderr);
+  assert.strictEqual(calls(healed).length, 3);
+  const dead = runStep(REFUSE, { stubs: { gh: ghVis }, env: { REPO: 'o/p', FAIL_TIMES: '9', FAIL_MSG: HTTP503 } });
+  assert.strictEqual(dead.status, 1);
+  assert.match(dead.stdout, /could not be read: unknown — HTTP 503: No server is currently available/);
+  const forbidden = runStep(REFUSE, { stubs: { gh: ghVis }, env: { REPO: 'o/p', FAIL_TIMES: '9', FAIL_MSG: 'HTTP 403: Resource not accessible by integration' } });
+  assert.strictEqual(forbidden.status, 1);
+  assert.strictEqual(calls(forbidden).length, 1, 'a 403 is not transient — refused at once');
+});
+
+test('#464 npm publish: a transient view is retried, and a publish the registry already holds is the skip', () => {
+  const repo = packageRepo();
+  // npm view answers 503 once, then "already published": retried, skipped, never published.
+  const viewFlaky = `if [ "$1" = view ]; then ${flaky('echo "${2##*@}"; exit 0')}; fi; echo "npm $*" >> "$LOG"; exit 0`;
+  const healed = runStep(PUBLISH_NPM, { cwd: repo, stubs: { npm: viewFlaky }, env: { TAGS: 'v1.3.0-rc.1', PKG_DIR: '.', PACKAGE: '@o/p', GATE: 'true', FAIL_TIMES: '1', FAIL_MSG: 'npm error code E503' } });
+  assert.strictEqual(healed.status, 0, healed.stderr);
+  assert.doesNotMatch(healed.log, /npm publish/);
+  assert.match(healed.stdout, /already on npm — skipping/);
+
+  // The view misses it (or the publish was applied before a 5xx): the republish refusal is the skip.
+  const npmConflict = `if [ "$1" = publish ]; then echo "npm $*" >> "$LOG"; echo "npm error code E403\nnpm error 403 You cannot publish over the previously published versions: 1.3.0-rc.1." >&2; exit 1; fi; ${NPM_STUB}`;
+  const raced = runStep(PUBLISH_NPM, { cwd: packageRepo(), stubs: { npm: npmConflict }, env: { TAGS: 'v1.3.0-rc.1', PKG_DIR: '.', PACKAGE: '@o/p', GATE: 'true' } });
+  assert.strictEqual(raced.status, 0, raced.stderr);
+  assert.match(raced.stdout, /already on npm \(published while this step ran\) — skipping/);
+
+  // Any other publish failure still fails.
+  const npmBroken = `if [ "$1" = publish ]; then echo "npm error code E401" >&2; exit 1; fi; ${NPM_STUB}`;
+  const broken = runStep(PUBLISH_NPM, { cwd: packageRepo(), stubs: { npm: npmBroken }, env: { TAGS: 'v1.3.0-rc.1', PKG_DIR: '.', PACKAGE: '@o/p', GATE: 'true' } });
+  assert.notStrictEqual(broken.status, 0);
+  assert.match(broken.stderr, /E401/);
+});
+
+test('#464 npm-record: a missing Release is a skip, a transient read is retried, a persistent one fails', () => {
+  const body = path.join(tmpdir('rec464-'), 'body');
+  fs.writeFileSync(body, '## v1.3.0-rc.1\n');
+  const base = { TAGS: 'v1.3.0-rc.1', REPO: 'o/p', PACKAGE: '@o/p', RUN_URL: 'https://example.invalid/run/1', BODY_FILE: body, RESULT: 'success' };
+  const gh = `if [ "$1 $2" = "release view" ]; then ${flaky('cat "$BODY_FILE"; exit 0')}; fi; exit 0`;
+  const healed = runStep(RECORD, { stubs: { gh }, env: { ...base, FAIL_TIMES: '1', FAIL_MSG: HTTP503 } });
+  assert.strictEqual(healed.status, 0, healed.stderr);
+  assert.match(healed.stdout, /npm: published/);
+  const missing = runStep(RECORD, { stubs: { gh }, env: { ...base, FAIL_TIMES: '9', FAIL_MSG: 'release not found' } });
+  assert.strictEqual(missing.status, 0);
+  assert.match(missing.stdout, /has no Release — nothing to record on/);
+  const dead = runStep(RECORD, { stubs: { gh }, env: { ...base, FAIL_TIMES: '9', FAIL_MSG: HTTP503 } });
+  assert.notStrictEqual(dead.status, 0, 'a read that kept failing is not "no Release"');
+  assert.match(dead.stderr, /HTTP 503/);
 });
