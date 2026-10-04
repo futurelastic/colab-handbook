@@ -98,7 +98,8 @@ test('the promote step runs on the schedule and a manual dispatch, before the cu
   const cond = stepLines(PROMOTE).find((l) => /^\s+if:/.test(l));
   assert.match(cond, /github\.event_name == 'schedule' \|\| github\.event_name == 'workflow_dispatch'/);
   assert.doesNotMatch(cond, /workflow_run/);
-  assert.match(stepScript(PROMOTE), /node "\$COLAB" promote --auto --json/);
+  // #474: `--dry` rides in only on a dry run (DRY_RUN=true), through an empty-safe array.
+  assert.match(stepScript(PROMOTE), /node "\$COLAB" promote --auto \$\{DRY\[@\]\+"\$\{DRY\[@\]\}"\} --json/);
 });
 
 test('the job may dispatch CI: actions: write; the CI workflow to dispatch is an EDIT point', () => {
