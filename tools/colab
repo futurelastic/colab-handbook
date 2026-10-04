@@ -9738,7 +9738,9 @@ Options:
                       warning). --dry prints "Machine trailer: …" saying which way it will go.
   --refs <N[,M]>      reference these claimed issues (Refs #N) instead of closing them — for a
                       long-lived memory/tracking issue the branch touched but did not complete.
-                      Comma-separated; each must be a claimed issue on the branch. An issue carrying
+                      Comma-separated, and repeatable: --refs A --refs B is --refs A,B (#479 —
+                      every other value flag to ship refuses a repeat). Each must be a claimed
+                      issue on the branch. An issue carrying
                       the "tracking" label is treated this way automatically, no flag needed. The
                       claim is still released either way — only Closes→Refs changes.
                       #385: a --refs'd issue whose body still has an unticked "- [ ]" box (under
@@ -11513,6 +11515,8 @@ function cmdShipDirect(opts) {
     print(preOk ? '→ READY: preconditions pass. Re-run without --dry to close.' : '→ NOT READY: fix the ✗ rows above.');
     print('  Plan: no merge, no commit, no push · post evidence comment + CLOSE each issue · release the claims (and the checkout hold)');
     print('  Gate: every closing issue must already carry an evidence comment — checked at run time.');
+    // #479: show BOTH halves of the split, so a wrong one is visible before the push.
+    if (closeIssues.length) print(`  Closes (closed by this ship): ${closeIssues.map((n) => '#' + n).join(' ')}`);
     if (refsIssues.length) print(`  Refs (kept open, NOT closed): ${refsIssues.map((n) => '#' + n).join(' ')}`);
     return preOk ? 0 : 1;
   }
@@ -11736,7 +11740,13 @@ function shipRefFor(repoAbs, branch) {
 
 function cmdShip(argv) {
   const opts = parseArgs(argv, {
-    values: { '--repo': 'repo', '--worktree': 'worktree', '--branch': 'branch', '--message': 'message', '--refs': 'refs', '--session': 'session', '--session-name': 'sessionName', '--batch': 'batch' },
+    values: { '--repo': 'repo', '--worktree': 'worktree', '--branch': 'branch', '--message': 'message', '--session': 'session', '--session-name': 'sessionName', '--batch': 'batch' },
+    // #479: a repeated --refs used to keep only its LAST value, and every dropped issue then became a
+    // `Closes` line on trunk — an issue meant to stay open, auto-closed by the push. --refs now
+    // accumulates (a repeat is the same as one comma list); every OTHER value flag to ship refuses a
+    // repeat (`once`), checked here before any git or GitHub call.
+    lists: { '--refs': 'refs' },
+    once: true,
     flags: { '--keep-worktree': 'keepWorktree', '--delete-branch': 'deleteBranch', '--keep-branch': 'keepBranch', '--dry': 'dry', '--json': 'json', '--direct': 'direct', '--adopt': 'adopt', '-h': 'help', '--help': 'help' },
   });
   if (opts.help) return print(HELP_SHIP);
@@ -12180,6 +12190,8 @@ function cmdShip(argv) {
         print(`  ✗ "${c.keyword} #${c.num}" would close #${c.num} on merge — kept open by --refs; reword the commit before shipping.`);
       }
     }
+    // #479: show BOTH halves of the split, so a wrong one is visible before the push.
+    if (closeIssues.length) print(`  Closes (closed by this ship): ${closeIssues.map((n) => '#' + n).join(' ')}`);
     if (refsIssues.length) print(`  Refs (kept open, NOT closed): ${refsIssues.map((n) => '#' + n).join(' ')}`);
     return dryOk ? 0 : 1;
   }
