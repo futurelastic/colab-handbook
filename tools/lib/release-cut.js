@@ -66,6 +66,7 @@
 
 const migrationPaths = require('./migration-paths');
 const releaseTag = require('./release-tag');
+const { stripCode } = require('./instruction-file');
 
 const VERSION_RE = /^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$/;
 const BUMPS = Object.freeze(['patch', 'minor']);
@@ -664,11 +665,16 @@ const MARKER_RE = /<!--\s*colab:switch\b([\s\S]*?)-->/g;
  * Returns { markers: [{ name, needs: [], role: null|'add'|'remove' }], malformed: [text] } — an
  * unknown token, a bad name, `needs` on a child, or two markers for one name disagreeing are all
  * `malformed`: "not cleared", reported, never defaulted.
+ *
+ * #466: fenced code blocks and inline code spans are blanked first (`stripCode`, the same reader
+ * the instruction-file import scan uses), so a body that QUOTES the marker family — prose such as
+ * "the `<!-- colab:switch -->` marker" — is documentation, not a malformed marker blocking every
+ * release. A real marker sits outside code, so it is still read, and still refused when malformed.
  */
 function parseSwitchMarkers(body) {
   const markers = [];
   const malformed = [];
-  const text = String(body || '');
+  const text = stripCode(String(body || '')).join('\n');
   let m;
   MARKER_RE.lastIndex = 0;
   while ((m = MARKER_RE.exec(text)) !== null) {

@@ -174,6 +174,28 @@ test('schema: a drop in up(), an edited migration, destructive Prisma SQL — ea
 
 const issue = (number, state, body, stateReason = state === 'CLOSED' ? 'COMPLETED' : null) => ({ number, state, stateReason, body });
 
+test('switches: a marker quoted in an inline code span or a fenced block is documentation, not a marker (#466)', () => {
+  const prose = 'NOT a reader of the `<!-- colab:switch -->` GitHub-issue-marker family';
+  assert.deepStrictEqual(rc.parseSwitchMarkers(prose), { markers: [], malformed: [] });
+  assert.strictEqual(rc.switchVerdict([issue(7, 'CLOSED', prose)]).ok, true);
+  const doubleTick = 'see ``<!-- colab:switch name=Bad_Name -->`` for the shape';
+  assert.deepStrictEqual(rc.parseSwitchMarkers(doubleTick), { markers: [], malformed: [] });
+  for (const fence of ['```', '~~~', '````']) {
+    const body = `Example:\n${fence}md\n<!-- colab:switch -->\n<!-- colab:switch name=a colour=red -->\n${fence}\nafter`;
+    assert.deepStrictEqual(rc.parseSwitchMarkers(body), { markers: [], malformed: [] }, fence);
+  }
+  // A real marker beside quoted documentation is still read …
+  const mixed = 'The `<!-- colab:switch -->` family:\n\n<!-- colab:switch name=a needs=b -->\n```\n<!-- colab:switch -->\n```';
+  assert.deepStrictEqual(rc.parseSwitchMarkers(mixed), { markers: [{ name: 'a', needs: ['b'], role: null }], malformed: [] });
+  // … a real marker spanning lines still parses …
+  assert.deepStrictEqual(rc.parseSwitchMarkers('<!-- colab:switch\n  name=a role=add -->').markers, [{ name: 'a', needs: [], role: 'add' }]);
+  // … and a malformed real marker outside code is still refused.
+  const bad = rc.parseSwitchMarkers('`<!-- colab:switch -->` aside, this one is real: <!-- colab:switch -->');
+  assert.strictEqual(bad.malformed.length, 1);
+  assert.match(bad.malformed[0], /no name=/);
+  assert.strictEqual(rc.switchVerdict([issue(8, 'OPEN', '<!-- colab:switch -->')]).ok, false);
+});
+
 test('switches: none declared passes; malformed markers are "not cleared"', () => {
   assert.strictEqual(rc.switchVerdict([issue(1, 'OPEN', 'no markers')]).ok, true);
   assert.strictEqual(rc.switchVerdict(null).ok, false);
