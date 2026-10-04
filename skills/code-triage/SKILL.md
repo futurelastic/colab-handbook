@@ -190,7 +190,7 @@ Input 2 is already in hand, so the title test costs nothing. The CI read happens
 no title owns the red. **The verdict is `colab ship`'s, not a rule of this skill's (#463):**
 `colab trunk-ci` runs the same read ship's *trunk CI green* row does — by commit, runs from
 workflows the repo does not own dropped, each workflow judged by its newest run — and prints
-it without the exemption doors, since a cure or a ci-grant lets one branch past a red trunk
+it without the exemption doors, since a cure or a human CI exemption lets one branch past a red trunk
 without making the trunk green. Never inline a `gh run list` filter here instead: one did,
 read "GREEN when any run succeeded", and a sha with `CI` green beside a red release workflow
 read GREEN to triage while ship parked every candidate on it — a red nobody owned.
