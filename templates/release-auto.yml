@@ -91,6 +91,23 @@
 # run still concludes on the `release` job. EDIT: on this route, a cron more frequent than daily
 # tags a head that release.final-spacing held back sooner.
 #
+# DRY RUN ON A FIX BRANCH (#474). This workflow never runs on a branch by itself, so a fix to it
+# (a moved runner label, a HANDBOOK_REF naming a missing branch) had no run to prove it, and the
+# cure rule (CONVENTIONS.md §4) could only refuse it — a human ci-grant was the one door. Dispatch
+# it on the fix branch instead:
+#
+#     gh workflow run release-auto.yml --ref <fix-branch> -f dry_run=true
+#
+# (`colab ship` dispatches it for you when a red in this workflow is what stands between the branch
+# and trunk). A dispatch on any ref other than main is ALWAYS dry, input or not. A dry run checks out
+# the branch, runs every step with `--dry` — the same decisions, nothing promoted, tagged, released,
+# pushed or dispatched — and skips only the steps whose names end in `[publish]`. The step
+# "Dry run — nothing is tagged, released or published" runs only then; it is how the cure rule
+# recognises the run. Keep both names as they are: the cure rule matches steps BY NAME, and accepts
+# a dry run only if every step that ran in trunk's red run passed in it and every step it skipped
+# ends in `[publish]`. So a red INSIDE a `[publish]` step, or in the npm or deploy jobs (which never
+# run without a tag), cannot be cured by a dry run — that stays a human ci-grant.
+#
 # IT READS TAGS AND CREATES TAGS. IT NEVER WRITES A COMMIT. No step here commits; the refs
 # pushed are the tags `colab release cut` / `colab release finalize` create (annotated, their
 # checks recorded in the tag message) and — only on a repo granting unattended promotion — the
@@ -154,12 +171,21 @@ on:
     # hour is when scheduled runs queue longest.
     - cron: "17 3 * * *"
   workflow_dispatch:
+    # #474: a DRY RUN for a fix branch — see "DRY RUN ON A FIX BRANCH" in the header. A dispatch on
+    # any ref other than main is dry whether or not this is set; on main it is opt-in.
+    inputs:
+      dry_run:
+        description: "Dry run: decide everything, write nothing (no promotion, tag, Release or publish)"
+        type: boolean
+        default: false
 
 # One release run at a time; a second one waits rather than racing the first for the same
 # candidate number. Never cancelled mid-run: a half-finished run may have pushed a tag
 # without publishing it.
 concurrency:
-  group: release-auto
+  # A dry run (#474) gets a group of its own: GitHub cancels an older PENDING run in the same group,
+  # so a shared one could let a branch's dry run displace a real release run waiting on main.
+  group: release-auto${{ github.event_name == 'workflow_dispatch' && (inputs.dry_run || github.ref_name != 'main') && format('-dry-{0}', github.ref_name) || '' }}
   cancel-in-progress: false
 
 permissions: {}
@@ -230,16 +256,34 @@ jobs:
       health-url: ${{ steps.cut.outputs.health-url }}
     env:
       GH_TOKEN: ${{ github.token }}
+      # #474: 'true' on a dry run — a dispatch on any ref other than main, or one with dry_run set.
+      # Never on workflow_run or schedule. Every write below is off when it is.
+      # EDIT: if your trunk is not `main`, name it here too (the same branch as `ref:` below).
+      DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && (inputs.dry_run || github.ref_name != 'main') }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
-          ref: main
+          # A dry run checks out the ref it was dispatched on — the fix being proven; every other run, main.
+          ref: ${{ env.DRY_RUN == 'true' && github.sha || 'main' }}
           # Full history plus tags: versions, bumps and "previous final" are all read from
           # git, and the on-trunk check refuses a shallow checkout outright.
           fetch-depth: 0
           # Left on deliberately: `colab release cut` / `finalize` push their tag over the
-          # checkout's origin. The token is this job's, scoped by `permissions:` above.
-          persist-credentials: true
+          # checkout's origin. The token is this job's, scoped by `permissions:` above. Off on a dry
+          # run (#474): nothing is pushed, so nothing should be able to push.
+          persist-credentials: ${{ env.DRY_RUN != 'true' }}
+
+      # #474: the marker ci-cure reads to recognise a dry run — its name must stay byte-identical to
+      # DRY_RUN_STEP in the handbook's tools/lib/ci-cure.js. Skipped on every ordinary run.
+      - name: Dry run — nothing is tagged, released or published
+        if: env.DRY_RUN == 'true'
+        run: |
+          {
+            echo "#### Dry run (#474)"
+            echo
+            echo "Dispatched on \`$GITHUB_REF_NAME\` @ \`$GITHUB_SHA\`. Every decision below runs with \`--dry\`; steps marked \`[publish]\` are skipped. Nothing is promoted, tagged, released or published."
+            echo
+          } >> "$GITHUB_STEP_SUMMARY"
 
       # A red CI run on main is not a candidate. Gated here rather than by a job-level `if:` so
       # this run concludes success, never `skipped` (#435; the comment on the job above).
@@ -285,7 +329,8 @@ jobs:
           eval "$RETRY_TRANSIENT"
           OUT="$RUNNER_TEMP/promote.json"
           rc=0
-          retry_transient node "$COLAB" promote --auto --json > "$OUT" || rc=$?
+          DRY=(); [ "${DRY_RUN:-false}" = "true" ] && DRY=(--dry)
+          retry_transient node "$COLAB" promote --auto ${DRY[@]+"${DRY[@]}"} --json > "$OUT" || rc=$?
           if ! jq -e 'has("promoted")' "$OUT" > /dev/null 2>&1; then
             echo "::warning::colab promote --auto gave no verdict (exit $rc; a HANDBOOK_REF older than #440?) — nothing was promoted"
             exit 0
@@ -296,7 +341,10 @@ jobs:
             jq -r '.checks[]? | "- \(if .ok then "✓" else "✗" end) **\(.condition)** — \(.detail)"' "$OUT"
             echo
           } >> "$GITHUB_STEP_SUMMARY"
-          if [ "$(jq -r '.promoted' "$OUT")" = "true" ]; then
+          if [ "${DRY_RUN:-false}" = "true" ]; then
+            # #474: a dry run promotes nothing and dispatches nothing, whatever the verdict says.
+            echo "Dry run — promote: $(jq -r 'if .promoted then "would promote" elif .noop then "no-op: \(.reason)" else "would refuse: \(.reason)" end' "$OUT")" | tee -a "$GITHUB_STEP_SUMMARY"
+          elif [ "$(jq -r '.promoted' "$OUT")" = "true" ]; then
             echo "promoted=true" >> "$GITHUB_OUTPUT"
             echo "Promoted to main @ $(jq -r '.sha' "$OUT")" | tee -a "$GITHUB_STEP_SUMMARY"
             if retry_transient gh workflow run "$CI_WORKFLOW" --ref main; then
@@ -322,7 +370,8 @@ jobs:
           eval "$RETRY_TRANSIENT"
           OUT="$RUNNER_TEMP/cut.json"
           rc=0
-          retry_transient node "$COLAB" release cut --auto --json > "$OUT" || rc=$?
+          DRY=(); [ "${DRY_RUN:-false}" = "true" ] && DRY=(--dry)
+          retry_transient node "$COLAB" release cut --auto ${DRY[@]+"${DRY[@]}"} --json > "$OUT" || rc=$?
           # A verdict is JSON carrying `ok`; anything else is a run that never decided.
           if ! jq -e 'has("ok")' "$OUT" > /dev/null 2>&1; then
             echo "::error::colab release cut produced no verdict (exit $rc)"
@@ -336,7 +385,10 @@ jobs:
             jq -r '.checks[]? | "- \(if .ok then "✓" else "✗" end) **\(.condition)** — \(.detail)"' "$OUT"
             echo
           } >> "$GITHUB_STEP_SUMMARY"
-          if [ "$(jq -r '.created' "$OUT")" = "true" ]; then
+          if [ "${DRY_RUN:-false}" = "true" ]; then
+            # #474: a dry run never hands a tag to the publishing steps, whatever the verdict says.
+            echo "Dry run — would cut: $(jq -r '.tag // "nothing"' "$OUT") (created: $(jq -r '.created' "$OUT"))" | tee -a "$GITHUB_STEP_SUMMARY"
+          elif [ "$(jq -r '.created' "$OUT")" = "true" ]; then
             TAG="$(jq -r '.tag' "$OUT")"
             echo "tag=$TAG" >> "$GITHUB_OUTPUT"
             echo "Cut $TAG" | tee -a "$GITHUB_STEP_SUMMARY"
@@ -376,7 +428,8 @@ jobs:
           eval "$RETRY_TRANSIENT"
           OUT="$RUNNER_TEMP/finalize.json"
           rc=0
-          retry_transient node "$COLAB" release finalize --auto --json > "$OUT" || rc=$?
+          DRY=(); [ "${DRY_RUN:-false}" = "true" ] && DRY=(--dry)
+          retry_transient node "$COLAB" release finalize --auto ${DRY[@]+"${DRY[@]}"} --json > "$OUT" || rc=$?
           if ! jq -e 'has("state")' "$OUT" > /dev/null 2>&1; then
             echo "::error::colab release finalize produced no verdict (exit $rc)"
             echo "colab release finalize produced no verdict (exit $rc) — the reason is in this step's log." >> "$GITHUB_STEP_SUMMARY"
@@ -400,7 +453,9 @@ jobs:
               echo
             fi
           } >> "$GITHUB_STEP_SUMMARY"
-          if [ "$(jq -r '.tagged' "$OUT")" = "true" ]; then
+          if [ "${DRY_RUN:-false}" = "true" ]; then
+            echo "Dry run — finalize: $STATE (would tag: $(jq -r '.finalTag // "nothing"' "$OUT"))" | tee -a "$GITHUB_STEP_SUMMARY"
+          elif [ "$(jq -r '.tagged' "$OUT")" = "true" ]; then
             TAG="$(jq -r '.finalTag' "$OUT")"
             echo "tag=$TAG" >> "$GITHUB_OUTPUT"
             echo "Finalized $TAG" | tee -a "$GITHUB_STEP_SUMMARY"
@@ -414,9 +469,9 @@ jobs:
       # Whether the npm job publishes what this run tagged — `colab release npm` reads the
       # release: block (one reading, the same as cut/finalize). A CLI older than #433 gives no
       # verdict; that is a warning and no npm publish, never a failed release.
-      - name: Read the npm target (colab release npm)
+      - name: Read the npm target (colab release npm) [publish]
         id: npm-target
-        if: steps.cut.outputs.tag != '' || steps.finalize.outputs.tag != ''
+        if: env.DRY_RUN != 'true' && (steps.cut.outputs.tag != '' || steps.finalize.outputs.tag != '')
         env:
           TAGS: ${{ steps.cut.outputs.tag }} ${{ steps.finalize.outputs.tag }}
         run: |
@@ -445,8 +500,8 @@ jobs:
 
       # Publishes every tag THIS run created. In this run, never via a tag-push workflow:
       # see "PUBLISHING HAPPENS IN THIS RUN" in the header.
-      - name: Publish GitHub Release (same run)
-        if: steps.cut.outputs.tag != '' || steps.finalize.outputs.tag != ''
+      - name: Publish GitHub Release (same run) [publish]
+        if: env.DRY_RUN != 'true' && (steps.cut.outputs.tag != '' || steps.finalize.outputs.tag != '')
         env:
           TAGS: ${{ steps.cut.outputs.tag }} ${{ steps.finalize.outputs.tag }}
         run: |

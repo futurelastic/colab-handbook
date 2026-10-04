@@ -160,7 +160,7 @@ function runPublish(tags, { viewExit, createExit, createErr = '' }) {
     'exit 1',
   ].join('\n'), { mode: 0o755 });
   const summary = path.join(dir, 'summary');
-  const r = spawnSync('bash', ['-c', stepScript('Publish GitHub Release (same run)')], {
+  const r = spawnSync('bash', ['-c', stepScript('Publish GitHub Release (same run) [publish]')], {
     cwd: dir,
     encoding: 'utf8',
     env: { ...process.env, ...RETRY_ENV, PATH: `${bin}:${process.env.PATH}`, TAGS: tags, COLAB: '/nonexistent', RUNNER_TEMP: dir, GITHUB_STEP_SUMMARY: summary },
@@ -327,12 +327,13 @@ test("own copy: runs this checkout's tools/colab — no pinned ref, no clone", (
   assert.doesNotMatch(OWN, /^\s*HANDBOOK_REF:/m);
   assert.doesNotMatch(OWN, /git clone/);
   assert.match(OWN, /COLAB=\$GITHUB_WORKSPACE\/tools\/colab/);
-  assert.match(OWN, /ref: main\n/);
+  // main on every real run; the dispatched ref only on a #474 dry run.
+  assert.match(OWN, /ref: \$\{\{ env\.DRY_RUN == 'true' && github\.sha \|\| 'main' \}\}\n/);
   assert.match(OWN, /fetch-depth: 0/);
 });
 
 test('own copy: gate, cut, finalize and publish are the template\'s steps verbatim', () => {
-  for (const step of [GATE, CUT, FIN, 'Publish GitHub Release (same run)']) {
+  for (const step of [GATE, CUT, FIN, 'Publish GitHub Release (same run) [publish]']) {
     assert.strictEqual(stepScript(step, OWN), stepScript(step), `step "${step}" drifted from the template`);
   }
 });
@@ -364,7 +365,7 @@ test('own copy: no job-level if — a red CI run is gated in a step, so the run 
 });
 
 test("own copy: the npm target and publish steps are the template's, and the job runs on a GitHub-hosted runner (#434)", () => {
-  assert.strictEqual(stepScript('Read the npm target (colab release npm)', OWN), stepScript('Read the npm target (colab release npm)'));
+  assert.strictEqual(stepScript('Read the npm target (colab release npm) [publish]', OWN), stepScript('Read the npm target (colab release npm) [publish]'));
   assert.strictEqual(stepScript('Publish each tag (npm publish --provenance)', OWN), stepScript('Publish each tag (npm publish --provenance)'));
   assert.match(OWN, /\n  npm:\n[\s\S]*?runs-on: ubuntu-latest[\s\S]*?id-token: write/);
   assert.doesNotMatch(OWN.split('\n').filter((l) => !/^\s*#/.test(l)).join('\n'), /^\s*(NODE_AUTH_TOKEN|NPM_TOKEN):|\$\{\{\s*secrets\./m);
@@ -383,7 +384,7 @@ test('own copy: the self-audit reads it as a release-auto workflow with nothing 
 // never moves git, refuses a private repo, gates the tarball, records the outcome on the Release.
 // Its run blocks are lifted and run against stub `npm` / `gh` / `colab` on PATH.
 
-const NPM_TARGET = 'Read the npm target (colab release npm)';
+const NPM_TARGET = 'Read the npm target (colab release npm) [publish]';
 const REFUSE = 'Refuse a private repository, and any npm token';
 const PUBLISH_NPM = 'Publish each tag (npm publish --provenance)';
 const RECORD = 'Record the npm outcome';
@@ -732,7 +733,7 @@ if(n<=+(process.env.FAIL_TIMES||0)){process.stderr.write(${JSON.stringify(HTTP50
 });
 
 test('#464 publish Release: a 5xx on create is retried; a create the API applied before its 5xx reads as the skip', () => {
-  const PUB = 'Publish GitHub Release (same run)';
+  const PUB = 'Publish GitHub Release (same run) [publish]';
   // Fails once with 503, then succeeds.
   const healed = runStep(PUB, { stubs: { gh: `if [ "$1 $2" = "release view" ]; then exit 1; fi; ${flaky('exit 0')}` }, env: { TAGS: 'v1.2.0-rc.1', COLAB: '/nonexistent', FAIL_TIMES: '1', FAIL_MSG: HTTP503 } });
   assert.strictEqual(healed.status, 0, healed.stderr);
@@ -845,4 +846,87 @@ test('#468 finalize: an older CLI with no why and no skipped prints exactly what
   assert.strictEqual(r.status, 0);
   assert.match(r.stdout, /^Finalize: testing$/m);
   assert.doesNotMatch(r.summary, /Why no final|Other open candidates/);
+});
+
+// --- #474: the dry run on a fix branch ------------------------------------------------------
+
+const { DRY_RUN_STEP, PUBLISH_STEP_MARKER } = require('./ci-cure.js');
+const PROMOTE = 'Promote unattended (colab promote --auto)';
+
+/** Like runWithStub, but records the stub colab's argv and every `gh` call, with DRY_RUN set. */
+function runDry(step, { stdout, exit = 0, dry }) {
+  const dir = tmpdir('release-auto-dry-');
+  const log = path.join(dir, 'calls.log');
+  const stub = path.join(dir, 'colab');
+  fs.writeFileSync(stub, `require('fs').appendFileSync(${JSON.stringify(log)}, 'colab ' + process.argv.slice(2).join(' ') + '\\n');
+process.stdout.write(${JSON.stringify(stdout)}); process.exitCode = ${exit};\n`);
+  const bin = path.join(dir, 'bin');
+  fs.mkdirSync(bin);
+  fs.writeFileSync(path.join(bin, 'gh'), `#!/bin/sh\necho "gh $*" >> ${JSON.stringify(log)}\n`, { mode: 0o755 });
+  const out = path.join(dir, 'output');
+  const summary = path.join(dir, 'summary');
+  fs.writeFileSync(out, '');
+  const r = spawnSync('bash', ['-c', stepScript(step)], {
+    cwd: dir, encoding: 'utf8',
+    env: { ...process.env, ...RETRY_ENV, PATH: `${bin}:${process.env.PATH}`, COLAB: stub, RUNNER_TEMP: dir,
+      GITHUB_OUTPUT: out, GITHUB_STEP_SUMMARY: summary, CI_WORKFLOW: 'CI', DRY_RUN: dry ? 'true' : 'false' },
+  });
+  const o = {};
+  for (const line of fs.readFileSync(out, 'utf8').split('\n')) {
+    const eq = line.indexOf('=');
+    if (eq > 0) o[line.slice(0, eq)] = line.slice(eq + 1);
+  }
+  const calls = fs.existsSync(log) ? fs.readFileSync(log, 'utf8').trim().split('\n') : [];
+  return { status: r.status, output: o, calls, summary: fs.existsSync(summary) ? fs.readFileSync(summary, 'utf8') : '' };
+}
+
+test('#474 dry run: the dispatch input, the forced-dry rule and a concurrency group of its own are declared', () => {
+  for (const [label, text] of [['template', TEXT], ['own copy', OWN]]) {
+    assert.match(text, /workflow_dispatch:\n[\s\S]*?inputs:\n\s+dry_run:\n[\s\S]*?type: boolean\n\s+default: false/, label);
+    assert.match(text, /DRY_RUN: \$\{\{ github\.event_name == 'workflow_dispatch' && \(inputs\.dry_run \|\| github\.ref_name != 'main'\) \}\}/, label);
+    assert.match(text, /group: release-auto\$\{\{ github\.event_name == 'workflow_dispatch' && \(inputs\.dry_run \|\| github\.ref_name != 'main'\) && format\('-dry-\{0\}', github\.ref_name\) \|\| '' \}\}/, label);
+    assert.match(text, /persist-credentials: \$\{\{ env\.DRY_RUN != 'true' \}\}/, label);
+    assert.ok(text.includes(`- name: ${DRY_RUN_STEP}\n        if: env.DRY_RUN == 'true'\n`), `${label}: the sentinel step, byte-identical to ci-cure's DRY_RUN_STEP`);
+  }
+});
+
+test('#474 dry run: every release-job step a dry run turns off is a [publish] step, and nothing else is', () => {
+  for (const [label, text] of [['template', TEXT], ['own copy', OWN]]) {
+    const job = text.slice(text.indexOf('\n  release:\n'), text.search(/\n {2}npm:\n/));
+    const steps = job.split(/\n {6}- /).slice(1);
+    const off = steps.filter((st) => /\n {8}if: env\.DRY_RUN != 'true'/.test(st)).map((st) => st.match(/^name: (.*)/)[1]);
+    assert.deepStrictEqual(off.sort(), [`Publish GitHub Release (same run) ${PUBLISH_STEP_MARKER}`, `Read the npm target (colab release npm) ${PUBLISH_STEP_MARKER}`], label);
+    const marked = steps.map((st) => (st.match(/^name: (.*)/) || [])[1]).filter((n) => n && n.endsWith(PUBLISH_STEP_MARKER));
+    assert.deepStrictEqual(marked.sort(), off.sort(), `${label}: a [publish] name with no DRY_RUN guard would be a skipped step D3 admits for no reason`);
+  }
+});
+
+test('#474 dry run: cut and finalize pass --dry and hand no tag on; an ordinary run passes no --dry', { skip: !HAS_JQ && 'jq not installed' }, () => {
+  const cutOut = JSON.stringify({ ok: true, noop: false, created: true, tag: 'v1.3.0-rc.1', final: true, checks: [] });
+  const dry = runDry(CUT, { stdout: cutOut, dry: true });
+  assert.strictEqual(dry.status, 0);
+  assert.match(dry.calls[0], /^colab release cut --auto --dry --json$/);
+  assert.deepStrictEqual(dry.output, {}, 'no tag=/final= on a dry run, even when the verdict claims created');
+  assert.match(dry.summary, /Dry run — would cut: v1\.3\.0-rc\.1/);
+  const real = runDry(CUT, { stdout: cutOut, dry: false });
+  assert.match(real.calls[0], /^colab release cut --auto --json$/);
+  assert.strictEqual(real.output.tag, 'v1.3.0-rc.1');
+
+  const finOut = JSON.stringify({ state: 'finalized', tagged: true, finalTag: 'v1.3.0', checks: [] });
+  const fdry = runDry(FIN, { stdout: finOut, dry: true });
+  assert.strictEqual(fdry.status, 0);
+  assert.match(fdry.calls[0], /^colab release finalize --auto --dry --json$/);
+  assert.strictEqual(fdry.output.tag, undefined);
+  assert.strictEqual(runDry(FIN, { stdout: finOut, dry: false }).output.tag, 'v1.3.0');
+});
+
+test('#474 dry run: promote passes --dry and never dispatches CI, even on a promoted verdict', { skip: !HAS_JQ && 'jq not installed' }, () => {
+  const out = JSON.stringify({ ok: true, promoted: true, noop: false, sha: 'abc', reason: null, checks: [] });
+  const dry = runDry(PROMOTE, { stdout: out, dry: true });
+  assert.strictEqual(dry.status, 0);
+  assert.deepStrictEqual(dry.calls, ['colab promote --auto --dry --json']);
+  assert.strictEqual(dry.output.promoted, undefined);
+  const real = runDry(PROMOTE, { stdout: out, dry: false });
+  assert.ok(real.calls.some((c) => /^gh workflow run CI --ref main$/.test(c)), real.calls.join('\n'));
+  assert.strictEqual(real.output.promoted, 'true');
 });

@@ -44,3 +44,30 @@ test('workflowsFiringOnBranchPush lists the files that fire', () => {
   assert.deepStrictEqual(wt.workflowsFiringOnBranchPush({ readFile, workflows, branch: PROBE }), ['ci.yml']);
   assert.deepStrictEqual(wt.workflowsFiringOnBranchPush({ readFile, workflows, branch: 'main' }), ['ci.yml', 'deploy.yml']);
 });
+
+// --- #474: workflow_dispatch inputs and the workflow's name ---------------------------------
+
+{
+  const { workflowDispatchInputs, workflowNameOf } = require('./workflow-triggers.js');
+  const fsx = require('fs');
+  const px = require('path');
+  const root = px.resolve(__dirname, '..', '..');
+
+  test('#474 workflowDispatchInputs: the template declares dry_run; a bare workflow_dispatch declares nothing', () => {
+    const tpl = fsx.readFileSync(px.join(root, 'templates', 'release-auto.yml'), 'utf8');
+    assert.deepStrictEqual(workflowDispatchInputs(tpl), ['dry_run']);
+    assert.deepStrictEqual(workflowDispatchInputs(fsx.readFileSync(px.join(root, '.github', 'workflows', 'release-auto.yml'), 'utf8')), ['dry_run']);
+    assert.deepStrictEqual(workflowDispatchInputs('on:\n  push:\n  workflow_dispatch:\njobs: {}\n'), []);
+    assert.deepStrictEqual(workflowDispatchInputs('on:\n  push:\njobs: {}\n'), []);
+    assert.deepStrictEqual(workflowDispatchInputs('on: [push, workflow_dispatch]\n'), []);
+    assert.deepStrictEqual(workflowDispatchInputs(
+      'on:\n  workflow_dispatch:\n    # c\n    inputs:\n      a:\n        type: string\n      b_2:\n        default: x\n  schedule:\n    - cron: "1 * * * *"\n'), ['a', 'b_2']);
+    assert.deepStrictEqual(workflowDispatchInputs(null), []);
+  });
+
+  test('#474 workflowNameOf: the top-level name, unquoted; null when absent', () => {
+    assert.strictEqual(workflowNameOf('name: Release (auto)\non: push\n'), 'Release (auto)');
+    assert.strictEqual(workflowNameOf('name: "CI"  # trailing\n'), 'CI');
+    assert.strictEqual(workflowNameOf('on: push\njobs:\n  a:\n    name: not-me\n'), null);
+  });
+}

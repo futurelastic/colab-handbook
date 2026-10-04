@@ -9450,9 +9450,9 @@ function ciGrantTrailerLine(grantVerdict, branch, trunk) {
  */
 function ciCureTrailerLine(cureVerdict, branch, trunk) {
   if (!cureVerdict || !cureVerdict.ok) return null;
-  const via = cureVerdict.carveOut
+  const via = (cureVerdict.carveOut
     ? ` via workflow-carve-out jobs ${cureVerdict.carveOut.jobs.map((j) => j.name).join(',')}`
-    : '';
+    : '') + (cureVerdict.dryRun ? ` via dry-run jobs ${cureVerdict.dryRun.jobs.join(',')}` : '');
   // #475/#476: a cure that changed a manifest under an admission says which, for the same reason.
   const adm = cureVerdict.admitted || {};
   const manifest = [adm.scripts ? 'add-only-scripts' : null, adm.pins ? 'pin-only-requirements' : null].filter(Boolean);
@@ -10430,9 +10430,10 @@ function applyRedTrunkExemptions(raw, target, trunk, redSha, grantThunk, cureThu
     const via = cureVerdict.carveOut
       ? ` THROUGH THE #321 WORKFLOW CARVE-OUT — every job red on trunk ran to success here: ${cureVerdict.carveOut.jobs.map((j) => `${j.name} (${j.redMs}ms red, ${j.branchMs}ms passing)`).join(', ')}`
       : '';
+    const viaDry = cureVerdict.dryRun ? ` — main-only job(s) ${cureVerdict.dryRun.jobs.join(', ')} proven by a DRY RUN on the branch (#474)` : '';
     return {
       name: raw.name, ok: true, class: null,
-      detail: `PRECONDITION OVERRIDDEN by the cure rule (#281) — branch contains red ${shortSha(redSha)} and is green at its own head${via} (raw: ${raw.detail})`,
+      detail: `PRECONDITION OVERRIDDEN by the cure rule (#281) — branch contains red ${shortSha(redSha)} and is green at its own head${via}${viaDry} (raw: ${raw.detail})`,
       grantVerdict: null, cureVerdict,
     };
   }
@@ -10552,13 +10553,25 @@ function shipCiCure(repoAbs, gh, target, trunk, redSha, branch) {
   // so a branch that cannot cure pays no job-level `gh` calls for it.
   const jobEvidence = (containsRedSha && evidence && evidence.ok)
     ? shipCureJobEvidence(repoAbs, trunk, redSha, branch, evRun) : null;
+  // #474: which workflows at the branch head offer a dry run — a static read (git show), read only
+  // when job evidence exists, so a branch that already refuses on containment or 2a pays nothing.
+  const capable = jobEvidence && evidence ? dryRunCapableWorkflows(repoAbs, evidence.sha) : [];
   const verdict = ciCure.cureVerdict({ containsRedSha, evidence, redSha, stacking, jobEvidence,
     workflowsTouched: diff.workflowsTouched,
     manifestScriptsTouched: diff.manifestScriptsTouched, manifestPaths: diff.manifestPaths,
     manifestScriptsAddOnly: diff.manifestScriptsAddOnly,
     pythonManifestTouched: diff.pythonManifestTouched, pythonManifestPaths: diff.pythonManifestPaths,
-    pythonPinOnly: diff.pythonPinOnly });
-  return { ...verdict, redSha, evidenceSha: evidence ? evidence.sha : null };
+    pythonPinOnly: diff.pythonPinOnly,
+    dryRunCapable: capable.map((w) => w.name) });
+  // The dispatch plan carries the FILE and the exact command, so the refusal can name it and the
+  // real ship path can run it — measurement only here; nothing is dispatched by this function.
+  const dryRunDispatch = verdict.dryRunWanted
+    ? verdict.dryRunWanted.map((name) => {
+      const w = capable.find((c) => c.name === name);
+      return { workflow: name, file: w.file, command: `gh workflow run ${w.file} --ref ${branch} -f ${DRY_RUN_INPUT}=true` };
+    })
+    : null;
+  return { ...verdict, ...(dryRunDispatch ? { dryRunDispatch } : {}), redSha, evidenceSha: evidence ? evidence.sha : null };
 }
 
 /**
@@ -10636,9 +10649,71 @@ function ciCurePayload(ciResult) {
     carveOut: c.carveOut
       ? { jobs: c.carveOut.jobs.map((j) => ({ name: j.name, redDurationMs: j.redMs, branchDurationMs: j.branchMs })) }
       : null,
+    // #474: the red job(s) proven only by a dry run of a main-only workflow — null otherwise.
+    dryRun: c.dryRun ? { jobs: c.dryRun.jobs.slice() } : null,
+    // #474: on a refusal, the dry run(s) that would supply the missing 2b evidence — what the real
+    // ship dispatches; `--dry --json` only reports it. null when none would help.
+    dryRunWanted: c.dryRunDispatch ? c.dryRunDispatch.map((d) => ({ ...d })) : null,
     // #475/#476: the manifest change a cure was admitted with — `{scripts?, pins?}` — or null.
     admitted: c.admitted || null,
   };
+}
+
+/** The dispatch input a dry-run-capable workflow declares (#474, templates/release-auto.yml). */
+const DRY_RUN_INPUT = 'dry_run';
+
+/**
+ * The workflows at `treeish` that offer a dry run (#474): a top-level `name:`, a `workflow_dispatch`
+ * input named `dry_run`, and ci-cure's sentinel step text. All three, read statically at the BRANCH's
+ * head — the copy a dispatch on that ref would run. A pre-#474 copy has no forced-dry mode and would
+ * really publish if dispatched, which is exactly why this read gates every dispatch. `[]` on any
+ * failed read: no capability is ever assumed.
+ */
+function dryRunCapableWorkflows(repoAbs, treeish) {
+  const ls = git.git(['ls-tree', '--name-only', `${treeish}:.github/workflows`], repoAbs);
+  if (!ls.ok) return [];
+  const out = [];
+  for (const f of ls.stdout.split('\n').map((x) => x.trim()).filter((x) => /\.ya?ml$/.test(x))) {
+    const r = git.git(['show', `${treeish}:.github/workflows/${f}`], repoAbs);
+    if (!r.ok) continue;
+    const name = workflowTriggers.workflowNameOf(r.stdout);
+    if (!name || !r.stdout.includes(ciCure.DRY_RUN_STEP)) continue;
+    if (!workflowTriggers.workflowDispatchInputs(r.stdout).includes(DRY_RUN_INPUT)) continue;
+    out.push({ name, file: f });
+  }
+  return out;
+}
+
+/**
+ * Dispatch the dry run(s) a refused cure asked for (#474) — the REAL ship path only, never `--dry`,
+ * never `--dry --json`, never from the measurement above (which runs up to three times per ship).
+ * Skips a workflow that already has ANY run at the branch head, whatever its status: a queued run has
+ * no jobs yet, so "job absent" alone would dispatch it twice. Never waits — the caller re-runs ship
+ * once the run completes (code-ship B1a's bounded wait), the same no-polling stance as every other
+ * read here.
+ */
+function shipDispatchDryRuns(repoAbs, branch, plan) {
+  const head = git.git(['rev-parse', branch], repoAbs);
+  const runs = head.ok ? git.ghRunsForCommit(repoAbs, branch, head.stdout.trim(), 30) : null;
+  for (const p of plan) {
+    const existing = runs ? runs.filter((r) => r.workflowName === p.workflow) : null;
+    if (existing === null) {
+      warn(`  dry run for ${p.workflow} NOT dispatched: the runs at ${branch}'s head could not be read — run it yourself: ${p.command}`);
+      continue;
+    }
+    if (existing.length) {
+      const r = existing[0];
+      warn(`  dry run for ${p.workflow} already exists at ${branch}'s head (run ${r.databaseId}, ${r.status}${r.conclusion ? '/' + r.conclusion : ''}) — not dispatched again; re-run \`colab ship\` once it completes.`);
+      continue;
+    }
+    const d = git.ghWorkflowDispatch(repoAbs, p.file, branch, { [DRY_RUN_INPUT]: 'true' });
+    if (d.ok) {
+      warn(`  ↻ dispatched a dry run of ${p.workflow} on ${branch} (#474)${d.withInputs ? '' : ' — without the input, which GitHub refused; the ref forces dry mode'}. ` +
+        'Re-run `colab ship` once it completes (code-ship B1a\'s bounded wait) — it is the evidence this cure is missing.');
+    } else {
+      warn(`  dry run for ${p.workflow} could NOT be dispatched (${d.detail}) — run it yourself: ${p.command}`);
+    }
+  }
 }
 
 /**
@@ -12073,6 +12148,11 @@ function cmdShip(argv) {
     }
     const dryOk = preOk && dryClosingConflicts.length === 0;
     print(dryOk ? '→ READY: preconditions pass. Re-run without --dry to ship.' : '→ NOT READY: fix the ✗ rows above.');
+    if (!ciOk && ciResult.cureVerdict && ciResult.cureVerdict.dryRunDispatch) {
+      for (const d of ciResult.cureVerdict.dryRunDispatch) {
+        print(`  Dry run wanted (#474): ${d.workflow} has no run on this branch — a real \`colab ship\` dispatches \`${d.command}\` and refuses until it completes.`);
+      }
+    }
     if (mode.evidenceClose) {
       print('  Plan: no merge, no commit, no push · post evidence comment + CLOSE each issue · ' +
         (opts.keepWorktree ? 'keep worktree' : 'worktree rm') + ' (releases claims)');
@@ -12103,7 +12183,14 @@ function cmdShip(argv) {
     if (refsIssues.length) print(`  Refs (kept open, NOT closed): ${refsIssues.map((n) => '#' + n).join(' ')}`);
     return dryOk ? 0 : 1;
   }
-  if (!preOk) { process.stderr.write('✗ Aborting: one or more preconditions failed (see ✗ above). Nothing was pushed.\n'); return 1; }
+  if (!preOk) {
+    // #474: the cure is missing only a main-only workflow's run, and that workflow offers a dry run —
+    // dispatch it now (once), so the re-run has the evidence. Never on --dry: that returned above.
+    if (!ciOk && ciResult.cureVerdict && ciResult.cureVerdict.dryRunDispatch && gh) {
+      shipDispatchDryRuns(repoAbs, sess.branch, ciResult.cureVerdict.dryRunDispatch);
+    }
+    process.stderr.write('✗ Aborting: one or more preconditions failed (see ✗ above). Nothing was pushed.\n'); return 1;
+  }
 
   // ---- (b3) evidence-close: the whole B0–B2 sequence is skipped, because there is nothing to merge ----
   if (mode.evidenceClose) return shipEvidenceClose({
