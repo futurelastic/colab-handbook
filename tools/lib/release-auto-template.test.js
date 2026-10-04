@@ -126,12 +126,58 @@ test('finalize: a final tag is handed to the publish step; testing / held are no
 });
 
 test('the template publishes in its own run and never pushes commits', () => {
-  assert.match(TEXT, /^\s+gh release create "\$TAG" --verify-tag/m);
+  assert.match(TEXT, /^\s+if ! gh release create "\$TAG" --verify-tag/m);
   assert.match(TEXT, /\*-\*\) KIND=\(--prerelease --latest=false\)/, 'a candidate must be a pre-release, never Latest');
   const code = TEXT.split('\n').filter((l) => !/^\s*#/.test(l)).join('\n');
   assert.doesNotMatch(code, /\bgit\s+commit\b/);
   assert.doesNotMatch(code, /\bgit\s+push\b/);
   assert.doesNotMatch(code, /^\s+push:/m, 'a push trigger here would make the release workflow fire on its own tags');
+});
+
+/** Runs the publish step for `tags` against a stub `gh` whose view/create behaviour is given. */
+function runPublish(tags, { viewExit, createExit, createErr = '' }) {
+  const dir = tmpdir('release-auto-publish-');
+  const bin = path.join(dir, 'bin');
+  fs.mkdirSync(bin);
+  const log = path.join(dir, 'gh.log');
+  fs.writeFileSync(path.join(bin, 'gh'), [
+    '#!/bin/sh',
+    `echo "$1 $2" >> ${JSON.stringify(log)}`,
+    `if [ "$1 $2" = "release view" ]; then exit ${viewExit}; fi`,
+    `if [ "$1 $2" = "release create" ]; then printf '%s\\n' ${JSON.stringify(createErr)} >&2; exit ${createExit}; fi`,
+    'exit 1',
+  ].join('\n'), { mode: 0o755 });
+  const summary = path.join(dir, 'summary');
+  const r = spawnSync('bash', ['-c', stepScript('Publish GitHub Release (same run)')], {
+    cwd: dir,
+    encoding: 'utf8',
+    env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, TAGS: tags, COLAB: '/nonexistent', RUNNER_TEMP: dir, GITHUB_STEP_SUMMARY: summary },
+  });
+  return { status: r.status, stdout: r.stdout, stderr: r.stderr, calls: fs.existsSync(log) ? fs.readFileSync(log, 'utf8').trim().split('\n') : [] };
+}
+
+test('publish is idempotent: a Release that already exists is a skip, however it is discovered (#462)', () => {
+  // Seen by the pre-check: no create at all.
+  const seen = runPublish('v1.2.0-rc.3', { viewExit: 0, createExit: 0 });
+  assert.strictEqual(seen.status, 0);
+  assert.match(seen.stdout, /v1\.2\.0-rc\.3 already has a Release — skipping/);
+  assert.deepStrictEqual(seen.calls, ['release view']);
+
+  // The race #462 measured: the view lags the cut's own publish, the create answers 422.
+  const raced = runPublish('v1.2.0-rc.3', { viewExit: 1, createExit: 1, createErr: 'HTTP 422: Validation Failed (https://api.github.com/repos/o/r/releases)\nRelease.tag_name already exists' });
+  assert.strictEqual(raced.status, 0, raced.stderr);
+  assert.match(raced.stdout, /already has a Release \(published while this step ran\) — skipping/);
+  assert.deepStrictEqual(raced.calls, ['release view', 'release create']);
+
+  // Any other create failure still fails the step — the skip is narrow.
+  const broken = runPublish('v1.2.0-rc.3', { viewExit: 1, createExit: 1, createErr: 'HTTP 403: Resource not accessible by integration' });
+  assert.notStrictEqual(broken.status, 0);
+  assert.match(broken.stderr, /HTTP 403/);
+
+  // A clean create publishes.
+  const ok = runPublish('v1.2.0-rc.3', { viewExit: 1, createExit: 0 });
+  assert.strictEqual(ok.status, 0);
+  assert.match(ok.stdout, /Published v1\.2\.0-rc\.3/);
 });
 
 test('the fingerprints attribute a copy to release-auto, not release-tag', () => {
