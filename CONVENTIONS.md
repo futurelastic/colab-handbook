@@ -1542,6 +1542,10 @@ than guessed.
   newer failure vetoes an older success, a newer run still in flight blocks (#307) — except
   that a `cancelled` run never supersedes, because it ran nothing (#92). Runs of *different*
   workflows are never reduced: a failing one beside a passing one is still not green.
+  `colab trunk-ci` prints that verdict for trunk's head, read-only and from the same function
+  (#463); a skill that needs it calls the verb instead of restating the rule as a `gh run
+  list` filter — one such filter, "green when any run succeeded", read a sha green that ship
+  had parked every candidate on, and the red went unowned.
   That is the half of the question about what is merged **into**; the branch's own run
   is the other half — see *Branch CI*, below.
 - **That resolves a FALSE red — a real one has two different doors, one of them

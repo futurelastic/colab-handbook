@@ -771,9 +771,11 @@ When the ready bucket is empty and every CI wait has either resolved or been def
 For each candidate, in the order 4.0 set:
 
 1. **Re-check trunk CI.** Ask by commit, not by recency (`CONVENTIONS.md` [§4](../../CONVENTIONS.md#4-branches-and-commits), #92):
-   does a completed, successful run exist for `<trunk>`'s current head sha? (`gh run
-   list --branch <trunk> -L 1` reads whatever ran *last*, and a cancelled straggler
-   can outrank a passing run on the same commit under `cancel-in-progress`.) Not
+   `colab trunk-ci` must print `GREEN` for `<trunk>`'s current head sha — the verdict
+   `colab ship` gates on, every workflow's newest run there green, not merely one
+   (#463). (`gh run list --branch <trunk> -L 1` reads whatever ran *last*, and a
+   cancelled straggler can outrank a passing run on the same commit under
+   `cancel-in-progress`.) Not
    once at the start — trunk CI can die mid-sweep (billing lockout, runner outage),
    and a failure that never started still means stop. A sweep can take an hour.
    This re-check is about the **branched** `ship` candidates below — the merge each

@@ -182,19 +182,24 @@ TRUNK=$(git rev-parse origin/<trunk>)                              # input 1, al
 printf '%s\n' "$OUT2" | grep '^I ' | awk -F'\t' '$2 ~ /^TRUNK RED:/ {
   split($1, f, " "); if (("," f[4] ",") !~ /,agent-filed,/) print f[2] }'
                                                                     # owned by title: any number ⇒ stop here, 0 calls
-gh run list --commit "$TRUNK" --json status,conclusion -q '
-  if length == 0 then "NONE"
-  elif any(.status != "completed") then "PENDING"
-  elif any(.conclusion == "success") then "GREEN"
-  else "RED" end'                                                   # 1 call, only when no title owns it
+colab trunk-ci --json                                               # 1 call, only when no title owns it
+                                                                    # → { verdict, sha, … }; verdict ∈ GREEN RED PENDING WEDGED NONE UNREADABLE
 ```
 
 Input 2 is already in hand, so the title test costs nothing. The CI read happens only when
-no title owns the red. Read it **by commit**, exactly as §5's *Trunk CI is alive* bullet
-does. Trunk is `RED` when every run at `$TRUNK` has completed and none succeeded. `PENDING`
-(a run still in flight) is not red yet, and neither is `NONE`. `RED`, owned by neither rule ⇒
-`§0 changed: unownedRedTrunk — full pass`. The full pass then reaches §5.2, which adopts a
-mis-titled or unaccepted diagnosis, or files one. A failed CI read is not "green": print
+no title owns the red. **The verdict is `colab ship`'s, not a rule of this skill's (#463):**
+`colab trunk-ci` runs the same read ship's *trunk CI green* row does — by commit, runs from
+workflows the repo does not own dropped, each workflow judged by its newest run — and prints
+it without the exemption doors, since a cure or a ci-grant lets one branch past a red trunk
+without making the trunk green. Never inline a `gh run list` filter here instead: one did,
+read "GREEN when any run succeeded", and a sha with `CI` green beside a red release workflow
+read GREEN to triage while ship parked every candidate on it — a red nobody owned.
+Check that its `sha` equals `$TRUNK`; if it does not, trunk moved between the two reads, so
+re-run both. `RED`, owned by neither rule ⇒ `§0 changed: unownedRedTrunk — full pass`. The
+full pass then reaches §5.2, which adopts a mis-titled or unaccepted diagnosis, or files one.
+`PENDING` (a run still in flight) is not red yet, and neither is `NONE`. `WEDGED` is not red
+either: it is a stuck run, and §5's *Trunk CI is alive* bullet reports it. `UNREADABLE` (exit
+2, or no `colab` on this machine) is not "green": print
 `§0 changed: unownedRedTrunk (unreadable) — full pass`.
 
 The condition **re-arms only while nobody owns the red**. Once a prefixed, accepted issue
@@ -1523,10 +1528,13 @@ with the blocker named:
       **An open blocker is not automatically a blocker** — judge its state, per §5.1.
       **And empty is not "free" — it is "nobody looked".**
 - [ ] **Trunk CI is alive** — ask by commit, not by recency (`CONVENTIONS.md` [§4](../../CONVENTIONS.md#4-branches-and-commits),
-      #92): does a completed, successful run exist for `<trunk>`'s current head sha?
-      (`gh run list --branch <trunk> -L 1` reads whatever ran *last*, and a
-      cancelled straggler can outrank a passing run on the same commit under
-      `cancel-in-progress`.) A failure that never started (billing lockout, runner
+      #92): `colab trunk-ci` must print `GREEN` for `<trunk>`'s current head sha — the
+      same verdict `colab ship` gates on, so every workflow's newest run there
+      succeeded, not merely one of them (#463). Never substitute a `gh run list`
+      filter of your own: `gh run list --branch <trunk> -L 1` reads whatever ran
+      *last* (a cancelled straggler can outrank a passing run on the same commit
+      under `cancel-in-progress`), and an "any run succeeded" filter calls a sha
+      with one red workflow green. A failure that never started (billing lockout, runner
       outage) counts as dead. **What CI *is* here follows whether the unit has a
       branch, how much it must catch follows `exposure`**
       ([§7, *CI*](../../CONVENTIONS.md#ci--what-it-is-follows-the-units-shape-how-much-follows-exposure)

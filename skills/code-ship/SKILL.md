@@ -565,17 +565,18 @@ arrive), merge-clean against trunk — land through one command instead of one s
 **Ask by commit, not by recency** (`CONVENTIONS.md` [§4](../../CONVENTIONS.md#4-branches-and-commits), #92). `gh run list --branch
 <base> -L 1` reads whatever ran *last*, and under `cancel-in-progress` a cancelled
 straggler can outrank a passing run on the *same* commit — deadlocking a ship that a
-by-commit check would clear. Ask instead whether a completed, successful run exists
-for `<base>`'s current head sha:
+by-commit check would clear. Ask instead about `<base>`'s current head sha — and ask it
+the way `colab ship` does, since that is the verdict the merge actually gates on:
 
 ```sh
-HEAD=$(git rev-parse origin/<base>)
-gh run list --branch <base> --limit 20 --json headSha,conclusion \
-  -q "[.[] | select(.headSha == \"$HEAD\" and .conclusion == \"success\")] | length"
+colab trunk-ci                       # <base> is trunk: GREEN | RED | PENDING | WEDGED | NONE | UNREADABLE
+colab ship --dry --json              # any <base>: the `trunk CI green` / `line CI green` row
 ```
 
-Non-zero → a green run exists for the exact sha you are about to merge, which is the
-only question that matters. `colab ship` asks it this same way.
+`GREEN` means every workflow's newest run at that exact sha succeeded — not merely one
+of them (#461, #463). Never hand-roll a `gh run list` filter that counts *a* successful
+run: at one measured trunk sha `CI` succeeded and a release workflow failed, ship read
+it red, and a one-success filter read it green.
 
 A "failure" that never started (billing lockout, runner outage) still means
 **stop** — we once merged for 12 hours into repos whose CI was silently dead

@@ -10112,14 +10112,34 @@ function descriptorHolds(doc) {
  */
 function shipCiCheck(repoAbs, gh, target, trunk, grantThunk, cureThunk) {
   const name = `${target === trunk ? 'trunk' : 'line'} CI green`;
-  if (!gh) return { name, ok: false, class: SELF_CLEARING, detail: `gh not usable (${ghUnusableWhy(repoAbs)}) — cannot confirm CI`, grantVerdict: null, cureVerdict: null };
+  const r = readCiVerdict(repoAbs, gh, target, trunk);
+  if (r.final) return { name, ...r.verdict, grantVerdict: null, cureVerdict: null };
+  return applyRedTrunkExemptions({ name, ...r.verdict }, target, trunk, r.run.sha, grantThunk, cureThunk);
+}
+
+/**
+ * The CI read and its classification, BEFORE any exemption door (#463) — the one function both
+ * `shipCiCheck` above and `colab trunk-ci` (cmdTrunkCi) call, so code-triage's "is trunk red?" and
+ * ship's "trunk CI green" precondition can no longer disagree about a sha. They did: triage read
+ * "red only when every run completed and none succeeded" in its own `gh run list` filter, so a sha
+ * with one green workflow beside a red one read GREEN to triage while ship parked every candidate.
+ *
+ * Returns `{ run, verdict, final }`. `verdict` is `{ok, class, detail}`; `run` is the summarized
+ * run (null when gh is unusable or the read failed). `final` is true when no exemption door applies
+ * (green, self-clearing, unreadable, or a batch substitute answered) — the caller returns `verdict`
+ * as is; false means a HUMAN_GATED verdict that `shipCiCheck` still offers to the cure rule and the
+ * ci-grant. `trunk-ci` deliberately reports the pre-exemption verdict: an exemption lets ONE
+ * branch past a red trunk, it does not make the trunk green, and the red still needs an owner.
+ */
+function readCiVerdict(repoAbs, gh, target, trunk) {
+  if (!gh) return { run: null, final: true, verdict: { ok: false, class: SELF_CLEARING, detail: `gh not usable (${ghUnusableWhy(repoAbs)}) — cannot confirm CI` } };
   let run = git.ghRunForSha(repoAbs, target);
   let via = target;
   if (run && run.status === 'none' && target !== trunk) {
     run = git.ghRunForSha(repoAbs, trunk);
     via = `${trunk} (line "${target}" has no runs — ungated, advisory)`;
   }
-  if (!run) return { name, ok: false, class: SELF_CLEARING, detail: 'gh run list failed', grantVerdict: null, cureVerdict: null };
+  if (!run) return { run: null, final: true, verdict: { ok: false, class: SELF_CLEARING, detail: 'gh run list failed' } };
   // #413: an empty BRANCH-filtered read of trunk's head is a second opinion away from `none`. It was
   // measured coming back empty for a trunk sha whose green run existed, then clearing a minute later
   // — and `none` classes HUMAN_GATED, so a transient read parked a ready candidate for a human.
@@ -10149,10 +10169,9 @@ function shipCiCheck(repoAbs, gh, target, trunk, grantThunk, cureThunk) {
   // Inert (no gh call) unless project.yml declares ship-batch > 1.
   if (!verdict.ok && target === trunk && (run.status === 'none' || verdict.class === SELF_CLEARING)) {
     const sub = shipBatchTrunkSubstitute(repoAbs, trunk, run.sha);
-    if (sub) return { name, ...sub, grantVerdict: null, cureVerdict: null };
+    if (sub) return { run, final: true, verdict: sub };
   }
-  if (verdict.ok || verdict.class !== HUMAN_GATED) return { name, ...verdict, grantVerdict: null, cureVerdict: null };
-  return applyRedTrunkExemptions({ name, ...verdict }, target, trunk, run.sha, grantThunk, cureThunk);
+  return { run, verdict, final: verdict.ok || verdict.class !== HUMAN_GATED };
 }
 
 /**
@@ -13128,6 +13147,62 @@ function shipBatchMemberTail({ repoAbs, doc, trunk, sess, sha, closeIssues, refs
 // decides and deletes is one bug away from deleting on an `unknown`.
 // ---------------------------------------------------------------------------
 
+// trunk-ci — the trunk-CI verdict `colab ship` computes, read-only (#463). code-triage's §0 "red
+// trunk nobody owns" check and §5's "Trunk CI is alive" bullet call this instead of keeping a
+// `gh run list` filter of their own — two rules for one question disagreed, and the red went
+// unowned (a sha with CI green and a release workflow red read GREEN to triage, not-green to ship).
+const HELP_TRUNK_CI = `colab trunk-ci [--repo <path>] [--json]
+
+Print the trunk-CI verdict \`colab ship\` would compute for the trunk's CURRENT remote head —
+the same read (shipCiCheck's readCiVerdict): by branch, re-read by commit when empty, runs from
+workflows the repo does not own dropped (#451), each workflow judged by its newest run (#461).
+Read-only: no claim, no label, no write.
+
+The first output word is one verdict:
+  GREEN       every judged workflow's newest run at the sha succeeded — ship's row would pass
+  RED         a judged run completed and did not succeed — trunk is red
+  PENDING     a judged run is still in flight (or the sha is minutes old with no run yet)
+  WEDGED      a run that will never move on its own (zero jobs / hours unmoving, #155)
+  NONE        no repo-owned run exists at the sha — CI not wired or never started
+  UNREADABLE  gh unusable or the read failed — never "green"
+
+Exemption doors (the cure rule, a ci-grant) are NOT applied: they let one branch past a red
+trunk, they do not make the trunk green, and the red still needs an owner.
+
+  --json   { verdict, sha, ok, class, detail, trunk }
+Exit 0 whenever a verdict was read (whatever it is); 2 on UNREADABLE.`;
+
+/** Map readCiVerdict's result to the closed trunk-ci vocabulary. Pure — exported for tests. */
+function trunkCiToken(r) {
+  if (!r || !r.run) return 'UNREADABLE';
+  if (r.verdict.ok) return 'GREEN';
+  const st = r.run.status;
+  if (st === 'none') return r.verdict.class === SELF_CLEARING ? 'PENDING' : 'NONE';
+  if (st === 'completed') return 'RED';
+  return r.verdict.class === HUMAN_GATED ? 'WEDGED' : 'PENDING';
+}
+
+function cmdTrunkCi(argv) {
+  const opts = parseArgs(argv, {
+    values: { '--repo': 'repo' },
+    flags: { '--json': 'json', '-h': 'help', '--help': 'help' },
+  });
+  if (opts.help) return print(HELP_TRUNK_CI);
+  const repoAbs = resolveRepo(opts);
+  if (!git.repoRoot(repoAbs)) throw new UserError(`${repoAbs} is not a git repo`);
+  const trunk = resolveTrunk(repoAbs, projectDoc(repoAbs));
+  if (!trunk) throw new UserError('cannot resolve trunk — no `trunk:` in .github/project.yml and no origin/HEAD');
+  const r = readCiVerdict(repoAbs, isGhUsable(repoAbs), trunk, trunk);
+  const verdict = trunkCiToken(r);
+  const sha = r.run ? r.run.sha || null : null;
+  if (opts.json) {
+    print(JSON.stringify({ verdict, trunk, sha, ok: r.verdict.ok, class: r.verdict.class || null, detail: r.verdict.detail }, null, 2));
+  } else {
+    print(`${verdict} ${trunk}${sha ? `@${shortSha(sha)}` : ''} — ${r.verdict.detail}`);
+  }
+  return verdict === 'UNREADABLE' ? 2 : 0;
+}
+
 const HELP_LANDED = `colab landed [--repo <path>] [--worktree <name> | --branch <br>] [--base <br>] [--all] [--json]
 
 Has this branch's work already landed on its base? The shared answer behind code-sweep's buckets
@@ -13951,6 +14026,8 @@ Commands:
                                         code-wrap Phase B → the branch's recorded base (trunk, or a
                                         declared line). --json (--dry only): machine-readable
                                         preconditions with a closed refusal-class vocabulary (#77)
+  trunk-ci [--json]                     the trunk-CI verdict ship computes, read-only (#463):
+                                        GREEN | RED | PENDING | WEDGED | NONE | UNREADABLE
   landed [--worktree N | --branch B | --all] [--base B] [--json]   has this work already landed?
                                         (the shared rule behind code-sweep's buckets — correct
                                         across squash merges, where "commits ahead" is not)
@@ -14038,6 +14115,7 @@ function main(argv) {
     case 'worktrees': return cmdWorktrees(rest);
     case 'ship': return cmdShip(rest);
     case 'landed': return cmdLanded(rest);
+    case 'trunk-ci': return cmdTrunkCi(rest);
     case 'holders': return cmdHolders(rest);
     case 'promote': return cmdPromote(rest);
     case 'deliver': return cmdDeliver(rest);
