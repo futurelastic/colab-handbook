@@ -1542,6 +1542,10 @@ than guessed.
   newer failure vetoes an older success, a newer run still in flight blocks (#307) — except
   that a `cancelled` run never supersedes, because it ran nothing (#92). Runs of *different*
   workflows are never reduced: a failing one beside a passing one is still not green.
+  `colab trunk-ci` prints that verdict for trunk's head, read-only and from the same function
+  (#463); a skill that needs it calls the verb instead of restating the rule as a `gh run
+  list` filter — one such filter, "green when any run succeeded", read a sha green that ship
+  had parked every candidate on, and the red went unowned.
   That is the half of the question about what is merged **into**; the branch's own run
   is the other half — see *Branch CI*, below.
 - **That resolves a FALSE red — a real one has two different doors, one of them
@@ -3628,6 +3632,12 @@ bodies — `role=add` on the first child, `role=remove` on the last:
   name, or two markers on one issue disagreeing all mean **"not cleared"** — reported,
   never defaulted. An epic with no marker is **not** declared single-merge; it is simply
   undeclared, and whether it should have a switch is a question, not an answer.
+- **A marker quoted inside code is not a marker.** Text in an inline code span or a
+  fenced block — like the examples above, or prose that names the family as
+  `` `<!-- colab:switch -->` `` — is documentation and is never read as a marker (#466).
+  We measured one closed issue whose body only described the family this way, and every
+  release-cut candidate in that repo was refused as a malformed marker until someone
+  reworded the issue.
 
 From these a check derives everything rule 6 and the release cut need, with no other
 record: a switch **exists** once its `role=add` child is closed by a merge, it is
