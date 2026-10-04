@@ -102,6 +102,19 @@ the handbook's current version, so a scheduled run is self-documenting.
   same rule (`tools/lib/workflow-triggers.js`), so it neither fails the audit nor refuses a
   candidate. Keep deploy steps out of the copied release workflow: the exemption trusts the
   template header's "deployment does not belong here", it does not check it.
+- **Distribution (CONVENTIONS.md §6)** — three checks, all from repository text plus the
+  repository's visibility (read from the GitHub API only when one of them has something to
+  look at, so a repo with no npm surface, no Release upload and no `distribution:` costs no
+  API call):
+  - a **private** repository that could reach public npm — a manifest without `"private":
+    true`, a `publishConfig.registry` on the public registry, or a workflow step publishing
+    there → **⚠ finding** (#432; unknown visibility → · advisory);
+  - a **private** repository uploading GitHub Release assets → **· advisory** (#442);
+  - a repository **declaring** `distribution: js | compiled` with no install route for its
+    row (publish step + non-private `bin`; root `bin`; root `bin` + a workflow calling a
+    dist-refs workflow) → **· advisory** (#469); an unknown value → **✗ failure**. Never
+    inferred: an undeclared repository is not checked, because nothing in a repository
+    tells a tool from a library. Table: `project.schema.md`, *`distribution` — optional*.
 - The declared `trunk` branch actually exists — checked against **local branch refs
   unioned with remote-tracking refs** (`refs/heads` ∪ `refs/remotes/*`, remote prefix
   stripped, deduped). A branch present only as `origin/<name>` still counts: `git clone
