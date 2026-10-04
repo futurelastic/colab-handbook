@@ -361,6 +361,15 @@ jobs:
         if: steps.scripts.outputs.lint == 'true'
         run: npm run lint
 
+      # EDIT: cap your test runner's workers in CI, in its own config (#478). vitest,
+      # jest, node:test and playwright start one worker per CPU the job can SEE. On a
+      # self-hosted pool slot that is often the whole host's count, while the slot
+      # caps only memory. A host upgrade then adds workers until the slot is
+      # throttled. There is no OOM, the tests time out, and trunk goes red with no
+      # code change. Use a fixed number sized to the slot's memory, e.g. vitest
+      # `maxWorkers: process.env.CI ? 4 : undefined`, jest `--maxWorkers=4`,
+      # node:test `--test-concurrency=4`. GitHub Actions sets CI=true. Why and how
+      # to size it: CONVENTIONS.md §7, "Self-hosted runners".
       - name: Test
         if: steps.scripts.outputs.test == 'true'
         run: npm test
