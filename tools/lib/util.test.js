@@ -48,3 +48,27 @@ test('humanAge: an unparseable timestamp degrades to a labelled "unknown", never
 test('humanAge: clock skew (a "since" in the future) never renders a negative age', () => {
   assert.strictEqual(humanAge(isoMsAgo(-60_000)), 'just now');
 });
+
+// --- #479: parseArgs repeat handling ------------------------------------------
+{
+  const { parseArgs: pa, UserError: UE } = require('./util');
+
+  test('#479 parseArgs: a `lists` flag accumulates across repeats, inline and spaced, like one comma list', () => {
+    const o = pa(['--refs', '1', '--refs=2,3', '--refs', '4'], { lists: { '--refs': 'refs' } });
+    assert.strictEqual(o.refs, '1,2,3,4');
+  });
+
+  test('#479 parseArgs: `once` makes a repeated value flag a usage error naming the flag', () => {
+    assert.throws(() => pa(['--branch', 'a', '--branch', 'b'], { values: { '--branch': 'branch' }, once: true }),
+      (e) => e instanceof UE && /--branch given more than once/.test(e.message));
+  });
+
+  test('#479 parseArgs: without `once`, a repeated value flag keeps the old last-one-wins behaviour', () => {
+    assert.strictEqual(pa(['--repo', 'a', '--repo', 'b'], { values: { '--repo': 'repo' } }).repo, 'b');
+  });
+
+  test('#479 parseArgs: `once` does not affect `lists` flags or a single use', () => {
+    const o = pa(['--refs', '1', '--refs', '2', '--branch', 'x'], { values: { '--branch': 'branch' }, lists: { '--refs': 'refs' }, once: true });
+    assert.deepStrictEqual([o.refs, o.branch], ['1,2', 'x']);
+  });
+}

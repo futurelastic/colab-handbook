@@ -211,3 +211,45 @@ test('#172: the branch-names-issues refusal also names "rename the branch" as a 
   assert.match(r.err, /NOT an issue number/);
   assert.match(r.err, /rename the branch/);
 });
+
+// --- #479: a repeated --refs accumulates; it never drops a value into a `Closes` -----------------
+//
+// Before #479, `--refs A --refs B` kept only B (parseArgs' last-one-wins), so A became a `Closes`
+// line on trunk and the push auto-closed an issue meant to stay open — while --dry read clean.
+
+function addBranchFor(fx, branch) {
+  fx.g(fx.work, 'checkout', '-q', '-b', branch);
+  fs.writeFileSync(path.join(fx.work, 'feature.txt'), 'x\n');
+  fx.g(fx.work, 'add', '-A');
+  fx.g(fx.work, 'commit', '-q', '-m', 'fix: add the feature, no mention of any issue');
+  fx.g(fx.work, 'checkout', '-q', 'main');
+}
+
+test('#479 --dry: --refs A --refs B lists BOTH as Refs and never composes Closes #A', () => {
+  const fx = fixture(PROJECT_YML_AUTO_TRUNK);
+  addBranchFor(fx, 'fix/group-61-62-63');
+  colab(fx, ['claim', '61', '62', '63', '--branch', 'fix/group-61-62-63', '--repo', fx.work]);
+
+  const r = colab(fx, ['ship', '--branch', 'fix/group-61-62-63', '--repo', fx.work, '--refs', '61', '--refs', '62', '--dry']);
+  assert.match(r.out, /Refs \(kept open, NOT closed\): #61 #62\b/, r.out + r.err);
+  assert.match(r.out, /Closes \(closed by this ship\): #63\b/, r.out + r.err);
+  assert.doesNotMatch(r.out, /Closes \(closed by this ship\):[^\n]*#6[12]\b/);
+});
+
+test('#479 --dry --json: a repeated --refs splits refsIssues/closeIssues as one comma list would', () => {
+  const fx = fixture(PROJECT_YML_AUTO_TRUNK);
+  addBranchFor(fx, 'fix/group-64-65-66');
+  colab(fx, ['claim', '64', '65', '66', '--branch', 'fix/group-64-65-66', '--repo', fx.work]);
+
+  const r = colab(fx, ['ship', '--branch', 'fix/group-64-65-66', '--repo', fx.work, '--refs', '64', '--refs=65', '--dry', '--json']);
+  const body = JSON.parse(r.out);
+  assert.deepStrictEqual(body.refsIssues.slice().sort(), [64, 65]);
+  assert.deepStrictEqual(body.closeIssues, [66]);
+});
+
+test('#479: any other value flag to ship given twice is a usage error naming the flag, before any git/GitHub work', () => {
+  const fx = fixture(PROJECT_YML_AUTO_TRUNK);
+  const r = colab(fx, ['ship', '--branch', 'a', '--branch', 'b', '--repo', fx.work, '--dry']);
+  assert.notStrictEqual(r.code, 0);
+  assert.match(r.err, /--branch given more than once/);
+});
