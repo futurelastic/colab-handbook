@@ -4260,7 +4260,10 @@ that cannot move is a warning, never a reason to undo the tag.
 **What a consumer pins.** [`templates/release-auto.yml`](templates/release-auto.yml)'s
 `HANDBOOK_REF` defaults to `stable`; a repo may pin `next` (the fast channel) or an exact version
 tag (frozen — the one way to stop moving). When `stable` moves, that final's release notes say
-what changed.
+what changed. A tool installed **with npx** follows a channel the same way, with one difference:
+the channel is resolved to the release tag on it before anything is installed, never installed as
+a ref — a per-machine service through its `update` verb, a one-shot command through the launcher
+([*Services over npx*](#services-over-npx--init-update-rollback-465), below).
 
 **Versioning** — SemVer. Patch for fixes, minor for features, major for breaking changes.
 Pre-1.0 repos use `v0.x.y`, treating minor as "meaningful increment".
@@ -4369,14 +4372,94 @@ tag, and a platform without its binary, and never moves a dist ref that exists) 
   made — the same reason the Release itself is published in that run.
 - **Trusted publishing (OIDC) for npm, never a token** — the npm job's first rule, above.
 - **A long-running tool never runs from npx's cache.** npm may prune that cache under a live
-  process. A tool that runs as a service has an `init`/`install` step that copies it to a stable
-  path first and points the service there. The launcher already runs every binary from its stable
-  path, and prints it on `--print-path` for exactly this wiring.
+  process. A tool that runs as a service installs, updates and rolls back through the contract in
+  [*Services over npx*](#services-over-npx--init-update-rollback-465), below.
 
 The audit reports a **private** repository whose workflows upload GitHub Release assets
 (`gh release upload`, `gh release create <tag> <files>`, a release action given `files:`) as
 **advisory** (`warn`): an asset can be a legitimate by-product — an SBOM, a checksum list — so it is
 never a failure, but an asset that is the install path asks every user for `gh`.
+
+
+### Services over npx — init, update, rollback (#465)
+
+A tool that runs as a **per-machine service** — a dashboard, a daemon, a JS app a launch agent
+serves — installs with npx like every other tool, but never *runs* from npx. It owns three verbs,
+and adopters implement them with [`templates/npx-service.mjs`](templates/npx-service.mjs), which
+uses its sibling [`templates/npx-launcher.mjs`](templates/npx-launcher.mjs) as a library:
+
+```sh
+npx github:<org>/<repo>#vX.Y.Z init [--channel next|stable]   # first install, or repair
+<tool> update [--check] [--version vX.Y.Z] [--channel next|stable]
+<tool> rollback
+```
+
+- **`init`** installs the version npx was asked for under a stable per-user path, writes a small
+  shim on the user's `PATH`, (re)writes the service unit, loads it and checks its health. It is
+  also the repair command: re-running it rewrites the shim and the unit.
+- **`update`** resolves its target, installs it **beside** the running version, switches to it,
+  restarts the service and checks its health. **A failed health check switches back** — the
+  previous version restarted, exit 1 — so an update either lands healthy or changes nothing that
+  serves. A failed fetch or build happens before the switch, so it changes nothing at all.
+  `--check` reports what an update would do and writes nothing.
+- **`rollback`** switches to the previous version through the same health-checked switch; run it
+  twice and it toggles.
+
+**Versions sit side by side; links decide which one runs.** Each version is installed into its
+own directory under the user's data directory (`$XDG_DATA_HOME/<tool>/vX.Y.Z/`, also on macOS —
+a path without spaces belongs in a unit file), and two links name the running and the previous
+version. The service unit and the shim point **through** the `current` link, so an update or a
+rollback is one atomic rename and the unit is never rewritten for it. A few versions are kept;
+the running and previous ones are never pruned. A service unit pointing into npx's cache, or into
+a checkout, is the failure this rule exists to prevent.
+
+**Following a channel.** A channel ([*Release channels*](#6-releases), #445) is a branch, and dist
+refs and install directories are keyed by version — so a channel is **resolved to a version, never
+installed as one**. `update` asks the origin, with the same git and the same URL npx used (so the
+same credentials), for the channel branch's tip and the release tags on that commit: `stable`
+takes the highest **final** there, `next` the highest release tag there (a final outranks its own
+candidates on the same commit). That exact `vX.Y.Z` is then installed. **A tip with no release
+tag refuses** — it is never guessed. `init` records the channel to follow (default `stable`);
+`update --channel` changes it; `update --version vX.Y.Z` **pins**, and later `update`s report
+"pinned" until a channel is chosen again — the same three choices a workflow's `HANDBOOK_REF`
+offers. Following automatically is a timer that runs the same `update`, never a second mechanism.
+
+**A one-shot command at a channel.** `npx github:<org>/<repo>#stable <args>` works too: the
+launcher resolves the channel on the commit npx installed (the sha in the installing project's
+lockfile) to its release tag and fetches that version's dist ref, so the binary always matches the
+source npx ran. npx re-resolves a branch committish on every run (measured on npm 11: the cached
+install is reused, and its lockfile's commit moves with the branch), so a one-shot command at a
+channel costs one round trip to the origin per run — pin `#vX.Y.Z` where that matters. Any other
+branch (`#main`) is still refused: it names no release.
+
+**Per-machine config, state and secrets live outside the install.** Everything under the install
+directory is disposable — replaced on update, pruned, reinstallable from the origin — so nothing a
+machine owns may live there, nor in the package, nor in the unit file:
+
+- config and secrets: `$XDG_CONFIG_HOME/<tool>/` (mode `0700`, secret files `0600`) or the OS
+  keychain;
+- state and logs: `$XDG_STATE_HOME/<tool>/`.
+
+The unit passes the service the **locations** (`<TOOL>_CONFIG_DIR`, `<TOOL>_STATE_DIR`), never a
+value; `init` creates the directories and never overwrites a file in them. Deleting the whole data
+directory must lose nothing a reinstall cannot bring back.
+
+**A JS app that needs a build** builds in `prepare`, as the *Distribution* table already says —
+for a service that is safe, because the build runs while the new version is being installed beside
+the running one, before any switch. Two conditions: the built output must be listed in `files`
+(npm packs a git dependency through `files`), and every machine needs the build toolchain. A build
+that cannot run on the target (secrets, a heavy toolchain) ships its output prebuilt instead, as a
+platform-neutral dist ref; the service template does not unpack one yet.
+
+**Why side-by-side versions, and not a serving clone that follows a branch.** A clone that pulls
+and rebuilds in place makes a branch the thing that runs: rollback becomes a checkout plus a
+rebuild, the running tree is half-updated while it builds, and what runs is not a version any dist
+ref or release note names. Side-by-side versions keep the running version untouched until the
+switch, make rollback a rename, and run only what a release tag names.
+
+**Service managers.** The template writes a launchd agent on macOS and a systemd user unit on
+Linux, and refuses Windows. A Linux service that must outlive the login session needs lingering
+enabled for the user; `init` prints the command and never runs it.
 
 ---
 
