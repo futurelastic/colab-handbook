@@ -4483,7 +4483,8 @@ does not guess (#469).
 ### Services over npx — init, update, rollback (#465)
 
 A tool that runs as a **per-machine service** — a dashboard, a daemon, a JS app a launch agent
-serves — installs with npx like every other tool, but never *runs* from npx. It owns three verbs,
+serves — installs with npx like every other tool, but never *runs* from npx. It owns three verbs
+(plus `status` and `uninstall`),
 and adopters implement them with [`templates/npx-service.mjs`](templates/npx-service.mjs), which
 uses its sibling [`templates/npx-launcher.mjs`](templates/npx-launcher.mjs) as a library:
 
@@ -4491,6 +4492,7 @@ uses its sibling [`templates/npx-launcher.mjs`](templates/npx-launcher.mjs) as a
 npx github:<org>/<repo>#vX.Y.Z init [--channel next|stable]   # first install, or repair
 <tool> update [--check] [--version vX.Y.Z] [--channel next|stable]
 <tool> rollback
+<tool> uninstall [--purge]
 ```
 
 - **`init`** installs the version npx was asked for under a stable per-user path, writes a small
@@ -4503,6 +4505,10 @@ npx github:<org>/<repo>#vX.Y.Z init [--channel next|stable]   # first install, o
   `--check` reports what an update would do and writes nothing.
 - **`rollback`** switches to the previous version through the same health-checked switch; run it
   twice and it toggles.
+- **`uninstall`** (#472) unloads the service (and its update timer), deletes the unit files, the
+  shim and the whole data directory — every installed version. The config and state directories
+  stay, so a later `init` finds the same config; `--purge` deletes them too. It removes only a shim
+  the template wrote.
 
 **Versions sit side by side; links decide which one runs.** Each version is installed into its
 own directory under the user's data directory (`$XDG_DATA_HOME/<tool>/vX.Y.Z/`, also on macOS —
@@ -4521,7 +4527,11 @@ candidates on the same commit). That exact `vX.Y.Z` is then installed. **A tip w
 tag refuses** — it is never guessed. `init` records the channel to follow (default `stable`);
 `update --channel` changes it; `update --version vX.Y.Z` **pins**, and later `update`s report
 "pinned" until a channel is chosen again — the same three choices a workflow's `HANDBOOK_REF`
-offers. Following automatically is a timer that runs the same `update`, never a second mechanism.
+offers. Following automatically is a timer that runs the same `update`, never a second mechanism:
+`init --auto-update 6h` (#471) writes one beside the service — a second launchd agent with
+`StartInterval`, or a systemd user `oneshot` service plus `.timer` — whose command is literally
+`<tool> update` through `current`, logging to the state directory; `init --no-auto-update` removes
+it. A pinned install's timer runs and changes nothing, exactly as `update` does.
 
 **A one-shot command at a channel.** `npx github:<org>/<repo>#stable <args>` works too: the
 launcher resolves the channel on the commit npx installed (the sha in the installing project's
@@ -4548,7 +4558,11 @@ for a service that is safe, because the build runs while the new version is bein
 the running one, before any switch. Two conditions: the built output must be listed in `files`
 (npm packs a git dependency through `files`), and every machine needs the build toolchain. A build
 that cannot run on the target (secrets, a heavy toolchain) ships its output prebuilt instead, as a
-platform-neutral dist ref; the service template does not unpack one yet.
+platform-neutral dist ref (#470): one tarball in `refs/tags/dist/vX.Y.Z/any`, pushed by
+`dist-refs.yml` with `platforms: any`. The service template's `KIND 'dist'` fetches it with the
+same git, verifies it against that ref's `SHA256SUMS` exactly as the launcher verifies a binary,
+refuses an archive with an absolute or `..` entry, and unpacks it into the version's directory
+before any switch.
 
 **Why side-by-side versions, and not a serving clone that follows a branch.** A clone that pulls
 and rebuilds in place makes a branch the thing that runs: rollback becomes a checkout plus a
