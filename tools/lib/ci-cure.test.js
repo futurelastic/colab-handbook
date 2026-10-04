@@ -595,3 +595,141 @@ test('conditions 5 and 6 both hit → condition 5 reports first (order is 5 → 
 test('the carve-out cure also carries provenJobs', () => {
   assert.deepEqual(cureVerdict(carving({})).provenJobs, ['browser']);
 });
+
+// --- #474: dry-run evidence for a main-only workflow ----------------------------------------
+//
+// The measured shape: `Release (auto) / Cut, finalize, publish` red on trunk at "Fetch the colab
+// CLI" (a HANDBOOK_REF default naming a missing branch). The fix branch cannot produce an ordinary
+// run of that job — release-auto fires only after trunk CI — so it dispatches a dry run.
+
+const { dryRunDispatchPlan, DRY_RUN_STEP, PUBLISH_STEP_MARKER } = require('./ci-cure.js');
+
+const REL_WF = 'Release (auto)';
+const REL_JOB = 'Cut, finalize, publish';
+const NPM_STEP = `Read the npm target (colab release npm) ${PUBLISH_STEP_MARKER}`;
+const PUB_STEP = `Publish GitHub Release (same run) ${PUBLISH_STEP_MARKER}`;
+const T0 = '2026-01-01T00:00:00Z';
+
+function step(name, conclusion = 'success') { return { name, status: 'completed', conclusion }; }
+
+// Trunk: ran up to Fetch, failed there; everything after it is skipped.
+function trunkRelease(failAt = 'Fetch the colab CLI') {
+  const order = ['Set up job', 'Run actions/checkout', 'Fetch the colab CLI', 'Cut a candidate (colab release cut --auto)',
+    'Finalize (colab release finalize --auto)', NPM_STEP, PUB_STEP];
+  const i = order.indexOf(failAt);
+  return { name: REL_JOB, workflowName: REL_WF, status: 'completed', conclusion: 'failure',
+    startedAt: T0, completedAt: '2026-01-01T00:00:20Z',
+    steps: order.map((n, k) => step(n, k < i ? 'success' : k === i ? 'failure' : 'skipped')) };
+}
+
+// Branch dry run: sentinel + every ordinary step success, both [publish] steps skipped.
+function dryRelease(over = {}) {
+  const steps = ['Set up job', 'Run actions/checkout', DRY_RUN_STEP, 'Fetch the colab CLI',
+    'Cut a candidate (colab release cut --auto)', 'Finalize (colab release finalize --auto)'].map((n) => step(n))
+    .concat([step(NPM_STEP, 'skipped'), step(PUB_STEP, 'skipped')]);
+  return { name: REL_JOB, workflowName: REL_WF, status: 'completed', conclusion: 'success',
+    startedAt: T0, completedAt: '2026-01-01T00:01:00Z', steps, ...over };
+}
+
+function withSteps(job, edit) { return { ...job, steps: edit(job.steps.map((s) => ({ ...s }))) }; }
+
+function relEvidence(trunk = trunkRelease(), branch = [dryRelease()]) {
+  return shapeJobEvidence({ redRunJobs: [trunk], branchRunJobs: branch });
+}
+
+test('#474 shapeJobEvidence: a branch job is a dry run only when its sentinel step concluded success', () => {
+  assert.equal(relEvidence().branchJobs[0].dryRun, true);
+  const skippedSentinel = withSteps(dryRelease(), (ss) => ss.map((s) => (s.name === DRY_RUN_STEP ? { ...s, conclusion: 'skipped' } : s)));
+  assert.equal(relEvidence(trunkRelease(), [skippedSentinel]).branchJobs[0].dryRun, false);
+});
+
+test('#474 (a) the measured HANDBOOK_REF shape cures through the carve-out, proven by the dry run', () => {
+  const v = cureVerdict(base({ jobEvidence: relEvidence(), workflowsTouched: true }));
+  assert.equal(v.ok, true, v.reason);
+  assert.ok(v.carveOut);
+  assert.deepEqual(v.dryRun, { jobs: [REL_JOB] });
+  assert.match(v.reason, /dry run/);
+});
+
+test('#474 (a\') the same shape cures on the ordinary path too (no workflow edit)', () => {
+  const v = cureVerdict(base({ jobEvidence: relEvidence() }));
+  assert.equal(v.ok, true, v.reason);
+  assert.equal(v.carveOut, undefined);
+  assert.deepEqual(v.dryRun, { jobs: [REL_JOB] });
+});
+
+test('#474 (b) not a back door: trunk red INSIDE a publishing step, skipped by the dry run → refuses', () => {
+  const v = cureVerdict(base({ jobEvidence: relEvidence(trunkRelease(PUB_STEP)) }));
+  assert.equal(v.ok, false);
+  assert.match(v.reason, /\[publish\]. RAN in job/);
+  assert.match(v.reason, /dry run cannot cure a red in a step it does not execute/);
+});
+
+test('#474 (c) trunk failed at Fetch and the dry run skipped Fetch → refuses', () => {
+  const dry = withSteps(dryRelease(), (ss) => ss.map((s) => (s.name === 'Fetch the colab CLI' ? { ...s, conclusion: 'skipped' } : s)));
+  const v = cureVerdict(base({ jobEvidence: relEvidence(trunkRelease(), [dry]) }));
+  assert.equal(v.ok, false);
+  assert.match(v.reason, /Fetch the colab CLI/);
+});
+
+test('#474 (d) D3: an unmarked step skipped in the dry run (past trunk\'s failure point) → refuses', () => {
+  const dry = withSteps(dryRelease(), (ss) => ss.map((s) => (s.name.startsWith('Finalize') ? { ...s, conclusion: 'skipped' } : s)));
+  const v = cureVerdict(base({ jobEvidence: relEvidence(trunkRelease(), [dry]) }));
+  assert.equal(v.ok, false);
+  assert.match(v.reason, /not a publishing step/);
+});
+
+test('#474 (e) the failing step renamed with the [publish] marker on the branch → refuses as absent', () => {
+  const dry = withSteps(dryRelease(), (ss) => ss.map((s) => (s.name === 'Fetch the colab CLI'
+    ? { ...s, name: `Fetch the colab CLI ${PUBLISH_STEP_MARKER}`, conclusion: 'skipped' } : s)));
+  const v = cureVerdict(base({ jobEvidence: relEvidence(trunkRelease(), [dry]) }));
+  assert.equal(v.ok, false);
+  assert.match(v.reason, /absent from the branch's dry run/);
+});
+
+test('#474 (f) a dry-run instance whose steps cannot be read → refuses', () => {
+  const ev = relEvidence();
+  ev.branchJobs[0] = { ...ev.branchJobs[0], steps: null, dryRun: true };
+  const v = redJobsProvenOnBranch(ev);
+  assert.equal(v.ok, false);
+  assert.match(v.reason, /step lists could not be read/);
+});
+
+test('#474 (g) a green ORDINARY instance outranks a dry run, and an ordinary run is judged as before', () => {
+  // Same job at the same head: one dry run that skipped Fetch (would refuse), one ordinary green run.
+  const badDry = withSteps(dryRelease(), (ss) => ss.map((s) => (s.name === 'Fetch the colab CLI' ? { ...s, conclusion: 'skipped' } : s)));
+  const ordinary = { ...dryRelease(), steps: dryRelease().steps.filter((s) => s.name !== DRY_RUN_STEP) };
+  for (const order of [[badDry, ordinary], [ordinary, badDry]]) {
+    const v = redJobsProvenOnBranch(relEvidence(trunkRelease(), order));
+    assert.equal(v.ok, true, v.reason);
+    assert.equal(v.dryRunJobs, undefined);
+  }
+});
+
+test('#474 (h) dryRunDispatchPlan: names a capable workflow only when its red job is absent and nothing else blocks', () => {
+  const absent = relEvidence(trunkRelease(), [rawJob('test', { workflowName: 'CI' })]);
+  assert.deepEqual(dryRunDispatchPlan(absent, [REL_WF]), [REL_WF]);
+  assert.deepEqual(dryRunDispatchPlan(absent, new Set([REL_WF])), [REL_WF]);
+  assert.deepEqual(dryRunDispatchPlan(absent, []), [], 'not capable → nothing to dispatch');
+  assert.deepEqual(dryRunDispatchPlan(absent, ['CI']), [], 'a different workflow is capable → nothing');
+  const presentRed = relEvidence(trunkRelease(), [{ ...dryRelease(), conclusion: 'failure' }]);
+  assert.deepEqual(dryRunDispatchPlan(presentRed, [REL_WF]), [], 'present but red → a dispatch would not help');
+  const pending = relEvidence(trunkRelease(), [{ ...dryRelease(), status: 'in_progress', conclusion: null }]);
+  assert.deepEqual(dryRunDispatchPlan(pending, [REL_WF]), [], 'in flight → wait, never dispatch again');
+  assert.deepEqual(dryRunDispatchPlan(null, [REL_WF]), []);
+});
+
+test('#474 (h) cureVerdict attaches dryRunWanted on the 2b refusal only when every later condition holds', () => {
+  const absent = relEvidence(trunkRelease(), [rawJob('test', { workflowName: 'CI' })]);
+  const v = cureVerdict(base({ jobEvidence: absent, dryRunCapable: [REL_WF] }));
+  assert.equal(v.ok, false);
+  assert.deepEqual(v.dryRunWanted, [REL_WF]);
+  // The refusal text itself is unchanged by the field.
+  const plain = cureVerdict(base({ jobEvidence: absent }));
+  assert.equal(plain.reason, v.reason);
+  assert.equal(plain.dryRunWanted, undefined);
+  for (const over of [{ stacking: badStacking('stacked') }, { manifestScriptsTouched: true }, { pythonManifestTouched: true },
+    { workflowsTouched: null }]) {
+    assert.equal(cureVerdict(base({ jobEvidence: absent, dryRunCapable: [REL_WF], ...over })).dryRunWanted, undefined, JSON.stringify(over));
+  }
+});

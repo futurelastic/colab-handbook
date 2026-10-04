@@ -126,6 +126,33 @@
  * is the obvious first follow-up the moment that refusal is observed in the field, but adding it
  * unmeasured is precisely the speculative loosening condition 4 exists to resist.
  *
+ * DRY-RUN EVIDENCE FOR A MAIN-ONLY WORKFLOW (#474). Some checks never run on a branch at all:
+ * `release-auto.yml` fires on `workflow_run` after trunk CI, or on a schedule. 2b then refuses every
+ * fix for a red in it (the job is absent on the branch), and a human ci-grant was the only door,
+ * even for a mechanical defect. The workflow template therefore offers a DRY RUN: dispatched on the
+ * fix branch, it runs the same job and the same steps, but with every external write turned off. Steps
+ * that would publish are skipped, and their names end in `PUBLISH_STEP_MARKER`. A sentinel step named
+ * `DRY_RUN_STEP` runs only in that mode, and is how a job instance is recognised as a dry run here.
+ * Such an instance counts as the job's evidence for 2b (and hence 4a) only when, on top of 2b:
+ *
+ *   D1. both step lists are measurable — trunk's ran-steps and the dry run's steps;
+ *   D2. every step that RAN on trunk, the failing one included, concluded `success` in the dry run.
+ *       This is the not-a-back-door proof: a red INSIDE a publishing step can never be cured this way,
+ *       because the dry run skips exactly that step. It is 4b, applied to dry-run instances on every
+ *       path, not only the carve-out's;
+ *   D3. every step the dry run did NOT run to success is a skipped publishing step. A dry run that
+ *       also skipped some ordinary step past trunk's failure point has not run the job, it has run
+ *       part of it.
+ *
+ * Why a NAME marker and not a list declared in the workflow: steps are matched by exact name (D2/4b),
+ * so marking the very step that failed on trunk renames it, and D2 then reads it as absent and
+ * refuses. A list inside the workflow would be read from the branch, which is the party being graded.
+ *
+ * Limit, stated: a red in a publishing step, or in a later job that only runs after a tag (npm,
+ * deploy), cannot be cured by a dry run. That stays a ci-grant. So does a red job that ran ZERO steps
+ * (a runner that never picked it up) on the carve-out path: 4c has no usable duration for it and
+ * refuses, which is the safe direction and a deliberately unmade loosening, like the timeout case.
+ *
  * PURE BY CONSTRUCTION, identical posture to ci-grant.js / migration-grant.js / readiness.js /
  * shipguard.js: signals in, verdict out. No git, no network, no `gh`. The caller (tools/colab)
  * measures containment, evidence, anti-stacking and the workflow-file diff, and hands them in.
@@ -176,6 +203,25 @@ const PYTHON_MANIFEST_REFUSAL =
  *  an allowlist closes the family once. `skipped` joins the run-level pair here because a job that
  *  never ran is not a job that failed. */
 const NOT_RED_CONCLUSIONS = new Set(['success', 'cancelled', 'skipped']);
+
+/** The suffix a step name carries when the dry run skips it because it writes outside the run (#474).
+ *  The template names its publishing steps with it; D3 admits no other skipped step. */
+const PUBLISH_STEP_MARKER = '[publish]';
+
+/** The sentinel step a dry-run job instance runs and an ordinary one skips (#474). Its successful
+ *  presence is the only thing that marks an instance as a dry run here. Must match the template's
+ *  step name byte for byte. */
+const DRY_RUN_STEP = 'Dry run — nothing is tagged, released or published';
+
+function isPublishStepName(name) {
+  return typeof name === 'string' && name.trimEnd().endsWith(PUBLISH_STEP_MARKER);
+}
+
+/** A job instance is a dry run iff its sentinel step concluded `success`. A skipped sentinel is an
+ *  ordinary run (the template's `if:` was false), never a dry one. */
+function isDryRunSteps(steps) {
+  return Array.isArray(steps) && steps.some((s) => s && s.name === DRY_RUN_STEP && s.conclusion === 'success');
+}
 
 /** A step "ran" on trunk iff it reached a terminal conclusion that is not `skipped`/`cancelled`.
  *  Steps after the failing one are skipped by GitHub, and a skipped step constrains nothing. */
@@ -245,6 +291,7 @@ function shapeJobEvidence({ redRunJobs, branchRunJobs } = {}) {
     conclusion: j && j.conclusion,
     durationMs: j ? durationMs(j.startedAt, j.completedAt) : null,
     steps: j && Array.isArray(j.steps) ? j.steps.map((s) => ({ name: s && s.name, conclusion: s && s.conclusion })) : null,
+    dryRun: !!j && isDryRunSteps(j.steps),
   }));
 
   return { redJobs, branchJobs };
@@ -279,11 +326,44 @@ function indexBranchJobs(branchJobs) {
     const isRed = j.status === 'completed' && !NOT_RED_CONCLUSIONS.has(j.conclusion);
     const isPending = j.status !== 'completed';
     if (!prev) { idx.set(k, { job: j, hasRed: isRed, hasPending: isPending }); continue; }
-    const better = j.status === 'completed' && j.conclusion === 'success'
-      && !(prev.job.status === 'completed' && prev.job.conclusion === 'success');
+    const ok = (x) => x.status === 'completed' && x.conclusion === 'success';
+    // A green ORDINARY instance outranks a green dry run (#474): the dry-run rules only apply when
+    // a dry run is the sole evidence the branch has for that job.
+    const better = ok(j) && (!ok(prev.job) || (prev.job.dryRun && !j.dryRun));
     idx.set(k, { job: better ? j : prev.job, hasRed: prev.hasRed || isRed, hasPending: prev.hasPending || isPending });
   }
   return idx;
+}
+
+/**
+ * The dry-run rules (#474), D1–D3 — see the module header. `red` is a trunk red job (with
+ * `ranSteps`), `mine` the branch's dry-run instance of the same job (with `steps`). Returns a refusal
+ * reason, or '' when the dry run is admissible evidence for this job.
+ */
+function dryRunEvidence(red, mine) {
+  const label = jobLabel(red);
+  if (!Array.isArray(red.ranSteps) || !Array.isArray(mine.steps)) {
+    return `job \`${label}\` is proven only by a dry run, and its step lists could not be read — a dry run is admissible only step by step`;
+  }
+  const mySteps = new Map();
+  for (const s of mine.steps) if (s && s.name) mySteps.set(s.name, s);
+  for (const stepName of red.ranSteps) {
+    const s = mySteps.get(stepName);
+    if (!s) {
+      return `step \`${stepName}\` RAN in job \`${label}\` on trunk and is absent from the branch's dry run — a dry run proves only the steps it executes`;
+    }
+    if (s.conclusion !== 'success') {
+      return `step \`${stepName}\` RAN in job \`${label}\` on trunk and concluded \`${s.conclusion}\` in the branch's dry run — ` +
+        'a dry run cannot cure a red in a step it does not execute (a red in a publishing step stays a ci-grant)';
+    }
+  }
+  for (const s of mine.steps) {
+    if (!s || s.conclusion === 'success') continue;
+    if (s.conclusion === 'skipped' && isPublishStepName(s.name)) continue;
+    return `step \`${s && s.name}\` concluded \`${s && s.conclusion}\` in the branch's dry run of job \`${label}\` and is not a publishing step ` +
+      `(name ending \`${PUBLISH_STEP_MARKER}\`) — a dry run may skip only the steps that write outside the run`;
+  }
+  return '';
 }
 
 /**
@@ -299,7 +379,8 @@ function indexBranchJobs(branchJobs) {
  * that exists only on the branch: this certifies that the branch cures trunk's red, not that the
  * branch is spotless.
  *
- * Returns `{ok, reason, jobs}` — `jobs` is the list of red job names proven on the branch.
+ * Returns `{ok, reason, jobs, dryRunJobs}` — `jobs` is the list of red job names proven on the branch,
+ * `dryRunJobs` the subset proven only by a dry run (#474), each having passed D1–D3.
  * Every unmeasurable input is a refusal, never a pass.
  */
 function redJobsProvenOnBranch(jobEvidence) {
@@ -317,6 +398,7 @@ function redJobsProvenOnBranch(jobEvidence) {
     return { ok: false, jobs: [], reason: "the branch's own run reported no jobs to compare against" };
   }
   const idx = indexBranchJobs(branchJobs);
+  const dryRunJobs = [];
 
   for (const red of redJobs) {
     if (!red || !red.name) {
@@ -341,8 +423,13 @@ function redJobsProvenOnBranch(jobEvidence) {
       return { ok: false, jobs: [],
         reason: `job \`${label}\` is red on trunk and failed in another run at the branch's own head — a job that both passed and failed at one sha has proven nothing` };
     }
+    if (mine.dryRun) {
+      const why = dryRunEvidence(red, mine);
+      if (why) return { ok: false, jobs: [], reason: why };
+      dryRunJobs.push(red.name);
+    }
   }
-  return { ok: true, jobs: redJobs.map((r) => r.name), reason: '' };
+  return { ok: true, jobs: redJobs.map((r) => r.name), ...(dryRunJobs.length ? { dryRunJobs } : {}), reason: '' };
 }
 
 /**
@@ -403,6 +490,34 @@ function workflowCarveOut(jobEvidence) {
 }
 
 /**
+ * Would a dry run on the branch supply the evidence 2b is missing (#474)? PURE. Returns the sorted
+ * workflow names to dispatch, or `[]`. Non-empty only when EVERY red job is either already passing
+ * on the branch (completed `success`, nothing red or pending beside it) or ABSENT from the branch's
+ * runs in a workflow listed in `dryRunCapable` — and at least one is absent. A red job that is
+ * present-but-failing, pending, or absent in a workflow without a dry-run mode means no dispatch
+ * would help, so none is asked for. Whether the dry run, once it exists, passes D1–D3 is decided
+ * then, not predicted now.
+ */
+function dryRunDispatchPlan(jobEvidence, dryRunCapable) {
+  const capable = new Set(Array.isArray(dryRunCapable) ? dryRunCapable : dryRunCapable instanceof Set ? [...dryRunCapable] : []);
+  if (!capable.size || !jobEvidence || !Array.isArray(jobEvidence.redJobs) || !jobEvidence.redJobs.length) return [];
+  const idx = indexBranchJobs(Array.isArray(jobEvidence.branchJobs) ? jobEvidence.branchJobs : []);
+  const want = new Set();
+  for (const red of jobEvidence.redJobs) {
+    if (!red || !red.name) return [];
+    const entry = idx.get(jobKey(red));
+    if (!entry) {
+      if (!red.workflowName || !capable.has(red.workflowName)) return [];
+      want.add(red.workflowName);
+      continue;
+    }
+    const mine = entry.job;
+    if (mine.status !== 'completed' || entry.hasPending || mine.conclusion !== 'success' || entry.hasRed) return [];
+  }
+  return [...want].sort();
+}
+
+/**
  * The cure verdict for one branch's attempt to ship into a red trunk.
  *
  * `containsRedSha` — bool, whether the branch's tree contains the red trunk sha as an ancestor
@@ -453,7 +568,7 @@ function workflowCarveOut(jobEvidence) {
  * the presence of `carveOut` rather than by re-deriving it.
  */
 function cureVerdict({ containsRedSha, evidence, redSha, stacking, workflowsTouched, jobEvidence,
-  manifestScriptsTouched, manifestPaths, pythonManifestTouched, pythonManifestPaths }) {
+  manifestScriptsTouched, manifestPaths, pythonManifestTouched, pythonManifestPaths, dryRunCapable }) {
   if (!containsRedSha) {
     return { ok: false,
       reason: `branch does not contain trunk's current red head \`${redSha}\` as an ancestor — ` +
@@ -473,10 +588,20 @@ function cureVerdict({ containsRedSha, evidence, redSha, stacking, workflowsTouc
   }
   const proven = redJobsProvenOnBranch(jobEvidence);
   if (!proven.ok) {
-    return { ok: false,
+    const out = { ok: false,
       reason: `branch's run is green, but the check trunk is red on is not proven here: ${proven.reason} — ` +
         'a cure must pass the named failing job(s), not merely produce a green run (#297)' };
+    // #474: say which dry run would supply the missing evidence — only when every LATER condition
+    // already holds, so a dispatch is never asked for on a branch that would refuse anyway.
+    const wanted = dryRunDispatchPlan(jobEvidence, dryRunCapable);
+    if (wanted.length && stacking && stacking.ok && manifestScriptsTouched === false && pythonManifestTouched === false
+      && typeof workflowsTouched === 'boolean') {
+      out.dryRunWanted = wanted;
+    }
+    return out;
   }
+  const dry = proven.dryRunJobs && proven.dryRunJobs.length ? { jobs: proven.dryRunJobs } : null;
+  const drySuffix = dry ? ` — the main-only job(s) ${dry.jobs.map((n) => `\`${n}\``).join(', ')} proven by a dry run on the branch (#474)` : '';
   if (!stacking || !stacking.ok) {
     return { ok: false, reason: (stacking && stacking.reason) || 'anti-stacking verdict unavailable' };
   }
@@ -500,13 +625,13 @@ function cureVerdict({ containsRedSha, evidence, redSha, stacking, workflowsTouc
       return { ok: false, reason: `${WORKFLOW_REFUSAL}. The #321 carve-out does not admit it either: ${carve.reason}` };
     }
     const detail = carve.jobs.map((j) => `\`${j.name}\` (${j.redMs}ms red on trunk, ${j.branchMs}ms passing here)`).join(', ');
-    return { ok: true, provenJobs: proven.jobs, carveOut: { jobs: carve.jobs },
+    return { ok: true, provenJobs: proven.jobs, carveOut: { jobs: carve.jobs }, ...(dry ? { dryRun: dry } : {}),
       reason: `branch contains red \`${redSha}\` as an ancestor AND is green at its own current head (\`${evidence.sha}\`) — proven cure, ` +
-        `admitted through the #321 workflow carve-out: every job red on trunk ran to success here with every step it took on trunk — ${detail}` };
+        `admitted through the #321 workflow carve-out: every job red on trunk ran to success here with every step it took on trunk — ${detail}${drySuffix}` };
   }
-  return { ok: true, provenJobs: proven.jobs,
-    reason: `branch contains red \`${redSha}\` as an ancestor AND is green at its own current head (\`${evidence.sha}\`) — proven cure` };
+  return { ok: true, provenJobs: proven.jobs, ...(dry ? { dryRun: dry } : {}),
+    reason: `branch contains red \`${redSha}\` as an ancestor AND is green at its own current head (\`${evidence.sha}\`) — proven cure${drySuffix}` };
 }
 
-module.exports = { cureVerdict, redJobsProvenOnBranch, workflowCarveOut, shapeJobEvidence, WORKFLOW_REFUSAL, MANIFEST_SCRIPTS_REFUSAL,
-  PYTHON_MANIFEST_REFUSAL };
+module.exports = { cureVerdict, redJobsProvenOnBranch, workflowCarveOut, shapeJobEvidence, dryRunDispatchPlan, WORKFLOW_REFUSAL,
+  MANIFEST_SCRIPTS_REFUSAL, PYTHON_MANIFEST_REFUSAL, PUBLISH_STEP_MARKER, DRY_RUN_STEP };

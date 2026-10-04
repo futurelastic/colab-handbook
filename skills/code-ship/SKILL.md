@@ -628,6 +628,15 @@ parent was the red sha and which fixed the clock opened a PR, ran green and
 cure-merged; the two bystanders stayed parked, correctly, and shipped once trunk was
 green.
 
+- **The red is in a main-only workflow** (`Release (auto)` — it never runs on a
+  branch) **and the branch is the patch?** Its evidence is a **dry run**, not a PR
+  (#474, `CONVENTIONS.md` *Cure rule*, *Dry-run evidence*). A real `colab ship`
+  dispatches it once and refuses until it completes. `--dry` only prints the
+  command: `gh workflow run release-auto.yml --ref <branch> -f dry_run=true`. Then
+  wait under B1a's 15-minute bound and re-run ship. The cure admits it only if
+  every step that ran on trunk passed in the dry run. A red inside a `[publish]`
+  step never cures this way: that is a ci-grant. A bystander never dispatches one,
+  and containment refuses it anyway.
 - **Not sure it is the patch?** It is a bystander. A wrong bystander costs one wait for
   a green that the real patch is about to produce; a wrong patch opens a red PR, spends
   a CI round, and teaches every reader of that run the failure is the branch's.
