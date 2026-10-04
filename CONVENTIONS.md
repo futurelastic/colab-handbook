@@ -3109,7 +3109,16 @@ ci-grant when any condition below is not met. Fires **iff**:
    adopter's edit point, and workspace runners read nested scripts); key order
    does not, a changed command does; deleting or renaming a manifest counts. There
    is **no carve-out** for this condition — see below for why the #321 door cannot
-   adjudicate it.
+   adjudicate it. **One narrow admission (#475): an add-only change.** When every
+   touched `package.json` exists on both sides, keeps every script it had with an
+   identical command, and only *adds* keys, the template runs more, never less —
+   so it passes condition 5 provided every step that ran in each red job on trunk,
+   the failing one included, ran on the branch and concluded `success` (the 4b
+   read, without 4c). Its limit: an added npm **lifecycle** hook (`postinstall`,
+   `prepare`, or `pre<x>`/`post<x>` for a script `<x>`) is never admitted — it runs
+   inside a step that already exists and can rewrite what that step measures with
+   no name changing. A removed, renamed or changed script, a new manifest, and an
+   add-only change in one manifest beside any other change in another still refuse.
 6. the branch diff does **not** change a Python dependency manifest (#377). The
    Python CI template runs ruff, mypy and pytest only when the tool is installed,
    and what is installed comes from the files it installs from — so dropping
@@ -3120,9 +3129,21 @@ ci-grant when any condition below is not met. Fires **iff**:
    include, a `[tool.setuptools.dynamic]` `file =`), read from both sides of the
    diff. The whole file counts, not a block: in Python the dependency list *is* the
    switch, and a tool can arrive transitively, which no block-level read can
-   measure. So a version pin refuses too — the accepted false refusal, falling
-   through to the ci-grant. Lockfiles are not read by the template and do not
-   count. **No carve-out**, for the same reason as 5.
+   measure. Lockfiles are not read by the template and do not count. **No
+   carve-out**, for the same reason as 5. **One narrow admission (#476): a pin-only
+   change.** When every touched manifest exists on both sides and differs only in
+   the version specifier (or `--hash`) of requirements present at the same position
+   on both sides — no requirement added, removed, reordered or renamed, no extras or
+   marker changed, no option line (`-r`/`-c`/`-e`/index) changed — it passes
+   condition 6 on the same step proof as 5's admission **plus one test**: no step
+   *after* the last one that ran on trunk may be `skipped` on the branch. That is
+   the answer to a pin dropping a transitively installed tool: steps up to trunk's
+   failure are covered by the step proof, steps past it were never reached on
+   trunk, so a skip there is unmeasurable and refuses. A `pyproject.toml` is read
+   only inside its dependency arrays (`[project] dependencies`,
+   `[project.optional-dependencies]`, `[dependency-groups]`, `[build-system]
+   requires`); every other byte must match. `setup.py` (code) and `setup.cfg` are
+   never pin-only.
 
 An unmeasurable diff — a failed read, a manifest that does not parse, a manifest
 that is a symlink — refuses, the same as any other unmeasured signal. Order of
@@ -3207,15 +3228,19 @@ no label, and no tracker comment: nothing here is a human write.
   never runs for a branch (a deploy on push to trunk) has no branch counterpart,
   so 2b refuses — correctly: the branch cannot prove trunk will go green. (v) A
   red run with no job that can be named refuses on every path. (vi) Any nested
-  `package.json` scripts change during a red trunk refuses condition 5. (vii) A job
+  `package.json` scripts change during a red trunk refuses condition 5 — unless it
+  is add-only (#475). (vii) A job
   whose `name:` interpolates the event name differs between the push and the
   `pull_request` run, so 2b cannot match it.
 - **#377 adds one more, same direction.** (viii) Any change to a Python dependency
-  manifest during a red trunk — a "pin the broken upstream" cure included — refuses
-  condition 6. Narrowing it to "a requirement name disappeared" is deliberately
-  unmade: a version change can drop a transitively installed tool, and that is not
-  measurable at this gate. Reasoning:
-  [`docs/adr/377-cure-rule-python-dependency-manifests.md`](docs/adr/377-cure-rule-python-dependency-manifests.md).
+  manifest during a red trunk refuses condition 6 — except a pin-only change that
+  passes #476's step proof. Narrowing it to "a requirement name disappeared" stays
+  unmade: a version change can drop a transitively installed tool. What #476 measures
+  instead is whether any tool step was skipped where trunk never got to look, so a
+  pin fixing a red that came *before* a step the repo never had (say, no mypy and
+  the red in Lint) still refuses. Reasoning:
+  [`docs/adr/377-cure-rule-python-dependency-manifests.md`](docs/adr/377-cure-rule-python-dependency-manifests.md),
+  [`docs/adr/475-476-cure-rule-narrow-manifest-admissions.md`](docs/adr/475-476-cure-rule-narrow-manifest-admissions.md).
 - **`package.json`'s `scripts` block is condition 5, not part of this carve-out,
   and must not be folded into it.** The carve-out's evidence cannot adjudicate a
   scripts-block weakening in the general case — it happens inside a step whose
@@ -3253,7 +3278,10 @@ and why the `timed_out` relaxation is deliberately left unwritten — is in
   after the runs age out. The `--grep=^CI-Cure:` scan is anchored on the prefix,
   so the suffix never disturbs it. `ciCure.provenJobs` (#297) lists the red jobs
   2b proved passing on the branch — a consumer rendering cure eligibility reads
-  it (and `ok`/`reason`) rather than re-deriving a verdict from check-runs.
+  it (and `ok`/`reason`) rather than re-deriving a verdict from check-runs. A
+  cure that changed a manifest under #475/#476's admissions appends ` admitted
+  add-only-scripts` and/or `pin-only-requirements` to the trailer, and reports
+  `ciCure.admitted: {scripts?, pins?}` (null otherwise), for the same reason.
 - **Group branches get simpler under this door.** A ci-grant on a group branch
   requires a valid grant on every member issue; the cure's evidence is branch-level,
   so the all-or-nothing-per-branch property holds with zero per-issue paperwork.

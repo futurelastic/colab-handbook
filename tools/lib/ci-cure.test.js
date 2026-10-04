@@ -11,7 +11,7 @@
 const test = require('node:test');
 const assert = require('node:assert');
 
-const { cureVerdict, redJobsProvenOnBranch, workflowCarveOut, shapeJobEvidence, MANIFEST_SCRIPTS_REFUSAL,
+const { cureVerdict, redJobsProvenOnBranch, workflowCarveOut, manifestStepProof, shapeJobEvidence, MANIFEST_SCRIPTS_REFUSAL,
   PYTHON_MANIFEST_REFUSAL } = require('./ci-cure.js');
 
 const RED_SHA = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
@@ -594,4 +594,126 @@ test('conditions 5 and 6 both hit → condition 5 reports first (order is 5 → 
 
 test('the carve-out cure also carries provenJobs', () => {
   assert.deepEqual(cureVerdict(carving({})).provenJobs, ['browser']);
+});
+
+// --- #475 / #476: the two narrow manifest admissions ------------------------------------------
+
+// The measured #475 shape: the Build job's `Build` step (`npm run build`) failed because the script
+// was missing; the branch adds it and the same step now passes.
+const NODE_RED_STEPS = ['Set up job', 'Install dependencies', 'Detect optional scripts', 'Build'];
+function nodeEvidence(branchSteps) {
+  return {
+    redJobs: [{ name: 'Build', workflowName: 'CI', conclusion: 'failure', durationMs: 30000, ranSteps: NODE_RED_STEPS.slice() }],
+    branchJobs: [{ name: 'Build', workflowName: 'CI', status: 'completed', conclusion: 'success', durationMs: 31000,
+      steps: branchSteps || NODE_RED_STEPS.map((n) => ({ name: n, conclusion: 'success' })) }],
+  };
+}
+const ADDED = [{ path: 'package.json', added: ['build'] }];
+
+test('#475: an add-only scripts change whose red step now passes → cures, and says it was admitted', () => {
+  const v = cureVerdict(base({ manifestScriptsTouched: true, manifestPaths: ['package.json'],
+    manifestScriptsAddOnly: ADDED, jobEvidence: nodeEvidence() }));
+  assert.equal(v.ok, true, v.reason);
+  assert.deepEqual(v.admitted, { scripts: ADDED });
+  assert.match(v.reason, /add-only package\.json scripts \(package\.json: build\)/);
+  assert.equal(v.carveOut, undefined);
+});
+
+test('#475: a scripts change that is NOT add-only still refuses on condition 5, saying why', () => {
+  for (const addOnly of [null, undefined, []]) {
+    const v = cureVerdict(base({ manifestScriptsTouched: true, manifestPaths: ['package.json'],
+      manifestScriptsAddOnly: addOnly, jobEvidence: nodeEvidence() }));
+    assert.equal(v.ok, false);
+    assert.ok(v.reason.startsWith(MANIFEST_SCRIPTS_REFUSAL));
+    assert.match(v.reason, /not add-only/);
+  }
+});
+
+test('#475: add-only but the step trunk failed in did not pass (or vanished) on the branch → refuses', () => {
+  const skipped = NODE_RED_STEPS.map((n) => ({ name: n, conclusion: n === 'Build' ? 'skipped' : 'success' }));
+  const gone = NODE_RED_STEPS.filter((n) => n !== 'Build').map((n) => ({ name: n, conclusion: 'success' }));
+  for (const steps of [skipped, gone]) {
+    const v = cureVerdict(base({ manifestScriptsTouched: true, manifestPaths: ['package.json'],
+      manifestScriptsAddOnly: ADDED, jobEvidence: nodeEvidence(steps) }));
+    assert.equal(v.ok, false);
+    assert.match(v.reason, /add-only admission \(#475\) does not admit it either: step `Build`/);
+  }
+});
+
+test('#475: unreadable step lists refuse the admission (fail closed)', () => {
+  const ev = nodeEvidence(); ev.branchJobs[0].steps = null;
+  const v = cureVerdict(base({ manifestScriptsTouched: true, manifestPaths: ['package.json'],
+    manifestScriptsAddOnly: ADDED, jobEvidence: ev }));
+  assert.equal(v.ok, false);
+  assert.match(v.reason, /could not be read/);
+});
+
+const PY_RED_STEPS = ['Set up job', 'Install dependencies', 'Detect optional tooling', 'Lint (ruff)'];
+function pyEvidence(after = []) {
+  return {
+    redJobs: [{ name: 'Build (Python)', workflowName: 'CI', conclusion: 'failure', durationMs: 30000, ranSteps: PY_RED_STEPS.slice() }],
+    branchJobs: [{ name: 'Build (Python)', workflowName: 'CI', status: 'completed', conclusion: 'success', durationMs: 40000,
+      steps: PY_RED_STEPS.map((n) => ({ name: n, conclusion: 'success' })).concat(after) }],
+  };
+}
+const PINS = [{ path: 'requirements-dev.txt', pins: ['ruff'] }];
+
+test('#476: a pin-only fix whose red step passes and every later step ran → cures, and says it was admitted', () => {
+  const v = cureVerdict(base({ pythonManifestTouched: true, pythonManifestPaths: ['requirements-dev.txt'],
+    pythonPinOnly: PINS, jobEvidence: pyEvidence([{ name: 'Typecheck (mypy)', conclusion: 'success' },
+      { name: 'Test (pytest)', conclusion: 'success' }, { name: 'Complete job', conclusion: 'success' }]) }));
+  assert.equal(v.ok, true, v.reason);
+  assert.deepEqual(v.admitted, { pins: PINS });
+  assert.match(v.reason, /pin-only Python requirements \(requirements-dev\.txt: ruff\)/);
+});
+
+test('#476: a pin after which a LATER tool step was skipped on the branch → refuses (the transitive-drop guard)', () => {
+  const v = cureVerdict(base({ pythonManifestTouched: true, pythonManifestPaths: ['requirements-dev.txt'],
+    pythonPinOnly: PINS, jobEvidence: pyEvidence([{ name: 'Test (pytest)', conclusion: 'skipped' }]) }));
+  assert.equal(v.ok, false);
+  assert.ok(v.reason.startsWith(PYTHON_MANIFEST_REFUSAL));
+  assert.match(v.reason, /`Test \(pytest\)`.*after trunk's failure point/);
+});
+
+test('#476: a step skipped BEFORE trunk\'s failure point (a tool the repo never had) does not refuse', () => {
+  // Red in Test; Typecheck was skipped on trunk too (no mypy), so it is not in ranSteps.
+  const ran = ['Set up job', 'Install dependencies', 'Detect optional tooling', 'Lint (ruff)', 'Test (pytest)'];
+  const ev = {
+    redJobs: [{ name: 'Build (Python)', workflowName: 'CI', conclusion: 'failure', durationMs: 1, ranSteps: ran }],
+    branchJobs: [{ name: 'Build (Python)', workflowName: 'CI', status: 'completed', conclusion: 'success', durationMs: 2,
+      steps: [...ran.slice(0, 4), 'Typecheck (mypy)', 'Test (pytest)'].map((n) => ({ name: n,
+        conclusion: n === 'Typecheck (mypy)' ? 'skipped' : 'success' })) }],
+  };
+  const v = cureVerdict(base({ pythonManifestTouched: true, pythonManifestPaths: ['requirements-dev.txt'],
+    pythonPinOnly: [{ path: 'requirements-dev.txt', pins: ['pytest'] }], jobEvidence: ev }));
+  assert.equal(v.ok, true, v.reason);
+});
+
+test('#476: a Python manifest change that is not pin-only still refuses on condition 6, saying why', () => {
+  for (const pins of [null, undefined, []]) {
+    const v = cureVerdict(base({ pythonManifestTouched: true, pythonManifestPaths: ['requirements-dev.txt'],
+      pythonPinOnly: pins, jobEvidence: pyEvidence() }));
+    assert.equal(v.ok, false);
+    assert.match(v.reason, /not pin-only/);
+  }
+});
+
+test('#475/#476: admissions compose with the #321 carve-out — both doors named on the result', () => {
+  const v = cureVerdict({ ...carving(), manifestScriptsTouched: true, manifestPaths: ['package.json'],
+    manifestScriptsAddOnly: [{ path: 'package.json', added: ['x'] }] });
+  assert.equal(v.ok, true, v.reason);
+  assert.ok(v.carveOut);
+  assert.deepEqual(v.admitted, { scripts: [{ path: 'package.json', added: ['x'] }] });
+  assert.match(v.reason, /#321 workflow carve-out.*add-only package\.json scripts/);
+});
+
+test('#475/#476: a cure with no manifest change carries no `admitted` (the ordinary result is unchanged)', () => {
+  assert.equal(cureVerdict(base()).admitted, undefined);
+  assert.equal(cureVerdict(carving()).admitted, undefined);
+});
+
+test('manifestStepProof: no red step list → refuses rather than a vacuous pass', () => {
+  const ev = nodeEvidence(); ev.redJobs[0].ranSteps = [];
+  assert.equal(manifestStepProof(ev).ok, false);
+  assert.equal(manifestStepProof(null).ok, false);
 });

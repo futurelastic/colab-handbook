@@ -236,3 +236,17 @@ test('#321: ciCurePayload reports WHICH door fired — `via` on every cure row, 
   assert.match(body, /: null,/, 'carveOut must be null, not absent, on the ordinary path');
   assert.match(body, /provenJobs: c\.provenJobs \|\| null/, '#297: the 2b-proven jobs ride the payload');
 });
+
+test('#475/#476: the CI-Cure trailer and the payload name a manifest admission', () => {
+  const src = fs.readFileSync(path.join(REPO_ROOT, 'tools', 'colab'), 'utf8');
+  const fn = src.slice(src.indexOf('function ciCureTrailerLine('));
+  const body = fn.slice(0, fn.indexOf('\n}\n') + 3);
+  // eslint-disable-next-line no-new-func
+  const trailer = new Function('shortSha', `${body}; return ciCureTrailerLine;`)((s) => String(s).slice(0, 7));
+  const v = { ok: true, redSha: 'a'.repeat(40), evidenceSha: 'b'.repeat(40) };
+  assert.equal(trailer(v, 'fix/x-1', 'main'), 'CI-Cure: branch fix/x-1 over-red main@aaaaaaa evidence bbbbbbb');
+  assert.equal(trailer({ ...v, admitted: { scripts: [{}], pins: [{}] } }, 'fix/x-1', 'main'),
+    'CI-Cure: branch fix/x-1 over-red main@aaaaaaa evidence bbbbbbb admitted add-only-scripts,pin-only-requirements');
+  const pay = src.slice(src.indexOf('function ciCurePayload('));
+  assert.match(pay.slice(0, pay.indexOf('\n}\n')), /admitted: c\.admitted \|\| null/);
+});

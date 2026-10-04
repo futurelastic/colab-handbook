@@ -9453,7 +9453,11 @@ function ciCureTrailerLine(cureVerdict, branch, trunk) {
   const via = cureVerdict.carveOut
     ? ` via workflow-carve-out jobs ${cureVerdict.carveOut.jobs.map((j) => j.name).join(',')}`
     : '';
-  return `CI-Cure: branch ${branch} over-red ${trunk}@${shortSha(cureVerdict.redSha)} evidence ${shortSha(cureVerdict.evidenceSha)}${via}`;
+  // #475/#476: a cure that changed a manifest under an admission says which, for the same reason.
+  const adm = cureVerdict.admitted || {};
+  const manifest = [adm.scripts ? 'add-only-scripts' : null, adm.pins ? 'pin-only-requirements' : null].filter(Boolean);
+  const admittedSuffix = manifest.length ? ` admitted ${manifest.join(',')}` : '';
+  return `CI-Cure: branch ${branch} over-red ${trunk}@${shortSha(cureVerdict.redSha)} evidence ${shortSha(cureVerdict.evidenceSha)}${via}${admittedSuffix}`;
 }
 
 const HELP_SHIP = `colab ship [--repo <path>] [--worktree <name> | --branch <br> | --direct] [--message "<msg>"] [--refs <N[,M]>] [--keep-worktree] [--delete-branch | --keep-branch] [--adopt] [--session <id>] [--session-name <s>] [--dry] [--json]
@@ -10551,7 +10555,9 @@ function shipCiCure(repoAbs, gh, target, trunk, redSha, branch) {
   const verdict = ciCure.cureVerdict({ containsRedSha, evidence, redSha, stacking, jobEvidence,
     workflowsTouched: diff.workflowsTouched,
     manifestScriptsTouched: diff.manifestScriptsTouched, manifestPaths: diff.manifestPaths,
-    pythonManifestTouched: diff.pythonManifestTouched, pythonManifestPaths: diff.pythonManifestPaths });
+    manifestScriptsAddOnly: diff.manifestScriptsAddOnly,
+    pythonManifestTouched: diff.pythonManifestTouched, pythonManifestPaths: diff.pythonManifestPaths,
+    pythonPinOnly: diff.pythonPinOnly });
   return { ...verdict, redSha, evidenceSha: evidence ? evidence.sha : null };
 }
 
@@ -10630,6 +10636,8 @@ function ciCurePayload(ciResult) {
     carveOut: c.carveOut
       ? { jobs: c.carveOut.jobs.map((j) => ({ name: j.name, redDurationMs: j.redMs, branchDurationMs: j.branchMs })) }
       : null,
+    // #475/#476: the manifest change a cure was admitted with — `{scripts?, pins?}` — or null.
+    admitted: c.admitted || null,
   };
 }
 

@@ -44,12 +44,29 @@
  *      and test run at all, and a skipped step leaves the job `success` — so deleting
  *      `scripts.test` weakens the instrument without touching a workflow file. No carve-out: see
  *      below for why the #321 door cannot adjudicate it.
+ *      ONE NARROW ADMISSION (#475): an ADD-ONLY scripts change — keys added, none removed or changed,
+ *      no lifecycle hook — makes the template run MORE, so it passes condition 5 on step evidence
+ *      (`manifestStepProof`, below) instead of refusing.
  *   6. NO PYTHON DEPENDENCY-MANIFEST CHANGES (#377) — the branch diff must not change a file the
  *      Python CI template installs from (`pyproject.toml`/`setup.py`/`setup.cfg`, `requirements*`
  *      files and what they include — tools/lib/cure-diff.js names the set). That template runs
  *      ruff/mypy/pytest only when the tool is importable after install, so removing `pytest` from
  *      `requirements-dev.txt` skips the Test step and leaves the job `success`. Same shape as 5, a
- *      sibling door with no carve-out, for the same reason.
+ *      sibling door with no carve-out, for the same reason. ONE NARROW ADMISSION (#476): a PIN-ONLY
+ *      change — only the version specifier of requirements present on both sides — passes on step
+ *      evidence plus the no-late-skip test (`manifestStepProof`, below).
+ *
+ * THE STEP PROOF BEHIND BOTH ADMISSIONS (#475, #476). Every step that RAN in each red job on trunk —
+ * the failing one included — ran on the branch and concluded `success`: the 4b read, applied here
+ * without the carve-out's duration floor (no workflow changed, so no `run:` body can have been
+ * gutted). Check-runs name steps, not commands, so "the step that runs the added script" is not
+ * measurable as such; "the step trunk failed in now passes" is, and it is the claim a cure makes.
+ * The pin admission adds one test (#476's open question, answered): a pin can drop a TRANSITIVELY
+ * installed tool, and the Python template then skips that tool's step with the job still `success`.
+ * Steps before trunk's failure point are covered by the superset; steps AFTER it were skipped on
+ * trunk and so say nothing. So no step after the last one that ran on trunk may be `skipped` on the
+ * branch. That refuses a repo that never had, say, mypy when its red came before the Typecheck step
+ * — a false refusal, falling through to the ci-grant, the safe direction.
  *
  * THE WORKFLOW CARVE-OUT (#321) — why condition 4 could not simply stay absolute. The repair for
  * a CI-INFRASTRUCTURE outage is, by construction, a workflow change: when trunk goes red because
@@ -403,6 +420,50 @@ function workflowCarveOut(jobEvidence) {
 }
 
 /**
+ * The step proof behind the #475/#476 manifest admissions — 4b without 4c, plus (for a pin) the
+ * no-late-skip test. See the module header. Returns `{ok, reason}`; every unmeasurable input refuses.
+ * Called only after `redJobsProvenOnBranch` passed, so every red job has a successful branch instance.
+ */
+function manifestStepProof(jobEvidence, { noLateSkip = false } = {}) {
+  if (!jobEvidence || !Array.isArray(jobEvidence.redJobs) || !Array.isArray(jobEvidence.branchJobs)) {
+    return { ok: false, reason: 'the job-level evidence could not be measured' };
+  }
+  const idx = indexBranchJobs(jobEvidence.branchJobs);
+  for (const red of jobEvidence.redJobs) {
+    const entry = idx.get(jobKey(red));
+    if (!entry) return { ok: false, reason: `job \`${jobLabel(red)}\` is absent on the branch` };
+    const mine = entry.job;
+    if (!Array.isArray(red.ranSteps) || !red.ranSteps.length) {
+      return { ok: false, reason: `the steps that ran in job \`${jobLabel(red)}\` on trunk could not be read` };
+    }
+    if (!Array.isArray(mine.steps)) {
+      return { ok: false, reason: `the steps of job \`${jobLabel(red)}\` on the branch could not be read` };
+    }
+    let last = -1;
+    for (const stepName of red.ranSteps) {
+      const at = mine.steps.findIndex((s) => s && s.name === stepName);
+      if (at === -1) {
+        return { ok: false, reason: `step \`${stepName}\` ran in job \`${jobLabel(red)}\` on trunk and is absent on the branch` };
+      }
+      if (mine.steps[at].conclusion !== 'success') {
+        return { ok: false,
+          reason: `step \`${stepName}\` ran in job \`${jobLabel(red)}\` on trunk and concluded \`${mine.steps[at].conclusion}\` on the branch` };
+      }
+      if (at > last) last = at;
+    }
+    if (noLateSkip) {
+      const late = mine.steps.slice(last + 1).find((s) => s && s.conclusion === 'skipped');
+      if (late) {
+        return { ok: false,
+          reason: `step \`${late.name}\` in job \`${jobLabel(red)}\` comes after trunk's failure point and was skipped on the branch — ` +
+            'trunk never reached it, so whether the pin dropped the tool it needs is unmeasurable' };
+      }
+    }
+  }
+  return { ok: true, reason: '' };
+}
+
+/**
  * The cure verdict for one branch's attempt to ship into a red trunk.
  *
  * `containsRedSha` — bool, whether the branch's tree contains the red trunk sha as an ancestor
@@ -429,9 +490,16 @@ function workflowCarveOut(jobEvidence) {
  * which refuses: a caller that did not measure it has not shown the instrument is intact.
  * `manifestPaths` — the manifests whose scripts changed, named in the refusal.
  *
+ * `manifestScriptsAddOnly` (#475) — cure-diff's classifier: `[{path, added}]` when every touched
+ * manifest's scripts change is add-only, anything else (null/undefined) when not. Only consulted when
+ * `manifestScriptsTouched` is true; a caller that does not pass it gets the pre-#475 refusal.
+ *
  * `pythonManifestTouched` — bool, whether the diff changes a Python dependency manifest the Python
  * template installs from (condition 6, #377). `null`/`undefined` = unmeasured, which refuses.
  * `pythonManifestPaths` — those files, named in the refusal.
+ *
+ * `pythonPinOnly` (#476) — cure-diff's classifier: `[{path, pins}]` when every touched Python
+ * manifest changed only version specifiers. Same posture as `manifestScriptsAddOnly`.
  *
  * `jobEvidence` — `shapeJobEvidence(...)`'s output, or `null`. Read on EVERY cure since #297 —
  * condition 2b (`redJobsProvenOnBranch`) — and again by the #321 carve-out when workflows were
@@ -448,12 +516,15 @@ function workflowCarveOut(jobEvidence) {
  * branch touching both — exactly the "two instrument paths, two doors" composition #321 asked for.
  *
  * Returns `{ok, reason}`; on success also `provenJobs` (the red job names 2b proved, additive,
- * #297) and — ONLY on a cure that went through the carve-out — `carveOut: {jobs}`. The ordinary
+ * #297), `admitted` (#475/#476 — `{scripts: [{path, added}], pins: [{path, pins}]}`, present only
+ * when a manifest admission was used) and — ONLY on a cure that went through the carve-out —
+ * `carveOut: {jobs}`. The ordinary
  * cure's reason text is unchanged, which is what lets the caller answer "which door was this?" by
  * the presence of `carveOut` rather than by re-deriving it.
  */
 function cureVerdict({ containsRedSha, evidence, redSha, stacking, workflowsTouched, jobEvidence,
-  manifestScriptsTouched, manifestPaths, pythonManifestTouched, pythonManifestPaths }) {
+  manifestScriptsTouched, manifestPaths, manifestScriptsAddOnly, pythonManifestTouched, pythonManifestPaths,
+  pythonPinOnly }) {
   if (!containsRedSha) {
     return { ok: false,
       reason: `branch does not contain trunk's current red head \`${redSha}\` as an ancestor — ` +
@@ -485,28 +556,60 @@ function cureVerdict({ containsRedSha, evidence, redSha, stacking, workflowsTouc
     return { ok: false,
       reason: 'branch diff could not be measured (which CI files and manifests it touches) — an unmeasured diff is never a cure' };
   }
+  const admitted = {};
   if (manifestScriptsTouched) {
     const named = Array.isArray(manifestPaths) && manifestPaths.length ? manifestPaths.join(', ') : 'package.json';
-    return { ok: false, reason: `${MANIFEST_SCRIPTS_REFUSAL} (changed: ${named})` };
+    if (!Array.isArray(manifestScriptsAddOnly) || !manifestScriptsAddOnly.length) {
+      return { ok: false, reason: `${MANIFEST_SCRIPTS_REFUSAL} (changed: ${named}; not add-only — a script removed, renamed, ` +
+        'changed, or a lifecycle hook added)' };
+    }
+    const proof = manifestStepProof(jobEvidence);
+    if (!proof.ok) {
+      return { ok: false, reason: `${MANIFEST_SCRIPTS_REFUSAL} (changed: ${named}). The add-only admission (#475) does not ` +
+        `admit it either: ${proof.reason}` };
+    }
+    admitted.scripts = manifestScriptsAddOnly;
   }
   if (pythonManifestTouched) {
     const named = Array.isArray(pythonManifestPaths) && pythonManifestPaths.length
       ? pythonManifestPaths.join(', ') : 'a Python dependency manifest';
-    return { ok: false, reason: `${PYTHON_MANIFEST_REFUSAL} (changed: ${named})` };
+    if (!Array.isArray(pythonPinOnly) || !pythonPinOnly.length) {
+      return { ok: false, reason: `${PYTHON_MANIFEST_REFUSAL} (changed: ${named}; not pin-only — a requirement, extra, ` +
+        'marker, include or option changed, or the file is setup.py/setup.cfg)' };
+    }
+    const proof = manifestStepProof(jobEvidence, { noLateSkip: true });
+    if (!proof.ok) {
+      return { ok: false, reason: `${PYTHON_MANIFEST_REFUSAL} (changed: ${named}). The pin-only admission (#476) does not ` +
+        `admit it either: ${proof.reason}` };
+    }
+    admitted.pins = pythonPinOnly;
   }
+  const via = admittedText(admitted);
   if (workflowsTouched) {
     const carve = workflowCarveOut(jobEvidence);
     if (!carve.ok) {
       return { ok: false, reason: `${WORKFLOW_REFUSAL}. The #321 carve-out does not admit it either: ${carve.reason}` };
     }
     const detail = carve.jobs.map((j) => `\`${j.name}\` (${j.redMs}ms red on trunk, ${j.branchMs}ms passing here)`).join(', ');
-    return { ok: true, provenJobs: proven.jobs, carveOut: { jobs: carve.jobs },
+    return { ok: true, provenJobs: proven.jobs, carveOut: { jobs: carve.jobs }, ...(via ? { admitted } : {}),
       reason: `branch contains red \`${redSha}\` as an ancestor AND is green at its own current head (\`${evidence.sha}\`) — proven cure, ` +
-        `admitted through the #321 workflow carve-out: every job red on trunk ran to success here with every step it took on trunk — ${detail}` };
+        `admitted through the #321 workflow carve-out: every job red on trunk ran to success here with every step it took on trunk — ${detail}${via}` };
   }
-  return { ok: true, provenJobs: proven.jobs,
-    reason: `branch contains red \`${redSha}\` as an ancestor AND is green at its own current head (\`${evidence.sha}\`) — proven cure` };
+  return { ok: true, provenJobs: proven.jobs, ...(via ? { admitted } : {}),
+    reason: `branch contains red \`${redSha}\` as an ancestor AND is green at its own current head (\`${evidence.sha}\`) — proven cure${via}` };
 }
 
-module.exports = { cureVerdict, redJobsProvenOnBranch, workflowCarveOut, shapeJobEvidence, WORKFLOW_REFUSAL, MANIFEST_SCRIPTS_REFUSAL,
-  PYTHON_MANIFEST_REFUSAL };
+/** The reason-text suffix naming which manifest admission(s) a cure used (#475/#476), or ''. */
+function admittedText(admitted) {
+  const parts = [];
+  if (admitted.scripts) {
+    parts.push(`add-only package.json scripts (${admitted.scripts.map((a) => `${a.path}: ${a.added.join(',')}`).join('; ')})`);
+  }
+  if (admitted.pins) {
+    parts.push(`pin-only Python requirements (${admitted.pins.map((a) => `${a.path}: ${a.pins.join(',')}`).join('; ')})`);
+  }
+  return parts.length ? `; manifest change admitted as ${parts.join(' and ')}, every step trunk ran passing here` : '';
+}
+
+module.exports = { cureVerdict, redJobsProvenOnBranch, workflowCarveOut, manifestStepProof, shapeJobEvidence, WORKFLOW_REFUSAL,
+  MANIFEST_SCRIPTS_REFUSAL, PYTHON_MANIFEST_REFUSAL };
