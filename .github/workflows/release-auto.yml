@@ -237,7 +237,19 @@ jobs:
               *-*) KIND=(--prerelease --latest=false) ;;
               *)   KIND=(--latest) ;;
             esac
-            gh release create "$TAG" --verify-tag --title "$TAG" --notes-file "$NOTES" --generate-notes "${KIND[@]}"
+            # The view above is a check, not a lock: `colab release cut` publishes a candidate's
+            # pre-release itself, and the API can still answer 404 for it seconds later (#462 — a
+            # trunk went red on exactly that 422). So a create refused because the Release already
+            # exists is the skip case too, decided from the create's own answer.
+            ERR="$RUNNER_TEMP/create-$TAG.err"
+            if ! gh release create "$TAG" --verify-tag --title "$TAG" --notes-file "$NOTES" --generate-notes "${KIND[@]}" 2> "$ERR"; then
+              cat "$ERR" >&2
+              if grep -qiE 'already[ _]exists' "$ERR"; then
+                echo "$TAG already has a Release (published while this step ran) — skipping"
+                continue
+              fi
+              exit 1
+            fi
             echo "Published $TAG" | tee -a "$GITHUB_STEP_SUMMARY"
           done
 
