@@ -50,6 +50,7 @@ function fakePortainer(opts = {}) {
     healthLag: opts.healthLag || 0,
     healthBody: opts.healthBody || ((v) => JSON.stringify({ version: v })),
     healthNever: opts.healthNever || null, // a tag whose version the endpoint never reports
+    healthAuth: opts.healthAuth || null, // [header-name, expected value]: /version is 401 without it
   };
   st.containers = () => st.images.map((ref) => ({ Image: `${ref}:${st.running}`, State: 'running' }));
   const server = http.createServer((req, res) => {
@@ -58,9 +59,10 @@ function fakePortainer(opts = {}) {
     req.on('end', () => {
       const u = new URL(req.url, 'http://x');
       const json = body ? JSON.parse(body) : null;
-      st.requests.push({ method: req.method, path: u.pathname, query: u.search, key: req.headers['x-api-key'], body: json });
+      st.requests.push({ method: req.method, path: u.pathname, query: u.search, key: req.headers['x-api-key'], headers: req.headers, body: json });
       const send = (code, obj) => { res.writeHead(code, { 'Content-Type': 'application/json' }); res.end(typeof obj === 'string' ? obj : JSON.stringify(obj)); };
       if (u.pathname === '/version') {
+        if (st.healthAuth && req.headers[st.healthAuth[0]] !== st.healthAuth[1]) return send(401, { message: 'unauthorized' });
         if (st.healthLag > 0) { st.healthLag--; return send(200, st.healthBody('1.2.2')); }
         if (st.healthNever && st.running === st.healthNever) return send(200, st.healthBody('0.0.0'));
         return send(200, st.healthBody(st.running.slice(1)));
@@ -384,6 +386,120 @@ test('helpers: reportsVersion is boundary-aware, readHealthUrl, previousFinalTag
   assert.equal(d.previousFinalTag(['v1.0.0'], 'v1.0.0'), null);
   assert.throws(() => d.parseImages('registry.example.com/team/web:v1 .'), /carries a tag/);
   assert.deepEqual(d.parseImages('localhost:5000/web ctx/\n'), [{ ref: 'localhost:5000/web', context: 'ctx/', dockerfile: 'ctx/Dockerfile' }]);
+});
+
+// ---- build args, health-URL auth, publish / deploy split (#460) --------------------------------------
+
+test('build args: shared and per-image, ${TAG}/${VERSION}/${SHA} substituted, passed to docker build', async () => {
+  const d = await load(RUN);
+  const st = await fakePortainer({ images: [IMG, IMG2] });
+  try {
+    const io = ioFor(envFor(st, {
+      DEPLOY_IMAGES: `${IMG} web\n${IMG2} form\n`,
+      DEPLOY_BUILD_ARGS: `# every image\nAPP_VERSION=\${VERSION}\nBUILD_SHA=\${SHA}\n${IMG} SITE_KEY=pk_live with space\n${IMG2} APP_VERSION=form-\${TAG}\n`,
+    }));
+    assert.equal(await d.run({ tag: 'v1.2.3' }, io), 0, io.out.join('\n'));
+    const builds = io.calls.filter((c) => c.cmd === 'docker' && c.args[0] === 'build').map((c) => c.args);
+    assert.deepEqual(builds[0], ['build', '-f', 'web/Dockerfile',
+      '--build-arg', 'APP_VERSION=1.2.3', '--build-arg', `BUILD_SHA=${SHA['v1.2.3']}`, '--build-arg', 'SITE_KEY=pk_live with space',
+      '-t', `${IMG}:v1.2.3`, '-t', `${IMG}:${SHA['v1.2.3']}`, 'web']);
+    assert.deepEqual(builds[1].slice(3, 7), ['--build-arg', 'APP_VERSION=form-v1.2.3', '--build-arg', `BUILD_SHA=${SHA['v1.2.3']}`], 'per-image overrides shared');
+  } finally { await st.close(); }
+});
+
+test('build args: no DEPLOY_BUILD_ARGS → no --build-arg; a typo or an unlisted image is refused before docker runs', async () => {
+  const d = await load(RUN);
+  const imgs = d.parseImages(`${IMG} .`);
+  assert.deepEqual(d.parseBuildArgs('', imgs, { tag: 'v1.2.3', sha: 'x' }), { [IMG]: [] });
+  assert.throws(() => d.parseBuildArgs('V=${VERSON}', imgs, { tag: 'v1.2.3', sha: 'x' }), /\$\{VERSON\} is not one of/);
+  assert.throws(() => d.parseBuildArgs(`${IMG2} K=v`, imgs, { tag: 'v1.2.3', sha: 'x' }), /DEPLOY_IMAGES does not list/);
+  assert.throws(() => d.parseBuildArgs(`${IMG} not-a-pair`, imgs, { tag: 'v1.2.3', sha: 'x' }), /needs KEY=VALUE/);
+  const st = await fakePortainer();
+  try {
+    const io = ioFor(envFor(st, { DEPLOY_BUILD_ARGS: 'V=${NOPE}' }));
+    assert.equal(await d.run({ tag: 'v1.2.3' }, io), 1);
+    assert.equal(io.calls.filter((c) => c.cmd === 'docker').length, 0);
+    assert.equal(st.requests.length, 0);
+  } finally { await st.close(); }
+});
+
+test('health auth: Basic credentials reach the version URL, are masked, and never appear in the output', async () => {
+  const d = await load(RUN);
+  const token = Buffer.from('ops:s3cr3t-pw').toString('base64');
+  const st = await fakePortainer({ healthAuth: ['authorization', `Basic ${token}`] });
+  try {
+    const io = ioFor(envFor(st, { HEALTH_BASIC_AUTH: 'ops:s3cr3t-pw' }));
+    const masked = [];
+    io.mask = (v) => masked.push(v);
+    assert.equal(await d.run({ tag: 'v1.2.3' }, io), 0, io.out.join('\n'));
+    assert.ok(st.requests.filter((r) => r.path === '/version').every((r) => r.headers.authorization === `Basic ${token}`));
+    assert.deepEqual(masked.sort(), ['ops:s3cr3t-pw', token].sort());
+    const all = io.out.join('\n') + ghComments(io).join('\n');
+    assert.ok(!all.includes('s3cr3t') && !all.includes(token), 'the credential is never printed');
+  } finally { await st.close(); }
+});
+
+test('health auth: a header from a secret is sent; without it a 401 never verifies', async () => {
+  const d = await load(RUN);
+  const st = await fakePortainer({ healthAuth: ['x-health-token', 'tok-9'] });
+  try {
+    const io = ioFor(envFor(st, { HEALTH_AUTH_HEADER: 'X-Health-Token: tok-9' }));
+    assert.equal(await d.run({ tag: 'v1.2.3' }, io), 0, io.out.join('\n'));
+  } finally { await st.close(); }
+  const st2 = await fakePortainer({ healthAuth: ['x-health-token', 'tok-9'] });
+  try {
+    const io = ioFor(envFor(st2));
+    assert.equal(await d.run({ tag: 'v1.2.3' }, io), 1);
+    assert.match(io.out.join('\n'), /did not report 1\.2\.3/);
+  } finally { await st2.close(); }
+  assert.throws(() => d.healthAuth({ HEALTH_AUTH_HEADER: 'X: y', HEALTH_BASIC_AUTH: 'a:b' }), /not both/);
+  assert.throws(() => d.healthAuth({ HEALTH_BASIC_AUTH: 'nocolon' }), /user:password/);
+  assert.throws(() => d.healthAuth({ HEALTH_AUTH_HEADER: 'no colon here' }), /Name: value/);
+});
+
+test('--publish-only builds and pushes with no platform config and no version URL, and never calls the platform', async () => {
+  const d = await load(RUN);
+  const io = ioFor({ DEPLOY_IMAGES: `${IMG} .\n`, DEPLOY_BUILD_ARGS: 'APP_VERSION=${VERSION}', GITHUB_REPOSITORY: 'owner/app' });
+  assert.equal(await d.run({ tag: 'v1.2.3', publishOnly: true }, io), 0, io.out.join('\n'));
+  const docker = io.calls.filter((c) => c.cmd === 'docker').map((c) => c.args.join(' '));
+  assert.deepEqual(docker, [
+    `manifest inspect ${IMG}:v1.2.3`,
+    `build -f ./Dockerfile --build-arg APP_VERSION=1.2.3 -t ${IMG}:v1.2.3 -t ${IMG}:${SHA['v1.2.3']} .`,
+    `push ${IMG}:v1.2.3`,
+    `push ${IMG}:${SHA['v1.2.3']}`,
+  ]);
+  assert.match(io.out.join('\n'), /SUMMARY published v1\.2\.3 at /);
+  assert.ok(!io.calls.some((c) => c.cmd === 'sh' || (c.cmd === 'git' && c.args[0] === 'tag')), 'no hook, no rollback lookup');
+  assert.deepEqual(ghComments(io), [], 'publishing is not a deploy outcome — the release issue is untouched');
+  // Already pushed → nothing rebuilt, still 0 (a re-run of the publish job is a no-op).
+  const again = ioFor({ DEPLOY_IMAGES: `${IMG} .\n` }, { manifests: [`${IMG}:v1.2.3`] });
+  assert.equal(await d.run({ tag: 'v1.2.3', publishOnly: true }, again), 0);
+  assert.deepEqual(again.calls.filter((c) => c.cmd === 'docker').map((c) => c.args[0]), ['manifest']);
+  // Still finals only.
+  const rc = ioFor({ DEPLOY_IMAGES: `${IMG} .\n` });
+  assert.equal(await d.run({ tag: 'v1.2.3-rc.1', publishOnly: true }, rc), 1);
+  assert.equal(rc.calls.length, 0);
+});
+
+test('--deploy-only never builds: a missing image fails before the platform; present images deploy and verify', async () => {
+  const d = await load(RUN);
+  const st = await fakePortainer({ images: [IMG, IMG2] });
+  try {
+    const env = envFor(st, { DEPLOY_IMAGES: `${IMG} web\n${IMG2} form\n` });
+    const io = ioFor(env, { manifests: [`${IMG}:v1.2.3`] });
+    assert.equal(await d.run({ tag: 'v1.2.3', deployOnly: true }, io), 1);
+    assert.equal(st.requests.length, 0, 'the platform was never called');
+    assert.ok(!io.calls.some((c) => c.cmd === 'docker' && c.args[0] !== 'manifest'), 'nothing built or pushed');
+    assert.match(io.out.join('\n'), new RegExp(`::error::not in the registry: ${IMG2.replace(/\./g, '\\.')}:v1\\.2\\.3`));
+    const ok = ioFor(env, { manifests: [`${IMG}:v1.2.3`, `${IMG2}:v1.2.3`] });
+    assert.equal(await d.run({ tag: 'v1.2.3', deployOnly: true }, ok), 0, ok.out.join('\n'));
+    assert.deepEqual([...new Set(ok.calls.filter((c) => c.cmd === 'docker').map((c) => c.args[0]))], ['manifest']);
+    assert.equal(st.running, 'v1.2.3');
+  } finally { await st.close(); }
+  const both = ioFor({ DEPLOY_IMAGES: `${IMG} .` });
+  assert.equal(await d.run({ tag: 'v1.2.3', publishOnly: true, deployOnly: true }, both), 1);
+  assert.deepEqual(d.parseArgs(['--tag', 'v1.2.3', '--publish-only']), { tag: 'v1.2.3', publishOnly: true });
+  assert.deepEqual(d.parseArgs(['--deploy-only', '--tag=v1.2.3']), { deployOnly: true, tag: 'v1.2.3' });
 });
 
 // ---- the CLI, end to end ---------------------------------------------------------------------------

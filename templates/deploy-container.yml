@@ -43,7 +43,15 @@
 #     that owns only this app's stack. Never an admin key: a leaked deploy key must reach one app.
 #   - `secrets.REGISTRY_PASSWORD` — optional; the registry login falls back to the job's
 #     `github.token`, which is enough for GHCR with `packages: write`.
-# Everything else is configuration in the env block of the last step.
+#   - `secrets.HEALTH_AUTH_HEADER` (`Name: value`) or `secrets.HEALTH_BASIC_AUTH` (`user:password`)
+#     — optional, only when the version URL sits behind auth. Masked; never printed.
+# Everything else is configuration: the workflow-level `env` (images, build args — both jobs read
+# them) and the env block of the deploy job's last step (the platform).
+#
+# TWO JOBS (#460). `publish` builds and pushes every image on EVERY final, whatever the platform's
+# state — so a repo not yet cut over still has each final's image in the registry, ready to stage.
+# `deploy` needs it and only talks to the platform; it never builds (a missing image fails before
+# the platform is touched). Gate `deploy`, never `publish`, on "is the platform switched on".
 #
 # TOPOLOGY. Every server runs its own Portainer — there is no central panel and no Portainer
 # Agent. So the per-app configuration is THAT host's Portainer URL + endpointId + stack id + key.
@@ -84,6 +92,10 @@ on:
         required: false
       REGISTRY_PASSWORD:
         required: false
+      HEALTH_AUTH_HEADER:
+        required: false
+      HEALTH_BASIC_AUTH:
+        required: false
 
 # One deploy at a time per repo, never cancelled half-way: a cancelled deploy is a stack in an
 # unknown state. A fixed group, because under workflow_call `github.workflow` is the CALLER's name.
@@ -94,16 +106,28 @@ concurrency:
 permissions:
   contents: read
 
+# Read by both jobs. Workflow-level, so the list is written once: `publish` builds exactly what
+# `deploy` then checks is in the registry.
+env:
+  # EDIT: every image this stack runs, one per line: <image-ref> <build-context> [<dockerfile>].
+  DEPLOY_IMAGES: |
+    ghcr.io/${{ github.repository }} .
+  # EDIT: optional build args, one per line — `KEY=VALUE` for every image, `<image-ref> KEY=VALUE`
+  # for one. ${TAG} (vX.Y.Z), ${VERSION} (X.Y.Z) and ${SHA} (the tag's commit) are filled in by the
+  # driver. Baked into the image, so public values only (`vars.*`), never a secret.
+  DEPLOY_BUILD_ARGS: ""
+
 jobs:
-  deploy:
-    name: Deploy the final
-    runs-on: ubuntu-latest # EDIT: a runner that reaches your platform (LAN or VPN) and has docker.
-    environment: production # EDIT: the GitHub environment holding PORTAINER_API_KEY, or remove.
+  publish:
+    name: Publish the final's images
+    # Never gated on the platform: a final publishes its images before cutover too.
+    runs-on: ubuntu-latest # EDIT: a runner with docker.
     permissions:
       contents: read # check out the tag
       packages: write # push the images (GHCR); drop it for another registry
-      issues: write # record the outcome on the release issue
     timeout-minutes: 45
+    outputs:
+      tag: ${{ steps.tag.outputs.tag }}
     steps:
       - name: Resolve the tag to deploy
         id: tag
@@ -120,7 +144,42 @@ jobs:
 
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
-          ref: refs/tags/${{ steps.tag.outputs.tag }}
+          ref: refs/tags/${{ steps.tag.outputs.tag }} # the tag ref resolves to the commit it builds
+          persist-credentials: false # nothing here pushes to git
+
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
+        with:
+          node-version: "22"
+
+      - name: Log in to the image registry
+        env:
+          REGISTRY: ghcr.io # EDIT: your registry host
+          REGISTRY_USER: ${{ github.actor }} # EDIT: the registry user, when not GHCR
+          REGISTRY_PASSWORD: ${{ secrets.REGISTRY_PASSWORD || github.token }}
+        run: |
+          set -euo pipefail
+          printf '%s' "$REGISTRY_PASSWORD" | docker login "$REGISTRY" -u "$REGISTRY_USER" --password-stdin
+
+      - name: Build once and push (deploy-container-run --publish-only)
+        env:
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: node .github/deploy/deploy-container-run.mjs --tag "$TAG" --publish-only
+
+  deploy:
+    name: Deploy the final
+    needs: publish
+    # EDIT: gate the platform half here, e.g. `if: vars.PLATFORM_LIVE == 'true'` — never `publish`.
+    runs-on: ubuntu-latest # EDIT: a runner that reaches your platform (LAN or VPN) and has docker.
+    environment: production # EDIT: the GitHub environment holding PORTAINER_API_KEY, or remove.
+    permissions:
+      contents: read # check out the tag
+      packages: read # confirm the images are in the registry (GHCR); drop it for another registry
+      issues: write # record the outcome on the release issue
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          ref: refs/tags/${{ needs.publish.outputs.tag }}
           fetch-depth: 0 # every tag: the rollback target is the previous final
           persist-credentials: false # nothing here pushes to git
 
@@ -137,12 +196,9 @@ jobs:
           set -euo pipefail
           printf '%s' "$REGISTRY_PASSWORD" | docker login "$REGISTRY" -u "$REGISTRY_USER" --password-stdin
 
-      - name: Build once, run exactly this tag, verify (deploy-container-run)
+      - name: Run exactly this tag, verify (deploy-container-run --deploy-only)
         env:
           DEPLOY_ADAPTER: portainer
-          # EDIT: every image this stack runs, one per line: <image-ref> <build-context> [<dockerfile>].
-          DEPLOY_IMAGES: |
-            ghcr.io/${{ github.repository }} .
           # EDIT: optional — runs before the platform is called, with TAG and PREVIOUS_TAG set; a
           # non-zero exit stops the deploy before anything changes (a database snapshot, say).
           PRE_DEPLOY: ""
@@ -153,9 +209,11 @@ jobs:
           PORTAINER_COMPOSE_FILE: docker-compose.yml # file stacks only: sent as the stack content
           PORTAINER_API_KEY: ${{ secrets.PORTAINER_API_KEY }}
           HEALTH_URL: ${{ inputs.health-url }} # empty → release.health-url in .github/project.yml
+          HEALTH_AUTH_HEADER: ${{ secrets.HEALTH_AUTH_HEADER }} # optional: `Name: value`
+          HEALTH_BASIC_AUTH: ${{ secrets.HEALTH_BASIC_AUTH }} # optional: `user:password`
           VERIFY_TIMEOUT_SECONDS: "600" # EDIT: how long the new version may take to report itself
           DEPLOY_TIMEOUT_SECONDS: "600"
           BUSY_TIMEOUT_SECONDS: "600"
           GH_TOKEN: ${{ github.token }}
-          TAG: ${{ steps.tag.outputs.tag }}
-        run: node .github/deploy/deploy-container-run.mjs --tag "$TAG"
+          TAG: ${{ needs.publish.outputs.tag }}
+        run: node .github/deploy/deploy-container-run.mjs --tag "$TAG" --deploy-only

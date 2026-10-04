@@ -4178,7 +4178,8 @@ platform has an API deploys through [`templates/deploy-container.yml`](templates
 and its two scripts, on every host the same way:
 
 1. CI builds every image the repo lists **once** per final tag (`vX.Y.Z` and the commit sha) and
-   pushes it.
+   pushes it — in its own job, never gated on whether the platform is switched on, so a repo not
+   yet cut over still has every final's image in the registry (#460).
 2. A per-repo pre-deploy step (a database snapshot, say) runs next; its failure stops the deploy
    before anything changes.
 3. A **platform adapter** tells the platform "run exactly `vX.Y.Z`", every image in one call.
