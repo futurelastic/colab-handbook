@@ -3715,7 +3715,11 @@ ROLE-TAGGED GRANTS (#397). --role defaults to \`human\` — the grant above, unc
 --role ${migrationGrant.REVIEWER_ROLE} the comment is a \`${migrationGrant.REVIEW_GRANT_MARK}\` instead:
 it names the declared reviewer and carries a REVIEW RECORD (a \`\`\`${migrationGrant.REVIEW_RECORD_FENCE}
 block — verdict, checklist result, the escalation condition checked, the CI round-trip result, and
-the reviewed HEAD sha). A reviewer grant is bound to that HEAD: any new commit on the branch voids it.
+the reviewed HEAD sha, and — #508 — \`migrations\`, a content id over the branch's migration files at
+that HEAD, computed here, never a flag). A reviewer grant is bound to that CONTENT: a commit that
+leaves every migration file byte-identical (the trunk sync ship requires) keeps it; editing, adding,
+removing or renaming a migration voids it. A branch with no migration file gets no id and is bound to
+its HEAD alone, as is every record minted before #508.
 It is minted only when ALL of these hold, checked before any network call:
   - the record is well-formed AND passing (approve · checklist pass · escalation clear · CI pass) —
     a grant carrying a failing review is a contradiction, so it is refused, not recorded;
@@ -3730,8 +3734,9 @@ Then, read from CI after the tracker read and before anything is written (#457):
 COLAB_HUMAN=1 is still required for every role. The reviewer identity is DECLARED, not attested.
 \`colab ship\` honours a reviewer grant only when ALL of (#401): P the target's project.yml says
 \`migration-grant: reviewer\` · M this record is live, trusted and passing · HEAD its head is the
-branch's exact remote head · R the live "${migrationGrant.ROUNDTRIP_JOB_PREFIX}" CI job passed on that
-HEAD (re-read by ship, never taken from the record). Any condition failing → a human runs Phase B.
+branch's exact remote head, or its \`migrations\` id equals the id at that head · R the live
+"${migrationGrant.ROUNDTRIP_JOB_PREFIX}" CI job passed on the SHIPPED head (re-read by ship, never
+taken from the record). Any condition failing → a human runs Phase B.
 
 Options:
   --branch <branch>  required for --branch grants; a grant is never inferred from HEAD
@@ -3850,11 +3855,22 @@ function migrationGrantReviewRecord(repoAbs, opts) {
     throw new UserError(`--head ${String(opts.head).slice(0, 12)} is not origin's tip of "${opts.branch}" (${tip.slice(0, 12)}) — the review covers a commit the grant would not bind; re-review the tip`);
   }
 
+  // #508: bind what was reviewed — the branch's migration files at the tip, by content. Same path
+  // rule the ship gate fires on (newMigrations), against origin's trunk. A branch with no migration
+  // to review gets no id and stays HEAD-bound.
+  const trunk = resolveTrunk(repoAbs, projectDoc(repoAbs));
+  const remote = git.remoteInfo(repoAbs).name || 'origin';
+  let base = trunk ? `${remote}/${trunk}` : null;
+  if (base && !git.git(['rev-parse', '--verify', '--quiet', `${base}^{commit}`], repoAbs).ok) base = trunk;
+  const migrations = base ? newMigrations(repoAbs, base, tip) : [];
+  const contentId = migrationContentAt(repoAbs, migrations, tip);
+
   const rec = {
     v: '1', role, reviewer: opts.reviewer, head: tip,
     verdict: opts.verdict, checklist: opts.checklist, 'checklist-items': opts.checklistItems,
     escalation: opts.escalation, 'escalation-result': opts.escalationResult,
     'ci-roundtrip': opts.ciRoundtrip, 'ci-run': opts.ciRun,
+    migrations: contentId || undefined,
   };
   for (const k of Object.keys(rec)) if (rec[k] === undefined) delete rec[k];
   const v = migrationGrant.validateReviewRecord(rec);
@@ -3937,7 +3953,11 @@ function cmdMigrationGrantCreate(repoAbs, num, opts) {
 
   if (opts.reviewRecord) {
     print(`Recorded a ${migrationGrant.REVIEWER_ROLE} grant on #${num} in ${shortRepo(repoAbs)} — reviewer "${opts.reviewRecord.reviewer}", branch "${opts.branch}" @ ${opts.reviewRecord.head.slice(0, 12)}.`);
-    print('  Bound to that HEAD: any new commit voids it. It expires the moment the issue closes.');
+    if (opts.reviewRecord.migrations) {
+      print(`  Bound to the reviewed migration content ${opts.reviewRecord.migrations.slice(0, 12)}: a commit that leaves every migration file byte-identical (a trunk sync) keeps it, any change to one voids it. It expires the moment the issue closes.`);
+    } else {
+      print('  Bound to that HEAD: any new commit voids it. It expires the moment the issue closes.');
+    }
     print(`  colab ship honours it only while the "${migrationGrant.ROUNDTRIP_JOB_PREFIX}" CI job has passed on that HEAD and the policy still says reviewer.`);
     print(`  Revoke any time: colab migration-grant ${num} --revoke`);
     return 0;
@@ -9617,6 +9637,19 @@ function newMigrations(mainRoot, trunk, branch) {
 }
 
 /**
+ * #508 — the content id (migration-grant.js migrationContentId) of `paths` — the branch's migration
+ * files, newMigrations' list — as they stand at `sha`: one `git ls-tree` for their blob ids, a path
+ * the commit no longer has counting as deleted. null when the tree cannot be read or there is
+ * nothing to bind; null never matches a recorded id, so an unreadable tree fails the binding closed.
+ */
+function migrationContentAt(repoAbs, paths, sha) {
+  if (!sha || !Array.isArray(paths) || paths.length === 0) return null;
+  const r = git.git(['ls-tree', '-z', sha, '--', ...paths], repoAbs);
+  if (!r.ok) return null;
+  return migrationGrant.migrationContentId(migrationGrant.migrationEntriesFromLsTree(r.stdout, paths));
+}
+
+/**
  * The `no new migrations` row, whole (#98, #401) — the ONE function every ship path calls:
  * `ship --dry`, a real or auto-trunk `ship` (both cmdShip), and `ship --dry --json` (cmdShipDryJson,
  * which batch reads its members through). No path recomputes any part of the rule, so no path can
@@ -9633,6 +9666,8 @@ function newMigrations(mainRoot, trunk, branch) {
  * evaluateShipSet ctx: the policy (P) from project.yml AT THE TARGET TIP — what the branch merges
  * into, not a working file the branch could have edited; the HEAD — the branch's remote head (what
  * CI ran), which must equal the local ref (what the squash takes), or no reviewer grant can bind;
+ * the migration content id at that HEAD (#508), which a content-bound grant matches instead of
+ * the reviewed HEAD — so the merge-of-trunk sync ship itself demands does not void the grant;
  * and R lazily — every job of every run at that HEAD, read only once some issue clears P+M+HEAD.
  */
 function shipMigrationGate(repoAbs, gh, target, branch, issues) {
@@ -9646,7 +9681,7 @@ function shipMigrationGate(repoAbs, gh, target, branch, issues) {
   } else {
     const records = {};
     for (const n of issues) records[n] = git.ghIssueView(repoAbs, n, ['state', 'labels', 'comments']);
-    ctx = shipMigrationCtx(repoAbs, gh, target, branch);
+    ctx = shipMigrationCtx(repoAbs, gh, target, branch, migrations);
     grants = migrationGrant.evaluateShipSet(issues, records, branch, labels.MIGRATION_GRANT_LABEL, ctx);
   }
   return { migrations, ok: grants.ok, ...migDetail(migrations, grants, target, branch, ctx) };
@@ -9654,7 +9689,7 @@ function shipMigrationGate(repoAbs, gh, target, branch, issues) {
 
 /** P, HEAD and the R thunk for shipMigrationGate. The thunk memoises its one verdict on the ctx
  *  (`roundtripResult`) so the payload can report what R saw without a second read. */
-function shipMigrationCtx(repoAbs, gh, target, branch) {
+function shipMigrationCtx(repoAbs, gh, target, branch, migrations) {
   const policy = migrationGrant.parseGrantPolicy(projectDocAt(repoAbs, target)).policy;
   const remote = git.remoteInfo(repoAbs).name || 'origin';
   const ls = git.git(['ls-remote', remote, `refs/heads/${branch}`], repoAbs);
@@ -9666,7 +9701,9 @@ function shipMigrationCtx(repoAbs, gh, target, branch) {
   else if (localSha && localSha !== remoteSha) headNote = `local ${branch} is ${localSha.slice(0, 7)}, ${remote} is ${remoteSha.slice(0, 7)} — push or pull until they agree`;
   else headSha = remoteSha;
   const trust = trustAt(repoAbs, target);
-  const ctx = { policy, headSha, headNote, roundtripResult: null, trust,
+  // #508: what the branch's migration files ARE at the shipped head, for a content-bound grant.
+  const contentId = headSha ? migrationContentAt(repoAbs, migrations, headSha) : null;
+  const ctx = { policy, headSha, contentId, headNote, roundtripResult: null, trust,
     labelActors: (n) => git.ghIssueLabelActors(repoAbs, n, labels.MIGRATION_GRANT_LABEL) };
   ctx.roundtrip = () => {
     const d = git.git(['diff', '--name-only', `${target}...${branch}`], repoAbs);
@@ -9700,16 +9737,17 @@ function migDetail(migrations, grants, target, branch, ctx) {
     branch, files: [...migrations],
     policy: ctx ? ctx.policy : null,
     headSha: ctx ? ctx.headSha : null,
+    contentId: ctx ? ctx.contentId || null : null,
     // #407: the human list as read from the TARGET — null when undeclared (association class).
     trustHumans: ctx && ctx.trust && ctx.trust.declared ? [...ctx.trust.humans] : null,
     roundtrip: ctx && ctx.roundtripResult ? { ok: ctx.roundtripResult.ok, reason: ctx.roundtripResult.reason } : null,
     granted: grants.granted.map((g) => ({ issue: g.issue, role: g.role || 'human', by: g.by, at: g.at,
-      ...(g.role === 'reviewer' ? { reviewer: g.reviewer, head: g.head } : {}) })),
+      ...(g.role === 'reviewer' ? { reviewer: g.reviewer, head: g.head, via: g.via || 'head', migrations: g.migrations || null } : {}) })),
     missing: grants.missing.map((m) => ({ issue: m.issue, failed: m.failed || null,
       reason: m.failed === 'head' && ctx && ctx.headNote ? `${m.reason} (${ctx.headNote})` : m.reason })),
   };
   if (grants.ok) {
-    const by = grants.granted.map((g) => (g.role === 'reviewer' ? `#${g.issue} (reviewer ${g.reviewer} @ ${String(g.head).slice(0, 7)}, CI round-trip passed)` : '#' + g.issue)).join(' ');
+    const by = grants.granted.map((g) => (g.role === 'reviewer' ? `#${g.issue} (reviewer ${g.reviewer} @ ${String(g.head).slice(0, 7)}${g.via === 'content' ? `, migration content ${String(g.migrations).slice(0, 12)} unchanged since` : ''}, CI round-trip passed)` : '#' + g.issue)).join(' ');
     const roles = [...new Set(grants.granted.map((g) => g.role || 'human'))].join('+');
     return { text: `${migrations.length} present, exempted by a ${roles} grant on ${by} for branch "${branch}" — ${files}`, payload };
   }

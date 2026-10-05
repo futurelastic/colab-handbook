@@ -24,6 +24,10 @@ export const REVIEW_RECORD_FENCE: 'migration-review';
 export const REVIEW_RECORD_VERSION: '1';
 export interface ReviewRecordField { key: string; required: boolean; values?: string[]; re?: RegExp; hint?: string; }
 export const REVIEW_RECORD_FIELDS: ReadonlyArray<ReviewRecordField>;
+/** Canonical tail of a HEAD-bound reviewer grant (a record with no `migrations` content id). */
+export const REVIEW_GRANT_TAIL: string;
+/** Canonical tail of a content-bound reviewer grant (#508 — the record names `migrations`). */
+export const REVIEW_GRANT_CONTENT_TAIL: string;
 
 export interface DecodedReviewGrant {
   role: string; reviewer: string; branch: string;

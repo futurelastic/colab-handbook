@@ -370,14 +370,91 @@ test('parseReviewGrant: text outside the fenced block is ignored; a duplicate ke
 
 test('grantHeadBinding: equal → ok; new commit → void; short/missing sha → not ok; human → unbound', () => {
   const g = { role: 'migration-reviewer', head: HEAD };
-  assert.deepEqual(mg.grantHeadBinding(g, HEAD), { bound: true, ok: true, reason: '' });
+  assert.deepEqual(mg.grantHeadBinding(g, HEAD), { bound: true, ok: true, via: 'head', reason: '' });
   assert.deepEqual(mg.grantHeadBinding(g, HEAD.toUpperCase()).ok, true);
   const moved = mg.grantHeadBinding(g, HEAD2);
   assert.equal(moved.ok, false);
   assert.match(moved.reason, /a new commit voids it/);
   assert.equal(mg.grantHeadBinding(g, HEAD.slice(0, 7)).ok, false);
   assert.equal(mg.grantHeadBinding(g, '').ok, false);
-  assert.deepEqual(mg.grantHeadBinding({ role: 'human', branch: 'x' }, ''), { bound: false, ok: true, reason: '' });
+  assert.deepEqual(mg.grantHeadBinding({ role: 'human', branch: 'x' }, ''), { bound: false, ok: true, via: null, reason: '' });
+  // A record with no `migrations` id stays HEAD-bound even when a content id is offered (#508).
+  assert.equal(mg.grantHeadBinding(g, HEAD2, 'a'.repeat(64)).ok, false);
+});
+
+// ── #508: bind to the reviewed migration content, not the HEAD ─────────────────────────────────
+const BLOB_A = '1'.repeat(40);
+const BLOB_B = '2'.repeat(40);
+const MIG = [{ path: 'db/migrations/0001_init.sql', blob: BLOB_A }, { path: 'db/migrations/0002_add.sql', blob: BLOB_B }];
+
+test('migrationContentId: order-independent; any path or blob change moves it; empty/unreadable → null', () => {
+  const id = mg.migrationContentId(MIG);
+  assert.match(id, /^[0-9a-f]{64}$/);
+  assert.equal(mg.migrationContentId([...MIG].reverse()), id, 'listing order is not content');
+  assert.equal(mg.migrationContentId(MIG.map((e) => ({ ...e, blob: e.blob.toUpperCase() }))), id);
+  assert.notEqual(mg.migrationContentId([MIG[0], { ...MIG[1], blob: '3'.repeat(40) }]), id, 'an edited migration');
+  assert.notEqual(mg.migrationContentId([...MIG, { path: 'db/migrations/0003_more.sql', blob: BLOB_A }]), id, 'an added migration');
+  assert.notEqual(mg.migrationContentId([MIG[0]]), id, 'a removed migration');
+  assert.notEqual(mg.migrationContentId([MIG[0], { ...MIG[1], path: 'db/migrations/0002_renamed.sql' }]), id, 'a renamed migration');
+  assert.notEqual(mg.migrationContentId([MIG[0], { ...MIG[1], blob: null }]), id, 'a deleted migration');
+  assert.equal(mg.migrationContentId([]), null);
+  assert.equal(mg.migrationContentId(null), null);
+  assert.equal(mg.migrationContentId([{ path: 'x.sql', blob: 'nope' }]), null);
+  assert.equal(mg.migrationContentId([{ path: '', blob: BLOB_A }]), null);
+});
+
+test('grantHeadBinding (#508): a content-bound grant survives a new head with byte-identical migrations', () => {
+  const id = mg.migrationContentId(MIG);
+  const g = { role: 'migration-reviewer', head: HEAD, record: { migrations: id } };
+  assert.deepEqual(mg.grantHeadBinding(g, HEAD, null), { bound: true, ok: true, via: 'head', reason: '' }, 'the reviewed head itself needs no id');
+  assert.deepEqual(mg.grantHeadBinding(g, HEAD2, id), { bound: true, ok: true, via: 'content', reason: '' });
+  assert.equal(mg.grantHeadBinding(g, HEAD2, id.toUpperCase()).ok, true);
+  const edited = mg.grantHeadBinding(g, HEAD2, mg.migrationContentId([MIG[0]]));
+  assert.equal(edited.ok, false);
+  assert.match(edited.reason, /a migration file changed since the review/);
+  const unread = mg.grantHeadBinding(g, HEAD2, null);
+  assert.equal(unread.ok, false);
+  assert.match(unread.reason, /could not be read/);
+  assert.equal(mg.grantHeadBinding(g, HEAD.slice(0, 7), id).ok, false, 'a short head is still never confirmed');
+});
+
+test('evaluateReviewerGrant + evaluateShipSet (#508): sync keeps a content-bound grant, an edit voids it, R still gates', () => {
+  const id = mg.migrationContentId(MIG);
+  const issue = openRecord({ comments: [reviewComment(rec({ migrations: id }))] });
+  const synced = mg.evaluateReviewerGrant(issue, { ...CTX, headSha: HEAD2, contentId: id });
+  assert.equal(synced.ok, true, synced.reason);
+  assert.equal(synced.via, 'content');
+  const edited = mg.evaluateReviewerGrant(issue, { ...CTX, headSha: HEAD2, contentId: 'f'.repeat(64) });
+  assert.equal(edited.ok, false);
+  assert.deepEqual(edited.checks, { policy: true, marker: true, head: false });
+  // A legacy (HEAD-only) record is unchanged: a sync still voids it.
+  const legacy = mg.evaluateReviewerGrant(openRecord({ comments: [reviewComment()] }), { ...CTX, headSha: HEAD2, contentId: id });
+  assert.match(legacy.reason, /a new commit voids it/);
+  // Through the ship set: content-bound pass, and R is read for the SHIPPED head.
+  let rtCalls = 0;
+  const set = mg.evaluateShipSet([1], { 1: issue }, BRANCH, LABEL,
+    { policy: 'reviewer', headSha: HEAD2, contentId: id, roundtrip: () => { rtCalls++; return { ok: true }; } });
+  assert.equal(set.ok, true, JSON.stringify(set.missing));
+  assert.equal(set.granted[0].via, 'content');
+  assert.equal(set.granted[0].migrations, id);
+  assert.equal(rtCalls, 1);
+  const noRt = mg.evaluateShipSet([1], { 1: issue }, BRANCH, LABEL,
+    { policy: 'reviewer', headSha: HEAD2, contentId: id, roundtrip: () => ({ ok: false, reason: 'no job' }) });
+  assert.equal(noRt.ok, false);
+  assert.equal(noRt.missing[0].failed, 'roundtrip');
+});
+
+test('reviewGrantCommentBody (#508): a content id is written, round-trips, and carries the content tail', () => {
+  const id = mg.migrationContentId(MIG);
+  const body = mg.reviewGrantCommentBody(BRANCH, HOST, NOW, rec({ migrations: id }));
+  assert.match(body.split('\n')[0], /bound to the reviewed migration content/);
+  assert.match(body, new RegExp(`\\nmigrations: ${id}\\n`));
+  const p = mg.parseReviewGrant(body);
+  assert.deepEqual(p.problems, []);
+  assert.equal(p.record.migrations, id);
+  assert.deepEqual(mg.parseReviewGrant(mg.reviewGrantCommentBody(BRANCH, HOST, NOW, rec({ migrations: 'abc' }))).problems.length > 0, true, 'a malformed id is a problem');
+  // A legacy record keeps the HEAD tail, byte for byte.
+  assert.match(mg.reviewGrantCommentBody(BRANCH, HOST, NOW, rec()).split('\n')[0], /bound to this HEAD: any new commit voids it/);
 });
 
 test('evaluateReviewerGrant: policy human refuses first, even with a perfect record', () => {
