@@ -29,6 +29,15 @@ function run(cmd, args, opts = {}) {
   };
 }
 
+/**
+ * Every `gh` spawn in this module goes through the tracker adapter (#500) — the one place the CLI
+ * talks to GitHub. Lazy require, deliberately: `module.exports = {…}` below REPLACES the exports
+ * object, so a top-level require cycle would hand tracker-github a stale empty `{}`.
+ */
+function gh(args, opts = {}) {
+  return require('./tracker-github').exec(args, opts);
+}
+
 function git(args, cwd, opts = {}) {
   return run('git', args, { ...(cwd ? { cwd } : {}), ...opts });
 }
@@ -453,9 +462,9 @@ function dirtyAny(wtPath) {
 let _ghState = null;
 function ghState() {
   if (_ghState) return _ghState;
-  if (!run('gh', ['--version']).ok) return (_ghState = { ok: false, reason: 'missing' });
-  if (run('gh', ['auth', 'status', '--active']).ok) return (_ghState = { ok: true, reason: null });
-  const who = run('gh', ['api', 'user', '-q', '.login']);
+  if (!gh(['--version']).ok) return (_ghState = { ok: false, reason: 'missing' });
+  if (gh(['auth', 'status', '--active']).ok) return (_ghState = { ok: true, reason: null });
+  const who = gh(['api', 'user', '-q', '.login']);
   if (who.ok && who.stdout) {
     if (_ghLogin === undefined) _ghLogin = who.stdout;
     return (_ghState = { ok: true, reason: null });
@@ -469,14 +478,14 @@ function ghAvailable() {
 
 /** gh issue edit — returns {ok, stderr}. cwd must be inside the repo so gh resolves the remote. */
 function ghIssueEdit(repo, issueNum, args) {
-  return run('gh', ['issue', 'edit', String(issueNum), ...args], { cwd: repo });
+  return gh(['issue', 'edit', String(issueNum), ...args], { cwd: repo });
 }
 
 /** The current gh user's login (`gh api user`), or null if it can't be determined. Cached. */
 let _ghLogin;
 function ghCurrentLogin() {
   if (_ghLogin !== undefined) return _ghLogin;
-  const r = run('gh', ['api', 'user', '-q', '.login']);
+  const r = gh(['api', 'user', '-q', '.login']);
   _ghLogin = r.ok && r.stdout ? r.stdout : null;
   return _ghLogin;
 }
@@ -484,7 +493,7 @@ function ghCurrentLogin() {
 /** Raw `gh api` call — returns {ok, stdout, stderr, code}. cwd must be inside the repo so `{owner}`
  * / `{repo}` placeholders resolve to the right remote. */
 function ghApi(repo, args) {
-  return run('gh', ['api', ...args], { cwd: repo });
+  return gh(['api', ...args], { cwd: repo });
 }
 
 /**
@@ -562,7 +571,7 @@ function ghIssueRelease(repo, issueNum, opts = {}) {
       note = 'could not read who holds the claim — unassigned @me only';
     }
   }
-  const r = run('gh', ['issue', 'edit', String(issueNum),
+  const r = gh(['issue', 'edit', String(issueNum),
     '--remove-assignee', ['@me', ...others].join(','), '--remove-label', 'in-progress'], { cwd: repo });
   if (r.ok || !isGraphqlRateLimit(r.stderr)) return { ...r, others: r.ok ? others : [], caller, note };
 
@@ -586,7 +595,7 @@ function ghIssueRelease(repo, issueNum, opts = {}) {
  * bad repo, network, unparseable). Callers treat null as "couldn't read" — never as "empty".
  */
 function ghIssueView(repo, issueNum, fields) {
-  const r = run('gh', ['issue', 'view', String(issueNum), '--json', fields.join(',')], { cwd: repo });
+  const r = gh(['issue', 'view', String(issueNum), '--json', fields.join(',')], { cwd: repo });
   if (!r.ok) return null;
   try { return JSON.parse(r.stdout); }
   catch (_) { return null; }
@@ -604,7 +613,7 @@ function ghIssueView(repo, issueNum, fields) {
  * someone approved it?", so the core-path pause costs one read on the resume path.
  */
 function ghPrForBranch(repo, branch) {
-  const r = run('gh', ['pr', 'list', '--head', branch, '--state', 'open', '--json', 'number,url,state,author,headRefOid,reviews'], { cwd: repo });
+  const r = gh(['pr', 'list', '--head', branch, '--state', 'open', '--json', 'number,url,state,author,headRefOid,reviews'], { cwd: repo });
   if (!r.ok) return { error: (r.stderr || '').split('\n')[0] || `gh pr list exited ${r.code}` };
   try {
     const list = JSON.parse(r.stdout || '[]');
@@ -618,7 +627,7 @@ function ghPrForBranch(repo, branch) {
  * tools/lib/machine-trailer.js fails closed on it.
  */
 function ghRepoVisibility(repo) {
-  const r = run('gh', ['repo', 'view', '--json', 'visibility', '-q', '.visibility'], { cwd: repo });
+  const r = gh(['repo', 'view', '--json', 'visibility', '-q', '.visibility'], { cwd: repo });
   if (!r.ok) return null;
   const v = (r.stdout || '').trim().toUpperCase();
   return /^[A-Z]+$/.test(v) ? v : null;
@@ -626,18 +635,18 @@ function ghRepoVisibility(repo) {
 
 /** #350: open a PR `head` → `base`. Returns {ok, url, stderr}; `url` is gh's printed PR URL. */
 function ghPrCreate(repo, { base, head, title, body }) {
-  const r = run('gh', ['pr', 'create', '--base', base, '--head', head, '--title', title, '--body', body], { cwd: repo });
+  const r = gh(['pr', 'create', '--base', base, '--head', head, '--title', title, '--body', body], { cwd: repo });
   const url = (r.stdout || '').split('\n').map((l) => l.trim()).filter(Boolean).pop() || null;
   return { ok: r.ok, url, stderr: r.stderr };
 }
 
 /** #350: close a PR whose work landed by squash elsewhere, with a comment saying where. */
 function ghPrClose(repo, num, comment) {
-  return run('gh', ['pr', 'close', String(num), '--comment', comment], { cwd: repo });
+  return gh(['pr', 'close', String(num), '--comment', comment], { cwd: repo });
 }
 
 function ghIssueComment(repo, issueNum, body) {
-  const r = run('gh', ['issue', 'comment', String(issueNum), '--body', body], { cwd: repo });
+  const r = gh(['issue', 'comment', String(issueNum), '--body', body], { cwd: repo });
   if (r.ok || !isGraphqlRateLimit(r.stderr)) return r;
   return ghApi(repo, ['-X', 'POST', `repos/{owner}/{repo}/issues/${issueNum}/comments`, '-f', `body=${body}`]);
 }
@@ -677,7 +686,7 @@ function ghIssueLabelActors(repo, issueNum, label) {
  * contract as ghIssueView: a caller must not read absence as proof a label is missing.
  */
 function ghListLabels(repo) {
-  const r = run('gh', ['label', 'list', '--limit', '500', '--json', 'name', '-q', '.[].name'], { cwd: repo });
+  const r = gh(['label', 'list', '--limit', '500', '--json', 'name', '-q', '.[].name'], { cwd: repo });
   if (!r.ok) return null;
   return r.stdout.split('\n').map((s) => s.trim()).filter(Boolean);
 }
@@ -688,7 +697,7 @@ function ghListLabels(repo) {
  * the same contract as ghIssueView; a caller must not read a failed call as "no issues".
  */
 function ghIssueListByLabel(repo, label, state, fields) {
-  const r = run('gh', ['issue', 'list', '--label', label, '--state', state,
+  const r = gh(['issue', 'list', '--label', label, '--state', state,
     '--json', fields.join(','), '--limit', '200'], { cwd: repo });
   if (!r.ok) return null;
   try { return JSON.parse(r.stdout); }
@@ -721,7 +730,7 @@ function ghOpenIssueNumbersByLabel(repo, label) {
  * instead; this is only for tearing down a spent `group:<key>` label (CONVENTIONS.md §5).
  */
 function ghLabelDelete(repo, name) {
-  return run('gh', ['label', 'delete', name, '--yes'], { cwd: repo });
+  return gh(['label', 'delete', name, '--yes'], { cwd: repo });
 }
 
 /**
@@ -734,7 +743,7 @@ function ghLabelDelete(repo, name) {
  * ghListLabels and only calls this for a name confirmed missing.
  */
 function ghLabelCreate(repo, name, color, description) {
-  return run('gh', ['label', 'create', name, '--color', color, '--description', description], { cwd: repo });
+  return gh(['label', 'create', name, '--color', color, '--description', description], { cwd: repo });
 }
 
 /**
@@ -744,7 +753,7 @@ function ghLabelCreate(repo, name, color, description) {
  * description has drifted from the handbook's (#364).
  */
 function ghListLabelsDetailed(repo) {
-  const r = run('gh', ['label', 'list', '--limit', '500', '--json', 'name,description'], { cwd: repo });
+  const r = gh(['label', 'list', '--limit', '500', '--json', 'name,description'], { cwd: repo });
   if (!r.ok) return null;
   try {
     const rows = JSON.parse(r.stdout);
@@ -760,7 +769,7 @@ function ghListLabelsDetailed(repo) {
  * read with a differing description.
  */
 function ghLabelEditDescription(repo, name, description) {
-  return run('gh', ['label', 'edit', name, '--description', description], { cwd: repo });
+  return gh(['label', 'edit', name, '--description', description], { cwd: repo });
 }
 
 /**
@@ -870,7 +879,7 @@ function ghRunsForCommit(repo, branch, sha, limit = 10) {
   // judge whether it is merely slow or structurally WEDGED (tools/lib/ci-verdict.js) — createdAt for
   // the age backstop, databaseId to look up its job count (ghRunJobCount, below — a second call, made
   // lazily by the caller, never here: an ordinary green check must not pay for a read it never needs).
-  const r = run('gh', ['run', 'list', '--branch', branch, '-L', String(limit),
+  const r = gh(['run', 'list', '--branch', branch, '-L', String(limit),
     // workflowName is additive (#338): `colab release cut`'s full-suite condition groups the rows by
     // workflow — a workflow whose only run at the sha was cancelled never ran its suite.
     // event is additive (#451): summarizeRunsForCommit drops `dynamic` rows (workflows the repo
@@ -902,7 +911,7 @@ function ghRunsForCommit(repo, branch, sha, limit = 10) {
 function ghApiConditional(repo, apiPath, etag) {
   const ciWait = require('./ci-wait');
   const args = ['api', '-i', ...(etag ? ['-H', `If-None-Match: ${etag}`] : []), apiPath];
-  const r = run('gh', args, { cwd: repo, timeoutMs: 60000 });
+  const r = gh(args, { cwd: repo, timeoutMs: 60000 });
   const http = ciWait.parseHttp(r.stdout);
   return ciWait.classifyResponse({ ...http, stderr: r.stderr });
 }
@@ -926,7 +935,7 @@ function ghRunsAtShaRest(repo, sha, branch) {
  * the first real read, not by a probe in front of it (`gh auth status` costs a REST + a GraphQL). */
 let _ghInstalled;
 function ghInstalled() {
-  if (_ghInstalled === undefined) _ghInstalled = run('gh', ['--version']).ok;
+  if (_ghInstalled === undefined) _ghInstalled = gh(['--version']).ok;
   return _ghInstalled;
 }
 
@@ -937,7 +946,7 @@ function ghInstalled() {
  */
 function ghRunsForRef(repo, ref, sha, limit = 20) {
   if (!sha) return null;
-  const r = run('gh', ['run', 'list', '--branch', ref, '-L', String(limit),
+  const r = gh(['run', 'list', '--branch', ref, '-L', String(limit),
     '--json', 'headSha,status,conclusion,createdAt,databaseId,workflowName,attempt'], { cwd: repo });
   if (!r.ok) return null;
   let runs;
@@ -957,7 +966,7 @@ function ghRunForCommit(repo, branch, sha, limit = 10) {
  */
 function ghRunsAtCommit(repo, sha, limit = 100) {
   if (!sha) return null;
-  const r = run('gh', ['run', 'list', '--commit', sha, '-L', String(limit),
+  const r = gh(['run', 'list', '--commit', sha, '-L', String(limit),
     '--json', 'headSha,status,conclusion,createdAt,databaseId,workflowName,event'], { cwd: repo });
   if (!r.ok) return null;
   let runs;
@@ -995,7 +1004,7 @@ function commitTimeMs(repo, sha) {
  * `truncated` is true when the read filled its limit, which a caller must treat as unread.
  */
 function ghRunsSince(repo, branch, sinceDay, limit = 1000) {
-  const r = run('gh', ['run', 'list', '--branch', branch, '--created', `>=${sinceDay}`, '-L', String(limit),
+  const r = gh(['run', 'list', '--branch', branch, '--created', `>=${sinceDay}`, '-L', String(limit),
     '--json', 'headSha,status,conclusion,createdAt,databaseId,workflowName,event'], { cwd: repo });
   if (!r.ok) return null;
   let runs;
@@ -1159,7 +1168,7 @@ function summarizeRepoOwnedRuns(forSha, sha) {
  */
 function ghRunJobCount(repo, runDatabaseId) {
   if (runDatabaseId === null || runDatabaseId === undefined) return null;
-  const r = run('gh', ['run', 'view', String(runDatabaseId), '--json', 'jobs', '-q', '.jobs | length'], { cwd: repo });
+  const r = gh(['run', 'view', String(runDatabaseId), '--json', 'jobs', '-q', '.jobs | length'], { cwd: repo });
   if (!r.ok) return null;
   const n = Number(r.stdout);
   return Number.isFinite(n) ? n : null;
@@ -1186,7 +1195,7 @@ function ghRunJobCount(repo, runDatabaseId) {
  */
 function ghRunJobs(repo, runDatabaseId) {
   if (runDatabaseId === null || runDatabaseId === undefined) return null;
-  const r = run('gh', ['run', 'view', String(runDatabaseId), '--json', 'jobs'], { cwd: repo });
+  const r = gh(['run', 'view', String(runDatabaseId), '--json', 'jobs'], { cwd: repo });
   if (!r.ok) return null;
   let parsed;
   try { parsed = JSON.parse(r.stdout); } catch (_) { return null; }
@@ -1211,7 +1220,7 @@ function ghRunJobs(repo, runDatabaseId) {
  */
 function ghCommitCheckRuns(repo, sha) {
   if (!sha) return null;
-  const r = run('gh', ['api', `repos/{owner}/{repo}/commits/${sha}/check-runs?per_page=100`,
+  const r = gh(['api', `repos/{owner}/{repo}/commits/${sha}/check-runs?per_page=100`,
     '--jq', '[.check_runs[] | {id, name, status, conclusion, suite: .check_suite.id, annotations: .output.annotations_count}]'], { cwd: repo });
   if (!r.ok) return null;
   try { const v = JSON.parse(r.stdout); return Array.isArray(v) ? v : null; } catch (_) { return null; }
@@ -1220,7 +1229,7 @@ function ghCommitCheckRuns(repo, sha) {
 /** One check run's annotations as `[{title, message, level}]`, or null on failure (#493). */
 function ghCheckRunAnnotations(repo, checkRunId) {
   if (checkRunId === null || checkRunId === undefined) return null;
-  const r = run('gh', ['api', `repos/{owner}/{repo}/check-runs/${checkRunId}/annotations`,
+  const r = gh(['api', `repos/{owner}/{repo}/check-runs/${checkRunId}/annotations`,
     '--jq', '[.[] | {title, message, level: .annotation_level}]'], { cwd: repo });
   if (!r.ok) return null;
   try { const v = JSON.parse(r.stdout); return Array.isArray(v) ? v : null; } catch (_) { return null; }
@@ -1237,10 +1246,10 @@ function ghCheckRunAnnotations(repo, checkRunId) {
 function ghWorkflowDispatch(repo, workflowFile, ref, inputs = {}) {
   const flags = [];
   for (const [k, v] of Object.entries(inputs)) flags.push('-f', `${k}=${v}`);
-  const first = run('gh', ['workflow', 'run', workflowFile, '--ref', ref, ...flags], { cwd: repo });
+  const first = gh(['workflow', 'run', workflowFile, '--ref', ref, ...flags], { cwd: repo });
   if (first.ok) return { ok: true, withInputs: true, detail: '' };
   if (!flags.length) return { ok: false, withInputs: false, detail: (first.stderr || first.stdout || '').trim().split('\n')[0] || 'gh workflow run failed' };
-  const second = run('gh', ['workflow', 'run', workflowFile, '--ref', ref], { cwd: repo });
+  const second = gh(['workflow', 'run', workflowFile, '--ref', ref], { cwd: repo });
   if (second.ok) return { ok: true, withInputs: false, detail: (first.stderr || '').trim().split('\n')[0] || '' };
   return { ok: false, withInputs: false, detail: (second.stderr || second.stdout || '').trim().split('\n')[0] || 'gh workflow run failed' };
 }
@@ -1250,7 +1259,7 @@ function ghWorkflowDispatch(repo, workflowFile, ref, inputs = {}) {
  * (that pairing is exactly what `colab claim` writes). Returns array of numbers, or null on failure.
  */
 function ghAssignedIssues(repo) {
-  const r = run('gh', ['issue', 'list', '--assignee', '@me', '--label', 'in-progress', '--state', 'open',
+  const r = gh(['issue', 'list', '--assignee', '@me', '--label', 'in-progress', '--state', 'open',
     '--json', 'number', '--limit', '200'], { cwd: repo });
   if (!r.ok) return null;
   try { return JSON.parse(r.stdout).map((o) => o.number); }

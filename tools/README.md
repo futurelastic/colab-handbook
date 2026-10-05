@@ -269,6 +269,14 @@ On `release` / `worktree rm` it posts `✅ Released` — **unless the issue is a
 which case it stays silent (a `Closes #N` merge already ended the story). Comments are
 **best-effort**: a failed comment warns but never fails the claim itself.
 
+**One door to the tracker (#500).** Every `gh` spawn colab makes goes through
+`tools/lib/tracker-github.js` — the one implementation of the contract named in
+`tools/lib/tracker.js` (`METHODS`, `forRepo`). The `gh*` helpers in `tools/lib/git.js` keep their
+names and shapes and route through it; new GitHub calls belong on the adapter, never as a fresh
+`spawnSync('gh', …)` (`tracker-github.test.js` fails on one). Methods are synchronous, bound to one
+repo, and return failures as data — a list read's `data` is `null` for "could not read", never
+"none".
+
 **GraphQL rate limit → REST fallback, and self-describing residue (#164).** Claim comments, ship
 comments, and the release write (unassign + delabel) all go through `gh issue comment`/`gh issue
 edit`, which is GraphQL under the hood — a **separate** hourly quota from REST. If GraphQL is
