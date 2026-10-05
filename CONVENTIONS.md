@@ -1555,6 +1555,13 @@ than guessed.
   Only runs of workflows the repo owns count (#451): a run with `event: dynamic`
   (Dependabot Updates and GitHub's other dynamic workflows) never executes the sha, so it is
   dropped before the verdict and named in its detail; if nothing is left, the sha reads `none`.
+  Only runs that **verify the code** count (#503): those triggered by a push or pull request.
+  A run that comes *after* the verdict and acts on it — a `workflow_run` release such as
+  `release-auto.yml`, its scheduled finalize, a dispatch, a deploy — is set aside and named the
+  same way. Its failure belongs to the release lane, so it never turns trunk red for ship and
+  ship never waits for it; measured, four green candidates parked ~30 min per landing behind
+  one. `ship-gate-workflows:` / `ship-ignore-workflows:` in `project.yml` override the set by
+  workflow name ([schema](project.schema.md#ship-gate-workflows-ship-ignore-workflows--optional)).
   A trunk sha whose tree has **no workflow file at all** (#482) — a freshly adopted repo whose
   adoption branch is what adds CI — can never draw a run, so nothing there can be red: its
   `none` gets the *Branch CI* treatment for a run that cannot arrive, and the candidate's own

@@ -1406,6 +1406,37 @@ branch run passed, so re-running it adds no information and holds runners the br
 - The one reading in tooling is `tools/lib/tree-green.js` `parseTreeReuse`; the audit reports the
   value (`--json`: `treeReuse`).
 
+### `ship-gate-workflows`, `ship-ignore-workflows` — optional
+
+```yaml
+ship-gate-workflows: [CI]          # absent = every push / pull_request-triggered workflow counts
+ship-ignore-workflows: [Deploy]    # absent = nothing beyond the default is set aside
+```
+
+Which workflow runs at a sha count as **its CI** for `colab ship`'s CI gate, `colab trunk-ci`
+and `colab ci-wait --sha` (#503). **Absent means the runs that verify the code count** — those
+triggered by `push`, `pull_request`, `pull_request_target` or `merge_group` — and every run of
+another trigger at the same sha is set aside and named in the verdict: a `workflow_run` release
+([`release-auto.yml`](templates/release-auto.yml) fires when CI completes, then cuts a candidate,
+publishes and deploys to staging), the same template's scheduled finalize, a dispatch, a deploy.
+Those runs act on the verdict after it exists; a failure there belongs to the release lane, so
+it neither turns trunk red for ship nor makes ship wait. Measured: four green, graded
+candidates parked ~30 min per landing behind a release run at trunk's head.
+
+- **`ship-gate-workflows`** — the explicit set. Exactly these workflows count, whatever their
+  trigger; every other workflow at the sha is set aside. Declare it when a workflow that verifies
+  the code is not push-triggered.
+- **`ship-ignore-workflows`** — set these aside as well, even when push-triggered (a deploy that
+  fires on a push to trunk). A name in both lists is set aside.
+- Values are workflow **names** (the workflow file's `name:`), the one workflow identity every run
+  read carries. A single string is read as a one-item list. An empty list, or an entry that is not a
+  non-empty string, is a finding, and the reader ignores that key and applies the default.
+- A run with no recorded trigger (an older read) is counted.
+- Not the [`ci`](#ci--deliberately-not-a-field) field that page refuses: this says which runs the
+  ship gate reads, never what CI is or how thorough it must be.
+- The one reading in tooling is `tools/lib/verify-runs.js` `parsePolicy`; the audit reports the
+  value (`--json`: `shipCiWorkflows`).
+
 ### `gate` — optional
 
 ```yaml
@@ -1606,6 +1637,7 @@ the shape that shows it. One writer at a time says nothing about who reads the r
 | `trust-humans` a non-empty list of GitHub logins when set → **finding** otherwise | a malformed list read as "nobody is human", so every human grant and ruling silently stops counting |
 | `live-env` = `none` when set → **finding** otherwise | a misspelled opt-out read as absent, so it silently does nothing |
 | `tree-reuse` = `off` when set → **finding** otherwise | the guard reads any value as off; an undefined value is not a declaration |
+| `ship-gate-workflows` / `ship-ignore-workflows` = a non-empty list of workflow names when set → **finding** otherwise | the reader ignores an invalid list, so the declaration does nothing |
 | `gate` a block with `smoke` + `authoritative` ∈ {`ci`,`local`} when set → **finding** otherwise; `ci` with no branch-push trigger → **warn** | a malformed block is read as absent, so it silently does nothing; a `ci` verdict that can never arrive leaves every reader on the local gate |
 | `holds` is a list of non-empty strings, each listed once, when set → **finding** otherwise | a scalar or malformed list silently read as "no holds declared", so triage reports held work ready |
 | `exposure` ∈ {`none`, `self`, `live`, `released`} when set | a misspelled value silently read as undeclared |
