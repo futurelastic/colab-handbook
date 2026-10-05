@@ -47,6 +47,7 @@ const ciCure = require('./lib/ci-cure');
 const ciVerdict = require('./lib/ci-verdict');
 const baseCiVerdict = require('./lib/base-ci-verdict');
 const treeGreen = require('./lib/tree-green');
+const verifyRuns = require('./lib/verify-runs');
 const ciWait = require('./lib/ci-wait'); // #495
 const staleBase = require('./lib/stale-base');
 const dirtyOwner = require('./lib/dirty-owner');
@@ -10422,10 +10423,13 @@ function trunkWorkflowFiles(repoAbs, sha) {
  */
 function readCiVerdict(repoAbs, gh, target, trunk) {
   if (!gh) return { run: null, final: true, verdict: { ok: false, class: SELF_CLEARING, detail: `gh not usable (${ghUnusableWhy(repoAbs)}) — cannot confirm CI` } };
-  let run = git.ghRunForSha(repoAbs, target);
+  // #503: only runs that VERIFY the code count — a post-CI release/deploy run at the same sha is set
+  // aside and named, never a red and never a reason to wait (tools/lib/verify-runs.js).
+  const readOpts = { verifying: verifyRuns.parsePolicy(projectDoc(repoAbs)) };
+  let run = git.ghRunForSha(repoAbs, target, undefined, undefined, readOpts);
   let via = target;
   if (run && run.status === 'none' && target !== trunk) {
-    run = git.ghRunForSha(repoAbs, trunk);
+    run = git.ghRunForSha(repoAbs, trunk, undefined, undefined, readOpts);
     via = `${trunk} (line "${target}" has no runs — ungated, advisory)`;
   }
   if (!run) return { run: null, final: true, verdict: { ok: false, class: SELF_CLEARING, detail: 'gh run list failed' } };
@@ -10435,7 +10439,7 @@ function readCiVerdict(repoAbs, gh, target, trunk) {
   // Re-read the same sha by commit (the read `release finalize` already trusts, #339) before
   // believing it. A failed re-read changes nothing: the branch read's `none` stands.
   if (run.status === 'none' && target === trunk) {
-    const byCommit = git.ghRunForCommitAnyRef(repoAbs, run.sha);
+    const byCommit = git.ghRunForCommitAnyRef(repoAbs, run.sha, undefined, readOpts);
     if (byCommit && byCommit.status !== 'none') {
       run = byCommit;
       via = `${trunk} (by commit — the branch-filtered read was empty)`;
@@ -10450,7 +10454,7 @@ function readCiVerdict(repoAbs, gh, target, trunk) {
     const fresh = ciVerdict.emptyReadVerdict(git.commitTimeMs(repoAbs, run.sha));
     if (fresh.fresh) {
       verdict = { ok: false, class: SELF_CLEARING,
-        detail: `no run yet for ${at} — committed ${fresh.minutes.toFixed(1)}m ago, inside the ${ciVerdict.EMPTY_READ_GRACE_MINUTES}m grace; retry later${excludedRunsNote(run)}` };
+        detail: `no run yet for ${at} — committed ${fresh.minutes.toFixed(1)}m ago, inside the ${ciVerdict.EMPTY_READ_GRACE_MINUTES}m grace; retry later${excludedRunsNote(run)}${verifyRuns.setAsideNote(run.setAside)}` };
     }
   }
   // #373: trunk's own run not there yet or still in flight (never a finished red) — a batch that landed
@@ -10521,7 +10525,7 @@ function treeGreenVerdict(repoAbs, run, verdict) {
  */
 function classifyCiRun(repoAbs, run, at) {
   const v = classifyCiRunRaw(repoAbs, run, at);
-  return { ...v, detail: v.detail + excludedRunsNote(run) + supersededRunsNote(run) };
+  return { ...v, detail: v.detail + excludedRunsNote(run) + supersededRunsNote(run) + verifyRuns.setAsideNote(run && run.setAside) };
 }
 
 /**
@@ -13648,6 +13652,13 @@ the same read (shipCiCheck's readCiVerdict): by branch, re-read by commit when e
 workflows the repo does not own dropped (#451), each workflow judged by its newest run (#461).
 Read-only: no claim, no label, no write.
 
+Only runs that VERIFY the code are judged (#503): push / pull_request / merge_group triggered.
+A run of any other trigger at the same sha — a workflow_run release (release-auto.yml), a
+scheduled finalize, a dispatch, a deploy — comes after the verdict and is set aside and named in
+the detail (--json: setAside). Override in .github/project.yml, by workflow name:
+  ship-gate-workflows: [CI]       exactly these workflows count, whatever their trigger
+  ship-ignore-workflows: [Deploy] set these aside too, even when push-triggered
+
 The first output word is one verdict:
   GREEN       every judged workflow's newest run at the sha succeeded — ship's row would pass
   RED         a judged run completed and did not succeed — trunk is red
@@ -13711,7 +13722,9 @@ function cmdTrunkCi(argv) {
     const sha = r.run ? r.run.sha || null : null;
     let detail = r.verdict.detail;
     if (verdict === 'UNREADABLE' && gh && !git.ghState().ok) detail += ` (${ghUnusableWhy(repoAbs)})`;
-    out = { verdict, trunk, sha, ok: r.verdict.ok, class: r.verdict.class || null, detail, ...(r.verdict.treeGreen ? { cited: r.verdict.treeGreen } : {}) };
+    out = { verdict, trunk, sha, ok: r.verdict.ok, class: r.verdict.class || null, detail,
+      ...(r.verdict.treeGreen ? { cited: r.verdict.treeGreen } : {}),
+      ...(r.run && Array.isArray(r.run.setAside) && r.run.setAside.length ? { setAside: r.run.setAside } : {}) };
     if (key && verdict !== 'UNREADABLE' && sha === headSha) cache.put(key, out);
   }
   if (opts.json) {
@@ -13775,8 +13788,9 @@ Wait for CI and exit with its outcome. The ONE way to wait for a run: never hand
 
   <run-id>        wait for one workflow run (actions/runs/<id>)
   --sha <sha>     wait for EVERY repo-owned workflow at the sha (the verdict colab ship reads:
-                  newest run per workflow, dynamic workflows dropped — #451/#461); a sha with no
-                  run yet counts as pending until the deadline
+                  newest run per workflow, dynamic workflows dropped — #451/#461; only runs that
+                  verify the code, so a post-CI release/deploy run is set aside — #503); a sha
+                  with no run yet counts as pending until the deadline
   --branch <b>    narrow --sha to runs on that branch
   --timeout <d>   deadline: 45m (default), 90s, 1h, or seconds
 
@@ -13824,6 +13838,7 @@ function cmdCiWait(argv) {
     return ciWait.EXIT.ALREADY_WAITING;
   }
 
+  const verifyPolicy = verifyRuns.parsePolicy(projectDoc(repoAbs));
   const poll = (etag) => {
     const r = git.ghApiConditional(repoAbs, apiPath, etag);
     if (r.kind !== 'ok') return r;
@@ -13833,7 +13848,9 @@ function cmdCiWait(argv) {
     } else {
       const rows = Array.isArray(r.json.workflow_runs) ? r.json.workflow_runs.map(ciWait.restRow).filter((x) => x.headSha === opts.sha) : null;
       if (!rows) return { kind: 'error', status: r.status, detail: 'response has no workflow_runs' };
-      summary = git.summarizeRunsForCommit(rows, opts.sha);
+      // #503: the same verifying-runs policy ship reads — a wait on trunk's head ends when the CI
+      // that verifies the code ends, not when the post-CI release run does.
+      summary = git.summarizeRunsForCommit(rows, opts.sha, { verifying: verifyPolicy });
       const pick = rows.find((x) => x.databaseId === summary.databaseId);
       summary = { ...summary, url: pick ? pick.url : null };
     }
@@ -13856,11 +13873,12 @@ function cmdCiWait(argv) {
     outcome: res.outcome, exit: code, target, polls: res.polls, notModified: res.notModified,
     waitedSec: Math.round(res.waitedMs / 1000), detail: res.detail || null,
     status: s.status || null, conclusion: s.conclusion || null, url: s.url || null,
+    ...(Array.isArray(s.setAside) && s.setAside.length ? { setAside: s.setAside } : {}),
   };
   if (opts.json) print(JSON.stringify(out, null, 2));
   else {
     print(`${res.outcome} ${target} — waited ${ciWait.fmtDuration(res.waitedMs)}, ${res.polls} poll(s), ${res.notModified} of them 304` +
-      `${s.status ? ` · ${s.status}${s.conclusion ? `/${s.conclusion}` : ''}` : ''}${s.url ? ` · ${s.url}` : ''}${res.detail ? ` — ${res.detail}` : ''}`);
+      `${s.status ? ` · ${s.status}${s.conclusion ? `/${s.conclusion}` : ''}` : ''}${s.url ? ` · ${s.url}` : ''}${res.detail ? ` — ${res.detail}` : ''}${verifyRuns.setAsideNote(s.setAside)}`);
   }
   return code;
 }

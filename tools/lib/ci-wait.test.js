@@ -204,6 +204,22 @@ test('CLI: --sha reads every workflow at the sha — one red sibling is RED (exi
   fs.rmSync(fx.root, { recursive: true, force: true });
 });
 
+test('#503 CLI: --sha ends GREEN when the verifying CI is green and a workflow_run release is still running', () => {
+  const sha = 'b'.repeat(40);
+  const runs = { workflow_runs: [
+    { id: 2, head_sha: sha, status: 'in_progress', conclusion: null, name: 'Release (auto)', event: 'workflow_run', html_url: 'u2' },
+    { id: 1, head_sha: sha, status: 'completed', conclusion: 'success', name: 'CI', event: 'push', html_url: 'u1' },
+  ] };
+  const fx = fixture([{ out: http('200 OK', JSON.stringify(runs)), code: 0 }]);
+  const r = spawnSync('node', [COLAB, 'ci-wait', '--sha', sha, '--branch', 'main', '--repo', fx.work, '--json'], { encoding: 'utf8', env: fx.env });
+  assert.strictEqual(r.status, 0, r.stdout + r.stderr);
+  const body = JSON.parse(r.stdout);
+  assert.strictEqual(body.outcome, 'GREEN');
+  assert.strictEqual(body.polls, 1, 'no wait on the release lane');
+  assert.deepStrictEqual(body.setAside.map((x) => x.workflowName), ['Release (auto)']);
+  fs.rmSync(fx.root, { recursive: true, force: true });
+});
+
 test('CLI: usage errors exit 2', () => {
   const fx = fixture([{ out: '', code: 1 }]);
   for (const args of [[], ['x1'], ['9', '--sha', 'abc'], ['--branch', 'main'], ['9', '--timeout', 'soon']]) {
