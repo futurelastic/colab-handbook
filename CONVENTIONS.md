@@ -3153,7 +3153,12 @@ sha. Four properties hold it together:
 - **R, round-trip.** The live CI round-trip passed on that HEAD. Ship re-reads CI itself
   and never trusts the recorded `ci-roundtrip:` value. The job is found by the name
   prefix `Migration round-trip` (the legs of `templates/ci-laravel.yml`). Every leg
-  needs a run that completed with success and ran at least one step. A repo without that
+  needs a run that completed with success and ran at least one step. The template's job
+  rolls back to the oldest migration the branch **adds or modifies** (#507), so a branch
+  that only repairs an existing `down()` gets a round-trip that actually runs it, and the
+  run's log names every file it exercised. A copy older than that counts added files only:
+  its green says nothing about a modified migration, so re-sync it before a reviewer grant
+  relies on it. A repo without that
   job cannot pass R, and a branch that edits `.github/workflows/` cannot pass it either,
   because a branch must not rewrite the job that grades it. Those branches ship on a
   human grant.
