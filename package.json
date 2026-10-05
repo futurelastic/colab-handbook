@@ -10,6 +10,7 @@
     "tools/colab",
     "tools/lib/*.js",
     "!tools/lib/*.test.js",
+    "tools/lib/tracker-scenarios.json",
     "tools/lib/codec/*.js",
     "tools/lib/codec/*.d.ts",
     "tools/lib/codec/samples.json",

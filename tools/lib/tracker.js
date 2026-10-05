@@ -4,8 +4,10 @@
  * once, so an implementation other than GitHub (and #501's in-memory fake) has a method set to
  * satisfy instead of a scatter of `gh` argv to imitate.
  *
- * The only implementation today is tools/lib/tracker-github.js. Semantics every implementation
- * keeps:
+ * The only real implementation today is tools/lib/tracker-github.js; tools/lib/tracker-fake.js is an
+ * in-memory one (#501). What every implementation must do is specified as data, in
+ * tools/lib/tracker-scenarios.json, and tools/lib/tracker-contract.test.js runs those scenarios
+ * against both. Semantics every implementation keeps:
  *   - synchronous — the CLI is spawnSync throughout;
  *   - bound to one repo — `forRepo(repoAbs)` fixes it, so no method takes a repo argument;
  *   - never throws on an environment failure (no tracker binary, no remote, offline): results are
@@ -13,7 +15,8 @@
  *     "could not read" and never "none"; the read helpers keep their existing null-on-failure
  *     contract.
  *
- * Deliberately NOT in the contract yet (a question for #501, not this module): the CI-run
+ * Deliberately NOT in the contract yet (#501 left it so: no scenario needs them, and each would
+ * pin a GitHub-only shape into a spec other trackers must satisfy): the CI-run
  * summarisers and REST probes, label create/delete/edit, raw `issue edit` flags and raw `api`
  * access. They still reach `gh` only through the adapter's `exec`.
  */
@@ -46,7 +49,7 @@ function assertImplements(impl, label = 'tracker') {
   return impl;
 }
 
-const KINDS = { github: () => require('./tracker-github') };
+const KINDS = { github: () => require('./tracker-github'), fake: () => require('./tracker-fake') };
 const _checked = new Set();
 
 /** The tracker for one repo. `kind` defaults to the one implementation, `github`. */

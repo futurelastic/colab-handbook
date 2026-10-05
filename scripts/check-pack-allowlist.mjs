@@ -29,6 +29,9 @@ export const ALLOWED = [
   /^LICENSE$/,
   /^tools\/colab$/,
   /^tools\/lib\/[A-Za-z0-9._-]+\.js$/,
+  // The tracker contract scenarios (#501): the language-neutral spec every adapter runs. Named
+  // exactly — the GitHub transcripts beside it (tracker-scenarios.github.json) are test-only.
+  /^tools\/lib\/tracker-scenarios\.json$/,
   // The tracker codec (#497): its modules, their types, and the golden samples that specify it.
   /^tools\/lib\/codec\/[A-Za-z0-9._-]+\.(js|d\.ts)$/,
   /^tools\/lib\/codec\/samples\.json$/,

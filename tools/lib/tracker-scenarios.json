@@ -1,0 +1,206 @@
+{
+  "$comment": "Tracker contract scenarios (#501) — the language-neutral spec of what an implementation of the tracker contract (tools/lib/tracker.js METHODS) must do. Each scenario: seed a tracker from `given`, run `steps` in order against that ONE tracker (state carries from step to step), and compare each step's return value to `expect`. This repo runs every scenario against its in-memory fake (tools/lib/tracker-fake.js) and against its GitHub adapter (tools/lib/tracker-github.js, gh replies replayed from recorded transcripts) — tools/lib/tracker-contract.test.js. A consumer with its own adapter, in any language, runs the same file with its own runner; see `match` for the comparison rules and `given` for the seed shape.",
+  "version": 1,
+  "match": {
+    "$comment": "How `expect` is compared with a step's actual return value. Partial by design: an implementation may return MORE than a scenario pins, never less or different.",
+    "null": "`expect: null` requires the value to be exactly null.",
+    "scalar": "a string, number or boolean must be strictly equal.",
+    "object": "every key in `expect` must be present in the actual object and match recursively; extra actual keys are ignored.",
+    "array": "the actual array must have the same length, and element i must match expect[i] recursively (order matters).",
+    "$re": "an object {\"$re\": \"<pattern>\"} matches a string the regular expression (ECMAScript syntax, unanchored) finds a match in.",
+    "$type": "an object {\"$type\": \"string\" | \"number\" | \"boolean\" | \"array\" | \"object\"} matches any value of that type (array is not object)."
+  },
+  "given": {
+    "$comment": "The seed. Every key is optional. Logins and label names are plain strings here; how an implementation stores them is its own business.",
+    "login": "the account the tracker is authenticated as (what currentLogin returns, and the author of anything this tracker writes).",
+    "offline": "true = the tracker cannot be reached: reads return their `could not read` value (null, or `data: null`), writes return ok:false. Never a throw.",
+    "labels": "the label names defined on the repo, in the order labelList returns them.",
+    "issues": "[{number, title, body, state: OPEN|CLOSED, stateReason, labels: [name], assignees: [login], comments: [{author, body}], events: [{event: \"labeled\", label, actor}]}] — `events` is the label timeline claimHolder reads; the claimer is the actor of the LATEST labeled in-progress event.",
+    "prs": "[{number, head, base, title, body, state: OPEN|CLOSED|MERGED, author}] — issues and pull requests share ONE number sequence, as on GitHub.",
+    "runs": "[{headBranch, headSha, status, conclusion, event, workflowName, createdAt}] — CI runs; runList returns them newest first by createdAt.",
+    "releases": "[{tag, prerelease}]"
+  },
+  "scenarios": [
+    {
+      "id": "identity",
+      "description": "An available tracker reports itself available and names the account it acts as.",
+      "given": { "login": "alice" },
+      "steps": [
+        { "call": "state", "args": [], "expect": { "ok": true, "reason": null } },
+        { "call": "currentLogin", "args": [], "expect": "alice" }
+      ]
+    },
+    {
+      "id": "issue-view",
+      "description": "issueView returns the requested fields of an issue, labels and assignees as objects; an issue that does not exist reads as null, never as an empty object.",
+      "given": {
+        "login": "alice",
+        "issues": [{ "number": 7, "title": "fix: the importer drops rows", "body": "Repro attached.", "state": "OPEN", "labels": ["bug", "in-progress"], "assignees": ["bob"] }]
+      },
+      "steps": [
+        { "call": "issueView", "args": [7, ["number", "title", "state", "labels", "assignees"]],
+          "expect": { "number": 7, "title": "fix: the importer drops rows", "state": "OPEN", "labels": [{ "name": "bug" }, { "name": "in-progress" }], "assignees": [{ "login": "bob" }] } },
+        { "call": "issueView", "args": [99, ["number"]], "expect": null }
+      ]
+    },
+    {
+      "id": "issue-create",
+      "description": "issueCreate takes the next number in the sequence issues and pull requests share, returns it with the issue's URL, and the new issue is open with nothing on it.",
+      "given": {
+        "login": "alice",
+        "issues": [{ "number": 7, "title": "an older issue", "state": "OPEN" }],
+        "prs": [{ "number": 8, "head": "fix/older-7", "base": "main", "title": "fix: older", "state": "MERGED", "author": "bob" }]
+      },
+      "steps": [
+        { "call": "issueCreate", "args": [{ "title": "feat: export as CSV", "body": "## Goal\nExport." }],
+          "expect": { "ok": true, "number": 9, "url": { "$re": "/issues/9$" } } },
+        { "call": "issueView", "args": [9, ["title", "body", "state", "labels", "assignees", "comments"]],
+          "expect": { "title": "feat: export as CSV", "body": "## Goal\nExport.", "state": "OPEN", "labels": [], "assignees": [], "comments": [] } }
+      ]
+    },
+    {
+      "id": "issue-comment",
+      "description": "A comment lands on the issue, authored by the tracker's account; commenting on an issue that does not exist fails as data.",
+      "given": { "login": "alice", "issues": [{ "number": 3, "title": "t", "state": "OPEN" }] },
+      "steps": [
+        { "call": "issueComment", "args": [3, "Progress: the parser is done."], "expect": { "ok": true } },
+        { "call": "issueView", "args": [3, ["comments"]],
+          "expect": { "comments": [{ "author": { "login": "alice" }, "body": "Progress: the parser is done." }] } },
+        { "call": "issueComment", "args": [404, "nobody home"], "expect": { "ok": false } }
+      ]
+    },
+    {
+      "id": "issue-close-reasons",
+      "description": "Closing with no reason records COMPLETED; closing with reason `not planned` records NOT_PLANNED.",
+      "given": { "login": "alice", "issues": [{ "number": 4, "title": "done", "state": "OPEN" }, { "number": 5, "title": "dropped", "state": "OPEN" }] },
+      "steps": [
+        { "call": "issueClose", "args": [4], "expect": { "ok": true } },
+        { "call": "issueClose", "args": [5, { "reason": "not planned" }], "expect": { "ok": true } },
+        { "call": "issueView", "args": [4, ["state", "stateReason"]], "expect": { "state": "CLOSED", "stateReason": "COMPLETED" } },
+        { "call": "issueView", "args": [5, ["state", "stateReason"]], "expect": { "state": "CLOSED", "stateReason": "NOT_PLANNED" } }
+      ]
+    },
+    {
+      "id": "claim-holder",
+      "description": "The claimer is the actor of the LATEST labeled-in-progress event, not the first; no event means no claimer; an issue that cannot be read gives null for both, never `nobody`.",
+      "given": {
+        "login": "alice",
+        "issues": [
+          { "number": 11, "title": "re-claimed", "state": "OPEN", "labels": ["in-progress"], "assignees": ["bob"],
+            "events": [{ "event": "labeled", "label": "in-progress", "actor": "carol" }, { "event": "labeled", "label": "in-progress", "actor": "bob" }] },
+          { "number": 12, "title": "never claimed", "state": "OPEN" }
+        ]
+      },
+      "steps": [
+        { "call": "claimHolder", "args": [11], "expect": { "assignees": ["bob"], "claimer": "bob" } },
+        { "call": "claimHolder", "args": [12], "expect": { "assignees": [], "claimer": null } },
+        { "call": "claimHolder", "args": [404], "expect": { "assignees": null, "claimer": null } }
+      ]
+    },
+    {
+      "id": "release-another-accounts-claim",
+      "description": "A claim taken under one account and released under another drops BOTH halves: the in-progress label and the claimer's assignee, and says whose assignee it removed.",
+      "given": {
+        "login": "alice",
+        "issues": [{ "number": 20, "title": "claimed by bob", "state": "OPEN", "labels": ["in-progress", "bug"], "assignees": ["bob"],
+          "events": [{ "event": "labeled", "label": "in-progress", "actor": "bob" }] }]
+      },
+      "steps": [
+        { "call": "issueRelease", "args": [20], "expect": { "ok": true, "caller": "alice", "others": ["bob"], "note": "" } },
+        { "call": "issueView", "args": [20, ["labels", "assignees"]], "expect": { "labels": [{ "name": "bug" }], "assignees": [] } }
+      ]
+    },
+    {
+      "id": "release-self-only",
+      "description": "selfOnly releases only the caller's half: the label goes, the latest labeler keeps its assignee (the yield path, where that labeler may be the winner of a race).",
+      "given": {
+        "login": "alice",
+        "issues": [{ "number": 21, "title": "raced", "state": "OPEN", "labels": ["in-progress"], "assignees": ["alice", "bob"],
+          "events": [{ "event": "labeled", "label": "in-progress", "actor": "bob" }] }]
+      },
+      "steps": [
+        { "call": "issueRelease", "args": [21, { "selfOnly": true }], "expect": { "ok": true, "caller": "alice", "others": [] } },
+        { "call": "issueView", "args": [21, ["labels", "assignees"]], "expect": { "labels": [], "assignees": [{ "login": "bob" }] } }
+      ]
+    },
+    {
+      "id": "labels-and-issue-list",
+      "description": "labelList returns the repo's label names; issueListAll returns every issue, open and closed, newest first, with the requested fields.",
+      "given": {
+        "login": "alice",
+        "labels": ["bug", "in-progress", "needs-plan"],
+        "issues": [{ "number": 1, "title": "open one", "state": "OPEN", "labels": ["bug"] }, { "number": 2, "title": "closed one", "state": "CLOSED", "stateReason": "COMPLETED" }]
+      },
+      "steps": [
+        { "call": "labelList", "args": [], "expect": ["bug", "in-progress", "needs-plan"] },
+        { "call": "issueListAll", "args": [{ "limit": 100, "fields": ["number", "state", "labels"] }],
+          "expect": { "ok": true, "data": [{ "number": 2, "state": "CLOSED", "labels": [] }, { "number": 1, "state": "OPEN", "labels": [{ "name": "bug" }] }] } }
+      ]
+    },
+    {
+      "id": "pull-request-lifecycle",
+      "description": "No open PR for a branch reads as {pr: null}; a created PR takes the shared next number, is found by its branch, can be retitled, and once closed is no longer the branch's open PR while prList with state all still lists it.",
+      "given": { "login": "alice", "issues": [{ "number": 30, "title": "feat: x", "state": "OPEN" }] },
+      "steps": [
+        { "call": "prForBranch", "args": ["feat/x-30"], "expect": { "pr": null } },
+        { "call": "prCreate", "args": [{ "base": "main", "head": "feat/x-30", "title": "feat: x", "body": "Closes #30" }],
+          "expect": { "ok": true, "url": { "$re": "/pull/31$" } } },
+        { "call": "prForBranch", "args": ["feat/x-30"],
+          "expect": { "pr": { "number": 31, "state": "OPEN", "author": { "login": "alice" }, "reviews": [] } } },
+        { "call": "prEdit", "args": [31, { "title": "feat: x, retitled", "body": "Closes #30" }], "expect": { "ok": true } },
+        { "call": "prList", "args": [{ "base": "main", "head": "feat/x-30", "state": "all", "limit": 50, "fields": ["number", "state", "title"] }],
+          "expect": { "ok": true, "data": [{ "number": 31, "state": "OPEN", "title": "feat: x, retitled" }] } },
+        { "call": "prClose", "args": [31, "Landed by squash on main."], "expect": { "ok": true } },
+        { "call": "prForBranch", "args": ["feat/x-30"], "expect": { "pr": null } },
+        { "call": "prList", "args": [{ "base": "main", "head": "feat/x-30", "state": "all", "limit": 50, "fields": ["number", "state"] }],
+          "expect": { "ok": true, "data": [{ "number": 31, "state": "CLOSED" }] } }
+      ]
+    },
+    {
+      "id": "ci-runs",
+      "description": "runList returns one branch's runs newest first, honours the limit, and narrows to one commit when asked.",
+      "given": {
+        "login": "alice",
+        "runs": [
+          { "headBranch": "main", "headSha": "aaa1111", "status": "completed", "conclusion": "success", "event": "push", "workflowName": "CI", "createdAt": "2026-10-01T10:00:00Z" },
+          { "headBranch": "main", "headSha": "bbb2222", "status": "in_progress", "conclusion": "", "event": "push", "workflowName": "CI", "createdAt": "2026-10-01T11:00:00Z" },
+          { "headBranch": "feat/y-40", "headSha": "ccc3333", "status": "completed", "conclusion": "failure", "event": "push", "workflowName": "CI", "createdAt": "2026-10-01T12:00:00Z" }
+        ]
+      },
+      "steps": [
+        { "call": "runList", "args": [{ "branch": "main", "limit": 10, "fields": ["headSha", "status", "conclusion"] }],
+          "expect": { "ok": true, "data": [{ "headSha": "bbb2222", "status": "in_progress", "conclusion": "" }, { "headSha": "aaa1111", "status": "completed", "conclusion": "success" }] } },
+        { "call": "runList", "args": [{ "branch": "main", "limit": 1, "fields": ["headSha"] }],
+          "expect": { "ok": true, "data": [{ "headSha": "bbb2222" }] } },
+        { "call": "runList", "args": [{ "branch": "main", "commit": "aaa1111", "limit": 10, "fields": ["headSha", "conclusion"] }],
+          "expect": { "ok": true, "data": [{ "headSha": "aaa1111", "conclusion": "success" }] } }
+      ]
+    },
+    {
+      "id": "releases",
+      "description": "A release that does not exist reads as a failed view; once created it reads back; creating the same tag twice fails as data.",
+      "given": { "login": "alice", "releases": [{ "tag": "v1.0.0", "prerelease": false }] },
+      "steps": [
+        { "call": "releaseView", "args": ["v1.1.0-rc.1"], "expect": { "ok": false } },
+        { "call": "releaseCreate", "args": ["v1.1.0-rc.1", { "notesFile": "notes.md" }], "expect": { "ok": true } },
+        { "call": "releaseView", "args": ["v1.1.0-rc.1"], "expect": { "ok": true } },
+        { "call": "releaseView", "args": ["v1.0.0"], "expect": { "ok": true } },
+        { "call": "releaseCreate", "args": ["v1.1.0-rc.1", { "notesFile": "notes.md" }], "expect": { "ok": false } }
+      ]
+    },
+    {
+      "id": "offline",
+      "description": "An unreachable tracker never throws: every read is `could not read` (null, data: null, or an error), every write is ok:false — and none of them is mistaken for `none`.",
+      "given": { "login": "alice", "offline": true, "issues": [{ "number": 1, "title": "exists, unreachable", "state": "OPEN", "labels": ["bug"] }] },
+      "steps": [
+        { "call": "issueView", "args": [1, ["number"]], "expect": null },
+        { "call": "issueListAll", "args": [{ "limit": 10, "fields": ["number"] }], "expect": { "ok": false, "data": null } },
+        { "call": "labelList", "args": [], "expect": null },
+        { "call": "claimHolder", "args": [1], "expect": { "assignees": null, "claimer": null } },
+        { "call": "issueComment", "args": [1, "lost"], "expect": { "ok": false } },
+        { "call": "runList", "args": [{ "branch": "main", "limit": 5, "fields": ["headSha"] }], "expect": { "ok": false, "data": null } },
+        { "call": "prForBranch", "args": ["feat/x-1"], "expect": { "error": { "$type": "string" } } }
+      ]
+    }
+  ]
+}
