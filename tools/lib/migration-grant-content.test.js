@@ -20,6 +20,7 @@ function repo() {
     env: { ...process.env, GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@x', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@x' } }).trim();
   const write = (f, body) => { fs.mkdirSync(path.dirname(path.join(dir, f)), { recursive: true }); fs.writeFileSync(path.join(dir, f), body); };
   g('init', '-q', '-b', 'main');
+  g('config', 'core.hooksPath', path.join(dir, '.nohooks'));
   write('README.md', 'x\n');
   write('db/migrations/0001_init.sql', 'create table a (id int);\n');
   g('add', '-A'); g('commit', '-q', '-m', 'init');
