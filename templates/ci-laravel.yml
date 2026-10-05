@@ -119,28 +119,76 @@ jobs:
   # Why not simply `if: !github.event.created` on every job: a run whose jobs are ALL
   # skipped concludes `skipped`, which `colab ship` reads as not-green (CONVENTIONS.md
   # §4, "Branch CI"). This job is the one that ends green.
+  #
+  # Already tested at this TREE? (#493) — the squash merge.
+  # A ship squash-merges a branch whose green run already contained the current base, so
+  # the trunk commit's TREE is byte-identical to the tree that branch run passed — only the
+  # sha is new. On a non-creating push to trunk this job therefore also asks: does THIS
+  # workflow have a green `push` run, on another ref of this repo, whose commit has THIS
+  # exact tree? It confirms the tree through the git object, never only the run listing.
+  # Yes → the suite is skipped and the run cites the run it relied on (a
+  # `tree-already-green` notice that `colab ship` / `colab trunk-ci` read back). Equal
+  # trees cover every committed byte, workflows and lockfiles included — NOT runner images,
+  # unpinned downloads, secrets or `github.ref`-conditional steps; a repo whose suite
+  # depends on those declares `tree-reuse: off` in .github/project.yml. Trunk only (the
+  # descriptor's `trunk:`, read at this sha), never a release branch, never a dispatch;
+  # any doubt (no descriptor, opt-out, an API error, no exact match) runs the full suite.
+  # Never put a trunk-only job (publish, deploy, release) behind this gate.
   dedupe:
-    name: Already tested at this sha?
-    if: github.event_name == 'push' && github.event.created
+    name: Already tested at this sha or tree?
+    # EDIT: the trunk refs here mirror `concurrency`'s list above (#493).
+    if: github.event_name == 'push' && (github.event.created || github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev')
     runs-on: ubuntu-latest # EDIT: the same label as the jobs below; it needs `gh` (GitHub-hosted images have it).
     permissions:
       actions: read
+      contents: read
     outputs:
       tested: ${{ steps.check.outputs.tested }}
+      cited: ${{ steps.check.outputs.cited }}
     steps:
-      - name: Look for a green run of this workflow at this sha
+      - name: Look for a green run of this workflow at this sha or tree
         id: check
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
           RUN_ID: ${{ github.run_id }}
           SHA: ${{ github.sha }}
+          CREATED: ${{ github.event.created }}
+          REF_NAME: ${{ github.ref_name }}
         run: |
           tested=false
+          cited=
           if ! command -v gh >/dev/null 2>&1; then
             echo "::notice::gh is not installed on this runner — running the full suite (#418)."
           elif ! WFID="$(gh api "repos/$REPO/actions/runs/$RUN_ID" --jq .workflow_id 2>/dev/null)" || [ -z "$WFID" ]; then
             echo "::notice::Could not read this run's workflow id — running the full suite (#418)."
+          elif [ "${CREATED:-}" = "false" ]; then
+            # A non-creating push: trunk tree mode (#493). Every branch below but one runs the suite.
+            if ! DESC="$(gh api "repos/$REPO/contents/.github/project.yml?ref=$SHA" -H 'Accept: application/vnd.github.raw' 2>/dev/null)" || [ -z "$DESC" ]; then
+              echo "::notice::Could not read .github/project.yml at $SHA — running the full suite (#493)."
+            elif grep -Eq '^tree-reuse[[:space:]]*:' <<< "$DESC"; then
+              echo "::notice::tree-reuse is declared in .github/project.yml — running the full suite (#493)."
+            elif [ "$(printf '%s\n' "$DESC" | sed -nE "s/^trunk:[[:space:]]*[\"']?([A-Za-z0-9._/-]+).*/\\1/p" | head -n 1)" != "$REF_NAME" ]; then
+              echo "::notice::$REF_NAME is not this repo's trunk — running the full suite (#493)."
+            elif ! OURS="$(gh api "repos/$REPO/git/commits/$SHA" --jq .tree.sha 2>/dev/null)" || [ -z "$OURS" ]; then
+              echo "::notice::Could not read the tree of $SHA — running the full suite (#493)."
+            elif ! CAND="$(gh api "repos/$REPO/actions/workflows/$WFID/runs?event=push&status=success&per_page=50" \
+                   --jq "first(.workflow_runs[] | select(.id != $RUN_ID and .head_branch != \"$REF_NAME\" and .head_repository.full_name == \"$REPO\" and .head_commit.tree_id == \"$OURS\") | \"\\(.head_sha) \\(.html_url) \\(.head_branch)\") // empty" 2>/dev/null)"; then
+              echo "::notice::Could not list this workflow's green runs — running the full suite (#493)."
+            elif [ -z "$CAND" ]; then
+              echo "No green run of this workflow on another ref has tree $OURS — running the full suite."
+            else
+              read -r CSHA URL BR <<< "$CAND"
+              if ! CTREE="$(gh api "repos/$REPO/git/commits/$CSHA" --jq .tree.sha 2>/dev/null)" || [ "$CTREE" != "$OURS" ]; then
+                echo "::notice::Could not confirm the tree of $CSHA — running the full suite (#493)."
+              else
+                tested=true
+                cited="$URL"
+                echo "::notice title=tree-already-green::$URL tree=$OURS head=$CSHA branch=$BR"
+                echo "Tree $OURS already passed this workflow at $CSHA on $BR ($URL) — skipping the suite (#493)."
+                echo "Already tested: tree \`$OURS\` passed this workflow on \`$BR\` — [the run relied on]($URL); suite skipped (#493)." >> "$GITHUB_STEP_SUMMARY"
+              fi
+            fi
           elif ! N="$(gh api "repos/$REPO/actions/workflows/$WFID/runs?head_sha=$SHA&status=success&per_page=20" \
                  --jq "[.workflow_runs[] | select(.id != $RUN_ID and .event != \"pull_request\")] | length" 2>/dev/null)"; then
             echo "::notice::Could not list this workflow's runs at $SHA — running the full suite (#418)."
@@ -152,6 +200,7 @@ jobs:
             echo "No green run of this workflow at $SHA yet — running the full suite."
           fi
           echo "tested=$tested" >> "$GITHUB_OUTPUT"
+          [ -z "$cited" ] || echo "cited=$cited" >> "$GITHUB_OUTPUT"
 
   gitleaks:
     name: Secret scan (gitleaks)

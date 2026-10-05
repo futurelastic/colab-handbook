@@ -107,6 +107,8 @@ const migrationGrant = require("../tools/lib/migration-grant.js");
 const trustHumansLib = require("../tools/lib/trust-humans.js");
 // #403: the `live-env:` key — read through the same module `colab gate-hermetic` uses.
 const hermeticLib = require("../tools/lib/hermetic.js");
+// #493: the `tree-reuse:` opt-out — read through the same module `colab ship` reads citations with.
+const treeGreenLib = require("../tools/lib/tree-green.js");
 // #410: the optional `gate:` block — read through the same module the skills name.
 const gateLib = require("../tools/lib/gate.js");
 // #417: CLAUDE.md as a thin shell over AGENTS.md — the @-import resolver and the tool-block table,
@@ -1348,6 +1350,17 @@ function auditRepo(target, ctx) {
       const le = hermeticLib.parseLiveEnv(cfg);
       info.liveEnv = le.declared ? le.value : null;
       if (!le.valid) fail(le.reason);
+    }
+
+    // ---- tree-reuse (#493) ----------------------------------------------------
+    // `tree-reuse: off` makes the CI templates' guard run trunk's full suite even when a green run
+    // of the same workflow already passed an identical tree. tools/lib/tree-green.js parseTreeReuse
+    // is the one reading. An invalid value fails: the guard reads ANY tree-reuse line as off (the
+    // stricter direction), so the repo gets the full suite — but a value nobody defined is not an answer.
+    {
+      const tr = treeGreenLib.parseTreeReuse(cfg);
+      info.treeReuse = tr.declared ? tr.value : null;
+      if (!tr.valid) fail(tr.reason);
     }
 
     // ---- gate (#410) ----------------------------------------------------------

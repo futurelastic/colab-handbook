@@ -1382,6 +1382,30 @@ this key existed.
 - The one reading is `tools/lib/hermetic.js` `parseLiveEnv`; the audit reports the value
   (`--json`: `liveEnv`).
 
+### `tree-reuse` — optional
+
+```yaml
+tree-reuse: off     # absent = trunk may skip its suite on a tree a green branch run already passed
+```
+
+Turns off the trunk half of the CI templates' `dedupe` guard (#493). Without it, a push to trunk
+whose tree is byte-identical to the tree of a green `push` run of the same workflow on another
+ref of this repo skips the suite and cites that run — a squash merge lands exactly the tree its
+branch run passed, so re-running it adds no information and holds runners the branches need.
+**Absent means reuse is on.**
+
+- **Declare `off` when trunk's run proves something a branch run cannot**: the suite reads secrets
+  or variables only trunk gets, steps branch on `github.ref`, the runner image or a toolchain
+  download is unpinned, or a trunk run is itself the deliverable someone audits.
+- **`off` is the only value.** Anything else is a finding. The guard reads *any* `tree-reuse:`
+  line as off — the stricter direction, so the full suite runs — but a value nobody defined is
+  not a declaration anyone can trust.
+- **Read at the pushed sha.** The guard fetches `.github/project.yml` at the trunk commit it is
+  judging, so the declaration that counts is the one that landed with that commit.
+- Trunk-only jobs (publish, deploy, release) are never gated by the guard, whatever this says.
+- The one reading in tooling is `tools/lib/tree-green.js` `parseTreeReuse`; the audit reports the
+  value (`--json`: `treeReuse`).
+
 ### `gate` — optional
 
 ```yaml
@@ -1581,6 +1605,7 @@ the shape that shows it. One writer at a time says nothing about who reads the r
 | `migration-grant` ∈ {`human`, `reviewer`} when set → **finding** otherwise | a misspelled policy silently read as `human` |
 | `trust-humans` a non-empty list of GitHub logins when set → **finding** otherwise | a malformed list read as "nobody is human", so every human grant and ruling silently stops counting |
 | `live-env` = `none` when set → **finding** otherwise | a misspelled opt-out read as absent, so it silently does nothing |
+| `tree-reuse` = `off` when set → **finding** otherwise | the guard reads any value as off; an undefined value is not a declaration |
 | `gate` a block with `smoke` + `authoritative` ∈ {`ci`,`local`} when set → **finding** otherwise; `ci` with no branch-push trigger → **warn** | a malformed block is read as absent, so it silently does nothing; a `ci` verdict that can never arrive leaves every reader on the local gate |
 | `holds` is a list of non-empty strings, each listed once, when set → **finding** otherwise | a scalar or malformed list silently read as "no holds declared", so triage reports held work ready |
 | `exposure` ∈ {`none`, `self`, `live`, `released`} when set | a misspelled value silently read as undeclared |

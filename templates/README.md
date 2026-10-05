@@ -54,6 +54,27 @@ Two things to keep in a copy:
   `migrations` job checks `needs.build.result == 'success'` explicitly. Add the same pair of
   conditions to any job you add.
 
+### The same job on trunk — why a squash merge's run skips the suite (#493)
+
+The `dedupe` job also runs on every push to a trunk ref named in `concurrency` (`main`, `dev`).
+There it asks a different question, because a squash merge lands a **new sha** whose **tree**
+is byte-identical to the tree its branch run passed: does this workflow have a green `push` run,
+on another ref of this repo, whose commit has this exact tree? It reads `.github/project.yml` at
+the pushed sha and acts only when the ref is that file's `trunk:` and no `tree-reuse:` line is
+present. It confirms the candidate's tree through the git object, then skips the suite and
+leaves a `tree-already-green` notice naming the run. `colab ship` and `colab trunk-ci` read that
+notice back and print the run they relied on. Three things to keep in a copy:
+
+- **It needs `contents: read`** on top of `actions: read`, to read the descriptor and the
+  commit objects.
+- **The trunk refs in its `if:` mirror `concurrency`'s list.** On a repo whose trunk has another
+  name, edit both. Until you do, the guard simply never fires on trunk — nothing breaks.
+- **Never put a trunk-only job behind it.** Publish, deploy and release jobs must run whatever
+  the guard says. Give them their own `if:` that does not read `needs.dedupe`.
+
+Opt out with `tree-reuse: off` (`project.schema.md`) when trunk's run proves something a branch
+run cannot: secrets only trunk gets, `github.ref`-conditional steps, unpinned runner images.
+
 ### Migration round-trip — what the Laravel job proves, and what it cannot
 
 `ci-laravel.yml`'s `migrations` job runs every migration **twice per engine**: once from
