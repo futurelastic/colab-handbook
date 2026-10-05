@@ -31,6 +31,7 @@ const NOT_IN_NEXT = {
   close: 'per-issue close outside a ship, driven by the skills (#381)',
   claims: 'per-session flow, read by code-triage',
   'trunk-ci': 'read-only trunk-CI verdict, called by code-triage / code-sweep / code-ship (#463)',
+  'ci-wait': 'per-run CI wait, called by code-ship / code-sweep / code-wrap (#495)',
   'issue-filed': 'notify event emitted by code-start, never typed by a new user',
   'gate-recorded': 'notify event emitted by the skills, never typed by a new user',
   'gate-hermetic': 'per-session test run, driven by code-wrap A3 (#403)',

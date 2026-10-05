@@ -546,8 +546,8 @@ arrive), merge-clean against trunk — land through one command instead of one s
    batch: it prints what would land and writes nothing.
 3. Read the exit code — it never waits for you:
    - **`3` — paused.** The combined run (or trunk's own) is still going, or the batch was just
-     (re)built. Wait on the run id it printed with B1a's bound — `timeout 900 gh run watch
-     <id>`, 15 minutes — then run **the same command** again. The cap expiring is a defer
+     (re)built. Wait on the run id it printed with B1a's bound — `colab ci-wait <id>
+     --timeout 15m` (#495) — then run **the same command** again. The cap expiring is a defer
      exactly as B1a records one; the batch ref stays for the next pass.
    - **`0` — landed.** Trunk fast-forwarded to the tested head; each member's claim, worktree,
      branch and 🚢 comment are handled as a serial ship handles them. Go to B2b for the
@@ -695,17 +695,34 @@ every step here runs in the coordinator's own worktree.
   once stayed in one turn for 1 h 40 min, hand-polling `gh run list` for three branches,
   while two other candidates were already green at their head and merge-clean. A ship
   pass that never ends also keeps the repository's trunk lock, so no fresh pass can
-  start either. Watch the run instead of polling it, with a wall-clock cap:
+  start either. Wait with `colab ci-wait`, with a wall-clock cap:
 
   ```sh
-  RUN=$(gh run list --branch <branch> --limit 20 --json headSha,status,databaseId \
-    -q "[.[] | select(.headSha == \"$BHEAD\" and .status != \"completed\")][0].databaseId")
-  timeout 900 gh run watch "$RUN" --exit-status   # macOS: gtimeout (coreutils), or the
-                                                  # agent harness's own 15-min call timeout
+  colab ci-wait --sha "$BHEAD" --branch <branch> --timeout 15m   # every run at the head sha
   ```
 
-  Exit 0 → re-read the class (it is `green` only if **every** run at the head sha is).
-  Non-zero from the run → classify the red as below. **The cap expired** → record a
+  **`colab ci-wait` is the only way to wait for CI (#495)** — here, in `code-sweep`, in
+  `code-wrap`, everywhere. Never hand-roll a `sleep N; gh run view|list` loop, never wrap
+  `gh run watch` (it polls every 3 s), never run two waits for the same run (a second
+  `ci-wait` on the same run in this checkout is refused, exit 6), never send `gh`'s stderr
+  to `/dev/null` inside a wait, and never leave a wait running in the background after
+  your turn ends. Measured over one hour on one fleet: ~88% of ~4,500 REST calls on the shared
+  agent identity were hand-rolled CI waits — one sweep alone made ~1,500/h with two loops
+  on the same run, and a loop that read a rate-limit error as "keep waiting" kept going —
+  until the 5,000/h quota ran out and **every** agent's `gh` call failed for the rest of the
+  hour. `ci-wait` backs off 30 s → 60 s → 120 s, sends conditional requests (a 304 is
+  free), and costs about 10 calls for a 15-minute run. It exits with the outcome:
+
+  | exit | outcome | what this skill does |
+  |---|---|---|
+  | `0` | GREEN | re-read the class — `green` only if **every** run at the head sha is |
+  | `1` | RED | classify the red as below |
+  | `3` | TIMEOUT | the cap expired — the defer below |
+  | `4` | RATE_LIMITED | **stop the pass**, not just this candidate: the quota is gone for every agent until the reset time it prints. Record the defer with that time as the re-measure trigger; do not retry |
+  | `5` | UNKNOWN | the read failed or returned an unknown state — defer, quoting its output |
+  | `6` | ALREADY_WAITING | another session is waiting on this run — defer on its run id; do not start a second wait |
+
+  **The cap expired** → record a
   defer with the clock *What a defer is for* requires — precondition: branch CI in flight
   at `<sha>`; clears on: that run completing `green`; re-measure trigger: run
   `<databaseId>` completing — and **end this candidate's turn**. That is the legitimate
@@ -1282,10 +1299,8 @@ closes the loop B1a opened.
 ```sh
 SQUASH=<the squash sha B2 pushed>   # from B2's commit or `colab ship`'s output — not
                                     # origin/<base>'s tip, another ship may land on top
-gh run list --commit "$SQUASH" --limit 20 \
-  --json databaseId,workflowName,status,conclusion   # one row per workflow at that sha
-timeout 900 gh run watch <databaseId> --exit-status  # each run still in flight; one
-                                                     # 15-min cap across all of them
+colab ci-wait --sha "$SQUASH" --timeout 15m   # every workflow at that sha, one 15-min
+                                              # cap across all of them; exit codes as B1a
 ```
 
 - **Same bound as B1a — 15 minutes, a cap across every run at the sha, not 15 per run**

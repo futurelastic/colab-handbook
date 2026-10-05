@@ -858,6 +858,14 @@ function ghRunForSha(repo, branch, limit = 10, remote = remoteInfo(repo).name ||
 function ghRunsForCommit(repo, branch, sha, limit = 10) {
   if (!sha) return null;
 
+  // #495: one REST call (`actions/runs?head_sha=&branch=`) instead of `gh run list`'s two (runs +
+  // workflows), and no `-L` window to fall out of. A rate limit is final — falling back would spend
+  // two more calls on a quota that is already gone. Any other failure (an old gh, a test stub that
+  // only answers `run list`, a non-GitHub remote) falls through to the `gh run list` read below.
+  const rest = ghRunsAtShaRest(repo, sha, branch);
+  if (rest.rows) return rest.rows;
+  if (rest.rateLimited) return null;
+
   // createdAt + databaseId are additive (#155): a NON-completed pick needs both to let a caller
   // judge whether it is merely slow or structurally WEDGED (tools/lib/ci-verdict.js) — createdAt for
   // the age backstop, databaseId to look up its job count (ghRunJobCount, below — a second call, made
@@ -882,6 +890,44 @@ function ghRunsForCommit(repo, branch, sha, limit = 10) {
       `none at ${String(sha).slice(0, 7)} (first heads: ${heads || '-'})\n`);
   }
   return forSha;
+}
+
+/**
+ * #495: `gh api -i <path>`, optionally conditional (`If-None-Match: <etag>`). Returns the
+ * classified response from tools/lib/ci-wait.js: `{ kind: ok|not-modified|rate-limited|error,
+ * status, etag, json?, detail? }`. A 304 does not count against the REST primary rate limit, so a
+ * poller that sends its last ETag pays for a read only when something changed. gh exits 1 on a 304
+ * and still prints the head to stdout (measured), so the head is parsed whatever the exit code.
+ */
+function ghApiConditional(repo, apiPath, etag) {
+  const ciWait = require('./ci-wait');
+  const args = ['api', '-i', ...(etag ? ['-H', `If-None-Match: ${etag}`] : []), apiPath];
+  const r = run('gh', args, { cwd: repo, timeoutMs: 60000 });
+  const http = ciWait.parseHttp(r.stdout);
+  return ciWait.classifyResponse({ ...http, stderr: r.stderr });
+}
+
+/**
+ * Every workflow run at `sha` in ONE REST call (#495) — `actions/runs?head_sha=<sha>[&branch=<b>]`,
+ * rows in `gh run list --json` shape. Returns `{ rows }` on success, `{ rateLimited: true }` on a
+ * rate limit, `{}` on any other failure (the caller decides whether to fall back).
+ */
+function ghRunsAtShaRest(repo, sha, branch) {
+  if (!sha) return {};
+  const ciWait = require('./ci-wait');
+  const q = `head_sha=${encodeURIComponent(sha)}${branch ? `&branch=${encodeURIComponent(branch)}` : ''}&per_page=100`;
+  const r = ghApiConditional(repo, `repos/{owner}/{repo}/actions/runs?${q}`);
+  if (r.kind === 'rate-limited') return { rateLimited: true, detail: r.detail };
+  if (r.kind !== 'ok' || !r.json || !Array.isArray(r.json.workflow_runs)) return {};
+  return { rows: r.json.workflow_runs.map(ciWait.restRow).filter((x) => x.headSha === sha) };
+}
+
+/** Is a `gh` binary on PATH (#495)? No API call — cached per process. The credential is proven by
+ * the first real read, not by a probe in front of it (`gh auth status` costs a REST + a GraphQL). */
+let _ghInstalled;
+function ghInstalled() {
+  if (_ghInstalled === undefined) _ghInstalled = run('gh', ['--version']).ok;
+  return _ghInstalled;
 }
 
 /**
@@ -1218,7 +1264,7 @@ module.exports = {
   claimRemote, remoteHeads,
   worktreeList, worktreeListDetailed, resolveWorktreePathForBranch, gitFailureLine,
   dirtyTracked, dirtyUntracked, dirtyAny,
-  ghAvailable, ghState, ghIssueEdit, ghListLabels, ghOpenIssueNumbersByLabel, ghAssignedIssues,
+  ghAvailable, ghState, ghInstalled, ghApiConditional, ghRunsAtShaRest, ghIssueEdit, ghListLabels, ghOpenIssueNumbersByLabel, ghAssignedIssues,
   ghCurrentLogin, ghIssueView, ghIssueComment, ghRunForSha, ghRunForCommit, ghRunsForCommit, ghRunsForRef, ghRunsAtCommit, ghRunForCommitAnyRef, commitTimeMs, ghRunsSince, summarizeRunsForCommit, isRepoOwnedRun,
   ghRunJobCount, ghRunJobs, ghWorkflowDispatch,
   ghIssueListByLabel, ghLabelDelete, ghLabelCreate, ghListLabelsDetailed, ghLabelEditDescription,

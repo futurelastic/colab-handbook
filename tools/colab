@@ -46,6 +46,7 @@ const ciCure = require('./lib/ci-cure');
 const ciVerdict = require('./lib/ci-verdict');
 const baseCiVerdict = require('./lib/base-ci-verdict');
 const treeGreen = require('./lib/tree-green');
+const ciWait = require('./lib/ci-wait'); // #495
 const staleBase = require('./lib/stale-base');
 const dirtyOwner = require('./lib/dirty-owner');
 const scratchDirs = require('./lib/scratch-dirs');
@@ -13648,7 +13649,8 @@ function shipBatchMemberTail({ repoAbs, doc, trunk, sess, sha, closeIssues, refs
 // trunk nobody owns" check and §5's "Trunk CI is alive" bullet call this instead of keeping a
 // `gh run list` filter of their own — two rules for one question disagreed, and the red went
 // unowned (a sha with CI green and a release workflow red read GREEN to triage, not-green to ship).
-const HELP_TRUNK_CI = `colab trunk-ci [--repo <path>] [--json]
+const TRUNK_CI_TTL_DEFAULT_SEC = 45;
+const HELP_TRUNK_CI = `colab trunk-ci [--repo <path>] [--fresh] [--json]
 
 Print the trunk-CI verdict \`colab ship\` would compute for the trunk's CURRENT remote head —
 the same read (shipCiCheck's readCiVerdict): by branch, re-read by commit when empty, runs from
@@ -13670,7 +13672,15 @@ A GREEN whose suite the CI guard skipped because a green run of the same workflo
 passed an identical tree (#493) names that run in its detail ("relied on <url>"). If the cited
 head is local and its tree differs from trunk's, the read is RED: trunk is untested.
 
-  --json   { verdict, sha, ok, class, detail, trunk[, cited: [<run url>…] on a #493 skip] }
+Cost (#495): one REST read of the runs at the sha (\`actions/runs?head_sha=\`), plus one
+check-runs read on a GREEN. No auth probe in front of it — the read is the probe, and an
+UNREADABLE explains which credential/remote condition failed. The verdict is cached per
+trunk+sha for ${TRUNK_CI_TTL_DEFAULT_SEC}s in the repo's git dir, shared by every session on the
+checkout (COLAB_TRUNK_CI_TTL=<sec> overrides, 0 disables; --fresh skips the cache for one read).
+To WAIT for CI, use \`colab ci-wait\` — never a loop around this command.
+
+  --fresh  ignore a cached verdict (still refreshes the cache)
+  --json   { verdict, sha, ok, class, detail, trunk[, cited: [<run url>…] on a #493 skip][, cachedAgeSec] }
 Exit 0 whenever a verdict was read (whatever it is); 2 on UNREADABLE.`;
 
 /** Map readCiVerdict's result to the closed trunk-ci vocabulary. Pure — exported for tests. */
@@ -13686,22 +13696,182 @@ function trunkCiToken(r) {
 function cmdTrunkCi(argv) {
   const opts = parseArgs(argv, {
     values: { '--repo': 'repo' },
-    flags: { '--json': 'json', '-h': 'help', '--help': 'help' },
+    flags: { '--json': 'json', '--fresh': 'fresh', '-h': 'help', '--help': 'help' },
   });
   if (opts.help) return print(HELP_TRUNK_CI);
   const repoAbs = resolveRepo(opts);
   if (!git.repoRoot(repoAbs)) throw new UserError(`${repoAbs} is not a git repo`);
   const trunk = resolveTrunk(repoAbs, projectDoc(repoAbs));
   if (!trunk) throw new UserError('cannot resolve trunk — no `trunk:` in .github/project.yml and no origin/HEAD');
-  const r = readCiVerdict(repoAbs, isGhUsable(repoAbs), trunk, trunk);
-  const verdict = trunkCiToken(r);
-  const sha = r.run ? r.run.sha || null : null;
-  if (opts.json) {
-    print(JSON.stringify({ verdict, trunk, sha, ok: r.verdict.ok, class: r.verdict.class || null, detail: r.verdict.detail, ...(r.verdict.treeGreen ? { cited: r.verdict.treeGreen } : {}) }, null, 2));
-  } else {
-    print(`${verdict} ${trunk}${sha ? `@${shortSha(sha)}` : ''} — ${r.verdict.detail}`);
+
+  // #495: the cache key is the trunk's CURRENT remote head — read with `git ls-remote`, which is the
+  // git protocol, not the REST quota — so a new push is never answered from an older sha's verdict.
+  const cache = trunkCiCache(repoAbs);
+  const headSha = remoteHeadSha(repoAbs, trunk);
+  const key = headSha ? `${trunk}@${headSha}` : null;
+  let out = key && !opts.fresh ? cache.get(key) : null;
+  if (!out) {
+    // #495: no `gh auth status` probe in front of the read (it costs a REST + a GraphQL call per
+    // process, and trunk-ci runs as a fresh process each time). The read itself proves the credential;
+    // only an UNREADABLE pays for the explanation.
+    const gh = git.ghInstalled() && !!git.remoteUrl(repoAbs);
+    const r = readCiVerdict(repoAbs, gh, trunk, trunk);
+    const verdict = trunkCiToken(r);
+    const sha = r.run ? r.run.sha || null : null;
+    let detail = r.verdict.detail;
+    if (verdict === 'UNREADABLE' && gh && !git.ghState().ok) detail += ` (${ghUnusableWhy(repoAbs)})`;
+    out = { verdict, trunk, sha, ok: r.verdict.ok, class: r.verdict.class || null, detail, ...(r.verdict.treeGreen ? { cited: r.verdict.treeGreen } : {}) };
+    if (key && verdict !== 'UNREADABLE' && sha === headSha) cache.put(key, out);
   }
-  return verdict === 'UNREADABLE' ? 2 : 0;
+  if (opts.json) {
+    print(JSON.stringify(out, null, 2));
+  } else {
+    const age = out.cachedAgeSec !== undefined ? ` (cached ${out.cachedAgeSec}s ago)` : '';
+    print(`${out.verdict} ${trunk}${out.sha ? `@${shortSha(out.sha)}` : ''} — ${out.detail}${age}`);
+  }
+  return out.verdict === 'UNREADABLE' ? 2 : 0;
+}
+
+/** `git ls-remote <remote> refs/heads/<branch>` → sha, or null. Git protocol — no REST quota. */
+function remoteHeadSha(repoAbs, branch) {
+  const remote = git.remoteInfo(repoAbs).name || 'origin';
+  const r = git.git(['ls-remote', remote, `refs/heads/${branch}`], repoAbs);
+  if (!r.ok) return null;
+  return (r.stdout.split('\n')[0] || '').split('\t')[0].trim() || null;
+}
+
+/**
+ * #495: the trunk-ci verdict cache — `<git common dir>/colab-trunk-ci.json`, so every session and
+ * worktree on one checkout shares it. Keyed by `<trunk>@<sha>`; an entry older than the TTL is a
+ * miss. Best effort both ways: an unreadable/unwritable file is simply no cache.
+ */
+function trunkCiCache(repoAbs) {
+  const env = process.env.COLAB_TRUNK_CI_TTL;
+  const ttl = env !== undefined && env !== '' && Number.isFinite(Number(env)) ? Number(env) : TRUNK_CI_TTL_DEFAULT_SEC;
+  const dir = git.git(['rev-parse', '--path-format=absolute', '--git-common-dir'], repoAbs);
+  const file = dir.ok && dir.stdout ? path.join(dir.stdout.trim(), 'colab-trunk-ci.json') : null;
+  const load = () => { try { return JSON.parse(fs.readFileSync(file, 'utf8')) || {}; } catch (_) { return {}; } };
+  return {
+    get(key) {
+      if (!file || ttl <= 0) return null;
+      const e = load()[key];
+      if (!e || !e.at || !e.out) return null;
+      const age = Math.floor((Date.now() - e.at) / 1000);
+      return age >= 0 && age < ttl ? { ...e.out, cachedAgeSec: age } : null;
+    },
+    put(key, out) {
+      if (!file || ttl <= 0) return;
+      const now = Date.now();
+      const all = load();
+      for (const k of Object.keys(all)) if (!all[k] || now - all[k].at > ttl * 1000) delete all[k];
+      all[key] = { at: now, out };
+      try {
+        const tmp = `${file}.${process.pid}.tmp`;
+        fs.writeFileSync(tmp, JSON.stringify(all));
+        fs.renameSync(tmp, file);
+      } catch (_) { /* no cache, not an error */ }
+    },
+  };
+}
+
+// ci-wait — THE way to wait for CI (#495). Agents' hand-rolled `sleep N; gh run …` loops spent ~88%
+// of a shared identity's REST quota in one measured hour; this waits with backoff, conditional
+// requests, a deadline, and a distinct exit code for every way a wait can end.
+const HELP_CI_WAIT = `colab ci-wait <run-id> | --sha <sha> [--branch <b>] [--repo <path>] [--timeout <dur>] [--json]
+
+Wait for CI and exit with its outcome. The ONE way to wait for a run: never hand-roll a
+\`sleep N; gh run view\` loop, never run two waits for the same run, never hide gh's stderr.
+
+  <run-id>        wait for one workflow run (actions/runs/<id>)
+  --sha <sha>     wait for EVERY repo-owned workflow at the sha (the verdict colab ship reads:
+                  newest run per workflow, dynamic workflows dropped — #451/#461); a sha with no
+                  run yet counts as pending until the deadline
+  --branch <b>    narrow --sha to runs on that branch
+  --timeout <d>   deadline: 45m (default), 90s, 1h, or seconds
+
+Polls at 0s, then +30s, +60s, +120s, +120s … until the deadline. Every poll after the first is a
+conditional request (If-None-Match); a 304 is not counted against the REST rate limit. A 15-minute
+run costs about 10 requests. One wait per run per checkout: a second waiter is refused.
+
+Exit codes — branch on these, never on the text:
+  0 GREEN            the run (every judged run at the sha) succeeded
+  1 RED              completed and did not succeed
+  2 usage            bad arguments
+  3 TIMEOUT          the deadline passed while still pending
+  4 RATE_LIMITED     GitHub refused for quota (403/429) — the wait ENDS, it does not retry
+  5 UNKNOWN          a read failed or returned a state it cannot classify
+  6 ALREADY_WAITING  another live ci-wait on this checkout holds the same run/sha
+
+It prints the wait it did: outcome, elapsed time, polls, and how many were 304s.
+  --json   { outcome, exit, target, polls, notModified, waitedSec, detail, status, conclusion, url }`;
+
+function cmdCiWait(argv) {
+  const opts = parseArgs(argv, {
+    values: { '--repo': 'repo', '--sha': 'sha', '--branch': 'branch', '--timeout': 'timeout' },
+    flags: { '--json': 'json', '-h': 'help', '--help': 'help' },
+  });
+  if (opts.help) return print(HELP_CI_WAIT);
+  const runId = opts._ && opts._[0];
+  if ((runId ? 1 : 0) + (opts.sha ? 1 : 0) !== 1 || (runId && !/^\d+$/.test(runId)) || (opts.branch && !opts.sha)) {
+    warn('ci-wait takes exactly one of <run-id> (numeric) or --sha <sha> [--branch <b>]');
+    return ciWait.EXIT.USAGE;
+  }
+  const deadlineSec = opts.timeout !== undefined ? ciWait.parseDuration(opts.timeout) : ciWait.DEFAULT_DEADLINE_SEC;
+  if (!deadlineSec) { warn(`--timeout: cannot read "${opts.timeout}" (try 45m, 90s, 1h)`); return ciWait.EXIT.USAGE; }
+  const repoAbs = resolveRepo(opts);
+  if (!git.ghInstalled()) { warn('gh is not installed — cannot read CI'); return ciWait.EXIT.UNKNOWN; }
+
+  const target = runId ? `run ${runId}` : `sha ${shortSha(opts.sha)}${opts.branch ? ` on ${opts.branch}` : ''}`;
+  const apiPath = runId
+    ? `repos/{owner}/{repo}/actions/runs/${runId}`
+    : `repos/{owner}/{repo}/actions/runs?head_sha=${encodeURIComponent(opts.sha)}${opts.branch ? `&branch=${encodeURIComponent(opts.branch)}` : ''}&per_page=100`;
+
+  const gitDir = git.git(['rev-parse', '--path-format=absolute', '--git-common-dir'], repoAbs);
+  const lock = gitDir.ok ? ciWait.acquireLock(path.join(gitDir.stdout.trim(), 'colab-ci-wait'), runId || `${opts.sha}-${opts.branch || ''}`) : { ok: true, release: () => {} };
+  if (!lock.ok) {
+    warn(`another ci-wait (pid ${lock.holder}) is already waiting on ${target} in this checkout — read its result, do not start a second wait`);
+    return ciWait.EXIT.ALREADY_WAITING;
+  }
+
+  const poll = (etag) => {
+    const r = git.ghApiConditional(repoAbs, apiPath, etag);
+    if (r.kind !== 'ok') return r;
+    let summary;
+    if (runId) {
+      summary = { status: r.json.status, conclusion: r.json.conclusion || null, url: r.json.html_url || null };
+    } else {
+      const rows = Array.isArray(r.json.workflow_runs) ? r.json.workflow_runs.map(ciWait.restRow).filter((x) => x.headSha === opts.sha) : null;
+      if (!rows) return { kind: 'error', status: r.status, detail: 'response has no workflow_runs' };
+      summary = git.summarizeRunsForCommit(rows, opts.sha);
+      const pick = rows.find((x) => x.databaseId === summary.databaseId);
+      summary = { ...summary, url: pick ? pick.url : null };
+    }
+    return { ...r, summary, state: ciWait.runState(summary) };
+  };
+
+  if (!opts.json) process.stderr.write(`ci-wait: waiting on ${target} (deadline ${ciWait.fmtDuration(deadlineSec * 1000)}; polls at +0s, +30s, +60s, then every 120s)\n`);
+  let res;
+  try {
+    res = ciWait.waitLoop({
+      poll, sleep: ciWait.sleepSync, deadlineSec,
+      onPoll: (p) => { if (!opts.json) process.stderr.write(`ci-wait: poll ${p.poll} at +${ciWait.fmtDuration(p.elapsedMs)} — ${p.state}${p.notModified ? ' (304, not counted)' : ''}\n`); },
+    });
+  } finally {
+    lock.release();
+  }
+  const s = (res.last && res.last.summary) || {};
+  const code = ciWait.EXIT[res.outcome];
+  const out = {
+    outcome: res.outcome, exit: code, target, polls: res.polls, notModified: res.notModified,
+    waitedSec: Math.round(res.waitedMs / 1000), detail: res.detail || null,
+    status: s.status || null, conclusion: s.conclusion || null, url: s.url || null,
+  };
+  if (opts.json) print(JSON.stringify(out, null, 2));
+  else {
+    print(`${res.outcome} ${target} — waited ${ciWait.fmtDuration(res.waitedMs)}, ${res.polls} poll(s), ${res.notModified} of them 304` +
+      `${s.status ? ` · ${s.status}${s.conclusion ? `/${s.conclusion}` : ''}` : ''}${s.url ? ` · ${s.url}` : ''}${res.detail ? ` — ${res.detail}` : ''}`);
+  }
+  return code;
 }
 
 const HELP_LANDED = `colab landed [--repo <path>] [--worktree <name> | --branch <br>] [--base <br>] [--all] [--json]
@@ -14527,8 +14697,12 @@ Commands:
                                         code-wrap Phase B → the branch's recorded base (trunk, or a
                                         declared line). --json (--dry only): machine-readable
                                         preconditions with a closed refusal-class vocabulary (#77)
-  trunk-ci [--json]                     the trunk-CI verdict ship computes, read-only (#463):
+  trunk-ci [--fresh] [--json]           the trunk-CI verdict ship computes, read-only (#463):
                                         GREEN | RED | PENDING | WEDGED | NONE | UNREADABLE
+                                        (cached per sha ~45s in .git — #495)
+  ci-wait <run-id> | --sha S [--branch B] [--timeout D] [--json]
+                                        WAIT for CI with backoff + conditional requests (#495);
+                                        exit 0 green · 1 red · 3 timeout · 4 rate-limited · 5 unknown
   landed [--worktree N | --branch B | --all] [--base B] [--json]   has this work already landed?
                                         (the shared rule behind code-sweep's buckets — correct
                                         across squash merges, where "commits ahead" is not)
@@ -14617,6 +14791,7 @@ function main(argv) {
     case 'ship': return cmdShip(rest);
     case 'landed': return cmdLanded(rest);
     case 'trunk-ci': return cmdTrunkCi(rest);
+    case 'ci-wait': return cmdCiWait(rest);
     case 'holders': return cmdHolders(rest);
     case 'promote': return cmdPromote(rest);
     case 'deliver': return cmdDeliver(rest);
