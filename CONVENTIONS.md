@@ -1535,6 +1535,11 @@ than guessed.
   Only runs of workflows the repo owns count (#451): a run with `event: dynamic`
   (Dependabot Updates and GitHub's other dynamic workflows) never executes the sha, so it is
   dropped before the verdict and named in its detail; if nothing is left, the sha reads `none`.
+  A trunk sha whose tree has **no workflow file at all** (#482) — a freshly adopted repo whose
+  adoption branch is what adds CI — can never draw a run, so nothing there can be red: its
+  `none` gets the *Branch CI* treatment for a run that cannot arrive, and the candidate's own
+  run at its remote head decides (green passes; red, in flight or absent still refuses). A
+  trunk that has workflows but no run at its sha is a real gap and still refuses.
   Each workflow is then judged by its **newest** run at the sha (#461): an earlier attempt of
   the *same* workflow that a later one superseded is set aside and named in the detail, so a
   `workflow_run`-triggered workflow that skipped for two red CI attempts and passed for the
