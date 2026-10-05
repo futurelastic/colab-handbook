@@ -2870,6 +2870,62 @@ They do not rewrite the ask, because the question is not theirs to restate. The 
 reading is `askShape` in `tools/lib/decision-record.js`, which `evaluateIssue` reports as
 `unshapedAsk` when it is given the body.
 
+#### An ask is said once — a later pass reports that it is still waiting (#489)
+
+The shapes above say how a question is put to a human. This rule says how often. A
+coordinator pass (`code-triage`, a sweep, a ship session) that finds work blocked on a
+human ask used to render the whole question again on every pass: the question, the
+options, the recommendation. On a repo blocked only on its operator, every pass added
+another copy of the question to a session the operator was not reading. Measured in one
+adopting fleet over 10 days: 25–32% of the asks repeated an earlier one, and the
+coordinator triage and ship sessions asked 309 questions for 1 human answer. A repeated
+question is not a reminder. It buries the one copy the human might read.
+
+**An ask is open when either of these holds:**
+
+- **The tracker already carries it.** The issue has a pending `needs-decision` (*Decision
+  gate*, above, read with `pairVerdict`) whose ask has a shape, either an options block or
+  a `Mockup:` line. Or its newest `Hold:` line has `wake: ruling` (*Holds*, above), and the
+  `Because:` line is the ask. A decision inbox that an adopting fleet runs reads these same
+  marks, so a question already in that inbox is open in this sense too.
+- **An earlier pass of the same skill already rendered it** in its own output and stored
+  it (`code-triage` §0.1, `asks`). Use this when the question exists only in that
+  session's output, for example *wake met, lift?* or *a ruling exists in a comment, record
+  it?*.
+
+**An open ask gets exactly one line on every later pass. A pass never renders its options
+again:**
+
+```
+unchanged, waiting on <link> since <date>
+```
+
+- `<link>` is where the answer goes: the options-block comment, the `Hold:` line comment,
+  or the issue itself for an ask that was only in session output.
+- `<date>` is when the ask was first put. That is the newest ask event for a tracker ask
+  (the same "newest ask" *Decision gate* compares with the marker), and the date of the
+  first rendering for an ask that was only in session output. It is never the date of
+  this pass. The point of the line is to show how long the human has been asked.
+- A pass may append who clears the ask. It never adds the question, the options or the
+  recommendation again: those are behind the link.
+
+**A new ask is rendered once, as a five-line card:** the question first, then two or more
+options, then the recommendation on its own line, then what stays parked if nobody
+answers, then the link. Any of these makes an ask new: it was never rendered before, the
+tracker now carries a newer ask than the stored one (a re-posted options block, or a
+`--reopen`), or the question itself changed. A card is session output, like the rest of a
+triage report. It never authorises a tracker comment that a skill's own write list does
+not name.
+
+**Waiting on a human is not a change.** An unanswered ask gets older on every pass, but its
+age is not an input to anything. A pass whose only news is "still unanswered" is an
+unchanged pass: on a skill with a no-change short-circuit (`code-triage` §0), it stays on
+the cheap path. It never re-asks, escalates or re-renders because time has passed. What
+moves an ask is the human's answer (a recorded decision, a label removed, a hold lifted).
+Those already move the inputs that the short-circuit compares.
+
+**No open ask, no change.** A repo with no open human ask renders nothing new.
+
 #### The human flag — what `COLAB_HUMAN=1` asserts
 
 `COLAB_HUMAN=1` is one mechanism carrying one assertion, used at several gates in this

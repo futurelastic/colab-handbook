@@ -209,6 +209,16 @@ it also covers the ping that must read the driver's re-run result (§5.2 step 2)
 short-circuit would otherwise skip. What is cached here is §5.2's act, not the CI verdict.
 CI is still re-read on every pass that needs it.
 
+**Waiting only on a human counts as unchanged (#489).** When everything left in a backlog is
+an open human ask (`CONVENTIONS.md` [§5](../../CONVENTIONS.md#an-ask-is-said-once--a-later-pass-reports-that-it-is-still-waiting-489),
+*An ask is said once*), the ask gets older on every ping, but its age is not one of the five
+inputs, and `wake: ruling` is never mechanically met (table above). So the pass stays
+`§0 unchanged` and costs three calls. A ping never leaves the short-circuit to ask again,
+to escalate, or to re-render a question because time has passed. The human's answer is
+what moves an ask: a `⚖` record with the `needs-decision` swap, a hold label removed, an
+issue closed. Each of these moves input 2 or 3 and ends the short-circuit normally. The
+re-print (§0.1) shows each open ask as its single `ASKED` line (§6), never as the card.
+
 **Every run — short-circuited or not — opens by printing exactly one of three outcome
 lines, before anything else.** This is the one thing #244 established a docs repo actually
 *can* ship toward "verified to have fired": not an enforced gate (nothing here executes a
@@ -426,7 +436,7 @@ half-matching:
 
 ```json
 {
-  "version": "code-triage/6",
+  "version": "code-triage/7",
   "scope": "whole-repo",
   "ranAt": "<ISO8601>",
   "fingerprint": {
@@ -446,7 +456,11 @@ half-matching:
   "wakes": [
     { "issue": 507, "label": "deferred:external-party", "wake": "issueClosed:owner/repo#12, review-by:2026-10-09" }
   ],
-  "redTrunk": { "sha": "<40hex>", "issue": 512 }
+  "redTrunk": { "sha": "<40hex>", "issue": 512 },
+  "asks": [
+    { "issue": 501, "kind": "needs-decision", "ref": "<options-comment url>", "since": "2026-09-22", "digest": "<16hex>" },
+    { "issue": 507, "kind": "wake-met-lift", "ref": "<issue url>", "since": "2026-10-03", "digest": "<16hex>" }
+  ]
 }
 ```
 
@@ -494,6 +508,21 @@ half-matching:
   says only that §5.2 already acted on this sha. It counts only while that issue is still
   open and accepted in input 2. Required-when-present: absent or `null` is the ordinary
   state, and any other sha means nothing about the current one.
+- **`asks` bumped `/6` to `/7` (#489), under the same rule and at the same one-time cost.**
+  One entry for each open human ask this pass reported (`CONVENTIONS.md`
+  [§5](../../CONVENTIONS.md#an-ask-is-said-once--a-later-pass-reports-that-it-is-still-waiting-489),
+  *An ask is said once*). `kind` is what is asked: `needs-decision`, `hold-ruling` (a
+  `wake: ruling` hold), or a session-only ask this skill raises itself (`wake-met-lift`,
+  `record-ruling`, `unshaped-ask`). `ref` is the `<link>` the `ASKED` line prints. `since`
+  is when the ask was first put. `digest` is the identity of the question: for a tracker ask,
+  a digest of the newest ask ref (the options-block comment id or the `needs-decision`
+  `labeled` event); for a session-only ask, a digest of `kind` plus the question text. §6
+  reads this list to decide between the card and the `ASKED` line. A tracker ask needs no
+  entry to print one line, because the tracker already shows it. The entry carries `since`
+  and `ref` forward so the line does not have to re-read the timeline. A session-only ask
+  does need its entry: without it, the next pass cannot tell that the card was already
+  shown. Drop an entry when its ask is no longer open. Required-when-present: absent or
+  empty is the ordinary state for a repo with no open human ask.
 
 ### 0.2 Running this twice must change nothing
 
@@ -1804,7 +1833,7 @@ do". Its first line is fixed, so a reader cannot mistake it for a clean result:
 
 ```
 DRY    0 of 22 open issues startable (trunk e31a896) — what unsticks each:
-       #501  ruling on layout A vs B — <maintainer> — asked on #501, 2026-09-22
+       #501  unchanged, waiting on <link> since 2026-09-22 (clears: <maintainer>)
        #502  nobody named — STALL
        #507  lift deferred:date, wake met — @maintainer — not asked
        #87   design session start — nobody claimed it — DESIGN, free
@@ -1994,7 +2023,7 @@ Then, briefly:
   that person has been asked** (#356):
 
   ```
-  BLOCKED #501  needs-decision (layout A vs B) — clears: <maintainer>, ruling — dispatched: asked on #501, 2026-09-22
+  ASKED   #501  unchanged, waiting on <link> since 2026-09-22 (clears: <maintainer>)
   STALL   #502  "design lane, then code" — clears: nobody named — dispatched: no
   BLOCKED #503  needs-decision, ruling exists, unrecorded (<link>) — clears: whoever takes it, via record: colab decision 503 --record --ruled-by <maintainer> … — dispatched: this line
   BLOCKED #508  needs-decision, finding: ask in neither shape — filer adds a Mockup: line or an options block — clears: <filer>, then <maintainer> — dispatched: this line
@@ -2031,6 +2060,61 @@ Then, briefly:
     `blocked` bucket of `$CACHE`, so there is no new bucket and no version bump.
   - Triage does not dispatch anything itself, because none of §0.2's writes is a
     dispatch. Naming the stall is what shows the gap to a reader who can dispatch.
+  - **An open human ask is said once (#489, `CONVENTIONS.md`
+    [§5](../../CONVENTIONS.md#an-ask-is-said-once--a-later-pass-reports-that-it-is-still-waiting-489),
+    *An ask is said once*).** Before printing a line that puts a question to a human
+    (a pending `needs-decision`, a `wake: ruling` hold, *wake met, lift?*, *ruling exists,
+    record it?*, *ask in neither shape*), check whether that ask is already open. It is open
+    when the tracker carries it: a pending `needs-decision` whose ask has a shape (options
+    block or `Mockup:` line), or a `Hold:` line with `wake: ruling`. It is also open when
+    `$CACHE.asks` (§0.1) holds an entry with the same `digest`. **Open ⇒ print exactly one
+    line and never the options:**
+
+    ```
+    ASKED   #501  unchanged, waiting on <link> since 2026-09-22 (clears: <maintainer>)
+    ```
+
+    `<link>` and the date come from the tracker (the newest ask: the options-block comment,
+    or the `needs-decision` `labeled` event) or from the stored entry. The date is never
+    today's date. An `ASKED` line meets #356's two questions: the clearer is named, and the
+    link is the dispatch. It prints in the `blocked` list after `STALL` and `WAKE`, and
+    in the `DRY` block in the same reduced form. **Not open ⇒ render it once as the
+    five-line card** and store its `asks` entry with today as `since`:
+
+    ```
+    WAKE    #507  Lift deferred:external-party? Its wake issueClosed:owner/repo#12 closed 2026-10-03.
+            options: A: lift it, #507 becomes startable | B: keep it held, re-date the wake
+            recommend: A — the wake is the only thing the hold waited for
+            if unanswered: #507 stays held; every later pass prints one ASKED line
+            answer at: <issue url>
+    ```
+
+    Question first, two or more options, the recommendation on its own line, what stays
+    parked if nobody answers, then the link. The card's first line keeps the tag the line
+    would have carried (`WAKE`, `BLOCKED`, `HELD`), so the ordering rules above still
+    apply to it. The card is console output, like the rest of
+    §6. It is not a tracker write, and §0.2's list stays at eight. Store the `ASKED` form
+    in `conclusion.blocked`, never the card, so §0's re-print cannot show the card again.
+    A tracker ask newer than the stored `digest` (a re-posted options block, a `--reopen`)
+    is a new ask: it gets one line with its new date, because the tracker already shows
+    the question. A session-only ask whose question text changed is new too, and gets the
+    card once. **A repo with no open human ask prints nothing new.** Its lines are exactly
+    the ones above.
+
+    **Fixture — the same unanswered ask, two passes.** Issue #507 carries
+    `deferred:external-party` with `Hold: … wake: issueClosed:owner/repo#12`. That issue
+    closed on 2026-10-03. `$CACHE.asks` is empty.
+
+    | pass | `$CACHE.asks` before | printed for #507 | `$CACHE.asks` after |
+    |---|---|---|---|
+    | 1, 2026-10-03 | `[]` | the five-line `WAKE` card above | `[{issue: 507, kind: wake-met-lift, ref: <issue url>, since: 2026-10-03, digest: d1}]` |
+    | 2, 2026-10-05, no answer | the entry above | `ASKED   #507  unchanged, waiting on <issue url> since 2026-10-03 (clears: @maintainer)` | unchanged |
+    | 3, after the hold is lifted | the entry above | nothing: #507 is ready, so it moves to the ready list | `[]`, entry dropped |
+
+    Pass 2 moved none of the five inputs, so it is a §0 short-circuit. The re-print shows
+    the stored `ASKED` line. Pass 3 moved input 2 (the label was removed), so it is a full
+    pass. A pending `needs-decision` with an options block skips row 1: the tracker already
+    shows the question, so even the first pass prints the `ASKED` line.
 - **taken** — who holds it, and since when. A claim flagged *parked, wake met* or *parked,
   wake unresolvable* (§2's `deferred:*` exception) gets its own line inside this bucket, not
   the ready list — name the `deferred:<kind>`, the `wake:` condition, and the evidence that
@@ -2387,6 +2471,9 @@ Hand the top group to **code-start**, which will re-verify the claim before taki
   what would make it startable and who holds that (§6, #380).
 - Every blocked line says who clears it and whether they have been asked. Any line with
   no one named, or no one asked, printed as `STALL`, first in the blocked list (#356).
+- Every open human ask printed as one `ASKED` line (`unchanged, waiting on <link> since
+  <date>`), with the date it was first put and no options. Only an ask that was not
+  already open got the five-line card, and its `asks` entry was stored (§6, #489).
 - Every "already shipped" call carries evidence (sha + `file:line`) — not a hunch.
 - Branch names carry all issue numbers in one trailing run.
 - Every group judged hard got `needs-plan` on its lead issue plus a one-line reason
