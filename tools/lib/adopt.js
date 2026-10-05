@@ -212,6 +212,25 @@ function deriveConsequences({ exposure, writes, room }) {
 // ---------------------------------------------------------------------- §9 remainder checklist
 
 const migrationPaths = require('./migration-paths.js');
+const codeowners = require('./codeowners.js');
+
+/**
+ * #483 — on a fork, the CODEOWNERS teams that belong to another org: inherited from the upstream,
+ * unable to review here, and therefore ignored by `colab ship`'s core-path reader (CONVENTIONS.md
+ * §2, *Core paths*). Adopt names them so the fork owner learns at adoption time, not at the first
+ * ship, that the inherited file is inert until the fork writes its own. Null when there is nothing
+ * to say: not a fork, the fork's owner unknown, no CODEOWNERS, or no foreign team in it.
+ */
+function detectInheritedCodeowners(io, fork, ownOrg) {
+  if (!fork || !ownOrg) return null;
+  for (const p of codeowners.CODEOWNERS_PATHS) {
+    const text = io.readFile(p);
+    if (text === null || text === undefined) continue;
+    const teams = codeowners.foreignTeams(codeowners.parse(text).rules, { fork: true, ownOrg });
+    return teams.length ? { path: p, ownOrg, teams } : null;
+  }
+  return null;
+}
 
 /**
  * #449 — the agent workflow an upstream ships inside the fork: entries under `.claude/skills/`
@@ -412,6 +431,7 @@ function detect(io, extra = {}) {
   // `upstream` whose URL differs from origin's) or takes `--fork`/`--no-fork`; null = not a fork.
   const fork = (extra && extra.fork) || null;
   const upstreamAgentFiles = fork ? detectUpstreamAgentFiles(io) : [];
+  const inheritedCodeowners = detectInheritedCodeowners(io, fork, (extra && extra.ownOrg) || null);
   // Only when the CLI handed over `git ls-files` — a pure-io caller without it gets no step-2 line
   // rather than a false "none detected".
   const migrations = extra && Array.isArray(extra.trackedFiles)
@@ -434,6 +454,7 @@ function detect(io, extra = {}) {
     consequences,
     fork,
     upstreamAgentFiles,
+    inheritedCodeowners,
     migrations,
     remaining: remainingSteps({ migrations, fork, upstreamAgentFiles }),
   };
@@ -1039,6 +1060,7 @@ function renderAgentsStub() {
 }
 
 module.exports = {
+  detectInheritedCodeowners,
   renderClaudeShell,
   renderAgentsStub,
   ROW_NAMES,
