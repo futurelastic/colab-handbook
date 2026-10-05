@@ -847,6 +847,92 @@ function writesGateVerdict({ writes, effExposure, isTTY, colabHuman, answeredBy 
   return { ok: true };
 }
 
+const VALID_AUTONOMY = new Set(['manual', 'auto-trunk']);
+
+/**
+ * #481 — `--autonomy` on `colab adopt`: the maintainer's grant recorded at adoption, so the
+ * descriptor trunk carries from its first commit already says whether an agent may complete
+ * Phase B. `auto-trunk` is the one value that EXPANDS permission (an unattended trunk merge
+ * through `colab ship`), so it carries the same human bar as `writes: direct`; `manual` is the
+ * default and never gated. Append-only like every other answer: a value already on record is
+ * either the same (no-op) or a hand edit, never overwritten here.
+ *
+ * Returns `{ ok, write }` — `write` false when the same value is already declared — or a refusal
+ * `{ ok:false, class, exitCode, message }`. Pure: cmdAdopt passes every fact in.
+ */
+function autonomyGateVerdict({ autonomy, current, ceremony, isTTY, colabHuman, answeredBy }) {
+  if (!VALID_AUTONOMY.has(autonomy)) {
+    throw new UserError(`--autonomy must be one of: ${[...VALID_AUTONOMY].join(', ')} (got ${JSON.stringify(autonomy)})`);
+  }
+  if (current !== undefined && current !== null) {
+    if (String(current) === autonomy) return { ok: true, write: false };
+    return {
+      ok: false,
+      class: GATE_CLASS.REPO_SHAPE,
+      exitCode: EXIT_CODE[GATE_CLASS.REPO_SHAPE],
+      message: `project.yml already declares autonomy: ${current} — adopt is append-only and never `
+        + 'rewrites a declared key; change it by hand, as its own reviewed commit',
+    };
+  }
+  if (autonomy !== 'auto-trunk') return { ok: true, write: true };
+  if (ceremony === 'light') {
+    return {
+      ok: false,
+      class: GATE_CLASS.REPO_SHAPE,
+      exitCode: EXIT_CODE[GATE_CLASS.REPO_SHAPE],
+      message: 'autonomy: auto-trunk is refused alongside ceremony: light — an unattended merge with '
+        + 'the ceremony skipped is the one combination the handbook forbids (CONVENTIONS.md §2)',
+    };
+  }
+  if (!(isTTY || (colabHuman && answeredBy))) {
+    return {
+      ok: false,
+      class: GATE_CLASS.HUMAN_GATED,
+      exitCode: EXIT_CODE[GATE_CLASS.HUMAN_GATED],
+      message: 'declaring autonomy: auto-trunk requires a human: answer at an interactive terminal, or '
+        + 're-run with COLAB_HUMAN=1 and --answered-by "<name>" — it grants agents the trunk merge',
+    };
+  }
+  return { ok: true, write: true };
+}
+
+/**
+ * #481 — may `colab adopt --land` commit the descriptor straight to trunk? Landing writes trunk,
+ * so it is the human's act and never an agent's: COLAB_HUMAN=1 AND --answered-by, no TTY
+ * substitute (a TTY proves a terminal, not that this particular write was asked for). It runs only
+ * on a checkout standing ON trunk, never --local (a local descriptor is machine state, never
+ * committed). Pure.
+ */
+function landVerdict({ local, colabHuman, answeredBy, trunk, currentBranch }) {
+  if (local) {
+    return { ok: false, class: GATE_CLASS.REPO_SHAPE, exitCode: EXIT_CODE[GATE_CLASS.REPO_SHAPE],
+      message: '--land cannot combine with --local — a local-only descriptor is never committed (CONVENTIONS.md §9)' };
+  }
+  if (!(colabHuman && answeredBy)) {
+    return { ok: false, class: GATE_CLASS.HUMAN_GATED, exitCode: EXIT_CODE[GATE_CLASS.HUMAN_GATED],
+      message: '--land commits to trunk, which is a human act: re-run with COLAB_HUMAN=1 and --answered-by "<name>"' };
+  }
+  if (!trunk) {
+    return { ok: false, class: GATE_CLASS.REPO_SHAPE, exitCode: EXIT_CODE[GATE_CLASS.REPO_SHAPE],
+      message: '--land needs a trunk, and none could be determined' };
+  }
+  if (currentBranch !== trunk) {
+    return { ok: false, class: GATE_CLASS.REPO_SHAPE, exitCode: EXIT_CODE[GATE_CLASS.REPO_SHAPE],
+      message: `--land runs on the trunk checkout: this checkout is on ${currentBranch ? JSON.stringify(currentBranch) : 'no branch'}, trunk is ${JSON.stringify(trunk)} — `
+        + `run it from the checkout standing on ${trunk}` };
+  }
+  return { ok: true };
+}
+
+/** The commit message `--land` writes. Conventional, so it is visible in release notes. */
+function landCommitMessage({ answeredBy, paths }) {
+  return 'chore: adopt the colab-handbook conventions — land the descriptor on trunk\n\n'
+    + `Committed by \`colab adopt --land\` (COLAB_HUMAN=1, --answered-by ${JSON.stringify(answeredBy)}): `
+    + 'the maintainer\'s adoption answers, on trunk from its first commit, so the branch that adds '
+    + 'CI is judged by them.\n\n'
+    + `Paths: ${paths.join(', ')}\n`;
+}
+
 // ---------------------------------------------------------------------- provenance + the append-only write
 
 /** The comment placed beside a written key — never trusted as identity (see gateVerdict's
@@ -982,6 +1068,10 @@ module.exports = {
   exposureShapeVerdict,
   gateVerdict,
   writesGateVerdict,
+  VALID_AUTONOMY,
+  autonomyGateVerdict,
+  landVerdict,
+  landCommitMessage,
   provenanceComment,
   renderDescriptor,
 };
