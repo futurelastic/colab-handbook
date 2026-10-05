@@ -133,6 +133,7 @@ test('added AND modified migrations are found; the oldest touched one is where t
   }
   fs.writeFileSync(path.join(mig, 'README.md'), 'x\n');
   git('init', '-q', '-b', 'main');
+  git('config', 'core.hooksPath', path.join(dir, '.nohooks'));
   git('add', '-A');
   git('commit', '-qm', 'init');
   git('clone', '-q', '--bare', '.', path.join(dir, 'origin.git'));
