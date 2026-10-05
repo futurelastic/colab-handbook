@@ -430,6 +430,28 @@ test('#325: single machine, nothing elsewhere → worktree new claims exactly as
   assert.strictEqual(is.comments.length, 1);
 });
 
+// --- #485: a dependency bot's branch is not a claim -----------------------------------------------
+
+test('#485: an open dependabot/...-9 ref on origin does not hold #9 — worktree new claims it without --force', () => {
+  const fx = fixture();
+  g(fx.work, 'push', '-q', 'origin', 'main:refs/heads/dependabot/github_actions/actions/github-script-9');
+  const r = colab(fx, ['worktree', 'new', 'feat/x-9', '--issues', '9', '--session', 'sA']);
+  assert.strictEqual(r.code, 0, r.out + r.err);
+  assert.doesNotMatch(r.err, /dependabot/);
+  assert.strictEqual(claimsFor(fx.home, 9).length, 1);
+  assert.ok(remoteHas(fx, 'feat/x-9'));
+});
+
+test('#485: a session branch ending in the same number still refuses — only the bot ref is filtered', () => {
+  const fx = fixture();
+  g(fx.work, 'push', '-q', 'origin', 'main:refs/heads/dependabot/github_actions/actions/github-script-9');
+  g(fx.work, 'push', '-q', 'origin', 'main:refs/heads/fix/other-9');
+  const r = colab(fx, ['claim', '9', '--session', 'sA']);
+  assert.strictEqual(r.code, 1, r.out + r.err);
+  assert.match(r.err, /origin\/fix\/other-9/);
+  assert.doesNotMatch(r.err, /dependabot/);
+});
+
 // --- #369: no raw hostname on a destination that may not name it ---------------------------------
 
 test('#369: forge unreadable + no room: → the claim comment carries the h: token, and a re-claim still reads it as ours', () => {
