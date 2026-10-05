@@ -103,6 +103,8 @@ const shipBatch = require("../tools/lib/ship-batch.js");
 const migrationPaths = require("../tools/lib/migration-paths.js");
 // #398: the `migration-grant:` policy key — read through the same module `colab migration-grant` uses.
 const migrationGrant = require("../tools/lib/migration-grant.js");
+// #504: the `ci-grant:` policy key — read through the same module `colab ci-grant` uses.
+const ciGrantLib = require("../tools/lib/ci-grant.js");
 // #407: the optional `trust-humans` list — read through the same module every grant reader uses.
 const trustHumansLib = require("../tools/lib/trust-humans.js");
 // #403: the `live-env:` key — read through the same module `colab gate-hermetic` uses.
@@ -1329,6 +1331,17 @@ function auditRepo(target, ctx) {
     {
       const pol = migrationGrant.parseGrantPolicy(cfg);
       info.migrationGrant = pol.policy;
+      if (!pol.valid) fail(pol.reason);
+    }
+
+    // ---- ci-grant (#504) -------------------------------------------------------
+    // Who may open the red-trunk door when the cure rule refuses: `human` (absent) or `reviewer`, the
+    // coordinator agent minting `colab ci-grant --role ci-reviewer` without COLAB_HUMAN=1.
+    // tools/lib/ci-grant.js parseGrantPolicy is the one reading. Always reported (info.ciGrant); an
+    // invalid value fails, because the reader then falls back to `human` silently.
+    {
+      const pol = ciGrantLib.parseGrantPolicy(cfg);
+      info.ciGrant = pol.policy;
       if (!pol.valid) fail(pol.reason);
     }
 

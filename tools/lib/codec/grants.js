@@ -1,8 +1,9 @@
 'use strict';
 /**
  * CODEC (#498, epic #496): the GRANT comment wire formats as encode/decode pairs — the human
- * migration grant and its revoke, the reviewer migration grant with its fenced record, and the
- * red-trunk CI grant and its revoke. Pure and synchronous: no I/O, no clock, no requires.
+ * migration grant and its revoke, the reviewer migration grant with its fenced record, the
+ * red-trunk CI grant and its revoke, and the reviewer red-trunk CI grant with its fenced record
+ * (#504). Pure and synchronous: no I/O, no clock, no requires.
  *
  * What stays OUT of here is everything that JUDGES a grant: which grants are live, whose comment is
  * trusted, whether a record passes review, whether a grant still binds a HEAD. That lives in
@@ -11,7 +12,7 @@
  *
  * STABLE WIRE FORMAT. `tools/colab` and any vendored reader parse these verbatim, and an older CLI on
  * another machine reads what this one writes. Every mark has a DIFFERENT leading emoji from every
- * other (🛢 🚫 🔎 🚨 🧯), so no regex here can match another mark's body — a revoke that merely
+ * other (🛢 🚫 🔎 🚨 🧯 🩹), so no regex here can match another mark's body — a revoke that merely
  * suffixed its grant would parse as a fresh grant and reopen the door it was posted to close.
  *
  * Round-trip rule shared by every pair below: a decoded comment carries `tail`, the text after the
@@ -92,17 +93,7 @@ const REVIEW_RECORD_FIELDS = Object.freeze([
 function encodeReviewGrant({ role, reviewer, branch, head, host, at, tail, record } = {}) {
   const marker = withTail(`${REVIEW_GRANT_MARK} — role \`${role}\` · reviewer \`${reviewer}\` · branch \`${branch}\``
     + ` · head \`${head}\` · host \`${host}\` · ${at}`, tail, REVIEW_GRANT_TAIL);
-  const rec = record || {};
-  const known = REVIEW_RECORD_FIELDS.map((f) => f.key);
-  const keys = [...known.filter((k) => Object.prototype.hasOwnProperty.call(rec, k)),
-    ...Object.keys(rec).filter((k) => !known.includes(k))];
-  const lines = [];
-  for (const k of keys) {
-    const v = rec[k];
-    if (v === undefined || v === null || String(v) === '') continue;
-    lines.push(`${k}: ${v}`);
-  }
-  return `${marker}\n\n\`\`\`${REVIEW_RECORD_FENCE}\n${lines.join('\n')}\n\`\`\``;
+  return `${marker}\n\n${fencedRecord(REVIEW_RECORD_FENCE, REVIEW_RECORD_FIELDS, record)}`;
 }
 
 /**
@@ -121,10 +112,16 @@ function decodeReviewGrant(body) {
   const t = line.slice(m[0].length);
   const out = { role: m[1], reviewer: m[2], branch: m[3], head: m[4], host: m[5], at: m[6],
     tail: t === REVIEW_GRANT_TAIL ? null : t, record: null, problems: [] };
-  const fence = new RegExp('^```' + REVIEW_RECORD_FENCE + '[ \\t]*\\n([\\s\\S]*?)^```[ \\t]*$', 'm');
-  const fm = text.match(fence);
+  return readFencedRecord(text, REVIEW_RECORD_FENCE, out);
+}
+
+/** Find the FIRST fenced block whose info string is exactly `fence` and read its `key: value`
+ *  lines into `out.record`; syntax findings go to `out.problems`. Shared by both reviewer grants. */
+function readFencedRecord(text, fence, out) {
+  const re = new RegExp('^```' + fence + '[ \\t]*\\n([\\s\\S]*?)^```[ \\t]*$', 'm');
+  const fm = text.match(re);
   if (!fm) {
-    out.problems.push(`no \`\`\`${REVIEW_RECORD_FENCE} block — a reviewer grant without its review record is not a grant`);
+    out.problems.push(`no \`\`\`${fence} block — a reviewer grant without its review record is not a grant`);
     return out;
   }
   const record = {};
@@ -138,6 +135,22 @@ function decodeReviewGrant(body) {
   }
   out.record = record;
   return out;
+}
+
+/** Record object → its fenced lines: `fields` order first, then any other key in the object's own
+ *  order; an empty/absent value is omitted. Shared by both reviewer grants. */
+function fencedRecord(fence, fields, rec) {
+  const r = rec || {};
+  const known = fields.map((f) => f.key);
+  const keys = [...known.filter((k) => Object.prototype.hasOwnProperty.call(r, k)),
+    ...Object.keys(r).filter((k) => !known.includes(k))];
+  const lines = [];
+  for (const k of keys) {
+    const v = r[k];
+    if (v === undefined || v === null || String(v) === '') continue;
+    lines.push(`${k}: ${v}`);
+  }
+  return `\`\`\`${fence}\n${lines.join('\n')}\n\`\`\``;
 }
 
 // ── red-trunk CI grant / revoke ───────────────────────────────────────────────────────────────
@@ -174,6 +187,59 @@ function decodeCiRevoke(body) {
   return m ? { branch: m[1], host: m[2], at: m[3], tail: tailOf(s, m, REVOKE_TAIL) } : null;
 }
 
+// ── reviewer red-trunk CI grant (#504): a marker line plus a fenced `ci-review` record ─────────
+//
+// The coordinator agent's door through a red trunk the cure rule refuses (maintainer ruling
+// 2026-10-05). Same shape as the reviewer migration grant: a declared reviewer, a review record,
+// bound to one HEAD. It additionally names the red trunk sha it reviewed against (a grant must never
+// survive into a different red) and the red checks it claims to cure. Leading glyph 🩹, distinct from
+// every other mark here.
+
+const CI_REVIEW_GRANT_MARK = '🩹 Red-trunk CI review grant';
+const CI_REVIEWER_ROLE = 'ci-reviewer';
+const CI_REVIEW_GRANT_RE = /^🩹 Red-trunk CI review grant — role `([^`]*)` · reviewer `([^`]*)` · branch `([^`]*)` · head `([^`]*)` · red `([^`]*)`@`([^`]*)` · host `([^`]*)` · (\S+)/;
+const CI_REVIEW_GRANT_TAIL = ' — bound to this HEAD and this red trunk sha: a new commit on either voids it; expires when this issue closes.';
+const CI_REVIEW_RECORD_FENCE = 'ci-review';
+const CI_REVIEW_RECORD_VERSION = '1';
+/** `cures:` is a `; `-separated list of red check names (`workflow / job`, or a bare job name) —
+ *  `;`, not `,`, because matrix job names carry commas (`test (ubuntu, 22)`). */
+const CI_CURES_SEPARATOR = ';';
+
+/** Every key a v1 `ci-review` record may carry. Order is the order the encoder writes them in. */
+const CI_REVIEW_RECORD_FIELDS = Object.freeze([
+  { key: 'v', required: true, values: [CI_REVIEW_RECORD_VERSION] },
+  { key: 'role', required: true, values: [CI_REVIEWER_ROLE] },
+  { key: 'reviewer', required: true, re: REVIEWER_ID_RE, hint: 'letters, digits, . _ @ -' },
+  { key: 'head', required: true, re: SHA40_RE, hint: 'a full 40-hex commit sha' },
+  { key: 'red', required: true, re: SHA40_RE, hint: 'the full 40-hex red trunk sha reviewed against' },
+  { key: 'verdict', required: true, values: ['pass', 'fail'] },
+  { key: 'cures', required: true, re: /^[^;\s][^;]*(;\s*[^;\s][^;]*)*$/, hint: 'red check names, "; "-separated' },
+  { key: 'not-before', required: false, re: /^\d{4}-\d{2}-\d{2}T\S+$/, hint: 'an ISO-8601 instant' },
+  { key: 'ci-run', required: false, re: /^\S+$/, hint: 'a run id or URL, no spaces' },
+]);
+
+/** `{role, reviewer, branch, head, trunk, redSha, host, at, tail?, record}` → marker line, blank
+ *  line, fenced `ci-review` record. Validation is ci-grant.js's job; the codec writes what it gets. */
+function encodeCiReviewGrant({ role, reviewer, branch, head, trunk, redSha, host, at, tail, record } = {}) {
+  const marker = withTail(`${CI_REVIEW_GRANT_MARK} — role \`${role}\` · reviewer \`${reviewer}\` · branch \`${branch}\``
+    + ` · head \`${head}\` · red \`${trunk}\`@\`${redSha}\` · host \`${host}\` · ${at}`, tail, CI_REVIEW_GRANT_TAIL);
+  return `${marker}\n\n${fencedRecord(CI_REVIEW_RECORD_FENCE, CI_REVIEW_RECORD_FIELDS, record)}`;
+}
+
+/** A CI review-grant comment → `{role, reviewer, branch, head, trunk, redSha, host, at, tail, record,
+ *  problems}`, or null when the first line is not one. `problems` holds SYNTAX findings only. */
+function decodeCiReviewGrant(body) {
+  const text = String(body == null ? '' : body).replace(/\r\n/g, '\n').trim();
+  const m = text.match(CI_REVIEW_GRANT_RE);
+  if (!m) return null;
+  const nl = text.indexOf('\n');
+  const line = nl === -1 ? text : text.slice(0, nl);
+  const t = line.slice(m[0].length);
+  const out = { role: m[1], reviewer: m[2], branch: m[3], head: m[4], trunk: m[5], redSha: m[6], host: m[7], at: m[8],
+    tail: t === CI_REVIEW_GRANT_TAIL ? null : t, record: null, problems: [] };
+  return readFencedRecord(text, CI_REVIEW_RECORD_FENCE, out);
+}
+
 module.exports = {
   MIGRATION_GRANT_MARK, MIGRATION_REVOKE_MARK, MIGRATION_GRANT_RE, MIGRATION_REVOKE_RE,
   encodeMigrationGrant, decodeMigrationGrant, encodeMigrationRevoke, decodeMigrationRevoke,
@@ -181,4 +247,6 @@ module.exports = {
   encodeReviewGrant, decodeReviewGrant,
   CI_GRANT_MARK, CI_REVOKE_MARK, CI_GRANT_RE, CI_REVOKE_RE,
   encodeCiGrant, decodeCiGrant, encodeCiRevoke, decodeCiRevoke,
+  CI_REVIEW_GRANT_MARK, CI_REVIEW_GRANT_RE, CI_REVIEWER_ROLE, CI_REVIEW_RECORD_FENCE, CI_REVIEW_RECORD_VERSION,
+  CI_REVIEW_RECORD_FIELDS, CI_CURES_SEPARATOR, encodeCiReviewGrant, decodeCiReviewGrant,
 };

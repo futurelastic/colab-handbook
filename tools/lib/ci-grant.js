@@ -230,6 +230,11 @@ function evaluateIssue(record, branch, trunk, redTrunkSha, evidence, issueNum, l
  *
  * `records` maps issue number → the `ghIssueView` result for that issue, or `null` on a failed
  * read (the caller's job, not this function's).
+ *
+ * `opts` (#504) additionally carries `{ policy, now, redJobs }` for the reviewer role: per issue a
+ * live human grant wins, unchanged; otherwise an issue carrying a live reviewer grant is judged by
+ * evaluateReviewerIssue (records must then include `title`). `redJobs` is a thunk, called at most
+ * once per set. A granted reviewer entry carries `role: 'ci-reviewer'`, `reviewer`, `head`, `cures`.
  */
 function evaluateShipSet(issues, records, branch, trunk, redTrunkSha, evidence, labelName, opts) {
   const list = Array.isArray(issues) ? issues : [];
@@ -239,10 +244,35 @@ function evaluateShipSet(issues, records, branch, trunk, redTrunkSha, evidence, 
   }
   const granted = [];
   const missing = [];
+  // #504: the red-job set is read at most once per set, and only by an issue whose reviewer grant
+  // has cleared every cheaper check.
+  let redJobsMemo;
+  const redJobs = () => {
+    if (redJobsMemo === undefined) {
+      try { redJobsMemo = opts && typeof opts.redJobs === 'function' ? opts.redJobs() : null; } catch (_) { redJobsMemo = null; }
+    }
+    return redJobsMemo;
+  };
   for (const n of list) {
-    const v = evaluateIssue(records ? records[n] : null, branch, trunk, redTrunkSha, evidence, n, labelName, opts);
-    if (v.ok) granted.push({ issue: n, branch: v.grant.branch, by: v.grant.login, at: v.grant.at, redSha: v.grant.redSha, evidenceSha: v.grant.evidenceSha });
-    else missing.push({ issue: n, reason: v.reason });
+    const rec = records ? records[n] : null;
+    const v = evaluateIssue(rec, branch, trunk, redTrunkSha, evidence, n, labelName, opts);
+    if (v.ok) {
+      granted.push({ issue: n, branch: v.grant.branch, by: v.grant.login, at: v.grant.at, redSha: v.grant.redSha, evidenceSha: v.grant.evidenceSha });
+      continue;
+    }
+    // #504: a reviewer grant is consulted only when the human one failed AND the issue carries a
+    // live reviewer marker — so an issue with none keeps the human reason byte for byte.
+    const hasReviewer = !!rec && liveGrantRecords(rec.comments).some((g) => g.role !== 'human');
+    if (!hasReviewer) { missing.push({ issue: n, reason: v.reason }); continue; }
+    const r = evaluateReviewerIssue(rec, { branch, trunk, redTrunkSha, evidence, issueNum: n, labelName,
+      policy: opts && opts.policy, now: opts && opts.now, redJobs });
+    if (r.ok) {
+      granted.push({ issue: n, role: REVIEWER_ROLE, reviewer: r.grant.reviewer, head: r.grant.head,
+        branch: r.grant.branch, by: r.grant.login, at: r.grant.at, redSha: r.grant.redSha, evidenceSha: r.grant.head,
+        cures: parseCures(r.grant.record.cures) });
+    } else {
+      missing.push({ issue: n, reason: `reviewer grant: ${r.reason}` });
+    }
   }
   return { ok: missing.length === 0, granted, missing };
 }
@@ -297,9 +327,248 @@ function stackingVerdict({ trunkIsRed, priorGrantMerge, redContinuousSincePriorG
   return { ok: true, reason: '' };
 }
 
+// ============================================================================================
+// THE REVIEWER ROLE (#504) — `colab ci-grant <N> --role ci-reviewer`.
+//
+// Maintainer ruling 2026-10-05: the coordinator agent owns a red trunk end to end, including this
+// exemption, where the cure rule (tools/lib/ci-cure.js) still refuses. Mirrors the reviewer
+// migration grant (#397, #401): a declared reviewer, a review record, bound to ONE HEAD — and, like
+// every CI grant, to ONE red trunk sha. Unlike the migration reviewer it is minted WITHOUT
+// COLAB_HUMAN=1, and only because the repo opted in on trunk (`ci-grant: reviewer`). Everything it
+// relies on is MEASURED by the reader, never taken from the record:
+//   - the issue is open, labelled, and titled `TRUNK RED:` (the work is the red trunk's repair);
+//   - trunk is still at the red sha the review names;
+//   - the branch's own CI is green at the exact HEAD the review names;
+//   - every check the record claims to cure is red on trunk at that sha;
+//   - a host-imposed revoke window (`not-before`) has passed.
+// Never-stacks is a MINT-time guard (stackingVerdict, as for the human grant): once any exemption
+// merges, trunk's head moves, and a grant bound to the old red sha is dead.
+//
+// THE REVIEWER IDENTITY IS DECLARED, NOT ATTESTED — same caveat as the migration reviewer. The
+// anti-forgery properties are the label (write/triage permission) and TRUSTED_ASSOCIATIONS on read.
+// ============================================================================================
+
+const REVIEW_GRANT_MARK = codec.CI_REVIEW_GRANT_MARK;
+const REVIEW_GRANT_RE = codec.CI_REVIEW_GRANT_RE;
+const REVIEWER_ROLE = codec.CI_REVIEWER_ROLE;
+const GRANT_ROLES = Object.freeze(['human', REVIEWER_ROLE]);
+const REVIEW_RECORD_FIELDS = codec.CI_REVIEW_RECORD_FIELDS;
+const REVIEW_RECORD_KEYS = new Set(REVIEW_RECORD_FIELDS.map((f) => f.key));
+/** The issue-title prefix a reviewer grant requires: the branch's work IS the red trunk's repair. */
+const TRUNK_RED_TITLE_PREFIX = 'TRUNK RED:';
+/** `ci-grant:` values in project.yml (#504). Absent = human, the behaviour before #504. */
+const GRANT_POLICIES = Object.freeze(['human', 'reviewer']);
+
+/**
+ * `ci-grant:` from a parsed project.yml → { policy, declared, valid, reason }. Same shape and the same
+ * fail-safe posture as migration-grant.js's parseGrantPolicy: an invalid value reads as `human` (the
+ * stricter reading) with `valid: false`, so the audit fails it.
+ */
+function parseGrantPolicy(doc) {
+  const has = !!doc && Object.prototype.hasOwnProperty.call(doc, 'ci-grant');
+  const raw = has ? doc['ci-grant'] : undefined;
+  if (!has || raw === null || raw === undefined) {
+    return { policy: 'human', declared: false, valid: true, reason: 'ci-grant absent — human grants only' };
+  }
+  const v = typeof raw === 'string' ? raw.trim() : raw;
+  if (typeof v === 'string' && GRANT_POLICIES.includes(v)) {
+    return { policy: v, declared: true, valid: true, reason: `ci-grant: ${v}` };
+  }
+  return { policy: 'human', declared: true, valid: false,
+    reason: `ci-grant is ${JSON.stringify(raw)}, expected ${GRANT_POLICIES.join(' | ')} (omit for human)` };
+}
+
+/** The `cures:` value → a list of check names, trimmed, empties dropped. */
+function parseCures(value) {
+  return String(value == null ? '' : value).split(codec.CI_CURES_SEPARATOR).map((x) => x.trim()).filter(Boolean);
+}
+
+/** A list of check names → the `cures:` value. */
+function formatCures(list) {
+  return (Array.isArray(list) ? list : []).map((x) => String(x).trim()).filter(Boolean).join(`${codec.CI_CURES_SEPARATOR} `);
+}
+
+/**
+ * Validate a `ci-review` record — from a parsed comment or from CLI flags, the SAME function for
+ * both. `marker` (optional) is the parsed first line; given, its head/reviewer/red/role must agree
+ * with the record. Returns { valid, passing, problems }; PASSING = valid AND `verdict: pass`.
+ */
+function validateReviewRecord(rec, marker) {
+  const problems = [];
+  const r = rec && typeof rec === 'object' ? rec : {};
+  for (const k of Object.keys(r)) {
+    if (!REVIEW_RECORD_KEYS.has(k)) problems.push(`unknown key "${k}" — a v${codec.CI_REVIEW_RECORD_VERSION} ci-review record has no such field`);
+  }
+  for (const f of REVIEW_RECORD_FIELDS) {
+    const has = Object.prototype.hasOwnProperty.call(r, f.key) && r[f.key] !== undefined && r[f.key] !== null && String(r[f.key]) !== '';
+    if (!has) {
+      if (f.required) problems.push(`missing "${f.key}"`);
+      continue;
+    }
+    const v = String(r[f.key]);
+    if (f.values && !f.values.includes(v)) problems.push(`"${f.key}" is ${JSON.stringify(v)}, expected ${f.values.join(' | ')}`);
+    if (f.re && !f.re.test(v)) problems.push(`"${f.key}" is ${JSON.stringify(v)}, expected ${f.hint}`);
+  }
+  if (r['not-before'] && Number.isNaN(Date.parse(r['not-before']))) problems.push(`"not-before" is ${JSON.stringify(r['not-before'])}, not a parseable instant`);
+  if (marker) {
+    if (r.head && marker.head !== r.head) problems.push(`record head ${String(r.head).slice(0, 7)} differs from the marker's head ${String(marker.head).slice(0, 7)}`);
+    if (r.red && marker.redSha !== r.red) problems.push(`record red ${String(r.red).slice(0, 7)} differs from the marker's red ${String(marker.redSha).slice(0, 7)}`);
+    if (r.reviewer && marker.reviewer !== r.reviewer) problems.push(`record reviewer "${r.reviewer}" differs from the marker's reviewer "${marker.reviewer}"`);
+    if (marker.role !== REVIEWER_ROLE) problems.push(`marker role is "${marker.role}", expected "${REVIEWER_ROLE}"`);
+  }
+  const valid = problems.length === 0;
+  return { valid, passing: valid && r.verdict === 'pass', problems };
+}
+
+/** The exact reviewer-grant comment body. Only v1 fields are written. The caller validates `rec`
+ *  (validateReviewRecord) BEFORE calling this. */
+function reviewGrantCommentBody(branch, trunk, host, iso, rec) {
+  const record = {};
+  for (const f of REVIEW_RECORD_FIELDS) if (Object.prototype.hasOwnProperty.call(rec, f.key)) record[f.key] = rec[f.key];
+  return codec.encodeCiReviewGrant({ role: rec.role, reviewer: rec.reviewer, branch, head: rec.head,
+    trunk, redSha: rec.red, host, at: iso, record });
+}
+
+/** A reviewer-grant comment → { marker, record, problems } or null. Syntax from the codec, values
+ *  from validateReviewRecord. */
+function parseReviewGrant(body) {
+  const d = codec.decodeCiReviewGrant(body);
+  if (!d) return null;
+  const marker = { role: d.role, reviewer: d.reviewer, branch: d.branch, head: d.head, trunk: d.trunk,
+    redSha: d.redSha, host: d.host, at: d.at };
+  if (!d.record) return { marker, record: null, problems: d.problems };
+  const v = validateReviewRecord(d.record, marker);
+  return { marker, record: d.record, problems: [...d.problems, ...v.problems] };
+}
+
+/**
+ * Every live grant of EVERY role — human ones as liveGrants() reads them, plus reviewer grants —
+ * after the same revoke rule (a revoke cancels every earlier grant, whichever role, whoever posted
+ * it). Oldest-first. Human entries carry role 'human' and liveGrants()'s fields; reviewer entries
+ * carry { role, reviewer, branch, head, trunk, redSha, record, problems, valid, passing }.
+ */
+function liveGrantRecords(comments) {
+  const list = Array.isArray(comments) ? comments : [];
+  const sorted = [...list].sort((a, b) => (a.createdAt < b.createdAt ? -1 : a.createdAt > b.createdAt ? 1 : 0));
+  let lastRevokeAt = null;
+  for (const c of sorted) {
+    if (REVOKE_RE.test(String(c.body || '').trim())) {
+      if (lastRevokeAt === null || c.createdAt > lastRevokeAt) lastRevokeAt = c.createdAt;
+    }
+  }
+  const out = [];
+  for (const c of sorted) {
+    const at = c.createdAt;
+    if (lastRevokeAt !== null && lastRevokeAt > at) continue;
+    const body = String(c.body || '').trim();
+    const base = { at, login: (c.author && c.author.login) || '', authorAssociation: c.authorAssociation || '' };
+    const h = body.match(GRANT_RE);
+    if (h) {
+      out.push({ role: 'human', branch: h[1], trunk: h[2], redSha: h[3], evidenceSha: h[4], host: h[5], ...base });
+      continue;
+    }
+    const r = parseReviewGrant(body);
+    if (r) {
+      const v = r.record ? validateReviewRecord(r.record, r.marker) : { valid: false, passing: false };
+      out.push({ role: r.marker.role, reviewer: r.marker.reviewer, branch: r.marker.branch, head: r.marker.head,
+        trunk: r.marker.trunk, redSha: r.marker.redSha, host: r.marker.host, ...base,
+        record: r.record, problems: r.problems,
+        valid: r.problems.length === 0 && v.valid, passing: r.problems.length === 0 && v.passing });
+    }
+  }
+  return out;
+}
+
+/** The label a check is named by in `cures:` and in reasons — `workflow / job`, or the bare job
+ *  name when the workflow is unknown (tools/lib/ci-cure.js jobLabel). */
+function checkLabel(j) {
+  return j && j.workflowName ? `${j.workflowName} / ${j.name}` : String((j && j.name) || '');
+}
+
+/**
+ * Which claimed cures are NOT red on trunk. `redJobs` is ci-cure.js redJobSet's `[{name,
+ * workflowName}]` at the red sha, or null when it could not be measured. A claimed name matches a red
+ * job by its full `workflow / job` label, or by its bare job name when exactly one red job carries
+ * it (an ambiguous bare name matches nothing — never a guess). Returns { ok, unmatched, reason }.
+ */
+function curesAreRed(cures, redJobs) {
+  if (!Array.isArray(redJobs)) {
+    return { ok: false, unmatched: [], reason: 'trunk\'s red checks at that sha could not be measured — an unmeasured red set never confirms a cure' };
+  }
+  const list = Array.isArray(cures) ? cures : [];
+  if (list.length === 0) return { ok: false, unmatched: [], reason: 'the review names no red check it cures' };
+  const labelsSet = new Set(redJobs.map(checkLabel));
+  const byName = new Map();
+  for (const j of redJobs) byName.set(j.name, (byName.get(j.name) || 0) + 1);
+  const unmatched = list.filter((c) => !labelsSet.has(c) && byName.get(c) !== 1);
+  if (unmatched.length) {
+    const red = redJobs.length ? redJobs.map((j) => `\`${checkLabel(j)}\``).join(', ') : 'none';
+    return { ok: false, unmatched,
+      reason: `the review claims to cure ${unmatched.map((c) => `\`${c}\``).join(', ')}, which ${unmatched.length === 1 ? 'is' : 'are'} not red on trunk at that sha (red: ${red})` };
+  }
+  return { ok: true, unmatched: [], reason: '' };
+}
+
+function titleIsTrunkRed(title) {
+  return String(title || '').trimStart().startsWith(TRUNK_RED_TITLE_PREFIX);
+}
+
+/**
+ * The reviewer-grant verdict for one issue on a ship. `ctx` = { branch, trunk, redTrunkSha, evidence,
+ * issueNum, labelName, policy, now, redJobs } where `evidence` is `{ok, sha}` for the branch's CURRENT
+ * remote head (or null on a failed read), `now` is an ISO instant or ms (absent = Date.now()), and
+ * `redJobs` is a function returning the red-job set at `redTrunkSha` (or null) — called only once
+ * everything cheaper has passed. Checks, cheapest first, each with its own reason. `record` must be a
+ * ghIssueView result carrying `title`. Returns { ok, grant, reason }.
+ */
+function evaluateReviewerIssue(record, ctx) {
+  const c = ctx || {};
+  const issue = c.issueNum;
+  const no = (reason, grant = null) => ({ issue, ok: false, grant, reason });
+  if (!record) return no(`#${issue} could not be read from the tracker — a failed read is never a grant`);
+  if (record.state !== 'OPEN') return no(`#${issue} is ${record.state || 'not open'} — a grant expires when its issue closes`);
+  const labelNames = (record.labels || []).map((l) => (l && typeof l === 'object' ? l.name : l));
+  if (!labelNames.includes(c.labelName)) return no(`#${issue} does not carry the \`${c.labelName}\` label`);
+  if (c.policy !== 'reviewer') return no(`this repo's ci-grant policy is "${c.policy || 'human'}" — a reviewer grant is honoured only under ci-grant: reviewer`);
+  if (!titleIsTrunkRed(record.title)) {
+    return no(`#${issue}'s title does not start "${TRUNK_RED_TITLE_PREFIX}" — a reviewer CI grant covers only a branch whose work is the red trunk's repair`);
+  }
+  const reviewer = liveGrantRecords(record.comments).filter((g) => g.role !== 'human');
+  if (reviewer.length === 0) return no(`#${issue} has no live reviewer grant (revoked, or never posted)`);
+  const g = reviewer[reviewer.length - 1];
+  if (g.branch !== c.branch) return no(`#${issue}'s reviewer grant is bound to branch "${g.branch}", not "${c.branch}"`, g);
+  if (!TRUSTED_ASSOCIATIONS.has(g.authorAssociation)) {
+    return no(`#${issue}'s reviewer grant was posted by ${g.login || '(unknown)'} (${g.authorAssociation || 'unknown association'}) — not a repo owner/member/collaborator`, g);
+  }
+  if (!g.valid) return no(`#${issue}'s reviewer grant has an invalid review record: ${(g.problems || []).join('; ') || 'unreadable'}`, g);
+  if (!g.passing) return no(`#${issue}'s review record says verdict ${g.record && g.record.verdict} — only a pass is a grant`, g);
+  if (g.trunk !== c.trunk || g.redSha !== c.redTrunkSha) {
+    return no(`#${issue}'s reviewer grant was reviewed against \`${g.trunk}\`@\`${String(g.redSha).slice(0, 7)}\`, not the current \`${c.trunk}\`@\`${String(c.redTrunkSha || '').slice(0, 7)}\` — trunk moved since the review`, g);
+  }
+  const nb = g.record['not-before'];
+  if (nb) {
+    const now = c.now === undefined ? Date.now() : (typeof c.now === 'number' ? c.now : Date.parse(c.now));
+    if (!(now >= Date.parse(nb))) return no(`#${issue}'s reviewer grant is not yet usable — its revoke window runs until ${nb}`, g);
+  }
+  if (!c.evidence) return no(`#${issue}'s reviewer grant could not be checked against the branch's current CI run — a failed evidence read is never a grant`, g);
+  if (!c.evidence.ok) return no(`#${issue}'s reviewer grant requires a completed, successful CI run on \`${c.branch}\`'s current head — none exists`, g);
+  if (String(c.evidence.sha || '').toLowerCase() !== String(g.head).toLowerCase()) {
+    return no(`#${issue}'s reviewer grant is bound to ${String(g.head).slice(0, 7)}, \`${c.branch}\` is at ${String(c.evidence.sha || '?').slice(0, 7)} — a new commit voids it`, g);
+  }
+  let redJobs = null;
+  try { redJobs = typeof c.redJobs === 'function' ? c.redJobs() : (c.redJobs === undefined ? null : c.redJobs); } catch (_) { redJobs = null; }
+  const cr = curesAreRed(parseCures(g.record.cures), redJobs);
+  if (!cr.ok) return no(`#${issue}: ${cr.reason}`, g);
+  return { issue, ok: true, grant: g, reason: '' };
+}
+
 module.exports = {
   GRANT_MARK, REVOKE_MARK, GRANT_RE, REVOKE_RE,
   grantCommentBody, revokeCommentBody,
   liveGrants, TRUSTED_ASSOCIATIONS,
   evaluateIssue, evaluateShipSet, stackingVerdict, wentGreenSince,
+  // #504 — the reviewer role
+  REVIEW_GRANT_MARK, REVIEW_GRANT_RE, REVIEWER_ROLE, GRANT_ROLES, REVIEW_RECORD_FIELDS, TRUNK_RED_TITLE_PREFIX,
+  GRANT_POLICIES, parseGrantPolicy, parseCures, formatCures, validateReviewRecord, reviewGrantCommentBody,
+  parseReviewGrant, liveGrantRecords, checkLabel, curesAreRed, titleIsTrunkRed, evaluateReviewerIssue,
 };

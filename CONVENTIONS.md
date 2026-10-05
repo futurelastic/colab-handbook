@@ -3212,7 +3212,30 @@ Same shape as a migration grant, strictly **more dangerous** — a bad migration
 merges one reviewed schema change; a bad CI grant merges into a repo whose own test suite
 is known-failing.
 
-- **Human-only, identical bar** (`COLAB_HUMAN=1`).
+- **Two roles, as for a migration grant (#504).** The repo says which it accepts:
+
+  | Role | Who decided | Marker | Bound to | Accepted |
+  |---|---|---|---|---|
+  | `human` | a person, `COLAB_HUMAN=1` | `🚨 Red-trunk CI grant` | the branch and the red trunk sha | on every repo — the default |
+  | `ci-reviewer` | the coordinator agent, with a review record | `🩹 Red-trunk CI review grant` | the branch's exact HEAD and the red trunk sha | only under [`ci-grant: reviewer`](project.schema.md#ci-grant--optional) |
+
+  The reviewer role exists because the maintainer ruled (2026-10-05) that the coordinator
+  owns a red trunk end to end, including this exemption, where the cure rule (below) still
+  refuses. `colab ci-grant <N> --branch <b> --role ci-reviewer --reviewer <id> --verdict
+  pass --cures "<check>; <check>"` mints it **without** `COLAB_HUMAN=1` — the only grant
+  that does — and only where trunk's committed `project.yml` declares the opt-in (a branch
+  cannot opt itself in). Every guard is **measured** at mint, nothing is taken from the
+  flags: the branch's trailing number group carries `#N`; `#N` is open and titled
+  `TRUNK RED:`; trunk is red in the sense `ship` checks; never stacks (the same guard as the
+  human grant); the branch's own CI is green at its **exact** pushed head; and every check
+  the record claims to cure is red on trunk at the red sha. The review record (a fenced
+  `ci-review` block) carries `verdict: pass`, the reviewed `head`, the `red` sha and the
+  `cures`. `ship` re-measures all of it — issue, title, opt-in at the merge target, red sha,
+  branch green at exactly that head, cures still red — and honours an optional
+  `not-before` (a revoke window the host imposes) by reading the grant as *not yet usable*
+  until it passes. **Revoking stays human** (`COLAB_HUMAN=1 colab ci-grant <N> --revoke`
+  cancels every role). The reviewer identity is declared, not attested — the same caveat as
+  the migration reviewer.
 - **Bound to one issue, the branch, AND the exact red trunk sha reviewed against** — it
   expires the instant trunk's head moves, for any reason.
 - **Evidence is measured, never asserted** — creating one requires a completed,
@@ -3557,7 +3580,10 @@ refuses and a human runs Phase B.
 **A genuinely red trunk with no proven cure and no valid CI grant is human-gated, not
 self-clearing** — a scheduler must not queue and wait on it; it parks, states it once,
 and stops. A scheduler never mints a ci-grant itself either way — only the cure rule's
-mechanical door is available to it unattended, exactly as it is to any other caller.
+mechanical door is available to it unattended, exactly as it is to any other caller. On a
+repo declaring `ci-grant: reviewer`, a coordinator session that has reviewed the cure may
+mint a `ci-reviewer` grant ([*Red-trunk exemption*](#red-trunk-exemption--the-one-shot-door-through-trunk-ci-green-105),
+#504); the scheduler only reads it, through `colab ship`, like any other grant.
 
 **Never promotes, on any repo, on any tier — except the release workflow, through `colab
 promote --auto`, on a repo declaring `deploy: tag` and `promotion: main-loop` (#440)** — **and
