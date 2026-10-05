@@ -31,91 +31,12 @@
  * early on part of its condition, which rule 1 forbids.
  */
 
-// A cross-repo issue ref: `<owner>/<repo>#<n>`. Same character class the scheduler uses.
-const QUALIFIED_ISSUE_RE = /^([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)#(\d+)$/;
-const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
-
-function isIsoDate(arg) {
-  if (!ISO_DATE_RE.test(arg)) return false;
-  const t = Date.parse(`${arg}T00:00:00Z`);
-  // Date.parse rolls 2026-02-31 over to March; round-trip it so an impossible date is refused.
-  return !Number.isNaN(t) && new Date(t).toISOString().slice(0, 10) === arg;
-}
-
-/**
- * The checkable kinds, each with its argument validator — spelled and validated exactly as the
- * adopting scheduler does (see the header). Frozen: this list is the vocabulary.
- */
-const CHECKABLE = Object.freeze({
-  // Bare `<n>` (this repo's own issue) OR qualified `<owner>/<repo>#<n>` (another repo's).
-  issueClosed: (arg) => /^\d+$/.test(arg) || QUALIFIED_ISSUE_RE.test(arg),
-  branchLanded: (arg) => arg.length > 0 && !/\s/.test(arg),
-  trunkAt: (arg) => /^[0-9a-f]{7,40}$/i.test(arg),
-  labelPresent: (arg) => arg.length > 0,
-  // Epoch-ms digits OR anything Date.parse accepts — permissive on FORMAT only, because this is
-  // the one argument a human chooses; the kind itself is still closed.
-  after: (arg) => /^\d+$/.test(arg) || !Number.isNaN(Date.parse(arg)),
-});
-
-/** The handbook's own three forms, older than the checkable ones and unchanged by #382. */
-const NATIVE = Object.freeze(['review-by', 'edge', 'ruling']);
-
-/** Every kind a `wake:` may carry, in the order CONVENTIONS lists them. */
-const WAKE_KINDS = Object.freeze([...NATIVE, ...Object.keys(CHECKABLE)]);
-
-const WAKE_KINDS_TEXT = 'review-by:<date> · #N · ruling · issueClosed:<n|owner/repo#n> · ' +
-  'branchLanded:<ref> · trunkAt:<sha> · labelPresent:<label> · after:<date>';
-
-/**
- * Parse ONE wake condition. `null` for anything outside the closed vocabulary, or whose argument
- * fails its kind's validator — the caller treats `null` as "this line names no wake", never as
- * "skip this piece".
- * @returns {{kind:string, arg:string|null, raw:string}|null}
- */
-function parseWake(raw) {
-  if (typeof raw !== 'string') return null;
-  const s = raw.trim();
-  if (s === '') return null;
-  if (s === 'ruling') return { kind: 'ruling', arg: null, raw: s };
-  const edge = /^#(\d+)$/.exec(s);
-  if (edge) return { kind: 'edge', arg: edge[1], raw: s };
-  const idx = s.indexOf(':');
-  if (idx <= 0) return null;
-  const kind = s.slice(0, idx);
-  const arg = s.slice(idx + 1);
-  if (arg === '') return null;
-  if (kind === 'review-by') return isIsoDate(arg) ? { kind, arg, raw: s } : null;
-  const validate = Object.prototype.hasOwnProperty.call(CHECKABLE, kind) ? CHECKABLE[kind] : null;
-  if (!validate || !validate(arg)) return null;
-  return { kind, arg, raw: s };
-}
-
-/**
- * Parse the value of a `wake:` field — one condition, or several separated by commas, ANDed.
- * Accepts the string as written on the `Hold:` line, or an array of condition strings.
- * @returns {{ok:true, conditions:Array<{kind,arg,raw}>}|{ok:false, error:string}}
- */
-function parseWakeLine(value) {
-  const parts = Array.isArray(value)
-    ? value
-    : (typeof value === 'string' ? value.split(',') : null);
-  if (!parts) return { ok: false, error: 'wake: is missing' };
-  const pieces = parts.map((p) => (typeof p === 'string' ? p.trim() : p)).filter((p) => p !== '');
-  if (pieces.length === 0) return { ok: false, error: 'wake: is empty — a hold must name what ends it' };
-  const conditions = [];
-  for (const p of pieces) {
-    const c = parseWake(p);
-    if (!c) {
-      return {
-        ok: false,
-        error: `wake condition ${JSON.stringify(p)} is not in the closed vocabulary — ${WAKE_KINDS_TEXT}. ` +
-          'A wait with no checkable form stays prose in Because: and carries review-by:<date>.',
-      };
-    }
-    conditions.push(c);
-  }
-  return { ok: true, conditions };
-}
+// The vocabulary and its parsers — CHECKABLE's validators, `parseWake`, `parseWakeLine`, the
+// qualified-ref parser — live in codec/hold.js (#498, epic #496) beside the `Hold:` line they
+// belong to. Re-exported below under the names this module always had; what stays here is
+// EVALUATION, which needs facts a caller gathered and so is not wire format.
+const codec = require('./codec/hold');
+const { WAKE_KINDS, CHECKABLE_KINDS, parseWake, parseWakeLine, parseQualifiedIssueRef } = codec;
 
 /**
  * The facts that decide each kind, as a caller gathers them. Every key optional:
@@ -176,13 +97,10 @@ function evaluateWakeLine(conditions, facts) {
 
 module.exports = {
   WAKE_KINDS,
-  CHECKABLE_KINDS: Object.freeze(Object.keys(CHECKABLE)),
+  CHECKABLE_KINDS,
   parseWake,
   parseWakeLine,
   evaluateWake,
   evaluateWakeLine,
-  parseQualifiedIssueRef(arg) {
-    const m = QUALIFIED_ISSUE_RE.exec(String(arg));
-    return m ? { slug: m[1], number: Number(m[2]) } : null;
-  },
+  parseQualifiedIssueRef,
 };

@@ -41,29 +41,25 @@
  * this branch and this issue may rely on.
  */
 
-/** The two comment markers. STABLE WIRE FORMAT — do not reword casually; `tools/colab` and any
- *  vendored reader parse these verbatim, the same posture as CLAIM_MARK/RELEASE_MARK in tools/colab. */
-const GRANT_MARK = '🛢 Migration grant';
-const REVOKE_MARK = '🚫 Migration grant revoked';
+// The wire format — both marks, both regexes, and the encode/decode pairs — lives in
+// codec/grants.js (#498, epic #496). Re-exported below under the names this module always had.
+// Mark design (distinct leading emoji, so neither regex can match the other mark's body) is
+// documented there; the grant-revoke-mark-collision test still pins it here.
+const codec = require('./codec/grants');
+const GRANT_MARK = codec.MIGRATION_GRANT_MARK;
+const REVOKE_MARK = codec.MIGRATION_REVOKE_MARK;
+const GRANT_RE = codec.MIGRATION_GRANT_RE;
+const REVOKE_RE = codec.MIGRATION_REVOKE_RE;
 
-// Deliberately DIFFERENT leading emoji (not just different trailing text) so neither `startsWith`
-// nor either regex can ever match the other mark's body — a revoke mark that merely suffixed the
-// grant mark would make every revoke parse as a fresh grant, silently reopening exactly the door
-// it was posted to close. Covered by a dedicated test (grant-revoke-mark-collision).
-const GRANT_RE = /^🛢 Migration grant — branch `([^`]*)` · host `([^`]*)` · (\S+)/;
-const REVOKE_RE = /^🚫 Migration grant revoked — branch `([^`]*)` · host `([^`]*)` · (\S+)/;
-
-/** The exact grant-comment body. Keep in lockstep with GRANT_RE. */
+/** The exact grant-comment body (codec `encodeMigrationGrant`, canonical tail). */
 function grantCommentBody(branch, host, iso) {
-  return `${GRANT_MARK} — branch \`${branch}\` · host \`${host}\` · ${iso}`
-    + ' — this exempts THIS BRANCH only, and expires when this issue closes.';
+  return codec.encodeMigrationGrant({ branch, host, at: iso });
 }
 
-/** The exact revoke-comment body. Keep in lockstep with REVOKE_RE. `branch` is the branch named in
+/** The exact revoke-comment body (codec `encodeMigrationRevoke`). `branch` is the branch named in
  *  the record for the audit trail — revocation itself is NOT branch-scoped (see evaluateIssue doc). */
 function revokeCommentBody(branch, host, iso) {
-  return `${REVOKE_MARK} — branch \`${branch}\` · host \`${host}\` · ${iso}`
-    + ' — every grant on this issue up to this point is cancelled.';
+  return codec.encodeMigrationRevoke({ branch, host, at: iso });
 }
 
 /**
@@ -428,37 +424,18 @@ function stepRanOk(s) {
 // `head` itself rather than rely on the recorded value.
 // ============================================================================================
 
-/** The reviewer grant's first-line mark. STABLE WIRE FORMAT. Distinct leading emoji on purpose:
- *  GRANT_RE (the human marker, the one today's ship gate reads) must never match a reviewer grant. */
-const REVIEW_GRANT_MARK = '🔎 Migration review grant';
-const REVIEWER_ROLE = 'migration-reviewer';
+// The reviewer grant's wire format — mark, regex, fence, field table — lives in codec/grants.js
+// (#498). GRANT_RE (the human marker, the one today's ship gate reads) never matches it: distinct
+// leading emoji, on purpose.
+const REVIEW_GRANT_MARK = codec.REVIEW_GRANT_MARK;
+const REVIEWER_ROLE = codec.REVIEWER_ROLE;
 const GRANT_ROLES = Object.freeze(['human', REVIEWER_ROLE]);
-
-const REVIEW_GRANT_RE = /^🔎 Migration review grant — role `([^`]*)` · reviewer `([^`]*)` · branch `([^`]*)` · head `([^`]*)` · host `([^`]*)` · (\S+)/;
-
-/** The fenced block's info string — the record is found by it, never by position. */
-const REVIEW_RECORD_FENCE = 'migration-review';
-const REVIEW_RECORD_VERSION = '1';
-
+const REVIEW_GRANT_RE = codec.REVIEW_GRANT_RE;
+const REVIEW_RECORD_FENCE = codec.REVIEW_RECORD_FENCE;
+const REVIEW_RECORD_VERSION = codec.REVIEW_RECORD_VERSION;
 const SHA40_RE = /^[0-9a-f]{40}$/;
-const REVIEWER_ID_RE = /^[A-Za-z0-9._@-]+$/;
-const CONDITION_ID_RE = /^[a-z0-9][a-z0-9-]*$/;
-
-/** Every key a v1 record may carry, and what each accepts. `required: false` keys may be absent.
- *  Order here is the order reviewGrantCommentBody() writes them in. */
-const REVIEW_RECORD_FIELDS = Object.freeze([
-  { key: 'v', required: true, values: [REVIEW_RECORD_VERSION] },
-  { key: 'role', required: true, values: [REVIEWER_ROLE] },
-  { key: 'reviewer', required: true, re: REVIEWER_ID_RE, hint: 'letters, digits, . _ @ -' },
-  { key: 'head', required: true, re: SHA40_RE, hint: 'a full 40-hex commit sha' },
-  { key: 'verdict', required: true, values: ['approve', 'reject'] },
-  { key: 'checklist', required: true, values: ['pass', 'fail'] },
-  { key: 'checklist-items', required: false, re: /^\d+\/\d+$/, hint: 'N/M, e.g. 7/7' },
-  { key: 'escalation', required: true, re: CONDITION_ID_RE, hint: 'a condition id, lowercase-hyphenated' },
-  { key: 'escalation-result', required: true, values: ['clear', 'escalated'] },
-  { key: 'ci-roundtrip', required: true, values: ['pass', 'fail', 'pending'] },
-  { key: 'ci-run', required: false, re: /^\S+$/, hint: 'a run id or URL, no spaces' },
-]);
+/** Every key a v1 record may carry, and what each accepts (codec/grants.js). */
+const REVIEW_RECORD_FIELDS = codec.REVIEW_RECORD_FIELDS;
 const REVIEW_RECORD_KEYS = new Set(REVIEW_RECORD_FIELDS.map((f) => f.key));
 
 /**
@@ -550,48 +527,25 @@ function reviewRecordFailure(rec) {
  * caller (tools/colab) validates it with validateReviewRecord BEFORE calling this.
  */
 function reviewGrantCommentBody(branch, host, iso, rec) {
-  const head = `${REVIEW_GRANT_MARK} — role \`${rec.role}\` · reviewer \`${rec.reviewer}\` · branch \`${branch}\``
-    + ` · head \`${rec.head}\` · host \`${host}\` · ${iso}`
-    + ' — bound to this HEAD: any new commit voids it; expires when this issue closes.';
-  const lines = [];
-  for (const f of REVIEW_RECORD_FIELDS) {
-    const v = rec[f.key];
-    if (v === undefined || v === null || String(v) === '') continue;
-    lines.push(`${f.key}: ${v}`);
-  }
-  return `${head}\n\n\`\`\`${REVIEW_RECORD_FENCE}\n${lines.join('\n')}\n\`\`\``;
+  // Only the v1 fields are written — an unknown key on `rec` never reaches the comment.
+  const record = {};
+  for (const f of REVIEW_RECORD_FIELDS) if (Object.prototype.hasOwnProperty.call(rec, f.key)) record[f.key] = rec[f.key];
+  return codec.encodeReviewGrant({ role: rec.role, reviewer: rec.reviewer, branch, head: rec.head, host, at: iso, record });
 }
 
 /**
  * Parse a reviewer-grant comment body → { marker, record, problems } or null when the first line
- * is not a reviewer-grant marker at all. The record is the FIRST fenced block whose info string is
- * exactly `migration-review`; text outside it is ignored. A marker with no such block, or a block
- * with a malformed line, returns problems — never a record silently missing fields.
+ * is not a reviewer-grant marker at all. The codec (`decodeReviewGrant`) reads the syntax; this adds
+ * validateReviewRecord's findings. A marker with no record block, or a block with a malformed line,
+ * returns problems — never a record silently missing fields.
  */
 function parseReviewGrant(body) {
-  const text = String(body || '').replace(/\r\n/g, '\n').trim();
-  const m = text.match(REVIEW_GRANT_RE);
-  if (!m) return null;
-  const marker = { role: m[1], reviewer: m[2], branch: m[3], head: m[4], host: m[5], at: m[6] };
-  const problems = [];
-  const fence = new RegExp('^```' + REVIEW_RECORD_FENCE + '[ \\t]*\\n([\\s\\S]*?)^```[ \\t]*$', 'm');
-  const fm = text.match(fence);
-  if (!fm) {
-    problems.push(`no \`\`\`${REVIEW_RECORD_FENCE} block — a reviewer grant without its review record is not a grant`);
-    return { marker, record: null, problems };
-  }
-  const record = {};
-  for (const raw of fm[1].split('\n')) {
-    const line = raw.trim();
-    if (line === '') continue;
-    const kv = line.match(/^([a-z][a-z-]*):\s*(.*)$/);
-    if (!kv) { problems.push(`record line ${JSON.stringify(line)} is not "key: value"`); continue; }
-    if (Object.prototype.hasOwnProperty.call(record, kv[1])) { problems.push(`"${kv[1]}" appears twice`); continue; }
-    record[kv[1]] = kv[2].trim();
-  }
-  const v = validateReviewRecord(record, marker);
-  problems.push(...v.problems);
-  return { marker, record, problems };
+  const d = codec.decodeReviewGrant(body);
+  if (!d) return null;
+  const marker = { role: d.role, reviewer: d.reviewer, branch: d.branch, head: d.head, host: d.host, at: d.at };
+  if (!d.record) return { marker, record: null, problems: d.problems };
+  const v = validateReviewRecord(d.record, marker);
+  return { marker, record: d.record, problems: [...d.problems, ...v.problems] };
 }
 
 /**
