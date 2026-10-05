@@ -7478,7 +7478,7 @@ const HELP_ADOPT = `colab adopt [--repo <path>] [--json] [--no-verify] [--axis a
                  [--writes <free|direct|isolated>] [--channels <c1,c2,...>]
                  [--production <url>|none] [--deploy <push-main|tag|manual|none>]
                  [--stack "<text>"] [--answered-by <name>] [--reason "<text>"]
-                 [--fork | --no-fork]
+                 [--fork | --no-fork] [--autonomy <manual|auto-trunk>] [--land]
 
 Detects what a repo already states in .github/project.yml, ASKS a human only what could not be
 detected (flags, or a forced multiple-choice menu at a TTY — every row is a numbered choice,
@@ -7509,7 +7509,32 @@ accepted and reads as free — no adopter's descriptor breaks, and none is re-as
                     named, and a new CLAUDE.md gets no AGENTS.md stub (CONVENTIONS.md §9,
                     "A fork of an upstream")
 
-Any answer flag (--room/--exposure/--writes/--channels/--production/--deploy/--stack) makes the
+THE AUTONOMY GRANT AND --land (#481) — so a new repo's first branch is not hand-merged:
+
+  --autonomy auto-trunk   records the maintainer's grant (project.yml autonomy:) with the same
+                          provenance comment as every answer. It EXPANDS permission (an agent may
+                          then complete Phase B through \`colab ship\`), so it carries the writes:
+                          direct bar: interactive TTY, OR COLAB_HUMAN=1 AND --answered-by <name>
+                          (exit 3 otherwise). Refused with ceremony: light (exit 5). manual (the
+                          default) is never gated. Append-only: a different value already declared
+                          is refused (exit 5) — change it by hand.
+  --land                  commits what THIS run wrote — the descriptor, plus the thin-shell
+                          CLAUDE.md/AGENTS.md when written now — straight to trunk as its own
+                          commit, then pushes origin/<trunk>. It is the human's adoption act, not
+                          an agent's: COLAB_HUMAN=1 AND --answered-by are required, no TTY
+                          substitute (exit 3). It runs only on the checkout standing ON trunk, never
+                          with --local, and refuses before writing anything when origin's trunk is
+                          ahead (pull first). Run without new answers, it lands a descriptor an
+                          earlier adopt left uncommitted. No origin remote: commits only.
+
+  The shape it exists for: \`colab ship\` judges a branch's autonomy by the descriptor trunk
+  carries. Land it first, and the follow-up branch (CI workflow, guards, docs) ships through the
+  normal lane under the grant — no human merge of the adoption branch.
+
+    COLAB_HUMAN=1 colab adopt --exposure self --stack node --autonomy auto-trunk \\
+      --answered-by "<name>" --land
+
+Any answer flag (--room/--exposure/--writes/--channels/--production/--deploy/--stack/--autonomy) makes the
 whole run NON-INTERACTIVE — it never half-prompts. With no answer flags and no TTY, and something
 is still missing, this refuses in under a second, naming exactly which flags would answer it —
 never hangs waiting on stdin nobody is at.
@@ -7615,7 +7640,7 @@ files is not an option (CONVENTIONS.md §9, "Working in a repo you don't own"):
      block, topic, register, autopilot) and why.
 
 Boundary: adopt writes the descriptor and nothing else — no labels, no topic, no CI template, no
-\`colab register\`, and it never commits. One exception (#417): on a repo with no descriptor before
+\`colab register\`, and it never commits unless --land asks it to (#481). One exception (#417): on a repo with no descriptor before
 the run and no CLAUDE.md, plain adopt also writes the thin-shell CLAUDE.md (\`@AGENTS.md\` + the
 filled Conventions block) and an AGENTS.md stub if none exists; an existing CLAUDE.md is never
 touched, and --local never writes either. It ends with the machine-readable
@@ -8104,9 +8129,9 @@ async function cmdAdopt(argv) {
       '--repo': 'repo', '--axis': 'axis', '--room': 'room', '--exposure': 'exposure',
       '--writes': 'writes', '--channels': 'channels', '--production': 'production',
       '--deploy': 'deploy', '--stack': 'stack', '--answered-by': 'answeredBy', '--reason': 'reason',
-      '--trunk': 'trunk',
+      '--trunk': 'trunk', '--autonomy': 'autonomy',
     },
-    flags: { '--json': 'json', '--no-verify': 'noVerify', '--local': 'local', '--no-labels': 'noLabels', '--fork': 'fork', '--no-fork': 'noFork', '-h': 'help', '--help': 'help' },
+    flags: { '--json': 'json', '--no-verify': 'noVerify', '--local': 'local', '--no-labels': 'noLabels', '--fork': 'fork', '--no-fork': 'noFork', '--land': 'land', '-h': 'help', '--help': 'help' },
   });
   if (opts.help) return print(HELP_ADOPT);
   if (opts.fork && opts.noFork) throw new UserError('--fork and --no-fork contradict each other — pass one');
@@ -8114,6 +8139,10 @@ async function cmdAdopt(argv) {
     throw new UserError('--trunk only means something with --local — on an ordinary adoption trunk is DETECTED, never asked (CONVENTIONS.md §9)');
   }
   if (opts.noLabels && !opts.local) throw new UserError('--no-labels only means something with --local — plain adopt never touches labels');
+  if (opts.land && opts.local) throw new UserError('--land cannot combine with --local — a local-only descriptor is never committed (CONVENTIONS.md §9)');
+  if (opts.autonomy !== undefined && !adopt.VALID_AUTONOMY.has(opts.autonomy)) {
+    throw new UserError(`--autonomy must be one of: ${[...adopt.VALID_AUTONOMY].join(', ')} (got ${JSON.stringify(opts.autonomy)})`);
+  }
 
   // --local (#393): the descriptor is machine state, not a committable source file — it lives in
   // the MAIN checkout (where every worktree's `colab` call reads project.yml from, via
@@ -8144,9 +8173,33 @@ async function cmdAdopt(argv) {
   const localAnswerFlag = ['room', 'exposure', 'writes', 'channels', 'production', 'deploy', 'stack'].some((k) => opts[k] !== undefined);
   if (local && !localAnswerFlag && !requestedAxes.length && axisAuthority.axisOfRecord(cfg).source === 'exposure') axesToAsk = [];
 
+  const isTTY = !!(process.stdin.isTTY && process.stdout.isTTY);
+  const colabHuman = process.env.COLAB_HUMAN === '1';
+
+  // #481: --land preflight — every refusal here happens BEFORE anything is written, like the gates.
+  let landTrunk = null;
+  if (opts.land) {
+    landTrunk = cfg.trunk ? String(cfg.trunk) : (extra.trunk || null);
+    const cur = git.git(['symbolic-ref', '--short', 'HEAD'], repoAbs);
+    const lv = adopt.landVerdict({ local: !!opts.local, colabHuman, answeredBy: opts.answeredBy || null,
+      trunk: landTrunk, currentBranch: cur.ok && cur.stdout ? cur.stdout : null });
+    if (!lv.ok) { warn(lv.message); return lv.exitCode; }
+    const behind = adoptLandBehind(repoAbs, landTrunk);
+    if (behind) { warn(behind); return 1; }
+  }
+
+  // #481: --autonomy — the maintainer's grant, gated like writes: direct (it expands permission).
+  let autonomyWrite = false;
+  if (opts.autonomy !== undefined) {
+    const av = adopt.autonomyGateVerdict({ autonomy: opts.autonomy, current: cfg.autonomy, ceremony: cfg.ceremony,
+      isTTY, colabHuman, answeredBy: opts.answeredBy || null });
+    if (!av.ok) { warn(av.message); return av.exitCode; }
+    autonomyWrite = av.write;
+  }
+
   // Already complete (and nothing forced): report, write nothing, exit 0 — except the one key a
   // bare --local re-run still owes (#405): the `owner:` block, for a clone adopted before it existed.
-  if (axesToAsk.length === 0 && opts.stack === undefined) {
+  if (axesToAsk.length === 0 && opts.stack === undefined && !autonomyWrite) {
     const backfill = localOwnerEntry(local, cfg, today());
     if (backfill) {
       fs.writeFileSync(descriptorFile, adopt.renderDescriptor(rawTextBefore, [backfill]));
@@ -8154,9 +8207,12 @@ async function cmdAdopt(argv) {
     }
     const verify = opts.noVerify ? null : adoptVerify(repoAbs);
     const lf = local ? adoptLocalFinish(repoAbs, local, opts) : undefined;
-    if (opts.json) { print(JSON.stringify({ repo: repoAbs, ...report, verify, ...(backfill ? { written: [{ key: backfill.key, value: backfill.value }] } : {}), local: lf }, null, 2)); return lf && !lf.ok ? 1 : 0; }
+    const land = opts.land ? adoptLand(repoAbs, landTrunk, ['.github/project.yml'], opts.answeredBy) : undefined;
+    const rc = (lf && !lf.ok) || (land && !land.ok) ? 1 : 0;
+    if (opts.json) { print(JSON.stringify({ repo: repoAbs, ...report, verify, ...(backfill ? { written: [{ key: backfill.key, value: backfill.value }] } : {}), local: lf, land }, null, 2)); return rc; }
     printAdoptReport(report, repoAbs, verify, lf);
-    return lf && !lf.ok ? 1 : 0;
+    printAdoptLand(land);
+    return rc;
   }
 
   // `trunk` is DETECTED, never asked — no answer flag can supply it, and asking a human "what is
@@ -8171,9 +8227,9 @@ async function cmdAdopt(argv) {
     return 1;
   }
 
-  const answerFlagKeys = ['room', 'exposure', 'writes', 'channels', 'production', 'deploy', 'stack'];
+  // --autonomy counts as an answer flag (#481): it makes the run non-interactive, never half-prompted.
+  const answerFlagKeys = ['room', 'exposure', 'writes', 'channels', 'production', 'deploy', 'stack', 'autonomy'];
   const anyAnswerFlagGiven = answerFlagKeys.some((k) => opts[k] !== undefined);
-  const isTTY = !!(process.stdin.isTTY && process.stdout.isTTY);
 
   // `stack` is REQUIRED by the audit but free-form, so it cannot always be detected — a
   // manifest-less repo (a docs-only repo; this handbook's own shape) has zero candidates.
@@ -8188,7 +8244,8 @@ async function cmdAdopt(argv) {
   let stackAnsweredInteractively = false;
   if (axesToAsk.length === 0) {
     answers = {};
-  } else if (anyAnswerFlagGiven) {
+  } else if (anyAnswerFlagGiven || (opts.land && !isTTY)) {
+    // #481: a bare --land with no terminal lands what is already on disk — it never asks.
     // Fully non-interactive: whatever flags were given get applied; anything still missing
     // just stays missing (reported in "remaining"), never prompted for — half a prompt is worse
     // than none. `stack` is the one exception: it is a required key, not an optional row, so an
@@ -8330,6 +8387,10 @@ async function cmdAdopt(argv) {
       comment: `${adopt.provenanceComment('exposure', m)}${reasonSuffix}`,
     });
   }
+  if (autonomyWrite) {
+    entries.push({ key: 'autonomy', value: opts.autonomy, comment: adopt.provenanceComment('autonomy',
+      { mode: 'flag', flags: ['--autonomy'], date: nowDate, colabHuman, answeredBy: opts.answeredBy || null }) });
+  }
   // Fallback: exposure ends this run still unanswered (declined interactively, or simply not
   // among the axes that got an answer this run) and no `tier` already exists — derive one from
   // (production, deploy), using the EFFECTIVE values (this run's tier answer, if any, else what
@@ -8385,9 +8446,12 @@ async function cmdAdopt(argv) {
     warn('nothing to write — every requested row was already answered, or nothing was supplied to answer it.');
     const verify = opts.noVerify ? null : adoptVerify(repoAbs);
     const lf = local ? adoptLocalFinish(repoAbs, local, opts) : undefined;
-    if (opts.json) { print(JSON.stringify({ repo: repoAbs, ...report, verify, written: [], local: lf }, null, 2)); return lf && !lf.ok ? 1 : 0; }
+    const land = opts.land ? adoptLand(repoAbs, landTrunk, ['.github/project.yml'], opts.answeredBy) : undefined;
+    const rc = (lf && !lf.ok) || (land && !land.ok) ? 1 : 0;
+    if (opts.json) { print(JSON.stringify({ repo: repoAbs, ...report, verify, written: [], local: lf, land }, null, 2)); return rc; }
     printAdoptReport(report, repoAbs, verify, lf);
-    return lf && !lf.ok ? 1 : 0;
+    printAdoptLand(land);
+    return rc;
   }
 
   const newText = adopt.renderDescriptor(rawTextBefore, entries);
@@ -8403,9 +8467,16 @@ async function cmdAdopt(argv) {
   const shell = local || rawTextBefore !== null ? null : adoptWriteShell(repoAbs, after);
   const verify = opts.noVerify ? null : adoptVerify(repoAbs);
   const lf = local ? adoptLocalFinish(repoAbs, local, opts) : undefined;
+  // #481: --land commits exactly what THIS run wrote — the descriptor, plus the thin shell when
+  // it was written now — never anything else in the working tree.
+  const landPaths = ['.github/project.yml'];
+  if (shell && shell.claude === 'written') landPaths.push(CLAUDE_FILE);
+  if (shell && shell.agents === 'written') landPaths.push('AGENTS.md');
+  const land = opts.land ? adoptLand(repoAbs, landTrunk, landPaths, opts.answeredBy) : undefined;
+  const rc = (lf && !lf.ok) || (land && !land.ok) ? 1 : 0;
   if (opts.json) {
-    print(JSON.stringify({ repo: repoAbs, ...after, verify, written: entries.map((e) => ({ key: e.key, value: e.value })), ...(shell ? { shell } : {}), local: lf }, null, 2));
-    return lf && !lf.ok ? 1 : 0;
+    print(JSON.stringify({ repo: repoAbs, ...after, verify, written: entries.map((e) => ({ key: e.key, value: e.value })), ...(shell ? { shell } : {}), local: lf, land }, null, 2));
+    return rc;
   }
   for (const e of entries) print(`✓ wrote ${e.key}: ${fmtVal(e.value)}`);
   if (shell) {
@@ -8416,7 +8487,63 @@ async function cmdAdopt(argv) {
   }
   print('');
   printAdoptReport(after, repoAbs, verify, lf);
-  return lf && !lf.ok ? 1 : 0;
+  printAdoptLand(land);
+  return rc;
+}
+
+/**
+ * #481 — `--land` preflight: is origin's trunk ahead of this checkout? Landing on a stale trunk
+ * would either fail the push or need a merge, and adopt does neither on a human's behalf. Returns a
+ * refusal message, or null. No origin remote, or no trunk there yet (a first push), is not behind.
+ */
+function adoptLandBehind(repoAbs, trunk) {
+  if (!git.git(['remote', 'get-url', 'origin'], repoAbs).ok) return null;
+  const f = git.git(['fetch', 'origin', trunk], repoAbs);
+  if (!f.ok) {
+    const remoteHas = git.git(['ls-remote', '--exit-code', '--heads', 'origin', trunk], repoAbs);
+    if (remoteHas.ok) return `--land could not fetch origin/${trunk} — refusing to land on a trunk it cannot see: ${f.stderr || f.stdout}`;
+    return null; // origin has no trunk yet: the landing push creates it
+  }
+  const anc = git.git(['merge-base', '--is-ancestor', 'FETCH_HEAD', 'HEAD'], repoAbs);
+  if (anc.ok) return null;
+  return `--land refuses: origin/${trunk} has commits this checkout does not — pull ${trunk} first, then re-run`;
+}
+
+/**
+ * #481 — commit `paths` (only those) onto trunk and push it. Called only after landVerdict passed
+ * (COLAB_HUMAN=1 + --answered-by, standing on trunk), so the pre-push guard's COLAB_HUMAN door is
+ * the one this push walks through — the same env the human set. Nothing staged for these paths
+ * (already committed) is not an error: it still pushes a trunk that is ahead of origin.
+ */
+function adoptLand(repoAbs, trunk, paths, answeredBy) {
+  const present = paths.filter((p) => fs.existsSync(path.join(repoAbs, p)));
+  if (!present.length) return { ok: false, trunk, committed: [], sha: null, pushed: false, error: 'no descriptor on disk to land' };
+  const add = git.git(['add', '--', ...present], repoAbs);
+  if (!add.ok) return { ok: false, trunk, committed: [], sha: null, pushed: false, error: `git add failed: ${add.stderr || add.stdout}` };
+  const staged = git.git(['diff', '--cached', '--name-only', '--', ...present], repoAbs);
+  const committed = staged.ok && staged.stdout ? staged.stdout.split('\n').filter(Boolean) : [];
+  if (committed.length) {
+    const c = git.git(['commit', '--only', '-m', adopt.landCommitMessage({ answeredBy, paths: committed }), '--', ...committed], repoAbs);
+    if (!c.ok) return { ok: false, trunk, committed: [], sha: null, pushed: false, error: `git commit failed: ${c.stderr || c.stdout}` };
+  }
+  const head = git.git(['rev-parse', 'HEAD'], repoAbs);
+  const sha = head.ok ? head.stdout : null;
+  if (!git.git(['remote', 'get-url', 'origin'], repoAbs).ok) {
+    return { ok: true, trunk, committed, sha, pushed: false, note: 'no origin remote — committed locally; the first push of trunk carries it' };
+  }
+  const p = git.git(['push', 'origin', `HEAD:refs/heads/${trunk}`], repoAbs);
+  if (!p.ok) return { ok: false, trunk, committed, sha, pushed: false, error: `committed ${shortSha(sha)} on ${trunk}, but the push failed: ${p.stderr || p.stdout}` };
+  return { ok: true, trunk, committed, sha, pushed: true };
+}
+
+function printAdoptLand(land) {
+  if (!land) return;
+  print('');
+  if (!land.ok) { print(`✗ land: ${land.error}`); return; }
+  const what = land.committed.length ? `committed ${land.committed.join(', ')} as ${shortSha(land.sha)}` : `nothing new to commit (trunk at ${shortSha(land.sha)})`;
+  print(`✓ land: ${what} on ${land.trunk}${land.pushed ? ` — pushed to origin/${land.trunk}` : ''}`);
+  if (land.note) print(`  ${land.note}`);
+  print('  The follow-up branch (CI, guards, docs) is judged by this descriptor — ship it through the normal lane.');
 }
 
 /**
