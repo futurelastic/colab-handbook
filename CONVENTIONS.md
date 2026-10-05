@@ -5045,10 +5045,11 @@ only. Resolution order: `--config` flag > `~/.colab/repos.txt` > bundled example
    **and** `--answered-by`, with no terminal substitute, since it writes trunk; it refuses
    off trunk, with `--local`, and when origin's trunk is ahead. Everything else in the
    adoption — CI workflow, guards, docs — then ships through the normal lane under the
-   grant. Trunk has never run the repo's CI at that point, so the follow-up branch's
-   `trunk CI green` row still reads "no run"; the existing human door for a trunk CI read
-   (`ci-granted`, [§4](#4-branches-and-commits)) is how a maintainer lets that one branch
-   through, and the CI it adds grades every branch after it.
+   grant. Trunk's tree has no workflow file at that point, so its `none` cannot hide a red
+   ([§4](#4-branches-and-commits), #482): the follow-up branch that adds CI passes `trunk CI
+   green` on its **own** green run, with no human step, and the CI it adds grades every
+   branch after it. `ci-granted` stays the door only for a trunk that already has workflows
+   and still has no run at its sha.
 2. **Write `.github/project.yml`** ([§3](#3-githubprojectyml--the-marker)) with the
    answers from step 1 — **and declare `migrations:`** when the repo keeps migrations
    anywhere but `database/migrations/` or `prisma/migrations/`
