@@ -45,8 +45,8 @@
 # The last two bullets fire ONLY when rows exist — on an empty table every one of
 # them passes on both engines. Set ROUNDTRIP_SEEDER below, or they go unchecked.
 #
-# Not gated on RUN_TESTS: a bad migration is cheapest to fix on the branch that adds
-# it, so this runs on every push, not only on main.
+# Not gated on RUN_TESTS: a bad migration is cheapest to fix on the branch that adds or
+# modifies it, so this runs on every push, not only on main.
 
 name: CI
 
@@ -461,13 +461,18 @@ jobs:
   # Migration round-trip — see the header for what each engine catches.
   #
   #   1. migrate            from zero                                (schema snapshot A)
-  #   2. migrate:rollback   the migrations THIS change adds — every down() among them
-  #                         runs (all migrations when the change adds none)
+  #   2. migrate:rollback   back to the OLDEST migration this change adds OR modifies —
+  #                         every down() it touched runs, plus the untouched ones after
+  #                         it (all migrations when the change touches none)
   #   3. seed               only if ROUNDTRIP_SEEDER is set, and only when the change
-  #                         adds migrations: rows land at the PRE-change schema
-  #   4. migrate            again — the new migrations land on those rows (snapshot B)
+  #                         touches migrations: rows land at the PRE-change schema
+  #   4. migrate            again — the touched migrations land on those rows (snapshot B)
   #   5. compare            B must equal A — a down() that does not exactly undo its
   #                         up() leaves a schema that differs on the second pass
+  #
+  # MODIFIED counts as touched, not only added (#507): a branch that only repairs an
+  # existing down() must see that down() run, and a branch that adds one migration and
+  # repairs an older one must roll back past the older one, not just the newest step.
   #
   # Steps 2-4 are the shape of a real deploy: new migrations landing on tables that
   # already hold rows written before they existed. That is why the seed sits BETWEEN
@@ -533,7 +538,7 @@ jobs:
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
-          # Full history: step 3 counts the migrations this change adds against trunk.
+          # Full history: the count step diffs the migrations this change touches against trunk.
           fetch-depth: 0
           persist-credentials: false
 
@@ -580,7 +585,7 @@ jobs:
       - name: Discover packages
         run: php artisan package:discover --ansi
 
-      - name: Count the migrations this change adds
+      - name: Find the migrations this change adds or modifies
         env:
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
         run: |
@@ -597,15 +602,24 @@ jobs:
               base="$(git rev-parse -q --verify 'HEAD^' || true)"
             fi
           fi
-          steps=0
+          # Added, Modified, and Renamed (a rename is a new name to the migrator) — not
+          # added only (#507): a branch that only repairs an existing down() got a green
+          # round-trip that never ran it.
+          touched=""
           if [ -n "$base" ]; then
-            steps="$(git diff --name-only --diff-filter=A "$base" HEAD -- "$MIGRATIONS_PATH" | grep -c '\.php$' || true)"
+            touched="$(git diff --name-status --diff-filter=AMR "$base" HEAD -- "$MIGRATIONS_PATH" | awk -F'\t' '$NF ~ /\.php$/ { print substr($1,1,1) "\t" $NF }')"
           fi
-          echo "ROLLBACK_STEPS=$steps" >> "$GITHUB_ENV"
-          if [ "$steps" -gt 0 ]; then
-            echo "This change adds $steps migration(s) (vs ${base_ref}); step 3 rolls back exactly those."
+          # The migrator orders by file name, so the oldest touched one is the smallest
+          # base name; step 2 rolls back to it and everything after it.
+          from="$(printf '%s\n' "$touched" | awk -F'\t' 'NF { n=$2; sub(/.*\//, "", n); sub(/\.php$/, "", n); print n }' | LC_ALL=C sort | head -1)"
+          echo "ROUNDTRIP_FROM=$from" >> "$GITHUB_ENV"
+          if [ -n "$from" ]; then
+            added="$(printf '%s\n' "$touched" | grep -c '^A' || true)"
+            modified="$(printf '%s\n' "$touched" | grep -c '^[MR]' || true)"
+            echo "This change touches migrations (vs ${base_ref}): $added added, $modified modified. Step 2 rolls back to the oldest, $from, so every down() listed below runs:"
+            printf '%s\n' "$touched" | sed 's/^A\t/  added     /; s/^[MR]\t/  modified  /'
           else
-            echo "This change adds no migrations (vs ${base_ref:-nothing}); step 3 rolls back all of them."
+            echo "This change adds or modifies no migrations (vs ${base_ref:-nothing}); step 2 rolls back all of them."
           fi
 
       - name: Write the schema snapshot script
@@ -637,6 +651,18 @@ jobs:
           ksort($out);
           echo json_encode($out, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES), "\n";
           PHP
+          # How many migrations step 2 must roll back to reach ROUNDTRIP_FROM: the rows of
+          # the migrations table at or after it. Read from the table, not by counting
+          # files, so migrations a package registers from another path are counted too.
+          cat > "$RUNNER_TEMP/rollback-steps.php" <<'PHP'
+          <?php
+          require getcwd() . '/vendor/autoload.php';
+          $app = require getcwd() . '/bootstrap/app.php';
+          $app->make(Illuminate\Contracts\Console\Kernel::class)->bootstrap();
+          $m = config('database.migrations');
+          $table = is_array($m) ? ($m['table'] ?? 'migrations') : ($m ?: 'migrations');
+          echo Illuminate\Support\Facades\DB::table($table)->where('migration', '>=', getenv('ROUNDTRIP_FROM'))->count(), "\n";
+          PHP
 
       - name: 1. migrate from zero
         run: |
@@ -645,16 +671,22 @@ jobs:
 
       - name: 2. roll back
         run: |
-          if [ "$ROLLBACK_STEPS" -gt 0 ]; then
-            php artisan migrate:rollback --step="$ROLLBACK_STEPS" --force
+          set -euo pipefail
+          steps=0
+          if [ -n "$ROUNDTRIP_FROM" ]; then
+            steps="$(php "$RUNNER_TEMP/rollback-steps.php")"
+          fi
+          if [ "$steps" -gt 0 ]; then
+            echo "Rolling back $steps migration(s), down to $ROUNDTRIP_FROM."
+            php artisan migrate:rollback --step="$steps" --force
           else
             # Everything ran in one batch at step 1, so this rolls all of it back.
             php artisan migrate:rollback --force
           fi
 
       - name: 3. seed rows at the pre-change schema
-        # No new migrations = nothing lands on the rows, and the schema is empty anyway.
-        if: env.ROUNDTRIP_SEEDER != '' && env.ROLLBACK_STEPS != '0'
+        # No touched migrations = nothing lands on the rows, and the schema is empty anyway.
+        if: env.ROUNDTRIP_SEEDER != '' && env.ROUNDTRIP_FROM != ''
         run: php artisan db:seed --class="$ROUNDTRIP_SEEDER" --force
 
       - name: 4. migrate again
