@@ -10269,11 +10269,56 @@ function descriptorHolds(doc) {
  * caller can build the --dry --json `ciGrant`/`ciCure` payloads from the SAME verdicts the prose
  * detail string was built from — see ciGrantPayload/ciCurePayload, below.
  */
-function shipCiCheck(repoAbs, gh, target, trunk, grantThunk, cureThunk) {
+function shipCiCheck(repoAbs, gh, target, trunk, grantThunk, cureThunk, branch = null) {
   const name = `${target === trunk ? 'trunk' : 'line'} CI green`;
   const r = readCiVerdict(repoAbs, gh, target, trunk);
+  const nw = noWorkflowTrunkDoor(repoAbs, r, target, trunk, branch);
+  if (nw) return { name, ...nw, grantVerdict: null, cureVerdict: null };
   if (r.final) return { name, ...r.verdict, grantVerdict: null, cureVerdict: null };
   return applyRedTrunkExemptions({ name, ...r.verdict }, target, trunk, r.run.sha, grantThunk, cureThunk);
+}
+
+/**
+ * #482: a trunk with NO repo-owned workflow file at its head sha (a freshly adopted repo whose
+ * adoption branch is what adds CI) can never draw a run, so its `none` is not a gap in CI — there is
+ * no CI there to be red. It reads `none` and gets Branch CI's `none`-that-cannot-arrive treatment
+ * (CONVENTIONS.md §4): the candidate's OWN run at its remote head decides. Green there → the row
+ * passes; anything else → the ordinary refusal stands, with the reason appended.
+ *
+ * Fails closed: only a trunk sha present locally whose tree demonstrably has no
+ * `.github/workflows/*.yml|yaml` qualifies. A trunk that HAS workflows but no run at its sha is a
+ * real gap (CI not wired, or never started) and still blocks exactly as before. Runs ahead of the
+ * #413 grace window too: a run that can never exist is not worth waiting ten minutes for. Returns null when
+ * the door does not apply, or a `{ok, class, detail}` verdict when it does.
+ */
+function noWorkflowTrunkDoor(repoAbs, r, target, trunk, branch) {
+  if (target !== trunk || !branch || !r.run || r.run.status !== 'none' || !r.run.sha || r.verdict.ok) return null;
+  if (trunkWorkflowFiles(repoAbs, r.run.sha) !== 0) return null;
+  const at = `${trunk}@${shortSha(r.run.sha)}`;
+  const own = git.ghRunForSha(repoAbs, branch);
+  // Branch not on the remote, or its runs unreadable: nothing to decide with — the prior verdict stands.
+  if (!own) return null;
+  const ownAt = own.sha ? `${branch}@${shortSha(own.sha)}` : branch;
+  if (own && own.status === 'completed' && own.conclusion === 'success') {
+    const n = own.runCount == null ? 1 : own.runCount;
+    return { ok: true, class: null,
+      detail: `none — ${at} has no repo-owned workflow, so nothing there can be red (#482); the branch's own run decides: ${n} run${n === 1 ? '' : 's'} at ${ownAt}: ${n === 1 ? 'success' : 'all success'}${excludedRunsNote(r.run)}` };
+  }
+  const why = own.status === 'none' ? 'has no run' : `is status=${own.status} conclusion=${own.conclusion || 'none'}`;
+  return { ok: false, class: own.status !== 'completed' && own.status !== 'none' ? SELF_CLEARING : HUMAN_GATED,
+    detail: `none — ${at} has no repo-owned workflow (#482), so the branch's own run decides, and ${ownAt} ${why}${excludedRunsNote(r.run)}` };
+}
+
+/** Number of workflow files in `.github/workflows` at `sha`, or null when the tree cannot be read. */
+function trunkWorkflowFiles(repoAbs, sha) {
+  if (!git.git(['cat-file', '-e', `${sha}^{commit}`], repoAbs).ok) return null;
+  const ls = git.git(['ls-tree', '--name-only', `${sha}:.github/workflows`], repoAbs);
+  if (!ls.ok) {
+    // No such directory is a real zero; any other failure is unknown (fail closed).
+    const dir = git.git(['ls-tree', '--name-only', sha, '.github/workflows'], repoAbs);
+    return dir.ok && dir.stdout.trim() === '' ? 0 : null;
+  }
+  return ls.stdout.split('\n').map((x) => x.trim()).filter((f) => /\.ya?ml$/.test(f)).length;
 }
 
 /**
@@ -11052,7 +11097,7 @@ function cmdShipDryJson(opts) {
   const gh = isGhUsable(repoAbs);
   const ciResultJson = shipCiCheck(repoAbs, gh, target, trunk,
     (redSha) => shipCiGrants(repoAbs, gh, sess.issues, sess.branch, trunk, redSha),
-    (redSha) => shipCiCure(repoAbs, gh, target, trunk, redSha, sess.branch));
+    (redSha) => shipCiCure(repoAbs, gh, target, trunk, redSha, sess.branch), sess.branch);
   ciGrantPayloadVal = ciGrantPayload(ciResultJson);
   ciCurePayloadVal = ciCurePayload(ciResultJson);
   checks.push({ name: ciResultJson.name, ok: ciResultJson.ok, class: ciResultJson.class, detail: ciResultJson.detail });
@@ -12034,7 +12079,7 @@ function cmdShip(argv) {
   // ordinary green-trunk ship makes zero extra `gh` reads for a door nobody needs.
   const ciResult = shipCiCheck(repoAbs, gh, target, trunk,
     (redSha) => shipCiGrants(repoAbs, gh, sess.issues, sess.branch, trunk, redSha),
-    (redSha) => shipCiCure(repoAbs, gh, target, trunk, redSha, sess.branch));
+    (redSha) => shipCiCure(repoAbs, gh, target, trunk, redSha, sess.branch), sess.branch);
   const ciOk = ciResult.ok;
   checks.push([ciResult.ok ? '✓' : '✗', ciResult.name, ciResult.detail]);
 
@@ -12495,7 +12540,7 @@ function cmdShip(argv) {
   if (gh) {
     const ciResultB1 = shipCiCheck(repoAbs, gh, target, trunk,
       (redSha) => shipCiGrants(repoAbs, gh, sess.issues, sess.branch, trunk, redSha),
-      (redSha) => shipCiCure(repoAbs, gh, target, trunk, redSha, sess.branch));
+      (redSha) => shipCiCure(repoAbs, gh, target, trunk, redSha, sess.branch), sess.branch);
     if (!ciResultB1.ok) {
       cleanupEphemeral();
       process.stderr.write(`✗ B1: CI for ${target} is no longer green — aborting before merge. Nothing pushed. (${ciResultB1.detail})\n`);
