@@ -277,6 +277,18 @@ names and shapes and route through it; new GitHub calls belong on the adapter, n
 repo, and return failures as data — a list read's `data` is `null` for "could not read", never
 "none".
 
+**The contract as data (#501).** What an implementation must *do* is specified in
+`tools/lib/tracker-scenarios.json`, which ships in the package: seed a tracker from a scenario's
+`given`, run its `steps`, compare each return value to `expect` under the file's own `match` rules
+(partial objects, length-exact arrays, `$re`, `$type`). Adapters cannot be shared across consumers
+(this CLI is synchronous), so the scenarios are what is shared — a consumer runs the same file
+against its own adapter, in any language. `tracker-contract.test.js` runs every scenario against two
+implementations: `tracker-fake.js` (in memory, also `forRepo(repo, { kind: 'fake' })`, and usable as
+a no-network tracker in a consumer's tests) and the GitHub adapter, its `gh` replies replayed from
+`tracker-scenarios.github.json` (test-only, not shipped). The replay is strict — each spawn must be
+the next recorded argv and every recorded reply must be used — so a new scenario needs both its
+`expect`s and its transcript, and the test fails until it has them.
+
 **GraphQL rate limit → REST fallback, and self-describing residue (#164).** Claim comments, ship
 comments, and the release write (unassign + delabel) all go through `gh issue comment`/`gh issue
 edit`, which is GraphQL under the hood — a **separate** hourly quota from REST. If GraphQL is

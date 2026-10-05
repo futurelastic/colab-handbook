@@ -1,0 +1,79 @@
+{
+  "$comment": "Recorded gh transcripts for tools/lib/tracker-scenarios.json (#501): for each scenario id, the gh argv the GitHub adapter spawns, in order, and the reply gh gave. Reply shapes are copied from real gh 2.x output (extra fields kept on purpose, to exercise partial matching), scrubbed to the scenario's values: OWNER/REPO, node ids shortened. `json` is stringified into stdout by the runner. Identity probes (`gh --version`, `gh auth status --active`, `gh api user -q .login`) are not listed: git.js caches them per process, so the runner answers them from the scenario's `given.login` on every call. Test-only: not shipped in the package. A new scenario without an entry here fails tools/lib/tracker-contract.test.js.",
+  "scenarios": {
+    "identity": [],
+    "issue-view": [
+      {"argv":["issue","view","7","--json","number,title,state,labels,assignees"],"json":{"assignees":[{"id":"U_bob","login":"bob","name":""}],"labels":[{"id":"LA_bug","name":"bug","description":"Something isn't working","color":"d73a4a"},{"id":"LA_in-progress","name":"in-progress","description":"Claimed by an active session","color":"FBCA04"}],"number":7,"state":"OPEN","title":"fix: the importer drops rows"}},
+      {"argv":["issue","view","99","--json","number"],"ok":false,"code":1,"stderr":"GraphQL: Could not resolve to an issue or pull request with the number of 99. (repository.issue)"}
+    ],
+    "issue-create": [
+      {"argv":["issue","create","--title","feat: export as CSV","--body","## Goal\nExport."],"stdout":"https://github.com/OWNER/REPO/issues/9\n"},
+      {"argv":["issue","view","9","--json","title,body,state,labels,assignees,comments"],"json":{"assignees":[],"body":"## Goal\nExport.","comments":[],"labels":[],"state":"OPEN","title":"feat: export as CSV"}}
+    ],
+    "issue-comment": [
+      {"argv":["issue","comment","3","--body","Progress: the parser is done."],"stdout":"https://github.com/OWNER/REPO/issues/3#issuecomment-1\n"},
+      {"argv":["issue","view","3","--json","comments"],"json":{"comments":[{"id":"IC_1","author":{"login":"alice"},"authorAssociation":"MEMBER","body":"Progress: the parser is done.","createdAt":"2026-10-05T13:04:44Z","includesCreatedEdit":false,"isMinimized":false,"minimizedReason":"","reactionGroups":[],"url":"https://github.com/OWNER/REPO/issues/3#issuecomment-1","viewerDidAuthor":true}]}},
+      {"argv":["issue","comment","404","--body","nobody home"],"ok":false,"code":1,"stderr":"GraphQL: Could not resolve to an issue or pull request with the number of 404. (repository.issue)"}
+    ],
+    "issue-close-reasons": [
+      {"argv":["issue","close","4"],"stdout":"","stderr":"✓ Closed issue OWNER/REPO#4 (done)"},
+      {"argv":["issue","close","5","--reason","not planned"],"stdout":"","stderr":"✓ Closed issue OWNER/REPO#5 (dropped)"},
+      {"argv":["issue","view","4","--json","state,stateReason"],"json":{"state":"CLOSED","stateReason":"COMPLETED"}},
+      {"argv":["issue","view","5","--json","state,stateReason"],"json":{"state":"CLOSED","stateReason":"NOT_PLANNED"}}
+    ],
+    "claim-holder": [
+      {"argv":["api","repos/{owner}/{repo}/issues/11","--jq",".assignees[].login"],"stdout":"bob\n"},
+      {"argv":["api","--paginate","repos/{owner}/{repo}/issues/11/events","--jq",".[] | select(.event == \"labeled\" and .label.name == \"in-progress\") | .actor.login"],"stdout":"carol\nbob\n"},
+      {"argv":["api","repos/{owner}/{repo}/issues/12","--jq",".assignees[].login"],"stdout":""},
+      {"argv":["api","--paginate","repos/{owner}/{repo}/issues/12/events","--jq",".[] | select(.event == \"labeled\" and .label.name == \"in-progress\") | .actor.login"],"stdout":""},
+      {"argv":["api","repos/{owner}/{repo}/issues/404","--jq",".assignees[].login"],"ok":false,"code":1,"stderr":"gh: Not Found (HTTP 404)"},
+      {"argv":["api","--paginate","repos/{owner}/{repo}/issues/404/events","--jq",".[] | select(.event == \"labeled\" and .label.name == \"in-progress\") | .actor.login"],"ok":false,"code":1,"stderr":"gh: Not Found (HTTP 404)"}
+    ],
+    "release-another-accounts-claim": [
+      {"argv":["api","repos/{owner}/{repo}/issues/20","--jq",".assignees[].login"],"stdout":"bob\n"},
+      {"argv":["api","--paginate","repos/{owner}/{repo}/issues/20/events","--jq",".[] | select(.event == \"labeled\" and .label.name == \"in-progress\") | .actor.login"],"stdout":"bob\n"},
+      {"argv":["issue","edit","20","--remove-assignee","@me,bob","--remove-label","in-progress"],"stdout":"https://github.com/OWNER/REPO/issues/20\n"},
+      {"argv":["issue","view","20","--json","labels,assignees"],"json":{"assignees":[],"labels":[{"id":"LA_bug","name":"bug","description":"Something isn't working","color":"d73a4a"}]}}
+    ],
+    "release-self-only": [
+      {"argv":["issue","edit","21","--remove-assignee","@me","--remove-label","in-progress"],"stdout":"https://github.com/OWNER/REPO/issues/21\n"},
+      {"argv":["issue","view","21","--json","labels,assignees"],"json":{"assignees":[{"id":"U_bob","login":"bob","name":""}],"labels":[]}}
+    ],
+    "labels-and-issue-list": [
+      {"argv":["label","list","--limit","500","--json","name","-q",".[].name"],"stdout":"bug\nin-progress\nneeds-plan\n"},
+      {"argv":["issue","list","--state","all","--limit","100","--json","number,state,labels"],"json":[{"labels":[],"number":2,"state":"CLOSED"},{"labels":[{"id":"LA_bug","name":"bug","description":"Something isn't working","color":"d73a4a"}],"number":1,"state":"OPEN"}]}
+    ],
+    "pull-request-lifecycle": [
+      {"argv":["pr","list","--head","feat/x-30","--state","open","--json","number,url,state,author,headRefOid,reviews"],"stdout":"[]\n"},
+      {"argv":["pr","create","--base","main","--head","feat/x-30","--title","feat: x","--body","Closes #30"],"stdout":"https://github.com/OWNER/REPO/pull/31\n","stderr":"\nCreating pull request for feat/x-30 into main in OWNER/REPO\n"},
+      {"argv":["pr","list","--head","feat/x-30","--state","open","--json","number,url,state,author,headRefOid,reviews"],"json":[{"author":{"id":"U_alice","is_bot":false,"login":"alice","name":""},"headRefOid":"c4c8e49b9a5b5c363f02b8c67a94dc36183d146d","number":31,"reviews":[],"state":"OPEN","url":"https://github.com/OWNER/REPO/pull/31"}]},
+      {"argv":["pr","edit","31","--title","feat: x, retitled","--body","Closes #30"],"stdout":"https://github.com/OWNER/REPO/pull/31\n"},
+      {"argv":["pr","list","--base","main","--head","feat/x-30","--state","all","--limit","50","--json","number,state,title"],"json":[{"number":31,"state":"OPEN","title":"feat: x, retitled"}]},
+      {"argv":["pr","close","31","--comment","Landed by squash on main."],"stdout":"","stderr":"✓ Closed pull request OWNER/REPO#31 (feat: x, retitled)"},
+      {"argv":["pr","list","--head","feat/x-30","--state","open","--json","number,url,state,author,headRefOid,reviews"],"stdout":"[]\n"},
+      {"argv":["pr","list","--base","main","--head","feat/x-30","--state","all","--limit","50","--json","number,state"],"json":[{"number":31,"state":"CLOSED"}]}
+    ],
+    "ci-runs": [
+      {"argv":["run","list","--branch","main","-L","10","--json","headSha,status,conclusion"],"json":[{"conclusion":"","headSha":"bbb2222","status":"in_progress"},{"conclusion":"success","headSha":"aaa1111","status":"completed"}]},
+      {"argv":["run","list","--branch","main","-L","1","--json","headSha"],"json":[{"headSha":"bbb2222"}]},
+      {"argv":["run","list","--branch","main","--commit","aaa1111","-L","10","--json","headSha,conclusion"],"json":[{"conclusion":"success","headSha":"aaa1111"}]}
+    ],
+    "releases": [
+      {"argv":["release","view","v1.1.0-rc.1","--json","tagName"],"ok":false,"code":1,"stderr":"release not found"},
+      {"argv":["release","create","v1.1.0-rc.1","--verify-tag","--title","v1.1.0-rc.1","--notes-file","notes.md","--prerelease","--latest=false"],"stdout":"https://github.com/OWNER/REPO/releases/tag/v1.1.0-rc.1\n"},
+      {"argv":["release","view","v1.1.0-rc.1","--json","tagName"],"json":{"tagName":"v1.1.0-rc.1"}},
+      {"argv":["release","view","v1.0.0","--json","tagName"],"json":{"tagName":"v1.0.0"}},
+      {"argv":["release","create","v1.1.0-rc.1","--verify-tag","--title","v1.1.0-rc.1","--notes-file","notes.md","--prerelease","--latest=false"],"ok":false,"code":1,"stderr":"HTTP 422: Validation Failed (https://api.github.com/repos/OWNER/REPO/releases)\nRelease.tag_name already exists"}
+    ],
+    "offline": [
+      {"argv":["issue","view","1","--json","number"],"ok":false,"code":1,"stderr":"error connecting to api.github.com\ncheck your internet connection or https://githubstatus.com"},
+      {"argv":["issue","list","--state","all","--limit","10","--json","number"],"ok":false,"code":1,"stderr":"error connecting to api.github.com\ncheck your internet connection or https://githubstatus.com"},
+      {"argv":["label","list","--limit","500","--json","name","-q",".[].name"],"ok":false,"code":1,"stderr":"error connecting to api.github.com\ncheck your internet connection or https://githubstatus.com"},
+      {"argv":["api","repos/{owner}/{repo}/issues/1","--jq",".assignees[].login"],"ok":false,"code":1,"stderr":"error connecting to api.github.com\ncheck your internet connection or https://githubstatus.com"},
+      {"argv":["api","--paginate","repos/{owner}/{repo}/issues/1/events","--jq",".[] | select(.event == \"labeled\" and .label.name == \"in-progress\") | .actor.login"],"ok":false,"code":1,"stderr":"error connecting to api.github.com\ncheck your internet connection or https://githubstatus.com"},
+      {"argv":["issue","comment","1","--body","lost"],"ok":false,"code":1,"stderr":"error connecting to api.github.com\ncheck your internet connection or https://githubstatus.com"},
+      {"argv":["run","list","--branch","main","-L","5","--json","headSha"],"ok":false,"code":1,"stderr":"error connecting to api.github.com\ncheck your internet connection or https://githubstatus.com"},
+      {"argv":["pr","list","--head","feat/x-1","--state","open","--json","number,url,state,author,headRefOid,reviews"],"ok":false,"code":1,"stderr":"error connecting to api.github.com\ncheck your internet connection or https://githubstatus.com"}
+    ]
+  }
+}
