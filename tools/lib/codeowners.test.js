@@ -135,3 +135,52 @@ test('#351 directVerdict: owners of the same path merge across the two files', (
   const v = co.directVerdict({ files: [cf('/g @a\n', 'old'), cf('/g @b\n')], authors: ['me'], changed: ['g'] });
   assert.deepStrictEqual(v.corePaths, [{ path: 'g', owners: ['@a', '@b'] }]);
 });
+
+// ---- #483: a fork's inherited foreign-org CODEOWNERS ----
+
+test('#483 remoteOwner: https, ssh:// and scp forms; junk is null', () => {
+  assert.strictEqual(co.remoteOwner('https://forge.example/Acme-Fork/app.git'), 'acme-fork');
+  assert.strictEqual(co.remoteOwner('https://forge.example/acme/app/'), 'acme');
+  assert.strictEqual(co.remoteOwner('ssh://git@forge.example:2222/acme/app.git'), 'acme');
+  assert.strictEqual(co.remoteOwner('git@forge.example:acme/app.git'), 'acme');
+  assert.strictEqual(co.remoteOwner('/srv/git/app.git'), null);
+  assert.strictEqual(co.remoteOwner(''), null);
+});
+
+const INHERITED = '* @upstream-org/maintainers @upstream-org/web\n/.github/ @upstream-org/maintainers\n';
+const FORK = { fork: true, ownOrg: 'acme' };
+
+test('#483 an inherited foreign-org catch-all is inert on a fork', () => {
+  const { rules, dropped } = co.dropForeignTeams(co.parse(INHERITED).rules, FORK);
+  assert.deepStrictEqual(dropped, ['@upstream-org/maintainers', '@upstream-org/web']);
+  assert.strictEqual(co.inert(rules, ['someone']).inert, true);
+  assert.deepStrictEqual(co.corePaths(rules, ['docs/a.md', 'apps/x.ts', '.github/workflows/ci.yml']), []);
+});
+
+test('#483 the same file on a NON-fork stays active — nothing is dropped', () => {
+  for (const ctx of [{ fork: false, ownOrg: 'acme' }, { fork: true, ownOrg: null }, undefined]) {
+    const { rules, dropped } = co.dropForeignTeams(co.parse(INHERITED).rules, ctx);
+    assert.deepStrictEqual(dropped, []);
+    assert.strictEqual(co.inert(rules, ['someone']).inert, false);
+    assert.strictEqual(co.corePaths(rules, ['docs/a.md']).length, 1);
+  }
+});
+
+test('#483 the fork\'s own teams, logins and emails are kept; the last match still wins', () => {
+  const t = INHERITED + '/infra/ @Acme/ops\n/db/ @alice dba@acme.example @upstream-org/db\n';
+  const { rules, dropped } = co.dropForeignTeams(co.parse(t).rules, FORK);
+  assert.deepStrictEqual(dropped.sort(), ['@upstream-org/db', '@upstream-org/maintainers', '@upstream-org/web']);
+  assert.deepStrictEqual(co.ownerOf(rules, 'infra/main.tf'), ['@Acme/ops']); // case-insensitive org match
+  assert.deepStrictEqual(co.ownerOf(rules, 'db/001.sql'), ['@alice', 'dba@acme.example']);
+  assert.deepStrictEqual(co.ownerOf(rules, 'apps/x.ts'), []);
+  assert.strictEqual(co.inert(rules, ['someone']).inert, false);
+});
+
+test('#483 directVerdict honours the fork context for both files', () => {
+  const files = [{ path: '.github/CODEOWNERS', ref: 'abc', text: INHERITED }];
+  const plain = co.directVerdict({ files, authors: ['me'], changed: ['docs/a.md'] });
+  assert.strictEqual(plain.verdict, 'refuse');
+  const fork = co.directVerdict({ files, authors: ['me'], changed: ['docs/a.md'], fork: FORK });
+  assert.strictEqual(fork.verdict, 'inert');
+  assert.ok(fork.warnings.some((w) => /#483/.test(w) && /@upstream-org\/maintainers/.test(w)));
+});

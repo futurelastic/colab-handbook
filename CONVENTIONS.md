@@ -751,6 +751,22 @@ as before, with no extra `gh` call. The rule turns on when the file names someon
 (`@org/team`) or an email counts as someone else: a team cannot be expanded without a network
 call, and every doubt resolves toward review.
 
+**A fork's inherited `CODEOWNERS` binds nothing until the fork writes its own (#483).** A
+[fork of an upstream](#a-fork-of-an-upstream--a-repo-you-own-that-tracks-one-you-dont-449)
+carries the upstream's file unchanged, and that file names the upstream's teams. A team of
+another org cannot review in the fork, so honouring it turns every landing into a human gate
+that nobody here decided on. Measured: a fork with `auto-trunk` and an inherited
+`* @<upstream-org>/…` paused two docs-only branches in a row, every path read as core. So on a
+fork, `colab ship` ignores every owner of the form `@org/team` whose org is not the fork's own
+owner, before anything else is read, and says so in the `core-path review` row. A rule left with
+no owner carves its paths out, exactly like an ownerless line. Everything else is unchanged:
+logins and emails still count, a team of the fork's own org still counts, and a line the fork
+adds to the file applies as written. The fork test is the one `colab adopt` uses: a remote named
+`upstream` whose URL differs from `origin`'s. The fork's owner is read from its remote URL. When
+either is unknown, nothing is ignored. `colab adopt` names the ignored teams at adoption time, so
+a fork owner who wants a review on some paths learns there that the fix is to write the fork's own
+owners into the file, as a fork patch.
+
 **The pause.** When the rule is active and the branch touches a core path:
 
 1. The precondition table gains a `core-path review` row, marked `⏸`.
@@ -5319,7 +5335,7 @@ and `--no-fork` denies it when a remote called `upstream` means something else. 
 written to the descriptor: the remote is the fact, and a key would be a second copy of it that
 could drift.
 
-Three things change from [*Any repo, first-time adoption*](#any-repo-first-time-adoption):
+Four things change from [*Any repo, first-time adoption*](#any-repo-first-time-adoption):
 
 1. **Step 5 is append-only.** Paste [`templates/repo-CLAUDE-block.md`](templates/repo-CLAUDE-block.md)
    at the **end** of the upstream's `CLAUDE.md`. Leave the upstream's prose where it is, leave
@@ -5354,6 +5370,10 @@ Three things change from [*Any repo, first-time adoption*](#any-repo-first-time-
    not one of the two defaults (measured: `modules/*/sql/*.sql`), and an undeclared layout
    leaves the no-new-migrations gate blind. This is true of any repo, but a fork inherits
    someone else's layout and is the likeliest to miss it.
+4. **The upstream's `CODEOWNERS` is inert here.** Its teams belong to the upstream's org, so
+   `colab ship` ignores them and the core-path rule stays off until the fork writes owners of
+   its own ([§2, *Core paths*](#core-paths--a-pr-and-a-non-author-approval-before-landing-350)).
+   `colab adopt` names those teams. Leave the file alone unless some paths here need a review.
 
 Everything else in §9 applies unchanged: the five questions, labels, the topic, CI and
 registration. `trunk:` names a branch of the fork, the one its sessions merge into. Upstream
