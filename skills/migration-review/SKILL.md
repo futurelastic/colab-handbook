@@ -45,8 +45,9 @@ this file plus the checklist is enough for a routine review.
 2. **The role is bound to you.** The adopter's configuration names who fills
    `migration-reviewer`. If it does not name you, you are not the reviewer — stop.
 3. **The branch is pushed and its tip is what you will read.** Record the full 40-hex sha
-   of `origin/<branch>` now. That sha is the HEAD your verdict is bound to; a new commit
-   voids it, and you review again from the top.
+   of `origin/<branch>` now. That sha is the HEAD you review. The grant the tool mints binds
+   the migration files as they stand there (#508): a later trunk sync or a non-migration
+   commit keeps it, and a change to any migration file voids it, so you review again from the top.
 4. **You are not the author.** A reviewer never grants a migration it wrote or co-wrote on
    this branch. Stop and say so.
 
@@ -199,7 +200,9 @@ colab migration-grant <N> --branch <branch> \
   must be one of the runs at that head and carry the job, and `--checklist-items` must be
   `<passed>/10` with every item passed. A refusal means the review is not a GRANT yet — fix the
   fact, not the flags.
-- The grant covers that HEAD only. Any later commit on the branch means a new review.
+- The grant covers the migration content at that HEAD (#508). The tool computes the content
+  id; there is no flag for it. A later commit that changes any migration file means a new
+  review. A trunk sync, or a commit that leaves the migrations byte-identical, does not.
 
 ### REWORK — one brief per failure
 

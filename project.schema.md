@@ -554,7 +554,9 @@ migration-grant: reviewer   # a migration-reviewer grant may also be minted
 This key decides who may open the no-new-migrations door
 ([CONVENTIONS.md §5, *Migration exemption*](CONVENTIONS.md#migration-exemption--a-narrow-door-through-no-new-migrations-opened-by-a-role-98-402)).
 `human` accepts only the human grant. `reviewer` also lets `colab migration-grant --role
-migration-reviewer` mint a grant that carries a review record and is bound to one HEAD.
+migration-reviewer` mint a grant that carries a review record. The grant is bound to the
+reviewed migration content (a `migrations:` id in the record, #508), so a trunk sync that
+leaves the migration files byte-identical keeps it.
 The one reading is `tools/lib/migration-grant.js` `parseGrantPolicy`.
 
 - **It is a separate flat key, not nested under `migrations:`.** `migrations:` stays a list
@@ -565,9 +567,10 @@ The one reading is `tools/lib/migration-grant.js` `parseGrantPolicy`.
 - **An invalid value falls back to `human`.** That is the stricter reading, and the audit
   fails it.
 - **`colab ship` honours a reviewer grant only with P + M + HEAD + R** (#401). Ship reads
-  this key at the tip of the branch being merged into, and also needs a passing review
-  record bound to the branch's exact HEAD, plus a live, passing `Migration round-trip`
-  CI job on that HEAD. See [CONVENTIONS.md §5, *Migration exemption*](CONVENTIONS.md#migration-exemption--a-narrow-door-through-no-new-migrations-opened-by-a-role-98-402).
+  this key at the tip of the branch being merged into. It also needs a passing review
+  record that binds the branch's head, either as the exact reviewed HEAD or by an
+  unchanged migration content id (#508), plus a live, passing `Migration round-trip`
+  CI job on the shipped head. See [CONVENTIONS.md §5, *Migration exemption*](CONVENTIONS.md#migration-exemption--a-narrow-door-through-no-new-migrations-opened-by-a-role-98-402).
   A repo with no such job can declare `reviewer`, but every reviewer grant there fails R.
 - **The audit always reports the value.** It appears in `--json` as `migrationGrant`.
 

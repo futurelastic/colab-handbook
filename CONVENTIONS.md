@@ -3121,11 +3121,24 @@ every repo. Where both roles are live on an issue, a valid human grant wins.
 
 **The reviewer role** names the reviewer's **declared** identity and carries a **review
 record**: a fenced `` ```migration-review `` block giving the verdict, the checklist
-result, the escalation condition checked, the CI round-trip result, and the reviewed HEAD
-sha. Four properties hold it together:
+result, the escalation condition checked, the CI round-trip result, the reviewed HEAD
+sha, and a `migrations:` content id that `colab migration-grant` computes itself. Four
+properties hold it together:
 
-- **Bound to one commit.** A reviewer grant covers only the HEAD it reviewed, so a new
-  commit voids it.
+- **Bound to what was reviewed (#508).** The content id is a sha256 over the path and git
+  blob id of every migration file the branch changes, at the reviewed HEAD. The grant covers
+  that content, not that commit. A commit that leaves every migration file byte-identical
+  keeps the grant live. Editing, adding, removing or renaming a migration changes the id
+  and voids it.
+  *Why:* ship's stale-base rule (#395) makes a branch merge trunk in before it ships, and on
+  a busy repo trunk moves inside any review window. Bound to the commit, the sync that ship
+  requires voided the grant that ship requires, every time, so each reviewer-granted
+  migration needed a second review or a human (measured on one adopting repo: a passing
+  review voided by a two-commit sync, then parked for hours). R still reads CI at the
+  shipped head, so the bytes reviewed are also the bytes tested on the new base.
+  A record with no content id (minted before #508, or on a branch with no migration file)
+  stays bound to its HEAD alone, and a new commit voids it as before. A reader that predates
+  the field sees an unknown key and refuses the record, so an older `colab` fails closed.
 - **Opt-in per repo.** `migration-grant: reviewer` is read from the trunk checkout when a
   grant is minted, so a branch cannot raise its own policy. The default is `human`, and
   `colab migration-grant` refuses to mint a reviewer grant anywhere else.
@@ -3148,9 +3161,12 @@ sha. Four properties hold it together:
   being merged into. The branch's own copy never counts.
 - **M, record.** A live reviewer marker from a trusted author, bound to this branch,
   with a valid review record that passes.
-- **HEAD.** The record's head is exactly the branch's head on the remote, and the local
-  branch agrees with it.
-- **R, round-trip.** The live CI round-trip passed on that HEAD. Ship re-reads CI itself
+- **HEAD.** Ship reads the branch's head on the remote, and the local branch must agree
+  with it. The grant binds that head when the record's head is exactly it, or when the
+  record's `migrations:` id equals the id ship computes at that head (#508), using the
+  same path rule the gate fires on. An unreadable id never matches.
+- **R, round-trip.** The live CI round-trip passed on the **shipped** head, which after a
+  sync is not the reviewed one. Ship re-reads CI itself
   and never trusts the recorded `ci-roundtrip:` value. The job is found by the name
   prefix `Migration round-trip` (the legs of `templates/ci-laravel.yml`). Every leg
   needs a run that completed with success and ran at least one step. The template's job

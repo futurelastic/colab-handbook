@@ -60,6 +60,14 @@ const REVIEW_GRANT_MARK = '🔎 Migration review grant';
 const REVIEWER_ROLE = 'migration-reviewer';
 const REVIEW_GRANT_RE = /^🔎 Migration review grant — role `([^`]*)` · reviewer `([^`]*)` · branch `([^`]*)` · head `([^`]*)` · host `([^`]*)` · (\S+)/;
 const REVIEW_GRANT_TAIL = ' — bound to this HEAD: any new commit voids it; expires when this issue closes.';
+/** #508 — the canonical tail of a grant whose record carries `migrations` (a content id): it binds
+ *  what was reviewed, so a commit that leaves the migration files byte-identical keeps it. */
+const REVIEW_GRANT_CONTENT_TAIL = ' — bound to the reviewed migration content: a change to any migration file voids it; expires when this issue closes.';
+/** The tail a record of this shape gets by default — content-bound when it names a content id. */
+function reviewGrantTail(record) {
+  return record && record.migrations !== undefined && record.migrations !== null && String(record.migrations) !== ''
+    ? REVIEW_GRANT_CONTENT_TAIL : REVIEW_GRANT_TAIL;
+}
 /** The fenced block's info string — the record is found by it, never by position. */
 const REVIEW_RECORD_FENCE = 'migration-review';
 const REVIEW_RECORD_VERSION = '1';
@@ -67,6 +75,7 @@ const REVIEW_RECORD_VERSION = '1';
 const SHA40_RE = /^[0-9a-f]{40}$/;
 const REVIEWER_ID_RE = /^[A-Za-z0-9._@-]+$/;
 const CONDITION_ID_RE = /^[a-z0-9][a-z0-9-]*$/;
+const SHA256_RE = /^[0-9a-f]{64}$/;
 
 /** Every key a v1 record may carry, and what each accepts. `required: false` keys may be absent.
  *  Order here is the order `encodeReviewGrant` writes them in — part of the wire format. */
@@ -82,6 +91,9 @@ const REVIEW_RECORD_FIELDS = Object.freeze([
   { key: 'escalation-result', required: true, values: ['clear', 'escalated'] },
   { key: 'ci-roundtrip', required: true, values: ['pass', 'fail', 'pending'] },
   { key: 'ci-run', required: false, re: /^\S+$/, hint: 'a run id or URL, no spaces' },
+  // #508 — the content id of the migration files the review covered (migration-grant.js
+  // migrationContentId). Optional: a record without it is bound to `head` alone, as before.
+  { key: 'migrations', required: false, re: SHA256_RE, hint: 'a 64-hex sha256 content id of the reviewed migration files' },
 ]);
 
 /**
@@ -92,7 +104,7 @@ const REVIEW_RECORD_FIELDS = Object.freeze([
  */
 function encodeReviewGrant({ role, reviewer, branch, head, host, at, tail, record } = {}) {
   const marker = withTail(`${REVIEW_GRANT_MARK} — role \`${role}\` · reviewer \`${reviewer}\` · branch \`${branch}\``
-    + ` · head \`${head}\` · host \`${host}\` · ${at}`, tail, REVIEW_GRANT_TAIL);
+    + ` · head \`${head}\` · host \`${host}\` · ${at}`, tail, reviewGrantTail(record));
   return `${marker}\n\n${fencedRecord(REVIEW_RECORD_FENCE, REVIEW_RECORD_FIELDS, record)}`;
 }
 
@@ -111,8 +123,11 @@ function decodeReviewGrant(body) {
   const line = nl === -1 ? text : text.slice(0, nl);
   const t = line.slice(m[0].length);
   const out = { role: m[1], reviewer: m[2], branch: m[3], head: m[4], host: m[5], at: m[6],
-    tail: t === REVIEW_GRANT_TAIL ? null : t, record: null, problems: [] };
-  return readFencedRecord(text, REVIEW_RECORD_FENCE, out);
+    tail: t, record: null, problems: [] };
+  readFencedRecord(text, REVIEW_RECORD_FENCE, out);
+  // The canonical tail depends on the record's shape (#508), so it is judged once the record is read.
+  if (t === reviewGrantTail(out.record)) out.tail = null;
+  return out;
 }
 
 /** Find the FIRST fenced block whose info string is exactly `fence` and read its `key: value`
@@ -244,6 +259,7 @@ module.exports = {
   MIGRATION_GRANT_MARK, MIGRATION_REVOKE_MARK, MIGRATION_GRANT_RE, MIGRATION_REVOKE_RE,
   encodeMigrationGrant, decodeMigrationGrant, encodeMigrationRevoke, decodeMigrationRevoke,
   REVIEW_GRANT_MARK, REVIEW_GRANT_RE, REVIEWER_ROLE, REVIEW_RECORD_FENCE, REVIEW_RECORD_VERSION, REVIEW_RECORD_FIELDS,
+  REVIEW_GRANT_TAIL, REVIEW_GRANT_CONTENT_TAIL,
   encodeReviewGrant, decodeReviewGrant,
   CI_GRANT_MARK, CI_REVOKE_MARK, CI_GRANT_RE, CI_REVOKE_RE,
   encodeCiGrant, decodeCiGrant, encodeCiRevoke, decodeCiRevoke,

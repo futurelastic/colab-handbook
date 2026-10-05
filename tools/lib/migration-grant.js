@@ -45,6 +45,7 @@
 // codec/grants.js (#498, epic #496). Re-exported below under the names this module always had.
 // Mark design (distinct leading emoji, so neither regex can match the other mark's body) is
 // documented there; the grant-revoke-mark-collision test still pins it here.
+const crypto = require('crypto');
 const codec = require('./codec/grants');
 const GRANT_MARK = codec.MIGRATION_GRANT_MARK;
 const REVOKE_MARK = codec.MIGRATION_REVOKE_MARK;
@@ -194,13 +195,15 @@ function evaluateIssue(record, branch, issueNum, labelName, opts) {
  * read (the caller's job, not this function's — see tools/colab's shipMigrationGate).
  *
  * `ctx` (#401) — OPTIONAL, and absent means exactly the pre-#401 behaviour (human grants only,
- * byte-identical output). Given, it is `{ policy, headSha, roundtrip }` and the ONE rule every
+ * byte-identical output). Given, it is `{ policy, headSha, contentId, roundtrip }` and the ONE rule every
  * ship path shares (`--dry`, `--dry --json`, a real/auto-trunk ship, and batch — which reads
  * through `--dry --json`) — so no path can accept a grant another refuses. Per issue:
  *   1. a live human grant passes, unchanged — it wins where both roles exist;
  *   2. otherwise a reviewer grant passes only when ALL of: P policy is `reviewer` · M a valid,
- *      passing, trusted, branch-bound reviewer marker + record · HEAD the record's head equals
- *      `headSha` · R `roundtrip()` says the live CI round-trip passed on that HEAD.
+ *      passing, trusted, branch-bound reviewer marker + record · HEAD the grant binds the shipped
+ *      head — the record's head equals `headSha`, or (#508) the record's migration content id
+ *      equals `contentId`, the id at `headSha` · R `roundtrip()` says the live CI round-trip passed
+ *      on the SHIPPED head (never the reviewed one).
  * R is a THUNK, called at most once per set and only once some issue has cleared P, M and HEAD —
  * so a no-migration, human-granted or already-failing ship pays for no CI read. A thunk returning
  * anything but `{ ok: true }` (including `null`, a failed read) fails R closed.
@@ -238,23 +241,23 @@ function evaluateShipSet(issues, records, branch, labelName, ctx) {
         reason: policy === 'reviewer' ? `${h.reason}, and no live reviewer grant either` : h.reason });
       continue;
     }
-    const r = evaluateReviewerGrant(rec, { branch, headSha: ctx.headSha, issueNum: n, labelName, policy });
+    const r = evaluateReviewerGrant(rec, { branch, headSha: ctx.headSha, contentId: ctx.contentId, issueNum: n, labelName, policy });
     if (!r.ok) {
       const failed = !r.checks.policy ? 'policy' : !r.checks.marker ? 'marker' : 'head';
       missing.push({ issue: n, failed, reason: `reviewer grant [${SHIP_CONDITION_TAG[failed]}]: ${r.reason}` });
       continue;
     }
-    pending.push({ n, g: r.grant });
+    pending.push({ n, g: r.grant, via: r.via });
   }
   if (pending.length > 0) {
     let rt = null;
     try { rt = typeof ctx.roundtrip === 'function' ? ctx.roundtrip() : null; } catch (_) { rt = null; }
     const ok = !!rt && rt.ok === true;
     const why = rt && rt.reason ? rt.reason : 'the CI round-trip could not be read — an unread result is never a pass';
-    for (const { n, g } of pending) {
+    for (const { n, g, via } of pending) {
       if (ok) {
-        granted.push({ issue: n, role: 'reviewer', reviewer: g.reviewer, head: g.head,
-          branch: g.branch, by: g.login, at: g.at });
+        granted.push({ issue: n, role: 'reviewer', reviewer: g.reviewer, head: g.head, via,
+          migrations: (g.record && g.record.migrations) || null, branch: g.branch, by: g.login, at: g.at });
       } else {
         missing.push({ issue: n, failed: 'roundtrip',
           reason: `reviewer grant [${SHIP_CONDITION_TAG.roundtrip}]: #${n}: ${why}` });
@@ -586,22 +589,76 @@ function liveGrantRecords(comments) {
 }
 
 /**
- * HEAD binding. A human grant is branch-bound, not HEAD-bound (unchanged since #98) → unbound, ok.
- * A reviewer grant covers exactly the commit it reviewed: ok only when `branchHeadSha` is a full
- * 40-hex sha equal (case-insensitively) to the grant's head. A short or missing sha is NOT ok —
- * "could not confirm the HEAD" is never read as "the HEAD matches", and never a prefix match.
+ * #508 — the CONTENT ID of a branch's migration files: what a reviewer actually reviewed. Pure:
+ * `entries` is `[{ path, blob }]`, one per migration path the branch changes against its base
+ * (tools/colab newMigrations — the same rule the gate fires on), `blob` the git blob id of that
+ * path at the head, or null when the head deletes it. The id is a sha256 over the SORTED
+ * `path<TAB>blob` lines, so it is independent of listing order and of everything outside those
+ * files: a merge-of-trunk sync, or any commit that leaves every migration byte-identical, keeps
+ * it; editing, adding, removing or renaming a migration changes it. Returns null for an empty or
+ * unreadable set — there is nothing to bind, and null never equals a recorded id.
  */
-function grantHeadBinding(grant, branchHeadSha) {
-  if (!grant || grant.role === 'human' || grant.role === undefined) return { bound: false, ok: true, reason: '' };
+function migrationContentId(entries) {
+  if (!Array.isArray(entries) || entries.length === 0) return null;
+  const lines = [];
+  for (const e of entries) {
+    if (!e || typeof e.path !== 'string' || e.path === '') return null;
+    const blob = e.blob == null ? '-' : String(e.blob).toLowerCase();
+    if (blob !== '-' && !/^[0-9a-f]{40}([0-9a-f]{24})?$/.test(blob)) return null;
+    lines.push(`${e.path}\t${blob}\n`);
+  }
+  lines.sort();
+  return crypto.createHash('sha256').update(lines.join('')).digest('hex');
+}
+
+/**
+ * #508 — `git ls-tree -z <sha> -- <paths…>` output → migrationContentId's entries, one per path in
+ * `paths` (a path the tree lacks is a deletion: blob null). Pure, so the parse is testable without
+ * the CLI; tools/colab migrationContentAt runs the git half.
+ */
+function migrationEntriesFromLsTree(stdout, paths) {
+  const blobs = new Map();
+  for (const rec of String(stdout || '').split('\0')) {
+    const m = rec.match(/^\d+ blob ([0-9a-f]+)\t([\s\S]+)$/);
+    if (m) blobs.set(m[2], m[1]);
+  }
+  return (paths || []).map((p) => ({ path: p, blob: blobs.get(p) || null }));
+}
+
+const SHA256_RE = /^[0-9a-f]{64}$/;
+
+/**
+ * The binding of a grant to what the branch now is. A human grant is branch-bound, not HEAD-bound
+ * (unchanged since #98) → unbound, ok. A reviewer grant needs `branchHeadSha` to be a full 40-hex
+ * sha (R reads CI there; "could not confirm the HEAD" is never read as a match, never a prefix
+ * match), and then binds one of two ways:
+ *   - its record names `migrations` (#508) → CONTENT-bound: ok when the head IS the reviewed head,
+ *     or when `contentId` — migrationContentId at the head — equals the recorded id. A sync that
+ *     only merges trunk in keeps the grant; any change to a migration file voids it.
+ *   - no `migrations` (a record minted before #508) → HEAD-bound, exactly as before: only the
+ *     reviewed commit itself.
+ * Returns { bound, ok, via: 'head' | 'content' | null, reason }.
+ */
+function grantHeadBinding(grant, branchHeadSha, contentId) {
+  if (!grant || grant.role === 'human' || grant.role === undefined) return { bound: false, ok: true, via: null, reason: '' };
   const want = String(grant.head || '').toLowerCase();
   const have = String(branchHeadSha || '').toLowerCase();
   if (!SHA40_RE.test(have)) {
-    return { bound: true, ok: false, reason: `cannot confirm the branch HEAD (${have ? `"${have}" is not a full sha` : 'no sha given'}) — a reviewer grant is bound to one commit` };
+    return { bound: true, ok: false, via: null, reason: `cannot confirm the branch HEAD (${have ? `"${have}" is not a full sha` : 'no sha given'}) — a reviewer grant is judged at one commit` };
   }
-  if (want !== have) {
-    return { bound: true, ok: false, reason: `reviewer grant is bound to ${want.slice(0, 7)}, branch is at ${have.slice(0, 7)} — a new commit voids it` };
+  if (want === have) return { bound: true, ok: true, via: 'head', reason: '' };
+  const recorded = grant.record && grant.record.migrations ? String(grant.record.migrations).toLowerCase() : '';
+  if (!recorded) {
+    return { bound: true, ok: false, via: null, reason: `reviewer grant is bound to ${want.slice(0, 7)}, branch is at ${have.slice(0, 7)} — a new commit voids it (the record names no migration content id, so it binds the HEAD alone)` };
   }
-  return { bound: true, ok: true, reason: '' };
+  const now = String(contentId || '').toLowerCase();
+  if (!SHA256_RE.test(now)) {
+    return { bound: true, ok: false, via: null, reason: `reviewer grant covers migration content ${recorded.slice(0, 12)}, and the content at ${have.slice(0, 7)} could not be read — an unread id is never a match` };
+  }
+  if (now !== recorded) {
+    return { bound: true, ok: false, via: null, reason: `reviewer grant covers migration content ${recorded.slice(0, 12)} (reviewed at ${want.slice(0, 7)}), the branch at ${have.slice(0, 7)} carries ${now.slice(0, 12)} — a migration file changed since the review, which voids it` };
+  }
+  return { bound: true, ok: true, via: 'content', reason: '' };
 }
 
 /** `migration-grant:` values, in project.yml (#398). Absent = human, today's behaviour. */
@@ -630,7 +687,8 @@ function parseGrantPolicy(doc) {
 
 /**
  * The reviewer-grant verdict for one issue — P, M and HEAD of the ship rule; evaluateShipSet()
- * (#401) calls it and adds R. `ctx` = { branch, headSha, issueNum, labelName, policy } where
+ * (#401) calls it and adds R. `ctx` = { branch, headSha, contentId, issueNum, labelName, policy } where
+ * `contentId` (#508) is migrationContentId at `headSha` (grantHeadBinding), and
  * `policy` is parseGrantPolicy(...).policy. Checks, cheapest/most-fundamental first, each with its
  * own reason: read failed · not open · no label · policy not `reviewer` · no live reviewer grant ·
  * branch mismatch · untrusted author · record invalid · record not passing · HEAD binding.
@@ -658,10 +716,10 @@ function evaluateReviewerGrant(record, ctx) {
   if (!g.valid) return no(`#${issue}'s reviewer grant has an invalid review record: ${(g.problems || []).join('; ') || 'unreadable'}`, g);
   if (!g.passing) return no(`#${issue}'s review record does not pass: ${reviewRecordFailure(g.record)}`, g);
   checks.marker = true;
-  const hb = grantHeadBinding(g, c.headSha);
+  const hb = grantHeadBinding(g, c.headSha, c.contentId);
   if (!hb.ok) return no(`#${issue}: ${hb.reason}`, g);
   checks.head = true;
-  return { issue, ok: true, grant: g, reason: '', checks };
+  return { issue, ok: true, grant: g, via: hb.via, reason: '', checks };
 }
 
 module.exports = {
@@ -674,6 +732,8 @@ module.exports = {
   REVIEW_RECORD_FENCE, REVIEW_RECORD_FIELDS,
   validateReviewRecord, reviewRecordFailure, reviewGrantCommentBody, parseReviewGrant,
   liveGrantRecords, grantHeadBinding, evaluateReviewerGrant,
+  // #508 — bind to the reviewed migration content, not the HEAD
+  migrationContentId, migrationEntriesFromLsTree,
   // #398 — repo policy
   GRANT_POLICIES, parseGrantPolicy,
   // #401 — ship honours a reviewer grant
