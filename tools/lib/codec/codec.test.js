@@ -176,6 +176,7 @@ const PAIRS = [
   ['grants.review', codec.encodeReviewGrant, codec.decodeReviewGrant],
   ['grants.ci', codec.encodeCiGrant, codec.decodeCiGrant],
   ['grants.ciRevokes', codec.encodeCiRevoke, codec.decodeCiRevoke],
+  ['grants.ciReview', codec.encodeCiReviewGrant, codec.decodeCiReviewGrant],
   ['decisions.records', codec.encodeDecision, codec.decodeDecision],
   ['decisions.reopens', codec.encodeReopen, codec.decodeReopen],
   ['holds', codec.encodeHold, codec.decodeHold],

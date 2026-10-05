@@ -473,6 +473,60 @@
         },
         "note": "synthetic"
       }
+    ],
+    "ciReview": [
+      {
+        "wire": "🩹 Red-trunk CI review grant — role `ci-reviewer` · reviewer `reviewer-b` · branch `fix/trunk-red-audit-212` · head `4f2a9c1e7b3d5a6f8e0c2b4d6a8f0e1c3b5d7a9f` · red `main`@`9e8d7c6b5a4f3e2d1c0b9a8f7e6d5c4b3a2f1e0d` · host `h:ee4bcb5b2678` · 2026-10-05T16:20:31.507Z — bound to this HEAD and this red trunk sha: a new commit on either voids it; expires when this issue closes.\n\n```ci-review\nv: 1\nrole: ci-reviewer\nreviewer: reviewer-b\nhead: 4f2a9c1e7b3d5a6f8e0c2b4d6a8f0e1c3b5d7a9f\nred: 9e8d7c6b5a4f3e2d1c0b9a8f7e6d5c4b3a2f1e0d\nverdict: pass\ncures: CI / test (ubuntu-latest, 22); CI / self-audit\nci-run: 18290000042\n```",
+        "decoded": {
+          "role": "ci-reviewer",
+          "reviewer": "reviewer-b",
+          "branch": "fix/trunk-red-audit-212",
+          "head": "4f2a9c1e7b3d5a6f8e0c2b4d6a8f0e1c3b5d7a9f",
+          "trunk": "main",
+          "redSha": "9e8d7c6b5a4f3e2d1c0b9a8f7e6d5c4b3a2f1e0d",
+          "host": "h:ee4bcb5b2678",
+          "at": "2026-10-05T16:20:31.507Z",
+          "tail": null,
+          "record": {
+            "v": "1",
+            "role": "ci-reviewer",
+            "reviewer": "reviewer-b",
+            "head": "4f2a9c1e7b3d5a6f8e0c2b4d6a8f0e1c3b5d7a9f",
+            "red": "9e8d7c6b5a4f3e2d1c0b9a8f7e6d5c4b3a2f1e0d",
+            "verdict": "pass",
+            "cures": "CI / test (ubuntu-latest, 22); CI / self-audit",
+            "ci-run": "18290000042"
+          },
+          "problems": []
+        },
+        "note": "synthetic: the #504 shape, every field"
+      },
+      {
+        "wire": "🩹 Red-trunk CI review grant — role `ci-reviewer` · reviewer `reviewer-b` · branch `fix/trunk-red-audit-212` · head `4f2a9c1e7b3d5a6f8e0c2b4d6a8f0e1c3b5d7a9f` · red `main`@`9e8d7c6b5a4f3e2d1c0b9a8f7e6d5c4b3a2f1e0d` · host `h:ee4bcb5b2678` · 2026-10-05T16:20:31.507Z — bound to this HEAD and this red trunk sha: a new commit on either voids it; expires when this issue closes.\n\n```ci-review\nv: 1\nrole: ci-reviewer\nreviewer: reviewer-b\nhead: 4f2a9c1e7b3d5a6f8e0c2b4d6a8f0e1c3b5d7a9f\nred: 9e8d7c6b5a4f3e2d1c0b9a8f7e6d5c4b3a2f1e0d\nverdict: pass\ncures: CI / test (ubuntu-latest, 22); CI / self-audit\nnot-before: 2026-10-05T16:35:31.507Z\n```",
+        "decoded": {
+          "role": "ci-reviewer",
+          "reviewer": "reviewer-b",
+          "branch": "fix/trunk-red-audit-212",
+          "head": "4f2a9c1e7b3d5a6f8e0c2b4d6a8f0e1c3b5d7a9f",
+          "trunk": "main",
+          "redSha": "9e8d7c6b5a4f3e2d1c0b9a8f7e6d5c4b3a2f1e0d",
+          "host": "h:ee4bcb5b2678",
+          "at": "2026-10-05T16:20:31.507Z",
+          "tail": null,
+          "record": {
+            "v": "1",
+            "role": "ci-reviewer",
+            "reviewer": "reviewer-b",
+            "head": "4f2a9c1e7b3d5a6f8e0c2b4d6a8f0e1c3b5d7a9f",
+            "red": "9e8d7c6b5a4f3e2d1c0b9a8f7e6d5c4b3a2f1e0d",
+            "verdict": "pass",
+            "cures": "CI / test (ubuntu-latest, 22); CI / self-audit",
+            "not-before": "2026-10-05T16:35:31.507Z"
+          },
+          "problems": []
+        },
+        "note": "synthetic: a host-imposed revoke window (not-before), no ci-run"
+      }
     ]
   },
   "decisions": {

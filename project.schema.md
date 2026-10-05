@@ -571,6 +571,29 @@ The one reading is `tools/lib/migration-grant.js` `parseGrantPolicy`.
   A repo with no such job can declare `reviewer`, but every reviewer grant there fails R.
 - **The audit always reports the value.** It appears in `--json` as `migrationGrant`.
 
+### `ci-grant` — optional
+
+```yaml
+ci-grant: human      # absent = human — only a person opens the red-trunk door
+ci-grant: reviewer   # the coordinator agent may also mint a ci-reviewer grant
+```
+
+This key decides who may open the red-trunk door when the cure rule refuses
+([CONVENTIONS.md §5, *Red-trunk exemption*](CONVENTIONS.md#red-trunk-exemption--the-one-shot-door-through-trunk-ci-green-105)).
+`human` accepts only the human grant (`COLAB_HUMAN=1`). `reviewer` also lets `colab ci-grant
+--role ci-reviewer` mint a grant **without** `COLAB_HUMAN=1`, carrying a review record and
+bound to one HEAD and one red trunk sha (#504). The one reading is `tools/lib/ci-grant.js`
+`parseGrantPolicy`.
+
+- **Only trunk's committed value counts.** Both `colab ci-grant` and `colab ship` read it
+  from trunk (`git show <trunk>:.github/project.yml`), never the branch, so a branch cannot
+  opt itself in.
+- **An invalid value falls back to `human`.** That is the stricter reading, and the audit
+  fails it.
+- **Declaring it is a human act**, like lowering exposure: it is the line that lets an agent
+  through a red trunk, so the agent it lets through does not add it.
+- **The audit always reports the value.** It appears in `--json` as `ciGrant`.
+
 ### `trust-humans` — optional
 
 ```yaml

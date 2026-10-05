@@ -638,6 +638,14 @@ green.
   every step that ran on trunk passed in the dry run. A red inside a `[publish]`
   step never cures this way: that is a ci-grant. A bystander never dispatches one,
   and containment refuses it anyway.
+- **The cure refuses, the branch is the patch, and trunk declares `ci-grant: reviewer`?**
+  You may open the door yourself (#504, `CONVENTIONS.md` *Red-trunk exemption*). Review the
+  branch against the red first — does its head repair exactly the checks that are red? —
+  then `colab ci-grant <N> --branch <b> --role ci-reviewer --reviewer <your id> --verdict pass
+  --cures "<workflow / job>; …"`, where `<N>` is its `TRUNK RED:` issue. The command measures
+  every guard and refuses on any; a refusal is final for this head, never something to route
+  around. Then re-run ship, which re-measures them all. Without the opt-in, the door stays a
+  human's: say what the human grant needs and stop.
 - **Not sure it is the patch?** It is a bystander. A wrong bystander costs one wait for
   a green that the real patch is about to produce; a wrong patch opens a red PR, spends
   a CI round, and teaches every reader of that run the failure is the branch's.

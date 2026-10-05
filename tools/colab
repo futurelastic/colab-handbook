@@ -4348,6 +4348,7 @@ function cmdDecisionList(opts) {
 // ---------------------------------------------------------------------------
 
 const HELP_CI_GRANT = `colab ci-grant <issue> --branch <branch> [--evidence-run <sha-or-url>] [--repo <path>]
+colab ci-grant <issue> --branch <branch> --role ci-reviewer --reviewer <id> --verdict pass --cures <checks> [--repo <path>]
 colab ci-grant <issue> --revoke [--repo <path>]
 colab ci-grant --list [--json] [--repo <path>]
 
@@ -4386,8 +4387,9 @@ CI grant merges into a repo whose own test suite is known-failing:
      \`ship\` would never consult it for, reading live in \`--list\` while doing nothing.
 
 HUMAN-ONLY, ENFORCED: both grant and revoke REFUSE (exit 1) unless COLAB_HUMAN=1 is set in the
-environment — the identical bar \`colab promote\`/\`colab migration-grant\` already hold. No field,
-flag or project.yml value can lower it. This check runs BEFORE any network call.
+environment — the identical bar \`colab promote\`/\`colab migration-grant\` already hold. This check
+runs BEFORE any network call. The ONE exception is the reviewer role below, and only on a repo whose
+trunk opts in.
 
 The marker is TWO parts, both required for a grant to read as live:
   - the \`${labels.CI_GRANT_LABEL}\` label — applying it requires GitHub write/triage permission, so
@@ -4415,8 +4417,30 @@ Revoking removes the label FIRST (the gate is restored the same minute) and post
 There is deliberately no local-only fallback: without a usable \`gh\`, every subcommand here REFUSES
 rather than write (or read) something invisible to the machine \`ship\` might later run on.
 
+THE REVIEWER ROLE (#504). On a repo whose TRUNK declares \`ci-grant: reviewer\` in project.yml,
+--role ${ciGrant.REVIEWER_ROLE} mints a \`${ciGrant.REVIEW_GRANT_MARK}\` WITHOUT COLAB_HUMAN=1 — the coordinator
+agent's door through a red trunk the cure rule refuses (maintainer ruling 2026-10-05). It is the only
+path past the human bar above, and only that opt-in opens it; revoking stays human. Every guard is
+measured, nothing is taken from the flags:
+  - local, before any network call: the opt-in on trunk as committed (a branch cannot opt itself
+    in) · the record is well-formed with --verdict pass and at least one cure · the branch is
+    pushed and --head (if given) is origin's tip · the branch's trailing number group carries #N;
+  - #N is open and its title starts "${ciGrant.TRUNK_RED_TITLE_PREFIX}" · trunk is red in ship's sense ·
+    never stacks (guard 2 above) · the branch's own CI is green at that EXACT head · every
+    check in --cures is red on trunk at the red sha.
+The comment carries a fenced \`ci-review\` record (verdict, head, red sha, cures) and binds that
+HEAD and that red sha: a new commit on either voids it. \`colab ship\` re-measures all of it, reads
+the opt-in at the merge target, and reads a grant with \`not-before\` in the future as not yet usable.
+
 Options:
   --branch <branch>       required for a grant; never inferred from HEAD
+  --role <role>            human (default) | ${ciGrant.REVIEWER_ROLE}
+  --reviewer <id>          (reviewer) the reviewer's declared identity (letters, digits, . _ @ -)
+  --verdict <v>            (reviewer) pass | fail — only pass is minted
+  --cures <checks>         (reviewer) the red checks the branch cures, "workflow / job; …"
+  --head <sha>             (reviewer) optional; must equal the pushed branch tip
+  --not-before <iso>       (reviewer) optional; a revoke window the host imposes
+  --ci-run <id-or-url>     (reviewer) optional; recorded only
   --evidence-run <ref>     recording-only note for the audit trail — never substitutes for the
                            measured branch-head run this command itself checks
   --revoke                 revoke instead of grant
@@ -4473,7 +4497,12 @@ function computeAntiStacking(repoAbs, trunk, trunkIsRed) {
 
 function cmdCiGrant(argv) {
   const opts = parseArgs(argv, {
-    values: { '--repo': 'repo', '--branch': 'branch', '--evidence-run': 'evidenceRun' },
+    values: {
+      '--repo': 'repo', '--branch': 'branch', '--evidence-run': 'evidenceRun',
+      // #504 reviewer-grant record flags
+      '--role': 'role', '--reviewer': 'reviewer', '--verdict': 'verdict', '--cures': 'cures',
+      '--head': 'head', '--not-before': 'notBefore', '--ci-run': 'ciRun',
+    },
     flags: { '--revoke': 'revoke', '--list': 'list', '--json': 'json', '-h': 'help', '--help': 'help' },
   });
   if (opts.help) return print(HELP_CI_GRANT);
@@ -4481,11 +4510,27 @@ function cmdCiGrant(argv) {
   if (opts._.length === 0) return print(HELP_CI_GRANT);
   const num = normIssueNum(opts._[0]);
 
+  // #504: the reviewer role is the ONE path past the human bar below, and only on a repo whose
+  // TRUNK declares `ci-grant: reviewer`. Decided from local git alone, before any network call.
+  const role = opts.role === undefined ? 'human' : String(opts.role);
+  if (!ciGrant.GRANT_ROLES.includes(role)) {
+    throw new UserError(`--role is "${role}", expected ${ciGrant.GRANT_ROLES.join(' | ')}`);
+  }
+  if (opts.revoke && opts.role !== undefined) {
+    throw new UserError('--revoke takes no --role — a revoke cancels every live grant on the issue, whatever its role');
+  }
+  if (role === ciGrant.REVIEWER_ROLE && !opts.revoke) return cmdCiGrantReviewer(num, opts);
+  const stray = ['reviewer', 'verdict', 'cures', 'head', 'notBefore', 'ciRun'].filter((k) => opts[k] !== undefined);
+  if (stray.length) {
+    throw new UserError(`review-record flags (${stray.map((k) => '--' + k.replace(/[A-Z]/g, (c) => '-' + c.toLowerCase())).join(', ')}) need --role ${ciGrant.REVIEWER_ROLE} — a human grant carries no record`);
+  }
+
   // HUMAN-ONLY, first — identical posture and identical reason to cmdMigrationGrant's check above:
   // assertable by a test against a fixture with no `gh` at all (tools/lib/ship-ci-grant.test.js).
   if (process.env.COLAB_HUMAN !== '1') {
     process.stderr.write(`✗ Refusing: ${opts.revoke ? 'revoking' : 'creating'} a CI grant requires a human.\n`);
     process.stderr.write('  Re-run with COLAB_HUMAN=1. (No field, flag or project.yml value can lower this bar.)\n');
+    if (!opts.revoke) process.stderr.write(`  The ${ciGrant.REVIEWER_ROLE} role is a different grant, open only where trunk declares ci-grant: reviewer — colab ci-grant --help.\n`);
     return 1;
   }
 
@@ -4507,6 +4552,121 @@ function cmdCiGrant(argv) {
   }
 
   return opts.revoke ? cmdCiGrantRevoke(repoAbs, num) : cmdCiGrantCreate(repoAbs, num, opts);
+}
+
+/**
+ * #504: `colab ci-grant <N> --role ci-reviewer` — the coordinator agent's door through a red trunk the
+ * cure rule refuses. Needs no COLAB_HUMAN=1, and that is the whole point; what replaces the human is
+ * the opt-in on trunk plus guards that are all MEASURED here, never taken from the flags:
+ *   local (before any network call): `ci-grant: reviewer` committed on trunk · the record is
+ *     well-formed with verdict pass and at least one cure · the branch is pushed and --head (if
+ *     given) is its remote tip · the branch name's trailing number group carries #N;
+ *   tracker/CI: #N is open and titled `TRUNK RED:` · trunk is red in the sense ship checks · never
+ *     stacks (computeAntiStacking, same as the human grant) · the branch's own CI is green at that
+ *     EXACT head · every claimed cure is a red check on trunk at the red sha.
+ * Nothing is written until all of them pass.
+ */
+function cmdCiGrantReviewer(num, opts) {
+  const repoAbs = resolveRepoOrCwd(opts);
+  if (!repoAbs) throw new UserError('not inside a git repo — pass --repo <path>');
+  if (!opts.branch) {
+    throw new UserError('--branch <branch> is required — a grant is bound to one branch, never inferred from the current checkout');
+  }
+  const trunk = resolveTrunk(repoAbs, projectDoc(repoAbs));
+  if (!trunk) throw new UserError('Could not determine trunk branch (set project.yml trunk:)');
+
+  // The opt-in, read from TRUNK as committed — never this checkout or the branch, so a branch cannot
+  // grant itself the policy it would then use.
+  const pol = ciGrant.parseGrantPolicy(projectDocAt(repoAbs, trunk));
+  if (!pol.valid) throw new UserError(`${pol.reason} — fix project.yml on ${trunk} before minting a reviewer grant`);
+  if (pol.policy !== 'reviewer') {
+    process.stderr.write(`✗ Refusing: ${trunk}'s project.yml says ci-grant: ${pol.policy}${pol.declared ? '' : ' (absent = human)'} — a ${ciGrant.REVIEWER_ROLE} grant is minted only where trunk declares ci-grant: reviewer.\n`);
+    process.stderr.write('  Without that opt-in a CI grant is human-only: COLAB_HUMAN=1 colab ci-grant <N> --branch <b>.\n');
+    return 1;
+  }
+
+  if (!branchName.branchIssueNumbers(opts.branch).includes(num)) {
+    throw new UserError(`branch "${opts.branch}" does not carry #${num} in its trailing number group — a reviewer grant needs the branch to close the TRUNK RED issue it is posted on`);
+  }
+  const refs = git.branchRefs(repoAbs, opts.branch);
+  if (!refs.remoteSha) {
+    throw new UserError(`branch "${opts.branch}" is not on origin — a reviewer grant binds the pushed HEAD, so push it first`);
+  }
+  const head = refs.remoteSha.toLowerCase();
+  if (opts.head !== undefined && String(opts.head).toLowerCase() !== head) {
+    throw new UserError(`--head ${String(opts.head).slice(0, 12)} is not origin's tip of "${opts.branch}" (${head.slice(0, 12)}) — the review covers a commit the grant would not bind; re-review the tip`);
+  }
+  const rec = {
+    v: '1', role: ciGrant.REVIEWER_ROLE, reviewer: opts.reviewer, head, red: '0'.repeat(40),
+    verdict: opts.verdict, cures: opts.cures === undefined ? undefined : ciGrant.formatCures(ciGrant.parseCures(opts.cures)),
+    'not-before': opts.notBefore, 'ci-run': opts.ciRun,
+  };
+  for (const k of Object.keys(rec)) if (rec[k] === undefined || rec[k] === '') delete rec[k];
+  const v0 = ciGrant.validateReviewRecord(rec);
+  if (!v0.valid) throw new UserError(`the review record is invalid: ${v0.problems.join('; ')}`);
+  if (!v0.passing) throw new UserError(`the review says verdict ${rec.verdict} — a grant carrying a failing review is a contradiction; nothing was posted`);
+
+  if (!isGhUsable(repoAbs)) {
+    throw new UserError(`gh not usable here (${ghUnusableWhy(repoAbs)}) — a CI grant lives on the tracker, visible from any machine to the gate that reads it, and there is deliberately no local-only fallback`);
+  }
+
+  const info = git.ghIssueView(repoAbs, num, ['state', 'labels', 'title']);
+  if (!info) throw new UserError(`could not read #${num} from the tracker — refusing to write a grant blind`);
+  if (info.state !== 'OPEN') throw new UserError(`#${num} is ${info.state} — a grant expires the instant its issue closes`);
+  if (!ciGrant.titleIsTrunkRed(info.title)) {
+    throw new UserError(`#${num}'s title does not start "${ciGrant.TRUNK_RED_TITLE_PREFIX}" — a reviewer CI grant covers only work that is the red trunk's repair`);
+  }
+  const present = git.ghListLabels(repoAbs);
+  if (present && !present.includes(labels.CI_GRANT_LABEL)) {
+    throw new UserError(labels.ciGrantMissingLabelHint(present) || `this repo has no \`${labels.CI_GRANT_LABEL}\` label`);
+  }
+
+  // Trunk red, in ship's sense — the identical classification cmdCiGrantCreate uses (#155).
+  git.git(['fetch', git.remoteFor(repoAbs), trunk], repoAbs);
+  const trunkRun = git.ghRunForSha(repoAbs, trunk);
+  if (!trunkRun) throw new UserError(`could not read ${trunk}'s CI status (gh run list failed) — refusing to grant blind`);
+  const trunkVerdict = classifyCiRun(repoAbs, trunkRun, `${trunk}@${shortSha(trunkRun.sha)}`);
+  if (trunkVerdict.class !== HUMAN_GATED) {
+    throw new UserError(`${trunk} is not red in the sense \`ship\` checks — ${trunkVerdict.detail || 'green'}. Nothing for a grant to exempt.`);
+  }
+  const redSha = trunkRun.sha;
+  const stacking = computeAntiStacking(repoAbs, trunk, true);
+  if (!stacking.ok) throw new UserError(stacking.reason);
+
+  // The branch's own CI, green at the EXACT head the review covers.
+  const evRun = git.ghRunForSha(repoAbs, opts.branch);
+  if (!evRun) throw new UserError(`could not read "${opts.branch}"'s CI status (gh run list failed) — refusing to grant blind`);
+  if (String(evRun.sha || '').toLowerCase() !== head) {
+    throw new UserError(`"${opts.branch}"'s newest CI run is for ${shortSha(evRun.sha)}, not the reviewed head ${shortSha(head)} — wait for CI on the head, then re-run`);
+  }
+  if (!(evRun.status === 'completed' && evRun.conclusion === 'success')) {
+    throw new UserError(`"${opts.branch}" has no completed, successful CI run at ${shortSha(head)} (status=${evRun.status} conclusion=${evRun.conclusion || 'none'}) — a reviewer grant needs the branch green at its exact head`);
+  }
+
+  // Every claimed cure is a red check on trunk at the red sha.
+  const redRunJobs = trunkRedRunJobs(repoAbs, trunk, redSha);
+  const redJobs = redRunJobs === null ? null : ciCure.redJobSet(redRunJobs);
+  const cr = ciGrant.curesAreRed(ciGrant.parseCures(rec.cures), redJobs);
+  if (!cr.ok) throw new UserError(`${cr.reason}; nothing was posted`);
+
+  rec.red = redSha.toLowerCase();
+  const v = ciGrant.validateReviewRecord(rec);
+  if (!v.passing) throw new UserError(`the review record is invalid: ${v.problems.join('; ')}`);
+
+  const editR = git.ghIssueEdit(repoAbs, num, labels.ciGrantLabelArgs({}));
+  if (!editR.ok) throw new UserError(`gh edit #${num} failed (${editR.stderr.split('\n')[0] || editR.code})`);
+  const commentR = git.ghIssueComment(repoAbs, num,
+    ciGrant.reviewGrantCommentBody(opts.branch, trunk, commentHost(repoAbs), nowISO(), rec));
+  if (!commentR.ok) {
+    git.ghIssueEdit(repoAbs, num, labels.ciGrantLabelArgs({ clear: true }));
+    throw new UserError(`label applied but the grant comment failed to post (${commentR.stderr.split('\n')[0] || commentR.code}) — rolled the label back so this does not read as granted. Re-run.`);
+  }
+
+  print(`Recorded a ${ciGrant.REVIEWER_ROLE} CI grant on #${num} in ${shortRepo(repoAbs)} — reviewer "${rec.reviewer}", branch "${opts.branch}" @ ${head.slice(0, 12)}.`);
+  print(`  Bound to that HEAD and to red ${trunk}@${shortSha(redSha)}: a new commit on either voids it. Cures: ${rec.cures}.`);
+  if (rec['not-before']) print(`  Not usable before ${rec['not-before']} (revoke window).`);
+  print(`  Revoke any time: COLAB_HUMAN=1 colab ci-grant ${num} --revoke`);
+  return 0;
 }
 
 function cmdCiGrantCreate(repoAbs, num, opts) {
@@ -4589,7 +4749,8 @@ function cmdCiGrantRevoke(repoAbs, num) {
   if (!info) throw new UserError(`could not read #${num} from the tracker`);
   const labelNames = (info.labels || []).map((l) => (l && typeof l === 'object' ? l.name : l));
   const hasLabel = labelNames.includes(labels.CI_GRANT_LABEL);
-  const live = ciGrant.liveGrants(info.comments);
+  // Every role (#504): a revoke cancels reviewer grants too, so a reviewer-only issue is not "nothing to revoke".
+  const live = ciGrant.liveGrantRecords(info.comments);
 
   if (!hasLabel && live.length === 0) {
     print(`No live CI grant on #${num} in ${shortRepo(repoAbs)} — nothing to revoke.`);
@@ -4635,14 +4796,15 @@ function cmdCiGrantList(opts) {
   const stale = [];
   for (const h of hits) {
     const info = git.ghIssueView(repoAbs, h.number, ['state', 'labels', 'comments']);
-    const live = info ? ciGrant.liveGrants(info.comments) : [];
+    const live = info ? ciGrant.liveGrantRecords(info.comments) : [];
     if (live.length === 0) { stale.push(h.number); continue; }
     const g = live[live.length - 1];
     // Spent: the normal post-ship state — trunk's head has moved past the sha this grant named.
     // Not an error, just informative — distinguishes "still live, awaiting a ship" from "already
     // used (or overtaken by an unrelated trunk change) and inert" without anyone revoking it.
     const spent = currentTrunkSha !== null && g.redSha !== currentTrunkSha;
-    grants.push({ issue: h.number, title: h.title, branch: g.branch, redSha: g.redSha, evidenceSha: g.evidenceSha, by: g.login, authorAssociation: g.authorAssociation, at: g.at, spent });
+    const reviewer = g.role !== 'human' ? { role: g.role, reviewer: g.reviewer, head: g.head } : {};
+    grants.push({ issue: h.number, title: h.title, branch: g.branch, redSha: g.redSha, evidenceSha: g.role === 'human' ? g.evidenceSha : g.head, by: g.login, authorAssociation: g.authorAssociation, at: g.at, spent, ...reviewer });
   }
 
   if (opts.json) {
@@ -4654,7 +4816,7 @@ function cmdCiGrantList(opts) {
     return 0;
   }
   print(table(
-    grants.map((g) => [String(g.issue), g.branch, shortSha(g.redSha), g.spent ? 'spent' : 'live', g.by || '(unknown)', g.title]),
+    grants.map((g) => [String(g.issue), g.branch, shortSha(g.redSha), g.spent ? 'spent' : 'live', (g.by || '(unknown)') + (g.role ? ` (${g.role} ${g.reviewer})` : ''), g.title]),
     ['ISSUE', 'BRANCH', 'RED SHA', 'STATE', 'GRANTED BY', 'TITLE'],
   ));
   if (stale.length) {
@@ -9643,7 +9805,11 @@ function ciGrantTrailerLine(grantVerdict, branch, trunk) {
   if (!grantVerdict || !grantVerdict.ok || !grantVerdict.granted.length) return null;
   const g = grantVerdict.granted[0]; // redSha/evidenceSha are identical across the whole granted set (evaluateShipSet)
   const issues = grantVerdict.granted.map((x) => '#' + x.issue).join(' ');
-  return `CI-Grant: ${issues} branch ${branch} over-red ${trunk}@${shortSha(g.redSha)} evidence ${shortSha(g.evidenceSha)}`;
+  // #504: a reviewer grant appends who reviewed it; the `over-red <trunk>@<sha>` part the anti-stacking
+  // scan (ci-cure.js priorRedShaFromMessage) reads is unchanged.
+  const rv = grantVerdict.granted.filter((x) => x.role && x.role !== 'human');
+  const via = rv.length ? ` via ${rv[0].role} ${[...new Set(rv.map((x) => x.reviewer))].join(',')}` : '';
+  return `CI-Grant: ${issues} branch ${branch} over-red ${trunk}@${shortSha(g.redSha)} evidence ${shortSha(g.evidenceSha)}${via}`;
 }
 
 /**
@@ -10747,9 +10913,14 @@ function applyRedTrunkExemptions(raw, target, trunk, redSha, grantThunk, cureThu
   const grantVerdict = grantThunk ? grantThunk(redSha) : null;
   if (grantVerdict && grantVerdict.ok) {
     const by = grantVerdict.granted.map((g) => '#' + g.issue).join(' ');
+    // #504: a reviewer grant says so — it must never render as a human's decision.
+    const rv = grantVerdict.granted.filter((g) => g.role && g.role !== 'human');
+    const who = rv.length
+      ? `a ${rv[0].role} ci-grant (reviewer ${[...new Set(rv.map((g) => g.reviewer))].join(', ')}, cures ${[...new Set(rv.flatMap((g) => g.cures || []))].join('; ')})`
+      : 'a human ci-grant';
     return {
       name: raw.name, ok: true, class: null,
-      detail: `PRECONDITION OVERRIDDEN by a human ci-grant on ${by} — trunk was red at ${shortSha(redSha)} (raw: ${raw.detail})`,
+      detail: `PRECONDITION OVERRIDDEN by ${who} on ${by} — trunk was red at ${shortSha(redSha)} (raw: ${raw.detail})`,
       grantVerdict, cureVerdict,
     };
   }
@@ -10772,12 +10943,21 @@ function shipCiGrants(repoAbs, gh, issues, branch, trunk, redSha) {
       missing: [{ issue: null, reason: `gh not usable (${ghUnusableWhy(repoAbs)}) — a CI grant lives on the tracker and cannot be confirmed` }] };
   }
   const records = {};
-  for (const n of issues) records[n] = git.ghIssueView(repoAbs, n, ['state', 'labels', 'comments']);
+  // `title` (#504): a reviewer grant requires its issue to be titled `TRUNK RED:`.
+  for (const n of issues) records[n] = git.ghIssueView(repoAbs, n, ['state', 'labels', 'comments', 'title']);
   const evRun = git.ghRunForSha(repoAbs, branch);
   const evidence = !evRun ? null : { ok: evRun.status === 'completed' && evRun.conclusion === 'success', sha: evRun.sha };
   return ciGrant.evaluateShipSet(issues, records, branch, trunk, redSha, evidence, labels.CI_GRANT_LABEL, {
     trust: trustAt(repoAbs, trunk),
     labelActors: (n) => git.ghIssueLabelActors(repoAbs, n, labels.CI_GRANT_LABEL),
+    // #504 — the reviewer role: the opt-in as committed on TRUNK (never the branch), the clock for a
+    // host's revoke window, and trunk's red checks at redSha, read lazily and at most once.
+    policy: ciGrant.parseGrantPolicy(projectDocAt(repoAbs, trunk)).policy,
+    now: Date.now(),
+    redJobs: () => {
+      const jobs = trunkRedRunJobs(repoAbs, trunk, redSha);
+      return jobs === null ? null : ciCure.redJobSet(jobs);
+    },
   });
 }
 
@@ -10792,7 +10972,8 @@ function ciGrantPayload(ciResult) {
   const g = ciResult.grantVerdict;
   return {
     ok: g.ok,
-    granted: g.granted.map((x) => ({ issue: x.issue, by: x.by, at: x.at, redSha: x.redSha, evidenceSha: x.evidenceSha })),
+    granted: g.granted.map((x) => ({ issue: x.issue, by: x.by, at: x.at, redSha: x.redSha, evidenceSha: x.evidenceSha,
+      ...(x.role ? { role: x.role, reviewer: x.reviewer, head: x.head, cures: x.cures } : {}) })),
     missing: g.missing.map((m) => ({ issue: m.issue, reason: m.reason })),
   };
 }
@@ -14692,7 +14873,7 @@ Commands:
   migration-grant <issue> --branch B | --revoke | --list [--json]    human-only ship migration exemption (#98)
   decision <issue> --record --ruled-by N | --reopen --ruled-by N | --list [--json]
                                         record/reopen a needs-decision answer (#121, #122)
-  ci-grant <issue> --branch B | --revoke | --list [--json]           human-only ship trunk-CI-green exemption (#105)
+  ci-grant <issue> --branch B | --revoke | --list [--json]           ship trunk-CI-green exemption: human, or ci-reviewer under opt-in (#105, #504)
   claims [--json] [--sync]                                            list / reconcile with GitHub
 
   port alloc [--count N] [--range A-B] [--worktree N|--claim I|--label S]

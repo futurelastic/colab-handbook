@@ -52,3 +52,27 @@ export function encodeCiGrant(g?: Omit<DecodedCiGrant, 'tail'> & { tail?: string
 export function decodeCiGrant(body: string | null | undefined): DecodedCiGrant | null;
 export function encodeCiRevoke(r?: { branch: string; host: string; at: string; tail?: string | null }): string;
 export function decodeCiRevoke(body: string | null | undefined): DecodedMigrationGrant | null;
+
+// ── reviewer red-trunk CI grant (#504) ───────────────────────────────────────────────────────
+
+export const CI_REVIEW_GRANT_MARK: '🩹 Red-trunk CI review grant';
+export const CI_REVIEW_GRANT_RE: RegExp;
+export const CI_REVIEWER_ROLE: 'ci-reviewer';
+export const CI_REVIEW_RECORD_FENCE: 'ci-review';
+export const CI_REVIEW_RECORD_VERSION: '1';
+export const CI_CURES_SEPARATOR: ';';
+export const CI_REVIEW_RECORD_FIELDS: ReadonlyArray<ReviewRecordField>;
+
+export interface DecodedCiReviewGrant {
+  role: string; reviewer: string; branch: string;
+  /** Full 40-hex sha the review covers, as written. */
+  head: string;
+  /** Trunk name and the full red trunk sha the review was made against. */
+  trunk: string; redSha: string;
+  host: string; at: string; tail: string | null;
+  record: Record<string, string> | null;
+  /** SYNTAX findings only — never whether the review passes. */
+  problems: string[];
+}
+export function encodeCiReviewGrant(g?: Partial<Omit<DecodedCiReviewGrant, 'problems' | 'record'>> & { record?: Record<string, unknown> }): string;
+export function decodeCiReviewGrant(body: string | null | undefined): DecodedCiReviewGrant | null;
