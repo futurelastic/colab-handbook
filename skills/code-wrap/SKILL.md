@@ -11,6 +11,10 @@ backup — then stops. It never merges to trunk; that is
 says go. If you came here expecting to merge or find `Phase B`, you want that skill —
 this one asserts a checklist for it to pick up, nothing more.
 
+"Stops" means stops **before `code-ship`**, not "the session is over": a wrap that leaves
+claimed work unfinished with no named blocker is a checkpoint, and the session carries on
+(*A partial wrap is a checkpoint*, under Hand off, #486).
+
 Notation: `$N` = the feature's Issue number · `<trunk>` = the branch sessions
 merge into — the value of `trunk:` in `.github/project.yml`
 ([§2](../../CONVENTIONS.md#2-tiers): `main` on Tier B (fixed); on Tier C a
@@ -820,9 +824,9 @@ never by trusting this session's word for it:
 - [ ] claim(s) still held — nothing here releases them; `code-ship` B3 does
 - [ ] plan file present at `$MAIN_REPO/.claude/plans/issue-$N.md` — the **absolute main
       checkout path**, resolved via `--git-common-dir`, not "present in `.claude/plans/`"
-      relative to wherever this checklist happens to be asserted from (#113) — **if** one
-      was written this session (#94); absent is fine when the work never needed one
-      (rung 0)
+      relative to wherever this checklist happens to be asserted from (#113; #94) — **or**
+      the one line `rung 0 because <reason>` in its place (#486). Absent with no such
+      line is a **failed box, not a blank one**: see *A missing plan file* below
 - [ ] trunk checkout reconciled (A2b) — clean, or every dirty path worked through the
       ownership ladder and reported by verdict (recovered / not-mine-with-owner /
       can't-tell) — never left unexplained
@@ -831,6 +835,71 @@ State this checklist, filled in, as the last thing you report. A box you cannot
 check is not a reason to force it true — say what is missing and why, and let
 whoever picks up `code-ship` decide, rather than asserting a contract you did not
 actually meet.
+
+### A missing plan file — say so, never report "hand-off complete" over it (#486)
+
+`code-start` writes the plan stub **before** the claim (rung 1 is the default —
+`CONVENTIONS.md` [§5](../../CONVENTIONS.md#planning--a-plan-file-that-outlives-one-command-and-who-drafts-it-94),
+*Planning*), so at wrap the file either exists or a decision not to write one was made.
+Check it here, mechanically:
+
+```sh
+MAIN_REPO="$(dirname "$(git rev-parse --path-format=absolute --git-common-dir)")"
+for n in <every carried issue>; do
+  test -f "$MAIN_REPO/.claude/plans/issue-$n.md" && echo "#$n plan present" || echo "#$n NO PLAN"
+done
+```
+
+A group branch may share one file, named for any member — one present file covers the group.
+
+- **Present** → tick the box.
+- **Absent, and the work really was rung 0** (trivial/mechanical, the oracle
+  self-evident from the Issue) → write `rung 0 because <one line>` in the box's place.
+  The reason is the evidence: "single-line typo fix, oracle = the typo is gone" is one;
+  "forgot" or "small change" is not.
+- **Absent, and the work was not rung 0** — anything touching more than one file with
+  judgement in it, a grouped branch, a rule or skill change — is **not hand-off
+  complete**. Say exactly that in the report: `plan file missing — rung <1|2> work
+  wrapped without one`, and let `code-ship` grade against the Issue's stated ask instead.
+  Do not back-fill a plan now to make the box pass: a plan written after the code
+  describes the code, so it cannot catch anything the plan was there to catch.
+
+Measured: one session skipped the stub on a three-issue grouped branch, by its own
+account by mistake, left this box unchecked with no reason, and the wrap accepted it —
+nothing surfaced the miss until a person asked. An unchecked box with no reason reads
+exactly like "not applicable", which is why the escape line is required, not optional.
+
+### A partial wrap is a checkpoint, not the end of your turn (#486)
+
+The stop at the top of this section means **stop before `code-ship`** — it does not mean
+the session's work is over. A wrap whose distill (A1) lists remaining work on an issue
+this branch **still claims** — "issue X done, Y half done, Z design only" — is an
+**interim checkpoint**: it saves progress to the Issue and the remote, then the session
+**continues with the remaining items**, in the same turn.
+
+It may end its turn on a partial wrap only when it names a **concrete blocker** for every
+unfinished item, **on the Issue**, as its own line:
+
+```
+Blocked: <what is missing> — <who or what clears it> (<link: issue, decision, run id>)
+```
+
+"Needs a design ruling from <role>, filed as #M", "waits on #M to land first", "trunk CI
+red since <sha>, not this branch's" — each is a blocker: something outside this session
+must happen first. "Ran out of steam", "the rest is follow-up", "left for the next
+session" are not blockers, they are the work. With the line posted, the blocker **is** the
+hand-off: report it first, above the checklist, so whoever reads the report sees why the
+session stopped, not just that it did.
+
+The third exit is giving the remainder away explicitly: move the unfinished item to its
+own issue (agent-filed, A1), drop it from this branch's claim, and say so — then the wrap
+is no longer partial. Silently ending the turn with claimed work outstanding is not one of
+the exits.
+
+Measured: one unattended session posted a partial wrap (one issue done, one half done,
+one design-only), ended its turn naming no blocker, and sat idle about five and a half
+hours holding all three claims before a person noticed. Nothing in the session was
+waiting on anyone — it had simply read "stop" as "done".
 
 ## Verify complete
 
@@ -857,3 +926,7 @@ actually meet.
   A4's own commit) introduced new dirt on trunk; go back to A2b rather than assuming
   ownership either way.
 - The hand-off checklist above is stated, filled in, in your final report — not implied.
+  Its plan-file box is ticked or carries `rung 0 because …`; a missing plan on non-rung-0
+  work is reported as such, never as "hand-off complete" (#486).
+- **No claimed issue has unfinished work without a `Blocked:` line on it** — otherwise
+  this was a checkpoint, and the session goes back to work rather than ending here (#486).
