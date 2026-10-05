@@ -55,6 +55,34 @@ function branchIssueNumbers(branchName) {
 }
 
 /**
+ * Ref-name prefixes owned by a dependency bot, never by a session (#485). Dependabot names its
+ * branches after the version it bumps to — `dependabot/github_actions/actions/github-script-9` —
+ * so the trailing run is a MAJOR VERSION, not an issue number, and reading it as one makes an
+ * unrelated issue look held. `code-sweep` §1.3 drops the same prefix with `grep -v '^dependabot/'`;
+ * keep the two in step.
+ */
+const BOT_BRANCH_PREFIXES = ['dependabot/'];
+
+/**
+ * Issue numbers a branch carries AS A CLAIM — `branchIssueNumbers`, minus every ref that can only
+ * be a false positive (#485): a dependency bot's branch (`BOT_BRANCH_PREFIXES`), `HEAD`, the
+ * declared trunk, and any declared `integration:` line. Those are long-lived lines or tool-owned
+ * refs whose trailing digits mean something else; a match against one would refuse a claim that
+ * nobody holds and teach the session to reach for `--force` — the one flag that also bypasses a
+ * real holder. Returns [] for an excluded ref, exactly like a name with no trailing run.
+ *
+ * `branchIssueNumbers` itself stays unfiltered on purpose: ship's harvest reads the session's OWN
+ * branch, which can never be one of these.
+ */
+function claimIssueNumbers(branchName, { trunk = '', integration = [] } = {}) {
+  const b = String(branchName || '');
+  if (!b || b === 'HEAD' || (trunk && b === trunk)) return [];
+  if (BOT_BRANCH_PREFIXES.some((p) => b.startsWith(p))) return [];
+  if ((integration || []).includes(b)) return [];
+  return branchIssueNumbers(b);
+}
+
+/**
  * A §4-conforming name → `{ login, machine, type, rest, slug, issues, prefixed }`, or `null` when the
  * name conforms to neither shape. `rest` is `<slug>-<N…>` (everything after the type); `slug` is
  * `rest` minus its trailing issue run. `login`/`machine` are `null` on the unprefixed shape.
@@ -133,5 +161,5 @@ function worktreeName(branch) {
 
 module.exports = {
   TYPES, BRANCH_RE_SOURCE, BRANCH_RE,
-  branchIssueNumbers, parse, format, machineLabel, sessionBranch, worktreeName,
+  branchIssueNumbers, claimIssueNumbers, BOT_BRANCH_PREFIXES, parse, format, machineLabel, sessionBranch, worktreeName,
 };

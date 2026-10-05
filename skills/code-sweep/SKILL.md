@@ -265,6 +265,10 @@ rm -f "$S" "$W"
 
 - **Trailing number group only** — the same anchor `code-ship`'s B1b harvest uses, so
   `feat/oauth2-login-88` carries 88, not 2 and 88.
+- **`dependabot/*`, trunk and every `integration:` line are dropped first** — a bot ref's
+  trailing digits are a version (`github-script-9`), not an issue. `colab claim` / `worktree
+  new` apply the same filter (`claimIssueNumbers` in `tools/lib/branch-name.js`, #485); change
+  one, change both.
 - **One `gh issue list`, not a `gh issue view` per branch.** It is a single call instead of
   N. It also avoids a trap: `gh` inside a `while read` loop reads the loop's stdin, so each
   call fails, and a `|| echo MISSING` fallback then silently turns every branch into "not

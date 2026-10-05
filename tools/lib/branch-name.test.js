@@ -183,3 +183,28 @@ test('audit: branchPrefix accepts `machine` and fails anything else', () => {
   const r = audit(fixture(TIER_B + 'branchPrefix: host\n'));
   assert.ok(r.fails.some((f) => /branchPrefix is "host"/.test(f)), r.fails.join(' | '));
 });
+
+// --- #485: issue numbers a branch carries AS A CLAIM -------------------------------------------
+
+test('#485 claimIssueNumbers: a dependabot ref\'s trailing major version is not an issue number', () => {
+  assert.deepStrictEqual(bn.claimIssueNumbers('dependabot/github_actions/actions/github-script-9'), []);
+  assert.deepStrictEqual(bn.claimIssueNumbers('dependabot/npm_and_yarn/vite-7'), []);
+  // the unfiltered reader still sees the digits — only the claim reading drops them
+  assert.deepStrictEqual(bn.branchIssueNumbers('dependabot/github_actions/actions/github-script-9'), [9]);
+});
+
+test('#485 claimIssueNumbers: HEAD, trunk and declared integration lines carry no claim', () => {
+  const scope = { trunk: 'release-2', integration: ['line/q4-9'] };
+  assert.deepStrictEqual(bn.claimIssueNumbers('HEAD', scope), []);
+  assert.deepStrictEqual(bn.claimIssueNumbers('release-2', scope), []);
+  assert.deepStrictEqual(bn.claimIssueNumbers('line/q4-9', scope), []);
+});
+
+test('#485 claimIssueNumbers: session branches read exactly as branchIssueNumbers', () => {
+  const scope = { trunk: 'main', integration: ['line/q4-9'] };
+  for (const b of ['feat/x-9', 'fix/import-fixes-115-114-113', 'ada/box-a/feat/x-23', 'feature/legacy-12', 'line/q4-10']) {
+    assert.deepStrictEqual(bn.claimIssueNumbers(b, scope), bn.branchIssueNumbers(b), b);
+  }
+  // a branch merely CONTAINING the word is not a bot ref — the prefix is anchored
+  assert.deepStrictEqual(bn.claimIssueNumbers('feat/bump-dependabot-config-9'), [9]);
+});

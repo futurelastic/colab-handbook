@@ -470,9 +470,14 @@ function remoteClaimConflicts(st, repoAbs, nums) {
   const want = new Set(nums);
   const records = [...Object.values(st.worktrees || {}), ...Object.values(st.claims || {})];
   const ours = (b) => records.some((r) => r && r.repo === repoAbs && r.branch === b && machine.isLocal(r));
+  // #485: a dependabot ref, trunk and every declared integration: line are never a session's claim —
+  // their trailing digits are a version or an accident of naming. Same filter as code-sweep §1.3.
+  const doc = projectDoc(repoAbs);
+  const trunk = resolveTrunk(repoAbs, doc) || '';
+  const scope = { trunk, integration: trunk ? resolveIntegration(repoAbs, doc, trunk) : [] };
   const conflicts = [];
   for (const h of heads.heads) {
-    const carried = shipguard.branchIssueNumbers(h.branch).filter((n) => want.has(n));
+    const carried = branchName.claimIssueNumbers(h.branch, scope).filter((n) => want.has(n));
     if (!carried.length || ours(h.branch)) continue;
     for (const num of carried) conflicts.push({ num, remote, branch: h.branch, sha: h.sha });
   }
