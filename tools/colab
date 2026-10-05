@@ -57,6 +57,7 @@ const axisAuthority = require('./lib/axis-authority');
 const writesAuthority = require('./lib/writes-authority');
 const claimIdentity = require('./lib/claim-identity');
 const claimComments = require('./lib/claim-comments');
+const codec = require('./lib/codec');
 const machine = require('./lib/machine');
 const targetSync = require('./lib/ship-target-sync');
 const shipBatch = require('./lib/ship-batch');
@@ -243,9 +244,10 @@ function ghUnusableWhy(repoAbs) {
 // GitHub offers no atomic check-and-set on labels/assignees.
 // ---------------------------------------------------------------------------
 
-// The claim/release comment markers and parsers live in tools/lib/claim-comments.js (#369/#375) —
+// The claim/release comment markers and their encode/decode pairs live in tools/lib/codec/claim.js
+// (#497); the readers built on them (liveness, tie-break) in tools/lib/claim-comments.js (#369/#375) —
 // a STABLE WIRE FORMAT the refusal path, the tie-break and dashboards grep. Do not reword casually.
-const { CLAIM_MARK, RELEASE_MARK, liveClaimComments, tieBreakVerdict } = claimComments;
+const { liveClaimComments, tieBreakVerdict } = claimComments; // the format itself: codec/claim.js (#497)
 
 /**
  * #369: may a comment colab posts to THIS repo's tracker name the host in its `host` field? The
@@ -436,14 +438,6 @@ function identityLegend(entries) {
   print('      Repair:  colab worktree tag <worktree> --session <url>');
 }
 
-/** The ` · session …` comment suffix, or '' — keeps the no-identity comment byte-stable. */
-function sessionCommentSuffix(session, sessionName) {
-  if (sessionName && session) return ` · session [${sessionName}](${session})`; // both → markdown link
-  if (session) return ` · session ${session}`;                                  // url only → legacy form
-  if (sessionName) return ` · session ${sessionName}`;                          // name only
-  return '';
-}
-
 /**
  * Worktree lifecycle status, backfilled-on-read: entries created before this field existed (or by
  * an older colab) render as `running`. Values: `running` (default, at create) → `merged` (branch
@@ -452,17 +446,18 @@ function sessionCommentSuffix(session, sessionName) {
  */
 function wtStatus(wt) { return (wt && wt.status) || 'running'; }
 
-/** The exact claim-comment body. Keep in lockstep with CLAIM_RE/parseSessionField and the README. */
+/**
+ * The exact claim-comment body. The format itself is codec/claim.js `encodeClaim` (#497); this
+ * supplies what the codec deliberately does not hold — the clock and the machine digest. `-` stands
+ * for "no branch"/"no worktree" (#53, it used to be the word `trunk`). `host` is the raw hostname
+ * where the destination may name it, the `h:` token where it may not (#369, `commentHost`); the
+ * comparable identity is the machine digest beside it (#327), omitted when no id resolved.
+ */
 function claimCommentBody(wtName, branch, session, sessionName, host = HOST) {
-  // `-` for "no branch", matching the worktree field beside it. It used to be the word `trunk`,
-  // which read as a branch name that never existed (#53).
-  const base = `${CLAIM_MARK} — worktree \`${wtName || '-'}\` · branch \`${branch || '-'}\` · host \`${host}\` · ${nowISO()}`;
-  // #327: `host` is the raw hostname where the destination may name it, the `h:` token where it
-  // may not (#369, `commentHost`); the comparable identity is the machine digest beside it.
-  // Omitted when no id resolved.
-  const token = machine.machineToken(myMachineId());
-  const mach = token ? ` · machine \`${token}\`` : '';
-  return base + mach + sessionCommentSuffix(session, sessionName);
+  return codec.encodeClaim({
+    worktree: wtName, branch, host, at: nowISO(),
+    machine: machine.machineToken(myMachineId()) || '', session, sessionName,
+  });
 }
 
 /** Issues whose EXISTING local claim sits on a different worktree than the one we're claiming onto. */
@@ -716,7 +711,7 @@ function postClaimComment(repoAbs, num, wtName, branch, session, sessionName) {
 function postReleaseComment(repoAbs, num) {
   const info = git.ghIssueView(repoAbs, num, ['state']);
   if (info && info.state === 'CLOSED') return true; // don't chatter on a closed issue
-  const r = git.ghIssueComment(repoAbs, num, RELEASE_MARK);
+  const r = git.ghIssueComment(repoAbs, num, codec.encodeRelease());
   if (!r.ok) { warnDeferred(`could not post release comment on #${num} (${r.stderr.split('\n')[0] || r.code})`); return false; }
   return true;
 }

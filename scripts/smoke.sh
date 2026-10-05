@@ -12,7 +12,7 @@ set -eu
 cd "$(git rev-parse --show-toplevel)"
 
 node --check tools/colab
-for f in tools/lib/*.js audit/audit.mjs; do node --check "$f"; done
+for f in tools/lib/*.js tools/lib/codec/*.js audit/audit.mjs; do node --check "$f"; done
 for f in templates/*.mjs; do node --check "$f"; done
 sh -n install.sh
 for f in .githooks/install.sh templates/pre-commit-identity templates/pre-commit-dispatch \
@@ -25,6 +25,7 @@ base="$(git merge-base HEAD origin/main 2>/dev/null || echo HEAD)"
 tests=""
 for p in $( { git diff --name-only "$base"; git ls-files --others --exclude-standard; } | sort -u); do
   case "$p" in
+    tools/lib/codec/*) t=tools/lib/codec/codec.test.js ;;
     tools/lib/*.test.js) t="$p" ;;
     tools/lib/*.js) t="${p%.js}.test.js" ;;
     *) continue ;;

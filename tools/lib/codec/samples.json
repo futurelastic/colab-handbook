@@ -1,0 +1,350 @@
+{
+  "$comment": "Golden samples for tools/lib/codec (#497) — the language-neutral spec of the tracker wire format. Every `wire` string is real tracker text (claim/release comments and label names from this repo), scrubbed: hosts as h: tokens, session ids and logins replaced; the few samples carrying a `note` are synthetic edge cases. For each sample, decode(wire) must deep-equal `decoded` and encode(decoded) must equal `wire` byte for byte. An older reader parses what a newer writer emits, so a change that breaks a sample breaks every machine still running the older reader.",
+  "labels": [
+    {
+      "wire": "in-progress",
+      "decoded": {
+        "kind": "convention",
+        "value": "in-progress",
+        "known": true
+      }
+    },
+    {
+      "wire": "deps-checked",
+      "decoded": {
+        "kind": "convention",
+        "value": "deps-checked",
+        "known": true
+      }
+    },
+    {
+      "wire": "agent-filed",
+      "decoded": {
+        "kind": "convention",
+        "value": "agent-filed",
+        "known": true
+      }
+    },
+    {
+      "wire": "epic",
+      "decoded": {
+        "kind": "convention",
+        "value": "epic",
+        "known": true
+      }
+    },
+    {
+      "wire": "needs-decision",
+      "decoded": {
+        "kind": "convention",
+        "value": "needs-decision",
+        "known": true
+      }
+    },
+    {
+      "wire": "decision-recorded",
+      "decoded": {
+        "kind": "convention",
+        "value": "decision-recorded",
+        "known": true
+      }
+    },
+    {
+      "wire": "needs-plan",
+      "decoded": {
+        "kind": "convention",
+        "value": "needs-plan",
+        "known": true
+      }
+    },
+    {
+      "wire": "migration-granted",
+      "decoded": {
+        "kind": "convention",
+        "value": "migration-granted",
+        "known": true
+      }
+    },
+    {
+      "wire": "ci-granted",
+      "decoded": {
+        "kind": "convention",
+        "value": "ci-granted",
+        "known": true
+      }
+    },
+    {
+      "wire": "low-priority",
+      "decoded": {
+        "kind": "convention",
+        "value": "low-priority",
+        "known": true
+      }
+    },
+    {
+      "wire": "release-hold",
+      "decoded": {
+        "kind": "convention",
+        "value": "release-hold",
+        "known": true
+      }
+    },
+    {
+      "wire": "graph-empty",
+      "decoded": {
+        "kind": "convention",
+        "value": "graph-empty",
+        "known": true
+      }
+    },
+    {
+      "wire": "delivery:code",
+      "decoded": {
+        "kind": "delivery",
+        "value": "code",
+        "known": true
+      }
+    },
+    {
+      "wire": "delivery:docs-only",
+      "decoded": {
+        "kind": "delivery",
+        "value": "docs-only",
+        "known": true
+      }
+    },
+    {
+      "wire": "delivery:design",
+      "decoded": {
+        "kind": "delivery",
+        "value": "design",
+        "known": true
+      }
+    },
+    {
+      "wire": "deferred:date",
+      "decoded": {
+        "kind": "deferred",
+        "value": "date",
+        "known": true
+      }
+    },
+    {
+      "wire": "deferred:external-party",
+      "decoded": {
+        "kind": "deferred",
+        "value": "external-party",
+        "known": true
+      }
+    },
+    {
+      "wire": "review-by:2026-10-16",
+      "decoded": {
+        "kind": "review-by",
+        "value": "2026-10-16",
+        "known": true
+      }
+    },
+    {
+      "wire": "group:trunk-ci-verdict",
+      "decoded": {
+        "kind": "group",
+        "value": "trunk-ci-verdict",
+        "known": true
+      }
+    },
+    {
+      "wire": "group:ship-worktree-checkout",
+      "decoded": {
+        "kind": "group",
+        "value": "ship-worktree-checkout",
+        "known": true
+      }
+    },
+    {
+      "wire": "mechanical-lane",
+      "decoded": {
+        "kind": "other",
+        "value": "mechanical-lane",
+        "known": false
+      }
+    },
+    {
+      "wire": "needs-ruling",
+      "decoded": {
+        "kind": "other",
+        "value": "needs-ruling",
+        "known": false
+      }
+    },
+    {
+      "wire": "needs-rescope",
+      "decoded": {
+        "kind": "other",
+        "value": "needs-rescope",
+        "known": false
+      }
+    },
+    {
+      "wire": "bug",
+      "decoded": {
+        "kind": "other",
+        "value": "bug",
+        "known": false
+      }
+    },
+    {
+      "wire": "good first issue",
+      "decoded": {
+        "kind": "other",
+        "value": "good first issue",
+        "known": false
+      }
+    },
+    {
+      "note": "synthetic edge case: an unknown delivery type still decodes under its prefix (known: false), so a newer vocabulary round-trips through an older reader",
+      "wire": "delivery:paper",
+      "decoded": {
+        "kind": "delivery",
+        "value": "paper",
+        "known": false
+      }
+    },
+    {
+      "note": "synthetic edge case: not a calendar date, so not a review-by label — kept verbatim as other",
+      "wire": "review-by:2026-02-30",
+      "decoded": {
+        "kind": "other",
+        "value": "review-by:2026-02-30",
+        "known": false
+      }
+    },
+    {
+      "note": "synthetic edge case: a bare prefix carries no key — kept verbatim as other",
+      "wire": "group:",
+      "decoded": {
+        "kind": "other",
+        "value": "group:",
+        "known": false
+      }
+    }
+  ],
+  "claims": [
+    {
+      "wire": "🔒 Claimed — worktree `ship-trunk-no-workflow-none-482` · branch `fix/ship-trunk-no-workflow-none-482` · host `h:ee4bcb5b2678` · 2026-10-05T03:16:29.738Z · machine `m:a873b2982c1d` · session [colab-handbook-482](https://claude.ai/code/session_02EXAMPLE00000000000000)",
+      "decoded": {
+        "worktree": "ship-trunk-no-workflow-none-482",
+        "branch": "fix/ship-trunk-no-workflow-none-482",
+        "host": "h:ee4bcb5b2678",
+        "at": "2026-10-05T03:16:29.738Z",
+        "machine": "m:a873b2982c1d",
+        "session": "https://claude.ai/code/session_02EXAMPLE00000000000000",
+        "sessionName": "colab-handbook-482"
+      }
+    },
+    {
+      "wire": "🔒 Claimed — worktree `release-stall-visibility-468-467` · branch `fix/release-stall-visibility-468-467` · host `h:ee4bcb5b2678` · 2026-10-04T11:53:58.625Z · machine `m:a873b2982c1d` · session [colab-handbook-467](https://claude.ai/code/session_03EXAMPLE00000000000000)",
+      "decoded": {
+        "worktree": "release-stall-visibility-468-467",
+        "branch": "fix/release-stall-visibility-468-467",
+        "host": "h:ee4bcb5b2678",
+        "at": "2026-10-04T11:53:58.625Z",
+        "machine": "m:a873b2982c1d",
+        "session": "https://claude.ai/code/session_03EXAMPLE00000000000000",
+        "sessionName": "colab-handbook-467"
+      }
+    },
+    {
+      "wire": "🔒 Claimed — worktree `ci-wait-495` · branch `feat/ci-wait-495` · host `h:ee4bcb5b2678` · 2026-10-05T11:02:52.482Z · machine `m:a873b2982c1d` · session colab-handbook-495",
+      "decoded": {
+        "worktree": "ci-wait-495",
+        "branch": "feat/ci-wait-495",
+        "host": "h:ee4bcb5b2678",
+        "at": "2026-10-05T11:02:52.482Z",
+        "machine": "m:a873b2982c1d",
+        "session": "",
+        "sessionName": "colab-handbook-495"
+      }
+    },
+    {
+      "wire": "🔒 Claimed — worktree `squash-unrecognised-type-261` · branch `fix/squash-unrecognised-type-261` · host `h:48773651d08a` · 2026-08-25T02:05:46.075Z · session https://claude.ai/code/session_76EXAMPLE00000000000000",
+      "decoded": {
+        "worktree": "squash-unrecognised-type-261",
+        "branch": "fix/squash-unrecognised-type-261",
+        "host": "h:48773651d08a",
+        "at": "2026-08-25T02:05:46.075Z",
+        "machine": "",
+        "session": "https://claude.ai/code/session_76EXAMPLE00000000000000",
+        "sessionName": ""
+      }
+    },
+    {
+      "wire": "🔒 Claimed — worktree `colab-remote-name-301` · branch `fix/colab-remote-name-301` · host `h:ca0012aa6308` · 2026-09-01T11:02:03.931Z",
+      "decoded": {
+        "worktree": "colab-remote-name-301",
+        "branch": "fix/colab-remote-name-301",
+        "host": "h:ca0012aa6308",
+        "at": "2026-09-01T11:02:03.931Z",
+        "machine": "",
+        "session": "",
+        "sessionName": ""
+      }
+    },
+    {
+      "wire": "🔒 Claimed — worktree `cure-instrument-manifest-297` · branch `-` · host `h:ee4bcb5b2678` · 2026-09-25T10:48:18.652Z · machine `m:a873b2982c1d` · session [colab-handbook-297💻](https://claude.ai/code/session_14EXAMPLE00000000000000)",
+      "decoded": {
+        "worktree": "cure-instrument-manifest-297",
+        "branch": "-",
+        "host": "h:ee4bcb5b2678",
+        "at": "2026-09-25T10:48:18.652Z",
+        "machine": "m:a873b2982c1d",
+        "session": "https://claude.ai/code/session_14EXAMPLE00000000000000",
+        "sessionName": "colab-handbook-297💻"
+      }
+    },
+    {
+      "wire": "🔒 Claimed — worktree `claims-across-machines-325-326-327` · branch `feat/claims-across-machines-325-326-327` · host `h:ee4bcb5b2678` · 2026-09-13T16:11:15.694Z · session [colab-handbook-325-326-327](https://claude.ai/code/session_40EXAMPLE00000000000000)",
+      "decoded": {
+        "worktree": "claims-across-machines-325-326-327",
+        "branch": "feat/claims-across-machines-325-326-327",
+        "host": "h:ee4bcb5b2678",
+        "at": "2026-09-13T16:11:15.694Z",
+        "machine": "",
+        "session": "https://claude.ai/code/session_40EXAMPLE00000000000000",
+        "sessionName": "colab-handbook-325-326-327"
+      }
+    }
+  ],
+  "releases": [
+    {
+      "wire": "✅ Released",
+      "decoded": {
+        "kind": "release",
+        "rest": ""
+      }
+    },
+    {
+      "wire": "✅ Released (yielded — earlier claim by user-a@h:48773651d08a wins)",
+      "decoded": {
+        "kind": "yield",
+        "winner": "user-a@h:48773651d08a",
+        "rest": ""
+      }
+    },
+    {
+      "wire": "✅ Released (yielded — earlier claim by user-b@h:ca0012aa6308 wins)",
+      "decoded": {
+        "kind": "yield",
+        "winner": "user-b@h:ca0012aa6308",
+        "rest": ""
+      }
+    },
+    {
+      "wire": "✅ Released — machine-readable marker for the 2026-08-29 claim (worktree `ci-cure-package-check-parity-297`), whose release on 2026-09-01 was recorded in prose only, and by a different account. colab cancels a `🔒 Claimed` only with a `✅ Released` from the same author, so until now that stale claim won every new claim's tie-break.",
+      "decoded": {
+        "kind": "release",
+        "rest": " — machine-readable marker for the 2026-08-29 claim (worktree `ci-cure-package-check-parity-297`), whose release on 2026-09-01 was recorded in prose only, and by a different account. colab cancels a `🔒 Claimed` only with a `✅ Released` from the same author, so until now that stale claim won every new claim's tie-break."
+      }
+    }
+  ]
+}

@@ -5257,7 +5257,7 @@ only. Resolution order: `--config` flag > `~/.colab/repos.txt` > bundled example
 
    **This count is a hand-typed number restated in at least four places** (here, the
    `gh label create` fallback line above, `skills/handbook-sync/SKILL.md`, and
-   `tools/lib/labels.js`'s own doc comment) — **none checkable against the others except
+   `tools/lib/codec/labels.js`'s own doc comment) — **none checkable against the others except
    the one pinned assertion in `tools/lib/labels-ensure-cli.test.js`.** #274: adding
    `delivery:elsewhere` left three of the four wrong until found by hand. Add a label,
    bump that test, then grep for the other three prose counts before you're done.

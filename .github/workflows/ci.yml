@@ -204,7 +204,7 @@ jobs:
       - name: Syntax-check the CLI and audit tool
         run: |
           node --check tools/colab
-          for f in tools/lib/*.js audit/audit.mjs; do node --check "$f"; done
+          for f in tools/lib/*.js tools/lib/codec/*.js audit/audit.mjs; do node --check "$f"; done
           for f in templates/*.mjs; do node --check "$f"; done
           sh -n install.sh
           # Every shell artifact this repo ships or runs. The hook templates are `sh`, and an
@@ -249,7 +249,7 @@ jobs:
         run: |
           set -o pipefail
           env -u NODE_TEST_CONTEXT -u NODE_TEST_WORKER_ID \
-            node --test --test-reporter=tap tools/lib/*.test.js | tee /tmp/unit-tests.tap
+            node --test --test-reporter=tap tools/lib/*.test.js tools/lib/codec/*.test.js | tee /tmp/unit-tests.tap
           ran="$(grep -oE '^# tests [0-9]+' /tmp/unit-tests.tap | grep -oE '[0-9]+' || true)"
           failed="$(grep -oE '^# fail [0-9]+' /tmp/unit-tests.tap | grep -oE '[0-9]+' || true)"
           if [ -z "$ran" ] || [ "$ran" -eq 0 ]; then

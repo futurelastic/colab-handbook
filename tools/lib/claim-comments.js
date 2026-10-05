@@ -14,62 +14,15 @@
 const claimIdentity = require('./claim-identity');
 const machine = require('./machine');
 
-const CLAIM_MARK = '🔒 Claimed';
-const RELEASE_MARK = '✅ Released';
+// The wire format itself — markers, regexes, the session/identity fields and the claim/release
+// encode/decode pairs — lives in codec/claim.js (#497). Re-exported below under the names this
+// module always had, so no caller breaks.
+const codec = require('./codec/claim');
+const { CLAIM_MARK, RELEASE_MARK, CLAIM_RE, SESSION_RE, MACHINE_RE, YIELD_RE, parseSessionField, parseIdentity } = codec;
 // #378: how far BEFORE our own claim a rival's live claim can be and still count as "simultaneous".
 // Racers post within seconds of each other; 10 minutes is deliberately generous so a slow `gh` never
 // splits a real race, while a claim weeks old — abandoned, or released only in prose — is not a race.
 const RACE_WINDOW_MS = 10 * 60 * 1000;
-// Parses a claim comment body back into {worktree, branch, host, date}. The `· <host>` field is
-// what lets the tie-break tell two machines of the SAME GitHub user apart. On a public destination
-// it carries an opaque `h:` token instead of the raw name (#369, machine.js `hostToken`) — same
-// field, same position, so this regex and every older parser read both shapes. The optional
-// trailing `· session <value>` (added 2026-07) is captured separately by SESSION_RE so this regex
-// stays byte-stable for session-less comments.
-const CLAIM_RE = /🔒 Claimed — worktree `([^`]*)` · branch `([^`]*)` · host `([^`]*)` · (\S+)/;
-// The `· session <field>` tail, captured as the rest of the line. parseSessionField() then decodes
-// the THREE shapes it can take — `[name](url)`, a bare URL, or a bare name — plus the legacy
-// plain-URL form written before sessionName existed.
-const SESSION_RE = /· session (.+)$/;
-// #327: the claimant's machine, as the public `m:` digest (tools/lib/machine.js `machineToken`),
-// written AFTER the timestamp and BEFORE the session suffix — so CLAIM_RE's four groups and
-// SESSION_RE's end anchor both parse a new comment exactly as they parse a legacy one, and a legacy
-// comment (no such field) simply has no machine and is compared by host.
-const MACHINE_RE = /· machine `(m:[0-9a-f]{12})`/;
-// A yield: the loser of a race releases, naming the winner by its identity string
-// (`claimIdentity.identityString` — `login@host`, or `login@host#session` under the fine setting).
-const YIELD_RE = /^✅ Released \(yielded — earlier claim by (.+?) wins\)/;
-
-/**
- * Decode the `· session <field>` tail of a claim comment into { sessionName, session }. Accepts:
- *   `[name](url)`  → both;  bare `https://…`/`session_…` → url only;  any other bare token → name.
- * The bare-URL branch is exactly the LEGACY format written before sessionName existed, so old
- * comments keep parsing. Returns empty strings when there is no session tail.
- */
-function parseSessionField(body) {
-  const m = String(body).match(SESSION_RE);
-  if (!m) return { sessionName: '', session: '' };
-  const v = m[1].trim();
-  const link = v.match(/^\[([^\]]*)\]\((.*)\)$/);
-  if (link) return { sessionName: link[1], session: link[2] };
-  // #306: the shape test lives in claimIdentity.looksLikeSessionId — one copy of the rule.
-  if (claimIdentity.looksLikeSessionId(v)) return { sessionName: '', session: v };
-  return { sessionName: v, session: '' };
-}
-
-/** `login@host[#session]` → its parts. Logins cannot contain `@`, hosts cannot contain `#`. */
-function parseIdentity(s) {
-  const str = String(s || '').trim();
-  const at = str.indexOf('@');
-  if (at <= 0) return null;
-  const rest = str.slice(at + 1);
-  const hash = rest.indexOf('#');
-  return {
-    login: str.slice(0, at),
-    host: hash === -1 ? rest : rest.slice(0, hash),
-    session: hash === -1 ? '' : rest.slice(hash + 1),
-  };
-}
 
 /**
  * Is claim `c` the one a yield NAMED as its winner? Login exact, host by `sameHostName` (so a
@@ -91,11 +44,10 @@ function isNamedWinner(c, named) {
 function releaseComments(sorted) {
   const out = [];
   for (const c of sorted) {
-    const body = String(c.body || '').trim();
-    if (!body.startsWith(RELEASE_MARK)) continue;
+    const rel = codec.decodeRelease(c.body || '');
+    if (!rel) continue;
     const login = (c.author && c.author.login) || '';
-    const y = body.match(YIELD_RE);
-    if (y) out.push({ kind: 'yield', login, at: c.createdAt, winner: parseIdentity(y[1]) });
+    if (rel.kind === 'yield') out.push({ kind: 'yield', login, at: c.createdAt, winner: parseIdentity(rel.winner) });
     else out.push({ kind: 'release', login, at: c.createdAt });
   }
   return out;
@@ -133,14 +85,11 @@ function liveClaimComments(comments, comps) {
   const releases = releaseComments(sorted);
   const live = [];
   for (const c of sorted) {
-    const body = String(c.body || '').trim();
-    const m = body.match(CLAIM_RE);
-    if (!m) continue;
+    const claim = codec.decodeClaim(c.body || ''); // [name](url) / url / name / legacy, machine or not
+    if (!claim) continue;
     const login = (c.author && c.author.login) || '';
-    const host = m[3];
-    const { session, sessionName } = parseSessionField(body); // handles [name](url) / url / name / legacy
-    const mm = body.match(MACHINE_RE); // #327 — absent on a legacy comment: compared by host
-    const machineTok = mm ? mm[1] : '';
+    const { host, session, sessionName } = claim;
+    const machineTok = claim.machine; // #327 — '' on a legacy comment: compared by host
     const at = c.createdAt;
     const entry = { login, host, machine: machineTok, session, sessionName, at };
     const cancelled = releases.some((r) => r.at > at && (r.kind === 'release'
@@ -203,7 +152,7 @@ function yieldReleaseBody(winner, { redact = false } = {}) {
     const tail = id.startsWith(head) ? id.slice(head.length) : '';
     id = `${winner.login}@${machine.hostToken(winner.host)}${tail}`;
   }
-  return `${RELEASE_MARK} (yielded — earlier claim by ${id} wins)`;
+  return codec.encodeRelease({ winner: id });
 }
 
 module.exports = {
