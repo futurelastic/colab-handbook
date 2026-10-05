@@ -122,6 +122,62 @@ function inert(rules, authors) {
 }
 
 /**
+ * #483 — the owner (user or org) of a forge remote URL, lowercased, or null when the URL has no
+ * `<owner>/<repo>` shape this can read. Handles `https://host/owner/repo(.git)`,
+ * `ssh://git@host[:port]/owner/repo` and the scp form `git@host:owner/repo`.
+ */
+function remoteOwner(url) {
+  const s = String(url || '').trim().replace(/\/+$/, '').replace(/\.git$/, '');
+  let m = /^[a-z][a-z0-9+.-]*:\/\/[^/]+\/([^/]+)\/[^/]+$/i.exec(s);
+  if (!m) m = /^[^@/\s]+@[^:/\s]+:([^/]+)\/[^/]+$/.exec(s);
+  return m ? m[1].toLowerCase() : null;
+}
+
+const TEAM_RE = /^@([^/\s@]+)\/[^/\s]+$/;
+
+/**
+ * #483 — the owner tokens a FORK must not be bound by: teams (`@org/team`) of an org other than
+ * the fork's own owner (`ownOrg`). A fork inherits the upstream's CODEOWNERS unchanged, and a team
+ * of another org cannot review in the fork at all, so honouring it would turn every landing into a
+ * human gate nobody here decided on (CONVENTIONS.md §2, *Core paths*, "A fork's inherited
+ * CODEOWNERS").
+ *
+ * Narrow on purpose — every doubt still resolves toward review: not a fork, or the fork's owner
+ * unknown, drops nothing; a login or an email is never dropped (a person can be a collaborator
+ * anywhere); a team of the fork's own org is kept.
+ */
+function foreignTeams(rules, { fork, ownOrg } = {}) {
+  if (!fork || !ownOrg) return [];
+  const own = String(ownOrg).toLowerCase();
+  const out = new Set();
+  for (const r of rules || []) {
+    for (const o of r.owners) {
+      const m = TEAM_RE.exec(o);
+      if (m && m[1].toLowerCase() !== own) out.add(o);
+    }
+  }
+  return [...out];
+}
+
+/**
+ * #483 — `rules` with `foreignTeams` removed from every rule's owners. A rule left with no owner
+ * stays in place and, like an ownerless line, carves its paths out (the last match still wins), so
+ * an inherited `* @upstream/team` leaves the fork's own later lines exactly as they were.
+ * Returns `{ rules, dropped }`; `dropped` is `[]` (and `rules` the input) when nothing applies.
+ */
+function dropForeignTeams(rules, ctx) {
+  const dropped = foreignTeams(rules, ctx);
+  if (!dropped.length) return { rules, dropped };
+  const gone = new Set(dropped);
+  return { rules: (rules || []).map((r) => ({ ...r, owners: r.owners.filter((o) => !gone.has(o)) })), dropped };
+}
+
+/** #483: the one-line reason a fork's foreign teams were ignored — shared by every reader. */
+function foreignNote(dropped, ctx) {
+  return `fork of an upstream: ignored ${dropped.join(', ')} — team(s) of an org other than ${ctx.ownOrg}, inherited and unable to review here (#483)`;
+}
+
+/**
  * Has a PR been approved by someone other than its author, AT `headSha`?
  *
  * `reviews`: the forge's review list, `[{ author: { login }, state, submittedAt, commit: { oid } }]`.
@@ -168,8 +224,10 @@ function approvalVerdict(reviews, { prAuthor, authors = [], headSha }) {
  * rule is inert only when every file present is inert. Identical texts count once.
  * `changed`: every path the unit's commits touched, or null when they could not be listed. Null
  * refuses while the rule is active: an unbounded unit cannot be shown to avoid core paths.
+ * `fork`: `{ fork, ownOrg }` (#483) — on a fork, teams of another org are dropped from both files
+ * before anything else is read (`dropForeignTeams`). Absent = nothing dropped.
  */
-function directVerdict({ files, authors, changed }) {
+function directVerdict({ files, authors, changed, fork = null }) {
   const out = { active: false, inertReason: null, codeownersPath: null, warnings: [], corePaths: [], verdict: 'inert', detail: '' };
   const seen = new Set();
   const present = (files || []).filter((f) => f && !seen.has(f.text) && seen.add(f.text));
@@ -178,8 +236,11 @@ function directVerdict({ files, authors, changed }) {
   const inertReasons = [];
   const activeReasons = [];
   for (const f of present) {
-    const { rules, warnings } = parse(f.text);
-    for (const w of warnings) out.warnings.push(`${f.path}@${f.ref}: ${w}`);
+    const parsed = parse(f.text);
+    for (const w of parsed.warnings) out.warnings.push(`${f.path}@${f.ref}: ${w}`);
+    // #483: a fork's inherited foreign-org teams bind neither file.
+    const { rules, dropped } = dropForeignTeams(parsed.rules, fork || {});
+    if (dropped.length) out.warnings.push(`${f.path}@${f.ref}: ${foreignNote(dropped, fork)}`);
     const iv = inert(rules, authors);
     if (iv.inert) { inertReasons.push(`${f.path}@${f.ref}: ${iv.reason}`); continue; }
     out.active = true;
@@ -205,4 +266,7 @@ function directVerdict({ files, authors, changed }) {
   return out;
 }
 
-module.exports = { CODEOWNERS_PATHS, parse, compile, ownerOf, corePaths, inert, approvalVerdict, directVerdict };
+module.exports = {
+  CODEOWNERS_PATHS, parse, compile, ownerOf, corePaths, inert, approvalVerdict, directVerdict,
+  remoteOwner, foreignTeams, dropForeignTeams, foreignNote,
+};

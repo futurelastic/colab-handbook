@@ -7678,7 +7678,10 @@ function adoptGitExtras(repoAbs, opts = {}) {
   // #449: `git ls-files` for the migrations candidate scan (adopt never asks `migrations:`).
   const ls = git.git(['ls-files'], repoAbs);
   const trackedFiles = ls.ok ? ls.stdout.split('\n').filter(Boolean) : undefined;
-  return { trunk, trunkSource, hooksPath, hooksDirFiles, trackedFiles, fork: adoptDetectFork(repoAbs, opts) };
+  // #483: the fork's own owner, from origin's URL — what an inherited CODEOWNERS team is compared to.
+  const originUrl = git.git(['remote', 'get-url', 'origin'], repoAbs);
+  const ownOrg = originUrl.ok ? codeowners.remoteOwner(originUrl.stdout) : null;
+  return { trunk, trunkSource, hooksPath, hooksDirFiles, trackedFiles, fork: adoptDetectFork(repoAbs, opts), ownOrg };
 }
 
 /**
@@ -7932,6 +7935,12 @@ function printAdoptReport(report, repoAbs, verify, localFinish) {
   print(`stack candidates: ${report.detected.stackCandidates.length ? report.detected.stackCandidates.join(', ') : '(none found)'}`);
   print(`declared ports: ${fmtVal(report.detected.ports)}`);
   if (report.fork) print(`fork of an upstream: yes — ${report.fork.source === 'flag' ? '--fork' : `remote "${report.fork.remote}" ${report.fork.url}`} (step 5 is the append-only block, §9 "A fork of an upstream")`);
+  if (report.inheritedCodeowners) {
+    const ic = report.inheritedCodeowners;
+    print(`⚠ inherited CODEOWNERS: ${ic.path} names ${ic.teams.join(', ')} — team(s) of an org other than ${ic.ownOrg}. ` +
+      'colab ship ignores them on this fork, so they gate no landing here; write the fork\'s own owners into that file ' +
+      '(a fork patch) if some paths here should need a review (§2 "Core paths", #483)');
+  }
   print(`legacy tier letter, derived from (production, deploy): ${report.legacyTierLetter ?? '(undetermined — production is set but deploy matches none of push-main/tag/manual)'}`);
   print('');
   print('Derived consequences:');
@@ -9924,7 +9933,8 @@ Options:
                       instead — an unattended caller must NOT read it as a no-op. "pr-pending"
                       (#350) means a real run would open/reuse a PR and PAUSE (exit 3) — additive
                       keys \`coreReview\` ({ active, verdict, inertReason, codeownersPath, corePaths,
-                      headSha, pr, approval }) and \`machineTrailer\` ("Machine: <label>") say why.
+                      ignoredOwners (#483: a fork's inherited foreign-org teams), headSha, pr,
+                      approval }) and \`machineTrailer\` ("Machine: <label>") say why.
                       \`machineTrailer\` is null whenever the trailer is omitted (#367), and
                       \`machineTrailerDecision\` ({ include, reason, visibility, room, failClosed },
                       null on evidence-close) says which way the squash will go and why.
@@ -11763,6 +11773,19 @@ function readTargetCodeowners(repoAbs, target) {
   return null;
 }
 
+/**
+ * #483: is this repo a fork, and which org owns it? The fork test is adopt's own (#449: a remote named
+ * `upstream` whose URL differs from origin's), so adopt and ship never disagree about the shape; the
+ * owner is read from this repo's remote URL. Either unknown → `{ fork: false }`, nothing is dropped.
+ */
+function codeownersForkContext(repoAbs) {
+  if (!adoptDetectFork(repoAbs)) return { fork: false, ownOrg: null };
+  const name = git.remoteInfo(repoAbs).name || 'origin';
+  const u = git.git(['remote', 'get-url', name], repoAbs);
+  const ownOrg = u.ok ? codeowners.remoteOwner(u.stdout) : null;
+  return { fork: !!ownOrg, ownOrg };
+}
+
 function branchChangedPathsNoRenames(repoAbs, base, ref) {
   const r = git.git(['diff', '--name-only', '--no-renames', `${base}...${ref}`], repoAbs);
   return r.ok ? r.stdout.split('\n').map((s) => s.trim()).filter(Boolean) : null;
@@ -11806,21 +11829,30 @@ function shipDirectCoreReview(repoAbs, gh, trunk, since) {
       }
     }
   }
-  return codeowners.directVerdict({ files: [before, readTargetCodeowners(repoAbs, trunk)], authors, changed });
+  return codeowners.directVerdict({ files: [before, readTargetCodeowners(repoAbs, trunk)], authors, changed, fork: codeownersForkContext(repoAbs) });
 }
 
 function shipCoreReview(repoAbs, gh, target, branch) {
-  const out = { active: false, inertReason: null, codeownersPath: null, warnings: [], corePaths: [],
+  const out = { active: false, inertReason: null, codeownersPath: null, warnings: [], corePaths: [], ignoredOwners: [],
     pr: null, approval: null, headSha: null, authors: [], verdict: 'inert', detail: '' };
   const file = readTargetCodeowners(repoAbs, target);
   if (!file) { out.inertReason = `no CODEOWNERS on ${target}`; out.detail = `inert: ${out.inertReason}`; return out; }
   out.codeownersPath = file.path;
-  const { rules, warnings } = codeowners.parse(file.text);
-  out.warnings = warnings;
+  const parsedFile = codeowners.parse(file.text);
+  out.warnings = parsedFile.warnings;
+  // #483: on a fork, teams of another org (inherited from the upstream) bind nothing here.
+  const forkCtx = codeownersForkContext(repoAbs);
+  const { rules, dropped } = codeowners.dropForeignTeams(parsedFile.rules, forkCtx);
+  out.ignoredOwners = dropped;
+  if (dropped.length) out.warnings = [...out.warnings, codeowners.foreignNote(dropped, forkCtx)];
   const parsed = branchName.parse(branch);
   out.authors = [...new Set([gh ? git.ghCurrentLogin() : null, parsed && parsed.login].filter(Boolean))];
   const inert = codeowners.inert(rules, out.authors);
-  if (inert.inert) { out.inertReason = inert.reason; out.detail = `inert: ${inert.reason}`; return out; }
+  if (inert.inert) {
+    out.inertReason = dropped.length ? `${inert.reason} once the fork's inherited foreign-org teams are ignored (#483)` : inert.reason;
+    out.detail = `inert: ${out.inertReason}`;
+    return out;
+  }
   out.active = true;
   const ref = shipRefFor(repoAbs, branch);
   out.headSha = git.git(['rev-parse', ref], repoAbs).stdout || null;
@@ -11881,7 +11913,7 @@ function coreReviewPayload(cr) {
   if (!cr) return null;
   return {
     active: cr.active, verdict: cr.verdict, inertReason: cr.inertReason, codeownersPath: cr.codeownersPath,
-    corePaths: cr.corePaths.map((c) => c.path), headSha: cr.headSha,
+    ignoredOwners: cr.ignoredOwners || [], corePaths: cr.corePaths.map((c) => c.path), headSha: cr.headSha,
     pr: cr.pr ? { number: cr.pr.number, url: cr.pr.url, state: cr.pr.state } : null,
     approval: cr.approval,
   };
@@ -12522,7 +12554,8 @@ function cmdShip(argv) {
   if (coreReview.verdict === 'approved') {
     const reviewed = new Set(coreReview.corePaths.map((c) => c.path));
     const nowChanged = branchChangedPathsNoRenames(repoAbs, mergeRef, sess.branch) || [];
-    const { rules } = codeowners.parse((readTargetCodeowners(repoAbs, target) || {}).text || '');
+    const { rules } = codeowners.dropForeignTeams(
+      codeowners.parse((readTargetCodeowners(repoAbs, target) || {}).text || '').rules, codeownersForkContext(repoAbs));
     const unreviewed = codeowners.corePaths(rules, nowChanged).filter((c) => !reviewed.has(c.path));
     if (unreviewed.length) {
       cleanupEphemeral();

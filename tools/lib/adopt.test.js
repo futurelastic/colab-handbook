@@ -762,3 +762,16 @@ test('renderClaudeShell: a null tier leaves the placeholder for a human, never a
   const out = renderClaudeShell('## Conventions\n\n- **Tier:** `<A|B|C>` — <A = x · C = y · B = z>\n', { version: 'v1', trunk: 'main', tier: null });
   assert.match(out, /`<A\|B\|C>`/);
 });
+
+test('#483: detectInheritedCodeowners names a fork\'s foreign-org teams, and only on a fork', () => {
+  const { detectInheritedCodeowners } = require('./adopt.js');
+  const files = { '.github/CODEOWNERS': '* @upstream-org/maintainers\n/ops/ @acme/ops\n' };
+  const io = { readFile: (p) => (p in files ? files[p] : null) };
+  const fork = { remote: 'upstream', url: 'https://example.invalid/upstream-org/app.git', source: 'upstream-remote' };
+  assert.deepStrictEqual(detectInheritedCodeowners(io, fork, 'acme'),
+    { path: '.github/CODEOWNERS', ownOrg: 'acme', teams: ['@upstream-org/maintainers'] });
+  assert.strictEqual(detectInheritedCodeowners(io, null, 'acme'), null);
+  assert.strictEqual(detectInheritedCodeowners(io, fork, null), null);
+  assert.strictEqual(detectInheritedCodeowners({ readFile: () => null }, fork, 'acme'), null);
+  assert.strictEqual(detectInheritedCodeowners({ readFile: () => '* @acme/core\n' }, fork, 'acme'), null);
+});
