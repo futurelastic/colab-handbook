@@ -546,11 +546,42 @@ vocabulary: `review-by:<date>` · `#N` · `ruling` · `issueClosed:<n|owner/repo
 `branchLanded:<ref>` · `trunkAt:<sha>` · `labelPresent:<label>` · `after:<date>`. `lib/wake.js`
 parses a `wake:` value (commas AND several conditions; one piece outside the vocabulary refuses the
 whole value) and evaluates it against facts a caller gathered — `true` met, `false` not yet, `null`
-unmeasured, never guessed. It is **pure**, like `readiness.js`, and has no command: `code-triage`
+unmeasured, never guessed. The parsers, and the `Hold:` / `Because:` line pair itself
+(`encodeHold` / `decodeHold`), live in `lib/codec/hold.js` (#498); `lib/wake.js` re-exports them
+and keeps the evaluation. It is **pure**, like `readiness.js`, and has no command: `code-triage`
 §2 is the manual procedure that reaches the same verdicts. The checkable names are spelled exactly
 as the one adopting scheduler that evaluates wakes spells them; `lib/wake.test.js` pins the list, so
 a second spelling fails CI rather than drifting. `lib/disposition.js` reads it too: a `hold` whose
 wake is a vocabulary `wake:` is a hold, and prose is not.
+
+## Tracker codec (`lib/codec/`) — every marker as an encode/decode pair (#497, #498, #499)
+
+Everything this toolkit writes to a tracker with a meaning is encoded and decoded in one place,
+pure and synchronous (no I/O, no clock), so a downstream tool can consume it from the published
+package instead of keeping a hand copy. `codec/index.js` exports each half by name and flat:
+
+| Half | Wire format | Old module (re-exports, names unchanged) |
+|---|---|---|
+| `labels` | the convention label vocabulary | `lib/labels.js` |
+| `claim` | `🔒 Claimed` / `✅ Released` comments | `lib/claim-comments.js` |
+| `grants` | `🛢`/`🚫` migration grant + revoke, `🔎` reviewer grant + record, `🚨`/`🧯` red-trunk CI grant + revoke | `lib/migration-grant.js`, `lib/ci-grant.js` |
+| `decision` | `⚖ Decision recorded` / `↩ Decision reopened`, the options block, `Mockup:` lines | `lib/decision-record.js` |
+| `hold` | `Hold:` / `Because:` lines and the `wake:` vocabulary's parsers | `lib/wake.js` |
+| `release` | `colab:release` tracking marker, `colab:release-event` markers, the "released in" comment | `lib/release-finalize.js` |
+| `markers` | parent and close-reason markers, for trackers with no native field for either | — (no writer yet) |
+
+`codec/samples.json` is the language-neutral spec: real, scrubbed tracker strings (synthetic ones say
+so in a `note`), each of which must satisfy `decode(wire)` = `decoded` and `encode(decoded)` = `wire`
+byte for byte — an older CLI on another machine reads what a newer one writes. Comment markers keep
+their trailing sentence as `tail` (`null` = the canonical text), so a hand-edited comment still
+round-trips. Judging a marker — which grants are live, whose comment is trusted, whether a hold's
+wake has fired — stays in the old module, never in the codec.
+
+The `markers` half (#499) is designed from documented tracker capabilities: a parent is written into
+the child's body as `<!-- colab:parent issue=<ref> -->` plus a visible `Parent: <ref>` line (in case
+a tracker strips comments); a close reason as `<!-- colab:close-reason reason=completed|not-planned -->`
+plus `Close reason: …`, read for closed items only. A parent is **never** a dependency edge — an edge
+pointing at an epic is forbidden (`CONVENTIONS.md` §5, *Epics*).
 
 ## Dependency edges (`lib/blocked-by.js`) — the `blocked_by` write, owned (#251)
 

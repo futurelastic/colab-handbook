@@ -49,20 +49,14 @@
  * costs one line in tools/colab — flagged, not decided, by this module.
  */
 
-/** The two comment markers. STABLE WIRE FORMAT — do not reword casually; `tools/colab` and any
- *  vendored reader parse these verbatim, the same posture as GRANT_MARK/REVOKE_MARK. */
-const DECISION_MARK = '⚖ Decision recorded';
-const REOPEN_MARK = '↩ Decision reopened';
-
-// Deliberately DIFFERENT leading glyph (not just different trailing text) — mirrors
-// migration-grant.js's GRANT_RE/REVOKE_RE split, and for the identical reason: a reopen mark
-// that merely suffixed the decision mark would make every reopen parse as a fresh decision,
-// silently reopening exactly the door it was posted to close.
-const DECISION_RE = /^⚖ Decision recorded — ruled-by `([^`]*)` · answers `([^`]*)` · host `([^`]*)` · (\S+)/;
-const REOPEN_RE = /^↩ Decision reopened — ruled-by `([^`]*)` · host `([^`]*)` · (\S+)/;
+// The wire format — both marks (different leading glyphs, so a reopen never parses as a fresh
+// decision), both regexes, and the encode/decode pairs — lives in codec/decision.js (#498, epic
+// #496). Re-exported below under the names this module always had.
+const codec = require('./codec/decision');
+const { DECISION_MARK, REOPEN_MARK, DECISION_RE, REOPEN_RE } = codec;
 
 /**
- * The exact decision-comment body. Keep in lockstep with DECISION_RE.
+ * The exact decision-comment body (codec `encodeDecision`).
  * `ruledBy` names the human whose call it is — never the typist (mirrors `Filed-by:`).
  * `answers` is the `<!-- decision:options -->` block reference this decision resolves
  * (a comment URL/id), or `-` when there was no options block to answer.
@@ -70,16 +64,13 @@ const REOPEN_RE = /^↩ Decision reopened — ruled-by `([^`]*)` · host `([^`]*
  * what was rejected (CONVENTIONS.md §5, design conclusions' Unit 1).
  */
 function decisionCommentBody(ruledBy, answers, host, iso, body) {
-  const head = `${DECISION_MARK} — ruled-by \`${ruledBy}\` · answers \`${answers || '-'}\` · host \`${host}\` · ${iso}`;
-  return body ? `${head}\n\n${body}` : head;
+  return codec.encodeDecision({ ruledBy, answers, host, at: iso, body: body || null });
 }
 
-/** The exact reopen-comment body. Keep in lockstep with REOPEN_RE. Reopening is NOT scoped to
- *  the same `ruledBy` — see liveDecisions doc below for why. */
+/** The exact reopen-comment body (codec `encodeReopen`). Reopening is NOT scoped to the same
+ *  `ruledBy` — see liveDecisions doc below for why. */
 function reopenCommentBody(ruledBy, host, iso, reason) {
-  const head = `${REOPEN_MARK} — ruled-by \`${ruledBy}\` · host \`${host}\` · ${iso}`
-    + ' — every decision on this issue up to this point is superseded.';
-  return reason ? `${head}\n\n${reason}` : head;
+  return codec.encodeReopen({ ruledBy, host, at: iso, body: reason || null });
 }
 
 /**
@@ -163,26 +154,11 @@ function answeredOptionRefs(comments, trust) {
     .map((d) => d.answers);
 }
 
-/** The question-side marker (CONVENTIONS.md §5, *Decision options*, #126). Only its PRESENCE
- *  and its comment's createdAt matter here — the block's content is parsed by consumers. */
-const OPTIONS_RE = /<!--\s*decision:options\b/;
-
-/** The design-approval ask (CONVENTIONS.md §5, *Decision options*, #379): the second
- *  machine-readable question shape, beside the options block. A design issue whose finished
- *  artifact awaits approval carries `Mockup: <url of the frozen image>` in its BODY, anchored at
- *  the start of a line — never a comment, so a reader finds it with one field and no timeline.
- *  A set reviewed together carries one line in each member's body; the review comment keeps the
- *  full gallery. Leading whitespace disqualifies the line on purpose: an indented `Mockup:` is
- *  quoted or nested text, not the filer's declaration. */
-const MOCKUP_RE = /^Mockup:[ \t]*(\S+)[ \t]*$/gm;
-
-/** Every `Mockup:` URL declared in an issue body, in order. Empty when none (or no body). */
-function mockupUrls(body) {
-  if (typeof body !== 'string' || body === '') return [];
-  const out = [];
-  for (const m of body.replace(/\r\n/g, '\n').matchAll(MOCKUP_RE)) out.push(m[1]);
-  return out;
-}
+/** The question-side marker (CONVENTIONS.md §5, *Decision options*, #126) and the
+ *  design-approval `Mockup:` body line (#379) — both now in codec/decision.js (#498). Only the
+ *  options block's PRESENCE and its comment's createdAt matter here; a `Mockup:` line counts only
+ *  at the start of a body line (an indented one is quoted text, not the filer's declaration). */
+const { OPTIONS_RE, MOCKUP_RE, mockupUrls } = codec;
 
 const ASK_SHAPES = Object.freeze({ OPTIONS: 'options', MOCKUP: 'mockup' });
 

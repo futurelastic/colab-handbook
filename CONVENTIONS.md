@@ -2623,8 +2623,10 @@ This applies to `deferred:*` and to every label declared under `holds:` alike, b
 both carry the same `Hold:` line.
 
 Nothing in this repo's tooling writes a `Hold:` line. The mechanical parts are the
-audit's shape check on `holds:` and `tools/lib/wake.js`, which parses a `wake:` value and
-evaluates it against facts a caller has already gathered. Whoever parks the issue writes
+audit's shape check on `holds:`, the codec's `Hold:` line pair (`tools/lib/codec/hold.js`, which
+decodes only this exact shape — a looser line names no owner or wake and stays a stall), and
+`tools/lib/wake.js`, which parses a `wake:` value and evaluates it against facts a caller has
+already gathered. Whoever parks the issue writes
 the line, and `code-triage` reads it (its §0, §2, §5 and §6).
 
 #### Disposition — the marker, the seven kinds, and who may apply one (#315)

@@ -1,5 +1,5 @@
 {
-  "$comment": "Golden samples for tools/lib/codec (#497) — the language-neutral spec of the tracker wire format. Every `wire` string is real tracker text (claim/release comments and label names from this repo), scrubbed: hosts as h: tokens, session ids and logins replaced; the few samples carrying a `note` are synthetic edge cases. For each sample, decode(wire) must deep-equal `decoded` and encode(decoded) must equal `wire` byte for byte. An older reader parses what a newer writer emits, so a change that breaks a sample breaks every machine still running the older reader.",
+  "$comment": "Golden samples for tools/lib/codec (#497, #498, #499) — the language-neutral spec of the tracker wire format. Every `wire` string is real tracker text (claim/release comments and label names from this repo; grant, decision, hold and release-rung comments from repos that adopt it), scrubbed: hosts as h: tokens, session ids, logins, people and branch names replaced; repos as OWNER/REPO; a sample carrying a `note` says what is synthetic about it. For each sample, decode(wire) must deep-equal `decoded` and encode(decoded) must equal `wire` byte for byte. An older reader parses what a newer writer emits, so a change that breaks a sample breaks every machine still running the older reader. `notHolds` are real lines in a looser shape that must decode to null.",
   "labels": [
     {
       "wire": "in-progress",
@@ -345,6 +345,364 @@
         "kind": "release",
         "rest": " — machine-readable marker for the 2026-08-29 claim (worktree `ci-cure-package-check-parity-297`), whose release on 2026-09-01 was recorded in prose only, and by a different account. colab cancels a `🔒 Claimed` only with a `✅ Released` from the same author, so until now that stale claim won every new claim's tie-break."
       }
+    }
+  ],
+  "grants": {
+    "migration": [
+      {
+        "wire": "🛢 Migration grant — branch `feat/import-schema-163` · host `h:ca0012aa6308` · 2026-10-05T09:41:02.118Z — this exempts THIS BRANCH only, and expires when this issue closes.",
+        "decoded": {
+          "branch": "feat/import-schema-163",
+          "host": "h:ca0012aa6308",
+          "at": "2026-10-05T09:41:02.118Z",
+          "tail": null
+        },
+        "note": "shape of every human grant this toolkit writes; branch and timestamp synthetic"
+      },
+      {
+        "wire": "🛢 Migration grant — branch `feat/import-schema-163` · host `h:ca0012aa6308` · 2026-10-05T09:41:02.118Z",
+        "decoded": {
+          "branch": "feat/import-schema-163",
+          "host": "h:ca0012aa6308",
+          "at": "2026-10-05T09:41:02.118Z",
+          "tail": ""
+        },
+        "note": "synthetic: a grant whose tail was edited away — tail \"\" is kept literally, not read as canonical"
+      }
+    ],
+    "migrationRevokes": [
+      {
+        "wire": "🚫 Migration grant revoked — branch `feat/import-schema-163` · host `h:ee4bcb5b2678` · 2026-10-05T10:02:11.004Z — every grant on this issue up to this point is cancelled.",
+        "decoded": {
+          "branch": "feat/import-schema-163",
+          "host": "h:ee4bcb5b2678",
+          "at": "2026-10-05T10:02:11.004Z",
+          "tail": null
+        },
+        "note": "synthetic"
+      }
+    ],
+    "review": [
+      {
+        "wire": "🔎 Migration review grant — role `migration-reviewer` · reviewer `reviewer-a` · branch `feat/import-review-163` · head `2cb7d1676757563c7b5867a87beefcdfcd346523` · host `h:ca0012aa6308` · 2026-10-05T09:55:45.236Z — bound to this HEAD: any new commit voids it; expires when this issue closes.\n\n```migration-review\nv: 1\nrole: migration-reviewer\nreviewer: reviewer-a\nhead: 2cb7d1676757563c7b5867a87beefcdfcd346523\nverdict: approve\nchecklist: pass\nchecklist-items: 10/10\nescalation: none\nescalation-result: clear\nci-roundtrip: pass\nci-run: 18270000001\n```",
+        "decoded": {
+          "role": "migration-reviewer",
+          "reviewer": "reviewer-a",
+          "branch": "feat/import-review-163",
+          "head": "2cb7d1676757563c7b5867a87beefcdfcd346523",
+          "host": "h:ca0012aa6308",
+          "at": "2026-10-05T09:55:45.236Z",
+          "tail": null,
+          "record": {
+            "v": "1",
+            "role": "migration-reviewer",
+            "reviewer": "reviewer-a",
+            "head": "2cb7d1676757563c7b5867a87beefcdfcd346523",
+            "verdict": "approve",
+            "checklist": "pass",
+            "checklist-items": "10/10",
+            "escalation": "none",
+            "escalation-result": "clear",
+            "ci-roundtrip": "pass",
+            "ci-run": "18270000001"
+          },
+          "problems": []
+        },
+        "note": "marker line real (scrubbed); record values synthetic"
+      },
+      {
+        "wire": "🔎 Migration review grant — role `migration-reviewer` · reviewer `reviewer-a` · branch `feat/invite-backend-98` · head `22124b3c4c8b42bebe2631af9b3b336028d80f87` · host `h:ee4bcb5b2678` · 2026-10-05T14:46:54.114Z — bound to this HEAD: any new commit voids it; expires when this issue closes.\n\n```migration-review\nv: 1\nrole: migration-reviewer\nreviewer: reviewer-a\nhead: 22124b3c4c8b42bebe2631af9b3b336028d80f87\nverdict: approve\nchecklist: pass\nescalation: none\nescalation-result: clear\nci-roundtrip: pass\n```",
+        "decoded": {
+          "role": "migration-reviewer",
+          "reviewer": "reviewer-a",
+          "branch": "feat/invite-backend-98",
+          "head": "22124b3c4c8b42bebe2631af9b3b336028d80f87",
+          "host": "h:ee4bcb5b2678",
+          "at": "2026-10-05T14:46:54.114Z",
+          "tail": null,
+          "record": {
+            "v": "1",
+            "role": "migration-reviewer",
+            "reviewer": "reviewer-a",
+            "head": "22124b3c4c8b42bebe2631af9b3b336028d80f87",
+            "verdict": "approve",
+            "checklist": "pass",
+            "escalation": "none",
+            "escalation-result": "clear",
+            "ci-roundtrip": "pass"
+          },
+          "problems": []
+        },
+        "note": "marker line real (scrubbed); record values synthetic, without the two optional keys"
+      }
+    ],
+    "ci": [
+      {
+        "wire": "🚨 Red-trunk CI grant — branch `ci/release-runner-92` · red `main`@`5dacb6f0ada39dc194f55b0bd80e408044c4af3e` · evidence `3d7f6b87989a337870bdf7c03384a296f797a511` · host `h:ee4bcb5b2678` · 2026-10-04T04:25:21.914Z — this exempts THIS BRANCH from the trunk-CI-green precondition ONLY, only while `main` is still at `5dacb6f0ada39dc194f55b0bd80e408044c4af3e`, and expires when this issue closes.",
+        "decoded": {
+          "branch": "ci/release-runner-92",
+          "trunk": "main",
+          "redSha": "5dacb6f0ada39dc194f55b0bd80e408044c4af3e",
+          "evidenceSha": "3d7f6b87989a337870bdf7c03384a296f797a511",
+          "host": "h:ee4bcb5b2678",
+          "at": "2026-10-04T04:25:21.914Z",
+          "tail": null
+        }
+      },
+      {
+        "wire": "🚨 Red-trunk CI grant — branch `ci/release-runner-648` · red `main`@`2ba30e0c0302a5bfde875177569ac355af47552a` · evidence `c41543cfcf1bb75de03a7ac1dc9cc71dc2d31f40` · host `h:ee4bcb5b2678` · 2026-10-03T12:57:05.876Z — this exempts THIS BRANCH from the trunk-CI-green precondition ONLY, only while `main` is still at `2ba30e0c0302a5bfde875177569ac355af47552a`, and expires when this issue closes.",
+        "decoded": {
+          "branch": "ci/release-runner-648",
+          "trunk": "main",
+          "redSha": "2ba30e0c0302a5bfde875177569ac355af47552a",
+          "evidenceSha": "c41543cfcf1bb75de03a7ac1dc9cc71dc2d31f40",
+          "host": "h:ee4bcb5b2678",
+          "at": "2026-10-03T12:57:05.876Z",
+          "tail": null
+        }
+      }
+    ],
+    "ciRevokes": [
+      {
+        "wire": "🧯 Red-trunk CI grant revoked — branch `ci/release-runner-92` · host `h:ee4bcb5b2678` · 2026-10-04T05:00:00.000Z — every grant on this issue up to this point is cancelled.",
+        "decoded": {
+          "branch": "ci/release-runner-92",
+          "host": "h:ee4bcb5b2678",
+          "at": "2026-10-04T05:00:00.000Z",
+          "tail": null
+        },
+        "note": "synthetic"
+      }
+    ]
+  },
+  "decisions": {
+    "records": [
+      {
+        "wire": "⚖ Decision recorded — ruled-by `maintainer` · answers `-` · host `h:ee4bcb5b2678` · 2026-10-04T17:02:50.350Z",
+        "decoded": {
+          "ruledBy": "maintainer",
+          "answers": "-",
+          "host": "h:ee4bcb5b2678",
+          "at": "2026-10-04T17:02:50.350Z",
+          "tail": null,
+          "body": null
+        }
+      },
+      {
+        "wire": "⚖ Decision recorded — ruled-by `maintainer` · answers `-` · host `h:ca0012aa6308` · 2026-09-29T15:29:40.539Z\n\nOption B: keep the importer synchronous. Rejected A (a queue) — nothing else in the repo runs one yet.",
+        "decoded": {
+          "ruledBy": "maintainer",
+          "answers": "-",
+          "host": "h:ca0012aa6308",
+          "at": "2026-09-29T15:29:40.539Z",
+          "tail": null,
+          "body": "Option B: keep the importer synchronous. Rejected A (a queue) — nothing else in the repo runs one yet."
+        },
+        "note": "ruling prose synthetic"
+      },
+      {
+        "wire": "⚖ Decision recorded — ruled-by `maintainer` · answers `https://github.com/OWNER/REPO/issues/126#issuecomment-1` · host `h:ee4bcb5b2678` · 2026-08-30T08:00:00.000Z",
+        "decoded": {
+          "ruledBy": "maintainer",
+          "answers": "https://github.com/OWNER/REPO/issues/126#issuecomment-1",
+          "host": "h:ee4bcb5b2678",
+          "at": "2026-08-30T08:00:00.000Z",
+          "tail": null,
+          "body": null
+        },
+        "note": "synthetic: answers an options block"
+      }
+    ],
+    "reopens": [
+      {
+        "wire": "↩ Decision reopened — ruled-by `maintainer` · host `h:ee4bcb5b2678` · 2026-10-05T01:00:00.000Z — every decision on this issue up to this point is superseded.",
+        "decoded": {
+          "ruledBy": "maintainer",
+          "host": "h:ee4bcb5b2678",
+          "at": "2026-10-05T01:00:00.000Z",
+          "tail": null,
+          "body": null
+        },
+        "note": "synthetic"
+      },
+      {
+        "wire": "↩ Decision reopened — ruled-by `maintainer` · host `h:ee4bcb5b2678` · 2026-10-05T01:00:00.000Z — every decision on this issue up to this point is superseded.\n\nThe upstream format changed; the ruling has to be taken again.",
+        "decoded": {
+          "ruledBy": "maintainer",
+          "host": "h:ee4bcb5b2678",
+          "at": "2026-10-05T01:00:00.000Z",
+          "tail": null,
+          "body": "The upstream format changed; the ruling has to be taken again."
+        },
+        "note": "synthetic: with a reason"
+      }
+    ]
+  },
+  "holds": [
+    {
+      "wire": "Hold: blocked:needs-maintainer — owner: maintainer — wake: ruling\nBecause: the parent epic says outreach is a later milestone; the maintainer decides whether it is in v1 at all.",
+      "decoded": {
+        "label": "blocked:needs-maintainer",
+        "owner": "maintainer",
+        "wake": "ruling",
+        "because": "the parent epic says outreach is a later milestone; the maintainer decides whether it is in v1 at all."
+      }
+    },
+    {
+      "wire": "Hold: blocked:needs-maintainer — owner: maintainer — wake: ruling, #14\nBecause: no test machine for that platform; the maintainer decides whether to get one or keep it parked.",
+      "decoded": {
+        "label": "blocked:needs-maintainer",
+        "owner": "maintainer",
+        "wake": "ruling, #14",
+        "because": "no test machine for that platform; the maintainer decides whether to get one or keep it parked."
+      }
+    },
+    {
+      "wire": "Hold: needs-rescope — owner: @maintainer — wake: review-by:2026-10-01\nBecause: the import model changed in #88; the parser steps must be rewritten against it.",
+      "decoded": {
+        "label": "needs-rescope",
+        "owner": "@maintainer",
+        "wake": "review-by:2026-10-01",
+        "because": "the import model changed in #88; the parser steps must be rewritten against it."
+      },
+      "note": "the worked example in CONVENTIONS.md §5, *Holds*"
+    },
+    {
+      "wire": "Hold: deferred:external-party — owner: upstream maintainers — wake: issueClosed:OWNER/REPO#22, review-by:2026-11-02\nBecause: the design mirrors one still open upstream.",
+      "decoded": {
+        "label": "deferred:external-party",
+        "owner": "upstream maintainers",
+        "wake": "issueClosed:OWNER/REPO#22, review-by:2026-11-02",
+        "because": "the design mirrors one still open upstream."
+      },
+      "note": "synthetic: a checkable wake ANDed with a date"
+    },
+    {
+      "wire": "Hold: deferred:date — owner: @maintainer — wake: review-by:2026-12-01",
+      "decoded": {
+        "label": "deferred:date",
+        "owner": "@maintainer",
+        "wake": "review-by:2026-12-01",
+        "because": null
+      },
+      "note": "synthetic: a Hold line with no Because line"
+    }
+  ],
+  "notHolds": [
+    {
+      "wire": "Hold: deferred:date. Wake: review-by:2026-12-01, to look again once v1 is running. Taking it up then needs a test machine.",
+      "decoded": null,
+      "note": "real shape: no ` — owner:` and no ` — wake:` field — a stall, not a hold record"
+    },
+    {
+      "wire": "Hold: deferred:external-party, owner: upstream (the design this mirrors). Wake: review-by:2026-11-02, or sooner if upstream settles.",
+      "decoded": null,
+      "note": "real shape: commas instead of ` — ` separators"
+    }
+  ],
+  "releaseMarkers": {
+    "tracking": [
+      {
+        "wire": "<!-- colab:release version=v0.1.6 -->",
+        "decoded": "v0.1.6"
+      }
+    ],
+    "events": [
+      {
+        "wire": "<!-- colab:release-event candidate=v0.1.6-rc.1 -->",
+        "decoded": {
+          "candidate": "v0.1.6-rc.1"
+        }
+      },
+      {
+        "wire": "<!-- colab:release-event state=candidate-ready candidate=v0.1.6-rc.1 -->",
+        "decoded": {
+          "state": "candidate-ready",
+          "candidate": "v0.1.6-rc.1"
+        }
+      }
+    ],
+    "released": [
+      {
+        "wire": "<!-- colab:release-event released=v1.8.3 -->\nReleased in **v1.8.3** (`3e2f810`).",
+        "decoded": {
+          "version": "v1.8.3",
+          "sha": "3e2f810"
+        },
+        "note": "synthetic: no final has announced on an issue yet"
+      }
+    ]
+  },
+  "parents": [
+    {
+      "wire": "<!-- colab:parent issue=#496 -->",
+      "decoded": {
+        "repo": null,
+        "number": 496,
+        "form": "comment"
+      },
+      "note": "synthetic: designed from documented tracker capabilities, no writer yet (#499)"
+    },
+    {
+      "wire": "Parent: #496",
+      "decoded": {
+        "repo": null,
+        "number": 496,
+        "form": "line"
+      },
+      "note": "synthetic: the visible fallback line"
+    },
+    {
+      "wire": "<!-- colab:parent issue=OWNER/REPO#12 -->",
+      "decoded": {
+        "repo": "OWNER/REPO",
+        "number": 12,
+        "form": "comment"
+      },
+      "note": "synthetic: a cross-repo parent"
+    },
+    {
+      "wire": "Parent: OWNER/REPO#12",
+      "decoded": {
+        "repo": "OWNER/REPO",
+        "number": 12,
+        "form": "line"
+      },
+      "note": "synthetic"
+    }
+  ],
+  "closeReasons": [
+    {
+      "wire": "<!-- colab:close-reason reason=completed -->",
+      "decoded": {
+        "reason": "completed",
+        "form": "comment"
+      },
+      "note": "synthetic (#499)"
+    },
+    {
+      "wire": "<!-- colab:close-reason reason=not-planned -->",
+      "decoded": {
+        "reason": "not-planned",
+        "form": "comment"
+      },
+      "note": "synthetic"
+    },
+    {
+      "wire": "Close reason: completed",
+      "decoded": {
+        "reason": "completed",
+        "form": "line"
+      },
+      "note": "synthetic: the visible fallback line"
+    },
+    {
+      "wire": "Close reason: not-planned",
+      "decoded": {
+        "reason": "not-planned",
+        "form": "line"
+      },
+      "note": "synthetic"
     }
   ]
 }

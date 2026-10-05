@@ -68,32 +68,28 @@
  * `COLAB_HUMAN=1`, the same bar `cmdPromote` and `cmdMigrationGrant` already hold.
  */
 
-/** The two comment markers. STABLE WIRE FORMAT — do not reword casually; `tools/colab` and any
- *  vendored reader parse these verbatim. Deliberately a DIFFERENT leading emoji from BOTH
- *  migration-grant's marks (🛢/🚫) AND each other, so no regex here or in migration-grant.js can
- *  ever cross-match — a four-way collision test in ci-grant.test.js pins this. */
-const GRANT_MARK = '🚨 Red-trunk CI grant';
-const REVOKE_MARK = '🧯 Red-trunk CI grant revoked';
+// The wire format — both marks (a leading emoji distinct from migration-grant's 🛢/🚫 AND from
+// each other; ci-grant.test.js's four-way collision test pins it), both regexes, and the
+// encode/decode pairs — lives in codec/grants.js (#498, epic #496). Re-exported below under the
+// names this module always had.
+const codec = require('./codec/grants');
+const GRANT_MARK = codec.CI_GRANT_MARK;
+const REVOKE_MARK = codec.CI_REVOKE_MARK;
+const GRANT_RE = codec.CI_GRANT_RE;
+const REVOKE_RE = codec.CI_REVOKE_RE;
 
-const GRANT_RE = /^🚨 Red-trunk CI grant — branch `([^`]*)` · red `([^`]*)`@`([^`]*)` · evidence `([^`]*)` · host `([^`]*)` · (\S+)/;
-const REVOKE_RE = /^🧯 Red-trunk CI grant revoked — branch `([^`]*)` · host `([^`]*)` · (\S+)/;
-
-/** The exact grant-comment body. Keep in lockstep with GRANT_RE. Carries strictly more than
+/** The exact grant-comment body (codec `encodeCiGrant`, canonical tail). Carries strictly more than
  *  migration-grant's equivalent: the TRUNK NAME + RED SHA it was reviewed against, and the
  *  EVIDENCE RUN sha that proved the branch's own head green — both are read back and re-checked
  *  by evaluateIssue, not merely stored for audit. */
 function grantCommentBody(branch, trunk, redSha, evidenceSha, host, iso) {
-  return `${GRANT_MARK} — branch \`${branch}\` · red \`${trunk}\`@\`${redSha}\` · evidence \`${evidenceSha}\` · host \`${host}\` · ${iso}`
-    + ` — this exempts THIS BRANCH from the trunk-CI-green precondition ONLY, only while \`${trunk}\``
-    + ` is still at \`${redSha}\`, and expires when this issue closes.`;
+  return codec.encodeCiGrant({ branch, trunk, redSha, evidenceSha, host, at: iso });
 }
 
-/** The exact revoke-comment body. Keep in lockstep with REVOKE_RE. `branch` is the branch named in
- *  the record for the audit trail — revocation itself is NOT branch-scoped (see evaluateIssue doc
- *  in migration-grant.js; identical reasoning applies here). */
+/** The exact revoke-comment body (codec `encodeCiRevoke`). `branch` is for the audit trail —
+ *  revocation itself is NOT branch-scoped (see evaluateIssue doc in migration-grant.js). */
 function revokeCommentBody(branch, host, iso) {
-  return `${REVOKE_MARK} — branch \`${branch}\` · host \`${host}\` · ${iso}`
-    + ' — every grant on this issue up to this point is cancelled.';
+  return codec.encodeCiRevoke({ branch, host, at: iso });
 }
 
 /**

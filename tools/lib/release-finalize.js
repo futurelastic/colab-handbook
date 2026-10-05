@@ -56,7 +56,11 @@
 
 const releaseTag = require('./release-tag');
 
-const VERSION_RE = /^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$/;
+// The tracking marker and the event marker are wire format: codec/release.js (#498, epic #496),
+// re-exported below under the names this module always had. VERSION_RE is the codec's, so a
+// marker's version and a tag's version are judged by one pattern.
+const releaseCodec = require('./codec/release');
+const { VERSION_RE } = releaseCodec;
 const CANDIDATE_RE = /^(v(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*))-rc\.([1-9][0-9]*)$/;
 const CUT_SUBJECT_SUFFIX = '(colab release cut)';
 const HOLD_LABEL = 'release-hold';
@@ -93,20 +97,11 @@ function parseCandidate(tag) {
 
 // ---- the tracking issue -------------------------------------------------------------------------
 
-const RELEASE_MARKER_RE = /<!--\s*colab:release\s+version=(v[0-9]+\.[0-9]+\.[0-9]+)\s*-->/;
-
 /** The version a tracking issue's body declares, or null. Only the marker counts, never the title. */
-function parseReleaseMarker(body) {
-  const m = RELEASE_MARKER_RE.exec(String(body || ''));
-  return m && parseVersion(m[1]) ? m[1] : null;
-}
-
-function releaseMarker(version) { return `<!-- colab:release version=${version} -->`; }
-
+const parseReleaseMarker = releaseCodec.decodeTrackingMarker;
+const releaseMarker = releaseCodec.encodeTrackingMarker;
 /** `<!-- colab:release-event k=v … -->`, keys in the order given. */
-function eventMarker(fields) {
-  return `<!-- colab:release-event ${Object.entries(fields).map(([k, v]) => `${k}=${v}`).join(' ')} -->`;
-}
+const eventMarker = releaseCodec.encodeReleaseEvent;
 
 /** True when some comment body already carries exactly this event marker — a re-run posts nothing twice. */
 function hasEvent(comments, fields) {
@@ -583,9 +578,9 @@ function previousFinal(tagNames, version) {
 /** The event fields of a "released in" comment — one per issue per version. */
 function releasedEvent(version) { return { released: version }; }
 
-/** The comment body posted on each carried issue (marker included). */
+/** The comment body posted on each carried issue (marker included) — codec `encodeReleasedComment`. */
 function releasedComment(version, sha) {
-  return `${eventMarker(releasedEvent(version))}\nReleased in **${version}** (\`${String(sha || '').slice(0, 7)}\`).`;
+  return releaseCodec.encodeReleasedComment({ version, sha });
 }
 
 /** The final tag's annotated message: which candidate, which period, every condition, who. */
