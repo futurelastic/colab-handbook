@@ -3889,6 +3889,11 @@ PLAN="$MAIN_REPO/.claude/plans/issue-<N>.md"
 **Failing to state rung 1's oracle in one line is itself the signal to stop and ask on the
 Issue** — never guess, never silently drop to rung 0.
 
+**`code-wrap` checks the rung it finds (#486).** At hand-off the plan file is present, or
+its place holds one line `rung 0 because <reason>`; a non-rung-0 change wrapped with
+neither is reported as *plan file missing*, never as hand-off complete — and is never
+back-filled, since a plan written after the code only describes the code.
+
 `code-triage` may flag a hard group `needs-plan` with a one-line reason — a
 **cross-backlog judgement**, never a plan of its own (authoring at triage time produced
 stale artifacts for groups not started soon). **The full plan is drafted at code-session
