@@ -662,6 +662,11 @@ to CI fits today's runners. `CONVENTIONS.md`
 [§4, *Branch CI*](../../CONVENTIONS.md#branch-ci--the-candidates-own-run-read-as-a-class-314)
 has the rule and its sources.
 
+**Waiting for that CI run?** `colab ci-wait --sha <head> --branch <branch>` — the one wait
+primitive (#495): backoff, conditional requests, a deadline, an exit code per outcome. Never a
+hand-rolled `sleep N; gh run …` loop, never two waits on one run, never one left running after
+your turn; the measurement is in `code-ship` B1a, *The wait is bounded*.
+
 ## 5. Report
 
 - Issue URL (`gh issue view $N --json url -q .url`) or the notes-file path, and

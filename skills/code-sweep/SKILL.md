@@ -80,7 +80,8 @@ since <ts>`, name the candidates that were left standing last time and why, and 
 CI run finishing moves no tip, so the fingerprint cannot see it — and a candidate deferred
 because its run was still in flight would otherwise never be re-measured by a ping. For each
 `conclusion.deferred` entry whose reason is `ci-wait`, read its run
-(`gh run view <databaseId> --json status,conclusion`). Any run now `completed` ⇒ print
+(`gh run view <databaseId> --json status,conclusion` — one read, never a loop; waiting is
+`colab ci-wait`'s job, #495). Any run now `completed` ⇒ print
 `changed:deferred-ci` and take the full path; all still in flight ⇒ the short-circuit
 stands, and the report names them as still waiting.
 
@@ -743,9 +744,12 @@ plus `orphan-shippable` whose dry run read `ok`:
    B1a's bounded wait, then the same command, or a `ci-wait` defer on the run id it printed.
    Exit 4 hands the members back one at a time, in this same order.
 3. **Waiting on CI** — a run queued or in flight at the head. These go after every ready
-   candidate, and each gets `code-ship` B1a's bounded wait (15 min), then a defer recorded
-   as `ci-wait` with the run's id (§4, *A failure defers*; §0 re-measures it). Never poll
-   one while a ready candidate is still unlanded.
+   candidate, and each gets `code-ship` B1a's bounded wait (`colab ci-wait … --timeout 15m`,
+   #495), then a defer recorded as `ci-wait` with the run's id (§4, *A failure defers*; §0
+   re-measures it). Never poll one while a ready candidate is still unlanded, never run two
+   waits at once (one session measured ~1,500 REST calls/h with two background loops), and
+   **exit 4 (RATE_LIMITED) ends the whole sweep** — every remaining candidate's reads would
+   fail against the same spent quota; report the reset time it printed.
 4. **Everything else** — a conflict against trunk, `red:*` — goes through `code-ship` as
    usual and meets its own candidate-scoped outcome (hand-back, re-run, defer). It is
    last because it is the likeliest to stop, not because it matters less.

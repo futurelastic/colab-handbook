@@ -743,6 +743,14 @@ gh run list --branch <branch> --limit 20 \
   -q "[.[] | select(.headSha == \"$HEAD\")]"
 ```
 
+**Still `none` because a run is in flight, and you are waiting for the verdict?** Wait with
+`colab ci-wait --sha "$HEAD" --branch <branch> --timeout 15m`, then re-read — never a
+hand-rolled `sleep N; gh run …` loop, never two waits on one run, never `gh` stderr sent to
+`/dev/null`, never a wait left running in the background after your turn (#495; the
+measurement and the exit-code table are in `code-ship` B1a, *The wait is bounded*). Exit `4`
+(RATE_LIMITED) means the shared quota is gone: report the class as `none`, name the reset
+time it printed, and stop — do not retry.
+
 The four classes, their quantifiers and each one's next step are defined in
 `CONVENTIONS.md` [§4](../../CONVENTIONS.md#branch-ci--the-candidates-own-run-read-as-a-class-314),
 *Branch CI* — use exactly those names. What you are classifying at `$HEAD`:

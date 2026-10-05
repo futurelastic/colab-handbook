@@ -1571,6 +1571,15 @@ than guessed.
   (#463); a skill that needs it calls the verb instead of restating the rule as a `gh run
   list` filter — one such filter, "green when any run succeeded", read a sha green that ship
   had parked every candidate on, and the red went unowned.
+  **Waiting for that verdict is `colab ci-wait`, never a loop (#495).** It backs off
+  (30 s → 60 s → 120 s, then a deadline), sends conditional requests so an unchanged read is
+  free, and ends with its own exit code on a rate limit or an unreadable state instead of
+  retrying. Hand-rolled `sleep N; gh run …` loops were measured at ~88% of ~4,500 REST calls in
+  one hour on a shared agent identity — two loops on one run, a loop that read rate-limit
+  errors as "keep waiting", one orphaned for 5½ h — until the hourly quota ran out for every
+  agent. `colab trunk-ci` itself costs one runs read (plus one check-runs read on green) and
+  caches its verdict per trunk sha for 45 s in the repo's git dir, shared by every session on
+  that checkout.
   That is the half of the question about what is merged **into**; the branch's own run
   is the other half — see *Branch CI*, below.
 - **That resolves a FALSE red — a real one has two different doors, one of them
