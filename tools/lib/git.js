@@ -1158,6 +1158,29 @@ function ghRunJobs(repo, runDatabaseId) {
 }
 
 /**
+ * Every check run at one commit, flattened for the #493 tree-skip read — `[{id, name, status,
+ * conclusion, suite, annotations}]` (`suite` = check-suite id = one workflow run; `annotations` =
+ * output.annotations_count), or null on a gh/parse failure. One call per green trunk read, made
+ * lazily by readCiVerdict; `{owner}/{repo}` is resolved by gh from the cwd's remote.
+ */
+function ghCommitCheckRuns(repo, sha) {
+  if (!sha) return null;
+  const r = run('gh', ['api', `repos/{owner}/{repo}/commits/${sha}/check-runs?per_page=100`,
+    '--jq', '[.check_runs[] | {id, name, status, conclusion, suite: .check_suite.id, annotations: .output.annotations_count}]'], { cwd: repo });
+  if (!r.ok) return null;
+  try { const v = JSON.parse(r.stdout); return Array.isArray(v) ? v : null; } catch (_) { return null; }
+}
+
+/** One check run's annotations as `[{title, message, level}]`, or null on failure (#493). */
+function ghCheckRunAnnotations(repo, checkRunId) {
+  if (checkRunId === null || checkRunId === undefined) return null;
+  const r = run('gh', ['api', `repos/{owner}/{repo}/check-runs/${checkRunId}/annotations`,
+    '--jq', '[.[] | {title, message, level: .annotation_level}]'], { cwd: repo });
+  if (!r.ok) return null;
+  try { const v = JSON.parse(r.stdout); return Array.isArray(v) ? v : null; } catch (_) { return null; }
+}
+
+/**
  * Dispatch `workflowFile` on `ref` (#474) — `gh workflow run <file> --ref <ref> -f k=v…`. Returns
  * `{ok, withInputs, detail}`. If the call with inputs is refused (GitHub can validate inputs against
  * a workflow file that does not declare them yet), it is retried ONCE without them: the release-auto
@@ -1189,6 +1212,7 @@ function ghAssignedIssues(repo) {
 }
 
 module.exports = {
+  ghCommitCheckRuns, ghCheckRunAnnotations,
   run, git, repoRoot, mainRepoRoot, originUrl, remoteInfo, remoteName, remoteFor, remoteUrl, remoteProblem, _resetRemoteCache,
   detectTrunk, branchExists, branchRefs, existingBranchRef,
   claimRemote, remoteHeads,

@@ -1683,6 +1683,30 @@ reading either sees the same spelling. Spell them exactly so, everywhere:
   Waiting in the guard for trunk's in-flight run holds the runner slot that run is queued for.
   Measured before the change, across five adopting repos over 24 h: ~19% of all CI runs
   (~104 a day, ~660 runner-minutes) re-ran a trunk-tested sha on a freshly claimed branch.
+- **Trunk reuses a green run of an identical tree (#493).** A ship squash-merges a branch
+  whose green run already contained the current base, so the trunk commit's *tree* is
+  byte-identical to the tree that run passed — only the sha is new, and a sha-keyed skip can
+  never see it. On a non-creating push to trunk the same `dedupe` guard therefore also asks:
+  does *this* workflow have a `success` run, from a `push` on another ref of *this* repo, whose
+  commit has *this* exact tree? It filters the run listing by tree and then confirms the tree
+  through the git object. Yes ⇒ the suite is skipped, the run concludes `success`, and the
+  guard leaves a `tree-already-green` notice naming the run it relied on; `colab ship`'s
+  trunk-CI row and `colab trunk-ci` print that run ("relied on <url>"). **The rule: an
+  identical tree plus a green run of the same workflow is tested.** An identical tree covers
+  every committed byte — workflow files, lockfiles, the descriptor — but not what lives outside
+  the repo: runner images, unpinned toolchain downloads, secrets and variables, steps that
+  branch on `github.ref`. A repo whose suite depends on those declares `tree-reuse: off`
+  (`project.schema.md`) and trunk always runs in full. The guard reads `trunk:` from the
+  descriptor *at that sha* and acts only there — never on a release branch, never on a
+  promotion push to `main` where trunk is `dev`, never on a dispatch. Any doubt — no
+  descriptor, an opt-out, an API error, no exact match — runs the full suite. A trunk-only job
+  (publish, deploy, release) never sits behind this gate. One reading turns such a run red: a
+  cited head that is local and whose tree provably differs from trunk's (`HUMAN_GATED` —
+  trunk is untested at that sha). A citation that cannot be read leaves the run green and says
+  so, because the run's own `success` is the verdict, exactly as for #418. Measured on one
+  adopter with a 35–55 min sharded suite on self-hosted runners: trunk's duplicate run took
+  33–347 min wall time, most of it queueing behind branch runs for the same runners, and one
+  went red on a timeout over a tree that had already passed.
 - **An unclassifiable red is `red:finding`.** Where a repo does not separate exit 1 from
   exit 2, `failure` is all the platform reports: read the failing job's log far enough to
   say which side of the line it fell on, and if that cannot be told, report `red:finding`.

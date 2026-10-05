@@ -45,6 +45,7 @@ const trustHumans = require('./lib/trust-humans');
 const ciCure = require('./lib/ci-cure');
 const ciVerdict = require('./lib/ci-verdict');
 const baseCiVerdict = require('./lib/base-ci-verdict');
+const treeGreen = require('./lib/tree-green');
 const staleBase = require('./lib/stale-base');
 const dirtyOwner = require('./lib/dirty-owner');
 const scratchDirs = require('./lib/scratch-dirs');
@@ -10467,7 +10468,41 @@ function readCiVerdict(repoAbs, gh, target, trunk) {
     const sub = shipBatchTrunkSubstitute(repoAbs, trunk, run.sha);
     if (sub) return { run, final: true, verdict: sub };
   }
+  if (verdict.ok && target === trunk) verdict = treeGreenVerdict(repoAbs, run, verdict);
   return { run, verdict, final: verdict.ok || verdict.class !== HUMAN_GATED };
+}
+
+/**
+ * #493: a green trunk read whose suite was SKIPPED because the CI guard found a green run of the
+ * same workflow at an identical tree — name the run it relied on. The run's `success` is already
+ * the verdict (same as #418's sha skip); the citation is the audit pointer, so a citation that
+ * cannot be read leaves the verdict green and says so. One thing turns it red: the cited head is
+ * local and its tree provably differs from trunk's — the skip relied on a run of a DIFFERENT
+ * tree, so trunk is untested (HUMAN_GATED, a person looks). An ordinary green run costs one
+ * check-runs read and keeps its detail byte-identical.
+ */
+function treeGreenVerdict(repoAbs, run, verdict) {
+  const checks = git.ghCommitCheckRuns(repoAbs, run.sha);
+  const ids = treeGreen.treeSkipCheckRuns(checks);
+  if (!ids || !ids.length) return verdict;
+  const cites = [];
+  let unreadable = 0;
+  const treeOf = (sha) => {
+    const r = git.git(['rev-parse', '--verify', '--quiet', `${sha}^{tree}`], repoAbs);
+    return r.ok ? r.stdout.trim() : null;
+  };
+  const ours = treeOf(run.sha);
+  for (const id of ids) {
+    const cite = treeGreen.parseCitation(git.ghCheckRunAnnotations(repoAbs, id));
+    if (!cite) { unreadable++; continue; }
+    const theirs = treeOf(cite.head);
+    if (ours && theirs && ours !== theirs) {
+      return { ok: false, class: HUMAN_GATED,
+        detail: `${verdict.detail} — but the suite was SKIPPED on a tree-already-green citation (#493) of ${cite.url} (${cite.branch}@${shortSha(cite.head)}), whose tree ${theirs.slice(0, 12)} differs from trunk's ${ours.slice(0, 12)}: trunk is untested at this sha — re-run its CI, and report the guard` };
+    }
+    cites.push({ ...cite, proof: ours && theirs ? 'verified' : 'unverified' });
+  }
+  return { ...verdict, detail: verdict.detail + treeGreen.citationNote(cites, unreadable), treeGreen: cites.map((c) => c.url) };
 }
 
 /**
@@ -13631,7 +13666,11 @@ The first output word is one verdict:
 Exemption doors (the cure rule, a ci-grant) are NOT applied: they let one branch past a red
 trunk, they do not make the trunk green, and the red still needs an owner.
 
-  --json   { verdict, sha, ok, class, detail, trunk }
+A GREEN whose suite the CI guard skipped because a green run of the same workflow already
+passed an identical tree (#493) names that run in its detail ("relied on <url>"). If the cited
+head is local and its tree differs from trunk's, the read is RED: trunk is untested.
+
+  --json   { verdict, sha, ok, class, detail, trunk[, cited: [<run url>…] on a #493 skip] }
 Exit 0 whenever a verdict was read (whatever it is); 2 on UNREADABLE.`;
 
 /** Map readCiVerdict's result to the closed trunk-ci vocabulary. Pure — exported for tests. */
@@ -13658,7 +13697,7 @@ function cmdTrunkCi(argv) {
   const verdict = trunkCiToken(r);
   const sha = r.run ? r.run.sha || null : null;
   if (opts.json) {
-    print(JSON.stringify({ verdict, trunk, sha, ok: r.verdict.ok, class: r.verdict.class || null, detail: r.verdict.detail }, null, 2));
+    print(JSON.stringify({ verdict, trunk, sha, ok: r.verdict.ok, class: r.verdict.class || null, detail: r.verdict.detail, ...(r.verdict.treeGreen ? { cited: r.verdict.treeGreen } : {}) }, null, 2));
   } else {
     print(`${verdict} ${trunk}${sha ? `@${shortSha(sha)}` : ''} — ${r.verdict.detail}`);
   }
