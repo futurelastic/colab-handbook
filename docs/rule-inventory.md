@@ -229,6 +229,9 @@ as an unticked row later — it just quietly stops existing.
 | 144 | A decision surface groups by the `Ask:` line instead of re-deriving the lane from title text. | none | #89 | advisory |
 | 145 | `Ask:` is written at filing time, by whoever files — not reconstructed after the fact by a later reader. | none | #89 | hard rule |
 | 146 | The `Ask:` line only ever appears on `agent-filed` issues — a human filing for a human audience needs no machine-readable ask class. | none | #89 | hard rule |
+| 431 | An open human ask (already on the tracker, or already rendered by an earlier pass of the same skill) gets exactly one line on every later pass — `unchanged, waiting on <link> since <date>`, dated when the ask was first put — and its options are never rendered again. *(added #489)* | measured: one fleet over 10 days — 25–32% of asks repeated an earlier one; coordinator triage/ship sessions asked 309 questions for 1 human answer | #489 | hard rule |
+| 432 | A new ask is rendered once, as a five-line card: question first, two or more options, the recommendation on its own line, what stays parked if unanswered, the link. *(added #489)* | none | #489 | default |
+| 433 | Waiting only on a human is an unchanged pass — an ask's age is not an input, so a no-change short-circuit stays cheap and never re-asks or escalates on time alone. *(added #489)* | none | #489 | hard rule |
 
 ## §5 — Readiness
 
