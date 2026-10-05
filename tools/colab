@@ -129,7 +129,8 @@ function resolveRepo(opts) {
  * `.github/project.yml` into the main checkout when run from inside a worktree it was supposed
  * to target — silently violating "the main checkout stays on trunk at rest" (#258). This
  * mirrors the `opts.repo ? resolveRepo(opts) : (git.repoRoot(process.cwd()) || null)` pattern
- * already used at most other cmd* call sites, as a named, reusable resolver.
+ * once used at most other cmd* call sites (normalised since #487 — resolveRepoOrCwd), as a named,
+ * reusable resolver for the one question that genuinely wants the caller's own tree.
  */
 function resolveWorkingRepo(opts) {
   let r = opts.repo;
@@ -154,16 +155,60 @@ function knownRepos(config) {
   return extra;
 }
 
-/** Find a single claim by issue number, optionally constrained to a repo. */
+/**
+ * The repo a lookup with no --repo is about: --repo (normalised) or the MAIN root of cwd, or null.
+ *
+ * #487: this used to be spelled `resolveRepoOrCwd(opts)`
+ * at a dozen call sites — normalised with --repo, NOT normalised without it. Run from inside a
+ * linked worktree, the bare form answered with the worktree's own root, so a release looked up
+ * `<worktree>#N` while the claim sat under `<mainRoot>#N`. Every one of those sites is about repo
+ * STATE or the tracker (claims, ports, grants, events), never a committable file — for that,
+ * resolveWorkingRepo() is the deliberate exception.
+ */
+function resolveRepoOrCwd(opts) {
+  return opts.repo ? resolveRepo(opts) : (git.mainRepoRoot(process.cwd()) || null);
+}
+
+/**
+ * The main checkout a claim row belongs to, given the path in its key (or its `repo` field).
+ *
+ * #487: an older writer (`claims --sync` run from inside a linked worktree) keyed rows by the
+ * WORKTREE's path. Those rows outlive the worktree, and the path no longer exists, so nothing could
+ * resolve it back to its repo — `release` missed them with and without --repo, forever. A path that
+ * exists resolves through git; a vanished one is attributed to the nearest existing ancestor's main
+ * root, but only when that ancestor IS a repo the path sits inside — never a guess across repos.
+ */
+function claimHomeRoot(p) {
+  if (!p) return p;
+  if (fs.existsSync(p)) return git.mainRepoRoot(p) || p;
+  let dir = path.dirname(p);
+  while (dir && dir !== path.dirname(dir) && !fs.existsSync(dir)) dir = path.dirname(dir);
+  const root = dir && fs.existsSync(dir) ? git.mainRepoRoot(dir) : null;
+  return root && p.startsWith(`${root}${path.sep}`) ? root : p;
+}
+
+/** Does the claim key `k` belong to `repoAbs` (a main root)? Includes legacy worktree-keyed rows (#487). */
+function claimKeyInRepo(k, repoAbs) {
+  if (k.startsWith(`${repoAbs}#`)) return true;
+  const keyPath = k.slice(0, k.lastIndexOf('#'));
+  return keyPath.startsWith(`${repoAbs}${path.sep}`) && claimHomeRoot(keyPath) === repoAbs;
+}
+
+/**
+ * Find a single claim by issue number, optionally constrained to a repo. `repo` in the result is
+ * the claim's MAIN root — for a legacy worktree-keyed row (#487) that is not `claim.repo`, which
+ * names a directory that may no longer exist; anything talking to the tracker must use `repo`.
+ */
 function findClaim(st, num, repoAbs) {
   const matches = Object.entries(st.claims).filter(([, c]) => normIssueNum(c.issue) === num);
-  const scoped = repoAbs ? matches.filter(([k]) => k.startsWith(`${repoAbs}#`)) : matches;
+  const scoped = repoAbs ? matches.filter(([k]) => claimKeyInRepo(k, repoAbs)) : matches;
   if (scoped.length === 0) return null;
   if (scoped.length > 1) {
-    const repos = scoped.map(([k]) => shortRepo(k.split('#')[0])).join(', ');
+    const repos = scoped.map(([k]) => shortRepo(k.slice(0, k.lastIndexOf('#')))).join(', ');
     throw new UserError(`Issue #${num} is claimed in multiple repos (${repos}) — disambiguate with --repo`);
   }
-  return { key: scoped[0][0], claim: scoped[0][1] };
+  const [key, claim] = scoped[0];
+  return { key, claim, repo: repoAbs || claimHomeRoot(claim.repo || key.slice(0, key.lastIndexOf('#'))) };
 }
 
 function isGhUsable(repoAbs) {
@@ -2183,7 +2228,7 @@ function cmdRelease(argv) {
   });
   if (opts.help || opts._.length === 0) return print(HELP_RELEASE);
   const num = normIssueNum(opts._[0]);
-  const repoAbs = opts.repo ? resolveRepo(opts) : (git.repoRoot(process.cwd()) || null);
+  const repoAbs = resolveRepoOrCwd(opts);
 
   // #164: look the claim up WITHOUT deleting it yet — the gh write below can fail (GraphQL AND
   // REST both rate-limited, network down, ...), and deleting first would clear the one local
@@ -2209,7 +2254,7 @@ function cmdRelease(argv) {
  * Returns { ghFailed, worktree, remaining }.
  */
 function releaseFoundClaim(num, found, opts = {}) {
-  const repo = found.claim.repo;
+  const repo = found.repo || found.claim.repo; // #487: the MAIN root, even for a legacy worktree-keyed row
   const wtName = found.claim.worktree;
 
   let ghFailed = false;
@@ -2332,7 +2377,7 @@ function cmdIssueFiled(argv) {
   });
   if (opts.help || opts._.length === 0) return print(HELP_ISSUE_FILED);
   const num = normIssueNum(opts._[0]);
-  const repoAbs = opts.repo ? resolveRepo(opts) : (git.repoRoot(process.cwd()) || null);
+  const repoAbs = resolveRepoOrCwd(opts);
   if (!repoAbs) throw new UserError('not inside a git repo — pass --repo <path>');
 
   pushEvent('issue-filed', { repo: repoAbs, issue: num });
@@ -2504,7 +2549,7 @@ function cmdGateRecorded(argv) {
   });
   if (opts.help) return print(HELP_GATE_RECORDED);
 
-  const repoAbs = opts.repo ? resolveRepo(opts) : (git.mainRepoRoot(process.cwd()) || null);
+  const repoAbs = resolveRepoOrCwd(opts);
   if (!repoAbs) throw new UserError('not inside a git repo — pass --repo <path>');
 
   let wtName = opts.worktree || null;
@@ -3278,7 +3323,7 @@ function cmdReadiness(argv) {
   });
   if (opts.help || opts._.length === 0) return print(HELP_READINESS);
   const num = normIssueNum(opts._[0]);
-  const repoAbs = opts.repo ? resolveRepo(opts) : (git.repoRoot(process.cwd()) || null);
+  const repoAbs = resolveRepoOrCwd(opts);
   if (!repoAbs) throw new UserError('not inside a git repo — pass --repo <path>');
 
   // No local fallback, on purpose. A claim can degrade to local-only because it also has a fast
@@ -3478,7 +3523,7 @@ function cmdBlocked(argv) {
   });
   if (argErr) throw new UserError(argErr);
 
-  const repoAbs = opts.repo ? resolveRepo(opts) : (git.repoRoot(process.cwd()) || null);
+  const repoAbs = resolveRepoOrCwd(opts);
   if (!repoAbs) throw new UserError('not inside a git repo — pass --repo <path>');
 
   if (!isGhUsable(repoAbs)) {
@@ -3739,7 +3784,7 @@ function cmdMigrationGrant(argv) {
     return 1;
   }
 
-  const repoAbs = opts.repo ? resolveRepo(opts) : (git.repoRoot(process.cwd()) || null);
+  const repoAbs = resolveRepoOrCwd(opts);
   if (!repoAbs) throw new UserError('not inside a git repo — pass --repo <path>');
 
   // Argument validation and local ref resolution run BEFORE isGhUsable, deliberately — they are
@@ -3945,7 +3990,7 @@ function cmdMigrationGrantRevoke(repoAbs, num) {
 }
 
 function cmdMigrationGrantList(opts) {
-  const repoAbs = opts.repo ? resolveRepo(opts) : (git.repoRoot(process.cwd()) || null);
+  const repoAbs = resolveRepoOrCwd(opts);
   if (!repoAbs) throw new UserError('not inside a git repo — pass --repo <path>');
   if (!isGhUsable(repoAbs)) {
     throw new UserError(`gh not usable here (${ghUnusableWhy(repoAbs)}) — cannot list migration grants`);
@@ -4080,7 +4125,7 @@ function cmdDecision(argv) {
     throw new UserError('--ruled-by <name> is required — names the human whose call this is, never the typist (CONVENTIONS.md §5, Provenance)');
   }
 
-  const repoAbs = opts.repo ? resolveRepo(opts) : (git.repoRoot(process.cwd()) || null);
+  const repoAbs = resolveRepoOrCwd(opts);
   if (!repoAbs) throw new UserError('not inside a git repo — pass --repo <path>');
 
   if (!isGhUsable(repoAbs)) {
@@ -4226,7 +4271,7 @@ function cmdDecisionReopen(repoAbs, num, opts, body) {
 }
 
 function cmdDecisionList(opts) {
-  const repoAbs = opts.repo ? resolveRepo(opts) : (git.repoRoot(process.cwd()) || null);
+  const repoAbs = resolveRepoOrCwd(opts);
   if (!repoAbs) throw new UserError('not inside a git repo — pass --repo <path>');
   if (!isGhUsable(repoAbs)) {
     throw new UserError(`gh not usable here (${ghUnusableWhy(repoAbs)}) — cannot list decisions`);
@@ -4450,7 +4495,7 @@ function cmdCiGrant(argv) {
     return 1;
   }
 
-  const repoAbs = opts.repo ? resolveRepo(opts) : (git.repoRoot(process.cwd()) || null);
+  const repoAbs = resolveRepoOrCwd(opts);
   if (!repoAbs) throw new UserError('not inside a git repo — pass --repo <path>');
 
   // Argument validation and local ref resolution BEFORE isGhUsable — same reasoning as
@@ -4576,7 +4621,7 @@ function cmdCiGrantRevoke(repoAbs, num) {
 }
 
 function cmdCiGrantList(opts) {
-  const repoAbs = opts.repo ? resolveRepo(opts) : (git.repoRoot(process.cwd()) || null);
+  const repoAbs = resolveRepoOrCwd(opts);
   if (!repoAbs) throw new UserError('not inside a git repo — pass --repo <path>');
   if (!isGhUsable(repoAbs)) {
     throw new UserError(`gh not usable here (${ghUnusableWhy(repoAbs)}) — cannot list CI grants`);
@@ -4683,8 +4728,11 @@ function syncClaims({ prune = false } = {}) {
   if (!git.ghAvailable()) { warn('gh not available — --sync skipped'); return; }
   const st = state.loadState();
   // repos represented locally + repos with a resolvable remote (#301: not necessarily `origin`)
-  const repos = new Set(Object.values(st.claims).map((c) => c.repo));
-  const cur = git.repoRoot(process.cwd());
+  // #487: every repo here is a MAIN root. This was the writer of the worktree-keyed rows nothing could
+  // release: from inside a linked worktree, repoRoot(cwd) is the worktree, so every assigned issue
+  // was re-added as `<worktree>#N` — a second row beside the real `<mainRoot>#N`, outliving the dir.
+  const repos = new Set(Object.values(st.claims).map((c) => claimHomeRoot(c.repo)).filter(Boolean));
+  const cur = git.mainRepoRoot(process.cwd());
   if (cur) repos.add(cur);
 
   const added = [], removed = [];
@@ -4711,7 +4759,7 @@ function syncClaims({ prune = false } = {}) {
     }
     // local → GH: REMOVE stale local claims ONLY when --prune is given
     if (prune) {
-      const localForRepo = Object.entries(st.claims).filter(([k]) => k.startsWith(`${repoAbs}#`));
+      const localForRepo = Object.entries(st.claims).filter(([k]) => claimKeyInRepo(k, repoAbs));
       for (const [key, c] of localForRepo) {
         const num = normIssueNum(c.issue);
         if (!assignedSet.has(num)) {
@@ -4844,7 +4892,7 @@ function cmdPortAlloc(argv) {
   const config = state.loadConfig();
   const count = opts.count ? parseInt(opts.count, 10) : 1;
   if (!Number.isInteger(count) || count < 1) throw new UserError('--count must be a positive integer');
-  const explicitRepo = opts.repo ? resolveRepo(opts) : (git.repoRoot(process.cwd()) || null);
+  const explicitRepo = resolveRepoOrCwd(opts);
   const atPorts = parseAtPorts(opts);
 
   // For range resolution, a --worktree owner's repo wins over cwd (its project.yml window applies).
@@ -4891,7 +4939,7 @@ function cmdPortFree(argv) {
     flags: { '-h': 'help', '--help': 'help' },
   });
   if (opts.help) return print(HELP_PORT);
-  const repoAbs = opts.repo ? resolveRepo(opts) : (git.repoRoot(process.cwd()) || null);
+  const repoAbs = resolveRepoOrCwd(opts);
 
   const freed = state.mutate((st) => {
     let targets = [];
