@@ -100,7 +100,7 @@ function fixture() {
 // the code this hoists), and out of this fix's scope to change. Left as is, a real ship in this
 // test would write to the machine's ACTUAL `~/.colab/plan-journal.jsonl`. Overriding `HOME` in the
 // subprocess env (Node's `os.homedir()` reads it on POSIX) keeps every write inside the fixture.
-function colab(fx, args) {
+function colab(fx, args, extraEnv = {}) {
   const r = spawnSync('node', [COLAB, ...args], {
     encoding: 'utf8',
     // #237: a fixed, non-blank COLAB_SESSION (not '') — every fixture in this file runs `claim`
@@ -115,16 +115,29 @@ function colab(fx, args) {
     env: {
       ...process.env, PATH: `${fx.bin}:${process.env.PATH}`, HOME: fx.home, COLAB_HOME: fx.home,
       COLAB_SESSION: 'sess-plan-journal-test', COLAB_SESSION_NAME: '',
+      // #488: pin the scratch dirs to their defaults so a developer's own override cannot leak in
+      COLAB_PLANS_DIR: '', COLAB_BRIEFS_DIR: '', ...extraEnv,
     },
   });
   return { code: r.status, out: r.stdout || '', err: r.stderr || '' };
 }
 
+// The LEGACY dir (#488): every pre-#488 test below keeps writing here, which is itself the oracle
+// that a plan written before the switch is still journalled and deleted.
 function plansDir(fx) { return path.join(fx.work, '.claude', 'plans'); }
+function newPlansDir(fx) { return path.join(fx.work, '.plans'); }
 
-function writePlan(fx, name, { rung = '1', cause = 'none' } = {}) {
-  fs.mkdirSync(plansDir(fx), { recursive: true });
-  fs.writeFileSync(path.join(plansDir(fx), name), `rung: ${rung}\ncause: ${cause}\n\nplan body\n`);
+function writePlan(fx, name, { rung = '1', cause = 'none', dir = plansDir(fx) } = {}) {
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, name), `rung: ${rung}\ncause: ${cause}\n\nplan body\n`);
+}
+
+function branchWithCommit(fx, branch) {
+  fx.g(fx.work, 'checkout', '-q', '-b', branch);
+  fs.writeFileSync(path.join(fx.work, 'g.txt'), 'x\n');
+  fx.g(fx.work, 'add', '-A');
+  fx.g(fx.work, 'commit', '-q', '-m', 'fix: work');
+  fx.g(fx.work, 'checkout', '-q', 'main');
 }
 
 function journalLines(fx) {
@@ -254,4 +267,47 @@ test('a failed journal write leaves the plan file on disk, never deletes it with
   assert.strictEqual(fs.existsSync(path.join(plansDir(fx), 'issue-61.md')), true,
     'the plan file must survive a failed journal write, never be deleted with nothing journalled');
   assert.match(r.out, /could not journal\/delete the plan file/);
+});
+
+// --- #488: configurable plans dir, legacy read for one transition --------------------------------
+
+test('#488: a plan in the default .plans/ dir is journalled and deleted', () => {
+  const fx = fixture();
+  branchWithCommit(fx, 'fix/new-dir-70');
+  colab(fx, ['claim', '70', '--branch', 'fix/new-dir-70', '--repo', fx.work]);
+  writePlan(fx, 'issue-70.md', { dir: newPlansDir(fx) });
+
+  const r = colab(fx, ['ship', '--branch', 'fix/new-dir-70', '--repo', fx.work]);
+  assert.strictEqual(r.code, 0, r.out + r.err);
+  assert.strictEqual(fs.existsSync(path.join(newPlansDir(fx), 'issue-70.md')), false);
+  assert.deepStrictEqual(journalLines(fx).map((l) => l.issue), [70]);
+});
+
+test('#488: a plan in BOTH dirs is deleted from both and journalled once', () => {
+  const fx = fixture();
+  branchWithCommit(fx, 'fix/both-dirs-71');
+  colab(fx, ['claim', '71', '--branch', 'fix/both-dirs-71', '--repo', fx.work]);
+  writePlan(fx, 'issue-71.md', { dir: newPlansDir(fx), rung: '2' });
+  writePlan(fx, 'issue-71.md');
+
+  const r = colab(fx, ['ship', '--branch', 'fix/both-dirs-71', '--repo', fx.work]);
+  assert.strictEqual(r.code, 0, r.out + r.err);
+  assert.strictEqual(fs.existsSync(path.join(newPlansDir(fx), 'issue-71.md')), false);
+  assert.strictEqual(fs.existsSync(path.join(plansDir(fx), 'issue-71.md')), false);
+  const lines = journalLines(fx);
+  assert.strictEqual(lines.length, 1, 'one journal line per issue, not one per dir');
+  assert.strictEqual(lines[0].rung, '2', 'the configured dir is read first');
+});
+
+test('#488: COLAB_PLANS_DIR is honoured', () => {
+  const fx = fixture();
+  branchWithCommit(fx, 'fix/custom-dir-72');
+  colab(fx, ['claim', '72', '--branch', 'fix/custom-dir-72', '--repo', fx.work]);
+  const custom = path.join(fx.work, 'scratch', 'plans');
+  writePlan(fx, 'issue-72.md', { dir: custom });
+
+  const r = colab(fx, ['ship', '--branch', 'fix/custom-dir-72', '--repo', fx.work], { COLAB_PLANS_DIR: 'scratch/plans' });
+  assert.strictEqual(r.code, 0, r.out + r.err);
+  assert.strictEqual(fs.existsSync(path.join(custom, 'issue-72.md')), false);
+  assert.deepStrictEqual(journalLines(fx).map((l) => l.issue), [72]);
 });

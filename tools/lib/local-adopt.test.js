@@ -35,13 +35,18 @@ process.on('exit', () => { for (const d of TMP) { try { fs.rmSync(d, { recursive
 // ---- pure ------------------------------------------------------------------
 
 test('exclude paths are root-anchored and include the worktree subdir', () => {
-  assert.deepStrictEqual(la.localExcludePaths(), ['/.github/project.yml', '/CLAUDE.local.md', '/.claude/plans/', '/.worktrees/']);
+  assert.deepStrictEqual(la.localExcludePaths(undefined, {}),
+    ['/.github/project.yml', '/CLAUDE.local.md', '/.plans/', '/.briefs/', '/.claude/plans/', '/.worktrees/']);
+  // #488: a configured scratch dir is hidden too, and the legacy plans dir stays
+  assert.deepStrictEqual(la.localExcludePaths(undefined, { COLAB_PLANS_DIR: 'scratch/plans' }).slice(2, 5),
+    ['/scratch/plans/', '/.briefs/', '/.claude/plans/']);
   assert.deepStrictEqual(la.localExcludePaths('wt/').slice(-1), ['/wt/']);
 });
 
 test('missing lines: an existing line counts with or without the leading slash; comments do not', () => {
   const have = '# .github/project.yml\n.github/project.yml\n/.worktrees/\n';
-  assert.deepStrictEqual(la.missingExcludeLines(have), ['/CLAUDE.local.md', '/.claude/plans/']);
+  assert.deepStrictEqual(la.missingExcludeLines(have, la.localExcludePaths(undefined, {})),
+    ['/CLAUDE.local.md', '/.plans/', '/.briefs/', '/.claude/plans/']);
   assert.deepStrictEqual(la.missingExcludeLines(null), la.localExcludePaths());
 });
 

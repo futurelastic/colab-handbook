@@ -20,12 +20,16 @@
  * Everything here is pure (text in, text/verdict out); tools/colab does the IO.
  */
 
+const scratchDirs = require('./scratch-dirs');
+
 /**
  * Paths hidden by `.git/info/exclude`, root-anchored (a leading `/`) so they match only at the
  * repo root — `CLAUDE.local.md` in a subdirectory the owner commits must stay visible.
- * `.claude/plans/` is the plan-file scratch dir code-start already excludes the same way.
+ * The session scratch dirs (plans, briefs — #488) are appended by `localExcludePaths` from
+ * scratch-dirs.js, so a configured COLAB_PLANS_DIR / COLAB_BRIEFS_DIR is hidden too; the legacy
+ * `.claude/plans/` stays among them.
  */
-const LOCAL_EXCLUDE_PATHS = ['/.github/project.yml', '/CLAUDE.local.md', '/.claude/plans/'];
+const LOCAL_EXCLUDE_PATHS = ['/.github/project.yml', '/CLAUDE.local.md'];
 
 /**
  * LOCAL_EXCLUDE_PATHS plus the worktree subdir (`colab worktree new` creates worktrees INSIDE the
@@ -33,9 +37,9 @@ const LOCAL_EXCLUDE_PATHS = ['/.github/project.yml', '/CLAUDE.local.md', '/.clau
  * `.gitignore`; the owner's repo does not, so without this line every worktree shows up in the
  * main checkout's `git status` — measured on the #393 fixture the moment the first one was cut.
  */
-function localExcludePaths(worktreeSubdir) {
+function localExcludePaths(worktreeSubdir, env = process.env) {
   const sub = String(worktreeSubdir || '.worktrees').replace(/^\/+|\/+$/g, '');
-  return [...LOCAL_EXCLUDE_PATHS, `/${sub}/`];
+  return [...LOCAL_EXCLUDE_PATHS, ...scratchDirs.excludeLines(env), `/${sub}/`];
 }
 
 const EXCLUDE_HEADER = '# colab-handbook: local-only adoption (#393) — handbook files this clone keeps out of the owner\'s history';

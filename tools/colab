@@ -47,6 +47,7 @@ const ciVerdict = require('./lib/ci-verdict');
 const baseCiVerdict = require('./lib/base-ci-verdict');
 const staleBase = require('./lib/stale-base');
 const dirtyOwner = require('./lib/dirty-owner');
+const scratchDirs = require('./lib/scratch-dirs');
 const lockfileDrift = require('./lib/lockfile-drift');
 const adopt = require('./lib/adopt');
 const consumerEvidence = require('./lib/consumer-evidence');
@@ -5216,7 +5217,10 @@ function removeWorktreeDir(repoAbs, wtPath) {
 function uncommittedWork(wtPath) {
   if (!wtPath || !fs.existsSync(wtPath)) return { any: false, lines: '', what: '' };
   const tracked = git.dirtyTracked(wtPath);
-  const untracked = git.dirtyUntracked(wtPath);
+  // #488: scratch (a plan or brief left in the worktree) is disposable by definition — it must never
+  // be what makes a teardown refuse. Normally info/exclude already hides it; this covers a clone
+  // whose exclude predates the scratch dirs, or a dir configured after the worktree was cut.
+  const untracked = scratchDirs.withoutScratch(git.dirtyUntracked(wtPath));
   return {
     any: !!(tracked || untracked),
     lines: [tracked, untracked].filter(Boolean).join('\n'),
@@ -5490,6 +5494,10 @@ function cmdWorktreeNew(argv) {
     trackerMissed.push(...claimedHere);
   }
   settleTrackerPending(repoAbs, claimedHere.filter((n) => !lostIssues.includes(n)), trackerMissed, { wtName: name, branch });
+
+  // #488: the scratch dirs (plans, briefs) are hidden in the clone's shared info/exclude — one
+  // write covers the main checkout and every worktree, with no per-repo .gitignore diff.
+  ensureScratchExcluded(repoAbs);
 
   // 5. optional repo hook (machine-specific steps plug in here)
   const hook = runHook(repoAbs, 'post-create', { wtPath, name, branch, ports: alloc.chosenPorts, trunk, base, issues });
@@ -7672,7 +7680,8 @@ files is not an option (CONVENTIONS.md §9, "Working in a repo you don't own"):
 
   1. refuses if .github/project.yml is TRACKED (then the repo is adopted — use plain adopt), if
      --trunk is missing, or if --trunk names the owner's own default branch;
-  2. appends /.github/project.yml, /CLAUDE.local.md, /.claude/plans/ and the worktree subdir
+  2. appends /.github/project.yml, /CLAUDE.local.md, the scratch dirs (/.plans/, /.briefs/,
+     legacy /.claude/plans/ — #488) and the worktree subdir
      (/.worktrees/ by default — the owner's .gitignore does not hide it) to .git/info/exclude (the
      shared common dir — never .gitignore, which is itself a tracked file) BEFORE writing, and
      keeps them even if a later check refuses (idempotent, local, hides nothing that exists);
@@ -7797,6 +7806,26 @@ function gitExcludePath(repoAbs) {
   const r = git.git(['rev-parse', '--path-format=absolute', '--git-common-dir'], repoAbs);
   if (!r.ok || !r.stdout) return null;
   return path.join(r.stdout, 'info', 'exclude');
+}
+
+/**
+ * #488: append the scratch-dir exclude lines (scratch-dirs.js `excludeLines`) to the clone's shared
+ * info/exclude, idempotently. Best-effort: a failure warns and never blocks the caller.
+ */
+function ensureScratchExcluded(repoAbs) {
+  const excludeFile = gitExcludePath(repoAbs);
+  if (!excludeFile) return [];
+  let before = null;
+  try { before = fs.readFileSync(excludeFile, 'utf8'); } catch (_) { /* absent */ }
+  const lines = scratchDirs.excludeLines();
+  const missing = localAdopt.missingExcludeLines(before, lines);
+  if (!missing.length) return [];
+  try {
+    fs.mkdirSync(path.dirname(excludeFile), { recursive: true });
+    const sep = before && !before.endsWith('\n') ? '\n' : '';
+    fs.appendFileSync(excludeFile, sep + missing.join('\n') + '\n');
+  } catch (e) { warn(`could not hide the scratch dirs in ${excludeFile}: ${e.message}`); return []; }
+  return missing;
 }
 
 function gitTracks(repoAbs, rel) {
@@ -11450,7 +11479,14 @@ function shipCloseSpentContainers(repoAbs, closedIssues, { sha, target } = {}) {
 }
 
 function shipJournalPlanFiles(repoAbs, issues) {
-  const plansDir = path.join(repoAbs, '.claude', 'plans');
+  // #488: the configured plans dir first, then the legacy `.claude/plans/` — a plan written before
+  // the switch is still journalled and deleted. One journal line per issue across both dirs: a
+  // stray duplicate in the second dir is deleted without journalling the issue twice.
+  const journalled = new Set();
+  for (const plansDir of scratchDirs.planReadDirs(repoAbs)) shipJournalPlanDir(repoAbs, plansDir, issues, journalled);
+}
+
+function shipJournalPlanDir(repoAbs, plansDir, issues, journalled) {
   let entries;
   try { entries = fs.readdirSync(plansDir); } catch (_) { return; } // no plans dir at all — nothing to do
   const issueSet = new Set(issues.map((n) => String(n)));
@@ -11467,13 +11503,17 @@ function shipJournalPlanFiles(repoAbs, issues) {
       const rm = txt.match(/^rung:\s*(.+)$/m); if (rm) rung = rm[1].trim();
       const cm = txt.match(/^cause:\s*(.+)$/m); if (cm) cause = cm[1].trim();
     } catch (_) { /* front matter is optional — the defaults above cover a plain rung-1 stub */ }
-    const lines = nums.map((num) => JSON.stringify({
+    const fresh = nums.filter((num) => !journalled.has(num));
+    const lines = fresh.map((num) => JSON.stringify({
       ts: new Date().toISOString().replace(/\.\d{3}Z$/, 'Z'),
       issue: Number(num), rung, cause, verdict: 'pass',
-    })).join('\n') + '\n';
+    })).join('\n');
     try {
-      fs.mkdirSync(path.dirname(journalPath), { recursive: true });
-      fs.appendFileSync(journalPath, lines);
+      if (lines) {
+        fs.mkdirSync(path.dirname(journalPath), { recursive: true });
+        fs.appendFileSync(journalPath, lines + '\n');
+      }
+      for (const num of fresh) journalled.add(num);
       fs.rmSync(planPath, { force: true }); // only after the journal write above landed
     } catch (e) {
       warnDeferred(`could not journal/delete the plan file "${name}" (${e.message}) — left in place`);

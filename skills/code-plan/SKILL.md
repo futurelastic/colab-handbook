@@ -11,17 +11,28 @@ rung-1 stub hits an escalation trigger. It never runs on its own — there is no
 seed the plan into, and no branch or worktree for it to describe.
 
 Notation: `$N` = the feature's Issue number · plan file = `$PLAN`, resolved as
-`.claude/plans/issue-$N.md` in the **main checkout**, outside any worktree
+`.plans/issue-$N.md` (the dir is `COLAB_PLANS_DIR` when set — #488) in the **main
+checkout**, outside any worktree
 (`CONVENTIONS.md` [§5](../../CONVENTIONS.md#planning--a-plan-file-that-outlives-one-command-and-who-drafts-it-94), *Planning*):
 
 ```sh
 MAIN_REPO="$(dirname "$(git rev-parse --path-format=absolute --git-common-dir)")"
-PLAN="$MAIN_REPO/.claude/plans/issue-$N.md"
+case "${COLAB_PLANS_DIR:-.plans}" in /*) PLANS_DIR="$COLAB_PLANS_DIR" ;; *) PLANS_DIR="$MAIN_REPO/${COLAB_PLANS_DIR:-.plans}" ;; esac
+PLAN="$PLANS_DIR/issue-$N.md"; mkdir -p "$PLANS_DIR"
+LEGACY_PLAN="$MAIN_REPO/.claude/plans/issue-$N.md"
 ```
 
 Resolve it this way even when the calling session is already inside a worktree (#113) —
-a bare `.claude/plans/issue-$N.md` resolves against `$PWD`, which is the worktree's own
-directory of the same name, not the main checkout's.
+a bare `.plans/issue-$N.md` resolves against `$PWD`, which is the worktree's own
+directory of the same name, not the main checkout's. **Write only `$PLAN`, never under
+`.claude/`** — agent CLIs guard that directory, so a write there can cost the operator a
+permission prompt. A stub that `code-start` wrote before #488 may still sit at
+`$LEGACY_PLAN`: when `$PLAN` is absent, carry that one file over before anything reads it,
+so §1's reuse check sees it and one issue never has two plans:
+
+```sh
+[ -f "$PLAN" ] || [ ! -f "$LEGACY_PLAN" ] || mv "$LEGACY_PLAN" "$PLAN"
+```
 
 ## Why a subagent, and why a stronger model
 
@@ -220,7 +231,7 @@ in the conversation.
 - §1's reuse check ran **before** any spawn: a fresh plan (no commit to a named file, on
   `HEAD` or `origin/<base>`, since its `drafted-at`) was reused with zero planning calls; a
   re-spawn carried a stated reason and the existing plan in its seed.
-- The plan file exists at `$PLAN` (`.claude/plans/issue-$N.md` in the **main checkout**,
+- The plan file exists at `$PLAN` (`.plans/issue-$N.md`, or `$COLAB_PLANS_DIR`, in the **main checkout**,
   resolved via `--git-common-dir`, never a bare relative path — #113), outside any
   worktree, with valid frontmatter (`issue`, `rung: 2`, `cause`, `model`, `drafted`, `drafted-at`), and every
   path in `## Files` is backticked.

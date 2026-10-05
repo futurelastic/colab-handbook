@@ -310,24 +310,32 @@ durable tier at wrap — not just in the session comment that closes with the is
 ### Write the plan file — rung 0/1/2, before you claim (`CONVENTIONS.md` [§5](../../CONVENTIONS.md#planning--a-plan-file-that-outlives-one-command-and-who-drafts-it-94), *Planning*, #94)
 
 The Issue you just loaded is the coordinator's view; this file is yours to keep for the
-rest of the session. Convention: `.claude/plans/issue-$N.md`, in the **main checkout —
-outside any worktree you are about to create in step 4** (it has to exist before that
-worktree does, and survive after `code-ship` tears it down). Git-excluded, never
-committed.
+rest of the session. Convention: `.plans/issue-$N.md` (the dir is `COLAB_PLANS_DIR` when
+set — #488), in the **main checkout — outside any worktree you are about to create in
+step 4** (it has to exist before that worktree does, and survive after `code-ship` tears
+it down). Git-excluded, never committed. **Never write it under `.claude/`** — agent CLIs
+guard that directory as configuration, so a scratch write there can cost the operator a
+permission prompt; the old `.claude/plans/` is only *read*, for one transition.
 
 **Resolve the path, don't assume `$PWD` is the main checkout (#113).** You are running
 this step *before* step 4's worktree exists, so `$PWD` usually is the main checkout right
 now — but if you're resuming a session that's already inside a worktree, a bare
-`.claude/plans/issue-$N.md` silently reads/writes that worktree's own copy instead. Anchor
+`.plans/issue-$N.md` silently reads/writes that worktree's own copy instead. Anchor
 it every time:
 
 ```sh
 MAIN_REPO="$(dirname "$(git rev-parse --path-format=absolute --git-common-dir)")"
-PLAN="$MAIN_REPO/.claude/plans/issue-$N.md"
-mkdir -p "$MAIN_REPO/.claude/plans"
-grep -qxF '.claude/plans/' "$MAIN_REPO/.git/info/exclude" 2>/dev/null || \
-  echo '.claude/plans/' >> "$MAIN_REPO/.git/info/exclude"    # best-effort, machine-local — not a substitute for the repo's own .gitignore
+case "${COLAB_PLANS_DIR:-.plans}" in /*) PLANS_DIR="$COLAB_PLANS_DIR" ;; *) PLANS_DIR="$MAIN_REPO/${COLAB_PLANS_DIR:-.plans}" ;; esac
+PLAN="$PLANS_DIR/issue-$N.md"
+mkdir -p "$PLANS_DIR"
+case "${COLAB_PLANS_DIR:-.plans}" in /*) ;; *) L="/${COLAB_PLANS_DIR:-.plans}/"
+  grep -qxF "$L" "$MAIN_REPO/.git/info/exclude" 2>/dev/null || \
+    echo "$L" >> "$MAIN_REPO/.git/info/exclude" ;; esac    # best-effort, machine-local; `colab worktree new` writes the same line
 ```
+
+**Resuming with a plan written before #488?** It may still sit at
+`$MAIN_REPO/.claude/plans/issue-$N.md`. Read it there if `$PLAN` does not exist; append to
+whichever file you found rather than starting a second one — teardown deletes either.
 
 **Check for the flag first — you already have the data.** The `gh issue view $N` you ran
 above is a **direct fetch**, which is read-your-writes consistent; never re-check the flag

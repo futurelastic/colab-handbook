@@ -60,7 +60,8 @@ MAIN_REPO="$(dirname "$(git rev-parse --path-format=absolute --git-common-dir)")
 git ls-remote origin <branch>                              # branch actually pushed?
 gh issue view $N --comments | tail -5                       # distill comment present?
 colab claims                                                 # claim(s) still held?
-ls "$MAIN_REPO/.claude/plans/issue-$N.md" 2>/dev/null        # plan file, if one was written
+case "${COLAB_PLANS_DIR:-.plans}" in /*) PLANS_DIR="$COLAB_PLANS_DIR" ;; *) PLANS_DIR="$MAIN_REPO/${COLAB_PLANS_DIR:-.plans}" ;; esac
+ls "$PLANS_DIR/issue-$N.md" "$MAIN_REPO/.claude/plans/issue-$N.md" 2>/dev/null  # plan file, if one was written (#488: configured dir, then legacy)
 git -C "$MAIN_REPO" status --porcelain -uall                 # trunk checkout still clean?
 ```
 
@@ -904,12 +905,16 @@ session instead.
 
 ## B1c. Grade the diff against the plan (#94)
 
-Read the plan file, if one exists, from the **main checkout** — `$MAIN_REPO/.claude/plans/issue-<N>.md`
-(`$MAIN_REPO` as resolved in §0, not `$PWD` — #113) per issue in the harvested set (B1b),
-not the worktree, which may be mid-teardown by the time anything reads this:
+Read the plan file, if one exists, from the **main checkout** — `$PLANS_DIR/issue-<N>.md`
+(`$MAIN_REPO/.plans/` unless `COLAB_PLANS_DIR` says otherwise), **then** the legacy
+`$MAIN_REPO/.claude/plans/issue-<N>.md` for a plan written before #488 (`$MAIN_REPO` and
+`$PLANS_DIR` as resolved in §0, not `$PWD` — #113) per issue in the harvested set (B1b),
+not the worktree, which may be mid-teardown by the time anything reads this. A plan in
+either location counts — a session graded as having no plan because it wrote the other
+one is exactly the false reject this order prevents:
 
 ```sh
-cat "$MAIN_REPO/.claude/plans/issue-<N>.md" 2>/dev/null   # per issue that carried one
+cat "$PLANS_DIR/issue-<N>.md" 2>/dev/null || cat "$MAIN_REPO/.claude/plans/issue-<N>.md" 2>/dev/null   # per issue that carried one
 ```
 
 - **Plan file present** → grade the diff against its *Acceptance oracle* and *Files*
@@ -1721,10 +1726,11 @@ has it (#113):
 
 ```sh
 MAIN_REPO="${MAIN_REPO:-$(dirname "$(git rev-parse --path-format=absolute --git-common-dir)")}"
+case "${COLAB_PLANS_DIR:-.plans}" in /*) PLANS_DIR="$COLAB_PLANS_DIR" ;; *) PLANS_DIR="$MAIN_REPO/${COLAB_PLANS_DIR:-.plans}" ;; esac
 ISSUES="<harvested issue numbers, space-separated>"
 GRADE_VERDICT=pass   # only a `pass` reaches B4 by construction (B1c stops a reject before
                       # this step); use the same token B2b's marker emits, never a bare word
-for PLAN in "$MAIN_REPO"/.claude/plans/issue-*.md; do
+for PLAN in "$PLANS_DIR"/issue-*.md "$MAIN_REPO"/.claude/plans/issue-*.md; do   # #488: configured, then legacy
   [ -f "$PLAN" ] || continue
   NUMS=$(basename "$PLAN" .md); NUMS=${NUMS#issue-}   # e.g. "12-14-15"
   SUBSET=1

@@ -105,7 +105,8 @@ gh issue comment $N -b "**<YYYY-MM-DD>** — did X, decided Y, left Z open."
   comment (the `**<YYYY-MM-DD>** — did X…` line above). A tick of the checklist and a
   genuine decision/gotcha still belong here — this thins commentary, not knowledge.
 - **Wrote or extended a plan file this session** (`$PLAN`, i.e.
-  `<main checkout>/.claude/plans/issue-$N.md` — resolve via `--git-common-dir`, never a
+  `<main checkout>/.plans/issue-$N.md`, or under `COLAB_PLANS_DIR`, or — written before
+  #488 — the legacy `.claude/plans/issue-$N.md`; resolve via `--git-common-dir`, never a
   bare relative path, #113; #94)? Anything in it worth keeping past this session moves
   here, now — the file itself is disposable and dies at `code-ship` teardown. A rung-2
   plan's *Approach* and *Risks* sections are the likeliest candidates when the reasoning
@@ -473,9 +474,10 @@ point in the whole flow that class is ever caught, so it deliberately reads wide
 Two things that widens the net to catch, read correctly: a whole *directory* showing
 up under `-uall` is an unregistered worktree, not an edit — check `git worktree list`
 before reacting, the #273 lesson still applies. And `$PLAN`
-(`.claude/plans/issue-$N.md`) showing up here is expected when this session wrote
-one — code-start best-effort excludes it via `.git/info/exclude`, but that is
-machine-local, not a guarantee every adopter's `.gitignore` repeats it.
+(`.plans/issue-$N.md`, legacy `.claude/plans/issue-$N.md`) or a brief under `.briefs/`
+showing up here is expected when this session wrote one — `colab worktree new` and
+code-start best-effort exclude the scratch dirs via `.git/info/exclude`, but that is
+machine-local, not a guarantee every adopter's `.gitignore` repeats it (#488).
 
 ### A3. Run the repo's own quality gate
 
@@ -822,9 +824,11 @@ never by trusting this session's word for it:
       migration path and didn't already carry the signal (A3b) — or N/A, no migration
       files on this branch
 - [ ] claim(s) still held — nothing here releases them; `code-ship` B3 does
-- [ ] plan file present at `$MAIN_REPO/.claude/plans/issue-$N.md` — the **absolute main
-      checkout path**, resolved via `--git-common-dir`, not "present in `.claude/plans/`"
-      relative to wherever this checklist happens to be asserted from (#113; #94) — **or**
+- [ ] plan file present at `$PLANS_DIR/issue-$N.md` (`$MAIN_REPO/.plans/` unless
+      `COLAB_PLANS_DIR` says otherwise) or the legacy `$MAIN_REPO/.claude/plans/issue-$N.md`
+      (#488) — the **absolute main checkout path**, resolved via `--git-common-dir`, not
+      "present in `.plans/`" relative to wherever this checklist happens to be asserted
+      from (#113; #94) — **or**
       the one line `rung 0 because <reason>` in its place (#486). Absent with no such
       line is a **failed box, not a blank one**: see *A missing plan file* below
 - [ ] trunk checkout reconciled (A2b) — clean, or every dirty path worked through the
@@ -845,8 +849,11 @@ Check it here, mechanically:
 
 ```sh
 MAIN_REPO="$(dirname "$(git rev-parse --path-format=absolute --git-common-dir)")"
+case "${COLAB_PLANS_DIR:-.plans}" in /*) PLANS_DIR="$COLAB_PLANS_DIR" ;; *) PLANS_DIR="$MAIN_REPO/${COLAB_PLANS_DIR:-.plans}" ;; esac
 for n in <every carried issue>; do
-  test -f "$MAIN_REPO/.claude/plans/issue-$n.md" && echo "#$n plan present" || echo "#$n NO PLAN"
+  # configured dir first, then the legacy .claude/plans/ (#488 transition)
+  { test -f "$PLANS_DIR/issue-$n.md" || test -f "$MAIN_REPO/.claude/plans/issue-$n.md"; } \
+    && echo "#$n plan present" || echo "#$n NO PLAN"
 done
 ```
 

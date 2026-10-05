@@ -3979,16 +3979,30 @@ model tiers, and until #94 nothing carried the coordinator's read of the work ac
 that seam.
 
 **The plan is a repo-local scratch file, not an Issue comment** —
-`.claude/plans/issue-<N>.md`, in the **main checkout, outside any worktree** (exists
+`.plans/issue-<N>.md`, in the **main checkout, outside any worktree** (exists
 before the worktree, survives its teardown). Git-excluded, **never committed**. Anything
 worth keeping past the session moves to the Issue at wrap.
+
+**The directory is a setting, and it is not under `.claude/` (#488).** `COLAB_PLANS_DIR`
+overrides `.plans` (relative to the main checkout, or absolute); `COLAB_BRIEFS_DIR` does the
+same for dispatch briefs, default `.briefs`. Both used to sit under `.claude/`, which agent
+CLIs guard as configuration — so every scratch write could cost the operator a permission
+prompt. **Writers write only the configured dir. Readers** (`code-wrap`'s hand-off check,
+`code-ship`'s grade and teardown, `colab ship`'s plan journal) **read the configured dir
+first, then the legacy `.claude/plans/`**, for one transition; teardown deletes the plan
+wherever it found it. Old files are never moved. `colab worktree new` and `colab adopt
+--local` hide the configured dirs and the legacy one in the clone's shared
+`.git/info/exclude`, and a scratch file left inside a worktree never makes its teardown
+refuse (`tools/lib/scratch-dirs.js`).
 
 **Resolved via an absolute path, never bare relative (#113)** — a bare path from inside
 a worktree silently resolves to the worktree's own copy:
 
 ```sh
 MAIN_REPO="$(dirname "$(git rev-parse --path-format=absolute --git-common-dir)")"
-PLAN="$MAIN_REPO/.claude/plans/issue-<N>.md"
+case "${COLAB_PLANS_DIR:-.plans}" in /*) PLANS_DIR="$COLAB_PLANS_DIR" ;; *) PLANS_DIR="$MAIN_REPO/${COLAB_PLANS_DIR:-.plans}" ;; esac
+PLAN="$PLANS_DIR/issue-<N>.md"                       # write here
+LEGACY_PLAN="$MAIN_REPO/.claude/plans/issue-<N>.md"  # read here too, after $PLAN (#488 transition)
 ```
 
 **Three rungs, the middle the default:**
@@ -5331,7 +5345,7 @@ a service layer on a long-lived branch of its own.
 
 | need | where it lives | why it works |
 |---|---|---|
-| `.github/project.yml` — `trunk`, `production`, `deploy`, `stack`, `exposure` | the local clone's **main checkout** only, hidden by `.git/info/exclude` | every reader (`colab`, `adopt`, the audit's local source, `code-start`'s `cat`) reads the working tree, not git. `git status --porcelain -uall` does not report an excluded file, so the dirty-checkout and drift checks stay quiet. Same mechanism as the plan files (`.claude/plans/`) |
+| `.github/project.yml` — `trunk`, `production`, `deploy`, `stack`, `exposure` | the local clone's **main checkout** only, hidden by `.git/info/exclude` | every reader (`colab`, `adopt`, the audit's local source, `code-start`'s `cat`) reads the working tree, not git. `git status --porcelain -uall` does not report an excluded file, so the dirty-checkout and drift checks stay quiet. Same mechanism as the plan files (`.plans/`, legacy `.claude/plans/` — #488) |
 | labels `in-progress`, `deps-checked`, `agent-filed`, `epic` | the tracker (metadata, not files) | the load-bearing subset a session itself writes. Every other convention label is opt-in by use (`colab labels --ensure --minimal`) |
 | an operating note, `CLAUDE.local.md` | the local clone, excluded | carries the rules the owner's repo cannot: "our trunk is the integration branch; never touch the owner's trunk; autopilot stays off" |
 | the worktree subdir (`.worktrees/`) | excluded | an adopted repo hides it in its committed `.gitignore`; the owner's repo does not, so without this line every worktree shows up in the main checkout's `git status` |
