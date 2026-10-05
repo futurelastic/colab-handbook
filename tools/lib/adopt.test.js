@@ -14,7 +14,7 @@ const test = require('node:test');
 const assert = require('node:assert');
 
 const {
-  deriveTier, deriveConsequences, detectStack, detectChannelCandidates, remainingSteps, detect,
+  deriveTier, deriveConsequences, detectStack, detectChannelCandidates, remainingSteps, releaseRungSteps, detect,
   detectMigrationCandidates, detectUpstreamAgentFiles, renderClaudeShell,
   QUESTIONS, axisMissing, ROW_NAMES, EXPOSURE_RANK, GATE_CLASS, EXIT_CODE,
   exposureShapeVerdict, gateVerdict, writesGateVerdict, provenanceComment, renderDescriptor,
@@ -246,6 +246,77 @@ test('#449: remainingSteps on a fork with an upstream agent workflow names it fo
   assert.match(five[0].text, /\(--fork\)/);
   assert.match(five[1].text, /\.claude\/skills\/spec-flow, \.claude\/commands\/fix\.md/);
   assert.match(five[1].text, /code-start → code-wrap → code-ship/);
+});
+
+// --------------------------------------------------------------- releaseRungSteps (#492)
+
+test('#492: releaseRungSteps is silent unless exposure is released', () => {
+  for (const exposure of ['none', 'self', 'live']) {
+    assert.deepStrictEqual(releaseRungSteps({ cfg: { exposure, production: null, deploy: 'none' }, tags: [] }), []);
+  }
+  assert.deepStrictEqual(releaseRungSteps({ cfg: { tier: 'B' }, tags: [] }), []);
+});
+
+test('#492: released + deploy: tag -> deploy-tag block, release workflow, PHP deploy template disarmed, first final human', () => {
+  const steps = releaseRungSteps({
+    cfg: { exposure: 'released', production: 'https://app.example.invalid', deploy: 'tag' },
+    workflowTexts: { 'ci.yml': 'name: CI' }, tags: ['backup-1'], stackFiles: ['composer.json'],
+  });
+  assert.ok(steps.every((s) => s.n === 6));
+  assert.match(steps[0].text, /`route: deploy-tag` and `version-source: tag`/);
+  assert.match(steps[1].text, /colab template release-auto/);
+  assert.match(steps[1].text, /HANDBOOK_REF/);
+  assert.match(steps[1].text, /self-hosted/);
+  assert.match(steps[2].text, /colab template deploy-xserver/);
+  assert.match(steps[2].text, /DISARMED/);
+  assert.match(steps[3].text, /First final: none yet/);
+  assert.match(steps[3].text, /only when told/);
+});
+
+test('#492: released + deploy: manual on a container stack proposes deploy-container', () => {
+  const steps = releaseRungSteps({
+    cfg: { exposure: 'released', production: 'https://app.example.invalid', deploy: 'manual', runbook: 'docs/deploy.md' },
+    workflowTexts: {}, tags: ['v1.0.0'], stackFiles: ['Dockerfile'],
+  });
+  assert.match(steps[0].text, /`route: deploy-tag`/);
+  assert.ok(steps.some((s) => /colab template deploy-container/.test(s.text)));
+  assert.ok(!steps.some((s) => /First final/.test(s.text)), 'a final already exists');
+});
+
+test('#492: released with no production proposes rapid-app (team) or public-tool (public), and copies no deploy template', () => {
+  const team = releaseRungSteps({ cfg: { exposure: 'released', production: null, deploy: 'none', room: 'team' }, tags: [], stackFiles: ['composer.json'] });
+  assert.match(team[0].text, /`route: rapid-app`/);
+  assert.match(team[0].text, /PROPOSED/);
+  assert.ok(!team.some((s) => /deploy-xserver|deploy-container/.test(s.text)));
+  const pub = releaseRungSteps({ cfg: { exposure: 'released', production: null, deploy: 'none', room: 'public' }, tags: ['v0.1.0'] });
+  assert.match(pub[0].text, /`route: public-tool`/);
+});
+
+test('#492: a declared route and an existing release workflow are kept, not re-copied', () => {
+  const steps = releaseRungSteps({
+    cfg: { exposure: 'released', production: null, deploy: 'none', release: { route: 'library-fast' } },
+    workflowTexts: { 'release.yml': 'run: colab release cut --auto' }, tags: ['v2.1.0'],
+  });
+  assert.match(steps[0].text, /`release.route: library-fast` declared/);
+  assert.match(steps[1].text, /Release workflow present \(\.github\/workflows\/release\.yml\)/);
+  assert.strictEqual(steps.length, 2);
+});
+
+test('#492: unreadable tags and an unmatched released row both say so instead of guessing', () => {
+  const unread = releaseRungSteps({ cfg: { exposure: 'released', production: null, deploy: 'none' }, tags: null });
+  assert.ok(unread.some((s) => /tags could not be read/.test(s.text)));
+  const unmatched = releaseRungSteps({ cfg: { exposure: 'released', production: 'https://x.example.invalid', deploy: 'none' }, tags: [] });
+  assert.strictEqual(unmatched.length, 1);
+  assert.match(unmatched[0].text, /match no §6 row/);
+});
+
+test('#492: detect() on a released repo carries the release-rung lines inside step 6', () => {
+  const projectYml = 'trunk: main\nexposure: released\nproduction: https://app.example.invalid\ndeploy: tag\n';
+  const r = detect(io({ files: { '.github/project.yml': projectYml }, tags: [] }));
+  const six = r.remaining.filter((s) => s.n === 6);
+  assert.ok(six.length >= 3);
+  assert.ok(six.some((s) => /`route: deploy-tag`/.test(s.text)));
+  assert.deepStrictEqual([...new Set(r.remaining.map((s) => s.n))], [3, 4, 5, 6, 7, 8, 9]);
 });
 
 test('#449: remainingSteps with a migrations scan leads with a step-2 line, in all three shapes', () => {

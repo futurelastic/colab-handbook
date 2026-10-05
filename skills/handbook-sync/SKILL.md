@@ -278,6 +278,30 @@ gh api repos/<owner>/<repo>/actions/runs/<run-id>/jobs \
 A real workflow failure has nonzero steps, a named runner, and logs to read. An
 empty preflight failure has none of those — go do the runner check above instead.
 
+### `exposure: released` — the release rung is part of adoption (#492)
+
+[§9](../../CONVENTIONS.md#9-adopting-this) step 6 does not end at CI on a released repo: the
+release rung ([§6](../../CONVENTIONS.md#6-releases)) is wired in the same pass, or the repo
+never cuts a candidate until someone notices. `colab adopt` prints what is still missing as
+extra step-6 lines — read them there; this section adds only the judgement around them.
+
+- **The route.** A tag-deployed row (`deploy: tag` / `manual`) takes `deploy-tag`, finals
+  human — nothing to decide. The no-production row is the one choice §6 offers, and the
+  tool's pick (public room → `public-tool`, otherwise `rapid-app`; `library-fast` for a
+  library its consumers pin) is a **proposal**: put it to the human before writing the
+  block, exactly as the axis answers above. Always write `version-source: tag` beside it
+  (#484 — nobody bumps a manifest before an automatic cut).
+- **The release workflow** comes from `colab template release-auto`. `HANDBOOK_REF` must
+  name a ref the handbook carries (#480); on a private repo every job but `npm` takes the
+  self-hosted label the runner preflight above settled — the same red-trunk trap, on a
+  workflow that runs at every green trunk head.
+- **The deploy template**, where the tag deploys and the stack has one (`deploy-xserver` for
+  PHP on shared hosting, `deploy-container` for a container host), is copied **disarmed** —
+  only its `workflow_dispatch` trigger live — and the operator arms `push: tags` once its
+  secrets are set. Arming a deploy is never adoption's act.
+- **The first final** is the operator's. `colab release cut` refuses with no final to bump
+  from, so tell them in the report, with the command; tag `v0.1.0` yourself only when told to.
+
 ### Registration is the step that gets skipped
 
 **`colab register` ([§9](../../CONVENTIONS.md#9-adopting-this) step 7) is last on the list and first to be forgotten**, because
