@@ -944,6 +944,7 @@ function decide(facts) {
     bump: v.ok ? v.bump : (v.bump || null), overridden: v.ok ? v.overridden : null,
     signals: f.auto ? f.auto.signals || null : null, migration: v.migration || null,
     derivable,
+    versionSourceDeclared: !!(p && p.effective && p.effective.versionSourceDeclared),
     final: fast, grant, handoff,
     healthGate: fast ? p.effective.healthGate : null,
   };
@@ -970,7 +971,11 @@ function tagMessage(verdict, { sha, lastFinal }) {
     ...(verdict.migration && verdict.migration.section ? ['Migration:', '', verdict.migration.section, ''] : []),
     ...(fast && verdict.grant ? [`Automatic final granted by: release.final-grant -> decision #${verdict.grant.issue}${verdict.grant.ruledBy ? `, ruled by ${verdict.grant.ruledBy}` : ''} (an operator's per-repo grant; deleting it, or route: deploy-tag, revokes it)`] : []),
     ...(fast && verdict.healthGate ? [`Health gate: ${verdict.healthGate.url} (rollback: ${verdict.healthGate.rollback}) — the release workflow deploys this tag in the same run and verifies it there`, ''] : []),
-    ...(verdict.derivable && verdict.derivable.length ? [`Derivable manifests (release.version-source: tag, not checked against the tag): ${verdict.derivable.join(', ')}`, ''] : []),
+    // #484: a defaulted `tag` says so — the stale manifest is named on every cut, so an artifact that
+    // reads it unstamped is visible here rather than discovered by a user.
+    ...(verdict.derivable && verdict.derivable.length ? [verdict.versionSourceDeclared
+      ? `Derivable manifests (release.version-source: tag, not checked against the tag): ${verdict.derivable.join(', ')}`
+      : `Derivable manifests (release.version-source: tag — the default on a route that tags automatically, #484; not checked against the tag): ${verdict.derivable.join(', ')}`, ''] : []),
     'Conditions (CONVENTIONS.md §6):',
     ...verdict.checks.map((c) => `- ${c.condition}: ${c.detail}`),
     '',

@@ -398,11 +398,28 @@ test('--auto: inside a declared candidates-per-day window the run is a no-op (ex
 });
 
 test('refuses (#424): a manifest version that disagrees with the tag', () => {
-  const fx = fixture({ files: { 'package.json': '{"name":"p","version":"1.2.0"}' } });
+  // #484: public-tool defaults to version-source: tag; `manifest` declared keeps the refusal
+  const fx = fixture({ projectYml: `${RELEASED_YML}release:\n  version-source: manifest\n`, files: { 'package.json': '{"name":"p","version":"1.2.0"}' } });
   assertRefused(fx, cut(fx), 'manifest-version', /package\.json says 1\.2\.0/);
   commit(fx, 'package.json', 'chore: bump to 1.2.1', '{"name":"p","version":"1.2.1"}');
   const ok = cut(fx);
   assert.strictEqual(ok.code, 0, ok.out + ok.err);
+});
+
+test('#484: an automatic route with a lagging package.json and no version-source still cuts — the manifest is named derivable', () => {
+  // the measured stall: a final v1.2.0, the manifest never bumped since, nothing declared
+  const fx = fixture({ files: { 'package.json': '{"name":"p","version":"1.2.0"}' } });
+  const r = cut(fx, ['--auto']);
+  assert.strictEqual(r.code, 0, r.out + r.err);
+  assert.strictEqual(r.body.tag, 'v1.2.1-rc.1');
+  assert.match(r.body.checks.find((c) => c.condition === 'manifest-version').detail, /derivable \(release\.version-source: tag.*\): package\.json/);
+  const message = fx.g('for-each-ref', '--format=%(contents)', 'refs/tags/v1.2.1-rc.1');
+  assert.match(message, /Derivable manifests \(release\.version-source: tag — the default on a route that tags automatically, #484; not checked against the tag\): package\.json/);
+  // the second cut is not refused either — the stall was every candidate after a final, not just the first
+  commit(fx, 'src/a.js', 'fix: another', 'x\n');
+  const again = cut(fx, ['--auto']);
+  assert.strictEqual(again.code, 0, again.out + again.err);
+  assert.strictEqual(again.body.tag, 'v1.2.1-rc.2');
 });
 
 test('#438: version-source: tag — a VERSION that differs is derivable, the candidate is cut and the tag names it; manifest refuses as before', () => {

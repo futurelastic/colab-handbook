@@ -1132,7 +1132,7 @@ release:
   exports: api/public-symbols.txt              # optional — the committed public-symbol list
   npm: .                                       # optional — publish this package directory to npm (public-tool only)
   npm-gate: node scripts/check-pack-allowlist.mjs   # required with npm — the pack-allowlist gate
-  version-source: manifest                     # optional — manifest · tag (#438)
+  version-source: manifest                     # optional — manifest · tag; default tag where the machine cuts the tag (#438, #484)
   final-grant: 123                             # optional — deploy-tag / deploy-tag-fast only: the operator's recorded grant (#441, #446)
   health-url: https://app.example.com/health   # deploy-tag / deploy-tag-fast (required there) — the endpoint reporting the running version (#446, #452)
   rollback: auto                               # deploy-tag-fast only — the deploy rolls itself back on a failed check (#446)
@@ -1242,19 +1242,34 @@ passes here and is refused by the workflow itself — and failed by the audit's 
 (#432). `colab release npm` prints what the job would do
 ([`tools/README.md`, *Release npm*](tools/README.md#release-npm)).
 
-**`version-source` says where the tag's version comes from** (#438) — `manifest` (the default)
-or `tag`. It narrows and widens nothing; it only decides which file the number lives in:
+**`version-source` says where the tag's version comes from** (#438) — `manifest` or `tag`. It
+narrows and widens nothing; it only decides which file the number lives in.
+
+**The default follows the route** (#484): `tag` wherever the machine cuts the tag — automatic
+candidates (`rapid-app`, `public-tool`, `deploy-tag`) or a final `release cut --auto` tags itself
+(`deploy-tag-fast`) — and `manifest` everywhere a person cuts it (`library-fast`, a route
+narrowed to `candidates: off`, every route that cuts no tag). It is read from the route as
+narrowed, so `candidates: off` moves it back to `manifest`. Why: the release workflow never
+pushes to trunk, so on an automatic route nobody is there to bump a manifest before each cut —
+under a `manifest` default the first candidate after a final refuses at `manifest-version`, and so
+does every one after it. A declared value always wins, in either direction; an invalid one is a
+finding and leaves the route's default.
 
 - `manifest` — every declared manifest (`VERSION`, `package.json`, `Cargo.toml`,
   `pyproject.toml`) must already equal the tag at the tagged commit, or `colab release cut` /
   `finalize` refuse at `manifest-version`. With no manifest declared the tag is the version
-  either way, so the default costs a manifest-less repo nothing.
+  either way, so it costs a manifest-less repo nothing. Declare it on an automatic route only if
+  the repo really commits a manifest bump to trunk before every cut.
 - `tag` — the manifests are **derivable**: `manifest-version` skips one that differs and names
   it, and the tag message records it (`Derivable manifests …`). The repo's own release or deploy
   step stamps the number from the tag — on a deploy-only ref, or at build time — **never as a
   commit on trunk**, which the release workflow never pushes. A manifest that cannot be read at
   all (an unparsable `package.json`, an empty `VERSION`) still refuses: derivable says where a
-  number comes from, not that a broken file is fine.
+  number comes from, not that a broken file is fine. The handbook's own release steps already
+  stamp: the npm publish (`release.npm`) sets the package version from the tag on the tag's
+  checkout before publishing, and the container deploy receives the version from the tag. A
+  defaulted `tag` says so in the tag message (`… the default on a route that tags automatically`),
+  so a stale manifest stays visible on every cut.
 
 **`final-grant` lets an operator make one `deploy-tag` repo's final automatic** (#441). The
 default stays: a final tag that deploys production is a human act. An operator who chooses

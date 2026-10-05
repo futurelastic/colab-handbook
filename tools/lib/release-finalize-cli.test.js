@@ -375,7 +375,8 @@ test('--auto never combines with the human bar', () => {
 });
 
 test('#424: a manifest that disagrees with the version refuses at the cut, before any final can exist', () => {
-  const fx = fixture();
+  // #484: this route defaults to version-source: tag; `manifest` is declared so the check refuses
+  const fx = fixture(AUTO_YML + 'release:\n  version-source: manifest\n');
   dailyCandidates(fx, [6]);
   // A VERSION file that disagrees with the computed version: the cut refuses under the same named
   // check finalize runs (release-finalize.test.js covers the final's side of it).
