@@ -71,7 +71,7 @@
 //   - a git-IGNORED markdown file is not part of the doc graph and is never
 //     enumerated by any check. Scratch that never ships must not be able to
 //     fail a structural check on the repo — and it was: `.claude/plans/
-//     issue-<N>.md`, the git-excluded, `code-ship`-deleted plan file that
+//     issue-<N>.md` (since #488 `.plans/issue-<N>.md`), the git-excluded, `code-ship`-deleted plan file that
 //     `code-start` writes, contributed 7 of one control run's 10 check-6
 //     failures purely by quoting `§4` in prose, which made the repo lint clean
 //     or dirty depending on who happened to have a session open

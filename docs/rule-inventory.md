@@ -385,11 +385,11 @@ as an unticked row later — it just quietly stops existing.
 
 | # | rule | measured claim | source | kind |
 |---|---|---|---|---|
-| 240 | The session plan is a repo-local scratch file (`.claude/plans/issue-<N>.md`), never an Issue comment — coordinator and implementer sessions share one machine/filesystem, so a file is the cheapest bus and never touches the tracker. | none | #94 | hard rule |
+| 240 | The session plan is a repo-local scratch file (`.plans/issue-<N>.md`, dir overridable by `COLAB_PLANS_DIR`, never under `.claude/` — #488; readers also check the legacy `.claude/plans/` for one transition), never an Issue comment — coordinator and implementer sessions share one machine/filesystem, so a file is the cheapest bus and never touches the tracker. | none | #94 | hard rule |
 | 241 | The plan file lives in the main checkout, outside any worktree — it must exist before the worktree is created and survive after the worktree's teardown. | none | #94 | hard rule |
-| 242 | The plan file is git-excluded and never committed — every adopting repo's own `.gitignore` should carry `.claude/plans/`. | none | #94 | hard rule |
+| 242 | The plan file is git-excluded and never committed — every adopting repo's own `.gitignore` should carry `.plans/` (legacy `.claude/plans/`); `colab worktree new` also writes both to the clone's `.git/info/exclude` (`tools/lib/scratch-dirs.js`). | none | #94, #488 | hard rule |
 | 243 | Anything in the plan file worth keeping past the session moves to the Issue at wrap. | none | #94 | hard rule |
-| 244 | The plan file path must be resolved via `$(dirname "$(git rev-parse --path-format=absolute --git-common-dir)")`, never a bare relative `.claude/plans/issue-<N>.md` — from inside a worktree the bare path silently resolves to the worktree's own copy instead. | none | #113 | hard rule |
+| 244 | The plan file path must be resolved via `$(dirname "$(git rev-parse --path-format=absolute --git-common-dir)")`, never a bare relative `.plans/issue-<N>.md` — from inside a worktree the bare path silently resolves to the worktree's own copy instead. | none | #113 | hard rule |
 | 245 | Every skill touching the plan file uses the resolved `$PLAN` path — never a bare relative one. | none | #113 | hard rule |
 | 246 | The plan ladder has three rungs, the middle the default: rung 0 (nothing, trivial/self-evident oracle), rung 1 (plan-lite, default — intent, files, oracle, stop condition, 3-5 lines at session start), rung 2 (full plan, drafted by `code-plan` — triggered by `needs-plan` or a mid-session escalation). | none | #94 | hard rule |
 | 247 | Failing to state rung 1's oracle in one line is itself the signal to stop and ask on the Issue — never guess, never silently drop to rung 0. | none | #94 | hard rule |
