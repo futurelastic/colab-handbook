@@ -3293,7 +3293,9 @@ ci-grant when any condition below is not met. Fires **iff**:
    while the named check never ran. *"The one check that was failing now passes"*
    is the claim, stated exactly. It is scoped to trunk's **red set**, so an
    advisory job failing only on the branch does not refuse: the rule certifies
-   that the branch cures trunk's red, not that the branch is spotless.
+   that the branch cures trunk's red, not that the branch is spotless. A job
+   instance from a `workflow_dispatch` run counts here only under the #510 rules
+   below (*Dispatch evidence for a job a branch push skips*).
 3. the **same anti-stacking guard** ci-grant uses holds — no prior grant OR cure
    already merged while trunk has stayed continuously red since. A repo that
    auto-cures once and stays red anyway must not auto-cure again on the same
@@ -3451,6 +3453,54 @@ cannot be cured by a dry run and stays a ci-grant. So does a red job that ran
 4c has no usable duration for it. Reasoning:
 [`docs/adr/474-cure-rule-dry-run-evidence.md`](docs/adr/474-cure-rule-dry-run-evidence.md).
 
+**Dispatch evidence for a job a branch push skips (#510).** The same gap one level
+down. The workflow runs on a branch push, but one of its **jobs** is trunk-only by
+its own `if:` — true on trunk, on a schedule and on `workflow_dispatch`, false on a
+branch push — typically a long end-to-end suite moved off the branch path to keep
+branch CI short. The fix branch's push run is green with that job `skipped` (or,
+for a matrix, the red shard absent), so 2b refuses and only a ci-grant remained.
+A `workflow_dispatch` of the same workflow on the branch runs the job. A **dispatch
+instance** — a job row from a `workflow_dispatch` run that is not a #474 dry run —
+is the job's 2b (and 4a) evidence only when, on top of 2b's own tests, all of:
+
+- **W1 — same workflow.** The dispatch run's workflow **id** equals the red run's.
+  Ids are per workflow file and the same on every ref; display names are not
+  unique. Either id missing refuses.
+- **W2 — same head.** The dispatch run is at the branch's evidence head sha. A row
+  at any other sha is never evidence.
+- **W3 — the event** is `workflow_dispatch`. Ordinary instances are unchanged.
+- **W4 — the job passed and nothing beside it failed.** Completed `success`; no
+  other instance at the head red or pending. So `skipped`, `neutral`, `cancelled`
+  or absent never counts as cured, and a job that ran and **failed** on the push
+  run is not rescued by a green dispatch.
+- **W5 — the failing step ran.** Every step that went red on trunk is present by
+  exact name in the dispatch instance and concluded `success` — a job whose steps
+  were all skipped reports `success`, so job-level success alone cannot see a step
+  whose own `if:` depends on the event. Deliberately not the full executed-step
+  superset (D2/4b): a cache-conditional step that ran on trunk is skipped on a
+  cache hit, which would refuse genuine cures. A trunk red with no red step (a
+  timeout, a lost runner) leaves W5 nothing to check, and W4 decides.
+- **W6 — per job, by exact name.** Matrix shards match by their expanded names;
+  one green shard never covers another; nothing matches by prefix.
+
+W1 and W2 apply to a #474 dry run as well whenever its run reports
+`workflow_dispatch`. A green ordinary instance outranks a green dispatch
+instance, which outranks a green dry run: each rule set applies only when that
+instance is the job's sole evidence.
+
+When a cure refuses at 2b only because red jobs are absent or `skipped` on the
+branch in a workflow that (a) declares `workflow_dispatch` in the **branch's**
+copy, (b) is not dry-run capable (that keeps the #474 path), (c) has a completed,
+successful **non-dispatch** run at the head — it is branch CI, not a main-only
+workflow a dispatch could publish from — and (d) has no `workflow_dispatch` run at
+the head yet, and every later condition already holds, `colab ship` dispatches it
+**once** (`gh workflow run <file> --ref <branch>`, no inputs). It never waits — the
+job may take hours, and ship measures up to three times per invocation — and never
+dispatches from `--dry` or `--dry --json`, which report `ciCure.dispatchWanted`.
+Wait with `colab ci-wait --sha <head> --branch <branch>` sized to the job, then
+re-run ship. Reasoning:
+[`docs/adr/510-cure-rule-dispatch-evidence-for-branch-skipped-jobs.md`](docs/adr/510-cure-rule-dispatch-evidence-for-branch-skipped-jobs.md).
+
 Conditions 1+2 together mean the branch's tree passed the full suite **including
 the tests trunk is currently failing** — merging it provably turns trunk green.
 That is the one thing the human click on a ci-grant is supposed to certify,
@@ -3502,6 +3552,12 @@ no label, and no tracker comment: nothing here is a human write.
   the red in Lint) still refuses. Reasoning:
   [`docs/adr/377-cure-rule-python-dependency-manifests.md`](docs/adr/377-cure-rule-python-dependency-manifests.md),
   [`docs/adr/475-476-cure-rule-narrow-manifest-admissions.md`](docs/adr/475-476-cure-rule-narrow-manifest-admissions.md).
+- **#510 adds three, same direction.** (ix) A workflow whose `run-name:` renames
+  its dispatch runs, or whose matrix expands differently under `workflow_dispatch`,
+  cannot be matched job for job. (x) A workflow whose dispatch needs required
+  inputs fails the input-less dispatch; ship prints the command to run by hand.
+  (xi) A dispatch run whose workflow id could not be read refuses rather than fall
+  back to the display name.
 - **`package.json`'s `scripts` block is condition 5, not part of this carve-out,
   and must not be folded into it.** The carve-out's evidence cannot adjudicate a
   scripts-block weakening in the general case — it happens inside a step whose
@@ -3541,7 +3597,10 @@ and why the `timed_out` relaxation is deliberately left unwritten — is in
   so the suffix never disturbs it. A cure proven by a dry run (#474) appends
   ` via dry-run jobs <a,b>` the same way and reports `ciCure.dryRun: {jobs}`; on a
   refusal, `ciCure.dryRunWanted` names the dry run(s) that would supply the missing
-  evidence, each with its workflow, file and exact command. `ciCure.provenJobs` (#297) lists the red jobs
+  evidence, each with its workflow, file and exact command. A cure proven by a
+  `workflow_dispatch` run (#510) appends ` via dispatch jobs <a,b>` and reports
+  `ciCure.dispatch: {jobs}`; on a refusal, `ciCure.dispatchWanted` names the
+  dispatch(es) that would supply the evidence, in the same shape. `ciCure.provenJobs` (#297) lists the red jobs
   2b proved passing on the branch — a consumer rendering cure eligibility reads
   it (and `ok`/`reason`) rather than re-deriving a verdict from check-runs. A
   cure that changed a manifest under #475/#476's admissions appends ` admitted

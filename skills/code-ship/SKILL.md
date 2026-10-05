@@ -638,6 +638,17 @@ green.
   every step that ran on trunk passed in the dry run. A red inside a `[publish]`
   step never cures this way: that is a ci-grant. A bystander never dispatches one,
   and containment refuses it anyway.
+- **The red is in a trunk-only JOB of a branch workflow** (its `if:` skips it on a
+  branch push — a long E2E suite, say) **and the branch is the patch?** Its evidence
+  is a plain `workflow_dispatch` of that workflow at the branch head (#510,
+  `CONVENTIONS.md` *Cure rule*, *Dispatch evidence for a job a branch push skips*).
+  A real `colab ship` dispatches it once and refuses until it completes; `--dry`
+  prints the command (`gh workflow run <file> --ref <branch>`). Wait with
+  `colab ci-wait --sha <head> --branch <branch> --timeout <the job's usual length>`.
+  If that is longer than B1a's 15-minute bound, do not sit on it: record a defer
+  whose clears-on is that dispatch run finishing, and re-run ship then. The cure
+  admits it only from the same workflow file at the same head, with the step that
+  failed on trunk passing in it; `skipped` is never a pass.
 - **The cure refuses, the branch is the patch, and trunk declares `ci-grant: reviewer`?**
   You may open the door yourself (#504, `CONVENTIONS.md` *Red-trunk exemption*). Review the
   branch against the red first — does its head repair exactly the checks that are red? —

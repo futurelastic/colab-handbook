@@ -210,7 +210,7 @@ test('#297: shipCureJobEvidence reads EVERY run at the branch head and tags each
   const src = fs.readFileSync(path.join(REPO_ROOT, 'tools', 'colab'), 'utf8');
   const fn = src.slice(src.indexOf('function shipCureJobEvidence('), src.indexOf('function ciCurePayload('));
   assert.match(fn, /git\.ghRunsForCommit\(repoAbs, branch, evRun\.sha\)/);
-  assert.equal((fn.match(/workflowName: r\.workflowName/g) || []).length, 2, 'both sides tag their jobs');
+  assert.equal((fn.match(/jobs\.map\(\(j\) => \(\{ \.\.\.j, workflowName: r\.workflowName/g) || []).length, 2, 'both sides tag their jobs');
 });
 
 test('#321: the CI-Cure trailer keeps its anchored `CI-Cure:` prefix — computeAntiStacking greps on it', () => {
@@ -311,4 +311,55 @@ test('#474: ship --dry --json on the self-clearing fixture reports no dry-run fi
   const body = JSON.parse(r.out);
   assert.strictEqual(body.ciCure, null);
   assert.doesNotMatch(r.err, /refusing workflow run/);
+});
+
+// --- #510: dispatch evidence wiring ---------------------------------------------------------------
+
+test('#510: shipCureJobEvidence tags workflowId/event/headSha, passes branchSha, returns the run rows', () => {
+  const src = fs.readFileSync(path.join(REPO_ROOT, 'tools', 'colab'), 'utf8');
+  const fn = src.slice(src.indexOf('function shipCureJobEvidence('), src.indexOf('function ciCurePayload('));
+  assert.match(fn, /workflowId: r\.workflowId \?\? null,\s*event: r\.event \|\| null, headSha: r\.headSha \|\| null/);
+  assert.match(fn, /shapeJobEvidence\(\{ redRunJobs, branchRunJobs, branchSha: evRun\.sha \}\)/);
+  assert.match(fn, /branchRuns: branchRuns\.map/);
+  // The trunk side carries the workflow id too — W1 compares the two.
+  const red = src.slice(src.indexOf('function trunkRedRunJobs('), src.indexOf('function priorExemptionRedJobs('));
+  assert.match(red, /workflowId: r\.workflowId \?\? null/);
+});
+
+test('#510: shipCiCure only MEASURES the dispatch plan; the one dispatch sits on the real path, after the --dry return', () => {
+  const src = fs.readFileSync(path.join(REPO_ROOT, 'tools', 'colab'), 'utf8');
+  const cure = src.slice(src.indexOf('function shipCiCure('), src.indexOf('function shipCureJobEvidence('));
+  assert.match(cure, /dispatchable: dispatchable\.map\(\(w\) => w\.name\), branchRuns:/, 'the dispatchable set is handed to the pure verdict');
+  assert.doesNotMatch(cure, /shipDispatchCure\(|ghWorkflowDispatch\(/, 'measurement must never dispatch');
+  const calls = src.match(/(?<!function )shipDispatchCure\(/g) || [];
+  assert.strictEqual(calls.length, 1, 'exactly one dispatch site');
+  const ship = src.slice(src.indexOf('function cmdShip('));
+  const at = ship.indexOf('shipDispatchCure(repoAbs, sess');
+  assert.ok(at > 0, 'the dispatch site is inside cmdShip');
+  assert.ok(ship.indexOf('return dryOk ? 0 : 1;') < at, 'the dispatch comes after the --dry branch returned');
+  const dryJson = src.slice(src.indexOf('function cmdShipDryJson('), src.indexOf('function cmdShipDryJson(') + 20000);
+  assert.doesNotMatch(dryJson.slice(0, dryJson.indexOf('\n}\n')), /shipDispatchCure|ghWorkflowDispatch/, '--dry --json never dispatches');
+});
+
+test('#510: a plain dispatch is gated on a static read of the BRANCH copy — name, workflow_dispatch, and NOT dry-run capable', () => {
+  const src = fs.readFileSync(path.join(REPO_ROOT, 'tools', 'colab'), 'utf8');
+  const fn = src.slice(src.indexOf('function dispatchableWorkflows('));
+  const body = fn.slice(0, fn.indexOf('\n}\n') + 3);
+  assert.match(body, /workflowNameOf\(r\.stdout\)/);
+  assert.match(body, /parseWorkflowOn\(r\.stdout\)\.events\.has\('workflow_dispatch'\)/);
+  assert.match(body, /r\.stdout\.includes\(ciCure\.DRY_RUN_STEP\)\) continue/, 'a dry-run-capable file keeps the #474 path');
+  const disp = src.slice(src.indexOf('function shipDispatchCure('));
+  const dbody = disp.slice(0, disp.indexOf('\n}\n') + 3);
+  assert.match(dbody, /r\.event === 'workflow_dispatch'/, 'only an existing DISPATCH run suppresses a second dispatch');
+  assert.match(dbody, /colab ci-wait --sha/, 'tells the caller how to wait — ship never does');
+});
+
+test('#510: ciCurePayload carries dispatch and dispatchWanted; the trailer names the door', () => {
+  const src = fs.readFileSync(path.join(REPO_ROOT, 'tools', 'colab'), 'utf8');
+  const fn = src.slice(src.indexOf('function ciCurePayload('));
+  const body = fn.slice(0, fn.indexOf('\n}\n') + 3);
+  assert.match(body, /dispatch: c\.dispatch \? \{ jobs: c\.dispatch\.jobs\.slice\(\) \} : null/);
+  assert.match(body, /dispatchWanted: c\.dispatchCure \? .* : null/);
+  const tr = src.slice(src.indexOf('function ciCureTrailerLine('));
+  assert.match(tr.slice(0, tr.indexOf('\n}\n')), / via dispatch jobs /);
 });
