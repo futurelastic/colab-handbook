@@ -1495,9 +1495,13 @@ than guessed.
   were a live end-to-end proof that only a human-driven session could produce. The
   re-started implementer found nothing to do and held a concurrency slot for about an hour,
   until a human-side watch parked the issue. So when you choose `--refs` over closing:
-  - **The leftover is not code** (a live proof, an ops check, a measurement): park #N in
-    the same ship. Add `deferred:<kind>` + `review-by:<date>`, plus a `Hold:` line naming
-    who posts the proof (*Disposition* and *Holds*, §5).
+  - **The leftover is a check only a person can run** (a UI click-through, a look on a
+    real device, a live end-to-end proof): do not `--refs` it. Close #N and add one row to
+    the repo's single open `Human verify:` issue (§5 *Human verify*, #491).
+  - **The leftover is another non-code wait** (a measurement a machine can take, a date,
+    an outside party): park #N in the same ship. Add `deferred:<kind>` +
+    `review-by:<date>`, plus a `Hold:` line naming who posts the proof (*Disposition* and
+    *Holds*, §5).
   - **The leftover is code**: prefer `Remainder: #M` and let #N close. The remainder
     issue is a start candidate of its own and can carry its own hold. #N kept open for
     code is a second start candidate for the same work.
@@ -2095,7 +2099,9 @@ instead of `Closes #N`.
   issue references it automatically.
 - **`colab ship --refs <N[,M]>`** — explicit, per-ship, for an unlabelled issue. An
   issue kept open this way for a leftover that is **not** code must also be parked in the
-  same step, or it reads as startable again (#385, §4 *Merging*).
+  same step, or it reads as startable again (#385, §4 *Merging*). A leftover that is
+  only a check a person must run is not a reason to keep the issue open: close it and
+  add a row to the `Human verify:` issue (*Human verify*, below).
 
 The claim is released unconditionally either way. `tracking` is deliberately **not** in
 the convention label set ([§9](#9-adopting-this)) — its absence breaks no check, so adoption does not
@@ -2107,6 +2113,40 @@ this after the push and warns to reopen by hand. The reverse is not the same kin
 edge: a stray `Refs #N` written while N was open, now one of the branch's own
 `Closes #N` — `ship` drops the stale `Refs` before the push rather than shipping a commit
 that says both (#58).
+
+#### Human verify — a person-only check closes the issue and becomes one row (#491)
+
+`--refs` + a hold was built for an issue with work still left in it. It does not fit an
+issue whose code is all on trunk and whose only leftover is a check only a person can run:
+clicking through a UI, a look on a real device, an end-to-end run against a live account.
+Parking each of those separately puts one stop per finished issue in front of the person.
+In one adopted desktop-app repo, five finished issues sat open for days that way. Each was
+parked as `deferred:measurement` with a `review-by:` date, so the board read as a wait on
+an outside party, and the maintainer never saw that the wait was his. The maintainer's
+ruling: collect the checks in one place instead of stopping after every small UI change.
+
+**So when the code is all on trunk and what is left is a check only a human can run:**
+
+- The ship **closes** the issue: `Closes #N`, not `--refs`.
+- In the same step, it appends **one row** to the repo's single open issue titled
+  `Human verify: …`. The row gives the source issue, the steps to run, and the evidence
+  wanted. If no such issue is open, the ship files one, labelled `delivery:ops` so it is
+  routed to a person and never started as code. Where the repo declares a `holds:` label
+  for human-owned waits, that label goes on too.
+- **A row that fails becomes a new bug issue**, linked to the row's source issue. The
+  source issue stays closed: its code shipped, and the failure is new work.
+- The person ticks rows off one sitting at a time. When every row is ticked, they close
+  the `Human verify:` issue with `colab close`, and the next ship that needs one files a
+  fresh one.
+
+What this does **not** change:
+
+- **A code remainder** still takes `Remainder: #M` (or `--refs` plus a hold), as in §4
+  *Merging*.
+- **A `tracking` issue** is still `Refs #N`, as above.
+- **`deferred:measurement` is only for waits a machine can measure**: a metric, a
+  threshold, a counter. "A person has to look at it" is not a measurement, and a
+  `review-by:` date on it only hides whose turn it is.
 
 ### Who decided it should exist
 
@@ -2370,7 +2410,8 @@ Three fixed `deferred:*` kinds, each naming what the park is waiting on:
 
 - **`deferred:date`** — parked until a specific date. Pair with `review-by:<date>`.
 - **`deferred:measurement`** — parked until a metric crosses a threshold. Name the metric
-  and the threshold on the issue.
+  and the threshold on the issue. A machine must be able to take the measurement. A check
+  only a person can run goes on the `Human verify:` issue instead (*Human verify*, above).
 - **`deferred:external-party`** — parked until someone outside this repo acts. Name who.
   When that act is tracked somewhere, point the wake at it (`issueClosed:<owner>/<repo>#<n>`,
   *Holds* below). When it is not, pair the park with `review-by:<date>`.

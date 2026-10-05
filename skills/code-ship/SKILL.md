@@ -863,7 +863,22 @@ until you have. Ticking the remaining boxes, or an explicit, deliberate
 (#385).** It keeps $N open, and once B3 releases the claim an open, unheld issue
 reads as startable code work again. So in the **same step** as the ship:
 
-- **Leftover is not code** (a live proof, an ops check, a measurement) → park it:
+- **Leftover is a check only a person can run** (a UI click-through, a look on a real
+  device, a live end-to-end proof), with all the code on trunk → **do not `--refs`
+  it.** Let `Closes #N` stand, and in this same step add one row to the repo's single
+  open `Human verify:` issue (CONVENTIONS.md [§5](../../CONVENTIONS.md#human-verify--a-person-only-check-closes-the-issue-and-becomes-one-row-491), *Human verify*, #491):
+  ```sh
+  HV=$(gh issue list --state open --search 'in:title "Human verify:"' --json number -q '.[0].number')
+  [ -n "$HV" ] || HV=$(gh issue create --title "Human verify: checks waiting on a person" \
+    --label delivery:ops --body $'Each row is a check only a person can run. Tick it when it passes; a failed row becomes a new bug issue.\n' \
+    | sed 's#.*/##')        # also add this repo's human-wait label from `holds:`, if it declares one
+  gh issue comment "$HV" --body $'- [ ] #'"$N"$' — <steps to run>\n  Evidence wanted: <what the person posts back>'
+  ```
+  Stopping once per finished issue is what this replaces. In one adopted repo, five
+  finished issues sat open for days as `deferred:measurement`, and the person they
+  were waiting on never saw them.
+- **Leftover is another non-code wait** (a measurement a machine can take, a date, an
+  outside party) → park it:
   ```sh
   gh issue edit $N --add-label deferred:measurement --add-label review-by:<YYYY-MM-DD>
   gh issue comment $N --body $'Hold: deferred:measurement — owner: <who posts the proof> — wake: review-by:<YYYY-MM-DD>\nBecause: <what is left, and why no code session can produce it>'
@@ -1189,7 +1204,10 @@ is a human integration event of a promotion's weight.
   the blessed door this is automatic for an issue carrying the `tracking` label, or opt in
   per-ship with `colab ship --refs <N>`; the claim is still released either way. A
   `--refs`'d issue kept open for a non-code leftover gets its hold in this same step
-  (B1b above, #385). A `tracking`-labelled one needs none. When
+  (B1b above, #385). A leftover that is only a check a person must run does not keep
+  the issue open: close it and add a row to the `Human verify:` issue (B1b above, #491).
+  `--refs` plus a hold stays for a code remainder and for `tracking` issues. A
+  `tracking`-labelled one needs no hold. When
   that issue is finished later — its live check passed, its last item done — close it
   with `colab close <N> --comment "<evidence>"`, never a bare `gh issue close`: the bare
   close leaves any claim standing and tells no observer, which kept a closed issue
