@@ -418,8 +418,11 @@ test('RELEASE_BRANCH is main: the on-trunk check reads the release branch, never
 
 // ---- pre-tag checks (#424) ---------------------------------------------------------------------
 
+// #484: public-tool defaults to version-source: tag, so a refusing manifest needs `manifest` declared.
+const PINNED = releasePolicy.evaluateRelease({ ...RELEASED, release: { 'version-source': 'manifest' } });
+
 test('decide: each pre-tag check refuses under its own name', () => {
-  const man = rc.decide(facts({ manifests: [{ file: 'package.json', version: '1.2.0' }] }));
+  const man = rc.decide(facts({ policy: PINNED, manifests: [{ file: 'package.json', version: '1.2.0' }] }));
   assert.deepStrictEqual(man.refusals.map((c) => c.condition), ['manifest-version']);
   const shallow = rc.decide(facts({ ancestry: { ok: false, shallow: true } }));
   assert.deepStrictEqual(shallow.refusals.map((c) => c.condition), ['on-trunk']);
@@ -632,9 +635,22 @@ test('#467 standing: a no-op and an ok cut carry none', () => {
 });
 
 test('#467 standing: a wrong manifest is standing, an unread one is not', () => {
-  const wrong = rc.decide(autoFacts({ manifests: [{ file: 'package.json', version: '9.9.9' }] }));
+  const wrong = rc.decide(autoFacts({ policy: PINNED, manifests: [{ file: 'package.json', version: '9.9.9' }] }));
   assert.deepStrictEqual(wrong.standing, ['manifest-version']);
-  assert.deepStrictEqual(rc.decide(autoFacts({ manifests: null })).standing, []);
+  assert.deepStrictEqual(rc.decide(autoFacts({ policy: PINNED, manifests: null })).standing, []);
+});
+
+test('#484 default: on an automatic route a lagging manifest is derivable, not a standing refusal', () => {
+  const v = rc.decide(autoFacts({ manifests: [{ file: 'package.json', version: '1.2.0' }] }));
+  assert.strictEqual(v.ok, true, JSON.stringify(v.refusals));
+  assert.strictEqual(v.tag, 'v1.2.1-rc.1');
+  assert.deepStrictEqual(v.derivable, ['package.json']);
+  assert.deepStrictEqual(v.standing, []);
+  assert.strictEqual(v.versionSourceDeclared, false);
+  const msg = rc.tagMessage(v, { sha: 'abc', lastFinal: 'v1.2.0' });
+  assert.match(msg, /Derivable manifests \(release\.version-source: tag — the default on a route that tags automatically, #484; not checked against the tag\): package\.json/);
+  // an unreadable manifest still refuses under the default — derivable is not "broken is fine"
+  assert.deepStrictEqual(rc.decide(autoFacts({ manifests: [{ file: 'package.json', error: 'package.json does not parse (x)' }] })).standing, ['manifest-version']);
 });
 
 test('#467 every standing condition is one decide() can report', () => {

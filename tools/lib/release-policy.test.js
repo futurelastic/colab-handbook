@@ -12,7 +12,7 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { deriveDefault, evaluateRelease, ROUTES, ROW_ROUTES, ROUTE_POLICY } = require('./release-policy.js');
+const { deriveDefault, evaluateRelease, defaultVersionSource, ROUTES, ROW_ROUTES, ROUTE_POLICY } = require('./release-policy.js');
 
 const pick = (d) => ({ row: d.row, route: d.route, candidates: d.candidates, final: d.final, testPeriodDays: d.testPeriodDays });
 const eff = (e) => ({ route: e.route, candidates: e.candidates, testPeriodDays: e.testPeriodDays, final: e.final });
@@ -352,19 +352,62 @@ test('#443: no route derives a candidates-per-day cap — the newest candidate a
   assert.equal(r.effective.candidatesPerDay, null);
 });
 
-test('#438: version-source is tag | manifest, defaults to manifest, and widens nothing', () => {
+test('#438: version-source is tag | manifest, a declared value wins, and widens nothing', () => {
   const base = { exposure: 'released', deploy: 'tag', production: 'https://x.example' };
-  assert.equal(evaluateRelease(base).effective.versionSource, 'manifest');
+  assert.equal(evaluateRelease(base).effective.versionSource, 'tag');
   const tag = evaluateRelease({ ...base, release: { 'version-source': 'tag' } });
   assert.deepEqual(tag.findings, []);
   assert.equal(tag.effective.versionSource, 'tag');
+  assert.equal(tag.effective.versionSourceDeclared, true);
   assert.equal(tag.effective.final, 'human');
+  const manifest = evaluateRelease({ ...base, release: { 'version-source': 'manifest' } });
+  assert.deepEqual(manifest.findings, []);
+  assert.equal(manifest.effective.versionSource, 'manifest');
+  assert.equal(manifest.effective.versionSourceDeclared, true);
+  // an invalid value is a finding and leaves the route's own default (#484), never reaches effective
   const bad = evaluateRelease({ ...base, release: { 'version-source': 'git' } });
   assert.match(bad.findings.map((f) => f.text).join('|'), /release\.version-source is "git", expected "tag" or "manifest"/);
-  assert.equal(bad.effective.versionSource, 'manifest');
+  assert.equal(bad.effective.versionSource, 'tag');
+  assert.equal(bad.effective.versionSourceDeclared, false);
   // carried through a declared route too
   const routed = evaluateRelease({ exposure: 'released', deploy: 'none', production: null, release: { route: 'rapid-app', 'version-source': 'tag' } });
   assert.equal(routed.effective.versionSource, 'tag');
+});
+
+test('#484: version-source defaults per route — tag wherever the machine cuts the tag, manifest wherever a person does', () => {
+  const vs = (cfg) => evaluateRelease(cfg).effective;
+  const pub = { exposure: 'released', deploy: 'none', production: null };
+  const tagRow = { exposure: 'released', deploy: 'tag', production: 'https://x.example' };
+  // machine-cut: automatic candidates, or a final tagged by `release cut --auto` itself
+  assert.equal(vs(pub).route, 'public-tool');
+  assert.equal(vs(pub).versionSource, 'tag');
+  assert.equal(vs(pub).versionSourceDeclared, false);
+  assert.equal(vs({ ...pub, release: { route: 'rapid-app' } }).versionSource, 'tag');
+  assert.equal(vs(tagRow).route, 'deploy-tag');
+  assert.equal(vs(tagRow).versionSource, 'tag');
+  const fast = vs({ ...tagRow, release: { route: 'deploy-tag-fast', 'final-grant': 7, 'health-url': 'https://x.example/health', rollback: 'auto' } });
+  assert.equal(fast.route, 'deploy-tag-fast');
+  assert.equal(fast.versionSource, 'tag');
+  // a manual deploy still gets machine-cut candidates (deploy-tag), so it defaults to tag too
+  assert.equal(vs({ exposure: 'released', deploy: 'manual', production: 'https://x.example', runbook: 'r.md' }).versionSource, 'tag');
+  // also through an absent or empty release: block (the early returns)
+  assert.equal(vs({ ...pub, release: null }).versionSource, 'tag');
+  // person-cut: no automatic tag, so the manifest is bumped by the person who tags
+  assert.equal(vs({ ...pub, release: { route: 'library-fast' } }).versionSource, 'manifest');
+  assert.equal(vs({ ...pub, release: { candidates: 'off' } }).versionSource, 'manifest');
+  assert.equal(vs({ exposure: 'self', deploy: 'none', production: null }).versionSource, 'manifest');
+  assert.equal(vs({ exposure: 'none', deploy: 'none', production: null }).versionSource, 'manifest');
+  assert.equal(vs({ exposure: 'live', deploy: 'push-main', production: 'https://x.example' }).versionSource, 'manifest');
+  assert.equal(vs({ tier: 'B' }).versionSource, 'manifest');
+  // a declared value wins, in either direction
+  const pinned = vs({ ...pub, release: { 'version-source': 'manifest' } });
+  assert.equal(pinned.versionSource, 'manifest');
+  assert.equal(pinned.versionSourceDeclared, true);
+  assert.equal(vs({ ...pub, release: { route: 'library-fast', 'version-source': 'tag' } }).versionSource, 'tag');
+  // and the pure helper matches the table
+  assert.equal(defaultVersionSource(ROUTE_POLICY['public-tool']), 'tag');
+  assert.equal(defaultVersionSource(ROUTE_POLICY['library-fast']), 'manifest');
+  assert.equal(defaultVersionSource(null), 'manifest');
 });
 
 test('#441: final: auto on deploy-tag stands only with an operator grant', () => {

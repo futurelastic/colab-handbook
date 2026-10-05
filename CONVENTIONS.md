@@ -4331,15 +4331,30 @@ key per app**, for a non-admin user owning only that app's stack — never an ad
 server runs its own platform instance, so the configuration is that host's URL, environment and
 stack, by DNS name. Every redeploy recreates the containers, even with an unchanged compose file.
 
-**A manifest's version may be derivable (#438).** By default the pre-tag check refuses a tag
-that disagrees with any declared manifest (`VERSION`, `package.json`, `Cargo.toml`,
-`pyproject.toml`) at the tagged commit, so a human bumps the manifest on trunk first. A repo
-whose number exists only once the tag does — computed versions, a `VERSION` baked into an image
-— declares [`release.version-source: tag`](project.schema.md#release--optional): the check
-skips a differing manifest, names it, and the tag message records it as derivable. The repo's
-own release or deploy step stamps the number from the tag — on a deploy-only ref, or at build
-time — **never as a commit on trunk**: the release workflow never pushes one, and a stamp on
-trunk would put a version in the tree before the release it names exists.
+**A manifest's version may be derivable (#438), and on an automatic route it is by default
+(#484).** Under [`release.version-source: manifest`](project.schema.md#release--optional) the
+pre-tag check refuses a tag that disagrees with any declared manifest (`VERSION`, `package.json`,
+`Cargo.toml`, `pyproject.toml`) at the tagged commit, so a human bumps the manifest on trunk
+first. Under `tag` the check skips a differing manifest, names it, and the tag message records it
+as derivable. The repo's own release or deploy step stamps the number from the tag — on a
+deploy-only ref, or at build time — **never as a commit on trunk**: the release workflow never
+pushes one, and a stamp on trunk would put a version in the tree before the release it names
+exists.
+
+The default follows who cuts the tag. Where the machine does — automatic candidates, or a final
+`release cut --auto` tags itself — it is `tag`, because nobody is there to bump a manifest
+before each cut: under `manifest` the first candidate after a final refuses, and so does every
+one after it, a stall that reads only as a warning in a green run. Where a person cuts the tag it
+stays `manifest`. A declared value wins either way; the cut and the final read the same one, so
+a candidate cut under `tag` is never refused as a final under `manifest`.
+
+**Under `tag`, any version a user sees reads the tag, never the trunk manifest.** A `--version`,
+an about page, a health endpoint reporting the running version: each reads the tag or a stamp
+made from it at release or build time. The handbook's own release steps already stamp — the npm
+publish sets the package version from the tag before publishing, and the container deploy
+receives it from the tag. An artifact that reads its trunk manifest unstamped shows the last
+number someone typed, so stamp it, or declare `version-source: manifest` and bump on trunk before
+every cut.
 
 **On `public-tool`, the same run may publish to npm (#433).** A repo opts in with
 [`release.npm` + `release.npm-gate`](project.schema.md#release--optional) — the package directory

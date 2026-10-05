@@ -18,7 +18,7 @@
  *     exports: <path>         # #422 — a committed list of public symbols, one per line
  *     npm: <dir>              # #433 — publish this package directory to npm from release-auto.yml
  *     npm-gate: <command>     # #433 — the pack-allowlist gate, run before every npm publish
- *     version-source: tag     # #438 — tag | manifest: is a manifest's version checked, or derivable?
+ *     version-source: tag     # #438 — tag | manifest: is a manifest's version checked, or derivable? (#484: default per route)
  *     final-grant: 123        # #441 — an operator's recorded decision letting deploy-tag's final be automatic
  *     health-url: https://…   # #446/#452 — deploy-tag or deploy-tag-fast (required there): the public endpoint reporting the running version
  *     rollback: auto          # #446 — deploy-tag-fast only: the deploy rolls itself back when that check fails
@@ -48,12 +48,14 @@
 const axisAuthority = require('./axis-authority.js');
 
 const KEYS = Object.freeze(['route', 'candidates', 'candidates-per-day', 'test-period', 'final', 'guard-run', 'guard-result', 'exports', 'npm', 'npm-gate', 'version-source', 'final-grant', 'health-url', 'rollback', 'final-spacing']);
-// #438: where the version a tag names comes from. `manifest` (the default) — every declared manifest
-// (VERSION, package.json, Cargo.toml, pyproject.toml) must already equal the tag, so a human bumps it
-// on trunk first. `tag` — the tag is the version and the manifests are DERIVABLE: the pre-tag check
-// skips them, and the repo's own release/deploy step stamps the number from the tag (on a deploy-only
-// ref or at build time — never a commit on trunk). Neither widens nor narrows a route: it decides
-// which file is the source of a number, never whether a tag is cut.
+// #438: where the version a tag names comes from. `manifest` — every declared manifest (VERSION,
+// package.json, Cargo.toml, pyproject.toml) must already equal the tag, so a human bumps it on trunk
+// first. `tag` — the tag is the version and the manifests are DERIVABLE: the pre-tag check skips
+// them, and the repo's own release/deploy step stamps the number from the tag (on a deploy-only ref
+// or at build time — never a commit on trunk). Neither widens nor narrows a route: it decides which
+// file is the source of a number, never whether a tag is cut.
+// #484: the DEFAULT is per route (defaultVersionSource below) — `tag` wherever the machine cuts the
+// tag, `manifest` wherever a person does. A declared value always wins, in either direction.
 const VERSION_SOURCES = Object.freeze(['manifest', 'tag']);
 // #441: the one route whose final may become automatic by an operator's grant, and the row it must
 // sit on — `deploy: tag` only. `deploy: manual` stays human: a person runs that deploy anyway.
@@ -171,10 +173,23 @@ function deriveDefault(cfg) {
   };
 }
 
+/**
+ * #484: the version-source a policy defaults to when `release.version-source` is not declared.
+ * `tag` wherever the machine cuts the tag — automatic candidates (rapid-app, public-tool,
+ * deploy-tag) or a final tagged by `release cut --auto` itself (deploy-tag-fast's on-green-head):
+ * the release workflow never pushes to trunk, so nobody is there to bump a manifest before each
+ * cut, and a `manifest` default refuses the first candidate after a final and every one after it.
+ * `manifest` everywhere a person cuts the tag (and can bump the file first). Read from the
+ * EFFECTIVE policy, so a `candidates: off` narrowing moves the default back to `manifest`.
+ */
+function defaultVersionSource(p) {
+  return p && (p.candidates === 'auto' || p.finalize === 'on-green-head') ? 'tag' : 'manifest';
+}
+
 /** A route's policy as an effective-shaped object (no `why`). */
 function routePolicy(route) {
   const p = ROUTE_POLICY[route];
-  return p ? { route, candidates: p.candidates, candidatesPerDay: p.candidatesPerDay, testPeriodDays: p.testPeriodDays, final: p.final, finalize: p.finalize, npm: null, versionSource: 'manifest', finalGrant: null, healthGate: null, healthUrl: null, finalSpacingHours: null } : null;
+  return p ? { route, candidates: p.candidates, candidatesPerDay: p.candidatesPerDay, testPeriodDays: p.testPeriodDays, final: p.final, finalize: p.finalize, npm: null, versionSource: defaultVersionSource(p), versionSourceDeclared: false, finalGrant: null, healthGate: null, healthUrl: null, finalSpacingHours: null } : null;
 }
 
 /** `6h` -> 6, `2d` -> 48; anything else (including `30m`, `0h`) -> null. */
@@ -227,7 +242,8 @@ function evaluateRelease(cfg) {
   const fromDerived = () => ({
     route: derived.route, candidates: derived.candidates, candidatesPerDay: derived.candidatesPerDay,
     testPeriodDays: derived.testPeriodDays, final: derived.final, finalize: derived.finalize, npm: null,
-    versionSource: 'manifest', finalGrant: null, healthGate: null, healthUrl: null, finalSpacingHours: null,
+    versionSource: defaultVersionSource(derived), versionSourceDeclared: false,
+    finalGrant: null, healthGate: null, healthUrl: null, finalSpacingHours: null,
   });
   let effective = fromDerived();
   const findings = [];
@@ -358,11 +374,14 @@ function evaluateRelease(cfg) {
     } else effective.testPeriodDays = days;
   }
 
-  // #438: where the tag's version comes from.
+  // #438: where the tag's version comes from. #484: the default follows the route as narrowed so
+  // far (a `candidates: off` narrowing hands the cut back to a person, and with it `manifest`);
+  // a valid declared value wins either way, an invalid one is a finding and leaves the default.
+  effective.versionSource = defaultVersionSource(effective);
   if ('version-source' in raw) {
     const v = raw['version-source'];
     if (!VERSION_SOURCES.includes(v)) fail(`release.version-source is ${JSON.stringify(v)}, expected "tag" or "manifest"`);
-    else effective.versionSource = v;
+    else { effective.versionSource = v; effective.versionSourceDeclared = true; }
   }
 
   // #446: the fast route's own keys — only there, and the floor on spacing. #452: `health-url` is
@@ -443,5 +462,5 @@ module.exports = {
   VERSION_SOURCES, GRANTABLE_ROUTE, GRANTABLE_ROW, GRANTABLE_ROUTES, FAST_ROUTE, FAST_KEYS, FAST_ONLY_KEYS, HEALTH_URL_ROUTES, ROLLBACK, FINAL_SPACING_HOURS,
   parseGrantIssue, finalGrantVerdict, parseSpacing, validHealthUrl, fastRoutePrerequisites,
   KEYS, INPUT_KEYS, NPM_KEYS, NPM_ROUTES, CANDIDATES, FINAL, TEST_PERIOD_DAYS, ROUTES, ROUTE_POLICY, ROW_ROUTES,
-  deriveDefault, evaluateRelease, parseTestPeriod, routePolicy,
+  deriveDefault, evaluateRelease, parseTestPeriod, routePolicy, defaultVersionSource,
 };

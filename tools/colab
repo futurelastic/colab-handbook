@@ -1258,8 +1258,8 @@ Refuses, naming each failed condition (all are reported, not just the first):
   switch-dependencies  a colab:switch marker is malformed, or a finished switch needs one that is not
   manifest-version     the tag does not equal the version a manifest declares (VERSION, package.json,
                        Cargo.toml [package], pyproject.toml [project]/[tool.poetry]) — none declared
-                       passes: the tag is the version (#424). With release.version-source: tag (#438)
-                       a differing manifest is DERIVABLE — skipped, named in the tag message, and
+                       passes: the tag is the version (#424). Under release.version-source: tag (#438;
+                       the default where the machine cuts the tag, #484) a differing manifest is DERIVABLE — skipped, named in the tag message, and
                        stamped from the tag by the repo's own release step (never on trunk)
   on-trunk             the commit is not an ancestor of main, or the checkout is shallow (#424)
   outranks-final       the version is not strictly greater than the highest final tag (#424)
@@ -1850,8 +1850,8 @@ Conditions (--json checks[].condition; required:false means reported, not blocki
 
   manifest-version  on-trunk  outranks-final — #424's pre-tag checks, required before any final:
                 the final equals every declared manifest version, its commit is on main (a shallow
-                checkout refuses), and it outranks the highest final tag. With release.version-source:
-                tag (#438) a manifest that differs is skipped as derivable and named, not refused
+                checkout refuses), and it outranks the highest final tag. Under release.version-source:
+                tag (#438; the default where the machine cuts the tag, #484) a manifest that differs is skipped as derivable and named, not refused
 
   final-grant  migration-grant — #441, only where release.final-grant lets a deploy-tag final be
                 automatic: the decision issue it names must still carry a recorded, trusted, not

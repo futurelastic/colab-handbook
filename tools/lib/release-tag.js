@@ -156,7 +156,9 @@ function manifestVersions(readFile) {
  *               checkout cannot answer (null = not measured)
  *   tags        every tag name in the repo — the finals among them are what the version must outrank
  *   trunk       the trunk name, for the detail text
- *   versionSource  #438 — 'manifest' (default): every declared manifest must equal the tag. 'tag'
+ *   versionSource  #438 — 'manifest' (this function's default; the policy's own default is per
+ *               route since #484 — release-policy.js defaultVersionSource): every declared manifest
+ *               must equal the tag. 'tag'
  *               (`release.version-source: tag`): the manifests are DERIVABLE — the repo's own
  *               release/deploy step stamps them from the tag, never on trunk — so a manifest that
  *               differs is skipped and named, not refused. A manifest that cannot be read at all

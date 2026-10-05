@@ -323,7 +323,9 @@ test('trunkGreenVerdict: periodEnd bounds the window', () => {
 
 test('decide: each pre-tag check refuses a final under its own name', () => {
   const name = (v) => v.checks.filter((c) => c.required && !c.ok).map((c) => c.condition);
-  const man = rf.decide(facts({ manifests: [{ file: 'VERSION', version: '1.2.0' }] }));
+  // #484: AUTO (public-tool) defaults to version-source: tag, so a refusing manifest is declared
+  const pinned = releasePolicy.evaluateRelease({ trunk: 'main', exposure: 'released', production: null, deploy: 'none', release: { 'version-source': 'manifest' } });
+  const man = rf.decide(facts({ policy: pinned, manifests: [{ file: 'VERSION', version: '1.2.0' }] }));
   assert.strictEqual(man.state, 'refused');
   assert.deepStrictEqual(name(man), ['manifest-version']);
   const shallow = rf.decide(facts({ ancestry: { ok: false, shallow: true } }));
@@ -331,6 +333,15 @@ test('decide: each pre-tag check refuses a final under its own name', () => {
   const back = rf.decide(facts({ tags: ['v1.2.0', 'v1.4.0', 'v1.2.1-rc.1'] }));
   assert.strictEqual(back.state, 'refused');
   assert.deepStrictEqual(name(back), ['outranks-final']);
+});
+
+test('#484: under the default, a lagging manifest does not refuse a final — cut and finalize agree', () => {
+  const blocked = (v) => v.checks.filter((c) => c.required && !c.ok).map((c) => c.condition);
+  for (const policy of [AUTO, HUMAN]) {
+    assert.strictEqual(policy.effective.versionSource, 'tag');
+    const v = rf.decide(facts({ policy, manifests: [{ file: 'VERSION', version: '1.2.0' }] }));
+    assert.ok(!blocked(v).includes('manifest-version'), `${policy.effective.route}: ${JSON.stringify(blocked(v))}`);
+  }
 });
 
 // ---- announcing the final (#426) ----------------------------------------------------------------
