@@ -29,6 +29,9 @@ export const ALLOWED = [
   /^LICENSE$/,
   /^tools\/colab$/,
   /^tools\/lib\/[A-Za-z0-9._-]+\.js$/,
+  // The tracker codec (#497): its modules, their types, and the golden samples that specify it.
+  /^tools\/lib\/codec\/[A-Za-z0-9._-]+\.(js|d\.ts)$/,
+  /^tools\/lib\/codec\/samples\.json$/,
   /^templates\/[A-Za-z0-9._-]+$/,
   /^audit\/audit\.mjs$/,
 ];

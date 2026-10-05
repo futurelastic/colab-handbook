@@ -307,6 +307,8 @@ the tie **deterministically**, so both racers independently reach the *same* ver
    Each live claim carries `login`, `host`, `machine`, `session` (parsed from the comment body), and
    the comment's authoritative GitHub `createdAt`. The rule is a pure function of the comment list
    (`tools/lib/claim-comments.js`), so every reader of the same comments gets the same live set.
+   The comment format itself — both markers and every field — is an encode/decode pair in
+   `tools/lib/codec/claim.js`, pinned byte for byte by the golden samples in `codec/samples.json`.
 3. Identify **ours** = the **earliest** live claim that is the *same claimant* as us (see *Identity
    granularity* below) — **earliest**, not latest: a same-holder correction comment (the previous
    section) must never restart our own priority and cost us a race our first comment had already won.

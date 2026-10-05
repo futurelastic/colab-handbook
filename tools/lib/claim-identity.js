@@ -168,8 +168,9 @@ function mergeClaimRecord(existing, incoming, { sameHolder } = {}) {
 
 /**
  * Does `v` look like a session ID a consumer could actually JOIN on — a URL, or a `session_…`
- * token embedded in one (#306)? The repo's ONE answer to that question: `parseSessionField`
- * (tools/colab) decodes a claim comment's `· session <field>` tail with exactly this test, and
+ * token embedded in one (#306)? The repo's ONE answer to that question — defined in codec/claim.js
+ * since #497 and re-exported here: `parseSessionField` (codec/claim.js) decodes a claim comment's
+ * `· session <field>` tail with exactly this test, and
  * `warnWeakIdentity` warns with it. Two copies of a shape rule drift, and this one decides
  * whether a hold can ever be released by its own owner, so there is one.
  *
@@ -182,11 +183,7 @@ function mergeClaimRecord(existing, incoming, { sameHolder } = {}) {
  * False for '' / null: absence is `warnWeakIdentity`'s and `requirePlaceIdentity`'s subject
  * (#11/#242), never this predicate's — callers test blankness first.
  */
-function looksLikeSessionId(v) {
-  const s = String(v == null ? '' : v).trim();
-  if (!s) return false;
-  return /^https?:\/\//.test(s) || /session_[\w-]+/.test(s);
-}
+const { looksLikeSessionId } = require('./codec/claim'); // one copy of the rule, in the codec (#497)
 
 module.exports = {
   DEFAULT_COMPONENTS, FINE_COMPONENTS,
