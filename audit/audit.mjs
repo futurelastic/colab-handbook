@@ -109,6 +109,8 @@ const trustHumansLib = require("../tools/lib/trust-humans.js");
 const hermeticLib = require("../tools/lib/hermetic.js");
 // #493: the `tree-reuse:` opt-out — read through the same module `colab ship` reads citations with.
 const treeGreenLib = require("../tools/lib/tree-green.js");
+// #503: `ship-gate-workflows:` / `ship-ignore-workflows:` — read through the same module ship's CI gate uses.
+const verifyRunsLib = require("../tools/lib/verify-runs.js");
 // #410: the optional `gate:` block — read through the same module the skills name.
 const gateLib = require("../tools/lib/gate.js");
 // #417: CLAUDE.md as a thin shell over AGENTS.md — the @-import resolver and the tool-block table,
@@ -1361,6 +1363,16 @@ function auditRepo(target, ctx) {
       const tr = treeGreenLib.parseTreeReuse(cfg);
       info.treeReuse = tr.declared ? tr.value : null;
       if (!tr.valid) fail(tr.reason);
+    }
+
+    // ---- ship-gate-workflows / ship-ignore-workflows (#503) ---------------------
+    // Which workflow runs at trunk's head count as "trunk CI" for ship. Absent = the runs that verify
+    // the code (push / pull_request triggered); post-CI release/deploy runs are set aside. An invalid
+    // list fails: the reader ignores it and applies the default, so the declaration does nothing.
+    {
+      const vp = verifyRunsLib.parsePolicy(cfg);
+      info.shipCiWorkflows = vp.gate || vp.ignore.length ? { gate: vp.gate, ignore: vp.ignore } : null;
+      for (const why of vp.problems) fail(why);
     }
 
     // ---- gate (#410) ----------------------------------------------------------

@@ -176,5 +176,14 @@ test('#461 the measured case: release skipped twice then success at trunk → gr
   const ci = trunkCiRow(fx);
   assert.strictEqual(ci.ok, true, JSON.stringify(ci));
   assert.doesNotMatch(ci.detail, /conclusion=skipped/);
-  assert.match(ci.detail, /2 runs at main@\w+: all success — set aside 2 superseded runs \(a newer run of the same workflow decides, #461\): release \(skipped, run 20\), release \(skipped, run 10\)/);
+  // #503: a workflow_run release does not verify the code, so all three of its runs are now set aside
+  // before #461's per-workflow reduction ever sees them — the verdict is CI's alone, still green.
+  assert.match(ci.detail, /1 run at main@\w+: success — set aside 3 runs that do not verify the code \(post-CI release\/deploy lane, #503\): release \(success, run 30; event: workflow_run\), release \(skipped, run 20; event: workflow_run\), release \(skipped, run 10; event: workflow_run\)/);
+
+  // #461's reduction itself, on a workflow that DOES count (push-triggered): stale attempts superseded.
+  const pushRows = rows.map((r) => ({ ...r, event: 'push' }));
+  fx.setRows(pushRows, pushRows);
+  const ci2 = trunkCiRow(fx);
+  assert.strictEqual(ci2.ok, true, JSON.stringify(ci2));
+  assert.match(ci2.detail, /2 runs at main@\w+: all success — set aside 2 superseded runs \(a newer run of the same workflow decides, #461\): release \(skipped, run 20\), release \(skipped, run 10\)/);
 });

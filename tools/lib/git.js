@@ -823,12 +823,12 @@ function ghLabelEditDescription(repo, name, description) {
  * when tools/lib/ci-verdict.js finds the run WEDGED rather than merely slow. Nothing here waits or
  * polls — it reports what is true at read time and lets the caller decide.
  */
-function ghRunForSha(repo, branch, limit = 10, remote = remoteInfo(repo).name || 'origin') {
+function ghRunForSha(repo, branch, limit = 10, remote = remoteInfo(repo).name || 'origin', opts = {}) {
   const head = run('git', ['ls-remote', remote, `refs/heads/${branch}`], { cwd: repo });
   if (!head.ok) return null;
   const sha = (head.stdout.split('\n')[0] || '').split('\t')[0].trim();
   if (!sha) return null; // branch does not exist on the remote
-  return ghRunForCommit(repo, branch, sha, limit);
+  return ghRunForCommit(repo, branch, sha, limit, opts);
 }
 
 /**
@@ -955,8 +955,8 @@ function ghRunsForRef(repo, ref, sha, limit = 20) {
   return runs.filter((x) => x && x.headSha === sha);
 }
 
-function ghRunForCommit(repo, branch, sha, limit = 10) {
-  return summarizeRunsForCommit(ghRunsForCommit(repo, branch, sha, limit), sha);
+function ghRunForCommit(repo, branch, sha, limit = 10, opts = {}) {
+  return summarizeRunsForCommit(ghRunsForCommit(repo, branch, sha, limit), sha, opts);
 }
 
 /**
@@ -981,8 +981,8 @@ function ghRunsAtCommit(repo, sha, limit = 100) {
  * empty trunk read `none`: the branch-filtered list was measured returning nothing for a trunk sha
  * whose green run existed, and clearing on its own a minute later. Null on failure, as elsewhere.
  */
-function ghRunForCommitAnyRef(repo, sha, limit = 50) {
-  return summarizeRunsForCommit(ghRunsAtCommit(repo, sha, limit), sha);
+function ghRunForCommitAnyRef(repo, sha, limit = 50, opts = {}) {
+  return summarizeRunsForCommit(ghRunsAtCommit(repo, sha, limit), sha, opts);
 }
 
 /**
@@ -1029,6 +1029,7 @@ function excludedRunSummary(rows) {
   return rows.map((x) => ({
     workflowName: x.workflowName || null, status: x.status || null,
     conclusion: x.conclusion || null, databaseId: x.databaseId || null,
+    ...(x.setAsideWhy ? { why: x.setAsideWhy } : {}),
   }));
 }
 
@@ -1043,15 +1044,28 @@ function excludedRunSummary(rows) {
  * #461: the repo-owned rows are then reduced to the newest run per workflow (newestRunPerWorkflow,
  * below); the rows that reduction set aside ride along as an additive `superseded` list, same shape
  * as `excluded`, present only when non-empty. Every quantifier below runs over the reduced set.
+ *
+ * #503: `opts.verifying` (a tools/lib/verify-runs.js policy, `{gate, ignore}`) narrows the owned rows
+ * to the runs that VERIFY the code — push / pull-request triggered, or the declared set — BEFORE the
+ * per-workflow reduction; the rest (a `workflow_run` release, a scheduled finalize, a deploy) ride
+ * along as `setAside`, each with its reason. Opt-in: without `opts.verifying` nothing changes, so
+ * readers that never asked (release finalize, the base-ci advisory, ci-grant) read exactly as before.
  */
-function summarizeRunsForCommit(allForSha, sha) {
+function summarizeRunsForCommit(allForSha, sha, opts = {}) {
   if (allForSha === null) return null;
   const dropped = allForSha.filter((x) => !isRepoOwnedRun(x));
-  const owned = dropped.length ? allForSha.filter(isRepoOwnedRun) : allForSha;
+  let owned = dropped.length ? allForSha.filter(isRepoOwnedRun) : allForSha;
+  let setAside = [];
+  if (opts && opts.verifying) {
+    const split = require('./verify-runs').splitVerifying(owned, opts.verifying);
+    owned = split.counted;
+    setAside = split.setAside;
+  }
   const { heads, superseded } = newestRunPerWorkflow(owned);
   const extra = {
     ...(dropped.length ? { excluded: excludedRunSummary(dropped) } : {}),
     ...(superseded.length ? { superseded: excludedRunSummary(superseded) } : {}),
+    ...(setAside.length ? { setAside: excludedRunSummary(setAside) } : {}),
   };
   const r = summarizeRepoOwnedRuns(heads, sha);
   return { ...r, ...extra };
