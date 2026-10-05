@@ -15,6 +15,7 @@ const { spawnSync } = require('child_process');
 
 const state = require('./lib/state');
 const git = require('./lib/git');
+const tracker = require('./lib/tracker'); // every gh call goes through tracker-github.js (#500)
 const ports = require('./lib/ports');
 const stamp = require('./lib/stamp');
 const releaseTag = require('./lib/release-tag');
@@ -1323,16 +1324,13 @@ no-op; 1 when refused.
 function readAllIssuesForSwitches(repoAbs) {
   const LIMIT = 5000;
   // title/labels/createdAt/url are additive (#339): `release finalize` finds its tracking issue in the same read.
-  const r = spawnSync('gh', ['issue', 'list', '--state', 'all', '--limit', String(LIMIT), '--json', 'number,state,stateReason,body,title,labels,createdAt,closedAt,url'],
-    { cwd: repoAbs, encoding: 'utf8', maxBuffer: 512 * 1024 * 1024 });
-  if (r.status !== 0) return null;
-  try {
-    const list = JSON.parse(r.stdout);
-    // A full page may be a truncated one — an unread marker is not a cleared one.
-    return Array.isArray(list) && list.length < LIMIT ? list : null;
-  } catch (_) {
-    return null;
-  }
+  const r = tracker.forRepo(repoAbs).issueListAll({
+    limit: LIMIT, fields: ['number', 'state', 'stateReason', 'body', 'title', 'labels', 'createdAt', 'closedAt', 'url'],
+    maxBuffer: 512 * 1024 * 1024,
+  });
+  const list = r.data; // null: the read failed or was unparseable
+  // A full page may be a truncated one — an unread marker is not a cleared one.
+  return Array.isArray(list) && list.length < LIMIT ? list : null;
 }
 
 /** [{status, path, content}] for every path changed between `from` (null = the empty tree) and `sha`; null on a git failure. */
@@ -1673,15 +1671,14 @@ function cmdReleaseCut(argv) {
       announced = announceCarried(repoAbs, { tagNames: [...tags, verdict.tag], exclude, version: verdict.tag, sha });
       if (fastFacts.tracking) {
         commentOnce(repoAbs, fastFacts.tracking.number, { state: 'finalized', tag: verdict.tag }, `**${verdict.tag}** tagged final on \`${shortSha(sha)}\` by route deploy-tag-fast — the release workflow deploys it in this run.`);
-        const r = spawnSync('gh', ['issue', 'close', String(fastFacts.tracking.number)], { cwd: repoAbs, encoding: 'utf8' });
-        if (r.status !== 0) warn(`could not close #${fastFacts.tracking.number}: ${String(r.stderr || '').split('\n')[0]}`);
+        const r = tracker.forRepo(repoAbs).issueClose(fastFacts.tracking.number);
+        if (!r.ok) warn(`could not close #${fastFacts.tracking.number}: ${String(r.stderr || '').split('\n')[0]}`);
       }
     } else if (handoff && verdict.version) {
       let num = fastFacts.tracking ? fastFacts.tracking.number : null;
       if (!num && issues !== null) {
-        const c = spawnSync('gh', ['issue', 'create', '--title', releaseFinalize.trackingTitle(verdict.version), '--body', releaseCut.handoffTrackingBody(verdict.version)], { cwd: repoAbs, encoding: 'utf8' });
-        const m = c.status === 0 ? /\/issues\/([0-9]+)/.exec(c.stdout || '') : null;
-        if (m) num = Number(m[1]);
+        const c = tracker.forRepo(repoAbs).issueCreate({ title: releaseFinalize.trackingTitle(verdict.version), body: releaseCut.handoffTrackingBody(verdict.version) });
+        if (c.number) num = c.number;
         else warn(`could not open the tracking issue for ${verdict.version} (${String(c.stderr || '').split('\n')[0] || 'no issue URL returned'}) — the hand-off is printed here only`);
       }
       if (num) {
@@ -1757,8 +1754,8 @@ function publishPrerelease(repoAbs, { tag, lastFinal, message, final = false }) 
   // #446: a deploy-tag-fast final is published as a full release, marked latest.
   const kind = final ? 'release' : 'pre-release';
   if (!isGhUsable(repoAbs)) return { ok: false, detail: `${kind} NOT published: gh not usable (${ghUnusableWhy(repoAbs)})` };
-  const view = spawnSync('gh', ['release', 'view', tag, '--json', 'tagName'], { cwd: repoAbs, encoding: 'utf8' });
-  if (view.status === 0) return { ok: true, detail: `${tag} already has a GitHub Release — left as it is` };
+  const view = tracker.forRepo(repoAbs).releaseView(tag);
+  if (view.ok) return { ok: true, detail: `${tag} already has a GitHub Release — left as it is` };
   let notes;
   try {
     notes = lastFinal ? buildReleaseNotes(repoAbs, `${lastFinal}..${tag}`, lastFinal).out : `## ${tag}\n\nFirst release.\n`;
@@ -1769,8 +1766,8 @@ function publishPrerelease(repoAbs, { tag, lastFinal, message, final = false }) 
   const file = path.join(os.tmpdir(), `colab-release-notes-${process.pid}-${tag}.md`);
   fs.writeFileSync(file, notes);
   try {
-    const r = spawnSync('gh', final ? releaseCut.finalReleaseArgs(tag, file) : releaseCut.prereleaseArgs(tag, file), { cwd: repoAbs, encoding: 'utf8' });
-    if (r.status !== 0) return { ok: false, detail: `${kind} NOT published: gh release create ${tag} failed (${(r.stderr || '').split('\n')[0] || r.status})` };
+    const r = tracker.forRepo(repoAbs).releaseCreate(tag, { notesFile: file, final });
+    if (!r.ok) return { ok: false, detail: `${kind} NOT published: gh release create ${tag} failed (${(r.stderr || '').split('\n')[0] || r.code})` };
     return { ok: true, detail: `published the GitHub ${kind} ${tag}` };
   } finally {
     try { fs.unlinkSync(file); } catch (_) { /* best-effort */ }
@@ -1963,10 +1960,9 @@ function cmdReleaseFinalize(argv) {
   const t0 = version0 ? trackings.get(version0) : null;
   if (newest && t0 && !t0.error && !t0.number && !opts.dry) {
     const body = releaseFinalize.trackingBody({ version: version0, row: policy.derived.row, final: policy.effective.final, testPeriodDays: policy.effective.testPeriodDays });
-    const c = spawnSync('gh', ['issue', 'create', '--title', releaseFinalize.trackingTitle(version0), '--body', body], { cwd: repoAbs, encoding: 'utf8' });
-    const m = c.status === 0 ? /\/issues\/([0-9]+)/.exec(c.stdout || '') : null;
-    if (!m) trackings.set(version0, { error: `could not open the tracking issue for ${version0} (${String(c.stderr || '').split('\n')[0] || 'no issue URL returned'})` });
-    else { trackings.set(version0, { number: Number(m[1]), url: (c.stdout || '').trim(), createdAt: now, held: false }); trackingCreated = true; }
+    const c = tracker.forRepo(repoAbs).issueCreate({ title: releaseFinalize.trackingTitle(version0), body });
+    if (!c.number) trackings.set(version0, { error: `could not open the tracking issue for ${version0} (${String(c.stderr || '').split('\n')[0] || 'no issue URL returned'})` });
+    else { trackings.set(version0, { number: c.number, url: c.url, createdAt: now, held: false }); trackingCreated = true; }
   }
 
   // #441: an operator-granted automatic final — the decision it names is resolved once per run, from
@@ -2069,8 +2065,8 @@ function cmdReleaseFinalize(argv) {
     if (!r.ok) warn(`could not comment on #${num}: ${String(r.stderr || '').split('\n')[0]}`);
   };
   const close = (num) => {
-    const r = spawnSync('gh', ['issue', 'close', String(num)], { cwd: repoAbs, encoding: 'utf8' });
-    if (r.status !== 0) warn(`could not close #${num}: ${String(r.stderr || '').split('\n')[0]}`);
+    const r = tracker.forRepo(repoAbs).issueClose(num);
+    if (!r.ok) warn(`could not close #${num}: ${String(r.stderr || '').split('\n')[0]}`);
   };
   // #426: one "Released in vX.Y.Z" comment on every issue the version carries (release-finalize.js
   // carriedIssues — the closing references in (previous final, sha]). Idempotent by event marker.
@@ -2470,7 +2466,7 @@ function cmdClose(argv) {
   if (already) {
     print(`  #${num} is already closed — skipping the close; releasing and notifying anyway`);
   } else {
-    const r = git.run('gh', ['issue', 'close', String(num), '--reason', ghReason], { cwd: repoAbs });
+    const r = tracker.forRepo(repoAbs).issueClose(num, { reason: ghReason });
     if (!r.ok) {
       process.stderr.write(`✗ gh issue close #${num} failed (${(r.stderr || '').split('\n')[0] || r.code}) — claim untouched.\n`);
       return 1;
@@ -4463,11 +4459,10 @@ function computeAntiStacking(repoAbs, trunk, trunkIsRed) {
     // local offset is positive (tools/lib/ci-grant.js's wentGreenSince doc comment has the full
     // failure).
     let wentGreen = false;
-    const runsR = git.run('gh', ['run', 'list', '--branch', trunk, '-L', '100',
-      '--json', 'conclusion,status,createdAt'], { cwd: repoAbs });
-    if (runsR.ok) {
+    const runsR = tracker.forRepo(repoAbs).runList({ branch: trunk, limit: 100, fields: ['conclusion', 'status', 'createdAt'] });
+    if (runsR.data) {
       try {
-        wentGreen = ciGrant.wentGreenSince(JSON.parse(runsR.stdout), priorGrantMerge.at);
+        wentGreen = ciGrant.wentGreenSince(runsR.data, priorGrantMerge.at);
       } catch (_) { /* unparseable — treat conservatively as "cannot prove it went green" */ }
     }
     redContinuousSincePriorGrant = !wentGreen;
@@ -6967,9 +6962,10 @@ function measureHeadCandidate(repoAbs, { candidatesAuto, mainRef, lastRelease, o
   const tagsAtSha = tagsR.ok ? tagsR.stdout.split('\n').map((t) => t.trim()).filter(Boolean) : [];
   let runs = null;
   if (isGhUsable(repoAbs)) {
-    const r = spawnSync('gh', ['run', 'list', '--branch', 'main', '--commit', sha, '-L', '50', '--json', 'status,conclusion,event,createdAt,updatedAt,workflowName'],
-      { cwd: repoAbs, encoding: 'utf8' });
-    if (r.status === 0) { try { const j = JSON.parse(r.stdout); runs = Array.isArray(j) ? j : null; } catch (_) { runs = null; } }
+    const r = tracker.forRepo(repoAbs).runList({
+      branch: 'main', commit: sha, limit: 50, fields: ['status', 'conclusion', 'event', 'createdAt', 'updatedAt', 'workflowName'],
+    });
+    runs = Array.isArray(r.data) ? r.data : null;
   }
   const promotion = dualTrunk ? measurePromotion(repoAbs, { sha, trunk, remote, fetched: fetchTrunk }) : null;
   return releaseCut.headCandidateVerdict({
@@ -11500,7 +11496,7 @@ function shipCloseSpentContainers(repoAbs, closedIssues, { sha, target } = {}) {
       const cm = git.ghIssueComment(repoAbs, pnum, body);
       if (!cm.ok) warnDeferred(`could not post the container-close comment on #${pnum} — left OPEN`);
       if (!cm.ok) break;
-      const r = git.run('gh', ['issue', 'close', String(pnum), '--reason', 'completed'], { cwd: repoAbs });
+      const r = tracker.forRepo(repoAbs).issueClose(pnum, { reason: 'completed' });
       if (!r.ok) { warnDeferred(`could not close container #${pnum}: ${(r.stderr || '').split('\n')[0]}`); break; }
       print(`  closed container #${pnum} — all ${c.total} sub-issue(s) closed (#371)`);
       for (const d of containerClose.containerDeliveryLabels(parent.labels)) warn(`container #${pnum} carried ${d} — a container has no deliverable of its own (#371)`);
@@ -11606,7 +11602,7 @@ function shipEvidenceClose({ repoAbs, st, sess, target, trunk, gh, closeIssues, 
       `write. The zero-diff fact was measured from git: ${mode.why}.${shipSess}`;
     const c = git.ghIssueComment(repoAbs, num, body);
     if (!c.ok) warn(`could not post the evidence-close comment on #${num} — closing anyway`);
-    const r = git.run('gh', ['issue', 'close', String(num), '--reason', 'completed'], { cwd: repoAbs });
+    const r = tracker.forRepo(repoAbs).issueClose(num, { reason: 'completed' });
     if (!r.ok) { skipped.push({ num, why: `gh issue close failed: ${(r.stderr || '').split('\n')[0]}` }); continue; }
     closed.push(num);
     print(`  #${num} closed with evidence.`);
@@ -14212,11 +14208,12 @@ function cmdDeliver(argv) {
   if (!tip || !ownerTip) return fail(`${remote}/${trunk} or ${remote}/${owner.branch} does not resolve after the fetch`);
 
   // 2. every delivery PR, any state
-  const r = git.run('gh', ['pr', 'list', '--base', owner.branch, '--head', trunk, '--state', 'all', '--limit', '50',
-    '--json', 'number,url,state,mergedAt,headRefOid,title'], { cwd: repoAbs });
+  const r = tracker.forRepo(repoAbs).prList({
+    base: owner.branch, head: trunk, state: 'all', limit: 50, fields: ['number', 'url', 'state', 'mergedAt', 'headRefOid', 'title'],
+  });
   if (!r.ok) return fail(`could not list pull requests: ${(r.stderr || '').split('\n')[0]}`);
-  let list;
-  try { list = JSON.parse(r.stdout || '[]'); } catch (_) { return fail('gh pr list returned unparseable JSON'); }
+  const list = r.stdout ? r.data : []; // an empty reply is no PRs here, as it always was
+  if (list === null) return fail('gh pr list returned unparseable JSON');
   const prs = ownerBranch.classifyPrs(list);
 
   // 3. the undelivered range: since the last merged delivery's head when that head is still on
@@ -14268,7 +14265,7 @@ function cmdDeliver(argv) {
     return 1;
   }
   if (d.action === 'refresh') {
-    const e = git.run('gh', ['pr', 'edit', String(prs.open.number), '--title', text.title, '--body', text.body], { cwd: repoAbs });
+    const e = tracker.forRepo(repoAbs).prEdit(prs.open.number, { title: text.title, body: text.body });
     if (!e.ok) return fail(`could not refresh PR #${prs.open.number}: ${(e.stderr || '').split('\n')[0]}`);
     out.done = `refreshed PR #${prs.open.number} (${prs.open.url || ''}) — waiting on the owner`;
   } else {
