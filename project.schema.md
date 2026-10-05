@@ -450,6 +450,11 @@ deploys; the field cannot express otherwise. Promotion follows
 [CONVENTIONS §6's release routes](CONVENTIONS.md#6-releases). The grant lives in the repo file (not the caller's flags) so autonomy is
 a property of the repo's risk profile, reviewed in a commit like any other change.
 
+On a repo adopting for the first time, `colab adopt --autonomy auto-trunk --land`
+(`COLAB_HUMAN=1`, `--answered-by`) records the grant and commits the descriptor straight
+to trunk, so the branch that adds CI is already judged by it
+([CONVENTIONS.md §9](CONVENTIONS.md#9-adopting-this), #481).
+
 ### `ship-batch` — optional
 
 ```yaml

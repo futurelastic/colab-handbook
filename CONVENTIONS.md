@@ -5031,6 +5031,30 @@ only. Resolution order: `--config` flag > `~/.colab/repos.txt` > bundled example
    fallback, deriving `tier` instead, is a real fallback that consumes the absence; the
    other four have none, so declining them would just recreate #282's shape under a
    different row).
+
+   **Land the descriptor on trunk in the same human act (#481).** On a freshly adopted
+   repo, the first branch is the one that *creates* trunk's rules — the descriptor with
+   the maintainer's grant, and the repo's CI. `colab ship` reads autonomy from the
+   descriptor **trunk** carries, so that branch is judged by rules trunk does not have
+   yet, and a human ends up hand-merging it although the grant was already given. The
+   maintainer's adoption command is the human step, so it can land its own output:
+   ```sh
+   COLAB_HUMAN=1 colab adopt --exposure self --autonomy auto-trunk \
+     --answered-by "<name>" --land          # run on the checkout standing on trunk
+   ```
+   `--autonomy auto-trunk` records the grant with the same provenance comment as every
+   answer, behind the same bar as `writes: direct` (it expands what an agent may do);
+   `manual` is never gated, and `ceremony: light` refuses it. `--land` commits exactly
+   what this run wrote — the descriptor, plus the thin-shell `CLAUDE.md`/`AGENTS.md` when
+   written now — to trunk as its own commit and pushes it. It requires `COLAB_HUMAN=1`
+   **and** `--answered-by`, with no terminal substitute, since it writes trunk; it refuses
+   off trunk, with `--local`, and when origin's trunk is ahead. Everything else in the
+   adoption — CI workflow, guards, docs — then ships through the normal lane under the
+   grant. Trunk's tree has no workflow file at that point, so its `none` cannot hide a red
+   ([§4](#4-branches-and-commits), #482): the follow-up branch that adds CI passes `trunk CI
+   green` on its **own** green run, with no human step, and the CI it adds grades every
+   branch after it. `ci-granted` stays the door only for a trunk that already has workflows
+   and still has no run at its sha.
 2. **Write `.github/project.yml`** ([§3](#3-githubprojectyml--the-marker)) with the
    answers from step 1 — **and declare `migrations:`** when the repo keeps migrations
    anywhere but `database/migrations/` or `prisma/migrations/`
