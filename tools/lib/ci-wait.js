@@ -94,6 +94,8 @@ function restRow(x) {
     headSha: x.head_sha, status: x.status, conclusion: x.conclusion || null,
     createdAt: x.created_at || null, databaseId: x.id, workflowName: x.name || null,
     event: x.event || null, url: x.html_url || null,
+    // #510: the workflow FILE's id — the cure rule's same-workflow test, which a display name cannot answer.
+    workflowId: x.workflow_id ?? null,
   };
 }
 

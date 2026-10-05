@@ -884,12 +884,15 @@ function ghRunsForCommit(repo, branch, sha, limit = 10) {
     // workflow — a workflow whose only run at the sha was cancelled never ran its suite.
     // event is additive (#451): summarizeRunsForCommit drops `dynamic` rows (workflows the repo
     // does not own) before it computes a verdict, and can only do that if the row says so.
-    '--json', 'headSha,status,conclusion,createdAt,databaseId,workflowName,event'], { cwd: repo });
+    // workflowDatabaseId is additive (#510): the cure rule's same-workflow test reads the workflow's
+    // id, never its display name; mapped to `workflowId`, the name the REST row (ci-wait restRow) uses.
+    '--json', 'headSha,status,conclusion,createdAt,databaseId,workflowName,workflowDatabaseId,event'], { cwd: repo });
   if (!r.ok) return null;
   let runs;
   try { runs = JSON.parse(r.stdout); } catch (_) { return null; }
   if (!Array.isArray(runs)) return null;
-  const forSha = runs.filter((x) => x && x.headSha === sha);
+  const forSha = runs.filter((x) => x && x.headSha === sha)
+    .map(({ workflowDatabaseId, ...x }) => ({ ...x, workflowId: workflowDatabaseId ?? null }));
   // #413: an empty filter over a sha that HAS a green run was measured intermittently and never
   // reproduced. Opt-in trace of what the read actually returned, so the next occurrence says
   // whether gh answered nothing, answered other shas, or failed in a way that parsed as [].

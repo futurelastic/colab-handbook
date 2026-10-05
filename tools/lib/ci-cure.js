@@ -177,6 +177,33 @@
  * (a runner that never picked it up) on the carve-out path: 4c has no usable duration for it and
  * refuses, which is the safe direction and a deliberately unmade loosening, like the timeout case.
  *
+ * DISPATCH EVIDENCE FOR A JOB A BRANCH PUSH SKIPS (#510). One level below #474: the WORKFLOW runs on a
+ * branch push, but one of its JOBS is trunk-only by its own `if:` (true on trunk, on a schedule and on
+ * `workflow_dispatch`, false on a branch push) — an E2E suite moved off the branch path to keep branch CI
+ * short. A branch push then shows that job skipped (or, for an unexpanded matrix, absent), 2b refuses,
+ * and a human ci-grant was the only door. The same workflow dispatched on the branch runs the job. A
+ * DISPATCH INSTANCE — a job row from a run with `event: workflow_dispatch` that is not a #474 dry run —
+ * counts as the job's evidence only when, on top of 2b's own tests (completed `success`; no instance at
+ * the head red or pending — so `skipped`, `neutral`, `cancelled` or absent never counts, and a job that
+ * ran and FAILED on the push run is never rescued by a green dispatch):
+ *
+ *   W1. SAME WORKFLOW — the dispatch run's workflow id equals the red run's. Ids are per file and the same
+ *       on every ref; the display name is not, two files can share a `name:`. Either id missing refuses.
+ *   W2. SAME HEAD — the dispatch run's head sha is the branch evidence sha. Rows at any other sha are
+ *       dropped by `shapeJobEvidence`; the check is repeated here so it holds without the caller.
+ *   W5. THE FAILING STEP RAN — every step that went red on trunk is present by exact name in the dispatch
+ *       instance and concluded `success`. GitHub reports a job whose steps were all skipped as `success`,
+ *       so job-level success alone cannot see a step whose own `if:` depends on the event. Deliberately
+ *       NOT the full executed-step superset (4b/D2): a cache-conditional step that ran on trunk is skipped
+ *       on a cache hit, which would refuse genuine cures. A trunk red with no red STEP (a timeout, a lost
+ *       runner) leaves W5 nothing to check, and job-level success decides — a stated limit.
+ *   W6. PER JOB, BY EXACT NAME — the existing `jobKey`; matrix shards match by expanded name, one green
+ *       shard never covers another, and nothing is matched by prefix.
+ *
+ * W1 and W2 apply to a #474 dry-run instance too when its row says `workflow_dispatch` — the same
+ * same-name hole. A green ordinary instance outranks a green dispatch instance, which outranks a green
+ * dry run: each rule set applies only when that instance is the job's sole evidence.
+ *
  * PURE BY CONSTRUCTION, identical posture to ci-grant.js / migration-grant.js / readiness.js /
  * shipguard.js: signals in, verdict out. No git, no network, no `gh`. The caller (tools/colab)
  * measures containment, evidence, anti-stacking and the workflow-file diff, and hands them in.
@@ -294,7 +321,7 @@ function usableMs(v) {
  * half-finished red run cannot be adjudicated: a job still in flight may yet become the red one
  * the branch would have to prove it repaired.
  */
-function shapeJobEvidence({ redRunJobs, branchRunJobs } = {}) {
+function shapeJobEvidence({ redRunJobs, branchRunJobs, branchSha } = {}) {
   if (!Array.isArray(redRunJobs) || !Array.isArray(branchRunJobs)) return null;
   if (redRunJobs.some((j) => !j || j.status !== 'completed')) return null;
 
@@ -303,22 +330,41 @@ function shapeJobEvidence({ redRunJobs, branchRunJobs } = {}) {
     .map((j) => ({
       name: j.name,
       workflowName: j.workflowName || '',
+      workflowId: idOrNull(j.workflowId),
       conclusion: j.conclusion,
       durationMs: durationMs(j.startedAt, j.completedAt),
       ranSteps: Array.isArray(j.steps) ? j.steps.filter(stepRan).map((s) => s.name) : null,
+      // #510 W5: the steps that went red on trunk — the ones a dispatch instance must show passing.
+      failedSteps: Array.isArray(j.steps) ? j.steps.filter((s) => stepRan(s) && s.conclusion !== 'success').map((s) => s.name) : null,
     }));
 
-  const branchJobs = branchRunJobs.map((j) => ({
-    name: j && j.name,
-    workflowName: (j && j.workflowName) || '',
-    status: j && j.status,
-    conclusion: j && j.conclusion,
-    durationMs: j ? durationMs(j.startedAt, j.completedAt) : null,
-    steps: j && Array.isArray(j.steps) ? j.steps.map((s) => ({ name: s && s.name, conclusion: s && s.conclusion })) : null,
-    dryRun: !!j && isDryRunSteps(j.steps),
-  }));
+  const branchJobs = branchRunJobs
+    // #510 W2: a row at another sha is never evidence for this head — dropped when both shas are known.
+    .filter((j) => !(branchSha && j && j.headSha && j.headSha !== branchSha))
+    .map((j) => {
+      const dryRun = !!j && isDryRunSteps(j.steps);
+      const event = (j && j.event) || null;
+      return {
+        name: j && j.name,
+        workflowName: (j && j.workflowName) || '',
+        workflowId: j ? idOrNull(j.workflowId) : null,
+        event,
+        headSha: (j && j.headSha) || null,
+        status: j && j.status,
+        conclusion: j && j.conclusion,
+        durationMs: j ? durationMs(j.startedAt, j.completedAt) : null,
+        steps: j && Array.isArray(j.steps) ? j.steps.map((s) => ({ name: s && s.name, conclusion: s && s.conclusion })) : null,
+        dryRun,
+        dispatch: event === 'workflow_dispatch' && !dryRun,
+      };
+    });
 
-  return { redJobs, branchJobs };
+  return { redJobs, branchJobs, branchSha: branchSha || null };
+}
+
+/** A workflow id as carried on a run row (#510 W1), or null — never `0`/`''` read as an id. */
+function idOrNull(v) {
+  return (typeof v === 'number' && Number.isFinite(v) && v > 0) || (typeof v === 'string' && v !== '') ? v : null;
 }
 
 /** How a job is named in a reason string: `workflow / job` when the workflow is known. */
@@ -343,18 +389,21 @@ function jobKey(j) {
  */
 function indexBranchJobs(branchJobs) {
   const idx = new Map();
+  // A green ORDINARY instance outranks a green dispatch instance (#510), which outranks a green dry run
+  // (#474): each rule set applies only when that instance is the sole evidence the branch has for the job.
+  const rank = (x) => (x.status !== 'completed' || x.conclusion !== 'success' ? 0 : x.dryRun ? 1 : x.dispatch ? 2 : 3);
   for (const j of branchJobs) {
     if (!j || !j.name) continue;
     const k = jobKey(j);
     const prev = idx.get(k);
     const isRed = j.status === 'completed' && !NOT_RED_CONCLUSIONS.has(j.conclusion);
     const isPending = j.status !== 'completed';
-    if (!prev) { idx.set(k, { job: j, hasRed: isRed, hasPending: isPending }); continue; }
-    const ok = (x) => x.status === 'completed' && x.conclusion === 'success';
-    // A green ORDINARY instance outranks a green dry run (#474): the dry-run rules only apply when
-    // a dry run is the sole evidence the branch has for that job.
-    const better = ok(j) && (!ok(prev.job) || (prev.job.dryRun && !j.dryRun));
-    idx.set(k, { job: better ? j : prev.job, hasRed: prev.hasRed || isRed, hasPending: prev.hasPending || isPending });
+    // #510: every instance completed `skipped` — the shape a trunk-only job leaves on a branch push.
+    const isSkipped = j.status === 'completed' && j.conclusion === 'skipped';
+    if (!prev) { idx.set(k, { job: j, hasRed: isRed, hasPending: isPending, allSkipped: isSkipped }); continue; }
+    const better = rank(j) > rank(prev.job);
+    idx.set(k, { job: better ? j : prev.job, hasRed: prev.hasRed || isRed, hasPending: prev.hasPending || isPending,
+      allSkipped: prev.allSkipped && isSkipped });
   }
   return idx;
 }
@@ -391,6 +440,57 @@ function dryRunEvidence(red, mine) {
 }
 
 /**
+ * W1/W2 (#510) for any instance whose run was a `workflow_dispatch` — a #510 dispatch instance or a
+ * #474 dry run. Returns a refusal reason, or ''.
+ */
+function dispatchRunIdentity(red, mine, branchSha) {
+  const label = jobLabel(red);
+  if (red.workflowId === null || red.workflowId === undefined || mine.workflowId === null || mine.workflowId === undefined) {
+    return `job \`${label}\` is proven only by a workflow_dispatch run, and the workflow id of the red run or of that run could not be read — ` +
+      'a dispatch run counts only as the SAME workflow file, and a display name is not proof of that';
+  }
+  if (String(red.workflowId) !== String(mine.workflowId)) {
+    return `job \`${label}\` is proven only by a workflow_dispatch run of a DIFFERENT workflow (id ${mine.workflowId}, trunk's red run is ${red.workflowId}) — ` +
+      'a workflow that shares the display name is not the workflow that is red';
+  }
+  if (!branchSha || !mine.headSha || mine.headSha !== branchSha) {
+    return `job \`${label}\` is proven only by a workflow_dispatch run that is not at the branch's evidence head (\`${mine.headSha || '?'}\`) — ` +
+      'evidence counts only at the head being shipped';
+  }
+  return '';
+}
+
+/**
+ * The dispatch rules (#510) — W1, W2 and W5; see the module header. `red` is a trunk red job (with
+ * `workflowId` and `failedSteps`), `mine` the branch's dispatch instance of the same job. Returns a
+ * refusal reason, or '' when the dispatch run is admissible evidence for this job. W4 (job success, no
+ * red or pending sibling) and W6 (the per-job key) are applied by `redJobsProvenOnBranch` before this.
+ */
+function dispatchEvidence(red, mine, branchSha) {
+  const id = dispatchRunIdentity(red, mine, branchSha);
+  if (id) return id;
+  const label = jobLabel(red);
+  if (!Array.isArray(red.failedSteps) || !Array.isArray(mine.steps)) {
+    return `job \`${label}\` is proven only by a workflow_dispatch run, and the step lists could not be read — ` +
+      'a dispatch run proves a cure only if the step that failed on trunk ran and passed in it';
+  }
+  const mySteps = new Map();
+  for (const s of mine.steps) if (s && s.name) mySteps.set(s.name, s);
+  for (const stepName of red.failedSteps) {
+    const s = mySteps.get(stepName);
+    if (!s) {
+      return `step \`${stepName}\` failed in job \`${label}\` on trunk and is absent from the branch's workflow_dispatch run — ` +
+        'a dispatch run proves only the steps it executes';
+    }
+    if (s.conclusion !== 'success') {
+      return `step \`${stepName}\` failed in job \`${label}\` on trunk and concluded \`${s.conclusion}\` in the branch's workflow_dispatch run — ` +
+        'a job that reports success with that step skipped has not run it';
+    }
+  }
+  return '';
+}
+
+/**
  * Sub-test 4a (#321), and — since #297 — condition 2b of EVERY cure: every job RED on trunk exists
  * on the branch's runs at its own head, completed and successful.
  *
@@ -403,8 +503,9 @@ function dryRunEvidence(red, mine) {
  * that exists only on the branch: this certifies that the branch cures trunk's red, not that the
  * branch is spotless.
  *
- * Returns `{ok, reason, jobs, dryRunJobs}` — `jobs` is the list of red job names proven on the branch,
- * `dryRunJobs` the subset proven only by a dry run (#474), each having passed D1–D3.
+ * Returns `{ok, reason, jobs, dryRunJobs, dispatchJobs}` — `jobs` is the list of red job names proven on
+ * the branch, `dryRunJobs` the subset proven only by a dry run (#474), each having passed D1–D3, and
+ * `dispatchJobs` the subset proven only by a workflow_dispatch run (#510), each having passed W1–W6.
  * Every unmeasurable input is a refusal, never a pass.
  */
 function redJobsProvenOnBranch(jobEvidence) {
@@ -423,6 +524,7 @@ function redJobsProvenOnBranch(jobEvidence) {
   }
   const idx = indexBranchJobs(branchJobs);
   const dryRunJobs = [];
+  const dispatchJobs = [];
 
   for (const red of redJobs) {
     if (!red || !red.name) {
@@ -448,12 +550,18 @@ function redJobsProvenOnBranch(jobEvidence) {
         reason: `job \`${label}\` is red on trunk and failed in another run at the branch's own head — a job that both passed and failed at one sha has proven nothing` };
     }
     if (mine.dryRun) {
-      const why = dryRunEvidence(red, mine);
+      const why = (mine.event === 'workflow_dispatch' ? dispatchRunIdentity(red, mine, jobEvidence.branchSha) : '')
+        || dryRunEvidence(red, mine);
       if (why) return { ok: false, jobs: [], reason: why };
       dryRunJobs.push(red.name);
+    } else if (mine.dispatch) {
+      const why = dispatchEvidence(red, mine, jobEvidence.branchSha);
+      if (why) return { ok: false, jobs: [], reason: why };
+      dispatchJobs.push(red.name);
     }
   }
-  return { ok: true, jobs: redJobs.map((r) => r.name), ...(dryRunJobs.length ? { dryRunJobs } : {}), reason: '' };
+  return { ok: true, jobs: redJobs.map((r) => r.name), ...(dryRunJobs.length ? { dryRunJobs } : {}),
+    ...(dispatchJobs.length ? { dispatchJobs } : {}), reason: '' };
 }
 
 /**
@@ -572,22 +680,54 @@ function manifestStepProof(jobEvidence, { noLateSkip = false } = {}) {
  * then, not predicted now.
  */
 function dryRunDispatchPlan(jobEvidence, dryRunCapable) {
-  const capable = new Set(Array.isArray(dryRunCapable) ? dryRunCapable : dryRunCapable instanceof Set ? [...dryRunCapable] : []);
-  if (!capable.size || !jobEvidence || !Array.isArray(jobEvidence.redJobs) || !jobEvidence.redJobs.length) return [];
+  return cureDispatchPlan(jobEvidence, { dryRunCapable }).dryRun;
+}
+
+/**
+ * Which dispatch(es) would supply the evidence 2b is missing — a #474 dry run, or a #510 plain
+ * `workflow_dispatch` of a branch workflow whose red job a branch push skips. PURE. Returns
+ * `{dryRun: [workflow names], dispatch: [workflow names]}`, both sorted; both empty unless EVERY red job
+ * is either already passing on the branch, or missing in a way one of the two dispatches answers:
+ *
+ *   - ABSENT from the branch's runs in a workflow listed in `dryRunCapable` → a dry run (#474, unchanged);
+ *   - ABSENT, or present only as `skipped` instances, in a workflow listed in `dispatchable` → a dispatch
+ *     (#510), and only when `branchRuns` shows that workflow has a completed, successful NON-dispatch run
+ *     at the head (gate d: it is branch CI, not a main-only workflow a dispatch could publish from) and NO
+ *     `workflow_dispatch` run there yet, whatever its status (gate e: a dispatch already made either is
+ *     still running, or ran and did not supply the job — dispatching again would not help).
+ *
+ * A red job present-but-failing, pending, or missing in a workflow neither list names means no dispatch
+ * would help, so none is asked for. Whether the run, once it exists, passes D1–D3 or W1–W6 is decided
+ * then, not predicted now.
+ */
+function cureDispatchPlan(jobEvidence, { dryRunCapable, dispatchable, branchRuns } = {}) {
+  const none = { dryRun: [], dispatch: [] };
+  const asSet = (x) => new Set(Array.isArray(x) ? x : x instanceof Set ? [...x] : []);
+  const capable = asSet(dryRunCapable);
+  const plain = asSet(dispatchable);
+  if ((!capable.size && !plain.size) || !jobEvidence || !Array.isArray(jobEvidence.redJobs) || !jobEvidence.redJobs.length) return none;
   const idx = indexBranchJobs(Array.isArray(jobEvidence.branchJobs) ? jobEvidence.branchJobs : []);
-  const want = new Set();
+  const dry = new Set();
+  const disp = new Set();
   for (const red of jobEvidence.redJobs) {
-    if (!red || !red.name) return [];
+    if (!red || !red.name) return none;
     const entry = idx.get(jobKey(red));
-    if (!entry) {
-      if (!red.workflowName || !capable.has(red.workflowName)) return [];
-      want.add(red.workflowName);
-      continue;
-    }
+    const wf = red.workflowName;
+    if (!entry && wf && capable.has(wf)) { dry.add(wf); continue; }
+    if ((!entry || entry.allSkipped) && wf && plain.has(wf)) { disp.add(wf); continue; }
+    if (!entry) return none;
     const mine = entry.job;
-    if (mine.status !== 'completed' || entry.hasPending || mine.conclusion !== 'success' || entry.hasRed) return [];
+    if (mine.status !== 'completed' || entry.hasPending || mine.conclusion !== 'success' || entry.hasRed) return none;
   }
-  return [...want].sort();
+  if (disp.size) {
+    if (!Array.isArray(branchRuns)) return none;
+    for (const wf of disp) {
+      const runs = branchRuns.filter((r) => r && r.workflowName === wf);
+      if (runs.some((r) => r.event === 'workflow_dispatch')) return none;
+      if (!runs.some((r) => r.event !== 'workflow_dispatch' && r.status === 'completed' && r.conclusion === 'success')) return none;
+    }
+  }
+  return { dryRun: [...dry].sort(), dispatch: [...disp].sort() };
 }
 
 /**
@@ -716,6 +856,12 @@ function stackingWithProgress(stacking, priorRedJobs, jobEvidence) {
  * `pythonPinOnly` (#476) — cure-diff's classifier: `[{path, pins}]` when every touched Python
  * manifest changed only version specifiers. Same posture as `manifestScriptsAddOnly`.
  *
+ * `dispatchable` / `branchRuns` (#510) — the branch workflows a plain workflow_dispatch can run (by
+ * name), and the run-level rows at the branch head (`{workflowName, workflowId, event, status,
+ * conclusion}`). Read only on a 2b refusal, by `cureDispatchPlan`, to set `dispatchWanted`; a caller that
+ * passes neither gets the pre-#510 refusal unchanged. A cure proven by a dispatch instance returns
+ * `dispatch: {jobs}`, the same way a dry-run-proven one returns `dryRun`.
+ *
  * `jobEvidence` — `shapeJobEvidence(...)`'s output, or `null`. Read on EVERY cure since #297 —
  * condition 2b (`redJobsProvenOnBranch`) — and again by the #321 carve-out when workflows were
  * touched. `null`, an empty `redJobs`, an empty `branchJobs`, an unreadable step list and an
@@ -740,7 +886,7 @@ function stackingWithProgress(stacking, priorRedJobs, jobEvidence) {
  */
 function cureVerdict({ containsRedSha, evidence, redSha, stacking, workflowsTouched, jobEvidence,
   manifestScriptsTouched, manifestPaths, manifestScriptsAddOnly, pythonManifestTouched, pythonManifestPaths,
-  pythonPinOnly, dryRunCapable, priorRedJobs }) {
+  pythonPinOnly, dryRunCapable, dispatchable, branchRuns, priorRedJobs }) {
   if (!containsRedSha) {
     return { ok: false,
       reason: `branch does not contain trunk's current red head \`${redSha}\` as an ancestor — ` +
@@ -766,21 +912,24 @@ function cureVerdict({ containsRedSha, evidence, redSha, stacking, workflowsTouc
         'a cure must pass the named failing job(s), not merely produce a green run (#297)' };
     // #474: say which dry run would supply the missing evidence — only when every LATER condition
     // already holds, so a dispatch is never asked for on a branch that would refuse anyway.
-    const wanted = dryRunDispatchPlan(jobEvidence, dryRunCapable);
+    // #510: and which plain workflow_dispatch would supply a job a branch push skipped.
+    const plan = cureDispatchPlan(jobEvidence, { dryRunCapable, dispatchable, branchRuns });
     // An admissible manifest change (#475/#476) does not suppress the ask: the admission is judged on
     // the dry run's steps once it exists, exactly like any other branch instance.
     const scriptsOk = manifestScriptsTouched === false
       || (manifestScriptsTouched === true && Array.isArray(manifestScriptsAddOnly) && manifestScriptsAddOnly.length > 0);
     const pythonOk = pythonManifestTouched === false
       || (pythonManifestTouched === true && Array.isArray(pythonPinOnly) && pythonPinOnly.length > 0);
-    if (wanted.length && cond3.ok && scriptsOk && pythonOk
-      && typeof workflowsTouched === 'boolean') {
-      out.dryRunWanted = wanted;
+    if (cond3.ok && scriptsOk && pythonOk && typeof workflowsTouched === 'boolean') {
+      if (plan.dryRun.length) out.dryRunWanted = plan.dryRun;
+      if (plan.dispatch.length) out.dispatchWanted = plan.dispatch;
     }
     return out;
   }
   const dry = proven.dryRunJobs && proven.dryRunJobs.length ? { jobs: proven.dryRunJobs } : null;
-  const drySuffix = dry ? ` — the main-only job(s) ${dry.jobs.map((n) => `\`${n}\``).join(', ')} proven by a dry run on the branch (#474)` : '';
+  const disp = proven.dispatchJobs && proven.dispatchJobs.length ? { jobs: proven.dispatchJobs } : null;
+  const drySuffix = (dry ? ` — the main-only job(s) ${dry.jobs.map((n) => `\`${n}\``).join(', ')} proven by a dry run on the branch (#474)` : '')
+    + (disp ? ` — the trunk-only job(s) ${disp.jobs.map((n) => `\`${n}\``).join(', ')} proven by a workflow_dispatch run at the branch head (#510)` : '');
   if (!cond3.ok) {
     return { ok: false, reason: cond3.reason };
   }
@@ -826,12 +975,13 @@ function cureVerdict({ containsRedSha, evidence, redSha, stacking, workflowsTouc
       return { ok: false, reason: `${WORKFLOW_REFUSAL}. The #321 carve-out does not admit it either: ${carve.reason}` };
     }
     const detail = carve.jobs.map((j) => `\`${j.name}\` (${j.redMs}ms red on trunk, ${j.branchMs}ms passing here)`).join(', ');
-    return { ok: true, provenJobs: proven.jobs, carveOut: { jobs: carve.jobs }, ...(dry ? { dryRun: dry } : {}),
+    return { ok: true, provenJobs: proven.jobs, carveOut: { jobs: carve.jobs }, ...(dry ? { dryRun: dry } : {}), ...(disp ? { dispatch: disp } : {}),
       ...(via ? { admitted } : {}), ...prog,
       reason: `branch contains red \`${redSha}\` as an ancestor AND is green at its own current head (\`${evidence.sha}\`) — proven cure, ` +
         `admitted through the #321 workflow carve-out: every job red on trunk ran to success here with every step it took on trunk — ${detail}${drySuffix}${via}${progSuffix}` };
   }
-  return { ok: true, provenJobs: proven.jobs, ...(dry ? { dryRun: dry } : {}), ...(via ? { admitted } : {}), ...prog,
+  return { ok: true, provenJobs: proven.jobs, ...(dry ? { dryRun: dry } : {}), ...(disp ? { dispatch: disp } : {}),
+    ...(via ? { admitted } : {}), ...prog,
     reason: `branch contains red \`${redSha}\` as an ancestor AND is green at its own current head (\`${evidence.sha}\`) — proven cure${drySuffix}${via}${progSuffix}` };
 }
 
@@ -848,5 +998,6 @@ function admittedText(admitted) {
 }
 
 module.exports = { cureVerdict, redJobsProvenOnBranch, workflowCarveOut, manifestStepProof, shapeJobEvidence, dryRunDispatchPlan,
+  cureDispatchPlan, dispatchEvidence,
   priorRedShaFromMessage, redJobSet, redSetShrank,
   WORKFLOW_REFUSAL, MANIFEST_SCRIPTS_REFUSAL, PYTHON_MANIFEST_REFUSAL, PUBLISH_STEP_MARKER, DRY_RUN_STEP };

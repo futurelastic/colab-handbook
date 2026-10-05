@@ -228,3 +228,8 @@ test('CLI: usage errors exit 2', () => {
   }
   fs.rmSync(fx.root, { recursive: true, force: true });
 });
+
+test('#510: restRow carries the workflow FILE id as workflowId (null when absent)', () => {
+  assert.strictEqual(cw.restRow({ id: 1, name: 'CI', workflow_id: 7, head_sha: 'a' }).workflowId, 7);
+  assert.strictEqual(cw.restRow({ id: 1, name: 'CI', head_sha: 'a' }).workflowId, null);
+});

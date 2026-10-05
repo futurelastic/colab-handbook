@@ -996,3 +996,207 @@ test('#477 cureVerdict: an ordinary (non-stacked) cure carries no progress field
   assert.equal(v.ok, true);
   assert.equal('progress' in v, false);
 });
+
+// --- #510: dispatch evidence for a job a branch push skips ------------------------------------------
+//
+// The measured shape: `CI / e2e (2/4)` red on trunk at its `Run E2E` step. Its `if:` is true on trunk,
+// on a schedule and on workflow_dispatch, false on a branch push — so the fix branch's push run is
+// green with the shard skipped, and only a workflow_dispatch of the same workflow at the same head runs it.
+
+const { cureDispatchPlan, dispatchEvidence } = require('./ci-cure.js');
+
+const CI_WF = 'CI';
+const CI_ID = 1001;
+const E2E = 'e2e (2/4)';
+const E2E_STEPS = ['Set up job', 'Restore cache', 'Run E2E', 'Save cache'];
+
+function trunkE2E(name = E2E, failAt = 'Run E2E') {
+  const i = E2E_STEPS.indexOf(failAt);
+  return { name, workflowName: CI_WF, workflowId: CI_ID, status: 'completed', conclusion: 'failure',
+    startedAt: T0, completedAt: '2026-01-01T00:30:00Z',
+    steps: E2E_STEPS.map((n, k) => step(n, k < i ? 'success' : k === i ? 'failure' : 'skipped')) };
+}
+function pushRow(name, over = {}) {
+  return { name, workflowName: CI_WF, workflowId: CI_ID, event: 'push', headSha: HEAD_SHA, status: 'completed',
+    conclusion: 'success', startedAt: T0, completedAt: '2026-01-01T00:05:00Z', steps: [step('Set up job'), step('Test')], ...over };
+}
+function skippedPush(name = E2E) { return pushRow(name, { conclusion: 'skipped', steps: [] }); }
+function dispatchRow(name = E2E, over = {}) {
+  return { name, workflowName: CI_WF, workflowId: CI_ID, event: 'workflow_dispatch', headSha: HEAD_SHA, status: 'completed',
+    conclusion: 'success', startedAt: T0, completedAt: '2026-01-01T00:40:00Z', steps: E2E_STEPS.map((n) => step(n)), ...over };
+}
+function e2eEvidence(branch, trunk = [trunkE2E()]) {
+  return shapeJobEvidence({ redRunJobs: trunk, branchRunJobs: [pushRow('unit'), ...branch], branchSha: HEAD_SHA });
+}
+
+test('#510 shapeJobEvidence: carries workflowId, event, headSha, failedSteps; marks a non-dry dispatch instance', () => {
+  const ev = e2eEvidence([skippedPush(), dispatchRow()]);
+  assert.equal(ev.branchSha, HEAD_SHA);
+  assert.deepEqual(ev.redJobs[0].failedSteps, ['Run E2E']);
+  assert.equal(ev.redJobs[0].workflowId, CI_ID);
+  const d = ev.branchJobs.find((j) => j.event === 'workflow_dispatch');
+  assert.equal(d.dispatch, true);
+  assert.equal(d.dryRun, false);
+  assert.equal(ev.branchJobs.find((j) => j.event === 'push' && j.name === E2E).dispatch, false);
+});
+
+test('#510 (1) skipped on push + a green dispatch at the same head, same workflow, failing step passing → cures', () => {
+  const v = cureVerdict(base({ jobEvidence: e2eEvidence([skippedPush(), dispatchRow()]) }));
+  assert.equal(v.ok, true, v.reason);
+  assert.deepEqual(v.dispatch, { jobs: [E2E] });
+  assert.equal(v.dryRun, undefined);
+  assert.match(v.reason, /workflow_dispatch run at the branch head \(#510\)/);
+});
+
+test('#510 (2) an unexpanded matrix row skipped on push (shard absent) + the dispatch → cures', () => {
+  const v = cureVerdict(base({ jobEvidence: e2eEvidence([skippedPush('e2e (${{ matrix.shard }})'), dispatchRow()]) }));
+  assert.equal(v.ok, true, v.reason);
+  assert.deepEqual(v.dispatch, { jobs: [E2E] });
+});
+
+test('#510 (3) a dispatch at a different sha is never evidence for this head', () => {
+  const ev = e2eEvidence([skippedPush(), dispatchRow(E2E, { headSha: 'c'.repeat(40) })]);
+  assert.equal(ev.branchJobs.some((j) => j.event === 'workflow_dispatch'), false, 'dropped by shapeJobEvidence');
+  assert.equal(cureVerdict(base({ jobEvidence: ev })).ok, false);
+  // And W2 holds without the caller's filter.
+  const raw = e2eEvidence([skippedPush(), dispatchRow()]);
+  raw.branchJobs = raw.branchJobs.map((j) => (j.dispatch ? { ...j, headSha: 'c'.repeat(40) } : j));
+  const v = redJobsProvenOnBranch(raw);
+  assert.equal(v.ok, false);
+  assert.match(v.reason, /not at the branch's evidence head/);
+});
+
+test('#510 (4) the dispatch skipped the job too → refuses; skipped never counts as cured', () => {
+  const v = cureVerdict(base({ jobEvidence: e2eEvidence([skippedPush(), dispatchRow(E2E, { conclusion: 'skipped', steps: [] })]) }));
+  assert.equal(v.ok, false);
+  assert.match(v.reason, /concluded `skipped`/);
+  const pushOnly = cureVerdict(base({ jobEvidence: e2eEvidence([skippedPush()]) }));
+  assert.equal(pushOnly.ok, false);
+});
+
+test('#510 (5) a dispatch of a DIFFERENT workflow sharing the display name → refuses; a missing id → refuses', () => {
+  const other = cureVerdict(base({ jobEvidence: e2eEvidence([skippedPush(), dispatchRow(E2E, { workflowId: 2002 })]) }));
+  assert.equal(other.ok, false);
+  assert.match(other.reason, /DIFFERENT workflow/);
+  assert.match(other.reason, /CI \/ e2e \(2\/4\)/);
+  const noId = cureVerdict(base({ jobEvidence: e2eEvidence([skippedPush(), dispatchRow(E2E, { workflowId: null })]) }));
+  assert.equal(noId.ok, false);
+  assert.match(noId.reason, /workflow id/);
+  const noRedId = cureVerdict(base({ jobEvidence: e2eEvidence([skippedPush(), dispatchRow()], [{ ...trunkE2E(), workflowId: undefined }]) }));
+  assert.equal(noRedId.ok, false);
+  assert.match(noRedId.reason, /workflow id/);
+});
+
+test('#510 (6) the job RAN and FAILED on the push run → a green dispatch does not rescue it', () => {
+  const v = cureVerdict(base({ jobEvidence: e2eEvidence([pushRow(E2E, { conclusion: 'failure' }), dispatchRow()]) }));
+  assert.equal(v.ok, false);
+  assert.match(v.reason, /both passed and failed/);
+});
+
+test('#510 (7) two red shards: one proven by the dispatch is not both; both proven → cures', () => {
+  const trunk = [trunkE2E(), trunkE2E('e2e (3/4)')];
+  const one = cureVerdict(base({ jobEvidence: e2eEvidence([skippedPush(), dispatchRow()], trunk) }));
+  assert.equal(one.ok, false);
+  assert.match(one.reason, /e2e \(3\/4\)/);
+  const both = cureVerdict(base({ jobEvidence: e2eEvidence([skippedPush(), dispatchRow(), dispatchRow('e2e (3/4)')], trunk) }));
+  assert.equal(both.ok, true, both.reason);
+  assert.deepEqual(both.dispatch, { jobs: [E2E, 'e2e (3/4)'] });
+});
+
+test('#510 (8) W5: the job reports success with trunk\'s failing step skipped → refuses; unreadable steps → refuses', () => {
+  const allSkipped = dispatchRow(E2E, { steps: E2E_STEPS.map((n) => step(n, 'skipped')) });
+  const v = cureVerdict(base({ jobEvidence: e2eEvidence([skippedPush(), allSkipped]) }));
+  assert.equal(v.ok, false);
+  assert.match(v.reason, /step `Run E2E` failed .* concluded `skipped`/);
+  const missing = dispatchRow(E2E, { steps: [step('Set up job')] });
+  assert.match(cureVerdict(base({ jobEvidence: e2eEvidence([skippedPush(), missing]) })).reason, /absent from the branch's workflow_dispatch run/);
+  const noSteps = cureVerdict(base({ jobEvidence: e2eEvidence([skippedPush(), dispatchRow(E2E, { steps: null })]) }));
+  assert.equal(noSteps.ok, false);
+  assert.match(noSteps.reason, /step lists could not be read/);
+  // A cache-conditional step skipped in the dispatch does NOT refuse (W5 is not the full superset).
+  const cacheHit = dispatchRow(E2E, { steps: E2E_STEPS.map((n) => step(n, n === 'Save cache' || n === 'Restore cache' ? 'skipped' : 'success')) });
+  const trunkRanCache = { ...trunkE2E(), steps: E2E_STEPS.map((n) => step(n, n === 'Run E2E' ? 'failure' : 'success')) };
+  assert.equal(cureVerdict(base({ jobEvidence: e2eEvidence([skippedPush(), cacheHit], [trunkRanCache]) })).ok, true);
+});
+
+test('#510 (8\') dispatchEvidence: a trunk red with no red step leaves W5 nothing to check — job success decides', () => {
+  const red = { name: E2E, workflowName: CI_WF, workflowId: CI_ID, failedSteps: [] };
+  assert.equal(dispatchEvidence(red, { workflowId: CI_ID, headSha: HEAD_SHA, steps: [] }, HEAD_SHA), '');
+  assert.notEqual(dispatchEvidence(red, { workflowId: CI_ID, headSha: HEAD_SHA, steps: [] }, null), '', 'no evidence sha → refuses');
+});
+
+test('#510 (9) a neutral or cancelled dispatch is never cured', () => {
+  for (const conclusion of ['neutral', 'cancelled']) {
+    const v = cureVerdict(base({ jobEvidence: e2eEvidence([skippedPush(), dispatchRow(E2E, { conclusion })]) }));
+    assert.equal(v.ok, false, conclusion);
+  }
+});
+
+test('#510 (10) a green push instance beside a green dispatch → ordinary evidence wins, no dispatch key', () => {
+  for (const order of [[pushRow(E2E), dispatchRow(E2E, { workflowId: 2002 })], [dispatchRow(E2E, { workflowId: 2002 }), pushRow(E2E)]]) {
+    const v = cureVerdict(base({ jobEvidence: e2eEvidence(order) }));
+    assert.equal(v.ok, true, v.reason);
+    assert.equal(v.dispatch, undefined);
+  }
+});
+
+test('#510 (11) a #474 dry run carrying event workflow_dispatch still goes through D1–D3, plus W1/W2', () => {
+  const tr = { ...trunkRelease(), workflowId: 77 };
+  const dry = { ...dryRelease(), workflowId: 77, event: 'workflow_dispatch', headSha: HEAD_SHA };
+  const ok = redJobsProvenOnBranch(shapeJobEvidence({ redRunJobs: [tr], branchRunJobs: [dry], branchSha: HEAD_SHA }));
+  assert.equal(ok.ok, true, ok.reason);
+  assert.deepEqual(ok.dryRunJobs, [REL_JOB]);
+  assert.equal(ok.dispatchJobs, undefined);
+  const wrong = redJobsProvenOnBranch(shapeJobEvidence({ redRunJobs: [tr], branchRunJobs: [{ ...dry, workflowId: 78 }], branchSha: HEAD_SHA }));
+  assert.equal(wrong.ok, false);
+  assert.match(wrong.reason, /DIFFERENT workflow/);
+});
+
+test('#510 (12) cureDispatchPlan: asks for a dispatch only through gates (a)–(e)', () => {
+  const runs = (extra = []) => [{ workflowName: CI_WF, workflowId: CI_ID, event: 'push', status: 'completed', conclusion: 'success' }, ...extra];
+  const skipped = e2eEvidence([skippedPush()]);
+  assert.deepEqual(cureDispatchPlan(skipped, { dispatchable: [CI_WF], branchRuns: runs() }), { dryRun: [], dispatch: [CI_WF] });
+  const absent = e2eEvidence([]);
+  assert.deepEqual(cureDispatchPlan(absent, { dispatchable: [CI_WF], branchRuns: runs() }).dispatch, [CI_WF], 'absent (unexpanded matrix) too');
+  assert.deepEqual(cureDispatchPlan(skipped, { dispatchable: [CI_WF],
+    branchRuns: runs([{ workflowName: CI_WF, event: 'workflow_dispatch', status: 'in_progress', conclusion: null }]) }).dispatch, [],
+  '(e) a dispatch already exists');
+  assert.deepEqual(cureDispatchPlan(skipped, { dispatchable: [], branchRuns: runs() }).dispatch, [], '(b/c) not dispatchable');
+  assert.deepEqual(cureDispatchPlan(skipped, { dispatchable: [CI_WF], branchRuns: [] }).dispatch, [], '(d) no green non-dispatch run');
+  assert.deepEqual(cureDispatchPlan(skipped, { dispatchable: [CI_WF] }).dispatch, [], '(d) runs unread');
+  const failing = e2eEvidence([pushRow(E2E, { conclusion: 'failure' })]);
+  assert.deepEqual(cureDispatchPlan(failing, { dispatchable: [CI_WF], branchRuns: runs() }), { dryRun: [], dispatch: [] }, '(a) present and failing');
+  const pending = e2eEvidence([pushRow(E2E, { status: 'in_progress', conclusion: null })]);
+  assert.deepEqual(cureDispatchPlan(pending, { dispatchable: [CI_WF], branchRuns: runs() }).dispatch, [], '(a) pending');
+  // A mix: one main-only red job (dry run) and one trunk-only job (dispatch).
+  const mix = shapeJobEvidence({ redRunJobs: [trunkRelease(), trunkE2E()], branchRunJobs: [pushRow('unit'), skippedPush()], branchSha: HEAD_SHA });
+  assert.deepEqual(cureDispatchPlan(mix, { dryRunCapable: [REL_WF], dispatchable: [CI_WF], branchRuns: runs() }),
+    { dryRun: [REL_WF], dispatch: [CI_WF] });
+  // The #474 wrapper answers exactly as before: a present-but-skipped job is not a dry-run ask.
+  assert.deepEqual(dryRunDispatchPlan(relEvidence(trunkRelease(), [{ ...dryRelease(), conclusion: 'skipped' }]), [REL_WF]), []);
+});
+
+test('#510 (13) cureVerdict: dispatchWanted on the 2b refusal only when every later condition holds', () => {
+  const runs = [{ workflowName: CI_WF, workflowId: CI_ID, event: 'push', status: 'completed', conclusion: 'success' }];
+  const ev = e2eEvidence([skippedPush()]);
+  const v = cureVerdict(base({ jobEvidence: ev, dispatchable: [CI_WF], branchRuns: runs }));
+  assert.equal(v.ok, false);
+  assert.deepEqual(v.dispatchWanted, [CI_WF]);
+  assert.equal(v.dryRunWanted, undefined);
+  assert.equal(cureVerdict(base({ jobEvidence: ev })).reason, v.reason, 'the refusal text is unchanged by the field');
+  for (const over of [{ stacking: badStacking('stacked') }, { manifestScriptsTouched: true }, { pythonManifestTouched: true },
+    { workflowsTouched: null }]) {
+    assert.equal(cureVerdict(base({ jobEvidence: ev, dispatchable: [CI_WF], branchRuns: runs, ...over })).dispatchWanted, undefined, JSON.stringify(over));
+  }
+});
+
+test('#510 (14) a workflow-touching branch: the carve-out still checks 4b/4c against the dispatch instance', () => {
+  const ok = cureVerdict(base({ workflowsTouched: true, jobEvidence: e2eEvidence([skippedPush(), dispatchRow()]) }));
+  assert.equal(ok.ok, true, ok.reason);
+  assert.ok(ok.carveOut);
+  assert.deepEqual(ok.dispatch, { jobs: [E2E] });
+  const fast = cureVerdict(base({ workflowsTouched: true,
+    jobEvidence: e2eEvidence([skippedPush(), dispatchRow(E2E, { completedAt: '2026-01-01T00:01:00Z' })]) }));
+  assert.equal(fast.ok, false);
+  assert.match(fast.reason, /too fast/);
+});
