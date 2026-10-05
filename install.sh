@@ -276,7 +276,7 @@ freeze_cli() {
   cp -R "$DIR/tools/lib" "$FROZEN_DIR/lib"
   # Tests are for the working tree; the frozen copy is a runtime, and its fixtures reference repo
   # paths that do not exist here.
-  rm -f "$FROZEN_DIR"/lib/*.test.js
+  rm -f "$FROZEN_DIR"/lib/*.test.js "$FROZEN_DIR"/lib/*/*.test.js
   cp "$DIR/tools/package.json" "$FROZEN_DIR/package.json"
   printf '# colab-handbook: colab-bin @ %s\n' "$ver" > "$FROZEN_STAMP"
   echo "  ❄ froze: colab @ $ver (copy — does NOT follow this clone's branch)"

@@ -19,11 +19,11 @@ function tmp() { return fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'c
 function copyCli(toolsDir) {
   fs.mkdirSync(path.join(toolsDir, 'lib'), { recursive: true });
   fs.copyFileSync(path.join(TOOLS, 'colab'), path.join(toolsDir, 'colab'));
-  for (const f of fs.readdirSync(path.join(TOOLS, 'lib'))) {
-    if (f.endsWith('.js') && !f.endsWith('.test.js')) {
-      fs.copyFileSync(path.join(TOOLS, 'lib', f), path.join(toolsDir, 'lib', f));
-    }
-  }
+  // Recursive, as install.sh's `cp -R` is: tools/lib/codec/ (#497) is a subdirectory the CLI requires.
+  fs.cpSync(path.join(TOOLS, 'lib'), path.join(toolsDir, 'lib'), {
+    recursive: true,
+    filter: (src) => fs.statSync(src).isDirectory() || (src.endsWith('.js') && !src.endsWith('.test.js')),
+  });
 }
 
 function git(dir, ...args) {
