@@ -308,7 +308,80 @@ function listShort(items) {
  *                      step 5 becomes the append-only block instead of the thin-shell conversion
  *                      (CONVENTIONS.md §9, *A fork of an upstream*)
  *   upstreamAgentFiles — on a fork, the upstream's own agent workflow, named for the precedence line
+ *   releaseRung     — `releaseRungSteps()`'s result (#492): extra step-6 lines on exposure: released
  */
+const releasePolicy = require('./release-policy.js');
+
+const FINAL_TAG = /^v\d+\.\d+\.\d+$/;
+
+/**
+ * #492 — on `exposure: released`, step 6 is not only CI: the release rung (CONVENTIONS.md §6) has
+ * to be wired at adoption too, or the repo never cuts a candidate until someone notices. Measured:
+ * six adopters in one fleet sweep with no `release:` block and no release workflow, several more
+ * with the workflow but no first final (`release cut` refuses with no final to bump from).
+ *
+ * Pure: reads the descriptor and what `io` already exposes. Returns step-6 entries (possibly
+ * none). Never decides a route on a human's behalf beyond §6's own derivation — the no-production
+ * row's choice is PROPOSED (public room -> public-tool, else rapid-app), and the text says so.
+ *
+ * `ctx`: { cfg, workflowTexts: { [file]: text }, tags: string[]|null, stackFiles: string[] }
+ */
+function releaseRungSteps(ctx = {}) {
+  const cfg = ctx.cfg || {};
+  const def = releasePolicy.deriveDefault(cfg);
+  const exposure = axisAuthority.axisOfRecord(cfg).exposure;
+  if (exposure !== 'released') return [];
+  const steps = [];
+  const block = cfg.release && typeof cfg.release === 'object' ? cfg.release : null;
+
+  // 6a — the release: block.
+  if (block && block.route) {
+    steps.push({ n: 6, text: `Release rung: \`release.route: ${block.route}\` declared — keep it; confirm \`version-source\` (default \`tag\` where the machine cuts the tag, #484), CONVENTIONS.md §6 *Release routes*` });
+  } else if (def.row === 'released-tag' || def.row === 'released-manual') {
+    steps.push({ n: 6, text: `Release rung: add a nested \`release:\` block to .github/project.yml with \`route: deploy-tag\` and \`version-source: tag\` (block style — the descriptor reader parses no \`{ }\` flow map) — the tag deploys production (deploy: ${cfg.deploy}), so candidates are automatic and every final is a human click (CONVENTIONS.md §6 *Release routes*, #492)` });
+  } else if (def.row === 'released-no-production') {
+    const proposed = cfg.room === 'public' ? 'public-tool' : 'rapid-app';
+    steps.push({ n: 6, text: `Release rung: add a nested \`release:\` block to .github/project.yml with \`route: ${proposed}\` and \`version-source: tag\` (block style) — PROPOSED from room: ${cfg.room || 'undeclared'} (public CLI/handbook adopters install → public-tool; an app or tool with few installers → rapid-app; a library its consumers pin → library-fast) — confirm with the human, CONVENTIONS.md §6 *Release routes* (#492)` });
+  } else {
+    steps.push({ n: 6, text: 'Release rung: exposure: released but production/deploy match no §6 row — no route derives, a human tags; fix `deploy:`/`production:` before wiring a release workflow (CONVENTIONS.md §6, #492)' });
+    return steps;
+  }
+
+  // 6b — the release workflow.
+  const texts = ctx.workflowTexts || {};
+  const releaseWf = Object.keys(texts).find((f) => /colab release cut/.test(texts[f] || ''));
+  if (releaseWf) {
+    steps.push({ n: 6, text: `Release workflow present (.github/workflows/${releaseWf}) — check its \`HANDBOOK_REF\` names a ref the handbook carries (#480) and its \`runs-on\` is the self-hosted label on a private repo` });
+  } else {
+    steps.push({ n: 6, text: 'Copy the release workflow — `colab template release-auto`, then walk its `# EDIT:` points: `HANDBOOK_REF` (a channel or tag the handbook carries, #480), the test-suite workflow `name:`, and on a PRIVATE repo the self-hosted runner label from ci.yml on every job except `npm` (#492)' });
+  }
+
+  // 6c — a deploy template by stack, only where the tag deploys.
+  if (def.row === 'released-tag' || def.row === 'released-manual') {
+    const files = new Set(ctx.stackFiles || []);
+    const deployWf = Object.keys(texts).find((f) => /^deploy/.test(f));
+    const php = files.has('composer.json');
+    const container = ['Dockerfile', 'compose.yml', 'compose.yaml', 'docker-compose.yml', 'docker-compose.yaml'].some((f) => files.has(f));
+    const tpl = php ? 'deploy-xserver' : container ? 'deploy-container' : null;
+    if (deployWf) {
+      steps.push({ n: 6, text: `Deploy workflow present (.github/workflows/${deployWf}) — nothing to copy` });
+    } else if (tpl) {
+      steps.push({ n: 6, text: `Copy the deploy template for this stack — \`colab template ${tpl}\` (${php ? 'PHP: composer.json' : 'container: a Dockerfile/compose file'}) — and keep it DISARMED: leave only its \`workflow_dispatch\` trigger until the operator has set its secrets and arms the \`push: tags\` trigger (#492)` });
+    } else {
+      steps.push({ n: 6, text: 'No deploy template matches this stack (none for it under templates/) — the deploy stays the runbook\'s, by hand (#492)' });
+    }
+  }
+
+  // 6d — the first final.
+  const tags = ctx.tags;
+  if (tags === null || tags === undefined) {
+    steps.push({ n: 6, text: 'First final: tags could not be read — check for a `vX.Y.Z` final; `colab release cut` refuses until one exists (#492)' });
+  } else if (!tags.some((t) => FINAL_TAG.test(t))) {
+    steps.push({ n: 6, text: 'First final: none yet, and `colab release cut` refuses with no final to bump from — the first final is the operator\'s to set (e.g. `git tag -a v0.1.0 -m "v0.1.0" && git push origin v0.1.0`); an agent tags it only when told to (#492)' });
+  }
+  return steps;
+}
+
 function remainingSteps(ctx = {}) {
   const steps = [];
   if (ctx.migrations) steps.push({ n: 2, text: migrationsStepText(ctx.migrations) });
@@ -327,6 +400,7 @@ function remainingSteps(ctx = {}) {
   }
   steps.push(
     { n: 6, text: "Make sure CI meets §7's outcome — `colab template <name>`, step 6" },
+    ...(ctx.releaseRung || []),
     { n: 7, text: 'Register the repo — `colab register`, step 7' },
     { n: 8, text: 'Leave existing branches alone — nothing to do, step 8' },
     { n: 9, text: 'Do not create `dev` unless genuinely Tier A or Tier C — nothing to do, step 9' },
@@ -438,6 +512,13 @@ function detect(io, extra = {}) {
     ? detectMigrationCandidates(cfg, extra.trackedFiles)
     : null;
 
+  // #492: on exposure: released, step 6 also wires the release rung.
+  const workflowTexts = {};
+  for (const f of workflows) workflowTexts[f] = io.readFile(`.github/workflows/${f}`) || '';
+  const stackFiles = ['composer.json', 'Dockerfile', 'compose.yml', 'compose.yaml', 'docker-compose.yml', 'docker-compose.yaml']
+    .filter((f) => io.readFile(f) !== null);
+  const releaseRung = releaseRungSteps({ cfg, workflowTexts, tags: io.tags ? io.tags() : null, stackFiles });
+
   return {
     descriptorExists: io.readFile('.github/project.yml') !== null,
     cfg,
@@ -456,7 +537,7 @@ function detect(io, extra = {}) {
     upstreamAgentFiles,
     inheritedCodeowners,
     migrations,
-    remaining: remainingSteps({ migrations, fork, upstreamAgentFiles }),
+    remaining: remainingSteps({ migrations, fork, upstreamAgentFiles, releaseRung }),
   };
 }
 
@@ -1070,6 +1151,7 @@ module.exports = {
   deriveTier,
   deriveConsequences,
   remainingSteps,
+  releaseRungSteps,
   detectUpstreamAgentFiles,
   detectMigrationCandidates,
   detect,

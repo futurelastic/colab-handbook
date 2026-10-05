@@ -5305,7 +5305,16 @@ only. Resolution order: `--config` flag > `~/.colab/repos.txt` > bundled example
    the line ranges) and when there is no `AGENTS.md` (`no-agents-md`) — #419. All warnings,
    never failures; `handbook-sync` carries the move as a graft step.
 6. **Make sure CI meets [§7](#7-ci-and-toolchain)'s outcome** — copy a template via
-   `colab template <name>`, which stamps for reconciliation.
+   `colab template <name>`, which stamps for reconciliation. **On `exposure: released`, this
+   step also wires the release rung ([§6](#6-releases)) — at adoption, not later** (#492): the
+   `release:` block with the route the descriptor's row takes and `version-source: tag`, the
+   release workflow (`templates/release-auto.yml`, its edit points walked), the deploy template
+   for the stack where the tag deploys — copied disarmed, armed by the operator — and a first
+   final, which is the operator's to set because `colab release cut` refuses with none to bump
+   from. A released repo adopted without them never cuts a candidate until someone notices:
+   measured on six adopters in one sweep, and more that had the workflow but no first final.
+   `colab adopt` lists these as step-6 lines; the no-production row's route is a proposal for
+   the human to confirm, never a choice the agent makes.
 7. **Register the repo** — `colab register`, updating both the audit fleet list and the
    reserved-ports aggregation. Unregistered = invisible to the fleet audit.
 8. **Leave existing branches alone** — grandfathered.
