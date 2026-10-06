@@ -26,7 +26,7 @@
 
 const test = require('node:test');
 const assert = require('node:assert');
-const { evaluateExposure } = require('./exposure-shape.js');
+const { evaluateExposure, singleTrunkViolation } = require('./exposure-shape.js');
 
 const kinds = (entries) => entries.map((e) => e.kind);
 
@@ -43,10 +43,30 @@ test('none: clean shape yields zero entries', () => {
   assert.deepStrictEqual(evaluateExposure('none', { trunk: 'main', hasProduction: false, deploy: 'none', hasDeployWorkflow: false }), []);
 });
 
-test('none: wrong trunk is one fail entry, phrased for the audit\'s pinned regex', () => {
+test('none: a non-main trunk with NO readable branch list fails closed, one fail entry', () => {
   const r = evaluateExposure('none', { trunk: 'dev', hasProduction: false, deploy: 'none', hasDeployWorkflow: false });
   assert.deepStrictEqual(kinds(r), ['fail']);
-  assert.match(r[0].message, /exposure: none requires trunk "main"/);
+  assert.match(r[0].message, /exposure: none requires a single trunk/);
+  assert.match(r[0].message, /branch list could not be read/);
+});
+
+// #522: the single-trunk rule counts long-lived branches, it never checks the spelling.
+test('none: an existing repo whose single trunk is "master" is clean — nothing renamed', () => {
+  assert.deepStrictEqual(evaluateExposure('none', { trunk: 'master', hasProduction: false, deploy: 'none', hasDeployWorkflow: false, branches: ['master', 'feat/old-thing'] }), []);
+});
+
+test('none: a "main" beside a non-main trunk is the two-branch shape — still refused', () => {
+  const r = evaluateExposure('none', { trunk: 'master', hasProduction: false, deploy: 'none', hasDeployWorkflow: false, branches: ['master', 'main'] });
+  assert.deepStrictEqual(kinds(r), ['fail']);
+  assert.match(r[0].message, /exposure: none requires a single trunk — trunk is "master" and a "main" branch exists beside it/);
+});
+
+test('singleTrunkViolation: main always passes; missing trunk always fails', () => {
+  assert.strictEqual(singleTrunkViolation('main', null), null);
+  assert.strictEqual(singleTrunkViolation('main', ['main', 'dev']), null);
+  assert.ok(singleTrunkViolation(null, ['main']));
+  assert.ok(singleTrunkViolation('', null));
+  assert.strictEqual(singleTrunkViolation('trunk-x', ['trunk-x']), null);
 });
 
 test('none: a deploy workflow is one fail entry, workflow names appended when given', () => {
@@ -127,6 +147,13 @@ test('released (no production): wrong trunk and a live deploy value are independ
 
   const both = evaluateExposure('released', { trunk: 'dev', hasProduction: false, deploy: 'tag', hasDeployWorkflow: false });
   assert.deepStrictEqual(kinds(both), ['fail', 'fail']);
+});
+
+test('released (no production): a single "master" trunk is clean; a "main" beside it is refused (#522)', () => {
+  assert.deepStrictEqual(evaluateExposure('released', { trunk: 'master', hasProduction: false, deploy: 'none', hasDeployWorkflow: false, branches: ['master'] }), []);
+  const r = evaluateExposure('released', { trunk: 'master', hasProduction: false, deploy: 'none', hasDeployWorkflow: false, branches: ['master', 'main'] });
+  assert.deepStrictEqual(kinds(r), ['fail']);
+  assert.match(r[0].message, /released with production: null requires a single trunk/);
 });
 
 // --- released, with production: deploy tag|manual, trunk dev (or main when deploy: tag) --------
