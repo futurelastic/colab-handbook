@@ -1900,6 +1900,15 @@ excuses, and it names the rows that carry its rules now.
 | C8.upstream.14 | default |  | colab labels --ensure creates missing labels and never rewrites an existing description on its own. | `colab labels --ensure` creates missing labels and never rewrites an existing | CONVENTIONS.md | — |
 | C8.upstream.15 | default |  | colab labels --ensure --refresh-descriptions rewrites differing descriptions on request; --keep name spares a declared divergence. | `colab labels --ensure --refresh-descriptions` rewrites them on request | CONVENTIONS.md | — |
 
+### Refusals name the next command (#532)
+
+| id | class | gate | rule | key | dest | source |
+|---|---|---|---|---|---|---|
+| C8.refusal.01 | hard | tools/lib/refusal-sites.test.js::every refusal names its next command | Every refusal colab prints ends with the exact next command, or says no command can and who decides. | Every refusal `colab` prints ends with the exact next command | CONVENTIONS.md | #532 |
+| C8.refusal.02 | default |  | "Retry later" counts as a remedy only when it names what to wait for. | counts only when it names what to wait for | CONVENTIONS.md | #532 |
+| C8.refusal.03 | default |  | An interactive flow checks each answer when it is given, not after the last question. | an interactive flow checks each answer when it is | CONVENTIONS.md | #532 |
+| C8.refusal.04 | default |  | The known list of pre-rule refusals with no remedy only shrinks. | which only shrinks | CONVENTIONS.md | #532 |
+
 ### The fleet registry is private
 
 | id | class | gate | rule | key | dest | source |

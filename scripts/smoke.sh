@@ -5,6 +5,7 @@
 #   1. syntax of every shipped script (the same list CI checks),
 #   2. stray control bytes in tracked text,
 #   3. the self-audit, the rule inventory and the normative documents' size budget (#523),
+#      and the refusal gate — every `✗` colab prints names its next command (#532),
 #   4. the unit tests for what this branch changed — a tools/lib/<m>.test.js runs when
 #      it, or its module tools/lib/<m>.js, differs from origin/main. Everything else
 #      is left to CI's full run.
@@ -22,12 +23,14 @@ node audit/audit.mjs --local . >/dev/null
 node scripts/check-pack-allowlist.mjs
 node scripts/check-rule-inventory.mjs
 node scripts/check-doc-budget.mjs
+env -u NODE_TEST_CONTEXT -u NODE_TEST_WORKER_ID node --test --test-reporter=dot tools/lib/refusal-sites.test.js
 
 base="$(git merge-base HEAD origin/main 2>/dev/null || echo HEAD)"
 tests=""
 for p in $( { git diff --name-only "$base"; git ls-files --others --exclude-standard; } | sort -u); do
   case "$p" in
     tools/lib/codec/*) t=tools/lib/codec/codec.test.js ;;
+    tools/lib/refusal-sites*) continue ;;   # always run above
     tools/lib/*.test.js) t="$p" ;;
     tools/lib/*.js) t="${p%.js}.test.js" ;;
     *) continue ;;
