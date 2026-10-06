@@ -61,3 +61,14 @@ test('isScratchPath / withoutScratch: only paths inside a scratch dir are droppe
   assert.strictEqual(sd.withoutScratch('?? .plans/issue-1.md\n?? src/new.js\n?? .briefs/b.md', env), '?? src/new.js');
   assert.strictEqual(sd.withoutScratch('', env), '');
 });
+
+test('worktreeExcludeLine (#527): the worktree subdir as an anchored line, null when it is not repo-local', () => {
+  const { worktreeExcludeLine, isScratchPath } = sd;
+  assert.strictEqual(worktreeExcludeLine(undefined), '/.worktrees/');
+  assert.strictEqual(worktreeExcludeLine('.worktrees'), '/.worktrees/');
+  assert.strictEqual(worktreeExcludeLine('wt/'), '/wt/');
+  assert.strictEqual(worktreeExcludeLine('/abs/wt'), null);
+  assert.strictEqual(worktreeExcludeLine('../sibling'), null);
+  // a worktree is live work, never scratch — the uncommitted-work gate must still see it
+  assert.strictEqual(isScratchPath('.worktrees/x/file.js', {}), false);
+});

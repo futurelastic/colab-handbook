@@ -106,3 +106,39 @@ test('worktree new: hides the scratch dirs in the clone\'s shared info/exclude, 
   fs.mkdirSync(path.join(fx.work, '.plans')); fs.writeFileSync(path.join(fx.work, '.plans', 'issue-4.md'), 'p\n');
   assert.strictEqual(fx.g(fx.work, 'status', '--porcelain', '-uall').includes('.plans'), false);
 });
+
+test('worktree new (#527): hides the worktree subdir too — trunk stays clean and `git add -A` stages nothing', () => {
+  const fx = fixture(); // .gitignore-free repo: nothing but info/exclude can hide .worktrees/
+  const r = colab(fx, ['worktree', 'new', 'chore/wt-dir-6', '--repo', fx.work]);
+  assert.strictEqual(r.code, 0, r.out + r.err);
+  assert.ok(fs.existsSync(path.join(fx.work, '.worktrees')), 'fixture precondition: worktree created inside the clone');
+  const exclude = fs.readFileSync(path.join(fx.work, '.git', 'info', 'exclude'), 'utf8').split('\n');
+  assert.strictEqual(exclude.filter((l) => l === '/.worktrees/').length, 1, '/.worktrees/ exactly once');
+  assert.strictEqual(fx.g(fx.work, 'status', '--porcelain', '-uall'), '', 'trunk checkout must read clean');
+  assert.strictEqual(fx.g(fx.work, 'add', '-A', '--dry-run'), '', 'git add -A must stage nothing');
+  // idempotent across a second worktree
+  assert.strictEqual(colab(fx, ['worktree', 'new', 'chore/wt-dir-7', '--repo', fx.work]).code, 0);
+  const again = fs.readFileSync(path.join(fx.work, '.git', 'info', 'exclude'), 'utf8').split('\n');
+  assert.strictEqual(again.filter((l) => l === '/.worktrees/').length, 1);
+});
+
+test('worktree new (#527): a configured worktreeSubdir is the one hidden', () => {
+  const fx = fixture();
+  fs.writeFileSync(path.join(fx.home, 'config.json'), JSON.stringify({ worktreeSubdir: 'wt' }));
+  const r = colab(fx, ['worktree', 'new', 'chore/wt-dir-8', '--repo', fx.work]);
+  assert.strictEqual(r.code, 0, r.out + r.err);
+  assert.ok(fs.existsSync(path.join(fx.work, 'wt')), 'fixture precondition: config honoured');
+  const exclude = fs.readFileSync(path.join(fx.work, '.git', 'info', 'exclude'), 'utf8').split('\n');
+  assert.ok(exclude.includes('/wt/'), exclude.join('\n'));
+  assert.strictEqual(fx.g(fx.work, 'status', '--porcelain', '-uall'), '');
+});
+
+test('adopt (#527): a repo adopted before the fix — a worktree already showing on trunk — is hidden by re-running adopt', () => {
+  const fx = fixture();
+  // the pre-fix shape: a worktree inside the clone, nothing excluding it
+  fx.g(fx.work, 'worktree', 'add', '-q', '-b', 'chore/inside', path.join(fx.work, '.worktrees', 'inside'), 'origin/main');
+  assert.ok(fx.g(fx.work, 'status', '--porcelain').includes('.worktrees'), 'precondition: the gap shows');
+  const r = colab(fx, ['adopt', '--repo', fx.work, '--no-verify']);
+  assert.ok(fs.readFileSync(path.join(fx.work, '.git', 'info', 'exclude'), 'utf8').split('\n').includes('/.worktrees/'), r.out + r.err);
+  assert.strictEqual(fx.g(fx.work, 'status', '--porcelain', '-uall').includes('.worktrees'), false);
+});
