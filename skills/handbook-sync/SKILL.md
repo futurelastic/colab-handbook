@@ -298,7 +298,9 @@ extra step-6 lines — read them there; this section adds only the judgement aro
 - **The deploy template**, where the tag deploys and the stack has one (`deploy-xserver` for
   PHP on shared hosting, `deploy-container` for a container host), is copied **disarmed** —
   only its `workflow_dispatch` trigger live — and the operator arms `push: tags` once its
-  secrets are set. Arming a deploy is never adoption's act.
+  secrets are set. Arming a deploy is never adoption's act. When the operator does arm it,
+  the `"!v*.*.*-*"` line right after `"v*.*.*"` comes with the trigger (#513): a copy that
+  keeps only the positive pattern deploys every release-candidate tag.
 - **The first final** is the operator's. `colab release cut` refuses with no final to bump
   from, so tell them in the report, with the command; tag `v0.1.0` yourself only when told to.
 
@@ -495,6 +497,19 @@ and the audit is what catches it:
   `gh release create <tag> <files>`, a release action given `files:`). A compiled tool moves its
   binaries to dist refs (`templates/dist-refs.yml` + `templates/npx-launcher.mjs`, CONVENTIONS.md
   §6 *Distribution*); an asset that is only a by-product (an SBOM) can stay — it is a warning.
+- **A tag-triggered deploy copy must exclude pre-release tags (#513).** GitHub's tag glob `*`
+  matches `-`, so `v*.*.*` also fires on `v1.2.3-rc.1`, and the release workflow cuts candidate
+  tags automatically — a copy with only the positive pattern deploys every candidate to
+  production. Every `deploy-*.yml` / `deploy.yml` copy (`deploy-xserver`, `deploy-container`, or
+  an older hand-written one) is read for it, stamped or not: parse its `push: tags:` list; a
+  copy that fires on a pre-release tag is a **finding**, and the audit fails it under
+  `deploy: tag` (warns otherwise). Offer the graft — one line, `- "!v*.*.*-*"` placed
+  **immediately after** `- "v*.*.*"` (a negative pattern before it, or separated from it, excludes
+  nothing; GitHub applies the list in order) — and keep the copy's own tag shape if it differs.
+  A copy whose positive pattern is already strict (`v[0-9]+.[0-9]+.[0-9]+`) cannot match `-` and
+  needs nothing. A copy with only a `workflow_dispatch` trigger (disarmed) is not a finding, but
+  tell the operator the exclusion goes in when they arm it. `release-tag.yml` copies are exempt
+  by design: they record a pre-release and deploy nothing.
 - A workflow may trigger on branches that no longer exist — CI passing on nothing.
 - **A convention label may have been added since this repo adopted.** The label set
   is part of the model, and a repo that adopted at an older version never back-filled
@@ -640,6 +655,8 @@ git show --stat                                                 # verify the fil
   single-runner warning recorded on the Issue (§4) — never neither.
 - `audit.mjs --local .` is clean, or each remaining finding is explained.
 - `git show --stat` on your commits lists only files you meant to change.
+- Every tag-triggered `deploy-*` copy excludes pre-release tags (§7, #513), or the reason it
+  does not is recorded on the Issue.
 - The §7 convention-drift check ran. Every `value`/`meaning` hit and every divergent text
   is reverted, refreshed, or declared in `Local divergences:` with a handbook issue URL.
   None is left reported as a local customisation.
