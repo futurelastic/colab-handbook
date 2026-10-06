@@ -73,7 +73,8 @@ With the inventory in place, every such reword is visible row by row, because a 
 fails CI until its row is updated. Whether to allow that is a ruling, not an implementation
 detail, so it is asked on #539 rather than taken here.
 
-Budgets after this pass: `CONVENTIONS.md` 5,550 (5,516 lines) and `project.schema.md` 1,750
+Budgets after this pass: `CONVENTIONS.md` 5,600 (5,525 lines; the extra 50 absorb a concurrent
+branch's pending 28-line §4 hunk, so neither landing order goes red) and `project.schema.md` 1,750
 (1,704). The ratchet makes #539 lower them as it lands.
 
 **§2 is reframed by a lead paragraph, not by renaming.** §2 now opens by reading the section

@@ -20,7 +20,7 @@ import { pathToFileURL } from "node:url";
 // file -> max lines. Set from the size after #523's first pass (rounded up to the next 50);
 // docs/adr/523-conventions-hard-default-and-size-budget.md records the numbers and phase 2's target.
 export const BUDGET = {
-  "CONVENTIONS.md": 5550, // #523 pass 1: 5,516 lines (from 5,895)
+  "CONVENTIONS.md": 5600, // #523 pass 1: 5,525 lines (from 5,895), +50 for #512's pending §4 Branch CI hunk
   "project.schema.md": 1750, // #523 pass 1: 1,704 lines, markers only
 };
 export const RATCHET_SLACK = 100;
