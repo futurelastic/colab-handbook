@@ -10213,7 +10213,9 @@ It never waits: each call reads the remote, takes ONE step and exits —
      trunk CI red (the cure/grant doors apply per member, never to a batch), fewer than two members
      can join, or the combined run is red — classify it: red:infra → the printed \`gh run rerun\`,
      once; red:finding, or red again after that one re-run → serial
-  1  refused (a broken checkout, an unreadable remote)
+  1  refused (a broken checkout, an unreadable remote) — or the land push was refused while trunk did
+     NOT move (a local pre-push hook, a remote rejection): the push's own output is echoed, and
+     re-running hits the same refusal until its cause is fixed (#509)
 One batch per base: a batch at this base carrying OTHER members is waited on (exit 3) while its run
 is pending or green, but a declined one — its combined run red — is deleted and the batch you asked
 for is built in its place, so the survivors of a decline can batch without landing serially first (#391).
@@ -13959,9 +13961,28 @@ function shipBatchLand(repoAbs, doc, trunk, remote, base, existing, verdict, opt
     const headNow = git.git(['rev-parse', 'HEAD'], repoAbs).stdout;
     if (headNow === head) git.git(['reset', '--hard', preMergeSha], repoAbs); // #322: our own merge, put back
     release();
-    print(`⏸ ship-batch: trunk moved during land (${git.gitFailureLine(push.stderr)}) — nothing landed; ${trunk} rolled back to ${shortSha(preMergeSha)}.`);
-    print('  Run this command again: it sees the moved trunk and rebuilds the batch on it.');
-    return 3;
+    // #509: a failed push is not proof trunk moved — re-read the remote trunk before saying so.
+    const ls = git.run('git', ['ls-remote', remote, `refs/heads/${trunk}`], { cwd: repoAbs, timeoutMs: 60_000 });
+    const remoteNow = ls.ok ? ((ls.stdout || '').split('\n')[0] || '').split('\t')[0].trim() : null;
+    const why = shipBatch.landPushFailure({ stderr: push.stderr, remoteNow, base });
+    const rolled = `nothing landed; ${trunk} rolled back to ${shortSha(preMergeSha)}`;
+    const echo = () => { for (const l of why.lines) print(`  │ ${l}`); };
+    if (why.kind === 'trunk-moved') {
+      print(`⏸ ship-batch: trunk moved during land (${remote}/${trunk} ${shortSha(base)} → ${shortSha(remoteNow)}) — ${rolled}.`);
+      print('  Run this command again: it sees the moved trunk and rebuilds the batch on it.');
+    } else if (why.kind === 'unreachable') {
+      print(`⏸ ship-batch: the push failed and ${remote}/${trunk} could not be re-read to say why — ${rolled}. The push said:`);
+      echo();
+      print(`  Run this command again once ${remote} answers; it re-reads trunk before deciding anything.`);
+    } else {
+      const who = why.kind === 'remote-rejected'
+        ? `${remote} rejected the update`
+        : 'the push was refused before it reached the remote (a local pre-push hook?)';
+      print(`✗ ship-batch: ${who} — ${remote}/${trunk} did NOT move (still ${shortSha(base)}); ${rolled}. The push said:`);
+      echo();
+      print('  This is not a moved trunk: re-running hits the same refusal. Fix what the output above names, then run this command again.');
+    }
+    return why.exit;
   }
   print('  pushed.');
   deferredCollector = [];
