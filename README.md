@@ -13,7 +13,7 @@ This file is for humans.
 
 ```sh
 git clone https://github.com/futurelastic/colab-handbook.git ~/code/colab-handbook
-cd ~/code/colab-handbook && ./install.sh --all   # skills + colab CLI + hooks; --dry shows it first
+cd ~/code/colab-handbook && ./install.sh --all   # skills + colab CLI + hooks, from the newest release; --dry shows it first
 cd /path/to/your-repo
 colab adopt              # asks only what it cannot detect, writes .github/project.yml
 colab labels --ensure    # creates the convention labels
@@ -23,7 +23,8 @@ colab register           # adds the repo to this machine's fleet list
 Then, in an agent session in that repo, run `/code-start <issue-number>`. With an
 agent at hand, `/handbook-sync` replaces the last three commands and also does
 the rest of adoption (see [*Adopting it into a repo*](#adopting-it-into-a-repo)).
-You need `git`, `node` ≥ 18 and `gh` logged in (`gh auth login`).
+You need `git`, `node` ≥ 18 and `gh` ≥ 2.94 logged in (`gh auth login`); distro
+packages often ship an older `gh`, so install it from [cli.github.com](https://cli.github.com).
 
 *([`CONVENTIONS.md`](CONVENTIONS.md) is the normative document, written in
 English so agents and tooling can read it. This file and the Vietnamese
@@ -244,10 +245,23 @@ migration hold with or without it.
 ## Setting up a machine
 
 Once per machine. Clone somewhere permanent — the skills are symlinks *into
-this working tree*, so whichever branch it has checked out is the version every
-session gets; keep it on `main`. `install.sh` checks its prerequisites before it
-changes anything, never overwrites what it did not create, and `--dry` prints
-the plan first.
+this working tree*, so whatever it has checked out is the version every session
+gets. `install.sh` checks its prerequisites before it changes anything, never
+overwrites what it did not create, and `--dry` prints the plan first.
+
+**Which version you get.** `main` runs ahead of the last final release, so the
+first install from a fresh clone checks out the **newest final release tag**
+(`vX.Y.Z`, never a release candidate) and installs from that — the same
+default npm gives you. To follow `main` instead, unreleased work included, run
+the first install with `--trunk`. Every run prints which one you are on.
+Later moves are explicit:
+
+- to a newer release: `./install.sh --release`;
+- from a release back to `main`: `git checkout main && ./install.sh --trunk` (an
+  older release's installer does not know `--trunk`, so check out `main` first).
+
+A clone with uncommitted changes is never moved, and a re-run without either
+flag keeps whatever is checked out.
 
 | Flag | What it does |
 |---|---|
@@ -257,6 +271,8 @@ the plan first.
 | `--fleet` | Seed `~/.colab/repos.txt` with format notes only, if absent. It stays machine-local because it names your private repos; `colab register` fills it. |
 | `--all` | `--tools --hooks --fleet`. |
 | `--notify-url <url>` | Seed `notifyUrl` in `~/.colab/config.json`, only if the key is absent. See [`tools/README.md`](tools/README.md#notifyurl--optional-event-push-off-by-default). |
+| `--release` | Check this clone out at the newest final release tag, then install. The default for a first install from a fresh clone. |
+| `--trunk` | Check out `main` and install it, unreleased work included — the clone's `@next`. |
 | `--dry` | Print what would happen, change nothing. Combines with the flags above. |
 | `--check` | **Read-only** health report on an earlier install — see below. Takes no other flag; exit 1 on any ✗ row. |
 
@@ -268,9 +284,11 @@ branch this clone has checked out. The frozen copy never moves on its own:
 [`tools/README.md`](tools/README.md#install).
 
 **The CLI alone, without the skills,** is on npm as
-**`@futurelastic/colab-handbook`** — `npx @futurelastic/colab-handbook <command>`,
-or `npm i -g @futurelastic/colab-handbook` (`@next` for release candidates). The
-command is still `colab`. The skills are not in the package; they install from a
+**`@futurelastic/colab-handbook`**. No final release has been published to npm
+yet, so the default `latest` tag holds only a placeholder; install from
+**`@next`**, the release candidates: `npx @futurelastic/colab-handbook@next
+<command>`, or `npm i -g @futurelastic/colab-handbook@next`. The command is
+still `colab`. The skills are not in the package; they install from a
 clone, because they must symlink into `~/.claude/skills/`.
 
 ### Checking an install
@@ -287,7 +305,10 @@ which commands it does not dispatch, whether the state file exists, whether
 anything is registered, whether both pre-commit hooklets can run, and whether
 `notifyUrl` is unset while a local observer declared an endpoint. ✗ means
 something installed is stale or unusable; ⚠ means something was never set up,
-which may be deliberate. It never refreshes anything.
+which may be deliberate or just not done yet — so a correct fresh install, with
+no repo registered and no identity vocabulary, reports ⚠ rows and exits 0. It
+never refreshes anything. `--check` is not in v1.11.0 or earlier; on such a
+release, follow `main` to get it.
 
 ## Why so little enforcement
 

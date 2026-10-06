@@ -208,13 +208,14 @@ test('state: absent is ✗ only once a CLI is installed; unparseable is ✗', (t
   assert.strictEqual(check.checkState({ colabHome, home }).severity, check.FAIL);
 });
 
-test('fleet: never set up is ⚠; a placeholder-only list is ✗ (the --fleet dead end); hand-edited drift is ⚠', (t) => {
+test('fleet: never set up is ⚠; a placeholder-only list is ⚠ too (not set up yet, #521); hand-edited drift is ⚠', (t) => {
   const colabHome = tmp(t);
   assert.strictEqual(check.checkFleet({ colabHome })[0].severity, check.WARN);
 
   fs.copyFileSync(path.join(ROOT, 'audit', 'repos.txt'), path.join(colabHome, 'repos.txt'));
   const seeded = check.checkFleet({ colabHome });
-  assert.strictEqual(seeded[0].severity, check.FAIL, 'the committed example must register nothing');
+  assert.strictEqual(seeded[0].severity, check.WARN, 'the committed example registers nothing, and that is not a failure');
+  assert.match(seeded[0].text, /placeholders only/, 'the committed example must register nothing');
   assert.match(seeded[0].text, /colab register/);
 
   fs.appendFileSync(path.join(colabHome, 'repos.txt'), '/srv/a\nowner/remote-only\n');
@@ -225,7 +226,7 @@ test('fleet: never set up is ⚠; a placeholder-only list is ✗ (the --fleet de
   assert.deepStrictEqual(check.checkFleet({ colabHome }).map((r) => r.severity), [check.OK]);
 });
 
-test('hooks: enabled with no vocabulary and no gitleaks fails BOTH rows — neither dependency is quieter', (t) => {
+test('hooks: enabled with no vocabulary and no gitleaks warns on BOTH rows — neither quieter, neither ✗ (#521)', (t) => {
   const h = tempHandbook(t);
   const home = tmp(t);
   const env = { PATH: '', HOME: home };
@@ -234,7 +235,7 @@ test('hooks: enabled with no vocabulary and no gitleaks fails BOTH rows — neit
 
   h.git('config', 'core.hooksPath', '.githooks');
   const rows = check.checkHooks({ root: h.root, colabHome: home, home, env });
-  assert.deepStrictEqual(rows.map((r) => r.severity), [check.FAIL, check.FAIL]);
+  assert.deepStrictEqual(rows.map((r) => r.severity), [check.WARN, check.WARN]);
   assert.match(rows[1].text, /identity vocabulary/);
 
   fs.writeFileSync(path.join(home, 'identity-vocabulary'), 'example\n');
@@ -252,8 +253,12 @@ function runInstall(home, args) {
     // Pin core.hooksPath off for the clone under test: a developer's own clone may have --hooks
     // enabled, and the hooks row must not make this test machine-dependent.
     GIT_CONFIG_COUNT: '1', GIT_CONFIG_KEY_0: 'core.hooksPath', GIT_CONFIG_VALUE_0: '',
+    // Never let a test move THIS checkout: a fresh HOME on a trunk checkout at origin's tip is exactly
+    // the first-install shape that pins a release (#521). The ref step has its own tests below.
+    COLAB_INSTALL_REF: 'keep',
   };
   delete env.COLAB_IDENTITY_VOCAB;
+  delete env.COLAB_INSTALL_REEXEC;
   return spawnSync('bash', [INSTALL, ...args], { encoding: 'utf8', env });
 }
 
@@ -343,4 +348,109 @@ test('install.sh --notify-url refuses a non-http value before installing anythin
   assert.strictEqual(r.status, 2);
   assert.match(r.stderr, /must be an http\(s\) URL/);
   assert.ok(!fs.existsSync(path.join(home, '.claude')), 'installed skills before refusing');
+});
+
+// --- #521: which ref a new machine installs ---------------------------------------------------------
+
+/**
+ * A throwaway "handbook" with a remote: v1.0.0 carries a stub installer that only echoes its argv
+ * (so a re-exec is observable), v1.1.0-rc.1 sits above it, and trunk runs ahead of both with the
+ * real install.sh. Returns a fresh clone of trunk — the exact state the README's clone step leaves.
+ */
+function releasedHandbook(t) {
+  const base = tmp(t);
+  const origin = path.join(base, 'origin');
+  const clone = path.join(base, 'clone');
+  const git = (cwd, ...args) => execFileSync('git', args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
+  const write = (rel, text, mode) => {
+    fs.mkdirSync(path.dirname(path.join(origin, rel)), { recursive: true });
+    fs.writeFileSync(path.join(origin, rel), text);
+    if (mode) fs.chmodSync(path.join(origin, rel), mode);
+  };
+  fs.mkdirSync(origin);
+  git(origin, 'init', '-q', '-b', 'main');
+  git(origin, 'config', 'user.email', 'test@example.invalid');
+  git(origin, 'config', 'user.name', 'test');
+  git(origin, 'config', 'core.hooksPath', path.join(origin, '.nohooks'));
+  write('.github/project.yml', 'trunk: main\n');
+  write('skills/demo/SKILL.md', '---\nname: demo\n---\n');
+  write('tools/package.json', '{"engines":{"node":">=18"}}\n');
+  write('install.sh', '#!/usr/bin/env bash\necho "OLD INSTALLER args:[$*] reexec:[$COLAB_INSTALL_REEXEC]"\n', 0o755);
+  git(origin, 'add', '-A'); git(origin, 'commit', '-qm', 'v1'); git(origin, 'tag', 'v1.0.0');
+  write('skills/demo/SKILL.md', '---\nname: demo\n---\nrc\n');
+  git(origin, 'add', '-A'); git(origin, 'commit', '-qm', 'rc'); git(origin, 'tag', 'v1.1.0-rc.1');
+  write('install.sh', installText, 0o755);
+  git(origin, 'add', '-A'); git(origin, 'commit', '-qm', 'trunk work');
+  execFileSync('git', ['clone', '-q', origin, clone], { stdio: 'ignore' });
+  return { clone, git: (...a) => git(clone, ...a) };
+}
+
+function runClone(clone, home, args, extraEnv = {}) {
+  const env = {
+    ...process.env, HOME: home, COLAB_HOME: path.join(home, '.colab'),
+    GIT_CONFIG_COUNT: '1', GIT_CONFIG_KEY_0: 'core.hooksPath', GIT_CONFIG_VALUE_0: '',
+    ...extraEnv,
+  };
+  delete env.COLAB_INSTALL_REF; delete env.COLAB_INSTALL_REEXEC;
+  Object.assign(env, extraEnv);
+  return spawnSync('bash', [path.join(clone, 'install.sh'), ...args], { encoding: 'utf8', env });
+}
+
+test('#521: a first install from a fresh clone of trunk pins the newest FINAL tag and hands over to its installer', (t) => {
+  const h = releasedHandbook(t);
+  const r = runClone(h.clone, tmp(t), ['--tools', '--hooks']);
+  assert.strictEqual(r.status, 0, r.stdout + r.stderr);
+  assert.match(r.stdout, /first install from a fresh clone of main → pinning the newest final release/);
+  assert.strictEqual(h.git('describe', '--tags', '--exact-match'), 'v1.0.0', 'not the rc, not trunk');
+  assert.match(r.stdout, /OLD INSTALLER args:\[--tools --hooks\] reexec:\[1\]/, 'did not re-exec the tag\'s own installer with the flags');
+});
+
+test('#521: --trunk (or the env) keeps a fresh clone on trunk; --release afterwards moves it to the release', (t) => {
+  const h = releasedHandbook(t);
+  const home = tmp(t);
+  const r = runClone(h.clone, home, ['--trunk']);
+  assert.strictEqual(r.status, 0, r.stdout + r.stderr);
+  assert.match(r.stdout, /✓ trunk main @ v1\.1\.0-rc\.1-1-g[0-9a-f]+ — unreleased work included/);
+  assert.strictEqual(h.git('symbolic-ref', '--short', 'HEAD'), 'main');
+  assert.ok(fs.lstatSync(path.join(home, '.claude', 'skills', 'demo')).isSymbolicLink());
+
+  // Installed on trunk now: a flagless re-run keeps it and says how to pin a release.
+  const again = runClone(h.clone, home, []);
+  assert.strictEqual(again.status, 0, again.stdout + again.stderr);
+  assert.match(again.stdout, /main @ v1\.1\.0-rc\.1-1-g[0-9a-f]+ — not a final release[\s\S]*\.\/install\.sh --release/);
+  assert.strictEqual(h.git('symbolic-ref', '--short', 'HEAD'), 'main');
+
+  const rel = runClone(h.clone, home, ['--release']);
+  assert.strictEqual(rel.status, 0, rel.stdout + rel.stderr);
+  assert.strictEqual(h.git('describe', '--tags', '--exact-match'), 'v1.0.0');
+});
+
+test('#521: a dirty clone is never moved, keep never moves, and the two ref flags refuse together', (t) => {
+  const h = releasedHandbook(t);
+  fs.appendFileSync(path.join(h.clone, 'skills', 'demo', 'SKILL.md'), 'local edit\n');
+  const dirty = runClone(h.clone, tmp(t), ['--release']);
+  assert.strictEqual(dirty.status, 0, dirty.stdout + dirty.stderr);
+  assert.match(dirty.stdout, /uncommitted changes — NOT switching to v1\.0\.0/);
+  assert.strictEqual(h.git('symbolic-ref', '--short', 'HEAD'), 'main');
+  h.git('checkout', '--', '.');
+
+  const kept = runClone(h.clone, tmp(t), [], { COLAB_INSTALL_REF: 'keep' });
+  assert.strictEqual(kept.status, 0, kept.stdout + kept.stderr);
+  assert.strictEqual(h.git('symbolic-ref', '--short', 'HEAD'), 'main');
+
+  const both = runClone(h.clone, tmp(t), ['--release', '--trunk']);
+  assert.strictEqual(both.status, 2);
+  assert.match(both.stderr, /opposite choices/);
+});
+
+test('#521: a fresh --tools --fleet then --check is ⚠-only, exit 0 — not set up yet is not broken', (t) => {
+  const home = tmp(t);
+  // Not --all: --hooks writes core.hooksPath into THIS clone's .git/config. The hooks rows, the other
+  // half of the #521 measurement, are covered against a throwaway handbook above.
+  const r = runInstall(home, ['--tools', '--fleet']);
+  assert.strictEqual(r.status, 0, r.stdout + r.stderr);
+  const c = runInstall(home, ['--check']);
+  assert.strictEqual(c.status, 0, c.stdout + c.stderr);
+  assert.doesNotMatch(c.stdout, /^\s+✗ /m);
+  assert.match(c.stdout, /⚠ fleet\s+nothing registered yet/);
 });
