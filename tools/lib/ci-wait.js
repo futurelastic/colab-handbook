@@ -13,7 +13,8 @@
  *     run costs ~10 polls instead of ~180 at `sleep 5`;
  *   - conditional requests: every poll after the first sends `If-None-Match`, and a `304 Not
  *     Modified` is not counted against the primary rate limit (GitHub REST docs, "conditional
- *     requests");
+ *     requests") — capped (#505): after two 304s in a row, and on the deadline's poll, it re-reads
+ *     unconditionally, because a validator that never changes would otherwise pin a stale state;
  *   - a rate limit (403 with remaining 0, or 429) ENDS the wait with its own outcome — never a retry;
  *   - an unreadable or unrecognised state ends it too (UNKNOWN), never "keep waiting";
  *   - one wait per run per checkout: a second waiter on the same key is refused (ALREADY_WAITING).
@@ -113,18 +114,31 @@ function runState(s) {
 }
 
 /**
+ * #505: how many 304s in a row may stand for the state before the next poll re-reads without
+ * `If-None-Match`. Measured: the runs-list read kept answering 304 for ten minutes while every run
+ * at the sha had completed green — the validator never changed, so a loop that trusted it would
+ * have reported TIMEOUT on a green sha. A cap of 2 bounds that to one paid call per three polls.
+ */
+const DEFAULT_MAX_NOT_MODIFIED = 2;
+
+/**
  * The wait loop. `poll(etag)` returns a classifyResponse() result, plus `state` (runState) and
- * `summary` on `ok`. `sleep(ms)` blocks; `now()` is epoch ms. A 304 keeps the previous state.
+ * `summary` on `ok`. `sleep(ms)` blocks; `now()` is epoch ms. A 304 keeps the previous state — but
+ * only for `maxNotModified` polls in a row, and never on the last poll before the deadline: those
+ * polls send no ETag (`poll(null)`), so a stale validator costs one paid read, not the wait (#505).
  *
- * Returns `{ outcome, polls, notModified, waitedMs, last, detail }`, outcome one of the EXIT keys.
+ * Returns `{ outcome, polls, notModified, forced, waitedMs, last, detail }`, outcome one of the
+ * EXIT keys; `forced` counts the unconditional re-reads #505 added.
  */
 function waitLoop({ poll, sleep, now = Date.now, deadlineSec = DEFAULT_DEADLINE_SEC,
-  schedule = DEFAULT_SCHEDULE_SEC, onPoll = () => {} }) {
+  schedule = DEFAULT_SCHEDULE_SEC, maxNotModified = DEFAULT_MAX_NOT_MODIFIED, onPoll = () => {} }) {
   const start = now();
   let etag = null;
   let last = null;
   let polls = 0;
   let notModified = 0;
+  let streak = 0; // consecutive 304s
+  let forced = 0;
   for (let i = 0; ; i++) {
     const d = delayFor(i, schedule) * 1000;
     if (d) {
@@ -132,25 +146,31 @@ function waitLoop({ poll, sleep, now = Date.now, deadlineSec = DEFAULT_DEADLINE_
       if (left <= 0) return done('TIMEOUT', `still ${last ? last.state : 'unread'} at the ${fmtDuration(deadlineSec * 1000)} deadline`);
       sleep(Math.min(d, left));
     }
-    const r = poll(etag);
+    // The poll that lands on the deadline is the last one: it must read the truth, not a 304.
+    const final = now() - start >= deadlineSec * 1000;
+    const force = Boolean(etag) && (streak >= maxNotModified || final);
+    if (force) forced++;
+    const r = poll(force ? null : etag);
     polls++;
     if (r.kind === 'rate-limited') return done('RATE_LIMITED', r.detail + (r.resetAt ? ` — quota resets ${new Date(r.resetAt).toISOString()}` : ''), r);
     if (r.kind === 'error') return done('UNKNOWN', `read failed: ${r.detail}`, r);
     if (r.kind === 'not-modified') {
       notModified++;
+      streak++;
       if (!last) return done('UNKNOWN', '304 on the first read — nothing to compare against', r);
     } else {
+      streak = 0;
       etag = r.etag || etag;
       last = r;
     }
-    onPoll({ poll: polls, state: last.state, notModified: r.kind === 'not-modified', elapsedMs: now() - start });
+    onPoll({ poll: polls, state: last.state, notModified: r.kind === 'not-modified', forced: force, elapsedMs: now() - start });
     if (last.state === 'green') return done('GREEN', null);
     if (last.state === 'red') return done('RED', null);
     if (last.state !== 'pending') return done('UNKNOWN', `unrecognised state (${JSON.stringify(last.summary || null)})`);
     if (now() - start >= deadlineSec * 1000) return done('TIMEOUT', `still pending at the ${fmtDuration(deadlineSec * 1000)} deadline`);
   }
   function done(outcome, detail, r) {
-    return { outcome, polls, notModified, waitedMs: now() - start, last: last || r || null, detail };
+    return { outcome, polls, notModified, forced, waitedMs: now() - start, last: last || r || null, detail };
   }
 }
 
@@ -197,7 +217,7 @@ function sleepSync(ms) {
 }
 
 module.exports = {
-  EXIT, DEFAULT_SCHEDULE_SEC, DEFAULT_DEADLINE_SEC,
+  EXIT, DEFAULT_SCHEDULE_SEC, DEFAULT_DEADLINE_SEC, DEFAULT_MAX_NOT_MODIFIED,
   delayFor, parseHttp, classifyResponse, restRow, runState, waitLoop, fmtDuration, parseDuration,
   acquireLock, sleepSync,
 };

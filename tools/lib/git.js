@@ -865,6 +865,10 @@ function ghRunForSha(repo, branch, limit = 10, remote = remoteInfo(repo).name ||
  * branch head.
  */
 function ghRunsForCommit(repo, branch, sha, limit = 10) {
+  // #529: every row filter below is strict equality against a 40-hex head_sha. An abbreviated sha
+  // would filter to [] — read by every caller as "no runs yet" — so resolve it, and when it cannot
+  // be resolved answer null ("the read failed"), never an empty set.
+  sha = fullSha(repo, sha);
   if (!sha) return null;
 
   // #495: one REST call (`actions/runs?head_sha=&branch=`) instead of `gh run list`'s two (runs +
@@ -920,11 +924,28 @@ function ghApiConditional(repo, apiPath, etag) {
 }
 
 /**
+ * #529: `sha` as the full 40-hex object name the Actions API reports as `head_sha`, or null. A
+ * 40-hex value passes through (lowercased) without a local lookup — the commit may exist only on
+ * the remote. Anything shorter is resolved with `git rev-parse --verify <sha>^{commit}` in `repo`;
+ * unresolvable (unknown here, or ambiguous) is null. Never a prefix match: a short sha can be
+ * ambiguous across runs, and a match against the wrong run is worse than a refusal.
+ */
+function fullSha(repo, sha) {
+  const s = String(sha || '').trim();
+  if (/^[0-9a-f]{40}$/i.test(s)) return s.toLowerCase();
+  if (!/^[0-9a-f]{4,39}$/i.test(s)) return null;
+  const r = git(['rev-parse', '--verify', '--quiet', `${s}^{commit}`], repo);
+  const out = r.ok ? r.stdout.trim() : '';
+  return /^[0-9a-f]{40}$/.test(out) ? out : null;
+}
+
+/**
  * Every workflow run at `sha` in ONE REST call (#495) — `actions/runs?head_sha=<sha>[&branch=<b>]`,
  * rows in `gh run list --json` shape. Returns `{ rows }` on success, `{ rateLimited: true }` on a
  * rate limit, `{}` on any other failure (the caller decides whether to fall back).
  */
 function ghRunsAtShaRest(repo, sha, branch) {
+  sha = fullSha(repo, sha); // #529: the API's head_sha is 40-hex; an abbreviated one matches no row
   if (!sha) return {};
   const ciWait = require('./ci-wait');
   const q = `head_sha=${encodeURIComponent(sha)}${branch ? `&branch=${encodeURIComponent(branch)}` : ''}&per_page=100`;
@@ -1290,7 +1311,7 @@ module.exports = {
   claimRemote, remoteHeads,
   worktreeList, worktreeListDetailed, resolveWorktreePathForBranch, gitFailureLine,
   dirtyTracked, dirtyUntracked, dirtyAny,
-  ghAvailable, ghState, ghInstalled, ghApiConditional, ghRunsAtShaRest, ghIssueEdit, ghListLabels, ghOpenIssueNumbersByLabel, ghAssignedIssues,
+  ghAvailable, ghState, ghInstalled, ghApiConditional, ghRunsAtShaRest, fullSha, ghIssueEdit, ghListLabels, ghOpenIssueNumbersByLabel, ghAssignedIssues,
   ghCurrentLogin, ghIssueView, ghIssueComment, ghRunForSha, ghRunForCommit, ghRunsForCommit, ghRunsForRef, ghRunsAtCommit, ghRunForCommitAnyRef, commitTimeMs, ghRunsSince, summarizeRunsForCommit, isRepoOwnedRun,
   ghRunJobCount, ghRunJobs, ghWorkflowDispatch,
   ghIssueListByLabel, ghLabelDelete, ghLabelCreate, ghListLabelsDetailed, ghLabelEditDescription,
