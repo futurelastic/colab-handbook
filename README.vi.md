@@ -112,6 +112,12 @@ Cũng trong [`skills/`](skills/): `code-plan` (plan đầy đủ cho issue khó,
 nhất), và `migration-review` (review migration của một nhánh, cho người/agent
 được repo gán vai đó).
 
+**Tự chạy vòng này bằng tay ở terminal?** Không có `--session` thì `colab` đặt
+tên bạn là `person:<git user.email>/<host token>`, nên claim và bằng chứng ship
+đều ghi rõ ai làm. Nếu làm nhiều đơn vị việc cùng lúc ở các shell khác nhau,
+đặt cho mỗi shell một `COLAB_SESSION=<id ổn định bất kỳ>` để các hold không lẫn
+vào nhau.
+
 **Mấy từ sẽ gặp:**
 
 - **Trunk** — nhánh các phiên merge vào (`trunk:` trong `project.yml`).

@@ -74,7 +74,8 @@ colab claim $N --worktree <name> \
   runs several steps later — silently producing the exact anonymous rows this step
   exists to prevent. Flags are the only thing that reliably sticks for an agent.
 - **A human at one terminal may still export it once** (`export COLAB_SESSION=…`);
-  resolution is flag > env > empty, so both paths work. The env route is for people
+  resolution is flag > env > a derived `person:<email>/<host token>` (only outside an
+  agent shell, only with `COLAB_SESSION` unset — #528) > empty, so both paths work. The env route is for people
   with a persistent shell, not for agents.
 - **Do this before step 3**, not inside step 4. Sessions that work directly on trunk
   still claim, and they deserve identity just as much as worktree sessions.

@@ -41,7 +41,9 @@ const YIELD_RE = /^✅ Released \(yielded — earlier claim by (.+?) wins\)/;
 function looksLikeSessionId(v) {
   const s = String(v == null ? '' : v).trim();
   if (!s) return false;
-  return /^https?:\/\//.test(s) || /session_[\w-]+/.test(s);
+  // #528: a derived person identity (`claim-identity.js` `derivePersonSession`) is a session id
+  // too — a stable join key, not a display name — so it reads back as one from a claim comment.
+  return /^https?:\/\//.test(s) || /session_[\w-]+/.test(s) || /^person:\S+$/.test(s);
 }
 
 /**
