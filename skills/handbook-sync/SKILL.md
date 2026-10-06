@@ -104,11 +104,11 @@ not carry its files, stop here: nothing in this section applies. Use `colab adop
 own*](../../CONVENTIONS.md#working-in-a-repo-you-dont-own)) instead, which commits nothing.
 
 **One step is a human's, and you should know it before step 1, not after (#522).**
-Answering `exposure` with `none` or `self` needs a human — at a terminal, or
-`COLAB_HUMAN=1 … --answered-by <name>`. Drive everything else; when `colab adopt`
+Answering `exposure` with `none` or `self` needs a human — the bar in
+[§9](../../CONVENTIONS.md#9-adopting-this). Drive everything else; when `colab adopt`
 reaches that gate it prints, as its first line, the one command the human runs with
-every answer already filled in. Hand the maintainer that line — do not set
-`COLAB_HUMAN=1` yourself. Adoption asks only the gating rows (deploy/production and
+every answer already filled in. Hand the maintainer that line, unchanged — never
+clear the bar yourself. Adoption asks only the gating rows (deploy/production and
 exposure); `room`, `writes` and `channels` are optional and answered later with
 `--axis` (#533). An existing default branch is kept as trunk whatever it is called —
 never rename `master` to adopt.
