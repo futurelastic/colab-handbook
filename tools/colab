@@ -14222,13 +14222,15 @@ Wait for CI and exit with its outcome. The ONE way to wait for a run: never hand
   --sha <sha>     wait for EVERY repo-owned workflow at the sha (the verdict colab ship reads:
                   newest run per workflow, dynamic workflows dropped — #451/#461; only runs that
                   verify the code, so a post-CI release/deploy run is set aside — #503); a sha
-                  with no run yet counts as pending until the deadline
+                  with no run yet counts as pending until the deadline. An abbreviated sha is
+                  resolved in the repo first, and refused (exit 2) when it does not resolve — #529
   --branch <b>    narrow --sha to runs on that branch
   --timeout <d>   deadline: 45m (default), 90s, 1h, or seconds
 
 Polls at 0s, then +30s, +60s, +120s, +120s … until the deadline. Every poll after the first is a
-conditional request (If-None-Match); a 304 is not counted against the REST rate limit. A 15-minute
-run costs about 10 requests. One wait per run per checkout: a second waiter is refused.
+conditional request (If-None-Match); a 304 is not counted against the REST rate limit. After two
+304s in a row, and on the last poll before the deadline, it re-reads unconditionally: a stale ETag
+can cost one paid call, never the whole wait (#505). A 15-minute run costs about 10 requests. One wait per run per checkout: a second waiter is refused.
 
 Exit codes — branch on these, never on the text:
   0 GREEN            the run (every judged run at the sha) succeeded
@@ -14240,7 +14242,7 @@ Exit codes — branch on these, never on the text:
   6 ALREADY_WAITING  another live ci-wait on this checkout holds the same run/sha
 
 It prints the wait it did: outcome, elapsed time, polls, and how many were 304s.
-  --json   { outcome, exit, target, polls, notModified, waitedSec, detail, status, conclusion, url }`;
+  --json   { outcome, exit, target, polls, notModified, forced, waitedSec, detail, status, conclusion, url }`;
 
 function cmdCiWait(argv) {
   const opts = parseArgs(argv, {
@@ -14256,6 +14258,17 @@ function cmdCiWait(argv) {
   const deadlineSec = opts.timeout !== undefined ? ciWait.parseDuration(opts.timeout) : ciWait.DEFAULT_DEADLINE_SEC;
   if (!deadlineSec) { warn(`--timeout: cannot read "${opts.timeout}" (try 45m, 90s, 1h)`); return ciWait.EXIT.USAGE; }
   const repoAbs = resolveRepo(opts);
+  if (opts.sha) {
+    // #529: the API reports a 40-hex head_sha and the rows are matched by equality, so an
+    // abbreviated --sha would match nothing and wait out the whole deadline as "pending" — on a run
+    // that finished green in minutes. Resolve it here, or refuse; never poll with it.
+    const full = git.fullSha(repoAbs, opts.sha);
+    if (!full) {
+      warn(`--sha ${opts.sha}: not a full 40-hex sha and it does not resolve to one commit in ${repoAbs} — pass the full sha (\`git rev-parse <sha>\`), or fetch first`);
+      return ciWait.EXIT.USAGE;
+    }
+    opts.sha = full;
+  }
   if (!git.ghInstalled()) { warn('gh is not installed — cannot read CI'); return ciWait.EXIT.UNKNOWN; }
 
   const target = runId ? `run ${runId}` : `sha ${shortSha(opts.sha)}${opts.branch ? ` on ${opts.branch}` : ''}`;
@@ -14294,7 +14307,7 @@ function cmdCiWait(argv) {
   try {
     res = ciWait.waitLoop({
       poll, sleep: ciWait.sleepSync, deadlineSec,
-      onPoll: (p) => { if (!opts.json) process.stderr.write(`ci-wait: poll ${p.poll} at +${ciWait.fmtDuration(p.elapsedMs)} — ${p.state}${p.notModified ? ' (304, not counted)' : ''}\n`); },
+      onPoll: (p) => { if (!opts.json) process.stderr.write(`ci-wait: poll ${p.poll} at +${ciWait.fmtDuration(p.elapsedMs)} — ${p.state}${p.notModified ? ' (304, not counted)' : ''}${p.forced ? ' (unconditional re-read — #505)' : ''}\n`); },
     });
   } finally {
     lock.release();
@@ -14302,7 +14315,7 @@ function cmdCiWait(argv) {
   const s = (res.last && res.last.summary) || {};
   const code = ciWait.EXIT[res.outcome];
   const out = {
-    outcome: res.outcome, exit: code, target, polls: res.polls, notModified: res.notModified,
+    outcome: res.outcome, exit: code, target, polls: res.polls, notModified: res.notModified, forced: res.forced,
     waitedSec: Math.round(res.waitedMs / 1000), detail: res.detail || null,
     status: s.status || null, conclusion: s.conclusion || null, url: s.url || null,
     ...(Array.isArray(s.setAside) && s.setAside.length ? { setAside: s.setAside } : {}),

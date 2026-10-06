@@ -42,7 +42,7 @@ test('a 15-minute run costs well under 40 calls — the issue\'s done-when', () 
   assert.strictEqual(res.polls, calls);
 });
 
-test('every poll after the first sends the last ETag; a 304 keeps the previous state', () => {
+test('every poll after the first sends the last ETag; a 304 keeps the previous state — for two polls (#505)', () => {
   const c = clock();
   const seen = [];
   let n = 0;
@@ -56,9 +56,49 @@ test('every poll after the first sends the last ETag; a 304 keeps the previous s
       return ok('green', '"b"');
     },
   });
-  assert.deepStrictEqual(seen, [null, '"a"', '"a"', '"a"']);
+  // Poll 4 follows two 304s in a row, so it sends no ETag (#505).
+  assert.deepStrictEqual(seen, [null, '"a"', '"a"', null]);
   assert.strictEqual(res.outcome, 'GREEN');
   assert.strictEqual(res.notModified, 2);
+  assert.strictEqual(res.forced, 1);
+});
+
+test('#505: a run that turns green behind a validator that never changes still ends GREEN', () => {
+  // The measured failure: poll 1 reads pending, every conditional poll after it answers 304, and
+  // meanwhile the runs complete green. Only a read WITHOUT If-None-Match can see it.
+  const c = clock();
+  const start = c.at();
+  const seen = [];
+  const truth = () => (c.at() - start >= 3 * 60_000 ? 'green' : 'pending');
+  const res = cw.waitLoop({
+    now: c.now, sleep: c.sleep, deadlineSec: 15 * 60,
+    poll: (etag) => { seen.push(etag); return etag ? { kind: 'not-modified', status: 304 } : ok(truth(), '"stale"'); },
+  });
+  assert.strictEqual(res.outcome, 'GREEN');
+  assert.ok(c.at() - start <= 3 * 60_000 + 3 * 120_000, `seen within a few polls of turning green, took ${c.at() - start}ms`);
+  for (let i = 0; i + 2 < seen.length; i++) {
+    assert.ok(!(seen[i] && seen[i + 1] && seen[i + 2]), `never three conditional polls in a row: ${JSON.stringify(seen)}`);
+  }
+});
+
+test('#505: the poll on the deadline is unconditional even with the 304 cap disabled', () => {
+  const c = clock();
+  const start = c.at();
+  const seen = [];
+  const res = cw.waitLoop({
+    now: c.now, sleep: c.sleep, deadlineSec: 100, maxNotModified: Infinity,
+    poll: (etag) => { seen.push(etag); return etag ? { kind: 'not-modified', status: 304 } : ok(c.at() - start >= 100_000 ? 'green' : 'pending'); },
+  });
+  assert.deepStrictEqual(seen, [null, '"e1"', '"e1"', null]);
+  assert.strictEqual(res.outcome, 'GREEN');
+  assert.strictEqual(res.forced, 1);
+});
+
+test('#505: a 304 streak never forces a re-read before any ETag exists', () => {
+  const c = clock();
+  const seen = [];
+  cw.waitLoop({ now: c.now, sleep: c.sleep, poll: (etag) => { seen.push(etag); return ok('red', null); } });
+  assert.deepStrictEqual(seen, [null]);
 });
 
 test('a rate limit ENDS the wait on that poll — no retry', () => {
@@ -232,4 +272,40 @@ test('CLI: usage errors exit 2', () => {
 test('#510: restRow carries the workflow FILE id as workflowId (null when absent)', () => {
   assert.strictEqual(cw.restRow({ id: 1, name: 'CI', workflow_id: 7, head_sha: 'a' }).workflowId, 7);
   assert.strictEqual(cw.restRow({ id: 1, name: 'CI', head_sha: 'a' }).workflowId, null);
+});
+
+test('#529 CLI: an abbreviated --sha is resolved to the full sha before polling', () => {
+  const fx = fixture([]);
+  execFileSync('git', ['-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-q', '--allow-empty', '-m', 'x'], { cwd: fx.work });
+  const sha = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: fx.work, encoding: 'utf8' }).trim();
+  const runs = { workflow_runs: [{ id: 1, head_sha: sha, status: 'completed', conclusion: 'success', name: 'CI', event: 'push', html_url: 'u1' }] };
+  fs.writeFileSync(path.join(fx.root, 'r0.out'), http('200 OK', JSON.stringify(runs)));
+  fs.writeFileSync(path.join(fx.root, 'r0.code'), '0');
+  const r = spawnSync('node', [COLAB, 'ci-wait', '--sha', sha.slice(0, 7), '--branch', 'main', '--repo', fx.work, '--json'], { encoding: 'utf8', env: fx.env });
+  assert.strictEqual(r.status, 0, r.stdout + r.stderr);
+  assert.strictEqual(JSON.parse(r.stdout).polls, 1, 'matched on the first read, not left pending');
+  assert.match(fs.readFileSync(fx.log, 'utf8'), new RegExp(`head_sha=${sha}&`));
+  fs.rmSync(fx.root, { recursive: true, force: true });
+});
+
+test('#529 CLI: an abbreviated --sha that does not resolve is refused (exit 2) without polling', () => {
+  const fx = fixture([{ out: '', code: 1 }]);
+  const r = spawnSync('node', [COLAB, 'ci-wait', '--sha', 'deadbee', '--repo', fx.work], { encoding: 'utf8', env: fx.env });
+  assert.strictEqual(r.status, 2, r.stdout + r.stderr);
+  assert.match(r.stderr, /not a full 40-hex sha/);
+  assert.ok(!fs.existsSync(fx.log), 'no gh api call was made');
+  fs.rmSync(fx.root, { recursive: true, force: true });
+});
+
+test('#529: git.fullSha — 40-hex passes through, a short sha resolves, junk and unknown are null', () => {
+  const git = require('./git');
+  const fx = fixture([]);
+  execFileSync('git', ['-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-q', '--allow-empty', '-m', 'x'], { cwd: fx.work });
+  const sha = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: fx.work, encoding: 'utf8' }).trim();
+  assert.strictEqual(git.fullSha(fx.work, 'A'.repeat(40)), 'a'.repeat(40), 'not required to exist locally');
+  assert.strictEqual(git.fullSha(fx.work, sha.slice(0, 8)), sha);
+  assert.strictEqual(git.fullSha(fx.work, 'deadbee'), null);
+  assert.strictEqual(git.fullSha(fx.work, 'HEAD'), null, 'a ref name is not a sha');
+  assert.strictEqual(git.fullSha(fx.work, ''), null);
+  fs.rmSync(fx.root, { recursive: true, force: true });
 });
