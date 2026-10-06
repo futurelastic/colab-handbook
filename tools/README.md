@@ -1521,7 +1521,12 @@ autonomy: auto-trunk   # colab ship may squash-merge session branches into trunk
 refuses, with one exception it computes itself: a **docs-only** diff (#345) — every changed path is
 `.md`/`.mdx`/`.txt` or under a top-level `docs/`; none is `CLAUDE.md`, `CLAUDE.local.md`, `AGENTS.md`
 or under `.claude/`, `.github/`, `.githooks/`; no binary, no symlink, not empty. The caller cannot
-assert it and nothing widens it ([CONVENTIONS §2](../CONVENTIONS.md#autonomy--the-docs-only-exception-345)). This
+assert it and nothing widens it ([CONVENTIONS §2](../CONVENTIONS.md#autonomy--the-docs-only-exception-345)). And
+one door for a person (#525): a human running `ship` at an interactive terminal (not an agent shell;
+ship asks `proceed? [y/N]`), or with `COLAB_HUMAN=1 --answered-by <name>`, is the go — every other
+precondition still runs, and the 🚢 comment records the door
+([CONVENTIONS §2](../CONVENTIONS.md#autonomy--the-human-door-525)). An unattended refusal prints
+both commands. This
 gate has **no override** — `--force` does not exist on `ship`. Autonomy is a property of the repo a
 human configured, never a flag the caller can pass. `ship` **never** touches `main` when `trunk ≠
 main`, **never** tags, and **never** promotes — those belong to `promote` and CONVENTIONS §6's release rung.
@@ -1540,7 +1545,7 @@ Each step is checked; any failure aborts **before the push**, so trunk is never 
 
 | step | what | abort condition |
 |---|---|---|
-| a. autonomy | repo grants `auto-trunk`, or the diff is docs-only (#345, computed, re-measured after B0) | neither → refuse (no override) |
+| a. autonomy | repo grants `auto-trunk`, or the diff is docs-only (#345, computed, re-measured after B0), or a person runs it through the human door (#525) | none → refuse, naming the human's command (no override) |
 | a′. resolvable | the session's recorded branch resolves to a ref (locally or on `origin`) | it does not → refuse: everything below is keyed to that name, and a record nothing can act on silently costs the `Closes` |
 | a″. claim sanity | the branch resolves to at least one claimed issue | zero → **loud warning** (the squash will carry no `Closes #N`); zero **and** some claim in the repo names an unresolvable branch → refuse, because "no claims" is then a broken lookup |
 | b. preconditions | reported as a ✓/✗ table | any ✗ → abort |
