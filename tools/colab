@@ -5677,7 +5677,8 @@ function cmdWorktreeNew(argv) {
 
   // #488: the scratch dirs (plans, briefs) are hidden in the clone's shared info/exclude — one
   // write covers the main checkout and every worktree, with no per-repo .gitignore diff.
-  ensureScratchExcluded(repoAbs);
+  // #527: and the worktree subdir itself, or trunk's `git add -A` stages this worktree as a gitlink.
+  ensureScratchExcluded(repoAbs, config);
 
   // 5. optional repo hook (machine-specific steps plug in here)
   const hook = runHook(repoAbs, 'post-create', { wtPath, name, branch, ports: alloc.chosenPorts, trunk, base, issues });
@@ -8023,13 +8024,17 @@ function gitExcludePath(repoAbs) {
 /**
  * #488: append the scratch-dir exclude lines (scratch-dirs.js `excludeLines`) to the clone's shared
  * info/exclude, idempotently. Best-effort: a failure warns and never blocks the caller.
+ * #527: `config` given → the worktree subdir's line too (`worktreeExcludeLine`), so whatever creates
+ * the default worktree dir also hides it — an adopted repo's `.gitignore` has never heard of it.
  */
-function ensureScratchExcluded(repoAbs) {
+function ensureScratchExcluded(repoAbs, config = null) {
   const excludeFile = gitExcludePath(repoAbs);
   if (!excludeFile) return [];
   let before = null;
   try { before = fs.readFileSync(excludeFile, 'utf8'); } catch (_) { /* absent */ }
   const lines = scratchDirs.excludeLines();
+  const wtLine = config ? scratchDirs.worktreeExcludeLine(worktreeSubdir(config)) : null;
+  if (wtLine && !lines.includes(wtLine)) lines.push(wtLine);
   const missing = localAdopt.missingExcludeLines(before, lines);
   if (!missing.length) return [];
   try {
@@ -8497,6 +8502,12 @@ async function cmdAdopt(argv) {
   if (opts.local) {
     local = adoptLocalPrepare(repoAbs, opts);
     if (local.exit !== undefined) return local.exit;
+  }
+  // #527: a repo adopted before `worktree new` hid its own dir gets the same exclude lines here —
+  // machine-local (info/exclude), idempotent, never a committed diff. --local already wrote them.
+  if (!opts.local) {
+    const hidden = ensureScratchExcluded(repoAbs, state.loadConfig());
+    if (hidden.length && !opts.json) print(`✓ hid ${hidden.join(' ')} in .git/info/exclude (machine-local)`);
   }
   const io = adoptIo(repoAbs);
   const extra = adoptGitExtras(repoAbs, opts);
