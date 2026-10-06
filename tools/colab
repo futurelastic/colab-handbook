@@ -283,11 +283,38 @@ function myMachineId() { return machine.localMachine().id || null; }
 
 /**
  * Resolve the Claude session URL for this invocation: --session flag > COLAB_SESSION env >
- * '' (absent, never an error). Free-form — typically a session URL.
+ * a DERIVED person identity (#528) > '' (absent, never an error). Free-form — typically a session URL.
+ *
+ * The derived step exists for a person at a plain terminal, who has no session runtime and so no
+ * id to pass: without it their first trunk `colab claim` refused (#242's gate), `worktree new`
+ * warned three lines every time, and ship evidence read `implemented by: unknown`. It applies only
+ * when `COLAB_SESSION` is unset and the shell is not an agent's (`claimIdentity.
+ * shouldDerivePersonSession` has why) — an explicit flag or env value always wins.
  */
 function resolveSession(opts) {
-  const s = opts.session || process.env.COLAB_SESSION || '';
-  return String(s).trim();
+  const s = String(opts.session || process.env.COLAB_SESSION || '').trim();
+  return s || derivedPersonSession();
+}
+
+/**
+ * The derived person identity for this invocation, or ''. Memoized — one `git config` spawn, and
+ * the "derived" note is printed once per invocation (stderr, so `--json` stdout stays clean).
+ */
+let derivedSessionCache = null;
+function derivedPersonSession() {
+  if (derivedSessionCache !== null) return derivedSessionCache;
+  derivedSessionCache = '';
+  if (!claimIdentity.shouldDerivePersonSession(process.env)) return derivedSessionCache;
+  const r = spawnSync('git', ['config', '--get', 'user.email'], { encoding: 'utf8' });
+  const email = r.status === 0 ? String(r.stdout || '').trim() : '';
+  let user = process.env.USER || '';
+  if (!user) { try { user = os.userInfo().username; } catch { user = ''; } }
+  derivedSessionCache = claimIdentity.derivePersonSession({ email, user, hostToken: machine.hostToken(HOST) });
+  if (derivedSessionCache) {
+    process.stderr.write(`· session: ${derivedSessionCache} (derived — no --session or COLAB_SESSION given; ` +
+      `either one overrides it)\n`);
+  }
+  return derivedSessionCache;
 }
 
 /**

@@ -1031,6 +1031,15 @@ and **verified by the writer itself**, not merely by whatever spawned it.
   the same holder. So both now REFUSE outright, before any state is touched, when no `--session`
   (or `COLAB_SESSION`) is given — the #235 warn-only floor above still applies to `colab place
   acquire` and to a worktree's own hold, neither of which is re-acquired the same way.
+  **#528: a person at a plain terminal is given an identity instead of a refusal.** When no
+  `--session` is given, `COLAB_SESSION` is *unset* (an explicit `COLAB_SESSION=''` still means
+  "no identity"), and the shell is not an agent's (`CLAUDECODE=1` / `AI_AGENT`), `colab` derives
+  `person:<git user.email, else the OS user>/<h:host token>`, says once on stderr that it did, and
+  uses it everywhere a session id goes — the claim, the hold, the ship evidence. It is stable, so
+  the same person's re-acquire is recognized. Agents never derive: two concurrent agent sessions on
+  one machine would derive the same value and read each other's holds as their own — the
+  collision this gate exists to stop. A person running several units at once from separate shells
+  has the same exposure, and gives each shell its own `COLAB_SESSION`.
   **A BARE `pid` is process lineage, not a session, and is never used to decide the re-acquire
   exemption** — only surfaced as a hint in a refusal's message when it happens to match. Two
   invocations sharing a parent shell share one `pid` without being one writer, and this

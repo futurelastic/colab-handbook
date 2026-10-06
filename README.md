@@ -113,6 +113,11 @@ Also in [`skills/`](skills/): `code-plan` (a full plan for a hard issue, run by
 handbook), and `migration-review` (review a branch's migrations, for whoever a
 repo binds to that role).
 
+**Running the loop by hand at a terminal?** With no `--session`, `colab` names
+you `person:<git user.email>/<host token>`, so claims and ship evidence say who
+you are. If you work on several units at once from separate shells, give each
+shell its own `COLAB_SESSION=<any stable id>` so their holds stay apart.
+
 **Words you will meet:**
 
 - **Trunk** — the branch sessions merge into (`trunk:` in `project.yml`).
