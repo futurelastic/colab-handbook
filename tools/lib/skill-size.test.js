@@ -37,10 +37,6 @@ const POLICY_WITHIN = 15; // lines after the frontmatter's closing `---`
 // skill name -> { lines, bytes, reason }. Empty is the goal; every entry says why.
 const OVERRIDES = {};
 
-// Skills still being split on the #524 branch. Each split commit removes its own entry; the
-// branch does not land until this set is empty.
-const PENDING = new Set(['code-triage']);
-
 const skills = fs.readdirSync(SKILLS, { withFileTypes: true })
   .filter((d) => d.isDirectory() && fs.existsSync(path.join(SKILLS, d.name, 'SKILL.md')))
   .map((d) => d.name)
@@ -59,7 +55,7 @@ test('there are skills to check', () => {
 });
 
 for (const name of skills) {
-  test(`${name}: core within its size budget`, { skip: PENDING.has(name) && 'split pending (#524)' }, () => {
+  test(`${name}: core within its size budget`, () => {
     const text = readCore(name);
     const split = refFiles(name).length > 0;
     const o = OVERRIDES[name] || {};

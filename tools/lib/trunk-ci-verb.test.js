@@ -128,6 +128,10 @@ test('#463 no run at the sha → NONE', () => {
 
 test('#463 code-triage keeps no trunk-red rule of its own — it calls colab trunk-ci', () => {
   const skill = fs.readFileSync(TRIAGE_SKILL, 'utf8');
-  assert.ok(!skill.includes('any(.conclusion == "success")'), 'the old any-success filter is back in code-triage');
+  // #524: the skill is a core plus reference files — the old filter must be absent from all of them.
+  const dir = path.dirname(TRIAGE_SKILL);
+  const all = fs.readdirSync(dir).filter((f) => f.endsWith('.md'))
+    .map((f) => fs.readFileSync(path.join(dir, f), 'utf8')).join('\n');
+  assert.ok(!all.includes('any(.conclusion == "success")'), 'the old any-success filter is back in code-triage');
   assert.ok(skill.includes('colab trunk-ci'), 'code-triage no longer calls colab trunk-ci');
 });
