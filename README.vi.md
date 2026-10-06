@@ -189,6 +189,23 @@ Mấy flag của `colab adopt` nên biết:
 
 Nhánh có sẵn từ trước được **giữ nguyên** (grandfathered). Đừng đổi tên gì cả.
 
+## Tuỳ biến một skill cho repo của bạn
+
+Muốn một skill chạy khác đi ở một repo — comment Issue bằng tiếng Nhật, thêm
+một bước kiểm tra trước wrap? Đừng fork skill: bản fork không còn nhận cập nhật
+từ handbook. Hãy viết phần khác biệt vào `.colab/skills/<skill>.md` (ví dụ
+`.colab/skills/code-wrap.md`), bằng văn xuôi thường. Mỗi skill đọc file đó
+trước các bước của chính nó, và nội dung file thắng phần chữ của skill trong
+repo đó. Nó không bao giờ nới một cổng của `colab`: claim hay merge đã bị từ
+chối thì vẫn bị từ chối.
+
+Claude Code tự nạp file vào skill. Các engine khác có một câu thường trong mỗi
+skill bảo agent đọc file, cách này chạy được mà không cần engine hỗ trợ gì.
+Vì file này ra lệnh cho agent, thay đổi trong nó không bao giờ được coi là
+docs-only: nó merge bằng `auto-trunk` hoặc khi có người duyệt, giống một thay đổi
+`CLAUDE.md`. Quy tắc:
+[`CONVENTIONS.md` §8, *Local policy*](CONVENTIONS.md#local-policy--a-repo-refines-a-skill-without-forking-it-520).
+
 ## Tự động hoá tùy chọn, đặt lên trên
 
 Không có gì ở đây giả định đã có dashboard, scheduler hay bot. Người adopt vẫn

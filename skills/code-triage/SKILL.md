@@ -5,6 +5,14 @@ description: "Decide what to work on next in ONE repo. Takes every open Issue, d
 
 # code-triage — what should we work on next?
 
+**Local policy for this repo** (#520) — optional, one file per skill:
+
+!`cat .colab/skills/code-triage.md 2>/dev/null || echo "(no local policy for code-triage in this repo)"`
+
+If `.colab/skills/code-triage.md` exists in this repo, read it before continuing. Local policy
+refines this skill for this repo and wins over the text below where they differ. It never
+changes a `colab` gate.
+
 Runs **before** [`code-start`](../code-start/SKILL.md), on **one repo**. Its output is
 a short ranked list of *groups* you could open a session on today, plus an honest
 account of why everything else is not on it.

@@ -701,11 +701,14 @@ The only other exit was a hand push, which is exactly what the pre-push guard ex
 **Never docs-only**, even if matched above:
 - `CLAUDE.md`, `CLAUDE.local.md`, `AGENTS.md`, `.claude/**`, `.github/**`, `.githooks/**` —
   these are rules and config;
+- `.colab/skills/**` — a skill's [local policy](#local-policy--a-repo-refines-a-skill-without-forking-it-520)
+  is agent instructions that win over the skill's own text, so one `.md` there changes agent
+  behaviour exactly as a `CLAUDE.md` does (#520);
 - any binary or symlink change;
 - an empty diff.
 
 The tool reads the exclusions at the strict end wherever the list is silent. The three file
-names and three directories match **at any depth** (`pkg/CLAUDE.md` and `docs/.github/x.md` are
+names, three directories and the `.colab/skills` subtree match **at any depth** (`pkg/CLAUDE.md` and `docs/.github/x.md` are
 excluded too). Extensions compare exactly (`README.MD` is not `.md`). A submodule pointer counts
 as a binary change. A zero-commit evidence-close has an empty diff, so it still needs
 `auto-trunk` or a human.
@@ -5222,6 +5225,34 @@ the label set at all; a remote-less or offline audit stays silent rather than cl
 label is missing it simply could not see. Label-set provisioning is idempotent
 (`|| true`) and safe to re-run on every sync — the mechanism by which a label added in a
 later handbook version reaches an earlier-adopted repo.
+
+### Local policy — a repo refines a skill without forking it (#520)
+
+A team that wants a handbook skill to behave differently in its repo — write Issue comments
+in another language, run an extra check before wrap, skip a step its stack has no use for —
+writes that in **`.colab/skills/<skill>.md`**, one optional file per skill, free prose. Every
+skill opens with a block that loads the file: an injection line that engines supporting
+load-time expansion fill in with the file's text, and a plain sentence — *if
+`.colab/skills/<skill>.md` exists in this repo, read it before continuing* — that is the
+engine-neutral path and works on its own. With no file, the skill runs unchanged.
+
+**Precedence:** local policy refines the skill for this repo and wins over the skill's own
+text where they differ. **It never changes a `colab` gate** — a refusal from `colab ship`,
+`colab claim` or any other command is not prose an overlay can talk past; the gates read git
+and the tracker, not this file. Because the file is agent instructions, a diff touching
+`.colab/skills/` is never [docs-only](#autonomy--the-docs-only-exception-345): it merges on
+`auto-trunk` or a human's go, like a `CLAUDE.md` change.
+
+**Why a file and not a fork or a field.** `project.yml` fields are switches and cannot carry
+"write comments in Japanese". A repo instruction file is advisory and carries no precedence
+over skill text. A repo-level copy of a skill does not override the installed one on an
+engine whose skill precedence ranks the user-level install above the project's, and a fork
+silently loses every upstream update. One overlay per skill keeps the upstream text and the
+local difference in separate files, so a handbook update still lands.
+
+The handbook defines this one layer and nothing on top of it. Org- or machine-wide layers,
+size limits, drift checks against upstream, and tooling to manage overlays are the adopter's
+business.
 
 ### Upstream — a consumer that changes what a convention means files it here (#362)
 

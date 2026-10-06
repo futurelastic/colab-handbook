@@ -5,6 +5,14 @@ description: "Clear out everything finished in ONE repo: find every worktree who
 
 # code-sweep — clear out everything finished, one at a time
 
+**Local policy for this repo** (#520) — optional, one file per skill:
+
+!`cat .colab/skills/code-sweep.md 2>/dev/null || echo "(no local policy for code-sweep in this repo)"`
+
+If `.colab/skills/code-sweep.md` exists in this repo, read it before continuing. Local policy
+refines this skill for this repo and wins over the text below where they differ. It never
+changes a `colab` gate.
+
 After a few parallel sessions, two things drift apart:
 
 - **worktrees** — merged but never torn down (measured: **8 of 9**, 2.9 GB of orphans)
