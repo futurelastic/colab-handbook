@@ -67,8 +67,11 @@ notice back and print the run they relied on. Three things to keep in a copy:
 
 - **It needs `contents: read`** on top of `actions: read`, to read the descriptor and the
   commit objects.
-- **The trunk refs in its `if:` mirror `concurrency`'s list.** On a repo whose trunk has another
-  name, edit both. Until you do, the guard simply never fires on trunk — nothing breaks.
+- **The trunk refs in its `if:` mirror `concurrency`'s list.** The list appears three times in a
+  copy: the `group:`, `cancel-in-progress:`, and this `if:` (#512 gave the trunk its own
+  per-run group, so a pending trunk run is never replaced). On a repo whose trunk has another
+  name, edit all three. Until you do, the guard simply never fires on trunk — nothing breaks;
+  but a trunk left out of `group:` and `cancel-in-progress:` has its runs cancelled.
 - **Never put a trunk-only job behind it.** Publish, deploy and release jobs must run whatever
   the guard says. Give them their own `if:` that does not read `needs.dedupe`.
 
@@ -302,3 +305,12 @@ runner is infrastructure, not a throwaway VM.
   service context (`job.services.mysql.ports['3306']`), threading it through your
   env. A fixed `3306:3306` works exactly until the first job lands on a runner
   that already listens there.
+
+### One run per commit — why the CI templates have no `pull_request` trigger (#512)
+
+The three `ci-*` templates trigger on `push: ['**']` and `workflow_dispatch`. A same-repo PR
+commit gets the push run and nothing else; a `pull_request` trigger beside it ran the suite twice
+and let the later run, which tests the merge ref, decide the verdict. Two edits belong to a copy:
+a repo that goes back to trunk-only push restores `pull_request: branches: [<trunk>]`, and a repo
+that accepts fork PRs keeps one (a fork's push never runs a workflow here). Detail:
+`CONVENTIONS.md` §4, *Branch CI*.

@@ -67,31 +67,40 @@ on:
     # dev is the trunk, so a main-only trigger runs zero checks on the branch you
     # merge into, and nothing looks broken (CONVENTIONS.md §7).
     branches: ['**']
-  pull_request:
-    # EDIT: keep only the branches this repo actually has (Tier A and C: dev is the
-    # trunk, main the release; Tier B: main only).
-    branches: [main, dev]
+  # No `pull_request:` here (#512). A branch with an open PR in this repository already
+  # has a push run at the same head, and a `pull_request` run beside it doubled the CI
+  # per commit while testing a merge ref instead of the sha that lands. Readers keep only
+  # the newest run per workflow at a sha, so that second run also decided the verdict.
+  # EDIT: a copy that went back to trunk-only push (above) has no run on a branch until it
+  # has a PR — restore `pull_request: branches: [<trunk>]` there; that PR run is then its
+  # only branch run (CONVENTIONS.md §4, "Branch CI").
   # A promotion pushed by the release workflow's token triggers no push run, so that workflow
   # dispatches this one on main instead (templates/release-auto.yml, #440). Harmless elsewhere.
   workflow_dispatch:
 
 # One live run per branch: a new push cancels the superseded run on the same ref.
 # Trunk is NEVER cancelled — every trunk sha keeps a completed run of its own, which
-# is what the merge gate reads (CONVENTIONS.md §4, "Branch CI"). Pull-request runs
-# group under refs/pull/<n>/merge, apart from the branch's push runs.
-# EDIT: name exactly this repo's trunk (and release branch) here. A Tier C trunk
-# may carry any name; one left off this list gets its trunk runs cancelled.
+# is what the merge gate reads (CONVENTIONS.md §4, "Branch CI"). A trunk run also gets a
+# group of its own (the run id): GitHub cancels an older run that is still PENDING in a
+# group even when cancel-in-progress is false, so a third quick merge would otherwise
+# drop the second one's run before it ever started (#512).
+# EDIT: name exactly this repo's trunk (and release branch) here — in the group, in
+# cancel-in-progress, and in the `dedupe` job's `if:`. A Tier C trunk may carry any
+# name; one left off this list gets its trunk runs cancelled.
 concurrency:
-  group: ci-${{ github.ref }}
+  group: ci-${{ github.ref }}${{ (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev') && format('-{0}', github.run_id) || '' }}
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' && github.ref != 'refs/heads/dev' }}
 
 env:
-  # Light CI on the dev trunk (does it build at all, ~2 min); heavy CI on main, where
-  # the Pest suite gates a release. On Tier C main IS production — promotion is the
-  # deploy — so this suite is the last gate before users, not a release formality.
-  # EDIT: set to a literal 'true' if this repo is Tier B (main is trunk) and you
-  # always want the suite.
-  RUN_TESTS: ${{ github.ref == 'refs/heads/main' || github.base_ref == 'main' }}
+  # Whether the Pest suite runs. 'auto' is decided by the "Decide the test tier" step in
+  # `build` (#512). Light CI on a dev trunk and its branches (does it build at all,
+  # ~2 min); heavy CI on main, where the Pest suite gates a release. On Tier C main IS
+  # production — promotion is the deploy — so this suite is the last gate before users,
+  # not a release formality. When main is the trunk (Tier B) every branch push runs the
+  # suite too: this workflow has no `pull_request` run any more, and that run used to be
+  # the only place a Tier B branch got its tests.
+  # EDIT: set to a literal 'true' to always run the suite, 'false' to never run it.
+  RUN_TESTS: auto
   # EDIT: bump deliberately, not automatically.
   GITLEAKS_VERSION: "8.30.1"
   # EDIT: match the app's APP_NAME. Leave empty if the build does not read it.
@@ -139,6 +148,7 @@ jobs:
     # EDIT: the trunk refs here mirror `concurrency`'s list above (#493).
     if: github.event_name == 'push' && (github.event.created || github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev')
     runs-on: ubuntu-latest # EDIT: the same label as the jobs below; it needs `gh` (GitHub-hosted images have it).
+    timeout-minutes: 5 # one `gh api` listing, a hung call must not hold the slot. EDIT: the default is 360.
     permissions:
       actions: read
       contents: read
@@ -207,6 +217,7 @@ jobs:
     needs: dedupe
     if: ${{ !cancelled() && needs.dedupe.outputs.tested != 'true' }}
     runs-on: ubuntu-latest # EDIT: self-hosted label if this repo needs one.
+    timeout-minutes: 15 # a scan of the checkout. EDIT: the default is 360.
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
@@ -255,6 +266,37 @@ jobs:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
           persist-credentials: false
+
+      # Decide the test tier (#512). Not an `env:` expression, because the answer depends on
+      # the repo's trunk (.github/project.yml), which only exists once the tree is checked out.
+      #   RUN_TESTS 'true' / 'false'  → used as written.
+      #   'auto', a pull_request run  → on when the PR targets main (copies that restore PRs).
+      #   'auto', push or dispatch    → on for main, and for every branch when trunk is main
+      #                                 (Tier B); off for a dev trunk and its branches (Tier C).
+      - name: Decide the test tier
+        id: tier
+        env:
+          DECLARED: ${{ env.RUN_TESTS }}
+          EVENT: ${{ github.event_name }}
+          REF: ${{ github.ref }}
+          BASE_REF: ${{ github.base_ref }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          case "$DECLARED" in
+            true|false) run="$DECLARED" ;;
+            *)
+              trunk="$(sed -nE 's/^trunk:[[:space:]]*"?([^"#[:space:]]+)"?.*/\1/p' .github/project.yml 2>/dev/null | head -1 || true)"
+              [ -n "$trunk" ] || trunk="$DEFAULT_BRANCH"
+              if [ "$EVENT" = "pull_request" ]; then
+                [ "$BASE_REF" = "main" ] && run=true || run=false
+              elif [ "$REF" = "refs/heads/main" ] || [ "$trunk" = "main" ]; then
+                run=true
+              else
+                run=false
+              fi ;;
+          esac
+          echo "run_tests=$run" >> "$GITHUB_OUTPUT"
+          echo "::notice::Pest suite: $run (RUN_TESTS=$DECLARED, event=$EVENT, ref=$REF)"
 
       # ---------------------------------------------------------------------------
       # Descriptor check (#416). A value `colab ship` cannot use does not fail there —
@@ -397,6 +439,8 @@ jobs:
           coverage: none
 
       - name: Composer install
+        env:
+          RUN_TESTS: ${{ steps.tier.outputs.run_tests }}
         run: |
           # --no-scripts: the post-autoload-dump hook runs `package:discover`, which
           # boots the app — and the app cannot boot until the .env below exists.
@@ -438,14 +482,14 @@ jobs:
           npm run build
 
       - name: Run migrations against sqlite
-        if: env.RUN_TESTS == 'true'
+        if: steps.tier.outputs.run_tests == 'true'
         run: |
           # Migrations must apply cleanly from zero. This is the cheapest way to catch
           # a migration that only works against an already-populated database.
           php artisan migrate --force
 
       - name: Test (Pest)
-        if: env.RUN_TESTS == 'true'
+        if: steps.tier.outputs.run_tests == 'true'
         run: |
           if [ -f vendor/bin/pest ]; then
             vendor/bin/pest --ci

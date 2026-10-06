@@ -134,6 +134,9 @@ for (const file of FILES) {
     const d = jobs.dedupe;
     const conc = text.match(/cancel-in-progress: \$\{\{ (.*) \}\}/)[1];
     const trunks = [...conc.matchAll(/github\.ref != '([^']+)'/g)].map((m) => m[1]).sort();
+    const groupLine = text.match(/^  group: (.*)$/m)[1];
+    const groupTrunks = [...groupLine.matchAll(/github\.ref == '([^']+)'/g)].map((m) => m[1]).sort();
+    assert.deepStrictEqual(groupTrunks, trunks, "concurrency's group and cancel-in-progress must name the same trunk refs (#512)");
     const cond = key(d, 'if');
     const admitted = [...cond.matchAll(/github\.ref == '([^']+)'/g)].map((m) => m[1]).sort();
     assert.deepStrictEqual(admitted, trunks, 'the guard must fire on exactly the trunk refs concurrency names');

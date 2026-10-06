@@ -54,22 +54,28 @@ on:
     # dev is the trunk, so a main-only trigger runs zero checks on the branch you
     # merge into, and nothing looks broken (CONVENTIONS.md §7).
     branches: ['**']
-  pull_request:
-    # EDIT: keep only the branches this repo actually has (Tier A and C: dev is the
-    # trunk, main the release; Tier B: main only).
-    branches: [main, dev]
+  # No `pull_request:` here (#512). A branch with an open PR in this repository already
+  # has a push run at the same head, and a `pull_request` run beside it doubled the CI
+  # per commit while testing a merge ref instead of the sha that lands. Readers keep only
+  # the newest run per workflow at a sha, so that second run also decided the verdict.
+  # EDIT: a copy that went back to trunk-only push (above) has no run on a branch until it
+  # has a PR — restore `pull_request: branches: [<trunk>]` there; that PR run is then its
+  # only branch run (CONVENTIONS.md §4, "Branch CI").
   # A promotion pushed by the release workflow's token triggers no push run, so that workflow
   # dispatches this one on main instead (templates/release-auto.yml, #440). Harmless elsewhere.
   workflow_dispatch:
 
 # One live run per branch: a new push cancels the superseded run on the same ref.
 # Trunk is NEVER cancelled — every trunk sha keeps a completed run of its own, which
-# is what the merge gate reads (CONVENTIONS.md §4, "Branch CI"). Pull-request runs
-# group under refs/pull/<n>/merge, apart from the branch's push runs.
-# EDIT: name exactly this repo's trunk (and release branch) here. A Tier C trunk
-# may carry any name; one left off this list gets its trunk runs cancelled.
+# is what the merge gate reads (CONVENTIONS.md §4, "Branch CI"). A trunk run also gets a
+# group of its own (the run id): GitHub cancels an older run that is still PENDING in a
+# group even when cancel-in-progress is false, so a third quick merge would otherwise
+# drop the second one's run before it ever started (#512).
+# EDIT: name exactly this repo's trunk (and release branch) here — in the group, in
+# cancel-in-progress, and in the `dedupe` job's `if:`. A Tier C trunk may carry any
+# name; one left off this list gets its trunk runs cancelled.
 concurrency:
-  group: ci-${{ github.ref }}
+  group: ci-${{ github.ref }}${{ (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev') && format('-{0}', github.run_id) || '' }}
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' && github.ref != 'refs/heads/dev' }}
 
 env:
@@ -118,6 +124,7 @@ jobs:
     # EDIT: the trunk refs here mirror `concurrency`'s list above (#493).
     if: github.event_name == 'push' && (github.event.created || github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev')
     runs-on: ubuntu-latest # EDIT: the same label as the jobs below; it needs `gh` (GitHub-hosted images have it).
+    timeout-minutes: 5 # one `gh api` listing, a hung call must not hold the slot. EDIT: the default is 360.
     permissions:
       actions: read
       contents: read
@@ -186,6 +193,7 @@ jobs:
     needs: dedupe
     if: ${{ !cancelled() && needs.dedupe.outputs.tested != 'true' }}
     runs-on: ubuntu-latest # EDIT: self-hosted label if this repo needs one.
+    timeout-minutes: 15 # a scan of the checkout. EDIT: the default is 360.
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
