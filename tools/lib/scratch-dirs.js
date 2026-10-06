@@ -82,6 +82,18 @@ function excludeLines(env = process.env) {
 }
 
 /**
+ * #527: the root-anchored exclude line for the worktree subdir (`colab worktree new` creates
+ * worktrees INSIDE the clone, `.worktrees/` by default), or null when the configured subdir is
+ * absolute or climbs out of the repo. Deliberately NOT part of `excludeLines`: those are scratch
+ * (disposable, filtered out of the uncommitted-work gate by `isScratchPath`); a worktree is live
+ * work and must never be filtered — it only has to stay out of the main checkout's `git status`,
+ * where one habitual `git add -A` would otherwise commit it as an embedded-repo gitlink.
+ */
+function worktreeExcludeLine(worktreeSubdir) {
+  return anchoredLine(normalise(worktreeSubdir, '.worktrees'));
+}
+
+/**
  * Is a repo-relative path (as `git status --porcelain` prints it) inside a scratch dir? Used to
  * keep scratch out of the uncommitted-work gate: a plan or brief left in a worktree is disposable
  * by definition, and must never be what makes a teardown refuse (#488).
@@ -102,5 +114,5 @@ function withoutScratch(porcelainText, env = process.env) {
 module.exports = {
   DEFAULT_PLANS_DIR, DEFAULT_BRIEFS_DIR, LEGACY_PLANS_DIR, LEGACY_BRIEFS_DIR,
   plansDirSetting, briefsDirSetting, planWriteDir, briefsWriteDir, planReadDirs,
-  excludeLines, isScratchPath, withoutScratch,
+  excludeLines, worktreeExcludeLine, isScratchPath, withoutScratch,
 };
