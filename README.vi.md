@@ -12,14 +12,15 @@ File này dành cho con người.
 
 ```sh
 git clone https://github.com/futurelastic/colab-handbook.git ~/code/colab-handbook
-cd ~/code/colab-handbook && ./install.sh --all   # skills + CLI colab + hook, từ bản phát hành mới nhất; --dry để xem trước
+cd ~/code/colab-handbook && ./install.sh --all   # hỏi agent nào nhận skill; + CLI colab + hook, từ bản phát hành mới nhất; --dry để xem trước
 cd /duong-dan/toi/repo-cua-ban
 colab adopt              # chỉ hỏi những gì không tự dò ra được, rồi ghi .github/project.yml
 colab labels --ensure    # tạo các label quy ước
 colab register           # đưa repo vào danh sách fleet của máy này
 ```
 
-Sau đó, trong một phiên agent ở repo đó, chạy `/code-start <số-issue>`. Có agent
+Sau đó, trong một phiên agent ở repo đó, chạy `/code-start <số-issue>` (Claude
+Code; trong Codex là `$code-start` — xem [*Chọn engine*](#chọn-engine)). Có agent
 trong tay thì `/handbook-sync` thay được ba lệnh cuối và làm nốt phần adopt còn
 lại (xem [*Adopt vào một repo*](#adopt-vào-một-repo)). Cần có `git`, `node` ≥ 18
 và `gh` ≥ 2.94 đã đăng nhập (`gh auth login`); gói `gh` của các distro thường cũ
@@ -243,7 +244,8 @@ quyền cấp trước khi chạy migration vẫn đứng vững dù có nó hay
 | [`templates/`](templates/) | Điểm khởi đầu **copy-về-là-của-bạn**: CI, release, git hook (một bản quét secret và một bản quét danh tính), và block `CLAUDE.md` cho repo adopt. Không có gì được gọi từ xa — copy, sửa, sở hữu. |
 | [`tools/`](tools/) | `colab` — một CLI nhỏ (tùy chọn): adopt một repo, claim issue, cấp port, quản lý worktree, và merge nhánh đã xong vào trunk khi repo cho phép. State JSON, không dependency. Tham chiếu các lệnh: [`tools/README.md`](tools/README.md). |
 | [`audit/`](audit/) | Trình kiểm tra conformance từ bên ngoài. Đọc mọi repo của bạn — mọi owner, kể cả repo local-only — và báo drift trong một lần chạy. Chỉ cảnh báo. Thêm `--identity` thì quét cả description và topic của repo public — thứ mà không git hook nào nhìn thấy được. Ý nghĩa từng check: [`audit/README.md`](audit/README.md). |
-| [`skills/`](skills/) | Luồng phiên làm việc — xem [*Phiên làm việc đầu tiên*](#phiên-làm-việc-đầu-tiên). `install.sh` cài chúng thành skill Claude Code. |
+| [`skills/`](skills/) | Luồng phiên làm việc — xem [*Phiên làm việc đầu tiên*](#phiên-làm-việc-đầu-tiên). Là các thư mục `SKILL.md` thuần; `install.sh` link chúng vào từng coding agent bạn chọn. |
+| [`engines/`](engines/) | Mỗi coding agent một file dữ liệu nhỏ: skill cấp user đặt ở đâu, gọi skill thế nào, agent hỗ trợ gì. Thêm engine là thêm một file — [`engines/README.md`](engines/README.md). |
 | [`install.sh`](install.sh) | Cài đặt cho **máy của bạn**: skills, CLI `colab`, hook pre-commit, danh sách fleet. Idempotent; `--dry` cho xem trước mọi thứ. |
 
 ## Cài đặt máy
@@ -267,9 +269,36 @@ sau đều phải chủ động:
 Clone đang có thay đổi chưa commit thì không bao giờ bị chuyển, và chạy lại
 không kèm flag nào thì giữ nguyên thứ đang checkout.
 
+### Chọn engine
+
+Các skill là thư mục `SKILL.md` thuần, chỉ gọi `git`, `gh` và `colab`; coding
+agent nào đọc được skill thì chạy được chúng. Khác nhau là **mỗi agent tìm
+skill ở đâu**, nên bản cài sẽ hỏi. Ở terminal, `./install.sh` liệt kê các
+engine nó biết và cho bạn chọn một hoặc nhiều, lựa chọn cuối là *other: give a
+path*. Chạy không người trông thì nói bằng flag:
+
+```sh
+./install.sh --engine claude              # Claude Code → ~/.claude/skills
+./install.sh --engine claude,codex        # cả hai
+./install.sh --skills-dir ~/my-agent/skills   # agent khác: bạn đưa thư mục của nó
+```
+
+| Engine | Thư mục skill | Gọi | Cần làm gì để skill chạy được |
+|---|---|---|---|
+| Claude Code (`claude`) | `~/.claude/skills` | `/code-start` | Không cần gì. Bản cài cấp user này **thắng** `.claude/skills/<name>` cùng tên của repo (thứ tự ưu tiên là enterprise > personal > project), nên muốn dùng bản của repo thì đổi tên nó. |
+| OpenAI Codex (`codex`) | `~/.agents/skills` | `$code-start` | Sandbox mặc định không có mạng nên `gh` lỗi: đặt `[sandbox_workspace_write] network_access = true` trong `~/.codex/config.toml`. Số liệu lấy từ tài liệu của Codex; chưa được xác minh bằng một lần chạy trên máy sạch. |
+| agent khác | `--skills-dir <path>` | theo cách của agent | Shell của agent cần có mạng cho `gh`. Thư mục được ghi nhớ trong `~/.colab/skills-dirs`. |
+
+Chạy lại không flag và không có terminal thì giữ mọi engine đã thấy được link
+sẵn, nên máy đã cài không thay đổi gì. Không thấy engine nào thì cài cho Claude
+Code và nói rõ điều đó. Thông tin từng engine nằm trong [`engines/`](engines/),
+mỗi engine một file — thư mục đó là nguồn của bảng trên.
+
 | Flag | Làm gì |
 |---|---|
-| *(không có)* | Symlink `skills/` vào `~/.claude/skills/`, để mở repo nào cũng có. |
+| *(không có)* | Symlink `skills/` vào thư mục cấp user của từng engine đã chọn, để mở repo nào cũng có. Ở terminal thì hỏi; không thì giữ những gì đã link (xem [*Chọn engine*](#chọn-engine)). |
+| `--engine <id>[,<id>]` | Cài cho các engine này (`claude`, `codex` — các file trong `engines/`), không hỏi. |
+| `--skills-dir <path>` | Cài thêm vào thư mục này, cho agent mà `engines/` chưa biết. |
 | `--tools` | CLI `colab` cài hai lần: một **symlink** ở `~/.local/bin/colab` cho các phiên làm việc của bạn (in sẵn dòng `PATH` nếu cần), và một **bản đóng băng** có đóng dấu ở `~/.colab/bin/colab` cho các service luôn-bật. Đồng thời tạo `~/.colab/state.json` rỗng nếu chưa có. |
 | `--hooks` | Trỏ git của clone này vào `.githooks/`: quét secret bằng gitleaks, và quét danh tính với danh sách từ khoá do bạn giữ NGOÀI mọi repo (xem [`templates/README.md`](templates/README.md)). |
 | `--fleet` | Tạo `~/.colab/repos.txt` chỉ chứa ghi chú định dạng, nếu chưa có. Nó cố tình nằm trên máy vì nó ghi tên các repo private của bạn; `colab register` mới là thứ điền vào. |
@@ -291,8 +320,8 @@ báo khi nó tụt sau một thay đổi CLI đã phát hành, và chạy lại 
 Chưa có bản phát hành chính thức nào lên npm, nên tag mặc định `latest` chỉ là
 bản giữ chỗ; hãy cài từ **`@next`**, các bản ứng viên: `npx
 @futurelastic/colab-handbook@next <lệnh>`, hoặc `npm i -g
-@futurelastic/colab-handbook@next`. Lệnh gõ vẫn là `colab`. Skill không nằm trong package; chúng cài từ một bản clone, vì phải
-symlink vào `~/.claude/skills/`.
+@futurelastic/colab-handbook@next`. Lệnh gõ vẫn là `colab`. Skill không nằm trong package; chúng cài từ một bản clone, vì chúng là
+symlink trỏ vào working tree của bản clone đó.
 
 ### Kiểm tra bản cài
 
@@ -303,7 +332,8 @@ node audit/audit.mjs     # báo cáo conformance cho mọi repo đã đăng ký
 colab update             # các bản copy có đóng dấu đã tụt lại, kể cả CLI đóng băng
 ```
 
-`--check` báo bản đóng băng có tụt sau bản phát hành mới nhất không và lệnh nào
+`--check` báo theo từng engine: bao nhiêu skill đã link, thiếu hay hỏng, kèm
+các lưu ý riêng của engine đó (ví dụ mạng trong sandbox của Codex). Nó cũng báo bản đóng băng có tụt sau bản phát hành mới nhất không và lệnh nào
 nó không chạy được, file state có tồn tại không, đã đăng ký repo nào chưa, cả
 hai hooklet pre-commit có chạy được không, và `notifyUrl` có đang trống trong
 khi một observer trên máy đã khai endpoint không. ✗ nghĩa là thứ đã cài đang cũ

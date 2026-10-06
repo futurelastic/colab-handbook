@@ -3,8 +3,17 @@
 # CLI, the pre-commit hook, and the fleet list. All by symlink or copy.
 # Idempotent and safe to re-run.
 #
-#   ./install.sh          install the skills into ~/.claude/skills/ (user level —
-#                         available in every repo you open).
+#   ./install.sh          install the skills for your coding agent(s), user level — available
+#                         in every repo you open. At a terminal it ASKS which engine(s): one
+#                         data file per engine in engines/ (Claude Code, Codex, …) plus
+#                         "other: give a path". Not at a terminal, with no flag below, it keeps
+#                         every engine it finds already linked — and, finding none, defaults to
+#                         Claude Code and says so (#530).
+#   ./install.sh --engine claude,codex
+#                         install for these engines, no question asked (ids: engines/*.conf).
+#   ./install.sh --skills-dir <path>
+#                         install into this folder too — any engine engines/ does not know.
+#                         Remembered in <COLAB_HOME>/skills-dirs so re-runs and --check find it.
 #   ./install.sh --tools  ALSO symlink tools/colab onto your PATH (~/.local/bin/colab)
 #                         AND freeze a stamped copy of the CLI at ~/.colab/bin/colab.
 #   ./install.sh --hooks  ALSO enable this clone's gitleaks pre-commit hook
@@ -65,7 +74,7 @@ set -eo pipefail
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SKILLS_SRC="$DIR/skills"
-SKILLS_DEST="$HOME/.claude/skills"
+ENGINES_DIR="$DIR/engines"
 TOOL_SRC="$DIR/tools/colab"
 TOOL_DEST="$HOME/.local/bin/colab"
 COLAB_DIR="${COLAB_HOME:-$HOME/.colab}"
@@ -74,9 +83,11 @@ FLEET_DEST="$COLAB_DIR/repos.txt"
 FROZEN_DIR="$COLAB_DIR/bin"
 FROZEN_BIN="$FROZEN_DIR/colab"
 FROZEN_STAMP="$FROZEN_DIR/STAMP"
+SKILL_DIRS_FILE="$COLAB_DIR/skills-dirs"
 
 WITH_TOOLS=0; WITH_HOOKS=0; WITH_FLEET=0; DRY=0; CHECK=0; NOTIFY_URL=""; NOTIFY_FLAG=0
 REF_MODE="${COLAB_INSTALL_REF:-}"; REF_FLAG=0
+ENGINE_FLAG=""; SKILLS_DIR_FLAG=""
 NARGS=$#
 while [ $# -gt 0 ]; do
   a="$1"; shift
@@ -85,6 +96,14 @@ while [ $# -gt 0 ]; do
     --notify-url)
       [ $# -gt 0 ] || { echo "--notify-url needs a URL" >&2; exit 2; }
       NOTIFY_URL="$1"; NOTIFY_FLAG=1; shift ;;
+    --engine=*) ENGINE_FLAG="${ENGINE_FLAG:+$ENGINE_FLAG,}${a#--engine=}" ;;
+    --engine)
+      [ $# -gt 0 ] || { echo "--engine needs an engine id (see engines/*.conf)" >&2; exit 2; }
+      ENGINE_FLAG="${ENGINE_FLAG:+$ENGINE_FLAG,}$1"; shift ;;
+    --skills-dir=*) SKILLS_DIR_FLAG="${a#--skills-dir=}" ;;
+    --skills-dir)
+      [ $# -gt 0 ] || { echo "--skills-dir needs a folder" >&2; exit 2; }
+      SKILLS_DIR_FLAG="$1"; shift ;;
     --check) CHECK=1 ;;
     --tools) WITH_TOOLS=1 ;;
     --hooks) WITH_HOOKS=1 ;;
@@ -124,6 +143,61 @@ if [ "$CHECK" = 1 ] && [ "$NARGS" -gt 1 ]; then
 fi
 
 have() { command -v "$1" >/dev/null 2>&1; }
+
+# ------------------------------------------------------------------ engines --
+# engines/<id>.conf is DATA: `key: value` lines, read here with sed and in --check by
+# tools/lib/engines.js. Nothing below names an engine — adding one is adding a file (#530).
+# No `| head -1` anywhere here: under pipefail a writer killed by SIGPIPE aborts the whole run (set -e).
+conf_get() { sed -n "/^$2:/{s/^$2:[[:space:]]*//;p;q;}" "$ENGINES_DIR/$1.conf" 2>/dev/null; }
+conf_all() { sed -n "s/^$2:[[:space:]]*//p" "$ENGINES_DIR/$1.conf" 2>/dev/null; }
+expand_home() {
+  case "$1" in
+    "~") echo "$HOME" ;;
+    "~/"*) echo "$HOME/${1#\~/}" ;;
+    /*) echo "$1" ;;
+    *) echo "$PWD/$1" ;;
+  esac
+}
+# Engines with a fixed skills folder, in file order — `generic` (folder supplied by the user) is not one.
+known_engines() {
+  for f in "$ENGINES_DIR"/*.conf; do
+    [ -f "$f" ] || continue
+    b="$(basename "$f" .conf)"
+    [ -n "$(conf_get "$b" skills_dir)" ] && echo "$b"
+  done
+  return 0
+}
+engine_dir() { expand_home "$(conf_get "$1" skills_dir)"; }
+# The engine a machine with nothing linked gets: the one whose file says `default: yes` — never "the
+# first file alphabetically", which would change the default the day someone adds aider.conf.
+default_engine() {
+  for e in $(known_engines); do [ "$(conf_get "$e" default)" = yes ] && { echo "$e"; return 0; }; done
+  for e in $(known_engines); do echo "$e"; return 0; done
+}
+# Folders given with --skills-dir on an earlier run (one per line).
+remembered_dirs() { [ -f "$SKILL_DIRS_FILE" ] && grep -v '^[[:space:]]*#' "$SKILL_DIRS_FILE" | grep -v '^[[:space:]]*$' || true; }
+# dir_has_our_link <dir> — true when anything in <dir> is a symlink into this clone's skills/.
+dir_has_our_link() {
+  for l in "$1"/*; do
+    [ -L "$l" ] || continue
+    case "$(readlink "$l")" in "$SKILLS_SRC"/*) return 0 ;; esac
+  done
+  return 1
+}
+
+# Refuse an unknown engine BEFORE anything is installed, not halfway through the run.
+if [ -n "$ENGINE_FLAG" ]; then
+  for e in $(echo "$ENGINE_FLAG" | tr ',' ' '); do
+    if [ ! -f "$ENGINES_DIR/$e.conf" ]; then
+      echo "--engine: no engine '$e' — known: $(known_engines | tr '\n' ' ')(or --skills-dir <path> for any other)" >&2
+      exit 2
+    fi
+    if [ -z "$(conf_get "$e" skills_dir)" ] && [ -z "$SKILLS_DIR_FLAG" ]; then
+      echo "--engine $e has no skills folder of its own — pass it: --skills-dir <path>" >&2
+      exit 2
+    fi
+  done
+fi
 
 # The oldest gh that knows issue relationships (`--json blockedBy`, sub-issues): gh v2.94.0,
 # "Issue types, sub-issues, and relationships in gh issue". Measured on gh 2.45 (#521): those
@@ -356,10 +430,8 @@ newest_final_tag() {
 # the "first install on this machine" half of the auto rule. A machine that already installed keeps
 # whatever ref it was on; only an explicit flag moves it.
 no_handbook_skill_linked() {
-  for l in "$SKILLS_DEST"/*; do
-    [ -L "$l" ] || continue
-    case "$(readlink "$l")" in "$SKILLS_SRC"/*) return 1 ;; esac
-  done
+  for e in $(known_engines); do dir_has_our_link "$(engine_dir "$e")" && return 1; done
+  for d in $(remembered_dirs); do dir_has_our_link "$d" && return 1; done
   return 0
 }
 
@@ -372,6 +444,15 @@ reexec_installer() {
   [ "$WITH_TOOLS" = 1 ] && set -- "$@" --tools
   [ "$WITH_HOOKS" = 1 ] && set -- "$@" --hooks
   [ "$WITH_FLEET" = 1 ] && set -- "$@" --fleet
+  if [ -n "$ENGINE_FLAG$SKILLS_DIR_FLAG" ]; then
+    if grep -q -- '--skills-dir' "$newsh"; then
+      [ -n "$ENGINE_FLAG" ] && set -- "$@" --engine "$ENGINE_FLAG"
+      [ -n "$SKILLS_DIR_FLAG" ] && set -- "$@" --skills-dir "$SKILLS_DIR_FLAG"
+    else
+      echo "  ⚠ the installer at this ref installs for Claude Code only — --engine/--skills-dir not applied;"
+      echo "    re-run with --trunk to use them"
+    fi
+  fi
   if [ "$NOTIFY_FLAG" = 1 ]; then
     if grep -q -- '--notify-url' "$newsh"; then
       set -- "$@" --notify-url "$NOTIFY_URL"
@@ -539,15 +620,119 @@ echo "== colab-handbook install ($([ "$DRY" = 1 ] && echo dry-run || echo apply)
 select_ref
 preflight
 
-# --- skills → ~/.claude/skills/ ---
-[ "$DRY" = 1 ] || mkdir -p "$SKILLS_DEST"
-echo "skills → $SKILLS_DEST"
-for s in "$SKILLS_SRC"/*/; do
-  [ -d "$s" ] || continue
-  link_dir "${s%/}" "$SKILLS_DEST/$(basename "$s")"
-done
-echo "  note: a project's own .claude/skills/<name> takes precedence over this"
-echo "        user-level install when both exist — this never shadows a repo skill."
+# --- skills → each chosen engine's user-level folder (#530) ---
+# TARGETS: one `<engine id>|<folder>` per line. POSIX only — no arrays (CI runs `sh -n` here).
+TARGETS=""
+add_target() {
+  case "
+$TARGETS
+" in *"
+$1|$2
+"*) return 0 ;; esac
+  TARGETS="${TARGETS:+$TARGETS
+}$1|$2"
+}
+# Everything already linked: what a re-run with no flag keeps.
+add_linked_targets() {
+  for e in $(known_engines); do
+    d="$(engine_dir "$e")"
+    dir_has_our_link "$d" && add_target "$e" "$d"
+  done
+  for d in $(remembered_dirs); do dir_has_our_link "$d" && add_target generic "$d"; done
+  return 0
+}
+ask_engines() {
+  echo "engines — which coding agent(s) should get the skills?"
+  i=0
+  for e in $(known_engines); do
+    i=$((i + 1)); d="$(engine_dir "$e")"; mark=""
+    dir_has_our_link "$d" && mark="  (installed)"
+    echo "  $i) $(conf_get "$e" label) → $d$mark"
+  done
+  other=$((i + 1))
+  echo "  $other) other: give a path"
+  add_linked_targets
+  if [ -n "$TARGETS" ]; then
+    dflt="what is installed"
+  else
+    dflt="$(known_engines | grep -nxF "$(default_engine)" | cut -d: -f1)"
+  fi
+  while :; do
+    printf '  pick one or more (e.g. 1 or 1,%s) [Enter = %s]: ' "$other" "$dflt"
+    ans=""; read -r ans || ans=""
+    if [ -z "$ans" ]; then
+      [ -n "$TARGETS" ] || add_target "$(default_engine)" "$(engine_dir "$(default_engine)")"
+      break
+    fi
+    picked=""; bad=""
+    for n in $(echo "$ans" | tr ',' ' '); do
+      case "$n" in *[!0-9]*|"") bad="$n"; break ;; esac
+      if [ "$n" -ge 1 ] && [ "$n" -lt "$other" ]; then
+        picked="$picked $(known_engines | sed -n "${n}p")"
+      elif [ "$n" = "$other" ]; then
+        picked="$picked :other"
+      else
+        bad="$n"; break
+      fi
+    done
+    [ -z "$bad" ] && break
+    echo "  '$bad' is not one of 1-$other"
+  done
+  [ -n "$ans" ] || { echo; return 0; }
+  TARGETS=""   # an explicit answer replaces the default
+  for e in $picked; do
+    if [ "$e" = ":other" ]; then
+      printf '  skills folder for the other engine: '
+      p=""; read -r p || p=""
+      if [ -n "$p" ]; then add_target generic "$(expand_home "$p")"; else echo "  (no folder given — skipped)"; fi
+    else
+      add_target "$e" "$(engine_dir "$e")"
+    fi
+  done
+  echo
+}
+
+if [ -n "$ENGINE_FLAG$SKILLS_DIR_FLAG" ]; then
+  for e in $(echo "$ENGINE_FLAG" | tr ',' ' '); do
+    [ -n "$(conf_get "$e" skills_dir)" ] && add_target "$e" "$(engine_dir "$e")"
+  done
+  [ -n "$SKILLS_DIR_FLAG" ] && add_target generic "$(expand_home "$SKILLS_DIR_FLAG")"
+elif [ -t 0 ] && [ -t 1 ]; then
+  ask_engines
+else
+  add_linked_targets
+  if [ -z "$TARGETS" ]; then
+    first="$(default_engine)"
+    add_target "$first" "$(engine_dir "$first")"
+    echo "engines: none had the skills linked yet → defaulted to $first ($(conf_get "$first" label))."
+    echo "         Another engine: --engine <id>[,<id>] (known: $(known_engines | tr '\n' ' '| sed 's/ $//')), or --skills-dir <path>."
+    echo
+  fi
+fi
+[ -n "$TARGETS" ] || warn "no engine chosen — no skills were installed (re-run and pick one, or pass --engine)"
+
+while IFS='|' read -r eng dest; do
+  [ -n "$eng" ] || continue
+  if [ "$eng" = generic ]; then label="$(conf_get generic label)"; else label="$(conf_get "$eng" label)"; fi
+  echo "skills → $dest  ($label)"
+  [ "$DRY" = 1 ] || mkdir -p "$dest"
+  for s in "$SKILLS_SRC"/*/; do
+    [ -d "$s" ] || continue
+    link_dir "${s%/}" "$dest/$(basename "$s")"
+  done
+  echo "  invoke: $(conf_get "$eng" invoke)"
+  conf_all "$eng" note | while IFS= read -r line; do echo "  note: $line"; done
+  while IFS= read -r line; do [ -n "$line" ] && warn "$line"; done <<CAVEATS
+$(conf_all "$eng" caveat)
+CAVEATS
+  # A folder engines/ does not know is remembered, so a re-run with no flag and --check find it.
+  if [ "$eng" = generic ] && [ "$DRY" != 1 ] && ! remembered_dirs | grep -qxF "$dest"; then
+    mkdir -p "$COLAB_DIR"; echo "$dest" >> "$SKILL_DIRS_FILE"
+    echo "  remembered in $SKILL_DIRS_FILE (re-runs and --check find it there)"
+  fi
+done <<TARGETS_EOF
+$TARGETS
+TARGETS_EOF
 
 # --- optional: colab CLI → ~/.local/bin/ ---
 if [ "$WITH_TOOLS" = 1 ]; then
@@ -634,11 +819,16 @@ if [ "$DRY" = 1 ]; then
   echo "  [dry] nothing was changed, so there is nothing to verify."
 else
   probe="$(ls "$SKILLS_SRC" 2>/dev/null | head -1)"
-  if [ -n "$probe" ] && [ -e "$SKILLS_DEST/$probe" ]; then
-    echo "  ✓ skill '$probe' resolves at $SKILLS_DEST/$probe"
-  else
-    warn "no skill resolved under $SKILLS_DEST — see the skips above."
-  fi
+  while IFS='|' read -r eng dest; do
+    [ -n "$eng" ] || continue
+    if [ -n "$probe" ] && [ -e "$dest/$probe" ]; then
+      echo "  ✓ skill '$probe' resolves at $dest/$probe"
+    else
+      warn "no skill resolved under $dest — see the skips above."
+    fi
+  done <<TARGETS_EOF
+$TARGETS
+TARGETS_EOF
   if [ "$WITH_TOOLS" = 1 ]; then
     if have colab; then
       echo "  ✓ colab resolves at $(command -v colab)"

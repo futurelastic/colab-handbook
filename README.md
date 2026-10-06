@@ -13,14 +13,15 @@ This file is for humans.
 
 ```sh
 git clone https://github.com/futurelastic/colab-handbook.git ~/code/colab-handbook
-cd ~/code/colab-handbook && ./install.sh --all   # skills + colab CLI + hooks, from the newest release; --dry shows it first
+cd ~/code/colab-handbook && ./install.sh --all   # asks which coding agent gets the skills; + colab CLI + hooks, from the newest release; --dry shows it first
 cd /path/to/your-repo
 colab adopt              # asks only what it cannot detect, writes .github/project.yml
 colab labels --ensure    # creates the convention labels
 colab register           # adds the repo to this machine's fleet list
 ```
 
-Then, in an agent session in that repo, run `/code-start <issue-number>`. With an
+Then, in an agent session in that repo, run `/code-start <issue-number>` (Claude
+Code; in Codex, `$code-start` — see [*Choose your engine*](#choose-your-engine)). With an
 agent at hand, `/handbook-sync` replaces the last three commands and also does
 the rest of adoption (see [*Adopting it into a repo*](#adopting-it-into-a-repo)).
 You need `git`, `node` ≥ 18 and `gh` ≥ 2.94 logged in (`gh auth login`); distro
@@ -244,7 +245,8 @@ migration hold with or without it.
 | [`templates/`](templates/) | **Copy-and-own** starting points: CI, release, git hooks (a secret scan and an identity scan), and the `CLAUDE.md` block for adopting repos. Nothing is called remotely — copy it, edit it, own it. |
 | [`tools/`](tools/) | `colab` — a small CLI (optional): adopt a repo, claim issues, allocate ports, manage worktrees, and merge a finished branch to trunk when the repo grants it. JSON state, zero dependencies. Command reference: [`tools/README.md`](tools/README.md). |
 | [`audit/`](audit/) | An external conformance checker. Reads all your repos — every owner, including local-only ones — and reports drift in a single run. Advisory only. `--identity` also scans public repository descriptions and topics, which no git hook can see. What each check means: [`audit/README.md`](audit/README.md). |
-| [`skills/`](skills/) | The session flow — see [*Your first session*](#your-first-session). Installed as Claude Code skills by `install.sh`. |
+| [`skills/`](skills/) | The session flow — see [*Your first session*](#your-first-session). Plain `SKILL.md` folders; `install.sh` links them into each coding agent you choose. |
+| [`engines/`](engines/) | One small data file per coding agent: where its user-level skills go, how a skill is invoked, what it supports. Adding an engine is adding a file — [`engines/README.md`](engines/README.md). |
 | [`install.sh`](install.sh) | Sets up **your machine**: skills, the `colab` CLI, the pre-commit hook, the fleet list. Idempotent; `--dry` shows everything first. |
 
 ## Setting up a machine
@@ -268,9 +270,36 @@ Later moves are explicit:
 A clone with uncommitted changes is never moved, and a re-run without either
 flag keeps whatever is checked out.
 
+### Choose your engine
+
+The skills are plain `SKILL.md` folders that call `git`, `gh` and `colab`; any
+coding agent that reads skills can run them. What differs is **where each
+agent looks for them**, so the install asks. At a terminal, `./install.sh`
+lists the engines it knows and lets you pick one or more, with *other: give a
+path* last. Unattended, say it with a flag:
+
+```sh
+./install.sh --engine claude              # Claude Code → ~/.claude/skills
+./install.sh --engine claude,codex        # both
+./install.sh --skills-dir ~/my-agent/skills   # any other agent: you give its folder
+```
+
+| Engine | Skills folder | Invoke | Before the skills work there |
+|---|---|---|---|
+| Claude Code (`claude`) | `~/.claude/skills` | `/code-start` | Nothing. This user-level install **wins** over a repo's own `.claude/skills/<name>` of the same name (precedence is enterprise > personal > project), so rename a repo variant you want used. |
+| OpenAI Codex (`codex`) | `~/.agents/skills` | `$code-start` | Its default sandbox has no network, so `gh` fails: set `[sandbox_workspace_write] network_access = true` in `~/.codex/config.toml`. Values from Codex's docs; not yet verified by a clean-machine run. |
+| anything else | `--skills-dir <path>` | the agent's own way | The agent's shell needs network access for `gh`. The folder is remembered in `~/.colab/skills-dirs`. |
+
+A re-run with no flag and no terminal keeps every engine it finds already
+linked, so an existing machine changes nothing. Finding none, it installs for
+Claude Code and says so. The per-engine facts live in [`engines/`](engines/),
+one file each — that folder is the source for the table above.
+
 | Flag | What it does |
 |---|---|
-| *(none)* | Symlink `skills/` into `~/.claude/skills/`, so they are available in every repo you open. |
+| *(none)* | Symlink `skills/` into each chosen engine's user-level folder, so they are available in every repo you open. Asks at a terminal; otherwise keeps what is linked (see [*Choose your engine*](#choose-your-engine)). |
+| `--engine <id>[,<id>]` | Install for these engines (`claude`, `codex` — the files in `engines/`), no question asked. |
+| `--skills-dir <path>` | Also install into this folder, for an agent `engines/` does not know. |
 | `--tools` | The `colab` CLI twice: a **symlink** at `~/.local/bin/colab` for your sessions (it prints the `PATH` line if needed), and a stamped **frozen copy** at `~/.colab/bin/colab` for always-on services. Also creates an empty `~/.colab/state.json` if there is none. |
 | `--hooks` | Point this clone's git at `.githooks/`: a gitleaks secret scan and an identity scan whose vocabulary you keep outside every repo (see [`templates/README.md`](templates/README.md)). |
 | `--fleet` | Seed `~/.colab/repos.txt` with format notes only, if absent. It stays machine-local because it names your private repos; `colab register` fills it. |
@@ -294,7 +323,7 @@ yet, so the default `latest` tag holds only a placeholder; install from
 **`@next`**, the release candidates: `npx @futurelastic/colab-handbook@next
 <command>`, or `npm i -g @futurelastic/colab-handbook@next`. The command is
 still `colab`. The skills are not in the package; they install from a
-clone, because they must symlink into `~/.claude/skills/`.
+clone, because they are symlinks into its working tree.
 
 ### Checking an install
 
@@ -305,7 +334,8 @@ node audit/audit.mjs     # a conformance report across every registered repo
 colab update             # stamped copies that fell behind, the frozen CLI included
 ```
 
-`--check` reports whether the frozen copy is behind the latest release and
+`--check` reports, per engine, how many skills are linked, missing or broken,
+plus that engine's own caveats (Codex's sandbox network, for instance). It also reports whether the frozen copy is behind the latest release and
 which commands it does not dispatch, whether the state file exists, whether
 anything is registered, whether both pre-commit hooklets can run, and whether
 `notifyUrl` is unset while a local observer declared an endpoint. ✗ means
