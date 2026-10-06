@@ -197,7 +197,9 @@ từ handbook. Hãy viết phần khác biệt vào `.colab/skills/<skill>.md` (
 `.colab/skills/code-wrap.md`), bằng văn xuôi thường. Mỗi skill đọc file đó
 trước các bước của chính nó, và nội dung file thắng phần chữ của skill trong
 repo đó. Nó không bao giờ nới một cổng của `colab`: claim hay merge đã bị từ
-chối thì vẫn bị từ chối.
+chối thì vẫn bị từ chối. Hãy gọi bước bạn muốn chỉnh theo số của nó (`code-ship`
+B1c, `code-sweep` §3): một skill lớn gồm một phần lõi ngắn cộng các file tham
+chiếu, và phần lõi giữ số của mọi bước.
 
 Claude Code tự nạp file vào skill. Các engine khác có một câu thường trong mỗi
 skill bảo agent đọc file, cách này chạy được mà không cần engine hỗ trợ gì.

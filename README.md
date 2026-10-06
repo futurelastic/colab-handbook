@@ -198,7 +198,10 @@ extra check before wrap? Do not fork the skill: a fork stops receiving handbook
 updates. Write the difference in `.colab/skills/<skill>.md` (for example
 `.colab/skills/code-wrap.md`), in plain prose. Every skill reads that file
 before its own steps, and what it says wins over the skill's text for that repo.
-It never loosens a `colab` gate: a refused claim or merge stays refused.
+It never loosens a `colab` gate: a refused claim or merge stays refused. Name
+the step you are refining by its number (`code-ship` B1c, `code-sweep` §3): a
+large skill is a short core plus reference files, and the core keeps every
+step's number.
 
 Claude Code loads the file into the skill automatically. Other engines get a
 plain sentence in each skill telling the agent to read the file, which works
