@@ -475,7 +475,9 @@ Then report the candidate as sent back and continue with the next one.
 
 - **Idempotent.** If a `↩️ Sent back` comment already exists on the issue and the branch head
   has not moved since it, post nothing; report `sent-back (pending since <ts>)`. A new commit
-  on the branch re-arms it.
+  on the branch re-arms it. While that comment stands at an unmoved head the candidate stays
+  `send-back` whatever follows it, until a comment appears that is neither bookkeeping nor a
+  bare signature line (test 3's filter, #517) — the `↩️` itself never reads as a hand-off.
 - **A conflict needing judgment is a send-back too** (§4): the author rebases and resolves,
   the sweep does not.
 - **`blocked` keeps what no implementer can be addressed about:** no claimed issue, or an
@@ -538,7 +540,8 @@ issues of another adopting repo that day.
    ```sh
    HEAD_AT=$(TZ=UTC git log -1 --date=format-local:%Y-%m-%dT%H:%M:%SZ --format=%cd "origin/$BR")
    WRAP_AT=$(gh issue view "$N" --json comments -q '[.comments[]
-     | select(.body | test("^(🔒 Claimed|✅ Released|🚢 Shipped|🔖 Referenced)") | not)]
+     | select(.body | test("^(🔒 Claimed|✅ Released|🚢 Shipped|🔖 Referenced|↩️ Sent back)") | not)
+     | select(.body | test("^—\\s[^\\n]+\\s*$") | not)]
      | last | .createdAt // ""')
    awk -v h="$HEAD_AT" -v w="$WRAP_AT" 'BEGIN { exit !(w != "" && h < w) }' \
      && echo handed-off || echo in-flight          # awk, not `[ \< ]`: zsh's `[` rejects `\<`
@@ -548,6 +551,28 @@ issues of another adopting repo that day.
    they are off by that offset. For a committer west of UTC, a head committed *after* the
    comment then reads as *before* it, and that is the unsafe direction. `format-local` under
    `TZ=UTC` gives the same shape `gh` uses, so a plain string compare is then correct.
+
+   **Two comment shapes are never a hand-off (#517)**, and the filter drops both: a
+   `↩️ Sent back` comment (this sweep's own, posted *after* the head it rejected — counting
+   it would make the next run read the unchanged branch as handed off and ship it), and a
+   comment whose whole body is one signature line (`— <name> · <machine>/<session>`, which
+   some deployments post after every comment). A distill that merely *ends* in such a line
+   still counts: the pattern is anchored to the start of the body and allows no second line.
+   Checked under `gh -q` (Go regexp: `$` is end of text, so `\s*$` absorbs one trailing
+   newline).
+
+   Walk-through — one branch, nothing pushed after 10:00:
+
+   | time | event | newest comment the filter keeps | verdict |
+   |---|---|---|---|
+   | 10:00 | head committed, no distill | — | — |
+   | 11:00 | sweep | none | `in-flight` → send-back, `↩️ Sent back` posted |
+   | 12:00 | next sweep | none (`↩️` filtered) | `in-flight`; a `↩️` already stands at this head ⇒ report `sent-back (pending since 11:00)`, post nothing |
+   | 12:30 | `— <name> · <machine>/<session>` posted | none (signature filtered) | still `in-flight`, still pending |
+   | 13:00 | implementer posts a real distill | the distill | `handed-off` → `ship` path |
+
+   Before this filter, the 12:00 run read the `↩️` comment as the hand-off and shipped the
+   branch the 10:00 run had just sent back.
 
    This is a **proxy**, and it is one on purpose. The comment's text is not checked, and an
    unrelated automated note posted after the commit would satisfy it. It only keeps obvious

@@ -105,7 +105,9 @@ git -C "$MAIN_REPO" status --porcelain -uall                 # trunk checkout st
   CI run ever validated the fix, and the contradiction was doing the blocking.
 - **No recent distill comment** → A1 did not happen, or happened somewhere this can't
   see. **Send it back** — the distill is the implementer's knowledge, not the
-  coordinator's to reconstruct (#409). Don't assume it was verbal.
+  coordinator's to reconstruct (#409). Don't assume it was verbal. A `↩️ Sent back`
+  comment or a bare one-line signature (`— <name> …`) is not a distill — the same filter as
+  [`code-sweep`](../code-sweep/SKILL.md) §3, test 3 (#517).
 - **Claim released already** → someone (or something) other than this skill let it go.
   That is a finding — B3 below is supposed to be the only unconditional release — chase
   it before merging over a claim that may no longer mean what it used to.
