@@ -18,13 +18,25 @@
 #                         Without the flag, --tools seeds it from <COLAB_HOME>/notify-endpoint
 #                         when a local observer declared one there, and otherwise says
 #                         plainly that notifyUrl is unset and which events that drops.
+#   ./install.sh --release
+#                         check this clone out at the newest FINAL release tag (vX.Y.Z, no -rc),
+#                         then install from it. Re-run it to move to a newer release.
+#   ./install.sh --trunk  follow trunk instead: check out the trunk branch (project.yml `trunk:`)
+#                         and install unreleased work — the clone's equivalent of npm's @next.
+#                         With neither flag, a FIRST install from a fresh clone of trunk pins
+#                         itself to the newest final release (#521); any other run keeps whatever
+#                         the clone has checked out and says which one that is.
+#                         COLAB_INSTALL_REF=release|trunk is the same choice as an env var;
+#                         COLAB_INSTALL_REF=keep never moves the checkout (tests, automation).
 #   ./install.sh --dry    print what would happen; change nothing. Combines with
 #                         any of the above.
 #   ./install.sh --check  READ-ONLY health report of what an earlier install left
 #                         behind: is the frozen copy behind the handbook, and which
 #                         commands does it not dispatch; is the state file there;
 #                         is anything registered in the fleet; can the hooklets run.
-#                         Exit 1 on any ✗ row. Takes no other flag.
+#                         Exit 1 on any ✗ row. ✗ means installed-but-stale-or-broken; something
+#                         merely never set up (no repo registered yet, no identity vocabulary)
+#                         is ⚠ and exits 0. Takes no other flag.
 #
 # A preflight runs on every invocation. It only reports (✓ / ⚠) and never aborts:
 # a tool you have not installed must not block the parts that do not need it.
@@ -64,6 +76,7 @@ FROZEN_BIN="$FROZEN_DIR/colab"
 FROZEN_STAMP="$FROZEN_DIR/STAMP"
 
 WITH_TOOLS=0; WITH_HOOKS=0; WITH_FLEET=0; DRY=0; CHECK=0; NOTIFY_URL=""; NOTIFY_FLAG=0
+REF_MODE="${COLAB_INSTALL_REF:-}"; REF_FLAG=0
 NARGS=$#
 while [ $# -gt 0 ]; do
   a="$1"; shift
@@ -78,6 +91,12 @@ while [ $# -gt 0 ]; do
     --fleet) WITH_FLEET=1 ;;
     --all)   WITH_TOOLS=1; WITH_HOOKS=1; WITH_FLEET=1 ;;
     --dry|--dry-run) DRY=1 ;;
+    --release|--trunk)
+      m="${a#--}"
+      if [ "$REF_FLAG" = 1 ] && [ "$REF_MODE" != "$m" ]; then
+        echo "--release and --trunk are opposite choices — pass one" >&2; exit 2
+      fi
+      REF_MODE="$m"; REF_FLAG=1 ;;
     # Print the header block itself: every comment line after the shebang, up to the
     # first line of code. A hardcoded line range silently truncates the moment the
     # header grows — and it grows exactly when someone documents something new,
@@ -95,12 +114,35 @@ if [ "$NOTIFY_FLAG" = 1 ]; then
     *) echo "--notify-url must be an http(s) URL, got: '$NOTIFY_URL'" >&2; exit 2 ;;
   esac
 fi
+case "$REF_MODE" in
+  ""|release|trunk|keep) ;;
+  *) echo "COLAB_INSTALL_REF must be release, trunk or keep, got: '$REF_MODE'" >&2; exit 2 ;;
+esac
 if [ "$CHECK" = 1 ] && [ "$NARGS" -gt 1 ]; then
   echo "--check takes no other flag: it only reads. Run the install first, then ./install.sh --check" >&2
   exit 2
 fi
 
 have() { command -v "$1" >/dev/null 2>&1; }
+
+# The oldest gh that knows issue relationships (`--json blockedBy`, sub-issues): gh v2.94.0,
+# "Issue types, sub-issues, and relationships in gh issue". Measured on gh 2.45 (#521): those
+# fields are unknown and `gh issue view N --comments` fails, while claims and `colab ship` work.
+GH_MIN="2.94.0"
+
+# version_ge A B — dotted numeric compare, true when A >= B. POSIX, no sort -V (absent on macOS).
+version_ge() {
+  a="$1"; b="$2"
+  while [ -n "$a" ] || [ -n "$b" ]; do
+    x="${a%%.*}"; y="${b%%.*}"
+    case "$a" in *.*) a="${a#*.}" ;; *) a="" ;; esac
+    case "$b" in *.*) b="${b#*.}" ;; *) b="" ;; esac
+    x="${x:-0}"; y="${y:-0}"
+    [ "$x" -gt "$y" ] 2>/dev/null && return 0
+    [ "$x" -lt "$y" ] 2>/dev/null && return 1
+  done
+  return 0
+}
 
 WARNED=0
 warn() { echo "  ⚠ $1"; WARNED=1; }
@@ -144,8 +186,16 @@ preflight() {
   fi
 
   if have gh; then
+    gh_v="$(gh --version 2>/dev/null | sed -n '1s/^gh version \([0-9][0-9.]*\).*/\1/p')"
+    if [ -n "$gh_v" ] && ! version_ge "$gh_v" "$GH_MIN"; then
+      warn "gh $gh_v is below $GH_MIN — the oldest gh that reads issue relationships. Below it:"
+      echo "            \`gh issue view --json blockedBy\` / \`subIssuesSummary\` are unknown fields, so"
+      echo "            readiness reads blockers as unread; \`gh issue view N --comments\` (how a session"
+      echo "            loads an Issue's memory) can fail with a Projects-classic GraphQL error."
+      echo "            Distro packages lag — install from https://cli.github.com"
+    fi
     if gh auth status >/dev/null 2>&1; then
-      echo "  ✓ gh       authenticated"
+      echo "  ✓ gh       ${gh_v:+$gh_v, }authenticated"
     else
       warn "gh       installed but NOT authenticated — run: gh auth login"
       echo "            Claims, the skills and the audit's remote targets all need it,"
@@ -285,6 +335,140 @@ freeze_cli() {
   echo "  refreshing it is deliberate — re-run install.sh; \`colab update\` reports when it is behind."
 }
 
+# ------------------------------------------------------------- handbook ref --
+# Which version of the handbook this machine runs (#521). The skills and the PATH colab are symlinks
+# into this working tree, so the checked-out ref IS the installed version. A fresh `git clone` lands
+# on trunk, which on a tag-gated repo runs ahead of every final release: a first install used to stamp
+# `v1.11.0-227-g…` — 227 commits of unreleased work as a newcomer's toolchain — while the npm route
+# defaults to the final release. So a first install from a fresh clone pins the newest FINAL tag, and
+# following trunk is an explicit choice (--trunk, the clone's @next).
+#
+# Every helper here reads git and nothing else; trunk is project.yml's `trunk:` (fallback main).
+trunk_name() {
+  t="$(sed -n 's/^trunk:[[:space:]]*\([A-Za-z0-9._/-]*\).*/\1/p' "$DIR/.github/project.yml" 2>/dev/null | head -1)"
+  echo "${t:-main}"
+}
+newest_final_tag() {
+  git -C "$DIR" tag --list 'v[0-9]*' --sort=-v:refname 2>/dev/null \
+    | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | head -1
+}
+# no_handbook_skill_linked — true when nothing in the skills folder is a symlink into this clone:
+# the "first install on this machine" half of the auto rule. A machine that already installed keeps
+# whatever ref it was on; only an explicit flag moves it.
+no_handbook_skill_linked() {
+  for l in "$SKILLS_DEST"/*; do
+    [ -L "$l" ] || continue
+    case "$(readlink "$l")" in "$SKILLS_SRC"/*) return 1 ;; esac
+  done
+  return 0
+}
+
+# reexec_installer — the checkout just replaced this very file under the running shell, so nothing
+# after it may be read from disk: hand over to the installer AS OF the new ref, with the flags it was
+# given. That installer may predate a flag (an older tag has no --notify-url) — drop it, loudly.
+reexec_installer() {
+  newsh="$DIR/install.sh"
+  set --
+  [ "$WITH_TOOLS" = 1 ] && set -- "$@" --tools
+  [ "$WITH_HOOKS" = 1 ] && set -- "$@" --hooks
+  [ "$WITH_FLEET" = 1 ] && set -- "$@" --fleet
+  if [ "$NOTIFY_FLAG" = 1 ]; then
+    if grep -q -- '--notify-url' "$newsh"; then
+      set -- "$@" --notify-url "$NOTIFY_URL"
+    else
+      echo "  ⚠ the installer at this ref has no --notify-url — not applied; re-run with --trunk to use it"
+    fi
+  fi
+  echo "  → continuing with the installer as of $(git -C "$DIR" describe --tags --always 2>/dev/null)"
+  echo
+  COLAB_INSTALL_REEXEC=1 exec bash "$newsh" "$@"
+}
+
+# select_ref — decide, act, and always print which ref the install comes from. Exits via exec when it
+# moved HEAD. Never moves a dirty tree, never moves a clone that is not a plain clone of the handbook.
+select_ref() {
+  echo "handbook version"
+  if [ -n "${COLAB_INSTALL_REEXEC:-}" ]; then
+    echo "  ✓ $(git -C "$DIR" describe --tags --always 2>/dev/null) (selected above)"
+    echo; return
+  fi
+  # Toplevel by prefix, not by path string: $DIR is a logical path (/var/…), git's is physical (/private/var/…).
+  if [ "$(git -C "$DIR" rev-parse --is-inside-work-tree 2>/dev/null)" != true ] \
+    || [ -n "$(git -C "$DIR" rev-parse --show-prefix 2>/dev/null)" ]; then
+    echo "  ⚠ $DIR is not a git checkout — installing these files as they are"
+    echo; return
+  fi
+  trunk="$(trunk_name)"
+  branch="$(git -C "$DIR" symbolic-ref -q --short HEAD 2>/dev/null || true)"
+  mode="$REF_MODE"
+  if [ -z "$mode" ]; then
+    # Auto: only the exact shape of "just cloned, never installed here" — on trunk, at origin's tip,
+    # no skill of ours linked. Everything else keeps its ref (a maintainer's trunk checkout, a
+    # worktree on a feature branch, CI's detached checkout, a machine that chose --trunk earlier).
+    if [ "$branch" = "$trunk" ] \
+      && [ "$(git -C "$DIR" rev-parse -q --verify HEAD 2>/dev/null)" = "$(git -C "$DIR" rev-parse -q --verify "refs/remotes/origin/$trunk" 2>/dev/null)" ] \
+      && no_handbook_skill_linked; then
+      mode=release
+      echo "  first install from a fresh clone of $trunk → pinning the newest final release"
+      echo "            (follow trunk instead: ./install.sh --trunk)"
+    else
+      mode=keep
+    fi
+  fi
+
+  head="$(git -C "$DIR" rev-parse -q --verify HEAD 2>/dev/null)"
+  case "$mode" in
+    release)
+      [ "$REF_FLAG" = 1 ] && [ "$DRY" != 1 ] && git -C "$DIR" fetch -q --tags origin 2>/dev/null
+      tag="$(newest_final_tag)"
+      if [ -z "$tag" ]; then
+        warn "no final release tag (vX.Y.Z) here yet — installing $trunk as it is"
+        echo; return
+      fi
+      if [ "$head" = "$(git -C "$DIR" rev-parse -q --verify "$tag^{commit}")" ]; then
+        echo "  ✓ release $tag"
+        echo; return
+      fi
+      target="$tag" ;;
+    trunk)
+      if [ "$branch" = "$trunk" ]; then
+        echo "  ✓ trunk $trunk @ $(git -C "$DIR" describe --tags --always 2>/dev/null) — unreleased work included"
+        echo; return
+      fi
+      target="$trunk" ;;
+    keep)
+      tag="$(newest_final_tag)"
+      desc="$(git -C "$DIR" describe --tags --always 2>/dev/null)"
+      if [ -n "$tag" ] && [ "$desc" = "$tag" ]; then
+        echo "  ✓ release $tag (follow trunk instead: ./install.sh --trunk)"
+      else
+        echo "  ✓ ${branch:-detached HEAD} @ $desc — not a final release; unreleased work is installed"
+        echo "            (pin the newest final release: ./install.sh --release)"
+      fi
+      echo; return ;;
+  esac
+
+  if [ -n "$(git -C "$DIR" status --porcelain --untracked-files=no 2>/dev/null)" ]; then
+    warn "this clone has uncommitted changes — NOT switching to $target; installing what is checked out"
+    echo; return
+  fi
+  if [ "$DRY" = 1 ]; then
+    echo "  [dry] check out $target, then install from it"
+    echo; return
+  fi
+  if [ "$target" = "$trunk" ]; then
+    git -C "$DIR" fetch -q origin 2>/dev/null || true
+    git -C "$DIR" checkout -q "$trunk" || { warn "could not check out $trunk — installing what is checked out"; echo; return; }
+    git -C "$DIR" merge -q --ff-only "origin/$trunk" 2>/dev/null || true
+  else
+    git -C "$DIR" -c advice.detachedHead=false checkout -q "$target" \
+      || { warn "could not check out $target — installing what is checked out"; echo; return; }
+  fi
+  echo "  ✓ checked out $target"
+  [ "$(git -C "$DIR" rev-parse HEAD)" = "$head" ] && { echo; return; }
+  reexec_installer
+}
+
 if [ "$CHECK" = 1 ]; then
   echo "== colab-handbook install --check (read-only) =="
   preflight
@@ -350,6 +534,7 @@ seed_notify() {
 
 echo "== colab-handbook install ($([ "$DRY" = 1 ] && echo dry-run || echo apply)) =="
 
+select_ref
 preflight
 
 # --- skills → ~/.claude/skills/ ---
@@ -478,7 +663,7 @@ echo "  colab labels --ensure --repo /path/to/repo  # create the convention labe
 echo "  colab update                    # stamped copies behind the handbook, the frozen CLI included"
 echo "  node audit/audit.mjs            # conformance report for your fleet"
 echo "  ./install.sh --check            # later: is what this installed still current? (read-only)"
-echo "  open CONVENTIONS.md             # the rules — ~15 minutes, the only normative file"
+echo "  less CONVENTIONS.md             # the rules — ~15 minutes, the only normative file"
 if [ "$WITH_TOOLS" = 1 ]; then
   echo
   echo "  two colabs, on purpose:"

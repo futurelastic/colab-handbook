@@ -13,8 +13,9 @@
  *
  * Row severities, and the one rule behind them: ✗ (fail, exit 1) means something was INSTALLED and
  * is now stale or unusable; ⚠ means something was simply never set up, which may be a deliberate
- * choice (a machine that only wants the skills needs no fleet list). A report that failed every
- * skills-only machine would teach people to ignore its exit code.
+ * choice (a machine that only wants the skills needs no fleet list) or just not done YET (no repo
+ * registered, no identity vocabulary). A report that failed every skills-only machine — or every
+ * correct fresh `--all` install, as it did until #521 — would teach people to ignore its exit code.
  *
  * CommonJS, zero dependencies, runnable as a script: install.sh calls
  *   node tools/lib/install-check.js --root <handbook> --colab-home <dir> --home <dir>
@@ -163,9 +164,9 @@ function checkState({ root, colabHome, home }) {
 }
 
 /**
- * The fleet: both machine-local registries `colab register` writes. A repos.txt that exists with no
- * live entry is the `--fleet` dead end — seeded from placeholders, and the next command refuses with
- * "No repos registered". That one is a ✗; never having asked for a fleet is a ⚠.
+ * The fleet: both machine-local registries `colab register` writes. Nothing registered is ⚠ whether or
+ * not `--fleet` seeded the placeholder list: both are "not set up yet", the state every correct fresh
+ * install is in until its first `colab register` (#521). The ⚠ text still names the dead end.
  */
 function checkFleet({ colabHome }) {
   const rows = [];
@@ -179,7 +180,9 @@ function checkFleet({ colabHome }) {
   if (entries === null && !cfgRepos.length) {
     rows.push({ area: 'fleet', severity: WARN, text: `nothing registered — add each repo: colab register <path>` });
   } else if (entries !== null && !entries.length) {
-    rows.push({ area: 'fleet', severity: FAIL, text: `${txtFile} exists with no live entry (placeholders only) — \`colab update\`/\`colab release-status\` refuse "No repos registered". Fix: colab register <path>` });
+    // #521: this is exactly what `--fleet` leaves on a new machine, and the install's own "next" list
+    // says to register a repo. Not yet set up, not broken — a ✗ here failed every correct fresh install.
+    rows.push({ area: 'fleet', severity: WARN, text: `nothing registered yet — ${txtFile} holds placeholders only, so \`colab update\`/\`colab release-status\` refuse "No repos registered". Next: colab register <path>` });
   } else {
     const locals = (entries || []).filter((e) => e.startsWith('/') || e.startsWith('~'));
     const unmirrored = locals.filter((e) => !cfgRepos.includes(e));
@@ -196,6 +199,9 @@ function checkFleet({ colabHome }) {
  * first hooklet's dependency) and said nothing about the identity vocabulary the second needs — and
  * the second guards publication to a public repo. With no vocabulary it warns and passes every commit.
  * Resolution order mirrors templates/pre-commit-identity exactly.
+ *
+ * Both dependencies are ⚠, never ✗ (#521): the preflight calls them optional, and a missing one is
+ * something not set up yet, not an install gone stale. Symmetric still — neither row is quieter.
  */
 function checkHooks({ root, colabHome, home, env }) {
   const hp = gitConfig(root, 'core.hooksPath', env);
@@ -206,7 +212,7 @@ function checkHooks({ root, colabHome, home, env }) {
   const rows = [];
   rows.push(isExecutable('gitleaks', env)
     ? { area: 'hooks', severity: OK, text: 'gitleaks on PATH — the secret scan runs' }
-    : { area: 'hooks', severity: FAIL, text: 'gitleaks not on PATH — the secret-scan hooklet skips every commit (macOS: brew install gitleaks)' });
+    : { area: 'hooks', severity: WARN, text: 'gitleaks not on PATH — the secret-scan hooklet skips every commit (macOS: brew install gitleaks)' });
 
   let vocab; let src;
   if (env.COLAB_IDENTITY_VOCAB) { vocab = env.COLAB_IDENTITY_VOCAB; src = 'COLAB_IDENTITY_VOCAB'; }
@@ -215,7 +221,7 @@ function checkHooks({ root, colabHome, home, env }) {
   if (vocab.startsWith('~/')) vocab = path.join(home, vocab.slice(2));
   rows.push(readText(vocab) !== null
     ? { area: 'hooks', severity: OK, text: `identity vocabulary ${vocab} (${src}) — the identity scan runs` }
-    : { area: 'hooks', severity: FAIL, text: `no identity vocabulary at ${vocab} (${src}) — the identity hooklet warns and lets every commit through. Example: templates/identity-vocabulary.example` });
+    : { area: 'hooks', severity: WARN, text: `no identity vocabulary at ${vocab} (${src}) — the identity hooklet warns and lets every commit through. Example: templates/identity-vocabulary.example` });
   return rows;
 }
 
