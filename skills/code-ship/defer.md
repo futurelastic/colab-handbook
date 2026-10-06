@@ -47,3 +47,10 @@ inventing a stop condition.
   triage already re-measures it every run and clears it on a recorded decision — plus
   your own report to whoever is operating you. An issue comment alone is a record, not a
   notification; reuse this existing machinery rather than inventing a second one.
+- **A landed gate fix is a re-measure trigger for every recorded park (#540).** When a merge
+  changes something a gate reads — `.github/workflows/`, `.github/project.yml`, the vendored
+  tool or handbook stamp, a CI or gate script — or closes a `TRUNK RED:` issue, every defer
+  whose precondition that gate was may now be clear. Re-run `colab ship --dry --json` on
+  each parked candidate in the same pass, and ship the ones that read READY. Nothing else
+  re-probes a park on its own: the host that spawns sessions does not, and a defer whose
+  trigger already fired otherwise waits for someone to ask.

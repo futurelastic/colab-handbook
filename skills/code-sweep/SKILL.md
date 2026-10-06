@@ -192,7 +192,8 @@ shipped, then land **ready** ones first (branch class `green` at its head and me
 against trunk), then those waiting on CI (each one bounded wait, `colab ci-wait … --timeout
 15m`, then a `ci-wait` defer with the run id), then everything else. Same-file siblings land
 earlier-wrap first, tie → smaller diff, tie → ref name — never a human gate. On a repo
-declaring `ship-batch`, the first N ready candidates go through `colab ship --batch`.
+declaring `ship-batch`, the first N ready candidates go through `colab ship --batch`. A landed
+gate fix ⇒ `--dry` every parked candidate, same pass. `colab ci-wait` is the only way to wait for CI (#495).
 **Stop:** exit 4 (`RATE_LIMITED`) from a wait ends the whole sweep. The pass ends once the
 ready bucket is empty and every wait resolved or deferred — never re-enter a wait.
 Full text: [4.0-order.md](4.0-order.md).
@@ -230,7 +231,8 @@ re-derives it once more. The list you started with is not the list the repo has 
 
 **Rule:** a candidate-scoped failure (a conflict needing judgment → send-back, its own gate,
 a rejected grade, a capped CI wait) is **deferred** with its reason, and the run continues.
-A repo-wide one (trunk CI dead or red) stops the **merge loop** only — §5 and the
+Trunk red ⇒ classify first (code-ship B1: one keyed re-run for a runner-side red). A
+repo-wide one (trunk CI dead or red) stops the **merge loop** only — §5 and the
 non-merging buckets still run — and routes to the cure rule; nothing here licenses a merge
 onto a red trunk. Destructive or unclassifiable ⇒ stop, treat as repo-wide.
 **Stop:** recorded as `interrupted` (§0.1) for a run-level stop; `conclusion.deferred` for a

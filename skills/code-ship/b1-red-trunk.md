@@ -14,6 +14,46 @@ it needs a `TRUNK RED:` issue and a patch, and the rest of this section applies.
 `TRUNK RED:` issue for a run that died at setup sends someone hunting a regression that
 does not exist; re-running a red that names assertions buries one that does.
 
+**The runner-side signatures, and the one re-run, step by step (#540).** These read as
+`red:infra` evidence under B1a's step 2, provided no named assertion failed (step 1 still
+wins):
+
+- the job lost communication with its runner;
+- the job ran past its `timeout-minutes` with no test output in its log;
+- the runner crashed before the job's first step;
+- a fixed-port `EADDRINUSE`;
+- the job died in under a second.
+
+```sh
+gh run list --commit "$RED" --json databaseId,workflowName,attempt,status,conclusion,startedAt
+gh api "repos/{owner}/{repo}/actions/runs/<databaseId>/jobs" \
+  -q '.jobs[]|"\(.name) \(.conclusion) \(.completed_at) \(.runner_name)"'   # gh run view --json jobs has no runner field
+```
+
+1. **Several jobs died within the same minute on different runners?** Check the host
+   first — load, swap, disk, the runner service. A re-run onto a sick host fails the same
+   way and spends the one re-run for nothing; a host problem is the ops lane's, and the
+   ship stops.
+2. **The re-run is keyed on the run's `attempt`.** `attempt` 1 ⇒ the re-run is still
+   available. `attempt` above 1 ⇒ it is already spent — by the repo's scheduled driver or
+   another ship pass — so go straight to step 5. That keeps one re-run per red sha whoever
+   makes it, which is what stops a green second run from burying a real defect.
+3. **Cancel only a queued duplicate first.** A second run of the same workflow at the same
+   sha, still queued, holds the concurrency slot the re-run needs:
+   `gh run list --commit "$RED" --workflow <w> --status queued --json databaseId`, then
+   `gh run cancel <id>`. Never cancel a run that is in progress, and never one at another
+   sha. This is the one cancel this skill makes, and it is on `<base>`'s red only — B1a's
+   branch-CI rule still permits a re-run and nothing else.
+4. **Re-run the failed jobs and wait with the one primitive:** `gh run rerun <databaseId>
+   --failed`, then `colab ci-wait --sha "$RED" --branch <base> --timeout 15m` (#495) — never
+   a hand-rolled `sleep` loop. Green ⇒ re-read B1 and carry on.
+5. **A repeat red is the real thing.** It is a code red ⇒ a `TRUNK RED:` issue and a patch
+   (the rest of this section), or — when the repeat shows the same runner-side signature —
+   an infra report for the ops lane. Either way the ship stops at this red.
+
+An `EADDRINUSE` keeps B1a's double rule: re-run to unblock, and file a defect as well when
+the fixed port is the code's own.
+
 A red `<base>` stops the ship unless a door opens — the machine-checkable *Cure rule* or
 a human ci-grant (`CONVENTIONS.md` [§4, *Cure rule*](../../CONVENTIONS.md#cure-rule--the-machine-checkable-door-through-trunk-ci-green-281)).
 The cure needs the branch **green at its own head**, and on a repo whose workflows

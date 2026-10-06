@@ -23,7 +23,16 @@ gh issue view <lead-issue> --json labels -q '.labels[].name' | grep -xE 'priorit
 Then, within each band, rank the surviving groups:
 
 1. **Blocks other work** — a bug in a shared engine, a broken trunk, a stale claim
-   nobody can get past. These unblock people, so they pay twice.
+   nobody can get past. These unblock people, so they pay twice. Leverage counts here
+   (#540), and any one of three measurements earns rank 1:
+   - **≥ 3 open issues are `blocked_by` it** — counted from §0's `BY` lines, zero added
+     calls;
+   - **a CI or tooling fix** — its diff, or its ask, is the repo's workflows, gate scripts or
+     vendored tooling; every later merge passes through it;
+   - **a hot-file split** — a `HOT FILE:` issue (§3, [3-hot-file.md](3-hot-file.md)), or any
+     issue restructuring a path that holds ≥ 3 waiting issues.
+   Leverage ranks only inside a band (#537) and never crosses one; the most it does across
+   bands is the `why:` line's proposal of `high`, above.
 2. **Reaches users** — a defect in a repo with a live production target
    (`project.yml` `production:` non-null). Key the urgency off
    [`exposure`](../../CONVENTIONS.md#exposure--what-consumes-a-merge-here): `live` means

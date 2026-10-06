@@ -80,7 +80,7 @@ Then, briefly:
     parked if nobody answers, then the link. The card's first line keeps the tag the line
     would have carried (`WAKE`, `BLOCKED`, `HELD`), so the ordering rules above still
     apply to it. The card is console output, like the rest of
-    §6. It is not a tracker write, and §0.2's list stays at eight. Store the `ASKED` form
+    §6. It is not a tracker write, and §0.2's list stays at nine. Store the `ASKED` form
     in `conclusion.blocked`, never the card, so §0's re-print cannot show the card again.
     A tracker ask newer than the stored `digest` (a re-posted options block, a `--reopen`)
     is a new ask: it gets one line with its new date, because the tracker already shows

@@ -148,11 +148,23 @@ git diff --name-only --diff-filter=U        # unmerged paths right now
 
 - **Non-empty** → real conflicts. Sort each conflicted path into exactly one of three
   (#409), reading the region, never resolving mechanically by side:
-  - **Generated file** (`generated:` globs, built-in lockfiles) → take one side, then the
-    regen below overwrites it.
+  - **Generated file** (`generated:` globs, built-in lockfiles) → take **trunk's side**
+    (`git checkout --theirs -- <path>` during this merge of `origin/<base>`), then the regen
+    below overwrites it. Trunk's copy is the one every other branch syncs against (#540).
   - **Purely mechanical** → the resolution keeps both sides' hunks unchanged, adds no
     line of its own and picks no winner (two appends to one list, two adjacent edits that
-    do not touch each other's lines). Resolve it.
+    do not touch each other's lines). Resolve it. Two hot-file shapes are this case, each
+    with a fixed answer (#540):
+    - **A retired shared file** — `<base>` deleted it, or renamed it away, and the branch
+      still edits it → trunk's side (`git rm <path>`), **unless** the branch's edits to it
+      are substantive and are not already carried to the file's replacement: that is a
+      change of the author's that would be lost, so it needs judgement (below).
+    - **An append-only ledger** → the **union** of both sides: `<base>`'s entries first,
+      then the branch's, an identical line kept once. A file counts as append-only here
+      only by measurement — neither side's diff against the merge base deletes a line in
+      the conflicting region (`git diff $(git merge-base HEAD origin/<base>) <side> --
+      <path>` shows no `-` line there). A side that edits or removes an entry is not an
+      append: judgement.
   - **Anything that needs judgement** — a line both sides changed, a rule one side reversed
     that the other still carries as context (see the incident in this file's history) →
     `git merge --abort`, **send it back** to the branch's author (§0, *send-back*), and
