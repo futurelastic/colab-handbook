@@ -82,7 +82,7 @@ const {
 // encode the VALIDATOR half (report every violation) separately from `colab adopt`'s CONSTRUCTOR
 // half (does declaring this exposure value stay possible at all?). Same install.sh-freezes-
 // tools/lib/ reasoning as the other requires on this page.
-const { evaluateExposure } = require("../tools/lib/exposure-shape.js");
+const { evaluateExposure, singleTrunkViolation } = require("../tools/lib/exposure-shape.js");
 // #208's `writes` split precedence ladder — same shared-module reasoning as axisAuthority
 // above, reused for a second axis rather than a bespoke second mechanism.
 const writesAuthority = require("../tools/lib/writes-authority.js");
@@ -1100,6 +1100,10 @@ function renderDuration(age) {
 
 function auditRepo(target, ctx) {
   const src = makeSource(target);
+  // #522: the branch list is read by the single-trunk rule (tier B / exposure none|released) AND the
+  // trunk-exists check below — one read, so a remote target costs one API listing, not three.
+  let branchesMemo;
+  const branchList = () => (branchesMemo === undefined ? (branchesMemo = src.branches()) : branchesMemo);
   const findings = []; // { level: 'fail'|'warn', text }
   // `self` = this target IS the handbook, not one of its consumers. Surfaced in the
   // report (and in --json) so the row reads as source-of-truth rather than clean-by-luck:
@@ -1608,7 +1612,12 @@ function auditRepo(target, ctx) {
           ? `tier A with deploy: tag requires trunk "dev" or "main", found ${JSON.stringify(trunk)}`
           : `tier A requires trunk "dev", found ${JSON.stringify(trunk)} — only a tag-gated A (deploy: tag) may run a single trunk "main"`);
       }
-      if (tier === "B" && trunk !== "main") fail(`tier B requires trunk "main", found ${JSON.stringify(trunk)}`);
+      // #522: B is the single-trunk shape — one long-lived branch, any spelling. `master` (or
+      // whatever an existing repo's default is) conforms; a "main" beside a non-main trunk does not.
+      if (tier === "B") {
+        const single = singleTrunkViolation(trunk, branchList());
+        if (single) fail(`tier B requires a single trunk — ${single}`);
+      }
       // C uses A's two-branch split: main = what is live, trunk = where sessions land. #205:
       // this validates the SPLIT, not the spelling — trunk is a declared setting (default
       // "dev", proposed by colab adopt and the templates), never required to literally be
@@ -1817,7 +1826,7 @@ function auditRepo(target, ctx) {
     // construction (CONVENTIONS.md §2: no mechanism rule applies to it, not even trunk shape).
     // A `runbook`-kind entry defers to `checkRunbook` here (this file can read the repo and tell
     // "missing" from "unreadable via the API"); every other entry is a ready `fail` message.
-    const shapeCtx = { trunk, hasProduction, deploy, hasDeployWorkflow: inRepoDeploy, deployWorkflowNames: [...deployWorkflows, ...fastDeployers] };
+    const shapeCtx = { trunk, hasProduction, deploy, hasDeployWorkflow: inRepoDeploy, deployWorkflowNames: [...deployWorkflows, ...fastDeployers], branches: branchList() };
     for (const entry of evaluateExposure(exp, shapeCtx)) {
       if (entry.kind === "runbook") checkRunbook(src, runbook, fail, warn, entry.why);
       else fail(entry.message);
@@ -1825,7 +1834,7 @@ function auditRepo(target, ctx) {
   }
 
   // ---- declared trunk actually exists -------------------------------------
-  const branches = src.branches();
+  const branches = branchList();
   if (trunk && branches === null) {
     warn(`cannot list branches (not a git checkout, or gh unavailable) — trunk "${trunk}" unverified`);
   } else if (trunk && branches && !branches.includes(trunk)) {

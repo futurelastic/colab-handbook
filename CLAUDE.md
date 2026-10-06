@@ -54,7 +54,8 @@ that one ever disagree, `CONVENTIONS.md` wins — and report the discrepancy.
   ("no axis of record") — propose adding one in your report, never invent it.
 - **Never create a branch named `trunk`.** "Trunk" is a role: the branch
   sessions merge into — the value of `trunk:` in `project.yml`, full stop.
-  `main` on Tier B (fixed — no second branch to distinguish it from); on
+  the default branch on Tier B — `main` by convention, any existing spelling
+  (`master`…) equally conforming, so long as no `main` sits beside it; on
   Tier C a branch distinct from `main` — `dev` by default, any other name
   equally conforming, never a per-tier mapping; `dev` on the ordinary Tier A,
   or `main` on a tag-gated Tier A (`deploy: tag`). The tier letter is only

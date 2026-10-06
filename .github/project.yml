@@ -9,8 +9,10 @@
 #               is read through it (tools/lib/axis-authority.js: A -> released, C ->
 #               live, B -> null — project.schema.md "tier — optional (legacy)").
 #   trunk       Branch feature work merges into — a declared setting, not a fixed
-#               spelling (project.schema.md "trunk — required"). Fixed to `main`
-#               where there is no production (tier B / exposure none|self). A branch
+#               spelling (project.schema.md "trunk — required"). The repo's single
+#               default branch where there is no production (tier B / exposure
+#               none|self) — `main` by convention, `master` or any other spelling
+#               equally conforming, never with a `main` beside it (#522). A branch
 #               distinct from `main` where the promotion itself is the deploy (tier C
 #               / exposure live) — `dev` is the default, any other name equally
 #               conforming, never a per-tier mapping. `dev`, or `main` when

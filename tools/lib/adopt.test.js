@@ -846,3 +846,35 @@ test('#483: detectInheritedCodeowners names a fork\'s foreign-org teams, and onl
   assert.strictEqual(detectInheritedCodeowners({ readFile: () => null }, fork, 'acme'), null);
   assert.strictEqual(detectInheritedCodeowners({ readFile: () => '* @acme/core\n' }, fork, 'acme'), null);
 });
+
+// ---------------------------------------------------------------------- #533 / #522 — asked rows, human command
+
+test('#533 axesToAsk: a fresh repo asks only the gating rows', () => {
+  const adopt = require('./adopt.js');
+  assert.deepStrictEqual(adopt.axesToAsk({}, [], []), ['tier', 'exposure']);
+});
+
+test('#533 axesToAsk: an optional row is asked when forced (--axis) or flagged, never otherwise', () => {
+  const adopt = require('./adopt.js');
+  assert.deepStrictEqual(adopt.axesToAsk({}, new Set(['channels']), new Set(['room'])), ['tier', 'room', 'exposure', 'channels']);
+  const full = { production: null, deploy: 'none', exposure: 'self' };
+  assert.deepStrictEqual(adopt.axesToAsk(full, [], []), []);
+  assert.deepStrictEqual(adopt.axesToAsk(full, ['exposure'], []), ['exposure']); // forced re-answer still works
+});
+
+test('#533 optionalUnanswered / optionalRowsLine: names only the missing optional rows, with the --axis command', () => {
+  const adopt = require('./adopt.js');
+  assert.deepStrictEqual(adopt.optionalUnanswered({ room: 'solo' }), ['writes', 'channels']);
+  assert.strictEqual(adopt.optionalRowsLine([]), null);
+  assert.match(adopt.optionalRowsLine(['writes', 'channels']), /writes, channels — answer later with `colab adopt --axis writes,channels`/);
+});
+
+test('#522 humanAdoptCommand: one pasteable line, quoted only where needed, --answered-by placeholder when absent', () => {
+  const adopt = require('./adopt.js');
+  assert.strictEqual(
+    adopt.humanAdoptCommand([['--production', 'none'], ['--deploy', 'none'], ['--exposure', 'none'], ['--stack', 'node app']]),
+    'COLAB_HUMAN=1 colab adopt --production none --deploy none --exposure none --stack "node app" --answered-by "<your name>"',
+  );
+  assert.strictEqual(adopt.humanAdoptCommand([['--exposure', 'self'], ['--answered-by', 'ana'], ['--land', true]]),
+    'COLAB_HUMAN=1 colab adopt --exposure self --answered-by ana --land');
+});

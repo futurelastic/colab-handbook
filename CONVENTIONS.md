@@ -153,12 +153,16 @@ a gate it never had. Migrating to `deploy: tag`, or declaring `deploy: manual` +
 `runbook:`, remain valid alternatives when the site has genuinely earned them.
 
 **"Trunk" is a role, not a branch name** — the branch sessions merge into, declared in
-`project.yml`'s `trunk:` field: `main` in Tier B (fixed — there is no second branch to
-distinguish it from); a name **distinct from `main`** in Tier C, `dev` by default but any
-other name equally conforming (the footnote above states why); `dev` or (tag-gated)
-`main` in Tier A. Read `project.yml` to learn which. **"Any name is legal" is not what
-this licenses** — on Tier B and (outside the tag-gated exception) Tier A the value is
-still fixed; only Tier C's split is about the *shape*, not the *spelling*. Never create a
+`project.yml`'s `trunk:` field: in Tier B (and `exposure: none`, or `released` with no
+production) the repo's **default branch** — `main` by convention, but an existing repo's
+`master` (or any other spelling) is equally conforming, because what the shape requires is
+that it is the **only** long-lived branch, not what it is called; a `main` beside a
+non-`main` trunk is the two-branch shape and fails (#522); a name **distinct from `main`** in
+Tier C, `dev` by default but any other name equally conforming (the footnote above states
+why); `dev` or (tag-gated) `main` in Tier A. Read `project.yml` to learn which. **"Any name
+is legal" is not what this licenses** — outside the tag-gated exception Tier A's value is
+still fixed, and Tier B's single trunk may never sit beside a `main`; renaming an existing
+default branch to satisfy a spelling is never the fix. Never create a
 branch literally named `trunk` — and never *record* the word
 either. Measured: a session's record read `branch: "trunk"`; the merge tool matched
 claims **by branch name**, found none, and squashed anyway — no `Closes #N`, the same
@@ -5349,13 +5353,30 @@ only. Resolution order: `--config` flag > `~/.colab/repos.txt` > bundled example
    asks a repo predating one of the newer axes ("Predates an axis", below). Each question
    is asked as a human answers it, not as a schema field name:
 
-   | # | ask it like this | writes | values |
-   |---|---|---|---|
-   | 1 | does a deploy target exist *today* ([§2](#2-tiers)), and how is it reached — a tag gates production, the promotion itself deploys, a human runs a runbook, or nothing is live yet? | `production` + `deploy` | a URL (or none) + `push-main` / `tag` / `manual` / `none` |
-   | 2 | who else works here? | [`room`](#room--who-else-is-here) | `solo` / `team` / `public` |
-   | 3 | **what would break if you merged something wrong here?** | [`exposure`](#exposure--what-consumes-a-merge-here) | `none` / `self` / `live` / `released` |
-   | 4 | Should a human ever be allowed to commit straight to this repo's trunk checkout, alongside worktree sessions? free allows it with no runtime restriction; direct allows it and additionally declares intent for a stronger guarantee later (declared today, not yet enforced — CONVENTIONS.md §2); isolated vetoes it outright, human or not. | [`writes`](#writes--the-trunk-direct-veto-and-the-two-things-that-make-a-branch-mandatory) | `free` / `direct` / `isolated` (unanswered reads as `free` — #283) |
-   | 5 | by what path does a commit reach something that runs it? (a list — several may apply) | [`channels`](#channels--by-what-path-does-code-reach-the-thing-that-runs-it) | `workflow` / `hook` / `procedure` / `checkout` / `artifact` / `data` / `none` |
+   | # | ask it like this | writes | values | at adoption |
+   |---|---|---|---|---|
+   | 1 | does a deploy target exist *today* ([§2](#2-tiers)), and how is it reached — a tag gates production, the promotion itself deploys, a human runs a runbook, or nothing is live yet? | `production` + `deploy` | a URL (or none) + `push-main` / `tag` / `manual` / `none` | **asked** — the URL only when `deploy` is not `none` |
+   | 2 | who else works here? | [`room`](#room--who-else-is-here) | `solo` / `team` / `public` | optional — later, `--axis room` |
+   | 3 | **what would break if you merged something wrong here?** | [`exposure`](#exposure--what-consumes-a-merge-here) | `none` / `self` / `live` / `released` | **asked** — a human's answer for `none`/`self` |
+   | 4 | Should a human ever be allowed to commit straight to this repo's trunk checkout, alongside worktree sessions? free allows it with no runtime restriction; direct allows it and additionally declares intent for a stronger guarantee later (declared today, not yet enforced — CONVENTIONS.md §2); isolated vetoes it outright, human or not. | [`writes`](#writes--the-trunk-direct-veto-and-the-two-things-that-make-a-branch-mandatory) | `free` / `direct` / `isolated` (unanswered reads as `free` — #283) | optional — later, `--axis writes` |
+   | 5 | by what path does a commit reach something that runs it? (a list — several may apply) | [`channels`](#channels--by-what-path-does-code-reach-the-thing-that-runs-it) | `workflow` / `hook` / `procedure` / `checkout` / `artifact` / `data` / `none` | optional — later, `--axis channels` |
+
+   **Adoption asks only what changes a gate (#533).** Questions 1 and 3 decide the gate
+   count; 2, 4 and 5 are optional in the schema and legal absent — `room` only tunes how
+   verbose the trail is, `writes` absent already reads as the common `free`, and `channels`
+   is descriptive (and easy to mis-answer `workflow` on a repo that merely has CI). So a
+   fresh adoption leaves them unanswered and prints one line naming them and the
+   `colab adopt --axis <row>` that answers each later. Their flag (`--room`, `--writes`,
+   `--channels`) still answers one in the same run.
+
+   **The human step comes first, not last (#522).** Answering question 3 with `none` or
+   `self` is a human's act (below). An agent driving an adoption should know that before it
+   starts, not learn it from the final refusal: when `colab adopt` cannot finish without a
+   human, the **first** line it prints is the one command the human runs, the answers this
+   run already had filled in (`COLAB_HUMAN=1 colab adopt --production none --deploy none
+   --exposure none … --answered-by "<name>"`). At a terminal, the exposure answer is checked
+   against the repo's shape the moment it is given and re-asked with the reason, rather than
+   refused after every other question.
 
    Question 1 writes `production` and `deploy`, never `tier` directly — `tier` is a pure
    function of those two answers (`tools/lib/adopt.js:deriveTier`: no production → `B`;
@@ -5376,9 +5397,10 @@ only. Resolution order: `--config` flag > `~/.colab/repos.txt` > bundled example
    answers above; a checklist that also prompts for a derived value is exactly how the
    fields drift apart from each other again (the failure this whole model exists to stop).
 
-   **Two entry states, one set.** A repo with nothing recorded yet asks all five, right
-   now, during first-time adoption. A repo that already adopted before one of the newer
-   axes existed asks only the axes it is missing — same five questions, same wording, at
+   **Two entry states, one set.** A repo with nothing recorded yet asks the two gating
+   questions now, during first-time adoption, and leaves the optional three for later. A repo that already adopted before one of the newer
+   axes existed asks only the gating axes it is missing (the optional three stay optional
+   there too) — same five questions, same wording, at
    sync time ("Predates an axis", `handbook-sync`). Building this once and pointing both
    moments at it is the point; do not let a sync grow its own paraphrase of these five
    rows.
@@ -5607,7 +5629,8 @@ merges into it, and the owner's trunk is reached only by a pull request he revie
 merges himself — `colab deliver`, below. Declare **`exposure: self`**: a merge onto the integration branch reaches
 only the fleet, and the owner's review is the next gate. `self` is human-gated
 ([§2](#2-tiers)), as always. The legacy fallback does not work here, because it would
-derive `tier: B`, which requires trunk `main`, and the integration branch is never `main`.
+derive `tier: B`, which is the single-trunk shape, and the integration branch is never the
+repo's only long-lived branch.
 
 **One command does it** (a human answers the exposure row, at a terminal or with
 `COLAB_HUMAN=1 --answered-by <name>`):
