@@ -9,11 +9,26 @@ other.
 **If you are an AI agent, stop here and read [`CLAUDE.md`](CLAUDE.md).**
 This file is for humans.
 
-*(The normative document — [`CONVENTIONS.md`](CONVENTIONS.md) — is written in
-English so agents and tooling can read it. This is the English front door; the
-Vietnamese one is [`README.vi.md`](README.vi.md). Both are only gateways, not
-normative — when the two disagree, **both are wrong** until they agree with
-`CONVENTIONS.md` again.)*
+## Quick start
+
+```sh
+git clone https://github.com/futurelastic/colab-handbook.git ~/code/colab-handbook
+cd ~/code/colab-handbook && ./install.sh --all   # skills + colab CLI + hooks; --dry shows it first
+cd /path/to/your-repo
+colab adopt              # asks only what it cannot detect, writes .github/project.yml
+colab labels --ensure    # creates the convention labels
+colab register           # adds the repo to this machine's fleet list
+```
+
+Then, in an agent session in that repo, run `/code-start <issue-number>`. With an
+agent at hand, `/handbook-sync` replaces the last three commands and also does
+the rest of adoption (see [*Adopting it into a repo*](#adopting-it-into-a-repo)).
+You need `git`, `node` ≥ 18 and `gh` logged in (`gh auth login`).
+
+*([`CONVENTIONS.md`](CONVENTIONS.md) is the normative document, written in
+English so agents and tooling can read it. This file and the Vietnamese
+[`README.vi.md`](README.vi.md) are only gateways. When the two disagree, **both
+are wrong** until they agree with `CONVENTIONS.md` again.)*
 
 ## What this is
 
@@ -22,10 +37,10 @@ what a release is, how you announce "I am working on this" — and deliberately
 leaves the **implementation** (your Node version, your test runner, your CI
 file) to each repo.
 
-Everything here was distilled from running ~25 real repos, several of them
+It was distilled from running a fleet of real repos, several of them
 production apps maintained almost entirely by AI agents working in parallel
 across many worktrees. The anti-pattern list is not theory: every entry is
-something that actually happened, with the scar to prove it.
+something that actually happened.
 
 ### The problem it solves
 
@@ -50,20 +65,17 @@ a repo that live in someone's memory instead of in the repo.**
 
 ### What it actually does
 
-It makes each repo answer a handful of questions about itself, **once**, in a
-file every session reads before touching anything — is there production today,
-who else works here, what breaks if a merge is wrong, how many units of work run
-at a time, how a commit reaches the thing that runs it.
+It makes each repo answer five questions about itself, **once**, in a file
+every session reads before touching anything (see [*The five
+questions*](#the-five-questions)). Everything else follows from those answers:
+which branch to merge into, what a release even means here, whether a branch is
+required at all, how much a session must write down before it stops.
 
-Everything else follows from those answers: which branch to merge into, what a
-release even means here, whether a branch is required at all, how much a session
-must write down before it stops. A session never guesses, and two repos never
-disagree about what a word means.
-
-The rest of the repo exists to serve that: a CLI that performs the mechanical
-parts, an audit that reports where reality has drifted from what a repo claims,
-and portable session flows so a coding session opens and closes the same way
-everywhere.
+The rest of the repo serves that: a CLI that performs the mechanical parts, an
+audit that reports where reality has drifted from what a repo claims, and
+session flows (skills) so a coding session opens and closes the same way
+everywhere. The skills are plain prose — a person at a terminal can follow them
+with no agent and no other tool.
 
 ### What it is not
 
@@ -73,48 +85,123 @@ everywhere.
 - **Not a CI system, and not an opinion about your stack.** Bring your own
   language, test runner and pipeline. The handbook only asks that the pipeline
   produce two outcomes, and never says how.
-- **Not an enforcement layer**, with one deliberate exception. Conformance is
-  advisory, because being wrong about a convention costs a conversation.
-  Publication blocks, because history cannot be recalled once anything is
-  cloned.
+- **Mostly not an enforcement layer.** Conformance is advisory. The few things
+  that block are listed in [*Why so little
+  enforcement*](#why-so-little-enforcement).
 - **Not a maturity model.** No answer here ranks a repo above another. A repo
   with no production is not a worse repo; it is a repo with fewer gates.
 
-If you run one repo alone, read the anti-patterns and take what is useful. If
-you run many — or you work alongside agents that never met the person who set
-the rules — the whole thing is likely to pay for itself faster than it takes to
-read.
+## Your first session
 
-## The questions
+A unit of work goes round one loop. Each step is a skill, invoked in an agent
+session as a slash command (`/code-start 42`), or followed by hand from
+[`skills/`](skills/).
 
-Adopting this means answering five questions about your repo, once, into
-`.github/project.yml` — so no session has to guess, and no two repos disagree
-on what a word means:
+| Step | Skill | Who runs it | What it leaves behind |
+|---|---|---|---|
+| 1. Pick | `/code-triage` | coordinator | the ready work in order, `group:` labels on issues that must share a branch, `needs-plan` on hard ones, the start commands |
+| 2. Open | `/code-start <N>` | implementer | the issue claimed, a branch cut from trunk and pushed, a worktree, a short plan file |
+| 3. Work | — | implementer | commits on the branch |
+| 4. Hand off | `/code-wrap` | implementer | what was learned written onto the Issue, the repo's gate run, the branch pushed — then it **stops** |
+| 5. Merge | `/code-ship` | coordinator, after a human go | one squash commit on trunk with `Closes #N`, evidence on each issue, claims released, the worktree removed |
+| 6. Clean up | `/code-sweep` | coordinator | finished work shipped, stale claims and worktrees cleared |
+| 7. Release | release workflow, or `/release-rung` | automatic, or a human where a tag deploys | a candidate tag, then the final after a test period — only where the repo's `exposure` has releases |
 
-1. **Does a deploy target exist today** — and how is it reached: a tag gates
-   production, the promotion itself deploys, a human runs a runbook, or
-   nothing is live yet?
-2. **Who else works here** — one person, a team, or the public?
-3. **What would break if you merged something wrong here** — nothing, only
-   the people already in the room, users via the next promotion, or users and
-   adopters via a released artifact?
-4. **One unit of work in flight at a time, or several at once?**
-5. **By what path does a commit reach the thing that runs it** — a CI
-   workflow, a git hook, a documented procedure, a live checkout, a published
-   artifact, another system's data, or none of those yet?
+Also in [`skills/`](skills/): `code-plan` (a full plan for a hard issue, run by
+`code-start` when flagged), `handbook-sync` (bring one repo up to the current
+handbook), and `migration-review` (review a branch's migrations, for whoever a
+repo binds to that role).
 
-The answers decide everything that follows: which branch a session merges
-into, what a release is, how much an Issue narrates, what must exist before a
-merge can be undone, whether a branch is even required. Nothing here is asked
-twice, and nothing is asked that the repo already states for itself — its
-default branch, its toolchain, its ports.
+**Words you will meet:**
 
-Issues are **claimed** with an assignee plus the `in-progress` label before
-work starts, so parallel sessions never collide on the same task.
+- **Trunk** — the branch sessions merge into (`trunk:` in `project.yml`).
+  **Promotion** — merging trunk into `main` where trunk is not `main`; on a
+  `live` repo the promotion *is* the deploy.
+- **Claim** — an assignee plus the `in-progress` label, backed by the branch
+  pushed to the remote, taken *before* work starts.
+- **Implementer / coordinator** — the session that writes the code / the one
+  that picks, merges and cleans up. One person may be both, at different times.
+- **Phase A / Phase B** — `code-wrap` (the implementer's half, ends before any
+  merge) / `code-ship` (the coordinator's half: the merge and everything after).
+- **Rung** — how much plan a session writes: 0 none, 1 a five-line stub, 2 a
+  full plan from `code-plan`.
 
-The full rules — what each answer resolves to, and why:
-[`CONVENTIONS.md`](CONVENTIONS.md). ~15 minutes to read, and the **single
-normative file** — everything else in the repo serves it.
+Newcomers: read [`CONVENTIONS.md` §1](CONVENTIONS.md#1-the-model-in-one-picture)
+(the model) and [§11](CONVENTIONS.md#11-quick-reference) (quick reference)
+first. The rest of `CONVENTIONS.md` is reference — look things up, do not read
+it end to end.
+
+## The five questions
+
+Adopting means answering these about your repo, once, into
+`.github/project.yml`. `colab adopt` asks them as numbered menus:
+
+| # | Question | Writes |
+|---|---|---|
+| 1 | Does a deploy target exist **today** (not "soon"), and how is it reached — a tag, the promotion itself, a human running a runbook, or nothing yet? | `production` + `deploy` |
+| 2 | Who else works here — just you, a team, or the public? | `room` |
+| 3 | What would break if you merged something wrong here — nothing, only people already in the room, users via the next promotion, or users and adopters via a released artifact? | `exposure` |
+| 4 | May a human commit straight to trunk alongside worktree sessions — freely, with declared intent, or never? | `writes` |
+| 5 | By what path does a commit reach the thing that runs it — a CI workflow, a git hook, a documented procedure, a live checkout, a published artifact, another system's data, or none yet? | `channels` |
+
+Nothing is asked that the repo already states — its default branch (`trunk`),
+its toolchain, its ports are detected. Gate count, release ritual and whether a
+branch is mandatory are derived from the answers. What each answer resolves to,
+and why: [`CONVENTIONS.md` §2](CONVENTIONS.md#2-tiers) and
+[§9](CONVENTIONS.md#9-adopting-this); every field:
+[`project.schema.md`](project.schema.md).
+
+## Adopting it into a repo
+
+**The default route: run `/handbook-sync` in an agent session inside the repo.**
+It sees that nothing is adopted yet and drives adoption to the end — the
+descriptor (through `colab adopt`), the labels, the `CLAUDE.md` block, CI from
+the templates, and registration on this machine. Run later, the same skill
+brings an adopted repo up to the current handbook without losing your local
+edits.
+
+By hand, the same steps (full checklist:
+[`CONVENTIONS.md` §9](CONVENTIONS.md#9-adopting-this)):
+
+1. `colab adopt` — answers the five questions and writes
+   `.github/project.yml`. It stops there and prints the remaining steps.
+2. `colab labels --ensure` — the convention labels do not exist by default. A
+   check whose label was never created can never fire.
+3. Paste [`templates/repo-CLAUDE-block.md`](templates/repo-CLAUDE-block.md)
+   into the repo's `CLAUDE.md` — this is how agents discover the conventions.
+4. Make sure CI produces the two required outcomes: a secret scan and a build,
+   with toolchain versions **resolved from the repo's own manifest**, never
+   hardcoded. Copy a template from [`templates/`](templates/) if it helps.
+5. `colab register` — puts the repo on this machine's fleet list, so the audit
+   and the port allocator both know it.
+
+`colab adopt` flags worth knowing:
+
+- `--autonomy auto-trunk` — records the maintainer's grant that lets an agent
+  finish the trunk merge through `colab ship` (never a release). Needs a human.
+- `--land` — commits what this run wrote straight to trunk and pushes it, so
+  the first feature branch is judged by the new rules. Needs a human
+  (`COLAB_HUMAN=1` and `--answered-by`).
+- `--fork` — the repo tracks an upstream you don't own (detected when a remote
+  named `upstream` exists); the `CLAUDE.md` block is then appended, never
+  restructured, and the upstream's own agent workflow is named.
+- `--local` — you cannot commit to this repo at all; everything stays in your
+  clone ([*Working in a repo you don't
+  own*](CONVENTIONS.md#working-in-a-repo-you-dont-own)).
+
+Pre-existing branches are **grandfathered**. Do not rename anything.
+
+## Optional automation on top
+
+Nothing here assumes a dashboard, scheduler or bot exists. An adopter may still
+build one: open sessions from a button, run the loop on a schedule, treat a
+human's click on a merge button as the go that `code-ship` waits for, or push
+notifications when work changes state. Such a tool reads the same shared
+artefacts a person does — `.github/project.yml`, the labels, the claims on each
+Issue, the machine-local `~/.colab/state.json` — and can receive `colab`'s
+events at `notifyUrl` ([`tools/README.md`](tools/README.md#notifyurl--optional-event-push-off-by-default)).
+It never changes a `colab` gate: the go before a merge and the grant before a
+migration hold with or without it.
 
 ## Repo layout
 
@@ -123,183 +210,80 @@ normative file** — everything else in the repo serves it.
 | [`CONVENTIONS.md`](CONVENTIONS.md) | The rules. Normative, the single source of truth (EN). |
 | [`CLAUDE.md`](CLAUDE.md) | The entry point for AI agents — the operational distillation (EN). |
 | [`project.schema.md`](project.schema.md) | Field reference for `.github/project.yml`. |
-| [`templates/`](templates/) | **Copy-and-own** starting points: CI, release, git hooks (a secret scan and an identity scan), and the `CLAUDE.md` block for adopting repos. **Nothing is called remotely** — copy it, edit it, own it. Templates, not scaffolding, because scaffolding only reaches repos created after it shipped. |
-| [`tools/`](tools/) | `colab` — a small CLI (optional): adopt a repo, claim issues, allocate ports, manage worktrees, and merge a finished branch to trunk when the repo grants it. JSON state, zero dependencies. Full command reference: [`tools/README.md`](tools/README.md). |
-| [`audit/`](audit/) | An external conformance checker. Reads all your repos — every owner, including local-only ones — and reports drift in a single run. Advisory only, never blocking. `--identity` additionally scans public repository descriptions and topics, which no git hook can see. What each check means: [`audit/README.md`](audit/README.md). |
-| [`skills/`](skills/) | Portable session flow: `code-triage` (pick the next task, flagging hard ones for a plan) → `code-start` (open a session; runs `code-plan` when flagged) → `code-wrap` (distill + gate + hand off) → `code-ship` (grade + merge, human-authorized), plus `code-sweep` (clear out everything ALREADY DONE in one repo — or just a named set of issues or one session — running `code-wrap`+`code-ship` on each) `handbook-sync` (bring ONE repo up to the latest handbook, run from inside it), and `release-rung` (the manual fallback and explainer for the release workflow, which is the driver: walk one repo's release rung from a coordinator session — candidate, test period, `release-hold` veto, final — through `colab release cut`/`finalize`, never by hand), and `migration-review` (for whoever a repo binds to the migration-reviewer role: review a branch's migrations against the deploy engine and end in one verdict — GRANT with a review record, REWORK with a brief, or ESCALATE to a human — with a blind test set to run before binding a new reviewer). Installed as Claude Code skills by [`install.sh`](install.sh) — see *Setting up a machine* below. |
-| [`install.sh`](install.sh) | Sets up **your machine**: skills, the `colab` CLI, the pre-commit hook, the fleet list. Idempotent, and `--dry` shows you everything first. |
-
-## Install the CLI from npm
-
-The `colab` CLI is also published as a public npm package, **`@futurelastic/colab-handbook`**. The command you type stays `colab`.
-
-```sh
-npx @futurelastic/colab-handbook <command>      # one-off, nothing installed, no npm account needed
-npm i -g @futurelastic/colab-handbook           # then: colab <command>
-npm i -g @futurelastic/colab-handbook@next      # release candidates (vX.Y.Z-rc.N) instead of finals
-```
-
-The package carries what `colab` reads at runtime — the CLI, its `lib/`, `templates/` and `audit/audit.mjs` — and nothing else; `colab template` and `colab adopt` work from the registry copy and stamp the package's own version. The skills are **not** in it: they install with `./install.sh` from a clone (below), because they must symlink into `~/.claude/skills/`. Every tarball is checked file by file against an allowlist in CI (`scripts/check-pack-allowlist.mjs`).
+| [`templates/`](templates/) | **Copy-and-own** starting points: CI, release, git hooks (a secret scan and an identity scan), and the `CLAUDE.md` block for adopting repos. Nothing is called remotely — copy it, edit it, own it. |
+| [`tools/`](tools/) | `colab` — a small CLI (optional): adopt a repo, claim issues, allocate ports, manage worktrees, and merge a finished branch to trunk when the repo grants it. JSON state, zero dependencies. Command reference: [`tools/README.md`](tools/README.md). |
+| [`audit/`](audit/) | An external conformance checker. Reads all your repos — every owner, including local-only ones — and reports drift in a single run. Advisory only. `--identity` also scans public repository descriptions and topics, which no git hook can see. What each check means: [`audit/README.md`](audit/README.md). |
+| [`skills/`](skills/) | The session flow — see [*Your first session*](#your-first-session). Installed as Claude Code skills by `install.sh`. |
+| [`install.sh`](install.sh) | Sets up **your machine**: skills, the `colab` CLI, the pre-commit hook, the fleet list. Idempotent; `--dry` shows everything first. |
 
 ## Setting up a machine
 
-Once per machine, before you adopt anything into a repo.
-
-**You need:** `git`; `node` ≥ 18 (`.nvmrc` pins 22, which is what CI here runs);
-`gh` **logged in** (`gh auth login`) — claims, the skills and the audit's remote
-targets are all useless without it, and the failure surfaces much later as
-something confusing; and `gitleaks` only if you want the pre-commit hook.
-`install.sh` checks every one of these and reports what is missing before it
-changes anything.
-
-**1. Clone it somewhere permanent** — with the rest of your code, not in a
-scratch directory.
-
-```sh
-git clone https://github.com/futurelastic/colab-handbook.git ~/code/colab-handbook
-cd ~/code/colab-handbook
-```
-
-**This clone is infrastructure, not a download.** The skills install as symlinks
-*into this working tree*: delete the clone and every session on the machine
-loses them, and whichever branch it has checked out is the version of the skills
-every session gets. So keep it on `main` unless you are actively working on the
-handbook itself. `install.sh` warns if it finds itself under `/tmp`,
-`~/Downloads` or `~/Desktop`.
-
-**2. Install.**
-
-```sh
-./install.sh --all --dry   # see exactly what would happen; changes nothing
-./install.sh --all         # skills + colab CLI + pre-commit hook + fleet list
-```
-
-`--all` is the recommended first run. Everything it does is a symlink or a copy,
-it is idempotent, and it never overwrites anything it did not create — your own
-skill, or an existing `~/.colab/repos.txt`, is left alone with a warning. Bare
-`./install.sh` installs the skills and nothing else, if that is genuinely all
-you want.
+Once per machine. Clone somewhere permanent — the skills are symlinks *into
+this working tree*, so whichever branch it has checked out is the version every
+session gets; keep it on `main`. `install.sh` checks its prerequisites before it
+changes anything, never overwrites what it did not create, and `--dry` prints
+the plan first.
 
 | Flag | What it does |
 |---|---|
 | *(none)* | Symlink `skills/` into `~/.claude/skills/`, so they are available in every repo you open. |
-| `--tools` | Two installs of one CLI: a **symlink** at `~/.local/bin/colab` for your sessions (checking that directory is really on your `PATH`, and printing the exact line to add if not), plus a stamped **frozen copy** at `~/.colab/bin/colab` for always-on services — see below. |
-| `--hooks` | Point this clone's git at `.githooks/`, whose `pre-commit` runs every check in `pre-commit.d/` — a gitleaks secret scan, and an identity scan that needs a vocabulary you supply by path and keep outside every repo (see [`templates/README.md`](templates/README.md)). `core.hooksPath` lives in `.git/config`, so it is per-clone, per-machine, and never travels with the repo. |
-| `--fleet` | Seed `~/.colab/repos.txt` from `audit/repos.txt`, only if it is absent. The seed is format notes and commented placeholders — it registers **nothing**; `colab register <path>` (step 3) is what fills it. That list stays machine-local on purpose: it names your private repos, and this repo is public. |
+| `--tools` | The `colab` CLI twice: a **symlink** at `~/.local/bin/colab` for your sessions (it prints the `PATH` line if needed), and a stamped **frozen copy** at `~/.colab/bin/colab` for always-on services. Also creates an empty `~/.colab/state.json` if there is none. |
+| `--hooks` | Point this clone's git at `.githooks/`: a gitleaks secret scan and an identity scan whose vocabulary you keep outside every repo (see [`templates/README.md`](templates/README.md)). |
+| `--fleet` | Seed `~/.colab/repos.txt` with format notes only, if absent. It stays machine-local because it names your private repos; `colab register` fills it. |
 | `--all` | `--tools --hooks --fleet`. |
-| `--notify-url <url>` | Seed `notifyUrl` in `~/.colab/config.json` with a local observer's events URL, only when the key is absent — an existing value is never overwritten. Without the flag, `--tools` seeds it from `~/.colab/notify-endpoint` when a local observer declared its URL there, and otherwise prints that `notifyUrl` is unset and which events that drops. See [`tools/README.md`](tools/README.md#notifyurl--optional-event-push-off-by-default). |
-| `--dry` | Print what would happen, change nothing. Combines with all of the above. |
-| `--check` | **Read-only** health report on what an earlier install left behind — see *Checking an install* below. Takes no other flag; exit 1 on any ✗ row. |
+| `--notify-url <url>` | Seed `notifyUrl` in `~/.colab/config.json`, only if the key is absent. See [`tools/README.md`](tools/README.md#notifyurl--optional-event-push-off-by-default). |
+| `--dry` | Print what would happen, change nothing. Combines with the flags above. |
+| `--check` | **Read-only** health report on an earlier install — see below. Takes no other flag; exit 1 on any ✗ row. |
 
-`--tools` also creates an **empty** `~/.colab/state.json` when there is none (it never
-touches an existing one). Without that, the file appeared only on the first
-state-changing `colab` command, and anything reading it on a fresh machine got an
-error where it should have seen an empty fleet.
+**Always-on services (launch agents, daemons, headless runners) must call
+`~/.colab/bin/colab`, not the symlink**, because the symlink follows whatever
+branch this clone has checked out. The frozen copy never moves on its own:
+`colab update` says when it is behind a released CLI change, and re-running
+`./install.sh --tools` refreshes it. Why it works this way:
+[`tools/README.md`](tools/README.md#install).
 
-**Always-on services must call `~/.colab/bin/colab`.** The symlinked CLI follows
-whatever branch this clone has checked out — deliberate for a human session, and
-wrong for anything that outlives one. A daemon, a launch agent or a headless
-runner started months ago would silently change behaviour because somebody
-checked out an unrelated branch, and nothing would report it: the process keeps
-working, differently. So `--tools` also writes a **copy** to `~/.colab/bin/`
-(honouring `COLAB_HOME`), stamped with the handbook version it was taken from —
-or, when that tree sits ahead of the last tag, with the commit it was taken from
-(`v1.7.0-2-gc8436c6`) and a warning, because no released version describes those
-bytes. That copy never moves on its own.
-
-Refreshing it is therefore an act, never a side effect: re-run `./install.sh
---tools`. `colab update` tells you when it is due. **`behind` means a released
-CLI change exists that this machine lacks** — the comparison runs to the latest
-tag, so a release that changed no CLI code does not nag you, and unreleased work
-in your own checkout does not either. (That last part is why the bound is the tag
-rather than `HEAD`: measuring to `HEAD` marked every machine stale for the whole
-window between a CLI commit and the next tag, and the advertised remedy copies
-*from* that same working tree — so on a machine developing the handbook it
-advised services to adopt untagged code.) It never rewrites the copy, not even
-with `--apply`: that is the toolchain your running services are executing.
-`colab --version` says which of the two you are talking to (or `npm package` for an
-`npx`/`npm i` install), and prints that install's version. The frozen copy carries
-`tools/` only, so `colab template` refuses there — run it from the working tree.
-
-**3. Verify, and register your repos.**
-
-```sh
-colab --help                  # not found? fix your PATH — step 2 prints the exact line
-colab --version               # which colab is this — working tree, frozen copy, or npm package — and its version
-colab register /path/to/repo  # once per repo — writes repos.txt AND config.json, so they agree
-node audit/audit.mjs          # a conformance report across the whole fleet
-colab update                  # stamped copies that fell behind — the frozen CLI included
-```
-
-`colab register` is the way in; hand-editing `~/.colab/repos.txt` still works for
-the audit, but leaves `config.json` — where the CLI reserves each repo's ports —
-unaware of the repo. A remote-only audit target (`owner/name`, nothing cloned) is
-the one entry you add to `repos.txt` by hand. A repo not yet adopted then needs
-`colab adopt` and `colab labels --ensure` — see *Adopting it into a repo* below.
+**The CLI alone, without the skills,** is on npm as
+**`@futurelastic/colab-handbook`** — `npx @futurelastic/colab-handbook <command>`,
+or `npm i -g @futurelastic/colab-handbook` (`@next` for release candidates). The
+command is still `colab`. The skills are not in the package; they install from a
+clone, because they must symlink into `~/.claude/skills/`.
 
 ### Checking an install
 
 ```sh
-./install.sh --check          # read-only; exit 1 on any ✗ row
+colab --version          # which colab answered — working tree, frozen copy or npm package — and its version
+./install.sh --check     # read-only; exit 1 on any ✗ row
+node audit/audit.mjs     # a conformance report across every registered repo
+colab update             # stamped copies that fell behind, the frozen CLI included
 ```
 
-A frozen copy never breaks — it gets **old**, and an old complete copy answers
-normally for every command it knows until something asks for one added after it
-was frozen. `--check` is the report nothing else gives: whether the frozen copy is
-behind the latest release, **which commands it does not dispatch**, whether the
-state file exists, whether anything is registered, whether both pre-commit
-hooklets can actually run (gitleaks, and the identity vocabulary), and whether
+`--check` reports whether the frozen copy is behind the latest release and
+which commands it does not dispatch, whether the state file exists, whether
+anything is registered, whether both pre-commit hooklets can run, and whether
 `notifyUrl` is unset while a local observer declared an endpoint. ✗ means
-something installed here is stale or unusable; ⚠ means something was never set
-up, which may be deliberate. It never refreshes anything — re-freezing stays your
-call: `./install.sh --tools`.
-
-Then read [`CONVENTIONS.md`](CONVENTIONS.md): ~15 minutes, and the only
-normative file here.
-
-## Adopting it into a repo
-
-The short version — the full checklist is
-[`CONVENTIONS.md` §9](CONVENTIONS.md#9-adopting-this):
-
-1. Answer question 1 honestly (is there production **today**, not "soon").
-2. Add `.github/project.yml`. `colab adopt` asks the five questions and writes
-   the file for you — it stops at the descriptor and prints the rest of this
-   list, because the remaining steps are not its to take.
-3. `colab labels --ensure` — the convention labels do not exist by default, and
-   there are more than one. A check whose label was never created can never
-   fire.
-4. Paste [`templates/repo-CLAUDE-block.md`](templates/repo-CLAUDE-block.md)
-   into the repo's `CLAUDE.md` — this is the only way agents discover these
-   conventions.
-5. Make sure CI produces the two required outcomes: a secret scan and a build,
-   with toolchain versions **resolved from the repo's own manifest** — never
-   hardcoded. Copy a template if it helps.
-
-Pre-existing branches are **grandfathered**. Do not rename anything.
-
-**Working in a repo you don't own?** If committing these files there is not an option,
-`colab adopt --local` keeps everything in your local clone instead, and nothing lands in
-the owner's history — see
-[*Working in a repo you don't own*](CONVENTIONS.md#working-in-a-repo-you-dont-own).
+something installed is stale or unusable; ⚠ means something was never set up,
+which may be deliberate. It never refreshes anything.
 
 ## Why so little enforcement
 
-Our private repos sit on a GitHub plan without branch protection — pushes to
-`main` cannot be forbidden. So this handbook does not pretend to enforce; it
-makes **compliance cheap and checking cheap**. The audit tool reports drift; the
-conventions explain *why* each rule exists, so you can judge for yourself when
-breaking one is worth it. When you do break one, fix the documentation in the
-same PR — a document describing a repo that does not exist is the worst thing in
-this business.
+Branch protection is not available on every plan and every owner a fleet spans,
+so this handbook does not rely on it. It makes **compliance cheap and checking
+cheap** instead: the audit reports drift, and the conventions explain *why*
+each rule exists, so you can judge when breaking one is worth it. When you do,
+fix the documentation in the same change — a document describing a repo that
+does not exist is the worst thing in this business.
 
-**Two things do block, and the line between them is deliberate.** The git hooks
-refuse: a secret scan, and an identity scan that stops a hostname, a home path
-or a customer's name reaching a public repo. Those guard **publication**, which
-is the one mistake that cannot be undone — history cannot be recalled once
-anything is cloned. Everything about *conformance* stays advisory, because being
-wrong about a convention costs a conversation, and being wrong about publication
-costs forever.
+**A short list does block, deliberately:**
+
+- **Publication.** The git hooks refuse a secret, and an identity scan stops a
+  hostname, a home path or a customer's name reaching a public repo. History
+  cannot be recalled once anything is cloned.
+- **The gates around a merge**, enforced by `colab`: a human go before a merge
+  (unless the repo granted `auto-trunk` or the change is docs-only), a grant
+  before a migration ships, and a release never bundled into a merge.
+
+Everything else is a default — one good way to do it — because being wrong
+about a convention costs a conversation.
 
 ## License
 
