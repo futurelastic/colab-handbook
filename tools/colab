@@ -7718,6 +7718,18 @@ answered by its number OR its literal value), DERIVES the rest, and WRITES the d
 act — append-only, never touching a byte already there. A complete descriptor just reports
 (write nothing, exit 0); re-answer one row on purpose with --axis.
 
+ONLY THE GATING ROWS ARE ASKED (#533): deploy/production and exposure. room, writes and channels
+are optional and legal absent — never prompted for; the report names them in one line with the
+\`--axis\` command that answers each later, and their own flag still answers one in the same run.
+After deploy: none, production is not asked again (null follows; --deploy none alone implies it).
+
+A SINGLE TRUNK, ANY SPELLING (#522): exposure none (and released with production null, and the
+legacy tier B) need ONE long-lived branch, not one named "main" — an existing master default
+adopts as-is. A "main" beside a non-main trunk is the two-branch shape and is refused (exit 5).
+At a terminal the exposure answer is checked against that shape when given, and re-asked with
+the reason. When a human must finish (the gate below), the FIRST line printed is the one
+command to run, every answer this run had already filled in.
+
 --writes accepts free (coexistence, the default), direct (an attended human may commit straight
 to trunk; DECLARED today, its runtime is DEFERRED — see CONVENTIONS.md §2, "writes: direct —
 declared today, runtime deferred"), or isolated (vetoes trunk-direct outright, human or not).
@@ -7914,7 +7926,26 @@ function adoptGitExtras(repoAbs, opts = {}) {
   // #483: the fork's own owner, from origin's URL — what an inherited CODEOWNERS team is compared to.
   const originUrl = git.git(['remote', 'get-url', 'origin'], repoAbs);
   const ownOrg = originUrl.ok ? codeowners.remoteOwner(originUrl.stdout) : null;
-  return { trunk, trunkSource, hooksPath, hooksDirFiles, trackedFiles, fork: adoptDetectFork(repoAbs, opts), ownOrg };
+  return { trunk, trunkSource, hooksPath, hooksDirFiles, trackedFiles, fork: adoptDetectFork(repoAbs, opts), ownOrg, branches: adoptBranchList(repoAbs) };
+}
+
+/** #522: every branch name visible here — refs/heads ∪ refs/remotes/<any>/<name> — the same union
+ * audit/audit.mjs's `branches()` reads, so the single-trunk rule (tools/lib/exposure-shape.js
+ * `singleTrunkViolation`) answers identically on both sides: adopt never writes what the audit
+ * then fails. null when git cannot list refs (the rule then fails closed to trunk "main"). */
+function adoptBranchList(repoAbs) {
+  const r = git.git(['for-each-ref', '--format=%(refname)', 'refs/heads', 'refs/remotes'], repoAbs);
+  if (!r.ok) return null;
+  const names = new Set();
+  for (const ref of r.stdout.split('\n').map((x) => x.trim()).filter(Boolean)) {
+    if (ref.startsWith('refs/heads/')) names.add(ref.slice('refs/heads/'.length));
+    else if (ref.startsWith('refs/remotes/')) {
+      const rest = ref.slice('refs/remotes/'.length);
+      const name = rest.slice(rest.indexOf('/') + 1);
+      if (rest.includes('/') && name && name !== 'HEAD') names.add(name);
+    }
+  }
+  return [...names];
 }
 
 /**
@@ -8187,6 +8218,8 @@ function printAdoptReport(report, repoAbs, verify, localFinish) {
   print(`detected trunk: ${t.detected || '(unknown)'}${trunkSourceNote}${t.declared !== null ? `  (declared: ${t.declared}${t.agree === false ? ' ⚠ disagrees with detected' : ''})` : ''}`);
   print(`stack candidates: ${report.detected.stackCandidates.length ? report.detected.stackCandidates.join(', ') : '(none found)'}`);
   print(`declared ports: ${fmtVal(report.detected.ports)}`);
+  const optLine = adopt.optionalRowsLine(report.optionalUnanswered); // #533
+  if (optLine) print(optLine);
   if (report.fork) print(`fork of an upstream: yes — ${report.fork.source === 'flag' ? '--fork' : `remote "${report.fork.remote}" ${report.fork.url}`} (step 5 is the append-only block, §9 "A fork of an upstream")`);
   if (report.inheritedCodeowners) {
     const ic = report.inheritedCodeowners;
@@ -8262,6 +8295,8 @@ function adoptAnswersFromFlags(opts, cfg, axesToAsk, forcedAxes) {
       if (!adopt.VALID_DEPLOY.has(opts.deploy)) throw new UserError(`--deploy must be one of: ${[...adopt.VALID_DEPLOY].join(', ')}`);
       values.deploy = opts.deploy;
       flags.push('--deploy');
+      // #533: deploy: none already says nothing is live — production: null follows, never re-asked.
+      if (opts.deploy === 'none' && opts.production === undefined && eligible('production', 'tier')) values.production = null;
     }
     if (flags.length) answers.tier = { values, mode: 'flag', flags };
   }
@@ -8325,7 +8360,7 @@ async function askMenu(rl, axis, promptFn) {
  * URL itself asked only on "yes" — this keeps every axis forced-choice-shaped without pretending
  * a URL belongs to an enum.
  */
-async function adoptAskInteractive(rl, axesToAsk, cfg) {
+async function adoptAskInteractive(rl, axesToAsk, cfg, checkExposure) {
   const answers = {};
   for (const axis of axesToAsk) {
     const q = adopt.QUESTIONS.find((x) => x.axis === axis);
@@ -8336,13 +8371,16 @@ async function adoptAskInteractive(rl, axesToAsk, cfg) {
         process.stdout.write(`${adopt.renderMenu('tier')}\n`);
         return rlAsk(rl, '  deploy: ');
       });
-      process.stdout.write('  1) no deploy target exists today\n  2) yes — enter the URL\n');
-      const existsRaw = (await rlAsk(rl, '  production: ')).trim();
       let prod = null;
-      if (existsRaw === '2' || existsRaw === 'yes') {
-        prod = (await rlAsk(rl, '    URL: ')).trim() || null;
-      } else if (existsRaw !== '1' && existsRaw !== 'no') {
-        throw new UserError('production: choose 1 (no deploy target exists today) or 2 (yes — enter the URL)');
+      // #533: deploy: none already answered "nothing is live" — asking production again is noise.
+      if (depChoice.value !== 'none') {
+        process.stdout.write('  1) no deploy target exists today\n  2) yes — enter the URL\n');
+        const existsRaw = (await rlAsk(rl, '  production: ')).trim();
+        if (existsRaw === '2' || existsRaw === 'yes') {
+          prod = (await rlAsk(rl, '    URL: ')).trim() || null;
+        } else if (existsRaw !== '1' && existsRaw !== 'no') {
+          throw new UserError('production: choose 1 (no deploy target exists today) or 2 (yes — enter the URL)');
+        }
       }
       answers.tier = { values: { production: prod, deploy: depChoice.value }, mode: 'interactive' };
     } else if (axis === 'channels') {
@@ -8352,12 +8390,22 @@ async function adoptAskInteractive(rl, axesToAsk, cfg) {
       });
       answers.channels = { values: { channels: resolved.value }, mode: 'interactive' };
     } else if (axis === 'exposure') {
-      const resolved = await askMenu(rl, 'exposure', () => {
-        process.stdout.write(`${adopt.renderMenu('exposure')}\n`);
-        return rlAsk(rl, '  choice: ');
-      });
-      if (resolved.skip) continue; // decline — the fallback tier derivation picks this up
-      answers.exposure = { values: { exposure: resolved.value }, mode: 'interactive' };
+      // #522: the repo-shape check runs HERE, at answer time — a refusal re-asks with its reason,
+      // instead of surfacing after every other question with nothing written.
+      let chosen = null;
+      for (let attempt = 0; attempt < 2 && !chosen; attempt++) {
+        const resolved = await askMenu(rl, 'exposure', () => {
+          process.stdout.write(`${adopt.renderMenu('exposure')}\n`);
+          return rlAsk(rl, '  choice: ');
+        });
+        if (resolved.skip) { chosen = resolved; break; }
+        const problem = checkExposure ? checkExposure(resolved.value, answers) : null;
+        if (!problem) { chosen = resolved; break; }
+        process.stdout.write(`  ✗ ${problem}\n  choose again (or skip):\n`);
+      }
+      if (!chosen) throw new UserError('exposure: no answer this repo\'s shape supports after one re-prompt');
+      if (chosen.skip) continue; // decline — the fallback tier derivation picks this up
+      answers.exposure = { values: { exposure: chosen.value }, mode: 'interactive' };
     } else {
       // room, writes — plain single-choice menus, no skip.
       const resolved = await askMenu(rl, axis, () => {
@@ -8370,11 +8418,41 @@ async function adoptAskInteractive(rl, axesToAsk, cfg) {
   return answers;
 }
 
+/** #522: this run's answers as the ordered flag list `adopt.humanAdoptCommand` prints — what the
+ * human pastes to finish the same adoption with the gate satisfied. */
+function adoptReplayFlags(opts, answers) {
+  const flags = [];
+  if (opts.repo !== undefined) flags.push(['--repo', opts.repo]);
+  const t = answers.tier && answers.tier.values;
+  if (t && 'production' in t) flags.push(['--production', t.production === null ? 'none' : t.production]);
+  if (t && 'deploy' in t) flags.push(['--deploy', t.deploy]);
+  if (answers.exposure) flags.push(['--exposure', answers.exposure.values.exposure]);
+  if (answers.room) flags.push(['--room', answers.room.values.room]);
+  if (answers.writes) flags.push(['--writes', answers.writes.values.writes]);
+  if (answers.channels) flags.push(['--channels', answers.channels.values.channels.join(',')]);
+  if (opts.stack !== undefined) flags.push(['--stack', opts.stack]);
+  if (opts.autonomy !== undefined) flags.push(['--autonomy', opts.autonomy]);
+  if (opts.reason !== undefined) flags.push(['--reason', opts.reason]);
+  if (opts.answeredBy) flags.push(['--answered-by', opts.answeredBy]);
+  if (opts.land) flags.push(['--land', true]);
+  return flags;
+}
+
+/** #522: the same command shape for a run that had no answers at all — placeholders per asked row. */
+function adoptAskedFlagPlaceholders(axesToAsk, stackUnresolvable) {
+  const flags = [];
+  if (axesToAsk.includes('tier')) flags.push(['--production', '<url>|none'], ['--deploy', '<none|tag|manual|push-main>']);
+  if (axesToAsk.includes('exposure')) flags.push(['--exposure', '<none|self|live|released>']);
+  for (const a of ['room', 'writes', 'channels']) if (axesToAsk.includes(a)) flags.push([`--${a}`, `<${a}>`]);
+  if (stackUnresolvable) flags.push(['--stack', '<text>']);
+  return flags;
+}
+
 /** The `EXPOSURE_SHAPE`/falsifier context, built from EFFECTIVE production/deploy — accounting
  * for a `tier`-axis answer resolved in THIS SAME run, not only what was already on record, so
  * declaring production+deploy and exposure together in one invocation validates against each
  * other rather than the pre-write snapshot. */
-function adoptShapeCtx(cfg, tierAnswer, trunk, workflows, io) {
+function adoptShapeCtx(cfg, tierAnswer, trunk, workflows, io, branches) {
   const effProduction = tierAnswer ? tierAnswer.values.production : (Object.prototype.hasOwnProperty.call(cfg, 'production') ? cfg.production : null);
   const effDeploy = tierAnswer ? tierAnswer.values.deploy : (Object.prototype.hasOwnProperty.call(cfg, 'deploy') ? cfg.deploy : null);
   const evidence = consumerEvidence.consumerEvidence(io, workflows);
@@ -8382,7 +8460,7 @@ function adoptShapeCtx(cfg, tierAnswer, trunk, workflows, io) {
   const hasProduction = effProduction !== null && effProduction !== undefined && effProduction !== '';
   const runbook = Object.prototype.hasOwnProperty.call(cfg, 'runbook') ? cfg.runbook : null;
   const hasRunbook = !!(runbook && io.readFile(String(runbook).trim().replace(/^\.\//, '')) !== null);
-  return { trunk, hasProduction, deploy: effDeploy, hasDeployWorkflow, hasRunbook, effProduction, effDeploy };
+  return { trunk, hasProduction, deploy: effDeploy, hasDeployWorkflow, hasRunbook, effProduction, effDeploy, branches: branches === undefined ? null : branches };
 }
 
 async function cmdAdopt(argv) {
@@ -8428,7 +8506,12 @@ async function cmdAdopt(argv) {
     if (!adopt.ROW_NAMES.includes(a)) throw new UserError(`Unknown --axis "${a}" — expected one of: ${adopt.ROW_NAMES.join(', ')}`);
   }
   const forcedAxes = new Set(requestedAxes);
-  let axesToAsk = adopt.ROW_NAMES.filter((a) => forcedAxes.has(a) || adopt.axisMissing(cfg, a));
+  // #533: a fresh adoption asks only the rows that change a gate (production/deploy, exposure);
+  // room/writes/channels are asked only when forced (--axis) or answered by their flag.
+  const flagAxes = new Set();
+  if (opts.production !== undefined || opts.deploy !== undefined) flagAxes.add('tier');
+  for (const a of ['room', 'exposure', 'writes', 'channels']) if (opts[a] !== undefined) flagAxes.add(a);
+  let axesToAsk = adopt.axesToAsk(cfg, forcedAxes, flagAxes);
   // --local re-run (#393): once exposure is on record, a bare `adopt --local` (no answer flags, no
   // --axis) is the idempotent re-apply — exclude lines, stub, labels, checkout — never a prompt for
   // the optional rows (room/writes/channels), which --local leaves to the operator by design.
@@ -8522,7 +8605,11 @@ async function cmdAdopt(argv) {
   } else if (isTTY) {
     const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
     try {
-      answers = await adoptAskInteractive(rl, axesToAsk, cfg);
+      const shapeWorkflows = io.listDir('.github/workflows').filter((f) => /\.ya?ml$/.test(f));
+      answers = await adoptAskInteractive(rl, axesToAsk, cfg, (exposure, sofar) => {
+        const v = adopt.exposureShapeVerdict(exposure, adoptShapeCtx(cfg, sofar.tier, extra.trunk, shapeWorkflows, io, extra.branches));
+        return v.ok ? null : v.reason;
+      });
       if (needsStack && opts.stack === undefined) {
         process.stdout.write('\nNo manifest recognised (package.json/composer.json/pyproject.toml/'
           + '.python-version) — the audit requires stack: as a literal key.\n');
@@ -8537,6 +8624,12 @@ async function cmdAdopt(argv) {
   } else {
     const hints = axesToAsk.map(adoptAxisFlagHint).join('  ');
     const stackHint = stackUnresolvable ? '  --stack "<text>"' : '';
+    // #522: the human step goes FIRST — answering exposure none/self is a human's act, so the one
+    // command that finishes the adoption leads, and the explanation follows it.
+    if (axesToAsk.includes('exposure')) {
+      warn('a human finishes this adoption — run at an interactive terminal: colab adopt   (or, non-interactively:)');
+      warn(`  ${adopt.humanAdoptCommand(adoptAskedFlagPlaceholders(axesToAsk, stackUnresolvable))}`);
+    }
     warn(`${axesToAsk.length} unanswered §9 row(s) (${axesToAsk.join(', ')}) — no TTY and no answer flags, so there is no way to ask. Re-run with: ${hints}${stackHint}`);
     return 1;
   }
@@ -8561,7 +8654,7 @@ async function cmdAdopt(argv) {
   // written, per "nothing partially written on refusal".
   if (answers.exposure) {
     const proposedExposure = answers.exposure.values.exposure;
-    const shapeCtx = adoptShapeCtx(cfg, answers.tier, trunk, workflows, io);
+    const shapeCtx = adoptShapeCtx(cfg, answers.tier, trunk, workflows, io, extra.branches);
     const evidence = consumerEvidence.consumerEvidence(io, workflows);
     const currentExposure = axisAuthority.axisOfRecord(cfg).exposure;
     const verdict = adopt.gateVerdict({
@@ -8575,6 +8668,10 @@ async function cmdAdopt(argv) {
       reason: opts.reason || null,
     });
     if (!verdict.ok) {
+      if (verdict.class === adopt.GATE_CLASS.HUMAN_GATED) {
+        // #522: lead with the one command a human runs, every answer this run had filled in.
+        warn(`a human finishes this adoption — run: ${adopt.humanAdoptCommand(adoptReplayFlags(opts, answers))}`);
+      }
       warn(verdict.message);
       return verdict.exitCode;
     }

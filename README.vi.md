@@ -133,18 +133,24 @@ còn lại của `CONVENTIONS.md` là tài liệu tra cứu — cần gì tra n�
 
 ## Năm câu hỏi
 
-Adopt nghĩa là trả lời mấy câu này về repo của bạn, một lần, vào
-`.github/project.yml`. `colab adopt` hỏi chúng dưới dạng menu đánh số:
+Adopt nghĩa là trả lời mấy câu này về repo của bạn vào `.github/project.yml`.
+`colab adopt` chỉ hỏi hai câu làm thay đổi cổng (1 và 3), dưới dạng menu đánh
+số; ba câu còn lại là tuỳ chọn, trả lời lúc nào sau này cũng được:
 
-| # | Câu hỏi | Ghi vào |
-|---|---|---|
-| 1 | **Hôm nay** (chứ không phải "sắp") đã có đích deploy chưa, và đến đó bằng đường nào — một tag, chính cú promote, một người chạy runbook, hay chưa có gì? | `production` + `deploy` |
-| 2 | Còn ai khác làm ở đây — một mình bạn, một team, hay có cả người ngoài? | `room` |
-| 3 | Merge nhầm thì cái gì hỏng — không gì cả, chỉ những người đang có mặt, người dùng qua lần promote kế tiếp, hay người dùng/người adopt qua một artifact đã phát hành? | `exposure` |
-| 4 | Một người có được commit thẳng vào trunk song song với các phiên worktree không — tự do, có khai ý định, hay không bao giờ? | `writes` |
-| 5 | Code đi tới chỗ nó chạy bằng đường nào — một workflow CI, một git hook, một quy trình tay có ghi lại, một checkout đang sống, một artifact phát hành, dữ liệu của hệ thống khác, hay chưa có đường nào? | `channels` |
+| # | Câu hỏi | Ghi vào | Lúc adopt |
+|---|---|---|---|
+| 1 | **Hôm nay** (chứ không phải "sắp") đã có đích deploy chưa, và đến đó bằng đường nào — một tag, chính cú promote, một người chạy runbook, hay chưa có gì? | `production` + `deploy` | có hỏi |
+| 2 | Còn ai khác làm ở đây — một mình bạn, một team, hay có cả người ngoài? | `room` | tuỳ chọn — `colab adopt --axis room` |
+| 3 | Merge nhầm thì cái gì hỏng — không gì cả, chỉ những người đang có mặt, người dùng qua lần promote kế tiếp, hay người dùng/người adopt qua một artifact đã phát hành? | `exposure` | có hỏi — người thật trả lời |
+| 4 | Một người có được commit thẳng vào trunk song song với các phiên worktree không — tự do, có khai ý định, hay không bao giờ? | `writes` | tuỳ chọn — `colab adopt --axis writes` |
+| 5 | Code đi tới chỗ nó chạy bằng đường nào — một workflow CI, một git hook, một quy trình tay có ghi lại, một checkout đang sống, một artifact phát hành, dữ liệu của hệ thống khác, hay chưa có đường nào? | `channels` | tuỳ chọn — `colab adopt --axis channels` |
 
-Không câu nào hỏi cái repo đã tự nói sẵn — nhánh mặc định (`trunk`), toolchain,
+**Trả lời câu 3 là việc của người thật** khi câu trả lời là "không gì cả" hoặc
+"chỉ những người đang có mặt". Agent làm được mọi phần còn lại; tới bước đó,
+`colab adopt` in ra, ngay dòng đầu tiên, đúng một lệnh để người thật chạy.
+
+Không câu nào hỏi cái repo đã tự nói sẵn — nhánh mặc định (`trunk`, giữ nguyên
+như đang có: nhánh mặc định tên `master` vẫn hợp lệ, không cần đổi tên), toolchain,
 port đều được tự dò. Số cổng, nghi thức release và việc có bắt buộc phải có
 nhánh hay không đều suy ra từ câu trả lời. Mỗi câu trả lời quy về đâu, và vì
 sao: [`CONVENTIONS.md` §2](CONVENTIONS.md#2-tiers) và
@@ -162,7 +168,7 @@ nhất mà không làm mất phần bạn đã sửa.
 Làm bằng tay thì cũng đúng các bước đó (checklist đầy đủ:
 [`CONVENTIONS.md` §9](CONVENTIONS.md#9-adopting-this)):
 
-1. `colab adopt` — trả lời năm câu hỏi và ghi `.github/project.yml`. Nó dừng ở
+1. `colab adopt` — trả lời hai câu hỏi về cổng và ghi `.github/project.yml`. Nó dừng ở
    đó và in ra các bước còn lại.
 2. `colab labels --ensure` — các label quy ước không có sẵn. Một check mà label
    của nó chưa từng được tạo thì không bao giờ chạy được.

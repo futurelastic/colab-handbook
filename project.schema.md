@@ -96,11 +96,16 @@ tier-legacy path"). Read `trunk`/`production`/`deploy` below as the **legacy** s
 
 ### `trunk` — required
 
-The branch sessions merge into. `main` when `tier: B` — fixed, there is no
-second branch to distinguish it from. On `tier: A` it is `dev` **or**, when
-`deploy: tag`, `main` (see the exception below) — also fixed, for the same
-reason as B outside that one exception. Any other value on B or (outside the
-tag-gated exception) A is a finding.
+The branch sessions merge into. On `tier: B` (and `exposure: none`, or
+`released` with `production: null`) it is the repo's **default branch** —
+`main` by convention, but an existing repo's `master`, or any other spelling, is
+equally conforming (#522). What is enforced there is that it is the **only**
+long-lived branch: a `main` beside a non-`main` trunk is the two-branch shape and
+is a finding (`tools/lib/exposure-shape.js` `singleTrunkViolation`, read by both
+the audit and `colab adopt`; when the branch list cannot be read it fails closed
+to `main`). On `tier: A` it is `dev` **or**, when `deploy: tag`, `main` (see the
+exception below) — fixed. Any other value on (outside the tag-gated exception) A
+is a finding.
 
 **On `tier: C`, `trunk` is a declared setting, not a fixed spelling (#205).**
 What is enforced is the **two-branch split**, not the name: `trunk` must be a
@@ -109,9 +114,10 @@ branch distinct from `main`, the release branch the promotion deploys to.
 when nothing is said — but a repo that declares a different name (`develop`,
 say) is **conforming, not exempted**: no advisory, no "legacy" framing. It
 answered the question the same way `dev` would have. This is deliberately
-narrower than "any name is legal" — Tier B and (non-tag-gated) Tier A keep a
-single fixed value each, because there either is no second branch at all, or
-the tag itself already marks the release boundary. Only the one-gate shape
+narrower than "any name is legal" — (non-tag-gated) Tier A keeps a fixed
+value, and Tier B's single trunk may never sit beside a `main`, because there
+either is no second branch at all, or the tag itself already marks the release
+boundary. Only the one-gate shape
 (Tier C) has a second branch whose *existence*, not its *spelling*, is what the
 model measures. `tools/lib/exposure-shape.js`'s `evaluateLive` and
 `audit/audit.mjs`'s tier-C coherence check are the two places this is enforced;

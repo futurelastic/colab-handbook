@@ -103,6 +103,16 @@ not carry its files, stop here: nothing in this section applies. Use `colab adop
 ([`CONVENTIONS.md` §9, *Working in a repo you don't
 own*](../../CONVENTIONS.md#working-in-a-repo-you-dont-own)) instead, which commits nothing.
 
+**One step is a human's, and you should know it before step 1, not after (#522).**
+Answering `exposure` with `none` or `self` needs a human — the bar in
+[§9](../../CONVENTIONS.md#9-adopting-this). Drive everything else; when `colab adopt`
+reaches that gate it prints, as its first line, the one command the human runs with
+every answer already filled in. Hand the maintainer that line, unchanged — never
+clear the bar yourself. Adoption asks only the gating rows (deploy/production and
+exposure); `room`, `writes` and `channels` are optional and answered later with
+`--axis` (#533). An existing default branch is kept as trunk whatever it is called —
+never rename `master` to adopt.
+
 ### The checklist is not in this file, on purpose
 
 **[`CONVENTIONS.md` §9 "Adopting this"](../../CONVENTIONS.md#9-adopting-this) is the

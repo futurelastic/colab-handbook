@@ -53,7 +53,8 @@
  * Context shape both sides build (identically named, audit.mjs and adopt.js each computing the
  * booleans from their own sources — a real git checkout for one, a `git status`-aware `io` for
  * the other):
- *   { trunk, hasProduction, deploy, hasDeployWorkflow, hasRunbook, deployWorkflowNames? }
+ *   { trunk, hasProduction, deploy, hasDeployWorkflow, hasRunbook, deployWorkflowNames?, branches? }
+ * `branches` (#522) is what `singleTrunkViolation` reads — omitting it fails closed to trunk "main".
  * `deployWorkflowNames` is OPTIONAL and cosmetic only (the `none` violation names which
  * workflow(s) contradict it) — omitting it (as adopt.js's ctx does) only drops the parenthetical
  * from the message, never changes which entries fire.
@@ -74,13 +75,45 @@ function evaluateExposure(exposure, ctx) {
   }
 }
 
+/**
+ * #522: the single-trunk invariant shared by every shape with no release branch — `exposure: none`,
+ * `exposure: released` with `production: null`, and the legacy `tier: B` (audit/audit.mjs). It is
+ * about HOW MANY long-lived branches exist, never how the one branch is spelled: an existing repo
+ * whose default branch is `master` (or anything else) adopts as-is, with nothing renamed.
+ *
+ * What it refuses is the two-branch shape wearing a single-trunk label: a `main` branch sitting
+ * beside a trunk that is not `main` is the live/released split (main = what ships, trunk = where
+ * sessions land), and declaring "nothing consumes this" over it would hide the release branch.
+ *
+ * `branches` — every branch name the caller can see (local ∪ remote-tracking), or null/undefined
+ * when it cannot list them. Unknown FAILS CLOSED to the old spelling rule (trunk "main"): a
+ * non-main trunk is accepted only when a readable branch list proves no `main` sits beside it.
+ *
+ * Returns null when the invariant holds, else the reason text (no prefix — each caller names its
+ * own shape in front of it).
+ */
+function singleTrunkViolation(trunk, branches) {
+  if (!trunk) return `no trunk declared, found ${JSON.stringify(trunk)}`;
+  if (trunk === 'main') return null;
+  if (!Array.isArray(branches)) {
+    return `trunk ${JSON.stringify(trunk)} can stand in for "main" only when the branch list is readable `
+      + 'and shows no "main" beside it, and the branch list could not be read';
+  }
+  if (branches.includes('main')) {
+    return `trunk is ${JSON.stringify(trunk)} and a "main" branch exists beside it — that is the `
+      + 'two-branch (live/released) shape, not a single trunk';
+  }
+  return null;
+}
+
 function evaluateNone(ctx) {
   const out = [];
-  if (ctx.trunk !== 'main') {
+  const single = singleTrunkViolation(ctx.trunk, ctx.branches);
+  if (single) {
     out.push({
       kind: 'fail',
-      message: `exposure: none requires trunk "main", found ${JSON.stringify(ctx.trunk)} — nothing `
-        + 'consumes this repo, so there is no release branch to speak of',
+      message: `exposure: none requires a single trunk — ${single} — nothing consumes this repo, `
+        + 'so there is no release branch to speak of',
     });
   }
   if (ctx.hasDeployWorkflow) {
@@ -131,11 +164,12 @@ function evaluateLive(ctx) {
 
 function evaluateReleasedNoProduction(ctx) {
   const out = [];
-  if (ctx.trunk !== 'main') {
+  const single = singleTrunkViolation(ctx.trunk, ctx.branches);
+  if (single) {
     out.push({
       kind: 'fail',
-      message: `exposure: released with production: null requires trunk "main", found `
-        + `${JSON.stringify(ctx.trunk)} — nothing is live, so there is no release branch to speak of`,
+      message: `exposure: released with production: null requires a single trunk — ${single} — `
+        + 'nothing is live, so there is no release branch to speak of',
     });
   }
   if (ctx.deploy !== null && ctx.deploy !== undefined && ctx.deploy !== 'none') {
@@ -204,4 +238,4 @@ function evaluateReleasedWithProduction(ctx) {
   return out;
 }
 
-module.exports = { evaluateExposure };
+module.exports = { evaluateExposure, singleTrunkViolation };

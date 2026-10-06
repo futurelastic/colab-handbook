@@ -134,18 +134,24 @@ it end to end.
 
 ## The five questions
 
-Adopting means answering these about your repo, once, into
-`.github/project.yml`. `colab adopt` asks them as numbered menus:
+Adopting means answering these about your repo into `.github/project.yml`.
+`colab adopt` asks only the two that change a gate (1 and 3), as numbered menus;
+the other three are optional and can be answered any time later:
 
-| # | Question | Writes |
-|---|---|---|
-| 1 | Does a deploy target exist **today** (not "soon"), and how is it reached — a tag, the promotion itself, a human running a runbook, or nothing yet? | `production` + `deploy` |
-| 2 | Who else works here — just you, a team, or the public? | `room` |
-| 3 | What would break if you merged something wrong here — nothing, only people already in the room, users via the next promotion, or users and adopters via a released artifact? | `exposure` |
-| 4 | May a human commit straight to trunk alongside worktree sessions — freely, with declared intent, or never? | `writes` |
-| 5 | By what path does a commit reach the thing that runs it — a CI workflow, a git hook, a documented procedure, a live checkout, a published artifact, another system's data, or none yet? | `channels` |
+| # | Question | Writes | At adoption |
+|---|---|---|---|
+| 1 | Does a deploy target exist **today** (not "soon"), and how is it reached — a tag, the promotion itself, a human running a runbook, or nothing yet? | `production` + `deploy` | asked |
+| 2 | Who else works here — just you, a team, or the public? | `room` | optional — `colab adopt --axis room` |
+| 3 | What would break if you merged something wrong here — nothing, only people already in the room, users via the next promotion, or users and adopters via a released artifact? | `exposure` | asked — a human's answer |
+| 4 | May a human commit straight to trunk alongside worktree sessions — freely, with declared intent, or never? | `writes` | optional — `colab adopt --axis writes` |
+| 5 | By what path does a commit reach the thing that runs it — a CI workflow, a git hook, a documented procedure, a live checkout, a published artifact, another system's data, or none yet? | `channels` | optional — `colab adopt --axis channels` |
 
-Nothing is asked that the repo already states — its default branch (`trunk`),
+**Answering question 3 is a human's act** when the answer is "nothing" or "only
+people already in the room". An agent can drive everything else; when it gets
+there, `colab adopt` prints, as its first line, the one command the human runs.
+
+Nothing is asked that the repo already states — its default branch (`trunk`,
+kept as it is: a `master` default is fine, nothing needs renaming),
 its toolchain, its ports are detected. Gate count, release ritual and whether a
 branch is mandatory are derived from the answers. What each answer resolves to,
 and why: [`CONVENTIONS.md` §2](CONVENTIONS.md#2-tiers) and
@@ -164,7 +170,7 @@ edits.
 By hand, the same steps (full checklist:
 [`CONVENTIONS.md` §9](CONVENTIONS.md#9-adopting-this)):
 
-1. `colab adopt` — answers the five questions and writes
+1. `colab adopt` — answers the two gating questions and writes
    `.github/project.yml`. It stops there and prints the remaining steps.
 2. `colab labels --ensure` — the convention labels do not exist by default. A
    check whose label was never created can never fire.
