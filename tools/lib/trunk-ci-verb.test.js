@@ -95,7 +95,10 @@ test('#463 the measured case: CI green beside Release red → trunk-ci RED, and 
   assert.strictEqual(t.body.sha, fx.sha);
   const s = shipRow(fx);
   assert.strictEqual(s.ok, false, JSON.stringify(s));
-  assert.strictEqual(t.body.detail, s.detail, 'one function, one detail — the two readers must not drift');
+  // One function, one detail: ship's row is trunk-ci's detail verbatim, followed only by the refused
+  // doors' own reasons (#534) — trunk-ci reports the pre-exemption verdict and consults no door.
+  assert.ok(s.detail === t.body.detail || s.detail.startsWith(`${t.body.detail} — cure rule (#281): `),
+    `the two readers must not drift: trunk-ci ${JSON.stringify(t.body.detail)} vs ship ${JSON.stringify(s.detail)}`);
 });
 
 test('#463 all workflows green → GREEN in trunk-ci, ok in ship', () => {
