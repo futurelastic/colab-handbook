@@ -410,7 +410,8 @@ select_ref() {
       && no_handbook_skill_linked; then
       mode=release
       echo "  first install from a fresh clone of $trunk → pinning the newest final release"
-      echo "            (follow trunk instead: ./install.sh --trunk)"
+      echo "            (follow trunk instead: re-run with --trunk; later, from a release:"
+      echo "             git checkout $trunk && ./install.sh --trunk)"
     else
       mode=keep
     fi
@@ -440,7 +441,8 @@ select_ref() {
       tag="$(newest_final_tag)"
       desc="$(git -C "$DIR" describe --tags --always 2>/dev/null)"
       if [ -n "$tag" ] && [ "$desc" = "$tag" ]; then
-        echo "  ✓ release $tag (follow trunk instead: ./install.sh --trunk)"
+        # Spelled as git + flag: an older release's installer does not know --trunk (#521).
+        echo "  ✓ release $tag (follow trunk instead: git checkout $(trunk_name) && ./install.sh --trunk)"
       else
         echo "  ✓ ${branch:-detached HEAD} @ $desc — not a final release; unreleased work is installed"
         echo "            (pin the newest final release: ./install.sh --release)"

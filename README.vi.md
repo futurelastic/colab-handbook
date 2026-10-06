@@ -12,7 +12,7 @@ File này dành cho con người.
 
 ```sh
 git clone https://github.com/futurelastic/colab-handbook.git ~/code/colab-handbook
-cd ~/code/colab-handbook && ./install.sh --all   # skills + CLI colab + hook; --dry để xem trước
+cd ~/code/colab-handbook && ./install.sh --all   # skills + CLI colab + hook, từ bản phát hành mới nhất; --dry để xem trước
 cd /duong-dan/toi/repo-cua-ban
 colab adopt              # chỉ hỏi những gì không tự dò ra được, rồi ghi .github/project.yml
 colab labels --ensure    # tạo các label quy ước
@@ -22,7 +22,8 @@ colab register           # đưa repo vào danh sách fleet của máy này
 Sau đó, trong một phiên agent ở repo đó, chạy `/code-start <số-issue>`. Có agent
 trong tay thì `/handbook-sync` thay được ba lệnh cuối và làm nốt phần adopt còn
 lại (xem [*Adopt vào một repo*](#adopt-vào-một-repo)). Cần có `git`, `node` ≥ 18
-và `gh` đã đăng nhập (`gh auth login`).
+và `gh` ≥ 2.94 đã đăng nhập (`gh auth login`); gói `gh` của các distro thường cũ
+hơn, nên hãy cài từ [cli.github.com](https://cli.github.com).
 
 *([`CONVENTIONS.md`](CONVENTIONS.md) là tài liệu chuẩn tắc, viết bằng tiếng Anh
 để agent và tool đọc được. File này và bản tiếng Anh [`README.md`](README.md)
@@ -234,10 +235,23 @@ quyền cấp trước khi chạy migration vẫn đứng vững dù có nó hay
 ## Cài đặt máy
 
 Làm một lần cho mỗi máy. Clone vào chỗ ở lâu dài — các skill là symlink trỏ
-*thẳng vào working tree này*, nên repo đang checkout nhánh nào thì mọi phiên
-dùng đúng bản skill của nhánh đó; hãy để nó ở `main`. `install.sh` kiểm tra đủ
-điều kiện trước khi đụng vào gì, không bao giờ ghi đè thứ nó không tạo ra, và
-`--dry` in kế hoạch ra trước.
+*thẳng vào working tree này*, nên repo đang checkout cái gì thì mọi phiên dùng
+đúng bản skill đó. `install.sh` kiểm tra đủ điều kiện trước khi đụng vào gì,
+không bao giờ ghi đè thứ nó không tạo ra, và `--dry` in kế hoạch ra trước.
+
+**Bạn nhận phiên bản nào.** `main` chạy trước bản phát hành chính thức cuối
+cùng, nên lần cài đầu tiên từ một bản clone mới sẽ checkout **tag phát hành
+chính thức mới nhất** (`vX.Y.Z`, không bao giờ là bản ứng viên) rồi cài từ đó —
+giống mặc định của npm. Muốn theo `main`, kể cả phần chưa phát hành, thì chạy
+lần cài đầu với `--trunk`. Lần chạy nào cũng in ra bạn đang ở bản nào. Đổi về
+sau đều phải chủ động:
+
+- lên bản phát hành mới hơn: `./install.sh --release`;
+- từ một bản phát hành quay về `main`: `git checkout main && ./install.sh --trunk`
+  (installer của bản phát hành cũ không biết `--trunk`, nên checkout `main` trước).
+
+Clone đang có thay đổi chưa commit thì không bao giờ bị chuyển, và chạy lại
+không kèm flag nào thì giữ nguyên thứ đang checkout.
 
 | Flag | Làm gì |
 |---|---|
@@ -247,6 +261,8 @@ dùng đúng bản skill của nhánh đó; hãy để nó ở `main`. `install.
 | `--fleet` | Tạo `~/.colab/repos.txt` chỉ chứa ghi chú định dạng, nếu chưa có. Nó cố tình nằm trên máy vì nó ghi tên các repo private của bạn; `colab register` mới là thứ điền vào. |
 | `--all` | `--tools --hooks --fleet`. |
 | `--notify-url <url>` | Ghi `notifyUrl` vào `~/.colab/config.json`, chỉ khi khoá đó chưa có. Xem [`tools/README.md`](tools/README.md#notifyurl--optional-event-push-off-by-default). |
+| `--release` | Checkout clone này về tag phát hành chính thức mới nhất, rồi cài. Là mặc định cho lần cài đầu từ một bản clone mới. |
+| `--trunk` | Checkout `main` rồi cài, kể cả phần chưa phát hành — `@next` của bản clone. |
 | `--dry` | In ra sẽ làm gì, không thay đổi gì. Ghép được với các flag trên. |
 | `--check` | Báo cáo sức khoẻ **chỉ đọc** cho một lần cài trước đó — xem bên dưới. Không nhận flag nào khác; exit 1 nếu có dòng ✗. |
 
@@ -257,10 +273,11 @@ báo khi nó tụt sau một thay đổi CLI đã phát hành, và chạy lại 
 --tools` để làm mới. Vì sao lại làm vậy:
 [`tools/README.md`](tools/README.md#install).
 
-**Chỉ cần CLI, không cần skill** thì có trên npm: **`@futurelastic/colab-handbook`**
-— `npx @futurelastic/colab-handbook <lệnh>`, hoặc `npm i -g
-@futurelastic/colab-handbook` (`@next` cho bản ứng viên). Lệnh gõ vẫn là
-`colab`. Skill không nằm trong package; chúng cài từ một bản clone, vì phải
+**Chỉ cần CLI, không cần skill** thì có trên npm: **`@futurelastic/colab-handbook`**.
+Chưa có bản phát hành chính thức nào lên npm, nên tag mặc định `latest` chỉ là
+bản giữ chỗ; hãy cài từ **`@next`**, các bản ứng viên: `npx
+@futurelastic/colab-handbook@next <lệnh>`, hoặc `npm i -g
+@futurelastic/colab-handbook@next`. Lệnh gõ vẫn là `colab`. Skill không nằm trong package; chúng cài từ một bản clone, vì phải
 symlink vào `~/.claude/skills/`.
 
 ### Kiểm tra bản cài
@@ -276,8 +293,11 @@ colab update             # các bản copy có đóng dấu đã tụt lại, k�
 nó không chạy được, file state có tồn tại không, đã đăng ký repo nào chưa, cả
 hai hooklet pre-commit có chạy được không, và `notifyUrl` có đang trống trong
 khi một observer trên máy đã khai endpoint không. ✗ nghĩa là thứ đã cài đang cũ
-hoặc không dùng được; ⚠ nghĩa là có thứ chưa từng được cài, có thể là cố ý. Nó
-không bao giờ tự làm mới gì cả.
+hoặc không dùng được; ⚠ nghĩa là có thứ chưa từng được cài, có thể là cố ý hoặc
+chỉ là chưa làm tới — nên một bản cài mới đúng, chưa đăng ký repo nào và chưa có
+danh sách từ khoá danh tính, sẽ ra các dòng ⚠ và exit 0. Nó không bao giờ tự làm
+mới gì cả. `--check` không có trong v1.11.0 trở về trước; ở những bản đó, hãy theo
+`main` để có nó.
 
 ## Vì sao ép buộc ít vậy
 
