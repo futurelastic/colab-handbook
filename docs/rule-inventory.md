@@ -451,6 +451,10 @@ excuses, and it names the rows that carry its rules now.
 | C2x.place.52 | explanation |  | How this section relates to the spawn-time lock a session dashboard already keeps. | A related lock already exists outside this convention | docs/adr/242-place-claims-rationale.md | — |
 | C2x.place.53 | default |  | Any cross-machine or distributed form of the place-claim lock is out of scope. | Explicitly out of scope: any cross-machine or distributed form of this lock. | CONVENTIONS.md | — |
 | C2x.place.54 | default |  | Separate working trees plus git's own push rejection on a stale ref remain the cross-machine backstop. | The existing backstop — separate working trees, plus git's own push rejection on a stale ref | CONVENTIONS.md | — |
+| C2x.place.55 | default |  | With no `--session` and `COLAB_SESSION` unset, a person at a plain terminal is given a derived `person:` identity instead of a refusal. | a person at a plain terminal is given an identity instead of a refusal | CONVENTIONS.md | #528 |
+| C2x.place.56 | default |  | An explicitly empty `COLAB_SESSION=''` still means no identity. | still means "no identity" | CONVENTIONS.md | #528 |
+| C2x.place.57 | default |  | Agents never derive an identity, because concurrent agent sessions on one machine would derive the same value. | Agents never derive: two concurrent agent sessions on | CONVENTIONS.md | #528 |
+| C2x.place.58 | default |  | A person running several units at once from separate shells gives each shell its own `COLAB_SESSION`. | gives each shell its own `COLAB_SESSION` | CONVENTIONS.md | #528 |
 
 ### Channels — by what path does code reach the thing that runs it?
 
