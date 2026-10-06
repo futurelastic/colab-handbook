@@ -20,7 +20,13 @@ falls into is what decides whether the run continues:
   — *"a rejected grade — either class — ends this skill's run **for that issue set**"* —
   and it was only this section that escalated a per-candidate refusal into a run-level
   one.
-- **Repo-wide** — trunk CI dead or red. **Stop the merge loop** and say what would clear
+- **Repo-wide** — trunk CI dead or red. **Classify a red first**, exactly as `code-ship`
+  B1 does ([b1-red-trunk.md](../code-ship/b1-red-trunk.md), #540): runner-side signatures
+  with the re-run still unspent (`attempt` 1) get the one re-run — after cancelling a queued
+  same-sha duplicate — and one bounded `colab ci-wait`; green ⇒ the merge loop carries on.
+  Several jobs dying in the same minute on different runners ⇒ check the host, not the
+  re-run. Only a repeat, or a `red:finding`, is the wall below.
+  Red after that, or dead: **stop the merge loop** and say what would clear
   it, routing to the cure rule (`CONVENTIONS.md` [§5, *Cure rule*](../../CONVENTIONS.md#cure-rule--the-machine-checkable-door-through-trunk-ci-green-281), #281). Continuing
   here is not conservatism, it is spinning: step 1 above re-checks trunk CI per
   candidate, so every remaining ship refuses at the same wall. **Nothing in this section

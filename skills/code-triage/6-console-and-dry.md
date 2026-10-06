@@ -7,9 +7,9 @@ behind them — moved here verbatim (#524).
 
 **This report is console output, not a tracker write.** Print it to whoever is reading this
 session; never post it, or any per-beat summary of it, as an issue comment. §0.2 names the
-eight writes this skill is authorised to make — a narrative verdict is not one of them, even
+nine writes this skill is authorised to make — a narrative verdict is not one of them, even
 when the verdict is genuinely new information. If a group's verdict changed in a way worth
-recording durably, that lands through one of the eight named writes (the label, the evidence
+recording durably, that lands through one of the nine named writes (the label, the evidence
 comment, the plan/lane reason, a transcribed record), never through a fresh prose comment
 invented for the occasion.
 

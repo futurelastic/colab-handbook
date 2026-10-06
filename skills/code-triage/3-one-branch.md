@@ -111,6 +111,6 @@ in descending member count; each rebases onto the new trunk sha **after** the ca
 lands.
 
 **Triage reports this order. It never performs it.** Rebasing, pushing, deleting a ref or
-editing a branch are not among §0.2's eight authorised writes, and they are not writes this
+editing a branch are not among §0.2's nine authorised writes, and they are not writes this
 skill may invent — see §6 for the printed shape, and `code-ship` B0 for the half that
 actually does the landing.
