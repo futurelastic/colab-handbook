@@ -96,6 +96,43 @@ function isIntentSession(s) {
 }
 
 /**
+ * Should a blank session be DERIVED for a person at a plain terminal (#528)? Only when nothing was
+ * said at all: `COLAB_SESSION` is UNSET (an explicit `COLAB_SESSION=''` is a deliberate "present no
+ * identity" and is honoured as one), and the shell is not an agent's (`CLAUDECODE=1` / `AI_AGENT`,
+ * the same signal `place.resolveAnchor` reads). An agent keeps #242's refusal: two concurrent agent
+ * sessions on one machine would derive the SAME person id, and `place.conflict`'s same-holder
+ * exemption would then read one session's hold as the other's — the collision #242 exists to stop.
+ * A person running several units at once from separate shells has the same problem, which is why
+ * the README tells them to give each shell its own `COLAB_SESSION`.
+ */
+function shouldDerivePersonSession(env) {
+  const e = env || {};
+  if (Object.prototype.hasOwnProperty.call(e, 'COLAB_SESSION')) return false;
+  if (e.CLAUDECODE === '1' || e.AI_AGENT) return false;
+  return true;
+}
+
+/**
+ * The derived identity for a person (#528): `person:<who>/<hostToken>`, where `<who>` is git's
+ * `user.email`, else the OS user. The host is the opaque `h:` token (`machine.hostToken`), never
+ * the raw name: this value is written verbatim into claim comments, and a public tracker must not
+ * learn a machine's name from it (#369). Stable across invocations — the same person on the same
+ * machine always derives the same value, which is what a re-acquire needs. '' when no `<who>` or
+ * no host is available: then nothing is derived and the blank-session paths apply unchanged.
+ */
+function derivePersonSession({ email, user, hostToken } = {}) {
+  const who = String(email || '').trim() || String(user || '').trim();
+  const host = String(hostToken || '').trim();
+  if (!who || !host || /\s/.test(who)) return '';
+  return `person:${who}/${host}`;
+}
+
+/** Is `s` a derived person identity (#528)? */
+function isPersonSession(s) {
+  return /^person:\S+$/.test(String(s == null ? '' : s).trim());
+}
+
+/**
  * Are `a` and `b` on the SAME machine (#327)? Both carry a `machine` → compare those (a raw id or
  * the `m:` digest a claim comment carries — `machineToken` makes the two comparable); raw ids of
  * DIFFERENT schemes (one machine resolving `iokit:` in one process and the MAC fallback in another)
@@ -189,4 +226,5 @@ module.exports = {
   DEFAULT_COMPONENTS, FINE_COMPONENTS,
   claimIdentityProblem, components, identityString, sameClaimant, mergeClaimRecord,
   looksLikeSessionId, isIntentSession, sameHost,
+  shouldDerivePersonSession, derivePersonSession, isPersonSession,
 };

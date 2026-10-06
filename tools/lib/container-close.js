@@ -135,7 +135,45 @@ function containerFinding(c) {
   }
 }
 
+/**
+ * `owner/repo` from an issue's web URL (`https://<host>/<owner>/<repo>/issues/<n>`), lowercased —
+ * GitHub slugs are case-insensitive. null when the URL is absent or not that shape.
+ */
+function issueRepoSlug(url) {
+  const m = /^https?:\/\/[^/]+\/([^/]+)\/([^/]+)\/issues\/\d+\/?$/.exec(String(url || '').trim());
+  return m ? `${m[1]}/${m[2]}`.toLowerCase() : null;
+}
+
+/**
+ * Is a native parent in the CHILD's own repository (#502)? A sub-issue may have a parent in another
+ * repository, and `gh issue view <number>` in the child's repo then reads either nothing or an
+ * UNRELATED issue that happens to share the number — one that could be classified, and closed.
+ * So a parent is looked up by number only when both URLs prove it lives where the child does.
+ *
+ * @param {object} childView  the child's view, carrying `url` and `parent` ({ number, url })
+ * @returns {{relation:'same'|'other'|'unknown', slug:string|null, number:number|null}}
+ *   `other` carries the parent's `owner/repo`; `unknown` means a URL was missing or unparseable —
+ *   fail toward leaving the parent alone, the module's asymmetry.
+ */
+function parentRelation(childView) {
+  const parent = childView && childView.parent;
+  const number = parent && Number.isInteger(parent.number) ? parent.number : null;
+  const childSlug = issueRepoSlug(childView && childView.url);
+  const parentSlug = issueRepoSlug(parent && parent.url);
+  if (!childSlug || !parentSlug) return { relation: 'unknown', slug: parentSlug, number };
+  return { relation: childSlug === parentSlug ? 'same' : 'other', slug: parentSlug, number };
+}
+
+/** One report line for a parent that is not looked up in the child's repo (#502); null for `same`. */
+function parentRelationFinding(rel) {
+  const n = rel.number !== null ? `#${rel.number}` : 'parent';
+  if (rel.relation === 'other') return `${rel.slug}${n} is in another repository — not evaluated`;
+  if (rel.relation === 'unknown') return `${n}: could not tell which repository the parent is in (no issue URL) — not evaluated`;
+  return null;
+}
+
 module.exports = {
   EPIC_LABEL, RELEASE_RECORD_RE,
+  issueRepoSlug, parentRelation, parentRelationFinding,
   untickedItems, classifyContainer, containerDeliveryLabels, containerCloseComment, containerFinding,
 };

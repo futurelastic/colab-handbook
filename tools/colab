@@ -228,7 +228,12 @@ function isGhUsable(repoAbs) {
  */
 function ghUnusableWhy(repoAbs) {
   const s = git.ghState();
-  if (!s.ok) return s.reason === 'missing' ? 'gh is not installed' : 'gh has no working credential — `gh api user` fails';
+  if (!s.ok && s.reason === 'missing') return 'gh is not installed';
+  if (!s.ok && s.reason === 'rate-limited') { // #516
+    const until = s.resetAt ? ` until ${new Date(s.resetAt).toISOString().replace(/\.\d{3}Z$/, 'Z')}` : '';
+    return `gh credential is rate-limited${until} — not a credential problem: wait for the reset, or switch account`;
+  }
+  if (!s.ok) return 'gh has no working credential — `gh api user` fails';
   const rp = git.remoteProblem(git.remoteInfo(repoAbs)); // #301: ambiguous remotes / a broken colab.remote
   if (rp) return rp;
   if (!git.remoteUrl(repoAbs)) return 'no origin remote';
@@ -278,11 +283,38 @@ function myMachineId() { return machine.localMachine().id || null; }
 
 /**
  * Resolve the Claude session URL for this invocation: --session flag > COLAB_SESSION env >
- * '' (absent, never an error). Free-form — typically a session URL.
+ * a DERIVED person identity (#528) > '' (absent, never an error). Free-form — typically a session URL.
+ *
+ * The derived step exists for a person at a plain terminal, who has no session runtime and so no
+ * id to pass: without it their first trunk `colab claim` refused (#242's gate), `worktree new`
+ * warned three lines every time, and ship evidence read `implemented by: unknown`. It applies only
+ * when `COLAB_SESSION` is unset and the shell is not an agent's (`claimIdentity.
+ * shouldDerivePersonSession` has why) — an explicit flag or env value always wins.
  */
 function resolveSession(opts) {
-  const s = opts.session || process.env.COLAB_SESSION || '';
-  return String(s).trim();
+  const s = String(opts.session || process.env.COLAB_SESSION || '').trim();
+  return s || derivedPersonSession();
+}
+
+/**
+ * The derived person identity for this invocation, or ''. Memoized — one `git config` spawn, and
+ * the "derived" note is printed once per invocation (stderr, so `--json` stdout stays clean).
+ */
+let derivedSessionCache = null;
+function derivedPersonSession() {
+  if (derivedSessionCache !== null) return derivedSessionCache;
+  derivedSessionCache = '';
+  if (!claimIdentity.shouldDerivePersonSession(process.env)) return derivedSessionCache;
+  const r = spawnSync('git', ['config', '--get', 'user.email'], { encoding: 'utf8' });
+  const email = r.status === 0 ? String(r.stdout || '').trim() : '';
+  let user = process.env.USER || '';
+  if (!user) { try { user = os.userInfo().username; } catch { user = ''; } }
+  derivedSessionCache = claimIdentity.derivePersonSession({ email, user, hostToken: machine.hostToken(HOST) });
+  if (derivedSessionCache) {
+    process.stderr.write(`· session: ${derivedSessionCache} (derived — no --session or COLAB_SESSION given; ` +
+      `either one overrides it)\n`);
+  }
+  return derivedSessionCache;
 }
 
 /**
@@ -5672,7 +5704,8 @@ function cmdWorktreeNew(argv) {
 
   // #488: the scratch dirs (plans, briefs) are hidden in the clone's shared info/exclude — one
   // write covers the main checkout and every worktree, with no per-repo .gitignore diff.
-  ensureScratchExcluded(repoAbs);
+  // #527: and the worktree subdir itself, or trunk's `git add -A` stages this worktree as a gitlink.
+  ensureScratchExcluded(repoAbs, config);
 
   // 5. optional repo hook (machine-specific steps plug in here)
   const hook = runHook(repoAbs, 'post-create', { wtPath, name, branch, ports: alloc.chosenPorts, trunk, base, issues });
@@ -8018,13 +8051,17 @@ function gitExcludePath(repoAbs) {
 /**
  * #488: append the scratch-dir exclude lines (scratch-dirs.js `excludeLines`) to the clone's shared
  * info/exclude, idempotently. Best-effort: a failure warns and never blocks the caller.
+ * #527: `config` given → the worktree subdir's line too (`worktreeExcludeLine`), so whatever creates
+ * the default worktree dir also hides it — an adopted repo's `.gitignore` has never heard of it.
  */
-function ensureScratchExcluded(repoAbs) {
+function ensureScratchExcluded(repoAbs, config = null) {
   const excludeFile = gitExcludePath(repoAbs);
   if (!excludeFile) return [];
   let before = null;
   try { before = fs.readFileSync(excludeFile, 'utf8'); } catch (_) { /* absent */ }
   const lines = scratchDirs.excludeLines();
+  const wtLine = config ? scratchDirs.worktreeExcludeLine(worktreeSubdir(config)) : null;
+  if (wtLine && !lines.includes(wtLine)) lines.push(wtLine);
   const missing = localAdopt.missingExcludeLines(before, lines);
   if (!missing.length) return [];
   try {
@@ -8492,6 +8529,12 @@ async function cmdAdopt(argv) {
   if (opts.local) {
     local = adoptLocalPrepare(repoAbs, opts);
     if (local.exit !== undefined) return local.exit;
+  }
+  // #527: a repo adopted before `worktree new` hid its own dir gets the same exclude lines here —
+  // machine-local (info/exclude), idempotent, never a committed diff. --local already wrote them.
+  if (!opts.local) {
+    const hidden = ensureScratchExcluded(repoAbs, state.loadConfig());
+    if (hidden.length && !opts.json) print(`✓ hid ${hidden.join(' ')} in .git/info/exclude (machine-local)`);
   }
   const io = adoptIo(repoAbs);
   const extra = adoptGitExtras(repoAbs, opts);
@@ -10213,7 +10256,9 @@ It never waits: each call reads the remote, takes ONE step and exits —
      trunk CI red (the cure/grant doors apply per member, never to a batch), fewer than two members
      can join, or the combined run is red — classify it: red:infra → the printed \`gh run rerun\`,
      once; red:finding, or red again after that one re-run → serial
-  1  refused (a broken checkout, an unreadable remote)
+  1  refused (a broken checkout, an unreadable remote) — or the land push was refused while trunk did
+     NOT move (a local pre-push hook, a remote rejection): the push's own output is echoed, and
+     re-running hits the same refusal until its cause is fixed (#509)
 One batch per base: a batch at this base carrying OTHER members is waited on (exit 3) while its run
 is pending or green, but a declined one — its combined run red — is deleted and the batch you asked
 for is built in its place, so the survivors of a decline can batch without landing serially first (#391).
@@ -11872,14 +11917,21 @@ function shipMode(repoAbs, target, branch, commits) {
  */
 function shipCloseSpentContainers(repoAbs, closedIssues, { sha, target } = {}) {
   const seen = new Set();
+  const tr = tracker.forRepo(repoAbs);
   for (const start of closedIssues || []) {
     let child = start;
     for (let depth = 0; depth < 5; depth++) {
-      const view = git.ghIssueView(repoAbs, child, ['parent']);
+      const view = tr.issueView(child, ['parent', 'url']);
       const pnum = view && view.parent && Number.isInteger(view.parent.number) ? view.parent.number : null;
       if (pnum === null || seen.has(pnum)) break;
+      // #502: the parent's NUMBER means something only in the parent's own repository. A cross-repo
+      // parent looked up here would read nothing (a misleading "could not read") or an unrelated
+      // issue sharing the number — which could be classified and closed. Never evaluated from here.
+      const rel = containerClose.parentRelation(view);
+      if (rel.relation === 'other') { print(`  container ${containerClose.parentRelationFinding(rel)} (#502)`); break; }
+      if (rel.relation !== 'same') { warn(`container ${containerClose.parentRelationFinding(rel)}`); break; }
       seen.add(pnum);
-      const parent = git.ghIssueView(repoAbs, pnum, ['number', 'state', 'labels', 'body', 'subIssuesSummary']);
+      const parent = tr.issueView(pnum, ['number', 'state', 'labels', 'body', 'subIssuesSummary']);
       const c = containerClose.classifyContainer(parent || null);
       if (c.verdict !== 'close') {
         const finding = containerClose.containerFinding({ ...c, number: c.number === null ? pnum : c.number });
@@ -11890,7 +11942,7 @@ function shipCloseSpentContainers(repoAbs, closedIssues, { sha, target } = {}) {
       const cm = git.ghIssueComment(repoAbs, pnum, body);
       if (!cm.ok) warnDeferred(`could not post the container-close comment on #${pnum} — left OPEN`);
       if (!cm.ok) break;
-      const r = tracker.forRepo(repoAbs).issueClose(pnum, { reason: 'completed' });
+      const r = tr.issueClose(pnum, { reason: 'completed' });
       if (!r.ok) { warnDeferred(`could not close container #${pnum}: ${(r.stderr || '').split('\n')[0]}`); break; }
       print(`  closed container #${pnum} — all ${c.total} sub-issue(s) closed (#371)`);
       for (const d of containerClose.containerDeliveryLabels(parent.labels)) warn(`container #${pnum} carried ${d} — a container has no deliverable of its own (#371)`);
@@ -13952,9 +14004,28 @@ function shipBatchLand(repoAbs, doc, trunk, remote, base, existing, verdict, opt
     const headNow = git.git(['rev-parse', 'HEAD'], repoAbs).stdout;
     if (headNow === head) git.git(['reset', '--hard', preMergeSha], repoAbs); // #322: our own merge, put back
     release();
-    print(`⏸ ship-batch: trunk moved during land (${git.gitFailureLine(push.stderr)}) — nothing landed; ${trunk} rolled back to ${shortSha(preMergeSha)}.`);
-    print('  Run this command again: it sees the moved trunk and rebuilds the batch on it.');
-    return 3;
+    // #509: a failed push is not proof trunk moved — re-read the remote trunk before saying so.
+    const ls = git.run('git', ['ls-remote', remote, `refs/heads/${trunk}`], { cwd: repoAbs, timeoutMs: 60_000 });
+    const remoteNow = ls.ok ? ((ls.stdout || '').split('\n')[0] || '').split('\t')[0].trim() : null;
+    const why = shipBatch.landPushFailure({ stderr: push.stderr, remoteNow, base });
+    const rolled = `nothing landed; ${trunk} rolled back to ${shortSha(preMergeSha)}`;
+    const echo = () => { for (const l of why.lines) print(`  │ ${l}`); };
+    if (why.kind === 'trunk-moved') {
+      print(`⏸ ship-batch: trunk moved during land (${remote}/${trunk} ${shortSha(base)} → ${shortSha(remoteNow)}) — ${rolled}.`);
+      print('  Run this command again: it sees the moved trunk and rebuilds the batch on it.');
+    } else if (why.kind === 'unreachable') {
+      print(`⏸ ship-batch: the push failed and ${remote}/${trunk} could not be re-read to say why — ${rolled}. The push said:`);
+      echo();
+      print(`  Run this command again once ${remote} answers; it re-reads trunk before deciding anything.`);
+    } else {
+      const who = why.kind === 'remote-rejected'
+        ? `${remote} rejected the update`
+        : 'the push was refused before it reached the remote (a local pre-push hook?)';
+      print(`✗ ship-batch: ${who} — ${remote}/${trunk} did NOT move (still ${shortSha(base)}); ${rolled}. The push said:`);
+      echo();
+      print('  This is not a moved trunk: re-running hits the same refusal. Fix what the output above names, then run this command again.');
+    }
+    return why.exit;
   }
   print('  pushed.');
   deferredCollector = [];
@@ -14189,13 +14260,15 @@ Wait for CI and exit with its outcome. The ONE way to wait for a run: never hand
   --sha <sha>     wait for EVERY repo-owned workflow at the sha (the verdict colab ship reads:
                   newest run per workflow, dynamic workflows dropped — #451/#461; only runs that
                   verify the code, so a post-CI release/deploy run is set aside — #503); a sha
-                  with no run yet counts as pending until the deadline
+                  with no run yet counts as pending until the deadline. An abbreviated sha is
+                  resolved in the repo first, and refused (exit 2) when it does not resolve — #529
   --branch <b>    narrow --sha to runs on that branch
   --timeout <d>   deadline: 45m (default), 90s, 1h, or seconds
 
 Polls at 0s, then +30s, +60s, +120s, +120s … until the deadline. Every poll after the first is a
-conditional request (If-None-Match); a 304 is not counted against the REST rate limit. A 15-minute
-run costs about 10 requests. One wait per run per checkout: a second waiter is refused.
+conditional request (If-None-Match); a 304 is not counted against the REST rate limit. After two
+304s in a row, and on the last poll before the deadline, it re-reads unconditionally: a stale ETag
+can cost one paid call, never the whole wait (#505). A 15-minute run costs about 10 requests. One wait per run per checkout: a second waiter is refused.
 
 Exit codes — branch on these, never on the text:
   0 GREEN            the run (every judged run at the sha) succeeded
@@ -14207,7 +14280,7 @@ Exit codes — branch on these, never on the text:
   6 ALREADY_WAITING  another live ci-wait on this checkout holds the same run/sha
 
 It prints the wait it did: outcome, elapsed time, polls, and how many were 304s.
-  --json   { outcome, exit, target, polls, notModified, waitedSec, detail, status, conclusion, url }`;
+  --json   { outcome, exit, target, polls, notModified, forced, waitedSec, detail, status, conclusion, url }`;
 
 function cmdCiWait(argv) {
   const opts = parseArgs(argv, {
@@ -14223,6 +14296,17 @@ function cmdCiWait(argv) {
   const deadlineSec = opts.timeout !== undefined ? ciWait.parseDuration(opts.timeout) : ciWait.DEFAULT_DEADLINE_SEC;
   if (!deadlineSec) { warn(`--timeout: cannot read "${opts.timeout}" (try 45m, 90s, 1h)`); return ciWait.EXIT.USAGE; }
   const repoAbs = resolveRepo(opts);
+  if (opts.sha) {
+    // #529: the API reports a 40-hex head_sha and the rows are matched by equality, so an
+    // abbreviated --sha would match nothing and wait out the whole deadline as "pending" — on a run
+    // that finished green in minutes. Resolve it here, or refuse; never poll with it.
+    const full = git.fullSha(repoAbs, opts.sha);
+    if (!full) {
+      warn(`--sha ${opts.sha}: not a full 40-hex sha and it does not resolve to one commit in ${repoAbs} — pass the full sha (\`git rev-parse <sha>\`), or fetch first`);
+      return ciWait.EXIT.USAGE;
+    }
+    opts.sha = full;
+  }
   if (!git.ghInstalled()) { warn('gh is not installed — cannot read CI'); return ciWait.EXIT.UNKNOWN; }
 
   const target = runId ? `run ${runId}` : `sha ${shortSha(opts.sha)}${opts.branch ? ` on ${opts.branch}` : ''}`;
@@ -14261,7 +14345,7 @@ function cmdCiWait(argv) {
   try {
     res = ciWait.waitLoop({
       poll, sleep: ciWait.sleepSync, deadlineSec,
-      onPoll: (p) => { if (!opts.json) process.stderr.write(`ci-wait: poll ${p.poll} at +${ciWait.fmtDuration(p.elapsedMs)} — ${p.state}${p.notModified ? ' (304, not counted)' : ''}\n`); },
+      onPoll: (p) => { if (!opts.json) process.stderr.write(`ci-wait: poll ${p.poll} at +${ciWait.fmtDuration(p.elapsedMs)} — ${p.state}${p.notModified ? ' (304, not counted)' : ''}${p.forced ? ' (unconditional re-read — #505)' : ''}\n`); },
     });
   } finally {
     lock.release();
@@ -14269,7 +14353,7 @@ function cmdCiWait(argv) {
   const s = (res.last && res.last.summary) || {};
   const code = ciWait.EXIT[res.outcome];
   const out = {
-    outcome: res.outcome, exit: code, target, polls: res.polls, notModified: res.notModified,
+    outcome: res.outcome, exit: code, target, polls: res.polls, notModified: res.notModified, forced: res.forced,
     waitedSec: Math.round(res.waitedMs / 1000), detail: res.detail || null,
     status: s.status || null, conclusion: s.conclusion || null, url: s.url || null,
     ...(Array.isArray(s.setAside) && s.setAside.length ? { setAside: s.setAside } : {}),

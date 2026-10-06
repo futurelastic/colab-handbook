@@ -190,3 +190,21 @@ test('#415 notStaged: requested branches the staged batch does not carry, in req
   assert.deepStrictEqual(sb.notStaged(['fix/c-13', 'fix/c-13'], []), ['fix/c-13']);
   assert.deepStrictEqual(sb.notStaged(null, staged), []);
 });
+
+test('#509 landPushFailure: re-read remote decides "moved"; stderr decides refusal vs rejection', () => {
+  const hook = 'ERR_MODULE_NOT_FOUND x\nerror: failed to push some refs to \'/o.git\'\n';
+  const T = 'a'.repeat(40);
+  const M = 'b'.repeat(40);
+  assert.deepStrictEqual(sb.landPushFailure({ stderr: hook, remoteNow: T, base: T }),
+    { kind: 'push-refused', exit: 1, lines: ['ERR_MODULE_NOT_FOUND x'] });
+  const rej = ' ! [remote rejected] main -> main (protected branch hook declined)\nerror: failed to push some refs to \'o\'';
+  assert.strictEqual(sb.landPushFailure({ stderr: rej, remoteNow: T, base: T }).kind, 'remote-rejected');
+  const nff = ' ! [rejected]        main -> main (fetch first)\nerror: failed to push some refs to \'o\'';
+  assert.deepStrictEqual(sb.landPushFailure({ stderr: nff, remoteNow: M, base: T }).exit, 3);
+  assert.strictEqual(sb.landPushFailure({ stderr: nff, remoteNow: M, base: T }).kind, 'trunk-moved');
+  assert.strictEqual(sb.landPushFailure({ stderr: 'fatal: unable to access', remoteNow: null, base: T }).kind, 'unreachable');
+  // only git's generic trailer → it is kept rather than echoing nothing
+  assert.deepStrictEqual(sb.landPushFailure({ stderr: 'error: failed to push some refs to \'o\'', remoteNow: T, base: T }).lines,
+    ['error: failed to push some refs to \'o\'']);
+  assert.strictEqual(sb.landPushFailure({ stderr: Array(20).fill('x').join('\n'), remoteNow: T, base: T }).lines.length, 8);
+});
