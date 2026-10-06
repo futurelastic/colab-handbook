@@ -5011,6 +5011,14 @@ chosen over the two alternatives:
 The filing obligation still sits with the change. `handbook-sync` is where a skipped one
 gets found (`skills/handbook-sync/SKILL.md` §7).
 
+### Refusals name the next command (#532)
+
+**[Hard — gate: refusal-sites test]** **Every refusal `colab` prints ends with the exact next command
+that gets the user forward**, or says plainly that no command can and who decides. "Retry later"
+counts only when it names what to wait for, and an interactive flow checks each answer when it is
+given. `tools/lib/refusal-sites.test.js` fails on a new refusal without one; older refusals are
+listed in `tools/lib/refusal-sites.known.json`, which only shrinks. Why: [ADR 532](docs/adr/532-refusals-name-the-next-command.md).
+
 ### The fleet registry is private
 
 The list of repos the audit sweeps lives at `~/.colab/repos.txt`, machine-local, never

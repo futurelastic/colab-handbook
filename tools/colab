@@ -8381,7 +8381,9 @@ async function askMenu(rl, axis, promptFn) {
     if (resolved.ok) return resolved;
     process.stdout.write(`  ${resolved.message}\n`);
   }
-  throw new UserError(`${axis}: no valid answer after one re-prompt`);
+  throw new UserError(`${axis}: no valid answer after one re-prompt — nothing was written. Run \`colab adopt --axis ${axis}\` ` +
+    `to be asked again, or pass the value directly: \`colab adopt ${axis === 'tier' ? '--deploy' : `--${axis}`} <value>\` ` +
+    `(\`colab adopt --help\` lists them).`);
 }
 
 /**
@@ -8441,7 +8443,10 @@ async function adoptAskInteractive(rl, axesToAsk, cfg, checkExposure) {
         if (!problem) { chosen = resolved; break; }
         process.stdout.write(`  ✗ ${problem}\n  choose again (or skip):\n`);
       }
-      if (!chosen) throw new UserError('exposure: no answer this repo\'s shape supports after one re-prompt');
+      // #532: this refusal comes after a long interaction, so it names the way through, not just the stop.
+      if (!chosen) throw new UserError('exposure: no answer this repo\'s shape supports after one re-prompt — nothing was written. ' +
+        'Each "✗" above says why its value was refused. Run `colab adopt --axis exposure` and pick a value it accepts, ' +
+        'or `colab adopt --exposure <value>` non-interactively; choosing "skip" leaves exposure unanswered for now.');
       if (chosen.skip) continue; // decline — the fallback tier derivation picks this up
       answers.exposure = { values: { exposure: chosen.value }, mode: 'interactive' };
     } else {
