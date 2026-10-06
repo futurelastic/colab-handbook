@@ -202,10 +202,10 @@ Full text: [3-touches.md](3-touches.md).
 
 ## 4. Order by blast radius, not by number
 
-**Rule:** rank surviving groups — 1 blocks other work, 2 reaches users (by `exposure`; a bare
-legacy `tier: B` gives no signal), 3 cheap and unblocking, 4 everything else — then push every
-`low-priority` group to the back. A human's recorded queue order outranks yours among the
-groups it names, never as an edge. State each rank's reason. Full text: [4-order.md](4-order.md).
+**Rule:** band `priority:now` › `priority:high` › unlabelled › `low-priority` (#537); within a
+band rank 1 blocks other work, 2 reaches users (by `exposure`; bare legacy `tier: B` gives no
+signal), 3 cheap and unblocking, 4 the rest — each with its reason. A band orders, never admits. A human's recorded
+queue order outranks yours among groups it names, never as an edge. Full text: [4-order.md](4-order.md).
 
 ### Then write the dependencies down — as relationships, not just as report prose
 
@@ -393,8 +393,8 @@ Hand the top group to **code-start**, which will re-verify the claim before taki
   got `mechanical-lane` on its lead issue plus a one-line reason and suggested batch
   size, and a `mechanical:` line in the §6 report — and, same as `needs-plan`, it landed
   on the minority actually both mechanical and oracle-checkable, not on every group.
-- Every `low-priority` group was ranked last in §4's list — never off it, never sorted
-  by its own blast-radius reasoning alone — and carries a `priority:` line in the §6
-  report; §5's readiness gate treated it exactly like any other group.
+- Every `priority:now`/`priority:high` group was banded first and every `low-priority` group
+  last in §4's list — never off it, never sorted by blast radius alone — each with a
+  `priority:` line in §6; §5's readiness gate treated them like any other group.
 - Anything surprising — a stale claim, a dead trunk CI, an epic whose table
   contradicts its title — is **reported**, not silently worked around.

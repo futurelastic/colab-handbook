@@ -29,8 +29,9 @@ gh issue view <lead-issue> --json labels -q '.labels[].name' | grep -qx low-prio
   label moves its position, it does not erase the reasoning that would otherwise have
   ranked it higher.
 - **Report it — one extra `priority:` line in §6, same shape as `mechanical:`.**
-  Absent from every group not carrying the label — same discipline as `mechanical:`,
-  present only on the minority that earns it.
+  Absent from every group carrying no priority label — same discipline as `mechanical:`,
+  present only on the minority that earns it. `priority:now` / `priority:high` print the
+  same line with their own band (§4, #537).
 - **A driver implementing the veto reading must say so where this check can be
   compared against it** — never leave the driver silently skipping what this report
   called ready. That disagreement is a finding to surface, not a difference to paper

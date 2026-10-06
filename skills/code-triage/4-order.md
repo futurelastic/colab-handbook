@@ -5,7 +5,22 @@ condition; this file holds the step's full text — the commands, edge cases and
 behind them — moved here verbatim (#524).
 
 
-Rank the surviving groups:
+**Rank by owner priority first, before blast radius (#537).** Read the lead issue's labels:
+`priority:now` groups first, then `priority:high`, then everything unlabelled, then
+`low-priority` last. Blast radius (the four ranks below) orders groups *within* each band,
+never across one. The rank orders; it never admits — a `priority:now` group that §5 holds
+(an open blocker, a held file, a claim) stays out of READY, and its held file drains rather
+than being overridden: the holder ships first. When the issue itself shows a `priority:*` label was
+applied by an agent on its own initiative — not by the owner or a coordinator (`CONVENTIONS.md` [§5](../../CONVENTIONS.md#priority--a-throttle-not-a-veto-268), *Priority*) — that is a finding to report; rank by it
+anyway, never strip it yourself. You may *propose* a band on leverage alone (unblocks many,
+splits a held file, fixes CI on a throttled repo) — `high` at most, never `now` — in the
+group's `why:` line; proposing is not applying the label.
+
+```sh
+gh issue view <lead-issue> --json labels -q '.labels[].name' | grep -xE 'priority:(now|high)|low-priority'
+```
+
+Then, within each band, rank the surviving groups:
 
 1. **Blocks other work** — a bug in a shared engine, a broken trunk, a stale claim
    nobody can get past. These unblock people, so they pay twice.
@@ -23,8 +38,8 @@ Rank the surviving groups:
 3. **Cheap and unblocking** — small work that lets something bigger start.
 4. **Everything else** — by whatever the humans care about.
 
-**Then push every `low-priority` group to the back, after all four ranks above are
-applied — never sorted in among them.** It is a throttle on position, not an input to
+**`low-priority` is the last band — every `low-priority` group goes to the back, after all
+four ranks above are applied — never sorted in among them.** It is a throttle on position, not an input to
 blast radius; see *Then rank low-priority groups last*, below §5, for the full check
 and what the report says about it.
 
