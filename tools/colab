@@ -11087,7 +11087,7 @@ function applyRedTrunkExemptions(raw, target, trunk, redSha, grantThunk, cureThu
     return {
       name: raw.name, ok: true, class: null,
       detail: `PRECONDITION OVERRIDDEN by the cure rule (#281) — branch contains red ${shortSha(redSha)} and is green at its own head${via}${viaDry} (raw: ${raw.detail})`,
-      grantVerdict: null, cureVerdict,
+      grantVerdict: null, cureVerdict, redSha,
     };
   }
 
@@ -11102,10 +11102,45 @@ function applyRedTrunkExemptions(raw, target, trunk, redSha, grantThunk, cureThu
     return {
       name: raw.name, ok: true, class: null,
       detail: `PRECONDITION OVERRIDDEN by ${who} on ${by} — trunk was red at ${shortSha(redSha)} (raw: ${raw.detail})`,
-      grantVerdict, cureVerdict,
+      grantVerdict, cureVerdict, redSha,
     };
   }
-  return { ...raw, grantVerdict, cureVerdict };
+  // #534: both doors were consulted and both refused — say WHY on the row itself, so the prose table,
+  // `--dry`, and B1's abort line all tell "needs a grant" from "missing evidence" from "stacked". The
+  // JSON payload already carried `ciCure.reason`; the prose detail used to end at the raw trunk read.
+  return { ...raw, detail: `${raw.detail}${doorRefusalNote(cureVerdict, grantVerdict)}`, grantVerdict, cureVerdict, redSha };
+}
+
+/**
+ * Which red-trunk door let a trunk-CI row pass — `'cure rule'`, `'ci-grant'`, or null for a row that
+ * passed on its own (green) or did not pass (#538: B1 re-measures only a door the table relied on).
+ */
+function doorThatAdmitted(ciResult) {
+  if (!ciResult || !ciResult.ok) return null;
+  if (ciResult.cureVerdict && ciResult.cureVerdict.ok) return 'cure rule';
+  if (ciResult.grantVerdict && ciResult.grantVerdict.ok) return 'ci-grant';
+  return null;
+}
+
+/** #538: the pause before B1's one re-measure — long enough for a transient `gh` failure to clear. */
+const B1_REMEASURE_MS = Number.isFinite(Number(process.env.COLAB_B1_REMEASURE_MS))
+  && process.env.COLAB_B1_REMEASURE_MS !== '' ? Number(process.env.COLAB_B1_REMEASURE_MS) : 3000;
+
+/**
+ * The " — cure rule (#281): …; ci-grant (#105): …" suffix of a refused trunk-CI row (#534). Empty
+ * when neither door was consulted. One clause per door, each its own refusal reason verbatim — the
+ * cure's `reason`, the grant's per-issue `missing[].reason` — never a re-wording, so the prose and
+ * the `--dry --json` fields cannot read differently.
+ */
+function doorRefusalNote(cureVerdict, grantVerdict) {
+  const parts = [];
+  if (cureVerdict && !cureVerdict.ok && cureVerdict.reason) parts.push(`cure rule (#281): ${cureVerdict.reason}`);
+  if (grantVerdict && !grantVerdict.ok) {
+    const why = (grantVerdict.missing || []).map((m) => (m.issue ? `#${m.issue}: ` : '') + m.reason)
+      .map((s) => s.replace(/^(#\d+): \1/, '$1')).join('; ');
+    if (why) parts.push(`ci-grant (#105): ${why}`);
+  }
+  return parts.length ? ` — ${parts.join(' · ')}` : '';
 }
 
 /**
@@ -13146,12 +13181,29 @@ function cmdShip(argv) {
   let ciGrantForTrailer = null; // #105: set below when B1 shipped UNDER a grant — read at commit-message time
   let ciCureForTrailer = null; // #281: set below when B1 shipped UNDER the cure rule — read at commit-message time
   if (gh) {
-    const ciResultB1 = shipCiCheck(repoAbs, gh, target, trunk,
+    const measureB1 = () => shipCiCheck(repoAbs, gh, target, trunk,
       (redSha) => shipCiGrants(repoAbs, gh, sess.issues, sess.branch, trunk, redSha),
       (redSha) => shipCiCure(repoAbs, gh, target, trunk, redSha, sess.branch), sess.branch);
+    let ciResultB1 = measureB1();
+    // #538: the table admitted this branch through a door (cure or grant) at red sha X, and B1 —
+    // seconds later, at the SAME red sha — refused. Nothing the door judges moved (trunk's head is
+    // X in both reads), so the likeliest cause is one of the ~10 `gh` reads a door makes failing
+    // once, which every door reads as a refusal (fail closed). Measured: `--dry` said READY and the
+    // real ship aborted here with only the raw "conclusion=failure". Re-measure ONCE, in full —
+    // never reuse the table's verdict (B1 exists to catch a change) — and if it refuses again, abort
+    // saying it was the door, with the door's own reason.
+    const tableDoor = doorThatAdmitted(ciResult);
+    if (!ciResultB1.ok && tableDoor && ciResultB1.redSha && ciResultB1.redSha === ciResult.redSha) {
+      warn(`  B1: the ${tableDoor} admitted this branch in the table at ${target}@${shortSha(ciResult.redSha)} but refused on the re-check at the same sha — re-measuring once (a failed read refuses).`);
+      ciWait.sleepSync(B1_REMEASURE_MS);
+      ciResultB1 = measureB1();
+    }
     if (!ciResultB1.ok) {
       cleanupEphemeral();
-      process.stderr.write(`✗ B1: CI for ${target} is no longer green — aborting before merge. Nothing pushed. (${ciResultB1.detail})\n`);
+      const sameRed = tableDoor && ciResultB1.redSha && ciResultB1.redSha === ciResult.redSha;
+      process.stderr.write(sameRed
+        ? `✗ B1: the ${tableDoor} admitted this branch in the precondition table, then refused twice on the re-check at the same ${target}@${shortSha(ciResult.redSha)} — aborting before merge. Nothing pushed. (${ciResultB1.detail})\n`
+        : `✗ B1: CI for ${target} is no longer green — aborting before merge. Nothing pushed. (${ciResultB1.detail})\n`);
       return 1;
     }
     if (ciResultB1.cureVerdict && ciResultB1.cureVerdict.ok) {
