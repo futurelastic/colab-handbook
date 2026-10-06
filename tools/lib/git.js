@@ -447,8 +447,9 @@ function dirtyAny(wtPath) {
 
 /**
  * #344: is gh usable — and if not, WHY. `{ ok, reason }`, reason `null` | `'missing'` (no gh binary)
- * | `'no-credential'` (gh is there, but the credential it would actually use does not work). Cached
- * per process.
+ * | `'no-credential'` (gh is there, but the credential it would actually use does not work)
+ * | `'rate-limited'` (#516: the credential works, its quota is spent — `resetAt` epoch ms or null).
+ * Cached per process.
  *
  * A bare `gh auth status` is the wrong question: it exits 1 when ANY configured account is broken,
  * even when the one gh actually uses is fine (measured: a valid `GH_TOKEN` plus an expired, inactive
@@ -469,7 +470,27 @@ function ghState() {
     if (_ghLogin === undefined) _ghLogin = who.stdout;
     return (_ghState = { ok: true, reason: null });
   }
+  // #516: a spent QUOTA is not a broken credential. `gh api user` answers 403/429 "API rate limit
+  // exceeded" (or a "secondary rate limit") for a token that is perfectly valid — and `gh auth status`
+  // then calls it invalid too. Reported as `no-credential`, that sent an operator hunting a broken
+  // token when the cure is to wait for the reset or switch account. Classified by the SAME rule
+  // ci-wait reads a REST response with (#495), so both name a rate limit identically.
+  const status = /\bHTTP (\d{3})\b/.exec(who.stderr || '');
+  const cls = require('./ci-wait').classifyResponse({ status: status ? Number(status[1]) : null, stderr: who.stderr || '' });
+  if (cls.kind === 'rate-limited') return (_ghState = { ok: false, reason: 'rate-limited', resetAt: ghRateLimitReset() });
   return (_ghState = { ok: false, reason: 'no-credential' });
+}
+
+/**
+ * #516: when the REST core quota resets, as epoch ms — or null when it cannot be read or is not the
+ * limit in force (quota left means a SECONDARY rate limit, whose end GitHub does not publish).
+ * `GET /rate_limit` does not count against the quota, so it answers even while `api user` cannot.
+ */
+function ghRateLimitReset() {
+  const r = gh(['api', 'rate_limit', '-q', '.resources.core | "\\(.remaining) \\(.reset)"']);
+  const m = r.ok ? /^(\d+)\s+(\d+)$/.exec((r.stdout || '').trim()) : null;
+  if (!m || Number(m[1]) > 0) return null;
+  return Number(m[2]) * 1000;
 }
 
 function ghAvailable() {

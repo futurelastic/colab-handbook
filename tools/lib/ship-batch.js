@@ -282,9 +282,41 @@ function serialLine(branches) {
   return `→ SERIAL: ${list.map((b) => `colab ship --branch ${b}`).join(' · ') || '(no members)'}`;
 }
 
+/**
+ * #509: WHY the land step's fast-forward push failed — asked before anything is reported. The push
+ * is the atomic "trunk has not moved" check, but a failed push is not proof trunk moved: a local
+ * `pre-push` hook can refuse it, and a remote can reject it for reasons of its own (protection, a
+ * pre-receive hook). Reporting those as "trunk moved — run again" sent an unattended caller into a
+ * retry loop against a deterministic refusal, under the exit code a scheduler reads as a pause.
+ *
+ * Facts in: the push's stderr, the remote trunk sha re-read AFTER the failure (null = could not
+ * read), and `base` — the trunk sha the batch was built on. Decision out:
+ *
+ *   trunk-moved      the remote trunk is no longer `base` — the existing pause-and-rebuild (exit 3)
+ *   unreachable      the remote could not be re-read — nothing is provable; a pause (exit 3), with
+ *                    the push's own output, never the "trunk moved" claim
+ *   remote-rejected  trunk did not move and the remote refused the update ("[remote rejected]") —
+ *                    deterministic until a human acts: exit 1, no "run again"
+ *   push-refused     trunk did not move and the remote said nothing — the push never reached it,
+ *                    which is what a refusing local `pre-push` hook looks like: exit 1, no "run again"
+ *
+ * `lines` is the push's stderr trimmed to its first `max` non-empty lines, minus git's generic
+ * "failed to push some refs" trailer — the hook's or the remote's own words are the diagnosis.
+ */
+function landPushFailure({ stderr, remoteNow, base, max = 8 } = {}) {
+  const all = String(stderr || '').split('\n').map((l) => l.replace(/\s+$/, '')).filter((l) => l.trim());
+  const telling = all.filter((l) => !/^error: failed to push some refs to /.test(l));
+  const lines = (telling.length ? telling : all).slice(0, max);
+  const now = remoteNow ? String(remoteNow).trim() : '';
+  if (!now) return { kind: 'unreachable', exit: 3, lines };
+  if (!base || now !== String(base).trim()) return { kind: 'trunk-moved', exit: 3, lines };
+  if (all.some((l) => /\[remote rejected\]/.test(l))) return { kind: 'remote-rejected', exit: 1, lines };
+  return { kind: 'push-refused', exit: 1, lines };
+}
+
 module.exports = {
   MAX_BATCH, REF_PREFIX, PROBE_REF, TRAILER_KEY,
   parseShipBatch, batchRefName, parseBatchRef, memberTrailer, parseMemberTrailers,
   branchCiClass, memberEligibility, selectMembers, wiring, combinedVerdict, nextStep, foreignBatchStep,
-  batchGreenCoversTrunk, evidenceSuffix, serialLine, notStaged,
+  batchGreenCoversTrunk, evidenceSuffix, serialLine, notStaged, landPushFailure,
 };

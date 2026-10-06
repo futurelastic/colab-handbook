@@ -115,9 +115,13 @@ function shipChild(fx, num) {
   return colab(fx, ['ship', '--branch', `fix/child-${num}`, '--repo', fx.work]);
 }
 
-const child = (parent) => ({ state: 'OPEN', labels: [], comments: [], parent: parent ? { number: parent } : null });
+const URL = (n, slug = 'org/repo-a') => `https://github.com/${slug}/issues/${n}`;
+const ref = (n, slug) => ({ number: n, url: URL(n, slug) });
+const child = (parent, n = 70) => ({
+  url: URL(n), state: 'OPEN', labels: [], comments: [], parent: parent ? ref(parent) : null,
+});
 const epic = (n, over = {}) => ({
-  number: n, state: 'OPEN', labels: [{ name: 'epic' }], body: '## Goal\n\ncontainer\n',
+  number: n, url: URL(n), state: 'OPEN', labels: [{ name: 'epic' }], body: '## Goal\n\ncontainer\n',
   subIssuesSummary: { total: 2, completed: 2 }, parent: null, ...over,
 });
 
@@ -155,7 +159,7 @@ test('#371: an epic still listing an unticked item is a finding, never closed', 
 });
 
 test('#371: an epic of epics empties bottom-up — the grandparent closes too', () => {
-  const fx = fixture({ 70: child(40), 40: epic(40, { parent: { number: 30 } }), 30: epic(30) });
+  const fx = fixture({ 70: child(40), 40: epic(40, { parent: ref(30) }), 30: epic(30) });
   const r = shipChild(fx, 70);
   assert.strictEqual(r.code, 0, r.out + r.err);
   assert.match(ghLog(fx), /issue close 40 --reason completed/);
@@ -164,7 +168,7 @@ test('#371: an epic of epics empties bottom-up — the grandparent closes too', 
 });
 
 test('#371: the evidence-close (zero-diff) path closes the container too', () => {
-  const fx = fixture({ 71: { ...child(40), comments: [{ body: 'fixture: delivered by hand' }] }, 40: epic(40) });
+  const fx = fixture({ 71: { ...child(40, 71), comments: [{ body: 'fixture: delivered by hand' }] }, 40: epic(40) });
   fx.g(fx.work, 'branch', 'docs/decision-71');
   colab(fx, ['claim', '71', '--branch', 'docs/decision-71', '--repo', fx.work]);
   const r = colab(fx, ['ship', '--branch', 'docs/decision-71', '--repo', fx.work]);
@@ -172,4 +176,24 @@ test('#371: the evidence-close (zero-diff) path closes the container too', () =>
   assert.match(r.out, /evidence-close/);
   assert.match(ghLog(fx), /issue close 71 --reason completed/);
   assert.match(ghLog(fx), /issue close 40 --reason completed/);
+});
+
+test('#502: a parent in ANOTHER repository is reported and never looked up by number here', () => {
+  // the child's repo has its own #68 — a spent epic that must never be read, classified or closed
+  const fx = fixture({ 70: { ...child(null), parent: ref(68, 'org/repo-b') }, 68: epic(68) });
+  const r = shipChild(fx, 70);
+  assert.strictEqual(r.code, 0, r.out + r.err);
+  assert.match(r.out, /container org\/repo-b#68 is in another repository — not evaluated/);
+  assert.doesNotMatch(r.out + r.err, /could not read the parent/);
+  assert.doesNotMatch(ghLog(fx), /issue view 68\b/);
+  assert.doesNotMatch(ghLog(fx), /issue (comment|close) 68\b/);
+});
+
+test('#502: a parent with no URL to place it is skipped as unknown, never looked up by number', () => {
+  const fx = fixture({ 70: { ...child(null), parent: { number: 40 } }, 40: epic(40) });
+  const r = shipChild(fx, 70);
+  assert.strictEqual(r.code, 0, r.out + r.err);
+  assert.match(r.err, /#40: could not tell which repository the parent is in/);
+  assert.doesNotMatch(ghLog(fx), /issue view 40\b/);
+  assert.doesNotMatch(ghLog(fx), /issue close 40\b/);
 });
