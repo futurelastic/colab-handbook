@@ -228,7 +228,12 @@ function isGhUsable(repoAbs) {
  */
 function ghUnusableWhy(repoAbs) {
   const s = git.ghState();
-  if (!s.ok) return s.reason === 'missing' ? 'gh is not installed' : 'gh has no working credential — `gh api user` fails';
+  if (!s.ok && s.reason === 'missing') return 'gh is not installed';
+  if (!s.ok && s.reason === 'rate-limited') { // #516
+    const until = s.resetAt ? ` until ${new Date(s.resetAt).toISOString().replace(/\.\d{3}Z$/, 'Z')}` : '';
+    return `gh credential is rate-limited${until} — not a credential problem: wait for the reset, or switch account`;
+  }
+  if (!s.ok) return 'gh has no working credential — `gh api user` fails';
   const rp = git.remoteProblem(git.remoteInfo(repoAbs)); // #301: ambiguous remotes / a broken colab.remote
   if (rp) return rp;
   if (!git.remoteUrl(repoAbs)) return 'no origin remote';
