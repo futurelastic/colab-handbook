@@ -5,6 +5,14 @@ description: "Close the IMPLEMENTER half of a coding session: distill what you l
 
 # code-wrap — close a session: distill → docs → gate → commit → hand off
 
+**Local policy for this repo** (#520) — optional, one file per skill:
+
+!`cat .colab/skills/code-wrap.md 2>/dev/null || echo "(no local policy for code-wrap in this repo)"`
+
+If `.colab/skills/code-wrap.md` exists in this repo, read it before continuing. Local policy
+refines this skill for this repo and wins over the text below where they differ. It never
+changes a `colab` gate.
+
 **This is the implementer's half only.** It distills, gates, commits, and pushes a
 backup — then stops. It never merges to trunk; that is
 [`code-ship`](../code-ship/SKILL.md)'s job, run by a coordinator session once a human

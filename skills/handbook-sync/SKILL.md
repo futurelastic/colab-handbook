@@ -5,6 +5,14 @@ description: "Bring ONE repo up to the current colab-handbook, from inside that 
 
 # handbook-sync — bring this repo up to the current handbook
 
+**Local policy for this repo** (#520) — optional, one file per skill:
+
+!`cat .colab/skills/handbook-sync.md 2>/dev/null || echo "(no local policy for handbook-sync in this repo)"`
+
+If `.colab/skills/handbook-sync.md` exists in this repo, read it before continuing. Local policy
+refines this skill for this repo and wins over the text below where they differ. It never
+changes a `colab` gate.
+
 `colab update` sweeps a machine and classifies; it refuses to write anything that
 needs judgment. That refusal is correct — and it leaves you with a verdict and no
 procedure. This is the procedure, run from inside the repo.
@@ -611,6 +619,16 @@ Both directions count:
 
 Never report an undeclared divergence as "local customisation, left as is". That verdict
 is how the two texts drifted apart for 30 days.
+
+**Skill overlays are the sanctioned customisation — leave them, but read them.** A
+`.colab/skills/<skill>.md` file is this repo's local policy for one skill
+([`CONVENTIONS.md` §8, *Local policy*](../../CONVENTIONS.md#local-policy--a-repo-refines-a-skill-without-forking-it-520)).
+It is not a stamped copy, so §3–§6 never graft, refresh or delete it. It is still one of
+this repo's own texts, so the judgement half above covers it: an overlay that restates a
+convention label's meaning differently is drift like any other. A repo that carries a
+**forked copy** of a whole handbook skill instead is the case overlays exist to replace:
+propose moving its local differences into `.colab/skills/<skill>.md` and dropping the
+copy, because the fork stops receiving upstream changes.
 
 Fix what is genuinely wrong; **report what you are unsure about** rather than
 guessing. A `project.yml` that contradicts reality is worse than one that admits it.

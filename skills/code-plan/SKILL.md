@@ -5,6 +5,14 @@ description: "Draft a full (rung-2) implementation plan for a hard Issue, into t
 
 # code-plan — draft the rung-2 plan a hard Issue needs before code starts
 
+**Local policy for this repo** (#520) — optional, one file per skill:
+
+!`cat .colab/skills/code-plan.md 2>/dev/null || echo "(no local policy for code-plan in this repo)"`
+
+If `.colab/skills/code-plan.md` exists in this repo, read it before continuing. Local policy
+refines this skill for this repo and wins over the text below where they differ. It never
+changes a `colab` gate.
+
 Runs **inside an implementing session**, either right after
 [`code-start`](../code-start/SKILL.md) reads a `needs-plan` flag, or mid-session when a
 rung-1 stub hits an escalation trigger. It never runs on its own — there is no session to

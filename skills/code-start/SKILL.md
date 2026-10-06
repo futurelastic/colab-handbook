@@ -7,6 +7,14 @@ runs code-plan when set, else writes a 3-5 line plan-lite stub. Pairs with code-
 
 # code-start — open a session: read marker → load Issue → claim → branch
 
+**Local policy for this repo** (#520) — optional, one file per skill:
+
+!`cat .colab/skills/code-start.md 2>/dev/null || echo "(no local policy for code-start in this repo)"`
+
+If `.colab/skills/code-start.md` exists in this repo, read it before continuing. Local policy
+refines this skill for this repo and wins over the text below where they differ. It never
+changes a `colab` gate.
+
 The goal is to spend as little context as possible. The Issue is the feature's
 external memory: one `gh issue view` reloads the plan and hard-won knowledge, so
 you never re-read the whole codebase. Claim before you start so two sessions

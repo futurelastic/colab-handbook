@@ -191,6 +191,22 @@ By hand, the same steps (full checklist:
 
 Pre-existing branches are **grandfathered**. Do not rename anything.
 
+## Customising a skill for your repo
+
+Want a skill to behave differently in one repo — Issue comments in Japanese, an
+extra check before wrap? Do not fork the skill: a fork stops receiving handbook
+updates. Write the difference in `.colab/skills/<skill>.md` (for example
+`.colab/skills/code-wrap.md`), in plain prose. Every skill reads that file
+before its own steps, and what it says wins over the skill's text for that repo.
+It never loosens a `colab` gate: a refused claim or merge stays refused.
+
+Claude Code loads the file into the skill automatically. Other engines get a
+plain sentence in each skill telling the agent to read the file, which works
+without any engine support. Because the file instructs agents, a change to it
+is never treated as docs-only: it merges on `auto-trunk` or a human's go, like a
+`CLAUDE.md` change. Rule:
+[`CONVENTIONS.md` §8, *Local policy*](CONVENTIONS.md#local-policy--a-repo-refines-a-skill-without-forking-it-520).
+
 ## Optional automation on top
 
 Nothing here assumes a dashboard, scheduler or bot exists. An adopter may still

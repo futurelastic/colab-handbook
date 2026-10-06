@@ -5,6 +5,14 @@ description: "Close the COORDINATOR half of a coding session, authorized: verify
 
 # code-ship — merge a wrapped session: verify hand-off → grade → CI → squash → evidence → release → teardown
 
+**Local policy for this repo** (#520) — optional, one file per skill:
+
+!`cat .colab/skills/code-ship.md 2>/dev/null || echo "(no local policy for code-ship in this repo)"`
+
+If `.colab/skills/code-ship.md` exists in this repo, read it before continuing. Local policy
+refines this skill for this repo and wins over the text below where they differ. It never
+changes a `colab` gate.
+
 This is the **coordinator's** half of closing a session — [`code-wrap`](../code-wrap/SKILL.md)
 is the implementer's. Where that skill asserts a checklist and stops, this one verifies
 the checklist independently and then performs the merge once authorized — see *Principle*

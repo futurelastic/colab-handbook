@@ -155,8 +155,8 @@ a refusal means a human finishes, not that you improvise around it. Raw
 `git push` to the trunk is blocked by hook regardless. **Without that grant,
 `colab ship` still completes Phase B for a docs-only change** — every changed
 path `.md`/`.mdx`/`.txt` or under a top-level `docs/`, none of them agent rules
-or config (`CLAUDE.md`, `AGENTS.md`, `.claude/`, `.github/`, `.githooks/`), no
-binary, no symlink, not empty. Ship computes this from the diff; you never
+or config (`CLAUDE.md`, `AGENTS.md`, `.claude/`, `.github/`, `.githooks/`,
+`.colab/skills/`), no binary, no symlink, not empty. Ship computes this from the diff; you never
 assert it, and every other precondition still applies
 ([§2](CONVENTIONS.md#autonomy--the-docs-only-exception-345)). Neither exception
 extends to promotion, tags, or anything that deploys: neither `auto-trunk` nor
