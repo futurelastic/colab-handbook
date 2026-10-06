@@ -229,6 +229,14 @@ jobs:
           echo stray > templates/zz-planted-stray.local
           if node scripts/check-pack-allowlist.mjs; then echo "gate passed with a planted stray file"; exit 1; fi
           rm -f templates/zz-planted-stray.local
+      # The normative documents (#523): every rule in docs/rule-inventory.md is still where its row
+      # says, every hard rule carries its marker and names a gate literal that exists, and each
+      # document is within its line budget. Both checks are proved able to fail by unit tests
+      # (tools/lib/rule-inventory.test.js, tools/lib/doc-budget.test.js).
+      - name: Rule inventory and size budget (normative documents)
+        run: |
+          node scripts/check-rule-inventory.mjs
+          node scripts/check-doc-budget.mjs
       # The stamp heuristic decides whether a repo's file is "ours". A false positive there ends in
       # advice to overwrite that file, so it is the one piece of logic here with unit tests.
       #

@@ -21,6 +21,7 @@
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
+import { normalise, units, headingsOf } from "./lib/md-units.mjs"; // shared with check-doc-move (#523)
 
 function usage(msg) {
   if (msg) console.error(`check-skill-split: ${msg}`);
@@ -53,91 +54,7 @@ const coreText = fs.readFileSync(path.join(dir, "SKILL.md"), "utf8");
 const refFiles = fs.readdirSync(dir).filter((f) => f.endsWith(".md") && f !== "SKILL.md").sort();
 const allNew = [coreText, ...refFiles.map((f) => fs.readFileSync(path.join(dir, f), "utf8"))].join("\n\n");
 
-function normalise(s) {
-  return s
-    .replace(/^\s{0,3}#{1,6}\s+/gm, "") // heading level is presentation, not content
-    .replace(/\]\([^)#\s]*\.md(#[^)\s]+)\)/g, "]($1)") // same anchor, possibly a sibling file
-    .replace(/\s+/g, " ")
-    .trim();
-}
-
-// Cut markdown into units. Line numbers are 1-based in the old file.
-function units(text) {
-  const lines = text.split("\n");
-  const out = [];
-  let i = 0;
-  const isBlank = (l) => /^\s*$/.test(l);
-  const isFence = (l) => /^\s*(```|~~~)/.test(l);
-  const isHeading = (l) => /^\s{0,3}#{1,6}\s/.test(l);
-  const isTable = (l) => /^\s*\|/.test(l);
-  const listStart = (l) => /^(\s*)([-*+]|\d+[.)])\s+/.exec(l);
-  // Frontmatter is one unit.
-  if (lines[0] === "---") {
-    let j = 1;
-    while (j < lines.length && lines[j] !== "---") j++;
-    out.push({ line: 1, kind: "frontmatter", text: lines.slice(0, j + 1).join("\n") });
-    i = j + 1;
-  }
-  while (i < lines.length) {
-    const l = lines[i];
-    if (isBlank(l)) { i++; continue; }
-    if (isFence(l)) {
-      const indent = /^(\s*)/.exec(l)[1];
-      let j = i + 1;
-      while (j < lines.length && !(isFence(lines[j]) && lines[j].startsWith(indent))) j++;
-      out.push({ line: i + 1, kind: "fence", text: lines.slice(i, j + 1).join("\n") });
-      i = j + 1;
-      continue;
-    }
-    if (isHeading(l)) { out.push({ line: i + 1, kind: "heading", text: l }); i++; continue; }
-    if (isTable(l)) {
-      if (!/^\s*\|[\s:|-]+\|\s*$/.test(l)) out.push({ line: i + 1, kind: "table-row", text: l });
-      i++;
-      continue;
-    }
-    const ls = listStart(l);
-    if (ls) {
-      const ind = ls[1].length;
-      let j = i + 1;
-      while (j < lines.length) {
-        const n = lines[j];
-        if (isBlank(n)) {
-          // A blank line ends the item unless the next non-blank line is indented continuation
-          // that is not itself a list item or fence at this item's indent or shallower.
-          let k = j;
-          while (k < lines.length && isBlank(lines[k])) k++;
-          if (k < lines.length && /^\s*/.exec(lines[k])[0].length > ind && !listStart(lines[k]) && !isFence(lines[k])) { j = k; continue; }
-          break;
-        }
-        if (isFence(n) || isHeading(n) || isTable(n)) break;
-        const nls = listStart(n);
-        if (nls && nls[1].length <= ind + 1) break;
-        if (nls) break; // nested item: its own unit
-        j++;
-      }
-      out.push({ line: i + 1, kind: "list-item", text: lines.slice(i, j).join("\n") });
-      i = j;
-      continue;
-    }
-    let j = i + 1;
-    while (j < lines.length && !isBlank(lines[j]) && !isFence(lines[j]) && !isHeading(lines[j]) && !isTable(lines[j]) && !listStart(lines[j])) j++;
-    out.push({ line: i + 1, kind: "paragraph", text: lines.slice(i, j).join("\n") });
-    i = j;
-  }
-  return out;
-}
-
 const NUMBERED = /^\s{0,3}#{1,6}\s+((\d+(\.\d+)*\.?)|([A-B]\d+[a-z]?\.?))\s/;
-const headingsOf = (text) => {
-  const hs = new Set();
-  let fence = false;
-  for (const l of text.split("\n")) {
-    if (/^\s*(```|~~~)/.test(l)) { fence = !fence; continue; }
-    if (!fence && /^\s{0,3}#{1,6}\s/.test(l)) hs.add(normalise(l));
-  }
-  return hs;
-};
-
 const hay = normalise(allNew);
 const old = units(oldText);
 const missing = old.filter((u) => !hay.includes(normalise(u.text)));

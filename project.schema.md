@@ -207,7 +207,7 @@ repo whose documentation lies is the outcome this handbook exists to prevent
 ([§8](CONVENTIONS.md#8-conformance-and-reconciliation)), so the vocabulary has
 to cover the case honestly.
 
-**`manual` grants no automation.** It is strictly *less* automated than `tag`,
+**[Hard — gate: colab promote refuses]** **`manual` grants no automation.** It is strictly *less* automated than `tag`,
 and the permission ladder treats it that way: `colab promote` allows an
 unattended promotion only on a `deploy: tag` repo, where promotion is
 verification-only. On a `manual` repo, promotion is the deliberate "I am about
@@ -262,7 +262,7 @@ Additional **long-lived integration branches** — lines that accumulate work fo
 release far enough out that they are not merged into trunk for weeks. Empty and
 absent are the same thing, and absent is the normal case.
 
-Declaring a line does three things and no more: `colab worktree new --base <line>`
+**[Hard — gate: colab worktree new refuses]** Declaring a line does three things and no more: `colab worktree new --base <line>`
 will cut from it, `colab ship` merges a worktree back into **the base it was cut
 from**, and the line is guarded and exempted the way trunk is (no raw pushes, no
 branch-name regex, not a "ghost" when a workflow names it).
@@ -274,7 +274,7 @@ the fence: on Tiers A and C, `trunk` **is** the production spine — it is the b
 promotion path straight at it, which is the opposite of the intent. So `trunk` stays
 tier-locked ([above](#trunk--required)) and this is a separate axis.
 
-**The guarantee: nothing in the promote / tag / deploy path reads this field.** A
+**[Hard — gate: colab ship refuses]** **The guarantee: nothing in the promote / tag / deploy path reads this field.** A
 branch on this axis cannot reach production by construction, not by discipline. The
 only way work on a line reaches users is for a human to merge that line into trunk
 and then promote — and `colab ship` refuses the line → trunk merge even under
@@ -286,7 +286,7 @@ on Tiers A and C, the trunk on Tier B), may not be the word `trunk` (a role, nev
 branch name), and **must exist as a branch**. A declared line nobody ever cut is the
 same failure as a release branch nothing consumes, so the audit reports it.
 
-CI on a line is checked but **advisory**: a line with no workflow triggering on push
+**[Hard — gate: colab ship refuses]** CI on a line is checked but **advisory**: a line with no workflow triggering on push
 to it gets a warning, never a failure. Merges into it really do run zero CI, which is
 worth saying — but a line that is not yet gated is a normal early state, and failing
 the repo for it would push teams back to declaring the line nowhere, which is the
@@ -308,7 +308,7 @@ branch, which the poller watches and redeploys. Empty and absent are the same th
 and absent is the normal case — most Tier A repos deploy from `main` itself and need no
 extra name.
 
-**This is the opposite axis from [`integration`](#integration--optional), not a
+**[Hard — gate: colab worktree new refuses]** **This is the opposite axis from [`integration`](#integration--optional), not a
 variant of it.** An integration line *accumulates* development work over weeks; a
 release branch is *consumed* — a release script overwrites it wholesale on every tag —
 and it is a **production** ref, exactly the thing `integration:` guarantees never to
@@ -358,14 +358,14 @@ What it changes, and what it does not:
   owner used a merge commit, squash or rebase; the next `colab deliver` treats that PR's
   head as the boundary and offers only what landed after it. A PR the owner closed unmerged
   is reported as a rejection, and nothing new is opened without `--reopen`.
-- **No colab command moves `owner.branch`.** `ship`, the ship batch and `promote` refuse a
+- **[Hard — gate: colab refuses a push]** **No colab command moves `owner.branch`.** `ship`, the ship batch and `promote` refuse a
   push to it, whatever the grant — `COLAB_HUMAN=1` does not lower this. A worktree may not be
   cut from it even if `integration:` lists it.
-- **A write to the owner's repo needs a human.** Opening or editing the PR requires
+- **[Hard — gate: colab deliver refuses]** **A write to the owner's repo needs a human.** Opening or editing the PR requires
   `COLAB_HUMAN=1`; `colab deliver --dry` only reads, so a scheduled driver may run it and read
   the state (`waiting-on-owner` / `nothing-to-deliver` / `ready` / `rejected`), and never
   acts on the owner's branch unattended.
-- **The core-path rule stays on top.** A branch touching a CODEOWNERS path still needs a
+- **[Hard — gate: colab ship refuses]** **The core-path rule stays on top.** A branch touching a CODEOWNERS path still needs a
   non-author approval before `colab ship` lands it on trunk ([`CONVENTIONS.md` §4](CONVENTIONS.md#4-branches-and-commits), #350).
 
 **Why `owner`, not `upstream`:** "upstream" already means something else twice — a
@@ -373,7 +373,7 @@ consumer filing a changed convention meaning back to the handbook
 ([CONVENTIONS.md §8, *Upstream*](CONVENTIONS.md#upstream--a-consumer-that-changes-what-a-convention-means-files-it-here-362)), and git's tracking ref. A third
 meaning of the same word would be misread.
 
-Validity: `branch` is required and is not the word `trunk`; only `branch` and `remote` are
+**[Hard — gate: colab refuses a push]** Validity: `branch` is required and is not the word `trunk`; only `branch` and `remote` are
 defined sub-keys; `branch` may not equal `trunk:`, appear in `integration:`, or equal
 `releaseBranch:`. `colab deliver` supports only the case where the owner's branch lives on
 the same remote trunk is pushed to (a fork delivery is refused, not guessed). A malformed
@@ -408,7 +408,7 @@ from; this axis never reads them and they never read it.
 ports: [5220]
 ```
 
-TCP ports reserved for this repo's **trunk dev server(s)**. The `colab` CLI
+**[Hard — gate: colab port allocator refuses]** TCP ports reserved for this repo's **trunk dev server(s)**. The `colab` CLI
 aggregates `ports:` across all registered repos into the machine-wide reserved
 set and will never allocate these to a worktree — even when the trunk server is
 currently down. One declaration here replaces any hand-maintained central list.
@@ -440,17 +440,17 @@ autonomy: auto-trunk     # manual (default) · auto-trunk
 
 How much of a session's Phase B (merge to **trunk**) an agent may perform alone.
 
-- `manual` (or absent) — an agent stops after Phase A; a human triggers the merge.
+- **[Hard — gate: colab ship refuses]** `manual` (or absent) — an agent stops after Phase A; a human triggers the merge.
   **One exception, computed rather than declared (#345):** a change `colab ship`
   measures as documentation only passes the autonomy gate without this grant —
   [CONVENTIONS.md §2, *Autonomy — the docs-only exception*](CONVENTIONS.md#autonomy--the-docs-only-exception-345).
   No value of this field, or of any other, widens what counts as documentation.
-- `auto-trunk` — an agent may complete the trunk merge itself **through `colab ship`
+- **[Hard — gate: colab ship refuses]** `auto-trunk` — an agent may complete the trunk merge itself **through `colab ship`
   only**, and only when every precondition passes: trunk CI alive and green, no new
   DB migrations in the branch, no hand-code conflicts after sync-regen. Any ✗ falls
   back to asking a human.
 
-This grants **trunk** autonomy only — never promotion, a tag, or anything that
+**[Hard — gate: colab ship never tags or promotes]** This grants **trunk** autonomy only — never promotion, a tag, or anything that
 deploys; the field cannot express otherwise. Promotion follows
 [`promotion`](#promotion--optional) and `deploy`; a tag follows
 [CONVENTIONS §6's release routes](CONVENTIONS.md#6-releases). The grant lives in the repo file (not the caller's flags) so autonomy is
@@ -467,7 +467,7 @@ to trunk, so the branch that adds CI is already judged by it
 ship-batch: 3     # 1–3; absent or 1 = serial landing (the default)
 ```
 
-How many green candidates `colab ship --batch` may land at once
+**[Hard — gate: colab ship --batch declines]** How many green candidates `colab ship --batch` may land at once
 ([CONVENTIONS.md §4, *Batch landing*](CONVENTIONS.md#batch-landing--one-combined-run-then-a-fast-forward-373)).
 An integer from 1 to 3. **Absent or `1` keeps today's serial landing exactly** — every
 `--batch` call declines, and a plain `colab ship` is unchanged whatever this says. Any other
@@ -497,16 +497,16 @@ re-run its halves), so a red stays logarithmic rather than linear, plus eviction
 batches of 2–3 showing how often they actually go red. Until then, a queue longer than 3
 drains as consecutive batches of 3, which is still three landings per cycle instead of one.
 
-With N > 1, `colab ship --batch <b1,b2[,b3]>` puts trunk's head plus one squash commit per
+**[Hard — gate: colab ship --batch declines]** With N > 1, `colab ship --batch <b1,b2[,b3]>` puts trunk's head plus one squash commit per
 member (each with its own `Closes #N`) on `ship-batch/<trunk-sha7>`, needs **one** combined CI
 run there to be green, and fast-forwards trunk to it only if trunk has not moved. Two things
 must also be true, and the audit warns when either is not:
 
-- **A CI workflow fires on a `ship-batch/**` push.** Consumer workflows must opt in — add
+- **[Hard — gate: colab ship --batch declines]** **A CI workflow fires on a `ship-batch/**` push.** Consumer workflows must opt in — add
   `'ship-batch/**'` to a CI workflow's `push: branches:` (a copy of the current CI templates
   already does: their `'**'` covers it, #384). Without it the combined run can never
   arrive, so every `--batch` call says so and declines.
-- **`autonomy: auto-trunk`.** A batch lands every member in one unattended push; without the
+- **[Hard — gate: colab ship --batch declines]** **`autonomy: auto-trunk`.** A batch lands every member in one unattended push; without the
   grant the field is inert.
 
 `ship-batch/` is a ref namespace `colab ship` owns: it creates, force-replaces (only within that
@@ -520,7 +520,7 @@ nothing landed, ship the members one at a time.
 migrations: [backend/migrations/]   # repo-relative prefixes; absent = the two defaults alone
 ```
 
-Where this repo's migrations live, **beyond** the two layouts every reader already knows —
+**[Hard — gate: colab ship refuses]** Where this repo's migrations live, **beyond** the two layouts every reader already knows —
 Laravel `database/migrations/` and Prisma `prisma/migrations/`, both matched anywhere in the
 path. `colab ship`'s no-new-migrations gate
 ([CONVENTIONS.md §5, *Migration exemption*](CONVENTIONS.md#migration-exemption--a-narrow-door-through-no-new-migrations-opened-by-a-role-98-402))
@@ -536,10 +536,10 @@ grant never engaged. Measured on an adopting repo before this key existed.
 - **Entries are repo-relative directory prefixes**, matched from the repo root. `./` and a
   missing trailing `/` are normalised away; an absolute path, a `..`, a glob, or the repo root
   itself is a finding — a prefix match would silently mean something other than what was written.
-- **Additive, never a replacement.** The defaults always apply; restating one is harmless (an
+- **[Hard — gate: colab ship refuses]** **Additive, never a replacement.** The defaults always apply; restating one is harmless (an
   advisory). There is deliberately no opt-out of the defaults: an opt-out can only make a
   human-only gate see *less*, and that waits for a repo that genuinely needs it.
-- **Ship reads trunk's declaration and the branch's, unioned.** A branch that adds its own
+- **[Hard — gate: colab ship refuses]** **Ship reads trunk's declaration and the branch's, unioned.** A branch that adds its own
   declaration is gated by it; a branch that deletes trunk's is still gated by trunk's.
 - **`release cut` reads `.php`/`.sql` under a declared prefix** with the same destructive
   heuristic as the defaults. A declared migration in any other format (`.mjs`, `.go`) is *named*
@@ -557,7 +557,7 @@ migration-grant: human      # absent = human — today's behaviour
 migration-grant: reviewer   # a migration-reviewer grant may also be minted
 ```
 
-This key decides who may open the no-new-migrations door
+**[Hard — gate: colab ship refuses]** This key decides who may open the no-new-migrations door
 ([CONVENTIONS.md §5, *Migration exemption*](CONVENTIONS.md#migration-exemption--a-narrow-door-through-no-new-migrations-opened-by-a-role-98-402)).
 `human` accepts only the human grant. `reviewer` also lets `colab migration-grant --role
 migration-reviewer` mint a grant that carries a review record. The grant is bound to the
@@ -568,11 +568,11 @@ The one reading is `tools/lib/migration-grant.js` `parseGrantPolicy`.
 - **It is a separate flat key, not nested under `migrations:`.** `migrations:` stays a list
   of path prefixes because three readers depend on that shape. Where the gate looks and who
   may open it are unrelated settings.
-- **Only the trunk checkout's value counts.** `colab migration-grant` reads the checkout,
+- **[Hard — gate: colab ship refuses]** **Only the trunk checkout's value counts.** `colab migration-grant` reads the checkout,
   never the branch, so a branch cannot raise its own policy.
-- **An invalid value falls back to `human`.** That is the stricter reading, and the audit
+- **[Hard — gate: colab ship refuses]** **An invalid value falls back to `human`.** That is the stricter reading, and the audit
   fails it.
-- **`colab ship` honours a reviewer grant only with P + M + HEAD + R** (#401). Ship reads
+- **[Hard — gate: colab ship refuses]** **`colab ship` honours a reviewer grant only with P + M + HEAD + R** (#401). Ship reads
   this key at the tip of the branch being merged into. It also needs a passing review
   record that binds the branch's head, either as the exact reviewed HEAD or by an
   unchanged migration content id (#508), plus a live, passing `Migration round-trip`
@@ -587,17 +587,17 @@ ci-grant: human      # absent = human — only a person opens the red-trunk door
 ci-grant: reviewer   # the coordinator agent may also mint a ci-reviewer grant
 ```
 
-This key decides who may open the red-trunk door when the cure rule refuses
+**[Hard — gate: colab ship refuses]** This key decides who may open the red-trunk door when the cure rule refuses
 ([CONVENTIONS.md §5, *Red-trunk exemption*](CONVENTIONS.md#red-trunk-exemption--the-one-shot-door-through-trunk-ci-green-105)).
 `human` accepts only the human grant (`COLAB_HUMAN=1`). `reviewer` also lets `colab ci-grant
 --role ci-reviewer` mint a grant **without** `COLAB_HUMAN=1`, carrying a review record and
 bound to one HEAD and one red trunk sha (#504). The one reading is `tools/lib/ci-grant.js`
 `parseGrantPolicy`.
 
-- **Only trunk's committed value counts.** Both `colab ci-grant` and `colab ship` read it
+- **[Hard — gate: colab ship refuses]** **Only trunk's committed value counts.** Both `colab ci-grant` and `colab ship` read it
   from trunk (`git show <trunk>:.github/project.yml`), never the branch, so a branch cannot
   opt itself in.
-- **An invalid value falls back to `human`.** That is the stricter reading, and the audit
+- **[Hard — gate: colab ship refuses]** **An invalid value falls back to `human`.** That is the stricter reading, and the audit
   fails it.
 - **Declaring it is a human act**, like lowering exposure: it is the line that lets an agent
   through a red trunk, so the agent it lets through does not add it.
@@ -618,11 +618,11 @@ list an agent-posted grant reads as a human's. The one reading is
 `tools/lib/trust-humans.js` `parseTrustHumans`.
 
 - **Absent → nothing changes.** A trusted association counts as human, as before.
-- **Declared → only listed logins are human.** A grant or ruling by any other author is
+- **[Hard — gate: colab ship refuses]** **Declared → only listed logins are human.** A grant or ruling by any other author is
   refused, and the reason names the login. The author must also still hold a trusted
   association. For the two grant labels, the account that last applied the label must be
   listed too. Logins compare case-insensitively.
-- **Read from the target, never the branch.** `colab ship` reads it at the tip of the
+- **[Hard — gate: colab ship refuses]** **Read from the target, never the branch.** `colab ship` reads it at the tip of the
   branch being merged into; rulings read trunk's. A branch that adds its own author changes
   nothing for its own ship. Editing the list is a human act, like lowering exposure.
 - **A reviewer grant is not judged by it.** A `migration-reviewer` grant passes or fails on
@@ -630,7 +630,7 @@ list an agent-posted grant reads as a human's. The one reading is
 - **A flat key holding a list, not `trust: { humans: … }`.** The audit's descriptor reader
   refuses nested shapes on purpose, and a list inside a map is one of them. Both list
   spellings work: `[a, b]` or a `- a` block sequence.
-- **A malformed value means nobody is human.** An empty list, a non-list, or an entry that
+- **[Hard — gate: colab ship refuses]** **A malformed value means nobody is human.** An empty list, a non-list, or an entry that
   is not a GitHub login blocks every human grant and ruling until it is fixed, and the audit
   fails it. Falling back to the association class would quietly reopen the hole the key
   was declared to close.
@@ -996,11 +996,11 @@ pushing that shape toward an undeclared, informal light mode instead. Removed (#
 one coherence rule that survives is the one that protects someone other than this repo's
 own room:
 
-- **`light` is incompatible with `autonomy: auto-trunk`.** An unattended merge with
+- **[Hard — gate: colab adopt refuses]** **`light` is incompatible with `autonomy: auto-trunk`.** An unattended merge with
   no evidence trail is a closure nobody watched and nobody can audit. A repo that wants
   unattended ships accepts `standard` — that is the trade.
 
-**`ceremony: light` no longer, by itself, enables solo flow.** #133 introduced
+**[Hard — gate: colab solo refuses]** **`ceremony: light` no longer, by itself, enables solo flow.** #133 introduced
 `writes: serial` as solo flow's real gate and accepted `ceremony: light` as a LEGACY
 proxy only, for repos that had not yet answered the `writes` question. #175 removed that
 bridge. ⚖ #233 then re-based the gate itself: `colab solo` now refuses outright on any
@@ -1139,7 +1139,7 @@ tag wherever the tag deploys production.
   ahead of `main` and dispatches CI there, so the candidate is cut with no human
   step. The final tag stays a human click. Without this value, `--auto` is a no-op.
 
-Unknown values fail closed to `human`. This field **cannot** lower the bar set by
+**[Hard — gate: colab promote refuses]** Unknown values fail closed to `human`. This field **cannot** lower the bar set by
 `deploy:` — on a `deploy: push-main` repo promotion *is* the production deploy, and
 on a `deploy: manual` repo promotion is the human's signal to run the deploy; both
 always require `COLAB_HUMAN=1`. Only `deploy: tag` makes promotion
@@ -1250,7 +1250,7 @@ widen nothing, so each only has to be a non-empty string:
 - `exports` — a committed list of public symbols, one per line; a line removed since the last final
   tag is a breaking change (`package.json` `exports`/`bin` are read without it).
 
-A guard that cannot be read refuses the cut — the contract and the rest of the computation:
+**[Hard — gate: colab release cut refuses]** A guard that cannot be read refuses the cut — the contract and the rest of the computation:
 [`tools/README.md`, *Release cut*](tools/README.md#release-cut-candidates).
 
 **Two keys opt a `public-tool` repo into publishing to npm** (#433) — the `npm` job of
@@ -1287,7 +1287,7 @@ under a `manifest` default the first candidate after a final refuses at `manifes
 does every one after it. A declared value always wins, in either direction; an invalid one is a
 finding and leaves the route's default.
 
-- `manifest` — every declared manifest (`VERSION`, `package.json`, `Cargo.toml`,
+- **[Hard — gate: colab release cut refuses]** `manifest` — every declared manifest (`VERSION`, `package.json`, `Cargo.toml`,
   `pyproject.toml`) must already equal the tag at the tagged commit, or `colab release cut` /
   `finalize` refuse at `manifest-version`. With no manifest declared the tag is the version
   either way, so it costs a manifest-less repo nothing. Declare it on an automatic route only if

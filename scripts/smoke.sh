@@ -4,7 +4,7 @@
 # this only catches the cheap mistakes before the push:
 #   1. syntax of every shipped script (the same list CI checks),
 #   2. stray control bytes in tracked text,
-#   3. the self-audit,
+#   3. the self-audit, the rule inventory and the normative documents' size budget (#523),
 #   4. the unit tests for what this branch changed — a tools/lib/<m>.test.js runs when
 #      it, or its module tools/lib/<m>.js, differs from origin/main. Everything else
 #      is left to CI's full run.
@@ -20,6 +20,8 @@ for f in .githooks/install.sh templates/pre-commit-identity templates/pre-commit
 node scripts/check-text-bytes.mjs
 node audit/audit.mjs --local . >/dev/null
 node scripts/check-pack-allowlist.mjs
+node scripts/check-rule-inventory.mjs
+node scripts/check-doc-budget.mjs
 
 base="$(git merge-base HEAD origin/main 2>/dev/null || echo HEAD)"
 tests=""
