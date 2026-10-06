@@ -169,6 +169,11 @@
  * this entry, plus the matching `code-triage` verdict, is what makes those readings
  * reconcilable instead of silently contradictory.
  *
+ * `priority:now` / `priority:high` joined the set in #537: the upward rank beside `low-priority`
+ * (CONVENTIONS.md §5, *Priority*). Fixed values, not a prefix kind — they decode as plain
+ * `convention` labels. Same malignant-absence reason: a rank only the owner may set must be
+ * appliable the moment the owner says so, which a label the repo never created is not.
+ *
  * `deferred:date` / `deferred:measurement` / `deferred:external-party` joined the set in
  * #279: `deps-checked` was being asked to carry two orthogonal facts at once — "has a
  * reasoning session evaluated this?" (process state, monotonic — the label's own
@@ -222,6 +227,8 @@ const CONVENTION_LABELS = [
   { name: 'needs-migration-grant', color: 'D4C5F9', description: 'Agent-flagged: deliverable is a schema migration; surfaces the grant request for a human to Accept' },
   { name: 'ci-granted', color: 'D73A4A', description: "A human granted this branch a one-shot exemption from ship's trunk-CI-green gate" },
   { name: 'low-priority', color: 'C2E0C6', description: 'Throttle, not a veto — startable, but code-triage ranks it behind every other ready group' },
+  { name: 'priority:now', color: 'B60205', description: "Rank first among ready work — the owner's order; never skips a gate or overrides a file hold" },
+  { name: 'priority:high', color: 'D93F0B', description: 'Rank ahead of default among ready work — owner or coordinator; never skips a gate' },
   { name: 'delivery:code', color: '1D76DB', description: 'Delivery is a code commit — the ordinary code pipeline applies' },
   { name: 'delivery:content', color: 'FEF2C0', description: 'Delivery is a content push, not a code commit — route, do not start in the code pipeline' },
   { name: 'delivery:ops', color: 'D4C5F9', description: 'Delivery is an ops/production check, not a code commit — route, do not start in the code pipeline' },

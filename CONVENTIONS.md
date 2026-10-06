@@ -3853,6 +3853,16 @@ the same label. `low-priority` is in the provisioned label set for the same reas
 and `delivery:*` are: an unattended driver's ordering decision depends on being able to
 see it, and a repo that adopted before it existed cannot create it at all.
 
+**`priority:now` and `priority:high` rank upward (#537):** `priority:now` › `priority:high` ›
+default (no label) › `low-priority`. A rank across ready work, for both start and merge order —
+never a gate skipped, never a hold overridden: a `now` issue whose file is held drains the
+file, the holder ships first. **Only the repo owner sets `priority:now`** — or a coordinator
+relaying the owner's order, quoted on the issue; `priority:high` the owner or a coordinator.
+**An agent never sets either** — it proposes one in a comment. A scheduling tool may compute a
+`high`-equivalent from leverage (unblocks many, splits a held file, fixes CI on a throttled
+repo), never a `now`. Not part of it: a per-repo cap on `now`, reserved capacity, expiry or
+ageing, batch membership. Both labels are provisioned beside `low-priority`.
+
 Why: [ADR 112](docs/adr/112-delivery-type-and-priority-rationale.md).
 
 ### How a decision is recorded
@@ -5131,10 +5141,10 @@ only. Resolution order: `--config` flag > `~/.colab/repos.txt` > bundled example
    candidate layouts it found (`git ls-files`: an uncovered `migrations/` directory, or a
    directory of tracked `*.sql` files). Until it is declared, the no-new-migrations gate
    cannot see those files (#449).
-3. **Create the whole label set — twenty-one names, not a subset** (`in-progress`,
+3. **Create the whole label set — twenty-three names, not a subset** (`in-progress`,
    `deps-checked`, `agent-filed`, `epic`, `needs-decision`, `decision-recorded`,
    `needs-plan`, `migration-granted`, `needs-migration-grant`, `ci-granted`,
-   `low-priority`, the six `delivery:*`, the three `deferred:*`, and `release-hold`):
+   `low-priority`, `priority:now`, `priority:high`, the six `delivery:*`, the three `deferred:*`, and `release-hold`):
    ```sh
    colab labels --ensure
    ```
@@ -5145,7 +5155,7 @@ only. Resolution order: `--config` flag > `~/.colab/repos.txt` > bundled example
    description differs from the handbook's, and rewrites it only when asked
    (`--refresh-descriptions`, #364) — a description may be a declared local divergence
    ([§8, *Upstream*](#upstream--a-consumer-that-changes-what-a-convention-means-files-it-here-362)).
-   (No `colab` on this machine? The twenty-one `gh label
+   (No `colab` on this machine? The twenty-three `gh label
    create … || true` lines this replaced are recoverable from that file's history.)
 
    **This count is a hand-typed number restated in at least four places** (here, the
@@ -5168,7 +5178,8 @@ only. Resolution order: `--config` flag > `~/.colab/repos.txt` > bundled example
    would refuse has nowhere to land, so the grant request never surfaces until the wall
    (#230). `low-priority` — a triage pass has no way to say "startable, but ranked last",
    so a group meant to wait its turn is reported exactly like every other ready group
-   (#268). `delivery:*` — a content push or ops check has no way to say "not a diff" and
+   (#268). `priority:now`/`priority:high` — an owner's "do this first" has nowhere to be
+   recorded, so it lives in a chat a scheduler cannot read (#537). `delivery:*` — a content push or ops check has no way to say "not a diff" and
    jams the code pipeline, and a new surface's design issue reads as a code start (#359). `deferred:*` — a triage pass has no way to say "parked, and
    here is what wakes it", so a deliberate park is indistinguishable from an unexamined
    issue — measured at 11 + 4 issues misreporting as untriaged across two repos (#279).

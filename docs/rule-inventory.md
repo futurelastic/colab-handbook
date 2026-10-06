@@ -1477,6 +1477,13 @@ excuses, and it names the rows that carry its rules now.
 | C5c.priority.07 | default |  | Clearing the label is the sanctioned way to release the group back to the scheduler. | clearing the label is the sanctioned way | CONVENTIONS.md | #268 |
 | C5c.priority.08 | default |  | A driver that implements the hard-veto reading must say so somewhere code-triage's output can be checked against. | must say so somewhere `code-triage`'s output can be checked against | CONVENTIONS.md | #268 |
 | C5c.priority.09 | default |  | low-priority is in the provisioned label set because an unattended driver's ordering decision depends on seeing it. | is in the provisioned label set for the same reason | CONVENTIONS.md | #268 |
+| C5c.priority.10 | default |  | priority:now and priority:high rank upward: now › high › default › low-priority. | rank upward (#537) | CONVENTIONS.md | #537 |
+| C5c.priority.11 | default |  | The priority rank orders ready work for start and merge; it never skips a gate or overrides a hold — a held file drains, the holder ships first. | a `now` issue whose file is held drains the | CONVENTIONS.md | #537 |
+| C5c.priority.12 | default |  | Only the repo owner sets priority:now, or a coordinator relaying the owner's order quoted on the issue; priority:high the owner or a coordinator. | Only the repo owner sets `priority:now` | CONVENTIONS.md | #537 |
+| C5c.priority.13 | default |  | An agent never sets priority:now or priority:high; it proposes one in a comment. | An agent never sets either | CONVENTIONS.md | #537 |
+| C5c.priority.14 | default |  | A scheduling tool may compute a high-equivalent from leverage, never a now. | never a `now` | CONVENTIONS.md | #537 |
+| C5c.priority.15 | default |  | No per-repo cap on now, no reserved capacity, no expiry or ageing, no batch membership. | Not part of it: a per-repo cap on `now` | CONVENTIONS.md | #537 |
+| C5c.priority.16 | default |  | Both priority labels are provisioned beside low-priority. | Both labels are provisioned beside `low-priority` | CONVENTIONS.md | #537 |
 | C5c.expl.38 | explanation |  | Rationale moved to the ADR: Priority (#268). | Reading the label as a hard veto turns "later" into | docs/adr/112-delivery-type-and-priority-rationale.md | — |
 | C5c.expl.39 | explanation |  | Rationale moved to the ADR: Priority (#268). | A driver meeting all three is honouring the throttle, not | docs/adr/112-delivery-type-and-priority-rationale.md | — |
 
@@ -1935,7 +1942,7 @@ excuses, and it names the rows that carry its rules now.
 | C9.first-time.28 | default | | `ci-granted` stays the door only for a trunk that already has workflows and no run at its sha. | `ci-granted` stays the door only for a trunk that already has workflows | CONVENTIONS.md | #482 |
 | C9.first-time.29 | default | | Write `.github/project.yml` with the answers from step 1. | with the answers from step 1 | CONVENTIONS.md | — |
 | C9.first-time.30 | default | | Declare `migrations:` when the repo keeps migrations anywhere but the two default paths; adopt lists it as the first remaining step. | declare `migrations:` when the repo keeps migrations anywhere but | CONVENTIONS.md | #449 |
-| C9.first-time.31 | default | | Create the whole label set, all twenty-one names, with `colab labels --ensure`. | Create the whole label set — twenty-one names, not a subset | CONVENTIONS.md | #206 |
+| C9.first-time.31 | default | | Create the whole label set, all twenty-three names, with `colab labels --ensure`. | Create the whole label set — twenty-three names, not a subset | CONVENTIONS.md | #206 |
 | C9.first-time.32 | default | | Rewrite an existing convention label's description only when asked with --refresh-descriptions. | description differs from the handbook's, and rewrites it only when asked | CONVENTIONS.md | #364 |
 | C9.first-time.33 | default | | When adding a label, bump the pinned test and grep the other three prose counts. | bump that test, then grep for the other three prose counts before you're done | CONVENTIONS.md | #274 |
 | C9.first-time.34 | default | | Provision the full label set again on every sync, not only at adoption. | This full set is provisioned again on every sync, not only at adoption. | CONVENTIONS.md | — |
