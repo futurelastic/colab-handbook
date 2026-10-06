@@ -13,6 +13,7 @@ export function normalise(s) {
     .replace(HARD_MARKER, "")
     .replace(/^\s{0,3}#{1,6}\s+/gm, "") // heading level is presentation, not content
     .replace(/\]\([^)#\s]*\.md(#[^)\s]+)\)/g, "]($1)") // same anchor, possibly another file
+    .replace(/\]\((?:\.\.\/)+/g, "](") // a file link retargeted from a deeper directory
     .replace(/\s+/g, " ")
     .trim();
 }
@@ -93,11 +94,12 @@ export function headingsOf(text) {
 }
 
 // Sentences of a unit, for the fallback when a mixed paragraph was split at sentence
-// boundaries (rule kept, rationale moved). Cuts after . ! ? followed by whitespace and a capital,
+// boundaries (rule kept, rationale moved). Cuts after . ! ? : ; ) — optionally closed by bold,
+// italics or a backtick — followed by whitespace and a capital,
 // a backtick, an asterisk or an opening bracket — good enough for this prose, never for code.
 export function sentences(text) {
   return normalise(text)
-    .split(/(?<=[.!?:;)])\s+(?=[A-Z`*(\[“"—-])/)
+    .split(/(?<=[.!?:;)](?:\*\*|\*|`)?)\s+(?=[A-Z`*(\[“"—-])/)
     .map((s) => s.trim())
     .filter((s) => s.length > 0);
 }

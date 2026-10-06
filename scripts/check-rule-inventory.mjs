@@ -70,7 +70,7 @@ export function parseInventory(text) {
 
 // Inventory cells wrap a key or literal in backticks only when it is code; strip one outer pair.
 const unwrap = (s) => s.replace(/^`(.*)`$/, "$1");
-export const flat = (s) => s.replace(/\*/g, "").replace(/\s+/g, " ").trim();
+export const flat = (s) => s.replace(/\\\|/g, "|").replace(/\*/g, "").replace(/\s+/g, " ").trim();
 
 export function check({ root, inventory = "docs/rule-inventory.md" }) {
   const findings = [];
@@ -130,7 +130,7 @@ export function check({ root, inventory = "docs/rule-inventory.md" }) {
     if (t == null) continue;
     const us = units(t).filter((u) => u.kind !== "fence" && u.kind !== "heading");
     for (const u of us) {
-      const marked = MARKER.test(u.text);
+      const marked = MARKER.test(u.text.replace(/`[^`]*`/g, "")); // a marker quoted as code is an example, not a marker
       const ft = flat(u.text);
       const held = hardKeys.filter(({ r, key }) => r.dest.replace(/`/g, "").split("#")[0].trim() === f && ft.includes(key));
       if (marked && !held.length) findings.push(`${f}:${u.line}: a Hard marker no inventory row accounts for — add the rule's row (class hard)`);
