@@ -3009,6 +3009,63 @@ Those already move the inputs that the short-circuit compares.
 
 **No open ask, no change.** A repo with no open human ask renders nothing new.
 
+#### An ask the human must answer can be raised once in a decision box (#490)
+
+The rule above controls how often a coordinator says an ask. It does not control where the
+human sees it. Some items cannot be settled by any coordinator: a migration grant, a
+promotion, a design ruling, a production credential, a destructive operation. A pass that
+finds one sets it aside and leaves it in the tracker's decision queue. The human who owns
+it may not watch that queue. A deployment may run a separate **decision box** that the
+human does watch. This rule says how a coordinator delivers the ask there, and how the
+answer gets back.
+
+**The box is optional and set by the deployment.** A skill reads its endpoint from a
+deployment setting. No host is ever written into a skill or into this handbook. **No
+endpoint set means no change:** the ask stays where it already lives, as the issue's
+`needs-decision` label and its `decision:options` block (*Decision options*, above).
+
+**Only a human-only item is raised.** That is an item the pass set aside because no
+coordinator may decide it, the list above. An ask that a coordinator can rule on is ruled
+on, not sent on.
+
+**The tracker stays the record. The box only delivers.** Raising an item changes nothing
+on the issue. The label, the options block and any `Hold:` line stay exactly as they were,
+and readiness still reads them. A box that is down, or never answers, loses a delivery,
+never the ask.
+
+**A raise carries everything needed to answer without opening the tracker:**
+
+- the issue link;
+- the question;
+- two or more options, taken from the issue's `decision:options` block, never re-derived;
+- the recommendation, on its own line;
+- what stays parked if nobody answers;
+- an opaque **reply-to**. The raiser composes it and the box hands it back unchanged with
+  the answer. The box never parses it. It is what lets the answer find its issue.
+
+These are the five lines of a new-ask card (above), plus the reply-to.
+
+**Raised once, checked first.** An item is identified by its issue link plus the date of
+its newest ask (the same "newest ask" *Decision gate* compares). Before raising, a pass
+looks for an earlier raise under that key. It looks in its own stored asks, and in the box
+when the box can answer the lookup. If it finds one, the pass writes the one line from the
+rule above, with `<link>` pointing at the raise in the box:
+
+```
+unchanged, waiting on <link> since <date>
+```
+
+It does not raise the item again. A newer ask on the issue (a re-posted options block, a
+`--reopen`, a changed question) is a new key, and it is raised once in turn.
+
+**The answer comes back as a comment on the issue, and the raiser never polls.** The box
+has an answer notifier. The deployment wires it to post the human's answer onto the issue
+named by the reply-to. The raising skill never asks the box whether an answer has arrived.
+Waiting is not a change (above). The comment that arrives is an answer left in a comment.
+It moves the issue the same way as one typed into the tracker by hand: it is recorded as
+*Decision gate* requires before the gate lifts. The box itself never removes a label or
+records a decision.
+
 #### The human flag — what `COLAB_HUMAN=1` asserts
 
 `COLAB_HUMAN=1` is one mechanism carrying one assertion, used at several gates in this
