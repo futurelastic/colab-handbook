@@ -5234,7 +5234,10 @@ writes that in **`.colab/skills/<skill>.md`**, one optional file per skill, free
 skill opens with a block that loads the file: an injection line that engines supporting
 load-time expansion fill in with the file's text, and a plain sentence — *if
 `.colab/skills/<skill>.md` exists in this repo, read it before continuing* — that is the
-engine-neutral path and works on its own. With no file, the skill runs unchanged.
+engine-neutral path and works on its own. With no file, the skill runs unchanged. A large
+skill is a short core `SKILL.md` plus reference files beside it (#524); the core keeps every
+step under its own number, so an overlay names the step it refines (`code-ship` B1c,
+`code-sweep` §3) and never has to point into a reference file.
 
 **Precedence:** local policy refines the skill for this repo and wins over the skill's own
 text where they differ. **It never changes a `colab` gate** — a refusal from `colab ship`,

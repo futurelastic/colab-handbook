@@ -41,57 +41,23 @@ narration distills real gotchas only, no progress commentary. (Its other thinned
 this file — claim discipline, squash-eligibility, the quality gate — runs exactly the
 same regardless of `ceremony`.
 
+**How this file is built (#524).** This is the core: the steps in order, each with its rule
+and its stop condition, and the commands and tables a run executes. Each step's full text —
+edge cases, the measurements behind them, worked examples — sits in a reference file next to
+this one, moved there verbatim, and the step names it. **Read a step's reference file before
+you act on that step**; the line here is an index to it, never a substitute. Where they seem
+to differ, the reference file holds the full rule.
+
 ### Did this session open with `colab solo`? Its exit is different, not thinner
 
-Solo flow (CONVENTIONS.md, *Solo flow*) made no worktree and holds no claim, so there is
-nothing here — or in `code-ship` — for either skill to harvest or tear down. This is not
-`ceremony: light` again, it is a genuinely different shape, and running the sections
-below against it produces confusing no-ops.
-
-> **Holding a claim with no worktree? Then this is a trunk-direct *unit*, not a solo
-> session (#302).** Committing straight to trunk against an issue you claimed with
-> `colab claim <N> --session <id>` still owes that issue its close. Run Phase A as usual
-> (A1's distill comment is the evidence), then close it with
-> `colab ship --direct --session <id>` — `code-ship`'s evidence-close door for a unit with
-> no branch. Only a session with no claim at all takes the solo exit below.
-
-The solo exit is its own, short path:
-
-1. **Run the quality gate anyway** (A3), hermetic second run included — solo flow relaxes
-   ceremony, never the gate.
-2. **Distill onto an Issue only if a decision emerged** this sitting (A1's spirit,
-   not its letter) — solo flow's whole premise is that the commit *is* the memory
-   when nothing needs to outlive the session; do not manufacture a narration Issue
-   for the sake of having one.
-3. **Verify clean and pushed, then release the lock:**
-   ```sh
-   colab solo --done
-   ```
-   `--done` re-derives both facts itself (tree clean, fully pushed to
-   `origin/<trunk>`) and refuses if either is false — it is the check, not a
-   formality that trusts you. A refusal means finish the commit/push first; it is
-   not a signal to fall back into the worktree-shaped steps below.
-4. **Nothing else runs, and `code-ship` never runs at all.** No B0 sync, no B1 CI
-   gate beyond what already ran on trunk post-push, no B2 squash (there is no branch
-   to squash), no B2c/B2d/B3/B4. The release ritual (`code-ship` B5 — whichever
-   shape `exposure` gives it) is a separate question that solo flow does not settle
-   either way — solo flow is gated on session attendance (human-asserted, never
-   automated) plus the repo not declaring `writes: isolated` (⚖ #233, CONVENTIONS.md, *Writes* / *Solo
-   flow*), neither of which is coupled to `production`, so a live repo may run solo
-   flow.
-
-If you are unsure whether this session is a solo session, **`writes:` in
-`.github/project.yml` no longer answers this** (⚖ #233 — the field is a veto on ANY
-session, including yours; it says nothing about whether YOUR session specifically opened
-through solo flow). The reliable signal is `colab solo`'s own lock, not the descriptor:
-```sh
-colab place check <repo-abs-path>    # exit 0 = free or held by you; exit 1 = held by a live other
-```
-or check `colab claims`/`colab worktrees` for a row naming your branch — if one exists,
-this was NOT a solo session (solo flow makes neither). If genuinely unsure, treat it as
-the ordinary worktree flow below; the ordinary steps degrade safely (they just find
-nothing to do), where the solo path degrades unsafely if run against a session that DOES
-hold a claim or worktree.
+**Rule:** a claim with no worktree is a trunk-direct *unit*, not solo (#302): run Phase A,
+then `colab ship --direct --session <id>`. A true solo session (no claim, no worktree) runs
+A3's gate anyway, hermetic run included, distills only if a decision emerged, then
+`colab solo --done` (refuses unless clean and fully pushed); `code-ship` never runs. `writes:`
+does not tell you which you are — `colab place check`, `colab claims`/`colab worktrees` do;
+genuinely unsure ⇒ the ordinary flow below.
+Read when the session opened with `colab solo`, or holds a claim with no worktree:
+[0-solo-exit.md](0-solo-exit.md).
 
 ## Do this now
 
@@ -122,45 +88,12 @@ gh issue comment $N -b "**<YYYY-MM-DD>** — did X, decided Y, left Z open."
 
 #### Filing a follow-up here? It is agent-filed, and it must say so
 
-This step is where most agent-initiated issues in the fleet are born: you found
-something real, it is out of scope, so you file it rather than lose it. Keep doing
-that — but a follow-up you decided to file is **work no human has approved yet**,
-and it must be labelled so a batch-start tool can leave it alone
-(`CONVENTIONS.md` [§5](../../CONVENTIONS.md#provenance--who-decided-the-work-should-exist), *Provenance*):
-
-```sh
-gh label create agent-filed --color C5DEF5 --description "Filed by an agent on its own initiative — not human-approved" 2>/dev/null || true
-gh issue create --title "<type>: <thing>" --label agent-filed --body-file <tmpfile>
-```
-
-Record the returned number and, if `colab` is installed, follow with
-`colab issue-filed <N>` — a best-effort notify event (`issue.filed`, #102) so an
-external observer learns the issue exists without waiting out its own poll
-interval. No `colab` on this machine means skip it.
-
-End the body with the origin, naming the issue you were wrapping when you found it —
-that is the breadcrumb back to the context — and, on the next line, the ask class
-(`CONVENTIONS.md` [§5](../../CONVENTIONS.md#ask--the-filer-declares-the-ask-class-89), *Ask*) so a decision surface never has to re-derive it from
-prose:
-
-```
-Filed-by: agent (during code-wrap of #$N, session <name>)
-Ask: backlog
-```
-
-Use `permission` for a request to touch machine/prod state, `ruling` for a question
-that resolves to a human judgment and never to a diff, `deferred(<trigger>)` when
-you have already decided no action is needed until something else happens, and
-`backlog` — the default a missing line reads as anyway — for an ordinary work
-proposal.
-
-**Before you file: would one session finish this?** If not, it is an epic — file
-the parent for the goal and each item as its own issue, linked as sub-issues, with
-`blocked_by` for real ordering (`CONVENTIONS.md` [§5](../../CONVENTIONS.md#epics--a-container-is-not-a-start-candidate), *Epics*).
-
-The distinction is intent, not keyboard. **If the human asked for the follow-up
-during this session, it is theirs** — `Filed-by: boss (via session <name>)`, no
-label. Only what you decided to raise on your own is `agent-filed`.
+**Rule:** a follow-up you decided to file gets the `agent-filed` label, a body ending
+`Filed-by: agent (during code-wrap of #$N, session <name>)` plus an `Ask:` line (`backlog` ·
+`permission` · `ruling` · `deferred(<trigger>)`), and `colab issue-filed <N>` where `colab`
+exists. More than one session of work ⇒ an epic with sub-issues. One the human asked for is
+`Filed-by: boss (via session <name>)`, no label.
+Read when you file a follow-up: [a1-follow-up.md](a1-follow-up.md).
 
 ### A2. Update repo docs the work made stale — not in `CLAUDE.md`
 
@@ -186,219 +119,46 @@ them:
 
 The last two share one naming rule — see below — because they share one defect.
 
-**Every one of these lands on THIS BRANCH, in your worktree. A commit on the trunk
-checkout is a defect, not a shortcut** (#322). The distill is prose, it feels like
-housekeeping rather than code, and the trunk checkout is where this session's process
-cwd already is — which is exactly how one got committed straight onto trunk. What
-happens next is not a tidiness problem: `colab ship` merges a *branch*, so it has no
-path for a commit already sitting on trunk, and the session that made one is left with
-a push its own repo refuses and a guard whose message used to name the variable that
-defeats it. Two sessions walked that route in a single day. Write docs with **absolute
-worktree paths**, commit them in A4 with everything else, and let them reach trunk the
-one way anything reaches trunk.
+**Rule:** every one of these lands on THIS BRANCH, in your worktree — a commit on the trunk
+checkout is a defect (#322). Write docs with absolute worktree paths; commit them in A4.
+Full text: [a2-on-this-branch.md](a2-on-this-branch.md).
 
 #### Design artifact — promote it out of exploration, onto this branch, right here (`CONVENTIONS.md` §5)
 
-A fifth destination, distinct from the four above because it is not "this session
-made a doc stale" — it is a durable repo asset that only now has a session to carry
-it. If this branch's work followed an approved design ruling — a `⚖ Decision
-recorded` marker on the Issue (`CONVENTIONS.md`
-[§5](../../CONVENTIONS.md#design-conclusions-are-three-units-not-two), *Design
-conclusions are three units, not two*) — its artifact belongs in `docs/design/`
-on **this branch**, promoted right here at **A2**, not left sitting in a
-scratch/exploration home with instructions not to promote it: that leaves the
-next session touching the same surface to pay the design lane's boot cost again,
-from nothing, as if the ruling never happened.
-
-- File it `docs/design/<slug>-<N>-mockup.html` or `<slug>-<N>-spec.md`, per
-  `CONVENTIONS.md` §5's
-  naming — commit it as a deliverable path in A4, same as any other file this
-  session produced.
-- **Superseded artifacts are marked, never deleted** — trunk carries the design
-  lineage. Replacing an earlier ruling's file for the same surface adds the new
-  one and marks the old one superseded; it does not overwrite or remove it.
-
-**Which branch carries the artifact follows the size rule** (`CONVENTIONS.md`
-[§5](../../CONVENTIONS.md#design-conclusions-are-three-units-not-two), *Design work
-splits by size*, #359):
-
-- **A small change to an already-designed surface** — promote it here, as above.
-- **A `delivery:design` branch** (a new surface's design issue) — the artifact *is* the
-  deliverable, not a promotion: commit it at A4 like any other deliverable path.
-- **The build branch for a new surface** — its artifact is already on trunk, landed by
-  the design issue this build was `blocked_by`. Build to it and promote nothing; mark an
-  artifact superseded only if a new ruling on this branch replaced it.
-
-**The ruling must postdate the review (#379, `CONVENTIONS.md`
-[§5](../../CONVENTIONS.md#decision-gate--a-human-must-answer-first-122), *Decision gate*).**
-A `decision-recorded` label, or a `⚖` marker, recorded *before* the artifact was put up
-for approval answers an earlier question, such as "start this work". It is not approval of
-the artifact. Compare the newest live `⚖ Decision recorded` marker with the review: the
-comment that posted the frozen screenshots, or the `--reopen` receipt that asked. The
-marker must be the later of the two. If it is not, the approval is still pending. Do not
-promote; say so in the wrap report, and leave the artifact where it is.
-
-No design ruling landed on this branch → skip this step silently, same as any
-other optional check A2 makes.
+**Rule:** a branch that followed a `⚖ Decision recorded` design ruling promotes its artifact to
+`docs/design/<slug>-<N>-mockup.html` or `<slug>-<N>-spec.md` on this branch (superseded ones
+marked, never deleted); which branch carries it follows the size rule (#359). The ruling must
+postdate the review (#379) — if not, do not promote, and say so. No ruling ⇒ skip silently.
+Read when a design ruling landed on this branch: [a2-design-artifact.md](a2-design-artifact.md).
 
 #### Or: a comment at the call site — when `docs/` is the expensive answer
 
-The four destinations above all cost something to read *later* — a doc is cold
-storage, opened on demand. A comment costs something to read *now* — it is a tax
-paid by everyone who opens that source file, forever, whether or not they care.
-Both costs are real, so A2 is not "always docs/": ask two questions, in order,
-before picking a destination for a piece of knowledge this session surfaced.
-
-1. **Will whoever needs this be looking at this exact line when they need it?**
-   Yes → a comment. No — they will be searching a symptom, or deciding before they
-   ever open this file — → `docs/`.
-2. **Does the knowledge outlive the code it sits next to?** A note on why a loop
-   isn't a map dies with the loop → a comment. A vendor/API quirk, or an incident
-   and how it presented, survives any refactor of the line it currently sits on →
-   `docs/gotchas.d/`.
-
-Shorthand: **the invariant goes in the comment; the incident goes in the doc.**
-
-When both are warranted — the reader at the call site needs the warning, and the
-knowledge is also worth finding by search — the comment is a **pointer, not a
-copy**: `// see docs/gotchas.d/<issue>-<slug>.md`, never the incident retold
-in-line. Same anti-duplication rule as `CLAUDE.md`'s pointer-not-copy rule below,
-for the same reason: whichever copy rots first, the other keeps being read.
-
-This lane does not relax the naming/keying rules for gotchas and ADRs below — it
-only says some knowledge never belonged in either, because its whole audience is
-the person already reading that line.
+**Rule:** will the reader be at this exact line? does the knowledge outlive the code? **The
+invariant goes in the comment; the incident goes in the doc**; when both, the comment points.
+Full text: [a2-call-site-comment.md](a2-call-site-comment.md).
 
 #### Issue-keyed naming — the fix for any sequential-counter document (gotchas, ADRs)
 
-Both gotchas and ADRs used to accrete into a **single file with a shared
-sequential counter**: numbered sections cited elsewhere by number. That shape
-breaks identically for either kind of entry, and it was measured breaking for
-gotchas first: on the busiest repo, `docs/gotchas.md` reached ~15KB and dozens
-of entries, the renumber procedure this forced had to be re-explained verbatim
-in 8 separate session briefs in one week, and every renumber silently
-stale-dates every existing `§N` citation elsewhere in the repo, with no error.
-An ADR directory numbered sequentially (`0001-`, `0002-`, …) has the same
-failure mode for the same reason: two parallel branches each adding "the next
-one" pick the same number, and one silently loses its identity at merge.
-
-The fix is one convention applied to both, not two conventions that drift
-apart: **key the filename on the issue number, never a sequence.**
-`<issue-number>-<slug>.md`, one entry per file, append-only — never edit
-another entry's file. No shared counter, so no merge contention and nothing to
-ever renumber; the issue number is a stable id citations can use across
-renames; two parallel branches adding an entry each touch a different file,
-never the same line. Already proven this way on two repos in the fleet —
-`docs/gotchas.d/` carries ~96 entries on the busiest of them.
-
-- **New entry → new file**, `docs/gotchas.d/$N-<slug>.md` or
-  `docs/adr/$N-<slug>.md` as appropriate, in this session's commit.
-- **An existing single-file/sequential doc becomes optional, never mandatory
-  to keep updating.** `docs/gotchas.md`, if a repo has one, becomes a curated,
-  hand-maintained topical guide that *points into* `gotchas.d/` entries (`See
-  docs/gotchas.d/N-slug.md`) — never a second copy of one. A sequentially
-  numbered ADR directory, if a repo has one, is simply left as historical
-  record. Either way: don't copy an entry's content back and forth between
-  old and new; the old doc links or sits still, it doesn't duplicate.
-- **Migration is lazy, for both.** A repo that already has `docs/gotchas.md`
-  or a sequentially-numbered `docs/adr/` keeps it exactly as-is — no forced
-  split, no renumber, no rewrite. Only *new* entries from here on use the
-  issue-keyed name. If the directory doesn't exist yet, don't create the old
-  shape just to hold one entry — go straight to the issue-keyed one.
-- Repo has neither yet? The directory is created by this step, on demand —
-  no template run is required to start using it. A stub README for each
-  directory (naming rule, the don't-copy-back rule above) is available at
-  [`templates/gotchas-d-README.md`](../../templates/gotchas-d-README.md) and
-  [`templates/adr-README.md`](../../templates/adr-README.md) for
-  adoption/handbook-sync to seed; copying it in is optional, not a
-  precondition for writing the first entry.
+**Rule:** new entry ⇒ new file `docs/gotchas.d/$N-<slug>.md` or `docs/adr/$N-<slug>.md`, never a
+sequence; existing single-file/sequential docs stay as they are (lazy migration), never copied
+back and forth. Full text: [a2-issue-keyed-naming.md](a2-issue-keyed-naming.md).
 
 #### `CLAUDE.md` is a router, not an archive
 
-"`CLAUDE.md`" in this section means **the repo's instruction file** — `AGENTS.md` where
-the repo has one, else `CLAUDE.md` — together with everything `CLAUDE.md` `@`-imports,
-because that whole set is what is loaded. Where `CLAUDE.md` is a thin shell
-(`@AGENTS.md` plus tool blocks — `CONVENTIONS.md` [§9](../../CONVENTIONS.md#9-adopting-this) step 5, #417), edit the prose in
-`AGENTS.md`; the blocks left in `CLAUDE.md` (the Conventions block and its stamp, other
-tool-managed blocks) are maintained by their tools and are never edited as prose.
-
-It holds conventions, trunk (and the legacy tier, when that's all a repo declares),
-ports, run commands, and **pointers** to the docs
-that carry the depth. It is also the one file loaded in full into **every** session
-before any work starts, which makes it the worst place in the repo for append-only
-accretion — and currently the place accretion lands.
-
-Measured across six repos: **~30 lines added per session, and not one commit ever
-made one smaller.** The furthest along went 66 → 452 lines (39 KB, ~10-12k tokens)
-in two days; every session in it — including one that only touched CSS — pays that
-before doing anything, which is the opposite of code-start's whole premise.
-
-A better destination existing is not enough: the repos that already had a
-contributing/gotchas doc grew at exactly the same rate, because nothing pointed
-there. So the counter-pressure has to be here:
-
-- **If the knowledge belongs in `docs/`, the `CLAUDE.md` change is a pointer, not a
-  copy.** Duplicating is worse than misfiling — whichever copy rots first, the other
-  keeps being read. We found a restart procedure living in both, and three other
-  rules living *only* in `CLAUDE.md`, so no after-the-fact routing rule can sort
-  them: "ops → the deploy doc" silently loses a rule, "gotchas → `CLAUDE.md`"
-  returns a second drifting copy.
-- **Prefer editing an existing line to adding one.** If nothing already in
-  `CLAUDE.md` has become wrong, the correct diff to it is often no diff at all.
-- **This is not licence to distill less.** The content is worth keeping — location
-  and unboundedness are what's wrong. Move it; never drop it.
-
-This paragraph used to be enforcement-by-prose only, and that failed silently: a repo
-was measured at 112,382 bytes / 197 lines — the line count read as healthy while one
-"pointer" row alone had grown to 68,350 bytes (60.8% of the file), because nothing
-mechanical was watching bytes. `audit/audit.mjs` now flags this — a `CLAUDE.md` over
-~40 KB **counting every in-repo file it `@`-imports** (#417), or any single physical line
-more than 6x its own file's median and over 2 KB — as an advisory (`audit/README.md`, #64). It is a starting-point threshold, not a hard
-gate, but it means a session no longer has to catch this by eye.
+**Rule:** the instruction file (`AGENTS.md` where it exists, plus `@`-imports; never edit
+tool-managed blocks as prose) gets a pointer, not a copy; prefer editing a line to adding
+one; move content, never drop it. Full text: [a2-claude-md-router.md](a2-claude-md-router.md).
 
 #### A *new rule* is a follow-up unit, not a line in this session's diff
 
-A2 covers docs your work made **wrong** — the domain moved, the deploy changed, a
-gotcha surfaced. It does not cover a session that *concluded something new*: a rule
-about how people work, a decision with alternatives that were weighed. Those go on an
-Issue now and get written by a claimed unit of their own (`CONVENTIONS.md` [§5](../../CONVENTIONS.md#writing-a-conclusion-down--the-decision-and-the-document-are-two-units),
-*Writing a conclusion down*). Two reasons, and the second is the one agents miss:
-
-- The reasoning needs a home a reader can find, and a squash commit body is not one.
-- Normative prose is the most-contended file in a repo. Slipping an unclaimed rewrite
-  of it into an unrelated feature's diff is exactly the parallel-branch collision the
-  claim model exists to prevent — with nothing claimed, so nothing can warn anyone.
-
-Do not use this to postpone A2's actual job. "This doc is now wrong" is this session;
-"here is something new we decided" is the next one.
-
-**Touched the instruction file? Re-check its pointer section against `ls docs/`.** An index
-that omits half the docs is worse than no index, because a reader trusts it and
-stops looking. Measured: one repo's pointer section lists a session-notes file and
-the README while omitting four docs totalling 120 KB — this step grew the body for
-14 commits and never once maintained the index.
-
-Never write a secret into docs — only *where it lives* (a GitHub Secret, `.env`
-on the server, a password manager). Docs are deliverable paths; commit them in A3.
+**Rule:** something newly concluded goes on an Issue, written by its own claimed unit. Touched
+the instruction file ⇒ re-check its pointers against `ls docs/`. Never write a secret into docs.
+Full text: [a2-new-rule.md](a2-new-rule.md).
 
 #### `docs-lint`, if this repo has adopted it — structure, not truth
 
-A2 above is about whether docs are still **true**; a separate, optional check
-handles whether the doc graph is still **structurally sound** — router links that
-resolve, `docs/` files nobody points to, drafts left where current truth lives,
-§-citations that resolve. If this repo has copied in `docs-lint.mjs`
-(`templates/docs-lint.mjs` — colab-handbook #249), this is the moment to run it:
-docs were just touched, so this is when a broken reference is cheapest to catch.
-
-```sh
-node <path-to>/docs-lint.mjs --repo .
-```
-
-**Advisory only — never a reason to block A4.** Fold any finding into this
-session's report the same way you would any other advisory (CI gone red for an
-unrelated reason, a stale claim); fix it now if it is trivial and yours, otherwise
-say so and move on. No `docs-lint.mjs` in this repo → skip this step silently,
-same as any other optional tool this skill checks for.
+**Rule:** run `node <path-to>/docs-lint.mjs --repo .` if the repo has it; advisory only, never
+blocks A4. Read when the repo has `docs-lint.mjs`: [a2-docs-lint.md](a2-docs-lint.md).
 
 ### A2b. Reconcile the trunk checkout — is anything of mine sitting in it?
 
@@ -416,76 +176,13 @@ git -C <repo-root> fetch -q origin <trunk> && \
   git -C <repo-root> log --oneline origin/<trunk>..<trunk>   # #322: a COMMITTED stray, which the line above cannot see
 ```
 
-**Two measurements, because a stray write has two fates and only one of them is
-dirty.** `status` finds the write that is still uncommitted. It is silent about the one
-that got *committed* onto the trunk checkout — a clean tree, a clean `status`, and a
-commit on trunk that no branch carries and nothing will ever publish (#322: the
-measured case was a docs/gotcha distill, committed on trunk while wrapping). The second
-command is the only thing in this flow that sees it, and seeing it HERE — in the
-session that made it, while the branch is still open — is the cheap moment. Left
-standing, it surfaces later as somebody else's `colab ship` refusing on a precondition
-they did not cause.
-
-Non-empty second command → those commits are yours to move, not to publish:
-
-```sh
-git -C <repo-root> branch <type>/<slug>-<issue> <trunk>   # keep them, on a branch
-git -C <repo-root> reset --hard origin/<trunk>            # return the checkout to at-rest
-```
-
-Then ship that branch through the ordinary flow, or — if the content belongs to *this*
-session's work, which is the usual case — cherry-pick it into this worktree instead and
-let A4 commit it here. **Never reach for the push guard's environment variable**; that
-is the door #322 exists to close, and no message in this flow will offer it to you.
-
-Clean → skip to A3. Dirty → **git is authoritative about *whether* the root is dirty
-and silent about *whose* the dirt is.** Do not default to either answer; work the
-ladder, strongest signal first:
-
-1. **Branch overlap.** Did your branch touch this path?
-   `git -C <worktree> diff --name-only <base>...HEAD -- <path>`. Non-empty is close
-   to decisive, and it is exactly the observed shape: a docs file edited on both
-   sides, the paragraph present on trunk and missing from the worktree's own copy.
-2. **Content.** Read the diff (`git -C <repo-root> diff -- <path>`) for a tracked
-   file, or the file itself for an untracked one. Recognisable as this session's own
-   prose or edit → it's yours, whatever the branch overlap said — this is the only
-   signal that catches a stray write to a path your branch never otherwise touches.
-3. **Timing.** Was the root already dirty when this session opened? Check `$PLAN`'s
-   `Trunk-dirty-at-start` line (code-start step 4) if one exists, or compare the
-   file's mtime against this worktree's `created` timestamp (`colab worktrees`).
-4. **Company.** `colab worktrees` / `colab claims` — is any *other* session live in
-   this repo right now? None → "someone else's live work" has no candidate owner.
-
-One of three verdicts, never a fourth:
-
-- **Mine (or plausibly mine)** — recover it, don't discard it. Capture and replay a
-  patch, never a stash (`CONVENTIONS.md` [§4](../../CONVENTIONS.md#4-branches-and-commits)):
-  ```sh
-  git -C <repo-root> diff -- <path> > /tmp/misplaced.patch   # or read an untracked file directly
-  git -C <repo-root> checkout -- <path>     # only this path — never a whole-tree `checkout -- .`
-  git -C <worktree> apply /tmp/misplaced.patch
-  ```
-  Re-run A3's gate after — it needs the complete tree, not one missing the file you
-  are about to commit. **This is a recovery, not "cleaning someone else's work"** —
-  the never-clean rule below is about the other two verdicts, not this one.
-- **Conclusively not mine** (branch never touched it, content is unrelated, predates
-  this session, another live session is the plausible owner) — **report it, never
-  clean it**, exactly as before, but now say who the plausible owner is (from
-  `colab worktrees`) instead of only "the root is dirty."
-- **Can't tell** — leave it, and say precisely what you checked in the report.
-  Neither commit past it nor delete it.
-
-**Why `-uall` here, and tracked-only at `colab ship`:** an untracked file written by
-a relative path is invisible to `colab ship`'s dirty-trunk gate forever — it stays
-tracked-only by design (#86, regression-guarded, do not "fix" that). A2b is the only
-point in the whole flow that class is ever caught, so it deliberately reads wider.
-Two things that widens the net to catch, read correctly: a whole *directory* showing
-up under `-uall` is an unregistered worktree, not an edit — check `git worktree list`
-before reacting, the #273 lesson still applies. And `$PLAN`
-(`.plans/issue-$N.md`, legacy `.claude/plans/issue-$N.md`) or a brief under `.briefs/`
-showing up here is expected when this session wrote one — `colab worktree new` and
-code-start best-effort exclude the scratch dirs via `.git/info/exclude`, but that is
-machine-local, not a guarantee every adopter's `.gitignore` repeats it (#488).
+**Rule:** a committed stray (second command) is yours to move, never publish: branch it,
+`reset --hard origin/<trunk>`, ship or cherry-pick it here; never the push guard's env var.
+Dirty ⇒ the ownership ladder (branch overlap, content, timing, company) to one of three
+verdicts: **mine** — recover by patch, never a stash, re-run A3; **not mine** — report with
+its plausible owner, never clean it; **can't tell** — leave it, report what you checked.
+**Stop:** never commit past or delete dirt you cannot attribute.
+Full text: [a2b-ownership-ladder.md](a2b-ownership-ladder.md).
 
 ### A3. Run the repo's own quality gate
 
@@ -542,180 +239,33 @@ colab gate-hermetic -- <the repo's test command>     # e.g. -- npm test
                                                       #      -- sh -c 'php artisan test --compact'
 ```
 
-It runs the test step once as-is, then again with a fresh empty `HOME`, every variable
-whose name marks a service address, credential, socket, proxy or agent/dashboard/daemon
-runtime unset (`*_URL`, `*_TOKEN`, `*_KEY`, `COLAB_*` and the rest are listed in
-`colab gate-hermetic --help`), and the network off where the platform allows it. It
-always prints which network mode it used. Lint and type checks are not rerun — only the
-test step reads the environment in the way this catches. A toolchain manager's home
-(`RUSTUP_HOME`, `CARGO_HOME`, `PYENV_ROOT`, `GOPATH`, … — the list is in `--help`) is
-pinned to its real directory before `HOME` moves, when you have not set it and the
-directory exists, and each pin is printed (#447). The toolchain is what the tests run
-**on**, not something they read: without the pin a rustup proxy in an empty `HOME` tries
-to download a toolchain with the network off, and the verdict blamed the code for it.
-`--no-pin` gives the strict run back.
-
-| verdict | means | A3 is |
-|---|---|---|
-| `green` | both runs passed | green |
-| `skipped` | trunk's `project.yml` declares `live-env: none`; the skip is printed | green if the normal run is |
-| `red` | the normal run fails — an ordinary red gate | red — fix it as above |
-| `live-env` | normal green, hermetic red: the named tests depend on **this machine** | **red** — they will fail on every runner |
-
-- **`live-env` is a red gate, not an advisory.** Fix the test so it builds its own
-  fixture: a temp `HOME` it creates, a server it starts itself, an env var it sets for
-  its own child process. Do not add `--keep` to make it pass. `--keep` exists for a
-  variable the suite genuinely needs and the name rules strip. Each kept variable is
-  printed, so name it and say why in the distill comment. A `live-env` that prints the
-  toolchain `hint:` is a manager whose install is not at its default home: export its
-  home variable and re-run. That is not a reason to `--keep` something else.
-- **Record the verdict word in A1's distill and in the hand-off**, not only "gate green".
-  `code-ship` §0 reads it.
-- **Why this is a command and not a sentence here:** a test once read its author's home
-  config and a local fleet daemon. It was green in every local wrap and red on every CI
-  runner, and the red trunk then blocked the repo's sweep. The lesson was written down in
-  prose and the same class recurred two days later. Prose did not stop it; a gate does.
-- **Not a substitute for A5's branch-CI read.** Runners differ in more than environment
-  (OS, toolchain, a browser to boot). This closes one cause before the push. A5 still
-  reads the rest after it.
-- **The reverse does hold: a green branch-CI run can stand in for the local hermetic run
-  (#408).** Where the repo's CI runs on this branch, A5's read can supply the verdict
-  instead, and you record it as **`branch-ci <sha7>`**. All three conditions must hold,
-  and you check each one, not assume it:
-  1. A5 reads **`green`** at the branch's current head sha. The sha you record is that head.
-  2. That run's workflow **runs the same test command** as this gate. Read the workflow
-     file's `run:` steps; a job that only lints or builds does not count.
-  3. Its runner **does not share a developer's machine**: a hosted runner or an ephemeral
-     container runner. A self-hosted runner running in someone's login session inherits
-     their `HOME` and daemons, so it proves nothing about `live-env`.
-
-  In any other case, run `colab gate-hermetic` locally as above: no CI trigger for this
-  branch (for example a workflow that runs only on `pull_request` with no PR open), a class
-  other than `green`, or a workflow that does not run the tests. Taking this path means the
-  normal local run in A3 still happens, but the hermetic half waits for A5; if A5 then reads
-  anything but `green`, run `colab gate-hermetic` before you hand off. Why: on a repo whose
-  suite takes 6–10 minutes locally and about 2 on CI, the local repeat was the largest single
-  cost of a ship pass (up to 23 minutes of gate runs in one pass) and added no evidence the
-  CI run at the same sha had not already given.
-- **Run a long suite once, with its output teed to a file; grep the file for each question
-  after that** (`<test command> 2>&1 | tee "$TMPDIR/gate.log"`, with `set -o pipefail` so the
-  pipe keeps the suite's exit code). Never re-run the suite to read a different slice of its
-  output. Two measured ship passes re-ran a 7-minute suite only for that.
-- No `colab` on this machine → do the same by hand and say so: `env -i HOME="$(mktemp -d)"
-  PATH="$PATH" <test command>`, network left on (say that too).
+**Rule:** verdicts — `green` (both runs passed) · `skipped` (`live-env: none`; green if the
+normal run is) · `red` (normal run fails) · `live-env` (hermetic red: **a red gate**; fix the
+test's fixture, `--keep` only a variable the suite truly needs, named). Record the verdict word
+in A1 and the hand-off. A green branch-CI run at the head may stand in, as `branch-ci <sha7>`,
+only when all three of #408's conditions hold. Run a long suite once, teed, with `pipefail`.
+Full text, with the verdict table: [a3-hermetic-rules.md](a3-hermetic-rules.md).
 
 #### Read the verdict, not the transcript
 
-On a repo with a real suite, the gate's raw output is not a rounding error next to
-`CLAUDE.md` — measured on one mature repo, 366,594 bytes (~104,700 tokens) of
-combined stdout+stderr against a 113,989-byte `CLAUDE.md`, at 3,212/3,213 green.
-The volume is structural, not a sign of trouble: a TAP-style runner emits a
-`# Subtest:` line **and** an `ok N` line per assertion, so it scales with
-assertion count — which every convention here encourages growing. And it does not
-cost once: gate output joins the cached prompt prefix, so a run at turn 10 of a
-40-turn session is re-read on every turn after, not paid for a single time.
-
-A list of test names that passed is the least informative text a session can hold.
-Filter before reading it back:
-
-```sh
-<gate command> 2>&1 | grep -E '^(not ok|# fail|# pass|Test Files| *Tests )'
-```
-
-Adjust the pattern to the runner's own vocabulary — Jest/Vitest, `phpunit`,
-`pytest` each summarize differently; grep the one line format that carries
-pass/fail counts and failing test names, not the runner's default default verbosity.
-
-- **Quiet on green: pass counts only.** Detailed on red: the failure count and the
-  name + `file:line` of each failing test, not just that some failed.
-- **The exit code is the verdict — preserve it.** A naive pipe through `grep`
-  returns the filter's exit status, not the gate's; `set -o pipefail` (or capture
-  the gate's own exit code before piping) so a red gate cannot read as green. Get
-  this wrong and it is worse than reading the raw transcript.
-- **More than one runner (e.g. lint + tests) → filter each one.** A filter tuned
-  to one runner's output silently drops the other's failures, which reads as a
-  pass.
-- Truncation is not a substitute for filtering: a long run can push the one
-  failing line past a tool's read window while the summary sits further down
-  still — the filtered command above avoids ever emitting the noise, rather than
-  hoping the reader's truncation point lands somewhere safe.
+**Rule:** filter output before reading it — counts on green, each failure's name and
+`file:line` on red; keep the gate's exit code (`set -o pipefail`); filter each runner.
+Full text: [a3-read-the-verdict.md](a3-read-the-verdict.md).
 
 #### Notify the dashboard, best-effort
 
-Once the verdict is known, report it to a session dashboard's hand-off checklist, when
-one is configured — its mark "does this branch have a recorded quality-gate result?".
-Read-side and persistence already live there; this is the only write call site (#116):
-
-```sh
-colab gate-recorded             # gate came back green
-colab gate-recorded --fail      # gate is red, for a reason unrelated to this branch's own change
-```
-
-Same posture as every other `colab` notify call: silent when `notifyUrl` is unset
-(the default — nothing above breaks without it), fire-and-forget, never fails or
-slows this step. It resolves the worktree from cwd against `colab worktrees` and
-`HEAD`'s own sha automatically — pass `--worktree <name>` / `--sha <sha>` only when
-running it from somewhere other than the worktree whose gate just ran. No `colab`
-installed → skip this call; A3's own verdict (above) is still what governs A4/A5.
+**Rule:** `colab gate-recorded` (green) or `--fail` (red, unrelated to this branch);
+fire-and-forget; no `colab` ⇒ skip. Full text: [a3-notify-dashboard.md](a3-notify-dashboard.md).
 
 ### A3b. Request a migration grant, if this branch needs one
 
-`colab ship` refuses, unconditionally, any branch touching `database/migrations/`,
-`prisma/migrations/`, or a prefix `project.yml` declares under `migrations:` (#383)
-unless every claimed issue already carries a live
-`migration-granted` exemption of a role the repo accepts (`CONVENTIONS.md` [§5](../../CONVENTIONS.md#migration-exemption--a-narrow-door-through-no-new-migrations-opened-by-a-role-98-402),
-*Migration exemption*): a human grant on any repo, or — only where `project.yml` declares
-`migration-grant: reviewer` — a reviewer grant bound to this branch's exact HEAD. Either
-role is minted by a human (the human flag, never set by an agent), so creating a grant is never yours to do
-here, and neither is running the review in this session: it is the bound reviewer's job
-([`migration-review`](../migration-review/SKILL.md)), against the HEAD you push.
-What **is** yours: making sure the *request* gets filed, so the human with the
-authority to grant it is actually asked — instead of a session finishing, wrapping,
-reporting success, and going idle, with the un-shippable branch discovered only when a
-later `ship` (often days later, often a different session) refuses it.
-
-```sh
-git diff --name-only <base>...HEAD | grep -E '(^|/)(database|prisma)/migrations/'
-# … plus every prefix the repo declares — `migrations: [backend/migrations/]` adds:
-git diff --name-only <base>...HEAD | grep -E '^backend/migrations/'
-```
-
-- **No matches** → nothing to do, skip to A4.
-- **Matches, and every issue this branch carries already holds `needs-migration-grant`
-  or `migration-granted`** → the request (or the grant itself) already exists, skip to A4.
-- **Matches, and a carried issue holds neither** → apply the request signal to that
-  issue now, **before declaring hand-off complete** — and read it back, because an exit
-  code is not evidence the write took (`code-triage` carries this same lesson for the
-  identical failure):
-  ```sh
-  gh issue edit <issue> --add-label needs-migration-grant
-  gh issue view <issue> --json labels -q '.labels[].name' | grep -qx needs-migration-grant
-  ```
-  - **Confirmed present** → done. State it in the wrap report — which issue(s) got the
-    label — and note that a human still has to run
-    `colab migration-grant <issue> --branch <branch>` (human-gated — no agent may set the
-    env assertion that authorizes it) before `code-ship` can merge this branch. On a repo
-    declaring `migration-grant: reviewer`, say that a reviewer grant is the other route:
-    it needs a review of the HEAD you just pushed, so **any later commit voids it** — push
-    everything before asking for the review, not after.
-  - **Still absent after the add** → this repo adopted the conventions before
-    `needs-migration-grant` entered the set (#230) and never back-filled it, so the ADD
-    landed on a label that does not exist — the same doubly-silent failure
-    `readinessMissingLabelHint`/`migrationGrantMissingLabelHint` exist to name for
-    `deps-checked`/`migration-granted` (`tools/lib/labels.js`). **Do not create the label
-    here** — defining it is not this step's job; `tools/lib/labels.js`'s
-    `CONVENTION_LABELS` already owns that definition, and a skill that also defines it
-    becomes a second source of truth that drifts (this skill is public and copied by
-    other repos, so the drift ships to them too). Say so loudly instead: report that the
-    request could **not** be filed, and point at `colab labels --ensure` (or
-    `handbook-sync`, `CONVENTIONS.md` §9 step 3) to provision the convention label set —
-    never claim success on a write that did not land.
-
-This is mechanical, not a judgement call — a file-path diff, and a label *application*
-gated on nothing but ordinary `gh` access, no `COLAB_HUMAN`, no schema review. It never
-defines the label and never substitutes for the grant; only a human minting
-`migration-granted` — as a human grant, or as a reviewer grant where the repo's policy
-accepts one — still authorizes anything.
+**Rule:** diff `<base>...HEAD` for `database/migrations/`, `prisma/migrations/` and every
+declared `migrations:` prefix. No match, or every carried issue holds `needs-migration-grant`
+or `migration-granted` ⇒ A4. Else add `needs-migration-grant` **before declaring hand-off
+complete**, read it back, and report that a human still runs `colab migration-grant` (a
+reviewer grant is voided by any later commit). Granting or reviewing is never yours.
+**Stop:** label absent after the add ⇒ never create it; report the request could **not** be
+filed, pointing at `colab labels --ensure`. Full text: [a3b-migration-grant.md](a3b-migration-grant.md).
 
 ### A4. Commit only the deliverable paths
 
@@ -734,30 +284,11 @@ unprefixed commit is invisible in the changelog (`CONVENTIONS.md` [§4](../../CO
 git push -u origin <branch>    # a backup/record, NOT a PR, NOT trunk
 ```
 
-**A3's green gate does not answer for this branch's CI, and nobody downstream asks.**
-A3 runs the suite *locally*, on this machine; CI runs it on the runner. They disagree
-for ordinary reasons, and a branch once sat red three times on the runner under a clean
-local wrap with nothing downstream reading that run (`CONVENTIONS.md`
-[§4](../../CONVENTIONS.md#branch-ci--the-candidates-own-run-read-as-a-class-314),
-*Branch CI*, has the measurement).
-
-So read it here, where the push just created it, and pass the answer forward as a
-**class** rather than a pass/fail:
-
-```sh
-HEAD=$(git rev-parse HEAD)     # the pushed head — the only sha the class describes
-gh run list --branch <branch> --limit 20 \
-  --json headSha,status,conclusion,workflowName,databaseId \
-  -q "[.[] | select(.headSha == \"$HEAD\")]"
-```
-
-**Still `none` because a run is in flight, and you are waiting for the verdict?** Wait with
-`colab ci-wait --sha "$HEAD" --branch <branch> --timeout 15m`, then re-read — never a
-hand-rolled `sleep N; gh run …` loop, never two waits on one run, never `gh` stderr sent to
-`/dev/null`, never a wait left running in the background after your turn (#495; the
-measurement and the exit-code table are in `code-ship` B1a, *The wait is bounded*). Exit `4`
-(RATE_LIMITED) means the shared quota is gone: report the class as `none`, name the reset
-time it printed, and stop — do not retry.
+**Rule:** A3's local green does not answer for branch CI. Read every run at the pushed head
+(`HEAD=$(git rev-parse HEAD)`, then `gh run list --branch <branch>` filtered to `$HEAD`); waiting on
+one in flight is `colab ci-wait --sha "$HEAD" --branch <branch> --timeout 15m`, never a
+hand-rolled loop or a background wait. **Stop:** exit 4 (RATE_LIMITED) ⇒ report `none` with
+the reset time, do not retry. Full text, with the command: [a5-read-the-run.md](a5-read-the-run.md).
 
 The four classes, their quantifiers and each one's next step are defined in
 `CONVENTIONS.md` [§4](../../CONVENTIONS.md#branch-ci--the-candidates-own-run-read-as-a-class-314),
@@ -770,48 +301,13 @@ The four classes, their quantifiers and each one's next step are defined in
 | `red:infra` | a run failed **before** the suite could judge the branch — runner boot, browser install, billing lockout, a dependency fetch; **exit 2** where separated |
 | `red:finding` | the suite ran and something in it failed — **exit 1** where separated |
 
-- **A red class is data, not a failed wrap.** Do not go back and start fixing on a
-  `red:infra` — you would be debugging the runner, in a session whose oracle is already
-  green. Record the class and stop; §4's table says who acts next. `red:finding`
-  is the one that names *you*, and even then only if the finding is this branch's —
-  say so and let `code-ship` route it, rather than silently reopening the work.
-- **Where the repo does not separate exit 1 from exit 2, you cannot infer the class
-  from the conclusion alone** — `failure` is all GitHub reports. Read the failing job's
-  log far enough to say which side of the line it fell on — §4, *Branch CI*, gives the
-  ordered test (#354): a named failing assertion ⇒ `red:finding`; else a duration far
-  below the repo's norm, an empty `--log-failed`, or environment text (`EADDRINUSE`,
-  `signal: killed`, a timeout on a loaded host) ⇒ `red:infra`. If it genuinely cannot be
-  told, it is `red:finding` (§4 gives the reason).
-- **`none` splits two ways, and only one of them is worth waiting for.** Before
-  reporting it, ask whether a run *can* arrive for this ref at all — read the triggers,
-  do not assume:
 
-  ```sh
-  gh workflow list --all                       # what exists
-  sed -n '/^on:/,/^jobs:/p' .github/workflows/*.yml   # what each one triggers on
-  ```
-
-  A workflow that fires on `push: branches: [<trunk>]` and `pull_request` produces **no
-  run for a feature-branch push**, ever. Since A5 pushes a backup branch and explicitly
-  does **not** open a PR, `none` on a repo of that shape is permanent, not pending. Say which
-  one you measured:
-  - `none (no workflow triggers on a branch push here — CI runs on PR/trunk)` → nothing
-    to wait for; `code-ship` proceeds on it.
-  - `none (run queued/in flight)` → `code-ship` does the bounded wait.
-  - `none (no workflows on this repo)` → nothing configured at all.
-
-  Collapsing these into a bare `none` is what turns a bounded wait into a wait for a run
-  that was never coming.
-- **`local` mode:** do not block the wrap waiting for a run to finish. Report `none`,
-  say the run was in flight, and let `code-ship` do the bounded wait — it is the step that
-  actually needs the answer.
-- **`ci` mode (#410): this read IS the gate, so wait for it — bounded, 15 minutes, the same
-  bound as `code-ship` B1a.** `green` → the gate is green; record
-  `branch-ci <sha7> run <databaseId>`. `red:finding` → the gate is red: fix, commit, re-push,
-  re-read (a new head needs a new run). `red:infra`, or still in flight at the cap → hand off
-  with the run id and the class; `code-ship` B1a re-runs an infra red once and does the rest
-  of the wait. Never fall back to running the full suite locally to "save" the wait — that
-  is the double run #410 removed.
+**Rule:** a red class is data — record it, never start fixing `red:infra`; unseparated exit
+codes ⇒ §4's ordered log test, undecidable is `red:finding`. Say which `none` you measured (no
+branch-push trigger · in flight · no workflows). `local` mode: do not block, report `none`.
+`ci` mode (#410): wait 15 minutes; `green` ⇒ `branch-ci <sha7> run <databaseId>`;
+`red:finding` ⇒ fix, re-push, re-read; `red:infra` or capped ⇒ hand off with run id and class.
+Full text: [a5-reading-the-class.md](a5-reading-the-class.md).
 
 ## Hand off — assert the contract, then stop
 
@@ -858,71 +354,19 @@ actually meet.
 
 ### A missing plan file — say so, never report "hand-off complete" over it (#486)
 
-`code-start` writes the plan stub **before** the claim (rung 1 is the default —
-`CONVENTIONS.md` [§5](../../CONVENTIONS.md#planning--a-plan-file-that-outlives-one-command-and-who-drafts-it-94),
-*Planning*), so at wrap the file either exists or a decision not to write one was made.
-Check it here, mechanically:
-
-```sh
-MAIN_REPO="$(dirname "$(git rev-parse --path-format=absolute --git-common-dir)")"
-case "${COLAB_PLANS_DIR:-.plans}" in /*) PLANS_DIR="$COLAB_PLANS_DIR" ;; *) PLANS_DIR="$MAIN_REPO/${COLAB_PLANS_DIR:-.plans}" ;; esac
-for n in <every carried issue>; do
-  # configured dir first, then the legacy .claude/plans/ (#488 transition)
-  { test -f "$PLANS_DIR/issue-$n.md" || test -f "$MAIN_REPO/.claude/plans/issue-$n.md"; } \
-    && echo "#$n plan present" || echo "#$n NO PLAN"
-done
-```
-
-A group branch may share one file, named for any member — one present file covers the group.
-
-- **Present** → tick the box.
-- **Absent, and the work really was rung 0** (trivial/mechanical, the oracle
-  self-evident from the Issue) → write `rung 0 because <one line>` in the box's place.
-  The reason is the evidence: "single-line typo fix, oracle = the typo is gone" is one;
-  "forgot" or "small change" is not.
-- **Absent, and the work was not rung 0** — anything touching more than one file with
-  judgement in it, a grouped branch, a rule or skill change — is **not hand-off
-  complete**. Say exactly that in the report: `plan file missing — rung <1|2> work
-  wrapped without one`, and let `code-ship` grade against the Issue's stated ask instead.
-  Do not back-fill a plan now to make the box pass: a plan written after the code
-  describes the code, so it cannot catch anything the plan was there to catch.
-
-Measured: one session skipped the stub on a three-issue grouped branch, by its own
-account by mistake, left this box unchecked with no reason, and the wrap accepted it —
-nothing surfaced the miss until a person asked. An unchecked box with no reason reads
-exactly like "not applicable", which is why the escape line is required, not optional.
+**Rule:** check each carried issue for `$PLANS_DIR/issue-$n.md` or the legacy
+`.claude/plans/` path under the main checkout (via `--git-common-dir`). Present ⇒ tick.
+Absent, real rung 0 ⇒ `rung 0 because <one line>`. Absent otherwise ⇒ report `plan file
+missing — rung <1|2> work wrapped without one`, not hand-off complete.
+**Stop:** never back-fill a plan after the code. Full text, with the check script:
+[handoff-missing-plan.md](handoff-missing-plan.md).
 
 ### A partial wrap is a checkpoint, not the end of your turn (#486)
 
-The stop at the top of this section means **stop before `code-ship`** — it does not mean
-the session's work is over. A wrap whose distill (A1) lists remaining work on an issue
-this branch **still claims** — "issue X done, Y half done, Z design only" — is an
-**interim checkpoint**: it saves progress to the Issue and the remote, then the session
-**continues with the remaining items**, in the same turn.
-
-It may end its turn on a partial wrap only when it names a **concrete blocker** for every
-unfinished item, **on the Issue**, as its own line:
-
-```
-Blocked: <what is missing> — <who or what clears it> (<link: issue, decision, run id>)
-```
-
-"Needs a design ruling from <role>, filed as #M", "waits on #M to land first", "trunk CI
-red since <sha>, not this branch's" — each is a blocker: something outside this session
-must happen first. "Ran out of steam", "the rest is follow-up", "left for the next
-session" are not blockers, they are the work. With the line posted, the blocker **is** the
-hand-off: report it first, above the checklist, so whoever reads the report sees why the
-session stopped, not just that it did.
-
-The third exit is giving the remainder away explicitly: move the unfinished item to its
-own issue (agent-filed, A1), drop it from this branch's claim, and say so — then the wrap
-is no longer partial. Silently ending the turn with claimed work outstanding is not one of
-the exits.
-
-Measured: one unattended session posted a partial wrap (one issue done, one half done,
-one design-only), ended its turn naming no blocker, and sat idle about five and a half
-hours holding all three claims before a person noticed. Nothing in the session was
-waiting on anyone — it had simply read "stop" as "done".
+**Rule:** unfinished work on a still-claimed issue ⇒ keep working, same turn. End the turn only
+with a `Blocked: <what is missing> — <who or what clears it> (<link>)` line on the Issue per
+unfinished item, reported first, or with the remainder moved to its own issue and unclaimed.
+**Stop:** "the rest is follow-up" is not a blocker. Full text: [handoff-partial-wrap.md](handoff-partial-wrap.md).
 
 ## Verify complete
 
