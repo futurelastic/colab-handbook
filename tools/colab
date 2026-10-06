@@ -11872,14 +11872,21 @@ function shipMode(repoAbs, target, branch, commits) {
  */
 function shipCloseSpentContainers(repoAbs, closedIssues, { sha, target } = {}) {
   const seen = new Set();
+  const tr = tracker.forRepo(repoAbs);
   for (const start of closedIssues || []) {
     let child = start;
     for (let depth = 0; depth < 5; depth++) {
-      const view = git.ghIssueView(repoAbs, child, ['parent']);
+      const view = tr.issueView(child, ['parent', 'url']);
       const pnum = view && view.parent && Number.isInteger(view.parent.number) ? view.parent.number : null;
       if (pnum === null || seen.has(pnum)) break;
+      // #502: the parent's NUMBER means something only in the parent's own repository. A cross-repo
+      // parent looked up here would read nothing (a misleading "could not read") or an unrelated
+      // issue sharing the number — which could be classified and closed. Never evaluated from here.
+      const rel = containerClose.parentRelation(view);
+      if (rel.relation === 'other') { print(`  container ${containerClose.parentRelationFinding(rel)} (#502)`); break; }
+      if (rel.relation !== 'same') { warn(`container ${containerClose.parentRelationFinding(rel)}`); break; }
       seen.add(pnum);
-      const parent = git.ghIssueView(repoAbs, pnum, ['number', 'state', 'labels', 'body', 'subIssuesSummary']);
+      const parent = tr.issueView(pnum, ['number', 'state', 'labels', 'body', 'subIssuesSummary']);
       const c = containerClose.classifyContainer(parent || null);
       if (c.verdict !== 'close') {
         const finding = containerClose.containerFinding({ ...c, number: c.number === null ? pnum : c.number });
@@ -11890,7 +11897,7 @@ function shipCloseSpentContainers(repoAbs, closedIssues, { sha, target } = {}) {
       const cm = git.ghIssueComment(repoAbs, pnum, body);
       if (!cm.ok) warnDeferred(`could not post the container-close comment on #${pnum} — left OPEN`);
       if (!cm.ok) break;
-      const r = tracker.forRepo(repoAbs).issueClose(pnum, { reason: 'completed' });
+      const r = tr.issueClose(pnum, { reason: 'completed' });
       if (!r.ok) { warnDeferred(`could not close container #${pnum}: ${(r.stderr || '').split('\n')[0]}`); break; }
       print(`  closed container #${pnum} — all ${c.total} sub-issue(s) closed (#371)`);
       for (const d of containerClose.containerDeliveryLabels(parent.labels)) warn(`container #${pnum} carried ${d} — a container has no deliverable of its own (#371)`);
