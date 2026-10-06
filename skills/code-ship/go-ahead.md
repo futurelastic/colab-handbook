@@ -79,3 +79,23 @@ sentence yourself**; a go-ahead you wrote is not a go-ahead you received.
 
 This grants no latitude beyond the trunk-merge step either: no click of any kind
 authorises a promotion, a tag, or anything that deploys.
+
+**Who runs `colab ship` once the go exists — the human door (#525).** On this kind of
+repo `colab ship` refuses an agent at the autonomy gate, go-ahead or not. It cannot see the
+go-ahead, and an agent shell is never the terminal it asks for. Ruled on #525: the person
+runs ship themselves, and that command is the go
+([CONVENTIONS.md §2, *The human door*](../../CONVENTIONS.md#autonomy--the-human-door-525)).
+So, on a repo without `auto-trunk` and a change that is not docs-only:
+
+- Do everything up to B2 as usual: the hand-off contract, B0, B1, the grade. Then run
+  `colab ship --dry` and read the table.
+- Hand the human the commands the refusal printed, copied as they stand, with the selector
+  already filled in. The first is `colab ship --worktree <name>` at their own terminal, which
+  asks them to confirm. The second is the non-interactive form: the human-only environment
+  flag plus `--answered-by`. Ship then runs B0–B4 itself, and the 🚢 comment records the
+  human door.
+- **Never set the `COLAB_HUMAN` flag yourself because a go-ahead exists.** A dashboard click,
+  or a go typed earlier, is a go for the merge. It is not a live human at this command. The
+  handbook's `COLAB_HUMAN` rule is unchanged by #525.
+- **Never redo B0–B4 by hand** to route around the refusal. That hand path is what the door
+  replaced.

@@ -710,7 +710,8 @@ as a binary change. A zero-commit evidence-close has an empty diff, so it still 
 grade, trunk CI, migrations (still opened only by a grant of a role the repo accepts), writes,
 claims, and the `COLAB_SHIP=1` push. The autonomy row
 reads `docs-only (N files) — autonomy exception` in place of `auto-trunk`. `--dry --json` adds
-`autonomyGate: { via, docsOnly }`, with `via` one of `"auto-trunk"`, `"docs-only"` or `null`.
+`autonomyGate: { via, docsOnly }`, with `via` one of `"auto-trunk"`, `"docs-only"`, `"human"`
+(the human door, below) or `null`.
 A refusal keeps the existing message and adds one line naming why the change is not docs-only.
 A branch is measured **again after B0 sync**, before the squash, so a `pre-ship` hook that
 regenerated a file cannot carry code in behind the first verdict. The pre-push guard needs no
@@ -721,6 +722,40 @@ nothing past the trunk merge — promotion and deploys stay human, and a tag fol
 **Nothing widens the allowlist.** No `project.yml` field, flag or environment variable can add
 to it: `tools/lib/docs-only.js` holds both lists as constants. Widening it is a handbook change,
 reviewed in a commit like this one.
+
+### Autonomy — the human door (#525)
+
+**[Hard — gate: colab ship autonomy gate]** **⚖ Ruled by the repo owner, 2026-10-06 ([#525](https://github.com/futurelastic/colab-handbook/issues/525), option 1).**
+On a repo that does **not** declare `autonomy: auto-trunk`, "a human must trigger Phase B" means
+a person runs `colab ship` themselves. Running the command **is** the go. Ship opens the
+autonomy gate for that person and runs every other precondition unchanged. Before this rule the
+refusal sent the human away with nothing to run, so on the default (`manual`) setting they had to
+redo B0 through B4 by hand, or grant `auto-trunk` and lose the human go on every later merge.
+
+The bar is the one the CLI already applies to human-only acts (`colab adopt --autonomy`):
+- **An interactive terminal** — stdin and stdout both a TTY, and **not** an agent shell
+  (`CLAUDECODE=1` or `AI_AGENT` set). Ship then asks `proceed? [y/N]` just before its first
+  write. Anything but `y`/`yes` changes nothing.
+- **Or `COLAB_HUMAN=1` and `--answered-by <name>`**, for a person without a terminal prompt.
+  `COLAB_HUMAN=1` alone is refused, with what is missing.
+
+**[Hard — gate: colab ship autonomy gate]** **An agent never opens this door on its own.** An agent
+shell is not a terminal, whatever its stdio is. Setting `COLAB_HUMAN=1` follows the same rule
+as everywhere else in the handbook: a human's instruction in the live session, never the agent's
+own reading of the situation.
+
+What the door changes, and what it does not:
+- It is checked **after** auto-trunk and docs-only, so those keep their own rows and records.
+- The autonomy row reads `human door (#525): <how>`. `--dry --json` reports
+  `autonomyGate.human: { open, how, why }` whenever the door was consulted, with `how` one of
+  `"tty"`, `"colab-human"` or `null`.
+- An unattended refusal names the exact commands a human runs, with the same selector
+  (`--worktree`, `--branch` or `--direct`).
+- The 🚢 comment (and the ✅ evidence-close comment) records that the merge went through the
+  human door, and how.
+- `colab ship --batch` is unchanged. It still needs `auto-trunk`, because a batch is one
+  unattended push.
+- It grants nothing past the trunk merge. Promotion, tags and deploys stay where §6 puts them.
 
 ### Core paths — a PR and a non-author approval before landing (#350)
 

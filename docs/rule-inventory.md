@@ -332,6 +332,15 @@ excuses, and it names the rows that carry its rules now.
 | C2x.docs.19 | hard | tools/colab::NEVER tags, NEVER promotes ; templates/pre-push-guard::COLAB_PROMOTE | The docs-only exception grants nothing past the trunk merge; promotion and deploys stay human and a tag never comes from `colab ship`. | nothing past the trunk merge — promotion and deploys stay human | CONVENTIONS.md | #345 |
 | C2x.docs.20 | default |  | Nothing widens the docs-only allowlist: no field, flag or environment variable; widening is a handbook change. | No `project.yml` field, flag or environment variable can add | CONVENTIONS.md | #345 |
 
+### Autonomy — the human door (#525)
+
+| id | class | gate | rule | key | dest | source |
+|---|---|---|---|---|---|---|
+| C2x.human.01 | hard | tools/colab::function shipAutonomyGate ; tools/lib/ship-human-door.js::function humanDoorVerdict | Without `auto-trunk`, a person running `colab ship` is the go; ship opens the autonomy gate for them and runs every other precondition. | a person runs `colab ship` themselves. Running the command is the go. | CONVENTIONS.md | #525 |
+| C2x.human.02 | default |  | The human bar: an interactive terminal outside an agent shell, confirmed at a `[y/N]` prompt, or `COLAB_HUMAN=1` with `--answered-by`. | The bar is the one the CLI already applies to human-only acts | CONVENTIONS.md | #525 |
+| C2x.human.03 | hard | tools/lib/ship-human-door.js::function isAgentShell | An agent never opens the human door on its own; an agent shell is not a terminal. | An agent never opens this door on its own. | CONVENTIONS.md | #525 |
+| C2x.human.04 | default |  | The human door is checked after auto-trunk and docs-only; the refusal names the commands a human runs; the 🚢 comment records the door; `--batch` still needs `auto-trunk`. | It is checked after auto-trunk and docs-only | CONVENTIONS.md | #525 |
+
 ### Core paths — a PR and a non-author approval before landing (#350)
 
 | id | class | gate | rule | key | dest | source |
