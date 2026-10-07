@@ -105,7 +105,15 @@ test('cut: a refusal is a warning, the job stays green, nothing is published', {
   const r = runWithStub(CUT, { exit: 1, stdout: JSON.stringify({ ok: false, noop: false, created: false, tag: null, checks: [check('ci-green', true), check('version', false)] }) });
   assert.strictEqual(r.status, 0);
   assert.strictEqual(r.output.tag, undefined);
-  assert.match(r.stdout, /::warning::colab release cut refused: version/);
+  assert.match(r.stdout, /::warning::colab release cut refused: version — version detail/);
+});
+
+test('#545 cut: the refusal warning names each failing condition WITH its detail, passing ones omitted', { skip: !HAS_JQ && 'jq not installed' }, () => {
+  const schema = { condition: 'schema-additive', ok: false, detail: 'destructive schema change since v1: db/1.sql:3: `DROP TABLE` in the Up section' };
+  const r = runWithStub(CUT, { exit: 1, stdout: JSON.stringify({ ok: false, noop: false, created: false, tag: null, checks: [check('ci-green', true), schema, check('version', false)] }) });
+  assert.strictEqual(r.status, 0);
+  assert.match(r.stdout, /::warning::colab release cut refused: schema-additive — destructive schema change since v1: db\/1\.sql:3: `DROP TABLE` in the Up section; version — version detail/);
+  assert.doesNotMatch(r.stdout, /refused:.*ci-green/);
 });
 
 test('cut: a no-op is green and publishes nothing', { skip: !HAS_JQ && 'jq not installed' }, () => {

@@ -622,6 +622,42 @@ const LARAVEL_DESTRUCTIVE = /(\b(drop|dropIfExists|dropColumn|dropColumns|dropFo
 // statements `-- DropIndex`, which is a comment, not a statement.
 const SQL_DESTRUCTIVE = /\b(DROP\s+(TABLE|COLUMN|INDEX|CONSTRAINT|TYPE|VIEW|SCHEMA)|RENAME\s+(TO|COLUMN)|ALTER\s+COLUMN|TRUNCATE)\b/i;
 
+// #545: SQL migration tools that keep the rollback in the SAME file mark it with a comment line —
+// sql-migrate `-- +migrate Up|Down`, goose `-- +goose Up|Down`, dbmate `-- migrate:up|down`. The Down
+// section dropping what Up created is the ordinary shape of an additive migration (same reading as
+// Laravel's down() above), so only lines outside a Down section are matched. Measured: one adopting
+// repo's release stalled ~26 h on a purely additive file (six CREATE TABLE in Up, six DROP TABLE IF
+// EXISTS in Down) because the whole file was read. Fails CLOSED: lines before any marker are kept, a
+// file with no marker is read whole, and a second Up marker re-opens reading after a Down.
+const SQL_UP_MARKER = /^\s*--\s*(\+(migrate|goose)\s+up|migrate:up)\b/i;
+const SQL_DOWN_MARKER = /^\s*--\s*(\+(migrate|goose)\s+down|migrate:down)\b/i;
+// golang-migrate and friends put the rollback in its own `<n>_<name>.down.sql` — the whole file is a
+// Down section. Only an ADDED one is exempt; editing or deleting it is still a rewritten migration.
+const SQL_DOWN_FILE = /\.down\.sql$/i;
+
+/**
+ * The first destructive SQL statement outside a Down section — `{ statement, line, inUp }` (1-based
+ * line in the original file; `inUp` = an Up marker opened the section it sits in) — or null. Skipped
+ * lines are blanked, not removed, so line numbers stay true and a statement split across lines
+ * (`DROP\n  TABLE`) still matches, as it did when the whole file was read.
+ */
+function sqlDestructive(text) {
+  let section = 'pre';
+  const sections = [];
+  const kept = String(text).split('\n').map((l) => {
+    if (SQL_DOWN_MARKER.test(l)) section = 'down';
+    else if (SQL_UP_MARKER.test(l)) section = 'up';
+    sections.push(section);
+    // `--` comment lines (markers included) are blanked too: Prisma labels its statements `-- DropIndex`.
+    return section === 'down' || /^\s*--/.test(l) ? '' : l;
+  });
+  const joined = kept.join('\n');
+  const m = SQL_DESTRUCTIVE.exec(joined);
+  if (!m) return null;
+  const line = joined.slice(0, m.index).split('\n').length;
+  return { statement: m[0].replace(/\s+/g, ' '), line, inUp: sections[line - 1] === 'up' };
+}
+
 function laravelUpBody(text) {
   const up = text.search(/function\s+up\s*\(/);
   if (up === -1) return text;
@@ -664,9 +700,9 @@ function schemaVerdict(changes, since, declared) {
       const m = LARAVEL_DESTRUCTIVE.exec(laravelUpBody(text));
       if (m) findings.push(`${c.path}: \`${m[0].trim()}\` in up()`);
     } else {
-      const sql = text.split('\n').filter((l) => !/^\s*--/.test(l)).join('\n');
-      const m = SQL_DESTRUCTIVE.exec(sql);
-      if (m) findings.push(`${c.path}: \`${m[0]}\``);
+      if (SQL_DOWN_FILE.test(c.path)) continue;
+      const m = sqlDestructive(text);
+      if (m) findings.push(`${c.path}:${m.line}: \`${m.statement}\`${m.inUp ? ' in the Up section' : ''}`);
     }
   }
   if (findings.length) {
