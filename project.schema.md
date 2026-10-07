@@ -473,6 +473,17 @@ never restarts. The caller waits, gathers every ready candidate again, and calls
 with all of them. Once the window has passed, the same call declines the lone member to
 serial (exit `4`).
 
+### `ci-wait-factor` — optional
+
+`ci-wait-factor: 2` (a number ≥ 1; absent = 2). Every CI wait bound — B1a's, B2a's trunk cap,
+`colab ci-wait`'s default deadline, `colab ship`'s wedged-run age and empty-read grace — is
+**measured** from the repo's own CI history, and this multiple is the only declared part of it (#559).
+`colab ci-profile` prints both. A kind with too few samples stays on its bootstrap value, the
+pre-#559 value exactly; the 6 h wedge cap and 30/60/120 s polling are safety limits measurement may only tighten.
+`colab ship` reads the cached profile only — a verdict never waits on a history fetch. Formulas:
+[ADR 559](docs/adr/559-ci-wait-bounds-measured-rationale.md). **[Hard — gate: the audit fails it]**
+Anything but a number ≥ 1 fails the audit; the tools use `2` and say so — a bad value never produces a different behaviour.
+
 ### `migrations` — optional
 
 ```yaml
@@ -1547,6 +1558,7 @@ the shape that shows it. One writer at a time says nothing about who reads the r
 | `ship-batch` > 1 with no workflow firing on a `ship-batch/**` push, or without `autonomy: auto-trunk` → **advisory** | a batch opt-in that can never land a batch |
 | `ship-batch-wait` a whole number with a unit (`s`/`m`/`h`) when set → **finding** otherwise | a misspelled window silently read as no wait by `colab ship` |
 | `ship-batch-wait` > 0 with `ship-batch` absent or 1 → **advisory** | a partner window with no batch to fill |
+| `ci-wait-factor` a number ≥ 1 when set → **finding** otherwise | a misspelled multiple silently read as the default by every CI wait |
 | `migrations` a list of repo-relative prefixes when set — an absolute path, `..`, glob, the repo root, or a non-list → **finding** | a declaration the migration gate cannot honestly read |
 | `migrations` empty, restating a default, or naming one prefix twice → **advisory** | redundancy, harmless |
 | a tracked `*/migrations/` directory outside the defaults and every declared prefix → **advisory** (local only) | a migration layout `colab ship`'s gate cannot see |

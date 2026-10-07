@@ -21,7 +21,7 @@ gh run list --branch <branch> --limit 20 \
 ```
 
 **Still `none` because a run is in flight, and you are waiting for the verdict?** Wait with
-`colab ci-wait --sha "$HEAD" --branch <branch> --timeout 15m`, then re-read — never a
+`colab ci-wait --sha "$HEAD" --branch <branch>` (its deadline is the repo's CI bound), then re-read — never a
 hand-rolled `sleep N; gh run …` loop, never two waits on one run, never `gh` stderr sent to
 `/dev/null`, never a wait left running in the background after your turn (#495; the
 measurement and the exit-code table are in `code-ship` B1a, *The wait is bounded*). Exit `4`

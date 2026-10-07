@@ -49,6 +49,7 @@ const baseCiVerdict = require('./lib/base-ci-verdict');
 const treeGreen = require('./lib/tree-green');
 const verifyRuns = require('./lib/verify-runs');
 const ciWait = require('./lib/ci-wait'); // #495
+const ciProfile = require('./lib/ci-profile'); // #559
 const staleBase = require('./lib/stale-base');
 const dirtyOwner = require('./lib/dirty-owner');
 const scratchDirs = require('./lib/scratch-dirs');
@@ -10885,10 +10886,11 @@ function readCiVerdict(repoAbs, gh, target, trunk) {
   // (a ship reading trunk right after another ship landed it). That clears on its own: SELF_CLEARING,
   // never HUMAN_GATED, until the grace window has passed. Age unknown keeps the old class.
   if (run.status === 'none' && target === trunk) {
-    const fresh = ciVerdict.emptyReadVerdict(git.commitTimeMs(repoAbs, run.sha));
+    // #559: the grace is the repo's measured push→run lag when there is one — read from cache, never fetched here.
+    const fresh = ciVerdict.emptyReadVerdict(git.commitTimeMs(repoAbs, run.sha), { graceSec: ciProfileFor(repoAbs).th.emptyReadGraceSec });
     if (fresh.fresh) {
       verdict = { ok: false, class: SELF_CLEARING,
-        detail: `no run yet for ${at} — committed ${fresh.minutes.toFixed(1)}m ago, inside the ${ciVerdict.EMPTY_READ_GRACE_MINUTES}m grace; retry later${excludedRunsNote(run)}${verifyRuns.setAsideNote(run.setAside)}` };
+        detail: `no run yet for ${at} — committed ${fresh.minutes.toFixed(1)}m ago, inside the ${Math.round(fresh.graceMinutes * 10) / 10}m grace; retry later${excludedRunsNote(run)}${verifyRuns.setAsideNote(run.setAside)}` };
     }
   }
   // #373: trunk's own run not there yet or still in flight (never a finished red) — a batch that landed
@@ -11001,7 +11003,9 @@ function classifyCiRunRaw(repoAbs, run, at) {
   // Non-completed, non-none: running/queued/etc. Ordinarily SELF_CLEARING — but #155's wedged
   // shape (queued, zero jobs, unmoving for hours) can never clear on its own, so check for it.
   const jobCount = run.databaseId != null ? git.ghRunJobCount(repoAbs, run.databaseId) : null;
-  const wedge = ciVerdict.wedgedVerdict({ status: run.status, createdAt: run.createdAt, jobCount });
+  // #559: wedge age and zero-jobs floor follow the repo's measured CI (cached profile; bootstrap = 6h / 2m).
+  const th = ciProfileFor(repoAbs).th;
+  const wedge = ciVerdict.wedgedVerdict({ status: run.status, createdAt: run.createdAt, jobCount }, { wedgeAgeSec: th.wedgeAgeSec, zeroJobsFloorSec: th.zeroJobsFloorSec });
   if (wedge.wedged) {
     return { ok: false, class: HUMAN_GATED, detail: `run for ${at}: status=${run.status} — WEDGED (${wedge.reason}); a human must look, not retry` };
   }
@@ -14491,6 +14495,110 @@ function trunkCiCache(repoAbs) {
   };
 }
 
+// ---- ci-profile (#559) ------------------------------------------------------------------------
+// Every CI wait bound derives from the repo's own measured CI duration (tools/lib/ci-profile.js).
+// The profile is cached per checkout in `<git common dir>/colab-ci-profile.json` for a day; the
+// thresholds are NOT cached — they are recomputed from the cached profile and the CURRENT
+// `ci-wait-factor`, so editing the factor applies at once with no refetch.
+const CI_PROFILE_TTL_DEFAULT_SEC = 24 * 3600;
+const CI_PROFILE_CACHE_V = 1;
+
+function ciProfileTtlSec() {
+  const env = process.env.COLAB_CI_PROFILE_TTL;
+  return env !== undefined && env !== '' && Number.isFinite(Number(env)) ? Number(env) : CI_PROFILE_TTL_DEFAULT_SEC;
+}
+
+function ciProfileCacheFile(repoAbs) {
+  const dir = git.git(['rev-parse', '--path-format=absolute', '--git-common-dir'], repoAbs);
+  return dir.ok && dir.stdout ? path.join(dir.stdout.trim(), 'colab-ci-profile.json') : null;
+}
+
+/**
+ * The repo's completed CI runs in the profile window — up to 3 pages of the whole list plus one page
+ * of trunk pushes, so a branch-heavy repo still yields trunk samples. Returns `{ rows, runsRead }`,
+ * or `{ error }` when the list cannot be read (the caller falls back, never fails a wait on it).
+ */
+function fetchCiProfileRows(repoAbs, trunk, sinceIso) {
+  const jq = '.workflow_runs[] | [.id, .head_branch, .head_sha, .event, .name, .status, .conclusion, .run_attempt, .created_at, .updated_at, .head_commit.timestamp] | @json';
+  const day = sinceIso.slice(0, 10);
+  const paths = [1, 2, 3].map((n) => `repos/{owner}/{repo}/actions/runs?per_page=100&status=completed&created=%3E%3D${day}&page=${n}`);
+  paths.push(`repos/{owner}/{repo}/actions/runs?per_page=100&status=completed&created=%3E%3D${day}&branch=${encodeURIComponent(trunk)}&event=push`);
+  const seen = new Map();
+  for (let i = 0; i < paths.length; i++) {
+    const r = git.ghApi(repoAbs, [paths[i], '--jq', jq]);
+    if (!r.ok) return { error: git.gitFailureLine(r.stderr) || 'gh api failed' };
+    let n = 0;
+    for (const line of String(r.stdout || '').split('\n')) {
+      if (!line.trim()) continue;
+      let a; try { a = JSON.parse(line); } catch (_) { continue; }
+      n++;
+      seen.set(a[0], {
+        id: a[0], branch: a[1], sha: a[2], event: a[3], workflowName: a[4], status: a[5], conclusion: a[6],
+        attempt: a[7], createdMs: Date.parse(a[8]), updatedMs: Date.parse(a[9]), headCommitMs: a[10] ? Date.parse(a[10]) : null,
+      });
+    }
+    if (i < 3 && n < 100) i = 2; // a short page ends the paged list; the trunk page still runs
+  }
+  return { rows: [...seen.values()], runsRead: seen.size };
+}
+
+const ciProfileMemo = new Map();
+
+/**
+ * The one reader: `{ profile, th, factor, kindTrunk, cache: { state, ageSec, fetchedAt }, notes }`.
+ * `fetch`: 'never' (ship's hot path — never blocks a verdict on a history read) · 'if-stale' ·
+ * 'always'. A stale cache is still used when a refetch fails: old measured data beats bootstrap.
+ * TTL 0 (`COLAB_CI_PROFILE_TTL=0`) means no cache and no fetch — the bootstrap everywhere.
+ */
+function ciProfileFor(repoAbs, { fetch = 'never' } = {}) {
+  const memoKey = `${repoAbs}\u0000${fetch}`;
+  if (ciProfileMemo.has(memoKey)) return ciProfileMemo.get(memoKey);
+  const doc = projectDoc(repoAbs);
+  const factor = ciProfile.parseFactor(doc);
+  const trunk = resolveTrunk(repoAbs, doc);
+  const notes = [];
+  if (!factor.valid) notes.push(factor.reason);
+  const ttl = ciProfileTtlSec();
+  const file = ttl > 0 ? ciProfileCacheFile(repoAbs) : null;
+  let entry = null;
+  if (file) {
+    try { entry = JSON.parse(fs.readFileSync(file, 'utf8')); } catch (_) { entry = null; }
+    if (entry && (entry.v !== CI_PROFILE_CACHE_V || entry.trunk !== trunk || !entry.profile)) entry = null;
+  }
+  const ageSec = entry ? Math.max(0, Math.floor((Date.now() - entry.fetchedAt) / 1000)) : null;
+  let state = entry ? (ageSec < ttl ? 'fresh' : 'stale') : 'none';
+  const want = file && trunk && (fetch === 'always' || (fetch === 'if-stale' && state !== 'fresh'));
+  if (want) {
+    if (!isGhUsable(repoAbs)) notes.push(`gh not usable (${ghUnusableWhy(repoAbs)}) — CI history not read`);
+    else {
+      const nowMs = Date.now();
+      const sinceMs = nowMs - ciProfile.WINDOW_DAYS * 86_400_000;
+      const got = fetchCiProfileRows(repoAbs, trunk, new Date(sinceMs).toISOString());
+      if (got.error) notes.push(`could not read CI history (${got.error}) — ${entry ? 'using the stale cached profile' : 'using the bootstrap bounds'}`);
+      else {
+        const policy = verifyRuns.parsePolicy(doc);
+        const prof = ciProfile.profile(ciProfile.shaDurations(got.rows, { trunk, policy }), { sinceMs });
+        entry = { v: CI_PROFILE_CACHE_V, trunk, fetchedAt: nowMs, since: new Date(sinceMs).toISOString(), runsRead: got.runsRead, profile: prof };
+        state = 'fetched';
+        try {
+          const tmp = `${file}.${process.pid}.tmp`;
+          fs.writeFileSync(tmp, JSON.stringify(entry));
+          fs.renameSync(tmp, file);
+        } catch (_) { /* no cache, not an error */ }
+      }
+    }
+  }
+  const profile = entry ? entry.profile : null;
+  const out = {
+    trunk, factor, profile, th: ciProfile.thresholds(profile, factor.value),
+    cache: { state, ageSec: state === 'fetched' ? 0 : ageSec, fetchedAt: entry ? new Date(entry.fetchedAt).toISOString() : null,
+      since: entry ? entry.since : null, runsRead: entry ? entry.runsRead : null },
+    notes,
+  };
+  ciProfileMemo.set(memoKey, out);
+  return out;
+}
+
 // ci-wait — THE way to wait for CI (#495). Agents' hand-rolled `sleep N; gh run …` loops spent ~88%
 // of a shared identity's REST quota in one measured hour; this waits with backoff, conditional
 // requests, a deadline, and a distinct exit code for every way a wait can end.
@@ -14506,9 +14614,13 @@ Wait for CI and exit with its outcome. The ONE way to wait for a run: never hand
                   with no run yet counts as pending until the deadline. An abbreviated sha is
                   resolved in the repo first, and refused (exit 2) when it does not resolve — #529
   --branch <b>    narrow --sha to runs on that branch
-  --timeout <d>   deadline: 45m (default), 90s, 1h, or seconds
+  --timeout <d>   deadline: 90s, 15m, 1h, or seconds. Default: this repo's CI wait bound, derived
+                  from its measured CI duration (\`colab ci-profile\`, #559) — the trunk bound
+                  when the target is trunk, the branch bound for any other branch, the larger
+                  for a bare run id; 15m while the repo has no CI history. Skills omit it.
 
-Polls at 0s, then +30s, +60s, +120s, +120s … until the deadline. Every poll after the first is a
+Polls at 0s, then +30s, +60s, +120s, +120s … until the deadline (a repo whose CI bound is past 15m
+gets the same schedule stretched in proportion — never a faster one). Every poll after the first is a
 conditional request (If-None-Match); a 304 is not counted against the REST rate limit. After two
 304s in a row, and on the last poll before the deadline, it re-reads unconditionally: a stale ETag
 can cost one paid call, never the whole wait (#505). A 15-minute run costs about 10 requests. One wait per run per checkout: a second waiter is refused.
@@ -14523,7 +14635,8 @@ Exit codes — branch on these, never on the text:
   6 ALREADY_WAITING  another live ci-wait on this checkout holds the same run/sha
 
 It prints the wait it did: outcome, elapsed time, polls, and how many were 304s.
-  --json   { outcome, exit, target, polls, notModified, forced, waitedSec, detail, status, conclusion, url }`;
+  --json   { outcome, exit, target, polls, notModified, forced, waitedSec, deadlineSec, deadlineBasis,
+             detail, status, conclusion, url }`;
 
 function cmdCiWait(argv) {
   const opts = parseArgs(argv, {
@@ -14536,8 +14649,10 @@ function cmdCiWait(argv) {
     warn('ci-wait takes exactly one of <run-id> (numeric) or --sha <sha> [--branch <b>]');
     return ciWait.EXIT.USAGE;
   }
-  const deadlineSec = opts.timeout !== undefined ? ciWait.parseDuration(opts.timeout) : ciWait.DEFAULT_DEADLINE_SEC;
-  if (!deadlineSec) { warn(`--timeout: cannot read "${opts.timeout}" (try 45m, 90s, 1h)`); return ciWait.EXIT.USAGE; }
+  let deadlineSec = opts.timeout !== undefined ? ciWait.parseDuration(opts.timeout) : ciWait.DEFAULT_DEADLINE_SEC;
+  if (!deadlineSec) { warn(`--timeout: cannot read "${opts.timeout}" (try 15m, 90s, 1h)`); return ciWait.EXIT.USAGE; }
+  let deadlineBasis = opts.timeout !== undefined ? '--timeout' : 'bootstrap';
+  let schedule = ciWait.DEFAULT_SCHEDULE_SEC;
   const repoAbs = resolveRepo(opts);
   if (opts.sha) {
     // #529: the API reports a 40-hex head_sha and the rows are matched by equality, so an
@@ -14564,6 +14679,23 @@ function cmdCiWait(argv) {
     return ciWait.EXIT.ALREADY_WAITING;
   }
 
+  // #559: no --timeout → the repo's own bound, one source with every skill (they omit the flag). Read
+  // after the lock, so a refused second waiter never spends a history fetch; a failed read is a note.
+  if (opts.timeout === undefined) {
+    const cp = ciProfileFor(repoAbs, { fetch: 'if-stale' });
+    let onTrunk = null;
+    if (!runId && !opts.branch && cp.trunk) {
+      const remote = git.remoteFor(repoAbs);
+      onTrunk = git.git(['merge-base', '--is-ancestor', opts.sha, `${remote}/${cp.trunk}`], repoAbs).ok;
+    }
+    const kind = ciProfile.kindFor({ branch: opts.branch || null, trunk: cp.trunk, onTrunk });
+    deadlineSec = cp.th.ciWaitDefaultSec[kind];
+    schedule = cp.th.scheduleSec[kind];
+    const b = kind === 'any' ? (cp.th.basis.branchWait === 'measured' || cp.th.basis.trunkWait === 'measured' ? 'measured' : 'bootstrap') : cp.th.basis[`${kind}Wait`];
+    deadlineBasis = `${kind === 'any' ? 'larger' : kind} bound, ${b}`;
+    if (!opts.json) for (const n of cp.notes) process.stderr.write(`ci-wait: ${n}\n`);
+  }
+
   const verifyPolicy = verifyRuns.parsePolicy(projectDoc(repoAbs));
   const poll = (etag) => {
     const r = git.ghApiConditional(repoAbs, apiPath, etag);
@@ -14583,11 +14715,11 @@ function cmdCiWait(argv) {
     return { ...r, summary, state: ciWait.runState(summary) };
   };
 
-  if (!opts.json) process.stderr.write(`ci-wait: waiting on ${target} (deadline ${ciWait.fmtDuration(deadlineSec * 1000)}; polls at +0s, +30s, +60s, then every 120s)\n`);
+  if (!opts.json) process.stderr.write(`ci-wait: waiting on ${target} (deadline ${ciWait.fmtDuration(deadlineSec * 1000)}, ${deadlineBasis}; polls at +0s, +${schedule[0]}s, +${schedule[1]}s, then every ${schedule[2]}s)\n`);
   let res;
   try {
     res = ciWait.waitLoop({
-      poll, sleep: ciWait.sleepSync, deadlineSec,
+      poll, sleep: ciWait.sleepSync, deadlineSec, schedule,
       onPoll: (p) => { if (!opts.json) process.stderr.write(`ci-wait: poll ${p.poll} at +${ciWait.fmtDuration(p.elapsedMs)} — ${p.state}${p.notModified ? ' (304, not counted)' : ''}${p.forced ? ' (unconditional re-read — #505)' : ''}\n`); },
     });
   } finally {
@@ -14597,7 +14729,7 @@ function cmdCiWait(argv) {
   const code = ciWait.EXIT[res.outcome];
   const out = {
     outcome: res.outcome, exit: code, target, polls: res.polls, notModified: res.notModified, forced: res.forced,
-    waitedSec: Math.round(res.waitedMs / 1000), detail: res.detail || null,
+    waitedSec: Math.round(res.waitedMs / 1000), deadlineSec, deadlineBasis, detail: res.detail || null,
     status: s.status || null, conclusion: s.conclusion || null, url: s.url || null,
     ...(Array.isArray(s.setAside) && s.setAside.length ? { setAside: s.setAside } : {}),
   };
@@ -14790,6 +14922,74 @@ function cmdBatchStats(argv) {
   if (rep.serial.nearMissWait.samples) print(`  near misses  per pair, the wait from the lone change's own green that would have caught its partner: ${q(rep.serial.nearMissWait)}`);
   print(`  queue wait   green-at-head → landing: ${q(rep.queueWait)}`);
   for (const n of rep.notes) print(`  ! ${n}`);
+  return 0;
+}
+
+// ci-profile (#559) — the repo's measured CI duration and every wait bound derived from it.
+const HELP_CI_PROFILE = `colab ci-profile [--repo <path>] [--json] [--refresh]
+
+This repo's measured CI duration, and every CI wait bound derived from it (#559). One source:
+\`colab ci-wait\` with no --timeout, and \`colab ship\`'s wedged-run and empty-read verdicts, read
+these same numbers — no skill hard-codes a wait.
+
+Measured: per sha, the wall time from the first verifying run's creation to the last one's
+finish, over clean first-attempt green shas in the last ${ciProfile.WINDOW_DAYS} days — split into branch runs and trunk
+runs — plus the push → run lag on trunk. A kind with fewer than ${ciProfile.MIN_SAMPLES} samples stays on its
+bootstrap value, which is today's fleet value exactly (15m waits, 6h wedge, 10m grace, 2m floor).
+
+Declared: only \`ci-wait-factor: <number ≥ 1>\` in .github/project.yml (default ${ciProfile.DEFAULT_FACTOR}) — how many times
+the measured p95 a repo will wait. Every bound:
+  branch / trunk wait   2m + factor × p95 of that kind, rounded up to the minute
+  wedged-run age        factor × the longer wait, never above 6h
+  empty-read grace      factor × push→run p95, never below 2m
+  zero-jobs floor       2m (not measurable from the run list)
+  poll backoff          30/60/120s, stretched in proportion to a wait past 15m — never faster
+
+The profile is cached per checkout for a day (<git common dir>/colab-ci-profile.json;
+COLAB_CI_PROFILE_TTL seconds overrides, 0 = no cache and no read: the bootstrap). The bounds are
+recomputed from it on every read, so a changed ci-wait-factor applies at once.
+
+  --refresh   re-read the CI history now, whatever the cache's age
+  --json      { repo, trunk, source, factor, cache, measured: { branch, trunk, lag }, thresholds, notes }`;
+
+function cmdCiProfile(argv) {
+  const opts = parseArgs(argv, {
+    values: { '--repo': 'repo' },
+    flags: { '--json': 'json', '--refresh': 'refresh', '-h': 'help', '--help': 'help' },
+  });
+  if (opts.help) return print(HELP_CI_PROFILE);
+  const repoAbs = resolveRepo(opts);
+  if (!git.repoRoot(repoAbs)) throw new UserError(`${repoAbs} is not a git repo — pass --repo <path> to a clone, then run \`colab ci-profile\` again`);
+  const cp = ciProfileFor(repoAbs, { fetch: opts.refresh ? 'always' : 'if-stale' });
+  if (!cp.trunk) throw new UserError('Could not determine trunk branch — add `trunk: <branch>` to .github/project.yml, then run `colab ci-profile` again');
+  const p = cp.profile || ciProfile.profile([]);
+  const th = cp.th;
+  const source = cp.profile ? cp.profile.source : 'bootstrap';
+  if (opts.json) {
+    print(JSON.stringify({
+      repo: shortRepo(repoAbs), trunk: cp.trunk, source, factor: cp.factor, cache: cp.cache,
+      measured: { branch: p.branch, trunk: p.trunk, lag: p.lag }, thresholds: th, notes: cp.notes,
+    }, null, 2));
+    return 0;
+  }
+  const dur = (s) => (s === null || s === undefined ? '—' : ciWait.fmtDuration(s * 1000));
+  const cacheTxt = cp.cache.state === 'fetched' ? 'read now'
+    : cp.cache.state === 'none' ? 'no history read' : `read ${dur(cp.cache.ageSec)} ago (cache${cp.cache.state === 'stale' ? ', stale' : ''})`;
+  print(`ci-profile ${shortRepo(repoAbs)} → ${cp.trunk}  ${source.toUpperCase()} · ${cacheTxt} · ${cp.factor.valid ? cp.factor.reason : `${ciProfile.FACTOR_KEY}: ${ciProfile.DEFAULT_FACTOR} (declared value invalid)`}`);
+  if (source !== 'measured') print(`  ${source === 'bootstrap' ? 'every bound is' : 'unmeasured bounds are'} the bootstrap — fewer than ${ciProfile.MIN_SAMPLES} clean green shas per kind in ${ciProfile.WINDOW_DAYS}d`);
+  const k = (name, x) => print(`  ${name.padEnd(11)} ${x.source} · ${x.samples} sha(s)${x.samples ? ` · p50 ${dur(x.p50Sec)} · p95 ${dur(x.p95Sec)} · max ${dur(x.maxSec)}` : ''}`);
+  k('branch', p.branch);
+  k('trunk', p.trunk);
+  print(`  ${'push→run'.padEnd(11)} ${p.lag.source} · ${p.lag.samples} sample(s)${p.lag.samples ? ` · p95 ${dur(p.lag.p95Sec)}` : ''}`);
+  const row = (name, sec, basis, how, boot) => print(`  ${name.padEnd(11)} ${dur(sec).padEnd(7)} ${basis === 'measured' ? how : basis === 'default' ? how : 'bootstrap'}${basis === 'measured' && boot ? `   (bootstrap ${boot})` : ''}`);
+  row('branch wait', th.branchWaitSec, th.basis.branchWait, `2m + ${th.factor} × p95`, '15m');
+  row('trunk wait', th.trunkWaitSec, th.basis.trunkWait, `2m + ${th.factor} × p95`, '15m');
+  print(`  ${'ci-wait'.padEnd(11)} ${dur(th.ciWaitDefaultSec.branch)} branch · ${dur(th.ciWaitDefaultSec.trunk)} trunk · ${dur(th.ciWaitDefaultSec.any)} run id  (its default with no --timeout)`);
+  row('wedged age', th.wedgeAgeSec, th.basis.wedgeAge, `${th.factor} × the longer wait, ≤ 6h`, '6h');
+  row('empty read', th.emptyReadGraceSec, th.basis.emptyReadGrace, `${th.factor} × push→run p95, ≥ 2m`, '10m');
+  row('zero jobs', th.zeroJobsFloorSec, th.basis.zeroJobsFloor, 'default — not measurable from the run list');
+  print(`  ${'backoff'.padEnd(11)} branch ${th.scheduleSec.branch.map((x) => `${x}s`).join('/')} · trunk ${th.scheduleSec.trunk.map((x) => `${x}s`).join('/')}`);
+  for (const n of cp.notes) print(`  ! ${n}`);
   return 0;
 }
 
@@ -15580,6 +15780,8 @@ Commands:
   batch-stats [--since 30d] [--json]   how batch landing performs here, from git + CI history —
                                         fill, first-attempt green, drops, missed partners, queue
                                         wait; how a repo tunes ship-batch / ship-batch-wait (#554)
+  ci-profile [--json] [--refresh]      this repo's measured CI duration and every CI wait bound
+                                        derived from it — ci-wait's default deadline (#559)
   holders <path> [--base B] [--json]   who else is holding <path> — refs that touched it and
                                         have not landed on the base (filters the raw git-log
                                         one-liner through \`landed\`'s content classification)
@@ -15665,6 +15867,7 @@ function main(argv) {
     case 'ship': return cmdShip(rest);
     case 'landed': return cmdLanded(rest);
     case 'batch-stats': return cmdBatchStats(rest);
+    case 'ci-profile': return cmdCiProfile(rest);
     case 'trunk-ci': return cmdTrunkCi(rest);
     case 'ci-wait': return cmdCiWait(rest);
     case 'holders': return cmdHolders(rest);

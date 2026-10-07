@@ -38,7 +38,10 @@ const EXIT = Object.freeze({
 });
 
 const DEFAULT_SCHEDULE_SEC = Object.freeze([30, 60, 120]);
-const DEFAULT_DEADLINE_SEC = 45 * 60;
+// #559: the bootstrap deadline — the same 15 minutes every skill passed as `--timeout 15m`, so a caller
+// that omits the flag no longer silently waits three times as long (it was 45 min). Once a repo has CI
+// history, `colab ci-wait` derives its deadline from it instead (tools/lib/ci-profile.js).
+const DEFAULT_DEADLINE_SEC = 15 * 60;
 
 /** Seconds to sleep before poll number `i` (0-based, i ≥ 1); the last step repeats. */
 function delayFor(i, schedule = DEFAULT_SCHEDULE_SEC) {

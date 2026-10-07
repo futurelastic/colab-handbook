@@ -37,8 +37,8 @@ behind them — moved here verbatim (#524).
 - **`local` mode:** do not block the wrap waiting for a run to finish. Report `none`,
   say the run was in flight, and let `code-ship` do the bounded wait — it is the step that
   actually needs the answer.
-- **`ci` mode (#410): this read IS the gate, so wait for it — bounded, 15 minutes, the same
-  bound as `code-ship` B1a.** `green` → the gate is green; record
+- **`ci` mode (#410): this read IS the gate, so wait for it — bounded by the repo's CI wait
+  bound, the same as `code-ship` B1a (`colab ci-wait` with no `--timeout`, #559).** `green` → the gate is green; record
   `branch-ci <sha7> run <databaseId>`. `red:finding` → the gate is red: fix, commit, re-push,
   re-read (a new head needs a new run). `red:infra`, or still in flight at the cap → hand off
   with the run id and the class; `code-ship` B1a re-runs an infra red once and does the rest

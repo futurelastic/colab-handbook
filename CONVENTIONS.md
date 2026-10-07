@@ -1394,7 +1394,8 @@ than guessed.
   list` filter — one such filter, "green when any run succeeded", read a sha green that ship
   had parked every candidate on, and the red went unowned.
   **Waiting for that verdict is `colab ci-wait`, never a loop (#495).** It backs off
-  (30 s → 60 s → 120 s, then a deadline), sends conditional requests so an unchanged read is
+  (30 s → 60 s → 120 s, then a deadline — the repo's own CI wait bound, measured from its
+  history, `colab ci-profile`, #559), sends conditional requests so an unchanged read is
   free, and ends with its own exit code on a rate limit or an unreadable state instead of
   retrying. `colab trunk-ci` itself costs one runs read (plus one check-runs read on green) and
   caches its verdict per trunk sha for 45 s in the repo's git dir, shared by every session on
@@ -1458,7 +1459,7 @@ reading either sees the same spelling. Spell them exactly so, everywhere:
 | class | what the runs at the head sha show | next step |
 |---|---|---|
 | `green` | **every** run `completed`, at least one `success`, none `failure` | nothing owed — this precondition passes |
-| `none` | no run exists, or **any** run is still in flight | a run queued or in flight has not passed, it has **not run**: wait, bounded — **15 minutes per candidate** by default, then a defer carrying a re-measure trigger, never an open-ended poll (#370). A run that **cannot arrive** for this ref — no workflows, or workflows triggering only on `pull_request` / trunk push — is not pending: proceed, and the base's own CI is the whole CI story — so the trunk run at the squash sha is read after the merge, before any evidence is posted, and a red there is filed as `TRUNK RED:` in the same pass (`code-ship` B2a, #374) |
+| `none` | no run exists, or **any** run is still in flight | a run queued or in flight has not passed, it has **not run**: wait, bounded — **the repo's CI wait bound per candidate** (measured from its own CI history, `colab ci-profile`; 15 minutes until it has one, #559), then a defer carrying a re-measure trigger, never an open-ended poll (#370). A run that **cannot arrive** for this ref — no workflows, or workflows triggering only on `pull_request` / trunk push — is not pending: proceed, and the base's own CI is the whole CI story — so the trunk run at the squash sha is read after the merge, before any evidence is posted, and a red there is filed as `TRUNK RED:` in the same pass (`code-ship` B2a, #374) |
 | `red:infra` | a run failed **before** the suite could judge the branch — runner boot, browser install, billing lockout, dependency fetch. **Exit 2** where the repo separates them | re-run **once**; an identical failure twice is the runner, not the branch — hand it to the ops lane. Never merged past, never sent back to the implementer: there is nothing in the diff to fix |
 | `red:finding` | the suite ran and something in it failed. **Exit 1** where separated | back to an implementer session, **as a class** — a [send-back](#who-may-touch-a-branch--the-coordinator-never-edits-implementer-work-409), never a coordinator fix. Never merged past, never re-run |
 
@@ -1467,7 +1468,7 @@ reading either sees the same spelling. Spell them exactly so, everywhere:
   each green alone can combine red when neither run saw the other, and a textually clean
   merge re-runs nothing.
   The next step is mechanical — sync the base in, push, wait on the new run (the same
-  15-minute bound), then land; `colab ship` refuses with this verdict, `self-clearing`. A
+  bound), then land; `colab ship` refuses with this verdict, `self-clearing`. A
   head with no run at all is not stale (the `none` row above governs it). Skipping the
   re-run because the base's new commits "touch nothing the branch's tests import" is only
   ever allowed on a measurement, never on a guess — and no generic measurement exists today. Why: [ADR 539](docs/adr/539-branch-ci-rationale.md).

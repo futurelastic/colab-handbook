@@ -22,11 +22,11 @@ closes the loop B1a opened.
 ```sh
 SQUASH=<the squash sha B2 pushed>   # from B2's commit or `colab ship`'s output — not
                                     # origin/<base>'s tip, another ship may land on top
-colab ci-wait --sha "$SQUASH" --timeout 15m   # every workflow at that sha, one 15-min
-                                              # cap across all of them; exit codes as B1a
+colab ci-wait --sha "$SQUASH"   # every workflow at that sha, one cap across all of
+                                # them (the trunk bound, #559); exit codes as B1a
 ```
 
-- **Same bound as B1a — 15 minutes, a cap across every run at the sha, not 15 per run**
+- **B1a's bound, measured on trunk — a cap across every run at the sha, not one per run**
   (*The wait is bounded*, #370). Under `code-sweep` this is not an extra wait: the next
   candidate's B1 needs this same run green at the new trunk head before it can merge.
 - **Same quantifier as B1:** the squash is `green` only when **every** run at `$SQUASH` has
@@ -43,7 +43,7 @@ Classify what you see with B1a's test (*Telling infra from finding*):
 |---|---|
 | `green` | **B2b as usual, citing that run** — its id beside the squash sha in each evidence comment. The claim "CI passed" now names the run that passed |
 | `red:finding` | **File `TRUNK RED: <sha> (#N) fails <what>` in the same pass**, before any evidence comment. Put in it the failing test names, the run link, the squash sha and every issue the squash carried. Then post B2b's evidence with the red noted and that issue linked. **The grade stays the grade** — B1c judged the diff against the plan, not trunk's CI, so `verdict=pass` is still true and is still emitted. Do not revert and do not push a fix from here: the `TRUNK RED:` issue is the patch's work, and the next ship's B1 (*Red trunk*) orders it first |
-| `red:infra` | **Re-run once** (`gh run rerun <databaseId> --failed`, §4) and read it again inside the same 15-minute bound. The same failure twice ⇒ the runner, not the change: hand it to the ops lane and say in the evidence that trunk CI for `$SQUASH` is unverified, for that reason |
+| `red:infra` | **Re-run once** (`gh run rerun <databaseId> --failed`, §4) and read it again inside the same bound. The same failure twice ⇒ the runner, not the change: hand it to the ops lane and say in the evidence that trunk CI for `$SQUASH` is unverified, for that reason |
 | cap expired | **Say so in the evidence** — "trunk run `<databaseId>` for `<sha>` still running at `<ts>`" — and leave the re-measure trigger: that run completing. The next ship pass or `code-sweep` ping reads it by id. A red there is filed as `TRUNK RED:` exactly as above, by whichever session finds it |
 
 So no

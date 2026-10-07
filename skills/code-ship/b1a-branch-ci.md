@@ -34,7 +34,7 @@ step is in this skill:
 | class | what this skill does |
 |---|---|
 | `green` | proceed to B1b |
-| `none` | **Depends which `none` — check before you wait.** A run *queued or in flight* (including a slow sibling behind a green fast one, #307): wait, **bounded — 15 minutes for this candidate, then defer it** (below, *The wait is bounded*, #370). A run that **cannot arrive for this ref** — no workflows, or workflows triggering only on `pull_request` / `push` to trunk — is not pending: proceed, exactly as the no-runs line above already allows for `<base>` — and **B2a then reads the trunk run at your squash before any evidence is posted**, because that run is this change's first. A5 reports which; re-read the triggers if it did not. **At a red `<base>`, "proceed" reaches B1's stop** — only the branch carrying the fix may open a PR to get a run (*Red trunk*, above); a bystander waits |
+| `none` | **Depends which `none` — check before you wait.** A run *queued or in flight* (including a slow sibling behind a green fast one, #307): wait, **bounded — the repo's CI wait bound for this candidate, then defer it** (below, *The wait is bounded*, #370). A run that **cannot arrive for this ref** — no workflows, or workflows triggering only on `pull_request` / `push` to trunk — is not pending: proceed, exactly as the no-runs line above already allows for `<base>` — and **B2a then reads the trunk run at your squash before any evidence is posted**, because that run is this change's first. A5 reports which; re-read the triggers if it did not. **At a red `<base>`, "proceed" reaches B1's stop** — only the branch carrying the fix may open a PR to get a run (*Red trunk*, above); a bystander waits |
 | `red:infra` | **re-run it once** (`gh run rerun <databaseId> --failed`), then re-read. Identical failure twice ⇒ it is the runner, not the branch: hand it to the **ops lane** and stop. Do not merge, and do not send it back to the implementer — there is nothing in the diff for them to fix |
 | `red:finding` | **send back to the implementer, as a class** (§0, *send-back*, #409) — the branch's own suite found something. Never a merge, never a re-run, never a fix from here |
 
@@ -47,12 +47,15 @@ run on `<base>`; re-measure trigger: that run. What is still never a defer is un
 originating session's composer, silence or parked state enters this decision at all —
 every step here runs in the coordinator's own worktree.
 
-- **The wait is bounded — 15 minutes per candidate, then a defer (#370).**
+- **The wait is bounded — the repo's CI wait bound per candidate, then a defer (#370).**
+  The bound is measured from the repo's own CI history, never a handbook number (#559):
+  `colab ci-profile` prints it — 2 min + `ci-wait-factor` × the p95 of its branch runs, 15
+  minutes while it has no history — and `colab ci-wait` uses it when no `--timeout` is given.
   Why: [ADR 536](../../docs/adr/536-code-ship-b1a-branch-ci-rationale.md).
   Wait with `colab ci-wait`, with a wall-clock cap:
 
   ```sh
-  colab ci-wait --sha "$BHEAD" --branch <branch> --timeout 15m   # every run at the head sha
+  colab ci-wait --sha "$BHEAD" --branch <branch>   # every run at the head sha; deadline = the bound
   ```
 
   **`colab ci-wait` is the only way to wait for CI (#495)** — here, in `code-sweep`, in
@@ -101,7 +104,7 @@ every step here runs in the coordinator's own worktree.
   now refuses with a `branch run contains current base (#395)` row, class `self-clearing`,
   whenever a branch run exists at the pushed head and that head does not contain
   `<base>`'s tip. The fix is mechanical and yours: B0 (merge `<base>` in), push, wait on the
-  new run under the same 15-minute bound, re-run ship. A head with **no** run (workflows
+  new run under the same bound, re-run ship. A head with **no** run (workflows
   that cannot fire for a branch ref) is not stale — B2a covers it. A batch member is exempt:
   the combined run is its re-read. Skipping the re-run because "the new `<base>` commits
   touch nothing this branch's tests import" is **not** allowed — that cannot be measured
@@ -109,7 +112,7 @@ every step here runs in the coordinator's own worktree.
 - **In a batch (#373), the combined run is that re-read — once, for every member.** Its head
   is trunk plus each member's squash, so it grades each member's synced state; do not also
   re-run each member. Read it through `colab ship --batch` (it applies the same all-runs rule
-  and counts the one re-run), wait on it with the same 15-minute bound, and classify its red
+  and counts the one re-run), wait on it with the same bound, and classify its red
   exactly as a branch red — only the one re-run belongs to the batch; after that, serial.
 - **Never wait out a bound on a repo whose workflows cannot fire for a branch ref.**
   That shape is a workflow that triggers only on `push: branches: [<trunk>]` and

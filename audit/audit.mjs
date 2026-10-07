@@ -98,6 +98,7 @@ const installRoute = require("../tools/lib/install-route.js");
 const releaseRunner = require("../tools/lib/release-runner.js"); // #453
 const { parseWorkflowOn, workflowFiresOnTag, prereleaseTagTriggers, workflowsFiringOnBranchPush } = require("../tools/lib/workflow-triggers.js");
 const shipBatch = require("../tools/lib/ship-batch.js");
+const ciProfile = require("../tools/lib/ci-profile.js"); // #559
 // #383: where migrations live — the one rule `colab ship`'s gate and `release cut` read; the audit
 // validates the `migrations:` declaration against it and reports a `*/migrations/` dir it misses.
 const migrationPaths = require("../tools/lib/migration-paths.js");
@@ -1313,6 +1314,16 @@ function auditRepo(target, ctx) {
       const wCfg = shipBatch.parseShipBatchWait(cfg);
       if (!wCfg.valid) fail(`${wCfg.reason} — see project.schema.md, ship-batch-wait`);
       else if (wCfg.sec > 0 && shipBatch.parseShipBatch(cfg).n <= 1) warn(`${wCfg.reason} is inert without ship-batch > 1 — there is no batch for a partner to join`);
+    }
+
+    // ---- ci-wait-factor (#559) ----------------------------------------------------
+    // The one declared part of every CI wait bound: a multiple of the repo's MEASURED CI duration
+    // (tools/lib/ci-profile.js parseFactor, the reading colab ci-wait and colab ship use). A malformed
+    // value fails here; the tools fall back to the documented default (2) and say so — never to a
+    // different behaviour. No ceiling: how patient a repo is, is the repo's choice.
+    if (ciProfile.FACTOR_KEY in (cfg || {}) && cfg[ciProfile.FACTOR_KEY] !== null) {
+      const f = ciProfile.parseFactor(cfg);
+      if (!f.valid) fail(`${f.reason} — see project.schema.md, ci-wait-factor`);
     }
 
     // ---- migrations (#383) ----------------------------------------------------
