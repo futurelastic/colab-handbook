@@ -366,7 +366,8 @@ missing — rung <1|2> work wrapped without one`, not hand-off complete.
 **Rule:** unfinished work on a still-claimed issue ⇒ keep working, same turn. End the turn only
 with a `Blocked: <what is missing> — <who or what clears it> (<link>)` line on the Issue per
 unfinished item, reported first, or with the remainder moved to its own issue and unclaimed.
-**Stop:** "the rest is follow-up" is not a blocker. Full text: [handoff-partial-wrap.md](handoff-partial-wrap.md).
+**Stop:** "the rest is follow-up" is not a blocker; nor is a person-only check — no hold, it becomes a
+`Human verify:` row and the branch hands off finished (#541, [handoff-human-verify.md](handoff-human-verify.md)). Full text: [handoff-partial-wrap.md](handoff-partial-wrap.md).
 
 ## Verify complete
 
