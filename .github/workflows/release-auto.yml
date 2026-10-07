@@ -223,7 +223,9 @@ jobs:
                 echo
               } >> "$GITHUB_STEP_SUMMARY"
             else
-              echo "::warning::colab release cut refused: $(jq -r '[.checks[]? | select(.ok | not) | .condition] | join(", ")' "$OUT")"
+              # #545: condition AND detail — the name alone hid which file and statement refused, so a
+              # false refusal could not be told from a real one without re-running the cut by hand.
+              echo "::warning::colab release cut refused: $(jq -r '[.checks[]? | select(.ok | not) | "\(.condition) — \(.detail)"] | join("; ")' "$OUT")"
             fi
           fi
 

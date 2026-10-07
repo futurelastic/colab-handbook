@@ -170,6 +170,66 @@ test('schema: a drop in up(), an edited migration, destructive Prisma SQL — ea
   assert.strictEqual(rc.schemaVerdict([{ status: 'A', path: 'prisma/migrations/20260902/migration.sql', content: additive }], 'v1').ok, true);
 });
 
+// #545: an explicit Down/rollback section is read like Laravel's down() — its DROPs never count.
+const D = ['modules/'];
+const sqlMigrate = (up, down) => `-- +migrate Up\n${up}\n\n-- +migrate Down\n${down}\n`;
+const CREATES = Array.from({ length: 6 }, (_, i) => `CREATE TABLE IF NOT EXISTS t${i} (\n  id BIGINT PRIMARY KEY\n);`).join('\n');
+const DROPS = Array.from({ length: 6 }, (_, i) => `DROP TABLE IF EXISTS t${i};`).join('\n');
+
+test('schema #545: sql-migrate file — DROP TABLE only in the Down section passes (the measured stall)', () => {
+  const v = rc.schemaVerdict([{ status: 'A', path: 'modules/billing/sql/001_init.sql', content: sqlMigrate(CREATES, DROPS) }], 'v1', D);
+  assert.strictEqual(v.ok, true, v.detail);
+  assert.match(v.detail, /1 migration file\(s\) added since v1, none destructive/);
+});
+
+test('schema #545: goose and dbmate markers are read the same way, case-insensitively', () => {
+  const goose = `-- +goose Up\nCREATE TABLE a (id INT);\n-- +goose Down\nDROP TABLE a;\n`;
+  const dbmate = `-- migrate:up\nCREATE TABLE b (id INT);\n\n-- migrate:down\nDROP TABLE b;\n`;
+  const upper = `-- +MIGRATE UP\nCREATE TABLE c (id INT);\n-- +MIGRATE DOWN\nDROP TABLE c;\n`;
+  for (const content of [goose, dbmate, upper]) {
+    const v = rc.schemaVerdict([{ status: 'A', path: 'modules/x/sql/1.sql', content }], 'v1', D);
+    assert.strictEqual(v.ok, true, `${content}\n${v.detail}`);
+  }
+});
+
+test('schema #545: a DROP in the Up section still refuses, and the detail names file, line and statement', () => {
+  const content = sqlMigrate('CREATE TABLE a (id INT);\nDROP TABLE legacy;', 'DROP TABLE a;');
+  const v = rc.schemaVerdict([{ status: 'A', path: 'modules/x/sql/2.sql', content }], 'v1', D);
+  assert.strictEqual(v.ok, false);
+  assert.match(v.detail, /modules\/x\/sql\/2\.sql:3: `DROP TABLE` in the Up section/);
+});
+
+test('schema #545: fails closed — no marker reads the whole file; text before any marker is read; a second Up re-opens', () => {
+  const noMarker = 'CREATE TABLE a (id INT);\nDROP TABLE a;\n';
+  assert.strictEqual(rc.schemaVerdict([{ status: 'A', path: 'modules/x/sql/3.sql', content: noMarker }], 'v1', D).ok, false);
+  const beforeMarker = 'TRUNCATE users;\n-- +migrate Up\nCREATE TABLE a (id INT);\n-- +migrate Down\nDROP TABLE a;\n';
+  const pre = rc.schemaVerdict([{ status: 'A', path: 'modules/x/sql/4.sql', content: beforeMarker }], 'v1', D);
+  assert.strictEqual(pre.ok, false);
+  assert.match(pre.detail, /4\.sql:1: `TRUNCATE`/);
+  assert.doesNotMatch(pre.detail, /in the Up section/);
+  const reopened = `${sqlMigrate('CREATE TABLE a (id INT);', 'DROP TABLE a;')}-- +migrate Up\nALTER TABLE b DROP COLUMN c;\n`;
+  assert.strictEqual(rc.schemaVerdict([{ status: 'A', path: 'modules/x/sql/5.sql', content: reopened }], 'v1', D).ok, false);
+});
+
+test('schema #545: a statement split across lines still matches, at its first line', () => {
+  const v = rc.schemaVerdict([{ status: 'A', path: 'prisma/migrations/1/migration.sql', content: 'SELECT 1;\nDROP\n  TABLE x;\n' }], 'v1');
+  assert.strictEqual(v.ok, false);
+  assert.match(v.detail, /migration\.sql:2: `DROP TABLE`/);
+});
+
+test('schema #545: an added golang-migrate .down.sql is a rollback file — exempt; editing one still refuses', () => {
+  const added = rc.schemaVerdict([
+    { status: 'A', path: 'modules/x/sql/000001_init.up.sql', content: 'CREATE TABLE a (id INT);' },
+    { status: 'A', path: 'modules/x/sql/000001_init.down.sql', content: 'DROP TABLE a;' },
+  ], 'v1', D);
+  assert.strictEqual(added.ok, true, added.detail);
+  const edited = rc.schemaVerdict([{ status: 'M', path: 'modules/x/sql/000001_init.down.sql' }], 'v1', D);
+  assert.strictEqual(edited.ok, false);
+  assert.match(edited.detail, /edited/);
+  const upDrop = rc.schemaVerdict([{ status: 'A', path: 'modules/x/sql/000002_x.up.sql', content: 'DROP TABLE a;' }], 'v1', D);
+  assert.strictEqual(upDrop.ok, false);
+});
+
 // ---- switches ---------------------------------------------------------------------------------
 
 const issue = (number, state, body, stateReason = state === 'CLOSED' ? 'COMPLETED' : null) => ({ number, state, stateReason, body });
