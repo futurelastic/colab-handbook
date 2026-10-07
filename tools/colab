@@ -10960,6 +10960,37 @@ function noWorkflowTrunkDoor(repoAbs, r, target, trunk, branch) {
     detail: `none — ${at} has no repo-owned workflow (#482), so the branch's own run decides, and ${ownAt} ${why}${excludedRunsNote(r.run)}` };
 }
 
+/**
+ * The verifying-runs policy every CI read uses (#503), plus the lost-push rescue's resolver (#567):
+ * the names of the workflows whose definition AT THAT SHA is triggered by a branch push or a pull
+ * request. Lazy — called only when a `workflow_dispatch` run has no push sibling — and fail-closed:
+ * a sha that is not local, or a tree that cannot be read, yields null and the run stays set aside.
+ */
+function verifyingPolicy(repoAbs) {
+  return { ...verifyRuns.parsePolicy(projectDoc(repoAbs)), dispatchVerifies: (sha) => pushVerifiedWorkflowsAt(repoAbs, sha) };
+}
+
+function pushVerifiedWorkflowsAt(repoAbs, sha) {
+  if (!sha) return null;
+  if (!git.git(['cat-file', '-e', `${sha}^{commit}`], repoAbs).ok) {
+    // Not local yet (another machine landed it): one fetch of that commit, then fail closed.
+    git.git(['fetch', '--quiet', git.remoteFor(repoAbs) || 'origin', sha], repoAbs);
+    if (!git.git(['cat-file', '-e', `${sha}^{commit}`], repoAbs).ok) return null;
+  }
+  const ls = git.git(['ls-tree', '--name-only', `${sha}:.github/workflows`], repoAbs);
+  if (!ls.ok) return null;
+  const names = [];
+  for (const f of ls.stdout.split('\n').map((x) => x.trim()).filter((x) => /\.ya?ml$/.test(x))) {
+    const rel = `.github/workflows/${f}`;
+    const show = git.git(['show', `${sha}:${rel}`], repoAbs);
+    if (!show.ok) continue;
+    const t = verifyRuns.workflowTriggers(show.stdout);
+    // GitHub names a workflow with no `name:` by its file path.
+    if (t && t.verifiesBranches) names.push(t.name || rel);
+  }
+  return names;
+}
+
 /** Number of workflow files in `.github/workflows` at `sha`, or null when the tree cannot be read. */
 function trunkWorkflowFiles(repoAbs, sha) {
   if (!git.git(['cat-file', '-e', `${sha}^{commit}`], repoAbs).ok) return null;
@@ -10990,7 +11021,7 @@ function readCiVerdict(repoAbs, gh, target, trunk) {
   if (!gh) return { run: null, final: true, verdict: { ok: false, class: SELF_CLEARING, detail: `gh not usable (${ghUnusableWhy(repoAbs)}) — cannot confirm CI` } };
   // #503: only runs that VERIFY the code count — a post-CI release/deploy run at the same sha is set
   // aside and named, never a red and never a reason to wait (tools/lib/verify-runs.js).
-  const readOpts = { verifying: verifyRuns.parsePolicy(projectDoc(repoAbs)) };
+  const readOpts = { verifying: verifyingPolicy(repoAbs) };
   let run = git.ghRunForSha(repoAbs, target, undefined, undefined, readOpts);
   let via = target;
   if (run && run.status === 'none' && target !== trunk) {
@@ -11091,7 +11122,7 @@ function treeGreenVerdict(repoAbs, run, verdict) {
  */
 function classifyCiRun(repoAbs, run, at) {
   const v = classifyCiRunRaw(repoAbs, run, at);
-  return { ...v, detail: v.detail + excludedRunsNote(run) + supersededRunsNote(run) + verifyRuns.setAsideNote(run && run.setAside) };
+  return { ...v, detail: v.detail + excludedRunsNote(run) + supersededRunsNote(run) + verifyRuns.setAsideNote(run && run.setAside) + verifyRuns.dispatchCountedNote(run && run.dispatchCounted) };
 }
 
 /**
@@ -14594,7 +14625,8 @@ function cmdTrunkCi(argv) {
     if (verdict === 'UNREADABLE' && gh && !git.ghState().ok) detail += ` (${ghUnusableWhy(repoAbs)})`;
     out = { verdict, trunk, sha, ok: r.verdict.ok, class: r.verdict.class || null, detail,
       ...(r.verdict.treeGreen ? { cited: r.verdict.treeGreen } : {}),
-      ...(r.run && Array.isArray(r.run.setAside) && r.run.setAside.length ? { setAside: r.run.setAside } : {}) };
+      ...(r.run && Array.isArray(r.run.setAside) && r.run.setAside.length ? { setAside: r.run.setAside } : {}),
+      ...(r.run && Array.isArray(r.run.dispatchCounted) && r.run.dispatchCounted.length ? { dispatchCounted: r.run.dispatchCounted } : {}) };
     if (key && verdict !== 'UNREADABLE' && sha === headSha) cache.put(key, out);
   }
   if (opts.json) {
@@ -14849,7 +14881,7 @@ function cmdCiWait(argv) {
     if (!opts.json) for (const n of cp.notes) process.stderr.write(`ci-wait: ${n}\n`);
   }
 
-  const verifyPolicy = verifyRuns.parsePolicy(projectDoc(repoAbs));
+  const verifyPolicy = verifyingPolicy(repoAbs);
   const poll = (etag) => {
     const r = git.ghApiConditional(repoAbs, apiPath, etag);
     if (r.kind !== 'ok') return r;
@@ -14885,11 +14917,12 @@ function cmdCiWait(argv) {
     waitedSec: Math.round(res.waitedMs / 1000), deadlineSec, deadlineBasis, detail: res.detail || null,
     status: s.status || null, conclusion: s.conclusion || null, url: s.url || null,
     ...(Array.isArray(s.setAside) && s.setAside.length ? { setAside: s.setAside } : {}),
+    ...(Array.isArray(s.dispatchCounted) && s.dispatchCounted.length ? { dispatchCounted: s.dispatchCounted } : {}),
   };
   if (opts.json) print(JSON.stringify(out, null, 2));
   else {
     print(`${res.outcome} ${target} — waited ${ciWait.fmtDuration(res.waitedMs)}, ${res.polls} poll(s), ${res.notModified} of them 304` +
-      `${s.status ? ` · ${s.status}${s.conclusion ? `/${s.conclusion}` : ''}` : ''}${s.url ? ` · ${s.url}` : ''}${res.detail ? ` — ${res.detail}` : ''}${verifyRuns.setAsideNote(s.setAside)}`);
+      `${s.status ? ` · ${s.status}${s.conclusion ? `/${s.conclusion}` : ''}` : ''}${s.url ? ` · ${s.url}` : ''}${res.detail ? ` — ${res.detail}` : ''}${verifyRuns.setAsideNote(s.setAside)}${verifyRuns.dispatchCountedNote(s.dispatchCounted)}`);
   }
   return code;
 }

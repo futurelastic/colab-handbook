@@ -1144,7 +1144,8 @@ function excludedRunSummary(rows) {
  * #503: `opts.verifying` (a tools/lib/verify-runs.js policy, `{gate, ignore}`) narrows the owned rows
  * to the runs that VERIFY the code — push / pull-request triggered, or the declared set — BEFORE the
  * per-workflow reduction; the rest (a `workflow_run` release, a scheduled finalize, a deploy) ride
- * along as `setAside`, each with its reason. Opt-in: without `opts.verifying` nothing changes, so
+ * along as `setAside`, each with its reason. #567: a `workflow_dispatch` run the policy's
+ * `dispatchVerifies` resolver rescues (lost push event) is counted and named in `dispatchCounted`. Opt-in: without `opts.verifying` nothing changes, so
  * readers that never asked (release finalize, the base-ci advisory, ci-grant) read exactly as before.
  */
 function summarizeRunsForCommit(allForSha, sha, opts = {}) {
@@ -1152,16 +1153,19 @@ function summarizeRunsForCommit(allForSha, sha, opts = {}) {
   const dropped = allForSha.filter((x) => !isRepoOwnedRun(x));
   let owned = dropped.length ? allForSha.filter(isRepoOwnedRun) : allForSha;
   let setAside = [];
+  let dispatchCounted = [];
   if (opts && opts.verifying) {
     const split = require('./verify-runs').splitVerifying(owned, opts.verifying);
     owned = split.counted;
     setAside = split.setAside;
+    dispatchCounted = split.dispatchCounted || [];
   }
   const { heads, superseded } = newestRunPerWorkflow(owned);
   const extra = {
     ...(dropped.length ? { excluded: excludedRunSummary(dropped) } : {}),
     ...(superseded.length ? { superseded: excludedRunSummary(superseded) } : {}),
     ...(setAside.length ? { setAside: excludedRunSummary(setAside) } : {}),
+    ...(dispatchCounted.length ? { dispatchCounted: excludedRunSummary(dispatchCounted) } : {}),
   };
   const r = summarizeRepoOwnedRuns(heads, sha);
   return { ...r, ...extra };
