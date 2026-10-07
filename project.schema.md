@@ -1393,6 +1393,15 @@ same template's scheduled finalize, a dispatch, a deploy. Those runs act on the 
 after it exists; a failure there belongs to the release lane, so it neither turns trunk
 red for ship nor makes ship wait.
 
+**One exception: a `workflow_dispatch` run of the workflow that verifies the code** (#567).
+It counts when the workflow's own file at that sha is triggered by a branch push or a pull
+request — so it is the CI, not a release lane that merely accepts a manual trigger — and that
+workflow has **no** push or pull-request run at the sha. That is the recovery for a lost
+`push` event (the forge dropped it, so there is no run to re-run): dispatch the CI workflow on
+trunk, and its run at that sha is the verdict, red or green. Where the push run exists it stays
+the verdict. The verdict detail names every run counted this way. A tags-only `push:` trigger
+does not make a workflow a code verifier, and a sha whose tree cannot be read rescues nothing.
+
 - **`ship-gate-workflows`** — the explicit set. Exactly these workflows count, whatever their
   trigger; every other workflow at the sha is set aside. Declare it when a workflow that verifies
   the code is not push-triggered.

@@ -105,6 +105,66 @@ test('#503 setAsideNote names each run and why; empty when nothing was set aside
   assert.match(n, /Release \(auto\) \(in_progress, run 9; event: workflow_run\)/);
 });
 
+// ---- unit: the lost-push rescue (#567) ---------------------------------------------------------
+
+const CI_YML = 'name: CI\non:\n  push:\n    branches: [main]\n  pull_request:\n  workflow_dispatch:\njobs:\n  test:\n    runs-on: ubuntu-latest\n    steps:\n      - run: |\n          npm test\n';
+const RELEASE_YML = 'name: Release (auto)\non:\n  workflow_run:\n    workflows: [CI]\n    types: [completed]\n  workflow_dispatch:\n';
+
+test('#567 workflowTriggers: push/PR-triggered workflows verify; release lanes and tags-only pushes do not', () => {
+  assert.deepStrictEqual(vr.workflowTriggers(CI_YML), { name: 'CI', verifiesBranches: true });
+  assert.deepStrictEqual(vr.workflowTriggers(RELEASE_YML), { name: 'Release (auto)', verifiesBranches: false });
+  assert.deepStrictEqual(vr.workflowTriggers('on: [push, workflow_dispatch]\n'), { name: null, verifiesBranches: true });
+  assert.deepStrictEqual(vr.workflowTriggers("name: 'Lint' # c\non: pull_request\n"), { name: 'Lint', verifiesBranches: true });
+  assert.deepStrictEqual(vr.workflowTriggers('name: CI\n"on":\n  - push\n  - workflow_dispatch\n'), { name: 'CI', verifiesBranches: true });
+  assert.deepStrictEqual(vr.workflowTriggers('name: Tag\non:\n  push:\n    tags: ["v*"]\n  workflow_dispatch:\n'), { name: 'Tag', verifiesBranches: false });
+  assert.deepStrictEqual(vr.workflowTriggers('name: Mixed\non:\n  push:\n    tags: ["v*"]\n    branches: [main]\n'), { name: 'Mixed', verifiesBranches: true });
+  assert.deepStrictEqual(vr.workflowTriggers('name: Nightly\non:\n  schedule:\n    - cron: "0 0 * * *"\n'), { name: 'Nightly', verifiesBranches: false });
+  assert.strictEqual(vr.workflowTriggers('name: no triggers\n'), null);
+});
+
+test('#567 a dispatch of the push-verifying workflow counts when that workflow has no push run at the sha', () => {
+  const p = { ...vr.parsePolicy({}), dispatchVerifies: () => ['CI'] };
+  const s = vr.splitVerifying([r('CI', 'workflow_dispatch', 'success', 1)], p);
+  assert.strictEqual(s.counted.length, 1);
+  assert.strictEqual(s.setAside.length, 0);
+  assert.strictEqual(s.dispatchCounted[0].databaseId, 1);
+  const sum = git.summarizeRunsForCommit([r('CI', 'workflow_dispatch', 'success', 1)], SHA, { verifying: p });
+  assert.strictEqual(sum.status, 'completed');
+  assert.strictEqual(sum.conclusion, 'success');
+  assert.strictEqual(sum.setAside, undefined);
+  assert.deepStrictEqual(sum.dispatchCounted, [{ workflowName: 'CI', status: 'completed', conclusion: 'success', databaseId: 1 }]);
+  assert.match(vr.dispatchCountedNote(sum.dispatchCounted), /counted 1 workflow_dispatch run .*lost push event, #567\): CI \(run 1\)/);
+});
+
+test('#567 the rescue stays narrow: push sibling present, non-verifying workflow, no resolver, unreadable tree', () => {
+  // A push run of the same workflow exists → it is the verdict; the dispatch stays set aside.
+  let calls = 0;
+  const p = { ...vr.parsePolicy({}), dispatchVerifies: () => { calls++; return ['CI']; } };
+  const s1 = vr.splitVerifying([r('CI', 'push', 'failure', 1), r('CI', 'workflow_dispatch', 'success', 2)], p);
+  assert.deepStrictEqual(s1.counted.map((x) => x.databaseId), [1]);
+  assert.strictEqual(s1.setAside[0].setAsideWhy, 'event: workflow_dispatch');
+  assert.strictEqual(calls, 0, 'resolver not consulted when no candidate needs it');
+  // A dispatch of a workflow that is not push-verifying (a release lane) stays set aside.
+  const s2 = vr.splitVerifying([r('Release (auto)', 'workflow_dispatch', 'success', 3)], p);
+  assert.strictEqual(s2.counted.length, 0);
+  assert.strictEqual(s2.setAside[0].setAsideWhy, 'event: workflow_dispatch');
+  // No resolver (the pre-#567 policy shape) → unchanged behaviour.
+  const s3 = vr.splitVerifying([r('CI', 'workflow_dispatch', 'success', 4)], vr.parsePolicy({}));
+  assert.strictEqual(s3.counted.length, 0);
+  // Resolver returns null or throws → fail closed.
+  for (const bad of [() => null, () => { throw new Error('x'); }]) {
+    const s4 = vr.splitVerifying([r('CI', 'workflow_dispatch', 'success', 5)], { ...vr.parsePolicy({}), dispatchVerifies: bad });
+    assert.strictEqual(s4.counted.length, 0);
+  }
+  // ship-ignore-workflows still wins: an ignored workflow is never rescued.
+  const s5 = vr.splitVerifying([r('CI', 'workflow_dispatch', 'success', 6)], { ...vr.parsePolicy({ 'ship-ignore-workflows': ['CI'] }), dispatchVerifies: () => ['CI'] });
+  assert.strictEqual(s5.counted.length, 0);
+  assert.strictEqual(s5.setAside[0].setAsideWhy, 'ship-ignore-workflows');
+  // A red dispatch is counted as red — the rescue measures, it does not forgive.
+  const sum = git.summarizeRunsForCommit([r('CI', 'workflow_dispatch', 'failure', 7)], SHA, { verifying: p });
+  assert.strictEqual(sum.conclusion, 'failure');
+});
+
 // ---- CLI: trunk-ci and ship --dry read the same policy -----------------------------------------
 
 const REPO_ROOT = path.resolve(__dirname, '..', '..');
@@ -113,7 +173,7 @@ const TMP = [];
 process.on('exit', () => { for (const d of TMP) { try { fs.rmSync(d, { recursive: true, force: true }); } catch (_) {} } });
 const BASE_YML = 'tier: B\ntrunk: main\nproduction: null\ndeploy: none\nstack: node\nautonomy: auto-trunk\n';
 
-function fixture(extraYml = '') {
+function fixture(extraYml = '', files = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'colab-verify-runs-'));
   TMP.push(root);
   const origin = path.join(root, 'origin.git');
@@ -132,6 +192,10 @@ function fixture(extraYml = '') {
   fs.mkdirSync(path.join(work, '.github'), { recursive: true });
   fs.writeFileSync(path.join(work, '.github', 'project.yml'), BASE_YML + extraYml);
   fs.writeFileSync(path.join(work, 'f.txt'), 'base\n');
+  for (const [rel, body] of Object.entries(files)) {
+    fs.mkdirSync(path.dirname(path.join(work, rel)), { recursive: true });
+    fs.writeFileSync(path.join(work, rel), body);
+  }
   g(work, 'add', '-A');
   g(work, 'commit', '-q', '-m', 'chore: fixture');
   g(work, 'push', '-q', 'origin', 'main');
@@ -191,4 +255,23 @@ test('#503 CLI: ship-ignore-workflows sets a push-triggered deploy aside', () =>
   const t = trunkCi(fx);
   assert.strictEqual(t.verdict, 'GREEN', JSON.stringify(t));
   assert.match(t.detail, /Deploy \(in_progress, run 2; ship-ignore-workflows\)/);
+});
+
+test('#567 CLI: lost push — only a dispatch of CI at trunk\'s sha → trunk-ci GREEN and ship row ok, naming the rescue', () => {
+  const fx = fixture('', { '.github/workflows/ci.yml': CI_YML, '.github/workflows/release.yml': RELEASE_YML });
+  fx.setRows([row(fx.sha, 'CI', 'workflow_dispatch', 'success', 1)]);
+  const t = trunkCi(fx);
+  assert.strictEqual(t.verdict, 'GREEN', JSON.stringify(t));
+  assert.match(t.detail, /lost push event, #567\): CI \(run 1\)/);
+  assert.strictEqual(t.dispatchCounted[0].workflowName, 'CI');
+  const s = shipRow(fx);
+  assert.strictEqual(s.ok, true, JSON.stringify(s));
+});
+
+test('#567 CLI: a dispatch of the release lane alone still reads NONE — the rescue is per workflow definition', () => {
+  const fx = fixture('', { '.github/workflows/ci.yml': CI_YML, '.github/workflows/release.yml': RELEASE_YML });
+  fx.setRows([row(fx.sha, 'Release (auto)', 'workflow_dispatch', 'success', 2)]);
+  const t = trunkCi(fx);
+  assert.notStrictEqual(t.verdict, 'GREEN', JSON.stringify(t));
+  assert.match(t.detail, /Release \(auto\) \(success, run 2; event: workflow_dispatch\)/);
 });
