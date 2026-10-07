@@ -77,7 +77,7 @@ const STATES = Object.freeze([
 
 const CONDITIONS = Object.freeze([
   'release-policy', 'candidate', 'tracking-issue', 'release-hold', 'regressions', 'test-period', 'trunk-green',
-  'ci-green', 'full-suite', 'schema-additive', 'switch-dependencies',
+  'ci-green', 'full-suite', 'cut-run', 'schema-additive', 'switch-dependencies',
   ...releaseTag.PRE_TAG_CONDITIONS, 'final-grant', 'migration-grant', 'human',
 ]);
 
@@ -319,6 +319,66 @@ function whyNoFinal({ state, candidate, checks, period, skipped, now } = {}) {
   return { line, next };
 }
 
+// ---- the run that cut the candidate (#566) ------------------------------------------------------
+
+// Slack around the tag's cut instant: the tagger date is the runner's clock, a run's createdAt /
+// updatedAt are GitHub's, both to the second.
+const CUT_RUN_SLACK_MS = 120000;
+
+/**
+ * Did the run that CUT this candidate finish what it does after the cut? `rows` are the workflow
+ * runs at the candidate's commit (`git.ghRunsAtCommit`, null = unread), WITHOUT the #425 own-workflow
+ * filter — the release workflow is exactly the one this reads; only the calling run itself is dropped
+ * (`ownRunId`), since a run cannot vouch for or against itself while it is still running.
+ *
+ * The cutter is every run that was in progress at `cutAt` (the annotated tag's date): created no later
+ * than the cut, and either not finished or finished no earlier than it. Each one must have concluded
+ * `success`. Measured (#566): the run that cut a candidate had its image-publish job CANCELLED; ci-green
+ * and full-suite set that run aside as superseded (#461 — a cancelled run never stands for its workflow
+ * while that workflow has any other run at the sha) and counted an EARLIER run of the same workflow at
+ * the same commit that concluded success having cut nothing. finalize said candidate-ready for a
+ * candidate whose image did not exist. Here only the cutter vouches, and cancelled is a failure: a run
+ * cancelled after its cut may have stopped before its publish.
+ *
+ * A CANCELLED row whose job count `jobCount(databaseId)` reads 0 never ran — the measured shape of a
+ * pending run GitHub cancelled out of the release workflow's concurrency group when a newer one queued —
+ * so it cut nothing and is dropped. Asked lazily, only for a cancelled row; null (unread) keeps it.
+ *
+ * No run in progress at the cut → ok: the candidate was cut by hand (`colab release cut` outside a
+ * workflow), and no run owes it anything. A completed row with no `updatedAt` (an older read) cannot
+ * be placed around the cut and is not counted — absence of the field never refuses.
+ *
+ * Returns { ok, detail, runs } — `runs` the cutter rows' ids, for the report.
+ */
+function cutRunVerdict(rows, { tag, cutAt, ownRunId = null, jobCount = null } = {}) {
+  if (rows === null || rows === undefined) return { ok: false, detail: `the workflow runs at ${tag} could not be read — the run that cut it cannot be checked`, runs: [] };
+  const cut = Date.parse(cutAt);
+  if (Number.isNaN(cut)) return { ok: false, detail: `${tag} carries no readable cut time — the run that cut it cannot be found`, runs: [] };
+  const own = ownRunId === null || ownRunId === undefined || ownRunId === '' ? null : String(ownRunId);
+  const cutters = rows.filter((r) => {
+    if (!r || (own && String(r.databaseId) === own)) return false;
+    const created = Date.parse(r.createdAt);
+    if (Number.isNaN(created) || created > cut + CUT_RUN_SLACK_MS) return false;
+    if (r.status !== 'completed') return true;
+    const ended = Date.parse(r.updatedAt);
+    if (Number.isNaN(ended) || ended < cut - CUT_RUN_SLACK_MS) return false;
+    if (r.conclusion === 'cancelled' && typeof jobCount === 'function' && r.databaseId != null && jobCount(r.databaseId) === 0) return false;
+    return true;
+  });
+  const ids = cutters.map((r) => r.databaseId).filter((x) => x !== null && x !== undefined);
+  const name = (r) => `${r.workflowName || '(unnamed workflow)'} run ${r.databaseId != null ? r.databaseId : '(id unread)'}`;
+  if (!cutters.length) return { ok: true, detail: `no workflow run at ${tag} was in progress when it was cut (${cutAt}) — cut by hand, no run's publish to wait for`, runs: [] };
+  const bad = cutters.filter((r) => !(r.status === 'completed' && r.conclusion === 'success'));
+  if (!bad.length) return { ok: true, detail: `the run that cut ${tag} (${cutters.map(name).join(', ')}) concluded success`, runs: ids };
+  const how = (r) => (r.status === 'completed' ? `concluded ${r.conclusion || 'with no conclusion'}` : `is still ${r.status || 'running'}`);
+  const rerun = bad.filter((r) => r.status === 'completed' && r.databaseId != null).map((r) => `gh run rerun ${r.databaseId} --failed`);
+  return {
+    ok: false,
+    detail: `the run that cut ${tag} — ${bad.map((r) => `${name(r)} ${how(r)}`).join('; ')} — did not finish what it publishes after the cut (an image, a package, a Release): ${tag}'s artifacts may not exist. An earlier green run at the same commit that cut nothing cannot vouch for it (#566). ${rerun.length ? `Re-run it (${rerun.join('; ')}) and finalize again, or cut a new candidate.` : 'Wait for it to finish, then finalize again.'}`,
+    runs: ids,
+  };
+}
+
 // ---- the test period ----------------------------------------------------------------------------
 
 /**
@@ -480,6 +540,7 @@ function handoffCommand(tag) {
  *   trunk        trunkGreenVerdict(...)
  *   regressions  regressionVerdict(...)
  *   ci, suite, schema, switches   { ok, detail }
+ *   cutRun       #566 — cutRunVerdict(): the run that cut the candidate concluded success
  *   finalGrant   #441 — release-policy.js finalGrantVerdict() of policy.effective.finalGrant (only
  *                read when the policy carries one; absent = unresolved, never a grant)
  *   migrations   #441 — migrationGrantVerdict() (only read when the policy carries a grant)
@@ -555,7 +616,7 @@ function decide(facts) {
   add('test-period', per.elapsed, s.older && !auto ? `${per.detail} — required: an older candidate is finalized only once its own period elapsed clean (#548)` : per.detail, ownClock);
   const tr = f.trunk || { ok: false, permanent: false, pending: false, detail: 'not measured' };
   add('trunk-green', tr.ok, tr.detail, ownClock);
-  for (const [condition, v] of [['ci-green', f.ci], ['full-suite', f.suite], ['schema-additive', f.schema], ['switch-dependencies', f.switches]]) {
+  for (const [condition, v] of [['ci-green', f.ci], ['full-suite', f.suite], ['cut-run', f.cutRun], ['schema-additive', f.schema], ['switch-dependencies', f.switches]]) {
     add(condition, v && v.ok, v ? v.detail : 'not measured');
   }
   // #424: before any final — the tag equals the manifests, the commit is on trunk, the version outranks the latest final.
@@ -637,7 +698,7 @@ module.exports = {
   STATES, CONDITIONS, HOLD_LABEL, CUT_SUBJECT_SUFFIX,
   parseVersion, compareVersions, parseCandidate,
   parseReleaseMarker, releaseMarker, eventMarker, hasEvent, trackingTitle, trackingBody,
-  selectCandidate, openCandidates, pickNewestClean, stateDetail, windowHasRed, whyNoFinal, periodVerdict, trunkGreenVerdict, windowBranches, mergeWindowRuns, regressionVerdict,
+  selectCandidate, openCandidates, pickNewestClean, stateDetail, windowHasRed, whyNoFinal, periodVerdict, cutRunVerdict, trunkGreenVerdict, windowBranches, mergeWindowRuns, regressionVerdict,
   handoffCommand, decide, tagMessage, migrationGrantVerdict,
   carriedIssues, previousFinal, releasedEvent, releasedComment,
 };

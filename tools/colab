@@ -1882,11 +1882,14 @@ under CONVENTIONS.md §6's release rung, re-checking everything at the moment it
 
 Conditions (--json checks[].condition; required:false means reported, not blocking, on this row):
   release-policy  candidate  tracking-issue  release-hold  regressions  test-period  trunk-green
-  ci-green  full-suite  schema-additive  switch-dependencies  final-grant  migration-grant  human
+  ci-green  full-suite  cut-run  schema-additive  switch-dependencies  final-grant  migration-grant  human
 
   regressions   blocked_by edges on the tracking issue: open -> refused; closed after the period
                 began -> needs-new-candidate. Record one with: colab blocked <tracking> --by <issue>
   test-period   from max(candidate tag date, tracking issue creation), release: test-period long
+  cut-run       the run that cut the candidate (in progress at the tag's date) concluded success — a
+                cancelled publish refuses; an earlier green run at the commit that cut nothing never
+                vouches for it (#566)
   trunk-green   every run since the period began on main — and on project.yml's trunk: when that is
                 another branch (trunk: dev, #437) — of the workflows that ran at the candidate,
                 none red — required only where the final is automatic, or for an older --tag (#548)
@@ -2035,13 +2038,19 @@ function cmdReleaseFinalize(argv) {
     if (!trackings.has(cand.version)) trackings.set(cand.version, trackingFor(cand.version, { isCandidate: true }));
     const tracking = trackings.get(cand.version);
     const supersededHeld = records.filter((r) => r.state === 'OPEN' && r.held && r.version !== cand.version && !finals.has(r.version)).map((r) => r.number);
-    let rows;
+    let rows; let rawRows;
     const conditions = measureCandidateConditions(repoAbs, {
       sha: cand.sha,
       lastFinal: releaseTag.latestReleaseTag(repoAbs, { ref: cand.sha }),
       at: `${cand.tag}@${shortSha(cand.sha)}`,
-      readRuns: () => { rows = releaseCut.withoutOwnWorkflow(git.ghRunsAtCommit(repoAbs, cand.sha)); return rows; }, // #425
+      readRuns: () => { rawRows = git.ghRunsAtCommit(repoAbs, cand.sha); rows = releaseCut.withoutOwnWorkflow(rawRows); return rows; }, // #425
       issues,
+    });
+    // #566: only the run that CUT the candidate vouches for what it published — read from the rows
+    // BEFORE the #425 own-workflow filter (the release workflow is the cutter), minus this run itself.
+    const cutRun = releaseFinalize.cutRunVerdict(rawRows, {
+      tag: cand.tag, cutAt: cand.cutAt, ownRunId: process.env.GITHUB_ACTIONS === 'true' ? process.env.GITHUB_RUN_ID || null : null,
+      jobCount: (id) => git.ghRunJobCount(repoAbs, id),
     });
     const suiteWorkflows = [...new Set((rows || []).map((r) => r.workflowName || '(unnamed workflow)'))];
     const period = releaseFinalize.periodVerdict({ cutAt: cand.cutAt, trackingCreatedAt: tracking && tracking.createdAt, testPeriodDays: policy.effective.testPeriodDays, now });
@@ -2066,7 +2075,7 @@ function cmdReleaseFinalize(argv) {
     }
     const verdict = releaseFinalize.decide({
       policy, selection: sel, tracking, supersededHeld, period, trunk, regressions,
-      ci: conditions.ci, suite: conditions.suite, schema: conditions.schema, switches: conditions.switches,
+      ci: conditions.ci, suite: conditions.suite, cutRun, schema: conditions.schema, switches: conditions.switches,
       manifests, ancestry, tags: tagNames, finalGrant, migrations,
       human: { bar: humanBar, answeredBy: opts.answeredBy || null },
     });

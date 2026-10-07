@@ -301,6 +301,34 @@ test('human row: an agent run stops at candidate-ready with the handoff; the hum
   assert.match(fx.g('tag', '-l', '--format=%(contents)', 'v1.2.1'), /Finalized by: Ops/);
 });
 
+test('#566 human row: the run that cut the candidate was cancelled — an older green run at the same commit that cut nothing does not vouch for it', () => {
+  const fx = fixture(HUMAN_YML);
+  const rc = cutCandidate(fx, 1);
+  const sha = fx.g('rev-parse', 'HEAD');
+  const cutMs = Date.parse(fx.g('tag', '-l', '--format=%(taggerdate:iso-strict)', rc));
+  const at = (min) => new Date(cutMs + min * 60000).toISOString();
+  const row = (over) => ({ headSha: sha, status: 'completed', conclusion: 'success', workflowName: 'Release (auto)', event: 'workflow_run', ...over });
+  writeState(fx, (s) => {
+    s.runsAtCommit = [
+      row({ databaseId: 902, createdAt: at(-3), updatedAt: at(25), conclusion: 'cancelled' }), // cut rc, then its publish was cancelled
+      row({ databaseId: 901, createdAt: at(-60), updatedAt: at(-55) }), // "nothing to cut" — green
+      row({ databaseId: 1, createdAt: at(-90), updatedAt: at(-70), workflowName: 'ci', event: 'push' }),
+    ];
+  });
+  const refused = finalize(fx, ['--dry']);
+  assert.strictEqual(refused.body.state, 'refused', refused.out + refused.err);
+  const c = refused.body.checks.find((x) => x.condition === 'cut-run');
+  assert.strictEqual(c.ok, false);
+  assert.match(c.detail, /Release \(auto\) run 902 concluded cancelled/);
+  assert.ok(refused.body.checks.find((x) => x.condition === 'full-suite').ok, 'full-suite alone still sets the cancelled run aside (#461) — the cut-run check is what refuses');
+  assert.ok(!refused.body.handoff, 'no finalize command is handed over');
+
+  writeState(fx, (s) => { s.runsAtCommit[0].conclusion = 'success'; });
+  const ready = finalize(fx, ['--dry']);
+  assert.strictEqual(ready.body.state, 'candidate-ready', ready.out + ready.err);
+  assert.ok(ready.body.checks.find((x) => x.condition === 'cut-run').ok);
+});
+
 test('#549 human row, test-period 0d: a candidate cut minutes ago finalizes on the human bar; --auto posts candidate-ready at once', () => {
   const fx = fixture(HUMAN_YML + 'release:\n  test-period: 0d\n');
   const rc = cutCandidate(fx, 0);

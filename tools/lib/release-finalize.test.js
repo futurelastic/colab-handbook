@@ -185,7 +185,7 @@ function facts(over = {}) {
     period: rf.periodVerdict({ cutAt: T0, trackingCreatedAt: T0, testPeriodDays: 3, now: at(4) }),
     trunk: { ok: true, permanent: false, pending: false, detail: 'green' },
     regressions: { ok: true, permanent: false, detail: 'none' },
-    ci: OK, suite: OK, schema: OK, switches: OK,
+    ci: OK, suite: OK, cutRun: OK, schema: OK, switches: OK,
     manifests: [], ancestry: { ok: true, shallow: false }, tags: ['v1.2.0', 'v1.2.1-rc.1'],
     human: { bar: false, answeredBy: null },
     ...over,
@@ -563,4 +563,74 @@ test('#468 whyNoFinal: all testing names the earliest end; a stuck state names i
   assert.strictEqual(rf.whyNoFinal({ state: 'finalized', now: at(2) }), null);
   assert.strictEqual(rf.whyNoFinal({ state: 'already-final', now: at(2) }), null);
   assert.match(rf.whyNoFinal({ state: 'no-candidate', checks: [{ condition: 'candidate', ok: false, detail: 'no rc tag' }], now: at(2) }).line, /^no open candidate to finalize — candidate: no rc tag$/);
+});
+
+// ---- #566: the run that cut the candidate --------------------------------------------------------
+
+const CUT = '2026-10-07T10:00:00.000Z';
+const off = (min) => new Date(Date.parse(CUT) + min * 60000).toISOString();
+const cutRow = (over) => ({ headSha: 'a'.repeat(40), status: 'completed', conclusion: 'success', workflowName: 'Release (auto)', event: 'workflow_run', ...over });
+
+test('#566 cutRunVerdict: the cutter cancelled, an older green run at the same sha that cut nothing -> not ok, names the run', () => {
+  const rows = [
+    cutRow({ databaseId: 902, createdAt: off(-3), updatedAt: off(20), conclusion: 'cancelled' }), // cut at CUT, then its publish was cancelled
+    cutRow({ databaseId: 901, createdAt: off(-60), updatedAt: off(-50), conclusion: 'success' }), // earlier run, "nothing to cut"
+    cutRow({ databaseId: 800, createdAt: off(-90), updatedAt: off(-70), workflowName: 'CI' }),
+  ];
+  const v = rf.cutRunVerdict(rows, { tag: 'v1.2.1-rc.3', cutAt: CUT });
+  assert.strictEqual(v.ok, false);
+  assert.deepStrictEqual(v.runs, [902]);
+  assert.match(v.detail, /Release \(auto\) run 902 concluded cancelled/);
+  assert.match(v.detail, /v1\.2\.1-rc\.3's artifacts may not exist/);
+  assert.match(v.detail, /gh run rerun 902 --failed/);
+  assert.doesNotMatch(v.detail, /901/);
+});
+
+test('#566 cutRunVerdict: a green cutter is ok; failed or still-running cutters are not', () => {
+  const ok = rf.cutRunVerdict([cutRow({ databaseId: 902, createdAt: off(-3), updatedAt: off(30) }), cutRow({ databaseId: 800, createdAt: off(-90), updatedAt: off(-70), workflowName: 'CI' })], { tag: 't', cutAt: CUT });
+  assert.strictEqual(ok.ok, true);
+  assert.deepStrictEqual(ok.runs, [902]);
+  assert.strictEqual(rf.cutRunVerdict([cutRow({ databaseId: 902, createdAt: off(-3), updatedAt: off(30), conclusion: 'failure' })], { tag: 't', cutAt: CUT }).ok, false);
+  const live = rf.cutRunVerdict([cutRow({ databaseId: 902, createdAt: off(-3), status: 'in_progress', conclusion: null })], { tag: 't', cutAt: CUT });
+  assert.strictEqual(live.ok, false);
+  assert.match(live.detail, /is still in_progress/);
+  assert.match(live.detail, /Wait for it to finish/);
+});
+
+test('#566 cutRunVerdict: no run around the cut (cut by hand) is ok; an unread list or cut time is not', () => {
+  const v = rf.cutRunVerdict([cutRow({ databaseId: 1, createdAt: off(-60), updatedAt: off(-50) }), cutRow({ databaseId: 2, createdAt: off(10), updatedAt: off(20), conclusion: 'cancelled' })], { tag: 't', cutAt: CUT });
+  assert.strictEqual(v.ok, true);
+  assert.match(v.detail, /cut by hand/);
+  assert.strictEqual(rf.cutRunVerdict([], { tag: 't', cutAt: CUT }).ok, true);
+  assert.strictEqual(rf.cutRunVerdict(null, { tag: 't', cutAt: CUT }).ok, false);
+  assert.strictEqual(rf.cutRunVerdict([], { tag: 't', cutAt: null }).ok, false);
+  // A completed row with no updatedAt cannot be placed around the cut — never a refusal on its own.
+  assert.strictEqual(rf.cutRunVerdict([cutRow({ databaseId: 3, createdAt: off(-3), conclusion: 'cancelled' })], { tag: 't', cutAt: CUT }).ok, true);
+});
+
+test('#566 cutRunVerdict: the calling run is not its own cutter; a cancelled run with zero jobs never ran', () => {
+  const rows = [cutRow({ databaseId: 902, createdAt: off(-3), status: 'in_progress', conclusion: null })];
+  assert.strictEqual(rf.cutRunVerdict(rows, { tag: 't', cutAt: CUT, ownRunId: '902' }).ok, true);
+  assert.strictEqual(rf.cutRunVerdict(rows, { tag: 't', cutAt: CUT, ownRunId: 903 }).ok, false);
+  // A pending run cancelled out of the concurrency group overlapping the cut, beside the green cutter.
+  const displaced = [cutRow({ databaseId: 902, createdAt: off(-3), updatedAt: off(30) }), cutRow({ databaseId: 903, createdAt: off(-1), updatedAt: off(2), conclusion: 'cancelled' })];
+  assert.strictEqual(rf.cutRunVerdict(displaced, { tag: 't', cutAt: CUT, jobCount: (id) => (id === 903 ? 0 : 3) }).ok, true);
+  assert.strictEqual(rf.cutRunVerdict(displaced, { tag: 't', cutAt: CUT, jobCount: () => null }).ok, false, 'an unread job count keeps the row');
+  assert.strictEqual(rf.cutRunVerdict(displaced, { tag: 't', cutAt: CUT }).ok, false);
+});
+
+test('#566 decide: a candidate whose cutting run was cancelled is refused on the human row; a green one stays candidate-ready', () => {
+  const rows = [
+    cutRow({ databaseId: 902, createdAt: off(-3), updatedAt: off(20), conclusion: 'cancelled' }),
+    cutRow({ databaseId: 901, createdAt: off(-60), updatedAt: off(-50) }),
+  ];
+  const bad = rf.decide(facts({ policy: HUMAN, cutRun: rf.cutRunVerdict(rows, { tag: 'v1.2.1-rc.1', cutAt: CUT }) }));
+  assert.strictEqual(bad.state, 'refused');
+  const c = bad.checks.find((x) => x.condition === 'cut-run');
+  assert.strictEqual(c.ok, false);
+  assert.strictEqual(c.required, true);
+  assert.match(c.detail, /run 902 concluded cancelled/);
+  const good = rf.decide(facts({ policy: HUMAN, cutRun: rf.cutRunVerdict([cutRow({ databaseId: 902, createdAt: off(-3), updatedAt: off(30) })], { tag: 'v1.2.1-rc.1', cutAt: CUT }) }));
+  assert.strictEqual(good.state, 'candidate-ready');
+  assert.strictEqual(rf.decide(facts({ cutRun: undefined })).state, 'refused', 'an unmeasured cut-run never passes');
 });
