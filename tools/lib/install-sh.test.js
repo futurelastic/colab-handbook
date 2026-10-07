@@ -51,6 +51,7 @@ const NOT_IN_NEXT = {
   ship: 'Phase B, driven by code-ship',
   landed: 'per-branch query used by code-sweep',
   holders: 'per-file query used by code-start',
+  'batch-stats': 'per-repo tuning report for ship-batch knobs, read when a repo picks its values (#554)',
   promote: 'human release act, never a first-run step',
   deliver: 'human act on a repo the fleet does not own (project.yml owner:), never a first-run step (#394)',
   doctor: 'maintenance of claims/worktrees that a fresh machine does not have yet',

@@ -1690,6 +1690,17 @@ the same command again) · `4` declined, nothing landed, ship the members one at
 Declining is never a silent fall-through to the serial path: that path's sync commit
 still needs its own re-run, and landing it unseen is the thing this section exists to stop.
 
+**Tuning — the repo's own history, read by `colab batch-stats`** (#554). Neither knob has a
+handbook default, so a repo sets `ship-batch:` and `ship-batch-wait:` from what
+`colab batch-stats [--since <window>] [--json]` reports for it: batches landed and their
+fill, the combined run's first-attempt green rate, red batches and their serial fallbacks,
+members dropped at build and why, **missed partners** (a change that landed alone while
+another was already green — or turned green inside its trunk-CI cycle, with the wait that
+would have caught it), and the queue wait from green-at-head to landing. It reads git and
+CI, never machine-local state, so it answers the same on every machine. A dropped member is
+part of that record: the batch head carries one `Ship-Batch-Dropped: <ref> <branch>@<sha>
+<class>` trailer per drop, so eviction rate is measurable from trunk alone.
+
 ### Is a shipped half actually shippable? — the mechanical gate is not the judgement call (#263)
 
 The close gate above is mechanical: it can see whether a box is ticked and whether a

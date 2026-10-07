@@ -298,6 +298,12 @@ test('#373: a member that conflicts with the members already in drops to the nex
   const T = fx.originSha('main');
   const head = fx.originSha(`ship-batch/${T.slice(0, 7)}`);
   assert.strictEqual(fx.g(fx.origin, 'rev-list', '--count', `${T}..${head}`), '2');
+  // #554: the drop is recorded on the batch head — once, on the head only, with its class
+  const headMsg = fx.g(fx.origin, 'log', '-1', '--format=%B', head);
+  const sha = fx.originSha('fix/c-13');
+  assert.match(headMsg, new RegExp(`^Ship-Batch-Dropped: ship-batch/${T.slice(0, 7)} fix/c-13@${sha.slice(0, 12)} conflict$`, 'm'));
+  assert.match(headMsg, /^Ship-Batch: ship-batch\/\w+ fix\/b-12@/m, 'the member trailer is kept, in the same block');
+  assert.doesNotMatch(fx.g(fx.origin, 'log', '-1', '--format=%B', `${head}~1`), /Ship-Batch-Dropped/);
 });
 
 /** #387: a pre-ship hook that regenerates `allow.txt` on whatever head it is handed, and stages it. */

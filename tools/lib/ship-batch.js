@@ -142,6 +142,48 @@ function parseMemberTrailers(messages) {
 }
 
 /**
+ * #554: a member dropped at build used to leave no trace in git — only a `✗ <member>: …` line on
+ * one terminal — so eviction rate could not be measured. The batch head now records each drop:
+ *
+ *   Ship-Batch-Dropped: <ref> <branch>@<sha> <class>
+ *
+ * appended to the LAST built member's message (the head commit), so it reaches trunk with a landed
+ * batch and rides the head commit's message of a combined run that went red. `class` is one token
+ * from DROP_CLASSES; the human reason stays on the terminal. A branch (already pushed, so already
+ * public) and a sha, never a host — the same rule as memberTrailer.
+ */
+const DROP_TRAILER_KEY = 'Ship-Batch-Dropped';
+const DROP_CLASSES = ['conflict', 'generated-no-hook', 'hook-failed', 'hook-markers', 'squash-failed', 'empty', 'message', 'commit-failed'];
+
+function droppedTrailer({ ref, branch, sha, cls }) {
+  const c = DROP_CLASSES.includes(cls) ? cls : 'other';
+  return `${DROP_TRAILER_KEY}: ${ref} ${branch}@${String(sha || '').slice(0, 12)} ${c}`;
+}
+
+/** Every `Ship-Batch-Dropped:` trailer across commit messages → [{ ref, branch, sha, cls }]. */
+function parseDroppedTrailers(messages) {
+  const out = [];
+  for (const msg of messages || []) {
+    for (const line of String(msg || '').split('\n')) {
+      const m = new RegExp(`^${DROP_TRAILER_KEY}:\\s+(\\S+)\\s+(\\S+)@([0-9a-f]{7,40})\\s+([a-z-]+)\\s*$`).exec(line.trim());
+      if (m) out.push({ ref: m[1], branch: m[2], sha: m[3], cls: m[4] });
+    }
+  }
+  return out;
+}
+
+/**
+ * `msg` with `lines` appended to its final trailer block — never as a new paragraph, which would
+ * split the block and hide the earlier trailers from `git interpret-trailers`. Lines already
+ * present are not repeated (a rebuild re-composes the same message).
+ */
+function appendTrailers(msg, lines) {
+  const body = String(msg || '').replace(/\s+$/, '');
+  const add = (lines || []).filter((l) => l && !body.split('\n').includes(l));
+  return add.length ? `${body}\n${add.join('\n')}\n` : `${body}\n`;
+}
+
+/**
  * A member's OWN head CI, read as a joining class (§4 Branch CI):
  *   green               every run at its head finished, all success
  *   none-cannot-arrive  no run, and no workflow fires on a push to that branch — nothing to wait for;
@@ -379,8 +421,9 @@ function landPushFailure({ stderr, remoteNow, base, max = 8 } = {}) {
 }
 
 module.exports = {
-  MAX_BATCH, REF_PREFIX, PROBE_REF, TRAILER_KEY, WAIT_KEY,
+  MAX_BATCH, REF_PREFIX, PROBE_REF, TRAILER_KEY, WAIT_KEY, DROP_TRAILER_KEY, DROP_CLASSES,
   parseShipBatch, parseShipBatchWait, partnerWait, readySince, batchRefName, parseBatchRef, memberTrailer, parseMemberTrailers,
+  droppedTrailer, parseDroppedTrailers, appendTrailers,
   branchCiClass, memberEligibility, selectMembers, wiring, combinedVerdict, nextStep, foreignBatchStep,
   batchGreenCoversTrunk, evidenceSuffix, serialLine, notStaged, landPushFailure,
 };
