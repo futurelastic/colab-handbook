@@ -154,6 +154,30 @@ test('one comment colab did not write IS the evidence the ruling asks for', () =
   assert.strictEqual(g.evidenceComments(comments).length, 1);
 });
 
+test('#535: a bare one-line signature comment is not evidence', () => {
+  const comments = [
+    { body: '🔒 Claimed — worktree `x` · branch `y`' },
+    { body: '— name · box/s1' },
+    { body: '  — another-agent · box-b/session_01abc  \n' },
+  ];
+  assert.strictEqual(g.hasEvidence([{ body: '— name · box/s1' }]), false);
+  assert.strictEqual(g.hasEvidence(comments), false);
+  assert.deepStrictEqual(g.evidenceComments(comments), []);
+});
+
+test('#535: a distill that merely ENDS in a signature line is still evidence', () => {
+  const comments = [
+    { body: 'Distill: the gate now refuses on X; verified at abc1234 tools/lib/x.js:12.\n\n— name · box/s1' },
+  ];
+  assert.strictEqual(g.hasEvidence(comments), true);
+  assert.strictEqual(g.evidenceComments(comments).length, 1);
+  // a dash that opens a multi-line comment is not a signature either
+  assert.strictEqual(g.isSignatureOnly('— name · box/s1\nmore text'), false);
+  // an em dash with no following text, or no separating space, is not the signature shape
+  assert.strictEqual(g.isSignatureOnly('—'), false);
+  assert.strictEqual(g.isSignatureOnly('—name'), false);
+});
+
 test('no comments at all is no evidence — and an empty/whitespace comment does not count', () => {
   assert.strictEqual(g.hasEvidence([]), false);
   assert.strictEqual(g.hasEvidence(null), false);

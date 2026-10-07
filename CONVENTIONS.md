@@ -601,7 +601,8 @@ second is still open; neither is answered by
 silence:
 
 - **[Hard — gate: close refuses without an evidence comment]** **Evidence-close is gated** on the issue *already carrying a comment the tool did not
-  write* (colab's own markers do not count); an issue without one is reported and left
+  write* (colab's own markers do not count, nor does a comment that is only a one-line
+  `— <name> · <machine>/<session>` signature, #535); an issue without one is reported and left
   open. Whether that gate is right for a `direct` unit — where the human's session-start
   instruction, not a comment, is the authorization — is a real follow-up question.
   **⚠️ Measured during #285:** the question was premature, because `colab ship` could not
