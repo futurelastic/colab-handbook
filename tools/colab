@@ -7683,13 +7683,13 @@ function cmdConfig(argv) {
     // #546: notifyUrl is a string or a list. These change ONE entry and leave every other exactly as
     // it was, so a second observer is added without hand-editing JSON and without rewriting the first.
     const u = (argv[1] || '').trim();
-    if (!u) throw new UserError(`${sub} needs a URL`);
+    if (!u) throw new UserError(`${sub} needs a URL — try: colab config ${sub} http://127.0.0.1:<port>/api/events`);
     const urls = notify.configuredUrls(cfg);
     if (sub === 'add-notify-url') {
-      if (!/^https?:\/\//i.test(u)) throw new UserError('notifyUrl must be an http(s) URL');
+      if (!/^https?:\/\//i.test(u)) throw new UserError(`notifyUrl must be an http(s) URL — try: colab config add-notify-url http://${u.replace(/^[a-z]+:\/\//i, '')}`);
       if (!urls.includes(u)) urls.push(u);
     } else {
-      if (!urls.includes(u)) throw new UserError(`notifyUrl has no entry ${u}`);
+      if (!urls.includes(u)) throw new UserError(`notifyUrl has no entry ${u} — see the entries with: colab config show`);
       urls.splice(urls.indexOf(u), 1);
     }
     const v = notify.storedNotifyUrl(urls);
