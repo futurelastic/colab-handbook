@@ -1784,9 +1784,7 @@ Parallel sessions and parallel agents must not collide on the same Issue. Two la
 
 **[Hard — gate: colab claim refuses]** **The record of a claim is its branch on the git remote** — the branch whose name carries
 the issue number ([§4](#4-branches-and-commits)), **pushed the moment it is cut** at session
-start and again at wrap (#325). The git remote is the one store every machine already
-shares, whatever the tracker is, so it is what a claim is refused against: a branch on the
-remote carrying `#N` that is not this machine's refuses a second claim on `#N` from
+start and again at wrap (#325). A claim is refused against the git remote: a branch on the remote carrying `#N` that is not this machine's refuses a second claim on `#N` from
 anywhere, naming the branch and how to continue it. Each machine sweeps its own worktrees.
 
 - **[Hard — gate: colab claim refuses]** **Remote unreachable → no claim.** Fail closed: a claim checked against nothing is not a
@@ -1796,9 +1794,7 @@ anywhere, naming the branch and how to continue it. Each machine sweeps its own 
   *pending* and posted when the same claim is re-run.
 - One account on **two machines** is two holders: a live claim comment from the same login on
   a different machine refuses too — the assignee set cannot say which machine holds it.
-- A claim names the machine by a canonical id, not its hostname (#327) — one machine spells
-  its hostname more than one way. The comment carries only a digest of that id: the raw id is
-  a hardware serial, and on a public repo the comment is published.
+- A claim names the machine by a canonical id, not its hostname (#327). The comment carries only a digest of that id. Why, with the measurement: [ADR 539](docs/adr/539-claims-rationale.md).
 - A **planner** may hold an issue before the session that will work it exists
   (`--session intent:<id>`, no worktree, #326). That session's own claim from the same machine
   upgrades it in place; a planner claim whose session never claimed is released after a short
@@ -1833,8 +1829,7 @@ Why, with the measurements: [ADR 363](docs/adr/363-claim-release-rationale.md).
 Assignee plus `in-progress` is the claim's **mirror for people**, not its lock: it is what a
 human reading the Issue sees, and the half-claim rule above still governs it exactly. It is
 no longer what a claim is refused against across machines — that is the branch on the remote,
-above — because a tracker can change or go down while the git remote is the store every
-machine already shares. The label does not exist in a fresh repo — creating it is part of
+above. Why, with the measurement: [ADR 539](docs/adr/539-claims-rationale.md). The label does not exist in a fresh repo — creating it is part of
 adoption ([§9](#9-adopting-this)).
 
 #### Fast path — local cache
@@ -1869,7 +1864,7 @@ colab doctor --prune     # free claims whose worktrees no longer exist
   verdict (B1c) uses the same family of marker, on its own line: `<!-- colab:grade
   verdict=<token> round=<n> -->`, `<token>` one of a **closed** set (`pass` ·
   `reject-decision` · `reject-escalate` · `rework` — no token a prefix or decorated variant of
-  another, so a qualifier can never be mistaken for `pass`). `rework` is a reject whose
+  another). `rework` is a reject whose
   recommended fix needs no authority the coordinator lacks, posted as a direction the author
   follows unless a human overrules (#328, #406). It is emitted only at `round=1`, and it is
   held, never cleared. Attributes are read by name, never position; an optional
@@ -1890,8 +1885,7 @@ colab doctor --prune     # free claims whose worktrees no longer exist
 #### Tracking issues — claimed but referenced, not closed
 
 A long-lived tracking issue may be **claimed** (to signal work in the domain) and
-**referenced**, without closing — its checklist still has open items, and closing it
-would bury its knowledge. The merge message says `Refs #N` (links, does not auto-close)
+**referenced**, without closing. The merge message says `Refs #N` (links, does not auto-close)
 instead of `Closes #N`.
 
 - **A `tracking` label** — declarative and durable; any session claiming a labelled
@@ -1906,8 +1900,7 @@ The claim is released unconditionally either way. `tracking` is deliberately **n
 the convention label set ([§9](#9-adopting-this)) — its absence breaks no check, so adoption does not
 provision it and the audit does not report it missing.
 
-Do not write `Closes #<tracking>` in a commit body — GitHub closes on the keyword
-regardless of intent, and it cannot be un-closed by another keyword. `colab ship` detects
+Do not write `Closes #<tracking>` in a commit body. `colab ship` detects
 this after the push and warns to reopen by hand. The reverse is not the same kind of
 edge: a stray `Refs #N` written while N was open, now one of the branch's own
 `Closes #N` — `ship` drops the stale `Refs` before the push rather than shipping a commit
@@ -1924,8 +1917,7 @@ Why, with the measurements: [ADR 491](docs/adr/491-human-verify-rationale.md).
   wanted. If no such issue is open, the ship files one, labelled `delivery:ops` so it is
   routed to a person and never started as code. Where the repo declares a `holds:` label
   for human-owned waits, that label goes on too.
-- **A row that fails becomes a new bug issue**, linked to the row's source issue. The
-  source issue stays closed: its code shipped, and the failure is new work.
+- **A row that fails becomes a new bug issue**, linked to the row's source issue. The source issue stays closed.
 - The person ticks rows off one sitting at a time. When every row is ticked, they close
   the `Human verify:` issue with `colab close`, and the next ship that needs one files a
   fresh one.
@@ -1936,8 +1928,7 @@ What this does **not** change:
   *Merging*.
 - **A `tracking` issue** is still `Refs #N`, as above.
 - **`deferred:measurement` is only for waits a machine can measure**: a metric, a
-  threshold, a counter. "A person has to look at it" is not a measurement, and a
-  `review-by:` date on it only hides whose turn it is.
+  threshold, a counter. "A person has to look at it" is not a measurement.
 
 ### Who decided it should exist
 
@@ -1990,8 +1981,7 @@ Ask: permission | backlog | ruling | deferred(<trigger>)
 
 An issue is **ready to start** only when open, unclaimed, **and nothing it depends on is
 still missing**. Prose dependencies ("blocked by the other one") do not block a parallel
-session and no tool can read them — measured: an epic tracking ~14 children by
-hand-edited checklist reported `subIssues.totalCount = 0`.
+session and no tool can read them.
 
 **So dependencies are recorded in GitHub's own relationship model:** parent/child as
 sub-issues, a dependency as blocked-by.
@@ -2019,14 +2009,10 @@ Why, with the measurements: [ADR 361](docs/adr/361-readiness-and-dependency-edge
 - **A real collision → *Grouping*** (below): one `group:<key>` label, one branch, one review
   cycle. It is never recorded as a chain of edges.
 - **A shared file that every unit of work must edit is a design defect. Fix the file; do not
-  serialize the work.** The measured case was fixed this way: the index became a pointer
-  to the per-item folders, and each item's status moved into that item's own file. The
-  items then touch disjoint files and run in parallel, with nothing left to group.
+  serialize the work.**
 
 **Contention between an issue and a live branch is recorded in the issue text (#386).** An
-issue names the files it will edit on a `Touches:` line in its body. A scheduler that
-brakes on files reads that line, not a comment, so a collision written only as prose never
-reaches it. When `code-triage` measures an issue's file held by a live branch, it appends
+issue names the files it will edit on a `Touches:` line in its body. When `code-triage` measures an issue's file held by a live branch, it appends
 that path to `Touches:` in the same step it reports the collision.
 
 **Split an issue at the external-wait line (#371).** When only part of an issue waits on
@@ -2066,9 +2052,7 @@ gh issue view <M> --json id -q .id                 # ← how to get that node id
 
 `removeSubIssue` requires **both** ids — a child cannot be detached by naming only
 itself. (`addSubIssue` is the laxer of the two — it accepts `subIssueUrl` in place of
-`subIssueId`, and `replaceParent: true` to move a child that already has a parent;
-verified live against the GraphQL schema, not restated from memory — `removeSubIssue`
-has neither.)
+`subIssueId`, and `replaceParent: true` to move a child that already has a parent; `removeSubIssue` has neither.)
 
 **The two halves do not share an API, and that is the trap.** Sub-issues are GraphQL,
 keyed by **node** id; dependencies are REST, keyed by **database** id — no dependency
@@ -2082,9 +2066,7 @@ caller's hands at all.
 Why, with the measurements: [ADR 361](docs/adr/361-readiness-and-dependency-edges-rationale.md).
 
 **Read that confirmation from the `blockedBy`/`blocking` connections, never
-`issueDependenciesSummary` — the summary lags the graph.** Measured, within a single
-response: seconds after a `blocked_by` POST, `blockedBy.totalCount` read `1` while
-`issueDependenciesSummary.blockedBy` in the same payload still read `0`.
+`issueDependenciesSummary` — the summary lags the graph.**
 
 **"No blockers" and "nobody checked" are the same empty list** — the second needs its
 own marker:
@@ -2100,11 +2082,7 @@ reasoning session looked and found no open blocker — not that the issue is sta
 *today*. Clearing it means exactly one of two things: a new blocker appeared (already
 carried by the `blockedBy` edge above, so stripping the label on top of that edge adds no
 information), or the issue reopened after being closed. It never means "startable in
-principle, but not right now" — that fact has its own carrier, below (*Disposition*), and
-piling it onto this label is what #279 measured going wrong: `code-triage` clearing
-`deps-checked` to keep non-startable work out of the ready column, at a rate where more
-than half of one repo's untriaged-looking backlog was actually triaged work misreporting
-as untriaged. A prose note saying "checked, no blockers" does not count as setting it.
+principle, but not right now" — that fact has its own carrier, below (*Disposition*). A prose note saying "checked, no blockers" does not count as setting it.
 
 ##### Readiness is not a boolean — read the blocker's state, not just its existence
 
@@ -2121,12 +2099,7 @@ ready:
 | open, code pushed and unmerged | **ready, with a note** |
 | closed, or its work is already on trunk | **ready** |
 
-**The middle value is computed at read time, never recorded as a second label** —
-rejected: a second label (stale the moment the blocker's own state moves — narrower a
-hazard than it once was, now that `deps-checked` itself is monotonic (#279) and only ever
-goes stale on a genuinely new blocker, but still a hazard a read-time computation avoids
-entirely); deleting the edge once code is written (destroys a true fact, doesn't survive a
-revert).
+**The middle value is computed at read time, never recorded as a second label**. Why, with the measurement: [ADR 539](docs/adr/539-readiness-rationale.md).
 
 **An active session on the blocker is not evidence — a pushed branch with real commits
 is.** An unpushed branch does not count either — invisible from other machines. **The
@@ -2142,9 +2115,7 @@ facts in, verdict out — deriving "blocker's code written but unmerged" from
 ##### Mechanical readiness — a weaker, honest claim for the empty case (#69)
 
 `deps-checked` asserts *somebody looked* — stronger than "the encoded graph, read via
-the API, has zero edges", because a prose-only blocker is invisible to a mechanical read
-and visible to a reader. **A mechanical check must never write `deps-checked` itself** —
-that launders a weaker guarantee into a stronger one.
+the API, has zero edges". **A mechanical check must never write `deps-checked` itself**.
 
 ```sh
 gh label create graph-empty --color BFDADC --description "Mechanical check: the recorded dependency graph reads empty — NOT a substitute for deps-checked"
@@ -2160,9 +2131,7 @@ colab readiness <N> --mechanical --clear
   empty-but-unchecked reads a fourth verdict, `unchecked-mechanical` — `isStartable()`
   still says no by default.
 - Not in the convention label set ([§9](#9-adopting-this)), same reasoning as `tracking`.
-- **No `readiness.marked` event fires for `--mechanical`** — that event kind's payload
-  means `deps-checked` specifically (#45, #46); emitting it here would be
-  indistinguishable from the stronger claim.
+- **No `readiness.marked` event fires for `--mechanical`**. Why, with the measurement: [ADR 539](docs/adr/539-readiness-rationale.md).
 
 #### Disposition — a park must name its wake condition (#279)
 
@@ -2189,18 +2158,14 @@ Three fixed `deferred:*` kinds, each naming what the park is waiting on:
 
 **A defer must name its wake condition.** A `deferred:*` label with no `review-by:<date>`,
 no `blockedBy` edge, and no checkable `wake:` (*Holds*, below) is not a defer at all — it
-is a deprioritisation or a `wontfix`, and should be said plainly instead. An unbounded
-park is a silent `wontfix`.
+is a deprioritisation or a `wontfix`, and should be said plainly instead.
 
-`review-by:<date>` is created **on demand**, the same way `group:<key>` is — the date
-varies per issue, so there is no fixed set to provision up front.
+`review-by:<date>` is created **on demand**, the same way `group:<key>` is.
 
 **This section defines vocabulary only.** Landing it changes nothing `code-triage`
 writes today: no tracker write in this repo's own tooling emits `deferred:*` or
 `review-by:<date>` yet. Consumer-side rendering of a disposition, and surfacing of an
-expired park, are meant to land before that write does — emitting the label before
-something renders it distinctly produces a park that is machine-readable and unread,
-which is worse than the silent park it replaces. Re-triaging existing silent parks once
+expired park, are meant to land before that write does. Why, with the measurement: [ADR 539](docs/adr/539-holds-rationale.md). Re-triaging existing silent parks once
 the vocabulary exists is a follow-up, not part of landing the vocabulary.
 
 How this generalises the `Ask:` line: [ADR 279](docs/adr/279-disposition-park-rationale.md).
@@ -2210,9 +2175,7 @@ How this generalises the `Ask:` line: [ADR 279](docs/adr/279-disposition-park-ra
 The three hold kinds that recur in adopting repos, and the measurements behind this subsection: [ADR 360](docs/adr/360-holds-rationale.md).
 
 **The three stay consumer-local. They are not adopted into the convention label set
-([§9](#9-adopting-this)).** Each one names a fact this section already has a carrier for,
-and a second name for the same fact is the two-carrier problem #279 measured with
-`deps-checked`:
+([§9](#9-adopting-this)).**
 
 | Consumer hold | What it actually is | The handbook's carrier |
 |---|---|---|
@@ -2220,7 +2183,7 @@ and a second name for the same fact is the two-carrier problem #279 measured wit
 | "needs rescope" | the issue no longer says what done looks like | fails *Actionable* in `code-triage`'s readiness gate; rewriting the issue is the wake |
 | "waiting on the operator" | a human must act | `needs-decision` for a question (*Decision gate*, below); a hold for an act, such as a credential, a grant or a purchase |
 
-A repo that already uses its own names keeps them, because its scheduler depends on them.
+A repo that already uses its own names keeps them.
 What this subsection adds is the rule every hold follows, whatever it is called.
 
 **Declare them in `.github/project.yml`, so no reader has to guess:**
@@ -2230,9 +2193,7 @@ holds: [hold:manual, needs-rescope]     # labels this repo's scheduler treats as
 ```
 
 - **Every label listed under `holds:` blocks a start.** `code-triage` reports an issue
-  carrying one as blocked, never as ready. If a scheduler honours a hold that is not in
-  the list, it and triage disagree without saying so, which is the failure the list
-  exists to prevent.
+  carrying one as blocked, never as ready.
 - **The list lives in the descriptor.** The descriptor is already the one
   machine-readable answer to "what is this repo". It is copy-and-own. Changing it is a
   trunk commit, which moves `code-triage`'s first fingerprint input, so the next ping sees
@@ -2315,12 +2276,10 @@ The rules:
    at all stays prose in `Because:`, such as a vendor or a person outside the repo. That
    wait **must** carry `review-by:<date>`.
 3. **A `wake:` that names an issue or ref that does not exist is a finding when it is
-   written**, not at the review date. A park waiting on nothing is the silent `wontfix`
-   again, with a date attached.
+   written**, not at the review date.
 4. **A met wake does not lift the hold by itself.** A scheduler that evaluates wakes
    posts once that the condition is met and hands the issue to triage. Triage reads the
-   newest ruling or `Hold:` line, because a later ruling may have tightened the condition,
-   and reports the hold as *wake met, lift?*. The owner removes the label, as above. The
+   newest ruling or `Hold:` line, and reports the hold as *wake met, lift?*. The owner removes the label, as above. The
    evaluator proposes; it never clears.
 5. **Wakes are re-checked on every triage pass**, not only once `review-by:` is reached
    (`code-triage` §0, §2, §5). A wake that comes true between two passes is noticed on the
@@ -2382,12 +2341,9 @@ it or reports it, and never leaves it. A human may leave with a reason; that rea
 itself the wake condition.
 
 **The evidence a marker rides on has a fixed shape** — *what was done · the command · the
-result · what remains*. Free-form evidence is a **finding, not a disposition**: a pass that
-cannot tell what was done from what remains cannot verify either, and applying anything on
-top of it is a guess wearing a marker. Where the ask was an **action** rather than a
+result · what remains*. Free-form evidence is a **finding, not a disposition**. Where the ask was an **action** rather than a
 measurement, a fifth line carries the **cross-check**: a second, independent, re-runnable
-command confirming the effect. That line is what makes `done` mechanical — a measurement
-cannot cross-check itself.
+command confirming the effect.
 
 ##### Who may apply one — a table over measurable inputs, never a judgement call
 
@@ -2400,8 +2356,7 @@ neither input reaches them.
 - **The axis of record** (*Exposure*, §2). `exposure: released` ⇒ a human confirms; `none`,
   `self` and `live` ⇒ the agent applies. Read a legacy `tier`-only descriptor **through**
   that axis (`A -> released`, `C -> live`, `B -> null`) rather than by letter — which means
-  a bare `tier: B` resolves to *no opinion*, and no opinion is not permission. This mirrors
-  how `autonomy:` is granted by the repo and never claimed by the agent.
+  a bare `tier: B` resolves to *no opinion*, and no opinion is not permission.
 - **Skip-fence class** — production access, credentials, destructive or non-undoable
   operations, promotion. Evidence naming one of these ⇒ human, whatever the exposure. The
   agent names the classes its evidence touches; nothing sniffs prose for them.
@@ -2419,9 +2374,7 @@ neither input reaches them.
 Three properties hold this together, and each is load-bearing:
 
 - **Fails towards `human`, always.** An absent, malformed or unresolvable fact never yields
-  `agent` — the posture *Readiness* (above) takes towards `ready`, for the same reason.
-  Spending a human's attention on something mechanical is cheap and visible; closing an
-  issue nobody checked is expensive and invisible.
+  `agent` — the posture *Readiness* (above) takes towards `ready`, for the same reason. Why, with the measurement: [ADR 539](docs/adr/539-disposition-marker-rationale.md).
 - **"An agent may" is never "a human may not."** A human can apply any disposition on any
   issue at any time, in either direction. The verdict is a proposal, not a lock.
 - **A mechanical gap is not a judgement call.** `split` with nothing filed yet, or `hold`
@@ -2437,9 +2390,7 @@ copies of the table above is the two-places-drift disease this handbook exists t
 they are what keeps the token set closed and the comparison by equality.
 
 **This section defines vocabulary only**, exactly as the park above does. Nothing in this
-repo's own tooling writes `colab:disposition` today, and no skill here reads it: the pass
-that applies a disposition is coupled to a consumer's own surfaces and lives with that
-consumer, not in a repo-generic handbook. What lives here is the table both sides agree on.
+repo's own tooling writes `colab:disposition` today, and no skill here reads it. What lives here is the table both sides agree on.
 
 #### Decision gate — a human must answer first (#122)
 
