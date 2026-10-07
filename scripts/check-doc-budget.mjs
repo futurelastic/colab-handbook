@@ -18,10 +18,10 @@ import { execFileSync } from "node:child_process";
 import { pathToFileURL } from "node:url";
 
 // file -> max lines. Set from the size after #523's first pass (rounded up to the next 50);
-// docs/adr/523-conventions-hard-default-and-size-budget.md records the numbers and phase 2's target.
+// docs/adr/523-conventions-hard-default-and-size-budget.md records pass 1, docs/adr/539-rationale-split-phase-2.md phase 2.
 export const BUDGET = {
-  "CONVENTIONS.md": 5600, // #523 pass 1: 5,525 lines (from 5,895), +50 for #512's pending §4 Branch CI hunk
-  "project.schema.md": 1750, // #523 pass 1: 1,704 lines, markers only
+  "CONVENTIONS.md": 5100, // #539 phase 2: 5,049 lines (from 5,580 at its base), +50 for #512's pending 28-line §4/§7 hunk
+  "project.schema.md": 1600, // #539 phase 2: 1,551 lines (from 1,704)
 };
 export const RATCHET_SLACK = 100;
 

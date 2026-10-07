@@ -61,6 +61,56 @@ project.schema.md @ e01b9e27: units 414 · found whole 414 · by sentence 0 · n
 missing 0 · headings gone from their file 0 · ledger entries 1 (stale 0)
 ```
 
+Result for #539's phase 2 (base `bc1100ea`, after #523's pass had landed), run as
+`node scripts/check-doc-move.mjs --base bc1100ea --allow docs/rule-inventory.md`:
+
+```
+CONVENTIONS.md @ bc1100ea: units 1202 · found whole 965 · by sentence 134 · now 5049 lines
+project.schema.md @ bc1100ea: units 414 · found whole 359 · by sentence 29 · now 1551 lines
+missing 0 · headings gone from their file 0 · ledger entries 129 (stale 0)
+```
+
+Phase 2 split rationale off rule sentences under the ruling on #539 (option A): the rule half
+keeps its meaning and modal verb, the rationale moves verbatim to `docs/adr/539-*.md`, and each
+reworded unit the check could not find by itself is listed in a `#539 ledger` block after its
+section's table. A reword that kept every part verbatim (a sentence boundary already existed)
+needs no ledger entry; the check finds it by sentence. The rows whose checked columns changed,
+before → after:
+
+| id | column | before | after |
+|---|---|---|---|
+| C2.tiers.11 | key | Name the release branch in | name that branch in |
+| C2.tiers.12 | key | Tier C exists because a tag ritual nobody honours is worse than no tag ritual | C describes that shape honestly |
+| C2.room.02 | key | Issue language has been derived from repo privacy | Issue language follows the room, not repo privacy |
+| C2.exposure.06 | dest | CONVENTIONS.md | docs/adr/539-room-exposure-rationale.md |
+| C2x.branch.07 | key | so no such rule exists, and none should be added later | none should be added later |
+| C4.s4.29 | key | original rule still holds exactly as before: **report it, never clean it.** The | original rule still holds exactly as before: **report it, never clean it.** |
+| C4.s4.53 | key | A ship releases every claim it carried (#319)** — not only the worktree's. A claim with | A ship releases every claim it carried (#319)** — not only the worktree's. |
+| C5b.da.03 | key | In the body, never only in a comment. A reader finds it with one | In the body, never only in a comment. |
+| C5b.me.02 | key | A declaration only ever widens what the gate sees, never narrows it; | A declaration only ever widens what the gate sees, never narrows it. |
+| C5b.me.49 | key | a branch that edits `.github/workflows/` cannot pass it either, | a branch that edits `.github/workflows/` cannot pass it either. |
+| C5b.rt.05 | key | It is the only re-run actor for a red trunk: | It is the only re-run actor for a red trunk |
+| C5b.re.18 | key | Trunk-only — an integration line's red already | or `colab promote`. Trunk-only — |
+| C5c.cure.13 | key | at any depth counts (the template's working directory is an adopter's edit point | at any depth counts |
+| C5c.cure.16 | key | is never admitted — it runs inside a step that already exists | is never admitted |
+| C5c.cure.27 | key | So a workflow-touching branch may still cure when, on top of 1-3 | A workflow-touching branch may still cure when, on top of 1-3 |
+| C5c.drivers.03 | key | `epic`-labelled issues are excluded — an epic can pass provenance cleanly | `epic`-labelled issues are excluded. |
+| C5c.drivers.04 | key | `needs-decision` issues are excluded, for a third distinct reason | even if the work item itself is human-filed |
+| C5c.drivers.22 | key | So its jobs run on the self-hosted label the repo's CI already uses | Its jobs run on the self-hosted label the repo's CI already uses |
+| C5c.epics.21 | key | an epic never carries `needs-decision`, and never a `decision:options` block | An epic never carries `needs-decision`, and never a `decision:options` block |
+| C5c.delivery.08 | key | is in the provisioned label set because every adopting repo needs all six | `delivery:*` is in the provisioned label set. |
+| C5c.delivery.18 | key | It routes for the same reason `content`/`ops` do | It routes as `content`/`ops` do |
+| C5c.priority.09 | key | is in the provisioned label set for the same reason | `low-priority` is in the provisioned label set. |
+| C5c.conclusion.07 | key | It fetches before it enumerates, and that is part of the check, not a convenience | It fetches before it enumerates. |
+| C6.rel.111 | key | A moving tag is refused by every clone that already fetched it | They are branches, not tags. |
+| C9.first-time.09 | key | the person answering is standing in the repo, not reading a schema, | Question 3 is phrased this way |
+| S1.trunk.12 | key | This holds for hand-deployed Tier A repos too (`deploy: manual`) | holds for hand-deployed Tier A repos too (`deploy: manual`) |
+| S1.trunk.13 | key | Tier C keeps the identical split for the identical reason, whatever its trunk | Tier C keeps the identical split |
+| S2.channels.15 | dest | project.schema.md | docs/adr/539-schema-exposure-and-channels-rationale.md |
+| S2.writes.15 | key | No coherence rule is audited against `tier`/`production` for this | No coherence rule is audited against `tier`/`production` |
+| S2.release.22 | key | It is not optional: a publish with no gate is the stray-local-file | It is not optional |
+| S2.live-env.07 | dest | project.schema.md | docs/adr/539-schema-checks-and-gates-rationale.md |
+
 ## Reframe ledger
 
 The reframe around `exposure` added a lead paragraph to §2 (new text, so nothing to excuse;
