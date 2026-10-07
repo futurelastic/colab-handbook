@@ -44,6 +44,11 @@ information and holds runners the branches need
 Measured: four green, graded candidates parked ~30 min per landing behind a release run at
 trunk's head.
 
+## Why a skill calls `colab trunk-ci` instead of filtering runs (#463)
+
+One such filter, "green when any run succeeded", read a sha green that ship had parked every
+candidate on, and the red went unowned.
+
 ## Why `gate` can take its verdict from CI
 
 Why: on shared agent workstations full local suites took 6–10 min and flaked on timeouts, while

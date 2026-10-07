@@ -156,6 +156,13 @@ settled here: restored as a minimal clause, or recorded as redundant with the re
 - Inventory rows not trimmed like the doc (limit 2): C2.tiers.11's rule column now carries the release-script/external-poller condition the doc restored; C5c.delivery.08, C5c.delivery.18 and C5c.priority.09 drop the *because…* / *for the same reason…* clauses that moved to the ADR. Key columns unchanged.
 - #543, same pass: §5 *Planning* no longer names a model. C5c.planning.15 now states `code-plan`'s two-path contract (a helper agent where the engine has one, otherwise the session itself, recording `drafted-by: self`). Key unchanged.
 
+### #568 ledger — clauses #567 and #547 left for after #512
+
+Two units reworded on purpose (base `c56bac20`), each to carry one new clause inside the line budget:
+
+- `CONVENTIONS.md:1386` — §4 trunk-CI gate: the #503 set-aside now ends "— except a dispatch of the push- or PR-triggered CI workflow with no push run at the sha (#567: a lost push event)"; the "four green candidates parked ~30 min" measurement, already in ADR 539, became a Why link; the #463 filter story moved to ADR 539 behind a Why link; "in `project.yml`" dropped from the override sentence. Rows: C4.s4.62 (key updated), C4.s4.67 (new).
+- `CONVENTIONS.md:3200` — §6 *Scheduled drivers*: the `release-auto.yml` paragraph gains "an hourly run re-tries only a refused cut, once the fetched colab CLI has moved (#547)" and is re-wrapped. Rows: C5c.drivers.34 (new).
+
 ---
 
 ### 1. Hard rules and defaults (added by #523)
@@ -689,7 +696,8 @@ settled here: restored as a minimal clause, or recorded as redundant with the re
 | C4.s4.59 | default |  | A sibling run still in progress has not passed; a fast green workflow never answers for a slow one. | a sibling that is merely still in progress has not passed either (#307) | CONVENTIONS.md | #307 |
 | C4.s4.60 | default |  | Only runs of workflows the repo owns count; `event: dynamic` runs are dropped before the verdict. | Only runs of workflows the repo owns count (#451) | CONVENTIONS.md | #451 |
 | C4.s4.61 | default |  | Only runs that verify the code (push or pull request) count; release-lane `workflow_run`, scheduled, dispatch and deploy runs are set aside. | Only runs that **verify the code** count (#503) | CONVENTIONS.md | #503 |
-| C4.s4.62 | default |  | `ship-gate-workflows:` / `ship-ignore-workflows:` override the counted set by workflow name. | in `project.yml` override the set by | CONVENTIONS.md | #503 |
+| C4.s4.62 | default |  | `ship-gate-workflows:` / `ship-ignore-workflows:` override the counted set by workflow name. | override the set by workflow name | CONVENTIONS.md | #503 |
+| C4.s4.67 | default |  | Exception: a `workflow_dispatch` run of the push- or PR-triggered CI workflow counts where that workflow has no push run at the sha. | except a dispatch of the push- or PR-triggered CI workflow with no push run at the sha | CONVENTIONS.md | #567 |
 | C4.s4.63 | default |  | A trunk sha whose tree has no workflow file reads `none`; the candidate's own run at its remote head decides, and a trunk with workflows but no run still refuses. | A trunk that has workflows but no run at its sha is a real gap and still refuses. | CONVENTIONS.md | #482 |
 | C4.s4.64 | default |  | Each workflow is judged by its newest run at the sha; a cancelled run never supersedes; different workflows are never reduced. | Each workflow is then judged by its **newest** run at the sha (#461) | CONVENTIONS.md | #461 |
 | C4.s4.65 | default |  | A skill needing the trunk verdict calls `colab trunk-ci` rather than restating the rule as a `gh run list` filter. | a skill that needs it calls the verb instead of restating the rule as a `gh run | CONVENTIONS.md | #463 |
@@ -1525,6 +1533,7 @@ Each entry lists the rule text of a unit whose rationale clause moved out (the u
 | C5c.drivers.19 | default |  | A scheduler never finalizes a tag on a deploy-tag route unless the operator granted that repo an automatic final; on deploy-tag-fast under such a grant cut --auto tags the final on a green head. | It may never finalize a tag on a `deploy-tag` route | CONVENTIONS.md | #441 |
 | C5c.drivers.20 | default |  | A candidate a human has put release-hold on is held for the workflow exactly as for a person. | A candidate a human has put `release-hold` on is held for the workflow | CONVENTIONS.md | — |
 | C5c.drivers.21 | default |  | The handbook ships a release workflow template to copy: cut on a green CI run on main, finalize daily and publish in the same run. | cut on a green CI run on `main`, finalize daily, and publish in the same run | CONVENTIONS.md | #425 |
+| C5c.drivers.34 | default |  | The release workflow template's hourly run re-tries only a refused cut, once the fetched colab CLI has moved. | run re-tries only a refused cut, once the fetched colab CLI has moved (#547) | CONVENTIONS.md | #547 |
 | C5c.drivers.22 | default |  | On a private repo the release workflow's jobs run on the self-hosted label the repo's CI already uses; ubuntu-latest is right only on a public repo. | Its jobs run on the self-hosted label the repo's CI already uses | CONVENTIONS.md | #453 |
 | C5c.drivers.23 | default |  | The npm publish job is the one exception: hosted everywhere, and it only ever runs on a public repo. | hosted everywhere because npm trusted publishing requires it | CONVENTIONS.md | #453 |
 | C5c.drivers.24 | default |  | The runner label is a literal edit point in the template, not an expression keyed on visibility. | The label is a literal edit point in the template, not an expression keyed on visibility | CONVENTIONS.md | #453 |

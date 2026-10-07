@@ -1397,9 +1397,9 @@ than guessed.
   A run that comes *after* the verdict and acts on it — a `workflow_run` release such as
   `release-auto.yml`, its scheduled finalize, a dispatch, a deploy — is set aside and named the
   same way. Its failure belongs to the release lane, so it never turns trunk red for ship and
-  ship never waits for it; measured, four green candidates parked ~30 min per landing behind
-  one. `ship-gate-workflows:` / `ship-ignore-workflows:` in `project.yml` override the set by
-  workflow name ([schema](project.schema.md#ship-gate-workflows-ship-ignore-workflows--optional)).
+  ship never waits for it ([why](docs/adr/539-schema-checks-and-gates-rationale.md)) — except a
+  dispatch of the push- or PR-triggered CI workflow with no push run at the sha (#567: a lost push
+  event). `ship-gate-workflows:` / `ship-ignore-workflows:` override the set by workflow name ([schema](project.schema.md#ship-gate-workflows-ship-ignore-workflows--optional)).
   A trunk sha whose tree has **no workflow file at all** (#482) — a freshly adopted repo whose
   adoption branch is what adds CI — can never draw a run, so nothing there can be red: its
   `none` gets the *Branch CI* treatment for a run that cannot arrive, and the candidate's own
@@ -1414,8 +1414,7 @@ than guessed.
   workflows are never reduced: a failing one beside a passing one is still not green.
   `colab trunk-ci` prints that verdict for trunk's head, read-only and from the same function
   (#463); a skill that needs it calls the verb instead of restating the rule as a `gh run
-  list` filter — one such filter, "green when any run succeeded", read a sha green that ship
-  had parked every candidate on, and the red went unowned.
+  list` filter ([why](docs/adr/539-schema-checks-and-gates-rationale.md)).
   **Waiting for that verdict is `colab ci-wait`, never a loop (#495).** It backs off
   (30 s → 60 s → 120 s, then a deadline — the repo's own CI wait bound, measured from its
   history, `colab ci-profile`, #559), sends conditional requests so an unchanged read is
@@ -3217,10 +3216,11 @@ on every green head*](#6-releases)).
 A candidate a human has put `release-hold` on is held for the workflow exactly as it is for
 a person.
 The handbook ships one to copy, [`templates/release-auto.yml`](templates/release-auto.yml)
-(#425): cut on a green CI run on `main`, finalize daily, and **publish in the same run**. It reads and creates tags and writes no commit. The same
-file fits `trunk: main` and `trunk: dev` + `deploy: tag` (#429): on the latter `main` moves only
-when trunk is promoted, so the promotion's green CI run is the trigger, and the CLI cuts only when
-`main`'s head is a promotion of trunk.
+(#425): cut on a green CI run on `main`, finalize daily, and **publish in the same run**; an hourly
+run re-tries only a refused cut, once the fetched colab CLI has moved (#547). It reads and creates
+tags and writes no commit. The same file fits `trunk: main` and `trunk: dev` + `deploy: tag` (#429):
+on the latter `main` moves only when trunk is promoted, so the promotion's green CI run is the
+trigger, and the CLI cuts only when `main`'s head is a promotion of trunk.
 
 **On a private repo the release workflow runs on the repo's own runners (#453).** Its
 jobs run on the self-hosted label the repo's CI already uses; `ubuntu-latest` is right
