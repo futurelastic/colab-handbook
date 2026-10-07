@@ -397,11 +397,8 @@ divergence.
 **The record of a claim is its branch on the git remote; the tracker is its mirror for
 people** (`CONVENTIONS.md` [§5](../../CONVENTIONS.md#5-claiming-work--how-to-say-im-on-this), *Record of a claim*, #325). What that means here:
 
-- `colab worktree new` (step 4) **pushes the claim ref `refs/claims/<branch>` the moment it
-  cuts** — that push is what another machine's claim is refused against. It is a ref, not the
-  branch, because a branch push re-runs CI on a commit trunk already tested (#550); the branch
-  itself is first pushed at code-wrap. Without `colab`, push the claim ref yourself right after
-  the plain-git cut: `git push origin <branch>:refs/claims/<branch>`.
+- `colab worktree new` (step 4) **pushes the claim ref `refs/claims/<branch>` at cut** — the record
+  refused against; not the branch, so no CI runs (#550). Plain git: `git push origin <b>:refs/claims/<b>`.
 - `colab claim` / `colab worktree new` **refuse** when a branch or claim ref on the remote carries `#N` and
   is not this machine's, and name it with the commands to continue it. That is not an obstacle
   to route around — it is step 3's "Found one → continue it" arriving before you branched. Only
@@ -599,13 +596,11 @@ plain-git fallback, compare against `git ls-remote origin <trunk>` yourself.
 this path. Pass **every** issue the branch will carry (`--issues 115,114,113`) — that
 set and the branch name are the two places code-wrap's harvest reads.
 
-**It also pushes the claim ref at cut (#325, #550)** — `pushed refs/claims/<branch> → origin` in
-its output; the branch itself is not on the remote until code-wrap pushes it, so no CI runs on
-the zero-commit cut. That push *is* the claim record other machines are refused against, so a
-failed push takes nothing: with `--issues`, the worktree and branch are removed again and it exits
-1 (`claim NOT taken`). `colab worktree rm` deletes the claim ref.
-Fix the push (access, network, or a same-named claim ref another machine just created) and re-run;
-do not recreate the worktree by hand around it. **Opened by a planner?** If a
+**It also pushes the claim ref at cut (#325, #550)** — `pushed refs/claims/<branch> → origin`;
+`colab worktree rm` deletes it. That push *is* the claim record, so a failed push takes nothing:
+with `--issues`, the worktree and branch are removed again and it exits 1 (`claim NOT taken`).
+Fix the push (access, network, or a same-named claim ref another machine just created) and
+re-run; do not recreate the worktree by hand around it. **Opened by a planner?** If a
 `--session intent:<id>` claim already holds the issue on this machine, this command upgrades
 that record in place with your real session — expected, and nothing is re-posted.
 

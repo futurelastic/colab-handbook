@@ -284,9 +284,6 @@ unprefixed commit is invisible in the changelog (`CONVENTIONS.md` [§4](../../CO
 git push -u origin <branch>    # a backup/record, NOT a PR, NOT trunk
 ```
 
-Usually the branch's **first** push: `colab worktree new` recorded the claim as the ref
-`refs/claims/<branch>`, which runs no CI (#550), so this is where branch CI starts.
-
 **Rule:** A3's local green does not answer for branch CI. Read every run at the pushed head
 (`HEAD=$(git rev-parse HEAD)`, then `gh run list --branch <branch>` filtered to `$HEAD`); waiting on
 one in flight is `colab ci-wait --sha "$HEAD" --branch <branch> --timeout 15m`, never a
