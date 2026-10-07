@@ -6,18 +6,6 @@ behind them — moved here verbatim (#524).
 
 ### `orphan-shippable` — wrapped work that no worktree will surface (#352)
 
-**The failure it closes.** A session wrapped under a place-claim on the main checkout: gate
-run, commit, push, distill comment ending *"ready for `code-ship`"*. Both of its claim
-comments recorded no worktree. Then nothing happened for about eight hours, until a human
-asked about it directly. `colab ship` passed every precondition on the first try, so the
-branch was never faulty. Nothing was red anywhere: the claim was held, the issue open, the
-session card idle and healthy, trunk CI green. The sweep enumerated the claim and sorted it
-into nothing, because every other bucket starts from a worktree (`wrap`, `teardown-only`),
-needs the work already shipped (`claim-only`) or needs the issues closed (`spent-remote`).
-`place-claim` was no help either: its action is right for a *live* holder and leaves a
-*finished* one unshipped and unreported. The same shape, claims with no worktree, sat on five
-issues of another adopting repo that day.
-
 **All three tests, in order. Fail one and the ref is not this bucket:**
 
 1. **§1.3 printed `orphan-candidate`.** On origin, no worktree on this machine, every
@@ -65,9 +53,6 @@ issues of another adopting repo that day.
    | 12:30 | `— <name> · <machine>/<session>` posted | none (signature filtered) | still `in-flight`, still pending |
    | 13:00 | implementer posts a real distill | the distill | `handed-off` → `ship` path |
 
-   Before this filter, the 12:00 run read the `↩️` comment as the hand-off and shipped the
-   branch the 10:00 run had just sent back.
-
    This is a **proxy**, and it is one on purpose. The comment's text is not checked, and an
    unrelated automated note posted after the commit would satisfy it. It only keeps obvious
    work in flight out of the ship path. `code-ship` §0 re-derives the full hand-off
@@ -104,3 +89,5 @@ person must act):
 
 **It merges, so it obeys §4's stops.** A dead or red trunk CI halts it together with the
 `ship` candidates. Unlike `spent-remote`, it is not a report-only bucket that §4 can skip.
+
+Why: [ADR 536](../../docs/adr/536-code-sweep-3-orphan-shippable-rationale.md).

@@ -40,11 +40,6 @@ Worktrees are only half of it. Also:
   | ticked, noted "held open for review" | issue already closed | drop the stale note |
   | unticked | issue closed with evidence | tick it, cite the sha |
 
-  The first form is the expensive one: it is how a session gets spent rediscovering
-  work that already shipped — the failure measured at 4 of 9 sessions in a day in
-  `code-triage`'s opening principle. The epic is the source triage is *instructed* to trust, so a wrong line
-  there does not merely annoy; it throws away a session.
-
   Same four limits as `code-ship` B2c: never close a hand-checklist epic on a full
   table, never rewrite its prose, never build a table that does not exist, never infer
   parentage from a title.
@@ -70,12 +65,12 @@ Worktrees are only half of it. Also:
   ```
 
   The `(?m)` is load-bearing: gh's built-in jq anchors a bare `^` to the start of the
-  body only, so without it an unticked item further down slips through. (Measured on this
-  repo: an epic with 9 of 9 sub-issues closed and 9 unticked plan lines passed the filter
-  without the flag.) Each number printed gets a comment naming the evidence (all K sub-issues closed, the
+  body only, so without it an unticked item further down slips through. Each number printed gets a comment naming the evidence (all K sub-issues closed, the
   last one and when), posted and closed in one step: `colab close <P> --comment "<that evidence>"`
   (#381 — a bare `gh issue close` would leave any claim on it and tell no observer). An epic that fails only
   the unticked-item check is reported with the unticked lines, never closed. The same
   goes for a parent with all sub-issues closed but no `epic` label. A `delivery:*` label
   on any container is reported too (a container has no deliverable). Remove it only if
   the sweep was asked to reconcile labels.
+
+Why: [ADR 536](../../docs/adr/536-code-sweep-5-reconcile-rationale.md).

@@ -10,8 +10,8 @@ The check above answers *"is the thing I am merging into healthy?"*. It says not
 about the thing being merged. Both have to be true, and until now nothing in this chain
 asked the second question: `code-wrap` asserted a **local** gate, this section read
 `<base>`, and `colab ship`'s cure rule touched the branch's run only as a side
-condition. A branch could therefore be red on the runner through every step of the ship
-and never be stopped by one.
+condition.
+Why: [ADR 536](../../docs/adr/536-code-ship-b1a-branch-ci-rationale.md).
 
 `code-wrap` A5 reports the class for the sha it pushed. **Re-derive it here — do not
 take the report's word for it.** The head may have moved (B0's sync commit moves it by
@@ -47,11 +47,9 @@ run on `<base>`; re-measure trigger: that run. What is still never a defer is un
 originating session's composer, silence or parked state enters this decision at all —
 every step here runs in the coordinator's own worktree.
 
-- **The wait is bounded — 15 minutes per candidate, then a defer (#370).** A coordinator
-  once stayed in one turn for 1 h 40 min, hand-polling `gh run list` for three branches,
-  while two other candidates were already green at their head and merge-clean. A ship
-  pass that never ends also keeps the repository's trunk lock, so no fresh pass can
-  start either. Wait with `colab ci-wait`, with a wall-clock cap:
+- **The wait is bounded — 15 minutes per candidate, then a defer (#370).**
+  Why: [ADR 536](../../docs/adr/536-code-ship-b1a-branch-ci-rationale.md).
+  Wait with `colab ci-wait`, with a wall-clock cap:
 
   ```sh
   colab ci-wait --sha "$BHEAD" --branch <branch> --timeout 15m   # every run at the head sha
@@ -62,11 +60,9 @@ every step here runs in the coordinator's own worktree.
   `gh run watch` (it polls every 3 s), never run two waits for the same run (a second
   `ci-wait` on the same run in this checkout is refused, exit 6), never send `gh`'s stderr
   to `/dev/null` inside a wait, and never leave a wait running in the background after
-  your turn ends. Measured over one hour on one fleet: ~88% of ~4,500 REST calls on the shared
-  agent identity were hand-rolled CI waits — one sweep alone made ~1,500/h with two loops
-  on the same run, and a loop that read a rate-limit error as "keep waiting" kept going —
-  until the 5,000/h quota ran out and **every** agent's `gh` call failed for the rest of the
-  hour. `ci-wait` backs off 30 s → 60 s → 120 s, sends conditional requests (a 304 is
+  your turn ends.
+  Why: [ADR 536](../../docs/adr/536-code-ship-b1a-branch-ci-rationale.md).
+  `ci-wait` backs off 30 s → 60 s → 120 s, sends conditional requests (a 304 is
   free), and costs about 10 calls for a 15-minute run. It exits with the outcome:
 
   | exit | outcome | what this skill does |

@@ -97,12 +97,10 @@ name, never by line position, so their order in the body is never load-bearing.
 
 ### The grade verdict is a marker, not a sentence to parse (#260)
 
-Free prose was measured to fail two ways at once, on two independently written adopter
-parsers: a decorative emoji before a prose heading blanked one consumer's match
-entirely, while the other's `PASS\b`-shaped tail pattern read a held, qualified verdict
-(`PASS-WITH-NOTES`) as cleared. Opposite failures from the same root cause — there was no
-fixed shape to parse in the first place. So the verdict is a **closed vocabulary in a
+So the verdict is a **closed vocabulary in a
 fixed marker**, and the prose next to it is decoration a consumer never has to touch:
+
+Why: [ADR 536](../../docs/adr/536-code-ship-b2b-evidence-rationale.md).
 
 ```
 <!-- colab:grade verdict=<token> round=<n> -->

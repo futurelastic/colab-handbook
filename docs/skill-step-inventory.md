@@ -140,6 +140,106 @@ in [`3-orphan-shippable.md`](../skills/code-sweep/3-orphan-shippable.md), and
 | 2312–2369 | §6 Flag delegable groups with `mechanical-lane` | [`6-mechanical-lane.md`](../skills/code-triage/6-mechanical-lane.md) |
 | 2371–2402 | §6 Rank `low-priority` groups last | [`6-low-priority.md`](../skills/code-triage/6-low-priority.md) |
 
+## #536 — rationale moved on to `docs/adr/`
+
+The split above moved text verbatim and left history beside the rules. #536 moved the
+incident write-ups and measurements out of the reference files of all four split skills
+into one ADR per reference file, `docs/adr/536-<skill>-<file>-rationale.md`, verbatim (whole
+units, or a mixed unit cut at a sentence boundary), and left one `Why: [ADR 536](…)` link
+where the text was. No core `SKILL.md` was touched, so every numbered heading and every
+budget above is unchanged. Decision: [ADR 536](adr/536-skill-rationale-to-adrs.md).
+
+- Baseline: `f69b9927`
+- Check: `node scripts/check-doc-move.mjs --base f69b9927 --files <every reference file of
+  the four skills> --into docs/adr` → `missing 0 · headings gone from their file 0 · ledger
+  entries 0 (stale 0)`. Every unit of every reference file at the baseline is in the same
+  file or an ADR, whole or sentence by sentence; no rewrite, so no ledger.
+- `tools/lib/skill-size.test.js`: 30 of 30, including every relative link from the skills
+  into `docs/adr/`.
+
+### `code-triage` — 11 of 33 reference files lost rationale
+
+| reference file | lines | ADR |
+|---|---|---|
+| [`0-fingerprint-notes.md`](../skills/code-triage/0-fingerprint-notes.md) | 171 → 144 | [`536-code-triage-0-fingerprint-notes-rationale.md`](adr/536-code-triage-0-fingerprint-notes-rationale.md) |
+| [`0-fingerprint.md`](../skills/code-triage/0-fingerprint.md) | 104 → 90 | [`536-code-triage-0-fingerprint-rationale.md`](adr/536-code-triage-0-fingerprint-rationale.md) |
+| [`0-wakes-and-red-trunk.md`](../skills/code-triage/0-wakes-and-red-trunk.md) | 101 → 98 | [`536-code-triage-0-wakes-and-red-trunk-rationale.md`](adr/536-code-triage-0-wakes-and-red-trunk-rationale.md) |
+| [`0.2-idempotence.md`](../skills/code-triage/0.2-idempotence.md) | 100 → 100 | [`536-code-triage-0.2-idempotence-rationale.md`](adr/536-code-triage-0.2-idempotence-rationale.md) |
+| [`0.3-verdict-cache.md`](../skills/code-triage/0.3-verdict-cache.md) | 99 → 98 | [`536-code-triage-0.3-verdict-cache-rationale.md`](adr/536-code-triage-0.3-verdict-cache-rationale.md) |
+| [`2-non-code-delivery.md`](../skills/code-triage/2-non-code-delivery.md) | 44 → 44 | [`536-code-triage-2-non-code-delivery-rationale.md`](adr/536-code-triage-2-non-code-delivery-rationale.md) |
+| [`3-group.md`](../skills/code-triage/3-group.md) | 52 → 53 | [`536-code-triage-3-group-rationale.md`](adr/536-code-triage-3-group-rationale.md) |
+| [`3-touches.md`](../skills/code-triage/3-touches.md) | 33 → 31 | [`536-code-triage-3-touches-rationale.md`](adr/536-code-triage-3-touches-rationale.md) |
+| [`5.1-blocker-state.md`](../skills/code-triage/5.1-blocker-state.md) | 54 → 54 | [`536-code-triage-5.1-blocker-state-rationale.md`](adr/536-code-triage-5.1-blocker-state-rationale.md) |
+| [`5.2-trunk-red.md`](../skills/code-triage/5.2-trunk-red.md) | 89 → 89 | [`536-code-triage-5.2-trunk-red-rationale.md`](adr/536-code-triage-5.2-trunk-red-rationale.md) |
+| [`6-console-and-dry.md`](../skills/code-triage/6-console-and-dry.md) | 44 → 43 | [`536-code-triage-6-console-and-dry-rationale.md`](adr/536-code-triage-6-console-and-dry-rationale.md) |
+
+### `code-ship` — 12 of 19 reference files lost rationale
+
+| reference file | lines | ADR |
+|---|---|---|
+| [`0-handoff-contract.md`](../skills/code-ship/0-handoff-contract.md) | 137 → 137 | [`536-code-ship-0-handoff-contract-rationale.md`](adr/536-code-ship-0-handoff-contract-rationale.md) |
+| [`b0-sync.md`](../skills/code-ship/b0-sync.md) | 240 → 233 | [`536-code-ship-b0-sync-rationale.md`](adr/536-code-ship-b0-sync-rationale.md) |
+| [`b1-red-trunk.md`](../skills/code-ship/b1-red-trunk.md) | 115 → 111 | [`536-code-ship-b1-red-trunk-rationale.md`](adr/536-code-ship-b1-red-trunk-rationale.md) |
+| [`b1a-branch-ci.md`](../skills/code-ship/b1a-branch-ci.md) | 142 → 138 | [`536-code-ship-b1a-branch-ci-rationale.md`](adr/536-code-ship-b1a-branch-ci-rationale.md) |
+| [`b1b-harvest.md`](../skills/code-ship/b1b-harvest.md) | 140 → 134 | [`536-code-ship-b1b-harvest-rationale.md`](adr/536-code-ship-b1b-harvest-rationale.md) |
+| [`b1c-reject-classes.md`](../skills/code-ship/b1c-reject-classes.md) | 146 → 131 | [`536-code-ship-b1c-reject-classes-rationale.md`](adr/536-code-ship-b1c-reject-classes-rationale.md) |
+| [`b2-squash.md`](../skills/code-ship/b2-squash.md) | 97 → 96 | [`536-code-ship-b2-squash-rationale.md`](adr/536-code-ship-b2-squash-rationale.md) |
+| [`b2a-trunk-run.md`](../skills/code-ship/b2a-trunk-run.md) | 55 → 54 | [`536-code-ship-b2a-trunk-run-rationale.md`](adr/536-code-ship-b2a-trunk-run-rationale.md) |
+| [`b2b-evidence.md`](../skills/code-ship/b2b-evidence.md) | 166 → 164 | [`536-code-ship-b2b-evidence-rationale.md`](adr/536-code-ship-b2b-evidence-rationale.md) |
+| [`b2c-epic.md`](../skills/code-ship/b2c-epic.md) | 86 → 83 | [`536-code-ship-b2c-epic-rationale.md`](adr/536-code-ship-b2c-epic-rationale.md) |
+| [`b4-teardown.md`](../skills/code-ship/b4-teardown.md) | 154 → 153 | [`536-code-ship-b4-teardown-rationale.md`](adr/536-code-ship-b4-teardown-rationale.md) |
+| [`defer.md`](../skills/code-ship/defer.md) | 56 → 56 | [`536-code-ship-defer-rationale.md`](adr/536-code-ship-defer-rationale.md) |
+
+### `code-sweep` — 9 of 16 reference files lost rationale
+
+| reference file | lines | ADR |
+|---|---|---|
+| [`1.1-scoped-mode.md`](../skills/code-sweep/1.1-scoped-mode.md) | 82 → 82 | [`536-code-sweep-1.1-scoped-mode-rationale.md`](adr/536-code-sweep-1.1-scoped-mode-rationale.md) |
+| [`1.3-remote-refs.md`](../skills/code-sweep/1.3-remote-refs.md) | 78 → 78 | [`536-code-sweep-1.3-remote-refs-rationale.md`](adr/536-code-sweep-1.3-remote-refs-rationale.md) |
+| [`3-orphan-shippable.md`](../skills/code-sweep/3-orphan-shippable.md) | 106 → 93 | [`536-code-sweep-3-orphan-shippable-rationale.md`](adr/536-code-sweep-3-orphan-shippable-rationale.md) |
+| [`3-spent-remote.md`](../skills/code-sweep/3-spent-remote.md) | 32 → 33 | [`536-code-sweep-3-spent-remote-rationale.md`](adr/536-code-sweep-3-spent-remote-rationale.md) |
+| [`4-failure-defers.md`](../skills/code-sweep/4-failure-defers.md) | 61 → 52 | [`536-code-sweep-4-failure-defers-rationale.md`](adr/536-code-sweep-4-failure-defers-rationale.md) |
+| [`4.0-order.md`](../skills/code-sweep/4.0-order.md) | 83 → 79 | [`536-code-sweep-4.0-order-rationale.md`](adr/536-code-sweep-4.0-order-rationale.md) |
+| [`5-reconcile.md`](../skills/code-sweep/5-reconcile.md) | 81 → 76 | [`536-code-sweep-5-reconcile-rationale.md`](adr/536-code-sweep-5-reconcile-rationale.md) |
+| [`5.1-rederive.md`](../skills/code-sweep/5.1-rederive.md) | 67 → 57 | [`536-code-sweep-5.1-rederive-rationale.md`](adr/536-code-sweep-5.1-rederive-rationale.md) |
+| [`6-report.md`](../skills/code-sweep/6-report.md) | 73 → 72 | [`536-code-sweep-6-report-rationale.md`](adr/536-code-sweep-6-report-rationale.md) |
+
+### `code-wrap` — 10 of 18 reference files lost rationale
+
+| reference file | lines | ADR |
+|---|---|---|
+| [`a2-claude-md-router.md`](../skills/code-wrap/a2-claude-md-router.md) | 48 → 42 | [`536-code-wrap-a2-claude-md-router-rationale.md`](adr/536-code-wrap-a2-claude-md-router-rationale.md) |
+| [`a2-issue-keyed-naming.md`](../skills/code-wrap/a2-issue-keyed-naming.md) | 49 → 42 | [`536-code-wrap-a2-issue-keyed-naming-rationale.md`](adr/536-code-wrap-a2-issue-keyed-naming-rationale.md) |
+| [`a2-new-rule.md`](../skills/code-wrap/a2-new-rule.md) | 30 → 30 | [`536-code-wrap-a2-new-rule-rationale.md`](adr/536-code-wrap-a2-new-rule-rationale.md) |
+| [`a2-on-this-branch.md`](../skills/code-wrap/a2-on-this-branch.md) | 16 → 12 | [`536-code-wrap-a2-on-this-branch-rationale.md`](adr/536-code-wrap-a2-on-this-branch-rationale.md) |
+| [`a3-hermetic-rules.md`](../skills/code-wrap/a3-hermetic-rules.md) | 67 → 60 | [`536-code-wrap-a3-hermetic-rules-rationale.md`](adr/536-code-wrap-a3-hermetic-rules-rationale.md) |
+| [`a3-read-the-verdict.md`](../skills/code-wrap/a3-read-the-verdict.md) | 41 → 34 | [`536-code-wrap-a3-read-the-verdict-rationale.md`](adr/536-code-wrap-a3-read-the-verdict-rationale.md) |
+| [`a5-read-the-run.md`](../skills/code-wrap/a5-read-the-run.md) | 30 → 28 | [`536-code-wrap-a5-read-the-run-rationale.md`](adr/536-code-wrap-a5-read-the-run-rationale.md) |
+| [`a5-reading-the-class.md`](../skills/code-wrap/a5-reading-the-class.md) | 48 → 48 | [`536-code-wrap-a5-reading-the-class-rationale.md`](adr/536-code-wrap-a5-reading-the-class-rationale.md) |
+| [`handoff-missing-plan.md`](../skills/code-wrap/handoff-missing-plan.md) | 41 → 38 | [`536-code-wrap-handoff-missing-plan-rationale.md`](adr/536-code-wrap-handoff-missing-plan-rationale.md) |
+| [`handoff-partial-wrap.md`](../skills/code-wrap/handoff-partial-wrap.md) | 37 → 34 | [`536-code-wrap-handoff-partial-wrap-rationale.md`](adr/536-code-wrap-handoff-partial-wrap-rationale.md) |
+
+### What still says "measured", and why it stayed
+
+The Done-when asks that every remaining measurement or incident either sit in an ADR or be
+justified as rule text. What stayed falls into four kinds; the per-unit list is on #536.
+
+- **Glued to its rule.** The measurement shares a sentence with the rule it supports
+  (`code-ship` B2 *squash* "measured … 5 s before", B2d's 29 s label race, B1's
+  "we once merged for 12 hours"), or the checker's sentence splitter cannot cut between
+  them without a reword (`code-triage` input 2 and input 5 notes, `0.2-idempotence`'s nine
+  comments). Moving it would have meant rewording a rule, which this change does not do.
+- **Referred back to.** A kept sentence points at it: "measurement 1" and "all six false
+  positives above" in `code-triage` `3-one-branch.md`; "the three causes" in `code-sweep`
+  `0-fingerprint.md`; "see the push bullet above" in `code-ship` `0-handoff-contract.md`;
+  "The re-run half" in `code-triage` `5.2-trunk-red.md`.
+- **Not history.** "Measured" as the ordinary verb of a rule ("measured met", "measured
+  against trunk", "say which kind of `none` you measured"), and dated lines that are example
+  output of a report format.
+- **Kept on doubt.** The opening "why this exists" paragraphs of `code-triage`
+  `6-needs-plan.md` and `6-mechanical-lane.md` carry no measurement and read as premise. A
+  later pass may move them; this one kept what it was unsure of.
+
 ## Ledger — units edited rather than moved
 
 None. Every unit of every old file is found verbatim (after the checker's normalisation:

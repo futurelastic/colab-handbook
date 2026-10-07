@@ -19,21 +19,13 @@ that carry the depth. It is also the one file loaded in full into **every** sess
 before any work starts, which makes it the worst place in the repo for append-only
 accretion — and currently the place accretion lands.
 
-Measured across six repos: **~30 lines added per session, and not one commit ever
-made one smaller.** The furthest along went 66 → 452 lines (39 KB, ~10-12k tokens)
-in two days; every session in it — including one that only touched CSS — pays that
-before doing anything, which is the opposite of code-start's whole premise.
-
 A better destination existing is not enough: the repos that already had a
 contributing/gotchas doc grew at exactly the same rate, because nothing pointed
 there. So the counter-pressure has to be here:
 
 - **If the knowledge belongs in `docs/`, the `CLAUDE.md` change is a pointer, not a
   copy.** Duplicating is worse than misfiling — whichever copy rots first, the other
-  keeps being read. We found a restart procedure living in both, and three other
-  rules living *only* in `CLAUDE.md`, so no after-the-fact routing rule can sort
-  them: "ops → the deploy doc" silently loses a rule, "gotchas → `CLAUDE.md`"
-  returns a second drifting copy.
+  keeps being read.
 - **Prefer editing an existing line to adding one.** If nothing already in
   `CLAUDE.md` has become wrong, the correct diff to it is often no diff at all.
 - **This is not licence to distill less.** The content is worth keeping — location
@@ -46,3 +38,5 @@ mechanical was watching bytes. `audit/audit.mjs` now flags this — a `CLAUDE.md
 ~40 KB **counting every in-repo file it `@`-imports** (#417), or any single physical line
 more than 6x its own file's median and over 2 KB — as an advisory (`audit/README.md`, #64). It is a starting-point threshold, not a hard
 gate, but it means a session no longer has to catch this by eye.
+
+Why: [ADR 536](../../docs/adr/536-code-wrap-a2-claude-md-router-rationale.md).

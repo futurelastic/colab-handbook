@@ -19,9 +19,9 @@ colab worktrees --json     # .worktrees["<name>"].base — trunk if it has none 
 
 **Then ask whether it already shipped under another sha — before you grade anything
 (#370).** A squash followed by `<base>` movement reads `unknown` below, so a ref kept
-after an earlier ship looks exactly like unshipped work. Measured: 3 of 8 candidates in
-one repository's ship queue were already on trunk; one read CONFLICT only because its own
-content was already there, and grading it would have spent a full review on nothing. The
+after an earlier ship looks exactly like unshipped work.
+Why: [ADR 536](../../docs/adr/536-code-ship-b0-sync-rationale.md).
+The
 squash message carries what the tree cannot (`CONVENTIONS.md`
 [§4](../../CONVENTIONS.md#has-it-landed--the-one-rule-because-the-obvious-one-is-wrong),
 *Has it landed?*):
@@ -62,9 +62,8 @@ door (#90).** A session can finish with a real deliverable and no diff at all: a
 decision recorded on its issue, an investigation concluding "no change needed", a
 design artifact stored outside the repo. That is not an exotic shape, and the route
 above does not close it — B2b wants "the `<base>` squash sha", which does not exist
-here, and no step in this skill has ever run `gh issue close`. Measured: the claim was
-released, the worktree torn down, and the issue stayed open until a human said in
-prose that finishing with no commit was acceptable.
+here, and no step in this skill has ever run `gh issue close`.
+Why: [ADR 536](../../docs/adr/536-code-ship-b0-sync-rationale.md).
 
 ```sh
 colab ship --worktree <name> --dry     # → MODE: evidence-close, if that is this branch
@@ -190,14 +189,8 @@ git add -A && git commit -m "chore(sync): merge <base> + regen generated files"
 **`<base>` is the only ref this step may merge — never a sibling member's branch.** If
 this branch carries a `group:` label and a sibling still has unmerged work you want, the
 answer is to sequence behind it or group onto it (`CONVENTIONS.md` [§5](../../CONVENTIONS.md#grouping--issues-that-must-share-one-branch), *Grouping*),
-never to pull it in here. Measured on a downstream session orchestrator, 2026-09-05 — its own ADR
-on reorganising its ship lanes, section 2 L5: one branch in a `group:` label
-carried **8 `chore(sync)` commits** pulling siblings' fixes ahead of their own trunk
-merge. The cost is not the noise — it is that a branch holding a sibling's unlanded
-commits can no longer land independently of that sibling, so each waits on the other and
-neither converges, while both keep burning CI rebasing around each other. The commit
-message shape above is exactly the one that failure wore, which is why this paragraph
-sits under it.
+never to pull it in here.
+Why: [ADR 536](../../docs/adr/536-code-ship-b0-sync-rationale.md).
 
 **Carrying a `group:` label with a sibling ref still live? You are landing one of N.**
 Land yours against the current `<base>` and **re-derive the contention here** — `colab

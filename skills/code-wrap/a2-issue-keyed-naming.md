@@ -7,15 +7,7 @@ behind them — moved here verbatim (#524).
 #### Issue-keyed naming — the fix for any sequential-counter document (gotchas, ADRs)
 
 Both gotchas and ADRs used to accrete into a **single file with a shared
-sequential counter**: numbered sections cited elsewhere by number. That shape
-breaks identically for either kind of entry, and it was measured breaking for
-gotchas first: on the busiest repo, `docs/gotchas.md` reached ~15KB and dozens
-of entries, the renumber procedure this forced had to be re-explained verbatim
-in 8 separate session briefs in one week, and every renumber silently
-stale-dates every existing `§N` citation elsewhere in the repo, with no error.
-An ADR directory numbered sequentially (`0001-`, `0002-`, …) has the same
-failure mode for the same reason: two parallel branches each adding "the next
-one" pick the same number, and one silently loses its identity at merge.
+sequential counter**: numbered sections cited elsewhere by number.
 
 The fix is one convention applied to both, not two conventions that drift
 apart: **key the filename on the issue number, never a sequence.**
@@ -23,8 +15,7 @@ apart: **key the filename on the issue number, never a sequence.**
 another entry's file. No shared counter, so no merge contention and nothing to
 ever renumber; the issue number is a stable id citations can use across
 renames; two parallel branches adding an entry each touch a different file,
-never the same line. Already proven this way on two repos in the fleet —
-`docs/gotchas.d/` carries ~96 entries on the busiest of them.
+never the same line.
 
 - **New entry → new file**, `docs/gotchas.d/$N-<slug>.md` or
   `docs/adr/$N-<slug>.md` as appropriate, in this session's commit.
@@ -47,3 +38,5 @@ never the same line. Already proven this way on two repos in the fleet —
   [`templates/adr-README.md`](../../templates/adr-README.md) for
   adoption/handbook-sync to seed; copying it in is optional, not a
   precondition for writing the first entry.
+
+Why: [ADR 536](../../docs/adr/536-code-wrap-a2-issue-keyed-naming-rationale.md).

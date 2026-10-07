@@ -49,31 +49,11 @@ behind them — moved here verbatim (#524).
   digests. The one miss: an assignee added to or dropped from an issue with no label and no
   other change — a pure half-claim appearing or being repaired. Re-run triage fully when
   one is being repaired rather than trusting a cache hit.
-- **`updatedAt` does not see dependency edges either — measured on the live API.** Adding a
-  `blocked_by` edge and removing it again left `updatedAt` byte-identical across both
-  writes, while a label add/remove moved it twice in the same minute. Edges do land in the
-  issue timeline (`blocked_by_added` / `blocked_by_removed`), but reading that is a call
-  *per issue*; input 3 is the entire graph in one query. This is why input 3 stays a
-  separate input even after input 2's narrowing above — none of `state,title,body,labels`
-  sees an edge either, so dropping input 3 would go blind to precisely the data the §5
-  readiness gate turns on: a new blocker would be reported as `free (checked)` forever.
 - **Input 3 digests BOTH directions, because an inbound edge is not visible on this side's
   `blockedBy`.** An edge written from another repository *toward* an issue here moves that
-  issue's `blocking` count and never touches its `blockedBy`. Measured: an open issue whose
-  `blocking` went 0 → 1 — a consumer elsewhere declaring itself blocked by it — produced a
-  **byte-identical** one-directional line (`<n>:0`) before and after, and two inbound edges
-  once survived a full triage cycle unnoticed. Under a ping loop that means the repo
-  acquires an obligation (one of its issues is now on somebody's critical path) and triage
-  never says so. The two-way line makes the fingerprint deliberately more sensitive, on the
-  same reasoning input 5 already uses for pushes: what this repo *owes* changed.
+  issue's `blocking` count and never touches its `blockedBy`.
 - **Digest the connections' `totalCount`, NOT `issueDependenciesSummary` — the summary
-  lags behind the graph.** Measured, both directions, inside a *single* response: seconds
-  after a `blocked_by` POST, `blockedBy(first:n){totalCount}` already read `1` while
-  `issueDependenciesSummary.blockedBy` still read `0`; seconds after the matching DELETE the
-  connections read `0` while the summary still read the pre-delete `1`. It converges within
-  a few seconds, so nothing is broken — but a digest built from the summary can record a
-  state that never existed at any instant, and a fingerprint stored from it "changes" on the
-  next ping for no reason. The connections are the authority; the summary is a cache of them.
+  lags behind the graph.** The connections are the authority; the summary is a cache of them.
   (The same fact protects §0.2's read-before-write rule: `gh issue view <N> --json blockedBy`
   reads the *connection*, so a POST is not re-issued against a stale zero.)
 - **The `BY` lines are why the blocker detail is fetched here and not again in §5.** §5.1
@@ -91,10 +71,7 @@ behind them — moved here verbatim (#524).
   you could not read"* below, and it binds all five inputs: every digest needs a receipt that
   its read actually happened —
   input 3's is the `COV` line, which is emitted by the same query and cannot be produced by
-  a failed one. Note the failure is *not* hypothetical for want of `jq`: shipped paths use
-  `gh`'s built-in `-q` (and the audit's `--jq`) for exactly this reason, but an external
-  `jq` is not universally installed — piping this query into one on a machine without it
-  returned that constant, silently.
+  a failed one.
 - **No silent caps — say what was dropped.** `first:100` in input 3, `--limit 100` in
   input 2 and in §1, all bounded; past 100 open issues the digest covers a partial set, so
   movement in the tail reads as "unchanged" and the short-circuit then hides it.
@@ -130,12 +107,6 @@ behind them — moved here verbatim (#524).
   `-f query=@file` does **not** — `gh` sends the literal `@` and the server rejects it. And
   `set -- $VAR` does not word-split under zsh, where it yields one argument to bash's three,
   so parse the `COV` line with `read` or `awk`, never with positional parameters.)
-- **Input 5 exists because §5.1 turned a branch push into a readiness signal.** A blocker
-  whose code gets pushed moves a dependent from `blocked` to soft-ready — and moves none of
-  inputs 1-4: trunk is untouched, the issues are untouched, the edge is untouched, and the
-  claim may live on another machine. Without this the new verdict would almost never be
-  discovered under a ping loop, which is the same blindness input 3 was added to fix. It
-  reads refs the fetch on input 1 already updated, so it costs no call.
 - **Input 5 now digests branch presence + ahead-ness, not tip shas — measured, #244.** The
   old digest (every remote ref's tip sha) moved on any push to any branch, and this repo's
   own text already conceded it: "any push to any branch forces a full pass" — a safe
@@ -169,3 +140,5 @@ behind them — moved here verbatim (#524).
   a version you do not recognise ⇒ run the full pass. Never report "nothing changed" from a
   cache you could not read — a silent fall-through to "all quiet" is the one failure mode
   that costs a day rather than a call.
+
+Why: [ADR 536](../../docs/adr/536-code-triage-0-fingerprint-notes-rationale.md).

@@ -41,12 +41,9 @@ real number, and the outcome line below prints it rather than a fixed three.
 **Then check for a red trunk that nobody owns — a state, not an input (#430).** Trunk CI is
 never part of the fingerprint (*What is deliberately NOT in the fingerprint*, below), so a
 trunk that goes red with no code change moves none of the five inputs. The same goes for a
-diagnosis already in the backlog under the wrong title. Measured: a trunk went red on a
-re-run (code unchanged, live data drifted, a static check failed). A session filed the
-diagnosis as an issue, but the title had no `TRUNK RED:` prefix and the issue was
-`agent-filed`. Two triage pings in the next ~25 minutes printed `unchanged` and stopped.
-Every ship candidate in the repo stayed parked on "trunk red has no owner" for about 40
-minutes, until someone outside triage retitled the issue and accepted it.
+diagnosis already in the backlog under the wrong title.
+
+Why: [ADR 536](../../docs/adr/536-code-triage-0-wakes-and-red-trunk-rationale.md).
 
 So check this on **every** pass, a short-circuited one included. The red trunk is
 **owned** when either of these holds:

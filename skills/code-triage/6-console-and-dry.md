@@ -16,10 +16,7 @@ invented for the occasion.
 **A dry pass is a finding (#380).** When the ranked list is empty (no ready and no
 soft-ready group), the report **opens** with that fact, before any bucket. It then lists
 every open issue that is not taken, not an epic and not a close candidate, one line each:
-the one thing that would make it startable, and who holds that thing. Measured: a repo sat
-with 22 open issues and 0 startable for hours, and no session worked it. Two of its holds
-were already stale, and a report that read "nothing ready" was taken to mean "nothing to
-do". Its first line is fixed, so a reader cannot mistake it for a clean result:
+the one thing that would make it startable, and who holds that thing. Its first line is fixed, so a reader cannot mistake it for a clean result:
 
 ```
 DRY    0 of 22 open issues startable (trunk e31a896) — what unsticks each:
@@ -42,3 +39,5 @@ DRY    0 of 22 open issues startable (trunk e31a896) — what unsticks each:
 - `N` in the header counts every open issue. If none of them gets a line (all epics, all
   taken, or all route), the header still prints, followed by one line saying so.
 - The `DRY` block is console output like the rest of §6. It is never posted to the tracker.
+
+Why: [ADR 536](../../docs/adr/536-code-triage-6-console-and-dry-rationale.md).

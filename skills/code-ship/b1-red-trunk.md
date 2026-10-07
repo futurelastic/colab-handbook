@@ -69,12 +69,8 @@ trunk-plus-branch, so it **includes the red**.
 
 **Both read the same remedy** ("open a PR to obtain branch CI"; `colab ship`'s cure
 refusal), which is exactly why the cure looks equally available to both. Ask the
-question before offering the cure to anything. Measured: a trunk turned red on a
-docs-only merge — a test deferring against a hardcoded date that real time walked past,
-a calendar bomb, no branch's regression. Of three waiting branches, the one whose
-parent was the red sha and which fixed the clock opened a PR, ran green and
-cure-merged; the two bystanders stayed parked, correctly, and shipped once trunk was
-green.
+question before offering the cure to anything.
+Why: [ADR 536](../../docs/adr/536-code-ship-b1-red-trunk-rationale.md).
 
 - **The red is in a main-only workflow** (`Release (auto)` — it never runs on a
   branch) **and the branch is the patch?** Its evidence is a **dry run**, not a PR

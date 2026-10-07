@@ -34,7 +34,4 @@ own issue (agent-filed, A1), drop it from this branch's claim, and say so — th
 is no longer partial. Silently ending the turn with claimed work outstanding is not one of
 the exits.
 
-Measured: one unattended session posted a partial wrap (one issue done, one half done,
-one design-only), ended its turn naming no blocker, and sat idle about five and a half
-hours holding all three claims before a person noticed. Nothing in the session was
-waiting on anyone — it had simply read "stop" as "done".
+Why: [ADR 536](../../docs/adr/536-code-wrap-handoff-partial-wrap-rationale.md).
