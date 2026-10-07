@@ -27,7 +27,8 @@
 # NOT for: Laravel + Inertia fullstack apps — use ci-laravel.yml.
 #
 # What it does:
-#   0. Fail on a .github/project.yml value colab would silently ignore (ship-batch, #416).
+#   0. Fail on a .github/project.yml value colab would silently ignore (ship-batch, #416;
+#      ship-batch-wait, #555).
 #   1. Resolve the Python version from declared sources — never a hardcoded default.
 #   2. Secret scan with gitleaks (pinned release binary, see note at the step).
 #   3. Install dependencies from whichever manifest the repo actually has.
@@ -248,22 +249,38 @@ jobs:
       # green; only a ship dry run noticed. So the value fails HERE, where the person
       # who changed project.yml is looking. Same rule as `colab ship` and the audit
       # (tools/lib/ship-batch.js parseShipBatch): absent/empty/null, or 1–3. Why the
-      # cap is 3: project.schema.md, `ship-batch`.
+      # cap is 3: project.schema.md, `ship-batch`. `ship-batch-wait` (#555) the same way
+      # (parseShipBatchWait): absent/empty/null, or a whole number with a unit (s, m, h).
       # ---------------------------------------------------------------------------
       - name: Descriptor check (.github/project.yml)
         working-directory: ${{ github.workspace }}
         run: |
           [ -f .github/project.yml ] || exit 0
-          line="$(grep -E '^ship-batch[[:space:]]*:' .github/project.yml | head -1 || true)"
-          [ -n "$line" ] || exit 0
-          v="$(printf '%s\n' "$line" | sed -E -e 's/^ship-batch[[:space:]]*:[[:space:]]*//' \
+          # The scalar after `<key>:` — comment, trailing blanks and one level of quotes stripped.
+          field() {
+            grep -E "^$1[[:space:]]*:" .github/project.yml | head -1 \
+              | sed -E -e "s/^$1[[:space:]]*:[[:space:]]*//" \
                 -e 's/[[:space:]]+#.*$//' -e 's/[[:space:]]+$//' \
-                -e 's/^"(.*)"$/\1/' -e "s/^'(.*)'\$/\\1/")"
+                -e 's/^"(.*)"$/\1/' -e "s/^'(.*)'\$/\\1/" || true
+          }
+          v="$(field ship-batch)"
           case "$v" in
             ''|'~'|null|1|2|3) echo "ship-batch: ${v:-absent} — ok" ;;
             *)
               echo "::error file=.github/project.yml::ship-batch is '$v', expected an integer 1-3 (omit for serial). colab ship ignores any other value and lands serially. Why the cap is 3: project.schema.md, ship-batch."
               exit 1 ;;
+          esac
+          # ship-batch-wait (#555): a whole number with a unit — 90s, 6m, 1h. No ceiling: the repo chooses.
+          w="$(field ship-batch-wait)"
+          case "$w" in
+            ''|'~'|null) echo "ship-batch-wait: absent — ok" ;;
+            *)
+              if printf '%s\n' "$w" | grep -Eq '^[0-9]+[smh]$'; then
+                echo "ship-batch-wait: $w — ok"
+              else
+                echo "::error file=.github/project.yml::ship-batch-wait is '$w', expected a whole number with a unit: 90s, 6m, 1h (omit for no wait). colab ship ignores any other value and does not wait."
+                exit 1
+              fi ;;
           esac
 
       # ---------------------------------------------------------------------------

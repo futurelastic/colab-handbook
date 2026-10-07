@@ -10351,6 +10351,12 @@ at build, added since) is NOT landed with it — the command names both lists an
 --dry pushes, deletes, lands, comments and releases nothing on EVERY path (#415): a fresh batch is built
 locally and printed; a staged green batch prints what would land (members, combined run, target sha).
 Consumer CI must opt in: add 'ship-batch/**' to a CI workflow's push: branches:.
+PARTNER WAIT (#555) — opt-in per repo: \`ship-batch-wait: <duration>\` in project.yml (90s, 6m, 1h; the
+unit is required). Absent, zero or malformed: no wait, exactly as above. With it, a call where exactly
+ONE member can join pauses (exit 3, "⏸ PARTNER-WAIT", the seconds left) until that window has passed
+since the member became ready (its head CI's last update, else its head commit's date) — then the same
+call declines it to serial (exit 4). The caller waits, gathers every ready candidate again and calls
+--batch with all of them. A single named branch is accepted only when the field is set.
 
 B3 KEEPS the branch by default. Deleting refs from a shared remote is not something this command
 does unasked, however certain it is that the content landed: reporting is safe and reversible,
@@ -13909,7 +13915,10 @@ function cmdShipBatch(opts) {
   if (String(doc.autonomy || '') !== 'auto-trunk') {
     return serial(`project.yml does not grant autonomy: auto-trunk — batch landing needs it (every member lands in one unattended push)`);
   }
-  if (members.length < 2) return serial(`--batch names ${members.length} branch(es) — a batch needs at least two`);
+  // #555: a declared ship-batch-wait lets ONE named member through — it may wait for a partner below.
+  const waitCfg = shipBatch.parseShipBatchWait(doc);
+  if (!waitCfg.valid) warn(`${waitCfg.reason} — ignored: a lone member does not wait (fails closed, #555)`);
+  if (members.length < 2 && !(members.length === 1 && waitCfg.sec > 0)) return serial(`--batch names ${members.length} branch(es) — a batch needs at least two`);
   if (members.length > cfg.n) warn(`--batch names ${members.length} branches; ship-batch: ${cfg.n} caps the batch — the rest wait for the next one`);
 
   const remote = git.remoteFor(repoAbs);
@@ -14048,6 +14057,22 @@ function cmdShipBatch(opts) {
     e.ok && !selected.includes(e) ? `eligible — waits for the next batch (cap ${cfg.n})` : e.why]), ['', 'MEMBER', 'DETAIL']));
   const notJoining = evaluated.filter((e) => !selected.includes(e)).map((e) => e.branch);
   step = shipBatch.nextStep({ enabled: true, wired: true, trunkCi, eligibleCount: selected.length, existing: null, trunkNow });
+  if (step.step === 'serial' && selected.length === 1 && waitCfg.sec > 0) {
+    // #555: the lane is idle here (trunk's run finished, no batch in flight at this base), and one
+    // member is ready. Wait for a partner until the repo's window, counted from when it became ready.
+    const lone = selected[0];
+    const commitIso = git.git(['log', '-1', '--format=%cI', lone.sha], repoAbs);
+    const since = shipBatch.readySince(git.ghRunsForCommit(repoAbs, lone.branch, lone.sha), commitIso.ok ? commitIso.stdout.trim() : null);
+    const pw = shipBatch.partnerWait({ n: cfg.n, waitSec: waitCfg.sec, eligibleCount: 1, readySinceMs: since, nowMs: Date.now() });
+    if (pw.wait) {
+      print(`⏸ PARTNER-WAIT ${lone.branch} — the only ready member; ${waitCfg.reason}, ready since ${new Date(since).toISOString()}, ${ciWait.fmtDuration(pw.leftSec * 1000)} left. Nothing landed.`);
+      print(`  Wait up to ${pw.leftSec}s (a wait on another candidate's run counts toward it), gather EVERY ready candidate again,`);
+      print('  then run colab ship --batch with all of them. Past the window, this same call lands it alone (serial).');
+      return 3;
+    }
+    const why = { 'window-elapsed': `${waitCfg.reason} has elapsed since it became ready`, 'ready-time-unread': 'its ready time could not be read, so it does not wait' }[pw.reason] || pw.reason;
+    return serial(`1 member can join and no partner arrived — ${why}`);
+  }
   if (step.step === 'serial') return serial(`${selected.length} member(s) can join — a batch needs at least two`);
 
   // ---- (e) build: trunk head + one squash commit per member, in an ephemeral detached worktree ----

@@ -1675,6 +1675,14 @@ unchanged) may land through `colab ship --batch <b1,b2[,b3]>`:
    the current CI templates already fires there, since their `'**'` covers it (#384).
 8. **[Hard — gate: colab ship --batch declines on red trunk]** **A red trunk still stops everything** except the cure/grant doors, and those apply
    **per member, never to a batch**: a red trunk declines the batch outright.
+9. **Gathering, and the partner wait** (#555). A ship pass builds a batch from **every**
+   candidate ready at that moment — re-read the set right before each `--batch` call, never
+   reuse the list the pass started with. A lone ready candidate lands alone at once, unless
+   the repo declares [`ship-batch-wait: <duration>`](project.schema.md#ship-batch-wait--optional):
+   then, with the lane otherwise idle (trunk's run finished, no batch in flight), it waits
+   up to that window — counted from when it became ready, so it never restarts — for a
+   partner, and lands alone after. The handbook gives no default and no ceiling: absent
+   is no wait. A repo picks the value from its own history.
 
 `colab ship --batch` never waits: each call reads the remote, takes one step, and exits
 `0` landed · `3` paused (wait on the printed run, bounded as any other CI wait, then run
