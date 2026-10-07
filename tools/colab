@@ -3926,12 +3926,26 @@ function migrationGrantReviewRecord(repoAbs, opts) {
   // #508: bind what was reviewed — the branch's migration files at the tip, by content. Same path
   // rule the ship gate fires on (newMigrations), against origin's trunk. A branch with no migration
   // to review gets no id and stays HEAD-bound.
+  //
+  // #563: and never silently fall back to HEAD binding. A grant posted without `migrations:` for a
+  // branch that HAS migrations is voided by the very trunk sync ship demands — the cost #508 removed.
+  // So every way this can fail to answer refuses instead: no trunk to diff against, a diff git
+  // cannot compute (base or tip object missing here), or a tree it cannot read at the tip.
   const trunk = resolveTrunk(repoAbs, projectDoc(repoAbs));
+  if (!trunk) {
+    throw new UserError("cannot resolve this repo's trunk from project.yml — a reviewer grant binds the branch's migration content against trunk, so nothing was posted. Declare `trunk:` in .github/project.yml, then re-run `colab migration-grant`");
+  }
   const remote = git.remoteInfo(repoAbs).name || 'origin';
-  let base = trunk ? `${remote}/${trunk}` : null;
-  if (base && !git.git(['rev-parse', '--verify', '--quiet', `${base}^{commit}`], repoAbs).ok) base = trunk;
-  const migrations = base ? newMigrations(repoAbs, base, tip) : [];
+  let base = `${remote}/${trunk}`;
+  if (!git.git(['rev-parse', '--verify', '--quiet', `${base}^{commit}`], repoAbs).ok) base = trunk;
+  const migrations = newMigrationsOrNull(repoAbs, base, tip);
+  if (migrations === null) {
+    throw new UserError(`cannot list "${opts.branch}"'s files against ${base} (git diff ${base}...${tip.slice(0, 12)} failed) — without that list the grant could not bind the migration content and would be voided by the next trunk sync; nothing was posted. Run \`git fetch ${remote} ${trunk} ${opts.branch}\`, then re-run \`colab migration-grant\``);
+  }
   const contentId = migrationContentAt(repoAbs, migrations, tip);
+  if (migrations.length > 0 && !contentId) {
+    throw new UserError(`"${opts.branch}" carries ${migrations.length} migration file(s) (${migrations.join(', ')}) but their content id could not be computed at ${tip.slice(0, 12)} (git ls-tree failed) — a grant without it binds the HEAD alone and the next trunk sync voids it; nothing was posted. Run \`git fetch ${remote} ${opts.branch}\`, then re-run \`colab migration-grant\``);
+  }
 
   const rec = {
     v: '1', role, reviewer: opts.reviewer, head: tip,
@@ -9947,8 +9961,14 @@ function trustAt(repoAbs, ref) {
  * gated by it, and a branch that deletes trunk's declaration is still gated by trunk's.
  */
 function newMigrations(mainRoot, trunk, branch) {
+  return newMigrationsOrNull(mainRoot, trunk, branch) || [];
+}
+
+/** newMigrations, but null — not [] — when git cannot compute the diff (#563): the grant write path
+ *  must tell "no migrations" from "could not look", and refuses on the second. */
+function newMigrationsOrNull(mainRoot, trunk, branch) {
   const r = git.git(['diff', '--name-only', `${trunk}...${branch}`], mainRoot);
-  if (!r.ok) return [];
+  if (!r.ok) return null;
   const declared = migrationPaths.unionPaths(projectDoc(mainRoot), projectDocAt(mainRoot, trunk), projectDocAt(mainRoot, branch));
   return r.stdout.split('\n').filter(Boolean).filter((f) => migrationPaths.isMigrationPath(f, declared));
 }

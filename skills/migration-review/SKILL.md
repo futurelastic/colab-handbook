@@ -211,6 +211,9 @@ colab migration-grant <N> --branch <branch> \
 - The grant covers the migration content at that HEAD (#508). The tool computes the content
   id; there is no flag for it. A later commit that changes any migration file means a new
   review. A trunk sync, or a commit that leaves the migrations byte-identical, does not.
+  When the tool cannot compute that id for a branch that carries migrations, it refuses and
+  names the `git fetch` to run (#563). Never post the grant marker some other way to get
+  past that: a grant without the id binds the HEAD alone, and the next trunk sync voids it.
 
 ### REWORK — one brief per failure
 
