@@ -227,6 +227,10 @@ what an Issue is *for* — memory for `solo`, coordination for `team`, documenta
 names a role (`team`/`public`) or only names a species when the room is otherwise empty
 of anyone else to hand the release to (`solo`).
 
+Issue language follows the room, not repo privacy, and
+[`ceremony`](#ceremony--narration-follows-the-room-recoverability-follows-exposure) follows
+the room, not production status.
+
 **The stated reason for claim discipline gets the same correction.** *"Anything labelled
 in-progress is someone else's — do not take it"* reads, on first pass, as etiquette
 between colleagues. The room axis makes the actual mechanism explicit: in the common case
