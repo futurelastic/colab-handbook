@@ -96,7 +96,8 @@ test('the promote step runs on the schedule and a manual dispatch, before the cu
   const c = lines.findIndex((l) => l.trim() === `- name: ${CUT}`);
   assert.ok(p >= 0 && c > p, 'promote must come before the cut');
   const cond = stepLines(PROMOTE).find((l) => /^\s+if:/.test(l));
-  assert.match(cond, /github\.event_name == 'schedule' \|\| github\.event_name == 'workflow_dispatch'/);
+  // #547: the daily schedule only — never the hourly retry run, which re-tries the cut and nothing else.
+  assert.match(cond, /\(github\.event_name == 'schedule' && env\.RETRY_RUN != 'true'\) \|\| github\.event_name == 'workflow_dispatch'/);
   assert.doesNotMatch(cond, /workflow_run/);
   // #474: `--dry` rides in only on a dry run (DRY_RUN=true), through an empty-safe array.
   assert.match(stepScript(PROMOTE), /node "\$COLAB" promote --auto \$\{DRY\[@\]\+"\$\{DRY\[@\]\}"\} --json/);
