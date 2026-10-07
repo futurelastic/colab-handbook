@@ -226,6 +226,25 @@ test('decide, human row: no bar -> candidate-ready with the pinned handoff; bar 
   assert.strictEqual(rf.decide(facts({ policy: HUMAN, human: { bar: true, answeredBy: 'Ops' }, tracking: { number: 12, createdAt: T0, held: true } })).state, 'held', 'the bar never overrides a hold');
 });
 
+test('#549 decide, human row with test-period 0d: no period — the bar finalizes at once, an agent run is candidate-ready', () => {
+  const ZERO = releasePolicy.evaluateRelease({ trunk: 'main', exposure: 'released', production: 'https://x.invalid', deploy: 'tag', release: { 'test-period': '0d' } });
+  assert.deepStrictEqual(ZERO.findings, []);
+  const period = rf.periodVerdict({ cutAt: T0, trackingCreatedAt: T0, testPeriodDays: 0, now: T0 });
+  assert.strictEqual(period.elapsed, true);
+  assert.strictEqual(period.days, 0);
+  assert.match(period.detail, /no test period/);
+  const ready = rf.decide(facts({ policy: ZERO, period }));
+  assert.strictEqual(ready.state, 'candidate-ready');
+  const tp = ready.checks.find((c) => c.condition === 'test-period');
+  assert.strictEqual(tp.required, false);
+  assert.strictEqual(tp.ok, true);
+  const done = rf.decide(facts({ policy: ZERO, period, human: { bar: true, answeredBy: 'Ops' } }));
+  assert.strictEqual(done.state, 'finalized');
+  const msg = rf.tagMessage(done, { candidate: { version: 'v1.2.1', tag: 'v1.2.1-rc.1', sha: 'a'.repeat(40) }, period, actor: 'Ops' });
+  assert.match(msg, /Test period: none \(release\.test-period: 0d/);
+  assert.strictEqual(rf.decide(facts({ policy: ZERO, period, human: { bar: true, answeredBy: 'Ops' }, tracking: { number: 12, createdAt: T0, held: true } })).state, 'held', 'no period never lifts a hold');
+});
+
 test('decide: rows with nothing to finalize refuse; no candidate and already-final are their own states', () => {
   for (const cfg of [{ exposure: 'self' }, { exposure: 'live', deploy: 'push-main' }, { tier: 'B' }]) {
     assert.strictEqual(rf.decide(facts({ policy: releasePolicy.evaluateRelease({ trunk: 'main', ...cfg }) })).state, 'refused', JSON.stringify(cfg));

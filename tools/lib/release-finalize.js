@@ -297,7 +297,10 @@ function whyNoFinal({ state, candidate, checks, period, skipped, now } = {}) {
 
 // ---- the test period ----------------------------------------------------------------------------
 
-/** { start, endsAt, elapsed, detail } — start = max(cutAt, trackingCreatedAt). All ISO strings. */
+/**
+ * { start, endsAt, days, elapsed, detail } — start = max(cutAt, trackingCreatedAt), ISO strings. `days` 0
+ * (#549, human final only) is no test period: elapsed at once, and the detail says so.
+ */
 function periodVerdict({ cutAt, trackingCreatedAt, testPeriodDays, now }) {
   const cut = Date.parse(cutAt);
   const created = trackingCreatedAt ? Date.parse(trackingCreatedAt) : NaN;
@@ -310,8 +313,11 @@ function periodVerdict({ cutAt, trackingCreatedAt, testPeriodDays, now }) {
   return {
     start: new Date(startMs).toISOString(),
     endsAt: new Date(endMs).toISOString(),
+    days: testPeriodDays,
     elapsed,
-    detail: elapsed
+    detail: testPeriodDays === 0
+      ? 'no test period (release.test-period: 0d, a human final — the human\'s finalize is the test, #549)'
+      : elapsed
       ? `${testPeriodDays}d test period from ${new Date(startMs).toISOString()} ended ${new Date(endMs).toISOString()}`
       : `${testPeriodDays}d test period from ${new Date(startMs).toISOString()} ends ${new Date(endMs).toISOString()} (${hours}h left)`,
   };
@@ -590,7 +596,7 @@ function tagMessage(verdict, { candidate, period, actor }) {
     '',
     `Candidate: ${candidate.tag}`,
     `Commit: ${candidate.sha}`,
-    period ? `Test period: ${period.start} -> ${period.endsAt}` : null,
+    period ? (period.days === 0 ? 'Test period: none (release.test-period: 0d — the human final is the test)' : `Test period: ${period.start} -> ${period.endsAt}`) : null,
     `Finalized by: ${actor}`,
     verdict.grant ? `Automatic final granted by: release.final-grant -> decision #${verdict.grant.issue}${verdict.grant.ruledBy ? `, ruled by ${verdict.grant.ruledBy}` : ''} (an operator's per-repo grant; deleting it, or final: human, revokes it)` : null,
     '',

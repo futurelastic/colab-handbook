@@ -3845,7 +3845,7 @@ final plus the tag's own message, so a cut run outside the workflow no longer le
 and no regression against the candidate is open.** "Trunk" here is both `main`, where
 candidates are cut, and the `trunk:` branch where that is a different one (`trunk: dev`,
 #437). It matters only on a route whose final
-is automatic (`rapid-app`, `public-tool`); `library-fast` and `deploy-tag-fast` have none. A route may lengthen it, never shorten it. A human vetoes by holding the candidate during it; a held candidate is not finalized.
+is automatic (`rapid-app`, `public-tool`); `library-fast` and `deploy-tag-fast` have none. A route may lengthen it, never shorten it — save that a repo whose final is a human act may declare `test-period: 0d`, no period at all, since the human's finalize is the test (#549). A human vetoes by holding the candidate during it; a held candidate is not finalized.
 **Finalizing re-checks every condition above at the moment it runs** — a candidate that
 was clean when cut and is not now stays a candidate. Where the final tag is a human act,
 the agent's work ends with the candidate, its release notes, and the one click — number

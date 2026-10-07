@@ -352,7 +352,8 @@ the handbook's current version, so a scheduled run is self-documenting.
   `deploy` exactly as `CONVENTIONS.md` [§6](../CONVENTIONS.md#6-releases)'s release rung
   tables it, through `tools/lib/release-policy.js`. The block may narrow that default and
   never widen it: `candidates: auto` where the rung cuts no tags, `final: auto` where the
-  final tag is a human act (`deploy: tag`/`manual`), a `test-period` under `3d`, an unknown
+  final tag is a human act (`deploy: tag`/`manual`), a `test-period` under `3d` (`0d` stands
+  where the final is human, #549), an unknown
   sub-key or an out-of-set value are each a **finding**. The only nested map this tool's
   reader accepts, and only under `release:` — a second level, or a nested map under any
   other key, is still a parse finding. No block → no work and no finding.
