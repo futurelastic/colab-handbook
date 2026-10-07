@@ -237,6 +237,14 @@ jobs:
         run: |
           node scripts/check-rule-inventory.mjs
           node scripts/check-doc-budget.mjs
+      # The skills install into any coding agent (#530), so no skill body may write one engine's
+      # slash command, tool call or model name (#531). The planted file proves the gate can fail.
+      - name: Skill bodies are engine-neutral
+        run: |
+          node scripts/check-engine-neutral.mjs
+          echo 'run /code-wrap' > skills/code-plan/zz-planted.md
+          if node scripts/check-engine-neutral.mjs 2>/dev/null; then echo "gate passed with a planted slash command"; exit 1; fi
+          rm -f skills/code-plan/zz-planted.md
       # The stamp heuristic decides whether a repo's file is "ours". A false positive there ends in
       # advice to overwrite that file, so it is the one piece of logic here with unit tests.
       #

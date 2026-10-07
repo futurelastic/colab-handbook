@@ -283,8 +283,9 @@ function commentHost(repoAbs) {
 function myMachineId() { return machine.localMachine().id || null; }
 
 /**
- * Resolve the Claude session URL for this invocation: --session flag > COLAB_SESSION env >
- * a DERIVED person identity (#528) > '' (absent, never an error). Free-form — typically a session URL.
+ * Resolve the session id for this invocation: --session flag > COLAB_SESSION env >
+ * a DERIVED person identity (#528) > '' (absent, never an error). Free-form — any stable id for
+ * the session (a URL, a uuid…).
  *
  * The derived step exists for a person at a plain terminal, who has no session runtime and so no
  * id to pass: without it their first trunk `colab claim` refused (#242's gate), `worktree new`
@@ -390,7 +391,7 @@ function warnWeakIdentity(session, sessionName, what, ref) {
     warn(`no --session or --session-name given — this ${what} will carry NO holder identity.`);
     warn(`  A live hold's refusal can then only point at its process id, and this acquire will`);
     warn(`  not be recognized as your own on a later re-acquire without one.`);
-    if (ref) warn(`  Repair once you have an identity:  colab worktree tag ${ref} --session <url>`);
+    if (ref) warn(`  Repair once you have an identity:  colab worktree tag ${ref} --session <id>`);
     return;
   }
   // #326: a planner intent id is a deliberate, documented non-URL value — not a mistyped name.
@@ -401,16 +402,16 @@ function warnWeakIdentity(session, sessionName, what, ref) {
     // refused the caller's own hold when they later presented their REAL url. Warn, never
     // refuse: `requirePlaceIdentity` promises `<url-or-any-stable-id>`, so a bare stable id is
     // a blessed value and rejecting it would break that contract and every adopter using one.
-    warn(`--session "${session}" does not look like a session URL or a session_… id — this ${what}`);
+    warn(`--session "${session}" does not look like a session id (a URL, a uuid, a session_… token) — this ${what}`);
     warn(`  will record it verbatim. That is allowed (any stable id works), but if this is your`);
     warn(`  session NAME you probably meant --session-name: a later 'colab place release'`);
-    warn(`  presenting your real URL will NOT match this value and will be refused (#306).`);
+    warn(`  presenting your real id will NOT match this value and will be refused (#306).`);
     return;
   }
   if (!sessionName || session) return;
-  warn(`session name "${sessionName}" recorded with NO session URL — this ${what} will read as owned`);
-  warn(`  but cannot be traced to a session. The name is display text; the URL is the join key.`);
-  if (ref) warn(`  Repair once you have it:  colab worktree tag ${ref} --session <url>`);
+  warn(`session name "${sessionName}" recorded with NO session id — this ${what} will read as owned`);
+  warn(`  but cannot be traced to a session. The name is display text; the id is the join key.`);
+  if (ref) warn(`  Repair once you have it:  colab worktree tag ${ref} --session <id>`);
 }
 
 /**
@@ -469,8 +470,8 @@ function identityCell(sessionName, session) {
 /** Print the `(!)` legend under a table, only when at least one row carries a half-identity. */
 function identityLegend(entries) {
   if (!entries.some((e) => e && e.sessionName && !e.session)) return;
-  print('  (!) session NAME with no session URL — reads as owned, links to nothing.');
-  print('      Repair:  colab worktree tag <worktree> --session <url>');
+  print('  (!) session NAME with no session id — reads as owned, links to nothing.');
+  print('      Repair:  colab worktree tag <worktree> --session <id>');
 }
 
 /**
@@ -918,7 +919,8 @@ Options:
   --branch <name>     branch these claims are worked on. Default: none (null) — a claim held on
                       the trunk checkout has no branch. Never the word "trunk": that is a role,
                       and a record holding it resolves to no ref (refused, exit 1)
-  --session <url>     Claude session URL recorded on the claim + comment (default: COLAB_SESSION env).
+  --session <id>      any stable id for this session (a URL, a uuid…), recorded on the claim + comment
+                      (default: COLAB_SESSION env).
                       MANDATORY when no --worktree is given (#242): a claim with no worktree takes
                       the trunk-checkout place-claim, and a blank session can never be recognized
                       as its own later re-acquire — refused (exit 1) before anything is read/written.
@@ -2798,7 +2800,7 @@ function cmdGateHermetic(argv) {
 // neither, so there is nothing else in state.json a second solo attempt could collide with.
 // ---------------------------------------------------------------------------
 
-const HELP_SOLO = `colab solo [--repo <path>] [--force] [--session <url>] [--session-name <name>]
+const HELP_SOLO = `colab solo [--repo <path>] [--force] [--session <id>] [--session-name <name>]
 colab solo --done [--repo <path>]
 
 Entry gate for solo flow (CONVENTIONS.md, Solo flow) — requires BOTH: this repo does not declare
@@ -3073,7 +3075,7 @@ function cmdSoloDone(repoAbs, doc) {
 // exactly `writes: isolated` — see writes-authority.js's `trunkDirectVetoed`)
 // ---------------------------------------------------------------------------
 
-const HELP_PLACE = `colab place <acquire|check|release> <path> [--repo P] [--session URL] [--session-name N] [--force]
+const HELP_PLACE = `colab place <acquire|check|release> <path> [--repo P] [--session ID] [--session-name N] [--force]
 
 Path-scoped, machine-local hold on ONE checkout (CONVENTIONS.md, Place-claims) — what a shared
 trunk checkout needs on any repo that does not declare \`writes: isolated\` (the veto), and a
@@ -5235,7 +5237,8 @@ dependency symlinking, dev-server restarts) live in OPTIONAL repo hooks, not her
                            <type>/, prefix or not; else the branch after its first '/')
         --trunk <name>     override trunk branch
         --repo <path>      repo root (default: git root of cwd)
-        --session <url>    Claude session URL recorded on the worktree + its claims (env COLAB_SESSION)
+        --session <id>     any stable id for this session (a URL, a uuid…), recorded on the worktree +
+                           its claims (env COLAB_SESSION)
         --session-name <s> short human label for tables/messages (env COLAB_SESSION_NAME)
         --pid <n|none>     the new worktree's place-claim liveness anchor (#288) — same meaning as
                            \`colab claim\`'s --pid; default: auto-detect (env COLAB_PLACE_PID too)
@@ -5262,7 +5265,7 @@ dependency symlinking, dev-server restarts) live in OPTIONAL repo hooks, not her
       and state record in place for a retry, unless --force. Refuses if there are
       uncommitted TRACKED changes unless --force.
 
-  colab worktree tag <name> --session <url> [--session-name <s>] [--branch <b>]
+  colab worktree tag <name> --session <id> [--session-name <s>] [--branch <b>]
       REPAIR session identity, and/or the recorded branch, on a worktree that already
       exists — and on every claim attached to it (claims hold their own copy of each
       field, and claims are what \`doctor\` reports and what \`ship\` unions by). Pass any
@@ -5886,7 +5889,7 @@ function cmdWorktreeRm(argv) {
 }
 
 /**
- * `colab worktree tag <name> --session <url> [--session-name <s>] [--branch <b>]` — repair
+ * `colab worktree tag <name> --session <id> [--session-name <s>] [--branch <b>]` — repair
  * session identity, and/or the recorded branch, on an ALREADY-created worktree. Before this, the
  * only fix was hand-editing ~/.colab/state.json.
  *
@@ -5920,7 +5923,7 @@ function cmdWorktreeTag(argv) {
   const sessionName = String(opts.sessionName || '').trim();
   const branch = String(opts.branch || '').trim();
   if (!session && !sessionName && !branch) {
-    throw new UserError('Nothing to tag — pass --session <url>, --session-name <s>, and/or --branch <b>');
+    throw new UserError('Nothing to tag — pass --session <id>, --session-name <s>, and/or --branch <b>');
   }
   if (!state.loadState().worktrees[name]) {
     throw new UserError(`No worktree "${name}" in state (list them with: colab worktrees)`);

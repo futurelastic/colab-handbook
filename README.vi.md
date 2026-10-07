@@ -19,9 +19,9 @@ colab labels --ensure    # tạo các label quy ước
 colab register           # đưa repo vào danh sách fleet của máy này
 ```
 
-Sau đó, trong một phiên agent ở repo đó, chạy `/code-start <số-issue>` (Claude
-Code; trong Codex là `$code-start` — xem [*Chọn engine*](#chọn-engine)). Có agent
-trong tay thì `/handbook-sync` thay được ba lệnh cuối và làm nốt phần adopt còn
+Sau đó, trong một phiên agent ở repo đó, chạy skill `code-start` kèm số issue —
+mỗi engine có cách gọi skill riêng, xem [*Chọn engine*](#chọn-engine). Có agent
+trong tay thì skill `handbook-sync` thay được ba lệnh cuối và làm nốt phần adopt còn
 lại (xem [*Adopt vào một repo*](#adopt-vào-một-repo)). Cần có `git`, `node` ≥ 18
 và `gh` ≥ 2.94 đã đăng nhập (`gh auth login`); gói `gh` của các distro thường cũ
 hơn, nên hãy cài từ [cli.github.com](https://cli.github.com).
@@ -94,19 +94,19 @@ khác.
 
 ## Phiên làm việc đầu tiên
 
-Mỗi đầu việc đi qua một vòng. Mỗi bước là một skill, gọi trong phiên agent bằng
-slash command (`/code-start 42`), hoặc tự làm theo bằng tay từ
-[`skills/`](skills/).
+Mỗi đầu việc đi qua một vòng. Mỗi bước là một skill, gọi theo tên trong phiên
+agent (cú pháp gọi là của engine — [*Chọn engine*](#chọn-engine)), hoặc tự làm
+theo bằng tay từ [`skills/`](skills/).
 
 | Bước | Skill | Ai chạy | Để lại gì |
 |---|---|---|---|
-| 1. Chọn | `/code-triage` | điều phối | việc sẵn sàng theo thứ tự, label `group:` trên các issue phải chung một nhánh, `needs-plan` trên việc khó, lệnh để bắt đầu |
-| 2. Mở | `/code-start <N>` | thợ | issue đã claim, nhánh cắt từ trunk và đã push, một worktree, một file plan ngắn |
+| 1. Chọn | `code-triage` | điều phối | việc sẵn sàng theo thứ tự, label `group:` trên các issue phải chung một nhánh, `needs-plan` trên việc khó, lệnh để bắt đầu |
+| 2. Mở | `code-start <N>` | thợ | issue đã claim, nhánh cắt từ trunk và đã push, một worktree, một file plan ngắn |
 | 3. Làm | — | thợ | commit trên nhánh |
-| 4. Bàn giao | `/code-wrap` | thợ | điều học được ghi lên Issue, gate của repo đã chạy, nhánh đã push — rồi **dừng** |
-| 5. Merge | `/code-ship` | điều phối, sau khi người đồng ý | một squash commit trên trunk kèm `Closes #N`, bằng chứng trên từng issue, claim đã nhả, worktree đã gỡ |
-| 6. Dọn | `/code-sweep` | điều phối | việc đã xong được ship, claim và worktree cũ được dọn |
-| 7. Release | release workflow, hoặc `/release-rung` | tự động, hoặc người khi tag là thứ deploy | một tag ứng viên, rồi bản final sau thời gian thử — chỉ khi `exposure` của repo có release |
+| 4. Bàn giao | `code-wrap` | thợ | điều học được ghi lên Issue, gate của repo đã chạy, nhánh đã push — rồi **dừng** |
+| 5. Merge | `code-ship` | điều phối, sau khi người đồng ý | một squash commit trên trunk kèm `Closes #N`, bằng chứng trên từng issue, claim đã nhả, worktree đã gỡ |
+| 6. Dọn | `code-sweep` | điều phối | việc đã xong được ship, claim và worktree cũ được dọn |
+| 7. Release | release workflow, hoặc `release-rung` | tự động, hoặc người khi tag là thứ deploy | một tag ứng viên, rồi bản final sau thời gian thử — chỉ khi `exposure` của repo có release |
 
 Cũng trong [`skills/`](skills/): `code-plan` (plan đầy đủ cho issue khó, do
 `code-start` gọi khi có cờ), `handbook-sync` (kéo một repo lên bản handbook mới
@@ -166,8 +166,8 @@ sao: [`CONVENTIONS.md` §2](CONVENTIONS.md#2-tiers) và
 
 ## Adopt vào một repo
 
-**Đường mặc định: chạy `/handbook-sync` trong một phiên agent ngay trong repo
-đó.** Nó nhận ra repo chưa adopt gì và đi hết đường adopt — descriptor (qua
+**Đường mặc định: chạy skill `handbook-sync` trong một phiên agent ngay trong
+repo đó.** Nó nhận ra repo chưa adopt gì và đi hết đường adopt — descriptor (qua
 `colab adopt`), label, block `CLAUDE.md`, CI từ template, và đăng ký trên máy
 này. Chạy lại về sau, chính skill đó kéo một repo đã adopt lên bản handbook mới
 nhất mà không làm mất phần bạn đã sửa.

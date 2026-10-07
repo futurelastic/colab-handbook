@@ -237,7 +237,7 @@ test('#326: planner claim → session claim from the same machine is ONE record,
   const fx = fixture();
   const r1 = colab(fx, ['claim', '9', '--session', 'intent:plan-1']);
   assert.strictEqual(r1.code, 0, r1.out + r1.err);
-  assert.doesNotMatch(r1.err, /does not look like a session URL/, 'an intent id is not a mistyped name');
+  assert.doesNotMatch(r1.err, /does not look like a session id/, 'an intent id is not a mistyped name');
   const st1 = readState(fx.home);
   assert.deepStrictEqual(Object.values(st1.places || {}).filter((p) => p.path === Object.values(st1.claims)[0].repo), [],
     'a planner claim must not take the checkout place-claim');
