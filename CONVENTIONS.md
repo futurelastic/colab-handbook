@@ -3111,16 +3111,13 @@ stops applying; this is what a scheduler must additionally honour.
 **It inherits the provenance gate, re-applied on every tick, not filtered once:**
 
 - `agent-filed` issues are excluded from what a scheduler starts, every run.
-- `epic`-labelled issues are excluded — an epic can pass provenance cleanly and still not
-  be a pick-up-and-code task.
-- `needs-decision` issues are excluded, for a third distinct reason: no human has answered
-  the blocking question, even if the work item itself is human-filed, unblocked, and a
-  genuine leaf task.
+- `epic`-labelled issues are excluded.
+- `needs-decision` issues are excluded, even if the work item itself is human-filed,
+  unblocked, and a genuine leaf task.
 - **The only admission is a human act recording the decision** (`colab decision --record`,
   above) — a scheduler may never infer an answer from content, age, or repeat proposal,
   and never treats the label's mere absence as an answer: it checks for
-  `decision-recorded` or the live comment marker, since a cleared `needs-decision` with
-  neither present is the stale, not-yet-swept state, not a decided one. The converse
+  `decision-recorded` or the live comment marker. The converse
   holds too: `needs-decision` *beside* `decision-recorded` is not an admission. It is
   resolved by the pair rule in *Decision gate* (above), and anything but a proven
   interrupted write stays excluded.
@@ -3167,36 +3164,29 @@ on every green head*](#6-releases)).
 A candidate a human has put `release-hold` on is held for the workflow exactly as it is for
 a person.
 The handbook ships one to copy, [`templates/release-auto.yml`](templates/release-auto.yml)
-(#425): cut on a green CI run on `main`, finalize daily, and **publish in the same run** — a tag
-pushed with `GITHUB_TOKEN` triggers no other workflow, so a Release left to a tag-push
-workflow is never published. It reads and creates tags and writes no commit. The same
+(#425): cut on a green CI run on `main`, finalize daily, and **publish in the same run**. It reads and creates tags and writes no commit. The same
 file fits `trunk: main` and `trunk: dev` + `deploy: tag` (#429): on the latter `main` moves only
 when trunk is promoted, so the promotion's green CI run is the trigger, and the CLI cuts only when
 `main`'s head is a promotion of trunk.
 
-**On a private repo the release workflow runs on the repo's own runners (#453).** It
-fires on every green CI run on `main`, so a job of it that fails is a failed run at
-`main`'s head, and `colab ship` reads that as trunk not green. So its jobs run on the
-self-hosted label the repo's CI already uses; `ubuntu-latest` is right only on a public
-repo, where hosted minutes are free. The npm publish job is the one exception, hosted
+**On a private repo the release workflow runs on the repo's own runners (#453).** Its
+jobs run on the self-hosted label the repo's CI already uses; `ubuntu-latest` is right
+only on a public repo. The npm publish job is the one exception, hosted
 everywhere because npm trusted publishing requires it, and it only ever runs on a public
 repo (below). The label is a literal edit point in the template, not an expression keyed
-on visibility: a scheduled run's payload carries no repository, so such a switch would
-quietly pick hosted on the daily run. The audit flags a private repo whose release
+on visibility. The audit flags a private repo whose release
 workflow still runs a hosted job and names the label its other workflows use (advisory;
 unreadable visibility reports nothing).
 
 **Who promotes is `promotion:`, and the release workflow honours it (#440).** Where a
 `deploy: tag` repo declares `promotion: main-loop`, the workflow's daily run first runs
 `colab promote --auto`: when trunk's head CI is green and trunk is ahead of `main`, it
-merges trunk into `main` (`--no-ff`) and pushes, then dispatches CI on `main` — a push
-made with `GITHUB_TOKEN` triggers no workflow, a `workflow_dispatch` is the documented
-exception — and that run's green completion cuts the candidate as it would for a human
+merges trunk into `main` (`--no-ff`) and pushes, then dispatches CI on `main`, and that run's green completion cuts the candidate as it would for a human
 promotion. So a candidate needs no human; the final tag, which deploys, still does.
 Everywhere else `--auto` is a recorded no-op — `promotion: human` or absent, `deploy:
 push-main` (the promotion *is* the deploy), `manual` (it signals a human deploy),
 `none`, and `trunk: main` (nothing to promote). `COLAB_HUMAN` changes nothing in either
-direction: a workflow is not a human, and the grant is the descriptor's.
+direction.
 
 Why, with the measurements: [ADR 440](docs/adr/440-scheduled-drivers-rationale.md).
 
@@ -3218,14 +3208,9 @@ grant clears the gate only where the repo's policy accepts that role.
 
 #### Grouping — issues that must share one branch
 
-**Issues that touch the same files must move on one branch** — the group is a
-collision-prevention mechanism, not a tidiness preference.
+**Issues that touch the same files must move on one branch.**
 
-**Neither existing mechanism has the right shape:** sub-issues are hierarchical (asserts
-a false parent); mutual blocked-by would mean the readiness gate never reports either
-member ready. A group needs a symmetric, flat relationship. A one-way `blocked_by` chain
-is wrong too: it turns one shared branch and one review into one review cycle per member
-(*File contention is never an edge*, under *Readiness* above, #371). And when the only
+And when the only
 overlap is a file that every unit must edit, fix the file before grouping on it.
 
 ```sh
@@ -3251,8 +3236,7 @@ from the members it no longer covers.
 
 `code-triage` writes the label; `code-start` reads it before branching. **`colab ship`'s
 B4 tears down the label OBJECT (not just an issue's use of it) once every member is
-closed** (#82) — one fleet repo accumulated ~12 stale `group:*` labels before this
-existed. Deletion removes it from future queries only — never touches closed issues'
+closed** (#82). Deletion removes it from future queries only — never touches closed issues'
 own timelines or the durable `Because:` comment. Only `group:*` labels are ever in scope
 — never the operational set (`in-progress`, `deps-checked`, `agent-filed`, `epic`).
 
@@ -3270,8 +3254,7 @@ spawn.** Two enforcement points, and neither may be mistaken for the other:
 - **ship orders** — a ship lands one member branch at a time against a re-fetched base,
   and **never merges a sibling member's branch to borrow its unmerged fix**: sequence
   behind it or group onto it (the same rule *Writing a conclusion down* below states for
-  a file-level group), because a branch carrying a sibling's unlanded commits cannot land
-  independently of it, and then neither converges.
+  a file-level group).
 
 `code-start` is not a third enforcement point — it is the reader that honours the offer.
 
@@ -3322,8 +3305,7 @@ items differ on paper:
 **No backfill** — this governs what gets filed next, not existing checklist issues;
 converting one is optional cleanup, never required by adoption. **Not every checklist
 is an epic** — an issue whose boxes are steps of one session's own work (write it,
-test it, document it) is a normal issue with a to-do list, and splitting it would be
-pure overhead. The test is whether the work **outlives a session**, never whether it
+test it, document it) is a normal issue with a to-do list. The test is whether the work **outlives a session**, never whether it
 merely *has* boxes.
 
 **The `epic` label marks a container for sub-issues — informative, never a start
@@ -3332,8 +3314,7 @@ provenance cleanly. Secondary signals (`epic(` title prefix, `subIssuesSummary.t
 corroborate but never substitute for the label. `epic` lives in the provisioned
 convention label set (unlike `tracking`) because an unattended driver's decision depends
 on it. An epic still gets closed and referenced exactly as any other issue once its
-children finish — the label only prevents a driver from mistaking the map for the
-territory.
+children finish.
 
 **A container closes with its last child (#371).** A child's merge closes the child. So
 `colab ship`, after it closes an issue, reads the issue's native parent and closes it in
@@ -3341,24 +3322,20 @@ the same step, with an evidence comment, when all of these hold:
 
 - it carries the `epic` label;
 - it has native sub-issues, and every one of them is closed;
-- its body lists no unticked checklist item (`- [ ]`). An unticked item on an epic is work
-  someone listed and nobody filed yet, and closing over it would bury that work;
+- its body lists no unticked checklist item (`- [ ]`);
 - it is not a release tracking record, which `colab release finalize` closes.
 
 Then it asks the same question of that parent's own parent. Any other shape is left open.
 A parent whose sub-issues are all closed but which has no `epic` label, or which still
 lists an unticked item, is reported as a finding for a human. A hand-written checklist
-with no native sub-issues is never closed this way, because a table of boxes running out
-does not prove the work ran out (`code-ship` B2c). `code-sweep` §5 closes containers whose
+with no native sub-issues is never closed this way (`code-ship` B2c). `code-sweep` §5 closes containers whose
 last child closed by some other route, using the same conditions
 (`tools/lib/container-close.js`).
 
-**A container never carries a `delivery:*` label (#371).** It has no deliverable of its
-own; its children do. `code-triage` reports one as a finding in its epic bucket.
+**A container never carries a `delivery:*` label (#371).** `code-triage` reports one as a finding in its epic bucket.
 
-**[Hard — gate: colab decision refuses on an epic]** **For the same reason, an epic never carries `needs-decision`, and never a
-`decision:options` block.** A gate on something that never starts gates nothing. A
-question about an epic goes on its own decision issue, attached as a sub-issue (*Decision
+**[Hard — gate: colab decision refuses on an epic]** **An epic never carries `needs-decision`, and never a
+`decision:options` block.** A question about an epic goes on its own decision issue, attached as a sub-issue (*Decision
 gate*, above, #361).
 
 Why, with the measurements: [ADR 127](docs/adr/127-epics-switched-epics-and-scope-rationale.md).
@@ -3371,10 +3348,9 @@ half-built — the policy the release ladder in [§6](#6-releases) relies on. It
 the #330 ruling; the rules are numbered so a check can cite one.
 
 **Scope: repos that tag — `exposure: released`** (legacy `tier: A` reads the same way,
-`tools/lib/axis-authority.js`). On `none` and `self` nothing consumes a half-finished
-epic, so a switch there is pure cost and this subsection does not apply; a bare
+`tools/lib/axis-authority.js`). On `none` and `self` this subsection does not apply; a bare
 `tier: B` carries no exposure opinion and is not bound either. `exposure: live` is not
-bound: its promotion is a human act that can simply wait for an epic to finish. *This
+bound. *This
 scope is the implementer's recommendation, recorded open on #336 and not yet ruled — if
 it is ruled otherwise, this paragraph changes, and nothing else here needs to.*
 
@@ -3395,8 +3371,7 @@ it is ruled otherwise, this paragraph changes, and nothing else here needs to.*
    switch-removal child carries a native `blocked_by` edge on A's switch-removal child
    (*Readiness*, above).
 4. **File-level collisions are not a switch's job.** Two epics' children touching one
-   file still serialize through *Grouping*, above; a switch hides behaviour, never a
-   merge conflict.
+   file still serialize through *Grouping*, above.
 5. **What a switch cannot hide stays backward-compatible while the epic is
    unfinished.** Schema changes **add only**; old config files and old API responses
    keep working; every destructive step — dropping a column, retiring a config key,
@@ -3404,19 +3379,13 @@ it is ruled otherwise, this paragraph changes, and nothing else here needs to.*
    earlier. A release built with the switch off must be indistinguishable, to anything
    outside the repo, from one built before the epic started.
 6. **At most ~3 unfinished switched epics at once, and a switch older than ~4 weeks
-   surfaces for a decision.** Both are **findings for a human**, never blockers: the cap
-   exists because every open switch doubles what the development configuration hides
-   from the release one, and the age exists because a switch nobody removes has become
-   a permanent fork in the code under a temporary name. Age is measured from the merge
+   surfaces for a decision.** Both are **findings for a human**, never blockers. Age is measured from the merge
    of the child that added the switch.
 7. **Releases are cut from trunk; versions live in tags only.** A `release/X.Y` branch
    exists **only** when an older version needs a fix of its own, and is deleted with
-   that line's support. Never put a version in a branch name: a branch named `0.2.0-dev`
-   is itself a SemVer pre-release, and sorts **below** `0.2.0`. A `release/X.Y` branch is
-   neither an [`integration:`](project.schema.md#integration--optional) line (that axis
-   never reaches a tag, by construction) nor a
-   [`releaseBranch:`](project.schema.md#releasebranch--optional) (that one is overwritten
-   wholesale on every release) — no descriptor field declares it and no `colab` path cuts
+   that line's support. Never put a version in a branch name. A `release/X.Y` branch is
+   neither an [`integration:`](project.schema.md#integration--optional) line nor a
+   [`releaseBranch:`](project.schema.md#releasebranch--optional) — no descriptor field declares it and no `colab` path cuts
    from or ships into it today, so a fix on an older version is a human-run procedure
    until one does.
 
@@ -3438,8 +3407,7 @@ bodies — `role=add` on the first child, `role=remove` on the last:
 ```
 
 - **`name`** matches `^[a-z0-9][a-z0-9-]*$` and is **the literal identifier the code
-  reads**, so `git grep <name>` finds every read site. That is what makes rule 1's
-  "removed" checkable: after the removal child, the grep returns nothing.
+  reads**, so `git grep <name>` finds every read site.
 - **`needs`** (epic marker only, optional, comma-separated names) is rule 3's
   declaration; the `blocked_by` edge is its enforcement. A `needs` with no matching edge,
   or an edge with no `needs`, is a finding.
@@ -3476,17 +3444,14 @@ Why, with the measurements: [ADR 127](docs/adr/127-epics-switched-epics-and-scop
 code commit *in this repo* at all. **Three-valued, not boolean:** no label = not asked
 (behaves as before); `delivery:code` and `delivery:docs-only` = the code lane, the ordinary
 pipeline; `content`/`ops`/`elsewhere`/`design` = non-code-here, not a code start.
-**"Not asked" must never collapse into "non-code"** — every issue is unlabelled the day
-this set is adopted, and reading absence as non-code would freeze every scheduled driver on
-day one.
+**"Not asked" must never collapse into "non-code".**
 
 `content`/`ops`/`elsewhere` gate exactly like `needs-decision` — route, not a start
 candidate for anyone. `design` is not a code start either, but it is not routed away: it is
 a design session's start, reported in triage's own design bucket (below). A code session
 landing on any of the four distills the finding onto the issue and ends the session.
 Whoever files or triages sets the label — no mechanical rule infers it from a title or body.
-`delivery:*` is in the provisioned label set because every adopting repo needs all six
-values before the first triage pass can classify anything.
+`delivery:*` is in the provisioned label set.
 
 **`delivery:docs-only` (#358)** is a code-lane value: the filer expects an in-repo
 commit whose diff is documentation only. It starts, is gated and ships exactly like
@@ -3495,8 +3460,7 @@ commit whose diff is documentation only. It starts, is gated and ships exactly l
 ship`'s docs-only exception ([§2](#autonomy--the-docs-only-exception-345)): ship
 measures that from the diff and never reads this label, so a `docs-only` issue whose
 diff turns out to carry code or a binary simply ships under the normal autonomy gate.
-Nor is it a home for design work — a design artifact with screenshots is a binary
-change, and design work has its own value.
+Nor is it a home for design work.
 
 **`delivery:design` (#359)** names an issue whose deliverable is a design artifact —
 unit 2 of [*Design conclusions*](#design-conclusions-are-three-units-not-two), below —
@@ -3510,12 +3474,8 @@ marker. When its `blocked_by` edges are all closed, or it has none, triage stamp
 that marker too (#380).
 
 **`delivery:elsewhere` (#274)** names an issue whose deliverable IS code, but code that
-lands in a different repository than the one the issue lives in — a consumer that read a
-tracker across several repositories provisioned it by hand on three separate trackers,
-21 issues total, well before this convention adopted it. It routes for the same reason
-`content`/`ops` do: this pipeline's worktree, gate, mergeable and squash machinery all
-assume the diff lands in the repo the issue lives in, and an `elsewhere` issue breaks
-that assumption identically to a content push.
+lands in a different repository than the one the issue lives in. It routes as
+`content`/`ops` do.
 
 **A `delivery:*` value outside these six has no handbook meaning (#366).** The measured
 case is `delivery:elsewhere-partial`. One consumer tracker uses it, and nobody has stated
@@ -3558,9 +3518,7 @@ A driver that implements the hard-veto reading instead — declining the group o
 for a human or an unattended start alike, with no ranking, no unattended/attended split,
 and no label-clearing release path — must say so somewhere `code-triage`'s output can be
 checked against — never leave the two silently disagreeing about what "ready" means for
-the same label. `low-priority` is in the provisioned label set for the same reason `epic`
-and `delivery:*` are: an unattended driver's ordering decision depends on being able to
-see it, and a repo that adopted before it existed cannot create it at all.
+the same label. `low-priority` is in the provisioned label set.
 
 **`priority:now` and `priority:high` rank upward (#537):** `priority:now` › `priority:high` ›
 default (no label) › `low-priority`. A rank across ready work, for both start and merge order —
@@ -3579,8 +3537,7 @@ Why: [ADR 112](docs/adr/112-delivery-type-and-priority-rationale.md).
 #### Planning — a plan file that outlives one command, and who drafts it (#94)
 
 **The plan is a repo-local scratch file, not an Issue comment** —
-`.plans/issue-<N>.md`, in the **main checkout, outside any worktree** (exists
-before the worktree, survives its teardown). Git-excluded, **never committed**. Anything
+`.plans/issue-<N>.md`, in the **main checkout, outside any worktree**. Git-excluded, **never committed**. Anything
 worth keeping past the session moves to the Issue at wrap.
 
 **The directory is a setting, and it is not under `.claude/` (#488).** `COLAB_PLANS_DIR`
@@ -3594,8 +3551,7 @@ configured dirs and the legacy one in the clone's shared `.git/info/exclude`, an
 scratch file left inside a worktree never makes its teardown refuse
 (`tools/lib/scratch-dirs.js`).
 
-**Resolved via an absolute path, never bare relative (#113)** — a bare path from inside
-a worktree silently resolves to the worktree's own copy:
+**Resolved via an absolute path, never bare relative (#113):**
 
 ```sh
 MAIN_REPO="$(dirname "$(git rev-parse --path-format=absolute --git-common-dir)")"
@@ -3618,17 +3574,15 @@ Issue** — never guess, never silently drop to rung 0.
 **`code-wrap` checks the rung it finds (#486).** At hand-off the plan file is present, or
 its place holds one line `rung 0 because <reason>`; a non-rung-0 change wrapped with
 neither is reported as *plan file missing*, never as hand-off complete — and is never
-back-filled, since a plan written after the code only describes the code.
+back-filled.
 
 `code-triage` may flag a hard group `needs-plan` with a one-line reason — a
-**cross-backlog judgement**, never a plan of its own (authoring at triage time produced
-stale artifacts for groups not started soon). **The full plan is drafted at code-session
+**cross-backlog judgement**, never a plan of its own. **The full plan is drafted at code-session
 start**, inside the implementing session, by a stronger-model subagent seeded with the
 Issue plus the reason line, against the repo as it is at coding time. A rung-1 stub may
 still upgrade to rung 2 mid-session — the flag decides only the default.
 
-**Read the `needs-plan` flag by direct issue fetch, never the Search API**, which can lag
-by minutes. A plan is a sketch the code may overrule, not a contract — note deviation
+**Read the `needs-plan` flag by direct issue fetch, never the Search API**. A plan is a sketch the code may overrule, not a contract — note deviation
 where the plan lives. `needs-plan` is provisioned on adoption and back-filled on sync,
 like every other fixed convention label.
 
@@ -3641,12 +3595,10 @@ write it into the docs tree, where other sessions are also merging. **It reaches
 two units, in order.**
 
 **Step 1 — the conclusion goes on an Issue immediately, before any file is touched.** No
-branch, worktree, or clean tree needed; it collides with nobody and is readable the
-instant it is posted — and it is the part that must survive.
+branch, worktree, or clean tree needed.
 
 **Step 2 — the write is its own coding unit**: own Issue, claim, branch off trunk in a
-worktree, wrapped normally. A conclusion worth documenting is the *most* consequential
-kind of doc change, not a typo exempt from ceremony.
+worktree, wrapped normally.
 
 **The collision unit is the file (the hunk), never the folder** — two sessions each
 adding a new file under one tree cannot conflict:
@@ -3659,13 +3611,9 @@ Empty output (or a nonexistent path) is clean ground; non-empty is a file-level 
 same branch, or sequence after theirs lands. `unknown` still means *look*, never *assume
 clear*.
 
-**It fetches before it enumerates, and that is part of the check, not a convenience.**
-The enumeration reads *local* refs, so a branch another session pushed and this clone
-never fetched is invisible — and "clean ground" off that is a confident verdict built on
-missing data, which is the one wrong answer that sends a second session onto a held file.
-`--no-fetch` (offline, or a pinned view) therefore still reports holders it *can* see —
-refs you have not fetched cannot un-hold a file — but **refuses** the clean verdict with
-exit 2 instead of printing it.
+**It fetches before it enumerates.**
+`--no-fetch` (offline, or a pinned view) still reports holders it *can* see, but
+**refuses** the clean verdict with exit 2 instead of printing it.
 
 No `colab` installed: `git fetch --prune origin` **first**, then `git log --all --not
 origin/<trunk> --source --format='%S' -- <path> | sort -u` — the fetch is not optional
@@ -3694,8 +3642,7 @@ A design ruling needs one more part: an **immutable visual record**.
    review approves the artifact. An earlier one, such as the ruling that let the work
    start, does not.
 2. **The artifact** — a repo file under `docs/design/`, named `<slug>-<N>-mockup.html` or
-   `<slug>-<N>-spec.md`, landing via a claimed docs branch. **Superseded artifacts are
-   marked, never deleted** — trunk carries the design lineage.
+   `<slug>-<N>-spec.md`, landing via a claimed docs branch. **Superseded artifacts are marked, never deleted.**
 3. **The frozen evidence** — a screenshot of the approved option attached to the ruling
    comment, immutable where the repo file is not. Rejected alternatives need never land
    on trunk — their screenshot on the Issue is the whole record.
@@ -3715,9 +3662,7 @@ never inferred mechanically from a title, a body or a file path.
 - **No — a small change to an already-designed surface.** The paragraph below holds
   unchanged.
 
-**A missing artifact never blocks a small change.** Unit 2 lands on the branch that
-builds the surface (`code-wrap` A2), so it is normally absent before that branch exists.
-The design gate is `needs-decision`, and only that. A consumer's label description,
+**A missing artifact never blocks a small change.** The design gate is `needs-decision`, and only that. A consumer's label description,
 agent prompt or local doc that says "needs an artifact before code" is stricter than
 this section. A consumer that wants a build to wait on design files the new-surface
 design issue and its edge, above — never an artifact check. Consumer docs should link to
@@ -3733,16 +3678,13 @@ accreted into `CLAUDE.md`, which gets one pointer row.
 ##### Design exploration files its Issue first — before the first mockup, not after
 
 **The Issue number must exist before the first mockup is drawn**, not retrofitted once
-one is approved — filing is cheaper than a single mockup iteration, and it is what makes
-`<slug>-<N>-mockup.html` naming possible at all.
+one is approved.
 
 There is one size rule — the new-surface test in *Design conclusions*, above — and
 exploration follows it. A small change explores on the issue that builds it. A new surface
 explores on its own `delivery:design` issue, filed before the first mockup. When the build
 spans several sessions, an `epic` parent holds the design issue and the build issues as
-children, each build child carrying its own `blocked_by` edge to the design issue. The
-design issue is never itself turned into the epic: an epic is never a start candidate, so
-its artifact would have no session to land it.
+children, each build child carrying its own `blocked_by` edge to the design issue. The design issue is never itself turned into the epic.
 
 `ceremony: light` repos are exempt from the file ceremony — a mockup lives as a preview
 link in conversation, and units 1 and 3 collapse into one screenshot-bearing Issue
