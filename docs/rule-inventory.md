@@ -73,6 +73,18 @@ text and no longer excuses anything.
   `exposure: released (legacy tier A; …)` instead of `Tier A / exposure: released (…)`;
   every command line in the fence is unchanged. Rows: C11.quick.08, C11.quick.09.
 
+### #539 ledger — coordinator review fixes
+
+A read-only review of the merged slices looked for a rule that left with its rationale, or a
+sentence whose referent moved. Each fix below restores the minimal rule clause; no rationale
+came back.
+
+- `CONVENTIONS.md:163` — before: "Name the release branch in `releaseBranch:`." (after the slice A cut, the sentence that introduced the release branch had moved) → after: "Where a release script fast-forwards a long-lived release branch that an external poller watches, name that branch in `releaseBranch:`." The condition is restored so the duty does not widen to every tag-gated single-trunk repo. Rows: C2.tiers.11 (key updated).
+- `CONVENTIONS.md:526` — before: "Why the premise was wrong in both halves" (the premise had moved to ADR 233's side) → after: "Why the original proposal (loosen `colab solo`'s entry gate so direct writers could share the trunk checkout) was wrong in both halves". Pointer only; none keyed.
+- `CONVENTIONS.md:1474` — before: "the shipper's call, for the same reason the gate does not file the remainder issue" (the reason had moved) → after: "the shipper's call, never the tool's — the gate does not file the remainder issue either". None keyed.
+- §2 Exposure, the bold lead "What this unit (#132) shipped, and what #144 later added." → "What later units added (what #132 and #144 shipped: ADR 539)." The #132/#144 account had moved; the lead now names what follows it. None keyed.
+- §2 Room — the slice A move took the contrast "Issue language follows the room, not repo privacy" with its rationale; restored as a rule sentence. Rows: C2.room.02 (key updated).
+
 ---
 
 ### 1. Hard rules and defaults (added by #523)
@@ -130,7 +142,7 @@ text and no longer excuses anything.
 | C2.tiers.08 | explanation | | Hand-deployed Tier A keeps two branches: `main` is what runs on the host, `dev` is where sessions land. | Hand-deployed Tier A keeps the two branches because they earn their keep | CONVENTIONS.md | — |
 | C2.tiers.09 | default | | A tag-gated Tier A may run a single trunk `main`; the tier is set by the promotion gate, never by trunk name or deploy location. | A tag-gated Tier A may instead run a single trunk `main`. | CONVENTIONS.md | — |
 | C2.tiers.10 | default | | Where the deploy runs outside CI, commit the path to production as `runbook:`. | the path to production must be committed as | CONVENTIONS.md | — |
-| C2.tiers.11 | default | | Name the release branch in `releaseBranch:`, otherwise `colab doctor` misreads it as safe to delete. | Name the release branch in | CONVENTIONS.md | #63 |
+| C2.tiers.11 | default | | Name the release branch in `releaseBranch:`, otherwise `colab doctor` misreads it as safe to delete. | name that branch in | CONVENTIONS.md | #63 |
 | C2.tiers.12 | default | | Tier C describes a live low-stakes site: `deploy: push-main`, `main` is live, the promotion is the one decision to ship. | C describes that shape honestly | CONVENTIONS.md | — |
 | C2.tiers.13 | default | | Deploying off a `main` push meets Tier C's contract; `tier: A` + `push-main` is a finding, usually fixed by retiering to C. | So `tier: A` + `push-main` is a finding | CONVENTIONS.md | — |
 | C2.tiers.14 | default | | Migrating to `deploy: tag`, or declaring `deploy: manual` + `runbook:`, remain valid alternatives when earned. | remain valid alternatives when the site has genuinely earned them | CONVENTIONS.md | — |

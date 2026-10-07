@@ -164,9 +164,10 @@ promotion **gate** (a version tag), never by the trunk name or where the deploy 
 Specific to `deploy: tag` — `manual`/`push-main` have no tag to mark the boundary and
 keep the split. Wherever the deploy runs outside CI, the path to production must be
 committed as [`runbook:`](project.schema.md#runbook--required-when-an-out-of-ci-deploy-has-no-workflow).
-Name the release branch in [`releaseBranch:`](project.schema.md#releasebranch--optional). Why: [ADR 539](docs/adr/539-tiers-rationale.md).
+Where a release script fast-forwards a long-lived release branch that an external poller
+watches, name that branch in [`releaseBranch:`](project.schema.md#releasebranch--optional). Why: [ADR 539](docs/adr/539-tiers-rationale.md).
 
- A live
+A live
 but low-stakes site gains nothing from cutting versions; C describes that shape honestly:
 `deploy: push-main`, `main` is what is live, the promotion is the one moment someone
 decides to ship. Why: [ADR 539](docs/adr/539-tiers-rationale.md).
@@ -318,7 +319,7 @@ declared by hand: a `tier` and an `exposure` that disagree about gate count is a
 (above). That is disagreement-detection between two written-down facts, not inference of
 one from the other, and it does not reopen this instruction.
 
-**What this unit (#132) shipped, and what #144 later added.** **#137 shipped 2 of 5 possible
+**What later units added** (what #132 and #144 shipped: [ADR 539](docs/adr/539-room-exposure-rationale.md)). **#137 shipped 2 of 5 possible
 falsifiers against a declared `exposure: none`** — a version-shaped tag exists, and a
 committed deploy path exists — each a `warn` naming the evidence, never a `fail` (a
 falsifier proves the CLASS of evidence that usually accompanies a consumer, not a consumer
@@ -460,7 +461,8 @@ path built in #302, the rest of the runtime still deferred); one remains a propo
 
 - **Concurrency on the shared checkout — DONE (#285), and it turned out not to be a
   loosening at all.**
-    - Why the premise was wrong in both halves, with the measurements: [ADR 233](docs/adr/233-writes-veto-and-direct-rationale.md).
+    - Why the original proposal (loosen `colab solo`'s entry gate so direct writers could
+      share the trunk checkout) was wrong in both halves, with the measurements: [ADR 233](docs/adr/233-writes-veto-and-direct-rationale.md).
   So `direct` gains no new permission here — that is deliberate, and the matrix cells above
   are unchanged. Its one `direct`-specific consequence is a **tightening**: a place-claim on
   a `direct` repo's own trunk checkout must carry an identity (`--session`), because a
@@ -1330,8 +1332,8 @@ than guessed.
   `deferred:*`, `needs-decision`, a non-code `delivery:*`, `tracking`, or a label declared
   under `holds:`. `--dry --json` reports the same thing as `refsBrakeFindings` and as an
   `ok: true` advisory row. The tool never applies the hold itself. Which kind, whose wake
-  and which date are the shipper's call, for the same reason the gate does not file the
-  remainder issue. Why: [ADR 539](docs/adr/539-branches-and-commits-rationale.md).
+  and which date are the shipper's call, never the tool's — the gate does not file the
+  remainder issue either. Why: [ADR 539](docs/adr/539-branches-and-commits-rationale.md).
 - **[Hard — gate: colab ship refuses uncorroborated issue]** **Every closed issue must be corroborated by git, not the claim registry alone (#87).**
   Corroboration reads two git-side sources: the branch name's
   **trailing** number group, and `#N` references in **commit bodies**. An issue named by
