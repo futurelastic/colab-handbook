@@ -144,6 +144,18 @@ came back.
 - project.schema.md `writes` — a blank line restored after list item 1, so the "Reclassifying an EXISTING repo's descriptor" paragraph no longer renders inside it (the struck-through item 2 between them had moved).
 - §2 Room — the slice A move took the contrast "Issue language follows the room, not repo privacy" with its rationale; restored as a rule sentence. Rows: C2.room.02 (key updated).
 
+### #539 ledger — follow-ups (#544)
+
+The ship grade of #539 found no violation of the ruling's limits, but listed loose ends. Each is
+settled here: restored as a minimal clause, or recorded as redundant with the reason.
+
+- `CONVENTIONS.md:2626` — "Fails towards `human`, always": the closing "for the same reason" pointed at a reason that had already moved to the ADR (before #539). After: "…the posture *Readiness* (above) takes towards `ready`." The reason stays in ADR 539. None keyed.
+- `CONVENTIONS.md:3939` — conclusion step 2: the scope clause "not a typo exempt from ceremony" left with the rationale sentence. Restored as a minimal clause: "…wrapped normally — never under a typo fix's exemption from ceremony." The "*most* consequential kind of doc change" reasoning stays in ADR 539. None keyed.
+- CONVENTIONS.md line 5122 (base; found by sentence, so it excuses nothing in the check) — "Land the descriptor on trunk in the same human act (#481)": the "On a freshly adopted repo" scope now lives only in ADR 539. **Redundant, not restored:** the paragraph is a step in §9's first-time adoption list and describes `colab adopt --land`, so its scope is the adoption it sits in; restoring the phrase would add nothing a reader of that step lacks. None keyed.
+- CONVENTIONS.md line 5184 (base; found by sentence) — the label-set step lost "`migration-granted`/`ci-granted` are **not opt-in** (unlike `tracking`)". **Redundant, not restored:** the step reads "Create the whole label set — twenty-three names, not a subset" and lists both labels by name, so neither can be read as optional. None keyed.
+- Inventory rows not trimmed like the doc (limit 2): C2.tiers.11's rule column now carries the release-script/external-poller condition the doc restored; C5c.delivery.08, C5c.delivery.18 and C5c.priority.09 drop the *because…* / *for the same reason…* clauses that moved to the ADR. Key columns unchanged.
+- #543, same pass: §5 *Planning* no longer names a model. C5c.planning.15 now states `code-plan`'s two-path contract (a helper agent where the engine has one, otherwise the session itself, recording `drafted-by: self`). Key unchanged.
+
 ---
 
 ### 1. Hard rules and defaults (added by #523)
@@ -201,7 +213,7 @@ came back.
 | C2.tiers.08 | explanation | | Hand-deployed Tier A keeps two branches: `main` is what runs on the host, `dev` is where sessions land. | Hand-deployed Tier A keeps the two branches because they earn their keep | CONVENTIONS.md | — |
 | C2.tiers.09 | default | | A tag-gated Tier A may run a single trunk `main`; the tier is set by the promotion gate, never by trunk name or deploy location. | A tag-gated Tier A may instead run a single trunk `main`. | CONVENTIONS.md | — |
 | C2.tiers.10 | default | | Where the deploy runs outside CI, commit the path to production as `runbook:`. | the path to production must be committed as | CONVENTIONS.md | — |
-| C2.tiers.11 | default | | Name the release branch in `releaseBranch:`, otherwise `colab doctor` misreads it as safe to delete. | name that branch in | CONVENTIONS.md | #63 |
+| C2.tiers.11 | default | | Where a release script fast-forwards a long-lived release branch that an external poller watches, name that branch in `releaseBranch:`. | name that branch in | CONVENTIONS.md | #63 |
 | C2.tiers.12 | default | | Tier C describes a live low-stakes site: `deploy: push-main`, `main` is live, the promotion is the one decision to ship. | C describes that shape honestly | CONVENTIONS.md | — |
 | C2.tiers.13 | default | | Deploying off a `main` push meets Tier C's contract; `tier: A` + `push-main` is a finding, usually fixed by retiering to C. | So `tier: A` + `push-main` is a finding | CONVENTIONS.md | — |
 | C2.tiers.14 | default | | Migrating to `deploy: tag`, or declaring `deploy: manual` + `runbook:`, remain valid alternatives when earned. | remain valid alternatives when the site has genuinely earned them | CONVENTIONS.md | — |
@@ -1616,7 +1628,7 @@ Each entry lists the rule text of a unit whose rationale clause moved out (the u
 | C5c.delivery.05 | default |  | design is not a code start but is not routed away: it is a design session's start, reported in triage's design bucket. | it is not routed away | CONVENTIONS.md | #359 |
 | C5c.delivery.06 | default |  | A code session landing on any of the four non-code values distills the finding onto the issue and ends the session. | A code session landing on any of the four distills the finding onto the issue | CONVENTIONS.md | #112 |
 | C5c.delivery.07 | default |  | Whoever files or triages sets the delivery label; no mechanical rule infers it from a title or body. | no mechanical rule infers it from a title or body | CONVENTIONS.md | #112 |
-| C5c.delivery.08 | default |  | delivery:* is in the provisioned label set because every adopting repo needs all six values before the first triage pass. | `delivery:*` is in the provisioned label set. | CONVENTIONS.md | #112 |
+| C5c.delivery.08 | default |  | delivery:* is in the provisioned label set. | `delivery:*` is in the provisioned label set. | CONVENTIONS.md | #112 |
 | C5c.delivery.09 | default |  | delivery:docs-only is a code-lane value: the filer expects an in-repo commit whose diff is documentation only. | is a code-lane value: the filer expects an in-repo commit | CONVENTIONS.md | #358 |
 | C5c.delivery.10 | default |  | docs-only starts, is gated and ships exactly like delivery:code, and triage gives it deps-checked once its blockers clear. | It starts, is gated and ships exactly like | CONVENTIONS.md | #358 |
 | C5c.delivery.11 | default |  | The docs-only label is not colab ship's docs-only exception: ship measures that from the diff and never reads the label. | ship measures that from the diff and never reads this label | CONVENTIONS.md | #358 |
@@ -1626,7 +1638,7 @@ Each entry lists the rule text of a unit whose rationale clause moved out (the u
 | C5c.delivery.15 | default |  | delivery:design is never a code start candidate and triage reports it in a bucket of its own. | It is never a code start candidate, and triage reports it in a bucket of its own | CONVENTIONS.md | #359 |
 | C5c.delivery.16 | default |  | When its blocked_by edges are all closed, or it has none, triage stamps deps-checked on a design issue by the same bar as a code issue. | triage stamps `deps-checked` on it by | CONVENTIONS.md | #380 |
 | C5c.delivery.17 | default |  | delivery:elsewhere names an issue whose deliverable is code that lands in a different repository than the one the issue lives in. | names an issue whose deliverable IS code, but code that | CONVENTIONS.md | #274 |
-| C5c.delivery.18 | default |  | elsewhere routes for the same reason content and ops do: the pipeline assumes the diff lands in the issue's own repo. | It routes as `content`/`ops` do | CONVENTIONS.md | #274 |
+| C5c.delivery.18 | default |  | delivery:elsewhere routes as content and ops do. | It routes as `content`/`ops` do | CONVENTIONS.md | #274 |
 | C5c.delivery.19 | default |  | A delivery:* value outside the six has no handbook meaning and is consumer-local. | has no handbook meaning | CONVENTIONS.md | #366 |
 | C5c.delivery.20 | default |  | The classifier reads an undefined delivery value as not asked: no lane, startable by a code session; next to a provisioned value, the provisioned value alone decides. | The classifier reads it as not asked | CONVENTIONS.md | #366 |
 | C5c.delivery.21 | default |  | handbook-sync reports an undefined delivery value as value drift until the consumer declares it in Local divergences with a handbook issue that states its meaning. | reports it as `value` drift, not as a gap | CONVENTIONS.md | #366 |
@@ -1647,7 +1659,7 @@ Each entry lists the rule text of a unit whose rationale clause moved out (the u
 | C5c.priority.06 | default |  | The group never leaves the ready list, so a human may start it by hand at any time. | the group never leaves the ready list | CONVENTIONS.md | #268 |
 | C5c.priority.07 | default |  | Clearing the label is the sanctioned way to release the group back to the scheduler. | clearing the label is the sanctioned way | CONVENTIONS.md | #268 |
 | C5c.priority.08 | default |  | A driver that implements the hard-veto reading must say so somewhere code-triage's output can be checked against. | must say so somewhere `code-triage`'s output can be checked against | CONVENTIONS.md | #268 |
-| C5c.priority.09 | default |  | low-priority is in the provisioned label set because an unattended driver's ordering decision depends on seeing it. | `low-priority` is in the provisioned label set. | CONVENTIONS.md | #268 |
+| C5c.priority.09 | default |  | low-priority is in the provisioned label set. | `low-priority` is in the provisioned label set. | CONVENTIONS.md | #268 |
 | C5c.priority.10 | default |  | priority:now and priority:high rank upward: now › high › default › low-priority. | rank upward (#537) | CONVENTIONS.md | #537 |
 | C5c.priority.11 | default |  | The priority rank orders ready work for start and merge; it never skips a gate or overrides a hold — a held file drains, the holder ships first. | a `now` issue whose file is held drains the | CONVENTIONS.md | #537 |
 | C5c.priority.12 | default |  | Only the repo owner sets priority:now, or a coordinator relaying the owner's order quoted on the issue; priority:high the owner or a coordinator. | Only the repo owner sets `priority:now` | CONVENTIONS.md | #537 |
@@ -1676,7 +1688,7 @@ Each entry lists the rule text of a unit whose rationale clause moved out (the u
 | C5c.planning.12 | default |  | code-wrap checks the rung it finds: the plan file is present or its place holds one line rung 0 because <reason>. | `code-wrap` checks the rung it finds | CONVENTIONS.md | #486 |
 | C5c.planning.13 | default |  | A non-rung-0 change wrapped with neither is reported as plan file missing, never as hand-off complete, and is never back-filled. | never as hand-off complete — and is never | CONVENTIONS.md | #486 |
 | C5c.planning.14 | default |  | code-triage may flag a hard group needs-plan with a one-line reason; a cross-backlog judgement, never a plan of its own. | may flag a hard group `needs-plan` with a one-line reason | CONVENTIONS.md | #94 |
-| C5c.planning.15 | default |  | The full plan is drafted at code-session start, inside the implementing session, by a stronger-model subagent seeded with the Issue plus the reason line. | The full plan is drafted at code-session start** | CONVENTIONS.md | #94 |
+| C5c.planning.15 | default |  | The full plan is drafted at code-session start, inside the implementing session, seeded with the Issue plus the reason line: by a helper agent where the engine has one, otherwise by the session itself, which records drafted-by: self in the plan's frontmatter. | The full plan is drafted at code-session start** | CONVENTIONS.md | #94 |
 | C5c.planning.16 | default |  | A rung-1 stub may upgrade to rung 2 mid-session; the flag decides only the default. | A rung-1 stub may still upgrade to rung 2 mid-session | CONVENTIONS.md | #94 |
 | C5c.planning.17 | default |  | Read the needs-plan flag by direct issue fetch, never the Search API. | Read the `needs-plan` flag by direct issue fetch | CONVENTIONS.md | #94 |
 | C5c.planning.18 | default |  | A plan is a sketch the code may overrule, not a contract; note deviation where the plan lives. | note deviation where the plan lives | CONVENTIONS.md | #94 |
