@@ -2537,6 +2537,8 @@ Reworded units, one bullet each. Row key changed: C6.rel.111 (the moved sentence
 | S1.thresholds.02 | default |  | Each default is today's value, so a repo that declares nothing sees no change. | a repo that declares nothing sees no change | project.schema.md | #560 |
 | S1.thresholds.03 | default |  | Safety limits and protocol counts are not thresholds and keep their own fields. | Safety limits (a cap a repo may only tighten) and protocol counts are not thresholds | project.schema.md | #560 |
 | S1.thresholds.04 | hard | tools/lib/thresholds.js::must be a whole number | An unknown name, a non-whole-number or a value under its floor fails the audit and the CI descriptor check; every reader falls back to the default. | falls back to the default and says so | project.schema.md | #560 |
+| S1.thresholds.05 | default |  | The `batch-*` thresholds have no default: the audit's `--batch-history` shows the measured batch picture and flags only against a value the repo declares. | have **no default** | project.schema.md | #556 |
+| S1.thresholds.06 | default |  | A declared batch rate with no samples, or fewer than `batch-min-samples`, is listed as not judged — never as a pass. | is listed as not judged | project.schema.md | #556 |
 
 ### `migrations`
 

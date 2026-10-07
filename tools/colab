@@ -15131,7 +15131,11 @@ hot-file count and dependents band, code-wrap's gate.smoke target — and read t
 skill hard-codes a number a repo may have changed. A malformed entry falls back to the default
 and is listed under problems; the audit and the CI templates' descriptor check fail it.
 
-  <name>    print only that threshold's value (a bare number, for a script or a skill)
+The batch-* names (#556) have NO default: undeclared, they read "—" and the audit's
+--batch-history shows the measurement without judging it. Percents are bounded at 100.
+
+  <name>    print only that threshold's value (a bare number, for a script or a skill;
+            an empty line for an undeclared no-default name)
   --json    { repo, thresholds: { <name>: { value, default, declared, what, where } }, problems }`;
 
 function cmdThresholds(argv) {
@@ -15146,7 +15150,7 @@ function cmdThresholds(argv) {
   if (name !== undefined) {
     if (!thresholdsLib.SPEC[name]) throw new UserError(`unknown threshold ${name} — expected one of: ${Object.keys(thresholdsLib.SPEC).join(', ')} (run \`colab thresholds\` to list them)`);
     for (const p of r.problems) process.stderr.write(`! ${p}\n`);
-    print(String(r.values[name]));
+    print(r.values[name] === null ? '' : String(r.values[name])); // #556: empty = undeclared, no default
     return 0;
   }
   const rows = Object.fromEntries(Object.entries(thresholdsLib.SPEC).map(([k, s]) => [k, {
@@ -15159,7 +15163,10 @@ function cmdThresholds(argv) {
   print(`thresholds ${shortRepo(repoAbs)}`);
   const w = Math.max(...Object.keys(rows).map((k) => k.length));
   for (const [k, row] of Object.entries(rows)) {
-    print(`  ${k.padEnd(w)}  ${String(row.value).padStart(5)}  ${row.declared ? `declared (default ${row.default})` : 'default'.padEnd(20)}  ${row.what}`);
+    // #556: a no-default key (batch-*) shows `—` and "not declared" — nothing judges it until it is.
+    const shown = row.value === null ? '—' : String(row.value);
+    const src = row.declared ? `declared (default ${row.default === null ? 'none' : row.default})` : (row.default === null ? 'not declared' : 'default');
+    print(`  ${k.padEnd(w)}  ${shown.padStart(5)}  ${src.padEnd(20)}  ${row.what}`);
   }
   for (const p of r.problems) print(`  ! ${p}`);
   return 0;

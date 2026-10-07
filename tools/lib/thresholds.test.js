@@ -17,7 +17,20 @@ test('#560: a repo that declares nothing gets today\'s values exactly', () => {
     'hot-file-count': 3, 'dependents-count': 3, 'hold-stale-days': 30, 'smoke-minutes': 3,
     'claude-md-kb': 40, 'claude-md-line-multiple': 6, 'claude-md-line-floor-bytes': 2048,
     'transitional-days': 180, 'doc-budget-slack': 100,
+    // #556: the batch-history keys have NO default — undeclared means "not judged".
+    'batch-min-samples': null, 'batch-first-green-pct-min': null, 'batch-eviction-pct-max': null, 'batch-overlap-pct': null,
   });
+});
+
+test('#556: a no-default key reads null until declared, and a percent is bounded at 100', () => {
+  assert.strictEqual(th.thresholdValue({}, 'batch-overlap-pct'), null);
+  assert.strictEqual(th.thresholdValue({ thresholds: { 'batch-overlap-pct': '30' } }, 'batch-overlap-pct'), 30);
+  assert.strictEqual(th.thresholdValue({ thresholds: { 'batch-first-green-pct-min': 0 } }, 'batch-first-green-pct-min'), 0);
+  const over = th.parseThresholds({ thresholds: { 'batch-eviction-pct-max': 101 } });
+  assert.strictEqual(over.values['batch-eviction-pct-max'], null);
+  assert.match(over.problems[0], /0–100, got 101 — not declared, so not judged$/);
+  const low = th.parseThresholds({ thresholds: { 'batch-min-samples': 0 } });
+  assert.match(low.problems[0], /≥ 1, got 0 — not declared, so not judged$/);
 });
 
 test('#560: a declared value overrides its default, and only its own', () => {

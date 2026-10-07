@@ -283,7 +283,8 @@ jobs:
               fi ;;
           esac
           # thresholds (#560): one level of `name: whole number`, each name known and at or above its
-          # floor — the table in tools/lib/thresholds.js (SPEC), which a test holds this list to.
+          # floor (and, for a percent, at most 100) — the table in tools/lib/thresholds.js (SPEC),
+          # which a test holds this list to.
           # A bad entry falls back to the default everywhere, silently, so it fails here.
           bad=0
           while IFS= read -r t; do
@@ -293,18 +294,20 @@ jobs:
             esac
             k="${t%%:*}"
             n="$(printf '%s' "${t#*:}" | sed -E -e 's/^[[:space:]]+//' -e 's/^"(.*)"$/\1/' -e "s/^'(.*)'\$/\\1/")"
+            max=999999999
             case "$k" in
               hot-file-count|claude-md-line-multiple) min=2 ;;
-              dependents-count|hold-stale-days|smoke-minutes|claude-md-kb|transitional-days) min=1 ;;
+              dependents-count|hold-stale-days|smoke-minutes|claude-md-kb|transitional-days|batch-min-samples) min=1 ;;
               claude-md-line-floor-bytes|doc-budget-slack) min=0 ;;
+              batch-first-green-pct-min|batch-eviction-pct-max|batch-overlap-pct) min=0 max=100 ;;
               *) echo "::error file=.github/project.yml::thresholds.$k is not a known threshold (colab thresholds lists them). See project.schema.md, thresholds."
                  bad=1; continue ;;
             esac
             case "$n" in ''|'~'|null) continue ;; esac
-            if printf '%s\n' "$n" | grep -Eq '^[0-9]{1,9}$' && [ "$n" -ge "$min" ]; then
+            if printf '%s\n' "$n" | grep -Eq '^[0-9]{1,9}$' && [ "$n" -ge "$min" ] && [ "$n" -le "$max" ]; then
               echo "thresholds.$k: $n — ok"
             else
-              echo "::error file=.github/project.yml::thresholds.$k is '$n', expected a whole number >= $min. Every reader ignores it and uses the default. See project.schema.md, thresholds."
+              echo "::error file=.github/project.yml::thresholds.$k is '$n', expected a whole number from $min to $max. Every reader ignores it (a batch-* key is then not judged; any other uses its default). See project.schema.md, thresholds."
               bad=1
             fi
           done < <(awk '
