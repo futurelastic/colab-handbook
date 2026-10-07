@@ -68,6 +68,7 @@ const shipBatch = require('./lib/ship-batch');
 const batchStats = require('./lib/batch-stats');
 const conflictMarkers = require('./lib/conflict-markers');
 const docsOnly = require('./lib/docs-only');
+const configSet = require('./lib/config-set'); // #561
 const cureDiff = require('./lib/cure-diff');
 const codeowners = require('./lib/codeowners');
 const releasePolicy = require('./lib/release-policy');
@@ -7657,6 +7658,10 @@ const HELP_CONFIG = `colab config [show|add-repo <path>|rm-repo <path>|add-reser
   rm-notify-url <url>        remove one receiver from notifyUrl; removing the last unsets the key
   set <key> <value>          set claimTTLHours | plannerClaimTTLMinutes | portRange | worktreeSubdir | notifyUrl | journal |
                               claimIdentity
+  set <tuning-key> <value> --evidence "<why>"
+                             a kebab-case key is this REPO's .github/project.yml, not this machine (#561):
+                             one tuning value, committed on a short branch, shippable with no issue —
+                             see: colab config set ship-batch --help
 
 notifyUrl is OPTIONAL and off by default: unset, colab makes no network call of its own. Set it to
 an http(s) endpoint and claim / release / ship / worktree new / worktree rm each push one small
@@ -7683,6 +7688,91 @@ yield to ourselves" rule can treat a co-tenant's live claim as our own. ONLY tur
 changes on resume makes that session's own earlier claim comment read as a different claimant, and
 it will yield to itself. Unset it again with:  colab config set claimIdentity ""
 `;
+
+// config set <tuning-key> (#561) — one TUNING value of this repo's .github/project.yml, committed on
+// a short branch without touching any checkout, shippable by `colab ship` with no issue.
+const HELP_CONFIG_SET_DESCRIPTOR = `colab config set <tuning-key> <value> --evidence "<why>" [--repo <path>] [--no-push] [--dry]
+
+Change ONE tuning value of this repo's .github/project.yml (#561). Tuning keys:
+  ${configSet.TUNING_KEYS.filter((k) => k !== 'thresholds').join(', ')}, thresholds.<name>
+
+The value is validated by the parser every reader of that key uses (the same verdict \`colab ship\`
+computes), then committed on top of a freshly fetched <remote>/<trunk> as branch
+chore/tune-<key> — with no checkout touched and no issue. The subject is
+\`chore(project): <key> <old> → <new>\`; --evidence (required) goes in the body, which the squash
+carries, so the reason for the number lives in trunk's history.
+
+Then: wait for the branch's CI (\`colab ci-wait --sha <sha> --branch <branch>\`) and
+\`colab ship --branch <branch>\`. Ship computes the TUNING-ONLY class from the diff — it is never
+asserted — and, like docs-only (#345), it opens the autonomy gate on a repo without auto-trunk.
+Every other precondition still applies.
+
+Never on this path (they grant authority or change what deploys): ${configSet.AUTHORITY_KEYS.join(', ')}.
+
+  --evidence <text>  the measurement behind the number (required)
+  --no-push          create the branch locally only
+  --dry              print the edit and the verdict; create nothing`;
+
+function cmdConfigSetDescriptor(argv) {
+  const opts = parseArgs(argv, {
+    values: { '--repo': 'repo', '--evidence': 'evidence' },
+    flags: { '--no-push': 'noPush', '--dry': 'dry', '-h': 'help', '--help': 'help' },
+  });
+  if (opts.help) return print(HELP_CONFIG_SET_DESCRIPTOR);
+  const [key, value] = opts._ || [];
+  if (!key || value === undefined) throw new UserError('config set needs <tuning-key> <value> — see: colab config set ship-batch --help');
+  const kp = configSet.parseKeyPath(key);
+  if (kp.problem) throw new UserError(kp.problem);
+  if (!opts.dry && !String(opts.evidence || '').trim()) {
+    throw new UserError('--evidence "<why>" is required — the measurement behind the number goes in the commit body (#561); re-run with --evidence "<what you measured>"');
+  }
+  const repoAbs = resolveRepo(opts);
+  const trunk = resolveTrunk(repoAbs, projectDoc(repoAbs));
+  if (!trunk) throw new UserError('could not determine trunk — add `trunk:` to .github/project.yml (or run `colab adopt`), then re-run');
+  const remote = git.remoteFor(repoAbs);
+  const f = git.git(['fetch', remote, trunk], repoAbs);
+  if (!f.ok) throw new UserError(`could not fetch ${remote}/${trunk} — nothing created (${f.stderr.split('\n')[0]}); re-run once \`git fetch ${remote} ${trunk}\` succeeds`);
+  const baseRef = `${remote}/${trunk}`;
+  const baseSha = (git.git(['rev-parse', `refs/remotes/${baseRef}`], repoAbs).stdout || '').trim();
+  if (!baseSha) throw new UserError(`${baseRef} does not resolve after the fetch — check \`git ls-remote ${remote} ${trunk}\` and re-run`);
+  const text = configSet.descriptorAt(repoAbs, baseSha);
+  if (text === null) throw new UserError(`could not read ${configSet.DESCRIPTOR} at ${baseRef} — see why with \`git show ${baseRef}:${configSet.DESCRIPTOR}\``);
+  if (text === '') throw new UserError(`${baseRef} has no ${configSet.DESCRIPTOR} — adopt the handbook first: \`colab adopt\``);
+  const edit = configSet.editText(text, kp, value);
+  if (edit.problem) throw new UserError(edit.problem);
+  const name = [kp.top, kp.sub].filter(Boolean).join('.');
+  if (edit.text === text) { print(`${name} is already ${value} on ${baseRef} — nothing to change`); return 0; }
+  // The SAME verdict ship will compute on this diff — so a value ship would refuse is refused here.
+  const verdict = configSet.classify({
+    entries: [{ path: configSet.DESCRIPTOR, oldMode: '100644', newMode: '100644', binary: false }],
+    baseText: text, headText: edit.text,
+  });
+  if (!verdict.tuning) throw new UserError(`refused: ${verdict.reason} — pick a valid value (\`colab config set ${name} --help\`)`);
+  const branch = configSet.branchName(kp);
+  if (git.branchExists(repoAbs, branch, remote)) {
+    throw new UserError(`branch ${branch} already exists — ship it with \`colab ship --branch ${branch}\`, or delete it with \`git push ${remote} --delete ${branch}\` and \`git branch -D ${branch}\``);
+  }
+  const message = configSet.commitMessage(kp, edit.old, value, opts.evidence || '(dry run)');
+  print(`config set ${shortRepo(repoAbs)} · ${name}: ${edit.old === null ? '(unset)' : edit.old} → ${value}`);
+  print(`  verdict: ${verdict.reason}`);
+  print(`  branch:  ${branch} (base ${baseRef} @ ${shortSha(baseSha)})`);
+  if (opts.dry) { print('  [DRY RUN] nothing created.'); return 0; }
+  const c = configSet.commitOnBranch(repoAbs, { baseSha, text: edit.text, message, branch });
+  if (!c.ok) throw new UserError(`could not create the commit: ${c.error} — nothing was created; a human must read the git error above before re-running`);
+  print(`  commit:  ${shortSha(c.sha)} ${message.split('\n')[0]}`);
+  if (opts.noPush) {
+    print(`  not pushed (--no-push). Push it, wait for CI, then: colab ship --branch ${branch}`);
+    return 0;
+  }
+  const p = git.git(['push', remote, `refs/heads/${branch}:refs/heads/${branch}`], repoAbs);
+  if (!p.ok) {
+    warn(`push failed — the branch exists locally only: ${p.stderr.split('\n')[0]}`);
+    return 1;
+  }
+  print(`  pushed:  ${remote}/${branch}`);
+  print(`Next: colab ci-wait --sha ${c.sha} --branch ${branch} && colab ship --branch ${branch}`);
+  return 0;
+}
 
 function cmdConfig(argv) {
   const sub = argv[0];
@@ -7741,6 +7831,7 @@ function cmdConfig(argv) {
     print(`notifyUrl = ${urls.length ? urls.join(', ') : '(unset)'}`);
     return 0;
   }
+  if (sub === 'set' && argv[1] && configSet.isDescriptorKey(argv[1])) return cmdConfigSetDescriptor(argv.slice(1)); // #561
   if (sub === 'set') {
     const [k, v] = [argv[1], argv[2]];
     if (!k || v === undefined) throw new UserError('set needs <key> <value>');
@@ -10122,6 +10213,7 @@ promotes is an integration event of the same weight as a promotion, and stays hu
 
 Sequence (each step gated; any failure aborts before the push — the target is never half-shipped):
   a. autonomy gate      repo must grant auto-trunk (no --force override) — or the diff is docs-only (#345)
+                        or tuning-only (#561)
                         — or a person runs ship through the human door (#525): a confirmed interactive
                         terminal, or COLAB_HUMAN=1 + --answered-by <name>. An agent shell is no terminal.
   b. preconditions      target CI alive+green (UNLESS the branch proves the CURE RULE, #281 — no
@@ -10297,6 +10389,14 @@ a submodule pointer. An empty diff is never docs-only (so a zero-commit evidence
 auto-trunk). The row reads "docs-only (N files) — autonomy exception", and --dry --json adds
 \`autonomyGate: { via, docsOnly }\`. After B0 sync the diff is measured again before the squash.
 Every other precondition is unchanged. No flag, env var or project.yml field widens the list.
+
+TUNING-ONLY — the second computed exception (#561). Ship also proceeds without the grant when the
+diff changes .github/project.yml ALONE, every changed line inside a tuning key (ship-batch,
+ship-batch-wait, ci-wait-factor, thresholds) and every moved value valid; never with an authority
+key (autonomy, promotion, migration-grant, ci-grant, trust-humans, exposure, tier, trunk, deploy,
+release, production). It needs no issue. \`colab config set <key> <value> --evidence "<why>"\`
+writes such a branch. The row reads "tuning-only (<keys>) — autonomy exception (#561)"; --dry --json
+adds \`autonomyGate.tuning\`. Re-measured after B0 sync like docs-only.
 
 TRUNK-DIRECT — \`colab ship --direct\` (#302). A unit committed straight to trunk has no branch and
 no worktree, so neither door above can find it, and evidence-close's own detection cannot fire
@@ -11775,7 +11875,8 @@ function cmdShipDryJson(opts) {
 
   // ---- (a) AUTONOMY GATE — does NOT short-circuit here; an unattended caller wants the whole table ----
   const autonomyGate = shipAutonomyGate(doc, () => docsOnly.branchChanges(git, repoAbs, target, shipRefFor(repoAbs, sess.branch)),
-    humanDoor.humanDoorFromProcess(process, opts.answeredBy)); // #525
+    humanDoor.humanDoorFromProcess(process, opts.answeredBy), // #525
+    () => configSet.branchTuning(git, repoAbs, target, shipRefFor(repoAbs, sess.branch))); // #561
   autonomyGatePayloadVal = autonomyGatePayload(autonomyGate);
   checks.push({ name: 'autonomy granted', ok: autonomyGate.ok, class: autonomyGate.ok ? null : HUMAN_GATED, detail: autonomyGate.detail });
 
@@ -12656,23 +12757,33 @@ function shipOpenCorePr(repoAbs, cr, { target, branch, title, body }) {
  * caller asserts nothing. `readDocsOnly` is a thunk, so an auto-trunk repo never pays for the
  * diff read. Every other precondition is untouched — this relaxes the autonomy gate, not the checks.
  *
- * Returns `{ ok, via: 'auto-trunk'|'docs-only'|null, declared, docsOnly: verdict|null, detail }`.
+ * #561 adds the TUNING-ONLY class beside it: a diff `lib/config-set.js` classifies as one or more
+ * tuning keys of .github/project.yml with valid values, and nothing else. `readTuning` is a thunk
+ * too, consulted only when the change is not docs-only; a branchless (trunk-direct) door passes none.
+ *
+ * Returns `{ ok, via: 'auto-trunk'|'docs-only'|'tuning'|'human'|null, declared, docsOnly: verdict|null,
+ * tuning: verdict|null, detail }`.
  */
-function shipAutonomyGate(doc, readDocsOnly, door = null) {
+function shipAutonomyGate(doc, readDocsOnly, door = null, readTuning = null) {
   const declared = doc.autonomy ? String(doc.autonomy) : 'absent';
-  if (declared === 'auto-trunk') return { ok: true, via: 'auto-trunk', declared, docsOnly: null, human: null, detail: 'auto-trunk' };
+  if (declared === 'auto-trunk') return { ok: true, via: 'auto-trunk', declared, docsOnly: null, tuning: null, human: null, detail: 'auto-trunk' };
   const verdict = readDocsOnly();
   if (verdict.docsOnly) {
-    return { ok: true, via: 'docs-only', declared, docsOnly: verdict, human: null, detail: `${verdict.reason} — autonomy exception` };
+    return { ok: true, via: 'docs-only', declared, docsOnly: verdict, tuning: null, human: null, detail: `${verdict.reason} — autonomy exception` };
+  }
+  const tuning = readTuning ? readTuning() : null;
+  if (tuning && tuning.tuning) {
+    return { ok: true, via: 'tuning', declared, docsOnly: verdict, tuning, human: null, detail: `${tuning.reason} — autonomy exception (#561)` };
   }
   // #525: the human door — the person running ship IS the go (ruling on #525, option 1). Checked
-  // after docs-only, so a docs-only change keeps its own (agent-usable) door and record.
+  // after docs-only and tuning, so either keeps its own (agent-usable) door and record.
   if (door && door.open) {
-    return { ok: true, via: 'human', declared, docsOnly: verdict, human: door,
+    return { ok: true, via: 'human', declared, docsOnly: verdict, tuning, human: door,
       detail: `human door (#525): ${door.why} — project.yml autonomy: ${declared}` };
   }
-  return { ok: false, via: null, declared, docsOnly: verdict, human: door,
-    detail: `project.yml autonomy: ${declared} — a human must trigger Phase B (not docs-only: ${verdict.reason}; human door closed: ${door ? door.why : 'not offered'})` };
+  return { ok: false, via: null, declared, docsOnly: verdict, tuning, human: door,
+    detail: `project.yml autonomy: ${declared} — a human must trigger Phase B (not docs-only: ${verdict.reason}; ` +
+      `${tuning ? `not tuning-only: ${tuning.reason}; ` : ''}human door closed: ${door ? door.why : 'not offered'})` };
 }
 
 /** #525: the human-door refusal lines — what a person runs, never just "a human must". */
@@ -12731,8 +12842,10 @@ function shipHumanDoorGo(gate, opts, what) {
 function autonomyGatePayload(gate) {
   // #525: `human` is additive and present only when the human door was consulted, so an
   // auto-trunk / docs-only payload stays byte-identical to before.
-  return gate.human ? { via: gate.via, docsOnly: gate.docsOnly, human: { open: gate.human.open, how: gate.human.how, why: gate.human.why } }
-    : { via: gate.via, docsOnly: gate.docsOnly };
+  // #561: `tuning` likewise — present only when the tuning class was consulted.
+  const base = { via: gate.via, docsOnly: gate.docsOnly };
+  if (gate.tuning) base.tuning = gate.tuning;
+  return gate.human ? { ...base, human: { open: gate.human.open, how: gate.human.how, why: gate.human.why } } : base;
 }
 
 /** The sha a branch name resolves to, local first, else origin's copy (#324's remote-only shape). */
@@ -12819,11 +12932,13 @@ function cmdShip(argv) {
   // ---- (a) AUTONOMY GATE — granted by the repo file, never by the caller ----
   // #345: …or the branch's diff is documentation only, computed here from git — never asserted.
   const autonomyGate = shipAutonomyGate(doc, () => docsOnly.branchChanges(git, repoAbs, target, shipRefFor(repoAbs, sess.branch)),
-    humanDoor.humanDoorFromProcess(process, opts.answeredBy)); // #525
+    humanDoor.humanDoorFromProcess(process, opts.answeredBy), // #525
+    () => configSet.branchTuning(git, repoAbs, target, shipRefFor(repoAbs, sess.branch))); // #561
   if (!autonomyGate.ok) {
     process.stderr.write(`✗ ${shortRepo(repoAbs)} does not grant auto-trunk (project.yml autonomy: ${autonomyGate.declared}).\n`);
     process.stderr.write('  A human must trigger Phase B. (Autonomy is granted by the repo, not by a flag — --force cannot override.)\n');
     process.stderr.write(`  The docs-only exception (#345) does not apply either: ${autonomyGate.docsOnly.reason}.\n`);
+    if (autonomyGate.tuning) process.stderr.write(`  Nor the tuning-only class (#561): ${autonomyGate.tuning.reason}.\n`);
     process.stderr.write(shipHumanDoorRefusal(autonomyGate, shipSelector(opts, sess)));
     return 1;
   }
@@ -13313,6 +13428,14 @@ function cmdShip(argv) {
     if (!again.docsOnly) {
       cleanupEphemeral();
       process.stderr.write(`✗ B1: the docs-only exception (#345) no longer holds after B0 sync — ${again.reason}. A human must trigger Phase B. Nothing pushed.\n`);
+      return 1;
+    }
+  }
+  if (autonomyGate.via === 'tuning') {
+    const again = configSet.branchTuning(git, repoAbs, mergeRef, sess.branch);
+    if (!again.tuning) {
+      cleanupEphemeral();
+      process.stderr.write(`✗ B1: the tuning-only class (#561) no longer holds after B0 sync — ${again.reason}. A human must trigger Phase B. Nothing pushed.\n`);
       return 1;
     }
   }

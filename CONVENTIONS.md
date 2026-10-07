@@ -635,8 +635,8 @@ as a binary change. A zero-commit evidence-close has an empty diff, so it still 
 grade, trunk CI, migrations (still opened only by a grant of a role the repo accepts), writes,
 claims, and the `COLAB_SHIP=1` push. The autonomy row
 reads `docs-only (N files) — autonomy exception` in place of `auto-trunk`. `--dry --json` adds
-`autonomyGate: { via, docsOnly }`, with `via` one of `"auto-trunk"`, `"docs-only"`, `"human"`
-(the human door, below) or `null`.
+`autonomyGate: { via, docsOnly }`, with `via` one of `"auto-trunk"`, `"docs-only"`, `"tuning"`
+(the tuning-only class, below), `"human"` (the human door, below) or `null`.
 A refusal keeps the existing message and adds one line naming why the change is not docs-only.
 A branch is measured **again after B0 sync**, before the squash, so a `pre-ship` hook that
 regenerated a file cannot carry code in behind the first verdict. The pre-push guard needs no
@@ -647,6 +647,29 @@ nothing past the trunk merge — promotion and deploys stay human, and a tag fol
 **Nothing widens the allowlist.** No `project.yml` field, flag or environment variable can add
 to it: `tools/lib/docs-only.js` holds both lists as constants. Widening it is a handbook change,
 reviewed in a commit like this one.
+
+### Autonomy — the tuning-only class (#561)
+
+**[Hard — gate: colab ship autonomy gate]** **⚖ Ruled by the repo owner, 2026-10-07 ([#561](https://github.com/futurelastic/colab-handbook/issues/561)).**
+`.github/project.yml` stays committed. What is made cheap is a **tuning** change: one
+repo-owned value moved on the repo's own measurements. Why: [ADR 561](docs/adr/561-tuning-only-class-rationale.md).
+
+- **`colab config set <key> <value> --evidence "<why>"`** edits that one key only, validates the
+  value with the parser every reader of the key uses, and commits `chore(project): <key> <old> → <new>`
+  on fresh trunk as `chore/tune-<key>`, touching no checkout. The evidence is the commit body.
+- **`colab ship` computes the class from the diff**, never asserted, and like docs-only it opens the
+  autonomy gate without `auto-trunk`. It needs no issue and no `Closes #N`. Every other precondition
+  still applies (trunk CI, branch CI class, conflicts), and it is re-measured after B0 sync.
+
+**Tuning only** when exactly one file changed, `.github/project.yml`, as a regular text file;
+every changed non-blank line sits inside a tuning key's block (a top-level comment does not); every
+other key parses identical on both sides; and every tuning key that moved holds a valid value or
+is absent. The allowlist: `ship-batch` (inside its cap), `ship-batch-wait`, `ci-wait-factor`,
+`thresholds`. **[Hard — gate: colab ship autonomy gate]** **Never tuning**, because they grant
+authority or change what deploys: `autonomy`, `promotion`, `migration-grant`, `ci-grant`,
+`trust-humans`, `exposure`, `tier`, `trunk`, `deploy`, `release`, `production`. A malformed value
+is refused by `config set` and by the class alike (#416). Both lists are constants in
+`tools/lib/config-set.js`, widened only by a reviewed handbook change.
 
 ### Autonomy — the human door (#525)
 

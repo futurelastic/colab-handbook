@@ -417,6 +417,15 @@ settled here: restored as a minimal clause, or recorded as redundant with the re
 | C2x.docs.19 | hard | tools/colab::NEVER tags, NEVER promotes ; templates/pre-push-guard::COLAB_PROMOTE | The docs-only exception grants nothing past the trunk merge; promotion and deploys stay human and a tag never comes from `colab ship`. | nothing past the trunk merge — promotion and deploys stay human | CONVENTIONS.md | #345 |
 | C2x.docs.20 | default |  | Nothing widens the docs-only allowlist: no field, flag or environment variable; widening is a handbook change. | No `project.yml` field, flag or environment variable can add | CONVENTIONS.md | #345 |
 
+### Autonomy — the tuning-only class (#561)
+
+| id | class | gate | rule | key | dest | source |
+|---|---|---|---|---|---|---|
+| C2x.tune.01 | hard | tools/colab::function shipAutonomyGate ; tools/lib/config-set.js::function classify | `project.yml` stays committed; a tuning change to it is what is made cheap. | What is made cheap is a tuning change | CONVENTIONS.md | #561 |
+| C2x.tune.02 | default |  | `colab config set` edits one tuning key, validated by the key's own parser, committed on a short branch without touching a checkout. | edits that one key only, validates the value with the parser every reader of the key uses | CONVENTIONS.md | #561 |
+| C2x.tune.03 | default |  | Ship computes the tuning-only class from the diff; it needs no issue and every other precondition still applies. | It needs no issue and no `Closes #N`. | CONVENTIONS.md | #561 |
+| C2x.tune.04 | hard | tools/colab::function shipAutonomyGate ; tools/lib/config-set.js::const AUTHORITY_KEYS | Authority and deploy keys are never tuning; a malformed value is refused by `config set` and by the class. | Never tuning, because they grant authority or change what deploys | CONVENTIONS.md | #561 |
+
 ### Autonomy — the human door (#525)
 
 | id | class | gate | rule | key | dest | source |
