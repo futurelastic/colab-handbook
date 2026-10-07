@@ -83,6 +83,15 @@ came back.
 - `CONVENTIONS.md:526` — before: "Why the premise was wrong in both halves" (the premise had moved to ADR 233's side) → after: "Why the original proposal (loosen `colab solo`'s entry gate so direct writers could share the trunk checkout) was wrong in both halves". Pointer only; none keyed.
 - `CONVENTIONS.md:1474` — before: "the shipper's call, for the same reason the gate does not file the remainder issue" (the reason had moved) → after: "the shipper's call, never the tool's — the gate does not file the remainder issue either". None keyed.
 - §2 Exposure, the bold lead "What this unit (#132) shipped, and what #144 later added." → "What later units added (what #132 and #144 shipped: ADR 539)." The #132/#144 account had moved; the lead now names what follows it. None keyed.
+- `CONVENTIONS.md:3175` — slice D's entry above cut the whole tail after "**Trunk-only**". The first clause is a rule (how an integration line's red is judged with no runs of its own), so it is restored: after: "**Trunk-only** — an integration line's red borrows trunk's advisory verdict when the line has no runs of its own; the exemption does not extend to lines." The "deliberately unmade decision" wording stays in the ADR. Rows: C5b.re.18 (key updated).
+- `CONVENTIONS.md:2329` — the slice C cut took "deleting the edge once code is written" with the declined alternatives, but it is the rule that reversed the older "remove the now-false edge". After: "…never recorded as a second label, and the `blocked_by` edge is never deleted once the blocker's code is written." Rows: C5a.boolean.07 (key unchanged).
+- `CONVENTIONS.md:3408` — the cut left "for the same reason `needs-decision` is" (a later bullet) without its reason. After: "`needs-decision` issues are excluded — no human has answered the blocking question — even if the work item itself is human-filed,". Rows: C5c.drivers.04 (key updated).
+- `project.schema.md:126` — "This holds for hand-deployed Tier A repos too" lost its referent when the slice G cut moved the two-branch description; after: "The two-branch split (`dev` → `main`) holds for hand-deployed Tier A repos too (`deploy: manual`)." None keyed.
+- project.schema.md line 1229 (base; the restored sentence makes the unit found by the move check again) — the #443 rule "the newest candidate always names trunk's head" had moved with its measurement; restored ahead of "So any value narrows." None keyed.
+- project.schema.md line 652 (base; the restored sentence makes the unit found by the move check again) — `room`: the rule contrasts (Issue language no longer derived from repo privacy, `ceremony` no longer the audit-trail proxy) restored as "It replaces both earlier proxies: …"; the "by coincidence" rationale stays in the ADR. None keyed.
+- CONVENTIONS.md line 4322 (base; the restored sentence makes the unit found by the move check again) — the container-deploy descriptor mapping ("the existing `deploy: tag` shape with an in-repo deploy workflow (`channels: [workflow]`)") restored; "so no rule changes; the template is what was missing" stays in the ADR. None keyed.
+- `CONVENTIONS.md:5522` — anti-pattern "Now a finding." names its combination again: "(`tier: A`/`exposure: released` with `deploy: push-main`)". None keyed.
+- project.schema.md `writes` — a blank line restored after list item 1, so the "Reclassifying an EXISTING repo's descriptor" paragraph no longer renders inside it (the struck-through item 2 between them had moved).
 - §2 Room — the slice A move took the contrast "Issue language follows the room, not repo privacy" with its rationale; restored as a rule sentence. Rows: C2.room.02 (key updated).
 
 ---
@@ -1293,7 +1302,7 @@ Each entry lists the rule text of a unit whose rationale clause moved out (the u
 | C5b.re.15 | hard | tools/lib/ci-grant.js::function stackingVerdict | A red-trunk grant never stacks: it refuses against a green trunk and again after a prior grant merged while trunk stayed red. | refuses against a green trunk, and refuses again if a prior grant | CONVENTIONS.md | #105 |
 | C5b.re.16 | default |  | A grant-authorised merge carries a `CI-Grant:` trailer in the squash commit and a tracker comment. | A grant-authorised merge carries a `CI-Grant:` trailer in the squash commit itself, | CONVENTIONS.md | #105 |
 | C5b.re.17 | default |  | A red-trunk grant exempts exactly one precondition, trunk-CI-green, never the others or `colab promote`. | Scoped to exactly one precondition (trunk-CI-green) — never exempts | CONVENTIONS.md | #105 |
-| C5b.re.18 | default |  | A red-trunk grant is trunk-only, not for integration lines. | or `colab promote`. Trunk-only. | CONVENTIONS.md | #105 |
+| C5b.re.18 | default |  | A red-trunk grant is trunk-only, not for integration lines. | or `colab promote`. Trunk-only — | CONVENTIONS.md | #105 |
 ### Cure rule — the machine-checkable door through trunk-CI-green (#281)
 
 | id | class | gate | rule | key | dest | source |
@@ -1424,7 +1433,7 @@ Each entry lists the rule text of a unit whose rationale clause moved out (the u
 | C5c.drivers.01 | default |  | A scheduler inherits the provenance gate, re-applied on every tick, not filtered once. | It inherits the provenance gate, re-applied on every tick, not filtered once | CONVENTIONS.md | — |
 | C5c.drivers.02 | default |  | agent-filed issues are excluded from what a scheduler starts, every run. | `agent-filed` issues are excluded from what a scheduler starts, every run | CONVENTIONS.md | — |
 | C5c.drivers.03 | default |  | epic-labelled issues are excluded from what a scheduler starts. | `epic`-labelled issues are excluded. | CONVENTIONS.md | — |
-| C5c.drivers.04 | default |  | needs-decision issues are excluded from what a scheduler starts. | `needs-decision` issues are excluded, even if the work item itself | CONVENTIONS.md | — |
+| C5c.drivers.04 | default |  | needs-decision issues are excluded from what a scheduler starts. | even if the work item itself is human-filed | CONVENTIONS.md | — |
 | C5c.drivers.05 | default |  | The only admission past those exclusions is a human act recording the decision (colab decision --record). | The only admission is a human act recording the decision | CONVENTIONS.md | — |
 | C5c.drivers.06 | default |  | A scheduler may never infer an answer from content, age or repeat proposal, and never treats the label's absence as an answer. | a scheduler may never infer an answer from content, age, or repeat proposal | CONVENTIONS.md | — |
 | C5c.drivers.07 | default |  | needs-decision beside decision-recorded is not an admission; it is resolved by the pair rule and stays excluded unless a write is proven interrupted. | *beside* `decision-recorded` is not an admission | CONVENTIONS.md | — |
@@ -2271,7 +2280,7 @@ Reworded units, one bullet each. Row key changed: C6.rel.111 (the moved sentence
 | S1.trunk.09 | default |  | A tier C repo declaring a different trunk name is conforming, with no advisory or legacy framing. | is conforming, not exempted: no advisory, no "legacy" framing. | project.schema.md | #205 |
 | S1.trunk.10 | default |  | Non-tag-gated tier A keeps a fixed trunk value. | (non-tag-gated) Tier A keeps a fixed | project.schema.md | #205 |
 | S1.trunk.11 | default |  | Tier B's single trunk may never sit beside a `main`. | Tier B's single trunk may never sit beside a `main` | project.schema.md | #205 |
-| S1.trunk.12 | default |  | Hand-deployed tier A (`deploy: manual`) keeps the dev/main split. | This holds for hand-deployed Tier A repos too (`deploy: manual`) | project.schema.md | — |
+| S1.trunk.12 | default |  | Hand-deployed tier A (`deploy: manual`) keeps the dev/main split. | holds for hand-deployed Tier A repos too (`deploy: manual`) | project.schema.md | — |
 | S1.trunk.13 | default |  | Tier C keeps the identical two-branch split whatever its trunk is named. | Tier C keeps the identical split | project.schema.md | — |
 | S1.trunk.14 | default |  | A tag-gated tier A may run a single trunk `main`. | The exception: a tag-gated Tier A may run a single trunk `main`. | project.schema.md | — |
 | S1.trunk.15 | default |  | The single-trunk exception applies only to `deploy: tag`. | This applies only to `deploy: tag`: `manual` and | project.schema.md | — |

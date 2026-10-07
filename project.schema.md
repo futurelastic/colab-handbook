@@ -103,7 +103,7 @@ keeps a fixed value, and Tier B's single trunk may never sit beside a `main`.
 check are the two places this is enforced; they agree by construction, not by two authors
 reading the same prose.
 
-This holds for hand-deployed Tier A repos too (`deploy: manual`).
+The two-branch split (`dev` → `main`) holds for hand-deployed Tier A repos too (`deploy: manual`).
 
 Tier C keeps the identical split, whatever its trunk is named.
 
@@ -572,7 +572,8 @@ Who else could ever read what a session writes down here ([CONVENTIONS.md §2,
 *Room*](CONVENTIONS.md#room--who-else-is-here)). It decides what an Issue is *for* (memory
 for `solo`, coordination for `team`, documentation for `public`), which language it is
 written in, and whether "a human performs the release" names a role or only names a
-species.
+species. It replaces both earlier proxies: Issue language derived from repo privacy, and
+`ceremony` standing in for "will anyone read the audit trail."
 
 **Omission means undeclared, not `solo`.** Nothing infers a repo's room from its GitHub
 visibility, its `production:` value, or anything else. The audit enum-checks the value for
@@ -967,6 +968,7 @@ observable behaviour:
 1. **Byte-identical preservation, still the operative reason.** Every repo declaring bare
    `serial` today stays solo-flow-eligible (subject to attendance, ⚖ #233) — including
    this handbook's own descriptor (see this file's own `.github/project.yml`).
+
 **Reclassifying an EXISTING repo's descriptor to `serial-gated` is now presentation-only —
 it changes nothing observable.** Now it is inert, identical to leaving the field absent or
 as bare `serial` — the field going fully advisory is the next step, per the epic, once
@@ -1086,8 +1088,8 @@ direction only, measured against the route — declared, or derived:
   **failure**. `none`, `live`, `library-fast` and a fail-closed descriptor reject
   `candidates: auto`.
 - `candidates-per-day` — a positive whole number, an **opt-in** cap. No route carries one
-  by default (#443, reversing #439's derived cap of `1` on `rapid-app` and `public-tool`).
-  So any value narrows. A repo that declares one still gets the guarantee: inside the
+  by default (#443, reversing #439's derived cap of `1` on `rapid-app` and `public-tool`):
+  the newest candidate always names trunk's head. So any value narrows. A repo that declares one still gets the guarantee: inside the
   rolling 24h window `colab release cut --auto` is a no-op, and the first run after it — a
   merge's green CI or the daily schedule — cuts **main's head**, never an older commit. On
   a route with no candidates it has nothing to cap and is a **failure**.

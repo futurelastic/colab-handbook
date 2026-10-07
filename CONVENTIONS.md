@@ -2101,7 +2101,8 @@ ready:
 | open, code pushed and unmerged | **ready, with a note** |
 | closed, or its work is already on trunk | **ready** |
 
-**The middle value is computed at read time, never recorded as a second label**. Why, with the measurement: [ADR 539](docs/adr/539-readiness-rationale.md).
+**The middle value is computed at read time, never recorded as a second label**, and the
+`blocked_by` edge is never deleted once the blocker's code is written. Why, with the measurement: [ADR 539](docs/adr/539-readiness-rationale.md).
 
 **An active session on the blocker is not evidence — a pushed branch with real commits
 is.** An unpushed branch does not count either — invisible from other machines. **The
@@ -2902,7 +2903,8 @@ Why, with the measurements: [ADR 105](docs/adr/105-red-trunk-exemption-rationale
   addition to the tracker comment.
 - **Scoped to exactly one precondition** (trunk-CI-green) — never exempts no-new-
   migrations, claim corroboration, the trunk-checkout check, the hand-merge conflict
-  preview, or `colab promote`. **Trunk-only**.
+  preview, or `colab promote`. **Trunk-only** — an integration line's red borrows trunk's
+  advisory verdict when the line has no runs of its own; the exemption does not extend to lines.
 
 Why, with the measurement: [ADR 539](docs/adr/539-red-trunk-rationale.md).
 
@@ -3114,7 +3116,8 @@ stops applying; this is what a scheduler must additionally honour.
 
 - `agent-filed` issues are excluded from what a scheduler starts, every run.
 - `epic`-labelled issues are excluded.
-- `needs-decision` issues are excluded, even if the work item itself is human-filed,
+- `needs-decision` issues are excluded — no human has answered the blocking question — even
+  if the work item itself is human-filed,
   unblocked, and a genuine leaf task.
 - **The only admission is a human act recording the decision** (`colab decision --record`,
   above) — a scheduler may never infer an answer from content, age, or repeat proposal,
@@ -3951,6 +3954,7 @@ and its two scripts, on every host the same way:
    the previous tag. The outcome — `running vX.Y.Z at <time>`, or the failure — is recorded in the
    run summary and on the release issue when one exists.
 
+It is the existing `deploy: tag` shape with an in-repo deploy workflow (`channels: [workflow]`).
 **There is one deploy path, reached two
 ways:** on `deploy-tag` a human-pushed final starts it (`push: tags`, finals only); on
 `deploy-tag-fast` the release workflow's `deploy` job calls the same file through
@@ -4988,7 +4992,8 @@ every hotfix.* We use two, deliberately.
 **A deploy mechanism nobody used.** *Copy-pasted CI encodes intentions nobody adopted.*
 
 **A merge that ships itself — while claiming otherwise.** *The mechanism is fine; claiming
-a gate you do not have is not.* Now a finding.
+a gate you do not have is not.* Now a finding (`tier: A`/`exposure: released` with
+`deploy: push-main`).
 
 **Docs describing a repo that doesn't exist.** *An aspirational doc is worse than no doc —
 people trust it.*
