@@ -253,7 +253,7 @@ test('cmdPlace acquire with a --session-name but no --session still gets the hal
   const fx = fixture();
   const r = colab(fx, ['place', 'acquire', fx.work, '--repo', fx.work, '--session-name', 'my-label']);
   assert.strictEqual(r.code, 0, r.err);
-  assert.match(r.err, /recorded with NO session URL/);
+  assert.match(r.err, /recorded with NO session id/);
   assert.doesNotMatch(r.err, /no --session or --session-name given/);
 });
 
@@ -276,7 +276,7 @@ test('a --session that is plainly a session NAME warns at claim time, but is sti
   const fx = fixture();
   const r = colab(fx, ['claim', '901', '--repo', fx.work, '--session', 'ops-example-orchestrator-1480']);
   assert.strictEqual(r.code, 0, r.err);
-  assert.match(r.err, /does not look like a session URL/);
+  assert.match(r.err, /does not look like a session id/);
   assert.match(r.err, /--session-name/);
   // Warned, never refused — `requirePlaceIdentity` promises `<url-or-any-stable-id>`.
   const st = JSON.parse(fs.readFileSync(path.join(fx.home, 'state.json'), 'utf8'));
@@ -288,7 +288,7 @@ test('a well-formed session URL draws NO shape warning — the check does not ov
   const r = colab(fx, ['claim', '902', '--repo', fx.work,
     '--session', 'https://claude.ai/code/session_017GKdaNPELs2mtKPDCasha1']);
   assert.strictEqual(r.code, 0, r.err);
-  assert.doesNotMatch(r.err, /does not look like a session URL/);
+  assert.doesNotMatch(r.err, /does not look like a session id/);
 });
 
 test('place release refused on a session mismatch NAMES both values and the recovery command (#306)', () => {

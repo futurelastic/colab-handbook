@@ -420,11 +420,11 @@ doing. Issue #17's own cleanup hit exactly this case.
 
 ## Session identity (which conversation)
 
-Every claim and worktree can record a **two-part Claude session identity**:
+Every claim and worktree can record a **two-part session identity**:
 
 | field | source (precedence) | typical value |
 |---|---|---|
-| `session` (URL) | `--session <url>` **>** `COLAB_SESSION` env **>** absent | `https://claude.ai/code/session_…` |
+| `session` (id) | `--session <id>` **>** `COLAB_SESSION` env **>** absent | any stable id for the session — a URL (`https://…/session_…`), a uuid… |
 | `sessionName` (label) | `--session-name <s>` **>** `COLAB_SESSION_NAME` env **>** absent | `colab-handbook`, `pilot-issue-30` |
 
 Either, both, or neither may be set — never an error, **except at the two call sites that mint a
@@ -477,7 +477,7 @@ worktree named `console-views-30-31-32` sat beside a live session with a nearly 
 ### Repairing an existing worktree — `worktree tag`
 
 ```sh
-colab worktree tag import-fixes-115-114-113 --session "https://claude.ai/code/session_…"
+colab worktree tag import-fixes-115-114-113 --session "<any stable session id>"
 colab worktree tag import-fixes-115-114-113 --session "<url>" --session-name "import-fixes"
 ```
 

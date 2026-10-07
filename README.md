@@ -20,9 +20,9 @@ colab labels --ensure    # creates the convention labels
 colab register           # adds the repo to this machine's fleet list
 ```
 
-Then, in an agent session in that repo, run `/code-start <issue-number>` (Claude
-Code; in Codex, `$code-start` — see [*Choose your engine*](#choose-your-engine)). With an
-agent at hand, `/handbook-sync` replaces the last three commands and also does
+Then, in an agent session in that repo, run the `code-start` skill with an issue
+number — each engine has its own way to invoke a skill, see [*Choose your engine*](#choose-your-engine).
+With an agent at hand, the `handbook-sync` skill replaces the last three commands and also does
 the rest of adoption (see [*Adopting it into a repo*](#adopting-it-into-a-repo)).
 You need `git`, `node` ≥ 18 and `gh` ≥ 2.94 logged in (`gh auth login`); distro
 packages often ship an older `gh`, so install it from [cli.github.com](https://cli.github.com).
@@ -95,19 +95,19 @@ with no agent and no other tool.
 
 ## Your first session
 
-A unit of work goes round one loop. Each step is a skill, invoked in an agent
-session as a slash command (`/code-start 42`), or followed by hand from
-[`skills/`](skills/).
+A unit of work goes round one loop. Each step is a skill, invoked by name in an
+agent session (the syntax is the engine's — [*Choose your engine*](#choose-your-engine)),
+or followed by hand from [`skills/`](skills/).
 
 | Step | Skill | Who runs it | What it leaves behind |
 |---|---|---|---|
-| 1. Pick | `/code-triage` | coordinator | the ready work in order, `group:` labels on issues that must share a branch, `needs-plan` on hard ones, the start commands |
-| 2. Open | `/code-start <N>` | implementer | the issue claimed, a branch cut from trunk and pushed, a worktree, a short plan file |
+| 1. Pick | `code-triage` | coordinator | the ready work in order, `group:` labels on issues that must share a branch, `needs-plan` on hard ones, the start commands |
+| 2. Open | `code-start <N>` | implementer | the issue claimed, a branch cut from trunk and pushed, a worktree, a short plan file |
 | 3. Work | — | implementer | commits on the branch |
-| 4. Hand off | `/code-wrap` | implementer | what was learned written onto the Issue, the repo's gate run, the branch pushed — then it **stops** |
-| 5. Merge | `/code-ship` | coordinator, after a human go | one squash commit on trunk with `Closes #N`, evidence on each issue, claims released, the worktree removed |
-| 6. Clean up | `/code-sweep` | coordinator | finished work shipped, stale claims and worktrees cleared |
-| 7. Release | release workflow, or `/release-rung` | automatic, or a human where a tag deploys | a candidate tag, then the final after a test period — only where the repo's `exposure` has releases |
+| 4. Hand off | `code-wrap` | implementer | what was learned written onto the Issue, the repo's gate run, the branch pushed — then it **stops** |
+| 5. Merge | `code-ship` | coordinator, after a human go | one squash commit on trunk with `Closes #N`, evidence on each issue, claims released, the worktree removed |
+| 6. Clean up | `code-sweep` | coordinator | finished work shipped, stale claims and worktrees cleared |
+| 7. Release | release workflow, or `release-rung` | automatic, or a human where a tag deploys | a candidate tag, then the final after a test period — only where the repo's `exposure` has releases |
 
 Also in [`skills/`](skills/): `code-plan` (a full plan for a hard issue, run by
 `code-start` when flagged), `handbook-sync` (bring one repo up to the current
@@ -166,7 +166,7 @@ and why: [`CONVENTIONS.md` §2](CONVENTIONS.md#2-tiers) and
 
 ## Adopting it into a repo
 
-**The default route: run `/handbook-sync` in an agent session inside the repo.**
+**The default route: run the `handbook-sync` skill in an agent session inside the repo.**
 It sees that nothing is adopted yet and drives adoption to the end — the
 descriptor (through `colab adopt`), the labels, the `CLAUDE.md` block, CI from
 the templates, and registration on this machine. Run later, the same skill
