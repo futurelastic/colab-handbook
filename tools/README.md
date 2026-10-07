@@ -1615,6 +1615,25 @@ nothing untested ever reaches trunk. While trunk's own run for a landed batch he
 flight, `ship`'s trunk-CI row accepts the batch ref's green run for that same sha, only when the
 workflows firing on a trunk push and on a `ship-batch/**` push are the same set.
 
+A member dropped at build is recorded on the batch head as `Ship-Batch-Dropped: <ref>
+<branch>@<sha> <class>` (`conflict` · `generated-no-hook` · `hook-failed` · `hook-markers` ·
+`squash-failed` · `empty` · `message` · `commit-failed`), one line per drop in the last member's
+trailer block — only when the batch is built; a build that collapses to serial pushes nothing (#554).
+
+**Tuning the knobs — `colab batch-stats [--since 30d] [--json]`** (`lib/batch-stats.js`, #554). Read-only,
+from git + CI only: trunk's first-parent log in the window, and the repo's runs over REST, one query
+per UTC day (a filtered run list stops at 1000 rows; a day that still hits it is named). Reports
+batches landed and their fill, combined-run builds (first-attempt green, green after re-run, red,
+pending), red builds and how many members then landed serially (an unlanded build's commits are
+read through the compare API), drops by class and the eviction rate, **missed partners** — a serial
+landing while another change landed later was already green at its head, or went green inside this
+landing's trunk-CI cycle (a near miss, with the wait from the lone change's own green that would have
+caught it) — and queue wait, green-at-head → landing. A partner is judged at that moment, never at
+its final head: a serial ship syncs the other branches, so every final head post-dates it. The
+cycle ends at the trunk run's last update or the next landing, whichever is first (a re-run moves
+`updated_at`). "Green" is the branch's own CI, not every ship gate, so a branch held for review
+counts as a missed partner — read the pair list in `--json` before treating it as lost throughput.
+
 #### If `ship` exits non-zero — establish which step it reached, don't guess
 
 The gated sequence above promises the abort case: "any failure aborts before the
