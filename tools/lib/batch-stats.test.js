@@ -144,6 +144,25 @@ test('near miss: the partner turns green inside the trunk-CI cycle — the wait 
   assert.strictEqual(r.serial.nearMissWait.p50Sec, 600);
 });
 
+test('#556: overlap counts — cyclesRead is serial landings with a finished trunk run, overlapped those with a partner', () => {
+  const commits = [
+    { sha: sha('4'), dateMs: min(10), body: 'fix: x\n\nCloses #41\n' },
+    { sha: sha('5'), dateMs: min(60), body: 'fix: y\n\nCloses #42\n' },
+  ];
+  const runs = [
+    run('fix/x-41', sha('a'), { created: min(0), updated: min(5) }),
+    run('fix/y-42', sha('b'), { created: min(9), updated: min(15) }),
+    run('main', sha('4'), { created: min(10), updated: min(25) }),
+    run('main', sha('5'), { created: min(60), updated: min(70) }),
+  ];
+  const r = bs.derive({ commits, runs, trunk: 'main' });
+  assert.strictEqual(r.serial.cyclesRead, 2);
+  assert.strictEqual(r.serial.overlapped, 1);
+  // no trunk runs at all: nothing could be judged, so the denominator is 0 — never a 0% overlap
+  const bare = bs.derive({ commits, runs: [], trunk: 'main' });
+  assert.deepStrictEqual([bare.serial.cyclesRead, bare.serial.overlapped], [0, 0]);
+});
+
 test('a next landing ends the cycle: a partner green only after it is no near miss of the earlier one', () => {
   const commits = [
     { sha: sha('4'), dateMs: min(10), body: 'Closes #51\n' },

@@ -507,13 +507,22 @@ declares nothing sees no change. `colab thresholds` prints every value in force 
 | `claude-md-kb` · `claude-md-line-multiple` · `claude-md-line-floor-bytes` | 40 · 6 · 2048 | the audit's `CLAUDE.md` size advisory |
 | `transitional-days` | 180 | the audit's "has held for" line on a transitional value |
 | `doc-budget-slack` | 100 | `scripts/check-doc-budget.mjs`'s ratchet |
+| `batch-overlap-pct` · `batch-first-green-pct-min` · `batch-eviction-pct-max` · `batch-min-samples` | **none** | the audit's `--batch-history` (#556) |
+
+The `batch-*` names have **no default** (owner ruling on #556: no hard-coded number). `audit.mjs
+--batch-history` shows each local repo's measured picture from `colab batch-stats --json` — overlap
+of serial landings with a partner inside their trunk-CI cycle, fill, first-attempt green, eviction —
+and flags a rate only against a value the repo declares here: overlap ≥ it (serial repo: consider
+`ship-batch`), first-green below it (consider lowering), eviction above it. Undeclared ⇒ shown, not
+judged; a declared rate with no samples, or fewer than `batch-min-samples`, is listed as not judged.
 
 Safety limits (a cap a repo may only tighten) and protocol counts are not thresholds and keep
 their own fields. **[Hard — gate: the audit fails it]** An unknown name, a value that is not a
 whole number of at most nine digits, or one under its floor (2 for `hot-file-count` and
-`claude-md-line-multiple`, 0 for `claude-md-line-floor-bytes` and `doc-budget-slack`, else 1)
+`claude-md-line-multiple`, 0 for `claude-md-line-floor-bytes`, `doc-budget-slack` and the
+percents, else 1), or a percent (`*-pct*`) over 100
 fails the audit **and the CI templates' descriptor check** (the #416 pattern); every reader
-falls back to the default and says so.
+falls back to the default and says so (a `batch-*` name: not judged).
 
 ### `migrations` — optional
 

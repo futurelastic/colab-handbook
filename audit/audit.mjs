@@ -37,6 +37,8 @@
 //   node audit.mjs --identity            # also scan PUBLIC repository METADATA (description,
 //                                        # topics, homepage, name) against the operator's
 //                                        # private identity vocabulary — see "Identity" below
+//   node audit.mjs --batch-history       # also read each local repo's batch landing history
+//                                        # (colab batch-stats --json) — see "Batch history" below
 //
 // Identity (--identity): metadata never passes through git, so the pre-commit identity scan
 // (templates/pre-commit-identity) structurally cannot see it, and it is the first thing a
@@ -44,6 +46,13 @@
 // kept outside every repo — COLAB_IDENTITY_VOCAB, else ${COLAB_HOME:-~/.colab}/identity-
 // vocabulary — and is never shipped, printed, or written into a report. Off unless asked
 // for: it needs the network, and a fleet sweep must stay runnable offline.
+//
+// Batch history (--batch-history, #556): per LOCAL repo, the measured batch picture from
+// `colab batch-stats --json` — overlap of serial landings with a partner inside their trunk-CI
+// cycle, batch fill, first-attempt green rate, eviction rate. Shown, never judged on its own:
+// an advisory is raised ONLY against a `batch-*` value the repo declares under `thresholds:`
+// in project.yml, and none of those has a default. Off unless asked for, like --identity: it
+// reads the CI history over the network (one API listing per day of the window).
 //
 // Exit code: 0 when every repo passes, 1 when any repo has a finding, 2 on a usage
 // error. Findings never crash the run — a repo missing project.yml is a result, not
@@ -100,6 +109,7 @@ const { parseWorkflowOn, workflowFiresOnTag, prereleaseTagTriggers, workflowsFir
 const shipBatch = require("../tools/lib/ship-batch.js");
 const ciProfile = require("../tools/lib/ci-profile.js"); // #559
 const thresholdsLib = require("../tools/lib/thresholds.js"); // #560
+const batchHistory = require("../tools/lib/batch-history.js"); // #556
 // #383: where migrations live — the one rule `colab ship`'s gate and `release cut` read; the audit
 // validates the `migrations:` declaration against it and reports a `*/migrations/` dir it misses.
 const migrationPaths = require("../tools/lib/migration-paths.js");
@@ -140,12 +150,13 @@ const COLAB_HOME = process.env.COLAB_HOME || join(homedir(), ".colab");
 
 function parseArgs(argv) {
   // config === null means "resolve from the precedence chain"; a string means explicit.
-  const opts = { config: null, locals: [], slugs: [], json: false, quiet: false, help: false, identity: false };
+  const opts = { config: null, locals: [], slugs: [], json: false, quiet: false, help: false, identity: false, batchHistory: false };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === "--json") opts.json = true;
     else if (a === "--quiet" || a === "-q") opts.quiet = true;
     else if (a === "--identity") opts.identity = true;
+    else if (a === "--batch-history") opts.batchHistory = true;
     else if (a === "--local") {
       const p = argv[++i];
       if (!p) die("--local needs a path");
@@ -1997,6 +2008,9 @@ function auditRepo(target, ctx) {
   // read by every visitor, and it is subject to the rule it publishes.
   if (ctx.identity) checkIdentityMetadata(src, ctx.identity, info, fail);
 
+  // ---- batch history (#556) ------------------------------------------------------
+  checkBatchHistory(src, target, cfg, ctx, info, warn);
+
   function finish() {
     info.findings = findings;
     info.ok = !findings.some((f) => f.level === "fail");
@@ -2004,6 +2018,43 @@ function auditRepo(target, ctx) {
     return info;
   }
   return finish();
+}
+
+/**
+ * #556 — the repo's measured batch picture, from `colab batch-stats --json` (this handbook's own
+ * CLI, so the audit and the command read history the same way). Writes `info.batchHistory` on every
+ * path. The picture is never a finding; an advisory is raised only for a `batch-*` threshold the
+ * repo declares (tools/lib/batch-history.js judge — no defaults, by the owner's ruling). A run that
+ * was asked for and could not read the history warns: a quiet row must not read as "checked".
+ */
+function checkBatchHistory(src, target, cfg, ctx, info, warn) {
+  const declared = batchHistory.declaredBatchKeys(cfg);
+  if (!ctx.batchHistory) {
+    info.batchHistory = { status: "not-requested", declared };
+    return;
+  }
+  if (src.kind !== "local") {
+    info.batchHistory = { status: "not-applicable", reason: "batch-stats reads a clone's trunk log — audit a local path", declared };
+    return;
+  }
+  let rep;
+  try {
+    const out = execFileSync(process.execPath, [join(HANDBOOK_ROOT, "tools", "colab"), "batch-stats", "--repo", resolve(target.path), "--json"],
+      { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], timeout: 600_000, maxBuffer: 64 * 1024 * 1024 });
+    rep = JSON.parse(out);
+  } catch (err) {
+    const why = String((err.stderr || err.message || "")).trim().split("\n").pop() || "no output";
+    info.batchHistory = { status: "unreadable", reason: why, declared };
+    warn(`batch history: colab batch-stats could not read it (${why}) — nothing was measured or judged`);
+    return;
+  }
+  const measured = batchHistory.measure(rep);
+  const verdict = batchHistory.judge(rep, cfg, measured);
+  info.batchHistory = {
+    status: "read", since: rep.since, until: rep.until, landings: rep.landings, measured,
+    picture: batchHistory.picture(rep, measured), declared, judged: verdict.judged, unjudged: verdict.unjudged, notes: rep.notes || [],
+  };
+  verdict.advisories.forEach(warn);
 }
 
 /**
@@ -3110,6 +3161,7 @@ function report(results, opts, ctx) {
       identity: ctx.identity
         ? { scanned: true, vocabulary: ctx.identity.path, source: ctx.identity.source, terms: ctx.identity.count }
         : { scanned: false, reason: "not requested (--identity)" },
+      batchHistory: ctx.batchHistory ? { read: true } : { read: false, reason: "not requested (--batch-history)" },
       results,
     }, null, 2));
     return;
@@ -3126,6 +3178,11 @@ function report(results, opts, ctx) {
   console.log(ctx.identity
     ? `identity:  ${ctx.identity.count} term(s) from ${ctx.identity.path} (${ctx.identity.source}) — public repository metadata scanned`
     : "identity:  repository metadata NOT scanned (pass --identity)");
+  // #556: same once-per-run statement for batch history — a per-repo line on every offline run
+  // would make every row non-clean for a read nobody asked for.
+  console.log(ctx.batchHistory
+    ? "batch:     batch landing history read per local repo (colab batch-stats); advisories only against declared thresholds"
+    : "batch:     batch landing history NOT read (pass --batch-history)");
   console.log("");
 
   const shown = opts.quiet ? results.filter((r) => !r.clean) : results;
@@ -3145,6 +3202,12 @@ function report(results, opts, ctx) {
     else if (r.adoption === "local") lines.push(`⌂ adopted locally, not committed — descriptor hidden by .git/info/exclude; a repo the fleet does not own (CONVENTIONS.md §9)${r.clean ? " ✓" : ""}`);
     else if (r.clean) lines.push("✓");
     r.findings.forEach((f) => lines.push(`${f.level === "fail" ? "⚠" : "·"} ${f.text}`));
+    // #556: the measured picture — information, not a finding, so it never changes clean/ok.
+    if (r.batchHistory?.status === "read") {
+      r.batchHistory.picture.forEach((l) => lines.push(`▸ ${l}`));
+      if (!r.batchHistory.declared.length) lines.push("▸ no batch-* thresholds declared — shown, not judged");
+      r.batchHistory.unjudged.forEach((u) => lines.push(`▸ thresholds.${u.key} not judged: ${u.why}`));
+    } else if (r.batchHistory?.status === "not-applicable") lines.push(`▸ batch history: ${r.batchHistory.reason}`);
 
     // Repeat the name on every line so the output stays greppable.
     lines.forEach((l, i) => console.log(`${i === 0 ? head : cont}  ${l}`));
@@ -3203,6 +3266,7 @@ function runAudit(opts) {
 
   const ctx = { handbook: handbookInfo(HANDBOOK_ROOT), templateNames: templateNames(HANDBOOK_ROOT) };
   ctx.identity = opts.identity ? loadIdentityVocabulary() : null;
+  ctx.batchHistory = !!opts.batchHistory;
 
   const results = [];
   for (const t of targets) {

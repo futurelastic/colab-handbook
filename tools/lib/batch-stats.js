@@ -207,7 +207,7 @@ function derive({ commits = [], runs = [], builds = {}, trunk = 'main', config =
 
   // ---- missed partners: serial landings that landed alone while a partner was (nearly) ready ----
   const pairs = [];
-  let withMissed = 0, withNear = 0, cyclesUnread = 0;
+  let withMissed = 0, withNear = 0, cyclesUnread = 0, overlapped = 0;
   // A partner is judged by ITS state at this landing's moment, never by the head it finally landed
   // with: a serial ship syncs the other branches, so their final heads all post-date it. The cycle
   // ends when this landing's trunk run finishes — or at the next landing, whichever is first (a
@@ -238,6 +238,7 @@ function derive({ commits = [], runs = [], builds = {}, trunk = 'main', config =
     }
     if (missed) withMissed++;
     else if (near) withNear++;
+    if (end !== null && (missed || near)) overlapped++;
   }
   if (cyclesUnread) notes.push(`${cyclesUnread} serial landing(s) with no finished trunk run in the window — near misses not judged for them`);
   const unknownGreen = changes.filter((c) => c.greenMs === null).length;
@@ -262,6 +263,9 @@ function derive({ commits = [], runs = [], builds = {}, trunk = 'main', config =
     dropped: { count: dropped.length, attempted: builtMembers + dropped.length, rate: rate(dropped.length, builtMembers + dropped.length), byClass, members: dropped },
     serial: {
       landings: serialChanges.length, withMissedPartner: withMissed, withNearMiss: withNear,
+      // #556: the overlap rate's honest denominator — only a landing whose trunk-CI cycle was read
+      // could have been judged for a partner inside it; `overlapped` counts those that had one.
+      cyclesRead: serialChanges.length - cyclesUnread, overlapped,
       nearMissWait: summary(pairs.filter((p) => p.kind === 'near').map((p) => p.waitSec)),
       pairs,
     },

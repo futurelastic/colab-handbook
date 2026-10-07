@@ -193,6 +193,13 @@ const THRESHOLD_CASES = [
   ['\n  hot-file-count: 4\n  hot-files: 4', { 'hot-file-count': '4', 'hot-files': '4' }],
   [' 5', '5'],
   [' high', 'high'],
+  // #556: no-default batch keys, percents bounded at 100
+  ['\n  batch-overlap-pct: 30', { 'batch-overlap-pct': '30' }],
+  ['\n  batch-first-green-pct-min: 0', { 'batch-first-green-pct-min': '0' }],
+  ['\n  batch-eviction-pct-max: 100', { 'batch-eviction-pct-max': '100' }],
+  ['\n  batch-eviction-pct-max: 101', { 'batch-eviction-pct-max': '101' }],
+  ['\n  batch-min-samples: 0', { 'batch-min-samples': '0' }],
+  ['\n  batch-min-samples: 5', { 'batch-min-samples': '5' }],
 ];
 
 test('#560: the step fails exactly the thresholds entries the parser refuses', () => {
@@ -213,10 +220,14 @@ test('#560: a thresholds block ends at the next top-level key', () => {
   assert.doesNotMatch(r.stdout, /stack/);
 });
 
-test('#560: the names and floors the step lists are thresholds.js SPEC', () => {
-  const script = scripts[TEMPLATES[0]];
-  const listed = {};
-  for (const m of script.matchAll(/^\s*([a-z|-]+)\) min=(\d+) ;;$/gm)) for (const k of m[1].split('|')) listed[k] = Number(m[2]);
-  const spec = Object.fromEntries(Object.entries(thresholds.SPEC).map(([k, s]) => [k, s.min]));
-  assert.deepStrictEqual(listed, spec);
+test('#560/#556: the names, floors and ceilings the step lists are thresholds.js SPEC', () => {
+  for (const name of TEMPLATES) {
+    const script = scripts[name];
+    const listed = {};
+    for (const m of script.matchAll(/^\s*([a-z|-]+)\) min=(\d+)(?: max=(\d+))? ;;$/gm)) {
+      for (const k of m[1].split('|')) listed[k] = [Number(m[2]), m[3] === undefined ? thresholds.MAX_VALUE : Number(m[3])];
+    }
+    const spec = Object.fromEntries(Object.entries(thresholds.SPEC).map(([k, s]) => [k, [s.min, s.max === undefined ? thresholds.MAX_VALUE : s.max]]));
+    assert.deepStrictEqual(listed, spec, name);
+  }
 });
