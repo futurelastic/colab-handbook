@@ -77,6 +77,7 @@ const shipRoles = require('./lib/ship-roles'); // #372
 const refsBrake = require('./lib/refs-brake'); // #385
 const localAdopt = require('./lib/local-adopt'); // #393
 const ownerBranch = require('./lib/owner-branch'); // #394
+const humanDoor = require('./lib/ship-human-door'); // #525
 const {
   HOST, UserError, normIssueNum, issueTag, claimKey, today, nowISO, hoursSince, humanAge,
   parseArgs, table, shortRepo,
@@ -8380,7 +8381,9 @@ async function askMenu(rl, axis, promptFn) {
     if (resolved.ok) return resolved;
     process.stdout.write(`  ${resolved.message}\n`);
   }
-  throw new UserError(`${axis}: no valid answer after one re-prompt`);
+  throw new UserError(`${axis}: no valid answer after one re-prompt — nothing was written. Run \`colab adopt --axis ${axis}\` ` +
+    `to be asked again, or pass the value directly: \`colab adopt ${axis === 'tier' ? '--deploy' : `--${axis}`} <value>\` ` +
+    `(\`colab adopt --help\` lists them).`);
 }
 
 /**
@@ -8440,7 +8443,10 @@ async function adoptAskInteractive(rl, axesToAsk, cfg, checkExposure) {
         if (!problem) { chosen = resolved; break; }
         process.stdout.write(`  ✗ ${problem}\n  choose again (or skip):\n`);
       }
-      if (!chosen) throw new UserError('exposure: no answer this repo\'s shape supports after one re-prompt');
+      // #532: this refusal comes after a long interaction, so it names the way through, not just the stop.
+      if (!chosen) throw new UserError('exposure: no answer this repo\'s shape supports after one re-prompt — nothing was written. ' +
+        'Each "✗" above says why its value was refused. Run `colab adopt --axis exposure` and pick a value it accepts, ' +
+        'or `colab adopt --exposure <value>` non-interactively; choosing "skip" leaves exposure unanswered for now.');
       if (chosen.skip) continue; // decline — the fallback tier derivation picks this up
       answers.exposure = { values: { exposure: chosen.value }, mode: 'interactive' };
     } else {
@@ -10024,14 +10030,18 @@ function ciCureTrailerLine(cureVerdict, branch, trunk) {
   return `CI-Cure: branch ${branch} over-red ${trunk}@${shortSha(cureVerdict.redSha)} evidence ${shortSha(cureVerdict.evidenceSha)}${via}${admittedSuffix}${progressSuffix}`;
 }
 
-const HELP_SHIP = `colab ship [--repo <path>] [--worktree <name> | --branch <br> | --direct] [--message "<msg>"] [--refs <N[,M]>] [--keep-worktree] [--delete-branch | --keep-branch] [--adopt] [--session <id>] [--session-name <s>] [--dry] [--json]
+const HELP_SHIP = `colab ship [--repo <path>] [--worktree <name> | --branch <br> | --direct] [--message "<msg>"] [--refs <N[,M]>] [--keep-worktree] [--delete-branch | --keep-branch] [--adopt] [--answered-by <name>] [--session <id>] [--session-name <s>] [--dry] [--json]
        colab ship --batch <b1,b2[,b3]> [--repo <path>] [--keep-worktree] [--delete-branch | --keep-branch] [--session <id>] [--session-name <s>] [--dry]
 
 The ONE sanctioned door for code-wrap Phase B: squash-merge a session branch into the BASE IT WAS
 CUT FROM — trunk for an ordinary session, or the declared integration line recorded on its worktree
 (project.yml \`integration:\`). Autonomy is granted by the repo's .github/project.yml
 (\`autonomy: auto-trunk\`) — NOT by any flag. Without that grant, ship refuses and a human must run
-Phase B — unless the change is DOCS-ONLY, computed from git (#345, below). ship NEVER touches main (when trunk≠main), NEVER tags, NEVER promotes.
+Phase B — unless the change is DOCS-ONLY, computed from git (#345, below). That human runs ship
+too, through the HUMAN DOOR (#525): at an interactive terminal (outside an agent shell) ship asks
+them to confirm; non-interactively, COLAB_HUMAN=1 plus --answered-by <name>. Every other
+precondition still applies, and the 🚢 comment records that the human door opened the gate.
+ship NEVER touches main (when trunk≠main), NEVER tags, NEVER promotes.
 
 Base and target are ONE decision. A branch cut from a long-lived line and shipped into trunk would
 drag the entire line in behind it, as a single squash commit that reads like a small change — so
@@ -10041,6 +10051,8 @@ promotes is an integration event of the same weight as a promotion, and stays hu
 
 Sequence (each step gated; any failure aborts before the push — the target is never half-shipped):
   a. autonomy gate      repo must grant auto-trunk (no --force override) — or the diff is docs-only (#345)
+                        — or a person runs ship through the human door (#525): a confirmed interactive
+                        terminal, or COLAB_HUMAN=1 + --answered-by <name>. An agent shell is no terminal.
   b. preconditions      target CI alive+green (UNLESS the branch proves the CURE RULE, #281 — no
                         human step needed — OR every issue the branch carries holds a valid
                         \`colab ci-grant\` over trunk's CURRENT red sha, #105 — see below) · no new
@@ -11682,7 +11694,8 @@ function cmdShipDryJson(opts) {
   }
 
   // ---- (a) AUTONOMY GATE — does NOT short-circuit here; an unattended caller wants the whole table ----
-  const autonomyGate = shipAutonomyGate(doc, () => docsOnly.branchChanges(git, repoAbs, target, shipRefFor(repoAbs, sess.branch)));
+  const autonomyGate = shipAutonomyGate(doc, () => docsOnly.branchChanges(git, repoAbs, target, shipRefFor(repoAbs, sess.branch)),
+    humanDoor.humanDoorFromProcess(process, opts.answeredBy)); // #525
   autonomyGatePayloadVal = autonomyGatePayload(autonomyGate);
   checks.push({ name: 'autonomy granted', ok: autonomyGate.ok, class: autonomyGate.ok ? null : HUMAN_GATED, detail: autonomyGate.detail });
 
@@ -12081,7 +12094,7 @@ function shipEvidenceClose({ repoAbs, st, sess, target, trunk, gh, closeIssues, 
       `The deliverable is recorded on this issue (see the comment(s) above), which is what authorised ` +
       `the close — colab closes a zero-diff issue only when it already carries a comment colab did not ` +
       `write. The zero-diff fact was measured from git: ${mode.why}.${shipSess}`;
-    const c = git.ghIssueComment(repoAbs, num, body);
+    const c = git.ghIssueComment(repoAbs, num, body + (opts.humanDoorEvidence || '')); // #525
     if (!c.ok) warn(`could not post the evidence-close comment on #${num} — closing anyway`);
     const r = tracker.forRepo(repoAbs).issueClose(num, { reason: 'completed' });
     if (!r.ok) { skipped.push({ num, why: `gh issue close failed: ${(r.stderr || '').split('\n')[0]}` }); continue; }
@@ -12243,7 +12256,8 @@ function cmdShipDirect(opts) {
   // #345: a trunk-direct unit has no branch diff. Its change set is every trunk commit since its
   // earliest claim — by anyone, so the verdict can only err toward refusing (lib/docs-only.js).
   const since = claims.map((c) => c.created).filter(Boolean).sort()[0];
-  const autonomyGate = shipAutonomyGate(doc, () => docsOnly.directChanges(git, repoAbs, trunk, since));
+  const autonomyGate = shipAutonomyGate(doc, () => docsOnly.directChanges(git, repoAbs, trunk, since),
+    humanDoor.humanDoorFromProcess(process, opts.answeredBy)); // #525
   autonomyGatePayloadVal = autonomyGatePayload(autonomyGate);
   checks.push({ name: 'autonomy granted', ok: autonomyGate.ok, class: autonomyGate.ok ? null : HUMAN_GATED, detail: autonomyGate.detail });
 
@@ -12322,6 +12336,7 @@ function cmdShipDirect(opts) {
     process.stderr.write(`✗ ${shortRepo(repoAbs)} does not grant auto-trunk (project.yml autonomy: ${autonomyGate.declared}).\n`);
     process.stderr.write('  A human must close this unit. (Autonomy is granted by the repo, not by a flag — --force cannot override.)\n');
     process.stderr.write(`  The docs-only exception (#345) does not apply either: ${autonomyGate.docsOnly.reason}.\n`);
+    process.stderr.write(shipHumanDoorRefusal(autonomyGate, '--direct'));
     return 1;
   }
   if (!coreOk && coreReview.corePaths.length) {
@@ -12333,6 +12348,7 @@ function cmdShipDirect(opts) {
     process.stderr.write('  unit\'s reviewed landing, a human closes this issue by hand.\n');
   }
   if (autonomyGate.via === 'docs-only') print(`→ AUTONOMY: ${autonomyGate.detail} (#345) — project.yml autonomy: ${autonomyGate.declared}`);
+  if (autonomyGate.via === 'human') print(`→ AUTONOMY: ${autonomyGate.detail}`);
   print(`→ MODE: evidence-close (trunk-direct — the work is already on ${trunk}; nothing to merge)`);
   if (opts.dry) {
     print(preOk ? '→ READY: preconditions pass. Re-run without --dry to close.' : '→ NOT READY: fix the ✗ rows above.');
@@ -12344,6 +12360,7 @@ function cmdShipDirect(opts) {
     return preOk ? 0 : 1;
   }
   if (!preOk) { process.stderr.write('✗ Aborting: one or more preconditions failed (see ✗ above). Nothing was closed.\n'); return 1; }
+  if (!shipHumanDoorGo(autonomyGate, opts, `close ${issues.map((n) => '#' + n).join(' ')} on ${trunk} (trunk-direct)`)) return 1;
 
   const tip = shortSha(git.git(['rev-parse', trunk], repoAbs).stdout);
   const mode = { evidenceClose: true, direct: true, why: `trunk-direct unit — ${trunk}@${tip} is checked out clean and published to ${git.remoteInfo(repoAbs).name || 'origin'}/${trunk}` };
@@ -12561,20 +12578,81 @@ function shipOpenCorePr(repoAbs, cr, { target, branch, title, body }) {
  *
  * Returns `{ ok, via: 'auto-trunk'|'docs-only'|null, declared, docsOnly: verdict|null, detail }`.
  */
-function shipAutonomyGate(doc, readDocsOnly) {
+function shipAutonomyGate(doc, readDocsOnly, door = null) {
   const declared = doc.autonomy ? String(doc.autonomy) : 'absent';
-  if (declared === 'auto-trunk') return { ok: true, via: 'auto-trunk', declared, docsOnly: null, detail: 'auto-trunk' };
+  if (declared === 'auto-trunk') return { ok: true, via: 'auto-trunk', declared, docsOnly: null, human: null, detail: 'auto-trunk' };
   const verdict = readDocsOnly();
   if (verdict.docsOnly) {
-    return { ok: true, via: 'docs-only', declared, docsOnly: verdict, detail: `${verdict.reason} — autonomy exception` };
+    return { ok: true, via: 'docs-only', declared, docsOnly: verdict, human: null, detail: `${verdict.reason} — autonomy exception` };
   }
-  return { ok: false, via: null, declared, docsOnly: verdict,
-    detail: `project.yml autonomy: ${declared} — a human must trigger Phase B (not docs-only: ${verdict.reason})` };
+  // #525: the human door — the person running ship IS the go (ruling on #525, option 1). Checked
+  // after docs-only, so a docs-only change keeps its own (agent-usable) door and record.
+  if (door && door.open) {
+    return { ok: true, via: 'human', declared, docsOnly: verdict, human: door,
+      detail: `human door (#525): ${door.why} — project.yml autonomy: ${declared}` };
+  }
+  return { ok: false, via: null, declared, docsOnly: verdict, human: door,
+    detail: `project.yml autonomy: ${declared} — a human must trigger Phase B (not docs-only: ${verdict.reason}; human door closed: ${door ? door.why : 'not offered'})` };
+}
+
+/** #525: the human-door refusal lines — what a person runs, never just "a human must". */
+function shipHumanDoorRefusal(gate, selector) {
+  const lines = [];
+  if (gate.human && gate.human.why) lines.push(`  The human door (#525) did not open: ${gate.human.why}.`);
+  lines.push('  A person gives the go by running ship themselves — every other precondition still applies:');
+  for (const l of humanDoor.humanDoorCommands(selector)) lines.push(`    ${l}`);
+  lines.push('  An agent does not pass this door on its own (CONVENTIONS.md §2, *The human door*).');
+  return lines.join('\n') + '\n';
+}
+
+/** #525: the ship selector to paste into the refusal's command line. */
+function shipSelector(opts, sess) {
+  if (opts.direct) return '--direct';
+  if (opts.worktree) return `--worktree ${opts.worktree}`;
+  if (sess && sess.name) return `--worktree ${sess.name}`;
+  if (opts.branch) return `--branch ${opts.branch}`;
+  return sess && sess.branch ? `--branch ${sess.branch}` : '';
+}
+
+/**
+ * #525: confirm the TTY door by a typed answer. Synchronous on purpose — ship is a sync pipeline,
+ * and the prompt sits before any write. Anything but `y`/`yes` is a no; EOF is a no.
+ */
+function shipConfirmAtTerminal(question) {
+  process.stdout.write(`${question} [y/N] `);
+  const buf = Buffer.alloc(256);
+  let line = '';
+  for (;;) {
+    let n = 0;
+    try { n = fs.readSync(0, buf, 0, buf.length, null); } catch (e) { if (e.code === 'EAGAIN') continue; return false; }
+    if (n <= 0) break;
+    line += buf.toString('utf8', 0, n);
+    if (line.includes('\n')) break;
+  }
+  return /^\s*y(es)?\s*$/i.test(line.split('\n')[0]);
+}
+
+/**
+ * #525: the last step before any write when the human door opened the gate. A TTY door asks the
+ * person to confirm; a COLAB_HUMAN door already carries its go (`--answered-by`). Either way the
+ * evidence clause is stashed on `opts` for the comment writers. Returns false on a declined prompt.
+ */
+function shipHumanDoorGo(gate, opts, what) {
+  if (gate.via !== 'human') return true;
+  if (gate.human.how === 'tty' && !shipConfirmAtTerminal(`Human door (#525): ${what}. This is your go — proceed?`)) {
+    process.stderr.write('✗ Not confirmed at the terminal. Nothing was changed.\n');
+    return false;
+  }
+  opts.humanDoorEvidence = humanDoor.humanDoorEvidence(gate.human);
+  return true;
 }
 
 /** #345: the additive `autonomyGate` field of the `--dry --json` output. */
 function autonomyGatePayload(gate) {
-  return { via: gate.via, docsOnly: gate.docsOnly };
+  // #525: `human` is additive and present only when the human door was consulted, so an
+  // auto-trunk / docs-only payload stays byte-identical to before.
+  return gate.human ? { via: gate.via, docsOnly: gate.docsOnly, human: { open: gate.human.open, how: gate.human.how, why: gate.human.why } }
+    : { via: gate.via, docsOnly: gate.docsOnly };
 }
 
 /** The sha a branch name resolves to, local first, else origin's copy (#324's remote-only shape). */
@@ -12585,7 +12663,7 @@ function shipRefFor(repoAbs, branch) {
 
 function cmdShip(argv) {
   const opts = parseArgs(argv, {
-    values: { '--repo': 'repo', '--worktree': 'worktree', '--branch': 'branch', '--message': 'message', '--session': 'session', '--session-name': 'sessionName', '--batch': 'batch' },
+    values: { '--repo': 'repo', '--worktree': 'worktree', '--branch': 'branch', '--message': 'message', '--session': 'session', '--session-name': 'sessionName', '--batch': 'batch', '--answered-by': 'answeredBy' },
     // #479: a repeated --refs used to keep only its LAST value, and every dropped issue then became a
     // `Closes` line on trunk — an issue meant to stay open, auto-closed by the push. --refs now
     // accumulates (a repeat is the same as one comma list); every OTHER value flag to ship refuses a
@@ -12660,11 +12738,13 @@ function cmdShip(argv) {
 
   // ---- (a) AUTONOMY GATE — granted by the repo file, never by the caller ----
   // #345: …or the branch's diff is documentation only, computed here from git — never asserted.
-  const autonomyGate = shipAutonomyGate(doc, () => docsOnly.branchChanges(git, repoAbs, target, shipRefFor(repoAbs, sess.branch)));
+  const autonomyGate = shipAutonomyGate(doc, () => docsOnly.branchChanges(git, repoAbs, target, shipRefFor(repoAbs, sess.branch)),
+    humanDoor.humanDoorFromProcess(process, opts.answeredBy)); // #525
   if (!autonomyGate.ok) {
     process.stderr.write(`✗ ${shortRepo(repoAbs)} does not grant auto-trunk (project.yml autonomy: ${autonomyGate.declared}).\n`);
     process.stderr.write('  A human must trigger Phase B. (Autonomy is granted by the repo, not by a flag — --force cannot override.)\n');
     process.stderr.write(`  The docs-only exception (#345) does not apply either: ${autonomyGate.docsOnly.reason}.\n`);
+    process.stderr.write(shipHumanDoorRefusal(autonomyGate, shipSelector(opts, sess)));
     return 1;
   }
 
@@ -13057,6 +13137,9 @@ function cmdShip(argv) {
     }
     process.stderr.write('✗ Aborting: one or more preconditions failed (see ✗ above). Nothing was pushed.\n'); return 1;
   }
+  if (!shipHumanDoorGo(autonomyGate, opts, mode.evidenceClose
+    ? `evidence-close ${sess.issues.map((n) => '#' + n).join(' ')} (${sess.branch} has nothing to merge)`
+    : `squash-merge ${sess.branch} into ${target}`)) return 1;
 
   // ---- (b3) evidence-close: the whole B0–B2 sequence is skipped, because there is nothing to merge ----
   if (mode.evidenceClose) return shipEvidenceClose({
@@ -13573,7 +13656,8 @@ function cmdShip(argv) {
   // last — see warnDeferred's own comment for why this is scoped to exactly this window. The
   // window itself now OPENS at the push (e2, #304), not here: post-ship's warnings belong in the
   // same block, and re-assigning the collector here would silently discard them.
-  shipLandedTail({ repoAbs, sess, target, trunk, gh, sha, closeIssues, refsIssues, refsSet, integration, opts });
+  shipLandedTail({ repoAbs, sess, target, trunk, gh, sha, closeIssues, refsIssues, refsSet, integration, opts,
+    evidenceExtra: opts.humanDoorEvidence || '' }); // #525
 
   print('');
   print(`✓ Shipped ${sess.branch} → ${target} @ ${sha}${sess.issues.length ? ' (' + sess.issues.map((n) => '#' + n).join(' ') + ')' : ''}`);

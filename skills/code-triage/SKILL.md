@@ -88,7 +88,7 @@ skill performs has to be idempotent.
 
 **This skill's tracker writes are exhaustive — the list below is all of them, and nothing
 else is authorised.** An enumeration of "which writes must be careful" reads, by omission,
-as permission for anything unlisted; it is not. If a write is not one of the eight below, it
+as permission for anything unlisted; it is not. If a write is not one of the nine below, it
 is not a triage write, no matter how naturally it seems to belong on the issue:
 
 1. `blocked_by` dependency edges, via `colab blocked` (§4, #251)
@@ -105,18 +105,12 @@ is not a triage write, no matter how naturally it seems to belong on the issue:
    failure's flake class, one comment on it recording this occurrence (§5.2, #390) — or
    the **adoption** of an open issue that already diagnoses this red sha: its retitle to
    that form, the removal of `agent-filed`, and one comment (§5.2 step 3, #430). All four
-   bounds must hold, and the list is the whole of them:
-   - trunk CI is **red** at `<trunk>`'s current head sha (§5, asked by commit);
-   - **no open, accepted `TRUNK RED:` issue exists** in this repo (accepted = no
-     `agent-filed` label) — one open red is one patch in flight, and a second filing
-     splits it;
-   - the **mechanical re-run has already been attempted** for this sha, or **cannot
-     apply** — the red commit touches more than the docs lane, or no scheduled driver
-     runs this repo;
-   - **at most one filing per red sha** — the issue, the one comment, or the adoption;
-     never two of them and never twice.
+   bounds in [5.2-trunk-red.md](5.2-trunk-red.md) must hold — red at head, none accepted
+   open, re-run spent or inapplicable, at most one filing per red sha.
+9. a `HOT FILE: <path> — <N> issues wait on it` structure issue, when ≥ 3 waiting issues
+   are held on one path and no open issue already restructures it (§3, #540)
 
-**Rule, beyond the list:** writes 6-7 only transcribe; write 8 records a measurement, never a
+**Rule, beyond the list:** writes 6-7 only transcribe; writes 8-9 record a measurement, never a
 diagnosis. Triage never re-runs a CI job. §6 is never posted; "only when changed" authorises
 nothing new. Every write reads before it writes, and a `deps-checked` older than a
 `blocked_by_added` is stale. Full text: [0.2-idempotence.md](0.2-idempotence.md).
@@ -165,8 +159,8 @@ own bucket (§6), never silently dropped.
   `project.yml`, never inferred from a name. Off the ranked list, into blocked; evaluate its
   newest `Hold:` line's `wake:` every pass and print `FIXED` (a legacy hold transcribed —
   write 6, only when label, `review-by:` date and a recorded reason naming the owner all
-  exist), `STALL`, `WAKE` or `HELD`. Record unmet wakes in `$CACHE.wakes`. Triage never
-  removes a hold. Full text, with the wake table: [2-held.md](2-held.md).
+  exist), `STALL`, `WAKE` or `HELD`; check the hold is what it says (`not external`, `misfiled
+  hold`). Record unmet wakes in `$CACHE.wakes`. Never removes a hold. Full text: [2-held.md](2-held.md).
 
 ## 3. Group — this is a correctness constraint, not tidiness
 
@@ -200,12 +194,17 @@ not the issue's own writes a file the issue will edit, append those paths to the
 `Touches:` line (write 7) — append, never rewrite — and still report it. It is not a group.
 Full text: [3-touches.md](3-touches.md).
 
+### Then count the hot files — one path holding ≥ 3 waiting issues is a structure issue (#540)
+
+**Rule:** ≥ 3 open issues held on one path by §5's file gate ⇒ write 9, read by title first; one
+restructuring that path is itself waiting ⇒ `self-deadlock` finding. Full text: [3-hot-file.md](3-hot-file.md).
+
 ## 4. Order by blast radius, not by number
 
-**Rule:** rank surviving groups — 1 blocks other work, 2 reaches users (by `exposure`; a bare
-legacy `tier: B` gives no signal), 3 cheap and unblocking, 4 everything else — then push every
-`low-priority` group to the back. A human's recorded queue order outranks yours among the
-groups it names, never as an edge. State each rank's reason. Full text: [4-order.md](4-order.md).
+**Rule:** band `priority:now` › `priority:high` › unlabelled › `low-priority` (#537); within a
+band rank 1 blocks other work (≥ 3 `blocked_by` dependents, a CI/tooling fix, a hot-file split), 2 reaches users (by `exposure`; bare legacy `tier: B` gives no
+signal), 3 cheap and unblocking, 4 the rest — each with its reason. A band orders, never admits. A human's recorded
+queue order outranks yours among groups it names, never as an edge. Full text: [4-order.md](4-order.md).
 
 ### Then write the dependencies down — as relationships, not just as report prose
 
@@ -306,7 +305,7 @@ Hand the top group to **code-start**, which will re-verify the claim before taki
 
 ## Verify complete
 
-- **No write outside §0.2's eight landed on the tracker.** In particular: no per-beat
+- **No write outside §0.2's nine landed on the tracker.** In particular: no per-beat
   narrative verdict comment, no "Triage at trunk `<sha>`" note, no "re-measure — verdict
   CHANGED/REVERSED" update, no correction to any of these, no restated §6 report, no
   "still ready, unchanged" note — the report went to the console and nowhere else. A
@@ -343,12 +342,13 @@ Hand the top group to **code-start**, which will re-verify the claim before taki
   **Every `Touches:` append names a path measured against a live branch** (§3), and nothing
   already on the line was rewritten or removed.
 - **No ref was rebased, pushed, deleted or otherwise edited by this pass.** Triage names
-  the order; `code-ship` B0 performs it. Neither is among §0.2's eight authorised writes.
+  the order; `code-ship` B0 performs it. Neither is among §0.2's nine authorised writes.
 - **The findings limits line was printed — clean or not** — and it claims only pass-time
   knowledge, naming what it is blind to. A findings section that reads as a guarantee of no
   second branch is a fail, not a wording nit: nothing here polls.
 - The finding went to the console and to `$CACHE`'s `conclusion.findings`, and **nowhere on
-  the tracker**. It is not one of §0.2's writes, and not a ninth.
+  the tracker**. It is not one of §0.2's writes, and not a tenth.
+- Every path holding ≥ 3 waiting issues got one `HOT FILE:` issue or a named reason not (§3).
 - Every open Issue is accounted for in exactly one bucket.
 - The verdicts were **persisted, not only printed**: every free group got its
   `colab readiness` marker, every blocked group was left unset (or cleared if
@@ -393,8 +393,8 @@ Hand the top group to **code-start**, which will re-verify the claim before taki
   got `mechanical-lane` on its lead issue plus a one-line reason and suggested batch
   size, and a `mechanical:` line in the §6 report — and, same as `needs-plan`, it landed
   on the minority actually both mechanical and oracle-checkable, not on every group.
-- Every `low-priority` group was ranked last in §4's list — never off it, never sorted
-  by its own blast-radius reasoning alone — and carries a `priority:` line in the §6
-  report; §5's readiness gate treated it exactly like any other group.
+- Every `priority:now`/`priority:high` group was banded first and every `low-priority` group
+  last in §4's list — never off it, never sorted by blast radius alone — each with a
+  `priority:` line in §6; §5's readiness gate treated them like any other group.
 - Anything surprising — a stale claim, a dead trunk CI, an epic whose table
   contradicts its title — is **reported**, not silently worked around.

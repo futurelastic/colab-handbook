@@ -81,8 +81,10 @@ Full text: [0-handoff-contract.md](0-handoff-contract.md).
 the go-ahead for the trunk merge (B2) once every gate below passes on its own terms.
 Otherwise ⇒ a fresh human go-ahead — typed in the session, or a dashboard click carrying a
 timestamp **and** an intent id — unless `colab ship --dry` itself reports the change
-docs-only (#345). Never compose a go-ahead yourself. No door ever covers a promotion, a tag
-or anything that deploys.
+docs-only (#345). Without either, `colab ship` refuses an agent: hand the human the command
+its refusal prints, and they run it through the human door (#525). Never set the `COLAB_HUMAN`
+flag on a go-ahead's strength. Never compose a go-ahead yourself. No door ever covers a promotion,
+a tag or anything that deploys.
 Full text: [go-ahead.md](go-ahead.md).
 
 ## What a defer is for — and what it is never for (#257)
@@ -91,7 +93,7 @@ Full text: [go-ahead.md](go-ahead.md).
 coordinator cannot clear, a conflict needing the author's judgement, or a missing human gate.
 The originating session's state (stranded composer text, silence, parked) is never one; the
 order of same-file siblings is mechanical, never a human gate. A recorded defer names the
-precondition, what clears it, and a re-measure trigger.
+precondition, what clears it, and a re-measure trigger; a landed gate fix re-measures every park.
 Full text: [defer.md](defer.md).
 
 ## B0. Is there still cargo? Then sync `<base>` into the branch
@@ -101,8 +103,9 @@ Full text: [defer.md](defer.md).
 merge, go to B2b–B4. `colab landed --worktree <name>`: `cargo`/`unknown` ⇒ continue;
 `landed` ⇒ B2b–B4; zero commits ⇒ `colab ship` evidence-close; a trunk-direct unit ⇒
 `colab ship --direct`. Then `git merge origin/<base>`, check `git diff --name-only
---diff-filter=U`: generated file ⇒ take a side and regen; purely mechanical ⇒ resolve; needs
-judgement ⇒ `git merge --abort` and send back. Merge only `<base>`, never a sibling's branch.
+--diff-filter=U`: generated file ⇒ trunk's side and regen; purely mechanical (a retired shared
+file ⇒ trunk's side; an append-only ledger ⇒ the union) ⇒ resolve; needs judgement ⇒ `git merge
+--abort` and send back. Merge only `<base>`, never a sibling's branch.
 Assert `git diff --stat origin/<base> HEAD` shows only this branch's files, then gate the sync
 commit (push and read branch CI where it exists).
 **Stop:** a merge that failed with zero conflicted paths never ran — do not commit it.
@@ -127,8 +130,9 @@ Full text: [b1-base-ci.md](b1-base-ci.md).
 
 ### Red trunk — first ask "is the red real?", then "is this branch the patch?" (#353, #354)
 
-**Rule:** classify the red first (`red:infra` ⇒ one re-run; `red:finding` ⇒ it needs a
-`TRUNK RED:` issue and a patch). Only the branch **carrying the fix** goes first, may sync
+**Rule:** classify the red first (`red:infra` ⇒ one re-run, keyed on `attempt` 1, after
+cancelling a queued same-sha duplicate; same-minute deaths on several runners ⇒ check the host
+first; a repeat ⇒ `TRUNK RED:` or ops; `red:finding` ⇒ it needs a `TRUNK RED:` issue and a patch). Only the branch **carrying the fix** goes first, may sync
 onto the red, and may open a PR (or dispatch a dry run / `workflow_dispatch`) to obtain the
 evidence the cure rule reads; a bystander waits for green trunk and records a defer. Not
 sure ⇒ bystander. `ci-grant: reviewer` lets you mint a reviewer grant for the patch only.

@@ -20,6 +20,8 @@ name suggests.
 | each label under `holds:` in `project.yml` | every start | whoever parks it, with a `Hold:` line | the `Hold:` line's owner, once the wake fires |
 | `agent-filed` | **unattended** starts only; stays on the READY list | the filing agent | never cleared. A human's start is the approval |
 | `low-priority` | nothing; it ranks last (§6) | the filer or a human | a human, to release it to unattended starts |
+| `priority:now` | nothing; it ranks first (§4) — never skips a gate or a file hold | the repo owner, or a coordinator quoting the owner's order on the issue | the owner or a coordinator |
+| `priority:high` | nothing; it ranks ahead of unlabelled work (§4) | the owner or a coordinator — an agent only proposes it | the owner or a coordinator |
 
 `agent-filed` gets one line of its own in a ready group's report, because an unattended
 reader must not start it:

@@ -79,6 +79,19 @@ READY  fix/stale-log-cleanup-190   #190
        start: colab claim 190 --worktree stale-log-cleanup-190
 ```
 
+A group carrying `priority:now` or `priority:high` (§4, #537) carries the same line,
+showing its band — printed in band order, ahead of every unlabelled group:
+
+```
+READY  fix/payroll-rounding-212   #212
+       why: reaches users (exposure: live); trunk CI green 2h ago
+       priority: now — owner's order, ranked first; gates unchanged
+       start: colab claim 212 --worktree payroll-rounding-212
+```
+
+A held group keeps its band on its held line (`priority: now — waits for <holder> to ship`),
+so the owner can see the hold, not a silently missing issue.
+
 A **UI-affecting** ready group — its files fall under a UI surface (views,
 templates, frontend components, anything a design system consumes) — carries one
 more line, reporting whatever `docs/design/` shows for it (`CONVENTIONS.md`

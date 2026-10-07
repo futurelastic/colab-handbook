@@ -82,6 +82,22 @@
       }
     },
     {
+      "wire": "priority:now",
+      "decoded": {
+        "kind": "convention",
+        "value": "priority:now",
+        "known": true
+      }
+    },
+    {
+      "wire": "priority:high",
+      "decoded": {
+        "kind": "convention",
+        "value": "priority:high",
+        "known": true
+      }
+    },
+    {
       "wire": "release-hold",
       "decoded": {
         "kind": "convention",

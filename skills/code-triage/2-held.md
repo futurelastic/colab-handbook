@@ -89,6 +89,31 @@ Then print exactly one of:
 - **`wake: ruling`** → the `Because:` line is the ask. Quote it in the report so the
   person who clears the hold can see what they are asked, not only that something waits.
 
+### Is the hold what it says it is? (#540)
+
+A hold names who clears it and what ends it. Both can be wrong in a way the wake table cannot
+see, and a hold that is wrong about its owner waits forever on someone who is not coming. So
+before printing `WAKE`, `HELD` or an `ASKED` card that chases the owner, check two things:
+
+- **An "external party" that is not external.** On `deferred:external-party`, read the
+  `owner:` and every `wake:` reference. When one resolves to this repo — an issue here, a
+  branch here, work a session in this repo could do — the wait is a dependency, not an
+  external one. Print the finding `not external: <ref> — a dependency, propose blocked_by #M`
+  instead of chasing the party. Triage writes nothing: correcting a human's hold is the
+  owner's act, and a `blocked_by` edge for it is §4's write only once the owner agrees.
+- **A `deferred:measurement` owned by a person.** That kind is for waits a machine can
+  measure (`CONVENTIONS.md` §5, *Holds*). When its `owner:` is a person who has to look, and
+  its `wake:` is nothing a pass can measure, it is a human wait mislabelled — print the
+  finding `misfiled hold: a human wait — <owner>`, and print its blocked line as a wait on
+  that person — the clearer named, asked or not — rather than as a measurement in flight. A
+  repo that declares a human-wait label under `holds:` is where it belongs; triage does not
+  relabel it.
+
+**A met wake is triage's job that pass.** Every condition measured met ⇒ the `WAKE` line
+prints in the pass that measured it — short-circuited passes included, through
+`$CACHE.wakes` (§0) — and its *wake met, lift?* proposal goes to the owner then, never left
+as `HELD` for a later pass to notice. Dispatching that proposal is not lifting the hold.
+
 Record every `HELD` line's `wake:` value in `$CACHE.wakes` (§0.1), so a later
 short-circuited ping can still see a date come due or another repo's issue close.
 
