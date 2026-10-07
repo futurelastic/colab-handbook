@@ -22,9 +22,9 @@ Do not use this to postpone A2's actual job. "This doc is now wrong" is this ses
 
 **Touched the instruction file? Re-check its pointer section against `ls docs/`.** An index
 that omits half the docs is worse than no index, because a reader trusts it and
-stops looking. Measured: one repo's pointer section lists a session-notes file and
-the README while omitting four docs totalling 120 KB — this step grew the body for
-14 commits and never once maintained the index.
+stops looking.
 
 Never write a secret into docs — only *where it lives* (a GitHub Secret, `.env`
 on the server, a password manager). Docs are deliverable paths; commit them in A3.
+
+Why: [ADR 536](../../docs/adr/536-code-wrap-a2-new-rule-rationale.md).

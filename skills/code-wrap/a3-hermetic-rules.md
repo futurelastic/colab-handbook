@@ -12,9 +12,7 @@ always prints which network mode it used. Lint and type checks are not rerun —
 test step reads the environment in the way this catches. A toolchain manager's home
 (`RUSTUP_HOME`, `CARGO_HOME`, `PYENV_ROOT`, `GOPATH`, … — the list is in `--help`) is
 pinned to its real directory before `HOME` moves, when you have not set it and the
-directory exists, and each pin is printed (#447). The toolchain is what the tests run
-**on**, not something they read: without the pin a rustup proxy in an empty `HOME` tries
-to download a toolchain with the network off, and the verdict blamed the code for it.
+directory exists, and each pin is printed (#447).
 `--no-pin` gives the strict run back.
 
 | verdict | means | A3 is |
@@ -33,10 +31,6 @@ to download a toolchain with the network off, and the verdict blamed the code fo
   home variable and re-run. That is not a reason to `--keep` something else.
 - **Record the verdict word in A1's distill and in the hand-off**, not only "gate green".
   `code-ship` §0 reads it.
-- **Why this is a command and not a sentence here:** a test once read its author's home
-  config and a local fleet daemon. It was green in every local wrap and red on every CI
-  runner, and the red trunk then blocked the repo's sweep. The lesson was written down in
-  prose and the same class recurred two days later. Prose did not stop it; a gate does.
 - **Not a substitute for A5's branch-CI read.** Runners differ in more than environment
   (OS, toolchain, a browser to boot). This closes one cause before the push. A5 still
   reads the rest after it.
@@ -55,13 +49,12 @@ to download a toolchain with the network off, and the verdict blamed the code fo
   branch (for example a workflow that runs only on `pull_request` with no PR open), a class
   other than `green`, or a workflow that does not run the tests. Taking this path means the
   normal local run in A3 still happens, but the hermetic half waits for A5; if A5 then reads
-  anything but `green`, run `colab gate-hermetic` before you hand off. Why: on a repo whose
-  suite takes 6–10 minutes locally and about 2 on CI, the local repeat was the largest single
-  cost of a ship pass (up to 23 minutes of gate runs in one pass) and added no evidence the
-  CI run at the same sha had not already given.
+  anything but `green`, run `colab gate-hermetic` before you hand off.
 - **Run a long suite once, with its output teed to a file; grep the file for each question
   after that** (`<test command> 2>&1 | tee "$TMPDIR/gate.log"`, with `set -o pipefail` so the
   pipe keeps the suite's exit code). Never re-run the suite to read a different slice of its
-  output. Two measured ship passes re-ran a 7-minute suite only for that.
+  output.
 - No `colab` on this machine → do the same by hand and say so: `env -i HOME="$(mktemp -d)"
   PATH="$PATH" <test command>`, network left on (say that too).
+
+Why: [ADR 536](../../docs/adr/536-code-wrap-a3-hermetic-rules-rationale.md).

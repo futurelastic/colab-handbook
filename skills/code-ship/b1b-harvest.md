@@ -66,18 +66,13 @@ grep -rn "<thing the issue describes>" <paths>
 
 Never close a partial issue bare — that buries the open question where nobody
 will find it again. Never leave it whole either — the next session reads an
-untouched issue as untouched work and redoes what you already shipped. This is
-the same failure mode as `(#N)`: issues sitting open with their code long since
-merged (`CONVENTIONS.md` [§4](../../CONVENTIONS.md#4-branches-and-commits)).
+untouched issue as untouched work and redoes what you already shipped.
+
+Why: [ADR 536](../../docs/adr/536-code-ship-b1b-harvest-rationale.md).
 
 **This sort is now MECHANICALLY checked, not honour-system (#74), and the check
-now refuses the MERGE, not just the close (#263).** The incident that motivated
-#74: an issue was closed by squash-merge with a third of its three-section
-scope unimplemented — the sections were prose, so nothing could catch it.
-#74's own fix — downgrading `Closes #N` to a silent `Refs #N` and shipping
-anyway — turned out to still fail, just quietly: measured on one repo over
-~8 weeks, 125 such downgrades against only 10 commits that ever declared a
-remainder, so the redirect was reported but essentially never read. If the
+now refuses the MERGE, not just the close (#263).**
+If the
 issue's `## Plan` is a real GitHub checklist (`- [ ]` one line per
 deliverable — CONVENTIONS.md [§4](../../CONVENTIONS.md#4-branches-and-commits), *Merging*),
 `colab ship` parses it before composing the squash body and **refuses to
@@ -111,9 +106,8 @@ reads as startable code work again. So in the **same step** as the ship:
     | sed 's#.*/##')        # also add this repo's human-wait label from `holds:`, if it declares one
   gh issue comment "$HV" --body $'- [ ] #'"$N"$' — <steps to run>\n  Evidence wanted: <what the person posts back>'
   ```
-  Stopping once per finished issue is what this replaces. In one adopted repo, five
-  finished issues sat open for days as `deferred:measurement`, and the person they
-  were waiting on never saw them.
+  Stopping once per finished issue is what this replaces.
+  Why: [ADR 536](../../docs/adr/536-code-ship-b1b-harvest-rationale.md).
 - **Leftover is another non-code wait** (a measurement a machine can take, a date, an
   outside party) → park it:
   ```sh

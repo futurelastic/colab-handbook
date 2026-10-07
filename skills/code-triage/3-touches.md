@@ -8,11 +8,9 @@ behind them — moved here verbatim (#524).
 A scheduler that brakes on files decides from the **issue text**: it starts an issue only
 when no live branch writes a file the issue names. By convention the issue names them on a
 `Touches:` line in its body. Triage's report is console output, so a collision this pass
-measures and only *prints* is invisible to that brake. Measured on an adopting repo: triage
-found an issue's files held by a live branch twice, and wrote it as prose both times. The
-brake could not see it, so a code session started on the issue and refused on the
-collision. The refusal counted as a strike and blocked the issue, and the block outlived
-the collision.
+measures and only *prints* is invisible to that brake.
+
+Why: [ADR 536](../../docs/adr/536-code-triage-3-touches-rationale.md).
 
 So when this pass **measures** that a file an issue will edit is written by a live branch
 that is not the issue's own, append those paths to the issue's `Touches:` line in the same

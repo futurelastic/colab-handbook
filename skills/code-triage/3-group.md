@@ -29,8 +29,9 @@ Keep separate when the files are disjoint — parallel sessions are the point.
 every issue number in one **trailing** run, e.g. `fix/import-fixes-115-114-113`.
 This is load-bearing — code-wrap's harvest reads the branch name and the claim
 registry, so a number in neither is one the wrap will never find, and it sits open
-with its code merged. The failure this whole skill exists to prevent, re-created by
-sloppy naming.
+with its code merged.
+
+Why: [ADR 536](../../docs/adr/536-code-triage-3-group-rationale.md).
 
 **On an attended trunk-direct unit with no branch, the branch-name half of that harvest
 is empty by construction** (`code-ship` B1b) — claim every member issue anyway, and cite

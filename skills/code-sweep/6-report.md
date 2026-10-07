@@ -32,8 +32,7 @@ end-of-run      §5.1 re-derived 2x       → second pass found nothing new; fin
 
 **The `end-of-run` line is required on every run that got past §0, even when it found
 nothing new** (`§5.1 re-derived 1x → nothing moved but this run's own merges`). Leave it
-out, and a reader cannot tell a run that checked from one that never looked. That
-difference is the whole of #329. A `ripened` line always says which pass handled it, or
+out, and a reader cannot tell a run that checked from one that never looked. A `ripened` line always says which pass handled it, or
 why no pass did.
 
 Say what you left and why. A worktree kept for a stated reason is fine; a worktree
@@ -42,8 +41,6 @@ kept silently is the 8-of-9 statistic repeating.
 **`deferred` and `blocked` are different outcomes — never collapse them into one line.**
 `blocked` is a candidate §3 never sent into §4 at all (genuinely unfinished, no implementer to address; work that only needs its implementer to wrap is `send-back`); `deferred` is one §4 *tried*, failed on, and moved past. So a `deferred` line
 owes the reader two things a `blocked` line does not: what failed, and what would clear it.
-Those two facts are the whole record the old run-level stop used to provide, now carried
-per candidate.
 
 **A repo-wide trunk-CI failure is neither of them.** It stops the merge loop, so it appears
 as the `stopped:` ending below — never as a per-candidate `blocked` line, which is how this
@@ -71,3 +68,5 @@ stopped: trunk CI red at a1b2c3d — merge loop halted after 2 of 6; §5 reconci
 
 The last of those is the run-level stop of §4, and it says two things on purpose: how far
 the merge loop got, and that the non-merging work was **not** abandoned with it.
+
+Why: [ADR 536](../../docs/adr/536-code-sweep-6-report-rationale.md).

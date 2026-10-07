@@ -27,8 +27,8 @@ inventing a stop condition.
 - **Which of two same-file siblings lands first is never a missing human gate (#370).**
   The order is mechanical — earlier wrap first, tie → smaller diff (`code-sweep`
   [§4.0](../code-sweep/SKILL.md#40-order-the-pass-by-readiness--ready-work-first-370)).
-  Measured: four such pairs in 72 h sat 35–143 min each waiting for a human to pick the
-  order; nobody answered, and each cleared on its own the moment its sibling landed. Land
+  Why: [ADR 536](../../docs/adr/536-code-ship-defer-rationale.md).
+  Land
   the first, record the order on both issues, then take the second through B0 against the
   new `<base>`. A conflict *there* is B0's ordinary conflict path, not a reason to have
   asked first.

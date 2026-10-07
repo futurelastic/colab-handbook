@@ -10,11 +10,10 @@ behind them — moved here verbatim (#524).
 reading `landed`.** #17 ruled that removing refs from a shared remote is the wrong default
 for an agent, however well verified: reporting can be undone, deleting cannot. #331 kept
 that ruling and added this bucket instead, so the pile shows up where sessions actually
-look. `colab doctor` was the only mitigation before, and nobody schedules a doctor run.
+look.
 
 - **The key is issue state, not `colab landed`.** A squash followed by trunk movement reads
-  as `unknown`. Of the 54 refs measured in #331, 32 read that way while every one of their
-  issues was closed. An `unknown` spent ref is not unshipped work, and a `landed` verdict
+  as `unknown`. An `unknown` spent ref is not unshipped work, and a `landed` verdict
   is not permission to delete. Neither verdict belongs in this decision.
 - **Every issue a branch carries must be CLOSED.** One open number makes the branch live.
   That includes a reopened issue: its old branch may be exactly what the next session
@@ -30,3 +29,5 @@ look. `colab doctor` was the only mitigation before, and nobody schedules a doct
   the human's: `git push origin --delete <branch> …`. Do not run it. If the pile keeps
   growing after this bucket exists, the fix is to bring #331's option A (delete by default at
   ship) back to a human with the count. Quietly pruning from a sweep is not the fix.
+
+Why: [ADR 536](../../docs/adr/536-code-sweep-3-spent-remote-rationale.md).

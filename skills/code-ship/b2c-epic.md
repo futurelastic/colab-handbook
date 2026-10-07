@@ -8,12 +8,9 @@ behind them — moved here verbatim (#524).
 
 `code-triage` instructs its readers to **trust the epic's checklist table over its
 title**, on the grounds that only the table is maintained. Nothing in this family
-maintained it. Measured across one repo in one day: one epic stayed correct purely
-because the operator happened to remember it existed through four consecutive merges,
-while a second — that nobody remembered — held two lines wrong in *opposite*
-directions: one claiming a branch that no longer existed, one ticked but annotated
-"held open for review" on an issue already closed. A document that says "trust X"
-while nothing updates X does not fail neutrally; it produces confidently wrong plans.
+maintained it.
+
+Why: [ADR 536](../../docs/adr/536-code-ship-b2c-epic-rationale.md).
 
 **First ask which kind of parent it is**, because #34's mechanism removed most of
 this work rather than adding to it:

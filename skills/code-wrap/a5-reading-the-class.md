@@ -34,8 +34,6 @@ behind them — moved here verbatim (#524).
   - `none (run queued/in flight)` → `code-ship` does the bounded wait.
   - `none (no workflows on this repo)` → nothing configured at all.
 
-  Collapsing these into a bare `none` is what turns a bounded wait into a wait for a run
-  that was never coming.
 - **`local` mode:** do not block the wrap waiting for a run to finish. Report `none`,
   say the run was in flight, and let `code-ship` do the bounded wait — it is the step that
   actually needs the answer.
@@ -46,3 +44,5 @@ behind them — moved here verbatim (#524).
   with the run id and the class; `code-ship` B1a re-runs an infra red once and does the rest
   of the wait. Never fall back to running the full suite locally to "save" the wait — that
   is the double run #410 removed.
+
+Why: [ADR 536](../../docs/adr/536-code-wrap-a5-reading-the-class-rationale.md).

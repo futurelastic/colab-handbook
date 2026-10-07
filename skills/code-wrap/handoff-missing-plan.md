@@ -35,7 +35,4 @@ A group branch may share one file, named for any member — one present file cov
   Do not back-fill a plan now to make the box pass: a plan written after the code
   describes the code, so it cannot catch anything the plan was there to catch.
 
-Measured: one session skipped the stub on a three-issue grouped branch, by its own
-account by mistake, left this box unchecked with no reason, and the wrap accepted it —
-nothing surfaced the miss until a person asked. An unchecked box with no reason reads
-exactly like "not applicable", which is why the escape line is required, not optional.
+Why: [ADR 536](../../docs/adr/536-code-wrap-handoff-missing-plan-rationale.md).

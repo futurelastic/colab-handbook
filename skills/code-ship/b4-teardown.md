@@ -6,10 +6,11 @@ behind them — moved here verbatim (#524).
 
 ## B4. Tear down the worktree — remove by DEFAULT
 
-Made a worktree? **Remove it.** Finished-but-not-removed worktrees are the single
-most-skipped step we measured (8 of 9 sessions, 2.9 GB) — and the permissive
-"(optional)" this step used to open with is what produced that miss rate. Removal
+Made a worktree? **Remove it.**
+Removal
 is the default path; keeping one is the exception you must justify.
+
+Why: [ADR 536](../../docs/adr/536-code-ship-b4-teardown-rationale.md).
 
 ```sh
 colab worktree rm <name>    # if colab is installed (releases its claims, frees its ports) …
@@ -142,10 +143,8 @@ done
   this one line and appears nowhere else this skill family actually depends on, while
   `python3` is already an assumed interpreter elsewhere (`code-sweep` §1's worktree-filter
   snippets) — so this removes an undeclared dependency rather than adding one more thing
-  every machine running this skill must have installed. Measured failure mode this
-  replaces: `jq` missing → the old `$(jq …)` command substitution failed, `printf` still
-  wrote a bare newline (exit 0) into the journal, and the un-chained `rm -f "$PLAN"` on the
-  next line still ran — the plan file was gone with no journal line to show for it.
+  every machine running this skill must have installed.
+  Why: [ADR 536](../../docs/adr/536-code-ship-b4-teardown-rationale.md).
 - **Chained per FILE, not per issue** — every line a file contributes is written in the
   one append, and the delete follows only on success, so a failed write for one plan
   file leaves that file in place without touching siblings already journalled.

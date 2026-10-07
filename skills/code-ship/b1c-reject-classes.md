@@ -9,9 +9,8 @@ behind them — moved here verbatim (#524).
 A stop-for-a-human on *every* reject was measured to be the wrong default for the
 common case: one fleet's cheap-tier lane spent 47 attempts — 35 of them rejects, all at
 the *same* worker tier — on a single issue, because nothing forced a tier change once
-that tier had been shown insufficient. A human wasn't blocking any of it; nothing was
-routing around a tier that had already failed repeatedly. Waiting for a person bought
-nothing there. So a reject is graded into exactly one of two classes, decided **at
+that tier had been shown insufficient. Why: [ADR 536](../../docs/adr/536-code-ship-b1c-reject-classes-rationale.md).
+So a reject is graded into exactly one of two classes, decided **at
 grading time**, never guessed from a label alone:
 
 - **`decision`** — the default, and everything not explicitly `escalate` below. The
@@ -61,19 +60,7 @@ grading time**, never guessed from a label alone:
 
 ### A reject that already carries its answer — record the direction, don't ask for it (#328)
 
-Measured 2026-09-11 on an `auto-trunk` repo, in a ship session autopilot had spawned:
-the grade found that the rework added a network poll outside the repo's three
-human-ruled network openings. The coordinator then stopped on an interactive prompt
-offering two options. **1 (Recommended)** was to move the refresh onto the path the
-repo had already budgeted for and delete the new slot, with no boundary change.
-**2** was to have a human rule a fourth opening. Option 1 only applied a ruling the
-repo already held. Only option 2 needed a human. The session waited on the modal
-anyway. The dashboard parked the stage (`waitingOn: prompt`), and two green
-candidates queued behind it until another session read the prompt and typed `1` by
-hand. On an unattended lane an interactive prompt is a stall with no timer. The
-reject was right. Asking a question the coordinator had already answered was the
-mistake, the same one *`decision` is the default* above argues against, one level
-up.
+Why: [ADR 536](../../docs/adr/536-code-ship-b1c-reject-classes-rationale.md).
 
 So when you reject and have a recommended route, check whether that route needs
 **authority you do not already hold**. It does if it needs any of the following:
@@ -100,10 +87,8 @@ the human will look, and a modal holds up every candidate queued behind this one
 its marker is the whole token **`rework`**, not `reject-decision` (#406):
 `<!-- colab:grade verdict=rework round=1 -->`. The token is what lets a rework router
 (something that sends a rework verdict back to the session owning the branch) tell
-"the rework is decided, go" from "this waits on a human" by equality alone. Before it
-existed both comments carried `reject-decision`, and the only difference was in prose
-no reader may parse, so one adopter's router had to keep its ship-grade lane dark
-rather than send human-waiting work back to the author. Everything else is unchanged:
+"the rework is decided, go" from "this waits on a human" by equality alone. Why: [ADR 536](../../docs/adr/536-code-ship-b1c-reject-classes-rationale.md).
+Everything else is unchanged:
 `rework` keeps every claim held, merges nothing and never proceeds to B2. It is
 **held**, never cleared, and a reader that predates it sees an unrecognised token,
 which is held too. Only the comment's shape and its token change, and no prompt is

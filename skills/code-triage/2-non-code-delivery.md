@@ -27,9 +27,7 @@ the build issues its `blocked_by` edges hold back are waiting on it.
 
 **Off the ranked list does not mean off the readiness pass (#380).** A design lane gates on
 `deps-checked` the same way the code lane does, so a design issue left unstamped stays held
-with nothing wrong, and every build issue `blocked_by` it waits too. Measured twice in one
-day on one consumer: a design issue whose blockers had all closed, and one with no
-`blocked_by` edge at all, both unstamped, each holding a build issue behind it. So run §5's
+with nothing wrong, and every build issue `blocked_by` it waits too. So run §5's
 first gate on every unclaimed `delivery:design` issue that carries no hold, by the same bar
 as a code issue. Read the edges (`gh issue view <N> --json blockedBy`), judge any open
 blocker's state (§5.1), then write or clear the marker exactly as §6's *persist* step does
@@ -42,3 +40,5 @@ non-code; an unlabelled issue proceeds through the rest of triage exactly as bef
 label set existed. `delivery:code` and `delivery:docs-only` also proceed normally — both are
 in-repo commits, the code lane (#358), not a routing signal. `docs-only` is not `colab
 ship`'s docs-only exception either; ship measures that from the diff, never from the label.
+
+Why: [ADR 536](../../docs/adr/536-code-triage-2-non-code-delivery-rationale.md).

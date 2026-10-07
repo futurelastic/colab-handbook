@@ -27,9 +27,8 @@ an ephemeral worktree, or make one yourself. The at-rest invariant does not paus
 a merge. And merging that **line into trunk** afterwards is never part of a ship: it
 is a human integration event of a promotion's weight.
 
-- **`Closes #N`, not a bare `(#N)`** — GitHub only auto-closes on the keyword. We
-  measured 26/30 issues left open with their code long merged because commits
-  said `(#N)` (`CONVENTIONS.md` [§4](../../CONVENTIONS.md#4-branches-and-commits)).
+- **`Closes #N`, not a bare `(#N)`** — GitHub only auto-closes on the keyword.
+  Why: [ADR 536](../../docs/adr/536-code-ship-b2-squash-rationale.md).
 - One `Closes #N` per issue the branch carried — the set you harvested in B1b, not
   just the "main" one.
 - **This step never runs against the will of B1b's close gate.** If any harvested

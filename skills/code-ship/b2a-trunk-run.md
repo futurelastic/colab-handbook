@@ -10,11 +10,9 @@ B1a let this merge through on a `none` that **cannot arrive** — the repo's wor
 only on a trunk push and `pull_request`, so no run could ever exist at the branch's head —
 with the words "the base's own CI is the whole CI story". That story is told **after** the
 merge: the trunk run at the squash sha B2 just pushed is the change's **first** run on the
-runner. Nothing before this section read it. Measured 2026-09-25 on one repository: the
-coordinator merged, then posted `colab:evidence` and `colab:grade verdict=pass` on both
-carried issues **19 s after** the trunk run for its own squash had completed red (2 failing
-tests of 929, `red:finding`). No `TRUNK RED:` issue was filed, and the red sat unnoticed for
-~40 min until something else happened to open the run.
+runner. Nothing before this section read it.
+
+Why: [ADR 536](../../docs/adr/536-code-ship-b2a-trunk-run-rationale.md).
 
 **So when B1a read the cannot-arrive `none`, watch the trunk run at the squash sha before
 B2b posts anything.** When B1a read `green` the branch's own run already judged the change —
@@ -48,8 +46,9 @@ Classify what you see with B1a's test (*Telling infra from finding*):
 | `red:infra` | **Re-run once** (`gh run rerun <databaseId> --failed`, §4) and read it again inside the same 15-minute bound. The same failure twice ⇒ the runner, not the change: hand it to the ops lane and say in the evidence that trunk CI for `$SQUASH` is unverified, for that reason |
 | cap expired | **Say so in the evidence** — "trunk run `<databaseId>` for `<sha>` still running at `<ts>`" — and leave the re-measure trigger: that run completing. The next ship pass or `code-sweep` ping reads it by id. A red there is filed as `TRUNK RED:` exactly as above, by whichever session finds it |
 
-The measured failure was one of **order**, not of skill. The coordinator could read a red
-run perfectly well; it wrote "pass" 19 s before the red it had caused existed. So no
+So no
 evidence comment for a cannot-arrive merge goes out ahead of this read. An evidence
 comment that says `pass` beside a red trunk it never looked at tells every later reader
 that trunk was fine.
+
+Why: [ADR 536](../../docs/adr/536-code-ship-b2a-trunk-run-rationale.md).

@@ -91,8 +91,8 @@ git -C "$MAIN_REPO" status --porcelain -uall                 # trunk checkout st
   branch), is not `green`, or does not run the tests is the hermetic verdict genuinely
   missing — and then it is a **send-back**, not a coordinator re-run of
   `colab gate-hermetic` (#409: the coordinator never runs the implementer's gate for it).
-  On a repo whose suite takes 6–10 minutes locally, that repeat was measured as the
-  largest single cost of a ship pass. **`live-env` is a red gate**: send it back to the
+  Why: [ADR 536](../../docs/adr/536-code-ship-0-handoff-contract-rationale.md).
+  **`live-env` is a red gate**: send it back to the
   implementer the same way as any other red. Never read it as an advisory, and never
   merge past it.
   **The branch-CI class A5 reports is the opposite case — it *does* re-derive, and B1a

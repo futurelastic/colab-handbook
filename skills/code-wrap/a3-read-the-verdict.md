@@ -6,15 +6,6 @@ behind them — moved here verbatim (#524).
 
 #### Read the verdict, not the transcript
 
-On a repo with a real suite, the gate's raw output is not a rounding error next to
-`CLAUDE.md` — measured on one mature repo, 366,594 bytes (~104,700 tokens) of
-combined stdout+stderr against a 113,989-byte `CLAUDE.md`, at 3,212/3,213 green.
-The volume is structural, not a sign of trouble: a TAP-style runner emits a
-`# Subtest:` line **and** an `ok N` line per assertion, so it scales with
-assertion count — which every convention here encourages growing. And it does not
-cost once: gate output joins the cached prompt prefix, so a run at turn 10 of a
-40-turn session is re-read on every turn after, not paid for a single time.
-
 A list of test names that passed is the least informative text a session can hold.
 Filter before reading it back:
 
@@ -39,3 +30,5 @@ pass/fail counts and failing test names, not the runner's default default verbos
   failing line past a tool's read window while the summary sits further down
   still — the filtered command above avoids ever emitting the noise, rather than
   hoping the reader's truncation point lands somewhere safe.
+
+Why: [ADR 536](../../docs/adr/536-code-wrap-a3-read-the-verdict-rationale.md).
