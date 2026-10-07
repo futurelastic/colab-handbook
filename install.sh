@@ -22,11 +22,12 @@
 #                         only when absent; an existing fleet list is never touched.
 #   ./install.sh --all    = --tools --hooks --fleet (the recommended first run).
 #   ./install.sh --notify-url <url>
-#                         seed notifyUrl in ~/.colab/config.json with a local observer's
-#                         events URL — only when the key is absent; never overwrites.
-#                         Without the flag, --tools seeds it from <COLAB_HOME>/notify-endpoint
-#                         when a local observer declared one there, and otherwise says
-#                         plainly that notifyUrl is unset and which events that drops.
+#                         add a local observer's events URL to notifyUrl in
+#                         ~/.colab/config.json when the key lacks it; never removes or
+#                         rewrites an existing entry. --tools also adds every URL declared in
+#                         <COLAB_HOME>/notify-endpoint (one per line, one per observer) that
+#                         the key lacks, and otherwise says plainly that notifyUrl is unset
+#                         and which events that drops.
 #   ./install.sh --release
 #                         check this clone out at the newest FINAL release tag (vX.Y.Z, no -rc),
 #                         then install from it. Re-run it to move to a newer release.
@@ -597,8 +598,9 @@ seed_state() {
 # seed_notify — notifyUrl is optional and off by default (#36), but a machine that runs a local
 # observer depends on its pushes: some kinds (issue.merged, issue.closed, …) never reach the observer
 # any other way, and an unset key there is a silent outage (#414). The logic lives in
-# tools/lib/notify-endpoint.js so it is unit-tested; it seeds only an ABSENT key, from --notify-url or
-# the observer's own <COLAB_HOME>/notify-endpoint, and otherwise prints that the key is unset.
+# tools/lib/notify-endpoint.js so it is unit-tested; it ADDS each URL the key lacks — from --notify-url
+# and from every line of the observers' own <COLAB_HOME>/notify-endpoint (#546) — never removing or
+# rewriting an existing entry, and otherwise prints that the key is unset.
 seed_notify() {
   echo "events → notifyUrl"
   if ! have node; then

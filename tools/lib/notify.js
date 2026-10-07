@@ -6,6 +6,12 @@
  * close, ship, worktree new, worktree rm, readiness) each POST one small JSON event as they succeed. Leave it unset
  * and this module makes no network call of any kind — that is the default and it is absolute.
  *
+ * `notifyUrl` is a string (one receiver) or an array of strings (several — a machine running two
+ * local observers side by side, #546). Every event goes to every URL, each through its OWN detached
+ * child, so a dead or hanging receiver can never cost another receiver its event. One URL is stored
+ * as a plain string, exactly as before the array form existed (`storedNotifyUrl` below), so a
+ * single-observer machine's config.json never changes shape.
+ *
  * ── What this is NOT ──────────────────────────────────────────────────────────────────────────
  * It is not a transport anyone may depend on. The observers this exists for already discover every
  * one of these facts on their own, by polling ~/.colab/state.json on a timer; the push only sharpens
@@ -124,6 +130,35 @@ function buildEvent(action, fields, ts) {
 }
 
 /**
+ * Every configured receiver, in order, deduplicated, trimmed. Accepts the string form (one URL) and
+ * the array form (#546); any other shape — a number, an object, a non-string array entry — reads as
+ * no receiver rather than a crash, because this sits on the path of commands that already succeeded.
+ * Validity (http/https) is NOT filtered here: notify() distinguishes "nothing configured" (silent)
+ * from "configured but unusable" (skipped), and a health check needs to see the raw entries.
+ */
+function configuredUrls(cfg) {
+  const raw = cfg ? cfg.notifyUrl : undefined;
+  const list = typeof raw === 'string' ? [raw] : Array.isArray(raw) ? raw : [];
+  const out = [];
+  for (const u of list) {
+    if (typeof u !== 'string') continue;
+    const t = u.trim();
+    if (t && !out.includes(t)) out.push(t);
+  }
+  return out;
+}
+
+/**
+ * The on-disk value for a list of URLs: absent for none, a plain string for one, an array for
+ * several. One URL is stored exactly as it always was, so a single-observer machine's config.json is
+ * byte-for-byte what it would have been before the array form existed (#546 ask 4).
+ */
+function storedNotifyUrl(urls) {
+  if (!urls || urls.length === 0) return undefined;
+  return urls.length === 1 ? urls[0] : urls.slice();
+}
+
+/**
  * The script the child runs. Kept as one string, taking url and body from argv rather than being
  * interpolated into source — the body carries branch and worktree names typed by a user, and
  * building code out of them is how a quoting bug becomes code execution. spawn() with an argv array
@@ -145,13 +180,18 @@ try {
 `;
 
 /**
- * Fire one event. Returns a string saying what happened, for tests and for --json callers; NOTHING
- * about the send is reported to the user, because a warning about a secondary signal is noise on
- * the output of a command that succeeded.
+ * Fire one event at every configured receiver. Returns a string saying what happened, for tests and
+ * for --json callers; NOTHING about the send is reported to the user, because a warning about a
+ * secondary signal is noise on the output of a command that succeeded.
  *
  *   'silent'  no notifyUrl configured — not one network call was made
- *   'skipped' unknown action, or a URL we will not send to
- *   'sent'    handed to a detached child; delivery is neither awaited nor known
+ *   'skipped' unknown action, or no URL we will send to (every one non-http, or every spawn failed)
+ *   'sent'    handed to at least one detached child; delivery is neither awaited nor known
+ *
+ * One child per URL, never one child looping over the list: a child stuck on a hung receiver would
+ * then hold every later receiver's request behind it, and a receiver that throws mid-loop would cost
+ * the rest their event. Separate children make "a dead receiver never fails the command" hold per
+ * receiver too (#546).
  *
  * @param {object} cfg   loaded config (state.loadConfig())
  * @param {string} action  one of ACTIONS
@@ -161,28 +201,34 @@ try {
 function notify(cfg, action, fields, deps) {
   // The unconfigured path must return before anything else can throw, allocate, or resolve a host.
   // "Absolute silence" is the documented default, so it is checked first and checked cheaply.
-  const url = cfg && typeof cfg.notifyUrl === 'string' ? cfg.notifyUrl.trim() : '';
-  if (!url) return 'silent';
-  if (!/^https?:\/\//i.test(url)) return 'skipped';
+  const urls = configuredUrls(cfg);
+  if (urls.length === 0) return 'silent';
+  const usable = urls.filter((u) => /^https?:\/\//i.test(u));
+  if (usable.length === 0) return 'skipped';
 
   const ev = buildEvent(action, fields);
   if (!ev) return 'skipped';
 
   const spawnFn = (deps && deps.spawn) || spawn;
-  try {
-    const child = spawnFn(process.execPath, ['-e', CHILD_SCRIPT, '--', url, JSON.stringify(ev)], {
-      detached: true,
-      stdio: 'ignore',
-    });
-    // unref() is what makes this fire-and-forget rather than fire-and-wait: without it the parent's
-    // event loop would keep the child in its dependants and the exit would block on a hung receiver.
-    if (child && typeof child.unref === 'function') child.unref();
-    return 'sent';
-  } catch (_) {
-    // Spawning can fail for reasons that have nothing to do with the user's command (EAGAIN under
-    // process pressure, a locked-down execPath). Swallowing is the whole contract.
-    return 'skipped';
+  const body = JSON.stringify(ev);
+  let sent = 0;
+  for (const url of usable) {
+    try {
+      const child = spawnFn(process.execPath, ['-e', CHILD_SCRIPT, '--', url, body], {
+        detached: true,
+        stdio: 'ignore',
+      });
+      // unref() is what makes this fire-and-forget rather than fire-and-wait: without it the parent's
+      // event loop would keep the child in its dependants and the exit would block on a hung receiver.
+      if (child && typeof child.unref === 'function') child.unref();
+      sent += 1;
+    } catch (_) {
+      // Spawning can fail for reasons that have nothing to do with the user's command (EAGAIN under
+      // process pressure, a locked-down execPath). Swallowing is the whole contract — and it is
+      // per URL, so one failed spawn never costs the next receiver its event.
+    }
   }
+  return sent > 0 ? 'sent' : 'skipped';
 }
 
-module.exports = { notify, buildEvent, ACTION_KIND, ACTIONS, SEND_TIMEOUT_MS };
+module.exports = { notify, buildEvent, configuredUrls, storedNotifyUrl, ACTION_KIND, ACTIONS, SEND_TIMEOUT_MS };

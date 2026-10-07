@@ -392,6 +392,9 @@ function repoRootOf(dir) {
 function safeArgv(argv) {
   const a = (argv || []).map(String);
   if (a[0] === 'config' && a[1] === 'set' && a.length > 3) return [...a.slice(0, 3), '<redacted>'];
+  // add-notify-url / rm-notify-url carry the same kind of value as `set notifyUrl` — a URL that can
+  // hold a token (#546) — so it is redacted the same way.
+  if (a[0] === 'config' && (a[1] === 'add-notify-url' || a[1] === 'rm-notify-url') && a.length > 2) return [...a.slice(0, 2), '<redacted>'];
   return a;
 }
 

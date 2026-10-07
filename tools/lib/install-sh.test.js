@@ -330,17 +330,25 @@ test('install.sh --tools seeds notifyUrl from a declared endpoint; says plainly 
   assert.strictEqual(cfg.notifyUrl, 'http://127.0.0.1:9000/api/events');
 });
 
-test('install.sh --notify-url seeds without --tools and never overwrites an existing value', (t) => {
+test('install.sh --notify-url seeds without --tools, then only ADDS — never removes or rewrites an entry (#546)', (t) => {
   const home = tmp(t);
   const r = runInstall(home, ['--notify-url', 'http://127.0.0.1:9000/api/events']);
   assert.strictEqual(r.status, 0, r.stdout + r.stderr);
   const cfgFile = path.join(home, '.colab', 'config.json');
   assert.strictEqual(JSON.parse(fs.readFileSync(cfgFile, 'utf8')).notifyUrl, 'http://127.0.0.1:9000/api/events');
 
+  // Same URL again: nothing to add, on-disk value still the plain string.
+  const same = runInstall(home, ['--notify-url', 'http://127.0.0.1:9000/api/events']);
+  assert.strictEqual(same.status, 0, same.stdout + same.stderr);
+  assert.match(same.stdout, /already set → left untouched/);
+  assert.strictEqual(JSON.parse(fs.readFileSync(cfgFile, 'utf8')).notifyUrl, 'http://127.0.0.1:9000/api/events');
+
+  // A second observer's URL is added after the first, which stays first and untouched.
   const again = runInstall(home, ['--notify-url=http://127.0.0.1:9001/api/events']);
   assert.strictEqual(again.status, 0, again.stdout + again.stderr);
-  assert.match(again.stdout, /NOT applied/);
-  assert.strictEqual(JSON.parse(fs.readFileSync(cfgFile, 'utf8')).notifyUrl, 'http://127.0.0.1:9000/api/events');
+  assert.match(again.stdout, /added http:\/\/127\.0\.0\.1:9001\/api\/events/);
+  assert.deepStrictEqual(JSON.parse(fs.readFileSync(cfgFile, 'utf8')).notifyUrl,
+    ['http://127.0.0.1:9000/api/events', 'http://127.0.0.1:9001/api/events']);
 });
 
 test('install.sh --notify-url refuses a non-http value before installing anything', (t) => {

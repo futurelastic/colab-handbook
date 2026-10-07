@@ -303,7 +303,7 @@ mỗi engine một file — thư mục đó là nguồn của bảng trên.
 | `--hooks` | Trỏ git của clone này vào `.githooks/`: quét secret bằng gitleaks, và quét danh tính với danh sách từ khoá do bạn giữ NGOÀI mọi repo (xem [`templates/README.md`](templates/README.md)). |
 | `--fleet` | Tạo `~/.colab/repos.txt` chỉ chứa ghi chú định dạng, nếu chưa có. Nó cố tình nằm trên máy vì nó ghi tên các repo private của bạn; `colab register` mới là thứ điền vào. |
 | `--all` | `--tools --hooks --fleet`. |
-| `--notify-url <url>` | Ghi `notifyUrl` vào `~/.colab/config.json`, chỉ khi khoá đó chưa có. Xem [`tools/README.md`](tools/README.md#notifyurl--optional-event-push-off-by-default). |
+| `--notify-url <url>` | Thêm `<url>` vào `notifyUrl` trong `~/.colab/config.json` nếu khoá đó chưa có URL này; không bao giờ xoá hay ghi đè mục đã có. Xem [`tools/README.md`](tools/README.md#notifyurl--optional-event-push-off-by-default). |
 | `--release` | Checkout clone này về tag phát hành chính thức mới nhất, rồi cài. Là mặc định cho lần cài đầu từ một bản clone mới. |
 | `--trunk` | Checkout `main` rồi cài, kể cả phần chưa phát hành — `@next` của bản clone. |
 | `--dry` | In ra sẽ làm gì, không thay đổi gì. Ghép được với các flag trên. |
@@ -335,8 +335,8 @@ colab update             # các bản copy có đóng dấu đã tụt lại, k�
 `--check` báo theo từng engine: bao nhiêu skill đã link, thiếu hay hỏng, kèm
 các lưu ý riêng của engine đó (ví dụ mạng trong sandbox của Codex). Nó cũng báo bản đóng băng có tụt sau bản phát hành mới nhất không và lệnh nào
 nó không chạy được, file state có tồn tại không, đã đăng ký repo nào chưa, cả
-hai hooklet pre-commit có chạy được không, và `notifyUrl` có đang trống trong
-khi một observer trên máy đã khai endpoint không. ✗ nghĩa là thứ đã cài đang cũ
+hai hooklet pre-commit có chạy được không, và `notifyUrl` có đang trống (hoặc
+thiếu một URL) trong khi một observer trên máy đã khai endpoint không. ✗ nghĩa là thứ đã cài đang cũ
 hoặc không dùng được; ⚠ nghĩa là có thứ chưa từng được cài, có thể là cố ý hoặc
 chỉ là chưa làm tới — nên một bản cài mới đúng, chưa đăng ký repo nào và chưa có
 danh sách từ khoá danh tính, sẽ ra các dòng ⚠ và exit 0. Nó không bao giờ tự làm

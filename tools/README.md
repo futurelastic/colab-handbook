@@ -665,7 +665,7 @@ append-only and never participates in that lock.
 | `claimTTLHours` | `doctor` flags worktree-less claims older than this (default 24). |
 | `portRange` | default search window for `port alloc` / `worktree new` (default `5200-5999`). |
 | `worktreeSubdir` | where worktrees are created inside a repo (default `.worktrees` — gitignore it). |
-| `notifyUrl` | **absent by default** — optional observer endpoint, see below. Unset means colab makes no network call of its own, ever. |
+| `notifyUrl` | **absent by default** — optional observer endpoint, or a list of them, see below. Unset means colab makes no network call of its own, ever. |
 | `journal` | **absent by default** — set to `true` for a local append-only record of every state transition and invocation in `~/.colab/journal.jsonl`, see below. Unset means colab writes no journal file, ever. Unrelated to `notifyUrl`: local file vs. remote push. |
 | `claimIdentity` | **absent by default** (`login,host` behaviour, unchanged) — set to `login,host,session` to distinguish two of your own sessions on one machine in the claim tie-break (#267). See *Identity granularity* under *Claim lifecycle* above; only safe where `--session` is stable across a resume. |
 
@@ -676,7 +676,16 @@ Set it and each state-changing command POST one small JSON event each, as they s
 ```sh
 colab config set notifyUrl http://127.0.0.1:9000/api/events
 colab config set notifyUrl ""      # unset — same state on disk as never having set it
+colab config add-notify-url http://127.0.0.1:9001/api/events   # a second receiver, the first kept
+colab config rm-notify-url  http://127.0.0.1:9001/api/events   # back to one — stored as a string again
 ```
+
+**Several receivers (#546).** `notifyUrl` is a string (one receiver) or an array of URLs. A machine
+can run two local observers side by side (a stable build and a release candidate on two ports), and
+every event goes to each of them. Each URL gets its own detached child with the semantics below — no
+retry, no response read — so a dead or hanging receiver never costs another receiver its event. One
+URL is stored as a plain string, so a single-observer machine's `config.json` looks exactly as it
+did before the list form existed.
 
 | command | event `kind` |
 |---|---|
@@ -718,15 +727,19 @@ push. Measured on two machines running the same observer: the one configured by 
 `issue.merged` events; the one set up a month later with `install.sh` recorded 0, and nothing said
 so. So an observer announces itself, and colab reads the announcement instead of guessing a port:
 
-- **`<COLAB_HOME>/notify-endpoint`** — written by the observer, never by colab: its events URL on
-  the first non-comment line (`#` starts a comment).
-- **`install.sh --tools`** seeds `notifyUrl` from that file when the key is absent;
-  **`install.sh --notify-url <url>`** seeds it from the flag (the flag wins). An existing value is
-  never overwritten. With nothing to seed from, install prints that `notifyUrl` is unset and which
-  events that drops.
+- **`<COLAB_HOME>/notify-endpoint`** — written by the observers, never by colab: one events URL per
+  non-comment line (`#` starts a comment), **each observer owning its own line** — an observer adds
+  or removes its line and never rewrites the file, so a second observer cannot silence the first. A
+  one-line file is the one-observer case. A line that is not an http(s) URL is reported and ignored.
+- **`install.sh --tools`** adds to `notifyUrl` every URL in that file the key lacks;
+  **`install.sh --notify-url <url>`** adds the flag's URL too. An existing entry is never removed
+  or rewritten — adding is the only write. With nothing to seed from, install prints that
+  `notifyUrl` is unset and which events that drops.
 - **`colab doctor`** and **`install.sh --check`** report `notifyUrl: unset` when the file exists and
-  the key does not (and a note when the two disagree). No file, no line: silence stays the default
-  for a machine with no observer. Logic: `lib/notify-endpoint.js`.
+  the key does not, and one `notifyUrl: lacks <url>` line for **each** declared URL the key is
+  missing, with the `colab config add-notify-url` fix. A configured URL the file does not declare
+  (a remote observer, say) is a deliberate value and reported as nothing. No file, no line: silence
+  stays the default for a machine with no observer. Logic: `lib/notify-endpoint.js`.
 
 **Two senses of the word "journal", and they are not the same thing.** Whatever a `notifyUrl`
 receiver keeps on its own side is *its* record: remote, someone else's, and possibly empty, since
@@ -1101,7 +1114,7 @@ Run `colab <cmd> --help` for full detail.
 | `template [<name>] [--dest F] [--repo P] [--force]` | copy a handbook workflow template into a repo, **stamped** with the handbook version (see below) |
 | `update [<repo>...] [--apply] [--json] [--quiet]` | sweep the fleet registry for stamped copies that fell behind a changed template; `--apply` refreshes the **pristine** ones. Never commits; never touches a hand-edited copy (see below) |
 | `register [<path>] [--remove] [--list]` | add/remove a repo in **both** fleet registries at once; `--list` flags drift (see below) |
-| `config [show \| add-repo P \| rm-repo P \| add-reserved-file P \| rm-reserved-file P \| set K V]` | manage config (`set` keys: `claimTTLHours`, `portRange`, `worktreeSubdir`, `notifyUrl`, `journal`, `claimIdentity`) |
+| `config [show \| add-repo P \| rm-repo P \| add-reserved-file P \| rm-reserved-file P \| add-notify-url U \| rm-notify-url U \| set K V]` | manage config (`set` keys: `claimTTLHours`, `portRange`, `worktreeSubdir`, `notifyUrl`, `journal`, `claimIdentity`) |
 | `adopt [--repo P] [--json] [--no-verify] [--axis a,b] [--room R] [--exposure E] [--writes W] [--channels C] [--production U\|none] [--deploy D] [--stack S] [--answered-by N] [--reason "..."]` | detect + ask + derive + WRITE CONVENTIONS.md [§9](../CONVENTIONS.md#9-adopting-this)'s five rows (`tier`, `room`, `exposure`, `writes`, `channels`) in one act (#199) — asks only the gating rows (`production`/`deploy`, `exposure`); `room`/`writes`/`channels` are optional, asked only via `--axis` or their own flag, and named in one report line (#533); a single trunk of any spelling (`master` included) adopts as `exposure: none`, a `main` beside it is refused (#522); a human-gated refusal prints the one command to run as its first line — a complete descriptor just reports; a flag makes the whole run non-interactive, a TTY prompts, neither refuses fast. Lowering `exposure` (or a first `none`/`self`) needs a human (`COLAB_HUMAN=1` + `--answered-by`, or a terminal); raising, or a first `live`/`released`, does not. Append-only — never rewrites an existing byte; never writes `tier` unless `exposure` ends unanswered. On a repo with no descriptor before the run and no `CLAUDE.md`, it also writes the thin-shell `CLAUDE.md` (`@AGENTS.md` + the Conventions block, stamped and filled) and an `AGENTS.md` stub if none exists (#417, CONVENTIONS.md §9 step 5) — never over an existing `CLAUDE.md`, never under `--local`. Every plain run also hides the scratch dirs and the worktree subdir (`.worktrees/` or the configured `worktreeSubdir`) in the clone's `.git/info/exclude` — machine-local, idempotent — so a repo adopted before `worktree new` excluded its own dir is covered too (#527). **`--local --trunk <integration-branch> [--no-labels]`** (#393): for a repo the fleet does not own — hides `.github/project.yml`, `CLAUDE.local.md`, the scratch dirs (`.plans/`, `.briefs/` or their `COLAB_PLANS_DIR`/`COLAB_BRIEFS_DIR` overrides, plus the legacy `.claude/plans/` — #488) and the worktree subdir via `.git/info/exclude`, writes the descriptor into the main checkout with trunk = the fleet's integration branch (exposure required, usually `self`), writes a stub `CLAUDE.local.md`, ensures the four load-bearing labels, moves the main checkout onto that branch when clean, and prints what it did not do and why (CONVENTIONS.md [§9, *Working in a repo you don't own*](../CONVENTIONS.md#working-in-a-repo-you-dont-own)) |
 
 ### Release notes
