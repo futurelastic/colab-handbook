@@ -960,7 +960,8 @@ function ghRunsForCommit(repo, branch, sha, limit = 10) {
     // does not own) before it computes a verdict, and can only do that if the row says so.
     // workflowDatabaseId is additive (#510): the cure rule's same-workflow test reads the workflow's
     // id, never its display name; mapped to `workflowId`, the name the REST row (ci-wait restRow) uses.
-    '--json', 'headSha,status,conclusion,createdAt,databaseId,workflowName,workflowDatabaseId,event'], { cwd: repo });
+    // updatedAt is additive (#555): a finished run's completion time, the lone-member wait's anchor.
+    '--json', 'headSha,status,conclusion,createdAt,updatedAt,databaseId,workflowName,workflowDatabaseId,event'], { cwd: repo });
   if (!r.ok) return null;
   let runs;
   try { runs = JSON.parse(r.stdout); } catch (_) { return null; }

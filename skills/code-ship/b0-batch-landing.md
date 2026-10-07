@@ -13,6 +13,10 @@ arrive), merge-clean against trunk — land through one command instead of one s
 (`CONVENTIONS.md`
 [§4, *Batch landing*](../../CONVENTIONS.md#batch-landing--one-combined-run-then-a-fast-forward-373)):
 
+0. **Gather, do not reuse.** Right before each `--batch` call, re-read the candidate set and
+   name **every** candidate ready at that moment — not the list the pass started with. A
+   candidate that turned green while you graded another is a member, not the next pass's
+   work (#555).
 1. Run §0 through B1c **per member** as usual — hand-off contract, the already-shipped grep,
    `landed`, B1b's harvest, B1c's grade. **Grading stays per member**; a batch never grades
    a diff it did not read. A member that fails any of it leaves the batch.
@@ -45,5 +49,15 @@ arrive), merge-clean against trunk — land through one command instead of one s
      printed `gh run rerun <id> --failed` once, wait, and re-run the batch command; `red:finding`
      → go serial, and the member that goes red on its own sync run returns to its implementer
      as a class.
+   - **`3` with `⏸ PARTNER-WAIT`** (#555) — only where `project.yml` declares
+     `ship-batch-wait`: exactly one member could join, and the lane was otherwise idle. The
+     line gives the seconds left in the window, counted from when that member became ready,
+     so calling again never restarts it. Wait at most that long — a bounded `colab ci-wait`
+     on another candidate still in CI counts toward it. Then go back to step 0, gather
+     again, and call `--batch` with every ready candidate. Once the window has passed, the
+     same one-branch call declines to serial (exit `4`), and the member ships alone.
+     **With one ready candidate on such a repo, call `colab ship --batch <it>` instead of
+     shipping it serially, so the window is honoured.** Without the field, a lone candidate
+     ships serially at once, as before.
 4. A red trunk declines a batch outright: the cure and ci-grant doors (B1, *Red trunk*) apply to
    one member at a time, never to a batch.

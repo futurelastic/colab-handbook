@@ -122,3 +122,45 @@ test('the cap the step enforces is the cap ship-batch.js declares', () => {
   const listed = arm[1].split('|').map(Number);
   assert.deepStrictEqual(listed, Array.from({ length: shipBatch.MAX_BATCH }, (_, i) => i + 1));
 });
+
+// #555: `ship-batch-wait:` — the same step, held to parseShipBatchWait the same way.
+// [ project.yml line (null = no ship-batch-wait line), the value a YAML reader hands the parser ]
+const WAIT_CASES = [
+  [null, undefined],
+  ['ship-batch-wait:', null],
+  ['ship-batch-wait: ~', null],
+  ['ship-batch-wait: null', null],
+  ['ship-batch-wait: 90s', '90s'],
+  ['ship-batch-wait: 6m', '6m'],
+  ['ship-batch-wait: 6m   # from colab batch-stats', '6m'],
+  ['ship-batch-wait: "6m"', '6m'],
+  ["ship-batch-wait: '1h'", '1h'],
+  ['ship-batch-wait: 0m', '0m'],
+  ['ship-batch-wait: 48h', '48h'],
+  ['ship-batch-wait: 6', 6],
+  ['ship-batch-wait: 6min', '6min'],
+  ['ship-batch-wait: 1.5m', '1.5m'],
+  ['ship-batch-wait: -1m', '-1m'],
+  ['ship-batch-wait: soon', 'soon'],
+  ['ship-batch-wait: true', true],
+];
+
+test('#555: the step fails exactly the ship-batch-wait values colab ship and the audit refuse', () => {
+  const script = scripts[TEMPLATES[0]];
+  for (const [line, value] of WAIT_CASES) {
+    const doc = value === undefined ? {} : { 'ship-batch-wait': value };
+    const want = shipBatch.parseShipBatchWait(doc).valid;
+    const r = runCase(script, line === null ? 'ship-batch: 3' : `ship-batch: 3\n${line}`);
+    const label = line === null ? '(no ship-batch-wait line)' : line;
+    assert.strictEqual(r.status === 0, want, `${label}: step exit ${r.status}, parseShipBatchWait valid=${want}\n${r.stdout}${r.stderr}`);
+    if (!want) assert.match(r.stdout, /::error file=\.github\/project\.yml::ship-batch-wait is /, `${label}: no annotation`);
+  }
+});
+
+test('#555: a ship-batch-wait line never reads as the ship-batch value', () => {
+  // `^ship-batch[[:space:]]*:` must not match `ship-batch-wait:` — else a wait of 6m reads as a bad cap.
+  const r = runCase(scripts[TEMPLATES[0]], 'ship-batch-wait: 6m');
+  assert.strictEqual(r.status, 0, r.stdout + r.stderr);
+  assert.match(r.stdout, /ship-batch: absent — ok/);
+  assert.match(r.stdout, /ship-batch-wait: 6m — ok/);
+});

@@ -208,3 +208,53 @@ test('#509 landPushFailure: re-read remote decides "moved"; stderr decides refus
     ['error: failed to push some refs to \'o\'']);
   assert.strictEqual(sb.landPushFailure({ stderr: Array(20).fill('x').join('\n'), remoteNow: T, base: T }).lines.length, 8);
 });
+
+// ---- #555: ship-batch-wait ------------------------------------------------------------------------
+
+test('parseShipBatchWait: absent/null is no wait — today exactly', () => {
+  assert.deepStrictEqual(sb.parseShipBatchWait({}), { sec: 0, declared: false, valid: true, reason: 'ship-batch-wait absent' });
+  assert.strictEqual(sb.parseShipBatchWait(null).sec, 0);
+  assert.strictEqual(sb.parseShipBatchWait({ 'ship-batch-wait': null }).declared, false);
+});
+
+test('parseShipBatchWait: a whole number with a unit, no ceiling', () => {
+  assert.strictEqual(sb.parseShipBatchWait({ 'ship-batch-wait': '90s' }).sec, 90);
+  assert.strictEqual(sb.parseShipBatchWait({ 'ship-batch-wait': '6m' }).sec, 360);
+  assert.strictEqual(sb.parseShipBatchWait({ 'ship-batch-wait': ' 1h ' }).sec, 3600);
+  assert.strictEqual(sb.parseShipBatchWait({ 'ship-batch-wait': '48h' }).sec, 172800, 'the repo chooses — no handbook ceiling');
+  const zero = sb.parseShipBatchWait({ 'ship-batch-wait': '0m' });
+  assert.strictEqual(zero.valid, true); assert.strictEqual(zero.sec, 0);
+});
+
+test('parseShipBatchWait: malformed fails CLOSED to no wait, with the reason', () => {
+  for (const v of [6, '6', 0, '6 m', '6min', '1.5m', '-1m', 'm', true, 'soon', '']) {
+    const r = sb.parseShipBatchWait({ 'ship-batch-wait': v });
+    assert.strictEqual(r.sec, 0, JSON.stringify(v));
+    assert.strictEqual(r.valid, false, JSON.stringify(v));
+    assert.match(r.reason, /^ship-batch-wait is .*, expected a whole number with a unit/);
+  }
+});
+
+test('partnerWait: waits only for ONE eligible member, with a window, inside it', () => {
+  const base = { n: 3, waitSec: 360, eligibleCount: 1, readySinceMs: 1_000_000, nowMs: 1_000_000 + 60_000 };
+  assert.deepStrictEqual(sb.partnerWait(base), { wait: true, leftSec: 300 });
+  assert.deepStrictEqual(sb.partnerWait({ ...base, n: 1 }), { wait: false, reason: 'not-enabled' }, 'serial repo never waits');
+  assert.deepStrictEqual(sb.partnerWait({ ...base, waitSec: 0 }), { wait: false, reason: 'no-window' }, 'absent field never waits');
+  assert.deepStrictEqual(sb.partnerWait({ ...base, eligibleCount: 2 }), { wait: false, reason: 'has-partner' });
+  assert.deepStrictEqual(sb.partnerWait({ ...base, eligibleCount: 0 }), { wait: false, reason: 'none-ready' });
+  assert.deepStrictEqual(sb.partnerWait({ ...base, readySinceMs: null }), { wait: false, reason: 'ready-time-unread' });
+  assert.deepStrictEqual(sb.partnerWait({ ...base, nowMs: base.readySinceMs + 360_000 }), { wait: false, reason: 'window-elapsed' });
+  assert.deepStrictEqual(sb.partnerWait({ ...base, nowMs: base.readySinceMs - 5_000 }), { wait: true, leftSec: 360 }, 'clock skew never extends the window');
+});
+
+test('readySince: newest finished run, else the head commit, else null', () => {
+  const rows = [
+    { status: 'completed', updatedAt: '2026-10-07T10:00:00Z' },
+    { status: 'completed', updatedAt: '2026-10-07T10:05:00Z' },
+    { status: 'in_progress', updatedAt: '2026-10-07T11:00:00Z' },
+  ];
+  assert.strictEqual(sb.readySince(rows, '2026-10-07T09:00:00Z'), Date.parse('2026-10-07T10:05:00Z'));
+  assert.strictEqual(sb.readySince([], '2026-10-07T09:00:00Z'), Date.parse('2026-10-07T09:00:00Z'));
+  assert.strictEqual(sb.readySince(null, null), null);
+  assert.strictEqual(sb.readySince([{ status: 'completed' }], 'garbage'), null);
+});

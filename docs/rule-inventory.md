@@ -764,6 +764,8 @@ settled here: restored as a minimal clause, or recorded as redundant with the re
 | C4.batch.13 | hard | tools/colab::a batch never passes the cure/grant doors | A red trunk declines the whole batch; the cure/grant doors apply per member, never to a batch. | A red trunk still stops everything** except the cure/grant doors, and those apply | CONVENTIONS.md | #373 |
 | C4.batch.14 | default |  | `colab ship --batch` never waits; it exits 0 landed, 3 paused (wait on the printed run, rerun) or 4 declined (ship members one at a time). | `colab ship --batch` never waits: each call reads the remote, takes one step, and exits | CONVENTIONS.md | #373 |
 | C4.batch.15 | default |  | Declining is never a silent fall-through to the serial path. | Declining is never a silent fall-through to the serial path | CONVENTIONS.md | #373 |
+| C4.batch.16 | default |  | A ship pass builds a batch from every candidate ready at that moment, re-reading the set before each `--batch` call. | re-read the set right before each `--batch` call | CONVENTIONS.md | #555 |
+| C4.batch.17 | default |  | A lone ready candidate waits for a partner only up to the repo's declared `ship-batch-wait`, with the lane otherwise idle. | it waits up to that window | CONVENTIONS.md | #555 |
 
 ### Is a shipped half actually shippable? — the mechanical gate is not the judgement call (#263)
 
@@ -2498,6 +2500,15 @@ Reworded units, one bullet each. Row key changed: C6.rel.111 (the moved sentence
 | S1.shipbatch.11 | hard | tools/colab::batch landing needs it | A batch needs `autonomy: auto-trunk`; without the grant the field is inert. | A batch lands every member in one unattended push | project.schema.md | — |
 | S1.shipbatch.12 | default |  | `ship-batch/` is a ref namespace `colab ship` owns and manages itself. | `ship-batch/` is a ref namespace `colab ship` owns | project.schema.md | — |
 | S1.shipbatch.13 | default |  | `--batch` exit codes: 0 landed, 3 paused, 4 declined. | Exit codes of `--batch`: `0` landed · | project.schema.md | — |
+
+### `ship-batch-wait`
+
+| id | class | gate | rule | key | dest | source |
+|---|---|---|---|---|---|---|
+| S1.shipbatchwait.01 | default |  | `ship-batch-wait` is optional: how long a lone ready candidate waits for a partner; absent keeps today's behaviour. | Absent keeps today's behaviour exactly. | project.schema.md | #555 |
+| S1.shipbatchwait.02 | default |  | The handbook ships no default value and no ceiling for the window. | no default value and no ceiling | project.schema.md | #555 |
+| S1.shipbatchwait.03 | hard | tools/lib/ship-batch.js::expected a whole number with a unit | A malformed `ship-batch-wait` fails the audit and the CI descriptor check; `colab ship` fails closed to no wait on it. | and `colab ship` fails closed to no wait on it | project.schema.md | #555 |
+| S1.shipbatchwait.04 | default |  | The window is counted from when the lone member became ready, so it never restarts. | so the window never restarts | project.schema.md | #555 |
 
 ### `migrations`
 

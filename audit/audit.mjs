@@ -1304,6 +1304,17 @@ function auditRepo(target, ctx) {
       }
     }
 
+    // ---- ship-batch-wait (#555) -------------------------------------------------
+    // How long a lone ready candidate waits for a partner (tools/lib/ship-batch.js parseShipBatchWait,
+    // the reading `colab ship --batch` uses). Malformed fails here and in the CI templates' descriptor
+    // check, the #416 pattern — ship fails closed to no wait, silently. A window with no batch to fill
+    // (ship-batch absent or 1) is inert, so it warns. No ceiling: the repo chooses the value.
+    if ("ship-batch-wait" in (cfg || {}) && cfg["ship-batch-wait"] !== null) {
+      const wCfg = shipBatch.parseShipBatchWait(cfg);
+      if (!wCfg.valid) fail(`${wCfg.reason} — see project.schema.md, ship-batch-wait`);
+      else if (wCfg.sec > 0 && shipBatch.parseShipBatch(cfg).n <= 1) warn(`${wCfg.reason} is inert without ship-batch > 1 — there is no batch for a partner to join`);
+    }
+
     // ---- migrations (#383) ----------------------------------------------------
     // Where the repo's migrations live, beyond the two defaults (database/migrations/,
     // prisma/migrations/) — tools/lib/migration-paths.js is the one reading, shared with

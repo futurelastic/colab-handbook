@@ -444,6 +444,35 @@ namespace, on a rebuild) and deletes those refs itself. Exit codes of `--batch`:
 `3` paused (wait on the printed run, bounded, then run the same command again) · `4` declined —
 nothing landed, ship the members one at a time.
 
+### `ship-batch-wait` — optional
+
+```yaml
+ship-batch-wait: 6m   # a whole number with a unit: s, m or h; absent = no wait (the default)
+```
+
+How long a **lone** ready candidate waits for
+a partner before it lands alone (#555). Only read where `ship-batch` > 1; with `ship-batch`
+absent or 1 it is inert, and the audit says so. **Absent keeps today's behaviour exactly.**
+`0s`/`0m` is valid and also means no wait.
+
+The handbook ships **no default value and no ceiling**: the window is the repo's choice,
+taken from its own history (how long after one candidate goes green the next one usually
+does).
+
+**[Hard — gate: the audit fails it]** A unit is required — a bare `6` could be seconds or minutes, so it is refused rather
+than guessed. Any malformed value fails the audit **and the CI templates' descriptor
+check** (the #416 pattern), and `colab ship` fails closed to no wait on it: a bad value must
+never delay a landing.
+
+With it set, `colab ship --batch <b1>` takes a single branch. When exactly one member can
+join and the lane is otherwise idle (trunk's own run finished, no batch in flight at this
+base), it exits `3` with `⏸ PARTNER-WAIT` and the seconds left. The window is counted from
+when that member became ready: its head CI's last update, or its head commit's date when no
+run can arrive. Every call works out the time left again, on any machine, so the window
+never restarts. The caller waits, gathers every ready candidate again, and calls `--batch`
+with all of them. Once the window has passed, the same call declines the lone member to
+serial (exit `4`).
+
 ### `migrations` — optional
 
 ```yaml
@@ -1516,6 +1545,8 @@ the shape that shows it. One writer at a time says nothing about who reads the r
 | `branchPrefix` = `machine` when set | a misspelled value silently read as the unprefixed default |
 | `ship-batch` an integer 1–3 when set → **finding** otherwise | a misspelled opt-in silently read as serial by `colab ship` |
 | `ship-batch` > 1 with no workflow firing on a `ship-batch/**` push, or without `autonomy: auto-trunk` → **advisory** | a batch opt-in that can never land a batch |
+| `ship-batch-wait` a whole number with a unit (`s`/`m`/`h`) when set → **finding** otherwise | a misspelled window silently read as no wait by `colab ship` |
+| `ship-batch-wait` > 0 with `ship-batch` absent or 1 → **advisory** | a partner window with no batch to fill |
 | `migrations` a list of repo-relative prefixes when set — an absolute path, `..`, glob, the repo root, or a non-list → **finding** | a declaration the migration gate cannot honestly read |
 | `migrations` empty, restating a default, or naming one prefix twice → **advisory** | redundancy, harmless |
 | a tracked `*/migrations/` directory outside the defaults and every declared prefix → **advisory** (local only) | a migration layout `colab ship`'s gate cannot see |

@@ -46,6 +46,70 @@ function parseShipBatch(doc) {
   return { n: 1, declared: true, valid: false, reason: `ship-batch is ${JSON.stringify(v)}, expected an integer 1–${MAX_BATCH} (omit for serial)` };
 }
 
+const WAIT_KEY = 'ship-batch-wait';
+const WAIT_UNITS = { s: 1, m: 60, h: 3600 };
+
+/**
+ * #555: `ship-batch-wait:` from project.yml — how long a LONE ready candidate waits for a partner
+ * before it lands alone. A whole number plus a unit: `90s`, `6m`, `1h`. The unit is required, so a
+ * bare `6` (seconds? minutes?) is refused, never guessed. `0s`/`0m` is valid and means no wait.
+ *
+ * Absent → `sec: 0`, today's behaviour exactly. The handbook gives NO default value and NO ceiling
+ * (owner, 2026-10-07: "Should not set any hard code number") — the repo chooses, from its own
+ * history. Anything malformed FAILS CLOSED to no wait, with the reason: a bad value must never delay
+ * a landing. The audit and the CI templates' descriptor check fail the same values.
+ */
+function parseShipBatchWait(doc) {
+  const has = !!doc && Object.prototype.hasOwnProperty.call(doc, WAIT_KEY);
+  if (!has || doc[WAIT_KEY] === null || doc[WAIT_KEY] === undefined) {
+    return { sec: 0, declared: false, valid: true, reason: `${WAIT_KEY} absent` };
+  }
+  const v = doc[WAIT_KEY];
+  const m = typeof v === 'string' ? /^(\d+)([smh])$/.exec(v.trim()) : null;
+  if (m) {
+    const sec = Number(m[1]) * WAIT_UNITS[m[2]];
+    if (Number.isSafeInteger(sec)) return { sec, declared: true, valid: true, reason: `${WAIT_KEY}: ${v.trim()}` };
+  }
+  return { sec: 0, declared: true, valid: false, reason: `${WAIT_KEY} is ${JSON.stringify(v)}, expected a whole number with a unit — 90s, 6m, 1h (omit for no wait)` };
+}
+
+/**
+ * #555: does a batch call with ONE eligible member wait for a partner, or let it go serial now?
+ * Facts in (all already read by the caller, after it has ruled out a pending trunk run and a batch
+ * already in flight — the lane is otherwise idle by then):
+ *   n             parseShipBatch(doc).n
+ *   waitSec       parseShipBatchWait(doc).sec (0 = absent, zero, or malformed)
+ *   eligibleCount members that passed their own gates
+ *   readySinceMs  when the lone member became ready — its head CI's last update, else its head
+ *                 commit's date; null = unreadable
+ *   nowMs         the clock
+ * Out: `{ wait: true, leftSec }` or `{ wait: false, reason }`. The window is counted from the member's
+ * own ready time, not from this call, so the command stays stateless and re-entrant: every call
+ * re-derives how much is left, on any machine, and the window can never restart.
+ */
+function partnerWait({ n, waitSec, eligibleCount, readySinceMs, nowMs }) {
+  if (!(n > 1)) return { wait: false, reason: 'not-enabled' };
+  if (!(waitSec > 0)) return { wait: false, reason: 'no-window' };
+  if (eligibleCount !== 1) return { wait: false, reason: eligibleCount > 1 ? 'has-partner' : 'none-ready' };
+  if (!Number.isFinite(readySinceMs) || !Number.isFinite(nowMs)) return { wait: false, reason: 'ready-time-unread' };
+  const leftSec = Math.ceil(waitSec - Math.max(0, nowMs - readySinceMs) / 1000);
+  if (leftSec <= 0) return { wait: false, reason: 'window-elapsed' };
+  return { wait: true, leftSec };
+}
+
+/**
+ * When did a member become ready? The newest `updatedAt` among its finished head runs (a run's last
+ * update is its completion), else — no run, because none can arrive — its head commit's date.
+ * Null when neither reads; the caller then does not wait.
+ */
+function readySince(rows, commitIso) {
+  const done = (Array.isArray(rows) ? rows : []).filter((r) => r && r.status === 'completed')
+    .map((r) => Date.parse(r.updatedAt || '')).filter(Number.isFinite);
+  if (done.length) return Math.max(...done);
+  const c = Date.parse(commitIso || '');
+  return Number.isFinite(c) ? c : null;
+}
+
 function batchRefName(baseSha) {
   return `${REF_PREFIX}${String(baseSha || '').slice(0, 7)}`;
 }
@@ -315,8 +379,8 @@ function landPushFailure({ stderr, remoteNow, base, max = 8 } = {}) {
 }
 
 module.exports = {
-  MAX_BATCH, REF_PREFIX, PROBE_REF, TRAILER_KEY,
-  parseShipBatch, batchRefName, parseBatchRef, memberTrailer, parseMemberTrailers,
+  MAX_BATCH, REF_PREFIX, PROBE_REF, TRAILER_KEY, WAIT_KEY,
+  parseShipBatch, parseShipBatchWait, partnerWait, readySince, batchRefName, parseBatchRef, memberTrailer, parseMemberTrailers,
   branchCiClass, memberEligibility, selectMembers, wiring, combinedVerdict, nextStep, foreignBatchStep,
   batchGreenCoversTrunk, evidenceSuffix, serialLine, notStaged, landPushFailure,
 };
