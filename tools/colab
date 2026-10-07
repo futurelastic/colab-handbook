@@ -1851,7 +1851,8 @@ const HELP_RELEASE_FINALIZE = `colab release finalize [--repo <path>] [--auto | 
 Take the newest release CANDIDATE (a vX.Y.Z-rc.N tag made by \`colab release cut\`) one step further
 under CONVENTIONS.md §6's release rung, re-checking everything at the moment it runs. Every run:
 
-  1. fetches tags, picks the newest open candidate (never a hand-made or off-main one);
+  1. fetches tags, picks the newest open candidate — or the one --tag names (never a hand-made or
+     off-main one);
   2. finds — or, without --dry, opens — the version's tracking issue, "release: vX.Y.Z", whose body
      starts <!-- colab:release version=vX.Y.Z --> (one per version, never per candidate);
   3. measures, and ends in exactly one state:
@@ -1884,7 +1885,7 @@ Conditions (--json checks[].condition; required:false means reported, not blocki
   test-period   from max(candidate tag date, tracking issue creation), release: test-period long
   trunk-green   every run since the period began on main — and on project.yml's trunk: when that is
                 another branch (trunk: dev, #437) — of the workflows that ran at the candidate,
-                none red — required only where the final is automatic
+                none red — required only where the final is automatic, or for an older --tag (#548)
 
   manifest-version  on-trunk  outranks-final — #424's pre-tag checks, required before any final:
                 the final equals every declared manifest version, its commit is on main (a shallow
@@ -1906,7 +1907,11 @@ Conditions (--json checks[].condition; required:false means reported, not blocki
                       never tags: it stops at candidate-ready and posts the one command, number
                       pre-filled. Never combines with --tag/--answered-by. testing / no-candidate /
                       already-final exit 0 (nothing to do yet is the ordinary output)
-  --tag <rc>          pin the candidate a human reviewed; refused unless it is the newest one
+  --tag <rc>          pin the candidate a human reviewed — the newest one, or any OLDER open candidate
+                      (#548). An older one is judged on its own clock exactly as --auto judges it: its
+                      own test period must have elapsed and trunk-green is read over its own window, on
+                      every row; release-hold and regressions as always. Newer candidates stay open
+                      for the next version — only versions below the final are closed as superseded
   --answered-by <n>   with COLAB_HUMAN=1 and --tag: the human bar for a final that is a human act.
                       No field, flag or project.yml value lowers it, and it never shortens a test period.
                       Where the final is a human act the period is informational anyway, and
@@ -1982,6 +1987,8 @@ function cmdReleaseFinalize(argv) {
   const newest = selection.kind === 'candidate' ? selection.candidate : null;
   // #423: on a route whose final is automatic, --auto judges every open candidate on its own clock.
   const walk = opts.auto && policy.effective.final === 'auto' && newest;
+  // #548: --tag naming an older open candidate — judged on its own clock, as the walk judges it.
+  const ownClock = walk || (selection.kind === 'candidate' && !!selection.older);
 
   // ---- the tracking records (one issue read for the whole run) ----
   const issues = readAllIssuesForSwitches(repoAbs);
@@ -2040,7 +2047,7 @@ function cmdReleaseFinalize(argv) {
       return { branch, read: raw ? { ...raw, runs: releaseCut.withoutOwnWorkflow(raw.runs) } : null }; // #425
     }));
     const trunk = releaseFinalize.trunkGreenVerdict(since ? since.runs : null, {
-      periodStart: period.start, periodEnd: walk ? period.endsAt : null, suiteWorkflows, truncated: !!(since && since.truncated), branches: windowBranches,
+      periodStart: period.start, periodEnd: ownClock ? period.endsAt : null, suiteWorkflows, truncated: !!(since && since.truncated), branches: windowBranches,
     });
     const regressions = releaseFinalize.regressionVerdict(tracking && tracking.number ? readRegressionEdges(repoAbs, tracking.number) : [], { periodStart: period.start });
     const { manifests, ancestry } = measurePreTag(repoAbs, cand.sha, `${remote}/main`); // #424
@@ -2119,7 +2126,7 @@ function cmdReleaseFinalize(argv) {
   const announceRelease = (version, sha) => announceCarried(repoAbs, { tagNames, exclude: records.map((r) => r.number), version, sha });
   if (!opts.dry) {
     if (verdict.state === 'finalized') {
-      const actor = humanBar && !verdict.grant ? `${opts.answeredBy} (human bar: COLAB_HUMAN=1)` : `automatic — clean test period (CONVENTIONS.md §6)${verdict.grant ? `, by the operator's grant (decision #${verdict.grant.issue})` : ''}${walk ? ', newest candidate clean on its own clock (--auto)' : ''}`;
+      const actor = humanBar && !verdict.grant ? `${opts.answeredBy} (human bar: COLAB_HUMAN=1)` : `automatic — clean test period (CONVENTIONS.md §6)${verdict.grant ? `, by the operator's grant (decision #${verdict.grant.issue})` : ''}${walk ? ', newest candidate clean on its own clock (--auto)' : ''}${selection.older ? `, an older candidate clean on its own clock (--tag; newest open: ${selection.newest})` : ''}`;
       const message = releaseFinalize.tagMessage(verdict, { candidate: cand, period, actor });
       const t = git.git(['tag', '-a', '--cleanup=verbatim', cand.version, cand.sha, '-m', message], repoAbs);
       if (!t.ok) throw new UserError(`git tag ${cand.version} failed: ${(t.stderr || '').split('\n')[0]}`);
@@ -2143,7 +2150,7 @@ function cmdReleaseFinalize(argv) {
       const pNew = releaseFinalize.periodVerdict({ cutAt: newest.cutAt, trackingCreatedAt: tNew.createdAt, testPeriodDays: policy.effective.testPeriodDays, now });
       comment(tNew.number, { candidate: newest.tag }, pNew.days === 0
         ? `Candidate **${newest.tag}** (\`${shortSha(newest.sha)}\`) picked up — no test period on this repo (\`release.test-period: 0d\`, #549): the human's finalize is the test.`
-        : walk
+        : ownClock
         ? `Candidate **${newest.tag}** (\`${shortSha(newest.sha)}\`) picked up — its own test period runs ${pNew.start} → ${pNew.endsAt}. A newer candidate does not restart an older one's clock: the newest candidate clean for its own period is finalized (\`--auto\`).`
         : `Candidate **${newest.tag}** (\`${shortSha(newest.sha)}\`) picked up — its test period runs ${pNew.start} → ${pNew.endsAt}. A new candidate restarts it.`);
     }
@@ -2160,12 +2167,14 @@ function cmdReleaseFinalize(argv) {
     // #426: every issue the final carries hears which version has it — on the run that tags, and on
     // the already-final resume (a run that died between the tag push and these comments finishes them).
     if (tagged) announced = announceRelease(cand.version, cand.sha);
-    // Superseded records. Without --auto: every other open, unheld, non-final version (the newest one
-    // is the only one ever finalized). With --auto: only versions BELOW one just tagged — a newer
-    // version's candidates are still on their own clocks.
-    if (cand && (!walk || tagged)) {
+    // Superseded records: only versions BELOW one just tagged, on every path (#548). Before #548 a run
+    // without --auto closed every other open version at once, because only the newest candidate could
+    // ever be finalized; now `--tag` may finalize any open candidate, so an older version's record has
+    // to stay open until a final above it exists — closing it earlier refuses that --tag ("closed but
+    // not final"). A newer version's candidates are still on their own clocks either way.
+    if (cand && tagged) {
       for (const r of records.filter((x) => x.state === 'OPEN' && !x.held && x.version !== cand.version && !finals.has(x.version)
-        && (!walk || releaseFinalize.compareVersions(x.version, cand.version) < 0))) {
+        && releaseFinalize.compareVersions(x.version, cand.version) < 0)) {
         comment(r.number, { state: 'superseded', by: cand.version }, `Superseded by ${cand.version} — no final is owed for ${r.version}.`);
         close(r.number);
       }

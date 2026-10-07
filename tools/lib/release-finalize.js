@@ -39,6 +39,12 @@
  * On a route whose final is a human act (`deploy-tag`) --auto never tags: it stops at
  * candidate-ready and posts the one command, number pre-filled.
  *
+ * `--tag` (#548) may name ANY open candidate, not only the newest, so a human can release what
+ * finished testing without trunk freezing for a whole period. An older one is held to the same rule
+ * --auto applies to it: its own test period and its own trunk window are required on every row
+ * (selectCandidate marks it `older`; decide() reads that). Newer candidates stay open, and a
+ * version's record closes as superseded only once a final ABOVE it is tagged.
+ *
  * Before ANY final, the three #424 pre-tag checks (release-tag.js preTagChecks) are required:
  * manifest-version, on-trunk, outranks-final.
  *
@@ -134,6 +140,8 @@ function trackingBody({ version, row, final, testPeriodDays }) {
  *   { kind: 'already-final', version, detail }
  *   { kind: 'refused', detail }
  *   { kind: 'candidate', candidate: { tag, version, n, sha, cutAt }, superseded: [version], detail }
+ *   { kind: 'candidate', older: true, newest: <tag>, … }   #548: `pin` names an open candidate that
+ *     is not the newest — decide() then requires its own test period and trunk window, as --auto does
  */
 function selectCandidate(tags, pin, remote = 'origin') {
   const all = tags || [];
@@ -159,16 +167,32 @@ function selectCandidate(tags, pin, remote = 'origin') {
   const newest = open[open.length - 1];
   const superseded = [...new Set(open.map((x) => x.p.version).filter((v) => v !== newest.p.version))];
 
-  if (pin && pin !== newest.t.name) {
-    return { kind: 'refused', detail: `--tag ${pin} is not the newest candidate (${newest.t.name}) — a final names the candidate that was actually tested last` };
-  }
-  const t = newest.t;
+  // #548: --tag may name an OLDER open candidate. It is then judged on its own clock, exactly as
+  // --auto judges it (decide() makes test-period and trunk-green over its own window required), so a
+  // human can release what finished testing while trunk keeps merging; the newer candidates stay open.
+  const chosen = pin ? open.find((x) => x.t.name === pin) : newest;
+  if (!chosen) return { kind: 'refused', detail: `--tag ${pin} is not an open candidate` };
+  const older = chosen !== newest;
+  const t = chosen.t;
   if (!t.annotated || !String(t.subject || '').endsWith(CUT_SUBJECT_SUFFIX)) {
     return { kind: 'refused', detail: `${t.name} was not made by \`colab release cut\` (not an annotated tag whose message ends "${CUT_SUBJECT_SUFFIX}") — a candidate cut by hand is never finalized (CONVENTIONS.md §6)` };
   }
   if (!t.onMain) return { kind: 'refused', detail: `${t.name} (${String(t.sha).slice(0, 7)}) is not on ${remote}/main — candidates are cut from main` };
   if (!t.date || Number.isNaN(Date.parse(t.date))) return { kind: 'refused', detail: `${t.name} has no readable tagger date — the test period cannot be placed` };
 
+  if (older) {
+    // Only versions BELOW the pinned one are superseded by it; a newer version's candidates stay open.
+    const below = [...new Set(open.map((x) => x.p.version).filter((v) => compareVersions(v, chosen.p.version) < 0))];
+    const newer = open.filter((x) => compareVersions(x.p.version, chosen.p.version) > 0 || (x.p.version === chosen.p.version && x.p.n > chosen.p.n)).map((x) => x.t.name);
+    return {
+      kind: 'candidate',
+      older: true,
+      newest: newest.t.name,
+      candidate: { tag: t.name, version: chosen.p.version, n: chosen.p.n, sha: t.sha, cutAt: new Date(t.date).toISOString() },
+      superseded: below,
+      detail: `${t.name} at ${String(t.sha).slice(0, 7)}, cut ${new Date(t.date).toISOString()} — an older candidate, judged on its own clock (newer, still open: ${newer.join(', ')})${below.length ? `; supersedes ${below.join(', ')}` : ''}`,
+    };
+  }
   return {
     kind: 'candidate',
     candidate: { tag: t.name, version: newest.p.version, n: newest.p.n, sha: t.sha, cutAt: new Date(t.date).toISOString() },
@@ -523,10 +547,14 @@ function decide(facts) {
   }
   const reg = f.regressions || { ok: false, permanent: false, detail: 'not measured' };
   add('regressions', reg.ok, reg.detail);
+  // #548: an older candidate pinned by --tag is finalized only on its own clean clock — the rule
+  // --auto applies to it — whatever the row: a newer candidate exists, so "the human is the test"
+  // no longer explains why THIS one, and its own clean period is what does.
+  const ownClock = auto || !!s.older;
   const per = f.period || { elapsed: false, detail: 'not measured' };
-  add('test-period', per.elapsed, per.detail, auto);
+  add('test-period', per.elapsed, s.older && !auto ? `${per.detail} — required: an older candidate is finalized only once its own period elapsed clean (#548)` : per.detail, ownClock);
   const tr = f.trunk || { ok: false, permanent: false, pending: false, detail: 'not measured' };
-  add('trunk-green', tr.ok, tr.detail, auto);
+  add('trunk-green', tr.ok, tr.detail, ownClock);
   for (const [condition, v] of [['ci-green', f.ci], ['full-suite', f.suite], ['schema-additive', f.schema], ['switch-dependencies', f.switches]]) {
     add(condition, v && v.ok, v ? v.detail : 'not measured');
   }
@@ -539,14 +567,14 @@ function decide(facts) {
   }
 
   if (held.length) return out('held');
-  if ((reg.permanent) || (auto && tr.permanent)) return out('needs-new-candidate');
+  if ((reg.permanent) || (ownClock && tr.permanent)) return out('needs-new-candidate');
   const blocking = checks.filter((c) => c.required && !c.ok && !['test-period', 'trunk-green', 'human'].includes(c.condition));
   if (blocking.length) return out('refused');
-  if (auto) {
+  if (ownClock) {
     if (!tr.ok && !tr.pending) return out('refused');
     if (!per.elapsed || tr.pending) return out('testing');
-    return out('finalized', { finalTag: cand.version, grant: grantUsed });
   }
+  if (auto) return out('finalized', { finalTag: cand.version, grant: grantUsed });
   if (!h.bar) return out('candidate-ready', { handoff: handoffCommand(cand.tag) });
   return out('finalized', { finalTag: cand.version });
 }
