@@ -3803,17 +3803,9 @@ it — *Release routes*, below). The `pre-push-guard` hook enforces the
 first two mechanically; `COLAB_SHIP` never opens `main`.
 
 **`COLAB_SHIP` and `COLAB_PROMOTE` are process-identity assertions, not permissions — an
-agent never sets either by hand, and a refusal never names one.** They mean "that command
-ran its preconditions", which is a claim only the command can truthfully make; typed at a
-shell, one asserts it falsely and reaches a direct trunk push having skipped the grade,
-the branch-CI check, the claim release and the evidence comment. Unlike `COLAB_HUMAN`,
-neither has any sanctioned hand-set case at all — not even solo flow's. Measured: two
-independent sessions set `COLAB_SHIP=1` by hand on the same repo on the same day, neither
-aware it was crossing a line, one reporting it in a status summary as ordinary
-housekeeping — and **neither had read it in a skill.** They read it in `pre-push-guard`'s
-own refusal, which named the variable that opens it. A guard that teaches its bypass at
-the moment it refuses is not a guard, so every refusal on this path now names the remedy
-(`colab ship`, `colab promote`) and nothing else.
+agent never sets either by hand, and a refusal never names one.** Unlike `COLAB_HUMAN`,
+neither has any sanctioned hand-set case at all — not even solo flow's. Accordingly, every refusal on this path now names the remedy
+(`colab ship`, `colab promote`) and nothing else. Why, with the measurement: [ADR 539](docs/adr/539-releases-routes-rationale.md).
 
 **Closing that door required closing the corner behind it, or it would have become a
 stall.** Both sessions reached for the variable while holding a completed local merge
@@ -3874,11 +3866,7 @@ block that tries to widen it is an audit failure, not an override.
 
 **The newest candidate always names trunk's head (#443).** Wherever candidates are automatic,
 once trunk CI is green on `main`'s head, the newest candidate is that head: every green trunk
-run whose head carries no candidate cuts one, and no route caps how many a day. A burst of
-merges therefore gets a candidate on each green head — what an adopter installs from `next` is
-never behind what trunk proved. Measured the day a one-a-day cap shipped (#439): four merges
-landed 40 minutes after a candidate, the cap kept them out of any tag until the next day, and a
-catch-up candidate had to be cut by hand. A repo may still declare
+run whose head carries no candidate cuts one, and no route caps how many a day. A repo may still declare
 `release.candidates-per-day` as a **narrowing**, and it keeps the guarantee: inside the window
 the run is a no-op, and the first run after the window closes — the next green CI, or the daily
 scheduled run, which cuts too — cuts **the head**, never an older commit. A head that already
@@ -3888,7 +3876,7 @@ least the test period, by design. `colab release-status` reads the guarantee bac
 *head not a candidate* when a green head has stayed untagged for longer than one CI cycle (the
 longest suite run at that sha). And every candidate has a release page however it was cut:
 `colab release cut` publishes the GitHub pre-release itself, notes = the summary since the last
-final plus the tag's own message, so a cut run outside the workflow no longer leaves a bare tag.
+final plus the tag's own message, so a cut run outside the workflow no longer leaves a bare tag. Why, with the measurement: [ADR 539](docs/adr/539-releases-routes-rationale.md).
 
 **[Hard — gate: colab release cut refuses]** **A candidate is cut only when all four hold, on the exact commit it names:**
 
@@ -3904,11 +3892,8 @@ final plus the tag's own message, so a cut run outside the workflow no longer le
 **[Hard — gate: colab release finalize refuses]** **The test period is 3 days, and it is clean only if trunk CI stayed green throughout
 and no regression against the candidate is open.** "Trunk" here is both `main`, where
 candidates are cut, and the `trunk:` branch where that is a different one (`trunk: dev`,
-#437): there `main` receives CI only at promotions, so a `main`-only reading would hold
-little beyond the promotion's own run, while `trunk:` is where the code actually moved
-during the period. It matters only on a route whose final
-is automatic (`rapid-app`, `public-tool`); `library-fast` and `deploy-tag-fast` have none,
-because they cut no candidate. A route may lengthen it, never shorten it. A human vetoes by holding the candidate during it; a held candidate is not finalized.
+#437). It matters only on a route whose final
+is automatic (`rapid-app`, `public-tool`); `library-fast` and `deploy-tag-fast` have none. A route may lengthen it, never shorten it. A human vetoes by holding the candidate during it; a held candidate is not finalized.
 **Finalizing re-checks every condition above at the moment it runs** — a candidate that
 was clean when cut and is not now stays a candidate. Where the final tag is a human act,
 the agent's work ends with the candidate, its release notes, and the one click — number
@@ -3945,8 +3930,7 @@ as pre-releases, the audit flags a deploy trigger that matches one, and every
 current-release read skips them.
 
 **An operator-granted automatic final (#441).** The default above stands: a final that deploys
-production is a human act. The operator may choose otherwise for **one repo at a time** — *"in
-some cases I want the release to deploy too; only some cases, but possible when I choose"*. The
+production is a human act. The operator may choose otherwise for **one repo at a time**. The
 grant is a human act, recorded the way an `autonomy` grant is, and checked on every read:
 
 - **[Hard — gate: colab release finalize refuses]** **Recorded, never written by an agent.** The operator rules on a decision issue
@@ -3970,12 +3954,10 @@ grant is a human act, recorded the way an `autonomy` grant is, and checked on ev
 - **Every automatic deploy says whose choice made it so.** The final tag's message names the
   grant and its decision issue, and who ruled it.
 
-**A final on every green head — `deploy-tag-fast` (#446).** Some repos have nobody to test a
-candidate: an app whose only user is its operator, where a 3-day period only measures "nothing
-new merged for 3 days". For such a repo the operator may choose route `deploy-tag-fast`: on
+**A final on every green head — `deploy-tag-fast` (#446).** For a repo with nobody to test a candidate, the operator may choose route `deploy-tag-fast`: on
 every green trunk head `colab release cut --auto` tags the **final** `vX.Y.Z` directly — no
 `-rc`, no test period — and the release workflow deploys it in the same run. The version tags
-stay; only the candidate step goes. It replaces the test period with two declarations and keeps
+stay; only the candidate step goes. Why: [ADR 539](docs/adr/539-releases-routes-rationale.md). It replaces the test period with two declarations and keeps
 every gate that does not depend on one:
 
 - **[Hard — gate: colab release cut refuses]** **The operator's grant, read exactly as #441's.** `release.final-grant: <N>` names a recorded
@@ -4013,22 +3995,19 @@ platform has an API deploys through [`templates/deploy-container.yml`](templates
 and its two scripts, on every host the same way:
 
 1. CI builds every image the repo lists **once** per final tag (`vX.Y.Z` and the commit sha) and
-   pushes it — in its own job, never gated on whether the platform is switched on, so a repo not
-   yet cut over still has every final's image in the registry (#460).
+   pushes it — in its own job, never gated on whether the platform is switched on.
 2. A per-repo pre-deploy step (a database snapshot, say) runs next; its failure stops the deploy
    before anything changes.
 3. A **platform adapter** tells the platform "run exactly `vX.Y.Z`", every image in one call.
 4. The deploy is green only on a **verified running version**: the platform's own state (the
    stack settled, the commit it deployed, the image its containers run), then
-   `release.health-url` reporting `X.Y.Z`. An HTTP 200 from the platform is never the evidence —
-   a platform can accept a deploy it then refuses to run.
+   `release.health-url` reporting `X.Y.Z`. An HTTP 200 from the platform is never the evidence.
 5. A failure after the platform accepted the call rolls back to what ran before (the previous
    final), checks that, and still fails the run. A manual rollback is the same workflow run with
    the previous tag. The outcome — `running vX.Y.Z at <time>`, or the failure — is recorded in the
    run summary and on the release issue when one exists.
 
-It is the existing `deploy: tag` shape with an in-repo deploy workflow (`channels: [workflow]`),
-so no rule changes; the template is what was missing. **There is one deploy path, reached two
+**There is one deploy path, reached two
 ways:** on `deploy-tag` a human-pushed final starts it (`push: tags`, finals only); on
 `deploy-tag-fast` the release workflow's `deploy` job calls the same file through
 `workflow_call` (the commented job in `templates/release-auto.yml`), because the final it tags
@@ -4036,7 +4015,7 @@ starts no `push: tags` run. Portainer is the first adapter; another platform is 
 file exporting the same functions, and a consuming workflow changes one variable. **One platform
 key per app**, for a non-admin user owning only that app's stack — never an admin key. Every
 server runs its own platform instance, so the configuration is that host's URL, environment and
-stack, by DNS name. Every redeploy recreates the containers, even with an unchanged compose file.
+stack, by DNS name. Every redeploy recreates the containers, even with an unchanged compose file. Why: [ADR 539](docs/adr/539-releases-routes-rationale.md).
 
 **[Hard — gate: pre-tag check refuses]** **A manifest's version may be derivable (#438), and on an automatic route it is by default
 (#484).** Under [`release.version-source: manifest`](project.schema.md#release--optional) the
@@ -4045,15 +4024,11 @@ pre-tag check refuses a tag that disagrees with any declared manifest (`VERSION`
 first. Under `tag` the check skips a differing manifest, names it, and the tag message records it
 as derivable. The repo's own release or deploy step stamps the number from the tag — on a
 deploy-only ref, or at build time — **never as a commit on trunk**: the release workflow never
-pushes one, and a stamp on trunk would put a version in the tree before the release it names
-exists.
+pushes one.
 
 The default follows who cuts the tag. Where the machine does — automatic candidates, or a final
-`release cut --auto` tags itself — it is `tag`, because nobody is there to bump a manifest
-before each cut: under `manifest` the first candidate after a final refuses, and so does every
-one after it, a stall that reads only as a warning in a green run. Where a person cuts the tag it
-stays `manifest`. A declared value wins either way; the cut and the final read the same one, so
-a candidate cut under `tag` is never refused as a final under `manifest`.
+`release cut --auto` tags itself — it is `tag`. Where a person cuts the tag it
+stays `manifest`. A declared value wins either way; the cut and the final read the same one. Why: [ADR 539](docs/adr/539-releases-routes-rationale.md).
 
 **Under `tag`, any version a user sees reads the tag, never the trunk manifest.** A `--version`,
 an about page, a health endpoint reporting the running version: each reads the tag or a stamp
@@ -4076,16 +4051,14 @@ hold the shape:
 - **Trusted publishing (OIDC) only.** No npm token is stored, read, or offered as a fallback; the
   job refuses to run with one in its environment. npm trusted publishing does not support
   self-hosted runners, so this job runs **GitHub-hosted** even where the rest of the workflow is
-  self-hosted. (npm ends direct publishing with 2FA-bypass tokens in January 2027; nothing here
-  depends on one.)
-- **Same run, never a tag-triggered workflow** — the reason the GitHub Release is published in
-  the same run: a tag pushed with `GITHUB_TOKEN` triggers nothing.
+  self-hosted.
+- **Same run, never a tag-triggered workflow**.
 - **A private repository never publishes to public npm** (#432). Visibility is not in
   `project.yml`, so the job reads it from the API and refuses a private or unreadable one.
 - **It never moves git.** The version comes from the tag (the manifest carries none) and is
   stamped into the checkout, then the gate runs, then `npm publish`. If publishing fails, the tag
   stands, the Release says *tagged, not published*, and re-running the failed job publishes the
-  existing tag; a version already on npm is skipped.
+  existing tag; a version already on npm is skipped. Why: [ADR 539](docs/adr/539-releases-routes-rationale.md).
 
 **Release channels — consumers follow `stable` or `next`, not a hand-bumped pin (#445).** Two
 branches name the newest release of each kind, the git counterpart of npm's `latest` / `next`:
@@ -4096,16 +4069,13 @@ branches name the newest release of each kind, the git counterpart of npm's `lat
   the human's final command, fast-forwards it to the final's commit; a later run that finds the
   version already final repairs a `stable` a dead run left behind.
 
-**[Hard — gate: pre-push-guard hook]** **They are branches, not tags.** A moving tag is refused by every clone that already fetched it
-(`would clobber existing tag`), and a non-semver tag is read as "the newest version" by tag
-readers (`git describe --tags`, stamps). A branch moves cleanly and no tag reader sees it, so
-version tags stay immutable. **Nothing else writes them:** both move **forward only**, never
+**[Hard — gate: pre-push-guard hook]** **They are branches, not tags.** **Nothing else writes them:** both move **forward only**, never
 forced — a channel that is not an ancestor of the new commit is reported and left alone, never
 overwritten — and [`pre-push-guard`](templates/pre-push-guard) refuses a hand push to either
 (the release commands push with their own process-identity variable, the `colab ship`
 precedent). `stable` sitting on an older commit than `next` is the design, not drift. A channel
 move is best-effort like the GitHub pre-release: the tag is already on the remote, so a channel
-that cannot move is a warning, never a reason to undo the tag.
+that cannot move is a warning, never a reason to undo the tag. Why: [ADR 539](docs/adr/539-releases-routes-rationale.md).
 
 **What a consumer pins.** [`templates/release-auto.yml`](templates/release-auto.yml)'s
 `HANDBOOK_REF` defaults to `stable`; a repo may pin `next` (the fast channel) or an exact version
@@ -4113,11 +4083,10 @@ tag (frozen — the one way to stop moving). When `stable` moves, that final's r
 what changed. A pinned ref the handbook does not carry — `stable` before its first final, or any
 channel on a fork or mirror that lacks it — is not a failure: the fetch step falls back to the
 newest final tag no older than the first final carrying every verb the template calls, else
-`next`, and says so in a warning (#480). Falling back to an older final would only move the red
-run one step later, to the first `--auto` call it rejects (#427). A tool installed **with npx** follows a channel the same way, with one difference:
+`next`, and says so in a warning (#480). A tool installed **with npx** follows a channel the same way, with one difference:
 the channel is resolved to the release tag on it before anything is installed, never installed as
 a ref — a per-machine service through its `update` verb, a one-shot command through the launcher
-([*Services over npx*](#services-over-npx--init-update-rollback-465), below).
+([*Services over npx*](#services-over-npx--init-update-rollback-465), below). Why: [ADR 539](docs/adr/539-releases-routes-rationale.md).
 
 **Versioning** — SemVer. Patch for fixes, minor for features, major for breaking changes.
 Pre-1.0 repos use `v0.x.y`, treating minor as "meaningful increment".
@@ -4135,11 +4104,9 @@ number.** Since the last final tag:
   consumer has to change, and how much of it was measured — **or it is refused.** A major
   with no migration section is not cut, by the workflow or by hand.
 
-The computation reads more than commit subjects precisely because the breaking change that
-bites is the one the types don't reveal — a destructive schema change or a renamed export
-merged as `feat:` or `fix:` with no `!`. **Put the reasoning in the release notes**: the
+**Put the reasoning in the release notes**: the
 bump computed, which input decided it, and each breaking change found — or that none was,
-and what was checked.
+and what was checked. Why: [ADR 539](docs/adr/539-releases-routes-rationale.md).
 
 **An unfinished feature never waits for a release, and never reaches one switched on.** On
 a repo that tags, a feature landing over several merges is an epic behind a switch: it
@@ -4161,8 +4128,7 @@ colab release-notes v1.1.0..v1.2.0 | gh release create v1.2.0 --notes-file - --g
 **Merged is not released — measure the gap, don't wait to notice it by eye.**
 `colab release-status [--repo P] [--json]` (#81) reports commits on `dev` not yet
 promoted, commits on `main` past the last `v*` tag (plus days since), and flags whichever
-gap holds a `fix:`-typed or breaking commit — exactly the class that has bitten before,
-in payroll. Its suggested SemVer bump is an input, not a verdict: the coordinator
+gap holds a `fix:`-typed or breaking commit. Its suggested SemVer bump is an input, not a verdict: the coordinator
 confirms or overrides it and states the reason in the release notes — it reads commit
 types, so it cannot see a breaking change the types don't reveal — the computed number
 (*Versioning*, above) also reads guard results and exports, and is the one a candidate
@@ -4206,27 +4172,20 @@ tag, and a platform without its binary, and never moves a dist ref that exists) 
 [`templates/npx-launcher.mjs`](templates/npx-launcher.mjs) (Node ≥ 18, zero dependencies).
 
 - **The launcher installs the release npx was asked for.** It reads the `#vX.Y.Z` committish from
-  the installing project's own record of the package, not from the manifest — a candidate
-  `#vX.Y.Z-rc.N` and its final carry the same manifest version, and only the committish tells
-  them apart. Where no record exists (a global install), the manifest version is the fallback; an
+  the installing project's own record of the package, not from the manifest. Where no record exists (a global install), the manifest version is the fallback; an
   environment variable overrides both; with none of them it refuses rather than guessing.
 - **The checksum proves the bytes, not the publisher.** `SHA256SUMS` lives in the same ref as the
   binary, so it catches a truncated or corrupted fetch. The trust anchor is write access to the
   repository, as it is for the source npx just ran.
-- **A dist ref is a tag, and a full clone pays for it.** A plain `git clone` fetches every tag,
-  including every platform of every release; later plain fetches do not (a tag is followed only
-  into fetched history, and an orphan is never in it). Contributors who mind clone with
+- **A dist ref is a tag, and a full clone pays for it.** Contributors who mind clone with
   `--no-tags`. npm's own tag-to-version parsing ignores dist refs (`v0.4.0-rc.1/darwin-x64` is not
-  a valid version), so a `#semver:` install range is unaffected.
+  a valid version), so a `#semver:` install range is unaffected. Why: [ADR 539](docs/adr/539-releases-distribution-rationale.md).
 
 **Rules that apply to every row:**
 
-- **Publish or push in the same run as the release cut.** A tag made with `GITHUB_TOKEN` triggers
-  no other workflow, so a "build on tag push" workflow never runs for a tag the release workflow
-  made — the same reason the Release itself is published in that run.
+- **Publish or push in the same run as the release cut.**
 - **Trusted publishing (OIDC) for npm, never a token** — the npm job's first rule, above.
-- **A long-running tool never runs from npx's cache.** npm may prune that cache under a live
-  process. A tool that runs as a service installs, updates and rolls back through the contract in
+- **A long-running tool never runs from npx's cache.** A tool that runs as a service installs, updates and rolls back through the contract in
   [*Services over npx*](#services-over-npx--init-update-rollback-465), below.
 
 The audit reports a **private** repository whose workflows upload GitHub Release assets
@@ -4238,10 +4197,8 @@ A repository that **declares** it distributes a tool — `distribution: js` or `
 compiled` in `project.yml` ([schema](project.schema.md#distribution--optional)) — is checked for
 its row's install route: a publish step plus a non-private `bin` (public JS; per-platform
 `optionalDependencies` too when compiled), a root `bin` (private JS), or a root `bin` plus a
-workflow calling a dist-refs workflow (private compiled). A missing route is **advisory** (`warn`):
-a publish in a reusable workflow outside the repository is invisible to the check. An undeclared
-repository is never checked — nothing in a repository tells a tool from a library, so the audit
-does not guess (#469).
+workflow calling a dist-refs workflow (private compiled). A missing route is **advisory** (`warn`). An undeclared
+repository is never checked (#469).
 
 ### Services over npx — init, update, rollback (#465)
 
@@ -4299,8 +4256,7 @@ it. A pinned install's timer runs and changes nothing, exactly as `update` does.
 **A one-shot command at a channel.** `npx github:<org>/<repo>#stable <args>` works too: the
 launcher resolves the channel on the commit npx installed (the sha in the installing project's
 lockfile) to its release tag and fetches that version's dist ref, so the binary always matches the
-source npx ran. npx re-resolves a branch committish on every run (measured on npm 11: the cached
-install is reused, and its lockfile's commit moves with the branch), so a one-shot command at a
+source npx ran. npx re-resolves a branch committish on every run, so a one-shot command at a
 channel costs one round trip to the origin per run — pin `#vX.Y.Z` where that matters. Any other
 branch (`#main`) is still refused: it names no release.
 
@@ -4327,11 +4283,7 @@ same git, verifies it against that ref's `SHA256SUMS` exactly as the launcher ve
 refuses an archive with an absolute or `..` entry, and unpacks it into the version's directory
 before any switch.
 
-**Why side-by-side versions, and not a serving clone that follows a branch.** A clone that pulls
-and rebuilds in place makes a branch the thing that runs: rollback becomes a checkout plus a
-rebuild, the running tree is half-updated while it builds, and what runs is not a version any dist
-ref or release note names. Side-by-side versions keep the running version untouched until the
-switch, make rollback a rename, and run only what a release tag names.
+Why side-by-side versions, and not a serving clone that follows a branch: [ADR 539](docs/adr/539-releases-distribution-rationale.md).
 
 **Service managers.** The template writes a launchd agent on macOS and a systemd user unit on
 Linux, and refuses Windows. A Linux service that must outlive the login session needs lingering
@@ -4349,19 +4301,16 @@ container deploy's logic with hermetic tests against a fake platform, and a copy
 adopter's to keep green from then on.
 
 The required **outcome**: every pull request must run, at minimum, a **secret scan** and
-a **build** — a committed credential is the one failure that cannot be undone by
-reverting.
+a **build**.
 
 **CI must trigger on pushes to the trunk itself**, not only on branches the trunk no
-longer is. Measured: three repos whose trunks had moved to `dev` while CI still fired
-only on `[main, master]` — every trunk merge ran zero checks, silently. When a repo's
+longer is. Why: [ADR 539](docs/adr/539-ci-toolchain-rationale.md). When a repo's
 trunk moves, updating the CI triggers is part of the move, and the audit checks it.
 
 ### CI — what it is follows the unit's shape, how much follows exposure
 
 **What CI *is* comes from whether the unit has a branch — a fact about the session, not a
-declared value** (⚖ #233 retired the `writes`-keyed reading this heading used to carry:
-`writes` is a veto now, not a method, so it no longer selects which CI role applies).
+declared value**.
 With a branch — the ordinary worktree session, or an attended trunk-direct one falling
 back to full ceremony — CI runs before the merge: a gate, something to inspect before a
 unit lands. An attended trunk-direct session with no branch runs it after the push — an
@@ -4375,9 +4324,7 @@ trunk-gating CI workflow, or branch protection — never by a declared value.** 
 where the retired `writes: serial-gated` spelling's one real assertion ("a pre-merge gate
 exists here") now lives: [Writes](#writes--the-trunk-direct-veto-and-the-two-things-that-make-a-branch-mandatory)'s
 second mandatory-branch condition ("a gate must inspect the unit before it lands") reads
-this fact, not a field. A declared value never carried this fact reliably — nothing
-audited whether a `serial-gated` repo actually ran one — and the gate itself is something
-the audit CAN see where it could never see a declaration.
+this fact, not a field.
 
 **How thorough it must be comes from [exposure](#exposure--what-consumes-a-merge-here).**
 `none` and `self` answer only to the room; `live` and `released` answer to a consumer with
@@ -4393,15 +4340,13 @@ the finding to report — not a CI run trusted to be the filter it structurally 
 **Provision CI for planned exposure, not current.** A repo declaring `exposure: none`
 with a named `production:` — the transitional pairing
 [Exposure](#exposure--what-consumes-a-merge-here) already flags — should already run at
-`live` thoroughness, free to be red, rather than discover the gap on cutover day: the one
-day it is most expensive to.
+`live` thoroughness, free to be red, rather than discover the gap on cutover day.
 
 **Test contracts follow the named consumer**, once
 [channels](#channels--by-what-path-does-code-reach-the-thing-that-runs-it) names one: for
 `artifact`, the test that matters is whether a fresh adopter's copy works, not a unit test
 of the generator; for `live`/`released`, the promotion or release path is the product; for
-`self`, whatever would break the room's own ability to work. A generator's internal tests
-passing proves nothing about what ships, if nothing names who actually consumes it.
+`self`, whatever would break the room's own ability to work.
 
 **A repo holding an unfinished switched epic runs its suite twice** — once in the release
 configuration, once in development — because those are the only two it supports and the
@@ -4417,14 +4362,10 @@ edit as drift to reconcile, the same treatment every other stamped file gets. Se
 
 The templates assume GitHub-hosted capacity: every job gets a fresh machine the moment
 it is queued. **A self-hosted runner breaks that assumption, and a flow copied unchanged
-spends most of its wall time waiting rather than working.** Measured on one busy repo
-with one self-hosted agent: a clean run did ~8.5 min of work, and runs under load took
-48–52 min. Nearly all of the difference was queue time.
+spends most of its wall time waiting rather than working.** Why, with the measurement: [ADR 539](docs/adr/539-ci-toolchain-rationale.md).
 
 - **A repo's capacity is how many agents it has, not how big the host is.** One agent
-  runs one job at a time for that repo, whatever the host has spare. Jobs from different
-  runs interleave on it job by job: one trunk run's secret-scan job finished and its
-  build job then waited **33 min** behind other branches' jobs.
+  runs one job at a time for that repo, whatever the host has spare.
 - **Measure queue and work separately, at job and step level.** Run duration
   (`created → updated`) adds the two together, so a slow suite and a starved runner read
   identically. Compare each job's `startedAt` with the run's creation time, and each
@@ -4445,18 +4386,13 @@ with one self-hosted agent: a clean run did ~8.5 min of work, and runs under loa
   first steps; it still runs on every run and still fails the job before any test
   starts. The main job must check out full history, which the scan needs. Split jobs
   out again only when there are enough agents to run them side by side.
-- **Never run the same check twice in one job.** Measured: a typecheck step, then the
-  test script's own leading typecheck, run once per configuration (the switched-epic
-  double run above) — **three** typechecks per build. Drop the copy whose removal breaks
+- **Never run the same check twice in one job.** Drop the copy whose removal breaks
   nothing; a test that pins the test script's shape decides which one that is.
 - **Test parallelism follows the cores the runner *exposes*, but more cores only help a
   CPU-bound suite.** Runners that size their concurrency from `os.availableParallelism()`
   (node:test does) are capped by the container's core limit, not by the host's. Raising
-  that limit is cheap on a memory-bound host, and it is not a speed-up you can assume.
-  Measured: a 536-file batch that reported 4 went to 8, and the batch went from 170 s to
-  160 s, about 5 %. It was bound by something other than CPU, such as process spawn or
-  disk. Before you count on a gain, compare the batch's wall time with the CPU it
-  actually used. Agent count (above) was the lever for wall time; core count was not.
+  that limit is cheap on a memory-bound host, and it is not a speed-up you can assume. Before you count on a gain, compare the batch's wall time with the CPU it
+  actually used.
 - **Cap test-runner workers in CI with a fixed number. Size it to the slot's memory,
   not to the CPUs the job can see (#478).** The bullet above assumes the slot limits
   cores. Many slots limit only memory: they run as a memory-capped cgroup, and the
@@ -4465,14 +4401,6 @@ with one self-hosted agent: a clean run did ~8.5 min of work, and runs under loa
   `os.availableParallelism()` (vitest, jest, node:test, playwright; pytest-xdist
   `-n auto` and parallel PHPUnit do the same) then starts one worker per *host*
   core, so the worker count changes when someone upgrades the host.
-  - Measured: a pool host went from 12 to 16 cores, and one repo's vitest went from
-    11 to 15 jsdom workers per slot. That crossed the slot's ~5 GiB soft cap. The
-    kernel throttled the job by reclaiming memory instead of killing it, so there
-    was no OOM and no message saying why. Each slot logged over a million
-    memory-high events and stalled for up to 24 min, imports took 4–28× their
-    baseline, and tests timed out at 5–15 s. Trunk went red with no code change.
-    The same suite had been green two days earlier, and longer per-test timeouts
-    did not help.
   - The fix is a cap in the test config, read from CI so that local runs keep
     their full parallelism: vitest `maxWorkers: process.env.CI ? 4 : undefined`,
     jest `--maxWorkers=4`, node:test `--test-concurrency=4`, playwright
@@ -4481,20 +4409,14 @@ with one self-hosted agent: a clean run did ~8.5 min of work, and runs under loa
     use the core count.
   - If a suite that used to be green starts timing out on a self-hosted pool with
     no code change, check the slot's memory pressure (`memory.events` `high`) and
-    the worker count before you widen any timeout. Throttling stalls every test
-    the same way, so the failures look like flaky tests even though nothing in
-    them changed.
+    the worker count before you widen any timeout.
 - **Before adding an agent, check the runner's disk as well as its memory.** Each agent
-  brings its own runner install and workspace (GBs for a Node repo). Measured: the
-  runner container's disk at 99 % was what blocked a second agent, not its memory. On a
+  brings its own runner install and workspace (GBs for a Node repo). On a
   memory-bound host, a second agent inside an existing runner container buys the same
   concurrency as a new container, without a second OS's overhead.
 - **A persistent runner never resets, so tests must clean up after themselves.** A test
-  that makes a temp dir and never removes it leaks on every run. Measured: 5 000+
-  leaked dirs, 2.1 GB, in a `/tmp` shared by the agents of seven repos, where one
-  repo's leak can fill the disk every other repo's CI runs on. The same persistence
-  makes a hosted cache action redundant: the package cache is already on disk, and
-  restoring GitHub's copy of it cost ~37 s per job.
+  that makes a temp dir and never removes it leaks on every run. The same persistence
+  makes a hosted cache action redundant: the package cache is already on disk.
 
 ### Toolchain versions — strict precedence
 
@@ -4505,26 +4427,20 @@ with one self-hosted agent: a clean run did ~8.5 min of work, and runs under loa
    `.python-version`/`requires-python`) — the normal answer.
 3. **Fail the build.** Never fall back to a default.
 
-Measured: a silent default is how one repo built on Node 20 while deploying on Node 22,
-undetected for months. When project.yml's pin and the manifest disagree, that is a
+When project.yml's pin and the manifest disagree, that is a
 finding to report, not resolve quietly.
 
 **`requirements.txt` does not declare an interpreter** — pins dependencies only; a Python
-repo carrying only that file must add `python:` to `project.yml` or a `.python-version`.
-Measured: a Python repo adopted the handbook, found no Python template, and copied the
-Node one with `python-version: "3.13"` hardcoded in. **A missing template is not a
+repo carrying only that file must add `python:` to `project.yml` or a `.python-version`. **A missing template is not a
 neutral absence** — it redirects adoption into a worse form and leaves behind a file
-whose header lies about what it is.
+whose header lies about what it is. Why, with the measurement: [ADR 539](docs/adr/539-ci-toolchain-rationale.md).
 
 ### Test fixtures — neutralise ambient machine state, don't inherit it
 
 **A test asserting a specific message or refusal must neutralise ambient credentials and
-configuration rather than inherit them.** This handbook installs a global
-`core.hooksPath`; a fixture that `git init`s and `git commit`s without overriding it runs
-the developer's real pre-commit hook inside a fake repo. Measured twice, in the identical
-shape (ambient `gh` credentials, then `core.hooksPath`). A git fixture helper sets
+configuration rather than inherit them.** A git fixture helper sets
 `user.email`, `user.name`, **and** `core.hooksPath` (pointed at a nonexistent directory)
-before it ever commits.
+before it ever commits. Why, with the measurement: [ADR 539](docs/adr/539-ci-toolchain-rationale.md).
 
 ---
 
@@ -4561,10 +4477,7 @@ stamp newer than the handbook is advisory. Reconcile deliberately: read the diff
 **A rule-neutral change downgrades the finding to a warn — declared, never inferred
 (#272).** Bytes drift is always a hard fail by default: a repo stamped against an old
 template gets `fail` the moment anything in that template changed, including a fix that
-touches no rule at all (a corrected hyperlink, once, flipped every under-stamped adopter
-red — the incident that motivated this). The fix is not a classifier that reads the diff
-and guesses whether it mattered; that trades a loud, honest failure for a quiet, wrong
-one. Instead, the person editing `templates/` states the claim themselves, at the moment
+touches no rule at all. Why: [ADR 539](docs/adr/539-conformance-rationale.md). Instead of a classifier, the person editing `templates/` states the claim themselves, at the moment
 they know it best — as a `Rule-Neutral: yes` trailer on the commit:
 
 ```
@@ -4597,9 +4510,7 @@ still pristine as of their own stamp — never commits, never rewrites a hand-ed
 
 - **A stamp older than current is not "behind"** — behind means the template *actually
   changed* since that stamp (`git log <stamp>..HEAD` scoped to the template's path).
-- **The frozen CLI copy is measured against the latest tag, not `HEAD`** — measured
-  against `HEAD` it reported "behind" for every unreleased CLI commit and advised
-  adopting untagged code.
+- **The frozen CLI copy is measured against the latest tag, not `HEAD`**. Why: [ADR 539](docs/adr/539-conformance-rationale.md).
 - **[Hard — gate: colab update refuses]** **An unstamped copy is never rewritten** by any flag — unknown lineage, human re-copies
   deliberately.
 - **[Hard — gate: colab update classifies]** **Provenance is decided by content, never filename** — a file merely sharing a
@@ -4633,12 +4544,7 @@ and the tracker, not this file. Because the file is agent instructions, a diff t
 `.colab/skills/` is never [docs-only](#autonomy--the-docs-only-exception-345): it merges on
 `auto-trunk` or a human's go, like a `CLAUDE.md` change.
 
-**Why a file and not a fork or a field.** `project.yml` fields are switches and cannot carry
-"write comments in Japanese". A repo instruction file is advisory and carries no precedence
-over skill text. A repo-level copy of a skill does not override the installed one on an
-engine whose skill precedence ranks the user-level install above the project's, and a fork
-silently loses every upstream update. One overlay per skill keeps the upstream text and the
-local difference in separate files, so a handbook update still lands.
+Why a file and not a fork or a field: [ADR 539](docs/adr/539-conformance-rationale.md).
 
 The handbook defines this one layer and nothing on top of it. Org- or machine-wide layers,
 size limits, drift checks against upstream, and tooling to manage overlays are the adopter's
@@ -4646,17 +4552,10 @@ business.
 
 ### Upstream — a consumer that changes what a convention means files it here (#362)
 
-Everything above runs one way: the handbook changes, and adopters find out. The other
-direction had no rule. A **consumer** is anything that reads these conventions in order to
+Everything above runs one way: the handbook changes, and adopters find out. A **consumer** is anything that reads these conventions in order to
 act on them: a dashboard, a scheduler, a triage or ship prompt, a repo's own copy of a
 skill, a label description on a tracker. A consumer can change what a convention means
-with a commit in its own repo, and nothing made the handbook hear about it. Agents load
-both texts, so they obey whichever they read last. Measured: a consumer made
-`delivery:docs-only` a code-lane start candidate, and the handbook issue was filed 30 days
-later. In between, a triage pass that followed the handbook left an issue unstarted for
-about 6 days. A second consumer added a `delivery:*` value the handbook does not have. A
-third consumer lacked that value, filed design work under `docs-only` instead, and its
-scheduler sent the work to the code worker.
+with a commit in its own repo, and nothing made the handbook hear about it. Why, with the measurement: [ADR 539](docs/adr/539-conformance-rationale.md).
 
 **The rule.** A consumer change that does either of these carries a linked handbook issue:
 
@@ -4677,9 +4576,7 @@ and neither is a hand-edit to a copied template (that is copy-and-own, above).
 - **Its provenance is the consumer change's, not the filer's.** The upstream issue records
   a decision a human already approved on the consumer side. It proposes nothing on an
   agent's own initiative, so it carries **no `agent-filed` label**. Its `Filed-by:` line
-  names whoever approved the consumer change ([§5](#provenance--who-decided-the-work-should-exist)).
-  Measured: a fix filed under `agent-filed` waited for acceptance, and one filed without it
-  landed the same day. The upstream issue describes the consumer by shape. The link runs
+  names whoever approved the consumer change ([§5](#provenance--who-decided-the-work-should-exist)). The upstream issue describes the consumer by shape. The link runs
   consumer → handbook, never the reverse, because the handbook is public.
 - **The upstream issue ends in one of three outcomes:** the handbook adopts the meaning,
   the handbook declines it and the consumer reverts, or the handbook rules it a legitimate
@@ -4689,10 +4586,7 @@ and neither is a hand-edit to a copied template (that is copy-and-own, above).
 divergence in its `CLAUDE.md`, next to the handbook pointer block
 ([§9](#9-adopting-this) step 5) — in `CLAUDE.md` even when that file is a thin shell over
 `AGENTS.md`, because the list belongs beside the block it qualifies, as a `Local divergences:` list with one line per item.
-Each line gives the label or value, what it means here, and the handbook issue URL. This
-is also what settles the "whichever text I read last" problem: an agent reading this
-repo's instructions sees, next to the handbook pointer, which meaning wins here and why.
-When the issue closes, remove the line if the meaning was adopted or reverted. If the
+Each line gives the label or value, what it means here, and the handbook issue URL. When the issue closes, remove the line if the meaning was adopted or reverted. If the
 issue ruled it a local variant, keep the line and point it at that ruling. An undeclared
 consumer-local meaning or value is **drift, not a local customisation**. Copy-and-own
 protects a repo's edits to its *copies*. It never makes the *meaning* of a shared label
@@ -4707,9 +4601,7 @@ chosen over the two alternatives:
   tooling.
 - **`handbook-sync`** is the one pass that stands inside the consumer with the handbook
   loaded. It is also the only one of the three that sees **the reverse direction**: a
-  handbook change the consumer's own prompts never absorbed. Measured: a label made
-  monotonic upstream while a consumer's triage prompt still said clearing it "is often
-  correct". `colab labels --ensure` creates missing labels and never rewrites an existing
+  handbook change the consumer's own prompts never absorbed. `colab labels --ensure` creates missing labels and never rewrites an existing
   description on its own, so a description can drift in either direction. Since #364 the
   drift is at least visible: `--ensure` and the audit both name every convention label
   whose tracker description differs from the handbook's, and
