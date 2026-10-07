@@ -1112,7 +1112,7 @@ Run `colab <cmd> --help` for full detail.
 | `doctor [--prune] [--ttl H] [--json] [--sync]` | heal dead worktrees / orphan + stale claims / orphan ports; report records whose branch or path cannot be resolved, including a zero-claim `pending` stub (no TTL — see *Records that cannot be acted on*); flip + sweep **merged** worktrees (see *Worktree lifecycle*); **list** shipped branches awaiting deletion (never deletes them); `--sync` also flags a worktree-less claim the tracker no longer shows assigned+in-progress (no TTL either) and spent `group:<key>` labels |
 | `release-notes [<range>] [--repo P] [--out F] [--headline "..."]` | grouped Markdown release summary from git history (see below) |
 | `release cut [--repo P] [--auto \| --bump patch\|minor --reason "..."] [--dry] [--json]` | cut a release **candidate** `vX.Y.Z-rc.N` on `origin/main` where §6's routes allow it and all four conditions plus the three pre-tag checks hold on that commit; `--auto` computes the bump (majors included) and honours the route's cadence; never a final tag — except on route `deploy-tag-fast`, where `--auto` tags the final itself (#446) (see *Release cut*, below) |
-| `release finalize [--repo P] [--auto \| --tag RC [--answered-by N]] [--dry] [--json]` | a candidate's next step under §6's routes; `--auto` finalizes the newest candidate clean on its own clock — `testing` / `held` / `needs-new-candidate` / `refused` / `candidate-ready` / `finalized`, re-checked every run, one tracking issue per version; tags the final only where the rung row makes it automatic, or behind the human bar (see *Release finalize*, below) |
+| `release finalize [--repo P] [--auto \| --tag RC [--answered-by N]] [--dry] [--json]` | a candidate's next step under §6's routes; `--auto` finalizes the newest candidate clean on its own clock, `--tag` any open one (an older one on its own clean clock, #548) — `testing` / `held` / `needs-new-candidate` / `refused` / `candidate-ready` / `finalized`, re-checked every run, one tracking issue per version; tags the final only where the rung row makes it automatic, or behind the human bar (see *Release finalize*, below) |
 | `release npm [--repo P] [--json]` | whether release-auto.yml's `npm` job publishes this repo, and what: the package, its directory and the gate, read from `release.npm` / `release.npm-gate`; read-only (see *Release npm*, below) |
 | `template [<name>] [--dest F] [--repo P] [--force]` | copy a handbook workflow template into a repo, **stamped** with the handbook version (see below) |
 | `update [<repo>...] [--apply] [--json] [--quiet]` | sweep the fleet registry for stamped copies that fell behind a changed template; `--apply` refreshes the **pristine** ones. Never commits; never touches a hand-edited copy (see below) |
@@ -1283,7 +1283,7 @@ earlier route is superseded by the next final, never finalized.
 ### Release finalize
 
 `colab release finalize [--repo P] [--auto | --tag vX.Y.Z-rc.N [--answered-by N]] [--dry] [--json]` (#339)
-takes the newest candidate one step further under §6's release rung. It is run — repeatedly — by
+takes the newest candidate — or the one `--tag` names — one step further under §6's release rung. It is run — repeatedly — by
 the release workflow ([`templates/release-auto.yml`](../templates/release-auto.yml), `--auto`, daily);
 the [`release-rung`](../skills/release-rung/SKILL.md) skill is the manual fallback that runs the same
 commands from a coordinator session when that workflow cannot (#426). There is no
@@ -1305,12 +1305,14 @@ daemon: every run re-measures from git and GitHub, and the decision is `tools/li
 
 - **Candidates** are annotated `vX.Y.Z-rc.N` tags on origin whose message's first line ends
   `(colab release cut)` and whose commit is on `origin/main`. The newest open one (highest version,
-  then highest `N`) is the candidate; a lightweight or hand-made one is refused, never finalized.
+  then highest `N`) is the candidate unless `--tag` names another open one (#548, below); a
+  lightweight or hand-made one is refused, never finalized.
 - **One tracking issue per version**, opened by the first non-`--dry` run for that version:
   title `release: vX.Y.Z`, body's first line `<!-- colab:release version=vX.Y.Z -->` (only the
   marker identifies it). Every `-rc.N` of the version reuses it. Two open ones for a version, or a
-  closed one for a version not yet final, refuse rather than guess. A superseded version's open,
-  un-held issue is closed with a "superseded" comment.
+  closed one for a version not yet final, refuse rather than guess. Once a final is tagged, every
+  open, un-held issue of a version *below* it is closed with a "superseded" comment — never earlier,
+  and never a newer version's (#548: any open candidate may still be finalized by `--tag`).
 - **Veto:** the `release-hold` label on it (a convention label — `colab labels --ensure`). No
   command removes it.
 - **Regression:** a `blocked_by` edge on it (`colab blocked <tracking> --by <regression>`), read
@@ -1335,11 +1337,11 @@ daemon: every run re-measures from git and GitHub, and the decision is `tools/li
 | condition | what it checks | blocks |
 |---|---|---|
 | `release-policy` | the rung row is a `released-*` row and the `release:` block is valid | always |
-| `candidate` | a candidate exists, made by `colab release cut`, on `origin/main`; `--tag` names the newest | always |
+| `candidate` | a candidate exists, made by `colab release cut`, on `origin/main`; `--tag` names an open one (an older one is marked so, #548) | always |
 | `tracking-issue` | exactly one findable record for the version | always |
 | `release-hold` | no hold on it or on a superseded open record | always |
 | `regressions` | as above | always |
-| `test-period` | the period has ended | automatic-final row only |
+| `test-period` | the period has ended | automatic-final row, or an older `--tag` (#548) |
 | `trunk-green` | every run created since the period began on `main` — and on `trunk:` too where that is another branch (`trunk: dev`, #437: there `main` gets CI only at promotions, so a `main`-only window is close to vacuous) — of the workflows that ran at the candidate (not `pull_request`), finished without going red — a `cancelled` one needs a later success; a read that hit its limit fails closed | automatic-final row only |
 | `ci-green` · `full-suite` · `schema-additive` · `switch-dependencies` | §6's four candidate conditions, re-measured at the candidate's commit by the same code `release cut` uses | always |
 | `manifest-version` · `on-trunk` · `outranks-final` | #424's pre-tag checks (see *Release cut*), on the final `vX.Y.Z` | always |
@@ -1353,6 +1355,16 @@ annotated message records who answered. On a granted `deploy-tag` repo (#441) th
 only while both grant checks pass; the tag message then names the grant and its decision issue
 (`Automatic final granted by: …`), and `--json` carries it as `grant: {issue, ruledBy}`. A human bar
 there takes the human path, never the grant's.
+
+**An older candidate by `--tag` (#548).** On an active trunk every merge cuts a candidate, and each
+starts its own clock — so a final that may only name the newest needs trunk to stop merging for a
+whole test period. `--tag` therefore names **any open candidate**. An older one is judged exactly as
+`--auto` judges it: `test-period` and `trunk-green` become required on every row (read over its own
+window `[start, endsAt)`, so a red run after it closed is about newer code), and `release-hold`,
+`regressions` and every pre-tag check apply as always — still testing → `testing`, red inside its
+window → `needs-new-candidate`; the human bar never shortens its period. The newest candidate keeps
+the human row's rule (period informational, `0d` allowed). The newer candidates stay open for the
+next version: a final closes only the records of versions below it.
 
 **`--auto` (#423)** is the release workflow's daily run, and changes only *which* candidate is
 judged. Without it, the newest candidate is the one judged — so on a repo cutting a candidate every

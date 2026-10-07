@@ -49,12 +49,21 @@ test('selectCandidate: a lightweight, hand-annotated or off-main candidate is re
   assert.match(off.detail, /not on origin\/main/);
 });
 
-test('selectCandidate: --tag must be the newest candidate', () => {
-  const tags = [rcTag('v1.2.1-rc.1'), rcTag('v1.2.1-rc.2')];
-  assert.strictEqual(rf.selectCandidate(tags, 'v1.2.1-rc.2').kind, 'candidate');
+test('#548 selectCandidate: --tag may name an older open candidate — marked older, newer ones named and left open', () => {
+  const tags = [rcTag('v1.2.1-rc.1'), rcTag('v1.2.1-rc.2'), rcTag('v1.3.0-rc.1')];
+  const newest = rf.selectCandidate(tags, 'v1.3.0-rc.1');
+  assert.strictEqual(newest.kind, 'candidate');
+  assert.ok(!newest.older);
   const old = rf.selectCandidate(tags, 'v1.2.1-rc.1');
-  assert.strictEqual(old.kind, 'refused');
-  assert.match(old.detail, /not the newest candidate \(v1\.2\.1-rc\.2\)/);
+  assert.strictEqual(old.kind, 'candidate');
+  assert.strictEqual(old.older, true);
+  assert.strictEqual(old.newest, 'v1.3.0-rc.1');
+  assert.deepStrictEqual([old.candidate.tag, old.candidate.version, old.candidate.n], ['v1.2.1-rc.1', 'v1.2.1', 1]);
+  assert.deepStrictEqual(old.superseded, [], 'nothing below v1.2.1 is open; v1.3.0 is newer and stays open');
+  assert.match(old.detail, /older candidate, judged on its own clock \(newer, still open: v1\.2\.1-rc\.2, v1\.3\.0-rc\.1\)/);
+  assert.strictEqual(rf.selectCandidate([rcTag('v1.2.0-rc.1'), ...tags], 'v1.2.1-rc.2').superseded.join(), 'v1.2.0');
+  // an older pin is still held to the cut contract
+  assert.match(rf.selectCandidate([rcTag('v1.2.1-rc.1', { onMain: false }), rcTag('v1.2.1-rc.2')], 'v1.2.1-rc.1').detail, /not on origin\/main/);
   assert.strictEqual(rf.selectCandidate(tags, 'v9.9.9-rc.1').kind, 'refused');
   assert.strictEqual(rf.selectCandidate(tags, 'v1.2.1').kind, 'refused');
 });
@@ -243,6 +252,47 @@ test('#549 decide, human row with test-period 0d: no period — the bar finalize
   const msg = rf.tagMessage(done, { candidate: { version: 'v1.2.1', tag: 'v1.2.1-rc.1', sha: 'a'.repeat(40) }, period, actor: 'Ops' });
   assert.match(msg, /Test period: none \(release\.test-period: 0d/);
   assert.strictEqual(rf.decide(facts({ policy: ZERO, period, human: { bar: true, answeredBy: 'Ops' }, tracking: { number: 12, createdAt: T0, held: true } })).state, 'held', 'no period never lifts a hold');
+});
+
+test('#548 decide, human row, older --tag: its own clean period -> candidate-ready / finalized; still testing, a regression or red in its window -> no final', () => {
+  const selection = rf.selectCandidate([rcTag('v1.2.1-rc.1'), rcTag('v1.2.1-rc.2', { date: at(3.5) })], 'v1.2.1-rc.1');
+  const bar = { bar: true, answeredBy: 'Ops' };
+  const elapsed = rf.periodVerdict({ cutAt: T0, trackingCreatedAt: T0, testPeriodDays: 3, now: at(4) });
+  const young = rf.periodVerdict({ cutAt: T0, trackingCreatedAt: T0, testPeriodDays: 3, now: at(2) });
+  const older = (over) => rf.decide(facts({ policy: HUMAN, selection, period: elapsed, ...over }));
+
+  // older eligible
+  const ready = older();
+  assert.strictEqual(ready.state, 'candidate-ready');
+  assert.match(ready.handoff, /--tag v1\.2\.1-rc\.1 /, 'the handoff names the older candidate, not the newest');
+  const tp = ready.checks.find((c) => c.condition === 'test-period');
+  assert.strictEqual(tp.required, true, 'an older pin is held to its own period, on a human row too');
+  assert.match(tp.detail, /#548/);
+  assert.strictEqual(ready.checks.find((c) => c.condition === 'trunk-green').required, true);
+  const done = older({ human: bar });
+  assert.strictEqual(done.state, 'finalized');
+  assert.strictEqual(done.finalTag, 'v1.2.1');
+
+  // older still testing — the human bar does not shorten its period
+  assert.strictEqual(older({ period: young, human: bar }).state, 'testing');
+  assert.strictEqual(older({ human: bar, trunk: { ok: false, permanent: false, pending: true, detail: 'in flight' } }).state, 'testing');
+  // older with a regression
+  assert.strictEqual(older({ human: bar, regressions: { ok: false, permanent: false, detail: 'open #7' } }).state, 'refused');
+  assert.strictEqual(older({ human: bar, regressions: { ok: false, permanent: true, detail: 'fixed after start' } }).state, 'needs-new-candidate');
+  // red inside its own window
+  assert.strictEqual(older({ human: bar, trunk: { ok: false, permanent: true, pending: false, detail: 'red' } }).state, 'needs-new-candidate');
+  // a hold still wins
+  assert.strictEqual(older({ human: bar, supersededHeld: [9] }).state, 'held');
+
+  // the newest pin on the same row keeps #549's rule: the period is informational
+  const newest = rf.selectCandidate([rcTag('v1.2.1-rc.1'), rcTag('v1.2.1-rc.2')], 'v1.2.1-rc.2');
+  assert.strictEqual(rf.decide(facts({ policy: HUMAN, selection: newest, period: young, human: bar })).state, 'finalized');
+});
+
+test('#548 decide, auto row, older --tag: same rule as the newest — its own clean period finalizes', () => {
+  const selection = rf.selectCandidate([rcTag('v1.2.1-rc.1'), rcTag('v1.2.1-rc.2', { date: at(3.5) })], 'v1.2.1-rc.1');
+  assert.strictEqual(rf.decide(facts({ selection })).state, 'finalized');
+  assert.strictEqual(rf.decide(facts({ selection, period: rf.periodVerdict({ cutAt: T0, trackingCreatedAt: T0, testPeriodDays: 3, now: at(2) }) })).state, 'testing');
 });
 
 test('decide: rows with nothing to finalize refuse; no candidate and already-final are their own states', () => {

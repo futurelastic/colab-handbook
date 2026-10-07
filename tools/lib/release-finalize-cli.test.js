@@ -322,6 +322,62 @@ test('#549 human row, test-period 0d: a candidate cut minutes ago finalizes on t
   assert.match(fx.g('tag', '-l', '--format=%(contents)', 'v1.2.1'), /Test period: none/);
 });
 
+/** #548: keep every listed commit green in the by-commit run list (commit() keeps only the newest). */
+function greenAt(fx, shas) {
+  writeState(fx, (s) => { s.runsAtCommit = shas.map((sha, i) => ({ headSha: sha, status: 'completed', conclusion: 'success', workflowName: 'ci', event: 'push', createdAt: new Date().toISOString(), databaseId: 80 + i })); });
+}
+
+test('#548 human row: --tag on an OLDER candidate whose own period elapsed clean finalizes it while newer ones keep testing — and stays open for the next version', () => {
+  const fx = fixture(HUMAN_YML);
+  const oldSha = fx.g('rev-parse', 'HEAD');
+  const old = cutCandidate(fx, 6); // v1.2.1-rc.1
+  finalize(fx); // opens release: v1.2.1 — the older version's record, as a daily run would have
+  ageTracking(fx, 7);
+  greenAt(fx, [oldSha, commit(fx, 'feat.txt', 'feat: a newer feature')]);
+  const newer = cutCandidate(fx); // v1.3.0-rc.1, minutes old
+  assert.deepStrictEqual([old, newer], ['v1.2.1-rc.1', 'v1.3.0-rc.1']);
+  finalize(fx); // opens release: v1.3.0
+  // The newer candidate is red: trunk failed half a day ago — after the older one's window closed.
+  writeState(fx, (s) => { s.runsSince = [{ headSha: 'c'.repeat(40), status: 'completed', conclusion: 'failure', workflowName: 'ci', event: 'push', createdAt: ago(0.5), databaseId: 70 }]; });
+
+  const ready = finalize(fx, ['--tag', old, '--dry']);
+  assert.strictEqual(ready.body.state, 'candidate-ready', JSON.stringify(ready.body.checks, null, 2));
+  assert.strictEqual(ready.body.candidate.tag, old);
+  assert.match(ready.body.handoff, /--tag v1\.2\.1-rc\.1 /);
+  assert.strictEqual(ready.body.checks.find((c) => c.condition === 'trunk-green').ok, true, 'the red run is outside its own window');
+
+  const done = finalize(fx, ['--tag', old, '--answered-by', 'Ops'], { env: { COLAB_HUMAN: '1' } });
+  assert.strictEqual(done.code, 0, done.out + done.err);
+  assert.strictEqual(done.body.state, 'finalized');
+  assert.ok(originTags(fx).includes('v1.2.1'));
+  assert.strictEqual(fx.g('rev-parse', 'v1.2.1^{commit}'), fx.g('rev-parse', `${old}^{commit}`));
+  fx.g('fetch', '-q', '--tags', 'origin');
+  assert.match(fx.g('tag', '-l', '--format=%(contents)', 'v1.2.1'), /Candidate: v1\.2\.1-rc\.1\n[\s\S]*an older candidate, judged on its own clock \(newer, still open: v1\.3\.0-rc\.1\)/);
+  const byVersion = Object.fromEntries(tracking(fx).map((i) => [/version=(\S+)/.exec(i.body)[1], i]));
+  assert.strictEqual(byVersion['v1.2.1'].state, 'CLOSED');
+  assert.strictEqual(byVersion['v1.3.0'].state, 'OPEN', 'the newer version is not superseded by an older final');
+  assert.ok(!byVersion['v1.3.0'].comments.some((c) => /Superseded/.test(c.body)));
+});
+
+test('#548 human row: --tag on an older candidate still testing, or red inside its own window, is not finalized', () => {
+  const fx = fixture(HUMAN_YML);
+  const oldSha = fx.g('rev-parse', 'HEAD');
+  const old = cutCandidate(fx, 2);
+  greenAt(fx, [oldSha, commit(fx, 'more.txt', 'fix: another')]);
+  cutCandidate(fx);
+  finalize(fx);
+  ageTracking(fx, 7);
+  const testing = finalize(fx, ['--tag', old, '--answered-by', 'Ops'], { env: { COLAB_HUMAN: '1' } });
+  assert.strictEqual(testing.code, 1);
+  assert.strictEqual(testing.body.state, 'testing', 'the human bar never shortens an older candidate\'s own period');
+  assert.strictEqual(testing.body.periodEndsAt > new Date().toISOString(), true);
+
+  writeState(fx, (s) => { s.runsSince = [{ headSha: 'd'.repeat(40), status: 'completed', conclusion: 'failure', workflowName: 'ci', event: 'push', createdAt: ago(1), databaseId: 71 }]; });
+  const red = finalize(fx, ['--tag', old, '--answered-by', 'Ops'], { env: { COLAB_HUMAN: '1' } });
+  assert.strictEqual(red.body.state, 'needs-new-candidate', JSON.stringify(red.body.checks, null, 2));
+  assert.ok(!originTags(fx).includes('v1.2.1'));
+});
+
 test('#549 an automatic-final row cannot declare test-period 0d — finalize refuses on the invalid block', () => {
   const fx = fixture(AUTO_YML + 'release:\n  test-period: 0d\n');
   const r = finalize(fx, ['--dry']);
