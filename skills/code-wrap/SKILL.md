@@ -198,9 +198,8 @@ sed -n '/^on:/,/^jobs:/p' .github/workflows/*.yml     # a push: trigger covering
 - **`ci` mode** — `gate:` declares `authoritative: ci` **and** a workflow fires on this
   branch's push (`tools/lib/gate.js` `gateMode`), **and** that workflow runs the tests on a
   runner that does not share a developer's machine (#408's conditions 2 and 3 below). Then
-  A3 is **one run of `gate.smoke`**, teed to a file (target ≤ `smoke-minutes`, 3 min unless the repo declares
-  `thresholds.smoke-minutes` — `colab thresholds smoke-minutes`, #560: lint, types, the tests
-  for what you changed), with **no** `colab gate-hermetic` pass — a clean CI runner is the
+  A3 is **one run of `gate.smoke`**, teed to a file (target ≤ `colab thresholds smoke-minutes`, default 3 min: lint, types,
+  the tests for what you changed), with **no** `colab gate-hermetic` pass — a clean CI runner is the
   hermetic run by construction. Smoke red → fix it. Smoke green → A4, and the **verdict**
   comes from A5's branch-CI read, which in this mode you wait for. Skip the rest of A3's
   full-gate text below.
