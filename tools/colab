@@ -50,6 +50,7 @@ const treeGreen = require('./lib/tree-green');
 const verifyRuns = require('./lib/verify-runs');
 const ciWait = require('./lib/ci-wait'); // #495
 const ciProfile = require('./lib/ci-profile'); // #559
+const thresholdsLib = require('./lib/thresholds'); // #560
 const staleBase = require('./lib/stale-base');
 const dirtyOwner = require('./lib/dirty-owner');
 const scratchDirs = require('./lib/scratch-dirs');
@@ -14993,6 +14994,54 @@ function cmdCiProfile(argv) {
   return 0;
 }
 
+// thresholds (#560) — the advisory thresholds this repo applies: its declared values, else the defaults.
+const HELP_THRESHOLDS = `colab thresholds [--repo <path>] [--json] [<name>]
+
+The advisory thresholds this repo applies (#560): the value of each, and whether it is this
+repo's declared value or the handbook default. A repo overrides one in .github/project.yml:
+
+  thresholds:
+    hot-file-count: 4
+
+Nothing changes for a repo that declares nothing. Skills cite these by name — code-triage's
+hot-file count and dependents band, code-wrap's gate.smoke target — and read them here, so no
+skill hard-codes a number a repo may have changed. A malformed entry falls back to the default
+and is listed under problems; the audit and the CI templates' descriptor check fail it.
+
+  <name>    print only that threshold's value (a bare number, for a script or a skill)
+  --json    { repo, thresholds: { <name>: { value, default, declared, what, where } }, problems }`;
+
+function cmdThresholds(argv) {
+  const opts = parseArgs(argv, {
+    values: { '--repo': 'repo' },
+    flags: { '--json': 'json', '-h': 'help', '--help': 'help' },
+  });
+  if (opts.help) return print(HELP_THRESHOLDS);
+  const repoAbs = resolveRepo(opts);
+  const r = thresholdsLib.parseThresholds(projectDoc(repoAbs));
+  const name = opts._ && opts._[0];
+  if (name !== undefined) {
+    if (!thresholdsLib.SPEC[name]) throw new UserError(`unknown threshold ${name} — expected one of: ${Object.keys(thresholdsLib.SPEC).join(', ')} (run \`colab thresholds\` to list them)`);
+    for (const p of r.problems) process.stderr.write(`! ${p}\n`);
+    print(String(r.values[name]));
+    return 0;
+  }
+  const rows = Object.fromEntries(Object.entries(thresholdsLib.SPEC).map(([k, s]) => [k, {
+    value: r.values[k], default: s.def, declared: !!r.declared[k], what: s.what, where: s.where,
+  }]));
+  if (opts.json) {
+    print(JSON.stringify({ repo: shortRepo(repoAbs), thresholds: rows, problems: r.problems }, null, 2));
+    return 0;
+  }
+  print(`thresholds ${shortRepo(repoAbs)}`);
+  const w = Math.max(...Object.keys(rows).map((k) => k.length));
+  for (const [k, row] of Object.entries(rows)) {
+    print(`  ${k.padEnd(w)}  ${String(row.value).padStart(5)}  ${row.declared ? `declared (default ${row.default})` : 'default'.padEnd(20)}  ${row.what}`);
+  }
+  for (const p of r.problems) print(`  ! ${p}`);
+  return 0;
+}
+
 function cmdLanded(argv) {
   const opts = parseArgs(argv, {
     values: { '--repo': 'repo', '--worktree': 'worktree', '--branch': 'branch', '--base': 'base' },
@@ -15782,6 +15831,8 @@ Commands:
                                         wait; how a repo tunes ship-batch / ship-batch-wait (#554)
   ci-profile [--json] [--refresh]      this repo's measured CI duration and every CI wait bound
                                         derived from it — ci-wait's default deadline (#559)
+  thresholds [<name>] [--json]         the advisory thresholds this repo applies — declared in
+                                        project.yml thresholds:, else the default (#560)
   holders <path> [--base B] [--json]   who else is holding <path> — refs that touched it and
                                         have not landed on the base (filters the raw git-log
                                         one-liner through \`landed\`'s content classification)
@@ -15868,6 +15919,7 @@ function main(argv) {
     case 'landed': return cmdLanded(rest);
     case 'batch-stats': return cmdBatchStats(rest);
     case 'ci-profile': return cmdCiProfile(rest);
+    case 'thresholds': return cmdThresholds(rest);
     case 'trunk-ci': return cmdTrunkCi(rest);
     case 'ci-wait': return cmdCiWait(rest);
     case 'holders': return cmdHolders(rest);

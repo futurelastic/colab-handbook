@@ -18,7 +18,8 @@ Run after §3's `Touches:` step and §5's file gate, from facts this pass alread
 - For each path `P`, count the open, unclaimed, non-epic issues that §5's file gate kept off
   READY on `P` — `P` is on their `Touches:` line, or §3 measured the collision this pass.
   A path a group's own members share is one waiting unit per group, not one per member.
-- **Count ≥ 3** ⇒ `P` is hot. Fewer ⇒ nothing, and nothing printed.
+- **Count ≥ `hot-file-count`** ⇒ `P` is hot — 3 unless `.github/project.yml` declares
+  `thresholds.hot-file-count`; `colab thresholds hot-file-count` prints the value in force (#560). Fewer ⇒ nothing, and nothing printed.
 - Count only what this pass measured. A guess from issue titles, or an `unknown` row from
   `colab holders`, is not a waiting issue.
 

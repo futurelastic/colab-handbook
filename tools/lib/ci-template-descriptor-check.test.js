@@ -164,3 +164,59 @@ test('#555: a ship-batch-wait line never reads as the ship-batch value', () => {
   assert.match(r.stdout, /ship-batch: absent — ok/);
   assert.match(r.stdout, /ship-batch-wait: 6m — ok/);
 });
+
+// #560: `thresholds:` — the same step, held to tools/lib/thresholds.js. The value handed to the parser
+// is the RAW scalar, as the audit's reader hands it (a digit string) — the stricter of the two readers,
+// so `4.0` is refused by both gates even though the CLI's YAML reader would read it as 4.
+const thresholds = require('./thresholds.js');
+
+// [ the indented lines under `thresholds:` (or the inline value after it), the map the parser gets ]
+const THRESHOLD_CASES = [
+  ['', null],
+  [' ~', null],
+  ['\n  hot-file-count: 4', { 'hot-file-count': '4' }],
+  ['\n  hot-file-count: 4   # four waiting', { 'hot-file-count': '4' }],
+  ['\n  hot-file-count: "4"', { 'hot-file-count': '4' }],
+  ["\n  hold-stale-days: '45'\n  smoke-minutes: 5", { 'hold-stale-days': '45', 'smoke-minutes': '5' }],
+  ['\n  # a comment\n\n  doc-budget-slack: 0', { 'doc-budget-slack': '0' }],
+  ['\n  claude-md-line-floor-bytes: 0', { 'claude-md-line-floor-bytes': '0' }],
+  ['\n  hot-file-count:', { 'hot-file-count': null }],
+  ['\n  hot-file-count: 1', { 'hot-file-count': '1' }],
+  ['\n  claude-md-line-multiple: 1', { 'claude-md-line-multiple': '1' }],
+  ['\n  hold-stale-days: 0', { 'hold-stale-days': '0' }],
+  ['\n  smoke-minutes: 2.5', { 'smoke-minutes': '2.5' }],
+  ['\n  smoke-minutes: 4.0', { 'smoke-minutes': '4.0' }],
+  ['\n  claude-md-kb: 40KB', { 'claude-md-kb': '40KB' }],
+  ['\n  transitional-days: -3', { 'transitional-days': '-3' }],
+  ['\n  transitional-days: 1234567890', { 'transitional-days': '1234567890' }],
+  ['\n  hot-files: 4', { 'hot-files': '4' }],
+  ['\n  hot-file-count: 4\n  hot-files: 4', { 'hot-file-count': '4', 'hot-files': '4' }],
+  [' 5', '5'],
+  [' high', 'high'],
+];
+
+test('#560: the step fails exactly the thresholds entries the parser refuses', () => {
+  const script = scripts[TEMPLATES[0]];
+  for (const [tail, value] of THRESHOLD_CASES) {
+    const want = thresholds.parseThresholds({ thresholds: value }).problems.length === 0;
+    const r = runCase(script, `thresholds:${tail}`);
+    assert.strictEqual(r.status === 0, want, `thresholds:${tail}: step exit ${r.status}, parser valid=${want}\n${r.stdout}${r.stderr}`);
+    if (!want) assert.match(r.stdout, /::error file=\.github\/project\.yml::thresholds/, `thresholds:${tail}: no annotation`);
+  }
+});
+
+test('#560: a thresholds block ends at the next top-level key', () => {
+  // `stack: node` follows the block in runCase's descriptor; it must not read as a threshold.
+  const r = runCase(scripts[TEMPLATES[0]], 'thresholds:\n  hot-file-count: 4');
+  assert.strictEqual(r.status, 0, r.stdout + r.stderr);
+  assert.match(r.stdout, /thresholds\.hot-file-count: 4 — ok/);
+  assert.doesNotMatch(r.stdout, /stack/);
+});
+
+test('#560: the names and floors the step lists are thresholds.js SPEC', () => {
+  const script = scripts[TEMPLATES[0]];
+  const listed = {};
+  for (const m of script.matchAll(/^\s*([a-z|-]+)\) min=(\d+) ;;$/gm)) for (const k of m[1].split('|')) listed[k] = Number(m[2]);
+  const spec = Object.fromEntries(Object.entries(thresholds.SPEC).map(([k, s]) => [k, s.min]));
+  assert.deepStrictEqual(listed, spec);
+});
