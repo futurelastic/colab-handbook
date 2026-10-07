@@ -4,8 +4,8 @@ A tiny, portable CLI that lets **parallel coding sessions and agents on one mach
 collisions. Three independent capabilities, each usable on its own:
 
 1. **Issue claims** — so two sessions, on one machine or several, don't grab the same issue. The
-   claim's record is its **branch on the git remote**, pushed at cut and refused against from any
-   machine (#325); also written to local state (fast) and mirrored to GitHub for people
+   claim's record is its **branch on the git remote** — at cut, the claim ref `refs/claims/<branch>`,
+   which no CI trigger watches (#550) — refused against from any machine (#325); also written to local state (fast) and mirrored to GitHub for people
    (`gh issue edit --add-assignee @me --add-label in-progress`).
 2. **Ports** — every dev server gets a unique port; a project's reserved trunk port is never handed
    to a worktree, even while that trunk server is down.
@@ -160,14 +160,17 @@ three gates; `colab release` and `colab worktree rm` close the loop.
 Before a claim is written, colab checks three layers and **refuses with exit 1** if any says the
 issue is taken:
 
-- **Remote** (#325, first): `git ls-remote --heads <remote>` — asked of the remote directly, so a
-  clone that never fetched sees what a fresh one would. A branch whose trailing number run
+- **Remote** (#325, first): `git ls-remote <remote> 'refs/heads/*' 'refs/claims/*'` — asked of the
+  remote directly, so a clone that never fetched sees what a fresh one would. A branch (or claim
+  ref, #550) whose trailing number run
   (`CONVENTIONS.md` §4) carries the issue, and that no worktree/claim record in *this machine's*
   state names, is another machine's claim → refuse, naming `<remote>/<branch> @ sha` and the
   commands to continue it. **Remote unreachable → refused** (no local-only fallback, no `--force`).
-  A repo with no remote at all skips this layer and says so. The branch is pushed by
-  `colab worktree new` at cut (`--force-with-lease=refs/heads/<b>:`, create-only); a failed push
-  with `--issues` removes the worktree + branch again and takes nothing.
+  A repo with no remote at all skips this layer and says so. `colab worktree new` pushes the
+  **claim ref** `refs/claims/<b>` at cut (`--force-with-lease=refs/claims/<b>:`, create-only), not
+  the branch — a branch push re-runs CI on trunk's own commit, a claim ref triggers nothing (#550);
+  the branch follows at code-wrap's push. A failed push with `--issues` removes the worktree +
+  branch again and takes nothing. `colab worktree rm` deletes the claim ref (absent is fine).
 - **Local** (always): if the issue already has a live claim in `state.json` attached to a
   *different* worktree (or a trunk claim vs. a worktree claim), refuse and print the holder —
   worktree, branch, host, and the date since. Re-claiming onto the **same** worktree is idempotent

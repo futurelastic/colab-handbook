@@ -7,6 +7,9 @@ behind them — moved here verbatim (#524).
 **A3's green gate does not answer for this branch's CI, and nobody downstream asks.**
 A3 runs the suite *locally*, on this machine; CI runs it on the runner.
 
+This push is usually the branch's **first**: `colab worktree new` recorded the claim as the ref
+`refs/claims/<branch>`, which runs no CI (#550), so this is where branch CI starts.
+
 So read it here, where the push just created it, and pass the answer forward as a
 **class** rather than a pass/fail:
 

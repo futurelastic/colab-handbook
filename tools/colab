@@ -522,8 +522,9 @@ function localClaimConflicts(st, repoAbs, nums, wtName) {
 
 /**
  * #325 — the claim record every machine can read, whatever the tracker: a branch on the remote whose
- * name carries the issue number (CONVENTIONS.md §4 puts the numbers in the trailing run; `code-start`
- * pushes the branch the moment it is cut). Asked of the remote directly (`ls-remote`, no fetch), so a
+ * name carries the issue number (CONVENTIONS.md §4 puts the numbers in the trailing run), or — since
+ * #550 — the claim ref `refs/claims/<branch>` that `colab worktree new` pushes the moment it cuts
+ * (a ref no CI trigger watches; the branch itself follows at code-wrap). Asked of the remote directly (`ls-remote`, no fetch), so a
  * clone that has never fetched sees exactly what a fresh one would.
  *
  * `mode`:
@@ -558,7 +559,7 @@ function remoteClaimConflicts(st, repoAbs, nums) {
   for (const h of heads.heads) {
     const carried = branchName.claimIssueNumbers(h.branch, scope).filter((n) => want.has(n));
     if (!carried.length || ours(h.branch)) continue;
-    for (const num of carried) conflicts.push({ num, remote, branch: h.branch, sha: h.sha });
+    for (const num of carried) conflicts.push({ num, remote, branch: h.branch, sha: h.sha, claimRef: !!h.claimRef });
   }
   return { mode: 'ok', remote, conflicts };
 }
@@ -667,13 +668,18 @@ function ghClaimConflicts(repoAbs, nums, myLogin, myHost, mySession, comps, myMa
 function printRefusal(localConf, ghConf, remoteConf = []) {
   process.stderr.write('✗ Refusing — one or more issues are already claimed:\n');
   for (const c of remoteConf) {
-    process.stderr.write(`  #${c.num} remote: branch ${c.remote}/${c.branch} @ ${c.sha} carries it, and it is not this machine's (#325)\n`);
+    process.stderr.write(c.claimRef
+      ? `  #${c.num} remote: claim ref ${c.remote} ${git.claimRef(c.branch)} @ ${c.sha} carries it (branch not pushed yet), and it is not this machine's (#325, #550)\n`
+      : `  #${c.num} remote: branch ${c.remote}/${c.branch} @ ${c.sha} carries it, and it is not this machine's (#325)\n`);
   }
   if (remoteConf.length) {
     const c = remoteConf[0];
-    process.stderr.write('  That branch IS the claim — continue it rather than open a second one:\n');
-    process.stderr.write(`    git fetch ${c.remote} ${c.branch} && git worktree add <path> ${c.branch}\n`);
+    process.stderr.write(`  That ${c.claimRef ? 'claim ref' : 'branch'} IS the claim — continue it rather than open a second one:\n`);
+    process.stderr.write(c.claimRef
+      ? `    git fetch ${c.remote} ${git.claimRef(c.branch)}:refs/heads/${c.branch} && git worktree add <path> ${c.branch}\n`
+      : `    git fetch ${c.remote} ${c.branch} && git worktree add <path> ${c.branch}\n`);
     process.stderr.write(`    colab claim ${c.num} --worktree <name> --branch ${c.branch} --session <id> --force\n`);
+    if (c.claimRef) process.stderr.write(`  A claim ref whose session is gone is stale — delete it: git push ${c.remote} --delete ${git.claimRef(c.branch)}\n`);
   }
   for (const c of localConf) {
     const h = c.holder;
@@ -710,7 +716,7 @@ function halfClaimText(c) {
 /** Announce exactly what --force overrides (a takeover is visible, never silent). */
 function printTakeover(localConf, ghConf, remoteConf = []) {
   for (const c of remoteConf) {
-    print(`  --force: taking over #${c.num} although branch ${c.remote}/${c.branch} @ ${c.sha} carries it (not this machine's)`);
+    print(`  --force: taking over #${c.num} although ${c.claimRef ? `claim ref ${c.remote} ${git.claimRef(c.branch)}` : `branch ${c.remote}/${c.branch}`} @ ${c.sha} carries it (not this machine's)`);
   }
   for (const c of localConf) {
     const h = c.holder;
@@ -877,7 +883,8 @@ const HELP_CLAIM = `colab claim <issue> [<issue> ...] [options]
 
 Claim one or more GitHub issues so parallel sessions/agents don't collide.
 The claim RECORD every machine reads is a branch on the git remote carrying the issue number
-(\`colab worktree new\` pushes it the moment it is cut, #325). Also writes local state (fast path)
+(\`colab worktree new\` records it the moment it is cut as the claim ref refs/claims/<branch>,
+which no CI trigger watches — #325, #550). Also writes local state (fast path)
 and the tracker (the copy people read):
   gh issue edit N --add-assignee @me --add-label in-progress
 Remote unreachable → REFUSED (fail closed). Tracker unreachable → the claim stands and its tracker
@@ -5587,23 +5594,30 @@ function cmdWorktreeNew(argv) {
   // rejected instead of overwriting. With issues to claim, a failed push takes nothing: the worktree
   // and the zero-commit branch this invocation just made are removed again, so no half-claim exists
   // anywhere. With no issues there is no claim to protect, and a failed push only warns.
+  //
+  // #550: what is pushed is the CLAIM REF `refs/claims/<branch>`, not the branch. A branch push fires
+  // every CI `push` trigger, and at cut the branch IS trunk's commit — so each cut re-ran a suite
+  // trunk had already passed (~27 % of one org's runs). A claim ref triggers nothing, and every
+  // claim reader (`remoteHeads`) lists it beside the branches. The branch itself is first pushed at
+  // code-wrap, when it has commits worth testing. The claim ref is deleted at `worktree rm`.
   const pushRemote = git.claimRemote(repoAbs);
   let pushed = false;
   if (pushRemote) {
-    const push = git.git(['push', '-u', pushRemote, `--force-with-lease=refs/heads/${branch}:`, branch], repoAbs, { timeoutMs: 120_000 });
+    const claimRef = git.claimRef(branch);
+    const push = git.pushClaimRef(repoAbs, pushRemote, branch);
     if (push.ok) {
       pushed = true;
-      print(`  pushed ${branch} → ${pushRemote} (the claim record other machines read)`);
+      print(`  pushed ${claimRef} → ${pushRemote} (the claim record other machines read; not a branch, so no CI runs — the branch is pushed at code-wrap)`);
     } else {
       const why = String(push.stderr || '').split('\n').filter(Boolean).slice(-1)[0] || `exit ${push.code}`;
       if (issues.length) {
         git.git(['worktree', 'remove', '--force', wtPath], repoAbs);
         git.git(['branch', '-D', branch], repoAbs);
-        throw new UserError(`git push ${pushRemote} ${branch} failed (${why}) — claim NOT taken: the worktree and branch ` +
-          'were removed again. The pushed branch is the claim record other machines read (#325); fix the push ' +
-          '(access, network, or a branch of that name another machine just created) and re-run.');
+        throw new UserError(`git push ${pushRemote} ${claimRef} failed (${why}) — claim NOT taken: the worktree and branch ` +
+          'were removed again. The pushed claim ref is the record other machines read (#325, #550); fix the push ' +
+          `(access, network, or a claim ref of that name another machine just created — \`git ls-remote ${pushRemote} ${claimRef}\`) and re-run.`);
       }
-      warn(`git push ${pushRemote} ${branch} failed (${why}) — worktree created, branch not on the remote yet`);
+      warn(`git push ${pushRemote} ${claimRef} failed (${why}) — worktree created, no claim ref on the remote`);
     }
   }
 
@@ -5625,14 +5639,14 @@ function cmdWorktreeNew(argv) {
   }
 
   // 3. allocate ports + record worktree + claims (atomic)
-  // #325: if recording fails after the push above, take the pushed branch back off the remote —
+  // #325: if recording fails after the push above, take the pushed claim ref back off the remote —
   // otherwise it would stand there as a claim record nothing on any machine owns, refusing every
   // later claim on these issues. (The local worktree is left as before this change.)
   let alloc;
   try {
     alloc = allocWorktreeRecord();
   } catch (e) {
-    if (pushed) git.git(['push', pushRemote, '--delete', branch], repoAbs, { timeoutMs: 120_000 });
+    if (pushed) git.deleteClaimRef(repoAbs, pushRemote, branch);
     throw e;
   }
   function allocWorktreeRecord() { return state.mutate((st) => {
@@ -5861,6 +5875,19 @@ function cmdWorktreeRm(argv) {
 
   print(`✓ Removed worktree "${name}"`);
   if (removal.action === 'rm-rf') print('  (directory was a husk from an earlier interrupted removal — cleaned up directly)');
+  // #550: the claim ref `worktree new` pushed is this worktree's claim record on the remote — release
+  // it with the claims, or it would stand there refusing every later claim on these issue numbers from
+  // another machine. Best effort: an absent ref is fine (never pushed, a pre-#550 worktree, or already
+  // gone), a failed delete only warns with the command, and nothing above is undone for it.
+  if (wt.branch) {
+    let claimRemoteName = null;
+    try { claimRemoteName = git.claimRemote(repoAbs); } catch { claimRemoteName = null; }
+    if (claimRemoteName) {
+      const d = git.deleteClaimRef(repoAbs, claimRemoteName, wt.branch);
+      if (d.ok && !d.absent) print(`  deleted claim ref ${claimRemoteName} ${git.claimRef(wt.branch)}`);
+      else if (!d.ok) warnDeferred(`could not delete claim ref ${claimRemoteName} ${git.claimRef(wt.branch)} (${String(d.stderr || '').split('\n')[0]}) — delete it by hand: git push ${claimRemoteName} --delete ${git.claimRef(wt.branch)}`);
+    }
+  }
   // #114: this line used to report `removed.claims` — the LOCAL registry mutation, which cannot
   // fail for a network reason and so always read as full success. Report what the tracker actually
   // did instead, and name what it didn't.

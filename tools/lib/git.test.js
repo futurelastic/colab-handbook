@@ -1173,3 +1173,19 @@ test('#301: in a repo whose only remote is `upstream`, the branch helpers read r
     assert.strictEqual(git.branchRefs(work, 'feat/x-1').localFromRemote, true);
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
+
+test('#550: parseRemoteHeads lists claim refs as branches, and a real branch of the same name wins', () => {
+  const { parseRemoteHeads, claimRef } = require('./git');
+  const out = [
+    'aaaaaaa1111111111111111111111111111111111\trefs/heads/main',
+    'bbbbbbb2222222222222222222222222222222222\trefs/claims/feat/x-9',
+    'ccccccc3333333333333333333333333333333333\trefs/claims/feat/y-10',
+    'ddddddd4444444444444444444444444444444444\trefs/heads/feat/y-10',
+    'eeeeeee5555555555555555555555555555555555\trefs/pull/3/head',
+  ].join('\n');
+  const heads = parseRemoteHeads(out);
+  assert.deepStrictEqual(heads.find((h) => h.branch === 'feat/x-9'), { branch: 'feat/x-9', sha: 'bbbbbbb', claimRef: true });
+  assert.deepStrictEqual(heads.find((h) => h.branch === 'feat/y-10'), { branch: 'feat/y-10', sha: 'ddddddd' });
+  assert.strictEqual(heads.length, 3);
+  assert.strictEqual(claimRef('feat/x-9'), 'refs/claims/feat/x-9');
+});

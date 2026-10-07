@@ -297,21 +297,70 @@ function claimRemote(repo) {
 }
 
 /**
- * Every branch head on `remoteName`, asked of the remote directly (`ls-remote --heads`, no fetch, no
- * local cache) — the claim record another machine can read (#325). Unlike `existingBranchRef`, a
- * failed ask is NOT "no branches": it returns `{ ok: false, stderr }` so the caller can refuse
- * (fail closed) instead of reading an unreachable remote as clear ground.
- * `{ ok: true, heads: [{ branch, sha }] }` otherwise, `sha` short (7).
+ * Every branch head on `remoteName` — plus every claim ref (`refs/claims/<branch>`, #550) — asked
+ * of the remote directly (`ls-remote`, no fetch, no local cache): the claim record another machine
+ * can read (#325). Unlike `existingBranchRef`, a failed ask is NOT "no branches": it returns
+ * `{ ok: false, stderr }` so the caller can refuse (fail closed) instead of reading an unreachable
+ * remote as clear ground. `{ ok: true, heads: [{ branch, sha, claimRef? }] }` otherwise, `sha` short
+ * (7) — `parseRemoteHeads`.
  */
 function remoteHeads(repo, remoteName) {
-  const r = git(['ls-remote', '--heads', remoteName], repo, { timeoutMs: 60_000 });
+  const r = git(['ls-remote', remoteName, 'refs/heads/*', `${CLAIM_REF_PREFIX}*`], repo, { timeoutMs: 60_000 });
   if (!r.ok) return { ok: false, stderr: r.stderr || (r.timedOut ? 'ls-remote timed out' : `exit ${r.code}`) };
-  const heads = [];
-  for (const line of String(r.stdout || '').split('\n')) {
-    const m = line.match(/^([0-9a-f]{7,})\s+refs\/heads\/(.+)$/);
-    if (m) heads.push({ branch: m[2], sha: m[1].slice(0, 7) });
+  return { ok: true, heads: parseRemoteHeads(r.stdout) };
+}
+
+/**
+ * #550 — where `colab worktree new` records a claim at cut: `refs/claims/<branch>`, NOT the branch.
+ * A push to `refs/heads/<branch>` fires every CI `push` trigger, and at cut the branch is identical
+ * to trunk, so each claim re-ran the full suite on a commit trunk had already tested (measured: ~209
+ * of 230 duplicate runs in one org over 3 days, one sha run 8 times). GitHub fires `push` workflows
+ * for branches and tags only, so a ref outside both namespaces is a claim record every machine can
+ * still `ls-remote`, at zero CI cost (probed live 2026-10-07: a refs/claims push started no run).
+ * The branch itself reaches the remote at its first real push (code-wrap), where CI is wanted.
+ */
+const CLAIM_REF_PREFIX = 'refs/claims/';
+function claimRef(branch) { return `${CLAIM_REF_PREFIX}${branch}`; }
+
+/**
+ * `ls-remote` output → `[{ branch, sha, claimRef? }]`, short sha. A `refs/claims/<b>` entry reads as
+ * branch `<b>` with `claimRef: true`; when the same name is ALSO a real branch, only the branch row is
+ * kept (it is the stronger record — it carries commits). Pure, for tests.
+ */
+function parseRemoteHeads(stdout) {
+  const heads = new Map();
+  const claims = new Map();
+  for (const line of String(stdout || '').split('\n')) {
+    const m = line.match(/^([0-9a-f]{7,})\s+refs\/(heads|claims)\/(.+)$/);
+    if (!m) continue;
+    if (m[2] === 'heads') heads.set(m[3], { branch: m[3], sha: m[1].slice(0, 7) });
+    else claims.set(m[3], { branch: m[3], sha: m[1].slice(0, 7), claimRef: true });
   }
-  return { ok: true, heads };
+  for (const [b, c] of claims) if (!heads.has(b)) heads.set(b, c);
+  return [...heads.values()];
+}
+
+/**
+ * Push the claim record for `branch` (#550): `<branch>:refs/claims/<branch>`, CREATE-ONLY
+ * (`--force-with-lease=<ref>:` with an empty expect), so two machines cutting one name still race on
+ * a real compare-and-swap and the loser is rejected. No `-u`: there is no remote branch to track yet.
+ */
+function pushClaimRef(repo, remote, branch) {
+  const ref = claimRef(branch);
+  return git(['push', remote, `--force-with-lease=${ref}:`, `refs/heads/${branch}:${ref}`], repo, { timeoutMs: 120_000 });
+}
+
+/**
+ * Delete the claim record for `branch` from `remote` (#550). Idempotent: an absent ref is success
+ * (nothing to release), so teardown never fails on a claim that was never pushed or already gone.
+ */
+function deleteClaimRef(repo, remote, branch) {
+  const ref = claimRef(branch);
+  const ls = git(['ls-remote', remote, ref], repo, { timeoutMs: 60_000 });
+  if (!ls.ok) return { ok: false, stderr: ls.stderr || `exit ${ls.code}` };
+  if (!String(ls.stdout || '').trim()) return { ok: true, absent: true };
+  const r = git(['push', remote, '--delete', ref], repo, { timeoutMs: 120_000 });
+  return { ok: r.ok, stderr: r.stderr };
 }
 
 /** List worktree paths registered in a repo (porcelain). */
@@ -1329,7 +1378,7 @@ module.exports = {
   ghCommitCheckRuns, ghCheckRunAnnotations,
   run, git, repoRoot, mainRepoRoot, originUrl, remoteInfo, remoteName, remoteFor, remoteUrl, remoteProblem, _resetRemoteCache,
   detectTrunk, branchExists, branchRefs, existingBranchRef,
-  claimRemote, remoteHeads,
+  claimRemote, remoteHeads, parseRemoteHeads, CLAIM_REF_PREFIX, claimRef, pushClaimRef, deleteClaimRef,
   worktreeList, worktreeListDetailed, resolveWorktreePathForBranch, gitFailureLine,
   dirtyTracked, dirtyUntracked, dirtyAny,
   ghAvailable, ghState, ghInstalled, ghApiConditional, ghRunsAtShaRest, fullSha, ghIssueEdit, ghListLabels, ghOpenIssueNumbersByLabel, ghAssignedIssues,

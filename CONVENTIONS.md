@@ -1477,8 +1477,8 @@ reading either sees the same spelling. Spell them exactly so, everywhere:
   straggler beside a real `success` is still `green`; the ladder must not reintroduce the
   deadlock #92 fixed.
 - **A claim's first push is `green` from a guard run, not a second suite run (#418).** A
-  claim pushes its branch at trunk's head (§5, *Record of a claim*), so that first push sits
-  on a sha the same workflow has usually already tested. The CI templates (and this repo's own
+  branch pushed at trunk's head (a plain-git cut; `colab` pushes a claim ref instead, §5,
+  *Record of a claim*) sits on a sha the same workflow has usually already tested. The CI templates (and this repo's own
   workflow) open with a `dedupe` job that runs only on a ref's **first** push, checks nothing
   out, and asks the platform one thing: does *this* workflow already have a completed,
   `success`, non-pull-request run at *this* sha? Yes ⇒ every other job is skipped, and the run
@@ -1785,9 +1785,12 @@ Parallel sessions and parallel agents must not collide on the same Issue. Two la
 #### Record of a claim — the branch on the remote
 
 **[Hard — gate: colab claim refuses]** **The record of a claim is its branch on the git remote** — the branch whose name carries
-the issue number ([§4](#4-branches-and-commits)), **pushed the moment it is cut** at session
-start and again at wrap (#325). A claim is refused against the git remote: a branch on the remote carrying `#N` that is not this machine's refuses a second claim on `#N` from
-anywhere, naming the branch and how to continue it. Each machine sweeps its own worktrees.
+the issue number ([§4](#4-branches-and-commits)), recorded **the moment it is cut** at session
+start and pushed at wrap (#325). At the cut it is recorded as the **claim ref**
+`refs/claims/<branch>`, not the branch: a branch push fires every CI `push` trigger on a commit
+trunk already tested, and a claim ref fires none (#550). It is deleted at `colab worktree rm`.
+A claim is refused against the git remote: a branch or claim ref on the remote carrying `#N` that is not this machine's refuses a second claim on `#N` from
+anywhere, naming the ref and how to continue it. Each machine sweeps its own worktrees.
 
 - **[Hard — gate: colab claim refuses]** **Remote unreachable → no claim.** Fail closed: a claim checked against nothing is not a
   lock. A repo with **no remote at all** is the one exception — nothing else could ever share

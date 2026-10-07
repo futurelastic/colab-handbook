@@ -131,6 +131,8 @@ function readState(home) {
 }
 const sha = (cwd, ref) => g(cwd, 'rev-parse', ref).trim();
 const remoteHeads = (fx) => g(fx.work, 'ls-remote', '--heads', 'origin').split('\n').filter(Boolean).map((l) => l.split('\t')[1].replace('refs/heads/', ''));
+// #550: the cut pushes the claim ref refs/claims/<branch>, not the branch.
+const remoteClaims = (fx, remote = 'origin') => g(fx.work, 'ls-remote', remote, 'refs/claims/*').split('\n').filter(Boolean).map((l) => l.split('\t')[1].replace('refs/claims/', ''));
 
 /** Advance origin/main from ANOTHER clone, so this clone's local main AND its origin/main cache lag. */
 function advanceOrigin(fx) {
@@ -183,7 +185,7 @@ test('#348: without branchPrefix the branch is exactly the name given', () => {
   const fx = fixture();
   const r = colab(fx, ['worktree', 'new', 'feat/x-9', '--issues', '9', '--session', 's1']);
   assert.strictEqual(r.code, 0, r.out + r.err);
-  assert.ok(remoteHeads(fx).includes('feat/x-9'), remoteHeads(fx).join(','));
+  assert.ok(remoteClaims(fx).includes('feat/x-9'), remoteClaims(fx).join(','));
   assert.ok(fs.existsSync(path.join(fx.work, '.worktrees', 'x-9')));
 });
 
@@ -194,7 +196,7 @@ test('#348: under branchPrefix: machine, worktree new cuts and pushes <login>/<m
   const want = `me/${LABEL}/feat/x-9`;
   const r = colab(fx, ['worktree', 'new', 'feat/x-9', '--issues', '9', '--session', 's1']);
   assert.strictEqual(r.code, 0, r.out + r.err);
-  assert.ok(remoteHeads(fx).includes(want), remoteHeads(fx).join(','));
+  assert.ok(remoteClaims(fx).includes(want), remoteClaims(fx).join(','));
   assert.ok(fs.existsSync(path.join(fx.work, '.worktrees', 'x-9')), 'worktree dir is the slug, not a nested path');
   const wt = Object.values(readState(fx.home).worktrees)[0];
   assert.strictEqual(wt.branch, want);
@@ -233,9 +235,8 @@ test('#301: the only remote is `upstream` — worktree new fetches, cuts from an
   assert.strictEqual(r.code, 0, r.out + r.err);
   assert.strictEqual(sha(fx.work, 'feat/x-9'), tip);
   assert.ok(r.out.includes(`base upstream/main @ ${tip.slice(0, 7)}`), r.out);
-  assert.ok(r.out.includes('pushed feat/x-9 → upstream'), r.out);
-  const heads = g(fx.work, 'ls-remote', '--heads', 'upstream');
-  assert.match(heads, /refs\/heads\/feat\/x-9$/m);
+  assert.ok(r.out.includes('pushed refs/claims/feat/x-9 → upstream'), r.out);
+  assert.ok(remoteClaims(fx, 'upstream').includes('feat/x-9'));
   assert.ok(fs.existsSync(path.join(fx.work, '.worktrees', 'x-9')));
   assert.ok(Object.values(readState(fx.home).claims || {}).some((c) => c.issue === '#9'), 'claim recorded');
 });
@@ -268,6 +269,6 @@ test('#301: two remotes resolved by `git config colab.remote` — the cut and th
   const r = colab(fx, ['worktree', 'new', 'feat/x-9', '--issues', '9', '--session', 's1']);
   assert.strictEqual(r.code, 0, r.out + r.err);
   assert.ok(r.out.includes('base a/main @'), r.out);
-  assert.match(g(fx.work, 'ls-remote', '--heads', 'a'), /refs\/heads\/feat\/x-9$/m);
-  assert.strictEqual(g(fx.work, 'ls-remote', '--heads', 'b').trim(), '', 'nothing pushed to the other remote');
+  assert.ok(remoteClaims(fx, 'a').includes('feat/x-9'));
+  assert.strictEqual(g(fx.work, 'ls-remote', 'b').trim(), '', 'nothing pushed to the other remote');
 });
