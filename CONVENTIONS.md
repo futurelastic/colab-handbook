@@ -2379,7 +2379,7 @@ neither input reaches them.
 Three properties hold this together, and each is load-bearing:
 
 - **Fails towards `human`, always.** An absent, malformed or unresolvable fact never yields
-  `agent` — the posture *Readiness* (above) takes towards `ready`, for the same reason. Why, with the measurement: [ADR 539](docs/adr/539-disposition-marker-rationale.md).
+  `agent` — the posture *Readiness* (above) takes towards `ready`. Why, with the measurement: [ADR 539](docs/adr/539-disposition-marker-rationale.md).
 - **"An agent may" is never "a human may not."** A human can apply any disposition on any
   issue at any time, in either direction. The verdict is a proposal, not a lock.
 - **A mechanical gap is not a judgement call.** `split` with nothing filed yet, or `hold`
@@ -3585,8 +3585,11 @@ back-filled.
 
 `code-triage` may flag a hard group `needs-plan` with a one-line reason — a
 **cross-backlog judgement**, never a plan of its own. **The full plan is drafted at code-session
-start**, inside the implementing session, by a stronger-model subagent seeded with the
-Issue plus the reason line, against the repo as it is at coding time. A rung-1 stub may
+start**, inside the implementing session, seeded with the Issue plus the reason line,
+against the repo as it is at coding time. One contract, two equal paths: the drafter takes
+that seed, appends one rung-2 section to the plan file, and stops before implementing — a
+separate helper agent where the engine has one, otherwise the session itself, which records
+`drafted-by: self` in the plan's frontmatter ([`code-plan`](skills/code-plan/SKILL.md)). A rung-1 stub may
 still upgrade to rung 2 mid-session — the flag decides only the default.
 
 **Read the `needs-plan` flag by direct issue fetch, never the Search API**. A plan is a sketch the code may overrule, not a contract — note deviation
@@ -3605,7 +3608,7 @@ two units, in order.**
 branch, worktree, or clean tree needed.
 
 **Step 2 — the write is its own coding unit**: own Issue, claim, branch off trunk in a
-worktree, wrapped normally.
+worktree, wrapped normally — never under a typo fix's exemption from ceremony.
 
 **The collision unit is the file (the hunk), never the folder** — two sessions each
 adding a new file under one tree cannot conflict:
