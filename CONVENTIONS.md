@@ -2649,9 +2649,7 @@ consumer, not in a repo-generic handbook. What lives here is the table both side
 #### Decision gate — a human must answer first (#122)
 
 Some issues cannot start, or cannot finish, until a human answers a blocking question —
-a design pre-approval, a business-logic call, a permission. `needs-decision` (named
-`needs-ruling` before #122; widened because "ruling" read narrower than the gate actually
-covers) marks that. A designer producing a spec decides, while producing it, whether a
+a design pre-approval, a business-logic call, a permission. `needs-decision` marks that. A designer producing a spec decides, while producing it, whether a
 surface needs human pre-approval before code starts, and applies the label if so — the
 call belongs to whoever is producing the spec, never inferred mechanically from title or
 labels.
@@ -2661,9 +2659,7 @@ hard blocker or a live claim — until a human answers and that answer is **reco
 (below). No session, manual or scheduled, starts an issue that still carries it.
 
 **On an issue whose deliverable is a design artifact, approving the artifact is not a
-question you can ask at filing (#361).** The gate blocks the start, and the start is
-the session that produces the artifact. Labelling the issue at filing, for an approval
-that needs the finished artifact, blocks the only session that could produce it. So:
+question you can ask at filing (#361).** In practice:
 
 - **At filing**, `needs-decision` goes on such an issue only for a question that must be
   answered *before* design work starts, such as which of two directions to explore, or
@@ -2681,8 +2677,7 @@ that needs the finished artifact, blocks the only session that could produce it.
 Why, with the measurements: [ADR 122](docs/adr/122-decision-gate-rationale.md).
 
 **An epic never carries `needs-decision`, and never a `decision:options` block (#361).**
-The label is a start gate, and an epic is never a start candidate (*Epics*, below), so on
-an epic the label gates nothing. Why, with the measurements: [ADR 122](docs/adr/122-decision-gate-rationale.md).
+Why, with the measurements: [ADR 122](docs/adr/122-decision-gate-rationale.md).
 
 **[Hard — gate: colab decision --reopen refuses]** **A question about an epic goes on its own decision issue**, the same shape as the third
 path below. Its body carries the question and, if there are options, the
@@ -2694,25 +2689,18 @@ path below. Its body carries the question and, if there are options, the
 
 **A session discovering a significant design decision mid-work continues on the
 designer's spec** rather than stopping to request a ruling, and records
-`design-not-preapproved` in its ship evidence — so the closure itself is what a human
-reviews, after the fact. This default stays the rule everywhere a usable default exists.
+`design-not-preapproved` in its ship evidence. This default stays the rule everywhere a usable default exists.
 
 **The third path (#122) — only when there is no usable default and the work genuinely
 cannot finish.** A session that hits a genuine, blocking, non-design ruling mid-work — not
 a design fork with a spec to fall back on, but a question with no default answer — files
 the ruling as its **own** issue, wires a `blocked_by` edge (§*Readiness*, above) from the
-issue it is working, and **keeps its claim**. The question becomes visible where humans
-and triage already look — a labelled issue, not prose in a comment nobody scans — while
-the work stays owned so no second session picks it up mid-flight. **This is not licence to
+issue it is working, and **keeps its claim**. **This is not licence to
 stop on any fork** — the default-exists case above is unchanged and still the ordinary
 rule; this path exists only for the genuinely blocking, no-default case.
 
 **Recording the decision is what clears the gate — it is not a separate act a human must
-remember.** Measured failure (#127): a ruling was posted as ordinary prose in a comment
-and the `needs-decision` label removed by hand. A later triage pass, reading the issue
-fresh, saw no machine-readable trace of a decision, re-gated it, and reported it
-not-startable — the ruling had been sitting in the comment the whole time. **A cleared
-label is indistinguishable from a label never applied.** So the answer, not the label's
+remember.** The answer, not the label's
 absence, is the artifact: a `⚖ Decision recorded` comment (`tools/lib/decision-record.js`)
 naming who ruled and what it answers, plus the `decision-recorded` label, written together
 by `colab decision <N> --record --ruled-by <name>` — never `needs-decision` cleared alone.
@@ -2720,10 +2708,7 @@ A reader checking whether an issue is decided looks for `decision-recorded` or t
 comment marker, never merely for `needs-decision`'s absence.
 
 **A second question on an already-decided issue goes through `colab decision <N> --reopen
---ruled-by <name>` — never a hand-added `needs-decision` (#357).** This is the rule above
-seen from the other side: the label is never *removed* by hand, and for the same reason it
-is never *re-added* by hand. A decided issue can need a second ruling — ruling one
-commissions a design, and later the finished design needs approving. `--reopen` removes
+--ruled-by <name>` — never a hand-added `needs-decision` (#357).** `--reopen` removes
 `decision-recorded`, re-applies `needs-decision` and posts a `↩ Decision reopened` receipt,
 so the issue reads as open to every reader. A hand-added `needs-decision` does not: it
 leaves the issue with **both** labels. Why, with the measurements: [ADR 122](docs/adr/122-decision-gate-rationale.md).
@@ -2748,6 +2733,8 @@ is `pairVerdict` in `tools/lib/decision-record.js`. `colab decision --list` name
 issue carrying the pair, with its verdict and fix. `colab decision --record` **refuses**
 over the pair unless `--answers <ref>` says which question the new record answers.
 
+Why, with the measurement: [ADR 539](docs/adr/539-decision-gate-rationale.md).
+
 #### Decision options — what a ruling chooses between (#126)
 
 The mechanics above make the **answer** to a `needs-decision` gate machine-readable.
@@ -2768,8 +2755,7 @@ C: Short label | Listed for completeness; why it is probably wrong.
 ```
 
 - `LETTER: label | detail`, one option per line; `detail` is optional.
-- **Two or more lines, or the block does not count** — a one-option decision is not a
-  decision.
+- **Two or more lines, or the block does not count**.
 - An HTML comment fence, so it costs a human reader nothing in the rendered issue.
 - **The block states the choices. It never states the answer** — recording the
   acceptance is the separate, later act above (`colab decision --record --answers
@@ -2790,6 +2776,8 @@ existed. The one exception is the design-approval ask below: a `needs-decision` 
 in neither shape is reported to its filer as a finding (#379). That is a report, never a
 gate, and it never changes whether the question is pending.
 
+Why, with the measurement: [ADR 539](docs/adr/539-decision-gate-rationale.md).
+
 #### Design-approval ask — the `Mockup:` line (#379)
 
 The options block is the shape for a pick-one question. The other common ask, approving
@@ -2802,8 +2790,7 @@ an image, and had no machine-readable shape at all. Why, with the measurements: 
 Mockup: https://…/frozen-screenshot.png
 ```
 
-- **In the body, never only in a comment.** A reader finds it with one field and no
-  timeline walk. The session that produced the artifact edits the body when it asks.
+- **In the body, never only in a comment.** The session that produced the artifact edits the body when it asks.
 - **Anchored at the start of a line**: `Mockup:`, then the URL of the frozen image. An
   indented or inline `Mockup:` is quoted text, not a declaration. The image is the same
   frozen evidence unit 3 attaches to the ruling.
@@ -2823,12 +2810,11 @@ They do not rewrite the ask, because the question is not theirs to restate. The 
 reading is `askShape` in `tools/lib/decision-record.js`, which `evaluateIssue` reports as
 `unshapedAsk` when it is given the body.
 
+Why, with the measurement: [ADR 539](docs/adr/539-decision-gate-rationale.md).
+
 #### An ask is said once — a later pass reports that it is still waiting (#489)
 
-The shapes above say how a question is put to a human. This rule says how often. A
-coordinator pass (`code-triage`, a sweep, a ship session) that finds work blocked on a
-human ask used to render the whole question again on every pass: the question, the
-options, the recommendation. Why, with the measurements: [ADR 489](docs/adr/489-ask-said-once-rationale.md).
+The shapes above say how a question is put to a human. This rule says how often. Why, with the measurements: [ADR 489](docs/adr/489-ask-said-once-rationale.md).
 
 **An ask is open when either of these holds:**
 
@@ -2853,8 +2839,7 @@ unchanged, waiting on <link> since <date>
   or the issue itself for an ask that was only in session output.
 - `<date>` is when the ask was first put. That is the newest ask event for a tracker ask
   (the same "newest ask" *Decision gate* compares with the marker), and the date of the
-  first rendering for an ask that was only in session output. It is never the date of
-  this pass. The point of the line is to show how long the human has been asked.
+  first rendering for an ask that was only in session output. It is never the date of this pass.
 - A pass may append who clears the ask. It never adds the question, the options or the
   recommendation again: those are behind the link.
 
@@ -2874,6 +2859,8 @@ moves an ask is the human's answer (a recorded decision, a label removed, a hold
 Those already move the inputs that the short-circuit compares.
 
 **No open ask, no change.** A repo with no open human ask renders nothing new.
+
+Why, with the measurement: [ADR 539](docs/adr/539-decision-gate-rationale.md).
 
 #### An ask the human must answer can be raised once in a decision box (#490)
 
@@ -2935,8 +2922,7 @@ records a decision.
 #### The human flag — what `COLAB_HUMAN=1` asserts
 
 `COLAB_HUMAN=1` is one mechanism carrying one assertion, used at several gates in this
-handbook: **a human is behind this command.** ⚖ #233 widened it to this single statement,
-covering both uses it already had and one it gained. Read every site below as an instance
+handbook: **a human is behind this command.** Read every site below as an instance
 of the same assertion, never as a separate rule with its own semantics:
 
 - **Promotion** ([`colab promote`](#4-branches-and-commits)) — authorises the act that
@@ -2951,9 +2937,7 @@ of the same assertion, never as a separate rule with its own semantics:
   above) — the newest instance (⚖ #233): asserts a human is present to commit straight to
   trunk, on any repo that does not declare the veto.
 
-**Two terms make the assertion checkable, not just statable** — the same standard
-`code-ship` already holds itself to, restated here as the general rule rather than one
-skill's local convention:
+**Two terms make the assertion checkable, not just statable**:
 
 - **Transcription, never inference.** Set it because a human said so — "take the trunk,"
   "promote this," "grant the migration" — never because the situation seemed to call for
@@ -2967,13 +2951,14 @@ terms above beyond the discipline of everyone honoring them (#150, parked: a str
 mechanism would need an out-of-band attestation this fleet does not have). The two terms
 are what make a violation *legible* after the fact, not what makes one impossible.
 
+Why, with the measurement: [ADR 539](docs/adr/539-human-flag-rationale.md).
+
 #### Migration exemption — a narrow door through no-new-migrations, opened by a role (#98, #402)
 
 **[Hard — gate: colab ship refuses]** `colab ship` refuses, by default with no flag/env/field to lower the bar, any branch
 touching `database/migrations/` or `prisma/migrations/` — or any prefix the repo declares in
 `project.yml` `migrations:` (#383, [`project.schema.md`](project.schema.md#migrations--optional)).
-A declaration only ever widens what the gate sees, never narrows it; a repo keeping migrations
-elsewhere without declaring them is a repo whose gate reads `no new migrations ✓` on a backfill.
+A declaration only ever widens what the gate sees, never narrows it.
 
 **A migration grant is a narrow, per-issue, branch-bound, expiring exemption, and every
 grant names the role that decided it** — deliberately not a repo- or tier-level switch.
@@ -2996,13 +2981,11 @@ policy.
   or infer one ([*The human flag*](#the-human-flag--what-colab-human1-asserts), above).
   The reviewer role changes what a grant must *prove*, not who may post it.
 - **Two required parts**: a `migration-granted` label (requires write/triage permission)
-  and a comment naming the exact branch (labels cap at 50 chars, cannot carry a branch
-  name). Never authorises a migration arriving on a different branch later.
+  and a comment naming the exact branch. Never authorises a migration arriving on a different branch later.
 - **Expires the instant its issue closes** — `ship` reads the issue's live open/closed
   state, never a separate expiry.
 - Visible from any machine — no local-only fallback.
-- **Covers the whole ship set**, never narrowed by `--refs`. One issue without a valid
-  grant fails the set: a migration cannot be attributed to one member of a group branch.
+- **Covers the whole ship set**, never narrowed by `--refs`. One issue without a valid grant fails the set.
 - `--revoke` removes the label first (gate restored immediately), then posts a receipt.
   A revoke cancels every earlier grant on the issue, of either role, whoever posted it.
   `colab migration-grant --list` names every live grant.
@@ -3027,8 +3010,7 @@ in that position lists its humans:
   the tip of the branch being merged into, and rulings read trunk's — a branch cannot
   add its own author. **Editing the list is a human act**, like lowering exposure. As
   with every other human-only rule here, #150's limit applies to *enforcing* that: the
-  handbook cannot stop an account with write access from editing the file. The list only
-  stops the readers from throwing away a difference the platform already has.
+  handbook cannot stop an account with write access from editing the file.
 - **A reviewer grant is not judged by this list.** It passes or fails on the policy, the
   review record, the HEAD and the round-trip below. The list decides only what a *human*
   grant is.
@@ -3051,8 +3033,7 @@ properties hold it together:
   A record with no content id (minted before #508, or on a branch with no migration file)
   stays bound to its HEAD alone, and a new commit voids it as before. A reader that predates
   the field sees an unknown key and refuses the record, so an older `colab` fails closed.
-- **Opt-in per repo.** `migration-grant: reviewer` is read from the trunk checkout when a
-  grant is minted, so a branch cannot raise its own policy. The default is `human`, and
+- **Opt-in per repo.** `migration-grant: reviewer` is read from the trunk checkout when a grant is minted. The default is `human`, and
   `colab migration-grant` refuses to mint a reviewer grant anywhere else.
 - **Recorded only if the review passed.** The record must approve, pass the checklist,
   clear the escalation and pass the CI round-trip. A failing review is refused, not
@@ -3087,8 +3068,7 @@ properties hold it together:
   run's log names every file it exercised. A copy older than that counts added files only:
   its green says nothing about a modified migration, so re-sync it before a reviewer grant
   relies on it. A repo without that
-  job cannot pass R, and a branch that edits `.github/workflows/` cannot pass it either,
-  because a branch must not rewrite the job that grades it. Those branches ship on a
+  job cannot pass R, and a branch that edits `.github/workflows/` cannot pass it either. Those branches ship on a
   human grant.
 
 If any condition fails, the gate behaves exactly as it does without a reviewer grant: a
@@ -3098,12 +3078,12 @@ human grant, or a human running Phase B. The refusal says which condition failed
 grant another refuses.
 
 **`needs-migration-grant` is this gate's plan-time half, not a second gate (#230).**
-It is provisioned in `CONVENTION_LABELS` alongside `migration-granted` for the same
-malignant-absence reason, but nothing in this repo's own tooling reads it — a
+It is provisioned in `CONVENTION_LABELS` alongside `migration-granted`, but nothing in this repo's own tooling reads it — a
 downstream consumer (the fleet dashboard) applies it at plan/triage time, as soon as
-it can tell an issue's deliverable IS a schema migration, so the grant request
-surfaces before `ship` ever has a reason to refuse. It authorises nothing by itself;
+it can tell an issue's deliverable IS a schema migration. It authorises nothing by itself;
 only a grant minted as above does that.
+
+Why, with the measurement: [ADR 539](docs/adr/539-migration-rationale.md).
 
 #### A red trunk with no patch — never parked in silence (#390)
 
@@ -3113,8 +3093,7 @@ a red trunk. Something has to **create** one first. The invariant:
 > **A green, finished branch is never parked behind trunk CI while there is neither an
 > open, accepted `TRUNK RED:` issue nor a re-run in flight.**
 
-An issue that diagnoses the red under another title, or still carries `agent-filed`, does
-not count: nobody will pick it up as the patch. Triage's §0 therefore treats "trunk red,
+An issue that diagnoses the red under another title, or still carries `agent-filed`, does not count. Triage's §0 therefore treats "trunk red,
 and no open accepted `TRUNK RED:` issue" as a change that forces a full pass, even when
 none of its fingerprint inputs moved. The full pass adopts such an issue: it retitles it
 and drops `agent-filed` (#430).
@@ -3124,8 +3103,7 @@ Two actors hold it, one per half, and neither does the other's:
 - **The re-run — the repo's scheduled driver, where one exists.** Once per red sha,
   only when the red commit's diff is docs-lane-only
   ([§2](#autonomy--the-docs-only-exception-345)) and no `TRUNK RED:` issue is open. It is
-  the **only** re-run actor for a red trunk: two actors each allowed one re-run per sha
-  make two, and a green second run can bury a real defect ([§4](#4-branches-and-commits),
+  the **only** re-run actor for a red trunk ([§4](#4-branches-and-commits),
   *Telling `red:infra` from `red:finding`*).
 - **The filing — triage.** When the re-run has been tried for that sha, or cannot apply
   (the commit touches more than docs, or nothing drives the repo), and no accepted
@@ -3136,6 +3114,8 @@ Two actors hold it, one per half, and neither does the other's:
   never re-runs a job itself.
 
 Why, with the measurements: [ADR 390](docs/adr/390-red-trunk-no-patch-rationale.md).
+
+Why, with the measurement: [ADR 539](docs/adr/539-red-trunk-rationale.md).
 
 #### Red-trunk exemption — the one-shot door through trunk-CI-green (#105)
 
@@ -3174,9 +3154,9 @@ Why, with the measurements: [ADR 105](docs/adr/105-red-trunk-exemption-rationale
   addition to the tracker comment.
 - **Scoped to exactly one precondition** (trunk-CI-green) — never exempts no-new-
   migrations, claim corroboration, the trunk-checkout check, the hand-merge conflict
-  preview, or `colab promote`. **Trunk-only** — an integration line's red already
-  borrows trunk's advisory verdict when the line has no runs of its own; widening the
-  exemption to lines is a deliberately unmade decision.
+  preview, or `colab promote`. **Trunk-only**.
+
+Why, with the measurement: [ADR 539](docs/adr/539-red-trunk-rationale.md).
 
 #### Cure rule — the machine-checkable door through trunk-CI-green (#281)
 
@@ -3185,15 +3165,12 @@ A second door through the same precondition, tried **before** ci-grant and needi
 trunk-CI-green check fails HUMAN_GATED, and falls straight through to the ordinary
 ci-grant when any condition below is not met. Fires **iff**:
 
-1. **[Hard — gate: colab ship refuses (cure rule)]** the branch **contains trunk's current red head sha** as an ancestor — proof the
-   branch was built against the exact failure, not merely conflict-free with it.
+1. **[Hard — gate: colab ship refuses (cure rule)]** the branch **contains trunk's current red head sha** as an ancestor.
 2. **[Hard — gate: colab ship refuses (cure rule)]** the branch's own CI is green **at its own current head**, measured, never asserted —
    identical "ask by sha" discipline to ci-grant's evidence guard — **and** (2b, #297)
    every job that is RED on trunk's runs at the red sha exists in the branch's runs at
    that head, completed and concluded `success`, matched per workflow. It is scoped to
-   trunk's **red set**, so an advisory job failing only on the branch does not refuse:
-   the rule certifies that the branch cures trunk's red, not that the branch is
-   spotless. A job instance from a `workflow_dispatch` run counts here only under the
+   trunk's **red set**, so an advisory job failing only on the branch does not refuse. A job instance from a `workflow_dispatch` run counts here only under the
    #510 rules below (*Dispatch evidence for a job a branch push skips*).
 3. **[Hard — gate: colab ship refuses (cure rule)]** the **same anti-stacking guard** ci-grant uses holds — no prior grant OR cure already
    merged while trunk has stayed continuously red since. A repo that auto-cures once and
@@ -3201,10 +3178,8 @@ ci-grant when any condition below is not met. Fires **iff**:
    — progress (#477):** a further cure passes condition 3 when trunk's red-job set at
    its current red sha is a **strict subset** of the red-job set at the red sha the
    prior exemption was measured against (the `over-red` sha its `CI-Grant:` / `CI-Cure:`
-   trailer names), jobs matched per workflow as in 2b. An **unchanged** set refuses (the
-   prior exemption fixed nothing that stayed fixed), and so does a set with **any new**
-   red job, even if another healed — trading one red for another is the loop this
-   condition exists to break. Either set unmeasurable (runs aged out, a job still in
+   trailer names), jobs matched per workflow as in 2b. An **unchanged** set refuses, and so does a set with **any new**
+   red job, even if another healed. Either set unmeasurable (runs aged out, a job still in
    flight) refuses. The candidate must still cure the remaining set under every other
    condition. The admission belongs to the cure rule only; a human `ci-grant` create
    keeps the plain guard.
@@ -3214,18 +3189,16 @@ ci-grant when any condition below is not met. Fires **iff**:
    below. The diff is read without rename detection, so moving a workflow file
    out of the directory counts as touching it (#297).
 5. **[Hard — gate: colab ship refuses (cure rule)]** the branch diff does **not** change the `scripts` block of any `package.json` (#297).
-   Any `package.json` at any depth counts (the template's working directory is an
-   adopter's edit point, and workspace runners read nested scripts); key order does not,
+   Any `package.json` at any depth counts; key order does not,
    a changed command does; deleting or renaming a manifest counts. There is **no
    carve-out** for this condition — see below for why the #321 door cannot adjudicate
    it. **One narrow admission (#475): an add-only change.** When every touched
    `package.json` exists on both sides, keeps every script it had with an identical
-   command, and only *adds* keys, the template runs more, never less — so it passes
+   command, and only *adds* keys, it passes
    condition 5 provided every step that ran in each red job on trunk, the failing one
    included, ran on the branch and concluded `success` (the 4b read, without 4c). Its
    limit: an added npm **lifecycle** hook (`postinstall`, `prepare`, or
-   `pre<x>`/`post<x>` for a script `<x>`) is never admitted — it runs inside a step that
-   already exists and can rewrite what that step measures with no name changing. A
+   `pre<x>`/`post<x>` for a script `<x>`) is never admitted. A
    removed, renamed or changed script, a new manifest, and an add-only change in one
    manifest beside any other change in another still refuse.
 6. **[Hard — gate: colab ship refuses (cure rule)]** the branch diff does **not** change a Python dependency manifest (#377). What counts,
@@ -3249,11 +3222,7 @@ that is a symlink — refuses, the same as any other unmeasured signal. Order of
 checks: 1 → 2 → 2b → 3 → diff measurable → 5 → 6 → 4 (with its carve-out).
 
 **The workflow carve-out (#321) — one guarded door through condition 4, not a relaxation
-of it.** The repair for a CI-*infrastructure* outage is, by construction, a workflow
-change: when trunk goes red because the runner pool cannot reach a service container,
-the branch that fixes it necessarily edits `.github/workflows/**` and was therefore
-permanently cure-ineligible however green it was — leaving a mechanically-verifiable
-repair waiting on a human who may not be watching. So a workflow-touching branch may
+of it.** A workflow-touching branch may
 still cure when, on top of 1-3 (2b included) and 5, **all** of:
 
 - **[Hard — gate: colab ship refuses (cure rule)]** **4a — job-name superset.** Every job RED on trunk's run at the red sha
@@ -3266,10 +3235,7 @@ still cure when, on top of 1-3 (2b included) and 5, **all** of:
   branch's job and concluded `success`. Steps *after* the failing one are `skipped` on
   trunk and so constrain nothing — only steps that demonstrably ran do. *"I made it exit
   early"* fails here.
-- **[Hard — gate: colab ship refuses (cure rule)]** **4c — duration floor.** Each of those jobs cost at least the wall time its failure
-  did on trunk. 4b proves the *steps* ran; it cannot see a step's `run:` body gutted to
-  a no-op inside the very workflow file being carved for, and duration is the only
-  signal that touches that.
+- **[Hard — gate: colab ship refuses (cure rule)]** **4c — duration floor.** Each of those jobs cost at least the wall time its failure did on trunk.
 
 **[Hard — gate: colab ship refuses (cure rule)]** Anything unmeasurable — no job evidence, an empty red-job set, an unreadable
 step list, a missing duration — **refuses**, exactly as before. The carve-out
@@ -3339,8 +3305,7 @@ copy, (b) is not dry-run capable (that keeps the #474 path), (c) has a completed
 successful **non-dispatch** run at the head — it is branch CI, not a main-only
 workflow a dispatch could publish from — and (d) has no `workflow_dispatch` run at
 the head yet, and every later condition already holds, `colab ship` dispatches it
-**once** (`gh workflow run <file> --ref <branch>`, no inputs). It never waits — the
-job may take hours, and ship measures up to three times per invocation — and never
+**once** (`gh workflow run <file> --ref <branch>`, no inputs). It never waits and never
 dispatches from `--dry` or `--dry --json`, which report `ciCure.dispatchWanted`.
 Wait with `colab ci-wait --sha <head> --branch <branch>` sized to the job, then
 re-run ship. Reasoning:
@@ -3356,10 +3321,7 @@ The full reasoning — why the executed-step superset is the primary test and a
 bare duration threshold was rejected, what the two accepted false refusals cost,
 and why the `timed_out` relaxation is deliberately left unwritten — is in
 [`docs/adr/321-workflow-carve-out-measures-execution-not-duration.md`](docs/adr/321-workflow-carve-out-measures-execution-not-duration.md).
-- **Where workflows never fire for a branch ref, that round is a PR — for the patch
-  only (#353).** Condition 2 then has no other way to be measured, and the PR's merge
-  ref includes the red trunk, so only the branch carrying the fix gets a meaningful
-  run from it. A bystander does not rebase onto the red and does not open a PR: it
+- **Where workflows never fire for a branch ref, that round is a PR — for the patch only (#353).** A bystander does not rebase onto the red and does not open a PR: it
   waits for green (*Branch CI*, above).
 - A cured merge carries a `CI-Cure:` trailer instead of `CI-Grant:` — unlike the
   grant's trailer it names no issue (the cure rule never reads the tracker at all,
@@ -3385,13 +3347,13 @@ and why the `timed_out` relaxation is deliberately left unwritten — is in
   {healed, still}` (null otherwise); its own `over-red` sha is what the next cure on the
   same red compares against.
 - **`colab ci-grant`'s anti-stacking scan now recognises either trailer** —
-  `CI-Grant:` or `CI-Cure:` — as "an exemption already merged against this red", so a
-  repo that has used both doors is scanned as one continuous stacking history rather
-  than two independent ones.
+  `CI-Grant:` or `CI-Cure:` — as "an exemption already merged against this red".
 - Scoped identically to the grant: trunk-only, and never exempts anything but
   trunk-CI-green.
 
 Why, with the measurements and the accepted false refusals: [ADR 281](docs/adr/281-cure-rule-rationale.md).
+
+Why, with the measurement: [ADR 539](docs/adr/539-cure-rationale.md).
 
 #### Scheduled drivers — provenance and autonomy meet a caller that is not a person
 
