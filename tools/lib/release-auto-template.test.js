@@ -1035,3 +1035,127 @@ test('#480 the template\'s ref listing goes through retry_transient, before the 
   assert.match(body, /retry_transient git ls-remote --heads --tags "\$HANDBOOK_REPO"/);
   assert.ok(body.indexOf('git ls-remote') < body.indexOf('retry_transient fetch_cli'));
 });
+
+// ---- #547: a cut refused by a CLI defect is re-tried within the hour once the fix reaches the channel ----
+// The retry step is lifted and run against a real main checkout and a real fetched-CLI clone (both
+// git repos whose tag and commit DATES are set), with `gh run list` stubbed on PATH.
+const RETRY_STEP = 'Retry a refused cut once the CLI moved (#547)';
+const HOURLY = /^ {4}- cron: "([^"]+)"$/gm;
+
+const gitIn = (cwd, args, epoch) => execFileSync('git', args, {
+  cwd, encoding: 'utf8',
+  env: { ...process.env, GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@t', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@t',
+    ...(epoch ? { GIT_COMMITTER_DATE: `@${epoch} +0000`, GIT_AUTHOR_DATE: `@${epoch} +0000` } : {}) },
+});
+const minutesAgo = (m) => Math.floor(Date.now() / 1000) - m * 60;
+
+/**
+ * Runs the retry step. `cli` = { commitAgo, tagAgo } in minutes (tagAgo omitted: no tag at the CLI's
+ * commit, e.g. a plain branch ref); `headTag` tags main's head; `runs` is what `gh run list` prints,
+ * or null for a list that fails.
+ */
+function runRetry({ cli, headTag = null, runs = [], runId = '900' }) {
+  const dir = tmpdir('release-auto-547-');
+  const main = path.join(dir, 'main');
+  const hb = path.join(dir, 'colab-handbook');
+  for (const d of [main, hb]) { fs.mkdirSync(d); gitIn(d, ['init', '-q']); }
+  gitIn(main, ['commit', '-q', '--allow-empty', '-m', 'feat: x']);
+  if (headTag) gitIn(main, ['tag', '-a', headTag, '-m', headTag]);
+  gitIn(hb, ['commit', '-q', '--allow-empty', '-m', 'fix: the false positive'], minutesAgo(cli.commitAgo));
+  if (cli.tagAgo !== undefined) gitIn(hb, ['tag', '-a', 'v1.13.0-rc.21', '-m', 'rc'], minutesAgo(cli.tagAgo));
+  const bin = path.join(dir, 'bin');
+  fs.mkdirSync(bin);
+  const log = path.join(dir, 'gh.log');
+  fs.writeFileSync(path.join(bin, 'gh'), runs === null
+    ? `#!/bin/bash\necho "gh $*" >> "${log}"; echo "HTTP 403: Resource not accessible by integration" >&2; exit 1\n`
+    : `#!/bin/bash\necho "gh $*" >> "${log}"; cat <<'JSON'\n${JSON.stringify(runs)}\nJSON\n`, { mode: 0o755 });
+  const out = path.join(dir, 'output');
+  const summary = path.join(dir, 'summary');
+  fs.writeFileSync(out, '');
+  const r = spawnSync('bash', ['-c', stepScript(RETRY_STEP)], {
+    cwd: main, encoding: 'utf8',
+    env: { ...process.env, ...RETRY_ENV, PATH: `${bin}:${process.env.PATH}`, COLAB: path.join(hb, 'tools', 'colab'),
+      RUNNER_TEMP: dir, GITHUB_OUTPUT: out, GITHUB_STEP_SUMMARY: summary, GITHUB_WORKFLOW: 'Release (auto)', GITHUB_RUN_ID: runId, RETRY_WINDOW_MINUTES: '130' },
+  });
+  const retry = (/^retry=(\w+)$/m.exec(fs.readFileSync(out, 'utf8')) || [])[1];
+  return { status: r.status, stderr: r.stderr, retry, summary: fs.existsSync(summary) ? fs.readFileSync(summary, 'utf8') : '', gh: fs.existsSync(log) ? fs.readFileSync(log, 'utf8') : '' };
+}
+
+test('#547 refused -> fixed -> retried: a refusal tags nothing, the CLI moves, the hourly run re-tries and cuts', { skip: !HAS_JQ && 'jq not installed' }, () => {
+  // T+0: the cut is refused by a CLI defect — nothing tagged, the run stays green.
+  const refused = runWithStub(CUT, { exit: 1, stdout: JSON.stringify({ ok: false, noop: false, created: false, tag: null, checks: [{ condition: 'schema-additive', ok: false, detail: 'a false positive' }] }) });
+  assert.strictEqual(refused.status, 0);
+  assert.strictEqual(refused.output.tag, undefined);
+  // The fix reaches the channel 18 min ago (its release tag's date); main's head is still untagged.
+  const r = runRetry({ cli: { commitAgo: 40, tagAgo: 18 }, runs: [{ databaseId: 1, conclusion: 'success', createdAt: '2026-10-07T00:00:00Z' }] });
+  assert.strictEqual(r.status, 0, r.stderr);
+  assert.strictEqual(r.retry, 'true');
+  assert.match(r.summary, /reached HANDBOOK_REF 18 min ago/);
+  assert.strictEqual(r.gh, '', 'a recent move decides alone — no run listing needed');
+  // The cut it lets through now passes with the fixed CLI.
+  const cut = runWithStub(CUT, { exit: 0, stdout: JSON.stringify({ ok: true, noop: false, created: true, tag: 'v2.0.0-rc.1', checks: [{ condition: 'schema-additive', ok: true, detail: 'additive' }] }) });
+  assert.strictEqual(cut.output.tag, 'v2.0.0-rc.1');
+});
+
+test('#547 the move is the release tag\'s date, not the commit\'s: an old commit tagged onto the channel just now retries', () => {
+  assert.strictEqual(runRetry({ cli: { commitAgo: 600, tagAgo: 10 } }).retry, 'true');
+  // No tag at the CLI's commit (a plain branch ref): the commit date is the move.
+  assert.strictEqual(runRetry({ cli: { commitAgo: 30 } }).retry, 'true');
+  assert.strictEqual(runRetry({ cli: { commitAgo: 300 } }).retry, 'false');
+});
+
+test('#547 nothing to retry: a CLI that has not moved within the window, or a head that already carries a tag', { skip: !HAS_JQ && 'jq not installed' }, () => {
+  const stale = runRetry({ cli: { commitAgo: 400, tagAgo: 300 }, runs: [{ databaseId: 1, conclusion: 'success', createdAt: '2026-10-07T00:00:00Z' }] });
+  assert.strictEqual(stale.status, 0, stale.stderr);
+  assert.strictEqual(stale.retry, 'false');
+  assert.match(stale.summary, /nothing to retry; the daily run cuts as usual/);
+  const tagged = runRetry({ cli: { commitAgo: 20, tagAgo: 5 }, headTag: 'v2.0.0-rc.1' });
+  assert.strictEqual(tagged.retry, 'false');
+  assert.match(tagged.summary, /already carries v2\.0\.0-rc\.1/);
+  assert.strictEqual(tagged.gh, '');
+});
+
+test('#547 a run the hourly run displaced from the shared concurrency group gets its cut done', { skip: !HAS_JQ && 'jq not installed' }, () => {
+  const old = { cli: { commitAgo: 400, tagAgo: 300 } };
+  const displaced = runRetry({ ...old, runId: '900', runs: [
+    { databaseId: 900, conclusion: '', createdAt: '2026-10-07T03:47:00Z' }, // this run — ignored
+    { databaseId: 899, conclusion: 'cancelled', createdAt: '2026-10-07T03:40:00Z' },
+    { databaseId: 850, conclusion: 'success', createdAt: '2026-10-07T03:17:00Z' },
+  ] });
+  assert.strictEqual(displaced.retry, 'true');
+  assert.match(displaced.summary, /was cancelled/);
+  assert.match(displaced.gh, /run list --workflow Release \(auto\) --commit [0-9a-f]{40} /);
+  // Once a later run at the head finished, the old cancellation earns nothing more.
+  const handled = runRetry({ ...old, runs: [
+    { databaseId: 899, conclusion: 'cancelled', createdAt: '2026-10-07T03:40:00Z' },
+    { databaseId: 870, conclusion: 'success', createdAt: '2026-10-07T03:47:00Z' },
+  ] });
+  assert.strictEqual(handled.retry, 'false');
+  // A list that cannot be read re-tries rather than guessing; the step still ends green.
+  const unreadable = runRetry({ ...old, runs: null });
+  assert.strictEqual(unreadable.status, 0, unreadable.stderr);
+  assert.strictEqual(unreadable.retry, 'true');
+});
+
+test('#547 wiring: the hourly run is recognised, cuts only through the retry step, and never promotes or finalizes', () => {
+  const crons = [...TEXT.matchAll(HOURLY)].map((m) => m[1]);
+  assert.ok(crons.includes('17 3 * * *'), 'the daily cron is still there');
+  const retryRun = /^ {6}RETRY_RUN: \$\{\{ github\.event_name == 'schedule' && github\.event\.schedule == '([^']+)' \}\}$/m.exec(TEXT);
+  assert.ok(retryRun, 'RETRY_RUN not declared in the release job env');
+  assert.ok(crons.includes(retryRun[1]), `RETRY_RUN names "${retryRun[1]}", which is not a cron of on.schedule (${crons.join(' | ')})`);
+  assert.notStrictEqual(retryRun[1], '17 3 * * *', 'the retry cron must not be the daily one');
+  assert.match(TEXT, /^ {6}RETRY_WINDOW_MINUTES: "\d+"/m);
+  const ifOf = (name) => {
+    const lines = TEXT.split('\n');
+    const at = lines.findIndex((l) => l.trim() === `- name: ${name}`);
+    return lines.slice(at + 1, at + 4).find((l) => /^\s+if: /.test(l)) || '';
+  };
+  for (const name of ['Promote unattended (colab promote --auto)', FIN]) {
+    assert.match(ifOf(name), /\(github\.event_name == 'schedule' && env\.RETRY_RUN != 'true'\) \|\| github\.event_name == 'workflow_dispatch'/, name);
+  }
+  assert.match(ifOf(CUT), /&& \(env\.RETRY_RUN != 'true' \|\| steps\.retry\.outputs\.retry == 'true'\)$/);
+  assert.match(ifOf(RETRY_STEP), /if: env\.RETRY_RUN == 'true'$/);
+  const order = ['Fetch the colab CLI', RETRY_STEP, CUT].map((n) => TEXT.indexOf(`- name: ${n}`));
+  assert.ok(order[0] < order[1] && order[1] < order[2], 'the retry step runs after the CLI is fetched and before the cut');
+  assert.match(stepScript(RETRY_STEP), /retry_transient gh run list/);
+});
