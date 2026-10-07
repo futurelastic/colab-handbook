@@ -67,12 +67,8 @@ consumes a release. Do not create `dev` "to be ready" — see [§10](#10-anti-pa
 ### Why the split exists at all
 
 `main` in Tier A is a **pure release branch** — work is promoted to it, not landed on it.
-This buys one thing: the expensive test suite runs at promotion time, not on every session
-merge. Sessions stay fast; releases stay safe.
 
-**If your test suite is fast, you do not need Tier A.** The split answers slow CI, not
-seriousness. A repo with no meaningful suite gains nothing from it — ceremony with no
-benefit, and `main` becomes a branch nobody trusts. Write the suite first, then split.
+**If your test suite is fast, you do not need Tier A.** Write the suite first, then split. Why: [ADR 539](docs/adr/539-tiers-rationale.md).
 
 ### Hard rules and defaults
 
@@ -163,23 +159,17 @@ when.
 **A tag-gated Tier A may instead run a single trunk `main`.** When `deploy: tag`, the tag
 itself marks the release boundary — the last `v*.*.*` is "what shipped and when", the
 same job the split does on a hand-deployed repo — so a second branch marking the same
-boundary is redundant. Day-to-day work lands on `main`; releases are cut by tag. Common
-in tag-gated GitOps: a release script cuts `vX.Y.Z` and fast-forwards a long-lived
-**release branch** an external poller watches and redeploys, so the deploy runs
-**outside** CI with **no in-repo deploy workflow** by design. The tier is set by the
+boundary is redundant. Day-to-day work lands on `main`; releases are cut by tag. The tier is set by the
 promotion **gate** (a version tag), never by the trunk name or where the deploy job runs.
 Specific to `deploy: tag` — `manual`/`push-main` have no tag to mark the boundary and
 keep the split. Wherever the deploy runs outside CI, the path to production must be
 committed as [`runbook:`](project.schema.md#runbook--required-when-an-out-of-ci-deploy-has-no-workflow).
-Name the release branch in [`releaseBranch:`](project.schema.md#releasebranch--optional)
-— between releases it is, by construction, an ancestor of trunk, indistinguishable by
-ancestry alone from a spent session branch; undeclared, `colab doctor` misreads it as
-safe to delete (#63).
+Name the release branch in [`releaseBranch:`](project.schema.md#releasebranch--optional). Why: [ADR 539](docs/adr/539-tiers-rationale.md).
 
-**Tier C exists because a tag ritual nobody honours is worse than no tag ritual.** A live
+ A live
 but low-stakes site gains nothing from cutting versions; C describes that shape honestly:
 `deploy: push-main`, `main` is what is live, the promotion is the one moment someone
-decides to ship. Not a lesser A — a different, honest gate count.
+decides to ship. Why: [ADR 539](docs/adr/539-tiers-rationale.md).
 
 **Deploying straight off a `main` push meets Tier C's contract, not Tier A's.**
 `deploy: push-main` is a legal, reasonable mechanism; the mismatch is with the *tier*
@@ -201,9 +191,7 @@ is legal" is not what this licenses** — outside the tag-gated exception Tier A
 still fixed, and Tier B's single trunk may never sit beside a `main`; renaming an existing
 default branch to satisfy a spelling is never the fix. Never create a
 branch literally named `trunk` — and never *record* the word
-either. Measured: a session's record read `branch: "trunk"`; the merge tool matched
-claims **by branch name**, found none, and squashed anyway — no `Closes #N`, the same
-26-of-30 failure below reached by a different path. **The absence of a branch is null,
+either. **The absence of a branch is null,
 not a word.** A tool storing this should refuse the word on write, and treat "this
 branch has no claimed issues" as suspicious rather than routine.
 
@@ -219,15 +207,13 @@ stays tier-locked because on A/C it is literally the production spine.
 **`trunk:` answers one question only, deliberately.** Consumers split into Group A —
 correctness (worktree classification, landed/delete-safety, cut-from base) — which must
 keep reading one shared value; and Group B — "which line does *this checkout* serve",
-a per-host deployment fact. **Group B gets no descriptor field, on any tier.** A
-`deploys: { <host>: <branch> }` entry would drift the moment a machine is renamed or
-retired, with nothing able to tell a stale entry from a live one. Its answer lives in a
+a per-host deployment fact. **Group B gets no descriptor field, on any tier.** Its answer lives in a
 per-host mechanism the repo owns (env var, machine-local config) — the same shape as
 `colab`'s own cache, uncommitted and VCS-fenced. Whatever mechanism is chosen must
 **name** a branch, unset-by-default, never widen or disable the gate it overrides (e.g.
 an `HEAD == trunk` safety check for an unattended rebuild-and-restart). A repo on N hosts
 with N lines stays one repo, one descriptor — never N repos, N descriptors, or a second
-entry in `trunk:`/`integration:`.
+entry in `trunk:`/`integration:`. Why: [ADR 539](docs/adr/539-tiers-rationale.md).
 
 ### Room — who else is here?
 
@@ -241,17 +227,6 @@ what an Issue is *for* — memory for `solo`, coordination for `team`, documenta
 names a role (`team`/`public`) or only names a species when the room is otherwise empty
 of anyone else to hand the release to (`solo`).
 
-**Replaces two things that were standing in for it by coincidence, not by design.** Issue
-language has been derived from repo privacy — private repos get the team's language,
-public ones get English — which happens to track the room in the common case but is not
-what the room actually asks: a private repo one person touches has a room of one, same as
-if it were public, and the language that serves that room is whichever the person
-actually thinks in, not whichever visibility setting GitHub happens to report.
-[`ceremony`](#ceremony--narration-follows-the-room-recoverability-follows-exposure) has
-also been proxying this: "will anyone ever read this repo's audit trail" was answered by
-squinting at production status, when the honest question is who is in the room to read
-it, independent of whether the thing is live.
-
 **The stated reason for claim discipline gets the same correction.** *"Anything labelled
 in-progress is someone else's — do not take it"* reads, on first pass, as etiquette
 between colleagues. The room axis makes the actual mechanism explicit: in the common case
@@ -260,9 +235,7 @@ rule exists to stop two of one person's own sessions from editing the same file,
 be polite to a colleague who may not even be there. Politeness is negotiable under
 pressure; a write conflict is not — so state the function, not the etiquette gloss on it.
 
-**Landed first because the exposure axis is defined against it** (#132, below — exposure's
-`self` value is the set of consumers that is a subset of the room's collaborator set; that
-definition points at nothing until the room axis exists).
+Why this axis exists, and its history: [ADR 539](docs/adr/539-room-exposure-rationale.md).
 
 **What this unit does not do.** It introduces the field and its prose meaning only — no
 audit check reads `room` yet, and no tool infers a repo's room from its GitHub visibility
@@ -297,20 +270,11 @@ shipped the key inert, additive, `tier` fully authoritative; **#144 cut the weld
 when declared, is the axis of record outright, and `tier`, when it is the only thing
 declared, is read as a LEGACY value (`tools/lib/axis-authority.js`: `A → released`,
 `C → live`, `B → null` — the `null` is deliberate, because a bare `tier: B` carries no
-derivable opinion about what consumes it). A repo that has never declared `exposure` sees
-zero change — the legacy read reproduces pre-#144 behaviour byte for byte, verified against
-the whole fleet, not merely designed for — so nothing in the fleet, and no outside adopter of
-this public repo who has not opted in, breaks on this flip. Declaring **neither** key is now
+derivable opinion about what consumes it). Declaring **neither** key is now
 the one hard failure ("no axis of record"), replacing the old unconditional "missing tier".
 `exposure` does **not** become required by this flip — that is phase 3, a separate, later
 step (ten repos answering the question by hand).
 
-**`prelaunch` was rejected in favour of a relationship word.** An earlier candidate named this
-axis by a *moment* rather than a *relationship* — the same defect the tier letters have in
-miniature, one member of the set speaking a different language than the rest. It also implies
-a public event many of these repos never have, and implies imminence for a state that has
-already lasted months on more than one repo in this fleet. The intent it was trying to carry —
-"not yet, but headed there" — already has a home: `production:`, which exists today.
 `exposure: none` with a *named* `production` target reads as visibly transitional;
 `exposure: self` with `production: null` reads as terminal. No new marker key encodes this;
 the two existing flat scalars, read together, already say it.
@@ -336,12 +300,7 @@ may find and report evidence of a consumer; it may never write down that none ex
 
 **The `production:` pairing gets an advisory, at `warn`, never `fail`:**
 `exposure: none` together with `production: null` — the claim that both nothing consumes this
-repo and there is nothing to point at. Advisory, not failure, because the descriptor is not
-*lying* (the `fail` severity is reserved for that — see the `tier: A` + `push-main` block
-below), it is *unanswered*, and answering it is the human act above, explicitly out of scope
-for this unit (Phase 3 of the epic, ten repos each answering "what would break if you merged
-something wrong?", is not performed here). A `fail` would also make declaring the key riskier
-than omitting it, suppressing exactly the opt-in adoption data a later unit needs. Every other
+repo and there is nothing to point at. Every other
 combination is clean — in particular `live`/`released` **with `production: null`**, because a
 tag-published repo with real adopters and no server (this repo's own shape) is the case this
 axis exists to stop misreading as "no exposure means no server."
@@ -355,26 +314,13 @@ declared by hand: a `tier` and an `exposure` that disagree about gate count is a
 (above). That is disagreement-detection between two written-down facts, not inference of
 one from the other, and it does not reopen this instruction.
 
-**What this unit (#132) shipped, and what #144 later added.** #132 shipped the key, its
-four-value enum check, and the `production:` pairing advisory — nothing that derived gate
-count. #144 is the unit that flipped authority: `exposure`, when declared, now governs gate
-count directly (see the top of this section, above), rather than merely being readable
-alongside a still-authoritative `tier`. [CI's role and thoroughness](#ci--what-it-is-follows-the-units-shape-how-much-follows-exposure)
-and the [rollback obligation](#recovery--what-must-exist-to-undo-a-merge) are now derived
-— by later units reading this key, not by this one. **#137 shipped 2 of 5 possible
+**What this unit (#132) shipped, and what #144 later added.** **#137 shipped 2 of 5 possible
 falsifiers against a declared `exposure: none`** — a version-shaped tag exists, and a
 committed deploy path exists — each a `warn` naming the evidence, never a `fail` (a
 falsifier proves the CLASS of evidence that usually accompanies a consumer, not a consumer
-itself). `exposure: self` gets no falsifier at all. Three more named in #137 stay
-deliberately deferred: a per-machine service definition serving the path (the schema
-already ruled per-host facts out as a field), another repo's stamp naming this one as a
-source (the stamp vocabulary has no way to name an arbitrary source yet), and a declared
-`production:` target resolving in DNS (the repo-local half of that case is already the
-pinned-clean "visibly transitional" shape below, and the resolving half needs network this
-tool does not use). Reasons in full, and what would reopen each: `audit/README.md`. #137
+itself). `exposure: self` gets no falsifier at all. #137
 also added a **duration report** — how long `exposure: none` has held, from the
-descriptor's own git history, never a new field. #144 shipped the authority flip described
-above; it deliberately does **not** make the key required — that stays phase 3. The exposure
+descriptor's own git history, never a new field. The exposure
 question is now asked, in words, by [§9](#9-adopting-this)'s shared question set (question 3),
 and `colab adopt` (#199) is the tool that detects/asks/derives/writes it in one act — gated on
 a human for the `none`/`self`/lowering direction ([§9](#9-adopting-this)'s "colab adopt executes this checklist"
@@ -393,8 +339,7 @@ squash + `Closes #N`, CI secret scan, and the
 [core-path PR pause](#core-paths--a-pr-and-a-non-author-approval-before-landing-350)).
 
 **Narration and recoverability are two different questions, and one rule used to weld
-them together.** The rule required `production: null` for `light`, reasoning that a live
-repo cannot skip its own audit trail. That conflates:
+them together.**
 
 - **narration** — Issue prose, progress comments, Phase B evidence. Follows the **room**:
   a `solo` repo's trail has exactly one reader whether or not the thing is live, so being
@@ -403,11 +348,7 @@ repo cannot skip its own audit trail. That conflates:
   irreplaceable state, not narration depth ([Recovery](#recovery--what-must-exist-to-undo-a-merge),
   below).
 
-A live, single-operator repo whose only irreplaceable asset is a small state file cannot
-skip recoverability, and gains nothing from full narration nobody in the room will ever
-read; the old rule forbade the second and was silent on the first — catching neither
-correctly, and pushing exactly this shape toward an informal, undocumented light mode
-instead of a declared one.
+Why, with the old rule's history: [ADR 539](docs/adr/539-ceremony-recovery-rationale.md).
 
 **[Hard — gate: colab adopt refuses light + auto-trunk]** **So `ceremony` now reduces narration only**, gated on the room rather than on
 `production:`. It never waives what exposure requires for recoverability — a live repo
@@ -456,11 +397,7 @@ question: **may a human ever commit straight to this repo's trunk checkout, alon
 worktree sessions?**
 
 **⚖ Decision on #233 (2026-08-19): `writes` stopped selecting a write-conflict prevention
-METHOD and became a two-state VETO.** Before this ruling, the field named which of three
-coherent methods a repo's sessions defaulted to (`serial-direct` / `serial-gated` /
-`isolated`), and the three interacted with `autonomy`, CI role, and branch-mandatory in
-different ways — machinery this section used to spend most of its length explaining. That
-machinery is retired. The vocabulary now resolves to exactly two states:
+METHOD and became a two-state VETO.** The vocabulary now resolves to exactly two states:
 
 | descriptor says | means |
 |---|---|
@@ -518,11 +455,7 @@ now; one was handed to a ⚖ ruling and has since been ruled (#284, below — re
 path built in #302, the rest of the runtime still deferred); one remains a proposal of record:
 
 - **Concurrency on the shared checkout — DONE (#285), and it turned out not to be a
-  loosening at all.** The proposal of record was that under `direct` the trunk checkout
-  becomes a strictly one-writer-at-a-time resource, every direct writer holding the
-  path-scoped place-claim, and that `colab solo`'s entry gate would have to be *loosened*
-  from "refuse if anything is held" to allow it. Implementing it found the premise wrong in
-  both halves, and the correction is worth more than the original plan:
+  loosening at all.**
     - Why the premise was wrong in both halves, with the measurements: [ADR 233](docs/adr/233-writes-veto-and-direct-rationale.md).
   So `direct` gains no new permission here — that is deliberate, and the matrix cells above
   are unchanged. Its one `direct`-specific consequence is a **tightening**: a place-claim on
@@ -534,8 +467,7 @@ path built in #302, the rest of the runtime still deferred); one remains a propo
   automated session" row above still reads **forbidden** for every column.
 - **CI role — DECIDED AND SHIPPED, as derived report text only.** Under `direct`, `ciRole` is
   **alarm, always** — nothing branches under a merge event that never happens, so CI can
-  never gate a merge that doesn't exist. Cheap to decide because `ciRole` is derived prose in
-  `tools/lib/adopt.js`'s `deriveConsequences`, not enforcement.
+  never gate a merge that doesn't exist.
 - **The human merge gate and the Phase A / Phase B split — ⚖ RULED (#284); its close path
   IMPLEMENTED (#302, `colab ship --direct`).** The proposal handed to the ruling was: under `direct` there is no merge
   event, so Phase B does not apply at all; Phase A applies unchanged; the human
@@ -605,19 +537,12 @@ silence:
   `— <name> · <machine>/<session>` signature, #535); an issue without one is reported and left
   open. Whether that gate is right for a `direct` unit — where the human's session-start
   instruction, not a comment, is the authorization — is a real follow-up question.
-  **⚠️ Measured during #285:** the question was premature, because `colab ship` could not
-  reach evidence-close for a branchless `direct` unit at all — `resolveShipSession` refused
-  with `ship needs --worktree or --branch`, supplying trunk was refused by `--branch is the
-  trunk itself`, and `colab solo --done` neither posts evidence nor closes anything: the same
-  26/30 hole option B was chosen to avoid. **[#302](https://github.com/futurelastic/colab-handbook/issues/302)
-  built that door (`colab ship --direct`, above) and left the gate exactly as it is.**
   **⚖ Ruled 2026-09-14 ([#342](https://github.com/futurelastic/colab-handbook/issues/342),
   option A: confirm all three readings #302 took)**: the gate is right for a
   `direct` unit too, because the two things answer different questions. The session-start
   instruction authorizes the *unit* to exist; the comment evidences its *delivery* — and
   Phase A, which applies to `direct` in full, writes that comment anyway (`code-wrap` A1).
-  Counting trunk commits that mention `#N` as evidence was considered and rejected: the
-  session writes those messages itself, so the evidence would be self-declared. The same
+  The same
   ruling confirmed the two further choices #302 made: the **autonomy gate still applies** to
   `--direct` (without `autonomy: auto-trunk` a human closes the unit — unless the unit is
   docs-only, [the one exception](#autonomy--the-docs-only-exception-345), which applies to
@@ -652,14 +577,7 @@ the whole guarantee — adding a branch on top buys nothing the lock did not alr
 Nor does "so the changelog reads cleanly" qualify — a solo session's Conventional Commits
 already group correctly without one.
 
-**Deliberately not coupled to exposure, tier, or production.** The correlation visible
-across today's fleet — light/beta repos tending to run solo, live repos tending to branch
-— is caused by *who works a repo* (one person vs. several), not by *what consumes it*
-(nobody vs. production users). A quiet Tier A repo with one session in flight needs no
-branch on `writes` grounds; a busy Tier B playground with three sessions does. Encoding
-the observed correlation as an audited rule would repeat the same weld `ceremony` was
-introduced to undo (`ceremony` vs. `tier`, above) — so no such rule exists, and none
-should be added later "to catch the common case."
+**Deliberately not coupled to exposure, tier, or production.** No audited rule couples this to them, and none should be added later "to catch the common case." Why: [ADR 539](docs/adr/539-writes-direct-rationale.md).
 
 The deploy-shape prohibition was retired by #233, the rule it carried and the measurement behind dropping it: [ADR 233](docs/adr/233-writes-veto-and-direct-rationale.md). A
 repo that later grows into that shape without declaring the veto gets trunk-direct
@@ -729,9 +647,7 @@ reviewed in a commit like this one.
 **[Hard — gate: colab ship autonomy gate]** **⚖ Ruled by the repo owner, 2026-10-06 ([#525](https://github.com/futurelastic/colab-handbook/issues/525), option 1).**
 On a repo that does **not** declare `autonomy: auto-trunk`, "a human must trigger Phase B" means
 a person runs `colab ship` themselves. Running the command **is** the go. Ship opens the
-autonomy gate for that person and runs every other precondition unchanged. Before this rule the
-refusal sent the human away with nothing to run, so on the default (`manual`) setting they had to
-redo B0 through B4 by hand, or grant `auto-trunk` and lose the human go on every later merge.
+autonomy gate for that person and runs every other precondition unchanged. Why: [ADR 539](docs/adr/539-autonomy-core-paths-rationale.md).
 
 The bar is the one the CLI already applies to human-only acts (`colab adopt --autonomy`):
 - **An interactive terminal** — stdin and stdout both a TTY, and **not** an agent shell
@@ -785,9 +701,7 @@ call, and every doubt resolves toward review.
 
 **A fork's inherited `CODEOWNERS` binds nothing until the fork writes its own (#483).** A
 [fork of an upstream](#a-fork-of-an-upstream--a-repo-you-own-that-tracks-one-you-dont-449)
-carries the upstream's file unchanged, and that file names the upstream's teams. A team of
-another org cannot review in the fork, so honouring it turns every landing into a human gate
-that nobody here decided on. Why, with the measurement: [ADR 483](docs/adr/483-core-path-fork-codeowners-rationale.md). So on a
+carries the upstream's file unchanged, and that file names the upstream's teams. Why, with the measurement: [ADR 483](docs/adr/483-core-path-fork-codeowners-rationale.md). Also [ADR 539](docs/adr/539-autonomy-core-paths-rationale.md). So on a
 fork, `colab ship` ignores every owner of the form `@org/team` whose org is not the fork's own
 owner, before anything else is read, and says so in the `core-path review` row. A rule left with
 no owner carves its paths out, exactly like an ownerless line. Everything else is unchanged:
@@ -841,23 +755,20 @@ exception uses: every trunk commit since its earliest claim, by anyone. That can
 refusing. When the paths belong to another unit's reviewed landing, a human closes the issue by
 hand. `CODEOWNERS` is read twice: from trunk as it stood before the unit's first commit, and from
 trunk now. A path is core if either file covers it, and the rule is inert only when both files
-are. For `--direct` the target already contains the unit, so reading the current file alone would
-let a unit exempt itself by deleting or narrowing it. The door that makes the trunk-direct commit
-in the first place (`colab solo`) does not check core paths. That would be a separate change,
-taken only if a bypass is ever measured, because `--direct` is attended by construction.
+are. The door that makes the trunk-direct commit
+in the first place (`colab solo`) does not check core paths.
 
 **Not covered here:** escalating to the repo owner after a set wait. That is a separate change.
 
 ### Solo flow — trunk-direct, issue-on-demand, entry-gated (a human must be at the keyboard)
 
-`ceremony: light` relaxed the record-keeping *end* of a session; the *start* — pre-filed
-issue, claim, branch, worktree — stayed full weight even there. Solo flow is the
+ Solo flow is the
 **coexistence, attended** cell of the table above: legal on any repo that does not declare
 `writes: isolated` (absence and every other value permit it — ⚖ #233), **and only to a
 session a human is behind**. A repo one person codes directly, in one conversation-driven
 session, with no other session to protect against — the start-side invariants exist to
 protect *other* sessions, and the attendance requirement exists because trunk-direct
-itself needs someone present to answer for the commit.
+itself needs someone present to answer for the commit. Why: [ADR 539](docs/adr/539-solo-place-claims-rationale.md).
 
 0. **[Hard — gate: colab solo refuses]** **Attendance comes first — before any mechanical check below.** `COLAB_HUMAN=1` asserts
    one thing: a human is behind this command ([§5, "The human flag"](#the-human-flag--what-colab-human1-asserts),
@@ -878,9 +789,7 @@ itself needs someone present to answer for the commit.
    including every #288 `invocation`-anchored hold, and the case where no place record
    exists at all) both keep the refusal: fail closed, exactly as the primitive does. This
    is strictly narrower than the `--force` it replaces and is deliberately **not** gated on
-   any `writes:` value — a stale record is equally stale under every one of them, and a
-   safety rule that only applies in one mode is the kind of conditional [§4](#4-branches-and-commits)'s
-   incident log warns about. **Not** on this list,
+   any `writes:` value. **Not** on this list,
    deliberately: a worktree existing anywhere else in the repo (#236), or a claim held
    anywhere else in the repo (#240) — the same category error, twice. Why neither belongs on that list: [ADR 236](docs/adr/236-solo-flow-entry-gate-rationale.md). (A claim
    taken directly against *this* checkout, with no worktree, already acquires the same
@@ -948,8 +857,7 @@ and **verified by the writer itself**, not merely by whatever spawned it.
   same rule that refuses the literal word `trunk` as a branch value elsewhere applies here
   too.
 - **Release is a liveness lookup at read time — never a state transition written at kill
-  time.** "Dies with its session" is what a reader assumes, and it is not what a purely
-  written record can promise: nothing reliable runs at the moment a session dies. So a
+  time.** So a
   place-claim's *check* re-derives whether its holder is still alive every time it is
   read, rather than trusting a stored `released` flag. Why, with the measurement: [ADR 242](docs/adr/242-place-claims-rationale.md). A read-time liveness
   check has no such lag; adopt that stronger semantics rather than the poller's.
@@ -1051,19 +959,13 @@ and **verified by the writer itself**, not merely by whatever spawned it.
   This governs a different question than the #242 bullet above (whether a pid may be PROBED at
   all, not whether it exempts a re-acquire) and changes nothing about that rule.
 - **A hold's holder is identified by its proven anchor process as well as by its session string
-  (#317).** The string has to be reproduced identically by every later command of the same session,
-  and twice now it was not: a session that recorded its *name* in `--session` failed its own
-  ownership check (#306), and a ship session that could not resolve any identity at all was refused
-  by a hold **its own claim had taken minutes earlier** — one merge in 8½ hours on that repo until a
-  human cleared it by hand. So a hold is also yours when its recorded anchor pid is alive and
+  (#317).** So a hold is also yours when its recorded anchor pid is alive and
   provably contains this very invocation. Four terms guard that, and the second is the one doing the
   work: the anchor must be `'anchor'`-kind; its **proof** must be `verified` (auto-detected *and*
   ancestor-checked at write time) or `declared` (`--pid <n>`); it must be alive; and it must be this
   process or an ancestor of it **right now**. A `default` proof — a bare `process.ppid` — and every
   record written before this are excluded by construction, which is exactly the #242 population
-  above. `sessionName` is still never an ownership key, on any path. The equivalence class this
-  admits is never coarser than the session string beside it: everything it exempts is something the
-  same session could already exempt by exporting `COLAB_SESSION` once. Full argument, the four
+  above. `sessionName` is still never an ownership key, on any path. Full argument, the four
   alternatives rejected, and the falsifier that would supersede it:
   [`docs/adr/317-anchor-pid-self-ownership.md`](docs/adr/317-anchor-pid-self-ownership.md).
 - **A confirmed-dead holder lapses at read time — it is a record to clear, not a conflict to
@@ -1081,9 +983,7 @@ and **verified by the writer itself**, not merely by whatever spawned it.
   carried a worktree, skip while another no-worktree claim of that session still holds that
   checkout, and never on a branch that KEEPS the claim (a `releasePending` claim keeps its hold with
   it). The remaining deletion sites are all worktree-keyed and never took a checkout hold at all.
-- **Machine identity, not a hostname string (#289).** A record's `host` alone false-refuses the
-  SAME machine the instant its short hostname drifts from its FQDN, or DHCP/mDNS hands out a
-  different label between processes. Comparison is now two-tier: a cheap, pure canonicalization
+- **Machine identity, not a hostname string (#289).** Comparison is now two-tier: a cheap, pure canonicalization
   (case-fold, drop a trailing dot, keep only the first label) resolves the ordinary drift case, and
   when both sides also carry a hardware-bound id — `ioreg`'s `IOPlatformUUID` on darwin, the
   D-Bus machine id on linux, a MAC-address hash as the last resort — that id decides exactly,
@@ -1091,7 +991,7 @@ and **verified by the writer itself**, not merely by whatever spawned it.
   takes the hostname-comparison branch, which is strictly *more* permissive than the raw string
   equality it replaces; no record that compared equal before can start comparing unequal now.
 
-How this section relates to the spawn-time lock a session dashboard already keeps: [ADR 242](docs/adr/242-place-claims-rationale.md).
+How this section relates to the spawn-time lock a session dashboard already keeps: [ADR 242](docs/adr/242-place-claims-rationale.md). The rationale cut from the bullets above: [ADR 539](docs/adr/539-solo-place-claims-rationale.md).
 
 **Explicitly out of scope: any cross-machine or distributed form of this lock.** A
 place-claim is machine-local state (`~/.colab/state.json`); two machines each holding
@@ -1141,10 +1041,7 @@ tree file-synced between machines while git metadata is deliberately excluded is
 not a deployment strategy, and this model must not normalise it into a legal member of
 the list. The two shapes of consequence: [ADR 523](docs/adr/523-channels-axis-rationale.md).
 
-**Consequence — a file-synced working tree cannot use trunk-direct at all.** What makes a
-shared-checkout hold safe is a lock on one checkout, and machine-local state is the
-correct home for that lock — but only while a path on one machine means one machine. Sync
-breaks that silently: two machines can each believe they hold the only checkout. The mode
+**Consequence — a file-synced working tree cannot use trunk-direct at all.** The mode
 is **unavailable** until the repo is excluded from the sync; performing the exclusion is
 operations work, not a rule this handbook states. This is a distinct fact from the
 [place-claim](#place-claims--the-writer-verifiable-hold-a-shared-checkout-needs-and-a-worktree-does-not)
@@ -1164,7 +1061,7 @@ question is now asked, in words, by [§9](#9-adopting-this)'s shared question se
 5, first-time adoption or a sync against a repo predating this axis), and `colab adopt`
 (#199) detects/asks/derives/writes the set in one act — proposed candidates only (a tag, a
 committed deploy path, a hooks dir), never an asserted absence, on the same asymmetry as
-`exposure`.
+`exposure`. Why: [ADR 539](docs/adr/539-channels-marker-rationale.md).
 What the merge left unchanged: [ADR 523](docs/adr/523-channels-axis-rationale.md).
 
 ---
@@ -1186,8 +1083,7 @@ stack: capacitor-vite    # free-form; describe the repo honestly
 `manual` means a human runs a documented procedure; it requires `runbook: <path>` naming
 that document, and the audit checks the file is really there.
 
-`stack` is a **free-form string**, not a fixed list — a closed enum was tried and
-immediately failed on a Capacitor app fitting no bucket.
+`stack` is a **free-form string**, not a fixed list. Why: [ADR 539](docs/adr/539-channels-marker-rationale.md).
 
 Optional toolchain keys (`node:`, `php:`, …) may be added — see [§7](#7-ci-and-toolchain).
 A repo keeping a long-lived line declares it in `integration:` — a development-side axis
@@ -1216,18 +1112,14 @@ Full field reference: [`project.schema.md`](project.schema.md).
 ### Boot recipe — an entry point the repo owns, not a table a consumer keeps
 
 `ports:` declares **where** a repo's trunk dev server listens; nothing declares **how**
-it starts, so every consumer wanting to start one has kept its own external table of
-start commands, unvalidated against the repo, forcing a default onto any repo it has no
-entry for.
+it starts.
 
 **So the entry point is conventional, not a marker field:** if `<repo>/.colab/dev` exists
 and is executable, that starts the trunk dev server — no arguments, foreground, exits
 when the server stops. Absent it, a caller falls back to its own ecosystem default. A
 boot recipe changes with the code, so it belongs beside the code, not in a shared schema.
 
-Measured cost of the status quo: a repo silently inherited an external table's default
-ecosystem; the session's command died on the spot, and the caller was told the start had
-**succeeded** while the port stayed dead indefinitely, with nothing to flag it.
+Why, with the measurement: [ADR 539](docs/adr/539-channels-marker-rationale.md).
 
 **A start is verified by the declared port accepting a connection, never by the process
 manager's exit code** — a supervisor exits 0 the moment a session is created, not when
