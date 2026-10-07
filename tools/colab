@@ -7601,7 +7601,7 @@ function cmdLabels(argv) {
 // config (show / manage the aggregation inputs)
 // ---------------------------------------------------------------------------
 
-const HELP_CONFIG = `colab config [show|add-repo <path>|rm-repo <path>|add-reserved-file <path>|rm-reserved-file <path>|set <key> <value>]
+const HELP_CONFIG = `colab config [show|add-repo <path>|rm-repo <path>|add-reserved-file <path>|rm-reserved-file <path>|add-notify-url <url>|rm-notify-url <url>|set <key> <value>]
 
   show                       print resolved config, file paths, and the aggregated reserved set
   add-repo <path>            add a repo root to scan for .github/project.yml reserved ports
@@ -7609,6 +7609,9 @@ const HELP_CONFIG = `colab config [show|add-repo <path>|rm-repo <path>|add-reser
   add-reserved-file <path>   add a machine-local reserved-ports file (~ is expanded); its ports join
                              the reserved set (lenient parse: whitespace ints per line, # comments)
   rm-reserved-file <path>    remove a reserved-ports file
+  add-notify-url <url>       add one more event receiver to notifyUrl (a second local observer) —
+                             existing entries are kept; one URL stays stored as a plain string
+  rm-notify-url <url>        remove one receiver from notifyUrl; removing the last unsets the key
   set <key> <value>          set claimTTLHours | plannerClaimTTLMinutes | portRange | worktreeSubdir | notifyUrl | journal |
                               claimIdentity
 
@@ -7617,6 +7620,9 @@ an http(s) endpoint and claim / release / ship / worktree new / worktree rm each
 best-effort JSON event as they succeed — fire-and-forget, never retried, never able to fail or slow
 the command that triggered it. Observers already poll this state file; the push only sharpens the
 timestamp. Unset it again with:  colab config set notifyUrl ""
+notifyUrl may hold SEVERAL receivers (#546) — every event goes to each, through its own detached
+child, so one dead receiver never costs another its event. \`set notifyUrl <url>\` replaces the
+whole value with one URL; add-notify-url / rm-notify-url change one entry and leave the rest alone.
 
 journal is OPTIONAL and off by default: unset, colab writes no journal file at all. Set it and every
 state transition and every invocation is appended to ~/.colab/journal.jsonl — one JSON object per
@@ -7672,6 +7678,25 @@ function cmdConfig(argv) {
     if (!argv[1]) throw new UserError('rm-reserved-file needs a path');
     cfg.reservedFiles = (cfg.reservedFiles || []).filter((f) => f !== argv[1]);
     state.saveConfig(cfg); print(`reservedFiles: ${cfg.reservedFiles.join(', ') || '(none)'}`); return 0;
+  }
+  if (sub === 'add-notify-url' || sub === 'rm-notify-url') {
+    // #546: notifyUrl is a string or a list. These change ONE entry and leave every other exactly as
+    // it was, so a second observer is added without hand-editing JSON and without rewriting the first.
+    const u = (argv[1] || '').trim();
+    if (!u) throw new UserError(`${sub} needs a URL`);
+    const urls = notify.configuredUrls(cfg);
+    if (sub === 'add-notify-url') {
+      if (!/^https?:\/\//i.test(u)) throw new UserError('notifyUrl must be an http(s) URL');
+      if (!urls.includes(u)) urls.push(u);
+    } else {
+      if (!urls.includes(u)) throw new UserError(`notifyUrl has no entry ${u}`);
+      urls.splice(urls.indexOf(u), 1);
+    }
+    const v = notify.storedNotifyUrl(urls);
+    if (v === undefined) delete cfg.notifyUrl; else cfg.notifyUrl = v;
+    state.saveConfig(cfg);
+    print(`notifyUrl = ${urls.length ? urls.join(', ') : '(unset)'}`);
+    return 0;
   }
   if (sub === 'set') {
     const [k, v] = [argv[1], argv[2]];

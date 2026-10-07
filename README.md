@@ -304,7 +304,7 @@ one file each — that folder is the source for the table above.
 | `--hooks` | Point this clone's git at `.githooks/`: a gitleaks secret scan and an identity scan whose vocabulary you keep outside every repo (see [`templates/README.md`](templates/README.md)). |
 | `--fleet` | Seed `~/.colab/repos.txt` with format notes only, if absent. It stays machine-local because it names your private repos; `colab register` fills it. |
 | `--all` | `--tools --hooks --fleet`. |
-| `--notify-url <url>` | Seed `notifyUrl` in `~/.colab/config.json`, only if the key is absent. See [`tools/README.md`](tools/README.md#notifyurl--optional-event-push-off-by-default). |
+| `--notify-url <url>` | Add `<url>` to `notifyUrl` in `~/.colab/config.json` if the key lacks it; an existing entry is never removed or rewritten. See [`tools/README.md`](tools/README.md#notifyurl--optional-event-push-off-by-default). |
 | `--release` | Check this clone out at the newest final release tag, then install. The default for a first install from a fresh clone. |
 | `--trunk` | Check out `main` and install it, unreleased work included — the clone's `@next`. |
 | `--dry` | Print what would happen, change nothing. Combines with the flags above. |
@@ -338,7 +338,7 @@ colab update             # stamped copies that fell behind, the frozen CLI inclu
 plus that engine's own caveats (Codex's sandbox network, for instance). It also reports whether the frozen copy is behind the latest release and
 which commands it does not dispatch, whether the state file exists, whether
 anything is registered, whether both pre-commit hooklets can run, and whether
-`notifyUrl` is unset while a local observer declared an endpoint. ✗ means
+`notifyUrl` is unset, or lacks a URL, while a local observer declared one. ✗ means
 something installed is stale or unusable; ⚠ means something was never set up,
 which may be deliberate or just not done yet — so a correct fresh install, with
 no repo registered and no identity vocabulary, reports ⚠ rows and exits 0. It

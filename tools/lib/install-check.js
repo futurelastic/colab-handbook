@@ -306,10 +306,11 @@ function checkNotify({ colabHome }) {
   try { cfg = JSON.parse(readText(path.join(colabHome, 'config.json')) || '{}'); } catch (_) { /* reported by colab itself */ }
   const st = notifyEndpoint.status(cfg, colabHome);
   if (st.state === 'unset') return [];
-  if (st.state === 'set' && !st.declared) {
-    return [{ area: 'notify', severity: OK, text: `notifyUrl = ${st.url}` }];
-  }
-  return [{ area: 'notify', severity: WARN, text: notifyEndpoint.healthLine(st) }];
+  // One ⚠ row per problem — each declared URL the key lacks is its own row (#546), so a machine
+  // running two observers sees which one is going without, not a single blended line.
+  const problems = notifyEndpoint.healthLines(st);
+  if (problems.length) return problems.map((text) => ({ area: 'notify', severity: WARN, text }));
+  return [{ area: 'notify', severity: OK, text: `notifyUrl = ${st.urls.join(', ')}` }];
 }
 
 function runChecks(opts) {

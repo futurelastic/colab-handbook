@@ -197,6 +197,10 @@ test('a container command keeps its sub-command, but an argument is not one', ()
 test('config set values are redacted; the key survives', () => {
   assert.deepEqual(j.safeArgv(['config', 'set', 'notifyUrl', 'https://h/x?token=abc']),
     ['config', 'set', 'notifyUrl', '<redacted>']);
+  assert.deepEqual(j.safeArgv(['config', 'add-notify-url', 'https://h/x?token=abc']),
+    ['config', 'add-notify-url', '<redacted>']);
+  assert.deepEqual(j.safeArgv(['config', 'rm-notify-url', 'https://h/x?token=abc']),
+    ['config', 'rm-notify-url', '<redacted>']);
   assert.deepEqual(j.safeArgv(['config', 'show']), ['config', 'show']);
   assert.deepEqual(j.safeArgv(['worktree', 'new', 'feat/x-1']), ['worktree', 'new', 'feat/x-1']);
 });
