@@ -528,7 +528,7 @@ excuses, and it names the rows that carry its rules now.
 | C4.s4.26 | default |  | Never infer a dirty main checkout from a nested worktree's path; ask git. | A nested worktree's path shares the main checkout's prefix — never infer dirty from | CONVENTIONS.md | #273 |
 | C4.s4.27 | default |  | The only reliable dirtiness check is `git -C <repo-root> status --porcelain`, scoped to the repo root. | The only reliable check is `git -C <repo-root> status --porcelain`, | CONVENTIONS.md | #273 |
 | C4.s4.28 | default |  | Treat a dirty path in the main checkout as possibly yours until shown otherwise. | The default is "possibly mine until shown otherwise," not the | CONVENTIONS.md | #294 |
-| C4.s4.29 | default |  | A dirty path conclusively not yours is reported, never cleaned. | original rule still holds exactly as before: **report it, never clean it.** The | CONVENTIONS.md | #294 |
+| C4.s4.29 | default |  | A dirty path conclusively not yours is reported, never cleaned. | original rule still holds exactly as before: **report it, never clean it.** | CONVENTIONS.md | #294 |
 | C4.s4.30 | default |  | Commits use Conventional Commit prefixes, which §6 groups into the release summary. | Conventional Commits (`feat:`, `fix:`, `docs:`, `chore:`, `refactor:`, | CONVENTIONS.md | — |
 | C4.s4.31 | default |  | A commit with no prefix is invisible in release notes. | A commit with no prefix is invisible in release notes. | CONVENTIONS.md | — |
 | C4.s4.32 | default |  | `colab ship`'s default squash subject is the branch's highest-weight commit, ranked as listed (ties to the oldest). | commit — highest wins, ties go to the oldest — in this order, | CONVENTIONS.md | #261 |
@@ -552,7 +552,7 @@ excuses, and it names the rows that carry its rules now.
 | C4.s4.50 | default |  | A deliverable with no diff still has to close, through `colab ship` evidence-close (`landed` and zero own commits, measured from git). | `colab ship` detects `landed ∧ zero own commits` (both | CONVENTIONS.md | #90 |
 | C4.s4.51 | hard | tools/colab::carries no evidence comment | Evidence-close is gated on the issue already carrying a comment the tool did not write. | Gated on the issue **already carrying a comment the tool did not write**. | CONVENTIONS.md | #90 |
 | C4.s4.52 | default |  | A unit committed straight to trunk closes through `colab ship --direct`, which matches claims by session identity and refuses until published. | way through `colab ship --direct` (#302), which matches its claims by session identity and | CONVENTIONS.md | #302 |
-| C4.s4.53 | default |  | A ship releases every claim it carried, not only the worktree's. | A ship releases every claim it carried (#319)** — not only the worktree's. A claim with | CONVENTIONS.md | #319 |
+| C4.s4.53 | default |  | A ship releases every claim it carried, not only the worktree's. | A ship releases every claim it carried (#319)** — not only the worktree's. | CONVENTIONS.md | #319 |
 | C4.s4.54 | default |  | An unattached claim of the same session is carried by a branch ship only when the branch name's trailing group names it; otherwise it is reported and left alone. | is carried by a branch ship only when the branch name's trailing group names it; | CONVENTIONS.md | #319 |
 | C4.s4.55 | hard | tools/colab::remote-only-unclaimed | `colab ship` refuses a branch that exists only on origin with no issue number and no local claim unless `--adopt` is passed. | `colab ship` refuses it unless `--adopt` is passed, and an | CONVENTIONS.md | #324 |
 | C4.s4.56 | default |  | A local ref created by git from `origin/<same name>` reads the same as remote-only. | A local ref does not make it this machine's (#343): when the ref's oldest reflog entry says | CONVENTIONS.md | #343 |
@@ -672,6 +672,19 @@ excuses, and it names the rows that carry its rules now.
 | C4.landed.09 | default |  | The grep answers whether a ship happened, never whether the content is on base; an unmatched grep never rounds toward `landed`. | an unmatched grep never rounds a verdict toward `landed`. | CONVENTIONS.md | #370 |
 | C4.landed.10 | default |  | Git state and claim state are two signals; neither replaces the other. | Git state and claim state are two signals, and neither replaces the other. | CONVENTIONS.md | — |
 | C4.landed.11 | default |  | `colab landed --ci` is advisory only and never blocks `colab landed` or `colab ship`. | Advisory only — it never blocks `colab landed` or `colab ship` | CONVENTIONS.md | #293 |
+
+#### #539 ledger — §4 Branches and commits (slice B)
+
+Rationale from this slice moved to `docs/adr/539-branches-and-commits-rationale.md`, `docs/adr/539-branch-ci-rationale.md`, `docs/adr/539-who-may-touch-and-batch-landing-rationale.md` and `docs/adr/539-landed-rationale.md`. Every other cut in the slice removed whole sentences (or whole list items) verbatim, so the move check finds them without an entry. The two units below were reworded inside a sentence.
+
+- `CONVENTIONS.md:1272` — before: "The label is a hostname, and a commit message cannot be edited once it is pushed. On a public repository the trailer would publish an internal hostname permanently, once per ship. So `colab ship` reads the destination first." → after: "`colab ship` reads the destination first." Rationale → `docs/adr/539-branches-and-commits-rationale.md`. Rows: C4.s4.07, C4.s4.08 (keys intact).
+- `CONVENTIONS.md:1409` — before: "`design:` (a specification, mockup, or visual decision rather than a behaviour change) is ranked here, not merely branch-legal — added because an adopter had 3 genuine `design:` commits over 400, six live `design/…` branches, and its own conventions already named `design` a legitimate type before this repo's tooling recognised it." → after: "`design:` (a specification, mockup, or visual decision rather than a behaviour change) is ranked here, not merely branch-legal." Rationale → `docs/adr/539-branches-and-commits-rationale.md`. Rows: none keyed.
+
+Keys shortened because the sentence that followed them was moved whole (the rule text itself is unchanged):
+
+- C4.s4.29 — key was "…**report it, never clean it.** The"; now ends at "**report it, never clean it.**" (the moved sentence began "The investigation is what changed…").
+- C4.s4.53 — key was "…— not only the worktree's. A claim with"; now ends at "— not only the worktree's." (the moved sentence began "A claim with no worktree … used to survive…").
+
 ### §5 Claiming work — Who holds this
 
 | id | class | gate | rule | key | dest | source |

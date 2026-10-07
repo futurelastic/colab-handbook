@@ -1256,8 +1256,7 @@ from the ref alone by every other machine. `colab worktree new` adds the prefix 
 still pass the unprefixed name. Undeclared, the unprefixed shape stays the default, and both
 shapes conform everywhere: the issue numbers stay in the **trailing** `-<N>` run, and every
 reader (ship's harvest, the remote-claim check, the skills) anchors there, so none of them
-needs to know the prefix exists. The shapes cannot be confused — the slug has no `/`, so four
-segments can only be the prefixed shape. An opt-in CI check for either shape ships as
+needs to know the prefix exists. An opt-in CI check for either shape ships as
 `templates/branch-name.yml`.
 
 **The `Machine:` trailer (#350).** Every squash `colab ship` lands carries
@@ -1269,9 +1268,7 @@ measured from git alone:
 each unit. It records where a landing ran. It is not an identity, and no gate reads it
 ([§2, *Core paths*](#core-paths--a-pr-and-a-non-author-approval-before-landing-350)).
 
-**Not on a public repository (#367).** The label is a hostname, and a commit message cannot be
-edited once it is pushed. On a public repository the trailer would publish an internal hostname
-permanently, once per ship. So `colab ship` reads the destination first. If the forge reports
+**Not on a public repository (#367).** `colab ship` reads the destination first. If the forge reports
 the repository as public, or `project.yml` declares `room: public`, the squash carries no
 `Machine:` trailer, and the `Colab-Adopted:` trailer (#324) keeps its branch and sha but drops
 its `on <host> (machine <id>)` tail. A private repository is unchanged. When the visibility
@@ -1281,7 +1278,7 @@ line costs one traceability record and a published hostname cannot be taken back
 `room:` restores it. `colab ship --dry` prints `Machine trailer: …` with the decision, and
 `--dry --json` reports it as `machineTrailerDecision`. The cross-machine measurement above
 therefore covers private repositories only. A `branchPrefix: machine` branch name still carries
-the label too, and that stays a deliberate choice for the repo that declares it.
+the label too, and that stays a deliberate choice for the repo that declares it. Why: [ADR 539](docs/adr/539-branches-and-commits-rationale.md).
 
 **A branch may carry a group of related issues** — suffix them all:
 `fix/import-fixes-115-114-113`. Claim every issue in the group before starting, and
@@ -1293,8 +1290,7 @@ not — #319.)
 **A group is not a chain.** A *group* is issues that touch the same code and must move
 together on one branch, spelled with trailing numbers in the branch name. A *chain* is
 issues that must happen in order, across separate branches — recorded as a dependency
-([§5](#5-claiming-work--how-to-say-im-on-this)), never by a branch name. Mixing them
-produces a branch carrying work that is not ready, or a sequence nothing enforces.
+([§5](#5-claiming-work--how-to-say-im-on-this)), never by a branch name.
 
 **Branches that predate adoption are grandfathered** — do not rename them; several may be
 live worktrees. Apply the convention to new branches only.
@@ -1314,30 +1310,24 @@ colab worktree new feat/<slug>-N --issues N --base v2    # base = the declared l
 ```
 
 Base and merge target are **one decision, not two** — say which branch you merged into
-whenever you report a session done. A branch cut from a line and merged into trunk
-carries the entire line in with it, inside one squash commit that reads like a small
-change.
+whenever you report a session done. Why: [ADR 539](docs/adr/539-branches-and-commits-rationale.md).
 
 **The main checkout stays on trunk at rest — a worktree is the default, not a
 preference.** A dev server, a symlink, a scheduled job may read that working tree, and
-none of them learn that you branched it. Measured: a session branched a repo's main
-checkout for a chore; that repo ran always-on from the tree, so the live app served
-unmerged feature-branch code until a human noticed by eye. Leaving the tree merely
+none of them learn that you branched it. Leaving the tree merely
 *dirty* is the same fault with wider blast radius — an uncommitted file there blocks
 every other session's trunk merge in that repo. A plain branch is still allowed on a
 repo nothing reads from; taking it means **you** own returning the checkout to trunk
-before you wrap.
+before you wrap. Why: [ADR 539](docs/adr/539-branches-and-commits-rationale.md).
 
 **`git stash` is repo-scoped, not worktree-scoped — never reach for a bare stash in any
 checkout of a repo that has more than one.** `refs/stash` is one ref per repository, not
 per checkout; two concurrent sessions stashing around the same time can push/pop over
-each other with no error. Measured: on a repo running 10+ concurrent worktree sessions,
-one session's `git stash pop` restored a *different* session's uncommitted changes, with
-a third, unrelated, much older stash sitting in the same shared stack the whole time.
+each other with no error.
 **The hazard follows the repo, not where a session stands** (#241) — a recovery that
 *starts* in the main checkout (stash) and only *pops* inside a worktree still shares the
 one ref between two checkouts; it is not exempt just because the command that reaches for
-`refs/stash` isn't the one sitting inside the worktree.
+`refs/stash` isn't the one sitting inside the worktree. Why: [ADR 539](docs/adr/539-branches-and-commits-rationale.md).
 
 Prefer, in order: `git diff`/`git status` to read without moving; targeted
 `git checkout -- <path>` plus manual re-apply; comparing directly against
@@ -1364,33 +1354,17 @@ main checkout's path as a prefix. A judgement made from that path string, or fro
 directory walk that descends into `.worktrees/`, reads "the main checkout is dirty" when
 it is not — git itself is not fooled; it already excludes registered worktrees from the
 parent's status. The only reliable check is `git -C <repo-root> status --porcelain`,
-scoped to the repo root, nothing else. Measured: a wrapping session reported the shared
-main checkout dirty with two files it did not own, and named another session's issue as
-the cause — the files were inside `.worktrees/<other-session>/`, on that session's own
-branch, doing exactly the right thing (#273). That was a **false positive about
-dirtiness itself** — the check asked the wrong question (a path prefix, not git) — and
-the fix above, *ask git scoped to the repo root*, stands on its own and is not touched
-by what follows.
+scoped to the repo root, nothing else. Why: [ADR 539](docs/adr/539-branches-and-commits-rationale.md).
 
 **Git answers *whether* the root is dirty; it never answers *whose* the dirt is — and
-the two questions must not collapse into one default.** A session's process cwd is the
-main checkout, not any worktree it later creates (code-start §4 creates the worktree
-after the cwd is already fixed), so a tool call made with a relative path anywhere in
-that session lands on trunk with no error — most often a docs edit made after the code
-itself already landed correctly in the worktree (#294). Reading every dirty hit here as
-categorically "someone else's" — the reading this section used to state outright —
-assumes away exactly that failure: the session that caused it declines to even check,
-ships code with no docs, and leaves the trunk checkout dirty for every other session's
-merge to trip over. **The default is "possibly mine until shown otherwise," not the
+the two questions must not collapse into one default.** **The default is "possibly mine until shown otherwise," not the
 reverse** — the cost of checking one file's branch overlap and content is a `git diff`
 and a sentence in a report; the cost of assuming wrongly is lost content plus a blocked
 repo. Once a dirty path is actually investigated — does *this* session's branch touch
 it, does the content read as this session's own — and it is conclusively not yours, the
-original rule still holds exactly as before: **report it, never clean it.** The
-investigation is what changed, not the rule for what to do once you've genuinely run
-it. `skills/code-wrap/SKILL.md` A2b is the worked procedure — the ladder to run, the
+original rule still holds exactly as before: **report it, never clean it.** `skills/code-wrap/SKILL.md` A2b is the worked procedure — the ladder to run, the
 three verdicts, and the patch-based recovery for a hit that turns out to be yours (using
-the recipe two paragraphs above, never a stash).
+the recipe two paragraphs above, never a stash). Why: [ADR 539](docs/adr/539-branches-and-commits-rationale.md).
 
 **Commits** — Conventional Commits (`feat:`, `fix:`, `docs:`, `chore:`, `refactor:`,
 `test:`, `perf:`, `design:`). Not decoration: [§6](#6-releases) builds the release summary
@@ -1407,9 +1381,7 @@ breaking (any type, +1000) > feat > fix > perf > refactor / revert > design > do
 ```
 
 `design:` (a specification, mockup, or visual decision rather than a behaviour change)
-is ranked here, not merely branch-legal — added because an adopter had 3 genuine
-`design:` commits over 400, six live `design/…` branches, and its own conventions
-already named `design` a legitimate type before this repo's tooling recognised it.
+is ranked here, not merely branch-legal. Why: [ADR 539](docs/adr/539-branches-and-commits-rationale.md).
 
 **A type outside this list is not invisible, but it cannot outrank a named one.** A
 commit shaped like a Conventional Commit (`type(scope): text`) whose `type` this repo
@@ -1428,8 +1400,7 @@ than guessed.
 - `dev` → `main` promotion (Tiers A and C): **`--no-ff` merge commit**, never squash —
   the merge commit *is* the release boundary.
 - **The merge message closes its issues: write `Closes #N`** (one per issue), not a bare
-  `(#N)` — GitHub auto-closes only on the keyword. Measured: 26 of 30 issues sat open with
-  their code long since merged, purely because merges said `(#22)` instead of `Closes #22`.
+  `(#N)` — GitHub auto-closes only on the keyword. Why: [ADR 539](docs/adr/539-branches-and-commits-rationale.md).
 - **[Hard — gate: colab ship refuses unticked plan]** **`Closes #N` requires the issue's own scope fully accounted for — a mechanical gate,
   not an honour system (#74).** An issue's `## Plan` is a real GitHub checklist — one
   `- [ ]` line per deliverable, load-bearing. A prose-only `## Plan` cannot be verified
@@ -1437,29 +1408,16 @@ than guessed.
   convention). `colab ship` parses the checklist before composing the squash body: any
   claimed issue with an unticked box and no declared `Remainder: #M` **refuses the
   merge outright (#263)** — a precondition row exactly like a red CI run, not a silent
-  `Closes #N` → `Refs #N` downgrade that lets the ship proceed anyway. Measured before
-  this tightened: on one repo, ~8 weeks, 125 `Refs #N` merges against 780 `Closes #N`
-  ones, and only 10 commits ever declared a remainder — the redirect was reported, but
-  reported is not the same as read; a tracker showing an open issue with unticked boxes
-  is indistinguishable from work nobody started. Ticking every box, declaring
+  `Closes #N` → `Refs #N` downgrade that lets the ship proceed anyway. Ticking every box, declaring
   `Remainder: #M`, or an explicit `--refs #N` (a deliberate choice, never gated) all
   clear it. A hand-merge runs the identical check by reading the same two fields
-  (`gh issue view N --json body,comments`). Motivating incident: an issue closed by
-  squash-merge with a third of its three-section scope unimplemented — the sections were
-  prose, so nothing could have caught it.
+  (`gh issue view N --json body,comments`). Why: [ADR 539](docs/adr/539-branches-and-commits-rationale.md).
 - **Requiring the remainder issue is the convention — the gate does not file one for
-  you (#263).** A merge blocked on a missing `Remainder: #M` could in principle create
-  that issue automatically; this deliberately does not, because filing on an agent's own
-  judgement writes an artifact to the tracker nobody asked for, while requiring the
-  human (or session) that already knows what was left out to write the one line keeps
-  authorship where the judgement actually lives. The smaller change, taken on purpose.
+  you (#263).** Why: [ADR 539](docs/adr/539-branches-and-commits-rationale.md).
 - **`--refs` keeps an issue open, so the same step must also stop it being started
   (#385).** `--refs #N` is still a deliberate choice and still ungated. But after the ship,
   #N is open, possibly `deps-checked`, and unclaimed. If nothing on it says "do not start",
-  a scheduler picks it up again as code work. In the measured case, the only unticked items
-  were a live end-to-end proof that only a human-driven session could produce. The
-  re-started implementer found nothing to do and held a concurrency slot for about an hour,
-  until a human-side watch parked the issue. So when you choose `--refs` over closing:
+  a scheduler picks it up again as code work. So when you choose `--refs` over closing:
   - **The leftover is a check only a person can run** (a UI click-through, a look on a
     real device, a live end-to-end proof): do not `--refs` it. Close #N and add one row to
     the repo's single open `Human verify:` issue (§5 *Human verify*, #491).
@@ -1477,15 +1435,13 @@ than guessed.
   under `holds:`. `--dry --json` reports the same thing as `refsBrakeFindings` and as an
   `ok: true` advisory row. The tool never applies the hold itself. Which kind, whose wake
   and which date are the shipper's call, for the same reason the gate does not file the
-  remainder issue.
+  remainder issue. Why: [ADR 539](docs/adr/539-branches-and-commits-rationale.md).
 - **[Hard — gate: colab ship refuses uncorroborated issue]** **Every closed issue must be corroborated by git, not the claim registry alone (#87).**
-  Measured: a branch carrying #71 and #76 resolved to `[71, 74, 76]` because a co-tenant
-  claimed #74 onto the same worktree minutes after merge authorisation, with nothing on
-  the branch implementing it. Corroboration reads two git-side sources: the branch name's
+  Corroboration reads two git-side sources: the branch name's
   **trailing** number group, and `#N` references in **commit bodies**. An issue named by
   neither is a finding — `colab ship` refuses; a hand merge must perform the same check.
   Do not resolve it by quietly writing `Refs #N` — that hides the collision; `--refs`
-  exists for when an operator actually means it.
+  exists for when an operator actually means it. Why: [ADR 539](docs/adr/539-branches-and-commits-rationale.md).
 - **[Hard — gate: evidence-close needs an evidence comment]** **A deliverable with no diff still has to close (#90).** A decision recorded, an
   investigation concluding "no change needed", an artifact stored outside the repo —
   there is nothing to squash. `colab ship` detects `landed ∧ zero own commits` (both
@@ -1495,11 +1451,9 @@ than guessed.
   A unit committed straight to trunk has no branch to detect this from; it closes the same
   way through `colab ship --direct` (#302), which matches its claims by session identity and
   refuses until the work is published.
-- **A ship releases every claim it carried (#319)** — not only the worktree's. A claim with
-  no worktree (`--branch`-keyed, or taken with neither) used to survive a successful ship
-  still `in-progress`, because teardown ran only through `colab worktree rm`. An unattached
+- **A ship releases every claim it carried (#319)** — not only the worktree's. An unattached
   claim of the *same session* is carried by a branch ship only when the branch name's
-  trailing group names it; otherwise it is reported and left alone, never closed.
+  trailing group names it; otherwise it is reported and left alone, never closed. Why: [ADR 539](docs/adr/539-branches-and-commits-rationale.md).
 - **[Hard — gate: colab ship refuses unadopted remote-only branch]** **A branch this machine never held is not a legit zero (#324).** A branch that exists only
   on `origin`, with no issue number in its name and no local claim, is most likely another
   machine's work in flight; `colab ship` refuses it unless `--adopt` is passed, and an
@@ -1509,10 +1463,8 @@ than guessed.
   `--track`), it reads the same as remote-only. Where no reflog survives, nothing contradicts
   the local reading.
 - **[Hard — gate: colab ship refuses unless trunk CI green]** **Before merging to trunk, check that trunk's last CI run is green — and that it ran at
-  all.** We once merged for 12 straight hours into repos whose CI was silently dead (org
-  billing lockout) — every run "failed" without starting. **Ask by commit, not by recency
-  (#92):** `gh run list --branch <trunk> -L 1` reads whatever ran *last*, and under
-  `cancel-in-progress` a cancelled straggler can outrank a passing run on the same commit.
+  all.** **Ask by commit, not by recency
+  (#92):**
   The right question: has EVERY run at this branch's current head sha completed, and did
   one of them succeed? `colab ship` asks it that way. Both halves are load-bearing: a
   sibling that is merely still in progress has not passed either (#307), so a fast
@@ -1546,12 +1498,9 @@ than guessed.
   **Waiting for that verdict is `colab ci-wait`, never a loop (#495).** It backs off
   (30 s → 60 s → 120 s, then a deadline), sends conditional requests so an unchanged read is
   free, and ends with its own exit code on a rate limit or an unreadable state instead of
-  retrying. Hand-rolled `sleep N; gh run …` loops were measured at ~88% of ~4,500 REST calls in
-  one hour on a shared agent identity — two loops on one run, a loop that read rate-limit
-  errors as "keep waiting", one orphaned for 5½ h — until the hourly quota ran out for every
-  agent. `colab trunk-ci` itself costs one runs read (plus one check-runs read on green) and
+  retrying. `colab trunk-ci` itself costs one runs read (plus one check-runs read on green) and
   caches its verdict per trunk sha for 45 s in the repo's git dir, shared by every session on
-  that checkout.
+  that checkout. Why: [ADR 539](docs/adr/539-branches-and-commits-rationale.md).
   That is the half of the question about what is merged **into**; the branch's own run
   is the other half — see *Branch CI*, below.
 - **That resolves a FALSE red — a real one has two different doors, one of them
@@ -1564,10 +1513,7 @@ than guessed.
 Trunk CI answers *"is the thing I am merging into healthy?"*. It says nothing about the
 thing being merged, and both gate a merge. A local quality gate does not answer for the
 branch's CI either: local and runner disagree for ordinary reasons — a different OS, a
-browser the runner has to boot, a toolchain pin the local machine already satisfies.
-Measured, 2026-09-05: a branch sat red three times on its remote run while its wrap had
-recorded a clean local gate, and no step between the implementer's wrap and the merge was
-reading that run at all.
+browser the runner has to boot, a toolchain pin the local machine already satisfies. Why: [ADR 539](docs/adr/539-branch-ci-rationale.md).
 
 **One cause of that disagreement is closed before the push, not read after it (#403).** A
 test that reads its author's machine (the home directory's config, a local daemon, a token
@@ -1588,13 +1534,11 @@ same test command the local gate runs, and its runner does not share a developer
 (a hosted runner, or an ephemeral container runner, but never a self-hosted runner that
 runs in someone's login session with their `HOME` and daemons). That run already had no
 developer `HOME` and no local daemon, at the exact commit being merged, so repeating it
-locally adds minutes and no evidence. Measured on this repo's own ship passes: the local
-suite took 6–10 minutes per run and was repeated up to six times in one pass (23 minutes),
-while branch CI ran the same tests in about 2 minutes. So the hermetic verdict may be
+locally adds minutes and no evidence. So the hermetic verdict may be
 recorded as `branch-ci` with that run's sha, and `colab gate-hermetic` runs locally only
 when branch CI cannot arrive (no trigger for the branch), is not `green`, or does not run
 the tests. The same holds after a sync: push and read the new branch run before
-re-running the suite locally.
+re-running the suite locally. Why: [ADR 539](docs/adr/539-branch-ci-rationale.md).
 
 **Local is a smoke check; branch CI is the one gate (#410).** A repo whose branch CI can
 arrive may say so in `project.yml` (`gate:` with `smoke:` and `authoritative: ci`,
@@ -1606,21 +1550,7 @@ locally. A clean CI runner is the hermetic run by construction, so `colab gate-h
 stays only where the local gate is still the verdict. While iterating, run the tests for what
 you changed; the full suite runs once, where the verdict comes from. The fallback is today's
 rule, unchanged: no `gate:`, `authoritative: local`, or no workflow firing on a session-branch
-push ⇒ the local full gate plus the hermetic run. Measured on shared agent workstations
-(load ≈ 22 on 16 cores): full local suites took 6–10 min and failed on timeouts, then were
-re-run, while the same suites took 2–7 min in branch CI on clean runners — and the #403
-hermetic rule doubled each local run. No source recommends running the full suite both
-locally and in CI:
-
-- Fowler, *Continuous Integration* (2024 rev.) — the CI build is the final check; keep the
-  commit build under ~10 min. <https://martinfowler.com/articles/continuousIntegration.html>
-- *Software Engineering at Google*, ch. 23 (2020) — presubmit runs only fast, reliable tests;
-  larger suites run after. <https://abseil.io/resources/swe-book/html/ch23.html>
-- Humble & Farley, *Continuous Delivery*, ch. 7 (2010) — commit stage under 5 min, never over 10.
-- Machalica et al., *Predictive Test Selection* (ICSE-SEIP 2019) — server-side selection
-  halves cost and still catches > 99.9% of faulty changes. <https://arxiv.org/abs/1810.05286>
-- Lam et al., *The Effects of Computational Resources on Flaky Tests* (2024) — 46.5% of flaky
-  tests are resource-affected, CPU most. <https://arxiv.org/pdf/2310.12132>
+push ⇒ the local full gate plus the hermetic run. Why: [ADR 539](docs/adr/539-branch-ci-rationale.md).
 
 **Read the runs at the branch's current head sha, and report the result as one of four
 classes — not as pass/fail.** The names are shared vocabulary: the implementer records
@@ -1637,13 +1567,12 @@ reading either sees the same spelling. Spell them exactly so, everywhere:
 - **[Hard — gate: colab ship refuses stale-base]** **The run must have seen the current base (#395).** A class read at a head that does not
   contain the base's current tip is **`stale-base`**, whatever its runs say: two branches
   each green alone can combine red when neither run saw the other, and a textually clean
-  merge re-runs nothing. Measured: one branch changed a shared test base class that a
-  second branch's new tests also relied on; both were green, trunk went red on landing.
+  merge re-runs nothing.
   The next step is mechanical — sync the base in, push, wait on the new run (the same
   15-minute bound), then land; `colab ship` refuses with this verdict, `self-clearing`. A
   head with no run at all is not stale (the `none` row above governs it). Skipping the
   re-run because the base's new commits "touch nothing the branch's tests import" is only
-  ever allowed on a measurement, never on a guess — and no generic measurement exists today.
+  ever allowed on a measurement, never on a guess — and no generic measurement exists today. Why: [ADR 539](docs/adr/539-branch-ci-rationale.md).
 - **The quantifiers are the trunk rule's, unchanged (#92, #307).** `every … completed`: a
   fast sibling already green never answers for a slow one still running — that sha is
   `none`, not `green`. `cancelled` is `completed` and not a `failure`, so a cancelled
@@ -1658,12 +1587,7 @@ reading either sees the same spelling. Spell them exactly so, everywhere:
   concludes `success` — the branch reads `green`, truthfully, because the same workflow passed
   at the same sha. Trunk's run still in flight or red, no `gh` on the runner, or any API error
   ⇒ the suite runs as before (fail-open). Every later push skips the guard at scheduling time,
-  so the session's first real commit always gets the full suite at its own sha. Two shapes are
-  deliberately not used. Skipping every job on `github.event.created` leaves a run whose jobs
-  were *all* skipped; it concludes `skipped`, which is not green under the quantifiers above.
-  Waiting in the guard for trunk's in-flight run holds the runner slot that run is queued for.
-  Measured before the change, across five adopting repos over 24 h: ~19% of all CI runs
-  (~104 a day, ~660 runner-minutes) re-ran a trunk-tested sha on a freshly claimed branch.
+  so the session's first real commit always gets the full suite at its own sha. Why: [ADR 539](docs/adr/539-branch-ci-rationale.md).
 - **Trunk reuses a green run of an identical tree (#493).** A ship squash-merges a branch
   whose green run already contained the current base, so the trunk commit's *tree* is
   byte-identical to the tree that run passed — only the sha is new, and a sha-keyed skip can
@@ -1684,15 +1608,10 @@ reading either sees the same spelling. Spell them exactly so, everywhere:
   (publish, deploy, release) never sits behind this gate. One reading turns such a run red: a
   cited head that is local and whose tree provably differs from trunk's (`HUMAN_GATED` —
   trunk is untested at that sha). A citation that cannot be read leaves the run green and says
-  so, because the run's own `success` is the verdict, exactly as for #418. Measured on one
-  adopter with a 35–55 min sharded suite on self-hosted runners: trunk's duplicate run took
-  33–347 min wall time, most of it queueing behind branch runs for the same runners, and one
-  went red on a timeout over a tree that had already passed.
+  so, because the run's own `success` is the verdict, exactly as for #418. Why: [ADR 539](docs/adr/539-branch-ci-rationale.md).
 - **An unclassifiable red is `red:finding`.** Where a repo does not separate exit 1 from
   exit 2, `failure` is all the platform reports: read the failing job's log far enough to
-  say which side of the line it fell on, and if that cannot be told, report `red:finding`.
-  A wrong `red:finding` costs one hand-back to someone who can look; a wrong `red:infra`
-  spends the one re-run and then parks the work in a lane nobody opened.
+  say which side of the line it fell on, and if that cannot be told, report `red:finding`. Why: [ADR 539](docs/adr/539-branch-ci-rationale.md).
 - **Telling `red:infra` from `red:finding` is a test, not taste (#354).** The same test
   reads a red **trunk** run, where it chooses between re-running once and filing a
   `TRUNK RED:` issue — the choice this section's re-run permission otherwise leaves to
@@ -1712,11 +1631,9 @@ reading either sees the same spelling. Spell them exactly so, everywhere:
   3. **Neither ⇒ `red:finding`** — the unclassifiable rule above, unchanged.
 
   Two readings that the text alone gets wrong:
-  - **A timeout is `red:infra` only if the host was loaded.** Measured: two `Test timed
-    out in 5000ms` failures in a file that took 498 s for 49 tests, on a self-hosted
-    runner sitting at load 41 on 16 cores — re-ran green. The same text on an idle host
+  - **A timeout is `red:infra` only if the host was loaded.** The same text on an idle host
     is a real slow-test bug. Check the host (load, swap, I/O pressure) before calling it
-    infra; no host evidence ⇒ `red:finding`.
+    infra; no host evidence ⇒ `red:finding`. Why: [ADR 539](docs/adr/539-branch-ci-rationale.md).
   - **Infra-shaped is not the same as harmless.** A port collision (`EADDRINUSE`) from a
     single random draw with no retry is re-run once to clear the red **and** filed as a
     defect — the re-run unblocks the base, the cause is still the code's. The two are
@@ -1764,11 +1681,7 @@ reading either sees the same spelling. Spell them exactly so, everywhere:
   the patch?** — its title or issue says it repairs the red, or its head fixes the
   failing test. Yes → it goes first, ahead of anything queued. No → it waits, and does
   not rebase onto the red either: containment proves a cure only for a branch that is
-  one. Measured: a trunk went red on a docs-only merge — a test deferring against a
-  hardcoded date that real time walked past, a calendar bomb, no branch's regression.
-  Three branches waited reading one remedy; the one whose parent was the red sha and
-  which fixed the clock opened a PR, ran green, and cure-merged; the two bystanders
-  stayed parked until trunk was green, correctly.
+  one. Why: [ADR 539](docs/adr/539-branch-ci-rationale.md).
 - **A class describes one sha.** Anything that moves the head — a sync merge of the base
   into the branch — invalidates it; read it again at the new head. A green inherited from
   an earlier sha is exactly the green-run-on-a-different-commit this section refuses.
@@ -1787,9 +1700,7 @@ reading either sees the same spelling. Spell them exactly so, everywhere:
 
 The owner's ruling: *"Ship session should never code. Should ask the code session to
 rework."* The coordinator — a ship or sweep session — never edits, commits, wraps or gates
-an implementer's work. Measured: a coordinator asked to wrap a candidate its implementer
-had left uncommitted spent ~40 min running the full test gate on a shared, loaded
-workstation, and the repo's single ship lane landed nothing else meanwhile.
+an implementer's work. Why: [ADR 539](docs/adr/539-who-may-touch-and-batch-landing-rationale.md).
 
 **What stays the coordinator's — git mechanics, not new code.** Three are owner-ruled:
 
@@ -1817,12 +1728,7 @@ has not moved since, it is not repeated.
 
 ### Batch landing — one combined run, then a fast-forward (#373)
 
-Landing is serial by construction: every merge moves trunk, so the next candidate syncs
-the new trunk in and pays a whole CI cycle for its re-run, and trunk's own run for the
-last merge is still in flight when it asks. A queue of green work drains at **one change
-per trunk-CI cycle**. Measured on one repo with an 8–9 minute CI: six candidates green at
-their own heads, at most one landed per cycle — finished work waited hours behind the
-gate, not behind review.
+Why, with the measurement: [ADR 539](docs/adr/539-who-may-touch-and-batch-landing-rationale.md).
 
 Every mature system that lands several changes per cycle (merge trains, merge queues,
 rollups, speculative pipelines) **tests the combined state before it becomes trunk**. None
@@ -1924,11 +1830,8 @@ colab landed --all                 # every worktree of this repo
 **Never decide it by counting commits** — a squash mints a new commit with a new sha, so
 a shipped branch's own commits are never ancestors of its base; a count-only test reports
 every branch ever shipped as unfinished. Comparing diffs alone also fails: zero commits
-ahead but a non-empty diff, because the base moved underneath. Both measured on live
-worktrees in a single sweep. Requiring both still leaves a gap — a squash *followed by*
-base movement satisfies both (five of seven shipped branches in one repo were in this
-state). **The rule asks directly: does merging this branch into its base change the
-base's tree at all?**
+ahead but a non-empty diff, because the base moved underneath. **The rule asks directly: does merging this branch into its base change the
+base's tree at all?** Why: [ADR 539](docs/adr/539-landed-rationale.md).
 
 - **Asked against the branch's base**, trunk only by default — a branch cut from a
   declared line, measured against trunk, looks like enormous unshipped cargo.
@@ -1960,11 +1863,7 @@ state is this actually in*. Do not collapse them.
 **A green branch can be reporting a red base's problem, not its own (#293).** `colab
 ship`'s trunk-CI-green check asks whether trunk is green *right now* — never whether
 the sha a branch was actually *cut from* was green *at the time*, and those differ
-once trunk has moved. Measured: three branches cut from one identical red base sha;
-two drew a green run of their own and shipped unchallenged, one drew red and cost a
-coordinator a hand diagnosis — none of the three touched the failing harness, the
-differing verdicts were a flaky test on the base. The dangerous case is the GREEN
-one: it currently looks safest of all, which is exactly backwards.
+once trunk has moved. Why: [ADR 539](docs/adr/539-landed-rationale.md).
 
 ```sh
 colab landed --worktree <name> --ci     # adds: was the cut-from sha actually green?
@@ -4534,7 +4433,6 @@ workflow calling a dist-refs workflow (private compiled). A missing route is **a
 a publish in a reusable workflow outside the repository is invisible to the check. An undeclared
 repository is never checked — nothing in a repository tells a tool from a library, so the audit
 does not guess (#469).
-
 
 ### Services over npx — init, update, rollback (#465)
 
