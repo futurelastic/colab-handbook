@@ -2828,13 +2828,8 @@ properties hold it together:
   and voids it.
   Why, with the measurements: [ADR 98](docs/adr/98-migration-exemption-rationale.md).
   A record with no content id (minted before #508, or on a branch with no migration file)
-  stays bound to its HEAD alone, and a new commit voids it as before. A reader that predates
-  the field sees an unknown key and refuses the record, so an older `colab` fails closed.
-  For a branch that does carry migrations, a missing id is a refusal at write time, never
-  a silent HEAD-only grant (#563). `colab migration-grant` refuses and names why when it
-  cannot list the branch's files against trunk or read their tree at the tip. Any other lane
-  that posts the grant marker owes the same refusal. A HEAD-only grant there is voided by the
-  very trunk sync ship asks for.
+  stays bound to its HEAD alone, and a new commit voids it as before. Older readers refuse the
+  unknown key. A branch with a migration never gets one: no computable id is refused (#563).
 - **Opt-in per repo.** `migration-grant: reviewer` is read from the trunk checkout when a grant is minted. The default is `human`, and
   `colab migration-grant` refuses to mint a reviewer grant anywhere else.
 - **Recorded only if the review passed.** The record must approve, pass the checklist,
