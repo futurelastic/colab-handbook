@@ -14,6 +14,7 @@ const { execFileSync, spawnSync } = require('child_process');
 
 const stamp = require('./stamp');
 const check = require('./install-check');
+const engines = require('./engines');
 
 const ROOT = path.resolve(__dirname, '..', '..');
 const INSTALL = path.join(ROOT, 'install.sh');
@@ -271,7 +272,7 @@ test('install.sh --check on a machine with nothing installed: only ⚠ rows, exi
   assert.doesNotMatch(r.stdout, /^\s+✗ /m, "a ✗ row"); // the summary line itself says "no ✗ rows"
   // Only paths install.sh owns. The preflight's `gh auth status` writes gh's own
   // ~/.local/state/gh/device-id, which is gh's doing and predates --check.
-  for (const p of ['.colab', '.claude', path.join('.local', 'bin')]) {
+  for (const p of ['.colab', '.claude', '.agents', path.join('.local', 'bin')]) {
     assert.ok(!fs.existsSync(path.join(home, p)), `--check wrote ${p} into HOME`);
   }
 });
@@ -380,6 +381,8 @@ function releasedHandbook(t) {
   write('skills/demo/SKILL.md', '---\nname: demo\n---\nrc\n');
   git(origin, 'add', '-A'); git(origin, 'commit', '-qm', 'rc'); git(origin, 'tag', 'v1.1.0-rc.1');
   write('install.sh', installText, 0o755);
+  // The real installer reads its install targets from engines/ (#530); trunk ships them beside it.
+  for (const f of fs.readdirSync(path.join(ROOT, 'engines'))) write(`engines/${f}`, fs.readFileSync(path.join(ROOT, 'engines', f), 'utf8'));
   git(origin, 'add', '-A'); git(origin, 'commit', '-qm', 'trunk work');
   execFileSync('git', ['clone', '-q', origin, clone], { stdio: 'ignore' });
   return { clone, git: (...a) => git(clone, ...a) };
@@ -453,4 +456,111 @@ test('#521: a fresh --tools --fleet then --check is ⚠-only, exit 0 — not set
   assert.strictEqual(c.status, 0, c.stdout + c.stderr);
   assert.doesNotMatch(c.stdout, /^\s+✗ /m);
   assert.match(c.stdout, /⚠ fleet\s+nothing registered yet/);
+});
+
+// --- engines (#530): the install target is per engine, chosen by flag or at a prompt -------------
+
+const SKILL_NAMES = fs.readdirSync(path.join(ROOT, 'skills'), { withFileTypes: true }).filter((d) => d.isDirectory()).map((d) => d.name);
+const linkedInto = (dir) => SKILL_NAMES.filter((n) => {
+  try { return fs.readlinkSync(path.join(dir, n)) === path.join(ROOT, 'skills', n); } catch (_) { return false; }
+});
+
+test('#530: every engine file declares every key, with yes/no where the format says so', () => {
+  const all = engines.listEngines(ROOT);
+  assert.deepStrictEqual(all.map((e) => e.id).sort(), ['claude', 'codex', 'generic']);
+  for (const e of all) {
+    for (const k of ['label', 'skills_dir', 'invoke', 'instructions', 'helper_agents', 'load_time_injection', 'shell_network', 'verified']) {
+      assert.ok(k in e, `engines/${e.id}.conf has no ${k}:`);
+    }
+    for (const k of ['helper_agents', 'load_time_injection']) assert.match(e[k], /^(yes|no)$/, `${e.id} ${k}`);
+    assert.match(e.shell_network, /^(yes|no|unknown)$/, `${e.id} shell_network`);
+  }
+  assert.strictEqual(all.find((e) => e.id === 'generic').skills_dir, '', 'generic must leave the folder to the user');
+  assert.deepStrictEqual(all.filter((e) => e.default === 'yes').map((e) => e.id), ['claude'], 'exactly one default engine, and it is Claude Code (#530)');
+});
+
+test('#530: install.sh (sed) and engines.js read every engine file the same way', () => {
+  for (const e of engines.listEngines(ROOT)) {
+    for (const k of ['label', 'skills_dir', 'invoke']) {
+      const sed = execFileSync('sed', ['-n', `/^${k}:/{s/^${k}:[[:space:]]*//;p;q;}`, path.join(ROOT, 'engines', `${e.id}.conf`)], { encoding: 'utf8' }).replace(/\n$/, '');
+      assert.strictEqual(sed, e[k], `${e.id} ${k}`);
+    }
+  }
+  const p = engines.parseConf('# c\nlabel: A\nlabel: B\nnote: one\nnote: two\nskills_dir:\n');
+  assert.deepStrictEqual(p, { label: 'A', skills_dir: '', note: ['one', 'two'], caveat: [] });
+});
+
+test('#530: no flag, not a terminal, nothing linked → Claude Code, said aloud; a re-run changes nothing', (t) => {
+  const home = tmp(t);
+  const r = runInstall(home, []);
+  assert.strictEqual(r.status, 0, r.stdout + r.stderr);
+  assert.match(r.stdout, /none had the skills linked yet → defaulted to claude/);
+  assert.match(r.stdout, /--engine <id>/);
+  assert.deepStrictEqual(linkedInto(path.join(home, '.claude', 'skills')), SKILL_NAMES);
+  assert.ok(!fs.existsSync(path.join(home, '.agents')), 'a no-flag install must not pick a second engine');
+  assert.doesNotMatch(r.stdout, /takes precedence over this\s/, 'the old, wrong precedence note is back');
+
+  const again = runInstall(home, []);
+  assert.strictEqual(again.status, 0, again.stdout + again.stderr);
+  assert.doesNotMatch(again.stdout, /defaulted to/);
+  assert.doesNotMatch(again.stdout, /🔗 link/, 'a re-run linked something new');
+});
+
+test('#530: --engine and --skills-dir install there; a later no-flag run keeps every one; --check reports each', (t) => {
+  const home = tmp(t);
+  const own = path.join(home, 'my-agent', 'skills');
+  const r = runInstall(home, ['--engine', 'codex', '--skills-dir', own]);
+  assert.strictEqual(r.status, 0, r.stdout + r.stderr);
+  assert.deepStrictEqual(linkedInto(path.join(home, '.agents', 'skills')), SKILL_NAMES);
+  assert.deepStrictEqual(linkedInto(own), SKILL_NAMES);
+  assert.ok(!fs.existsSync(path.join(home, '.claude')), 'an explicit --engine must not add claude');
+  assert.match(r.stdout, /⚠ the default workspace-write sandbox has NO network/, 'the engine caveat was not printed');
+  assert.strictEqual(fs.readFileSync(path.join(home, '.colab', 'skills-dirs'), 'utf8'), own + '\n');
+
+  const again = runInstall(home, []);
+  assert.strictEqual(again.status, 0, again.stdout + again.stderr);
+  assert.match(again.stdout, /skills → .*\.agents\/skills/);
+  assert.match(again.stdout, new RegExp(`skills → ${own.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`));
+  assert.strictEqual(fs.readFileSync(path.join(home, '.colab', 'skills-dirs'), 'utf8'), own + '\n', 'remembered twice');
+
+  const c = runInstall(home, ['--check']);
+  assert.strictEqual(c.status, 0, c.stdout + c.stderr);
+  assert.match(c.stdout, new RegExp(`✓ skills\\s+codex .*: ${SKILL_NAMES.length}/${SKILL_NAMES.length} linked`));
+  assert.match(c.stdout, new RegExp(`✓ skills\\s+generic .*my-agent/skills: ${SKILL_NAMES.length}/${SKILL_NAMES.length} linked`));
+  assert.match(c.stdout, /⚠ skills\s+codex: the default workspace-write sandbox/);
+  assert.match(c.stdout, /✓ skills\s+not installed for: claude/);
+});
+
+test('#530: an unknown engine, or generic with no folder, refuses before anything is written', (t) => {
+  const home = tmp(t);
+  const bad = runInstall(home, ['--engine', 'nope']);
+  assert.strictEqual(bad.status, 2);
+  assert.match(bad.stderr, /no engine 'nope' — known: claude codex/);
+  const gen = runInstall(home, ['--engine=generic']);
+  assert.strictEqual(gen.status, 2);
+  assert.match(gen.stderr, /--skills-dir <path>/);
+  assert.deepStrictEqual(fs.readdirSync(home), [], 'a refused run wrote into HOME');
+});
+
+test('#530: --check skills rows — broken link ✗, missing ⚠, a Claude-only machine is not told off', (t) => {
+  const home = tmp(t);
+  const colabHome = path.join(home, '.colab');
+  assert.deepStrictEqual(check.checkSkills({ root: ROOT, home, colabHome }).map((r) => r.severity), [check.WARN]);
+
+  const dir = path.join(home, '.claude', 'skills');
+  fs.mkdirSync(dir, { recursive: true });
+  for (const n of SKILL_NAMES) fs.symlinkSync(path.join(ROOT, 'skills', n), path.join(dir, n));
+  let rows = check.checkSkills({ root: ROOT, home, colabHome });
+  assert.deepStrictEqual(rows.map((r) => r.severity), [check.OK, check.OK], JSON.stringify(rows));
+  assert.match(rows[1].text, /not installed for: codex/);
+
+  fs.unlinkSync(path.join(dir, SKILL_NAMES[0]));
+  rows = check.checkSkills({ root: ROOT, home, colabHome });
+  assert.strictEqual(rows[0].severity, check.WARN);
+  assert.match(rows[0].text, new RegExp(`missing ${SKILL_NAMES[0]} — re-run ./install.sh --engine claude`));
+
+  fs.symlinkSync(path.join(ROOT, 'skills', 'removed-upstream'), path.join(dir, 'removed-upstream'));
+  rows = check.checkSkills({ root: ROOT, home, colabHome });
+  assert.strictEqual(rows[0].severity, check.FAIL);
+  assert.match(rows[0].text, /BROKEN links to skills that no longer exist: removed-upstream/);
 });
