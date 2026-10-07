@@ -369,7 +369,9 @@ gh issue view $N --json labels -q '.labels[].name' | grep -qx needs-plan && echo
   ```
   **Cannot state the oracle line?** That is the ambiguity trigger firing, not a prompt to
   guess. Stop, comment the question onto the Issue, and wait — do not drop to rung 0
-  and do not invent an oracle so the stub looks complete.
+  and do not invent an oracle so the stub looks complete. **Part of the acceptance only a person
+  can run** (a real device, a real account, a check by eye)? Plan it as a `Human verify:` row,
+  `Oracle: <tests> + Human verify row: <check>`, never as a reason to park the issue (`code-wrap`, #541).
 - **Trivial/mechanical, oracle self-evident** → rung 0, nothing to write. Do not manufacture
   a stub for the sake of having one.
 

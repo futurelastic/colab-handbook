@@ -111,6 +111,8 @@ reads as startable code work again. So in the **same step** as the ship:
     | sed 's#.*/##')        # also add this repo's human-wait label from `holds:`, if it declares one
   gh issue comment "$HV" --body $'- [ ] #'"$N"$' — <steps to run>\n  Evidence wanted: <what the person posts back>'
   ```
+  `code-wrap` normally added this row already (#541): if the `Human verify:` issue has a row
+  for `#$N`, do not add a second one.
   Stopping once per finished issue is what this replaces. In one adopted repo, five
   finished issues sat open for days as `deferred:measurement`, and the person they
   were waiting on never saw them.
