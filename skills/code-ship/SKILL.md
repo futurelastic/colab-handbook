@@ -81,7 +81,8 @@ Full text: [0-handoff-contract.md](0-handoff-contract.md).
 the go-ahead for the trunk merge (B2) once every gate below passes on its own terms.
 Otherwise ⇒ a fresh human go-ahead — typed in the session, or a dashboard click carrying a
 timestamp **and** an intent id — unless `colab ship --dry` itself reports the change
-docs-only (#345). Without either, `colab ship` refuses an agent: hand the human the command
+docs-only (#345) or tuning-only (#561: `.github/project.yml` tuning keys alone — no issue, so no
+`Closes #N` and no issue comment; the evidence is in the commit body). Without either, `colab ship` refuses an agent: hand the human the command
 its refusal prints, and they run it through the human door (#525). Never set the `COLAB_HUMAN`
 flag on a go-ahead's strength. Never compose a go-ahead yourself. No door ever covers a promotion,
 a tag or anything that deploys.

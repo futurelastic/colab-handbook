@@ -166,5 +166,5 @@ function directChanges(git, repo, trunk, since) {
 
 module.exports = {
   DOC_EXTENSIONS, DOCS_DIR, NEVER_BASENAMES, NEVER_DIRS, NEVER_SUBDIRS,
-  pathReason, classify, parseRaw, parseBinary, branchChanges, directChanges,
+  pathReason, classify, parseRaw, parseBinary, readEntries, branchChanges, directChanges,
 };

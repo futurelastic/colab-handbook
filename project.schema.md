@@ -389,6 +389,10 @@ How much of a session's Phase B (merge to **trunk**) an agent may perform alone.
   measures as documentation only passes the autonomy gate without this grant —
   [CONVENTIONS.md §2, *Autonomy — the docs-only exception*](CONVENTIONS.md#autonomy--the-docs-only-exception-345).
   No value of this field, or of any other, widens what counts as documentation.
+  **A second, also computed (#561):** a diff that changes only tuning keys of this file
+  (`ship-batch`, `ship-batch-wait`, `ci-wait-factor`, `thresholds`) to valid values passes it
+  too, with no issue — `colab config set <key> <value> --evidence "<why>"` writes one —
+  [CONVENTIONS.md §2, *Autonomy — the tuning-only class*](CONVENTIONS.md#autonomy--the-tuning-only-class-561).
 - **[Hard — gate: colab ship refuses]** `auto-trunk` — an agent may complete the trunk merge itself **through `colab ship`
   only**, and only when every precondition passes: trunk CI alive and green, no new
   DB migrations in the branch, no hand-code conflicts after sync-regen. Any ✗ falls
