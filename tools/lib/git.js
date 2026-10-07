@@ -1061,8 +1061,9 @@ function ghRunForCommit(repo, branch, sha, limit = 10, opts = {}) {
  */
 function ghRunsAtCommit(repo, sha, limit = 100) {
   if (!sha) return null;
+  // updatedAt is additive (#566): release finalize places a run around the candidate's cut instant.
   const r = gh(['run', 'list', '--commit', sha, '-L', String(limit),
-    '--json', 'headSha,status,conclusion,createdAt,databaseId,workflowName,event'], { cwd: repo });
+    '--json', 'headSha,status,conclusion,createdAt,updatedAt,databaseId,workflowName,event'], { cwd: repo });
   if (!r.ok) return null;
   let runs;
   try { runs = JSON.parse(r.stdout); } catch (_) { return null; }
