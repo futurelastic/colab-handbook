@@ -5046,12 +5046,10 @@ only. Resolution order: `--config` flag > `~/.colab/repos.txt` > bundled example
    | 5 | by what path does a commit reach something that runs it? (a list — several may apply) | [`channels`](#channels--by-what-path-does-code-reach-the-thing-that-runs-it) | `workflow` / `hook` / `procedure` / `checkout` / `artifact` / `data` / `none` | optional — later, `--axis channels` |
 
    **Adoption asks only what changes a gate (#533).** Questions 1 and 3 decide the gate
-   count; 2, 4 and 5 are optional in the schema and legal absent — `room` only tunes how
-   verbose the trail is, `writes` absent already reads as the common `free`, and `channels`
-   is descriptive (and easy to mis-answer `workflow` on a repo that merely has CI). So a
-   fresh adoption leaves them unanswered and prints one line naming them and the
-   `colab adopt --axis <row>` that answers each later. Their flag (`--room`, `--writes`,
-   `--channels`) still answers one in the same run.
+   count; 2, 4 and 5 are optional in the schema and legal absent. So a fresh adoption
+   leaves them unanswered and prints one line naming them and the `colab adopt --axis
+   <row>` that answers each later. Their flag (`--room`, `--writes`, `--channels`) still
+   answers one in the same run.
 
    **[Hard — gate: adopt human gate]** **The human step comes first, not last (#522).** Answering question 3 with `none` or
    `self` is a human's act (below). An agent driving an adoption should know that before it
@@ -5064,30 +5062,24 @@ only. Resolution order: `--config` flag > `~/.colab/repos.txt` > bundled example
 
    Question 1 writes `production` and `deploy`, never `tier` directly — `tier` is a pure
    function of those two answers (`tools/lib/adopt.js:deriveTier`: no production → `B`;
-   production + `push-main` → `C`; production + `tag`/`manual` → `A`), so asking for the
-   letter directly would be asking for a value that is always derivable from a more basic
-   answer already on record — the same drift-by-redundancy this whole model exists to stop.
+   production + `push-main` → `C`; production + `tag`/`manual` → `A`).
 
-   Question 3 is phrased this way — never "who consumes this?" — per the ruling on #128:
-   the person answering is standing in the repo, not reading a schema, and "what breaks"
-   is the question they can actually answer.
+   Question 3 is phrased this way — never "who consumes this?".
 
    **Detected, never asked:** `trunk` (the default branch), `stack` and toolchain pins
    (read from the repo's own manifests), `ports` (existing config or reservations). Do not
    ask a human something the repo already states.
 
-   **Derived, never asked:** gate count, CI role and thoroughness, ceremony weight, whether
-   a branch is mandatory, the rollback obligation. Every one of these follows from the
-   answers above; a checklist that also prompts for a derived value is exactly how the
-   fields drift apart from each other again (the failure this whole model exists to stop).
+   **Derived, never asked:** gate count, CI role and thoroughness, ceremony weight,
+   whether a branch is mandatory, the rollback obligation. Every one of these follows from
+   the answers above.
 
    **Two entry states, one set.** A repo with nothing recorded yet asks the two gating
-   questions now, during first-time adoption, and leaves the optional three for later. A repo that already adopted before one of the newer
-   axes existed asks only the gating axes it is missing (the optional three stay optional
-   there too) — same five questions, same wording, at
-   sync time ("Predates an axis", `handbook-sync`). Building this once and pointing both
-   moments at it is the point; do not let a sync grow its own paraphrase of these five
-   rows.
+   questions now, during first-time adoption, and leaves the optional three for later. A
+   repo that already adopted before one of the newer axes existed asks only the gating
+   axes it is missing (the optional three stay optional there too) — same five questions,
+   same wording, at sync time ("Predates an axis", `handbook-sync`); do not let a sync
+   grow its own paraphrase of these five rows.
 
    **Asking is not the same as writing.** A sync (or a first-time adoption interrupted
    partway through) records a human's answer; it never fills a missing key on its own,
@@ -5100,31 +5092,26 @@ only. Resolution order: `--config` flag > `~/.colab/repos.txt` > bundled example
    `null` (undeclared, and legal); only a human answer may write down that nothing, or only
    the room, consumes a merge here.
 
-   **[Hard — gate: adopt human gate]** **`colab adopt` executes this checklist.** It detects what a repo already states, asks
-   a human only what could not be detected (flags, or an interactive prompt at a
-   terminal), derives the rest, and writes `.github/project.yml` in one act — the same
-   shape `colab template` already uses for copy-and-stamp. A row already answered is
-   skipped; `--axis <row>` forces a re-ask on purpose (the "going live" ladder below asks
-   for exactly that). Lowering an existing `exposure` — or a first declaration of
-   `none`/`self` — requires a human: an interactive terminal, or `COLAB_HUMAN=1` together
-   with `--answered-by <name>` (the same bar `colab ship`'s gates use, and no stronger —
-   see the command's `--help` for the honest limit). Raising, or a first declaration of
-   `live`/`released`, needs nothing beyond the falsifier/shape clearance described above —
-   an agent may run this unattended for exactly the direction CONVENTIONS.md [§2](#exposure--what-consumes-a-merge-here)'s asymmetry
-   already allows it to propose. `colab adopt` never runs steps 3 onward below; it prints
-   them as a to-do list on exit. **The five questions above are asked as forced numbered
-   menus (#283)**, not free text — every option is answerable by its number or its literal
-   value — and `exposure` is the only one of the five that carries a skip option (its own
-   fallback, deriving `tier` instead, is a real fallback that consumes the absence; the
-   other four have none, so declining them would just recreate #282's shape under a
-   different row).
+   **[Hard — gate: adopt human gate]** **`colab adopt` executes this checklist.** It
+   detects what a repo already states, asks a human only what could not be detected
+   (flags, or an interactive prompt at a terminal), derives the rest, and writes
+   `.github/project.yml` in one act — the same shape `colab template` already uses for
+   copy-and-stamp. A row already answered is skipped; `--axis <row>` forces a re-ask on
+   purpose (the "going live" ladder below asks for exactly that). Lowering an existing
+   `exposure` — or a first declaration of `none`/`self` — requires a human: an interactive
+   terminal, or `COLAB_HUMAN=1` together with `--answered-by <name>` (the same bar `colab
+   ship`'s gates use, and no stronger — see the command's `--help` for the honest limit).
+   Raising, or a first declaration of `live`/`released`, needs nothing beyond the
+   falsifier/shape clearance described above — an agent may run this unattended for
+   exactly the direction CONVENTIONS.md [§2](#exposure--what-consumes-a-merge-here)'s
+   asymmetry already allows it to propose. `colab adopt` never runs steps 3 onward below;
+   it prints them as a to-do list on exit. **The five questions above are asked as forced
+   numbered menus (#283)**, not free text — every option is answerable by its number or
+   its literal value — and `exposure` is the only one of the five that carries a skip
+   option.
 
-   **Land the descriptor on trunk in the same human act (#481).** On a freshly adopted
-   repo, the first branch is the one that *creates* trunk's rules — the descriptor with
-   the maintainer's grant, and the repo's CI. `colab ship` reads autonomy from the
-   descriptor **trunk** carries, so that branch is judged by rules trunk does not have
-   yet, and a human ends up hand-merging it although the grant was already given. The
-   maintainer's adoption command is the human step, so it can land its own output:
+   **Land the descriptor on trunk in the same human act (#481).** The maintainer's
+   adoption command is the human step, so it can land its own output:
    ```sh
    COLAB_HUMAN=1 colab adopt --exposure self --autonomy auto-trunk \
      --answered-by "<name>" --land          # run on the checkout standing on trunk
@@ -5148,8 +5135,7 @@ only. Resolution order: `--config` flag > `~/.colab/repos.txt` > bundled example
    ([`project.schema.md`](project.schema.md#migrations--optional)). None of the five
    questions asks it, so `colab adopt` lists it as the first remaining step, naming the
    candidate layouts it found (`git ls-files`: an uncovered `migrations/` directory, or a
-   directory of tracked `*.sql` files). Until it is declared, the no-new-migrations gate
-   cannot see those files (#449).
+   directory of tracked `*.sql` files).
 3. **Create the whole label set — twenty-three names, not a subset** (`in-progress`,
    `deps-checked`, `agent-filed`, `epic`, `needs-decision`, `decision-recorded`,
    `needs-plan`, `migration-granted`, `needs-migration-grant`, `ci-granted`,
@@ -5167,58 +5153,35 @@ only. Resolution order: `--config` flag > `~/.colab/repos.txt` > bundled example
    (No `colab` on this machine? The twenty-three `gh label
    create … || true` lines this replaced are recoverable from that file's history.)
 
-   **This count is a hand-typed number restated in at least four places** (here, the
-   `gh label create` fallback line above, `skills/handbook-sync/SKILL.md`, and
-   `tools/lib/codec/labels.js`'s own doc comment) — **none checkable against the others except
-   the one pinned assertion in `tools/lib/labels-ensure-cli.test.js`.** #274: adding
-   `delivery:elsewhere` left three of the four wrong until found by hand. Add a label,
-   bump that test, then grep for the other three prose counts before you're done.
-   What each absence costs, briefly: `in-progress` — the first claim cannot land.
-   `deps-checked` — a readiness check can never tell *free* from *nobody looked*.
-   `agent-filed` — every agent-filed issue reports as human-approved. `epic` — an epic
-   passes every readiness gate and reads as a normal start candidate. `needs-decision` —
-   the blocking-question gate cannot be applied at all. `decision-recorded` — a recorded
-   answer has no positive marker to distinguish it from a label nobody ever applied, so the
-   next mechanical pass re-gates settled work (measured: #127). `needs-plan` —
-   `code-start` always sees "no flag", every session falls back to rung 1.
-   `migration-granted`/`ci-granted` are **not opt-in** (unlike `tracking`) — absence fails
-   malignantly, discovered only when a repo hits the wall with no route past `ship`'s gate
-   at all. `needs-migration-grant` — the plan-time flag a consumer raises before `ship`
-   would refuse has nowhere to land, so the grant request never surfaces until the wall
-   (#230). `low-priority` — a triage pass has no way to say "startable, but ranked last",
-   so a group meant to wait its turn is reported exactly like every other ready group
-   (#268). `priority:now`/`priority:high` — an owner's "do this first" has nowhere to be
-   recorded, so it lives in a chat a scheduler cannot read (#537). `delivery:*` — a content push or ops check has no way to say "not a diff" and
-   jams the code pipeline, and a new surface's design issue reads as a code start (#359). `deferred:*` — a triage pass has no way to say "parked, and
-   here is what wakes it", so a deliberate park is indistinguishable from an unexamined
-   issue — measured at 11 + 4 issues misreporting as untriaged across two repos (#279).
+   **This count is a hand-typed number restated in at least four places** (here, the `gh
+   label create` fallback line above, `skills/handbook-sync/SKILL.md`, and
+   `tools/lib/codec/labels.js`'s own doc comment) — **none checkable against the others
+   except the one pinned assertion in `tools/lib/labels-ensure-cli.test.js`.** Add a
+   label, bump that test, then grep for the other three prose counts before you're done.
    This full set is provisioned again on every sync, not only at adoption.
 4. **Add the tier topic** — `gh repo edit <owner>/<repo> --add-topic tier-b` (or
    `tier-c`/`tier-a`).
 5. **Add the handbook pointer to `CLAUDE.md`** — copy
    [`templates/repo-CLAUDE-block.md`](templates/repo-CLAUDE-block.md); create the file if
-   none exists. **Do not skip this** — it is the only reason a future agent discovers
-   these conventions. `colab adopt` writes it for you on a repo adopting for the first
-   time that has no `CLAUDE.md` yet, in the shape below.
+   none exists. **Do not skip this**. `colab adopt` writes it for you on a repo adopting
+   for the first time that has no `CLAUDE.md` yet, in the shape below.
 
    **The instruction-file shape (#417).** Most agent tools read `AGENTS.md`; one reads
    `CLAUDE.md` by name. So:
    - **Repo prose goes in `AGENTS.md`** — what the repo is, how to run and test it,
      pointers into `docs/`. It is the repo's *instruction file*: the one you edit.
-   - **`CLAUDE.md` is a thin shell:** `@AGENTS.md` on its first line, plus the blocks tools
-     look up in `CLAUDE.md` by name — this Conventions block with its stamp, any
-     `Local divergences:` list beside it, and any other tool-managed block that is found by
-     filename. The stamp only works there: the audit, `handbook-sync` and `colab update`
-     never follow the import to find it.
+   - **`CLAUDE.md` is a thin shell:** `@AGENTS.md` on its first line, plus the blocks
+     tools look up in `CLAUDE.md` by name — this Conventions block with its stamp, any
+     `Local divergences:` list beside it, and any other tool-managed block that is found
+     by filename.
    - **No block lives in both files.** A framework generator that supports targets is
-     configured to write `AGENTS.md` **only** (Laravel Boost: its agent/target config). A
-     block in both is loaded twice into every session once `CLAUDE.md` imports `AGENTS.md`,
-     and a generator writing both re-adds the copy after any hand cleanup.
+     configured to write `AGENTS.md` **only** (Laravel Boost: its agent/target config).
    - A repo with only a `CLAUDE.md` is still conforming — the shell is the shape for new
      repos and the target for migrations, not a reason to fail an existing one.
-   - **A fork of an upstream you don't own does not take this shape** — the thin-shell
-     conversion would rewrite a file the upstream keeps editing. Its step 5 is the
-     append-only block in [*A fork of an upstream*](#a-fork-of-an-upstream--a-repo-you-own-that-tracks-one-you-dont-449), below.
+   - **A fork of an upstream you don't own does not take this shape**. Its step 5 is the
+     append-only block in [*A fork of an
+     upstream*](#a-fork-of-an-upstream--a-repo-you-own-that-tracks-one-you-dont-449),
+     below.
 
    The audit holds this shape: its size advisory measures `CLAUDE.md` **plus every in-repo
    file it `@`-imports**, so a bloated `AGENTS.md` behind a tiny shell is still caught; it
@@ -5226,21 +5189,21 @@ only. Resolution order: `--config` flag > `~/.colab/repos.txt` > bundled example
    anywhere but `CLAUDE.md`, when `CLAUDE.md` carries repo prose (`prose-in-claude-md`, with
    the line ranges) and when there is no `AGENTS.md` (`no-agents-md`) — #419. All warnings,
    never failures; `handbook-sync` carries the move as a graft step.
-6. **Make sure CI meets [§7](#7-ci-and-toolchain)'s outcome** — copy a template via
-   `colab template <name>`, which stamps for reconciliation. **On `exposure: released`, this
-   step also wires the release rung ([§6](#6-releases)) — at adoption, not later** (#492): the
-   `release:` block with the route the descriptor's row takes and `version-source: tag`, the
-   release workflow (`templates/release-auto.yml`, its edit points walked), the deploy template
-   for the stack where the tag deploys — copied disarmed, armed by the operator — and a first
-   final, which is the operator's to set because `colab release cut` refuses with none to bump
-   from. A released repo adopted without them never cuts a candidate until someone notices:
-   measured on six adopters in one sweep, and more that had the workflow but no first final.
-   `colab adopt` lists these as step-6 lines; the no-production row's route is a proposal for
-   the human to confirm, never a choice the agent makes.
+6. **Make sure CI meets [§7](#7-ci-and-toolchain)'s outcome** — copy a template via `colab
+   template <name>`, which stamps for reconciliation. **On `exposure: released`, this step
+   also wires the release rung ([§6](#6-releases)) — at adoption, not later** (#492): the
+   `release:` block with the route the descriptor's row takes and `version-source: tag`,
+   the release workflow (`templates/release-auto.yml`, its edit points walked), the deploy
+   template for the stack where the tag deploys — copied disarmed, armed by the operator —
+   and a first final, which is the operator's to set because `colab release cut` refuses
+   with none to bump from. `colab adopt` lists these as step-6 lines; the no-production
+   row's route is a proposal for the human to confirm, never a choice the agent makes.
 7. **Register the repo** — `colab register`, updating both the audit fleet list and the
    reserved-ports aggregation. Unregistered = invisible to the fleet audit.
 8. **Leave existing branches alone** — grandfathered.
 9. **Do not create `dev`** unless the repo is genuinely Tier A or Tier C.
+
+Why, with the measurements: [ADR 539](docs/adr/539-adoption-first-time-rationale.md).
 
 ### Going live: Tier B → Tier C or Tier A
 
@@ -5251,8 +5214,7 @@ Do this **on the day a deploy target exists** — not before.
    repo. One of these must be committed before proceeding.
 2. `git checkout -b dev main && git push -u origin dev`
 3. Set the repo's default branch to `dev`.
-4. **Add `dev` to every CI workflow's trigger branches** — CI that still gates only
-   `main` runs zero checks on your actual work.
+4. **Add `dev` to every CI workflow's trigger branches**.
 5. Update `project.yml`: **C** — `tier: C`, `trunk: dev`, real `production:`,
    `deploy: push-main`. **A** — `tier: A`, `trunk: dev`, real `production:`, and
    `deploy: tag` or `deploy: manual` + `runbook:` — never `push-main`. *Tag-gated
@@ -5265,16 +5227,16 @@ Do this **on the day a deploy target exists** — not before.
    channel (`workflow`, at minimum). Leave `room` and `writes` alone unless who works
    here, or how many units are in flight, genuinely changed too.
 
-Step 1 comes first because `main` only becomes meaningful once something consumes it —
-what must not exist is a `main` that nothing and nobody reads.
+Step 1 comes first. Why, with the measurement: [ADR
+539](docs/adr/539-adoption-tier-transitions-rationale.md).
 
 ### Tier C → Tier A — when the site earns a release ritual
 
-Do this when you find yourself *wanting* to name what shipped — not before, since an
-unused tag ritual decays exactly like an unused branch.
+Do this when you find yourself *wanting* to name what shipped — not before.
 
-1. **Retrigger the deploy workflow on a tag** instead of a `main` push — the whole
-   change; until it lands, the tier claim would be false.
+1. **Retrigger the deploy workflow on a tag** instead of a `main` push — the whole change.
+   Why, with the measurement: [ADR
+   539](docs/adr/539-adoption-tier-transitions-rationale.md).
 2. Update `project.yml`: `tier: A`, `deploy: tag`. `trunk` stays `dev`.
 3. Swap the topic to `tier-a`.
 4. Tag the current `main`, so the first tagged release names what is already live.
@@ -5292,9 +5254,7 @@ Everything above assumes the repo's **owner** is the one adopting. Sometimes tha
 the case. The fleet has to build in a repository whose owner has not adopted this
 handbook, who reviews and merges changes himself, and where committing handbook files is
 not an option. That repo can still be driven by `code-start` → `code-wrap` → `colab ship`,
-and nothing lands in the owner's history (#393). The measured case: a private repo owned
-by another developer, default branch `master`, no handbook files, with the fleet building
-a service layer on a long-lived branch of its own.
+and nothing lands in the owner's history (#393).
 
 **The minimum is small, and all of it stays out of the owner's repo:**
 
@@ -5307,15 +5267,13 @@ a service layer on a long-lived branch of its own.
 | registry entry | the operator's machine | already local |
 | CI templates, CODEOWNERS, the `CLAUDE.md` block, the topic | **not needed** | nothing in claim, start or ship gates on them, and each would be a commit or setting the owner never asked for |
 
-**[Hard — gate: adopt human gate]** **The pattern: `trunk:` names the fleet's own integration branch** (e.g.
-`<prefix>/integration`), never the owner's default branch. Claims, worktrees, grading and
-`colab ship` then work unchanged. Sessions branch off the integration branch, `ship`
-merges into it, and the owner's trunk is reached only by a pull request he reviews and
-merges himself — `colab deliver`, below. Declare **`exposure: self`**: a merge onto the integration branch reaches
-only the fleet, and the owner's review is the next gate. `self` is human-gated
-([§2](#2-tiers)), as always. The legacy fallback does not work here, because it would
-derive `tier: B`, which is the single-trunk shape, and the integration branch is never the
-repo's only long-lived branch.
+**[Hard — gate: adopt human gate]** **The pattern: `trunk:` names the fleet's own
+integration branch** (e.g. `<prefix>/integration`), never the owner's default branch.
+Claims, worktrees, grading and `colab ship` then work unchanged. Sessions branch off the
+integration branch, `ship` merges into it, and the owner's trunk is reached only by a pull
+request he reviews and merges himself — `colab deliver`, below. Declare **`exposure:
+self`**: a merge onto the integration branch reaches only the fleet, and the owner's
+review is the next gate. `self` is human-gated ([§2](#2-tiers)), as always.
 
 **[Hard — gate: adopt human gate]** **One command does it** (a human answers the exposure row, at a terminal or with
 `COLAB_HUMAN=1 --answered-by <name>`):
@@ -5355,11 +5313,9 @@ COLAB_HUMAN=1 colab deliver         # open (or refresh) ONE PR integration → o
 - **[Hard — gate: owner-branch guard]** **It never merges.** The owner merges by merge commit, squash or rebase — his call. No
   colab command moves his branch: `ship`, the ship batch and `promote` refuse a push to it,
   and `COLAB_HUMAN=1` does not lower that.
-- **Delivered is read from PR state.** After a squash or rebase no integration commit is an
-  ancestor of the owner's branch, so ancestry cannot answer "was this delivered". The last
-  merged delivery PR's head is the boundary; the next run offers only what landed after it,
-  in a fresh PR. An open PR is refreshed (its head follows the integration branch on its
-  own), never duplicated.
+- **Delivered is read from PR state.** The last merged delivery PR's head is the boundary;
+  the next run offers only what landed after it, in a fresh PR. An open PR is refreshed
+  (its head follows the integration branch on its own), never duplicated.
 - **[Hard — gate: deliver refuses]** **A rejection stops it.** If the newest delivery PR was closed without a merge, `deliver`
   reports it (exit 3) and opens nothing until a human re-offers the batch with `--reopen`.
 - **The PR carries no closing keywords.** Its issues already closed when their work landed
@@ -5371,22 +5327,20 @@ COLAB_HUMAN=1 colab deliver         # open (or refresh) ONE PR integration → o
   touching a CODEOWNERS path needs a non-author approval before it lands on the integration
   branch.
 
-A PR per issue that the owner merges one by one is a different shape, deferred until a repo
-asks for it; the measured case wants the batch.
+A PR per issue that the owner merges one by one is a different shape, deferred until a
+repo asks for it.
 
 **Traps, each measured:**
 
 - **A `.gitignore` entry is itself a tracked file.** Hiding the descriptor that way is
   exactly the commit you are avoiding. The local-only mechanism is `.git/info/exclude`
   (in the common git dir, so it covers every worktree).
-- **Scheduled autopilot must stay OFF on such a repo.** It would triage and start the
-  **owner's** issues, not only the fleet's, and there is no way today to scope it to the
-  fleet's issues.
+- **Scheduled autopilot must stay OFF on such a repo.**
 - **`colab ship` still gates on CI at the integration branch's head.** The workflows are
   the owner's. If none runs on push to the integration branch, every ship reads "no run"
   as human-gated and needs a `ci-granted` exemption per branch. Find out which case you
   are in before the first ship. The audit reports an ungated integration branch as an
-  advisory here, not a failure, because the fix would be a commit to his repo.
+  advisory here, not a failure.
 - **The main checkout must rest on the integration branch**, not on the owner's trunk
   where a fresh clone lands. Otherwise `ship` refuses with "trunk checkout not ready".
 - **A dashboard's cached repo scan does not pick the repo up** until it is refreshed.
@@ -5397,61 +5351,47 @@ accident the mechanism exists to prevent: a descriptor that is untracked but **n
 excluded, one `git add -A` away from the owner's history. A remote audit reads the forge,
 where the file never exists, so only a local audit can see this state.
 
-**Prefer full adoption instead** whenever the owner is willing to carry the files. It is
-the only way the conventions reach anyone who clones the repo without this machine's
-local state: a teammate, CI, the owner's own agents. Local adoption is a working
-arrangement for one operator's clones, not a substitute.
+**Prefer full adoption instead** whenever the owner is willing to carry the files. Local
+adoption is a working arrangement for one operator's clones, not a substitute. Why, with
+the measured case: [ADR 539](docs/adr/539-adoption-repo-you-dont-own-rationale.md).
 
 ### A fork of an upstream — a repo you own that tracks one you don't (#449)
 
 The two paths above cover a repo you own and a repo you don't. A third shape sits between
-them: **a fork you own that keeps merging from an upstream you don't.** The fork is yours, so
-it adopts in full — descriptor, labels, CI, registration, all committed. But some files in it
-belong to the upstream: its `CLAUDE.md`, its `AGENTS.md`, and often an agent workflow of its
-own. Every edit to one of those is a patch the fork carries forever and re-resolves on every
-upstream merge.
+them: **a fork you own that keeps merging from an upstream you don't.** The fork is yours,
+so it adopts in full — descriptor, labels, CI, registration, all committed. But some files
+in it belong to the upstream: its `CLAUDE.md`, its `AGENTS.md`, and often an agent
+workflow of its own.
 
 **`colab adopt` detects it, never asks.** It looks for a remote named `upstream` whose URL
-differs from `origin`'s. `--fork` asserts the shape when the upstream remote has another name,
-and `--no-fork` denies it when a remote called `upstream` means something else. Nothing is
-written to the descriptor: the remote is the fact, and a key would be a second copy of it that
-could drift.
+differs from `origin`'s. `--fork` asserts the shape when the upstream remote has another
+name, and `--no-fork` denies it when a remote called `upstream` means something else.
+Nothing is written to the descriptor: the remote is the fact.
 
 Four things change from [*Any repo, first-time adoption*](#any-repo-first-time-adoption):
 
-1. **Step 5 is append-only.** Paste [`templates/repo-CLAUDE-block.md`](templates/repo-CLAUDE-block.md)
-   at the **end** of the upstream's `CLAUDE.md`. Leave the upstream's prose where it is, leave
-   `AGENTS.md` alone, and record the append in whatever list the fork keeps of its patches
-   against the upstream. One appended block, at the end, touches no upstream line, so a merge
-   only conflicts if the upstream edits its own last lines. Measured: a block appended this way
-   survived a 588-commit upstream merge untouched. The thin-shell conversion moves every upstream
-   line instead, and conflicts on each upstream change to that file.
-   - **Upstream has no `CLAUDE.md`?** `colab adopt` writes one. With an upstream `AGENTS.md` it is
-     the usual shell (`@AGENTS.md` plus the block). Without one it is the block alone, and adopt
-     writes **no** `AGENTS.md` stub. Every file adopt creates is a file the upstream may add later,
-     and then it conflicts.
-   - **`CLAUDE.local.md` instead** only when the fork must stay byte-identical to the upstream
-     (a pure mirror). That file is never committed, so a teammate, CI or the upstream's own
-     agents cloning the fork never see the conventions. That is the same cost as
-     [*Working in a repo you don't own*](#working-in-a-repo-you-dont-own), paid on a repo you do own.
+1. **Step 5 is append-only.** Paste
+   [`templates/repo-CLAUDE-block.md`](templates/repo-CLAUDE-block.md) at the **end** of
+   the upstream's `CLAUDE.md`. Leave the upstream's prose where it is, leave `AGENTS.md`
+   alone, and record the append in whatever list the fork keeps of its patches against the
+   upstream.
+   - **Upstream has no `CLAUDE.md`?** `colab adopt` writes one. With an upstream
+     `AGENTS.md` it is the usual shell (`@AGENTS.md` plus the block). Without one it is
+     the block alone, and adopt writes **no** `AGENTS.md` stub.
+   - **`CLAUDE.local.md` instead** only when the fork must stay byte-identical to the
+     upstream (a pure mirror).
    - The audit's `prose-in-claude-md` and `no-agents-md` warnings are expected on a fork, and so
      is `handbook-sync`'s offer of the `AGENTS.md` graft. Leave the upstream's files alone and
      decline the graft. Both are warnings, never failures.
-2. **The upstream's agent workflow stays where it is, and the appended block says which flow
-   governs.** An upstream can ship skills and commands under `.claude/skills/` and
-   `.claude/commands/`. Measured: one such skill fired on any "fix / implement / refactor"
-   request, wrote four files per change into the upstream's own spec folder, and opened a pull
-   request. That competes directly with `code-start` → `code-wrap` → `code-ship`. Deleting or
-   editing it is a fork patch with the same merge cost as step 5, so don't. Add one line inside
-   the appended block instead: *work on this fork runs the `code-*` flow; the upstream's
-   workflow is how changes are contributed back to the upstream, not how this fork ships.* An
-   agent reads the upstream's instructions and then this block, so the block is what settles
-   the competition. `colab adopt` names the upstream's skill and command entries in its
-   remaining steps so that this line gets written.
-3. **Declare `migrations:` (step 2) before the first ship.** An upstream's layout is usually
-   not one of the two defaults (measured: `modules/*/sql/*.sql`), and an undeclared layout
-   leaves the no-new-migrations gate blind. This is true of any repo, but a fork inherits
-   someone else's layout and is the likeliest to miss it.
+2. **The upstream's agent workflow stays where it is, and the appended block says which
+   flow governs.** An upstream can ship skills and commands under `.claude/skills/` and
+   `.claude/commands/`. Deleting or editing it is a fork patch with the same merge cost as
+   step 5, so don't. Add one line inside the appended block instead: *work on this fork
+   runs the `code-*` flow; the upstream's workflow is how changes are contributed back to
+   the upstream, not how this fork ships.* `colab adopt` names the upstream's skill and
+   command entries in its remaining steps so that this line gets written.
+3. **Declare `migrations:` (step 2) before the first ship.** Why, with the measurements:
+   [ADR 539](docs/adr/539-adoption-fork-rationale.md).
 4. **The upstream's `CODEOWNERS` is inert here.** Its teams belong to the upstream's org, so
    `colab ship` ignores them and the core-path rule stays off until the fork writes owners of
    its own ([§2, *Core paths*](#core-paths--a-pr-and-a-non-author-approval-before-landing-350)).
@@ -5468,17 +5408,6 @@ Never a real hostname, account handle, filesystem path, internal domain, custome
 partner name — even when the real value is what was measured. Write `build-box-01`,
 not the machine you ran it on.
 
-This is not the secret-scanning rule wearing a different hat. A credential is a secret
-and a scanner finds it; **a hostname is not a secret, so every gate you run passes it**,
-and in a public repo it is published the moment it lands. Git history cannot be recalled
-once anything is cloned or forked, so the only reliable control is never writing the real
-value down.
-
-The cost of complying is zero — an invented value tests exactly as well as a real one,
-because a fixture asserts *shape*, never provenance. We found real machine names in four
-of this repo's own fixtures, one of them inside an asserted output string, with CI green
-throughout and correctly so.
-
 **Where the real value genuinely matters** — a reproduction that only makes sense against
 a specific environment — it belongs in an Issue on a private tracker, not in a tracked
 file. The destination decides, exactly as it does for
@@ -5487,19 +5416,18 @@ file. The destination decides, exactly as it does for
 **The rule has a mechanism, and it is not CI.** `templates/pre-commit-identity` scans
 staged content against a vocabulary of strings the operator says must never be published,
 and `templates/pre-commit-dispatch` composes it with the secret scan a repo already has.
-Pre-commit, deliberately: by the time a workflow runs, the commit exists and may already
-be pushed, and the only remedy left is rewriting published history. **The scanner is
-shipped; the vocabulary never is** — a list of the exact strings an organisation treats as
-sensitive is a precise index of what to look for, so it is supplied by path and kept
-outside every repo. Adoption steps: [`templates/README.md`](templates/README.md).
+**The scanner is shipped; the vocabulary never is** — a list of the exact strings an
+organisation treats as sensitive is a precise index of what to look for, so it is supplied
+by path and kept outside every repo. Adoption steps:
+[`templates/README.md`](templates/README.md).
 
 Two things the hook cannot see, both real. **Repository metadata** — description, topics,
 homepage, the name itself — never passes through git, and it is the first thing a visitor
-reads; that needs a periodic sweep instead (`node audit/audit.mjs --identity`, documented in
-[`audit/README.md`](audit/README.md), reading the same operator-supplied vocabulary and
-refusing to run without one). **A machine with no vocabulary configured** scans nothing, and
-says so on every commit. Neither is a reason to relax the rule above: the rule is the
-control, and both mechanisms are backstops for the day somebody forgets it.
+reads; that needs a periodic sweep instead (`node audit/audit.mjs --identity`, documented
+in [`audit/README.md`](audit/README.md), reading the same operator-supplied vocabulary and
+refusing to run without one). **A machine with no vocabulary configured** scans nothing,
+and says so on every commit. Neither is a reason to relax the rule above. Why, with the
+measurement: [ADR 539](docs/adr/539-adoption-fixtures-rationale.md).
 
 ---
 
@@ -5507,39 +5435,32 @@ control, and both mechanisms are backstops for the day somebody forgets it.
 
 Each of these is something we have actually done.
 
-**A release branch nobody consumes.** A repo adopted `dev` as default but nothing ever
-deployed from `main` — it sat 76 commits behind for months, while a sibling `staging`
-branch was abandoned after a week. *A branch with no pipeline hanging off it decays into
-noise.* Why Tier B is the default, and going-live step 1 is "add the deploy workflow".
+**A release branch nobody consumes.** *A branch with no pipeline hanging off it decays
+into noise.* Why Tier B is the default, and going-live step 1 is "add the deploy
+workflow".
 
-**The same fix opened four times.** With `dev`, `staging`, and `main` all live, one
-timezone fix required four near-identical PRs. *Three tiers without automated promotion
-is a tax on every hotfix.* We use two, deliberately.
+**The same fix opened four times.** *Three tiers without automated promotion is a tax on
+every hotfix.* We use two, deliberately.
 
-**A deploy mechanism nobody used.** A workflow triggers on tag push; it has zero tags —
-every deploy was manual dispatch. *Copy-pasted CI encodes intentions nobody adopted.*
+**A deploy mechanism nobody used.** *Copy-pasted CI encodes intentions nobody adopted.*
 
-**A merge that ships itself — while claiming otherwise.** Two live repos deploy on every
-`main` push and declare Tier A, whose contract says a release artifact gates production.
-*The mechanism is fine; claiming a gate you do not have is not.* Now a finding.
+**A merge that ships itself — while claiming otherwise.** *The mechanism is fine; claiming
+a gate you do not have is not.* Now a finding.
 
-**Docs describing a repo that doesn't exist.** Our most heavily documented repo
-prescribed trunk `main` (actual default `master`), "rebase, never squash" (every commit a
-squash), CI gating on `dev` (workflow skips CI there by design). *An aspirational doc is
-worse than no doc — people trust it.*
+**Docs describing a repo that doesn't exist.** *An aspirational doc is worse than no doc —
+people trust it.*
 
-**Stale branch references in CI.** A repo still gated on `develop`, `master`, and
-`workos` — none of which exist. *Config drifts silently when copied rather than
+**Stale branch references in CI.** *Config drifts silently when copied rather than
 referenced.*
 
-**A conclusion that only ever existed in chat.** A session settled a batch of rules and
-went straight to implementing them — three branches, zero Issues, no issue numbers in
-branch names, no `Closes #N` possible. The code landed; the argument behind it was lost.
-*Work only agreed to in a room is undocumented the moment the room closes.* Why the
-decision goes on an Issue before any file is touched ([§5](#5-claiming-work--how-to-say-im-on-this)).
+**A conclusion that only ever existed in chat.** *Work only agreed to in a room is
+undocumented the moment the room closes.* Why the decision goes on an Issue before any
+file is touched ([§5](#5-claiming-work--how-to-say-im-on-this)).
 
 **A silent version default.** Covered in [§7](#7-ci-and-toolchain) — worth repeating: the
 bug was invisible because CI was green the whole time.
+
+Why, with the stories: [ADR 539](docs/adr/539-anti-patterns-rationale.md).
 
 ---
 
