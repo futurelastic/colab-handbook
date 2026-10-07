@@ -50,3 +50,15 @@ test('this repo is within its own budgets', async () => {
   for (const [f, n] of Object.entries(BUDGET)) assert.ok(n > 0, `BUDGET["${f}"] is unset`);
   assert.deepStrictEqual(check({ root: ROOT }).findings, []);
 });
+
+test('#560: thresholds.doc-budget-slack in the repo\'s project.yml sets the ratchet slack', async () => {
+  const { check, slackFor, RATCHET_SLACK } = await load();
+  const root = fixture(30);
+  assert.strictEqual(slackFor(root), RATCHET_SLACK, 'no project.yml: the default');
+  fs.mkdirSync(path.join(root, '.github'));
+  fs.writeFileSync(path.join(root, '.github', 'project.yml'), 'trunk: main\nthresholds:\n  doc-budget-slack: 80\n');
+  assert.strictEqual(slackFor(root), 80);
+  assert.deepStrictEqual(check({ root, budget: { 'DOC.md': 100 } }).findings, [], '70 under is within a declared 80');
+  fs.writeFileSync(path.join(root, '.github', 'project.yml'), 'trunk: main\nthresholds:\n  doc-budget-slack: lots\n');
+  assert.strictEqual(slackFor(root), RATCHET_SLACK, 'malformed: the default, never a different behaviour');
+});

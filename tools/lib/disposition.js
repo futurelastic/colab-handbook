@@ -55,6 +55,7 @@
 
 const { axisOfRecord } = require('./axis-authority');
 const { parseWakeLine } = require('./wake');
+const { thresholdValue, parseThresholds } = require('./thresholds');
 
 // ---------------------------------------------------------------------------------------------
 // Vocabulary
@@ -115,10 +116,10 @@ const EVIDENCE_FIELDS = Object.freeze(['what', 'command', 'result', 'remains']);
 /**
  * PROPOSAL, not a measured threshold (CONVENTIONS.md §5 says so in the same words). A hold whose
  * wake condition has sat this long without movement wants a human to confirm it is still wanted.
- * Exported so a consumer can measure against a different number rather than fork the module, and
- * so the day someone measures it, one constant moves.
+ * This is the DEFAULT: a repo may declare its own as `thresholds.hold-stale-days` (#560), read
+ * from the `project` fact through tools/lib/thresholds.js. Exported for consumers and tests.
  */
-const HOLD_STALE_DAYS = 30;
+const HOLD_STALE_DAYS = thresholdValue({}, 'hold-stale-days');
 
 /**
  * One marker per line, `proposed=<token>`, the shape `colab:grade verdict=<token>` already uses.
@@ -320,11 +321,13 @@ function classify(facts) {
           'a park with no wake condition is not a hold — it is a silent wontfix, and should be said plainly',
           ['no review-by:<date>, no blockedBy edge, and no wake: condition from the closed vocabulary']);
       }
-      const stale = Number.isFinite(w.ageDays) && w.ageDays > HOLD_STALE_DAYS && w.movedSince !== true;
+      const declared = parseThresholds(f.project); // #560: the repo's value, else the default 30
+      const staleDays = declared.values['hold-stale-days'];
+      const stale = Number.isFinite(w.ageDays) && w.ageDays > staleDays && w.movedSince !== true;
       return stale
         ? verdict(kind, HUMAN, true,
-          `the wake condition has stood ${w.ageDays} days without movement — a human confirms it is still wanted (${HOLD_STALE_DAYS} d is a PROPOSAL, unmeasured)`,
-          [`wake older than ${HOLD_STALE_DAYS} days with no movement`])
+          `the wake condition has stood ${w.ageDays} days without movement — a human confirms it is still wanted (${staleDays} d is ${declared.declared['hold-stale-days'] ? 'this repo\'s thresholds.hold-stale-days' : 'a PROPOSAL, unmeasured'})`,
+          [`wake older than ${staleDays} days with no movement`])
         : verdict(kind, AGENT, true, 'the park names what it is waiting on — the agent applies', []);
     }
 

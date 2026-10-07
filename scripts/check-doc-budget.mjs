@@ -8,7 +8,7 @@
 // regrows; a checked budget does not (#518). Two failures, both deliberate:
 //   - over budget  → move the rationale to an ADR (docs/adr/README.md); the rule keeps one
 //                    sentence and a link. Never compress a rule's wording to fit.
-//   - far under    → more than RATCHET_SLACK lines below budget: lower the budget in this file,
+//   - far under    → more than RATCHET_SLACK lines (thresholds.doc-budget-slack, #560) below budget: lower the budget in this file,
 //                    so a saving is locked in instead of becoming room to regrow.
 // Raising a budget is a reviewed edit to BUDGET with its reason in the same commit, never a
 // silent bump. Runs in scripts/smoke.sh and in CI's self-check job.
@@ -16,18 +16,31 @@ import fs from "node:fs";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
 import { pathToFileURL } from "node:url";
+import { createRequire } from "node:module";
+
+const require = createRequire(import.meta.url);
+const yaml = require("../tools/lib/yaml.js");
+const { thresholdValue } = require("../tools/lib/thresholds.js");
 
 // file -> max lines. Set from the size after #523's first pass (rounded up to the next 50);
 // docs/adr/523-conventions-hard-default-and-size-budget.md records pass 1, docs/adr/539-rationale-split-phase-2.md phase 2.
 export const BUDGET = {
   "CONVENTIONS.md": 5100, // #539 phase 2: 5,049 lines (from 5,580 at its base), +50 for #512's pending 28-line §4/§7 hunk
-  "project.schema.md": 1600, // #539 phase 2: 1,551 lines (from 1,704)
+  "project.schema.md": 1650, // #539 phase 2: 1,551 lines (from 1,704); +50 for #560's `thresholds` entry — a new field, its rationale already in the issue, no story to move to an ADR
 };
-export const RATCHET_SLACK = 100;
+// The default; a repo may declare its own as `thresholds.doc-budget-slack` in .github/project.yml (#560).
+export const RATCHET_SLACK = thresholdValue({}, "doc-budget-slack");
+
+/** The slack the repo at `root` declares, else RATCHET_SLACK. A malformed value falls back to the default. */
+export function slackFor(root) {
+  const p = path.join(root, ".github", "project.yml");
+  if (!fs.existsSync(p)) return RATCHET_SLACK;
+  try { return thresholdValue(yaml.parse(fs.readFileSync(p, "utf8")) || {}, "doc-budget-slack"); } catch { return RATCHET_SLACK; }
+}
 
 export const lineCount = (text) => text.split("\n").length - (text.endsWith("\n") ? 1 : 0);
 
-export function check({ root, budget = BUDGET, slack = RATCHET_SLACK }) {
+export function check({ root, budget = BUDGET, slack = slackFor(root) }) {
   const findings = [];
   const sizes = {};
   for (const [file, max] of Object.entries(budget)) {

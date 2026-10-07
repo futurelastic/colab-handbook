@@ -2520,6 +2520,15 @@ Reworded units, one bullet each. Row key changed: C6.rel.111 (the moved sentence
 | S1.ciwaitfactor.04 | default |  | `colab ship` reads the cached profile only; a verdict never waits on a history fetch. | a verdict never waits on a history fetch | project.schema.md | #559 |
 | S1.ciwaitfactor.05 | hard | tools/lib/ci-profile.js::must be a number ≥ 1 | A malformed `ci-wait-factor` fails the audit; the tools use the default 2 and say so. | a bad value never produces a different behaviour | project.schema.md | #559 |
 
+### `thresholds`
+
+| id | class | gate | rule | key | dest | source |
+|---|---|---|---|---|---|---|
+| S1.thresholds.01 | default |  | Advisory thresholds (what is flagged, ranked or warned about, never what is refused) are the repo's to set under `thresholds:`. | are the repo's to set (#560) | project.schema.md | #560 |
+| S1.thresholds.02 | default |  | Each default is today's value, so a repo that declares nothing sees no change. | a repo that declares nothing sees no change | project.schema.md | #560 |
+| S1.thresholds.03 | default |  | Safety limits and protocol counts are not thresholds and keep their own fields. | Safety limits (a cap a repo may only tighten) and protocol counts are not thresholds | project.schema.md | #560 |
+| S1.thresholds.04 | hard | tools/lib/thresholds.js::must be a whole number | An unknown name, a non-whole-number or a value under its floor fails the audit and the CI descriptor check; every reader falls back to the default. | falls back to the default and says so | project.schema.md | #560 |
+
 ### `migrations`
 
 | id | class | gate | rule | key | dest | source |

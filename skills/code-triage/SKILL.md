@@ -107,7 +107,7 @@ is not a triage write, no matter how naturally it seems to belong on the issue:
    that form, the removal of `agent-filed`, and one comment (§5.2 step 3, #430). All four
    bounds in [5.2-trunk-red.md](5.2-trunk-red.md) must hold — red at head, none accepted
    open, re-run spent or inapplicable, at most one filing per red sha.
-9. a `HOT FILE: <path> — <N> issues wait on it` structure issue, when ≥ 3 waiting issues
+9. a `HOT FILE: <path> — <N> issues wait on it` structure issue, when ≥ `hot-file-count` (3 by default, `colab thresholds`) waiting issues
    are held on one path and no open issue already restructures it (§3, #540)
 
 **Rule, beyond the list:** writes 6-7 only transcribe; writes 8-9 record a measurement, never a
@@ -196,13 +196,13 @@ Full text: [3-touches.md](3-touches.md).
 
 ### Then count the hot files — one path holding ≥ 3 waiting issues is a structure issue (#540)
 
-**Rule:** ≥ 3 open issues held on one path by §5's file gate ⇒ write 9, read by title first; one
+**Rule:** ≥ `hot-file-count` open issues (3 unless the repo declares it — `colab thresholds`, #560) held on one path by §5's file gate ⇒ write 9, read by title first; one
 restructuring that path is itself waiting ⇒ `self-deadlock` finding. Full text: [3-hot-file.md](3-hot-file.md).
 
 ## 4. Order by blast radius, not by number
 
 **Rule:** band `priority:now` › `priority:high` › unlabelled › `low-priority` (#537); within a
-band rank 1 blocks other work (≥ 3 `blocked_by` dependents, a CI/tooling fix, a hot-file split), 2 reaches users (by `exposure`; bare legacy `tier: B` gives no
+band rank 1 blocks other work (≥ `dependents-count` `blocked_by` dependents, 3 by default; a CI/tooling fix, a hot-file split), 2 reaches users (by `exposure`; bare legacy `tier: B` gives no
 signal), 3 cheap and unblocking, 4 the rest — each with its reason. A band orders, never admits. A human's recorded
 queue order outranks yours among groups it names, never as an edge. Full text: [4-order.md](4-order.md).
 
@@ -348,7 +348,7 @@ Hand the top group to **code-start**, which will re-verify the claim before taki
   second branch is a fail, not a wording nit: nothing here polls.
 - The finding went to the console and to `$CACHE`'s `conclusion.findings`, and **nowhere on
   the tracker**. It is not one of §0.2's writes, and not a tenth.
-- Every path holding ≥ 3 waiting issues got one `HOT FILE:` issue or a named reason not (§3).
+- Every path holding ≥ `hot-file-count` waiting issues got one `HOT FILE:` issue or a named reason not (§3).
 - Every open Issue is accounted for in exactly one bucket.
 - The verdicts were **persisted, not only printed**: every free group got its
   `colab readiness` marker, every blocked group was left unset (or cleared if

@@ -99,6 +99,7 @@ const releaseRunner = require("../tools/lib/release-runner.js"); // #453
 const { parseWorkflowOn, workflowFiresOnTag, prereleaseTagTriggers, workflowsFiringOnBranchPush } = require("../tools/lib/workflow-triggers.js");
 const shipBatch = require("../tools/lib/ship-batch.js");
 const ciProfile = require("../tools/lib/ci-profile.js"); // #559
+const thresholdsLib = require("../tools/lib/thresholds.js"); // #560
 // #383: where migrations live — the one rule `colab ship`'s gate and `release cut` read; the audit
 // validates the `migrations:` declaration against it and reports a `*/migrations/` dir it misses.
 const migrationPaths = require("../tools/lib/migration-paths.js");
@@ -219,7 +220,7 @@ function parseScalarValue(raw) {
   return val;
 }
 
-const NESTED_MAP_KEYS = new Set(["release", "owner", "gate"]); // owner: #394 · gate: #410
+const NESTED_MAP_KEYS = new Set(["release", "owner", "gate", "thresholds"]); // owner: #394 · gate: #410 · thresholds: #560
 
 function parseFlatYaml(text) {
   const out = {};
@@ -1054,7 +1055,7 @@ function yamlRawValue(text, key) {
   return m[1].replace(/\s+#.*$/, "").trim();
 }
 
-const DURATION_MIN_DAYS = 180; // below this, silence — see audit-exposure.test.js's pinned
+const DURATION_MIN_DAYS = thresholdsLib.DEFAULTS["transitional-days"]; // 180, the DEFAULT (#560: a repo may declare thresholds.transitional-days); below this, silence — see audit-exposure.test.js's pinned
                                 // "transitional descriptor is clean" case, which this
                                 // threshold exists to keep passing untouched: a descriptor
                                 // committed moments ago must never earn a duration line.
@@ -1092,9 +1093,9 @@ function declaredStateAge(src, key) {
 
 // Prose for a declaredStateAge() result, or null when it is too recent to be worth saying
 // (the DURATION_MIN_DAYS gate — the caller must check this before calling warn()).
-function renderDuration(age) {
+function renderDuration(age, minDays = DURATION_MIN_DAYS) {
   const days = Math.floor((Date.now() / 1000 - age.epoch) / DURATION_DAY_SECONDS);
-  if (days < DURATION_MIN_DAYS) return null;
+  if (days < minDays) return null;
   const months = Math.floor(days / 30); // coarse on purpose — a report, not a countdown
   return `${age.lowerBound ? "at least " : ""}${months} month${months === 1 ? "" : "s"}`;
 }
@@ -1123,12 +1124,15 @@ function auditRepo(target, ctx) {
   // ---- .github/project.yml -------------------------------------------------
   const rawCfg = src.readFile(".github/project.yml");
   let cfg = null;
+  // #560: the advisory thresholds this run applies — defaults until the descriptor declares otherwise.
+  let th = thresholdsLib.parseThresholds(null);
   if (rawCfg === null) {
     fail("no .github/project.yml — repo is undescribed (tier/trunk/deploy unknown)");
   } else {
     const { data, problems } = parseFlatYaml(rawCfg);
     problems.forEach((p) => fail(`project.yml: ${p}`));
     cfg = data;
+    th = thresholdsLib.parseThresholds(cfg);
     // `tier` is deliberately NOT in this list as of #144: it used to be the sole axis of
     // record and therefore unconditionally required, but a descriptor may now answer the
     // gate-count question with `exposure` instead — see the "axis of record" check below,
@@ -1326,6 +1330,12 @@ function auditRepo(target, ctx) {
       if (!f.valid) fail(`${f.reason} — see project.schema.md, ci-wait-factor`);
     }
 
+    // ---- thresholds (#560) --------------------------------------------------------
+    // Repo-declared values for the advisory thresholds (tools/lib/thresholds.js, the one reading
+    // `colab thresholds` and every consumer use). A malformed entry fails here and in the CI
+    // templates' descriptor check (the #416 pattern); every consumer falls back to the default.
+    thresholdsLib.parseThresholds(cfg).problems.forEach((p) => fail(`${p} — see project.schema.md, thresholds`));
+
     // ---- migrations (#383) ----------------------------------------------------
     // Where the repo's migrations live, beyond the two defaults (database/migrations/,
     // prisma/migrations/) — tools/lib/migration-paths.js is the one reading, shared with
@@ -1478,7 +1488,7 @@ function auditRepo(target, ctx) {
         );
       }
       const exposureAge = declaredStateAge(src, "exposure");
-      const durationLine = exposureAge && renderDuration(exposureAge);
+      const durationLine = exposureAge && renderDuration(exposureAge, th.values["transitional-days"]);
       if (durationLine) {
         warn(`exposure: none has held for ${durationLine} (per the descriptor's own git history) — visible so a long-running transitional state does not go unnoticed`);
       }
@@ -1568,7 +1578,7 @@ function auditRepo(target, ctx) {
             );
           }
           const channelsAge = declaredStateAge(src, "channels");
-          const durationLine = channelsAge && renderDuration(channelsAge);
+          const durationLine = channelsAge && renderDuration(channelsAge, th.values["transitional-days"]);
           if (durationLine) {
             warn(`channels: [none] has held for ${durationLine} (per the descriptor's own git history) — visible so a long-running transitional state does not go unnoticed`);
           }
@@ -1713,7 +1723,7 @@ function auditRepo(target, ctx) {
   // ---- CLAUDE.md is a router, not an archive (#64) -------------------------
   // Unconditional: this is a repo-doc concern, not a tier/deploy one, and it applies to
   // the handbook's OWN CLAUDE.md too (not a stamp check, so it is not gated on !isSelf).
-  checkClaudeMdSize(src, warn);
+  checkClaudeMdSize(src, warn, th.values);
   // #417: same posture — a tool block loaded twice, or the Conventions block moved out of the
   // file tools look it up in, is a repo-doc concern on every repo, the handbook's own included.
   checkInstructionFileBlocks(src, warn);
@@ -2215,9 +2225,10 @@ function checkReleaseBranch(cfg, trunk, branches, fail, warn, deploy) {
 // a starting point rather than a recommendation", wanting calibration across adopting repos
 // before anything here becomes a hard gate — the goal is a finding with the measured number
 // ("state the condition"), not a build-breaking assertion of a still-uncalibrated one.
-const CLAUDE_MD_MAX_BYTES = 40 * 1024; // near the handbook's own cited worst case (39 KB / 452 lines)
-const CLAUDE_MD_LINE_MULTIPLE = 6; // "some small multiple of the [file's] median row"
-const CLAUDE_MD_LINE_ABS_FLOOR = 2048; // below this, flagging on multiple alone is noise (tiny medians make everything look huge)
+const CLAUDE_MD_MAX_BYTES = thresholdsLib.DEFAULTS["claude-md-kb"] * 1024; // 40 KB by default (#560) — near the handbook's own cited worst case (39 KB / 452 lines)
+// The per-line multiple ("some small multiple of the [file's] median row", default 6) and its
+// absolute floor (default 2048 bytes — below it, flagging on the multiple alone is noise: tiny
+// medians make everything look huge) live in tools/lib/thresholds.js with the ceiling (#560).
 
 // #117: the byte ceiling above was built to catch hand-written accretion, but it counts
 // TOTAL file bytes — which also charges a repo for content it cannot shorten by the rule's
@@ -2450,7 +2461,11 @@ function checkAnchorLinks(src, fail) {
   }
 }
 
-function checkClaudeMdSize(src, warn) {
+function checkClaudeMdSize(src, warn, limits = thresholdsLib.DEFAULTS) {
+  // #560: the three numbers below are the defaults; a repo may declare its own under `thresholds:`.
+  const maxBytes = limits["claude-md-kb"] * 1024;
+  const lineMultiple = limits["claude-md-line-multiple"];
+  const lineFloor = limits["claude-md-line-floor-bytes"];
   // #417: measure what is LOADED, not one file. A thin-shell CLAUDE.md (`@AGENTS.md` plus the
   // by-name tool blocks) is tiny by construction, so measuring it alone would neuter this guard
   // while a bloated AGENTS.md rides in behind it on every turn. The loaded set is CLAUDE.md plus
@@ -2473,7 +2488,7 @@ function checkClaudeMdSize(src, warn) {
   }
   const derivedBytes = Math.max(0, bytes - authoredBytes);
 
-  if (authoredBytes > CLAUDE_MD_MAX_BYTES) {
+  if (authoredBytes > maxBytes) {
     const totalNote = derivedBytes > 0
       ? ` (of ${bytes} bytes total; ${derivedBytes} bytes are marked colab:derived and excluded — #117)`
       : "";
@@ -2482,7 +2497,7 @@ function checkClaudeMdSize(src, warn) {
       : `CLAUDE.md plus its @-imports (${files.slice(1).map((f) => f.path).join(", ")}) is`;
     warn(
       `${subject} ${authoredBytes} bytes (~${(authoredBytes / 1024).toFixed(1)} KB)${totalNote} — over the ` +
-      `${CLAUDE_MD_MAX_BYTES / 1024} KB advisory ceiling (#64). It is loaded in full into every session before ` +
+      `${maxBytes / 1024} KB advisory ceiling (#64${maxBytes === CLAUDE_MD_MAX_BYTES ? "" : ", declared in thresholds.claude-md-kb"}). It is loaded in full into every session before ` +
       `any work starts; if the knowledge belongs in docs/, the ${files.length === 1 ? "CLAUDE.md" : "instruction-file"} change is a pointer, not a copy (code-wrap A2)`,
     );
   }
@@ -2497,7 +2512,7 @@ function checkClaudeMdSize(src, warn) {
     if (lens.length < 2) continue; // no meaningful median from 0 or 1 lines
     const median = lens[Math.floor(lens.length / 2)];
     const worst = lens[lens.length - 1];
-    if (median > 0 && worst > CLAUDE_MD_LINE_ABS_FLOOR && worst > median * CLAUDE_MD_LINE_MULTIPLE) {
+    if (median > 0 && worst > lineFloor && worst > median * lineMultiple) {
       const pct = ((worst / f.authoredBytes) * 100).toFixed(1);
       warn(
         `${f.path} has a single line of ${worst} bytes — ${(worst / median).toFixed(1)}x the file's median line ` +

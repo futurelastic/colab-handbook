@@ -2394,7 +2394,7 @@ neither input reaches them.
 | `done` | evidence in the fixed shape **∧** a re-runnable cross-check recorded **∧** acceptance ticked or a remainder declared **∧** the issue gates nothing still open **∧** the axis permits **∧** no skip-fence class | the axis does not permit · a skip-fence class · no cross-check possible · the issue is a gate node for something open |
 | `split` | the remainder is filed as a native sub-issue with the same `delivery:` and a wake condition, evidence copied across | never — filing is mechanical |
 | `routed-out` | `<other-repo>#N` exists **and** links back to this issue | never — but the filing itself obeys the destination repo's own language rule |
-| `hold` | a wake condition is present — `review-by:<date>`, a real `blockedBy` edge, **or** a `wake:` from *Holds*' closed vocabulary | the wake has stood **30 d** (a PROPOSAL, unmeasured) with no movement ⇒ a human confirms it is still wanted, else `not planned` |
+| `hold` | a wake condition is present — `review-by:<date>`, a real `blockedBy` edge, **or** a `wake:` from *Holds*' closed vocabulary | the wake has stood **30 d** (a PROPOSAL, unmeasured; a repo may declare `thresholds.hold-stale-days`) with no movement ⇒ a human confirms it is still wanted, else `not planned` |
 | `needs-boss` | **never** — the agent *records* the question and moves on (record-first) | always; the answer returns the issue to intake |
 | `not planned` | superseded by a **merged or closed** replacement that references this issue | an abandoned direction — a human judgement, always |
 | `leave` | **never** — the agent converts it (see above) | a human may leave with a reason |

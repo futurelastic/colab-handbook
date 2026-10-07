@@ -296,6 +296,40 @@ jobs:
                 exit 1
               fi ;;
           esac
+          # thresholds (#560): one level of `name: whole number`, each name known and at or above its
+          # floor — the table in tools/lib/thresholds.js (SPEC), which a test holds this list to.
+          # A bad entry falls back to the default everywhere, silently, so it fails here.
+          bad=0
+          while IFS= read -r t; do
+            case "$t" in =*)
+              echo "::error file=.github/project.yml::thresholds is '${t#=}', expected a map of 'name: whole number' pairs. See project.schema.md, thresholds."
+              bad=1; continue ;;
+            esac
+            k="${t%%:*}"
+            n="$(printf '%s' "${t#*:}" | sed -E -e 's/^[[:space:]]+//' -e 's/^"(.*)"$/\1/' -e "s/^'(.*)'\$/\\1/")"
+            case "$k" in
+              hot-file-count|claude-md-line-multiple) min=2 ;;
+              dependents-count|hold-stale-days|smoke-minutes|claude-md-kb|transitional-days) min=1 ;;
+              claude-md-line-floor-bytes|doc-budget-slack) min=0 ;;
+              *) echo "::error file=.github/project.yml::thresholds.$k is not a known threshold (colab thresholds lists them). See project.schema.md, thresholds."
+                 bad=1; continue ;;
+            esac
+            case "$n" in ''|'~'|null) continue ;; esac
+            if printf '%s\n' "$n" | grep -Eq '^[0-9]{1,9}$' && [ "$n" -ge "$min" ]; then
+              echo "thresholds.$k: $n — ok"
+            else
+              echo "::error file=.github/project.yml::thresholds.$k is '$n', expected a whole number >= $min. Every reader ignores it and uses the default. See project.schema.md, thresholds."
+              bad=1
+            fi
+          done < <(awk '
+            /^thresholds[[:space:]]*:/ { b = 1; v = $0
+              sub(/^thresholds[[:space:]]*:[[:space:]]*/, "", v); sub(/[[:space:]]+#.*$/, "", v); sub(/[[:space:]]+$/, "", v)
+              if (v != "" && v != "~" && v != "null") print "=" v
+              next }
+            b && /^[[:space:]]*(#|$)/ { next }
+            b && /^[[:space:]]/ { l = $0; sub(/^[[:space:]]+/, "", l); sub(/[[:space:]]+#.*$/, "", l); sub(/[[:space:]]+$/, "", l); print l; next }
+            { b = 0 }' .github/project.yml)
+          [ "$bad" = 0 ] || exit 1
 
       # ---------------------------------------------------------------------------
       # Toolchain resolution. Precedence, highest first:

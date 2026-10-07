@@ -484,6 +484,33 @@ pre-#559 value exactly; the 6 h wedge cap and 30/60/120 s polling are safety lim
 [ADR 559](docs/adr/559-ci-wait-bounds-measured-rationale.md). **[Hard — gate: the audit fails it]**
 Anything but a number ≥ 1 fails the audit; the tools use `2` and say so — a bad value never produces a different behaviour.
 
+### `thresholds` — optional
+
+```yaml
+thresholds:            # one level of `name: whole number`; absent = every default
+  hot-file-count: 4
+```
+
+The **advisory** thresholds — numbers that decide what is flagged, ranked or warned about, never
+what is refused — are the repo's to set (#560). Each default is today's value, so a repo that
+declares nothing sees no change. `colab thresholds` prints every value in force and who reads it.
+
+| name | default | read by |
+|---|---|---|
+| `hot-file-count` · `dependents-count` | 3 · 3 | `code-triage` §3 HOT FILE, §4 leverage |
+| `hold-stale-days` | 30 | `tools/lib/disposition.js`, a hold human-confirmed |
+| `smoke-minutes` | 3 | `code-wrap` A3, the `gate.smoke` target |
+| `claude-md-kb` · `claude-md-line-multiple` · `claude-md-line-floor-bytes` | 40 · 6 · 2048 | the audit's `CLAUDE.md` size advisory |
+| `transitional-days` | 180 | the audit's "has held for" line on a transitional value |
+| `doc-budget-slack` | 100 | `scripts/check-doc-budget.mjs`'s ratchet |
+
+Safety limits (a cap a repo may only tighten) and protocol counts are not thresholds and keep
+their own fields. **[Hard — gate: the audit fails it]** An unknown name, a value that is not a
+whole number of at most nine digits, or one under its floor (2 for `hot-file-count` and
+`claude-md-line-multiple`, 0 for `claude-md-line-floor-bytes` and `doc-budget-slack`, else 1)
+fails the audit **and the CI templates' descriptor check** (the #416 pattern); every reader
+falls back to the default and says so.
+
 ### `migrations` — optional
 
 ```yaml
