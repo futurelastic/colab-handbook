@@ -23,7 +23,7 @@ never grab the same work. Close the session with **code-wrap**, then **code-ship
 Notation: `$N` = the feature's Issue number (keep it for the whole session).
 `<trunk>` = the branch sessions merge into (from `project.yml`, below).
 
-## 0. Say who you are — the URL, above all
+## 0. Say who you are — the session id, above all
 
 Skip this and every claim and worktree you create is **anonymous**: a dashboard row
 with a branch and no owner. Someone finding a stale claim then knows it is stale but
@@ -33,11 +33,11 @@ not who to ask.
 
 | field | what it is | missing it costs |
 |---|---|---|
-| `--session-name` | **display text.** The column a human scans. | cosmetic — the row falls back to the URL tail: ugly, still reachable |
-| `--session` (URL) | **the only join key.** A consumer resolves a worktree to a live session through it: `worktree.session` → its `session_…` tail → the session. | structural — the row can never be linked to anyone |
+| `--session-name` | **display text.** The column a human scans. | cosmetic — the row falls back to the id: ugly, still reachable |
+| `--session` (id) | **the only join key.** Any stable id for this session — a URL, a uuid… A consumer resolves a worktree to a live session through it: `worktree.session` → the session. | structural — the row can never be linked to anyone |
 
-The name participates in **no join**. So a name with no URL is the worst of the three
-states: it *reads* as owned and still traces to nobody. Set the URL first; the name is
+The name participates in **no join**. So a name with no id is the worst of the three
+states: it *reads* as owned and still traces to nobody. Set the id first; the name is
 a nicety on top of it. `colab` now warns when you supply a name alone.
 
 Nothing infers identity from the name, and nothing should: a worktree once sat next to
@@ -49,12 +49,12 @@ as "unknown" — never as a guess.
 A session may be opened by an operator clicking a button rather than by a human
 typing. That spawn prompt has a fixed shape:
 
-> Run /code-start for issue(s) #N in `<repo>`. Spawned from `<dashboard>` by
-> `<operator>` at `<ts>` (intent `<id>`). Session name: `<name>`.
+> Run `<code-start, in your engine's invocation syntax>` for issue(s) #N in `<repo>`.
+> Spawned from `<dashboard>` by `<operator>` at `<ts>` (intent `<id>`). Session name: `<name>`.
 
 Read it as questions already answered: `#N` is your issue, and `<name>` is the
 `--session-name` to pass through **verbatim** — do not invent a better one, and do
-not ask which issue was meant. What the dashboard cannot know is your session URL,
+not ask which issue was meant. What the dashboard cannot know is your session id,
 so you still supply `--session` yourself, exactly as below.
 
 The dashboard only spawns: it writes no claim, no label, no merge. Every `colab` and
@@ -65,7 +65,7 @@ it is you.
 
 ```sh
 colab claim $N --worktree <name> \
-  --session "https://claude.ai/code/session_…" \
+  --session "<any stable id for this session — a URL, a uuid…>" \
   --session-name "import-fixes"          # short, human, about the WORK
 ```
 
@@ -82,10 +82,10 @@ colab claim $N --worktree <name> \
 - **Name it after the work, not the branch.** The table already shows the branch;
   `import-fixes` or `payroll-hotfix` tells a human something new, `fix-import-115`
   does not.
-- **Genuinely no session URL?** Then set the name alone and know what you have: a
+- **Genuinely no session id?** Then set the name alone and know what you have: a
   cosmetic label, not a traceable row. It is a degraded state, not an equal choice.
-- **Got the URL later, or already created the worktree anonymous?**
-  `colab worktree tag <name> --session <url> [--session-name <s>]` repairs the worktree
+- **Got the id later, or already created the worktree anonymous?**
+  `colab worktree tag <name> --session <id> [--session-name <s>]` repairs the worktree
   *and* the claims hanging off it. No hand-editing of `~/.colab/state.json`.
 - **No `colab` installed?** Nothing breaks — the fields simply do not exist, and
   claiming still works through `gh`.
@@ -126,7 +126,7 @@ gate, never on your own say-so, AND only when a human is genuinely present in th
 conversation to say so:
 
 ```sh
-COLAB_HUMAN=1 colab solo --session "$SESSION_URL" --session-name "<label>"
+COLAB_HUMAN=1 colab solo --session "$SESSION_ID" --session-name "<label>"
 ```
 
 **Set `COLAB_HUMAN=1` only by transcription, never by inference — and never at all in a
@@ -415,7 +415,7 @@ colab claims          # if colab is installed …
 gh issue list --label in-progress    # … else the raw command
 
 # claim it (before starting, not when you open the PR)
-colab claim $N --session "$SESSION_URL"        # if colab is installed …
+colab claim $N --session "$SESSION_ID"        # if colab is installed …
 gh issue edit $N --add-assignee @me --add-label in-progress    # … else raw
 ```
 
@@ -433,7 +433,7 @@ gh issue edit $N --add-assignee @me --add-label in-progress    # … else raw
 - An unclaimed issue is fair game — someone may take it out from under you.
   Claim first.
 - A branch may carry a group of issues; claim **every** issue in the group now
-  (`colab claim 115 114 113 --session "$SESSION_URL"`, or one `gh issue edit` each).
+  (`colab claim 115 114 113 --session "$SESSION_ID"`, or one `gh issue edit` each).
   Claiming the whole group is load-bearing at wrap, not bookkeeping — see step 4.
   **`--session` mandatory here too** — same reason as above.
 
@@ -572,7 +572,7 @@ conditional rule is one agents skip.
 
 ```sh
 colab worktree new <type>/<slug>-$N --issues $N --ports 1 \
-  --session "$SESSION_URL" --session-name "<label>"     # claims AND creates — one command
+  --session "$SESSION_ID" --session-name "<label>"     # claims AND creates — one command
 #   … add --base <line> ONLY for a line declared in project.yml `integration:`;
 #   the base is recorded on the worktree and is what `colab ship` merges into.
 # … else fall back to plain git (then claim by hand, step 3). Under branchPrefix: machine,
@@ -682,8 +682,8 @@ your turn; the measurement is in `code-ship` B1a, *The wait is bounded*.
   whether you **reopened** a closed Issue rather than creating one.
 - The session name you set in step 0 — it is how a human matches your report to the
   row holding this work. Confirm it stuck: `colab worktrees` (or `colab claims`)
-  should show it, not a `—`. A name showing with **no URL behind it** is a half-fix,
-  not a pass: repair it with `colab worktree tag <name> --session <url>` and say so.
+  should show it, not a `—`. A name showing with **no id behind it** is a half-fix,
+  not a pass: repair it with `colab worktree tag <name> --session <id>` and say so.
 - Branch name, **the base it was cut from**, and the worktree path if you made one. Say
   the base even when it is trunk — "cut from trunk" and "nobody recorded a base" read
   identically otherwise, and only the first is a fact. If the step-3 check found an

@@ -83,8 +83,8 @@ cannot find one (no worktree, no branch, and `--branch <trunk>` is refused), so 
 own:
 
 ```sh
-colab ship --direct --session "$SESSION_URL" --dry   # → MODE: evidence-close (trunk-direct)
-colab ship --direct --session "$SESSION_URL"         # posts evidence, CLOSES, releases claims + hold
+colab ship --direct --session "$SESSION_ID" --dry   # → MODE: evidence-close (trunk-direct)
+colab ship --direct --session "$SESSION_ID"         # posts evidence, CLOSES, releases claims + hold
 ```
 
 It closes exactly the claims **this session** holds in the repo with no worktree and no
