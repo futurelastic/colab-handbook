@@ -814,8 +814,9 @@ Keys shortened because the sentence that followed them was moved whole (the rule
 
 | id | class | gate | rule | key | dest | source |
 |---|---|---|---|---|---|---|
-| C5a.record.01 | hard | tools/colab::Refusing — one or more issues are already claimed | A branch on the remote carrying #N that is not this machine's refuses a second claim on #N from anywhere. | refuses a second claim on `#N` from anywhere, naming the branch | CONVENTIONS.md | #325 |
-| C5a.record.02 | default |  | The record of a claim is its branch on the remote, pushed when cut at session start and again at wrap. | pushed the moment it is cut at session start and again at wrap | CONVENTIONS.md | #325 |
+| C5a.record.01 | hard | tools/colab::Refusing — one or more issues are already claimed | A branch or claim ref on the remote carrying #N that is not this machine's refuses a second claim on #N from anywhere. | refuses a second claim on `#N` from anywhere, naming the ref | CONVENTIONS.md | #325, #550 |
+| C5a.record.02 | default |  | The record of a claim is its branch on the remote, recorded when cut at session start and pushed at wrap. | the moment it is cut at session start and pushed at wrap | CONVENTIONS.md | #325 |
+| C5a.record.10 | default |  | At the cut the claim is recorded as the claim ref refs/claims/<branch>, not the branch, so no CI push trigger fires; colab worktree rm deletes it. | a claim ref fires none | CONVENTIONS.md | #550 |
 | C5a.record.03 | default |  | Each machine sweeps its own worktrees. | Each machine sweeps its own worktrees. | CONVENTIONS.md | — |
 | C5a.record.04 | hard | tools/colab::function printRemoteUnreachable | Fail closed: with the remote unreachable, make no claim (a repo with no remote at all excepted). | Fail closed: a claim checked against nothing is not a lock. | CONVENTIONS.md | #325 |
 | C5a.record.05 | default |  | A repo with no remote at all relies on the machine's own record. | A repo with no remote at all is the one exception | CONVENTIONS.md | — |
