@@ -22,7 +22,10 @@ Blocked: <what is missing> — <who or what clears it> (<link: issue, decision, 
 "Needs a design ruling from <role>, filed as #M", "waits on #M to land first", "trunk CI
 red since <sha>, not this branch's" — each is a blocker: something outside this session
 must happen first. "Ran out of steam", "the rest is follow-up", "left for the next
-session" are not blockers, they are the work. With the line posted, the blocker **is** the
+session" are not blockers, they are the work. **A check only a person can run is not a
+blocker either**, and it is not unfinished work: it becomes a row on the `Human verify:` issue
+and the branch hands off as finished ([handoff-human-verify.md](handoff-human-verify.md), #541).
+With the line posted, the blocker **is** the
 hand-off: report it first, above the checklist, so whoever reads the report sees why the
 session stopped, not just that it did.
 

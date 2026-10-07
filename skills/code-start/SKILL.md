@@ -370,6 +370,12 @@ gh issue view $N --json labels -q '.labels[].name' | grep -qx needs-plan && echo
   **Cannot state the oracle line?** That is the ambiguity trigger firing, not a prompt to
   guess. Stop, comment the question onto the Issue, and wait — do not drop to rung 0
   and do not invent an oracle so the stub looks complete.
+  **Part of the acceptance only a person can run** (a real device, a real account or
+  credential, a visual check by eye)? Write it in the oracle line as a `Human verify:` row,
+  not as a gate this session waits on: `Oracle: <what the code's tests prove> + Human verify
+  row: <the person-only check>`. At wrap it goes onto the repo's `Human verify:` issue and the
+  branch still hands off as finished (`code-wrap`, *A person-only check is a Human-verify row*,
+  #541). It is never a reason to park the issue.
 - **Trivial/mechanical, oracle self-evident** → rung 0, nothing to write. Do not manufacture
   a stub for the sake of having one.
 

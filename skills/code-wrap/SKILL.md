@@ -343,6 +343,9 @@ never by trusting this session's word for it:
       from (#113; #94) — **or**
       the one line `rung 0 because <reason>` in its place (#486). Absent with no such
       line is a **failed box, not a blank one**: see *A missing plan file* below
+- [ ] every person-only acceptance check is a row on the `Human verify:` issue, with its plan
+      box ticked and pointing there, and no carried issue holds a hold or human-wait label for
+      one (#541). N/A when nothing person-only is left
 - [ ] trunk checkout reconciled (A2b) — clean, or every dirty path worked through the
       ownership ladder and reported by verdict (recovered / not-mine-with-owner /
       can't-tell) — never left unexplained
@@ -361,12 +364,24 @@ missing — rung <1|2> work wrapped without one`, not hand-off complete.
 **Stop:** never back-fill a plan after the code. Full text, with the check script:
 [handoff-missing-plan.md](handoff-missing-plan.md).
 
+### A person-only check is a Human-verify row, not a hold (#541)
+
+**Rule:** the code is done and the only acceptance item left is a check only a person can run
+(a real device, a real account or credential, a visual check by eye) ⇒ **no hold, no human-wait
+label** on the issue. Append one row (source issue, exact steps, evidence wanted) to the repo's
+open `Human verify:` issue, filing it if none is open (`CONVENTIONS.md` §5 *Human verify*). Tick
+the plan box with a pointer to the row, and hand off as an ordinary finished branch (`Closes #$N`).
+**Stop:** a `Hold:`/`Blocked:` line is legitimate only for a real decision (a ruling, money,
+credentials or security, design approval), and it names that decision. "Someone has to try it
+on the real thing" is not one. Full text, with the command: [handoff-human-verify.md](handoff-human-verify.md).
+
 ### A partial wrap is a checkpoint, not the end of your turn (#486)
 
 **Rule:** unfinished work on a still-claimed issue ⇒ keep working, same turn. End the turn only
 with a `Blocked: <what is missing> — <who or what clears it> (<link>)` line on the Issue per
 unfinished item, reported first, or with the remainder moved to its own issue and unclaimed.
-**Stop:** "the rest is follow-up" is not a blocker. Full text: [handoff-partial-wrap.md](handoff-partial-wrap.md).
+**Stop:** "the rest is follow-up" is not a blocker, and neither is a person-only check (the
+Human-verify row above). Full text: [handoff-partial-wrap.md](handoff-partial-wrap.md).
 
 ## Verify complete
 
@@ -397,3 +412,5 @@ unfinished item, reported first, or with the remainder moved to its own issue an
   work is reported as such, never as "hand-off complete" (#486).
 - **No claimed issue has unfinished work without a `Blocked:` line on it** — otherwise
   this was a checkpoint, and the session goes back to work rather than ending here (#486).
+  A person-only check is not unfinished work and gets no `Blocked:` line: it is a
+  `Human verify:` row (#541).

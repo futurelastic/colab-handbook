@@ -1913,7 +1913,9 @@ that says both (#58).
 Why, with the measurements: [ADR 491](docs/adr/491-human-verify-rationale.md).
 **So when the code is all on trunk and what is left is a check only a human can run:**
 
-- The ship **closes** the issue: `Closes #N`, not `--refs`.
+- The ship **closes** the issue: `Closes #N`, not `--refs`. The implementer does not hold
+  the issue for the check either: `code-wrap` adds the row and hands off a finished branch,
+  and `code-start` plans such a check as a row from the start (#541).
 - In the same step, it appends **one row** to the repo's single open issue titled
   `Human verify: …`. The row gives the source issue, the steps to run, and the evidence
   wanted. If no such issue is open, the ship files one, labelled `delivery:ops` so it is
