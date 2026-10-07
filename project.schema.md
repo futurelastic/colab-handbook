@@ -1025,7 +1025,7 @@ release:
   route: public-tool      # none · rapid-app · public-tool · library-fast · deploy-tag · deploy-tag-fast · live
   candidates: auto        # auto · off
   candidates-per-day: 1   # optional — a positive integer; no route has a cap by default (#443)
-  test-period: 3d         # <N>d — never shorter than 3d
+  test-period: 3d         # <N>d — never shorter than 3d; 0d (no test period) only where the final is human
   final: auto             # auto · human
   guard-run: node scripts/breaking-guard.mjs   # optional — a breaking-change detector (or guard-result: <file>)
   exports: api/public-symbols.txt              # optional — the committed public-symbol list
@@ -1100,7 +1100,12 @@ direction only, measured against the route — declared, or derived:
   `final-grant` below, and it is a recorded human act, not a value.
 - `test-period` — a whole number of days, `<N>d`. Longer than `3d` narrows; shorter is a
   **failure**. On `library-fast` and `deploy-tag-fast`, which have no test period, it is a
-  failure too.
+  failure too. **One exception: `0d`, where the final is a human act** (`final: human`,
+  `deploy-tag`'s own default included) — no test period at all, because the human's finalize
+  is the test: `colab release finalize --tag <newest rc> --answered-by <name>` tags it as soon
+  as every other check passes, and `--auto` posts `candidate-ready` on its first run (#549).
+  Where the final is automatic, `0d` is a failure: the period is the only look a candidate
+  gets there, and no human looked.
 
 **Three keys add evidence to the computed version, never permission** (#422) — they narrow and
 widen nothing, so each only has to be a non-empty string:
@@ -1531,7 +1536,7 @@ the shape that shows it. One writer at a time says nothing about who reads the r
 | `distribution` ∈ {`js`, `compiled`}, when set → else **finding** (#469) | a misspelled value silently read as undeclared, and the tool never checked |
 | `distribution` declared, but no install route §6 recognises for its row → **advisory** (#469) | a tool nobody can install the way §6 says every tool installs |
 | `release` is a one-level block of `candidates` ∈ {`auto`, `off`}, `test-period` `<N>d`, `final` ∈ {`auto`, `human`}, when set — no other sub-key | a misspelled knob silently read as the default |
-| `release` widening its derived default — `candidates: auto` where the rung cuts no tags, `final: auto` where the final tag is a human act (`deploy: tag` without a resolvable `final-grant`, or `manual`), `test-period` under `3d` → **finding** | a descriptor lowering §6's human gate on a tag that deploys production |
+| `release` widening its derived default — `candidates: auto` where the rung cuts no tags, `final: auto` where the final tag is a human act (`deploy: tag` without a resolvable `final-grant`, or `manual`), `test-period` under `3d` (except `0d` on a human final, #549) → **finding** | a descriptor lowering §6's human gate on a tag that deploys production |
 | `route: deploy-tag-fast` without a resolvable `final-grant`, `health-url` and `rollback: auto`, or whose release workflow deploys nothing from the final it tags (#446) → **finding** | a final on every green head that nobody chose, or that reaches the Release page while production never moves |
 
 `push-main` on a Tier A repo **is a finding** — a mismatch between the mechanism and the

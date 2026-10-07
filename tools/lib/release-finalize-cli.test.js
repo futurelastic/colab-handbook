@@ -301,6 +301,34 @@ test('human row: an agent run stops at candidate-ready with the handoff; the hum
   assert.match(fx.g('tag', '-l', '--format=%(contents)', 'v1.2.1'), /Finalized by: Ops/);
 });
 
+test('#549 human row, test-period 0d: a candidate cut minutes ago finalizes on the human bar; --auto posts candidate-ready at once', () => {
+  const fx = fixture(HUMAN_YML + 'release:\n  test-period: 0d\n');
+  const rc = cutCandidate(fx, 0);
+  const ready = finalize(fx, ['--auto']);
+  assert.strictEqual(ready.code, 0, ready.out + ready.err);
+  assert.strictEqual(ready.body.state, 'candidate-ready');
+  assert.strictEqual(ready.body.testPeriodDays, 0);
+  assert.ok(!originTags(fx).includes('v1.2.1'), '--auto never tags a human final');
+  const comments = tracking(fx)[0].comments.map((c) => c.body);
+  assert.ok(comments.some((b) => new RegExp(`${rc.replace(/\./g, '\\.')} is ready`).test(b)), 'candidate-ready is posted on the first run, not after 3 days');
+  assert.ok(comments.some((b) => /no test period on this repo/.test(b)), 'the picked-up comment names no period, not a zero-length window');
+
+  const done = finalize(fx, ['--tag', rc, '--answered-by', 'Ops'], { env: { COLAB_HUMAN: '1' } });
+  assert.strictEqual(done.code, 0, done.out + done.err);
+  assert.strictEqual(done.body.state, 'finalized');
+  assert.strictEqual(done.body.checks.find((c) => c.condition === 'test-period').required, false);
+  assert.ok(originTags(fx).includes('v1.2.1'));
+  fx.g('fetch', '-q', '--tags', 'origin');
+  assert.match(fx.g('tag', '-l', '--format=%(contents)', 'v1.2.1'), /Test period: none/);
+});
+
+test('#549 an automatic-final row cannot declare test-period 0d — finalize refuses on the invalid block', () => {
+  const fx = fixture(AUTO_YML + 'release:\n  test-period: 0d\n');
+  const r = finalize(fx, ['--dry']);
+  assert.strictEqual(r.code, 1, r.out + r.err);
+  assert.match(JSON.stringify(r.body || r.err), /test-period: 0d widens/);
+});
+
 // ---- --auto (#423) ------------------------------------------------------------------------------
 
 /** One fix commit + one candidate per entry of `daysAgo`; every candidate's commit stays green. */

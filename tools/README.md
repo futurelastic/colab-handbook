@@ -1314,7 +1314,9 @@ daemon: every run re-measures from git and GitHub, and the decision is `tools/li
   from `issues/<n>/dependencies/blocked_by`: open → `refused`; closed after the period began →
   `needs-new-candidate`; closed before → fine.
 - **Test period** starts at the later of the candidate tag's tagger date and the issue's
-  `createdAt`, and lasts the effective `release: test-period` (3 days by default).
+  `createdAt`, and lasts the effective `release: test-period` (3 days by default). A human-final
+  repo may declare `0d`: no period, and the human bar finalizes the newest candidate as soon as
+  every other check passes (#549).
 - **Events** are comments carrying `<!-- colab:release-event … -->` markers, each posted once:
   `candidate=<rc>` (the period starts), `state=candidate-ready candidate=<rc>` (carries the
   handoff), `state=finalized tag=<vX.Y.Z>`, `state=superseded by=<vX.Y.Z>`.
@@ -1342,7 +1344,8 @@ daemon: every run re-measures from git and GitHub, and the decision is `tools/li
 | `migration-grant` | #441: no migration file (any, destructive or not) since the last final, or a live migration grant on the version's tracking issue bound to `vX.Y.Z` (`COLAB_HUMAN=1 colab migration-grant <tracking> --branch vX.Y.Z`) | granted `deploy-tag` only; reported — failing takes the automatic final away (→ `candidate-ready`) |
 | `human` | human-final row only: `COLAB_HUMAN=1` + `--answered-by` + `--tag` (the `adopt` gate's precedent) | reported; absent → `candidate-ready` |
 
-The human bar never shortens a test period and never overrides a hold. Where it is met, the final's
+The human bar never shortens a test period and never overrides a hold — on a human-final row the
+period is informational, and `release: test-period: 0d` declares none (#549). Where it is met, the final's
 annotated message records who answered. On a granted `deploy-tag` repo (#441) the final is automatic
 only while both grant checks pass; the tag message then names the grant and its decision issue
 (`Automatic final granted by: …`), and `--json` carries it as `grant: {issue, ruledBy}`. A human bar

@@ -11,7 +11,7 @@
  *     route: public-tool      # none | rapid-app | public-tool | library-fast | deploy-tag | deploy-tag-fast | live
  *     candidates: auto        # auto | off
  *     candidates-per-day: 1   # positive integer — an opt-in cap; no route has one by default (#443)
- *     test-period: 3d         # <N>d, never below the route's 3 days
+ *     test-period: 3d         # <N>d, never below the route's 3 days — or 0d where the final is human (#549)
  *     final: auto             # auto | human
  *     guard-run: <command>    # #422 — a breaking-change detector `release cut --auto` runs
  *     guard-result: <path>    # #422 — or the file an earlier CI step wrote its result to
@@ -95,6 +95,8 @@ const FINAL = Object.freeze(['auto', 'human']);
 // The routes' own test period (CONVENTIONS.md §6: "The test period is 3 days"). A floor, not a
 // suggestion: a declared period may be longer, never shorter.
 const TEST_PERIOD_DAYS = 3;
+// #549: the one value below the floor — no test period at all, and only where the final is human.
+const TEST_PERIOD_ZERO = '0d';
 
 /**
  * Each route's own policy — CONVENTIONS.md §6, *Release routes*, row for row.
@@ -369,8 +371,14 @@ function evaluateRelease(cfg) {
     const days = parseTestPeriod(v);
     if (days === null) fail(`release.test-period is ${JSON.stringify(v)}, expected a whole number of days like "${TEST_PERIOD_DAYS}d"`);
     else if (effective.testPeriodDays === null) fail(`release.test-period: ${v} has no period to set — ${route} cuts no candidate, so there is no test period. Remove the key`);
-    else if (days < effective.testPeriodDays) {
-      widen('test-period', v, `the test period is ${effective.testPeriodDays}d, and a shorter one finalizes a candidate before the route's own window has passed. Set ${effective.testPeriodDays}d or longer`);
+    else if (days === 0 && effective.final === 'human') {
+      // #549: a human final may declare no test period — the human's finalize is the test.
+      effective.testPeriodDays = 0;
+    } else if (days === 0) {
+      widen('test-period', v, `the final is automatic here, so the test period is the only look a candidate gets before it becomes a release — no human looked. ${TEST_PERIOD_ZERO} fits only a human final (final: human). Set ${effective.testPeriodDays}d or longer`);
+    } else if (days < effective.testPeriodDays) {
+      widen('test-period', v, `the test period is ${effective.testPeriodDays}d, and a shorter one finalizes a candidate before the route's own window has passed. Set ${effective.testPeriodDays}d or longer` +
+        (effective.final === 'human' ? ` — or ${TEST_PERIOD_ZERO} for no test period, since the final here is a human act` : ''));
     } else effective.testPeriodDays = days;
   }
 

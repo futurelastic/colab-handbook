@@ -1901,7 +1901,9 @@ Conditions (--json checks[].condition; required:false means reported, not blocki
                       already-final exit 0 (nothing to do yet is the ordinary output)
   --tag <rc>          pin the candidate a human reviewed; refused unless it is the newest one
   --answered-by <n>   with COLAB_HUMAN=1 and --tag: the human bar for a final that is a human act.
-                      No field, flag or project.yml value lowers it, and it never shortens a test period
+                      No field, flag or project.yml value lowers it, and it never shortens a test period.
+                      Where the final is a human act the period is informational anyway, and
+                      release.test-period: 0d declares none at all (#549)
   --dry               measure and report; open, post, tag and close nothing
   --json              { repo, row, route, final, testPeriodDays, lastFinal, dry, auto, candidate, tracking,
                         periodStart, periodEndsAt, state, tagged, finalTag, checks, handoff,
@@ -2132,7 +2134,9 @@ function cmdReleaseFinalize(argv) {
     const tNew = version0 ? trackings.get(version0) : null;
     if (newest && tNew && tNew.number) {
       const pNew = releaseFinalize.periodVerdict({ cutAt: newest.cutAt, trackingCreatedAt: tNew.createdAt, testPeriodDays: policy.effective.testPeriodDays, now });
-      comment(tNew.number, { candidate: newest.tag }, walk
+      comment(tNew.number, { candidate: newest.tag }, pNew.days === 0
+        ? `Candidate **${newest.tag}** (\`${shortSha(newest.sha)}\`) picked up — no test period on this repo (\`release.test-period: 0d\`, #549): the human's finalize is the test.`
+        : walk
         ? `Candidate **${newest.tag}** (\`${shortSha(newest.sha)}\`) picked up — its own test period runs ${pNew.start} → ${pNew.endsAt}. A newer candidate does not restart an older one's clock: the newest candidate clean for its own period is finalized (\`--auto\`).`
         : `Candidate **${newest.tag}** (\`${shortSha(newest.sha)}\`) picked up — its test period runs ${pNew.start} → ${pNew.endsAt}. A new candidate restarts it.`);
     }
