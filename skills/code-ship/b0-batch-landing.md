@@ -37,8 +37,8 @@ arrive), merge-clean against trunk — land through one command instead of one s
    batch: it prints what would land and writes nothing.
 3. Read the exit code — it never waits for you:
    - **`3` — paused.** The combined run (or trunk's own) is still going, or the batch was just
-     (re)built. Wait on the run id it printed with B1a's bound — `colab ci-wait <id>
-     --timeout 15m` (#495) — then run **the same command** again. The cap expiring is a defer
+     (re)built. Wait on the run id it printed with B1a's bound — `colab ci-wait <id>`
+     (#495; no `--timeout`: its default is that bound, #559) — then run **the same command** again. The cap expiring is a defer
      exactly as B1a records one; the batch ref stays for the next pass.
    - **`0` — landed.** Trunk fast-forwarded to the tested head; each member's claim, worktree,
      branch and 🚢 comment are handled as a serial ship handles them. Go to B2b for the

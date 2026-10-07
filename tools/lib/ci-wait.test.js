@@ -204,7 +204,9 @@ function fixture(responses) {
     `f="${root}/r$n"; [ -f "$f.out" ] || f="${root}/r${responses.length - 1}"`,
     'cat "$f.out"; c=$(cat "$f.code"); [ "$c" = 304 ] && echo "gh: HTTP 304" >&2; [ "$c" = 0 ] || exit 1',
   ].join('\n') + '\n', { mode: 0o755 });
-  return { root, work, log, env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, COLAB_HOME: path.join(root, 'home') } };
+  return { root, work, log, env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, COLAB_HOME: path.join(root, 'home'),
+    // #559: no CI-history read in these fixtures — the deadline is the bootstrap, the gh call counts hold.
+    COLAB_CI_PROFILE_TTL: '0' } };
 }
 
 const http = (status, body, extra = '') => `HTTP/2.0 ${status}\r\nEtag: "e"\r\n${extra}\r\n${body}`;

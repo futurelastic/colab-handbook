@@ -14,7 +14,7 @@ falls into is what decides whether the run continues:
   `↩️ Sent back` comment naming the conflicting paths, never a resolution by the sweep),
   this branch's gate failing for
   reasons unrelated to trunk, a rejected grade on one issue set, a branch run still in
-  flight when `code-ship` B1a's 15-minute cap expired (`ci-wait`, §4.0 — record its run
+  flight when `code-ship` B1a's bounded wait expired (`ci-wait`, §4.0 — record its run
   id). It blocks *that* candidate and says nothing about the next one. **Defer it, record why, continue.**
   [`code-ship`](../code-ship/SKILL.md) already scopes its own refusals exactly this way
   — *"a rejected grade — either class — ends this skill's run **for that issue set**"* —

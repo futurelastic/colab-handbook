@@ -45,7 +45,7 @@ gh api "repos/{owner}/{repo}/actions/runs/<databaseId>/jobs" \
    sha. This is the one cancel this skill makes, and it is on `<base>`'s red only — B1a's
    branch-CI rule still permits a re-run and nothing else.
 4. **Re-run the failed jobs and wait with the one primitive:** `gh run rerun <databaseId>
-   --failed`, then `colab ci-wait --sha "$RED" --branch <base> --timeout 15m` (#495) — never
+   --failed`, then `colab ci-wait --sha "$RED" --branch <base>` (#495; the trunk bound, #559) — never
    a hand-rolled `sleep` loop. Green ⇒ re-read B1 and carry on.
 5. **A repeat red is the real thing.** It is a code red ⇒ a `TRUNK RED:` issue and a patch
    (the rest of this section), or — when the repeat shows the same runner-side signature —
@@ -77,7 +77,7 @@ Why: [ADR 536](../../docs/adr/536-code-ship-b1-red-trunk-rationale.md).
   (#474, `CONVENTIONS.md` *Cure rule*, *Dry-run evidence*). A real `colab ship`
   dispatches it once and refuses until it completes. `--dry` only prints the
   command: `gh workflow run release-auto.yml --ref <branch> -f dry_run=true`. Then
-  wait under B1a's 15-minute bound and re-run ship. The cure admits it only if
+  wait under B1a's bound and re-run ship. The cure admits it only if
   every step that ran on trunk passed in the dry run. A red inside a `[publish]`
   step never cures this way: that is a ci-grant. A bystander never dispatches one,
   and containment refuses it anyway.
@@ -88,7 +88,7 @@ Why: [ADR 536](../../docs/adr/536-code-ship-b1-red-trunk-rationale.md).
   A real `colab ship` dispatches it once and refuses until it completes; `--dry`
   prints the command (`gh workflow run <file> --ref <branch>`). Wait with
   `colab ci-wait --sha <head> --branch <branch> --timeout <the job's usual length>`.
-  If that is longer than B1a's 15-minute bound, do not sit on it: record a defer
+  If that is longer than B1a's bound, do not sit on it: record a defer
   whose clears-on is that dispatch run finishing, and re-run ship then. The cure
   admits it only from the same workflow file at the same head, with the step that
   failed on trunk passing in it; `skipped` is never a pass.

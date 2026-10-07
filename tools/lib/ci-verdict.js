@@ -72,23 +72,29 @@ function hoursSince(iso, nowMs) {
 function wedgedVerdict(run, opts = {}) {
   if (!run || run.status === 'completed' || run.status === 'none') return { wedged: false, reason: null };
   const age = hoursSince(run.createdAt, opts.nowMs);
+  // #559: both bounds may come from the repo's measured CI (tools/lib/ci-profile.js); absent → today's.
+  const floorMin = Number.isFinite(opts.zeroJobsFloorSec) ? opts.zeroJobsFloorSec / 60 : ZERO_JOBS_AGE_FLOOR_MINUTES;
+  const wedgeHours = Number.isFinite(opts.wedgeAgeSec) ? opts.wedgeAgeSec / 3600 : WEDGE_AGE_HOURS;
   if (run.jobCount === 0) {
     // #171: no createdAt (age unknown) never manufactures a positive here, same posture as the age
     // backstop below when createdAt is missing/unparseable — a missing signal must not wedge on its own.
-    const floorHours = ZERO_JOBS_AGE_FLOOR_MINUTES / 60;
+    const floorHours = floorMin / 60;
     if (age !== null && age >= floorHours) {
       return {
         wedged: true,
-        reason: `zero jobs — no runner has ever picked it up (unmoving for ${age.toFixed(2)}h, past the ${ZERO_JOBS_AGE_FLOOR_MINUTES}m floor)`,
+        reason: `zero jobs — no runner has ever picked it up (unmoving for ${age.toFixed(2)}h, past the ${fmtMin(floorMin)} floor)`,
       };
     }
     return { wedged: false, reason: null };
   }
-  if (age !== null && age >= WEDGE_AGE_HOURS) {
-    return { wedged: true, reason: `status=${run.status} for ${age.toFixed(1)}h (>= ${WEDGE_AGE_HOURS}h backstop)` };
+  if (age !== null && age >= wedgeHours) {
+    return { wedged: true, reason: `status=${run.status} for ${age.toFixed(1)}h (>= ${fmtHours(wedgeHours)} backstop)` };
   }
   return { wedged: false, reason: null };
 }
+
+const fmtMin = (m) => `${Number.isInteger(m) ? m : m.toFixed(1)}m`;
+const fmtHours = (h) => (Number.isInteger(h) ? `${h}h` : `${Math.round(h * 60)}m`);
 
 // #413: how long after a trunk commit "no run at this sha" is still the ordinary state. GitHub
 // creates a push run seconds after the push, but a ship reading trunk right after another ship
@@ -107,7 +113,9 @@ function emptyReadVerdict(committedAtMs, opts = {}) {
   if (committedAtMs == null || !Number.isFinite(committedAtMs)) return { fresh: false, minutes: null };
   const now = opts.nowMs != null ? opts.nowMs : Date.now();
   const minutes = (now - committedAtMs) / 60000;
-  return { fresh: minutes >= 0 && minutes < EMPTY_READ_GRACE_MINUTES, minutes };
+  // #559: the grace may be the repo's measured push→run lag (tools/lib/ci-profile.js); absent → 10 min.
+  const graceMinutes = Number.isFinite(opts.graceSec) ? opts.graceSec / 60 : EMPTY_READ_GRACE_MINUTES;
+  return { fresh: minutes >= 0 && minutes < graceMinutes, minutes, graceMinutes };
 }
 
 module.exports = { WEDGE_AGE_HOURS, ZERO_JOBS_AGE_FLOOR_MINUTES, EMPTY_READ_GRACE_MINUTES, wedgedVerdict, emptyReadVerdict };

@@ -286,7 +286,7 @@ git push -u origin <branch>    # a backup/record, NOT a PR, NOT trunk
 
 **Rule:** A3's local green does not answer for branch CI. Read every run at the pushed head
 (`HEAD=$(git rev-parse HEAD)`, then `gh run list --branch <branch>` filtered to `$HEAD`); waiting on
-one in flight is `colab ci-wait --sha "$HEAD" --branch <branch> --timeout 15m`, never a
+one in flight is `colab ci-wait --sha "$HEAD" --branch <branch>` (deadline = the repo's CI bound), never a
 hand-rolled loop or a background wait. **Stop:** exit 4 (RATE_LIMITED) ⇒ report `none` with
 the reset time, do not retry. Full text, with the command: [a5-read-the-run.md](a5-read-the-run.md).
 
@@ -305,7 +305,7 @@ The four classes, their quantifiers and each one's next step are defined in
 **Rule:** a red class is data — record it, never start fixing `red:infra`; unseparated exit
 codes ⇒ §4's ordered log test, undecidable is `red:finding`. Say which `none` you measured (no
 branch-push trigger · in flight · no workflows). `local` mode: do not block, report `none`.
-`ci` mode (#410): wait 15 minutes; `green` ⇒ `branch-ci <sha7> run <databaseId>`;
+`ci` mode (#410): wait the repo's CI bound; `green` ⇒ `branch-ci <sha7> run <databaseId>`;
 `red:finding` ⇒ fix, re-push, re-read; `red:infra` or capped ⇒ hand off with run id and class.
 Full text: [a5-reading-the-class.md](a5-reading-the-class.md).
 

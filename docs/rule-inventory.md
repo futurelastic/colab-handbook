@@ -702,12 +702,12 @@ settled here: restored as a minimal clause, or recorded as redundant with the re
 | C4.bci.10 | default |  | While iterating run the tests for what changed; the full suite runs once, where the verdict comes from. | While iterating, run the tests for what | CONVENTIONS.md | #410 |
 | C4.bci.11 | default |  | With no `gate:`, `authoritative: local`, or no workflow on a session-branch push, the local full gate plus the hermetic run applies. | no `gate:`, `authoritative: local`, or no workflow firing on a session-branch | CONVENTIONS.md | #410 |
 | C4.bci.12 | default |  | Report branch CI at the head sha as one of four classes, spelled exactly `green`, `none`, `red:infra`, `red:finding`, not as pass/fail. | report the result as one of four | CONVENTIONS.md | — |
-| C4.bci.13 | default |  | A `none` (run queued, in flight, or absent) is waited on for 15 minutes per candidate, then deferred with a re-measure trigger, never polled open-endedly. | then a defer carrying a re-measure trigger, never an open-ended poll | CONVENTIONS.md | #370 |
+| C4.bci.13 | default |  | A `none` (run queued, in flight, or absent) is waited on for the repo's measured CI wait bound per candidate (15 minutes with no history, #559), then deferred with a re-measure trigger, never polled open-endedly. | then a defer carrying a re-measure trigger, never an open-ended poll | CONVENTIONS.md | #370 |
 | C4.bci.14 | default |  | A run that cannot arrive for the ref is not pending: proceed, and read the trunk run at the squash sha after merge, filing `TRUNK RED:` on red. | is not pending: proceed, and the base's own CI is the whole CI story | CONVENTIONS.md | #374 |
 | C4.bci.15 | default |  | A `red:infra` run is re-run once; an identical second failure goes to the ops lane, never merged past and never sent back. | an identical failure twice is the runner, not the branch — hand it to the ops lane. | CONVENTIONS.md | — |
 | C4.bci.16 | default |  | A `red:finding` goes back to an implementer session as a class send-back, never merged past and never re-run. | back to an implementer session, **as a class** | CONVENTIONS.md | — |
 | C4.bci.17 | hard | tools/colab::branch run contains current base (#395) | `colab ship` refuses a branch whose run head does not contain the base's current tip (`stale-base`). | A class read at a head that does not contain the base's current tip is | CONVENTIONS.md | #395 |
-| C4.bci.18 | default |  | A stale-base class is cleared by syncing the base in, pushing and waiting on the new run (15-minute bound), then landing. | The next step is mechanical — sync the base in, push, wait on the new run | CONVENTIONS.md | #395 |
+| C4.bci.18 | default |  | A stale-base class is cleared by syncing the base in, pushing and waiting on the new run (the same bound), then landing. | The next step is mechanical — sync the base in, push, wait on the new run | CONVENTIONS.md | #395 |
 | C4.bci.19 | default |  | Skipping the re-run on a stale base is allowed only on a measurement, never on a guess. | ever allowed on a measurement, never on a guess | CONVENTIONS.md | #395 |
 | C4.bci.20 | default |  | A fast green sibling never answers for a slow run still going (that sha is `none`); a cancelled straggler beside a real success is still `green`. | a fast sibling already green never answers for a slow one still running | CONVENTIONS.md | #307 |
 | C4.bci.21 | default |  | The ladder must not reintroduce the deadlock #92 fixed. | the ladder must not reintroduce the deadlock #92 fixed. | CONVENTIONS.md | #92 |
@@ -2509,6 +2509,16 @@ Reworded units, one bullet each. Row key changed: C6.rel.111 (the moved sentence
 | S1.shipbatchwait.02 | default |  | The handbook ships no default value and no ceiling for the window. | no default value and no ceiling | project.schema.md | #555 |
 | S1.shipbatchwait.03 | hard | tools/lib/ship-batch.js::expected a whole number with a unit | A malformed `ship-batch-wait` fails the audit and the CI descriptor check; `colab ship` fails closed to no wait on it. | and `colab ship` fails closed to no wait on it | project.schema.md | #555 |
 | S1.shipbatchwait.04 | default |  | The window is counted from when the lone member became ready, so it never restarts. | so the window never restarts | project.schema.md | #555 |
+
+### `ci-wait-factor`
+
+| id | class | gate | rule | key | dest | source |
+|---|---|---|---|---|---|---|
+| S1.ciwaitfactor.01 | default |  | Every CI wait bound is measured from the repo's own CI history; the factor is the only declared part. | only declared part of it (#559) | project.schema.md | #559 |
+| S1.ciwaitfactor.02 | default |  | With too few samples a bound stays on its bootstrap value, the pre-#559 value exactly. | A kind with too few samples stays on its | project.schema.md | #559 |
+| S1.ciwaitfactor.03 | default |  | The 6 h wedge cap and the 30/60/120 s schedule are safety limits measurement may only tighten. | are safety limits measurement may only tighten | project.schema.md | #559 |
+| S1.ciwaitfactor.04 | default |  | `colab ship` reads the cached profile only; a verdict never waits on a history fetch. | a verdict never waits on a history fetch | project.schema.md | #559 |
+| S1.ciwaitfactor.05 | hard | tools/lib/ci-profile.js::must be a number ≥ 1 | A malformed `ci-wait-factor` fails the audit; the tools use the default 2 and say so. | a bad value never produces a different behaviour | project.schema.md | #559 |
 
 ### `migrations`
 

@@ -142,7 +142,7 @@ Read when `<base>` is red: [b1-red-trunk.md](b1-red-trunk.md).
 
 **Rule:** re-derive the branch's class at its current head — `green` · `none` · `red:infra` ·
 `red:finding` — never take `code-wrap` A5's word. `green` ⇒ B1b; `none` in flight ⇒
-`colab ci-wait --sha "$BHEAD" --branch <branch> --timeout 15m`, then defer; `none` that cannot
+`colab ci-wait --sha "$BHEAD" --branch <branch>` (deadline = the repo's measured CI bound, #559), then defer; `none` that cannot
 arrive ⇒ proceed, and B2a reads trunk after the merge; `red:infra` ⇒ one re-run, twice ⇒ ops
 lane; `red:finding` ⇒ send back. `colab ci-wait` is the only way to wait for CI. A green class
 on a head lacking `<base>`'s tip is `stale-base`: sync, push, re-read.
@@ -191,8 +191,8 @@ Full text: [b2-squash.md](b2-squash.md).
 
 ## B2a. Branch CI could not arrive? Read the trunk run at your squash before any evidence (#374)
 
-**Rule:** only when B1a proceeded on a cannot-arrive `none`. `colab ci-wait --sha "$SQUASH"
---timeout 15m`, then: `green` ⇒ cite the run in B2b · `red:finding` ⇒ file `TRUNK RED: <sha>
+**Rule:** only when B1a proceeded on a cannot-arrive `none`. `colab ci-wait --sha "$SQUASH"`
+(the trunk bound), then: `green` ⇒ cite the run in B2b · `red:finding` ⇒ file `TRUNK RED: <sha>
 (#N) fails <what>` before any evidence, the grade stays `pass` · `red:infra` ⇒ one re-run ·
 cap expired ⇒ say so in the evidence, naming the run.
 Read when B1a read a cannot-arrive `none`: [b2a-trunk-run.md](b2a-trunk-run.md).
