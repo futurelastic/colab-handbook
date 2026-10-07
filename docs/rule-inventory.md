@@ -64,10 +64,12 @@ missing 0 · headings gone from their file 0 · ledger entries 1 (stale 0)
 ## Reframe ledger
 
 The reframe around `exposure` added a lead paragraph to §2 (new text, so nothing to excuse;
-rows C2.frame.01–03) and rewrote the one unit below. It is the only unit `check-doc-move`
-excuses, and it names the rows that carry its rules now.
+rows C2.frame.01–03) and rewrote the one unit below. It was the only unit #523's move check
+(base `e01b9e27`) excused, and it names the rows that carry its rules now. Against #539's base
+`bc1100ea` the fence is already in its reframed form, so the entry is kept as history in plain
+text and no longer excuses anything.
 
-- `CONVENTIONS.md:5863` — the §11 quick-reference fence. Its releasing comment now reads
+- CONVENTIONS.md line 5863 at `e01b9e27` — the §11 quick-reference fence. Its releasing comment now reads
   `exposure: released (legacy tier A; …)` instead of `Tier A / exposure: released (…)`;
   every command line in the fence is unchanged. Rows: C11.quick.08, C11.quick.09.
 
