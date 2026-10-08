@@ -14,7 +14,8 @@
 //      previous final), verifies that, and still fails the run. A manual rollback is a re-run
 //      with the previous tag.
 // The outcome — "running vX.Y.Z at <time>" or the failure — goes to the run summary and, when one
-// exists, to the release issue (the issue carrying `<!-- colab:release version=vX.Y.Z -->`).
+// exists, to the release issue (the issue whose body STARTS with `<!-- colab:release version=vX.Y.Z -->`;
+// one that only mentions it is not the record — #576).
 //
 // CONFIGURATION (env; the workflow's one env block):
 //   DEPLOY_ADAPTER          portainer (default) — loads ./deploy-adapter-<name>.mjs beside this file
@@ -187,12 +188,25 @@ async function waitForVersion(url, version, io, timeoutS, auth = {}) {
   }
 }
 
+// The release issue is the one whose body STARTS with the marker (leading whitespace tolerated) —
+// never one that merely mentions it, which the search above also returns, in an order GitHub's
+// ranking decides (#576). The same anchored rule as the handbook's release codec
+// (`decodeTrackingMarker`, #575), restated here because this copy never calls back to the handbook.
+export function releaseIssue(json, tag) {
+  let list;
+  try { list = JSON.parse(json || '[]'); } catch { return ''; }
+  if (!Array.isArray(list)) return '';
+  const re = /^\s*<!--\s*colab:release\s+version=(v[0-9]+\.[0-9]+\.[0-9]+)\s*-->/;
+  const hit = list.find((i) => { const m = re.exec(String((i && i.body) || '')); return m && m[1] === tag; });
+  return hit ? String(hit.number) : '';
+}
+
 function record(io, tag, line) {
   io.summary(line);
   const repo = io.env.GITHUB_REPOSITORY;
   if (!repo) return;
-  const found = io.sh('gh', ['issue', 'list', '--repo', repo, '--state', 'all', '--search', `"colab:release version=${tag}" in:body`, '--json', 'number', '--jq', '.[0].number // ""']);
-  const n = found.status === 0 ? found.stdout.trim() : '';
+  const found = io.sh('gh', ['issue', 'list', '--repo', repo, '--state', 'all', '--search', `"colab:release version=${tag}" in:body`, '--json', 'number,body']);
+  const n = found.status === 0 ? releaseIssue(found.stdout, tag) : '';
   if (!n) { io.log(`no release issue for ${tag} — recorded in the run summary only`); return; }
   const c = io.sh('gh', ['issue', 'comment', n, '--repo', repo, '--body', line]);
   if (c.status !== 0) io.log(`could not comment on release issue #${n}: ${c.stderr.trim()}`);
