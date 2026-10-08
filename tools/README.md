@@ -1316,7 +1316,9 @@ daemon: every run re-measures from git and GitHub, and the decision is `tools/li
   lightweight or hand-made one is refused, never finalized.
 - **One tracking issue per version**, opened by the first non-`--dry` run for that version:
   title `release: vX.Y.Z`, body's first line `<!-- colab:release version=vX.Y.Z -->` (only the
-  marker identifies it). Every `-rc.N` of the version reuses it. Two open ones for a version, or a
+  marker identifies it, and only at the body's start — leading whitespace tolerated; an issue that
+  mentions the marker anywhere else is never adopted as the record, #575). `--json`'s `tracking.title`
+  is the matched issue's own title, so a record that is not `release: vX.Y.Z` shows. Every `-rc.N` of the version reuses it. Two open ones for a version, or a
   closed one for a version not yet final, refuse rather than guess. Once a final is tagged, every
   open, un-held issue of a version *below* it is closed with a "superseded" comment — never earlier,
   and never a newer version's (#548: any open candidate may still be finalized by `--tag`).
