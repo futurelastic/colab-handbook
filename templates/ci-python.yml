@@ -279,6 +279,9 @@ jobs:
     needs: dedupe
     if: ${{ !cancelled() && needs.dedupe.outputs.tested != 'true' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository) }}
     runs-on: ubuntu-latest # EDIT: self-hosted label if this repo needs one.
+    timeout-minutes: 30 # a hung build must not hold the runner for the 360-minute default (#572).
+    # EDIT: NOT a measured fit (#572) — one Python adopter, whose build is a byte-compile (p99
+    # under 1 min). Set it well above YOUR p99 — below it a slow but healthy suite goes red.
     defaults:
       run:
         # EDIT: set to the directory holding the Python project if it is not at the root.
