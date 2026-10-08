@@ -322,8 +322,22 @@ test('#569: a declared shape: is read, an older reader still parses the line, an
   assert.strictEqual(codec.parseWakeLine(late.wake).ok, false);
 });
 
+test('#575: a tracking marker counts only at the body\'s start — a body that mentions it is not a record', () => {
+  assert.ok(samples.releaseMarkers.notTracking.length > 0);
+  for (const s of samples.releaseMarkers.notTracking) assert.strictEqual(codec.decodeTrackingMarker(s.wire), null, s.wire);
+  const marker = samples.releaseMarkers.tracking[0].wire;
+  const v = samples.releaseMarkers.tracking[0].decoded;
+  // The body finalize writes: the marker, then prose — matched.
+  assert.strictEqual(codec.decodeTrackingMarker(`${marker}\n\nRelease tracking record for **${v}**.`), v);
+  // Leading whitespace (a hand-edited body, a CRLF client) is tolerated.
+  assert.strictEqual(codec.decodeTrackingMarker(`\n  \r\n${marker}\nmore`), v);
+  // Anything before it — even one word — makes it a mention.
+  assert.strictEqual(codec.decodeTrackingMarker(`see ${marker}`), null);
+  assert.strictEqual(codec.decodeTrackingMarker(`release: ${v}\n${marker}`), null);
+});
+
 test('the new samples are scrubbed: hosts as h: tokens, repos as OWNER/REPO', () => {
-  const all = PAIRS.flatMap(([n]) => group(n)).concat(samples.notHolds);
+  const all = PAIRS.flatMap(([n]) => group(n)).concat(samples.notHolds, samples.releaseMarkers.notTracking);
   for (const s of all) {
     for (const m of s.wire.matchAll(/host `([^`]*)`/g)) assert.match(m[1], /^h:[0-9a-f]{12}$/, s.wire);
     for (const m of s.wire.matchAll(/([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+)#\d+/g)) assert.strictEqual(`${m[1]}/${m[2]}`, 'OWNER/REPO', s.wire);

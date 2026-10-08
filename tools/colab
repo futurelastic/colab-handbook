@@ -2001,7 +2001,7 @@ function cmdReleaseFinalize(argv) {
   const issues = readAllIssuesForSwitches(repoAbs);
   const labelNames = (i) => (i.labels || []).map((l) => (typeof l === 'string' ? l : l.name));
   const records = (issues || [])
-    .map((i) => ({ number: i.number, url: i.url || null, state: String(i.state || '').toUpperCase(), createdAt: i.createdAt || null, held: labelNames(i).includes(releaseFinalize.HOLD_LABEL), version: releaseFinalize.parseReleaseMarker(i.body) }))
+    .map((i) => ({ number: i.number, url: i.url || null, title: i.title == null ? null : String(i.title), state: String(i.state || '').toUpperCase(), createdAt: i.createdAt || null, held: labelNames(i).includes(releaseFinalize.HOLD_LABEL), version: releaseFinalize.parseReleaseMarker(i.body) }))
     .filter((r) => r.version);
   const trackingFor = (version, { isCandidate }) => {
     if (issues === null) return { error: 'the issue list could not be read (or may be truncated) — the tracking issue cannot be found' };
@@ -2009,7 +2009,7 @@ function cmdReleaseFinalize(argv) {
     const open = mine.filter((r) => r.state === 'OPEN');
     if (open.length > 1) return { error: `${open.length} open tracking issues for ${version} (${open.map((r) => `#${r.number}`).join(', ')}) — one per version; close the duplicate by hand` };
     if (open.length === 1) return { ...open[0] };
-    if (isCandidate && mine.length) return { error: `the tracking issue for ${version} (#${mine[0].number}) is closed but ${version} is not final — reopen it; a closed record is never silently replaced` };
+    if (isCandidate && mine.length) return { error: `the tracking issue for ${version} (#${mine[0].number}${mine[0].title ? ` ${JSON.stringify(mine[0].title)}` : ''}) is closed but ${version} is not final — reopen it; a closed record is never silently replaced` };
     return { number: null, createdAt: null, held: false, wouldCreate: !opts.dry };
   };
   const version0 = newest ? newest.version : (selection.version || null);
@@ -2021,7 +2021,7 @@ function cmdReleaseFinalize(argv) {
     const body = releaseFinalize.trackingBody({ version: version0, row: policy.derived.row, final: policy.effective.final, testPeriodDays: policy.effective.testPeriodDays });
     const c = tracker.forRepo(repoAbs).issueCreate({ title: releaseFinalize.trackingTitle(version0), body });
     if (!c.number) trackings.set(version0, { error: `could not open the tracking issue for ${version0} (${String(c.stderr || '').split('\n')[0] || 'no issue URL returned'})` });
-    else { trackings.set(version0, { number: c.number, url: c.url, createdAt: now, held: false }); trackingCreated = true; }
+    else { trackings.set(version0, { number: c.number, url: c.url, title: releaseFinalize.trackingTitle(version0), createdAt: now, held: false }); trackingCreated = true; }
   }
 
   // #441: an operator-granted automatic final — the decision it names is resolved once per run, from
@@ -2202,7 +2202,7 @@ function cmdReleaseFinalize(argv) {
 
   const supersededHeld = records.filter((r) => r.state === 'OPEN' && r.held && r.version !== (cand ? cand.version : version0) && !finals.has(r.version)).map((r) => r.number);
   const trackingOut = tracking && !tracking.error
-    ? { number: tracking.number || null, url: tracking.url || null, created: trackingCreated && (!cand || cand.version === version0), held: !!tracking.held, supersededHeld }
+    ? { number: tracking.number || null, url: tracking.url || null, title: tracking.title || null, created: trackingCreated && (!cand || cand.version === version0), held: !!tracking.held, supersededHeld }
     : null;
   // #468: why this run made no final, and which candidate finals first — the line the release
   // workflow prints, so "no final" never has to be reconstructed from a checklist.

@@ -4,7 +4,10 @@
  * (CONVENTIONS.md §6, *The release rung*), as encode/decode pairs. Pure and synchronous.
  *
  *   tracking marker  — `<!-- colab:release version=vX.Y.Z -->`, the first line of a tracking
- *                      issue's body. Only the marker identifies the version, never the title.
+ *                      issue's body. Only the marker identifies the version, never the title —
+ *                      and only at the START of the body (leading whitespace tolerated): a body
+ *                      that merely MENTIONS the marker further down is talking about releases,
+ *                      not recording one, and is never adopted as the record (#575).
  *   event marker     — `<!-- colab:release-event k=v … -->`, one per thing announced on the
  *                      tracking issue, keys in the order written. Its exact presence is what makes
  *                      a re-run post nothing twice, so key order is part of the wire format.
@@ -16,7 +19,7 @@
  */
 
 const VERSION_RE = /^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$/;
-const TRACKING_MARKER_RE = /<!--\s*colab:release\s+version=(v[0-9]+\.[0-9]+\.[0-9]+)\s*-->/;
+const TRACKING_MARKER_RE = /^\s*<!--\s*colab:release\s+version=(v[0-9]+\.[0-9]+\.[0-9]+)\s*-->/;
 const RELEASE_EVENT_RE = /^<!-- colab:release-event((?: [^\s=]+=\S*)+) -->$/;
 const RELEASED_COMMENT_RE = /^<!-- colab:release-event released=(\S+) -->\nReleased in \*\*(\S+)\*\* \(`([^`]*)`\)\.$/;
 
@@ -24,7 +27,7 @@ const RELEASED_COMMENT_RE = /^<!-- colab:release-event released=(\S+) -->\nRelea
 function encodeTrackingMarker(version) { return `<!-- colab:release version=${version} -->`; }
 
 /** The version a body's tracking marker declares, or null — a marker naming a non-canonical
- *  version (a leading zero) declares nothing. */
+ *  version (a leading zero) declares nothing, and neither does one anywhere but the body's start. */
 function decodeTrackingMarker(body) {
   const m = TRACKING_MARKER_RE.exec(String(body || ''));
   return m && VERSION_RE.test(m[1]) ? m[1] : null;

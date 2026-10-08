@@ -189,6 +189,39 @@ test('auto row: --dry writes nothing; a run opens ONE tracking issue and tests; 
   assert.strictEqual(originBranch(fx, 'stable'), rcSha);
 });
 
+test('#575: an issue that only MENTIONS the marker is never adopted — finalize opens the real record, and --json names its title', () => {
+  const fx = fixture();
+  cutCandidate(fx, 5);
+  const mention = 'The tracking lookup should match a body that starts <!-- colab:release version=v1.2.1 --> only.';
+  writeState(fx, (s) => {
+    // Closed and about releases — the exact shape #575 measured being adopted, then refused as "closed".
+    s.issues.push({ number: 7, title: 'fix(release): lookup matches mentions', body: mention, state: 'CLOSED', stateReason: 'COMPLETED', labels: [], createdAt: ago(10), url: 'https://github.com/o/r/issues/7', comments: [] });
+    // Open too, so it would also have counted as a second "open tracking issue".
+    s.issues.push({ number: 8, title: 'docs: release rung', body: `Intro.\n\n<!-- colab:release version=v1.2.1 -->`, state: 'OPEN', stateReason: null, labels: [], createdAt: ago(10), url: 'https://github.com/o/r/issues/8', comments: [] });
+  });
+
+  const dry = finalize(fx, ['--dry']);
+  assert.strictEqual(dry.body.state, 'testing', dry.out + dry.err);
+  const check = dry.body.checks.find((c) => c.condition === 'tracking-issue');
+  assert.ok(check && check.ok, JSON.stringify(dry.body.checks));
+  assert.match(check.detail, /^none yet/, 'neither mention is the record');
+  assert.strictEqual(dry.body.tracking.number, null);
+
+  const first = finalize(fx);
+  assert.strictEqual(first.body.state, 'testing', first.out + first.err);
+  assert.strictEqual(first.body.tracking.created, true);
+  assert.ok(first.body.tracking.number >= 100, 'a NEW issue, not #7 or #8');
+  assert.strictEqual(first.body.tracking.title, 'release: v1.2.1');
+  const st = readState(fx);
+  assert.strictEqual(st.issues.find((i) => i.number === 7).state, 'CLOSED', 'the mention is left alone');
+  assert.deepStrictEqual(st.issues.find((i) => i.number === 8).comments, [], 'nothing is posted on a mention');
+
+  const again = finalize(fx);
+  assert.strictEqual(again.body.tracking.number, first.body.tracking.number, 'the record is found again');
+  assert.strictEqual(again.body.tracking.title, 'release: v1.2.1', 'the matched issue\'s own title');
+  assert.match(again.body.checks.find((c) => c.condition === 'tracking-issue').detail, /"release: v1\.2\.1"/);
+});
+
 test('#426: the final tells every issue it carries "Released in vX.Y.Z" — once, and a resume finishes it', () => {
   const fx = fixture();
   writeState(fx, (s) => {

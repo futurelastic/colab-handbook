@@ -710,6 +710,18 @@
         "decoded": "v0.1.6"
       }
     ],
+    "notTracking": [
+      {
+        "wire": "Finalize keeps one tracking issue per version; its body starts <!-- colab:release version=v0.1.6 --> and nothing else counts.",
+        "decoded": null,
+        "note": "synthetic (#575): an issue ABOUT releases that mentions the marker mid-body — never adopted as the record"
+      },
+      {
+        "wire": "fix: release lookup\n\n```\n<!-- colab:release version=v0.1.6 -->\n```",
+        "decoded": null,
+        "note": "synthetic (#575): the marker quoted on a later line, not the body's first"
+      }
+    ],
     "events": [
       {
         "wire": "<!-- colab:release-event candidate=v0.1.6-rc.1 -->",
