@@ -47,7 +47,16 @@ on:
   # the newest run per workflow at a sha, so that second run also decided the verdict.
   # EDIT: a copy that went back to trunk-only push (above) has no run on a branch until it
   # has a PR — restore `pull_request: branches: [<trunk>]` there; that PR run is then its
-  # only branch run (CONVENTIONS.md §4, "Branch CI").
+  # only branch run (CONVENTIONS.md §4, "Branch CI"), so also delete the fork-PR term
+  # (`github.event_name != 'pull_request' || …`) from every job's `if:` below, or it skips that run.
+  # EDIT: fork PRs (#514). A push to a fork never runs a workflow here, so a repo that takes
+  # PRs from forks needs `pull_request`. Uncomment it there. Every suite job below already
+  # carries `github.event.pull_request.head.repo.full_name != github.repository` for a PR
+  # event, so a same-repo PR's run skips every job (its push run is the one that tests) and a
+  # fork PR's run tests. A skipped run never stands for a workflow that has a run that ran
+  # (CONVENTIONS.md §4, "Branch CI"). Check every reader of your CI agrees before you uncomment.
+  # pull_request:
+  #   branches: ['**']
   # A promotion pushed by the release workflow's token triggers no push run, so that workflow
   # dispatches this one on main instead (templates/release-auto.yml, #440). Harmless elsewhere.
   workflow_dispatch:
@@ -208,7 +217,7 @@ jobs:
   gitleaks:
     name: Secret scan (gitleaks)
     needs: dedupe
-    if: ${{ !cancelled() && needs.dedupe.outputs.tested != 'true' }}
+    if: ${{ !cancelled() && needs.dedupe.outputs.tested != 'true' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository) }}
     runs-on: ubuntu-latest # EDIT: self-hosted label if this repo needs one.
     timeout-minutes: 15 # a scan of the checkout. EDIT: the default is 360.
     steps:
@@ -255,7 +264,7 @@ jobs:
   build:
     name: Build
     needs: dedupe
-    if: ${{ !cancelled() && needs.dedupe.outputs.tested != 'true' }}
+    if: ${{ !cancelled() && needs.dedupe.outputs.tested != 'true' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository) }}
     # A repo can adopt this template before it has any application code at all —
     # a fresh Tier B scaffold with decisions locked and a backlog filed, nothing
     # else. Unguarded, every step below still runs: "Install dependencies" warns

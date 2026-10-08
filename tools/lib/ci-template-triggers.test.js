@@ -131,3 +131,23 @@ test('the three templates carry one identical trigger + concurrency block', () =
   const [first, ...rest] = TEMPLATES.map((f) => block(read(f)));
   for (const [i, b] of rest.entries()) assert.strictEqual(b, first, `${TEMPLATES[i + 1]} drifted from ${TEMPLATES[0]}`);
 });
+
+// #514: the fork-PR opt-in. Every suite job carries the term, so uncommenting `pull_request:`
+// skips a same-repo PR's run (its push run tests that head) and tests a fork PR's run.
+const FORK_TERM = "(github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository)";
+for (const file of TEMPLATES) {
+  test(`${file}: fork-PR opt-in — trigger commented, every job needing dedupe carries the fork term (#514)`, () => {
+    const text = read(file);
+    const on = parseWorkflowOn(text);
+    assert.ok(!on.events.has('pull_request'), 'pull_request stays opt-in (commented) in the template');
+    assert.match(text, /^  # pull_request:\n  #   branches: \['\*\*'\]$/m);
+    const ifs = [...text.matchAll(/^    needs: dedupe\n    if: (.*)$/gm)].map((m) => m[1]);
+    assert.ok(ifs.length >= 2, `expected the suite jobs, got ${ifs.length}`);
+    for (const cond of ifs) assert.ok(cond.includes(`&& ${FORK_TERM} }}`), cond);
+    // The term, evaluated: true on push and on a fork PR, false on a same-repo PR.
+    const evalFork = (event, head, repo) => event !== 'pull_request' || head !== repo;
+    assert.strictEqual(evalFork('push', undefined, 'o/r'), true);
+    assert.strictEqual(evalFork('pull_request', 'fork/r', 'o/r'), true);
+    assert.strictEqual(evalFork('pull_request', 'o/r', 'o/r'), false);
+  });
+}

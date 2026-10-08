@@ -1525,7 +1525,11 @@ reading either sees the same spelling. Spell them exactly so, everywhere:
   (`project.schema.md`) and trunk always runs in full. The guard reads `trunk:` from the
   descriptor *at that sha* and acts only there — never on a release branch, never on a
   promotion push to `main` where trunk is `dev`, never on a dispatch. Any doubt — no
-  descriptor, an opt-out, an API error, no exact match — runs the full suite. A trunk-only job
+  descriptor, an opt-out, an API error, no exact match — runs the full suite. A green `push`
+  run at *this* sha on another ref (a `ship-batch/*` run trunk fast-forwarded to) is asked for
+  first, by an exact query, so a busy repo's listing window cannot miss it (#552). A cited run
+  is reused only if it skipped no job but the guard: a job gated on the trunk ref is `skipped`
+  on every branch push, and reusing that run would skip it on trunk too (#511). A trunk-only job
   (publish, deploy, release) never sits behind this gate. One reading turns such a run red: a
   cited head that is local and whose tree provably differs from trunk's (`HUMAN_GATED` —
   trunk is untested at that sha). A citation that cannot be read leaves the run green and says
@@ -1606,11 +1610,15 @@ reading either sees the same spelling. Spell them exactly so, everywhere:
      in-flight run, and leaves a `cancelled` run at the head. An `if:` that skips jobs on a
      same-repo PR, or `paths-ignore`, leaves a `skipped` or absent run: `colab ship` reads
      `skipped` as not green and a docs-only squash with no trunk run as `none`.
-  **Fork PRs are the open edge.** A push to a fork never runs a workflow in the base
-  repository, so a repo that takes fork PRs needs `pull_request` — and a second run for every
-  same-repo PR with it. That needs the readers' newest-run pick to stop letting a `skipped` or
-  `cancelled` run shadow one that ran; until then such a repo keeps the trigger and the
-  duplicate (this handbook's own `ci.yml` does). Private repos with forking disabled are not
+  **Fork PRs are opt-in.** A push to a fork never runs a workflow in the base repository, so
+  a repo that takes fork PRs needs `pull_request`. The templates carry it commented out, and
+  every suite job already carries `github.event_name != 'pull_request' ||
+  github.event.pull_request.head.repo.full_name != github.repository`: uncommented, a
+  same-repo PR's run skips every job (its push run tests that head) and a fork PR's run tests
+  (#514). A run that skipped everything concludes `skipped`, and `colab`'s newest-run pick
+  treats `skipped` like `cancelled` — it never stands for a workflow that has a run that ran.
+  Uncomment only once every reader of the repo's CI does the same; until then such a repo keeps
+  the trigger and the duplicate (this handbook's own `ci.yml` does). Private repos with forking disabled are not
   affected. A Laravel copy's heavy suite used to run only on the PR run; it now runs on the
   push run (`RUN_TESTS: auto`, decided from the descriptor's `trunk:`).
 - **Say which `none`.** A bare `none` turns a bounded wait into a wait for a run that was

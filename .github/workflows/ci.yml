@@ -15,8 +15,9 @@ on:
     branches: ['**']
   # `pull_request` stays HERE (#512), unlike the templates: this repo is public and takes
   # fork PRs, and a push to a fork never runs a workflow in this repo. Same-repo PRs get a
-  # second run for it; dropping that duplicate for forks-only needs two reader fixes first
-  # (a skipped or cancelled newer run must not shadow a run that ran).
+  # second run for it. The templates' fork-PR opt-in (#514) drops that duplicate; this repo
+  # takes it once the session dashboard's run reader, like colab's, never lets a newer skipped
+  # run shadow one that ran.
   pull_request:
 
 # One live run per ref: a new push cancels the superseded run on the same branch.
