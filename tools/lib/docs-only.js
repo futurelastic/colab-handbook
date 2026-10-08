@@ -19,6 +19,19 @@ const DOC_EXTENSIONS = Object.freeze(['.md', '.mdx', '.txt']);
 const DOCS_DIR = 'docs/';
 /** Rules and agent instructions: never documentation, at any depth, even though they are `.md`. */
 const NEVER_BASENAMES = Object.freeze(['CLAUDE.md', 'CLAUDE.local.md', 'AGENTS.md']);
+/**
+ * #570: build inputs that happen to end in `.txt` — a suite installs or compiles from them, so a change
+ * to one changes behaviour. Never documentation, at any depth: a Python dependency manifest exactly as
+ * the cure rule names one (cure-diff.js isPythonManifest — a name containing `requirements`, or under a
+ * `requirements/` directory, any case), a pip constraints file, and `CMakeLists.txt`. A `.txt` pulled
+ * in by `-r`/`-c` under some other name is NOT caught by name — a repo with one lists it in
+ * `ci-docs-skip`.
+ */
+function buildInput(p, base) {
+  // Lazy: cure-diff.js requires this module at load time.
+  if (require('./cure-diff').isPythonManifest(p)) return true;
+  return /constraints.*\.txt$/i.test(base) || base === 'CMakeLists.txt';
+}
 /** Config directories: nothing under them is documentation, at any depth. */
 const NEVER_DIRS = Object.freeze(['.claude', '.github', '.githooks']);
 /**
@@ -40,6 +53,7 @@ function pathReason(p) {
   const segs = String(p).split('/');
   const base = segs[segs.length - 1];
   if (NEVER_BASENAMES.includes(base)) return `${base} is agent rules, not documentation`;
+  if (buildInput(String(p), base)) return `${base} is a build input, not documentation`;
   const dir = segs.slice(0, -1).find((s) => NEVER_DIRS.includes(s));
   if (dir) return `under ${dir}/ (config)`;
   const dirs = segs.slice(0, -1);
@@ -164,7 +178,40 @@ function directChanges(git, repo, trunk, since) {
   return { ...verdict, commits: shas.length };
 }
 
+/**
+ * #570: `ci-docs-skip:` in project.yml — the opt-in to the CI templates' docs-only mode. Absent (or
+ * null) = off. A list = on; each member is a repo path whose changes always run the suite even though
+ * this module calls them documentation (`docs/api/` feeding a generator). `[]` = on, nothing excluded.
+ *
+ * The CI guard parses the same shape in shell and reads anything else as "not opted in" — the
+ * stricter direction — so an invalid value here is a finding: a declaration that silently does
+ * nothing. Members are plain paths (the guard matches `p == x` or `p` under `x/`): no glob, no `..`
+ * or `.` segment, not absolute, only `[A-Za-z0-9._/-]`.
+ */
+const CI_DOCS_SKIP_KEY = 'ci-docs-skip';
+function parseCiDocsSkip(doc) {
+  const has = !!doc && Object.prototype.hasOwnProperty.call(doc, CI_DOCS_SKIP_KEY);
+  const v = has ? doc[CI_DOCS_SKIP_KEY] : null;
+  if (v === null || v === undefined) {
+    return { declared: false, valid: true, on: false, exclude: null, reason: 'ci-docs-skip absent — a docs-only change runs the full CI suite (#570)' };
+  }
+  const bad = (why) => ({ declared: true, valid: false, on: false, exclude: null,
+    reason: `ci-docs-skip ${why} — it must be a list of repo paths (\`[]\` for none); the CI guard reads anything else as not opted in, so docs-only changes run the full suite` });
+  if (!Array.isArray(v)) return bad(`is ${JSON.stringify(v)}`);
+  const exclude = [];
+  for (const m of v) {
+    const s = typeof m === 'string' ? m.replace(/\/+$/, '') : null;
+    if (!s || !/^[A-Za-z0-9._/-]+$/.test(s) || s.startsWith('/') || s.split('/').some((x) => x === '..' || x === '.' || x === '')) {
+      return bad(`lists ${JSON.stringify(m)}, which is not a plain repo path`);
+    }
+    exclude.push(s);
+  }
+  return { declared: true, valid: true, on: true, exclude,
+    reason: exclude.length ? `ci-docs-skip on, except ${exclude.join(', ')}` : 'ci-docs-skip on — a docs-only change skips the CI suite' };
+}
+
 module.exports = {
   DOC_EXTENSIONS, DOCS_DIR, NEVER_BASENAMES, NEVER_DIRS, NEVER_SUBDIRS,
   pathReason, classify, parseRaw, parseBinary, readEntries, branchChanges, directChanges,
+  CI_DOCS_SKIP_KEY, parseCiDocsSkip,
 };

@@ -189,3 +189,25 @@ test('#493 tree-green.js: the pure readers', () => {
   const bad = tg.parseTreeReuse({ 'tree-reuse': 'on' });
   assert.deepStrictEqual([bad.valid, bad.off], [false, true]);
 });
+
+test('#570 a docs-only skip run → GREEN, named as docs-only with its base, never "cited run unreadable"', () => {
+  const fx = fixture();
+  fx.setRows(greenRun(fx.sha));
+  fx.setChecks(skipChecks);
+  fx.setAnn([{ title: 'docs-only-skip', level: 'notice', message: `base=${fx.sha} files=3 run=${URL}` }]);
+  const t = trunkCi(fx);
+  assert.strictEqual(t.verdict, 'GREEN', JSON.stringify(t));
+  assert.match(t.detail, new RegExp(`docs-only \\(#570\\): suite skipped, 3 path\\(s\\) since ${fx.sha.slice(0, 7)}, whose green run is https://github\\.com/o/r/actions/runs/77$`));
+  assert.doesNotMatch(t.detail, /unreadable|tree already green/);
+  const s = shipRow(fx);
+  assert.strictEqual(s.ok, true, JSON.stringify(s));
+  assert.strictEqual(s.detail, t.detail, 'one function, one detail');
+});
+
+test('#570 tree-green.js: parseDocsSkip', () => {
+  assert.deepStrictEqual(tg.parseDocsSkip([{ title: 'docs-only-skip', message: `base=abc123 files=2 run=${URL}` }]), { base: 'abc123', files: 2, url: URL });
+  assert.strictEqual(tg.parseDocsSkip([{ title: 'docs-only-skip', message: 'garbage' }]), null);
+  assert.strictEqual(tg.parseDocsSkip(ann('bbb222')), null);
+  assert.strictEqual(tg.parseDocsSkip(null), null);
+  assert.strictEqual(tg.citationNote([], 0, []), '');
+});

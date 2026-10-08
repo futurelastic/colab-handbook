@@ -167,3 +167,27 @@ test('directChanges: every commit since the claim counts, including the root com
     assert.deepEqual(v.offenders.map((o) => o.path), ['a.js']);
   } finally { r.cleanup(); }
 });
+
+test('#570: ci-docs-skip — absent is off, a list of plain repo paths is on, anything else is a finding', () => {
+  const { parseCiDocsSkip } = require('./docs-only.js');
+  assert.deepStrictEqual(parseCiDocsSkip({}), { declared: false, valid: true, on: false, exclude: null, reason: parseCiDocsSkip({}).reason });
+  assert.strictEqual(parseCiDocsSkip({ 'ci-docs-skip': null }).declared, false);
+  assert.deepStrictEqual(parseCiDocsSkip({ 'ci-docs-skip': [] }).exclude, []);
+  const on = parseCiDocsSkip({ 'ci-docs-skip': ['docs/api/', 'openapi.md'] });
+  assert.ok(on.valid && on.on);
+  assert.deepStrictEqual(on.exclude, ['docs/api', 'openapi.md']);
+  for (const v of [true, 'yes', 'off', {}, ['docs/*'], ['../x'], ['/abs'], ['a//b'], ['./x'], [''], [3], ['a b']]) {
+    const r = parseCiDocsSkip({ 'ci-docs-skip': v });
+    assert.strictEqual(r.valid, false, JSON.stringify(v));
+    assert.strictEqual(r.on, false, JSON.stringify(v));
+  }
+});
+
+test('#570: a build input is never documentation, despite the .txt extension', () => {
+  for (const p of ['requirements.txt', 'a/requirements-dev.txt', 'dev-Requirements.txt', 'requirements/base.txt',
+    'docs/requirements.txt', 'constraints.txt', 'CMakeLists.txt', 'lib/CMakeLists.txt']) {
+    assert.match(d.pathReason(p), /build input/, p);
+  }
+  for (const p of ['notes.txt', 'requirements.md', 'cmakelists.txt', 'docs/build.txt']) assert.strictEqual(d.pathReason(p), null, p);
+  assert.strictEqual(d.classify([{ path: 'README.md' }, { path: 'requirements.txt' }]).docsOnly, false);
+});

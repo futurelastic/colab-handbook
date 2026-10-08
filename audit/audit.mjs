@@ -123,6 +123,8 @@ const trustHumansLib = require("../tools/lib/trust-humans.js");
 const hermeticLib = require("../tools/lib/hermetic.js");
 // #493: the `tree-reuse:` opt-out — read through the same module `colab ship` reads citations with.
 const treeGreenLib = require("../tools/lib/tree-green.js");
+// #570: the `ci-docs-skip:` opt-in — read through the same module whose rule the CI guard mirrors.
+const docsOnlyLib = require("../tools/lib/docs-only.js");
 // #503: `ship-gate-workflows:` / `ship-ignore-workflows:` — read through the same module ship's CI gate uses.
 const verifyRunsLib = require("../tools/lib/verify-runs.js");
 // #410: the optional `gate:` block — read through the same module the skills name.
@@ -1434,6 +1436,16 @@ function auditRepo(target, ctx) {
       const tr = treeGreenLib.parseTreeReuse(cfg);
       info.treeReuse = tr.declared ? tr.value : null;
       if (!tr.valid) fail(tr.reason);
+    }
+
+    // ---- ci-docs-skip (#570) ----------------------------------------------------
+    // Opts the CI templates' guard into docs-only mode: a change whose every path is documentation
+    // (tools/lib/docs-only.js, the rule colab ship applies), from a green base, skips the suite.
+    // An invalid value fails: the guard reads it as not opted in, so it silently does nothing.
+    {
+      const ds = docsOnlyLib.parseCiDocsSkip(cfg);
+      info.ciDocsSkip = ds.declared && ds.valid ? ds.exclude : null;
+      if (!ds.valid) fail(ds.reason);
     }
 
     // ---- ship-gate-workflows / ship-ignore-workflows (#503) ---------------------

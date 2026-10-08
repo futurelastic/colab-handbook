@@ -134,6 +134,19 @@ jobs:
   # A cited run is reused only if it skipped no job but this one: a job gated on the trunk
   # ref is `skipped` on every branch push, and reusing that run would skip it on trunk too
   # (#511). Never put a trunk-only job (publish, deploy, release) behind this gate.
+  #
+  # Only documentation changed? (#570) — opt-in, `ci-docs-skip:` in .github/project.yml.
+  # When the two modes above find nothing, a repo that declared `ci-docs-skip` at THIS sha
+  # asks a third question: is every path changed since the base documentation, by the rule
+  # `colab ship` applies (CONVENTIONS.md §2, the docs-only exception: .md/.mdx/.txt or under
+  # docs/, never agent rules, config, a build input like requirements*.txt, a symlink, a
+  # submodule or a binary), and does the base
+  # have a green run of this workflow? The base is the merge base with trunk on a ref-creating
+  # push, and the previous tip on a push to trunk. Yes → the suite is skipped and the run
+  # leaves a `docs-only-skip` notice naming the base and its green run. A path the suite reads
+  # (docs/api/ feeding a generator) is listed in `ci-docs-skip` and always runs the suite. Any
+  # doubt (no opt-in, a red or unrun base, an API or fetch failure) runs the full suite. A run
+  # skipped this way is never cited as tree-reuse proof: it skipped every job (#511).
   dedupe:
     name: Already tested at this sha or tree?
     # EDIT: the trunk refs here mirror `concurrency`'s list above (#493).
@@ -144,7 +157,7 @@ jobs:
       actions: read
       contents: read
     outputs:
-      tested: ${{ steps.check.outputs.tested }}
+      tested: ${{ steps.docs.outputs.tested == 'true' && 'true' || steps.check.outputs.tested }}
       cited: ${{ steps.check.outputs.cited }}
     steps:
       - name: Look for a green run of this workflow at this sha or tree
@@ -226,6 +239,160 @@ jobs:
           fi
           echo "tested=$tested" >> "$GITHUB_OUTPUT"
           [ -z "$cited" ] || echo "cited=$cited" >> "$GITHUB_OUTPUT"
+      # Docs-only (#570) — the two steps below run only when the step above found nothing.
+      - name: Find the base a docs-only change would rely on
+        id: docs_base
+        if: steps.check.outputs.tested != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          RUN_ID: ${{ github.run_id }}
+          SHA: ${{ github.sha }}
+          BEFORE: ${{ github.event.before }}
+          CREATED: ${{ github.event.created }}
+          REF: ${{ github.ref }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          base=
+          # The opt-in at THIS sha (project.schema.md "ci-docs-skip"). A list, flow or block; any
+          # doubt about it reads as "not opted in". Adding the key is itself not a docs-only change.
+          optin() {
+            local v items
+            v="$(printf '%s\n' "$DESC" | sed -nE 's/^ci-docs-skip[[:space:]]*:[[:space:]]*//p' | head -n 1 | sed -E 's/[[:space:]]+#.*$//; s/[[:space:]]+$//')"
+            if [ -z "$v" ]; then
+              items="$(printf '%s\n' "$DESC" | awk '/^ci-docs-skip[[:space:]]*:/{f=1;next} f&&/^[[:space:]]+-/{sub(/^[[:space:]]+-[[:space:]]*/,"");sub(/[[:space:]]+#.*$/,"");print;next} f&&/^[[:space:]]*(#.*)?$/{next} {f=0}')"
+              [ -n "$items" ] || return 1
+            elif [ "${v#[}" != "$v" ] && [ "${v%]}" != "$v" ]; then
+              v="${v#[}"; v="${v%]}"
+              items="$(printf '%s' "$v" | tr ',' '\n')"
+            else
+              return 1
+            fi
+            EXCLUDE=
+            while IFS= read -r it; do
+              it="$(printf '%s' "$it" | sed -E "s/^[[:space:]]*[\"']?//; s/[\"']?[[:space:]]*$//")"
+              [ -n "$it" ] || continue
+              case "/$it/" in */../*|*/./*|//*) return 1 ;; esac
+              printf '%s' "$it" | grep -Eq '^[A-Za-z0-9._/-]+$' || return 1
+              EXCLUDE="$EXCLUDE ${it%/}"
+            done <<< "$items"
+          }
+          if ! command -v gh >/dev/null 2>&1; then
+            echo "gh is not installed on this runner — docs-only mode is off (#570)."
+          elif [ "${REF#refs/heads/}" = "$REF" ]; then
+            echo "$REF is not a branch — docs-only mode is off (#570)."
+          elif ! DESC="$(gh api "repos/$REPO/contents/.github/project.yml?ref=$SHA" -H 'Accept: application/vnd.github.raw' 2>/dev/null)" || [ -z "$DESC" ]; then
+            echo "::notice::Could not read .github/project.yml at $SHA — running the full suite (#570)."
+          elif ! grep -Eq '^ci-docs-skip[[:space:]]*:' <<< "$DESC"; then
+            echo "ci-docs-skip is not declared in .github/project.yml — docs-only mode is off (#570)."
+          elif ! optin; then
+            echo "::notice::ci-docs-skip in .github/project.yml is not a list of repo paths — running the full suite (#570)."
+          else
+            TRUNK="$(printf '%s\n' "$DESC" | sed -nE "s/^trunk:[[:space:]]*[\"']?([A-Za-z0-9._/-]+).*/\\1/p" | head -n 1)"
+            if [ -z "$TRUNK" ]; then
+              echo "::notice::.github/project.yml declares no trunk — running the full suite (#570)."
+            elif [ "${CREATED:-}" = "true" ] && [ "$REF_NAME" != "$TRUNK" ]; then
+              # A new branch: the change is everything since it left trunk (the diff the squash lands).
+              base="$(gh api "repos/$REPO/compare/$TRUNK...$SHA" --jq .merge_base_commit.sha 2>/dev/null)" || base=
+              [ -n "$base" ] || echo "::notice::Could not read the merge base of $SHA with $TRUNK — running the full suite (#570)."
+            elif [ "${CREATED:-}" = "false" ] && [ "$REF_NAME" = "$TRUNK" ] && [ -n "${BEFORE//0/}" ]; then
+              base="$BEFORE"   # a push to trunk: the change is what this push added
+            else
+              echo "Not a new branch and not a push to trunk — docs-only mode is off (#570)."
+            fi
+            # The base must itself be green: a docs-only change cannot make a red suite green. The base
+            # is a trunk commit, so the run that counts is TRUNK's own newest push run there — never a
+            # branch run at the same sha, which may be green beside a red trunk run (a trunk-only job
+            # skipped on the branch, #511). Still running, red, or none: the full suite.
+            if [ -n "$base" ]; then
+              if ! WFID="$(gh api "repos/$REPO/actions/runs/$RUN_ID" --jq .workflow_id 2>/dev/null)" || [ -z "$WFID" ] \
+                 || ! URL="$(gh api "repos/$REPO/actions/workflows/$WFID/runs?head_sha=$base&event=push&per_page=20" \
+                      --jq "[.workflow_runs[] | select(.id != $RUN_ID and .head_branch == \"$TRUNK\" and .head_repository.full_name == \"$REPO\")] | sort_by(.created_at) | last | if . != null and .status == \"completed\" and .conclusion == \"success\" then .html_url else empty end" 2>/dev/null)"; then
+                echo "::notice::Could not list this workflow's runs at $base — running the full suite (#570)."
+                base=
+              elif [ -z "$URL" ]; then
+                echo "Trunk's newest run of this workflow at $base is not green, or there is none — running the full suite (#570)."
+                base=
+              fi
+            fi
+          fi
+          if [ -n "$base" ]; then
+            echo "base=$base" >> "$GITHUB_OUTPUT"
+            echo "base_run=$URL" >> "$GITHUB_OUTPUT"
+            echo "exclude=${EXCLUDE# }" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Is every changed path documentation?
+        id: docs
+        if: steps.docs_base.outputs.base != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SERVER_URL: ${{ github.server_url }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ github.sha }}
+          BASE: ${{ steps.docs_base.outputs.base }}
+          BASE_RUN: ${{ steps.docs_base.outputs.base_run }}
+          EXCLUDE: ${{ steps.docs_base.outputs.exclude }}
+        run: |
+          tested=false
+          # Mirrors tools/lib/docs-only.js pathReason — the rule `colab ship` applies (CONVENTIONS.md
+          # §2, the docs-only exception). Prints why a path is NOT documentation; nothing if it is.
+          # Kept equal to that module by tools/lib/ci-template-docs-only.test.js; edit both or neither.
+          reason() {
+            local p="$1" base dir x
+            base="${p##*/}"; dir=; [ "$base" = "$p" ] || dir="${p%/*}"
+            case "$p" in \"*) echo "quoted path"; return ;; esac
+            for x in $EXCLUDE; do
+              case "$p" in "$x"|"$x"/*) echo "listed in ci-docs-skip"; return ;; esac
+            done
+            case "$base" in CLAUDE.md|CLAUDE.local.md|AGENTS.md) echo "agent rules"; return ;; esac
+            # A build input despite the extension: the cure rule's Python manifest (any case), a pip
+            # constraints file, CMakeLists.txt. A -r/-c include under another name: list it in ci-docs-skip.
+            lp="$(printf '%s' "$p" | tr 'A-Z' 'a-z')"
+            case "/$lp" in */requirements/*.txt|*/requirements/*.in) echo "a build input"; return ;; esac
+            case "${lp##*/}" in *requirements*.txt|*requirements*.in|*constraints*.txt) echo "a build input"; return ;; esac
+            [ "$base" != CMakeLists.txt ] || { echo "a build input"; return; }
+            case "/$dir/" in */.claude/*|*/.github/*|*/.githooks/*) echo "config"; return ;; */.colab/skills/*) echo "skill local policy"; return ;; esac
+            case "$p" in docs/*) return ;; esac
+            case "$base" in ?*.md|?*.mdx|?*.txt) return ;; esac
+            echo "not .md/.mdx/.txt and not under docs/"
+          }
+          # Both commits, trees only; blobs come on demand for the binary check. No checkout (#418).
+          G="$RUNNER_TEMP/docs-only-$GITHUB_RUN_ID"
+          AUTH="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$GH_TOKEN" | base64 | tr -d '\n')"
+          if ! { git init -q "$G" && git -C "$G" remote add origin "$SERVER_URL/$REPO" \
+                 && git -C "$G" config remote.origin.promisor true && git -C "$G" config remote.origin.partialclonefilter blob:none \
+                 && git -C "$G" config http.extraheader "$AUTH" \
+                 && git -C "$G" fetch -q --no-tags --depth=1 --filter=blob:none origin "$BASE" "$SHA"; } >/dev/null 2>&1; then
+            echo "::notice::Could not fetch $BASE and $SHA — running the full suite (#570)."
+          elif ! RAW="$(git -C "$G" diff --raw --no-renames --no-abbrev "$BASE" "$SHA" 2>/dev/null)" \
+               || ! NUM="$(git -C "$G" diff --numstat --no-renames "$BASE" "$SHA" 2>/dev/null)"; then
+            echo "::notice::Could not diff $BASE..$SHA — running the full suite (#570)."
+          elif [ -z "$RAW" ]; then
+            echo "Empty diff from $BASE — nothing to call documentation; running the full suite (#570)."
+          else
+            bad=; n=0
+            while IFS= read -r line; do
+              meta="${line%%$'\t'*}"; p="${line#*$'\t'}"; n=$((n + 1))
+              why="$(reason "$p")"
+              set -- $meta
+              case "${1#:} $2" in *120000*) why="${why:+$why, }symlink change" ;; esac
+              case "${1#:} $2" in *160000*) why="${why:+$why, }submodule change" ;; esac
+              [ -z "$why" ] || bad="${bad:+$bad; }$p ($why)"
+            done <<< "$RAW"
+            while IFS=$'\t' read -r a d p; do
+              if [ "$a" = "-" ] && [ "$d" = "-" ]; then bad="${bad:+$bad; }$p (binary change)"; fi
+            done <<< "$NUM"
+            if [ -n "$bad" ]; then
+              echo "Not docs-only since $BASE: $bad — running the full suite (#570)."
+            else
+              tested=true
+              echo "::notice title=docs-only-skip::base=$BASE files=$n run=$BASE_RUN"
+              echo "Every one of $n changed path(s) since $BASE is documentation, and $BASE is green ($BASE_RUN) — skipping the suite (#570)."
+              echo "Docs-only: $n path(s) since \`$BASE\`, which [passed this workflow]($BASE_RUN); suite skipped (#570)." >> "$GITHUB_STEP_SUMMARY"
+            fi
+          fi
+          rm -rf "$G"
+          echo "tested=$tested" >> "$GITHUB_OUTPUT"
 
   gitleaks:
     name: Secret scan (gitleaks)

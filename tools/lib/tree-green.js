@@ -18,6 +18,8 @@
  */
 
 const NOTICE_TITLE = 'tree-already-green';
+/** #570: the CI guard's docs-only mode leaves this notice instead — same run shape, a different reason. */
+const DOCS_NOTICE_TITLE = 'docs-only-skip';
 
 /** `tree-reuse:` in project.yml. Absent = reuse on. `off` = the one legal value. */
 function parseTreeReuse(doc) {
@@ -73,16 +75,31 @@ function parseCitation(annotations) {
 }
 
 /**
+ * #570: the docs-only notice in a check run's annotations (`base=<sha> files=<n> run=<url>`), or null.
+ * A docs-only skip has the same shape as a tree skip (the guard green, the rest skipped), so the
+ * reader must recognise it — otherwise it reads as a tree citation nobody can parse.
+ */
+function parseDocsSkip(annotations) {
+  if (!Array.isArray(annotations)) return null;
+  const a = annotations.find((x) => x && x.title === DOCS_NOTICE_TITLE && typeof x.message === 'string');
+  if (!a) return null;
+  const m = a.message.trim().match(/^base=([0-9a-f]+)\s+files=(\d+)\s+run=(\S+)$/i);
+  if (!m) return null;
+  return { base: m[1], files: Number(m[2]), url: m[3] };
+}
+
+/**
  * The verdict suffix for a green trunk read that relied on cited runs. `cites`: [{url, branch,
  * head, proof}] where proof is 'verified' | 'unverified'; `unreadable`: count of skip-runs whose
  * citation could not be read. '' when there is nothing to say (an ordinary green run).
  */
-function citationNote(cites, unreadable = 0) {
+function citationNote(cites, unreadable = 0, docs = []) {
   const parts = (cites || []).map((c) =>
     `relied on ${c.url} (${c.branch}@${String(c.head).slice(0, 7)}${c.proof === 'verified' ? ', tree verified locally' : ', tree not verified locally'})`);
   for (let i = 0; i < unreadable; i++) parts.push('cited run unreadable');
-  if (!parts.length) return '';
-  return ` — tree already green (#493): suite skipped, ${parts.join('; ')}`;
+  const tree = parts.length ? ` — tree already green (#493): suite skipped, ${parts.join('; ')}` : '';
+  const doc = (docs || []).map((d) => `${d.files} path(s) since ${String(d.base).slice(0, 7)}, whose green run is ${d.url}`);
+  return tree + (doc.length ? ` — docs-only (#570): suite skipped, ${doc.join('; ')}` : '');
 }
 
-module.exports = { NOTICE_TITLE, parseTreeReuse, treeSkipCheckRuns, parseCitation, citationNote };
+module.exports = { NOTICE_TITLE, DOCS_NOTICE_TITLE, parseTreeReuse, treeSkipCheckRuns, parseCitation, parseDocsSkip, citationNote };
