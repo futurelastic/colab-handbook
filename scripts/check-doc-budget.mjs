@@ -26,7 +26,7 @@ const { thresholdValue } = require("../tools/lib/thresholds.js");
 // docs/adr/523-conventions-hard-default-and-size-budget.md records pass 1, docs/adr/539-rationale-split-phase-2.md phase 2.
 export const BUDGET = {
   "CONVENTIONS.md": 5200, // #539 phase 2: 5,049 lines (from 5,580 at its base), +50 for #512's pending 28-line §4/§7 hunk; raised +100 by #569: trunk had reached 5,100 (the #512 headroom spent by later merges), #569's `shape:` rule adds 23 lines that are rules, not movable rationale, and #512's 28 still have to fit
-  "project.schema.md": 1650, // #539 phase 2: 1,551 lines (from 1,704); +50 for #560's `thresholds` entry — a new field, its rationale already in the issue, no story to move to an ADR
+  "project.schema.md": 1700, // #539 phase 2: 1,551 lines (from 1,704); +50 for #560's `thresholds` entry — a new field, its rationale already in the issue, no story to move to an ADR; +50 by #570: trunk was at 1,649 and the new `ci-docs-skip` field adds 15 lines of rule, its rationale already in CONVENTIONS §4
 };
 // The default; a repo may declare its own as `thresholds.doc-budget-slack` in .github/project.yml (#560).
 export const RATCHET_SLACK = thresholdValue({}, "doc-budget-slack");

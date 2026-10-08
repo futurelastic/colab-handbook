@@ -1377,6 +1377,20 @@ on.**
 - The one reading in tooling is `tools/lib/tree-green.js` `parseTreeReuse`; the audit reports the
   value (`--json`: `treeReuse`).
 
+### `ci-docs-skip` — optional
+
+```yaml
+ci-docs-skip: [docs/api/]   # absent = off · [] = on, no exceptions
+```
+
+Opts the CI templates' `dedupe` guard into docs-only mode: a change whose every path is
+documentation, from a green base, skips the suite (`CONVENTIONS.md` §4, *Branch CI*, #570).
+**Absent means off.** Each member is a repo path a test reads, so a change to it — or under it,
+`docs/api` never matching `docs/apiary.md` — runs the suite anyway. Members are plain paths: no
+glob, `..`, `.` or leading `/`, only `[A-Za-z0-9._/-]`. Anything else, or a non-list, is a
+finding: the guard reads it as off. Read at the pushed sha. The one reading in tooling is
+`tools/lib/docs-only.js` `parseCiDocsSkip` (`--json`: `ciDocsSkip`).
+
 ### `ship-gate-workflows`, `ship-ignore-workflows` — optional
 
 ```yaml
@@ -1616,6 +1630,7 @@ the shape that shows it. One writer at a time says nothing about who reads the r
 | `trust-humans` a non-empty list of GitHub logins when set → **finding** otherwise | a malformed list read as "nobody is human", so every human grant and ruling silently stops counting |
 | `live-env` = `none` when set → **finding** otherwise | a misspelled opt-out read as absent, so it silently does nothing |
 | `tree-reuse` = `off` when set → **finding** otherwise | the guard reads any value as off; an undefined value is not a declaration |
+| `ci-docs-skip` a list of plain repo paths when set → **finding** otherwise | the guard reads an invalid value as not opted in, so the declaration silently does nothing |
 | `ship-gate-workflows` / `ship-ignore-workflows` = a non-empty list of workflow names when set → **finding** otherwise | the reader ignores an invalid list, so the declaration does nothing |
 | `gate` a block with `smoke` + `authoritative` ∈ {`ci`,`local`} when set → **finding** otherwise; `ci` with no branch-push trigger → **warn** | a malformed block is read as absent, so it silently does nothing; a `ci` verdict that can never arrive leaves every reader on the local gate |
 | `holds` is a list of non-empty strings, each listed once, when set → **finding** otherwise | a scalar or malformed list silently read as "no holds declared", so triage reports held work ready |

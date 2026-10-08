@@ -81,7 +81,8 @@ for (const file of FILES) {
     assert.match(body, /^    permissions:\n      actions: read$/m);
     assert.doesNotMatch(body, /actions\/checkout/);
     assert.doesNotMatch(body, /\bexit 1\b/);
-    assert.match(body, /tested: \$\{\{ steps\.check\.outputs\.tested \}\}/);
+    // #570: the docs-only step may also say tested; the sha/tree step still decides when it does not.
+    assert.match(body, /tested: \$\{\{ (steps\.docs\.outputs\.tested == 'true' && 'true' \|\| )?steps\.check\.outputs\.tested \}\}/);
   });
 
   test(`${file}: every other job runs when dedupe is skipped and skips when it says tested (#418)`, () => {

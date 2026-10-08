@@ -1534,6 +1534,25 @@ reading either sees the same spelling. Spell them exactly so, everywhere:
   cited head that is local and whose tree provably differs from trunk's (`HUMAN_GATED` —
   trunk is untested at that sha). A citation that cannot be read leaves the run green and says
   so, because the run's own `success` is the verdict, exactly as for #418. Why: [ADR 539](docs/adr/539-branch-ci-rationale.md).
+- **A docs-only change from a green base is tested — where the repo opts in (#570).** When
+  neither mode above applies, a repo that declares `ci-docs-skip` (`project.schema.md`) gets a
+  third question from the same guard, on a ref-creating push and on a push to trunk: is every
+  path changed since the base documentation — by the rule `colab ship`'s docs-only exception
+  applies ([§2](#autonomy--the-docs-only-exception-345), `tools/lib/docs-only.js`) — and does the
+  base have a green run of this workflow? The base is the merge base with trunk on a new branch,
+  and the previous tip on trunk. Yes ⇒ the suite is skipped, the run concludes `success`, and
+  the guard leaves a `docs-only-skip` notice naming the base and its green run, which
+  `colab ship` and `colab trunk-ci` print. **The rule: a green base plus a change no suite reads
+  is tested.** It needs both halves. The green base is why a docs commit on a red trunk still
+  runs (it cannot make red green), and the opt-in is why the rule is never assumed: some suites
+  *do* read documentation (`docs/api/` feeding a generator, a link checker), and those paths are
+  listed in `ci-docs-skip` so a change to them always runs the suite. `paths-ignore` is not
+  the same thing: a docs-only squash would then have *no* trunk run, which ship reads as
+  `none`. The guard reads the opt-in at the pushed sha, so a branch that adds it is not itself
+  docs-only. Any doubt — no opt-in, an unreadable value, a red or unrun base, an API or fetch
+  failure — runs the full suite. A run skipped this way skipped every job but the guard, so
+  tree mode never cites it (#511). The template cannot load `docs-only.js`, so it carries the
+  rule in shell, pinned to the module path by path by `tools/lib/ci-template-docs-only.test.js`.
 - **An unclassifiable red is `red:finding`.** Where a repo does not separate exit 1 from
   exit 2, `failure` is all the platform reports: read the failing job's log far enough to
   say which side of the line it fell on, and if that cannot be told, report `red:finding`. Why: [ADR 539](docs/adr/539-branch-ci-rationale.md).

@@ -11133,6 +11133,7 @@ function treeGreenVerdict(repoAbs, run, verdict) {
   const ids = treeGreen.treeSkipCheckRuns(checks);
   if (!ids || !ids.length) return verdict;
   const cites = [];
+  const docs = [];
   let unreadable = 0;
   const treeOf = (sha) => {
     const r = git.git(['rev-parse', '--verify', '--quiet', `${sha}^{tree}`], repoAbs);
@@ -11140,7 +11141,11 @@ function treeGreenVerdict(repoAbs, run, verdict) {
   };
   const ours = treeOf(run.sha);
   for (const id of ids) {
-    const cite = treeGreen.parseCitation(git.ghCheckRunAnnotations(repoAbs, id));
+    const annotations = git.ghCheckRunAnnotations(repoAbs, id);
+    // #570: a docs-only skip — the guard found every changed path documentation from a green base.
+    const docsSkip = treeGreen.parseDocsSkip(annotations);
+    if (docsSkip) { docs.push(docsSkip); continue; }
+    const cite = treeGreen.parseCitation(annotations);
     if (!cite) { unreadable++; continue; }
     const theirs = treeOf(cite.head);
     if (ours && theirs && ours !== theirs) {
@@ -11149,7 +11154,7 @@ function treeGreenVerdict(repoAbs, run, verdict) {
     }
     cites.push({ ...cite, proof: ours && theirs ? 'verified' : 'unverified' });
   }
-  return { ...verdict, detail: verdict.detail + treeGreen.citationNote(cites, unreadable), treeGreen: cites.map((c) => c.url) };
+  return { ...verdict, detail: verdict.detail + treeGreen.citationNote(cites, unreadable, docs), treeGreen: cites.map((c) => c.url) };
 }
 
 /**
