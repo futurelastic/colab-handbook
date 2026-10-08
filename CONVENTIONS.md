@@ -1579,12 +1579,40 @@ reading either sees the same spelling. Spell them exactly so, everywhere:
   reads. That is the default **only where trunk has capacity of its own**: GitHub-hosted
   runners, a runner pool, or a trunk-only runner label chosen in `runs-on` on `github.ref`
   ([*Self-hosted runners*](#self-hosted-runners--capacity-is-the-agent-count-not-the-machine-355)).
-  On a **single self-hosted agent shared with trunk**, keep trunk-only triggers until a
-  trunk lane exists — measured there (#355), branch pushes queued a trunk build job 33 min
+  On a **single self-hosted agent shared with trunk**, keep trunk-only triggers (and restore
+  `pull_request`, below) until a trunk lane exists — measured there (#355), branch pushes queued a trunk build job 33 min
   behind other branches' jobs, delaying the one run a merge waits for. The cancel list
   names the repo's trunk and release branch by name; a trunk missing from it has each run
   cancelled by the next merge, leaving that squash sha with no completed run of its own for
   the by-commit trunk read (#92) or the post-merge read (`code-ship` B2a) to find.
+- **One commit, one run: the templates do not trigger on `pull_request` (#512).** With `push` on
+  `'**'` a branch that has an open PR in the same repository already has a run at its head, and
+  a `pull_request` run beside it ran the whole suite a second time — measured on one Laravel
+  adopter, a docs-only PR of 4 commits produced 8 runs, 4 of them duplicates; across nine
+  adopting repos over 15 days, 126 push-plus-PR pairs. The second run also *decided* the
+  verdict: every reader keeps the newest run per workflow at a sha, and the PR run is created
+  seconds after the push run, so it won — while testing the merge ref, not the sha that lands.
+  The templates therefore carry `push` and `workflow_dispatch` only. Three things follow:
+  1. **A copy that went back to trunk-only push (#355) restores `pull_request: branches: [<trunk>]`.**
+     There the PR run is the only branch run (the *none* paragraph above, and #353 below).
+  2. **Trunk runs keep a group of their own.** The group is `ci-<ref>` for a branch, so a newer
+     push cancels the older run, and `ci-<ref>-<run id>` for the trunk and release refs: GitHub
+     cancels an older run still **pending** in a group even when `cancel-in-progress` is
+     `false`, so a third quick merge would drop the second one's run before it started. The trunk
+     list appears three times in a copy — the group, `cancel-in-progress`, and the `dedupe`
+     job's `if:` — and the three must name the same refs.
+  3. **Do not deduplicate any other way.** A shared push/PR group (`head_ref || ref_name`) can
+     leave the merge-ref run as the survivor, lets a promotion PR cancel the trunk's own
+     in-flight run, and leaves a `cancelled` run at the head. An `if:` that skips jobs on a
+     same-repo PR, or `paths-ignore`, leaves a `skipped` or absent run: `colab ship` reads
+     `skipped` as not green and a docs-only squash with no trunk run as `none`.
+  **Fork PRs are the open edge.** A push to a fork never runs a workflow in the base
+  repository, so a repo that takes fork PRs needs `pull_request` — and a second run for every
+  same-repo PR with it. That needs the readers' newest-run pick to stop letting a `skipped` or
+  `cancelled` run shadow one that ran; until then such a repo keeps the trigger and the
+  duplicate (this handbook's own `ci.yml` does). Private repos with forking disabled are not
+  affected. A Laravel copy's heavy suite used to run only on the PR run; it now runs on the
+  push run (`RUN_TESTS: auto`, decided from the descriptor's `trunk:`).
 - **Say which `none`.** A bare `none` turns a bounded wait into a wait for a run that was
   never coming. A repo whose workflows trigger only on a trunk push and `pull_request` is
   the permanent shape: a wrap pushes a backup branch without opening a PR, so branch CI
@@ -4397,7 +4425,7 @@ spends most of its wall time waiting rather than working.** Why, with the measur
   Use **disjoint** label sets: trunk → a trunk-only label, everything else → the
   general one, chosen in `runs-on` with an expression on `github.ref`. Until that lane
   exists, a single shared agent is also why a copied template's every-branch trigger
-  goes back to trunk-only ([*Branch CI*](#branch-ci--the-candidates-own-run-read-as-a-class-314), #384). Two traps:
+  goes back to trunk-only, with `pull_request` restored ([*Branch CI*](#branch-ci--the-candidates-own-run-read-as-a-class-314), #384, #512). Two traps:
   - **A label no online agent carries leaves the job queued forever, with no error.**
     Register the agent before merging the routing, and change the routing in the same
     change that retires the agent.

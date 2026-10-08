@@ -113,238 +113,32 @@ exposure); `room`, `writes` and `channels` are optional and answered later with
 `--axis` (#533). An existing default branch is kept as trunk whatever it is called —
 never rename `master` to adopt.
 
-### The checklist is not in this file, on purpose
 
-**[`CONVENTIONS.md` §9 "Adopting this"](../../CONVENTIONS.md#9-adopting-this) is the
-procedure** — nine steps, already written, already correct. Open it and work it in
-order. This section adds only what [§9](../../CONVENTIONS.md#9-adopting-this) cannot know: how to interleave it with your
-session, which step blocks, and which steps get skipped.
+**How this file is built (#524).** This is the core: the steps in order, each with its rule and
+its stop condition. Each step's full text — edge cases, the measurements behind them, worked
+examples — sits in a reference file next to this one, moved there verbatim, and the step names
+it. **Read a step's reference file before you act on that step**; the line here is an index to
+it, never a substitute.
 
-**Step 1 (the shared question set) is `colab adopt` — run the tool, don't walk the
-five rows by hand (#199).** It detects what the repo already states, asks only what
-is missing (flags, or a prompt at a terminal), derives the rest, and writes
-`.github/project.yml` in one act, append-only. This skill's job around it is
-unchanged: judge whether a *detected* candidate (a stack manifest, a channel
-candidate) is actually right before answering with it, decide what [§9](../../CONVENTIONS.md#9-adopting-this)'s "going
-live" ladder means for THIS repo, and carry the session/Issue ceremony `colab
-adopt` deliberately does not touch. What moved to the tool is steps 3–7 of typing
-the answers in — this skill still grafts, proposes, and judges; it never writes
-the descriptor itself.
+**Adoption, in the order a run needs it** — full text: [2-adoption-details.md](2-adoption-details.md).
 
-Do **not** copy [§9](../../CONVENTIONS.md#9-adopting-this)'s steps into this skill, or into the Issue as a restated list. Two
-copies of one checklist drift, and the disagreement is then found by whoever followed
-the wrong one. This handbook has paid for that twice in a single day — a duplicated
-detection predicate that broke invisibly, and a list that quietly conflated two
-different things. Link to [§9](../../CONVENTIONS.md#9-adopting-this), summarise its outcomes, never fork it.
+- **The checklist is [`CONVENTIONS.md` §9](../../CONVENTIONS.md#9-adopting-this)** — work it in
+  order; never copy its steps into this skill or the Issue (two copies drift).
+- **Ordering trap:** run `colab labels --ensure` *before* the claim — `colab claim` keeps a local
+  claim silently when the label does not exist yet.
+- **The question set blocks:** every §9 axis answer is a human's; you may propose `live`/`released`
+  from committed evidence, never `none`/`self`. Asking is not writing.
+- **Partial adoption is normal** — probe each §9 step and resume; leave existing branches alone.
+- **Runner preflight:** a private repo under a personal account needs a registered, online
+  self-hosted runner before `colab template` stamps `ubuntu-latest`; if none, stop and ask.
+- **Red CI after adoption:** `steps: 0` + empty `runner_name` + seconds-long run = no runner was
+  assigned; check that before reading logs.
+- **`exposure: released`:** the release rung (§6) is wired in the same pass; the route and the
+  disarmed deploy template are proposals, the first final is the operator's.
+- **Registration is the step that gets skipped** — run `colab register`.
+- **Finish by proving the repo is visible:** `colab update .`, the audit and
+  `colab register --list`, pasted onto the Issue; then return to §1.
 
-### The ordering trap — you cannot claim before the label exists
-
-[§9](../../CONVENTIONS.md#9-adopting-this)'s step 3 creates the `in-progress` label, because on an unadopted repo it does not
-exist. But **code-start claims the Issue in its own step 3, before any of [§9](../../CONVENTIONS.md#9-adopting-this) runs** —
-so the claim depends on machinery adoption has not built yet.
-
-On the path most sessions take, the failure is quiet:
-
-- Raw `gh issue edit $N --add-label in-progress` **fails loudly.** Recoverable.
-- `colab claim $N` **does not fail.** It warns that the `gh` edit failed and keeps the
-  **local** claim. So the machine-local cache reads as claimed while GitHub — the
-  source of truth, and the only thing a colleague on another machine can see — holds
-  nothing. That is precisely the collision `CONVENTIONS.md` [§5](../../CONVENTIONS.md#5-claiming-work--how-to-say-im-on-this) exists to prevent,
-  reached from underneath.
-
-So **pull [§9](../../CONVENTIONS.md#9-adopting-this)'s step 3 forward, ahead of the claim** — and provision the **whole label
-set** while you are there, not just the claim label:
-
-```sh
-colab labels --ensure
-```
-
-Only `in-progress` is ordering-critical (the claim below needs it), but `--ensure`
-creates the whole twenty-three-name set in one idempotent call (#206) — reading it from
-`tools/lib/labels.js`'s `CONVENTION_LABELS`, never restated here — and creating a
-subset is the exact bug this leads to: a `deps-checked` never created leaves a
-readiness column that can never fill, and nothing downstream can tell *free* from
-*nobody looked*. Create the set, not the claim label alone. Then claim, then work [§9](../../CONVENTIONS.md#9-adopting-this)
-from its step 1. Safe to re-run on a repo that already has some or all of the labels —
-which matters, because partial adoption is the normal case.
-
-**No GitHub remote at all?** There is no label and no claim to be made. Take
-code-start's notes-file path; [§9](../../CONVENTIONS.md#9-adopting-this)'s steps 3 and 4 and the GitHub half of 7 do not
-apply. Say so in your report rather than leaving them looking undone.
-
-### The question set blocks — ask it, never infer it
-
-[§9](../../CONVENTIONS.md#9-adopting-this)'s step 1 is a **shared question set — five questions, not one** — and every
-answer is a **judgement, not yours to make.** `CLAUDE.md` is explicit about the
-oldest of them: a missing marker means treat the repo as Tier B and *propose* the
-file. Proposing is the agent's job; deciding is not, for `tier` or for any of the
-newer four (`room`, `exposure`, `writes`, `channels`).
-
-**Do not restate the five rows here** — that is the exact fork [§9](../../CONVENTIONS.md#9-adopting-this)'s own text
-forbids, one section above this one. Link to [§9](../../CONVENTIONS.md#9-adopting-this)'s table, and know the two outcomes
-that matter for how you run a sync:
-
-- **You may propose, from committed evidence, and never conclude on your own:**
-  a non-null `production:` or a committed deploy path lets you propose `exposure:
-  live` or `released` — never `none` or `self`, because those declare the *absence*
-  of a consumer, which nothing in a checkout can verify. The identical asymmetry
-  [§9](../../CONVENTIONS.md#9-adopting-this) states for `exposure` applies to reading a tier off a `Dockerfile`, a URL in
-  a README, or a deploy workflow that may be dormant: guessing costs nothing at
-  the time it is written and misroutes something later. A repo that describes
-  nothing is more honest than one that describes itself wrongly.
-- **Asking is not writing.** When a sync meets a repo missing one of the newer
-  four axes, put [§9](../../CONVENTIONS.md#9-adopting-this)'s question to the human and record the answer through
-  `colab adopt` (`--room`/`--exposure`/`--writes`/`--channels`, or run it at a
-  terminal and answer the prompt) — never fill the gap yourself, and never
-  "resolve" the undeclared-pairing advisory (`exposure: none` +
-  `production: null`, `channels: [none]` + a non-null `production`/non-`none`
-  `deploy`) by deleting a key someone already declared. Declaring must never
-  come out riskier than omitting. `colab adopt` enforces the mechanical half of
-  this (append-only, the human bar on lowering `exposure`) — your judgment is
-  still choosing WHAT to propose when evidence exists, and confirming a human
-  answer before it goes in.
-
-Two things not to do while the trunk/tier answer is still pending: do not create
-`dev` "to be ready" ([§9](../../CONVENTIONS.md#9-adopting-this) step 9) — `trunk:` is whatever the finished descriptor
-declares, never assumed ahead of it — and if the answer is the legacy Tier B (trunk
-`main`, no `exposure`), `production: null` and `deploy: none` are the finished values, not
-placeholders to revisit.
-
-### Partial adoption is the normal case — resume, don't restart
-
-A marker but no label; CI but no registration; everything but the CLAUDE pointer.
-Treat [§9](../../CONVENTIONS.md#9-adopting-this) as a checklist to **complete**, and probe each step rather than assume it:
-
-```sh
-colab adopt --repo . --no-verify        # step 2 — one command: which of the five §9 rows
-                                         #   are already declared, what the repo's working
-                                         #   tree already detects, what still needs asking
-gh label list --search in-progress      # step 3
-gh repo view --json repositoryTopics    # step 4 — tier-a / tier-b / tier-c
-grep -c "colab-handbook @" CLAUDE.md    # step 5 — the pointer block and its stamp (always in
-                                         #   CLAUDE.md, even when it is a thin shell over AGENTS.md)
-ls .github/workflows/                   # step 6
-colab register --list                   # step 7 — is this repo in BOTH registries?
-```
-
-Every step of [§9](../../CONVENTIONS.md#9-adopting-this) is safe to re-run, and `colab register` documents it in its own help
-("Idempotent: registering an already-registered repo reports it and exits 0"). Record
-the *outcomes* in the Issue as a checklist; leave the *steps* in [§9](../../CONVENTIONS.md#9-adopting-this).
-
-**Leave existing branches alone** ([§9](../../CONVENTIONS.md#9-adopting-this) step 8) — [§4](../../CONVENTIONS.md#4-branches-and-commits) grandfathers them, and a first sync
-is exactly when someone is tempted to tidy. Renaming one can break a live worktree.
-
-### Runner preflight — before `colab template` writes `runs-on`
-
-Step 6 of [§9](../../CONVENTIONS.md#9-adopting-this) (`colab template <name>`) stamps a CI workflow whose jobs
-default to `runs-on: ubuntu-latest`, with a `# EDIT: self-hosted label if this repo
-needs one.` comment left for a human to act on later. On a **private repo owned by a
-personal account**, that default is not a placeholder to revisit — it is a red trunk
-waiting to happen: GitHub-hosted runners stop being available the moment that
-account's included Actions minutes run out, so every job dies before it starts.
-Measured twice, on two different repos, two days apart (#259).
-
-**Worth stating plainly, because it is not obvious: public repos do not consume
-Actions minutes, private ones do.** A repo that must stay private — because its
-contents are sensitive — cannot dodge this by becoming public. "Make it public" is
-not an available fix; do not offer it as one.
-
-So before accepting the template's default, check what is actually checkable:
-
-- **owner type** — `gh api users/<owner> -q .type` (`User` vs `Organization`)
-- **repository visibility** — `gh repo view <owner>/<repo> --json isPrivate -q .isPrivate`
-- **is a usable self-hosted runner registered and online?** —
-  `gh api repos/<owner>/<repo>/actions/runners`
-
-If the repo is **private under a personal account** and that last call returns no
-runner that is both registered and `online`, **stop and ask** rather than letting
-`ubuntu-latest` stand. The answer — how this machine actually provides a self-hosted
-runner — is local infrastructure and does not belong in this shared skill; put the
-question to the repo's own owner and let their workspace's own notes answer it. This
-skill's job ends at detecting the situation and asking, not at solving it.
-
-### CI comes back red after adoption — which kind of red?
-
-Two different causes produce an identical red X on the run, and only one of them has
-logs worth reading:
-
-```
-run:  run_started_at 14:37:42Z → updated_at 14:37:46Z    (4s for the whole run)
-job:  started 14:37:43Z → completed 14:37:45Z            (2s)
-      steps = 0        runner_name = ""                  (empty)
-```
-
-`steps: 0` plus an empty `runner_name` plus a run measured in single-digit seconds
-means **no runner was ever assigned** — the workflow never executed, so its contents
-are irrelevant, correct or not. This is the runner-preflight failure above, arrived
-at from the other direction: the repo went unadopted, then adopted with a default
-that can't run.
-
-**Check run duration and step count before reading logs.** `gh run view --log`
-returns `log not found` for this failure, which reads like "logs aren't ready yet"
-but actually means "nothing ran" — chasing it leads straight into editing workflow
-contents that were never the problem. Three fix-and-push rounds were burned this way
-before the two fields above answered it in one call:
-
-```sh
-gh run view <run-id> --json status,conclusion,startedAt,updatedAt \
-  -q '{status,conclusion,startedAt,updatedAt}'
-gh api repos/<owner>/<repo>/actions/runs/<run-id>/jobs \
-  -q '.jobs[] | {steps: (.steps|length), runner_name, started_at, completed_at}'
-```
-
-A real workflow failure has nonzero steps, a named runner, and logs to read. An
-empty preflight failure has none of those — go do the runner check above instead.
-
-### `exposure: released` — the release rung is part of adoption (#492)
-
-[§9](../../CONVENTIONS.md#9-adopting-this) step 6 does not end at CI on a released repo: the
-release rung ([§6](../../CONVENTIONS.md#6-releases)) is wired in the same pass, or the repo
-never cuts a candidate until someone notices. `colab adopt` prints what is still missing as
-extra step-6 lines — read them there; this section adds only the judgement around them.
-
-- **The route.** A tag-deployed row (`deploy: tag` / `manual`) takes `deploy-tag`, finals
-  human — nothing to decide. The no-production row is the one choice §6 offers, and the
-  tool's pick (public room → `public-tool`, otherwise `rapid-app`; `library-fast` for a
-  library its consumers pin) is a **proposal**: put it to the human before writing the
-  block, exactly as the axis answers above. Always write `version-source: tag` beside it
-  (#484 — nobody bumps a manifest before an automatic cut).
-- **The release workflow** comes from `colab template release-auto`. `HANDBOOK_REF` must
-  name a ref the handbook carries (#480); on a private repo every job but `npm` takes the
-  self-hosted label the runner preflight above settled — the same red-trunk trap, on a
-  workflow that runs at every green trunk head.
-- **The deploy template**, where the tag deploys and the stack has one (`deploy-xserver` for
-  PHP on shared hosting, `deploy-container` for a container host), is copied **disarmed** —
-  only its `workflow_dispatch` trigger live — and the operator arms `push: tags` once its
-  secrets are set. Arming a deploy is never adoption's act.
-- **The first final** is the operator's. `colab release cut` refuses with no final to bump
-  from, so tell them in the report, with the command; tag `v0.1.0` yourself only when told to.
-
-### Registration is the step that gets skipped
-
-**`colab register` ([§9](../../CONVENTIONS.md#9-adopting-this) step 7) is last on the list and first to be forgotten**, because
-nothing local breaks without it. The repo builds, CI passes, the session wraps — and
-the repo simply never appears in a sweep, accumulating drift nobody can see. It is the
-mechanism by which a cohort that size goes unnoticed. Run it, do not defer it.
-
-### Finish by proving the repo is visible
-
-Adoption ends with the classification that could not run at the start — not with the
-claim that it now would:
-
-```sh
-colab update .                                     # no longer "nothing adopted here yet"
-node "$COLAB_HANDBOOK/audit/audit.mjs" --local .   # no longer "repo is undescribed"
-colab register --list                              # this repo, in BOTH registries
-```
-
-`colab register --list` marks each registry it found the repo in (`T` = the audit
-fleet list, `C` = the ports config); a path in only one is drift, and the command
-exits non-zero when it finds any. Paste that output onto the Issue. A repo is adopted
-when the fleet can see it, and this is the evidence for it.
-
-Then return to §1. Anything you copied in [§9](../../CONVENTIONS.md#9-adopting-this)'s step 6 is now a stamped artifact, and
-the rest of this skill applies to it in the ordinary way.
 
 ## 3. `behind` — let the tool write only what is provably pristine
 
@@ -376,48 +170,20 @@ If the upstream change conflicts with why you edited the file, that is a **findi
 say so on the Issue rather than silently choosing. Someone made both decisions for a
 reason and they now disagree.
 
-### The every-branch trigger block (#384) — offer it only where trunk has capacity
 
-A `ci-*` copy stamped before #384 is missing the templates' new `on:` + `concurrency:`
-block: push on `'**'`, and a per-ref group that cancels a superseded branch run and never
-a trunk one ([`CONVENTIONS.md` §4, *Branch CI*](../../CONVENTIONS.md#branch-ci--the-candidates-own-run-read-as-a-class-314)).
-It is an upstream change like any other — but it is only a fix where trunk runs have
-capacity of their own. On one self-hosted agent shared with trunk it makes things worse:
-branch runs queue ahead of the one trunk run a merge waits for (#355). So decide from the
-copy's own `runs-on:` lines, every job, before offering it:
+### The CI trigger blocks (#384, #512) — decide per copy before grafting
 
-| every job's `runs-on:` is … | trunk lane? | do |
-|---|---|---|
-| a GitHub-hosted label (`ubuntu-latest`, `ubuntu-24.04`, `macos-*`, `windows-*`) | yes — a fresh machine per job | **offer the graft** |
-| an expression on `github.ref` sending trunk to a label other jobs never use | yes — a trunk-only lane | **offer the graft** |
-| a static self-hosted label, and `gh api repos/<owner>/<repo>/actions/runners` lists **two or more** online runners carrying it | yes — a pool | **offer the graft** |
-| a static self-hosted label with **at most one** online runner carrying it | **no** | **warn, do not graft** |
+Full text, with the runner table and the per-copy decision rows:
+[4-trigger-blocks.md](4-trigger-blocks.md).
 
-The warning, said to the human and recorded on the sync's Issue — not left in the diff:
-
-> `<workflow>` runs on a single self-hosted runner (`<label>`) with no trunk lane.
-> Not grafting the every-branch trigger (#384): branch runs would queue ahead of the
-> trunk run the merge gate waits for (#355). Give trunk its own label or a second
-> runner first (CONVENTIONS.md §7, *Self-hosted runners*), then re-run this sync.
-
-- **Grafting keeps the copy's own branch names.** If the repo's trunk or release branch
-  is not `main`/`dev`, put its real names into both the `pull_request` list and the
-  `cancel-in-progress` expression. A trunk missing from that expression has its runs
-  cancelled by the next merge — the one outcome the block exists to prevent.
-- **Mixed jobs — some hosted, some on a single shared agent — read as "no".** A run is
-  not complete until its last job is; one starved job holds the trunk run as surely as
-  all of them.
-- **The runners call needs admin on the repo.** A 403/404 there is not "zero runners":
-  say the pool size could not be read and warn, rather than guess a pool into existence.
-- **A copy that is `behind` and pristine** (§3) still carries the template's own
-  `runs-on: ubuntu-latest` — byte-identical means nobody changed it — so `colab update
-  --apply` writing it is the first row above, never the last. The check matters on a
-  `diverged` or `unstamped` copy, which is where a self-hosted label lives.
-- **Already on `'**'` by hand** (a common local edit before #384)? Graft only what is
-  missing, usually the `concurrency:` block — and check the copy's existing cancel rule
-  does not already cancel trunk runs. The table still decides first: on a single shared
-  agent that hand edit is itself the #355 shape, so warn about it (as a finding, not a
-  revert — the owner chose it) instead of grafting more onto it.
+- **Every-branch trigger block (#384):** offer it only where trunk has capacity of its own — decide
+  from every job's `runs-on:`; on a single shared self-hosted runner, **warn, do not graft**.
+- **Single-run trigger block (#512):** a copy with push `'**'` *and* `pull_request` runs every
+  same-repo PR commit twice; offer dropping `pull_request` only where fork PRs cannot arrive and
+  the copy has more than a trunk-only push. Check what the PR run was carrying (a Laravel
+  `RUN_TESTS`) first; never replace the trigger with an `if:` skip or `paths-ignore`.
+- A `cancel-in-progress` that is unconditionally `true`, or a trunk missing from the cancel list, is
+  a **finding**: trunk runs get cancelled.
 
 ## 5. `unstamped` — establish lineage before touching anything
 
@@ -560,88 +326,21 @@ or `channels`' own) by deleting a key someone already declared. Declaring must
 never read as riskier than omitting — a rule that would flip that is a bug, not a
 tidy-up.
 
+
 ### Convention drift — a meaning this repo changed, or never absorbed (#362)
 
-A convention label's *meaning* is not a copy this repo owns. The graft rules in §4–§6
-protect what the repo added to its copies. They do not cover a repo that changed which
-lane a `delivery:*` value starts in, or added a value the handbook does not have. That is
-**drift, not a local customisation**, unless the repo declares it
-([`CONVENTIONS.md` §8, *Upstream*](../../CONVENTIONS.md#upstream--a-consumer-that-changes-what-a-convention-means-files-it-here-362)).
-A declaration is a line in this repo's `CLAUDE.md` `Local divergences:` list (in `CLAUDE.md`
-beside the block, even where the repo's prose lives in `AGENTS.md`) that names
-the label or value, what it means here, and a handbook issue URL.
+Full text, with the mechanical label comparison and the judgement half:
+[7-convention-drift.md](7-convention-drift.md).
 
-**The mechanical half: compare the tracker's labels with the handbook's set.**
-
-```sh
-gh label list --limit 500 --json name,description | node -e '
-  const L = require(process.argv[1] + "/tools/lib/labels.js");
-  const want = new Map(L.CONVENTION_LABELS.map((l) => [l.name, l.description]));
-  const fams = [L.DELIVERY_LABEL_PREFIX, L.DEFERRED_LABEL_PREFIX];
-  for (const { name, description } of JSON.parse(require("fs").readFileSync(0, "utf8"))) {
-    if (!want.has(name)) { if (fams.some((p) => name.startsWith(p))) console.log(`value   ${name}`); }
-    else if (want.get(name) !== description) console.log(`meaning ${name}: "${description}"`);
-  }' "$COLAB_HANDBOOK"
-```
-
-- **`value <name>`**: this tracker has a `delivery:*` / `deferred:*` value the handbook
-  does not define. It is drift unless the `Local divergences:` list declares it. Do not
-  read it as a gap the handbook forgot to fill, and do not guess a meaning for it:
-  `delivery:elsewhere-partial` was ruled consumer-local in #366 for exactly that reason
-  (`CONVENTIONS.md` §5, *Delivery type*). Until it is declared, the handbook's classifier
-  reads it as not asked.
-- **`meaning <name>`**: the label's description differs from the handbook's. This line is
-  a lead. Read both texts before you conclude anything, because it has two readings:
-  - **Same meaning, older wording.** `colab labels --ensure` never rewrites an existing
-    description unasked, so a label created before the handbook reworded it keeps the old
-    text until someone refreshes it. `colab labels --ensure` prints both texts for every
-    such label (the audit warns on the same list, #364). Refresh them with
-    `colab labels --ensure --refresh-descriptions`, adding `--keep <name>` for each label
-    that is a declared divergence. This is a GitHub-side change, like the label back-fill
-    above.
-  - **A different meaning.** This is the divergence. It is drift unless declared.
-
-Measured on the consumer behind the rule: the command printed `value delivery:design` and
-a `meaning delivery:docs-only` line saying "on the ordinary code lane". Those are the two
-divergences the handbook heard about 7 and 30 days late.
-
-**The judgement half: this repo's own texts.** Labels are not the only place a meaning
-lives. Search this repo's prompts, copied skills, scheduler config and docs for each
-convention label name, and compare the rule each one states with `CONVENTIONS.md`'s.
-Both directions count:
-
-- **This repo says something the handbook does not.** Treat it the same as a `value` or
-  `meaning` hit.
-- **The handbook moved on and this repo still states the old rule.** Measured: a label
-  made monotonic upstream, while a consumer's triage prompt still said clearing it "is
-  often correct". Fix the repo's text in this sync's commit (§8). The handbook already
-  decided, so there is nothing to file upstream.
-
-**For each undeclared divergence**, pick one:
-
-1. **This repo is wrong.** Revert it to the handbook's meaning in this sync's commit.
-2. **The meaning should stay.** File the handbook issue now, in this session. Do not
-   defer it to the next sync. Describe the consumer by shape, since the handbook is public.
-   Use no `agent-filed` label, because it transcribes a decision already made here. Put
-   `Filed-by:` on the person who approved the change. Then add the `Local divergences:`
-   line to `CLAUDE.md` in this sync's commit. `CONVENTIONS.md` §8 *Upstream* is the rule
-   behind each of these choices. Link to it rather than restating it on the Issue.
-
-Never report an undeclared divergence as "local customisation, left as is". That verdict
-is how the two texts drifted apart for 30 days.
-
-**Skill overlays are the sanctioned customisation — leave them, but read them.** A
-`.colab/skills/<skill>.md` file is this repo's local policy for one skill
-([`CONVENTIONS.md` §8, *Local policy*](../../CONVENTIONS.md#local-policy--a-repo-refines-a-skill-without-forking-it-520)).
-It is not a stamped copy, so §3–§6 never graft, refresh or delete it. It is still one of
-this repo's own texts, so the judgement half above covers it: an overlay that restates a
-convention label's meaning differently is drift like any other. A repo that carries a
-**forked copy** of a whole handbook skill instead is the case overlays exist to replace:
-propose moving its local differences into `.colab/skills/<skill>.md` and dropping the
-copy, because the fork stops receiving upstream changes.
-
-Fix what is genuinely wrong; **report what you are unsure about** rather than
-guessing. A `project.yml` that contradicts reality is worse than one that admits it.
+- A convention label's *meaning* is not a copy this repo owns. Compare the tracker's labels with
+  the handbook's set (the script in the reference file prints `value` / `meaning` leads) and search
+  this repo's own prompts, skills, scheduler config and docs for each label name.
+- Each undeclared divergence is either **reverted** to the handbook's meaning in this sync's commit,
+  or **filed upstream now** (described by shape, no `agent-filed` label, `Filed-by:` the approver)
+  with a `Local divergences:` line added to `CLAUDE.md`. Never report one as "local customisation,
+  left as is".
+- `.colab/skills/<skill>.md` overlays are the sanctioned customisation — leave them, but read them.
+- Fix what is genuinely wrong; **report what you are unsure about** rather than guessing.
 
 ## 8. Commit safely — two habits, both learned the hard way
 
@@ -666,6 +365,8 @@ git show --stat                                                 # verify the fil
 - Every `unstamped` item is either stamped after checking lineage, or reported.
 - Every `ci-*` copy either carries the every-branch trigger block (#384) or has the
   single-runner warning recorded on the Issue (§4) — never neither.
+- Every `ci-*` copy either carries the single-run trigger block (#512) or has the reason it
+  keeps `pull_request` (trunk-only push, fork PRs) recorded on the Issue (§4).
 - `audit.mjs --local .` is clean, or each remaining finding is explained.
 - `git show --stat` on your commits lists only files you meant to change.
 - The §7 convention-drift check ran. Every `value`/`meaning` hit and every divergent text
