@@ -2916,15 +2916,19 @@ properties hold it together:
 - **R, round-trip.** The live CI round-trip passed on the **shipped** head, which after a
   sync is not the reviewed one. Ship re-reads CI itself
   and never trusts the recorded `ci-roundtrip:` value. The job is found by the name
-  prefix `Migration round-trip` (the legs of `templates/ci-laravel.yml`). Every leg
+  prefix `Migration round-trip` (the legs of `templates/ci-laravel.yml`, or of the opt-in
+  block in `templates/ci-node.yml`, #494). Every leg
   needs a run that completed with success and ran at least one step. The template's job
   rolls back to the oldest migration the branch **adds or modifies** (#507), so a branch
   that only repairs an existing `down()` gets a round-trip that actually runs it, and the
   run's log names every file it exercised. A copy older than that counts added files only:
   its green says nothing about a modified migration, so re-sync it before a reviewer grant
-  relies on it. A repo without that
-  job cannot pass R, and a branch that edits `.github/workflows/` cannot pass it either. Those branches ship on a
-  human grant.
+  relies on it. Node has no canonical migration runner, so ci-node's job runs the repo's own
+  forward-only runner three times — fresh, re-applied, and on top of the base's migrations —
+  and each schema must equal the first: a forward-only runner has no `down()` to exercise,
+  and an edit to an applied migration shows up as a differing schema instead. A repo without
+  that job cannot pass R — the audit warns when one declares `reviewer` anyway — and a branch
+  that edits `.github/workflows/` cannot pass it either. Those branches ship on a human grant.
 
 If any condition fails, the gate behaves exactly as it does without a reviewer grant: a
 human grant, or a human running Phase B. The refusal says which condition failed

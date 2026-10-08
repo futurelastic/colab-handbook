@@ -290,12 +290,27 @@ function labelNamesOf(record) {
 const SHIP_CONDITION_TAG = Object.freeze({ policy: 'P policy', marker: 'M record', head: 'HEAD', roundtrip: 'R round-trip' });
 
 /**
- * The CI round-trip job (#399's `templates/ci-laravel.yml`) is found by NAME PREFIX: its matrix
- * legs are named `Migration round-trip (<engine>)`. Nothing in project.yml names it today (#401
+ * The CI round-trip job (#399's `templates/ci-laravel.yml`, and #494's opt-in block in
+ * `templates/ci-node.yml`) is found by NAME PREFIX: its matrix legs are named
+ * `Migration round-trip (<engine>)`. Nothing in project.yml names it today (#401
  * risk 1) — a repo that renames the job, or has no such job, cannot pass R, and ships a migration
  * on a human grant exactly as before. STABLE: renaming the template's job breaks this reader.
  */
 const ROUNDTRIP_JOB_PREFIX = 'Migration round-trip';
+
+/**
+ * #494 — which workflows carry a live job whose `name:` starts with ROUNDTRIP_JOB_PREFIX. A
+ * commented line never counts (ci-node ships its job as a commented opt-in block). `readFile(rel)`
+ * returns the text or null; `workflows` are file names under .github/workflows. Text-level on
+ * purpose — the same reading R does by job name at ship time, without a YAML parser.
+ */
+function roundtripJobWorkflows({ readFile, workflows }) {
+  const re = new RegExp(`^\\s+name:\\s*['"]?${ROUNDTRIP_JOB_PREFIX.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`, 'm');
+  return (workflows || []).filter((wf) => {
+    const text = readFile(`.github/workflows/${wf}`);
+    return typeof text === 'string' && re.test(text);
+  });
+}
 
 /**
  * R — did the live CI round-trip pass on the shipped HEAD? Pure: `jobs` is every job of every run
@@ -738,6 +753,8 @@ module.exports = {
   GRANT_POLICIES, parseGrantPolicy,
   // #401 — ship honours a reviewer grant
   ROUNDTRIP_JOB_PREFIX, roundtripVerdict, SHIP_CONDITION_TAG,
+  // #494 — the audit's check that R is reachable at all
+  roundtripJobWorkflows,
   // #457 — the mint-time checks
   REVIEW_CHECKLIST_ITEMS, mintRecordProblems, mintRoundtripCheck, parseRunId,
 };

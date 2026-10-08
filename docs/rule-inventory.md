@@ -2580,7 +2580,7 @@ Reworded units, one bullet each. Row key changed: C6.rel.111 (the moved sentence
 | S1.migrationgrant.05 | hard | tools/colab::function shipMigrationGate | Only the trunk checkout's `migration-grant` value counts; a branch cannot raise its own policy. | Only the trunk checkout's value counts. | project.schema.md | — |
 | S1.migrationgrant.06 | hard | tools/lib/migration-grant.js::function parseGrantPolicy | An invalid `migration-grant` value falls back to `human`, and the audit fails it. | An invalid value falls back to `human`. That is the stricter reading, and the audit | project.schema.md | — |
 | S1.migrationgrant.07 | hard | tools/colab::function shipMigrationGate | Ship honours a reviewer grant only with P + M + HEAD + R: the key at the target tip, a passing review record binding the head, and a live passing `Migration round-trip` CI job. | `colab ship` honours a reviewer grant only with P + M + HEAD + R | project.schema.md | #401 |
-| S1.migrationgrant.08 | default |  | A repo with no `Migration round-trip` job can declare `reviewer`, but every reviewer grant there fails R. | A repo with no such job can declare `reviewer`, but every reviewer grant there fails R. | project.schema.md | — |
+| S1.migrationgrant.08 | default |  | A repo with no `Migration round-trip` job can declare `reviewer`, but every reviewer grant there fails R and the audit warns (#494). | A repo with no such job can declare `reviewer`, but every reviewer grant there fails R and the audit warns. | project.schema.md | — |
 | S1.migrationgrant.09 | default |  | The audit always reports the value in `--json` as `migrationGrant`. | It appears in `--json` as `migrationGrant`. | project.schema.md | — |
 
 ### `ci-grant`
