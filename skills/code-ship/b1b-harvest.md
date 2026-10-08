@@ -114,8 +114,12 @@ reads as startable code work again. So in the **same step** as the ship:
   outside party) → park it:
   ```sh
   gh issue edit $N --add-label deferred:measurement --add-label review-by:<YYYY-MM-DD>
-  gh issue comment $N --body $'Hold: deferred:measurement — owner: <who posts the proof> — wake: review-by:<YYYY-MM-DD>\nBecause: <what is left, and why no code session can produce it>'
+  gh issue comment $N --body $'Hold: deferred:measurement — owner: <who posts the proof> — shape: wait — wake: review-by:<YYYY-MM-DD>\nBecause: <what is left, and why no code session can produce it>'
   ```
+  `shape: wait` — nothing is asked of the owner until the wake. If the leftover is instead an
+  act only a person can perform (sign, supply a credential), write `shape: task`; if it is a
+  choice, it is not a hold at all but a structured ask (`needs-decision` + `decision:options`
+  with a recommended option) — CONVENTIONS.md §5, *Holds*, *The `shape:` field* (#569).
   (`deferred:date` / `deferred:external-party` when that is what it waits on —
   CONVENTIONS.md [§5](../../CONVENTIONS.md#disposition--a-park-must-name-its-wake-condition-279), *Disposition* and *Holds*.)
 - **Leftover is code** → prefer `Remainder: #M` over `--refs`, and let $N close.

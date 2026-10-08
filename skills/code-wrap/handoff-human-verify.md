@@ -53,12 +53,14 @@ passed. The leftover is what a fake cannot prove.
    second time (`code-ship` B1b).
 
 **When a hold is still right.** A hold on the source issue is legitimate only for a real
-**decision** that blocks the code itself, and the `Blocked:`/`Hold:` line must name it:
+**decision** that blocks the code itself, and the `Blocked:`/`Hold:` line must name it, with its
+`shape:` (CONVENTIONS.md §5, *Holds*, *The `shape:` field*, #569):
 
-- a ruling on behaviour or scope (comment the options and add `needs-decision`);
-- money;
+- a ruling on behaviour or scope — a **choice**, so a structured ask, not a bare hold: comment a
+  `decision:options` block (2–4 options, one `(recommended)`) and add `needs-decision`;
+- money — a choice (`shape: ask`, as above) or an act such as approving a purchase (`shape: task`);
 - credentials or security, such as a secret that has to be issued or rotated before the code can
-  run at all;
+  run at all — an act: `shape: task`, `wake: ruling`, `Because:` is the act;
 - design approval for a surface that has no ruling yet.
 
 "Someone has to try it on the real thing" is none of these. If the person-only check **fails**

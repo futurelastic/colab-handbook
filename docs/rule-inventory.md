@@ -1095,6 +1095,12 @@ Keys shortened because the sentence that followed them was moved whole (the rule
 | C5a.wake.27 | default |  | The wake rules apply to deferred:* and every label under holds: alike. | This applies to `deferred:*` and to every label declared under `holds:` alike | CONVENTIONS.md | #382 |
 | C5a.wake.28 | default |  | Whoever parks the issue writes the Hold: line, and code-triage reads it. | Whoever parks the issue writes the line, and `code-triage` reads it | CONVENTIONS.md | #382 |
 | C5a.wake.29 | default |  | The codec decodes only the exact Hold: line shape; a looser line names no owner or wake and stays a stall. | decodes only this exact shape | CONVENTIONS.md | #382 |
+| C5a.shape.01 | default |  | shape: is optional, sits between owner: and wake: (never after wake:), and every new hold declares it. | Optional, between `owner:` and `wake:`, never after `wake:`; every new hold declares it. | CONVENTIONS.md | #569 |
+| C5a.shape.02 | default |  | An owner choice is never a bare hold: it goes through needs-decision plus a decision:options block with a recommended option. | a **choice** between ways forward | CONVENTIONS.md | #569 |
+| C5a.shape.03 | default |  | A task is an act only a person can perform; it is a hold with wake: ruling and Because: is the act. | an **act** only a person can perform | CONVENTIONS.md | #569 |
+| C5a.shape.04 | default |  | A wait is a hold with a checkable wake: or review-by:<date>. | a hold with a checkable `wake:` or `review-by:<date>` | CONVENTIONS.md | #569 |
+| C5a.shape.05 | default |  | Present shape: is used; absent is inferred from the wake (ruling -> ask, else wait); any other value is a finding that falls back to the inference. | absent → inferred from the wake as before | CONVENTIONS.md | #569 |
+| C5a.shape.06 | explanation |  | Why shape: is declared, why a choice is never a bare hold, and why the field sits between owner: and wake:. | Measured on one installation: an owner's decision queue held 21 items. | docs/adr/569-hold-shape-rationale.md | #569 |
 
 ### §5 Disposition — the marker, the seven kinds, and who may apply one (#315)
 
