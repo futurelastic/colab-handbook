@@ -54,9 +54,13 @@ Then print exactly one of:
 
   Post one comment in the ordinary two-line shape, then read it back:
   ```
-  Hold: <label> — owner: <who the reason names> — wake: review-by:<date>
+  Hold: <label> — owner: <who the reason names> — shape: wait — wake: review-by:<date>
   Because: <one-sentence summary of the recorded reason> (transcribed by triage from <link to it>)
   ```
+  - `shape: wait` matches what the wake already says (only a date), so declaring it decides
+    nothing (#569). When the recorded reason names an act the owner must perform, write
+    `shape: task`. A reason that is a choice is not transcribed as a hold — it stays `STALL`,
+    naming the structured ask (`needs-decision` + `decision:options`) it should become.
   - `wake:` is **only** the date. Conditions on one `wake:` line are ANDed, so a reason
     that says "until X, or by the date" cannot put X there as well — that would turn "or"
     into "and". X goes into `Because:`, in the reason's own words.
@@ -88,6 +92,13 @@ Then print exactly one of:
   clearer, and the wake.
 - **`wake: ruling`** → the `Because:` line is the ask. Quote it in the report so the
   person who clears the hold can see what they are asked, not only that something waits.
+- **Print the hold's shape on every `HELD`/`WAKE` line** (#569): the declared `shape:` when
+  the newest `Hold:` line carries one of `ask`/`task`/`wait`, else the inference
+  (`ruling` → `ask`, anything else → `wait`) marked `(inferred)`. `holdShape()` in
+  `tools/lib/codec/hold.js` does both. Two findings, printed on the line, never a gate:
+  a `shape:` value outside the three (named, inference used), and a `shape: ask` hold whose
+  issue has no `decision:options` block — a choice posted as a bare hold, which the owner
+  cannot answer in one act.
 
 ### Is the hold what it says it is? (#540)
 

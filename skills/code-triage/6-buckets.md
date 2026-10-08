@@ -17,7 +17,7 @@ Then, briefly:
   STALL   #504  hold needs-rescope — no Hold: line (no owner, no wake) — clears: nobody named — dispatched: no
   FIXED   #510  hold needs-rescope — Hold: line transcribed (owner: @maintainer, wake: review-by:2026-10-05, reason from #510 body) — clears: @maintainer — dispatched: Hold: line, this pass
   HELD    #505  hold needs-rescope — clears: @maintainer — wake: review-by:2026-10-01 — dispatched: Hold: line, 2026-09-24
-  HELD    #506  hold hold:manual — clears: @maintainer — wake: ruling, "grant the deploy key for staging" — dispatched: Hold: line, 2026-09-23
+  HELD    #506  hold hold:manual — shape: task — clears: @maintainer — wake: ruling, "grant the deploy key for staging" — dispatched: Hold: line, 2026-09-23
   WAKE    #507  deferred:date — wake met, lift? review-by:2026-09-20 (reached) — clears: @maintainer — dispatched: Hold: line, 2026-09-01
   WAKE    #508  deferred:external-party — wake met, lift? issueClosed:owner/repo#12 (closed 2026-09-25) — clears: @maintainer — dispatched: no
   STALL   #509  hold hold:manual — wake: issueClosed:owner/repo#999 does not resolve — clears: @maintainer — dispatched: no

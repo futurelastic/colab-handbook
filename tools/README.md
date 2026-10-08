@@ -577,6 +577,13 @@ as the one adopting scheduler that evaluates wakes spells them; `lib/wake.test.j
 a second spelling fails CI rather than drifting. `lib/disposition.js` reads it too: a `hold` whose
 wake is a vocabulary `wake:` is a hold, and prose is not.
 
+The line may also declare `shape: ask|task|wait` between `owner:` and `wake:` (#569) — what the
+owner is asked for. `decodeHold` returns `shape` only when the line carries one; `holdShape(decoded)`
+returns the declared shape when it is one of the three, else the inference that predates the field
+(`ruling` in the wake → `ask`, otherwise `wait`), with `declared` and `invalid` saying which. A
+reader built before the field still parses the line: its lazy owner match absorbs the field and
+its wake stays whole — `codec.test.js` pins that against the old pattern.
+
 ## Tracker codec (`lib/codec/`) — every marker as an encode/decode pair (#497, #498, #499)
 
 Everything this toolkit writes to a tracker with a meaning is encoded and decoded in one place,

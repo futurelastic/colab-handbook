@@ -2267,6 +2267,7 @@ Because: the import model changed in #88; the parser steps must be rewritten aga
   line.
 - **`wake:`** is drawn from a small **closed** vocabulary (below). Nothing outside it
   is ever evaluated, and free text is never a wake.
+- **`shape:`** says what the owner is asked for: `ask`, `task` or `wait` (below, #569).
 - **The newest `Hold:` line for a label is the live one.** A new hold posts a new line.
   Clearing a hold is the owner removing the label once the wake fires. The comment stays
   as history.
@@ -2306,7 +2307,7 @@ So `wake:` is now one of these, and a scheduler can evaluate every form on every
 wake is `ruling`, the `Because:` line is the ask itself, written as what the owner has to
 do or answer. A consumer's card reader parses this line and does not invent a second
 syntax for it. If the ask is a question rather than an act, it belongs under
-`needs-decision` instead, where the answer gets a record of its own.
+`needs-decision` instead, where the answer gets a record of its own (`shape:`, below).
 
 **One spelling, not two.** Every checkable name above is spelled exactly the way the one
 adopting scheduler that evaluates wakes already spells it, argument rules included. The direction is one way: a consumer that evaluates a
@@ -2344,6 +2345,28 @@ decodes only this exact shape — a looser line names no owner or wake and stays
 `tools/lib/wake.js`, which parses a `wake:` value and evaluates it against facts a caller has
 already gathered. Whoever parks the issue writes
 the line, and `code-triage` reads it (its §0, §2, §5 and §6).
+
+###### The `shape:` field — what the owner is asked for (#569)
+
+Optional, between `owner:` and `wake:`, never after `wake:`; every new hold declares it.
+Why, and why that position: [ADR 569](docs/adr/569-hold-shape-rationale.md).
+
+| `shape:` | The owner is asked for | Carrier |
+|---|---|---|
+| `ask` | a **choice** between ways forward | **never a bare hold:** `needs-decision` + a `decision:options` block (*Decision options*, below) — 2–4 options, one `(recommended)`, `Because:` names what makes it the owner's call |
+| `task` | an **act** only a person can perform: sign, run a privileged script, supply a credential | a hold, `wake: ruling`; `Because:` is the act |
+| `wait` | nothing yet: a third party, other work, a date | a hold with a checkable `wake:` or `review-by:<date>` |
+
+```
+Hold: needs-decision — owner: @maintainer — shape: ask — wake: ruling
+Hold: hold:manual — owner: @maintainer — shape: task — wake: ruling
+Hold: deferred:external-party — owner: upstream — shape: wait — wake: issueClosed:owner/repo#22
+```
+
+Present → readers use it; absent → inferred from the wake as before (`ruling` → `ask`, else
+`wait`); any other value is a finding and falls back to the inference. A reader that does not
+know the field still parses the line, wake whole. `holdShape()` in `tools/lib/codec/hold.js`
+returns the declared or inferred shape. A person-only check on finished code is no hold at all.
 
 #### Disposition — the marker, the seven kinds, and who may apply one (#315)
 

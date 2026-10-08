@@ -3,7 +3,7 @@
  * CODEC (#498, epic #496): the HOLD wire format — the two-line comment that parks an issue
  * (CONVENTIONS.md §5, *Holds*):
  *
- *   Hold: <label> — owner: <who clears it> — wake: <condition>[, <condition>…]
+ *   Hold: <label> — owner: <who clears it>[ — shape: ask|task|wait] — wake: <condition>[, <condition>…]
  *   Because: <what is left>
  *
  * — and the closed `wake:` vocabulary that line's last field is drawn from (#382). Pure and
@@ -114,17 +114,47 @@ function parseQualifiedIssueRef(arg) {
 
 // ── the Hold: / Because: lines ───────────────────────────────────────────────────────────────
 
-const HOLD_RE = /^Hold: (\S+) — owner: (.+?) — wake: (.+)$/;
+// `shape:` (#569) sits BETWEEN owner and wake on purpose. An older reader's pattern is
+// `owner: (.+?) — wake: (.+)$`: placed there, the field folds into that reader's owner text and
+// its wake still parses whole. Placed after wake: it would corrupt the wake, and the older reader
+// would report a perfectly good hold as a stall. Never move it.
+const HOLD_RE = /^Hold: (\S+) — owner: (.+?)(?: — shape: (\S+))? — wake: (.+)$/;
 const BECAUSE_RE = /^Because: (.*)$/;
+
+/**
+ * What the owner is being asked for (#569) — closed, read by equality:
+ *   ask  — a choice between ways forward. Posted as a structured ask (`needs-decision` + a
+ *          `decision:options` block with a recommended default), never as a bare hold.
+ *   task — an act only a person can perform: verify by hand, run a privileged script, sign,
+ *          supply a credential.
+ *   wait — on a third party, another issue, a ref or a date.
+ */
+const HOLD_SHAPES = Object.freeze(['ask', 'task', 'wait']);
+
+/**
+ * The shape a reader acts on: the declared `shape:` when it is in the closed set, otherwise the
+ * inference that predates the field — a `ruling` anywhere in the wake reads as `ask`, anything
+ * else as `wait`. `declared` says which. An unknown declared value is not trusted (`invalid` names
+ * it) and falls back to the inference, so a typo never silently re-routes a hold.
+ * @returns {{shape:'ask'|'task'|'wait', declared:boolean, invalid:string|null}}
+ */
+function holdShape(decoded) {
+  const d = decoded || {};
+  if (d.shape != null && HOLD_SHAPES.includes(d.shape)) return { shape: d.shape, declared: true, invalid: null };
+  const parsed = parseWakeLine(d.wake);
+  const ruling = parsed.ok && parsed.conditions.some((c) => c.kind === 'ruling');
+  return { shape: ruling ? 'ask' : 'wait', declared: false, invalid: d.shape != null ? String(d.shape) : null };
+}
 
 /**
  * `{label, owner, wake, because?}` → the hold comment. `wake` is the field as written (conditions
  * joined by `, `); pass an array to have it joined. `because` null/absent → the `Hold:` line alone.
  * The codec writes what it is given — checking `wake` against the vocabulary is `parseWakeLine`'s job.
  */
-function encodeHold({ label, owner, wake, because } = {}) {
+function encodeHold({ label, owner, shape, wake, because } = {}) {
   const w = Array.isArray(wake) ? wake.join(', ') : wake;
-  const line = `Hold: ${label} — owner: ${owner} — wake: ${w}`;
+  const sh = shape == null ? '' : ` — shape: ${shape}`;
+  const line = `Hold: ${label} — owner: ${owner}${sh} — wake: ${w}`;
   return because == null ? line : `${line}\nBecause: ${because}`;
 }
 
@@ -133,20 +163,24 @@ function encodeHold({ label, owner, wake, because } = {}) {
  * line in the canonical shape. `because` is the second line's text when that line is `Because: …`
  * and nothing follows it; anything else after the `Hold:` line makes the comment not a hold record
  * (null) rather than a partially-read one. `wake` is the raw field — `parseWakeLine(wake)` decides
- * whether it names a wake at all.
+ * whether it names a wake at all. `shape` is present ONLY when the line declares one (#569), as
+ * written — `holdShape` decides whether it is in the closed set; absent means "infer from wake".
  */
 function decodeHold(body) {
   const lines = String(body == null ? '' : body).replace(/\r\n/g, '\n').trim().split('\n');
   const h = HOLD_RE.exec(lines[0]);
   if (!h) return null;
-  if (lines.length === 1) return { label: h[1], owner: h[2], wake: h[3], because: null };
+  const head = h[3] == null
+    ? { label: h[1], owner: h[2], wake: h[4] }
+    : { label: h[1], owner: h[2], shape: h[3], wake: h[4] };
+  if (lines.length === 1) return { ...head, because: null };
   const b = lines.length === 2 ? BECAUSE_RE.exec(lines[1]) : null;
   if (!b) return null;
-  return { label: h[1], owner: h[2], wake: h[3], because: b[1] };
+  return { ...head, because: b[1] };
 }
 
 module.exports = {
   WAKE_KINDS, CHECKABLE_KINDS, WAKE_KINDS_TEXT,
   parseWake, parseWakeLine, parseQualifiedIssueRef,
-  HOLD_RE, BECAUSE_RE, encodeHold, decodeHold,
+  HOLD_RE, BECAUSE_RE, HOLD_SHAPES, encodeHold, decodeHold, holdShape,
 };
