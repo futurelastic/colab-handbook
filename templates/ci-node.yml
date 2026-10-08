@@ -290,6 +290,9 @@ jobs:
     # hashFiles() would have been testing an empty directory even if it were
     # allowed.
     runs-on: ubuntu-latest # EDIT: self-hosted label if this repo needs one.
+    timeout-minutes: 60 # a hung build must not hold the runner for the 360-minute default (#572).
+    # EDIT: measured (#572): the slowest Node adopter's build ran p99 37 / max 43 min. Keep this
+    # well above YOUR p99 — below it a slow but healthy suite goes red (`gh run view <id>` per job).
     # Re-exported so the opt-in round-trip job below resolves Node exactly once, here.
     outputs:
       node-version: ${{ steps.toolchain.outputs.node-version }}
@@ -587,6 +590,8 @@ jobs:
   #   # including `dedupe`, which is skipped on every ordinary push (#418).
   #   if: ${{ !cancelled() && needs.build.result == 'success' }}
   #   runs-on: ubuntu-latest # EDIT: self-hosted label if this repo needs one.
+  #   timeout-minutes: 15 # a hung round-trip must not hold the runner for the 360-minute default (#572).
+  #   # EDIT: measured (#572): p99 under 4 min on every adopter. Keep it well above your own p99.
   #   strategy:
   #     fail-fast: false
   #     matrix:
