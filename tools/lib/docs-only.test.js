@@ -182,3 +182,12 @@ test('#570: ci-docs-skip — absent is off, a list of plain repo paths is on, an
     assert.strictEqual(r.on, false, JSON.stringify(v));
   }
 });
+
+test('#570: a build input is never documentation, despite the .txt extension', () => {
+  for (const p of ['requirements.txt', 'a/requirements-dev.txt', 'dev-Requirements.txt', 'requirements/base.txt',
+    'docs/requirements.txt', 'constraints.txt', 'CMakeLists.txt', 'lib/CMakeLists.txt']) {
+    assert.match(d.pathReason(p), /build input/, p);
+  }
+  for (const p of ['notes.txt', 'requirements.md', 'cmakelists.txt', 'docs/build.txt']) assert.strictEqual(d.pathReason(p), null, p);
+  assert.strictEqual(d.classify([{ path: 'README.md' }, { path: 'requirements.txt' }]).docsOnly, false);
+});

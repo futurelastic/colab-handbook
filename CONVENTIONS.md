@@ -622,6 +622,9 @@ Why, with the measurement: [ADR 345](docs/adr/345-docs-only-autonomy-exception-r
 - `.colab/skills/**` — a skill's [local policy](#local-policy--a-repo-refines-a-skill-without-forking-it-520)
   is agent instructions that win over the skill's own text, so one `.md` there changes agent
   behaviour exactly as a `CLAUDE.md` does (#520);
+- a build input despite its extension, at any depth (#570): a Python dependency manifest as the
+  [cure rule](#cure-rule--the-machine-checkable-door-through-trunk-ci-green-281) names one (`requirements` in the name, or under
+  `requirements/`), a pip `constraints*.txt`, `CMakeLists.txt`;
 - any binary or symlink change;
 - an empty diff.
 

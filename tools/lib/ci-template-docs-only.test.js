@@ -118,7 +118,9 @@ test('docs_base: the base is the merge base on a new branch, the previous tip on
   const bin = path.join(dir, 'bin');
   fs.mkdirSync(bin);
   fs.writeFileSync(path.join(bin, 'gh'), FAKE_GH, { mode: 0o755 });
-  const green = (id, event = 'push') => ({ id, event, html_url: `https://github.com/o/r/actions/runs/${id}` });
+  // A run of this workflow at a base sha: trunk's own push run unless said otherwise.
+  const green = (id, o = {}) => ({ id, event: 'push', head_branch: 'main', head_repository: { full_name: 'o/r' },
+    status: 'completed', conclusion: 'success', created_at: `2026-10-0${o.day || 1}T00:00:00Z`, html_url: `https://github.com/o/r/actions/runs/${id}`, ...o });
   const run = (fx = {}) => {
     const fix = fs.mkdtempSync(path.join(dir, 'fx-'));
     fs.writeFileSync(path.join(fix, 'run'), JSON.stringify({ workflow_id: 777 }));
@@ -145,7 +147,7 @@ test('docs_base: the base is the merge base on a new branch, the previous tip on
     let r = run();
     assert.deepStrictEqual(r.out, { base: 'mb111', base_run: 'https://github.com/o/r/actions/runs/10', exclude: '' });
     assert.match(r.args, /repos\/o\/r\/compare\/main\.\.\.abc123/);
-    assert.match(r.args, /repos\/o\/r\/actions\/workflows\/777\/runs\?head_sha=mb111&status=success/);
+    assert.match(r.args, /repos\/o\/r\/actions\/workflows\/777\/runs\?head_sha=mb111&event=push/);
     // a push to trunk: the previous tip, no compare call.
     r = run({ env: TRUNK });
     assert.deepStrictEqual(r.out, { base: 'bef222', base_run: 'https://github.com/o/r/actions/runs/11', exclude: '' });
@@ -165,10 +167,24 @@ test('docs_base: the base is the merge base on a new branch, the previous tip on
     }
     assert.deepStrictEqual(run({ desc: null }).out, {});
 
-    // a base with no green run of this workflow: none, a PR run only, or only this run itself.
-    for (const list of [[], [green(10, 'pull_request')], [green(42)]]) {
-      assert.deepStrictEqual(run({ runs: { mb111: list } }).out, {}, JSON.stringify(list));
+    // the base's run is TRUNK's own newest push run there, completed and green — nothing else counts.
+    const red = (id, o = {}) => green(id, { conclusion: 'failure', ...o });
+    const branch = { head_branch: 'feat/y-2' };
+    for (const [why, list] of Object.entries({
+      'no run': [],
+      'only this run itself': [green(42)],
+      'only a branch run': [green(10, branch)],
+      'a red trunk run beside a green branch run at the same sha': [red(10), green(11, { ...branch, day: 2 })],
+      'the newest trunk run is red': [green(10), red(11, { day: 2 })],
+      'the newest trunk run is still running': [green(10), green(11, { day: 2, status: 'in_progress', conclusion: null })],
+      'a green trunk-named run from a fork': [green(10, { head_repository: { full_name: 'evil/r' } })],
+    })) {
+      assert.deepStrictEqual(run({ runs: { mb111: list } }).out, {}, why);
     }
+    // a re-run that went green: the newest trunk run decides, and it cites that one.
+    assert.strictEqual(run({ runs: { mb111: [red(10), green(12, { day: 2 })] } }).out.base_run, 'https://github.com/o/r/actions/runs/12');
+    // the same holds on trunk (Lucy's case: before = T, T's trunk run red, a branch at T green).
+    assert.deepStrictEqual(run({ env: TRUNK, runs: { bef222: [red(10), green(11, { ...branch, day: 2 })] } }).out, {});
     // neither a new branch nor a trunk push; trunk's first push; a tag; trunk created as a new ref.
     assert.deepStrictEqual(run({ env: { CREATED: 'false' } }).out, {});
     assert.deepStrictEqual(run({ env: { ...TRUNK, BEFORE: '0000000000000000000000000000000000000000' } }).out, {});
@@ -269,6 +285,10 @@ test('docs: the shell rule agrees with tools/lib/docs-only.js pathReason, path b
     'x.MD', '.md', 'docs.md', 'docsx/a.js', 'a/docs/x.js', 'src/x.js', 'Makefile',
     'AGENTS.md', 'docs/CLAUDE.md', 'a/CLAUDE.local.md', '.claude/x.md', 'a/.github/x.md',
     '.githooks/README.md', '.colab/skills/x.md', 'a/.colab/skills/b.md', '.colab/hooks/readme.md', '.colab/x.md',
+    // #570 build inputs despite the extension — and their look-alikes that stay documentation.
+    'requirements.txt', 'requirements-dev.txt', 'dev-requirements.txt', 'a/Requirements.txt', 'requirements/base.txt',
+    'docs/requirements.txt', 'docs/requirements/x.in', 'constraints.txt', 'pip-Constraints.txt', 'CMakeLists.txt',
+    'a/CMakeLists.txt', 'cmakelists.txt', 'requirements.md', 'requirements/notes.md', 'constraints.md',
   ];
   const { commit, classify, cleanup } = fixtureRepo();
   try {

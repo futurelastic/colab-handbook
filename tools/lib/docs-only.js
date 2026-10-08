@@ -19,6 +19,19 @@ const DOC_EXTENSIONS = Object.freeze(['.md', '.mdx', '.txt']);
 const DOCS_DIR = 'docs/';
 /** Rules and agent instructions: never documentation, at any depth, even though they are `.md`. */
 const NEVER_BASENAMES = Object.freeze(['CLAUDE.md', 'CLAUDE.local.md', 'AGENTS.md']);
+/**
+ * #570: build inputs that happen to end in `.txt` — a suite installs or compiles from them, so a change
+ * to one changes behaviour. Never documentation, at any depth: a Python dependency manifest exactly as
+ * the cure rule names one (cure-diff.js isPythonManifest — a name containing `requirements`, or under a
+ * `requirements/` directory, any case), a pip constraints file, and `CMakeLists.txt`. A `.txt` pulled
+ * in by `-r`/`-c` under some other name is NOT caught by name — a repo with one lists it in
+ * `ci-docs-skip`.
+ */
+function buildInput(p, base) {
+  // Lazy: cure-diff.js requires this module at load time.
+  if (require('./cure-diff').isPythonManifest(p)) return true;
+  return /constraints.*\.txt$/i.test(base) || base === 'CMakeLists.txt';
+}
 /** Config directories: nothing under them is documentation, at any depth. */
 const NEVER_DIRS = Object.freeze(['.claude', '.github', '.githooks']);
 /**
@@ -40,6 +53,7 @@ function pathReason(p) {
   const segs = String(p).split('/');
   const base = segs[segs.length - 1];
   if (NEVER_BASENAMES.includes(base)) return `${base} is agent rules, not documentation`;
+  if (buildInput(String(p), base)) return `${base} is a build input, not documentation`;
   const dir = segs.slice(0, -1).find((s) => NEVER_DIRS.includes(s));
   if (dir) return `under ${dir}/ (config)`;
   const dirs = segs.slice(0, -1);

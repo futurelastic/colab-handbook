@@ -1388,7 +1388,9 @@ documentation, from a green base, skips the suite (`CONVENTIONS.md` §4, *Branch
 **Absent means off.** Each member is a repo path a test reads, so a change to it — or under it,
 `docs/api` never matching `docs/apiary.md` — runs the suite anyway. Members are plain paths: no
 glob, `..`, `.` or leading `/`, only `[A-Za-z0-9._/-]`. Anything else, or a non-list, is a
-finding: the guard reads it as off. Read at the pushed sha. The one reading in tooling is
+finding: the guard reads it as off. Build inputs that end in `.txt` are never documentation —
+a Python requirements or constraints file, `CMakeLists.txt` — but a `.txt` a suite pulls in under
+any other name (a `-r` include) is: list it. Read at the pushed sha. The one reading in tooling is
 `tools/lib/docs-only.js` `parseCiDocsSkip` (`--json`: `ciDocsSkip`).
 
 ### `ship-gate-workflows`, `ship-ignore-workflows` — optional

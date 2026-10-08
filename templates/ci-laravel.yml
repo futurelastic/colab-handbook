@@ -162,7 +162,8 @@ jobs:
   # When the two modes above find nothing, a repo that declared `ci-docs-skip` at THIS sha
   # asks a third question: is every path changed since the base documentation, by the rule
   # `colab ship` applies (CONVENTIONS.md §2, the docs-only exception: .md/.mdx/.txt or under
-  # docs/, never agent rules, config, a symlink, a submodule or a binary), and does the base
+  # docs/, never agent rules, config, a build input like requirements*.txt, a symlink, a
+  # submodule or a binary), and does the base
   # have a green run of this workflow? The base is the merge base with trunk on a ref-creating
   # push, and the previous tip on a push to trunk. Yes → the suite is skipped and the run
   # leaves a `docs-only-skip` notice naming the base and its green run. A path the suite reads
@@ -322,15 +323,18 @@ jobs:
             else
               echo "Not a new branch and not a push to trunk — docs-only mode is off (#570)."
             fi
-            # The base must itself be green: a docs-only change cannot make a red suite green.
+            # The base must itself be green: a docs-only change cannot make a red suite green. The base
+            # is a trunk commit, so the run that counts is TRUNK's own newest push run there — never a
+            # branch run at the same sha, which may be green beside a red trunk run (a trunk-only job
+            # skipped on the branch, #511). Still running, red, or none: the full suite.
             if [ -n "$base" ]; then
               if ! WFID="$(gh api "repos/$REPO/actions/runs/$RUN_ID" --jq .workflow_id 2>/dev/null)" || [ -z "$WFID" ] \
-                 || ! URL="$(gh api "repos/$REPO/actions/workflows/$WFID/runs?head_sha=$base&status=success&per_page=20" \
-                      --jq "first(.workflow_runs[] | select(.id != $RUN_ID and .event != \"pull_request\") | .html_url) // empty" 2>/dev/null)"; then
+                 || ! URL="$(gh api "repos/$REPO/actions/workflows/$WFID/runs?head_sha=$base&event=push&per_page=20" \
+                      --jq "[.workflow_runs[] | select(.id != $RUN_ID and .head_branch == \"$TRUNK\" and .head_repository.full_name == \"$REPO\")] | sort_by(.created_at) | last | if . != null and .status == \"completed\" and .conclusion == \"success\" then .html_url else empty end" 2>/dev/null)"; then
                 echo "::notice::Could not list this workflow's runs at $base — running the full suite (#570)."
                 base=
               elif [ -z "$URL" ]; then
-                echo "Base $base has no green run of this workflow — running the full suite (#570)."
+                echo "Trunk's newest run of this workflow at $base is not green, or there is none — running the full suite (#570)."
                 base=
               fi
             fi
@@ -364,6 +368,12 @@ jobs:
               case "$p" in "$x"|"$x"/*) echo "listed in ci-docs-skip"; return ;; esac
             done
             case "$base" in CLAUDE.md|CLAUDE.local.md|AGENTS.md) echo "agent rules"; return ;; esac
+            # A build input despite the extension: the cure rule's Python manifest (any case), a pip
+            # constraints file, CMakeLists.txt. A -r/-c include under another name: list it in ci-docs-skip.
+            lp="$(printf '%s' "$p" | tr 'A-Z' 'a-z')"
+            case "/$lp" in */requirements/*.txt|*/requirements/*.in) echo "a build input"; return ;; esac
+            case "${lp##*/}" in *requirements*.txt|*requirements*.in|*constraints*.txt) echo "a build input"; return ;; esac
+            [ "$base" != CMakeLists.txt ] || { echo "a build input"; return; }
             case "/$dir/" in */.claude/*|*/.github/*|*/.githooks/*) echo "config"; return ;; */.colab/skills/*) echo "skill local policy"; return ;; esac
             case "$p" in docs/*) return ;; esac
             case "$base" in ?*.md|?*.mdx|?*.txt) return ;; esac
