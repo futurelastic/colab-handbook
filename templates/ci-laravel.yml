@@ -713,6 +713,28 @@ jobs:
           extensions: mbstring, sqlite3, pdo_sqlite, bcmath, intl # EDIT: add what this app needs.
           coverage: none
 
+      # Package cache (#571): Composer's download cache, on only on a GitHub-hosted runner AND
+      # with composer.lock present. Both halves are load-bearing:
+      #   - No composer.lock → nothing stable to key on; every run would save a fresh entry.
+      #   - Self-hosted → off. A persistent runner already keeps Composer's cache dir between
+      #     jobs; a remote cache on top was measured as a loss, not a saving (#512).
+      # Two NEW steps, both skipped where the gate is off. "Composer install" keeps its name
+      # and its body: `colab ship`'s cure rule matches steps by exact name.
+      # EDIT: self-hosted runners are already off; to turn caching off everywhere, delete these
+      # two steps.
+      - name: Locate Composer cache
+        id: composer-cache
+        if: runner.environment == 'github-hosted' && hashFiles('composer.lock') != ''
+        run: echo "dir=$(composer config cache-files-dir)" >> "$GITHUB_OUTPUT"
+
+      - name: Restore Composer cache
+        if: runner.environment == 'github-hosted' && hashFiles('composer.lock') != ''
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ steps.composer-cache.outputs.dir }}
+          key: composer-${{ runner.os }}-${{ hashFiles('composer.lock') }}
+          restore-keys: composer-${{ runner.os }}-
+
       - name: Composer install
         env:
           RUN_TESTS: ${{ steps.tier.outputs.run_tests }}
@@ -747,9 +769,15 @@ jobs:
           # stderr and reports only "Command failed".
           php artisan wayfinder:generate $WAYFINDER_ARGS
 
+      # npm cache (#571): the same gate as the Composer cache above — GitHub-hosted AND
+      # package-lock.json present (`cache: npm` fails the step without one). The automatic
+      # `packageManager` cache is pinned to the same condition so it cannot override it.
+      # EDIT: to turn it off everywhere, replace both expressions with '' and false.
       - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
         with:
           node-version: ${{ steps.toolchain.outputs.node-version }}
+          cache: ${{ runner.environment == 'github-hosted' && hashFiles('package-lock.json') != '' && 'npm' || '' }}
+          package-manager-cache: ${{ runner.environment == 'github-hosted' && hashFiles('package-lock.json') != '' }}
 
       - name: Build frontend assets (Vite)
         run: |

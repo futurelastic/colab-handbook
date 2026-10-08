@@ -646,11 +646,26 @@ jobs:
           echo "Node $NODE_VERSION (resolved from: $SOURCE)"
           echo "Node **$NODE_VERSION** — resolved from \`$SOURCE\`" >> "$GITHUB_STEP_SUMMARY"
 
+      # Package cache (#571): on only on a GitHub-hosted runner AND with package-lock.json
+      # present. Both halves are load-bearing:
+      #   - No lockfile → setup-node's `cache:` fails the step outright ("Dependencies lock
+      #     file is not found"), and this template allows a repo without one.
+      #   - Self-hosted → off. A persistent runner already keeps ~/.npm between jobs; a
+      #     remote cache on top was measured as a loss, not a saving (#512).
+      # npm only: `cache: pnpm` needs pnpm on PATH before this step, and the install step
+      # below enables it through corepack afterwards. `package-manager-cache` is pinned to
+      # the same condition so setup-node's automatic `packageManager` caching cannot switch
+      # it back on where the condition says off.
+      # EDIT: self-hosted runners are already off; to turn caching off everywhere, replace
+      # both expressions with '' and false. If the app is not at the root, point the
+      # hashFiles() and a `cache-dependency-path:` at its package-lock.json.
       - name: Setup Node
         uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
         if: hashFiles('package.json') != ''
         with:
           node-version: ${{ steps.toolchain.outputs.node-version }}
+          cache: ${{ runner.environment == 'github-hosted' && hashFiles('package-lock.json') != '' && 'npm' || '' }}
+          package-manager-cache: ${{ runner.environment == 'github-hosted' && hashFiles('package-lock.json') != '' }}
 
       - name: Install dependencies
         if: hashFiles('package.json') != ''
@@ -807,6 +822,9 @@ jobs:
   #       uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
   #       with:
   #         node-version: ${{ needs.build.outputs.node-version }}
+  #         # Same cache gate as the build job's Setup Node (#571): hosted + lockfile only.
+  #         cache: ${{ runner.environment == 'github-hosted' && hashFiles('package-lock.json') != '' && 'npm' || '' }}
+  #         package-manager-cache: ${{ runner.environment == 'github-hosted' && hashFiles('package-lock.json') != '' }}
   #
   #     - name: Install dependencies
   #       run: |
