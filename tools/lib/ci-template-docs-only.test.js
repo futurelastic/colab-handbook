@@ -194,13 +194,14 @@ function fixtureRepo() {
     return r.stdout.trim();
   };
   g('init', '-q');
+  g('config', 'core.hooksPath', path.join(dir, '.nohooks'));
   g('config', 'uploadpack.allowFilter', 'true');
   g('config', 'uploadpack.allowAnySHA1InWant', 'true');
   fs.writeFileSync(path.join(srv, 'app.js'), 'x\n');
   fs.mkdirSync(path.join(srv, 'docs'));
   fs.writeFileSync(path.join(srv, 'docs', 'old.md'), 'old\n');
   g('add', '-A');
-  g('commit', '-q', '--no-verify', '-m', 'base');
+  g('commit', '-q', '-m', 'base');
   const base = g('rev-parse', 'HEAD');
   /** A commit on `base` applying `files` ({path: string|Buffer|{link}|null}); returns its sha. */
   const commit = (files) => {
@@ -213,7 +214,7 @@ function fixtureRepo() {
       else fs.writeFileSync(abs, v);
     }
     g('add', '-A');
-    g('commit', '-q', '--no-verify', '-m', 'change');
+    g('commit', '-q', '-m', 'change');
     return g('rev-parse', 'HEAD');
   };
   const classify = (sha, { from = base, exclude = '', server = `file://${dir}` } = {}) => {
