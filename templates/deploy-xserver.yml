@@ -159,6 +159,13 @@ jobs:
     # EDIT: your runner label. See the SELF-HOSTED RUNNER note in the header —
     # this file assumes PHP and Composer already exist on the box.
     runs-on: [self-hosted, Linux, X64]
+    # EDIT: size this above your slowest healthy deploy (build + rsync + migrate +
+    # smoke), with headroom for a large migration. Without it a hung step — an SSH
+    # session waiting on a prompt, a migration blocked on a lock — holds this
+    # self-hosted runner for GitHub's default 360 minutes, and every later deploy
+    # queues behind it. A deploy that legitimately needs longer should raise this,
+    # not delete it.
+    timeout-minutes: 30
     steps:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
