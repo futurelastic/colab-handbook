@@ -31,6 +31,7 @@ const REPO_ROOT = path.resolve(__dirname, '..', '..');
 const FILES = ['templates/ci-node.yml', 'templates/ci-laravel.yml', 'templates/ci-python.yml', '.github/workflows/ci.yml'];
 const read = (f) => fs.readFileSync(path.join(REPO_ROOT, f), 'utf8');
 const HAVE_JQ = spawnSync('jq', ['--version']).status === 0;
+const GUARD = 'Already tested at this sha or tree?';
 
 // Top-level jobs as { name: [lines of its body] } — same line-scan as ci-template-dedupe.test.js.
 function jobsOf(text) {
@@ -72,9 +73,11 @@ printf '%s\\n' "$*" >> "$FIX/args"
 url="$2"; shift 2; prog=""
 while [ $# -gt 0 ]; do case "$1" in --jq) prog="$2"; shift 2;; -H) shift 2;; *) shift;; esac; done
 case "$url" in
+  */actions/runs/*/jobs*) k="jobs-\$(printf '%s' "$url" | sed -E 's|.*/runs/([0-9]+)/jobs.*|\\1|')";;
   */actions/runs/*) k=run;;
   */contents/*) k=desc;;
   */git/commits/*) k="commit-\${url##*/}";;
+  */workflows/*/runs\?head_sha=*) k=same;;
   */workflows/*/runs*) k=list;;
   *) exit 9;;
 esac
@@ -94,7 +97,9 @@ function makeRunner(script) {
   fs.mkdirSync(bin);
   fs.writeFileSync(path.join(bin, 'gh'), FAKE_GH, { mode: 0o755 });
   /**
-   * fx: { desc, list: [runs], trees: {sha: tree}, fail: [keys], noGh, env }
+   * fx: { desc, list: [runs], same: [runs at this sha], jobs: {runId: [{name, conclusion}]},
+   *       trees: {sha: tree}, fail: [keys], noGh, env }
+   * Every listed run gets a jobs listing — by default the guard skipped and a build succeeded.
    * Returns { out: {tested, cited}, stdout, args }.
    */
   const run = (fx = {}) => {
@@ -102,6 +107,11 @@ function makeRunner(script) {
     fs.writeFileSync(path.join(fix, 'run'), JSON.stringify({ workflow_id: 777 }));
     if (fx.desc !== null) fs.writeFileSync(path.join(fix, 'desc'), fx.desc ?? 'tier: B\ntrunk: main\n');
     fs.writeFileSync(path.join(fix, 'list'), JSON.stringify({ workflow_runs: fx.list ?? [] }));
+    fs.writeFileSync(path.join(fix, 'same'), JSON.stringify({ workflow_runs: fx.same ?? [] }));
+    for (const r of [...(fx.list || []), ...(fx.same || [])]) {
+      const jobs = (fx.jobs && fx.jobs[r.id]) || [{ name: GUARD, conclusion: 'skipped' }, { name: 'Build', conclusion: 'success' }];
+      fs.writeFileSync(path.join(fix, `jobs-${r.id}`), JSON.stringify({ total_count: jobs.length, jobs }));
+    }
     const trees = { abc123: 'T1', ...(fx.trees || {}) };
     for (const [sha, tree] of Object.entries(trees)) {
       fs.writeFileSync(path.join(fix, `commit-${sha}`), JSON.stringify({ tree: { sha: tree } }));
@@ -113,7 +123,7 @@ function makeRunner(script) {
       env: {
         PATH: fx.noGh ? '/usr/bin:/bin' : `${bin}:${process.env.PATH}`,
         FIX: fix, GITHUB_OUTPUT: out, GITHUB_STEP_SUMMARY: path.join(fix, 'sum'),
-        REPO: 'o/r', RUN_ID: '42', SHA: 'abc123', GH_TOKEN: 'x', CREATED: 'false', REF_NAME: 'main',
+        REPO: 'o/r', RUN_ID: '42', GUARD_NAME: GUARD, SHA: 'abc123', GH_TOKEN: 'x', CREATED: 'false', REF_NAME: 'main',
         ...(fx.env || {}),
       },
       encoding: 'utf8',
@@ -199,6 +209,64 @@ for (const file of FILES) {
       assert.match(r.args, /\.id != 42/);
       assert.match(r.args, /\.head_branch != "main"/);
       assert.match(r.args, /\.head_repository\.full_name == "o\/r"/);
+    } finally {
+      cleanup();
+    }
+  });
+
+  test(`${file}: trunk cites a green push run at THIS sha first — the ship-batch fast-forward (#552)`, { skip: !HAVE_JQ && 'jq not installed' }, () => {
+    const { run, cleanup } = makeRunner(guardScript(jobs.dedupe));
+    try {
+      const batch = runObj(90, 'ship-batch/abc1234', 'abc123', 'T1');
+      // Found by the exact sha query even when the 50-run tree listing does not reach it.
+      let r = run({ same: [batch], list: [] });
+      assert.deepStrictEqual(r.out, { tested: 'true', cited: 'https://github.com/o/r/actions/runs/90' });
+      assert.match(r.stdout, /^::notice title=tree-already-green::https:\/\/github\.com\/o\/r\/actions\/runs\/90 tree=T1 head=abc123 branch=ship-batch\/abc1234$/m);
+      assert.match(r.args, /repos\/o\/r\/actions\/workflows\/777\/runs\?head_sha=abc123&event=push&status=success/);
+      // The sha query excludes this run, trunk's own run and a fork, like the tree query.
+      r = run({ same: [runObj(42, 'feat/self', 'abc123', 'T1'), runObj(50, 'main', 'abc123', 'T1'), runObj(51, 'x', 'abc123', 'T1', 'evil/r')] });
+      assert.deepStrictEqual(r.out, { tested: 'false' });
+      // Nothing at this sha → the tree listing still decides (#493 unchanged).
+      r = run({ same: [], list: [runObj(77, 'feat/x-1', 'bbb222', 'T1')], trees: { bbb222: 'T1' } });
+      assert.strictEqual(r.out.cited, 'https://github.com/o/r/actions/runs/77');
+      // The sha query failing falls through to the tree listing, never to a failed run.
+      r = run({ same: [batch], fail: ['same'], list: [runObj(77, 'feat/x-1', 'bbb222', 'T1')], trees: { bbb222: 'T1' } });
+      assert.strictEqual(r.out.cited, 'https://github.com/o/r/actions/runs/77');
+      // Created push (sha mode, #418) never runs the trunk queries.
+      r = run({ same: [batch], env: { CREATED: 'true' } });
+      assert.doesNotMatch(r.args, /event=push&status=success/);
+    } finally {
+      cleanup();
+    }
+  });
+
+  test(`${file}: a cited run that skipped a job other than the guard is not reused (#511)`, { skip: !HAVE_JQ && 'jq not installed' }, () => {
+    const { run, cleanup } = makeRunner(guardScript(jobs.dedupe));
+    try {
+      const green = runObj(77, 'feat/x-1', 'bbb222', 'T1');
+      const base = { list: [green], trees: { bbb222: 'T1' } };
+      // The trunk-only E2E job was skipped on the branch push: trunk runs the suite, no citation.
+      let r = run({ ...base, jobs: { 77: [{ name: GUARD, conclusion: 'skipped' }, { name: 'Build', conclusion: 'success' }, { name: 'E2E (trunk only)', conclusion: 'skipped' }] } });
+      assert.deepStrictEqual(r.out, { tested: 'false' });
+      assert.doesNotMatch(r.stdout, /tree-already-green/);
+      assert.match(r.stdout, /Run 77 skipped E2E \(trunk only\)/);
+      // Only the guard skipped (its own `if:` is false on a non-creating branch push): reused.
+      assert.strictEqual(run(base).out.tested, 'true');
+      // The guard ran (a created push) and nothing skipped: reused.
+      assert.strictEqual(run({ ...base, jobs: { 77: [{ name: GUARD, conclusion: 'success' }, { name: 'Build', conclusion: 'success' }] } }).out.tested, 'true');
+      // A cited run that was itself a reuse (every job but the guard skipped): not reused.
+      assert.strictEqual(run({ ...base, jobs: { 77: [{ name: GUARD, conclusion: 'success' }, { name: 'Build', conclusion: 'skipped' }] } }).out.tested, 'false');
+      // The jobs listing failing, or truncated, runs the suite.
+      assert.deepStrictEqual(run({ ...base, fail: ['jobs-77'] }).out, { tested: 'false' });
+      r = run({ ...base, jobs: { 77: [{ name: 'Build', conclusion: 'success' }] } });
+      assert.strictEqual(r.out.tested, 'true');
+      // Same rule for a run found by the sha query (#552).
+      r = run({ same: [runObj(90, 'ship-batch/abc1234', 'abc123', 'T1')], jobs: { 90: [{ name: 'Nightly', conclusion: 'skipped' }] } });
+      assert.deepStrictEqual(r.out, { tested: 'false' });
+      // The guard reads its own name from GUARD_NAME — the workflow sets it to this job's name.
+      const env = jobs.dedupe.join('\n').match(/GUARD_NAME: (.*?) # EDIT/);
+      assert.ok(env, 'dedupe sets GUARD_NAME');
+      assert.strictEqual(env[1], key(jobs.dedupe, 'name'));
     } finally {
       cleanup();
     }

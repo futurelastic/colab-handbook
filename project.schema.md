@@ -583,7 +583,8 @@ The one reading is `tools/lib/migration-grant.js` `parseGrantPolicy`.
   record that binds the branch's head, either as the exact reviewed HEAD or by an
   unchanged migration content id (#508), plus a live, passing `Migration round-trip`
   CI job on the shipped head. See [CONVENTIONS.md §5, *Migration exemption*](CONVENTIONS.md#migration-exemption--a-narrow-door-through-no-new-migrations-opened-by-a-role-98-402).
-  A repo with no such job can declare `reviewer`, but every reviewer grant there fails R.
+  A repo with no such job can declare `reviewer`, but every reviewer grant there fails R and the
+  audit warns. `ci-laravel.yml` carries the job; `ci-node.yml` carries it as an opt-in block (#494).
 - **The audit always reports the value.** It appears in `--json` as `migrationGrant`.
 
 ### `ci-grant` — optional

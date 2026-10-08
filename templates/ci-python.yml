@@ -61,7 +61,16 @@ on:
   # the newest run per workflow at a sha, so that second run also decided the verdict.
   # EDIT: a copy that went back to trunk-only push (above) has no run on a branch until it
   # has a PR — restore `pull_request: branches: [<trunk>]` there; that PR run is then its
-  # only branch run (CONVENTIONS.md §4, "Branch CI").
+  # only branch run (CONVENTIONS.md §4, "Branch CI"), so also delete the fork-PR term
+  # (`github.event_name != 'pull_request' || …`) from every job's `if:` below, or it skips that run.
+  # EDIT: fork PRs (#514). A push to a fork never runs a workflow here, so a repo that takes
+  # PRs from forks needs `pull_request`. Uncomment it there. Every suite job below already
+  # carries `github.event.pull_request.head.repo.full_name != github.repository` for a PR
+  # event, so a same-repo PR's run skips every job (its push run is the one that tests) and a
+  # fork PR's run tests. A skipped run never stands for a workflow that has a run that ran
+  # (CONVENTIONS.md §4, "Branch CI"). Check every reader of your CI agrees before you uncomment.
+  # pull_request:
+  #   branches: ['**']
   # A promotion pushed by the release workflow's token triggers no push run, so that workflow
   # dispatches this one on main instead (templates/release-auto.yml, #440). Harmless elsewhere.
   workflow_dispatch:
@@ -74,7 +83,8 @@ on:
 # drop the second one's run before it ever started (#512).
 # EDIT: name exactly this repo's trunk (and release branch) here — in the group, in
 # cancel-in-progress, and in the `dedupe` job's `if:`. A Tier C trunk may carry any
-# name; one left off this list gets its trunk runs cancelled.
+# name; one left off this list gets its trunk runs cancelled. `colab template` writes these
+# from the `trunk:` in .github/project.yml and prints what it wrote (#526).
 concurrency:
   group: ci-${{ github.ref }}${{ (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev') && format('-{0}', github.run_id) || '' }}
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' && github.ref != 'refs/heads/dev' }}
@@ -119,7 +129,11 @@ jobs:
   # depends on those declares `tree-reuse: off` in .github/project.yml. Trunk only (the
   # descriptor's `trunk:`, read at this sha), never a release branch, never a dispatch;
   # any doubt (no descriptor, opt-out, an API error, no exact match) runs the full suite.
-  # Never put a trunk-only job (publish, deploy, release) behind this gate.
+  # A green run at THIS sha on another ref (a `ship-batch/*` run trunk fast-forwarded to) is
+  # asked for first, by an exact query, so a busy repo's 50-run listing cannot miss it (#552).
+  # A cited run is reused only if it skipped no job but this one: a job gated on the trunk
+  # ref is `skipped` on every branch push, and reusing that run would skip it on trunk too
+  # (#511). Never put a trunk-only job (publish, deploy, release) behind this gate.
   dedupe:
     name: Already tested at this sha or tree?
     # EDIT: the trunk refs here mirror `concurrency`'s list above (#493).
@@ -142,9 +156,34 @@ jobs:
           SHA: ${{ github.sha }}
           CREATED: ${{ github.event.created }}
           REF_NAME: ${{ github.ref_name }}
+          GUARD_NAME: Already tested at this sha or tree? # EDIT: this job's `name:`, if you rename it (#511).
         run: |
           tested=false
           cited=
+          # #511: a cited run is reusable only if it skipped no job but this guard. A job gated on
+          # the trunk ref is `skipped` on every branch push and a skipped job does not fail the
+          # run, so citing that run would skip the trunk-only job on trunk a second time.
+          reusable() {
+            if ! SK="$(gh api "repos/$REPO/actions/runs/$1/jobs?per_page=100" \
+                   --jq 'if .total_count > (.jobs | length) then "(more than 100 jobs)" else [.jobs[] | select(.conclusion == "skipped" and .name != env.GUARD_NAME) | .name] | join(", ") end' 2>/dev/null)"; then
+              echo "::notice::Could not list the jobs of run $1 — running the full suite (#511)."
+              return 1
+            elif [ -n "$SK" ]; then
+              echo "::notice::Run $1 skipped $SK, which this push may run — running the full suite (#511)."
+              return 1
+            fi
+          }
+          # The cited run, as "<id> <head sha> <url> <branch>": a green push run of this workflow on
+          # another ref of this repo. #552: one at THIS sha first (a `ship-batch/*` run trunk
+          # fast-forwarded to), an exact query; else one whose commit has THIS tree (#493).
+          same_sha() {
+            gh api "repos/$REPO/actions/workflows/$WFID/runs?head_sha=$SHA&event=push&status=success&per_page=20" \
+              --jq "first(.workflow_runs[] | select(.id != $RUN_ID and .head_branch != \"$REF_NAME\" and .head_repository.full_name == \"$REPO\") | \"\\(.id) \\(.head_sha) \\(.html_url) \\(.head_branch)\") // empty" 2>/dev/null | grep .
+          }
+          same_tree() {
+            gh api "repos/$REPO/actions/workflows/$WFID/runs?event=push&status=success&per_page=50" \
+              --jq "first(.workflow_runs[] | select(.id != $RUN_ID and .head_branch != \"$REF_NAME\" and .head_repository.full_name == \"$REPO\" and .head_commit.tree_id == \"$OURS\") | \"\\(.id) \\(.head_sha) \\(.html_url) \\(.head_branch)\") // empty" 2>/dev/null
+          }
           if ! command -v gh >/dev/null 2>&1; then
             echo "::notice::gh is not installed on this runner — running the full suite (#418)."
           elif ! WFID="$(gh api "repos/$REPO/actions/runs/$RUN_ID" --jq .workflow_id 2>/dev/null)" || [ -z "$WFID" ]; then
@@ -159,16 +198,15 @@ jobs:
               echo "::notice::$REF_NAME is not this repo's trunk — running the full suite (#493)."
             elif ! OURS="$(gh api "repos/$REPO/git/commits/$SHA" --jq .tree.sha 2>/dev/null)" || [ -z "$OURS" ]; then
               echo "::notice::Could not read the tree of $SHA — running the full suite (#493)."
-            elif ! CAND="$(gh api "repos/$REPO/actions/workflows/$WFID/runs?event=push&status=success&per_page=50" \
-                   --jq "first(.workflow_runs[] | select(.id != $RUN_ID and .head_branch != \"$REF_NAME\" and .head_repository.full_name == \"$REPO\" and .head_commit.tree_id == \"$OURS\") | \"\\(.head_sha) \\(.html_url) \\(.head_branch)\") // empty" 2>/dev/null)"; then
+            elif ! CAND="$(same_sha || same_tree)"; then
               echo "::notice::Could not list this workflow's green runs — running the full suite (#493)."
             elif [ -z "$CAND" ]; then
-              echo "No green run of this workflow on another ref has tree $OURS — running the full suite."
+              echo "No green run of this workflow on another ref has sha $SHA or tree $OURS — running the full suite."
             else
-              read -r CSHA URL BR <<< "$CAND"
+              read -r CID CSHA URL BR <<< "$CAND"
               if ! CTREE="$(gh api "repos/$REPO/git/commits/$CSHA" --jq .tree.sha 2>/dev/null)" || [ "$CTREE" != "$OURS" ]; then
                 echo "::notice::Could not confirm the tree of $CSHA — running the full suite (#493)."
-              else
+              elif reusable "$CID"; then
                 tested=true
                 cited="$URL"
                 echo "::notice title=tree-already-green::$URL tree=$OURS head=$CSHA branch=$BR"
@@ -192,7 +230,7 @@ jobs:
   gitleaks:
     name: Secret scan (gitleaks)
     needs: dedupe
-    if: ${{ !cancelled() && needs.dedupe.outputs.tested != 'true' }}
+    if: ${{ !cancelled() && needs.dedupe.outputs.tested != 'true' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository) }}
     runs-on: ubuntu-latest # EDIT: self-hosted label if this repo needs one.
     timeout-minutes: 15 # a scan of the checkout. EDIT: the default is 360.
     steps:
@@ -239,7 +277,7 @@ jobs:
   build:
     name: Build (Python)
     needs: dedupe
-    if: ${{ !cancelled() && needs.dedupe.outputs.tested != 'true' }}
+    if: ${{ !cancelled() && needs.dedupe.outputs.tested != 'true' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository) }}
     runs-on: ubuntu-latest # EDIT: self-hosted label if this repo needs one.
     defaults:
       run:

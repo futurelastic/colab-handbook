@@ -1374,11 +1374,22 @@ function auditRepo(target, ctx) {
     // read by three consumers). tools/lib/migration-grant.js parseGrantPolicy is the one reading, so
     // `colab migration-grant` and the audit cannot disagree. The value is always reported
     // (info.migrationGrant). An invalid value fails: the reader falls back to `human`, which is safe
-    // but silent. `reviewer` is clean: colab ship honours it under P+M+HEAD+R (#401).
+    // but silent. `reviewer` is clean when a round-trip job exists: colab ship honours it under
+    // P+M+HEAD+R (#401), and R needs that job (#494).
     {
       const pol = migrationGrant.parseGrantPolicy(cfg);
       info.migrationGrant = pol.policy;
       if (!pol.valid) fail(pol.reason);
+      // #494: R needs a live `Migration round-trip…` job. Without one every reviewer grant fails R
+      // (the mint and ship both refuse) and the declared policy does nothing — say so here, not at
+      // ship time. A warning: the policy fails safe, back to a human grant.
+      if (pol.valid && pol.policy === "reviewer") {
+        const rt = migrationGrant.roundtripJobWorkflows({ readFile: (p) => src.readFile(p), workflows });
+        info.migrationRoundtrip = rt;
+        if (!rt.length) {
+          warn(`migration-grant: reviewer, but no workflow in .github/workflows has a "${migrationGrant.ROUNDTRIP_JOB_PREFIX}" job — every reviewer grant fails R (the mint and colab ship refuse); adopt the job from templates/ci-laravel.yml or the opt-in block in templates/ci-node.yml, or declare migration-grant: human`);
+        }
+      }
     }
 
     // ---- ci-grant (#504) -------------------------------------------------------

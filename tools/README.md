@@ -1428,6 +1428,13 @@ unless `--force` (and prints a `diff` hint instead). The stamp exists so
 they copied it — copy-and-own with a reconciliation trail, never a remote call. Making
 copy+stamp one command matters because a manual stamp is the step people skip.
 
+A `ci-*` template is written with the repo's own protected refs (#526,
+`lib/template-trunk.js`): the template names `main`/`dev` in `concurrency` and the `dedupe`
+guard; the copy names the descriptor's `trunk:` (plus `main` where a promotion into it
+releases), and the command prints what it wrote and what it could not find. It then lists
+the repo's other workflows that also run on push — keep, merge or delete, the person decides.
+`colab update` renders the same way, both to recognise a pristine copy and to refresh one.
+
 ### Update (the outward sweep)
 
 `colab template` is how a repo *adopts* a template; `colab update` is how the machine finds out
