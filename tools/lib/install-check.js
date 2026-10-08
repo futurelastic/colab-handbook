@@ -13,8 +13,9 @@
  *
  * Row severities, and the one rule behind them: ✗ (fail, exit 1) means something was INSTALLED and
  * is now stale or unusable; ⚠ means something was simply never set up, which may be a deliberate
- * choice (a machine that only wants the skills needs no fleet list). A report that failed every
- * skills-only machine would teach people to ignore its exit code.
+ * choice (a machine that only wants the skills needs no fleet list) or just not done YET (no repo
+ * registered, no identity vocabulary). A report that failed every skills-only machine — or every
+ * correct fresh `--all` install, as it did until #521 — would teach people to ignore its exit code.
  *
  * CommonJS, zero dependencies, runnable as a script: install.sh calls
  *   node tools/lib/install-check.js --root <handbook> --colab-home <dir> --home <dir>
@@ -26,6 +27,7 @@ const path = require('path');
 const { execFileSync } = require('child_process');
 const stamp = require('./stamp');
 const notifyEndpoint = require('./notify-endpoint');
+const engines = require('./engines');
 
 const OK = 'ok';
 const WARN = 'warn';
@@ -140,6 +142,75 @@ function checkFrozen({ root, colabHome }) {
   return rows;
 }
 
+/**
+ * The skills, per engine (#530). For every engine in engines/ with a folder of its own, plus every
+ * folder an earlier --skills-dir remembered: how many of this clone's skills are linked there, which
+ * are missing (a skill added since the install — re-run it), which links are broken (they point into
+ * this clone's skills/ at a folder that no longer exists — ✗, installed and now unusable), and which
+ * names something else holds (⚠, possibly a deliberate local variant; install.sh never clobbers it).
+ *
+ * An engine with nothing linked is "not installed for it" — one ✓ line naming them, because a
+ * Claude-only machine is a correct machine. Only when NO engine has the skills is that a ⚠.
+ * The engine's own `caveat:` lines become ⚠ rows while it is installed: they are what the user must
+ * do there for the skills to work (a sandbox with no network, say), and they stay true until done.
+ */
+function checkSkills({ root, home, colabHome }) {
+  const src = path.join(root, 'skills');
+  let skills = [];
+  try { skills = fs.readdirSync(src, { withFileTypes: true }).filter((d) => d.isDirectory()).map((d) => d.name).sort(); } catch (_) { /* none */ }
+  const all = engines.listEngines(root);
+  const byId = Object.fromEntries(all.map((e) => [e.id, e]));
+  const targets = all.filter((e) => e.skills_dir).map((e) => ({ e, dir: engines.expandHome(e.skills_dir, home) }));
+  for (const dir of engines.rememberedDirs(colabHome)) {
+    if (!targets.some((t) => t.dir === dir)) targets.push({ e: byId.generic || { id: 'generic', label: 'another engine', note: [], caveat: [] }, dir });
+  }
+
+  const rows = [];
+  const notInstalled = [];
+  for (const { e, dir } of targets) {
+    const linked = []; const missing = []; const broken = []; const foreign = [];
+    for (const name of skills) {
+      const dest = path.join(dir, name);
+      let st;
+      try { st = fs.lstatSync(dest); } catch (_) { missing.push(name); continue; }
+      if (!st.isSymbolicLink()) { foreign.push(name); continue; }
+      const to = path.resolve(dir, fs.readlinkSync(dest));
+      if (to === path.join(src, name)) linked.push(name);
+      else foreign.push(name);
+    }
+    // Links into this clone's skills/ whose target is gone: a skill removed or renamed upstream.
+    let entries = [];
+    try { entries = fs.readdirSync(dir); } catch (_) { /* folder absent */ }
+    for (const n of entries) {
+      const p = path.join(dir, n);
+      try {
+        if (!fs.lstatSync(p).isSymbolicLink()) continue;
+        const to = path.resolve(dir, fs.readlinkSync(p));
+        if (to.startsWith(src + path.sep) && !fs.existsSync(to)) broken.push(n);
+      } catch (_) { /* unreadable entry — not ours to judge */ }
+    }
+    const who = `${e.id} (${e.label || e.id}) ${dir}`;
+    if (!linked.length && !broken.length) { notInstalled.push(e.id === 'generic' ? dir : `${e.id} (${e.label || e.id})`); continue; }
+    const parts = [`${linked.length}/${skills.length} linked`];
+    if (missing.length) parts.push(`missing ${missing.join(', ')} — re-run ./install.sh${e.id === 'generic' ? '' : ` --engine ${e.id}`}`);
+    if (foreign.length) parts.push(`held by something else (left as is): ${foreign.join(', ')}`);
+    if (broken.length) parts.push(`BROKEN links to skills that no longer exist: ${broken.join(', ')} — remove them: ${broken.map((b) => `rm '${path.join(dir, b)}'`).join('; ')}`);
+    rows.push({
+      area: 'skills',
+      severity: broken.length ? FAIL : (missing.length || foreign.length) ? WARN : OK,
+      text: `${who}: ${parts.join('; ')}`,
+    });
+    for (const c of e.caveat || []) rows.push({ area: 'skills', severity: WARN, text: `${e.id}: ${c}` });
+    if (e.verified && /^no\b/.test(e.verified)) rows.push({ area: 'skills', severity: WARN, text: `${e.id}: engine file not verified by a run yet — ${e.verified.replace(/^no\s*[—-]?\s*/, '')}` });
+  }
+  if (!rows.length) {
+    rows.push({ area: 'skills', severity: WARN, text: `not linked for any engine — ./install.sh asks which (or --engine <id> / --skills-dir <path>)` });
+  } else if (notInstalled.length) {
+    rows.push({ area: 'skills', severity: OK, text: `not installed for: ${notInstalled.join(', ')} — fine if deliberate; ./install.sh --engine <id> adds one` });
+  }
+  return rows;
+}
+
 /** The state file. The CLI creates it lazily, so a consumer reading it early saw an error, not an empty fleet. */
 function checkState({ root, colabHome, home }) {
   const file = path.join(colabHome, 'state.json');
@@ -163,9 +234,9 @@ function checkState({ root, colabHome, home }) {
 }
 
 /**
- * The fleet: both machine-local registries `colab register` writes. A repos.txt that exists with no
- * live entry is the `--fleet` dead end — seeded from placeholders, and the next command refuses with
- * "No repos registered". That one is a ✗; never having asked for a fleet is a ⚠.
+ * The fleet: both machine-local registries `colab register` writes. Nothing registered is ⚠ whether or
+ * not `--fleet` seeded the placeholder list: both are "not set up yet", the state every correct fresh
+ * install is in until its first `colab register` (#521). The ⚠ text still names the dead end.
  */
 function checkFleet({ colabHome }) {
   const rows = [];
@@ -179,7 +250,9 @@ function checkFleet({ colabHome }) {
   if (entries === null && !cfgRepos.length) {
     rows.push({ area: 'fleet', severity: WARN, text: `nothing registered — add each repo: colab register <path>` });
   } else if (entries !== null && !entries.length) {
-    rows.push({ area: 'fleet', severity: FAIL, text: `${txtFile} exists with no live entry (placeholders only) — \`colab update\`/\`colab release-status\` refuse "No repos registered". Fix: colab register <path>` });
+    // #521: this is exactly what `--fleet` leaves on a new machine, and the install's own "next" list
+    // says to register a repo. Not yet set up, not broken — a ✗ here failed every correct fresh install.
+    rows.push({ area: 'fleet', severity: WARN, text: `nothing registered yet — ${txtFile} holds placeholders only, so \`colab update\`/\`colab release-status\` refuse "No repos registered". Next: colab register <path>` });
   } else {
     const locals = (entries || []).filter((e) => e.startsWith('/') || e.startsWith('~'));
     const unmirrored = locals.filter((e) => !cfgRepos.includes(e));
@@ -196,6 +269,9 @@ function checkFleet({ colabHome }) {
  * first hooklet's dependency) and said nothing about the identity vocabulary the second needs — and
  * the second guards publication to a public repo. With no vocabulary it warns and passes every commit.
  * Resolution order mirrors templates/pre-commit-identity exactly.
+ *
+ * Both dependencies are ⚠, never ✗ (#521): the preflight calls them optional, and a missing one is
+ * something not set up yet, not an install gone stale. Symmetric still — neither row is quieter.
  */
 function checkHooks({ root, colabHome, home, env }) {
   const hp = gitConfig(root, 'core.hooksPath', env);
@@ -206,7 +282,7 @@ function checkHooks({ root, colabHome, home, env }) {
   const rows = [];
   rows.push(isExecutable('gitleaks', env)
     ? { area: 'hooks', severity: OK, text: 'gitleaks on PATH — the secret scan runs' }
-    : { area: 'hooks', severity: FAIL, text: 'gitleaks not on PATH — the secret-scan hooklet skips every commit (macOS: brew install gitleaks)' });
+    : { area: 'hooks', severity: WARN, text: 'gitleaks not on PATH — the secret-scan hooklet skips every commit (macOS: brew install gitleaks)' });
 
   let vocab; let src;
   if (env.COLAB_IDENTITY_VOCAB) { vocab = env.COLAB_IDENTITY_VOCAB; src = 'COLAB_IDENTITY_VOCAB'; }
@@ -215,7 +291,7 @@ function checkHooks({ root, colabHome, home, env }) {
   if (vocab.startsWith('~/')) vocab = path.join(home, vocab.slice(2));
   rows.push(readText(vocab) !== null
     ? { area: 'hooks', severity: OK, text: `identity vocabulary ${vocab} (${src}) — the identity scan runs` }
-    : { area: 'hooks', severity: FAIL, text: `no identity vocabulary at ${vocab} (${src}) — the identity hooklet warns and lets every commit through. Example: templates/identity-vocabulary.example` });
+    : { area: 'hooks', severity: WARN, text: `no identity vocabulary at ${vocab} (${src}) — the identity hooklet warns and lets every commit through. Example: templates/identity-vocabulary.example` });
   return rows;
 }
 
@@ -230,15 +306,17 @@ function checkNotify({ colabHome }) {
   try { cfg = JSON.parse(readText(path.join(colabHome, 'config.json')) || '{}'); } catch (_) { /* reported by colab itself */ }
   const st = notifyEndpoint.status(cfg, colabHome);
   if (st.state === 'unset') return [];
-  if (st.state === 'set' && !st.declared) {
-    return [{ area: 'notify', severity: OK, text: `notifyUrl = ${st.url}` }];
-  }
-  return [{ area: 'notify', severity: WARN, text: notifyEndpoint.healthLine(st) }];
+  // One ⚠ row per problem — each declared URL the key lacks is its own row (#546), so a machine
+  // running two observers sees which one is going without, not a single blended line.
+  const problems = notifyEndpoint.healthLines(st);
+  if (problems.length) return problems.map((text) => ({ area: 'notify', severity: WARN, text }));
+  return [{ area: 'notify', severity: OK, text: `notifyUrl = ${st.urls.join(', ')}` }];
 }
 
 function runChecks(opts) {
   const o = { env: process.env, ...opts };
   return [
+    ...checkSkills(o),
     checkLink(o),
     ...checkFrozen(o),
     checkState(o),
@@ -274,5 +352,5 @@ if (require.main === module) {
 
 module.exports = {
   OK, WARN, FAIL,
-  dispatchedCommands, checkLink, checkFrozen, checkState, checkFleet, checkHooks, checkNotify, runChecks, render,
+  dispatchedCommands, checkSkills, checkLink, checkFrozen, checkState, checkFleet, checkHooks, checkNotify, runChecks, render,
 };

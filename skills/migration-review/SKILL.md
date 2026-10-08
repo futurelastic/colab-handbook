@@ -5,6 +5,14 @@ description: "Review the database migrations a branch carries, as the repo's mig
 
 # migration-review — read the migration, reach one verdict, leave evidence
 
+**Local policy for this repo** (#520) — optional, one file per skill:
+
+!`cat .colab/skills/migration-review.md 2>/dev/null || echo "(no local policy for migration-review in this repo)"`
+
+If `.colab/skills/migration-review.md` exists in this repo, read it before continuing. Local policy
+refines this skill for this repo and wins over the text below where they differ. It never
+changes a `colab` gate.
+
 The repo's `colab ship` refuses a branch that adds a migration unless a grant opens that door
 ([CONVENTIONS.md §5, *Migration exemption*](../../CONVENTIONS.md#migration-exemption--a-narrow-door-through-no-new-migrations-opened-by-a-role-98-402)).
 A grant from a human says *someone looked*. A grant from the `migration-reviewer` role has to
@@ -203,6 +211,9 @@ colab migration-grant <N> --branch <branch> \
 - The grant covers the migration content at that HEAD (#508). The tool computes the content
   id; there is no flag for it. A later commit that changes any migration file means a new
   review. A trunk sync, or a commit that leaves the migrations byte-identical, does not.
+  When the tool cannot compute that id for a branch that carries migrations, it refuses and
+  names the `git fetch` to run (#563). Never post the grant marker some other way to get
+  past that: a grant without the id binds the HEAD alone, and the next trunk sync voids it.
 
 ### REWORK — one brief per failure
 

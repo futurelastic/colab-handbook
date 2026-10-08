@@ -241,11 +241,14 @@ test('tools/colab: evaluateShipSet and newMigrations are called only inside ship
   assert.equal(count(src, /migrationGrant\.evaluateShipSet\(/g), 1, 'one migration evaluateShipSet call in tools/colab');
   assert.equal(count(gate, /migrationGrant\.evaluateShipSet\(/g), 1);
   const newMigCalls = count(src, /\bnewMigrations\(/g) - 1; // minus the definition
+  assert.equal(newMigCalls, count(gate, /\bnewMigrations\(/g), 'newMigrations is called from nowhere but shipMigrationGate');
   // #508: the reviewer-grant mint computes its content id over the SAME path rule, so it is the
-  // one other caller — the rule is still never recomputed, only called.
+  // one other caller — the rule is still never recomputed, only called. #563: it calls the variant
+  // that answers null on an unreadable diff (so it can refuse), which newMigrations itself wraps.
   const mint = fnBody('migrationGrantReviewRecord');
-  assert.equal(count(mint, /\bnewMigrations\(/g), 1, 'the mint reads the gate\'s own path rule');
-  assert.equal(newMigCalls, count(gate, /\bnewMigrations\(/g) + 1, 'newMigrations is called from nowhere but shipMigrationGate and the mint');
+  assert.equal(count(mint, /\bnewMigrationsOrNull\(/g), 1, 'the mint reads the gate\'s own path rule');
+  assert.match(fnBody('newMigrations'), /return newMigrationsOrNull\(/);
+  assert.equal(count(src, /\bnewMigrationsOrNull\(/g) - 1, 2, 'newMigrationsOrNull is called from nowhere but newMigrations and the mint');
   // Both bind through the one content-id helper.
   assert.match(mint, /migrationContentAt\(/);
   assert.match(fnBody('shipMigrationCtx'), /migrationContentAt\(/);

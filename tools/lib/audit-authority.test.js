@@ -117,6 +117,21 @@ test('`tier` left the required-key list — omitting only it (exposure present) 
 // 5. Legacy path — no `exposure`, tier alone still governs, byte-identical shape
 // --------------------------------------------------------------------------------
 
+// #522: tier B and exposure none are the single-trunk shape — any spelling, one long-lived branch.
+for (const axis of ['tier: B', 'exposure: none']) {
+  test(`#522: ${axis} on a single "master" trunk is clean; a "main" beside it fails`, () => {
+    const yml = `${axis}\ntrunk: master\nproduction: null\ndeploy: none\nstack: node\n`;
+    const solo = fixture({ projectYml: yml, extraBranches: ['master'], checkout: 'master' });
+    execFileSync('git', ['branch', '-D', 'main'], { cwd: solo, stdio: 'ignore' });
+    const r1 = audit(solo);
+    assert.ok(!hasText(r1.fails, /single trunk|requires trunk/), r1.fails.join(' | '));
+
+    const split = fixture({ projectYml: yml, extraBranches: ['master'], checkout: 'master' });
+    const r2 = audit(split);
+    assert.ok(hasText(r2.fails, /requires a single trunk — trunk is "master" and a "main" branch exists beside it/), r2.fails.join(' | '));
+  });
+}
+
 test('legacy tier: B, no exposure — clean, exactly as before #144', () => {
   const yml = `tier: B\ntrunk: main\nproduction: null\ndeploy: none\nstack: node\n`;
   const r = audit(fixture({ projectYml: yml }));

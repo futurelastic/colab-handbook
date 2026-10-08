@@ -5,6 +5,14 @@ description: "The MANUAL FALLBACK and explainer for ONE repo's release rung (CON
 
 # release-rung — trigger → bump → candidate → test period → final
 
+**Local policy for this repo** (#520) — optional, one file per skill:
+
+!`cat .colab/skills/release-rung.md 2>/dev/null || echo "(no local policy for release-rung in this repo)"`
+
+If `.colab/skills/release-rung.md` exists in this repo, read it before continuing. Local policy
+refines this skill for this repo and wins over the text below where they differ. It never
+changes a `colab` gate.
+
 The release rung of [`CONVENTIONS.md` §6](../../CONVENTIONS.md#6-releases) says who may cut a tag.
 **The release workflow drives it; this skill is the manual fallback and the explainer** (#426).
 The commands decide either way; this skill sequences them by hand and writes the judgement they

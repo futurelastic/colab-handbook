@@ -39,6 +39,12 @@
  * On a route whose final is a human act (`deploy-tag`) --auto never tags: it stops at
  * candidate-ready and posts the one command, number pre-filled.
  *
+ * `--tag` (#548) may name ANY open candidate, not only the newest, so a human can release what
+ * finished testing without trunk freezing for a whole period. An older one is held to the same rule
+ * --auto applies to it: its own test period and its own trunk window are required on every row
+ * (selectCandidate marks it `older`; decide() reads that). Newer candidates stay open, and a
+ * version's record closes as superseded only once a final ABOVE it is tagged.
+ *
  * Before ANY final, the three #424 pre-tag checks (release-tag.js preTagChecks) are required:
  * manifest-version, on-trunk, outranks-final.
  *
@@ -71,7 +77,7 @@ const STATES = Object.freeze([
 
 const CONDITIONS = Object.freeze([
   'release-policy', 'candidate', 'tracking-issue', 'release-hold', 'regressions', 'test-period', 'trunk-green',
-  'ci-green', 'full-suite', 'schema-additive', 'switch-dependencies',
+  'ci-green', 'full-suite', 'cut-run', 'schema-additive', 'switch-dependencies',
   ...releaseTag.PRE_TAG_CONDITIONS, 'final-grant', 'migration-grant', 'human',
 ]);
 
@@ -134,6 +140,8 @@ function trackingBody({ version, row, final, testPeriodDays }) {
  *   { kind: 'already-final', version, detail }
  *   { kind: 'refused', detail }
  *   { kind: 'candidate', candidate: { tag, version, n, sha, cutAt }, superseded: [version], detail }
+ *   { kind: 'candidate', older: true, newest: <tag>, … }   #548: `pin` names an open candidate that
+ *     is not the newest — decide() then requires its own test period and trunk window, as --auto does
  */
 function selectCandidate(tags, pin, remote = 'origin') {
   const all = tags || [];
@@ -159,16 +167,32 @@ function selectCandidate(tags, pin, remote = 'origin') {
   const newest = open[open.length - 1];
   const superseded = [...new Set(open.map((x) => x.p.version).filter((v) => v !== newest.p.version))];
 
-  if (pin && pin !== newest.t.name) {
-    return { kind: 'refused', detail: `--tag ${pin} is not the newest candidate (${newest.t.name}) — a final names the candidate that was actually tested last` };
-  }
-  const t = newest.t;
+  // #548: --tag may name an OLDER open candidate. It is then judged on its own clock, exactly as
+  // --auto judges it (decide() makes test-period and trunk-green over its own window required), so a
+  // human can release what finished testing while trunk keeps merging; the newer candidates stay open.
+  const chosen = pin ? open.find((x) => x.t.name === pin) : newest;
+  if (!chosen) return { kind: 'refused', detail: `--tag ${pin} is not an open candidate` };
+  const older = chosen !== newest;
+  const t = chosen.t;
   if (!t.annotated || !String(t.subject || '').endsWith(CUT_SUBJECT_SUFFIX)) {
     return { kind: 'refused', detail: `${t.name} was not made by \`colab release cut\` (not an annotated tag whose message ends "${CUT_SUBJECT_SUFFIX}") — a candidate cut by hand is never finalized (CONVENTIONS.md §6)` };
   }
   if (!t.onMain) return { kind: 'refused', detail: `${t.name} (${String(t.sha).slice(0, 7)}) is not on ${remote}/main — candidates are cut from main` };
   if (!t.date || Number.isNaN(Date.parse(t.date))) return { kind: 'refused', detail: `${t.name} has no readable tagger date — the test period cannot be placed` };
 
+  if (older) {
+    // Only versions BELOW the pinned one are superseded by it; a newer version's candidates stay open.
+    const below = [...new Set(open.map((x) => x.p.version).filter((v) => compareVersions(v, chosen.p.version) < 0))];
+    const newer = open.filter((x) => compareVersions(x.p.version, chosen.p.version) > 0 || (x.p.version === chosen.p.version && x.p.n > chosen.p.n)).map((x) => x.t.name);
+    return {
+      kind: 'candidate',
+      older: true,
+      newest: newest.t.name,
+      candidate: { tag: t.name, version: chosen.p.version, n: chosen.p.n, sha: t.sha, cutAt: new Date(t.date).toISOString() },
+      superseded: below,
+      detail: `${t.name} at ${String(t.sha).slice(0, 7)}, cut ${new Date(t.date).toISOString()} — an older candidate, judged on its own clock (newer, still open: ${newer.join(', ')})${below.length ? `; supersedes ${below.join(', ')}` : ''}`,
+    };
+  }
   return {
     kind: 'candidate',
     candidate: { tag: t.name, version: newest.p.version, n: newest.p.n, sha: t.sha, cutAt: new Date(t.date).toISOString() },
@@ -295,9 +319,72 @@ function whyNoFinal({ state, candidate, checks, period, skipped, now } = {}) {
   return { line, next };
 }
 
+// ---- the run that cut the candidate (#566) ------------------------------------------------------
+
+// Slack around the tag's cut instant: the tagger date is the runner's clock, a run's createdAt /
+// updatedAt are GitHub's, both to the second.
+const CUT_RUN_SLACK_MS = 120000;
+
+/**
+ * Did the run that CUT this candidate finish what it does after the cut? `rows` are the workflow
+ * runs at the candidate's commit (`git.ghRunsAtCommit`, null = unread), WITHOUT the #425 own-workflow
+ * filter — the release workflow is exactly the one this reads; only the calling run itself is dropped
+ * (`ownRunId`), since a run cannot vouch for or against itself while it is still running.
+ *
+ * The cutter is every run that was in progress at `cutAt` (the annotated tag's date): created no later
+ * than the cut, and either not finished or finished no earlier than it. Each one must have concluded
+ * `success`. Measured (#566): the run that cut a candidate had its image-publish job CANCELLED; ci-green
+ * and full-suite set that run aside as superseded (#461 — a cancelled run never stands for its workflow
+ * while that workflow has any other run at the sha) and counted an EARLIER run of the same workflow at
+ * the same commit that concluded success having cut nothing. finalize said candidate-ready for a
+ * candidate whose image did not exist. Here only the cutter vouches, and cancelled is a failure: a run
+ * cancelled after its cut may have stopped before its publish.
+ *
+ * A CANCELLED row whose job count `jobCount(databaseId)` reads 0 never ran — the measured shape of a
+ * pending run GitHub cancelled out of the release workflow's concurrency group when a newer one queued —
+ * so it cut nothing and is dropped. Asked lazily, only for a cancelled row; null (unread) keeps it.
+ *
+ * No run in progress at the cut → ok: the candidate was cut by hand (`colab release cut` outside a
+ * workflow), and no run owes it anything. A completed row with no `updatedAt` (an older read) cannot
+ * be placed around the cut and is not counted — absence of the field never refuses.
+ *
+ * Returns { ok, detail, runs } — `runs` the cutter rows' ids, for the report.
+ */
+function cutRunVerdict(rows, { tag, cutAt, ownRunId = null, jobCount = null } = {}) {
+  if (rows === null || rows === undefined) return { ok: false, detail: `the workflow runs at ${tag} could not be read — the run that cut it cannot be checked`, runs: [] };
+  const cut = Date.parse(cutAt);
+  if (Number.isNaN(cut)) return { ok: false, detail: `${tag} carries no readable cut time — the run that cut it cannot be found`, runs: [] };
+  const own = ownRunId === null || ownRunId === undefined || ownRunId === '' ? null : String(ownRunId);
+  const cutters = rows.filter((r) => {
+    if (!r || (own && String(r.databaseId) === own)) return false;
+    const created = Date.parse(r.createdAt);
+    if (Number.isNaN(created) || created > cut + CUT_RUN_SLACK_MS) return false;
+    if (r.status !== 'completed') return true;
+    const ended = Date.parse(r.updatedAt);
+    if (Number.isNaN(ended) || ended < cut - CUT_RUN_SLACK_MS) return false;
+    if (r.conclusion === 'cancelled' && typeof jobCount === 'function' && r.databaseId != null && jobCount(r.databaseId) === 0) return false;
+    return true;
+  });
+  const ids = cutters.map((r) => r.databaseId).filter((x) => x !== null && x !== undefined);
+  const name = (r) => `${r.workflowName || '(unnamed workflow)'} run ${r.databaseId != null ? r.databaseId : '(id unread)'}`;
+  if (!cutters.length) return { ok: true, detail: `no workflow run at ${tag} was in progress when it was cut (${cutAt}) — cut by hand, no run's publish to wait for`, runs: [] };
+  const bad = cutters.filter((r) => !(r.status === 'completed' && r.conclusion === 'success'));
+  if (!bad.length) return { ok: true, detail: `the run that cut ${tag} (${cutters.map(name).join(', ')}) concluded success`, runs: ids };
+  const how = (r) => (r.status === 'completed' ? `concluded ${r.conclusion || 'with no conclusion'}` : `is still ${r.status || 'running'}`);
+  const rerun = bad.filter((r) => r.status === 'completed' && r.databaseId != null).map((r) => `gh run rerun ${r.databaseId} --failed`);
+  return {
+    ok: false,
+    detail: `the run that cut ${tag} — ${bad.map((r) => `${name(r)} ${how(r)}`).join('; ')} — did not finish what it publishes after the cut (an image, a package, a Release): ${tag}'s artifacts may not exist. An earlier green run at the same commit that cut nothing cannot vouch for it (#566). ${rerun.length ? `Re-run it (${rerun.join('; ')}) and finalize again, or cut a new candidate.` : 'Wait for it to finish, then finalize again.'}`,
+    runs: ids,
+  };
+}
+
 // ---- the test period ----------------------------------------------------------------------------
 
-/** { start, endsAt, elapsed, detail } — start = max(cutAt, trackingCreatedAt). All ISO strings. */
+/**
+ * { start, endsAt, days, elapsed, detail } — start = max(cutAt, trackingCreatedAt), ISO strings. `days` 0
+ * (#549, human final only) is no test period: elapsed at once, and the detail says so.
+ */
 function periodVerdict({ cutAt, trackingCreatedAt, testPeriodDays, now }) {
   const cut = Date.parse(cutAt);
   const created = trackingCreatedAt ? Date.parse(trackingCreatedAt) : NaN;
@@ -310,8 +397,11 @@ function periodVerdict({ cutAt, trackingCreatedAt, testPeriodDays, now }) {
   return {
     start: new Date(startMs).toISOString(),
     endsAt: new Date(endMs).toISOString(),
+    days: testPeriodDays,
     elapsed,
-    detail: elapsed
+    detail: testPeriodDays === 0
+      ? 'no test period (release.test-period: 0d, a human final — the human\'s finalize is the test, #549)'
+      : elapsed
       ? `${testPeriodDays}d test period from ${new Date(startMs).toISOString()} ended ${new Date(endMs).toISOString()}`
       : `${testPeriodDays}d test period from ${new Date(startMs).toISOString()} ends ${new Date(endMs).toISOString()} (${hours}h left)`,
   };
@@ -450,6 +540,7 @@ function handoffCommand(tag) {
  *   trunk        trunkGreenVerdict(...)
  *   regressions  regressionVerdict(...)
  *   ci, suite, schema, switches   { ok, detail }
+ *   cutRun       #566 — cutRunVerdict(): the run that cut the candidate concluded success
  *   finalGrant   #441 — release-policy.js finalGrantVerdict() of policy.effective.finalGrant (only
  *                read when the policy carries one; absent = unresolved, never a grant)
  *   migrations   #441 — migrationGrantVerdict() (only read when the policy carries a grant)
@@ -517,11 +608,15 @@ function decide(facts) {
   }
   const reg = f.regressions || { ok: false, permanent: false, detail: 'not measured' };
   add('regressions', reg.ok, reg.detail);
+  // #548: an older candidate pinned by --tag is finalized only on its own clean clock — the rule
+  // --auto applies to it — whatever the row: a newer candidate exists, so "the human is the test"
+  // no longer explains why THIS one, and its own clean period is what does.
+  const ownClock = auto || !!s.older;
   const per = f.period || { elapsed: false, detail: 'not measured' };
-  add('test-period', per.elapsed, per.detail, auto);
+  add('test-period', per.elapsed, s.older && !auto ? `${per.detail} — required: an older candidate is finalized only once its own period elapsed clean (#548)` : per.detail, ownClock);
   const tr = f.trunk || { ok: false, permanent: false, pending: false, detail: 'not measured' };
-  add('trunk-green', tr.ok, tr.detail, auto);
-  for (const [condition, v] of [['ci-green', f.ci], ['full-suite', f.suite], ['schema-additive', f.schema], ['switch-dependencies', f.switches]]) {
+  add('trunk-green', tr.ok, tr.detail, ownClock);
+  for (const [condition, v] of [['ci-green', f.ci], ['full-suite', f.suite], ['cut-run', f.cutRun], ['schema-additive', f.schema], ['switch-dependencies', f.switches]]) {
     add(condition, v && v.ok, v ? v.detail : 'not measured');
   }
   // #424: before any final — the tag equals the manifests, the commit is on trunk, the version outranks the latest final.
@@ -533,14 +628,14 @@ function decide(facts) {
   }
 
   if (held.length) return out('held');
-  if ((reg.permanent) || (auto && tr.permanent)) return out('needs-new-candidate');
+  if ((reg.permanent) || (ownClock && tr.permanent)) return out('needs-new-candidate');
   const blocking = checks.filter((c) => c.required && !c.ok && !['test-period', 'trunk-green', 'human'].includes(c.condition));
   if (blocking.length) return out('refused');
-  if (auto) {
+  if (ownClock) {
     if (!tr.ok && !tr.pending) return out('refused');
     if (!per.elapsed || tr.pending) return out('testing');
-    return out('finalized', { finalTag: cand.version, grant: grantUsed });
   }
+  if (auto) return out('finalized', { finalTag: cand.version, grant: grantUsed });
   if (!h.bar) return out('candidate-ready', { handoff: handoffCommand(cand.tag) });
   return out('finalized', { finalTag: cand.version });
 }
@@ -590,7 +685,7 @@ function tagMessage(verdict, { candidate, period, actor }) {
     '',
     `Candidate: ${candidate.tag}`,
     `Commit: ${candidate.sha}`,
-    period ? `Test period: ${period.start} -> ${period.endsAt}` : null,
+    period ? (period.days === 0 ? 'Test period: none (release.test-period: 0d — the human final is the test)' : `Test period: ${period.start} -> ${period.endsAt}`) : null,
     `Finalized by: ${actor}`,
     verdict.grant ? `Automatic final granted by: release.final-grant -> decision #${verdict.grant.issue}${verdict.grant.ruledBy ? `, ruled by ${verdict.grant.ruledBy}` : ''} (an operator's per-repo grant; deleting it, or final: human, revokes it)` : null,
     '',
@@ -603,7 +698,7 @@ module.exports = {
   STATES, CONDITIONS, HOLD_LABEL, CUT_SUBJECT_SUFFIX,
   parseVersion, compareVersions, parseCandidate,
   parseReleaseMarker, releaseMarker, eventMarker, hasEvent, trackingTitle, trackingBody,
-  selectCandidate, openCandidates, pickNewestClean, stateDetail, windowHasRed, whyNoFinal, periodVerdict, trunkGreenVerdict, windowBranches, mergeWindowRuns, regressionVerdict,
+  selectCandidate, openCandidates, pickNewestClean, stateDetail, windowHasRed, whyNoFinal, periodVerdict, cutRunVerdict, trunkGreenVerdict, windowBranches, mergeWindowRuns, regressionVerdict,
   handoffCommand, decide, tagMessage, migrationGrantVerdict,
   carriedIssues, previousFinal, releasedEvent, releasedComment,
 };

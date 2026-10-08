@@ -4,8 +4,8 @@ A tiny, portable CLI that lets **parallel coding sessions and agents on one mach
 collisions. Three independent capabilities, each usable on its own:
 
 1. **Issue claims** — so two sessions, on one machine or several, don't grab the same issue. The
-   claim's record is its **branch on the git remote**, pushed at cut and refused against from any
-   machine (#325); also written to local state (fast) and mirrored to GitHub for people
+   claim's record is its **branch on the git remote** — at cut, the claim ref `refs/claims/<branch>`,
+   which no CI trigger watches (#550) — refused against from any machine (#325); also written to local state (fast) and mirrored to GitHub for people
    (`gh issue edit --add-assignee @me --add-label in-progress`).
 2. **Ports** — every dev server gets a unique port; a project's reserved trunk port is never handed
    to a worktree, even while that trunk server is down.
@@ -160,14 +160,17 @@ three gates; `colab release` and `colab worktree rm` close the loop.
 Before a claim is written, colab checks three layers and **refuses with exit 1** if any says the
 issue is taken:
 
-- **Remote** (#325, first): `git ls-remote --heads <remote>` — asked of the remote directly, so a
-  clone that never fetched sees what a fresh one would. A branch whose trailing number run
+- **Remote** (#325, first): `git ls-remote <remote> 'refs/heads/*' 'refs/claims/*'` — asked of the
+  remote directly, so a clone that never fetched sees what a fresh one would. A branch (or claim
+  ref, #550) whose trailing number run
   (`CONVENTIONS.md` §4) carries the issue, and that no worktree/claim record in *this machine's*
   state names, is another machine's claim → refuse, naming `<remote>/<branch> @ sha` and the
   commands to continue it. **Remote unreachable → refused** (no local-only fallback, no `--force`).
-  A repo with no remote at all skips this layer and says so. The branch is pushed by
-  `colab worktree new` at cut (`--force-with-lease=refs/heads/<b>:`, create-only); a failed push
-  with `--issues` removes the worktree + branch again and takes nothing.
+  A repo with no remote at all skips this layer and says so. `colab worktree new` pushes the
+  **claim ref** `refs/claims/<b>` at cut (`--force-with-lease=refs/claims/<b>:`, create-only), not
+  the branch — a branch push re-runs CI on trunk's own commit, a claim ref triggers nothing (#550);
+  the branch follows at code-wrap's push. A failed push with `--issues` removes the worktree +
+  branch again and takes nothing. `colab worktree rm` deletes the claim ref (absent is fine).
 - **Local** (always): if the issue already has a live claim in `state.json` attached to a
   *different* worktree (or a trunk claim vs. a worktree claim), refuse and print the holder —
   worktree, branch, host, and the date since. Re-claiming onto the **same** worktree is idempotent
@@ -420,11 +423,11 @@ doing. Issue #17's own cleanup hit exactly this case.
 
 ## Session identity (which conversation)
 
-Every claim and worktree can record a **two-part Claude session identity**:
+Every claim and worktree can record a **two-part session identity**:
 
 | field | source (precedence) | typical value |
 |---|---|---|
-| `session` (URL) | `--session <url>` **>** `COLAB_SESSION` env **>** absent | `https://claude.ai/code/session_…` |
+| `session` (id) | `--session <id>` **>** `COLAB_SESSION` env **>** absent | any stable id for the session — a URL (`https://…/session_…`), a uuid… |
 | `sessionName` (label) | `--session-name <s>` **>** `COLAB_SESSION_NAME` env **>** absent | `colab-handbook`, `pilot-issue-30` |
 
 Either, both, or neither may be set — never an error, **except at the two call sites that mint a
@@ -477,7 +480,7 @@ worktree named `console-views-30-31-32` sat beside a live session with a nearly 
 ### Repairing an existing worktree — `worktree tag`
 
 ```sh
-colab worktree tag import-fixes-115-114-113 --session "https://claude.ai/code/session_…"
+colab worktree tag import-fixes-115-114-113 --session "<any stable session id>"
 colab worktree tag import-fixes-115-114-113 --session "<url>" --session-name "import-fixes"
 ```
 
@@ -574,6 +577,13 @@ as the one adopting scheduler that evaluates wakes spells them; `lib/wake.test.j
 a second spelling fails CI rather than drifting. `lib/disposition.js` reads it too: a `hold` whose
 wake is a vocabulary `wake:` is a hold, and prose is not.
 
+The line may also declare `shape: ask|task|wait` between `owner:` and `wake:` (#569) — what the
+owner is asked for. `decodeHold` returns `shape` only when the line carries one; `holdShape(decoded)`
+returns the declared shape when it is one of the three, else the inference that predates the field
+(`ruling` in the wake → `ask`, otherwise `wait`), with `declared` and `invalid` saying which. A
+reader built before the field still parses the line: its lazy owner match absorbs the field and
+its wake stays whole — `codec.test.js` pins that against the old pattern.
+
 ## Tracker codec (`lib/codec/`) — every marker as an encode/decode pair (#497, #498, #499)
 
 Everything this toolkit writes to a tracker with a meaning is encoded and decoded in one place,
@@ -665,7 +675,7 @@ append-only and never participates in that lock.
 | `claimTTLHours` | `doctor` flags worktree-less claims older than this (default 24). |
 | `portRange` | default search window for `port alloc` / `worktree new` (default `5200-5999`). |
 | `worktreeSubdir` | where worktrees are created inside a repo (default `.worktrees` — gitignore it). |
-| `notifyUrl` | **absent by default** — optional observer endpoint, see below. Unset means colab makes no network call of its own, ever. |
+| `notifyUrl` | **absent by default** — optional observer endpoint, or a list of them, see below. Unset means colab makes no network call of its own, ever. |
 | `journal` | **absent by default** — set to `true` for a local append-only record of every state transition and invocation in `~/.colab/journal.jsonl`, see below. Unset means colab writes no journal file, ever. Unrelated to `notifyUrl`: local file vs. remote push. |
 | `claimIdentity` | **absent by default** (`login,host` behaviour, unchanged) — set to `login,host,session` to distinguish two of your own sessions on one machine in the claim tie-break (#267). See *Identity granularity* under *Claim lifecycle* above; only safe where `--session` is stable across a resume. |
 
@@ -676,7 +686,16 @@ Set it and each state-changing command POST one small JSON event each, as they s
 ```sh
 colab config set notifyUrl http://127.0.0.1:9000/api/events
 colab config set notifyUrl ""      # unset — same state on disk as never having set it
+colab config add-notify-url http://127.0.0.1:9001/api/events   # a second receiver, the first kept
+colab config rm-notify-url  http://127.0.0.1:9001/api/events   # back to one — stored as a string again
 ```
+
+**Several receivers (#546).** `notifyUrl` is a string (one receiver) or an array of URLs. A machine
+can run two local observers side by side (a stable build and a release candidate on two ports), and
+every event goes to each of them. Each URL gets its own detached child with the semantics below — no
+retry, no response read — so a dead or hanging receiver never costs another receiver its event. One
+URL is stored as a plain string, so a single-observer machine's `config.json` looks exactly as it
+did before the list form existed.
 
 | command | event `kind` |
 |---|---|
@@ -718,15 +737,19 @@ push. Measured on two machines running the same observer: the one configured by 
 `issue.merged` events; the one set up a month later with `install.sh` recorded 0, and nothing said
 so. So an observer announces itself, and colab reads the announcement instead of guessing a port:
 
-- **`<COLAB_HOME>/notify-endpoint`** — written by the observer, never by colab: its events URL on
-  the first non-comment line (`#` starts a comment).
-- **`install.sh --tools`** seeds `notifyUrl` from that file when the key is absent;
-  **`install.sh --notify-url <url>`** seeds it from the flag (the flag wins). An existing value is
-  never overwritten. With nothing to seed from, install prints that `notifyUrl` is unset and which
-  events that drops.
+- **`<COLAB_HOME>/notify-endpoint`** — written by the observers, never by colab: one events URL per
+  non-comment line (`#` starts a comment), **each observer owning its own line** — an observer adds
+  or removes its line and never rewrites the file, so a second observer cannot silence the first. A
+  one-line file is the one-observer case. A line that is not an http(s) URL is reported and ignored.
+- **`install.sh --tools`** adds to `notifyUrl` every URL in that file the key lacks;
+  **`install.sh --notify-url <url>`** adds the flag's URL too. An existing entry is never removed
+  or rewritten — adding is the only write. With nothing to seed from, install prints that
+  `notifyUrl` is unset and which events that drops.
 - **`colab doctor`** and **`install.sh --check`** report `notifyUrl: unset` when the file exists and
-  the key does not (and a note when the two disagree). No file, no line: silence stays the default
-  for a machine with no observer. Logic: `lib/notify-endpoint.js`.
+  the key does not, and one `notifyUrl: lacks <url>` line for **each** declared URL the key is
+  missing, with the `colab config add-notify-url` fix. A configured URL the file does not declare
+  (a remote observer, say) is a deliberate value and reported as nothing. No file, no line: silence
+  stays the default for a machine with no observer. Logic: `lib/notify-endpoint.js`.
 
 **Two senses of the word "journal", and they are not the same thing.** Whatever a `notifyUrl`
 receiver keeps on its own side is *its* record: remote, someone else's, and possibly empty, since
@@ -1086,7 +1109,7 @@ Run `colab <cmd> --help` for full detail.
 | `port alloc [--count N] [--range A-B \| --at p1,p2,...] [--worktree N \| --claim I \| --label S]` | allocate consecutive free ports, or pin exact ports with `--at` |
 | `port free <port> \| --worktree N \| --claim I` | free ports |
 | `ports [--json]` | list allocated ports + the reserved set |
-| `worktree new <branch> [--issues N,M] [--ports N \| --at p1,..] [--name X] [--trunk T] [--session S] [--session-name S] [--repo P]` | create a worktree (optional) |
+| `worktree new <branch> [--issues N,M] [--ports N \| --at p1,..] [--name X] [--trunk T] [--session S] [--session-name S] [--repo P]` | create a worktree (optional); hides the scratch dirs and the worktree subdir itself in the clone's `.git/info/exclude`, so trunk's `git add -A` never stages a live worktree as a gitlink (#488, #527) |
 | `worktree rm <name> [--force] [--repo P]` | remove a worktree; release its group; free its ports. Refuses on uncommitted work — tracked changes **or** untracked, non-ignored files (the latter is the only category with no copy in the index, a commit, or the remote; ignored build output and copied `.env` files never block) — **or** processes the worktree owns (cwd inside it); `--force` overrides both, terminating the owned processes. Ports still bound afterwards are reported as such, never as freed. Directory removal (and the pre-remove hook) is bounded at 5min (`COLAB_TEARDOWN_TIMEOUT_MS`); a failed or timed-out removal leaves the claim(s) and state record in place for a retry instead of releasing them anyway, unless `--force`. A directory missing `.git` (an earlier removal interrupted partway) is recognized as a **husk** and finished by hand rather than re-fought with `git worktree remove`, which can never succeed against it |
 | `worktree tag <name> --session S [--session-name S]` | **repair** session identity on an existing worktree **and its claims** (see *Session identity*) |
 | `worktrees [--json]` | list worktrees (status + on-disk liveness); also reports directories git never linked at all (no `.git`) but that look worktree-shaped (`CLAUDE.md` + `.github/project.yml`) — reports only, never prunes (#99) |
@@ -1096,13 +1119,13 @@ Run `colab <cmd> --help` for full detail.
 | `doctor [--prune] [--ttl H] [--json] [--sync]` | heal dead worktrees / orphan + stale claims / orphan ports; report records whose branch or path cannot be resolved, including a zero-claim `pending` stub (no TTL — see *Records that cannot be acted on*); flip + sweep **merged** worktrees (see *Worktree lifecycle*); **list** shipped branches awaiting deletion (never deletes them); `--sync` also flags a worktree-less claim the tracker no longer shows assigned+in-progress (no TTL either) and spent `group:<key>` labels |
 | `release-notes [<range>] [--repo P] [--out F] [--headline "..."]` | grouped Markdown release summary from git history (see below) |
 | `release cut [--repo P] [--auto \| --bump patch\|minor --reason "..."] [--dry] [--json]` | cut a release **candidate** `vX.Y.Z-rc.N` on `origin/main` where §6's routes allow it and all four conditions plus the three pre-tag checks hold on that commit; `--auto` computes the bump (majors included) and honours the route's cadence; never a final tag — except on route `deploy-tag-fast`, where `--auto` tags the final itself (#446) (see *Release cut*, below) |
-| `release finalize [--repo P] [--auto \| --tag RC [--answered-by N]] [--dry] [--json]` | a candidate's next step under §6's routes; `--auto` finalizes the newest candidate clean on its own clock — `testing` / `held` / `needs-new-candidate` / `refused` / `candidate-ready` / `finalized`, re-checked every run, one tracking issue per version; tags the final only where the rung row makes it automatic, or behind the human bar (see *Release finalize*, below) |
+| `release finalize [--repo P] [--auto \| --tag RC [--answered-by N]] [--dry] [--json]` | a candidate's next step under §6's routes; `--auto` finalizes the newest candidate clean on its own clock, `--tag` any open one (an older one on its own clean clock, #548) — `testing` / `held` / `needs-new-candidate` / `refused` / `candidate-ready` / `finalized`, re-checked every run, one tracking issue per version; tags the final only where the rung row makes it automatic, or behind the human bar (see *Release finalize*, below) |
 | `release npm [--repo P] [--json]` | whether release-auto.yml's `npm` job publishes this repo, and what: the package, its directory and the gate, read from `release.npm` / `release.npm-gate`; read-only (see *Release npm*, below) |
 | `template [<name>] [--dest F] [--repo P] [--force]` | copy a handbook workflow template into a repo, **stamped** with the handbook version (see below) |
 | `update [<repo>...] [--apply] [--json] [--quiet]` | sweep the fleet registry for stamped copies that fell behind a changed template; `--apply` refreshes the **pristine** ones. Never commits; never touches a hand-edited copy (see below) |
 | `register [<path>] [--remove] [--list]` | add/remove a repo in **both** fleet registries at once; `--list` flags drift (see below) |
-| `config [show \| add-repo P \| rm-repo P \| add-reserved-file P \| rm-reserved-file P \| set K V]` | manage config (`set` keys: `claimTTLHours`, `portRange`, `worktreeSubdir`, `notifyUrl`, `journal`, `claimIdentity`) |
-| `adopt [--repo P] [--json] [--no-verify] [--axis a,b] [--room R] [--exposure E] [--writes W] [--channels C] [--production U\|none] [--deploy D] [--stack S] [--answered-by N] [--reason "..."]` | detect + ask + derive + WRITE CONVENTIONS.md [§9](../CONVENTIONS.md#9-adopting-this)'s five rows (`tier`, `room`, `exposure`, `writes`, `channels`) in one act (#199) — a complete descriptor just reports; a flag makes the whole run non-interactive, a TTY prompts, neither refuses fast. Lowering `exposure` (or a first `none`/`self`) needs a human (`COLAB_HUMAN=1` + `--answered-by`, or a terminal); raising, or a first `live`/`released`, does not. Append-only — never rewrites an existing byte; never writes `tier` unless `exposure` ends unanswered. On a repo with no descriptor before the run and no `CLAUDE.md`, it also writes the thin-shell `CLAUDE.md` (`@AGENTS.md` + the Conventions block, stamped and filled) and an `AGENTS.md` stub if none exists (#417, CONVENTIONS.md §9 step 5) — never over an existing `CLAUDE.md`, never under `--local`. **`--local --trunk <integration-branch> [--no-labels]`** (#393): for a repo the fleet does not own — hides `.github/project.yml`, `CLAUDE.local.md`, the scratch dirs (`.plans/`, `.briefs/` or their `COLAB_PLANS_DIR`/`COLAB_BRIEFS_DIR` overrides, plus the legacy `.claude/plans/` — #488) and the worktree subdir via `.git/info/exclude`, writes the descriptor into the main checkout with trunk = the fleet's integration branch (exposure required, usually `self`), writes a stub `CLAUDE.local.md`, ensures the four load-bearing labels, moves the main checkout onto that branch when clean, and prints what it did not do and why (CONVENTIONS.md [§9, *Working in a repo you don't own*](../CONVENTIONS.md#working-in-a-repo-you-dont-own)) |
+| `config [show \| add-repo P \| rm-repo P \| add-reserved-file P \| rm-reserved-file P \| add-notify-url U \| rm-notify-url U \| set K V]` | manage config (`set` keys: `claimTTLHours`, `portRange`, `worktreeSubdir`, `notifyUrl`, `journal`, `claimIdentity`) |
+| `adopt [--repo P] [--json] [--no-verify] [--axis a,b] [--room R] [--exposure E] [--writes W] [--channels C] [--production U\|none] [--deploy D] [--stack S] [--answered-by N] [--reason "..."]` | detect + ask + derive + WRITE CONVENTIONS.md [§9](../CONVENTIONS.md#9-adopting-this)'s five rows (`tier`, `room`, `exposure`, `writes`, `channels`) in one act (#199) — asks only the gating rows (`production`/`deploy`, `exposure`); `room`/`writes`/`channels` are optional, asked only via `--axis` or their own flag, and named in one report line (#533); a single trunk of any spelling (`master` included) adopts as `exposure: none`, a `main` beside it is refused (#522); a human-gated refusal prints the one command to run as its first line — a complete descriptor just reports; a flag makes the whole run non-interactive, a TTY prompts, neither refuses fast. Lowering `exposure` (or a first `none`/`self`) needs a human (`COLAB_HUMAN=1` + `--answered-by`, or a terminal); raising, or a first `live`/`released`, does not. Append-only — never rewrites an existing byte; never writes `tier` unless `exposure` ends unanswered. On a repo with no descriptor before the run and no `CLAUDE.md`, it also writes the thin-shell `CLAUDE.md` (`@AGENTS.md` + the Conventions block, stamped and filled) and an `AGENTS.md` stub if none exists (#417, CONVENTIONS.md §9 step 5) — never over an existing `CLAUDE.md`, never under `--local`. Every plain run also hides the scratch dirs and the worktree subdir (`.worktrees/` or the configured `worktreeSubdir`) in the clone's `.git/info/exclude` — machine-local, idempotent — so a repo adopted before `worktree new` excluded its own dir is covered too (#527). **`--local --trunk <integration-branch> [--no-labels]`** (#393): for a repo the fleet does not own — hides `.github/project.yml`, `CLAUDE.local.md`, the scratch dirs (`.plans/`, `.briefs/` or their `COLAB_PLANS_DIR`/`COLAB_BRIEFS_DIR` overrides, plus the legacy `.claude/plans/` — #488) and the worktree subdir via `.git/info/exclude`, writes the descriptor into the main checkout with trunk = the fleet's integration branch (exposure required, usually `self`), writes a stub `CLAUDE.local.md`, ensures the four load-bearing labels, moves the main checkout onto that branch when clean, and prints what it did not do and why (CONVENTIONS.md [§9, *Working in a repo you don't own*](../CONVENTIONS.md#working-in-a-repo-you-dont-own)) |
 
 ### Release notes
 
@@ -1146,7 +1169,7 @@ them), and any one failing refuses the cut:
 | `already-candidate` | the commit already carries a candidate of that version. Under `--auto` a **no-op** (#443): main's head already being a candidate is the guarantee holding, so the daily schedule and a CI re-run are safe |
 | `ci-green` | §6 condition 1: not every run at the commit finished with one success — `colab ship`'s whole-sha check |
 | `full-suite` | §6 condition 2: some workflow that ran at the commit has no successful run (a cancelled-only workflow never ran its tests; `ci-green` alone reads that as green) |
-| `schema-additive` | §6 condition 3: a migration since the last final tag is destructive — Laravel `database/migrations` with a drop/rename/`->change()` in `up()`, Prisma SQL with `DROP`/`RENAME`/`ALTER COLUMN` — or an existing migration was edited or deleted. `.php`/`.sql` under a `project.yml` `migrations:` prefix are read the same way; a declared migration in another format is named in the detail for a human read (#383). Other layouts are not read |
+| `schema-additive` | §6 condition 3: a migration since the last final tag is destructive — Laravel `database/migrations` with a drop/rename/`->change()` in `up()`, Prisma SQL with `DROP`/`RENAME`/`ALTER COLUMN` — or an existing migration was edited or deleted. A `.sql` file's explicit Down section (sql-migrate `-- +migrate Down`, goose `-- +goose Down`, dbmate `-- migrate:down`) and an added `*.down.sql` are rollbacks and never count, the same as Laravel's `down()`; text outside any marker is read (#545). A finding names `file:line` and the statement. `.php`/`.sql` under a `project.yml` `migrations:` prefix are read the same way; a declared migration in another format is named in the detail for a human read (#383). Other layouts are not read |
 | `switch-dependencies` | §6 condition 4: a `colab:switch` marker is malformed, or a finished switch `needs` one that is not finished |
 | `manifest-version` | #424: the tag does not equal the version a manifest declares — `VERSION`, `package.json` `version`, `Cargo.toml` `[package]`, `pyproject.toml` `[project]`/`[tool.poetry]` (a `dynamic` version is derived from the tag and passes). A manifest that does not parse, or a workspace-inherited Cargo version, refuses; no manifest declaring a version passes — the tag is the version. Under `release.version-source: tag` (#438 — the default on a route where the machine cuts the tag, #484) a manifest that differs is **derivable**: skipped, named in the detail and in the tag message (`Derivable manifests …`), and stamped from the tag by the repo's own release step, never on trunk |
 | `on-trunk` | #424: the commit is not an ancestor of `origin/main`, or the checkout is **shallow** and cannot answer (a release workflow needs `fetch-depth: 0`) |
@@ -1267,7 +1290,7 @@ earlier route is superseded by the next final, never finalized.
 ### Release finalize
 
 `colab release finalize [--repo P] [--auto | --tag vX.Y.Z-rc.N [--answered-by N]] [--dry] [--json]` (#339)
-takes the newest candidate one step further under §6's release rung. It is run — repeatedly — by
+takes the newest candidate — or the one `--tag` names — one step further under §6's release rung. It is run — repeatedly — by
 the release workflow ([`templates/release-auto.yml`](../templates/release-auto.yml), `--auto`, daily);
 the [`release-rung`](../skills/release-rung/SKILL.md) skill is the manual fallback that runs the same
 commands from a coordinator session when that workflow cannot (#426). There is no
@@ -1289,19 +1312,23 @@ daemon: every run re-measures from git and GitHub, and the decision is `tools/li
 
 - **Candidates** are annotated `vX.Y.Z-rc.N` tags on origin whose message's first line ends
   `(colab release cut)` and whose commit is on `origin/main`. The newest open one (highest version,
-  then highest `N`) is the candidate; a lightweight or hand-made one is refused, never finalized.
+  then highest `N`) is the candidate unless `--tag` names another open one (#548, below); a
+  lightweight or hand-made one is refused, never finalized.
 - **One tracking issue per version**, opened by the first non-`--dry` run for that version:
   title `release: vX.Y.Z`, body's first line `<!-- colab:release version=vX.Y.Z -->` (only the
   marker identifies it). Every `-rc.N` of the version reuses it. Two open ones for a version, or a
-  closed one for a version not yet final, refuse rather than guess. A superseded version's open,
-  un-held issue is closed with a "superseded" comment.
+  closed one for a version not yet final, refuse rather than guess. Once a final is tagged, every
+  open, un-held issue of a version *below* it is closed with a "superseded" comment — never earlier,
+  and never a newer version's (#548: any open candidate may still be finalized by `--tag`).
 - **Veto:** the `release-hold` label on it (a convention label — `colab labels --ensure`). No
   command removes it.
 - **Regression:** a `blocked_by` edge on it (`colab blocked <tracking> --by <regression>`), read
   from `issues/<n>/dependencies/blocked_by`: open → `refused`; closed after the period began →
   `needs-new-candidate`; closed before → fine.
 - **Test period** starts at the later of the candidate tag's tagger date and the issue's
-  `createdAt`, and lasts the effective `release: test-period` (3 days by default).
+  `createdAt`, and lasts the effective `release: test-period` (3 days by default). A human-final
+  repo may declare `0d`: no period, and the human bar finalizes the newest candidate as soon as
+  every other check passes (#549).
 - **Events** are comments carrying `<!-- colab:release-event … -->` markers, each posted once:
   `candidate=<rc>` (the period starts), `state=candidate-ready candidate=<rc>` (carries the
   handoff), `state=finalized tag=<vX.Y.Z>`, `state=superseded by=<vX.Y.Z>`.
@@ -1317,23 +1344,35 @@ daemon: every run re-measures from git and GitHub, and the decision is `tools/li
 | condition | what it checks | blocks |
 |---|---|---|
 | `release-policy` | the rung row is a `released-*` row and the `release:` block is valid | always |
-| `candidate` | a candidate exists, made by `colab release cut`, on `origin/main`; `--tag` names the newest | always |
+| `candidate` | a candidate exists, made by `colab release cut`, on `origin/main`; `--tag` names an open one (an older one is marked so, #548) | always |
 | `tracking-issue` | exactly one findable record for the version | always |
 | `release-hold` | no hold on it or on a superseded open record | always |
 | `regressions` | as above | always |
-| `test-period` | the period has ended | automatic-final row only |
+| `test-period` | the period has ended | automatic-final row, or an older `--tag` (#548) |
 | `trunk-green` | every run created since the period began on `main` — and on `trunk:` too where that is another branch (`trunk: dev`, #437: there `main` gets CI only at promotions, so a `main`-only window is close to vacuous) — of the workflows that ran at the candidate (not `pull_request`), finished without going red — a `cancelled` one needs a later success; a read that hit its limit fails closed | automatic-final row only |
 | `ci-green` · `full-suite` · `schema-additive` · `switch-dependencies` | §6's four candidate conditions, re-measured at the candidate's commit by the same code `release cut` uses | always |
+| `cut-run` | #566: the run that cut the candidate — every workflow run at its commit in progress at the tag's date, minus the calling run and a cancelled one with zero jobs (a pending run displaced from the concurrency group) — concluded `success`. A cancelled cutter is a failure: what it publishes after the cut (an image, a package) may not exist. An earlier green run at the same commit that cut nothing never vouches for it — `full-suite` sets the cancelled run aside as superseded (#461), this does not. No run around the cut (cut by hand) passes | always |
 | `manifest-version` · `on-trunk` · `outranks-final` | #424's pre-tag checks (see *Release cut*), on the final `vX.Y.Z` | always |
 | `final-grant` | #441: the decision issue `release.final-grant` names still carries a recorded, trusted, not-reopened ruling (`decision-recorded` label + live `⚖ Decision recorded` comment) | granted `deploy-tag` only; reported — failing takes the automatic final away (→ `candidate-ready`) |
 | `migration-grant` | #441: no migration file (any, destructive or not) since the last final, or a live migration grant on the version's tracking issue bound to `vX.Y.Z` (`COLAB_HUMAN=1 colab migration-grant <tracking> --branch vX.Y.Z`) | granted `deploy-tag` only; reported — failing takes the automatic final away (→ `candidate-ready`) |
 | `human` | human-final row only: `COLAB_HUMAN=1` + `--answered-by` + `--tag` (the `adopt` gate's precedent) | reported; absent → `candidate-ready` |
 
-The human bar never shortens a test period and never overrides a hold. Where it is met, the final's
+The human bar never shortens a test period and never overrides a hold — on a human-final row the
+period is informational, and `release: test-period: 0d` declares none (#549). Where it is met, the final's
 annotated message records who answered. On a granted `deploy-tag` repo (#441) the final is automatic
 only while both grant checks pass; the tag message then names the grant and its decision issue
 (`Automatic final granted by: …`), and `--json` carries it as `grant: {issue, ruledBy}`. A human bar
 there takes the human path, never the grant's.
+
+**An older candidate by `--tag` (#548).** On an active trunk every merge cuts a candidate, and each
+starts its own clock — so a final that may only name the newest needs trunk to stop merging for a
+whole test period. `--tag` therefore names **any open candidate**. An older one is judged exactly as
+`--auto` judges it: `test-period` and `trunk-green` become required on every row (read over its own
+window `[start, endsAt)`, so a red run after it closed is about newer code), and `release-hold`,
+`regressions` and every pre-tag check apply as always — still testing → `testing`, red inside its
+window → `needs-new-candidate`; the human bar never shortens its period. The newest candidate keeps
+the human row's rule (period informational, `0d` allowed). The newer candidates stay open for the
+next version: a final closes only the records of versions below it.
 
 **`--auto` (#423)** is the release workflow's daily run, and changes only *which* candidate is
 judged. Without it, the newest candidate is the one judged — so on a repo cutting a candidate every
@@ -1521,7 +1560,12 @@ autonomy: auto-trunk   # colab ship may squash-merge session branches into trunk
 refuses, with one exception it computes itself: a **docs-only** diff (#345) — every changed path is
 `.md`/`.mdx`/`.txt` or under a top-level `docs/`; none is `CLAUDE.md`, `CLAUDE.local.md`, `AGENTS.md`
 or under `.claude/`, `.github/`, `.githooks/`; no binary, no symlink, not empty. The caller cannot
-assert it and nothing widens it ([CONVENTIONS §2](../CONVENTIONS.md#autonomy--the-docs-only-exception-345)). This
+assert it and nothing widens it ([CONVENTIONS §2](../CONVENTIONS.md#autonomy--the-docs-only-exception-345)). And
+one door for a person (#525): a human running `ship` at an interactive terminal (not an agent shell;
+ship asks `proceed? [y/N]`), or with `COLAB_HUMAN=1 --answered-by <name>`, is the go — every other
+precondition still runs, and the 🚢 comment records the door
+([CONVENTIONS §2](../CONVENTIONS.md#autonomy--the-human-door-525)). An unattended refusal prints
+both commands. This
 gate has **no override** — `--force` does not exist on `ship`. Autonomy is a property of the repo a
 human configured, never a flag the caller can pass. `ship` **never** touches `main` when `trunk ≠
 main`, **never** tags, and **never** promotes — those belong to `promote` and CONVENTIONS §6's release rung.
@@ -1540,7 +1584,7 @@ Each step is checked; any failure aborts **before the push**, so trunk is never 
 
 | step | what | abort condition |
 |---|---|---|
-| a. autonomy | repo grants `auto-trunk`, or the diff is docs-only (#345, computed, re-measured after B0) | neither → refuse (no override) |
+| a. autonomy | repo grants `auto-trunk`, or the diff is docs-only (#345, computed, re-measured after B0), or a person runs it through the human door (#525) | none → refuse, naming the human's command (no override) |
 | a′. resolvable | the session's recorded branch resolves to a ref (locally or on `origin`) | it does not → refuse: everything below is keyed to that name, and a record nothing can act on silently costs the `Closes` |
 | a″. claim sanity | the branch resolves to at least one claimed issue | zero → **loud warning** (the squash will carry no `Closes #N`); zero **and** some claim in the repo names an unresolvable branch → refuse, because "no claims" is then a broken lookup |
 | b. preconditions | reported as a ✓/✗ table | any ✗ → abort |
@@ -1578,6 +1622,25 @@ A trunk that moved since the batch was built deletes the stale ref and rebuilds 
 nothing untested ever reaches trunk. While trunk's own run for a landed batch head is still in
 flight, `ship`'s trunk-CI row accepts the batch ref's green run for that same sha, only when the
 workflows firing on a trunk push and on a `ship-batch/**` push are the same set.
+
+A member dropped at build is recorded on the batch head as `Ship-Batch-Dropped: <ref>
+<branch>@<sha> <class>` (`conflict` · `generated-no-hook` · `hook-failed` · `hook-markers` ·
+`squash-failed` · `empty` · `message` · `commit-failed`), one line per drop in the last member's
+trailer block — only when the batch is built; a build that collapses to serial pushes nothing (#554).
+
+**Tuning the knobs — `colab batch-stats [--since 30d] [--json]`** (`lib/batch-stats.js`, #554). Read-only,
+from git + CI only: trunk's first-parent log in the window, and the repo's runs over REST, one query
+per UTC day (a filtered run list stops at 1000 rows; a day that still hits it is named). Reports
+batches landed and their fill, combined-run builds (first-attempt green, green after re-run, red,
+pending), red builds and how many members then landed serially (an unlanded build's commits are
+read through the compare API), drops by class and the eviction rate, **missed partners** — a serial
+landing while another change landed later was already green at its head, or went green inside this
+landing's trunk-CI cycle (a near miss, with the wait from the lone change's own green that would have
+caught it) — and queue wait, green-at-head → landing. A partner is judged at that moment, never at
+its final head: a serial ship syncs the other branches, so every final head post-dates it. The
+cycle ends at the trunk run's last update or the next landing, whichever is first (a re-run moves
+`updated_at`). "Green" is the branch's own CI, not every ship gate, so a branch held for review
+counts as a missed partner — read the pair list in `--json` before treating it as lost throughput.
 
 #### If `ship` exits non-zero — establish which step it reached, don't guess
 

@@ -132,6 +132,29 @@ test('candidates: auto on exposure: live and on an unmatched descriptor is a fai
   }
 });
 
+test('#549: test-period 0d — no test period — stands only where the final is human', () => {
+  const tag = { exposure: 'released', deploy: 'tag', production: 'https://x.example' };
+  const tool = { exposure: 'released', deploy: 'none', production: null };
+  // a human final: deploy-tag's own, or one narrowed to human on an automatic-final route
+  for (const [cfg, release] of [[tag, { 'test-period': '0d' }], [tool, { final: 'human', 'test-period': '0d' }]]) {
+    const r = evaluateRelease({ ...cfg, release });
+    assert.deepEqual(r.findings, [], JSON.stringify(release));
+    assert.equal(r.effective.testPeriodDays, 0);
+    assert.equal(r.effective.final, 'human');
+  }
+  // an automatic final: refused with a message naming why, and the 3-day floor stays
+  for (const [cfg, release] of [[tool, { 'test-period': '0d' }], [tag, { final: 'auto', 'final-grant': 123, 'test-period': '0d' }]]) {
+    const r = evaluateRelease({ ...cfg, release });
+    assert.match(r.findings.map((f) => f.text).join('|'), /release\.test-period: 0d widens the release route.*the final is automatic here.*0d fits only a human final/, JSON.stringify(release));
+    assert.equal(r.effective.testPeriodDays, 3);
+  }
+  // 1d-2d stays a failure even on a human final — 0d is the one value below the floor; the finding names it
+  const short = evaluateRelease({ ...tag, release: { 'test-period': '1d' } });
+  assert.match(short.findings.map((f) => f.text).join('|'), /Set 3d or longer — or 0d for no test period/);
+  // absent: today's 3 days, unchanged
+  assert.equal(evaluateRelease({ ...tag }).effective.testPeriodDays, 3);
+});
+
 test('a test period shorter than 3d is a failure', () => {
   const r = evaluateRelease({ exposure: 'released', deploy: 'none', production: null, release: { 'test-period': '1d' } });
   assert.match(r.findings.map((f) => f.text).join('|'), /release\.test-period: 1d widens the release route/);

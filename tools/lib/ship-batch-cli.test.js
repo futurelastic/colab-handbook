@@ -298,6 +298,12 @@ test('#373: a member that conflicts with the members already in drops to the nex
   const T = fx.originSha('main');
   const head = fx.originSha(`ship-batch/${T.slice(0, 7)}`);
   assert.strictEqual(fx.g(fx.origin, 'rev-list', '--count', `${T}..${head}`), '2');
+  // #554: the drop is recorded on the batch head — once, on the head only, with its class
+  const headMsg = fx.g(fx.origin, 'log', '-1', '--format=%B', head);
+  const sha = fx.originSha('fix/c-13');
+  assert.match(headMsg, new RegExp(`^Ship-Batch-Dropped: ship-batch/${T.slice(0, 7)} fix/c-13@${sha.slice(0, 12)} conflict$`, 'm'));
+  assert.match(headMsg, /^Ship-Batch: ship-batch\/\w+ fix\/b-12@/m, 'the member trailer is kept, in the same block');
+  assert.doesNotMatch(fx.g(fx.origin, 'log', '-1', '--format=%B', `${head}~1`), /Ship-Batch-Dropped/);
 });
 
 /** #387: a pre-ship hook that regenerates `allow.txt` on whatever head it is handed, and stages it. */
@@ -550,4 +556,60 @@ test('#436: serial B0 — a pre-ship hook that exits 0 but leaves conflict marke
   assert.match(r.out + r.err, /✗ B0: pre-ship hook exited 0 but left conflict markers staged in allow\.txt:1,\d+ — treated as a failing hook\. Nothing pushed\./);
   assert.strictEqual(fx.originSha('main'), T, 'trunk untouched');
   assert.strictEqual(fx.originSha('fix/a-11'), B, 'the branch was not pushed with the markers');
+});
+
+// ---- #509: a failed land push is classified before it is reported --------------------------------
+
+/** Stage a green batch at trunk T; returns { T, ref, head }. */
+function stagedGreen(fx) {
+  for (const b of MEMBERS) member(fx, b);
+  const T = fx.originSha('main');
+  const ref = `ship-batch/${T.slice(0, 7)}`;
+  assert.strictEqual(batch(fx).code, 3);
+  fx.setStatus(ref, 'completed success 1');
+  return { T, ref, head: fx.originSha(ref) };
+}
+/** A pre-push hook in the fixture's hooksPath (installed AFTER staging, so only the land push sees it). */
+function prePush(fx, body) {
+  const dir = path.join(fx.root, '.nohooks');
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, 'pre-push'), `#!/bin/sh\n${body}\n`, { mode: 0o755 });
+}
+
+test('#509: a pre-push hook refusal with an unchanged remote is reported as a refusal, with the hook output — not "trunk moved"', () => {
+  const fx = fixture();
+  const { T, ref } = stagedGreen(fx);
+  prePush(fx, 'echo "ERR_MODULE_NOT_FOUND: cannot find package left-pad" >&2\necho "boot check: run the installer first" >&2\nexit 1');
+
+  const r = batch(fx);
+  assert.strictEqual(r.code, 1, r.out + r.err);
+  assert.doesNotMatch(r.out + r.err, /trunk moved/);
+  assert.doesNotMatch(r.out, /Run this command again: it sees the moved trunk/);
+  assert.match(r.out, /refused before it reached the remote \(a local pre-push hook\?\) — origin\/main did NOT move/);
+  assert.match(r.out, /│ ERR_MODULE_NOT_FOUND: cannot find package left-pad/);
+  assert.match(r.out, /│ boot check: run the installer first/);
+  assert.strictEqual(fx.originSha('main'), T, 'nothing landed');
+  assert.strictEqual(fx.g(fx.work, 'rev-parse', 'main'), T, 'the trunk checkout is rolled back');
+  assert.deepStrictEqual(fx.batchRefs(), [ref], 'the staged batch is kept for the retry after the fix');
+});
+
+test('#509: the remote trunk really advanced during the land push → the "trunk moved, rebuild" path, unchanged', () => {
+  const fx = fixture();
+  const { T } = stagedGreen(fx);
+  // a racer commit on top of T, parked on origin under another name; the hook moves origin/main to it
+  fx.g(fx.work, 'checkout', '-q', '-b', 'racer', T);
+  fs.writeFileSync(path.join(fx.work, 'racer.txt'), 'R\n');
+  fx.g(fx.work, 'add', '-A');
+  fx.g(fx.work, 'commit', '-q', '-m', 'chore: racer');
+  fx.g(fx.work, 'checkout', '-q', 'main');
+  fx.g(fx.work, 'push', '-q', 'origin', 'racer');
+  const R = fx.originSha('racer');
+  prePush(fx, `git --git-dir="${fx.origin}" update-ref refs/heads/main ${R}\nexit 0`);
+
+  const r = batch(fx);
+  assert.strictEqual(r.code, 3, r.out + r.err);
+  assert.match(r.out, /⏸ ship-batch: trunk moved during land \(origin\/main [0-9a-f]{7} → [0-9a-f]{7}\)/);
+  assert.match(r.out, /Run this command again: it sees the moved trunk and rebuilds the batch on it/);
+  assert.strictEqual(fx.originSha('main'), R, 'the racer, not the batch');
+  assert.notStrictEqual(R, T);
 });

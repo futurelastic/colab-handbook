@@ -37,6 +37,22 @@ test('the exclusions win over the allowlist, at any depth', () => {
   }
 });
 
+test('#520: a skill local-policy overlay under .colab/skills/ is agent instructions, at any depth', () => {
+  for (const p of ['.colab/skills/code-wrap.md', '.colab/skills/x/y.txt', 'pkg/.colab/skills/code-start.md',
+    'docs/.colab/skills/code-ship.md']) {
+    assert.match(d.pathReason(p), /\.colab\/skills\/ \(skill local policy/, p);
+  }
+  const v = d.classify([e('README.md'), e('.colab/skills/code-wrap.md')]);
+  assert.equal(v.docsOnly, false);
+  assert.deepEqual(v.offenders.map((o) => o.path), ['.colab/skills/code-wrap.md']);
+});
+
+test('#520: only the .colab/skills subtree is excluded — other .colab docs and look-alikes judge normally', () => {
+  for (const p of ['.colab/README.md', '.colab/skills.md', 'skills/code-wrap/x.md', '.colab/hooks/notes.txt']) {
+    assert.equal(d.pathReason(p), null, p);
+  }
+});
+
 test('classify: an all-docs set passes and counts distinct paths', () => {
   const v = d.classify([e('README.md'), e('docs/a.js'), e('README.md')]);
   assert.equal(v.docsOnly, true);

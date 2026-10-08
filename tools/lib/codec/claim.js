@@ -35,13 +35,18 @@ const MACHINE_RE = /· machine `(m:[0-9a-f]{12})`/;
 const YIELD_RE = /^✅ Released \(yielded — earlier claim by (.+?) wins\)/;
 
 /**
- * Does `v` look like a session URL / `session_…` id rather than a display name? A SHAPE heuristic
- * (#306), not a gate — claim-identity.js re-exports this one copy of it.
+ * Does `v` look like a session id — a URL, a `session_…` token, a bare uuid — rather than a display
+ * name? A SHAPE heuristic (#306), not a gate — claim-identity.js re-exports this one copy of it.
+ * The uuid shape is #531: `--session` takes any stable id, and an engine whose session id is a bare
+ * uuid must not have it read back from a claim comment as a session NAME.
  */
 function looksLikeSessionId(v) {
   const s = String(v == null ? '' : v).trim();
   if (!s) return false;
-  return /^https?:\/\//.test(s) || /session_[\w-]+/.test(s);
+  // #528: a derived person identity (`claim-identity.js` `derivePersonSession`) is a session id
+  // too — a stable join key, not a display name — so it reads back as one from a claim comment.
+  return /^https?:\/\//.test(s) || /session_[\w-]+/.test(s) || /^person:\S+$/.test(s)
+    || /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(s);
 }
 
 /**

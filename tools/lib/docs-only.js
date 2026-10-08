@@ -21,6 +21,13 @@ const DOCS_DIR = 'docs/';
 const NEVER_BASENAMES = Object.freeze(['CLAUDE.md', 'CLAUDE.local.md', 'AGENTS.md']);
 /** Config directories: nothing under them is documentation, at any depth. */
 const NEVER_DIRS = Object.freeze(['.claude', '.github', '.githooks']);
+/**
+ * Agent-instruction directories named by more than one segment (#520): nothing under them is
+ * documentation, at any depth. `.colab/skills/<skill>.md` is a skill's local policy — text an agent
+ * loads and follows over the skill's own — so one `.md` there changes agent behaviour exactly as a
+ * `CLAUDE.md` does. Only this subtree: the rest of `.colab/` is judged by the ordinary rules.
+ */
+const NEVER_SUBDIRS = Object.freeze(['.colab/skills']);
 
 const MODE_SYMLINK = '120000';
 const MODE_GITLINK = '160000';
@@ -35,6 +42,13 @@ function pathReason(p) {
   if (NEVER_BASENAMES.includes(base)) return `${base} is agent rules, not documentation`;
   const dir = segs.slice(0, -1).find((s) => NEVER_DIRS.includes(s));
   if (dir) return `under ${dir}/ (config)`;
+  const dirs = segs.slice(0, -1);
+  for (const sub of NEVER_SUBDIRS) {
+    const want = sub.split('/');
+    for (let i = 0; i + want.length <= dirs.length; i++) {
+      if (want.every((w, j) => dirs[i + j] === w)) return `under ${sub}/ (skill local policy — agent instructions)`;
+    }
+  }
   if (String(p).startsWith(DOCS_DIR)) return null;
   const dot = base.lastIndexOf('.');
   const ext = dot > 0 ? base.slice(dot) : '';
@@ -151,6 +165,6 @@ function directChanges(git, repo, trunk, since) {
 }
 
 module.exports = {
-  DOC_EXTENSIONS, DOCS_DIR, NEVER_BASENAMES, NEVER_DIRS,
-  pathReason, classify, parseRaw, parseBinary, branchChanges, directChanges,
+  DOC_EXTENSIONS, DOCS_DIR, NEVER_BASENAMES, NEVER_DIRS, NEVER_SUBDIRS,
+  pathReason, classify, parseRaw, parseBinary, readEntries, branchChanges, directChanges,
 };

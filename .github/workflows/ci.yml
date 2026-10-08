@@ -13,14 +13,20 @@ on:
     # red after the merge (CONVENTIONS.md §4, "Branch CI"). GitHub-hosted runners, so
     # branch runs never queue ahead of a trunk run (§7, "Self-hosted runners").
     branches: ['**']
+  # `pull_request` stays HERE (#512), unlike the templates: this repo is public and takes
+  # fork PRs, and a push to a fork never runs a workflow in this repo. Same-repo PRs get a
+  # second run for it; dropping that duplicate for forks-only needs two reader fixes first
+  # (a skipped or cancelled newer run must not shadow a run that ran).
   pull_request:
 
 # One live run per ref: a new push cancels the superseded run on the same branch.
 # `main` is NEVER cancelled — every trunk sha keeps a completed run of its own, which
-# is what the merge gate reads. Pull-request runs group under refs/pull/<n>/merge,
-# apart from the branch's push runs.
+# is what the merge gate reads — and gets a group of its own (the run id), because
+# GitHub cancels an older run still PENDING in a group even when cancel-in-progress is
+# false (#512). Pull-request runs group under refs/pull/<n>/merge, apart from the
+# branch's push runs.
 concurrency:
-  group: ci-${{ github.ref }}
+  group: ci-${{ github.ref }}${{ github.ref == 'refs/heads/main' && format('-{0}', github.run_id) || '' }}
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
@@ -59,6 +65,7 @@ jobs:
     # EDIT: the trunk refs here mirror `concurrency`'s list above (#493).
     if: github.event_name == 'push' && (github.event.created || github.ref == 'refs/heads/main')
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     permissions:
       actions: read
       contents: read
@@ -127,6 +134,7 @@ jobs:
     needs: dedupe
     if: ${{ !cancelled() && needs.dedupe.outputs.tested != 'true' }}
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     env:
       GITLEAKS_VERSION: "8.30.1"
     steps:
@@ -229,6 +237,22 @@ jobs:
           echo stray > templates/zz-planted-stray.local
           if node scripts/check-pack-allowlist.mjs; then echo "gate passed with a planted stray file"; exit 1; fi
           rm -f templates/zz-planted-stray.local
+      # The normative documents (#523): every rule in docs/rule-inventory.md is still where its row
+      # says, every hard rule carries its marker and names a gate literal that exists, and each
+      # document is within its line budget. Both checks are proved able to fail by unit tests
+      # (tools/lib/rule-inventory.test.js, tools/lib/doc-budget.test.js).
+      - name: Rule inventory and size budget (normative documents)
+        run: |
+          node scripts/check-rule-inventory.mjs
+          node scripts/check-doc-budget.mjs
+      # The skills install into any coding agent (#530), so no skill body may write one engine's
+      # slash command, tool call or model name (#531). The planted file proves the gate can fail.
+      - name: Skill bodies are engine-neutral
+        run: |
+          node scripts/check-engine-neutral.mjs
+          echo 'run /code-wrap' > skills/code-plan/zz-planted.md
+          if node scripts/check-engine-neutral.mjs 2>/dev/null; then echo "gate passed with a planted slash command"; exit 1; fi
+          rm -f skills/code-plan/zz-planted.md
       # The stamp heuristic decides whether a repo's file is "ours". A false positive there ends in
       # advice to overwrite that file, so it is the one piece of logic here with unit tests.
       #

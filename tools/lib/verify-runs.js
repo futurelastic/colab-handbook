@@ -26,6 +26,19 @@
  *   ship-ignore-workflows: [Deploy]     set these aside too, even when push-triggered (a deploy
  *                                       workflow that fires on a push to trunk). Wins over the gate
  *                                       list for a name in both.
+ *
+ * A LOST PUSH (#567). The forge can drop a trunk commit's `push` event (measured: a ship's push landed
+ * during a window of HTTP 500s and CI never started for that sha). Re-running is impossible (there is
+ * no run), and dispatching the same CI workflow at that sha produced a `workflow_dispatch` run the
+ * rule above set aside — so trunk stayed unmeasured until a human wrote an empty commit. Now: a
+ * `workflow_dispatch` run COUNTS when (a) its workflow's own definition at that sha is triggered by a
+ * branch push or a pull request — i.e. it is the workflow that verifies the code, not a release lane
+ * that merely accepts a manual trigger — and (b) no push / pull-request run of that same workflow is
+ * at the sha. (b) keeps the rescue narrow: where the push run exists, it is the verdict, as before.
+ * The caller supplies (a) as `policy.dispatchVerifies(sha) → string[] | null` (the workflow names, read
+ * from the tree at that sha — this module does no I/O); null / absent / unreadable → nothing is
+ * rescued, the run stays set aside (fail closed). With `ship-gate-workflows` declared this rescue is
+ * moot: the gate list already counts its workflows whatever their trigger.
  */
 
 const VERIFYING_EVENTS = Object.freeze(['push', 'pull_request', 'pull_request_target', 'merge_group']);
@@ -77,17 +90,117 @@ function setAsideReason(row, policy) {
   return VERIFYING_EVENTS.includes(ev) ? null : `event: ${ev}`;
 }
 
-/** Split rows into `{ counted, setAside }`; each set-aside row carries `setAsideWhy`. Null in → null out. */
+/**
+ * Split rows into `{ counted, setAside, dispatchCounted }`; each set-aside row carries `setAsideWhy`,
+ * and `dispatchCounted` lists the `workflow_dispatch` rows the lost-push rescue (#567) moved into
+ * `counted`. Null in → null out.
+ */
 function splitVerifying(rows, policy) {
   if (!Array.isArray(rows)) return null;
   const counted = [];
-  const setAside = [];
+  let setAside = [];
   for (const r of rows) {
     const why = setAsideReason(r, policy);
     if (why) setAside.push({ ...r, setAsideWhy: why });
     else counted.push(r);
   }
-  return { counted, setAside };
+  const dispatchCounted = [];
+  const resolver = policy && typeof policy.dispatchVerifies === 'function' ? policy.dispatchVerifies : null;
+  const candidates = setAside.filter((x) => x.setAsideWhy === 'event: workflow_dispatch' && x.workflowName
+    && !counted.some((c) => c.workflowName === x.workflowName));
+  if (resolver && candidates.length) {
+    const byShas = new Map();
+    const namesAt = (sha) => {
+      if (!byShas.has(sha)) {
+        let v = null;
+        try { v = resolver(sha); } catch (_) { v = null; }
+        byShas.set(sha, Array.isArray(v) ? v : null);
+      }
+      return byShas.get(sha);
+    };
+    const keep = [];
+    for (const x of setAside) {
+      const names = candidates.includes(x) && x.headSha ? namesAt(x.headSha) : null;
+      if (names && names.includes(x.workflowName)) {
+        const { setAsideWhy, ...row } = x;
+        counted.push(row);
+        dispatchCounted.push(row);
+      } else keep.push(x);
+    }
+    setAside = keep;
+  }
+  return { counted, setAside, dispatchCounted };
+}
+
+/** Strip a trailing ` # comment` and matching quotes from a one-line YAML scalar. */
+function yamlScalar(raw) {
+  let v = String(raw).replace(/\s+#.*$/, '').trim();
+  if (v.length > 1 && ((v[0] === '"' && v.endsWith('"')) || (v[0] === "'" && v.endsWith("'")))) v = v.slice(1, -1);
+  return v;
+}
+
+const BRANCH_TRIGGERS = Object.freeze(['push', 'pull_request', 'pull_request_target', 'merge_group']);
+
+/**
+ * What one workflow file says about itself (#567): `{ name, verifiesBranches }`, or null when the text
+ * has no top-level `on:` at all. `name` is the top-level `name:` (null when absent — GitHub then names
+ * the workflow by its path, which the caller knows). `verifiesBranches` is true when the triggers
+ * include a pull request, or a push that is not tags-only (`push: { tags: [...] }` with no
+ * `branches`/`branches-ignore` is a release lane, never a code verifier). A deliberately small reader
+ * of the three `on:` shapes (scalar, flow list, block map / block list) — not a YAML parser.
+ */
+function workflowTriggers(text) {
+  const lines = String(text || '').split(/\r?\n/);
+  let name = null;
+  let onIdx = -1;
+  let onInline = null;
+  for (let i = 0; i < lines.length; i++) {
+    const l = lines[i];
+    let m = /^name:\s*(.*)$/.exec(l);
+    if (m && name === null) { name = yamlScalar(m[1]) || null; continue; }
+    m = /^(?:on|"on"|'on'|true):\s*(.*)$/.exec(l);
+    if (m && onIdx < 0) { onIdx = i; onInline = yamlScalar(m[1]); }
+  }
+  if (onIdx < 0) return null;
+  const events = new Map(); // event -> its child lines (block map form only)
+  if (onInline) {
+    const list = onInline.startsWith('[') ? onInline.replace(/^\[|\]$/g, '').split(',') : [onInline];
+    for (const e of list) { const v = yamlScalar(e); if (v) events.set(v, []); }
+  } else {
+    let evIndent = null;
+    let cur = null;
+    for (let i = onIdx + 1; i < lines.length; i++) {
+      const l = lines[i];
+      if (!l.trim() || /^\s*#/.test(l)) continue;
+      const indent = l.length - l.trimStart().length;
+      if (indent === 0) break;
+      if (evIndent === null) evIndent = indent;
+      if (indent < evIndent) break;
+      if (indent === evIndent) {
+        const t = l.trim();
+        const m = /^-\s*(.+)$/.exec(t) || /^([A-Za-z_]+)\s*:/.exec(t);
+        cur = m ? yamlScalar(m[1].replace(/:.*$/, '')) : null;
+        if (cur) events.set(cur, []);
+      } else if (cur) events.get(cur).push(l.trim());
+    }
+  }
+  let verifies = false;
+  for (const [ev, body] of events) {
+    if (!BRANCH_TRIGGERS.includes(ev)) continue;
+    if (ev !== 'push') { verifies = true; break; }
+    const keys = body.map((t) => (/^([A-Za-z_-]+)\s*:/.exec(t) || [])[1]).filter(Boolean);
+    const tagsOnly = (keys.includes('tags') || keys.includes('tags-ignore')) && !keys.includes('branches') && !keys.includes('branches-ignore');
+    if (!tagsOnly) { verifies = true; break; }
+  }
+  return { name, verifiesBranches: verifies };
+}
+
+/** The compact verdict-detail note for rows the lost-push rescue counted — '' when none. */
+function dispatchCountedNote(rows) {
+  const list = Array.isArray(rows) ? rows : [];
+  if (!list.length) return '';
+  const names = list.map((x) => `${x.workflowName || 'unnamed'}${x.databaseId ? ` (run ${x.databaseId})` : ''}`);
+  return ` — counted ${list.length} workflow_dispatch run${list.length === 1 ? '' : 's'} of a push-verifying workflow with no push run at this sha (lost push event, #567): ${names.join(', ')}`;
 }
 
 /**
@@ -101,4 +214,4 @@ function setAsideNote(rows) {
   return ` — set aside ${list.length} run${list.length === 1 ? '' : 's'} that do${list.length === 1 ? 'es' : ''} not verify the code (post-CI release/deploy lane, #503): ${names.join(', ')}`;
 }
 
-module.exports = { VERIFYING_EVENTS, GATE_KEY, IGNORE_KEY, parsePolicy, setAsideReason, splitVerifying, setAsideNote };
+module.exports = { VERIFYING_EVENTS, GATE_KEY, IGNORE_KEY, parsePolicy, setAsideReason, splitVerifying, setAsideNote, workflowTriggers, dispatchCountedNote };

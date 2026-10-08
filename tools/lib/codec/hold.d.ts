@@ -14,13 +14,20 @@ export function parseQualifiedIssueRef(arg: unknown): { slug: string; number: nu
 
 export const HOLD_RE: RegExp;
 export const BECAUSE_RE: RegExp;
+export type HoldShape = 'ask' | 'task' | 'wait';
+export const HOLD_SHAPES: ReadonlyArray<HoldShape>;
 export interface DecodedHold {
   label: string;
   owner: string;
+  /** The declared `shape:` as written (#569) — present only when the line carries one. */
+  shape?: string;
   /** The `wake:` field as written — `parseWakeLine` decides whether it names a wake. */
   wake: string;
   /** The `Because:` line's text, or null when the comment is the `Hold:` line alone. */
   because: string | null;
 }
-export function encodeHold(h?: { label: string; owner: string; wake: string | string[]; because?: string | null }): string;
+export function encodeHold(h?: { label: string; owner: string; shape?: HoldShape | null; wake: string | string[]; because?: string | null }): string;
 export function decodeHold(body: string | null | undefined): DecodedHold | null;
+/** Declared shape when in the closed set, else inferred from the wake (`ruling` → ask, else wait). */
+export function holdShape(decoded: Partial<DecodedHold> | null | undefined):
+  { shape: HoldShape; declared: boolean; invalid: string | null };

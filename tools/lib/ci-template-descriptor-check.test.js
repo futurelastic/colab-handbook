@@ -122,3 +122,164 @@ test('the cap the step enforces is the cap ship-batch.js declares', () => {
   const listed = arm[1].split('|').map(Number);
   assert.deepStrictEqual(listed, Array.from({ length: shipBatch.MAX_BATCH }, (_, i) => i + 1));
 });
+
+// #555: `ship-batch-wait:` — the same step, held to parseShipBatchWait the same way.
+// [ project.yml line (null = no ship-batch-wait line), the value a YAML reader hands the parser ]
+const WAIT_CASES = [
+  [null, undefined],
+  ['ship-batch-wait:', null],
+  ['ship-batch-wait: ~', null],
+  ['ship-batch-wait: null', null],
+  ['ship-batch-wait: 90s', '90s'],
+  ['ship-batch-wait: 6m', '6m'],
+  ['ship-batch-wait: 6m   # from colab batch-stats', '6m'],
+  ['ship-batch-wait: "6m"', '6m'],
+  ["ship-batch-wait: '1h'", '1h'],
+  ['ship-batch-wait: 0m', '0m'],
+  ['ship-batch-wait: 48h', '48h'],
+  ['ship-batch-wait: 6', 6],
+  ['ship-batch-wait: 6min', '6min'],
+  ['ship-batch-wait: 1.5m', '1.5m'],
+  ['ship-batch-wait: -1m', '-1m'],
+  ['ship-batch-wait: soon', 'soon'],
+  ['ship-batch-wait: true', true],
+];
+
+test('#555: the step fails exactly the ship-batch-wait values colab ship and the audit refuse', () => {
+  const script = scripts[TEMPLATES[0]];
+  for (const [line, value] of WAIT_CASES) {
+    const doc = value === undefined ? {} : { 'ship-batch-wait': value };
+    const want = shipBatch.parseShipBatchWait(doc).valid;
+    const r = runCase(script, line === null ? 'ship-batch: 3' : `ship-batch: 3\n${line}`);
+    const label = line === null ? '(no ship-batch-wait line)' : line;
+    assert.strictEqual(r.status === 0, want, `${label}: step exit ${r.status}, parseShipBatchWait valid=${want}\n${r.stdout}${r.stderr}`);
+    if (!want) assert.match(r.stdout, /::error file=\.github\/project\.yml::ship-batch-wait is /, `${label}: no annotation`);
+  }
+});
+
+test('#555: a ship-batch-wait line never reads as the ship-batch value', () => {
+  // `^ship-batch[[:space:]]*:` must not match `ship-batch-wait:` — else a wait of 6m reads as a bad cap.
+  const r = runCase(scripts[TEMPLATES[0]], 'ship-batch-wait: 6m');
+  assert.strictEqual(r.status, 0, r.stdout + r.stderr);
+  assert.match(r.stdout, /ship-batch: absent — ok/);
+  assert.match(r.stdout, /ship-batch-wait: 6m — ok/);
+});
+
+// #560: `thresholds:` — the same step, held to tools/lib/thresholds.js. The value handed to the parser
+// is the RAW scalar, as the audit's reader hands it (a digit string) — the stricter of the two readers,
+// so `4.0` is refused by both gates even though the CLI's YAML reader would read it as 4.
+const thresholds = require('./thresholds.js');
+
+// [ the indented lines under `thresholds:` (or the inline value after it), the map the parser gets ]
+const THRESHOLD_CASES = [
+  ['', null],
+  [' ~', null],
+  ['\n  hot-file-count: 4', { 'hot-file-count': '4' }],
+  ['\n  hot-file-count: 4   # four waiting', { 'hot-file-count': '4' }],
+  ['\n  hot-file-count: "4"', { 'hot-file-count': '4' }],
+  ["\n  hold-stale-days: '45'\n  smoke-minutes: 5", { 'hold-stale-days': '45', 'smoke-minutes': '5' }],
+  ['\n  # a comment\n\n  doc-budget-slack: 0', { 'doc-budget-slack': '0' }],
+  ['\n  claude-md-line-floor-bytes: 0', { 'claude-md-line-floor-bytes': '0' }],
+  ['\n  hot-file-count:', { 'hot-file-count': null }],
+  ['\n  hot-file-count: 1', { 'hot-file-count': '1' }],
+  ['\n  claude-md-line-multiple: 1', { 'claude-md-line-multiple': '1' }],
+  ['\n  hold-stale-days: 0', { 'hold-stale-days': '0' }],
+  ['\n  smoke-minutes: 2.5', { 'smoke-minutes': '2.5' }],
+  ['\n  smoke-minutes: 4.0', { 'smoke-minutes': '4.0' }],
+  ['\n  claude-md-kb: 40KB', { 'claude-md-kb': '40KB' }],
+  ['\n  transitional-days: -3', { 'transitional-days': '-3' }],
+  ['\n  transitional-days: 1234567890', { 'transitional-days': '1234567890' }],
+  ['\n  hot-files: 4', { 'hot-files': '4' }],
+  ['\n  hot-file-count: 4\n  hot-files: 4', { 'hot-file-count': '4', 'hot-files': '4' }],
+  [' 5', '5'],
+  [' high', 'high'],
+  // #556: no-default batch keys, percents bounded at 100
+  ['\n  batch-overlap-pct: 30', { 'batch-overlap-pct': '30' }],
+  ['\n  batch-first-green-pct-min: 0', { 'batch-first-green-pct-min': '0' }],
+  ['\n  batch-eviction-pct-max: 100', { 'batch-eviction-pct-max': '100' }],
+  ['\n  batch-eviction-pct-max: 101', { 'batch-eviction-pct-max': '101' }],
+  ['\n  batch-min-samples: 0', { 'batch-min-samples': '0' }],
+  ['\n  batch-min-samples: 5', { 'batch-min-samples': '5' }],
+];
+
+test('#560: the step fails exactly the thresholds entries the parser refuses', () => {
+  const script = scripts[TEMPLATES[0]];
+  for (const [tail, value] of THRESHOLD_CASES) {
+    const want = thresholds.parseThresholds({ thresholds: value }).problems.length === 0;
+    const r = runCase(script, `thresholds:${tail}`);
+    assert.strictEqual(r.status === 0, want, `thresholds:${tail}: step exit ${r.status}, parser valid=${want}\n${r.stdout}${r.stderr}`);
+    if (!want) assert.match(r.stdout, /::error file=\.github\/project\.yml::thresholds/, `thresholds:${tail}: no annotation`);
+  }
+});
+
+test('#560: a thresholds block ends at the next top-level key', () => {
+  // `stack: node` follows the block in runCase's descriptor; it must not read as a threshold.
+  const r = runCase(scripts[TEMPLATES[0]], 'thresholds:\n  hot-file-count: 4');
+  assert.strictEqual(r.status, 0, r.stdout + r.stderr);
+  assert.match(r.stdout, /thresholds\.hot-file-count: 4 — ok/);
+  assert.doesNotMatch(r.stdout, /stack/);
+});
+
+test('#560/#556: the names, floors and ceilings the step lists are thresholds.js SPEC', () => {
+  for (const name of TEMPLATES) {
+    const script = scripts[name];
+    const listed = {};
+    for (const m of script.matchAll(/^\s*([a-z|-]+)\) min=(\d+)(?: max=(\d+))? ;;$/gm)) {
+      for (const k of m[1].split('|')) listed[k] = [Number(m[2]), m[3] === undefined ? thresholds.MAX_VALUE : Number(m[3])];
+    }
+    const spec = Object.fromEntries(Object.entries(thresholds.SPEC).map(([k, s]) => [k, [s.min, s.max === undefined ? thresholds.MAX_VALUE : s.max]]));
+    assert.deepStrictEqual(listed, spec, name);
+  }
+});
+
+// #564: `ci-wait-factor:` — the same step, held to tools/lib/ci-profile.js parseFactor. The value handed
+// to the parser is the scalar as the audit's reader hands it (quotes stripped, a string). The CLI's
+// tools/lib/yaml.js gives the same verdict on every case below (it too reads `1e3` as a string).
+const ciProfile = require('./ci-profile.js');
+
+// [ project.yml line (null = no ci-wait-factor line), the value the audit's reader hands parseFactor ]
+const FACTOR_CASES = [
+  [null, undefined],
+  ['ci-wait-factor:', null],
+  ['ci-wait-factor: ~', null],
+  ['ci-wait-factor: null', null],
+  ['ci-wait-factor: 1', '1'],
+  ['ci-wait-factor: 2', '2'],
+  ['ci-wait-factor: 1.5', '1.5'],
+  ['ci-wait-factor: 1.0', '1.0'],
+  ['ci-wait-factor: 10   # a slow, flaky runner pool', '10'],
+  ['ci-wait-factor: "3"', '3'],
+  ["ci-wait-factor: '2.5'", '2.5'],
+  ['ci-wait-factor: 0', '0'],
+  ['ci-wait-factor: 0.5', '0.5'],
+  ['ci-wait-factor: 0.99', '0.99'],
+  ['ci-wait-factor: -2', '-2'],
+  ['ci-wait-factor: .5', '.5'],
+  ['ci-wait-factor: 1.', '1.'],
+  ['ci-wait-factor: 1e3', '1e3'],
+  ['ci-wait-factor: 2x', '2x'],
+  ['ci-wait-factor: double', 'double'],
+  ['ci-wait-factor: true', true],
+];
+
+test('#564: the step fails exactly the ci-wait-factor values parseFactor refuses', () => {
+  for (const file of TEMPLATES) {
+    const script = scripts[file];
+    for (const [line, value] of FACTOR_CASES) {
+      const doc = value === undefined ? {} : { [ciProfile.FACTOR_KEY]: value };
+      const want = ciProfile.parseFactor(doc).valid;
+      const r = runCase(script, line);
+      const label = `${file} ${line === null ? '(no ci-wait-factor line)' : line}`;
+      assert.strictEqual(r.status === 0, want, `${label}: step exit ${r.status}, parseFactor valid=${want}\n${r.stdout}${r.stderr}`);
+      if (!want) assert.match(r.stdout, /::error file=\.github\/project\.yml::ci-wait-factor is /, `${label}: no annotation`);
+    }
+  }
+});
+
+test('#564: the step reads the key parseFactor reads', () => {
+  // A renamed FACTOR_KEY must not leave the step checking a key nothing reads any more.
+  assert.match(scripts[TEMPLATES[0]], new RegExp(`field ${ciProfile.FACTOR_KEY}\\)`));
+  const r = runCase(scripts[TEMPLATES[0]], `${ciProfile.FACTOR_KEY}: 3`);
+  assert.strictEqual(r.status, 0, r.stdout + r.stderr);
+  assert.match(r.stdout, /ci-wait-factor: 3 — ok/);
+});

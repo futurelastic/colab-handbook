@@ -82,6 +82,22 @@
       }
     },
     {
+      "wire": "priority:now",
+      "decoded": {
+        "kind": "convention",
+        "value": "priority:now",
+        "known": true
+      }
+    },
+    {
+      "wire": "priority:high",
+      "decoded": {
+        "kind": "convention",
+        "value": "priority:high",
+        "known": true
+      }
+    },
+    {
       "wire": "release-hold",
       "decoded": {
         "kind": "convention",
@@ -640,6 +656,39 @@
         "because": null
       },
       "note": "synthetic: a Hold line with no Because line"
+    },
+    {
+      "wire": "Hold: blocked:needs-maintainer — owner: maintainer — shape: task — wake: ruling\nBecause: run the signing script on the release machine; only the maintainer holds the key.",
+      "decoded": {
+        "label": "blocked:needs-maintainer",
+        "owner": "maintainer",
+        "shape": "task",
+        "wake": "ruling",
+        "because": "run the signing script on the release machine; only the maintainer holds the key."
+      },
+      "note": "synthetic (#569): a chore declared as a task — without shape: its `ruling` wake would read as a choice"
+    },
+    {
+      "wire": "Hold: deferred:external-party — owner: upstream maintainers — shape: wait — wake: issueClosed:OWNER/REPO#22, review-by:2026-11-02\nBecause: the design mirrors one still open upstream.",
+      "decoded": {
+        "label": "deferred:external-party",
+        "owner": "upstream maintainers",
+        "shape": "wait",
+        "wake": "issueClosed:OWNER/REPO#22, review-by:2026-11-02",
+        "because": "the design mirrors one still open upstream."
+      },
+      "note": "synthetic (#569): a declared wait"
+    },
+    {
+      "wire": "Hold: needs-decision — owner: @maintainer — shape: ask — wake: ruling\nBecause: pick the import model; the options block in the body recommends A.",
+      "decoded": {
+        "label": "needs-decision",
+        "owner": "@maintainer",
+        "shape": "ask",
+        "wake": "ruling",
+        "because": "pick the import model; the options block in the body recommends A."
+      },
+      "note": "synthetic (#569): a declared ask — the choice itself lives in the issue's decision:options block"
     }
   ],
   "notHolds": [

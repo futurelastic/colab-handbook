@@ -49,6 +49,8 @@ const baseCiVerdict = require('./lib/base-ci-verdict');
 const treeGreen = require('./lib/tree-green');
 const verifyRuns = require('./lib/verify-runs');
 const ciWait = require('./lib/ci-wait'); // #495
+const ciProfile = require('./lib/ci-profile'); // #559
+const thresholdsLib = require('./lib/thresholds'); // #560
 const staleBase = require('./lib/stale-base');
 const dirtyOwner = require('./lib/dirty-owner');
 const scratchDirs = require('./lib/scratch-dirs');
@@ -63,8 +65,10 @@ const codec = require('./lib/codec');
 const machine = require('./lib/machine');
 const targetSync = require('./lib/ship-target-sync');
 const shipBatch = require('./lib/ship-batch');
+const batchStats = require('./lib/batch-stats');
 const conflictMarkers = require('./lib/conflict-markers');
 const docsOnly = require('./lib/docs-only');
+const configSet = require('./lib/config-set'); // #561
 const cureDiff = require('./lib/cure-diff');
 const codeowners = require('./lib/codeowners');
 const releasePolicy = require('./lib/release-policy');
@@ -77,6 +81,7 @@ const shipRoles = require('./lib/ship-roles'); // #372
 const refsBrake = require('./lib/refs-brake'); // #385
 const localAdopt = require('./lib/local-adopt'); // #393
 const ownerBranch = require('./lib/owner-branch'); // #394
+const humanDoor = require('./lib/ship-human-door'); // #525
 const {
   HOST, UserError, normIssueNum, issueTag, claimKey, today, nowISO, hoursSince, humanAge,
   parseArgs, table, shortRepo,
@@ -228,7 +233,12 @@ function isGhUsable(repoAbs) {
  */
 function ghUnusableWhy(repoAbs) {
   const s = git.ghState();
-  if (!s.ok) return s.reason === 'missing' ? 'gh is not installed' : 'gh has no working credential — `gh api user` fails';
+  if (!s.ok && s.reason === 'missing') return 'gh is not installed';
+  if (!s.ok && s.reason === 'rate-limited') { // #516
+    const until = s.resetAt ? ` until ${new Date(s.resetAt).toISOString().replace(/\.\d{3}Z$/, 'Z')}` : '';
+    return `gh credential is rate-limited${until} — not a credential problem: wait for the reset, or switch account`;
+  }
+  if (!s.ok) return 'gh has no working credential — `gh api user` fails';
   const rp = git.remoteProblem(git.remoteInfo(repoAbs)); // #301: ambiguous remotes / a broken colab.remote
   if (rp) return rp;
   if (!git.remoteUrl(repoAbs)) return 'no origin remote';
@@ -277,12 +287,40 @@ function commentHost(repoAbs) {
 function myMachineId() { return machine.localMachine().id || null; }
 
 /**
- * Resolve the Claude session URL for this invocation: --session flag > COLAB_SESSION env >
- * '' (absent, never an error). Free-form — typically a session URL.
+ * Resolve the session id for this invocation: --session flag > COLAB_SESSION env >
+ * a DERIVED person identity (#528) > '' (absent, never an error). Free-form — any stable id for
+ * the session (a URL, a uuid…).
+ *
+ * The derived step exists for a person at a plain terminal, who has no session runtime and so no
+ * id to pass: without it their first trunk `colab claim` refused (#242's gate), `worktree new`
+ * warned three lines every time, and ship evidence read `implemented by: unknown`. It applies only
+ * when `COLAB_SESSION` is unset and the shell is not an agent's (`claimIdentity.
+ * shouldDerivePersonSession` has why) — an explicit flag or env value always wins.
  */
 function resolveSession(opts) {
-  const s = opts.session || process.env.COLAB_SESSION || '';
-  return String(s).trim();
+  const s = String(opts.session || process.env.COLAB_SESSION || '').trim();
+  return s || derivedPersonSession();
+}
+
+/**
+ * The derived person identity for this invocation, or ''. Memoized — one `git config` spawn, and
+ * the "derived" note is printed once per invocation (stderr, so `--json` stdout stays clean).
+ */
+let derivedSessionCache = null;
+function derivedPersonSession() {
+  if (derivedSessionCache !== null) return derivedSessionCache;
+  derivedSessionCache = '';
+  if (!claimIdentity.shouldDerivePersonSession(process.env)) return derivedSessionCache;
+  const r = spawnSync('git', ['config', '--get', 'user.email'], { encoding: 'utf8' });
+  const email = r.status === 0 ? String(r.stdout || '').trim() : '';
+  let user = process.env.USER || '';
+  if (!user) { try { user = os.userInfo().username; } catch { user = ''; } }
+  derivedSessionCache = claimIdentity.derivePersonSession({ email, user, hostToken: machine.hostToken(HOST) });
+  if (derivedSessionCache) {
+    process.stderr.write(`· session: ${derivedSessionCache} (derived — no --session or COLAB_SESSION given; ` +
+      `either one overrides it)\n`);
+  }
+  return derivedSessionCache;
 }
 
 /**
@@ -357,7 +395,7 @@ function warnWeakIdentity(session, sessionName, what, ref) {
     warn(`no --session or --session-name given — this ${what} will carry NO holder identity.`);
     warn(`  A live hold's refusal can then only point at its process id, and this acquire will`);
     warn(`  not be recognized as your own on a later re-acquire without one.`);
-    if (ref) warn(`  Repair once you have an identity:  colab worktree tag ${ref} --session <url>`);
+    if (ref) warn(`  Repair once you have an identity:  colab worktree tag ${ref} --session <id>`);
     return;
   }
   // #326: a planner intent id is a deliberate, documented non-URL value — not a mistyped name.
@@ -368,16 +406,16 @@ function warnWeakIdentity(session, sessionName, what, ref) {
     // refused the caller's own hold when they later presented their REAL url. Warn, never
     // refuse: `requirePlaceIdentity` promises `<url-or-any-stable-id>`, so a bare stable id is
     // a blessed value and rejecting it would break that contract and every adopter using one.
-    warn(`--session "${session}" does not look like a session URL or a session_… id — this ${what}`);
+    warn(`--session "${session}" does not look like a session id (a URL, a uuid, a session_… token) — this ${what}`);
     warn(`  will record it verbatim. That is allowed (any stable id works), but if this is your`);
     warn(`  session NAME you probably meant --session-name: a later 'colab place release'`);
-    warn(`  presenting your real URL will NOT match this value and will be refused (#306).`);
+    warn(`  presenting your real id will NOT match this value and will be refused (#306).`);
     return;
   }
   if (!sessionName || session) return;
-  warn(`session name "${sessionName}" recorded with NO session URL — this ${what} will read as owned`);
-  warn(`  but cannot be traced to a session. The name is display text; the URL is the join key.`);
-  if (ref) warn(`  Repair once you have it:  colab worktree tag ${ref} --session <url>`);
+  warn(`session name "${sessionName}" recorded with NO session id — this ${what} will read as owned`);
+  warn(`  but cannot be traced to a session. The name is display text; the id is the join key.`);
+  if (ref) warn(`  Repair once you have it:  colab worktree tag ${ref} --session <id>`);
 }
 
 /**
@@ -436,8 +474,8 @@ function identityCell(sessionName, session) {
 /** Print the `(!)` legend under a table, only when at least one row carries a half-identity. */
 function identityLegend(entries) {
   if (!entries.some((e) => e && e.sessionName && !e.session)) return;
-  print('  (!) session NAME with no session URL — reads as owned, links to nothing.');
-  print('      Repair:  colab worktree tag <worktree> --session <url>');
+  print('  (!) session NAME with no session id — reads as owned, links to nothing.');
+  print('      Repair:  colab worktree tag <worktree> --session <id>');
 }
 
 /**
@@ -488,8 +526,9 @@ function localClaimConflicts(st, repoAbs, nums, wtName) {
 
 /**
  * #325 — the claim record every machine can read, whatever the tracker: a branch on the remote whose
- * name carries the issue number (CONVENTIONS.md §4 puts the numbers in the trailing run; `code-start`
- * pushes the branch the moment it is cut). Asked of the remote directly (`ls-remote`, no fetch), so a
+ * name carries the issue number (CONVENTIONS.md §4 puts the numbers in the trailing run), or — since
+ * #550 — the claim ref `refs/claims/<branch>` that `colab worktree new` pushes the moment it cuts
+ * (a ref no CI trigger watches; the branch itself follows at code-wrap). Asked of the remote directly (`ls-remote`, no fetch), so a
  * clone that has never fetched sees exactly what a fresh one would.
  *
  * `mode`:
@@ -524,7 +563,7 @@ function remoteClaimConflicts(st, repoAbs, nums) {
   for (const h of heads.heads) {
     const carried = branchName.claimIssueNumbers(h.branch, scope).filter((n) => want.has(n));
     if (!carried.length || ours(h.branch)) continue;
-    for (const num of carried) conflicts.push({ num, remote, branch: h.branch, sha: h.sha });
+    for (const num of carried) conflicts.push({ num, remote, branch: h.branch, sha: h.sha, claimRef: !!h.claimRef });
   }
   return { mode: 'ok', remote, conflicts };
 }
@@ -633,13 +672,18 @@ function ghClaimConflicts(repoAbs, nums, myLogin, myHost, mySession, comps, myMa
 function printRefusal(localConf, ghConf, remoteConf = []) {
   process.stderr.write('✗ Refusing — one or more issues are already claimed:\n');
   for (const c of remoteConf) {
-    process.stderr.write(`  #${c.num} remote: branch ${c.remote}/${c.branch} @ ${c.sha} carries it, and it is not this machine's (#325)\n`);
+    process.stderr.write(c.claimRef
+      ? `  #${c.num} remote: claim ref ${c.remote} ${git.claimRef(c.branch)} @ ${c.sha} carries it (branch not pushed yet), and it is not this machine's (#325, #550)\n`
+      : `  #${c.num} remote: branch ${c.remote}/${c.branch} @ ${c.sha} carries it, and it is not this machine's (#325)\n`);
   }
   if (remoteConf.length) {
     const c = remoteConf[0];
-    process.stderr.write('  That branch IS the claim — continue it rather than open a second one:\n');
-    process.stderr.write(`    git fetch ${c.remote} ${c.branch} && git worktree add <path> ${c.branch}\n`);
+    process.stderr.write(`  That ${c.claimRef ? 'claim ref' : 'branch'} IS the claim — continue it rather than open a second one:\n`);
+    process.stderr.write(c.claimRef
+      ? `    git fetch ${c.remote} ${git.claimRef(c.branch)}:refs/heads/${c.branch} && git worktree add <path> ${c.branch}\n`
+      : `    git fetch ${c.remote} ${c.branch} && git worktree add <path> ${c.branch}\n`);
     process.stderr.write(`    colab claim ${c.num} --worktree <name> --branch ${c.branch} --session <id> --force\n`);
+    if (c.claimRef) process.stderr.write(`  A claim ref whose session is gone is stale — delete it: git push ${c.remote} --delete ${git.claimRef(c.branch)}\n`);
   }
   for (const c of localConf) {
     const h = c.holder;
@@ -676,7 +720,7 @@ function halfClaimText(c) {
 /** Announce exactly what --force overrides (a takeover is visible, never silent). */
 function printTakeover(localConf, ghConf, remoteConf = []) {
   for (const c of remoteConf) {
-    print(`  --force: taking over #${c.num} although branch ${c.remote}/${c.branch} @ ${c.sha} carries it (not this machine's)`);
+    print(`  --force: taking over #${c.num} although ${c.claimRef ? `claim ref ${c.remote} ${git.claimRef(c.branch)}` : `branch ${c.remote}/${c.branch}`} @ ${c.sha} carries it (not this machine's)`);
   }
   for (const c of localConf) {
     const h = c.holder;
@@ -843,7 +887,8 @@ const HELP_CLAIM = `colab claim <issue> [<issue> ...] [options]
 
 Claim one or more GitHub issues so parallel sessions/agents don't collide.
 The claim RECORD every machine reads is a branch on the git remote carrying the issue number
-(\`colab worktree new\` pushes it the moment it is cut, #325). Also writes local state (fast path)
+(\`colab worktree new\` records it the moment it is cut as the claim ref refs/claims/<branch>,
+which no CI trigger watches — #325, #550). Also writes local state (fast path)
 and the tracker (the copy people read):
   gh issue edit N --add-assignee @me --add-label in-progress
 Remote unreachable → REFUSED (fail closed). Tracker unreachable → the claim stands and its tracker
@@ -885,7 +930,8 @@ Options:
   --branch <name>     branch these claims are worked on. Default: none (null) — a claim held on
                       the trunk checkout has no branch. Never the word "trunk": that is a role,
                       and a record holding it resolves to no ref (refused, exit 1)
-  --session <url>     Claude session URL recorded on the claim + comment (default: COLAB_SESSION env).
+  --session <id>      any stable id for this session (a URL, a uuid…), recorded on the claim + comment
+                      (default: COLAB_SESSION env).
                       MANDATORY when no --worktree is given (#242): a claim with no worktree takes
                       the trunk-checkout place-claim, and a blank session can never be recognized
                       as its own later re-acquire — refused (exit 1) before anything is read/written.
@@ -1809,7 +1855,8 @@ const HELP_RELEASE_FINALIZE = `colab release finalize [--repo <path>] [--auto | 
 Take the newest release CANDIDATE (a vX.Y.Z-rc.N tag made by \`colab release cut\`) one step further
 under CONVENTIONS.md §6's release rung, re-checking everything at the moment it runs. Every run:
 
-  1. fetches tags, picks the newest open candidate (never a hand-made or off-main one);
+  1. fetches tags, picks the newest open candidate — or the one --tag names (never a hand-made or
+     off-main one);
   2. finds — or, without --dry, opens — the version's tracking issue, "release: vX.Y.Z", whose body
      starts <!-- colab:release version=vX.Y.Z --> (one per version, never per candidate);
   3. measures, and ends in exactly one state:
@@ -1835,14 +1882,17 @@ under CONVENTIONS.md §6's release rung, re-checking everything at the moment it
 
 Conditions (--json checks[].condition; required:false means reported, not blocking, on this row):
   release-policy  candidate  tracking-issue  release-hold  regressions  test-period  trunk-green
-  ci-green  full-suite  schema-additive  switch-dependencies  final-grant  migration-grant  human
+  ci-green  full-suite  cut-run  schema-additive  switch-dependencies  final-grant  migration-grant  human
 
   regressions   blocked_by edges on the tracking issue: open -> refused; closed after the period
                 began -> needs-new-candidate. Record one with: colab blocked <tracking> --by <issue>
   test-period   from max(candidate tag date, tracking issue creation), release: test-period long
+  cut-run       the run that cut the candidate (in progress at the tag's date) concluded success — a
+                cancelled publish refuses; an earlier green run at the commit that cut nothing never
+                vouches for it (#566)
   trunk-green   every run since the period began on main — and on project.yml's trunk: when that is
                 another branch (trunk: dev, #437) — of the workflows that ran at the candidate,
-                none red — required only where the final is automatic
+                none red — required only where the final is automatic, or for an older --tag (#548)
 
   manifest-version  on-trunk  outranks-final — #424's pre-tag checks, required before any final:
                 the final equals every declared manifest version, its commit is on main (a shallow
@@ -1864,9 +1914,15 @@ Conditions (--json checks[].condition; required:false means reported, not blocki
                       never tags: it stops at candidate-ready and posts the one command, number
                       pre-filled. Never combines with --tag/--answered-by. testing / no-candidate /
                       already-final exit 0 (nothing to do yet is the ordinary output)
-  --tag <rc>          pin the candidate a human reviewed; refused unless it is the newest one
+  --tag <rc>          pin the candidate a human reviewed — the newest one, or any OLDER open candidate
+                      (#548). An older one is judged on its own clock exactly as --auto judges it: its
+                      own test period must have elapsed and trunk-green is read over its own window, on
+                      every row; release-hold and regressions as always. Newer candidates stay open
+                      for the next version — only versions below the final are closed as superseded
   --answered-by <n>   with COLAB_HUMAN=1 and --tag: the human bar for a final that is a human act.
-                      No field, flag or project.yml value lowers it, and it never shortens a test period
+                      No field, flag or project.yml value lowers it, and it never shortens a test period.
+                      Where the final is a human act the period is informational anyway, and
+                      release.test-period: 0d declares none at all (#549)
   --dry               measure and report; open, post, tag and close nothing
   --json              { repo, row, route, final, testPeriodDays, lastFinal, dry, auto, candidate, tracking,
                         periodStart, periodEndsAt, state, tagged, finalTag, checks, handoff,
@@ -1938,6 +1994,8 @@ function cmdReleaseFinalize(argv) {
   const newest = selection.kind === 'candidate' ? selection.candidate : null;
   // #423: on a route whose final is automatic, --auto judges every open candidate on its own clock.
   const walk = opts.auto && policy.effective.final === 'auto' && newest;
+  // #548: --tag naming an older open candidate — judged on its own clock, as the walk judges it.
+  const ownClock = walk || (selection.kind === 'candidate' && !!selection.older);
 
   // ---- the tracking records (one issue read for the whole run) ----
   const issues = readAllIssuesForSwitches(repoAbs);
@@ -1980,13 +2038,19 @@ function cmdReleaseFinalize(argv) {
     if (!trackings.has(cand.version)) trackings.set(cand.version, trackingFor(cand.version, { isCandidate: true }));
     const tracking = trackings.get(cand.version);
     const supersededHeld = records.filter((r) => r.state === 'OPEN' && r.held && r.version !== cand.version && !finals.has(r.version)).map((r) => r.number);
-    let rows;
+    let rows; let rawRows;
     const conditions = measureCandidateConditions(repoAbs, {
       sha: cand.sha,
       lastFinal: releaseTag.latestReleaseTag(repoAbs, { ref: cand.sha }),
       at: `${cand.tag}@${shortSha(cand.sha)}`,
-      readRuns: () => { rows = releaseCut.withoutOwnWorkflow(git.ghRunsAtCommit(repoAbs, cand.sha)); return rows; }, // #425
+      readRuns: () => { rawRows = git.ghRunsAtCommit(repoAbs, cand.sha); rows = releaseCut.withoutOwnWorkflow(rawRows); return rows; }, // #425
       issues,
+    });
+    // #566: only the run that CUT the candidate vouches for what it published — read from the rows
+    // BEFORE the #425 own-workflow filter (the release workflow is the cutter), minus this run itself.
+    const cutRun = releaseFinalize.cutRunVerdict(rawRows, {
+      tag: cand.tag, cutAt: cand.cutAt, ownRunId: process.env.GITHUB_ACTIONS === 'true' ? process.env.GITHUB_RUN_ID || null : null,
+      jobCount: (id) => git.ghRunJobCount(repoAbs, id),
     });
     const suiteWorkflows = [...new Set((rows || []).map((r) => r.workflowName || '(unnamed workflow)'))];
     const period = releaseFinalize.periodVerdict({ cutAt: cand.cutAt, trackingCreatedAt: tracking && tracking.createdAt, testPeriodDays: policy.effective.testPeriodDays, now });
@@ -1996,7 +2060,7 @@ function cmdReleaseFinalize(argv) {
       return { branch, read: raw ? { ...raw, runs: releaseCut.withoutOwnWorkflow(raw.runs) } : null }; // #425
     }));
     const trunk = releaseFinalize.trunkGreenVerdict(since ? since.runs : null, {
-      periodStart: period.start, periodEnd: walk ? period.endsAt : null, suiteWorkflows, truncated: !!(since && since.truncated), branches: windowBranches,
+      periodStart: period.start, periodEnd: ownClock ? period.endsAt : null, suiteWorkflows, truncated: !!(since && since.truncated), branches: windowBranches,
     });
     const regressions = releaseFinalize.regressionVerdict(tracking && tracking.number ? readRegressionEdges(repoAbs, tracking.number) : [], { periodStart: period.start });
     const { manifests, ancestry } = measurePreTag(repoAbs, cand.sha, `${remote}/main`); // #424
@@ -2011,7 +2075,7 @@ function cmdReleaseFinalize(argv) {
     }
     const verdict = releaseFinalize.decide({
       policy, selection: sel, tracking, supersededHeld, period, trunk, regressions,
-      ci: conditions.ci, suite: conditions.suite, schema: conditions.schema, switches: conditions.switches,
+      ci: conditions.ci, suite: conditions.suite, cutRun, schema: conditions.schema, switches: conditions.switches,
       manifests, ancestry, tags: tagNames, finalGrant, migrations,
       human: { bar: humanBar, answeredBy: opts.answeredBy || null },
     });
@@ -2075,7 +2139,7 @@ function cmdReleaseFinalize(argv) {
   const announceRelease = (version, sha) => announceCarried(repoAbs, { tagNames, exclude: records.map((r) => r.number), version, sha });
   if (!opts.dry) {
     if (verdict.state === 'finalized') {
-      const actor = humanBar && !verdict.grant ? `${opts.answeredBy} (human bar: COLAB_HUMAN=1)` : `automatic — clean test period (CONVENTIONS.md §6)${verdict.grant ? `, by the operator's grant (decision #${verdict.grant.issue})` : ''}${walk ? ', newest candidate clean on its own clock (--auto)' : ''}`;
+      const actor = humanBar && !verdict.grant ? `${opts.answeredBy} (human bar: COLAB_HUMAN=1)` : `automatic — clean test period (CONVENTIONS.md §6)${verdict.grant ? `, by the operator's grant (decision #${verdict.grant.issue})` : ''}${walk ? ', newest candidate clean on its own clock (--auto)' : ''}${selection.older ? `, an older candidate clean on its own clock (--tag; newest open: ${selection.newest})` : ''}`;
       const message = releaseFinalize.tagMessage(verdict, { candidate: cand, period, actor });
       const t = git.git(['tag', '-a', '--cleanup=verbatim', cand.version, cand.sha, '-m', message], repoAbs);
       if (!t.ok) throw new UserError(`git tag ${cand.version} failed: ${(t.stderr || '').split('\n')[0]}`);
@@ -2097,7 +2161,9 @@ function cmdReleaseFinalize(argv) {
     const tNew = version0 ? trackings.get(version0) : null;
     if (newest && tNew && tNew.number) {
       const pNew = releaseFinalize.periodVerdict({ cutAt: newest.cutAt, trackingCreatedAt: tNew.createdAt, testPeriodDays: policy.effective.testPeriodDays, now });
-      comment(tNew.number, { candidate: newest.tag }, walk
+      comment(tNew.number, { candidate: newest.tag }, pNew.days === 0
+        ? `Candidate **${newest.tag}** (\`${shortSha(newest.sha)}\`) picked up — no test period on this repo (\`release.test-period: 0d\`, #549): the human's finalize is the test.`
+        : ownClock
         ? `Candidate **${newest.tag}** (\`${shortSha(newest.sha)}\`) picked up — its own test period runs ${pNew.start} → ${pNew.endsAt}. A newer candidate does not restart an older one's clock: the newest candidate clean for its own period is finalized (\`--auto\`).`
         : `Candidate **${newest.tag}** (\`${shortSha(newest.sha)}\`) picked up — its test period runs ${pNew.start} → ${pNew.endsAt}. A new candidate restarts it.`);
     }
@@ -2114,12 +2180,14 @@ function cmdReleaseFinalize(argv) {
     // #426: every issue the final carries hears which version has it — on the run that tags, and on
     // the already-final resume (a run that died between the tag push and these comments finishes them).
     if (tagged) announced = announceRelease(cand.version, cand.sha);
-    // Superseded records. Without --auto: every other open, unheld, non-final version (the newest one
-    // is the only one ever finalized). With --auto: only versions BELOW one just tagged — a newer
-    // version's candidates are still on their own clocks.
-    if (cand && (!walk || tagged)) {
+    // Superseded records: only versions BELOW one just tagged, on every path (#548). Before #548 a run
+    // without --auto closed every other open version at once, because only the newest candidate could
+    // ever be finalized; now `--tag` may finalize any open candidate, so an older version's record has
+    // to stay open until a final above it exists — closing it earlier refuses that --tag ("closed but
+    // not final"). A newer version's candidates are still on their own clocks either way.
+    if (cand && tagged) {
       for (const r of records.filter((x) => x.state === 'OPEN' && !x.held && x.version !== cand.version && !finals.has(x.version)
-        && (!walk || releaseFinalize.compareVersions(x.version, cand.version) < 0))) {
+        && releaseFinalize.compareVersions(x.version, cand.version) < 0)) {
         comment(r.number, { state: 'superseded', by: cand.version }, `Superseded by ${cand.version} — no final is owed for ${r.version}.`);
         close(r.number);
       }
@@ -2765,7 +2833,7 @@ function cmdGateHermetic(argv) {
 // neither, so there is nothing else in state.json a second solo attempt could collide with.
 // ---------------------------------------------------------------------------
 
-const HELP_SOLO = `colab solo [--repo <path>] [--force] [--session <url>] [--session-name <name>]
+const HELP_SOLO = `colab solo [--repo <path>] [--force] [--session <id>] [--session-name <name>]
 colab solo --done [--repo <path>]
 
 Entry gate for solo flow (CONVENTIONS.md, Solo flow) — requires BOTH: this repo does not declare
@@ -3040,7 +3108,7 @@ function cmdSoloDone(repoAbs, doc) {
 // exactly `writes: isolated` — see writes-authority.js's `trunkDirectVetoed`)
 // ---------------------------------------------------------------------------
 
-const HELP_PLACE = `colab place <acquire|check|release> <path> [--repo P] [--session URL] [--session-name N] [--force]
+const HELP_PLACE = `colab place <acquire|check|release> <path> [--repo P] [--session ID] [--session-name N] [--force]
 
 Path-scoped, machine-local hold on ONE checkout (CONVENTIONS.md, Place-claims) — what a shared
 trunk checkout needs on any repo that does not declare \`writes: isolated\` (the veto), and a
@@ -3858,12 +3926,26 @@ function migrationGrantReviewRecord(repoAbs, opts) {
   // #508: bind what was reviewed — the branch's migration files at the tip, by content. Same path
   // rule the ship gate fires on (newMigrations), against origin's trunk. A branch with no migration
   // to review gets no id and stays HEAD-bound.
+  //
+  // #563: and never silently fall back to HEAD binding. A grant posted without `migrations:` for a
+  // branch that HAS migrations is voided by the very trunk sync ship demands — the cost #508 removed.
+  // So every way this can fail to answer refuses instead: no trunk to diff against, a diff git
+  // cannot compute (base or tip object missing here), or a tree it cannot read at the tip.
   const trunk = resolveTrunk(repoAbs, projectDoc(repoAbs));
+  if (!trunk) {
+    throw new UserError("cannot resolve this repo's trunk from project.yml — a reviewer grant binds the branch's migration content against trunk, so nothing was posted. Declare `trunk:` in .github/project.yml, then re-run `colab migration-grant`");
+  }
   const remote = git.remoteInfo(repoAbs).name || 'origin';
-  let base = trunk ? `${remote}/${trunk}` : null;
-  if (base && !git.git(['rev-parse', '--verify', '--quiet', `${base}^{commit}`], repoAbs).ok) base = trunk;
-  const migrations = base ? newMigrations(repoAbs, base, tip) : [];
+  let base = `${remote}/${trunk}`;
+  if (!git.git(['rev-parse', '--verify', '--quiet', `${base}^{commit}`], repoAbs).ok) base = trunk;
+  const migrations = newMigrationsOrNull(repoAbs, base, tip);
+  if (migrations === null) {
+    throw new UserError(`cannot list "${opts.branch}"'s files against ${base} (git diff ${base}...${tip.slice(0, 12)} failed) — without that list the grant could not bind the migration content and would be voided by the next trunk sync; nothing was posted. Run \`git fetch ${remote} ${trunk} ${opts.branch}\`, then re-run \`colab migration-grant\``);
+  }
   const contentId = migrationContentAt(repoAbs, migrations, tip);
+  if (migrations.length > 0 && !contentId) {
+    throw new UserError(`"${opts.branch}" carries ${migrations.length} migration file(s) (${migrations.join(', ')}) but their content id could not be computed at ${tip.slice(0, 12)} (git ls-tree failed) — a grant without it binds the HEAD alone and the next trunk sync voids it; nothing was posted. Run \`git fetch ${remote} ${opts.branch}\`, then re-run \`colab migration-grant\``);
+  }
 
   const rec = {
     v: '1', role, reviewer: opts.reviewer, head: tip,
@@ -5202,7 +5284,8 @@ dependency symlinking, dev-server restarts) live in OPTIONAL repo hooks, not her
                            <type>/, prefix or not; else the branch after its first '/')
         --trunk <name>     override trunk branch
         --repo <path>      repo root (default: git root of cwd)
-        --session <url>    Claude session URL recorded on the worktree + its claims (env COLAB_SESSION)
+        --session <id>     any stable id for this session (a URL, a uuid…), recorded on the worktree +
+                           its claims (env COLAB_SESSION)
         --session-name <s> short human label for tables/messages (env COLAB_SESSION_NAME)
         --pid <n|none>     the new worktree's place-claim liveness anchor (#288) — same meaning as
                            \`colab claim\`'s --pid; default: auto-detect (env COLAB_PLACE_PID too)
@@ -5229,7 +5312,7 @@ dependency symlinking, dev-server restarts) live in OPTIONAL repo hooks, not her
       and state record in place for a retry, unless --force. Refuses if there are
       uncommitted TRACKED changes unless --force.
 
-  colab worktree tag <name> --session <url> [--session-name <s>] [--branch <b>]
+  colab worktree tag <name> --session <id> [--session-name <s>] [--branch <b>]
       REPAIR session identity, and/or the recorded branch, on a worktree that already
       exists — and on every claim attached to it (claims hold their own copy of each
       field, and claims are what \`doctor\` reports and what \`ship\` unions by). Pass any
@@ -5547,23 +5630,30 @@ function cmdWorktreeNew(argv) {
   // rejected instead of overwriting. With issues to claim, a failed push takes nothing: the worktree
   // and the zero-commit branch this invocation just made are removed again, so no half-claim exists
   // anywhere. With no issues there is no claim to protect, and a failed push only warns.
+  //
+  // #550: what is pushed is the CLAIM REF `refs/claims/<branch>`, not the branch. A branch push fires
+  // every CI `push` trigger, and at cut the branch IS trunk's commit — so each cut re-ran a suite
+  // trunk had already passed (~27 % of one org's runs). A claim ref triggers nothing, and every
+  // claim reader (`remoteHeads`) lists it beside the branches. The branch itself is first pushed at
+  // code-wrap, when it has commits worth testing. The claim ref is deleted at `worktree rm`.
   const pushRemote = git.claimRemote(repoAbs);
   let pushed = false;
   if (pushRemote) {
-    const push = git.git(['push', '-u', pushRemote, `--force-with-lease=refs/heads/${branch}:`, branch], repoAbs, { timeoutMs: 120_000 });
+    const claimRef = git.claimRef(branch);
+    const push = git.pushClaimRef(repoAbs, pushRemote, branch);
     if (push.ok) {
       pushed = true;
-      print(`  pushed ${branch} → ${pushRemote} (the claim record other machines read)`);
+      print(`  pushed ${claimRef} → ${pushRemote} (the claim record other machines read; not a branch, so no CI runs — the branch is pushed at code-wrap)`);
     } else {
       const why = String(push.stderr || '').split('\n').filter(Boolean).slice(-1)[0] || `exit ${push.code}`;
       if (issues.length) {
         git.git(['worktree', 'remove', '--force', wtPath], repoAbs);
         git.git(['branch', '-D', branch], repoAbs);
-        throw new UserError(`git push ${pushRemote} ${branch} failed (${why}) — claim NOT taken: the worktree and branch ` +
-          'were removed again. The pushed branch is the claim record other machines read (#325); fix the push ' +
-          '(access, network, or a branch of that name another machine just created) and re-run.');
+        throw new UserError(`git push ${pushRemote} ${claimRef} failed (${why}) — claim NOT taken: the worktree and branch ` +
+          'were removed again. The pushed claim ref is the record other machines read (#325, #550); fix the push ' +
+          `(access, network, or a claim ref of that name another machine just created — \`git ls-remote ${pushRemote} ${claimRef}\`) and re-run.`);
       }
-      warn(`git push ${pushRemote} ${branch} failed (${why}) — worktree created, branch not on the remote yet`);
+      warn(`git push ${pushRemote} ${claimRef} failed (${why}) — worktree created, no claim ref on the remote`);
     }
   }
 
@@ -5585,14 +5675,14 @@ function cmdWorktreeNew(argv) {
   }
 
   // 3. allocate ports + record worktree + claims (atomic)
-  // #325: if recording fails after the push above, take the pushed branch back off the remote —
+  // #325: if recording fails after the push above, take the pushed claim ref back off the remote —
   // otherwise it would stand there as a claim record nothing on any machine owns, refusing every
   // later claim on these issues. (The local worktree is left as before this change.)
   let alloc;
   try {
     alloc = allocWorktreeRecord();
   } catch (e) {
-    if (pushed) git.git(['push', pushRemote, '--delete', branch], repoAbs, { timeoutMs: 120_000 });
+    if (pushed) git.deleteClaimRef(repoAbs, pushRemote, branch);
     throw e;
   }
   function allocWorktreeRecord() { return state.mutate((st) => {
@@ -5672,7 +5762,8 @@ function cmdWorktreeNew(argv) {
 
   // #488: the scratch dirs (plans, briefs) are hidden in the clone's shared info/exclude — one
   // write covers the main checkout and every worktree, with no per-repo .gitignore diff.
-  ensureScratchExcluded(repoAbs);
+  // #527: and the worktree subdir itself, or trunk's `git add -A` stages this worktree as a gitlink.
+  ensureScratchExcluded(repoAbs, config);
 
   // 5. optional repo hook (machine-specific steps plug in here)
   const hook = runHook(repoAbs, 'post-create', { wtPath, name, branch, ports: alloc.chosenPorts, trunk, base, issues });
@@ -5820,6 +5911,19 @@ function cmdWorktreeRm(argv) {
 
   print(`✓ Removed worktree "${name}"`);
   if (removal.action === 'rm-rf') print('  (directory was a husk from an earlier interrupted removal — cleaned up directly)');
+  // #550: the claim ref `worktree new` pushed is this worktree's claim record on the remote — release
+  // it with the claims, or it would stand there refusing every later claim on these issue numbers from
+  // another machine. Best effort: an absent ref is fine (never pushed, a pre-#550 worktree, or already
+  // gone), a failed delete only warns with the command, and nothing above is undone for it.
+  if (wt.branch) {
+    let claimRemoteName = null;
+    try { claimRemoteName = git.claimRemote(repoAbs); } catch { claimRemoteName = null; }
+    if (claimRemoteName) {
+      const d = git.deleteClaimRef(repoAbs, claimRemoteName, wt.branch);
+      if (d.ok && !d.absent) print(`  deleted claim ref ${claimRemoteName} ${git.claimRef(wt.branch)}`);
+      else if (!d.ok) warnDeferred(`could not delete claim ref ${claimRemoteName} ${git.claimRef(wt.branch)} (${String(d.stderr || '').split('\n')[0]}) — delete it by hand: git push ${claimRemoteName} --delete ${git.claimRef(wt.branch)}`);
+    }
+  }
   // #114: this line used to report `removed.claims` — the LOCAL registry mutation, which cannot
   // fail for a network reason and so always read as full success. Report what the tracker actually
   // did instead, and name what it didn't.
@@ -5852,7 +5956,7 @@ function cmdWorktreeRm(argv) {
 }
 
 /**
- * `colab worktree tag <name> --session <url> [--session-name <s>] [--branch <b>]` — repair
+ * `colab worktree tag <name> --session <id> [--session-name <s>] [--branch <b>]` — repair
  * session identity, and/or the recorded branch, on an ALREADY-created worktree. Before this, the
  * only fix was hand-editing ~/.colab/state.json.
  *
@@ -5886,7 +5990,7 @@ function cmdWorktreeTag(argv) {
   const sessionName = String(opts.sessionName || '').trim();
   const branch = String(opts.branch || '').trim();
   if (!session && !sessionName && !branch) {
-    throw new UserError('Nothing to tag — pass --session <url>, --session-name <s>, and/or --branch <b>');
+    throw new UserError('Nothing to tag — pass --session <id>, --session-name <s>, and/or --branch <b>');
   }
   if (!state.loadState().worktrees[name]) {
     throw new UserError(`No worktree "${name}" in state (list them with: colab worktrees)`);
@@ -7564,7 +7668,7 @@ function cmdLabels(argv) {
 // config (show / manage the aggregation inputs)
 // ---------------------------------------------------------------------------
 
-const HELP_CONFIG = `colab config [show|add-repo <path>|rm-repo <path>|add-reserved-file <path>|rm-reserved-file <path>|set <key> <value>]
+const HELP_CONFIG = `colab config [show|add-repo <path>|rm-repo <path>|add-reserved-file <path>|rm-reserved-file <path>|add-notify-url <url>|rm-notify-url <url>|set <key> <value>]
 
   show                       print resolved config, file paths, and the aggregated reserved set
   add-repo <path>            add a repo root to scan for .github/project.yml reserved ports
@@ -7572,14 +7676,24 @@ const HELP_CONFIG = `colab config [show|add-repo <path>|rm-repo <path>|add-reser
   add-reserved-file <path>   add a machine-local reserved-ports file (~ is expanded); its ports join
                              the reserved set (lenient parse: whitespace ints per line, # comments)
   rm-reserved-file <path>    remove a reserved-ports file
+  add-notify-url <url>       add one more event receiver to notifyUrl (a second local observer) —
+                             existing entries are kept; one URL stays stored as a plain string
+  rm-notify-url <url>        remove one receiver from notifyUrl; removing the last unsets the key
   set <key> <value>          set claimTTLHours | plannerClaimTTLMinutes | portRange | worktreeSubdir | notifyUrl | journal |
                               claimIdentity
+  set <tuning-key> <value> --evidence "<why>"
+                             a kebab-case key is this REPO's .github/project.yml, not this machine (#561):
+                             one tuning value, committed on a short branch, shippable with no issue —
+                             see: colab config set ship-batch --help
 
 notifyUrl is OPTIONAL and off by default: unset, colab makes no network call of its own. Set it to
 an http(s) endpoint and claim / release / ship / worktree new / worktree rm each push one small
 best-effort JSON event as they succeed — fire-and-forget, never retried, never able to fail or slow
 the command that triggered it. Observers already poll this state file; the push only sharpens the
 timestamp. Unset it again with:  colab config set notifyUrl ""
+notifyUrl may hold SEVERAL receivers (#546) — every event goes to each, through its own detached
+child, so one dead receiver never costs another its event. \`set notifyUrl <url>\` replaces the
+whole value with one URL; add-notify-url / rm-notify-url change one entry and leave the rest alone.
 
 journal is OPTIONAL and off by default: unset, colab writes no journal file at all. Set it and every
 state transition and every invocation is appended to ~/.colab/journal.jsonl — one JSON object per
@@ -7597,6 +7711,91 @@ yield to ourselves" rule can treat a co-tenant's live claim as our own. ONLY tur
 changes on resume makes that session's own earlier claim comment read as a different claimant, and
 it will yield to itself. Unset it again with:  colab config set claimIdentity ""
 `;
+
+// config set <tuning-key> (#561) — one TUNING value of this repo's .github/project.yml, committed on
+// a short branch without touching any checkout, shippable by `colab ship` with no issue.
+const HELP_CONFIG_SET_DESCRIPTOR = `colab config set <tuning-key> <value> --evidence "<why>" [--repo <path>] [--no-push] [--dry]
+
+Change ONE tuning value of this repo's .github/project.yml (#561). Tuning keys:
+  ${configSet.TUNING_KEYS.filter((k) => k !== 'thresholds').join(', ')}, thresholds.<name>
+
+The value is validated by the parser every reader of that key uses (the same verdict \`colab ship\`
+computes), then committed on top of a freshly fetched <remote>/<trunk> as branch
+chore/tune-<key> — with no checkout touched and no issue. The subject is
+\`chore(project): <key> <old> → <new>\`; --evidence (required) goes in the body, which the squash
+carries, so the reason for the number lives in trunk's history.
+
+Then: wait for the branch's CI (\`colab ci-wait --sha <sha> --branch <branch>\`) and
+\`colab ship --branch <branch>\`. Ship computes the TUNING-ONLY class from the diff — it is never
+asserted — and, like docs-only (#345), it opens the autonomy gate on a repo without auto-trunk.
+Every other precondition still applies.
+
+Never on this path (they grant authority or change what deploys): ${configSet.AUTHORITY_KEYS.join(', ')}.
+
+  --evidence <text>  the measurement behind the number (required)
+  --no-push          create the branch locally only
+  --dry              print the edit and the verdict; create nothing`;
+
+function cmdConfigSetDescriptor(argv) {
+  const opts = parseArgs(argv, {
+    values: { '--repo': 'repo', '--evidence': 'evidence' },
+    flags: { '--no-push': 'noPush', '--dry': 'dry', '-h': 'help', '--help': 'help' },
+  });
+  if (opts.help) return print(HELP_CONFIG_SET_DESCRIPTOR);
+  const [key, value] = opts._ || [];
+  if (!key || value === undefined) throw new UserError('config set needs <tuning-key> <value> — see: colab config set ship-batch --help');
+  const kp = configSet.parseKeyPath(key);
+  if (kp.problem) throw new UserError(kp.problem);
+  if (!opts.dry && !String(opts.evidence || '').trim()) {
+    throw new UserError('--evidence "<why>" is required — the measurement behind the number goes in the commit body (#561); re-run with --evidence "<what you measured>"');
+  }
+  const repoAbs = resolveRepo(opts);
+  const trunk = resolveTrunk(repoAbs, projectDoc(repoAbs));
+  if (!trunk) throw new UserError('could not determine trunk — add `trunk:` to .github/project.yml (or run `colab adopt`), then re-run');
+  const remote = git.remoteFor(repoAbs);
+  const f = git.git(['fetch', remote, trunk], repoAbs);
+  if (!f.ok) throw new UserError(`could not fetch ${remote}/${trunk} — nothing created (${f.stderr.split('\n')[0]}); re-run once \`git fetch ${remote} ${trunk}\` succeeds`);
+  const baseRef = `${remote}/${trunk}`;
+  const baseSha = (git.git(['rev-parse', `refs/remotes/${baseRef}`], repoAbs).stdout || '').trim();
+  if (!baseSha) throw new UserError(`${baseRef} does not resolve after the fetch — check \`git ls-remote ${remote} ${trunk}\` and re-run`);
+  const text = configSet.descriptorAt(repoAbs, baseSha);
+  if (text === null) throw new UserError(`could not read ${configSet.DESCRIPTOR} at ${baseRef} — see why with \`git show ${baseRef}:${configSet.DESCRIPTOR}\``);
+  if (text === '') throw new UserError(`${baseRef} has no ${configSet.DESCRIPTOR} — adopt the handbook first: \`colab adopt\``);
+  const edit = configSet.editText(text, kp, value);
+  if (edit.problem) throw new UserError(edit.problem);
+  const name = [kp.top, kp.sub].filter(Boolean).join('.');
+  if (edit.text === text) { print(`${name} is already ${value} on ${baseRef} — nothing to change`); return 0; }
+  // The SAME verdict ship will compute on this diff — so a value ship would refuse is refused here.
+  const verdict = configSet.classify({
+    entries: [{ path: configSet.DESCRIPTOR, oldMode: '100644', newMode: '100644', binary: false }],
+    baseText: text, headText: edit.text,
+  });
+  if (!verdict.tuning) throw new UserError(`refused: ${verdict.reason} — pick a valid value (\`colab config set ${name} --help\`)`);
+  const branch = configSet.branchName(kp);
+  if (git.branchExists(repoAbs, branch, remote)) {
+    throw new UserError(`branch ${branch} already exists — ship it with \`colab ship --branch ${branch}\`, or delete it with \`git push ${remote} --delete ${branch}\` and \`git branch -D ${branch}\``);
+  }
+  const message = configSet.commitMessage(kp, edit.old, value, opts.evidence || '(dry run)');
+  print(`config set ${shortRepo(repoAbs)} · ${name}: ${edit.old === null ? '(unset)' : edit.old} → ${value}`);
+  print(`  verdict: ${verdict.reason}`);
+  print(`  branch:  ${branch} (base ${baseRef} @ ${shortSha(baseSha)})`);
+  if (opts.dry) { print('  [DRY RUN] nothing created.'); return 0; }
+  const c = configSet.commitOnBranch(repoAbs, { baseSha, text: edit.text, message, branch });
+  if (!c.ok) throw new UserError(`could not create the commit: ${c.error} — nothing was created; a human must read the git error above before re-running`);
+  print(`  commit:  ${shortSha(c.sha)} ${message.split('\n')[0]}`);
+  if (opts.noPush) {
+    print(`  not pushed (--no-push). Push it, wait for CI, then: colab ship --branch ${branch}`);
+    return 0;
+  }
+  const p = git.git(['push', remote, `refs/heads/${branch}:refs/heads/${branch}`], repoAbs);
+  if (!p.ok) {
+    warn(`push failed — the branch exists locally only: ${p.stderr.split('\n')[0]}`);
+    return 1;
+  }
+  print(`  pushed:  ${remote}/${branch}`);
+  print(`Next: colab ci-wait --sha ${c.sha} --branch ${branch} && colab ship --branch ${branch}`);
+  return 0;
+}
 
 function cmdConfig(argv) {
   const sub = argv[0];
@@ -7636,6 +7835,26 @@ function cmdConfig(argv) {
     cfg.reservedFiles = (cfg.reservedFiles || []).filter((f) => f !== argv[1]);
     state.saveConfig(cfg); print(`reservedFiles: ${cfg.reservedFiles.join(', ') || '(none)'}`); return 0;
   }
+  if (sub === 'add-notify-url' || sub === 'rm-notify-url') {
+    // #546: notifyUrl is a string or a list. These change ONE entry and leave every other exactly as
+    // it was, so a second observer is added without hand-editing JSON and without rewriting the first.
+    const u = (argv[1] || '').trim();
+    if (!u) throw new UserError(`${sub} needs a URL — try: colab config ${sub} http://127.0.0.1:<port>/api/events`);
+    const urls = notify.configuredUrls(cfg);
+    if (sub === 'add-notify-url') {
+      if (!/^https?:\/\//i.test(u)) throw new UserError(`notifyUrl must be an http(s) URL — try: colab config add-notify-url http://${u.replace(/^[a-z]+:\/\//i, '')}`);
+      if (!urls.includes(u)) urls.push(u);
+    } else {
+      if (!urls.includes(u)) throw new UserError(`notifyUrl has no entry ${u} — see the entries with: colab config show`);
+      urls.splice(urls.indexOf(u), 1);
+    }
+    const v = notify.storedNotifyUrl(urls);
+    if (v === undefined) delete cfg.notifyUrl; else cfg.notifyUrl = v;
+    state.saveConfig(cfg);
+    print(`notifyUrl = ${urls.length ? urls.join(', ') : '(unset)'}`);
+    return 0;
+  }
+  if (sub === 'set' && argv[1] && configSet.isDescriptorKey(argv[1])) return cmdConfigSetDescriptor(argv.slice(1)); // #561
   if (sub === 'set') {
     const [k, v] = [argv[1], argv[2]];
     if (!k || v === undefined) throw new UserError('set needs <key> <value>');
@@ -7717,6 +7936,18 @@ detected (flags, or a forced multiple-choice menu at a TTY — every row is a nu
 answered by its number OR its literal value), DERIVES the rest, and WRITES the descriptor in one
 act — append-only, never touching a byte already there. A complete descriptor just reports
 (write nothing, exit 0); re-answer one row on purpose with --axis.
+
+ONLY THE GATING ROWS ARE ASKED (#533): deploy/production and exposure. room, writes and channels
+are optional and legal absent — never prompted for; the report names them in one line with the
+\`--axis\` command that answers each later, and their own flag still answers one in the same run.
+After deploy: none, production is not asked again (null follows; --deploy none alone implies it).
+
+A SINGLE TRUNK, ANY SPELLING (#522): exposure none (and released with production null, and the
+legacy tier B) need ONE long-lived branch, not one named "main" — an existing master default
+adopts as-is. A "main" beside a non-main trunk is the two-branch shape and is refused (exit 5).
+At a terminal the exposure answer is checked against that shape when given, and re-asked with
+the reason. When a human must finish (the gate below), the FIRST line printed is the one
+command to run, every answer this run had already filled in.
 
 --writes accepts free (coexistence, the default), direct (an attended human may commit straight
 to trunk; DECLARED today, its runtime is DEFERRED — see CONVENTIONS.md §2, "writes: direct —
@@ -7914,7 +8145,26 @@ function adoptGitExtras(repoAbs, opts = {}) {
   // #483: the fork's own owner, from origin's URL — what an inherited CODEOWNERS team is compared to.
   const originUrl = git.git(['remote', 'get-url', 'origin'], repoAbs);
   const ownOrg = originUrl.ok ? codeowners.remoteOwner(originUrl.stdout) : null;
-  return { trunk, trunkSource, hooksPath, hooksDirFiles, trackedFiles, fork: adoptDetectFork(repoAbs, opts), ownOrg };
+  return { trunk, trunkSource, hooksPath, hooksDirFiles, trackedFiles, fork: adoptDetectFork(repoAbs, opts), ownOrg, branches: adoptBranchList(repoAbs) };
+}
+
+/** #522: every branch name visible here — refs/heads ∪ refs/remotes/<any>/<name> — the same union
+ * audit/audit.mjs's `branches()` reads, so the single-trunk rule (tools/lib/exposure-shape.js
+ * `singleTrunkViolation`) answers identically on both sides: adopt never writes what the audit
+ * then fails. null when git cannot list refs (the rule then fails closed to trunk "main"). */
+function adoptBranchList(repoAbs) {
+  const r = git.git(['for-each-ref', '--format=%(refname)', 'refs/heads', 'refs/remotes'], repoAbs);
+  if (!r.ok) return null;
+  const names = new Set();
+  for (const ref of r.stdout.split('\n').map((x) => x.trim()).filter(Boolean)) {
+    if (ref.startsWith('refs/heads/')) names.add(ref.slice('refs/heads/'.length));
+    else if (ref.startsWith('refs/remotes/')) {
+      const rest = ref.slice('refs/remotes/'.length);
+      const name = rest.slice(rest.indexOf('/') + 1);
+      if (rest.includes('/') && name && name !== 'HEAD') names.add(name);
+    }
+  }
+  return [...names];
 }
 
 /**
@@ -7987,13 +8237,17 @@ function gitExcludePath(repoAbs) {
 /**
  * #488: append the scratch-dir exclude lines (scratch-dirs.js `excludeLines`) to the clone's shared
  * info/exclude, idempotently. Best-effort: a failure warns and never blocks the caller.
+ * #527: `config` given → the worktree subdir's line too (`worktreeExcludeLine`), so whatever creates
+ * the default worktree dir also hides it — an adopted repo's `.gitignore` has never heard of it.
  */
-function ensureScratchExcluded(repoAbs) {
+function ensureScratchExcluded(repoAbs, config = null) {
   const excludeFile = gitExcludePath(repoAbs);
   if (!excludeFile) return [];
   let before = null;
   try { before = fs.readFileSync(excludeFile, 'utf8'); } catch (_) { /* absent */ }
   const lines = scratchDirs.excludeLines();
+  const wtLine = config ? scratchDirs.worktreeExcludeLine(worktreeSubdir(config)) : null;
+  if (wtLine && !lines.includes(wtLine)) lines.push(wtLine);
   const missing = localAdopt.missingExcludeLines(before, lines);
   if (!missing.length) return [];
   try {
@@ -8187,6 +8441,8 @@ function printAdoptReport(report, repoAbs, verify, localFinish) {
   print(`detected trunk: ${t.detected || '(unknown)'}${trunkSourceNote}${t.declared !== null ? `  (declared: ${t.declared}${t.agree === false ? ' ⚠ disagrees with detected' : ''})` : ''}`);
   print(`stack candidates: ${report.detected.stackCandidates.length ? report.detected.stackCandidates.join(', ') : '(none found)'}`);
   print(`declared ports: ${fmtVal(report.detected.ports)}`);
+  const optLine = adopt.optionalRowsLine(report.optionalUnanswered); // #533
+  if (optLine) print(optLine);
   if (report.fork) print(`fork of an upstream: yes — ${report.fork.source === 'flag' ? '--fork' : `remote "${report.fork.remote}" ${report.fork.url}`} (step 5 is the append-only block, §9 "A fork of an upstream")`);
   if (report.inheritedCodeowners) {
     const ic = report.inheritedCodeowners;
@@ -8262,6 +8518,8 @@ function adoptAnswersFromFlags(opts, cfg, axesToAsk, forcedAxes) {
       if (!adopt.VALID_DEPLOY.has(opts.deploy)) throw new UserError(`--deploy must be one of: ${[...adopt.VALID_DEPLOY].join(', ')}`);
       values.deploy = opts.deploy;
       flags.push('--deploy');
+      // #533: deploy: none already says nothing is live — production: null follows, never re-asked.
+      if (opts.deploy === 'none' && opts.production === undefined && eligible('production', 'tier')) values.production = null;
     }
     if (flags.length) answers.tier = { values, mode: 'flag', flags };
   }
@@ -8308,7 +8566,9 @@ async function askMenu(rl, axis, promptFn) {
     if (resolved.ok) return resolved;
     process.stdout.write(`  ${resolved.message}\n`);
   }
-  throw new UserError(`${axis}: no valid answer after one re-prompt`);
+  throw new UserError(`${axis}: no valid answer after one re-prompt — nothing was written. Run \`colab adopt --axis ${axis}\` ` +
+    `to be asked again, or pass the value directly: \`colab adopt ${axis === 'tier' ? '--deploy' : `--${axis}`} <value>\` ` +
+    `(\`colab adopt --help\` lists them).`);
 }
 
 /**
@@ -8325,7 +8585,7 @@ async function askMenu(rl, axis, promptFn) {
  * URL itself asked only on "yes" — this keeps every axis forced-choice-shaped without pretending
  * a URL belongs to an enum.
  */
-async function adoptAskInteractive(rl, axesToAsk, cfg) {
+async function adoptAskInteractive(rl, axesToAsk, cfg, checkExposure) {
   const answers = {};
   for (const axis of axesToAsk) {
     const q = adopt.QUESTIONS.find((x) => x.axis === axis);
@@ -8336,13 +8596,16 @@ async function adoptAskInteractive(rl, axesToAsk, cfg) {
         process.stdout.write(`${adopt.renderMenu('tier')}\n`);
         return rlAsk(rl, '  deploy: ');
       });
-      process.stdout.write('  1) no deploy target exists today\n  2) yes — enter the URL\n');
-      const existsRaw = (await rlAsk(rl, '  production: ')).trim();
       let prod = null;
-      if (existsRaw === '2' || existsRaw === 'yes') {
-        prod = (await rlAsk(rl, '    URL: ')).trim() || null;
-      } else if (existsRaw !== '1' && existsRaw !== 'no') {
-        throw new UserError('production: choose 1 (no deploy target exists today) or 2 (yes — enter the URL)');
+      // #533: deploy: none already answered "nothing is live" — asking production again is noise.
+      if (depChoice.value !== 'none') {
+        process.stdout.write('  1) no deploy target exists today\n  2) yes — enter the URL\n');
+        const existsRaw = (await rlAsk(rl, '  production: ')).trim();
+        if (existsRaw === '2' || existsRaw === 'yes') {
+          prod = (await rlAsk(rl, '    URL: ')).trim() || null;
+        } else if (existsRaw !== '1' && existsRaw !== 'no') {
+          throw new UserError('production: choose 1 (no deploy target exists today) or 2 (yes — enter the URL)');
+        }
       }
       answers.tier = { values: { production: prod, deploy: depChoice.value }, mode: 'interactive' };
     } else if (axis === 'channels') {
@@ -8352,12 +8615,25 @@ async function adoptAskInteractive(rl, axesToAsk, cfg) {
       });
       answers.channels = { values: { channels: resolved.value }, mode: 'interactive' };
     } else if (axis === 'exposure') {
-      const resolved = await askMenu(rl, 'exposure', () => {
-        process.stdout.write(`${adopt.renderMenu('exposure')}\n`);
-        return rlAsk(rl, '  choice: ');
-      });
-      if (resolved.skip) continue; // decline — the fallback tier derivation picks this up
-      answers.exposure = { values: { exposure: resolved.value }, mode: 'interactive' };
+      // #522: the repo-shape check runs HERE, at answer time — a refusal re-asks with its reason,
+      // instead of surfacing after every other question with nothing written.
+      let chosen = null;
+      for (let attempt = 0; attempt < 2 && !chosen; attempt++) {
+        const resolved = await askMenu(rl, 'exposure', () => {
+          process.stdout.write(`${adopt.renderMenu('exposure')}\n`);
+          return rlAsk(rl, '  choice: ');
+        });
+        if (resolved.skip) { chosen = resolved; break; }
+        const problem = checkExposure ? checkExposure(resolved.value, answers) : null;
+        if (!problem) { chosen = resolved; break; }
+        process.stdout.write(`  ✗ ${problem}\n  choose again (or skip):\n`);
+      }
+      // #532: this refusal comes after a long interaction, so it names the way through, not just the stop.
+      if (!chosen) throw new UserError('exposure: no answer this repo\'s shape supports after one re-prompt — nothing was written. ' +
+        'Each "✗" above says why its value was refused. Run `colab adopt --axis exposure` and pick a value it accepts, ' +
+        'or `colab adopt --exposure <value>` non-interactively; choosing "skip" leaves exposure unanswered for now.');
+      if (chosen.skip) continue; // decline — the fallback tier derivation picks this up
+      answers.exposure = { values: { exposure: chosen.value }, mode: 'interactive' };
     } else {
       // room, writes — plain single-choice menus, no skip.
       const resolved = await askMenu(rl, axis, () => {
@@ -8370,11 +8646,41 @@ async function adoptAskInteractive(rl, axesToAsk, cfg) {
   return answers;
 }
 
+/** #522: this run's answers as the ordered flag list `adopt.humanAdoptCommand` prints — what the
+ * human pastes to finish the same adoption with the gate satisfied. */
+function adoptReplayFlags(opts, answers) {
+  const flags = [];
+  if (opts.repo !== undefined) flags.push(['--repo', opts.repo]);
+  const t = answers.tier && answers.tier.values;
+  if (t && 'production' in t) flags.push(['--production', t.production === null ? 'none' : t.production]);
+  if (t && 'deploy' in t) flags.push(['--deploy', t.deploy]);
+  if (answers.exposure) flags.push(['--exposure', answers.exposure.values.exposure]);
+  if (answers.room) flags.push(['--room', answers.room.values.room]);
+  if (answers.writes) flags.push(['--writes', answers.writes.values.writes]);
+  if (answers.channels) flags.push(['--channels', answers.channels.values.channels.join(',')]);
+  if (opts.stack !== undefined) flags.push(['--stack', opts.stack]);
+  if (opts.autonomy !== undefined) flags.push(['--autonomy', opts.autonomy]);
+  if (opts.reason !== undefined) flags.push(['--reason', opts.reason]);
+  if (opts.answeredBy) flags.push(['--answered-by', opts.answeredBy]);
+  if (opts.land) flags.push(['--land', true]);
+  return flags;
+}
+
+/** #522: the same command shape for a run that had no answers at all — placeholders per asked row. */
+function adoptAskedFlagPlaceholders(axesToAsk, stackUnresolvable) {
+  const flags = [];
+  if (axesToAsk.includes('tier')) flags.push(['--production', '<url>|none'], ['--deploy', '<none|tag|manual|push-main>']);
+  if (axesToAsk.includes('exposure')) flags.push(['--exposure', '<none|self|live|released>']);
+  for (const a of ['room', 'writes', 'channels']) if (axesToAsk.includes(a)) flags.push([`--${a}`, `<${a}>`]);
+  if (stackUnresolvable) flags.push(['--stack', '<text>']);
+  return flags;
+}
+
 /** The `EXPOSURE_SHAPE`/falsifier context, built from EFFECTIVE production/deploy — accounting
  * for a `tier`-axis answer resolved in THIS SAME run, not only what was already on record, so
  * declaring production+deploy and exposure together in one invocation validates against each
  * other rather than the pre-write snapshot. */
-function adoptShapeCtx(cfg, tierAnswer, trunk, workflows, io) {
+function adoptShapeCtx(cfg, tierAnswer, trunk, workflows, io, branches) {
   const effProduction = tierAnswer ? tierAnswer.values.production : (Object.prototype.hasOwnProperty.call(cfg, 'production') ? cfg.production : null);
   const effDeploy = tierAnswer ? tierAnswer.values.deploy : (Object.prototype.hasOwnProperty.call(cfg, 'deploy') ? cfg.deploy : null);
   const evidence = consumerEvidence.consumerEvidence(io, workflows);
@@ -8382,7 +8688,7 @@ function adoptShapeCtx(cfg, tierAnswer, trunk, workflows, io) {
   const hasProduction = effProduction !== null && effProduction !== undefined && effProduction !== '';
   const runbook = Object.prototype.hasOwnProperty.call(cfg, 'runbook') ? cfg.runbook : null;
   const hasRunbook = !!(runbook && io.readFile(String(runbook).trim().replace(/^\.\//, '')) !== null);
-  return { trunk, hasProduction, deploy: effDeploy, hasDeployWorkflow, hasRunbook, effProduction, effDeploy };
+  return { trunk, hasProduction, deploy: effDeploy, hasDeployWorkflow, hasRunbook, effProduction, effDeploy, branches: branches === undefined ? null : branches };
 }
 
 async function cmdAdopt(argv) {
@@ -8415,6 +8721,12 @@ async function cmdAdopt(argv) {
     local = adoptLocalPrepare(repoAbs, opts);
     if (local.exit !== undefined) return local.exit;
   }
+  // #527: a repo adopted before `worktree new` hid its own dir gets the same exclude lines here —
+  // machine-local (info/exclude), idempotent, never a committed diff. --local already wrote them.
+  if (!opts.local) {
+    const hidden = ensureScratchExcluded(repoAbs, state.loadConfig());
+    if (hidden.length && !opts.json) print(`✓ hid ${hidden.join(' ')} in .git/info/exclude (machine-local)`);
+  }
   const io = adoptIo(repoAbs);
   const extra = adoptGitExtras(repoAbs, opts);
   if (local) { extra.trunk = local.trunk; extra.trunkSource = 'local-integration'; }
@@ -8428,7 +8740,12 @@ async function cmdAdopt(argv) {
     if (!adopt.ROW_NAMES.includes(a)) throw new UserError(`Unknown --axis "${a}" — expected one of: ${adopt.ROW_NAMES.join(', ')}`);
   }
   const forcedAxes = new Set(requestedAxes);
-  let axesToAsk = adopt.ROW_NAMES.filter((a) => forcedAxes.has(a) || adopt.axisMissing(cfg, a));
+  // #533: a fresh adoption asks only the rows that change a gate (production/deploy, exposure);
+  // room/writes/channels are asked only when forced (--axis) or answered by their flag.
+  const flagAxes = new Set();
+  if (opts.production !== undefined || opts.deploy !== undefined) flagAxes.add('tier');
+  for (const a of ['room', 'exposure', 'writes', 'channels']) if (opts[a] !== undefined) flagAxes.add(a);
+  let axesToAsk = adopt.axesToAsk(cfg, forcedAxes, flagAxes);
   // --local re-run (#393): once exposure is on record, a bare `adopt --local` (no answer flags, no
   // --axis) is the idempotent re-apply — exclude lines, stub, labels, checkout — never a prompt for
   // the optional rows (room/writes/channels), which --local leaves to the operator by design.
@@ -8522,7 +8839,11 @@ async function cmdAdopt(argv) {
   } else if (isTTY) {
     const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
     try {
-      answers = await adoptAskInteractive(rl, axesToAsk, cfg);
+      const shapeWorkflows = io.listDir('.github/workflows').filter((f) => /\.ya?ml$/.test(f));
+      answers = await adoptAskInteractive(rl, axesToAsk, cfg, (exposure, sofar) => {
+        const v = adopt.exposureShapeVerdict(exposure, adoptShapeCtx(cfg, sofar.tier, extra.trunk, shapeWorkflows, io, extra.branches));
+        return v.ok ? null : v.reason;
+      });
       if (needsStack && opts.stack === undefined) {
         process.stdout.write('\nNo manifest recognised (package.json/composer.json/pyproject.toml/'
           + '.python-version) — the audit requires stack: as a literal key.\n');
@@ -8537,6 +8858,12 @@ async function cmdAdopt(argv) {
   } else {
     const hints = axesToAsk.map(adoptAxisFlagHint).join('  ');
     const stackHint = stackUnresolvable ? '  --stack "<text>"' : '';
+    // #522: the human step goes FIRST — answering exposure none/self is a human's act, so the one
+    // command that finishes the adoption leads, and the explanation follows it.
+    if (axesToAsk.includes('exposure')) {
+      warn('a human finishes this adoption — run at an interactive terminal: colab adopt   (or, non-interactively:)');
+      warn(`  ${adopt.humanAdoptCommand(adoptAskedFlagPlaceholders(axesToAsk, stackUnresolvable))}`);
+    }
     warn(`${axesToAsk.length} unanswered §9 row(s) (${axesToAsk.join(', ')}) — no TTY and no answer flags, so there is no way to ask. Re-run with: ${hints}${stackHint}`);
     return 1;
   }
@@ -8561,7 +8888,7 @@ async function cmdAdopt(argv) {
   // written, per "nothing partially written on refusal".
   if (answers.exposure) {
     const proposedExposure = answers.exposure.values.exposure;
-    const shapeCtx = adoptShapeCtx(cfg, answers.tier, trunk, workflows, io);
+    const shapeCtx = adoptShapeCtx(cfg, answers.tier, trunk, workflows, io, extra.branches);
     const evidence = consumerEvidence.consumerEvidence(io, workflows);
     const currentExposure = axisAuthority.axisOfRecord(cfg).exposure;
     const verdict = adopt.gateVerdict({
@@ -8575,6 +8902,10 @@ async function cmdAdopt(argv) {
       reason: opts.reason || null,
     });
     if (!verdict.ok) {
+      if (verdict.class === adopt.GATE_CLASS.HUMAN_GATED) {
+        // #522: lead with the one command a human runs, every answer this run had filled in.
+        warn(`a human finishes this adoption — run: ${adopt.humanAdoptCommand(adoptReplayFlags(opts, answers))}`);
+      }
       warn(verdict.message);
       return verdict.exitCode;
     }
@@ -9630,8 +9961,14 @@ function trustAt(repoAbs, ref) {
  * gated by it, and a branch that deletes trunk's declaration is still gated by trunk's.
  */
 function newMigrations(mainRoot, trunk, branch) {
+  return newMigrationsOrNull(mainRoot, trunk, branch) || [];
+}
+
+/** newMigrations, but null — not [] — when git cannot compute the diff (#563): the grant write path
+ *  must tell "no migrations" from "could not look", and refuses on the second. */
+function newMigrationsOrNull(mainRoot, trunk, branch) {
   const r = git.git(['diff', '--name-only', `${trunk}...${branch}`], mainRoot);
-  if (!r.ok) return [];
+  if (!r.ok) return null;
   const declared = migrationPaths.unionPaths(projectDoc(mainRoot), projectDocAt(mainRoot, trunk), projectDocAt(mainRoot, branch));
   return r.stdout.split('\n').filter(Boolean).filter((f) => migrationPaths.isMigrationPath(f, declared));
 }
@@ -9884,14 +10221,18 @@ function ciCureTrailerLine(cureVerdict, branch, trunk) {
   return `CI-Cure: branch ${branch} over-red ${trunk}@${shortSha(cureVerdict.redSha)} evidence ${shortSha(cureVerdict.evidenceSha)}${via}${admittedSuffix}${progressSuffix}`;
 }
 
-const HELP_SHIP = `colab ship [--repo <path>] [--worktree <name> | --branch <br> | --direct] [--message "<msg>"] [--refs <N[,M]>] [--keep-worktree] [--delete-branch | --keep-branch] [--adopt] [--session <id>] [--session-name <s>] [--dry] [--json]
+const HELP_SHIP = `colab ship [--repo <path>] [--worktree <name> | --branch <br> | --direct] [--message "<msg>"] [--refs <N[,M]>] [--keep-worktree] [--delete-branch | --keep-branch] [--adopt] [--answered-by <name>] [--session <id>] [--session-name <s>] [--dry] [--json]
        colab ship --batch <b1,b2[,b3]> [--repo <path>] [--keep-worktree] [--delete-branch | --keep-branch] [--session <id>] [--session-name <s>] [--dry]
 
 The ONE sanctioned door for code-wrap Phase B: squash-merge a session branch into the BASE IT WAS
 CUT FROM — trunk for an ordinary session, or the declared integration line recorded on its worktree
 (project.yml \`integration:\`). Autonomy is granted by the repo's .github/project.yml
 (\`autonomy: auto-trunk\`) — NOT by any flag. Without that grant, ship refuses and a human must run
-Phase B — unless the change is DOCS-ONLY, computed from git (#345, below). ship NEVER touches main (when trunk≠main), NEVER tags, NEVER promotes.
+Phase B — unless the change is DOCS-ONLY, computed from git (#345, below). That human runs ship
+too, through the HUMAN DOOR (#525): at an interactive terminal (outside an agent shell) ship asks
+them to confirm; non-interactively, COLAB_HUMAN=1 plus --answered-by <name>. Every other
+precondition still applies, and the 🚢 comment records that the human door opened the gate.
+ship NEVER touches main (when trunk≠main), NEVER tags, NEVER promotes.
 
 Base and target are ONE decision. A branch cut from a long-lived line and shipped into trunk would
 drag the entire line in behind it, as a single squash commit that reads like a small change — so
@@ -9901,6 +10242,9 @@ promotes is an integration event of the same weight as a promotion, and stays hu
 
 Sequence (each step gated; any failure aborts before the push — the target is never half-shipped):
   a. autonomy gate      repo must grant auto-trunk (no --force override) — or the diff is docs-only (#345)
+                        or tuning-only (#561)
+                        — or a person runs ship through the human door (#525): a confirmed interactive
+                        terminal, or COLAB_HUMAN=1 + --answered-by <name>. An agent shell is no terminal.
   b. preconditions      target CI alive+green (UNLESS the branch proves the CURE RULE, #281 — no
                         human step needed — OR every issue the branch carries holds a valid
                         \`colab ci-grant\` over trunk's CURRENT red sha, #105 — see below) · no new
@@ -10075,6 +10419,14 @@ auto-trunk). The row reads "docs-only (N files) — autonomy exception", and --d
 \`autonomyGate: { via, docsOnly }\`. After B0 sync the diff is measured again before the squash.
 Every other precondition is unchanged. No flag, env var or project.yml field widens the list.
 
+TUNING-ONLY — the second computed exception (#561). Ship also proceeds without the grant when the
+diff changes .github/project.yml ALONE, every changed line inside a tuning key (ship-batch,
+ship-batch-wait, ci-wait-factor, thresholds) and every moved value valid; never with an authority
+key (autonomy, promotion, migration-grant, ci-grant, trust-humans, exposure, tier, trunk, deploy,
+release, production). It needs no issue. \`colab config set <key> <value> --evidence "<why>"\`
+writes such a branch. The row reads "tuning-only (<keys>) — autonomy exception (#561)"; --dry --json
+adds \`autonomyGate.tuning\`. Re-measured after B0 sync like docs-only.
+
 TRUNK-DIRECT — \`colab ship --direct\` (#302). A unit committed straight to trunk has no branch and
 no worktree, so neither door above can find it, and evidence-close's own detection cannot fire
 (\`landed\` is \`unknown\` when base === branch). --direct is its close path: the claims are this
@@ -10116,7 +10468,9 @@ It never waits: each call reads the remote, takes ONE step and exits —
      trunk CI red (the cure/grant doors apply per member, never to a batch), fewer than two members
      can join, or the combined run is red — classify it: red:infra → the printed \`gh run rerun\`,
      once; red:finding, or red again after that one re-run → serial
-  1  refused (a broken checkout, an unreadable remote)
+  1  refused (a broken checkout, an unreadable remote) — or the land push was refused while trunk did
+     NOT move (a local pre-push hook, a remote rejection): the push's own output is echoed, and
+     re-running hits the same refusal until its cause is fixed (#509)
 One batch per base: a batch at this base carrying OTHER members is waited on (exit 3) while its run
 is pending or green, but a declined one — its combined run red — is deleted and the batch you asked
 for is built in its place, so the survivors of a decline can batch without landing serially first (#391).
@@ -10129,6 +10483,12 @@ at build, added since) is NOT landed with it — the command names both lists an
 --dry pushes, deletes, lands, comments and releases nothing on EVERY path (#415): a fresh batch is built
 locally and printed; a staged green batch prints what would land (members, combined run, target sha).
 Consumer CI must opt in: add 'ship-batch/**' to a CI workflow's push: branches:.
+PARTNER WAIT (#555) — opt-in per repo: \`ship-batch-wait: <duration>\` in project.yml (90s, 6m, 1h; the
+unit is required). Absent, zero or malformed: no wait, exactly as above. With it, a call where exactly
+ONE member can join pauses (exit 3, "⏸ PARTNER-WAIT", the seconds left) until that window has passed
+since the member became ready (its head CI's last update, else its head commit's date) — then the same
+call declines it to serial (exit 4). The caller waits, gathers every ready candidate again and calls
+--batch with all of them. A single named branch is accepted only when the field is set.
 
 B3 KEEPS the branch by default. Deleting refs from a shared remote is not something this command
 does unasked, however certain it is that the content landed: reporting is safe and reversible,
@@ -10600,6 +10960,37 @@ function noWorkflowTrunkDoor(repoAbs, r, target, trunk, branch) {
     detail: `none — ${at} has no repo-owned workflow (#482), so the branch's own run decides, and ${ownAt} ${why}${excludedRunsNote(r.run)}` };
 }
 
+/**
+ * The verifying-runs policy every CI read uses (#503), plus the lost-push rescue's resolver (#567):
+ * the names of the workflows whose definition AT THAT SHA is triggered by a branch push or a pull
+ * request. Lazy — called only when a `workflow_dispatch` run has no push sibling — and fail-closed:
+ * a sha that is not local, or a tree that cannot be read, yields null and the run stays set aside.
+ */
+function verifyingPolicy(repoAbs) {
+  return { ...verifyRuns.parsePolicy(projectDoc(repoAbs)), dispatchVerifies: (sha) => pushVerifiedWorkflowsAt(repoAbs, sha) };
+}
+
+function pushVerifiedWorkflowsAt(repoAbs, sha) {
+  if (!sha) return null;
+  if (!git.git(['cat-file', '-e', `${sha}^{commit}`], repoAbs).ok) {
+    // Not local yet (another machine landed it): one fetch of that commit, then fail closed.
+    git.git(['fetch', '--quiet', git.remoteFor(repoAbs) || 'origin', sha], repoAbs);
+    if (!git.git(['cat-file', '-e', `${sha}^{commit}`], repoAbs).ok) return null;
+  }
+  const ls = git.git(['ls-tree', '--name-only', `${sha}:.github/workflows`], repoAbs);
+  if (!ls.ok) return null;
+  const names = [];
+  for (const f of ls.stdout.split('\n').map((x) => x.trim()).filter((x) => /\.ya?ml$/.test(x))) {
+    const rel = `.github/workflows/${f}`;
+    const show = git.git(['show', `${sha}:${rel}`], repoAbs);
+    if (!show.ok) continue;
+    const t = verifyRuns.workflowTriggers(show.stdout);
+    // GitHub names a workflow with no `name:` by its file path.
+    if (t && t.verifiesBranches) names.push(t.name || rel);
+  }
+  return names;
+}
+
 /** Number of workflow files in `.github/workflows` at `sha`, or null when the tree cannot be read. */
 function trunkWorkflowFiles(repoAbs, sha) {
   if (!git.git(['cat-file', '-e', `${sha}^{commit}`], repoAbs).ok) return null;
@@ -10630,7 +11021,7 @@ function readCiVerdict(repoAbs, gh, target, trunk) {
   if (!gh) return { run: null, final: true, verdict: { ok: false, class: SELF_CLEARING, detail: `gh not usable (${ghUnusableWhy(repoAbs)}) — cannot confirm CI` } };
   // #503: only runs that VERIFY the code count — a post-CI release/deploy run at the same sha is set
   // aside and named, never a red and never a reason to wait (tools/lib/verify-runs.js).
-  const readOpts = { verifying: verifyRuns.parsePolicy(projectDoc(repoAbs)) };
+  const readOpts = { verifying: verifyingPolicy(repoAbs) };
   let run = git.ghRunForSha(repoAbs, target, undefined, undefined, readOpts);
   let via = target;
   if (run && run.status === 'none' && target !== trunk) {
@@ -10656,10 +11047,11 @@ function readCiVerdict(repoAbs, gh, target, trunk) {
   // (a ship reading trunk right after another ship landed it). That clears on its own: SELF_CLEARING,
   // never HUMAN_GATED, until the grace window has passed. Age unknown keeps the old class.
   if (run.status === 'none' && target === trunk) {
-    const fresh = ciVerdict.emptyReadVerdict(git.commitTimeMs(repoAbs, run.sha));
+    // #559: the grace is the repo's measured push→run lag when there is one — read from cache, never fetched here.
+    const fresh = ciVerdict.emptyReadVerdict(git.commitTimeMs(repoAbs, run.sha), { graceSec: ciProfileFor(repoAbs).th.emptyReadGraceSec });
     if (fresh.fresh) {
       verdict = { ok: false, class: SELF_CLEARING,
-        detail: `no run yet for ${at} — committed ${fresh.minutes.toFixed(1)}m ago, inside the ${ciVerdict.EMPTY_READ_GRACE_MINUTES}m grace; retry later${excludedRunsNote(run)}${verifyRuns.setAsideNote(run.setAside)}` };
+        detail: `no run yet for ${at} — committed ${fresh.minutes.toFixed(1)}m ago, inside the ${Math.round(fresh.graceMinutes * 10) / 10}m grace; retry later${excludedRunsNote(run)}${verifyRuns.setAsideNote(run.setAside)}` };
     }
   }
   // #373: trunk's own run not there yet or still in flight (never a finished red) — a batch that landed
@@ -10730,7 +11122,7 @@ function treeGreenVerdict(repoAbs, run, verdict) {
  */
 function classifyCiRun(repoAbs, run, at) {
   const v = classifyCiRunRaw(repoAbs, run, at);
-  return { ...v, detail: v.detail + excludedRunsNote(run) + supersededRunsNote(run) + verifyRuns.setAsideNote(run && run.setAside) };
+  return { ...v, detail: v.detail + excludedRunsNote(run) + supersededRunsNote(run) + verifyRuns.setAsideNote(run && run.setAside) + verifyRuns.dispatchCountedNote(run && run.dispatchCounted) };
 }
 
 /**
@@ -10772,7 +11164,9 @@ function classifyCiRunRaw(repoAbs, run, at) {
   // Non-completed, non-none: running/queued/etc. Ordinarily SELF_CLEARING — but #155's wedged
   // shape (queued, zero jobs, unmoving for hours) can never clear on its own, so check for it.
   const jobCount = run.databaseId != null ? git.ghRunJobCount(repoAbs, run.databaseId) : null;
-  const wedge = ciVerdict.wedgedVerdict({ status: run.status, createdAt: run.createdAt, jobCount });
+  // #559: wedge age and zero-jobs floor follow the repo's measured CI (cached profile; bootstrap = 6h / 2m).
+  const th = ciProfileFor(repoAbs).th;
+  const wedge = ciVerdict.wedgedVerdict({ status: run.status, createdAt: run.createdAt, jobCount }, { wedgeAgeSec: th.wedgeAgeSec, zeroJobsFloorSec: th.zeroJobsFloorSec });
   if (wedge.wedged) {
     return { ok: false, class: HUMAN_GATED, detail: `run for ${at}: status=${run.status} — WEDGED (${wedge.reason}); a human must look, not retry` };
   }
@@ -10945,7 +11339,7 @@ function applyRedTrunkExemptions(raw, target, trunk, redSha, grantThunk, cureThu
     return {
       name: raw.name, ok: true, class: null,
       detail: `PRECONDITION OVERRIDDEN by the cure rule (#281) — branch contains red ${shortSha(redSha)} and is green at its own head${via}${viaDry} (raw: ${raw.detail})`,
-      grantVerdict: null, cureVerdict,
+      grantVerdict: null, cureVerdict, redSha,
     };
   }
 
@@ -10960,10 +11354,45 @@ function applyRedTrunkExemptions(raw, target, trunk, redSha, grantThunk, cureThu
     return {
       name: raw.name, ok: true, class: null,
       detail: `PRECONDITION OVERRIDDEN by ${who} on ${by} — trunk was red at ${shortSha(redSha)} (raw: ${raw.detail})`,
-      grantVerdict, cureVerdict,
+      grantVerdict, cureVerdict, redSha,
     };
   }
-  return { ...raw, grantVerdict, cureVerdict };
+  // #534: both doors were consulted and both refused — say WHY on the row itself, so the prose table,
+  // `--dry`, and B1's abort line all tell "needs a grant" from "missing evidence" from "stacked". The
+  // JSON payload already carried `ciCure.reason`; the prose detail used to end at the raw trunk read.
+  return { ...raw, detail: `${raw.detail}${doorRefusalNote(cureVerdict, grantVerdict)}`, grantVerdict, cureVerdict, redSha };
+}
+
+/**
+ * Which red-trunk door let a trunk-CI row pass — `'cure rule'`, `'ci-grant'`, or null for a row that
+ * passed on its own (green) or did not pass (#538: B1 re-measures only a door the table relied on).
+ */
+function doorThatAdmitted(ciResult) {
+  if (!ciResult || !ciResult.ok) return null;
+  if (ciResult.cureVerdict && ciResult.cureVerdict.ok) return 'cure rule';
+  if (ciResult.grantVerdict && ciResult.grantVerdict.ok) return 'ci-grant';
+  return null;
+}
+
+/** #538: the pause before B1's one re-measure — long enough for a transient `gh` failure to clear. */
+const B1_REMEASURE_MS = Number.isFinite(Number(process.env.COLAB_B1_REMEASURE_MS))
+  && process.env.COLAB_B1_REMEASURE_MS !== '' ? Number(process.env.COLAB_B1_REMEASURE_MS) : 3000;
+
+/**
+ * The " — cure rule (#281): …; ci-grant (#105): …" suffix of a refused trunk-CI row (#534). Empty
+ * when neither door was consulted. One clause per door, each its own refusal reason verbatim — the
+ * cure's `reason`, the grant's per-issue `missing[].reason` — never a re-wording, so the prose and
+ * the `--dry --json` fields cannot read differently.
+ */
+function doorRefusalNote(cureVerdict, grantVerdict) {
+  const parts = [];
+  if (cureVerdict && !cureVerdict.ok && cureVerdict.reason) parts.push(`cure rule (#281): ${cureVerdict.reason}`);
+  if (grantVerdict && !grantVerdict.ok) {
+    const why = (grantVerdict.missing || []).map((m) => (m.issue ? `#${m.issue}: ` : '') + m.reason)
+      .map((s) => s.replace(/^(#\d+): \1/, '$1')).join('; ');
+    if (why) parts.push(`ci-grant (#105): ${why}`);
+  }
+  return parts.length ? ` — ${parts.join(' · ')}` : '';
 }
 
 /**
@@ -11505,7 +11934,9 @@ function cmdShipDryJson(opts) {
   }
 
   // ---- (a) AUTONOMY GATE — does NOT short-circuit here; an unattended caller wants the whole table ----
-  const autonomyGate = shipAutonomyGate(doc, () => docsOnly.branchChanges(git, repoAbs, target, shipRefFor(repoAbs, sess.branch)));
+  const autonomyGate = shipAutonomyGate(doc, () => docsOnly.branchChanges(git, repoAbs, target, shipRefFor(repoAbs, sess.branch)),
+    humanDoor.humanDoorFromProcess(process, opts.answeredBy), // #525
+    () => configSet.branchTuning(git, repoAbs, target, shipRefFor(repoAbs, sess.branch))); // #561
   autonomyGatePayloadVal = autonomyGatePayload(autonomyGate);
   checks.push({ name: 'autonomy granted', ok: autonomyGate.ok, class: autonomyGate.ok ? null : HUMAN_GATED, detail: autonomyGate.detail });
 
@@ -11775,14 +12206,21 @@ function shipMode(repoAbs, target, branch, commits) {
  */
 function shipCloseSpentContainers(repoAbs, closedIssues, { sha, target } = {}) {
   const seen = new Set();
+  const tr = tracker.forRepo(repoAbs);
   for (const start of closedIssues || []) {
     let child = start;
     for (let depth = 0; depth < 5; depth++) {
-      const view = git.ghIssueView(repoAbs, child, ['parent']);
+      const view = tr.issueView(child, ['parent', 'url']);
       const pnum = view && view.parent && Number.isInteger(view.parent.number) ? view.parent.number : null;
       if (pnum === null || seen.has(pnum)) break;
+      // #502: the parent's NUMBER means something only in the parent's own repository. A cross-repo
+      // parent looked up here would read nothing (a misleading "could not read") or an unrelated
+      // issue sharing the number — which could be classified and closed. Never evaluated from here.
+      const rel = containerClose.parentRelation(view);
+      if (rel.relation === 'other') { print(`  container ${containerClose.parentRelationFinding(rel)} (#502)`); break; }
+      if (rel.relation !== 'same') { warn(`container ${containerClose.parentRelationFinding(rel)}`); break; }
       seen.add(pnum);
-      const parent = git.ghIssueView(repoAbs, pnum, ['number', 'state', 'labels', 'body', 'subIssuesSummary']);
+      const parent = tr.issueView(pnum, ['number', 'state', 'labels', 'body', 'subIssuesSummary']);
       const c = containerClose.classifyContainer(parent || null);
       if (c.verdict !== 'close') {
         const finding = containerClose.containerFinding({ ...c, number: c.number === null ? pnum : c.number });
@@ -11793,7 +12231,7 @@ function shipCloseSpentContainers(repoAbs, closedIssues, { sha, target } = {}) {
       const cm = git.ghIssueComment(repoAbs, pnum, body);
       if (!cm.ok) warnDeferred(`could not post the container-close comment on #${pnum} — left OPEN`);
       if (!cm.ok) break;
-      const r = tracker.forRepo(repoAbs).issueClose(pnum, { reason: 'completed' });
+      const r = tr.issueClose(pnum, { reason: 'completed' });
       if (!r.ok) { warnDeferred(`could not close container #${pnum}: ${(r.stderr || '').split('\n')[0]}`); break; }
       print(`  closed container #${pnum} — all ${c.total} sub-issue(s) closed (#371)`);
       for (const d of containerClose.containerDeliveryLabels(parent.labels)) warn(`container #${pnum} carried ${d} — a container has no deliverable of its own (#371)`);
@@ -11897,7 +12335,7 @@ function shipEvidenceClose({ repoAbs, st, sess, target, trunk, gh, closeIssues, 
       `The deliverable is recorded on this issue (see the comment(s) above), which is what authorised ` +
       `the close — colab closes a zero-diff issue only when it already carries a comment colab did not ` +
       `write. The zero-diff fact was measured from git: ${mode.why}.${shipSess}`;
-    const c = git.ghIssueComment(repoAbs, num, body);
+    const c = git.ghIssueComment(repoAbs, num, body + (opts.humanDoorEvidence || '')); // #525
     if (!c.ok) warn(`could not post the evidence-close comment on #${num} — closing anyway`);
     const r = tracker.forRepo(repoAbs).issueClose(num, { reason: 'completed' });
     if (!r.ok) { skipped.push({ num, why: `gh issue close failed: ${(r.stderr || '').split('\n')[0]}` }); continue; }
@@ -12059,7 +12497,8 @@ function cmdShipDirect(opts) {
   // #345: a trunk-direct unit has no branch diff. Its change set is every trunk commit since its
   // earliest claim — by anyone, so the verdict can only err toward refusing (lib/docs-only.js).
   const since = claims.map((c) => c.created).filter(Boolean).sort()[0];
-  const autonomyGate = shipAutonomyGate(doc, () => docsOnly.directChanges(git, repoAbs, trunk, since));
+  const autonomyGate = shipAutonomyGate(doc, () => docsOnly.directChanges(git, repoAbs, trunk, since),
+    humanDoor.humanDoorFromProcess(process, opts.answeredBy)); // #525
   autonomyGatePayloadVal = autonomyGatePayload(autonomyGate);
   checks.push({ name: 'autonomy granted', ok: autonomyGate.ok, class: autonomyGate.ok ? null : HUMAN_GATED, detail: autonomyGate.detail });
 
@@ -12138,6 +12577,7 @@ function cmdShipDirect(opts) {
     process.stderr.write(`✗ ${shortRepo(repoAbs)} does not grant auto-trunk (project.yml autonomy: ${autonomyGate.declared}).\n`);
     process.stderr.write('  A human must close this unit. (Autonomy is granted by the repo, not by a flag — --force cannot override.)\n');
     process.stderr.write(`  The docs-only exception (#345) does not apply either: ${autonomyGate.docsOnly.reason}.\n`);
+    process.stderr.write(shipHumanDoorRefusal(autonomyGate, '--direct'));
     return 1;
   }
   if (!coreOk && coreReview.corePaths.length) {
@@ -12149,6 +12589,7 @@ function cmdShipDirect(opts) {
     process.stderr.write('  unit\'s reviewed landing, a human closes this issue by hand.\n');
   }
   if (autonomyGate.via === 'docs-only') print(`→ AUTONOMY: ${autonomyGate.detail} (#345) — project.yml autonomy: ${autonomyGate.declared}`);
+  if (autonomyGate.via === 'human') print(`→ AUTONOMY: ${autonomyGate.detail}`);
   print(`→ MODE: evidence-close (trunk-direct — the work is already on ${trunk}; nothing to merge)`);
   if (opts.dry) {
     print(preOk ? '→ READY: preconditions pass. Re-run without --dry to close.' : '→ NOT READY: fix the ✗ rows above.');
@@ -12160,6 +12601,7 @@ function cmdShipDirect(opts) {
     return preOk ? 0 : 1;
   }
   if (!preOk) { process.stderr.write('✗ Aborting: one or more preconditions failed (see ✗ above). Nothing was closed.\n'); return 1; }
+  if (!shipHumanDoorGo(autonomyGate, opts, `close ${issues.map((n) => '#' + n).join(' ')} on ${trunk} (trunk-direct)`)) return 1;
 
   const tip = shortSha(git.git(['rev-parse', trunk], repoAbs).stdout);
   const mode = { evidenceClose: true, direct: true, why: `trunk-direct unit — ${trunk}@${tip} is checked out clean and published to ${git.remoteInfo(repoAbs).name || 'origin'}/${trunk}` };
@@ -12375,22 +12817,95 @@ function shipOpenCorePr(repoAbs, cr, { target, branch, title, body }) {
  * caller asserts nothing. `readDocsOnly` is a thunk, so an auto-trunk repo never pays for the
  * diff read. Every other precondition is untouched — this relaxes the autonomy gate, not the checks.
  *
- * Returns `{ ok, via: 'auto-trunk'|'docs-only'|null, declared, docsOnly: verdict|null, detail }`.
+ * #561 adds the TUNING-ONLY class beside it: a diff `lib/config-set.js` classifies as one or more
+ * tuning keys of .github/project.yml with valid values, and nothing else. `readTuning` is a thunk
+ * too, consulted only when the change is not docs-only; a branchless (trunk-direct) door passes none.
+ *
+ * Returns `{ ok, via: 'auto-trunk'|'docs-only'|'tuning'|'human'|null, declared, docsOnly: verdict|null,
+ * tuning: verdict|null, detail }`.
  */
-function shipAutonomyGate(doc, readDocsOnly) {
+function shipAutonomyGate(doc, readDocsOnly, door = null, readTuning = null) {
   const declared = doc.autonomy ? String(doc.autonomy) : 'absent';
-  if (declared === 'auto-trunk') return { ok: true, via: 'auto-trunk', declared, docsOnly: null, detail: 'auto-trunk' };
+  if (declared === 'auto-trunk') return { ok: true, via: 'auto-trunk', declared, docsOnly: null, tuning: null, human: null, detail: 'auto-trunk' };
   const verdict = readDocsOnly();
   if (verdict.docsOnly) {
-    return { ok: true, via: 'docs-only', declared, docsOnly: verdict, detail: `${verdict.reason} — autonomy exception` };
+    return { ok: true, via: 'docs-only', declared, docsOnly: verdict, tuning: null, human: null, detail: `${verdict.reason} — autonomy exception` };
   }
-  return { ok: false, via: null, declared, docsOnly: verdict,
-    detail: `project.yml autonomy: ${declared} — a human must trigger Phase B (not docs-only: ${verdict.reason})` };
+  const tuning = readTuning ? readTuning() : null;
+  if (tuning && tuning.tuning) {
+    return { ok: true, via: 'tuning', declared, docsOnly: verdict, tuning, human: null, detail: `${tuning.reason} — autonomy exception (#561)` };
+  }
+  // #525: the human door — the person running ship IS the go (ruling on #525, option 1). Checked
+  // after docs-only and tuning, so either keeps its own (agent-usable) door and record.
+  if (door && door.open) {
+    return { ok: true, via: 'human', declared, docsOnly: verdict, tuning, human: door,
+      detail: `human door (#525): ${door.why} — project.yml autonomy: ${declared}` };
+  }
+  return { ok: false, via: null, declared, docsOnly: verdict, tuning, human: door,
+    detail: `project.yml autonomy: ${declared} — a human must trigger Phase B (not docs-only: ${verdict.reason}; ` +
+      `${tuning ? `not tuning-only: ${tuning.reason}; ` : ''}human door closed: ${door ? door.why : 'not offered'})` };
+}
+
+/** #525: the human-door refusal lines — what a person runs, never just "a human must". */
+function shipHumanDoorRefusal(gate, selector) {
+  const lines = [];
+  if (gate.human && gate.human.why) lines.push(`  The human door (#525) did not open: ${gate.human.why}.`);
+  lines.push('  A person gives the go by running ship themselves — every other precondition still applies:');
+  for (const l of humanDoor.humanDoorCommands(selector)) lines.push(`    ${l}`);
+  lines.push('  An agent does not pass this door on its own (CONVENTIONS.md §2, *The human door*).');
+  return lines.join('\n') + '\n';
+}
+
+/** #525: the ship selector to paste into the refusal's command line. */
+function shipSelector(opts, sess) {
+  if (opts.direct) return '--direct';
+  if (opts.worktree) return `--worktree ${opts.worktree}`;
+  if (sess && sess.name) return `--worktree ${sess.name}`;
+  if (opts.branch) return `--branch ${opts.branch}`;
+  return sess && sess.branch ? `--branch ${sess.branch}` : '';
+}
+
+/**
+ * #525: confirm the TTY door by a typed answer. Synchronous on purpose — ship is a sync pipeline,
+ * and the prompt sits before any write. Anything but `y`/`yes` is a no; EOF is a no.
+ */
+function shipConfirmAtTerminal(question) {
+  process.stdout.write(`${question} [y/N] `);
+  const buf = Buffer.alloc(256);
+  let line = '';
+  for (;;) {
+    let n = 0;
+    try { n = fs.readSync(0, buf, 0, buf.length, null); } catch (e) { if (e.code === 'EAGAIN') continue; return false; }
+    if (n <= 0) break;
+    line += buf.toString('utf8', 0, n);
+    if (line.includes('\n')) break;
+  }
+  return /^\s*y(es)?\s*$/i.test(line.split('\n')[0]);
+}
+
+/**
+ * #525: the last step before any write when the human door opened the gate. A TTY door asks the
+ * person to confirm; a COLAB_HUMAN door already carries its go (`--answered-by`). Either way the
+ * evidence clause is stashed on `opts` for the comment writers. Returns false on a declined prompt.
+ */
+function shipHumanDoorGo(gate, opts, what) {
+  if (gate.via !== 'human') return true;
+  if (gate.human.how === 'tty' && !shipConfirmAtTerminal(`Human door (#525): ${what}. This is your go — proceed?`)) {
+    process.stderr.write('✗ Not confirmed at the terminal. Nothing was changed.\n');
+    return false;
+  }
+  opts.humanDoorEvidence = humanDoor.humanDoorEvidence(gate.human);
+  return true;
 }
 
 /** #345: the additive `autonomyGate` field of the `--dry --json` output. */
 function autonomyGatePayload(gate) {
-  return { via: gate.via, docsOnly: gate.docsOnly };
+  // #525: `human` is additive and present only when the human door was consulted, so an
+  // auto-trunk / docs-only payload stays byte-identical to before.
+  // #561: `tuning` likewise — present only when the tuning class was consulted.
+  const base = { via: gate.via, docsOnly: gate.docsOnly };
+  if (gate.tuning) base.tuning = gate.tuning;
+  return gate.human ? { ...base, human: { open: gate.human.open, how: gate.human.how, why: gate.human.why } } : base;
 }
 
 /** The sha a branch name resolves to, local first, else origin's copy (#324's remote-only shape). */
@@ -12401,7 +12916,7 @@ function shipRefFor(repoAbs, branch) {
 
 function cmdShip(argv) {
   const opts = parseArgs(argv, {
-    values: { '--repo': 'repo', '--worktree': 'worktree', '--branch': 'branch', '--message': 'message', '--session': 'session', '--session-name': 'sessionName', '--batch': 'batch' },
+    values: { '--repo': 'repo', '--worktree': 'worktree', '--branch': 'branch', '--message': 'message', '--session': 'session', '--session-name': 'sessionName', '--batch': 'batch', '--answered-by': 'answeredBy' },
     // #479: a repeated --refs used to keep only its LAST value, and every dropped issue then became a
     // `Closes` line on trunk — an issue meant to stay open, auto-closed by the push. --refs now
     // accumulates (a repeat is the same as one comma list); every OTHER value flag to ship refuses a
@@ -12476,11 +12991,15 @@ function cmdShip(argv) {
 
   // ---- (a) AUTONOMY GATE — granted by the repo file, never by the caller ----
   // #345: …or the branch's diff is documentation only, computed here from git — never asserted.
-  const autonomyGate = shipAutonomyGate(doc, () => docsOnly.branchChanges(git, repoAbs, target, shipRefFor(repoAbs, sess.branch)));
+  const autonomyGate = shipAutonomyGate(doc, () => docsOnly.branchChanges(git, repoAbs, target, shipRefFor(repoAbs, sess.branch)),
+    humanDoor.humanDoorFromProcess(process, opts.answeredBy), // #525
+    () => configSet.branchTuning(git, repoAbs, target, shipRefFor(repoAbs, sess.branch))); // #561
   if (!autonomyGate.ok) {
     process.stderr.write(`✗ ${shortRepo(repoAbs)} does not grant auto-trunk (project.yml autonomy: ${autonomyGate.declared}).\n`);
     process.stderr.write('  A human must trigger Phase B. (Autonomy is granted by the repo, not by a flag — --force cannot override.)\n');
     process.stderr.write(`  The docs-only exception (#345) does not apply either: ${autonomyGate.docsOnly.reason}.\n`);
+    if (autonomyGate.tuning) process.stderr.write(`  Nor the tuning-only class (#561): ${autonomyGate.tuning.reason}.\n`);
+    process.stderr.write(shipHumanDoorRefusal(autonomyGate, shipSelector(opts, sess)));
     return 1;
   }
 
@@ -12873,6 +13392,9 @@ function cmdShip(argv) {
     }
     process.stderr.write('✗ Aborting: one or more preconditions failed (see ✗ above). Nothing was pushed.\n'); return 1;
   }
+  if (!shipHumanDoorGo(autonomyGate, opts, mode.evidenceClose
+    ? `evidence-close ${sess.issues.map((n) => '#' + n).join(' ')} (${sess.branch} has nothing to merge)`
+    : `squash-merge ${sess.branch} into ${target}`)) return 1;
 
   // ---- (b3) evidence-close: the whole B0–B2 sequence is skipped, because there is nothing to merge ----
   if (mode.evidenceClose) return shipEvidenceClose({
@@ -12969,6 +13491,14 @@ function cmdShip(argv) {
       return 1;
     }
   }
+  if (autonomyGate.via === 'tuning') {
+    const again = configSet.branchTuning(git, repoAbs, mergeRef, sess.branch);
+    if (!again.tuning) {
+      cleanupEphemeral();
+      process.stderr.write(`✗ B1: the tuning-only class (#561) no longer holds after B0 sync — ${again.reason}. A human must trigger Phase B. Nothing pushed.\n`);
+      return 1;
+    }
+  }
 
   // #350: B0 may have brought in paths (a pre-ship hook's regenerated files). The approval covered
   // the core paths the table listed; a core path it did not list was never reviewed.
@@ -12997,12 +13527,29 @@ function cmdShip(argv) {
   let ciGrantForTrailer = null; // #105: set below when B1 shipped UNDER a grant — read at commit-message time
   let ciCureForTrailer = null; // #281: set below when B1 shipped UNDER the cure rule — read at commit-message time
   if (gh) {
-    const ciResultB1 = shipCiCheck(repoAbs, gh, target, trunk,
+    const measureB1 = () => shipCiCheck(repoAbs, gh, target, trunk,
       (redSha) => shipCiGrants(repoAbs, gh, sess.issues, sess.branch, trunk, redSha),
       (redSha) => shipCiCure(repoAbs, gh, target, trunk, redSha, sess.branch), sess.branch);
+    let ciResultB1 = measureB1();
+    // #538: the table admitted this branch through a door (cure or grant) at red sha X, and B1 —
+    // seconds later, at the SAME red sha — refused. Nothing the door judges moved (trunk's head is
+    // X in both reads), so the likeliest cause is one of the ~10 `gh` reads a door makes failing
+    // once, which every door reads as a refusal (fail closed). Measured: `--dry` said READY and the
+    // real ship aborted here with only the raw "conclusion=failure". Re-measure ONCE, in full —
+    // never reuse the table's verdict (B1 exists to catch a change) — and if it refuses again, abort
+    // saying it was the door, with the door's own reason.
+    const tableDoor = doorThatAdmitted(ciResult);
+    if (!ciResultB1.ok && tableDoor && ciResultB1.redSha && ciResultB1.redSha === ciResult.redSha) {
+      warn(`  B1: the ${tableDoor} admitted this branch in the table at ${target}@${shortSha(ciResult.redSha)} but refused on the re-check at the same sha — re-measuring once (a failed read refuses).`);
+      ciWait.sleepSync(B1_REMEASURE_MS);
+      ciResultB1 = measureB1();
+    }
     if (!ciResultB1.ok) {
       cleanupEphemeral();
-      process.stderr.write(`✗ B1: CI for ${target} is no longer green — aborting before merge. Nothing pushed. (${ciResultB1.detail})\n`);
+      const sameRed = tableDoor && ciResultB1.redSha && ciResultB1.redSha === ciResult.redSha;
+      process.stderr.write(sameRed
+        ? `✗ B1: the ${tableDoor} admitted this branch in the precondition table, then refused twice on the re-check at the same ${target}@${shortSha(ciResult.redSha)} — aborting before merge. Nothing pushed. (${ciResultB1.detail})\n`
+        : `✗ B1: CI for ${target} is no longer green — aborting before merge. Nothing pushed. (${ciResultB1.detail})\n`);
       return 1;
     }
     if (ciResultB1.cureVerdict && ciResultB1.cureVerdict.ok) {
@@ -13372,7 +13919,8 @@ function cmdShip(argv) {
   // last — see warnDeferred's own comment for why this is scoped to exactly this window. The
   // window itself now OPENS at the push (e2, #304), not here: post-ship's warnings belong in the
   // same block, and re-assigning the collector here would silently discard them.
-  shipLandedTail({ repoAbs, sess, target, trunk, gh, sha, closeIssues, refsIssues, refsSet, integration, opts });
+  shipLandedTail({ repoAbs, sess, target, trunk, gh, sha, closeIssues, refsIssues, refsSet, integration, opts,
+    evidenceExtra: opts.humanDoorEvidence || '' }); // #525
 
   print('');
   print(`✓ Shipped ${sess.branch} → ${target} @ ${sha}${sess.issues.length ? ' (' + sess.issues.map((n) => '#' + n).join(' ') + ')' : ''}`);
@@ -13556,7 +14104,10 @@ function cmdShipBatch(opts) {
   if (String(doc.autonomy || '') !== 'auto-trunk') {
     return serial(`project.yml does not grant autonomy: auto-trunk — batch landing needs it (every member lands in one unattended push)`);
   }
-  if (members.length < 2) return serial(`--batch names ${members.length} branch(es) — a batch needs at least two`);
+  // #555: a declared ship-batch-wait lets ONE named member through — it may wait for a partner below.
+  const waitCfg = shipBatch.parseShipBatchWait(doc);
+  if (!waitCfg.valid) warn(`${waitCfg.reason} — ignored: a lone member does not wait (fails closed, #555)`);
+  if (members.length < 2 && !(members.length === 1 && waitCfg.sec > 0)) return serial(`--batch names ${members.length} branch(es) — a batch needs at least two`);
   if (members.length > cfg.n) warn(`--batch names ${members.length} branches; ship-batch: ${cfg.n} caps the batch — the rest wait for the next one`);
 
   const remote = git.remoteFor(repoAbs);
@@ -13695,6 +14246,22 @@ function cmdShipBatch(opts) {
     e.ok && !selected.includes(e) ? `eligible — waits for the next batch (cap ${cfg.n})` : e.why]), ['', 'MEMBER', 'DETAIL']));
   const notJoining = evaluated.filter((e) => !selected.includes(e)).map((e) => e.branch);
   step = shipBatch.nextStep({ enabled: true, wired: true, trunkCi, eligibleCount: selected.length, existing: null, trunkNow });
+  if (step.step === 'serial' && selected.length === 1 && waitCfg.sec > 0) {
+    // #555: the lane is idle here (trunk's run finished, no batch in flight at this base), and one
+    // member is ready. Wait for a partner until the repo's window, counted from when it became ready.
+    const lone = selected[0];
+    const commitIso = git.git(['log', '-1', '--format=%cI', lone.sha], repoAbs);
+    const since = shipBatch.readySince(git.ghRunsForCommit(repoAbs, lone.branch, lone.sha), commitIso.ok ? commitIso.stdout.trim() : null);
+    const pw = shipBatch.partnerWait({ n: cfg.n, waitSec: waitCfg.sec, eligibleCount: 1, readySinceMs: since, nowMs: Date.now() });
+    if (pw.wait) {
+      print(`⏸ PARTNER-WAIT ${lone.branch} — the only ready member; ${waitCfg.reason}, ready since ${new Date(since).toISOString()}, ${ciWait.fmtDuration(pw.leftSec * 1000)} left. Nothing landed.`);
+      print(`  Wait up to ${pw.leftSec}s (a wait on another candidate's run counts toward it), gather EVERY ready candidate again,`);
+      print('  then run colab ship --batch with all of them. Past the window, this same call lands it alone (serial).');
+      return 3;
+    }
+    const why = { 'window-elapsed': `${waitCfg.reason} has elapsed since it became ready`, 'ready-time-unread': 'its ready time could not be read, so it does not wait' }[pw.reason] || pw.reason;
+    return serial(`1 member can join and no partner arrived — ${why}`);
+  }
   if (step.step === 'serial') return serial(`${selected.length} member(s) can join — a batch needs at least two`);
 
   // ---- (e) build: trunk head + one squash commit per member, in an ephemeral detached worktree ----
@@ -13716,9 +14283,9 @@ function cmdShipBatch(opts) {
       // regenerated by .colab/hooks/pre-ship, never hand-merged and never a reason to leave the batch.
       // Only an overlap outside `generated:` (or no hook to regenerate with) drops the member.
       const nonGen = unmerged.filter((f) => !isGeneratedPath(f, generated));
-      let why = null;
-      if (nonGen.length) why = `conflicts with the members already in (${nonGen.join(', ')}) — next batch`;
-      else if (!hasPreShip) why = `conflicts with the members already in only in generated file(s) (${unmerged.join(', ')}), but there is no .colab/hooks/pre-ship to regenerate them — next batch`;
+      let why = null, cls = null;
+      if (nonGen.length) { why = `conflicts with the members already in (${nonGen.join(', ')}) — next batch`; cls = 'conflict'; }
+      else if (!hasPreShip) { cls = 'generated-no-hook'; why = `conflicts with the members already in only in generated file(s) (${unmerged.join(', ')}), but there is no .colab/hooks/pre-ship to regenerate them — next batch`; }
       else {
         const hk = runHook(repoAbs, 'pre-ship', {
           wtPath: dir, name: m.branch, branch: m.branch, ports: [], trunk, base: trunk,
@@ -13729,24 +14296,26 @@ function cmdShipBatch(opts) {
         // state, so `left` reads empty — read the staged content itself before trusting it.
         const markers = hk.ran && hk.ok && !left.length ? stagedConflictMarkers(dir, unmerged) : [];
         if (!hk.ran || !hk.ok || left.length) {
+          cls = 'hook-failed';
           why = `.colab/hooks/pre-ship could not regenerate ${unmerged.join(', ')} on the combined head${left.length && hk.ok ? ` (still unmerged: ${left.join(', ')})` : ''} — next batch`;
         } else if (markers.length) {
+          cls = 'hook-markers';
           why = `.colab/hooks/pre-ship exited 0 but left conflict markers staged in ${conflictMarkers.describe(markers)} on the combined head — treated as a failing hook, next batch`;
         } else regenerated = unmerged;
       }
       if (why) {
         git.git(['reset', '--hard', 'HEAD'], dir);
-        dropped.push({ branch: m.branch, why });
+        dropped.push({ branch: m.branch, sha: m.sha, cls, why });
         continue;
       }
     } else if (!sq.ok) {
       git.git(['reset', '--hard', 'HEAD'], dir);
-      dropped.push({ branch: m.branch, why: `squash failed: ${git.gitFailureLine(sq.stderr)}` });
+      dropped.push({ branch: m.branch, sha: m.sha, cls: 'squash-failed', why: `squash failed: ${git.gitFailureLine(sq.stderr)}` });
       continue;
     }
     if (!git.git(['diff', '--cached', '--name-only'], dir).stdout.trim()) {
       git.git(['reset', '--hard', 'HEAD'], dir);
-      dropped.push({ branch: m.branch, why: 'stages nothing on top of the members already in' });
+      dropped.push({ branch: m.branch, sha: m.sha, cls: 'empty', why: 'stages nothing on top of the members already in' });
       continue;
     }
     const closeIssues = m.report.closeIssues || [];
@@ -13758,14 +14327,25 @@ function cmdShipBatch(opts) {
     const inherited = msg && refsIssues.length ? squash.inheritedClosingKeywordConflicts(msg, refsIssues) : [];
     if (!msg || !coverage.ok || inherited.length) {
       git.git(['reset', '--hard', 'HEAD'], dir);
-      dropped.push({ branch: m.branch, why: !msg ? 'no commit of its own to take a squash subject from' : 'its composed message does not close exactly what it claims — ship it alone to see why' });
+      dropped.push({ branch: m.branch, sha: m.sha, cls: 'message', why: !msg ? 'no commit of its own to take a squash subject from' : 'its composed message does not close exactly what it claims — ship it alone to see why' });
       continue;
     }
     const c = git.run('git', ['commit', '-q', '-m', msg], { cwd: dir });
-    if (!c.ok) { git.git(['reset', '--hard', 'HEAD'], dir); dropped.push({ branch: m.branch, why: `commit failed: ${git.gitFailureLine(c.stderr)}` }); continue; }
+    if (!c.ok) { git.git(['reset', '--hard', 'HEAD'], dir); dropped.push({ branch: m.branch, sha: m.sha, cls: 'commit-failed', why: `commit failed: ${git.gitFailureLine(c.stderr)}` }); continue; }
     built.push({ ...m, regenerated, commit: git.git(['rev-parse', 'HEAD'], dir).stdout });
   }
   for (const d of dropped) print(`  ✗ ${d.branch}: ${d.why}`);
+  // #554: a drop leaves a durable trace — one Ship-Batch-Dropped trailer per dropped member on the
+  // batch head, so it reaches trunk with a landed batch and rides a red combined run's head message.
+  // Only when the batch is built (≥2 members): a build that collapses to serial pushes nothing.
+  if (dropped.length && built.length >= 2) {
+    const last = built[built.length - 1];
+    const cur = git.git(['log', '-1', '--format=%B'], dir);
+    const lines = dropped.map((d) => shipBatch.droppedTrailer({ ref, branch: d.branch, sha: d.sha, cls: d.cls }));
+    const am = cur.ok ? git.run('git', ['commit', '-q', '--amend', '-m', shipBatch.appendTrailers(cur.stdout, lines)], { cwd: dir }) : cur;
+    if (am.ok) last.commit = git.git(['rev-parse', 'HEAD'], dir).stdout;
+    else warn(`could not record the dropped member(s) on the batch head: ${git.gitFailureLine(am.stderr)} — the drop is on this terminal only`);
+  }
   for (const b of built.filter((x) => x.regenerated)) {
     print(`  ↻ ${b.branch}: combined despite a generated-file overlap — ${b.regenerated.join(', ')} regenerated by .colab/hooks/pre-ship on the combined head (the combined run is the gate)`);
   }
@@ -13855,9 +14435,28 @@ function shipBatchLand(repoAbs, doc, trunk, remote, base, existing, verdict, opt
     const headNow = git.git(['rev-parse', 'HEAD'], repoAbs).stdout;
     if (headNow === head) git.git(['reset', '--hard', preMergeSha], repoAbs); // #322: our own merge, put back
     release();
-    print(`⏸ ship-batch: trunk moved during land (${git.gitFailureLine(push.stderr)}) — nothing landed; ${trunk} rolled back to ${shortSha(preMergeSha)}.`);
-    print('  Run this command again: it sees the moved trunk and rebuilds the batch on it.');
-    return 3;
+    // #509: a failed push is not proof trunk moved — re-read the remote trunk before saying so.
+    const ls = git.run('git', ['ls-remote', remote, `refs/heads/${trunk}`], { cwd: repoAbs, timeoutMs: 60_000 });
+    const remoteNow = ls.ok ? ((ls.stdout || '').split('\n')[0] || '').split('\t')[0].trim() : null;
+    const why = shipBatch.landPushFailure({ stderr: push.stderr, remoteNow, base });
+    const rolled = `nothing landed; ${trunk} rolled back to ${shortSha(preMergeSha)}`;
+    const echo = () => { for (const l of why.lines) print(`  │ ${l}`); };
+    if (why.kind === 'trunk-moved') {
+      print(`⏸ ship-batch: trunk moved during land (${remote}/${trunk} ${shortSha(base)} → ${shortSha(remoteNow)}) — ${rolled}.`);
+      print('  Run this command again: it sees the moved trunk and rebuilds the batch on it.');
+    } else if (why.kind === 'unreachable') {
+      print(`⏸ ship-batch: the push failed and ${remote}/${trunk} could not be re-read to say why — ${rolled}. The push said:`);
+      echo();
+      print(`  Run this command again once ${remote} answers; it re-reads trunk before deciding anything.`);
+    } else {
+      const who = why.kind === 'remote-rejected'
+        ? `${remote} rejected the update`
+        : 'the push was refused before it reached the remote (a local pre-push hook?)';
+      print(`✗ ship-batch: ${who} — ${remote}/${trunk} did NOT move (still ${shortSha(base)}); ${rolled}. The push said:`);
+      echo();
+      print('  This is not a moved trunk: re-running hits the same refusal. Fix what the output above names, then run this command again.');
+    }
+    return why.exit;
   }
   print('  pushed.');
   deferredCollector = [];
@@ -14026,7 +14625,8 @@ function cmdTrunkCi(argv) {
     if (verdict === 'UNREADABLE' && gh && !git.ghState().ok) detail += ` (${ghUnusableWhy(repoAbs)})`;
     out = { verdict, trunk, sha, ok: r.verdict.ok, class: r.verdict.class || null, detail,
       ...(r.verdict.treeGreen ? { cited: r.verdict.treeGreen } : {}),
-      ...(r.run && Array.isArray(r.run.setAside) && r.run.setAside.length ? { setAside: r.run.setAside } : {}) };
+      ...(r.run && Array.isArray(r.run.setAside) && r.run.setAside.length ? { setAside: r.run.setAside } : {}),
+      ...(r.run && Array.isArray(r.run.dispatchCounted) && r.run.dispatchCounted.length ? { dispatchCounted: r.run.dispatchCounted } : {}) };
     if (key && verdict !== 'UNREADABLE' && sha === headSha) cache.put(key, out);
   }
   if (opts.json) {
@@ -14080,6 +14680,110 @@ function trunkCiCache(repoAbs) {
   };
 }
 
+// ---- ci-profile (#559) ------------------------------------------------------------------------
+// Every CI wait bound derives from the repo's own measured CI duration (tools/lib/ci-profile.js).
+// The profile is cached per checkout in `<git common dir>/colab-ci-profile.json` for a day; the
+// thresholds are NOT cached — they are recomputed from the cached profile and the CURRENT
+// `ci-wait-factor`, so editing the factor applies at once with no refetch.
+const CI_PROFILE_TTL_DEFAULT_SEC = 24 * 3600;
+const CI_PROFILE_CACHE_V = 1;
+
+function ciProfileTtlSec() {
+  const env = process.env.COLAB_CI_PROFILE_TTL;
+  return env !== undefined && env !== '' && Number.isFinite(Number(env)) ? Number(env) : CI_PROFILE_TTL_DEFAULT_SEC;
+}
+
+function ciProfileCacheFile(repoAbs) {
+  const dir = git.git(['rev-parse', '--path-format=absolute', '--git-common-dir'], repoAbs);
+  return dir.ok && dir.stdout ? path.join(dir.stdout.trim(), 'colab-ci-profile.json') : null;
+}
+
+/**
+ * The repo's completed CI runs in the profile window — up to 3 pages of the whole list plus one page
+ * of trunk pushes, so a branch-heavy repo still yields trunk samples. Returns `{ rows, runsRead }`,
+ * or `{ error }` when the list cannot be read (the caller falls back, never fails a wait on it).
+ */
+function fetchCiProfileRows(repoAbs, trunk, sinceIso) {
+  const jq = '.workflow_runs[] | [.id, .head_branch, .head_sha, .event, .name, .status, .conclusion, .run_attempt, .created_at, .updated_at, .head_commit.timestamp] | @json';
+  const day = sinceIso.slice(0, 10);
+  const paths = [1, 2, 3].map((n) => `repos/{owner}/{repo}/actions/runs?per_page=100&status=completed&created=%3E%3D${day}&page=${n}`);
+  paths.push(`repos/{owner}/{repo}/actions/runs?per_page=100&status=completed&created=%3E%3D${day}&branch=${encodeURIComponent(trunk)}&event=push`);
+  const seen = new Map();
+  for (let i = 0; i < paths.length; i++) {
+    const r = git.ghApi(repoAbs, [paths[i], '--jq', jq]);
+    if (!r.ok) return { error: git.gitFailureLine(r.stderr) || 'gh api failed' };
+    let n = 0;
+    for (const line of String(r.stdout || '').split('\n')) {
+      if (!line.trim()) continue;
+      let a; try { a = JSON.parse(line); } catch (_) { continue; }
+      n++;
+      seen.set(a[0], {
+        id: a[0], branch: a[1], sha: a[2], event: a[3], workflowName: a[4], status: a[5], conclusion: a[6],
+        attempt: a[7], createdMs: Date.parse(a[8]), updatedMs: Date.parse(a[9]), headCommitMs: a[10] ? Date.parse(a[10]) : null,
+      });
+    }
+    if (i < 3 && n < 100) i = 2; // a short page ends the paged list; the trunk page still runs
+  }
+  return { rows: [...seen.values()], runsRead: seen.size };
+}
+
+const ciProfileMemo = new Map();
+
+/**
+ * The one reader: `{ profile, th, factor, kindTrunk, cache: { state, ageSec, fetchedAt }, notes }`.
+ * `fetch`: 'never' (ship's hot path — never blocks a verdict on a history read) · 'if-stale' ·
+ * 'always'. A stale cache is still used when a refetch fails: old measured data beats bootstrap.
+ * TTL 0 (`COLAB_CI_PROFILE_TTL=0`) means no cache and no fetch — the bootstrap everywhere.
+ */
+function ciProfileFor(repoAbs, { fetch = 'never' } = {}) {
+  const memoKey = `${repoAbs}\u0000${fetch}`;
+  if (ciProfileMemo.has(memoKey)) return ciProfileMemo.get(memoKey);
+  const doc = projectDoc(repoAbs);
+  const factor = ciProfile.parseFactor(doc);
+  const trunk = resolveTrunk(repoAbs, doc);
+  const notes = [];
+  if (!factor.valid) notes.push(factor.reason);
+  const ttl = ciProfileTtlSec();
+  const file = ttl > 0 ? ciProfileCacheFile(repoAbs) : null;
+  let entry = null;
+  if (file) {
+    try { entry = JSON.parse(fs.readFileSync(file, 'utf8')); } catch (_) { entry = null; }
+    if (entry && (entry.v !== CI_PROFILE_CACHE_V || entry.trunk !== trunk || !entry.profile)) entry = null;
+  }
+  const ageSec = entry ? Math.max(0, Math.floor((Date.now() - entry.fetchedAt) / 1000)) : null;
+  let state = entry ? (ageSec < ttl ? 'fresh' : 'stale') : 'none';
+  const want = file && trunk && (fetch === 'always' || (fetch === 'if-stale' && state !== 'fresh'));
+  if (want) {
+    if (!isGhUsable(repoAbs)) notes.push(`gh not usable (${ghUnusableWhy(repoAbs)}) — CI history not read`);
+    else {
+      const nowMs = Date.now();
+      const sinceMs = nowMs - ciProfile.WINDOW_DAYS * 86_400_000;
+      const got = fetchCiProfileRows(repoAbs, trunk, new Date(sinceMs).toISOString());
+      if (got.error) notes.push(`could not read CI history (${got.error}) — ${entry ? 'using the stale cached profile' : 'using the bootstrap bounds'}`);
+      else {
+        const policy = verifyRuns.parsePolicy(doc);
+        const prof = ciProfile.profile(ciProfile.shaDurations(got.rows, { trunk, policy }), { sinceMs });
+        entry = { v: CI_PROFILE_CACHE_V, trunk, fetchedAt: nowMs, since: new Date(sinceMs).toISOString(), runsRead: got.runsRead, profile: prof };
+        state = 'fetched';
+        try {
+          const tmp = `${file}.${process.pid}.tmp`;
+          fs.writeFileSync(tmp, JSON.stringify(entry));
+          fs.renameSync(tmp, file);
+        } catch (_) { /* no cache, not an error */ }
+      }
+    }
+  }
+  const profile = entry ? entry.profile : null;
+  const out = {
+    trunk, factor, profile, th: ciProfile.thresholds(profile, factor.value),
+    cache: { state, ageSec: state === 'fetched' ? 0 : ageSec, fetchedAt: entry ? new Date(entry.fetchedAt).toISOString() : null,
+      since: entry ? entry.since : null, runsRead: entry ? entry.runsRead : null },
+    notes,
+  };
+  ciProfileMemo.set(memoKey, out);
+  return out;
+}
+
 // ci-wait — THE way to wait for CI (#495). Agents' hand-rolled `sleep N; gh run …` loops spent ~88%
 // of a shared identity's REST quota in one measured hour; this waits with backoff, conditional
 // requests, a deadline, and a distinct exit code for every way a wait can end.
@@ -14092,13 +14796,19 @@ Wait for CI and exit with its outcome. The ONE way to wait for a run: never hand
   --sha <sha>     wait for EVERY repo-owned workflow at the sha (the verdict colab ship reads:
                   newest run per workflow, dynamic workflows dropped — #451/#461; only runs that
                   verify the code, so a post-CI release/deploy run is set aside — #503); a sha
-                  with no run yet counts as pending until the deadline
+                  with no run yet counts as pending until the deadline. An abbreviated sha is
+                  resolved in the repo first, and refused (exit 2) when it does not resolve — #529
   --branch <b>    narrow --sha to runs on that branch
-  --timeout <d>   deadline: 45m (default), 90s, 1h, or seconds
+  --timeout <d>   deadline: 90s, 15m, 1h, or seconds. Default: this repo's CI wait bound, derived
+                  from its measured CI duration (\`colab ci-profile\`, #559) — the trunk bound
+                  when the target is trunk, the branch bound for any other branch, the larger
+                  for a bare run id; 15m while the repo has no CI history. Skills omit it.
 
-Polls at 0s, then +30s, +60s, +120s, +120s … until the deadline. Every poll after the first is a
-conditional request (If-None-Match); a 304 is not counted against the REST rate limit. A 15-minute
-run costs about 10 requests. One wait per run per checkout: a second waiter is refused.
+Polls at 0s, then +30s, +60s, +120s, +120s … until the deadline (a repo whose CI bound is past 15m
+gets the same schedule stretched in proportion — never a faster one). Every poll after the first is a
+conditional request (If-None-Match); a 304 is not counted against the REST rate limit. After two
+304s in a row, and on the last poll before the deadline, it re-reads unconditionally: a stale ETag
+can cost one paid call, never the whole wait (#505). A 15-minute run costs about 10 requests. One wait per run per checkout: a second waiter is refused.
 
 Exit codes — branch on these, never on the text:
   0 GREEN            the run (every judged run at the sha) succeeded
@@ -14110,7 +14820,8 @@ Exit codes — branch on these, never on the text:
   6 ALREADY_WAITING  another live ci-wait on this checkout holds the same run/sha
 
 It prints the wait it did: outcome, elapsed time, polls, and how many were 304s.
-  --json   { outcome, exit, target, polls, notModified, waitedSec, detail, status, conclusion, url }`;
+  --json   { outcome, exit, target, polls, notModified, forced, waitedSec, deadlineSec, deadlineBasis,
+             detail, status, conclusion, url }`;
 
 function cmdCiWait(argv) {
   const opts = parseArgs(argv, {
@@ -14123,9 +14834,22 @@ function cmdCiWait(argv) {
     warn('ci-wait takes exactly one of <run-id> (numeric) or --sha <sha> [--branch <b>]');
     return ciWait.EXIT.USAGE;
   }
-  const deadlineSec = opts.timeout !== undefined ? ciWait.parseDuration(opts.timeout) : ciWait.DEFAULT_DEADLINE_SEC;
-  if (!deadlineSec) { warn(`--timeout: cannot read "${opts.timeout}" (try 45m, 90s, 1h)`); return ciWait.EXIT.USAGE; }
+  let deadlineSec = opts.timeout !== undefined ? ciWait.parseDuration(opts.timeout) : ciWait.DEFAULT_DEADLINE_SEC;
+  if (!deadlineSec) { warn(`--timeout: cannot read "${opts.timeout}" (try 15m, 90s, 1h)`); return ciWait.EXIT.USAGE; }
+  let deadlineBasis = opts.timeout !== undefined ? '--timeout' : 'bootstrap';
+  let schedule = ciWait.DEFAULT_SCHEDULE_SEC;
   const repoAbs = resolveRepo(opts);
+  if (opts.sha) {
+    // #529: the API reports a 40-hex head_sha and the rows are matched by equality, so an
+    // abbreviated --sha would match nothing and wait out the whole deadline as "pending" — on a run
+    // that finished green in minutes. Resolve it here, or refuse; never poll with it.
+    const full = git.fullSha(repoAbs, opts.sha);
+    if (!full) {
+      warn(`--sha ${opts.sha}: not a full 40-hex sha and it does not resolve to one commit in ${repoAbs} — pass the full sha (\`git rev-parse <sha>\`), or fetch first`);
+      return ciWait.EXIT.USAGE;
+    }
+    opts.sha = full;
+  }
   if (!git.ghInstalled()) { warn('gh is not installed — cannot read CI'); return ciWait.EXIT.UNKNOWN; }
 
   const target = runId ? `run ${runId}` : `sha ${shortSha(opts.sha)}${opts.branch ? ` on ${opts.branch}` : ''}`;
@@ -14140,7 +14864,24 @@ function cmdCiWait(argv) {
     return ciWait.EXIT.ALREADY_WAITING;
   }
 
-  const verifyPolicy = verifyRuns.parsePolicy(projectDoc(repoAbs));
+  // #559: no --timeout → the repo's own bound, one source with every skill (they omit the flag). Read
+  // after the lock, so a refused second waiter never spends a history fetch; a failed read is a note.
+  if (opts.timeout === undefined) {
+    const cp = ciProfileFor(repoAbs, { fetch: 'if-stale' });
+    let onTrunk = null;
+    if (!runId && !opts.branch && cp.trunk) {
+      const remote = git.remoteFor(repoAbs);
+      onTrunk = git.git(['merge-base', '--is-ancestor', opts.sha, `${remote}/${cp.trunk}`], repoAbs).ok;
+    }
+    const kind = ciProfile.kindFor({ branch: opts.branch || null, trunk: cp.trunk, onTrunk });
+    deadlineSec = cp.th.ciWaitDefaultSec[kind];
+    schedule = cp.th.scheduleSec[kind];
+    const b = kind === 'any' ? (cp.th.basis.branchWait === 'measured' || cp.th.basis.trunkWait === 'measured' ? 'measured' : 'bootstrap') : cp.th.basis[`${kind}Wait`];
+    deadlineBasis = `${kind === 'any' ? 'larger' : kind} bound, ${b}`;
+    if (!opts.json) for (const n of cp.notes) process.stderr.write(`ci-wait: ${n}\n`);
+  }
+
+  const verifyPolicy = verifyingPolicy(repoAbs);
   const poll = (etag) => {
     const r = git.ghApiConditional(repoAbs, apiPath, etag);
     if (r.kind !== 'ok') return r;
@@ -14159,12 +14900,12 @@ function cmdCiWait(argv) {
     return { ...r, summary, state: ciWait.runState(summary) };
   };
 
-  if (!opts.json) process.stderr.write(`ci-wait: waiting on ${target} (deadline ${ciWait.fmtDuration(deadlineSec * 1000)}; polls at +0s, +30s, +60s, then every 120s)\n`);
+  if (!opts.json) process.stderr.write(`ci-wait: waiting on ${target} (deadline ${ciWait.fmtDuration(deadlineSec * 1000)}, ${deadlineBasis}; polls at +0s, +${schedule[0]}s, +${schedule[1]}s, then every ${schedule[2]}s)\n`);
   let res;
   try {
     res = ciWait.waitLoop({
-      poll, sleep: ciWait.sleepSync, deadlineSec,
-      onPoll: (p) => { if (!opts.json) process.stderr.write(`ci-wait: poll ${p.poll} at +${ciWait.fmtDuration(p.elapsedMs)} — ${p.state}${p.notModified ? ' (304, not counted)' : ''}\n`); },
+      poll, sleep: ciWait.sleepSync, deadlineSec, schedule,
+      onPoll: (p) => { if (!opts.json) process.stderr.write(`ci-wait: poll ${p.poll} at +${ciWait.fmtDuration(p.elapsedMs)} — ${p.state}${p.notModified ? ' (304, not counted)' : ''}${p.forced ? ' (unconditional re-read — #505)' : ''}\n`); },
     });
   } finally {
     lock.release();
@@ -14172,15 +14913,16 @@ function cmdCiWait(argv) {
   const s = (res.last && res.last.summary) || {};
   const code = ciWait.EXIT[res.outcome];
   const out = {
-    outcome: res.outcome, exit: code, target, polls: res.polls, notModified: res.notModified,
-    waitedSec: Math.round(res.waitedMs / 1000), detail: res.detail || null,
+    outcome: res.outcome, exit: code, target, polls: res.polls, notModified: res.notModified, forced: res.forced,
+    waitedSec: Math.round(res.waitedMs / 1000), deadlineSec, deadlineBasis, detail: res.detail || null,
     status: s.status || null, conclusion: s.conclusion || null, url: s.url || null,
     ...(Array.isArray(s.setAside) && s.setAside.length ? { setAside: s.setAside } : {}),
+    ...(Array.isArray(s.dispatchCounted) && s.dispatchCounted.length ? { dispatchCounted: s.dispatchCounted } : {}),
   };
   if (opts.json) print(JSON.stringify(out, null, 2));
   else {
     print(`${res.outcome} ${target} — waited ${ciWait.fmtDuration(res.waitedMs)}, ${res.polls} poll(s), ${res.notModified} of them 304` +
-      `${s.status ? ` · ${s.status}${s.conclusion ? `/${s.conclusion}` : ''}` : ''}${s.url ? ` · ${s.url}` : ''}${res.detail ? ` — ${res.detail}` : ''}${verifyRuns.setAsideNote(s.setAside)}`);
+      `${s.status ? ` · ${s.status}${s.conclusion ? `/${s.conclusion}` : ''}` : ''}${s.url ? ` · ${s.url}` : ''}${res.detail ? ` — ${res.detail}` : ''}${verifyRuns.setAsideNote(s.setAside)}${verifyRuns.dispatchCountedNote(s.dispatchCounted)}`);
   }
   return code;
 }
@@ -14232,6 +14974,264 @@ function landedBaseTrunk(repoAbs) {
     `Could not determine the base: no .github/project.yml \`trunk:\` and no local ${remote}/HEAD. ` +
     'Pass --base <branch>. (It is never assumed to be "main" — guessing the base is how a branch ' +
     'gets measured against the wrong one.)');
+}
+
+const HELP_BATCH_STATS = `colab batch-stats [--repo <path>] [--since <30d | 12h | YYYY-MM-DD>] [--json]
+
+How batch landing (#373) actually performs in this repo — read-only, derived from GitHub so it
+answers the same on any machine (#554). It is how a repo tunes its batch knobs: ship-batch: <N>
+and ship-batch-wait: <duration> have no handbook default (CONVENTIONS §4, Batch landing).
+
+Sources: trunk's first-parent log since --since (default 30d) — Ship-Batch: trailers mark batch
+members, Ship-Batch-Dropped: trailers mark members dropped at build, anything else with a
+Closes #N is a serial landing — and the repo's CI runs in the same window (REST, paginated):
+ship-batch/** runs are the combined runs, feature-branch runs say when a branch went green at
+its head, trunk runs say when a landing was pushed and when its trunk-CI cycle ended.
+
+Reports:
+  batches     landed, and their fill · combined-run builds: first-attempt green, green after the
+              one re-run, red, pending
+  red         red builds, and how many of their members then landed serially (the fallback)
+  dropped     members dropped at build, by class, and the eviction rate
+  serial      serial landings, and MISSED PARTNERS — another change, landed later, that was
+              already green when this one landed alone (could have joined) or went green inside
+              this landing's trunk-CI cycle (a near miss; its wait is what ship-batch-wait buys)
+  queue wait  green-at-head → landing, per landed change
+
+No batch history in the window is an answer, not an error: it says so, and still reports the
+serial side — missed partners are the evidence for turning ship-batch on at all. Not the optional
+machine-local journal: that is off by default and per-machine, so it cannot be the source.
+--json is the input for an audit; its shape is batch-stats.js derive()'s return value.
+Exit 0 on a report (empty or not); 1 when trunk's log cannot be read.
+`;
+
+/** `--since`: `<N>d` / `<N>h` / `<N>m` back from now, or an ISO date. → epoch ms, or null. */
+function batchStatsSince(v, nowMs) {
+  const s = String(v || '30d').trim();
+  const rel = /^(\d+)([dhm])$/.exec(s);
+  if (rel) return nowMs - Number(rel[1]) * ({ d: 86400, h: 3600, m: 60 })[rel[2]] * 1000;
+  const t = Date.parse(s);
+  return Number.isFinite(t) ? t : null;
+}
+
+function cmdBatchStats(argv) {
+  const opts = parseArgs(argv, {
+    values: { '--repo': 'repo', '--since': 'since' },
+    flags: { '--json': 'json', '-h': 'help', '--help': 'help' },
+  });
+  if (opts.help) return print(HELP_BATCH_STATS);
+  const repoAbs = resolveRepo(opts);
+  if (!git.repoRoot(repoAbs)) throw new UserError(`${repoAbs} is not a git repo — pass --repo <path> to a clone`);
+  const doc = projectDoc(repoAbs);
+  const trunk = resolveTrunk(repoAbs, doc);
+  if (!trunk) throw new UserError('Could not determine trunk branch — add `trunk: <branch>` to .github/project.yml, then run `colab batch-stats` again');
+  const nowMs = Date.now();
+  const sinceMs = batchStatsSince(opts.since, nowMs);
+  if (sinceMs === null) throw new UserError(`--since ${JSON.stringify(opts.since)}: expected 30d, 12h, 90m or an ISO date`);
+  const sinceIso = new Date(sinceMs).toISOString();
+  const notes = [];
+
+  const remote = git.remoteFor(repoAbs);
+  const f = git.git(['fetch', remote, trunk], repoAbs);
+  if (!f.ok) notes.push(`could not fetch ${remote}/${trunk} (${git.gitFailureLine(f.stderr)}) — read from the local copy, which may be behind`);
+  const log = git.git(['log', `${remote}/${trunk}`, '--first-parent', `--since=${sinceIso}`, '--format=%H%x1f%cI%x1f%B%x1e'], repoAbs);
+  if (!log.ok) throw new UserError(`could not read ${remote}/${trunk}: ${git.gitFailureLine(log.stderr)} — run \`git fetch ${remote} ${trunk}\`, then run this again`);
+  const commits = log.stdout.split('\x1e').map((r) => r.replace(/^\n/, '')).filter((r) => r.trim()).map((r) => {
+    const [sha, iso, body] = r.split('\x1f');
+    return { sha: sha.trim(), dateMs: Date.parse(iso), body: body || '' };
+  });
+
+  let runs = [];
+  const builds = {};
+  if (!isGhUsable(repoAbs)) {
+    notes.push(`gh not usable (${ghUnusableWhy(repoAbs)}) — trunk commits only: no combined runs, no green times, no partner matching`);
+  } else {
+    const jq = '.workflow_runs[] | [.id, .head_branch, .head_sha, .event, .status, .conclusion, .run_attempt, .created_at, .updated_at, (if ((.head_branch // "") | startswith("ship-batch/")) then .head_commit.message else null end)] | @json';
+    // One query per UTC day: GitHub answers at most 1000 rows for a filtered run list, and a busy
+    // repo passes that inside a fortnight. A day that still hits the cap is named, never hidden.
+    const days = [];
+    for (let d = Date.parse(sinceIso.slice(0, 10)); d <= nowMs; d += 86_400_000) days.push(new Date(d).toISOString().slice(0, 10));
+    let failed = null;
+    const capped = [];
+    for (const day of days) {
+      const r = git.ghApi(repoAbs, ['--paginate', `repos/{owner}/{repo}/actions/runs?per_page=100&created=${day}`, '--jq', jq]);
+      if (!r.ok) { failed = git.gitFailureLine(r.stderr); break; }
+      let n = 0;
+      for (const line of String(r.stdout || '').split('\n')) {
+        if (!line.trim()) continue;
+        let a; try { a = JSON.parse(line); } catch (_) { continue; }
+        n++;
+        runs.push({ id: a[0], branch: a[1], sha: a[2], event: a[3], status: a[4], conclusion: a[5], attempt: a[6], createdMs: Date.parse(a[7]), updatedMs: Date.parse(a[8]), message: a[9] });
+      }
+      if (n >= 1000) capped.push(day);
+    }
+    if (failed) { notes.push(`could not list CI runs (${failed}) — trunk commits only`); runs = []; }
+    else {
+      if (capped.length) notes.push(`GitHub caps a filtered run list at 1000 and ${capped.join(', ')} hit it — those days are incomplete`);
+      // An unlanded combined run's ref is usually gone: read every commit of the build, so a red
+      // batch's members and its drops are known, not just its head commit's.
+      const landedShas = new Set(commits.map((c) => c.sha));
+      const unlanded = [...new Set(runs.filter((x) => String(x.branch || '').startsWith(shipBatch.REF_PREFIX) && !landedShas.has(x.sha)).map((x) => `${x.branch} ${x.sha}`))];
+      for (const k of unlanded) {
+        const [ref, sha] = k.split(' ');
+        const base7 = (shipBatch.parseBatchRef(ref) || {}).base7;
+        if (!base7) continue;
+        const c = git.ghApi(repoAbs, [`repos/{owner}/{repo}/compare/${base7}...${sha}`, '--jq', '[.commits[].commit.message]']);
+        if (c.ok) { try { builds[sha] = JSON.parse(c.stdout); } catch (_) { /* head message only */ } }
+      }
+    }
+  }
+
+  const cfg = shipBatch.parseShipBatch(doc);
+  const waitCfg = shipBatch.parseShipBatchWait(doc);
+  const rep = batchStats.derive({ commits, runs, builds, trunk, config: { n: cfg.n, waitSec: waitCfg.sec } });
+  rep.repo = shortRepo(repoAbs);
+  rep.since = sinceIso;
+  rep.until = new Date(nowMs).toISOString();
+  rep.notes = [...notes, ...rep.notes];
+  if (opts.json) { print(JSON.stringify(rep, null, 2)); return 0; }
+
+  const pct = (x) => (x === null ? '—' : `${Math.round(x * 100)}%`);
+  const dur = (s) => (s === null ? '—' : ciWait.fmtDuration(s * 1000));
+  const q = (w) => (w.samples ? `p50 ${dur(w.p50Sec)} · p90 ${dur(w.p90Sec)} · max ${dur(w.maxSec)} (${w.samples})` : 'no samples');
+  print(`batch-stats ${rep.repo} → ${trunk}  ${rep.since.slice(0, 10)} … ${rep.until.slice(0, 10)}  (ship-batch: ${cfg.n}${waitCfg.sec ? ` · ship-batch-wait: ${dur(waitCfg.sec)}` : ''})`);
+  print(`  landings     ${rep.landings.total} (${rep.landings.batch} batch · ${rep.landings.serial} serial)`);
+  if (!rep.history) print('  batches      no batch history in this window — nothing has landed or been built through colab ship --batch');
+  else {
+    const fill = Object.keys(rep.batches.fill).sort().map((k) => `${rep.batches.fill[k]}×${k}`).join(' · ') || '—';
+    print(`  batches      ${rep.batches.landed} landed (fill ${fill}) · ${rep.batches.builds} combined-run build(s): ${rep.batches.firstAttemptGreen} first-attempt green (${pct(rep.batches.firstAttemptGreenRate)}), ${rep.batches.greenAfterRerun} after a re-run, ${rep.batches.red} red, ${rep.batches.pending} pending`);
+    print(`  red          ${rep.red.builds} build(s) · ${rep.red.members} member(s), ${rep.red.relandedSerially} then landed serially`);
+    const cls = Object.entries(rep.dropped.byClass).map(([k, v]) => `${v} ${k}`).join(', ');
+    print(`  dropped      ${rep.dropped.count} of ${rep.dropped.attempted} attempted (${pct(rep.dropped.rate)})${cls ? ` — ${cls}` : ''}`);
+  }
+  print(`  serial       ${rep.serial.landings} landed alone · ${rep.serial.withMissedPartner} with a missed partner (already green) · ${rep.serial.withNearMiss} more with a near miss (green within its trunk-CI cycle)`);
+  if (rep.serial.nearMissWait.samples) print(`  near misses  per pair, the wait from the lone change's own green that would have caught its partner: ${q(rep.serial.nearMissWait)}`);
+  print(`  queue wait   green-at-head → landing: ${q(rep.queueWait)}`);
+  for (const n of rep.notes) print(`  ! ${n}`);
+  return 0;
+}
+
+// ci-profile (#559) — the repo's measured CI duration and every wait bound derived from it.
+const HELP_CI_PROFILE = `colab ci-profile [--repo <path>] [--json] [--refresh]
+
+This repo's measured CI duration, and every CI wait bound derived from it (#559). One source:
+\`colab ci-wait\` with no --timeout, and \`colab ship\`'s wedged-run and empty-read verdicts, read
+these same numbers — no skill hard-codes a wait.
+
+Measured: per sha, the wall time from the first verifying run's creation to the last one's
+finish, over clean first-attempt green shas in the last ${ciProfile.WINDOW_DAYS} days — split into branch runs and trunk
+runs — plus the push → run lag on trunk. A kind with fewer than ${ciProfile.MIN_SAMPLES} samples stays on its
+bootstrap value, which is today's fleet value exactly (15m waits, 6h wedge, 10m grace, 2m floor).
+
+Declared: only \`ci-wait-factor: <number ≥ 1>\` in .github/project.yml (default ${ciProfile.DEFAULT_FACTOR}) — how many times
+the measured p95 a repo will wait. Every bound:
+  branch / trunk wait   2m + factor × p95 of that kind, rounded up to the minute
+  wedged-run age        factor × the longer wait, never above 6h
+  empty-read grace      factor × push→run p95, never below 2m
+  zero-jobs floor       2m (not measurable from the run list)
+  poll backoff          30/60/120s, stretched in proportion to a wait past 15m — never faster
+
+The profile is cached per checkout for a day (<git common dir>/colab-ci-profile.json;
+COLAB_CI_PROFILE_TTL seconds overrides, 0 = no cache and no read: the bootstrap). The bounds are
+recomputed from it on every read, so a changed ci-wait-factor applies at once.
+
+  --refresh   re-read the CI history now, whatever the cache's age
+  --json      { repo, trunk, source, factor, cache, measured: { branch, trunk, lag }, thresholds, notes }`;
+
+function cmdCiProfile(argv) {
+  const opts = parseArgs(argv, {
+    values: { '--repo': 'repo' },
+    flags: { '--json': 'json', '--refresh': 'refresh', '-h': 'help', '--help': 'help' },
+  });
+  if (opts.help) return print(HELP_CI_PROFILE);
+  const repoAbs = resolveRepo(opts);
+  if (!git.repoRoot(repoAbs)) throw new UserError(`${repoAbs} is not a git repo — pass --repo <path> to a clone, then run \`colab ci-profile\` again`);
+  const cp = ciProfileFor(repoAbs, { fetch: opts.refresh ? 'always' : 'if-stale' });
+  if (!cp.trunk) throw new UserError('Could not determine trunk branch — add `trunk: <branch>` to .github/project.yml, then run `colab ci-profile` again');
+  const p = cp.profile || ciProfile.profile([]);
+  const th = cp.th;
+  const source = cp.profile ? cp.profile.source : 'bootstrap';
+  if (opts.json) {
+    print(JSON.stringify({
+      repo: shortRepo(repoAbs), trunk: cp.trunk, source, factor: cp.factor, cache: cp.cache,
+      measured: { branch: p.branch, trunk: p.trunk, lag: p.lag }, thresholds: th, notes: cp.notes,
+    }, null, 2));
+    return 0;
+  }
+  const dur = (s) => (s === null || s === undefined ? '—' : ciWait.fmtDuration(s * 1000));
+  const cacheTxt = cp.cache.state === 'fetched' ? 'read now'
+    : cp.cache.state === 'none' ? 'no history read' : `read ${dur(cp.cache.ageSec)} ago (cache${cp.cache.state === 'stale' ? ', stale' : ''})`;
+  print(`ci-profile ${shortRepo(repoAbs)} → ${cp.trunk}  ${source.toUpperCase()} · ${cacheTxt} · ${cp.factor.valid ? cp.factor.reason : `${ciProfile.FACTOR_KEY}: ${ciProfile.DEFAULT_FACTOR} (declared value invalid)`}`);
+  if (source !== 'measured') print(`  ${source === 'bootstrap' ? 'every bound is' : 'unmeasured bounds are'} the bootstrap — fewer than ${ciProfile.MIN_SAMPLES} clean green shas per kind in ${ciProfile.WINDOW_DAYS}d`);
+  const k = (name, x) => print(`  ${name.padEnd(11)} ${x.source} · ${x.samples} sha(s)${x.samples ? ` · p50 ${dur(x.p50Sec)} · p95 ${dur(x.p95Sec)} · max ${dur(x.maxSec)}` : ''}`);
+  k('branch', p.branch);
+  k('trunk', p.trunk);
+  print(`  ${'push→run'.padEnd(11)} ${p.lag.source} · ${p.lag.samples} sample(s)${p.lag.samples ? ` · p95 ${dur(p.lag.p95Sec)}` : ''}`);
+  const row = (name, sec, basis, how, boot) => print(`  ${name.padEnd(11)} ${dur(sec).padEnd(7)} ${basis === 'measured' ? how : basis === 'default' ? how : 'bootstrap'}${basis === 'measured' && boot ? `   (bootstrap ${boot})` : ''}`);
+  row('branch wait', th.branchWaitSec, th.basis.branchWait, `2m + ${th.factor} × p95`, '15m');
+  row('trunk wait', th.trunkWaitSec, th.basis.trunkWait, `2m + ${th.factor} × p95`, '15m');
+  print(`  ${'ci-wait'.padEnd(11)} ${dur(th.ciWaitDefaultSec.branch)} branch · ${dur(th.ciWaitDefaultSec.trunk)} trunk · ${dur(th.ciWaitDefaultSec.any)} run id  (its default with no --timeout)`);
+  row('wedged age', th.wedgeAgeSec, th.basis.wedgeAge, `${th.factor} × the longer wait, ≤ 6h`, '6h');
+  row('empty read', th.emptyReadGraceSec, th.basis.emptyReadGrace, `${th.factor} × push→run p95, ≥ 2m`, '10m');
+  row('zero jobs', th.zeroJobsFloorSec, th.basis.zeroJobsFloor, 'default — not measurable from the run list');
+  print(`  ${'backoff'.padEnd(11)} branch ${th.scheduleSec.branch.map((x) => `${x}s`).join('/')} · trunk ${th.scheduleSec.trunk.map((x) => `${x}s`).join('/')}`);
+  for (const n of cp.notes) print(`  ! ${n}`);
+  return 0;
+}
+
+// thresholds (#560) — the advisory thresholds this repo applies: its declared values, else the defaults.
+const HELP_THRESHOLDS = `colab thresholds [--repo <path>] [--json] [<name>]
+
+The advisory thresholds this repo applies (#560): the value of each, and whether it is this
+repo's declared value or the handbook default. A repo overrides one in .github/project.yml:
+
+  thresholds:
+    hot-file-count: 4
+
+Nothing changes for a repo that declares nothing. Skills cite these by name — code-triage's
+hot-file count and dependents band, code-wrap's gate.smoke target — and read them here, so no
+skill hard-codes a number a repo may have changed. A malformed entry falls back to the default
+and is listed under problems; the audit and the CI templates' descriptor check fail it.
+
+The batch-* names (#556) have NO default: undeclared, they read "—" and the audit's
+--batch-history shows the measurement without judging it. Percents are bounded at 100.
+
+  <name>    print only that threshold's value (a bare number, for a script or a skill;
+            an empty line for an undeclared no-default name)
+  --json    { repo, thresholds: { <name>: { value, default, declared, what, where } }, problems }`;
+
+function cmdThresholds(argv) {
+  const opts = parseArgs(argv, {
+    values: { '--repo': 'repo' },
+    flags: { '--json': 'json', '-h': 'help', '--help': 'help' },
+  });
+  if (opts.help) return print(HELP_THRESHOLDS);
+  const repoAbs = resolveRepo(opts);
+  const r = thresholdsLib.parseThresholds(projectDoc(repoAbs));
+  const name = opts._ && opts._[0];
+  if (name !== undefined) {
+    if (!thresholdsLib.SPEC[name]) throw new UserError(`unknown threshold ${name} — expected one of: ${Object.keys(thresholdsLib.SPEC).join(', ')} (run \`colab thresholds\` to list them)`);
+    for (const p of r.problems) process.stderr.write(`! ${p}\n`);
+    print(r.values[name] === null ? '' : String(r.values[name])); // #556: empty = undeclared, no default
+    return 0;
+  }
+  const rows = Object.fromEntries(Object.entries(thresholdsLib.SPEC).map(([k, s]) => [k, {
+    value: r.values[k], default: s.def, declared: !!r.declared[k], what: s.what, where: s.where,
+  }]));
+  if (opts.json) {
+    print(JSON.stringify({ repo: shortRepo(repoAbs), thresholds: rows, problems: r.problems }, null, 2));
+    return 0;
+  }
+  print(`thresholds ${shortRepo(repoAbs)}`);
+  const w = Math.max(...Object.keys(rows).map((k) => k.length));
+  for (const [k, row] of Object.entries(rows)) {
+    // #556: a no-default key (batch-*) shows `—` and "not declared" — nothing judges it until it is.
+    const shown = row.value === null ? '—' : String(row.value);
+    const src = row.declared ? `declared (default ${row.default === null ? 'none' : row.default})` : (row.default === null ? 'not declared' : 'default');
+    print(`  ${k.padEnd(w)}  ${shown.padStart(5)}  ${src.padEnd(20)}  ${row.what}`);
+  }
+  for (const p of r.problems) print(`  ! ${p}`);
+  return 0;
 }
 
 function cmdLanded(argv) {
@@ -15018,6 +16018,13 @@ Commands:
   landed [--worktree N | --branch B | --all] [--base B] [--json]   has this work already landed?
                                         (the shared rule behind code-sweep's buckets — correct
                                         across squash merges, where "commits ahead" is not)
+  batch-stats [--since 30d] [--json]   how batch landing performs here, from git + CI history —
+                                        fill, first-attempt green, drops, missed partners, queue
+                                        wait; how a repo tunes ship-batch / ship-batch-wait (#554)
+  ci-profile [--json] [--refresh]      this repo's measured CI duration and every CI wait bound
+                                        derived from it — ci-wait's default deadline (#559)
+  thresholds [<name>] [--json]         the advisory thresholds this repo applies — declared in
+                                        project.yml thresholds:, else the default (#560)
   holders <path> [--base B] [--json]   who else is holding <path> — refs that touched it and
                                         have not landed on the base (filters the raw git-log
                                         one-liner through \`landed\`'s content classification)
@@ -15102,6 +16109,9 @@ function main(argv) {
     case 'worktrees': return cmdWorktrees(rest);
     case 'ship': return cmdShip(rest);
     case 'landed': return cmdLanded(rest);
+    case 'batch-stats': return cmdBatchStats(rest);
+    case 'ci-profile': return cmdCiProfile(rest);
+    case 'thresholds': return cmdThresholds(rest);
     case 'trunk-ci': return cmdTrunkCi(rest);
     case 'ci-wait': return cmdCiWait(rest);
     case 'holders': return cmdHolders(rest);

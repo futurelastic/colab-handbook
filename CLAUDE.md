@@ -54,7 +54,8 @@ that one ever disagree, `CONVENTIONS.md` wins — and report the discrepancy.
   ("no axis of record") — propose adding one in your report, never invent it.
 - **Never create a branch named `trunk`.** "Trunk" is a role: the branch
   sessions merge into — the value of `trunk:` in `project.yml`, full stop.
-  `main` on Tier B (fixed — no second branch to distinguish it from); on
+  the default branch on Tier B — `main` by convention, any existing spelling
+  (`master`…) equally conforming, so long as no `main` sits beside it; on
   Tier C a branch distinct from `main` — `dev` by default, any other name
   equally conforming, never a per-tier mapping; `dev` on the ordinary Tier A,
   or `main` on a tag-gated Tier A (`deploy: tag`). The tier letter is only
@@ -155,8 +156,8 @@ a refusal means a human finishes, not that you improvise around it. Raw
 `git push` to the trunk is blocked by hook regardless. **Without that grant,
 `colab ship` still completes Phase B for a docs-only change** — every changed
 path `.md`/`.mdx`/`.txt` or under a top-level `docs/`, none of them agent rules
-or config (`CLAUDE.md`, `AGENTS.md`, `.claude/`, `.github/`, `.githooks/`), no
-binary, no symlink, not empty. Ship computes this from the diff; you never
+or config (`CLAUDE.md`, `AGENTS.md`, `.claude/`, `.github/`, `.githooks/`,
+`.colab/skills/`), no binary, no symlink, not empty. Ship computes this from the diff; you never
 assert it, and every other precondition still applies
 ([§2](CONVENTIONS.md#autonomy--the-docs-only-exception-345)). Neither exception
 extends to promotion, tags, or anything that deploys: neither `auto-trunk` nor

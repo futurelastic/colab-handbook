@@ -131,6 +131,12 @@ test('looksLikeSessionId: a real session URL, and a bare session_ token, both pa
   assert.strictEqual(ci.looksLikeSessionId('session_017abc-DEF'), true);
 });
 
+test('looksLikeSessionId: a bare uuid is an id, not a name — any engine\'s session id (#531)', () => {
+  assert.strictEqual(ci.looksLikeSessionId('0f3c9a2e-5b7d-4e1a-9c2b-7d8e6f5a4b3c'), true);
+  assert.strictEqual(ci.looksLikeSessionId('0F3C9A2E-5B7D-4E1A-9C2B-7D8E6F5A4B3C'), true);
+  assert.strictEqual(ci.looksLikeSessionId('0f3c9a2e-5b7d-4e1a-9c2b'), false);
+});
+
 test('looksLikeSessionId: a session NAME in the URL slot fails — the #306 live case', () => {
   assert.strictEqual(ci.looksLikeSessionId('ops-example-orchestrator-1480'), false);
   assert.strictEqual(ci.looksLikeSessionId('colab-handbook-305-306'), false);

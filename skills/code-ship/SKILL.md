@@ -5,6 +5,14 @@ description: "Close the COORDINATOR half of a coding session, authorized: verify
 
 # code-ship — merge a wrapped session: verify hand-off → grade → CI → squash → evidence → release → teardown
 
+**Local policy for this repo** (#520) — optional, one file per skill:
+
+!`cat .colab/skills/code-ship.md 2>/dev/null || echo "(no local policy for code-ship in this repo)"`
+
+If `.colab/skills/code-ship.md` exists in this repo, read it before continuing. Local policy
+refines this skill for this repo and wins over the text below where they differ. It never
+changes a `colab` gate.
+
 This is the **coordinator's** half of closing a session — [`code-wrap`](../code-wrap/SKILL.md)
 is the implementer's. Where that skill asserts a checklist and stops, this one verifies
 the checklist independently and then performs the merge once authorized — see *Principle*
@@ -27,6 +35,14 @@ case it is that line.
 claim discipline, worktree teardown, squash + `Closes #N`, the CI gate — runs exactly
 the same regardless of `ceremony`.
 
+
+**How this file is built (#524).** This is the core: the steps in order, each with its rule
+and its stop condition, and the commands and tables a run executes. Each step's full text —
+edge cases, the measurements behind them, worked examples — sits in a reference file next to
+this one, moved there verbatim, and the step names it. **Read a step's reference file before
+you act on that step**; the line here is an index to it, never a substitute. Where they seem
+to differ, the reference file holds the full rule.
+
 ## Principle
 
 **A trunk merge is authorized, never inferred; a release is never this skill's act.**
@@ -44,1787 +60,185 @@ all is [`CONVENTIONS.md` §6's release rung](../../CONVENTIONS.md#6-releases) (a
 candidates; a final tag automatic only where nothing deploys from it) — a separate act by
 a release skill in a coordinator session, never a step of this one.
 
+
 ## 0. Verify the hand-off contract — don't trust the report, re-derive it
 
-`code-wrap` **asserts** seven things when it stops. Re-check each from git and GitHub
-directly — a session's own report of its state is exactly the kind of self-grading #94
-exists to add a second check on top of:
-
-**Resolve `$MAIN_REPO` first, from wherever this coordinator session happens to be
-running** — it may itself be inside a worktree, and every plan-file path below is
-meaningless unless it is anchored to the main checkout rather than `$PWD` (#113):
-
-```sh
-MAIN_REPO="$(dirname "$(git rev-parse --path-format=absolute --git-common-dir)")"
-
-git ls-remote origin <branch>                              # branch actually pushed?
-gh issue view $N --comments | tail -5                       # distill comment present?
-colab claims                                                 # claim(s) still held?
-case "${COLAB_PLANS_DIR:-.plans}" in /*) PLANS_DIR="$COLAB_PLANS_DIR" ;; *) PLANS_DIR="$MAIN_REPO/${COLAB_PLANS_DIR:-.plans}" ;; esac
-ls "$PLANS_DIR/issue-$N.md" "$MAIN_REPO/.claude/plans/issue-$N.md" 2>/dev/null  # plan file, if one was written (#488: configured dir, then legacy)
-git -C "$MAIN_REPO" status --porcelain -uall                 # trunk checkout still clean?
-```
-
-- **Branch not on the remote** → `code-wrap` did not finish A5. **You may push it — and
-  only it.** The head that exists locally, unchanged, when it equals the commit
-  `code-wrap` reported in its hand-off; nothing else. Verify before you push, do not
-  assume:
-
-  ```sh
-  git rev-parse <branch>                 # must equal the sha code-wrap reported
-  git log --oneline origin/<trunk>..<branch>   # must be this branch's own commits only
-  git push -u origin <branch>
-  ```
-
-  If the local head is **not** the wrapped commit, that is a different problem —
-  somebody committed after the wrap, and this skill has no idea whether that work was
-  gated. Stop there and **send it back** (below).
-
-  **This is the one thing the coordinator may do to the branch, and the boundary is
-  source** — stated once in `CONVENTIONS.md`
-  [§4, *Who may touch a branch*](../../CONVENTIONS.md#who-may-touch-a-branch--the-coordinator-never-edits-implementer-work-409)
-  (#409). You may push a wrapped head, re-run an infra-class red run once (the test for
-  *infra-class*: B1a, *Telling infra from finding*), cure-merge,
-  open a PR to obtain branch CI for the branch that carries a red trunk's fix (that
-  branch only — B1, *Red trunk*), and — in B0 only — sync the base in, regenerate a
-  generated file after taking one side, and resolve a purely mechanical conflict. You may
-  **not** edit source, add a commit of your own beyond that sync, amend, or
-  force-push — the grader is not the fixer, and a coordinator that writes code is
-  grading its own work one step later. Measured, 2026-09-05: a branch's head — the very
-  commit whose message said the failure was resolved — sat unpushed for a day because
-  this line read *"stop; do not improvise a push from here"* while the paragraph twenty
-  lines below told the same reader to *"re-push"* before continuing. Nobody pushed, no
-  CI run ever validated the fix, and the contradiction was doing the blocking.
-- **No recent distill comment** → A1 did not happen, or happened somewhere this can't
-  see. **Send it back** — the distill is the implementer's knowledge, not the
-  coordinator's to reconstruct (#409). Don't assume it was verbal.
-- **Claim released already** → someone (or something) other than this skill let it go.
-  That is a finding — B3 below is supposed to be the only unconditional release — chase
-  it before merging over a claim that may no longer mean what it used to.
-- **Gate result, `gate: authoritative: ci` repos (#410)** — trunk's `project.yml` declares
-  `gate:` with `authoritative: ci` and a workflow fires on a session-branch push
-  (`tools/lib/gate.js` `gateMode` → `ci`). Then the hand-off names a **branch-CI run id**,
-  not a local gate claim, and this is the whole check: `gh run view <id> --json
-  headSha,conclusion` — its `headSha` must equal the branch's current head, and B1a
-  re-derives the class from GitHub anyway. **Never run the suite locally here.** A run id
-  at another sha is stale: read the run at the current head (B1a's bounded wait). No run
-  id, or a `red:finding` class → send back. There is no hermetic verdict to look for: a
-  clean CI runner is that run by construction.
-- **Gate result, every other repo** (no `gate:`, `authoritative: local`, or no branch
-  trigger) has no independent artifact to re-derive from outside the report itself on
-  most repos — trust the report here, but if anything else on this list is off, treat the
-  gate claim as unverified too and **send it back** rather than re-running the
-  implementer's gate yourself (#409).
-  **The gate claim must carry the hermetic verdict (#403)** — the word `colab
-  gate-hermetic` printed: `green`, or `skipped` (trunk declares `live-env: none`), or
-  `branch-ci <sha7>` (#408). A hand-off that says only "gate green", with no hermetic
-  verdict, has not shown the test step passing without this machine. **Before re-running
-  anything locally, check whether branch CI already answers it** (`code-wrap` A3's
-  conditions): B1a's class is `green` at the current head sha, that workflow runs the same
-  test command, and its runner does not share a developer's machine (hosted or ephemeral,
-  never a self-hosted runner in someone's login session). If all three hold, that run is
-  the hermetic verdict. Record `branch-ci <sha7>` and do not run the suite again. A
-  `branch-ci` verdict naming a sha other than the current head is stale; read the branch
-  run at the new head instead. Only when branch CI cannot arrive (no trigger for the
-  branch), is not `green`, or does not run the tests is the hermetic verdict genuinely
-  missing — and then it is a **send-back**, not a coordinator re-run of
-  `colab gate-hermetic` (#409: the coordinator never runs the implementer's gate for it).
-  On a repo whose suite takes 6–10 minutes locally, that repeat was measured as the
-  largest single cost of a ship pass. **`live-env` is a red gate**: send it back to the
-  implementer the same way as any other red. Never read it as an advisory, and never
-  merge past it.
-  **The branch-CI class A5 reports is the opposite case — it *does* re-derive, and B1a
-  below re-derives it rather than reading it here.** A missing class in the hand-off is
-  a wrap that skipped a step, worth saying in the report; it is not a blocker, because
-  B1a measures it again from GitHub anyway. A class that *contradicts* what B1a measures
-  usually means the head moved between the two reads, which is B1a's own sync caveat,
-  not a dishonest report.
-- **Trunk checkout dirty here too** → `code-wrap` A2b's own re-derivation (its *Verify
-  complete* step) either missed this or ran before whatever caused it. Don't re-run the
-  same ownership ladder blind: `git ls-remote` above already told you this branch's
-  remote sha, so diff it directly — `git -C "$MAIN_REPO" diff --name-only <path>` against
-  the branch's own commits for **branch overlap**, then the dirty path's content, same as
-  `code-wrap` A2b — before deciding whether this is the wrapped session's own stray write
-  (send it back, don't merge over it) or a genuinely different live session's work
-  (`colab worktrees` for a name to route the finding to). **Never merge past an
-  unattributed dirty trunk** — `colab ship`'s own precondition already refuses on a
-  dirty trunk checkout; this is what turns that refusal into something someone can act
-  on, not a reason to bypass it.
-
-A contract that fails to verify is not a reason to skip the merge — it is a reason to
-fix the gap before continuing, or to **send it back** to the implementer rather than
-papering over it here. **"Fix the gap" is mechanical only, and it is exactly two
-things**: re-push a wrapped head, re-claim a released claim. Everything else — a missing
-distill, an unwrapped or uncommitted change, a missing or red gate verdict, anything that
-needs a line of source changed — is a send-back, never a fix from here (#409; see the push
-bullet above for why that boundary is written twice).
-
-**A send-back is one Issue comment, and it is how this skill hands work back** —
-`CONVENTIONS.md`
-[§4, *Who may touch a branch*](../../CONVENTIONS.md#who-may-touch-a-branch--the-coordinator-never-edits-implementer-work-409):
-
-```sh
-gh issue comment $N --body "↩️ Sent back — <the gap, e.g. uncommitted work in <worktree>;
-no gate verdict at <sha7>>. To the implementer of <branch>: commit the deliverable paths,
-run \`code-wrap\`, stop."
-```
-
-The `↩️ Sent back` prefix is load-bearing: colab reads it as bookkeeping (`shipguard`
-`TOOL_MARKS`), so it is never mistaken for evidence or for a hand-off comment. Post it
-once per head — if one already stands and the branch head has not moved since, do not
-repeat it. Report the candidate as sent back and stop working on it; never wrap it here.
+**Rule:** re-check what `code-wrap` asserted, from git and GitHub, with `$MAIN_REPO` anchored
+to the main checkout: branch on the remote, a distill comment newer than the head (a
+`↩️ Sent back` or a bare `— <name>` line is not one, #517), claims still held, the plan file,
+a clean trunk checkout, and the gate verdict (a branch-CI run id at the current head on a
+`gate: authoritative: ci` repo; otherwise a claim carrying the hermetic verdict). "Fix the
+gap" is exactly two mechanical acts — push a wrapped head unchanged, re-claim a released
+claim. Everything else is a **send-back**: one `↩️ Sent back — <gap>` Issue comment, once per
+head. The coordinator never edits source, amends, force-pushes or re-runs the implementer's gate.
+**Stop:** any gap that is not one of the two mechanical fixes ⇒ send back, report it, stop on
+this candidate. Never merge past an unattributed dirty trunk.
+Full text: [0-handoff-contract.md](0-handoff-contract.md).
 
 ## What counts as "a human said go"
 
-**Check the repo's `autonomy:` field first — it decides which of the two doors below
-applies.** They are not layered (one is never required on top of the other); they are
-alternatives, selected by that one field.
-
-### Repo declares `autonomy: auto-trunk` — the grant IS the go-ahead, re-verified every run
-
-`CONVENTIONS.md` is explicit about what this grant means for a caller that is not a
-person: a scheduler "may complete a trunk merge only where the repo has granted
-`autonomy: auto-trunk`, and only through `colab ship`," subject to the identical gates
-as any other caller, and "without … the grant, `ship` refuses and a human runs Phase B"
-(`CONVENTIONS.md` [§*Scheduled drivers*](../../CONVENTIONS.md#scheduled-drivers--provenance-and-autonomy-meet-a-caller-that-is-not-a-person)).
-`tools/README.md` says the same thing about the tool itself: `auto-trunk` is the *only*
-value that enables `ship`, "the caller here need not be a human-opened session," and a
-scheduled driver is "a legitimate caller of `ship`, subject to this identical gate and
-no other." Neither description asks for a fresh per-run click on top of the grant — the
-grant **is** the decision, made once by whoever set the field, and this skill's job on
-a repo carrying it is to re-verify that decision still holds mechanically, not to go
-looking for a second, human one that was never meant to exist per run.
-
-So on a repo declaring `autonomy: auto-trunk`, this skill may complete B2 (the
-trunk-merge step, and only that step) once every precondition elsewhere in this skill
-has independently passed on its own terms: the hand-off contract (§0), CI green for the
-exact sha (B1), the checklist/remainder check (B1b), no new migration without a live
-grant of a role the repo accepts — a human grant, or a reviewer grant under
-`migration-grant: reviewer` with its policy, record, HEAD and CI round-trip all holding,
-and with `trust-humans` declared, a human grant only from a listed login
-(`CONVENTIONS.md` [§*Migration exemption*](../../CONVENTIONS.md#migration-exemption--a-narrow-door-through-no-new-migrations-opened-by-a-role-98-402);
-`colab ship` alone decides this — never infer a grant from a label or comment you read),
-no unresolved hand-merge conflict (B0), no `--force`. No additional per-run human
-instruction is required, and waiting for one that was never going to arrive is not
-caution — it is the exact failure this issue was filed over: a fully green, fully
-graded branch sitting unshipped because the coordinator held out for evidence the repo
-already gave, once, in `project.yml`.
-
-**This carve-out is scoped exactly to the trunk-merge step (B2) and nothing past it.**
-It never authorises a promotion, a tag, or anything that deploys, on any tier — those
-are outside `autonomy` entirely, with no field able to say otherwise (`CONVENTIONS.md`,
-same section: a scheduler "never promotes … and never tags by itself"; whether a tag may
-be automatic at all is [§6's release rung](../../CONVENTIONS.md#6-releases), an act this
-skill never performs). And it widens *who* may act once the gates are clear — it does not
-loosen the gates themselves: a red trunk with no proven cure and no valid CI grant, an
-unresolved new migration, an open checklist item with no declared remainder, or any
-other precondition below failing is still a stop, exactly as it is for a human-triggered
-ship.
-
-### Repo does NOT declare `autonomy: auto-trunk` — a fresh, auditable go-ahead is required
-
-**Except a docs-only change (#345).** When `colab ship --dry` (or `--dry --json`) reports
-the autonomy row as `docs-only (N files) — autonomy exception` (JSON: `autonomyGate.via:
-"docs-only"`), ship computed from git that every changed path is documentation. The
-autonomy gate then stands open with no human trigger, exactly as `auto-trunk` would open it,
-and this skill proceeds through `colab ship` under the identical gates. The verdict is
-ship's, never yours: do not argue a branch into it, and do not treat a diff you judge
-"basically docs" as covered. What counts is fixed in
-[CONVENTIONS.md §2](../../CONVENTIONS.md#autonomy--the-docs-only-exception-345). Any other
-row reading means the rest of this section applies.
-
-Typing it into the session is the ordinary form, not the only one. A click in an
-operator dashboard is a human decision too — provided the prompt that spawned you
-carries evidence of *when* and *which* click, so the authorisation can be audited
-afterwards instead of being asserted by the agent that benefits from it. The shape:
-
-> `<operator>` triggered the merge via the dashboard Merge button at `<ts>`
-> (intent `<id>`) — this click IS the human go-ahead for this skill.
-
-Match on the **timestamp and the intent id**, not on the wording: those are the two
-things a dashboard can write and an agent cannot invent, and they are what makes the
-click auditable after the fact. Missing either, you hold a claim of authorisation
-with nothing behind it — treat it as no go-ahead and ask. **Never compose that
-sentence yourself**; a go-ahead you wrote is not a go-ahead you received.
-
-This grants no latitude beyond the trunk-merge step either: no click of any kind
-authorises a promotion, a tag, or anything that deploys.
+**Rule:** the repo's `autonomy:` field picks the door. `autonomy: auto-trunk` ⇒ the grant is
+the go-ahead for the trunk merge (B2) once every gate below passes on its own terms.
+Otherwise ⇒ a fresh human go-ahead — typed in the session, or a dashboard click carrying a
+timestamp **and** an intent id — unless `colab ship --dry` itself reports the change
+docs-only (#345) or tuning-only (#561: `.github/project.yml` tuning keys alone — no issue, so no
+`Closes #N` and no issue comment; the evidence is in the commit body). Without either, `colab ship` refuses an agent: hand the human the command
+its refusal prints, and they run it through the human door (#525). Never set the `COLAB_HUMAN`
+flag on a go-ahead's strength. Never compose a go-ahead yourself. No door ever covers a promotion,
+a tag or anything that deploys.
+Full text: [go-ahead.md](go-ahead.md).
 
 ## What a defer is for — and what it is never for (#257)
 
-A coordinator once deferred a sound branch because the branch's originating session was
-sitting at an interactive prompt with unsent text in its composer and the coordinator
-could not deliver a message into it. Nothing about the diff was wrong; the deferral was
-written up carefully and was still the wrong outcome, because **every step this skill
-performs runs in the coordinator's own worktree** — B0's sync, B1's CI check, B2's
-squash — and none of them contact the originating session at all. Declining a step this
-skill assigns to you, on grounds that step never involves, is not caution; it is
-inventing a stop condition.
-
-- **Unsent or stranded text in the originating session's composer is an operational
-  nuisance about a UI, never a fact about the work.** Neither is "the session did not
-  answer", "the session is parked", or "I could not deliver a message into it." None of
-  these produce a defer, ever.
-- **A defer is reserved for a genuine blocker on the work**: a red or dead precondition
-  the coordinator cannot itself clear (B1's CI gate), a real conflict needing the
-  author's judgement (B0's non-generated-file conflict path), or a missing human gate
-  (the go-ahead itself, `autonomy`, a `needs-decision` answer). If you cannot name which
-  of these three a deferral is, it is not a deferral — go do the step.
-- **Which of two same-file siblings lands first is never a missing human gate (#370).**
-  The order is mechanical — earlier wrap first, tie → smaller diff (`code-sweep`
-  [§4.0](../code-sweep/SKILL.md#40-order-the-pass-by-readiness--ready-work-first-370)).
-  Measured: four such pairs in 72 h sat 35–143 min each waiting for a human to pick the
-  order; nobody answered, and each cleared on its own the moment its sibling landed. Land
-  the first, record the order on both issues, then take the second through B0 against the
-  new `<base>`. A conflict *there* is B0's ordinary conflict path, not a reason to have
-  asked first.
-- **The blast radius is never just this one branch.** A finish-before-start gate reads a
-  session holding an unfinished worktree as a reason to refuse *new* starts across the
-  whole repo — one wrongly deferred branch can make a large share of a ready backlog
-  unstartable, and a comment on one issue is not a place a human looking at the backlog
-  will ever see it. Clearing one such session by deferring it just moves the block to the
-  next session in the same state; it resolves nothing.
-- **A recorded deferral carries a clock, or it is indistinguishable from a defer nobody
-  noticed.** Name the specific precondition, what would clear it, and an expiry or
-  re-measure trigger — the event or time after which the branch is measured again rather
-  than waiting for someone to ask. A blocker no agent may clear belongs on the
-  handbook's existing human-watched surface, the `needs-decision` label
-  (`CONVENTIONS.md` [§5](../../CONVENTIONS.md#decision-gate--a-human-must-answer-first-122), *Decision gate*) —
-  triage already re-measures it every run and clears it on a recorded decision — plus
-  your own report to whoever is operating you. An issue comment alone is a record, not a
-  notification; reuse this existing machinery rather than inventing a second one.
+**Rule:** a defer is only for a genuine blocker on the work — a red or dead precondition the
+coordinator cannot clear, a conflict needing the author's judgement, or a missing human gate.
+The originating session's state (stranded composer text, silence, parked) is never one; the
+order of same-file siblings is mechanical, never a human gate. A recorded defer names the
+precondition, what clears it, and a re-measure trigger; a landed gate fix re-measures every park.
+Full text: [defer.md](defer.md).
 
 ## B0. Is there still cargo? Then sync `<base>` into the branch
 
-**First, know what you are merging into.** `<base>` is the branch's base: `<trunk>`
-in the ordinary case, or the declared `integration:` line the session was cut from
-(`CONVENTIONS.md` [§2](../../CONVENTIONS.md#2-tiers), recorded by `colab worktree new --base`). Everything below —
-the sync, the CI check, the squash, the push — targets `<base>`, not trunk-by-reflex.
-Shipping a line-based branch into trunk would drag the whole line in behind it inside
-one squash commit.
-
-```sh
-colab worktrees --json     # .worktrees["<name>"].base — trunk if it has none (shape: #67)
-```
-
-**Then ask whether it already shipped under another sha — before you grade anything
-(#370).** A squash followed by `<base>` movement reads `unknown` below, so a ref kept
-after an earlier ship looks exactly like unshipped work. Measured: 3 of 8 candidates in
-one repository's ship queue were already on trunk; one read CONFLICT only because its own
-content was already there, and grading it would have spent a full review on nothing. The
-squash message carries what the tree cannot (`CONVENTIONS.md`
-[§4](../../CONVENTIONS.md#has-it-landed--the-one-rule-because-the-obvious-one-is-wrong),
-*Has it landed?*):
-
-```sh
-git fetch origin <base>
-for N in <every issue the branch carries>; do
-  git log origin/<base> -i -E --format="#$N %h %cI %s" \
-    --grep="(close[sd]?|fix(e[sd])?|resolve[sd]?) #$N([^0-9]|$)"
-done
-git log -1 --format=%cI <branch>     # the branch's newest commit, to compare against
-```
-
-- **Every issue matched, every issue CLOSED, and no branch commit newer than its matching
-  squash** → **shipped already.** Do not grade, sync or merge. Go to B2b (post evidence
-  only where the issue has none), B3 and B4, and say in the report which squash sha it
-  shipped in — a phantom candidate is a finding about whoever kept the ref, not a failure
-  of this branch.
-- **A match, but the issue is OPEN again, or the branch has commits after the squash** →
-  a continuation. It is cargo; ship it normally, and grade only what came after the squash.
-- **No match** → nothing learned; the landed question below decides. The grep only ever
-  moves a candidate *out* of the queue — its absence never rounds a verdict toward
-  `landed`.
-
-**Then ask whether there is anything left to ship:**
-
-```sh
-colab landed --worktree <name>      # landed · cargo · unknown
-```
-
-- **cargo** → continue with the ship. This is the normal path.
-- **landed** → the content is already on `<base>`. **Do not merge again.** Go
-  straight to B2b (evidence), B3 (release claims) and B4 (teardown).
-- **unknown** → treat as cargo and look by hand before merging.
-
-**`landed` with ZERO commits of its own is a different thing, and it has its own
-door (#90).** A session can finish with a real deliverable and no diff at all: a
-decision recorded on its issue, an investigation concluding "no change needed", a
-design artifact stored outside the repo. That is not an exotic shape, and the route
-above does not close it — B2b wants "the `<base>` squash sha", which does not exist
-here, and no step in this skill has ever run `gh issue close`. Measured: the claim was
-released, the worktree torn down, and the issue stayed open until a human said in
-prose that finishing with no commit was acceptable.
-
-```sh
-colab ship --worktree <name> --dry     # → MODE: evidence-close, if that is this branch
-colab ship --worktree <name>           # posts evidence, CLOSES each issue, tears down
-```
-
-It merges nothing, pushes nothing, and writes no empty marker commit. It is gated on
-each issue **already carrying a comment colab did not write** — so record what you
-delivered on the Issue first (`code-wrap` A1 is where that happens anyway), or ship will
-report the issue and leave it open. The zero-diff fact is measured from git; you do not
-declare it.
-
-**A unit committed straight to trunk has no branch — its door is `--direct` (#302).**
-#284 ruled that a trunk-direct unit still closes via evidence-close; the branch door above
-cannot find one (no worktree, no branch, and `--branch <trunk>` is refused), so it has its
-own:
-
-```sh
-colab ship --direct --session "$SESSION_URL" --dry   # → MODE: evidence-close (trunk-direct)
-colab ship --direct --session "$SESSION_URL"         # posts evidence, CLOSES, releases claims + hold
-```
-
-It closes exactly the claims **this session** holds in the repo with no worktree and no
-branch — identity is required, another session's claim is never touched — and only once
-the work is **published** (trunk checked out, clean, not ahead of `origin`). Everything
-else is the branch door's: autonomy gate, trunk CI, the checklist close gate, and the same
-evidence gate (code-wrap A1's distill comment is the evidence). An issue left open keeps its
-claim, so a re-run finds it. A solo session with no claim has nothing to close and does not
-run this. All three of those gates (evidence, autonomy, trunk CI) are ⚖ ruled for a `direct`
-unit — confirmed as built ([#342](https://github.com/futurelastic/colab-handbook/issues/342),
-CONVENTIONS.md §2). The autonomy gate's docs-only exception (#345) applies here too: without
-`auto-trunk`, the unit closes when every trunk commit since its earliest claim — by anyone —
-touches documentation only. **The core-path rule (#350) refuses here instead of pausing (#351):**
-a trunk-direct unit has no PR, so when the rule is active and that same window touched a core path,
-`--direct` refuses with a human-gated `core-path review` row and closes nothing. Redo the change on
-a branch and ship that. If the paths are another unit's reviewed landing, a human closes the issue
-(`colab close <N> --comment "<evidence>"`). Never route around the refusal
-(`CONVENTIONS.md` [§2, *Core paths*](../../CONVENTIONS.md#core-paths--a-pr-and-a-non-author-approval-before-landing-350)).
-
-**Never decide this by counting commits.** A squash-merge mints a new sha, so a
-shipped branch's own commits look permanently unmerged — a count-only check calls
-*every branch we have ever shipped* unshipped and invites re-merging finished work.
-Without `colab`, ask the content question directly: `git merge-tree --write-tree
-origin/<base> <branch>` printing exactly `git rev-parse origin/<base>^{tree}` means
-the branch adds nothing. (`CONVENTIONS.md` [§4](../../CONVENTIONS.md#has-it-landed--the-one-rule-because-the-obvious-one-is-wrong), "Has it landed?")
-
-**This sync is the coordinator's own act, in the worktree it already holds — it makes no
-contact with the branch's originating session.** `git fetch` and `git merge` need
-nothing from that session: not a running process, not a reachable prompt, not an empty
-composer. Being unable to deliver a message into it changes nothing about this step —
-see *What a defer is for*, above, before treating anything about that session's state as
-a reason to stop here. It is also the first of the three owner-ruled mechanics the
-coordinator keeps under #409's "never codes" rule (`CONVENTIONS.md`
-[§4, *Who may touch a branch*](../../CONVENTIONS.md#who-may-touch-a-branch--the-coordinator-never-edits-implementer-work-409)):
-sync, regenerate a generated file, resolve a purely mechanical conflict. Nothing else in
-this section writes to the branch.
-
-**Now sync.** Merge conflicts here are almost always **generated files** (codegen
-locks, duplicate-timestamp migrations, generated route/type files) — they happen when
-a branch regenerated on an old base while `<base>` moved ahead. Cure it in the branch,
-before touching `<base>`. Skip if `<base>` hasn't moved since you branched
-(`git rev-list --count <branch>..origin/<base>` = 0):
-
-```sh
-git fetch origin <base>
-git merge origin/<base>        # conflicts in generated files → the regen below overwrites them
-```
-
-**Check what the merge actually did before touching anything else — do not chain
-straight into `add -A && commit` (#123).** `git merge` failing with **zero**
-conflicted paths is not a conflict to resolve; it is the merge never having
-applied (transient index-lock contention is the measured cause). Both that case
-and a real, resolved conflict leave `MERGE_HEAD` set and look identical to every
-cheap check afterwards — parent count, `merge-base --is-ancestor`, even a green
-gate, since a tree that lost `<base>`'s newer work is still perfectly
-self-consistent. Only the diff against `<base>` tells the two apart:
-
-```sh
-git diff --name-only --diff-filter=U        # unmerged paths right now
-```
-
-- **Non-empty** → real conflicts. Sort each conflicted path into exactly one of three
-  (#409), reading the region, never resolving mechanically by side:
-  - **Generated file** (`generated:` globs, built-in lockfiles) → take one side, then the
-    regen below overwrites it.
-  - **Purely mechanical** → the resolution keeps both sides' hunks unchanged, adds no
-    line of its own and picks no winner (two appends to one list, two adjacent edits that
-    do not touch each other's lines). Resolve it.
-  - **Anything that needs judgement** — a line both sides changed, a rule one side reversed
-    that the other still carries as context (see the incident in this file's history) →
-    `git merge --abort`, **send it back** to the branch's author (§0, *send-back*), and
-    defer the candidate. Never pick a winner from here.
-
-  Then `git add` the resolved paths and commit explicitly — never `add -A` blind,
-  it will also stage unrelated working-tree cruft into the merge commit.
-- **Empty, and `git merge` reported failure** → the merge never ran. **Do not
-  commit.** Fix the transient cause (retry after the index lock clears, `git
-  merge --abort` first if `MERGE_HEAD` is stuck) and re-run `git merge
-  origin/<base>` from a clean state. Committing here manufactures a two-parent
-  merge whose tree is the branch's pre-merge tree — a merge commit that reads as
-  "synced with `<base>`" while silently reverting everything `<base>` had that
-  the branch didn't.
-
-Then re-run the repo's codegen on the merged base (e.g. `npm run build` /
-codegen) if the repo has one, and commit:
-
-```sh
-git add -A && git commit -m "chore(sync): merge <base> + regen generated files"
-```
-
-**`<base>` is the only ref this step may merge — never a sibling member's branch.** If
-this branch carries a `group:` label and a sibling still has unmerged work you want, the
-answer is to sequence behind it or group onto it (`CONVENTIONS.md` [§5](../../CONVENTIONS.md#grouping--issues-that-must-share-one-branch), *Grouping*),
-never to pull it in here. Measured on a downstream session orchestrator, 2026-09-05 — its own ADR
-on reorganising its ship lanes, section 2 L5: one branch in a `group:` label
-carried **8 `chore(sync)` commits** pulling siblings' fixes ahead of their own trunk
-merge. The cost is not the noise — it is that a branch holding a sibling's unlanded
-commits can no longer land independently of that sibling, so each waits on the other and
-neither converges, while both keep burning CI rebasing around each other. The commit
-message shape above is exactly the one that failure wore, which is why this paragraph
-sits under it.
-
-**Carrying a `group:` label with a sibling ref still live? You are landing one of N.**
-Land yours against the current `<base>` and **re-derive the contention here** — `colab
-holders` on the group's own paths — rather than trusting a triage snapshot. Triage names
-a carrier and a rebase order at pass time
-([`code-triage` §3](../code-triage/SKILL.md#3-group--this-is-a-correctness-constraint-not-tidiness),
-[§6](../code-triage/SKILL.md#6-report--make-it-directly-actionable)); trunk has very likely
-moved since, and a verdict stamped to an older trunk sha is exactly the perishable kind
-that must not be treated as current at merge time.
-
-**Before the gate, assert the merge actually incorporated `<base>` — a green
-gate is not evidence of this, only of self-consistency:**
-
-```sh
-git diff --stat origin/<base> HEAD
-```
-
-This must show **only this branch's own files**. Deletions of files the branch
-never touched — especially other issues' shipped code, or `CLAUDE.md` Status
-entries — mean the sync commit above was the false-merge shape despite the
-guard: stop, do not proceed to the gate or the ship, and re-derive the merge
-from a fresh `git merge --abort` + retry rather than trying to patch the bad
-commit.
-
-**Gate the sync commit — the one gate the coordinator runs, because it is the one commit it
-made (#409).** On a `gate: authoritative: ci` repo (#410): push the sync commit and let B1a's
-bounded wait read the branch run at the new head — that run **is** the verdict; run nothing
-locally. Everywhere else, re-run the gate (`code-wrap` A3, the hermetic second run included —
-its verdict must be `green` or `skipped`, never `live-env`, #403) — a fresh-migrate test must
-pass, proving both branches' migrations run clean together. Either way, a `red:finding` at the
-post-sync head is a **send-back**, never a fix from here. **Where branch CI exists, prefer
-push-then-read over a local repeat for the hermetic half (#408):** the sync moved the head, so the old `branch-ci`
-verdict is stale, but pushing the sync commit starts a new branch run at the new head. B1a's
-bounded wait then reads it, and a `green` class there, meeting `code-wrap` A3's three
-conditions, is the hermetic verdict (`branch-ci <new sha7>`). Run `colab gate-hermetic`
-locally only when that run cannot arrive (no trigger for the branch), comes back other than
-`green`, or its workflow does not run the tests. Run the suite once and tee its output to a
-file; grep the file afterwards rather than re-running the suite to read another slice. *(Machine-specific reconcile — e.g. deduping a
-migration against one already on trunk — hooks in here; the universal rule is
-"regen on the merged base, never hand-merge generated files".)*
+**Rule:** know `<base>` (trunk, or the recorded `integration:` line). Grep `<base>` for
+`close[sd]?|fix(e[sd])?|resolve[sd]? #N` per carried issue — shipped already ⇒ no grade, no
+merge, go to B2b–B4. `colab landed --worktree <name>`: `cargo`/`unknown` ⇒ continue;
+`landed` ⇒ B2b–B4; zero commits ⇒ `colab ship` evidence-close; a trunk-direct unit ⇒
+`colab ship --direct`. Then `git merge origin/<base>`, check `git diff --name-only
+--diff-filter=U`: generated file ⇒ trunk's side and regen; purely mechanical (a retired shared
+file ⇒ trunk's side; an append-only ledger ⇒ the union) ⇒ resolve; needs judgement ⇒ `git merge
+--abort` and send back. Merge only `<base>`, never a sibling's branch.
+Assert `git diff --stat origin/<base> HEAD` shows only this branch's files, then gate the sync
+commit (push and read branch CI where it exists).
+**Stop:** a merge that failed with zero conflicted paths never ran — do not commit it.
+Full text: [b0-sync.md](b0-sync.md).
 
 ### Batch landing — several ready candidates, one combined run (#373)
 
-**Only where `.github/project.yml` declares `ship-batch: <N>` greater than 1.** Absent or 1,
-skip this subsection: every candidate ships alone, as below. With it, two or more candidates
-that are each **ready** — `green` at their own head (B1a's class, or the `none` that cannot
-arrive), merge-clean against trunk — land through one command instead of one ship each
-(`CONVENTIONS.md`
-[§4, *Batch landing*](../../CONVENTIONS.md#batch-landing--one-combined-run-then-a-fast-forward-373)):
-
-1. Run §0 through B1c **per member** as usual — hand-off contract, the already-shipped grep,
-   `landed`, B1b's harvest, B1c's grade. **Grading stays per member**; a batch never grades
-   a diff it did not read. A member that fails any of it leaves the batch.
-2. **Do not run B0's sync or B1a's post-sync re-run per member.** Instead:
-   ```sh
-   colab ship --batch <b1>,<b2>[,<b3>] --repo <repo>
-   ```
-   It re-reads each member's own ship gates, builds trunk + one squash commit per member on
-   `ship-batch/<trunk-sha7>`, and pushes it. That ref's **one combined run replaces every
-   member's post-sync re-run** (B1a, below). A member whose overlap with those already in is
-   confined to `generated:` paths is **not** dropped: the build runs `.colab/hooks/pre-ship` on
-   the combined head, B0's rule, and prints a `↻ <member>: … regenerated` line naming the
-   files (#387). Only an overlap outside `generated:` — or no hook to regenerate with, or a hook
-   that exits 0 but leaves conflict markers staged (#436) — drops a member to the next batch
-   (`✗ <member>: …`). Re-running on a staged batch lands **only the members it carries**; a branch
-   you name that it does not carry is printed as `NOT in the staged batch` — ship it afterwards,
-   it was not forgotten silently (#415). `--dry` is a read on every path, including a staged green
-   batch: it prints what would land and writes nothing.
-3. Read the exit code — it never waits for you:
-   - **`3` — paused.** The combined run (or trunk's own) is still going, or the batch was just
-     (re)built. Wait on the run id it printed with B1a's bound — `colab ci-wait <id>
-     --timeout 15m` (#495) — then run **the same command** again. The cap expiring is a defer
-     exactly as B1a records one; the batch ref stays for the next pass.
-   - **`0` — landed.** Trunk fast-forwarded to the tested head; each member's claim, worktree,
-     branch and 🚢 comment are handled as a serial ship handles them. Go to B2b for the
-     per-issue evidence (the 🚢 line already names the combined run).
-   - **`4` — declined; nothing landed.** The last line is `→ SERIAL: colab ship --branch …` —
-     ship those members one at a time from B0. If the reason was a **red combined run**, first
-     classify it like any branch red (B1a, *Telling infra from finding*): `red:infra` → run the
-     printed `gh run rerun <id> --failed` once, wait, and re-run the batch command; `red:finding`
-     → go serial, and the member that goes red on its own sync run returns to its implementer
-     as a class.
-4. A red trunk declines a batch outright: the cure and ci-grant doors (B1, *Red trunk*) apply to
-   one member at a time, never to a batch.
+**Rule:** only where `project.yml` declares `ship-batch: <N>` > 1. Each member passes §0–B1c on
+its own; then `colab ship --batch <b1>,<b2>[,…]` replaces B0's sync and B1a's post-sync re-run.
+Exit `3` paused (bounded wait, same command again) · `0` landed (go to B2b) · `4` declined,
+ship serially. A red trunk declines a batch outright.
+Read when the repo declares `ship-batch`: [b0-batch-landing.md](b0-batch-landing.md).
 
 ## B1. Verify CI on `<base>` is alive AND green — for the sha you are about to merge
 
-**Ask by commit, not by recency** (`CONVENTIONS.md` [§4](../../CONVENTIONS.md#4-branches-and-commits), #92). `gh run list --branch
-<base> -L 1` reads whatever ran *last*, and under `cancel-in-progress` a cancelled
-straggler can outrank a passing run on the *same* commit — deadlocking a ship that a
-by-commit check would clear. Ask instead about `<base>`'s current head sha — and ask it
-the way `colab ship` does, since that is the verdict the merge actually gates on:
-
-```sh
-colab trunk-ci                       # <base> is trunk: GREEN | RED | PENDING | WEDGED | NONE | UNREADABLE
-colab ship --dry --json              # any <base>: the `trunk CI green` / `line CI green` row
-```
-
-`GREEN` means every workflow's newest run at that exact sha succeeded — not merely one
-of them (#461, #463). Never hand-roll a `gh run list` filter that counts *a* successful
-run: at one measured trunk sha `CI` succeeded and a release workflow failed, ship read
-it red, and a one-success filter read it green.
-
-A "failure" that never started (billing lockout, runner outage) still means
-**stop** — we once merged for 12 hours into repos whose CI was silently dead
-(`CONVENTIONS.md` [§4](../../CONVENTIONS.md#4-branches-and-commits)). Branch protection can't check this for us; this command must.
-
-**What CI *is* follows whether the unit has a branch, how much it must catch follows
-`exposure`** ([§7, *CI*](../../CONVENTIONS.md#ci--what-it-is-follows-the-units-shape-how-much-follows-exposure)
-— ⚖ #233 retired the `writes`-keyed reading this used to carry). With a branch — the
-ordinary case, or an attended trunk-direct session falling back to full ceremony under
-one of [§2](../../CONVENTIONS.md#writes--the-trunk-direct-veto-and-the-two-things-that-make-a-branch-mandatory)'s
-two mandatory-branch conditions — CI here **is** the gate this merge depends on — a red
-or missing run for the head sha stops the ship, full stop. `none`/`self` exposure
-answers only to the room; `live`/`released` answers to a consumer with no way to ask a
-clarifying question, so more has to be caught before it reaches them.
-
-If `<base>` is a declared line with **no runs at all**, it is not yet CI-gated: check
-`<trunk>` instead and say so in the report. That is a normal early state for a line,
-not a green light — a line that *has* runs and is red still stops the ship.
+**Rule:** ask by commit, not by recency — `colab trunk-ci` (trunk) or `colab ship --dry
+--json`'s CI row (any `<base>`); `GREEN` means every workflow's newest run at that sha
+succeeded. A failure that never started still means stop. A declared line with no runs at
+all ⇒ check `<trunk>` and say so.
+**Stop:** red or missing for the head sha ⇒ no ship, unless a door opens (below).
+Full text: [b1-base-ci.md](b1-base-ci.md).
 
 ### Red trunk — first ask "is the red real?", then "is this branch the patch?" (#353, #354)
 
-**Before anything below, classify `<base>`'s red run** with the same test B1a uses
-(*Telling infra from finding*, below). `red:infra` → re-run it once
-(`gh run rerun <databaseId> --failed`) and re-read B1; a second identical failure is the
-runner — hand it to the ops lane, the ship still stops. `red:finding` → the red is real:
-it needs a `TRUNK RED:` issue and a patch, and the rest of this section applies. Filing a
-`TRUNK RED:` issue for a run that died at setup sends someone hunting a regression that
-does not exist; re-running a red that names assertions buries one that does.
-
-A red `<base>` stops the ship unless a door opens — the machine-checkable *Cure rule* or
-a human ci-grant (`CONVENTIONS.md` [§4, *Cure rule*](../../CONVENTIONS.md#cure-rule--the-machine-checkable-door-through-trunk-ci-green-281)).
-The cure needs the branch **green at its own head**, and on a repo whose workflows
-trigger only on trunk push (and `pull_request`) that run cannot exist until someone
-opens a PR — B1a then reads `none`, cannot-arrive. Opening one is legitimate **only for
-the branch carrying the fix**, and the reason is the merge ref: a PR's run is against
-trunk-plus-branch, so it **includes the red**.
-
-| branch | how you tell | what this skill does |
-|---|---|---|
-| **the patch** | its title or issue says it repairs the red (`TRUNK RED:`), or its head fixes the failing test; its head contains the red sha, or will once synced (B0) | goes **first**, ahead of anything else queued. Sync it onto the red if it does not yet contain it (cure condition 1 — pays one CI round, by design), push, open a PR if the repo cannot otherwise run CI for the branch, then re-read B1a at the new head. Green → the cure door opens at B2 |
-| **a bystander** | ready work that merely happens to be queued — nothing in it touches the red | **waits for green trunk.** No PR, no rebase onto the red: its PR's run inherits the red through the merge ref, says nothing about the branch, and spreads the failure signal. Record it as a defer — precondition: trunk red; clears on: a green run on `<base>`; re-measure trigger: that run |
-
-**Both read the same remedy** ("open a PR to obtain branch CI"; `colab ship`'s cure
-refusal), which is exactly why the cure looks equally available to both. Ask the
-question before offering the cure to anything. Measured: a trunk turned red on a
-docs-only merge — a test deferring against a hardcoded date that real time walked past,
-a calendar bomb, no branch's regression. Of three waiting branches, the one whose
-parent was the red sha and which fixed the clock opened a PR, ran green and
-cure-merged; the two bystanders stayed parked, correctly, and shipped once trunk was
-green.
-
-- **The red is in a main-only workflow** (`Release (auto)` — it never runs on a
-  branch) **and the branch is the patch?** Its evidence is a **dry run**, not a PR
-  (#474, `CONVENTIONS.md` *Cure rule*, *Dry-run evidence*). A real `colab ship`
-  dispatches it once and refuses until it completes. `--dry` only prints the
-  command: `gh workflow run release-auto.yml --ref <branch> -f dry_run=true`. Then
-  wait under B1a's 15-minute bound and re-run ship. The cure admits it only if
-  every step that ran on trunk passed in the dry run. A red inside a `[publish]`
-  step never cures this way: that is a ci-grant. A bystander never dispatches one,
-  and containment refuses it anyway.
-- **The red is in a trunk-only JOB of a branch workflow** (its `if:` skips it on a
-  branch push — a long E2E suite, say) **and the branch is the patch?** Its evidence
-  is a plain `workflow_dispatch` of that workflow at the branch head (#510,
-  `CONVENTIONS.md` *Cure rule*, *Dispatch evidence for a job a branch push skips*).
-  A real `colab ship` dispatches it once and refuses until it completes; `--dry`
-  prints the command (`gh workflow run <file> --ref <branch>`). Wait with
-  `colab ci-wait --sha <head> --branch <branch> --timeout <the job's usual length>`.
-  If that is longer than B1a's 15-minute bound, do not sit on it: record a defer
-  whose clears-on is that dispatch run finishing, and re-run ship then. The cure
-  admits it only from the same workflow file at the same head, with the step that
-  failed on trunk passing in it; `skipped` is never a pass.
-- **The cure refuses, the branch is the patch, and trunk declares `ci-grant: reviewer`?**
-  You may open the door yourself (#504, `CONVENTIONS.md` *Red-trunk exemption*). Review the
-  branch against the red first — does its head repair exactly the checks that are red? —
-  then `colab ci-grant <N> --branch <b> --role ci-reviewer --reviewer <your id> --verdict pass
-  --cures "<workflow / job>; …"`, where `<N>` is its `TRUNK RED:` issue. The command measures
-  every guard and refuses on any; a refusal is final for this head, never something to route
-  around. Then re-run ship, which re-measures them all. Without the opt-in, the door stays a
-  human's: say what the human grant needs and stop.
-- **Not sure it is the patch?** It is a bystander. A wrong bystander costs one wait for
-  a green that the real patch is about to produce; a wrong patch opens a red PR, spends
-  a CI round, and teaches every reader of that run the failure is the branch's.
-- **Two branches both claim to be the patch?** Take the one whose head demonstrably
-  repairs the failing test; the other waits. The cure door opens once per continuous
-  red episode (anti-stacking), and again only when trunk's red-job set has strictly
-  shrunk since (`CONVENTIONS.md` §4, *Cure rule*, condition 3, #477) — so a second
-  "cure" of the same failure is at best a no-op, while a fix for a *different* still-red
-  job can cure in turn.
+**Rule:** classify the red first (`red:infra` ⇒ one re-run, keyed on `attempt` 1, after
+cancelling a queued same-sha duplicate; same-minute deaths on several runners ⇒ check the host
+first; a repeat ⇒ `TRUNK RED:` or ops; `red:finding` ⇒ it needs a `TRUNK RED:` issue and a patch). Only the branch **carrying the fix** goes first, may sync
+onto the red, and may open a PR (or dispatch a dry run / `workflow_dispatch`) to obtain the
+evidence the cure rule reads; a bystander waits for green trunk and records a defer. Not
+sure ⇒ bystander. `ci-grant: reviewer` lets you mint a reviewer grant for the patch only.
+Read when `<base>` is red: [b1-red-trunk.md](b1-red-trunk.md).
 
 ### B1a. Now read the BRANCH's CI too — beside `<base>`'s, not instead of it
 
-The check above answers *"is the thing I am merging into healthy?"*. It says nothing
-about the thing being merged. Both have to be true, and until now nothing in this chain
-asked the second question: `code-wrap` asserted a **local** gate, this section read
-`<base>`, and `colab ship`'s cure rule touched the branch's run only as a side
-condition. A branch could therefore be red on the runner through every step of the ship
-and never be stopped by one.
-
-`code-wrap` A5 reports the class for the sha it pushed. **Re-derive it here — do not
-take the report's word for it.** The head may have moved (B0's sync commit moves it by
-design), and §0's rule is that this skill verifies the contract from git and GitHub
-rather than trusting the session:
-
-```sh
-BHEAD=$(git rev-parse <branch>)
-gh run list --branch <branch> --limit 20 \
-  --json headSha,status,conclusion,workflowName,databaseId \
-  -q "[.[] | select(.headSha == \"$BHEAD\")]"
-```
-
-Same four classes as A5 — `green` · `none` · `red:infra` · `red:finding` — defined,
-with their quantifiers and next steps, in `CONVENTIONS.md`
-[§4](../../CONVENTIONS.md#branch-ci--the-candidates-own-run-read-as-a-class-314),
-*Branch CI*. Each has a named next step, so none of them is a park; here is what that
-step is in this skill:
-
-| class | what this skill does |
-|---|---|
-| `green` | proceed to B1b |
-| `none` | **Depends which `none` — check before you wait.** A run *queued or in flight* (including a slow sibling behind a green fast one, #307): wait, **bounded — 15 minutes for this candidate, then defer it** (below, *The wait is bounded*, #370). A run that **cannot arrive for this ref** — no workflows, or workflows triggering only on `pull_request` / `push` to trunk — is not pending: proceed, exactly as the no-runs line above already allows for `<base>` — and **B2a then reads the trunk run at your squash before any evidence is posted**, because that run is this change's first. A5 reports which; re-read the triggers if it did not. **At a red `<base>`, "proceed" reaches B1's stop** — only the branch carrying the fix may open a PR to get a run (*Red trunk*, above); a bystander waits |
-| `red:infra` | **re-run it once** (`gh run rerun <databaseId> --failed`), then re-read. Identical failure twice ⇒ it is the runner, not the branch: hand it to the **ops lane** and stop. Do not merge, and do not send it back to the implementer — there is nothing in the diff for them to fix |
-| `red:finding` | **send back to the implementer, as a class** (§0, *send-back*, #409) — the branch's own suite found something. Never a merge, never a re-run, never a fix from here |
-
-**How this lands against *What a defer is for* (#257) — it does not loosen it.** A twice-
-identical `red:infra` is precisely that section's first legitimate case: *a red or dead
-precondition the coordinator cannot itself clear*. So record it as a defer with the clock
-that section requires — precondition: the runner, not the diff; what clears it: a green
-run on `<base>`; re-measure trigger: that run. What is still never a defer is unchanged:
-`red:finding` is a hand-back to an implementer, not a park, and nothing about the
-originating session's composer, silence or parked state enters this decision at all —
-every step here runs in the coordinator's own worktree.
-
-- **The wait is bounded — 15 minutes per candidate, then a defer (#370).** A coordinator
-  once stayed in one turn for 1 h 40 min, hand-polling `gh run list` for three branches,
-  while two other candidates were already green at their head and merge-clean. A ship
-  pass that never ends also keeps the repository's trunk lock, so no fresh pass can
-  start either. Wait with `colab ci-wait`, with a wall-clock cap:
-
-  ```sh
-  colab ci-wait --sha "$BHEAD" --branch <branch> --timeout 15m   # every run at the head sha
-  ```
-
-  **`colab ci-wait` is the only way to wait for CI (#495)** — here, in `code-sweep`, in
-  `code-wrap`, everywhere. Never hand-roll a `sleep N; gh run view|list` loop, never wrap
-  `gh run watch` (it polls every 3 s), never run two waits for the same run (a second
-  `ci-wait` on the same run in this checkout is refused, exit 6), never send `gh`'s stderr
-  to `/dev/null` inside a wait, and never leave a wait running in the background after
-  your turn ends. Measured over one hour on one fleet: ~88% of ~4,500 REST calls on the shared
-  agent identity were hand-rolled CI waits — one sweep alone made ~1,500/h with two loops
-  on the same run, and a loop that read a rate-limit error as "keep waiting" kept going —
-  until the 5,000/h quota ran out and **every** agent's `gh` call failed for the rest of the
-  hour. `ci-wait` backs off 30 s → 60 s → 120 s, sends conditional requests (a 304 is
-  free), and costs about 10 calls for a 15-minute run. It exits with the outcome:
-
-  | exit | outcome | what this skill does |
-  |---|---|---|
-  | `0` | GREEN | re-read the class — `green` only if **every** run at the head sha is |
-  | `1` | RED | classify the red as below |
-  | `3` | TIMEOUT | the cap expired — the defer below |
-  | `4` | RATE_LIMITED | **stop the pass**, not just this candidate: the quota is gone for every agent until the reset time it prints. Record the defer with that time as the re-measure trigger; do not retry |
-  | `5` | UNKNOWN | the read failed or returned an unknown state — defer, quoting its output |
-  | `6` | ALREADY_WAITING | another session is waiting on this run — defer on its run id; do not start a second wait |
-
-  **The cap expired** → record a
-  defer with the clock *What a defer is for* requires — precondition: branch CI in flight
-  at `<sha>`; clears on: that run completing `green`; re-measure trigger: run
-  `<databaseId>` completing — and **end this candidate's turn**. That is the legitimate
-  kind of defer, a precondition the coordinator cannot itself clear; it is never a reason
-  to hold the pass open. Under `code-sweep`, the pass moves on to the next candidate and
-  the deferred one is re-measured by its run id on the next ping (`code-sweep` §0,
-  §4.0), not by waiting here. Fifteen minutes covers one ordinary CI run plus queueing;
-  a repo whose normal run is longer than the cap should expect its candidates to defer
-  once per push — say so, rather than raising the cap silently.
-- **Re-running is mechanical, and it is the only CI action permitted here** — same
-  boundary as §0's push rule. One re-run per red episode, not per attempt: a second
-  identical failure is evidence, and spending re-runs on it just moves the wall further
-  out.
-- **B0's sync commit invalidates an earlier class.** If you merged `<base>` in, the sha
-  A5 measured is not the sha you are about to merge. Push the sync commit and read the
-  class again for the new head — a green class inherited from a pre-sync sha is exactly
-  the "green run on a different commit" this whole section exists to refuse.
-- **A green class on a head that lacks the current `<base>` tip is `stale-base`, not
-  `green` (#395).** `colab ship`'s own B0 merges `<base>` in *locally* and squashes without
-  that synced head ever running, so a textually clean merge used to land on a verdict that
-  never saw what `<base>` gained since. Measured:
-  two branches, each green alone — one changed a shared test base class the other's new
-  tests also relied on, and trunk went red on the combination. `colab ship` (dry and real)
-  now refuses with a `branch run contains current base (#395)` row, class `self-clearing`,
-  whenever a branch run exists at the pushed head and that head does not contain
-  `<base>`'s tip. The fix is mechanical and yours: B0 (merge `<base>` in), push, wait on the
-  new run under the same 15-minute bound, re-run ship. A head with **no** run (workflows
-  that cannot fire for a branch ref) is not stale — B2a covers it. A batch member is exempt:
-  the combined run is its re-read. Skipping the re-run because "the new `<base>` commits
-  touch nothing this branch's tests import" is **not** allowed — that cannot be measured
-  generically, and a guess is exactly what produced the incident.
-- **In a batch (#373), the combined run is that re-read — once, for every member.** Its head
-  is trunk plus each member's squash, so it grades each member's synced state; do not also
-  re-run each member. Read it through `colab ship --batch` (it applies the same all-runs rule
-  and counts the one re-run), wait on it with the same 15-minute bound, and classify its red
-  exactly as a branch red — only the one re-run belongs to the batch; after that, serial.
-- **Never wait out a bound on a repo whose workflows cannot fire for a branch ref.**
-  That shape is a workflow that triggers only on `push: branches: [<trunk>]` and
-  `pull_request`: `code-wrap` A5 does not open a PR by design, so branch CI genuinely
-  does not exist there before the merge, and `<base>`'s own gate at B1 is the whole CI
-  story.
-  That is a normal state, not a degraded one; say so in the report rather than treating
-  it as a missing measurement. The story does not end at the merge, though: the trunk
-  run at the squash sha is this change's first run, and B2a reads it before B2b.
-- **Telling infra from finding — run the test, do not judge by feel** (§4, *Branch CI*,
-  #354; the exit code answers first where the repo separates 1 from 2). In order:
-  1. **Any named failing assertion ⇒ `red:finding`**, whatever else the run shows. Never
-     re-run it — a green second run hides the defect.
-  2. **Else `red:infra` if the tests never ran:** duration far below this repo's norm for
-     the workflow (`gh run list --workflow <w> --status success -L 10 --json startedAt,updatedAt`),
-     `gh run view <databaseId> --log-failed` empty, or environment text — `EADDRINUSE`,
-     `signal: killed`, a lost runner, queued for hours then failed with no log.
-  3. **Neither ⇒ `red:finding`.**
-
-  A **timeout** counts as infra only with evidence the host was loaded (load, swap, I/O
-  pressure) — on an idle host it is a slow-test bug. An **`EADDRINUSE`** red is re-run to
-  unblock and, if the collision is the code's own (a random port with no retry), filed as
-  a defect too; the re-run and the filing are not exclusive.
-- **Cannot separate `red:infra` from `red:finding` even so?** Read it as `red:finding` and
-  hand back (§4, *Branch CI*: a wrong hand-back costs one look, a wrong `red:infra` burns
-  the re-run and parks the work in a lane nobody is watching).
+**Rule:** re-derive the branch's class at its current head — `green` · `none` · `red:infra` ·
+`red:finding` — never take `code-wrap` A5's word. `green` ⇒ B1b; `none` in flight ⇒
+`colab ci-wait --sha "$BHEAD" --branch <branch>` (deadline = the repo's measured CI bound, #559), then defer; `none` that cannot
+arrive ⇒ proceed, and B2a reads trunk after the merge; `red:infra` ⇒ one re-run, twice ⇒ ops
+lane; `red:finding` ⇒ send back. `colab ci-wait` is the only way to wait for CI. A green class
+on a head lacking `<base>`'s tip is `stale-base`: sync, push, re-read.
+**Stop:** `ci-wait` exit 4 (`RATE_LIMITED`) stops the pass; a capped wait ends this
+candidate's turn as a defer.
+Full text, with the exit-code table and the infra-vs-finding test: [b1a-branch-ci.md](b1a-branch-ci.md).
 
 ## B1b. Harvest every issue the branch carried
 
-B2 needs the **complete** set of issue numbers at the moment it writes the squash
-message. Build the set here — after the merge is pushed you can no longer add a
-missing `Closes` line without amending a commit that is already on trunk.
-
-**Primary source — git. Always works, no CLI required:**
-
-```sh
-{ git log --format=%B origin/<trunk>..<branch> | grep -oE '#[0-9]+' | tr -d '#'
-  printf '%s\n' "<branch>" | grep -oE '(-[0-9]+)+$' | tr -- '-' '\n'
-} | grep -E '^[0-9]+$' | sort -un
-```
-
-Commit bodies carry `#N`; branch names carry **bare** trailing digits
-(`fix/import-fixes-115-114-113`) — hence the two different extractions. Anchoring
-the branch half to the trailing group is deliberate: a plain `[0-9]+` sweep turns
-`feat/oauth2-login-88` into issues 2 and 88. It also makes the optional
-`<login>/<machine>/` prefix (§4, #348) invisible here: `ada/box-a/fix/import-fixes-115-114-113`
-extracts the same three numbers.
-
-**On a trunk-direct unit with no branch — an attended solo-flow session, legal on any
-repo without the veto (⚖ #233) — the branch-name half of this extraction is empty by
-construction, not a finding.** There is no `<branch>` to read a trailing number from;
-the commit-body `#N` on `<trunk>` is the only source harvest has, and it is enough
-(`CONVENTIONS.md`, *Solo flow*). This is the same shape `code-sweep`'s `landed
-trunk-direct: <sha>` outcome names from the sweep side.
-
-**Optional cross-check — the claims registry, if `colab` is installed:**
-
-```sh
-colab claims --json    # filter .worktree == "<name>", or .repo for a trunk session
-```
-
-Claims live in `colab claims`, **not** on the worktree record — `colab worktrees
---json` has no `issues` field (verified 2026-07-20; the table's ISSUES column is
-derived by filtering claims, so don't go looking for it in the JSON).
-
-The two sources fail in **opposite** directions, which is the point of running
-both: git catches an issue worked on but never claimed; the registry catches one
-claimed but never mentioned in a commit. A number in one set and not the other is
-a **finding** — chase it down, don't average it away.
-
-**Verify by code, not by commit message.** A commit saying `#88` proves only that
-someone typed `#88`. Grep trunk for the thing the issue actually describes — the
-column, route, UI string, function:
-
-```sh
-git log --oneline --all --grep="#88"
-grep -rn "<thing the issue describes>" <paths>
-```
-
-**Sort every number into one of three buckets — none may stay unsorted:**
-
-| Bucket | Action |
-|---|---|
-| **Done** | `Closes #N` in B2; confirm it actually closed; evidence in B2b. |
-| **Partial** | Close it **and** open a new linked issue for the remainder. |
-| **Untouched** | Leave open, with the next step written into it. |
-
-Never close a partial issue bare — that buries the open question where nobody
-will find it again. Never leave it whole either — the next session reads an
-untouched issue as untouched work and redoes what you already shipped. This is
-the same failure mode as `(#N)`: issues sitting open with their code long since
-merged (`CONVENTIONS.md` [§4](../../CONVENTIONS.md#4-branches-and-commits)).
-
-**This sort is now MECHANICALLY checked, not honour-system (#74), and the check
-now refuses the MERGE, not just the close (#263).** The incident that motivated
-#74: an issue was closed by squash-merge with a third of its three-section
-scope unimplemented — the sections were prose, so nothing could catch it.
-#74's own fix — downgrading `Closes #N` to a silent `Refs #N` and shipping
-anyway — turned out to still fail, just quietly: measured on one repo over
-~8 weeks, 125 such downgrades against only 10 commits that ever declared a
-remainder, so the redirect was reported but essentially never read. If the
-issue's `## Plan` is a real GitHub checklist (`- [ ]` one line per
-deliverable — CONVENTIONS.md [§4](../../CONVENTIONS.md#4-branches-and-commits), *Merging*),
-`colab ship` parses it before composing the squash body and **refuses to
-ship at all** for any claimed issue with an unticked box and no declared
-remainder — a precondition row (`remainder declared for unticked issues`),
-exactly like a red CI run, not a redirect that lets the ship proceed. Doing
-B2 **by hand** (no `colab ship`, or a repo without `autonomy: auto-trunk`):
-run the same check yourself before you write the commit message, and treat a
-hit as a stop, not a note —
-
-```sh
-gh issue view $N --json body,comments -q '.body, (.comments[].body)' | grep -E '^\s*- \[[ ]\]|^Remainder: #'
-```
-
-any `- [ ]` line with no `Remainder: #M` anywhere in that output means **Partial**,
-not **Done** — file the remainder issue and tick what shipped (B2b's evidence
-template below) *before* you write `Closes #N`; do not squash-merge this issue
-until you have. Ticking the remaining boxes, or an explicit, deliberate
-`colab ship --refs $N`, both clear it too — **but `--refs` is only half a choice
-(#385).** It keeps $N open, and once B3 releases the claim an open, unheld issue
-reads as startable code work again. So in the **same step** as the ship:
-
-- **Leftover is a check only a person can run** (a UI click-through, a look on a real
-  device, a live end-to-end proof), with all the code on trunk → **do not `--refs`
-  it.** Let `Closes #N` stand, and in this same step add one row to the repo's single
-  open `Human verify:` issue (CONVENTIONS.md [§5](../../CONVENTIONS.md#human-verify--a-person-only-check-closes-the-issue-and-becomes-one-row-491), *Human verify*, #491):
-  ```sh
-  HV=$(gh issue list --state open --search 'in:title "Human verify:"' --json number -q '.[0].number')
-  [ -n "$HV" ] || HV=$(gh issue create --title "Human verify: checks waiting on a person" \
-    --label delivery:ops --body $'Each row is a check only a person can run. Tick it when it passes; a failed row becomes a new bug issue.\n' \
-    | sed 's#.*/##')        # also add this repo's human-wait label from `holds:`, if it declares one
-  gh issue comment "$HV" --body $'- [ ] #'"$N"$' — <steps to run>\n  Evidence wanted: <what the person posts back>'
-  ```
-  Stopping once per finished issue is what this replaces. In one adopted repo, five
-  finished issues sat open for days as `deferred:measurement`, and the person they
-  were waiting on never saw them.
-- **Leftover is another non-code wait** (a measurement a machine can take, a date, an
-  outside party) → park it:
-  ```sh
-  gh issue edit $N --add-label deferred:measurement --add-label review-by:<YYYY-MM-DD>
-  gh issue comment $N --body $'Hold: deferred:measurement — owner: <who posts the proof> — wake: review-by:<YYYY-MM-DD>\nBecause: <what is left, and why no code session can produce it>'
-  ```
-  (`deferred:date` / `deferred:external-party` when that is what it waits on —
-  CONVENTIONS.md [§5](../../CONVENTIONS.md#disposition--a-park-must-name-its-wake-condition-279), *Disposition* and *Holds*.)
-- **Leftover is code** → prefer `Remainder: #M` over `--refs`, and let $N close.
-
-`colab ship` warns when a `--refs`'d issue still has an unticked box and carries
-no start-stopping label (`refsBrakeFindings` in `--dry --json`). The warning is a
-reminder, not a gate; treat it as a step you skipped, not noise. A `## Plan` with no checkboxes at
-all — written as prose — cannot be checked this way; that shape is itself a
-finding, worth a line in the Issue, but it does not block the close (nothing
-here can predate this convention and be held to it retroactively).
-
-**Before filing the remainder issue, ask whether this half should ship at
-all** (CONVENTIONS.md [§4](../../CONVENTIONS.md#4-branches-and-commits), *Is a shipped half actually
-shippable?*) — **does the shipped half have its own oracle**, independent of
-the unshipped remainder? If the only way to know it works is to finish the
-other half first, declaring a remainder and shipping anyway is the wrong
-move regardless of what the gate allows; leave the branch and finish it next
-session instead.
+**Rule:** build the complete issue set before the squash: `#N` from commit bodies plus the
+branch name's **trailing** digit group, cross-checked against `colab claims` — a number in one
+source only is a finding. Verify by code, not by commit message. Sort each into Done
+(`Closes #N`) · Partial (close + remainder issue) · Untouched (leave open, next step written).
+An unticked `## Plan` box with no `Remainder: #M` makes `colab ship` refuse the merge; a
+`--refs` keep-open needs its hold in the same step, and a person-only check closes and becomes
+a `Human verify:` row (#491).
+**Stop:** a shipped half with no oracle of its own does not ship — finish it next session.
+Full text: [b1b-harvest.md](b1b-harvest.md).
 
 ## B1c. Grade the diff against the plan (#94)
 
-Read the plan file, if one exists, from the **main checkout** — `$PLANS_DIR/issue-<N>.md`
-(`$MAIN_REPO/.plans/` unless `COLAB_PLANS_DIR` says otherwise), **then** the legacy
-`$MAIN_REPO/.claude/plans/issue-<N>.md` for a plan written before #488 (`$MAIN_REPO` and
-`$PLANS_DIR` as resolved in §0, not `$PWD` — #113) per issue in the harvested set (B1b),
-not the worktree, which may be mid-teardown by the time anything reads this. A plan in
-either location counts — a session graded as having no plan because it wrote the other
-one is exactly the false reject this order prevents:
-
-```sh
-cat "$PLANS_DIR/issue-<N>.md" 2>/dev/null || cat "$MAIN_REPO/.claude/plans/issue-<N>.md" 2>/dev/null   # per issue that carried one
-```
-
-- **Plan file present** → grade the diff against its *Acceptance oracle* and *Files*
-  sections.
-- **No plan file** (rung 0, or a session that predates #94) → grade against the Issue's
-  own stated ask — its `## Plan` checklist if it has one (B1b's per-item verdict already
-  covers this shape), else its prose Goal.
-
-Verdict is one of two, and it is a **judgement**, not a line-count — the same posture
-B1b's per-item verdict already takes toward the checklist, applied here to the plan (or
-ask) as a whole:
-
-- **pass** — the diff satisfies the stated oracle, or the plan's own deviation note
-  (`code-start`/`code-plan`, *Deviating from what you wrote*) explains why it does
-  something different and that reason holds up. Proceed to B2; the verdict rides on
-  B2b's evidence comment.
-- **reject** — the diff does not satisfy the oracle, or drifts from the plan's Files
-  list with no written reason anywhere in the plan file. **Do not merge, and do not
-  proceed to B2 on this pass, whichever reject class below applies.** Post a comment on
-  the issue naming specifically what falls short — not "does not match the plan," the
-  actual gap, and carry a `<!-- colab:grade verdict=reject-decision round=<n> -->`,
-  `verdict=reject-escalate round=<n>` or `verdict=rework round=1` marker per the
-  classification below (`rework` is the direction-bearing `decision`, #406) — same
-  grammar and reading rule as B2b's `pass` marker (*The grade verdict is a marker, not
-  a sentence to parse*). Every claim in the harvested set stays held; this is never an
-  automatic revert of the branch and never a silent merge-anyway.
-
-#### UI-affecting issues — also grade against the design artifact, when one exists (`CONVENTIONS.md` §5)
-
-When the harvested set touches a UI surface and `docs/design/` carries an artifact
-for it (`<slug>-<N>-mockup.html` / `<slug>-<N>-spec.md` — `CONVENTIONS.md`
-[§5](../../CONVENTIONS.md#design-conclusions-are-three-units-not-two), *Design
-conclusions are three units, not two*), grade the diff against that artifact too,
-alongside the plan's own oracle — not instead of it: a diff can satisfy the plan's
-stated Files/oracle and still miss what the approved design actually specified.
-The result folds into the **same** pass/reject verdict above — there is no separate
-design-verdict token — and a mismatch classifies exactly like any other B1c gap:
-`decision` by default, `escalate` only when the three conditions below all still
-hold. Name the artifact file in the reject comment so the gap is findable, not
-just "doesn't match the design."
-
-No artifact under `docs/design/` for this surface, or the harvested set is not
-UI-affecting → nothing new to check here; the plan/ask oracle above is still the
-whole grade, exactly as before this clause.
-
-#### Children of a switched epic — also grade "dark with the switch off" (#340)
-
-This applies only where `CONVENTIONS.md`
-[§5](../../CONVENTIONS.md#switched-epics--concurrent-unfinished-features-336), *Switched
-epics*, applies: `exposure: released`, or a bare legacy `tier: A`, which reads the same
-way (`tools/lib/axis-authority.js`). It also needs a harvested issue that carries a
-`colab:switch` marker itself, or whose parent epic does:
-
-```sh
-gh issue view <N> --json parent -q '.parent.number // empty'                        # the epic, if any
-gh issue view <epic> --json body -q .body | grep -oE '<!-- colab:switch [^>]*-->'   # name=, needs=
-gh issue view <N>    --json body -q .body | grep -oE '<!-- colab:switch [^>]*-->'   # role=add|remove
-```
-
-Read the markers the way `code-triage` §2 does. A marker that is **not cleared**
-(malformed, an unrecognised token, or two markers disagreeing) is a `reject-decision`
-naming the defect. The grade cannot tell which question below applies, and defaulting one
-is exactly what the marker family forbids. When a marker is valid, the child's `role`
-decides the question:
-
-- **`role=add`, the first child.** The switch is introduced under its declared `name`,
-  and that name is the literal identifier the code reads: `git grep -n <name>` at the
-  branch head finds the read sites. An absent selector runs the release configuration
-  (rule 2). Everything this diff adds sits behind the switch.
-- **No `role`, an ordinary child of a switched epic.** Every behaviour the diff adds is
-  reachable only with the switch on. The release configuration behaves as trunk did
-  before the branch: schema changes only add, old config files and API responses keep
-  working, and no destructive step happens here (rule 5). The epic's `role=add` child must
-  already be closed by a merge (the test is in `code-triage` §2), or be in this same
-  harvested set. A child that lands before its switch exists cannot be dark.
-- **`role=remove`, the last child.** This child is graded on the opposite question: is the
-  switch removed **completely**, and is any destructive step it was deferring performed
-  here? `git grep -n <name>` at the branch head returns nothing. No dead branch survives in
-  the switch's place, such as a selector read replaced by a constant, an `if (false)` path,
-  or the off path's code left behind unreachable. The grep cannot see those, so read the
-  diff for them. Every destructive step that rule 5 deferred to this child is in the diff:
-  each one the removal child's body or the epic names, and each compatibility stand-in the
-  epic's earlier children left behind that the diff can identify (an old column, an old
-  config key, an old response field). A deferred step that is still missing counts as a
-  miss. It does not become a follow-up.
-
-**What the grade reads as evidence, for `add` and ordinary children.** First, the
-**release-configuration CI run at the branch head**. `CONVENTIONS.md` §7 requires a repo
-holding an unfinished switched epic to run its suite in both configurations. A green release
-job at the head sha is the direct evidence that the release configuration behaves as before.
-Second, **the diff itself**, read for any code path the switch does not guard. A green
-release run is necessary but not sufficient: a suite that never exercises the new path
-passes while that path is live. If the repo's CI runs only one configuration, grade on the
-diff alone and say in the evidence that the release configuration **was not run**. That is
-not a reject by itself, because CI's shape is §7's business, not this change's.
-
-**The verdict a miss produces.** A dark-launch miss is a **reject**. That covers new
-behaviour reachable with the switch off, a changed release configuration, and a child that
-lands ahead of its switch. A removal miss is also a reject: a grep hit, a dead branch, or a
-deferred destructive step left undone. Either one is an ordinary B1c gap with the same
-marker tokens, no new ones. It is `reject-decision` by default, and `reject-escalate` only
-when all three conditions below hold. **One case is always `decision`:** a destructive step
-performed *before* the removal child (rule 5). Once a release carries that step, it cannot
-be undone, which puts it in the `decision` list's own category. The reject comment names the
-rule broken and the `file:line` of the unguarded path, grep hit, or destructive step.
-
-**On a pass**, B2b's evidence comment says in prose which switch question was graded and on
-what evidence. For example: `switch: bulk-import role=add — dark with the switch off
-(release-config job green at a1b2c3d; diff read, no unguarded path)`. The `colab:grade`
-marker keeps its closed set of four tokens.
-
-When the repo is out of scope, or no harvested issue belongs to a switched epic, this clause
-adds nothing, and the grade is exactly what it was before.
-
-### Reject classifies further — `decision` is the default, `escalate` is the narrow exception (#262)
-
-A stop-for-a-human on *every* reject was measured to be the wrong default for the
-common case: one fleet's cheap-tier lane spent 47 attempts — 35 of them rejects, all at
-the *same* worker tier — on a single issue, because nothing forced a tier change once
-that tier had been shown insufficient. A human wasn't blocking any of it; nothing was
-routing around a tier that had already failed repeatedly. Waiting for a person bought
-nothing there. So a reject is graded into exactly one of two classes, decided **at
-grading time**, never guessed from a label alone:
-
-- **`decision`** — the default, and everything not explicitly `escalate` below. The
-  oracle itself looks wrong, the ask was ambiguous, the diff drifted from scope with no
-  reason recorded in the plan file, or the change touches migration, promotion,
-  security, money, or anything non-undoable. **A human resolves this — no exception,
-  whatever any label says.** Behaviour is exactly what "reject" already meant above:
-  comment, hold every claim, stop. *Resolves* does not always mean *answers a
-  question first*: when your own recommended fix already sits inside authority the
-  repo has granted, the human's part is to overrule it, not to pick it (*A reject
-  that already carries its answer*, below). Either way the claims stay held and
-  nothing merges.
-- **`escalate`** — narrow, and every condition below must hold, not just one:
-  1. **The issue set carries the `mechanical-lane` label** (`code-triage`,
-     *mechanical-lane*, #93). That label is the one in-repo signal that this work was
-     dispatched below the fleet's default engine in the first place — which is what
-     makes "a rung above exists" a fact this skill can read, not a guess it is making.
-     No label on the harvested set → no `escalate` class, ever, regardless of 2 and 3.
-  2. **The gap is a plain oracle-unmet**, not an oracle-is-wrong or scope-is-wrong
-     finding — the diff genuinely attempted the stated task and the oracle genuinely
-     still says no. Anything that reads as the oracle itself being the problem is
-     `decision`, not this.
-  3. **`reject-escalate` may only ever be emitted at `round=1`.** Read the issue's
-     comments for a prior spend of the bound — **either** a `<!-- colab:grade
-     verdict=reject-escalate ... -->` marker **or** the legacy
-     `<!-- colab:reject escalate=1 -->` marker (#260 minted the former; every marker
-     from before that change is the latter, and issue comments are immutable, so both
-     forms exist in history permanently — read the union of the two, always, not just
-     the current one). If either is already present, this reject is `decision`, full
-     stop, regardless of 1 and 2 — one automatic escalation per issue set, ever. A
-     second reject after that spent escalation is exactly the case a human is for.
-
-  On `escalate`: post the same specific-gap comment `reject` always requires, with the
-  `<!-- colab:grade verdict=reject-escalate round=1 -->` marker — this marker *is* the
-  one-time bound now; nothing else needs to be written to record it, and condition 3
-  above is how a later pass reads whether it was spent. Leave the claim held and the
-  worktree in place, same as `decision` — do not tear down, do not release, do not
-  merge. **This skill does not itself pick or dispatch the next rung** — which engine
-  backs it, and how it is invoked, is per-fleet and deliberately out of this skill's
-  scope, the same posture `mechanical-lane` itself already takes (`code-triage`).
-  Report the escalation instead of a hard stop; whatever routes this fleet's mechanical
-  lane (or a human, absent one) picks up the still-held claim and re-attempts, carrying
-  this reject comment as that attempt's context. Re-attempting at the *same* tier with
-  nobody having checked for the marker first is precisely the failure this section
-  exists to close off — checking condition 3 above is not optional bookkeeping, it is
-  the cap.
-
-### A reject that already carries its answer — record the direction, don't ask for it (#328)
-
-Measured 2026-09-11 on an `auto-trunk` repo, in a ship session autopilot had spawned:
-the grade found that the rework added a network poll outside the repo's three
-human-ruled network openings. The coordinator then stopped on an interactive prompt
-offering two options. **1 (Recommended)** was to move the refresh onto the path the
-repo had already budgeted for and delete the new slot, with no boundary change.
-**2** was to have a human rule a fourth opening. Option 1 only applied a ruling the
-repo already held. Only option 2 needed a human. The session waited on the modal
-anyway. The dashboard parked the stage (`waitingOn: prompt`), and two green
-candidates queued behind it until another session read the prompt and typed `1` by
-hand. On an unattended lane an interactive prompt is a stall with no timer. The
-reject was right. Asking a question the coordinator had already answered was the
-mistake, the same one *`decision` is the default* above argues against, one level
-up.
-
-So when you reject and have a recommended route, check whether that route needs
-**authority you do not already hold**. It does if it needs any of the following:
-
-- **a new or amended ruling**, meaning any boundary, policy or `needs-decision` answer
-  the repo does not already record. "The ruling already exists" means you can cite it:
-  a file and line, a `⚖ Decision recorded` comment, or an issue number. A pattern you
-  inferred and cannot cite counts as a new ruling.
-- **a grant**: `migration-granted` (of either role — a reviewer grant is still minted
-  by a human), a `decision-recorded` label, a go-ahead, or anything else this skill reads
-  as a human act;
-- **a migration, promotion, tag or deploy**, or anything security, money or
-  non-undoable (the `decision` list above, unchanged);
-- **a change of scope or oracle**, meaning a fix that stops answering the issue's
-  stated ask, or changes what counts as done.
-
-**Every option needs one of these** → ordinary `decision`, unchanged. Post the reject
-comment with the options laid out and stop. A human attending the session live may be
-asked there as well, but an unattended session (autopilot, a scheduled driver, any run
-with nobody typing to it) never waits on an interactive prompt. The comment is where
-the human will look, and a modal holds up every candidate queued behind this one.
-
-**Your recommended route needs none of them** → still a `decision`-class reject, but
-its marker is the whole token **`rework`**, not `reject-decision` (#406):
-`<!-- colab:grade verdict=rework round=1 -->`. The token is what lets a rework router
-(something that sends a rework verdict back to the session owning the branch) tell
-"the rework is decided, go" from "this waits on a human" by equality alone. Before it
-existed both comments carried `reject-decision`, and the only difference was in prose
-no reader may parse, so one adopter's router had to keep its ship-grade lane dark
-rather than send human-waiting work back to the author. Everything else is unchanged:
-`rework` keeps every claim held, merges nothing and never proceeds to B2. It is
-**held**, never cleared, and a reader that predates it sees an unrecognised token,
-which is held too. Only the comment's shape and its token change, and no prompt is
-raised at all:
-
-1. **State the route as the direction**, meaning the rework to do. Cite the ruling it
-   applies, which is what makes it the author's to follow and not yours to invent.
-2. **State the alternative you declined** and which authority it would need ("rule a
-   4th network opening, a human act"), so a human who prefers it can overrule on the
-   issue. The direction stands unless someone overrules it. Nobody has to answer before
-   rework can start.
-3. **End the run for this issue set, as for any reject**, and move to the next
-   candidate. Picking or dispatching the rework is outside this skill, exactly as for
-   `escalate`. Whatever routes rework in this fleet (or a human, when nothing does)
-   picks up the held claim and carries this comment as its brief.
-
-```sh
-gh issue comment 88 -b "<!-- colab:grade verdict=rework round=1 -->
-Rejected: \`lib/sync.js:41\` adds a network poll outside the three openings ruled in
-\`docs/network.md:12\`.
-Direction: move the refresh onto the existing daily fetch (\`lib/fetch.js:88\`) and delete
-the new slot. Applies the ruling in \`docs/network.md:12\`; no boundary change.
-Declined: rule a 4th network opening — a human act. Overrule here to take it instead."
-```
-
-**Bounded, and on the same marker.** `rework` may only be emitted at `round=1`: no
-`colab:grade verdict=reject-*` or `verdict=rework` marker, and no legacy
-`colab:reject escalate=1`, already on the harvested set. A direction-bearing reject
-posted before #406 carries `reject-decision`, and the `reject-*` half of that test
-already sees it. If the rework that followed a direction is rejected again, that
-reject is a plain `reject-decision` and a human reads it. Two direction-bearing rejects in a row are how a coordinator
-and an author loop on each other's judgement with nobody deciding. The round number
-already records this, so nothing new has to be parsed.
-
-A rejected grade, of any class, ends this skill's run for that issue set: nothing
-past B1c executes on this pass. What differs is what happens next. A
-`reject-decision` waits on a human who has seen the comment and said what happens
-next. A `rework` waits on the rework its direction names, unless a human overrules
-first. An `escalate` waits on the one bounded automatic retry the marker
-records, and falls back to waiting on a human the moment that retry rejects too.
+**Rule:** grade against the plan file (`$PLANS_DIR/issue-<N>.md`, then the legacy
+`.claude/plans/`) — its *Acceptance oracle* and *Files* — or, with no plan, the Issue's own
+ask. Verdict `pass` (rides on B2b's evidence) or `reject` (a comment naming the actual gap,
+with a `colab:grade` marker; every claim stays held). UI-affecting work is also graded against
+its `docs/design/` artifact; a child of a switched epic is graded "dark with the switch off"
+(or "removed completely" for `role=remove`).
+**Stop:** any reject ⇒ nothing past B1c runs for that issue set on this pass.
+Full text: [b1c-grade.md](b1c-grade.md). Read when the set is UI-affecting or belongs to a
+switched epic: [b1c-ui-and-switched-epics.md](b1c-ui-and-switched-epics.md). Read before
+posting any reject: [b1c-reject-classes.md](b1c-reject-classes.md) — `reject-decision` is the
+default, `reject-escalate` needs all three of its conditions, and `rework` (round 1 only) is
+the reject whose recommended route needs no authority you lack. An unattended run never
+raises an interactive prompt.
 
 ## B2. Squash-merge with `Closes #N`
 
-**Re-check that it is still unshipped, immediately before the merge (#370).** Run B0's
-already-shipped grep again against a fresh `git fetch origin <base>`. Grading and CI take
-minutes, and the branch's own session may ship it in the meantime — measured on an
-`auto-trunk` repository: the implementer ran `colab ship` itself 5 s before the
-coordinator's verification finished. A match now means someone else landed it: **do not
-merge.** Stop the merge path and go to B2a–B4 for whatever that ship left undone (evidence,
-claims, worktree), naming the squash sha it landed in.
-
-```sh
-git checkout <base> && git pull
-git merge --squash <branch>
-git commit    # subject: type(scope): …  · body: Closes #N   (one line per issue in the group)
-git push origin <base>
-```
-
-**`<base>`, every line of it.** If `<base>` is a declared line rather than trunk, the
-main checkout must not be parked on it to do this — use `colab ship`, which merges in
-an ephemeral worktree, or make one yourself. The at-rest invariant does not pause for
-a merge. And merging that **line into trunk** afterwards is never part of a ship: it
-is a human integration event of a promotion's weight.
-
-- **`Closes #N`, not a bare `(#N)`** — GitHub only auto-closes on the keyword. We
-  measured 26/30 issues left open with their code long merged because commits
-  said `(#N)` (`CONVENTIONS.md` [§4](../../CONVENTIONS.md#4-branches-and-commits)).
-- One `Closes #N` per issue the branch carried — the set you harvested in B1b, not
-  just the "main" one.
-- **This step never runs against the will of B1b's close gate.** If any harvested
-  issue has an unticked `## Plan` box with no declared remainder, `colab ship` has
-  already refused before reaching this step (#263, B1b above) — do not hand-write
-  `Closes #N` around that refusal; resolve it the way B1b describes, then re-run.
-- **A long-lived tracking/memory issue is `Refs #N`, not `Closes #N`.** If the branch
-  claimed an issue used as external memory for a whole domain — a checklist of still-open
-  items you touched but did not complete — reference it, don't close it, or you bury its
-  knowledge behind a closed-issue lookup (`CONVENTIONS.md` [§5](../../CONVENTIONS.md#tracking-issues--claimed-but-referenced-not-closed), *Tracking issues*). Through
-  the blessed door this is automatic for an issue carrying the `tracking` label, or opt in
-  per-ship with `colab ship --refs <N>`; the claim is still released either way. A
-  `--refs`'d issue kept open for a non-code leftover gets its hold in this same step
-  (B1b above, #385). A leftover that is only a check a person must run does not keep
-  the issue open: close it and add a row to the `Human verify:` issue (B1b above, #491).
-  `--refs` plus a hold stays for a code remainder and for `tracking` issues. A
-  `tracking`-labelled one needs no hold. When
-  that issue is finished later — its live check passed, its last item done — close it
-  with `colab close <N> --comment "<evidence>"`, never a bare `gh issue close`: the bare
-  close leaves any claim standing and tells no observer, which kept a closed issue
-  offered as startable for ~10 minutes (#381).
-- **A core-path branch pauses here instead of merging — `⏸ PR-PENDING`, exit 3 (#350).**
-  When the target's `CODEOWNERS` names an account other than the author and the branch
-  touches a path it covers, `colab ship` pushes the branch, opens a PR (or reuses the open
-  one), and stops. Nothing is merged, and the claims, worktree and branch are kept
-  (`CONVENTIONS.md` [§2, *Core paths*](../../CONVENTIONS.md#core-paths--a-pr-and-a-non-author-approval-before-landing-350)).
-  - This is a pause, not a failure. Do not run B2a–B4. Post one comment on each carried
-    issue linking the PR, then stop.
-  - Resume by re-running the same `colab ship` once an account other than the author has
-    approved the branch's **current** head. It lands by the ordinary squash and closes the PR.
-  - Never press the PR's merge button, and never approve with the author's own account:
-    the forge refuses the second, and the first skips every gate ship re-checks.
-  - B1c's grade still runs before the PR is opened: a reject never reaches the pause.
-  - Every squash also carries a `Machine: <label>` trailer ([§4](../../CONVENTIONS.md#4-branches-and-commits)).
-- **A repo declaring `owner:` lands exactly as above — onto trunk, never onto the owner's
-  branch (#394).** `trunk:` there is the fleet's integration branch; the owner's branch is
-  reached only by `colab deliver`, a separate step that opens or refreshes ONE pull request
-  from trunk and never merges it (`CONVENTIONS.md` [§9, *Working in a repo you don't own*](../../CONVENTIONS.md#working-in-a-repo-you-dont-own)).
-  - It is not part of Phase B and never runs from here. Opening or editing that PR is a
-    human's act; this skill's go-ahead is for the trunk merge, not for an outward act on
-    the owner's repo.
-  - Your issues close on the trunk landing, as everywhere. After the ship, say in the
-    report that the work now waits on delivery, and give `colab deliver --dry`'s state line.
-  - `colab ship` and `colab promote` refuse a target that is `owner.branch`. That refusal is
-    final: do not route around it.
-    Leave it in place, and do not add it back where ship left it out. On a public repository,
-    or one whose visibility ship could not read, it is omitted on purpose (#367). A commit
-    message is permanent, and that label is a hostname. `--dry` prints which way it will go.
-- **Machine-specific trunk-side automation runs itself — `.colab/hooks/post-ship`.**
-  Migrate the trunk DB, restart the trunk dev server, re-install dependencies: `colab
-  ship` runs that hook on the trunk checkout right after the push, so this is no longer
-  a step you perform by hand. It is the one moment trunk may go down; keep the window
-  short. A non-zero hook is a warning, never a failed ship — the merge already landed,
-  so **never re-run `ship` because the hook complained**; finish what it does by hand
-  and leave the trunk checkout clean.
-- **A merge that changed a dependency lockfile leaves the trunk checkout stale, and
-  that is not cosmetic (#304).** The squash lands *in the shared trunk checkout*, and
-  nothing re-installs `vendor/`/`node_modules/` afterwards — so a merge adding a
-  Composer/npm package leaves an installed tree that disagrees with its lockfile.
-  Anything regenerating committed output from that tree (a route-binding generator, an
-  always-on dev server) then deletes those committed files, and the resulting dirty
-  trunk blocks **every other session's ship**, including ones whose diff touched
-  nothing related. With no `post-ship` hook, `colab ship` warns and names the install
-  command; `colab` never runs a package manager on a checkout itself. If you see that
-  warning, run the install before you walk away.
+**Rule:** re-run B0's already-shipped grep immediately before merging. Squash onto `<base>`
+(never the main checkout parked on a line), one `Closes #N` per harvested issue, `Refs #N` for
+a `tracking` issue or `--refs`. Never hand-write `Closes` around a close-gate refusal. A
+core-path branch pauses at `⏸ PR-PENDING` (exit 3): link the PR on each issue and stop. A
+repo declaring `owner:` lands on trunk; delivery is `colab deliver`, a separate human act.
+`post-ship` hook failures are warnings — never re-run `ship` for one.
+**Stop:** a match on the re-check means someone else landed it ⇒ do not merge; go to B2a–B4.
+Full text: [b2-squash.md](b2-squash.md).
 
 ## B2a. Branch CI could not arrive? Read the trunk run at your squash before any evidence (#374)
 
-B1a let this merge through on a `none` that **cannot arrive** — the repo's workflows fire
-only on a trunk push and `pull_request`, so no run could ever exist at the branch's head —
-with the words "the base's own CI is the whole CI story". That story is told **after** the
-merge: the trunk run at the squash sha B2 just pushed is the change's **first** run on the
-runner. Nothing before this section read it. Measured 2026-09-25 on one repository: the
-coordinator merged, then posted `colab:evidence` and `colab:grade verdict=pass` on both
-carried issues **19 s after** the trunk run for its own squash had completed red (2 failing
-tests of 929, `red:finding`). No `TRUNK RED:` issue was filed, and the red sat unnoticed for
-~40 min until something else happened to open the run.
-
-**So when B1a read the cannot-arrive `none`, watch the trunk run at the squash sha before
-B2b posts anything.** When B1a read `green` the branch's own run already judged the change —
-skip this section. This adds no gate before the merge — the merge has already happened. It
-closes the loop B1a opened.
-
-```sh
-SQUASH=<the squash sha B2 pushed>   # from B2's commit or `colab ship`'s output — not
-                                    # origin/<base>'s tip, another ship may land on top
-colab ci-wait --sha "$SQUASH" --timeout 15m   # every workflow at that sha, one 15-min
-                                              # cap across all of them; exit codes as B1a
-```
-
-- **Same bound as B1a — 15 minutes, a cap across every run at the sha, not 15 per run**
-  (*The wait is bounded*, #370). Under `code-sweep` this is not an extra wait: the next
-  candidate's B1 needs this same run green at the new trunk head before it can merge.
-- **Same quantifier as B1:** the squash is `green` only when **every** run at `$SQUASH` has
-  completed and none failed. A fast workflow already green does not answer for a slow one.
-- **No run listed yet?** A push takes a few seconds to register — look again for up to a
-  minute. If the workflows do trigger on a push to `<base>` and still nothing appears, trunk
-  CI is dead, which is B1's *a failure that never started still means stop*. It stops the
-  **next** ship, not this one. Say so in the evidence. A repo with no workflows at all, or
-  with `pull_request` only, never produces a run here: say that instead and go to B2b.
-
-Classify what you see with B1a's test (*Telling infra from finding*):
-
-| trunk run at `$SQUASH` | what this skill does |
-|---|---|
-| `green` | **B2b as usual, citing that run** — its id beside the squash sha in each evidence comment. The claim "CI passed" now names the run that passed |
-| `red:finding` | **File `TRUNK RED: <sha> (#N) fails <what>` in the same pass**, before any evidence comment. Put in it the failing test names, the run link, the squash sha and every issue the squash carried. Then post B2b's evidence with the red noted and that issue linked. **The grade stays the grade** — B1c judged the diff against the plan, not trunk's CI, so `verdict=pass` is still true and is still emitted. Do not revert and do not push a fix from here: the `TRUNK RED:` issue is the patch's work, and the next ship's B1 (*Red trunk*) orders it first |
-| `red:infra` | **Re-run once** (`gh run rerun <databaseId> --failed`, §4) and read it again inside the same 15-minute bound. The same failure twice ⇒ the runner, not the change: hand it to the ops lane and say in the evidence that trunk CI for `$SQUASH` is unverified, for that reason |
-| cap expired | **Say so in the evidence** — "trunk run `<databaseId>` for `<sha>` still running at `<ts>`" — and leave the re-measure trigger: that run completing. The next ship pass or `code-sweep` ping reads it by id. A red there is filed as `TRUNK RED:` exactly as above, by whichever session finds it |
-
-The measured failure was one of **order**, not of skill. The coordinator could read a red
-run perfectly well; it wrote "pass" 19 s before the red it had caused existed. So no
-evidence comment for a cannot-arrive merge goes out ahead of this read. An evidence
-comment that says `pass` beside a red trunk it never looked at tells every later reader
-that trunk was fine.
+**Rule:** only when B1a proceeded on a cannot-arrive `none`. `colab ci-wait --sha "$SQUASH"`
+(the trunk bound), then: `green` ⇒ cite the run in B2b · `red:finding` ⇒ file `TRUNK RED: <sha>
+(#N) fails <what>` before any evidence, the grade stays `pass` · `red:infra` ⇒ one re-run ·
+cap expired ⇒ say so in the evidence, naming the run.
+Read when B1a read a cannot-arrive `none`: [b2a-trunk-run.md](b2a-trunk-run.md).
 
 ## B2b. Post evidence on EVERY issue — including the auto-closed ones
 
-**`ceremony: light` repo? Skip this whole step.** The squash's `Closes #N` is the
-record; there is no evidence comment to post (project.schema.md#ceremony--optional).
-Everything below applies only on `standard` (the default — absent `ceremony:` key).
-
-`Closes #N` closes the issue the instant trunk is pushed: silently, with nothing
-attached. So the best-evidenced rule in the handbook is exactly the one that skips
-the evidence step — the issue goes green and no one ever records *what* shipped.
-
-**Comment evidence on every issue the branch carried, whether it auto-closed or you
-closed it by hand.** This runs **after** the merge, because the sha you cite must be
-the **trunk squash sha** — the branch sha is gone once the branch is deleted (a
-squash leaves no merge relation, which is why deleting the branch needs
-`git branch -D`, not `-d`).
-
-Evidence is three parts: **the `<base>` squash sha · `file:line` · what you checked and
-what came back.** After a cannot-arrive merge, what came back includes B2a's trunk run at
-that sha — green by id, the `TRUNK RED:` issue, or "still running at `<ts>`". A member that
-landed in a batch (#373) cites **its own** squash commit, not the batch head — `colab ship
---batch` already wrote that sha and the combined run into the 🚢 line. When `<base>` is a
-declared line, say so in the comment: that code is
-**not in trunk yet**, and an evidence comment that implies otherwise will be read as
-"this is in the next release".
-
-**An issue with a real `## Plan` checklist gets a per-item verdict, not one prose
-paragraph (#74).** One line per box: shipped-with-evidence (the `file:line` that proves
-it), or moved to `#M` (the remainder issue). A single paragraph summarising "did the
-whole thing" is exactly the shape that let a partially-done issue close silently in the
-first place — a reader auditing later cannot tell which box a general paragraph actually
-covers.
-
-**Carry B1c's grade verdict here too — one line of prose, plus the machine-readable
-marker (#260).** `Grade: pass — <what confirmed it>` for a plan/ask that was satisfied.
-A `reject` never reaches this step at all (B1c stopped before B2); if you are here, the
-verdict is `pass` by construction, but say what confirmed it so the record does not read
-as a bare rubber stamp. Add a `<!-- colab:grade verdict=pass round=<n> -->` line
-immediately after the `colab:evidence` marker — see *The grade verdict is a marker, not
-a sentence to parse* below for the full contract.
-
-```sh
-gh issue comment 88 -b "<!-- colab:evidence sha=a1b2c3d -->
-<!-- colab:grade verdict=pass round=1 -->
-Shipped in \`a1b2c3d\` on <trunk>.
-Grade: pass — diff matches the plan's Files list and the payroll fixture in the oracle
-confirms the double-count is gone.
-- [x] add the overtime_rate column — \`app/Models/Payroll.php:142\`; ran the payroll
-      fixture for a 25%-overtime employee, the premium now applies once, not twice.
-- [x] backfill existing rows — \`database/migrations/2026_08_01_backfill.php\`; ran
-      against a copy of prod data, 0 rows left at the old rate.
-- [ ] moved to #91 — the reporting-UI column was out of scope for this branch."
-```
-
-**A group that is not fully closed by this merge: name the siblings that must now rebase.**
-The squash just moved trunk, so every remaining member branch in the `group:<key>` is now
-behind it — say which refs those are and onto which sha, so the next ship is not left
-re-deriving it from scratch. Only when the group survives this merge: once every member is
-closed, the label is spent and B2d tears the object down instead.
-
-**UI-affecting issues additionally require a screenshot of the BUILT app**, not a DOM
-assertion and not a static mockup with tokens redefined to match the design system —
-both are blind to the real rendering cascade (measured 2026-08-01: a component passed
-every token-level assertion and still rendered wrong once actually built, because the
-mockup never went through the app's real CSS cascade). Run the app (`/run` skill),
-screenshot the changed surface, attach it to the evidence comment.
-
-**Prepend one invisible marker line** — a stable, machine-readable first line, exactly
-the pattern the claim comments already use (`CONVENTIONS.md` [§5](../../CONVENTIONS.md#rules) *Rules*: a stable first
-line as wire format, everything after it human). It names the trunk sha the comment
-attests, so an external consumer (a closure-review view on a fleet dashboard, say) can
-find and verify the evidence comment without heuristics — "first comment after merge
-by the closing actor" is brittle; a stable marker is not.
-
-```sh
-gh issue comment 88 -b "<!-- colab:evidence sha=a1b2c3d -->
-<!-- colab:grade verdict=pass round=1 -->
-Shipped in \`a1b2c3d\` on <trunk>.
-\`app/Models/Payroll.php:142\` — added the \`overtime_rate\` column.
-Checked: ran the payroll fixture for a 25%-overtime employee; the premium is now
-applied once, not twice — the double-count this issue reported is gone."
-```
-
-**Degrade, never gate.** The marker is an upgrade to an already-required comment, never
-a new requirement of its own: a comment missing it (an older ship, a hand-written one)
-still counts as evidence and must never be treated as absent by anything reading these
-comments. Everything after the marker line stays free prose — **not** a structured
-evidence format. A schema with fields invites padding (a 3-line honest comment becomes
-a 15-line template of restated obviousness); the marker's whole job is being findable,
-not being complete. A comment may carry both markers; a reader matches each by its own
-name, never by line position, so their order in the body is never load-bearing.
-
-### The grade verdict is a marker, not a sentence to parse (#260)
-
-Free prose was measured to fail two ways at once, on two independently written adopter
-parsers: a decorative emoji before a prose heading blanked one consumer's match
-entirely, while the other's `PASS\b`-shaped tail pattern read a held, qualified verdict
-(`PASS-WITH-NOTES`) as cleared. Opposite failures from the same root cause — there was no
-fixed shape to parse in the first place. So the verdict is a **closed vocabulary in a
-fixed marker**, and the prose next to it is decoration a consumer never has to touch:
-
-```
-<!-- colab:grade verdict=<token> round=<n> -->
-```
-
-- **Exactly four tokens are ever emitted here**: `pass` (B2b, this section) ·
-  `reject-decision` · `reject-escalate` · `rework` (all three B1c, on the reject
-  comment — `rework` is the direction-bearing `decision`, *A reject that already
-  carries its answer*, and only ever at `round=1`). No token is a prefix of another and none is a decorated variant of another —
-  a qualified outcome is a different whole token, never `pass` with a suffix. Free prose
-  around the marker (a heading, an emoji, "held one round") is exactly that: prose. It
-  can say anything; it changes what no consumer reads.
-- **`round=<n>`** is the 1-based grading attempt for the harvested issue set — count
-  prior `colab:grade` markers on these issues and add one.
-- **Reading rule, so two adopters written independently agree:** match the marker
-  anywhere in the comment body, never by heading text or line position. Compare the
-  `verdict` token by **equality**, never by prefix or substring. Four states follow:
-  **cleared** (token is exactly `pass`) · **held** (a recognised non-`pass` token —
-  `rework` included: "the rework is decided" is not "cleared") ·
-  **unrecognised** (marker present, token not in the reader's set) · **absent** (no
-  marker at all). Unrecognised and absent both mean "do not treat this as cleared" —
-  never a silent default to the safe-looking value. Absent is not a failure either
-  (*Degrade, never gate*, above): an older ship, a hand-written comment, or a
-  `ceremony: light` repo carries no marker and that is not evidence of anything wrong.
-- **Attributes are read by name, never by position.** `verdict=rework round=1` and
-  `round=1 verdict=rework` are the same marker. One optional attribute is defined:
-  **`reviewer=<lane>`**, naming which review produced the verdict, so one marker grammar
-  can serve more than one reviewer (a migration review's REWORK, for one). **Absent means
-  the ship grade**, and this skill never writes it: every marker above is the ship
-  grade's. A reader that routes only ship-grade verdicts treats a marker whose
-  `reviewer` is present and is not a lane it knows as not its own, never as the ship
-  grade's. An attribute a reader does not know is ignored; an unknown `verdict` token is
-  still unrecognised.
-- **An adopter needing an outcome this skill doesn't emit mints its own whole token**
-  (e.g. `hold`) rather than qualifying an existing one — because *unrecognised* is
-  defined as never-cleared, a new token is safe by construction at every consumer that
-  hasn't been taught it yet. The handbook constrains its own emission and the reading
-  rule; it does not police what an adopter's own tooling chooses to add.
-
-**Not evidence:** quoting your own commit message · restating the ticked checklist ·
-"done in `feat/x-23`". All three assert the work happened; none show it did.
-
-**Made a significant design decision mid-work, without a pre-approved spec?** Add
-`design-not-preapproved` as plain text in the same comment, after the marker line
-(`CONVENTIONS.md` [§5](../../CONVENTIONS.md#decision-gate--a-human-must-answer-first-122), *Design ruling*). Not a second marker — the marker's job is being
-findable, not enumerating every condition a comment might report — just a word a human
-reviewer greps for:
-
-```sh
-gh issue comment 88 -b "<!-- colab:evidence sha=a1b2c3d -->
-<!-- colab:grade verdict=pass round=1 -->
-Shipped in \`a1b2c3d\` on <trunk>.
-design-not-preapproved — the spec did not cover the empty-state illustration; chose one
-consistent with the existing icon set. Flagging for review.
-\`app/Views/EmptyState.tsx:12\` — added the illustration and copy."
-```
-
-This is the human-review path for a design decision the `needs-decision` gate did not
-catch because nobody could have: the surface did not look significant until someone was
-already building it. The session does not stop to request a ruling first — it continues
-on the designer's spec and lets the evidence comment carry the flag instead.
+**Rule:** skip only on `ceremony: light`. On every carried issue, auto-closed or not: a
+comment opening `<!-- colab:evidence sha=<squash> -->` then `<!-- colab:grade verdict=pass
+round=<n> -->`, the trunk squash sha · `file:line` · what you checked and what came back, a
+per-item line for each `## Plan` box, a `Grade:` line, a built-app screenshot for UI work, and
+the siblings that must now rebase when a group survives. The grade marker is a closed set of
+four whole tokens, compared by equality.
+Full text: [b2b-evidence.md](b2b-evidence.md).
 
 ## B2c. Update the parent epic — close a native container with its last child; tick a hand-maintained one
 
-`code-triage` instructs its readers to **trust the epic's checklist table over its
-title**, on the grounds that only the table is maintained. Nothing in this family
-maintained it. Measured across one repo in one day: one epic stayed correct purely
-because the operator happened to remember it existed through four consecutive merges,
-while a second — that nobody remembered — held two lines wrong in *opposite*
-directions: one claiming a branch that no longer existed, one ticked but annotated
-"held open for review" on an issue already closed. A document that says "trust X"
-while nothing updates X does not fail neutrally; it produces confidently wrong plans.
-
-**First ask which kind of parent it is**, because #34's mechanism removed most of
-this work rather than adding to it:
-
-```sh
-gh issue view $N --json parent -q '.parent.number // "none"'
-```
-
-- **A native parent (sub-issue link)** → **tick nothing.** GitHub maintains
-  `subIssuesSummary` itself; the child closing *is* the update. Ticking a checklist
-  line here would be inventing a second, hand-run source of truth beside a correct
-  automatic one. **But if that child was the parent's last open sub-issue, close the
-  parent in the same step (#371, `CONVENTIONS.md`
-  [§5](../../CONVENTIONS.md#epics--a-container-is-not-a-start-candidate), *Epics*).**
-  `colab ship` does this for you (its step i2). For every issue it closed, it reads the
-  native parent, and `tools/lib/container-close.js` decides. The parent is closed, with a
-  `📦 Closed by colab ship` evidence comment naming the child and the sha, only when it
-  carries `epic`, every native sub-issue is closed, its body lists no unticked `- [ ]`
-  item, and it is not a release tracking record. Then the same question goes to its own
-  parent. Any other shape stays open. A parent with no `epic` label, or one still listing
-  an unticked item, prints as a `container #P: …` warning for a human. Deciding by hand
-  (a parent `colab ship` did not reach) — the reads are `gh`, the close is `colab close`,
-  which also releases any claim on the parent and tells the observer (#381):
-
-  ```sh
-  P=$(gh issue view $N --json parent -q '.parent.number // empty')
-  [ -n "$P" ] && gh issue view $P --json state,labels,body,subIssuesSummary
-  # close only on: OPEN · labels ∋ epic · subIssuesSummary.total > 0 and completed == total
-  #                · no unticked "- [ ]" line in body · body does not open with <!-- colab:release
-  colab close $P --comment "📦 Closed — its last open sub-issue #$N shipped at <sha>; all sub-issues closed (#371)."
-  ```
-
-  `subIssuesSummary` can lag a child's auto-close by a moment. A lagging read looks like
-  an open child, so nothing closes. The next sibling ship or `code-sweep` §5 catches it.
-  Never retry in a loop.
-- **No native parent** → look for a hand-written checklist that references this issue:
-
-```sh
-gh issue list --state open --search "#$N in:body" --json number,title
-```
-
-For each open parent whose body has a **checklist line** containing `#$N`, tick that
-one line and record the trunk sha beside it. Prefer converting the epic to native
-sub-issues if the owner wants it — then this step stops applying forever.
-
-**Four things not to do** — each is a way this step turns destructive:
-
-1. **Never close a hand-checklist epic**, even when the last box ticks. Boxes running
-   out does not mean work running out: an epic can have two phases complete and two
-   whose issues are not written yet. Closing it buries the unwritten part. (A native
-   container closes by the rule above. Its unticked-item check is this same
-   protection, and on native sub-issues "every child closed" is a fact GitHub maintains.)
-2. **Never rewrite the epic's prose.** Edit the one checklist line for the issue that
-   just closed. The body is where the owner records decisions; a skill has no business
-   editing there.
-3. **No checklist, no action.** Do not create a table the repo did not choose.
-4. **Never infer parentage from a title.** Accept it only from a native `parent` link,
-   or from a literal `#$N` on a checklist line. Prose that merely mentions `#$N`
-   ("related to #$N", "unlike #$N") is **not** a checklist line and must not be edited.
-
-   A checklist line is `- [ ]` or `- [x]` — **a bullet is not a checklist**:
-
-   ```sh
-   grep -nE '^\s*-\s*\[[ x]\].*#'"$N"      # a hit here may be ticked; anything else may not
-   ```
-
-   This is not hypothetical. The issue that asked for this step lists its own related
-   work as `- **#28** (…)` — a bullet, matching any loose "list line mentioning #N"
-   rule, and editing it would tick a line that tracks nothing. Verified against that
-   body: the anchored pattern rejects it, a `-.*#N` pattern accepts it.
+**Rule:** native parent ⇒ tick nothing; close the parent (`colab close`) only when it carries
+`epic`, every sub-issue is closed, no `- [ ]` remains, and it is not a release record
+(`colab ship` does this itself). No native parent ⇒ tick only a `- [ ]`/`- [x]` line that
+literally carries `#$N`, with the trunk sha. Never close a hand-checklist epic, rewrite its
+prose, build a table, or infer parentage from a title.
+Full text: [b2c-epic.md](b2c-epic.md).
 
 ## B2d. Tear down a spent `group:<key>` label (#82)
 
-**`colab ship` does this for you** — its B4 unions the `group:` labels the branch's
-issues carried and, per label, checks whether any issue anywhere still carries it
-**open**. None left → the label OBJECT is deleted (`gh label delete`); one still open
-→ left exactly as it was, because it still binds the remainder. Nothing here to do on
-that path — it runs automatically, after the evidence comments in B2b.
-
-**"None left" takes two reads that agree (#448).** `gh issue list --label` is served by
-the search index, which can lag a burst of closes and answer 0 for a label still on an
-open issue — measured: a ship deleted a `group:` label 29 s after its squash while a
-deliberately-unshipped fourth member still carried it. So a 0 from that listing is
-confirmed through the REST issues list (the issues table, not the index) before the
-delete; if the two disagree, or the confirming read fails, the label stays and ship
-warns naming the open member. `colab doctor --sync --prune` applies the same check.
-
-**Only if `colab` isn't available in this repo** (no `tools/colab` to run `colab
-ship` with — a repo lacking `autonomy: auto-trunk` still has the tool, a human just
-triggers it instead of the tool running unattended), do the equivalent yourself,
-once B2 has pushed:
-
-```sh
-for GL in $(gh issue view $N --json labels -q '.labels[].name' | grep '^group:'); do
-  # REST issues list, not `gh issue list` (search-backed, can lag — #448). A failed read
-  # skips the label (`|| continue`): fail toward keeping, never read failure as "0 open".
-  OPEN=$(gh api --method GET --paginate repos/{owner}/{repo}/issues \
-      -f labels="$GL" -f state=open -f per_page=100 \
-      --jq '.[] | select(.pull_request == null) | .number') || continue
-  [ -z "$OPEN" ] && gh label delete "$GL" --yes
-done
-```
-
-Only `group:*` labels are ever in scope — never `in-progress`, `deps-checked`,
-`agent-filed`, `needs-plan`, or `epic`. Deleting the label does not erase the record:
-the closed issues' timelines still show it was applied, and each member's `Because:`
-comment (`CONVENTIONS.md` [§5](../../CONVENTIONS.md#grouping--issues-that-must-share-one-branch), *Grouping*) is the durable evidence of *why*, independent
-of whether the label object survives.
+**Rule:** `colab ship` deletes a `group:` label once no open issue carries it, confirmed by
+two reads that agree (#448). By hand only without `colab`, through the REST issues list; only
+`group:*` labels are ever in scope.
+Full text: [b2d-group-label.md](b2d-group-label.md).
 
 ## B3. Release the claim(s)
 
-**`colab ship` already did this for every claim it carried (#319)** — worktree claims
-through `colab worktree rm`, and claims with no worktree (`--branch`-keyed, or unattached)
-through `colab release`. Check `colab claims` rather than re-running it. Release by hand
-only what ship did not carry: a kept worktree (`--keep-worktree`), a claim ship reported
-and left in place (same session, but the branch does not name it), an issue evidence-close
-left open that you are abandoning, or a machine without `colab`:
-
-```sh
-colab release $N        # if colab is installed …
-gh issue edit $N --remove-assignee <claimer> --remove-label in-progress    # … else raw, one per issue
-```
-
-Drop **both** halves. A release that removes only the label leaves an assignee-only
-half-claim, which every reader must now treat as a broken claim (`CONVENTIONS.md` [§5](../../CONVENTIONS.md#5-claiming-work--how-to-say-im-on-this), #323).
-`<claimer>` is the account that applied `in-progress`, not necessarily you: `@me` only when
-you took the claim yourself. `colab release` reads it from the issue (#363).
-
-Release **every** issue in the group, even ones you didn't finish — a stale claim
-silently blocks others (`CONVENTIONS.md` [§5](../../CONVENTIONS.md#5-claiming-work--how-to-say-im-on-this)).
-
-**No exceptions — not "unless unfinished", not "unless the worktree stays".**
-`code-start` adds the claim, this skill removes it: symmetric and unconditional.
-Because:
-
-- A conditional release rule is one agents skip. The unconditional one is the one
-  that actually gets executed.
-- A claim is scoped to a **session**. Once the session ends it names a holder who
-  no longer exists.
-- Nothing ages a claim out. A kept-but-forgotten worktree would hold its issues
-  indefinitely and **no health check flags it** — the worktree is alive, so the
-  claim looks healthy.
-- Re-claiming next session is one command already in the `code-start` flow. The cost
-  of releasing is near zero; the cost of a stale claim is someone else blocked.
-
-*Tradeoff, chosen deliberately:* releasing gives up the lock that stopped a second
-session starting a colliding branch on a kept worktree. That protection now rests
-on the **session-start check** — before starting, verify whether the work already
-exists (`git log --grep`, grep the code, and look for an existing branch or
-worktree for that issue) rather than trusting the absence of a label. `code-start`
-already says *open ≠ untouched*; this is why.
-
-**A `reject` verdict from B1c never reaches this step** — the claim stays held either
-way: until a human resolves a `decision`-class rejection, or until the one bounded
-auto-retry an `escalate`-class rejection recorded lands (and reverts to the same
-human-held state if that retry rejects too, B1c's *Reject classifies further*). Either
-class is the whole point of stopping at B1c rather than merging past it.
+**Rule:** unconditional — every issue in the group, finished or not, both halves (assignee
+and `in-progress`). `colab ship` already released what it carried; release by hand only what it
+did not (`colab release $N`). A B1c reject never reaches here, so its claims stay held.
+Full text: [b3-release-claims.md](b3-release-claims.md).
 
 ## B4. Tear down the worktree — remove by DEFAULT
 
-Made a worktree? **Remove it.** Finished-but-not-removed worktrees are the single
-most-skipped step we measured (8 of 9 sessions, 2.9 GB) — and the permissive
-"(optional)" this step used to open with is what produced that miss rate. Removal
-is the default path; keeping one is the exception you must justify.
-
-```sh
-colab worktree rm <name>    # if colab is installed (releases its claims, frees its ports) …
-git worktree remove <path>  # … else raw git
-```
-
-**The raw fallback is not equivalent — it only deletes the directory.** `colab
-worktree rm` does four things: removes the directory, drops the worktree record from
-`state.json`, frees the ports the record owned, and releases the issue claim(s) it
-carried. Raw `git worktree remove` does the first and nothing else — the record
-survives with `status: "running"`, still holding its ports, and any tool reading
-`colab worktrees` reports it as live work in progress long after the checkout is
-gone. Taking this path (no `colab` on this machine) means finishing the other three
-by hand, on the machine that holds `state.json`: release each claim
-(`gh issue edit <N> --remove-assignee <claimer> --remove-label in-progress`, `<claimer>` = the account that
-applied `in-progress`) and have that machine prune the
-stale record — `colab` has no unattended flag for this, so say so in your report
-rather than leaving it silently wrong.
-
-`colab worktree rm` runs the repo's `.colab/hooks/pre-remove` (e.g. dropping a
-cloned DB) and refuses if there's uncommitted work — tracked changes **or**
-untracked, non-ignored files. Untracked counts because it is the only category
-with no copy anywhere else: not in the index, not in a commit, not on the remote.
-Ignored files (build output, a copied `.env`) never block.
-
-**It also refuses when the worktree still owns running processes** — anything
-whose cwd is inside it, typically the dev server you started. That is not an
-obstacle to route around: remove the tree underneath a live server and it keeps
-listening on a port the registry now calls free, serving a checkout that no
-longer exists. Stop the server and re-run, or pass `--force` to have `colab`
-terminate what it owns. Ownership is decided by cwd, never by port, so `--force`
-cannot reach an unrelated process that merely holds the same port.
-
-**Keep it only for a named reason,** and write the reason in your report — never
-leave one standing silently:
-
-- the group branch still has unfinished issues,
-- a human just told you to keep working in it,
-- teardown is blocked by uncommitted work (tracked or untracked).
-
-> **If you keep it, release its claims by hand.** `colab worktree rm` is *what*
-> releases claims — skip the removal and that automatic path never runs, so B3
-> did not happen for you. Do it explicitly:
-> ```sh
-> colab release <N>                              # … or, without colab:
-> gh issue edit <N> --remove-assignee <claimer> --remove-label in-progress   # <claimer> = @me only if you claimed it
-> ```
-> B3 is unconditional: a kept worktree changes **who runs** the release, never
-> **whether** it runs.
-
-### Delete the plan file and journal its usage, in the same breath (#94)
-
-**`colab ship` does this for you** — per issue in the harvested set (B1b), it appends
-one line to `~/.colab/plan-journal.jsonl` (rung/cause read from the plan file's own
-front matter, verdict always `pass` — a `reject` never reaches this far) and only then
-deletes the plan file, chained so a failed journal write leaves it in place. This used
-to be a step only this shell snippet performed (#115: verified zero matches for
-`plan-journal`/`plans/issue-` in `tools/colab` before that fix), so a ship driven
-through the tool alone left the plan file on disk with no journal line — that gap is
-closed; nothing here to do on that path.
-
-**Only if `colab` isn't available in this repo** (no `tools/colab` to run `colab
-ship` with — a repo lacking `autonomy: auto-trunk` still has the tool, a human just
-triggers it instead of the tool running unattended), do the equivalent yourself —
-resolved by **file, tested against the
-harvested set**, never by reconstructing `issue-$N.md` from one number at a time
-(#201's fix in `tools/colab`'s `shipJournalPlanFiles`, mirrored here rather than
-re-derived: a group session's plan file is named for the whole set,
-`issue-<A>-<B>-<C>.md`, so guessing the name from a single member number misses on
-every one of them — the loop completes silently, indistinguishable from the
-legitimate rung-0 "never had a plan" case). Check the main checkout, not the
-worktree, which this step may already be removing. `$MAIN_REPO` is `§0`'s resolved
-absolute path; re-derive it here if this step runs in a fresh shell that no longer
-has it (#113):
-
-```sh
-MAIN_REPO="${MAIN_REPO:-$(dirname "$(git rev-parse --path-format=absolute --git-common-dir)")}"
-case "${COLAB_PLANS_DIR:-.plans}" in /*) PLANS_DIR="$COLAB_PLANS_DIR" ;; *) PLANS_DIR="$MAIN_REPO/${COLAB_PLANS_DIR:-.plans}" ;; esac
-ISSUES="<harvested issue numbers, space-separated>"
-GRADE_VERDICT=pass   # only a `pass` reaches B4 by construction (B1c stops a reject before
-                      # this step); use the same token B2b's marker emits, never a bare word
-for PLAN in "$PLANS_DIR"/issue-*.md "$MAIN_REPO"/.claude/plans/issue-*.md; do   # #488: configured, then legacy
-  [ -f "$PLAN" ] || continue
-  NUMS=$(basename "$PLAN" .md); NUMS=${NUMS#issue-}   # e.g. "12-14-15"
-  SUBSET=1
-  for N in $(echo "$NUMS" | tr '-' ' '); do
-    case " $ISSUES " in *" $N "*) ;; *) SUBSET=0; break;; esac
-  done
-  [ "$SUBSET" = 1 ] || continue   # not a subset — leave it untouched (#201): a partial
-                                  # overlap may be another session's live plan, or a
-                                  # wider group's file this ship only carries part of
-  RUNG=$(sed -n 's/^rung: *//p' "$PLAN" | head -1)
-  CAUSE=$(sed -n 's/^cause: *//p' "$PLAN" | head -1)
-  mkdir -p "$(dirname ~/.colab/plan-journal.jsonl)"
-  python3 -c '
-import json, sys, datetime
-nums, rung, cause, verdict, out = sys.argv[1:6]
-ts = datetime.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
-with open(out, "a") as f:
-    for n in nums.split("-"):
-        f.write(json.dumps({
-            "ts": ts, "issue": int(n), "rung": rung, "cause": cause, "verdict": verdict,
-        }) + "\n")
-' "$NUMS" "${RUNG:-1}" "${CAUSE:-none}" "$GRADE_VERDICT" ~/.colab/plan-journal.jsonl \
-    && rm -f "$PLAN"
-done
-```
-
-- **Machine-local, never the tracker.** `~/.colab/plan-journal.jsonl` never leaves this
-  machine and is never committed — it is not a second source of truth about the feature,
-  only a record of how the planning mechanism itself is being used.
-- **One line per issue in the file's own number set**, not one per branch and not one
-  per file — a group branch can carry several issues behind one shared plan file, and
-  rung/cause are read from that file once and reused for every line it contributes,
-  since a shared plan file has one front matter, not one per issue.
-- **A file matches only when its whole number set is a subset of the harvested
-  issues.** No overlap means it belongs to unrelated work; a *partial* overlap still
-  means leave it alone — it may be another session's live plan, or a wider group's
-  file of which this ship only carries part. Acting on a partial match would journal
-  and delete a plan another session is still using.
-- **This is the one moment everything about the plan's life is known**: rung, cause
-  (flagged vs self-escalated), and B1c's grade verdict. Weeks of this file answer rung
-  frequencies, flag precision (flagged but the diff graded clean with no friction?), and
-  flag recall (unflagged but a mid-session escalation caught it?) — the evidence to tune
-  or retire the `needs-plan` mechanism. Nothing reads it automatically; a human greps it.
-- **Delete only after the journal line(s) land, and chain it — never split across
-  statements.** The append and the `rm` are one `&&`-joined command, not two lines, because
-  a compose that fails silently (wrong interpreter, a bad argument) must not let control
-  reach the delete. This is `python3`, not `jq`, on purpose (#96): `jq` was pulled in for
-  this one line and appears nowhere else this skill family actually depends on, while
-  `python3` is already an assumed interpreter elsewhere (`code-sweep` §1's worktree-filter
-  snippets) — so this removes an undeclared dependency rather than adding one more thing
-  every machine running this skill must have installed. Measured failure mode this
-  replaces: `jq` missing → the old `$(jq …)` command substitution failed, `printf` still
-  wrote a bare newline (exit 0) into the journal, and the un-chained `rm -f "$PLAN"` on the
-  next line still ran — the plan file was gone with no journal line to show for it.
-- **Chained per FILE, not per issue** — every line a file contributes is written in the
-  one append, and the delete follows only on success, so a failed write for one plan
-  file leaves that file in place without touching siblings already journalled.
-- **Delete only after the journal line lands**, and a harvested set with no matching
-  file at all is a silent no-op here — a rung-0 session never had one, and this loop
-  skips it correctly.
+**Rule:** `colab worktree rm <name>` (raw `git worktree remove` only deletes the directory —
+finish the rest by hand and say so). Keep one only for a named reason in the report, and then
+release its claims by hand. Then journal and delete each plan file whose whole number set is
+in the harvested set — `colab ship` does this itself; the shell fallback chains the append and
+the delete.
+Full text: [b4-teardown.md](b4-teardown.md).
 
 ## B5. The release ritual — a SEPARATE act, and not yours
 

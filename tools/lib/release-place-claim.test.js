@@ -362,7 +362,7 @@ test('a claim minted with a wrong-SHAPE session still releases its own hold (#30
   const fx = fixture();
   const claimed = colab(fx, ['claim', '907', '--repo', fx.work, '--session', 'ops-example-orchestrator-1480']);
   assert.strictEqual(claimed.code, 0, claimed.err);
-  assert.match(claimed.err, /does not look like a session URL/, 'warned at write time (#306)');
+  assert.match(claimed.err, /does not look like a session id/, 'warned at write time (#306)');
   assert.strictEqual(places(fx).length, 1);
 
   const r = colab(fx, ['release', '907', '--repo', fx.work], { COLAB_SESSION: SESSION });

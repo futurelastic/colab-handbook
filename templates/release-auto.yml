@@ -20,6 +20,9 @@
 #                                                                              hand-off where
 #                                                                              the final is a
 #                                                                              human's)
+#   an hourly schedule (#547) — the cut       colab release cut --auto, only when main's head
+#   only, never promote or finalize           has no tag AND the fetched CLI moved in the last
+#                                             RETRY_WINDOW_MINUTES (or a run here was displaced)
 #   workflow_dispatch                         all three, in that order
 #   any of the above tagged something, and    npm publish (job `npm`, #433) — candidates to
 #   project.yml declares release.npm          dist-tag `next`, finals to `latest`; see the
@@ -115,6 +118,23 @@
 # pre-releases, never "Latest". The audit's pre-release deploy-trigger check (#332) still
 # applies to your deploy workflows exactly as before.
 #
+# A REFUSAL THE HANDBOOK FIXES IS RETRIED WITHIN THE HOUR (#547). A cut can be refused by a defect in
+# the colab CLI rather than in your repo — a false positive in one of its checks. The fix reaches you
+# when HANDBOOK_REF's channel moves, and nothing in your repo changes, so neither trigger above fires:
+# the candidate would wait for your next merge or the next daily run (measured: ~2.5 h until a person
+# dispatched it by hand, ~22 h otherwise). So an hourly run re-tries the CUT, and only the cut, when:
+#   - main's head carries no release tag yet (a head that has one has nothing to retry), and
+#   - the CLI this run fetched reached HANDBOOK_REF within RETRY_WINDOW_MINUTES — read from the date of
+#     the release tag at that commit (when the channel moved onto it), else the commit's own date; or
+#   - the newest other run of this workflow at main's head was cancelled. An hourly run shares the
+#     `release-auto` concurrency group, and GitHub cancels a PENDING run in a group when a newer one
+#     queues — so an hourly run can displace the very run a merge started. It then does that run's cut.
+# Every other hourly run checks those and stops: no cut, no promotion, no finalize, so a held head is
+# not tagged sooner than the daily run would tag it, and a standing refusal is not re-announced every
+# hour. Nothing is stored between runs; the facts are re-read each time. EDIT: the cron string inside
+# RETRY_RUN (release job env) must stay byte-identical to the hourly `cron:` line, or no run is
+# recognised as a retry run — and the hourly run would then promote and finalize every hour.
+#
 # A REFUSAL IS NOT A FAILURE. `colab release cut --auto` refusing (nothing owed, a check
 # failed) is the ordinary output of most runs; it is printed to the run summary as a
 # warning and the job stays green, so a refusal never paints main red for `colab ship`.
@@ -170,6 +190,9 @@ on:
     # EDIT: when the daily finalize runs (UTC). Off the hour on purpose — the top of the
     # hour is when scheduled runs queue longest.
     - cron: "17 3 * * *"
+    # #547: the hourly RETRY run — cut only, only when the CLI moved or a run was displaced (header,
+    # "A REFUSAL THE HANDBOOK FIXES"). Keep it byte-identical to the string in RETRY_RUN (release job env).
+    - cron: "47 * * * *"
   workflow_dispatch:
     # #474: a DRY RUN for a fix branch — see "DRY RUN ON A FIX BRANCH" in the header. A dispatch on
     # any ref other than main is dry whether or not this is set; on main it is opt-in.
@@ -263,6 +286,12 @@ jobs:
       # Never on workflow_run or schedule. Every write below is off when it is.
       # EDIT: if your trunk is not `main`, name it here too (the same branch as `ref:` below).
       DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && (inputs.dry_run || github.ref_name != 'main') }}
+      # #547: 'true' on the hourly retry run. EDIT: the cron string here is byte-identical to the hourly
+      # `cron:` under `on.schedule`.
+      RETRY_RUN: ${{ github.event_name == 'schedule' && github.event.schedule == '47 * * * *' }}
+      # EDIT: how recent a move of the CLI still earns a retry. Two hourly runs plus slack, so one
+      # scheduled run GitHub drops under load does not lose the retry; a second retry is a no-op.
+      RETRY_WINDOW_MINUTES: "130"
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
@@ -334,13 +363,46 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
+      # #547: on the hourly retry run only — decide whether a cut is worth re-trying (header, "A REFUSAL
+      # THE HANDBOOK FIXES"). Ends green either way; retry=true lets the cut step below run.
+      - name: Retry a refused cut once the CLI moved (#547)
+        id: retry
+        if: env.RETRY_RUN == 'true'
+        run: |
+          set -uo pipefail
+          eval "$RETRY_TRANSIENT"
+          decide() { echo "retry=$1" >> "$GITHUB_OUTPUT"; echo "Retry run (#547): $2" | tee -a "$GITHUB_STEP_SUMMARY"; exit 0; }
+          HEAD="$(git rev-parse HEAD)"
+          TAGGED="$(git tag --points-at "$HEAD" --list 'v*' | head -n 1)"
+          [ -z "$TAGGED" ] || decide false "main's head ${HEAD:0:7} already carries $TAGGED — nothing to retry."
+          # When the CLI reached HANDBOOK_REF: a channel moves onto a release tag's commit, so that
+          # tag's date is the move; a plain branch or an untagged commit falls back to the commit date.
+          CLI_DIR="${COLAB%/tools/colab}"
+          CLI_SHA="$(git -C "$CLI_DIR" rev-parse --short HEAD 2> /dev/null || echo unknown)"
+          MOVED="$(git -C "$CLI_DIR" for-each-ref --points-at HEAD --format='%(taggerdate:unix)' refs/tags 2> /dev/null | grep -E '^[0-9]+$' | sort -n | tail -n 1)"
+          [ -n "$MOVED" ] || MOVED="$(git -C "$CLI_DIR" log -1 --format=%ct HEAD 2> /dev/null || true)"
+          AGE=""; [ -n "$MOVED" ] && AGE=$(( $(date +%s) - MOVED ))
+          if [ -n "$AGE" ] && [ "$AGE" -le $(( ${RETRY_WINDOW_MINUTES:-130} * 60 )) ]; then
+            decide true "the colab CLI ($CLI_SHA) reached HANDBOOK_REF $(( AGE / 60 )) min ago and main's head ${HEAD:0:7} has no tag — re-trying the cut with it."
+          fi
+          # A run this one displaced: the newest OTHER run of this workflow at main's head, cancelled.
+          # An unreadable list re-tries rather than guessing — a cut with nothing owed is a no-op.
+          RUNS="$(retry_transient gh run list --workflow "$GITHUB_WORKFLOW" --commit "$HEAD" --limit 20 --json databaseId,conclusion,createdAt)" \
+            || decide true "could not list this workflow's runs at ${HEAD:0:7}, so a displaced run cannot be ruled out — re-trying the cut."
+          LAST="$(jq -r --arg me "${GITHUB_RUN_ID:-0}" '[.[] | select((.databaseId | tostring) != $me)] | sort_by(.createdAt) | last | .conclusion // ""' <<< "$RUNS" 2> /dev/null || echo unreadable)"
+          case "$LAST" in
+            cancelled) decide true "the last run at main's head ${HEAD:0:7} was cancelled (displaced from the shared concurrency group) — doing its cut." ;;
+            unreadable) decide true "could not read this workflow's runs at ${HEAD:0:7}, so a displaced run cannot be ruled out — re-trying the cut." ;;
+          esac
+          decide false "the colab CLI ($CLI_SHA) has not moved in the last ${RETRY_WINDOW_MINUTES:-130} min and no run at ${HEAD:0:7} was displaced — nothing to retry; the daily run cuts as usual."
+
       # #440: where project.yml grants `promotion: main-loop` on `deploy: tag`, promote a green dev
       # into main, then dispatch CI there — its green run fires this workflow again to cut the
       # candidate. Everywhere else the CLI answers a no-op. A refusal (dev CI not green, a push
       # rejected) is a warning; the job stays green.
       - name: Promote unattended (colab promote --auto)
         id: promote
-        if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+        if: (github.event_name == 'schedule' && env.RETRY_RUN != 'true') || github.event_name == 'workflow_dispatch'
         env:
           # EDIT: your test-suite workflow — the same one `workflow_run.workflows` names above.
           CI_WORKFLOW: "CI"
@@ -384,7 +446,7 @@ jobs:
       # right after this run promoted: that head has no CI yet — the dispatched run cuts it.
       - name: Cut a candidate (colab release cut --auto)
         id: cut
-        if: steps.gate.outputs.cut == 'true' && (github.event_name == 'workflow_run' || github.event_name == 'workflow_dispatch' || github.event_name == 'schedule') && steps.promote.outputs.promoted != 'true'
+        if: steps.gate.outputs.cut == 'true' && (github.event_name == 'workflow_run' || github.event_name == 'workflow_dispatch' || github.event_name == 'schedule') && steps.promote.outputs.promoted != 'true' && (env.RETRY_RUN != 'true' || steps.retry.outputs.retry == 'true')
         run: |
           set -uo pipefail
           eval "$RETRY_TRANSIENT"
@@ -436,13 +498,15 @@ jobs:
                 echo
               } >> "$GITHUB_STEP_SUMMARY"
             else
-              echo "::warning::colab release cut refused: $(jq -r '[.checks[]? | select(.ok | not) | .condition] | join(", ")' "$OUT")"
+              # #545: condition AND detail — the name alone hid which file and statement refused, so a
+              # false refusal could not be told from a real one without re-running the cut by hand.
+              echo "::warning::colab release cut refused: $(jq -r '[.checks[]? | select(.ok | not) | "\(.condition) — \(.detail)"] | join("; ")' "$OUT")"
             fi
           fi
 
       - name: Finalize the newest clean candidate (colab release finalize --auto)
         id: finalize
-        if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+        if: (github.event_name == 'schedule' && env.RETRY_RUN != 'true') || github.event_name == 'workflow_dispatch'
         run: |
           set -uo pipefail
           eval "$RETRY_TRANSIENT"

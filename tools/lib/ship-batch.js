@@ -46,6 +46,70 @@ function parseShipBatch(doc) {
   return { n: 1, declared: true, valid: false, reason: `ship-batch is ${JSON.stringify(v)}, expected an integer 1–${MAX_BATCH} (omit for serial)` };
 }
 
+const WAIT_KEY = 'ship-batch-wait';
+const WAIT_UNITS = { s: 1, m: 60, h: 3600 };
+
+/**
+ * #555: `ship-batch-wait:` from project.yml — how long a LONE ready candidate waits for a partner
+ * before it lands alone. A whole number plus a unit: `90s`, `6m`, `1h`. The unit is required, so a
+ * bare `6` (seconds? minutes?) is refused, never guessed. `0s`/`0m` is valid and means no wait.
+ *
+ * Absent → `sec: 0`, today's behaviour exactly. The handbook gives NO default value and NO ceiling
+ * (owner, 2026-10-07: "Should not set any hard code number") — the repo chooses, from its own
+ * history. Anything malformed FAILS CLOSED to no wait, with the reason: a bad value must never delay
+ * a landing. The audit and the CI templates' descriptor check fail the same values.
+ */
+function parseShipBatchWait(doc) {
+  const has = !!doc && Object.prototype.hasOwnProperty.call(doc, WAIT_KEY);
+  if (!has || doc[WAIT_KEY] === null || doc[WAIT_KEY] === undefined) {
+    return { sec: 0, declared: false, valid: true, reason: `${WAIT_KEY} absent` };
+  }
+  const v = doc[WAIT_KEY];
+  const m = typeof v === 'string' ? /^(\d+)([smh])$/.exec(v.trim()) : null;
+  if (m) {
+    const sec = Number(m[1]) * WAIT_UNITS[m[2]];
+    if (Number.isSafeInteger(sec)) return { sec, declared: true, valid: true, reason: `${WAIT_KEY}: ${v.trim()}` };
+  }
+  return { sec: 0, declared: true, valid: false, reason: `${WAIT_KEY} is ${JSON.stringify(v)}, expected a whole number with a unit — 90s, 6m, 1h (omit for no wait)` };
+}
+
+/**
+ * #555: does a batch call with ONE eligible member wait for a partner, or let it go serial now?
+ * Facts in (all already read by the caller, after it has ruled out a pending trunk run and a batch
+ * already in flight — the lane is otherwise idle by then):
+ *   n             parseShipBatch(doc).n
+ *   waitSec       parseShipBatchWait(doc).sec (0 = absent, zero, or malformed)
+ *   eligibleCount members that passed their own gates
+ *   readySinceMs  when the lone member became ready — its head CI's last update, else its head
+ *                 commit's date; null = unreadable
+ *   nowMs         the clock
+ * Out: `{ wait: true, leftSec }` or `{ wait: false, reason }`. The window is counted from the member's
+ * own ready time, not from this call, so the command stays stateless and re-entrant: every call
+ * re-derives how much is left, on any machine, and the window can never restart.
+ */
+function partnerWait({ n, waitSec, eligibleCount, readySinceMs, nowMs }) {
+  if (!(n > 1)) return { wait: false, reason: 'not-enabled' };
+  if (!(waitSec > 0)) return { wait: false, reason: 'no-window' };
+  if (eligibleCount !== 1) return { wait: false, reason: eligibleCount > 1 ? 'has-partner' : 'none-ready' };
+  if (!Number.isFinite(readySinceMs) || !Number.isFinite(nowMs)) return { wait: false, reason: 'ready-time-unread' };
+  const leftSec = Math.ceil(waitSec - Math.max(0, nowMs - readySinceMs) / 1000);
+  if (leftSec <= 0) return { wait: false, reason: 'window-elapsed' };
+  return { wait: true, leftSec };
+}
+
+/**
+ * When did a member become ready? The newest `updatedAt` among its finished head runs (a run's last
+ * update is its completion), else — no run, because none can arrive — its head commit's date.
+ * Null when neither reads; the caller then does not wait.
+ */
+function readySince(rows, commitIso) {
+  const done = (Array.isArray(rows) ? rows : []).filter((r) => r && r.status === 'completed')
+    .map((r) => Date.parse(r.updatedAt || '')).filter(Number.isFinite);
+  if (done.length) return Math.max(...done);
+  const c = Date.parse(commitIso || '');
+  return Number.isFinite(c) ? c : null;
+}
+
 function batchRefName(baseSha) {
   return `${REF_PREFIX}${String(baseSha || '').slice(0, 7)}`;
 }
@@ -75,6 +139,48 @@ function parseMemberTrailers(messages) {
     }
   }
   return out;
+}
+
+/**
+ * #554: a member dropped at build used to leave no trace in git — only a `✗ <member>: …` line on
+ * one terminal — so eviction rate could not be measured. The batch head now records each drop:
+ *
+ *   Ship-Batch-Dropped: <ref> <branch>@<sha> <class>
+ *
+ * appended to the LAST built member's message (the head commit), so it reaches trunk with a landed
+ * batch and rides the head commit's message of a combined run that went red. `class` is one token
+ * from DROP_CLASSES; the human reason stays on the terminal. A branch (already pushed, so already
+ * public) and a sha, never a host — the same rule as memberTrailer.
+ */
+const DROP_TRAILER_KEY = 'Ship-Batch-Dropped';
+const DROP_CLASSES = ['conflict', 'generated-no-hook', 'hook-failed', 'hook-markers', 'squash-failed', 'empty', 'message', 'commit-failed'];
+
+function droppedTrailer({ ref, branch, sha, cls }) {
+  const c = DROP_CLASSES.includes(cls) ? cls : 'other';
+  return `${DROP_TRAILER_KEY}: ${ref} ${branch}@${String(sha || '').slice(0, 12)} ${c}`;
+}
+
+/** Every `Ship-Batch-Dropped:` trailer across commit messages → [{ ref, branch, sha, cls }]. */
+function parseDroppedTrailers(messages) {
+  const out = [];
+  for (const msg of messages || []) {
+    for (const line of String(msg || '').split('\n')) {
+      const m = new RegExp(`^${DROP_TRAILER_KEY}:\\s+(\\S+)\\s+(\\S+)@([0-9a-f]{7,40})\\s+([a-z-]+)\\s*$`).exec(line.trim());
+      if (m) out.push({ ref: m[1], branch: m[2], sha: m[3], cls: m[4] });
+    }
+  }
+  return out;
+}
+
+/**
+ * `msg` with `lines` appended to its final trailer block — never as a new paragraph, which would
+ * split the block and hide the earlier trailers from `git interpret-trailers`. Lines already
+ * present are not repeated (a rebuild re-composes the same message).
+ */
+function appendTrailers(msg, lines) {
+  const body = String(msg || '').replace(/\s+$/, '');
+  const add = (lines || []).filter((l) => l && !body.split('\n').includes(l));
+  return add.length ? `${body}\n${add.join('\n')}\n` : `${body}\n`;
 }
 
 /**
@@ -282,9 +388,42 @@ function serialLine(branches) {
   return `→ SERIAL: ${list.map((b) => `colab ship --branch ${b}`).join(' · ') || '(no members)'}`;
 }
 
+/**
+ * #509: WHY the land step's fast-forward push failed — asked before anything is reported. The push
+ * is the atomic "trunk has not moved" check, but a failed push is not proof trunk moved: a local
+ * `pre-push` hook can refuse it, and a remote can reject it for reasons of its own (protection, a
+ * pre-receive hook). Reporting those as "trunk moved — run again" sent an unattended caller into a
+ * retry loop against a deterministic refusal, under the exit code a scheduler reads as a pause.
+ *
+ * Facts in: the push's stderr, the remote trunk sha re-read AFTER the failure (null = could not
+ * read), and `base` — the trunk sha the batch was built on. Decision out:
+ *
+ *   trunk-moved      the remote trunk is no longer `base` — the existing pause-and-rebuild (exit 3)
+ *   unreachable      the remote could not be re-read — nothing is provable; a pause (exit 3), with
+ *                    the push's own output, never the "trunk moved" claim
+ *   remote-rejected  trunk did not move and the remote refused the update ("[remote rejected]") —
+ *                    deterministic until a human acts: exit 1, no "run again"
+ *   push-refused     trunk did not move and the remote said nothing — the push never reached it,
+ *                    which is what a refusing local `pre-push` hook looks like: exit 1, no "run again"
+ *
+ * `lines` is the push's stderr trimmed to its first `max` non-empty lines, minus git's generic
+ * "failed to push some refs" trailer — the hook's or the remote's own words are the diagnosis.
+ */
+function landPushFailure({ stderr, remoteNow, base, max = 8 } = {}) {
+  const all = String(stderr || '').split('\n').map((l) => l.replace(/\s+$/, '')).filter((l) => l.trim());
+  const telling = all.filter((l) => !/^error: failed to push some refs to /.test(l));
+  const lines = (telling.length ? telling : all).slice(0, max);
+  const now = remoteNow ? String(remoteNow).trim() : '';
+  if (!now) return { kind: 'unreachable', exit: 3, lines };
+  if (!base || now !== String(base).trim()) return { kind: 'trunk-moved', exit: 3, lines };
+  if (all.some((l) => /\[remote rejected\]/.test(l))) return { kind: 'remote-rejected', exit: 1, lines };
+  return { kind: 'push-refused', exit: 1, lines };
+}
+
 module.exports = {
-  MAX_BATCH, REF_PREFIX, PROBE_REF, TRAILER_KEY,
-  parseShipBatch, batchRefName, parseBatchRef, memberTrailer, parseMemberTrailers,
+  MAX_BATCH, REF_PREFIX, PROBE_REF, TRAILER_KEY, WAIT_KEY, DROP_TRAILER_KEY, DROP_CLASSES,
+  parseShipBatch, parseShipBatchWait, partnerWait, readySince, batchRefName, parseBatchRef, memberTrailer, parseMemberTrailers,
+  droppedTrailer, parseDroppedTrailers, appendTrailers,
   branchCiClass, memberEligibility, selectMembers, wiring, combinedVerdict, nextStep, foreignBatchStep,
-  batchGreenCoversTrunk, evidenceSuffix, serialLine, notStaged,
+  batchGreenCoversTrunk, evidenceSuffix, serialLine, notStaged, landPushFailure,
 };
