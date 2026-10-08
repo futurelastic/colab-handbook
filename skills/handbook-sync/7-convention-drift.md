@@ -86,3 +86,18 @@ copy, because the fork stops receiving upstream changes.
 
 Fix what is genuinely wrong; **report what you are unsure about** rather than
 guessing. A `project.yml` that contradicts reality is worse than one that admits it.
+
+### A tag-triggered deploy copy must exclude pre-release tags (#513)
+
+GitHub's tag glob `*` matches `-`, so `v*.*.*` also fires on `v1.2.3-rc.1`, and the release
+workflow cuts candidate tags automatically — a copy with only the positive pattern deploys every
+candidate to production. Every `deploy-*.yml` / `deploy.yml` copy (`deploy-xserver`,
+`deploy-container`, or an older hand-written one) is read for it, stamped or not: parse its
+`push: tags:` list; a copy that fires on a pre-release tag is a **finding**, and the audit fails
+it under `deploy: tag` (warns otherwise). Offer the graft — one line, `- "!v*.*.*-*"` placed
+**immediately after** `- "v*.*.*"` (a negative pattern before it, or separated from it, excludes
+nothing; GitHub applies the list in order) — and keep the copy's own tag shape if it differs.
+A copy whose positive pattern is already strict (`v[0-9]+.[0-9]+.[0-9]+`) cannot match `-` and
+needs nothing. A copy with only a `workflow_dispatch` trigger (disarmed) is not a finding, but
+tell the operator the exclusion goes in when they arm it. `release-tag.yml` copies are exempt
+by design: they record a pre-release and deploy nothing.

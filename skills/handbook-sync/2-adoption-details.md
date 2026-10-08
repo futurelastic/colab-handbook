@@ -207,7 +207,9 @@ extra step-6 lines — read them there; this section adds only the judgement aro
 - **The deploy template**, where the tag deploys and the stack has one (`deploy-xserver` for
   PHP on shared hosting, `deploy-container` for a container host), is copied **disarmed** —
   only its `workflow_dispatch` trigger live — and the operator arms `push: tags` once its
-  secrets are set. Arming a deploy is never adoption's act.
+  secrets are set. Arming a deploy is never adoption's act. When the operator does arm it,
+  the `"!v*.*.*-*"` line right after `"v*.*.*"` comes with the trigger (#513): a copy that
+  keeps only the positive pattern deploys every release-candidate tag.
 - **The first final** is the operator's. `colab release cut` refuses with no final to bump
   from, so tell them in the report, with the command; tag `v0.1.0` yourself only when told to.
 
