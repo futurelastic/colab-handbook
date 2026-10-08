@@ -636,9 +636,24 @@ jobs:
           echo "Python $PY_VERSION (resolved from: $SOURCE)"
           echo "Python **$PY_VERSION** — resolved from \`$SOURCE\`" >> "$GITHUB_STEP_SUMMARY"
 
+      # Package cache (#571): pip's wheel cache, on only on a GitHub-hosted runner AND with a
+      # dependency manifest present. Both halves are load-bearing:
+      #   - No requirements*.txt / pyproject.toml → setup-python's `cache: pip` fails the step
+      #     ("No file ... matched"), and this template allows a repo with neither.
+      #   - Self-hosted → off. A persistent runner already keeps ~/.cache/pip between jobs; a
+      #     remote cache on top was measured as a loss, not a saving (#512).
+      # The cache holds downloaded wheels, never a resolution: it cannot change which versions
+      # install, so a repo without a pinned lockfile is no less reproducible with it on.
+      # EDIT: self-hosted runners are already off; to turn caching off everywhere, replace the
+      # `cache:` expression with ''. Manifests outside the root → widen cache-dependency-path
+      # and the hashFiles() to match.
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: ${{ steps.toolchain.outputs.python-version }}
+          cache: ${{ runner.environment == 'github-hosted' && hashFiles('requirements*.txt', 'pyproject.toml') != '' && 'pip' || '' }}
+          cache-dependency-path: |
+            requirements*.txt
+            pyproject.toml
 
       - name: Install dependencies
         run: |
