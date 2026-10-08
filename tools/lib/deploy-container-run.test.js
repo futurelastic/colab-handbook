@@ -117,8 +117,11 @@ function envFor(st, extra = {}) {
   };
 }
 
+/** `gh issue list --json number,body` output: issue 9 is the release record for v1.2.3. */
+const RECORD_9 = JSON.stringify([{ number: 9, body: '<!-- colab:release version=v1.2.3 -->\n# release: v1.2.3' }]);
+
 /** An io whose `sh` is a recorder: git resolves tags from SHA, docker succeeds, gh finds issue 9. */
-function ioFor(env, { manifests = [], hookExit = 0, files = {} } = {}) {
+function ioFor(env, { manifests = [], hookExit = 0, files = {}, issues = RECORD_9 } = {}) {
   const calls = [];
   const out = [];
   const io = {
@@ -130,7 +133,7 @@ function ioFor(env, { manifests = [], hookExit = 0, files = {} } = {}) {
       if (cmd === 'git' && args[0] === 'rev-parse') return { status: 0, stdout: `${SHA[args[1].replace('^{commit}', '')] || ''}\n`, stderr: '' };
       if (cmd === 'git' && args[0] === 'tag') return { status: 0, stdout: 'v1.2.1\nv1.2.2\nv1.2.3-rc.1\nv1.2.3\n', stderr: '' };
       if (cmd === 'docker' && args[0] === 'manifest') return { status: manifests.includes(args[2]) ? 0 : 1, stdout: '', stderr: '' };
-      if (cmd === 'gh' && args[1] === 'list') return { status: 0, stdout: '9\n', stderr: '' };
+      if (cmd === 'gh' && args[1] === 'list') return { status: 0, stdout: `${issues}\n`, stderr: '' };
       if (cmd === 'sh') return { status: hookExit, stdout: '', stderr: '' };
       return { status: 0, stdout: '', stderr: '' };
     },
@@ -265,6 +268,48 @@ test('a green deploy: built once, one adapter call, verified, recorded on the re
     assert.match(c, /^running v1\.2\.3 at \d{4}-\d\d-\d\dT/);
     assert.ok(io.calls.some((x) => x.cmd === 'gh' && x.args.includes('"colab:release version=v1.2.3" in:body')));
   } finally { await st.close(); }
+});
+
+// ---- the release record is a body that STARTS with the marker (#576) ----------------------------
+
+test('an issue that only MENTIONS the marker mid-body gets no comment — the line stays in the run summary', async () => {
+  const d = await load(RUN);
+  const st = await fakePortainer();
+  try {
+    const mention = JSON.stringify([{ number: 4, body: 'Discussing how `<!-- colab:release version=v1.2.3 -->` is matched.' }]);
+    const io = ioFor(envFor(st), { issues: mention });
+    assert.equal(await d.run({ tag: 'v1.2.3' }, io), 0, io.out.join('\n'));
+    assert.deepEqual(ghComments(io), []);
+    assert.ok(io.out.some((l) => /^SUMMARY running v1\.2\.3 at /.test(l)), io.out.join('\n'));
+    assert.ok(io.out.includes('no release issue for v1.2.3 — recorded in the run summary only'), io.out.join('\n'));
+  } finally { await st.close(); }
+});
+
+test('an issue that STARTS with the marker gets the comment, even when a mentioning issue ranks first', async () => {
+  const d = await load(RUN);
+  const st = await fakePortainer();
+  try {
+    const both = JSON.stringify([
+      { number: 4, body: 'See <!-- colab:release version=v1.2.3 --> for the record.' },
+      { number: 7, body: '<!-- colab:release version=v1.2.30 -->' },
+      { number: 12, body: '\n  <!-- colab:release version=v1.2.3 -->\n# release: v1.2.3' },
+    ]);
+    const io = ioFor(envFor(st), { issues: both });
+    assert.equal(await d.run({ tag: 'v1.2.3' }, io), 0, io.out.join('\n'));
+    const comments = io.calls.filter((c) => c.cmd === 'gh' && c.args[1] === 'comment');
+    assert.equal(comments.length, 1);
+    assert.equal(comments[0].args[2], '12');
+    assert.match(ghComments(io)[0], /^running v1\.2\.3 at /);
+  } finally { await st.close(); }
+});
+
+test('releaseIssue: anchored, exact version, and empty on unparseable output', async () => {
+  const d = await load(RUN);
+  assert.equal(d.releaseIssue(RECORD_9, 'v1.2.3'), '9');
+  assert.equal(d.releaseIssue(RECORD_9, 'v1.2.4'), '');
+  assert.equal(d.releaseIssue(JSON.stringify([{ number: 3, body: 'x <!-- colab:release version=v1.2.3 -->' }]), 'v1.2.3'), '');
+  assert.equal(d.releaseIssue('not json', 'v1.2.3'), '');
+  assert.equal(d.releaseIssue('', 'v1.2.3'), '');
 });
 
 test('two images are built once each and deployed in one adapter call', async () => {
@@ -517,7 +562,7 @@ test('CLI: the copied pair runs end to end with stub git/docker/gh on PATH', asy
   const stub = (name, body) => { fs.writeFileSync(path.join(bin, name), `#!/bin/sh\necho "${name} $*" >> "${log}"\n${body}\n`); fs.chmodSync(path.join(bin, name), 0o755); };
   stub('git', `case "$1" in rev-parse) echo ${SHA['v1.2.3']} ;; tag) printf 'v1.2.2\\nv1.2.3\\n' ;; esac`);
   stub('docker', 'case "$1" in manifest) exit 1 ;; esac');
-  stub('gh', 'case "$2" in list) echo 9 ;; esac');
+  stub('gh', `case "$2" in list) printf '%s\\n' '${RECORD_9}' ;; esac`);
   const st = await fakePortainer();
   try {
     // release.health-url read from project.yml — the push/dispatch path, where no input carries it.
