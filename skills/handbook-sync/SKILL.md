@@ -279,6 +279,7 @@ and the audit is what catches it:
   `gh release create <tag> <files>`, a release action given `files:`). A compiled tool moves its
   binaries to dist refs (`templates/dist-refs.yml` + `templates/npx-launcher.mjs`, CONVENTIONS.md
   §6 *Distribution*); an asset that is only a by-product (an SBOM) can stay — it is a warning.
+- **A tag-triggered deploy copy must exclude pre-release tags (#513):** `- "!v*.*.*-*"` right after `- "v*.*.*"`, else every candidate tag deploys; the audit fails it under `deploy: tag` — [graft and exemptions](7-convention-drift.md#a-tag-triggered-deploy-copy-must-exclude-pre-release-tags-513).
 - A workflow may trigger on branches that no longer exist — CI passing on nothing.
 - **A convention label may have been added since this repo adopted.** The label set
   is part of the model, and a repo that adopted at an older version never back-filled
@@ -311,7 +312,6 @@ and the audit is what catches it:
   — omission already behaves as `standard`, so there is nothing to back-fill. Only
   raise it if the repo's own owner asks whether it qualifies for `light`, and never
   set it yourself as part of a routine sync.
-
 - **Agents with their own GitHub account → ask about `trust-humans:` (#407).** If this
   repo's agents post under a login separate from the operator's, both report `MEMBER`, and
   without the key an agent-posted grant or ruling reads as a human's
@@ -325,7 +325,6 @@ never fills a gap on its own initiative, and it never "cleans up" an advisory
 or `channels`' own) by deleting a key someone already declared. Declaring must
 never read as riskier than omitting — a rule that would flip that is a bug, not a
 tidy-up.
-
 
 ### Convention drift — a meaning this repo changed, or never absorbed (#362)
 
@@ -369,6 +368,7 @@ git show --stat                                                 # verify the fil
   keeps `pull_request` (trunk-only push, fork PRs) recorded on the Issue (§4).
 - `audit.mjs --local .` is clean, or each remaining finding is explained.
 - `git show --stat` on your commits lists only files you meant to change.
+- Every tag-triggered `deploy-*` copy excludes pre-release tags (§7), or the reason is on the Issue.
 - The §7 convention-drift check ran. Every `value`/`meaning` hit and every divergent text
   is reverted, refreshed, or declared in `Local divergences:` with a handbook issue URL.
   None is left reported as a local customisation.

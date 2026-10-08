@@ -103,6 +103,11 @@ on:
       # EDIT: only if your tag convention differs. This trigger is what makes
       # `deploy: tag` true — a tag is the deploy, a branch push is not.
       - "v*.*.*"
+      # A pre-release (v1.2.3-rc.1, -beta.2) never deploys: `v*.*.*` matches it, and the
+      # release workflow cuts a candidate tag automatically. The final tag is the deploy.
+      # This line MUST come right after the positive pattern it excludes — GitHub applies
+      # the patterns in order, so a negative pattern placed before it excludes nothing.
+      - "!v*.*.*-*"
   workflow_dispatch:
     inputs:
       ref:
