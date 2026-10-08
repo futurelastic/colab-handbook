@@ -127,3 +127,31 @@ test('ci-node Build is optional: no build script or an empty BUILD_COMMAND skips
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('renderForRepo: CI templates only, and only when a trunk is declared', () => {
+  const body = read('ci-node.yml');
+  assert.match(tt.renderForRepo('ci-node', body, { trunk: 'master' }), /cancel-in-progress: \$\{\{ github\.ref != 'refs\/heads\/master' \}\}/);
+  assert.strictEqual(tt.renderForRepo('ci-node', body, null), body);
+  assert.strictEqual(tt.renderForRepo('release-auto', 'x refs/heads/main', { trunk: 'master' }), 'x refs/heads/main');
+});
+
+test('colab update: a CI copy rendered for its repo still reads pristine (behind), a hand edit still diverged (#526)', () => {
+  const stamp = require('./stamp.js');
+  const hb = stamp.handbookInfo(REPO_ROOT);
+  // An old release whose ci-node.yml has changed since — any tag will do as long as it is reachable.
+  const tags = spawnSync('git', ['tag', '--sort=version:refname'], { cwd: REPO_ROOT, encoding: 'utf8' }).stdout.split('\n')
+    .filter((t) => /^v\d+\.\d+\.\d+$/.test(t));
+  const doc = { trunk: 'master', tier: 'B' };
+  const render = (b) => tt.renderForRepo('ci-node', b, doc);
+  // The newest one whose ci-node.yml the rendering actually changes, and which has changed since.
+  const old = tags.reverse().find((t) => {
+    const b = stamp.templateAt(REPO_ROOT, t, 'ci-node');
+    return b !== null && render(b) !== b && stamp.templateChangedSince(REPO_ROOT, stamp.templateFiles('ci-node'), t).changed;
+  });
+  if (hb.untagged || !old) return; // a shallow or tagless checkout cannot answer this question
+  const local = stamp.stampLine('ci-node', old) + render(stamp.templateAt(REPO_ROOT, old, 'ci-node'));
+  const base = { root: REPO_ROOT, hb, tmplNames: stamp.templateNames(REPO_ROOT), templateName: 'ci-node', stampVersion: old, comparable: true };
+  assert.strictEqual(stamp.classifyStamped({ ...base, localText: local, render }).state, 'behind');
+  assert.strictEqual(stamp.classifyStamped({ ...base, localText: local }).state, 'diverged', 'without the rendering it would never refresh');
+  assert.strictEqual(stamp.classifyStamped({ ...base, localText: `${local}# my edit\n`, render }).state, 'diverged');
+});

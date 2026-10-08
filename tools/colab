@@ -9406,7 +9406,7 @@ function cmdTemplate(argv) {
   if (ext === 'yml' && /^ci-/.test(stem)) {
     const tt = require('./lib/template-trunk');
     let doc = null;
-    try { doc = require('./lib/yaml').parse(fs.readFileSync(path.join(repoForCopy, '.github', 'project.yml'), 'utf8')) || {}; } catch (_) { doc = null; }
+    if (repoForCopy) doc = repoDescriptorDoc(repoForCopy);
     const p = tt.protectedRefs(doc);
     if (!p) {
       trunkNotes.push('  trunk: no `trunk:` in .github/project.yml — the template\'s main/dev refs are left as is; walk its # EDIT: markers.');
@@ -9519,6 +9519,8 @@ function inspectRepo(entry, ctx) {
   try { wfs = fs.existsSync(wfDir) ? fs.readdirSync(wfDir).filter((f) => /\.ya?ml$/.test(f)).sort() : []; }
   catch (_) { wfs = []; }
 
+  // #526: a CI copy is written with this repo's refs, so pristine means "as colab template renders it here".
+  const descDoc = repoDescriptorDoc(abs);
   for (const wf of wfs) {
     const rel = `.github/workflows/${wf}`;
     const text = read(rel);
@@ -9527,6 +9529,7 @@ function inspectRepo(entry, ctx) {
       const c = stamp.classifyStamped({
         root: ctx.handbookRoot, hb: ctx.hb, tmplNames: ctx.tmplNames,
         templateName: st.name, stampVersion: st.version, localText: text, comparable: true,
+        render: (body) => require('./lib/template-trunk').renderForRepo(st.name, body, descDoc),
       });
       artifacts.push({ file: rel, template: st.name, applicable: c.state === 'behind', ...c });
     } else {
@@ -9610,10 +9613,17 @@ function entryLabel(entry) {
 }
 
 /** Rewrite a behind-but-pristine workflow copy as the current template, freshly stamped. */
+/** A repo's parsed .github/project.yml, or null when absent or unreadable. */
+function repoDescriptorDoc(repoAbs) {
+  try { return require('./lib/yaml').parse(fs.readFileSync(path.join(repoAbs, '.github', 'project.yml'), 'utf8')) || {}; }
+  catch (_) { return null; }
+}
+
 function refreshArtifact(repo, art, ctx) {
   const src = path.join(ctx.templatesDir, `${art.template}.yml`);
   if (!fs.existsSync(src)) return { ok: false, err: `template ${art.template}.yml is not in the handbook` };
-  const body = fs.readFileSync(src, 'utf8');
+  // Rendered exactly as `colab template <name> --force` would write it here (#526).
+  const body = require('./lib/template-trunk').renderForRepo(art.template, fs.readFileSync(src, 'utf8'), repoDescriptorDoc(repo.path));
   const dest = path.join(repo.path, art.file);
   try {
     fs.mkdirSync(path.dirname(dest), { recursive: true });

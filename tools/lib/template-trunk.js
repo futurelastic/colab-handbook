@@ -65,4 +65,16 @@ function substituteTrunk(text, p) {
   return { text: out, changes, missed };
 }
 
-module.exports = { TEMPLATE_REFS, protectedRefs, substituteTrunk };
+/**
+ * What `colab template <name>` writes for a repo whose descriptor is `doc`: the body with this
+ * repo's refs when `name` is a CI template and a trunk is declared, else the body unchanged.
+ * `colab update` uses the same rendering both to recognise a pristine copy and to refresh one, so
+ * a refreshed file stays byte-identical to what `colab template <name> --force` would write.
+ */
+function renderForRepo(name, body, doc) {
+  if (!/^ci-/.test(String(name || ''))) return body;
+  const p = protectedRefs(doc);
+  return p ? substituteTrunk(body, p).text : body;
+}
+
+module.exports = { TEMPLATE_REFS, protectedRefs, substituteTrunk, renderForRepo };
