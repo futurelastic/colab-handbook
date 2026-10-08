@@ -231,3 +231,55 @@ test('#560/#556: the names, floors and ceilings the step lists are thresholds.js
     assert.deepStrictEqual(listed, spec, name);
   }
 });
+
+// #564: `ci-wait-factor:` — the same step, held to tools/lib/ci-profile.js parseFactor. The value handed
+// to the parser is the scalar as the audit's reader hands it (quotes stripped, a string). The CLI's
+// tools/lib/yaml.js gives the same verdict on every case below (it too reads `1e3` as a string).
+const ciProfile = require('./ci-profile.js');
+
+// [ project.yml line (null = no ci-wait-factor line), the value the audit's reader hands parseFactor ]
+const FACTOR_CASES = [
+  [null, undefined],
+  ['ci-wait-factor:', null],
+  ['ci-wait-factor: ~', null],
+  ['ci-wait-factor: null', null],
+  ['ci-wait-factor: 1', '1'],
+  ['ci-wait-factor: 2', '2'],
+  ['ci-wait-factor: 1.5', '1.5'],
+  ['ci-wait-factor: 1.0', '1.0'],
+  ['ci-wait-factor: 10   # a slow, flaky runner pool', '10'],
+  ['ci-wait-factor: "3"', '3'],
+  ["ci-wait-factor: '2.5'", '2.5'],
+  ['ci-wait-factor: 0', '0'],
+  ['ci-wait-factor: 0.5', '0.5'],
+  ['ci-wait-factor: 0.99', '0.99'],
+  ['ci-wait-factor: -2', '-2'],
+  ['ci-wait-factor: .5', '.5'],
+  ['ci-wait-factor: 1.', '1.'],
+  ['ci-wait-factor: 1e3', '1e3'],
+  ['ci-wait-factor: 2x', '2x'],
+  ['ci-wait-factor: double', 'double'],
+  ['ci-wait-factor: true', true],
+];
+
+test('#564: the step fails exactly the ci-wait-factor values parseFactor refuses', () => {
+  for (const file of TEMPLATES) {
+    const script = scripts[file];
+    for (const [line, value] of FACTOR_CASES) {
+      const doc = value === undefined ? {} : { [ciProfile.FACTOR_KEY]: value };
+      const want = ciProfile.parseFactor(doc).valid;
+      const r = runCase(script, line);
+      const label = `${file} ${line === null ? '(no ci-wait-factor line)' : line}`;
+      assert.strictEqual(r.status === 0, want, `${label}: step exit ${r.status}, parseFactor valid=${want}\n${r.stdout}${r.stderr}`);
+      if (!want) assert.match(r.stdout, /::error file=\.github\/project\.yml::ci-wait-factor is /, `${label}: no annotation`);
+    }
+  }
+});
+
+test('#564: the step reads the key parseFactor reads', () => {
+  // A renamed FACTOR_KEY must not leave the step checking a key nothing reads any more.
+  assert.match(scripts[TEMPLATES[0]], new RegExp(`field ${ciProfile.FACTOR_KEY}\\)`));
+  const r = runCase(scripts[TEMPLATES[0]], `${ciProfile.FACTOR_KEY}: 3`);
+  assert.strictEqual(r.status, 0, r.stdout + r.stderr);
+  assert.match(r.stdout, /ci-wait-factor: 3 — ok/);
+});

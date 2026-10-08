@@ -486,7 +486,7 @@ serial (exit `4`).
 pre-#559 value exactly; the 6 h wedge cap and 30/60/120 s polling are safety limits measurement may only tighten.
 `colab ship` reads the cached profile only — a verdict never waits on a history fetch. Formulas:
 [ADR 559](docs/adr/559-ci-wait-bounds-measured-rationale.md). **[Hard — gate: the audit fails it]**
-Anything but a number ≥ 1 fails the audit; the tools use `2` and say so — a bad value never produces a different behaviour.
+Anything but a number ≥ 1 fails the audit **and the CI templates' descriptor check** (the #416 pattern, #564); the tools use `2` and say so — a bad value never produces a different behaviour.
 
 ### `thresholds` — optional
 
