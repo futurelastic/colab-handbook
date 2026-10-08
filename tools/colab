@@ -9302,6 +9302,10 @@ prepended at the top for a *.yml/*.yaml copy, since there is no shebang to prote
 opens with a \`#!\` shebang (a *.mjs template) gets the same stamp on its SECOND line instead —
 using \`//\` there, since a bare \`#\` on any other line is a JS syntax error — so the shebang
 still has to be line 1 for the file to run.
+A ci-* template is also written with this repo's protected refs (#526): the template names
+\`main\`/\`dev\` in concurrency and the dedupe guard; the copy names the \`trunk:\` declared in
+.github/project.yml (plus \`main\` where a promotion into main releases), and says what it wrote.
+It then lists the repo's other workflows that also run on push, for you to keep, merge or delete.
 These templates are NEVER called remotely — copy, edit, own. When the audit flags your
 copy as behind a changed template, review the diff and re-copy to re-stamp.
 `;
@@ -9391,7 +9395,30 @@ function cmdTemplate(argv) {
     warn('handbook has no tags yet — stamping @ v0. Tag the handbook, then re-copy to stamp a real version.');
   }
 
-  const body = fs.readFileSync(srcFile, 'utf8');
+  let body = fs.readFileSync(srcFile, 'utf8');
+  // #526: a CI template names its protected refs `main`/`dev` — defaults, not this repo's facts.
+  // Write the repo's declared trunk (and release branch) instead, and say what changed.
+  const trunkNotes = [];
+  let repoForCopy = null;
+  if (ext === 'yml') {
+    try { repoForCopy = git.repoRoot(path.dirname(destFile)) || resolveWorkingRepo(opts); } catch (_) { repoForCopy = null; }
+  }
+  if (ext === 'yml' && /^ci-/.test(stem)) {
+    const tt = require('./lib/template-trunk');
+    let doc = null;
+    try { doc = require('./lib/yaml').parse(fs.readFileSync(path.join(repoForCopy, '.github', 'project.yml'), 'utf8')) || {}; } catch (_) { doc = null; }
+    const p = tt.protectedRefs(doc);
+    if (!p) {
+      trunkNotes.push('  trunk: no `trunk:` in .github/project.yml — the template\'s main/dev refs are left as is; walk its # EDIT: markers.');
+    } else {
+      const r = tt.substituteTrunk(body, p);
+      body = r.text;
+      trunkNotes.push(r.changes.length
+        ? `  trunk: wrote ${p.refs.join(', ')} (from .github/project.yml) into: ${r.changes.join(', ')}.`
+        : `  trunk: ${p.refs.join(', ')} — the template's refs already match .github/project.yml.`);
+      if (r.missed.length) trunkNotes.push(`  ⚠ trunk: not found in this template, check by hand: ${r.missed.join(', ')}.`);
+    }
+  }
   // A *.yml copy has no shebang to protect, so this is still a plain prepend at line 1 — unchanged
   // from before. A *.mjs copy opens with `#!/usr/bin/env node`; insertStamp puts the stamp on line
   // 2 instead so the shebang stays first and the file keeps running as a script (#252).
@@ -9405,6 +9432,23 @@ function cmdTemplate(argv) {
   // extension) is exactly how a stem collision reads back as a false confirmation (#252).
   print(`✓ ${stem}.${ext} @ ${version} → ${destFile}`);
   print('  stamped. Walk its # EDIT: markers, declare your toolchain, then commit. You own this file now.');
+  for (const l of trunkNotes) print(l);
+  // #526: a repo adopting a CI template usually has CI already. Both then run on every push —
+  // name them and leave the choice to the person, never decide it here.
+  if (ext === 'yml' && /^ci-/.test(stem) && repoForCopy) {
+    const wfDir = path.join(repoForCopy, '.github', 'workflows');
+    let others = [];
+    try {
+      const wt = require('./lib/workflow-triggers');
+      others = fs.readdirSync(wfDir)
+        .filter((f) => /\.ya?ml$/.test(f) && path.join(wfDir, f) !== destFile)
+        .filter((f) => { const on = wt.parseWorkflowOn(fs.readFileSync(path.join(wfDir, f), 'utf8')); return on.found && on.events.has('push'); });
+    } catch (_) { others = []; }
+    if (others.length) {
+      print('  Other workflows here also run on push — keep each, merge it into this one, or delete it (your call):');
+      for (const f of others) print(`    .github/workflows/${f}`);
+    }
+  }
   return 0;
 }
 

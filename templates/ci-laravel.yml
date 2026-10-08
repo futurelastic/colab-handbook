@@ -86,7 +86,8 @@ on:
 # drop the second one's run before it ever started (#512).
 # EDIT: name exactly this repo's trunk (and release branch) here — in the group, in
 # cancel-in-progress, and in the `dedupe` job's `if:`. A Tier C trunk may carry any
-# name; one left off this list gets its trunk runs cancelled.
+# name; one left off this list gets its trunk runs cancelled. `colab template` writes these
+# from the `trunk:` in .github/project.yml and prints what it wrote (#526).
 concurrency:
   group: ci-${{ github.ref }}${{ (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev') && format('-{0}', github.run_id) || '' }}
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' && github.ref != 'refs/heads/dev' }}

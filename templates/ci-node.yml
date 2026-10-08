@@ -20,7 +20,7 @@
 #   3. Install dependencies with the package manager the lockfile implies.
 #   4. Run typecheck / lint / test only if package.json declares those scripts, so a
 #      repo without them is not forced to add placeholders to keep CI green.
-#   5. Build.
+#   5. Build, if package.json declares the BUILD_COMMAND script.
 
 name: CI
 
@@ -60,7 +60,8 @@ on:
 # drop the second one's run before it ever started (#512).
 # EDIT: name exactly this repo's trunk (and release branch) here — in the group, in
 # cancel-in-progress, and in the `dedupe` job's `if:`. A Tier C trunk may carry any
-# name; one left off this list gets its trunk runs cancelled.
+# name; one left off this list gets its trunk runs cancelled. `colab template` writes these
+# from the `trunk:` in .github/project.yml and prints what it wrote (#526).
 concurrency:
   group: ci-${{ github.ref }}${{ (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev') && format('-{0}', github.run_id) || '' }}
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' && github.ref != 'refs/heads/dev' }}
@@ -68,7 +69,8 @@ concurrency:
 env:
   # EDIT: bump deliberately, not automatically.
   GITLEAKS_VERSION: "8.30.1"
-  # EDIT: npm script to build. Change for monorepos or non-standard scripts.
+  # EDIT: npm script to build. Change for monorepos or non-standard scripts. Empty, or a
+  # script package.json does not declare, skips the build with a notice (#526).
   BUILD_COMMAND: "build"
 
 # Self-hosted runner? The job layout below assumes GitHub-hosted capacity — a
@@ -527,6 +529,15 @@ jobs:
         if: steps.scripts.outputs.test == 'true'
         run: npm test
 
+      # Optional, like the scripts above (#526): a library or a test-only repo has no `build`
+      # script, and a template that fails on that turns a new adopter's first trunk run red.
       - name: Build
         if: hashFiles('package.json') != ''
-        run: npm run "$BUILD_COMMAND"
+        run: |
+          if [ -z "$BUILD_COMMAND" ]; then
+            echo "::notice::BUILD_COMMAND is empty — no build."
+          elif ! node -e "const s=(require('./package.json').scripts)||{};process.exit(s[process.env.BUILD_COMMAND]?0:1)" 2>/dev/null; then
+            echo "::notice::No '$BUILD_COMMAND' script in package.json — skipping the build."
+          else
+            npm run "$BUILD_COMMAND"
+          fi
