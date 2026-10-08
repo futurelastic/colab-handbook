@@ -68,6 +68,10 @@ function fixture({ yml = 'tier: B\ntrunk: main\nproduction: null\ndeploy: none\n
     `if [ "$1" = "auth" ] && [ "$2" = "status" ] && [ -f "${path.join(root, 'auth-broken')}" ]; then echo "X token in keyring is invalid (fixture)" >&2; exit 1; fi`,
     'if [ "$1" = "auth" ] && [ "$2" = "status" ]; then echo "Logged in (fixture)" >&2; exit 0; fi',
     `if [ "$1" = "api" ] && [ "$2" = "user" ] && [ -f "${path.join(root, 'no-credential')}" ]; then echo "HTTP 401: Bad credentials (fixture)" >&2; exit 1; fi`,
+    // #516: `rate-limited` = the active credential is valid but its quota is spent — `api user` 403s with
+    // GitHub's rate-limit text, and `api rate_limit` (never itself limited) reports core at 0 until a reset.
+    `if [ "$1" = "api" ] && [ "$2" = "user" ] && [ -f "${path.join(root, 'rate-limited')}" ]; then echo "gh: API rate limit exceeded for user ID 1. (HTTP 403)" >&2; exit 1; fi`,
+    `if [ "$1" = "api" ] && [ "$2" = "rate_limit" ] && [ -f "${path.join(root, 'rate-limited')}" ]; then echo "0 4102444800"; exit 0; fi`,
     'if [ "$1" = "api" ] && [ "$2" = "user" ]; then echo "me"; exit 0; fi',
     // #367: the forge's visibility — PRIVATE unless the test drops a `public` marker.
     `if [ "$1" = "repo" ] && [ "$2" = "view" ]; then if [ -f "${path.join(root, 'public')}" ]; then echo PUBLIC; else echo PRIVATE; fi; exit 0; fi`,
@@ -498,6 +502,16 @@ test('#344: no working credential at all — the refusal names the credential, n
   assert.strictEqual(row.ok, false);
   assert.match(row.detail, /gh not usable \(gh has no working credential/);
   assert.doesNotMatch(row.detail, /no origin/);
+});
+
+test('#516: a rate-limited credential is named as a rate limit with its reset — not "no working credential"', () => {
+  const fx = fixture();
+  fs.writeFileSync(path.join(fx.root, 'auth-broken'), '');
+  fs.writeFileSync(path.join(fx.root, 'rate-limited'), '');
+  const row = ciRow(fx);
+  assert.strictEqual(row.ok, false);
+  assert.match(row.detail, /gh credential is rate-limited until 2100-01-01T00:00:00Z — not a credential problem/);
+  assert.doesNotMatch(row.detail, /no working credential/);
 });
 
 test('#344: gh fine but no origin remote — the refusal says so, and does not blame auth', () => {

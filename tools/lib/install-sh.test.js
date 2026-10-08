@@ -14,6 +14,7 @@ const { execFileSync, spawnSync } = require('child_process');
 
 const stamp = require('./stamp');
 const check = require('./install-check');
+const engines = require('./engines');
 
 const ROOT = path.resolve(__dirname, '..', '..');
 const INSTALL = path.join(ROOT, 'install.sh');
@@ -50,6 +51,9 @@ const NOT_IN_NEXT = {
   ship: 'Phase B, driven by code-ship',
   landed: 'per-branch query used by code-sweep',
   holders: 'per-file query used by code-start',
+  'batch-stats': 'per-repo tuning report for ship-batch knobs, read when a repo picks its values (#554)',
+  'ci-profile': 'per-repo CI-duration report; ci-wait reads the same bounds itself (#559)',
+  thresholds: 'per-repo advisory-threshold report, read by code-triage / code-wrap (#560)',
   promote: 'human release act, never a first-run step',
   deliver: 'human act on a repo the fleet does not own (project.yml owner:), never a first-run step (#394)',
   doctor: 'maintenance of claims/worktrees that a fresh machine does not have yet',
@@ -208,13 +212,14 @@ test('state: absent is ✗ only once a CLI is installed; unparseable is ✗', (t
   assert.strictEqual(check.checkState({ colabHome, home }).severity, check.FAIL);
 });
 
-test('fleet: never set up is ⚠; a placeholder-only list is ✗ (the --fleet dead end); hand-edited drift is ⚠', (t) => {
+test('fleet: never set up is ⚠; a placeholder-only list is ⚠ too (not set up yet, #521); hand-edited drift is ⚠', (t) => {
   const colabHome = tmp(t);
   assert.strictEqual(check.checkFleet({ colabHome })[0].severity, check.WARN);
 
   fs.copyFileSync(path.join(ROOT, 'audit', 'repos.txt'), path.join(colabHome, 'repos.txt'));
   const seeded = check.checkFleet({ colabHome });
-  assert.strictEqual(seeded[0].severity, check.FAIL, 'the committed example must register nothing');
+  assert.strictEqual(seeded[0].severity, check.WARN, 'the committed example registers nothing, and that is not a failure');
+  assert.match(seeded[0].text, /placeholders only/, 'the committed example must register nothing');
   assert.match(seeded[0].text, /colab register/);
 
   fs.appendFileSync(path.join(colabHome, 'repos.txt'), '/srv/a\nowner/remote-only\n');
@@ -225,7 +230,7 @@ test('fleet: never set up is ⚠; a placeholder-only list is ✗ (the --fleet de
   assert.deepStrictEqual(check.checkFleet({ colabHome }).map((r) => r.severity), [check.OK]);
 });
 
-test('hooks: enabled with no vocabulary and no gitleaks fails BOTH rows — neither dependency is quieter', (t) => {
+test('hooks: enabled with no vocabulary and no gitleaks warns on BOTH rows — neither quieter, neither ✗ (#521)', (t) => {
   const h = tempHandbook(t);
   const home = tmp(t);
   const env = { PATH: '', HOME: home };
@@ -234,7 +239,7 @@ test('hooks: enabled with no vocabulary and no gitleaks fails BOTH rows — neit
 
   h.git('config', 'core.hooksPath', '.githooks');
   const rows = check.checkHooks({ root: h.root, colabHome: home, home, env });
-  assert.deepStrictEqual(rows.map((r) => r.severity), [check.FAIL, check.FAIL]);
+  assert.deepStrictEqual(rows.map((r) => r.severity), [check.WARN, check.WARN]);
   assert.match(rows[1].text, /identity vocabulary/);
 
   fs.writeFileSync(path.join(home, 'identity-vocabulary'), 'example\n');
@@ -252,8 +257,12 @@ function runInstall(home, args) {
     // Pin core.hooksPath off for the clone under test: a developer's own clone may have --hooks
     // enabled, and the hooks row must not make this test machine-dependent.
     GIT_CONFIG_COUNT: '1', GIT_CONFIG_KEY_0: 'core.hooksPath', GIT_CONFIG_VALUE_0: '',
+    // Never let a test move THIS checkout: a fresh HOME on a trunk checkout at origin's tip is exactly
+    // the first-install shape that pins a release (#521). The ref step has its own tests below.
+    COLAB_INSTALL_REF: 'keep',
   };
   delete env.COLAB_IDENTITY_VOCAB;
+  delete env.COLAB_INSTALL_REEXEC;
   return spawnSync('bash', [INSTALL, ...args], { encoding: 'utf8', env });
 }
 
@@ -266,7 +275,7 @@ test('install.sh --check on a machine with nothing installed: only ⚠ rows, exi
   assert.doesNotMatch(r.stdout, /^\s+✗ /m, "a ✗ row"); // the summary line itself says "no ✗ rows"
   // Only paths install.sh owns. The preflight's `gh auth status` writes gh's own
   // ~/.local/state/gh/device-id, which is gh's doing and predates --check.
-  for (const p of ['.colab', '.claude', path.join('.local', 'bin')]) {
+  for (const p of ['.colab', '.claude', '.agents', path.join('.local', 'bin')]) {
     assert.ok(!fs.existsSync(path.join(home, p)), `--check wrote ${p} into HOME`);
   }
 });
@@ -324,17 +333,25 @@ test('install.sh --tools seeds notifyUrl from a declared endpoint; says plainly 
   assert.strictEqual(cfg.notifyUrl, 'http://127.0.0.1:9000/api/events');
 });
 
-test('install.sh --notify-url seeds without --tools and never overwrites an existing value', (t) => {
+test('install.sh --notify-url seeds without --tools, then only ADDS — never removes or rewrites an entry (#546)', (t) => {
   const home = tmp(t);
   const r = runInstall(home, ['--notify-url', 'http://127.0.0.1:9000/api/events']);
   assert.strictEqual(r.status, 0, r.stdout + r.stderr);
   const cfgFile = path.join(home, '.colab', 'config.json');
   assert.strictEqual(JSON.parse(fs.readFileSync(cfgFile, 'utf8')).notifyUrl, 'http://127.0.0.1:9000/api/events');
 
+  // Same URL again: nothing to add, on-disk value still the plain string.
+  const same = runInstall(home, ['--notify-url', 'http://127.0.0.1:9000/api/events']);
+  assert.strictEqual(same.status, 0, same.stdout + same.stderr);
+  assert.match(same.stdout, /already set → left untouched/);
+  assert.strictEqual(JSON.parse(fs.readFileSync(cfgFile, 'utf8')).notifyUrl, 'http://127.0.0.1:9000/api/events');
+
+  // A second observer's URL is added after the first, which stays first and untouched.
   const again = runInstall(home, ['--notify-url=http://127.0.0.1:9001/api/events']);
   assert.strictEqual(again.status, 0, again.stdout + again.stderr);
-  assert.match(again.stdout, /NOT applied/);
-  assert.strictEqual(JSON.parse(fs.readFileSync(cfgFile, 'utf8')).notifyUrl, 'http://127.0.0.1:9000/api/events');
+  assert.match(again.stdout, /added http:\/\/127\.0\.0\.1:9001\/api\/events/);
+  assert.deepStrictEqual(JSON.parse(fs.readFileSync(cfgFile, 'utf8')).notifyUrl,
+    ['http://127.0.0.1:9000/api/events', 'http://127.0.0.1:9001/api/events']);
 });
 
 test('install.sh --notify-url refuses a non-http value before installing anything', (t) => {
@@ -343,4 +360,218 @@ test('install.sh --notify-url refuses a non-http value before installing anythin
   assert.strictEqual(r.status, 2);
   assert.match(r.stderr, /must be an http\(s\) URL/);
   assert.ok(!fs.existsSync(path.join(home, '.claude')), 'installed skills before refusing');
+});
+
+// --- #521: which ref a new machine installs ---------------------------------------------------------
+
+/**
+ * A throwaway "handbook" with a remote: v1.0.0 carries a stub installer that only echoes its argv
+ * (so a re-exec is observable), v1.1.0-rc.1 sits above it, and trunk runs ahead of both with the
+ * real install.sh. Returns a fresh clone of trunk — the exact state the README's clone step leaves.
+ */
+function releasedHandbook(t) {
+  const base = tmp(t);
+  const origin = path.join(base, 'origin');
+  const clone = path.join(base, 'clone');
+  const git = (cwd, ...args) => execFileSync('git', args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
+  const write = (rel, text, mode) => {
+    fs.mkdirSync(path.dirname(path.join(origin, rel)), { recursive: true });
+    fs.writeFileSync(path.join(origin, rel), text);
+    if (mode) fs.chmodSync(path.join(origin, rel), mode);
+  };
+  fs.mkdirSync(origin);
+  git(origin, 'init', '-q', '-b', 'main');
+  git(origin, 'config', 'user.email', 'test@example.invalid');
+  git(origin, 'config', 'user.name', 'test');
+  git(origin, 'config', 'core.hooksPath', path.join(origin, '.nohooks'));
+  write('.github/project.yml', 'trunk: main\n');
+  write('skills/demo/SKILL.md', '---\nname: demo\n---\n');
+  write('tools/package.json', '{"engines":{"node":">=18"}}\n');
+  write('install.sh', '#!/usr/bin/env bash\necho "OLD INSTALLER args:[$*] reexec:[$COLAB_INSTALL_REEXEC]"\n', 0o755);
+  git(origin, 'add', '-A'); git(origin, 'commit', '-qm', 'v1'); git(origin, 'tag', 'v1.0.0');
+  write('skills/demo/SKILL.md', '---\nname: demo\n---\nrc\n');
+  git(origin, 'add', '-A'); git(origin, 'commit', '-qm', 'rc'); git(origin, 'tag', 'v1.1.0-rc.1');
+  write('install.sh', installText, 0o755);
+  // The real installer reads its install targets from engines/ (#530); trunk ships them beside it.
+  for (const f of fs.readdirSync(path.join(ROOT, 'engines'))) write(`engines/${f}`, fs.readFileSync(path.join(ROOT, 'engines', f), 'utf8'));
+  git(origin, 'add', '-A'); git(origin, 'commit', '-qm', 'trunk work');
+  execFileSync('git', ['clone', '-q', origin, clone], { stdio: 'ignore' });
+  return { clone, git: (...a) => git(clone, ...a) };
+}
+
+function runClone(clone, home, args, extraEnv = {}) {
+  const env = {
+    ...process.env, HOME: home, COLAB_HOME: path.join(home, '.colab'),
+    GIT_CONFIG_COUNT: '1', GIT_CONFIG_KEY_0: 'core.hooksPath', GIT_CONFIG_VALUE_0: '',
+    ...extraEnv,
+  };
+  delete env.COLAB_INSTALL_REF; delete env.COLAB_INSTALL_REEXEC;
+  Object.assign(env, extraEnv);
+  return spawnSync('bash', [path.join(clone, 'install.sh'), ...args], { encoding: 'utf8', env });
+}
+
+test('#521: a first install from a fresh clone of trunk pins the newest FINAL tag and hands over to its installer', (t) => {
+  const h = releasedHandbook(t);
+  const r = runClone(h.clone, tmp(t), ['--tools', '--hooks']);
+  assert.strictEqual(r.status, 0, r.stdout + r.stderr);
+  assert.match(r.stdout, /first install from a fresh clone of main → pinning the newest final release/);
+  assert.strictEqual(h.git('describe', '--tags', '--exact-match'), 'v1.0.0', 'not the rc, not trunk');
+  assert.match(r.stdout, /OLD INSTALLER args:\[--tools --hooks\] reexec:\[1\]/, 'did not re-exec the tag\'s own installer with the flags');
+});
+
+test('#521: --trunk (or the env) keeps a fresh clone on trunk; --release afterwards moves it to the release', (t) => {
+  const h = releasedHandbook(t);
+  const home = tmp(t);
+  const r = runClone(h.clone, home, ['--trunk']);
+  assert.strictEqual(r.status, 0, r.stdout + r.stderr);
+  assert.match(r.stdout, /✓ trunk main @ v1\.1\.0-rc\.1-1-g[0-9a-f]+ — unreleased work included/);
+  assert.strictEqual(h.git('symbolic-ref', '--short', 'HEAD'), 'main');
+  assert.ok(fs.lstatSync(path.join(home, '.claude', 'skills', 'demo')).isSymbolicLink());
+
+  // Installed on trunk now: a flagless re-run keeps it and says how to pin a release.
+  const again = runClone(h.clone, home, []);
+  assert.strictEqual(again.status, 0, again.stdout + again.stderr);
+  assert.match(again.stdout, /main @ v1\.1\.0-rc\.1-1-g[0-9a-f]+ — not a final release[\s\S]*\.\/install\.sh --release/);
+  assert.strictEqual(h.git('symbolic-ref', '--short', 'HEAD'), 'main');
+
+  const rel = runClone(h.clone, home, ['--release']);
+  assert.strictEqual(rel.status, 0, rel.stdout + rel.stderr);
+  assert.strictEqual(h.git('describe', '--tags', '--exact-match'), 'v1.0.0');
+});
+
+test('#521: a dirty clone is never moved, keep never moves, and the two ref flags refuse together', (t) => {
+  const h = releasedHandbook(t);
+  fs.appendFileSync(path.join(h.clone, 'skills', 'demo', 'SKILL.md'), 'local edit\n');
+  const dirty = runClone(h.clone, tmp(t), ['--release']);
+  assert.strictEqual(dirty.status, 0, dirty.stdout + dirty.stderr);
+  assert.match(dirty.stdout, /uncommitted changes — NOT switching to v1\.0\.0/);
+  assert.strictEqual(h.git('symbolic-ref', '--short', 'HEAD'), 'main');
+  h.git('checkout', '--', '.');
+
+  const kept = runClone(h.clone, tmp(t), [], { COLAB_INSTALL_REF: 'keep' });
+  assert.strictEqual(kept.status, 0, kept.stdout + kept.stderr);
+  assert.strictEqual(h.git('symbolic-ref', '--short', 'HEAD'), 'main');
+
+  const both = runClone(h.clone, tmp(t), ['--release', '--trunk']);
+  assert.strictEqual(both.status, 2);
+  assert.match(both.stderr, /opposite choices/);
+});
+
+test('#521: a fresh --tools --fleet then --check is ⚠-only, exit 0 — not set up yet is not broken', (t) => {
+  const home = tmp(t);
+  // Not --all: --hooks writes core.hooksPath into THIS clone's .git/config. The hooks rows, the other
+  // half of the #521 measurement, are covered against a throwaway handbook above.
+  const r = runInstall(home, ['--tools', '--fleet']);
+  assert.strictEqual(r.status, 0, r.stdout + r.stderr);
+  const c = runInstall(home, ['--check']);
+  assert.strictEqual(c.status, 0, c.stdout + c.stderr);
+  assert.doesNotMatch(c.stdout, /^\s+✗ /m);
+  assert.match(c.stdout, /⚠ fleet\s+nothing registered yet/);
+});
+
+// --- engines (#530): the install target is per engine, chosen by flag or at a prompt -------------
+
+const SKILL_NAMES = fs.readdirSync(path.join(ROOT, 'skills'), { withFileTypes: true }).filter((d) => d.isDirectory()).map((d) => d.name);
+const linkedInto = (dir) => SKILL_NAMES.filter((n) => {
+  try { return fs.readlinkSync(path.join(dir, n)) === path.join(ROOT, 'skills', n); } catch (_) { return false; }
+});
+
+test('#530: every engine file declares every key, with yes/no where the format says so', () => {
+  const all = engines.listEngines(ROOT);
+  assert.deepStrictEqual(all.map((e) => e.id).sort(), ['claude', 'codex', 'generic']);
+  for (const e of all) {
+    for (const k of ['label', 'skills_dir', 'invoke', 'instructions', 'helper_agents', 'load_time_injection', 'shell_network', 'verified']) {
+      assert.ok(k in e, `engines/${e.id}.conf has no ${k}:`);
+    }
+    for (const k of ['helper_agents', 'load_time_injection']) assert.match(e[k], /^(yes|no)$/, `${e.id} ${k}`);
+    assert.match(e.shell_network, /^(yes|no|unknown)$/, `${e.id} shell_network`);
+  }
+  assert.strictEqual(all.find((e) => e.id === 'generic').skills_dir, '', 'generic must leave the folder to the user');
+  assert.deepStrictEqual(all.filter((e) => e.default === 'yes').map((e) => e.id), ['claude'], 'exactly one default engine, and it is Claude Code (#530)');
+});
+
+test('#530: install.sh (sed) and engines.js read every engine file the same way', () => {
+  for (const e of engines.listEngines(ROOT)) {
+    for (const k of ['label', 'skills_dir', 'invoke']) {
+      const sed = execFileSync('sed', ['-n', `/^${k}:/{s/^${k}:[[:space:]]*//;p;q;}`, path.join(ROOT, 'engines', `${e.id}.conf`)], { encoding: 'utf8' }).replace(/\n$/, '');
+      assert.strictEqual(sed, e[k], `${e.id} ${k}`);
+    }
+  }
+  const p = engines.parseConf('# c\nlabel: A\nlabel: B\nnote: one\nnote: two\nskills_dir:\n');
+  assert.deepStrictEqual(p, { label: 'A', skills_dir: '', note: ['one', 'two'], caveat: [] });
+});
+
+test('#530: no flag, not a terminal, nothing linked → Claude Code, said aloud; a re-run changes nothing', (t) => {
+  const home = tmp(t);
+  const r = runInstall(home, []);
+  assert.strictEqual(r.status, 0, r.stdout + r.stderr);
+  assert.match(r.stdout, /none had the skills linked yet → defaulted to claude/);
+  assert.match(r.stdout, /--engine <id>/);
+  assert.deepStrictEqual(linkedInto(path.join(home, '.claude', 'skills')), SKILL_NAMES);
+  assert.ok(!fs.existsSync(path.join(home, '.agents')), 'a no-flag install must not pick a second engine');
+  assert.doesNotMatch(r.stdout, /takes precedence over this\s/, 'the old, wrong precedence note is back');
+
+  const again = runInstall(home, []);
+  assert.strictEqual(again.status, 0, again.stdout + again.stderr);
+  assert.doesNotMatch(again.stdout, /defaulted to/);
+  assert.doesNotMatch(again.stdout, /🔗 link/, 'a re-run linked something new');
+});
+
+test('#530: --engine and --skills-dir install there; a later no-flag run keeps every one; --check reports each', (t) => {
+  const home = tmp(t);
+  const own = path.join(home, 'my-agent', 'skills');
+  const r = runInstall(home, ['--engine', 'codex', '--skills-dir', own]);
+  assert.strictEqual(r.status, 0, r.stdout + r.stderr);
+  assert.deepStrictEqual(linkedInto(path.join(home, '.agents', 'skills')), SKILL_NAMES);
+  assert.deepStrictEqual(linkedInto(own), SKILL_NAMES);
+  assert.ok(!fs.existsSync(path.join(home, '.claude')), 'an explicit --engine must not add claude');
+  assert.match(r.stdout, /⚠ the default workspace-write sandbox has NO network/, 'the engine caveat was not printed');
+  assert.strictEqual(fs.readFileSync(path.join(home, '.colab', 'skills-dirs'), 'utf8'), own + '\n');
+
+  const again = runInstall(home, []);
+  assert.strictEqual(again.status, 0, again.stdout + again.stderr);
+  assert.match(again.stdout, /skills → .*\.agents\/skills/);
+  assert.match(again.stdout, new RegExp(`skills → ${own.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`));
+  assert.strictEqual(fs.readFileSync(path.join(home, '.colab', 'skills-dirs'), 'utf8'), own + '\n', 'remembered twice');
+
+  const c = runInstall(home, ['--check']);
+  assert.strictEqual(c.status, 0, c.stdout + c.stderr);
+  assert.match(c.stdout, new RegExp(`✓ skills\\s+codex .*: ${SKILL_NAMES.length}/${SKILL_NAMES.length} linked`));
+  assert.match(c.stdout, new RegExp(`✓ skills\\s+generic .*my-agent/skills: ${SKILL_NAMES.length}/${SKILL_NAMES.length} linked`));
+  assert.match(c.stdout, /⚠ skills\s+codex: the default workspace-write sandbox/);
+  assert.match(c.stdout, /✓ skills\s+not installed for: claude/);
+});
+
+test('#530: an unknown engine, or generic with no folder, refuses before anything is written', (t) => {
+  const home = tmp(t);
+  const bad = runInstall(home, ['--engine', 'nope']);
+  assert.strictEqual(bad.status, 2);
+  assert.match(bad.stderr, /no engine 'nope' — known: claude codex/);
+  const gen = runInstall(home, ['--engine=generic']);
+  assert.strictEqual(gen.status, 2);
+  assert.match(gen.stderr, /--skills-dir <path>/);
+  assert.deepStrictEqual(fs.readdirSync(home), [], 'a refused run wrote into HOME');
+});
+
+test('#530: --check skills rows — broken link ✗, missing ⚠, a Claude-only machine is not told off', (t) => {
+  const home = tmp(t);
+  const colabHome = path.join(home, '.colab');
+  assert.deepStrictEqual(check.checkSkills({ root: ROOT, home, colabHome }).map((r) => r.severity), [check.WARN]);
+
+  const dir = path.join(home, '.claude', 'skills');
+  fs.mkdirSync(dir, { recursive: true });
+  for (const n of SKILL_NAMES) fs.symlinkSync(path.join(ROOT, 'skills', n), path.join(dir, n));
+  let rows = check.checkSkills({ root: ROOT, home, colabHome });
+  assert.deepStrictEqual(rows.map((r) => r.severity), [check.OK, check.OK], JSON.stringify(rows));
+  assert.match(rows[1].text, /not installed for: codex/);
+
+  fs.unlinkSync(path.join(dir, SKILL_NAMES[0]));
+  rows = check.checkSkills({ root: ROOT, home, colabHome });
+  assert.strictEqual(rows[0].severity, check.WARN);
+  assert.match(rows[0].text, new RegExp(`missing ${SKILL_NAMES[0]} — re-run ./install.sh --engine claude`));
+
+  fs.symlinkSync(path.join(ROOT, 'skills', 'removed-upstream'), path.join(dir, 'removed-upstream'));
+  rows = check.checkSkills({ root: ROOT, home, colabHome });
+  assert.strictEqual(rows[0].severity, check.FAIL);
+  assert.match(rows[0].text, /BROKEN links to skills that no longer exist: removed-upstream/);
 });

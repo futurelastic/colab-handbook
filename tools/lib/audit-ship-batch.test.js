@@ -89,3 +89,26 @@ test('ship-batch > 1 without autonomy: auto-trunk warns that it is inert', () =>
   const r = audit(fixture(`${BASE.replace('autonomy: auto-trunk\n', '')}ship-batch: 3\n`, WIRED));
   assert.ok(hasText(r.warns, /ship-batch: 3 is inert without autonomy: auto-trunk/), r.warns.join(' | '));
 });
+
+// ---- #555: ship-batch-wait ----
+
+test('#555: ship-batch-wait absent, empty or well-formed carries no ship-batch-wait finding', () => {
+  for (const extra of ['', 'ship-batch-wait:\n', 'ship-batch-wait: 90s\n', 'ship-batch-wait: 6m\n', 'ship-batch-wait: "1h"\n', 'ship-batch-wait: 0m\n']) {
+    const r = audit(fixture(`${BASE}ship-batch: 3\n${extra}`, WIRED));
+    assert.ok(!hasText(all(r), /ship-batch-wait/), `${JSON.stringify(extra)}: ${all(r).join(' | ')}`);
+  }
+});
+
+test('#555: every malformed ship-batch-wait value fails', () => {
+  for (const v of ['6', '6min', '1.5m', 'soon', 'true']) {
+    const r = audit(fixture(`${BASE}ship-batch: 3\nship-batch-wait: ${v}\n`, WIRED));
+    assert.ok(hasText(r.fails, /^ship-batch-wait is .*expected a whole number with a unit/), `${v}: ${r.fails.join(' | ')}`);
+  }
+});
+
+test('#555: a window with no batch to fill warns that it is inert', () => {
+  for (const sb of ['', 'ship-batch: 1\n']) {
+    const r = audit(fixture(`${BASE}${sb}ship-batch-wait: 6m\n`, WIRED));
+    assert.ok(hasText(r.warns, /ship-batch-wait: 6m is inert without ship-batch > 1/), `${JSON.stringify(sb)}: ${r.warns.join(' | ')}`);
+  }
+});

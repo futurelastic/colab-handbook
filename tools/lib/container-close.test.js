@@ -16,6 +16,7 @@ const assert = require('node:assert');
 const {
   untickedItems, classifyContainer, containerDeliveryLabels, containerCloseComment, containerFinding,
 } = require('./container-close.js');
+const cc = require('./container-close.js');
 
 const epic = (over = {}) => ({
   number: 40,
@@ -91,4 +92,28 @@ test('containerCloseComment: names the child, the target and the sha', () => {
   const s = containerCloseComment({ child: 43, sha: 'abc1234', total: 3, target: 'main' });
   assert.match(s, /#43 shipped to main at abc1234/);
   assert.match(s, /all 3 sub-issue/);
+});
+
+// ---- #502: a parent is looked up by number only in the child's own repository -------------------
+
+test('#502 issueRepoSlug: owner/repo from an issue URL, lowercased; null for anything else', () => {
+  assert.strictEqual(cc.issueRepoSlug('https://github.com/Org/Repo-A/issues/47'), 'org/repo-a');
+  assert.strictEqual(cc.issueRepoSlug('https://ghe.example/org/repo/issues/1/'), 'org/repo');
+  assert.strictEqual(cc.issueRepoSlug('https://github.com/org/repo/pull/3'), null);
+  assert.strictEqual(cc.issueRepoSlug(undefined), null);
+});
+
+test('#502 parentRelation: same / other / unknown, and the finding line for each', () => {
+  const view = (childUrl, parentUrl) => ({ url: childUrl, parent: { number: 68, url: parentUrl } });
+  const a = 'https://github.com/org/repo-a/issues/47';
+  const same = cc.parentRelation(view(a, 'https://github.com/ORG/repo-a/issues/68'));
+  assert.strictEqual(same.relation, 'same');
+  assert.strictEqual(cc.parentRelationFinding(same), null);
+  const other = cc.parentRelation(view(a, 'https://github.com/org/repo-b/issues/68'));
+  assert.deepStrictEqual(other, { relation: 'other', slug: 'org/repo-b', number: 68 });
+  assert.strictEqual(cc.parentRelationFinding(other), 'org/repo-b#68 is in another repository — not evaluated');
+  const unknown = cc.parentRelation(view(a, undefined));
+  assert.strictEqual(unknown.relation, 'unknown');
+  assert.doesNotMatch(cc.parentRelationFinding(unknown), /could not read the parent/);
+  assert.strictEqual(cc.parentRelation({ parent: { number: 68, url: a } }).relation, 'unknown');
 });

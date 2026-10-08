@@ -30,6 +30,7 @@ node audit.mjs --local ~/code/my-repo   # one local path, ad hoc (repeatable)
 node audit.mjs my-org/my-repo           # one remote slug, ad hoc
 node audit.mjs --config other-list.txt  # a different repo list
 node audit.mjs --identity               # ALSO scan public repository metadata — see below
+node audit.mjs --batch-history          # ALSO read each local repo's batch landing history — see below
 ```
 
 Exit code: `0` when every repo passes, `1` when any repo has a finding, `2` on a
@@ -352,7 +353,8 @@ the handbook's current version, so a scheduled run is self-documenting.
   `deploy` exactly as `CONVENTIONS.md` [§6](../CONVENTIONS.md#6-releases)'s release rung
   tables it, through `tools/lib/release-policy.js`. The block may narrow that default and
   never widen it: `candidates: auto` where the rung cuts no tags, `final: auto` where the
-  final tag is a human act (`deploy: tag`/`manual`), a `test-period` under `3d`, an unknown
+  final tag is a human act (`deploy: tag`/`manual`), a `test-period` under `3d` (`0d` stands
+  where the final is human, #549), an unknown
   sub-key or an out-of-set value are each a **finding**. The only nested map this tool's
   reader accepts, and only under `release:` — a second level, or a nested map under any
   other key, is still a parse finding. No block → no work and no finding.
@@ -472,6 +474,34 @@ once-per-run statement rather than a per-repo advisory: on a fleet where most op
 no vocabulary configured, a per-repo line would mark every repo non-clean and train the
 reader to ignore the report — a worse failure than the silence it fixes. But no run may be
 mistaken for having checked something it did not, so the header always says which it was.
+
+## Batch landing history — `--batch-history`
+
+```sh
+node audit.mjs --batch-history --local ~/code/my-repo
+```
+
+Per **local** repo, the audit runs this handbook's own `colab batch-stats --json` and prints the
+measured picture under the repo row (`▸` lines): the overlap of serial landings with a partner that
+went green inside their trunk-CI cycle, batch fill, the combined runs' first-attempt green rate, and
+the eviction rate at build. **The picture is never a finding** — a row stays clean with it.
+
+It has **no verdict of its own** (#556 — the owner's ruling: no hard-coded number). An advisory is
+raised only against a `batch-*` value the repo declares under `thresholds:` in `project.yml`
+(`project.schema.md`, *thresholds*): `batch-overlap-pct` (a serial repo: consider `ship-batch`),
+`batch-first-green-pct-min` (consider lowering `ship-batch`), `batch-eviction-pct-max`, and
+`batch-min-samples` (how many samples a rate needs before it is judged). None has a default.
+
+| Situation | Result |
+|---|---|
+| no `batch-*` declared | the picture, plus `no batch-* thresholds declared — shown, not judged` |
+| a declared rate with no samples, under `batch-min-samples`, or not applicable (e.g. overlap on a repo already batching) | `▸ thresholds.<name> not judged: <why>`; `--json` lists it under `batchHistory.unjudged` — never read as a pass |
+| `colab batch-stats` fails | **warn**, naming why — nothing was measured or judged |
+| a remote slug target | skipped, `▸ batch history: … audit a local path` — batch-stats reads a clone's trunk log |
+
+Off by default for the same reason as `--identity`: it reads CI history over the network (one API
+listing per day of the 30-day window), and a fleet sweep must stay runnable offline. The header says
+which it was on every run (`batch: … NOT read (pass --batch-history)`; `--json`: `batchHistory.read`).
 
 ## The repo list — resolution order
 

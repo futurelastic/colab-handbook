@@ -37,6 +37,8 @@
 //   node audit.mjs --identity            # also scan PUBLIC repository METADATA (description,
 //                                        # topics, homepage, name) against the operator's
 //                                        # private identity vocabulary — see "Identity" below
+//   node audit.mjs --batch-history       # also read each local repo's batch landing history
+//                                        # (colab batch-stats --json) — see "Batch history" below
 //
 // Identity (--identity): metadata never passes through git, so the pre-commit identity scan
 // (templates/pre-commit-identity) structurally cannot see it, and it is the first thing a
@@ -44,6 +46,13 @@
 // kept outside every repo — COLAB_IDENTITY_VOCAB, else ${COLAB_HOME:-~/.colab}/identity-
 // vocabulary — and is never shipped, printed, or written into a report. Off unless asked
 // for: it needs the network, and a fleet sweep must stay runnable offline.
+//
+// Batch history (--batch-history, #556): per LOCAL repo, the measured batch picture from
+// `colab batch-stats --json` — overlap of serial landings with a partner inside their trunk-CI
+// cycle, batch fill, first-attempt green rate, eviction rate. Shown, never judged on its own:
+// an advisory is raised ONLY against a `batch-*` value the repo declares under `thresholds:`
+// in project.yml, and none of those has a default. Off unless asked for, like --identity: it
+// reads the CI history over the network (one API listing per day of the window).
 //
 // Exit code: 0 when every repo passes, 1 when any repo has a finding, 2 on a usage
 // error. Findings never crash the run — a repo missing project.yml is a result, not
@@ -82,7 +91,7 @@ const {
 // encode the VALIDATOR half (report every violation) separately from `colab adopt`'s CONSTRUCTOR
 // half (does declaring this exposure value stay possible at all?). Same install.sh-freezes-
 // tools/lib/ reasoning as the other requires on this page.
-const { evaluateExposure } = require("../tools/lib/exposure-shape.js");
+const { evaluateExposure, singleTrunkViolation } = require("../tools/lib/exposure-shape.js");
 // #208's `writes` split precedence ladder — same shared-module reasoning as axisAuthority
 // above, reused for a second axis rather than a bespoke second mechanism.
 const writesAuthority = require("../tools/lib/writes-authority.js");
@@ -98,6 +107,9 @@ const installRoute = require("../tools/lib/install-route.js");
 const releaseRunner = require("../tools/lib/release-runner.js"); // #453
 const { parseWorkflowOn, workflowFiresOnTag, prereleaseTagTriggers, workflowsFiringOnBranchPush } = require("../tools/lib/workflow-triggers.js");
 const shipBatch = require("../tools/lib/ship-batch.js");
+const ciProfile = require("../tools/lib/ci-profile.js"); // #559
+const thresholdsLib = require("../tools/lib/thresholds.js"); // #560
+const batchHistory = require("../tools/lib/batch-history.js"); // #556
 // #383: where migrations live — the one rule `colab ship`'s gate and `release cut` read; the audit
 // validates the `migrations:` declaration against it and reports a `*/migrations/` dir it misses.
 const migrationPaths = require("../tools/lib/migration-paths.js");
@@ -138,12 +150,13 @@ const COLAB_HOME = process.env.COLAB_HOME || join(homedir(), ".colab");
 
 function parseArgs(argv) {
   // config === null means "resolve from the precedence chain"; a string means explicit.
-  const opts = { config: null, locals: [], slugs: [], json: false, quiet: false, help: false, identity: false };
+  const opts = { config: null, locals: [], slugs: [], json: false, quiet: false, help: false, identity: false, batchHistory: false };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === "--json") opts.json = true;
     else if (a === "--quiet" || a === "-q") opts.quiet = true;
     else if (a === "--identity") opts.identity = true;
+    else if (a === "--batch-history") opts.batchHistory = true;
     else if (a === "--local") {
       const p = argv[++i];
       if (!p) die("--local needs a path");
@@ -218,7 +231,7 @@ function parseScalarValue(raw) {
   return val;
 }
 
-const NESTED_MAP_KEYS = new Set(["release", "owner", "gate"]); // owner: #394 · gate: #410
+const NESTED_MAP_KEYS = new Set(["release", "owner", "gate", "thresholds"]); // owner: #394 · gate: #410 · thresholds: #560
 
 function parseFlatYaml(text) {
   const out = {};
@@ -1053,7 +1066,7 @@ function yamlRawValue(text, key) {
   return m[1].replace(/\s+#.*$/, "").trim();
 }
 
-const DURATION_MIN_DAYS = 180; // below this, silence — see audit-exposure.test.js's pinned
+const DURATION_MIN_DAYS = thresholdsLib.DEFAULTS["transitional-days"]; // 180, the DEFAULT (#560: a repo may declare thresholds.transitional-days); below this, silence — see audit-exposure.test.js's pinned
                                 // "transitional descriptor is clean" case, which this
                                 // threshold exists to keep passing untouched: a descriptor
                                 // committed moments ago must never earn a duration line.
@@ -1091,15 +1104,19 @@ function declaredStateAge(src, key) {
 
 // Prose for a declaredStateAge() result, or null when it is too recent to be worth saying
 // (the DURATION_MIN_DAYS gate — the caller must check this before calling warn()).
-function renderDuration(age) {
+function renderDuration(age, minDays = DURATION_MIN_DAYS) {
   const days = Math.floor((Date.now() / 1000 - age.epoch) / DURATION_DAY_SECONDS);
-  if (days < DURATION_MIN_DAYS) return null;
+  if (days < minDays) return null;
   const months = Math.floor(days / 30); // coarse on purpose — a report, not a countdown
   return `${age.lowerBound ? "at least " : ""}${months} month${months === 1 ? "" : "s"}`;
 }
 
 function auditRepo(target, ctx) {
   const src = makeSource(target);
+  // #522: the branch list is read by the single-trunk rule (tier B / exposure none|released) AND the
+  // trunk-exists check below — one read, so a remote target costs one API listing, not three.
+  let branchesMemo;
+  const branchList = () => (branchesMemo === undefined ? (branchesMemo = src.branches()) : branchesMemo);
   const findings = []; // { level: 'fail'|'warn', text }
   // `self` = this target IS the handbook, not one of its consumers. Surfaced in the
   // report (and in --json) so the row reads as source-of-truth rather than clean-by-luck:
@@ -1118,12 +1135,15 @@ function auditRepo(target, ctx) {
   // ---- .github/project.yml -------------------------------------------------
   const rawCfg = src.readFile(".github/project.yml");
   let cfg = null;
+  // #560: the advisory thresholds this run applies — defaults until the descriptor declares otherwise.
+  let th = thresholdsLib.parseThresholds(null);
   if (rawCfg === null) {
     fail("no .github/project.yml — repo is undescribed (tier/trunk/deploy unknown)");
   } else {
     const { data, problems } = parseFlatYaml(rawCfg);
     problems.forEach((p) => fail(`project.yml: ${p}`));
     cfg = data;
+    th = thresholdsLib.parseThresholds(cfg);
     // `tier` is deliberately NOT in this list as of #144: it used to be the sole axis of
     // record and therefore unconditionally required, but a descriptor may now answer the
     // gate-count question with `exposure` instead — see the "axis of record" check below,
@@ -1300,6 +1320,33 @@ function auditRepo(target, ctx) {
       }
     }
 
+    // ---- ship-batch-wait (#555) -------------------------------------------------
+    // How long a lone ready candidate waits for a partner (tools/lib/ship-batch.js parseShipBatchWait,
+    // the reading `colab ship --batch` uses). Malformed fails here and in the CI templates' descriptor
+    // check, the #416 pattern — ship fails closed to no wait, silently. A window with no batch to fill
+    // (ship-batch absent or 1) is inert, so it warns. No ceiling: the repo chooses the value.
+    if ("ship-batch-wait" in (cfg || {}) && cfg["ship-batch-wait"] !== null) {
+      const wCfg = shipBatch.parseShipBatchWait(cfg);
+      if (!wCfg.valid) fail(`${wCfg.reason} — see project.schema.md, ship-batch-wait`);
+      else if (wCfg.sec > 0 && shipBatch.parseShipBatch(cfg).n <= 1) warn(`${wCfg.reason} is inert without ship-batch > 1 — there is no batch for a partner to join`);
+    }
+
+    // ---- ci-wait-factor (#559) ----------------------------------------------------
+    // The one declared part of every CI wait bound: a multiple of the repo's MEASURED CI duration
+    // (tools/lib/ci-profile.js parseFactor, the reading colab ci-wait and colab ship use). A malformed
+    // value fails here; the tools fall back to the documented default (2) and say so — never to a
+    // different behaviour. No ceiling: how patient a repo is, is the repo's choice.
+    if (ciProfile.FACTOR_KEY in (cfg || {}) && cfg[ciProfile.FACTOR_KEY] !== null) {
+      const f = ciProfile.parseFactor(cfg);
+      if (!f.valid) fail(`${f.reason} — see project.schema.md, ci-wait-factor`);
+    }
+
+    // ---- thresholds (#560) --------------------------------------------------------
+    // Repo-declared values for the advisory thresholds (tools/lib/thresholds.js, the one reading
+    // `colab thresholds` and every consumer use). A malformed entry fails here and in the CI
+    // templates' descriptor check (the #416 pattern); every consumer falls back to the default.
+    thresholdsLib.parseThresholds(cfg).problems.forEach((p) => fail(`${p} — see project.schema.md, thresholds`));
+
     // ---- migrations (#383) ----------------------------------------------------
     // Where the repo's migrations live, beyond the two defaults (database/migrations/,
     // prisma/migrations/) — tools/lib/migration-paths.js is the one reading, shared with
@@ -1452,7 +1499,7 @@ function auditRepo(target, ctx) {
         );
       }
       const exposureAge = declaredStateAge(src, "exposure");
-      const durationLine = exposureAge && renderDuration(exposureAge);
+      const durationLine = exposureAge && renderDuration(exposureAge, th.values["transitional-days"]);
       if (durationLine) {
         warn(`exposure: none has held for ${durationLine} (per the descriptor's own git history) — visible so a long-running transitional state does not go unnoticed`);
       }
@@ -1542,7 +1589,7 @@ function auditRepo(target, ctx) {
             );
           }
           const channelsAge = declaredStateAge(src, "channels");
-          const durationLine = channelsAge && renderDuration(channelsAge);
+          const durationLine = channelsAge && renderDuration(channelsAge, th.values["transitional-days"]);
           if (durationLine) {
             warn(`channels: [none] has held for ${durationLine} (per the descriptor's own git history) — visible so a long-running transitional state does not go unnoticed`);
           }
@@ -1608,7 +1655,12 @@ function auditRepo(target, ctx) {
           ? `tier A with deploy: tag requires trunk "dev" or "main", found ${JSON.stringify(trunk)}`
           : `tier A requires trunk "dev", found ${JSON.stringify(trunk)} — only a tag-gated A (deploy: tag) may run a single trunk "main"`);
       }
-      if (tier === "B" && trunk !== "main") fail(`tier B requires trunk "main", found ${JSON.stringify(trunk)}`);
+      // #522: B is the single-trunk shape — one long-lived branch, any spelling. `master` (or
+      // whatever an existing repo's default is) conforms; a "main" beside a non-main trunk does not.
+      if (tier === "B") {
+        const single = singleTrunkViolation(trunk, branchList());
+        if (single) fail(`tier B requires a single trunk — ${single}`);
+      }
       // C uses A's two-branch split: main = what is live, trunk = where sessions land. #205:
       // this validates the SPLIT, not the spelling — trunk is a declared setting (default
       // "dev", proposed by colab adopt and the templates), never required to literally be
@@ -1682,7 +1734,7 @@ function auditRepo(target, ctx) {
   // ---- CLAUDE.md is a router, not an archive (#64) -------------------------
   // Unconditional: this is a repo-doc concern, not a tier/deploy one, and it applies to
   // the handbook's OWN CLAUDE.md too (not a stamp check, so it is not gated on !isSelf).
-  checkClaudeMdSize(src, warn);
+  checkClaudeMdSize(src, warn, th.values);
   // #417: same posture — a tool block loaded twice, or the Conventions block moved out of the
   // file tools look it up in, is a repo-doc concern on every repo, the handbook's own included.
   checkInstructionFileBlocks(src, warn);
@@ -1817,7 +1869,7 @@ function auditRepo(target, ctx) {
     // construction (CONVENTIONS.md §2: no mechanism rule applies to it, not even trunk shape).
     // A `runbook`-kind entry defers to `checkRunbook` here (this file can read the repo and tell
     // "missing" from "unreadable via the API"); every other entry is a ready `fail` message.
-    const shapeCtx = { trunk, hasProduction, deploy, hasDeployWorkflow: inRepoDeploy, deployWorkflowNames: [...deployWorkflows, ...fastDeployers] };
+    const shapeCtx = { trunk, hasProduction, deploy, hasDeployWorkflow: inRepoDeploy, deployWorkflowNames: [...deployWorkflows, ...fastDeployers], branches: branchList() };
     for (const entry of evaluateExposure(exp, shapeCtx)) {
       if (entry.kind === "runbook") checkRunbook(src, runbook, fail, warn, entry.why);
       else fail(entry.message);
@@ -1825,7 +1877,7 @@ function auditRepo(target, ctx) {
   }
 
   // ---- declared trunk actually exists -------------------------------------
-  const branches = src.branches();
+  const branches = branchList();
   if (trunk && branches === null) {
     warn(`cannot list branches (not a git checkout, or gh unavailable) — trunk "${trunk}" unverified`);
   } else if (trunk && branches && !branches.includes(trunk)) {
@@ -1956,6 +2008,9 @@ function auditRepo(target, ctx) {
   // read by every visitor, and it is subject to the rule it publishes.
   if (ctx.identity) checkIdentityMetadata(src, ctx.identity, info, fail);
 
+  // ---- batch history (#556) ------------------------------------------------------
+  checkBatchHistory(src, target, cfg, ctx, info, warn);
+
   function finish() {
     info.findings = findings;
     info.ok = !findings.some((f) => f.level === "fail");
@@ -1963,6 +2018,43 @@ function auditRepo(target, ctx) {
     return info;
   }
   return finish();
+}
+
+/**
+ * #556 — the repo's measured batch picture, from `colab batch-stats --json` (this handbook's own
+ * CLI, so the audit and the command read history the same way). Writes `info.batchHistory` on every
+ * path. The picture is never a finding; an advisory is raised only for a `batch-*` threshold the
+ * repo declares (tools/lib/batch-history.js judge — no defaults, by the owner's ruling). A run that
+ * was asked for and could not read the history warns: a quiet row must not read as "checked".
+ */
+function checkBatchHistory(src, target, cfg, ctx, info, warn) {
+  const declared = batchHistory.declaredBatchKeys(cfg);
+  if (!ctx.batchHistory) {
+    info.batchHistory = { status: "not-requested", declared };
+    return;
+  }
+  if (src.kind !== "local") {
+    info.batchHistory = { status: "not-applicable", reason: "batch-stats reads a clone's trunk log — audit a local path", declared };
+    return;
+  }
+  let rep;
+  try {
+    const out = execFileSync(process.execPath, [join(HANDBOOK_ROOT, "tools", "colab"), "batch-stats", "--repo", resolve(target.path), "--json"],
+      { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], timeout: 600_000, maxBuffer: 64 * 1024 * 1024 });
+    rep = JSON.parse(out);
+  } catch (err) {
+    const why = String((err.stderr || err.message || "")).trim().split("\n").pop() || "no output";
+    info.batchHistory = { status: "unreadable", reason: why, declared };
+    warn(`batch history: colab batch-stats could not read it (${why}) — nothing was measured or judged`);
+    return;
+  }
+  const measured = batchHistory.measure(rep);
+  const verdict = batchHistory.judge(rep, cfg, measured);
+  info.batchHistory = {
+    status: "read", since: rep.since, until: rep.until, landings: rep.landings, measured,
+    picture: batchHistory.picture(rep, measured), declared, judged: verdict.judged, unjudged: verdict.unjudged, notes: rep.notes || [],
+  };
+  verdict.advisories.forEach(warn);
 }
 
 /**
@@ -2184,9 +2276,10 @@ function checkReleaseBranch(cfg, trunk, branches, fail, warn, deploy) {
 // a starting point rather than a recommendation", wanting calibration across adopting repos
 // before anything here becomes a hard gate — the goal is a finding with the measured number
 // ("state the condition"), not a build-breaking assertion of a still-uncalibrated one.
-const CLAUDE_MD_MAX_BYTES = 40 * 1024; // near the handbook's own cited worst case (39 KB / 452 lines)
-const CLAUDE_MD_LINE_MULTIPLE = 6; // "some small multiple of the [file's] median row"
-const CLAUDE_MD_LINE_ABS_FLOOR = 2048; // below this, flagging on multiple alone is noise (tiny medians make everything look huge)
+const CLAUDE_MD_MAX_BYTES = thresholdsLib.DEFAULTS["claude-md-kb"] * 1024; // 40 KB by default (#560) — near the handbook's own cited worst case (39 KB / 452 lines)
+// The per-line multiple ("some small multiple of the [file's] median row", default 6) and its
+// absolute floor (default 2048 bytes — below it, flagging on the multiple alone is noise: tiny
+// medians make everything look huge) live in tools/lib/thresholds.js with the ceiling (#560).
 
 // #117: the byte ceiling above was built to catch hand-written accretion, but it counts
 // TOTAL file bytes — which also charges a repo for content it cannot shorten by the rule's
@@ -2419,7 +2512,11 @@ function checkAnchorLinks(src, fail) {
   }
 }
 
-function checkClaudeMdSize(src, warn) {
+function checkClaudeMdSize(src, warn, limits = thresholdsLib.DEFAULTS) {
+  // #560: the three numbers below are the defaults; a repo may declare its own under `thresholds:`.
+  const maxBytes = limits["claude-md-kb"] * 1024;
+  const lineMultiple = limits["claude-md-line-multiple"];
+  const lineFloor = limits["claude-md-line-floor-bytes"];
   // #417: measure what is LOADED, not one file. A thin-shell CLAUDE.md (`@AGENTS.md` plus the
   // by-name tool blocks) is tiny by construction, so measuring it alone would neuter this guard
   // while a bloated AGENTS.md rides in behind it on every turn. The loaded set is CLAUDE.md plus
@@ -2442,7 +2539,7 @@ function checkClaudeMdSize(src, warn) {
   }
   const derivedBytes = Math.max(0, bytes - authoredBytes);
 
-  if (authoredBytes > CLAUDE_MD_MAX_BYTES) {
+  if (authoredBytes > maxBytes) {
     const totalNote = derivedBytes > 0
       ? ` (of ${bytes} bytes total; ${derivedBytes} bytes are marked colab:derived and excluded — #117)`
       : "";
@@ -2451,7 +2548,7 @@ function checkClaudeMdSize(src, warn) {
       : `CLAUDE.md plus its @-imports (${files.slice(1).map((f) => f.path).join(", ")}) is`;
     warn(
       `${subject} ${authoredBytes} bytes (~${(authoredBytes / 1024).toFixed(1)} KB)${totalNote} — over the ` +
-      `${CLAUDE_MD_MAX_BYTES / 1024} KB advisory ceiling (#64). It is loaded in full into every session before ` +
+      `${maxBytes / 1024} KB advisory ceiling (#64${maxBytes === CLAUDE_MD_MAX_BYTES ? "" : ", declared in thresholds.claude-md-kb"}). It is loaded in full into every session before ` +
       `any work starts; if the knowledge belongs in docs/, the ${files.length === 1 ? "CLAUDE.md" : "instruction-file"} change is a pointer, not a copy (code-wrap A2)`,
     );
   }
@@ -2466,7 +2563,7 @@ function checkClaudeMdSize(src, warn) {
     if (lens.length < 2) continue; // no meaningful median from 0 or 1 lines
     const median = lens[Math.floor(lens.length / 2)];
     const worst = lens[lens.length - 1];
-    if (median > 0 && worst > CLAUDE_MD_LINE_ABS_FLOOR && worst > median * CLAUDE_MD_LINE_MULTIPLE) {
+    if (median > 0 && worst > lineFloor && worst > median * lineMultiple) {
       const pct = ((worst / f.authoredBytes) * 100).toFixed(1);
       warn(
         `${f.path} has a single line of ${worst} bytes — ${(worst / median).toFixed(1)}x the file's median line ` +
@@ -3064,6 +3161,7 @@ function report(results, opts, ctx) {
       identity: ctx.identity
         ? { scanned: true, vocabulary: ctx.identity.path, source: ctx.identity.source, terms: ctx.identity.count }
         : { scanned: false, reason: "not requested (--identity)" },
+      batchHistory: ctx.batchHistory ? { read: true } : { read: false, reason: "not requested (--batch-history)" },
       results,
     }, null, 2));
     return;
@@ -3080,6 +3178,11 @@ function report(results, opts, ctx) {
   console.log(ctx.identity
     ? `identity:  ${ctx.identity.count} term(s) from ${ctx.identity.path} (${ctx.identity.source}) — public repository metadata scanned`
     : "identity:  repository metadata NOT scanned (pass --identity)");
+  // #556: same once-per-run statement for batch history — a per-repo line on every offline run
+  // would make every row non-clean for a read nobody asked for.
+  console.log(ctx.batchHistory
+    ? "batch:     batch landing history read per local repo (colab batch-stats); advisories only against declared thresholds"
+    : "batch:     batch landing history NOT read (pass --batch-history)");
   console.log("");
 
   const shown = opts.quiet ? results.filter((r) => !r.clean) : results;
@@ -3099,6 +3202,12 @@ function report(results, opts, ctx) {
     else if (r.adoption === "local") lines.push(`⌂ adopted locally, not committed — descriptor hidden by .git/info/exclude; a repo the fleet does not own (CONVENTIONS.md §9)${r.clean ? " ✓" : ""}`);
     else if (r.clean) lines.push("✓");
     r.findings.forEach((f) => lines.push(`${f.level === "fail" ? "⚠" : "·"} ${f.text}`));
+    // #556: the measured picture — information, not a finding, so it never changes clean/ok.
+    if (r.batchHistory?.status === "read") {
+      r.batchHistory.picture.forEach((l) => lines.push(`▸ ${l}`));
+      if (!r.batchHistory.declared.length) lines.push("▸ no batch-* thresholds declared — shown, not judged");
+      r.batchHistory.unjudged.forEach((u) => lines.push(`▸ thresholds.${u.key} not judged: ${u.why}`));
+    } else if (r.batchHistory?.status === "not-applicable") lines.push(`▸ batch history: ${r.batchHistory.reason}`);
 
     // Repeat the name on every line so the output stays greppable.
     lines.forEach((l, i) => console.log(`${i === 0 ? head : cont}  ${l}`));
@@ -3157,6 +3266,7 @@ function runAudit(opts) {
 
   const ctx = { handbook: handbookInfo(HANDBOOK_ROOT), templateNames: templateNames(HANDBOOK_ROOT) };
   ctx.identity = opts.identity ? loadIdentityVocabulary() : null;
+  ctx.batchHistory = !!opts.batchHistory;
 
   const results = [];
   for (const t of targets) {

@@ -288,6 +288,40 @@ test('hold samples: every wake parses in the closed vocabulary, and looser real 
   assert.strictEqual(codec.encodeHold({ label: 'x', owner: 'o', wake: ['ruling', '#3'] }), 'Hold: x — owner: o — wake: ruling, #3');
 });
 
+test('#569: a declared shape: is read, an older reader still parses the line, and absence infers from the wake', () => {
+  const declared = samples.holds.filter((s) => 'shape' in s.decoded);
+  assert.deepStrictEqual([...new Set(declared.map((s) => s.decoded.shape))].sort(), ['ask', 'task', 'wait'],
+    'one sample per shape');
+  // The pre-#569 pattern, verbatim: a reader that does not know the field must still parse every
+  // line, with its wake intact — only its owner text absorbs the unknown field.
+  const OLD_HOLD_RE = /^Hold: (\S+) — owner: (.+?) — wake: (.+)$/;
+  for (const s of declared) {
+    const m = OLD_HOLD_RE.exec(s.wire.split('\n')[0]);
+    assert.ok(m, `older reader parses: ${s.wire}`);
+    assert.strictEqual(m[3], s.decoded.wake, 'older reader reads the wake whole');
+    assert.ok(codec.parseWakeLine(m[3]).ok);
+    assert.deepStrictEqual(codec.holdShape(s.decoded), { shape: s.decoded.shape, declared: true, invalid: null });
+  }
+  // The point of the field: a chore whose wake is `ruling` is a task, not a choice.
+  const chore = declared.find((s) => s.decoded.shape === 'task');
+  assert.strictEqual(chore.decoded.wake, 'ruling');
+  assert.strictEqual(codec.holdShape({ ...chore.decoded, shape: undefined }).shape, 'ask');
+  // Absent → inferred exactly as before the field existed.
+  for (const s of samples.holds.filter((x) => !('shape' in x.decoded))) {
+    const want = codec.parseWakeLine(s.decoded.wake).conditions.some((c) => c.kind === 'ruling') ? 'ask' : 'wait';
+    assert.deepStrictEqual(codec.holdShape(s.decoded), { shape: want, declared: false, invalid: null }, s.wire);
+  }
+  // An unknown value is named, never trusted: it falls back to the inference.
+  const typo = codec.decodeHold('Hold: x — owner: o — shape: chore — wake: ruling');
+  assert.strictEqual(typo.shape, 'chore');
+  assert.deepStrictEqual(codec.holdShape(typo), { shape: 'ask', declared: false, invalid: 'chore' });
+  assert.strictEqual(codec.encodeHold({ label: 'x', owner: 'o', shape: 'wait', wake: '#3' }), 'Hold: x — owner: o — shape: wait — wake: #3');
+  // `shape:` after the wake is NOT the field — it is part of the wake, which then names no wake.
+  const late = codec.decodeHold('Hold: x — owner: o — wake: ruling — shape: task');
+  assert.ok(!('shape' in late));
+  assert.strictEqual(codec.parseWakeLine(late.wake).ok, false);
+});
+
 test('the new samples are scrubbed: hosts as h: tokens, repos as OWNER/REPO', () => {
   const all = PAIRS.flatMap(([n]) => group(n)).concat(samples.notHolds);
   for (const s of all) {

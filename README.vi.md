@@ -8,11 +8,28 @@ người thật lẫn AI agent — mà không giẫm chân nhau.
 **Nếu bạn là AI agent, dừng ở đây và đọc [`CLAUDE.md`](CLAUDE.md).**
 File này dành cho con người.
 
-*(Tài liệu chuẩn tắc — [`CONVENTIONS.md`](CONVENTIONS.md) — viết bằng tiếng Anh
-để agent và tool đọc được. Bản này là cửa vào tiếng Việt cho anh em dev; bản
-tiếng Anh nằm ở [`README.md`](README.md). Cả hai chỉ là cửa vào, không phải
-tài liệu chuẩn tắc — khi hai bản nói khác nhau thì **cả hai đều sai** cho tới
-khi khớp lại với `CONVENTIONS.md`.)*
+## Bắt đầu nhanh
+
+```sh
+git clone https://github.com/futurelastic/colab-handbook.git ~/code/colab-handbook
+cd ~/code/colab-handbook && ./install.sh --all   # hỏi agent nào nhận skill; + CLI colab + hook, từ bản phát hành mới nhất; --dry để xem trước
+cd /duong-dan/toi/repo-cua-ban
+colab adopt              # chỉ hỏi những gì không tự dò ra được, rồi ghi .github/project.yml
+colab labels --ensure    # tạo các label quy ước
+colab register           # đưa repo vào danh sách fleet của máy này
+```
+
+Sau đó, trong một phiên agent ở repo đó, chạy skill `code-start` kèm số issue —
+mỗi engine có cách gọi skill riêng, xem [*Chọn engine*](#chọn-engine). Có agent
+trong tay thì skill `handbook-sync` thay được ba lệnh cuối và làm nốt phần adopt còn
+lại (xem [*Adopt vào một repo*](#adopt-vào-một-repo)). Cần có `git`, `node` ≥ 18
+và `gh` ≥ 2.94 đã đăng nhập (`gh auth login`); gói `gh` của các distro thường cũ
+hơn, nên hãy cài từ [cli.github.com](https://cli.github.com).
+
+*([`CONVENTIONS.md`](CONVENTIONS.md) là tài liệu chuẩn tắc, viết bằng tiếng Anh
+để agent và tool đọc được. File này và bản tiếng Anh [`README.md`](README.md)
+chỉ là cửa vào. Khi hai bản nói khác nhau thì **cả hai đều sai** cho tới khi
+khớp lại với `CONVENTIONS.md`.)*
 
 ## Đây là cái gì
 
@@ -21,10 +38,10 @@ merge vào đâu, release là gì, báo "tôi đang làm việc này" bằng cá
 tình để **cách hiện thực** (phiên bản Node, test runner, file CI của bạn) cho
 từng repo tự quyết.
 
-Mọi thứ trong đây được chưng cất từ việc vận hành ~25 repo thật, trong đó có
-nhiều app production được bảo trì gần như hoàn toàn bởi AI agent chạy song song
-trên nhiều worktree. Mục anti-pattern không phải lý thuyết: từng mục là chuyện
-đã xảy ra thật, kèm sẹo để chứng minh.
+Nó được chưng cất từ việc vận hành một fleet repo thật, trong đó có nhiều app
+production được bảo trì gần như hoàn toàn bởi AI agent chạy song song trên nhiều
+worktree. Mục anti-pattern không phải lý thuyết: từng mục là chuyện đã xảy ra
+thật.
 
 ### Nó giải quyết vấn đề gì
 
@@ -48,19 +65,17 @@ sự thật về một repo lại nằm trong trí nhớ của ai đó thay vì 
 
 ### Thực chất nó làm gì
 
-Nó bắt mỗi repo tự trả lời một nhúm câu hỏi về chính mình, **một lần**, vào một
-file mà mọi phiên đều đọc trước khi động vào bất cứ thứ gì — hôm nay đã có
-production chưa, còn ai khác làm ở đây, merge sai thì hỏng cái gì, mỗi lúc chạy
-bao nhiêu đầu việc, và code đi tới chỗ nó chạy bằng đường nào.
+Nó bắt mỗi repo tự trả lời năm câu hỏi về chính mình, **một lần**, vào một file
+mà mọi phiên đều đọc trước khi động vào bất cứ thứ gì (xem [*Năm câu
+hỏi*](#năm-câu-hỏi)). Mọi thứ còn lại suy ra từ mấy câu trả lời đó: merge vào
+nhánh nào, ở repo này release nghĩa là gì, có bắt buộc phải có nhánh không, một
+phiên phải ghi lại bao nhiêu trước khi dừng.
 
-Mọi thứ còn lại suy ra từ mấy câu trả lời đó: merge vào nhánh nào, ở repo này
-release nghĩa là gì, có bắt buộc phải có nhánh không, một phiên phải ghi lại
-bao nhiêu trước khi dừng. Phiên làm việc không phải đoán, và hai repo không bao
-giờ hiểu khác nhau về cùng một từ.
-
-Phần còn lại của repo sinh ra để phục vụ điều đó: một CLI làm giúp phần cơ học,
-một audit báo chỗ nào thực tế đã trôi khỏi thứ repo tự khai, và các luồng phiên
-làm việc mang đi được để phiên code ở đâu cũng mở ra và đóng lại giống nhau.
+Phần còn lại của repo phục vụ điều đó: một CLI làm giúp phần cơ học, một audit
+báo chỗ nào thực tế đã trôi khỏi thứ repo tự khai, và các luồng phiên làm việc
+(skill) để phiên code ở đâu cũng mở ra và đóng lại giống nhau. Skill chỉ là văn
+xuôi — một người ngồi terminal có thể làm theo mà không cần agent hay tool nào
+khác.
 
 ### Nó không phải cái gì
 
@@ -70,49 +85,154 @@ làm việc mang đi được để phiên code ở đâu cũng mở ra và đó
 - **Không phải hệ thống CI, cũng không có ý kiến gì về stack của bạn.** Ngôn
   ngữ, test runner, pipeline — của bạn cả. Handbook chỉ yêu cầu pipeline cho ra
   hai kết quả, và không bao giờ nói phải làm bằng cách nào.
-- **Không phải lớp ép buộc**, trừ đúng một ngoại lệ cố ý. Chuyện tuân thủ chỉ là
-  cảnh báo, vì sai một quy ước thì tốn một cuộc trao đổi. Chuyện phát hành ra
-  ngoài thì chặn, vì history không thu hồi lại được một khi đã có người clone.
+- **Phần lớn không phải lớp ép buộc.** Chuyện tuân thủ chỉ là cảnh báo. Vài thứ
+  ít ỏi thật sự chặn được liệt kê ở [*Vì sao ép buộc ít
+  vậy*](#vì-sao-ép-buộc-ít-vậy).
 - **Không phải thang đo độ trưởng thành.** Không câu trả lời nào ở đây xếp repo
   này trên repo kia. Một repo chưa có production không phải repo tệ hơn; nó là
   repo có ít cổng hơn.
 
-Nếu bạn làm một repo một mình, đọc mục anti-pattern rồi lấy cái nào thấy dùng
-được. Còn nếu bạn chạy nhiều repo — hoặc bạn làm việc cùng những agent chưa
-từng gặp người đặt ra luật — thì nhiều khả năng nó hoàn vốn nhanh hơn cả thời
-gian bạn bỏ ra để đọc.
+## Phiên làm việc đầu tiên
+
+Mỗi đầu việc đi qua một vòng. Mỗi bước là một skill, gọi theo tên trong phiên
+agent (cú pháp gọi là của engine — [*Chọn engine*](#chọn-engine)), hoặc tự làm
+theo bằng tay từ [`skills/`](skills/).
+
+| Bước | Skill | Ai chạy | Để lại gì |
+|---|---|---|---|
+| 1. Chọn | `code-triage` | điều phối | việc sẵn sàng theo thứ tự, label `group:` trên các issue phải chung một nhánh, `needs-plan` trên việc khó, lệnh để bắt đầu |
+| 2. Mở | `code-start <N>` | thợ | issue đã claim, nhánh cắt từ trunk và đã push, một worktree, một file plan ngắn |
+| 3. Làm | — | thợ | commit trên nhánh |
+| 4. Bàn giao | `code-wrap` | thợ | điều học được ghi lên Issue, gate của repo đã chạy, nhánh đã push — rồi **dừng** |
+| 5. Merge | `code-ship` | điều phối, sau khi người đồng ý | một squash commit trên trunk kèm `Closes #N`, bằng chứng trên từng issue, claim đã nhả, worktree đã gỡ |
+| 6. Dọn | `code-sweep` | điều phối | việc đã xong được ship, claim và worktree cũ được dọn |
+| 7. Release | release workflow, hoặc `release-rung` | tự động, hoặc người khi tag là thứ deploy | một tag ứng viên, rồi bản final sau thời gian thử — chỉ khi `exposure` của repo có release |
+
+Cũng trong [`skills/`](skills/): `code-plan` (plan đầy đủ cho issue khó, do
+`code-start` gọi khi có cờ), `handbook-sync` (kéo một repo lên bản handbook mới
+nhất), và `migration-review` (review migration của một nhánh, cho người/agent
+được repo gán vai đó).
+
+**Tự chạy vòng này bằng tay ở terminal?** Không có `--session` thì `colab` đặt
+tên bạn là `person:<git user.email>/<host token>`, nên claim và bằng chứng ship
+đều ghi rõ ai làm. Nếu làm nhiều đơn vị việc cùng lúc ở các shell khác nhau,
+đặt cho mỗi shell một `COLAB_SESSION=<id ổn định bất kỳ>` để các hold không lẫn
+vào nhau.
+
+**Mấy từ sẽ gặp:**
+
+- **Trunk** — nhánh các phiên merge vào (`trunk:` trong `project.yml`).
+  **Promotion** — merge trunk vào `main` khi trunk không phải `main`; ở repo
+  `live` thì chính cú promote *là* deploy.
+- **Claim** — assignee + label `in-progress`, có nhánh đã push lên remote làm
+  bằng, lấy *trước khi* bắt tay vào làm.
+- **Thợ / điều phối** (implementer / coordinator) — phiên viết code / phiên
+  chọn việc, merge và dọn dẹp. Một người có thể làm cả hai, ở hai thời điểm.
+- **Phase A / Phase B** — `code-wrap` (nửa của thợ, dừng trước mọi cú merge) /
+  `code-ship` (nửa của điều phối: cú merge và mọi thứ sau đó).
+- **Nấc (rung)** — phiên viết bao nhiêu plan: 0 không viết, 1 một khung năm
+  dòng, 2 plan đầy đủ từ `code-plan`.
+
+Người mới: đọc [`CONVENTIONS.md` §1](CONVENTIONS.md#1-the-model-in-one-picture)
+(mô hình) và [§11](CONVENTIONS.md#11-quick-reference) (tra nhanh) trước. Phần
+còn lại của `CONVENTIONS.md` là tài liệu tra cứu — cần gì tra nấy, đừng đọc từ
+đầu tới cuối.
 
 ## Năm câu hỏi
 
-Adopt handbook này nghĩa là trả lời năm câu hỏi về repo của bạn, một lần, ghi
-vào `.github/project.yml` — để không phiên nào phải đoán, và không hai repo
-nào hiểu khác nhau về cùng một từ:
+Adopt nghĩa là trả lời mấy câu này về repo của bạn vào `.github/project.yml`.
+`colab adopt` chỉ hỏi hai câu làm thay đổi cổng (1 và 3), dưới dạng menu đánh
+số; ba câu còn lại là tuỳ chọn, trả lời lúc nào sau này cũng được:
 
-1. **Hôm nay đã có đích deploy chưa** — và đến đó bằng đường nào: một tag gác
-   cổng production, chính cú promote là deploy, một người chạy runbook bằng
-   tay, hay chưa có gì sống cả?
-2. **Còn ai khác làm ở repo này** — một mình, một team, hay có cả người
-   ngoài?
-3. **Merge nhầm thì cái gì hỏng** — không gì cả, chỉ những người đang có mặt
-   ở đây, người dùng qua lần promote kế tiếp, hay người dùng/người adopt qua
-   một artifact đã phát hành?
-4. **Một việc tại một thời điểm, hay nhiều việc chạy song song?**
-5. **Code đi tới chỗ nó chạy bằng đường nào** — một workflow CI, một git
-   hook, một quy trình tay có ghi lại, một checkout đang sống sẵn, một
-   artifact phát hành, dữ liệu của hệ thống khác, hay chưa có đường nào cả?
+| # | Câu hỏi | Ghi vào | Lúc adopt |
+|---|---|---|---|
+| 1 | **Hôm nay** (chứ không phải "sắp") đã có đích deploy chưa, và đến đó bằng đường nào — một tag, chính cú promote, một người chạy runbook, hay chưa có gì? | `production` + `deploy` | có hỏi |
+| 2 | Còn ai khác làm ở đây — một mình bạn, một team, hay có cả người ngoài? | `room` | tuỳ chọn — `colab adopt --axis room` |
+| 3 | Merge nhầm thì cái gì hỏng — không gì cả, chỉ những người đang có mặt, người dùng qua lần promote kế tiếp, hay người dùng/người adopt qua một artifact đã phát hành? | `exposure` | có hỏi — người thật trả lời |
+| 4 | Một người có được commit thẳng vào trunk song song với các phiên worktree không — tự do, có khai ý định, hay không bao giờ? | `writes` | tuỳ chọn — `colab adopt --axis writes` |
+| 5 | Code đi tới chỗ nó chạy bằng đường nào — một workflow CI, một git hook, một quy trình tay có ghi lại, một checkout đang sống, một artifact phát hành, dữ liệu của hệ thống khác, hay chưa có đường nào? | `channels` | tuỳ chọn — `colab adopt --axis channels` |
 
-Trả lời xong năm câu này là quyết định luôn mọi thứ còn lại: merge vào nhánh
-nào, release nghĩa là gì, Issue tường thuật nhiều hay ít, cần gì để undo một
-merge, có bắt buộc phải có branch hay không. Không câu nào bị hỏi hai lần, và
-không câu nào hỏi cái mà repo đã tự nói sẵn rồi — nhánh mặc định, toolchain,
-port của nó.
+**Trả lời câu 3 là việc của người thật** khi câu trả lời là "không gì cả" hoặc
+"chỉ những người đang có mặt". Agent làm được mọi phần còn lại; tới bước đó,
+`colab adopt` in ra, ngay dòng đầu tiên, đúng một lệnh để người thật chạy.
 
-Issue được **claim** bằng assignee + label `in-progress` trước khi bắt tay vào
-làm, nên các phiên song song không bao giờ đụng nhau trên cùng một việc.
+Không câu nào hỏi cái repo đã tự nói sẵn — nhánh mặc định (`trunk`, giữ nguyên
+như đang có: nhánh mặc định tên `master` vẫn hợp lệ, không cần đổi tên), toolchain,
+port đều được tự dò. Số cổng, nghi thức release và việc có bắt buộc phải có
+nhánh hay không đều suy ra từ câu trả lời. Mỗi câu trả lời quy về đâu, và vì
+sao: [`CONVENTIONS.md` §2](CONVENTIONS.md#2-tiers) và
+[§9](CONVENTIONS.md#9-adopting-this); từng field:
+[`project.schema.md`](project.schema.md).
 
-Toàn bộ luật — mỗi câu trả lời quy về đâu, và vì sao:
-[`CONVENTIONS.md`](CONVENTIONS.md). Đọc mất ~15 phút và là file **chuẩn tắc
-duy nhất** — mọi thứ còn lại trong repo chỉ phục vụ nó.
+## Adopt vào một repo
+
+**Đường mặc định: chạy skill `handbook-sync` trong một phiên agent ngay trong
+repo đó.** Nó nhận ra repo chưa adopt gì và đi hết đường adopt — descriptor (qua
+`colab adopt`), label, block `CLAUDE.md`, CI từ template, và đăng ký trên máy
+này. Chạy lại về sau, chính skill đó kéo một repo đã adopt lên bản handbook mới
+nhất mà không làm mất phần bạn đã sửa.
+
+Làm bằng tay thì cũng đúng các bước đó (checklist đầy đủ:
+[`CONVENTIONS.md` §9](CONVENTIONS.md#9-adopting-this)):
+
+1. `colab adopt` — trả lời hai câu hỏi về cổng và ghi `.github/project.yml`. Nó dừng ở
+   đó và in ra các bước còn lại.
+2. `colab labels --ensure` — các label quy ước không có sẵn. Một check mà label
+   của nó chưa từng được tạo thì không bao giờ chạy được.
+3. Dán [`templates/repo-CLAUDE-block.md`](templates/repo-CLAUDE-block.md) vào
+   `CLAUDE.md` của repo — đây là cách agent phát hiện ra bộ quy ước.
+4. Đảm bảo CI đạt hai kết quả bắt buộc: quét secret và build, với phiên bản
+   toolchain **resolve từ manifest của chính repo**, không bao giờ hardcode.
+   Copy template từ [`templates/`](templates/) nếu thấy tiện.
+5. `colab register` — đưa repo vào danh sách fleet của máy này, để cả audit lẫn
+   bộ cấp port đều biết tới nó.
+
+Mấy flag của `colab adopt` nên biết:
+
+- `--autonomy auto-trunk` — ghi lại quyền maintainer cấp cho agent tự hoàn tất
+  cú merge vào trunk qua `colab ship` (không bao giờ là release). Cần người.
+- `--land` — commit những gì lần chạy này ghi thẳng vào trunk rồi push, để
+  nhánh feature đầu tiên được xét theo luật mới. Cần người (`COLAB_HUMAN=1`
+  kèm `--answered-by`).
+- `--fork` — repo bám theo một upstream không phải của bạn (tự dò khi có remote
+  tên `upstream`); khi đó block `CLAUDE.md` chỉ được nối thêm, không bị cấu trúc
+  lại, và workflow agent riêng của upstream được nêu tên.
+- `--local` — bạn hoàn toàn không commit được vào repo này; mọi thứ nằm trong
+  bản clone của bạn ([*Working in a repo you don't
+  own*](CONVENTIONS.md#working-in-a-repo-you-dont-own)).
+
+Nhánh có sẵn từ trước được **giữ nguyên** (grandfathered). Đừng đổi tên gì cả.
+
+## Tuỳ biến một skill cho repo của bạn
+
+Muốn một skill chạy khác đi ở một repo — comment Issue bằng tiếng Nhật, thêm
+một bước kiểm tra trước wrap? Đừng fork skill: bản fork không còn nhận cập nhật
+từ handbook. Hãy viết phần khác biệt vào `.colab/skills/<skill>.md` (ví dụ
+`.colab/skills/code-wrap.md`), bằng văn xuôi thường. Mỗi skill đọc file đó
+trước các bước của chính nó, và nội dung file thắng phần chữ của skill trong
+repo đó. Nó không bao giờ nới một cổng của `colab`: claim hay merge đã bị từ
+chối thì vẫn bị từ chối. Hãy gọi bước bạn muốn chỉnh theo số của nó (`code-ship`
+B1c, `code-sweep` §3): một skill lớn gồm một phần lõi ngắn cộng các file tham
+chiếu, và phần lõi giữ số của mọi bước.
+
+Claude Code tự nạp file vào skill. Các engine khác có một câu thường trong mỗi
+skill bảo agent đọc file, cách này chạy được mà không cần engine hỗ trợ gì.
+Vì file này ra lệnh cho agent, thay đổi trong nó không bao giờ được coi là
+docs-only: nó merge bằng `auto-trunk` hoặc khi có người duyệt, giống một thay đổi
+`CLAUDE.md`. Quy tắc:
+[`CONVENTIONS.md` §8, *Local policy*](CONVENTIONS.md#local-policy--a-repo-refines-a-skill-without-forking-it-520).
+
+## Tự động hoá tùy chọn, đặt lên trên
+
+Không có gì ở đây giả định đã có dashboard, scheduler hay bot. Người adopt vẫn
+có thể tự dựng: mở phiên từ một nút bấm, chạy vòng làm việc theo lịch, coi cú
+bấm nút merge của một người là cái gật đầu mà `code-ship` đang chờ, hay đẩy
+thông báo khi việc đổi trạng thái. Tool như vậy đọc đúng những artefact chung mà
+con người đọc — `.github/project.yml`, label, claim trên từng Issue, file
+`~/.colab/state.json` trên máy — và có thể nhận event của `colab` ở `notifyUrl`
+([`tools/README.md`](tools/README.md#notifyurl--optional-event-push-off-by-default)).
+Nó không bao giờ thay đổi một cổng của `colab`: cái gật đầu trước khi merge và
+quyền cấp trước khi chạy migration vẫn đứng vững dù có nó hay không.
 
 ## Cấu trúc repo
 
@@ -121,153 +241,129 @@ duy nhất** — mọi thứ còn lại trong repo chỉ phục vụ nó.
 | [`CONVENTIONS.md`](CONVENTIONS.md) | Luật. Chuẩn tắc, nguồn sự thật duy nhất (EN). |
 | [`CLAUDE.md`](CLAUDE.md) | Cửa vào cho AI agent — bản chưng cất vận hành (EN). |
 | [`project.schema.md`](project.schema.md) | Tham chiếu field của `.github/project.yml`. |
-| [`templates/`](templates/) | Điểm khởi đầu **copy-về-là-của-bạn**: CI, release, git hook (một bản quét secret và một bản quét danh tính), và block `CLAUDE.md` cho repo adopt. **Không có gì được gọi từ xa** — copy, sửa, sở hữu. Là template chứ không phải scaffold, vì scaffold chỉ tới được những repo tạo ra sau khi nó ra đời. |
-| [`tools/`](tools/) | `colab` — một CLI nhỏ (tùy chọn): adopt một repo, claim issue, cấp port, quản lý worktree, và merge nhánh đã xong vào trunk khi repo cho phép. State JSON, không dependency. Tham chiếu đầy đủ các lệnh: [`tools/README.md`](tools/README.md). |
-| [`audit/`](audit/) | Trình kiểm tra conformance từ bên ngoài. Đọc mọi repo của bạn — mọi owner, kể cả repo local-only — và báo drift trong một lần chạy. Chỉ cảnh báo, không bao giờ chặn. Thêm `--identity` thì quét cả description và topic của repo public — thứ mà không git hook nào nhìn thấy được. Ý nghĩa từng check: [`audit/README.md`](audit/README.md). |
-| [`skills/`](skills/) | Flow phiên làm việc portable: `code-triage` (chọn việc tiếp theo, gắn cờ việc khó cần plan) → `code-start` (mở phiên; chạy `code-plan` khi có cờ) → `code-wrap` (chưng cất + gate + bàn giao) → `code-ship` (chấm điểm + merge, cần người xác nhận), cộng `code-sweep` (dọn sạch mọi việc ĐÃ XONG trong một repo — hoặc chỉ một nhóm issue hay một phiên được chỉ định — chạy `code-wrap`+`code-ship` từng cái) `handbook-sync` (kéo MỘT repo lên bản handbook mới nhất, chạy từ trong repo đó), và `release-rung` (đường dự phòng thủ công và phần giải thích cho release workflow — workflow mới là thứ tự chạy: đi hết nấc release của một repo từ phiên điều phối — candidate, thời gian thử, quyền phủ quyết `release-hold`, bản final — qua `colab release cut`/`finalize`, không bao giờ tag tay), và `migration-review` (cho người/agent mà repo gán vai migration-reviewer: review migration của một nhánh theo engine deploy thật và chốt đúng một verdict — GRANT kèm review record, REWORK kèm brief sửa, hoặc ESCALATE lên người — kèm bộ test mù phải chạy trước khi gán reviewer mới). [`install.sh`](install.sh) cài chúng thành skill Claude Code — xem mục *Cài đặt máy* ngay dưới. |
-| [`install.sh`](install.sh) | Cài đặt cho **máy của bạn**: skills, CLI `colab`, hook pre-commit, danh sách repo cho audit. Idempotent, và `--dry` cho xem trước mọi thứ. |
-
-## Cài CLI từ npm
-
-CLI `colab` còn được phát hành dạng package npm công khai **`@futurelastic/colab-handbook`**. Lệnh bạn gõ vẫn là `colab`.
-
-```sh
-npx @futurelastic/colab-handbook <lệnh>         # chạy một lần, không cài gì, không cần tài khoản npm
-npm i -g @futurelastic/colab-handbook           # rồi: colab <lệnh>
-npm i -g @futurelastic/colab-handbook@next      # bản ứng viên (vX.Y.Z-rc.N) thay vì bản final
-```
-
-Package chỉ chứa những gì `colab` đọc lúc chạy — CLI, `lib/`, `templates/` và `audit/audit.mjs` — không gì khác; `colab template` và `colab adopt` chạy được từ bản trên registry và đóng dấu đúng version của package. Các skill **không** nằm trong đó: chúng cài bằng `./install.sh` từ một bản clone (xem bên dưới), vì phải symlink vào `~/.claude/skills/`. Mỗi tarball được CI đối chiếu từng file với allowlist (`scripts/check-pack-allowlist.mjs`).
+| [`templates/`](templates/) | Điểm khởi đầu **copy-về-là-của-bạn**: CI, release, git hook (một bản quét secret và một bản quét danh tính), và block `CLAUDE.md` cho repo adopt. Không có gì được gọi từ xa — copy, sửa, sở hữu. |
+| [`tools/`](tools/) | `colab` — một CLI nhỏ (tùy chọn): adopt một repo, claim issue, cấp port, quản lý worktree, và merge nhánh đã xong vào trunk khi repo cho phép. State JSON, không dependency. Tham chiếu các lệnh: [`tools/README.md`](tools/README.md). |
+| [`audit/`](audit/) | Trình kiểm tra conformance từ bên ngoài. Đọc mọi repo của bạn — mọi owner, kể cả repo local-only — và báo drift trong một lần chạy. Chỉ cảnh báo. Thêm `--identity` thì quét cả description và topic của repo public — thứ mà không git hook nào nhìn thấy được. Thêm `--batch-history` thì hiện số liệu batch landing đo được của từng repo, chỉ cảnh báo theo ngưỡng repo tự khai báo. Ý nghĩa từng check: [`audit/README.md`](audit/README.md). |
+| [`skills/`](skills/) | Luồng phiên làm việc — xem [*Phiên làm việc đầu tiên*](#phiên-làm-việc-đầu-tiên). Là các thư mục `SKILL.md` thuần; `install.sh` link chúng vào từng coding agent bạn chọn. |
+| [`engines/`](engines/) | Mỗi coding agent một file dữ liệu nhỏ: skill cấp user đặt ở đâu, gọi skill thế nào, agent hỗ trợ gì. Thêm engine là thêm một file — [`engines/README.md`](engines/README.md). |
+| [`install.sh`](install.sh) | Cài đặt cho **máy của bạn**: skills, CLI `colab`, hook pre-commit, danh sách fleet. Idempotent; `--dry` cho xem trước mọi thứ. |
 
 ## Cài đặt máy
 
-Làm một lần cho mỗi máy, trước khi adopt handbook vào repo nào.
+Làm một lần cho mỗi máy. Clone vào chỗ ở lâu dài — các skill là symlink trỏ
+*thẳng vào working tree này*, nên repo đang checkout cái gì thì mọi phiên dùng
+đúng bản skill đó. `install.sh` kiểm tra đủ điều kiện trước khi đụng vào gì,
+không bao giờ ghi đè thứ nó không tạo ra, và `--dry` in kế hoạch ra trước.
 
-**Cần có sẵn:** `git`; `node` ≥ 18 (`.nvmrc` ghim 22 — đúng bản CI ở đây chạy);
-`gh` và phải **đăng nhập rồi** (`gh auth login`) — claim issue, các skill và
-phần audit repo remote đều vô dụng nếu thiếu, mà lỗi thì mãi về sau mới hiện ra
-dưới dạng khó hiểu; `gitleaks` chỉ cần nếu bạn muốn bật hook pre-commit.
-`install.sh` kiểm tra hết những thứ này và báo cái nào thiếu *trước khi* đụng
-vào bất cứ gì.
+**Bạn nhận phiên bản nào.** `main` chạy trước bản phát hành chính thức cuối
+cùng, nên lần cài đầu tiên từ một bản clone mới sẽ checkout **tag phát hành
+chính thức mới nhất** (`vX.Y.Z`, không bao giờ là bản ứng viên) rồi cài từ đó —
+giống mặc định của npm. Muốn theo `main`, kể cả phần chưa phát hành, thì chạy
+lần cài đầu với `--trunk`. Lần chạy nào cũng in ra bạn đang ở bản nào. Đổi về
+sau đều phải chủ động:
 
-**1. Clone vào chỗ ở lâu dài** — để chung với đống code của bạn, đừng để trong
-thư mục tạm.
+- lên bản phát hành mới hơn: `./install.sh --release`;
+- từ một bản phát hành quay về `main`: `git checkout main && ./install.sh --trunk`
+  (installer của bản phát hành cũ không biết `--trunk`, nên checkout `main` trước).
+
+Clone đang có thay đổi chưa commit thì không bao giờ bị chuyển, và chạy lại
+không kèm flag nào thì giữ nguyên thứ đang checkout.
+
+### Chọn engine
+
+Các skill là thư mục `SKILL.md` thuần, chỉ gọi `git`, `gh` và `colab`; coding
+agent nào đọc được skill thì chạy được chúng. Khác nhau là **mỗi agent tìm
+skill ở đâu**, nên bản cài sẽ hỏi. Ở terminal, `./install.sh` liệt kê các
+engine nó biết và cho bạn chọn một hoặc nhiều, lựa chọn cuối là *other: give a
+path*. Chạy không người trông thì nói bằng flag:
 
 ```sh
-git clone https://github.com/futurelastic/colab-handbook.git ~/code/colab-handbook
-cd ~/code/colab-handbook
+./install.sh --engine claude              # Claude Code → ~/.claude/skills
+./install.sh --engine claude,codex        # cả hai
+./install.sh --skills-dir ~/my-agent/skills   # agent khác: bạn đưa thư mục của nó
 ```
 
-**Bản clone này là hạ tầng, không phải file tải về xem cho biết.** Các skill
-được cài bằng symlink trỏ *thẳng vào working tree này*: xoá clone đi là mọi
-phiên trên máy mất skill, và repo đang checkout nhánh nào thì mọi phiên dùng
-đúng bản skill của nhánh đó. Nên khi không trực tiếp sửa handbook, hãy để nó ở
-`main`. `install.sh` sẽ cảnh báo nếu thấy mình đang nằm trong `/tmp`,
-`~/Downloads` hay `~/Desktop`.
+| Engine | Thư mục skill | Gọi | Cần làm gì để skill chạy được |
+|---|---|---|---|
+| Claude Code (`claude`) | `~/.claude/skills` | `/code-start` | Không cần gì. Bản cài cấp user này **thắng** `.claude/skills/<name>` cùng tên của repo (thứ tự ưu tiên là enterprise > personal > project), nên muốn dùng bản của repo thì đổi tên nó. |
+| OpenAI Codex (`codex`) | `~/.agents/skills` | `$code-start` | Sandbox mặc định không có mạng nên `gh` lỗi: đặt `[sandbox_workspace_write] network_access = true` trong `~/.codex/config.toml`. Số liệu lấy từ tài liệu của Codex; chưa được xác minh bằng một lần chạy trên máy sạch. |
+| agent khác | `--skills-dir <path>` | theo cách của agent | Shell của agent cần có mạng cho `gh`. Thư mục được ghi nhớ trong `~/.colab/skills-dirs`. |
 
-**2. Cài.**
-
-```sh
-./install.sh --all --dry   # xem trước sẽ làm gì; không thay đổi gì cả
-./install.sh --all         # skills + CLI colab + hook pre-commit + danh sách repo
-```
-
-`--all` là lựa chọn nên dùng cho lần chạy đầu. Mọi thứ nó làm đều là symlink
-hoặc copy, chạy lại bao nhiêu lần cũng được, và không bao giờ ghi đè thứ nó
-không tạo ra — skill của riêng bạn, hay `~/.colab/repos.txt` đã có sẵn, đều được
-giữ nguyên kèm một dòng cảnh báo. Chạy trơn `./install.sh` thì chỉ cài skills,
-nếu bạn thật sự chỉ cần bấy nhiêu.
+Chạy lại không flag và không có terminal thì giữ mọi engine đã thấy được link
+sẵn, nên máy đã cài không thay đổi gì. Không thấy engine nào thì cài cho Claude
+Code và nói rõ điều đó. Thông tin từng engine nằm trong [`engines/`](engines/),
+mỗi engine một file — thư mục đó là nguồn của bảng trên.
 
 | Flag | Làm gì |
 |---|---|
-| *(không có)* | Symlink `skills/` vào `~/.claude/skills/`, để mở repo nào cũng có. |
-| `--tools` | Cài một CLI theo hai cách: một **symlink** ở `~/.local/bin/colab` cho các phiên làm việc của bạn (có kiểm tra thư mục đó thật sự nằm trong `PATH` không, thiếu thì in ra đúng dòng cần thêm), cộng một **bản đóng băng** có đóng dấu ở `~/.colab/bin/colab` cho các service luôn-bật — xem ngay dưới. |
-| `--hooks` | Trỏ git của clone này vào `.githooks/`, ở đó `pre-commit` chạy lần lượt mọi check trong `pre-commit.d/` — quét secret bằng gitleaks, và quét danh tính (identity) vốn cần một danh sách từ khoá do bạn cấp bằng đường dẫn và giữ NGOÀI mọi repo (xem [`templates/README.md`](templates/README.md)). `core.hooksPath` nằm trong `.git/config` nên là cấu hình per-clone, per-máy, không đi theo repo. |
-| `--fleet` | Tạo `~/.colab/repos.txt` từ `audit/repos.txt`, chỉ khi file chưa tồn tại. Danh sách đó cố tình nằm ngoài repo: nó ghi tên các repo private của bạn, còn repo này thì public. |
+| *(không có)* | Symlink `skills/` vào thư mục cấp user của từng engine đã chọn, để mở repo nào cũng có. Ở terminal thì hỏi; không thì giữ những gì đã link (xem [*Chọn engine*](#chọn-engine)). |
+| `--engine <id>[,<id>]` | Cài cho các engine này (`claude`, `codex` — các file trong `engines/`), không hỏi. |
+| `--skills-dir <path>` | Cài thêm vào thư mục này, cho agent mà `engines/` chưa biết. |
+| `--tools` | CLI `colab` cài hai lần: một **symlink** ở `~/.local/bin/colab` cho các phiên làm việc của bạn (in sẵn dòng `PATH` nếu cần), và một **bản đóng băng** có đóng dấu ở `~/.colab/bin/colab` cho các service luôn-bật. Đồng thời tạo `~/.colab/state.json` rỗng nếu chưa có. |
+| `--hooks` | Trỏ git của clone này vào `.githooks/`: quét secret bằng gitleaks, và quét danh tính với danh sách từ khoá do bạn giữ NGOÀI mọi repo (xem [`templates/README.md`](templates/README.md)). |
+| `--fleet` | Tạo `~/.colab/repos.txt` chỉ chứa ghi chú định dạng, nếu chưa có. Nó cố tình nằm trên máy vì nó ghi tên các repo private của bạn; `colab register` mới là thứ điền vào. |
 | `--all` | `--tools --hooks --fleet`. |
-| `--notify-url <url>` | Ghi `notifyUrl` vào `~/.colab/config.json` bằng URL nhận event của một observer chạy trên máy, chỉ khi khoá đó chưa có — giá trị đang có không bao giờ bị ghi đè. Không truyền flag thì `--tools` lấy URL từ `~/.colab/notify-endpoint` nếu observer trên máy đã khai ở đó; không có thì in rõ `notifyUrl` đang trống và sẽ mất những event nào. Xem [`tools/README.md`](tools/README.md#notifyurl--optional-event-push-off-by-default). |
-| `--dry` | In ra sẽ làm gì, không thay đổi gì. Ghép được với mọi flag trên. |
+| `--notify-url <url>` | Thêm `<url>` vào `notifyUrl` trong `~/.colab/config.json` nếu khoá đó chưa có URL này; không bao giờ xoá hay ghi đè mục đã có. Xem [`tools/README.md`](tools/README.md#notifyurl--optional-event-push-off-by-default). |
+| `--release` | Checkout clone này về tag phát hành chính thức mới nhất, rồi cài. Là mặc định cho lần cài đầu từ một bản clone mới. |
+| `--trunk` | Checkout `main` rồi cài, kể cả phần chưa phát hành — `@next` của bản clone. |
+| `--dry` | In ra sẽ làm gì, không thay đổi gì. Ghép được với các flag trên. |
+| `--check` | Báo cáo sức khoẻ **chỉ đọc** cho một lần cài trước đó — xem bên dưới. Không nhận flag nào khác; exit 1 nếu có dòng ✗. |
 
-**Service luôn-bật phải gọi `~/.colab/bin/colab`.** Bản CLI symlink chạy theo
-đúng nhánh mà clone này đang checkout — với một phiên làm việc của con người thì
-đó là chủ đích, nhưng với thứ sống lâu hơn một phiên thì đó là sai. Một daemon,
-một launch agent hay một runner headless bật từ mấy tháng trước sẽ âm thầm đổi
-hành vi chỉ vì ai đó checkout một nhánh chẳng liên quan, mà không có gì báo cả:
-tiến trình vẫn chạy, chỉ là chạy khác đi. Nên `--tools` còn ghi thêm một **bản
-copy** vào `~/.colab/bin/` (có tôn trọng `COLAB_HOME`), đóng dấu version handbook
-mà nó được lấy ra — hoặc, khi cây làm việc đó đang đi trước tag gần nhất, đóng dấu
-đúng commit mà nó được lấy ra (`v1.7.0-2-gc8436c6`) kèm một cảnh báo, vì không
-version phát hành nào mô tả đúng đống byte đó. Bản copy đó không bao giờ tự thay đổi.
+**Service luôn-bật (launch agent, daemon, runner headless) phải gọi
+`~/.colab/bin/colab`, không gọi symlink**, vì symlink chạy theo đúng nhánh mà
+clone này đang checkout. Bản đóng băng không bao giờ tự thay đổi: `colab update`
+báo khi nó tụt sau một thay đổi CLI đã phát hành, và chạy lại `./install.sh
+--tools` để làm mới. Vì sao lại làm vậy:
+[`tools/README.md`](tools/README.md#install).
 
-Vì vậy làm mới nó là một hành động chủ ý, không phải hệ quả phụ: chạy lại
-`./install.sh --tools`. `colab update` sẽ cho biết khi nào đến lúc. **`behind`
-nghĩa là đã có một thay đổi CLI ĐÃ PHÁT HÀNH mà máy này chưa có** — phép so sánh
-chạy tới tag gần nhất, nên một bản phát hành không đụng gì tới code CLI sẽ không
-càm ràm bạn, mà công việc chưa phát hành trong chính checkout của bạn cũng vậy.
-(Vế sau chính là lý do mốc trên là tag chứ không phải `HEAD`: đo tới `HEAD` khiến
-mọi máy bị đánh dấu cũ suốt quãng từ lúc commit CLI tới tag kế tiếp, mà cách khắc
-phục được quảng cáo lại copy *từ* chính cây làm việc đó — nên trên máy đang phát
-triển handbook, nó khuyên các service nạp code chưa phát hành.) Nó không bao giờ
-ghi đè bản copy, kể cả với `--apply`: đó là bộ công cụ mà các service đang chạy
-của bạn đang thực thi. `colab --version` cho biết bạn đang nói chuyện với bản nào (hoặc `npm package` khi
-cài qua `npx`/`npm i`), kèm phiên bản của chính bản đó.
+**Chỉ cần CLI, không cần skill** thì có trên npm: **`@futurelastic/colab-handbook`**.
+Chưa có bản phát hành chính thức nào lên npm, nên tag mặc định `latest` chỉ là
+bản giữ chỗ; hãy cài từ **`@next`**, các bản ứng viên: `npx
+@futurelastic/colab-handbook@next <lệnh>`, hoặc `npm i -g
+@futurelastic/colab-handbook@next`. Lệnh gõ vẫn là `colab`. Skill không nằm trong package; chúng cài từ một bản clone, vì chúng là
+symlink trỏ vào working tree của bản clone đó.
 
-**3. Kiểm lại, rồi chỉ cho audit biết phải soi repo nào.**
+### Kiểm tra bản cài
 
 ```sh
-colab --help                 # không thấy lệnh? sửa PATH — bước 2 in sẵn dòng cần thêm
-colab --version              # colab nào đây — working tree, bản đóng băng hay npm package — và phiên bản của nó
-$EDITOR ~/.colab/repos.txt   # thay các dòng ví dụ bằng repo của bạn
-node audit/audit.mjs         # báo cáo conformance cho toàn bộ fleet
-colab update                 # các bản copy có đóng dấu đã tụt lại — kể cả CLI đóng băng
+colab --version          # colab nào đang trả lời — working tree, bản đóng băng hay npm package — và phiên bản của nó
+./install.sh --check     # chỉ đọc; exit 1 nếu có dòng ✗
+node audit/audit.mjs     # báo cáo conformance cho mọi repo đã đăng ký
+colab update             # các bản copy có đóng dấu đã tụt lại, kể cả CLI đóng băng
 ```
 
-Xong thì đọc [`CONVENTIONS.md`](CONVENTIONS.md): mất ~15 phút, và là file chuẩn
-tắc duy nhất ở đây.
-
-## Adopt vào một repo
-
-Bản rút gọn — checklist đầy đủ ở
-[`CONVENTIONS.md` §9](CONVENTIONS.md#9-adopting-this):
-
-1. Trả lời câu 1 một cách trung thực (có production **hôm nay** không, chứ
-   không phải "sắp có").
-2. Thêm `.github/project.yml`. `colab adopt` hỏi năm câu rồi ghi file giùm bạn —
-   nó dừng ở phần descriptor và in ra phần còn lại của danh sách này, vì mấy
-   bước sau không phải việc của nó.
-3. `colab labels --ensure` — các label quy ước không có sẵn, và không phải chỉ
-   một cái. Một check mà label của nó chưa từng được tạo thì không bao giờ chạy
-   được.
-4. Dán [`templates/repo-CLAUDE-block.md`](templates/repo-CLAUDE-block.md) vào
-   `CLAUDE.md` của repo — đây là cách duy nhất để agent phát hiện ra bộ quy ước
-   này.
-5. Đảm bảo CI đạt hai kết quả bắt buộc: quét secret và build, với phiên bản
-   toolchain **resolve từ manifest của chính repo** — không bao giờ hardcode.
-   Copy template nếu thấy tiện.
-
-Nhánh có sẵn từ trước được **giữ nguyên** (grandfathered). Đừng đổi tên gì cả.
-
-**Làm việc trong repo không phải của mình?** Nếu không thể commit các file này vào đó,
-`colab adopt --local` giữ mọi thứ trong bản clone local của bạn, không có gì lọt vào lịch sử
-của chủ repo — xem
-[*Working in a repo you don't own*](CONVENTIONS.md#working-in-a-repo-you-dont-own).
+`--check` báo theo từng engine: bao nhiêu skill đã link, thiếu hay hỏng, kèm
+các lưu ý riêng của engine đó (ví dụ mạng trong sandbox của Codex). Nó cũng báo bản đóng băng có tụt sau bản phát hành mới nhất không và lệnh nào
+nó không chạy được, file state có tồn tại không, đã đăng ký repo nào chưa, cả
+hai hooklet pre-commit có chạy được không, và `notifyUrl` có đang trống (hoặc
+thiếu một URL) trong khi một observer trên máy đã khai endpoint không. ✗ nghĩa là thứ đã cài đang cũ
+hoặc không dùng được; ⚠ nghĩa là có thứ chưa từng được cài, có thể là cố ý hoặc
+chỉ là chưa làm tới — nên một bản cài mới đúng, chưa đăng ký repo nào và chưa có
+danh sách từ khoá danh tính, sẽ ra các dòng ⚠ và exit 0. Nó không bao giờ tự làm
+mới gì cả. `--check` không có trong v1.11.0 trở về trước; ở những bản đó, hãy theo
+`main` để có nó.
 
 ## Vì sao ép buộc ít vậy
 
-Các repo private của chúng ta nằm trên gói GitHub không có branch protection —
-không thể cấm push vào `main`. Nên handbook này không giả vờ ép buộc; nó làm
-cho việc **tuân thủ rẻ và việc kiểm tra rẻ**. Audit tool báo drift; quy ước
-giải thích *vì sao* từng luật tồn tại để bạn tự phán đoán khi nào đáng phá luật.
-Khi phá, hãy sửa tài liệu trong cùng PR — một tài liệu mô tả một repo không tồn
-tại là thứ tệ nhất trong nghề này.
+Không phải gói GitHub nào, owner nào trong một fleet cũng có branch protection,
+nên handbook này không dựa vào nó. Thay vào đó nó làm cho việc **tuân thủ rẻ và
+việc kiểm tra rẻ**: audit báo drift, còn quy ước giải thích *vì sao* từng luật
+tồn tại để bạn tự phán đoán khi nào đáng phá luật. Khi phá, hãy sửa tài liệu
+trong cùng thay đổi đó — một tài liệu mô tả một repo không tồn tại là thứ tệ
+nhất trong nghề này.
 
-**Có hai thứ thì chặn thật, và ranh giới đó là cố ý.** Git hook thì từ chối:
-một bản quét secret, và một bản quét danh tính chặn không cho tên máy, đường dẫn
-home hay tên khách hàng lọt vào một repo public. Chúng canh phần **phát hành ra
-ngoài** — sai lầm duy nhất không thể sửa được, vì history không thu hồi lại được
-một khi đã có người clone. Mọi thứ thuộc về *conformance* vẫn chỉ là cảnh báo:
-sai một quy ước thì tốn một cuộc trao đổi, còn sai chuyện phát hành thì tốn vĩnh
-viễn.
+**Một danh sách ngắn thì chặn thật, và là cố ý:**
+
+- **Phát hành ra ngoài.** Git hook từ chối secret, và bản quét danh tính chặn
+  tên máy, đường dẫn home hay tên khách hàng lọt vào một repo public. History
+  không thu hồi lại được một khi đã có người clone.
+- **Các cổng quanh cú merge**, do `colab` canh: người phải đồng ý trước khi
+  merge (trừ khi repo đã cấp `auto-trunk` hoặc thay đổi chỉ là docs), phải có
+  quyền cấp trước khi một migration được ship, và release không bao giờ đi kèm
+  cú merge.
+
+Mọi thứ khác là mặc định — một cách làm tốt — vì sai một quy ước thì chỉ tốn
+một cuộc trao đổi.
 
 ## Giấy phép
 

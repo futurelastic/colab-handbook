@@ -297,21 +297,70 @@ function claimRemote(repo) {
 }
 
 /**
- * Every branch head on `remoteName`, asked of the remote directly (`ls-remote --heads`, no fetch, no
- * local cache) — the claim record another machine can read (#325). Unlike `existingBranchRef`, a
- * failed ask is NOT "no branches": it returns `{ ok: false, stderr }` so the caller can refuse
- * (fail closed) instead of reading an unreachable remote as clear ground.
- * `{ ok: true, heads: [{ branch, sha }] }` otherwise, `sha` short (7).
+ * Every branch head on `remoteName` — plus every claim ref (`refs/claims/<branch>`, #550) — asked
+ * of the remote directly (`ls-remote`, no fetch, no local cache): the claim record another machine
+ * can read (#325). Unlike `existingBranchRef`, a failed ask is NOT "no branches": it returns
+ * `{ ok: false, stderr }` so the caller can refuse (fail closed) instead of reading an unreachable
+ * remote as clear ground. `{ ok: true, heads: [{ branch, sha, claimRef? }] }` otherwise, `sha` short
+ * (7) — `parseRemoteHeads`.
  */
 function remoteHeads(repo, remoteName) {
-  const r = git(['ls-remote', '--heads', remoteName], repo, { timeoutMs: 60_000 });
+  const r = git(['ls-remote', remoteName, 'refs/heads/*', `${CLAIM_REF_PREFIX}*`], repo, { timeoutMs: 60_000 });
   if (!r.ok) return { ok: false, stderr: r.stderr || (r.timedOut ? 'ls-remote timed out' : `exit ${r.code}`) };
-  const heads = [];
-  for (const line of String(r.stdout || '').split('\n')) {
-    const m = line.match(/^([0-9a-f]{7,})\s+refs\/heads\/(.+)$/);
-    if (m) heads.push({ branch: m[2], sha: m[1].slice(0, 7) });
+  return { ok: true, heads: parseRemoteHeads(r.stdout) };
+}
+
+/**
+ * #550 — where `colab worktree new` records a claim at cut: `refs/claims/<branch>`, NOT the branch.
+ * A push to `refs/heads/<branch>` fires every CI `push` trigger, and at cut the branch is identical
+ * to trunk, so each claim re-ran the full suite on a commit trunk had already tested (measured: ~209
+ * of 230 duplicate runs in one org over 3 days, one sha run 8 times). GitHub fires `push` workflows
+ * for branches and tags only, so a ref outside both namespaces is a claim record every machine can
+ * still `ls-remote`, at zero CI cost (probed live 2026-10-07: a refs/claims push started no run).
+ * The branch itself reaches the remote at its first real push (code-wrap), where CI is wanted.
+ */
+const CLAIM_REF_PREFIX = 'refs/claims/';
+function claimRef(branch) { return `${CLAIM_REF_PREFIX}${branch}`; }
+
+/**
+ * `ls-remote` output → `[{ branch, sha, claimRef? }]`, short sha. A `refs/claims/<b>` entry reads as
+ * branch `<b>` with `claimRef: true`; when the same name is ALSO a real branch, only the branch row is
+ * kept (it is the stronger record — it carries commits). Pure, for tests.
+ */
+function parseRemoteHeads(stdout) {
+  const heads = new Map();
+  const claims = new Map();
+  for (const line of String(stdout || '').split('\n')) {
+    const m = line.match(/^([0-9a-f]{7,})\s+refs\/(heads|claims)\/(.+)$/);
+    if (!m) continue;
+    if (m[2] === 'heads') heads.set(m[3], { branch: m[3], sha: m[1].slice(0, 7) });
+    else claims.set(m[3], { branch: m[3], sha: m[1].slice(0, 7), claimRef: true });
   }
-  return { ok: true, heads };
+  for (const [b, c] of claims) if (!heads.has(b)) heads.set(b, c);
+  return [...heads.values()];
+}
+
+/**
+ * Push the claim record for `branch` (#550): `<branch>:refs/claims/<branch>`, CREATE-ONLY
+ * (`--force-with-lease=<ref>:` with an empty expect), so two machines cutting one name still race on
+ * a real compare-and-swap and the loser is rejected. No `-u`: there is no remote branch to track yet.
+ */
+function pushClaimRef(repo, remote, branch) {
+  const ref = claimRef(branch);
+  return git(['push', remote, `--force-with-lease=${ref}:`, `refs/heads/${branch}:${ref}`], repo, { timeoutMs: 120_000 });
+}
+
+/**
+ * Delete the claim record for `branch` from `remote` (#550). Idempotent: an absent ref is success
+ * (nothing to release), so teardown never fails on a claim that was never pushed or already gone.
+ */
+function deleteClaimRef(repo, remote, branch) {
+  const ref = claimRef(branch);
+  const ls = git(['ls-remote', remote, ref], repo, { timeoutMs: 60_000 });
+  if (!ls.ok) return { ok: false, stderr: ls.stderr || `exit ${ls.code}` };
+  if (!String(ls.stdout || '').trim()) return { ok: true, absent: true };
+  const r = git(['push', remote, '--delete', ref], repo, { timeoutMs: 120_000 });
+  return { ok: r.ok, stderr: r.stderr };
 }
 
 /** List worktree paths registered in a repo (porcelain). */
@@ -447,8 +496,9 @@ function dirtyAny(wtPath) {
 
 /**
  * #344: is gh usable — and if not, WHY. `{ ok, reason }`, reason `null` | `'missing'` (no gh binary)
- * | `'no-credential'` (gh is there, but the credential it would actually use does not work). Cached
- * per process.
+ * | `'no-credential'` (gh is there, but the credential it would actually use does not work)
+ * | `'rate-limited'` (#516: the credential works, its quota is spent — `resetAt` epoch ms or null).
+ * Cached per process.
  *
  * A bare `gh auth status` is the wrong question: it exits 1 when ANY configured account is broken,
  * even when the one gh actually uses is fine (measured: a valid `GH_TOKEN` plus an expired, inactive
@@ -469,7 +519,27 @@ function ghState() {
     if (_ghLogin === undefined) _ghLogin = who.stdout;
     return (_ghState = { ok: true, reason: null });
   }
+  // #516: a spent QUOTA is not a broken credential. `gh api user` answers 403/429 "API rate limit
+  // exceeded" (or a "secondary rate limit") for a token that is perfectly valid — and `gh auth status`
+  // then calls it invalid too. Reported as `no-credential`, that sent an operator hunting a broken
+  // token when the cure is to wait for the reset or switch account. Classified by the SAME rule
+  // ci-wait reads a REST response with (#495), so both name a rate limit identically.
+  const status = /\bHTTP (\d{3})\b/.exec(who.stderr || '');
+  const cls = require('./ci-wait').classifyResponse({ status: status ? Number(status[1]) : null, stderr: who.stderr || '' });
+  if (cls.kind === 'rate-limited') return (_ghState = { ok: false, reason: 'rate-limited', resetAt: ghRateLimitReset() });
   return (_ghState = { ok: false, reason: 'no-credential' });
+}
+
+/**
+ * #516: when the REST core quota resets, as epoch ms — or null when it cannot be read or is not the
+ * limit in force (quota left means a SECONDARY rate limit, whose end GitHub does not publish).
+ * `GET /rate_limit` does not count against the quota, so it answers even while `api user` cannot.
+ */
+function ghRateLimitReset() {
+  const r = gh(['api', 'rate_limit', '-q', '.resources.core | "\\(.remaining) \\(.reset)"']);
+  const m = r.ok ? /^(\d+)\s+(\d+)$/.exec((r.stdout || '').trim()) : null;
+  if (!m || Number(m[1]) > 0) return null;
+  return Number(m[2]) * 1000;
 }
 
 function ghAvailable() {
@@ -865,6 +935,10 @@ function ghRunForSha(repo, branch, limit = 10, remote = remoteInfo(repo).name ||
  * branch head.
  */
 function ghRunsForCommit(repo, branch, sha, limit = 10) {
+  // #529: every row filter below is strict equality against a 40-hex head_sha. An abbreviated sha
+  // would filter to [] — read by every caller as "no runs yet" — so resolve it, and when it cannot
+  // be resolved answer null ("the read failed"), never an empty set.
+  sha = fullSha(repo, sha);
   if (!sha) return null;
 
   // #495: one REST call (`actions/runs?head_sha=&branch=`) instead of `gh run list`'s two (runs +
@@ -886,7 +960,8 @@ function ghRunsForCommit(repo, branch, sha, limit = 10) {
     // does not own) before it computes a verdict, and can only do that if the row says so.
     // workflowDatabaseId is additive (#510): the cure rule's same-workflow test reads the workflow's
     // id, never its display name; mapped to `workflowId`, the name the REST row (ci-wait restRow) uses.
-    '--json', 'headSha,status,conclusion,createdAt,databaseId,workflowName,workflowDatabaseId,event'], { cwd: repo });
+    // updatedAt is additive (#555): a finished run's completion time, the lone-member wait's anchor.
+    '--json', 'headSha,status,conclusion,createdAt,updatedAt,databaseId,workflowName,workflowDatabaseId,event'], { cwd: repo });
   if (!r.ok) return null;
   let runs;
   try { runs = JSON.parse(r.stdout); } catch (_) { return null; }
@@ -920,11 +995,28 @@ function ghApiConditional(repo, apiPath, etag) {
 }
 
 /**
+ * #529: `sha` as the full 40-hex object name the Actions API reports as `head_sha`, or null. A
+ * 40-hex value passes through (lowercased) without a local lookup — the commit may exist only on
+ * the remote. Anything shorter is resolved with `git rev-parse --verify <sha>^{commit}` in `repo`;
+ * unresolvable (unknown here, or ambiguous) is null. Never a prefix match: a short sha can be
+ * ambiguous across runs, and a match against the wrong run is worse than a refusal.
+ */
+function fullSha(repo, sha) {
+  const s = String(sha || '').trim();
+  if (/^[0-9a-f]{40}$/i.test(s)) return s.toLowerCase();
+  if (!/^[0-9a-f]{4,39}$/i.test(s)) return null;
+  const r = git(['rev-parse', '--verify', '--quiet', `${s}^{commit}`], repo);
+  const out = r.ok ? r.stdout.trim() : '';
+  return /^[0-9a-f]{40}$/.test(out) ? out : null;
+}
+
+/**
  * Every workflow run at `sha` in ONE REST call (#495) — `actions/runs?head_sha=<sha>[&branch=<b>]`,
  * rows in `gh run list --json` shape. Returns `{ rows }` on success, `{ rateLimited: true }` on a
  * rate limit, `{}` on any other failure (the caller decides whether to fall back).
  */
 function ghRunsAtShaRest(repo, sha, branch) {
+  sha = fullSha(repo, sha); // #529: the API's head_sha is 40-hex; an abbreviated one matches no row
   if (!sha) return {};
   const ciWait = require('./ci-wait');
   const q = `head_sha=${encodeURIComponent(sha)}${branch ? `&branch=${encodeURIComponent(branch)}` : ''}&per_page=100`;
@@ -969,8 +1061,9 @@ function ghRunForCommit(repo, branch, sha, limit = 10, opts = {}) {
  */
 function ghRunsAtCommit(repo, sha, limit = 100) {
   if (!sha) return null;
+  // updatedAt is additive (#566): release finalize places a run around the candidate's cut instant.
   const r = gh(['run', 'list', '--commit', sha, '-L', String(limit),
-    '--json', 'headSha,status,conclusion,createdAt,databaseId,workflowName,event'], { cwd: repo });
+    '--json', 'headSha,status,conclusion,createdAt,updatedAt,databaseId,workflowName,event'], { cwd: repo });
   if (!r.ok) return null;
   let runs;
   try { runs = JSON.parse(r.stdout); } catch (_) { return null; }
@@ -1051,7 +1144,8 @@ function excludedRunSummary(rows) {
  * #503: `opts.verifying` (a tools/lib/verify-runs.js policy, `{gate, ignore}`) narrows the owned rows
  * to the runs that VERIFY the code — push / pull-request triggered, or the declared set — BEFORE the
  * per-workflow reduction; the rest (a `workflow_run` release, a scheduled finalize, a deploy) ride
- * along as `setAside`, each with its reason. Opt-in: without `opts.verifying` nothing changes, so
+ * along as `setAside`, each with its reason. #567: a `workflow_dispatch` run the policy's
+ * `dispatchVerifies` resolver rescues (lost push event) is counted and named in `dispatchCounted`. Opt-in: without `opts.verifying` nothing changes, so
  * readers that never asked (release finalize, the base-ci advisory, ci-grant) read exactly as before.
  */
 function summarizeRunsForCommit(allForSha, sha, opts = {}) {
@@ -1059,16 +1153,19 @@ function summarizeRunsForCommit(allForSha, sha, opts = {}) {
   const dropped = allForSha.filter((x) => !isRepoOwnedRun(x));
   let owned = dropped.length ? allForSha.filter(isRepoOwnedRun) : allForSha;
   let setAside = [];
+  let dispatchCounted = [];
   if (opts && opts.verifying) {
     const split = require('./verify-runs').splitVerifying(owned, opts.verifying);
     owned = split.counted;
     setAside = split.setAside;
+    dispatchCounted = split.dispatchCounted || [];
   }
   const { heads, superseded } = newestRunPerWorkflow(owned);
   const extra = {
     ...(dropped.length ? { excluded: excludedRunSummary(dropped) } : {}),
     ...(superseded.length ? { superseded: excludedRunSummary(superseded) } : {}),
     ...(setAside.length ? { setAside: excludedRunSummary(setAside) } : {}),
+    ...(dispatchCounted.length ? { dispatchCounted: excludedRunSummary(dispatchCounted) } : {}),
   };
   const r = summarizeRepoOwnedRuns(heads, sha);
   return { ...r, ...extra };
@@ -1287,10 +1384,10 @@ module.exports = {
   ghCommitCheckRuns, ghCheckRunAnnotations,
   run, git, repoRoot, mainRepoRoot, originUrl, remoteInfo, remoteName, remoteFor, remoteUrl, remoteProblem, _resetRemoteCache,
   detectTrunk, branchExists, branchRefs, existingBranchRef,
-  claimRemote, remoteHeads,
+  claimRemote, remoteHeads, parseRemoteHeads, CLAIM_REF_PREFIX, claimRef, pushClaimRef, deleteClaimRef,
   worktreeList, worktreeListDetailed, resolveWorktreePathForBranch, gitFailureLine,
   dirtyTracked, dirtyUntracked, dirtyAny,
-  ghAvailable, ghState, ghInstalled, ghApiConditional, ghRunsAtShaRest, ghIssueEdit, ghListLabels, ghOpenIssueNumbersByLabel, ghAssignedIssues,
+  ghAvailable, ghState, ghInstalled, ghApiConditional, ghRunsAtShaRest, fullSha, ghIssueEdit, ghListLabels, ghOpenIssueNumbersByLabel, ghAssignedIssues,
   ghCurrentLogin, ghIssueView, ghIssueComment, ghRunForSha, ghRunForCommit, ghRunsForCommit, ghRunsForRef, ghRunsAtCommit, ghRunForCommitAnyRef, commitTimeMs, ghRunsSince, summarizeRunsForCommit, isRepoOwnedRun,
   ghRunJobCount, ghRunJobs, ghWorkflowDispatch,
   ghIssueListByLabel, ghLabelDelete, ghLabelCreate, ghListLabelsDetailed, ghLabelEditDescription,

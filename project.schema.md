@@ -27,44 +27,37 @@ users**:
 - `C` — live, but the promotion itself ships it. `C` is `A` minus the tag.
 - `A` — live, and a deliberate release artifact (the tag) gates production.
 
-**A/B/C are labels, not grades.** Read naively `C` looks like a worse `B`, but
-`B` has no production at all — a tier B repo cannot break anything for users,
-because there are no users. The letters name *shapes*, not maturity, and moving
-from `B` to `C` is not a demotion any more than `C` to `A` is a promotion in
-quality. Pick the one that describes your pipeline truthfully; a repo claiming a
-gate it does not have is the failure this file exists to prevent.
+**A/B/C are labels, not grades.** The letters name *shapes*, not maturity, and moving from
+`B` to `C` is not a demotion any more than `C` to `A` is a promotion in quality. Pick the
+one that describes your pipeline truthfully; a repo claiming a gate it does not have is
+the failure this file exists to prevent.
 
 Whether production exists is the tier question. *How* it deploys — a tag, a
 `main` push, a human following a runbook — is [`deploy`](#deploy--required)'s
 job, and the two must agree.
 
-**`colab adopt` (#199) writes `tier` only when `exposure` ends the run still unanswered** —
-declined at an interactive prompt, or simply not among the axes a non-interactive run
+**`colab adopt` (#199) writes `tier` only when `exposure` ends the run still unanswered**
+— declined at an interactive prompt, or simply not among the axes a non-interactive run
 answered — and no `tier` key already exists. The written value is derived purely from
 `(production, deploy)` (`tools/lib/adopt.js:deriveTier`), never from `exposure`, with a
 comment naming how to answer `exposure` later. The normal path — `exposure` answered —
-never writes `tier` at all: nothing in `tools/colab` reads it, and a redundant key a later
-hand-edit can contradict is exactly the drift this axis exists to end. An already-declared
-`tier` is never touched.
+never writes `tier` at all: nothing in `tools/colab` reads it. An already-declared `tier`
+is never touched.
 
 **As of #144, [`exposure`](#exposure--optional) is the AXIS OF RECORD when declared —
-`tier` is a legacy read, not a second source of truth.** This is the breaking change the
-major version bump names. The precedence (`tools/lib/axis-authority.js`):
+`tier` is a legacy read, not a second source of truth.** The precedence
+(`tools/lib/axis-authority.js`):
 
 1. `exposure` declared → it governs gate count outright. `tier`, declared or not, is
    carried through unread by the derivation (though see the contradiction rule below).
-2. Else `tier` declared → gate count is DERIVED from it: `A → released`, `C → live`,
-   `B → null`. The `null` is deliberate, not an oversight — a bare `tier: B` carries no
-   derivable opinion about what consumes it (`none`, `self` and `released` are all
-   measured under `B` in this fleet), so nothing may guess which one it means.
-3. Neither declared → **a finding**: no axis of record. This replaces the old
-   unconditional "missing key(s): tier" — `tier` left the required-key list in this unit,
-   because `exposure` alone is now a complete answer.
+2. Else `tier` declared → gate count is DERIVED from it: `A → released`, `C → live`, `B →
+   null`. The `null` is deliberate, not an oversight — a bare `tier: B` carries no
+   derivable opinion about what consumes it, so nothing may guess which one it means.
+3. Neither declared → **a finding**: no axis of record.
 
-**`exposure` does NOT become required by this unit.** 16 of 17 repos in this handbook's own
-fleet have never declared it, and they see zero change: the legacy read reproduces
-pre-#144 behaviour byte for byte. Making `exposure` mandatory is a later, separate step
-(phase 3 of the epic tracking this model, CONVENTIONS.md [§2](CONVENTIONS.md#2-tiers)).
+**`exposure` does NOT become required by this unit.** Making `exposure` mandatory is a
+later, separate step (phase 3 of the epic tracking this model, CONVENTIONS.md
+[§2](CONVENTIONS.md#2-tiers)).
 
 **Both keys declared and agreeing is silent — carrying both is fine, and this repo's own
 descriptor (`tier: B` + `exposure: released`) models exactly that**, deliberately, so the
@@ -73,73 +66,57 @@ count is exactly one finding** naming the disagreement (`tier: A` is consistent 
 `exposure: released`; `tier: C` only with `exposure: live`; `tier: B` is consistent with
 every value, because a bare `B` never had an opinion to contradict).
 
-Why `tier → exposure` is a **function, not a bijection** — `A → released` holds, but
-`released → A` does not: `released` covers two legal shapes, a tag deploying to a live
-server (the historical `tier: A` shape) and adopters copying files out of a tag with no
-server at all (this repo's own shape). A descriptor that answers with `exposure` is
-answering a strictly more precise question than one that only ever answered with `tier`,
-which is why it is trusted first. Full precedence code and rationale:
-`tools/lib/axis-authority.js`.
+Why `tier → exposure` is a function, not a bijection, and the measurements behind this
+section: [ADR 539](docs/adr/539-schema-tier-rationale.md).
 
-**Which axis actually governs `trunk`, `production` and `deploy`, below.** The three
-fields that follow are worded in `tier`'s vocabulary because that was, historically, the
-only axis that constrained them, and the wording is kept for the descriptors that still
-speak only `tier`. But the rule that is actually enforced is dispatched by axis of
-record, not always by `tier`: on a descriptor that has declared `exposure`, the
-tier-voiced coherence checks below **do not run at all** — `exposure`'s own gate-contract
-table, in [`exposure`](#exposure--optional) below, is what governs trunk shape,
-`production`'s non-null-ness, and `deploy`'s legal values instead
-(`tools/lib/exposure-shape.js`, consumed by both the audit and `colab adopt`; the split
-point is `tools/lib/axis-authority.js`, whose own comment names it: "Runs ONLY on the
-tier-legacy path"). Read `trunk`/`production`/`deploy` below as the **legacy** shape, and
-`exposure`'s table as the current one when that key is declared.
+**Which axis actually governs `trunk`, `production` and `deploy`, below.** The rule that
+is actually enforced is dispatched by axis of record, not always by `tier`: on a
+descriptor that has declared `exposure`, the tier-voiced coherence checks below **do not
+run at all** — `exposure`'s own gate-contract table, in [`exposure`](#exposure--optional)
+below, is what governs trunk shape, `production`'s non-null-ness, and `deploy`'s legal
+values instead (`tools/lib/exposure-shape.js`, consumed by both the audit and `colab
+adopt`; the split point is `tools/lib/axis-authority.js`, whose own comment names it:
+"Runs ONLY on the tier-legacy path"). Read `trunk`/`production`/`deploy` below as the
+**legacy** shape, and `exposure`'s table as the current one when that key is declared.
 
 ### `trunk` — required
 
-The branch sessions merge into. `main` when `tier: B` — fixed, there is no
-second branch to distinguish it from. On `tier: A` it is `dev` **or**, when
-`deploy: tag`, `main` (see the exception below) — also fixed, for the same
-reason as B outside that one exception. Any other value on B or (outside the
-tag-gated exception) A is a finding.
+The branch sessions merge into. On `tier: B` (and `exposure: none`, or
+`released` with `production: null`) it is the repo's **default branch** —
+`main` by convention, but an existing repo's `master`, or any other spelling, is
+equally conforming (#522). What is enforced there is that it is the **only**
+long-lived branch: a `main` beside a non-`main` trunk is the two-branch shape and
+is a finding (`tools/lib/exposure-shape.js` `singleTrunkViolation`, read by both
+the audit and `colab adopt`; when the branch list cannot be read it fails closed
+to `main`). On `tier: A` it is `dev` **or**, when `deploy: tag`, `main` (see the
+exception below) — fixed. Any other value on (outside the tag-gated exception) A
+is a finding.
 
-**On `tier: C`, `trunk` is a declared setting, not a fixed spelling (#205).**
-What is enforced is the **two-branch split**, not the name: `trunk` must be a
-branch distinct from `main`, the release branch the promotion deploys to.
-`dev` is the **default** — the value `colab adopt` and the templates propose
-when nothing is said — but a repo that declares a different name (`develop`,
-say) is **conforming, not exempted**: no advisory, no "legacy" framing. It
-answered the question the same way `dev` would have. This is deliberately
-narrower than "any name is legal" — Tier B and (non-tag-gated) Tier A keep a
-single fixed value each, because there either is no second branch at all, or
-the tag itself already marks the release boundary. Only the one-gate shape
-(Tier C) has a second branch whose *existence*, not its *spelling*, is what the
-model measures. `tools/lib/exposure-shape.js`'s `evaluateLive` and
-`audit/audit.mjs`'s tier-C coherence check are the two places this is enforced;
-they agree by construction, not by two authors reading the same prose.
+**On `tier: C`, `trunk` is a declared setting, not a fixed spelling (#205).** What is
+enforced is the **two-branch split**, not the name: `trunk` must be a branch distinct from
+`main`, the release branch the promotion deploys to. `dev` is the **default** — the value
+`colab adopt` and the templates propose when nothing is said — but a repo that declares a
+different name (`develop`, say) is **conforming, not exempted**: no advisory, no "legacy"
+framing. This is deliberately narrower than "any name is legal" — (non-tag-gated) Tier A
+keeps a fixed value, and Tier B's single trunk may never sit beside a `main`.
+`tools/lib/exposure-shape.js`'s `evaluateLive` and `audit/audit.mjs`'s tier-C coherence
+check are the two places this is enforced; they agree by construction, not by two authors
+reading the same prose.
 
-This holds for hand-deployed Tier A repos too (`deploy: manual`), and the shape
-earns its keep there rather than being ceremony: `main` is **what is currently
-running on the host**, `dev` is where sessions land, and the `dev` → `main`
-promotion is the deliberate "I am about to deploy" act. Without automation,
-that merge is the only record of what shipped and when — collapsing the two
-branches would erase it.
+The two-branch split (`dev` → `main`) holds for hand-deployed Tier A repos too (`deploy: manual`).
 
-Tier C keeps the identical split for the identical reason, whatever its trunk
-is named. There `main` is literally what is live — the promotion deploys it —
-so collapsing the branches would remove the only moment at which anyone
-decides to ship.
+Tier C keeps the identical split, whatever its trunk is named.
 
-**The exception: a tag-gated Tier A may run a single trunk `main`.** When
-`deploy: tag`, the **tag** is the deliberate release artifact, so the tag itself
-marks the release boundary — the last `v*.*.*` is "what shipped and when", the
-job the `dev` → `main` split does on a hand-deployed repo. A second branch
-marking the same boundary is then redundant, so such a repo may land day-to-day
-work on `main` and cut releases by tag (a release script fast-forwards a
-long-lived release branch an external poller redeploys, or a workflow ships on
-the tag). The tier is defined by the promotion **gate** — a version tag — not by
-the trunk **name**. This applies **only** to `deploy: tag`: `manual` and
-`push-main` have no tag to mark the boundary, so they keep the `dev`/`main`
-split, and `main` on either of those is still a finding.
+**The exception: a tag-gated Tier A may run a single trunk `main`.** When `deploy: tag`,
+the **tag** is the deliberate release artifact, so the tag itself marks the release
+boundary — the last `v*.*.*` is "what shipped and when", the job the `dev` → `main` split
+does on a hand-deployed repo. A second branch marking the same boundary is then redundant,
+so such a repo may land day-to-day work on `main` and cut releases by tag (a release
+script fast-forwards a long-lived release branch an external poller redeploys, or a
+workflow ships on the tag). This applies **only** to `deploy: tag`: `manual` and
+`push-main` have no tag to mark the boundary, so they keep the `dev`/`main` split, and
+`main` on either of those is still a finding. Why, with the measurement: [ADR
+539](docs/adr/539-schema-trunk-deploy-rationale.md).
 
 ### `production` — required
 
@@ -167,10 +144,8 @@ test is "does a deploy target exist today?" ([CONVENTIONS.md §9](CONVENTIONS.md
 - `push-main` — a push to `main` **is** the deploy. The required value for
   [`tier: C`](#tier--optional-legacy), and a finding on `tier: A` — see below.
 
-`push-main` describes a real mechanism truthfully: for the repos using it,
-pushing `main` really does deploy. It has a home — **tier C is exactly this
-shape** — and the finding is on the **combination** `tier: A` + `push-main`,
-never on the value itself.
+`push-main` has a home — **tier C is exactly this shape** — and the finding is on the
+**combination** `tier: A` + `push-main`, never on the value itself.
 
 **It is a tier mismatch, not a bad way to deploy.** Deploying on a `main` push
 is a reasonable choice for plenty of software. What it cannot do is meet Tier
@@ -180,10 +155,8 @@ Where every push to `main` reaches users, there is no such artifact and no such
 gate, so a repo claiming Tier A is claiming a guarantee its pipeline does not
 provide. Options:
 
-1. **Retier to `C`** — usually the right answer. Tier C *is* this shape, so
-   nothing about the pipeline changes; the descriptor simply stops claiming a
-   gate that was never there. This is the option that did not exist when the
-   finding was first written.
+1. **Retier to `C`** — usually the right answer. Tier C *is* this shape, so nothing about
+   the pipeline changes; the descriptor simply stops claiming a gate that was never there.
 2. **Migrate the pipeline to a tag trigger** → `deploy: tag`, staying tier A.
    Choose this when the site has earned a release ritual someone will actually
    honour.
@@ -191,17 +164,10 @@ provide. Options:
    [`runbook:`](#runbook--required-when-an-out-of-ci-deploy-has-no-workflow). Not a downgrade — an
    accurate description, which is always worth more than a flattering one.
 
-A tag ritual nobody honours is worse than no tag ritual: it puts a gate in the
-docs and not in the pipeline, and then people trust the docs.
+Why `manual` exists, and why a tag ritual nobody honours is worse than none: [ADR
+539](docs/adr/539-schema-trunk-deploy-rationale.md).
 
-`manual` exists because the alternatives were both false. A hand-deployed live
-repo declaring `deploy: tag` fails the deploy-workflow rule; declaring `tier: B`
-forces `production: null`, which states that a live product does not exist. A
-repo whose documentation lies is the outcome this handbook exists to prevent
-([§8](CONVENTIONS.md#8-conformance-and-reconciliation)), so the vocabulary has
-to cover the case honestly.
-
-**`manual` grants no automation.** It is strictly *less* automated than `tag`,
+**[Hard — gate: colab promote refuses]** **`manual` grants no automation.** It is strictly *less* automated than `tag`,
 and the permission ladder treats it that way: `colab promote` allows an
 unattended promotion only on a `deploy: tag` repo, where promotion is
 verification-only. On a `manual` repo, promotion is the deliberate "I am about
@@ -231,11 +197,9 @@ file documents it:
   a tag pushed with `GITHUB_TOKEN` starts no `deploy-*.yml` — so it counts as the
   in-repo deploy path the same way (#454).
 
-It is required because an out-of-CI deploy nobody wrote down is how a repo ends
-up with exactly one person — or one poller nobody can find — able to ship it.
-Automated in-repo deploys document themselves in the workflow file; anything else
-has to be written down or it is not knowledge, it is folklore. Omit the key when
-an in-repo deploy workflow already answers "how does this reach production?".
+Omit the key when an in-repo deploy workflow already answers "how does this reach
+production?". Why a runbook is required: [ADR
+539](docs/adr/539-schema-trunk-deploy-rationale.md).
 
 ### `stack` — required
 
@@ -256,19 +220,14 @@ Additional **long-lived integration branches** — lines that accumulate work fo
 release far enough out that they are not merged into trunk for weeks. Empty and
 absent are the same thing, and absent is the normal case.
 
-Declaring a line does three things and no more: `colab worktree new --base <line>`
+**[Hard — gate: colab worktree new refuses]** Declaring a line does three things and no more: `colab worktree new --base <line>`
 will cut from it, `colab ship` merges a worktree back into **the base it was cut
 from**, and the line is guarded and exempted the way trunk is (no raw pushes, no
 branch-name regex, not a "ghost" when a workflow names it).
 
-**Why this is not `trunk`.** The tempting alternative is to let a repo declare its
-long-lived line as trunk and be done. That does not stay on the development side of
-the fence: on Tiers A and C, `trunk` **is** the production spine — it is the branch
-`colab promote` merges into the release branch. Naming the line as trunk points the
-promotion path straight at it, which is the opposite of the intent. So `trunk` stays
-tier-locked ([above](#trunk--required)) and this is a separate axis.
+`trunk` stays tier-locked ([above](#trunk--required)) and this is a separate axis.
 
-**The guarantee: nothing in the promote / tag / deploy path reads this field.** A
+**[Hard — gate: colab ship refuses]** **The guarantee: nothing in the promote / tag / deploy path reads this field.** A
 branch on this axis cannot reach production by construction, not by discipline. The
 only way work on a line reaches users is for a human to merge that line into trunk
 and then promote — and `colab ship` refuses the line → trunk merge even under
@@ -280,11 +239,10 @@ on Tiers A and C, the trunk on Tier B), may not be the word `trunk` (a role, nev
 branch name), and **must exist as a branch**. A declared line nobody ever cut is the
 same failure as a release branch nothing consumes, so the audit reports it.
 
-CI on a line is checked but **advisory**: a line with no workflow triggering on push
-to it gets a warning, never a failure. Merges into it really do run zero CI, which is
-worth saying — but a line that is not yet gated is a normal early state, and failing
-the repo for it would push teams back to declaring the line nowhere, which is the
-state this field exists to end. Trunk's CI gate remains a hard requirement.
+**[Hard — gate: colab ship refuses]** CI on a line is checked but **advisory**: a line
+with no workflow triggering on push to it gets a warning, never a failure. Trunk's CI gate
+remains a hard requirement. Why, with the measurement: [ADR
+539](docs/adr/539-schema-lines-and-hosts-rationale.md).
 
 ### `releaseBranch` — optional
 
@@ -302,7 +260,7 @@ branch, which the poller watches and redeploys. Empty and absent are the same th
 and absent is the normal case — most Tier A repos deploy from `main` itself and need no
 extra name.
 
-**This is the opposite axis from [`integration`](#integration--optional), not a
+**[Hard — gate: colab worktree new refuses]** **This is the opposite axis from [`integration`](#integration--optional), not a
 variant of it.** An integration line *accumulates* development work over weeks; a
 release branch is *consumed* — a release script overwrites it wholesale on every tag —
 and it is a **production** ref, exactly the thing `integration:` guarantees never to
@@ -310,13 +268,8 @@ touch. A worktree may never be cut from it or shipped into it; declaring one her
 no such base (it is not added to the set [`allowedBases`](#integration--optional)
 computes).
 
-**Why it exists:** between releases, this branch is by construction an ancestor of
-trunk — it was fast-forwarded to trunk's tip as of the last tag, and trunk has since
-moved on. That is indistinguishable, by ancestry alone, from a spent session branch
-whose work already landed — which is exactly what `colab doctor`'s routine-maintenance
-list hunts for. Undeclared, `doctor` prints a ready-to-paste `git push origin --delete`
-for a ref a live deploy pipeline is polling; declaring it here is what lets `doctor`
-tell the two apart (issue #63).
+Why `releaseBranch` exists, with the incident: [ADR
+539](docs/adr/539-schema-lines-and-hosts-rationale.md).
 
 Validity: an entry may not be `trunk`'s value, may not be `main`, may not be the word
 `trunk` (a role, never a branch name), and **must exist as a branch**. Same fail-closed
@@ -352,22 +305,19 @@ What it changes, and what it does not:
   owner used a merge commit, squash or rebase; the next `colab deliver` treats that PR's
   head as the boundary and offers only what landed after it. A PR the owner closed unmerged
   is reported as a rejection, and nothing new is opened without `--reopen`.
-- **No colab command moves `owner.branch`.** `ship`, the ship batch and `promote` refuse a
+- **[Hard — gate: colab refuses a push]** **No colab command moves `owner.branch`.** `ship`, the ship batch and `promote` refuse a
   push to it, whatever the grant — `COLAB_HUMAN=1` does not lower this. A worktree may not be
   cut from it even if `integration:` lists it.
-- **A write to the owner's repo needs a human.** Opening or editing the PR requires
+- **[Hard — gate: colab deliver refuses]** **A write to the owner's repo needs a human.** Opening or editing the PR requires
   `COLAB_HUMAN=1`; `colab deliver --dry` only reads, so a scheduled driver may run it and read
   the state (`waiting-on-owner` / `nothing-to-deliver` / `ready` / `rejected`), and never
   acts on the owner's branch unattended.
-- **The core-path rule stays on top.** A branch touching a CODEOWNERS path still needs a
+- **[Hard — gate: colab ship refuses]** **The core-path rule stays on top.** A branch touching a CODEOWNERS path still needs a
   non-author approval before `colab ship` lands it on trunk ([`CONVENTIONS.md` §4](CONVENTIONS.md#4-branches-and-commits), #350).
 
-**Why `owner`, not `upstream`:** "upstream" already means something else twice — a
-consumer filing a changed convention meaning back to the handbook
-([CONVENTIONS.md §8, *Upstream*](CONVENTIONS.md#upstream--a-consumer-that-changes-what-a-convention-means-files-it-here-362)), and git's tracking ref. A third
-meaning of the same word would be misread.
+Why `owner`, not `upstream`: [ADR 539](docs/adr/539-schema-lines-and-hosts-rationale.md).
 
-Validity: `branch` is required and is not the word `trunk`; only `branch` and `remote` are
+**[Hard — gate: colab refuses a push]** Validity: `branch` is required and is not the word `trunk`; only `branch` and `remote` are
 defined sub-keys; `branch` may not equal `trunk:`, appear in `integration:`, or equal
 `releaseBranch:`. `colab deliver` supports only the case where the owner's branch lives on
 the same remote trunk is pushed to (a fork delivery is refused, not guessed). A malformed
@@ -402,7 +352,7 @@ from; this axis never reads them and they never read it.
 ports: [5220]
 ```
 
-TCP ports reserved for this repo's **trunk dev server(s)**. The `colab` CLI
+**[Hard — gate: colab port allocator refuses]** TCP ports reserved for this repo's **trunk dev server(s)**. The `colab` CLI
 aggregates `ports:` across all registered repos into the machine-wide reserved
 set and will never allocate these to a worktree — even when the trunk server is
 currently down. One declaration here replaces any hand-maintained central list.
@@ -434,17 +384,21 @@ autonomy: auto-trunk     # manual (default) · auto-trunk
 
 How much of a session's Phase B (merge to **trunk**) an agent may perform alone.
 
-- `manual` (or absent) — an agent stops after Phase A; a human triggers the merge.
+- **[Hard — gate: colab ship refuses]** `manual` (or absent) — an agent stops after Phase A; a human triggers the merge.
   **One exception, computed rather than declared (#345):** a change `colab ship`
   measures as documentation only passes the autonomy gate without this grant —
   [CONVENTIONS.md §2, *Autonomy — the docs-only exception*](CONVENTIONS.md#autonomy--the-docs-only-exception-345).
   No value of this field, or of any other, widens what counts as documentation.
-- `auto-trunk` — an agent may complete the trunk merge itself **through `colab ship`
+  **A second, also computed (#561):** a diff that changes only tuning keys of this file
+  (`ship-batch`, `ship-batch-wait`, `ci-wait-factor`, `thresholds`) to valid values passes it
+  too, with no issue — `colab config set <key> <value> --evidence "<why>"` writes one —
+  [CONVENTIONS.md §2, *Autonomy — the tuning-only class*](CONVENTIONS.md#autonomy--the-tuning-only-class-561).
+- **[Hard — gate: colab ship refuses]** `auto-trunk` — an agent may complete the trunk merge itself **through `colab ship`
   only**, and only when every precondition passes: trunk CI alive and green, no new
   DB migrations in the branch, no hand-code conflicts after sync-regen. Any ✗ falls
   back to asking a human.
 
-This grants **trunk** autonomy only — never promotion, a tag, or anything that
+**[Hard — gate: colab ship never tags or promotes]** This grants **trunk** autonomy only — never promotion, a tag, or anything that
 deploys; the field cannot express otherwise. Promotion follows
 [`promotion`](#promotion--optional) and `deploy`; a tag follows
 [CONVENTIONS §6's release routes](CONVENTIONS.md#6-releases). The grant lives in the repo file (not the caller's flags) so autonomy is
@@ -461,46 +415,32 @@ to trunk, so the branch that adds CI is already judged by it
 ship-batch: 3     # 1–3; absent or 1 = serial landing (the default)
 ```
 
-How many green candidates `colab ship --batch` may land at once
-([CONVENTIONS.md §4, *Batch landing*](CONVENTIONS.md#batch-landing--one-combined-run-then-a-fast-forward-373)).
-An integer from 1 to 3. **Absent or `1` keeps today's serial landing exactly** — every
-`--batch` call declines, and a plain `colab ship` is unchanged whatever this says. Any other
-value (`0`, `4`, `2.5`, a word) fails the audit **and the CI templates' descriptor check**
-(#416), and `colab ship` fails closed to serial on it: a malformed opt-in must never widen what
-an unattended merge does. Failing in CI is the part that matters. The audit is something a
-person runs by hand, and the fail-closed is silent. So without the CI step, an adopting repo
-raised the value to 5, its CI stayed green, and every landing went back to serial until a
-ship dry run noticed. A copy of the CI templates older than #416 lacks the step. Copy it in.
+**[Hard — gate: colab ship --batch declines]** How many green candidates `colab ship
+--batch` may land at once ([CONVENTIONS.md §4, *Batch
+landing*](CONVENTIONS.md#batch-landing--one-combined-run-then-a-fast-forward-373)). An
+integer from 1 to 3. **Absent or `1` keeps today's serial landing exactly** — every
+`--batch` call declines, and a plain `colab ship` is unchanged whatever this says. Any
+other value (`0`, `4`, `2.5`, a word) fails the audit **and the CI templates' descriptor
+check** (#416), and `colab ship` fails closed to serial on it: a malformed opt-in must
+never widen what an unattended merge does. A copy of the CI templates older than #416
+lacks the step. Copy it in.
 
-**Why the cap is 3, deliberately.** A red combined run lands nothing, and the members then
-ship one at a time, each with its own sync run. There is no bisection step: that serial
-fallback *is* the bisection, and it only stays cheap for a small N.
-
-- **Cost of a red batch.** It grows linearly with N: the wasted combined run plus N serial
-  cycles. At 3 that is four cycles, the same as a three-way bisect. At 8 it is nine, which is
-  hours on a 27-minute CI.
-- **Chance of a red batch.** It grows with N too: each member brings its own chance of a
-  semantic conflict or a flake. So the bad case gets both more likely and more expensive at
-  the same time.
-- **Builds have to start again.** Trunk moving mid-run sends a batch back to be rebuilt
-  ([§4](CONVENTIONS.md#batch-landing--one-combined-run-then-a-fast-forward-373), step 4).
-  A wider batch spends longer being built and run, so more of its runs end up thrown away.
-
+Why the cap is 3, deliberately: [ADR 539](docs/adr/539-schema-ship-batch-rationale.md).
 Raising the cap means first building what it lacks: a real bisection (split a red batch and
 re-run its halves), so a red stays logarithmic rather than linear, plus eviction data from
 batches of 2–3 showing how often they actually go red. Until then, a queue longer than 3
 drains as consecutive batches of 3, which is still three landings per cycle instead of one.
 
-With N > 1, `colab ship --batch <b1,b2[,b3]>` puts trunk's head plus one squash commit per
+**[Hard — gate: colab ship --batch declines]** With N > 1, `colab ship --batch <b1,b2[,b3]>` puts trunk's head plus one squash commit per
 member (each with its own `Closes #N`) on `ship-batch/<trunk-sha7>`, needs **one** combined CI
 run there to be green, and fast-forwards trunk to it only if trunk has not moved. Two things
 must also be true, and the audit warns when either is not:
 
-- **A CI workflow fires on a `ship-batch/**` push.** Consumer workflows must opt in — add
+- **[Hard — gate: colab ship --batch declines]** **A CI workflow fires on a `ship-batch/**` push.** Consumer workflows must opt in — add
   `'ship-batch/**'` to a CI workflow's `push: branches:` (a copy of the current CI templates
   already does: their `'**'` covers it, #384). Without it the combined run can never
   arrive, so every `--batch` call says so and declines.
-- **`autonomy: auto-trunk`.** A batch lands every member in one unattended push; without the
+- **[Hard — gate: colab ship --batch declines]** **`autonomy: auto-trunk`.** A batch lands every member in one unattended push; without the
   grant the field is inert.
 
 `ship-batch/` is a ref namespace `colab ship` owns: it creates, force-replaces (only within that
@@ -508,13 +448,89 @@ namespace, on a rebuild) and deletes those refs itself. Exit codes of `--batch`:
 `3` paused (wait on the printed run, bounded, then run the same command again) · `4` declined —
 nothing landed, ship the members one at a time.
 
+### `ship-batch-wait` — optional
+
+```yaml
+ship-batch-wait: 6m   # a whole number with a unit: s, m or h; absent = no wait (the default)
+```
+
+How long a **lone** ready candidate waits for
+a partner before it lands alone (#555). Only read where `ship-batch` > 1; with `ship-batch`
+absent or 1 it is inert, and the audit says so. **Absent keeps today's behaviour exactly.**
+`0s`/`0m` is valid and also means no wait.
+
+The handbook ships **no default value and no ceiling**: the window is the repo's choice,
+taken from its own history (how long after one candidate goes green the next one usually
+does).
+
+**[Hard — gate: the audit fails it]** A unit is required — a bare `6` could be seconds or minutes, so it is refused rather
+than guessed. Any malformed value fails the audit **and the CI templates' descriptor
+check** (the #416 pattern), and `colab ship` fails closed to no wait on it: a bad value must
+never delay a landing.
+
+With it set, `colab ship --batch <b1>` takes a single branch. When exactly one member can
+join and the lane is otherwise idle (trunk's own run finished, no batch in flight at this
+base), it exits `3` with `⏸ PARTNER-WAIT` and the seconds left. The window is counted from
+when that member became ready: its head CI's last update, or its head commit's date when no
+run can arrive. Every call works out the time left again, on any machine, so the window
+never restarts. The caller waits, gathers every ready candidate again, and calls `--batch`
+with all of them. Once the window has passed, the same call declines the lone member to
+serial (exit `4`).
+
+### `ci-wait-factor` — optional
+
+`ci-wait-factor: 2` (a number ≥ 1; absent = 2). Every CI wait bound — B1a's, B2a's trunk cap,
+`colab ci-wait`'s default deadline, `colab ship`'s wedged-run age and empty-read grace — is
+**measured** from the repo's own CI history, and this multiple is the only declared part of it (#559).
+`colab ci-profile` prints both. A kind with too few samples stays on its bootstrap value, the
+pre-#559 value exactly; the 6 h wedge cap and 30/60/120 s polling are safety limits measurement may only tighten.
+`colab ship` reads the cached profile only — a verdict never waits on a history fetch. Formulas:
+[ADR 559](docs/adr/559-ci-wait-bounds-measured-rationale.md). **[Hard — gate: the audit fails it]**
+Anything but a number ≥ 1 fails the audit **and the CI templates' descriptor check** (the #416 pattern, #564); the tools use `2` and say so — a bad value never produces a different behaviour.
+
+### `thresholds` — optional
+
+```yaml
+thresholds:            # one level of `name: whole number`; absent = every default
+  hot-file-count: 4
+```
+
+The **advisory** thresholds — numbers that decide what is flagged, ranked or warned about, never
+what is refused — are the repo's to set (#560). Each default is today's value, so a repo that
+declares nothing sees no change. `colab thresholds` prints every value in force and who reads it.
+
+| name | default | read by |
+|---|---|---|
+| `hot-file-count` · `dependents-count` | 3 · 3 | `code-triage` §3 HOT FILE, §4 leverage |
+| `hold-stale-days` | 30 | `tools/lib/disposition.js`, a hold human-confirmed |
+| `smoke-minutes` | 3 | `code-wrap` A3, the `gate.smoke` target |
+| `claude-md-kb` · `claude-md-line-multiple` · `claude-md-line-floor-bytes` | 40 · 6 · 2048 | the audit's `CLAUDE.md` size advisory |
+| `transitional-days` | 180 | the audit's "has held for" line on a transitional value |
+| `doc-budget-slack` | 100 | `scripts/check-doc-budget.mjs`'s ratchet |
+| `batch-overlap-pct` · `batch-first-green-pct-min` · `batch-eviction-pct-max` · `batch-min-samples` | **none** | the audit's `--batch-history` (#556) |
+
+The `batch-*` names have **no default** (owner ruling on #556: no hard-coded number). `audit.mjs
+--batch-history` shows each local repo's measured picture from `colab batch-stats --json` — overlap
+of serial landings with a partner inside their trunk-CI cycle, fill, first-attempt green, eviction —
+and flags a rate only against a value the repo declares here: overlap ≥ it (serial repo: consider
+`ship-batch`), first-green below it (consider lowering), eviction above it. Undeclared ⇒ shown, not
+judged; a declared rate with no samples, or fewer than `batch-min-samples`, is listed as not judged.
+
+Safety limits (a cap a repo may only tighten) and protocol counts are not thresholds and keep
+their own fields. **[Hard — gate: the audit fails it]** An unknown name, a value that is not a
+whole number of at most nine digits, or one under its floor (2 for `hot-file-count` and
+`claude-md-line-multiple`, 0 for `claude-md-line-floor-bytes`, `doc-budget-slack` and the
+percents, else 1), or a percent (`*-pct*`) over 100
+fails the audit **and the CI templates' descriptor check** (the #416 pattern); every reader
+falls back to the default and says so (a `batch-*` name: not judged).
+
 ### `migrations` — optional
 
 ```yaml
 migrations: [backend/migrations/]   # repo-relative prefixes; absent = the two defaults alone
 ```
 
-Where this repo's migrations live, **beyond** the two layouts every reader already knows —
+**[Hard — gate: colab ship refuses]** Where this repo's migrations live, **beyond** the two layouts every reader already knows —
 Laravel `database/migrations/` and Prisma `prisma/migrations/`, both matched anywhere in the
 path. `colab ship`'s no-new-migrations gate
 ([CONVENTIONS.md §5, *Migration exemption*](CONVENTIONS.md#migration-exemption--a-narrow-door-through-no-new-migrations-opened-by-a-role-98-402))
@@ -522,18 +538,16 @@ and `colab release cut`'s `schema-additive` check read this one list (`tools/lib
 neither keeps a regex of its own. **Absent changes nothing** — a repo that declares nothing is
 gated exactly as before.
 
-Without it, a repo whose migrations live anywhere else (a Node service's boot migrations in
-`backend/migrations/`, a Go service's `migrations/`) is invisible to the gate: `colab ship --dry`
-reported `no new migrations ✓` on a branch adding a production data backfill, and the human-only
-grant never engaged. Measured on an adopting repo before this key existed.
+Why `migrations` exists, with the measurement: [ADR
+539](docs/adr/539-schema-migrations-and-grants-rationale.md).
 
 - **Entries are repo-relative directory prefixes**, matched from the repo root. `./` and a
   missing trailing `/` are normalised away; an absolute path, a `..`, a glob, or the repo root
   itself is a finding — a prefix match would silently mean something other than what was written.
-- **Additive, never a replacement.** The defaults always apply; restating one is harmless (an
-  advisory). There is deliberately no opt-out of the defaults: an opt-out can only make a
-  human-only gate see *less*, and that waits for a repo that genuinely needs it.
-- **Ship reads trunk's declaration and the branch's, unioned.** A branch that adds its own
+- **[Hard — gate: colab ship refuses]** **Additive, never a replacement.** The defaults
+  always apply; restating one is harmless (an advisory). There is deliberately no opt-out
+  of the defaults.
+- **[Hard — gate: colab ship refuses]** **Ship reads trunk's declaration and the branch's, unioned.** A branch that adds its own
   declaration is gated by it; a branch that deletes trunk's is still gated by trunk's.
 - **`release cut` reads `.php`/`.sql` under a declared prefix** with the same destructive
   heuristic as the defaults. A declared migration in any other format (`.mjs`, `.go`) is *named*
@@ -551,7 +565,7 @@ migration-grant: human      # absent = human — today's behaviour
 migration-grant: reviewer   # a migration-reviewer grant may also be minted
 ```
 
-This key decides who may open the no-new-migrations door
+**[Hard — gate: colab ship refuses]** This key decides who may open the no-new-migrations door
 ([CONVENTIONS.md §5, *Migration exemption*](CONVENTIONS.md#migration-exemption--a-narrow-door-through-no-new-migrations-opened-by-a-role-98-402)).
 `human` accepts only the human grant. `reviewer` also lets `colab migration-grant --role
 migration-reviewer` mint a grant that carries a review record. The grant is bound to the
@@ -559,14 +573,12 @@ reviewed migration content (a `migrations:` id in the record, #508), so a trunk 
 leaves the migration files byte-identical keeps it.
 The one reading is `tools/lib/migration-grant.js` `parseGrantPolicy`.
 
-- **It is a separate flat key, not nested under `migrations:`.** `migrations:` stays a list
-  of path prefixes because three readers depend on that shape. Where the gate looks and who
-  may open it are unrelated settings.
-- **Only the trunk checkout's value counts.** `colab migration-grant` reads the checkout,
+- **It is a separate flat key, not nested under `migrations:`.**
+- **[Hard — gate: colab ship refuses]** **Only the trunk checkout's value counts.** `colab migration-grant` reads the checkout,
   never the branch, so a branch cannot raise its own policy.
-- **An invalid value falls back to `human`.** That is the stricter reading, and the audit
+- **[Hard — gate: colab ship refuses]** **An invalid value falls back to `human`.** That is the stricter reading, and the audit
   fails it.
-- **`colab ship` honours a reviewer grant only with P + M + HEAD + R** (#401). Ship reads
+- **[Hard — gate: colab ship refuses]** **`colab ship` honours a reviewer grant only with P + M + HEAD + R** (#401). Ship reads
   this key at the tip of the branch being merged into. It also needs a passing review
   record that binds the branch's head, either as the exact reviewed HEAD or by an
   unchanged migration content id (#508), plus a live, passing `Migration round-trip`
@@ -581,17 +593,17 @@ ci-grant: human      # absent = human — only a person opens the red-trunk door
 ci-grant: reviewer   # the coordinator agent may also mint a ci-reviewer grant
 ```
 
-This key decides who may open the red-trunk door when the cure rule refuses
+**[Hard — gate: colab ship refuses]** This key decides who may open the red-trunk door when the cure rule refuses
 ([CONVENTIONS.md §5, *Red-trunk exemption*](CONVENTIONS.md#red-trunk-exemption--the-one-shot-door-through-trunk-ci-green-105)).
 `human` accepts only the human grant (`COLAB_HUMAN=1`). `reviewer` also lets `colab ci-grant
 --role ci-reviewer` mint a grant **without** `COLAB_HUMAN=1`, carrying a review record and
 bound to one HEAD and one red trunk sha (#504). The one reading is `tools/lib/ci-grant.js`
 `parseGrantPolicy`.
 
-- **Only trunk's committed value counts.** Both `colab ci-grant` and `colab ship` read it
+- **[Hard — gate: colab ship refuses]** **Only trunk's committed value counts.** Both `colab ci-grant` and `colab ship` read it
   from trunk (`git show <trunk>:.github/project.yml`), never the branch, so a branch cannot
   opt itself in.
-- **An invalid value falls back to `human`.** That is the stricter reading, and the audit
+- **[Hard — gate: colab ship refuses]** **An invalid value falls back to `human`.** That is the stricter reading, and the audit
   fails it.
 - **Declaring it is a human act**, like lowering exposure: it is the line that lets an agent
   through a red trunk, so the agent it lets through does not add it.
@@ -604,30 +616,27 @@ trust-humans: [operator-login, second-operator]   # absent = the association cla
 ```
 
 This key names the logins that count as **human** for a grant (`migration-granted`,
-`ci-granted`) or a ruling (`⚖ Decision recorded`)
-([CONVENTIONS.md §5, *Migration exemption*](CONVENTIONS.md#migration-exemption--a-narrow-door-through-no-new-migrations-opened-by-a-role-98-402)).
-Declare it when your agents run under their own GitHub account. The association class
-(`OWNER`/`MEMBER`/`COLLABORATOR`) cannot tell that account from a person, so without the
-list an agent-posted grant reads as a human's. The one reading is
+`ci-granted`) or a ruling (`⚖ Decision recorded`) ([CONVENTIONS.md §5, *Migration
+exemption*](CONVENTIONS.md#migration-exemption--a-narrow-door-through-no-new-migrations-opened-by-a-role-98-402)).
+Declare it when your agents run under their own GitHub account. The one reading is
 `tools/lib/trust-humans.js` `parseTrustHumans`.
 
 - **Absent → nothing changes.** A trusted association counts as human, as before.
-- **Declared → only listed logins are human.** A grant or ruling by any other author is
+- **[Hard — gate: colab ship refuses]** **Declared → only listed logins are human.** A grant or ruling by any other author is
   refused, and the reason names the login. The author must also still hold a trusted
   association. For the two grant labels, the account that last applied the label must be
   listed too. Logins compare case-insensitively.
-- **Read from the target, never the branch.** `colab ship` reads it at the tip of the
+- **[Hard — gate: colab ship refuses]** **Read from the target, never the branch.** `colab ship` reads it at the tip of the
   branch being merged into; rulings read trunk's. A branch that adds its own author changes
   nothing for its own ship. Editing the list is a human act, like lowering exposure.
 - **A reviewer grant is not judged by it.** A `migration-reviewer` grant passes or fails on
   its own four conditions. The list only decides what a *human* grant is.
-- **A flat key holding a list, not `trust: { humans: … }`.** The audit's descriptor reader
-  refuses nested shapes on purpose, and a list inside a map is one of them. Both list
-  spellings work: `[a, b]` or a `- a` block sequence.
-- **A malformed value means nobody is human.** An empty list, a non-list, or an entry that
-  is not a GitHub login blocks every human grant and ruling until it is fixed, and the audit
-  fails it. Falling back to the association class would quietly reopen the hole the key
-  was declared to close.
+- **A flat key holding a list, not `trust: { humans: … }`.** Both list spellings work:
+  `[a, b]` or a `- a` block sequence.
+- **[Hard — gate: colab ship refuses]** **A malformed value means nobody is human.** An
+  empty list, a non-list, or an entry that is not a GitHub login blocks every human grant
+  and ruling until it is fixed, and the audit fails it. Why these keys are shaped this
+  way: [ADR 539](docs/adr/539-schema-migrations-and-grants-rationale.md).
 - **The audit always reports the value.** It appears in `--json` as `trustHumans`
   (lowercased), or `null` when absent or malformed.
 
@@ -639,20 +648,18 @@ room: team     # several people in one org, who may disagree or take over
 room: public   # people outside the org, with no shared context and no way to ask
 ```
 
-Who else could ever read what a session writes down here
-([CONVENTIONS.md §2, *Room*](CONVENTIONS.md#room--who-else-is-here)). It decides what an
-Issue is *for* (memory for `solo`, coordination for `team`, documentation for `public`),
-which language it is written in, and whether "a human performs the release" names a role
-or only names a species. Replaces two things that were proxying it by coincidence: Issue
-language derived from repo privacy, and `ceremony` standing in for "will anyone read the
-audit trail."
+Who else could ever read what a session writes down here ([CONVENTIONS.md §2,
+*Room*](CONVENTIONS.md#room--who-else-is-here)). It decides what an Issue is *for* (memory
+for `solo`, coordination for `team`, documentation for `public`), which language it is
+written in, and whether "a human performs the release" names a role or only names a
+species. It replaces both earlier proxies: Issue language derived from repo privacy, and
+`ceremony` standing in for "will anyone read the audit trail."
 
 **Omission means undeclared, not `solo`.** Nothing infers a repo's room from its GitHub
-visibility, its `production:` value, or anything else — a wrong inference here is worse
-than an honest "not yet answered." The audit enum-checks the value for typos exactly like
-`ceremony`/`writes` do, and nothing more: no downstream rule reads `room` yet. A later unit
-may add one; until it does, this field is a fact a human writes down, not a fact anything
-derives or verifies.
+visibility, its `production:` value, or anything else. The audit enum-checks the value for
+typos exactly like `ceremony`/`writes` do, and nothing more: no downstream rule reads
+`room` yet. A later unit may add one; until it does, this field is a fact a human writes
+down, not a fact anything derives or verifies.
 
 ### `branchPrefix` — optional
 
@@ -668,9 +675,8 @@ With it declared, `colab worktree new` takes the ordinary §4 name and prepends
 the host's name — so the branch it pushes at cut names who holds the claim, readable from the
 ref alone by any other machine.
 
-**Why a descriptor field, not a flag:** the pushed branch is a claim record every machine
-reads, so whether it carries the prefix has to be the same answer for every session in the
-repo. A per-call flag would depend on every skill and every human remembering to pass it.
+Why `branchPrefix` is a descriptor field, not a flag: [ADR
+539](docs/adr/539-schema-checks-and-gates-rationale.md).
 
 Readers never need this field: both shapes parse everywhere, because the issue numbers stay in
 the trailing `-<N>` run and the prefix is at the other end. The machine label is a **label**, not
@@ -708,14 +714,14 @@ exposure: released   # users or adopters, via a deliberate artifact (a tag, a ru
 ```
 
 What consumes a merge here — as of **#144**, the AXIS OF RECORD for gate count when
-declared (CONVENTIONS.md [§2](CONVENTIONS.md#exposure--what-consumes-a-merge-here), "Exposure — what consumes a merge here?"; [`tier`](#tier--optional-legacy)
-above states the full precedence). **This is the breaking change of the major version**: a
-descriptor that opted into `exposure` during phase 1 (additive, inert) now has a
-LOAD-BEARING key — declaring it drives the trunk-shape/deploy-path/production-non-null
-rules directly, in `exposure`'s own vocabulary, rather than `tier`'s. A repo that has
-**never** declared `exposure` sees zero change: the legacy `tier` read reproduces
-pre-#144 behaviour byte for byte, including every outside adopter of this public repo who
-has not opted in — verified empirically (a fleet-wide byte-diff), not merely designed for.
+declared (CONVENTIONS.md [§2](CONVENTIONS.md#exposure--what-consumes-a-merge-here),
+"Exposure — what consumes a merge here?"; [`tier`](#tier--optional-legacy) above states
+the full precedence). **This is the breaking change of the major version**: a descriptor
+that opted into `exposure` during phase 1 (additive, inert) now has a LOAD-BEARING key —
+declaring it drives the trunk-shape/deploy-path/production-non-null rules directly, in
+`exposure`'s own vocabulary, rather than `tier`'s. A repo that has **never** declared
+`exposure` sees zero change: the legacy `tier` read reproduces pre-#144 behaviour byte for
+byte, including every outside adopter of this public repo who has not opted in.
 
 **The gate contract, once `exposure` governs** (`tools/lib/exposure-shape.js` is the one
 executable version of every rule below, shared by the audit and by `colab adopt`'s own
@@ -746,28 +752,23 @@ disagree):
     `none` — nothing is live, so there is neither a release-branch split nor a deploy
     trigger with anything to gate. Evidenced instead by a version-shaped git tag or
     `channels: [artifact]`: adopters consume a release even though there is no server.
-    This is this repo's OWN shape, and the old `tier: B` weld could never express it
-    (`tier: B` forbade a non-null `production` AND required `deploy: none`, but had no
-    vocabulary for "released to adopters, no server").
 
 `self` is defined against the [`room`](#room--optional) axis: the consumer set is a subset
-of the room's collaborator set — that definition points at nothing until `room` exists,
-which is why exposure was sequenced after it. Why `prelaunch` was rejected in favour of a
-relationship word, the old→new mapping from `tier`, and the reasoning behind the
-`production:` pairing rule below all live in CONVENTIONS.md [§2](CONVENTIONS.md#exposure--what-consumes-a-merge-here), "Exposure" — read there for
-the argument; this page states the field.
+of the room's collaborator set. Why `prelaunch` was rejected in favour of a relationship
+word, the old→new mapping from `tier`, and the reasoning behind the `production:` pairing
+rule below all live in CONVENTIONS.md
+[§2](CONVENTIONS.md#exposure--what-consumes-a-merge-here), "Exposure" — read there for the
+argument; this page states the field.
 
 **The `production:` pairing advisory.** `exposure` and `production` are two flat sibling
 keys, read independently; there is no nested or paired syntax. `exposure: none` **and**
 `production: null` together — the claim that both nothing consumes this repo and there is
-nothing to point at — is an advisory. It is a `warn`, never a `fail`: the descriptor is not
-lying, it is unanswered, and answering it is a human act
-([CONVENTIONS.md §2, *Exposure*](CONVENTIONS.md#exposure--what-consumes-a-merge-here)) — a
-`fail` here would make declaring the key riskier than omitting it. Every other combination
-is clean, including `live`/`released` **with `production: null`** — a repo that ships by tag
-to real adopters and runs no server (this repo is exactly that shape) is not a finding; a
-rule that made it one would re-assert the "exposure means a server" defect this axis exists
-to remove.
+nothing to point at — is an advisory. It is a `warn`, never a `fail`: the descriptor is
+not lying, it is unanswered, and answering it is a human act ([CONVENTIONS.md §2,
+*Exposure*](CONVENTIONS.md#exposure--what-consumes-a-merge-here)) — a `fail` here would
+make declaring the key riskier than omitting it. Every other combination is clean,
+including `live`/`released` **with `production: null`** — a repo that ships by tag to real
+adopters and runs no server (this repo is exactly that shape) is not a finding.
 
 **The falsifier and duration report (#137).** The pairing advisory above is
 descriptor-internal; it cannot confirm or deny a "nothing consumes this" claim against the
@@ -775,38 +776,32 @@ outside world. `exposure: none` additionally gets **evidence falsification**: th
 looks for a version-shaped git tag, or a committed deploy path (a `deploy-*`/`release-*`
 workflow, or a `deploy`/`release` script at the repo root/`scripts/`/`bin/`) — cheap
 repo-local artifacts that usually accompany a consumer. Finding one is a `warn` naming the
-evidence, never a `fail` — a repo released years ago and dead since is truthfully
-`exposure: none` today, tag and all, so this is a prompt to look again, not a contradiction
-proven. Alongside it, a **duration report**: how long the current value has held, computed
-from the descriptor's own git history (never a new field), silent under roughly six months
-and degrading to a lower bound ("at least N months") when the exact origin is not visible.
-Both are gated on `exposure` being exactly `"none"` — every other value, including
-undeclared, triggers neither and does no new IO. `exposure: self` gets neither: it claims a
-consumer set bounded by the room, and a tag or deploy script is perfectly compatible with a
-team shipping to itself. Full falsifier set, what shipped and what did not, and why:
-`audit/README.md`.
+evidence, never a `fail`. Alongside it, a **duration report**: how long the current value
+has held, computed from the descriptor's own git history (never a new field), silent under
+roughly six months and degrading to a lower bound ("at least N months") when the exact
+origin is not visible. Both are gated on `exposure` being exactly `"none"` — every other
+value, including undeclared, triggers neither and does no new IO. `exposure: self` gets
+neither. Full falsifier set, what shipped and what did not, and why: `audit/README.md`.
 
-**Omission means undeclared, not `none`.** Nothing infers a repo's exposure from its GitHub
-visibility, its `production:` value, its `tier`, or a deploy workflow — a wrong inference
-here is worse than an honest "not yet answered," and it is the concrete mechanism behind
-"lowering a repo's exposure is a human act, with no field that can override it": the only
-path to a `none`/`self` value is a human committing the string, because every candidate
-value for an undeclared repo is a claim about the *absence* of a consumer, which nothing here
-can verify. Raising exposure (proposing `live`/`released` from a committed `production` URL
-or a deploy workflow) is a narrower claim an agent may propose; lowering it never is. The
-audit enum-checks the value, pairs it with `production:` as above, and — as of #144 — drives
-the gate contract itself when declared. **`exposure` is now coupled to `tier` in exactly one
-sense: when BOTH are declared and disagree about gate count, that is a finding** (`tier: A`
-is consistent only with `exposure: released`; `tier: C` only with `exposure: live`; `tier: B`
+**Omission means undeclared, not `none`.** Nothing infers a repo's exposure from its
+GitHub visibility, its `production:` value, its `tier`, or a deploy workflow: the only
+path to a `none`/`self` value is a human committing the string. Raising exposure
+(proposing `live`/`released` from a committed `production` URL or a deploy workflow) is a
+narrower claim an agent may propose; lowering it never is. The audit enum-checks the
+value, pairs it with `production:` as above, and — as of #144 — drives the gate contract
+itself when declared. **`exposure` is now coupled to `tier` in exactly one sense: when
+BOTH are declared and disagree about gate count, that is a finding** (`tier: A` is
+consistent only with `exposure: released`; `tier: C` only with `exposure: live`; `tier: B`
 is consistent with every value). It is still true that nothing INFERS `exposure` from
-`tier`, GitHub visibility, or a deploy workflow — the asymmetry [`writes`](#writes--optional)
-also carries ("do not add one") is about inference, not about disagreement between two
-values a human wrote down separately. CI role and thoroughness and the
-rollback obligation are now derived from it
-([CONVENTIONS.md, CI](CONVENTIONS.md#ci--what-it-is-follows-the-units-shape-how-much-follows-exposure);
+`tier`, GitHub visibility, or a deploy workflow — the asymmetry
+[`writes`](#writes--optional) also carries ("do not add one") is about inference, not
+about disagreement between two values a human wrote down separately. CI role and
+thoroughness and the rollback obligation are now derived from it ([CONVENTIONS.md,
+CI](CONVENTIONS.md#ci--what-it-is-follows-the-units-shape-how-much-follows-exposure);
 [CONVENTIONS.md, Recovery](CONVENTIONS.md#recovery--what-must-exist-to-undo-a-merge)).
 `exposure` otherwise stays a declared fact whose only enforced consequence is the one
-advisory above.
+advisory above. Why omission means undeclared: [ADR
+539](docs/adr/539-schema-exposure-and-channels-rationale.md).
 
 ### `channels` — optional
 
@@ -829,10 +824,7 @@ authoritative, and no rule anywhere reads `channels` to change a `tier`/`trunk`/
 `production` finding. A repo declaring nothing behaves exactly as it does today, byte for
 byte, including every outside adopter of this public repo who has not opted in.
 
-**A list, not a scalar** — the one structural difference from `exposure`/`room`/`writes`. A
-repo can genuinely have several channels open at once (a reviewed deploy workflow *and* a
-machine-local post-merge hook *and* a tag adopters copy out of), and a scalar would force
-picking the most visible one — the exact failure that produced this axis's finding.
+**A list, not a scalar** — the one structural difference from `exposure`/`room`/`writes`.
 
 **Names the KIND of channel, never the machine.** "A local hook rebuilds this on merge" is
 a fact about the repo; *which* machine runs the hook is not — see [Per-host deploy target —
@@ -855,14 +847,11 @@ per-host config the repo owns, never in this descriptor.
   *absence* that nothing here can verify, so only a human may write it down. An agent may
   *propose* adding a channel it found evidence for; it may never write `[none]`.
 
-**Why `procedure` and not `manual`.** `deploy: manual` is a promotion-trigger claim (a human
-runs a documented release procedure); `channels: [procedure]` is a "what runs this" claim (a
-human builds/installs/restarts from a checkout). Reusing `manual` for both would restate the
-same word for two different questions — exactly the conflation this axis exists to undo.
-`deploy: none` names the absence of a promotion trigger; it is not evidence about `channels`
-either way — three of the seven observed paths this axis was built from were found under a
-repo declaring `deploy: none`, so no rule may ever conclude a `deploy: none` repo's channel
-set from `deploy` alone.
+`deploy: none` names the absence of a promotion trigger; it is not evidence about
+`channels` either way — three of the seven observed paths this axis was built from were
+found under a repo declaring `deploy: none`, so no rule may ever conclude a `deploy: none`
+repo's channel set from `deploy` alone. Why `procedure` and not `manual`: [ADR
+539](docs/adr/539-schema-exposure-and-channels-rationale.md).
 
 **An unintended channel is a finding, never a value.** A working tree file-synced between
 machines with git metadata deliberately excluded is a bug, not a deployment strategy — the
@@ -928,13 +917,12 @@ in a reusable workflow that lives elsewhere is invisible to it. Not coupled to `
 
 ### `ci` — deliberately not a field
 
-Not modeled here, on purpose
-([CONVENTIONS.md, CI](CONVENTIONS.md#ci--what-it-is-follows-the-units-shape-how-much-follows-exposure)).
+Not modeled here, on purpose ([CONVENTIONS.md,
+CI](CONVENTIONS.md#ci--what-it-is-follows-the-units-shape-how-much-follows-exposure)).
 What CI *is* — gate or alarm — is derived from whether the unit has a branch, a fact about
 the session (⚖ #233 retired the `writes`-keyed reading — a branch, not a declared value,
-decides this now); how thorough it must be is derived from `exposure`. A `ci:` field would
-let either drift from what already answers it, the identical failure every other axis on
-this page exists to prevent.
+decides this now); how thorough it must be is derived from `exposure`. Why `ci` is not a
+field: [ADR 539](docs/adr/539-schema-checks-and-gates-rationale.md).
 
 [`gate`](#gate--optional) is not that field: it declares the fast **local** command and which
 verdict the skills read (#410), never what CI is or how thorough it must be.
@@ -954,55 +942,39 @@ ceremony: light      # repos where nobody in the room will comb through the trai
 
 How much record-keeping DEPTH a session owes this repo — a separate axis from `tier`,
 which counts gates to production ([CONVENTIONS.md §2](CONVENTIONS.md#2-tiers)), and from
-`room` (who could ever read it). Tier answers "how many gates stand between a merge and
-users"; `ceremony` answers "will anyone ever comb through this repo's audit trail" — two
-Tier B repos can be a heavy, long-lived codebase and a disposable beta playground, and
-only this field lets the second one stop paying full record-keeping cost for a record
-nobody will read. Descriptive, not evaluative — like `deploy:`. It never says the code
-matters less; it says the repo has opted out of audit-trail depth.
+`room` (who could ever read it). Descriptive, not evaluative — like `deploy:`. It never
+says the code matters less; it says the repo has opted out of audit-trail depth.
 
 **What `light` relaxes:**
 
 1. **Evidence & narration** — Phase B evidence comments are skipped; the squash's
    `Closes #N` suffices. Issue narration distills real gotchas only, no progress
    commentary.
-2. **Readiness ceremony** — triage orders and groups but skips the `deps-checked`
-   labeling pass. Coherent because `light` repos cannot be driven unattended (the
-   coherence rule below), so nothing consumes the column; an empty readiness column
-   that nothing reads is pure cost.
+2. **Readiness ceremony** — triage orders and groups but skips the `deps-checked` labeling
+   pass.
 3. **Audit severity** — memory-ceremony gaps (empty readiness column, missing
    evidence, stamp drift on non-CI templates) downgrade to advisories.
 
 **What `light` may never relax:** claim before start · branch-off-trunk & worktree
 discipline · reserved ports · main checkout at rest on trunk · squash + `Closes #N` ·
-Conventional Commits · CI secret scan + build. A beta repo shares the same machine,
-session fleet, port space, and claim state as the most serious repo.
+Conventional Commits · CI secret scan + build.
 
 **Narration follows `room`; recoverability follows exposure and irreplaceable state — and
-`ceremony` only ever touches the first.** A prior rule required `light` → `production:
-null`, reasoning that a live repo cannot skip its own audit trail. That welded two
-different questions together: whether a *trail* is ever read (the room), and what must
-exist to *undo* a change (exposure/irreplaceable state) — a `solo` repo's trail has one
-reader whether or not it is live, and a live `solo` repo that cannot roll back is a real
-hazard regardless of how much anyone narrates. The rule forbade the first case and was
-silent on the second, so a live single-operator repo could not declare `light` at all —
-pushing that shape toward an undeclared, informal light mode instead. Removed (#175); the
-one coherence rule that survives is the one that protects someone other than this repo's
-own room:
+`ceremony` only ever touches the first.** The one coherence rule that survives is the one
+that protects someone other than this repo's own room:
 
-- **`light` is incompatible with `autonomy: auto-trunk`.** An unattended merge with
-  no evidence trail is a closure nobody watched and nobody can audit. A repo that wants
-  unattended ships accepts `standard` — that is the trade.
+- **[Hard — gate: colab adopt refuses]** **`light` is incompatible with `autonomy:
+  auto-trunk`.** A repo that wants unattended ships accepts `standard` — that is the
+  trade.
 
-**`ceremony: light` no longer, by itself, enables solo flow.** #133 introduced
-`writes: serial` as solo flow's real gate and accepted `ceremony: light` as a LEGACY
-proxy only, for repos that had not yet answered the `writes` question. #175 removed that
-bridge. ⚖ #233 then re-based the gate itself: `colab solo` now refuses outright on any
-repo declaring `writes: isolated` (the veto, human or not), and on any session that
-cannot assert `COLAB_HUMAN=1` — the `writes`-keyed method distinction (`serial-direct`
-vs `serial-gated`) this paragraph used to describe no longer exists, both spellings are
-inert — see [`writes`](#writes--optional) below for the entry gate and the rules it
-never relaxes.
+**[Hard — gate: colab solo refuses]** **`ceremony: light` no longer, by itself, enables
+solo flow.** ⚖ #233 re-based the gate itself: `colab solo` now refuses outright on any
+repo declaring `writes: isolated` (the veto, human or not), and on any session that cannot
+assert `COLAB_HUMAN=1` — the `writes`-keyed method distinction (`serial-direct` vs
+`serial-gated`) this paragraph used to describe no longer exists, both spellings are inert
+— see [`writes`](#writes--optional) below for the entry gate and the rules it never
+relaxes. Why, with the history: [ADR
+539](docs/adr/539-schema-ceremony-and-writes-rationale.md).
 
 ### `writes` — optional
 
@@ -1022,18 +994,13 @@ this repo, human or not, no field/flag/override lowers that bar. Absence, and ev
 declared value (`serial-direct`, `serial-gated`, and the legacy `serial` alias — all three
 now INERT, identical to absence), means **coexistence**: a worktree session and an
 attended human trunk-direct session (`COLAB_HUMAN=1`, `CONVENTIONS.md` [§5, "The human
-flag"](CONVENTIONS.md#the-human-flag--what-colab-human1-asserts)) run side by side. The
-YAML block above is reworked by #239 to say so directly — "isolated (default)" was wrong
-twice over (neither the default nor merely descriptive) — but the paragraphs and tables
-below this note describe
-BEHAVIOUR, and state what is true today, not the retired three-method reading.
+flag"](CONVENTIONS.md#the-human-flag--what-colab-human1-asserts)) run side by side.
 
 **#283 (2026-08-27) widened the vocabulary again, without touching the two-state model
 above.** `free` and `direct` are the CURRENT spellings the wizard (`colab adopt`) offers;
 every pre-#283 spelling — `isolated`/`serial-direct`/`serial-gated`, plus the `serial`
 alias — is still accepted and still resolves the same way. `free` is coexistence, spelled
-out: it IS the state absence already named, given a name of its own because the old prompt
-had to tell a human to "leave unanswered" for it. `direct` is coexistence **plus a declared
+out: it IS the state absence already named. `direct` is coexistence **plus a declared
 intent**: stored and reported honestly (`tools/lib/writes-authority.js`'s `writesMode`,
 `tools/lib/adopt.js`'s `deriveConsequences`), but its runtime is **deferred** —
 `trunkDirectVetoed('direct')` is `false`, identical to `free`, so declaring it changes no
@@ -1059,13 +1026,6 @@ not three keyed on a declared method — the runtime distinction moved into the 
 | branch | always | always, except an attended trunk-direct unit |
 | `ceremony: light` + `autonomy: auto-trunk` | **forbidden** | **forbidden** |
 
-**Retired: the `auto-trunk`/`serial-direct` narrative #208 and #224 argued over.** A
-misgrant nobody could tell apart from `serial-gated`'s cell was the worry that motivated
-splitting `serial` in the first place; #224 corrected the cell itself before this ruling
-landed. Under ⚖ #233 there is only one coexistence cell, not two, so the distinction the
-narrative was about no longer exists — see `CONVENTIONS.md`, *Writes*, for the one
-sentence that survives it.
-
 **Exactly two conditions make a branch mandatory** for an attended trunk-direct
 session — every other kind of session (a worktree one) has a branch by construction, so
 this now governs solo flow specifically: more than one unit in flight, or a gate that must
@@ -1088,24 +1048,17 @@ observable behaviour:
 1. **Byte-identical preservation, still the operative reason.** Every repo declaring bare
    `serial` today stays solo-flow-eligible (subject to attendance, ⚖ #233) — including
    this handbook's own descriptor (see this file's own `.github/project.yml`).
-2. ~~**The conservative reading on the one property that is actually dangerous.**~~
-   **Retired by #224**, and moot after ⚖ #233 besides: the `auto-trunk` cell no longer
-   varies by which legacy spelling is declared, so there is nothing left for this reason to
-   protect against.
 
 **Reclassifying an EXISTING repo's descriptor to `serial-gated` is now presentation-only —
-it changes nothing observable.** Before ⚖ #233 this was a meaningful, human-only decision
-(`serial-gated` forbade solo flow outright and made every unit branch). Now it is inert,
-identical to leaving the field absent or as bare `serial` — the field going fully advisory
-is the next step, per the epic, once measured.
+it changes nothing observable.** Now it is inert, identical to leaving the field absent or
+as bare `serial` — the field going fully advisory is the next step, per the epic, once
+measured.
 
 **Deliberately not coupled to `tier`, `production`, or exposure.** A busy repo with three
 concurrent sessions needs a place-claim regardless of whether it has a production deploy;
-a quiet repo with one session at a time does not need one merely because it is live. The
-correlation seen across today's fleet is caused by *who works a repo*, not by *what
-consumes it* — encoding that correlation as a rule would repeat the same weld `ceremony`
-was introduced to undo. No coherence rule is audited against `tier`/`production` for this
-reason; do not add one.
+a quiet repo with one session at a time does not need one merely because it is live. No
+coherence rule is audited against `tier`/`production`; do not add one. Why, with the
+history: [ADR 539](docs/adr/539-schema-ceremony-and-writes-rationale.md).
 
 **No field for the place-claim itself.** The lock that a shared trunk checkout needs
 (`CONVENTIONS.md`, *Solo flow* / place-claims) is a fact about one checkout on one
@@ -1133,7 +1086,7 @@ tag wherever the tag deploys production.
   ahead of `main` and dispatches CI there, so the candidate is cut with no human
   step. The final tag stays a human click. Without this value, `--auto` is a no-op.
 
-Unknown values fail closed to `human`. This field **cannot** lower the bar set by
+**[Hard — gate: colab promote refuses]** Unknown values fail closed to `human`. This field **cannot** lower the bar set by
 `deploy:` — on a `deploy: push-main` repo promotion *is* the production deploy, and
 on a `deploy: manual` repo promotion is the human's signal to run the deploy; both
 always require `COLAB_HUMAN=1`. Only `deploy: tag` makes promotion
@@ -1152,7 +1105,7 @@ release:
   route: public-tool      # none · rapid-app · public-tool · library-fast · deploy-tag · deploy-tag-fast · live
   candidates: auto        # auto · off
   candidates-per-day: 1   # optional — a positive integer; no route has a cap by default (#443)
-  test-period: 3d         # <N>d — never shorter than 3d
+  test-period: 3d         # <N>d — never shorter than 3d; 0d (no test period) only where the final is human
   final: auto             # auto · human
   guard-run: node scripts/breaking-guard.mjs   # optional — a breaking-change detector (or guard-result: <file>)
   exports: api/public-symbols.txt              # optional — the committed public-symbol list
@@ -1205,11 +1158,8 @@ on.
 
 **`route` chooses; it never widens.** A declared route must be one the descriptor's row
 permits (the *May declare* column). A route outside that set is a **failure**, and the
-derived route stays in effect — `public-tool` on a `deploy: tag` repo would hand a
-production deploy's final to a machine, and `deploy-tag` on a repo where nothing deploys
-describes a repo that does not exist. If the repo really changed, change
-`exposure`/`deploy` first. `none` is permitted everywhere: turning releases off is always a
-narrowing.
+derived route stays in effect. If the repo really changed, change `exposure`/`deploy`
+first. `none` is permitted everywhere: turning releases off is always a narrowing.
 
 **The other keys may narrow the route in effect, never widen it.** Each moves in one
 direction only, measured against the route — declared, or derived:
@@ -1217,13 +1167,12 @@ direction only, measured against the route — declared, or derived:
 - `candidates` — `auto` → `off` is a narrowing; `auto` where the route cuts none is a
   **failure**. `none`, `live`, `library-fast` and a fail-closed descriptor reject
   `candidates: auto`.
-- `candidates-per-day` — a positive whole number, an **opt-in** cap. No route carries one by
-  default (#443, reversing #439's derived cap of `1` on `rapid-app` and `public-tool`): the
-  newest candidate always names trunk's head, and a cap of one kept four merges out of any tag
-  for a day. So any value narrows. A repo that declares one still gets the guarantee: inside
-  the rolling 24h window `colab release cut --auto` is a no-op, and the first run after it —
-  a merge's green CI or the daily schedule — cuts **main's head**, never an older commit. On a
-  route with no candidates it has nothing to cap and is a **failure**.
+- `candidates-per-day` — a positive whole number, an **opt-in** cap. No route carries one
+  by default (#443, reversing #439's derived cap of `1` on `rapid-app` and `public-tool`):
+  the newest candidate always names trunk's head. So any value narrows. A repo that declares one still gets the guarantee: inside the
+  rolling 24h window `colab release cut --auto` is a no-op, and the first run after it — a
+  merge's green CI or the daily schedule — cuts **main's head**, never an older commit. On
+  a route with no candidates it has nothing to cap and is a **failure**.
 - `final` — `auto` → `human` is a narrowing (a no-production repo that wants a person to
   finalize each release may say so); `auto` where the route says `human` is a **failure**.
   `final: auto` on a `deploy-tag` route is never an override — where the final tag deploys
@@ -1231,7 +1180,12 @@ direction only, measured against the route — declared, or derived:
   `final-grant` below, and it is a recorded human act, not a value.
 - `test-period` — a whole number of days, `<N>d`. Longer than `3d` narrows; shorter is a
   **failure**. On `library-fast` and `deploy-tag-fast`, which have no test period, it is a
-  failure too.
+  failure too. **One exception: `0d`, where the final is a human act** (`final: human`,
+  `deploy-tag`'s own default included) — no test period at all, because the human's finalize
+  is the test: `colab release finalize --tag <newest rc> --answered-by <name>` tags it as soon
+  as every other check passes, and `--auto` posts `candidate-ready` on its first run (#549).
+  Where the final is automatic, `0d` is a failure: the period is the only look a candidate
+  gets there, and no human looked.
 
 **Three keys add evidence to the computed version, never permission** (#422) — they narrow and
 widen nothing, so each only has to be a non-empty string:
@@ -1244,7 +1198,7 @@ widen nothing, so each only has to be a non-empty string:
 - `exports` — a committed list of public symbols, one per line; a line removed since the last final
   tag is a breaking change (`package.json` `exports`/`bin` are read without it).
 
-A guard that cannot be read refuses the cut — the contract and the rest of the computation:
+**[Hard — gate: colab release cut refuses]** A guard that cannot be read refuses the cut — the contract and the rest of the computation:
 [`tools/README.md`, *Release cut*](tools/README.md#release-cut-candidates).
 
 **Two keys opt a `public-tool` repo into publishing to npm** (#433) — the `npm` job of
@@ -1256,8 +1210,7 @@ A guard that cannot be read refuses the cut — the contract and the rest of the
   stamps from the tag.
 - `npm-gate` — the command run at the repo root, after the version stamp and before every
   `npm publish`, that fails when the tarball would carry a file nobody meant to ship (a
-  pack-allowlist check). It is not optional: a publish with no gate is the stray-local-file
-  leak the gate exists to stop.
+  pack-allowlist check). It is not optional.
 
 They are a pair — one without the other is a **failure** — and they fit only the
 `public-tool` route: on any other route, declared or derived, they are a **failure**, since an
@@ -1271,31 +1224,27 @@ passes here and is refused by the workflow itself — and failed by the audit's 
 **`version-source` says where the tag's version comes from** (#438) — `manifest` or `tag`. It
 narrows and widens nothing; it only decides which file the number lives in.
 
-**The default follows the route** (#484): `tag` wherever the machine cuts the tag — automatic
-candidates (`rapid-app`, `public-tool`, `deploy-tag`) or a final `release cut --auto` tags itself
-(`deploy-tag-fast`) — and `manifest` everywhere a person cuts it (`library-fast`, a route
-narrowed to `candidates: off`, every route that cuts no tag). It is read from the route as
-narrowed, so `candidates: off` moves it back to `manifest`. Why: the release workflow never
-pushes to trunk, so on an automatic route nobody is there to bump a manifest before each cut —
-under a `manifest` default the first candidate after a final refuses at `manifest-version`, and so
-does every one after it. A declared value always wins, in either direction; an invalid one is a
-finding and leaves the route's default.
+**The default follows the route** (#484): `tag` wherever the machine cuts the tag —
+automatic candidates (`rapid-app`, `public-tool`, `deploy-tag`) or a final `release cut
+--auto` tags itself (`deploy-tag-fast`) — and `manifest` everywhere a person cuts it
+(`library-fast`, a route narrowed to `candidates: off`, every route that cuts no tag). It
+is read from the route as narrowed, so `candidates: off` moves it back to `manifest`. A
+declared value always wins, in either direction; an invalid one is a finding and leaves
+the route's default.
 
-- `manifest` — every declared manifest (`VERSION`, `package.json`, `Cargo.toml`,
+- **[Hard — gate: colab release cut refuses]** `manifest` — every declared manifest (`VERSION`, `package.json`, `Cargo.toml`,
   `pyproject.toml`) must already equal the tag at the tagged commit, or `colab release cut` /
   `finalize` refuse at `manifest-version`. With no manifest declared the tag is the version
   either way, so it costs a manifest-less repo nothing. Declare it on an automatic route only if
   the repo really commits a manifest bump to trunk before every cut.
-- `tag` — the manifests are **derivable**: `manifest-version` skips one that differs and names
-  it, and the tag message records it (`Derivable manifests …`). The repo's own release or deploy
-  step stamps the number from the tag — on a deploy-only ref, or at build time — **never as a
-  commit on trunk**, which the release workflow never pushes. A manifest that cannot be read at
-  all (an unparsable `package.json`, an empty `VERSION`) still refuses: derivable says where a
-  number comes from, not that a broken file is fine. The handbook's own release steps already
-  stamp: the npm publish (`release.npm`) sets the package version from the tag on the tag's
-  checkout before publishing, and the container deploy receives the version from the tag. A
-  defaulted `tag` says so in the tag message (`… the default on a route that tags automatically`),
-  so a stale manifest stays visible on every cut.
+- `tag` — the manifests are **derivable**: `manifest-version` skips one that differs and
+  names it, and the tag message records it (`Derivable manifests …`). The repo's own
+  release or deploy step stamps the number from the tag — on a deploy-only ref, or at
+  build time — **never as a commit on trunk**, which the release workflow never pushes. A
+  manifest that cannot be read at all (an unparsable `package.json`, an empty `VERSION`)
+  still refuses: derivable says where a number comes from, not that a broken file is fine.
+  A defaulted `tag` says so in the tag message (`… the default on a route that tags
+  automatically`), so a stale manifest stays visible on every cut.
 
 **`final-grant` lets an operator make one `deploy-tag` repo's final automatic** (#441). The
 default stays: a final tag that deploys production is a human act. An operator who chooses
@@ -1329,9 +1278,8 @@ the test period it does not have, and the route stands only with all of them:
   reports the version (the template's `deploy` job). Anything else is a **failure**. It is the
   one verify key every deploy shares (#452): also legal on `deploy-tag` (below), never required
   there.
-- `rollback: auto` — the only accepted value: the operator's statement that the deploy restores
-  the previous version by itself when that check fails. The audit can check that the URL and the
-  wiring are there; it cannot prove the rollback works, which is why the grant is required too.
+- `rollback: auto` — the only accepted value: the operator's statement that the deploy
+  restores the previous version by itself when that check fails.
 
 Missing any of the three → the route is a **failure** and the derived `deploy-tag` stays in
 effect, final human — it fails closed, never into an untested automatic deploy. Only on
@@ -1359,10 +1307,11 @@ key picks or approves a version number** — every number is computed, majors in
 major without a migration section carrying its measured cost is refused
 ([§6, *Versioning*](CONVENTIONS.md#6-releases)).
 
-What reads it: the audit, and the release tooling (`colab release cut` #338, `colab release
-finalize` #339, and the release workflow that runs both), all through
-`tools/lib/release-policy.js` — the one executable version of the tables above. If this page
-and that module ever disagree, the module is what runs; report the drift.
+What reads it: the audit, and the release tooling (`colab release cut` #338, `colab
+release finalize` #339, and the release workflow that runs both), all through
+`tools/lib/release-policy.js` — the one executable version of the tables above. If this
+page and that module ever disagree, the module is what runs; report the drift. Why, with
+the measurements: [ADR 539](docs/adr/539-schema-release-rationale.md).
 
 ### `generated` — optional
 
@@ -1391,20 +1340,16 @@ a fresh empty `HOME`, every service-address/credential/socket variable unset, ne
 the platform allows it. **Absent means the run happens** — the default is the check, not the
 exemption.
 
-Why the run exists: a test read its author's home config and a local fleet daemon. It was green
-in every local wrap and red on every CI runner, and the red trunk then blocked the repo's sweep.
-The lesson was written down in prose and the same class recurred two days later. Measured before
-this key existed.
+Why the hermetic run exists, measured before the key: [ADR
+539](docs/adr/539-schema-checks-and-gates-rationale.md).
 
 - **`none` is the only value.** Anything else is a finding. The reader treats it as absent, so
   the hermetic run still happens, but a declaration that silently does nothing is not an answer.
 - **Only trunk's value counts.** `colab gate-hermetic` reads `live-env` from `origin/<trunk>`
   (else the local `<trunk>`), never from the branch being gated — a branch cannot opt its own
   tests out. A branch-only declaration is named in the output and the run still happens.
-- **Declare it only when it is true, and cheap to keep true.** The hermetic run costs one extra
-  pass of the test step. Skipping it trades that for the class of failure above, on every branch,
-  forever. A repo whose suite is too slow to run twice is a better candidate for a faster split
-  test step than for this key.
+- **Declare it only when it is true, and cheap to keep true.** A repo whose suite is too
+  slow to run twice is a better candidate for a faster split test step than for this key.
 - The one reading is `tools/lib/hermetic.js` `parseLiveEnv`; the audit reports the value
   (`--json`: `liveEnv`).
 
@@ -1414,11 +1359,10 @@ this key existed.
 tree-reuse: off     # absent = trunk may skip its suite on a tree a green branch run already passed
 ```
 
-Turns off the trunk half of the CI templates' `dedupe` guard (#493). Without it, a push to trunk
-whose tree is byte-identical to the tree of a green `push` run of the same workflow on another
-ref of this repo skips the suite and cites that run — a squash merge lands exactly the tree its
-branch run passed, so re-running it adds no information and holds runners the branches need.
-**Absent means reuse is on.**
+Turns off the trunk half of the CI templates' `dedupe` guard (#493). Without it, a push to
+trunk whose tree is byte-identical to the tree of a green `push` run of the same workflow
+on another ref of this repo skips the suite and cites that run. **Absent means reuse is
+on.**
 
 - **Declare `off` when trunk's run proves something a branch run cannot**: the suite reads secrets
   or variables only trunk gets, steps branch on `github.ref`, the runner image or a toolchain
@@ -1439,15 +1383,24 @@ ship-gate-workflows: [CI]          # absent = every push / pull_request-triggere
 ship-ignore-workflows: [Deploy]    # absent = nothing beyond the default is set aside
 ```
 
-Which workflow runs at a sha count as **its CI** for `colab ship`'s CI gate, `colab trunk-ci`
-and `colab ci-wait --sha` (#503). **Absent means the runs that verify the code count** — those
-triggered by `push`, `pull_request`, `pull_request_target` or `merge_group` — and every run of
-another trigger at the same sha is set aside and named in the verdict: a `workflow_run` release
-([`release-auto.yml`](templates/release-auto.yml) fires when CI completes, then cuts a candidate,
-publishes and deploys to staging), the same template's scheduled finalize, a dispatch, a deploy.
-Those runs act on the verdict after it exists; a failure there belongs to the release lane, so
-it neither turns trunk red for ship nor makes ship wait. Measured: four green, graded
-candidates parked ~30 min per landing behind a release run at trunk's head.
+Which workflow runs at a sha count as **its CI** for `colab ship`'s CI gate, `colab
+trunk-ci` and `colab ci-wait --sha` (#503). **Absent means the runs that verify the code
+count** — those triggered by `push`, `pull_request`, `pull_request_target` or
+`merge_group` — and every run of another trigger at the same sha is set aside and named in
+the verdict: a `workflow_run` release ([`release-auto.yml`](templates/release-auto.yml)
+fires when CI completes, then cuts a candidate, publishes and deploys to staging), the
+same template's scheduled finalize, a dispatch, a deploy. Those runs act on the verdict
+after it exists; a failure there belongs to the release lane, so it neither turns trunk
+red for ship nor makes ship wait.
+
+**One exception: a `workflow_dispatch` run of the workflow that verifies the code** (#567).
+It counts when the workflow's own file at that sha is triggered by a branch push or a pull
+request — so it is the CI, not a release lane that merely accepts a manual trigger — and that
+workflow has **no** push or pull-request run at the sha. That is the recovery for a lost
+`push` event (the forge dropped it, so there is no run to re-run): dispatch the CI workflow on
+trunk, and its run at that sha is the verdict, red or green. Where the push run exists it stays
+the verdict. The verdict detail names every run counted this way. A tags-only `push:` trigger
+does not make a workflow a code verifier, and a sha whose tree cannot be read rescues nothing.
 
 - **`ship-gate-workflows`** — the explicit set. Exactly these workflows count, whatever their
   trigger; every other workflow at the sha is set aside. Declare it when a workflow that verifies
@@ -1478,10 +1431,8 @@ tests locally. A clean CI runner is the hermetic run by construction. **Absent, 
 `authoritative: local`, means today's gate exactly**: the local full gate plus
 `colab gate-hermetic` (`live-env` above).
 
-Why: on shared agent workstations full local suites took 6–10 min and flaked on timeouts, while
-the same suites took 2–7 min in branch CI on clean runners, and the hermetic rule doubled every
-local run (sources: `CONVENTIONS.md`
-[§4, *Branch CI*](CONVENTIONS.md#branch-ci--the-candidates-own-run-read-as-a-class-314)).
+Why `gate` can take its verdict from CI: [ADR
+539](docs/adr/539-schema-checks-and-gates-rationale.md).
 
 - **`ci` needs branch CI that can arrive.** It takes effect only where a workflow fires on a push
   to a session branch (`tools/lib/gate.js` `gateMode`); a repo whose CI runs on PRs and trunk
@@ -1517,11 +1468,9 @@ Use only when the manifest cannot express the truth, or for a deliberate pin —
 the manifest is the normal answer. If neither source declares a version, CI must
 fail, not guess.
 
-**`requirements.txt` is not a manifest for this purpose.** It pins dependencies,
-never the interpreter. A Python repo carrying only a `requirements.txt` has
-declared nothing about which Python it runs on, so it must set `python:` here or
-add a `.python-version` — the alternative is a hardcoded version in CI, which is
-the exact failure this precedence exists to prevent.
+**`requirements.txt` is not a manifest for this purpose.** It pins dependencies, never the
+interpreter. A Python repo carrying only a `requirements.txt` has declared nothing about
+which Python it runs on, so it must set `python:` here or add a `.python-version`.
 
 When a pin here contradicts the manifest, the audit tool reports it. That is
 intentional: a disagreement is a finding to surface, not to auto-resolve.
@@ -1656,6 +1605,9 @@ the shape that shows it. One writer at a time says nothing about who reads the r
 | `branchPrefix` = `machine` when set | a misspelled value silently read as the unprefixed default |
 | `ship-batch` an integer 1–3 when set → **finding** otherwise | a misspelled opt-in silently read as serial by `colab ship` |
 | `ship-batch` > 1 with no workflow firing on a `ship-batch/**` push, or without `autonomy: auto-trunk` → **advisory** | a batch opt-in that can never land a batch |
+| `ship-batch-wait` a whole number with a unit (`s`/`m`/`h`) when set → **finding** otherwise | a misspelled window silently read as no wait by `colab ship` |
+| `ship-batch-wait` > 0 with `ship-batch` absent or 1 → **advisory** | a partner window with no batch to fill |
+| `ci-wait-factor` a number ≥ 1 when set → **finding** otherwise | a misspelled multiple silently read as the default by every CI wait |
 | `migrations` a list of repo-relative prefixes when set — an absolute path, `..`, glob, the repo root, or a non-list → **finding** | a declaration the migration gate cannot honestly read |
 | `migrations` empty, restating a default, or naming one prefix twice → **advisory** | redundancy, harmless |
 | a tracked `*/migrations/` directory outside the defaults and every declared prefix → **advisory** (local only) | a migration layout `colab ship`'s gate cannot see |
@@ -1668,7 +1620,7 @@ the shape that shows it. One writer at a time says nothing about who reads the r
 | `holds` is a list of non-empty strings, each listed once, when set → **finding** otherwise | a scalar or malformed list silently read as "no holds declared", so triage reports held work ready |
 | `exposure` ∈ {`none`, `self`, `live`, `released`} when set | a misspelled value silently read as undeclared |
 | `exposure: none` + `production: null` → **advisory** | the both-empty claim ("nothing consumes this, and there is nothing to point at") going unflagged |
-| `exposure: live` + `trunk: main` + no `writes: isolated` → **advisory** (⚖ #233, replacing the dropped deploy-shape prohibition) | a trunk-direct commit reaching users immediately, with the descriptor never naming the one field that vetoes it — dormant by construction today (measured: this shape already fails the `exposure: live` mechanism rule above, zero instances across 40 adopted descriptors), shipped anyway as the one finding that names the remedy |
+| `exposure: live` + `trunk: main` + no `writes: isolated` → **advisory** (⚖ #233, replacing the dropped deploy-shape prohibition) | a trunk-direct commit reaching users immediately, with the descriptor never naming the one field that vetoes it |
 | `channels` is a list, each member ∈ {`workflow`, `hook`, `procedure`, `checkout`, `artifact`, `data`, `none`}, when set | a misspelled or scalar value silently read as undeclared |
 | `channels` contains no duplicate member → **finding** | `[workflow, workflow]` passing silently as though it were a richer answer than `[workflow]` |
 | `channels: [none]` combined with another member, or `channels: []` → **finding** | an empty or self-contradicting answer read as a real one |
@@ -1676,16 +1628,14 @@ the shape that shows it. One writer at a time says nothing about who reads the r
 | `distribution` ∈ {`js`, `compiled`}, when set → else **finding** (#469) | a misspelled value silently read as undeclared, and the tool never checked |
 | `distribution` declared, but no install route §6 recognises for its row → **advisory** (#469) | a tool nobody can install the way §6 says every tool installs |
 | `release` is a one-level block of `candidates` ∈ {`auto`, `off`}, `test-period` `<N>d`, `final` ∈ {`auto`, `human`}, when set — no other sub-key | a misspelled knob silently read as the default |
-| `release` widening its derived default — `candidates: auto` where the rung cuts no tags, `final: auto` where the final tag is a human act (`deploy: tag` without a resolvable `final-grant`, or `manual`), `test-period` under `3d` → **finding** | a descriptor lowering §6's human gate on a tag that deploys production |
+| `release` widening its derived default — `candidates: auto` where the rung cuts no tags, `final: auto` where the final tag is a human act (`deploy: tag` without a resolvable `final-grant`, or `manual`), `test-period` under `3d` (except `0d` on a human final, #549) → **finding** | a descriptor lowering §6's human gate on a tag that deploys production |
 | `route: deploy-tag-fast` without a resolvable `final-grant`, `health-url` and `rollback: auto`, or whose release workflow deploys nothing from the final it tags (#446) → **finding** | a final on every green head that nobody chose, or that reaches the Release page while production never moves |
 
-`push-main` on a Tier A repo **is a finding** — a mismatch between the
-mechanism and the tier's contract, not a judgement on the mechanism, and the
-usual fix is `tier: C` rather than any pipeline change. (The wording here
-previously promised an advisory that no code ever emitted, so what looked like
-tolerance was in fact total silence — a doc describing behaviour the tool did
-not have.) On Tier B the value is caught by the `deploy: none` rule instead: a
-Tier B repo that deploys is mistiered, whatever mechanism it names.
+`push-main` on a Tier A repo **is a finding** — a mismatch between the mechanism and the
+tier's contract, not a judgement on the mechanism, and the usual fix is `tier: C` rather
+than any pipeline change. On Tier B the value is caught by the `deploy: none` rule
+instead: a Tier B repo that deploys is mistiered, whatever mechanism it names. Why, with
+the history: [ADR 539](docs/adr/539-schema-checks-and-gates-rationale.md).
 
 On Tier C the wrong `deploy` value is likewise redirected rather than merely
 rejected, because each one names a different gate count and therefore a

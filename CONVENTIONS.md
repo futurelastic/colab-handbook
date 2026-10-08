@@ -67,16 +67,49 @@ consumes a release. Do not create `dev` "to be ready" — see [§10](#10-anti-pa
 ### Why the split exists at all
 
 `main` in Tier A is a **pure release branch** — work is promoted to it, not landed on it.
-This buys one thing: the expensive test suite runs at promotion time, not on every session
-merge. Sessions stay fast; releases stay safe.
 
-**If your test suite is fast, you do not need Tier A.** The split answers slow CI, not
-seriousness. A repo with no meaningful suite gains nothing from it — ceremony with no
-benefit, and `main` becomes a branch nobody trusts. Write the suite first, then split.
+**If your test suite is fast, you do not need Tier A.** Write the suite first, then split. Why: [ADR 539](docs/adr/539-tiers-rationale.md).
+
+### Hard rules and defaults
+
+**A rule is hard only when a gate enforces it.** A hard rule opens with a
+`**[Hard — gate: …]**` marker naming what refuses — a `colab` command or a git hook — and
+it holds whatever a repo's local policy says. Every other rule is a **default**: one way to
+do it, which a repo may refine through a `project.yml` field where one exists, else in its
+local policy (`.colab/skills/<skill>.md`,
+[§8](#local-policy--a-repo-refines-a-skill-without-forking-it-520)). A refinement never
+lowers a hard rule. Until a repo refines a default, its wording stands as written: a
+"must" is still a "must".
+
+The hard set is short:
+
+| Family | What refuses |
+|---|---|
+| A human go before a trunk merge | `colab ship`'s autonomy precondition; the pre-push guard on the trunk |
+| A grant before a new migration ships | `colab ship`'s no-new-migrations precondition |
+| Release never bundled into ship | `colab ship` never tags or promotes; the pre-push guard holds `main` and the release channels for `colab promote` / `colab release` or a human |
+| A claim before work | `colab claim` and `colab worktree new` refuse a held issue; `colab ship` refuses an unclaimed branch |
+| Evidence on the issue | `colab close` refuses an issue with no evidence comment |
+| Publication guards | the secret-scan and identity-scan pre-commit hooks; the npm pack allowlist |
+
+The rest of `colab ship`'s preconditions (trunk CI green and its cure rule and ci-grant
+doors, core-path review), the place-claim and `writes: isolated` refusals, and a few
+`colab adopt` refusals are gated too, and each is marked where it is stated. Every rule's
+class, and each hard rule's gate literal, is listed in
+[`docs/rule-inventory.md`](docs/rule-inventory.md); `scripts/check-rule-inventory.mjs`
+keeps the list and this file in step. Why: [ADR 523](docs/adr/523-conventions-hard-default-and-size-budget.md).
 
 ---
 
 ## 2. Tiers
+
+**Read this section through [`exposure`](#exposure--what-consumes-a-merge-here), the axis of
+record.** What consumes a merge sets the gate count: `none` and `self` zero, `live` one (the
+promotion), `released` two (the artifact). `tier:` is a legacy read of it — `A` → `released`,
+`C` → `live`, `B` → no derivable value (`tools/lib/axis-authority.js`). The letters below name
+the pipeline shapes those gate counts produce; they stay because tools, skills and adopters'
+descriptors still cite them, and because a bare `B` cannot be renamed to an exposure value
+without asking what consumes the repo.
 
 | | **Tier B** | **Tier C** | **Tier A** |
 |---|---|---|---|
@@ -126,23 +159,18 @@ when.
 **A tag-gated Tier A may instead run a single trunk `main`.** When `deploy: tag`, the tag
 itself marks the release boundary — the last `v*.*.*` is "what shipped and when", the
 same job the split does on a hand-deployed repo — so a second branch marking the same
-boundary is redundant. Day-to-day work lands on `main`; releases are cut by tag. Common
-in tag-gated GitOps: a release script cuts `vX.Y.Z` and fast-forwards a long-lived
-**release branch** an external poller watches and redeploys, so the deploy runs
-**outside** CI with **no in-repo deploy workflow** by design. The tier is set by the
+boundary is redundant. Day-to-day work lands on `main`; releases are cut by tag. The tier is set by the
 promotion **gate** (a version tag), never by the trunk name or where the deploy job runs.
 Specific to `deploy: tag` — `manual`/`push-main` have no tag to mark the boundary and
 keep the split. Wherever the deploy runs outside CI, the path to production must be
 committed as [`runbook:`](project.schema.md#runbook--required-when-an-out-of-ci-deploy-has-no-workflow).
-Name the release branch in [`releaseBranch:`](project.schema.md#releasebranch--optional)
-— between releases it is, by construction, an ancestor of trunk, indistinguishable by
-ancestry alone from a spent session branch; undeclared, `colab doctor` misreads it as
-safe to delete (#63).
+Where a release script fast-forwards a long-lived release branch that an external poller
+watches, name that branch in [`releaseBranch:`](project.schema.md#releasebranch--optional). Why: [ADR 539](docs/adr/539-tiers-rationale.md).
 
-**Tier C exists because a tag ritual nobody honours is worse than no tag ritual.** A live
+A live
 but low-stakes site gains nothing from cutting versions; C describes that shape honestly:
 `deploy: push-main`, `main` is what is live, the promotion is the one moment someone
-decides to ship. Not a lesser A — a different, honest gate count.
+decides to ship. Why: [ADR 539](docs/adr/539-tiers-rationale.md).
 
 **Deploying straight off a `main` push meets Tier C's contract, not Tier A's.**
 `deploy: push-main` is a legal, reasonable mechanism; the mismatch is with the *tier*
@@ -152,21 +180,23 @@ the usual fix is **retiering to C** — no pipeline change, the descriptor stops
 a gate it never had. Migrating to `deploy: tag`, or declaring `deploy: manual` +
 `runbook:`, remain valid alternatives when the site has genuinely earned them.
 
-**"Trunk" is a role, not a branch name** — the branch sessions merge into, declared in
-`project.yml`'s `trunk:` field: `main` in Tier B (fixed — there is no second branch to
-distinguish it from); a name **distinct from `main`** in Tier C, `dev` by default but any
-other name equally conforming (the footnote above states why); `dev` or (tag-gated)
-`main` in Tier A. Read `project.yml` to learn which. **"Any name is legal" is not what
-this licenses** — on Tier B and (outside the tag-gated exception) Tier A the value is
-still fixed; only Tier C's split is about the *shape*, not the *spelling*. Never create a
+**[Hard — gate: records refuses role word]** **"Trunk" is a role, not a branch name** — the branch sessions merge into, declared in
+`project.yml`'s `trunk:` field: in Tier B (and `exposure: none`, or `released` with no
+production) the repo's **default branch** — `main` by convention, but an existing repo's
+`master` (or any other spelling) is equally conforming, because what the shape requires is
+that it is the **only** long-lived branch, not what it is called; a `main` beside a
+non-`main` trunk is the two-branch shape and fails (#522); a name **distinct from `main`** in
+Tier C, `dev` by default but any other name equally conforming (the footnote above states
+why); `dev` or (tag-gated) `main` in Tier A. Read `project.yml` to learn which. **"Any name
+is legal" is not what this licenses** — outside the tag-gated exception Tier A's value is
+still fixed, and Tier B's single trunk may never sit beside a `main`; renaming an existing
+default branch to satisfy a spelling is never the fix. Never create a
 branch literally named `trunk` — and never *record* the word
-either. Measured: a session's record read `branch: "trunk"`; the merge tool matched
-claims **by branch name**, found none, and squashed anyway — no `Closes #N`, the same
-26-of-30 failure below reached by a different path. **The absence of a branch is null,
+either. **The absence of a branch is null,
 not a word.** A tool storing this should refuse the word on write, and treat "this
 branch has no claimed issues" as suspicious rather than routine.
 
-**Trunk is the primary integration point, not always the only one.** A repo may declare
+**[Hard — gate: colab ship refuses integration line]** **Trunk is the primary integration point, not always the only one.** A repo may declare
 additional long-lived lines in `project.yml`
 [`integration:`](project.schema.md#integration--optional). Sessions may cut from a
 declared line and ship back into it, guarded exactly as trunk is. It never gets a path to
@@ -178,15 +208,13 @@ stays tier-locked because on A/C it is literally the production spine.
 **`trunk:` answers one question only, deliberately.** Consumers split into Group A —
 correctness (worktree classification, landed/delete-safety, cut-from base) — which must
 keep reading one shared value; and Group B — "which line does *this checkout* serve",
-a per-host deployment fact. **Group B gets no descriptor field, on any tier.** A
-`deploys: { <host>: <branch> }` entry would drift the moment a machine is renamed or
-retired, with nothing able to tell a stale entry from a live one. Its answer lives in a
+a per-host deployment fact. **Group B gets no descriptor field, on any tier.** Its answer lives in a
 per-host mechanism the repo owns (env var, machine-local config) — the same shape as
 `colab`'s own cache, uncommitted and VCS-fenced. Whatever mechanism is chosen must
 **name** a branch, unset-by-default, never widen or disable the gate it overrides (e.g.
 an `HEAD == trunk` safety check for an unattended rebuild-and-restart). A repo on N hosts
 with N lines stays one repo, one descriptor — never N repos, N descriptors, or a second
-entry in `trunk:`/`integration:`.
+entry in `trunk:`/`integration:`. Why: [ADR 539](docs/adr/539-tiers-rationale.md).
 
 ### Room — who else is here?
 
@@ -200,16 +228,9 @@ what an Issue is *for* — memory for `solo`, coordination for `team`, documenta
 names a role (`team`/`public`) or only names a species when the room is otherwise empty
 of anyone else to hand the release to (`solo`).
 
-**Replaces two things that were standing in for it by coincidence, not by design.** Issue
-language has been derived from repo privacy — private repos get the team's language,
-public ones get English — which happens to track the room in the common case but is not
-what the room actually asks: a private repo one person touches has a room of one, same as
-if it were public, and the language that serves that room is whichever the person
-actually thinks in, not whichever visibility setting GitHub happens to report.
-[`ceremony`](#ceremony--narration-follows-the-room-recoverability-follows-exposure) has
-also been proxying this: "will anyone ever read this repo's audit trail" was answered by
-squinting at production status, when the honest question is who is in the room to read
-it, independent of whether the thing is live.
+Issue language follows the room, not repo privacy, and
+[`ceremony`](#ceremony--narration-follows-the-room-recoverability-follows-exposure) follows
+the room, not production status.
 
 **The stated reason for claim discipline gets the same correction.** *"Anything labelled
 in-progress is someone else's — do not take it"* reads, on first pass, as etiquette
@@ -219,9 +240,7 @@ rule exists to stop two of one person's own sessions from editing the same file,
 be polite to a colleague who may not even be there. Politeness is negotiable under
 pressure; a write conflict is not — so state the function, not the etiquette gloss on it.
 
-**Landed first because the exposure axis is defined against it** (#132, below — exposure's
-`self` value is the set of consumers that is a subset of the room's collaborator set; that
-definition points at nothing until the room axis exists).
+Why this axis exists, and its history: [ADR 539](docs/adr/539-room-exposure-rationale.md).
 
 **What this unit does not do.** It introduces the field and its prose meaning only — no
 audit check reads `room` yet, and no tool infers a repo's room from its GitHub visibility
@@ -256,20 +275,11 @@ shipped the key inert, additive, `tier` fully authoritative; **#144 cut the weld
 when declared, is the axis of record outright, and `tier`, when it is the only thing
 declared, is read as a LEGACY value (`tools/lib/axis-authority.js`: `A → released`,
 `C → live`, `B → null` — the `null` is deliberate, because a bare `tier: B` carries no
-derivable opinion about what consumes it). A repo that has never declared `exposure` sees
-zero change — the legacy read reproduces pre-#144 behaviour byte for byte, verified against
-the whole fleet, not merely designed for — so nothing in the fleet, and no outside adopter of
-this public repo who has not opted in, breaks on this flip. Declaring **neither** key is now
+derivable opinion about what consumes it). Declaring **neither** key is now
 the one hard failure ("no axis of record"), replacing the old unconditional "missing tier".
 `exposure` does **not** become required by this flip — that is phase 3, a separate, later
 step (ten repos answering the question by hand).
 
-**`prelaunch` was rejected in favour of a relationship word.** An earlier candidate named this
-axis by a *moment* rather than a *relationship* — the same defect the tier letters have in
-miniature, one member of the set speaking a different language than the rest. It also implies
-a public event many of these repos never have, and implies imminence for a state that has
-already lasted months on more than one repo in this fleet. The intent it was trying to carry —
-"not yet, but headed there" — already has a home: `production:`, which exists today.
 `exposure: none` with a *named* `production` target reads as visibly transitional;
 `exposure: self` with `production: null` reads as terminal. No new marker key encodes this;
 the two existing flat scalars, read together, already say it.
@@ -286,7 +296,7 @@ so no rule may ever conclude a `B` repo's exposure value — the legacy read for
 about gate count, that is exactly one finding naming the disagreement; `tier: B` disagrees
 with nothing, because a bare `B` never had an opinion to contradict.
 
-**Lowering a repo's exposure is a human act, with no field that can override it.** This is
+**[Hard — gate: colab adopt human bar]** **Lowering a repo's exposure is a human act, with no field that can override it.** This is
 the sharper form of the asymmetry above, and it is enforced in code, not only in prose: the
 audit assigns `exposure` no default anywhere — omission reports `null` (undeclared), never
 `"none"` (declared: nothing consumes this) — because every candidate value for an undeclared
@@ -295,12 +305,7 @@ may find and report evidence of a consumer; it may never write down that none ex
 
 **The `production:` pairing gets an advisory, at `warn`, never `fail`:**
 `exposure: none` together with `production: null` — the claim that both nothing consumes this
-repo and there is nothing to point at. Advisory, not failure, because the descriptor is not
-*lying* (the `fail` severity is reserved for that — see the `tier: A` + `push-main` block
-below), it is *unanswered*, and answering it is the human act above, explicitly out of scope
-for this unit (Phase 3 of the epic, ten repos each answering "what would break if you merged
-something wrong?", is not performed here). A `fail` would also make declaring the key riskier
-than omitting it, suppressing exactly the opt-in adoption data a later unit needs. Every other
+repo and there is nothing to point at. Every other
 combination is clean — in particular `live`/`released` **with `production: null`**, because a
 tag-published repo with real adopters and no server (this repo's own shape) is the case this
 axis exists to stop misreading as "no exposure means no server."
@@ -314,26 +319,13 @@ declared by hand: a `tier` and an `exposure` that disagree about gate count is a
 (above). That is disagreement-detection between two written-down facts, not inference of
 one from the other, and it does not reopen this instruction.
 
-**What this unit (#132) shipped, and what #144 later added.** #132 shipped the key, its
-four-value enum check, and the `production:` pairing advisory — nothing that derived gate
-count. #144 is the unit that flipped authority: `exposure`, when declared, now governs gate
-count directly (see the top of this section, above), rather than merely being readable
-alongside a still-authoritative `tier`. [CI's role and thoroughness](#ci--what-it-is-follows-the-units-shape-how-much-follows-exposure)
-and the [rollback obligation](#recovery--what-must-exist-to-undo-a-merge) are now derived
-— by later units reading this key, not by this one. **#137 shipped 2 of 5 possible
+**What later units added** (what #132 and #144 shipped: [ADR 539](docs/adr/539-room-exposure-rationale.md)). **#137 shipped 2 of 5 possible
 falsifiers against a declared `exposure: none`** — a version-shaped tag exists, and a
 committed deploy path exists — each a `warn` naming the evidence, never a `fail` (a
 falsifier proves the CLASS of evidence that usually accompanies a consumer, not a consumer
-itself). `exposure: self` gets no falsifier at all. Three more named in #137 stay
-deliberately deferred: a per-machine service definition serving the path (the schema
-already ruled per-host facts out as a field), another repo's stamp naming this one as a
-source (the stamp vocabulary has no way to name an arbitrary source yet), and a declared
-`production:` target resolving in DNS (the repo-local half of that case is already the
-pinned-clean "visibly transitional" shape below, and the resolving half needs network this
-tool does not use). Reasons in full, and what would reopen each: `audit/README.md`. #137
+itself). `exposure: self` gets no falsifier at all. #137
 also added a **duration report** — how long `exposure: none` has held, from the
-descriptor's own git history, never a new field. #144 shipped the authority flip described
-above; it deliberately does **not** make the key required — that stays phase 3. The exposure
+descriptor's own git history, never a new field. The exposure
 question is now asked, in words, by [§9](#9-adopting-this)'s shared question set (question 3),
 and `colab adopt` (#199) is the tool that detects/asks/derives/writes it in one act — gated on
 a human for the `none`/`self`/lowering direction ([§9](#9-adopting-this)'s "colab adopt executes this checklist"
@@ -352,8 +344,7 @@ squash + `Closes #N`, CI secret scan, and the
 [core-path PR pause](#core-paths--a-pr-and-a-non-author-approval-before-landing-350)).
 
 **Narration and recoverability are two different questions, and one rule used to weld
-them together.** The rule required `production: null` for `light`, reasoning that a live
-repo cannot skip its own audit trail. That conflates:
+them together.**
 
 - **narration** — Issue prose, progress comments, Phase B evidence. Follows the **room**:
   a `solo` repo's trail has exactly one reader whether or not the thing is live, so being
@@ -362,13 +353,9 @@ repo cannot skip its own audit trail. That conflates:
   irreplaceable state, not narration depth ([Recovery](#recovery--what-must-exist-to-undo-a-merge),
   below).
 
-A live, single-operator repo whose only irreplaceable asset is a small state file cannot
-skip recoverability, and gains nothing from full narration nobody in the room will ever
-read; the old rule forbade the second and was silent on the first — catching neither
-correctly, and pushing exactly this shape toward an informal, undocumented light mode
-instead of a declared one.
+Why, with the old rule's history: [ADR 539](docs/adr/539-ceremony-recovery-rationale.md).
 
-**So `ceremony` now reduces narration only**, gated on the room rather than on
+**[Hard — gate: colab adopt refuses light + auto-trunk]** **So `ceremony` now reduces narration only**, gated on the room rather than on
 `production:`. It never waives what exposure requires for recoverability — a live repo
 may run light narration; it may not skip the record required to undo a change. One
 backstop remains: `light` may not combine with `autonomy: auto-trunk` (an unattended
@@ -415,18 +402,14 @@ question: **may a human ever commit straight to this repo's trunk checkout, alon
 worktree sessions?**
 
 **⚖ Decision on #233 (2026-08-19): `writes` stopped selecting a write-conflict prevention
-METHOD and became a two-state VETO.** Before this ruling, the field named which of three
-coherent methods a repo's sessions defaulted to (`serial-direct` / `serial-gated` /
-`isolated`), and the three interacted with `autonomy`, CI role, and branch-mandatory in
-different ways — machinery this section used to spend most of its length explaining. That
-machinery is retired. The vocabulary now resolves to exactly two states:
+METHOD and became a two-state VETO.** The vocabulary now resolves to exactly two states:
 
 | descriptor says | means |
 |---|---|
 | *(absent)* | **coexistence** — the default. Worktree sessions and an attended human trunk-direct session run side by side. |
 | `free` | **coexistence, spelled out (#283).** The same state as absence, given a name — `free` IS the former blank: the old prompt told a human to "leave unanswered" for this state because there was no spelling for it; now there is. |
 | `direct` | **coexistence, plus a DECLARED intent (#283) — declared today, runtime deferred.** Stored and reported honestly (`tools/lib/adopt.js`'s `deriveConsequences`, `--json`, the wizard) as an explicit "declared, not yet enforced" state; `trunkDirectVetoed('direct')` is `false`, so it changes NO session's actual permissions in this diff — it behaves exactly like `free` at runtime until a separate unit implements what it declares. See "writes: direct — declared today, runtime deferred (#283)", below. |
-| `isolated` | **veto** — no trunk-direct in this repo, human or not. No field, flag, or override lowers this bar. |
+| **[Hard — gate: colab solo refuses]** `isolated` | **veto** — no trunk-direct in this repo, human or not. No field, flag, or override lowers this bar. |
 | `serial` · `serial-direct` · `serial-gated` | **inert — identical to `free` (#283, formerly "identical to absent").** These spellings stay valid (no adopter's descriptor breaks), and resolve through the legacy alias exactly as before (`tools/lib/writes-authority.js`), but nothing downstream treats them as a method choice any longer. |
 
 Binary in practice: veto, or not. `tools/lib/writes-authority.js`'s `trunkDirectVetoed(raw)`
@@ -435,7 +418,7 @@ is the one function anything may act on — it reads the **raw** declared value,
 resolve the legacy alias, report `source` — what changed is that nothing may read its
 3-way `value` as selecting a method anymore).
 
-**Whether trunk-direct is legal here is a descriptor fact (the veto); whether THIS session
+**[Hard — gate: colab solo refuses]** **Whether trunk-direct is legal here is a descriptor fact (the veto); whether THIS session
 may use it is a session-identity fact, not a descriptor fact.** A repo that does not veto
 permits an *attended* human session to commit straight to trunk — attendance is asserted
 with `COLAB_HUMAN=1`, set only on a human's explicit instruction (never inferred, never
@@ -458,12 +441,7 @@ used to be keyed to a declarable method:
 | place-claim needed | n/a — nothing writes the shared checkout | yes, on the trunk checkout |
 | branch | always | always, except an attended trunk-direct unit |
 
-The two rows that never varied by the old method (`autonomy: auto-trunk`,
-`ceremony: light` + `auto-trunk`) keep their cells unchanged — that they never depended on
-`writes` is now evidence for this direction, not an invitation to re-open them. The two
-rows that used to vary by declared method (`place-claim needed`, `branch`) are re-based
-onto session identity, which a test can now drive end to end against the real `colab solo`
-— see `tools/lib/audit-writes-matrix.test.js`.
+Why those two rows stay unchanged, and how the matrix is tested: [ADR 233](docs/adr/233-writes-veto-and-direct-rationale.md).
 
 #### writes: direct — declared today, runtime deferred (#283)
 
@@ -482,23 +460,9 @@ now; one was handed to a ⚖ ruling and has since been ruled (#284, below — re
 path built in #302, the rest of the runtime still deferred); one remains a proposal of record:
 
 - **Concurrency on the shared checkout — DONE (#285), and it turned out not to be a
-  loosening at all.** The proposal of record was that under `direct` the trunk checkout
-  becomes a strictly one-writer-at-a-time resource, every direct writer holding the
-  path-scoped place-claim, and that `colab solo`'s entry gate would have to be *loosened*
-  from "refuse if anything is held" to allow it. Implementing it found the premise wrong in
-  both halves, and the correction is worth more than the original plan:
-  - The gate was already "whoever holds it right now" — `conflict` clears for a dead holder
-    and for a same-session re-acquire, and `entryProblems` deliberately ignores worktrees
-    (#236) and off-checkout claims (#240). There was nothing to loosen.
-  - What was missing is that the hold **did not serialize anybody**, on any repo, under any
-    `writes:` value: every acquire site decided outside the state lock and wrote inside it,
-    so 8 concurrent acquires on one checkout all succeeded (see
-    [Place-claims](#place-claims--the-writer-verifiable-hold-a-shared-checkout-needs-and-a-worktree-does-not)).
-    `colab ship`'s B1 merge and `colab promote` take that same hold on the main checkout,
-    so this was a live defect in paths that already run today — not a future `direct`-only
-    concern. #285 moved the decision inside the lock and proved it with
-    `tools/lib/place-serialize.test.js`, demonstrated failing (8 winners where 1 is
-    required) against the pre-#285 binary before it passed against the new one.
+  loosening at all.**
+    - Why the original proposal (loosen `colab solo`'s entry gate so direct writers could
+      share the trunk checkout) was wrong in both halves, with the measurements: [ADR 233](docs/adr/233-writes-veto-and-direct-rationale.md).
   So `direct` gains no new permission here — that is deliberate, and the matrix cells above
   are unchanged. Its one `direct`-specific consequence is a **tightening**: a place-claim on
   a `direct` repo's own trunk checkout must carry an identity (`--session`), because a
@@ -509,8 +473,7 @@ path built in #302, the rest of the runtime still deferred); one remains a propo
   automated session" row above still reads **forbidden** for every column.
 - **CI role — DECIDED AND SHIPPED, as derived report text only.** Under `direct`, `ciRole` is
   **alarm, always** — nothing branches under a merge event that never happens, so CI can
-  never gate a merge that doesn't exist. Cheap to decide because `ciRole` is derived prose in
-  `tools/lib/adopt.js`'s `deriveConsequences`, not enforcement.
+  never gate a merge that doesn't exist.
 - **The human merge gate and the Phase A / Phase B split — ⚖ RULED (#284); its close path
   IMPLEMENTED (#302, `colab ship --direct`).** The proposal handed to the ruling was: under `direct` there is no merge
   event, so Phase B does not apply at all; Phase A applies unchanged; the human
@@ -519,7 +482,7 @@ path built in #302, the rest of the runtime still deferred); one remains a propo
   below, which is the statement of record. Since #302 the close-accounting half has a
   runtime — `colab ship --direct` — and `code-ship`/`code-wrap` say how a trunk-direct unit
   reaches it; everything else about `direct`'s runtime is still deferred.
-- **Exposure restriction — DECIDED AND ENFORCED NOW.** Declaring `writes: direct` requires
+- **[Hard — gate: colab adopt refuses]** **Exposure restriction — DECIDED AND ENFORCED NOW.** Declaring `writes: direct` requires
   the same human bar as lowering exposure (an interactive TTY, or `COLAB_HUMAN=1` together
   with `--answered-by <name>` — `direct` is the only `writes` value that *expands*
   permission, `free`/`isolated` never do), and is refused outright when the *effective*
@@ -548,21 +511,7 @@ path built in #302, the rest of the runtime still deferred); one remains a propo
   code-wrap", and it is named here deliberately so nobody discovers it later by assuming
   Phase B still runs somewhere.
 
-**Why not the simpler "Phase B never runs at all" (option A).** Because Phase A does not
-close issues — it only distills onto them. Drop the whole of Phase B and a `direct` repo
-has no close mechanism whatsoever: every unit's issue stays open forever with its work
-long since on trunk. That is not a hypothetical — it is the failure [§4](#4-branches-and-commits)
-already quantifies at 26/30 issues open with their code merged, and the failure
-evidence-close (#90) was built to close:
-
-> That branch cannot be squashed (there is nothing to stage) and used to have no
-> completion path at all: the claim was released, the worktree torn down, and the issue
-> stayed open forever, because the only close mechanism in the system was `Closes #N`
-> inside a squash commit.
-
-Option A recreates that hole for *every* `direct` unit. The ruling is a codebase fact
-rather than a preference: the machinery option B asks for already exists and is already
-this repo's answer to this exact shape of problem.
+Why option A was declined, and the failure evidence-close was built to close: [ADR 233](docs/adr/233-writes-veto-and-direct-rationale.md).
 
 **Which is also why it is cheap.** Evidence-close is not a new mode somebody has to build
 for `direct`. Its trigger is `landed ∧ zero own commits` — **both measured from git, never
@@ -589,23 +538,17 @@ write, only a close, so any repo whose `writes:` does not veto trunk-direct may.
 second is still open; neither is answered by
 silence:
 
-- **Evidence-close is gated** on the issue *already carrying a comment the tool did not
-  write* (colab's own markers do not count); an issue without one is reported and left
+- **[Hard — gate: close refuses without an evidence comment]** **Evidence-close is gated** on the issue *already carrying a comment the tool did not
+  write* (colab's own markers do not count, nor does a comment that is only a one-line
+  `— <name> · <machine>/<session>` signature, #535); an issue without one is reported and left
   open. Whether that gate is right for a `direct` unit — where the human's session-start
   instruction, not a comment, is the authorization — is a real follow-up question.
-  **⚠️ Measured during #285:** the question was premature, because `colab ship` could not
-  reach evidence-close for a branchless `direct` unit at all — `resolveShipSession` refused
-  with `ship needs --worktree or --branch`, supplying trunk was refused by `--branch is the
-  trunk itself`, and `colab solo --done` neither posts evidence nor closes anything: the same
-  26/30 hole option B was chosen to avoid. **[#302](https://github.com/futurelastic/colab-handbook/issues/302)
-  built that door (`colab ship --direct`, above) and left the gate exactly as it is.**
   **⚖ Ruled 2026-09-14 ([#342](https://github.com/futurelastic/colab-handbook/issues/342),
   option A: confirm all three readings #302 took)**: the gate is right for a
   `direct` unit too, because the two things answer different questions. The session-start
   instruction authorizes the *unit* to exist; the comment evidences its *delivery* — and
   Phase A, which applies to `direct` in full, writes that comment anyway (`code-wrap` A1).
-  Counting trunk commits that mention `#N` as evidence was considered and rejected: the
-  session writes those messages itself, so the evidence would be self-declared. The same
+  The same
   ruling confirmed the two further choices #302 made: the **autonomy gate still applies** to
   `--direct` (without `autonomy: auto-trunk` a human closes the unit — unless the unit is
   docs-only, [the one exception](#autonomy--the-docs-only-exception-345), which applies to
@@ -618,16 +561,7 @@ silence:
   ruling settles close-accounting only; it does not authorize any session to take
   trunk-direct anywhere the veto and the attendance bar do not already allow it.
 
-**Option C (defer until #285's concurrency design is further along) was declined.**
-Close-accounting is independent of how concurrent writers are serialized, and leaving it
-open cost #285 its unblock for no gain.
-
-**Retired: the `auto-trunk`/`serial-direct` narrative #208 and #224 argued over.** The old
-three-method table spent several paragraphs establishing that `auto-trunk` was never
-actually gated on `serial-direct` vs `serial-gated`, only on whether a branch exists for
-`colab ship` to act on. That conclusion is now trivially true — there is only one
-coexistence cell, not two — and the argument that reached it is retired along with the
-distinction it was about.
+Why option C was declined, and the retired argument over `auto-trunk` and `serial-direct`: [ADR 233](docs/adr/233-writes-veto-and-direct-rationale.md).
 
 **Exactly two conditions make a branch mandatory** for an attended trunk-direct session —
 every other kind of session (a worktree one) has a branch by construction, so this now
@@ -649,22 +583,9 @@ the whole guarantee — adding a branch on top buys nothing the lock did not alr
 Nor does "so the changelog reads cleanly" qualify — a solo session's Conventional Commits
 already group correctly without one.
 
-**Deliberately not coupled to exposure, tier, or production.** The correlation visible
-across today's fleet — light/beta repos tending to run solo, live repos tending to branch
-— is caused by *who works a repo* (one person vs. several), not by *what consumes it*
-(nobody vs. production users). A quiet Tier A repo with one session in flight needs no
-branch on `writes` grounds; a busy Tier B playground with three sessions does. Encoding
-the observed correlation as an audited rule would repeat the same weld `ceremony` was
-introduced to undo (`ceremony` vs. `tier`, above) — so no such rule exists, and none
-should be added later "to catch the common case."
+**Deliberately not coupled to exposure, tier, or production.** No audited rule couples this to them, and none should be added later "to catch the common case." Why: [ADR 539](docs/adr/539-writes-direct-rationale.md).
 
-**Retired: the deploy-shape prohibition.** A now-dropped rule once required a repo whose
-trunk merge is itself the deploy to keep a branch and a pre-merge gate rather than run
-trunk-direct freely (spelled out under [Channels](#channels--by-what-path-does-code-reach-the-thing-that-runs-it)
-below). ⚖ #233 removed it outright rather than deriving a replacement test: measured
-before deciding, the shape it protected against (`exposure: live` **and** `trunk: main`)
-had zero instances across 40 adopted descriptors — every live repo already declares a
-trunk distinct from `main`, so its trunk merge lands on a branch that ships nothing. A
+The deploy-shape prohibition was retired by #233, the rule it carried and the measurement behind dropping it: [ADR 233](docs/adr/233-writes-veto-and-direct-rationale.md). A
 repo that later grows into that shape without declaring the veto gets trunk-direct
 silently, and there a commit reaches users immediately; the audit reports the combination
 as an informational advisory (never a refusal) — `writes: isolated` is now the only way to
@@ -672,16 +593,13 @@ say "not here."
 
 ### Autonomy — the docs-only exception (#345)
 
-**⚖ Ruled by the repo owner, 2026-09-14 ([#345](https://github.com/futurelastic/colab-handbook/issues/345)).**
+**[Hard — gate: colab ship autonomy gate]** **⚖ Ruled by the repo owner, 2026-09-14 ([#345](https://github.com/futurelastic/colab-handbook/issues/345)).**
 On a repo that does **not** declare `autonomy: auto-trunk`, an agent may complete Phase B
 through `colab ship` for a change that is **documentation only**, with no human trigger. The
 "documentation only" judgement is **computed by `colab ship` from git** — never asserted by
 the caller.
 
-**Why.** Some branches carry nothing but text: path repoints, typo fixes, doc updates. Their
-failure mode is a wrong sentence, not wrong behaviour. Measured: several one-line doc-path
-branches sat graded-pass and merge-clean on such repos with nothing to do but wait for a click.
-The only other exit was a hand push, which is exactly what the pre-push guard exists to refuse.
+Why, with the measurement: [ADR 345](docs/adr/345-docs-only-autonomy-exception-rationale.md).
 
 **The change set ship measures.**
 - A branch: `git diff <target>...<branch>`, the same three-dot diff the squash lands, with
@@ -698,23 +616,27 @@ The only other exit was a hand push, which is exactly what the pre-push guard ex
 - an extension in `.md`, `.mdx`, `.txt`, **or**
 - under a top-level `docs/`.
 
-**Never docs-only**, even if matched above:
+**[Hard — gate: colab ship autonomy gate]** **Never docs-only**, even if matched above:
 - `CLAUDE.md`, `CLAUDE.local.md`, `AGENTS.md`, `.claude/**`, `.github/**`, `.githooks/**` —
   these are rules and config;
+- `.colab/skills/**` — a skill's [local policy](#local-policy--a-repo-refines-a-skill-without-forking-it-520)
+  is agent instructions that win over the skill's own text, so one `.md` there changes agent
+  behaviour exactly as a `CLAUDE.md` does (#520);
 - any binary or symlink change;
 - an empty diff.
 
 The tool reads the exclusions at the strict end wherever the list is silent. The three file
-names and three directories match **at any depth** (`pkg/CLAUDE.md` and `docs/.github/x.md` are
+names, three directories and the `.colab/skills` subtree match **at any depth** (`pkg/CLAUDE.md` and `docs/.github/x.md` are
 excluded too). Extensions compare exactly (`README.MD` is not `.md`). A submodule pointer counts
 as a binary change. A zero-commit evidence-close has an empty diff, so it still needs
 `auto-trunk` or a human.
 
-**It relaxes the autonomy gate, and only that gate.** Every other precondition is unchanged:
+**[Hard — gate: ship never tags or promotes]** **It relaxes the autonomy gate, and only that gate.** Every other precondition is unchanged:
 grade, trunk CI, migrations (still opened only by a grant of a role the repo accepts), writes,
 claims, and the `COLAB_SHIP=1` push. The autonomy row
 reads `docs-only (N files) — autonomy exception` in place of `auto-trunk`. `--dry --json` adds
-`autonomyGate: { via, docsOnly }`, with `via` one of `"auto-trunk"`, `"docs-only"` or `null`.
+`autonomyGate: { via, docsOnly }`, with `via` one of `"auto-trunk"`, `"docs-only"`, `"tuning"`
+(the tuning-only class, below), `"human"` (the human door, below) or `null`.
 A refusal keeps the existing message and adds one line naming why the change is not docs-only.
 A branch is measured **again after B0 sync**, before the squash, so a `pre-ship` hook that
 regenerated a file cannot carry code in behind the first verdict. The pre-push guard needs no
@@ -726,9 +648,64 @@ nothing past the trunk merge — promotion and deploys stay human, and a tag fol
 to it: `tools/lib/docs-only.js` holds both lists as constants. Widening it is a handbook change,
 reviewed in a commit like this one.
 
+### Autonomy — the tuning-only class (#561)
+
+**[Hard — gate: colab ship autonomy gate]** **⚖ Ruled by the repo owner, 2026-10-07 ([#561](https://github.com/futurelastic/colab-handbook/issues/561)).**
+`.github/project.yml` stays committed. What is made cheap is a **tuning** change: one
+repo-owned value moved on the repo's own measurements. Why: [ADR 561](docs/adr/561-tuning-only-class-rationale.md).
+
+- **`colab config set <key> <value> --evidence "<why>"`** edits that one key only, validates the
+  value with the parser every reader of the key uses, and commits `chore(project): <key> <old> → <new>`
+  on fresh trunk as `chore/tune-<key>`, touching no checkout. The evidence is the commit body.
+- **`colab ship` computes the class from the diff**, never asserted, and like docs-only it opens the
+  autonomy gate without `auto-trunk`. It needs no issue and no `Closes #N`. Every other precondition
+  still applies (trunk CI, branch CI class, conflicts), and it is re-measured after B0 sync.
+
+**Tuning only** when exactly one file changed, `.github/project.yml`, as a regular text file;
+every changed non-blank line sits inside a tuning key's block (a top-level comment does not); every
+other key parses identical on both sides; and every tuning key that moved holds a valid value or
+is absent. The allowlist: `ship-batch` (inside its cap), `ship-batch-wait`, `ci-wait-factor`,
+`thresholds`. **[Hard — gate: colab ship autonomy gate]** **Never tuning**, because they grant
+authority or change what deploys: `autonomy`, `promotion`, `migration-grant`, `ci-grant`,
+`trust-humans`, `exposure`, `tier`, `trunk`, `deploy`, `release`, `production`. A malformed value
+is refused by `config set` and by the class alike (#416). Both lists are constants in
+`tools/lib/config-set.js`, widened only by a reviewed handbook change.
+
+### Autonomy — the human door (#525)
+
+**[Hard — gate: colab ship autonomy gate]** **⚖ Ruled by the repo owner, 2026-10-06 ([#525](https://github.com/futurelastic/colab-handbook/issues/525), option 1).**
+On a repo that does **not** declare `autonomy: auto-trunk`, "a human must trigger Phase B" means
+a person runs `colab ship` themselves. Running the command **is** the go. Ship opens the
+autonomy gate for that person and runs every other precondition unchanged. Why: [ADR 539](docs/adr/539-autonomy-core-paths-rationale.md).
+
+The bar is the one the CLI already applies to human-only acts (`colab adopt --autonomy`):
+- **An interactive terminal** — stdin and stdout both a TTY, and **not** an agent shell
+  (`CLAUDECODE=1` or `AI_AGENT` set). Ship then asks `proceed? [y/N]` just before its first
+  write. Anything but `y`/`yes` changes nothing.
+- **Or `COLAB_HUMAN=1` and `--answered-by <name>`**, for a person without a terminal prompt.
+  `COLAB_HUMAN=1` alone is refused, with what is missing.
+
+**[Hard — gate: colab ship autonomy gate]** **An agent never opens this door on its own.** An agent
+shell is not a terminal, whatever its stdio is. Setting `COLAB_HUMAN=1` follows the same rule
+as everywhere else in the handbook: a human's instruction in the live session, never the agent's
+own reading of the situation.
+
+What the door changes, and what it does not:
+- It is checked **after** auto-trunk and docs-only, so those keep their own rows and records.
+- The autonomy row reads `human door (#525): <how>`. `--dry --json` reports
+  `autonomyGate.human: { open, how, why }` whenever the door was consulted, with `how` one of
+  `"tty"`, `"colab-human"` or `null`.
+- An unattended refusal names the exact commands a human runs, with the same selector
+  (`--worktree`, `--branch` or `--direct`).
+- The 🚢 comment (and the ✅ evidence-close comment) records that the merge went through the
+  human door, and how.
+- `colab ship --batch` is unchanged. It still needs `auto-trunk`, because a batch is one
+  unattended push.
+- It grants nothing past the trunk merge. Promotion, tags and deploys stay where §6 puts them.
+
 ### Core paths — a PR and a non-author approval before landing (#350)
 
-Landing is machine-only: `colab ship` squashes a branch onto its target once the mechanical
+**[Hard — gate: colab ship core-path review]** Landing is machine-only: `colab ship` squashes a branch onto its target once the mechanical
 preconditions pass. **The one exception is the core.** A branch that touches a core path goes
 up as a pull request, and it lands only after an account other than its author has approved it.
 
@@ -753,10 +730,7 @@ call, and every doubt resolves toward review.
 
 **A fork's inherited `CODEOWNERS` binds nothing until the fork writes its own (#483).** A
 [fork of an upstream](#a-fork-of-an-upstream--a-repo-you-own-that-tracks-one-you-dont-449)
-carries the upstream's file unchanged, and that file names the upstream's teams. A team of
-another org cannot review in the fork, so honouring it turns every landing into a human gate
-that nobody here decided on. Measured: a fork with `auto-trunk` and an inherited
-`* @<upstream-org>/…` paused two docs-only branches in a row, every path read as core. So on a
+carries the upstream's file unchanged, and that file names the upstream's teams. Why, with the measurement: [ADR 483](docs/adr/483-core-path-fork-codeowners-rationale.md). Also [ADR 539](docs/adr/539-autonomy-core-paths-rationale.md). So on a
 fork, `colab ship` ignores every owner of the form `@org/team` whose org is not the fork's own
 owner, before anything else is read, and says so in the `core-path review` row. A rule left with
 no owner carves its paths out, exactly like an ownerless line. Everything else is unchanged:
@@ -767,7 +741,7 @@ either is unknown, nothing is ignored. `colab adopt` names the ignored teams at 
 a fork owner who wants a review on some paths learns there that the fix is to write the fork's own
 owners into the file, as a fork patch.
 
-**The pause.** When the rule is active and the branch touches a core path:
+**[Hard — gate: colab ship core-path review]** **The pause.** When the rule is active and the branch touches a core path:
 
 1. The precondition table gains a `core-path review` row, marked `⏸`.
 2. Once every other precondition passes, ship pushes the branch, opens a PR to the target (or
@@ -800,7 +774,7 @@ machines apart is what the `Machine:` trailer and the branch prefix are for
 ([§4](#4-branches-and-commits)): they support measurement, not approval. A second operator
 needs a second account.
 
-**A trunk-direct unit that touches a core path is refused, not paused (#351).** `colab ship
+**[Hard — gate: colab ship --direct refuses]** **A trunk-direct unit that touches a core path is refused, not paused (#351).** `colab ship
 --direct` closes a branchless unit whose commits are already on trunk, so there is no branch to
 open a PR from and nothing left to hold back. When the rule is active and the unit touched a core
 path, `--direct` refuses to close it. The precondition table gains a `core-path review` row,
@@ -810,25 +784,22 @@ exception uses: every trunk commit since its earliest claim, by anyone. That can
 refusing. When the paths belong to another unit's reviewed landing, a human closes the issue by
 hand. `CODEOWNERS` is read twice: from trunk as it stood before the unit's first commit, and from
 trunk now. A path is core if either file covers it, and the rule is inert only when both files
-are. For `--direct` the target already contains the unit, so reading the current file alone would
-let a unit exempt itself by deleting or narrowing it. The door that makes the trunk-direct commit
-in the first place (`colab solo`) does not check core paths. That would be a separate change,
-taken only if a bypass is ever measured, because `--direct` is attended by construction.
+are. The door that makes the trunk-direct commit
+in the first place (`colab solo`) does not check core paths.
 
 **Not covered here:** escalating to the repo owner after a set wait. That is a separate change.
 
 ### Solo flow — trunk-direct, issue-on-demand, entry-gated (a human must be at the keyboard)
 
-`ceremony: light` relaxed the record-keeping *end* of a session; the *start* — pre-filed
-issue, claim, branch, worktree — stayed full weight even there. Solo flow is the
+ Solo flow is the
 **coexistence, attended** cell of the table above: legal on any repo that does not declare
 `writes: isolated` (absence and every other value permit it — ⚖ #233), **and only to a
 session a human is behind**. A repo one person codes directly, in one conversation-driven
 session, with no other session to protect against — the start-side invariants exist to
 protect *other* sessions, and the attendance requirement exists because trunk-direct
-itself needs someone present to answer for the commit.
+itself needs someone present to answer for the commit. Why: [ADR 539](docs/adr/539-solo-place-claims-rationale.md).
 
-0. **Attendance comes first — before any mechanical check below.** `COLAB_HUMAN=1` asserts
+0. **[Hard — gate: colab solo refuses]** **Attendance comes first — before any mechanical check below.** `COLAB_HUMAN=1` asserts
    one thing: a human is behind this command ([§5, "The human flag"](#the-human-flag--what-colab-human1-asserts),
    below). Set it only on a human's explicit instruction — **transcription, never
    inference**: type it because the human said "take the trunk," never because the
@@ -837,28 +808,19 @@ itself needs someone present to answer for the commit.
    literally contain the words, and an unattended session cannot tell an instruction from
    a quotation of one. `writes: isolated` vetoes this outright, for a human exactly as for
    an automated session — no flag lowers that bar.
-1. **Entry gate, not honor system.** `colab solo` checks fresh on every invocation, never
+1. **[Hard — gate: colab solo refuses]** **Entry gate, not honor system.** `colab solo` checks fresh on every invocation, never
    a cached answer: `COLAB_HUMAN=1` set, no veto declared, no live solo session already
    open, checkout on trunk with no unpushed branch anywhere, a clean (tracked + untracked)
    tree, and no conflicting place-claim held on **this checkout** (below). Anything
    held/unmet refuses outright — full ceremony, no partial credit, with **one narrow
    exception added by #285**: a solo record whose co-located place-claim holder is
-   *confirmed dead* is superseded rather than refused. `colab solo`'s own `solo` record
-   carries no liveness signal — it used to refuse on mere presence, so a crashed session's
-   leftovers blocked every later attendee until somebody reached for `--force`, the same
-   blunt instrument used to take over a **live** holder. The place-claim beside it does
-   carry liveness, so that is what is asked. `live: true` and `live: null` (unprovable —
+   *confirmed dead* is superseded rather than refused. Why the place-claim is asked and not the solo record: [ADR 236](docs/adr/236-solo-flow-entry-gate-rationale.md). `live: true` and `live: null` (unprovable —
    including every #288 `invocation`-anchored hold, and the case where no place record
    exists at all) both keep the refusal: fail closed, exactly as the primitive does. This
    is strictly narrower than the `--force` it replaces and is deliberately **not** gated on
-   any `writes:` value — a stale record is equally stale under every one of them, and a
-   safety rule that only applies in one mode is the kind of conditional [§4](#4-branches-and-commits)'s
-   incident log warns about. **Not** on this list,
+   any `writes:` value. **Not** on this list,
    deliberately: a worktree existing anywhere else in the repo (#236), or a claim held
-   anywhere else in the repo (#240) — the same category error, twice. The claim registry
-   holds an *issue*, not a *place*, so a claim tied to a worktree elsewhere is that
-   worktree's business, not this checkout's — a session writing there is not a writer of
-   the checkout solo flow is about to commit straight to, and cannot become one. (A claim
+   anywhere else in the repo (#240) — the same category error, twice. Why neither belongs on that list: [ADR 236](docs/adr/236-solo-flow-entry-gate-rationale.md). (A claim
    taken directly against *this* checkout, with no worktree, already acquires the same
    place-claim at claim time, so it still refuses here — via the place-claim check, not a
    separate claim check.)
@@ -916,26 +878,17 @@ spawn) from writing the same trunk checkout at once. A place-claim is that lock:
 multiple worktrees still needs only one hold per checkout in use — **held by a session**
 and **verified by the writer itself**, not merely by whatever spawned it.
 
-- **What it is not.** Three partial mechanisms already exist in this fleet and none is a
-  place-claim: the claim registry holds an *issue*, not a *place*; a worktree's existence
-  implies nothing about who is writing to it *right now* (creating one is taking it — there
-  is no separate act, and nothing has refused a second writer since); and a session
-  spawner's own trunk-lock (below) is keyed to *spawning a ship-kind session*, which cannot
-  answer "may I write here right now" for work that never came through a spawn.
+- What a place-claim is not, and the three partial mechanisms beside it: [ADR 242](docs/adr/242-place-claims-rationale.md).
+
 - **Reuses the existing null-branch representation — nothing new is invented.** A hold on
   the main checkout records `branch: null`, exactly the value a trunk-checkout claim
   already carries; a hold on a worktree records that worktree's real branch name. The
   same rule that refuses the literal word `trunk` as a branch value elsewhere applies here
   too.
 - **Release is a liveness lookup at read time — never a state transition written at kill
-  time.** "Dies with its session" is what a reader assumes, and it is not what a purely
-  written record can promise: nothing reliable runs at the moment a session dies. So a
+  time.** So a
   place-claim's *check* re-derives whether its holder is still alive every time it is
-  read, rather than trusting a stored `released` flag. Measured on the one such lock
-  already running in this fleet (a session dashboard's spawn-time trunk-lock, refusing a
-  second `ship`/`sweep`-kind spawn with the holder named): it releases only once a poller
-  *notices* the holder died, roughly a minute later — so immediately re-spawning after a
-  kill gets a refusal indistinguishable from a genuine conflict. A read-time liveness
+  read, rather than trusting a stored `released` flag. Why, with the measurement: [ADR 242](docs/adr/242-place-claims-rationale.md). A read-time liveness
   check has no such lag; adopt that stronger semantics rather than the poller's.
 - **A trunk claim's hold is given back by its last `release` — a courtesy, never a
   correctness dependency (#305).** The no-worktree claim shape takes this hold at `claim`
@@ -947,8 +900,7 @@ and **verified by the writer itself**, not merely by whatever spawned it.
   claim swept long after a *later* session re-took the checkout correctly touches nothing.
   None of this weakens the bullet above: read-time liveness remains the authority, and this
   only removes the lag that made an ops session's finished hold look live for as long as its
-  process survived. Measured: a session released its issue on GitHub cleanly and still held
-  the checkout 45 minutes later, blocking every sibling claim on the machine.
+  process survived. Why, with the measurement: [ADR 242](docs/adr/242-place-claims-rationale.md).
 - **Identity is fixed when the hold is written, never matched loosely when it is released.**
   `--session` accepts a URL or any stable id, but a value that is neither is warned about at
   write time, because the self-release check is exact equality on that field: a session
@@ -961,15 +913,7 @@ and **verified by the writer itself**, not merely by whatever spawned it.
 - **The decision happens INSIDE the state lock, not beside it (#285).** A hold is acquired by
   one function that re-checks the conflict against the state it is about to write
   (`tools/lib/place.js`'s `acquire`), called from within `state.mutate`'s critical section.
-  Before this, every shared-checkout write site was a check-then-act pair straddling that
-  boundary: state was loaded with no lock, `conflict` judged that snapshot, and the write then
-  landed unconditionally under the lock without re-checking the fact the decision rested on.
-  **Measured on a fixture: 8 concurrent `colab place acquire` invocations against one checkout
-  ALL exited 0**, and the state file ended up holding a single record belonging to whoever wrote
-  last — the same "each reads unlocked, each writes held by me, both proceed *with confidence*"
-  failure the sync-location bullet below names as worse than no lock, reached through the
-  check/write split instead of through a synced filesystem. It gated nothing, on any repo,
-  under any `writes:` value. The cheap lock-free pre-check remains at every call site — it
+  Why, with the measurements: [ADR 242](docs/adr/242-place-claims-rationale.md) and [ADR 285](docs/adr/285-place-claim-serialization-under-state-lock.md). The cheap lock-free pre-check remains at every call site — it
   refuses without taking the lock in the common case, and it owns the `--force`/`COLAB_HUMAN=1`
   policy — but it is no longer the authority. Both refusals are composed from the same
   `conflict()` result, so their wording cannot drift apart; the inner one adds a line saying the
@@ -978,14 +922,9 @@ and **verified by the writer itself**, not merely by whatever spawned it.
   a synced `~/.colab` — that stays the next bullet's refusal and #289's foreign-machine branch,
   not something this ordering fixes.
 - **Serialization means acquire-or-refuse, never a queue with waiting.** Nothing sleeps, polls,
-  or blocks inside the tool. Two reasons, both structural rather than stylistic: the state lock
-  is a busy-wait spin with a fixed budget, so a blocking acquire would hold a machine-wide lock
-  across an unbounded wait — starving every other command, including the release it is waiting
-  for; and a waiter entry would be a **stored flag**, which is the one thing this module refuses
-  to keep (see the read-time liveness bullet above) — it would need its own liveness probe, a
-  second copy of the problem #288/#289 just fixed. A caller that wants to wait polls
+  or blocks inside the tool. Why: [ADR 242](docs/adr/242-place-claims-rationale.md). A caller that wants to wait polls
   `colab place check <path>` itself, which already answers in exit codes.
-- **Never in a file-synced location.** A Resilio/Syncthing/Dropbox/iCloud path has no
+- **[Hard — gate: place-claim refuses a synced path]** **Never in a file-synced location.** A Resilio/Syncthing/Dropbox/iCloud path has no
   atomicity and no consistency guarantee inside its sync window — two sessions can each
   read "unlocked," each write "held by me," and both proceed *with confidence*, which is
   worse than having no lock at all. A place-claim refuses to acquire from such a path.
@@ -999,7 +938,7 @@ and **verified by the writer itself**, not merely by whatever spawned it.
   synced path), the writer is told to use a worktree and branch instead — which needs no
   lock. Speed is what degrades, never safety; nothing ever proceeds trunk-direct without a
   hold.
-- **Override is a human act.** A held place-claim with a live holder is a genuine refusal,
+- **[Hard — gate: place-claim refuses a live holder]** **Override is a human act.** A held place-claim with a live holder is a genuine refusal,
   not friction to route around; overriding one requires the same `COLAB_HUMAN=1` bar as
   a migration grant or a promotion ([§5, "The human flag"](#the-human-flag--what-colab-human1-asserts),
   below). An `unknown`-liveness holder (recorded by session URL
@@ -1017,22 +956,24 @@ and **verified by the writer itself**, not merely by whatever spawned it.
   re-acquire, and a pid does so only where it is a **proven anchor** (the anchor-proof bullet
   below — never a bare or defaulted one) — supply an identity when one is available, this is a
   floor, not a substitute.
-- **Narrowed by #242: acquiring a SHARED-checkout hold is no longer warn-only.** A `colab claim`
+- **[Hard — gate: colab claim and colab solo refuse]** **Narrowed by #242: acquiring a SHARED-checkout hold is no longer warn-only.** A `colab claim`
   with no `--worktree` (the trunk-checkout shape) and `colab solo` both mint a hold meant to be
   re-acquired/renewed by the SAME caller across later commands — and `conflict`'s same-holder
   exemption only ever recognizes that via a truthy, matching `session`; two blank ones are never
   the same holder. So both now REFUSE outright, before any state is touched, when no `--session`
   (or `COLAB_SESSION`) is given — the #235 warn-only floor above still applies to `colab place
   acquire` and to a worktree's own hold, neither of which is re-acquired the same way.
+  **#528: a person at a plain terminal is given an identity instead of a refusal.** When no
+  `--session` is given, `COLAB_SESSION` is *unset* (an explicit `COLAB_SESSION=''` still means
+  "no identity"), and the shell is not an agent's (`CLAUDECODE=1` / `AI_AGENT`), `colab` derives
+  `person:<git user.email, else the OS user>/<h:host token>`, says once on stderr that it did, and
+  uses it everywhere a session id goes — the claim, the hold, the ship evidence. It is stable, so
+  the same person's re-acquire is recognized. Agents never derive: two concurrent agent sessions on
+  one machine would derive the same value and read each other's holds as their own — the
+  collision this gate exists to stop. A person running several units at once from separate shells
+  has the same exposure, and gives each shell its own `COLAB_SESSION`.
   **A BARE `pid` is process lineage, not a session, and is never used to decide the re-acquire
-  exemption** — only surfaced as a hint in a refusal's message when it happens to match. Two
-  invocations sharing a parent shell share one `pid` without being one writer, and this
-  primitive's whole value is refusing when it cannot prove safety; a measured falsifier run found
-  agent tool calls do not even share a stable `pid` across separate commands, so the mandatory
-  identity at the two minting call sites is the fix, not a weaker match inside `conflict` itself.
-  ⚖ #317 draws the boundary this paragraph was always about, rather than moving it: the population
-  it rules out — a `process.ppid`, shared by every command in one shell — is ruled out permanently,
-  and only a pid that was **proved** to contain the caller earns the exemption (two bullets down).
+  exemption** — only surfaced as a hint in a refusal's message when it happens to match. Why, with the measurements: [ADR 242](docs/adr/242-place-claims-rationale.md).
 - **The anchor pid is resolved per call, not always `process.ppid` (#288).** An agent's `ppid` is
   the short-lived shell spawned for ONE tool call, not the long-lived session — probing it as a
   liveness signal produces exactly the false-dead verdict this measured. So every write site
@@ -1047,27 +988,18 @@ and **verified by the writer itself**, not merely by whatever spawned it.
   This governs a different question than the #242 bullet above (whether a pid may be PROBED at
   all, not whether it exempts a re-acquire) and changes nothing about that rule.
 - **A hold's holder is identified by its proven anchor process as well as by its session string
-  (#317).** The string has to be reproduced identically by every later command of the same session,
-  and twice now it was not: a session that recorded its *name* in `--session` failed its own
-  ownership check (#306), and a ship session that could not resolve any identity at all was refused
-  by a hold **its own claim had taken minutes earlier** — one merge in 8½ hours on that repo until a
-  human cleared it by hand. So a hold is also yours when its recorded anchor pid is alive and
+  (#317).** So a hold is also yours when its recorded anchor pid is alive and
   provably contains this very invocation. Four terms guard that, and the second is the one doing the
   work: the anchor must be `'anchor'`-kind; its **proof** must be `verified` (auto-detected *and*
   ancestor-checked at write time) or `declared` (`--pid <n>`); it must be alive; and it must be this
   process or an ancestor of it **right now**. A `default` proof — a bare `process.ppid` — and every
   record written before this are excluded by construction, which is exactly the #242 population
-  above. `sessionName` is still never an ownership key, on any path. The equivalence class this
-  admits is never coarser than the session string beside it: everything it exempts is something the
-  same session could already exempt by exporting `COLAB_SESSION` once. Full argument, the four
+  above. `sessionName` is still never an ownership key, on any path. Full argument, the four
   alternatives rejected, and the falsifier that would supersede it:
   [`docs/adr/317-anchor-pid-self-ownership.md`](docs/adr/317-anchor-pid-self-ownership.md).
 - **A confirmed-dead holder lapses at read time — it is a record to clear, not a conflict to
   override (#317).** Read-time liveness (above) already meant a dead holder refused nothing; what it
-  did not mean was that the record went away. Only `colab doctor --prune` removed one, and only when
-  somebody thought to run it, so a corpse sat in `colab places` looking exactly like a hold and
-  `colab place release` demanded `COLAB_HUMAN=1` to clear it — which is the command a human actually
-  had to type at 01:35 to unstick a trunk. Now every command that writes at that path clears it on
+  did not mean was that the record went away. Why, with the incident: [ADR 242](docs/adr/242-place-claims-rationale.md). Now every command that writes at that path clears it on
   the way past, and releasing one needs no human flag: overriding nobody is not a human decision.
   **`unknown` liveness is untouched** — that is the case #288/#289 deliberately fail closed on, and
   it keeps the human bar. `colab places` stays a READ: it labels a lapsed row rather than deleting
@@ -1080,9 +1012,7 @@ and **verified by the writer itself**, not merely by whatever spawned it.
   carried a worktree, skip while another no-worktree claim of that session still holds that
   checkout, and never on a branch that KEEPS the claim (a `releasePending` claim keeps its hold with
   it). The remaining deletion sites are all worktree-keyed and never took a checkout hold at all.
-- **Machine identity, not a hostname string (#289).** A record's `host` alone false-refuses the
-  SAME machine the instant its short hostname drifts from its FQDN, or DHCP/mDNS hands out a
-  different label between processes. Comparison is now two-tier: a cheap, pure canonicalization
+- **Machine identity, not a hostname string (#289).** Comparison is now two-tier: a cheap, pure canonicalization
   (case-fold, drop a trailing dot, keep only the first label) resolves the ordinary drift case, and
   when both sides also carry a hardware-bound id — `ioreg`'s `IOPlatformUUID` on darwin, the
   D-Bus machine id on linux, a MAC-address hash as the last resort — that id decides exactly,
@@ -1090,13 +1020,7 @@ and **verified by the writer itself**, not merely by whatever spawned it.
   takes the hostname-comparison branch, which is strictly *more* permissive than the raw string
   equality it replaces; no record that compared equal before can start comparing unequal now.
 
-**A related lock already exists outside this convention, and this section describes it
-rather than forking it.** A session dashboard refuses to spawn a second `ship`/`sweep`
-session per repo, naming the holder. That mechanism's *semantics* — held by a session,
-checked before work starts, refuses rather than warns, releases on holder death — are
-what this section generalizes to any writer on any checkout, not a competing design; the
-lag correction above (poller vs. read-time liveness) is the one place the generalization
-is deliberately *stronger* than what it started from.
+How this section relates to the spawn-time lock a session dashboard already keeps: [ADR 242](docs/adr/242-place-claims-rationale.md). The rationale cut from the bullets above: [ADR 539](docs/adr/539-solo-place-claims-rationale.md).
 
 **Explicitly out of scope: any cross-machine or distributed form of this lock.** A
 place-claim is machine-local state (`~/.colab/state.json`); two machines each holding
@@ -1110,12 +1034,7 @@ from landing the same conflict undetected.
 **Another axis, and the one `deploy:` has been silently standing in for.**
 [`channels`](project.schema.md#channels--optional) names every path by which a commit
 reaches something that *runs* it — a different question from `deploy`, which names only
-the **trigger** that promotes to production. `deploy:` covers roughly two of the paths
-this fleet has actually observed: merge → CI → a deploy workflow, and a hand-run
-procedure. Measured across a real fleet, code reaches something that runs it by at least
-seven distinct routes, and `deploy: none` had come to mean "there is no workflow file,"
-when the honest reading has to be "nothing runs this code anywhere" — three separate
-running services were found declaring exactly that.
+the **trigger** that promotes to production. Why, with the measurement: [ADR 523](docs/adr/523-channels-axis-rationale.md).
 
 | by what path a commit reaches something that runs it | value |
 |---|---|
@@ -1134,12 +1053,7 @@ Full field shape, the omission asymmetry, and the one advisory:
 [`project.schema.md`](project.schema.md#channels--optional) — this section states the
 argument, that page states the field.
 
-**Why this is not the exposure axis again.** [Exposure](#exposure--what-consumes-a-merge-here)
-asks *who consumes a merge*; this asks *by what route a commit reaches the thing that
-runs*. They fail differently: a repo can answer exposure correctly and still have an
-undeclared channel — the consumer is right, the route is invisible. And two repos with
-identical exposure can need completely different care, because one ships by a reviewed
-workflow and the other by a file-sync nobody wrote down.
+Why `channels` is not the exposure axis again: [ADR 523](docs/adr/523-channels-axis-rationale.md).
 
 **Names the KIND of channel; the MACHINE is never in the descriptor.** Several channels
 are inherently machine-local — a hook installed on one host, a service definition, sync
@@ -1154,18 +1068,9 @@ per-host mechanism the repo owns.
 **Intended channels get declared; unintended ones are findings, never values.** A working
 tree file-synced between machines while git metadata is deliberately excluded is a bug,
 not a deployment strategy, and this model must not normalise it into a legal member of
-the list. Two shapes of consequence, described here by what was true rather than by which
-repo it was true of: a running service reporting a build from a dirty working tree at a
-revision matching no commit findable on the machine inspected, while the repo's own
-deploy script *refuses* a dirty tree by design — meaning the binary arrived by a path that
-bypassed the repo's own documented procedure; and a second machine carrying no git
-metadata at all for a repo it was nonetheless running, so a directory-scoped git command
-silently resolved to an enclosing repository and answered confidently about the wrong one.
+the list. The two shapes of consequence: [ADR 523](docs/adr/523-channels-axis-rationale.md).
 
-**Consequence — a file-synced working tree cannot use trunk-direct at all.** What makes a
-shared-checkout hold safe is a lock on one checkout, and machine-local state is the
-correct home for that lock — but only while a path on one machine means one machine. Sync
-breaks that silently: two machines can each believe they hold the only checkout. The mode
+**Consequence — a file-synced working tree cannot use trunk-direct at all.** The mode
 is **unavailable** until the repo is excluded from the sync; performing the exclusion is
 operations work, not a rule this handbook states. This is a distinct fact from the
 [place-claim](#place-claims--the-writer-verifiable-hold-a-shared-checkout-needs-and-a-worktree-does-not)
@@ -1173,21 +1078,9 @@ rule that the *lock's own state* must never live on a synced path — that rules
 lock is stored, this rules on whether the checkout being locked is itself trustworthy as
 "one machine" at all.
 
-**Retired: the second consequence, where the trunk merge was itself the deploy.** A rule
-used to sit here requiring such a repo to keep a branch and a pre-merge gate for
-trunk-direct rather than running it freely — a derived constraint from `channels`+`deploy`
-together, not a declared field. ⚖ #233 dropped it outright rather than deriving a
-replacement test, measuring first that the shape it protected against (`exposure: live`
-**and** `trunk: main`) has zero instances across 40 adopted descriptors — every live repo
-already declares a trunk distinct from `main`. See
-[Writes, "Retired: the deploy-shape prohibition"](#writes--the-trunk-direct-veto-and-the-two-things-that-make-a-branch-mandatory)
-for the replacement: a repo needing this restriction now declares `writes: isolated`
-outright, and the audit reports the undeclared shape as an informational advisory.
+The second consequence, retired by #233: [ADR 523](docs/adr/523-channels-axis-rationale.md).
 
-**What this unit does not do.** It ships the `channels` key, its shape/enum check, and the
-descriptor-internal advisory — nothing more. **#137 later added a falsifier**: a
-version-shaped tag, or a committed deploy path, contradicting a declared `channels: [none]`
-— a `warn`, on `exposure`'s own precedent, plus a duration report computed from git history.
+What the unit that introduced `channels` did, and the falsifier #137 added: [ADR 523](docs/adr/523-channels-axis-rationale.md).
 Of the seven values above, only `artifact` (a tag) and `workflow` (a committed deploy path)
 are checked today; `hook`, `procedure`, `checkout`, `data`, and sync membership are each a
 named, deliberate deferral — see `audit/README.md` for the reason each was left out and what
@@ -1197,10 +1090,8 @@ question is now asked, in words, by [§9](#9-adopting-this)'s shared question se
 5, first-time adoption or a sync against a repo predating this axis), and `colab adopt`
 (#199) detects/asks/derives/writes the set in one act — proposed candidates only (a tag, a
 committed deploy path, a hooks dir), never an asserted absence, on the same asymmetry as
-`exposure`.
-`room`, `exposure`, `ceremony`, and `writes` rules are unchanged; `tier`,
-`trunk`, `deploy`, and `production` stay fully authoritative, and nothing in the fleet, nor
-any outside adopter of this public repo, breaks on this merge.
+`exposure`. Why: [ADR 539](docs/adr/539-channels-marker-rationale.md).
+What the merge left unchanged: [ADR 523](docs/adr/523-channels-axis-rationale.md).
 
 ---
 
@@ -1221,8 +1112,7 @@ stack: capacitor-vite    # free-form; describe the repo honestly
 `manual` means a human runs a documented procedure; it requires `runbook: <path>` naming
 that document, and the audit checks the file is really there.
 
-`stack` is a **free-form string**, not a fixed list — a closed enum was tried and
-immediately failed on a Capacitor app fitting no bucket.
+`stack` is a **free-form string**, not a fixed list. Why: [ADR 539](docs/adr/539-channels-marker-rationale.md).
 
 Optional toolchain keys (`node:`, `php:`, …) may be added — see [§7](#7-ci-and-toolchain).
 A repo keeping a long-lived line declares it in `integration:` — a development-side axis
@@ -1251,18 +1141,14 @@ Full field reference: [`project.schema.md`](project.schema.md).
 ### Boot recipe — an entry point the repo owns, not a table a consumer keeps
 
 `ports:` declares **where** a repo's trunk dev server listens; nothing declares **how**
-it starts, so every consumer wanting to start one has kept its own external table of
-start commands, unvalidated against the repo, forcing a default onto any repo it has no
-entry for.
+it starts.
 
 **So the entry point is conventional, not a marker field:** if `<repo>/.colab/dev` exists
 and is executable, that starts the trunk dev server — no arguments, foreground, exits
 when the server stops. Absent it, a caller falls back to its own ecosystem default. A
 boot recipe changes with the code, so it belongs beside the code, not in a shared schema.
 
-Measured cost of the status quo: a repo silently inherited an external table's default
-ecosystem; the session's command died on the spot, and the caller was told the start had
-**succeeded** while the port stayed dead indefinitely, with nothing to flag it.
+Why, with the measurement: [ADR 539](docs/adr/539-channels-marker-rationale.md).
 
 **A start is verified by the declared port accepting a connection, never by the process
 manager's exit code** — a supervisor exits 0 the moment a session is created, not when
@@ -1291,8 +1177,7 @@ from the ref alone by every other machine. `colab worktree new` adds the prefix 
 still pass the unprefixed name. Undeclared, the unprefixed shape stays the default, and both
 shapes conform everywhere: the issue numbers stay in the **trailing** `-<N>` run, and every
 reader (ship's harvest, the remote-claim check, the skills) anchors there, so none of them
-needs to know the prefix exists. The shapes cannot be confused — the slug has no `/`, so four
-segments can only be the prefixed shape. An opt-in CI check for either shape ships as
+needs to know the prefix exists. An opt-in CI check for either shape ships as
 `templates/branch-name.yml`.
 
 **The `Machine:` trailer (#350).** Every squash `colab ship` lands carries
@@ -1304,9 +1189,7 @@ measured from git alone:
 each unit. It records where a landing ran. It is not an identity, and no gate reads it
 ([§2, *Core paths*](#core-paths--a-pr-and-a-non-author-approval-before-landing-350)).
 
-**Not on a public repository (#367).** The label is a hostname, and a commit message cannot be
-edited once it is pushed. On a public repository the trailer would publish an internal hostname
-permanently, once per ship. So `colab ship` reads the destination first. If the forge reports
+**Not on a public repository (#367).** `colab ship` reads the destination first. If the forge reports
 the repository as public, or `project.yml` declares `room: public`, the squash carries no
 `Machine:` trailer, and the `Colab-Adopted:` trailer (#324) keeps its branch and sha but drops
 its `on <host> (machine <id>)` tail. A private repository is unchanged. When the visibility
@@ -1316,7 +1199,7 @@ line costs one traceability record and a published hostname cannot be taken back
 `room:` restores it. `colab ship --dry` prints `Machine trailer: …` with the decision, and
 `--dry --json` reports it as `machineTrailerDecision`. The cross-machine measurement above
 therefore covers private repositories only. A `branchPrefix: machine` branch name still carries
-the label too, and that stays a deliberate choice for the repo that declares it.
+the label too, and that stays a deliberate choice for the repo that declares it. Why: [ADR 539](docs/adr/539-branches-and-commits-rationale.md).
 
 **A branch may carry a group of related issues** — suffix them all:
 `fix/import-fixes-115-114-113`. Claim every issue in the group before starting, and
@@ -1328,8 +1211,7 @@ not — #319.)
 **A group is not a chain.** A *group* is issues that touch the same code and must move
 together on one branch, spelled with trailing numbers in the branch name. A *chain* is
 issues that must happen in order, across separate branches — recorded as a dependency
-([§5](#5-claiming-work--how-to-say-im-on-this)), never by a branch name. Mixing them
-produces a branch carrying work that is not ready, or a sequence nothing enforces.
+([§5](#5-claiming-work--how-to-say-im-on-this)), never by a branch name.
 
 **Branches that predate adoption are grandfathered** — do not rename them; several may be
 live worktrees. Apply the convention to new branches only.
@@ -1349,30 +1231,24 @@ colab worktree new feat/<slug>-N --issues N --base v2    # base = the declared l
 ```
 
 Base and merge target are **one decision, not two** — say which branch you merged into
-whenever you report a session done. A branch cut from a line and merged into trunk
-carries the entire line in with it, inside one squash commit that reads like a small
-change.
+whenever you report a session done. Why: [ADR 539](docs/adr/539-branches-and-commits-rationale.md).
 
 **The main checkout stays on trunk at rest — a worktree is the default, not a
 preference.** A dev server, a symlink, a scheduled job may read that working tree, and
-none of them learn that you branched it. Measured: a session branched a repo's main
-checkout for a chore; that repo ran always-on from the tree, so the live app served
-unmerged feature-branch code until a human noticed by eye. Leaving the tree merely
+none of them learn that you branched it. Leaving the tree merely
 *dirty* is the same fault with wider blast radius — an uncommitted file there blocks
 every other session's trunk merge in that repo. A plain branch is still allowed on a
 repo nothing reads from; taking it means **you** own returning the checkout to trunk
-before you wrap.
+before you wrap. Why: [ADR 539](docs/adr/539-branches-and-commits-rationale.md).
 
 **`git stash` is repo-scoped, not worktree-scoped — never reach for a bare stash in any
 checkout of a repo that has more than one.** `refs/stash` is one ref per repository, not
 per checkout; two concurrent sessions stashing around the same time can push/pop over
-each other with no error. Measured: on a repo running 10+ concurrent worktree sessions,
-one session's `git stash pop` restored a *different* session's uncommitted changes, with
-a third, unrelated, much older stash sitting in the same shared stack the whole time.
+each other with no error.
 **The hazard follows the repo, not where a session stands** (#241) — a recovery that
 *starts* in the main checkout (stash) and only *pops* inside a worktree still shares the
 one ref between two checkouts; it is not exempt just because the command that reaches for
-`refs/stash` isn't the one sitting inside the worktree.
+`refs/stash` isn't the one sitting inside the worktree. Why: [ADR 539](docs/adr/539-branches-and-commits-rationale.md).
 
 Prefer, in order: `git diff`/`git status` to read without moving; targeted
 `git checkout -- <path>` plus manual re-apply; comparing directly against
@@ -1399,33 +1275,17 @@ main checkout's path as a prefix. A judgement made from that path string, or fro
 directory walk that descends into `.worktrees/`, reads "the main checkout is dirty" when
 it is not — git itself is not fooled; it already excludes registered worktrees from the
 parent's status. The only reliable check is `git -C <repo-root> status --porcelain`,
-scoped to the repo root, nothing else. Measured: a wrapping session reported the shared
-main checkout dirty with two files it did not own, and named another session's issue as
-the cause — the files were inside `.worktrees/<other-session>/`, on that session's own
-branch, doing exactly the right thing (#273). That was a **false positive about
-dirtiness itself** — the check asked the wrong question (a path prefix, not git) — and
-the fix above, *ask git scoped to the repo root*, stands on its own and is not touched
-by what follows.
+scoped to the repo root, nothing else. Why: [ADR 539](docs/adr/539-branches-and-commits-rationale.md).
 
 **Git answers *whether* the root is dirty; it never answers *whose* the dirt is — and
-the two questions must not collapse into one default.** A session's process cwd is the
-main checkout, not any worktree it later creates (code-start §4 creates the worktree
-after the cwd is already fixed), so a tool call made with a relative path anywhere in
-that session lands on trunk with no error — most often a docs edit made after the code
-itself already landed correctly in the worktree (#294). Reading every dirty hit here as
-categorically "someone else's" — the reading this section used to state outright —
-assumes away exactly that failure: the session that caused it declines to even check,
-ships code with no docs, and leaves the trunk checkout dirty for every other session's
-merge to trip over. **The default is "possibly mine until shown otherwise," not the
+the two questions must not collapse into one default.** **The default is "possibly mine until shown otherwise," not the
 reverse** — the cost of checking one file's branch overlap and content is a `git diff`
 and a sentence in a report; the cost of assuming wrongly is lost content plus a blocked
 repo. Once a dirty path is actually investigated — does *this* session's branch touch
 it, does the content read as this session's own — and it is conclusively not yours, the
-original rule still holds exactly as before: **report it, never clean it.** The
-investigation is what changed, not the rule for what to do once you've genuinely run
-it. `skills/code-wrap/SKILL.md` A2b is the worked procedure — the ladder to run, the
+original rule still holds exactly as before: **report it, never clean it.** `skills/code-wrap/SKILL.md` A2b is the worked procedure — the ladder to run, the
 three verdicts, and the patch-based recovery for a hit that turns out to be yours (using
-the recipe two paragraphs above, never a stash).
+the recipe two paragraphs above, never a stash). Why: [ADR 539](docs/adr/539-branches-and-commits-rationale.md).
 
 **Commits** — Conventional Commits (`feat:`, `fix:`, `docs:`, `chore:`, `refactor:`,
 `test:`, `perf:`, `design:`). Not decoration: [§6](#6-releases) builds the release summary
@@ -1442,9 +1302,7 @@ breaking (any type, +1000) > feat > fix > perf > refactor / revert > design > do
 ```
 
 `design:` (a specification, mockup, or visual decision rather than a behaviour change)
-is ranked here, not merely branch-legal — added because an adopter had 3 genuine
-`design:` commits over 400, six live `design/…` branches, and its own conventions
-already named `design` a legitimate type before this repo's tooling recognised it.
+is ranked here, not merely branch-legal. Why: [ADR 539](docs/adr/539-branches-and-commits-rationale.md).
 
 **A type outside this list is not invisible, but it cannot outrank a named one.** A
 commit shaped like a Conventional Commit (`type(scope): text`) whose `type` this repo
@@ -1463,38 +1321,24 @@ than guessed.
 - `dev` → `main` promotion (Tiers A and C): **`--no-ff` merge commit**, never squash —
   the merge commit *is* the release boundary.
 - **The merge message closes its issues: write `Closes #N`** (one per issue), not a bare
-  `(#N)` — GitHub auto-closes only on the keyword. Measured: 26 of 30 issues sat open with
-  their code long since merged, purely because merges said `(#22)` instead of `Closes #22`.
-- **`Closes #N` requires the issue's own scope fully accounted for — a mechanical gate,
+  `(#N)` — GitHub auto-closes only on the keyword. Why: [ADR 539](docs/adr/539-branches-and-commits-rationale.md).
+- **[Hard — gate: colab ship refuses unticked plan]** **`Closes #N` requires the issue's own scope fully accounted for — a mechanical gate,
   not an honour system (#74).** An issue's `## Plan` is a real GitHub checklist — one
   `- [ ]` line per deliverable, load-bearing. A prose-only `## Plan` cannot be verified
   mechanically (reported, not blocking; cannot bind an issue opened before this
   convention). `colab ship` parses the checklist before composing the squash body: any
   claimed issue with an unticked box and no declared `Remainder: #M` **refuses the
   merge outright (#263)** — a precondition row exactly like a red CI run, not a silent
-  `Closes #N` → `Refs #N` downgrade that lets the ship proceed anyway. Measured before
-  this tightened: on one repo, ~8 weeks, 125 `Refs #N` merges against 780 `Closes #N`
-  ones, and only 10 commits ever declared a remainder — the redirect was reported, but
-  reported is not the same as read; a tracker showing an open issue with unticked boxes
-  is indistinguishable from work nobody started. Ticking every box, declaring
+  `Closes #N` → `Refs #N` downgrade that lets the ship proceed anyway. Ticking every box, declaring
   `Remainder: #M`, or an explicit `--refs #N` (a deliberate choice, never gated) all
   clear it. A hand-merge runs the identical check by reading the same two fields
-  (`gh issue view N --json body,comments`). Motivating incident: an issue closed by
-  squash-merge with a third of its three-section scope unimplemented — the sections were
-  prose, so nothing could have caught it.
+  (`gh issue view N --json body,comments`). Why: [ADR 539](docs/adr/539-branches-and-commits-rationale.md).
 - **Requiring the remainder issue is the convention — the gate does not file one for
-  you (#263).** A merge blocked on a missing `Remainder: #M` could in principle create
-  that issue automatically; this deliberately does not, because filing on an agent's own
-  judgement writes an artifact to the tracker nobody asked for, while requiring the
-  human (or session) that already knows what was left out to write the one line keeps
-  authorship where the judgement actually lives. The smaller change, taken on purpose.
+  you (#263).** Why: [ADR 539](docs/adr/539-branches-and-commits-rationale.md).
 - **`--refs` keeps an issue open, so the same step must also stop it being started
   (#385).** `--refs #N` is still a deliberate choice and still ungated. But after the ship,
   #N is open, possibly `deps-checked`, and unclaimed. If nothing on it says "do not start",
-  a scheduler picks it up again as code work. In the measured case, the only unticked items
-  were a live end-to-end proof that only a human-driven session could produce. The
-  re-started implementer found nothing to do and held a concurrency slot for about an hour,
-  until a human-side watch parked the issue. So when you choose `--refs` over closing:
+  a scheduler picks it up again as code work. So when you choose `--refs` over closing:
   - **The leftover is a check only a person can run** (a UI click-through, a look on a
     real device, a live end-to-end proof): do not `--refs` it. Close #N and add one row to
     the repo's single open `Human verify:` issue (§5 *Human verify*, #491).
@@ -1511,17 +1355,15 @@ than guessed.
   `deferred:*`, `needs-decision`, a non-code `delivery:*`, `tracking`, or a label declared
   under `holds:`. `--dry --json` reports the same thing as `refsBrakeFindings` and as an
   `ok: true` advisory row. The tool never applies the hold itself. Which kind, whose wake
-  and which date are the shipper's call, for the same reason the gate does not file the
-  remainder issue.
-- **Every closed issue must be corroborated by git, not the claim registry alone (#87).**
-  Measured: a branch carrying #71 and #76 resolved to `[71, 74, 76]` because a co-tenant
-  claimed #74 onto the same worktree minutes after merge authorisation, with nothing on
-  the branch implementing it. Corroboration reads two git-side sources: the branch name's
+  and which date are the shipper's call, never the tool's — the gate does not file the
+  remainder issue either. Why: [ADR 539](docs/adr/539-branches-and-commits-rationale.md).
+- **[Hard — gate: colab ship refuses uncorroborated issue]** **Every closed issue must be corroborated by git, not the claim registry alone (#87).**
+  Corroboration reads two git-side sources: the branch name's
   **trailing** number group, and `#N` references in **commit bodies**. An issue named by
   neither is a finding — `colab ship` refuses; a hand merge must perform the same check.
   Do not resolve it by quietly writing `Refs #N` — that hides the collision; `--refs`
-  exists for when an operator actually means it.
-- **A deliverable with no diff still has to close (#90).** A decision recorded, an
+  exists for when an operator actually means it. Why: [ADR 539](docs/adr/539-branches-and-commits-rationale.md).
+- **[Hard — gate: evidence-close needs an evidence comment]** **A deliverable with no diff still has to close (#90).** A decision recorded, an
   investigation concluding "no change needed", an artifact stored outside the repo —
   there is nothing to squash. `colab ship` detects `landed ∧ zero own commits` (both
   measured from git, never declared by the session) and switches to **evidence-close**:
@@ -1530,12 +1372,10 @@ than guessed.
   A unit committed straight to trunk has no branch to detect this from; it closes the same
   way through `colab ship --direct` (#302), which matches its claims by session identity and
   refuses until the work is published.
-- **A ship releases every claim it carried (#319)** — not only the worktree's. A claim with
-  no worktree (`--branch`-keyed, or taken with neither) used to survive a successful ship
-  still `in-progress`, because teardown ran only through `colab worktree rm`. An unattached
+- **A ship releases every claim it carried (#319)** — not only the worktree's. An unattached
   claim of the *same session* is carried by a branch ship only when the branch name's
-  trailing group names it; otherwise it is reported and left alone, never closed.
-- **A branch this machine never held is not a legit zero (#324).** A branch that exists only
+  trailing group names it; otherwise it is reported and left alone, never closed. Why: [ADR 539](docs/adr/539-branches-and-commits-rationale.md).
+- **[Hard — gate: colab ship refuses unadopted remote-only branch]** **A branch this machine never held is not a legit zero (#324).** A branch that exists only
   on `origin`, with no issue number in its name and no local claim, is most likely another
   machine's work in flight; `colab ship` refuses it unless `--adopt` is passed, and an
   adopted squash carries a `Colab-Adopted:` trailer naming the remote sha and this machine.
@@ -1543,11 +1383,9 @@ than guessed.
   git created it from `origin/<same name>` (a DWIM `checkout`/`switch`/`worktree add`, or
   `--track`), it reads the same as remote-only. Where no reflog survives, nothing contradicts
   the local reading.
-- **Before merging to trunk, check that trunk's last CI run is green — and that it ran at
-  all.** We once merged for 12 straight hours into repos whose CI was silently dead (org
-  billing lockout) — every run "failed" without starting. **Ask by commit, not by recency
-  (#92):** `gh run list --branch <trunk> -L 1` reads whatever ran *last*, and under
-  `cancel-in-progress` a cancelled straggler can outrank a passing run on the same commit.
+- **[Hard — gate: colab ship refuses unless trunk CI green]** **Before merging to trunk, check that trunk's last CI run is green — and that it ran at
+  all.** **Ask by commit, not by recency
+  (#92):**
   The right question: has EVERY run at this branch's current head sha completed, and did
   one of them succeed? `colab ship` asks it that way. Both halves are load-bearing: a
   sibling that is merely still in progress has not passed either (#307), so a fast
@@ -1559,9 +1397,9 @@ than guessed.
   A run that comes *after* the verdict and acts on it — a `workflow_run` release such as
   `release-auto.yml`, its scheduled finalize, a dispatch, a deploy — is set aside and named the
   same way. Its failure belongs to the release lane, so it never turns trunk red for ship and
-  ship never waits for it; measured, four green candidates parked ~30 min per landing behind
-  one. `ship-gate-workflows:` / `ship-ignore-workflows:` in `project.yml` override the set by
-  workflow name ([schema](project.schema.md#ship-gate-workflows-ship-ignore-workflows--optional)).
+  ship never waits for it ([why](docs/adr/539-schema-checks-and-gates-rationale.md)) — except a
+  dispatch of the push- or PR-triggered CI workflow with no push run at the sha (#567: a lost push
+  event). `ship-gate-workflows:` / `ship-ignore-workflows:` override the set by workflow name ([schema](project.schema.md#ship-gate-workflows-ship-ignore-workflows--optional)).
   A trunk sha whose tree has **no workflow file at all** (#482) — a freshly adopted repo whose
   adoption branch is what adds CI — can never draw a run, so nothing there can be red: its
   `none` gets the *Branch CI* treatment for a run that cannot arrive, and the candidate's own
@@ -1576,17 +1414,14 @@ than guessed.
   workflows are never reduced: a failing one beside a passing one is still not green.
   `colab trunk-ci` prints that verdict for trunk's head, read-only and from the same function
   (#463); a skill that needs it calls the verb instead of restating the rule as a `gh run
-  list` filter — one such filter, "green when any run succeeded", read a sha green that ship
-  had parked every candidate on, and the red went unowned.
+  list` filter ([why](docs/adr/539-schema-checks-and-gates-rationale.md)).
   **Waiting for that verdict is `colab ci-wait`, never a loop (#495).** It backs off
-  (30 s → 60 s → 120 s, then a deadline), sends conditional requests so an unchanged read is
+  (30 s → 60 s → 120 s, then a deadline — the repo's own CI wait bound, measured from its
+  history, `colab ci-profile`, #559), sends conditional requests so an unchanged read is
   free, and ends with its own exit code on a rate limit or an unreadable state instead of
-  retrying. Hand-rolled `sleep N; gh run …` loops were measured at ~88% of ~4,500 REST calls in
-  one hour on a shared agent identity — two loops on one run, a loop that read rate-limit
-  errors as "keep waiting", one orphaned for 5½ h — until the hourly quota ran out for every
-  agent. `colab trunk-ci` itself costs one runs read (plus one check-runs read on green) and
+  retrying. `colab trunk-ci` itself costs one runs read (plus one check-runs read on green) and
   caches its verdict per trunk sha for 45 s in the repo's git dir, shared by every session on
-  that checkout.
+  that checkout. Why: [ADR 539](docs/adr/539-branches-and-commits-rationale.md).
   That is the half of the question about what is merged **into**; the branch's own run
   is the other half — see *Branch CI*, below.
 - **That resolves a FALSE red — a real one has two different doors, one of them
@@ -1599,10 +1434,7 @@ than guessed.
 Trunk CI answers *"is the thing I am merging into healthy?"*. It says nothing about the
 thing being merged, and both gate a merge. A local quality gate does not answer for the
 branch's CI either: local and runner disagree for ordinary reasons — a different OS, a
-browser the runner has to boot, a toolchain pin the local machine already satisfies.
-Measured, 2026-09-05: a branch sat red three times on its remote run while its wrap had
-recorded a clean local gate, and no step between the implementer's wrap and the merge was
-reading that run at all.
+browser the runner has to boot, a toolchain pin the local machine already satisfies. Why: [ADR 539](docs/adr/539-branch-ci-rationale.md).
 
 **One cause of that disagreement is closed before the push, not read after it (#403).** A
 test that reads its author's machine (the home directory's config, a local daemon, a token
@@ -1623,13 +1455,11 @@ same test command the local gate runs, and its runner does not share a developer
 (a hosted runner, or an ephemeral container runner, but never a self-hosted runner that
 runs in someone's login session with their `HOME` and daemons). That run already had no
 developer `HOME` and no local daemon, at the exact commit being merged, so repeating it
-locally adds minutes and no evidence. Measured on this repo's own ship passes: the local
-suite took 6–10 minutes per run and was repeated up to six times in one pass (23 minutes),
-while branch CI ran the same tests in about 2 minutes. So the hermetic verdict may be
+locally adds minutes and no evidence. So the hermetic verdict may be
 recorded as `branch-ci` with that run's sha, and `colab gate-hermetic` runs locally only
 when branch CI cannot arrive (no trigger for the branch), is not `green`, or does not run
 the tests. The same holds after a sync: push and read the new branch run before
-re-running the suite locally.
+re-running the suite locally. Why: [ADR 539](docs/adr/539-branch-ci-rationale.md).
 
 **Local is a smoke check; branch CI is the one gate (#410).** A repo whose branch CI can
 arrive may say so in `project.yml` (`gate:` with `smoke:` and `authoritative: ci`,
@@ -1641,21 +1471,7 @@ locally. A clean CI runner is the hermetic run by construction, so `colab gate-h
 stays only where the local gate is still the verdict. While iterating, run the tests for what
 you changed; the full suite runs once, where the verdict comes from. The fallback is today's
 rule, unchanged: no `gate:`, `authoritative: local`, or no workflow firing on a session-branch
-push ⇒ the local full gate plus the hermetic run. Measured on shared agent workstations
-(load ≈ 22 on 16 cores): full local suites took 6–10 min and failed on timeouts, then were
-re-run, while the same suites took 2–7 min in branch CI on clean runners — and the #403
-hermetic rule doubled each local run. No source recommends running the full suite both
-locally and in CI:
-
-- Fowler, *Continuous Integration* (2024 rev.) — the CI build is the final check; keep the
-  commit build under ~10 min. <https://martinfowler.com/articles/continuousIntegration.html>
-- *Software Engineering at Google*, ch. 23 (2020) — presubmit runs only fast, reliable tests;
-  larger suites run after. <https://abseil.io/resources/swe-book/html/ch23.html>
-- Humble & Farley, *Continuous Delivery*, ch. 7 (2010) — commit stage under 5 min, never over 10.
-- Machalica et al., *Predictive Test Selection* (ICSE-SEIP 2019) — server-side selection
-  halves cost and still catches > 99.9% of faulty changes. <https://arxiv.org/abs/1810.05286>
-- Lam et al., *The Effects of Computational Resources on Flaky Tests* (2024) — 46.5% of flaky
-  tests are resource-affected, CPU most. <https://arxiv.org/pdf/2310.12132>
+push ⇒ the local full gate plus the hermetic run. Why: [ADR 539](docs/adr/539-branch-ci-rationale.md).
 
 **Read the runs at the branch's current head sha, and report the result as one of four
 classes — not as pass/fail.** The names are shared vocabulary: the implementer records
@@ -1665,40 +1481,34 @@ reading either sees the same spelling. Spell them exactly so, everywhere:
 | class | what the runs at the head sha show | next step |
 |---|---|---|
 | `green` | **every** run `completed`, at least one `success`, none `failure` | nothing owed — this precondition passes |
-| `none` | no run exists, or **any** run is still in flight | a run queued or in flight has not passed, it has **not run**: wait, bounded — **15 minutes per candidate** by default, then a defer carrying a re-measure trigger, never an open-ended poll (#370). A run that **cannot arrive** for this ref — no workflows, or workflows triggering only on `pull_request` / trunk push — is not pending: proceed, and the base's own CI is the whole CI story — so the trunk run at the squash sha is read after the merge, before any evidence is posted, and a red there is filed as `TRUNK RED:` in the same pass (`code-ship` B2a, #374) |
+| `none` | no run exists, or **any** run is still in flight | a run queued or in flight has not passed, it has **not run**: wait, bounded — **the repo's CI wait bound per candidate** (measured from its own CI history, `colab ci-profile`; 15 minutes until it has one, #559), then a defer carrying a re-measure trigger, never an open-ended poll (#370). A run that **cannot arrive** for this ref — no workflows, or workflows triggering only on `pull_request` / trunk push — is not pending: proceed, and the base's own CI is the whole CI story — so the trunk run at the squash sha is read after the merge, before any evidence is posted, and a red there is filed as `TRUNK RED:` in the same pass (`code-ship` B2a, #374) |
 | `red:infra` | a run failed **before** the suite could judge the branch — runner boot, browser install, billing lockout, dependency fetch. **Exit 2** where the repo separates them | re-run **once**; an identical failure twice is the runner, not the branch — hand it to the ops lane. Never merged past, never sent back to the implementer: there is nothing in the diff to fix |
 | `red:finding` | the suite ran and something in it failed. **Exit 1** where separated | back to an implementer session, **as a class** — a [send-back](#who-may-touch-a-branch--the-coordinator-never-edits-implementer-work-409), never a coordinator fix. Never merged past, never re-run |
 
-- **The run must have seen the current base (#395).** A class read at a head that does not
+- **[Hard — gate: colab ship refuses stale-base]** **The run must have seen the current base (#395).** A class read at a head that does not
   contain the base's current tip is **`stale-base`**, whatever its runs say: two branches
   each green alone can combine red when neither run saw the other, and a textually clean
-  merge re-runs nothing. Measured: one branch changed a shared test base class that a
-  second branch's new tests also relied on; both were green, trunk went red on landing.
+  merge re-runs nothing.
   The next step is mechanical — sync the base in, push, wait on the new run (the same
-  15-minute bound), then land; `colab ship` refuses with this verdict, `self-clearing`. A
+  bound), then land; `colab ship` refuses with this verdict, `self-clearing`. A
   head with no run at all is not stale (the `none` row above governs it). Skipping the
   re-run because the base's new commits "touch nothing the branch's tests import" is only
-  ever allowed on a measurement, never on a guess — and no generic measurement exists today.
+  ever allowed on a measurement, never on a guess — and no generic measurement exists today. Why: [ADR 539](docs/adr/539-branch-ci-rationale.md).
 - **The quantifiers are the trunk rule's, unchanged (#92, #307).** `every … completed`: a
   fast sibling already green never answers for a slow one still running — that sha is
   `none`, not `green`. `cancelled` is `completed` and not a `failure`, so a cancelled
   straggler beside a real `success` is still `green`; the ladder must not reintroduce the
   deadlock #92 fixed.
 - **A claim's first push is `green` from a guard run, not a second suite run (#418).** A
-  claim pushes its branch at trunk's head (§5, *Record of a claim*), so that first push sits
-  on a sha the same workflow has usually already tested. The CI templates (and this repo's own
+  branch pushed at trunk's head (a plain-git cut; `colab` pushes a claim ref instead, §5,
+  *Record of a claim*) sits on a sha the same workflow has usually already tested. The CI templates (and this repo's own
   workflow) open with a `dedupe` job that runs only on a ref's **first** push, checks nothing
   out, and asks the platform one thing: does *this* workflow already have a completed,
   `success`, non-pull-request run at *this* sha? Yes ⇒ every other job is skipped, and the run
   concludes `success` — the branch reads `green`, truthfully, because the same workflow passed
   at the same sha. Trunk's run still in flight or red, no `gh` on the runner, or any API error
   ⇒ the suite runs as before (fail-open). Every later push skips the guard at scheduling time,
-  so the session's first real commit always gets the full suite at its own sha. Two shapes are
-  deliberately not used. Skipping every job on `github.event.created` leaves a run whose jobs
-  were *all* skipped; it concludes `skipped`, which is not green under the quantifiers above.
-  Waiting in the guard for trunk's in-flight run holds the runner slot that run is queued for.
-  Measured before the change, across five adopting repos over 24 h: ~19% of all CI runs
-  (~104 a day, ~660 runner-minutes) re-ran a trunk-tested sha on a freshly claimed branch.
+  so the session's first real commit always gets the full suite at its own sha. Why: [ADR 539](docs/adr/539-branch-ci-rationale.md).
 - **Trunk reuses a green run of an identical tree (#493).** A ship squash-merges a branch
   whose green run already contained the current base, so the trunk commit's *tree* is
   byte-identical to the tree that run passed — only the sha is new, and a sha-keyed skip can
@@ -1719,15 +1529,10 @@ reading either sees the same spelling. Spell them exactly so, everywhere:
   (publish, deploy, release) never sits behind this gate. One reading turns such a run red: a
   cited head that is local and whose tree provably differs from trunk's (`HUMAN_GATED` —
   trunk is untested at that sha). A citation that cannot be read leaves the run green and says
-  so, because the run's own `success` is the verdict, exactly as for #418. Measured on one
-  adopter with a 35–55 min sharded suite on self-hosted runners: trunk's duplicate run took
-  33–347 min wall time, most of it queueing behind branch runs for the same runners, and one
-  went red on a timeout over a tree that had already passed.
+  so, because the run's own `success` is the verdict, exactly as for #418. Why: [ADR 539](docs/adr/539-branch-ci-rationale.md).
 - **An unclassifiable red is `red:finding`.** Where a repo does not separate exit 1 from
   exit 2, `failure` is all the platform reports: read the failing job's log far enough to
-  say which side of the line it fell on, and if that cannot be told, report `red:finding`.
-  A wrong `red:finding` costs one hand-back to someone who can look; a wrong `red:infra`
-  spends the one re-run and then parks the work in a lane nobody opened.
+  say which side of the line it fell on, and if that cannot be told, report `red:finding`. Why: [ADR 539](docs/adr/539-branch-ci-rationale.md).
 - **Telling `red:infra` from `red:finding` is a test, not taste (#354).** The same test
   reads a red **trunk** run, where it chooses between re-running once and filing a
   `TRUNK RED:` issue — the choice this section's re-run permission otherwise leaves to
@@ -1747,11 +1552,9 @@ reading either sees the same spelling. Spell them exactly so, everywhere:
   3. **Neither ⇒ `red:finding`** — the unclassifiable rule above, unchanged.
 
   Two readings that the text alone gets wrong:
-  - **A timeout is `red:infra` only if the host was loaded.** Measured: two `Test timed
-    out in 5000ms` failures in a file that took 498 s for 49 tests, on a self-hosted
-    runner sitting at load 41 on 16 cores — re-ran green. The same text on an idle host
+  - **A timeout is `red:infra` only if the host was loaded.** The same text on an idle host
     is a real slow-test bug. Check the host (load, swap, I/O pressure) before calling it
-    infra; no host evidence ⇒ `red:finding`.
+    infra; no host evidence ⇒ `red:finding`. Why: [ADR 539](docs/adr/539-branch-ci-rationale.md).
   - **Infra-shaped is not the same as harmless.** A port collision (`EADDRINUSE`) from a
     single random draw with no retry is re-run once to clear the red **and** filed as a
     defect — the re-run unblocks the base, the cause is still the code's. The two are
@@ -1827,11 +1630,7 @@ reading either sees the same spelling. Spell them exactly so, everywhere:
   the patch?** — its title or issue says it repairs the red, or its head fixes the
   failing test. Yes → it goes first, ahead of anything queued. No → it waits, and does
   not rebase onto the red either: containment proves a cure only for a branch that is
-  one. Measured: a trunk went red on a docs-only merge — a test deferring against a
-  hardcoded date that real time walked past, a calendar bomb, no branch's regression.
-  Three branches waited reading one remedy; the one whose parent was the red sha and
-  which fixed the clock opened a PR, ran green, and cure-merged; the two bystanders
-  stayed parked until trunk was green, correctly.
+  one. Why: [ADR 539](docs/adr/539-branch-ci-rationale.md).
 - **A class describes one sha.** Anything that moves the head — a sync merge of the base
   into the branch — invalidates it; read it again at the new head. A green inherited from
   an earlier sha is exactly the green-run-on-a-different-commit this section refuses.
@@ -1850,9 +1649,7 @@ reading either sees the same spelling. Spell them exactly so, everywhere:
 
 The owner's ruling: *"Ship session should never code. Should ask the code session to
 rework."* The coordinator — a ship or sweep session — never edits, commits, wraps or gates
-an implementer's work. Measured: a coordinator asked to wrap a candidate its implementer
-had left uncommitted spent ~40 min running the full test gate on a shared, loaded
-workstation, and the repo's single ship lane landed nothing else meanwhile.
+an implementer's work. Why: [ADR 539](docs/adr/539-who-may-touch-and-batch-landing-rationale.md).
 
 **What stays the coordinator's — git mechanics, not new code.** Three are owner-ruled:
 
@@ -1868,7 +1665,7 @@ infra-class red once, cure-merge, open the red-trunk-fix PR, re-take a released 
 coordinator runs a gate only on a commit it made itself — the sync commit — never the
 implementer's gate on the implementer's behalf.
 
-**Everything else is a send-back.** A conflict that needs judgement, a hand-off that does not
+**[Hard — gate: sent-back marker is never evidence]** **Everything else is a send-back.** A conflict that needs judgement, a hand-off that does not
 verify (uncommitted work, an unpushed head, no distill comment newer than the head, no gate
 verdict), a `red:finding` or `live-env` verdict: the coordinator posts **one** Issue comment
 beginning with the fixed marker `↩️ Sent back`, addressed to the branch's implementer —
@@ -1880,12 +1677,7 @@ has not moved since, it is not repeated.
 
 ### Batch landing — one combined run, then a fast-forward (#373)
 
-Landing is serial by construction: every merge moves trunk, so the next candidate syncs
-the new trunk in and pays a whole CI cycle for its re-run, and trunk's own run for the
-last merge is still in flight when it asks. A queue of green work drains at **one change
-per trunk-CI cycle**. Measured on one repo with an 8–9 minute CI: six candidates green at
-their own heads, at most one landed per cycle — finished work waited hours behind the
-gate, not behind review.
+Why, with the measurement: [ADR 539](docs/adr/539-who-may-touch-and-batch-landing-rationale.md).
 
 Every mature system that lands several changes per cycle (merge trains, merge queues,
 rollups, speculative pipelines) **tests the combined state before it becomes trunk**. None
@@ -1901,7 +1693,7 @@ unchanged) may land through `colab ship --batch <b1,b2[,b3]>`:
    `.github/workflows/**` (it would change what grades the batch). File-disjoint members
    are preferred — only as a pre-filter that lowers eviction odds. **Disjointness is never
    the correctness gate**: semantic conflicts need no shared file. The combined run is.
-2. **Building.** Trunk's current head — green exactly as the trunk gate requires — plus
+2. **[Hard — gate: combined-head build fails on staged conflict markers]** **Building.** Trunk's current head — green exactly as the trunk gate requires — plus
    one squash commit per member, **each its own commit with its own `Closes #N`**, so
    per-issue evidence and revert stay one-to-one. A member that conflicts with those
    already in drops to the next batch — **unless every conflicting path is
@@ -1932,14 +1724,33 @@ unchanged) may land through `colab ship --batch <b1,b2[,b3]>`:
    arrive: `colab ship` says so and declines to serial — it never waits for it. Consumer
    CI opts in by adding `'ship-batch/**'` to a CI workflow's `push: branches:` — a copy of
    the current CI templates already fires there, since their `'**'` covers it (#384).
-8. **A red trunk still stops everything** except the cure/grant doors, and those apply
+8. **[Hard — gate: colab ship --batch declines on red trunk]** **A red trunk still stops everything** except the cure/grant doors, and those apply
    **per member, never to a batch**: a red trunk declines the batch outright.
+9. **Gathering, and the partner wait** (#555). A ship pass builds a batch from **every**
+   candidate ready at that moment — re-read the set right before each `--batch` call, never
+   reuse the list the pass started with. A lone ready candidate lands alone at once, unless
+   the repo declares [`ship-batch-wait: <duration>`](project.schema.md#ship-batch-wait--optional):
+   then, with the lane otherwise idle (trunk's run finished, no batch in flight), it waits
+   up to that window — counted from when it became ready, so it never restarts — for a
+   partner, and lands alone after. The handbook gives no default and no ceiling: absent
+   is no wait. A repo picks the value from its own history.
 
 `colab ship --batch` never waits: each call reads the remote, takes one step, and exits
 `0` landed · `3` paused (wait on the printed run, bounded as any other CI wait, then run
 the same command again) · `4` declined, nothing landed, ship the members one at a time.
 Declining is never a silent fall-through to the serial path: that path's sync commit
 still needs its own re-run, and landing it unseen is the thing this section exists to stop.
+
+**Tuning — the repo's own history, read by `colab batch-stats`** (#554). Neither knob has a
+handbook default, so a repo sets `ship-batch:` and `ship-batch-wait:` from what
+`colab batch-stats [--since <window>] [--json]` reports for it: batches landed and their
+fill, the combined run's first-attempt green rate, red batches and their serial fallbacks,
+members dropped at build and why, **missed partners** (a change that landed alone while
+another was already green — or turned green inside its trunk-CI cycle, with the wait that
+would have caught it), and the queue wait from green-at-head to landing. It reads git and
+CI, never machine-local state, so it answers the same on every machine. A dropped member is
+part of that record: the batch head carries one `Ship-Batch-Dropped: <ref> <branch>@<sha>
+<class>` trailer per drop, so eviction rate is measurable from trunk alone.
 
 ### Is a shipped half actually shippable? — the mechanical gate is not the judgement call (#263)
 
@@ -1987,11 +1798,8 @@ colab landed --all                 # every worktree of this repo
 **Never decide it by counting commits** — a squash mints a new commit with a new sha, so
 a shipped branch's own commits are never ancestors of its base; a count-only test reports
 every branch ever shipped as unfinished. Comparing diffs alone also fails: zero commits
-ahead but a non-empty diff, because the base moved underneath. Both measured on live
-worktrees in a single sweep. Requiring both still leaves a gap — a squash *followed by*
-base movement satisfies both (five of seven shipped branches in one repo were in this
-state). **The rule asks directly: does merging this branch into its base change the
-base's tree at all?**
+ahead but a non-empty diff, because the base moved underneath. **The rule asks directly: does merging this branch into its base change the
+base's tree at all?** Why: [ADR 539](docs/adr/539-landed-rationale.md).
 
 - **Asked against the branch's base**, trunk only by default — a branch cut from a
   declared line, measured against trunk, looks like enormous unshipped cargo.
@@ -2023,11 +1831,7 @@ state is this actually in*. Do not collapse them.
 **A green branch can be reporting a red base's problem, not its own (#293).** `colab
 ship`'s trunk-CI-green check asks whether trunk is green *right now* — never whether
 the sha a branch was actually *cut from* was green *at the time*, and those differ
-once trunk has moved. Measured: three branches cut from one identical red base sha;
-two drew a green run of their own and shipped unchallenged, one drew red and cost a
-coordinator a hand diagnosis — none of the three touched the failing harness, the
-differing verdicts were a flaky test on the base. The dangerous case is the GREEN
-one: it currently looks safest of all, which is exactly backwards.
+once trunk has moved. Why: [ADR 539](docs/adr/539-landed-rationale.md).
 
 ```sh
 colab landed --worktree <name> --ci     # adds: was the cut-from sha actually green?
@@ -2050,23 +1854,22 @@ Parallel sessions and parallel agents must not collide on the same Issue. Two la
 
 #### Record of a claim — the branch on the remote
 
-**The record of a claim is its branch on the git remote** — the branch whose name carries
-the issue number ([§4](#4-branches-and-commits)), **pushed the moment it is cut** at session
-start and again at wrap (#325). The git remote is the one store every machine already
-shares, whatever the tracker is, so it is what a claim is refused against: a branch on the
-remote carrying `#N` that is not this machine's refuses a second claim on `#N` from
-anywhere, naming the branch and how to continue it. Each machine sweeps its own worktrees.
+**[Hard — gate: colab claim refuses]** **The record of a claim is its branch on the git remote** — the branch whose name carries
+the issue number ([§4](#4-branches-and-commits)), recorded **the moment it is cut** at session
+start and pushed at wrap (#325). At the cut it is recorded as the **claim ref**
+`refs/claims/<branch>`, not the branch: a branch push fires every CI `push` trigger on a commit
+trunk already tested, and a claim ref fires none (#550). It is deleted at `colab worktree rm`.
+A claim is refused against the git remote: a branch or claim ref on the remote carrying `#N` that is not this machine's refuses a second claim on `#N` from
+anywhere, naming the ref and how to continue it. Each machine sweeps its own worktrees.
 
-- **Remote unreachable → no claim.** Fail closed: a claim checked against nothing is not a
+- **[Hard — gate: colab claim refuses]** **Remote unreachable → no claim.** Fail closed: a claim checked against nothing is not a
   lock. A repo with **no remote at all** is the one exception — nothing else could ever share
   its branches, so the machine's own record is the whole truth.
 - **Tracker unreachable → the claim still stands.** Its tracker half (below) is recorded as
   *pending* and posted when the same claim is re-run.
 - One account on **two machines** is two holders: a live claim comment from the same login on
   a different machine refuses too — the assignee set cannot say which machine holds it.
-- A claim names the machine by a canonical id, not its hostname (#327) — one machine spells
-  its hostname more than one way. The comment carries only a digest of that id: the raw id is
-  a hardware serial, and on a public repo the comment is published.
+- A claim names the machine by a canonical id, not its hostname (#327). The comment carries only a digest of that id. Why, with the measurement: [ADR 539](docs/adr/539-claims-rationale.md).
 - A **planner** may hold an issue before the session that will work it exists
   (`--session intent:<id>`, no worktree, #326). That session's own claim from the same machine
   upgrades it in place; a planner claim whose session never claimed is released after a short
@@ -2080,7 +1883,7 @@ gh issue edit <N> --add-assignee @me --add-label in-progress    # claim, at sess
 gh issue edit <N> --remove-assignee <claimer> --remove-label in-progress   # release, at session end
 ```
 
-**A claim is both halves — the assignee *and* `in-progress`.** Either half alone is a
+**[Hard — gate: colab claim refuses]** **A claim is both halves — the assignee *and* `in-progress`.** Either half alone is a
 **half-claim**: a broken claim, which is neither free nor taken (ruled in #323). Nobody
 starts on it; triage reports it for **repair** — whoever holds the assignee completes the
 claim (adds the label) or drops the assignee (releases it) — and `colab claim` refuses it
@@ -2090,20 +1893,18 @@ removing only the label is what leaves the assignee-only half-claim behind.
 
 **Release removes the assignee who holds the claim, not the account releasing it** (#363).
 The claimer is the account that applied `in-progress` — the latest such event on the issue,
-which survives the label's removal. A fleet working under more than one account claims under
-one and releases under another as a matter of routine; a release that drops `@me` there
-removes the label and leaves the claimer assigned, which is the half-claim above arrived at
-by the release itself — measured twice on this repo, one of them still assigned 23 days on.
+which survives the label's removal.
 `colab release` (and every path that releases through it) reads the claimer from the issue,
 unassigns it alongside the caller, and says so whenever that is a different login. By hand,
 `<claimer>` is `@me` only when you took the claim yourself. The one exception is yielding a
 lost race: there the latest labeler is the winner, whose assignee must stay.
 
+Why, with the measurements: [ADR 363](docs/adr/363-claim-release-rationale.md).
+
 Assignee plus `in-progress` is the claim's **mirror for people**, not its lock: it is what a
 human reading the Issue sees, and the half-claim rule above still governs it exactly. It is
 no longer what a claim is refused against across machines — that is the branch on the remote,
-above — because a tracker can change or go down while the git remote is the store every
-machine already shares. The label does not exist in a fresh repo — creating it is part of
+above. Why, with the measurement: [ADR 539](docs/adr/539-claims-rationale.md). The label does not exist in a fresh repo — creating it is part of
 adoption ([§9](#9-adopting-this)).
 
 #### Fast path — local cache
@@ -2123,8 +1924,8 @@ colab doctor --prune     # free claims whose worktrees no longer exist
 
 #### Rules
 
-- Claim **before** you start, not when you open the PR — an unclaimed issue is fair game.
-- **A live claim is enforced, not advisory.** `colab claim`/`colab worktree new` *refuse*
+- **[Hard — gate: colab ship refuses unclaimed branch]** Claim **before** you start, not when you open the PR — an unclaimed issue is fair game.
+- **[Hard — gate: colab claim refuses]** **A live claim is enforced, not advisory.** `colab claim`/`colab worktree new` *refuse*
   an issue with a live claim, naming the holder; `--force` takes over loudly. This
   protects an issue only while the claim is *live* — a session releases its whole group
   at wrap, so an unfinished issue is immediately reclaimable; say so on the Issue if you
@@ -2138,7 +1939,7 @@ colab doctor --prune     # free claims whose worktrees no longer exist
   verdict (B1c) uses the same family of marker, on its own line: `<!-- colab:grade
   verdict=<token> round=<n> -->`, `<token>` one of a **closed** set (`pass` ·
   `reject-decision` · `reject-escalate` · `rework` — no token a prefix or decorated variant of
-  another, so a qualifier can never be mistaken for `pass`). `rework` is a reject whose
+  another). `rework` is a reject whose
   recommended fix needs no authority the coordinator lacks, posted as a direction the author
   follows unless a human overrules (#328, #406). It is emitted only at `round=1`, and it is
   held, never cleared. Attributes are read by name, never position; an optional
@@ -2159,8 +1960,7 @@ colab doctor --prune     # free claims whose worktrees no longer exist
 #### Tracking issues — claimed but referenced, not closed
 
 A long-lived tracking issue may be **claimed** (to signal work in the domain) and
-**referenced**, without closing — its checklist still has open items, and closing it
-would bury its knowledge. The merge message says `Refs #N` (links, does not auto-close)
+**referenced**, without closing. The merge message says `Refs #N` (links, does not auto-close)
 instead of `Closes #N`.
 
 - **A `tracking` label** — declarative and durable; any session claiming a labelled
@@ -2175,8 +1975,7 @@ The claim is released unconditionally either way. `tracking` is deliberately **n
 the convention label set ([§9](#9-adopting-this)) — its absence breaks no check, so adoption does not
 provision it and the audit does not report it missing.
 
-Do not write `Closes #<tracking>` in a commit body — GitHub closes on the keyword
-regardless of intent, and it cannot be un-closed by another keyword. `colab ship` detects
+Do not write `Closes #<tracking>` in a commit body. `colab ship` detects
 this after the push and warns to reopen by hand. The reverse is not the same kind of
 edge: a stray `Refs #N` written while N was open, now one of the branch's own
 `Closes #N` — `ship` drops the stale `Refs` before the push rather than shipping a commit
@@ -2184,25 +1983,18 @@ that says both (#58).
 
 #### Human verify — a person-only check closes the issue and becomes one row (#491)
 
-`--refs` + a hold was built for an issue with work still left in it. It does not fit an
-issue whose code is all on trunk and whose only leftover is a check only a person can run:
-clicking through a UI, a look on a real device, an end-to-end run against a live account.
-Parking each of those separately puts one stop per finished issue in front of the person.
-In one adopted desktop-app repo, five finished issues sat open for days that way. Each was
-parked as `deferred:measurement` with a `review-by:` date, so the board read as a wait on
-an outside party, and the maintainer never saw that the wait was his. The maintainer's
-ruling: collect the checks in one place instead of stopping after every small UI change.
-
+Why, with the measurements: [ADR 491](docs/adr/491-human-verify-rationale.md).
 **So when the code is all on trunk and what is left is a check only a human can run:**
 
-- The ship **closes** the issue: `Closes #N`, not `--refs`.
+- The ship **closes** the issue: `Closes #N`, not `--refs`. The implementer does not hold
+  the issue for the check either: `code-wrap` adds the row and hands off a finished branch,
+  and `code-start` plans such a check as a row from the start (#541).
 - In the same step, it appends **one row** to the repo's single open issue titled
   `Human verify: …`. The row gives the source issue, the steps to run, and the evidence
   wanted. If no such issue is open, the ship files one, labelled `delivery:ops` so it is
   routed to a person and never started as code. Where the repo declares a `holds:` label
   for human-owned waits, that label goes on too.
-- **A row that fails becomes a new bug issue**, linked to the row's source issue. The
-  source issue stays closed: its code shipped, and the failure is new work.
+- **A row that fails becomes a new bug issue**, linked to the row's source issue. The source issue stays closed.
 - The person ticks rows off one sitting at a time. When every row is ticked, they close
   the `Human verify:` issue with `colab close`, and the next ship that needs one files a
   fresh one.
@@ -2213,17 +2005,13 @@ What this does **not** change:
   *Merging*.
 - **A `tracking` issue** is still `Refs #N`, as above.
 - **`deferred:measurement` is only for waits a machine can measure**: a metric, a
-  threshold, a counter. "A person has to look at it" is not a measurement, and a
-  `review-by:` date on it only hides whose turn it is.
+  threshold, a counter. "A person has to look at it" is not a measurement.
 
 ### Who decided it should exist
 
 #### Provenance — who decided the work should exist
 
-Issues arrive from three directions: a person, an agent that hit something while coding,
-an agent filing a follow-up as it wraps. Nothing else in the model answers whether a
-human decided the work should happen at all — an agent-filed issue is open, unclaimed,
-unblocked, indistinguishable from human-requested work.
+Why provenance exists, and why the label: [ADR 89](docs/adr/89-provenance-and-ask-rationale.md).
 
 **So an agent filing on its own initiative labels the issue `agent-filed` and ends the
 body with:**
@@ -2240,15 +2028,9 @@ Filed-by: boss (via discussion session <name>)
 - The `Filed-by:` line is the durable record; the label makes it **queryable**. Write
   both.
 
-**Why:** anything that starts work in bulk (a start button, batch triage, a scheduled
-sweep) must be able to exclude work no human approved — the label is what lets the
-default be *excluded, started only when a person clicks*.
-
 ##### Ask — the filer declares the ask class (#89)
 
-`agent-filed` says a human did not decide the work exists; it does not say what kind of
-decision it is waiting on. Measured on a live 34-item approve queue (2026-08-01): six
-ask-classes, detected only heuristically from labels and title phrasing.
+Why an ask class, with the measurement: [ADR 89](docs/adr/89-provenance-and-ask-rationale.md).
 
 ```
 Ask: permission | backlog | ruling | deferred(<trigger>)
@@ -2276,8 +2058,7 @@ Ask: permission | backlog | ruling | deferred(<trigger>)
 
 An issue is **ready to start** only when open, unclaimed, **and nothing it depends on is
 still missing**. Prose dependencies ("blocked by the other one") do not block a parallel
-session and no tool can read them — measured: an epic tracking ~14 children by
-hand-edited checklist reported `subIssues.totalCount = 0`.
+session and no tool can read them.
 
 **So dependencies are recorded in GitHub's own relationship model:** parent/child as
 sub-issues, a dependency as blocked-by.
@@ -2285,53 +2066,41 @@ sub-issues, a dependency as blocked-by.
 **A `blocked_by` edge records a dependency, never a queue position (#361).** A dependency
 means B needs something A produces: a table, an endpoint, a ruling, a design artifact. A
 queue position means someone wants A before B, with nothing flowing between them. Only a
-dependency is an edge. GitHub has one edge type, so an order-only edge looks exactly like
-a dependency to every reader. Readiness then holds B until A lands, and B inherits any
-wait parked on A even though it needs nothing from A. Nobody catches that inheritance
-when A parks. It is the hostage effect *Epics* (below) names for a shared claim, reached
-through a chain of edges instead. Measured in one adopting repo: a ruling to "start all,
-in queue order" was written as a 10-node `blocked_by` chain. About 13 h later one mid-chain
-node was parked on an outside party. A map comment called one section "unaffected and
-still moving". Yet four issues in that section, two design issues and the two UI issues
-behind them, reached the parked node only through queue edges. They inherit its outside
-wait as soon as the node before it lands. Nobody re-threaded the chain.
+dependency is an edge.
+
+Why, with the measurements: [ADR 361](docs/adr/361-readiness-and-dependency-edges-rationale.md).
 
 **Queue order is a ranking, recorded as one.** Put it in the ruling itself, as an ordered
 list on the issue or epic where the ruling is recorded. `code-triage`'s ordering step
 reads that list and ranks ready groups by it. `low-priority` (*Priority*, below) is the
-label for "later". Rejected: an order-only edge that has to be re-threaded whenever a node
-parks. That re-threading is a manual step with no trigger, and the measured chain above
-is what happens when nobody does it.
+label for "later".
+
+Rejected alternative, with the measured chain: [ADR 361](docs/adr/361-readiness-and-dependency-edges-rationale.md).
 
 **File contention is never an edge (#371).** Two issues that edit the same file have no
 dependency: neither needs anything the other produces. So an edge between them is a queue
-position, which the rule above already forbids. It is stated separately because it was the
-commonest wrong edge in a measured backlog review. One adopting repo linked six design
-issues `blocked_by` one after another only to serialize edits to one shared docs index.
-One merge conflict became six serial review cycles. Contention has its own two answers:
+position, which the rule above already forbids. Contention has its own two answers:
+
+Why, with the measurements: [ADR 361](docs/adr/361-readiness-and-dependency-edges-rationale.md).
 
 - **A real collision → *Grouping*** (below): one `group:<key>` label, one branch, one review
   cycle. It is never recorded as a chain of edges.
 - **A shared file that every unit of work must edit is a design defect. Fix the file; do not
-  serialize the work.** The measured case was fixed this way: the index became a pointer
-  to the per-item folders, and each item's status moved into that item's own file. The
-  items then touch disjoint files and run in parallel, with nothing left to group.
+  serialize the work.**
 
 **Contention between an issue and a live branch is recorded in the issue text (#386).** An
-issue names the files it will edit on a `Touches:` line in its body. A scheduler that
-brakes on files reads that line, not a comment, so a collision written only as prose never
-reaches it. When `code-triage` measures an issue's file held by a live branch, it appends
+issue names the files it will edit on a `Touches:` line in its body. When `code-triage` measures an issue's file held by a live branch, it appends
 that path to `Touches:` in the same step it reports the collision.
 
 **Split an issue at the external-wait line (#371).** When only part of an issue waits on
 an outside party (another team's API, a vendor, a ruling from outside the repo), neither
 the edge nor the `deferred:external-party` park may hold the whole issue. Split it. The
 part the repo can build now becomes its own issue and can start. The part behind the wait
-keeps the edge or the park. Measured: one issue bundled a surface the repo owned, whose
-design had already shipped, with a mode that needed an outside party's API. Blocking the
-whole issue held back the only buildable UI path and the two issues built on top of it.
+keeps the edge or the park.
 `code-triage` reports the split as a structural finding. It does not split the issue
 itself: filing issues is not one of its writes.
+
+Why, with the measurements: [ADR 361](docs/adr/361-readiness-and-dependency-edges-rationale.md).
 
 ```sh
 # read (repo-relative — no owner/name to get wrong)
@@ -2360,24 +2129,21 @@ gh issue view <M> --json id -q .id                 # ← how to get that node id
 
 `removeSubIssue` requires **both** ids — a child cannot be detached by naming only
 itself. (`addSubIssue` is the laxer of the two — it accepts `subIssueUrl` in place of
-`subIssueId`, and `replaceParent: true` to move a child that already has a parent;
-verified live against the GraphQL schema, not restated from memory — `removeSubIssue`
-has neither.)
+`subIssueId`, and `replaceParent: true` to move a child that already has a parent; `removeSubIssue` has neither.)
 
 **The two halves do not share an API, and that is the trap.** Sub-issues are GraphQL,
 keyed by **node** id; dependencies are REST, keyed by **database** id — no dependency
 mutation exists in GraphQL. Three mistakes fail loud (wrong type, `NOT_FOUND`); one is
 silent and is the one to fear: the REST endpoint accepts an **issue number** as a valid
 integer database id and **succeeds**, attaching a blocker from whichever issue happens to
-hold that id *anywhere on GitHub*. Measured: `issue_id=34` silently attached a blocker
-from a stranger's unrelated repo. **Read `blockedBy` back after every write.** `colab
+hold that id *anywhere on GitHub*. **Read `blockedBy` back after every write.** `colab
 blocked` (#251) takes issue numbers only, so this hazardous value never passes through a
 caller's hands at all.
 
+Why, with the measurements: [ADR 361](docs/adr/361-readiness-and-dependency-edges-rationale.md).
+
 **Read that confirmation from the `blockedBy`/`blocking` connections, never
-`issueDependenciesSummary` — the summary lags the graph.** Measured, within a single
-response: seconds after a `blocked_by` POST, `blockedBy.totalCount` read `1` while
-`issueDependenciesSummary.blockedBy` in the same payload still read `0`.
+`issueDependenciesSummary` — the summary lags the graph.**
 
 **"No blockers" and "nobody checked" are the same empty list** — the second needs its
 own marker:
@@ -2393,16 +2159,13 @@ reasoning session looked and found no open blocker — not that the issue is sta
 *today*. Clearing it means exactly one of two things: a new blocker appeared (already
 carried by the `blockedBy` edge above, so stripping the label on top of that edge adds no
 information), or the issue reopened after being closed. It never means "startable in
-principle, but not right now" — that fact has its own carrier, below (*Disposition*), and
-piling it onto this label is what #279 measured going wrong: `code-triage` clearing
-`deps-checked` to keep non-startable work out of the ready column, at a rate where more
-than half of one repo's untriaged-looking backlog was actually triaged work misreporting
-as untriaged. A prose note saying "checked, no blockers" does not count as setting it.
+principle, but not right now" — that fact has its own carrier, below (*Disposition*). A prose note saying "checked, no blockers" does not count as setting it.
 
 ##### Readiness is not a boolean — read the blocker's state, not just its existence
 
-An open blocker used to end the question. That hides two different situations: nobody
-has started it, versus its code is written and pushed, waiting only on a merge. So the
+Why one verdict was not enough: [ADR 361](docs/adr/361-readiness-and-dependency-edges-rationale.md).
+
+So the
 verdict has **three values**, plus the *unchecked* state above, which is not a kind of
 ready:
 
@@ -2413,18 +2176,15 @@ ready:
 | open, code pushed and unmerged | **ready, with a note** |
 | closed, or its work is already on trunk | **ready** |
 
-**The middle value is computed at read time, never recorded as a second label** —
-rejected: a second label (stale the moment the blocker's own state moves — narrower a
-hazard than it once was, now that `deps-checked` itself is monotonic (#279) and only ever
-goes stale on a genuinely new blocker, but still a hazard a read-time computation avoids
-entirely); deleting the edge once code is written (destroys a true fact, doesn't survive a
-revert).
+**The middle value is computed at read time, never recorded as a second label**, and the
+`blocked_by` edge is never deleted once the blocker's code is written. Why, with the measurement: [ADR 539](docs/adr/539-readiness-rationale.md).
 
 **An active session on the blocker is not evidence — a pushed branch with real commits
-is.** Measured: a session open ten minutes was already dead, having never claimed its
-issue. An unpushed branch does not count either — invisible from other machines. **The
+is.** An unpushed branch does not count either — invisible from other machines. **The
 judgement fails toward `blocked`, never toward `ready`** — the mirror of the landed rule
 ([§4](#4-branches-and-commits)).
+
+Why, with the measurements: [ADR 361](docs/adr/361-readiness-and-dependency-edges-rationale.md).
 
 Reference implementation: `tools/lib/readiness.js` (`classify`, `isStartable`), pure —
 facts in, verdict out — deriving "blocker's code written but unmerged" from
@@ -2433,9 +2193,7 @@ facts in, verdict out — deriving "blocker's code written but unmerged" from
 ##### Mechanical readiness — a weaker, honest claim for the empty case (#69)
 
 `deps-checked` asserts *somebody looked* — stronger than "the encoded graph, read via
-the API, has zero edges", because a prose-only blocker is invisible to a mechanical read
-and visible to a reader. **A mechanical check must never write `deps-checked` itself** —
-that launders a weaker guarantee into a stronger one.
+the API, has zero edges". **A mechanical check must never write `deps-checked` itself**.
 
 ```sh
 gh label create graph-empty --color BFDADC --description "Mechanical check: the recorded dependency graph reads empty — NOT a substitute for deps-checked"
@@ -2451,19 +2209,11 @@ colab readiness <N> --mechanical --clear
   empty-but-unchecked reads a fourth verdict, `unchecked-mechanical` — `isStartable()`
   still says no by default.
 - Not in the convention label set ([§9](#9-adopting-this)), same reasoning as `tracking`.
-- **No `readiness.marked` event fires for `--mechanical`** — that event kind's payload
-  means `deps-checked` specifically (#45, #46); emitting it here would be
-  indistinguishable from the stronger claim.
+- **No `readiness.marked` event fires for `--mechanical`**. Why, with the measurement: [ADR 539](docs/adr/539-readiness-rationale.md).
 
 #### Disposition — a park must name its wake condition (#279)
 
-`deps-checked` (above) is monotonic: it records that triage looked, nothing more. That
-leaves a real fact with nowhere to live — an issue can be ready, evaluated, and still not
-startable *right now*, for a reason that is not a blocker on another issue and not a
-question for a human. Before #279, `code-triage` expressed that by clearing
-`deps-checked`, which silently reused the "nobody has looked" state to mean "somebody
-looked and parked it" — the two became indistinguishable to any later reader, including
-another triage pass.
+Why a park needed its own carrier: [ADR 279](docs/adr/279-disposition-park-rationale.md).
 
 The four situations, and where each fact lives:
 
@@ -2486,46 +2236,24 @@ Three fixed `deferred:*` kinds, each naming what the park is waiting on:
 
 **A defer must name its wake condition.** A `deferred:*` label with no `review-by:<date>`,
 no `blockedBy` edge, and no checkable `wake:` (*Holds*, below) is not a defer at all — it
-is a deprioritisation or a `wontfix`, and should be said plainly instead. An unbounded
-park is a silent `wontfix`.
+is a deprioritisation or a `wontfix`, and should be said plainly instead.
 
-`review-by:<date>` is created **on demand**, the same way `group:<key>` is — the date
-varies per issue, so there is no fixed set to provision up front.
+`review-by:<date>` is created **on demand**, the same way `group:<key>` is.
 
 **This section defines vocabulary only.** Landing it changes nothing `code-triage`
 writes today: no tracker write in this repo's own tooling emits `deferred:*` or
 `review-by:<date>` yet. Consumer-side rendering of a disposition, and surfacing of an
-expired park, are meant to land before that write does — emitting the label before
-something renders it distinctly produces a park that is machine-readable and unread,
-which is worse than the silent park it replaces. Re-triaging existing silent parks once
+expired park, are meant to land before that write does. Why, with the measurement: [ADR 539](docs/adr/539-holds-rationale.md). Re-triaging existing silent parks once
 the vocabulary exists is a follow-up, not part of landing the vocabulary.
 
-This generalises the `Ask: … | deferred(<trigger>)` line (*Ask*, above) beyond
-`agent-filed` issues and gives it a machine-readable carrier: that line is free text,
-scoped to filing time, and mechanically ungrepped anywhere in this repo's own tooling;
-`deferred:<kind>` + `review-by:<date>` is a label pair any consumer can query and act on
-without parsing prose.
+How this generalises the `Ask:` line: [ADR 279](docs/adr/279-disposition-park-rationale.md).
 
 ##### Holds — every label that stops a start names its owner and its wake (#360)
 
-`deferred:*` is not the only way work gets parked. Adopting repos add hold labels of their
-own, and three kinds recur: a person's "not yet", set before any session touched the
-issue; "needs rescope", on an issue built on a model that has since changed; and "waiting
-on the operator", for an act only a human can perform. Their schedulers refuse to start
-an issue carrying one. Measured across adopting repos (2026-09-24):
-
-- None of the three appeared anywhere in this handbook. So a triage that followed
-  `code-triage` exactly reported those issues ready, and the scheduler refused them.
-- One repo parked 16 issues under a rescope label within one minute, with no named
-  rescoper and no date.
-- One repo held an issue under a "not yet" label for 14 days.
-- Two operator holds reached the operator's queue with no stated ask. The reason had not
-  been written in the one syntax that repo's reader parsed.
+The three hold kinds that recur in adopting repos, and the measurements behind this subsection: [ADR 360](docs/adr/360-holds-rationale.md).
 
 **The three stay consumer-local. They are not adopted into the convention label set
-([§9](#9-adopting-this)).** Each one names a fact this section already has a carrier for,
-and a second name for the same fact is the two-carrier problem #279 measured with
-`deps-checked`:
+([§9](#9-adopting-this)).**
 
 | Consumer hold | What it actually is | The handbook's carrier |
 |---|---|---|
@@ -2533,7 +2261,7 @@ and a second name for the same fact is the two-carrier problem #279 measured wit
 | "needs rescope" | the issue no longer says what done looks like | fails *Actionable* in `code-triage`'s readiness gate; rewriting the issue is the wake |
 | "waiting on the operator" | a human must act | `needs-decision` for a question (*Decision gate*, below); a hold for an act, such as a credential, a grant or a purchase |
 
-A repo that already uses its own names keeps them, because its scheduler depends on them.
+A repo that already uses its own names keeps them.
 What this subsection adds is the rule every hold follows, whatever it is called.
 
 **Declare them in `.github/project.yml`, so no reader has to guess:**
@@ -2543,9 +2271,7 @@ holds: [hold:manual, needs-rescope]     # labels this repo's scheduler treats as
 ```
 
 - **Every label listed under `holds:` blocks a start.** `code-triage` reports an issue
-  carrying one as blocked, never as ready. If a scheduler honours a hold that is not in
-  the list, it and triage disagree without saying so, which is the failure the list
-  exists to prevent.
+  carrying one as blocked, never as ready.
 - **The list lives in the descriptor.** The descriptor is already the one
   machine-readable answer to "what is this repo". It is copy-and-own. Changing it is a
   trunk commit, which moves `code-triage`'s first fingerprint input, so the next ping sees
@@ -2569,6 +2295,7 @@ Because: the import model changed in #88; the parser steps must be rewritten aga
   line.
 - **`wake:`** is drawn from a small **closed** vocabulary (below). Nothing outside it
   is ever evaluated, and free text is never a wake.
+- **`shape:`** says what the owner is asked for: `ask`, `task` or `wait` (below, #569).
 - **The newest `Hold:` line for a label is the live one.** A new hold posts a new line.
   Clearing a hold is the owner removing the label once the wake fires. The comment stays
   as history.
@@ -2589,23 +2316,9 @@ Because: the import model changed in #88; the parser steps must be rewritten aga
 
 ###### The `wake:` vocabulary — a wake a scheduler can check (#382)
 
-Until #382, `wake:` was one of three forms, and anything else could only be written as
-prose in `Because:`, backed by a `review-by:` date: "until the fix is deployed", "when that
-capability lands". Nobody reads that prose before the date. Measured across adopting
-repos, 2026-09-25 → 26:
+Why a wake had to be checkable, with the measurements: [ADR 382](docs/adr/382-wake-vocabulary-rationale.md).
 
-- A deferred issue waited on another repo's issue number **that did not exist**. The real
-  fix had landed and been deployed the day before, and the park would have slept another
-  13 days.
-- A deferred issue's condition was met by a commit in the same repo. The issue sat about
-  7 more hours.
-- A deferred issue's measurement condition had been true for 4 days.
-- A manual hold's stated preconditions were all met, and it stayed held until someone
-  asked.
-
-Each hold was right when it was set. What failed was **release**: the condition came true
-and nothing noticed, because the only machine-readable part was the date. So `wake:` is
-now one of these, and a scheduler can evaluate every form on every beat:
+So `wake:` is now one of these, and a scheduler can evaluate every form on every beat:
 
 | `wake:` | Met when |
 |---|---|
@@ -2622,15 +2335,14 @@ now one of these, and a scheduler can evaluate every form on every beat:
 wake is `ruling`, the `Because:` line is the ask itself, written as what the owner has to
 do or answer. A consumer's card reader parses this line and does not invent a second
 syntax for it. If the ask is a question rather than an act, it belongs under
-`needs-decision` instead, where the answer gets a record of its own.
+`needs-decision` instead, where the answer gets a record of its own (`shape:`, below).
 
 **One spelling, not two.** Every checkable name above is spelled exactly the way the one
-adopting scheduler that evaluates wakes already spells it, argument rules included. That
-scheduler also accepts two kinds about a live session (a claim released, a session gone).
-Those describe a session, not a tracker fact that a hold on an issue can wait on, so the
-handbook does not adopt them. The direction is one way: a consumer that evaluates a
+adopting scheduler that evaluates wakes already spells it, argument rules included. The direction is one way: a consumer that evaluates a
 `wake:` never invents a second spelling for a name on this list.
 `tools/lib/wake.js` is the parser and evaluator, and its tests pin the list.
+
+Why two kinds are not adopted: [ADR 382](docs/adr/382-wake-vocabulary-rationale.md).
 
 The rules:
 
@@ -2643,12 +2355,10 @@ The rules:
    at all stays prose in `Because:`, such as a vendor or a person outside the repo. That
    wait **must** carry `review-by:<date>`.
 3. **A `wake:` that names an issue or ref that does not exist is a finding when it is
-   written**, not at the review date. A park waiting on nothing is the silent `wontfix`
-   again, with a date attached.
+   written**, not at the review date.
 4. **A met wake does not lift the hold by itself.** A scheduler that evaluates wakes
    posts once that the condition is met and hands the issue to triage. Triage reads the
-   newest ruling or `Hold:` line, because a later ruling may have tightened the condition,
-   and reports the hold as *wake met, lift?*. The owner removes the label, as above. The
+   newest ruling or `Hold:` line, and reports the hold as *wake met, lift?*. The owner removes the label, as above. The
    evaluator proposes; it never clears.
 5. **Wakes are re-checked on every triage pass**, not only once `review-by:` is reached
    (`code-triage` §0, §2, §5). A wake that comes true between two passes is noticed on the
@@ -2664,6 +2374,28 @@ decodes only this exact shape — a looser line names no owner or wake and stays
 already gathered. Whoever parks the issue writes
 the line, and `code-triage` reads it (its §0, §2, §5 and §6).
 
+###### The `shape:` field — what the owner is asked for (#569)
+
+Optional, between `owner:` and `wake:`, never after `wake:`; every new hold declares it.
+Why, and why that position: [ADR 569](docs/adr/569-hold-shape-rationale.md).
+
+| `shape:` | The owner is asked for | Carrier |
+|---|---|---|
+| `ask` | a **choice** between ways forward | **never a bare hold:** `needs-decision` + a `decision:options` block (*Decision options*, below) — 2–4 options, one `(recommended)`, `Because:` names what makes it the owner's call |
+| `task` | an **act** only a person can perform: sign, run a privileged script, supply a credential | a hold, `wake: ruling`; `Because:` is the act |
+| `wait` | nothing yet: a third party, other work, a date | a hold with a checkable `wake:` or `review-by:<date>` |
+
+```
+Hold: needs-decision — owner: @maintainer — shape: ask — wake: ruling
+Hold: hold:manual — owner: @maintainer — shape: task — wake: ruling
+Hold: deferred:external-party — owner: upstream — shape: wait — wake: issueClosed:owner/repo#22
+```
+
+Present → readers use it; absent → inferred from the wake as before (`ruling` → `ask`, else
+`wait`); any other value is a finding and falls back to the inference. A reader that does not
+know the field still parses the line, wake whole. `holdShape()` in `tools/lib/codec/hold.js`
+returns the declared or inferred shape. A person-only check on finished code is no hold at all.
+
 #### Disposition — the marker, the seven kinds, and who may apply one (#315)
 
 The park above is one of seven ways a piece of work can end. This subsection names all
@@ -2671,10 +2403,9 @@ seven, the marker that proposes one, and the rule deciding whether an agent may 
 unattended or a human must.
 
 **A session does not dispose of its own issue.** It does the work, posts evidence, and
-proposes a disposition; a **separate later pass applies it**. That separation is the whole
-point: *looking something up is not doing it*, and a session grading its own measurement is
-the failure this exists to prevent. It is the same shape as the code lane — an implementer
-hands off, a coordinator lands it — with a different oracle.
+proposes a disposition; a **separate later pass applies it**.
+
+Why the separation: [ADR 315](docs/adr/315-disposition-kinds-rationale.md).
 
 **The proposal is a marker**, one line, the family `colab:evidence` / `colab:grade` already
 use (*Rules*, above), followed by a one-line reason in prose:
@@ -2711,12 +2442,9 @@ it or reports it, and never leaves it. A human may leave with a reason; that rea
 itself the wake condition.
 
 **The evidence a marker rides on has a fixed shape** — *what was done · the command · the
-result · what remains*. Free-form evidence is a **finding, not a disposition**: a pass that
-cannot tell what was done from what remains cannot verify either, and applying anything on
-top of it is a guess wearing a marker. Where the ask was an **action** rather than a
+result · what remains*. Free-form evidence is a **finding, not a disposition**. Where the ask was an **action** rather than a
 measurement, a fifth line carries the **cross-check**: a second, independent, re-runnable
-command confirming the effect. That line is what makes `done` mechanical — a measurement
-cannot cross-check itself.
+command confirming the effect.
 
 ##### Who may apply one — a table over measurable inputs, never a judgement call
 
@@ -2729,8 +2457,7 @@ neither input reaches them.
 - **The axis of record** (*Exposure*, §2). `exposure: released` ⇒ a human confirms; `none`,
   `self` and `live` ⇒ the agent applies. Read a legacy `tier`-only descriptor **through**
   that axis (`A -> released`, `C -> live`, `B -> null`) rather than by letter — which means
-  a bare `tier: B` resolves to *no opinion*, and no opinion is not permission. This mirrors
-  how `autonomy:` is granted by the repo and never claimed by the agent.
+  a bare `tier: B` resolves to *no opinion*, and no opinion is not permission.
 - **Skip-fence class** — production access, credentials, destructive or non-undoable
   operations, promotion. Evidence naming one of these ⇒ human, whatever the exposure. The
   agent names the classes its evidence touches; nothing sniffs prose for them.
@@ -2740,7 +2467,7 @@ neither input reaches them.
 | `done` | evidence in the fixed shape **∧** a re-runnable cross-check recorded **∧** acceptance ticked or a remainder declared **∧** the issue gates nothing still open **∧** the axis permits **∧** no skip-fence class | the axis does not permit · a skip-fence class · no cross-check possible · the issue is a gate node for something open |
 | `split` | the remainder is filed as a native sub-issue with the same `delivery:` and a wake condition, evidence copied across | never — filing is mechanical |
 | `routed-out` | `<other-repo>#N` exists **and** links back to this issue | never — but the filing itself obeys the destination repo's own language rule |
-| `hold` | a wake condition is present — `review-by:<date>`, a real `blockedBy` edge, **or** a `wake:` from *Holds*' closed vocabulary | the wake has stood **30 d** (a PROPOSAL, unmeasured) with no movement ⇒ a human confirms it is still wanted, else `not planned` |
+| `hold` | a wake condition is present — `review-by:<date>`, a real `blockedBy` edge, **or** a `wake:` from *Holds*' closed vocabulary | the wake has stood **30 d** (a PROPOSAL, unmeasured; a repo may declare `thresholds.hold-stale-days`) with no movement ⇒ a human confirms it is still wanted, else `not planned` |
 | `needs-boss` | **never** — the agent *records* the question and moves on (record-first) | always; the answer returns the issue to intake |
 | `not planned` | superseded by a **merged or closed** replacement that references this issue | an abandoned direction — a human judgement, always |
 | `leave` | **never** — the agent converts it (see above) | a human may leave with a reason |
@@ -2748,9 +2475,7 @@ neither input reaches them.
 Three properties hold this together, and each is load-bearing:
 
 - **Fails towards `human`, always.** An absent, malformed or unresolvable fact never yields
-  `agent` — the posture *Readiness* (above) takes towards `ready`, for the same reason.
-  Spending a human's attention on something mechanical is cheap and visible; closing an
-  issue nobody checked is expensive and invisible.
+  `agent` — the posture *Readiness* (above) takes towards `ready`. Why, with the measurement: [ADR 539](docs/adr/539-disposition-marker-rationale.md).
 - **"An agent may" is never "a human may not."** A human can apply any disposition on any
   issue at any time, in either direction. The verdict is a proposal, not a lock.
 - **A mechanical gap is not a judgement call.** `split` with nothing filed yet, or `hold`
@@ -2766,16 +2491,12 @@ copies of the table above is the two-places-drift disease this handbook exists t
 they are what keeps the token set closed and the comparison by equality.
 
 **This section defines vocabulary only**, exactly as the park above does. Nothing in this
-repo's own tooling writes `colab:disposition` today, and no skill here reads it: the pass
-that applies a disposition is coupled to a consumer's own surfaces and lives with that
-consumer, not in a repo-generic handbook. What lives here is the table both sides agree on.
+repo's own tooling writes `colab:disposition` today, and no skill here reads it. What lives here is the table both sides agree on.
 
 #### Decision gate — a human must answer first (#122)
 
 Some issues cannot start, or cannot finish, until a human answers a blocking question —
-a design pre-approval, a business-logic call, a permission. `needs-decision` (named
-`needs-ruling` before #122; widened because "ruling" read narrower than the gate actually
-covers) marks that. A designer producing a spec decides, while producing it, whether a
+a design pre-approval, a business-logic call, a permission. `needs-decision` marks that. A designer producing a spec decides, while producing it, whether a
 surface needs human pre-approval before code starts, and applies the label if so — the
 call belongs to whoever is producing the spec, never inferred mechanically from title or
 labels.
@@ -2785,9 +2506,7 @@ hard blocker or a live claim — until a human answers and that answer is **reco
 (below). No session, manual or scheduled, starts an issue that still carries it.
 
 **On an issue whose deliverable is a design artifact, approving the artifact is not a
-question you can ask at filing (#361).** The gate blocks the start, and the start is
-the session that produces the artifact. Labelling the issue at filing, for an approval
-that needs the finished artifact, blocks the only session that could produce it. So:
+question you can ask at filing (#361).** In practice:
 
 - **At filing**, `needs-decision` goes on such an issue only for a question that must be
   answered *before* design work starts, such as which of two directions to explore, or
@@ -2800,59 +2519,35 @@ that needs the finished artifact, blocks the only session that could produce it.
 - **A `decision-recorded` that predates the review is not approval of the artifact
   (#379).** It answers the question it was recorded for, such as "start this work", and
   nothing asked after it. Promoting the artifact to `docs/design/` (`code-wrap` A2) waits
-  for a ruling recorded **after** the review. Measured in one adopting repo: a design issue
-  carrying an earlier "start" ruling got a hand-added `needs-decision` for its approval,
-  and the design lane then read the earlier `decision-recorded` as the approval.
+  for a ruling recorded **after** the review. Why, with the measurements: [ADR 122](docs/adr/122-decision-gate-rationale.md).
 
-Measured in one adopting repo: 11 design issues each got `needs-decision` within 2 s of
-being filed, and each one's acceptance list included the human approving the final
-screenshots. No artifact existed, so there was nothing to approve, and no design session
-could open. They stayed held for about 4 h. What freed them was a ruling to "start now",
-recorded on all 11. That ruling answers no design question, so every real approval now
-needs a `--reopen`. A sibling filed the same morning shows the working shape: claimed
-without the label, labelled once its screenshots existed about 40 min later, and ruled
-8 min after that.
+Why, with the measurements: [ADR 122](docs/adr/122-decision-gate-rationale.md).
 
 **An epic never carries `needs-decision`, and never a `decision:options` block (#361).**
-The label is a start gate, and an epic is never a start candidate (*Epics*, below), so on
-an epic the label gates nothing. A decision inbox built on start gates may also leave
-epics out by design. One adopting repo's inbox puts them in a collapsed "informative"
-lane, so a question posted there is one nobody is shown. Measured: four epics in one repo
-carried multi-option blocks that sat unanswered for 78–169 h. Four epics in another repo
-were labelled `needs-decision` with no question on them at all, until a human ruled that
-an epic never carries the label.
+Why, with the measurements: [ADR 122](docs/adr/122-decision-gate-rationale.md).
 
-**A question about an epic goes on its own decision issue**, the same shape as the third
+**[Hard — gate: colab decision --reopen refuses]** **A question about an epic goes on its own decision issue**, the same shape as the third
 path below. Its body carries the question and, if there are options, the
 `decision:options` block. It carries `needs-decision`, and it is attached to the epic
 **as a sub-issue**. If the question holds back a specific child, that child also gets a
-`blocked_by` edge to the decision issue. Why a sub-issue: it keeps the question visible
-from the epic's own `subIssues`, and the decision issue is an ordinary issue, so every
-inbox and triage pass that reads start gates shows it. Once the ruling is recorded
+`blocked_by` edge to the decision issue. Why, with the measurements: [ADR 122](docs/adr/122-decision-gate-rationale.md). Once the ruling is recorded
 (`colab decision --record`), the decision issue closes with the record as its evidence.
 `colab decision --reopen` refuses on an `epic`-labelled issue and names this path.
 
 **A session discovering a significant design decision mid-work continues on the
 designer's spec** rather than stopping to request a ruling, and records
-`design-not-preapproved` in its ship evidence — so the closure itself is what a human
-reviews, after the fact. This default stays the rule everywhere a usable default exists.
+`design-not-preapproved` in its ship evidence. This default stays the rule everywhere a usable default exists.
 
 **The third path (#122) — only when there is no usable default and the work genuinely
 cannot finish.** A session that hits a genuine, blocking, non-design ruling mid-work — not
 a design fork with a spec to fall back on, but a question with no default answer — files
 the ruling as its **own** issue, wires a `blocked_by` edge (§*Readiness*, above) from the
-issue it is working, and **keeps its claim**. The question becomes visible where humans
-and triage already look — a labelled issue, not prose in a comment nobody scans — while
-the work stays owned so no second session picks it up mid-flight. **This is not licence to
+issue it is working, and **keeps its claim**. **This is not licence to
 stop on any fork** — the default-exists case above is unchanged and still the ordinary
 rule; this path exists only for the genuinely blocking, no-default case.
 
 **Recording the decision is what clears the gate — it is not a separate act a human must
-remember.** Measured failure (#127): a ruling was posted as ordinary prose in a comment
-and the `needs-decision` label removed by hand. A later triage pass, reading the issue
-fresh, saw no machine-readable trace of a decision, re-gated it, and reported it
-not-startable — the ruling had been sitting in the comment the whole time. **A cleared
-label is indistinguishable from a label never applied.** So the answer, not the label's
+remember.** The answer, not the label's
 absence, is the artifact: a `⚖ Decision recorded` comment (`tools/lib/decision-record.js`)
 naming who ruled and what it answers, plus the `decision-recorded` label, written together
 by `colab decision <N> --record --ruled-by <name>` — never `needs-decision` cleared alone.
@@ -2860,15 +2555,10 @@ A reader checking whether an issue is decided looks for `decision-recorded` or t
 comment marker, never merely for `needs-decision`'s absence.
 
 **A second question on an already-decided issue goes through `colab decision <N> --reopen
---ruled-by <name>` — never a hand-added `needs-decision` (#357).** This is the rule above
-seen from the other side: the label is never *removed* by hand, and for the same reason it
-is never *re-added* by hand. A decided issue can need a second ruling — ruling one
-commissions a design, and later the finished design needs approving. `--reopen` removes
+--ruled-by <name>` — never a hand-added `needs-decision` (#357).** `--reopen` removes
 `decision-recorded`, re-applies `needs-decision` and posts a `↩ Decision reopened` receipt,
 so the issue reads as open to every reader. A hand-added `needs-decision` does not: it
-leaves the issue with **both** labels. Measured in one adopting repo: one such hand-added
-label hid the second question from that repo's decision inbox for about nine hours. The
-human ruled in chat after noticing the question was missing.
+leaves the issue with **both** labels. Why, with the measurements: [ADR 122](docs/adr/122-decision-gate-rationale.md).
 
 **Both labels at once is ambiguous, and a reader resolves it by time.** Two histories leave
 the same pair. An **interrupted write** is `--record` posting its `⚖` comment and then
@@ -2885,26 +2575,18 @@ is later.
 | The label timeline was read, and every ask predates the marker | an **interrupted write** — answered; finish it with `gh issue edit <N> --remove-label needs-decision` |
 | Anything the reader cannot prove (timeline unread, no event found) | **undetermined** — surfaced as **pending**, never hidden |
 
-This leans towards showing the issue, like *Readiness* does. Showing a settled question
-once more costs a glance. Hiding an open one costs a human's ruling. The reference reading
+**[Hard — gate: colab decision --record refuses]** This leans towards showing the issue, like *Readiness* does. Why, with the measurements: [ADR 122](docs/adr/122-decision-gate-rationale.md). The reference reading
 is `pairVerdict` in `tools/lib/decision-record.js`. `colab decision --list` names every
 issue carrying the pair, with its verdict and fix. `colab decision --record` **refuses**
 over the pair unless `--answers <ref>` says which question the new record answers.
+
+Why, with the measurement: [ADR 539](docs/adr/539-decision-gate-rationale.md).
 
 #### Decision options — what a ruling chooses between (#126)
 
 The mechanics above make the **answer** to a `needs-decision` gate machine-readable.
 They say nothing about the **question**: what a human is actually choosing between.
-Left as prose — headings, bullets, a sentence saying "my recommendation is A" — every
-consumer re-derives the choices heuristically or fails to. Measured, one repo
-line-by-line: 3 of 8 open decision issues carried no machine-readable options at all,
-and the failure is quiet in a specific way — an unstructured decision issue **looks
-like a UI defect, not a filing defect**, so nobody goes looking for the missing line.
-Prose is also unsafe on its own terms: a decision issue whose body said *"my
-recommendation: A"* was once implemented as A by a later session, while the actual
-accepted answer sat in a separate, later comment — a recommendation and an acceptance
-read identically as prose, and only a structured record on the answer side (above)
-closes that gap.
+Why, with the measurements: [ADR 126](docs/adr/126-decision-options-rationale.md).
 
 **The filer of a `needs-decision` issue writes the options as a fenced block**, at
 filing time, whether the filer is human or an agent — this is not scoped to
@@ -2920,8 +2602,7 @@ C: Short label | Listed for completeness; why it is probably wrong.
 ```
 
 - `LETTER: label | detail`, one option per line; `detail` is optional.
-- **Two or more lines, or the block does not count** — a one-option decision is not a
-  decision.
+- **Two or more lines, or the block does not count**.
 - An HTML comment fence, so it costs a human reader nothing in the rendered issue.
 - **The block states the choices. It never states the answer** — recording the
   acceptance is the separate, later act above (`colab decision --record --answers
@@ -2942,17 +2623,13 @@ existed. The one exception is the design-approval ask below: a `needs-decision` 
 in neither shape is reported to its filer as a finding (#379). That is a report, never a
 gate, and it never changes whether the question is pending.
 
+Why, with the measurement: [ADR 539](docs/adr/539-decision-gate-rationale.md).
+
 #### Design-approval ask — the `Mockup:` line (#379)
 
 The options block is the shape for a pick-one question. The other common ask, approving
 a finished design artifact (*Design conclusions are three units*, below), is a yes/no on
-an image, and had no machine-readable shape at all. The design lane did what the text
-said: it posted the frozen screenshots in a review comment and added `needs-decision`. A
-consumer that renders decisions then had nothing to render. Measured in one consumer (a
-decisions view): 7 design-approval asks on one repo, from two workflow sets, read as
-unstructured ("malformed, needs its filer") for about 4.5 h. None counted as waiting on
-the ruler, and they gated 7 build issues until a line was backfilled into each body by
-hand.
+an image, and had no machine-readable shape at all. Why, with the measurements: [ADR 379](docs/adr/379-design-approval-ask-rationale.md).
 
 **The design issue's body carries the ask as one line:**
 
@@ -2960,8 +2637,7 @@ hand.
 Mockup: https://…/frozen-screenshot.png
 ```
 
-- **In the body, never only in a comment.** A reader finds it with one field and no
-  timeline walk. The session that produced the artifact edits the body when it asks.
+- **In the body, never only in a comment.** The session that produced the artifact edits the body when it asks.
 - **Anchored at the start of a line**: `Mockup:`, then the URL of the frozen image. An
   indented or inline `Mockup:` is quoted text, not a declaration. The image is the same
   frozen evidence unit 3 attaches to the ruling.
@@ -2981,16 +2657,11 @@ They do not rewrite the ask, because the question is not theirs to restate. The 
 reading is `askShape` in `tools/lib/decision-record.js`, which `evaluateIssue` reports as
 `unshapedAsk` when it is given the body.
 
+Why, with the measurement: [ADR 539](docs/adr/539-decision-gate-rationale.md).
+
 #### An ask is said once — a later pass reports that it is still waiting (#489)
 
-The shapes above say how a question is put to a human. This rule says how often. A
-coordinator pass (`code-triage`, a sweep, a ship session) that finds work blocked on a
-human ask used to render the whole question again on every pass: the question, the
-options, the recommendation. On a repo blocked only on its operator, every pass added
-another copy of the question to a session the operator was not reading. Measured in one
-adopting fleet over 10 days: 25–32% of the asks repeated an earlier one, and the
-coordinator triage and ship sessions asked 309 questions for 1 human answer. A repeated
-question is not a reminder. It buries the one copy the human might read.
+The shapes above say how a question is put to a human. This rule says how often. Why, with the measurements: [ADR 489](docs/adr/489-ask-said-once-rationale.md).
 
 **An ask is open when either of these holds:**
 
@@ -3015,8 +2686,7 @@ unchanged, waiting on <link> since <date>
   or the issue itself for an ask that was only in session output.
 - `<date>` is when the ask was first put. That is the newest ask event for a tracker ask
   (the same "newest ask" *Decision gate* compares with the marker), and the date of the
-  first rendering for an ask that was only in session output. It is never the date of
-  this pass. The point of the line is to show how long the human has been asked.
+  first rendering for an ask that was only in session output. It is never the date of this pass.
 - A pass may append who clears the ask. It never adds the question, the options or the
   recommendation again: those are behind the link.
 
@@ -3037,11 +2707,69 @@ Those already move the inputs that the short-circuit compares.
 
 **No open ask, no change.** A repo with no open human ask renders nothing new.
 
+Why, with the measurement: [ADR 539](docs/adr/539-decision-gate-rationale.md).
+
+#### An ask the human must answer can be raised once in a decision box (#490)
+
+The rule above controls how often a coordinator says an ask. It does not control where the
+human sees it. Some items cannot be settled by any coordinator: a migration grant, a
+promotion, a design ruling, a production credential, a destructive operation. A pass that
+finds one sets it aside and leaves it in the tracker's decision queue. The human who owns
+it may not watch that queue. A deployment may run a separate **decision box** that the
+human does watch. This rule says how a coordinator delivers the ask there, and how the
+answer gets back.
+
+**The box is optional and set by the deployment.** A skill reads its endpoint from a
+deployment setting. No host is ever written into a skill or into this handbook. **No
+endpoint set means no change:** the ask stays where it already lives, as the issue's
+`needs-decision` label and its `decision:options` block (*Decision options*, above).
+
+**Only a human-only item is raised.** That is an item the pass set aside because no
+coordinator may decide it, the list above. An ask that a coordinator can rule on is ruled
+on, not sent on.
+
+**The tracker stays the record. The box only delivers.** Raising an item changes nothing
+on the issue. The label, the options block and any `Hold:` line stay exactly as they were,
+and readiness still reads them. A box that is down, or never answers, loses a delivery,
+never the ask.
+
+**A raise carries everything needed to answer without opening the tracker:**
+
+- the issue link;
+- the question;
+- two or more options, taken from the issue's `decision:options` block, never re-derived;
+- the recommendation, on its own line;
+- what stays parked if nobody answers;
+- an opaque **reply-to**. The raiser composes it and the box hands it back unchanged with
+  the answer. The box never parses it. It is what lets the answer find its issue.
+
+These are the five lines of a new-ask card (above), plus the reply-to.
+
+**Raised once, checked first.** An item is identified by its issue link plus the date of
+its newest ask (the same "newest ask" *Decision gate* compares). Before raising, a pass
+looks for an earlier raise under that key. It looks in its own stored asks, and in the box
+when the box can answer the lookup. If it finds one, the pass writes the one line from the
+rule above, with `<link>` pointing at the raise in the box:
+
+```
+unchanged, waiting on <link> since <date>
+```
+
+It does not raise the item again. A newer ask on the issue (a re-posted options block, a
+`--reopen`, a changed question) is a new key, and it is raised once in turn.
+
+**The answer comes back as a comment on the issue, and the raiser never polls.** The box
+has an answer notifier. The deployment wires it to post the human's answer onto the issue
+named by the reply-to. The raising skill never asks the box whether an answer has arrived.
+Waiting is not a change (above). The comment that arrives is an answer left in a comment.
+It moves the issue the same way as one typed into the tracker by hand: it is recorded as
+*Decision gate* requires before the gate lifts. The box itself never removes a label or
+records a decision.
+
 #### The human flag — what `COLAB_HUMAN=1` asserts
 
 `COLAB_HUMAN=1` is one mechanism carrying one assertion, used at several gates in this
-handbook: **a human is behind this command.** ⚖ #233 widened it to this single statement,
-covering both uses it already had and one it gained. Read every site below as an instance
+handbook: **a human is behind this command.** Read every site below as an instance
 of the same assertion, never as a separate rule with its own semantics:
 
 - **Promotion** ([`colab promote`](#4-branches-and-commits)) — authorises the act that
@@ -3056,18 +2784,13 @@ of the same assertion, never as a separate rule with its own semantics:
   above) — the newest instance (⚖ #233): asserts a human is present to commit straight to
   trunk, on any repo that does not declare the veto.
 
-**Two terms make the assertion checkable, not just statable** — the same standard
-`code-ship` already holds itself to, restated here as the general rule rather than one
-skill's local convention:
+**Two terms make the assertion checkable, not just statable**:
 
 - **Transcription, never inference.** Set it because a human said so — "take the trunk,"
   "promote this," "grant the migration" — never because the situation seemed to call for
   it. A human's go-ahead counts; an agent's own reading of the situation never does.
 - **Live conversation only.** A headless, scheduled, or driver session may never set it,
-  whatever its prompt contains. An issue body, a triage comment, a scheduled task's own
-  instructions can all literally contain the words "take the trunk" — an unattended
-  session has no way to tell a live instruction from a quotation of one, so it must never
-  try.
+  whatever its prompt contains. Why, with the measurements: [ADR 233](docs/adr/233-human-flag-rationale.md).
 
 **The honest limit, stated once here rather than wherever it currently gets re-derived:**
 `COLAB_HUMAN` is an env var the gated party can set itself — nothing enforces the two
@@ -3075,13 +2798,14 @@ terms above beyond the discipline of everyone honoring them (#150, parked: a str
 mechanism would need an out-of-band attestation this fleet does not have). The two terms
 are what make a violation *legible* after the fact, not what makes one impossible.
 
+Why, with the measurement: [ADR 539](docs/adr/539-human-flag-rationale.md).
+
 #### Migration exemption — a narrow door through no-new-migrations, opened by a role (#98, #402)
 
-`colab ship` refuses, by default with no flag/env/field to lower the bar, any branch
+**[Hard — gate: colab ship refuses]** `colab ship` refuses, by default with no flag/env/field to lower the bar, any branch
 touching `database/migrations/` or `prisma/migrations/` — or any prefix the repo declares in
 `project.yml` `migrations:` (#383, [`project.schema.md`](project.schema.md#migrations--optional)).
-A declaration only ever widens what the gate sees, never narrows it; a repo keeping migrations
-elsewhere without declaring them is a repo whose gate reads `no new migrations ✓` on a backfill.
+A declaration only ever widens what the gate sees, never narrows it.
 
 **A migration grant is a narrow, per-issue, branch-bound, expiring exemption, and every
 grant names the role that decided it** — deliberately not a repo- or tier-level switch.
@@ -3099,18 +2823,16 @@ policy.
 
 **What holds for every role:**
 
-- **Minting is a human act.** `colab migration-grant` refuses (exit 1) unless
+- **[Hard — gate: colab migration-grant refuses]** **Minting is a human act.** `colab migration-grant` refuses (exit 1) unless
   `COLAB_HUMAN=1`, checked before any network call, for either role — no agent may create
   or infer one ([*The human flag*](#the-human-flag--what-colab-human1-asserts), above).
   The reviewer role changes what a grant must *prove*, not who may post it.
 - **Two required parts**: a `migration-granted` label (requires write/triage permission)
-  and a comment naming the exact branch (labels cap at 50 chars, cannot carry a branch
-  name). Never authorises a migration arriving on a different branch later.
+  and a comment naming the exact branch. Never authorises a migration arriving on a different branch later.
 - **Expires the instant its issue closes** — `ship` reads the issue's live open/closed
   state, never a separate expiry.
 - Visible from any machine — no local-only fallback.
-- **Covers the whole ship set**, never narrowed by `--refs`. One issue without a valid
-  grant fails the set: a migration cannot be attributed to one member of a group branch.
+- **Covers the whole ship set**, never narrowed by `--refs`. One issue without a valid grant fails the set.
 - `--revoke` removes the label first (gate restored immediately), then posts a receipt.
   A revoke cancels every earlier grant on the issue, of either role, whoever posted it.
   `colab migration-grant --list` names every live grant.
@@ -3120,10 +2842,7 @@ policy.
 
 **Who counts as a human — `trust-humans` (#407).** By default a grant (or a ruling,
 [*Decision gate*](#decision-gate--a-human-must-answer-first-122), above) counts as a
-human's when its author's GitHub association is `OWNER`, `MEMBER` or `COLLABORATOR`. That
-class cannot tell a person from an agent that runs under **its own** account: both report
-`MEMBER`. Measured in one adopting fleet, where the agents had their own login with write
-access: 97 of one repo's latest 100 comments were the agent's, every one `MEMBER`. A repo
+human's when its author's GitHub association is `OWNER`, `MEMBER` or `COLLABORATOR`. Why, with the measurements: [ADR 98](docs/adr/98-migration-exemption-rationale.md). A repo
 in that position lists its humans:
 
 - **Declared** ([`trust-humans:`](project.schema.md#trust-humans--optional)) → a human
@@ -3138,8 +2857,7 @@ in that position lists its humans:
   the tip of the branch being merged into, and rulings read trunk's — a branch cannot
   add its own author. **Editing the list is a human act**, like lowering exposure. As
   with every other human-only rule here, #150's limit applies to *enforcing* that: the
-  handbook cannot stop an account with write access from editing the file. The list only
-  stops the readers from throwing away a difference the platform already has.
+  handbook cannot stop an account with write access from editing the file.
 - **A reviewer grant is not judged by this list.** It passes or fails on the policy, the
   review record, the HEAD and the round-trip below. The list decides only what a *human*
   grant is.
@@ -3158,17 +2876,11 @@ properties hold it together:
   that content, not that commit. A commit that leaves every migration file byte-identical
   keeps the grant live. Editing, adding, removing or renaming a migration changes the id
   and voids it.
-  *Why:* ship's stale-base rule (#395) makes a branch merge trunk in before it ships, and on
-  a busy repo trunk moves inside any review window. Bound to the commit, the sync that ship
-  requires voided the grant that ship requires, every time, so each reviewer-granted
-  migration needed a second review or a human (measured on one adopting repo: a passing
-  review voided by a two-commit sync, then parked for hours). R still reads CI at the
-  shipped head, so the bytes reviewed are also the bytes tested on the new base.
+  Why, with the measurements: [ADR 98](docs/adr/98-migration-exemption-rationale.md).
   A record with no content id (minted before #508, or on a branch with no migration file)
-  stays bound to its HEAD alone, and a new commit voids it as before. A reader that predates
-  the field sees an unknown key and refuses the record, so an older `colab` fails closed.
-- **Opt-in per repo.** `migration-grant: reviewer` is read from the trunk checkout when a
-  grant is minted, so a branch cannot raise its own policy. The default is `human`, and
+  stays bound to its HEAD alone, and a new commit voids it as before. Older readers refuse the
+  unknown key. A branch with a migration never gets one: no computable id is refused (#563).
+- **Opt-in per repo.** `migration-grant: reviewer` is read from the trunk checkout when a grant is minted. The default is `human`, and
   `colab migration-grant` refuses to mint a reviewer grant anywhere else.
 - **Recorded only if the review passed.** The record must approve, pass the checklist,
   clear the escalation and pass the CI round-trip. A failing review is refused, not
@@ -3183,7 +2895,7 @@ properties hold it together:
   mint-time check only keeps an honest tool from writing a false record; it proves nothing
   about a comment posted by hand.
 
-**`colab ship` honours a reviewer grant only when four conditions hold together (#401):**
+**[Hard — gate: colab ship refuses without conditions P, M, HEAD, R]** **`colab ship` honours a reviewer grant only when four conditions hold together (#401):**
 
 - **P, policy.** `migration-grant: reviewer` in `project.yml` at the tip of the branch
   being merged into. The branch's own copy never counts.
@@ -3203,8 +2915,7 @@ properties hold it together:
   run's log names every file it exercised. A copy older than that counts added files only:
   its green says nothing about a modified migration, so re-sync it before a reviewer grant
   relies on it. A repo without that
-  job cannot pass R, and a branch that edits `.github/workflows/` cannot pass it either,
-  because a branch must not rewrite the job that grades it. Those branches ship on a
+  job cannot pass R, and a branch that edits `.github/workflows/` cannot pass it either. Those branches ship on a
   human grant.
 
 If any condition fails, the gate behaves exactly as it does without a reviewer grant: a
@@ -3214,12 +2925,12 @@ human grant, or a human running Phase B. The refusal says which condition failed
 grant another refuses.
 
 **`needs-migration-grant` is this gate's plan-time half, not a second gate (#230).**
-It is provisioned in `CONVENTION_LABELS` alongside `migration-granted` for the same
-malignant-absence reason, but nothing in this repo's own tooling reads it — a
+It is provisioned in `CONVENTION_LABELS` alongside `migration-granted`, but nothing in this repo's own tooling reads it — a
 downstream consumer (the fleet dashboard) applies it at plan/triage time, as soon as
-it can tell an issue's deliverable IS a schema migration, so the grant request
-surfaces before `ship` ever has a reason to refuse. It authorises nothing by itself;
+it can tell an issue's deliverable IS a schema migration. It authorises nothing by itself;
 only a grant minted as above does that.
+
+Why, with the measurement: [ADR 539](docs/adr/539-migration-rationale.md).
 
 #### A red trunk with no patch — never parked in silence (#390)
 
@@ -3229,8 +2940,7 @@ a red trunk. Something has to **create** one first. The invariant:
 > **A green, finished branch is never parked behind trunk CI while there is neither an
 > open, accepted `TRUNK RED:` issue nor a re-run in flight.**
 
-An issue that diagnoses the red under another title, or still carries `agent-filed`, does
-not count: nobody will pick it up as the patch. Triage's §0 therefore treats "trunk red,
+An issue that diagnoses the red under another title, or still carries `agent-filed`, does not count. Triage's §0 therefore treats "trunk red,
 and no open accepted `TRUNK RED:` issue" as a change that forces a full pass, even when
 none of its fingerprint inputs moved. The full pass adopts such an issue: it retitles it
 and drops `agent-filed` (#430).
@@ -3240,8 +2950,7 @@ Two actors hold it, one per half, and neither does the other's:
 - **The re-run — the repo's scheduled driver, where one exists.** Once per red sha,
   only when the red commit's diff is docs-lane-only
   ([§2](#autonomy--the-docs-only-exception-345)) and no `TRUNK RED:` issue is open. It is
-  the **only** re-run actor for a red trunk: two actors each allowed one re-run per sha
-  make two, and a green second run can bury a real defect ([§4](#4-branches-and-commits),
+  the **only** re-run actor for a red trunk ([§4](#4-branches-and-commits),
   *Telling `red:infra` from `red:finding`*).
 - **The filing — triage.** When the re-run has been tried for that sha, or cannot apply
   (the commit touches more than docs, or nothing drives the repo), and no accepted
@@ -3251,26 +2960,22 @@ Two actors hold it, one per half, and neither does the other's:
   one of triage's authorised writes (`skills/code-triage` §0.2, write 8), and triage
   never re-runs a job itself.
 
-Measured: a red from a known flake class, on a docs-only commit, parked a green branch for
-1 h 45 min across four triage pings that could see it and had no step to act. One re-run
-cleared it.
+Why, with the measurements: [ADR 390](docs/adr/390-red-trunk-no-patch-rationale.md).
+
+Why, with the measurement: [ADR 539](docs/adr/539-red-trunk-rationale.md).
 
 #### Red-trunk exemption — the one-shot door through trunk-CI-green (#105)
 
-Same shape as a migration grant, strictly **more dangerous** — a bad migration grant
-merges one reviewed schema change; a bad CI grant merges into a repo whose own test suite
-is known-failing.
+Why, with the measurements: [ADR 105](docs/adr/105-red-trunk-exemption-rationale.md).
 
 - **Two roles, as for a migration grant (#504).** The repo says which it accepts:
 
   | Role | Who decided | Marker | Bound to | Accepted |
   |---|---|---|---|---|
-  | `human` | a person, `COLAB_HUMAN=1` | `🚨 Red-trunk CI grant` | the branch and the red trunk sha | on every repo — the default |
+  | **[Hard — gate: colab ci-grant refuses]** `human` | a person, `COLAB_HUMAN=1` | `🚨 Red-trunk CI grant` | the branch and the red trunk sha | on every repo — the default |
   | `ci-reviewer` | the coordinator agent, with a review record | `🩹 Red-trunk CI review grant` | the branch's exact HEAD and the red trunk sha | only under [`ci-grant: reviewer`](project.schema.md#ci-grant--optional) |
 
-  The reviewer role exists because the maintainer ruled (2026-10-05) that the coordinator
-  owns a red trunk end to end, including this exemption, where the cure rule (below) still
-  refuses. `colab ci-grant <N> --branch <b> --role ci-reviewer --reviewer <id> --verdict
+  **[Hard — gate: colab ci-grant refuses without COLAB_HUMAN or the reviewer opt-in]** `colab ci-grant <N> --branch <b> --role ci-reviewer --reviewer <id> --verdict
   pass --cures "<check>; <check>"` mints it **without** `COLAB_HUMAN=1` — the only grant
   that does — and only where trunk's committed `project.yml` declares the opt-in (a branch
   cannot opt itself in). Every guard is **measured** at mint, nothing is taken from the
@@ -3284,21 +2989,22 @@ is known-failing.
   `not-before` (a revoke window the host imposes) by reading the grant as *not yet usable*
   until it passes. **Revoking stays human** (`COLAB_HUMAN=1 colab ci-grant <N> --revoke`
   cancels every role). The reviewer identity is declared, not attested — the same caveat as
-  the migration reviewer.
-- **Bound to one issue, the branch, AND the exact red trunk sha reviewed against** — it
+  the migration reviewer. Why, with the measurements: [ADR 105](docs/adr/105-red-trunk-exemption-rationale.md).
+- **[Hard — gate: colab ship refuses a stale CI grant]** **Bound to one issue, the branch, AND the exact red trunk sha reviewed against** — it
   expires the instant trunk's head moves, for any reason.
-- **Evidence is measured, never asserted** — creating one requires a completed,
+- **[Hard — gate: colab ship refuses unmeasured evidence]** **Evidence is measured, never asserted** — creating one requires a completed,
   successful CI run for the branch's own current head sha; `--evidence-run` is
   recording-only and never substitutes for the measured run.
-- **Never stacks** — refuses against a green trunk, and refuses again if a prior grant
+- **[Hard — gate: colab ci-grant refuses a stack]** **Never stacks** — refuses against a green trunk, and refuses again if a prior grant
   already merged something and trunk has been red continuously since.
 - A grant-authorised merge carries a `CI-Grant:` trailer in the squash commit itself, in
   addition to the tracker comment.
 - **Scoped to exactly one precondition** (trunk-CI-green) — never exempts no-new-
   migrations, claim corroboration, the trunk-checkout check, the hand-merge conflict
-  preview, or `colab promote`. **Trunk-only** — an integration line's red already
-  borrows trunk's advisory verdict when the line has no runs of its own; widening the
-  exemption to lines is a deliberately unmade decision.
+  preview, or `colab promote`. **Trunk-only** — an integration line's red borrows trunk's
+  advisory verdict when the line has no runs of its own; the exemption does not extend to lines.
+
+Why, with the measurement: [ADR 539](docs/adr/539-red-trunk-rationale.md).
 
 #### Cure rule — the machine-checkable door through trunk-CI-green (#281)
 
@@ -3307,167 +3013,101 @@ A second door through the same precondition, tried **before** ci-grant and needi
 trunk-CI-green check fails HUMAN_GATED, and falls straight through to the ordinary
 ci-grant when any condition below is not met. Fires **iff**:
 
-1. the branch **contains trunk's current red head sha** as an ancestor — proof the
-   branch was built against the exact failure, not merely conflict-free with it. A
-   ci-grant's evidence guard checks the branch's own head is green, but never
-   containment: a branch cut from an OLDER, green base can carry a green run that
-   proves nothing about the redness it is being exempted from.
-2. the branch's own CI is green **at its own current head**, measured, never
-   asserted — identical "ask by sha" discipline to ci-grant's evidence guard —
-   **and** (2b, #297) every job that is RED on trunk's runs at the red sha exists
-   in the branch's runs at that head, completed and concluded `success`, matched
-   per workflow. A green run alone never proved the check trunk is failing ran
-   here: a `paths:` filter, a matrix change or a renamed job leaves the run green
-   while the named check never ran. *"The one check that was failing now passes"*
-   is the claim, stated exactly. It is scoped to trunk's **red set**, so an
-   advisory job failing only on the branch does not refuse: the rule certifies
-   that the branch cures trunk's red, not that the branch is spotless. A job
-   instance from a `workflow_dispatch` run counts here only under the #510 rules
-   below (*Dispatch evidence for a job a branch push skips*).
-3. the **same anti-stacking guard** ci-grant uses holds — no prior grant OR cure
-   already merged while trunk has stayed continuously red since. A repo that
-   auto-cures once and stays red anyway must not auto-cure again on the same
-   continuous red. **One admission — progress (#477):** a further cure passes
-   condition 3 when trunk's red-job set at its current red sha is a **strict
-   subset** of the red-job set at the red sha the prior exemption was measured
-   against (the `over-red` sha its `CI-Grant:` / `CI-Cure:` trailer names), jobs
-   matched per workflow as in 2b. A trunk with two independent failures, or a fix
-   that repaired one of two red jobs, then heals by successive fixes with no human
-   step. An **unchanged** set refuses (the prior exemption fixed nothing that
-   stayed fixed), and so does a set with **any new** red job, even if another
-   healed — trading one red for another is the loop this condition exists to
-   break. Either set unmeasurable (runs aged out, a job still in flight) refuses.
-   The candidate must still cure the remaining set under every other condition.
-   The admission belongs to the cure rule only; a human `ci-grant` create keeps
-   the plain guard.
-4. the branch diff does **not** touch `.github/workflows/**` — a branch may not
+1. **[Hard — gate: colab ship refuses (cure rule)]** the branch **contains trunk's current red head sha** as an ancestor.
+2. **[Hard — gate: colab ship refuses (cure rule)]** the branch's own CI is green **at its own current head**, measured, never asserted —
+   identical "ask by sha" discipline to ci-grant's evidence guard — **and** (2b, #297)
+   every job that is RED on trunk's runs at the red sha exists in the branch's runs at
+   that head, completed and concluded `success`, matched per workflow. It is scoped to
+   trunk's **red set**, so an advisory job failing only on the branch does not refuse. A job instance from a `workflow_dispatch` run counts here only under the
+   #510 rules below (*Dispatch evidence for a job a branch push skips*).
+3. **[Hard — gate: colab ship refuses (cure rule)]** the **same anti-stacking guard** ci-grant uses holds — no prior grant OR cure already
+   merged while trunk has stayed continuously red since. A repo that auto-cures once and
+   stays red anyway must not auto-cure again on the same continuous red. **One admission
+   — progress (#477):** a further cure passes condition 3 when trunk's red-job set at
+   its current red sha is a **strict subset** of the red-job set at the red sha the
+   prior exemption was measured against (the `over-red` sha its `CI-Grant:` / `CI-Cure:`
+   trailer names), jobs matched per workflow as in 2b. An **unchanged** set refuses, and so does a set with **any new**
+   red job, even if another healed. Either set unmeasurable (runs aged out, a job still in
+   flight) refuses. The candidate must still cure the remaining set under every other
+   condition. The admission belongs to the cure rule only; a human `ci-grant` create
+   keeps the plain guard.
+4. **[Hard — gate: colab ship refuses (cure rule)]** the branch diff does **not** touch `.github/workflows/**` — a branch may not
    self-certify a change to the CI configuration that is grading it. This door
    stays behind a human ci-grant, **unless** the branch passes the carve-out
    below. The diff is read without rename detection, so moving a workflow file
    out of the directory counts as touching it (#297).
-5. the branch diff does **not** change the `scripts` block of any `package.json`
-   (#297). The Node CI template does not hardcode what it measures: it asks
-   `package.json` whether `typecheck`, `lint` and `test` exist and **skips** each
-   step whose script is absent, and the job still concludes `success`. So
-   deleting `scripts.test` stops the failing suite from running without touching
-   a workflow file — the manifest is part of the instrument too. Any
-   `package.json` at any depth counts (the template's working directory is an
-   adopter's edit point, and workspace runners read nested scripts); key order
-   does not, a changed command does; deleting or renaming a manifest counts. There
-   is **no carve-out** for this condition — see below for why the #321 door cannot
-   adjudicate it. **One narrow admission (#475): an add-only change.** When every
-   touched `package.json` exists on both sides, keeps every script it had with an
-   identical command, and only *adds* keys, the template runs more, never less —
-   so it passes condition 5 provided every step that ran in each red job on trunk,
-   the failing one included, ran on the branch and concluded `success` (the 4b
-   read, without 4c). Its limit: an added npm **lifecycle** hook (`postinstall`,
-   `prepare`, or `pre<x>`/`post<x>` for a script `<x>`) is never admitted — it runs
-   inside a step that already exists and can rewrite what that step measures with
-   no name changing. A removed, renamed or changed script, a new manifest, and an
-   add-only change in one manifest beside any other change in another still refuse.
-6. the branch diff does **not** change a Python dependency manifest (#377). The
-   Python CI template runs ruff, mypy and pytest only when the tool is installed,
-   and what is installed comes from the files it installs from — so dropping
-   `pytest` from `requirements-dev.txt` skips the Test step and the job still
-   concludes `success`. What counts, at any depth: `pyproject.toml`, `setup.py`,
-   `setup.cfg`; any `.txt`/`.in` whose name contains `requirements` or that sits
-   under a `requirements/` directory; and any file one of those pulls in (a `-r`/`-c`
-   include, a `[tool.setuptools.dynamic]` `file =`), read from both sides of the
-   diff. The whole file counts, not a block: in Python the dependency list *is* the
-   switch, and a tool can arrive transitively, which no block-level read can
-   measure. Lockfiles are not read by the template and do not count. **No
-   carve-out**, for the same reason as 5. **One narrow admission (#476): a pin-only
-   change.** When every touched manifest exists on both sides and differs only in
-   the version specifier (or `--hash`) of requirements present at the same position
+5. **[Hard — gate: colab ship refuses (cure rule)]** the branch diff does **not** change the `scripts` block of any `package.json` (#297).
+   Any `package.json` at any depth counts; key order does not,
+   a changed command does; deleting or renaming a manifest counts. There is **no
+   carve-out** for this condition — see below for why the #321 door cannot adjudicate
+   it. **One narrow admission (#475): an add-only change.** When every touched
+   `package.json` exists on both sides, keeps every script it had with an identical
+   command, and only *adds* keys, it passes
+   condition 5 provided every step that ran in each red job on trunk, the failing one
+   included, ran on the branch and concluded `success` (the 4b read, without 4c). Its
+   limit: an added npm **lifecycle** hook (`postinstall`, `prepare`, or
+   `pre<x>`/`post<x>` for a script `<x>`) is never admitted. A
+   removed, renamed or changed script, a new manifest, and an add-only change in one
+   manifest beside any other change in another still refuse.
+6. **[Hard — gate: colab ship refuses (cure rule)]** the branch diff does **not** change a Python dependency manifest (#377). What counts,
+   at any depth: `pyproject.toml`, `setup.py`, `setup.cfg`; any `.txt`/`.in` whose name
+   contains `requirements` or that sits under a `requirements/` directory; and any file
+   one of those pulls in (a `-r`/`-c` include, a `[tool.setuptools.dynamic]` `file =`),
+   read from both sides of the diff. Lockfiles are not read by the template and do not
+   count. **No carve-out**, for the same reason as 5. **One narrow admission (#476): a
+   pin-only change.** When every touched manifest exists on both sides and differs only
+   in the version specifier (or `--hash`) of requirements present at the same position
    on both sides — no requirement added, removed, reordered or renamed, no extras or
-   marker changed, no option line (`-r`/`-c`/`-e`/index) changed — it passes
-   condition 6 on the same step proof as 5's admission **plus one test**: no step
-   *after* the last one that ran on trunk may be `skipped` on the branch. That is
-   the answer to a pin dropping a transitively installed tool: steps up to trunk's
-   failure are covered by the step proof, steps past it were never reached on
-   trunk, so a skip there is unmeasurable and refuses. A `pyproject.toml` is read
-   only inside its dependency arrays (`[project] dependencies`,
-   `[project.optional-dependencies]`, `[dependency-groups]`, `[build-system]
-   requires`); every other byte must match. `setup.py` (code) and `setup.cfg` are
-   never pin-only.
+   marker changed, no option line (`-r`/`-c`/`-e`/index) changed — it passes condition 6
+   on the same step proof as 5's admission **plus one test**: no step *after* the last
+   one that ran on trunk may be `skipped` on the branch. A `pyproject.toml` is read only
+   inside its dependency arrays (`[project] dependencies`,
+   `[project.optional-dependencies]`, `[dependency-groups]`, `[build-system] requires`);
+   every other byte must match. `setup.py` (code) and `setup.cfg` are never pin-only.
 
-An unmeasurable diff — a failed read, a manifest that does not parse, a manifest
+**[Hard — gate: colab ship refuses (cure rule)]** An unmeasurable diff — a failed read, a manifest that does not parse, a manifest
 that is a symlink — refuses, the same as any other unmeasured signal. Order of
 checks: 1 → 2 → 2b → 3 → diff measurable → 5 → 6 → 4 (with its carve-out).
-Conditions 5 and 6 come before 4 because the carve-out *admits*: a check placed
-after it would never be reached by a branch touching both.
 
-**The workflow carve-out (#321) — one guarded door through condition 4, not a
-relaxation of it.** The repair for a CI-*infrastructure* outage is, by
-construction, a workflow change: when trunk goes red because the runner pool
-cannot reach a service container, the branch that fixes it necessarily edits
-`.github/workflows/**` and was therefore permanently cure-ineligible however
-green it was — leaving a mechanically-verifiable repair waiting on a human who
-may not be watching. Worse, the human is measurably the wrong judge here: a
-genuine repair and a "CI fix" that pins every job to a runner missing a shared
-library read identically in a one-line grant prompt, and granting the wrong one
-converts a 30-hour stall into a permanently red trunk. The CI evidence tells
-them apart. So a workflow-touching branch may still cure when, on top of 1-3
-(2b included) and 5, **all** of:
+**The workflow carve-out (#321) — one guarded door through condition 4, not a relaxation
+of it.** A workflow-touching branch may
+still cure when, on top of 1-3 (2b included) and 5, **all** of:
 
-- **4a — job-name superset.** Every job RED on trunk's run at the red sha
+- **[Hard — gate: colab ship refuses (cure rule)]** **4a — job-name superset.** Every job RED on trunk's run at the red sha
   exists on the branch's own green run, completed and concluded `success`.
   *"I made the red job disappear"* — deleted, renamed, filtered away — fails here.
   Since #297 this sub-test is condition 2b and applies to **every** cure; 4b and
   4c stay the carve-out's alone.
-- **4b — executed-step superset.** For each of those jobs, every step that
-  actually **ran** on trunk (reached a terminal, non-skipped conclusion) is
-  present on the branch's job and concluded `success`. Steps *after* the failing
-  one are `skipped` on trunk and so constrain nothing — only steps that
-  demonstrably ran do. *"I made it exit early"* fails here. This is the
-  structural, primary sub-test: it embeds no constant and is symmetric with 4a
-  one level down. It is also why job-level `success` is not enough on its own —
-  GitHub reports a job whose steps were **all** skipped as `conclusion:
-  success`, so run- and job-level conclusions are blind to exactly the fast-exit
-  this catches.
-- **4c — duration floor.** Each of those jobs cost at least the wall time its
-  failure did on trunk. 4b proves the *steps* ran; it cannot see a step's `run:`
-  body gutted to a no-op inside the very workflow file being carved for, and
-  duration is the only signal that touches that. The comparison is against a
-  measurement taken in the same repo, on the same job, on the same runner class,
-  minutes apart — so there is no repo-specific constant to tune. Measured case:
-  `browser` fast-failing at 36s pre-fix versus passing at 11m8s on the repair.
+- **[Hard — gate: colab ship refuses (cure rule)]** **4b — executed-step superset.** For each of those jobs, every step that actually
+  **ran** on trunk (reached a terminal, non-skipped conclusion) is present on the
+  branch's job and concluded `success`. Steps *after* the failing one are `skipped` on
+  trunk and so constrain nothing — only steps that demonstrably ran do. *"I made it exit
+  early"* fails here.
+- **[Hard — gate: colab ship refuses (cure rule)]** **4c — duration floor.** Each of those jobs cost at least the wall time its failure did on trunk.
 
-Anything unmeasurable — no job evidence, an empty red-job set, an unreadable
+**[Hard — gate: colab ship refuses (cure rule)]** Anything unmeasurable — no job evidence, an empty red-job set, an unreadable
 step list, a missing duration — **refuses**, exactly as before. The carve-out
 only ever widens the door on evidence, never on the absence of it.
 
-**Dry-run evidence for a main-only workflow (#474).** Some workflows never run on
-a branch at all. `release-auto.yml` fires after trunk CI or on a schedule, so 2b
-refused every fix for a red in it (the job is absent on the branch), and a human
-ci-grant was the only door, even for a mechanical defect such as a moved runner
-label or a `HANDBOOK_REF` naming a missing branch. The template therefore offers a
-**dry run**: dispatched on the fix branch (`gh workflow run release-auto.yml --ref
-<branch> -f dry_run=true`; a dispatch on any ref other than `main` is dry with or
-without the input), it checks out the branch and runs the same job with every
-external write off. Each decision runs with `--dry`. No promotion, tag, Release,
-push or dispatch happens. Only steps whose names end in `[publish]` are skipped. A
-sentinel step, *Dry run — nothing is tagged, released or published*, runs only in
-that mode, and it is what marks a job instance as a dry run. Such an instance is
-the job's 2b (and 4a) evidence only when, on top of 2b:
+**Dry-run evidence for a main-only workflow (#474).** Some workflows never run on a
+branch at all. The template therefore offers a **dry run**: dispatched on the fix branch
+(`gh workflow run release-auto.yml --ref <branch> -f dry_run=true`; a dispatch on any
+ref other than `main` is dry with or without the input), it checks out the branch and
+runs the same job with every external write off. Each decision runs with `--dry`. No
+promotion, tag, Release, push or dispatch happens. Only steps whose names end in
+`[publish]` are skipped. A sentinel step, *Dry run — nothing is tagged, released or
+published*, runs only in that mode, and it is what marks a job instance as a dry run.
+Such an instance is the job's 2b (and 4a) evidence only when, on top of 2b:
 
-- **D1** — both step lists are measurable: trunk's ran-steps and the dry run's steps.
-- **D2** — every step that **ran** on trunk, the failing one included, concluded
+- **[Hard — gate: colab ship refuses (cure rule)]** **D1** — both step lists are measurable: trunk's ran-steps and the dry run's steps.
+- **[Hard — gate: colab ship refuses (cure rule)]** **D2** — every step that **ran** on trunk, the failing one included, concluded
   `success` in the dry run. This is 4b, applied to dry-run instances on every path.
-  It is also what keeps the dry run from being a back door: a red **inside** a
-  `[publish]` step can never be cured this way, because the dry run skips exactly
-  that step.
-- **D3** — every step the dry run did not run to success is a skipped `[publish]`
-  step. A dry run that also skipped an ordinary step past trunk's failure point
-  has run part of the job, not the job.
+- **[Hard — gate: colab ship refuses (cure rule)]** **D3** — every step the dry run did not run to success is a skipped `[publish]` step.
 
-The marker is a step **name** on purpose. Steps are matched by exact name, so
-marking the very step that failed on trunk renames it, and D2 then reads it as
-absent and refuses. A list declared inside the workflow would be read from the
-branch, which is the party being graded. A green ordinary instance of the same job
-outranks a dry one, so the D-rules apply only when a dry run is the sole evidence.
+A green ordinary instance of the same job outranks a dry one, so the D-rules apply only
+when a dry run is the sole evidence.
 
-When a cure refuses at 2b only because such a workflow's red job is absent on the
+**[Hard — gate: colab ship refuses (cure rule)]** When a cure refuses at 2b only because such a workflow's red job is absent on the
 branch, and every later condition already holds, `colab ship` dispatches the dry
 run **once**. It skips any workflow that already has a run at the branch head. It
 never waits, and it never dispatches from `--dry` or `--dry --json`, which only
@@ -3481,33 +3121,24 @@ cannot be cured by a dry run and stays a ci-grant. So does a red job that ran
 4c has no usable duration for it. Reasoning:
 [`docs/adr/474-cure-rule-dry-run-evidence.md`](docs/adr/474-cure-rule-dry-run-evidence.md).
 
-**Dispatch evidence for a job a branch push skips (#510).** The same gap one level
-down. The workflow runs on a branch push, but one of its **jobs** is trunk-only by
-its own `if:` — true on trunk, on a schedule and on `workflow_dispatch`, false on a
-branch push — typically a long end-to-end suite moved off the branch path to keep
-branch CI short. The fix branch's push run is green with that job `skipped` (or,
-for a matrix, the red shard absent), so 2b refuses and only a ci-grant remained.
-A `workflow_dispatch` of the same workflow on the branch runs the job. A **dispatch
-instance** — a job row from a `workflow_dispatch` run that is not a #474 dry run —
-is the job's 2b (and 4a) evidence only when, on top of 2b's own tests, all of:
+**Dispatch evidence for a job a branch push skips (#510).** The same gap one level down.
+A **dispatch instance** — a job row from a `workflow_dispatch` run that is not a #474
+dry run — is the job's 2b (and 4a) evidence only when, on top of 2b's own tests, all of:
 
-- **W1 — same workflow.** The dispatch run's workflow **id** equals the red run's.
-  Ids are per workflow file and the same on every ref; display names are not
-  unique. Either id missing refuses.
-- **W2 — same head.** The dispatch run is at the branch's evidence head sha. A row
+- **[Hard — gate: colab ship refuses (cure rule)]** **W1 — same workflow.** The dispatch run's workflow **id** equals the red run's.
+  Either id missing refuses.
+- **[Hard — gate: colab ship refuses (cure rule)]** **W2 — same head.** The dispatch run is at the branch's evidence head sha. A row
   at any other sha is never evidence.
 - **W3 — the event** is `workflow_dispatch`. Ordinary instances are unchanged.
 - **W4 — the job passed and nothing beside it failed.** Completed `success`; no
   other instance at the head red or pending. So `skipped`, `neutral`, `cancelled`
   or absent never counts as cured, and a job that ran and **failed** on the push
   run is not rescued by a green dispatch.
-- **W5 — the failing step ran.** Every step that went red on trunk is present by
-  exact name in the dispatch instance and concluded `success` — a job whose steps
-  were all skipped reports `success`, so job-level success alone cannot see a step
-  whose own `if:` depends on the event. Deliberately not the full executed-step
-  superset (D2/4b): a cache-conditional step that ran on trunk is skipped on a
-  cache hit, which would refuse genuine cures. A trunk red with no red step (a
-  timeout, a lost runner) leaves W5 nothing to check, and W4 decides.
+- **[Hard — gate: colab ship refuses (cure rule)]** **W5 — the failing step ran.** Every step that went red on trunk is present by exact
+  name in the dispatch instance and concluded `success` — a job whose steps were all
+  skipped reports `success`, so job-level success alone cannot see a step whose own
+  `if:` depends on the event. A trunk red with no red step (a timeout, a lost runner)
+  leaves W5 nothing to check, and W4 decides.
 - **W6 — per job, by exact name.** Matrix shards match by their expanded names;
   one green shard never covers another; nothing matches by prefix.
 
@@ -3522,130 +3153,55 @@ copy, (b) is not dry-run capable (that keeps the #474 path), (c) has a completed
 successful **non-dispatch** run at the head — it is branch CI, not a main-only
 workflow a dispatch could publish from — and (d) has no `workflow_dispatch` run at
 the head yet, and every later condition already holds, `colab ship` dispatches it
-**once** (`gh workflow run <file> --ref <branch>`, no inputs). It never waits — the
-job may take hours, and ship measures up to three times per invocation — and never
+**once** (`gh workflow run <file> --ref <branch>`, no inputs). It never waits and never
 dispatches from `--dry` or `--dry --json`, which report `ciCure.dispatchWanted`.
 Wait with `colab ci-wait --sha <head> --branch <branch>` sized to the job, then
 re-run ship. Reasoning:
 [`docs/adr/510-cure-rule-dispatch-evidence-for-branch-skipped-jobs.md`](docs/adr/510-cure-rule-dispatch-evidence-for-branch-skipped-jobs.md).
 
-Conditions 1+2 together mean the branch's tree passed the full suite **including
-the tests trunk is currently failing** — merging it provably turns trunk green.
-That is the one thing the human click on a ci-grant is supposed to certify,
-mechanically checkable instead — which is why this door needs no `COLAB_HUMAN=1`,
-no label, and no tracker comment: nothing here is a human write.
-
-- **Honest limit, not glossed over:** test-file self-weakening (gutting the failing
-  tests to go green) is invisible at this gate either way — check-runs name jobs,
-  not files. Condition 4 closes only the adjacent, checkable door (weakening the CI
-  config itself); content weakening is caught where it is caught today — review/grade
-  time, downstream of ship.
-- **The carve-out's own honest limit, in the same register:** it proves the red
-  jobs still exist, still ran the steps they ran on trunk, and still cost at
-  least the wall time the failure did. It cannot see what those steps
-  **asserted**. A workflow edit that preserves every step name and every second
-  of wall time while weakening what the commands actually check passes this door
-  — the same content-blindness above, moved one layer down into the workflow
-  itself. What it closes is the structural form: deleting, renaming, `if:`-ing
-  away, or fast-exiting the job trunk is red on.
-- **Two known, accepted false refusals — both fall through to the ordinary
-  ci-grant, which is the safe direction.** (i) A trunk job that failed by
-  **timeout** or hang ran *longer* than any healthy green run, so 4c refuses the
-  genuine repair; relaxing 4c for a `timed_out`/`cancelled` red job is a
-  deliberately unmade decision — one `if`, and the obvious first follow-up the
-  moment it is observed in the field, but adding it unmeasured is the
-  speculative loosening condition 4 exists to resist. (ii) A repair that
-  legitimately **renames** a job or a step fails 4a/4b, because the gate cannot
-  distinguish a rename from a deletion. Expect this to be the most common benign
-  refusal.
-- **#297 adds more accepted false refusals, in the same safe direction.** (iii) A
-  job with job-level `continue-on-error` that fails on trunk *persistently* is in
-  the red set, so it refuses every cure; step-level `continue-on-error` (what the
-  templates use) leaves the job `success` and is unaffected. Relaxing this is
-  left unwritten for the same reason as (i). (iv) A workflow red on trunk that
-  never runs for a branch (a deploy on push to trunk) has no branch counterpart,
-  so 2b refuses — correctly: the branch cannot prove trunk will go green —
-  **unless the workflow offers dry-run evidence (#474, above)**, which gives it one. (v) A
-  red run with no job that can be named refuses on every path. (vi) Any nested
-  `package.json` scripts change during a red trunk refuses condition 5 — unless it
-  is add-only (#475). (vii) A job
-  whose `name:` interpolates the event name differs between the push and the
-  `pull_request` run, so 2b cannot match it.
-- **#377 adds one more, same direction.** (viii) Any change to a Python dependency
-  manifest during a red trunk refuses condition 6 — except a pin-only change that
-  passes #476's step proof. Narrowing it to "a requirement name disappeared" stays
-  unmade: a version change can drop a transitively installed tool. What #476 measures
-  instead is whether any tool step was skipped where trunk never got to look, so a
-  pin fixing a red that came *before* a step the repo never had (say, no mypy and
-  the red in Lint) still refuses. Reasoning:
-  [`docs/adr/377-cure-rule-python-dependency-manifests.md`](docs/adr/377-cure-rule-python-dependency-manifests.md),
-  [`docs/adr/475-476-cure-rule-narrow-manifest-admissions.md`](docs/adr/475-476-cure-rule-narrow-manifest-admissions.md).
-- **#510 adds three, same direction.** (ix) A workflow whose `run-name:` renames
-  its dispatch runs, or whose matrix expands differently under `workflow_dispatch`,
-  cannot be matched job for job. (x) A workflow whose dispatch needs required
-  inputs fails the input-less dispatch; ship prints the command to run by hand.
-  (xi) A dispatch run whose workflow id could not be read refuses rather than fall
-  back to the display name.
-- **`package.json`'s `scripts` block is condition 5, not part of this carve-out,
-  and must not be folded into it.** The carve-out's evidence cannot adjudicate a
-  scripts-block weakening in the general case — it happens inside a step whose
-  name and conclusion are unchanged and whose duration delta may sit below any
-  signal, so 4b and 4c would both silently pass a change they are structurally
-  unable to see. Two instrument paths, two different doors. What is named once
-  is the carve-out *predicate*, never the path list. Why only 4a was hoisted to
-  every cure, and 4b/4c were not: [`docs/adr/297-cure-rule-instrument-manifest-and-named-check-evidence.md`](docs/adr/297-cure-rule-instrument-manifest-and-named-check-evidence.md).
+- **[Hard — gate: colab ship refuses (cure rule)]** **`package.json`'s `scripts` block is condition 5, not part of this carve-out, and
+  must not be folded into it.** The carve-out's evidence cannot adjudicate a
+  scripts-block weakening in the general case — it happens inside a step whose name and
+  conclusion are unchanged and whose duration delta may sit below any signal, so 4b and
+  4c would both silently pass a change they are structurally unable to see.
 
 The full reasoning — why the executed-step superset is the primary test and a
 bare duration threshold was rejected, what the two accepted false refusals cost,
 and why the `timed_out` relaxation is deliberately left unwritten — is in
 [`docs/adr/321-workflow-carve-out-measures-execution-not-duration.md`](docs/adr/321-workflow-carve-out-measures-execution-not-duration.md).
-- **Containment costs a fresh CI round, by design.** Requiring the red sha in the
-  branch forces a rebase onto red trunk, which moves the branch head and
-  invalidates any prior green run — every cure pays one CI round at the new head.
-  That is the price of the proof, not overhead to trim.
-- **Where workflows never fire for a branch ref, that round is a PR — for the patch
-  only (#353).** Condition 2 then has no other way to be measured, and the PR's merge
-  ref includes the red trunk, so only the branch carrying the fix gets a meaningful
-  run from it. A bystander does not rebase onto the red and does not open a PR: it
+- **Where workflows never fire for a branch ref, that round is a PR — for the patch only (#353).** A bystander does not rebase onto the red and does not open a PR: it
   waits for green (*Branch CI*, above).
 - A cured merge carries a `CI-Cure:` trailer instead of `CI-Grant:` — unlike the
   grant's trailer it names no issue (the cure rule never reads the tracker at all,
   so it has none to name), only the branch, the red trunk sha it contained, and the
   evidence run sha.
 - **The trailer and the `--dry --json` payload name WHICH door was used.** A cure
-  admitted through the carve-out appends ` via workflow-carve-out jobs <a,b>` to
-  its trailer and reports `ciCure.via: "workflow-carve-out"` (with per-job
-  durations) instead of `"ordinary"`. This is not decoration: anti-stacking
-  permits **one** exemption per continuous red episode (more only on progress,
-  condition 3), so a later reader
-  has to be able to tell which door spent it — a cure that went through the
-  widened door on a branch editing the CI config is a materially different fact
-  from an ordinary one, and the commit is the only artifact that still says so
-  after the runs age out. The `--grep=^CI-Cure:` scan is anchored on the prefix,
-  so the suffix never disturbs it. A cure proven by a dry run (#474) appends
-  ` via dry-run jobs <a,b>` the same way and reports `ciCure.dryRun: {jobs}`; on a
-  refusal, `ciCure.dryRunWanted` names the dry run(s) that would supply the missing
-  evidence, each with its workflow, file and exact command. A cure proven by a
-  `workflow_dispatch` run (#510) appends ` via dispatch jobs <a,b>` and reports
-  `ciCure.dispatch: {jobs}`; on a refusal, `ciCure.dispatchWanted` names the
-  dispatch(es) that would supply the evidence, in the same shape. `ciCure.provenJobs` (#297) lists the red jobs
-  2b proved passing on the branch — a consumer rendering cure eligibility reads
-  it (and `ok`/`reason`) rather than re-deriving a verdict from check-runs. A
-  cure that changed a manifest under #475/#476's admissions appends ` admitted
-  add-only-scripts` and/or `pin-only-requirements` to the trailer, and reports
-  `ciCure.admitted: {scripts?, pins?}` (null otherwise), for the same reason. A
-  cure that passed condition 3 by progress (#477) appends ` after-progress healed
-  <a,b>` and reports `ciCure.progress: {healed, still}` (null otherwise); its own
-  `over-red` sha is what the next cure on the same red compares against.
-- **Group branches get simpler under this door.** A ci-grant on a group branch
-  requires a valid grant on every member issue; the cure's evidence is branch-level,
-  so the all-or-nothing-per-branch property holds with zero per-issue paperwork.
+  admitted through the carve-out appends ` via workflow-carve-out jobs <a,b>` to its
+  trailer and reports `ciCure.via: "workflow-carve-out"` (with per-job durations)
+  instead of `"ordinary"`. The `--grep=^CI-Cure:` scan is anchored on the prefix, so the
+  suffix never disturbs it. A cure proven by a dry run (#474) appends ` via dry-run jobs
+  <a,b>` the same way and reports `ciCure.dryRun: {jobs}`; on a refusal,
+  `ciCure.dryRunWanted` names the dry run(s) that would supply the missing evidence,
+  each with its workflow, file and exact command. A cure proven by a `workflow_dispatch`
+  run (#510) appends ` via dispatch jobs <a,b>` and reports `ciCure.dispatch: {jobs}`;
+  on a refusal, `ciCure.dispatchWanted` names the dispatch(es) that would supply the
+  evidence, in the same shape. `ciCure.provenJobs` (#297) lists the red jobs 2b proved
+  passing on the branch — a consumer rendering cure eligibility reads it (and
+  `ok`/`reason`) rather than re-deriving a verdict from check-runs. A cure that changed
+  a manifest under #475/#476's admissions appends ` admitted add-only-scripts` and/or
+  `pin-only-requirements` to the trailer, and reports `ciCure.admitted: {scripts?,
+  pins?}` (null otherwise), for the same reason. A cure that passed condition 3 by
+  progress (#477) appends ` after-progress healed <a,b>` and reports `ciCure.progress:
+  {healed, still}` (null otherwise); its own `over-red` sha is what the next cure on the
+  same red compares against.
 - **`colab ci-grant`'s anti-stacking scan now recognises either trailer** —
-  `CI-Grant:` or `CI-Cure:` — as "an exemption already merged against this red", so a
-  repo that has used both doors is scanned as one continuous stacking history rather
-  than two independent ones.
+  `CI-Grant:` or `CI-Cure:` — as "an exemption already merged against this red".
 - Scoped identically to the grant: trunk-only, and never exempts anything but
   trunk-CI-green.
+
+Why, with the measurements and the accepted false refusals: [ADR 281](docs/adr/281-cure-rule-rationale.md).
+
+Why, with the measurement: [ADR 539](docs/adr/539-cure-rationale.md).
 
 #### Scheduled drivers — provenance and autonomy meet a caller that is not a person
 
@@ -3657,16 +3213,14 @@ stops applying; this is what a scheduler must additionally honour.
 **It inherits the provenance gate, re-applied on every tick, not filtered once:**
 
 - `agent-filed` issues are excluded from what a scheduler starts, every run.
-- `epic`-labelled issues are excluded — an epic can pass provenance cleanly and still not
-  be a pick-up-and-code task.
-- `needs-decision` issues are excluded, for a third distinct reason: no human has answered
-  the blocking question, even if the work item itself is human-filed, unblocked, and a
-  genuine leaf task.
+- `epic`-labelled issues are excluded.
+- `needs-decision` issues are excluded — no human has answered the blocking question — even
+  if the work item itself is human-filed,
+  unblocked, and a genuine leaf task.
 - **The only admission is a human act recording the decision** (`colab decision --record`,
   above) — a scheduler may never infer an answer from content, age, or repeat proposal,
   and never treats the label's mere absence as an answer: it checks for
-  `decision-recorded` or the live comment marker, since a cleared `needs-decision` with
-  neither present is the stale, not-yet-swept state, not a decided one. The converse
+  `decision-recorded` or the live comment marker. The converse
   holds too: `needs-decision` *beside* `decision-recorded` is not an admission. It is
   resolved by the pair rule in *Decision gate* (above), and anything but a proven
   interrupted write stays excluded.
@@ -3677,7 +3231,7 @@ stops applying; this is what a scheduler must additionally honour.
 `code-start` → work → `code-wrap` → where granted, `code-ship`) — it may not claim,
 label, comment, or merge directly.
 
-**It may complete a trunk merge only where the repo has granted `autonomy: auto-trunk`
+**[Hard — gate: colab ship refuses]** **It may complete a trunk merge only where the repo has granted `autonomy: auto-trunk`
 — or where `colab ship` itself measures the change as
 [docs-only](#autonomy--the-docs-only-exception-345) — and only through `colab ship`**, subject to the identical gates as any other caller (CI
 green, a proven cure, or a valid CI grant, no new migrations or a valid migration grant
@@ -3685,7 +3239,7 @@ of a role the repo accepts ([*Migration exemption*](#migration-exemption--a-narr
 no hand-merge conflict, no `--force`). Without a proven cure or the grant, `ship`
 refuses and a human runs Phase B.
 
-**A genuinely red trunk with no proven cure and no valid CI grant is human-gated, not
+**[Hard — gate: colab ci-grant refuses]** **A genuinely red trunk with no proven cure and no valid CI grant is human-gated, not
 self-clearing** — a scheduler must not queue and wait on it; it parks, states it once,
 and stops. A scheduler never mints a ci-grant itself either way — only the cure rule's
 mechanical door is available to it unattended, exactly as it is to any other caller. On a
@@ -3693,7 +3247,7 @@ repo declaring `ci-grant: reviewer`, a coordinator session that has reviewed the
 mint a `ci-reviewer` grant ([*Red-trunk exemption*](#red-trunk-exemption--the-one-shot-door-through-trunk-ci-green-105),
 #504); the scheduler only reads it, through `colab ship`, like any other grant.
 
-**Never promotes, on any repo, on any tier — except the release workflow, through `colab
+**[Hard — gate: colab refuses any tag or promotion outside the release routes]** **Never promotes, on any repo, on any tier — except the release workflow, through `colab
 promote --auto`, on a repo declaring `deploy: tag` and `promotion: main-loop` (#440)** — **and
 never tags by any path but the release workflow's two commands.** A **release workflow**
 (#420) is the one scheduled caller that may tag: it may run `colab release cut --auto` and
@@ -3713,40 +3267,34 @@ on every green head*](#6-releases)).
 A candidate a human has put `release-hold` on is held for the workflow exactly as it is for
 a person.
 The handbook ships one to copy, [`templates/release-auto.yml`](templates/release-auto.yml)
-(#425): cut on a green CI run on `main`, finalize daily, and **publish in the same run** — a tag
-pushed with `GITHUB_TOKEN` triggers no other workflow, so a Release left to a tag-push
-workflow is never published. It reads and creates tags and writes no commit. The same
-file fits `trunk: main` and `trunk: dev` + `deploy: tag` (#429): on the latter `main` moves only
-when trunk is promoted, so the promotion's green CI run is the trigger, and the CLI cuts only when
-`main`'s head is a promotion of trunk.
+(#425): cut on a green CI run on `main`, finalize daily, and **publish in the same run**; an hourly
+run re-tries only a refused cut, once the fetched colab CLI has moved (#547). It reads and creates
+tags and writes no commit. The same file fits `trunk: main` and `trunk: dev` + `deploy: tag` (#429):
+on the latter `main` moves only when trunk is promoted, so the promotion's green CI run is the
+trigger, and the CLI cuts only when `main`'s head is a promotion of trunk.
 
-**On a private repo the release workflow runs on the repo's own runners (#453).** It fires on
-every green CI run on `main`, so a job of it that fails is a failed run at `main`'s head, and
-`colab ship` reads that as trunk not green. On a private (or internal) repo GitHub-hosted minutes
-are billed, and a billing refusal stops a hosted job before it starts — measured twice in a row on
-one adopting repo, the release workflow being the only one on its trunk still on hosted runners.
-So its jobs run on the self-hosted label the repo's CI already uses; `ubuntu-latest` is right only
-on a public repo, where hosted minutes are free. The npm publish job is the one exception, hosted
-everywhere because npm trusted publishing requires it, and it only ever runs on a public repo
-(below). The label is a literal edit point in the template, not an expression keyed on visibility:
-a scheduled run's payload carries no repository, so such a switch would quietly pick hosted on the
-daily run. The audit flags a private repo whose release workflow still runs a hosted job and names
-the label its other workflows use (advisory; unreadable visibility reports nothing).
+**On a private repo the release workflow runs on the repo's own runners (#453).** Its
+jobs run on the self-hosted label the repo's CI already uses; `ubuntu-latest` is right
+only on a public repo. The npm publish job is the one exception, hosted
+everywhere because npm trusted publishing requires it, and it only ever runs on a public
+repo (below). The label is a literal edit point in the template, not an expression keyed
+on visibility. The audit flags a private repo whose release
+workflow still runs a hosted job and names the label its other workflows use (advisory;
+unreadable visibility reports nothing).
 
-**Who promotes is `promotion:`, and the release workflow honours it (#440).** Where a `deploy:
-tag` repo declares `promotion: main-loop`, the workflow's daily run first runs `colab promote
---auto`: when trunk's head CI is green and trunk is ahead of `main`, it merges trunk into `main`
-(`--no-ff`) and pushes, then dispatches CI on `main` — a push made with `GITHUB_TOKEN` triggers
-no workflow, a `workflow_dispatch` is the documented exception — and that run's green completion
-cuts the candidate as it would for a human promotion. So a candidate needs no human; the final
-tag, which deploys, still does. This is the one cell where a scheduled caller may promote, and it
-is safe there for the reason the field already gives: on `deploy: tag` a promotion only runs the
-heavy suite on `main` and deploys nothing. Everywhere else `--auto` is a recorded no-op —
-`promotion: human` or absent, `deploy: push-main` (the promotion *is* the deploy), `manual` (it
-signals a human deploy), `none`, and `trunk: main` (nothing to promote). `COLAB_HUMAN` changes
-nothing in either direction: a workflow is not a human, and the grant is the descriptor's.
+**Who promotes is `promotion:`, and the release workflow honours it (#440).** Where a
+`deploy: tag` repo declares `promotion: main-loop`, the workflow's daily run first runs
+`colab promote --auto`: when trunk's head CI is green and trunk is ahead of `main`, it
+merges trunk into `main` (`--no-ff`) and pushes, then dispatches CI on `main`, and that run's green completion cuts the candidate as it would for a human
+promotion. So a candidate needs no human; the final tag, which deploys, still does.
+Everywhere else `--auto` is a recorded no-op — `promotion: human` or absent, `deploy:
+push-main` (the promotion *is* the deploy), `manual` (it signals a human deploy),
+`none`, and `trunk: main` (nothing to promote). `COLAB_HUMAN` changes nothing in either
+direction.
 
-**Never acts on an owner's branch.** On a repo declaring `owner:` (a repo the fleet does
+Why, with the measurements: [ADR 440](docs/adr/440-scheduled-drivers-rationale.md).
+
+**[Hard — gate: colab refuses to move an owner's branch]** **Never acts on an owner's branch.** On a repo declaring `owner:` (a repo the fleet does
 not own, #394), a scheduler may run `colab deliver --dry` and report its state, and nothing
 more: opening or editing the delivery PR needs a human, and no colab command moves the
 owner's branch at all ([§9, *Working in a repo you don't own*](#working-in-a-repo-you-dont-own)).
@@ -3764,16 +3312,9 @@ grant clears the gate only where the repo's policy accepts that role.
 
 #### Grouping — issues that must share one branch
 
-**Issues that touch the same files must move on one branch** — the group is a
-collision-prevention mechanism, not a tidiness preference. Measured: a real triage run
-concluded two issues MUST share a branch, printed the `file:line` collision, and had
-nowhere to record it outside the terminal.
+**Issues that touch the same files must move on one branch.**
 
-**Neither existing mechanism has the right shape:** sub-issues are hierarchical (asserts
-a false parent); mutual blocked-by would mean the readiness gate never reports either
-member ready. A group needs a symmetric, flat relationship. A one-way `blocked_by` chain
-is wrong too: it turns one shared branch and one review into one review cycle per member
-(*File contention is never an edge*, under *Readiness* above, #371). And when the only
+And when the only
 overlap is a file that every unit must edit, fix the file before grouping on it.
 
 ```sh
@@ -3799,8 +3340,7 @@ from the members it no longer covers.
 
 `code-triage` writes the label; `code-start` reads it before branching. **`colab ship`'s
 B4 tears down the label OBJECT (not just an issue's use of it) once every member is
-closed** (#82) — one fleet repo accumulated ~12 stale `group:*` labels before this
-existed. Deletion removes it from future queries only — never touches closed issues'
+closed** (#82). Deletion removes it from future queries only — never touches closed issues'
 own timelines or the durable `Because:` comment. Only `group:*` labels are ever in scope
 — never the operational set (`in-progress`, `deps-checked`, `agent-filed`, `epic`).
 
@@ -3818,19 +3358,9 @@ spawn.** Two enforcement points, and neither may be mistaken for the other:
 - **ship orders** — a ship lands one member branch at a time against a re-fetched base,
   and **never merges a sibling member's branch to borrow its unmerged fix**: sequence
   behind it or group onto it (the same rule *Writing a conclusion down* below states for
-  a file-level group), because a branch carrying a sibling's unlanded commits cannot land
-  independently of it, and then neither converges.
+  a file-level group).
 
 `code-start` is not a third enforcement point — it is the reader that honours the offer.
-
-Measured on a downstream session orchestrator, 2026-09-05 — its own ADR on reorganising
-its ship lanes, section 2 L5 and section 7 item 7: one `group:` label, whose evidence line
-named a single view component as the collision, held 6 open issues and 3+ live parallel
-branches; two overlapped on that view component, its i18n message file and `CLAUDE.md`, and one
-carried **8 `chore(sync)` commits** pulling siblings' fixes ahead of their own trunk
-merge. They burned CI rebasing around each other and none converged. Nothing had read the
-label: the dashboard's `planShipOrder` never consulted it, and its pairwise conflict check
-is same-beat only.
 
 **The limit, stated rather than rounded up: triage sees pass time only.** A second branch
 created after a pass ends is invisible to that pass — no skill here polls, and a promise
@@ -3843,32 +3373,24 @@ path-keyed check whose false-positive rate was measured at 6-of-6 on this repo's
 history — are recorded in
 [`docs/adr/316-group-serialisation-enforced-at-triage-and-ship.md`](docs/adr/316-group-serialisation-enforced-at-triage-and-ship.md).
 
+Why, with the measurements: [ADR 316](docs/adr/316-grouping-measured-incident-rationale.md).
+
 #### Scope — diagnosing across repos is not license to act in them
 
 **Reading and diagnosing across repos to find a root cause is expected.** **Acting in
 another repo** (branching, committing, pushing, rebasing/force-pushing an existing
-branch, merging) **requires that repo's own claim and its own explicit go-ahead**, scoped
-to that repo — even when the diagnosing session is confident it found the real fix.
-Measured: a session traced a downstream issue to an existing branch in an upstream tool
-repo, then rebased and force-pushed it with no claim and no go-ahead scoped to that repo
-— caught and reverted before merging. The correct move: report the finding and stop.
+branch, merging) **requires that repo's own claim and its own explicit go-ahead**,
+scoped to that repo — even when the diagnosing session is confident it found the real
+fix. The correct move: report the finding and stop.
+
+Why, with the measurement: [ADR 127](docs/adr/127-epics-switched-epics-and-scope-rationale.md).
 
 #### Epics — a container is not a start candidate
 
-**An issue whose checklist will outlive one session is an epic, and its items are
-issues (#127).** The parent carries the goal and the shared context; each child is
-independently claimable, independently blockable, independently shippable, and closes
-on its own merge — nothing a child does can put a closure claim on the parent. You
-cannot claim half an issue: a checklist issue shipped three-of-six by one session and
-left three behind serializes everything remaining onto one claim regardless of whether
-those items are related, similarly sized, or blocked by the same thing. Measured, one
-repo's clearest offender: three trivial UI additions, one item blocked behind an
-in-flight change, and one needing a design pass, all six behind a single claim. Every
-cost traced to the same cause — one claim, six different readiness states: a session
-that shipped three wrote a closing reference that later blocked an unrelated,
-legitimate ship three days on; and one still-unblocked item was re-measured across
-ten-plus triage passes because the issue's own plan text (written for a different
-sibling) never actually applied to it.
+**An issue whose checklist will outlive one session is an epic, and its items are issues
+(#127).** The parent carries the goal and the shared context; each child is
+independently claimable, independently blockable, independently shippable, and closes on
+its own merge — nothing a child does can put a closure claim on the parent.
 
 At filing time, ask whether the items would be worked by **one** session. Three
 signals say they will not — evidence for the rule, never its definition, since a
@@ -3887,8 +3409,7 @@ items differ on paper:
 **No backfill** — this governs what gets filed next, not existing checklist issues;
 converting one is optional cleanup, never required by adoption. **Not every checklist
 is an epic** — an issue whose boxes are steps of one session's own work (write it,
-test it, document it) is a normal issue with a to-do list, and splitting it would be
-pure overhead. The test is whether the work **outlives a session**, never whether it
+test it, document it) is a normal issue with a to-do list. The test is whether the work **outlives a session**, never whether it
 merely *has* boxes.
 
 **The `epic` label marks a container for sub-issues — informative, never a start
@@ -3897,38 +3418,31 @@ provenance cleanly. Secondary signals (`epic(` title prefix, `subIssuesSummary.t
 corroborate but never substitute for the label. `epic` lives in the provisioned
 convention label set (unlike `tracking`) because an unattended driver's decision depends
 on it. An epic still gets closed and referenced exactly as any other issue once its
-children finish — the label only prevents a driver from mistaking the map for the
-territory.
+children finish.
 
-**A container closes with its last child (#371).** A child's merge closes the child. Before
-#371 nothing closed the parent, and a backlog review found five open containers whose
-children were all closed. So `colab ship`, after it closes an issue, reads the issue's
-native parent and closes it in the same step, with an evidence comment, when all of these
-hold:
+**A container closes with its last child (#371).** A child's merge closes the child. So
+`colab ship`, after it closes an issue, reads the issue's native parent and closes it in
+the same step, with an evidence comment, when all of these hold:
 
 - it carries the `epic` label;
 - it has native sub-issues, and every one of them is closed;
-- its body lists no unticked checklist item (`- [ ]`). An unticked item on an epic is work
-  someone listed and nobody filed yet, and closing over it would bury that work;
+- its body lists no unticked checklist item (`- [ ]`);
 - it is not a release tracking record, which `colab release finalize` closes.
 
 Then it asks the same question of that parent's own parent. Any other shape is left open.
 A parent whose sub-issues are all closed but which has no `epic` label, or which still
 lists an unticked item, is reported as a finding for a human. A hand-written checklist
-with no native sub-issues is never closed this way, because a table of boxes running out
-does not prove the work ran out (`code-ship` B2c). `code-sweep` §5 closes containers whose
+with no native sub-issues is never closed this way (`code-ship` B2c). `code-sweep` §5 closes containers whose
 last child closed by some other route, using the same conditions
 (`tools/lib/container-close.js`).
 
-**A container never carries a `delivery:*` label (#371).** It has no deliverable of its
-own; its children do. In the same review, one closed-out container still carried
-`delivery:code`, so a scheduler could have read it as code work. `code-triage` reports one
-as a finding in its epic bucket.
+**A container never carries a `delivery:*` label (#371).** `code-triage` reports one as a finding in its epic bucket.
 
-**For the same reason, an epic never carries `needs-decision`, and never a
-`decision:options` block.** A gate on something that never starts gates nothing. A
-question about an epic goes on its own decision issue, attached as a sub-issue (*Decision
+**[Hard — gate: colab decision refuses on an epic]** **An epic never carries `needs-decision`, and never a
+`decision:options` block.** A question about an epic goes on its own decision issue, attached as a sub-issue (*Decision
 gate*, above, #361).
+
+Why, with the measurements: [ADR 127](docs/adr/127-epics-switched-epics-and-scope-rationale.md).
 
 #### Switched epics — concurrent unfinished features (#336)
 
@@ -3938,10 +3452,9 @@ half-built — the policy the release ladder in [§6](#6-releases) relies on. It
 the #330 ruling; the rules are numbered so a check can cite one.
 
 **Scope: repos that tag — `exposure: released`** (legacy `tier: A` reads the same way,
-`tools/lib/axis-authority.js`). On `none` and `self` nothing consumes a half-finished
-epic, so a switch there is pure cost and this subsection does not apply; a bare
+`tools/lib/axis-authority.js`). On `none` and `self` this subsection does not apply; a bare
 `tier: B` carries no exposure opinion and is not bound either. `exposure: live` is not
-bound: its promotion is a human act that can simply wait for an epic to finish. *This
+bound. *This
 scope is the implementer's recommendation, recorded open on #336 and not yet ruled — if
 it is ruled otherwise, this paragraph changes, and nothing else here needs to.*
 
@@ -3957,15 +3470,12 @@ it is ruled otherwise, this paragraph changes, and nothing else here needs to.*
    reproducible only there is not a bug to fix. **Absent a selector, the code runs the
    release configuration**: a deploy that forgets to choose must get the dark build,
    never the half-built one.
-3. **Switch dependencies are declared and enforced, following the issue graph.** If
-   epic B's feature needs epic A's, B's declaration names A (below) **and** B's
+3. **Switch dependencies are declared and enforced, following the issue graph.** If epic
+   B's feature needs epic A's, B's declaration names A (below) **and** B's
    switch-removal child carries a native `blocked_by` edge on A's switch-removal child
-   (*Readiness*, above). With only two configurations, a dependency has exactly one
-   runtime consequence — B cannot finish while A is still switched — and the edge is
-   what makes that mechanical instead of remembered.
+   (*Readiness*, above).
 4. **File-level collisions are not a switch's job.** Two epics' children touching one
-   file still serialize through *Grouping*, above; a switch hides behaviour, never a
-   merge conflict.
+   file still serialize through *Grouping*, above.
 5. **What a switch cannot hide stays backward-compatible while the epic is
    unfinished.** Schema changes **add only**; old config files and old API responses
    keep working; every destructive step — dropping a column, retiring a config key,
@@ -3973,19 +3483,13 @@ it is ruled otherwise, this paragraph changes, and nothing else here needs to.*
    earlier. A release built with the switch off must be indistinguishable, to anything
    outside the repo, from one built before the epic started.
 6. **At most ~3 unfinished switched epics at once, and a switch older than ~4 weeks
-   surfaces for a decision.** Both are **findings for a human**, never blockers: the cap
-   exists because every open switch doubles what the development configuration hides
-   from the release one, and the age exists because a switch nobody removes has become
-   a permanent fork in the code under a temporary name. Age is measured from the merge
+   surfaces for a decision.** Both are **findings for a human**, never blockers. Age is measured from the merge
    of the child that added the switch.
 7. **Releases are cut from trunk; versions live in tags only.** A `release/X.Y` branch
    exists **only** when an older version needs a fix of its own, and is deleted with
-   that line's support. Never put a version in a branch name: a branch named `0.2.0-dev`
-   is itself a SemVer pre-release, and sorts **below** `0.2.0`. A `release/X.Y` branch is
-   neither an [`integration:`](project.schema.md#integration--optional) line (that axis
-   never reaches a tag, by construction) nor a
-   [`releaseBranch:`](project.schema.md#releasebranch--optional) (that one is overwritten
-   wholesale on every release) — no descriptor field declares it and no `colab` path cuts
+   that line's support. Never put a version in a branch name. A `release/X.Y` branch is
+   neither an [`integration:`](project.schema.md#integration--optional) line nor a
+   [`releaseBranch:`](project.schema.md#releasebranch--optional) — no descriptor field declares it and no `colab` path cuts
    from or ships into it today, so a fix on an older version is a human-run procedure
    until one does.
 
@@ -4007,8 +3511,7 @@ bodies — `role=add` on the first child, `role=remove` on the last:
 ```
 
 - **`name`** matches `^[a-z0-9][a-z0-9-]*$` and is **the literal identifier the code
-  reads**, so `git grep <name>` finds every read site. That is what makes rule 1's
-  "removed" checkable: after the removal child, the grep returns nothing.
+  reads**, so `git grep <name>` finds every read site.
 - **`needs`** (epic marker only, optional, comma-separated names) is rule 3's
   declaration; the `blocked_by` edge is its enforcement. A `needs` with no matching edge,
   or an edge with no `needs`, is a finding.
@@ -4021,9 +3524,6 @@ bodies — `role=add` on the first child, `role=remove` on the last:
 - **A marker quoted inside code is not a marker.** Text in an inline code span or a
   fenced block — like the examples above, or prose that names the family as
   `` `<!-- colab:switch -->` `` — is documentation and is never read as a marker (#466).
-  We measured one closed issue whose body only described the family this way, and every
-  release-cut candidate in that repo was refused as a malformed marker until someone
-  reworded the issue.
 
 From these a check derives everything rule 6 and the release cut need, with no other
 record: a switch **exists** once its `role=add` child is closed by a merge, it is
@@ -4039,6 +3539,8 @@ B1c grades a switched epic's children against rules 1, 2 and 5: an `add` or ordi
 must be dark with the switch off, and the `remove` child must remove the switch completely
 and perform the destructive steps it deferred.
 
+Why, with the measurements: [ADR 127](docs/adr/127-epics-switched-epics-and-scope-rationale.md).
+
 #### Delivery type — route, not start (#112)
 
 **Six labels — `delivery:code`, `delivery:docs-only`, `delivery:content`, `delivery:ops`,
@@ -4046,57 +3548,38 @@ and perform the destructive steps it deferred.
 code commit *in this repo* at all. **Three-valued, not boolean:** no label = not asked
 (behaves as before); `delivery:code` and `delivery:docs-only` = the code lane, the ordinary
 pipeline; `content`/`ops`/`elsewhere`/`design` = non-code-here, not a code start.
-**"Not asked" must never collapse into "non-code"** — every issue is unlabelled the day
-this set is adopted, and reading absence as non-code would freeze every scheduled driver on
-day one.
+**"Not asked" must never collapse into "non-code".**
 
 `content`/`ops`/`elsewhere` gate exactly like `needs-decision` — route, not a start
 candidate for anyone. `design` is not a code start either, but it is not routed away: it is
 a design session's start, reported in triage's own design bucket (below). A code session
 landing on any of the four distills the finding onto the issue and ends the session.
 Whoever files or triages sets the label — no mechanical rule infers it from a title or body.
-`delivery:*` is in the provisioned label set because every adopting repo needs all six
-values before the first triage pass can classify anything.
+`delivery:*` is in the provisioned label set.
 
-**`delivery:docs-only` (#358)** is a code-lane value: the filer expects an in-repo commit
-whose diff is documentation only. It starts, is gated and ships exactly like
+**`delivery:docs-only` (#358)** is a code-lane value: the filer expects an in-repo
+commit whose diff is documentation only. It starts, is gated and ships exactly like
 `delivery:code` — worktree, the repo's gate, `colab ship` — and triage gives it
-`deps-checked` like any code issue once its blockers clear. It was provisioned in #112 as a
-non-code value ("a docs sync outside code review"), but a docs-only deliverable in the repo
-the issue lives in is still a commit, and a consumer's scheduler already read it that way;
-so triage withheld `deps-checked` from issues the scheduler would have started, and they sat
-with no park and no decision to say why — one measured case for 6 days. The label is **not**
-`colab ship`'s docs-only exception ([§2](#autonomy--the-docs-only-exception-345)): ship
-measures that from the diff and never reads this label, so a `docs-only` issue whose diff
-turns out to carry code or a binary simply ships under the normal autonomy gate. Nor is it
-a home for design work — a design artifact with screenshots is a binary change, and design
-work has its own value.
+`deps-checked` like any code issue once its blockers clear. The label is **not** `colab
+ship`'s docs-only exception ([§2](#autonomy--the-docs-only-exception-345)): ship
+measures that from the diff and never reads this label, so a `docs-only` issue whose
+diff turns out to carry code or a binary simply ships under the normal autonomy gate.
+Nor is it a home for design work.
 
-**`delivery:design` (#359)** names an issue whose deliverable is a design artifact — unit 2
-of [*Design conclusions*](#design-conclusions-are-three-units-not-two), below — for a **new
-surface**, per the size rule there. A design session works it on the issue's own branch
-(`design/<slug>-<N>`), and it ships like any branch; the build issue that implements the
-surface waits on it through a `blocked_by` edge. It is never a code start candidate, and
-triage reports it in a bucket of its own — apart from code, from route, and from not
-asked. Being off the code start list does not take it off the readiness marker. When its
-`blocked_by` edges are all closed, or it has none, triage stamps `deps-checked` on it by
-the same bar as a code issue, because a design lane gates on that marker too (#380). Two consumers hand-created the label before the handbook provisioned it, and a
-third, having no such value, filed design work under `delivery:docs-only`, where its
-scheduler started a code worker that refused the issue 5 times. Before #359
-`deliveryType()` returned `null` for it — the "not asked" case, the #274 failure below for
-a sixth value.
+**`delivery:design` (#359)** names an issue whose deliverable is a design artifact —
+unit 2 of [*Design conclusions*](#design-conclusions-are-three-units-not-two), below —
+for a **new surface**, per the size rule there. A design session works it on the issue's
+own branch (`design/<slug>-<N>`), and it ships like any branch; the build issue that
+implements the surface waits on it through a `blocked_by` edge. It is never a code start
+candidate, and triage reports it in a bucket of its own — apart from code, from route,
+and from not asked. Being off the code start list does not take it off the readiness
+marker. When its `blocked_by` edges are all closed, or it has none, triage stamps
+`deps-checked` on it by the same bar as a code issue, because a design lane gates on
+that marker too (#380).
 
 **`delivery:elsewhere` (#274)** names an issue whose deliverable IS code, but code that
-lands in a different repository than the one the issue lives in — a consumer that read a
-tracker across several repositories provisioned it by hand on three separate trackers, 21
-issues total, well before this convention adopted it. Before #274, an issue explicitly
-labelled `delivery:elsewhere` was byte-identical, to this repo's own classifier, to one
-nobody had ever labelled: `deliveryType()` returned `null` for it (the "not asked" case),
-so `isRouteNotStart()` read `false` and the issue reported startable — the opposite of what
-applying the label was asking for. It routes for the same reason `content`/`ops` do: this
-pipeline's worktree, gate, mergeable and squash machinery all assume
-the diff lands in the repo the issue lives in, and an `elsewhere` issue breaks that
-assumption identically to a content push.
+lands in a different repository than the one the issue lives in. It routes as
+`content`/`ops` do.
 
 **A `delivery:*` value outside these six has no handbook meaning (#366).** The measured
 case is `delivery:elsewhere-partial`. One consumer tracker uses it, and nobody has stated
@@ -4118,61 +3601,61 @@ exists to prevent. So it is **consumer-local**, and it works like this:
   `delivery:elsewhere`. The other goes in the ordinary lane. Link them with a `blocked_by`
   edge only where one needs the other's output.
 
+Why, with the measurements: [ADR 112](docs/adr/112-delivery-type-and-priority-rationale.md).
+
 #### Priority — a throttle, not a veto (#268)
 
 **`low-priority` orders a queue; it does not remove work from one.** Unlike `epic` and a
-non-code `delivery:*` value above, a `low-priority` issue **is** a start candidate — it passes the
-readiness gate exactly like any other issue and stays on the ready list. What the label
-changes is rank, not eligibility: `code-triage`'s ordering step ranks a `low-priority`
-group behind every other ready group, never off the ready list. Reading the label as a
-hard veto turns "later" into "never" for work someone filed believing they were only
-setting its place in line — the opposite of what filing it as low priority, rather than
-not filing it at all, was meant to say.
+non-code `delivery:*` value above, a `low-priority` issue **is** a start candidate — it
+passes the readiness gate exactly like any other issue and stays on the ready list. What
+the label changes is rank, not eligibility: `code-triage`'s ordering step ranks a
+`low-priority` group behind every other ready group, never off the ready list.
 
 **A scheduled driver declining to auto-start a `low-priority` group unattended is not
 that hard-veto reading, provided three things hold:** the decline applies only to
 *unattended* starts, checked after every harder objection, with the group still ranked
 last exactly where the ordering above puts it; the group never leaves the ready list, so
-a human may start it by hand at any time; and clearing the label is the sanctioned way to
-release the group back to the scheduler. A driver meeting all three is honouring the
-throttle, not overriding it — it has scoped "who may start this without asking" more
-narrowly than "who may start it at all", which is a different question than eligibility.
+a human may start it by hand at any time; and clearing the label is the sanctioned way
+to release the group back to the scheduler.
 
 A driver that implements the hard-veto reading instead — declining the group outright,
 for a human or an unattended start alike, with no ranking, no unattended/attended split,
 and no label-clearing release path — must say so somewhere `code-triage`'s output can be
 checked against — never leave the two silently disagreeing about what "ready" means for
-the same label. `low-priority` is in the provisioned label set for the same reason `epic`
-and `delivery:*` are: an unattended driver's ordering decision depends on being able to
-see it, and a repo that adopted before it existed cannot create it at all.
+the same label. `low-priority` is in the provisioned label set.
+
+**`priority:now` and `priority:high` rank upward (#537):** `priority:now` › `priority:high` ›
+default (no label) › `low-priority`. A rank across ready work, for both start and merge order —
+never a gate skipped, never a hold overridden: a `now` issue whose file is held drains the
+file, the holder ships first. **Only the repo owner sets `priority:now`** — or a coordinator
+relaying the owner's order, quoted on the issue; `priority:high` the owner or a coordinator.
+**An agent never sets either** — it proposes one in a comment. A scheduling tool may compute a
+`high`-equivalent from leverage (unblocks many, splits a held file, fixes CI on a throttled
+repo), never a `now`. Not part of it: a per-repo cap on `now`, reserved capacity, expiry or
+ageing, batch membership. Both labels are provisioned beside `low-priority`.
+
+Why: [ADR 112](docs/adr/112-delivery-type-and-priority-rationale.md).
 
 ### How a decision is recorded
 
 #### Planning — a plan file that outlives one command, and who drafts it (#94)
 
-Coordinator (triage/grading) and implementer (coding) sessions often run at different
-model tiers, and until #94 nothing carried the coordinator's read of the work across
-that seam.
-
 **The plan is a repo-local scratch file, not an Issue comment** —
-`.plans/issue-<N>.md`, in the **main checkout, outside any worktree** (exists
-before the worktree, survives its teardown). Git-excluded, **never committed**. Anything
+`.plans/issue-<N>.md`, in the **main checkout, outside any worktree**. Git-excluded, **never committed**. Anything
 worth keeping past the session moves to the Issue at wrap.
 
 **The directory is a setting, and it is not under `.claude/` (#488).** `COLAB_PLANS_DIR`
-overrides `.plans` (relative to the main checkout, or absolute); `COLAB_BRIEFS_DIR` does the
-same for dispatch briefs, default `.briefs`. Both used to sit under `.claude/`, which agent
-CLIs guard as configuration — so every scratch write could cost the operator a permission
-prompt. **Writers write only the configured dir. Readers** (`code-wrap`'s hand-off check,
-`code-ship`'s grade and teardown, `colab ship`'s plan journal) **read the configured dir
-first, then the legacy `.claude/plans/`**, for one transition; teardown deletes the plan
-wherever it found it. Old files are never moved. `colab worktree new` and `colab adopt
---local` hide the configured dirs and the legacy one in the clone's shared
-`.git/info/exclude`, and a scratch file left inside a worktree never makes its teardown
-refuse (`tools/lib/scratch-dirs.js`).
+overrides `.plans` (relative to the main checkout, or absolute); `COLAB_BRIEFS_DIR` does
+the same for dispatch briefs, default `.briefs`. **Writers write only the configured
+dir. Readers** (`code-wrap`'s hand-off check, `code-ship`'s grade and teardown, `colab
+ship`'s plan journal) **read the configured dir first, then the legacy
+`.claude/plans/`**, for one transition; teardown deletes the plan wherever it found it.
+Old files are never moved. `colab worktree new` and `colab adopt --local` hide the
+configured dirs and the legacy one in the clone's shared `.git/info/exclude`, and a
+scratch file left inside a worktree never makes its teardown refuse
+(`tools/lib/scratch-dirs.js`).
 
-**Resolved via an absolute path, never bare relative (#113)** — a bare path from inside
-a worktree silently resolves to the worktree's own copy:
+**Resolved via an absolute path, never bare relative (#113):**
 
 ```sh
 MAIN_REPO="$(dirname "$(git rev-parse --path-format=absolute --git-common-dir)")"
@@ -4195,19 +3678,22 @@ Issue** — never guess, never silently drop to rung 0.
 **`code-wrap` checks the rung it finds (#486).** At hand-off the plan file is present, or
 its place holds one line `rung 0 because <reason>`; a non-rung-0 change wrapped with
 neither is reported as *plan file missing*, never as hand-off complete — and is never
-back-filled, since a plan written after the code only describes the code.
+back-filled.
 
 `code-triage` may flag a hard group `needs-plan` with a one-line reason — a
-**cross-backlog judgement**, never a plan of its own (authoring at triage time produced
-stale artifacts for groups not started soon). **The full plan is drafted at code-session
-start**, inside the implementing session, by a stronger-model subagent seeded with the
-Issue plus the reason line, against the repo as it is at coding time. A rung-1 stub may
+**cross-backlog judgement**, never a plan of its own. **The full plan is drafted at code-session
+start**, inside the implementing session, seeded with the Issue plus the reason line,
+against the repo as it is at coding time. One contract, two equal paths: the drafter takes
+that seed, appends one rung-2 section to the plan file, and stops before implementing — a
+separate helper agent where the engine has one, otherwise the session itself, which records
+`drafted-by: self` in the plan's frontmatter ([`code-plan`](skills/code-plan/SKILL.md)). A rung-1 stub may
 still upgrade to rung 2 mid-session — the flag decides only the default.
 
-**Read the `needs-plan` flag by direct issue fetch, never the Search API**, which can lag
-by minutes. A plan is a sketch the code may overrule, not a contract — note deviation
+**Read the `needs-plan` flag by direct issue fetch, never the Search API**. A plan is a sketch the code may overrule, not a contract — note deviation
 where the plan lives. `needs-plan` is provisioned on adoption and back-filled on sync,
 like every other fixed convention label.
+
+Why: [ADR 94](docs/adr/94-planning-and-conclusion-writing-rationale.md).
 
 #### Writing a conclusion down — the decision and the document are two units
 
@@ -4216,12 +3702,10 @@ write it into the docs tree, where other sessions are also merging. **It reaches
 two units, in order.**
 
 **Step 1 — the conclusion goes on an Issue immediately, before any file is touched.** No
-branch, worktree, or clean tree needed; it collides with nobody and is readable the
-instant it is posted — and it is the part that must survive.
+branch, worktree, or clean tree needed.
 
 **Step 2 — the write is its own coding unit**: own Issue, claim, branch off trunk in a
-worktree, wrapped normally. A conclusion worth documenting is the *most* consequential
-kind of doc change, not a typo exempt from ceremony.
+worktree, wrapped normally — never under a typo fix's exemption from ceremony.
 
 **The collision unit is the file (the hunk), never the folder** — two sessions each
 adding a new file under one tree cannot conflict:
@@ -4231,20 +3715,12 @@ colab holders <path>          # fetches first; refuses to say "clean" if it coul
 ```
 
 Empty output (or a nonexistent path) is clean ground; non-empty is a file-level group —
-same branch, or sequence after theirs lands. `colab holders` filters every ref that ever
-touched `<path>` through the same content classification `colab landed` uses, so a
-branch whose edit already shipped (squash-merged, or landed with the base moved on
-since) does not read as live contention — the raw `git log --all --not origin/<trunk>
---source` sweep it replaces cannot tell the two apart, and a busy repo pays for that
-with false positives on every file. `unknown` still means *look*, never *assume clear*.
+same branch, or sequence after theirs lands. `unknown` still means *look*, never *assume
+clear*.
 
-**It fetches before it enumerates, and that is part of the check, not a convenience.**
-The enumeration reads *local* refs, so a branch another session pushed and this clone
-never fetched is invisible — and "clean ground" off that is a confident verdict built on
-missing data, which is the one wrong answer that sends a second session onto a held file.
-`--no-fetch` (offline, or a pinned view) therefore still reports holders it *can* see —
-refs you have not fetched cannot un-hold a file — but **refuses** the clean verdict with
-exit 2 instead of printing it.
+**It fetches before it enumerates.**
+`--no-fetch` (offline, or a pinned view) still reports holders it *can* see, but
+**refuses** the clean verdict with exit 2 instead of printing it.
 
 No `colab` installed: `git fetch --prune origin` **first**, then `git log --all --not
 origin/<trunk> --source --format='%S' -- <path> | sort -u` — the fetch is not optional
@@ -4252,13 +3728,13 @@ there either, and every ref it lists is a candidate, not a verdict; check each b
 
 **Never write the final artifact in the main checkout** — a throwaway draft in a
 git-ignored scratch directory is fine; the committed version belongs on a branch, in a
-worktree. **Two doc branches landing in
-the same window are wrapped one at a time**, each re-checked against the trunk the other
-just moved. **A branch that never touched a given line still carries that line as diff
-context** — taking its side of a prose conflict wholesale can silently revert the other
-session's edit while looking clean; read the region and resolve as a union when the
-edits are non-contradictory. Measured: on two adjacent edits to one paragraph, the
-correct resolution was their union, not either side.
+worktree. **Two doc branches landing in the same window are wrapped one at a time**,
+each re-checked against the trunk the other just moved. **A branch that never touched a
+given line still carries that line as diff context** — taking its side of a prose
+conflict wholesale can silently revert the other session's edit while looking clean;
+read the region and resolve as a union when the edits are non-contradictory.
+
+Why, with the measurements: [ADR 94](docs/adr/94-planning-and-conclusion-writing-rationale.md).
 
 ##### Design conclusions are three units, not two
 
@@ -4273,8 +3749,7 @@ A design ruling needs one more part: an **immutable visual record**.
    review approves the artifact. An earlier one, such as the ruling that let the work
    start, does not.
 2. **The artifact** — a repo file under `docs/design/`, named `<slug>-<N>-mockup.html` or
-   `<slug>-<N>-spec.md`, landing via a claimed docs branch. **Superseded artifacts are
-   marked, never deleted** — trunk carries the design lineage.
+   `<slug>-<N>-spec.md`, landing via a claimed docs branch. **Superseded artifacts are marked, never deleted.**
 3. **The frozen evidence** — a screenshot of the approved option attached to the ruling
    comment, immutable where the repo file is not. Rejected alternatives need never land
    on trunk — their screenshot on the Issue is the whole record.
@@ -4294,18 +3769,15 @@ never inferred mechanically from a title, a body or a file path.
 - **No — a small change to an already-designed surface.** The paragraph below holds
   unchanged.
 
-**A missing artifact never blocks a small change.** Unit 2 lands on the branch that builds
-the surface (`code-wrap` A2), so it is normally absent before that branch exists. The design
-gate is `needs-decision`, and only that. A consumer's label description, agent prompt
-or local doc that says "needs an artifact before code" is stricter than this section.
-Following it stalls settled work, measured at about a day on three issues (#356). A
-consumer that wants a build to wait on design files the new-surface design issue and its
-edge, above — never an artifact check.
-Consumer docs should link to [`code-triage`](skills/code-triage/SKILL.md) §6 (`design:`
-line) instead of restating it. A ruling given elsewhere and never recorded does not block
-either. That includes prose on the issue and a ruling on a linked issue. It still has
-to be written down as unit 1, with `colab decision --record --ruled-by <human>`. Triage
-reports that case; it does not treat it as a gate.
+**A missing artifact never blocks a small change.** The design gate is `needs-decision`, and only that. A consumer's label description,
+agent prompt or local doc that says "needs an artifact before code" is stricter than
+this section. A consumer that wants a build to wait on design files the new-surface
+design issue and its edge, above — never an artifact check. Consumer docs should link to
+[`code-triage`](skills/code-triage/SKILL.md) §6 (`design:` line) instead of restating
+it. A ruling given elsewhere and never recorded does not block either. That includes
+prose on the issue and a ruling on a linked issue. It still has to be written down as
+unit 1, with `colab decision --record --ruled-by <human>`. Triage reports that case; it
+does not treat it as a gate.
 
 The index of what lives under `docs/design/` belongs in that directory itself — never
 accreted into `CLAUDE.md`, which gets one pointer row.
@@ -4313,16 +3785,13 @@ accreted into `CLAUDE.md`, which gets one pointer row.
 ##### Design exploration files its Issue first — before the first mockup, not after
 
 **The Issue number must exist before the first mockup is drawn**, not retrofitted once
-one is approved — filing is cheaper than a single mockup iteration, and it is what makes
-`<slug>-<N>-mockup.html` naming possible at all.
+one is approved.
 
 There is one size rule — the new-surface test in *Design conclusions*, above — and
 exploration follows it. A small change explores on the issue that builds it. A new surface
 explores on its own `delivery:design` issue, filed before the first mockup. When the build
 spans several sessions, an `epic` parent holds the design issue and the build issues as
-children, each build child carrying its own `blocked_by` edge to the design issue. The
-design issue is never itself turned into the epic: an epic is never a start candidate, so
-its artifact would have no session to land it.
+children, each build child carrying its own `blocked_by` edge to the design issue. The design issue is never itself turned into the epic.
 
 `ceremony: light` repos are exempt from the file ceremony — a mockup lives as a preview
 link in conversation, and units 1 and 3 collapse into one screenshot-bearing Issue
@@ -4359,7 +3828,7 @@ and when. No tag step, no "ship it later" — treat the promotion with the serio
 Tier A gives the tag. Tagging on C is optional and harmless; wanting tags consistently is
 the signal the repo has earned Tier A.
 
-On a `deploy: manual` repo the sequence is the same, the last step performed by a person:
+**[Hard — gate: colab promote refuses]** On a `deploy: manual` repo the sequence is the same, the last step performed by a person:
 promote, tag, then run the runbook — promotion there always requires a human, and
 `promotion: main-loop` cannot say otherwise. The final tag there is a human act too
 (*Release routes*, below).
@@ -4375,7 +3844,7 @@ too: approve the idea, then look at what actually shipped — on `released` with
 production, that look is a candidate's test period and its veto. The permission ladder
 below is that second case, at full length.
 
-**The permission ladder, one rung per boundary:** **ship** (branch→trunk, gated by
+**[Hard — gate: pre-push-guard hook]** **The permission ladder, one rung per boundary:** **ship** (branch→trunk, gated by
 `autonomy:`) · **promote** (trunk→main, gated by `deploy:`+`promotion:` — safe to
 automate only where deploy is tag-gated) · **release** (the tag, gated by exposure:
 automatic candidates, and a final tag that is automatic only where nothing deploys from
@@ -4383,17 +3852,9 @@ it — *Release routes*, below). The `pre-push-guard` hook enforces the
 first two mechanically; `COLAB_SHIP` never opens `main`.
 
 **`COLAB_SHIP` and `COLAB_PROMOTE` are process-identity assertions, not permissions — an
-agent never sets either by hand, and a refusal never names one.** They mean "that command
-ran its preconditions", which is a claim only the command can truthfully make; typed at a
-shell, one asserts it falsely and reaches a direct trunk push having skipped the grade,
-the branch-CI check, the claim release and the evidence comment. Unlike `COLAB_HUMAN`,
-neither has any sanctioned hand-set case at all — not even solo flow's. Measured: two
-independent sessions set `COLAB_SHIP=1` by hand on the same repo on the same day, neither
-aware it was crossing a line, one reporting it in a status summary as ordinary
-housekeeping — and **neither had read it in a skill.** They read it in `pre-push-guard`'s
-own refusal, which named the variable that opens it. A guard that teaches its bypass at
-the moment it refuses is not a guard, so every refusal on this path now names the remedy
-(`colab ship`, `colab promote`) and nothing else.
+agent never sets either by hand, and a refusal never names one.** Unlike `COLAB_HUMAN`,
+neither has any sanctioned hand-set case at all — not even solo flow's. Accordingly, every refusal on this path now names the remedy
+(`colab ship`, `colab promote`) and nothing else. Why, with the measurement: [ADR 539](docs/adr/539-releases-routes-rationale.md).
 
 **Closing that door required closing the corner behind it, or it would have become a
 stall.** Both sessions reached for the variable while holding a completed local merge
@@ -4407,13 +3868,13 @@ cornered in. The upstream rail is [`code-wrap`](skills/code-wrap/SKILL.md)'s: **
 doc lands on the session branch, never as a commit on the trunk checkout** — that commit is
 what both sessions were trying to publish.
 
-**On Tier C the ladder has two rungs, not three, and the second is the deploy** —
+**[Hard — gate: colab promote refuses]** **On Tier C the ladder has two rungs, not three, and the second is the deploy** —
 promotion there always requires `COLAB_HUMAN=1`; `promotion: main-loop` applies only
 where `deploy: tag` makes promotion verification-only, so it can never apply to C.
 Nothing about C widens what an agent may do: `autonomy: auto-trunk` still only ever
 merges into `dev`, which does not deploy.
 
-**Release routes — how a repo releases, and the one human gate (#420; formerly *The release
+**[Hard — gate: colab release finalize stops]** **Release routes — how a repo releases, and the one human gate (#420; formerly *The release
 rung*, #330 — tool messages citing that name mean this paragraph).** Every version number is computed, every candidate is cut by a trigger, and a human
 is asked exactly once: **for the final tag on a repo where that tag deploys production**
 (`deploy: tag`, and `deploy: manual`, where a person deploys from it) — one click, number
@@ -4454,11 +3915,7 @@ block that tries to widen it is an audit failure, not an override.
 
 **The newest candidate always names trunk's head (#443).** Wherever candidates are automatic,
 once trunk CI is green on `main`'s head, the newest candidate is that head: every green trunk
-run whose head carries no candidate cuts one, and no route caps how many a day. A burst of
-merges therefore gets a candidate on each green head — what an adopter installs from `next` is
-never behind what trunk proved. Measured the day a one-a-day cap shipped (#439): four merges
-landed 40 minutes after a candidate, the cap kept them out of any tag until the next day, and a
-catch-up candidate had to be cut by hand. A repo may still declare
+run whose head carries no candidate cuts one, and no route caps how many a day. A repo may still declare
 `release.candidates-per-day` as a **narrowing**, and it keeps the guarantee: inside the window
 the run is a no-op, and the first run after the window closes — the next green CI, or the daily
 scheduled run, which cuts too — cuts **the head**, never an older commit. A head that already
@@ -4468,33 +3925,30 @@ least the test period, by design. `colab release-status` reads the guarantee bac
 *head not a candidate* when a green head has stayed untagged for longer than one CI cycle (the
 longest suite run at that sha). And every candidate has a release page however it was cut:
 `colab release cut` publishes the GitHub pre-release itself, notes = the summary since the last
-final plus the tag's own message, so a cut run outside the workflow no longer leaves a bare tag.
+final plus the tag's own message, so a cut run outside the workflow no longer leaves a bare tag. Why, with the measurement: [ADR 539](docs/adr/539-releases-routes-rationale.md).
 
-**A candidate is cut only when all four hold, on the exact commit it names:**
+**[Hard — gate: colab release cut refuses]** **A candidate is cut only when all four hold, on the exact commit it names:**
 
-1. **CI green on that commit** — every run at that sha finished and one succeeded; a
+1. **[Hard — gate: colab release cut refuses]** **CI green on that commit** — every run at that sha finished and one succeeded; a
    green trunk head later on does not count for it.
-2. **The full suite passed on it** — the rule at the end of this section, unchanged.
-3. **Every schema change since the last final tag is additive**
+2. **[Hard — gate: colab release cut refuses]** **The full suite passed on it** — the rule at the end of this section, unchanged.
+3. **[Hard — gate: colab release cut refuses]** **Every schema change since the last final tag is additive**
    ([*Switched epics*](#switched-epics--concurrent-unfinished-features-336), rule 5). A
    release carrying a destructive one is not a candidate an agent cuts; a human decides it.
-4. **Switch dependencies are satisfied**
+4. **[Hard — gate: colab release cut refuses]** **Switch dependencies are satisfied**
    ([*Switched epics*](#switched-epics--concurrent-unfinished-features-336), rule 3).
 
-**The test period is 3 days, and it is clean only if trunk CI stayed green throughout
+**[Hard — gate: colab release finalize refuses]** **The test period is 3 days, and it is clean only if trunk CI stayed green throughout
 and no regression against the candidate is open.** "Trunk" here is both `main`, where
 candidates are cut, and the `trunk:` branch where that is a different one (`trunk: dev`,
-#437): there `main` receives CI only at promotions, so a `main`-only reading would hold
-little beyond the promotion's own run, while `trunk:` is where the code actually moved
-during the period. It matters only on a route whose final
-is automatic (`rapid-app`, `public-tool`); `library-fast` and `deploy-tag-fast` have none,
-because they cut no candidate. A route may lengthen it, never shorten it. A human vetoes by holding the candidate during it; a held candidate is not finalized.
+#437). It matters only on a route whose final
+is automatic (`rapid-app`, `public-tool`); `library-fast` and `deploy-tag-fast` have none. A route may lengthen it, never shorten it — save that a repo whose final is a human act may declare `test-period: 0d`, no period at all, since the human's finalize is the test (#549). A human vetoes by holding the candidate during it; a held candidate is not finalized. A human final may name **any open candidate, not only the newest** (`--tag`): an older one is finalized only once its **own** test period elapsed clean — its own window, read exactly as the automatic walk reads it — so a release never needs trunk to stop merging; the newer candidates stay open for the next version, and a version's record closes as superseded only once a final above it is tagged (#548).
 **Finalizing re-checks every condition above at the moment it runs** — a candidate that
 was clean when cut and is not now stays a candidate. Where the final tag is a human act,
 the agent's work ends with the candidate, its release notes, and the one click — number
 pre-filled — that finalizes it.
 
-**A trigger runs it — not a person, and not a session.** Each repo that tags carries a
+**[Hard — gate: colab release refuses]** **A trigger runs it — not a person, and not a session.** Each repo that tags carries a
 **release workflow** ([*Scheduled drivers*](#scheduled-drivers--provenance-and-autonomy-meet-a-caller-that-is-not-a-person)):
 a green CI run on `main` — and the daily scheduled run (#443) — tries a candidate (`colab release cut --auto`) — on `trunk: main` every
 trunk push, on `trunk: dev` the human promotion's push (#429), where the bump reads the promoted
@@ -4525,11 +3979,10 @@ as pre-releases, the audit flags a deploy trigger that matches one, and every
 current-release read skips them.
 
 **An operator-granted automatic final (#441).** The default above stands: a final that deploys
-production is a human act. The operator may choose otherwise for **one repo at a time** — *"in
-some cases I want the release to deploy too; only some cases, but possible when I choose"*. The
+production is a human act. The operator may choose otherwise for **one repo at a time**. The
 grant is a human act, recorded the way an `autonomy` grant is, and checked on every read:
 
-- **Recorded, never written by an agent.** The operator rules on a decision issue
+- **[Hard — gate: colab release finalize refuses]** **Recorded, never written by an agent.** The operator rules on a decision issue
   (`colab decision <N> --record --ruled-by <human>`) and the repo names it with
   [`release.final: auto` + `release.final-grant: <N>`](project.schema.md#release--optional).
   `final: auto` on `deploy-tag` without that line is the widening failure it always was. The
@@ -4539,7 +3992,7 @@ grant is a human act, recorded the way an `autonomy` grant is, and checked on ev
   stays human; a grant there, or on any route but `deploy-tag`, is an audit failure.
 - **Per repo, revocable at once.** Deleting the line, `final: human`, or `colab decision <N>
   --reopen` revokes it; the next `colab release finalize` reads the new state.
-- **More conditions, never fewer.** On top of everything a candidate's final already needs —
+- **[Hard — gate: colab release finalize refuses]** **More conditions, never fewer.** On top of everything a candidate's final already needs —
   the clean test period, trunk green throughout, no `release-hold` on any open tracking issue,
   no open regression — an automatically deployed final carries **no database migration since
   the last final** unless the release itself is granted one: migration stays a human gate
@@ -4550,15 +4003,13 @@ grant is a human act, recorded the way an `autonomy` grant is, and checked on ev
 - **Every automatic deploy says whose choice made it so.** The final tag's message names the
   grant and its decision issue, and who ruled it.
 
-**A final on every green head — `deploy-tag-fast` (#446).** Some repos have nobody to test a
-candidate: an app whose only user is its operator, where a 3-day period only measures "nothing
-new merged for 3 days". For such a repo the operator may choose route `deploy-tag-fast`: on
+**A final on every green head — `deploy-tag-fast` (#446).** For a repo with nobody to test a candidate, the operator may choose route `deploy-tag-fast`: on
 every green trunk head `colab release cut --auto` tags the **final** `vX.Y.Z` directly — no
 `-rc`, no test period — and the release workflow deploys it in the same run. The version tags
-stay; only the candidate step goes. It replaces the test period with two declarations and keeps
+stay; only the candidate step goes. Why: [ADR 539](docs/adr/539-releases-routes-rationale.md). It replaces the test period with two declarations and keeps
 every gate that does not depend on one:
 
-- **The operator's grant, read exactly as #441's.** `release.final-grant: <N>` names a recorded
+- **[Hard — gate: colab release cut refuses]** **The operator's grant, read exactly as #441's.** `release.final-grant: <N>` names a recorded
   decision, re-read on every run by the audit and by `cut`; unreadable, untrusted or reopened →
   no tag, and the audit fails. Deleting the line, or `route: deploy-tag`, revokes it.
 - **A health-gated deploy that rolls itself back.** `release.health-url` (an `https://` endpoint
@@ -4572,7 +4023,7 @@ every gate that does not depend on one:
 - **`deploy: tag` only.** Not `deploy: manual` (a person deploys anyway), not a no-production
   repo — `library-fast` keeps its meaning: nothing it tags reaches production. Missing the grant
   or the health gate, the route is an audit failure and `deploy-tag` stays in effect, final human.
-- **The gates that stay:** trunk CI green on the head and every other candidate condition above
+- **[Hard — gate: colab release cut refuses]** **The gates that stay:** trunk CI green on the head and every other candidate condition above
   (full suite, additive schema, switch dependencies, the pre-tag checks); no open issue carrying
   `release-hold` (repo-wide — there is no candidate issue to put it on); and **no database
   migration since the last final** unless the version's tracking issue carries a migration grant
@@ -4581,7 +4032,7 @@ every gate that does not depend on one:
 - **A minimum spacing between finals.** `release.final-spacing` (default and floor `1h`; longer
   narrows) — a burst of merges deploys at most once per window. Inside it a run is a no-op, and
   the first run after it tags the head, never an older commit.
-- **Deployed in the same run, never by a tag-push workflow.** A tag pushed with `GITHUB_TOKEN`
+- **[Hard — gate: colab release cut refuses]** **Deployed in the same run, never by a tag-push workflow.** A tag pushed with `GITHUB_TOKEN`
   starts no `push: tags` run, so a separate deploy-on-tag workflow would never fire for this
   final. [`templates/release-auto.yml`](templates/release-auto.yml)'s `deploy` job deploys it
   (an edit point the adopter fills) and checks the health URL; a cut by hand refuses on this
@@ -4593,22 +4044,20 @@ platform has an API deploys through [`templates/deploy-container.yml`](templates
 and its two scripts, on every host the same way:
 
 1. CI builds every image the repo lists **once** per final tag (`vX.Y.Z` and the commit sha) and
-   pushes it — in its own job, never gated on whether the platform is switched on, so a repo not
-   yet cut over still has every final's image in the registry (#460).
+   pushes it — in its own job, never gated on whether the platform is switched on.
 2. A per-repo pre-deploy step (a database snapshot, say) runs next; its failure stops the deploy
    before anything changes.
 3. A **platform adapter** tells the platform "run exactly `vX.Y.Z`", every image in one call.
 4. The deploy is green only on a **verified running version**: the platform's own state (the
    stack settled, the commit it deployed, the image its containers run), then
-   `release.health-url` reporting `X.Y.Z`. An HTTP 200 from the platform is never the evidence —
-   a platform can accept a deploy it then refuses to run.
+   `release.health-url` reporting `X.Y.Z`. An HTTP 200 from the platform is never the evidence.
 5. A failure after the platform accepted the call rolls back to what ran before (the previous
    final), checks that, and still fails the run. A manual rollback is the same workflow run with
    the previous tag. The outcome — `running vX.Y.Z at <time>`, or the failure — is recorded in the
    run summary and on the release issue when one exists.
 
-It is the existing `deploy: tag` shape with an in-repo deploy workflow (`channels: [workflow]`),
-so no rule changes; the template is what was missing. **There is one deploy path, reached two
+It is the existing `deploy: tag` shape with an in-repo deploy workflow (`channels: [workflow]`).
+**There is one deploy path, reached two
 ways:** on `deploy-tag` a human-pushed final starts it (`push: tags`, finals only); on
 `deploy-tag-fast` the release workflow's `deploy` job calls the same file through
 `workflow_call` (the commented job in `templates/release-auto.yml`), because the final it tags
@@ -4616,24 +4065,20 @@ starts no `push: tags` run. Portainer is the first adapter; another platform is 
 file exporting the same functions, and a consuming workflow changes one variable. **One platform
 key per app**, for a non-admin user owning only that app's stack — never an admin key. Every
 server runs its own platform instance, so the configuration is that host's URL, environment and
-stack, by DNS name. Every redeploy recreates the containers, even with an unchanged compose file.
+stack, by DNS name. Every redeploy recreates the containers, even with an unchanged compose file. Why: [ADR 539](docs/adr/539-releases-routes-rationale.md).
 
-**A manifest's version may be derivable (#438), and on an automatic route it is by default
+**[Hard — gate: pre-tag check refuses]** **A manifest's version may be derivable (#438), and on an automatic route it is by default
 (#484).** Under [`release.version-source: manifest`](project.schema.md#release--optional) the
 pre-tag check refuses a tag that disagrees with any declared manifest (`VERSION`, `package.json`,
 `Cargo.toml`, `pyproject.toml`) at the tagged commit, so a human bumps the manifest on trunk
 first. Under `tag` the check skips a differing manifest, names it, and the tag message records it
 as derivable. The repo's own release or deploy step stamps the number from the tag — on a
 deploy-only ref, or at build time — **never as a commit on trunk**: the release workflow never
-pushes one, and a stamp on trunk would put a version in the tree before the release it names
-exists.
+pushes one.
 
 The default follows who cuts the tag. Where the machine does — automatic candidates, or a final
-`release cut --auto` tags itself — it is `tag`, because nobody is there to bump a manifest
-before each cut: under `manifest` the first candidate after a final refuses, and so does every
-one after it, a stall that reads only as a warning in a green run. Where a person cuts the tag it
-stays `manifest`. A declared value wins either way; the cut and the final read the same one, so
-a candidate cut under `tag` is never refused as a final under `manifest`.
+`release cut --auto` tags itself — it is `tag`. Where a person cuts the tag it
+stays `manifest`. A declared value wins either way; the cut and the final read the same one. Why: [ADR 539](docs/adr/539-releases-routes-rationale.md).
 
 **Under `tag`, any version a user sees reads the tag, never the trunk manifest.** A `--version`,
 an about page, a health endpoint reporting the running version: each reads the tag or a stamp
@@ -4656,16 +4101,14 @@ hold the shape:
 - **Trusted publishing (OIDC) only.** No npm token is stored, read, or offered as a fallback; the
   job refuses to run with one in its environment. npm trusted publishing does not support
   self-hosted runners, so this job runs **GitHub-hosted** even where the rest of the workflow is
-  self-hosted. (npm ends direct publishing with 2FA-bypass tokens in January 2027; nothing here
-  depends on one.)
-- **Same run, never a tag-triggered workflow** — the reason the GitHub Release is published in
-  the same run: a tag pushed with `GITHUB_TOKEN` triggers nothing.
+  self-hosted.
+- **Same run, never a tag-triggered workflow**.
 - **A private repository never publishes to public npm** (#432). Visibility is not in
   `project.yml`, so the job reads it from the API and refuses a private or unreadable one.
 - **It never moves git.** The version comes from the tag (the manifest carries none) and is
   stamped into the checkout, then the gate runs, then `npm publish`. If publishing fails, the tag
   stands, the Release says *tagged, not published*, and re-running the failed job publishes the
-  existing tag; a version already on npm is skipped.
+  existing tag; a version already on npm is skipped. Why: [ADR 539](docs/adr/539-releases-routes-rationale.md).
 
 **Release channels — consumers follow `stable` or `next`, not a hand-bumped pin (#445).** Two
 branches name the newest release of each kind, the git counterpart of npm's `latest` / `next`:
@@ -4676,16 +4119,13 @@ branches name the newest release of each kind, the git counterpart of npm's `lat
   the human's final command, fast-forwards it to the final's commit; a later run that finds the
   version already final repairs a `stable` a dead run left behind.
 
-**They are branches, not tags.** A moving tag is refused by every clone that already fetched it
-(`would clobber existing tag`), and a non-semver tag is read as "the newest version" by tag
-readers (`git describe --tags`, stamps). A branch moves cleanly and no tag reader sees it, so
-version tags stay immutable. **Nothing else writes them:** both move **forward only**, never
+**[Hard — gate: pre-push-guard hook]** **They are branches, not tags.** **Nothing else writes them:** both move **forward only**, never
 forced — a channel that is not an ancestor of the new commit is reported and left alone, never
 overwritten — and [`pre-push-guard`](templates/pre-push-guard) refuses a hand push to either
 (the release commands push with their own process-identity variable, the `colab ship`
 precedent). `stable` sitting on an older commit than `next` is the design, not drift. A channel
 move is best-effort like the GitHub pre-release: the tag is already on the remote, so a channel
-that cannot move is a warning, never a reason to undo the tag.
+that cannot move is a warning, never a reason to undo the tag. Why: [ADR 539](docs/adr/539-releases-routes-rationale.md).
 
 **What a consumer pins.** [`templates/release-auto.yml`](templates/release-auto.yml)'s
 `HANDBOOK_REF` defaults to `stable`; a repo may pin `next` (the fast channel) or an exact version
@@ -4693,11 +4133,10 @@ tag (frozen — the one way to stop moving). When `stable` moves, that final's r
 what changed. A pinned ref the handbook does not carry — `stable` before its first final, or any
 channel on a fork or mirror that lacks it — is not a failure: the fetch step falls back to the
 newest final tag no older than the first final carrying every verb the template calls, else
-`next`, and says so in a warning (#480). Falling back to an older final would only move the red
-run one step later, to the first `--auto` call it rejects (#427). A tool installed **with npx** follows a channel the same way, with one difference:
+`next`, and says so in a warning (#480). A tool installed **with npx** follows a channel the same way, with one difference:
 the channel is resolved to the release tag on it before anything is installed, never installed as
 a ref — a per-machine service through its `update` verb, a one-shot command through the launcher
-([*Services over npx*](#services-over-npx--init-update-rollback-465), below).
+([*Services over npx*](#services-over-npx--init-update-rollback-465), below). Why: [ADR 539](docs/adr/539-releases-routes-rationale.md).
 
 **Versioning** — SemVer. Patch for fixes, minor for features, major for breaking changes.
 Pre-1.0 repos use `v0.x.y`, treating minor as "meaningful increment".
@@ -4711,15 +4150,13 @@ number.** Since the last final tag:
   `0.4.2` → `0.5.0`), **major from 1.0** (`1.3.0` → `2.0.0`). Breaking means any of: `!` or
   `BREAKING CHANGE:` in a commit; a repo guard reporting a destructive schema,
   config-format or API-response change; a removed or renamed export.
-- **A major must carry a migration section with the measured cost** — what an adopter or
+- **[Hard — gate: colab release cut refuses]** **A major must carry a migration section with the measured cost** — what an adopter or
   consumer has to change, and how much of it was measured — **or it is refused.** A major
   with no migration section is not cut, by the workflow or by hand.
 
-The computation reads more than commit subjects precisely because the breaking change that
-bites is the one the types don't reveal — a destructive schema change or a renamed export
-merged as `feat:` or `fix:` with no `!`. **Put the reasoning in the release notes**: the
+**Put the reasoning in the release notes**: the
 bump computed, which input decided it, and each breaking change found — or that none was,
-and what was checked.
+and what was checked. Why: [ADR 539](docs/adr/539-releases-routes-rationale.md).
 
 **An unfinished feature never waits for a release, and never reaches one switched on.** On
 a repo that tags, a feature landing over several merges is an epic behind a switch: it
@@ -4741,8 +4178,7 @@ colab release-notes v1.1.0..v1.2.0 | gh release create v1.2.0 --notes-file - --g
 **Merged is not released — measure the gap, don't wait to notice it by eye.**
 `colab release-status [--repo P] [--json]` (#81) reports commits on `dev` not yet
 promoted, commits on `main` past the last `v*` tag (plus days since), and flags whichever
-gap holds a `fix:`-typed or breaking commit — exactly the class that has bitten before,
-in payroll. Its suggested SemVer bump is an input, not a verdict: the coordinator
+gap holds a `fix:`-typed or breaking commit. Its suggested SemVer bump is an input, not a verdict: the coordinator
 confirms or overrides it and states the reason in the release notes — it reads commit
 types, so it cannot see a breaking change the types don't reveal — the computed number
 (*Versioning*, above) also reads guard results and exports, and is the one a candidate
@@ -4786,27 +4222,20 @@ tag, and a platform without its binary, and never moves a dist ref that exists) 
 [`templates/npx-launcher.mjs`](templates/npx-launcher.mjs) (Node ≥ 18, zero dependencies).
 
 - **The launcher installs the release npx was asked for.** It reads the `#vX.Y.Z` committish from
-  the installing project's own record of the package, not from the manifest — a candidate
-  `#vX.Y.Z-rc.N` and its final carry the same manifest version, and only the committish tells
-  them apart. Where no record exists (a global install), the manifest version is the fallback; an
+  the installing project's own record of the package, not from the manifest. Where no record exists (a global install), the manifest version is the fallback; an
   environment variable overrides both; with none of them it refuses rather than guessing.
 - **The checksum proves the bytes, not the publisher.** `SHA256SUMS` lives in the same ref as the
   binary, so it catches a truncated or corrupted fetch. The trust anchor is write access to the
   repository, as it is for the source npx just ran.
-- **A dist ref is a tag, and a full clone pays for it.** A plain `git clone` fetches every tag,
-  including every platform of every release; later plain fetches do not (a tag is followed only
-  into fetched history, and an orphan is never in it). Contributors who mind clone with
+- **A dist ref is a tag, and a full clone pays for it.** Contributors who mind clone with
   `--no-tags`. npm's own tag-to-version parsing ignores dist refs (`v0.4.0-rc.1/darwin-x64` is not
-  a valid version), so a `#semver:` install range is unaffected.
+  a valid version), so a `#semver:` install range is unaffected. Why: [ADR 539](docs/adr/539-releases-distribution-rationale.md).
 
 **Rules that apply to every row:**
 
-- **Publish or push in the same run as the release cut.** A tag made with `GITHUB_TOKEN` triggers
-  no other workflow, so a "build on tag push" workflow never runs for a tag the release workflow
-  made — the same reason the Release itself is published in that run.
+- **Publish or push in the same run as the release cut.**
 - **Trusted publishing (OIDC) for npm, never a token** — the npm job's first rule, above.
-- **A long-running tool never runs from npx's cache.** npm may prune that cache under a live
-  process. A tool that runs as a service installs, updates and rolls back through the contract in
+- **A long-running tool never runs from npx's cache.** A tool that runs as a service installs, updates and rolls back through the contract in
   [*Services over npx*](#services-over-npx--init-update-rollback-465), below.
 
 The audit reports a **private** repository whose workflows upload GitHub Release assets
@@ -4818,11 +4247,8 @@ A repository that **declares** it distributes a tool — `distribution: js` or `
 compiled` in `project.yml` ([schema](project.schema.md#distribution--optional)) — is checked for
 its row's install route: a publish step plus a non-private `bin` (public JS; per-platform
 `optionalDependencies` too when compiled), a root `bin` (private JS), or a root `bin` plus a
-workflow calling a dist-refs workflow (private compiled). A missing route is **advisory** (`warn`):
-a publish in a reusable workflow outside the repository is invisible to the check. An undeclared
-repository is never checked — nothing in a repository tells a tool from a library, so the audit
-does not guess (#469).
-
+workflow calling a dist-refs workflow (private compiled). A missing route is **advisory** (`warn`). An undeclared
+repository is never checked (#469).
 
 ### Services over npx — init, update, rollback (#465)
 
@@ -4880,8 +4306,7 @@ it. A pinned install's timer runs and changes nothing, exactly as `update` does.
 **A one-shot command at a channel.** `npx github:<org>/<repo>#stable <args>` works too: the
 launcher resolves the channel on the commit npx installed (the sha in the installing project's
 lockfile) to its release tag and fetches that version's dist ref, so the binary always matches the
-source npx ran. npx re-resolves a branch committish on every run (measured on npm 11: the cached
-install is reused, and its lockfile's commit moves with the branch), so a one-shot command at a
+source npx ran. npx re-resolves a branch committish on every run, so a one-shot command at a
 channel costs one round trip to the origin per run — pin `#vX.Y.Z` where that matters. Any other
 branch (`#main`) is still refused: it names no release.
 
@@ -4908,11 +4333,7 @@ same git, verifies it against that ref's `SHA256SUMS` exactly as the launcher ve
 refuses an archive with an absolute or `..` entry, and unpacks it into the version's directory
 before any switch.
 
-**Why side-by-side versions, and not a serving clone that follows a branch.** A clone that pulls
-and rebuilds in place makes a branch the thing that runs: rollback becomes a checkout plus a
-rebuild, the running tree is half-updated while it builds, and what runs is not a version any dist
-ref or release note names. Side-by-side versions keep the running version untouched until the
-switch, make rollback a rename, and run only what a release tag names.
+Why side-by-side versions, and not a serving clone that follows a branch: [ADR 539](docs/adr/539-releases-distribution-rationale.md).
 
 **Service managers.** The template writes a launchd agent on macOS and a systemd user unit on
 Linux, and refuses Windows. A Linux service that must outlive the login session needs lingering
@@ -4930,19 +4351,16 @@ container deploy's logic with hermetic tests against a fake platform, and a copy
 adopter's to keep green from then on.
 
 The required **outcome**: every pull request must run, at minimum, a **secret scan** and
-a **build** — a committed credential is the one failure that cannot be undone by
-reverting.
+a **build**.
 
 **CI must trigger on pushes to the trunk itself**, not only on branches the trunk no
-longer is. Measured: three repos whose trunks had moved to `dev` while CI still fired
-only on `[main, master]` — every trunk merge ran zero checks, silently. When a repo's
+longer is. Why: [ADR 539](docs/adr/539-ci-toolchain-rationale.md). When a repo's
 trunk moves, updating the CI triggers is part of the move, and the audit checks it.
 
 ### CI — what it is follows the unit's shape, how much follows exposure
 
 **What CI *is* comes from whether the unit has a branch — a fact about the session, not a
-declared value** (⚖ #233 retired the `writes`-keyed reading this heading used to carry:
-`writes` is a veto now, not a method, so it no longer selects which CI role applies).
+declared value**.
 With a branch — the ordinary worktree session, or an attended trunk-direct one falling
 back to full ceremony — CI runs before the merge: a gate, something to inspect before a
 unit lands. An attended trunk-direct session with no branch runs it after the push — an
@@ -4956,9 +4374,7 @@ trunk-gating CI workflow, or branch protection — never by a declared value.** 
 where the retired `writes: serial-gated` spelling's one real assertion ("a pre-merge gate
 exists here") now lives: [Writes](#writes--the-trunk-direct-veto-and-the-two-things-that-make-a-branch-mandatory)'s
 second mandatory-branch condition ("a gate must inspect the unit before it lands") reads
-this fact, not a field. A declared value never carried this fact reliably — nothing
-audited whether a `serial-gated` repo actually ran one — and the gate itself is something
-the audit CAN see where it could never see a declaration.
+this fact, not a field.
 
 **How thorough it must be comes from [exposure](#exposure--what-consumes-a-merge-here).**
 `none` and `self` answer only to the room; `live` and `released` answer to a consumer with
@@ -4974,15 +4390,13 @@ the finding to report — not a CI run trusted to be the filter it structurally 
 **Provision CI for planned exposure, not current.** A repo declaring `exposure: none`
 with a named `production:` — the transitional pairing
 [Exposure](#exposure--what-consumes-a-merge-here) already flags — should already run at
-`live` thoroughness, free to be red, rather than discover the gap on cutover day: the one
-day it is most expensive to.
+`live` thoroughness, free to be red, rather than discover the gap on cutover day.
 
 **Test contracts follow the named consumer**, once
 [channels](#channels--by-what-path-does-code-reach-the-thing-that-runs-it) names one: for
 `artifact`, the test that matters is whether a fresh adopter's copy works, not a unit test
 of the generator; for `live`/`released`, the promotion or release path is the product; for
-`self`, whatever would break the room's own ability to work. A generator's internal tests
-passing proves nothing about what ships, if nothing names who actually consumes it.
+`self`, whatever would break the room's own ability to work.
 
 **A repo holding an unfinished switched epic runs its suite twice** — once in the release
 configuration, once in development — because those are the only two it supports and the
@@ -4998,14 +4412,10 @@ edit as drift to reconcile, the same treatment every other stamped file gets. Se
 
 The templates assume GitHub-hosted capacity: every job gets a fresh machine the moment
 it is queued. **A self-hosted runner breaks that assumption, and a flow copied unchanged
-spends most of its wall time waiting rather than working.** Measured on one busy repo
-with one self-hosted agent: a clean run did ~8.5 min of work, and runs under load took
-48–52 min. Nearly all of the difference was queue time.
+spends most of its wall time waiting rather than working.** Why, with the measurement: [ADR 539](docs/adr/539-ci-toolchain-rationale.md).
 
 - **A repo's capacity is how many agents it has, not how big the host is.** One agent
-  runs one job at a time for that repo, whatever the host has spare. Jobs from different
-  runs interleave on it job by job: one trunk run's secret-scan job finished and its
-  build job then waited **33 min** behind other branches' jobs.
+  runs one job at a time for that repo, whatever the host has spare.
 - **Measure queue and work separately, at job and step level.** Run duration
   (`created → updated`) adds the two together, so a slow suite and a starved runner read
   identically. Compare each job's `startedAt` with the run's creation time, and each
@@ -5026,18 +4436,13 @@ with one self-hosted agent: a clean run did ~8.5 min of work, and runs under loa
   first steps; it still runs on every run and still fails the job before any test
   starts. The main job must check out full history, which the scan needs. Split jobs
   out again only when there are enough agents to run them side by side.
-- **Never run the same check twice in one job.** Measured: a typecheck step, then the
-  test script's own leading typecheck, run once per configuration (the switched-epic
-  double run above) — **three** typechecks per build. Drop the copy whose removal breaks
+- **Never run the same check twice in one job.** Drop the copy whose removal breaks
   nothing; a test that pins the test script's shape decides which one that is.
 - **Test parallelism follows the cores the runner *exposes*, but more cores only help a
   CPU-bound suite.** Runners that size their concurrency from `os.availableParallelism()`
   (node:test does) are capped by the container's core limit, not by the host's. Raising
-  that limit is cheap on a memory-bound host, and it is not a speed-up you can assume.
-  Measured: a 536-file batch that reported 4 went to 8, and the batch went from 170 s to
-  160 s, about 5 %. It was bound by something other than CPU, such as process spawn or
-  disk. Before you count on a gain, compare the batch's wall time with the CPU it
-  actually used. Agent count (above) was the lever for wall time; core count was not.
+  that limit is cheap on a memory-bound host, and it is not a speed-up you can assume. Before you count on a gain, compare the batch's wall time with the CPU it
+  actually used.
 - **Cap test-runner workers in CI with a fixed number. Size it to the slot's memory,
   not to the CPUs the job can see (#478).** The bullet above assumes the slot limits
   cores. Many slots limit only memory: they run as a memory-capped cgroup, and the
@@ -5046,14 +4451,6 @@ with one self-hosted agent: a clean run did ~8.5 min of work, and runs under loa
   `os.availableParallelism()` (vitest, jest, node:test, playwright; pytest-xdist
   `-n auto` and parallel PHPUnit do the same) then starts one worker per *host*
   core, so the worker count changes when someone upgrades the host.
-  - Measured: a pool host went from 12 to 16 cores, and one repo's vitest went from
-    11 to 15 jsdom workers per slot. That crossed the slot's ~5 GiB soft cap. The
-    kernel throttled the job by reclaiming memory instead of killing it, so there
-    was no OOM and no message saying why. Each slot logged over a million
-    memory-high events and stalled for up to 24 min, imports took 4–28× their
-    baseline, and tests timed out at 5–15 s. Trunk went red with no code change.
-    The same suite had been green two days earlier, and longer per-test timeouts
-    did not help.
   - The fix is a cap in the test config, read from CI so that local runs keep
     their full parallelism: vitest `maxWorkers: process.env.CI ? 4 : undefined`,
     jest `--maxWorkers=4`, node:test `--test-concurrency=4`, playwright
@@ -5062,20 +4459,14 @@ with one self-hosted agent: a clean run did ~8.5 min of work, and runs under loa
     use the core count.
   - If a suite that used to be green starts timing out on a self-hosted pool with
     no code change, check the slot's memory pressure (`memory.events` `high`) and
-    the worker count before you widen any timeout. Throttling stalls every test
-    the same way, so the failures look like flaky tests even though nothing in
-    them changed.
+    the worker count before you widen any timeout.
 - **Before adding an agent, check the runner's disk as well as its memory.** Each agent
-  brings its own runner install and workspace (GBs for a Node repo). Measured: the
-  runner container's disk at 99 % was what blocked a second agent, not its memory. On a
+  brings its own runner install and workspace (GBs for a Node repo). On a
   memory-bound host, a second agent inside an existing runner container buys the same
   concurrency as a new container, without a second OS's overhead.
 - **A persistent runner never resets, so tests must clean up after themselves.** A test
-  that makes a temp dir and never removes it leaks on every run. Measured: 5 000+
-  leaked dirs, 2.1 GB, in a `/tmp` shared by the agents of seven repos, where one
-  repo's leak can fill the disk every other repo's CI runs on. The same persistence
-  makes a hosted cache action redundant: the package cache is already on disk, and
-  restoring GitHub's copy of it cost ~37 s per job.
+  that makes a temp dir and never removes it leaks on every run. The same persistence
+  makes a hosted cache action redundant: the package cache is already on disk.
 
 ### Toolchain versions — strict precedence
 
@@ -5086,26 +4477,20 @@ with one self-hosted agent: a clean run did ~8.5 min of work, and runs under loa
    `.python-version`/`requires-python`) — the normal answer.
 3. **Fail the build.** Never fall back to a default.
 
-Measured: a silent default is how one repo built on Node 20 while deploying on Node 22,
-undetected for months. When project.yml's pin and the manifest disagree, that is a
+When project.yml's pin and the manifest disagree, that is a
 finding to report, not resolve quietly.
 
 **`requirements.txt` does not declare an interpreter** — pins dependencies only; a Python
-repo carrying only that file must add `python:` to `project.yml` or a `.python-version`.
-Measured: a Python repo adopted the handbook, found no Python template, and copied the
-Node one with `python-version: "3.13"` hardcoded in. **A missing template is not a
+repo carrying only that file must add `python:` to `project.yml` or a `.python-version`. **A missing template is not a
 neutral absence** — it redirects adoption into a worse form and leaves behind a file
-whose header lies about what it is.
+whose header lies about what it is. Why, with the measurement: [ADR 539](docs/adr/539-ci-toolchain-rationale.md).
 
 ### Test fixtures — neutralise ambient machine state, don't inherit it
 
 **A test asserting a specific message or refusal must neutralise ambient credentials and
-configuration rather than inherit them.** This handbook installs a global
-`core.hooksPath`; a fixture that `git init`s and `git commit`s without overriding it runs
-the developer's real pre-commit hook inside a fake repo. Measured twice, in the identical
-shape (ambient `gh` credentials, then `core.hooksPath`). A git fixture helper sets
+configuration rather than inherit them.** A git fixture helper sets
 `user.email`, `user.name`, **and** `core.hooksPath` (pointed at a nonexistent directory)
-before it ever commits.
+before it ever commits. Why, with the measurement: [ADR 539](docs/adr/539-ci-toolchain-rationale.md).
 
 ---
 
@@ -5131,7 +4516,7 @@ is **stamped** with the handbook version it came from:
 
 - Workflow copies: `# colab-handbook: <template> @ <version>`.
 - The CLAUDE conventions block: `<!-- colab-handbook @ <version> -->`.
-- **`colab template <name>`** copies and stamps in one act, refusing to overwrite without
+- **[Hard — gate: colab template refuses]** **`colab template <name>`** copies and stamps in one act, refusing to overwrite without
   `--force`.
 
 The audit compares each stamp against the handbook's git history: a template **changed
@@ -5142,10 +4527,7 @@ stamp newer than the handbook is advisory. Reconcile deliberately: read the diff
 **A rule-neutral change downgrades the finding to a warn — declared, never inferred
 (#272).** Bytes drift is always a hard fail by default: a repo stamped against an old
 template gets `fail` the moment anything in that template changed, including a fix that
-touches no rule at all (a corrected hyperlink, once, flipped every under-stamped adopter
-red — the incident that motivated this). The fix is not a classifier that reads the diff
-and guesses whether it mattered; that trades a loud, honest failure for a quiet, wrong
-one. Instead, the person editing `templates/` states the claim themselves, at the moment
+touches no rule at all. Why: [ADR 539](docs/adr/539-conformance-rationale.md). Instead of a classifier, the person editing `templates/` states the claim themselves, at the moment
 they know it best — as a `Rule-Neutral: yes` trailer on the commit:
 
 ```
@@ -5166,24 +4548,22 @@ Rule-Neutral: yes
   error to catch in review, the same as a false `Closes #N` or a mis-typed commit
   prefix elsewhere in this file; the audit trusts the trailer exactly as far as it
   trusts the person who wrote it.
-- **The trailer must survive the squash.** This repo's own [§4](#4-branches-and-commits)
+- **[Hard — gate: squash trailer allowlist]** **The trailer must survive the squash.** This repo's own [§4](#4-branches-and-commits)
   squash-merges a branch into one trunk commit, and the audit reads only trunk history
   — never the pre-squash branch commits the declaration was written on. `Rule-Neutral`
   is on the squash's carried-trailer allowlist (`tools/lib/squash.js`) for exactly this
   reason; dropping it from that list would make the declaration invisible the moment the
   branch that wrote it merges, on this repo specifically.
 
-`colab update` classifies every stamped copy and, with `--apply`, refreshes only those
+**[Hard — gate: colab update refuses]** `colab update` classifies every stamped copy and, with `--apply`, refreshes only those
 still pristine as of their own stamp — never commits, never rewrites a hand-edited copy.
 
 - **A stamp older than current is not "behind"** — behind means the template *actually
   changed* since that stamp (`git log <stamp>..HEAD` scoped to the template's path).
-- **The frozen CLI copy is measured against the latest tag, not `HEAD`** — measured
-  against `HEAD` it reported "behind" for every unreleased CLI commit and advised
-  adopting untagged code.
-- **An unstamped copy is never rewritten** by any flag — unknown lineage, human re-copies
+- **The frozen CLI copy is measured against the latest tag, not `HEAD`**. Why: [ADR 539](docs/adr/539-conformance-rationale.md).
+- **[Hard — gate: colab update refuses]** **An unstamped copy is never rewritten** by any flag — unknown lineage, human re-copies
   deliberately.
-- **Provenance is decided by content, never filename** — a file merely sharing a
+- **[Hard — gate: colab update classifies]** **Provenance is decided by content, never filename** — a file merely sharing a
   template's name is reported `unrelated`, explicitly not something to re-copy.
 
 ### Labels reconcile too — not just stamped files
@@ -5194,19 +4574,38 @@ label is missing it simply could not see. Label-set provisioning is idempotent
 (`|| true`) and safe to re-run on every sync — the mechanism by which a label added in a
 later handbook version reaches an earlier-adopted repo.
 
+### Local policy — a repo refines a skill without forking it (#520)
+
+A team that wants a handbook skill to behave differently in its repo — write Issue comments
+in another language, run an extra check before wrap, skip a step its stack has no use for —
+writes that in **`.colab/skills/<skill>.md`**, one optional file per skill, free prose. Every
+skill opens with a block that loads the file: an injection line that engines supporting
+load-time expansion fill in with the file's text, and a plain sentence — *if
+`.colab/skills/<skill>.md` exists in this repo, read it before continuing* — that is the
+engine-neutral path and works on its own. With no file, the skill runs unchanged. A large
+skill is a short core `SKILL.md` plus reference files beside it (#524); the core keeps every
+step under its own number, so an overlay names the step it refines (`code-ship` B1c,
+`code-sweep` §3) and never has to point into a reference file.
+
+**[Hard — gate: docs-only classifier]** **Precedence:** local policy refines the skill for this repo and wins over the skill's own
+text where they differ. **It never changes a `colab` gate** — a refusal from `colab ship`,
+`colab claim` or any other command is not prose an overlay can talk past; the gates read git
+and the tracker, not this file. Because the file is agent instructions, a diff touching
+`.colab/skills/` is never [docs-only](#autonomy--the-docs-only-exception-345): it merges on
+`auto-trunk` or a human's go, like a `CLAUDE.md` change.
+
+Why a file and not a fork or a field: [ADR 539](docs/adr/539-conformance-rationale.md).
+
+The handbook defines this one layer and nothing on top of it. Org- or machine-wide layers,
+size limits, drift checks against upstream, and tooling to manage overlays are the adopter's
+business.
+
 ### Upstream — a consumer that changes what a convention means files it here (#362)
 
-Everything above runs one way: the handbook changes, and adopters find out. The other
-direction had no rule. A **consumer** is anything that reads these conventions in order to
+Everything above runs one way: the handbook changes, and adopters find out. A **consumer** is anything that reads these conventions in order to
 act on them: a dashboard, a scheduler, a triage or ship prompt, a repo's own copy of a
 skill, a label description on a tracker. A consumer can change what a convention means
-with a commit in its own repo, and nothing made the handbook hear about it. Agents load
-both texts, so they obey whichever they read last. Measured: a consumer made
-`delivery:docs-only` a code-lane start candidate, and the handbook issue was filed 30 days
-later. In between, a triage pass that followed the handbook left an issue unstarted for
-about 6 days. A second consumer added a `delivery:*` value the handbook does not have. A
-third consumer lacked that value, filed design work under `docs-only` instead, and its
-scheduler sent the work to the code worker.
+with a commit in its own repo, and nothing made the handbook hear about it. Why, with the measurement: [ADR 539](docs/adr/539-conformance-rationale.md).
 
 **The rule.** A consumer change that does either of these carries a linked handbook issue:
 
@@ -5227,9 +4626,7 @@ and neither is a hand-edit to a copied template (that is copy-and-own, above).
 - **Its provenance is the consumer change's, not the filer's.** The upstream issue records
   a decision a human already approved on the consumer side. It proposes nothing on an
   agent's own initiative, so it carries **no `agent-filed` label**. Its `Filed-by:` line
-  names whoever approved the consumer change ([§5](#provenance--who-decided-the-work-should-exist)).
-  Measured: a fix filed under `agent-filed` waited for acceptance, and one filed without it
-  landed the same day. The upstream issue describes the consumer by shape. The link runs
+  names whoever approved the consumer change ([§5](#provenance--who-decided-the-work-should-exist)). The upstream issue describes the consumer by shape. The link runs
   consumer → handbook, never the reverse, because the handbook is public.
 - **The upstream issue ends in one of three outcomes:** the handbook adopts the meaning,
   the handbook declines it and the consumer reverts, or the handbook rules it a legitimate
@@ -5239,10 +4636,7 @@ and neither is a hand-edit to a copied template (that is copy-and-own, above).
 divergence in its `CLAUDE.md`, next to the handbook pointer block
 ([§9](#9-adopting-this) step 5) — in `CLAUDE.md` even when that file is a thin shell over
 `AGENTS.md`, because the list belongs beside the block it qualifies, as a `Local divergences:` list with one line per item.
-Each line gives the label or value, what it means here, and the handbook issue URL. This
-is also what settles the "whichever text I read last" problem: an agent reading this
-repo's instructions sees, next to the handbook pointer, which meaning wins here and why.
-When the issue closes, remove the line if the meaning was adopted or reverted. If the
+Each line gives the label or value, what it means here, and the handbook issue URL. When the issue closes, remove the line if the meaning was adopted or reverted. If the
 issue ruled it a local variant, keep the line and point it at that ruling. An undeclared
 consumer-local meaning or value is **drift, not a local customisation**. Copy-and-own
 protects a repo's edits to its *copies*. It never makes the *meaning* of a shared label
@@ -5257,9 +4651,7 @@ chosen over the two alternatives:
   tooling.
 - **`handbook-sync`** is the one pass that stands inside the consumer with the handbook
   loaded. It is also the only one of the three that sees **the reverse direction**: a
-  handbook change the consumer's own prompts never absorbed. Measured: a label made
-  monotonic upstream while a consumer's triage prompt still said clearing it "is often
-  correct". `colab labels --ensure` creates missing labels and never rewrites an existing
+  handbook change the consumer's own prompts never absorbed. `colab labels --ensure` creates missing labels and never rewrites an existing
   description on its own, so a description can drift in either direction. Since #364 the
   drift is at least visible: `--ensure` and the audit both name every convention label
   whose tracker description differs from the handbook's, and
@@ -5268,6 +4660,14 @@ chosen over the two alternatives:
 
 The filing obligation still sits with the change. `handbook-sync` is where a skipped one
 gets found (`skills/handbook-sync/SKILL.md` §7).
+
+### Refusals name the next command (#532)
+
+**[Hard — gate: refusal-sites test]** **Every refusal `colab` prints ends with the exact next command
+that gets the user forward**, or says plainly that no command can and who decides. "Retry later"
+counts only when it names what to wait for, and an interactive flow checks each answer when it is
+given. `tools/lib/refusal-sites.test.js` fails on a new refusal without one; older refusals are
+listed in `tools/lib/refusal-sites.known.json`, which only shrinks. Why: [ADR 532](docs/adr/532-refusals-name-the-next-command.md).
 
 ### The fleet registry is private
 
@@ -5286,81 +4686,86 @@ only. Resolution order: `--config` flag > `~/.colab/repos.txt` > bundled example
    asks a repo predating one of the newer axes ("Predates an axis", below). Each question
    is asked as a human answers it, not as a schema field name:
 
-   | # | ask it like this | writes | values |
-   |---|---|---|---|
-   | 1 | does a deploy target exist *today* ([§2](#2-tiers)), and how is it reached — a tag gates production, the promotion itself deploys, a human runs a runbook, or nothing is live yet? | `production` + `deploy` | a URL (or none) + `push-main` / `tag` / `manual` / `none` |
-   | 2 | who else works here? | [`room`](#room--who-else-is-here) | `solo` / `team` / `public` |
-   | 3 | **what would break if you merged something wrong here?** | [`exposure`](#exposure--what-consumes-a-merge-here) | `none` / `self` / `live` / `released` |
-   | 4 | Should a human ever be allowed to commit straight to this repo's trunk checkout, alongside worktree sessions? free allows it with no runtime restriction; direct allows it and additionally declares intent for a stronger guarantee later (declared today, not yet enforced — CONVENTIONS.md §2); isolated vetoes it outright, human or not. | [`writes`](#writes--the-trunk-direct-veto-and-the-two-things-that-make-a-branch-mandatory) | `free` / `direct` / `isolated` (unanswered reads as `free` — #283) |
-   | 5 | by what path does a commit reach something that runs it? (a list — several may apply) | [`channels`](#channels--by-what-path-does-code-reach-the-thing-that-runs-it) | `workflow` / `hook` / `procedure` / `checkout` / `artifact` / `data` / `none` |
+   | # | ask it like this | writes | values | at adoption |
+   |---|---|---|---|---|
+   | 1 | does a deploy target exist *today* ([§2](#2-tiers)), and how is it reached — a tag gates production, the promotion itself deploys, a human runs a runbook, or nothing is live yet? | `production` + `deploy` | a URL (or none) + `push-main` / `tag` / `manual` / `none` | **asked** — the URL only when `deploy` is not `none` |
+   | 2 | who else works here? | [`room`](#room--who-else-is-here) | `solo` / `team` / `public` | optional — later, `--axis room` |
+   | 3 | **what would break if you merged something wrong here?** | [`exposure`](#exposure--what-consumes-a-merge-here) | `none` / `self` / `live` / `released` | **asked** — a human's answer for `none`/`self` |
+   | 4 | Should a human ever be allowed to commit straight to this repo's trunk checkout, alongside worktree sessions? free allows it with no runtime restriction; direct allows it and additionally declares intent for a stronger guarantee later (declared today, not yet enforced — CONVENTIONS.md §2); isolated vetoes it outright, human or not. | [`writes`](#writes--the-trunk-direct-veto-and-the-two-things-that-make-a-branch-mandatory) | `free` / `direct` / `isolated` (unanswered reads as `free` — #283) | optional — later, `--axis writes` |
+   | 5 | by what path does a commit reach something that runs it? (a list — several may apply) | [`channels`](#channels--by-what-path-does-code-reach-the-thing-that-runs-it) | `workflow` / `hook` / `procedure` / `checkout` / `artifact` / `data` / `none` | optional — later, `--axis channels` |
+
+   **Adoption asks only what changes a gate (#533).** Questions 1 and 3 decide the gate
+   count; 2, 4 and 5 are optional in the schema and legal absent. So a fresh adoption
+   leaves them unanswered and prints one line naming them and the `colab adopt --axis
+   <row>` that answers each later. Their flag (`--room`, `--writes`, `--channels`) still
+   answers one in the same run.
+
+   **[Hard — gate: adopt human gate]** **The human step comes first, not last (#522).** Answering question 3 with `none` or
+   `self` is a human's act (below). An agent driving an adoption should know that before it
+   starts, not learn it from the final refusal: when `colab adopt` cannot finish without a
+   human, the **first** line it prints is the one command the human runs, the answers this
+   run already had filled in (`COLAB_HUMAN=1 colab adopt --production none --deploy none
+   --exposure none … --answered-by "<name>"`). At a terminal, the exposure answer is checked
+   against the repo's shape the moment it is given and re-asked with the reason, rather than
+   refused after every other question.
 
    Question 1 writes `production` and `deploy`, never `tier` directly — `tier` is a pure
    function of those two answers (`tools/lib/adopt.js:deriveTier`: no production → `B`;
-   production + `push-main` → `C`; production + `tag`/`manual` → `A`), so asking for the
-   letter directly would be asking for a value that is always derivable from a more basic
-   answer already on record — the same drift-by-redundancy this whole model exists to stop.
+   production + `push-main` → `C`; production + `tag`/`manual` → `A`).
 
-   Question 3 is phrased this way — never "who consumes this?" — per the ruling on #128:
-   the person answering is standing in the repo, not reading a schema, and "what breaks"
-   is the question they can actually answer.
+   Question 3 is phrased this way — never "who consumes this?".
 
    **Detected, never asked:** `trunk` (the default branch), `stack` and toolchain pins
    (read from the repo's own manifests), `ports` (existing config or reservations). Do not
    ask a human something the repo already states.
 
-   **Derived, never asked:** gate count, CI role and thoroughness, ceremony weight, whether
-   a branch is mandatory, the rollback obligation. Every one of these follows from the
-   answers above; a checklist that also prompts for a derived value is exactly how the
-   fields drift apart from each other again (the failure this whole model exists to stop).
+   **Derived, never asked:** gate count, CI role and thoroughness, ceremony weight,
+   whether a branch is mandatory, the rollback obligation. Every one of these follows from
+   the answers above.
 
-   **Two entry states, one set.** A repo with nothing recorded yet asks all five, right
-   now, during first-time adoption. A repo that already adopted before one of the newer
-   axes existed asks only the axes it is missing — same five questions, same wording, at
-   sync time ("Predates an axis", `handbook-sync`). Building this once and pointing both
-   moments at it is the point; do not let a sync grow its own paraphrase of these five
-   rows.
+   **Two entry states, one set.** A repo with nothing recorded yet asks the two gating
+   questions now, during first-time adoption, and leaves the optional three for later. A
+   repo that already adopted before one of the newer axes existed asks only the gating
+   axes it is missing (the optional three stay optional there too) — same five questions,
+   same wording, at sync time ("Predates an axis", `handbook-sync`); do not let a sync
+   grow its own paraphrase of these five rows.
 
    **Asking is not the same as writing.** A sync (or a first-time adoption interrupted
    partway through) records a human's answer; it never fills a missing key on its own,
    and it never "resolves" the `production:`-pairing advisory below by deleting a key
    that was already declared. Declaring must never be riskier than omitting.
 
-   **The exposure asymmetry survives here too.** An agent walking through this checklist
+   **[Hard — gate: adopt human gate]** **The exposure asymmetry survives here too.** An agent walking through this checklist
    may *propose* `live` or `released` when it finds committed evidence for one (a non-null
    `production:`, a committed deploy path) — never `none` or `self`. Omission reports as
    `null` (undeclared, and legal); only a human answer may write down that nothing, or only
    the room, consumes a merge here.
 
-   **`colab adopt` executes this checklist.** It detects what a repo already states, asks
-   a human only what could not be detected (flags, or an interactive prompt at a
-   terminal), derives the rest, and writes `.github/project.yml` in one act — the same
-   shape `colab template` already uses for copy-and-stamp. A row already answered is
-   skipped; `--axis <row>` forces a re-ask on purpose (the "going live" ladder below asks
-   for exactly that). Lowering an existing `exposure` — or a first declaration of
-   `none`/`self` — requires a human: an interactive terminal, or `COLAB_HUMAN=1` together
-   with `--answered-by <name>` (the same bar `colab ship`'s gates use, and no stronger —
-   see the command's `--help` for the honest limit). Raising, or a first declaration of
-   `live`/`released`, needs nothing beyond the falsifier/shape clearance described above —
-   an agent may run this unattended for exactly the direction CONVENTIONS.md [§2](#exposure--what-consumes-a-merge-here)'s asymmetry
-   already allows it to propose. `colab adopt` never runs steps 3 onward below; it prints
-   them as a to-do list on exit. **The five questions above are asked as forced numbered
-   menus (#283)**, not free text — every option is answerable by its number or its literal
-   value — and `exposure` is the only one of the five that carries a skip option (its own
-   fallback, deriving `tier` instead, is a real fallback that consumes the absence; the
-   other four have none, so declining them would just recreate #282's shape under a
-   different row).
+   **[Hard — gate: adopt human gate]** **`colab adopt` executes this checklist.** It
+   detects what a repo already states, asks a human only what could not be detected
+   (flags, or an interactive prompt at a terminal), derives the rest, and writes
+   `.github/project.yml` in one act — the same shape `colab template` already uses for
+   copy-and-stamp. A row already answered is skipped; `--axis <row>` forces a re-ask on
+   purpose (the "going live" ladder below asks for exactly that). Lowering an existing
+   `exposure` — or a first declaration of `none`/`self` — requires a human: an interactive
+   terminal, or `COLAB_HUMAN=1` together with `--answered-by <name>` (the same bar `colab
+   ship`'s gates use, and no stronger — see the command's `--help` for the honest limit).
+   Raising, or a first declaration of `live`/`released`, needs nothing beyond the
+   falsifier/shape clearance described above — an agent may run this unattended for
+   exactly the direction CONVENTIONS.md [§2](#exposure--what-consumes-a-merge-here)'s
+   asymmetry already allows it to propose. `colab adopt` never runs steps 3 onward below;
+   it prints them as a to-do list on exit. **The five questions above are asked as forced
+   numbered menus (#283)**, not free text — every option is answerable by its number or
+   its literal value — and `exposure` is the only one of the five that carries a skip
+   option.
 
-   **Land the descriptor on trunk in the same human act (#481).** On a freshly adopted
-   repo, the first branch is the one that *creates* trunk's rules — the descriptor with
-   the maintainer's grant, and the repo's CI. `colab ship` reads autonomy from the
-   descriptor **trunk** carries, so that branch is judged by rules trunk does not have
-   yet, and a human ends up hand-merging it although the grant was already given. The
-   maintainer's adoption command is the human step, so it can land its own output:
+   **Land the descriptor on trunk in the same human act (#481).** The maintainer's
+   adoption command is the human step, so it can land its own output:
    ```sh
    COLAB_HUMAN=1 colab adopt --exposure self --autonomy auto-trunk \
      --answered-by "<name>" --land          # run on the checkout standing on trunk
    ```
-   `--autonomy auto-trunk` records the grant with the same provenance comment as every
+   **[Hard — gate: adopt autonomy/land gates]** `--autonomy auto-trunk` records the grant with the same provenance comment as every
    answer, behind the same bar as `writes: direct` (it expands what an agent may do);
    `manual` is never gated, and `ceremony: light` refuses it. `--land` commits exactly
    what this run wrote — the descriptor, plus the thin-shell `CLAUDE.md`/`AGENTS.md` when
@@ -5379,12 +4784,11 @@ only. Resolution order: `--config` flag > `~/.colab/repos.txt` > bundled example
    ([`project.schema.md`](project.schema.md#migrations--optional)). None of the five
    questions asks it, so `colab adopt` lists it as the first remaining step, naming the
    candidate layouts it found (`git ls-files`: an uncovered `migrations/` directory, or a
-   directory of tracked `*.sql` files). Until it is declared, the no-new-migrations gate
-   cannot see those files (#449).
-3. **Create the whole label set — twenty-one names, not a subset** (`in-progress`,
+   directory of tracked `*.sql` files).
+3. **Create the whole label set — twenty-three names, not a subset** (`in-progress`,
    `deps-checked`, `agent-filed`, `epic`, `needs-decision`, `decision-recorded`,
    `needs-plan`, `migration-granted`, `needs-migration-grant`, `ci-granted`,
-   `low-priority`, the six `delivery:*`, the three `deferred:*`, and `release-hold`):
+   `low-priority`, `priority:now`, `priority:high`, the six `delivery:*`, the three `deferred:*`, and `release-hold`):
    ```sh
    colab labels --ensure
    ```
@@ -5395,60 +4799,38 @@ only. Resolution order: `--config` flag > `~/.colab/repos.txt` > bundled example
    description differs from the handbook's, and rewrites it only when asked
    (`--refresh-descriptions`, #364) — a description may be a declared local divergence
    ([§8, *Upstream*](#upstream--a-consumer-that-changes-what-a-convention-means-files-it-here-362)).
-   (No `colab` on this machine? The twenty-one `gh label
+   (No `colab` on this machine? The twenty-three `gh label
    create … || true` lines this replaced are recoverable from that file's history.)
 
-   **This count is a hand-typed number restated in at least four places** (here, the
-   `gh label create` fallback line above, `skills/handbook-sync/SKILL.md`, and
-   `tools/lib/codec/labels.js`'s own doc comment) — **none checkable against the others except
-   the one pinned assertion in `tools/lib/labels-ensure-cli.test.js`.** #274: adding
-   `delivery:elsewhere` left three of the four wrong until found by hand. Add a label,
-   bump that test, then grep for the other three prose counts before you're done.
-   What each absence costs, briefly: `in-progress` — the first claim cannot land.
-   `deps-checked` — a readiness check can never tell *free* from *nobody looked*.
-   `agent-filed` — every agent-filed issue reports as human-approved. `epic` — an epic
-   passes every readiness gate and reads as a normal start candidate. `needs-decision` —
-   the blocking-question gate cannot be applied at all. `decision-recorded` — a recorded
-   answer has no positive marker to distinguish it from a label nobody ever applied, so the
-   next mechanical pass re-gates settled work (measured: #127). `needs-plan` —
-   `code-start` always sees "no flag", every session falls back to rung 1.
-   `migration-granted`/`ci-granted` are **not opt-in** (unlike `tracking`) — absence fails
-   malignantly, discovered only when a repo hits the wall with no route past `ship`'s gate
-   at all. `needs-migration-grant` — the plan-time flag a consumer raises before `ship`
-   would refuse has nowhere to land, so the grant request never surfaces until the wall
-   (#230). `low-priority` — a triage pass has no way to say "startable, but ranked last",
-   so a group meant to wait its turn is reported exactly like every other ready group
-   (#268). `delivery:*` — a content push or ops check has no way to say "not a diff" and
-   jams the code pipeline, and a new surface's design issue reads as a code start (#359). `deferred:*` — a triage pass has no way to say "parked, and
-   here is what wakes it", so a deliberate park is indistinguishable from an unexamined
-   issue — measured at 11 + 4 issues misreporting as untriaged across two repos (#279).
+   **This count is a hand-typed number restated in at least four places** (here, the `gh
+   label create` fallback line above, `skills/handbook-sync/SKILL.md`, and
+   `tools/lib/codec/labels.js`'s own doc comment) — **none checkable against the others
+   except the one pinned assertion in `tools/lib/labels-ensure-cli.test.js`.** Add a
+   label, bump that test, then grep for the other three prose counts before you're done.
    This full set is provisioned again on every sync, not only at adoption.
 4. **Add the tier topic** — `gh repo edit <owner>/<repo> --add-topic tier-b` (or
    `tier-c`/`tier-a`).
 5. **Add the handbook pointer to `CLAUDE.md`** — copy
    [`templates/repo-CLAUDE-block.md`](templates/repo-CLAUDE-block.md); create the file if
-   none exists. **Do not skip this** — it is the only reason a future agent discovers
-   these conventions. `colab adopt` writes it for you on a repo adopting for the first
-   time that has no `CLAUDE.md` yet, in the shape below.
+   none exists. **Do not skip this**. `colab adopt` writes it for you on a repo adopting
+   for the first time that has no `CLAUDE.md` yet, in the shape below.
 
    **The instruction-file shape (#417).** Most agent tools read `AGENTS.md`; one reads
    `CLAUDE.md` by name. So:
    - **Repo prose goes in `AGENTS.md`** — what the repo is, how to run and test it,
      pointers into `docs/`. It is the repo's *instruction file*: the one you edit.
-   - **`CLAUDE.md` is a thin shell:** `@AGENTS.md` on its first line, plus the blocks tools
-     look up in `CLAUDE.md` by name — this Conventions block with its stamp, any
-     `Local divergences:` list beside it, and any other tool-managed block that is found by
-     filename. The stamp only works there: the audit, `handbook-sync` and `colab update`
-     never follow the import to find it.
+   - **`CLAUDE.md` is a thin shell:** `@AGENTS.md` on its first line, plus the blocks
+     tools look up in `CLAUDE.md` by name — this Conventions block with its stamp, any
+     `Local divergences:` list beside it, and any other tool-managed block that is found
+     by filename.
    - **No block lives in both files.** A framework generator that supports targets is
-     configured to write `AGENTS.md` **only** (Laravel Boost: its agent/target config). A
-     block in both is loaded twice into every session once `CLAUDE.md` imports `AGENTS.md`,
-     and a generator writing both re-adds the copy after any hand cleanup.
+     configured to write `AGENTS.md` **only** (Laravel Boost: its agent/target config).
    - A repo with only a `CLAUDE.md` is still conforming — the shell is the shape for new
      repos and the target for migrations, not a reason to fail an existing one.
-   - **A fork of an upstream you don't own does not take this shape** — the thin-shell
-     conversion would rewrite a file the upstream keeps editing. Its step 5 is the
-     append-only block in [*A fork of an upstream*](#a-fork-of-an-upstream--a-repo-you-own-that-tracks-one-you-dont-449), below.
+   - **A fork of an upstream you don't own does not take this shape**. Its step 5 is the
+     append-only block in [*A fork of an
+     upstream*](#a-fork-of-an-upstream--a-repo-you-own-that-tracks-one-you-dont-449),
+     below.
 
    The audit holds this shape: its size advisory measures `CLAUDE.md` **plus every in-repo
    file it `@`-imports**, so a bloated `AGENTS.md` behind a tiny shell is still caught; it
@@ -5456,21 +4838,21 @@ only. Resolution order: `--config` flag > `~/.colab/repos.txt` > bundled example
    anywhere but `CLAUDE.md`, when `CLAUDE.md` carries repo prose (`prose-in-claude-md`, with
    the line ranges) and when there is no `AGENTS.md` (`no-agents-md`) — #419. All warnings,
    never failures; `handbook-sync` carries the move as a graft step.
-6. **Make sure CI meets [§7](#7-ci-and-toolchain)'s outcome** — copy a template via
-   `colab template <name>`, which stamps for reconciliation. **On `exposure: released`, this
-   step also wires the release rung ([§6](#6-releases)) — at adoption, not later** (#492): the
-   `release:` block with the route the descriptor's row takes and `version-source: tag`, the
-   release workflow (`templates/release-auto.yml`, its edit points walked), the deploy template
-   for the stack where the tag deploys — copied disarmed, armed by the operator — and a first
-   final, which is the operator's to set because `colab release cut` refuses with none to bump
-   from. A released repo adopted without them never cuts a candidate until someone notices:
-   measured on six adopters in one sweep, and more that had the workflow but no first final.
-   `colab adopt` lists these as step-6 lines; the no-production row's route is a proposal for
-   the human to confirm, never a choice the agent makes.
+6. **Make sure CI meets [§7](#7-ci-and-toolchain)'s outcome** — copy a template via `colab
+   template <name>`, which stamps for reconciliation. **On `exposure: released`, this step
+   also wires the release rung ([§6](#6-releases)) — at adoption, not later** (#492): the
+   `release:` block with the route the descriptor's row takes and `version-source: tag`,
+   the release workflow (`templates/release-auto.yml`, its edit points walked), the deploy
+   template for the stack where the tag deploys — copied disarmed, armed by the operator —
+   and a first final, which is the operator's to set because `colab release cut` refuses
+   with none to bump from. `colab adopt` lists these as step-6 lines; the no-production
+   row's route is a proposal for the human to confirm, never a choice the agent makes.
 7. **Register the repo** — `colab register`, updating both the audit fleet list and the
    reserved-ports aggregation. Unregistered = invisible to the fleet audit.
 8. **Leave existing branches alone** — grandfathered.
 9. **Do not create `dev`** unless the repo is genuinely Tier A or Tier C.
+
+Why, with the measurements: [ADR 539](docs/adr/539-adoption-first-time-rationale.md).
 
 ### Going live: Tier B → Tier C or Tier A
 
@@ -5481,8 +4863,7 @@ Do this **on the day a deploy target exists** — not before.
    repo. One of these must be committed before proceeding.
 2. `git checkout -b dev main && git push -u origin dev`
 3. Set the repo's default branch to `dev`.
-4. **Add `dev` to every CI workflow's trigger branches** — CI that still gates only
-   `main` runs zero checks on your actual work.
+4. **Add `dev` to every CI workflow's trigger branches**.
 5. Update `project.yml`: **C** — `tier: C`, `trunk: dev`, real `production:`,
    `deploy: push-main`. **A** — `tier: A`, `trunk: dev`, real `production:`, and
    `deploy: tag` or `deploy: manual` + `runbook:` — never `push-main`. *Tag-gated
@@ -5495,16 +4876,16 @@ Do this **on the day a deploy target exists** — not before.
    channel (`workflow`, at minimum). Leave `room` and `writes` alone unless who works
    here, or how many units are in flight, genuinely changed too.
 
-Step 1 comes first because `main` only becomes meaningful once something consumes it —
-what must not exist is a `main` that nothing and nobody reads.
+Step 1 comes first. Why, with the measurement: [ADR
+539](docs/adr/539-adoption-tier-transitions-rationale.md).
 
 ### Tier C → Tier A — when the site earns a release ritual
 
-Do this when you find yourself *wanting* to name what shipped — not before, since an
-unused tag ritual decays exactly like an unused branch.
+Do this when you find yourself *wanting* to name what shipped — not before.
 
-1. **Retrigger the deploy workflow on a tag** instead of a `main` push — the whole
-   change; until it lands, the tier claim would be false.
+1. **Retrigger the deploy workflow on a tag** instead of a `main` push — the whole change.
+   Why, with the measurement: [ADR
+   539](docs/adr/539-adoption-tier-transitions-rationale.md).
 2. Update `project.yml`: `tier: A`, `deploy: tag`. `trunk` stays `dev`.
 3. Swap the topic to `tier-a`.
 4. Tag the current `main`, so the first tagged release names what is already live.
@@ -5522,9 +4903,7 @@ Everything above assumes the repo's **owner** is the one adopting. Sometimes tha
 the case. The fleet has to build in a repository whose owner has not adopted this
 handbook, who reviews and merges changes himself, and where committing handbook files is
 not an option. That repo can still be driven by `code-start` → `code-wrap` → `colab ship`,
-and nothing lands in the owner's history (#393). The measured case: a private repo owned
-by another developer, default branch `master`, no handbook files, with the fleet building
-a service layer on a long-lived branch of its own.
+and nothing lands in the owner's history (#393).
 
 **The minimum is small, and all of it stays out of the owner's repo:**
 
@@ -5537,16 +4916,15 @@ a service layer on a long-lived branch of its own.
 | registry entry | the operator's machine | already local |
 | CI templates, CODEOWNERS, the `CLAUDE.md` block, the topic | **not needed** | nothing in claim, start or ship gates on them, and each would be a commit or setting the owner never asked for |
 
-**The pattern: `trunk:` names the fleet's own integration branch** (e.g.
-`<prefix>/integration`), never the owner's default branch. Claims, worktrees, grading and
-`colab ship` then work unchanged. Sessions branch off the integration branch, `ship`
-merges into it, and the owner's trunk is reached only by a pull request he reviews and
-merges himself — `colab deliver`, below. Declare **`exposure: self`**: a merge onto the integration branch reaches
-only the fleet, and the owner's review is the next gate. `self` is human-gated
-([§2](#2-tiers)), as always. The legacy fallback does not work here, because it would
-derive `tier: B`, which requires trunk `main`, and the integration branch is never `main`.
+**[Hard — gate: adopt human gate]** **The pattern: `trunk:` names the fleet's own
+integration branch** (e.g. `<prefix>/integration`), never the owner's default branch.
+Claims, worktrees, grading and `colab ship` then work unchanged. Sessions branch off the
+integration branch, `ship` merges into it, and the owner's trunk is reached only by a pull
+request he reviews and merges himself — `colab deliver`, below. Declare **`exposure:
+self`**: a merge onto the integration branch reaches only the fleet, and the owner's
+review is the next gate. `self` is human-gated ([§2](#2-tiers)), as always.
 
-**One command does it** (a human answers the exposure row, at a terminal or with
+**[Hard — gate: adopt human gate]** **One command does it** (a human answers the exposure row, at a terminal or with
 `COLAB_HUMAN=1 --answered-by <name>`):
 
 ```sh
@@ -5555,7 +4933,7 @@ colab adopt --local --trunk <prefix>/integration --production none --deploy none
   --exposure self --stack "<text>"
 ```
 
-It refuses when the descriptor is **tracked** (the repo is adopted, so use plain `adopt`),
+**[Hard — gate: adopt --local refuses]** It refuses when the descriptor is **tracked** (the repo is adopted, so use plain `adopt`),
 when `--trunk` is missing, and when `--trunk` names the owner's own trunk. It appends the
 exclude lines *before* writing anything, writes the descriptor into the main checkout
 (where every worktree's `colab` reads it — a linked worktree never carries the file),
@@ -5581,41 +4959,37 @@ colab deliver --dry                 # read-only: what is pending, and the delive
 COLAB_HUMAN=1 colab deliver         # open (or refresh) ONE PR integration → owner's branch
 ```
 
-- **It never merges.** The owner merges by merge commit, squash or rebase — his call. No
+- **[Hard — gate: owner-branch guard]** **It never merges.** The owner merges by merge commit, squash or rebase — his call. No
   colab command moves his branch: `ship`, the ship batch and `promote` refuse a push to it,
   and `COLAB_HUMAN=1` does not lower that.
-- **Delivered is read from PR state.** After a squash or rebase no integration commit is an
-  ancestor of the owner's branch, so ancestry cannot answer "was this delivered". The last
-  merged delivery PR's head is the boundary; the next run offers only what landed after it,
-  in a fresh PR. An open PR is refreshed (its head follows the integration branch on its
-  own), never duplicated.
-- **A rejection stops it.** If the newest delivery PR was closed without a merge, `deliver`
+- **Delivered is read from PR state.** The last merged delivery PR's head is the boundary;
+  the next run offers only what landed after it, in a fresh PR. An open PR is refreshed
+  (its head follows the integration branch on its own), never duplicated.
+- **[Hard — gate: deliver refuses]** **A rejection stops it.** If the newest delivery PR was closed without a merge, `deliver`
   reports it (exit 3) and opens nothing until a human re-offers the batch with `--reopen`.
 - **The PR carries no closing keywords.** Its issues already closed when their work landed
   on the integration branch; the body lists them as "carried".
-- **Opening or editing the PR needs a human** — it is an outward act on somebody else's
+- **[Hard — gate: deliver human gate]** **Opening or editing the PR needs a human** — it is an outward act on somebody else's
   repo. A scheduled driver may run `--dry` and read the state (`waiting-on-owner`,
   `nothing-to-deliver`, `ready`, `rejected`); it never acts on the owner's branch.
-- **The core-path rule still applies on top** ([§4](#4-branches-and-commits), #350): a branch
+- **[Hard — gate: core-path PR gate]** **The core-path rule still applies on top** ([§4](#4-branches-and-commits), #350): a branch
   touching a CODEOWNERS path needs a non-author approval before it lands on the integration
   branch.
 
-A PR per issue that the owner merges one by one is a different shape, deferred until a repo
-asks for it; the measured case wants the batch.
+A PR per issue that the owner merges one by one is a different shape, deferred until a
+repo asks for it.
 
 **Traps, each measured:**
 
 - **A `.gitignore` entry is itself a tracked file.** Hiding the descriptor that way is
   exactly the commit you are avoiding. The local-only mechanism is `.git/info/exclude`
   (in the common git dir, so it covers every worktree).
-- **Scheduled autopilot must stay OFF on such a repo.** It would triage and start the
-  **owner's** issues, not only the fleet's, and there is no way today to scope it to the
-  fleet's issues.
+- **Scheduled autopilot must stay OFF on such a repo.**
 - **`colab ship` still gates on CI at the integration branch's head.** The workflows are
   the owner's. If none runs on push to the integration branch, every ship reads "no run"
   as human-gated and needs a `ci-granted` exemption per branch. Find out which case you
   are in before the first ship. The audit reports an ungated integration branch as an
-  advisory here, not a failure, because the fix would be a commit to his repo.
+  advisory here, not a failure.
 - **The main checkout must rest on the integration branch**, not on the owner's trunk
   where a fresh clone lands. Otherwise `ship` refuses with "trunk checkout not ready".
 - **A dashboard's cached repo scan does not pick the repo up** until it is refreshed.
@@ -5626,61 +5000,47 @@ accident the mechanism exists to prevent: a descriptor that is untracked but **n
 excluded, one `git add -A` away from the owner's history. A remote audit reads the forge,
 where the file never exists, so only a local audit can see this state.
 
-**Prefer full adoption instead** whenever the owner is willing to carry the files. It is
-the only way the conventions reach anyone who clones the repo without this machine's
-local state: a teammate, CI, the owner's own agents. Local adoption is a working
-arrangement for one operator's clones, not a substitute.
+**Prefer full adoption instead** whenever the owner is willing to carry the files. Local
+adoption is a working arrangement for one operator's clones, not a substitute. Why, with
+the measured case: [ADR 539](docs/adr/539-adoption-repo-you-dont-own-rationale.md).
 
 ### A fork of an upstream — a repo you own that tracks one you don't (#449)
 
 The two paths above cover a repo you own and a repo you don't. A third shape sits between
-them: **a fork you own that keeps merging from an upstream you don't.** The fork is yours, so
-it adopts in full — descriptor, labels, CI, registration, all committed. But some files in it
-belong to the upstream: its `CLAUDE.md`, its `AGENTS.md`, and often an agent workflow of its
-own. Every edit to one of those is a patch the fork carries forever and re-resolves on every
-upstream merge.
+them: **a fork you own that keeps merging from an upstream you don't.** The fork is yours,
+so it adopts in full — descriptor, labels, CI, registration, all committed. But some files
+in it belong to the upstream: its `CLAUDE.md`, its `AGENTS.md`, and often an agent
+workflow of its own.
 
 **`colab adopt` detects it, never asks.** It looks for a remote named `upstream` whose URL
-differs from `origin`'s. `--fork` asserts the shape when the upstream remote has another name,
-and `--no-fork` denies it when a remote called `upstream` means something else. Nothing is
-written to the descriptor: the remote is the fact, and a key would be a second copy of it that
-could drift.
+differs from `origin`'s. `--fork` asserts the shape when the upstream remote has another
+name, and `--no-fork` denies it when a remote called `upstream` means something else.
+Nothing is written to the descriptor: the remote is the fact.
 
 Four things change from [*Any repo, first-time adoption*](#any-repo-first-time-adoption):
 
-1. **Step 5 is append-only.** Paste [`templates/repo-CLAUDE-block.md`](templates/repo-CLAUDE-block.md)
-   at the **end** of the upstream's `CLAUDE.md`. Leave the upstream's prose where it is, leave
-   `AGENTS.md` alone, and record the append in whatever list the fork keeps of its patches
-   against the upstream. One appended block, at the end, touches no upstream line, so a merge
-   only conflicts if the upstream edits its own last lines. Measured: a block appended this way
-   survived a 588-commit upstream merge untouched. The thin-shell conversion moves every upstream
-   line instead, and conflicts on each upstream change to that file.
-   - **Upstream has no `CLAUDE.md`?** `colab adopt` writes one. With an upstream `AGENTS.md` it is
-     the usual shell (`@AGENTS.md` plus the block). Without one it is the block alone, and adopt
-     writes **no** `AGENTS.md` stub. Every file adopt creates is a file the upstream may add later,
-     and then it conflicts.
-   - **`CLAUDE.local.md` instead** only when the fork must stay byte-identical to the upstream
-     (a pure mirror). That file is never committed, so a teammate, CI or the upstream's own
-     agents cloning the fork never see the conventions. That is the same cost as
-     [*Working in a repo you don't own*](#working-in-a-repo-you-dont-own), paid on a repo you do own.
+1. **Step 5 is append-only.** Paste
+   [`templates/repo-CLAUDE-block.md`](templates/repo-CLAUDE-block.md) at the **end** of
+   the upstream's `CLAUDE.md`. Leave the upstream's prose where it is, leave `AGENTS.md`
+   alone, and record the append in whatever list the fork keeps of its patches against the
+   upstream.
+   - **Upstream has no `CLAUDE.md`?** `colab adopt` writes one. With an upstream
+     `AGENTS.md` it is the usual shell (`@AGENTS.md` plus the block). Without one it is
+     the block alone, and adopt writes **no** `AGENTS.md` stub.
+   - **`CLAUDE.local.md` instead** only when the fork must stay byte-identical to the
+     upstream (a pure mirror).
    - The audit's `prose-in-claude-md` and `no-agents-md` warnings are expected on a fork, and so
      is `handbook-sync`'s offer of the `AGENTS.md` graft. Leave the upstream's files alone and
      decline the graft. Both are warnings, never failures.
-2. **The upstream's agent workflow stays where it is, and the appended block says which flow
-   governs.** An upstream can ship skills and commands under `.claude/skills/` and
-   `.claude/commands/`. Measured: one such skill fired on any "fix / implement / refactor"
-   request, wrote four files per change into the upstream's own spec folder, and opened a pull
-   request. That competes directly with `code-start` → `code-wrap` → `code-ship`. Deleting or
-   editing it is a fork patch with the same merge cost as step 5, so don't. Add one line inside
-   the appended block instead: *work on this fork runs the `code-*` flow; the upstream's
-   workflow is how changes are contributed back to the upstream, not how this fork ships.* An
-   agent reads the upstream's instructions and then this block, so the block is what settles
-   the competition. `colab adopt` names the upstream's skill and command entries in its
-   remaining steps so that this line gets written.
-3. **Declare `migrations:` (step 2) before the first ship.** An upstream's layout is usually
-   not one of the two defaults (measured: `modules/*/sql/*.sql`), and an undeclared layout
-   leaves the no-new-migrations gate blind. This is true of any repo, but a fork inherits
-   someone else's layout and is the likeliest to miss it.
+2. **The upstream's agent workflow stays where it is, and the appended block says which
+   flow governs.** An upstream can ship skills and commands under `.claude/skills/` and
+   `.claude/commands/`. Deleting or editing it is a fork patch with the same merge cost as
+   step 5, so don't. Add one line inside the appended block instead: *work on this fork
+   runs the `code-*` flow; the upstream's workflow is how changes are contributed back to
+   the upstream, not how this fork ships.* `colab adopt` names the upstream's skill and
+   command entries in its remaining steps so that this line gets written.
+3. **Declare `migrations:` (step 2) before the first ship.** Why, with the measurements:
+   [ADR 539](docs/adr/539-adoption-fork-rationale.md).
 4. **The upstream's `CODEOWNERS` is inert here.** Its teams belong to the upstream's org, so
    `colab ship` ignores them and the core-path rule stays off until the fork writes owners of
    its own ([§2, *Core paths*](#core-paths--a-pr-and-a-non-author-approval-before-landing-350)).
@@ -5697,17 +5057,6 @@ Never a real hostname, account handle, filesystem path, internal domain, custome
 partner name — even when the real value is what was measured. Write `build-box-01`,
 not the machine you ran it on.
 
-This is not the secret-scanning rule wearing a different hat. A credential is a secret
-and a scanner finds it; **a hostname is not a secret, so every gate you run passes it**,
-and in a public repo it is published the moment it lands. Git history cannot be recalled
-once anything is cloned or forked, so the only reliable control is never writing the real
-value down.
-
-The cost of complying is zero — an invented value tests exactly as well as a real one,
-because a fixture asserts *shape*, never provenance. We found real machine names in four
-of this repo's own fixtures, one of them inside an asserted output string, with CI green
-throughout and correctly so.
-
 **Where the real value genuinely matters** — a reproduction that only makes sense against
 a specific environment — it belongs in an Issue on a private tracker, not in a tracked
 file. The destination decides, exactly as it does for
@@ -5716,19 +5065,18 @@ file. The destination decides, exactly as it does for
 **The rule has a mechanism, and it is not CI.** `templates/pre-commit-identity` scans
 staged content against a vocabulary of strings the operator says must never be published,
 and `templates/pre-commit-dispatch` composes it with the secret scan a repo already has.
-Pre-commit, deliberately: by the time a workflow runs, the commit exists and may already
-be pushed, and the only remedy left is rewriting published history. **The scanner is
-shipped; the vocabulary never is** — a list of the exact strings an organisation treats as
-sensitive is a precise index of what to look for, so it is supplied by path and kept
-outside every repo. Adoption steps: [`templates/README.md`](templates/README.md).
+**The scanner is shipped; the vocabulary never is** — a list of the exact strings an
+organisation treats as sensitive is a precise index of what to look for, so it is supplied
+by path and kept outside every repo. Adoption steps:
+[`templates/README.md`](templates/README.md).
 
 Two things the hook cannot see, both real. **Repository metadata** — description, topics,
 homepage, the name itself — never passes through git, and it is the first thing a visitor
-reads; that needs a periodic sweep instead (`node audit/audit.mjs --identity`, documented in
-[`audit/README.md`](audit/README.md), reading the same operator-supplied vocabulary and
-refusing to run without one). **A machine with no vocabulary configured** scans nothing, and
-says so on every commit. Neither is a reason to relax the rule above: the rule is the
-control, and both mechanisms are backstops for the day somebody forgets it.
+reads; that needs a periodic sweep instead (`node audit/audit.mjs --identity`, documented
+in [`audit/README.md`](audit/README.md), reading the same operator-supplied vocabulary and
+refusing to run without one). **A machine with no vocabulary configured** scans nothing,
+and says so on every commit. Neither is a reason to relax the rule above. Why, with the
+measurement: [ADR 539](docs/adr/539-adoption-fixtures-rationale.md).
 
 ---
 
@@ -5736,39 +5084,33 @@ control, and both mechanisms are backstops for the day somebody forgets it.
 
 Each of these is something we have actually done.
 
-**A release branch nobody consumes.** A repo adopted `dev` as default but nothing ever
-deployed from `main` — it sat 76 commits behind for months, while a sibling `staging`
-branch was abandoned after a week. *A branch with no pipeline hanging off it decays into
-noise.* Why Tier B is the default, and going-live step 1 is "add the deploy workflow".
+**A release branch nobody consumes.** *A branch with no pipeline hanging off it decays
+into noise.* Why Tier B is the default, and going-live step 1 is "add the deploy
+workflow".
 
-**The same fix opened four times.** With `dev`, `staging`, and `main` all live, one
-timezone fix required four near-identical PRs. *Three tiers without automated promotion
-is a tax on every hotfix.* We use two, deliberately.
+**The same fix opened four times.** *Three tiers without automated promotion is a tax on
+every hotfix.* We use two, deliberately.
 
-**A deploy mechanism nobody used.** A workflow triggers on tag push; it has zero tags —
-every deploy was manual dispatch. *Copy-pasted CI encodes intentions nobody adopted.*
+**A deploy mechanism nobody used.** *Copy-pasted CI encodes intentions nobody adopted.*
 
-**A merge that ships itself — while claiming otherwise.** Two live repos deploy on every
-`main` push and declare Tier A, whose contract says a release artifact gates production.
-*The mechanism is fine; claiming a gate you do not have is not.* Now a finding.
+**A merge that ships itself — while claiming otherwise.** *The mechanism is fine; claiming
+a gate you do not have is not.* Now a finding (`tier: A`/`exposure: released` with
+`deploy: push-main`).
 
-**Docs describing a repo that doesn't exist.** Our most heavily documented repo
-prescribed trunk `main` (actual default `master`), "rebase, never squash" (every commit a
-squash), CI gating on `dev` (workflow skips CI there by design). *An aspirational doc is
-worse than no doc — people trust it.*
+**Docs describing a repo that doesn't exist.** *An aspirational doc is worse than no doc —
+people trust it.*
 
-**Stale branch references in CI.** A repo still gated on `develop`, `master`, and
-`workos` — none of which exist. *Config drifts silently when copied rather than
+**Stale branch references in CI.** *Config drifts silently when copied rather than
 referenced.*
 
-**A conclusion that only ever existed in chat.** A session settled a batch of rules and
-went straight to implementing them — three branches, zero Issues, no issue numbers in
-branch names, no `Closes #N` possible. The code landed; the argument behind it was lost.
-*Work only agreed to in a room is undocumented the moment the room closes.* Why the
-decision goes on an Issue before any file is touched ([§5](#5-claiming-work--how-to-say-im-on-this)).
+**A conclusion that only ever existed in chat.** *Work only agreed to in a room is
+undocumented the moment the room closes.* Why the decision goes on an Issue before any
+file is touched ([§5](#5-claiming-work--how-to-say-im-on-this)).
 
 **A silent version default.** Covered in [§7](#7-ci-and-toolchain) — worth repeating: the
 bug was invisible because CI was green the whole time.
+
+Why, with the stories: [ADR 539](docs/adr/539-anti-patterns-rationale.md).
 
 ---
 
@@ -5796,7 +5138,7 @@ colab landed --worktree <name>                    # landed → teardown, cargo �
 git checkout <base> && git merge --squash feat/<slug>-N   # base = trunk, or a declared line
 gh issue edit N --remove-assignee <claimer> --remove-label in-progress   # both halves — one alone is a half-claim; <claimer> = @me only if you claimed it (§5)
 
-# releasing — Tier A / exposure: released (who tags follows §6's release routes)
+# releasing — exposure: released (legacy tier A; who tags follows §6's release routes)
 git checkout main && git merge --no-ff dev && git push   # --no-ff, never squash
 colab release cut                                        # candidate v1.3.0-rc.N — refuses unless §6's four conditions hold
 git tag v1.3.0 && git push origin v1.3.0                 # final — automatic after 3 clean days where nothing deploys;

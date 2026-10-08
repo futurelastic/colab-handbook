@@ -115,6 +115,75 @@ test('an unroutable address is the same non-event', () => {
   assert.equal(spawn.calls.length, 1, 'notify() must delegate to spawn and return, not perform the request itself');
 });
 
+// ─────────────────────────────────────────────── several receivers (#546)
+
+test('notifyUrl as an array: one child per URL; string and one-entry array behave identically', () => {
+  const A = 'http://127.0.0.1:9000/e', B = 'http://127.0.0.1:9001/e';
+  for (const cfg of [{ notifyUrl: A }, { notifyUrl: [A] }, { notifyUrl: [` ${A} `, A] }]) {
+    const spawn = recordingSpawn();
+    assert.equal(notify(cfg, 'claim', { repo: '/r' }, { spawn }), 'sent');
+    assert.equal(spawn.calls.length, 1, JSON.stringify(cfg));
+    assert.equal(spawn.calls[0][1][3], A);
+  }
+  const spawn = recordingSpawn();
+  assert.equal(notify({ notifyUrl: [A, B] }, 'issue-merged', { repo: '/r', issue: 3 }, { spawn }), 'sent');
+  assert.deepEqual(spawn.calls.map((c) => c[1][3]), [A, B]);
+  assert.equal(spawn.calls[0][1][4], spawn.calls[1][1][4], 'every receiver gets the same event body');
+});
+
+test('notifyUrl array: empty / junk entries are silence; a bad entry is skipped, the good one still sent', () => {
+  for (const cfg of [{ notifyUrl: [] }, { notifyUrl: ['', '  '] }, { notifyUrl: [3, null, {}] }, { notifyUrl: 42 }]) {
+    const spawn = recordingSpawn();
+    assert.equal(notify(cfg, 'claim', { repo: '/r' }, { spawn }), 'silent', JSON.stringify(cfg));
+    assert.equal(spawn.calls.length, 0);
+  }
+  const spawn = recordingSpawn();
+  assert.equal(notify({ notifyUrl: ['file:///etc/passwd', 'http://127.0.0.1:1/x'] }, 'claim', { repo: '/r' }, { spawn }), 'sent');
+  assert.deepEqual(spawn.calls.map((c) => c[1][3]), ['http://127.0.0.1:1/x']);
+});
+
+test('one receiver whose spawn throws does not stop delivery to the next', () => {
+  const seen = [];
+  const spawn = (_exe, args) => {
+    if (args[3].includes(':1/')) throw new Error('EAGAIN');
+    seen.push(args[3]);
+    return { unref() {} };
+  };
+  assert.equal(notify({ notifyUrl: ['http://127.0.0.1:1/x', 'http://127.0.0.1:9001/x'] }, 'claim', { repo: '/r' }, { spawn }), 'sent');
+  assert.deepEqual(seen, ['http://127.0.0.1:9001/x']);
+});
+
+test('delivery: a dead receiver does not stop the live one getting the event (real children)', async () => {
+  const seen = [];
+  const server = http.createServer((req, res) => {
+    let body = '';
+    req.on('data', (c) => { body += c; });
+    req.on('end', () => { seen.push(body); res.end('{}'); });
+  });
+  await new Promise((res) => server.listen(0, '127.0.0.1', res));
+  const live = `http://127.0.0.1:${server.address().port}/api/events`;
+  try {
+    const arrived = new Promise((resolve) => server.once('request', () => setTimeout(resolve, 50)));
+    // The dead one first: if delivery were sequential in one child, it would be in the live one's way.
+    const r = notify({ notifyUrl: ['http://127.0.0.1:1/api/events', live] }, 'issue-closed', { repo: '/r', issue: 9, payload: { reason: 'completed' } });
+    assert.equal(r, 'sent');
+    await Promise.race([arrived, new Promise((_, rej) => setTimeout(() => rej(new Error('no event reached the live receiver within 5s')), 5000))]);
+    assert.equal(seen.length, 1);
+    assert.equal(JSON.parse(seen[0]).kind, 'issue.closed');
+  } finally {
+    server.close();
+  }
+});
+
+test('storedNotifyUrl: none → absent, one → plain string, several → array', () => {
+  const { storedNotifyUrl, configuredUrls } = require('./notify.js');
+  assert.equal(storedNotifyUrl([]), undefined);
+  assert.equal(storedNotifyUrl(['http://a/x']), 'http://a/x');
+  assert.deepEqual(storedNotifyUrl(['http://a/x', 'http://b/x']), ['http://a/x', 'http://b/x']);
+  assert.deepEqual(configuredUrls({ notifyUrl: 'http://a/x' }), ['http://a/x']);
+  assert.deepEqual(configuredUrls({}), []);
+});
+
 test('a spawn that throws is swallowed, not propagated', () => {
   // Every call site sits after the command has already succeeded, so an exception escaping notify()
   // would turn a completed claim into a failed one. Under process pressure spawn genuinely throws.

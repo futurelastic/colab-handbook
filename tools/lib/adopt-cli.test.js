@@ -190,9 +190,11 @@ function colabWithOpenStdin(fx, args, { ceilingMs = 30_000, envOverrides = {} } 
 // #311: this used to assert `elapsed < 1000ms`, a timing proxy for the real property — "refuses
 // instead of waiting on a TTY read" — and flaked at 1092ms under ~16 concurrent sessions. It now
 // asserts the property itself: with stdin held open, the process ends on its own.
+// #533: channels is optional and no longer asked by default — the stdin property is now proven on
+// a FORCED row (--axis channels), which is the remaining way an optional row gets asked.
 test('incomplete descriptor, no flags, no TTY: refuses without waiting on stdin, names the exact missing rows, writes nothing', async () => {
   const fx = fixture(fullYml({ channels: undefined }));
-  const r = await colabWithOpenStdin(fx, ['adopt', '--repo', fx.work, '--no-verify']);
+  const r = await colabWithOpenStdin(fx, ['adopt', '--repo', fx.work, '--no-verify', '--axis', 'channels']);
   assert.strictEqual(r.killed, false, `still running at the ceiling with stdin open — it is waiting for input it will never get\nstderr so far:\n${r.err}`);
   assert.strictEqual(r.signal, null, `exited by signal ${r.signal}, not on its own`);
   assert.notStrictEqual(r.code, 0);
@@ -200,6 +202,75 @@ test('incomplete descriptor, no flags, no TTY: refuses without waiting on stdin,
   assert.match(r.err, /--channels/);
   const raw = fs.readFileSync(path.join(fx.work, '.github', 'project.yml'), 'utf8');
   assert.ok(!/channels:/.test(raw), 'must not have written channels on refusal');
+});
+
+// --------------------------------------------------------------- #533 — ask only what changes a gate
+
+test('#533: optional rows missing (room/writes/channels), gating rows answered: no prompt, nothing written, one line names --axis', () => {
+  const fx = fixture(fullYml({ channels: undefined, room: undefined, writes: undefined }));
+  const before = fs.readFileSync(path.join(fx.work, '.github', 'project.yml'), 'utf8');
+  const r = colab(fx, ['adopt', '--repo', fx.work, '--no-verify']);
+  assert.strictEqual(r.code, 0, r.err);
+  assert.match(r.out, /not asked \(optional, legal absent\): room, writes, channels — answer later with `colab adopt --axis room,writes,channels`/);
+  assert.strictEqual(fs.readFileSync(path.join(fx.work, '.github', 'project.yml'), 'utf8'), before);
+});
+
+test('#533: an optional row\'s own flag still answers it without --axis', () => {
+  const fx = fixture(fullYml({ room: undefined }));
+  const r = colab(fx, ['adopt', '--repo', fx.work, '--room', 'team', '--no-verify']);
+  assert.strictEqual(r.code, 0, r.err);
+  assert.match(fs.readFileSync(path.join(fx.work, '.github', 'project.yml'), 'utf8'), /room: team/);
+});
+
+test('#533: --deploy none implies production: null — the production row is not left missing', () => {
+  const fx = fixture(undefined);
+  const r = colab(fx, ['adopt', '--repo', fx.work, '--deploy', 'none', '--exposure', 'none', '--stack', 'docs', '--answered-by', 'tester', '--no-verify'], { COLAB_HUMAN: '1' });
+  assert.strictEqual(r.code, 0, r.err);
+  const raw = fs.readFileSync(path.join(fx.work, '.github', 'project.yml'), 'utf8');
+  assert.match(raw, /^production: null$/m);
+  assert.match(raw, /^deploy: none$/m);
+  assert.ok(!/^(room|writes|channels):/m.test(raw), `optional rows must stay absent:\n${raw}`);
+});
+
+// --------------------------------------------------------------- #522 — a single trunk, any spelling
+
+test('#522: an existing "master"-default, no-production repo adopts as exposure: none without renaming anything', () => {
+  const fx = fixture(undefined, { branch: 'master' });
+  fx.g(fx.work, 'branch', 'feat/old-thing'); // an old feature branch is not a second long-lived line
+  const r = colab(fx, ['adopt', '--repo', fx.work, '--production', 'none', '--deploy', 'none', '--exposure', 'none', '--stack', 'docs', '--answered-by', 'tester', '--json'], { COLAB_HUMAN: '1' });
+  assert.strictEqual(r.code, 0, r.err);
+  const raw = fs.readFileSync(path.join(fx.work, '.github', 'project.yml'), 'utf8');
+  assert.match(raw, /^exposure: none$/m);
+  assert.match(raw, /^trunk: master$/m);
+  const j = JSON.parse(r.out);
+  assert.ok(!j.verify.findings.some((f) => f.level === 'fail' && /single trunk|requires trunk/.test(f.text || '')), JSON.stringify(j.verify.findings));
+});
+
+test('#522: a "main" branch beside a "master" trunk is still refused (exit 5), nothing written', () => {
+  const fx = fixture(undefined, { branch: 'master' });
+  fx.g(fx.work, 'branch', 'main');
+  const r = colab(fx, ['adopt', '--repo', fx.work, '--production', 'none', '--deploy', 'none', '--exposure', 'none', '--stack', 'docs', '--answered-by', 'tester', '--no-verify'], { COLAB_HUMAN: '1' });
+  assert.strictEqual(r.code, 5, r.err);
+  assert.match(r.err, /a "main" branch exists beside it/);
+  assert.strictEqual(fs.existsSync(path.join(fx.work, '.github', 'project.yml')), false);
+});
+
+test('#522: a human-gated refusal leads with the ONE runnable command, answers filled in', () => {
+  const fx = fixture(undefined);
+  const r = colab(fx, ['adopt', '--repo', fx.work, '--deploy', 'none', '--exposure', 'self', '--stack', 'docs', '--no-verify']);
+  assert.strictEqual(r.code, 3, r.err);
+  const first = r.err.split('\n').find(Boolean);
+  assert.match(first, /COLAB_HUMAN=1 colab adopt .*--production none --deploy none --exposure self --stack docs --answered-by "<your name>"/);
+});
+
+test('#522: no flags, no TTY on a fresh repo — the first line is the human command, only the gating rows', () => {
+  const fx = fixture(undefined);
+  const r = colab(fx, ['adopt', '--repo', fx.work, '--no-verify']);
+  assert.notStrictEqual(r.code, 0);
+  const lines = r.err.split('\n').filter(Boolean);
+  assert.match(lines[0], /a human finishes this adoption/);
+  assert.match(lines[1], /COLAB_HUMAN=1 colab adopt --production .* --deploy .* --exposure /);
+  assert.ok(!/--room|--writes|--channels/.test(lines[1]), lines[1]);
 });
 
 test('a fresh repo with no .github/project.yml at all, no flags, no TTY: refuses, file still does not exist', () => {

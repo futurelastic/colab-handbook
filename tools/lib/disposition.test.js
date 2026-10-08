@@ -343,3 +343,16 @@ test('every kind answers with a closed-set authority and a reason', () => {
     assert.ok(Array.isArray(v.blockers), kind);
   }
 });
+
+test('#560: hold — a repo-declared thresholds.hold-stale-days moves the boundary', () => {
+  const project = { trunk: 'main', thresholds: { 'hold-stale-days': 45 } };
+  const at = (ageDays) => d.classify({ kind: 'hold', project, wake: { reviewBy: '2026-01-01', ageDays } });
+  assert.equal(at(d.HOLD_STALE_DAYS + 1).authority, d.AGENT, '31 days is not stale under a declared 45');
+  assert.equal(at(45).authority, d.AGENT, 'the declared boundary itself is not yet stale');
+  const v = at(46);
+  assert.equal(v.authority, d.HUMAN);
+  assert.match(v.why, /45 d is this repo's thresholds\.hold-stale-days/);
+  // A malformed declaration falls back to the default, never to a different behaviour.
+  const bad = { trunk: 'main', thresholds: { 'hold-stale-days': 0 } };
+  assert.equal(d.classify({ kind: 'hold', project: bad, wake: { reviewBy: '2026-01-01', ageDays: 31 } }).authority, d.HUMAN);
+});

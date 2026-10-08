@@ -301,6 +301,118 @@ test('human row: an agent run stops at candidate-ready with the handoff; the hum
   assert.match(fx.g('tag', '-l', '--format=%(contents)', 'v1.2.1'), /Finalized by: Ops/);
 });
 
+test('#566 human row: the run that cut the candidate was cancelled — an older green run at the same commit that cut nothing does not vouch for it', () => {
+  const fx = fixture(HUMAN_YML);
+  const rc = cutCandidate(fx, 1);
+  const sha = fx.g('rev-parse', 'HEAD');
+  const cutMs = Date.parse(fx.g('tag', '-l', '--format=%(taggerdate:iso-strict)', rc));
+  const at = (min) => new Date(cutMs + min * 60000).toISOString();
+  const row = (over) => ({ headSha: sha, status: 'completed', conclusion: 'success', workflowName: 'Release (auto)', event: 'workflow_run', ...over });
+  writeState(fx, (s) => {
+    s.runsAtCommit = [
+      row({ databaseId: 902, createdAt: at(-3), updatedAt: at(25), conclusion: 'cancelled' }), // cut rc, then its publish was cancelled
+      row({ databaseId: 901, createdAt: at(-60), updatedAt: at(-55) }), // "nothing to cut" — green
+      row({ databaseId: 1, createdAt: at(-90), updatedAt: at(-70), workflowName: 'ci', event: 'push' }),
+    ];
+  });
+  const refused = finalize(fx, ['--dry']);
+  assert.strictEqual(refused.body.state, 'refused', refused.out + refused.err);
+  const c = refused.body.checks.find((x) => x.condition === 'cut-run');
+  assert.strictEqual(c.ok, false);
+  assert.match(c.detail, /Release \(auto\) run 902 concluded cancelled/);
+  assert.ok(refused.body.checks.find((x) => x.condition === 'full-suite').ok, 'full-suite alone still sets the cancelled run aside (#461) — the cut-run check is what refuses');
+  assert.ok(!refused.body.handoff, 'no finalize command is handed over');
+
+  writeState(fx, (s) => { s.runsAtCommit[0].conclusion = 'success'; });
+  const ready = finalize(fx, ['--dry']);
+  assert.strictEqual(ready.body.state, 'candidate-ready', ready.out + ready.err);
+  assert.ok(ready.body.checks.find((x) => x.condition === 'cut-run').ok);
+});
+
+test('#549 human row, test-period 0d: a candidate cut minutes ago finalizes on the human bar; --auto posts candidate-ready at once', () => {
+  const fx = fixture(HUMAN_YML + 'release:\n  test-period: 0d\n');
+  const rc = cutCandidate(fx, 0);
+  const ready = finalize(fx, ['--auto']);
+  assert.strictEqual(ready.code, 0, ready.out + ready.err);
+  assert.strictEqual(ready.body.state, 'candidate-ready');
+  assert.strictEqual(ready.body.testPeriodDays, 0);
+  assert.ok(!originTags(fx).includes('v1.2.1'), '--auto never tags a human final');
+  const comments = tracking(fx)[0].comments.map((c) => c.body);
+  assert.ok(comments.some((b) => new RegExp(`${rc.replace(/\./g, '\\.')} is ready`).test(b)), 'candidate-ready is posted on the first run, not after 3 days');
+  assert.ok(comments.some((b) => /no test period on this repo/.test(b)), 'the picked-up comment names no period, not a zero-length window');
+
+  const done = finalize(fx, ['--tag', rc, '--answered-by', 'Ops'], { env: { COLAB_HUMAN: '1' } });
+  assert.strictEqual(done.code, 0, done.out + done.err);
+  assert.strictEqual(done.body.state, 'finalized');
+  assert.strictEqual(done.body.checks.find((c) => c.condition === 'test-period').required, false);
+  assert.ok(originTags(fx).includes('v1.2.1'));
+  fx.g('fetch', '-q', '--tags', 'origin');
+  assert.match(fx.g('tag', '-l', '--format=%(contents)', 'v1.2.1'), /Test period: none/);
+});
+
+/** #548: keep every listed commit green in the by-commit run list (commit() keeps only the newest). */
+function greenAt(fx, shas) {
+  writeState(fx, (s) => { s.runsAtCommit = shas.map((sha, i) => ({ headSha: sha, status: 'completed', conclusion: 'success', workflowName: 'ci', event: 'push', createdAt: new Date().toISOString(), databaseId: 80 + i })); });
+}
+
+test('#548 human row: --tag on an OLDER candidate whose own period elapsed clean finalizes it while newer ones keep testing — and stays open for the next version', () => {
+  const fx = fixture(HUMAN_YML);
+  const oldSha = fx.g('rev-parse', 'HEAD');
+  const old = cutCandidate(fx, 6); // v1.2.1-rc.1
+  finalize(fx); // opens release: v1.2.1 — the older version's record, as a daily run would have
+  ageTracking(fx, 7);
+  greenAt(fx, [oldSha, commit(fx, 'feat.txt', 'feat: a newer feature')]);
+  const newer = cutCandidate(fx); // v1.3.0-rc.1, minutes old
+  assert.deepStrictEqual([old, newer], ['v1.2.1-rc.1', 'v1.3.0-rc.1']);
+  finalize(fx); // opens release: v1.3.0
+  // The newer candidate is red: trunk failed half a day ago — after the older one's window closed.
+  writeState(fx, (s) => { s.runsSince = [{ headSha: 'c'.repeat(40), status: 'completed', conclusion: 'failure', workflowName: 'ci', event: 'push', createdAt: ago(0.5), databaseId: 70 }]; });
+
+  const ready = finalize(fx, ['--tag', old, '--dry']);
+  assert.strictEqual(ready.body.state, 'candidate-ready', JSON.stringify(ready.body.checks, null, 2));
+  assert.strictEqual(ready.body.candidate.tag, old);
+  assert.match(ready.body.handoff, /--tag v1\.2\.1-rc\.1 /);
+  assert.strictEqual(ready.body.checks.find((c) => c.condition === 'trunk-green').ok, true, 'the red run is outside its own window');
+
+  const done = finalize(fx, ['--tag', old, '--answered-by', 'Ops'], { env: { COLAB_HUMAN: '1' } });
+  assert.strictEqual(done.code, 0, done.out + done.err);
+  assert.strictEqual(done.body.state, 'finalized');
+  assert.ok(originTags(fx).includes('v1.2.1'));
+  assert.strictEqual(fx.g('rev-parse', 'v1.2.1^{commit}'), fx.g('rev-parse', `${old}^{commit}`));
+  fx.g('fetch', '-q', '--tags', 'origin');
+  assert.match(fx.g('tag', '-l', '--format=%(contents)', 'v1.2.1'), /Candidate: v1\.2\.1-rc\.1\n[\s\S]*an older candidate, judged on its own clock \(newer, still open: v1\.3\.0-rc\.1\)/);
+  const byVersion = Object.fromEntries(tracking(fx).map((i) => [/version=(\S+)/.exec(i.body)[1], i]));
+  assert.strictEqual(byVersion['v1.2.1'].state, 'CLOSED');
+  assert.strictEqual(byVersion['v1.3.0'].state, 'OPEN', 'the newer version is not superseded by an older final');
+  assert.ok(!byVersion['v1.3.0'].comments.some((c) => /Superseded/.test(c.body)));
+});
+
+test('#548 human row: --tag on an older candidate still testing, or red inside its own window, is not finalized', () => {
+  const fx = fixture(HUMAN_YML);
+  const oldSha = fx.g('rev-parse', 'HEAD');
+  const old = cutCandidate(fx, 2);
+  greenAt(fx, [oldSha, commit(fx, 'more.txt', 'fix: another')]);
+  cutCandidate(fx);
+  finalize(fx);
+  ageTracking(fx, 7);
+  const testing = finalize(fx, ['--tag', old, '--answered-by', 'Ops'], { env: { COLAB_HUMAN: '1' } });
+  assert.strictEqual(testing.code, 1);
+  assert.strictEqual(testing.body.state, 'testing', 'the human bar never shortens an older candidate\'s own period');
+  assert.strictEqual(testing.body.periodEndsAt > new Date().toISOString(), true);
+
+  writeState(fx, (s) => { s.runsSince = [{ headSha: 'd'.repeat(40), status: 'completed', conclusion: 'failure', workflowName: 'ci', event: 'push', createdAt: ago(1), databaseId: 71 }]; });
+  const red = finalize(fx, ['--tag', old, '--answered-by', 'Ops'], { env: { COLAB_HUMAN: '1' } });
+  assert.strictEqual(red.body.state, 'needs-new-candidate', JSON.stringify(red.body.checks, null, 2));
+  assert.ok(!originTags(fx).includes('v1.2.1'));
+});
+
+test('#549 an automatic-final row cannot declare test-period 0d — finalize refuses on the invalid block', () => {
+  const fx = fixture(AUTO_YML + 'release:\n  test-period: 0d\n');
+  const r = finalize(fx, ['--dry']);
+  assert.strictEqual(r.code, 1, r.out + r.err);
+  assert.match(JSON.stringify(r.body || r.err), /test-period: 0d widens/);
+});
+
 // ---- --auto (#423) ------------------------------------------------------------------------------
 
 /** One fix commit + one candidate per entry of `daysAgo`; every candidate's commit stays green. */

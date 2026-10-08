@@ -37,6 +37,13 @@ const { UserError } = require('./util.js');
 
 const ROW_NAMES = ['tier', 'room', 'exposure', 'writes', 'channels'];
 
+/** #533: the rows that change a gate — the only ones a fresh adoption ASKS. `tier` here is the
+ * production/deploy pair; `exposure` sets the gate count. The other three are optional in the
+ * schema and legal absent (room → trail verbosity, writes → `free` is the default, channels →
+ * descriptive), so adoption leaves them unanswered and names the `--axis` command instead. */
+const GATING_ROWS = Object.freeze(['tier', 'exposure']);
+const OPTIONAL_ROWS = Object.freeze(['room', 'writes', 'channels']);
+
 // ---------------------------------------------------------------------- descriptor read
 
 /** Parsed `.github/project.yml`, or {} when absent/unparseable — never throws. */
@@ -387,7 +394,7 @@ function remainingSteps(ctx = {}) {
   if (ctx.migrations) steps.push({ n: 2, text: migrationsStepText(ctx.migrations) });
   steps.push(
     { n: 3, text: 'Create the full label set (21 names) — `colab labels --ensure`, CONVENTIONS.md §9 step 3 (#206)' },
-    { n: 4, text: 'Add the tier topic to the GitHub repo — `gh repo edit --add-topic tier-<b|c|a>`, step 4' },
+    { n: 4, text: 'Optional: add the tier topic to the GitHub repo — `gh repo edit --add-topic tier-<b|c|a>`, step 4. Needs repo ADMIN (push access alone gets `HTTP 404 …/topics`); nothing in colab or the audit reads it, so skip it when you are not one (#522)' },
   );
   if (ctx.fork) {
     steps.push({ n: 5, text: `Fork of an upstream (${ctx.fork.source === 'flag' ? '--fork' : `remote "${ctx.fork.remote}"`}): do NOT make CLAUDE.md the thin shell — append templates/repo-CLAUDE-block.md at the END of the upstream's CLAUDE.md (create it only if upstream has none), record that append as a fork patch, leave AGENTS.md and the upstream prose untouched; CONVENTIONS.md §9 "A fork of an upstream", step 5` });
@@ -538,6 +545,7 @@ function detect(io, extra = {}) {
     inheritedCodeowners,
     migrations,
     remaining: remainingSteps({ migrations, fork, upstreamAgentFiles, releaseRung }),
+    optionalUnanswered: optionalUnanswered(cfg), // #533
   };
 }
 
@@ -778,6 +786,52 @@ function axisMissing(cfg, axis) {
     default:
       return false;
   }
+}
+
+/**
+ * #533: which rows this run asks. A gating row is asked when it is still missing; an optional row
+ * (room/writes/channels) only when the caller forced it (`--axis`) or supplied its answer flag —
+ * a fresh adoption never prompts for it. `flagAxes` — the rows an answer flag was given for.
+ */
+function axesToAsk(cfg, forcedAxes, flagAxes) {
+  const forced = forcedAxes instanceof Set ? forcedAxes : new Set(forcedAxes || []);
+  const flagged = flagAxes instanceof Set ? flagAxes : new Set(flagAxes || []);
+  return ROW_NAMES.filter((a) => forced.has(a)
+    || (axisMissing(cfg, a) && (GATING_ROWS.includes(a) || flagged.has(a))));
+}
+
+/** #533: the optional rows still unanswered after a run — reported in one line, never asked. */
+function optionalUnanswered(cfg) {
+  return OPTIONAL_ROWS.filter((a) => axisMissing(cfg, a));
+}
+
+/** The one line naming them and the command that answers each later (#533). null when none. */
+function optionalRowsLine(rows) {
+  if (!rows || !rows.length) return null;
+  return `not asked (optional, legal absent): ${rows.join(', ')} — answer later with \`colab adopt --axis ${rows.join(',')}\``;
+}
+
+/** Shell-quote one argument only when it needs it — the printed command must paste and run. */
+function shellArg(v) {
+  const t = String(v);
+  return /^[A-Za-z0-9_@%+=:,./-]+$/.test(t) ? t : `"${t.replace(/(["\\$`])/g, '\\$1')}"`;
+}
+
+/**
+ * #522: the ONE command a human runs to finish an adoption an agent could not — printed as the
+ * first line of a human-gated refusal, answers already filled in. `flags` is an ordered list of
+ * `[flag, value]` pairs (value undefined/null for a bare flag); `--answered-by` is appended as a
+ * placeholder when absent, because the human bar needs it alongside COLAB_HUMAN=1.
+ */
+function humanAdoptCommand(flags) {
+  const parts = ['COLAB_HUMAN=1', 'colab', 'adopt'];
+  let hasAnsweredBy = false;
+  for (const [flag, value] of flags || []) {
+    if (flag === '--answered-by') hasAnsweredBy = true;
+    parts.push(value === undefined || value === null || value === true ? flag : `${flag} ${shellArg(value)}`);
+  }
+  if (!hasAnsweredBy) parts.push('--answered-by "<your name>"');
+  return parts.join(' ');
 }
 
 // ---------------------------------------------------------------------- EXPOSURE_SHAPE — the constructor
@@ -1166,6 +1220,12 @@ module.exports = {
   renderMenu,
   resolveChoice,
   axisMissing,
+  GATING_ROWS,
+  OPTIONAL_ROWS,
+  axesToAsk,
+  optionalUnanswered,
+  optionalRowsLine,
+  humanAdoptCommand,
   EXPOSURE_RANK,
   GATE_CLASS,
   EXIT_CODE,

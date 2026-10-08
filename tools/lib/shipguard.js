@@ -190,10 +190,21 @@ function bodyShaClaims(message) {
  * an issue that carries no delivery-type label is still covered.
  */
 const TOOL_MARKS = ['🔒 Claimed', '✅ Released', '🚢 Shipped', '🔖 Referenced', '↩️ Sent back'];
+/**
+ * #535: a comment whose WHOLE body is one signature line (`— <name> · <machine>/<session>`) is
+ * not evidence either. Some deployments post one after every comment; it records who spoke, never
+ * what was delivered. Only the bare line is excluded — a distill that merely ENDS in a signature
+ * still counts, so the test is on the whole trimmed body, single line, no `m` flag.
+ */
+const SIGNATURE_ONLY = /^—[^\S\n][^\n]*\S$/;
+function isSignatureOnly(body) {
+  return SIGNATURE_ONLY.test(body);
+}
 function evidenceComments(comments) {
   return (Array.isArray(comments) ? comments : []).filter((c) => {
     const body = String((c && c.body) || '').trim();
     if (!body) return false;
+    if (isSignatureOnly(body)) return false;
     return !TOOL_MARKS.some((mark) => body.startsWith(mark));
   });
 }
@@ -312,6 +323,6 @@ function zeroClaimVerdict(issuesCount, branchName, brokenClaimsCount, { remoteOn
 
 module.exports = {
   branchIssueNumbers, commitIssueNumbers, corroborateIssues, branchType,
-  subjectSanity, bodyShaClaims, evidenceComments, hasEvidence, TOOL_MARKS,
+  subjectSanity, bodyShaClaims, evidenceComments, hasEvidence, isSignatureOnly, TOOL_MARKS,
   closesCoverage, zeroClaimVerdict,
 };

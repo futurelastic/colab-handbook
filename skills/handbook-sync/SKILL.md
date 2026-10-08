@@ -5,6 +5,14 @@ description: "Bring ONE repo up to the current colab-handbook, from inside that 
 
 # handbook-sync — bring this repo up to the current handbook
 
+**Local policy for this repo** (#520) — optional, one file per skill:
+
+!`cat .colab/skills/handbook-sync.md 2>/dev/null || echo "(no local policy for handbook-sync in this repo)"`
+
+If `.colab/skills/handbook-sync.md` exists in this repo, read it before continuing. Local policy
+refines this skill for this repo and wins over the text below where they differ. It never
+changes a `colab` gate.
+
 `colab update` sweeps a machine and classifies; it refuses to write anything that
 needs judgment. That refusal is correct — and it leaves you with a verdict and no
 procedure. This is the procedure, run from inside the repo.
@@ -95,6 +103,16 @@ not carry its files, stop here: nothing in this section applies. Use `colab adop
 ([`CONVENTIONS.md` §9, *Working in a repo you don't
 own*](../../CONVENTIONS.md#working-in-a-repo-you-dont-own)) instead, which commits nothing.
 
+**One step is a human's, and you should know it before step 1, not after (#522).**
+Answering `exposure` with `none` or `self` needs a human — the bar in
+[§9](../../CONVENTIONS.md#9-adopting-this). Drive everything else; when `colab adopt`
+reaches that gate it prints, as its first line, the one command the human runs with
+every answer already filled in. Hand the maintainer that line, unchanged — never
+clear the bar yourself. Adoption asks only the gating rows (deploy/production and
+exposure); `room`, `writes` and `channels` are optional and answered later with
+`--axis` (#533). An existing default branch is kept as trunk whatever it is called —
+never rename `master` to adopt.
+
 ### The checklist is not in this file, on purpose
 
 **[`CONVENTIONS.md` §9 "Adopting this"](../../CONVENTIONS.md#9-adopting-this) is the
@@ -142,7 +160,7 @@ colab labels --ensure
 ```
 
 Only `in-progress` is ordering-critical (the claim below needs it), but `--ensure`
-creates the whole twenty-one-name set in one idempotent call (#206) — reading it from
+creates the whole twenty-three-name set in one idempotent call (#206) — reading it from
 `tools/lib/labels.js`'s `CONVENTION_LABELS`, never restated here — and creating a
 subset is the exact bug this leads to: a `deps-checked` never created leaves a
 readiness column that can never fill, and nothing downstream can tell *free* from
@@ -635,6 +653,16 @@ Both directions count:
 
 Never report an undeclared divergence as "local customisation, left as is". That verdict
 is how the two texts drifted apart for 30 days.
+
+**Skill overlays are the sanctioned customisation — leave them, but read them.** A
+`.colab/skills/<skill>.md` file is this repo's local policy for one skill
+([`CONVENTIONS.md` §8, *Local policy*](../../CONVENTIONS.md#local-policy--a-repo-refines-a-skill-without-forking-it-520)).
+It is not a stamped copy, so §3–§6 never graft, refresh or delete it. It is still one of
+this repo's own texts, so the judgement half above covers it: an overlay that restates a
+convention label's meaning differently is drift like any other. A repo that carries a
+**forked copy** of a whole handbook skill instead is the case overlays exist to replace:
+propose moving its local differences into `.colab/skills/<skill>.md` and dropping the
+copy, because the fork stops receiving upstream changes.
 
 Fix what is genuinely wrong; **report what you are unsure about** rather than
 guessing. A `project.yml` that contradicts reality is worse than one that admits it.

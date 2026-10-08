@@ -7,6 +7,14 @@ runs code-plan when set, else writes a 3-5 line plan-lite stub. Pairs with code-
 
 # code-start — open a session: read marker → load Issue → claim → branch
 
+**Local policy for this repo** (#520) — optional, one file per skill:
+
+!`cat .colab/skills/code-start.md 2>/dev/null || echo "(no local policy for code-start in this repo)"`
+
+If `.colab/skills/code-start.md` exists in this repo, read it before continuing. Local policy
+refines this skill for this repo and wins over the text below where they differ. It never
+changes a `colab` gate.
+
 The goal is to spend as little context as possible. The Issue is the feature's
 external memory: one `gh issue view` reloads the plan and hard-won knowledge, so
 you never re-read the whole codebase. Claim before you start so two sessions
@@ -15,7 +23,7 @@ never grab the same work. Close the session with **code-wrap**, then **code-ship
 Notation: `$N` = the feature's Issue number (keep it for the whole session).
 `<trunk>` = the branch sessions merge into (from `project.yml`, below).
 
-## 0. Say who you are — the URL, above all
+## 0. Say who you are — the session id, above all
 
 Skip this and every claim and worktree you create is **anonymous**: a dashboard row
 with a branch and no owner. Someone finding a stale claim then knows it is stale but
@@ -25,11 +33,11 @@ not who to ask.
 
 | field | what it is | missing it costs |
 |---|---|---|
-| `--session-name` | **display text.** The column a human scans. | cosmetic — the row falls back to the URL tail: ugly, still reachable |
-| `--session` (URL) | **the only join key.** A consumer resolves a worktree to a live session through it: `worktree.session` → its `session_…` tail → the session. | structural — the row can never be linked to anyone |
+| `--session-name` | **display text.** The column a human scans. | cosmetic — the row falls back to the id: ugly, still reachable |
+| `--session` (id) | **the only join key.** Any stable id for this session — a URL, a uuid… A consumer resolves a worktree to a live session through it: `worktree.session` → the session. | structural — the row can never be linked to anyone |
 
-The name participates in **no join**. So a name with no URL is the worst of the three
-states: it *reads* as owned and still traces to nobody. Set the URL first; the name is
+The name participates in **no join**. So a name with no id is the worst of the three
+states: it *reads* as owned and still traces to nobody. Set the id first; the name is
 a nicety on top of it. `colab` now warns when you supply a name alone.
 
 Nothing infers identity from the name, and nothing should: a worktree once sat next to
@@ -41,12 +49,12 @@ as "unknown" — never as a guess.
 A session may be opened by an operator clicking a button rather than by a human
 typing. That spawn prompt has a fixed shape:
 
-> Run /code-start for issue(s) #N in `<repo>`. Spawned from `<dashboard>` by
-> `<operator>` at `<ts>` (intent `<id>`). Session name: `<name>`.
+> Run `<code-start, in your engine's invocation syntax>` for issue(s) #N in `<repo>`.
+> Spawned from `<dashboard>` by `<operator>` at `<ts>` (intent `<id>`). Session name: `<name>`.
 
 Read it as questions already answered: `#N` is your issue, and `<name>` is the
 `--session-name` to pass through **verbatim** — do not invent a better one, and do
-not ask which issue was meant. What the dashboard cannot know is your session URL,
+not ask which issue was meant. What the dashboard cannot know is your session id,
 so you still supply `--session` yourself, exactly as below.
 
 The dashboard only spawns: it writes no claim, no label, no merge. Every `colab` and
@@ -57,7 +65,7 @@ it is you.
 
 ```sh
 colab claim $N --worktree <name> \
-  --session "https://claude.ai/code/session_…" \
+  --session "<any stable id for this session — a URL, a uuid…>" \
   --session-name "import-fixes"          # short, human, about the WORK
 ```
 
@@ -66,17 +74,18 @@ colab claim $N --worktree <name> \
   runs several steps later — silently producing the exact anonymous rows this step
   exists to prevent. Flags are the only thing that reliably sticks for an agent.
 - **A human at one terminal may still export it once** (`export COLAB_SESSION=…`);
-  resolution is flag > env > empty, so both paths work. The env route is for people
+  resolution is flag > env > a derived `person:<email>/<host token>` (only outside an
+  agent shell, only with `COLAB_SESSION` unset — #528) > empty, so both paths work. The env route is for people
   with a persistent shell, not for agents.
 - **Do this before step 3**, not inside step 4. Sessions that work directly on trunk
   still claim, and they deserve identity just as much as worktree sessions.
 - **Name it after the work, not the branch.** The table already shows the branch;
   `import-fixes` or `payroll-hotfix` tells a human something new, `fix-import-115`
   does not.
-- **Genuinely no session URL?** Then set the name alone and know what you have: a
+- **Genuinely no session id?** Then set the name alone and know what you have: a
   cosmetic label, not a traceable row. It is a degraded state, not an equal choice.
-- **Got the URL later, or already created the worktree anonymous?**
-  `colab worktree tag <name> --session <url> [--session-name <s>]` repairs the worktree
+- **Got the id later, or already created the worktree anonymous?**
+  `colab worktree tag <name> --session <id> [--session-name <s>]` repairs the worktree
   *and* the claims hanging off it. No hand-editing of `~/.colab/state.json`.
 - **No `colab` installed?** Nothing breaks — the fields simply do not exist, and
   claiming still works through `gh`.
@@ -117,7 +126,7 @@ gate, never on your own say-so, AND only when a human is genuinely present in th
 conversation to say so:
 
 ```sh
-COLAB_HUMAN=1 colab solo --session "$SESSION_URL" --session-name "<label>"
+COLAB_HUMAN=1 colab solo --session "$SESSION_ID" --session-name "<label>"
 ```
 
 **Set `COLAB_HUMAN=1` only by transcription, never by inference — and never at all in a
@@ -358,9 +367,11 @@ gh issue view $N --json labels -q '.labels[].name' | grep -qx needs-plan && echo
   Oracle: <what proves this done>
   Stop: <condition that ends the session>
   ```
-  **Cannot state the oracle line?** That is the ambiguity trigger firing, not a prompt to
-  guess. Stop, comment the question onto the Issue, and wait — do not drop to rung 0
-  and do not invent an oracle so the stub looks complete.
+  **Cannot state the oracle line?** That is the ambiguity trigger firing, not a prompt to guess. Stop, comment the
+  question onto the Issue (an owner **choice** = `needs-decision` + `decision:options`, one `(recommended)`; never a bare
+  hold, #569), and wait — do not drop to rung 0 and do not invent an oracle so the stub looks complete. **Part of the acceptance only a person
+  can run** (a real device, a real account, a check by eye)? Plan it as a `Human verify:` row,
+  `Oracle: <tests> + Human verify row: <check>`, never as a reason to park the issue (`code-wrap`, #541).
 - **Trivial/mechanical, oracle self-evident** → rung 0, nothing to write. Do not manufacture
   a stub for the sake of having one.
 
@@ -386,10 +397,9 @@ divergence.
 **The record of a claim is its branch on the git remote; the tracker is its mirror for
 people** (`CONVENTIONS.md` [§5](../../CONVENTIONS.md#5-claiming-work--how-to-say-im-on-this), *Record of a claim*, #325). What that means here:
 
-- `colab worktree new` (step 4) **pushes the branch the moment it cuts it** — that push is
-  what another machine's claim is refused against. Without `colab`, push it yourself right
-  after the plain-git cut: `git push -u origin <branch>`.
-- `colab claim` / `colab worktree new` **refuse** when a branch on the remote carries `#N` and
+- `colab worktree new` (step 4) **pushes the claim ref `refs/claims/<branch>` at cut** — the record
+  refused against; not the branch, so no CI runs (#550). Plain git: `git push origin <b>:refs/claims/<b>`.
+- `colab claim` / `colab worktree new` **refuse** when a branch or claim ref on the remote carries `#N` and
   is not this machine's, and name it with the commands to continue it. That is not an obstacle
   to route around — it is step 3's "Found one → continue it" arriving before you branched. Only
   `--force` takes it over, loudly.
@@ -406,7 +416,7 @@ colab claims          # if colab is installed …
 gh issue list --label in-progress    # … else the raw command
 
 # claim it (before starting, not when you open the PR)
-colab claim $N --session "$SESSION_URL"        # if colab is installed …
+colab claim $N --session "$SESSION_ID"        # if colab is installed …
 gh issue edit $N --add-assignee @me --add-label in-progress    # … else raw
 ```
 
@@ -424,7 +434,7 @@ gh issue edit $N --add-assignee @me --add-label in-progress    # … else raw
 - An unclaimed issue is fair game — someone may take it out from under you.
   Claim first.
 - A branch may carry a group of issues; claim **every** issue in the group now
-  (`colab claim 115 114 113 --session "$SESSION_URL"`, or one `gh issue edit` each).
+  (`colab claim 115 114 113 --session "$SESSION_ID"`, or one `gh issue edit` each).
   Claiming the whole group is load-bearing at wrap, not bookkeeping — see step 4.
   **`--session` mandatory here too** — same reason as above.
 
@@ -444,6 +454,7 @@ already exists on that issue:
 ```sh
 git fetch --prune origin                   # ← without this the check is blind (see below)
 git branch -a --list '*<issue-number>*'    # a previous session's branch may still exist
+git ls-remote origin 'refs/claims/*' | grep -- '-<issue-number>'   # … or only its claim ref (#550, never fetched)
 colab worktrees                            # if colab is installed — is a worktree holding it?
 gh issue view $N --json labels -q '.labels[].name|select(startswith("group:"))'
 ```
@@ -563,14 +574,14 @@ conditional rule is one agents skip.
 
 ```sh
 colab worktree new <type>/<slug>-$N --issues $N --ports 1 \
-  --session "$SESSION_URL" --session-name "<label>"     # claims AND creates — one command
+  --session "$SESSION_ID" --session-name "<label>"     # claims AND creates — one command
 #   … add --base <line> ONLY for a line declared in project.yml `integration:`;
 #   the base is recorded on the worktree and is what `colab ship` merges into.
 # … else fall back to plain git (then claim by hand, step 3). Under branchPrefix: machine,
 #   spell the prefix yourself here: <login>/<machine>/<type>/<slug>-$N.
 git fetch --prune origin                     # the cut below must be origin's tip NOW, not a cache
 git worktree add -b <type>/<slug>-$N ../<slug>-$N origin/<trunk>
-git push -u origin <type>/<slug>-$N          # the claim record other machines read (#325)
+git push origin <type>/<slug>-$N:refs/claims/<type>/<slug>-$N   # the claim record (#325) — a ref, so no CI run (#550)
 ```
 
 **Cut from a freshly fetched `origin/<trunk>`, never from local trunk (#349).** Local trunk
@@ -585,11 +596,11 @@ plain-git fallback, compare against `git ls-remote origin <trunk>` yourself.
 this path. Pass **every** issue the branch will carry (`--issues 115,114,113`) — that
 set and the branch name are the two places code-wrap's harvest reads.
 
-**It also pushes the branch at cut (#325)** — `pushed <branch> → origin` in its output. That
-push *is* the claim record other machines are refused against, so a failed push takes nothing:
+**It also pushes the claim ref at cut (#325, #550)** — `pushed refs/claims/<branch> → origin`;
+`colab worktree rm` deletes it. That push *is* the claim record, so a failed push takes nothing:
 with `--issues`, the worktree and branch are removed again and it exits 1 (`claim NOT taken`).
-Fix the push (access, network, or a same-named branch another machine just created) and re-run;
-do not recreate the worktree by hand around it. **Opened by a planner?** If a
+Fix the push (access, network, or a same-named claim ref another machine just created) and
+re-run; do not recreate the worktree by hand around it. **Opened by a planner?** If a
 `--session intent:<id>` claim already holds the issue on this machine, this command upgrades
 that record in place with your real session — expected, and nothing is re-posted.
 
@@ -673,8 +684,8 @@ your turn; the measurement is in `code-ship` B1a, *The wait is bounded*.
   whether you **reopened** a closed Issue rather than creating one.
 - The session name you set in step 0 — it is how a human matches your report to the
   row holding this work. Confirm it stuck: `colab worktrees` (or `colab claims`)
-  should show it, not a `—`. A name showing with **no URL behind it** is a half-fix,
-  not a pass: repair it with `colab worktree tag <name> --session <url>` and say so.
+  should show it, not a `—`. A name showing with **no id behind it** is a half-fix,
+  not a pass: repair it with `colab worktree tag <name> --session <id>` and say so.
 - Branch name, **the base it was cut from**, and the worktree path if you made one. Say
   the base even when it is trunk — "cut from trunk" and "nobody recorded a base" read
   identically otherwise, and only the first is a fact. If the step-3 check found an

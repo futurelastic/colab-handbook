@@ -13,7 +13,8 @@
 # `php artisan wayfinder:generate` and needs PHP on the runner. Use ci-laravel.yml.
 #
 # What it does:
-#   0. Fail on a .github/project.yml value colab would silently ignore (ship-batch, #416).
+#   0. Fail on a .github/project.yml value colab would silently ignore (ship-batch, #416;
+#      ship-batch-wait, #555; ci-wait-factor, #564).
 #   1. Resolve the Node version from declared sources — never a hardcoded default.
 #   2. Secret scan with gitleaks (pinned release binary, see note at the step).
 #   3. Install dependencies with the package manager the lockfile implies.
@@ -265,23 +266,90 @@ jobs:
       # green; only a ship dry run noticed. So the value fails HERE, where the person
       # who changed project.yml is looking. Same rule as `colab ship` and the audit
       # (tools/lib/ship-batch.js parseShipBatch): absent/empty/null, or 1–3. Why the
-      # cap is 3: project.schema.md, `ship-batch`.
+      # cap is 3: project.schema.md, `ship-batch`. `ship-batch-wait` (#555) the same way
+      # (parseShipBatchWait): absent/empty/null, or a whole number with a unit (s, m, h).
+      # `ci-wait-factor` (#564) too (tools/lib/ci-profile.js parseFactor): absent, or a number >= 1.
       # ---------------------------------------------------------------------------
       - name: Descriptor check (.github/project.yml)
         working-directory: ${{ github.workspace }}
         run: |
           [ -f .github/project.yml ] || exit 0
-          line="$(grep -E '^ship-batch[[:space:]]*:' .github/project.yml | head -1 || true)"
-          [ -n "$line" ] || exit 0
-          v="$(printf '%s\n' "$line" | sed -E -e 's/^ship-batch[[:space:]]*:[[:space:]]*//' \
+          # The scalar after `<key>:` — comment, trailing blanks and one level of quotes stripped.
+          field() {
+            grep -E "^$1[[:space:]]*:" .github/project.yml | head -1 \
+              | sed -E -e "s/^$1[[:space:]]*:[[:space:]]*//" \
                 -e 's/[[:space:]]+#.*$//' -e 's/[[:space:]]+$//' \
-                -e 's/^"(.*)"$/\1/' -e "s/^'(.*)'\$/\\1/")"
+                -e 's/^"(.*)"$/\1/' -e "s/^'(.*)'\$/\\1/" || true
+          }
+          v="$(field ship-batch)"
           case "$v" in
             ''|'~'|null|1|2|3) echo "ship-batch: ${v:-absent} — ok" ;;
             *)
               echo "::error file=.github/project.yml::ship-batch is '$v', expected an integer 1-3 (omit for serial). colab ship ignores any other value and lands serially. Why the cap is 3: project.schema.md, ship-batch."
               exit 1 ;;
           esac
+          # ship-batch-wait (#555): a whole number with a unit — 90s, 6m, 1h. No ceiling: the repo chooses.
+          w="$(field ship-batch-wait)"
+          case "$w" in
+            ''|'~'|null) echo "ship-batch-wait: absent — ok" ;;
+            *)
+              if printf '%s\n' "$w" | grep -Eq '^[0-9]+[smh]$'; then
+                echo "ship-batch-wait: $w — ok"
+              else
+                echo "::error file=.github/project.yml::ship-batch-wait is '$w', expected a whole number with a unit: 90s, 6m, 1h (omit for no wait). colab ship ignores any other value and does not wait."
+                exit 1
+              fi ;;
+          esac
+          # ci-wait-factor (#559): a number >= 1 — a multiple of the repo's measured CI duration. No ceiling.
+          # Same reading as tools/lib/ci-profile.js parseFactor on the raw scalar the audit hands it.
+          f="$(field ci-wait-factor)"
+          case "$f" in
+            ''|'~'|null) echo "ci-wait-factor: absent — ok (default 2)" ;;
+            *)
+              if printf '%s\n' "$f" | grep -Eq '^[0-9]+(\.[0-9]+)?$' && awk -v n="$f" 'BEGIN { exit !(n + 0 >= 1) }'; then
+                echo "ci-wait-factor: $f — ok"
+              else
+                echo "::error file=.github/project.yml::ci-wait-factor is '$f', expected a number >= 1 (a multiple of the measured CI duration; omit for 2). colab ship and colab ci-wait ignore any other value and use 2. See project.schema.md, ci-wait-factor."
+                exit 1
+              fi ;;
+          esac
+          # thresholds (#560): one level of `name: whole number`, each name known and at or above its
+          # floor (and, for a percent, at most 100) — the table in tools/lib/thresholds.js (SPEC),
+          # which a test holds this list to.
+          # A bad entry falls back to the default everywhere, silently, so it fails here.
+          bad=0
+          while IFS= read -r t; do
+            case "$t" in =*)
+              echo "::error file=.github/project.yml::thresholds is '${t#=}', expected a map of 'name: whole number' pairs. See project.schema.md, thresholds."
+              bad=1; continue ;;
+            esac
+            k="${t%%:*}"
+            n="$(printf '%s' "${t#*:}" | sed -E -e 's/^[[:space:]]+//' -e 's/^"(.*)"$/\1/' -e "s/^'(.*)'\$/\\1/")"
+            max=999999999
+            case "$k" in
+              hot-file-count|claude-md-line-multiple) min=2 ;;
+              dependents-count|hold-stale-days|smoke-minutes|claude-md-kb|transitional-days|batch-min-samples) min=1 ;;
+              claude-md-line-floor-bytes|doc-budget-slack) min=0 ;;
+              batch-first-green-pct-min|batch-eviction-pct-max|batch-overlap-pct) min=0 max=100 ;;
+              *) echo "::error file=.github/project.yml::thresholds.$k is not a known threshold (colab thresholds lists them). See project.schema.md, thresholds."
+                 bad=1; continue ;;
+            esac
+            case "$n" in ''|'~'|null) continue ;; esac
+            if printf '%s\n' "$n" | grep -Eq '^[0-9]{1,9}$' && [ "$n" -ge "$min" ] && [ "$n" -le "$max" ]; then
+              echo "thresholds.$k: $n — ok"
+            else
+              echo "::error file=.github/project.yml::thresholds.$k is '$n', expected a whole number from $min to $max. Every reader ignores it (a batch-* key is then not judged; any other uses its default). See project.schema.md, thresholds."
+              bad=1
+            fi
+          done < <(awk '
+            /^thresholds[[:space:]]*:/ { b = 1; v = $0
+              sub(/^thresholds[[:space:]]*:[[:space:]]*/, "", v); sub(/[[:space:]]+#.*$/, "", v); sub(/[[:space:]]+$/, "", v)
+              if (v != "" && v != "~" && v != "null") print "=" v
+              next }
+            b && /^[[:space:]]*(#|$)/ { next }
+            b && /^[[:space:]]/ { l = $0; sub(/^[[:space:]]+/, "", l); sub(/[[:space:]]+#.*$/, "", l); sub(/[[:space:]]+$/, "", l); print l; next }
+            { b = 0 }' .github/project.yml)
+          [ "$bad" = 0 ] || exit 1
 
       # ---------------------------------------------------------------------------
       # Toolchain resolution. Precedence, highest first:
