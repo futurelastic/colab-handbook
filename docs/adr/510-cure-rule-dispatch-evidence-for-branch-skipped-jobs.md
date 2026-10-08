@@ -90,6 +90,8 @@ non-dispatch run at the head, and has no dispatch run there yet, gets
 - After a cure merge, a template's trunk dedupe guard may cite the branch's push
   run — where the trunk-only job was skipped — and skip that job on trunk until
   its next schedule. The tree did pass the job in the dispatch run, so the result
-  is not wrong, but trunk shows no run of it at that sha. Left for its own issue.
+  is not wrong, but trunk shows no run of it at that sha. Left for its own issue —
+  closed by #511: the guard now reuses a cited run only if it skipped no job but the
+  guard itself, so that trunk push runs the trunk-only job.
 - The content-blindness the cure rule already confesses — what the steps
   *asserted* — is unchanged.

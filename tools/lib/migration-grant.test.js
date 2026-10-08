@@ -492,3 +492,18 @@ test('parseGrantPolicy: absent/null → human; human; reviewer (trimmed); anythi
     assert.equal(p.policy, 'human', JSON.stringify(bad));
   }
 });
+
+// --- #494: roundtripJobWorkflows — is R reachable at all? ---------------------------------------
+test('#494 roundtripJobWorkflows: a live job name counts (quoted or not, with or without a leg); a commented one never does', () => {
+  const wf = {
+    '.github/workflows/a.yml': 'jobs:\n  m:\n    name: Migration round-trip (${{ matrix.engine }})\n',
+    '.github/workflows/b.yml': "jobs:\n  m:\n    name: 'Migration round-trip'\n",
+    '.github/workflows/c.yml': 'jobs:\n  # m:\n  #   name: Migration round-trip (postgres)\n',
+    '.github/workflows/d.yml': 'jobs:\n  m:\n    name: Migrations round trip\n',
+  };
+  const readFile = (p) => (p in wf ? wf[p] : null);
+  assert.deepStrictEqual(
+    mg.roundtripJobWorkflows({ readFile, workflows: ['a.yml', 'b.yml', 'c.yml', 'd.yml', 'missing.yml'] }),
+    ['a.yml', 'b.yml']);
+  assert.deepStrictEqual(mg.roundtripJobWorkflows({ readFile, workflows: [] }), []);
+});

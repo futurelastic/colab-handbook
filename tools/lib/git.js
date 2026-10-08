@@ -1203,6 +1203,12 @@ function isNewerRun(a, b) {
  * sha — otherwise a cancel-in-progress straggler created after the passing run would turn #92's
  * green back into "every run was cancelled". It still counts when it is all a workflow has.
  *
+ * #514: `skipped` is neutral in exactly the same way. A run whose every job was skipped executed
+ * nothing (a same-repo `pull_request` run gated off by a fork-PR `if:`, a `workflow_run` that
+ * declined), so a newer `skipped` row never stands for a workflow that has a run that ran: push
+ * `failure` + newer `skipped` reads red, push `success` + newer `skipped` reads green. A workflow
+ * whose runs are ALL skipped still reads not-green, as before.
+ *
  * Newest = later createdAt, then higher databaseId; when neither key separates two rows, gh's
  * newest-first order decides (the first row seen is kept). An unfinished newest run still blocks
  * green (#307): it is the head, so the all-finished quantifier sees it.
@@ -1210,6 +1216,9 @@ function isNewerRun(a, b) {
  * Returns the heads in their original order (callers' newest-first `forSha[0]` pick relies on it)
  * plus the rows they superseded.
  */
+/** Conclusions of a run that executed nothing — never chosen over a run that did (#92, #514). */
+const NEUTRAL_RUN = new Set(['cancelled', 'skipped']);
+
 function newestRunPerWorkflow(rows) {
   const best = new Map();
   rows.forEach((x, i) => {
@@ -1218,9 +1227,9 @@ function newestRunPerWorkflow(rows) {
     const cur = best.get(name);
     if (cur === undefined) { best.set(name, i); return; }
     const c = rows[cur];
-    const xCancelled = x.conclusion === 'cancelled';
-    const cCancelled = c.conclusion === 'cancelled';
-    if (xCancelled !== cCancelled) { if (cCancelled) best.set(name, i); return; }
+    const xNeutral = NEUTRAL_RUN.has(x.conclusion);
+    const cNeutral = NEUTRAL_RUN.has(c.conclusion);
+    if (xNeutral !== cNeutral) { if (cNeutral) best.set(name, i); return; }
     if (isNewerRun(x, c)) best.set(name, i);
   });
   const heads = []; const superseded = [];

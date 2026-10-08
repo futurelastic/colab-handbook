@@ -20,7 +20,8 @@
 #   3. Install dependencies with the package manager the lockfile implies.
 #   4. Run typecheck / lint / test only if package.json declares those scripts, so a
 #      repo without them is not forced to add placeholders to keep CI green.
-#   5. Build.
+#   5. Build, if package.json declares the BUILD_COMMAND script.
+#   6. Opt-in, commented: a Migration round-trip for `migration-grant: reviewer` (#494).
 
 name: CI
 
@@ -47,7 +48,16 @@ on:
   # the newest run per workflow at a sha, so that second run also decided the verdict.
   # EDIT: a copy that went back to trunk-only push (above) has no run on a branch until it
   # has a PR — restore `pull_request: branches: [<trunk>]` there; that PR run is then its
-  # only branch run (CONVENTIONS.md §4, "Branch CI").
+  # only branch run (CONVENTIONS.md §4, "Branch CI"), so also delete the fork-PR term
+  # (`github.event_name != 'pull_request' || …`) from every job's `if:` below, or it skips that run.
+  # EDIT: fork PRs (#514). A push to a fork never runs a workflow here, so a repo that takes
+  # PRs from forks needs `pull_request`. Uncomment it there. Every suite job below already
+  # carries `github.event.pull_request.head.repo.full_name != github.repository` for a PR
+  # event, so a same-repo PR's run skips every job (its push run is the one that tests) and a
+  # fork PR's run tests. A skipped run never stands for a workflow that has a run that ran
+  # (CONVENTIONS.md §4, "Branch CI"). Check every reader of your CI agrees before you uncomment.
+  # pull_request:
+  #   branches: ['**']
   # A promotion pushed by the release workflow's token triggers no push run, so that workflow
   # dispatches this one on main instead (templates/release-auto.yml, #440). Harmless elsewhere.
   workflow_dispatch:
@@ -60,7 +70,8 @@ on:
 # drop the second one's run before it ever started (#512).
 # EDIT: name exactly this repo's trunk (and release branch) here — in the group, in
 # cancel-in-progress, and in the `dedupe` job's `if:`. A Tier C trunk may carry any
-# name; one left off this list gets its trunk runs cancelled.
+# name; one left off this list gets its trunk runs cancelled. `colab template` writes these
+# from the `trunk:` in .github/project.yml and prints what it wrote (#526).
 concurrency:
   group: ci-${{ github.ref }}${{ (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev') && format('-{0}', github.run_id) || '' }}
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' && github.ref != 'refs/heads/dev' }}
@@ -68,7 +79,8 @@ concurrency:
 env:
   # EDIT: bump deliberately, not automatically.
   GITLEAKS_VERSION: "8.30.1"
-  # EDIT: npm script to build. Change for monorepos or non-standard scripts.
+  # EDIT: npm script to build. Change for monorepos or non-standard scripts. Empty, or a
+  # script package.json does not declare, skips the build with a notice (#526).
   BUILD_COMMAND: "build"
 
 # Self-hosted runner? The job layout below assumes GitHub-hosted capacity — a
@@ -105,7 +117,11 @@ jobs:
   # depends on those declares `tree-reuse: off` in .github/project.yml. Trunk only (the
   # descriptor's `trunk:`, read at this sha), never a release branch, never a dispatch;
   # any doubt (no descriptor, opt-out, an API error, no exact match) runs the full suite.
-  # Never put a trunk-only job (publish, deploy, release) behind this gate.
+  # A green run at THIS sha on another ref (a `ship-batch/*` run trunk fast-forwarded to) is
+  # asked for first, by an exact query, so a busy repo's 50-run listing cannot miss it (#552).
+  # A cited run is reused only if it skipped no job but this one: a job gated on the trunk
+  # ref is `skipped` on every branch push, and reusing that run would skip it on trunk too
+  # (#511). Never put a trunk-only job (publish, deploy, release) behind this gate.
   dedupe:
     name: Already tested at this sha or tree?
     # EDIT: the trunk refs here mirror `concurrency`'s list above (#493).
@@ -128,9 +144,34 @@ jobs:
           SHA: ${{ github.sha }}
           CREATED: ${{ github.event.created }}
           REF_NAME: ${{ github.ref_name }}
+          GUARD_NAME: Already tested at this sha or tree? # EDIT: this job's `name:`, if you rename it (#511).
         run: |
           tested=false
           cited=
+          # #511: a cited run is reusable only if it skipped no job but this guard. A job gated on
+          # the trunk ref is `skipped` on every branch push and a skipped job does not fail the
+          # run, so citing that run would skip the trunk-only job on trunk a second time.
+          reusable() {
+            if ! SK="$(gh api "repos/$REPO/actions/runs/$1/jobs?per_page=100" \
+                   --jq 'if .total_count > (.jobs | length) then "(more than 100 jobs)" else [.jobs[] | select(.conclusion == "skipped" and .name != env.GUARD_NAME) | .name] | join(", ") end' 2>/dev/null)"; then
+              echo "::notice::Could not list the jobs of run $1 — running the full suite (#511)."
+              return 1
+            elif [ -n "$SK" ]; then
+              echo "::notice::Run $1 skipped $SK, which this push may run — running the full suite (#511)."
+              return 1
+            fi
+          }
+          # The cited run, as "<id> <head sha> <url> <branch>": a green push run of this workflow on
+          # another ref of this repo. #552: one at THIS sha first (a `ship-batch/*` run trunk
+          # fast-forwarded to), an exact query; else one whose commit has THIS tree (#493).
+          same_sha() {
+            gh api "repos/$REPO/actions/workflows/$WFID/runs?head_sha=$SHA&event=push&status=success&per_page=20" \
+              --jq "first(.workflow_runs[] | select(.id != $RUN_ID and .head_branch != \"$REF_NAME\" and .head_repository.full_name == \"$REPO\") | \"\\(.id) \\(.head_sha) \\(.html_url) \\(.head_branch)\") // empty" 2>/dev/null | grep .
+          }
+          same_tree() {
+            gh api "repos/$REPO/actions/workflows/$WFID/runs?event=push&status=success&per_page=50" \
+              --jq "first(.workflow_runs[] | select(.id != $RUN_ID and .head_branch != \"$REF_NAME\" and .head_repository.full_name == \"$REPO\" and .head_commit.tree_id == \"$OURS\") | \"\\(.id) \\(.head_sha) \\(.html_url) \\(.head_branch)\") // empty" 2>/dev/null
+          }
           if ! command -v gh >/dev/null 2>&1; then
             echo "::notice::gh is not installed on this runner — running the full suite (#418)."
           elif ! WFID="$(gh api "repos/$REPO/actions/runs/$RUN_ID" --jq .workflow_id 2>/dev/null)" || [ -z "$WFID" ]; then
@@ -145,16 +186,15 @@ jobs:
               echo "::notice::$REF_NAME is not this repo's trunk — running the full suite (#493)."
             elif ! OURS="$(gh api "repos/$REPO/git/commits/$SHA" --jq .tree.sha 2>/dev/null)" || [ -z "$OURS" ]; then
               echo "::notice::Could not read the tree of $SHA — running the full suite (#493)."
-            elif ! CAND="$(gh api "repos/$REPO/actions/workflows/$WFID/runs?event=push&status=success&per_page=50" \
-                   --jq "first(.workflow_runs[] | select(.id != $RUN_ID and .head_branch != \"$REF_NAME\" and .head_repository.full_name == \"$REPO\" and .head_commit.tree_id == \"$OURS\") | \"\\(.head_sha) \\(.html_url) \\(.head_branch)\") // empty" 2>/dev/null)"; then
+            elif ! CAND="$(same_sha || same_tree)"; then
               echo "::notice::Could not list this workflow's green runs — running the full suite (#493)."
             elif [ -z "$CAND" ]; then
-              echo "No green run of this workflow on another ref has tree $OURS — running the full suite."
+              echo "No green run of this workflow on another ref has sha $SHA or tree $OURS — running the full suite."
             else
-              read -r CSHA URL BR <<< "$CAND"
+              read -r CID CSHA URL BR <<< "$CAND"
               if ! CTREE="$(gh api "repos/$REPO/git/commits/$CSHA" --jq .tree.sha 2>/dev/null)" || [ "$CTREE" != "$OURS" ]; then
                 echo "::notice::Could not confirm the tree of $CSHA — running the full suite (#493)."
-              else
+              elif reusable "$CID"; then
                 tested=true
                 cited="$URL"
                 echo "::notice title=tree-already-green::$URL tree=$OURS head=$CSHA branch=$BR"
@@ -178,7 +218,7 @@ jobs:
   gitleaks:
     name: Secret scan (gitleaks)
     needs: dedupe
-    if: ${{ !cancelled() && needs.dedupe.outputs.tested != 'true' }}
+    if: ${{ !cancelled() && needs.dedupe.outputs.tested != 'true' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository) }}
     runs-on: ubuntu-latest # EDIT: self-hosted label if this repo needs one.
     timeout-minutes: 15 # a scan of the checkout. EDIT: the default is 360.
     steps:
@@ -225,7 +265,7 @@ jobs:
   build:
     name: Build
     needs: dedupe
-    if: ${{ !cancelled() && needs.dedupe.outputs.tested != 'true' }}
+    if: ${{ !cancelled() && needs.dedupe.outputs.tested != 'true' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository) }}
     # A repo can adopt this template before it has any application code at all —
     # a fresh Tier B scaffold with decisions locked and a backlog filed, nothing
     # else. Unguarded, every step below still runs: "Install dependencies" warns
@@ -250,6 +290,9 @@ jobs:
     # hashFiles() would have been testing an empty directory even if it were
     # allowed.
     runs-on: ubuntu-latest # EDIT: self-hosted label if this repo needs one.
+    # Re-exported so the opt-in round-trip job below resolves Node exactly once, here.
+    outputs:
+      node-version: ${{ steps.toolchain.outputs.node-version }}
     defaults:
       run:
         # EDIT: set to the directory holding package.json if the app is not at the root.
@@ -499,6 +542,183 @@ jobs:
         if: steps.scripts.outputs.test == 'true'
         run: npm test
 
+      # Optional, like the scripts above (#526): a library or a test-only repo has no `build`
+      # script, and a template that fails on that turns a new adopter's first trunk run red.
       - name: Build
         if: hashFiles('package.json') != ''
-        run: npm run "$BUILD_COMMAND"
+        run: |
+          if [ -z "$BUILD_COMMAND" ]; then
+            echo "::notice::BUILD_COMMAND is empty — no build."
+          elif ! node -e "const s=(require('./package.json').scripts)||{};process.exit(s[process.env.BUILD_COMMAND]?0:1)" 2>/dev/null; then
+            echo "::notice::No '$BUILD_COMMAND' script in package.json — skipping the build."
+          else
+            npm run "$BUILD_COMMAND"
+          fi
+
+  # ---------------------------------------------------------------------------
+  # Migration round-trip — OPT-IN (#494). Needed for `migration-grant: reviewer`: condition R
+  # reads a passing job named "Migration round-trip…" at the shipped head (CONVENTIONS.md §5),
+  # and the audit warns when a repo declares `reviewer` without one. Node has no canonical
+  # migration runner, so the job runs YOURS, forward-only, three times — each pass's schema
+  # must equal the first:
+  #
+  #   1. fresh       apply every migration to an empty database          (schema A)
+  #   2. re-apply    apply again on the same database — nothing changes  (must equal A)
+  #   3. on base     empty database, apply the BASE's migrations (+ ROUNDTRIP_SEED rows),
+  #                  then this change's on top                           (must equal A)
+  #
+  # Pass 3 is the shape of a real deploy: an edit to a migration that is already applied is
+  # skipped by the runner there, so its schema differs from pass 1. Pass 3 runs the base's
+  # migrations with THIS checkout's code and node_modules — a runner whose migrations import
+  # app code may need its own ROUNDTRIP_APPLY for that pass.
+  #
+  # To adopt: remove the leading `# ` from every line between the two fences, e.g.
+  #   sed -i '/^  ##>>>/,/^  ##<<</ s/^  # \{0,1\}/  /' .github/workflows/ci.yml
+  # then walk its EDIT points. Kept commented, not behind an `if:`: a job skipped on every run
+  # would cost every repo trunk tree reuse (#511), and a no-op job that ends green would pass
+  # R without testing anything. The branch that uncomments it edits .github/workflows/, so that
+  # one branch fails R and ships on a human grant (a branch never grades itself).
+  # ---------------------------------------------------------------------------
+  ##>>> migration round-trip (opt-in, #494) — uncomment to the closing fence
+  # migrations:
+  #   name: Migration round-trip (${{ matrix.engine }})
+  #   needs: build
+  #   # Explicit result check, not the implicit success(): success() reads EVERY ancestor,
+  #   # including `dedupe`, which is skipped on every ordinary push (#418).
+  #   if: ${{ !cancelled() && needs.build.result == 'success' }}
+  #   runs-on: ubuntu-latest # EDIT: self-hosted label if this repo needs one.
+  #   strategy:
+  #     fail-fast: false
+  #     matrix:
+  #       include:
+  #         - engine: postgres
+  #           image: postgres:17 # EDIT: the version production runs. A different one proves nothing about it.
+  #   services:
+  #     db:
+  #       image: ${{ matrix.image }}
+  #       env:
+  #         # A disposable server inside one job; this password never leaves the runner.
+  #         POSTGRES_PASSWORD: postgres
+  #       # Container port only: a shared self-hosted runner may already listen on 5432.
+  #       ports:
+  #         - 5432
+  #       options: >-
+  #         --health-cmd "pg_isready -U postgres"
+  #         --health-interval 5s
+  #         --health-timeout 5s
+  #         --health-retries 30
+  #   env:
+  #     # EDIT: the command that applies every pending migration to $DATABASE_URL — e.g.
+  #     # `npx knex migrate:latest`, `npx dbmate --no-dump-schema up`, `node scripts/migrate.mjs`.
+  #     # Required: an enabled round-trip that applies nothing must not pass R.
+  #     ROUNDTRIP_APPLY: ""
+  #     # EDIT: the prefixes under `migrations:` in .github/project.yml, space-separated.
+  #     MIGRATIONS_PATHS: "migrations/"
+  #     # EDIT: rows that look like OLD data (NULLs, rows a new foreign key would orphan),
+  #     # written between pass 3's two applies. Empty = no seeding.
+  #     ROUNDTRIP_SEED: ""
+  #     # Leave an empty database, and print its schema. The defaults run INSIDE the
+  #     # service container, so the client always matches the server's version.
+  #     ROUNDTRIP_RESET: >-
+  #       docker exec "$DB_CONTAINER" psql -q -U postgres -v ON_ERROR_STOP=1
+  #       -c 'DROP DATABASE IF EXISTS roundtrip WITH (FORCE)' -c 'CREATE DATABASE roundtrip'
+  #     ROUNDTRIP_DUMP: >-
+  #       docker exec "$DB_CONTAINER" pg_dump -U postgres --schema-only --no-owner --no-privileges roundtrip
+  #   steps:
+  #     - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+  #       with:
+  #         # Full history: pass 3 reads the migrations as they were at the base.
+  #         fetch-depth: 0
+  #         persist-credentials: false
+  #
+  #     - name: Setup Node
+  #       uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
+  #       with:
+  #         node-version: ${{ needs.build.outputs.node-version }}
+  #
+  #     - name: Install dependencies
+  #       run: |
+  #         if [ -f pnpm-lock.yaml ]; then corepack enable; pnpm install --frozen-lockfile
+  #         elif [ -f package-lock.json ]; then npm ci
+  #         else npm install
+  #         fi
+  #
+  #     - name: Round-trip
+  #       env:
+  #         DB_CONTAINER: ${{ job.services.db.id }}
+  #         DATABASE_URL: postgres://postgres:postgres@127.0.0.1:${{ job.services.db.ports['5432'] }}/roundtrip
+  #         DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+  #       run: |
+  #         set -euo pipefail
+  #         if [ -z "${ROUNDTRIP_APPLY:-}" ]; then
+  #           echo "::error::ROUNDTRIP_APPLY is empty — set the command that applies every pending migration (#494)."
+  #           exit 1
+  #         fi
+  #         if [ -z "${MIGRATIONS_PATHS:-}" ]; then
+  #           echo "::error::MIGRATIONS_PATHS is empty — copy the migrations: prefixes from .github/project.yml."
+  #           exit 1
+  #         fi
+  #         # pg_dump 17.6+ writes a random key on its \restrict lines; drop them before comparing.
+  #         dump() { eval "$ROUNDTRIP_DUMP" | { grep -vE '^\\(un)?restrict ' || true; }; }
+  #         T="$RUNNER_TEMP"
+  #
+  #         # The base: trunk from .github/project.yml (else the default branch); on trunk itself,
+  #         # the commit before the one that just landed. A pull request compares against its base.
+  #         trunk="$(sed -nE 's/^trunk:[[:space:]]*"?([^"#[:space:]]+)"?.*/\1/p' .github/project.yml 2>/dev/null | head -1 || true)"
+  #         base_ref="origin/${GITHUB_BASE_REF:-${trunk:-$DEFAULT_BRANCH}}"
+  #         base=""
+  #         if git rev-parse -q --verify "$base_ref" >/dev/null; then
+  #           base="$(git merge-base HEAD "$base_ref")"
+  #           [ "$base" != "$(git rev-parse HEAD)" ] || base="$(git rev-parse -q --verify 'HEAD^' || true)"
+  #         fi
+  #         if [ -n "$base" ]; then
+  #           # Added, modified AND renamed (#507): an edit to an applied migration is the trap pass 3 exists for.
+  #           # shellcheck disable=SC2086
+  #           touched="$(git diff --name-status --diff-filter=AMR "$base" HEAD -- $MIGRATIONS_PATHS)"
+  #           if [ -n "$touched" ]; then
+  #             echo "This change touches migrations (vs $base_ref):"
+  #             printf '%s\n' "$touched" | awk -F'\t' '{ print "  " (substr($1,1,1) == "A" ? "added   " : "modified") "  " $NF }'
+  #           else
+  #             echo "This change adds or modifies no migrations (vs $base_ref)."
+  #           fi
+  #         fi
+  #
+  #         # 1. Fresh: every migration applied to an empty database.
+  #         eval "$ROUNDTRIP_RESET"
+  #         eval "$ROUNDTRIP_APPLY"
+  #         dump > "$T/schema-a.sql"
+  #
+  #         # 2. Idempotent: applying again on the same database changes nothing.
+  #         eval "$ROUNDTRIP_APPLY"
+  #         dump > "$T/schema-a2.sql"
+  #         if ! diff -u "$T/schema-a.sql" "$T/schema-a2.sql"; then
+  #           echo "::error::Pass 2 (re-apply): a second apply changed the schema. The runner re-ran a migration it had already applied."
+  #           exit 1
+  #         fi
+  #
+  #         # 3. Deploy-shaped: the base's migrations first (plus old-looking rows), then this change's
+  #         #    on top. A migration that was edited after it was applied is skipped by the runner here,
+  #         #    exactly as on a real database, so the schema differs from pass 1.
+  #         eval "$ROUNDTRIP_RESET"
+  #         if [ -n "$base" ]; then
+  #           for p in $MIGRATIONS_PATHS; do
+  #             p="${p%/}"; rm -rf "$p"
+  #             if git cat-file -e "$base:$p" 2>/dev/null; then git archive "$base" "$p" | tar -x; fi
+  #           done
+  #           eval "$ROUNDTRIP_APPLY"
+  #           [ -z "${ROUNDTRIP_SEED:-}" ] || eval "$ROUNDTRIP_SEED"
+  #           for p in $MIGRATIONS_PATHS; do
+  #             p="${p%/}"; rm -rf "$p"
+  #             git checkout -q HEAD -- "$p" 2>/dev/null || true
+  #           done
+  #         else
+  #           echo "::notice::No base to compare against ($base_ref not found) — pass 3 applies from empty."
+  #         fi
+  #         eval "$ROUNDTRIP_APPLY"
+  #         dump > "$T/schema-b.sql"
+  #         if ! diff -u "$T/schema-a.sql" "$T/schema-b.sql"; then
+  #           echo "::error::Pass 3 (base, then this change): the schema differs from a fresh apply. A migration already on the base was edited, or the order only works on an empty database."
+  #           exit 1
+  #         fi
+  #         echo "Round-trip passed: fresh, re-applied, and on top of the base all give one schema."
+  ##<<< migration round-trip

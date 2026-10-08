@@ -642,7 +642,7 @@ function sameContent(a, b) {
  * so divergence is undecidable and the classification stops at current/behind.
  */
 function classifyStamped(opts) {
-  const { root, hb, templateName, stampVersion, localText, comparable = true, tmplNames } = opts;
+  const { root, hb, templateName, stampVersion, localText, comparable = true, tmplNames, render = null } = opts;
 
   if (hb.untagged || !hb.hasGit) {
     return { state: 'n-a', reason: 'handbook is untagged — stamp comparison inactive', from: stampVersion, to: hb.version };
@@ -675,7 +675,11 @@ function classifyStamped(opts) {
     return { state: 'n-a', reason: `cannot read templates/${templateName} at ${stampVersion} — cannot tell pristine from edited`, from: stampVersion, to: hb.version };
   }
   const expected = stampLine(templateName, stampVersion) + pristine;
-  if (sameContent(localText, expected)) {
+  // #526: `colab template` writes a CI copy with the repo's own refs. `render` (when given) is
+  // that rendering, so such a copy still reads as pristine; the raw body still counts too (a copy
+  // made before #526, or in a repo whose descriptor changed since).
+  const rendered = typeof render === 'function' ? stampLine(templateName, stampVersion) + render(pristine) : null;
+  if (sameContent(localText, expected) || (rendered !== null && sameContent(localText, rendered))) {
     return { state: 'behind', reason: 'pristine copy, template changed since this stamp', from: stampVersion, to: hb.version };
   }
   return { state: 'diverged', reason: `hand-edited since it was copied @ ${stampVersion} — copy-and-own, review by hand`, from: stampVersion, to: hb.version };

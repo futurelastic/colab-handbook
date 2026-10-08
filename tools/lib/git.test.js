@@ -632,6 +632,33 @@ test('#461 + #92: a NEWER cancelled run of the same workflow never supersedes it
   assert.strictEqual(r.conclusion, 'success');
 });
 
+test('#514: push failure + a NEWER skipped run of the same workflow reads red — skipped never supersedes a run that ran', () => {
+  const r = git.summarizeRunsForCommit([
+    { ...wf('ci', 'skipped', '2026-10-03T12:00:00Z', 30), event: 'pull_request' },
+    { ...wf('ci', 'failure', '2026-10-03T10:00:00Z', 10), event: 'push' },
+  ], S461);
+  assert.strictEqual(r.conclusion, 'failure');
+  assert.strictEqual(r.databaseId, 10);
+});
+
+test('#514: push success + a NEWER skipped run of the same workflow reads green', () => {
+  const r = git.summarizeRunsForCommit([
+    { ...wf('ci', 'skipped', '2026-10-03T12:00:00Z', 30), event: 'pull_request' },
+    { ...wf('ci', 'success', '2026-10-03T10:00:00Z', 10), event: 'push' },
+  ], S461);
+  assert.strictEqual(r.status, 'completed');
+  assert.strictEqual(r.conclusion, 'success');
+  assert.deepStrictEqual(r.superseded.map((x) => x.databaseId), [30]);
+});
+
+test('#514: every run of a workflow skipped — still not green', () => {
+  const r = git.summarizeRunsForCommit([
+    wf('ci', 'skipped', '2026-10-03T12:00:00Z', 30),
+    wf('ci', 'skipped', '2026-10-03T10:00:00Z', 10),
+  ], S461);
+  assert.notStrictEqual(r.conclusion, 'success');
+});
+
 test('#461: every run of a workflow cancelled — still not green, as before', () => {
   const r = git.summarizeRunsForCommit([
     wf('ci', 'cancelled', '2026-10-03T12:00:00Z', 30),
