@@ -41,6 +41,7 @@ st.calls.push(a.join(' ')); save();
 if (a[0] === '--version') out('gh version 0.0.0 (fixture)');
 if (a[0] === 'auth' && a[1] === 'status') process.exit(0);
 if (a[0] === 'run' && a[1] === 'list') out(a.includes('--created') ? ((st.runsSinceByBranch || {})[flag('--branch')] || st.runsSince) : st.runsAtCommit);
+if (a[0] === 'run' && a[1] === 'view' && st.jobs && st.jobs[a[2]]) out(a.includes('-q') ? String(st.jobs[a[2]].length) : { jobs: st.jobs[a[2]] });
 if (a[0] === 'issue' && a[1] === 'list') out(st.issues);
 if (a[0] === 'issue' && a[1] === 'create') {
   const number = st.next++;
@@ -360,6 +361,35 @@ test('#566 human row: the run that cut the candidate was cancelled — an older 
   const ready = finalize(fx, ['--dry']);
   assert.strictEqual(ready.body.state, 'candidate-ready', ready.out + ready.err);
   assert.ok(ready.body.checks.find((x) => x.condition === 'cut-run').ok);
+});
+
+test('#565 a failed staging deploy: candidate-ready on the human row with the failure named; refused on the automatic row', () => {
+  for (const [yml, want] of [[HUMAN_YML, 'candidate-ready'], [AUTO_YML, 'refused']]) {
+    const fx = fixture(yml);
+    const rc = cutCandidate(fx, yml === AUTO_YML ? 4 : 1);
+    const sha = fx.g('rev-parse', 'HEAD');
+    const cutMs = Date.parse(fx.g('tag', '-l', '--format=%(taggerdate:iso-strict)', rc));
+    const at = (min) => new Date(cutMs + min * 60000).toISOString();
+    writeState(fx, (s) => {
+      s.runsAtCommit = [
+        { headSha: sha, status: 'completed', conclusion: 'failure', workflowName: 'Release (auto)', event: 'workflow_run', databaseId: 902, createdAt: at(-3), updatedAt: at(30) },
+        { headSha: sha, status: 'completed', conclusion: 'success', workflowName: 'ci', event: 'push', databaseId: 1, createdAt: at(-90), updatedAt: at(-70) },
+      ];
+      s.jobs = { 902: [
+        { name: 'Cut, finalize, publish', status: 'completed', conclusion: 'success' },
+        { name: 'Publish the image', status: 'completed', conclusion: 'success' },
+        { name: 'Deploy to staging', status: 'completed', conclusion: 'failure' },
+      ] };
+    });
+    const r = finalize(fx, ['--dry']);
+    assert.strictEqual(r.body.state, want, `${yml}\n${r.out}${r.err}`);
+    const report = r.body.checks.find((c) => c.condition === 'deploy-report');
+    assert.ok(report, 'the deploy failure is named in the checks');
+    assert.strictEqual(report.required, false);
+    assert.match(report.detail, /Release \(auto\) run 902: Deploy to staging \(failure\)/);
+    if (want === 'candidate-ready') assert.ok(r.body.handoff, 'the human is handed the finalize command');
+    else assert.strictEqual(r.body.checks.find((c) => c.condition === 'cut-run').ok, false, 'an automatic final keeps the deploy as a gate');
+  }
 });
 
 test('#549 human row, test-period 0d: a candidate cut minutes ago finalizes on the human bar; --auto posts candidate-ready at once', () => {

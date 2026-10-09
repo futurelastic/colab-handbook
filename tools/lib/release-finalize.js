@@ -77,7 +77,7 @@ const STATES = Object.freeze([
 
 const CONDITIONS = Object.freeze([
   'release-policy', 'candidate', 'tracking-issue', 'release-hold', 'regressions', 'test-period', 'trunk-green',
-  'ci-green', 'full-suite', 'cut-run', 'schema-additive', 'switch-dependencies',
+  'ci-green', 'full-suite', 'cut-run', 'deploy-report', 'schema-additive', 'switch-dependencies',
   ...releaseTag.PRE_TAG_CONDITIONS, 'final-grant', 'migration-grant', 'human',
 ]);
 
@@ -379,6 +379,56 @@ function cutRunVerdict(rows, { tag, cutAt, ownRunId = null, jobCount = null } = 
   };
 }
 
+// ---- a failed deploy job: a report on a human final, a gate on an automatic one (#565) -------------
+
+// A job whose name says it deploys. The release workflow deploys the candidate to staging after it has
+// built, tested and published it; that job's failure is about the deploy target (a host the runner
+// cannot reach, a registry permission, a sibling image that was never built), never about the code.
+const DEPLOY_JOB_RE = /\bdeploy/i;
+
+/** Does a job named `name` deploy? Read from the name: GitHub's job read carries no environment. */
+function isDeployJob(name) {
+  return DEPLOY_JOB_RE.test(String(name || ''));
+}
+
+/**
+ * The runs at a candidate's commit that failed ONLY in deploy jobs (#565). `rows` are the run rows
+ * (null = unread); `jobsOf(databaseId)` returns that run's jobs (`git.ghRunJobs`, null = unread), asked
+ * lazily and only for a completed run that concluded `failure`.
+ *
+ * A run is deploy-only when its jobs were read, at least one did not pass, and every job that did not
+ * pass (anything but success/skipped/neutral — cancelled included) is a deploy job. A job that builds,
+ * tests or publishes failing keeps the run a failure; so does a run whose jobs could not be read.
+ *
+ * Returns { rows, failures } — `rows` a copy of `rows` where each deploy-only run reads `success` and
+ * carries `deployFailed` (its failed deploy jobs), `failures` [{ workflowName, databaseId, jobs }] for
+ * the report. Measuring this never decides anything: decide() uses the rewritten reading only on a
+ * human final, and names the failures either way.
+ */
+function deployOnlyFailures(rows, jobsOf) {
+  if (!Array.isArray(rows) || typeof jobsOf !== 'function') return { rows, failures: [] };
+  const failures = [];
+  const out = rows.map((r) => {
+    if (!r || r.status !== 'completed' || r.conclusion !== 'failure' || r.databaseId == null) return r;
+    const jobs = jobsOf(r.databaseId);
+    if (!Array.isArray(jobs) || !jobs.length) return r;
+    const bad = jobs.filter((j) => j && !(j.status === 'completed' && NOT_RED.has(j.conclusion)));
+    if (!bad.length || !bad.every((j) => isDeployJob(j.name))) return r;
+    const named = bad.map((j) => `${j.name} (${j.status === 'completed' ? j.conclusion || 'no conclusion' : j.status || 'unknown'})`);
+    failures.push({ workflowName: r.workflowName || '(unnamed workflow)', databaseId: r.databaseId, jobs: named });
+    return { ...r, conclusion: 'success', deployFailed: named };
+  });
+  return { rows: out, failures };
+}
+
+/** The `deploy-report` check's detail — what failed, and what it means on this final. */
+function deployReportDetail(failures, { blocking }) {
+  const what = failures.map((f) => `${f.workflowName} run ${f.databaseId}: ${f.jobs.join(', ')}`).join('; ');
+  return blocking
+    ? `a deploy job failed at this candidate (${what}); an automatic final treats it as blocking, so ci-green, full-suite and cut-run read the run as failed`
+    : `a deploy job failed at this candidate (${what}); its build, tests and publish passed, so on a human final this is a report, not a gate: ci-green, full-suite and cut-run read that run without its deploy jobs. Check the deploy target before you finalize`;
+}
+
 // ---- the test period ----------------------------------------------------------------------------
 
 /**
@@ -617,7 +667,17 @@ function decide(facts) {
   add('test-period', per.elapsed, s.older && !auto ? `${per.detail} — required: an older candidate is finalized only once its own period elapsed clean (#548)` : per.detail, ownClock);
   const tr = f.trunk || { ok: false, permanent: false, pending: false, detail: 'not measured' };
   add('trunk-green', tr.ok, tr.detail, ownClock);
-  for (const [condition, v] of [['ci-green', f.ci], ['full-suite', f.suite], ['cut-run', f.cutRun], ['schema-additive', f.schema], ['switch-dependencies', f.switches]]) {
+  // #565: a run that failed only in deploy jobs is a report on a human final (the human who decides
+  // sees it), and stays a gate on an automatic one. `deployReport` carries the verdicts re-read with
+  // those runs counted as passed; it is absent when no such run exists.
+  const dr = f.deployReport && Array.isArray(f.deployReport.failures) && f.deployReport.failures.length ? f.deployReport : null;
+  const lenient = !!dr && !auto;
+  const pick = (strict, relaxed) => (lenient && relaxed ? relaxed : strict);
+  for (const [condition, v] of [['ci-green', pick(f.ci, dr && dr.ci)], ['full-suite', pick(f.suite, dr && dr.suite)], ['cut-run', pick(f.cutRun, dr && dr.cutRun)]]) {
+    add(condition, v && v.ok, v ? v.detail : 'not measured');
+  }
+  if (dr) add('deploy-report', false, deployReportDetail(dr.failures, { blocking: !lenient }), false);
+  for (const [condition, v] of [['schema-additive', f.schema], ['switch-dependencies', f.switches]]) {
     add(condition, v && v.ok, v ? v.detail : 'not measured');
   }
   // #424: before any final — the tag equals the manifests, the commit is on trunk, the version outranks the latest final.
@@ -699,7 +759,7 @@ module.exports = {
   STATES, CONDITIONS, HOLD_LABEL, CUT_SUBJECT_SUFFIX,
   parseVersion, compareVersions, parseCandidate,
   parseReleaseMarker, releaseMarker, eventMarker, hasEvent, trackingTitle, trackingBody,
-  selectCandidate, openCandidates, pickNewestClean, stateDetail, windowHasRed, whyNoFinal, periodVerdict, cutRunVerdict, trunkGreenVerdict, windowBranches, mergeWindowRuns, regressionVerdict,
+  selectCandidate, openCandidates, pickNewestClean, stateDetail, windowHasRed, whyNoFinal, periodVerdict, cutRunVerdict, isDeployJob, deployOnlyFailures, deployReportDetail, trunkGreenVerdict, windowBranches, mergeWindowRuns, regressionVerdict,
   handoffCommand, decide, tagMessage, migrationGrantVerdict,
   carriedIssues, previousFinal, releasedEvent, releasedComment,
 };
