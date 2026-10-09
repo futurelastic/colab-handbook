@@ -10537,7 +10537,9 @@ work as usual (json: \`direct: true\`, \`branch: null\`, \`mode: "evidence-close
 
 BATCH LANDING (--batch, #373) — opt-in per repo: \`ship-batch: <N>\` in project.yml, an integer 1–3;
 absent or 1 declines every --batch call. It tests up to N green candidates as ONE combined head, then
-fast-forwards trunk, so a queue of green work stops draining at one change per trunk-CI cycle:
+fast-forwards trunk, so a queue of green work stops draining at one change per trunk-CI cycle.
+A batch of ONE is valid (#562): a lone ready member lands the same way, so the combined run — the
+setups a repo runs only on ship-batch/** and trunk — gates it too, and it needs no sync + re-run:
   - each member must be green at its OWN head (or have no run that could ever arrive), pass every
     gate its own \`ship --dry --json\` reports, and be an ordinary squash into trunk through the
     auto-trunk grant — the docs-only door, a migration, a ci-grant/cure, a core-path review, an
@@ -10555,8 +10557,8 @@ It never waits: each call reads the remote, takes ONE step and exits —
      it, bounded (code-ship B1a), and run the SAME command again
   4  declined — nothing landed; the last line is "→ SERIAL: colab ship --branch <b1> · …". Causes:
      not enabled, no auto-trunk, no workflow fires on ship-batch/** (the run could never arrive),
-     trunk CI red (the cure/grant doors apply per member, never to a batch), fewer than two members
-     can join, or the combined run is red — classify it: red:infra → the printed \`gh run rerun\`,
+     trunk CI red (the cure/grant doors apply per member, never to a batch), no member can join,
+     or the combined run is red — classify it: red:infra → the printed \`gh run rerun\`,
      once; red:finding, or red again after that one re-run → serial
   1  refused (a broken checkout, an unreadable remote) — or the land push was refused while trunk did
      NOT move (a local pre-push hook, a remote rejection): the push's own output is echoed, and
@@ -10577,8 +10579,8 @@ PARTNER WAIT (#555) — opt-in per repo: \`ship-batch-wait: <duration>\` in proj
 unit is required). Absent, zero or malformed: no wait, exactly as above. With it, a call where exactly
 ONE member can join pauses (exit 3, "⏸ PARTNER-WAIT", the seconds left) until that window has passed
 since the member became ready (its head CI's last update, else its head commit's date) — then the same
-call declines it to serial (exit 4). The caller waits, gathers every ready candidate again and calls
---batch with all of them. A single named branch is accepted only when the field is set.
+call builds it as a batch of one (#562). The caller waits, gathers every ready candidate again and
+calls --batch with all of them. Without the field, a lone member is built at once.
 
 B3 KEEPS the branch by default. Deleting refs from a shared remote is not something this command
 does unasked, however certain it is that the content landed: reporting is safe and reversible,
@@ -14286,10 +14288,11 @@ function cmdShipBatch(opts) {
   if (String(doc.autonomy || '') !== 'auto-trunk') {
     return serial(`project.yml does not grant autonomy: auto-trunk — batch landing needs it (every member lands in one unattended push)`);
   }
-  // #555: a declared ship-batch-wait lets ONE named member through — it may wait for a partner below.
+  // #555: a declared ship-batch-wait makes a lone member wait for a partner below.
+  // #562: one named member is a valid batch — it lands through the combined run, never serially.
   const waitCfg = shipBatch.parseShipBatchWait(doc);
   if (!waitCfg.valid) warn(`${waitCfg.reason} — ignored: a lone member does not wait (fails closed, #555)`);
-  if (members.length < 2 && !(members.length === 1 && waitCfg.sec > 0)) return serial(`--batch names ${members.length} branch(es) — a batch needs at least two`);
+  if (members.length < 1) return serial('--batch names no branch — name every ready candidate');
   if (members.length > cfg.n) warn(`--batch names ${members.length} branches; ship-batch: ${cfg.n} caps the batch — the rest wait for the next one`);
 
   const remote = git.remoteFor(repoAbs);
@@ -14355,7 +14358,7 @@ function cmdShipBatch(opts) {
     }
     if (!foreignStep) {
       const heads = inBatch.map((m) => ({ ...m, now: git.branchRefs(repoAbs, m.branch, remote).remoteSha }));
-      const matches = heads.length >= 2 && heads.every((m) => m.now && m.now.startsWith(m.sha));
+      const matches = heads.length >= 1 && heads.every((m) => m.now && m.now.startsWith(m.sha));
       existing = { ref: atBase.parsed.ref, base7: atBase.parsed.base7, sha: atBase.sha, members: inBatch, matches };
       // #415: the command line and the staged batch can name different sets. A requested branch the
       // staged batch does not carry (over the cap, dropped at build, or added since) does NOT ride
@@ -14368,7 +14371,7 @@ function cmdShipBatch(opts) {
     }
   }
   const verdict = existing && existing.matches ? shipBatch.combinedVerdict(git.ghRunsForRef(repoAbs, existing.ref, existing.sha)) : null;
-  let step = shipBatch.nextStep({ enabled: true, wired: true, trunkCi, eligibleCount: 2, existing, trunkNow, verdict });
+  let step = shipBatch.nextStep({ enabled: true, wired: true, trunkCi, eligibleCount: members.length, existing, trunkNow, verdict });
 
   if (step.step === 'rebuild') {
     print(`  ${existing.ref} no longer carries the requested members at their current heads — rebuilding`);
@@ -14428,7 +14431,7 @@ function cmdShipBatch(opts) {
     e.ok && !selected.includes(e) ? `eligible — waits for the next batch (cap ${cfg.n})` : e.why]), ['', 'MEMBER', 'DETAIL']));
   const notJoining = evaluated.filter((e) => !selected.includes(e)).map((e) => e.branch);
   step = shipBatch.nextStep({ enabled: true, wired: true, trunkCi, eligibleCount: selected.length, existing: null, trunkNow });
-  if (step.step === 'serial' && selected.length === 1 && waitCfg.sec > 0) {
+  if (step.step === 'build' && selected.length === 1 && waitCfg.sec > 0) {
     // #555: the lane is idle here (trunk's run finished, no batch in flight at this base), and one
     // member is ready. Wait for a partner until the repo's window, counted from when it became ready.
     const lone = selected[0];
@@ -14438,13 +14441,13 @@ function cmdShipBatch(opts) {
     if (pw.wait) {
       print(`⏸ PARTNER-WAIT ${lone.branch} — the only ready member; ${waitCfg.reason}, ready since ${new Date(since).toISOString()}, ${ciWait.fmtDuration(pw.leftSec * 1000)} left. Nothing landed.`);
       print(`  Wait up to ${pw.leftSec}s (a wait on another candidate's run counts toward it), gather EVERY ready candidate again,`);
-      print('  then run colab ship --batch with all of them. Past the window, this same call lands it alone (serial).');
+      print('  then run colab ship --batch with all of them. Past the window, this same call lands it alone, as a batch of one.');
       return 3;
     }
     const why = { 'window-elapsed': `${waitCfg.reason} has elapsed since it became ready`, 'ready-time-unread': 'its ready time could not be read, so it does not wait' }[pw.reason] || pw.reason;
-    return serial(`1 member can join and no partner arrived — ${why}`);
+    print(`  no partner arrived for ${lone.branch} — ${why}; building a batch of one (the combined run still gates it, #562)`);
   }
-  if (step.step === 'serial') return serial(`${selected.length} member(s) can join — a batch needs at least two`);
+  if (step.step === 'serial') return serial('no member can join — each one above says why');
 
   // ---- (e) build: trunk head + one squash commit per member, in an ephemeral detached worktree ----
   const ref = shipBatch.batchRefName(trunkNow);
@@ -14519,8 +14522,8 @@ function cmdShipBatch(opts) {
   for (const d of dropped) print(`  ✗ ${d.branch}: ${d.why}`);
   // #554: a drop leaves a durable trace — one Ship-Batch-Dropped trailer per dropped member on the
   // batch head, so it reaches trunk with a landed batch and rides a red combined run's head message.
-  // Only when the batch is built (≥2 members): a build that collapses to serial pushes nothing.
-  if (dropped.length && built.length >= 2) {
+  // Only when the batch is built (≥1 member, #562): a build that collapses to serial pushes nothing.
+  if (dropped.length && built.length >= 1) {
     const last = built[built.length - 1];
     const cur = git.git(['log', '-1', '--format=%B'], dir);
     const lines = dropped.map((d) => shipBatch.droppedTrailer({ ref, branch: d.branch, sha: d.sha, cls: d.cls }));
@@ -14532,9 +14535,9 @@ function cmdShipBatch(opts) {
     print(`  ↻ ${b.branch}: combined despite a generated-file overlap — ${b.regenerated.join(', ')} regenerated by .colab/hooks/pre-ship on the combined head (the combined run is the gate)`);
   }
   const head = git.git(['rev-parse', 'HEAD'], dir).stdout;
-  if (built.length < 2) {
+  if (built.length < 1) {
     cleanup();
-    return serial(`${built.length} member(s) survived the build — a batch needs at least two`, members);
+    return serial('no member survived the build', members);
   }
   if (opts.dry) {
     cleanup();

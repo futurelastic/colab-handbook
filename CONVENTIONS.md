@@ -1723,6 +1723,10 @@ lands first and tests afterwards. So a repo that declares
 [`ship-batch: <N>`](project.schema.md#ship-batch--optional) (1–3; absent or 1 is serial,
 unchanged) may land through `colab ship --batch <b1,b2[,b3]>`:
 
+**A batch of one is a batch** (#562): a lone ready candidate lands through the same path,
+never serially, so a repo running its full matrix only on `ship-batch/**` and trunk still
+tests every setup before trunk moves — whether or not a sibling was ready.
+
 1. **Joining.** A member is `green` at its own head ([*Branch CI*](#branch-ci--the-candidates-own-run-read-as-a-class-314),
    unchanged — or a `none` that cannot arrive), passes every gate its own serial ship would,
    and is an ordinary squash into trunk through the `auto-trunk` grant. Anything special
@@ -1766,11 +1770,12 @@ unchanged) may land through `colab ship --batch <b1,b2[,b3]>`:
    **per member, never to a batch**: a red trunk declines the batch outright.
 9. **Gathering, and the partner wait** (#555). A ship pass builds a batch from **every**
    candidate ready at that moment — re-read the set right before each `--batch` call, never
-   reuse the list the pass started with. A lone ready candidate lands alone at once, unless
+   reuse the list the pass started with. A lone ready candidate lands alone at once — as a
+   batch of one — unless
    the repo declares [`ship-batch-wait: <duration>`](project.schema.md#ship-batch-wait--optional):
    then, with the lane otherwise idle (trunk's run finished, no batch in flight), it waits
    up to that window — counted from when it became ready, so it never restarts — for a
-   partner, and lands alone after. The handbook gives no default and no ceiling: absent
+   partner, and lands alone after, still as a batch of one. The handbook gives no default and no ceiling: absent
    is no wait. A repo picks the value from its own history.
 
 `colab ship --batch` never waits: each call reads the remote, takes one step, and exits

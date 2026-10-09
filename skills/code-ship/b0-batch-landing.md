@@ -7,9 +7,10 @@ behind them — moved here verbatim (#524).
 ### Batch landing — several ready candidates, one combined run (#373)
 
 **Only where `.github/project.yml` declares `ship-batch: <N>` greater than 1.** Absent or 1,
-skip this subsection: every candidate ships alone, as below. With it, two or more candidates
-that are each **ready** — `green` at their own head (B1a's class, or the `none` that cannot
-arrive), merge-clean against trunk — land through one command instead of one ship each
+skip this subsection: every candidate ships alone, as below. With it, the candidates that
+are each **ready** — `green` at their own head (B1a's class, or the `none` that cannot
+arrive), merge-clean against trunk — land through one command instead of one ship each,
+**however many there are: a batch of one is valid** (#562)
 (`CONVENTIONS.md`
 [§4, *Batch landing*](../../CONVENTIONS.md#batch-landing--one-combined-run-then-a-fast-forward-373)):
 
@@ -55,9 +56,9 @@ arrive), merge-clean against trunk — land through one command instead of one s
      so calling again never restarts it. Wait at most that long — a bounded `colab ci-wait`
      on another candidate still in CI counts toward it. Then go back to step 0, gather
      again, and call `--batch` with every ready candidate. Once the window has passed, the
-     same one-branch call declines to serial (exit `4`), and the member ships alone.
-     **With one ready candidate on such a repo, call `colab ship --batch <it>` instead of
-     shipping it serially, so the window is honoured.** Without the field, a lone candidate
-     ships serially at once, as before.
+     same one-branch call builds it as a batch of one (exit `3`, then `0` once its combined
+     run is green). **With one ready candidate on such a repo, call `colab ship --batch <it>`
+     instead of shipping it serially** — with or without the field: the combined run is what
+     gates it with every setup the repo runs only on `ship-batch/**` and trunk (#562).
 4. A red trunk declines a batch outright: the cure and ci-grant doors (B1, *Red trunk*) apply to
    one member at a time, never to a batch.
