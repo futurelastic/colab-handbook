@@ -179,4 +179,12 @@ session that takes the group runs the `record:` line before its first build comm
 same way it runs `start:`. That is the ordinary agent case the command's own help
 describes: an agent writing down a ruling a human already made.
 
+**An open ask on the issue? Name it with `--answers <ask id>`.** When a dashboard that
+tracks asks has written an ask record on the issue (`<!-- <tool>:ask id=<id> v=<n> -->`) and
+nothing has answered it yet, the `record:` line ends in `--answers <id>`. A ruling that names
+no ask leaves a consumer guessing which question it settled. With several open asks it cannot
+tell at all, and the issue stays held on an ask that was in fact ruled. `colab decision
+--record` reads the open asks for you (#582). With one open ask it prints the id and the exact
+re-run line, and with two or more it refuses until `--answers` names one.
+
 Not UI-affecting → no `design:` line, same as `mechanical:` and `priority:` above.

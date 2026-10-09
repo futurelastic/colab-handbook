@@ -315,3 +315,71 @@ test('decision --list keeps an interrupted write among the live decisions, and n
   assert.strictEqual(j.pairs[0].pending, false);
   assert.match(j.pairs[0].fix, /--remove-label needs-decision/);
 });
+
+// --- #582: --record shows the open ask(s) and asks for --answers when it is ambiguous ----------
+
+const ASK_1 = { createdAt: '2026-01-01T00:00:00Z', body: '<!-- dash:ask id=ask-one v=1 owner=boss default=A -->\nWhich way?\n\nA: this\nB: that', author: { login: 'bot' }, authorAssociation: 'NONE' };
+const ASK_2 = { createdAt: '2026-01-01T00:01:00Z', body: '<!-- dash:ask id=ask-two v=1 default=B -->\nAnd this?\n\nA: yes\nB: no', author: { login: 'bot' }, authorAssociation: 'NONE' };
+const viewWith = (comments) => ({ code: 0, stdout: JSON.stringify({ state: 'OPEN', labels: [], comments }) + '\n' });
+
+test('decision --record, ONE open ask, no --answers: prints the ask id and the exact --answers re-run line, then records', () => {
+  const fx = fixture({
+    'issue view': viewWith([ASK_1]),
+    'label list': { code: 1, stderr: 'fixture: no labels\n' },
+    'issue comment': { code: 0, stdout: '' },
+    'issue edit': { code: 0, stdout: '' },
+  });
+  const r = colab(fx, ['decision', '1', '--record', '--ruled-by', 'boss', '--repo', fx.work]);
+  assert.strictEqual(r.code, 0, r.out + r.err);
+  assert.match(r.err, /one open ask: ask-one/);
+  assert.match(r.err, /will be read as answering it/);
+  assert.match(r.err, /colab decision 1 --record --ruled-by boss --answers ask-one/);
+});
+
+test('decision --record, TWO open asks, no --answers: refuses non-zero before any write and lists both ids', () => {
+  const fx = fixture({
+    'issue view': viewWith([ASK_1, ASK_2]),
+    'label list': { code: 1, stderr: 'fixture: no labels\n' },
+    // no 'issue comment' / 'issue edit' — a write would hit "unscripted" and fail differently
+  });
+  const r = colab(fx, ['decision', '1', '--record', '--ruled-by', 'boss', '--repo', fx.work]);
+  assert.notStrictEqual(r.code, 0, r.out + r.err);
+  assert.match(r.err, /2 open asks/);
+  assert.match(r.err, /ask-one/);
+  assert.match(r.err, /ask-two/);
+  assert.match(r.err, /--answers ask-two/);
+  assert.doesNotMatch(r.err, /unscripted/);
+});
+
+test('decision --record, TWO open asks WITH --answers: records without complaint', () => {
+  const fx = fixture({
+    'issue view': viewWith([ASK_1, ASK_2]),
+    'label list': { code: 1, stderr: 'fixture: no labels\n' },
+    'issue comment': { code: 0, stdout: '' },
+    'issue edit': { code: 0, stdout: '' },
+  });
+  const r = colab(fx, ['decision', '1', '--record', '--ruled-by', 'boss', '--answers', 'ask-two', '--repo', fx.work]);
+  assert.strictEqual(r.code, 0, r.out + r.err);
+  assert.doesNotMatch(r.err, /open ask/);
+});
+
+test('decision --record, an ask already answered by an answer record: no open-ask notice', () => {
+  const answered = { createdAt: '2026-01-01T00:02:00Z', body: '<!-- dash:answer ask=ask-one v=1 option=A by=coordinator at=2026-01-01T00:02:00Z -->', author: { login: 'bot' }, authorAssociation: 'NONE' };
+  const fx = fixture({
+    'issue view': viewWith([ASK_1, answered]),
+    'label list': { code: 1, stderr: 'fixture: no labels\n' },
+    'issue comment': { code: 0, stdout: '' },
+    'issue edit': { code: 0, stdout: '' },
+  });
+  const r = colab(fx, ['decision', '1', '--record', '--ruled-by', 'boss', '--repo', fx.work]);
+  assert.strictEqual(r.code, 0, r.out + r.err);
+  assert.doesNotMatch(r.err, /open ask/);
+});
+
+test('HELP_DECISION documents --answers for an ask id, not only a decision:options comment', () => {
+  const fx = fixture({});
+  const r = colab(fx, ['decision', '--help']);
+  assert.strictEqual(r.code, 0, r.out + r.err);
+  assert.match(r.out, /--answers <ref>\s+\(--record only\) the open ask id/);
+  assert.match(r.out, /ASK ID/);
+});

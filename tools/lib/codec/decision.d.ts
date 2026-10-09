@@ -27,3 +27,10 @@ export const OPTIONS_RE: RegExp;
 export const MOCKUP_RE: RegExp;
 export function encodeMockup(url: string): string;
 export function mockupUrls(body: unknown): string[];
+
+/** An ask record a dashboard that tracks asks wrote (#582) — read-only to colab. */
+export interface AskRecord { ns: string; id: string; version: number; index: number; }
+/** An answer record naming an ask by id (#582). */
+export interface AnswerRecord { ns: string; ask: string; version: number | null; index: number; }
+export function askRecords(text: unknown): AskRecord[];
+export function answerRecords(text: unknown): AnswerRecord[];

@@ -74,8 +74,62 @@ function mockupUrls(body) {
   return out;
 }
 
+/**
+ * ASK / ANSWER RECORDS (#582) — the structured question a dashboard that tracks asks writes onto an
+ * issue, and the answer that settles it. READ-ONLY here: colab never writes either, it only needs to
+ * know which asks are still open so `colab decision --record` can name the one a ruling settles.
+ *
+ * Wire shape, namespaced by whatever tool wrote it (the namespace is not interpreted — any tool
+ * writing this shape is read the same way):
+ *   `<!-- <tool>:ask id=<id> v=<n> [key=value …] -->` + the question below it
+ *   `<!-- <tool>:answer ask=<id> [v=<n>] [key=value …] -->` (+ optional note)
+ * and the same heads as a bare line form `<tool>:ask id=…` at the start of a line. Attribute values
+ * are percent-encoded and space-separated. Other kinds naming an ask (a wait, a delegation) are not
+ * answers and are not read.
+ */
+const RECORD_NS = '[a-z][a-z0-9_-]*';
+function recordHeads(text, kind) {
+  if (typeof text !== 'string' || text === '') return [];
+  const heads = [];
+  const markerRe = new RegExp(`<!--\\s*(${RECORD_NS}):${kind}\\s+([^>]*?)\\s*-->`, 'g');
+  const lineRe = new RegExp(`^(${RECORD_NS}):${kind}\\s+([^\\n]*)$`, 'gm');
+  for (const re of [markerRe, lineRe]) {
+    let m;
+    while ((m = re.exec(text))) {
+      const attrs = parseRecordAttrs(m[2]);
+      if (attrs) heads.push({ index: m.index, ns: m[1], attrs });
+    }
+  }
+  return heads.sort((a, b) => a.index - b.index);
+}
+/** `k=v k2=v2` → `{k: v, k2: v2}` (values percent-decoded), or null when any token is not `k=v`. */
+function parseRecordAttrs(raw) {
+  const out = {};
+  const toks = String(raw).trim().split(/\s+/).filter(Boolean);
+  if (toks.length === 0) return null;
+  for (const t of toks) {
+    const m = /^([a-z][a-z0-9_-]*)=(\S*)$/i.exec(t);
+    if (!m) return null;
+    try { out[m[1]] = decodeURIComponent(m[2]); } catch (_) { out[m[1]] = m[2]; }
+  }
+  return out;
+}
+/** Every ask record in `text`, in order: `{ns, id, version, index}`. Requires `id` and an integer `v >= 1`. */
+function askRecords(text) {
+  return recordHeads(text, 'ask')
+    .filter((h) => h.attrs.id && /^\d+$/.test(h.attrs.v || '') && Number(h.attrs.v) >= 1)
+    .map((h) => ({ ns: h.ns, id: h.attrs.id, version: Number(h.attrs.v), index: h.index }));
+}
+/** Every answer record in `text`, in order: `{ns, ask, version, index}` (`version` null when absent). */
+function answerRecords(text) {
+  return recordHeads(text, 'answer')
+    .filter((h) => h.attrs.ask)
+    .map((h) => ({ ns: h.ns, ask: h.attrs.ask, version: /^\d+$/.test(h.attrs.v || '') ? Number(h.attrs.v) : null, index: h.index }));
+}
+
 module.exports = {
   DECISION_MARK, REOPEN_MARK, DECISION_RE, REOPEN_RE,
   encodeDecision, decodeDecision, encodeReopen, decodeReopen,
   OPTIONS_RE, MOCKUP_RE, encodeMockup, mockupUrls,
+  askRecords, answerRecords,
 };
