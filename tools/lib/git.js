@@ -1042,7 +1042,7 @@ function ghInstalled() {
 function ghRunsForRef(repo, ref, sha, limit = 20) {
   if (!sha) return null;
   const r = gh(['run', 'list', '--branch', ref, '-L', String(limit),
-    '--json', 'headSha,status,conclusion,createdAt,databaseId,workflowName,attempt'], { cwd: repo });
+    '--json', 'headSha,status,conclusion,createdAt,updatedAt,databaseId,workflowName,attempt'], { cwd: repo });
   if (!r.ok) return null;
   let runs;
   try { runs = JSON.parse(r.stdout); } catch (_) { return null; }

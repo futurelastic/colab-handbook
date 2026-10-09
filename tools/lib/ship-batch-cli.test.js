@@ -74,10 +74,12 @@ function fixture({ yml = YML(), ci = CI_WIRED } = {}) {
     `  SHA=$(git -C "${origin}" rev-parse --verify -q "refs/heads/$BR")`,
     `  if [ -n "$SHA" ]; then echo "$SHA" > "${seenDir}/$KEY"; elif [ -f "${seenDir}/$KEY" ]; then SHA=$(cat "${seenDir}/$KEY"); fi`,
     '  if [ -z "$SHA" ]; then echo "[]"; exit 0; fi',
-    '  ST=completed; CO=success; AT=1',
-    `  if [ -f "${statusDir}/$KEY" ]; then read ST CO AT < "${statusDir}/$KEY"; fi`,
+    '  ST=completed; CO=success; AT=1; UP=',
+    `  if [ -f "${statusDir}/$KEY" ]; then read ST CO AT UP < "${statusDir}/$KEY"; fi`,
     '  if [ "$ST" = "none" ]; then echo "[]"; exit 0; fi',
-    '  echo "[{\\"headSha\\":\\"$SHA\\",\\"status\\":\\"$ST\\",\\"conclusion\\":\\"$CO\\",\\"attempt\\":$AT,\\"databaseId\\":9001,\\"workflowName\\":\\"CI\\",\\"createdAt\\":\\"2099-01-01T00:00:00Z\\"}]"',
+    // #581: an optional 4th field is the run's updatedAt (when it settled); absent → not emitted
+    '  UPJ=""; if [ -n "$UP" ]; then UPJ=",\\"updatedAt\\":\\"$UP\\""; fi',
+    '  echo "[{\\"headSha\\":\\"$SHA\\",\\"status\\":\\"$ST\\",\\"conclusion\\":\\"$CO\\",\\"attempt\\":$AT,\\"databaseId\\":9001,\\"workflowName\\":\\"CI\\",\\"createdAt\\":\\"2099-01-01T00:00:00Z\\"$UPJ}]"',
     '  exit 0',
     'fi',
     'if [ "$1" = "issue" ] && [ "$2" = "view" ]; then',
@@ -663,4 +665,77 @@ test('#509: the remote trunk really advanced during the land push → the "trunk
   assert.match(r.out, /Run this command again: it sees the moved trunk and rebuilds the batch on it/);
   assert.strictEqual(fx.originSha('main'), R, 'the racer, not the batch');
   assert.notStrictEqual(R, T);
+});
+
+// ---- #581: a batch in flight holds the trunk lane — a serial ship waits instead of discarding it ----
+const isoAgo = (min) => new Date(Date.now() - min * 60000).toISOString().replace(/\.\d{3}Z$/, 'Z');
+const laneRow = (fx, branch) => {
+  const body = JSON.parse(colab(fx, ['ship', '--dry', '--json', '--branch', branch, '--repo', fx.work]).out);
+  return { body, row: body.checks.find((c) => c.name === 'no batch in flight (#581)') };
+};
+
+test('#581 oracle: a serial ship pauses while a batch run is in flight or freshly green — trunk does not move under it', () => {
+  const fx = fixture();
+  for (const b of MEMBERS.slice(0, 2)) member(fx, b);
+  member(fx, 'fix/d-14');
+  const T = fx.originSha('main');
+  const ref = `ship-batch/${T.slice(0, 7)}`;
+  assert.strictEqual(batch(fx, MEMBERS.slice(0, 2)).code, 3);
+  const staged = fx.originSha(ref);
+
+  for (const status of ['in_progress null 1', `completed success 1 ${isoAgo(2)}`]) {
+    fx.setStatus(ref, status);
+    const s = colab(fx, ['ship', '--branch', 'fix/d-14', '--repo', fx.work]);
+    assert.strictEqual(s.code, 3, `${status}: ${s.out}${s.err}`);
+    assert.match(s.out, new RegExp(`BATCH-IN-FLIGHT ${ref} — `));
+    assert.match(s.out, /no batch in flight \(#581\)/, 'the table row names it');
+    assert.strictEqual(fx.originSha('main'), T, `${status}: trunk did not move`);
+    assert.strictEqual(fx.originSha(ref), staged, `${status}: the batch is untouched`);
+    assert.strictEqual(fx.originSha('fix/d-14') !== '', true);
+
+    const { body, row } = laneRow(fx, 'fix/d-14');
+    assert.strictEqual(body.ok, false, 'a coordinator reading --dry --json is told to wait');
+    assert.strictEqual(row.ok, false);
+    assert.strictEqual(row.class, 'self-clearing');
+    assert.strictEqual(row.batchRef, ref);
+  }
+
+  // the batch lands on its next call — no rebuild, no extra CI cycle
+  const land = batch(fx, MEMBERS.slice(0, 2));
+  assert.strictEqual(land.code, 0, land.out + land.err);
+  assert.doesNotMatch(land.out, /rebuilding/);
+  assert.strictEqual(fx.originSha('main'), staged, 'trunk fast-forwarded to the green batch head');
+  const after = laneRow(fx, 'fix/d-14').row;
+  assert.strictEqual(after.ok, true, JSON.stringify(after));
+  assert.match(after.detail, /no batch in flight at main@/);
+});
+
+test('#581: a just-built batch with no run yet holds; an abandoned or declined one does not', () => {
+  const fx = fixture();
+  member(fx, 'fix/a-11');
+  member(fx, 'fix/d-14');
+  const T = fx.originSha('main');
+  const ref = `ship-batch/${T.slice(0, 7)}`;
+  assert.strictEqual(batch(fx, ['fix/a-11']).code, 3);
+
+  fx.setStatus(ref, 'none');
+  assert.strictEqual(laneRow(fx, 'fix/d-14').row.ok, false, 'built seconds ago, its run has not appeared yet');
+
+  fx.setStatus(ref, `completed success 1 ${isoAgo(20)}`);
+  const stale = laneRow(fx, 'fix/d-14').row;
+  assert.strictEqual(stale.ok, true, 'green 20m ago and never landed — abandoned, it holds nothing');
+  assert.match(stale.detail, /still not landed .*abandoned/);
+
+  fx.setStatus(ref, 'completed failure 1');
+  const red = laneRow(fx, 'fix/d-14').row;
+  assert.strictEqual(red.ok, true);
+  assert.match(red.detail, /declined/);
+});
+
+test('#581: inert where ship-batch is not enabled — no row, and no batch ref is even read', () => {
+  const fx = fixture({ yml: YML('') });
+  member(fx, 'fix/d-14');
+  const { row } = laneRow(fx, 'fix/d-14');
+  assert.strictEqual(row, undefined);
+  assert.doesNotMatch(ghLog(fx), /--branch ship-batch\//);
 });

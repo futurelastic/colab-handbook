@@ -371,6 +371,66 @@ function batchGreenCoversTrunk({ trunkRows, batchRows, trunkFires, batchFires })
 }
 
 /**
+ * #581: the lane reservation. A batch ref at trunk's CURRENT tip whose combined run is in flight (or
+ * green and not yet landed) holds the trunk lane: a serial `colab ship` into trunk that landed now
+ * would move trunk under it, and the batch's next call would throw the green run away and rebuild —
+ * measured five builds in two hours on one repo, every member ready the whole time. The ref itself
+ * is the reservation: it already sits on the remote every lander reads, it names its base, and its
+ * runs say whether it is alive. No second record to write, expire or keep in sync.
+ *
+ * Facts in, per batch ref on the remote (`batches`):
+ *   ref, base7       parseBatchRef
+ *   verdict          combinedVerdict of the runs at its head
+ *   builtAtMs        the batch head's commit time (the build commits it), null = unread
+ *   settledAtMs      the newest `updatedAt` of its runs once green, null = unread
+ * plus `trunkNow` (the remote trunk sha), `nowMs`, and `graceSec`.
+ *
+ * Out: `{ held: true, ref, why }` for the first batch that holds the lane, else `{ held: false,
+ * released: [{ ref, why }] }` naming each batch at this base that does NOT hold it, and why.
+ *   - a batch on an older base holds nothing: trunk already moved past it, it rebuilds anyway;
+ *   - red (first attempt or after its re-run) → declined, holds nothing;
+ *   - pending, or a run list that could not be read → held (fail closed: a pause clears itself);
+ *   - no run yet → held for `graceSec` after it was built, then released (its run never came);
+ *   - green → held for `graceSec` after it went green — its lander lands it on its next call —
+ *     then released: a green batch nobody lands is abandoned, and must not hold the lane forever.
+ * An unread time (built/settled) is released, never held: a hold has to be provably alive.
+ */
+const LANE_GRACE_SEC = 900;
+
+function laneHold({ batches, trunkNow, nowMs, graceSec = LANE_GRACE_SEC } = {}) {
+  const now = String(trunkNow || '');
+  const released = [];
+  if (!now) return { held: false, released };
+  const fresh = (atMs) => Number.isFinite(atMs) && Number.isFinite(nowMs) && (nowMs - atMs) < graceSec * 1000;
+  const mins = (atMs) => `${Math.max(0, Math.round((nowMs - atMs) / 60000))}m ago`;
+  for (const b of (Array.isArray(batches) ? batches : [])) {
+    if (!b || !b.base7 || !now.startsWith(b.base7)) continue;
+    const v = b.verdict || { state: 'pending', why: 'the run list could not be read' };
+    if (v.state === 'red') { released.push({ ref: b.ref, why: `declined — ${v.why}` }); continue; }
+    if (v.state === 'pending') return { held: true, ref: b.ref, why: `combined run in flight (${v.why})` };
+    if (v.state === 'none') {
+      if (fresh(b.builtAtMs)) return { held: true, ref: b.ref, why: `built ${mins(b.builtAtMs)}, its combined run has not appeared yet` };
+      released.push({ ref: b.ref, why: Number.isFinite(b.builtAtMs)
+        ? `no combined run ${mins(b.builtAtMs)} after it was built (grace ${graceSec}s) — treated as abandoned`
+        : 'no combined run, and its build time could not be read — not provably alive' });
+      continue;
+    }
+    if (fresh(b.settledAtMs)) return { held: true, ref: b.ref, why: `combined run green ${mins(b.settledAtMs)} — its lander lands it on its next call` };
+    released.push({ ref: b.ref, why: Number.isFinite(b.settledAtMs)
+      ? `combined run green ${mins(b.settledAtMs)} and still not landed (grace ${graceSec}s) — treated as abandoned`
+      : 'combined run green, but when it went green could not be read — not provably alive' });
+  }
+  return { held: false, released };
+}
+
+/** #581: when a batch's combined run settled — the newest `updatedAt` among its finished rows, else null. */
+function settledAt(rows) {
+  const t = (Array.isArray(rows) ? rows : []).filter((r) => r && r.status === 'completed')
+    .map((r) => Date.parse(r.updatedAt || '')).filter(Number.isFinite);
+  return t.length ? Math.max(...t) : null;
+}
+
+/**
  * #415: branches the command line names that a staged batch does not carry, in command-line order.
  * `staged` is parseMemberTrailers' `[{ branch }]`. Not a refusal on its own: a branch over the cap or
  * dropped at build is EXPECTED to be missing on resume — the caller must say so, never stay silent.
@@ -430,4 +490,5 @@ module.exports = {
   droppedTrailer, parseDroppedTrailers, appendTrailers,
   branchCiClass, memberEligibility, selectMembers, wiring, combinedVerdict, nextStep, foreignBatchStep,
   batchGreenCoversTrunk, evidenceSuffix, serialLine, notStaged, landPushFailure,
+  LANE_GRACE_SEC, laneHold, settledAt,
 };
