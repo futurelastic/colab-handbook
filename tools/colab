@@ -2049,10 +2049,25 @@ function cmdReleaseFinalize(argv) {
     });
     // #566: only the run that CUT the candidate vouches for what it published — read from the rows
     // BEFORE the #425 own-workflow filter (the release workflow is the cutter), minus this run itself.
-    const cutRun = releaseFinalize.cutRunVerdict(rawRows, {
+    const cutRunOpts = {
       tag: cand.tag, cutAt: cand.cutAt, ownRunId: process.env.GITHUB_ACTIONS === 'true' ? process.env.GITHUB_RUN_ID || null : null,
       jobCount: (id) => git.ghRunJobCount(repoAbs, id),
-    });
+    };
+    const cutRun = releaseFinalize.cutRunVerdict(rawRows, cutRunOpts);
+    // #565: a run that failed only in its deploy jobs (staging) — the three run-reading conditions
+    // re-read with it counted as passed. decide() uses that reading on a human final only, and names
+    // the failure either way. Jobs are read lazily: only when a condition already failed.
+    let deployReport = null;
+    if (Array.isArray(rawRows) && !(conditions.ci.ok && conditions.suite.ok && cutRun.ok)) {
+      const d = releaseFinalize.deployOnlyFailures(rawRows, (id) => git.ghRunJobs(repoAbs, id));
+      if (d.failures.length) {
+        const at = `${cand.tag}@${shortSha(cand.sha)}`;
+        const lenRows = releaseCut.withoutOwnWorkflow(d.rows); // #425, as readRuns does
+        const run = git.summarizeRunsForCommit(lenRows, cand.sha);
+        const ci = run ? (({ ok, detail }) => ({ ok, detail }))(classifyCiRun(repoAbs, run, at)) : { ok: false, detail: `gh run list failed — cannot confirm CI at ${at}` };
+        deployReport = { failures: d.failures, ci, suite: releaseCut.fullSuiteVerdict(lenRows, at), cutRun: releaseFinalize.cutRunVerdict(d.rows, cutRunOpts) };
+      }
+    }
     const suiteWorkflows = [...new Set((rows || []).map((r) => r.workflowName || '(unnamed workflow)'))];
     const period = releaseFinalize.periodVerdict({ cutAt: cand.cutAt, trackingCreatedAt: tracking && tracking.createdAt, testPeriodDays: policy.effective.testPeriodDays, now });
     // #437: the window is main plus project.yml's trunk: when that is another branch (trunk: dev).
@@ -2076,7 +2091,7 @@ function cmdReleaseFinalize(argv) {
     }
     const verdict = releaseFinalize.decide({
       policy, selection: sel, tracking, supersededHeld, period, trunk, regressions,
-      ci: conditions.ci, suite: conditions.suite, cutRun, schema: conditions.schema, switches: conditions.switches,
+      ci: conditions.ci, suite: conditions.suite, cutRun, deployReport, schema: conditions.schema, switches: conditions.switches,
       manifests, ancestry, tags: tagNames, finalGrant, migrations,
       human: { bar: humanBar, answeredBy: opts.answeredBy || null },
     });

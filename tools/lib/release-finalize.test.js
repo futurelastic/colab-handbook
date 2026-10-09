@@ -634,3 +634,67 @@ test('#566 decide: a candidate whose cutting run was cancelled is refused on the
   assert.strictEqual(good.state, 'candidate-ready');
   assert.strictEqual(rf.decide(facts({ cutRun: undefined })).state, 'refused', 'an unmeasured cut-run never passes');
 });
+
+// ---- #565: a failed staging deploy is a report on a human final, a gate on an automatic one ------
+
+const releaseCut = require('./release-cut.js');
+const JOBS_DEPLOY_RED = [
+  { name: 'Cut, finalize, publish', status: 'completed', conclusion: 'success' },
+  { name: 'Publish the image', status: 'completed', conclusion: 'success' },
+  { name: 'Deploy to staging', status: 'completed', conclusion: 'failure' },
+];
+
+/** The candidate's facts as the finalize CLI measures them: strict verdicts, plus the #565 re-read. */
+function measured565(jobs) {
+  const rows = [
+    cutRow({ databaseId: 801, workflowName: 'CI', event: 'push', createdAt: off(-20), updatedAt: off(-10) }),
+    cutRow({ databaseId: 902, conclusion: 'failure', createdAt: off(-3), updatedAt: off(30) }),
+  ];
+  const at = 'v1.2.1-rc.1@aaaaaaa';
+  const opts = { tag: 'v1.2.1-rc.1', cutAt: CUT };
+  const ci = (rs) => (rs.every((r) => r.conclusion === 'success') ? { ok: true, detail: 'all success' } : { ok: false, detail: 'conclusion=failure' });
+  const d = rf.deployOnlyFailures(rows, (id) => (id === 902 ? jobs : null));
+  return {
+    d,
+    facts: {
+      ci: ci(rows), suite: releaseCut.fullSuiteVerdict(rows, at), cutRun: rf.cutRunVerdict(rows, opts),
+      deployReport: d.failures.length ? { failures: d.failures, ci: ci(d.rows), suite: releaseCut.fullSuiteVerdict(d.rows, at), cutRun: rf.cutRunVerdict(d.rows, opts) } : null,
+    },
+  };
+}
+
+test('#565 deployOnlyFailures: only a run whose every failed job deploys is re-read as passed', () => {
+  const { d } = measured565(JOBS_DEPLOY_RED);
+  assert.deepStrictEqual(d.failures, [{ workflowName: 'Release (auto)', databaseId: 902, jobs: ['Deploy to staging (failure)'] }]);
+  assert.strictEqual(d.rows.find((r) => r.databaseId === 902).conclusion, 'success');
+  // a build/test/publish job failing keeps the run a failure, even beside a failed deploy
+  const image = JOBS_DEPLOY_RED.map((j) => (j.name === 'Publish the image' ? { ...j, conclusion: 'cancelled' } : j));
+  assert.deepStrictEqual(measured565(image).d.failures, []);
+  // unread jobs are never "deploy only"
+  assert.deepStrictEqual(rf.deployOnlyFailures([cutRow({ databaseId: 9, conclusion: 'failure' })], () => null).failures, []);
+  assert.strictEqual(rf.isDeployJob('deploy (staging)'), true);
+  assert.strictEqual(rf.isDeployJob('Build and test'), false);
+});
+
+test('#565 decide: human final + failed staging deploy -> candidate-ready, the failure named; automatic final still refuses', () => {
+  const { facts: m } = measured565(JOBS_DEPLOY_RED);
+  const human = rf.decide(facts({ policy: HUMAN, ...m }));
+  assert.strictEqual(human.state, 'candidate-ready');
+  const report = human.checks.find((c) => c.condition === 'deploy-report');
+  assert.deepStrictEqual([report.ok, report.required], [false, false]);
+  assert.match(report.detail, /Deploy to staging \(failure\)/);
+  assert.match(report.detail, /a report, not a gate/);
+  for (const c of ['ci-green', 'full-suite', 'cut-run']) assert.strictEqual(human.checks.find((x) => x.condition === c).ok, true, c);
+  for (const c of human.checks) assert.ok(rf.CONDITIONS.includes(c.condition), c.condition);
+
+  const auto = rf.decide(facts({ policy: AUTO, ...m }));
+  assert.strictEqual(auto.state, 'refused');
+  assert.match(auto.checks.find((c) => c.condition === 'deploy-report').detail, /treats it as blocking/);
+  assert.strictEqual(auto.checks.find((c) => c.condition === 'cut-run').ok, false);
+
+  // without the re-read (a non-deploy job failed), the human final is refused as before
+  const image = JOBS_DEPLOY_RED.map((j) => (j.name === 'Publish the image' ? { ...j, conclusion: 'failure' } : j));
+  const strict = rf.decide(facts({ policy: HUMAN, ...measured565(image).facts }));
+  assert.strictEqual(strict.state, 'refused');
+  assert.strictEqual(strict.checks.some((c) => c.condition === 'deploy-report'), false);
+});
