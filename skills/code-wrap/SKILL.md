@@ -69,11 +69,11 @@ context from `gh issue view $N` without re-reading the codebase.
 ```sh
 gh issue view $N                         # then edit the body:
 gh issue edit $N --body-file <tmpfile>   # tick the checklist, add Decisions/Gotchas
-gh issue comment $N -b "**<YYYY-MM-DD>** — did X, decided Y, left Z open."
+gh issue comment $N -b "**<YYYY-MM-DD>** — wrapped on \`<branch>\` (head <sha8>): did X, decided Y, left Z open."
 ```
 
 - Record **reusable knowledge** — a decision and *why*, a gotcha, a dead end —
-  not a copy of the diff. The code is already in git.
+  not a copy of the diff. Name branch + head: it is the hand-off (#578).
 - No GitHub remote? Write the same into the session notes file from code-start.
 - **`ceremony: light` repo** — distill real gotchas only; skip the progress-commentary
   comment (the `**<YYYY-MM-DD>** — did X…` line above). A tick of the checklist and a

@@ -78,6 +78,7 @@ const releaseFinalize = require('./lib/release-finalize');
 const releaseChannel = require('./lib/release-channel');
 const shippedBranch = require('./lib/shipped-branch');
 const shipRoles = require('./lib/ship-roles'); // #372
+const shipHandoff = require('./lib/ship-handoff'); // #578
 const refsBrake = require('./lib/refs-brake'); // #385
 const localAdopt = require('./lib/local-adopt'); // #393
 const ownerBranch = require('./lib/owner-branch'); // #394
@@ -10275,7 +10276,7 @@ function ciCureTrailerLine(cureVerdict, branch, trunk) {
   return `CI-Cure: branch ${branch} over-red ${trunk}@${shortSha(cureVerdict.redSha)} evidence ${shortSha(cureVerdict.evidenceSha)}${via}${admittedSuffix}${progressSuffix}`;
 }
 
-const HELP_SHIP = `colab ship [--repo <path>] [--worktree <name> | --branch <br> | --direct] [--message "<msg>"] [--refs <N[,M]>] [--keep-worktree] [--delete-branch | --keep-branch] [--adopt] [--answered-by <name>] [--session <id>] [--session-name <s>] [--dry] [--json]
+const HELP_SHIP = `colab ship [--repo <path>] [--worktree <name> | --branch <br> | --direct] [--message "<msg>"] [--refs <N[,M]>] [--keep-worktree] [--delete-branch | --keep-branch] [--adopt | --handoff <comment-url>] [--answered-by <name>] [--session <id>] [--session-name <s>] [--dry] [--json]
        colab ship --batch <b1,b2[,b3]> [--repo <path>] [--keep-worktree] [--delete-branch | --keep-branch] [--session <id>] [--session-name <s>] [--dry]
 
 The ONE sanctioned door for code-wrap Phase B: squash-merge a session branch into the BASE IT WAS
@@ -10370,6 +10371,19 @@ machine never held is most likely another machine's work in flight. Ship it from
 here, or pass --adopt if it genuinely has no issue — the squash then carries a
 \`Colab-Adopted: origin/<br> @ <sha> on <host> (machine <id>)\` trailer. A LOCAL no-digit branch is
 still a legitimate zero. --adopt never bypasses a branch that names issues.
+
+A HAND-OFF (#578) is the non-force door for a branch whose claim lives on ANOTHER machine:
+\`colab ship --branch <br> --handoff <url>\`, where <url> is the executor's hand-off comment
+(…/issues/<N>#issuecomment-<id>). With zero claims here, ship takes the issue set from the branch
+name's trailing run once the hand-off proves all of: the comment is on one of THIS repo's issues,
+one the branch carries; it names the branch and a sha that is the remote branch's CURRENT head (a
+branch that moved after its hand-off needs a new one); and every issue the branch carries has a
+live \`🔒 Claimed\` comment on that branch, posted by the hand-off's author before it. Nothing is
+claimed or taken over here: the executor keeps its claim, worktree and branch until it confirms
+the land, the shipped branch is kept, the squash carries \`Colab-Handoff: <url> @ <sha>\`, and each
+🚢 comment names the hand-off. Any check failing refuses (exit 1); --force is never involved, and
+the human takeover (\`colab claim --force\`) stays the only other way in. Not with --adopt,
+--batch or --direct, and not when this machine already holds a claim on the branch.
 
 UNATTACHED CLAIMS (#319). A claim taken with no --worktree and no --branch (\`colab claim <N>
 --session <id>\`) is carried by a branch ship only when BOTH hold: its session equals this ship's
@@ -11897,8 +11911,13 @@ function cmdShipDryJson(opts) {
   const trunk = resolveTrunk(repoAbs, doc);
   if (!trunk) throw new UserError('Could not determine trunk branch (set project.yml trunk:)');
   if (sess.branch === trunk) throw new UserError(`Refusing: --branch is the trunk itself (${trunk}) — nothing to ship. A unit committed straight to ${trunk} closes with \`colab ship --direct\` (#302)`);
+  const handoff = applyShipHandoff(repoAbs, sess, opts); // #578 — same resolution as the prose path
 
   const checks = [];
+  if (handoff) {
+    checks.push({ name: 'hand-off verified (#578)', ok: handoff.ok, class: handoff.ok ? null : HUMAN_GATED,
+      detail: handoff.ok ? handoffDetail(handoff) : `${handoff.reason}: ${handoff.detail}` });
+  }
   let target = null;
   // #74/#263: the close-gate split (closeIssues/refsIssues/checklistFindings) is reported
   // ALONGSIDE `checks` AS WELL AS folded into it — `closeIssues`/`refsIssues`/`checklistFindings`
@@ -12968,6 +12987,62 @@ function autonomyGatePayload(gate) {
 }
 
 /** The sha a branch name resolves to, local first, else origin's copy (#324's remote-only shape). */
+/**
+ * #578 — `--handoff <comment-url>`: verify the executor's recorded hand-off and, when it holds, take
+ * the session's issue set from it (tools/lib/ship-handoff.js says what it must prove). Returns null
+ * without --handoff, the failing verdict on a refusal, the passing one after mutating `sess`.
+ *
+ * Writes nothing locally: no claim record, no worktree record. The executor's claim is the claim;
+ * this ship only lands what it handed off, so B3 has nothing of THIS machine's to release.
+ */
+function applyShipHandoff(repoAbs, sess, opts) {
+  if (!opts.handoff) return null;
+  if (opts.adopt) throw new UserError('--handoff and --adopt contradict each other: --adopt is for a branch with NO issue, --handoff for one whose claim lives on another machine — drop --adopt');
+  if (sess.issues.length) {
+    throw new UserError(`--handoff is the door for a branch with NO claim on this machine, and this machine holds ${sess.issues.map((n) => '#' + n).join(' ')} ` +
+      `for ${sess.branch} — ship it without --handoff`);
+  }
+  const u = shipHandoff.parseHandoffUrl(opts.handoff);
+  let comment = null;
+  if (u) {
+    const r = git.ghApi(repoAbs, [`repos/{owner}/{repo}/issues/comments/${u.commentId}`]);
+    if (r.ok) {
+      try {
+        const j = JSON.parse(r.stdout);
+        comment = { body: j.body || '', login: (j.user && j.user.login) || '', createdAt: j.created_at || '', htmlUrl: j.html_url || '' };
+      } catch (_) { comment = null; }
+    }
+  }
+  // The head check must read the remote as it is NOW, not a tracking ref from whenever this clone last fetched.
+  const remote = git.remoteFor(repoAbs);
+  if (u && comment) git.git(['fetch', '--quiet', remote, `+refs/heads/${sess.branch}:refs/remotes/${remote}/${sess.branch}`], repoAbs);
+  const refs = git.branchRefs(repoAbs, sess.branch, remote);
+  const claimsByIssue = {};
+  if (u && comment) {
+    for (const n of shipguard.branchIssueNumbers(sess.branch)) {
+      const info = git.ghIssueView(repoAbs, n, ['comments']);
+      claimsByIssue[n] = info ? liveClaimComments(info.comments || []).map((c) => ({ ...c })) : null;
+    }
+  }
+  const v = shipHandoff.handoffVerdict({ url: opts.handoff, comment, branch: sess.branch, refs, claimsByIssue });
+  if (!v.ok) return v;
+  sess.issues = v.issues;
+  sess.handoff = v;
+  // #372: the implementer is the executor that handed off — name it, never leave it reading as the shipper.
+  const ex = (claimsByIssue[v.issues[0]] || []).find((c) => c.branch === sess.branch && c.login === v.executor.login);
+  if (ex && (ex.session || ex.sessionName)) sess.holder = { session: ex.session || '', sessionName: ex.sessionName || '' };
+  return v;
+}
+
+function handoffDetail(v) {
+  return `${v.url} hands off ${shortSha(v.sha)} = the remote head; executor ${v.executor.login}'s live claim on ${v.issues.map((n) => '#' + n).join(' ')}`;
+}
+
+/** The clause the 🚢 comment carries for a hand-off land — the executor still holds its claim. */
+function handoffEvidence(v) {
+  return v ? ` · landed from the executor's hand-off ${v.url} — its claim and worktree stay until it confirms the land` : '';
+}
+
 function shipRefFor(repoAbs, branch) {
   const r = git.branchRefs(repoAbs, branch);
   return r.localSha || r.remoteSha || branch;
@@ -12975,7 +13050,7 @@ function shipRefFor(repoAbs, branch) {
 
 function cmdShip(argv) {
   const opts = parseArgs(argv, {
-    values: { '--repo': 'repo', '--worktree': 'worktree', '--branch': 'branch', '--message': 'message', '--session': 'session', '--session-name': 'sessionName', '--batch': 'batch', '--answered-by': 'answeredBy' },
+    values: { '--repo': 'repo', '--worktree': 'worktree', '--branch': 'branch', '--message': 'message', '--session': 'session', '--session-name': 'sessionName', '--batch': 'batch', '--answered-by': 'answeredBy', '--handoff': 'handoff' },
     // #479: a repeated --refs used to keep only its LAST value, and every dropped issue then became a
     // `Closes` line on trunk — an issue meant to stay open, auto-closed by the push. --refs now
     // accumulates (a repeat is the same as one comma list); every OTHER value flag to ship refuses a
@@ -12990,6 +13065,8 @@ function cmdShip(argv) {
   // — refuse the combination rather than silently ignore --json on a real ship.
   if (opts.json && !opts.dry) throw new UserError('--json currently only applies together with --dry — see `colab ship --help`');
   if (shippedBranch.conflictingFlags(opts)) throw new UserError('--delete-branch and --keep-branch contradict each other — pass one (see `colab ship --help`, #368)');
+  // #578: a hand-off names ONE branch; batch and trunk-direct have no single branch for it to name.
+  if (opts.handoff && (opts.batch || opts.direct)) throw new UserError(`--handoff applies to one --branch ship — not to ${opts.batch ? '--batch' : '--direct'} (see \`colab ship --help\`)`);
   if (opts.batch) return cmdShipBatch(opts); // #373 — its own re-entrant path; nothing below changes
   // A fully separate code path, deliberately: the prose/table path below is unchanged by this
   // feature (CONVENTIONS/#77 requires it stay byte-identical), so --dry --json does its own
@@ -13006,6 +13083,17 @@ function cmdShip(argv) {
   const trunk = resolveTrunk(repoAbs, doc);
   if (!trunk) throw new UserError('Could not determine trunk branch (set project.yml trunk:)');
   if (sess.branch === trunk) throw new UserError(`Refusing: --branch is the trunk itself (${trunk}) — nothing to ship. A unit committed straight to ${trunk} closes with \`colab ship --direct\` (#302)`);
+
+  // #578: a remote-built branch's issue set, from its executor's recorded hand-off. Before the
+  // branch-resolves check below: reading the hand-off fetches the branch, which is what makes a
+  // remote-only branch resolve here at all.
+  const handoff = applyShipHandoff(repoAbs, sess, opts);
+  if (handoff && !handoff.ok) {
+    process.stderr.write(`✗ Refusing --handoff: ${handoff.detail}. Re-run with --handoff <a hand-off naming ${sess.branch} and its current head>, ` +
+      `ship from the executor's machine, or a human takes the claim over (\`colab claim <N> --branch ${sess.branch} --force\`, a human act).\n`);
+    process.stderr.write('  Nothing was claimed or taken over here — the executor\'s claim still stands.\n');
+    return 1;
+  }
 
   // ---- the recorded branch must RESOLVE, before anything else is computed ----
   // Everything downstream is keyed to this name: the claim lookup above, the migration diff, the
@@ -13066,6 +13154,7 @@ function cmdShip(argv) {
   const gh = isGhUsable(repoAbs);
   // #345: the gate that passed is the table's first row, so a reader sees WHICH door opened it.
   const checks = [['✓', 'autonomy granted', autonomyGate.detail]];
+  if (handoff) checks.push(['✓', 'hand-off verified (#578)', handoffDetail(handoff)]);
 
   // Which claimed issues are REFERENCED (Refs #N), not closed — three sources unioned by
   // resolveCloseRefsSplit (#48, #74): --refs, the tracking label, and #74's close gate (an
@@ -13738,7 +13827,7 @@ function cmdShip(argv) {
     (publicOmit ? (m) => print(`  ${m}`) : warn)(`Machine trailer ${machineTrailerSummary(trailerDecision)}`);
   }
   const machineLine = trailerDecision.line;
-  const ciTrailerLines = [ciTrailer, adoptTrailer, machineLine].filter(Boolean);
+  const ciTrailerLines = [ciTrailer, adoptTrailer, shipHandoff.handoffTrailer(sess.handoff), machineLine].filter(Boolean);
   if (opts.message) {
     // --message overrides the subject/body, but Closes is spliced in as its own paragraph — never
     // concatenated. Appending it welded ` — Closes #N` onto whatever the message ended with, which
@@ -13747,7 +13836,7 @@ function cmdShip(argv) {
     for (const tl of ciTrailerLines) {
       if (commitMsg.toLowerCase().includes(tl.toLowerCase())) continue;
       const lastLine = commitMsg.split('\n').pop().trim();
-      commitMsg += (/^(?:Co-authored-by|Signed-off-by|Claude-Session|Reviewed-by|CI-Grant|CI-Cure|Colab-Adopted|Machine):\s*\S/i.test(lastLine) ? '\n' : '\n\n') + tl;
+      commitMsg += (/^(?:Co-authored-by|Signed-off-by|Claude-Session|Reviewed-by|CI-Grant|CI-Cure|Colab-Adopted|Colab-Handoff|Machine):\s*\S/i.test(lastLine) ? '\n' : '\n\n') + tl;
     }
   } else {
     // Preserve the branch's crafted commit (subject + footers); insert Closes/Refs above the footers.
@@ -13957,7 +14046,7 @@ function cmdShip(argv) {
   pushEvent('ship', {
     repo: repoAbs, worktree: sess.name, session: sess.session,
     issue: sess.issues.length === 1 ? sess.issues[0] : undefined,
-    payload: { state: 'merged', branch: sess.branch, target, sha, issues: sess.issues, ...(adoptInfo ? { adopted: adoptInfo } : {}) },
+    payload: { state: 'merged', branch: sess.branch, target, sha, issues: sess.issues, ...(adoptInfo ? { adopted: adoptInfo } : {}), ...(sess.handoff ? { handoff: { url: sess.handoff.url, sha: sess.handoff.sha } } : {}) },
   });
 
   // Then, PER ISSUE, a merge-completion event (#46 §2, following #45 §2). The ship event above is
@@ -13979,11 +14068,12 @@ function cmdShip(argv) {
   // window itself now OPENS at the push (e2, #304), not here: post-ship's warnings belong in the
   // same block, and re-assigning the collector here would silently discard them.
   shipLandedTail({ repoAbs, sess, target, trunk, gh, sha, closeIssues, refsIssues, refsSet, integration, opts,
-    evidenceExtra: opts.humanDoorEvidence || '' }); // #525
+    evidenceExtra: (opts.humanDoorEvidence || '') + handoffEvidence(sess.handoff) }); // #525, #578
 
   print('');
   print(`✓ Shipped ${sess.branch} → ${target} @ ${sha}${sess.issues.length ? ' (' + sess.issues.map((n) => '#' + n).join(' ') + ')' : ''}`);
   if (adoptInfo) print(`  adopted from ${adoptInfo.remote || 'origin'}/${adoptInfo.branch} @ ${shortSha(adoptInfo.remoteSha)} — recorded in the Colab-Adopted: trailer (#324)`);
+  if (sess.handoff) print(`  landed from the hand-off ${sess.handoff.url} — the executor's claim and worktree stay until it confirms the land (#578)`);
   if (target !== trunk) print(`  "${target}" is a declared line: this work is NOT in ${trunk} until a human merges the line.`);
   // #114: everything deferred since the push (e2, #304) lands here, AFTER the success line — not scattered above it
   // where a long ship scrolls it out of view. The merge itself already landed either way; this is
@@ -14025,7 +14115,8 @@ function shipLandedTail({ repoAbs, sess, target, trunk, gh, sha, closeIssues, re
   // B3 (cont.) — the shipped branch. Kept by default; --delete-branch opts in. MUST come after the
   // worktree removal above: git refuses to delete a branch checked out in a worktree.
   // #368: a Refs-only ship deletes unless --keep-branch — see tools/lib/shipped-branch.js.
-  const disposition = shippedBranch.shippedBranchDisposition({ closeIssues, refsIssues, deleteBranch: opts.deleteBranch, keepBranch: opts.keepBranch });
+  // #578: a handed-off branch is the executor's until it confirms the land — never deleted for it.
+  const disposition = shippedBranch.shippedBranchDisposition({ closeIssues, refsIssues, deleteBranch: opts.deleteBranch, keepBranch: opts.keepBranch || (!!sess.handoff && !opts.deleteBranch) });
   handleShippedBranch(repoAbs, target, sess.branch, { disposition, worktreeKept, integration });
 
   // ---- (g/h) B4 verify + post summary per issue ----
