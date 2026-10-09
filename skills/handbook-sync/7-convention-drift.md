@@ -101,3 +101,56 @@ A copy whose positive pattern is already strict (`v[0-9]+.[0-9]+.[0-9]+`) cannot
 needs nothing. A copy with only a `workflow_dispatch` trigger (disarmed) is not a finding, but
 tell the operator the exclusion goes in when they arm it. `release-tag.yml` copies are exempt
 by design: they record a pre-release and deploy nothing.
+
+### A long-running CI or deploy job must declare `timeout-minutes` (#577)
+
+#572 and #573 gave the templates' long-running jobs a job-level `timeout-minutes`. A copy cut
+before that keeps GitHub's 360-minute default, and a self-hosted runner does not even hold to that
+default: #572 measured Laravel builds cancelled at 1440 and 1544 minutes, with the runner held the
+whole time and every later run queued behind it. Copy-and-own means the copy gets the change only
+through this sync. Read every copy, stamped or not:
+
+```sh
+for f in .github/workflows/ci.yml .github/workflows/deploy*.yml; do if [ -f "$f" ]; then node -e '
+  const f = process.argv[1], deploy = /\/deploy[^/]*\.ya?ml$/.test(f);
+  let inJobs = false, job = null; const jobs = new Map();
+  for (const l of require("fs").readFileSync(f, "utf8").split("\n")) {
+    if (/^jobs:\s*$/.test(l)) { inJobs = true; continue; }
+    if (inJobs && /^\S/.test(l) && !l.startsWith("#")) inJobs = false;
+    let m;
+    if (inJobs && (m = /^  ([A-Za-z0-9_-]+):\s*$/.exec(l))) jobs.set(job = m[1], false);
+    else if (job && /^    timeout-minutes:/.test(l)) jobs.set(job, true);
+  }
+  for (const [j, t] of jobs) if (!t && (deploy || /^(build|migrations)$/.test(j)))
+    console.log(`no timeout-minutes  ${f}  job: ${j}`);' "$f"; fi; done
+```
+
+Each printed line is a **finding**. It covers every job in a `deploy-*.yml` / `deploy.yml` copy,
+including hand-written ones, plus the `build` and `migrations` jobs of a `ci-*` copy. A CI copy
+named something other than `ci.yml` gets the same check under its own name. A step-level
+`timeout-minutes` (deeper indent) does not count, because it caps one step and leaves the job
+unbounded. A commented-out job is not live and is not a finding. That includes `ci-node`'s opt-in
+migration round-trip, which needs its timeout once someone uncomments it.
+
+**Offer the graft.** Take the template's line and its `# EDIT:` note, placed at job level next to
+`runs-on:`:
+
+| copy of | job | template value |
+|---|---|---|
+| `ci-node` | `build` | `60` (measured p99 37 / max 43 min) |
+| `ci-python` | `build` | `30` (not a measured fit, because only one adopter's byte-compile build was measured) |
+| `ci-laravel` | `build` | `45` (measured p99 20 / max 26 min) |
+| `ci-laravel`, `ci-node` opt-in | `migrations` | `15` (p99 under 4 min on every adopter) |
+| `deploy-xserver` | `deploy` | `30` |
+| `deploy-container` | `publish`, `deploy` | `45` each |
+| a hand-written deploy | each job | none. Propose a value from that repo's own run history |
+
+- **The value is the adopter's to size, and the template's number is only a starting point.** Size
+  it well above *this* repo's p99 for that job (`gh run list --workflow <file>` and then
+  `gh run view <id>` per job). Set it below the p99 and a slow but healthy run goes red. Say this in
+  the offer, and copy the `# EDIT:` note with the line so the next reader sees it too.
+- **Never overwrite a value the copy already has.** That includes one lower or higher than the
+  template's, and the copy's own number wins. This check only flags absence, and the snippet
+  prints nothing for a job that declares one.
+- A copy that declines the graft is reported with its reason on the Issue, like any other declined
+  graft (§4).
