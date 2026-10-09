@@ -300,6 +300,47 @@ function evaluateIssue({ labels, comments, labelEvents = null, body, trust } = {
   return { recorded, gated, contradiction: recorded && gated, pair, pending, decisions, ask, unshapedAsk };
 }
 
+/**
+ * #582: the ask records on this issue still waiting on an answer — what `colab decision --record`
+ * shows the recorder, so the ruling can name the ask it settles (`--answers <id>`). A consumer that
+ * tracks asks reads a nameless ruling as answering the issue's ONLY open ask; with two or more it
+ * cannot tell which one the ruling meant.
+ *
+ * An ask is OPEN when no answer comes AFTER its latest ask record (same id; a re-ask at a higher
+ * version reopens it). An answer is either an answer record naming the id, or a live `⚖ Decision
+ * recorded` whose `answers` field is that id. Order is by `createdAt`, then position inside one
+ * comment. Deliberately NOT trust-filtered: this only decides what to SHOW and whether a nameless
+ * record is ambiguous — it gates no start and authorizes nothing.
+ *
+ * Returns [{id, version, at, ns}], oldest-asked first.
+ */
+function openAsks(comments) {
+  const list = Array.isArray(comments) ? comments : [];
+  const sorted = list
+    .map((c, i) => ({ c, i }))
+    .sort((a, b) => (a.c.createdAt < b.c.createdAt ? -1 : a.c.createdAt > b.c.createdAt ? 1 : a.i - b.i));
+  const asks = new Map(); // id -> {id, version, at, ns, pos}
+  const answers = [];     // {id, pos}
+  sorted.forEach(({ c }, ci) => {
+    const body = String(c.body || '');
+    for (const a of codec.askRecords(body)) {
+      asks.set(a.id, { id: a.id, version: a.version, at: c.createdAt || null, ns: a.ns, pos: [ci, a.index] });
+    }
+    for (const r of codec.answerRecords(body)) answers.push({ id: r.ask, pos: [ci, r.index] });
+  });
+  const live = new Set(liveDecisions(list).map((d) => d.at));
+  sorted.forEach(({ c }, ci) => {
+    if (!live.has(c.createdAt)) return;
+    const d = codec.decodeDecision(c.body);
+    if (d && d.answers && d.answers !== '-') answers.push({ id: d.answers, pos: [ci, 0] });
+  });
+  const after = (p, q) => p[0] > q[0] || (p[0] === q[0] && p[1] > q[1]);
+  return [...asks.values()]
+    .filter((a) => !answers.some((r) => r.id === a.id && after(r.pos, a.pos)))
+    .sort((a, b) => (after(a.pos, b.pos) ? 1 : -1))
+    .map(({ id, version, at, ns }) => ({ id, version, at, ns }));
+}
+
 module.exports = {
   DECISION_MARK, REOPEN_MARK, DECISION_RE, REOPEN_RE,
   decisionCommentBody, reopenCommentBody,
@@ -308,4 +349,5 @@ module.exports = {
   OPTIONS_RE, PAIR_VERDICTS, pairVerdict,
   MOCKUP_RE, mockupUrls, ASK_SHAPES, askShape,
   evaluateIssue,
+  openAsks,
 };

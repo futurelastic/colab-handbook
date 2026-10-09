@@ -4185,8 +4185,14 @@ TRUSTED_ASSOCIATIONS, checked on read. Same principle, a different mechanism, be
 command TRANSCRIBES a decision made elsewhere rather than AUTHORIZING a write that did not exist
 before it ran — the flag would assert nothing here that \`--ruled-by\` does not already.
 
-\`--answers <ref>\` names the \`<!-- decision:options -->\` comment (id or URL) this decision
-resolves, when one exists — omit it when there was no options block.
+\`--answers <ref>\` names the question this decision resolves: an ASK ID (the \`id=\` of an open
+\`<!-- <tool>:ask id=<id> v=<n> -->\` record a dashboard that tracks asks wrote on the issue), or the
+\`<!-- decision:options -->\` comment (id or URL). Omit it only when there is neither. --record
+reads the issue's open asks first (#582) — an ask with no answer record, and no ⚖ record
+naming it, after its latest version: with ONE open ask and no --answers it prints the ask id
+and the exact re-run line, and says the ruling will be read as answering that ask; with TWO OR
+MORE it REFUSES before any write and lists every id, because a nameless ruling cannot say which
+one it settles.
 
 Reopening removes \`${labels.DECISION_RECORDED_LABEL}\`, re-applies \`${labels.NEEDS_DECISION_LABEL}\`,
 and posts a \`${decisionRecord.REOPEN_MARK}\` receipt — every decision on that issue up to this
@@ -4215,7 +4221,7 @@ Options:
                        and an issue number is present, for the common one-shot case)
   --reopen             reopen an existing decision instead of recording a new one
   --ruled-by <name>    required for --record/--reopen — who made this call, never the typist
-  --answers <ref>      (--record only) the decision:options comment this answers, if any
+  --answers <ref>      (--record only) the open ask id, or the decision:options comment, this answers
   --body-file <f>      ruling prose (or reopen reason) to append below the marker line
   --list               list every issue with a live decision right now, instead of recording
   --json               (with --list) machine-readable output
@@ -4305,6 +4311,23 @@ function cmdDecisionRecord(repoAbs, num, opts, body) {
     throw new UserError(`${describeDecisionPair(num, pair)}
   Recording over this pair must name the question it answers: re-run with --answers <decision:options comment id or URL>.
   ${pair.fix}`);
+  }
+
+  // #582: show the recorder the asks still waiting on this issue, so the ruling names the one it
+  // settles. One open ask + no --answers: a consumer reads the ruling as answering it — say so.
+  // Two or more + no --answers: ambiguous, refuse before any write (same posture as the pair
+  // check above) and list the ids.
+  const asks = decisionRecord.openAsks(info.comments);
+  const shellQuote = (v) => (/^[A-Za-z0-9_@%+=:,./-]+$/.test(String(v)) ? String(v) : `'${String(v).replace(/'/g, `'\\''`)}'`);
+  if (asks.length > 0 && !opts.answers) {
+    const rerun = (id) => `colab decision ${num} --record --ruled-by ${shellQuote(opts.ruledBy)} --answers ${shellQuote(id)}${opts.bodyFile ? ` --body-file ${shellQuote(opts.bodyFile)}` : ''}`;
+    const rows = asks.map((a) => `    ${a.id}  (v${a.version}, asked ${a.at || 'unknown'})\n      ${rerun(a.id)}`).join('\n');
+    if (asks.length > 1) {
+      throw new UserError(`#${num} has ${asks.length} open asks and this record names none — a reader cannot tell which one the ruling settles. Re-run with --answers <ask id>:
+${rows}`);
+    }
+    warn(`#${num} has one open ask: ${asks[0].id} (v${asks[0].version}, asked ${asks[0].at || 'unknown'}). This ruling will be read as answering it. To name it explicitly, re-run as:
+  ${rerun(asks[0].id)}`);
   }
 
   const present = git.ghListLabels(repoAbs);

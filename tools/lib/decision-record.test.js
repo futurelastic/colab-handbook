@@ -329,3 +329,41 @@ test('evaluateIssue: unshapedAsk flags a pending question in neither shape, and 
   assert.strictEqual(shaped.pending, true, 'the shape never changes whether the question is pending');
   assert.strictEqual(evaluateIssue({ labels: [], comments: [], body: 'no gate' }).unshapedAsk, false);
 });
+
+// --- #582: openAsks ------------------------------------------------------------------------------
+
+test('openAsks: an ask with no later answer is open; an answer record, or a ⚖ record naming it, closes it; a re-ask reopens it', () => {
+  const { openAsks } = require('./decision-record.js');
+  const c = [
+    { createdAt: '2026-01-01T00:00:00Z', body: '<!-- dash:ask id=a1 v=1 owner=boss -->\nQ1?' },
+    { createdAt: '2026-01-01T00:01:00Z', body: 'tool:ask id=a2 v=1\nQ2?' }, // bare line form
+    { createdAt: '2026-01-01T00:02:00Z', body: '<!-- dash:answer ask=a2 v=1 option=A by=coordinator at=2026-01-01T00:02:00Z -->' },
+  ];
+  assert.deepStrictEqual(openAsks(c).map((a) => a.id), ['a1']);
+  c.push({ createdAt: '2026-01-01T00:03:00Z', body: '⚖ Decision recorded — ruled-by `boss` · answers `a1` · host `h` · 2026-01-01T00:03:00Z' });
+  assert.deepStrictEqual(openAsks(c), []);
+  c.push({ createdAt: '2026-01-01T00:04:00Z', body: '<!-- dash:ask id=a1 v=2 -->\nQ1 again' });
+  assert.deepStrictEqual(openAsks(c), [{ id: 'a1', version: 2, at: '2026-01-01T00:04:00Z', ns: 'dash' }]);
+});
+
+test('openAsks: an answer BEFORE the ask, a wait/delegate record, a malformed head, or prose mention do not count', () => {
+  const { openAsks } = require('./decision-record.js');
+  const c = [
+    { createdAt: '2026-01-01T00:00:00Z', body: '<!-- dash:answer ask=a1 option=A by=coordinator at=2026-01-01T00:00:00Z -->' },
+    { createdAt: '2026-01-01T00:01:00Z', body: '<!-- dash:ask id=a1 v=1 -->\nQ?' },
+    { createdAt: '2026-01-01T00:02:00Z', body: '<!-- dash:wait ask=a1 until=2026-02-01 -->' },
+    { createdAt: '2026-01-01T00:03:00Z', body: '<!-- dash:ask id=bad -->\nno version' },
+    { createdAt: '2026-01-01T00:04:00Z', body: 'we discussed dash:ask id=x v=1 inline' },
+  ];
+  assert.deepStrictEqual(openAsks(c).map((a) => a.id), ['a1']);
+});
+
+test('openAsks: a ⚖ record cancelled by a later reopen no longer answers the ask', () => {
+  const { openAsks } = require('./decision-record.js');
+  const c = [
+    { createdAt: '2026-01-01T00:00:00Z', body: '<!-- dash:ask id=a1 v=1 -->\nQ?' },
+    { createdAt: '2026-01-01T00:01:00Z', body: '⚖ Decision recorded — ruled-by `boss` · answers `a1` · host `h` · 2026-01-01T00:01:00Z' },
+    { createdAt: '2026-01-01T00:02:00Z', body: '↩ Decision reopened — ruled-by `boss` · host `h` · 2026-01-01T00:02:00Z' },
+  ];
+  assert.deepStrictEqual(openAsks(c).map((a) => a.id), ['a1']);
+});
