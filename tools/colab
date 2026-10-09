@@ -15176,11 +15176,17 @@ its head, trunk runs say when a landing was pushed and when its trunk-CI cycle e
 Reports:
   batches     landed, and their fill · combined-run builds: first-attempt green, green after the
               one re-run, red, pending
-  red         red builds, and how many of their members then landed serially (the fallback)
+  red         red builds, and how many of their members then landed alone — serially, or as a
+              batch of one (#580) — the fallback
   dropped     members dropped at build, by class, and the eviction rate
   serial      serial landings, and MISSED PARTNERS — another change, landed later, that was
               already green when this one landed alone (could have joined) or went green inside
-              this landing's trunk-CI cycle (a near miss; its wait is what ship-batch-wait buys)
+              this landing's trunk-CI cycle (a near miss; its wait is what ship-batch-wait buys).
+              "serial" means landed through the serial path, and only that
+  alone       the same partner scan over every change that landed ALONE — serially or as a batch
+              of one (#580). On a ship-batch repo a lone ready candidate lands as a fill-1 batch,
+              so there serial reads zero either way; alone is the line to tune ship-batch-wait by.
+              Printed only when a batch of one landed (otherwise it equals serial)
   queue wait  green-at-head → landing, per landed change
 
 No batch history in the window is an answer, not an error: it says so, and still reports the
@@ -15285,12 +15291,17 @@ function cmdBatchStats(argv) {
   else {
     const fill = Object.keys(rep.batches.fill).sort().map((k) => `${rep.batches.fill[k]}×${k}`).join(' · ') || '—';
     print(`  batches      ${rep.batches.landed} landed (fill ${fill}) · ${rep.batches.builds} combined-run build(s): ${rep.batches.firstAttemptGreen} first-attempt green (${pct(rep.batches.firstAttemptGreenRate)}), ${rep.batches.greenAfterRerun} after a re-run, ${rep.batches.red} red, ${rep.batches.pending} pending`);
-    print(`  red          ${rep.red.builds} build(s) · ${rep.red.members} member(s), ${rep.red.relandedSerially} then landed serially`);
+    print(`  red          ${rep.red.builds} build(s) · ${rep.red.members} member(s), ${rep.red.relandedAlone} then landed alone (${rep.red.relandedSerially} serially · ${rep.red.relandedAlone - rep.red.relandedSerially} as a batch of one)`);
     const cls = Object.entries(rep.dropped.byClass).map(([k, v]) => `${v} ${k}`).join(', ');
     print(`  dropped      ${rep.dropped.count} of ${rep.dropped.attempted} attempted (${pct(rep.dropped.rate)})${cls ? ` — ${cls}` : ''}`);
   }
   print(`  serial       ${rep.serial.landings} landed alone · ${rep.serial.withMissedPartner} with a missed partner (already green) · ${rep.serial.withNearMiss} more with a near miss (green within its trunk-CI cycle)`);
   if (rep.serial.nearMissWait.samples) print(`  near misses  per pair, the wait from the lone change's own green that would have caught its partner: ${q(rep.serial.nearMissWait)}`);
+  if (rep.alone.batchOfOne) {
+    // #580: a batch of one landed alone too — the serial line above cannot see it.
+    print(`  alone        ${rep.alone.landings} landed alone (${rep.alone.landings - rep.alone.batchOfOne} serial · ${rep.alone.batchOfOne} batch of one) · ${rep.alone.withMissedPartner} with a missed partner (already green) · ${rep.alone.withNearMiss} more with a near miss`);
+    if (rep.alone.nearMissWait.samples) print(`  near misses  (alone) ${q(rep.alone.nearMissWait)}`);
+  }
   print(`  queue wait   green-at-head → landing: ${q(rep.queueWait)}`);
   for (const n of rep.notes) print(`  ! ${n}`);
   return 0;
