@@ -72,12 +72,8 @@ gh issue edit $N --body-file <tmpfile>   # tick the checklist, add Decisions/Got
 gh issue comment $N -b "**<YYYY-MM-DD>** — wrapped on \`<branch>\` (head <sha8>): did X, decided Y, left Z open."
 ```
 
-The distill comment names the branch and the pushed head sha: it is the **hand-off** another
-machine lands the branch from (`colab ship --handoff <its URL>`, #578), and a comment naming
-neither cannot be one.
-
 - Record **reusable knowledge** — a decision and *why*, a gotcha, a dead end —
-  not a copy of the diff. The code is already in git.
+  not a copy of the diff. Name branch + head: it is the hand-off (#578).
 - No GitHub remote? Write the same into the session notes file from code-start.
 - **`ceremony: light` repo** — distill real gotchas only; skip the progress-commentary
   comment (the `**<YYYY-MM-DD>** — did X…` line above). A tick of the checklist and a
