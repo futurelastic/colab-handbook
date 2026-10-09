@@ -316,3 +316,146 @@ test('#578 e2e: --handoff on a branch this machine already claims is refused as 
   assert.notStrictEqual(r.code, 0);
   assert.match(r.err, /this machine holds #90/);
 });
+
+// =================================================================================================
+// #579 — a stale remote-built branch: the lander's base-sync merges do not void the hand-off
+// =================================================================================================
+
+test('#579 verdict: a hand-off naming a sha the head reached through base-sync merges passes', () => {
+  const H = '1111111111111111111111111111111111111111';
+  const M1 = '2222222222222222222222222222222222222222';
+  const M2 = '3333333333333333333333333333333333333333';
+  const c = { ...COMMENT, body: `wrapped on \`${BR}\` (head ${H.slice(0, 8)})` };
+  const v = ho.handoffVerdict(base({ comment: c, refs: { localSha: null, remoteSha: M2 }, syncChain: [M1, H] }));
+  assert.strictEqual(v.ok, true, JSON.stringify(v));
+  assert.strictEqual(v.sha, M2, 'what lands is the synced head');
+  assert.strictEqual(v.handedOff, H);
+  assert.strictEqual(v.syncMerges, 2);
+  assert.strictEqual(ho.handoffTrailer(v), `Colab-Handoff: ${URL} @ ${H.slice(0, 12)} (synced to ${M2.slice(0, 12)} by 2 base merges)`);
+  // Without the chain the same hand-off is head-moved — the rule #578 shipped, unchanged.
+  const bare = ho.handoffVerdict(base({ comment: c, refs: { localSha: null, remoteSha: M2 } }));
+  assert.strictEqual(bare.reason, 'head-moved');
+  // A chain that does not reach the named sha (a fix-up stopped the walk) still refuses, and says why.
+  const short = ho.handoffVerdict(base({ comment: c, refs: { localSha: null, remoteSha: M2 }, syncChain: [M1] }));
+  assert.strictEqual(short.reason, 'head-moved');
+  assert.match(short.detail, /nor the sha its base-sync merges sit on/);
+  // An unsynced hand-off's trailer is exactly #578's.
+  assert.strictEqual(ho.handoffTrailer(ho.handoffVerdict(base())), `Colab-Handoff: ${URL} @ ${HEAD.slice(0, 12)}`);
+});
+
+/** A throwaway repo with a `main` and a branch `br` off it, for the chain walk on real git. */
+function chainRepo() {
+  const d = fs.mkdtempSync(path.join(os.tmpdir(), 'colab-syncchain-'));
+  TMP.push(d);
+  execFileSync('git', ['init', '-q', '-b', 'main', d]);
+  g(d, 'config', 'user.email', 'c@example.invalid'); g(d, 'config', 'user.name', 'chain');
+  g(d, 'config', 'core.hooksPath', path.join(d, '.nohooks'));
+  const commit = (file, text, msg) => { fs.writeFileSync(path.join(d, file), text); g(d, 'add', '-A'); g(d, 'commit', '-q', '-m', msg); return g(d, 'rev-parse', 'HEAD'); };
+  commit('shared.txt', 'one\n', 'base');
+  g(d, 'checkout', '-q', '-b', 'br');
+  const H = commit('feature.txt', 'feature\n', 'feat: the work');
+  g(d, 'checkout', '-q', 'main');
+  commit('trunk.txt', 'trunk moved\n', 'trunk 1');
+  g(d, 'checkout', '-q', 'br');
+  return { d, H, commit, run: (a) => { const r = spawnSync('git', a, { cwd: d, encoding: 'utf8' }); return { ok: r.status === 0, code: r.status, stdout: (r.stdout || '').trim() }; } };
+}
+
+test('#579 syncMergeChain: clean base merges are walked; a fix-up, a side merge, a hand edit stop it', () => {
+  // Two clean syncs stacked on H.
+  const r = chainRepo();
+  g(r.d, 'merge', '-q', '--no-edit', 'main');
+  const M1 = g(r.d, 'rev-parse', 'HEAD');
+  g(r.d, 'checkout', '-q', 'main'); r.commit('trunk2.txt', 'again\n', 'trunk 2'); g(r.d, 'checkout', '-q', 'br');
+  g(r.d, 'merge', '-q', '--no-edit', 'main');
+  const M2 = g(r.d, 'rev-parse', 'HEAD');
+  assert.deepStrictEqual(ho.syncMergeChain(r.run, M2, 'main'), [M1, r.H]);
+  assert.deepStrictEqual(ho.syncMergeChain(r.run, r.H, 'main'), [], 'an unsynced head has no chain');
+
+  // A non-merge commit after H, then a sync: the walk stops at the fix-up, so H is not reached.
+  const f = chainRepo();
+  const fix = f.commit('feature.txt', 'feature, edited after the hand-off\n', 'fix: later');
+  g(f.d, 'merge', '-q', '--no-edit', 'main');
+  assert.deepStrictEqual(ho.syncMergeChain(f.run, g(f.d, 'rev-parse', 'HEAD'), 'main'), [fix]);
+
+  // A merge whose result was hand-edited (amended) is not git's clean merge — not walked.
+  const e = chainRepo();
+  g(e.d, 'merge', '-q', '--no-edit', 'main');
+  fs.writeFileSync(path.join(e.d, 'feature.txt'), 'smuggled into the merge\n');
+  g(e.d, 'add', '-A'); g(e.d, 'commit', '-q', '--amend', '--no-edit');
+  assert.deepStrictEqual(ho.syncMergeChain(e.run, g(e.d, 'rev-parse', 'HEAD'), 'main'), []);
+
+  // A merge of something NOT on the base (a side branch) is not a base sync.
+  const s = chainRepo();
+  g(s.d, 'checkout', '-q', '-b', 'side', 'main~1'); s.commit('side.txt', 'side\n', 'side work'); g(s.d, 'checkout', '-q', 'br');
+  g(s.d, 'merge', '-q', '--no-edit', 'side');
+  assert.deepStrictEqual(ho.syncMergeChain(s.run, g(s.d, 'rev-parse', 'HEAD'), 'main'), []);
+
+  // A conflict resolved by hand: merge-tree reports the conflict, so the merge is not walked.
+  const c = chainRepo();
+  g(c.d, 'checkout', '-q', 'main'); c.commit('shared.txt', 'trunk side\n', 'trunk edits shared'); g(c.d, 'checkout', '-q', 'br');
+  c.commit('shared.txt', 'branch side\n', 'branch edits shared');
+  const pre = g(c.d, 'rev-parse', 'HEAD');
+  spawnSync('git', ['merge', '-q', '--no-edit', 'main'], { cwd: c.d });
+  fs.writeFileSync(path.join(c.d, 'shared.txt'), 'resolved by hand\n');
+  g(c.d, 'add', '-A'); g(c.d, 'commit', '-q', '--no-edit');
+  assert.notStrictEqual(g(c.d, 'rev-parse', 'HEAD'), pre);
+  assert.deepStrictEqual(ho.syncMergeChain(c.run, g(c.d, 'rev-parse', 'HEAD'), 'main'), []);
+});
+
+/** Trunk moves on origin after the hand-off (another branch lands), from machine B's clone. */
+function trunkMoves(fx, file = 'other.txt') {
+  g(fx.workB, 'checkout', '-q', 'main');
+  g(fx.workB, 'pull', '-q', '--ff-only', 'origin', 'main');
+  fs.writeFileSync(path.join(fx.workB, file), 'landed elsewhere\n');
+  g(fx.workB, 'add', '-A'); g(fx.workB, 'commit', '-q', '-m', 'feat: something else landed');
+  g(fx.workB, 'push', '-q', 'origin', 'main');
+}
+
+/** The lander's B0 sync: merge the base into the remote branch and push — from machine B. */
+function landerSyncs(fx, branch) {
+  g(fx.workB, 'fetch', '-q', 'origin');
+  g(fx.workB, 'checkout', '-q', '-B', branch, `origin/${branch}`);
+  g(fx.workB, 'merge', '-q', '--no-edit', 'origin/main');
+  g(fx.workB, 'push', '-q', 'origin', branch);
+  const head = g(fx.workB, 'rev-parse', 'HEAD');
+  g(fx.workB, 'checkout', '-q', 'main');
+  return head;
+}
+
+test('#579 e2e: a handed-off branch behind trunk is synced by the lander and lands from the SAME hand-off', () => {
+  const fx = fixture();
+  const { head } = executorBuilds(fx, BR, [90]);
+  const url = postHandoff(fx, 90, '701', `wrapped on \`${BR}\` (head ${head.slice(0, 8)}, cut from main).`);
+  trunkMoves(fx);
+  const synced = landerSyncs(fx, BR);
+  assert.notStrictEqual(synced, head);
+
+  const rep = JSON.parse(colab(fx, ['ship', '--branch', BR, '--handoff', url, '--repo', fx.workB, '--dry', '--json'], { home: fx.homeB, ...SHIPPER }).out);
+  const row = rep.checks.find((c) => /hand-off verified/.test(c.name));
+  assert.ok(row && row.ok && /1 clean base-sync merge/.test(row.detail), JSON.stringify(rep.checks, null, 1));
+
+  const r = colab(fx, ['ship', '--branch', BR, '--handoff', url, '--repo', fx.workB], { home: fx.homeB, ...SHIPPER });
+  assert.strictEqual(r.code, 0, r.out + r.err);
+  assert.match(r.out, /✓ Shipped feat\/thing-90 → main/);
+  const msg = execFileSync('git', ['--git-dir', fx.origin, 'log', '-1', '--format=%B', 'main'], { encoding: 'utf8' });
+  assert.match(msg, /Closes #90/);
+  assert.ok(msg.includes(`Colab-Handoff: ${url} @ ${head.slice(0, 12)} (synced to ${synced.slice(0, 12)} by 1 base merge)`), msg);
+  assert.strictEqual(execFileSync('git', ['--git-dir', fx.origin, 'show', 'main:thing.txt'], { encoding: 'utf8' }), 'built on A\n');
+  assert.strictEqual(execFileSync('git', ['--git-dir', fx.origin, 'show', 'main:other.txt'], { encoding: 'utf8' }), 'landed elsewhere\n');
+  assert.ok(!callLog(fx).includes('--force'));
+});
+
+test('#579 e2e: a non-merge commit after the handed-off head is still refused, synced or not', () => {
+  const fx = fixture();
+  const { wt, head } = executorBuilds(fx, BR, [90]);
+  const url = postHandoff(fx, 90, '702', `wrapped on \`${BR}\` (head ${head.slice(0, 8)}).`);
+  fs.writeFileSync(path.join(wt, 'more.txt'), 'after the hand-off\n');
+  g(wt, 'add', '-A'); g(wt, 'commit', '-q', '-m', 'feat: more'); g(wt, 'push', '-q', 'origin', BR);
+  trunkMoves(fx);
+  landerSyncs(fx, BR);
+
+  const r = colab(fx, ['ship', '--branch', BR, '--handoff', url, '--repo', fx.workB], { home: fx.homeB, ...SHIPPER });
+  assert.strictEqual(r.code, 1, r.out + r.err);
+  assert.match(r.err, /Refusing --handoff: .*moved after it was handed off by more than a clean merge of its base/);
+  assert.doesNotMatch(execFileSync('git', ['--git-dir', fx.origin, 'log', '--format=%s', 'main'], { encoding: 'utf8' }), /the thing/);
+});

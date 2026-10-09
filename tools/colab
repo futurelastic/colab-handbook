@@ -10377,13 +10377,20 @@ A HAND-OFF (#578) is the non-force door for a branch whose claim lives on ANOTHE
 (…/issues/<N>#issuecomment-<id>). With zero claims here, ship takes the issue set from the branch
 name's trailing run once the hand-off proves all of: the comment is on one of THIS repo's issues,
 one the branch carries; it names the branch and a sha that is the remote branch's CURRENT head (a
-branch that moved after its hand-off needs a new one); and every issue the branch carries has a
+branch that moved after its hand-off needs a new one — except by base-sync merges, #579, below); and every issue the branch carries has a
 live \`🔒 Claimed\` comment on that branch, posted by the hand-off's author before it. Nothing is
 claimed or taken over here: the executor keeps its claim, worktree and branch until it confirms
 the land, the shipped branch is kept, the squash carries \`Colab-Handoff: <url> @ <sha>\`, and each
 🚢 comment names the hand-off. Any check failing refuses (exit 1); --force is never involved, and
 the human takeover (\`colab claim --force\`) stays the only other way in. Not with --adopt,
 --batch or --direct, and not when this machine already holds a claim on the branch.
+
+A remote-built branch that fell BEHIND its base (#579) is synced by the lander as usual (B0: merge
+the base in, push) — and the hand-off still verifies, because the commits between the handed-off
+sha and the new head are each a PURE base-sync merge: two parents, the second already on the base,
+and a tree equal to git's own conflict-free merge of the two. A fix-up, a rebase, or a merge whose
+conflict was resolved by hand is not one, and still needs a new hand-off from the executor. The
+trailer then reads \`Colab-Handoff: <url> @ <handed-off sha> (synced to <head> by N base merge(s))\`.
 
 UNATTACHED CLAIMS (#319). A claim taken with no --worktree and no --branch (\`colab claim <N>
 --session <id>\`) is carried by a branch ship only when BOTH hold: its session equals this ship's
@@ -11911,7 +11918,7 @@ function cmdShipDryJson(opts) {
   const trunk = resolveTrunk(repoAbs, doc);
   if (!trunk) throw new UserError('Could not determine trunk branch (set project.yml trunk:)');
   if (sess.branch === trunk) throw new UserError(`Refusing: --branch is the trunk itself (${trunk}) — nothing to ship. A unit committed straight to ${trunk} closes with \`colab ship --direct\` (#302)`);
-  const handoff = applyShipHandoff(repoAbs, sess, opts); // #578 — same resolution as the prose path
+  const handoff = applyShipHandoff(repoAbs, sess, opts, trunk); // #578 — same resolution as the prose path
 
   const checks = [];
   if (handoff) {
@@ -12995,7 +13002,7 @@ function autonomyGatePayload(gate) {
  * Writes nothing locally: no claim record, no worktree record. The executor's claim is the claim;
  * this ship only lands what it handed off, so B3 has nothing of THIS machine's to release.
  */
-function applyShipHandoff(repoAbs, sess, opts) {
+function applyShipHandoff(repoAbs, sess, opts, trunk) {
   if (!opts.handoff) return null;
   if (opts.adopt) throw new UserError('--handoff and --adopt contradict each other: --adopt is for a branch with NO issue, --handoff for one whose claim lives on another machine — drop --adopt');
   if (sess.issues.length) {
@@ -13017,6 +13024,13 @@ function applyShipHandoff(repoAbs, sess, opts) {
   const remote = git.remoteFor(repoAbs);
   if (u && comment) git.git(['fetch', '--quiet', remote, `+refs/heads/${sess.branch}:refs/remotes/${remote}/${sess.branch}`], repoAbs);
   const refs = git.branchRefs(repoAbs, sess.branch, remote);
+  // #579: base-sync merges the lander (B0) stacked on the handed-off head do not void the hand-off.
+  // Read against the base as it is NOW — the merges' second parents must already be on it.
+  let syncChain = [];
+  if (u && comment && refs && refs.remoteSha && trunk) {
+    git.git(['fetch', '--quiet', remote, `+refs/heads/${trunk}:refs/remotes/${remote}/${trunk}`], repoAbs);
+    syncChain = shipHandoff.syncMergeChain((a) => git.git(a, repoAbs), refs.remoteSha, `refs/remotes/${remote}/${trunk}`);
+  }
   const claimsByIssue = {};
   if (u && comment) {
     for (const n of shipguard.branchIssueNumbers(sess.branch)) {
@@ -13024,7 +13038,7 @@ function applyShipHandoff(repoAbs, sess, opts) {
       claimsByIssue[n] = info ? liveClaimComments(info.comments || []).map((c) => ({ ...c })) : null;
     }
   }
-  const v = shipHandoff.handoffVerdict({ url: opts.handoff, comment, branch: sess.branch, refs, claimsByIssue });
+  const v = shipHandoff.handoffVerdict({ url: opts.handoff, comment, branch: sess.branch, refs, claimsByIssue, syncChain });
   if (!v.ok) return v;
   sess.issues = v.issues;
   sess.handoff = v;
@@ -13035,7 +13049,10 @@ function applyShipHandoff(repoAbs, sess, opts) {
 }
 
 function handoffDetail(v) {
-  return `${v.url} hands off ${shortSha(v.sha)} = the remote head; executor ${v.executor.login}'s live claim on ${v.issues.map((n) => '#' + n).join(' ')}`;
+  const head = v.syncMerges
+    ? `${shortSha(v.handedOff)}, under ${v.syncMerges} clean base-sync merge${v.syncMerges === 1 ? '' : 's'} to the remote head ${shortSha(v.sha)} (#579)`
+    : `${shortSha(v.sha)} = the remote head`;
+  return `${v.url} hands off ${head}; executor ${v.executor.login}'s live claim on ${v.issues.map((n) => '#' + n).join(' ')}`;
 }
 
 /** The clause the 🚢 comment carries for a hand-off land — the executor still holds its claim. */
@@ -13087,7 +13104,7 @@ function cmdShip(argv) {
   // #578: a remote-built branch's issue set, from its executor's recorded hand-off. Before the
   // branch-resolves check below: reading the hand-off fetches the branch, which is what makes a
   // remote-only branch resolve here at all.
-  const handoff = applyShipHandoff(repoAbs, sess, opts);
+  const handoff = applyShipHandoff(repoAbs, sess, opts, trunk);
   if (handoff && !handoff.ok) {
     process.stderr.write(`✗ Refusing --handoff: ${handoff.detail}. Re-run with --handoff <a hand-off naming ${sess.branch} and its current head>, ` +
       `ship from the executor's machine, or a human takes the claim over (\`colab claim <N> --branch ${sess.branch} --force\`, a human act).\n`);
