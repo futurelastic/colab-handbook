@@ -139,7 +139,9 @@ test('nextStep: the declined, waiting and building states', () => {
   assert.deepStrictEqual(sb.nextStep({ ...base, wired: false }), { step: 'serial', reason: 'unwired' });
   assert.deepStrictEqual(sb.nextStep({ ...base, trunkCi: 'red' }), { step: 'serial', reason: 'trunk-red' });
   assert.deepStrictEqual(sb.nextStep({ ...base, trunkCi: 'pending' }), { step: 'wait-trunk' });
-  assert.deepStrictEqual(sb.nextStep({ ...base, eligibleCount: 1 }), { step: 'serial', reason: 'too-few' });
+  // #562: one ready member is a batch of one — it builds; only none ready goes serial.
+  assert.deepStrictEqual(sb.nextStep({ ...base, eligibleCount: 1 }), { step: 'build' });
+  assert.deepStrictEqual(sb.nextStep({ ...base, eligibleCount: 0 }), { step: 'serial', reason: 'none-ready' });
   assert.deepStrictEqual(sb.nextStep(base), { step: 'build' });
 });
 

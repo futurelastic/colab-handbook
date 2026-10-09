@@ -51,7 +51,7 @@ const WAIT_UNITS = { s: 1, m: 60, h: 3600 };
 
 /**
  * #555: `ship-batch-wait:` from project.yml — how long a LONE ready candidate waits for a partner
- * before it lands alone. A whole number plus a unit: `90s`, `6m`, `1h`. The unit is required, so a
+ * before it lands alone (as a batch of one, #562). A whole number plus a unit: `90s`, `6m`, `1h`. The unit is required, so a
  * bare `6` (seconds? minutes?) is refused, never guessed. `0s`/`0m` is valid and means no wait.
  *
  * Absent → `sec: 0`, today's behaviour exactly. The handbook gives NO default value and NO ceiling
@@ -74,7 +74,8 @@ function parseShipBatchWait(doc) {
 }
 
 /**
- * #555: does a batch call with ONE eligible member wait for a partner, or let it go serial now?
+ * #555: does a batch call with ONE eligible member wait for a partner, or build now? (Past the window
+ * it lands alone — through the batch path, as a batch of one, #562 — never serially.)
  * Facts in (all already read by the caller, after it has ruled out a pending trunk run and a batch
  * already in flight — the lane is otherwise idle by then):
  *   n             parseShipBatch(doc).n
@@ -305,7 +306,8 @@ function combinedVerdict(rows) {
 /**
  * The one decision per `colab ship --batch` call. The command is RE-ENTRANT: it reads remote state,
  * takes one step, and exits — the caller waits (bounded, code-ship B1a) and calls again.
- *   serial(reason)       land nothing; hand the members back as a serial list (exit 4)
+ *   serial(reason)       land nothing; hand the members back as a serial list (exit 4) — never for
+ *                        a lone ready member: one member is a valid batch (#562)
  *   wait-trunk           trunk's own run is still in flight (exit 3)
  *   rebuild              a batch ref exists on a base trunk has moved past, or its members/heads are
  *                        no longer the ones asked for → delete it, then build afresh
@@ -328,7 +330,9 @@ function nextStep({ enabled, wired, trunkCi, eligibleCount = 0, existing = null,
     if (verdict.state === 'red') return verdict.attempt >= 2 ? { step: 'red-serial' } : { step: 'red-rerun-or-serial' };
     return { step: 'land' };
   }
-  if (eligibleCount < 2) return { step: 'serial', reason: 'too-few' };
+  // #562: a batch of ONE is a batch — a lone ready member still lands through the combined run, so
+  // the setups a repo runs only on ship-batch/** and trunk gate it before trunk moves.
+  if (eligibleCount < 1) return { step: 'serial', reason: 'none-ready' };
   return { step: 'build' };
 }
 

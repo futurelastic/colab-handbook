@@ -4,11 +4,11 @@
  * cmdShipBatch that tools/lib/ship-batch.test.js's pure cases (parseShipBatchWait, partnerWait)
  * cannot reach.
  *
- * The done-criterion pinned here: with the field ABSENT (or malformed, which fails closed to the
- * same), a one-branch --batch call answers byte-for-byte what it answered before the field existed
- * — the same two lines, the same exit 4, and nothing fetched. With a valid window the one-branch
- * call is let through to the batch path instead; here it then stops at the fetch, because the
- * fixture has no remote — which is the proof it got past the old early refusal.
+ * #562 superseded #555's "absent → decline as before": one named member is now a valid batch on
+ * any ship-batch repo, so EVERY one-branch call — field absent, malformed, or a valid window — gets
+ * past the early refusal to the batch path. Here it then stops at the fetch, because the fixture has
+ * no remote — which is the proof it got past. The window's own behaviour (wait, then build alone) is
+ * pinned in ship-batch-cli.test.js against a real remote.
  *
  * Real CLI, real repo, private COLAB_HOME, no network. Run: `node --test tools/lib/*.test.js`.
  */
@@ -49,25 +49,23 @@ function shipBatchOne(dir) {
   });
 }
 
-const BEFORE = '✗ ship-batch: --batch names 1 branch(es) — a batch needs at least two\n→ SERIAL: colab ship --branch feat/a-1\n';
+const PAST = (r) => {
+  assert.doesNotMatch(r.stdout, /a batch needs at least two|names no branch/, r.stdout);
+  assert.match(r.stdout + r.stderr, /could not fetch/, 'stops at the fetch — this fixture has no remote');
+};
 
-test('#555: field absent — a one-branch --batch is declined exactly as before', () => {
-  const r = shipBatchOne(fixture(''));
-  assert.strictEqual(r.status, 4, r.stdout + r.stderr);
-  assert.strictEqual(r.stdout, BEFORE);
+test('#562: field absent — a one-branch --batch is a batch of one, no longer declined', () => {
+  PAST(shipBatchOne(fixture('')));
 });
 
-test('#555: zero or malformed fails closed — the same decline, plus a warning naming the value', () => {
+test('#555: zero or malformed fails closed to no wait — still a batch of one, plus a warning naming the value', () => {
   for (const v of ['0m', '6', 'soon']) {
     const r = shipBatchOne(fixture(`ship-batch-wait: ${v}\n`));
-    assert.strictEqual(r.status, 4, `${v}: ${r.stdout}${r.stderr}`);
-    assert.strictEqual(r.stdout, BEFORE, v);
+    PAST(r);
     if (v !== '0m') assert.match(r.stderr, /ship-batch-wait is .* ignored: a lone member does not wait/, v);
   }
 });
 
 test('#555: a valid window lets a one-branch --batch through to the batch path', () => {
-  const r = shipBatchOne(fixture('ship-batch-wait: 6m\n'));
-  assert.doesNotMatch(r.stdout, /a batch needs at least two/, r.stdout);
-  assert.match(r.stdout + r.stderr, /could not fetch/, 'stops at the fetch — this fixture has no remote');
+  PAST(shipBatchOne(fixture('ship-batch-wait: 6m\n')));
 });

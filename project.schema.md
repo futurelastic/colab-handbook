@@ -474,8 +474,8 @@ base), it exits `3` with `⏸ PARTNER-WAIT` and the seconds left. The window is 
 when that member became ready: its head CI's last update, or its head commit's date when no
 run can arrive. Every call works out the time left again, on any machine, so the window
 never restarts. The caller waits, gathers every ready candidate again, and calls `--batch`
-with all of them. Once the window has passed, the same call declines the lone member to
-serial (exit `4`).
+with all of them. Once the window has passed, the same call builds the lone member as a
+batch of one (#562) — it still lands through the combined run, never serially.
 
 ### `ci-wait-factor` — optional
 

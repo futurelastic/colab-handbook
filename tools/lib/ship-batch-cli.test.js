@@ -199,9 +199,11 @@ test('#373 oracle 2: a red combined run lands nothing; one re-run, then serial; 
 
   // the culprit, red at its OWN head, is named when a new batch is asked for
   fx.setStatus('fix/b-12', 'completed failure 1');
+  // … and the survivor still goes through the batch path, as a batch of one (#562)
   const r4 = batch(fx, ['fix/b-12', 'fix/c-13']);
-  assert.strictEqual(r4.code, 4, r4.out + r4.err);
+  assert.strictEqual(r4.code, 3, r4.out + r4.err);
   assert.match(r4.out, /fix\/b-12\s+red at its own head/);
+  assert.match(r4.out, /BATCH-PENDING ship-batch\/[0-9a-f]{7}@[0-9a-f]{7} — .*\(fix\/c-13\)|pushed ship-batch\/[0-9a-f]{7} = [0-9a-f]{7} \+ 1 commit\(s\) @ [0-9a-f]{7} \(fix\/c-13\)/);
 });
 
 test('#391: a declined batch at the base does not block a --batch of the survivors', () => {
@@ -359,16 +361,65 @@ test('#387: a hook present does not rescue an overlap outside generated:', () =>
   assert.doesNotMatch(r.out, /running hook pre-ship/);
 });
 
-test('#373: only one member qualifies → serial, nothing pushed', () => {
+test('#562 oracle: a lone ready member lands through a ship-batch run — one member, a green combined run, trunk fast-forwards', () => {
+  const fx = fixture();
+  member(fx, 'fix/a-11');
+  const T = fx.originSha('main');
+  const ref = `ship-batch/${T.slice(0, 7)}`;
+  fx.setStatus(ref, 'in_progress null 1');
+
+  const r1 = batch(fx, ['fix/a-11']);
+  assert.strictEqual(r1.code, 3, r1.out + r1.err);
+  assert.doesNotMatch(r1.out, /SERIAL/, 'one member is a batch, never a decline');
+  assert.match(r1.out, /pushed ship-batch\/[0-9a-f]{7} = [0-9a-f]{7} \+ 1 commit\(s\)/);
+  assert.deepStrictEqual(fx.batchRefs(), [ref]);
+  assert.strictEqual(fx.originSha('main'), T, 'nothing lands before the combined run is green');
+  const head = fx.originSha(ref);
+  assert.strictEqual(fx.g(fx.origin, 'rev-list', '--count', `${T}..${head}`), '1');
+
+  fx.setStatus(ref, 'completed success 1');
+  const r2 = batch(fx, ['fix/a-11']);
+  assert.strictEqual(r2.code, 0, r2.out + r2.err);
+  assert.strictEqual(fx.originSha('main'), head, 'trunk fast-forwards to the tested batch head');
+  assert.deepStrictEqual(fx.batchRefs(), []);
+  const body = fx.g(fx.origin, 'log', '-1', '--format=%B', head);
+  assert.deepStrictEqual(body.match(/Closes #\d+/g), ['Closes #11'], body);
+  assert.match(body, new RegExp(`^Ship-Batch: ${ref} fix/a-11@`, 'm'));
+  assert.match(ghLog(fx), new RegExp(`issue comment 11 --body 🚢 Shipped to main by colab ship — [0-9a-f]{7} · landed in a batch of 1 — combined run 9001 at ${ref}`));
+});
+
+test('#562: of two named, only one qualifies → it lands alone through the batch path; the other is named', () => {
   const fx = fixture();
   member(fx, 'fix/a-11');
   member(fx, 'fix/b-12');
   fx.setStatus('fix/b-12', 'in_progress null 1');
   const r = batch(fx, ['fix/a-11', 'fix/b-12']);
-  assert.strictEqual(r.code, 4, r.out + r.err);
+  assert.strictEqual(r.code, 3, r.out + r.err);
   assert.match(r.out, /fix\/b-12\s+its own head CI has not finished/);
-  assert.match(r.out, /1 member\(s\) can join — a batch needs at least two/);
+  assert.match(r.out, /\+ 1 commit\(s\) @ [0-9a-f]{7} \(fix\/a-11\)/);
+  assert.strictEqual(fx.batchRefs().length, 1);
+});
+
+test('#562: no member qualifies → still declined to serial, nothing pushed', () => {
+  const fx = fixture();
+  member(fx, 'fix/a-11');
+  fx.setStatus('fix/a-11', 'in_progress null 1');
+  const r = batch(fx, ['fix/a-11']);
+  assert.strictEqual(r.code, 4, r.out + r.err);
+  assert.match(r.out, /no member can join/);
   assert.deepStrictEqual(fx.batchRefs(), []);
+});
+
+test('#562: past its ship-batch-wait window a lone member builds as a batch of one, not serial', () => {
+  const fx = fixture({ yml: YML('ship-batch: 3\nship-batch-wait: 1m\n') });
+  // ready an hour ago: no run row carries updatedAt here, so readiness reads the head commit's date
+  process.env.GIT_COMMITTER_DATE = new Date(Date.now() - 3600_000).toISOString();
+  try { member(fx, 'fix/a-11'); } finally { delete process.env.GIT_COMMITTER_DATE; }
+  const r = batch(fx, ['fix/a-11']);
+  assert.strictEqual(r.code, 3, r.out + r.err);
+  assert.doesNotMatch(r.out, /PARTNER-WAIT|SERIAL/, r.out);
+  assert.match(r.out, /building a batch of one/);
+  assert.strictEqual(fx.batchRefs().length, 1);
 });
 
 test('#373: a red trunk declines the batch — the doors apply per member, never to a batch', () => {

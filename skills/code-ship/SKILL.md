@@ -115,7 +115,8 @@ Full text: [b0-sync.md](b0-sync.md).
 ### Batch landing — several ready candidates, one combined run (#373)
 
 **Rule:** only where `project.yml` declares `ship-batch: <N>` > 1. Each member passes §0–B1c on
-its own; then `colab ship --batch <b1>,<b2>[,…]` replaces B0's sync and B1a's post-sync re-run.
+its own; then `colab ship --batch <b1>[,<b2>,…]` replaces B0's sync and B1a's post-sync re-run —
+a lone ready candidate too: a batch of one is valid (#562).
 Exit `3` paused (bounded wait, same command again) · `0` landed (go to B2b) · `4` declined,
 ship serially. A red trunk declines a batch outright.
 Read when the repo declares `ship-batch`: [b0-batch-landing.md](b0-batch-landing.md).

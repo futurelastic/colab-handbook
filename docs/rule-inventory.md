@@ -782,6 +782,7 @@ Two units reworded on purpose (base `c56bac20`), each to carry one new clause in
 | C4.batch.14 | default |  | `colab ship --batch` never waits; it exits 0 landed, 3 paused (wait on the printed run, rerun) or 4 declined (ship members one at a time). | `colab ship --batch` never waits: each call reads the remote, takes one step, and exits | CONVENTIONS.md | #373 |
 | C4.batch.15 | default |  | Declining is never a silent fall-through to the serial path. | Declining is never a silent fall-through to the serial path | CONVENTIONS.md | #373 |
 | C4.batch.16 | default |  | A ship pass builds a batch from every candidate ready at that moment, re-reading the set before each `--batch` call. | re-read the set right before each `--batch` call | CONVENTIONS.md | #555 |
+| C4.batch.18 | default |  | On a `ship-batch` repo a lone ready candidate lands through the batch path as a batch of one, never serially. | A batch of one is a batch | CONVENTIONS.md | #562 |
 | C4.batch.17 | default |  | A lone ready candidate waits for a partner only up to the repo's declared `ship-batch-wait`, with the lane otherwise idle. | it waits up to that window | CONVENTIONS.md | #555 |
 
 ### Is a shipped half actually shippable? — the mechanical gate is not the judgement call (#263)
