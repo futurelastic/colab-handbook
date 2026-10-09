@@ -10566,6 +10566,11 @@ It never waits: each call reads the remote, takes ONE step and exits —
 One batch per base: a batch at this base carrying OTHER members is waited on (exit 3) while its run
 is pending or green, but a declined one — its combined run red — is deleted and the batch you asked
 for is built in its place, so the survivors of a decline can batch without landing serially first (#391).
+The batch also holds the trunk LANE (#581): while a ship-batch/<trunk-sha7> ref at trunk's tip has its
+combined run in flight — or green within ${shipBatch.LANE_GRACE_SEC / 60}m, so its lander can land it — a serial
+\`colab ship --branch\` into trunk pauses with exit 3 (⏸ BATCH-IN-FLIGHT; its --dry --json row
+'no batch in flight (#581)' reads self-clearing) instead of moving trunk under it and discarding the run.
+A red batch, or one with no run / not landed past that grace, holds nothing.
 A member that conflicts with the members already in is dropped to the next batch; the rest go on —
 unless every conflicting path is generated (defaults + project.yml generated:): then .colab/hooks/pre-ship
 regenerates them on the combined head and the member stays in (#387). No hook, or a failing one → dropped.
@@ -12216,6 +12221,17 @@ function cmdShipDryJson(opts) {
     if (coreReviewJson.verdict === 'pending') mode = 'pr-pending';
   }
 
+  // #581: the same lane read as the prose path's table — a squash into trunk while a batch holds the
+  // lane would discard the batch's run. SELF_CLEARING: the batch lands or is declined on its own.
+  // Never for a batch member read (the batch IS the lane) nor for evidence-close (trunk does not move).
+  if (!dryMode.evidenceClose && !opts._batchMember) {
+    const laneJson = shipBatchLaneCheck(repoAbs, doc, trunk, target, gh);
+    if (laneJson) {
+      checks.push({ name: 'no batch in flight (#581)', ok: !laneJson.held, class: laneJson.held ? SELF_CLEARING : null,
+        detail: laneJson.detail, ...(laneJson.held ? { batchRef: laneJson.ref } : {}) });
+    }
+  }
+
   // #149: the same inherited-closing-keyword scan the prose --dry path runs, mirrored here —
   // following #153's own precedent for this function (its comment above: "a caller reading only
   // checks[]/ok … used to see NO check at all here"). Without this, the ONE caller class this path
@@ -13300,6 +13316,11 @@ function cmdShip(argv) {
   const coreReview = shipCoreReview(repoAbs, gh, target, sess.branch);
   const coreOk = coreReview.verdict !== 'refuse';
   checks.push([coreOk ? (coreReview.verdict === 'pending' ? '⏸' : '✓') : '✗', 'core-path review (#350)', coreReview.detail]);
+
+  // #581: a batch in flight at trunk's tip holds the lane. Like the core-path review's 'pending', a
+  // hold is not a failed precondition — it is a pause, taken below once every real one has passed.
+  const lane = shipBatchLaneCheck(repoAbs, doc, trunk, target, gh);
+  if (lane) checks.push([lane.held ? '⏸' : '✓', 'no batch in flight (#581)', lane.detail]);
   for (const w of coreReview.warnings) warn(`${coreReview.codeownersPath}: ${w}`);
 
   // #389: the record this ship will write after the push must be writable NOW.
@@ -13534,6 +13555,8 @@ function cmdShip(argv) {
       print('  Plan: no merge, no commit, no push · post evidence comment + CLOSE each issue · ' +
         (opts.keepWorktree ? 'keep worktree' : 'worktree rm') + ' (releases claims)');
       print('  Gate: every closing issue must already carry an evidence comment — checked at run time.');
+    } else if (lane && lane.held && coreReview.verdict !== 'pending') {
+      print(`  Plan: PAUSE (⏸ exit 3, nothing merged) — ${lane.ref} holds the ${trunk} lane (#581); run again once it has landed or been declined`);
     } else if (coreReview.verdict === 'pending') {
       print(`  Plan: push ${sess.branch} · ${coreReview.pr ? `PR #${coreReview.pr.number} already open` : 'open a PR → ' + target} · ` +
         'PAUSE (⏸ exit 3, no squash) until an account other than the author approves the current head (#350)');
@@ -13598,6 +13621,9 @@ function cmdShip(argv) {
     ].join('\n');
     return shipOpenCorePr(repoAbs, coreReview, { target, branch: sess.branch, title, body });
   }
+
+  // ---- (b5) #581: a batch holds the trunk lane — pause before B0, so nothing is synced or merged ----
+  if (lane && lane.held) { printBatchLanePause(lane, trunk); return 3; }
 
   // ---- (c) B0: merge the TARGET into the branch (in the worktree, or an ephemeral one) ----
   const generated = [...DEFAULT_GENERATED, ...(Array.isArray(doc.generated) ? doc.generated.map(String) : [])];
@@ -13744,6 +13770,10 @@ function cmdShip(argv) {
       ciGrantForTrailer = ciResultB1.grantVerdict;
     }
   }
+  // #581: re-read the lane right before the merge — B0 sits between the table and here, and a batch
+  // built in that window is exactly as live as one the table saw.
+  const laneB1 = lane ? shipBatchLaneCheck(repoAbs, doc, trunk, target, gh) : null;
+  if (laneB1 && laneB1.held) { cleanupEphemeral(); printBatchLanePause(laneB1, trunk); return 3; }
   // WHERE the squash happens. Into trunk it is the main checkout, which is on trunk by invariant
   // (and was just verified to be). Into a declared line it must NOT be: checking the main checkout
   // out onto a long-lived line is the very state that made this axis necessary — everything reading
@@ -14264,6 +14294,46 @@ function shipDryJsonReport(opts) {
   try { code = cmdShipDryJson({ ...opts, _report: holder, _batchMember: true }); }
   catch (e) { if (e instanceof UserError) return { ok: false, body: null, error: e.message }; throw e; }
   return { ok: code === 0, body: holder.body || null, error: null };
+}
+
+/**
+ * #581: is a batch in flight at trunk's current tip? Read by every serial door that moves trunk (the
+ * prose ship's table and B1, `--dry --json`), so a lander told about it waits instead of moving trunk
+ * under the batch — which would throw the batch's green combined run away. The rule is
+ * lib/ship-batch.js laneHold; this only reads the remote.
+ *
+ * Inert (null, no git or gh call) unless project.yml declares ship-batch > 1, the merge target is
+ * trunk, and gh is usable. Out: null, or `{ held, ref, why, released, detail }`.
+ */
+function shipBatchLaneCheck(repoAbs, doc, trunk, target, gh) {
+  if (target !== trunk || !gh || shipBatch.parseShipBatch(doc).n <= 1) return null;
+  const remote = git.remoteFor(repoAbs);
+  const ls = git.git(['ls-remote', remote, `refs/heads/${trunk}`, 'refs/heads/ship-batch/*'], repoAbs);
+  if (!ls.ok) return { held: false, released: [], detail: `could not read ${remote} — no batch provably in flight` };
+  const rows = ls.stdout.split('\n').map((l) => l.split('\t')).filter(([sha, ref]) => sha && ref);
+  const trunkNow = ((rows.find(([, ref]) => ref.trim() === `refs/heads/${trunk}`) || [])[0] || '').trim();
+  const atTip = rows.map(([sha, ref]) => ({ sha: sha.trim(), parsed: shipBatch.parseBatchRef(ref.trim()) }))
+    .filter((x) => x.parsed && trunkNow.startsWith(x.parsed.base7));
+  const batches = atTip.map((x) => {
+    const runs = git.ghRunsForRef(repoAbs, x.parsed.ref, x.sha);
+    let t = git.git(['log', '-1', '--format=%cI', x.sha], repoAbs);
+    if (!t.ok) { git.git(['fetch', '-q', remote, `refs/heads/${x.parsed.ref}`], repoAbs); t = git.git(['log', '-1', '--format=%cI', x.sha], repoAbs); }
+    const built = t.ok ? Date.parse(t.stdout.trim()) : NaN;
+    return { ref: x.parsed.ref, base7: x.parsed.base7, verdict: shipBatch.combinedVerdict(runs),
+      builtAtMs: Number.isFinite(built) ? built : null, settledAtMs: shipBatch.settledAt(runs) };
+  });
+  const r = shipBatch.laneHold({ batches, trunkNow, nowMs: Date.now() });
+  const detail = r.held
+    ? `${r.ref} holds the ${trunk} lane — ${r.why}; landing now would move ${trunk} under it and discard its run`
+    : (r.released.length ? `no batch holds the lane (${r.released.map((x) => `${x.ref}: ${x.why}`).join('; ')})` : `no batch in flight at ${trunk}@${shortSha(trunkNow)}`);
+  return { ...r, trunkNow, detail };
+}
+
+/** #581: the pause a serial ship takes while a batch holds the trunk lane — one message, every door. */
+function printBatchLanePause(lane, trunk) {
+  print(`⏸ BATCH-IN-FLIGHT ${lane.ref} — ${lane.why}. Nothing landed.`);
+  print(`  Landing now would move ${trunk} under it and throw its combined run away (#581). Wait for it to land`);
+  print('  or be declined (bounded, B1a — the same wait as any CI run), then run this command again.');
 }
 
 function cmdShipBatch(opts) {

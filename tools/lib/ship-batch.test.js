@@ -260,3 +260,79 @@ test('readySince: newest finished run, else the head commit, else null', () => {
   assert.strictEqual(sb.readySince(null, null), null);
   assert.strictEqual(sb.readySince([{ status: 'completed' }], 'garbage'), null);
 });
+
+// ---- #581: the lane reservation — an in-flight batch at trunk's tip holds the lane ----
+const TRUNK = 'abcdef0123456789';
+const NOW = Date.parse('2026-10-09T10:00:00Z');
+const ago = (min) => NOW - min * 60000;
+const batch = (o) => ({ ref: 'ship-batch/abcdef0', base7: 'abcdef0', ...o });
+
+test('laneHold: a pending combined run at trunk tip holds the lane', () => {
+  const r = sb.laneHold({ trunkNow: TRUNK, nowMs: NOW, batches: [batch({ verdict: { state: 'pending', why: 'a run is still in flight' }, builtAtMs: ago(60) })] });
+  assert.strictEqual(r.held, true);
+  assert.strictEqual(r.ref, 'ship-batch/abcdef0');
+  assert.match(r.why, /in flight/);
+});
+
+test('laneHold: an unreadable run list holds (fails closed — a pause clears itself)', () => {
+  const r = sb.laneHold({ trunkNow: TRUNK, nowMs: NOW, batches: [batch({ verdict: sb.combinedVerdict(null) })] });
+  assert.strictEqual(r.held, true);
+  assert.strictEqual(sb.laneHold({ trunkNow: TRUNK, nowMs: NOW, batches: [batch({})] }).held, true, 'a missing verdict reads as unreadable');
+});
+
+test('laneHold: a batch on an older base holds nothing — trunk already moved past it', () => {
+  const r = sb.laneHold({ trunkNow: '1234567aaaa', nowMs: NOW, batches: [batch({ verdict: { state: 'pending', why: 'x' } })] });
+  assert.deepStrictEqual(r, { held: false, released: [] });
+});
+
+test('laneHold: a red batch is declined and holds nothing', () => {
+  const r = sb.laneHold({ trunkNow: TRUNK, nowMs: NOW, batches: [batch({ verdict: { state: 'red', why: 'a run finished failure' } })] });
+  assert.strictEqual(r.held, false);
+  assert.match(r.released[0].why, /^declined — a run finished failure/);
+});
+
+test('laneHold: no run yet holds within the grace after the build, releases after it', () => {
+  const none = { state: 'none', why: 'no run at the batch head yet' };
+  assert.strictEqual(sb.laneHold({ trunkNow: TRUNK, nowMs: NOW, batches: [batch({ verdict: none, builtAtMs: ago(2) })] }).held, true);
+  const stale = sb.laneHold({ trunkNow: TRUNK, nowMs: NOW, batches: [batch({ verdict: none, builtAtMs: ago(16) })] });
+  assert.strictEqual(stale.held, false);
+  assert.match(stale.released[0].why, /no combined run 16m ago.*abandoned/);
+  const unread = sb.laneHold({ trunkNow: TRUNK, nowMs: NOW, batches: [batch({ verdict: none, builtAtMs: null })] });
+  assert.strictEqual(unread.held, false, 'an unread build time is not provably alive');
+});
+
+test('laneHold: green holds within the grace after it went green — then it is abandoned', () => {
+  const green = { state: 'green', why: '2 run(s): all success' };
+  const fresh = sb.laneHold({ trunkNow: TRUNK, nowMs: NOW, batches: [batch({ verdict: green, builtAtMs: ago(40), settledAtMs: ago(3) })] });
+  assert.strictEqual(fresh.held, true);
+  assert.match(fresh.why, /green 3m ago — its lander lands it/);
+  const old = sb.laneHold({ trunkNow: TRUNK, nowMs: NOW, batches: [batch({ verdict: green, settledAtMs: ago(15) })] });
+  assert.strictEqual(old.held, false, 'exactly the grace has elapsed');
+  assert.match(old.released[0].why, /still not landed .*abandoned/);
+  assert.strictEqual(sb.laneHold({ trunkNow: TRUNK, nowMs: NOW, batches: [batch({ verdict: green, settledAtMs: null })] }).held, false);
+});
+
+test('laneHold: graceSec is honoured, and no trunk means nothing is held', () => {
+  const green = { state: 'green', why: 'ok' };
+  assert.strictEqual(sb.laneHold({ trunkNow: TRUNK, nowMs: NOW, graceSec: 60, batches: [batch({ verdict: green, settledAtMs: ago(2) })] }).held, false);
+  assert.strictEqual(sb.laneHold({ trunkNow: '', nowMs: NOW, batches: [batch({ verdict: { state: 'pending' } })] }).held, false);
+  assert.strictEqual(sb.laneHold({}).held, false);
+});
+
+test('laneHold: a declined batch does not hide a live one at the same base', () => {
+  const r = sb.laneHold({ trunkNow: TRUNK, nowMs: NOW, batches: [
+    batch({ verdict: { state: 'red', why: 'r' } }),
+    batch({ ref: 'ship-batch/abcdef0', verdict: { state: 'pending', why: 'p' } }),
+  ] });
+  assert.strictEqual(r.held, true);
+});
+
+test('settledAt: newest updatedAt among finished rows, null when none', () => {
+  assert.strictEqual(sb.settledAt([
+    { status: 'completed', updatedAt: '2026-10-09T09:00:00Z' },
+    { status: 'completed', updatedAt: '2026-10-09T09:05:00Z' },
+    { status: 'in_progress', updatedAt: '2026-10-09T09:10:00Z' },
+  ]), Date.parse('2026-10-09T09:05:00Z'));
+  assert.strictEqual(sb.settledAt([]), null);
+  assert.strictEqual(sb.settledAt(null), null);
+});

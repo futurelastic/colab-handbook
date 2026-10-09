@@ -1751,9 +1751,9 @@ tests every setup before trunk moves — whether or not a sibling was ready.
 3. **One combined run** there must be `green`. It **replaces** each member's post-sync
    re-run — not a skip justified by disjointness, but one run instead of N.
 4. **Landing.** Trunk fast-forwards to the batch head **only if trunk has not moved** since
-   the batch was built — by a plain, non-forced push, so a moved trunk makes the push fail
-   on its own. Moved → nothing lands and the batch is rebuilt on the new head. Each
-   member's evidence names the combined run.
+   the build, by a plain non-forced push (a moved trunk fails it; the batch is then rebuilt
+   on the new head). Each member's evidence names the combined run. While that run is in
+   flight (or green, within a grace), the batch **holds the trunk lane**: serial ships pause (#581).
 5. **A green batch run stands in for trunk's own run at that same sha** — while trunk's
    run is still in flight — only when **the same workflows** ran there: the workflow files
    firing on a trunk push and on a `ship-batch/**` push must be the same set. Otherwise

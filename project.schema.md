@@ -447,6 +447,9 @@ must also be true, and the audit warns when either is not:
 namespace, on a rebuild) and deletes those refs itself. Exit codes of `--batch`: `0` landed ·
 `3` paused (wait on the printed run, bounded, then run the same command again) · `4` declined —
 nothing landed, ship the members one at a time.
+While a batch ref at trunk's tip has its combined run in flight (or green, not yet landed,
+within a short grace), it holds the trunk lane: a serial `colab ship` into trunk pauses with
+exit `3` rather than discard that run (#581).
 
 ### `ship-batch-wait` — optional
 
