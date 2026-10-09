@@ -69,8 +69,12 @@ context from `gh issue view $N` without re-reading the codebase.
 ```sh
 gh issue view $N                         # then edit the body:
 gh issue edit $N --body-file <tmpfile>   # tick the checklist, add Decisions/Gotchas
-gh issue comment $N -b "**<YYYY-MM-DD>** — did X, decided Y, left Z open."
+gh issue comment $N -b "**<YYYY-MM-DD>** — wrapped on \`<branch>\` (head <sha8>): did X, decided Y, left Z open."
 ```
+
+The distill comment names the branch and the pushed head sha: it is the **hand-off** another
+machine lands the branch from (`colab ship --handoff <its URL>`, #578), and a comment naming
+neither cannot be one.
 
 - Record **reusable knowledge** — a decision and *why*, a gotcha, a dead end —
   not a copy of the diff. The code is already in git.

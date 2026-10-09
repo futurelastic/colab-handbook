@@ -1385,7 +1385,11 @@ than guessed.
   A local ref does not make it this machine's (#343): when the ref's oldest reflog entry says
   git created it from `origin/<same name>` (a DWIM `checkout`/`switch`/`worktree add`, or
   `--track`), it reads the same as remote-only. Where no reflog survives, nothing contradicts
-  the local reading.
+  the local reading. A branch that **does** name its issues, with the claim on another machine,
+  lands without a takeover from its executor's hand-off (#578): `colab ship --branch <b>
+  --handoff <comment-url>` takes the issue set from the branch name once that comment names the
+  branch and its current remote head and every issue carries the executor's live claim on it;
+  nothing is claimed here, and the executor keeps its worktree until it confirms the land.
 - **[Hard — gate: colab ship refuses unless trunk CI green]** **Before merging to trunk, check that trunk's last CI run is green — and that it ran at
   all.** **Ask by commit, not by recency
   (#92):**

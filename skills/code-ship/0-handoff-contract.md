@@ -63,6 +63,13 @@ git -C "$MAIN_REPO" status --porcelain -uall                 # trunk checkout st
 - **Claim released already** → someone (or something) other than this skill let it go.
   That is a finding — B3 below is supposed to be the only unconditional release — chase
   it before merging over a claim that may no longer mean what it used to.
+- **Claim held on ANOTHER machine** (a remote-built branch: `colab claims` here shows nothing,
+  the issue shows a live `🔒 Claimed` on this branch from another host) → not a gap and not a
+  re-claim: land it from the executor's distill comment, `colab ship --branch <b> --handoff
+  <comment-url>` (#578). Ship verifies the comment names the branch and its current remote head
+  and that the executor's claim is live; it claims nothing here. A refusal (the head moved, the
+  comment names no sha) is a **send-back** for a fresh hand-off — never `colab claim --force`,
+  which stays a human takeover.
 - **Gate result, `gate: authoritative: ci` repos (#410)** — trunk's `project.yml` declares
   `gate:` with `authoritative: ci` and a workflow fires on a session-branch push
   (`tools/lib/gate.js` `gateMode` → `ci`). Then the hand-off names a **branch-CI run id**,

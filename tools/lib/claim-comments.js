@@ -55,7 +55,7 @@ function releaseComments(sorted) {
 
 /**
  * Live claim comments on an issue. Returns [{login, host, machine, session, sessionName, at,
- * identity}], `at` = the comment's real GitHub createdAt (authoritative, sub-second). `identity`
+ * branch, worktree, identity}], `at` = the comment's real GitHub createdAt (authoritative, sub-second). `identity`
  * is built from `comps` (claim-identity.js `components()`, #267); the raw fields are returned too
  * for callers that need `sameClaimant`'s degrade-on-missing comparison.
  *
@@ -91,7 +91,8 @@ function liveClaimComments(comments, comps) {
     const { host, session, sessionName } = claim;
     const machineTok = claim.machine; // #327 — '' on a legacy comment: compared by host
     const at = c.createdAt;
-    const entry = { login, host, machine: machineTok, session, sessionName, at };
+    // #578: branch/worktree ride along so a reader can ask WHICH branch a live claim holds.
+    const entry = { login, host, machine: machineTok, session, sessionName, at, branch: claim.branch, worktree: claim.worktree };
     const cancelled = releases.some((r) => r.at > at && (r.kind === 'release'
       || (r.login === login && !isNamedWinner(entry, r.winner))));
     if (!cancelled) live.push({ ...entry, identity: claimIdentity.identityString({ login, host, session }, comps) });
