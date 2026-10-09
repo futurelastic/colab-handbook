@@ -2,7 +2,7 @@
 /**
  * tools/lib/batch-stats.js (#554) — the derivation behind `colab batch-stats`, on hand-built
  * histories: none at all, a landed batch with a drop, a red build that fell back to serial, and a
- * serial landing that left a green partner behind. Plus ship-batch.js's drop trailer round-trip.
+ * serial landing that left a green partner behind, and (#580) a batch of one doing either. Plus ship-batch.js's drop trailer round-trip.
  * Run: `node --test tools/lib/*.test.js`.
  */
 
@@ -94,7 +94,7 @@ test('a red build that never landed: counted red, its members read from the buil
   assert.strictEqual(r.batches.red, 1);
   assert.strictEqual(r.batches.landed, 0);
   assert.strictEqual(r.batches.firstAttemptGreenRate, 0);
-  assert.deepStrictEqual(r.red, { builds: 1, members: 2, relandedSerially: 1 });
+  assert.deepStrictEqual(r.red, { builds: 1, members: 2, relandedSerially: 1, relandedAlone: 1 });
   assert.strictEqual(r.dropped.count, 1);
   assert.strictEqual(r.dropped.members[0].landed, false);
   assert.strictEqual(r.dropped.attempted, 3);
@@ -180,4 +180,88 @@ test('a next landing ends the cycle: a partner green only after it is no near mi
   const r = bs.derive({ commits, runs, trunk: 'main' });
   const ofX = r.serial.pairs.filter((p) => p.landed === 'fix/x-51');
   assert.deepStrictEqual(ofX, [{ kind: 'near', landed: 'fix/x-51', partner: 'fix/z-53', waitSec: 6 * 60 }]);
+});
+
+// ---- #580: a batch of one is a lone landing too ----
+
+test('#580: a batch of one landing while a partner was already green reports a missed partner under alone, not serial', () => {
+  const ref = 'ship-batch/ddddddd';
+  const commits = [
+    { sha: sha('4'), dateMs: min(10), body: `fix: x\n\nCloses #61\n${sb.memberTrailer({ ref, branch: 'fix/x-61', sha: sha('a') })}\n` },
+    { sha: sha('5'), dateMs: min(40), body: 'fix: y\n\nCloses #62\n' },
+  ];
+  const runs = [
+    run('fix/x-61', sha('a'), { created: min(0), updated: min(5) }),
+    run('fix/y-62', sha('b'), { created: min(1), updated: min(6) }), // green before x's batch landed
+    run(ref, sha('4'), { created: min(7), updated: min(9) }),
+    run('main', sha('4'), { created: min(10), updated: min(20) }),
+    run('main', sha('5'), { created: min(40), updated: min(50) }),
+  ];
+  const r = bs.derive({ commits, runs, trunk: 'main', config: { n: 3 } });
+  assert.deepStrictEqual(r.batches.fill, { 1: 1 });
+  // the serial path saw only y, which had no later partner — its meaning is unchanged
+  assert.deepStrictEqual([r.serial.landings, r.serial.withMissedPartner], [1, 0]);
+  assert.strictEqual(r.alone.landings, 2);
+  assert.strictEqual(r.alone.batchOfOne, 1);
+  assert.strictEqual(r.alone.withMissedPartner, 1);
+  assert.deepStrictEqual(r.alone.pairs, [{ kind: 'missed', landed: 'fix/x-61', partner: 'fix/y-62', via: 'batch-of-one' }]);
+  assert.deepStrictEqual([r.alone.cyclesRead, r.alone.overlapped], [2, 1]);
+});
+
+test('#580: a batch of two is not a lone landing — its members are never scanned for partners', () => {
+  const ref = 'ship-batch/eeeeeee';
+  const commits = [
+    { sha: sha('1'), dateMs: min(10), body: `Closes #71\n${sb.memberTrailer({ ref, branch: 'fix/a-71', sha: sha('a') })}\n` },
+    { sha: sha('2'), dateMs: min(10), body: `Closes #72\n${sb.memberTrailer({ ref, branch: 'fix/b-72', sha: sha('b') })}\n` },
+    { sha: sha('5'), dateMs: min(40), body: 'Closes #73\n' },
+  ];
+  const runs = [
+    run('fix/a-71', sha('a'), { created: min(0), updated: min(5) }),
+    run('fix/b-72', sha('b'), { created: min(0), updated: min(5) }),
+    run('fix/c-73', sha('c'), { created: min(1), updated: min(6) }), // green, left out of the pair
+    run('main', sha('2'), { created: min(11), updated: min(20) }),
+    run('main', sha('5'), { created: min(40), updated: min(50) }),
+  ];
+  const r = bs.derive({ commits, runs, trunk: 'main', config: { n: 3 } });
+  assert.deepStrictEqual([r.alone.landings, r.alone.batchOfOne, r.alone.withMissedPartner], [1, 0, 0]);
+});
+
+test('#580: a red build\'s member that re-lands as a batch of one counts as relanded alone, not serially', () => {
+  const ref = 'ship-batch/fffffff';
+  const ref2 = 'ship-batch/0000000';
+  const buildMsgs = [
+    `fix: a\n\nCloses #81\n${sb.memberTrailer({ ref, branch: 'fix/a-81', sha: sha('a') })}\n`,
+    `fix: b\n\nCloses #82\n${sb.memberTrailer({ ref, branch: 'fix/b-82', sha: sha('b') })}\n`,
+  ];
+  const commits = [
+    { sha: sha('3'), dateMs: min(40), body: `fix: a\n\nCloses #81\n${sb.memberTrailer({ ref: ref2, branch: 'fix/a-81', sha: sha('e') })}\n` },
+  ];
+  const runs = [
+    run('fix/a-81', sha('a'), { created: min(0), updated: min(5) }),
+    run('fix/b-82', sha('b'), { created: min(0), updated: min(5) }),
+    run(ref, sha('9'), { created: min(10), updated: min(20), conclusion: 'failure', attempt: 2 }),
+    run('fix/a-81', sha('e'), { created: min(30), updated: min(35) }),
+    run(ref2, sha('3'), { created: min(36), updated: min(39) }),
+    run('main', sha('3'), { created: min(41), updated: min(50) }),
+  ];
+  const r = bs.derive({ commits, runs, builds: { [sha('9')]: buildMsgs }, trunk: 'main' });
+  assert.deepStrictEqual(r.red, { builds: 1, members: 2, relandedSerially: 0, relandedAlone: 1 });
+});
+
+test('#580: on a history with no batches, alone equals serial', () => {
+  const commits = [
+    { sha: sha('4'), dateMs: min(10), body: 'fix: x\n\nCloses #31\n' },
+    { sha: sha('5'), dateMs: min(40), body: 'fix: y\n\nCloses #32\n' },
+  ];
+  const runs = [
+    run('fix/x-31', sha('a'), { created: min(0), updated: min(5) }),
+    run('fix/y-32', sha('b'), { created: min(1), updated: min(6) }),
+    run('main', sha('4'), { created: min(10), updated: min(20) }),
+    run('main', sha('5'), { created: min(40), updated: min(50) }),
+  ];
+  const r = bs.derive({ commits, runs, trunk: 'main' });
+  const strip = (x) => ({ ...x, pairs: x.pairs.map(({ via, ...p }) => p) });
+  const { batchOfOne, ...alone } = r.alone;
+  assert.strictEqual(batchOfOne, 0);
+  assert.deepStrictEqual(strip(alone), r.serial);
 });

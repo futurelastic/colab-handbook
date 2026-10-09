@@ -1787,10 +1787,12 @@ still needs its own re-run, and landing it unseen is the thing this section exis
 **Tuning — the repo's own history, read by `colab batch-stats`** (#554). Neither knob has a
 handbook default, so a repo sets `ship-batch:` and `ship-batch-wait:` from what
 `colab batch-stats [--since <window>] [--json]` reports for it: batches landed and their
-fill, the combined run's first-attempt green rate, red batches and their serial fallbacks,
+fill, the combined run's first-attempt green rate, red batches and their lone fallbacks,
 members dropped at build and why, **missed partners** (a change that landed alone while
 another was already green — or turned green inside its trunk-CI cycle, with the wait that
-would have caught it), and the queue wait from green-at-head to landing. It reads git and
+would have caught it), and the queue wait from green-at-head to landing. `serial` is the
+serial path only; `alone` adds a batch of one (#580) — a `ship-batch` repo's lone candidate
+lands as one, so there `alone`, not `serial`, is what `ship-batch-wait` is tuned from. It reads git and
 CI, never machine-local state, so it answers the same on every machine. A dropped member is
 part of that record: the batch head carries one `Ship-Batch-Dropped: <ref> <branch>@<sha>
 <class>` trailer per drop, so eviction rate is measurable from trunk alone.

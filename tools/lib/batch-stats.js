@@ -20,12 +20,18 @@
  * What it measures, per window:
  *   batches     landed and their fill; every combined-run build, first-attempt green, green after
  *               the one re-run, red, still pending
- *   red         red builds and how many of their members then landed serially (the fallback)
+ *   red         red builds and how many of their members then landed alone — serially, or as a
+ *               batch of one (#580) — the fallback
  *   dropped     members dropped at build, by class, and the eviction rate among attempted members
  *   serial      serial landings, and MISSED PARTNERS: another candidate that landed later but was
  *               already green when this one landed alone (could have joined), or turned green
  *               within this landing's trunk-CI cycle (a partner wait of `waitSec` would have caught
- *               it — the number `ship-batch-wait` is tuned from)
+ *               it — the number `ship-batch-wait` is tuned from). `serial` means landed through the
+ *               SERIAL PATH (no Ship-Batch trailer), and only that
+ *   alone       the same partner scan over every change that LANDED ALONE: a serial landing, or a
+ *               batch of one (#580). Since #562 a lone ready candidate on a ship-batch repo lands as
+ *               a fill-1 batch, so on such a repo `serial` reads zero whether partners were missed or
+ *               not; `alone` is the signal `ship-batch-wait` is tuned from there
  *   queueWait   per landed change, green-at-head → landing
  */
 
@@ -175,16 +181,21 @@ function derive({ commits = [], runs = [], builds = {}, trunk = 'main', config =
   const rerunGreen = buildRows.filter((b) => b.state === 'green' && b.attempt > 1).length;
   const redBuilds = buildRows.filter((b) => b.state === 'red');
 
-  // ---- red builds → did their members then land serially? ----
+  // ---- red builds → did their members then land alone (serially, or as a batch of one)? ----
   const serialChanges = changes.filter((c) => c.landing.kind === 'serial');
-  let redMembers = 0, relanded = 0, redMembersUnread = 0;
+  // #580: a fill-1 batch landed alone exactly as a serial landing did — only its path differs.
+  const isBatchOfOne = (c) => c.landing.kind === 'batch' && c.landing.members.length === 1;
+  const aloneChanges = changes.filter((c) => c.landing.kind === 'serial' || isBatchOfOne(c));
+  let redMembers = 0, relanded = 0, relandedAlone = 0, redMembersUnread = 0;
   for (const b of redBuilds) {
     const members = b.messages && b.messages.length ? shipBatch.parseMemberTrailers(b.messages) : [];
     if (!members.length) { redMembersUnread++; continue; }
     for (const m of members) {
       redMembers++;
       const nums = branchName.branchIssueNumbers(m.branch);
-      if (serialChanges.some((c) => c.atMs >= b.createdMs && (c.branch === m.branch || c.issues.some((n) => nums.includes(n))))) relanded++;
+      const isMember = (c) => c.atMs >= b.createdMs && (c.branch === m.branch || c.issues.some((n) => nums.includes(n)));
+      if (serialChanges.some(isMember)) relanded++;
+      if (aloneChanges.some(isMember)) relandedAlone++;
     }
   }
   if (redMembersUnread) notes.push(`${redMembersUnread} red build(s) whose members could not be read (the ref is gone and its commits were not readable)`);
@@ -205,42 +216,57 @@ function derive({ commits = [], runs = [], builds = {}, trunk = 'main', config =
   const byClass = {};
   for (const d of dropped) byClass[d.cls] = (byClass[d.cls] || 0) + 1;
 
-  // ---- missed partners: serial landings that landed alone while a partner was (nearly) ready ----
-  const pairs = [];
-  let withMissed = 0, withNear = 0, cyclesUnread = 0, overlapped = 0;
+  // ---- missed partners: landings that went alone while a partner was (nearly) ready ----
   // A partner is judged by ITS state at this landing's moment, never by the head it finally landed
   // with: a serial ship syncs the other branches, so their final heads all post-date it. The cycle
   // ends when this landing's trunk run finishes — or at the next landing, whichever is first (a
   // re-run moves a run's updated_at hours later, and the next landing moves trunk anyway).
   const landingTimes = landings.map((l) => l.atMs).sort((a, b) => a - b);
-  for (const c of serialChanges) {
-    const next = landingTimes.find((t) => t > c.atMs);
-    let end = cycleEnd(c.landing.sha);
-    if (end === null) cyclesUnread++;
-    else if (next !== undefined) end = Math.min(end, next);
-    let missed = false, near = false;
-    const label = c.branch || c.landing.sha.slice(0, 7);
-    for (const o of changes) {
-      if (o === c || o.landing === c.landing || o.atMs <= c.atMs || !o.branch || o.branch === c.branch) continue;
-      const gNow = greenAt(runsByBranch, o.branch, c.atMs);
-      if (gNow !== null) {
-        missed = true;
-        pairs.push({ kind: 'missed', landed: label, partner: o.branch });
-        continue;
+  const scanPartners = (lone, tagVia) => {
+    const pairs = [];
+    let withMissed = 0, withNear = 0, cyclesUnread = 0, overlapped = 0;
+    for (const c of lone) {
+      const next = landingTimes.find((t) => t > c.atMs);
+      let end = cycleEnd(c.landing.sha);
+      if (end === null) cyclesUnread++;
+      else if (next !== undefined) end = Math.min(end, next);
+      let missed = false, near = false;
+      const label = c.branch || c.landing.sha.slice(0, 7);
+      const via = tagVia ? { via: c.landing.kind === 'serial' ? 'serial' : 'batch-of-one' } : {};
+      for (const o of changes) {
+        if (o === c || o.landing === c.landing || o.atMs <= c.atMs || !o.branch || o.branch === c.branch) continue;
+        const gNow = greenAt(runsByBranch, o.branch, c.atMs);
+        if (gNow !== null) {
+          missed = true;
+          pairs.push({ kind: 'missed', landed: label, partner: o.branch, ...via });
+          continue;
+        }
+        if (end === null) continue;
+        const gEnd = greenAt(runsByBranch, o.branch, end);
+        if (gEnd !== null && gEnd > c.atMs) {
+          near = true;
+          const from = c.greenMs !== null ? c.greenMs : c.atMs;
+          pairs.push({ kind: 'near', landed: label, partner: o.branch, waitSec: Math.round((gEnd - from) / 1000), ...via });
+        }
       }
-      if (end === null) continue;
-      const gEnd = greenAt(runsByBranch, o.branch, end);
-      if (gEnd !== null && gEnd > c.atMs) {
-        near = true;
-        const from = c.greenMs !== null ? c.greenMs : c.atMs;
-        pairs.push({ kind: 'near', landed: label, partner: o.branch, waitSec: Math.round((gEnd - from) / 1000) });
-      }
+      if (missed) withMissed++;
+      else if (near) withNear++;
+      if (end !== null && (missed || near)) overlapped++;
     }
-    if (missed) withMissed++;
-    else if (near) withNear++;
-    if (end !== null && (missed || near)) overlapped++;
-  }
-  if (cyclesUnread) notes.push(`${cyclesUnread} serial landing(s) with no finished trunk run in the window — near misses not judged for them`);
+    return {
+      landings: lone.length, withMissedPartner: withMissed, withNearMiss: withNear,
+      // #556: the overlap rate's honest denominator — only a landing whose trunk-CI cycle was read
+      // could have been judged for a partner inside it; `overlapped` counts those that had one.
+      cyclesRead: lone.length - cyclesUnread, overlapped,
+      nearMissWait: summary(pairs.filter((p) => p.kind === 'near').map((p) => p.waitSec)),
+      pairs,
+    };
+  };
+  const serial = scanPartners(serialChanges, false);
+  const alone = scanPartners(aloneChanges, true);
+  // The alone set contains the serial one, so its unread count is the one note (never two).
+  const aloneUnread = alone.landings - alone.cyclesRead;
+  if (aloneUnread) notes.push(`${aloneUnread} lone landing(s) (serial or a batch of one) with no finished trunk run in the window — near misses not judged for them`);
   const unknownGreen = changes.filter((c) => c.greenMs === null).length;
   if (unknownGreen) notes.push(`${unknownGreen} landed change(s) with no readable green-at-head run — left out of queue wait and partner matching`);
 
@@ -259,16 +285,13 @@ function derive({ commits = [], runs = [], builds = {}, trunk = 'main', config =
       pending: buildRows.length - finished.length,
       firstAttemptGreenRate: rate(firstGreen, finished.length),
     },
-    red: { builds: redBuilds.length, members: redMembers, relandedSerially: relanded },
+    // relandedSerially: through the serial path only; relandedAlone: serially OR as a batch of one (#580).
+    red: { builds: redBuilds.length, members: redMembers, relandedSerially: relanded, relandedAlone },
     dropped: { count: dropped.length, attempted: builtMembers + dropped.length, rate: rate(dropped.length, builtMembers + dropped.length), byClass, members: dropped },
-    serial: {
-      landings: serialChanges.length, withMissedPartner: withMissed, withNearMiss: withNear,
-      // #556: the overlap rate's honest denominator — only a landing whose trunk-CI cycle was read
-      // could have been judged for a partner inside it; `overlapped` counts those that had one.
-      cyclesRead: serialChanges.length - cyclesUnread, overlapped,
-      nearMissWait: summary(pairs.filter((p) => p.kind === 'near').map((p) => p.waitSec)),
-      pairs,
-    },
+    // `serial`: landed through the serial path. `alone`: landed alone by either path — a serial
+    // landing or a batch of one (#580); its pairs carry `via: 'serial' | 'batch-of-one'`.
+    serial,
+    alone: { ...alone, batchOfOne: aloneChanges.filter(isBatchOfOne).length },
     queueWait,
     notes,
   };
