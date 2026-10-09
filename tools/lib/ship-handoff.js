@@ -24,7 +24,14 @@
  *   4. the body names the branch, as a whole token;
  *   5. the branch exists on the remote, and this machine holds no diverging copy of its own;
  *   6. the body names a sha that is a prefix of the remote branch's CURRENT head — a branch that
- *      moved after its hand-off was not handed off at that head, and lands only after a new one;
+ *      moved after its hand-off was not handed off at that head, and lands only after a new one.
+ *      ONE movement is not "moved" (#579): base-sync merges stacked on the handed-off head. The
+ *      stale-base gate (#395) sends every behind-trunk branch through B0's sync, and the sync moves
+ *      the head; without this a remote-built branch that fell behind could land only after its
+ *      executor — whose session has usually ended — posted again. A sync merge is accepted only
+ *      when it adds nothing of its own (syncMergeChain, below): two parents, the second already on
+ *      the base, and a tree equal to git's own clean merge of the two. Any other commit after the
+ *      handed-off sha — a fix-up, a rebase, a hand-resolved conflict — is still `head-moved`;
  *   7. every issue the branch carries has a LIVE `🔒 Claimed` comment naming this branch, posted by
  *      the hand-off's author before the hand-off — the claim really does live elsewhere, and the
  *      party handing off is the party holding it.
@@ -63,9 +70,13 @@ function namedShas(body) {
  *   refs         — git.branchRefs(): { localSha, remoteSha, localFromRemote }
  *   claimsByIssue — { [n]: [{ login, branch, at, host, machine }] } live claim comments per issue,
  *                  or null for an issue whose comments could not be read
- * Returns { ok: true, issues, sha, executor, url } or { ok: false, reason, detail }.
+ *   syncChain    — (#579) the first-parent ancestors of the remote head reached through pure
+ *                  base-sync merges only, nearest first (syncMergeChain's output); [] or absent = none
+ * Returns { ok: true, issues, sha, handedOff, syncMerges, executor, url } or { ok: false, reason, detail }.
+ * `sha` is what lands (the remote head); `handedOff` is the sha the hand-off named — equal to `sha`
+ * unless the head was synced, in which case `syncMerges` counts the merges between them.
  */
-function handoffVerdict({ url, comment, branch, refs, claimsByIssue }) {
+function handoffVerdict({ url, comment, branch, refs, claimsByIssue, syncChain }) {
   const no = (reason, detail) => ({ ok: false, reason, detail });
   const u = parseHandoffUrl(url);
   if (!u) return no('bad-url', `--handoff ${url || '(empty)'} is not an issue-comment URL (…/issues/<N>#issuecomment-<id>)`);
@@ -89,9 +100,13 @@ function handoffVerdict({ url, comment, branch, refs, claimsByIssue }) {
   }
   const head = String(refs.remoteSha).toLowerCase();
   const shas = namedShas(comment.body);
-  if (!shas.some((s) => head.startsWith(s))) {
+  // #579: the head itself first, then each sha a pure base-sync merge sits on, nearest first.
+  const lineage = [head, ...(Array.isArray(syncChain) ? syncChain : []).map((x) => String(x).toLowerCase())];
+  const at = lineage.findIndex((l) => shas.some((s) => l.startsWith(s)));
+  if (at < 0) {
+    const synced = lineage.length > 1 ? ` (nor ${lineage.length - 1 === 1 ? 'the sha' : 'any of the ' + (lineage.length - 1) + ' shas'} its base-sync merges sit on)` : '';
     return no('head-moved', shas.length
-      ? `the hand-off names ${shas.map((s) => s.slice(0, 8)).join(', ')}, but the remote ${branch} is at ${head.slice(0, 8)} — the branch moved after it was handed off; ask its executor for a new hand-off`
+      ? `the hand-off names ${shas.map((s) => s.slice(0, 8)).join(', ')}, but the remote ${branch} is at ${head.slice(0, 8)}${synced} — the branch moved after it was handed off by more than a clean merge of its base; ask its executor for a new hand-off`
       : `the hand-off names no head sha — it must say which commit it hands off (the remote is at ${head.slice(0, 8)})`);
   }
   let executor = null;
@@ -105,12 +120,55 @@ function handoffVerdict({ url, comment, branch, refs, claimsByIssue }) {
     }
     if (!executor) executor = { login: match.login, host: match.host, machine: match.machine || '' };
   }
-  return { ok: true, issues, sha: refs.remoteSha, executor, url: String(url).trim() };
+  return { ok: true, issues, sha: refs.remoteSha, handedOff: lineage[at], syncMerges: at, executor, url: String(url).trim() };
 }
 
-/** The squash trailer recording the door the issue set came through. */
+/**
+ * The squash trailer recording the door the issue set came through. It names the HANDED-OFF sha —
+ * the one the executor vouched for — and, after a sync (#579), the head that actually landed.
+ */
 function handoffTrailer(v) {
-  return v && v.ok ? `Colab-Handoff: ${v.url} @ ${String(v.sha).slice(0, 12)}` : '';
+  if (!v || !v.ok) return '';
+  const handed = String(v.handedOff || v.sha).slice(0, 12);
+  const synced = v.syncMerges ? ` (synced to ${String(v.sha).slice(0, 12)} by ${v.syncMerges} base merge${v.syncMerges === 1 ? '' : 's'})` : '';
+  return `Colab-Handoff: ${v.url} @ ${handed}${synced}`;
 }
 
-module.exports = { parseHandoffUrl, namesBranch, namedShas, handoffVerdict, handoffTrailer };
+/**
+ * #579 — walk the remote head's first-parent line while each commit is a PURE base-sync merge, and
+ * return the shas it sits on, nearest first. A commit qualifies only when all three hold:
+ *   - exactly two parents (a squash, a rebase, a cherry-pick or a fix-up has one);
+ *   - its second parent is already on the base (`merge-base --is-ancestor p2 <baseRef>`) — it
+ *     brought in landed base content, not a side branch;
+ *   - its tree equals `git merge-tree --write-tree p1 p2`'s — git's own conflict-free merge of the
+ *     two. A conflict (exit 1) or a hand-edited result (a different tree) is NOT pure: someone wrote
+ *     content into it, and only the executor can vouch for content.
+ * The walk stops at the first commit that fails, so a sync merge stacked on a fix-up yields only
+ * the fix-up's sha — which a hand-off naming the commit before the fix-up does not match.
+ *
+ * `run(args)` is git in the repo, returning { ok, code, stdout } (tools/lib/git.js `git`). A git
+ * too old for `merge-tree --write-tree` (< 2.38) proves nothing, so the chain is just empty there:
+ * the hand-off then needs the exact head, exactly as before #579.
+ */
+function syncMergeChain(run, head, baseRef, maxDepth = 50) {
+  const chain = [];
+  let cur = String(head || '');
+  for (let i = 0; cur && i < maxDepth; i++) {
+    const p = run(['rev-list', '--parents', '-n', '1', cur]);
+    if (!p.ok) break;
+    const parts = String(p.stdout).trim().split(/\s+/);
+    if (parts.length !== 3) break;
+    const [, p1, p2] = parts;
+    if (run(['merge-base', '--is-ancestor', p2, baseRef]).code !== 0) break;
+    const mt = run(['merge-tree', '--write-tree', p1, p2]);
+    if (mt.code !== 0) break;
+    const merged = String(mt.stdout).split('\n')[0].trim();
+    const tree = run(['rev-parse', `${cur}^{tree}`]);
+    if (!tree.ok || !/^[0-9a-f]{40,64}$/.test(merged) || merged !== String(tree.stdout).trim()) break;
+    chain.push(p1.toLowerCase());
+    cur = p1;
+  }
+  return chain;
+}
+
+module.exports = { parseHandoffUrl, namesBranch, namedShas, handoffVerdict, handoffTrailer, syncMergeChain };

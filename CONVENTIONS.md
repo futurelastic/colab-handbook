@@ -1389,7 +1389,11 @@ than guessed.
   lands without a takeover from its executor's hand-off (#578): `colab ship --branch <b>
   --handoff <comment-url>` takes the issue set from the branch name once that comment names the
   branch and its current remote head and every issue carries the executor's live claim on it;
-  nothing is claimed here, and the executor keeps its worktree until it confirms the land.
+  nothing is claimed here, and the executor keeps its worktree until it confirms the land. A
+  handed-off branch that fell behind its base is synced by the lander as usual, and the hand-off
+  still holds (#579): commits after the handed-off sha are accepted only when each is a pure
+  base-sync merge — second parent already on the base, tree equal to git's own clean merge. Any
+  other movement still needs a new hand-off.
 - **[Hard — gate: colab ship refuses unless trunk CI green]** **Before merging to trunk, check that trunk's last CI run is green — and that it ran at
   all.** **Ask by commit, not by recency
   (#92):**
