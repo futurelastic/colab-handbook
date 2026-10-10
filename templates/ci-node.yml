@@ -474,13 +474,15 @@ jobs:
 
       # ---------------------------------------------------------------------------
       # Descriptor check (#416). A value `colab ship` cannot use does not fail there —
-      # it fails closed to the safe default, silently. `ship-batch: 5` (the cap is 3)
+      # it fails closed to the safe default, silently. `ship-batch: 5` (the cap was 3)
       # once turned every landing in a busy repo back to serial while this CI stayed
       # green; only a ship dry run noticed. So the value fails HERE, where the person
       # who changed project.yml is looking. Same rule as `colab ship` and the audit
-      # (tools/lib/ship-batch.js parseShipBatch): absent/empty/null, or 1–3. Why the
-      # cap is 3: project.schema.md, `ship-batch`. `ship-batch-wait` (#555) the same way
+      # (tools/lib/ship-batch.js parseShipBatch): absent/empty/null, or 1–8. Why the
+      # cap is 8: project.schema.md, `ship-batch`. `ship-batch-wait` (#555) the same way
       # (parseShipBatchWait): absent/empty/null, or a whole number with a unit (s, m, h).
+      # `ship-batch-steps` (#557, parseShipBatchSteps): absent/empty/null, or ascending
+      # whole numbers within ship-batch — 2,4,8 or [2, 4, 8].
       # `ci-wait-factor` (#564) too (tools/lib/ci-profile.js parseFactor): absent, or a number >= 1.
       # ---------------------------------------------------------------------------
       - name: Descriptor check (.github/project.yml)
@@ -496,10 +498,25 @@ jobs:
           }
           v="$(field ship-batch)"
           case "$v" in
-            ''|'~'|null|1|2|3) echo "ship-batch: ${v:-absent} — ok" ;;
+            ''|'~'|null|1|2|3|4|5|6|7|8) echo "ship-batch: ${v:-absent} — ok" ;;
             *)
-              echo "::error file=.github/project.yml::ship-batch is '$v', expected an integer 1-3 (omit for serial). colab ship ignores any other value and lands serially. Why the cap is 3: project.schema.md, ship-batch."
+              echo "::error file=.github/project.yml::ship-batch is '$v', expected an integer 1-8 (omit for serial). colab ship ignores any other value and lands serially. Why the cap is 8: project.schema.md, ship-batch."
               exit 1 ;;
+          esac
+          # ship-batch-steps (#557): ascending whole numbers, each within ship-batch (the ceiling read above).
+          s="$(field ship-batch-steps)"
+          case "$s" in
+            ''|'~'|null) echo "ship-batch-steps: absent — ok (fixed size)" ;;
+            *)
+              case "$v" in ''|'~'|null) ceil=1 ;; *) ceil="$v" ;; esac
+              list="$(printf '%s' "$s" | sed -E -e 's/^\[(.*)\]$/\1/' -e 's/^[[:space:]]+//' -e 's/[[:space:]]+$//' -e 's/[[:space:]]*,[[:space:]]*/,/g')"
+              if printf '%s\n' "$list" | grep -Eq '^[1-9][0-9]*(,[1-9][0-9]*)*$' \
+                && printf '%s\n' "$list" | tr ',' '\n' | awk -v n="$ceil" '{ if ($1 + 0 <= p || $1 + 0 > n + 0) bad = 1; p = $1 + 0 } END { exit bad }'; then
+                echo "ship-batch-steps: $list — ok"
+              else
+                echo "::error file=.github/project.yml::ship-batch-steps is '$s', expected strictly ascending whole numbers within ship-batch ($ceil), like 2,4,8 (omit for a fixed size). colab ship ignores any other value and uses the fixed size. See project.schema.md, ship-batch-steps."
+                exit 1
+              fi ;;
           esac
           # ship-batch-wait (#555): a whole number with a unit — 90s, 6m, 1h. No ceiling: the repo chooses.
           w="$(field ship-batch-wait)"

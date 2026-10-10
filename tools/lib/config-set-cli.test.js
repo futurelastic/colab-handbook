@@ -144,14 +144,14 @@ test('#561: a diff touching one tuning key and one authority key is refused the 
 
 test('#561: a malformed value is refused by config set, and by the class', () => {
   const fx = fixture();
-  const r = colab(fx, ['config', 'set', 'ship-batch', '7', '--evidence', 'x', '--repo', fx.work]);
+  const r = colab(fx, ['config', 'set', 'ship-batch', '9', '--evidence', 'x', '--repo', fx.work]);
   assert.strictEqual(r.code, 1, r.out + r.err);
-  assert.match(r.err, /malformed tuning value: ship-batch is 7/);
+  assert.match(r.err, /malformed tuning value: ship-batch is 9/);
   assert.strictEqual(spawnSync('git', ['rev-parse', '--verify', '--quiet', `refs/heads/${BR}`], { cwd: fx.work }).status, 1);
 
   fx.g(fx.work, 'checkout', '-q', '-b', 'chore/tune-bad');
-  fs.writeFileSync(path.join(fx.work, '.github', 'project.yml'), NO_AUTONOMY.replace('ship-batch: 1', 'ship-batch: 7'));
-  fx.g(fx.work, 'commit', '-q', '-am', 'chore(project): ship-batch 7');
+  fs.writeFileSync(path.join(fx.work, '.github', 'project.yml'), NO_AUTONOMY.replace('ship-batch: 1', 'ship-batch: 9'));
+  fx.g(fx.work, 'commit', '-q', '-am', 'chore(project): ship-batch 9');
   fx.g(fx.work, 'checkout', '-q', 'main');
   const s = colab(fx, ['ship', '--branch', 'chore/tune-bad', '--repo', fx.work]);
   assert.strictEqual(s.code, 1, s.out + s.err);

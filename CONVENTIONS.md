@@ -667,8 +667,8 @@ repo-owned value moved on the repo's own measurements. Why: [ADR 561](docs/adr/5
 **Tuning only** when exactly one file changed, `.github/project.yml`, as a regular text file;
 every changed non-blank line sits inside a tuning key's block (a top-level comment does not); every
 other key parses identical on both sides; and every tuning key that moved holds a valid value or
-is absent. The allowlist: `ship-batch` (inside its cap), `ship-batch-wait`, `ci-wait-factor`,
-`thresholds`. **[Hard — gate: colab ship autonomy gate]** **Never tuning**, because they grant
+is absent. The allowlist: `ship-batch` (inside its cap), `ship-batch-wait`, `ship-batch-steps`,
+`ci-wait-factor`, `thresholds`. **[Hard — gate: colab ship autonomy gate]** **Never tuning**, because they grant
 authority or change what deploys: `autonomy`, `promotion`, `migration-grant`, `ci-grant`,
 `trust-humans`, `exposure`, `tier`, `trunk`, `deploy`, `release`, `production`. A malformed value
 is refused by `config set` and by the class alike (#416). Both lists are constants in
@@ -1720,8 +1720,8 @@ Why, with the measurement: [ADR 539](docs/adr/539-who-may-touch-and-batch-landin
 Every mature system that lands several changes per cycle (merge trains, merge queues,
 rollups, speculative pipelines) **tests the combined state before it becomes trunk**. None
 lands first and tests afterwards. So a repo that declares
-[`ship-batch: <N>`](project.schema.md#ship-batch--optional) (1–3; absent or 1 is serial,
-unchanged) may land through `colab ship --batch <b1,b2[,b3]>`:
+[`ship-batch: <N>`](project.schema.md#ship-batch--optional) (1–8; absent or 1 is serial,
+unchanged) may land through `colab ship --batch <b1,b2[,…]>`:
 
 **A batch of one is a batch** (#562): a lone ready candidate lands through the same path,
 never serially, so a repo running its full matrix only on `ship-batch/**` and trunk still
@@ -1758,10 +1758,11 @@ tests every setup before trunk moves — whether or not a sibling was ready.
    run is still in flight — only when **the same workflows** ran there: the workflow files
    firing on a trunk push and on a `ship-batch/**` push must be the same set. Otherwise
    trunk waits for its own run, as always.
-6. **Failure.** `red:infra` → re-run once (unchanged). `red:finding`, or red again after
-   that one re-run → **land nothing** from the batch; the members ship serially, each with
-   its own sync run — for N ≤ 3 that *is* the bisection — and the one that goes red
-   returns to its implementer as a class, exactly as today.
+6. **Failure — split, then retry** (#557). A red run lands nothing. `red:infra` → re-run
+   once. With two or more members, `red:finding` (`--split`) or red after that re-run splits
+   it: the same ref is rebuilt on the same base with the **first half** of its members; the
+   rest wait for the next batch, and a red half splits again. A red batch of **one** cannot
+   split: that member ships serially and returns to its implementer as a class.
 7. **Wiring.** If no workflow fires on a `ship-batch/**` push, the combined run can never
    arrive: `colab ship` says so and declines to serial — it never waits for it. Consumer
    CI opts in by adding `'ship-batch/**'` to a CI workflow's `push: branches:` — a copy of
@@ -1777,25 +1778,22 @@ tests every setup before trunk moves — whether or not a sibling was ready.
    up to that window — counted from when it became ready, so it never restarts — for a
    partner, and lands alone after, still as a batch of one. The handbook gives no default and no ceiling: absent
    is no wait. A repo picks the value from its own history.
+10. **Adaptive size** (#557): with [`ship-batch-steps`](project.schema.md#ship-batch-steps--optional),
+   one step up after a green batch, one step down after a red one; no default steps.
 
 `colab ship --batch` never waits: each call reads the remote, takes one step, and exits
 `0` landed · `3` paused (wait on the printed run, bounded as any other CI wait, then run
-the same command again) · `4` declined, nothing landed, ship the members one at a time.
-Declining is never a silent fall-through to the serial path: that path's sync commit
+the same command again) · `4` declined, nothing landed, ship the members one at a time (a
+red of two or more: re-run or `--split`, step 6). Declining is never a silent fall-through to the serial path: that path's sync commit
 still needs its own re-run, and landing it unseen is the thing this section exists to stop.
 
-**Tuning — the repo's own history, read by `colab batch-stats`** (#554). Neither knob has a
-handbook default, so a repo sets `ship-batch:` and `ship-batch-wait:` from what
-`colab batch-stats [--since <window>] [--json]` reports for it: batches landed and their
-fill, the combined run's first-attempt green rate, red batches and their lone fallbacks,
-members dropped at build and why, **missed partners** (a change that landed alone while
-another was already green — or turned green inside its trunk-CI cycle, with the wait that
-would have caught it), and the queue wait from green-at-head to landing. `serial` is the
-serial path only; `alone` adds a batch of one (#580) — a `ship-batch` repo's lone candidate
-lands as one, so there `alone`, not `serial`, is what `ship-batch-wait` is tuned from. It reads git and
-CI, never machine-local state, so it answers the same on every machine. A dropped member is
-part of that record: the batch head carries one `Ship-Batch-Dropped: <ref> <branch>@<sha>
-<class>` trailer per drop, so eviction rate is measurable from trunk alone.
+**Tuning — the repo's own history, read by `colab batch-stats`** (#554). No knob has a
+handbook default, so a repo sets `ship-batch:`, `ship-batch-wait:` and `ship-batch-steps:` from
+what `colab batch-stats [--since <window>] [--json]` reports for it — fill, first-attempt green,
+reds, drops by class (each a `Ship-Batch-Dropped:` trailer on the batch head), **missed
+partners** and queue wait; the metrics are defined in `tools/README.md`. On a `ship-batch` repo
+`alone` (serial plus a batch of one, #580), not `serial`, tunes `ship-batch-wait`. It reads
+git and CI only, so it answers the same on every machine.
 
 ### Is a shipped half actually shippable? — the mechanical gate is not the judgement call (#263)
 

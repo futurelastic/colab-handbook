@@ -766,7 +766,7 @@ Two units reworded on purpose (base `c56bac20`), each to carry one new clause in
 
 | id | class | gate | rule | key | dest | source |
 |---|---|---|---|---|---|---|
-| C4.batch.01 | default |  | A repo declaring `ship-batch: <N>` (1–3) may land through `colab ship --batch`; absent or 1 is serial. | may land through `colab ship --batch <b1,b2[,b3]>`: | CONVENTIONS.md | #373 |
+| C4.batch.01 | default |  | A repo declaring `ship-batch: <N>` (1–8) may land through `colab ship --batch`; absent or 1 is serial. | may land through `colab ship --batch <b1,b2[,…]>`: | CONVENTIONS.md | #373 |
 | C4.batch.02 | default |  | A batch member is `green` at its own head, passes every gate its own serial ship would, and is an ordinary auto-trunk squash. | passes every gate its own serial ship would, | CONVENTIONS.md | #373 |
 | C4.batch.03 | default |  | Anything special (docs-only door, migration, ci-grant or cure, core-path review, adopted branch, workflow edits) ships serially. | Anything special ships serially, where its path already is | CONVENTIONS.md | #373 |
 | C4.batch.04 | default |  | Disjointness is never the correctness gate; the combined run is. | Disjointness is never the correctness gate | CONVENTIONS.md | #373 |
@@ -776,7 +776,8 @@ Two units reworded on purpose (base `c56bac20`), each to carry one new clause in
 | C4.batch.08 | default |  | One combined run at the batch head must be `green` and replaces each member's post-sync re-run. | One combined run** there must be `green`. It **replaces** each member's post-sync | CONVENTIONS.md | #373 |
 | C4.batch.09 | default |  | Trunk fast-forwards to the batch head only if trunk has not moved, by a plain non-forced push; otherwise rebuild. | Trunk fast-forwards to the batch head **only if trunk has not moved** since | CONVENTIONS.md | #373 |
 | C4.batch.10 | default |  | A green batch run stands in for trunk's own in-flight run only when the same workflows fire on a trunk push and a `ship-batch/**` push. | only when **the same workflows** ran there: the workflow files | CONVENTIONS.md | #373 |
-| C4.batch.11 | default |  | On `red:infra` re-run once; on `red:finding` or red after the re-run, land nothing and ship the members serially. | `red:finding`, or red again after | CONVENTIONS.md | #373 |
+| C4.batch.11 | default |  | On `red:infra` re-run once; on `red:finding` (`--split`) or red after the re-run, a batch of two or more lands nothing and splits: the same ref is rebuilt with its first half, the rest wait for the next batch. | rebuilt on the same base with the **first half** of its members | CONVENTIONS.md | #557 |
+| C4.batch.19 | default |  | A red batch of one cannot split: it lands nothing and that member ships serially. | A red batch of **one** cannot split | CONVENTIONS.md | #557 |
 | C4.batch.12 | default |  | If no workflow fires on a `ship-batch/**` push, `colab ship` says so and declines to serial, never waiting. | `colab ship` says so and declines to serial — it never waits for it. | CONVENTIONS.md | #373 |
 | C4.batch.13 | hard | tools/colab::a batch never passes the cure/grant doors | A red trunk declines the whole batch; the cure/grant doors apply per member, never to a batch. | A red trunk still stops everything** except the cure/grant doors, and those apply | CONVENTIONS.md | #373 |
 | C4.batch.14 | default |  | `colab ship --batch` never waits; it exits 0 landed, 3 paused (wait on the printed run, rerun) or 4 declined (ship members one at a time). | `colab ship --batch` never waits: each call reads the remote, takes one step, and exits | CONVENTIONS.md | #373 |
@@ -784,6 +785,7 @@ Two units reworded on purpose (base `c56bac20`), each to carry one new clause in
 | C4.batch.16 | default |  | A ship pass builds a batch from every candidate ready at that moment, re-reading the set before each `--batch` call. | re-read the set right before each `--batch` call | CONVENTIONS.md | #555 |
 | C4.batch.18 | default |  | On a `ship-batch` repo a lone ready candidate lands through the batch path as a batch of one, never serially. | A batch of one is a batch | CONVENTIONS.md | #562 |
 | C4.batch.17 | default |  | A lone ready candidate waits for a partner only up to the repo's declared `ship-batch-wait`, with the lane otherwise idle. | it waits up to that window | CONVENTIONS.md | #555 |
+| C4.batch.20 | default |  | With `ship-batch-steps` declared, each batch is built one step up after a green batch, one step down after a red one. | one step up after a green batch, one step down after a red one | CONVENTIONS.md | #557 |
 
 ### Is a shipped half actually shippable? — the mechanical gate is not the judgement call (#263)
 
@@ -2513,13 +2515,13 @@ Reworded units, one bullet each. Row key changed: C6.rel.111 (the moved sentence
 | id | class | gate | rule | key | dest | source |
 |---|---|---|---|---|---|---|
 | S1.shipbatch.01 | default |  | `ship-batch` is optional: how many green candidates `colab ship --batch` may land at once. | How many green candidates `colab ship --batch` may land at once | project.schema.md | — |
-| S1.shipbatch.02 | default |  | `ship-batch` is an integer from 1 to 3. | An integer from 1 to 3. | project.schema.md | — |
+| S1.shipbatch.02 | default |  | `ship-batch` is an integer from 1 to 8, the repo's ceiling. | integer from 1 to 8 — the repo's ceiling | project.schema.md | — |
 | S1.shipbatch.03 | default |  | Absent or `1` keeps serial landing exactly; every `--batch` call declines. | Absent or `1` keeps today's serial landing exactly | project.schema.md | — |
 | S1.shipbatch.04 | hard | tools/lib/ship-batch.js::expected an integer 1 | Any other `ship-batch` value fails the audit and ship fails closed to serial on it. | and `colab ship` fails closed to serial on it | project.schema.md | #416 |
-| S1.shipbatch.05 | default |  | Any other value also fails the CI templates' descriptor check. | value (`0`, `4`, `2.5`, a word) fails the audit and the CI templates' descriptor check | project.schema.md | #416 |
+| S1.shipbatch.05 | default |  | Any other value also fails the CI templates' descriptor check. | value (`0`, `9`, `2.5`, a word) fails the audit and the CI templates' descriptor check | project.schema.md | #416 |
 | S1.shipbatch.06 | default |  | A copy of the CI templates older than #416 lacks the descriptor step; copy it in. | A copy of the CI templates older than #416 lacks the step. | project.schema.md | #416 |
-| S1.shipbatch.07 | default |  | Raising the cap means first building a real bisection and collecting eviction data. | Raising the cap means first building what it lacks | project.schema.md | — |
-| S1.shipbatch.08 | default |  | A queue longer than 3 drains as consecutive batches of 3. | a queue longer than 3 drains as consecutive batches of 3 | project.schema.md | — |
+| S1.shipbatch.07 | default |  | A red combined run of two or more members splits rather than going serial, so a red stays logarithmic. | so a red stays logarithmic | project.schema.md | #557 |
+| S1.shipbatch.08 | default |  | A queue longer than the cap drains as consecutive batches. | A queue longer than the cap still drains as consecutive batches. | project.schema.md | — |
 | S1.shipbatch.09 | hard | tools/colab::could never arrive; landing serially instead | A batch puts trunk's head plus one squash commit per member (each with `Closes #N`) on a ship-batch ref, needs one green combined run, and fast-forwards trunk only if trunk has not moved. | puts trunk's head plus one squash commit per | project.schema.md | #373 |
 | S1.shipbatch.10 | hard | tools/colab::could never arrive; landing serially instead | A CI workflow must fire on a `ship-batch/**` push; without it every `--batch` call declines. | A CI workflow fires on a `ship-batch/**` push. | project.schema.md | #384 |
 | S1.shipbatch.11 | hard | tools/colab::batch landing needs it | A batch needs `autonomy: auto-trunk`; without the grant the field is inert. | A batch lands every member in one unattended push | project.schema.md | — |
@@ -2534,6 +2536,15 @@ Reworded units, one bullet each. Row key changed: C6.rel.111 (the moved sentence
 | S1.shipbatchwait.02 | default |  | The handbook ships no default value and no ceiling for the window. | no default value and no ceiling | project.schema.md | #555 |
 | S1.shipbatchwait.03 | hard | tools/lib/ship-batch.js::expected a whole number with a unit | A malformed `ship-batch-wait` fails the audit and the CI descriptor check; `colab ship` fails closed to no wait on it. | and `colab ship` fails closed to no wait on it | project.schema.md | #555 |
 | S1.shipbatchwait.04 | default |  | The window is counted from when the lone member became ready, so it never restarts. | so the window never restarts | project.schema.md | #555 |
+
+### `ship-batch-steps`
+
+| id | class | gate | rule | key | dest | source |
+|---|---|---|---|---|---|---|
+| S1.shipbatchsteps.01 | default |  | `ship-batch-steps` is optional: the sizes an adaptive batch walks through; absent keeps a fixed size. | Absent keeps a fixed size | project.schema.md | #557 |
+| S1.shipbatchsteps.02 | default |  | The handbook ships no default steps; `ship-batch` stays the ceiling. | The handbook ships **no default steps** | project.schema.md | #557 |
+| S1.shipbatchsteps.03 | default |  | The size is read from the newest `Ship-Batch-Size:` trailer on trunk: green → one step up, red → one step down, none → the smallest step. | green → the smallest step above `s` | project.schema.md | #557 |
+| S1.shipbatchsteps.04 | hard | tools/lib/ship-batch.js::expected strictly ascending sizes | A malformed `ship-batch-steps` fails the audit and the CI descriptor check; `colab ship` fails closed to the fixed size on it. | and `colab ship` fails closed to the fixed size on it | project.schema.md | #557 |
 
 ### `ci-wait-factor`
 
@@ -2902,8 +2913,10 @@ Reworded units, one bullet each. Row key changed: C6.rel.111 (the moved sentence
 | S2.validity.25 | default |  | `writes` must be one of `free`, `direct`, `isolated`, `serial-direct`, `serial-gated`, `serial` when set. | `writes` ∈ {`free`, `direct`, `isolated`, `serial-direct`, `serial-gated`, `serial`} when set | project.schema.md | #233 |
 | S2.validity.26 | default |  | `room` must be `solo`, `team` or `public` when set. | `room` ∈ {`solo`, `team`, `public`} when set | project.schema.md | — |
 | S2.validity.27 | default |  | `branchPrefix` must be `machine` when set. | `branchPrefix` = `machine` when set | project.schema.md | — |
-| S2.validity.28 | default |  | `ship-batch` must be an integer 1-3 when set, else a finding. | `ship-batch` an integer 1–3 when set | project.schema.md | — |
+| S2.validity.28 | default |  | `ship-batch` must be an integer 1-8 when set, else a finding. | `ship-batch` an integer 1–8 when set | project.schema.md | — |
 | S2.validity.29 | default |  | `ship-batch` > 1 with no workflow firing on a `ship-batch/**` push, or without `autonomy: auto-trunk`, is an advisory. | `ship-batch` > 1 with no workflow firing on a `ship-batch/**` push | project.schema.md | — |
+| S2.validity.52 | default |  | `ship-batch-steps` must be strictly ascending whole numbers within `ship-batch` when set, else a finding. | `ship-batch-steps` strictly ascending whole numbers within `ship-batch` when set | project.schema.md | #557 |
+| S2.validity.53 | default |  | `ship-batch-steps` with `ship-batch` absent or 1 is an advisory. | `ship-batch-steps` with `ship-batch` absent or 1 | project.schema.md | #557 |
 | S2.validity.30 | default |  | `migrations` must be a list of repo-relative prefixes when set; an absolute path, `..`, glob, the repo root or a non-list is a finding. | `migrations` a list of repo-relative prefixes when set | project.schema.md | — |
 | S2.validity.31 | default |  | `migrations` empty, restating a default, or naming one prefix twice is an advisory. | `migrations` empty, restating a default, or naming one prefix twice | project.schema.md | — |
 | S2.validity.32 | default |  | A tracked `*/migrations/` directory outside the defaults and every declared prefix is an advisory (local only). | a tracked `*/migrations/` directory outside the defaults | project.schema.md | — |

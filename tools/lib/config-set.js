@@ -35,6 +35,7 @@ const DESCRIPTOR = '.github/project.yml';
 const TUNING = Object.freeze({
   'ship-batch': (doc) => { const r = shipBatch.parseShipBatch(doc); return r.valid ? null : r.reason; },
   'ship-batch-wait': (doc) => { const r = shipBatch.parseShipBatchWait(doc); return r.valid ? null : r.reason; },
+  [shipBatch.STEPS_KEY]: (doc) => { const r = shipBatch.parseShipBatchSteps(doc); return r.valid ? null : r.reason; },
   'ci-wait-factor': (doc) => { const r = ciProfile.parseFactor(doc); return r.valid ? null : r.reason; },
   [thresholds.KEY]: (doc) => { const r = thresholds.parseThresholds(doc); return r.problems.length ? r.problems.join('; ') : null; },
 });
@@ -49,8 +50,8 @@ const AUTHORITY_KEYS = Object.freeze([
   'exposure', 'tier', 'trunk', 'deploy', 'release', 'production',
 ]);
 
-/** A value is a plain YAML scalar — every tuning value is one (`2`, `6m`, `1.5`). */
-const VALUE_RE = /^[A-Za-z0-9._-]+$/;
+/** A value is a plain YAML scalar — every tuning value is one (`2`, `6m`, `1.5`, `2,4,8`). */
+const VALUE_RE = /^[A-Za-z0-9._,-]+$/;
 
 /**
  * `ship-batch` → `{ top: 'ship-batch', sub: null }`; `thresholds.hot-file-count` → `{ top:
@@ -89,7 +90,7 @@ function replaceValue(line, value) {
  * old }` (`old` is the previous raw value, or null when the key was absent), or `{ problem }`.
  */
 function editText(text, keyPath, value) {
-  if (!VALUE_RE.test(String(value))) return { problem: `value ${JSON.stringify(value)} is not a plain scalar (letters, digits, . _ -)` };
+  if (!VALUE_RE.test(String(value))) return { problem: `value ${JSON.stringify(value)} is not a plain scalar (letters, digits, . _ , -)` };
   const src = String(text);
   const eol = src.endsWith('\n') ? '' : '\n';
   const lines = src.split('\n');
