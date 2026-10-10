@@ -22,6 +22,7 @@ function repo(n, bodyBytes) {
   execFileSync('git', ['init', '-q', '--bare', '-b', 'main', origin]);
   execFileSync('git', ['init', '-q', '-b', 'main', dir]);
   g('config', 'user.email', 't@example.com'); g('config', 'user.name', 't');
+  g('config', 'core.hooksPath', path.join(dir, '.nohooks'));
   fs.mkdirSync(path.join(dir, '.github'));
   fs.writeFileSync(path.join(dir, '.github', 'project.yml'), 'trunk: main\n');
   const msg = path.join(root, 'msg');
