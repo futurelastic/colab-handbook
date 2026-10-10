@@ -15435,6 +15435,9 @@ function batchStatsSince(v, nowMs) {
   return Number.isFinite(t) ? t : null;
 }
 
+/** The trunk log read's buffer (#585); COLAB_BATCH_STATS_MAX_BUFFER overrides it, for a test. */
+const BATCH_STATS_LOG_MAX_BUFFER = Number(process.env.COLAB_BATCH_STATS_MAX_BUFFER) || 256 * 1024 * 1024;
+
 function cmdBatchStats(argv) {
   const opts = parseArgs(argv, {
     values: { '--repo': 'repo', '--since': 'since' },
@@ -15455,7 +15458,11 @@ function cmdBatchStats(argv) {
   const remote = git.remoteFor(repoAbs);
   const f = git.git(['fetch', remote, trunk], repoAbs);
   if (!f.ok) notes.push(`could not fetch ${remote}/${trunk} (${git.gitFailureLine(f.stderr)}) — read from the local copy, which may be behind`);
-  const log = git.git(['log', `${remote}/${trunk}`, '--first-parent', `--since=${sinceIso}`, '--format=%H%x1f%cI%x1f%B%x1e'], repoAbs);
+  // Full squash bodies over a long window pass spawnSync's 1 MiB default (measured 2026-10-10:
+  // 60 days of one repo's trunk came to 1,061,950 bytes), and ENOBUFS then read as a failed
+  // fetch (#585). The buffer is sized for the read; a spawn error is reported as itself.
+  const log = git.git(['log', `${remote}/${trunk}`, '--first-parent', `--since=${sinceIso}`, '--format=%H%x1f%cI%x1f%B%x1e'], repoAbs, { maxBuffer: BATCH_STATS_LOG_MAX_BUFFER });
+  if (!log.ok && log.error) throw new UserError(`could not read ${remote}/${trunk}: ${git.gitFailureLine(log.stderr)} — pass a shorter --since, then run \`colab batch-stats\` again`);
   if (!log.ok) throw new UserError(`could not read ${remote}/${trunk}: ${git.gitFailureLine(log.stderr)} — run \`git fetch ${remote} ${trunk}\`, then run this again`);
   const commits = log.stdout.split('\x1e').map((r) => r.replace(/^\n/, '')).filter((r) => r.trim()).map((r) => {
     const [sha, iso, body] = r.split('\x1f');

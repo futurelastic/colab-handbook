@@ -1216,3 +1216,14 @@ test('#550: parseRemoteHeads lists claim refs as branches, and a real branch of 
   assert.strictEqual(heads.length, 3);
   assert.strictEqual(claimRef('feat/x-9'), 'refs/claims/feat/x-9');
 });
+
+test('#585: a spawn error with no stderr becomes the detail — ENOBUFS names its buffer', () => {
+  const r = git.run(process.execPath, ['-e', 'process.stdout.write("x".repeat(4096))'], { maxBuffer: 1024 });
+  assert.strictEqual(r.ok, false);
+  assert.strictEqual(r.error.code, 'ENOBUFS');
+  assert.strictEqual(r.stderr, 'ENOBUFS: output passed the 1 KiB read buffer and the child was killed');
+  const missing = git.run('colab-no-such-binary-585', []);
+  assert.strictEqual(missing.ok, false);
+  assert.match(missing.stderr, /^ENOENT: /);
+  assert.strictEqual(git.spawnErrorLine(null), '');
+});
