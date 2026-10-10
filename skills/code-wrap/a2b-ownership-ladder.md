@@ -75,3 +75,21 @@ before reacting, the #273 lesson still applies. And `$PLAN`
 showing up here is expected when this session wrote one — `colab worktree new` and
 code-start best-effort exclude the scratch dirs via `.git/info/exclude`, but that is
 machine-local, not a guarantee every adopter's `.gitignore` repeats it (#488).
+
+### Verify complete — the dirty re-check
+
+Moved here verbatim from the core's *Verify complete* list (#586, size budget).
+
+- **Ask git, scoped to the repo root, whether it is *dirty* — again** —
+  `git -C <repo-root> status --porcelain -uall`, nothing else. Never infer from a path
+  prefix or a directory walk: `colab worktree new` nests every worktree inside the main
+  checkout, at `<repo-root>/.worktrees/<name>`, so a live worktree's absolute path
+  always carries the main checkout's path as a prefix, and a plain listing there reads
+  as "the main checkout is dirty" when it is not — git already excludes registered
+  worktrees from the parent's status (`CONVENTIONS.md`
+  [§4](../../CONVENTIONS.md#4-branches-and-commits)). This is A2b's ladder re-run, not a
+  fresh judgement call: clean, or dirty with exactly the not-mine set A2b already worked
+  through and reported. **Git only ever answers whether the root is dirty, never whose
+  the dirt is** — a hit here that A2b never saw means something after A2b (most often
+  A4's own commit) introduced new dirt on trunk; go back to A2b rather than assuming
+  ownership either way.

@@ -69,11 +69,11 @@ context from `gh issue view $N` without re-reading the codebase.
 ```sh
 gh issue view $N                         # then edit the body:
 gh issue edit $N --body-file <tmpfile>   # tick the checklist, add Decisions/Gotchas
-gh issue comment $N -b "**<YYYY-MM-DD>** — wrapped on \`<branch>\` (head <sha8>): did X, decided Y, left Z open."
+# draft, post at *Hand off*: **<YYYY-MM-DD>** — wrapped on `<branch>` (head <full sha>): did X, decided Y, left Z open.
 ```
 
 - Record **reusable knowledge** — a decision and *why*, a gotcha, a dead end —
-  not a copy of the diff. Name branch + head: it is the hand-off (#578).
+  not a copy of the diff. Name branch + **full** head sha: it is the hand-off (#578, #586).
 - No GitHub remote? Write the same into the session notes file from code-start.
 - **`ceremony: light` repo** — distill real gotchas only; skip the progress-commentary
   comment (the `**<YYYY-MM-DD>** — did X…` line above). A tick of the checklist and a
@@ -324,7 +324,7 @@ never by trusting this session's word for it:
 - [ ] session branch pushed (A5), **and** its branch-CI class recorded for the pushed
       sha — `green` · `none` · `red:infra` · `red:finding`, naming the sha (A5). A red
       class does not fail this box; an unrecorded one does
-- [ ] distill comment posted on each carried issue (A1)
+- [ ] hand-off comment (A1's distill) posted on each carried issue, last for its head (#586)
 - [ ] **`ci` mode (#410):** smoke green (A3) **and** the branch-CI run id + class at the
       pushed head (`branch-ci <sha7> run <databaseId>`, A5) — `code-ship` reads that run
       and never re-runs tests locally. **`local` mode:** as below
@@ -346,6 +346,13 @@ never by trusting this session's word for it:
 - [ ] trunk checkout reconciled (A2b) — clean, or every dirty path worked through the
       ownership ladder and reported by verdict (recovered / not-mine-with-owner /
       can't-tell) — never left unexplained
+
+### Post the hand-off comment — the last word on its head (#586)
+
+**Rule:** after A5, post A1's distill as one comment per issue naming the branch, the **full**
+head sha and A5's class — the **last** comment you write for that head. Later news on the same
+head ⇒ **edit** it or post a complete new hand-off, never a follow-up comment; a new head ⇒ a new
+hand-off naming the new sha. Full text: [handoff-last-word.md](handoff-last-word.md).
 
 State this checklist, filled in, as the last thing you report. A box you cannot
 check is not a reason to force it true — say what is missing and why, and let
@@ -381,18 +388,8 @@ unfinished item, reported first, or with the remainder moved to its own issue an
   the step that pays that debt: a checkout left on a feature branch means anything
   reading that tree (dev server, symlink, LaunchAgent) is serving unmerged code.
 - **Ask git, scoped to the repo root, whether it is *dirty* — again** —
-  `git -C <repo-root> status --porcelain -uall`, nothing else. Never infer from a path
-  prefix or a directory walk: `colab worktree new` nests every worktree inside the main
-  checkout, at `<repo-root>/.worktrees/<name>`, so a live worktree's absolute path
-  always carries the main checkout's path as a prefix, and a plain listing there reads
-  as "the main checkout is dirty" when it is not — git already excludes registered
-  worktrees from the parent's status (`CONVENTIONS.md`
-  [§4](../../CONVENTIONS.md#4-branches-and-commits)). This is A2b's ladder re-run, not a
-  fresh judgement call: clean, or dirty with exactly the not-mine set A2b already worked
-  through and reported. **Git only ever answers whether the root is dirty, never whose
-  the dirt is** — a hit here that A2b never saw means something after A2b (most often
-  A4's own commit) introduced new dirt on trunk; go back to A2b rather than assuming
-  ownership either way.
+  `git -C <repo-root> status --porcelain -uall`, A2b's ladder re-run; a hit A2b never saw ⇒
+  back to A2b. Full text: [a2b-ownership-ladder.md](a2b-ownership-ladder.md#verify-complete--the-dirty-re-check).
 - The hand-off checklist above is stated, filled in, in your final report — not implied.
   Its plan-file box is ticked or carries `rung 0 because …`; a missing plan on non-rung-0
   work is reported as such, never as "hand-off complete" (#486).

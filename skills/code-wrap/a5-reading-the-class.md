@@ -40,7 +40,7 @@ behind them — moved here verbatim (#524).
 - **`ci` mode (#410): this read IS the gate, so wait for it — bounded by the repo's CI wait
   bound, the same as `code-ship` B1a (`colab ci-wait` with no `--timeout`, #559).** `green` → the gate is green; record
   `branch-ci <sha7> run <databaseId>`. `red:finding` → the gate is red: fix, commit, re-push,
-  re-read (a new head needs a new run). `red:infra`, or still in flight at the cap → hand off
+  re-read (a new head needs a new run — and a new hand-off naming it, [handoff-last-word.md](handoff-last-word.md)). `red:infra`, or still in flight at the cap → hand off
   with the run id and the class; `code-ship` B1a re-runs an infra red once and does the rest
   of the wait. Never fall back to running the full suite locally to "save" the wait — that
   is the double run #410 removed.
