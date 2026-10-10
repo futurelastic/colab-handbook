@@ -2,7 +2,7 @@
 /**
  * Tests for the audit's `ship-batch:` validation (audit/audit.mjs) — issue #373.
  *
- * Real descriptors through the real audit. An integer 1–3 passes; every malformed value fails (ship
+ * Real descriptors through the real audit. An integer 1–8 passes (#557 raised the cap from 3); every malformed value fails (ship
  * would fail closed to serial, silently); a batch nothing can grade — no workflow firing on
  * `ship-batch/**` — warns, and so does one without `autonomy: auto-trunk`, where it is inert.
  *
@@ -66,17 +66,17 @@ const BASE = 'trunk: main\nproduction: null\ndeploy: none\nstack: node\nexposure
 const WIRED = { '.github/workflows/ci.yml': "name: CI\non:\n  push:\n    branches: [main, 'ship-batch/**']\njobs: {}\n" };
 const UNWIRED = { '.github/workflows/ci.yml': 'name: CI\non:\n  push:\n    branches: [main]\njobs: {}\n' };
 
-test('ship-batch absent, 1, 2 and 3 carry no ship-batch finding', () => {
-  for (const extra of ['', 'ship-batch: 1\n', 'ship-batch: 2\n', 'ship-batch: 3\n']) {
+test('ship-batch absent, 1, 2, 3 and 8 carry no ship-batch finding', () => {
+  for (const extra of ['', 'ship-batch: 1\n', 'ship-batch: 2\n', 'ship-batch: 3\n', 'ship-batch: 8\n']) {
     const r = audit(fixture(BASE + extra, WIRED));
     assert.ok(!hasText(all(r), /ship-batch/), `${JSON.stringify(extra)}: ${all(r).join(' | ')}`);
   }
 });
 
 test('every malformed ship-batch value fails', () => {
-  for (const v of ['0', '4', '2.5', 'two', 'true']) {
+  for (const v of ['0', '9', '2.5', 'two', 'true']) {
     const r = audit(fixture(`${BASE}ship-batch: ${v}\n`, WIRED));
-    assert.ok(hasText(r.fails, /^ship-batch is .*expected an integer 1–3/), `${v}: ${r.fails.join(' | ')}`);
+    assert.ok(hasText(r.fails, /^ship-batch is .*expected an integer 1–8/), `${v}: ${r.fails.join(' | ')}`);
   }
 });
 
@@ -111,4 +111,26 @@ test('#555: a window with no batch to fill warns that it is inert', () => {
     const r = audit(fixture(`${BASE}${sb}ship-batch-wait: 6m\n`, WIRED));
     assert.ok(hasText(r.warns, /ship-batch-wait: 6m is inert without ship-batch > 1/), `${JSON.stringify(sb)}: ${r.warns.join(' | ')}`);
   }
+});
+
+// #557: ship-batch-steps — the adaptive sizes, held to parseShipBatchSteps.
+test('ship-batch-steps: ascending sizes within ship-batch carry no finding, in either spelling', () => {
+  for (const v of ['2,4,8', '[2, 4, 8]', '"2,4,8"', '4']) {
+    const r = audit(fixture(`${BASE}ship-batch: 8\nship-batch-steps: ${v}\n`, WIRED));
+    assert.ok(!hasText(all(r), /ship-batch-steps/), `${v}: ${all(r).join(' | ')}`);
+  }
+});
+
+test('ship-batch-steps: every malformed value fails', () => {
+  for (const v of ['4,2', '2,2', '0,2', 'two', '2;4', '2,4,16']) {
+    const r = audit(fixture(`${BASE}ship-batch: 8\nship-batch-steps: ${v}\n`, WIRED));
+    assert.ok(hasText(r.fails, /^ship-batch-steps is /), `${v}: ${r.fails.join(' | ')}`);
+  }
+  const over = audit(fixture(`${BASE}ship-batch: 3\nship-batch-steps: 2,4\n`, WIRED));
+  assert.ok(hasText(over.fails, /within ship-batch: 3/), over.fails.join(' | '));
+});
+
+test('ship-batch-steps with ship-batch 1 is inert and warns', () => {
+  const r = audit(fixture(`${BASE}ship-batch: 1\nship-batch-steps: 1\n`, WIRED));
+  assert.ok(hasText(r.warns, /ship-batch-steps: 1 is inert without ship-batch > 1/), r.warns.join(' | '));
 });

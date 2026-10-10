@@ -8,21 +8,24 @@ const test = require('node:test');
 const assert = require('node:assert');
 const sb = require('./ship-batch');
 
-test('parseShipBatch: absent and 1 are serial; 2 and 3 are batches', () => {
+test('parseShipBatch: absent and 1 are serial; 2 up to MAX_BATCH (8, #557) are batches', () => {
   assert.deepStrictEqual(sb.parseShipBatch({}), { n: 1, declared: false, valid: true, reason: 'ship-batch absent' });
   assert.strictEqual(sb.parseShipBatch(null).n, 1);
   assert.strictEqual(sb.parseShipBatch({ 'ship-batch': 1 }).n, 1);
   assert.strictEqual(sb.parseShipBatch({ 'ship-batch': 2 }).n, 2);
   assert.strictEqual(sb.parseShipBatch({ 'ship-batch': 3 }).n, 3);
   assert.strictEqual(sb.parseShipBatch({ 'ship-batch': '2' }).n, 2, 'the audit reads every scalar as a string — both readers agree');
+  assert.strictEqual(sb.MAX_BATCH, 8);
+  assert.strictEqual(sb.parseShipBatch({ 'ship-batch': 8 }).n, 8);
+  assert.strictEqual(sb.parseShipBatch({ 'ship-batch': '5' }).n, 5);
 });
 
 test('parseShipBatch: every malformed value fails CLOSED to serial, with the reason', () => {
-  for (const v of [0, 4, '4', '03', 2.5, '2.5', true, 'two', -1]) {
+  for (const v of [0, 9, '9', '10', '03', 2.5, '2.5', true, 'two', -1]) {
     const r = sb.parseShipBatch({ 'ship-batch': v });
     assert.strictEqual(r.n, 1, JSON.stringify(v));
     assert.strictEqual(r.valid, false);
-    assert.match(r.reason, /^ship-batch is .*, expected an integer 1–3/);
+    assert.match(r.reason, /^ship-batch is .*, expected an integer 1–8/);
   }
 });
 
@@ -152,11 +155,81 @@ test('nextStep: an existing batch — trunk moved, members changed, pending, red
   assert.deepStrictEqual(sb.nextStep({ ...base, existing: { ...ex, matches: false } }), { step: 'rebuild', reason: 'members-changed' });
   assert.deepStrictEqual(sb.nextStep({ ...base, existing: ex, verdict: { state: 'pending' } }), { step: 'wait-run' });
   assert.deepStrictEqual(sb.nextStep({ ...base, existing: ex, verdict: { state: 'none' } }), { step: 'wait-run' });
+  // a batch of ONE (no members list reads as one) cannot split: today's red path, unchanged
   assert.deepStrictEqual(sb.nextStep({ ...base, existing: ex, verdict: { state: 'red', attempt: 1 } }), { step: 'red-rerun-or-serial' });
   assert.deepStrictEqual(sb.nextStep({ ...base, existing: ex, verdict: { state: 'red', attempt: 2 } }), { step: 'red-serial' });
+  assert.deepStrictEqual(sb.nextStep({ ...base, existing: { ...ex, members: [{}] }, verdict: { state: 'red', attempt: 1 }, split: true }), { step: 'red-serial' });
   assert.deepStrictEqual(sb.nextStep({ ...base, existing: ex, verdict: { state: 'green' } }), { step: 'land' });
   // the race: trunk moved between building and landing → never land
   assert.deepStrictEqual(sb.nextStep({ ...base, trunkNow: 'fffffff000', existing: ex, verdict: { state: 'green' } }).step, 'rebuild');
+});
+
+test('nextStep (#557): a red batch of k > 1 splits instead of going serial', () => {
+  const base = { enabled: true, wired: true, trunkCi: 'green', trunkNow: 'abcdef0999' };
+  const ex = { base7: 'abcdef0', matches: true, members: [{ branch: 'a' }, { branch: 'b' }, { branch: 'c' }] };
+  // first attempt: the caller classifies — infra re-runs, finding passes --split
+  assert.deepStrictEqual(sb.nextStep({ ...base, existing: ex, verdict: { state: 'red', attempt: 1 } }), { step: 'red-rerun-or-split' });
+  assert.deepStrictEqual(sb.nextStep({ ...base, existing: ex, verdict: { state: 'red', attempt: 1 }, split: true }), { step: 'split' });
+  // after its one re-run it splits by itself — no classification left to make
+  assert.deepStrictEqual(sb.nextStep({ ...base, existing: ex, verdict: { state: 'red', attempt: 2 } }), { step: 'split' });
+  // --split never touches a batch that is not red
+  assert.deepStrictEqual(sb.nextStep({ ...base, existing: ex, verdict: { state: 'green' }, split: true }), { step: 'land' });
+  assert.deepStrictEqual(sb.nextStep({ ...base, existing: ex, verdict: { state: 'pending' }, split: true }), { step: 'wait-run' });
+});
+
+test('splitHalves (#557): the first ceil(k/2) in batch order are tested next; the rest are held', () => {
+  assert.deepStrictEqual(sb.splitHalves(['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h']), { first: ['a', 'b', 'c', 'd'], held: ['e', 'f', 'g', 'h'] });
+  assert.deepStrictEqual(sb.splitHalves(['a', 'b', 'c']), { first: ['a', 'b'], held: ['c'] });
+  assert.deepStrictEqual(sb.splitHalves(['a', 'b']), { first: ['a'], held: ['b'] });
+  assert.deepStrictEqual(sb.splitHalves(['a']), { first: ['a'], held: [] });
+  assert.deepStrictEqual(sb.splitHalves(null), { first: [], held: [] });
+});
+
+test('parseShipBatchSteps (#557): ascending sizes within ship-batch; absent is a fixed size', () => {
+  assert.deepStrictEqual(sb.parseShipBatchSteps({ 'ship-batch': 8 }), { steps: null, declared: false, valid: true, reason: 'ship-batch-steps absent' });
+  assert.deepStrictEqual(sb.parseShipBatchSteps({ 'ship-batch': 8, 'ship-batch-steps': '2,4,8' }).steps, [2, 4, 8]);
+  assert.deepStrictEqual(sb.parseShipBatchSteps({ 'ship-batch': 8, 'ship-batch-steps': ' 2, 4 ,8 ' }).steps, [2, 4, 8]);
+  assert.deepStrictEqual(sb.parseShipBatchSteps({ 'ship-batch': 8, 'ship-batch-steps': '[2, 4, 8]' }).steps, [2, 4, 8], 'the flat reader hands the flow list over as a string');
+  assert.deepStrictEqual(sb.parseShipBatchSteps({ 'ship-batch': 8, 'ship-batch-steps': [2, 4, 8] }).steps, [2, 4, 8]);
+  assert.deepStrictEqual(sb.parseShipBatchSteps({ 'ship-batch': 6, 'ship-batch-steps': '1,3,6' }).steps, [1, 3, 6]);
+  assert.deepStrictEqual(sb.parseShipBatchSteps({ 'ship-batch': 3, 'ship-batch-steps': 2 }).steps, [2]);
+  assert.strictEqual(sb.parseShipBatchSteps({ 'ship-batch': 8, 'ship-batch-steps': null }).declared, false);
+});
+
+test('parseShipBatchSteps (#557): every malformed value fails CLOSED to the fixed size, with the reason', () => {
+  for (const v of ['4,2', '2,2,4', '0,2', '2,,4', '2;4', 'two', '', '2.5,4', true, [2, 'x'], {}]) {
+    const r = sb.parseShipBatchSteps({ 'ship-batch': 8, 'ship-batch-steps': v });
+    assert.strictEqual(r.steps, null, JSON.stringify(v));
+    assert.strictEqual(r.valid, false, JSON.stringify(v));
+    assert.match(r.reason, /^ship-batch-steps is /);
+  }
+  // a step above the repo's own ceiling — including the ceiling of a repo that is not batching
+  assert.match(sb.parseShipBatchSteps({ 'ship-batch': 4, 'ship-batch-steps': '2,4,8' }).reason, /within ship-batch: 4/);
+  assert.strictEqual(sb.parseShipBatchSteps({ 'ship-batch-steps': '2,4' }).valid, false);
+});
+
+test('size trailer (#557) round-trips; the LAST one wins; member trailers never read as one', () => {
+  assert.strictEqual(sb.sizeTrailer({ size: 4 }), 'Ship-Batch-Size: 4');
+  assert.strictEqual(sb.sizeTrailer({ size: 8, red: true }), 'Ship-Batch-Size: 8 red');
+  assert.deepStrictEqual(sb.parseSizeTrailer(['fix: a\n\nShip-Batch-Size: 4\n', 'fix: b\n\nShip-Batch-Size: 8 red\n']), { size: 8, red: true });
+  assert.strictEqual(sb.parseSizeTrailer(['fix: a\n\nShip-Batch: ship-batch/abcdef0 fix/a-1@1111111\n']), null);
+  assert.strictEqual(sb.parseSizeTrailer([]), null);
+  assert.deepStrictEqual(sb.parseMemberTrailers(['x\n\nShip-Batch-Size: 4\n']), []);
+});
+
+test('adaptiveSize (#557): grow after green, shrink after red, start small, fixed without steps', () => {
+  const steps = [2, 4, 8];
+  assert.strictEqual(sb.adaptiveSize({ n: 3, steps: null, last: { size: 2 } }), 3, 'no steps → the fixed ceiling, today');
+  assert.strictEqual(sb.adaptiveSize({ n: 8, steps, last: null }), 2, 'nothing on trunk yet → the smallest step');
+  assert.strictEqual(sb.adaptiveSize({ n: 8, steps, last: { size: 2, red: false } }), 4);
+  assert.strictEqual(sb.adaptiveSize({ n: 8, steps, last: { size: 4, red: false } }), 8);
+  assert.strictEqual(sb.adaptiveSize({ n: 8, steps, last: { size: 8, red: false } }), 8, 'never past the largest step');
+  assert.strictEqual(sb.adaptiveSize({ n: 8, steps, last: { size: 8, red: true } }), 4);
+  assert.strictEqual(sb.adaptiveSize({ n: 8, steps, last: { size: 2, red: true } }), 2, 'never below the smallest step');
+  // a size that is not a step any more (the steps changed) still moves the right way
+  assert.strictEqual(sb.adaptiveSize({ n: 8, steps, last: { size: 3, red: false } }), 4);
+  assert.strictEqual(sb.adaptiveSize({ n: 8, steps, last: { size: 3, red: true } }), 2);
+  assert.strictEqual(sb.adaptiveSize({ n: 8, steps, last: { size: 6, red: true } }), 4);
 });
 
 test('foreignBatchStep (#391): only a red batch is declined and cleared; everything else waits', () => {

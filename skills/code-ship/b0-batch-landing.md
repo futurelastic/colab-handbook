@@ -23,7 +23,7 @@ arrive), merge-clean against trunk — land through one command instead of one s
    a diff it did not read. A member that fails any of it leaves the batch.
 2. **Do not run B0's sync or B1a's post-sync re-run per member.** Instead:
    ```sh
-   colab ship --batch <b1>,<b2>[,<b3>] --repo <repo>
+   colab ship --batch <b1>,<b2>[,…] --repo <repo>
    ```
    It re-reads each member's own ship gates, builds trunk + one squash commit per member on
    `ship-batch/<trunk-sha7>`, and pushes it. That ref's **one combined run replaces every
@@ -47,9 +47,15 @@ arrive), merge-clean against trunk — land through one command instead of one s
    - **`4` — declined; nothing landed.** The last line is `→ SERIAL: colab ship --branch …` —
      ship those members one at a time from B0. If the reason was a **red combined run**, first
      classify it like any branch red (B1a, *Telling infra from finding*): `red:infra` → run the
-     printed `gh run rerun <id> --failed` once, wait, and re-run the batch command; `red:finding`
-     → go serial, and the member that goes red on its own sync run returns to its implementer
-     as a class.
+     printed `gh run rerun <id> --failed` once, wait, and re-run the batch command.
+     `red:finding` on a batch of **two or more** → run the printed
+     `colab ship --batch … --split` (#557): it rebuilds the batch with its first half (exit `3`)
+     and holds the rest for the next batch — never go serial. A red that comes back after its
+     one re-run splits by itself, with no flag. `red:finding` on a batch of **one** → go serial,
+     and that member returns to its implementer as a class when its own sync run goes red.
+   - **A split (`3`, `splitting (#557)`)** is a batch like any other: wait on its run and call
+     again. A red half splits again; a green one lands. After it lands, step 0 gathers again —
+     the held members are ready candidates like any other.
    - **`3` with `⏸ PARTNER-WAIT`** (#555) — only where `project.yml` declares
      `ship-batch-wait`: exactly one member could join, and the lane was otherwise idle. The
      line gives the seconds left in the window, counted from when that member became ready,

@@ -10353,7 +10353,7 @@ function ciCureTrailerLine(cureVerdict, branch, trunk) {
 }
 
 const HELP_SHIP = `colab ship [--repo <path>] [--worktree <name> | --branch <br> | --direct] [--message "<msg>"] [--refs <N[,M]>] [--keep-worktree] [--delete-branch | --keep-branch] [--adopt | --handoff <comment-url>] [--answered-by <name>] [--session <id>] [--session-name <s>] [--dry] [--json]
-       colab ship --batch <b1,b2[,b3]> [--repo <path>] [--keep-worktree] [--delete-branch | --keep-branch] [--session <id>] [--session-name <s>] [--dry]
+       colab ship --batch <b1,b2[,…]> [--split] [--repo <path>] [--keep-worktree] [--delete-branch | --keep-branch] [--session <id>] [--session-name <s>] [--dry]
 
 The ONE sanctioned door for code-wrap Phase B: squash-merge a session branch into the BASE IT WAS
 CUT FROM — trunk for an ordinary session, or the declared integration line recorded on its worktree
@@ -10572,7 +10572,7 @@ Every other precondition is unchanged. No flag, env var or project.yml field wid
 
 TUNING-ONLY — the second computed exception (#561). Ship also proceeds without the grant when the
 diff changes .github/project.yml ALONE, every changed line inside a tuning key (ship-batch,
-ship-batch-wait, ci-wait-factor, thresholds) and every moved value valid; never with an authority
+ship-batch-wait, ship-batch-steps, ci-wait-factor, thresholds) and every moved value valid; never with an authority
 key (autonomy, promotion, migration-grant, ci-grant, trust-humans, exposure, tier, trunk, deploy,
 release, production). It needs no issue. \`colab config set <key> <value> --evidence "<why>"\`
 writes such a branch. The row reads "tuning-only (<keys>) — autonomy exception (#561)"; --dry --json
@@ -10596,7 +10596,7 @@ keeps its claim so a re-run finds it. Cannot be combined with --worktree/--branc
 --delete-branch/--keep-branch/--keep-worktree/--adopt. \`writes: direct\` is not required. --dry and --dry --json
 work as usual (json: \`direct: true\`, \`branch: null\`, \`mode: "evidence-close"\`, \`coreReview\`).
 
-BATCH LANDING (--batch, #373) — opt-in per repo: \`ship-batch: <N>\` in project.yml, an integer 1–3;
+BATCH LANDING (--batch, #373) — opt-in per repo: \`ship-batch: <N>\` in project.yml, an integer 1–${shipBatch.MAX_BATCH};
 absent or 1 declines every --batch call. It tests up to N green candidates as ONE combined head, then
 fast-forwards trunk, so a queue of green work stops draining at one change per trunk-CI cycle.
 A batch of ONE is valid (#562): a lone ready member lands the same way, so the combined run — the
@@ -10619,8 +10619,12 @@ It never waits: each call reads the remote, takes ONE step and exits —
   4  declined — nothing landed; the last line is "→ SERIAL: colab ship --branch <b1> · …". Causes:
      not enabled, no auto-trunk, no workflow fires on ship-batch/** (the run could never arrive),
      trunk CI red (the cure/grant doors apply per member, never to a batch), no member can join,
-     or the combined run is red — classify it: red:infra → the printed \`gh run rerun\`,
-     once; red:finding, or red again after that one re-run → serial
+     or a batch of ONE whose combined run is red — classify it: red:infra → the printed
+     \`gh run rerun\`, once; red:finding, or red again after that one re-run → serial.
+     A red batch of TWO OR MORE never goes serial (#557): red:infra → re-run once; red:finding →
+     the same command plus --split; red again after the re-run → it splits by itself. A split
+     rebuilds the same ship-batch/<trunk-sha7> with the FIRST half of its members (exit 3); the rest
+     wait for the next batch, and a red half splits again
   1  refused (a broken checkout, an unreadable remote) — or the land push was refused while trunk did
      NOT move (a local pre-push hook, a remote rejection): the push's own output is echoed, and
      re-running hits the same refusal until its cause is fixed (#509)
@@ -10641,6 +10645,11 @@ at build, added since) is NOT landed with it — the command names both lists an
 --dry pushes, deletes, lands, comments and releases nothing on EVERY path (#415): a fresh batch is built
 locally and printed; a staged green batch prints what would land (members, combined run, target sha).
 Consumer CI must opt in: add 'ship-batch/**' to a CI workflow's push: branches:.
+ADAPTIVE SIZE (#557) — opt-in per repo: \`ship-batch-steps: 2,4,8\` in project.yml, ascending sizes
+within ship-batch. Absent or malformed: every batch is up to ship-batch, exactly as above. With it,
+each batch head carries "Ship-Batch-Size: <s>" ("<s> red" on a split half), and the next batch is
+built at the step above the last landed one's size after a green, the step below after a red, the
+smallest step when trunk carries none yet.
 PARTNER WAIT (#555) — opt-in per repo: \`ship-batch-wait: <duration>\` in project.yml (90s, 6m, 1h; the
 unit is required). Absent, zero or malformed: no wait, exactly as above. With it, a call where exactly
 ONE member can join pauses (exit 3, "⏸ PARTNER-WAIT", the seconds left) until that window has passed
@@ -13168,7 +13177,7 @@ function cmdShip(argv) {
     // repeat (`once`), checked here before any git or GitHub call.
     lists: { '--refs': 'refs' },
     once: true,
-    flags: { '--keep-worktree': 'keepWorktree', '--delete-branch': 'deleteBranch', '--keep-branch': 'keepBranch', '--dry': 'dry', '--json': 'json', '--direct': 'direct', '--adopt': 'adopt', '-h': 'help', '--help': 'help' },
+    flags: { '--keep-worktree': 'keepWorktree', '--delete-branch': 'deleteBranch', '--keep-branch': 'keepBranch', '--dry': 'dry', '--json': 'json', '--direct': 'direct', '--adopt': 'adopt', '--split': 'split', '-h': 'help', '--help': 'help' },
   });
   if (opts.help) return print(HELP_SHIP);
   // --json is scoped to --dry only (#77): a machine-readable READ of the preconditions. Reporting
@@ -13178,6 +13187,7 @@ function cmdShip(argv) {
   if (shippedBranch.conflictingFlags(opts)) throw new UserError('--delete-branch and --keep-branch contradict each other — pass one (see `colab ship --help`, #368)');
   // #578: a hand-off names ONE branch; batch and trunk-direct have no single branch for it to name.
   if (opts.handoff && (opts.batch || opts.direct)) throw new UserError(`--handoff applies to one --branch ship — not to ${opts.batch ? '--batch' : '--direct'} (see \`colab ship --help\`)`);
+  if (opts.split && !opts.batch) throw new UserError('--split applies to a red combined run of --batch only (#557) — run `colab ship --batch <b1,b2,…> --split` with the members the red batch carries');
   if (opts.batch) return cmdShipBatch(opts); // #373 — its own re-entrant path; nothing below changes
   // A fully separate code path, deliberately: the prose/table path below is unchanged by this
   // feature (CONVENTIONS/#77 requires it stay byte-identical), so --dry --json does its own
@@ -14465,12 +14475,26 @@ function cmdShipBatch(opts) {
   const waitCfg = shipBatch.parseShipBatchWait(doc);
   if (!waitCfg.valid) warn(`${waitCfg.reason} — ignored: a lone member does not wait (fails closed, #555)`);
   if (members.length < 1) return serial('--batch names no branch — name every ready candidate');
-  if (members.length > cfg.n) warn(`--batch names ${members.length} branches; ship-batch: ${cfg.n} caps the batch — the rest wait for the next one`);
 
   const remote = git.remoteFor(repoAbs);
   const fetched = git.git(['fetch', '--prune', remote], repoAbs);
   if (!fetched.ok) throw new UserError(`could not fetch ${remote}: ${git.gitFailureLine(fetched.stderr)} — a batch is never built from stale refs`);
   const trunkRef = `${remote}/${trunk}`;
+
+  // #557: the size this batch is built at — fixed at ship-batch without steps; with them, one step
+  // above the last landed batch's size after a green, one below after a red, read from trunk alone.
+  const stepsCfg = shipBatch.parseShipBatchSteps(doc);
+  if (!stepsCfg.valid) warn(`${stepsCfg.reason} — ignored: every batch is up to ship-batch: ${cfg.n} (fails closed, #557)`);
+  let lastSize = null;
+  if (stepsCfg.steps) {
+    const lg = git.git(['log', '-1', '--first-parent', `--grep=^${shipBatch.SIZE_TRAILER_KEY}: `, '--format=%B', trunkRef], repoAbs);
+    lastSize = lg.ok ? shipBatch.parseSizeTrailer([lg.stdout]) : null;
+  }
+  const size = shipBatch.adaptiveSize({ n: cfg.n, steps: stepsCfg.steps, last: lastSize });
+  const sizeLabel = stepsCfg.steps
+    ? `ship-batch: ${cfg.n} · step ${size} of ${stepsCfg.steps.join(',')}${lastSize ? ` — the last landed batch was ${lastSize.red ? `a split of a red one at ${lastSize.size}` : `green at ${lastSize.size}`}` : ' — no sized batch on trunk yet'}`
+    : `ship-batch: ${cfg.n}`;
+  if (members.length > size) warn(`--batch names ${members.length} branches; ${sizeLabel} caps the batch — the rest wait for the next one`);
 
   // ---- (a) wiring: could the combined run ever arrive? Decided BEFORE anything is pushed. ----
   const fires = workflowsFiringAt(repoAbs, trunkRef, shipBatch.PROBE_REF);
@@ -14531,7 +14555,8 @@ function cmdShipBatch(opts) {
     if (!foreignStep) {
       const heads = inBatch.map((m) => ({ ...m, now: git.branchRefs(repoAbs, m.branch, remote).remoteSha }));
       const matches = heads.length >= 1 && heads.every((m) => m.now && m.now.startsWith(m.sha));
-      existing = { ref: atBase.parsed.ref, base7: atBase.parsed.base7, sha: atBase.sha, members: inBatch, matches };
+      existing = { ref: atBase.parsed.ref, base7: atBase.parsed.base7, sha: atBase.sha, members: inBatch, matches,
+        size: shipBatch.parseSizeTrailer(log.ok ? log.stdout.split('\0') : []) };
       // #415: the command line and the staged batch can name different sets. A requested branch the
       // staged batch does not carry (over the cap, dropped at build, or added since) does NOT ride
       // along — say so, naming both lists, instead of resuming as if the two were the same.
@@ -14543,7 +14568,10 @@ function cmdShipBatch(opts) {
     }
   }
   const verdict = existing && existing.matches ? shipBatch.combinedVerdict(git.ghRunsForRef(repoAbs, existing.ref, existing.sha)) : null;
-  let step = shipBatch.nextStep({ enabled: true, wired: true, trunkCi, eligibleCount: members.length, existing, trunkNow, verdict });
+  let step = shipBatch.nextStep({ enabled: true, wired: true, trunkCi, eligibleCount: members.length, existing, trunkNow, verdict, split: !!opts.split });
+  if (opts.split && !(verdict && verdict.state === 'red')) {
+    print(`  --split ignored: ${existing ? `${existing.ref} is not red (${verdict ? verdict.state : 'members changed'})` : 'no batch is staged at this base'} — only a red combined run splits (#557)`);
+  }
 
   if (step.step === 'rebuild') {
     print(`  ${existing.ref} no longer carries the requested members at their current heads — rebuilding`);
@@ -14564,6 +14592,24 @@ function cmdShipBatch(opts) {
     print('    red:finding → land nothing from this batch; ship the members one at a time, each with its own sync run:');
     print(shipBatch.serialLine(existing.members.map((m) => m.branch)));
     return 4;
+  }
+  if (step.step === 'red-rerun-or-split') {
+    const ids = verdict.runIds.join(', ') || '(id unread)';
+    const cmd = `colab ship --batch ${members.join(',')} --split${opts.repo ? ` --repo ${opts.repo}` : ''}`;
+    print(`✗ ship-batch: the combined run is red at ${existing.ref}@${shortSha(existing.sha)} (${verdict.why}; run ${ids}). Nothing landed.`);
+    print(`  ${existing.members.length} members — it splits rather than going serial (#557). Classify it first (CONVENTIONS §4, Branch CI):`);
+    for (const id of verdict.runIds) print(`    red:infra   → gh run rerun ${id} --failed   then run this command again (one re-run only)`);
+    print(`    red:finding → ${cmd}`);
+    print('                  rebuilds this batch with its first half; the rest wait for the next batch');
+    return 4;
+  }
+  let splitHalf = null;
+  if (step.step === 'split') {
+    const { first, held } = shipBatch.splitHalves(existing.members);
+    splitHalf = { first, held, parentSize: existing.size ? existing.size.size : existing.members.length };
+    print(`✗ ship-batch: the combined run is red at ${existing.ref}@${shortSha(existing.sha)} (${verdict.why}${verdict.attempt >= 2 ? ', after its one re-run' : ''}). Nothing landed.`);
+    print(`  splitting (#557): testing ${first.map((m) => m.branch).join(', ')} on the same base; held for the next batch: ${held.map((m) => m.branch).join(', ')}`);
+    step = { step: 'build' };
   }
   if (step.step === 'red-serial') {
     print(`✗ ship-batch: the combined run is red again after its one re-run (${verdict.why}) — nothing landed; ${existing.ref} ${opts.dry ? 'would be deleted [DRY RUN]' : 'deleted'}.`);
@@ -14597,13 +14643,21 @@ function cmdShipBatch(opts) {
   // #387: a generated path shared by two members is not an overlap — the build regenerates it (below).
   const generated = [...DEFAULT_GENERATED, ...(Array.isArray(doc.generated) ? doc.generated.map(String) : [])];
   const hasPreShip = fs.existsSync(path.join(repoAbs, '.colab', 'hooks', 'pre-ship'));
-  const { selected, overflow } = shipBatch.selectMembers(eligible, cfg.n, { isGenerated: (f) => isGeneratedPath(f, generated) });
-  print(`ship --batch ${shortRepo(repoAbs)} → ${trunk} @ ${shortSha(trunkNow)}  (ship-batch: ${cfg.n})${opts.dry ? '  [DRY RUN]' : ''}`);
+  // #557: a split builds exactly its first half, in the red batch's order — the pre-sort is not re-run,
+  // or a different subset would be tested and the bisection would not narrow.
+  const { selected, overflow } = splitHalf
+    ? (() => {
+      const want = splitHalf.first.map((m) => m.branch);
+      const sel = want.map((b) => eligible.find((e) => e.branch === b)).filter(Boolean);
+      return { selected: sel, overflow: eligible.filter((e) => !sel.includes(e)) };
+    })()
+    : shipBatch.selectMembers(eligible, size, { isGenerated: (f) => isGeneratedPath(f, generated) });
+  print(`ship --batch ${shortRepo(repoAbs)} → ${trunk} @ ${shortSha(trunkNow)}  (${splitHalf ? `split of a red batch of ${splitHalf.first.length + splitHalf.held.length}` : sizeLabel})${opts.dry ? '  [DRY RUN]' : ''}`);
   print(table(evaluated.map((e) => [e.ok ? (selected.includes(e) ? '✓' : '·') : '✗', e.branch,
-    e.ok && !selected.includes(e) ? `eligible — waits for the next batch (cap ${cfg.n})` : e.why]), ['', 'MEMBER', 'DETAIL']));
+    e.ok && !selected.includes(e) ? (splitHalf ? 'eligible — held by the split for the next batch' : `eligible — waits for the next batch (cap ${size})`) : e.why]), ['', 'MEMBER', 'DETAIL']));
   const notJoining = evaluated.filter((e) => !selected.includes(e)).map((e) => e.branch);
   step = shipBatch.nextStep({ enabled: true, wired: true, trunkCi, eligibleCount: selected.length, existing: null, trunkNow });
-  if (step.step === 'build' && selected.length === 1 && waitCfg.sec > 0) {
+  if (step.step === 'build' && selected.length === 1 && waitCfg.sec > 0 && !splitHalf) {
     // #555: the lane is idle here (trunk's run finished, no batch in flight at this base), and one
     // member is ready. Wait for a partner until the repo's window, counted from when it became ready.
     const lone = selected[0];
@@ -14695,13 +14749,17 @@ function cmdShipBatch(opts) {
   // #554: a drop leaves a durable trace — one Ship-Batch-Dropped trailer per dropped member on the
   // batch head, so it reaches trunk with a landed batch and rides a red combined run's head message.
   // Only when the batch is built (≥1 member, #562): a build that collapses to serial pushes nothing.
-  if (dropped.length && built.length >= 1) {
+  // #557: with steps declared (or on a split), the head also carries the size it was built at, so the
+  // next build reads the lane's last outcome from trunk alone.
+  const sizeLine = splitHalf ? shipBatch.sizeTrailer({ size: splitHalf.parentSize, red: true })
+    : (stepsCfg.steps ? shipBatch.sizeTrailer({ size }) : null);
+  if ((dropped.length || sizeLine) && built.length >= 1) {
     const last = built[built.length - 1];
     const cur = git.git(['log', '-1', '--format=%B'], dir);
-    const lines = dropped.map((d) => shipBatch.droppedTrailer({ ref, branch: d.branch, sha: d.sha, cls: d.cls }));
+    const lines = [...dropped.map((d) => shipBatch.droppedTrailer({ ref, branch: d.branch, sha: d.sha, cls: d.cls })), ...(sizeLine ? [sizeLine] : [])];
     const am = cur.ok ? git.run('git', ['commit', '-q', '--amend', '-m', shipBatch.appendTrailers(cur.stdout, lines)], { cwd: dir }) : cur;
     if (am.ok) last.commit = git.git(['rev-parse', 'HEAD'], dir).stdout;
-    else warn(`could not record the dropped member(s) on the batch head: ${git.gitFailureLine(am.stderr)} — the drop is on this terminal only`);
+    else warn(`could not record the dropped member(s)/size on the batch head: ${git.gitFailureLine(am.stderr)} — they are on this terminal only`);
   }
   for (const b of built.filter((x) => x.regenerated)) {
     print(`  ↻ ${b.branch}: combined despite a generated-file overlap — ${b.regenerated.join(', ')} regenerated by .colab/hooks/pre-ship on the combined head (the combined run is the gate)`);
@@ -14723,7 +14781,7 @@ function cmdShipBatch(opts) {
   cleanup();
   if (!push.ok) throw new UserError(`could not push ${ref}: ${git.gitFailureLine(push.stderr)} — nothing landed`);
   print(`  pushed ${ref} = ${shortSha(trunkNow)} + ${built.length} commit(s) @ ${shortSha(head)} (${built.map((b) => b.branch).join(', ')})`);
-  if (overflow.length) print(`  eligible but over the cap (next batch): ${overflow.map((o) => o.branch).join(', ')}`);
+  if (overflow.length) print(`  eligible but ${splitHalf ? 'held by the split' : 'over the cap'} (next batch): ${overflow.map((o) => o.branch).join(', ')}`);
   print(`⏸ BATCH-PENDING ${ref}@${shortSha(head)} — wait on the combined run (bounded, B1a), then run this command again. Nothing landed yet.`);
   return 3;
 }

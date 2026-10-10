@@ -18,7 +18,11 @@
  * semantic conflicts need no shared file. The combined run is the gate.
  */
 
-const MAX_BATCH = 3;
+// The SAFETY ceiling (#557): what any repo may declare, never what it gets. 3 until a red batch had
+// a cheaper exit than N serial cycles; split-and-retry (nextStep's `split`) is that exit, so the
+// ceiling is now 8 — the size from which bisection beats a serial fallback. A repo's own
+// `ship-batch: <N>` is its ceiling; `ship-batch-steps` makes the size adapt below it.
+const MAX_BATCH = 8;
 const REF_PREFIX = 'ship-batch/';
 // A concrete ref a `branches:` filter is tested against. Any 7-hex tail works: GitHub's filters see
 // the literal ref name, and the question is only whether `ship-batch/**` (or a wider glob) admits it.
@@ -26,7 +30,7 @@ const PROBE_REF = `${REF_PREFIX}0000000`;
 const TRAILER_KEY = 'Ship-Batch';
 
 /**
- * `ship-batch:` from project.yml. Absent → 1 (serial, today's behaviour). An integer 1..3 → that
+ * `ship-batch:` from project.yml. Absent → 1 (serial, today's behaviour). An integer 1..MAX_BATCH → that
  * (a single-digit string reads the same). Anything else — 0, 4, 2.5, true, a word — FAILS CLOSED to
  * serial, with the reason: a malformed opt-in must never widen what ship does. The audit fails the
  * same values.
@@ -39,11 +43,103 @@ function parseShipBatch(doc) {
   const v = doc['ship-batch'];
   // A digit string is accepted too: the audit's flat reader keeps every scalar a string, and the two
   // readers must agree on what is valid — a value one accepts and the other refuses is drift.
-  const n = typeof v === 'number' ? v : (typeof v === 'string' && /^[1-9]$/.test(v.trim()) ? Number(v.trim()) : NaN);
+  const n = typeof v === 'number' ? v : (typeof v === 'string' && /^[1-9][0-9]*$/.test(v.trim()) ? Number(v.trim()) : NaN);
   if (Number.isInteger(n) && n >= 1 && n <= MAX_BATCH) {
     return { n, declared: true, valid: true, reason: `ship-batch: ${n}` };
   }
   return { n: 1, declared: true, valid: false, reason: `ship-batch is ${JSON.stringify(v)}, expected an integer 1–${MAX_BATCH} (omit for serial)` };
+}
+
+const STEPS_KEY = 'ship-batch-steps';
+
+/**
+ * #557: `ship-batch-steps:` from project.yml — the sizes an ADAPTIVE batch walks through, smallest
+ * first: grow one step after a green batch, shrink one after a red one. Written `2,4,8` (a YAML flow
+ * list `[2, 4, 8]` reads the same). Strictly ascending whole numbers within 1..`ship-batch` — the
+ * repo's own ceiling, which stays the largest a batch may ever be.
+ *
+ * Absent → `steps: null`: the size is fixed at `ship-batch`, today's behaviour exactly. The handbook
+ * gives NO default steps — the repo chooses them from its own `colab batch-stats`. Anything malformed
+ * FAILS CLOSED to `steps: null`, with the reason: the fixed size the repo already declared, never
+ * wider. The audit and the CI templates' descriptor check fail the same values.
+ */
+function parseShipBatchSteps(doc) {
+  const has = !!doc && Object.prototype.hasOwnProperty.call(doc, STEPS_KEY);
+  if (!has || doc[STEPS_KEY] === null || doc[STEPS_KEY] === undefined) {
+    return { steps: null, declared: false, valid: true, reason: `${STEPS_KEY} absent` };
+  }
+  const v = doc[STEPS_KEY];
+  const n = parseShipBatch(doc).n;
+  const bad = (why) => ({ steps: null, declared: true, valid: false, reason: `${STEPS_KEY} is ${JSON.stringify(v)}, ${why} (omit for a fixed size)` });
+  let parts;
+  if (Array.isArray(v)) parts = v.map((x) => String(x).trim());
+  else if (typeof v === 'number') parts = [String(v)];
+  else if (typeof v === 'string') parts = v.trim().replace(/^\[(.*)\]$/, '$1').split(',').map((x) => x.trim());
+  else return bad('expected ascending whole numbers like 2,4,8');
+  if (!parts.length || parts.some((x) => !/^[1-9][0-9]*$/.test(x))) return bad('expected ascending whole numbers like 2,4,8');
+  const steps = parts.map(Number);
+  if (steps.some((x, i) => i > 0 && x <= steps[i - 1])) return bad('expected strictly ascending sizes like 2,4,8');
+  if (steps[steps.length - 1] > n) return bad(`expected every size within ship-batch: ${n}, the repo's own ceiling`);
+  return { steps, declared: true, valid: true, reason: `${STEPS_KEY}: ${steps.join(',')}` };
+}
+
+/**
+ * #557: the trailer every batch head carries where steps are declared — the size the build TARGETED
+ * (not its fill), plus ` red` when the build is a split half of a red batch:
+ *
+ *   Ship-Batch-Size: <s>        built at step s
+ *   Ship-Batch-Size: <s> red    a split half; its parent batch, built at step s, went red
+ *
+ * It reaches trunk with a landed batch, so the next build reads the lane's last outcome from trunk
+ * alone — no batch state in ~/.colab, the same posture as memberTrailer.
+ */
+const SIZE_TRAILER_KEY = 'Ship-Batch-Size';
+
+function sizeTrailer({ size, red = false }) {
+  return `${SIZE_TRAILER_KEY}: ${size}${red ? ' red' : ''}`;
+}
+
+/** The LAST `Ship-Batch-Size:` trailer across commit messages → `{ size, red }`, else null. */
+function parseSizeTrailer(messages) {
+  let out = null;
+  for (const msg of messages || []) {
+    for (const line of String(msg || '').split('\n')) {
+      const m = new RegExp(`^${SIZE_TRAILER_KEY}:\\s+([1-9][0-9]*)(\\s+red)?\\s*$`).exec(line.trim());
+      if (m) out = { size: Number(m[1]), red: !!m[2] };
+    }
+  }
+  return out;
+}
+
+/**
+ * #557: the size the NEXT batch is built at.
+ *   steps null (absent or malformed) → n, fixed — today's behaviour
+ *   no trailer on trunk yet          → the smallest step: a lane starts small and earns its width
+ *   last landed batch green          → the smallest step ABOVE its size (the largest step if none)
+ *   last landed batch a red's half   → the largest step BELOW its parent's size (the smallest if none)
+ * Never above n: parseShipBatchSteps already refuses a step above it.
+ */
+function adaptiveSize({ n, steps, last }) {
+  if (!Array.isArray(steps) || !steps.length) return n;
+  if (!last || !Number.isFinite(last.size)) return steps[0];
+  if (last.red) {
+    const below = steps.filter((s) => s < last.size);
+    return below.length ? below[below.length - 1] : steps[0];
+  }
+  const above = steps.filter((s) => s > last.size);
+  return above.length ? above[0] : steps[steps.length - 1];
+}
+
+/**
+ * #557: split a red batch — the members (batch order) that form the FIRST half, tested next on the
+ * same base; the rest wait for the next batch. Sequential halves keep one batch per base, so the lane
+ * hold, the foreign-batch rule and the rebuild rule all hold unchanged; worst case for one culprit is
+ * about 2·log2(k)+1 cycles against 1+k for the serial fallback it replaces.
+ */
+function splitHalves(members) {
+  const list = Array.isArray(members) ? members : [];
+  const cut = Math.ceil(list.length / 2);
+  return { first: list.slice(0, cut), held: list.slice(cut) };
 }
 
 const WAIT_KEY = 'ship-batch-wait';
@@ -313,12 +409,19 @@ function combinedVerdict(rows) {
  *                        no longer the ones asked for → delete it, then build afresh
  *   build                build + push the batch ref (exit 3)
  *   wait-run             the combined run is pending or has not appeared (exit 3)
- *   red-rerun-or-serial  combined run red on its FIRST attempt — the caller classifies it (§4): a
- *                        red:infra is re-run once, a red:finding goes serial (exit 4, ref kept)
- *   red-serial           red again after the one re-run — land nothing, serial (exit 4, ref deleted)
+ *   red-rerun-or-split   combined run red on its FIRST attempt, k > 1 members — the caller classifies
+ *                        it (§4): a red:infra is re-run once, a red:finding re-runs this command with
+ *                        `--split` (exit 4, ref kept) (#557)
+ *   split                red after the one re-run, or `--split` on a first-attempt red, k > 1 → rebuild
+ *                        the same ref with the first half of its members (splitHalves); the rest wait
+ *                        for the next batch (exit 3) (#557)
+ *   red-rerun-or-serial  a red batch of ONE on its first attempt: re-run once, or that member goes
+ *                        serial — it cannot split (exit 4, ref kept)
+ *   red-serial           a batch of one red after the re-run (or `--split`) — land nothing, serial
+ *                        (exit 4, ref deleted); that member returns to its implementer
  *   land                 green → fast-forward trunk if it has not moved
  */
-function nextStep({ enabled, wired, trunkCi, eligibleCount = 0, existing = null, trunkNow = null, verdict = null }) {
+function nextStep({ enabled, wired, trunkCi, eligibleCount = 0, existing = null, trunkNow = null, verdict = null, split = false }) {
   if (!enabled) return { step: 'serial', reason: 'not-enabled' };
   if (!wired) return { step: 'serial', reason: 'unwired' };
   if (trunkCi === 'red') return { step: 'serial', reason: 'trunk-red' };
@@ -327,7 +430,13 @@ function nextStep({ enabled, wired, trunkCi, eligibleCount = 0, existing = null,
     if (!trunkNow || !String(trunkNow).startsWith(existing.base7)) return { step: 'rebuild', reason: 'trunk-moved' };
     if (!existing.matches) return { step: 'rebuild', reason: 'members-changed' };
     if (!verdict || verdict.state === 'pending' || verdict.state === 'none') return { step: 'wait-run' };
-    if (verdict.state === 'red') return verdict.attempt >= 2 ? { step: 'red-serial' } : { step: 'red-rerun-or-serial' };
+    if (verdict.state === 'red') {
+      // #557: a red batch of k > 1 splits instead of going serial. After its one re-run, it splits by
+      // itself; on the first attempt the caller has classified it (red:finding → `--split`).
+      const k = Array.isArray(existing.members) ? existing.members.length : 1;
+      if (verdict.attempt >= 2 || split) return k > 1 ? { step: 'split' } : { step: 'red-serial' };
+      return k > 1 ? { step: 'red-rerun-or-split' } : { step: 'red-rerun-or-serial' };
+    }
     return { step: 'land' };
   }
   // #562: a batch of ONE is a batch — a lone ready member still lands through the combined run, so
@@ -485,8 +594,8 @@ function landPushFailure({ stderr, remoteNow, base, max = 8 } = {}) {
 }
 
 module.exports = {
-  MAX_BATCH, REF_PREFIX, PROBE_REF, TRAILER_KEY, WAIT_KEY, DROP_TRAILER_KEY, DROP_CLASSES,
-  parseShipBatch, parseShipBatchWait, partnerWait, readySince, batchRefName, parseBatchRef, memberTrailer, parseMemberTrailers,
+  MAX_BATCH, REF_PREFIX, PROBE_REF, TRAILER_KEY, WAIT_KEY, STEPS_KEY, SIZE_TRAILER_KEY, DROP_TRAILER_KEY, DROP_CLASSES,
+  parseShipBatch, parseShipBatchWait, parseShipBatchSteps, sizeTrailer, parseSizeTrailer, adaptiveSize, splitHalves, partnerWait, readySince, batchRefName, parseBatchRef, memberTrailer, parseMemberTrailers,
   droppedTrailer, parseDroppedTrailers, appendTrailers,
   branchCiClass, memberEligibility, selectMembers, wiring, combinedVerdict, nextStep, foreignBatchStep,
   batchGreenCoversTrunk, evidenceSuffix, serialLine, notStaged, landPushFailure,

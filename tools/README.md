@@ -1611,21 +1611,21 @@ Each step is checked; any failure aborts **before the push**, so trunk is never 
 
 #### Batch landing — `colab ship --batch` (#373)
 
-Opt-in per repo: `ship-batch: <N>` (1–3) in `.github/project.yml`, plus `autonomy: auto-trunk`
+Opt-in per repo: `ship-batch: <N>` (1–8) in `.github/project.yml`, plus `autonomy: auto-trunk`
 and a CI workflow whose `push: branches:` includes `'ship-batch/**'`. Absent or `1`, every
 `--batch` call declines and the sequence above is untouched.
 
 ```sh
-colab ship --batch fix/a-11,fix/b-12,fix/c-13 [--dry]
+colab ship --batch fix/a-11,fix/b-12,fix/c-13 [--split] [--dry]
 ```
 
 | step | what | outcome |
 |---|---|---|
 | wiring | a workflow fires on a `ship-batch/**` push (static read of trunk's `.github/workflows`) | none → **exit 4**, the refusal line, then `→ SERIAL: …` |
 | trunk CI | green at its head — read with **no** cure/grant door | red → exit 4 (the doors are per member); still running → **exit 3** |
-| members | each: pushed head = local head · its own `ship --dry --json` ok · an ordinary auto-trunk squash into trunk · `green` at its own head (or no run can arrive) · edits no workflow. File-disjoint first, capped at N | fewer than 2 → exit 4 |
+| members | each: pushed head = local head · its own `ship --dry --json` ok · an ordinary auto-trunk squash into trunk · `green` at its own head (or no run can arrive) · edits no workflow. File-disjoint first, capped at the batch size (N, or the adaptive step — below) | none → exit 4 |
 | build | trunk head + one squash commit per member (own `Closes #N`, `Ship-Batch:` trailer) in a throwaway detached worktree; a member conflicting with those already in drops to the next batch → push `ship-batch/<trunk-sha7>` | **exit 3** — wait on the combined run, then run the same command |
-| verdict | every run at the batch head: pending → exit 3 · red on attempt 1 → exit 4 with `gh run rerun <id> --failed` for a `red:infra` (ref kept) · red again → exit 4, ref deleted · green → land | |
+| verdict | every run at the batch head: pending → exit 3 · red on attempt 1 → exit 4 with `gh run rerun <id> --failed` for a `red:infra` (ref kept), and — two or more members — the `--split` command for a `red:finding` · red again, or `--split`: two or more members → **split** (#557): the same ref is rebuilt with the first half, exit 3; one member → exit 4, ref deleted · green → land | |
 | land | trunk not moved → `merge --ff-only` + a plain, non-forced push; a rejected push rolls back and exits 3 (rebuild on the next call). Then the ref is deleted, post-ship runs once, and each member gets B3–i2 with its own squash sha; the 🚢 comment names the combined run | **exit 0** |
 
 A trunk that moved since the batch was built deletes the stale ref and rebuilds on the new head —
@@ -1637,6 +1637,13 @@ A member dropped at build is recorded on the batch head as `Ship-Batch-Dropped: 
 <branch>@<sha> <class>` (`conflict` · `generated-no-hook` · `hook-failed` · `hook-markers` ·
 `squash-failed` · `empty` · `message` · `commit-failed`), one line per drop in the last member's
 trailer block — only when the batch is built; a build that collapses to serial pushes nothing (#554).
+
+**Adaptive size** (#557, `ship-batch-steps: 2,4,8`). Each batch head also carries
+`Ship-Batch-Size: <s>` — the step it was built at — or `Ship-Batch-Size: <s> red` on a split half
+(always written on a split, whether or not steps are declared). The next build reads the newest one on
+trunk's first-parent log (`git log -1 --grep`): green → the next step up, `red` → the next step
+down, none → the smallest step. Absent or malformed steps → a fixed size of `ship-batch`, and no
+size trailer on an ordinary build.
 
 **Tuning the knobs — `colab batch-stats [--since 30d] [--json]`** (`lib/batch-stats.js`, #554). Read-only,
 from git + CI only: trunk's first-parent log in the window, and the repo's runs over REST, one query

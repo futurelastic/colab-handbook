@@ -72,6 +72,16 @@ test('editText: refuses a value that is not a plain scalar', () => {
   }
 });
 
+test('#557: ship-batch-steps is a tuning key — a comma list is a plain scalar, validated against ship-batch', () => {
+  const base8 = BASE.replace('ship-batch: 1\n', 'ship-batch: 8\n');
+  const kp = c.parseKeyPath('ship-batch-steps');
+  assert.ok(!kp.problem, kp.problem);
+  const ok = c.classify({ entries: one, baseText: base8, headText: set(base8, 'ship-batch-steps', '2,4,8').text });
+  assert.equal(ok.tuning, true, ok.reason);
+  const over = c.classify({ entries: one, baseText: BASE, headText: set(BASE, 'ship-batch-steps', '2,4').text });
+  assert.equal(over.tuning, false, 'a step above ship-batch: 1 is an invalid value, never the class');
+});
+
 test('classify: a tuning-only diff is the class (one key, a threshold, an addition, a removal)', () => {
   for (const [key, value] of [['ship-batch', '2'], ['thresholds.hot-file-count', '6'], ['ship-batch-wait', '90s'], ['ci-wait-factor', '1.5']]) {
     const v = c.classify({ entries: one, baseText: BASE, headText: set(BASE, key, value).text });

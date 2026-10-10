@@ -68,6 +68,8 @@ const CASES = [
   ['ship-batch: 4', 4],
   ['ship-batch: 5', 5],
   ['ship-batch: 8  # we have 8 sessions', 8],
+  ['ship-batch: 9', 9],
+  ['ship-batch: 10', 10],
   ['ship-batch: 2.5', 2.5],
   ['ship-batch: -1', -1],
   ['ship-batch: true', true],
@@ -154,6 +156,45 @@ test('#555: the step fails exactly the ship-batch-wait values colab ship and the
     const label = line === null ? '(no ship-batch-wait line)' : line;
     assert.strictEqual(r.status === 0, want, `${label}: step exit ${r.status}, parseShipBatchWait valid=${want}\n${r.stdout}${r.stderr}`);
     if (!want) assert.match(r.stdout, /::error file=\.github\/project\.yml::ship-batch-wait is /, `${label}: no annotation`);
+  }
+});
+
+// #557: `ship-batch-steps:` — the same step, held to parseShipBatchSteps. The parser gets the scalar a
+// flat reader hands it (a flow list arrives as its text, which the parser reads the same as an array).
+// [ ship-batch value, project.yml steps line (null = none), the value the parser gets ]
+const STEPS_CASES = [
+  ['8', null, undefined],
+  ['8', 'ship-batch-steps:', null],
+  ['8', 'ship-batch-steps: ~', null],
+  ['8', 'ship-batch-steps: 2,4,8', '2,4,8'],
+  ['8', 'ship-batch-steps: 2, 4, 8', '2, 4, 8'],
+  ['8', 'ship-batch-steps: [2, 4, 8]', '[2, 4, 8]'],
+  ['8', 'ship-batch-steps: "2,4,8"   # from batch-stats', '2,4,8'],
+  ['8', 'ship-batch-steps: 4', '4'],
+  ['6', 'ship-batch-steps: 1,3,6', '1,3,6'],
+  ['8', 'ship-batch-steps: 4,2', '4,2'],
+  ['8', 'ship-batch-steps: 2,2,4', '2,2,4'],
+  ['8', 'ship-batch-steps: 0,2', '0,2'],
+  ['8', 'ship-batch-steps: 2,,4', '2,,4'],
+  ['8', 'ship-batch-steps: 2;4', '2;4'],
+  ['8', 'ship-batch-steps: 2 4', '2 4'],
+  ['8', 'ship-batch-steps: 2.5,4', '2.5,4'],
+  ['8', 'ship-batch-steps: two', 'two'],
+  ['3', 'ship-batch-steps: 2,4', '2,4'],
+  [null, 'ship-batch-steps: 2', '2'],
+  [null, 'ship-batch-steps: 1', '1'],
+];
+
+test('#557: the step fails exactly the ship-batch-steps values colab ship and the audit refuse', () => {
+  const script = scripts[TEMPLATES[0]];
+  for (const [n, line, value] of STEPS_CASES) {
+    const doc = { ...(n === null ? {} : { 'ship-batch': n }), ...(value === undefined ? {} : { 'ship-batch-steps': value }) };
+    const want = shipBatch.parseShipBatchSteps(doc).valid;
+    const lines = [...(n === null ? [] : [`ship-batch: ${n}`]), ...(line === null ? [] : [line])];
+    const r = runCase(script, lines.length ? lines.join('\n') : null);
+    const label = `ship-batch: ${n} / ${line}`;
+    assert.strictEqual(r.status === 0, want, `${label}: step exit ${r.status}, parseShipBatchSteps valid=${want}\n${r.stdout}${r.stderr}`);
+    if (!want) assert.match(r.stdout, /::error file=\.github\/project\.yml::ship-batch-steps is /, `${label}: no annotation`);
   }
 });
 

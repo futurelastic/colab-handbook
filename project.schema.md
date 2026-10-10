@@ -390,7 +390,7 @@ How much of a session's Phase B (merge to **trunk**) an agent may perform alone.
   [CONVENTIONS.md §2, *Autonomy — the docs-only exception*](CONVENTIONS.md#autonomy--the-docs-only-exception-345).
   No value of this field, or of any other, widens what counts as documentation.
   **A second, also computed (#561):** a diff that changes only tuning keys of this file
-  (`ship-batch`, `ship-batch-wait`, `ci-wait-factor`, `thresholds`) to valid values passes it
+  (`ship-batch`, `ship-batch-wait`, `ship-batch-steps`, `ci-wait-factor`, `thresholds`) to valid values passes it
   too, with no issue — `colab config set <key> <value> --evidence "<why>"` writes one —
   [CONVENTIONS.md §2, *Autonomy — the tuning-only class*](CONVENTIONS.md#autonomy--the-tuning-only-class-561).
 - **[Hard — gate: colab ship refuses]** `auto-trunk` — an agent may complete the trunk merge itself **through `colab ship`
@@ -412,26 +412,28 @@ to trunk, so the branch that adds CI is already judged by it
 ### `ship-batch` — optional
 
 ```yaml
-ship-batch: 3     # 1–3; absent or 1 = serial landing (the default)
+ship-batch: 3     # 1–8; absent or 1 = serial landing (the default)
 ```
 
 **[Hard — gate: colab ship --batch declines]** How many green candidates `colab ship
 --batch` may land at once ([CONVENTIONS.md §4, *Batch
 landing*](CONVENTIONS.md#batch-landing--one-combined-run-then-a-fast-forward-373)). An
-integer from 1 to 3. **Absent or `1` keeps today's serial landing exactly** — every
+integer from 1 to 8 — the repo's ceiling; with
+[`ship-batch-steps`](#ship-batch-steps--optional) the size adapts below it. **Absent or `1` keeps today's serial landing exactly** — every
 `--batch` call declines, and a plain `colab ship` is unchanged whatever this says. Any
-other value (`0`, `4`, `2.5`, a word) fails the audit **and the CI templates' descriptor
+other value (`0`, `9`, `2.5`, a word) fails the audit **and the CI templates' descriptor
 check** (#416), and `colab ship` fails closed to serial on it: a malformed opt-in must
 never widen what an unattended merge does. A copy of the CI templates older than #416
 lacks the step. Copy it in.
 
-Why the cap is 3, deliberately: [ADR 539](docs/adr/539-schema-ship-batch-rationale.md).
-Raising the cap means first building what it lacks: a real bisection (split a red batch and
-re-run its halves), so a red stays logarithmic rather than linear, plus eviction data from
-batches of 2–3 showing how often they actually go red. Until then, a queue longer than 3
-drains as consecutive batches of 3, which is still three landings per cycle instead of one.
+Why the cap is 8, and why it was 3 until #557: [ADR 539](docs/adr/539-schema-ship-batch-rationale.md).
+The cap rose once a red batch had a cheaper exit than N serial cycles: a red combined run of
+two or more members **splits** — the same ref is rebuilt with the first half of its members,
+the rest wait for the next batch, and a red half splits again — so a red stays logarithmic
+rather than linear ([CONVENTIONS.md §4, *Batch landing*](CONVENTIONS.md#batch-landing--one-combined-run-then-a-fast-forward-373), step 6).
+A queue longer than the cap still drains as consecutive batches.
 
-**[Hard — gate: colab ship --batch declines]** With N > 1, `colab ship --batch <b1,b2[,b3]>` puts trunk's head plus one squash commit per
+**[Hard — gate: colab ship --batch declines]** With N > 1, `colab ship --batch <b1,b2[,…]>` puts trunk's head plus one squash commit per
 member (each with its own `Closes #N`) on `ship-batch/<trunk-sha7>`, needs **one** combined CI
 run there to be green, and fast-forwards trunk to it only if trunk has not moved. Two things
 must also be true, and the audit warns when either is not:
@@ -446,7 +448,8 @@ must also be true, and the audit warns when either is not:
 `ship-batch/` is a ref namespace `colab ship` owns: it creates, force-replaces (only within that
 namespace, on a rebuild) and deletes those refs itself. Exit codes of `--batch`: `0` landed ·
 `3` paused (wait on the printed run, bounded, then run the same command again) · `4` declined —
-nothing landed, ship the members one at a time.
+nothing landed: ship the members one at a time, or — a red batch of two or more on its first
+attempt — re-run it (`red:infra`) or call the same command with `--split` (`red:finding`).
 While a batch ref at trunk's tip has its combined run in flight (or green, not yet landed,
 within a short grace), it holds the trunk lane: a serial `colab ship` into trunk pauses with
 exit `3` rather than discard that run (#581).
@@ -479,6 +482,29 @@ run can arrive. Every call works out the time left again, on any machine, so the
 never restarts. The caller waits, gathers every ready candidate again, and calls `--batch`
 with all of them. Once the window has passed, the same call builds the lone member as a
 batch of one (#562) — it still lands through the combined run, never serially.
+
+### `ship-batch-steps` — optional
+
+```yaml
+ship-batch: 8
+ship-batch-steps: 2,4,8   # ascending sizes within ship-batch; absent = a fixed size (the default)
+```
+
+The sizes an **adaptive** batch walks through (#557): one step up after a green batch, one
+step down after a red one. Only read where `ship-batch` > 1. **Absent keeps a fixed size —
+every batch up to `ship-batch` — exactly as before.** `[2, 4, 8]` reads the same. The handbook
+ships **no default steps**: the repo picks them from its own `colab batch-stats`; no step may
+exceed `ship-batch`.
+
+With no state outside git: each batch head carries `Ship-Batch-Size: <s>` (the step it was
+built at), or `<s> red` on a split half of a red batch built at `s`. The next build reads the
+newest one on trunk: green → the smallest step above `s`; `red` → the largest step below `s`;
+none yet → the smallest step. A red batch of one cannot split and records no shrink.
+
+**[Hard — gate: the audit fails it]** Strictly ascending whole numbers, each within
+`ship-batch`. Any malformed value fails the audit **and the CI templates' descriptor check**
+(the #416 pattern), and `colab ship` fails closed to the fixed size on it — never wider than
+the ceiling the repo declared.
 
 ### `ci-wait-factor` — optional
 
@@ -1623,10 +1649,12 @@ the shape that shows it. One writer at a time says nothing about who reads the r
 | `writes` ∈ {`free`, `direct`, `isolated`, `serial-direct`, `serial-gated`, `serial`} when set | a misspelled value silently read as coexistence (⚖ #233: never veto on an unrecognised value) |
 | `room` ∈ {`solo`, `team`, `public`} when set | a misspelled value silently read as undeclared |
 | `branchPrefix` = `machine` when set | a misspelled value silently read as the unprefixed default |
-| `ship-batch` an integer 1–3 when set → **finding** otherwise | a misspelled opt-in silently read as serial by `colab ship` |
+| `ship-batch` an integer 1–8 when set → **finding** otherwise | a misspelled opt-in silently read as serial by `colab ship` |
 | `ship-batch` > 1 with no workflow firing on a `ship-batch/**` push, or without `autonomy: auto-trunk` → **advisory** | a batch opt-in that can never land a batch |
 | `ship-batch-wait` a whole number with a unit (`s`/`m`/`h`) when set → **finding** otherwise | a misspelled window silently read as no wait by `colab ship` |
 | `ship-batch-wait` > 0 with `ship-batch` absent or 1 → **advisory** | a partner window with no batch to fill |
+| `ship-batch-steps` strictly ascending whole numbers within `ship-batch` when set → **finding** otherwise | a misspelled list silently read as a fixed size by `colab ship` |
+| `ship-batch-steps` with `ship-batch` absent or 1 → **advisory** | steps with no batch to size |
 | `ci-wait-factor` a number ≥ 1 when set → **finding** otherwise | a misspelled multiple silently read as the default by every CI wait |
 | `migrations` a list of repo-relative prefixes when set — an absolute path, `..`, glob, the repo root, or a non-list → **finding** | a declaration the migration gate cannot honestly read |
 | `migrations` empty, restating a default, or naming one prefix twice → **advisory** | redundancy, harmless |

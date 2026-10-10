@@ -180,23 +180,25 @@ test('#373 oracle 1: three green disjoint members → one combined run, one fast
   assert.match(r2.out, /✓ Shipped batch → main/);
 });
 
-test('#373 oracle 2: a red combined run lands nothing; one re-run, then serial; serial still lands', () => {
+test('#373 oracle 2: a red batch of ONE lands nothing; one re-run, then serial; serial still lands', () => {
+  // #557: a batch of two or more splits instead (below); a batch of one cannot, so this is its path.
   const fx = fixture();
   for (const b of MEMBERS) member(fx, b);
   const T = fx.originSha('main');
   const ref = `ship-batch/${T.slice(0, 7)}`;
-  assert.strictEqual(batch(fx).code, 3);
+  assert.strictEqual(batch(fx, ['fix/a-11']).code, 3);
 
   fx.setStatus(ref, 'completed failure 1');
-  const r2 = batch(fx);
+  const r2 = batch(fx, ['fix/a-11']);
   assert.strictEqual(r2.code, 4, r2.out + r2.err);
   assert.strictEqual(fx.originSha('main'), T);
   assert.match(r2.out, /gh run rerun 9001 --failed/);
-  assert.match(r2.out, /→ SERIAL: colab ship --branch fix\/a-11 · colab ship --branch fix\/b-12 · colab ship --branch fix\/c-13/);
+  assert.match(r2.out, /→ SERIAL: colab ship --branch fix\/a-11$/m);
+  assert.doesNotMatch(r2.out, /--split/);
   assert.deepStrictEqual(fx.batchRefs(), [ref], 'the ref is kept so the one re-run is possible');
 
   fx.setStatus(ref, 'completed failure 2');
-  const r3 = batch(fx);
+  const r3 = batch(fx, ['fix/a-11']);
   assert.strictEqual(r3.code, 4, r3.out + r3.err);
   assert.strictEqual(fx.originSha('main'), T);
   assert.deepStrictEqual(fx.batchRefs(), [], 'red after its one re-run → the ref goes');
@@ -214,6 +216,160 @@ test('#373 oracle 2: a red combined run lands nothing; one re-run, then serial; 
   assert.strictEqual(r4.code, 3, r4.out + r4.err);
   assert.match(r4.out, /fix\/b-12\s+red at its own head/);
   assert.match(r4.out, /BATCH-PENDING ship-batch\/[0-9a-f]{7}@[0-9a-f]{7} — .*\(fix\/c-13\)|pushed ship-batch\/[0-9a-f]{7} = [0-9a-f]{7} \+ 1 commit\(s\) @ [0-9a-f]{7} \(fix\/c-13\)/);
+});
+
+const carriedBy = (fx, T, ref) => fx.g(fx.origin, 'log', '--format=%s', `${T}..${ref}`);
+
+test('#557 oracle: a red batch of three splits, never goes serial — first-attempt red asks for --split, a re-run red splits by itself', () => {
+  const fx = fixture();
+  for (const b of MEMBERS) member(fx, b);
+  const T = fx.originSha('main');
+  const ref = `ship-batch/${T.slice(0, 7)}`;
+  assert.strictEqual(batch(fx).code, 3);
+
+  // first attempt red: the caller classifies — no serial line, the --split command instead
+  fx.setStatus(ref, 'completed failure 1');
+  const r1 = batch(fx);
+  assert.strictEqual(r1.code, 4, r1.out + r1.err);
+  assert.doesNotMatch(r1.out, /→ SERIAL/);
+  assert.match(r1.out, /gh run rerun 9001 --failed/);
+  assert.match(r1.out, /red:finding → colab ship --batch fix\/a-11,fix\/b-12,fix\/c-13 --split/);
+  assert.deepStrictEqual(fx.batchRefs(), [ref]);
+
+  // red:finding → --split: the same ref now carries the first half (a, b); c is held
+  const r2 = batch(fx, MEMBERS, ['--split']);
+  assert.strictEqual(r2.code, 3, r2.out + r2.err);
+  assert.match(r2.out, /splitting \(#557\): testing fix\/a-11, fix\/b-12 on the same base; held for the next batch: fix\/c-13/);
+  assert.deepStrictEqual(fx.batchRefs(), [ref]);
+  const half = carriedBy(fx, T, ref);
+  assert.match(half, /a-11/); assert.match(half, /b-12/); assert.doesNotMatch(half, /c-13/);
+  assert.match(fx.g(fx.origin, 'log', '-1', '--format=%B', ref), /^Ship-Batch-Size: 3 red$/m, 'the split half records the red parent size');
+  assert.strictEqual(fx.originSha('main'), T, 'nothing landed');
+
+  // the half goes red after its re-run → it splits again by itself, no --split needed
+  fx.setStatus(ref, 'completed failure 2');
+  const r3 = batch(fx);
+  assert.strictEqual(r3.code, 3, r3.out + r3.err);
+  assert.match(r3.out, /after its one re-run/);
+  assert.match(r3.out, /testing fix\/a-11 on the same base; held for the next batch: fix\/b-12/);
+  const quarter = carriedBy(fx, T, ref);
+  assert.match(quarter, /a-11/); assert.doesNotMatch(quarter, /b-12|c-13/);
+  assert.match(fx.g(fx.origin, 'log', '-1', '--format=%B', ref), /^Ship-Batch-Size: 3 red$/m, 'the parent size is inherited, not halved');
+
+  // that member alone is green → it lands; the trailer reaches trunk
+  fx.setStatus(ref, 'completed success 1');
+  const r4 = batch(fx);
+  assert.strictEqual(r4.code, 0, r4.out + r4.err);
+  assert.match(fx.g(fx.origin, 'log', '-1', '--format=%B', 'main'), /^Ship-Batch-Size: 3 red$/m);
+  assert.match(fx.g(fx.origin, 'log', '-1', '--format=%B', 'main'), /Closes #11/);
+
+  // the held members re-enter the ordinary flow on the new trunk
+  const r5 = batch(fx, ['fix/b-12', 'fix/c-13']);
+  assert.strictEqual(r5.code, 3, r5.out + r5.err);
+  assert.match(r5.out, /BATCH-PENDING/);
+});
+
+test('#557: a red batch of ONE under --split cannot split — it is declined to serial, ref deleted', () => {
+  const fx = fixture();
+  for (const b of MEMBERS) member(fx, b);
+  const T = fx.originSha('main');
+  const ref = `ship-batch/${T.slice(0, 7)}`;
+  assert.strictEqual(batch(fx, ['fix/a-11']).code, 3);
+  fx.setStatus(ref, 'completed failure 1');
+  const r = batch(fx, ['fix/a-11'], ['--split']);
+  assert.strictEqual(r.code, 4, r.out + r.err);
+  assert.match(r.out, /→ SERIAL: colab ship --branch fix\/a-11$/m);
+  assert.deepStrictEqual(fx.batchRefs(), []);
+});
+
+test('#557: --split on a batch that is not red is ignored, said aloud; --split without --batch refuses', () => {
+  const fx = fixture();
+  for (const b of MEMBERS) member(fx, b);
+  const T = fx.originSha('main');
+  const ref = `ship-batch/${T.slice(0, 7)}`;
+  assert.strictEqual(batch(fx).code, 3);
+  fx.setStatus(ref, 'in_progress null 1');
+  const r = batch(fx, MEMBERS, ['--split']);
+  assert.strictEqual(r.code, 3, r.out + r.err);
+  assert.match(r.out, /--split ignored: .* is not red \(pending\)/);
+  assert.match(r.out, /BATCH-PENDING/);
+  const s = colab(fx, ['ship', '--branch', 'fix/a-11', '--split', '--repo', fx.work]);
+  assert.strictEqual(s.code, 1, s.out + s.err);
+  assert.match(s.err, /--split applies to a red combined run of --batch only/);
+});
+
+test('#557: --dry on a split builds the half locally and pushes nothing', () => {
+  const fx = fixture();
+  for (const b of MEMBERS) member(fx, b);
+  const T = fx.originSha('main');
+  const ref = `ship-batch/${T.slice(0, 7)}`;
+  assert.strictEqual(batch(fx).code, 3);
+  const sha = fx.originSha(ref);
+  fx.setStatus(ref, 'completed failure 2');
+  const r = batch(fx, MEMBERS, ['--dry']);
+  assert.strictEqual(r.code, 0, r.out + r.err);
+  assert.match(r.out, /→ READY: would push .* \+ 2 squash commit\(s\): fix\/a-11, fix\/b-12/);
+  assert.strictEqual(fx.originSha(ref), sha, 'the red batch is untouched');
+});
+
+const STEPS_YML = (steps) => YML(`ship-batch: 3\nship-batch-steps: ${steps}\n`);
+
+test('#557 adaptive: no sized batch on trunk → the smallest step; a green landing grows it one step', () => {
+  const fx = fixture({ yml: STEPS_YML('1,3') });
+  for (const b of MEMBERS) member(fx, b);
+  const T = fx.originSha('main');
+  const ref = `ship-batch/${T.slice(0, 7)}`;
+  const r1 = batch(fx);
+  assert.strictEqual(r1.code, 3, r1.out + r1.err);
+  assert.match(r1.out, /step 1 of 1,3 — no sized batch on trunk yet/);
+  assert.strictEqual(fx.g(fx.origin, 'rev-list', '--count', `${T}..${ref}`), '1', 'built at the smallest step');
+  assert.match(fx.g(fx.origin, 'log', '-1', '--format=%B', ref), /^Ship-Batch-Size: 1$/m);
+  fx.setStatus(ref, 'completed success 1');
+  assert.strictEqual(batch(fx).code, 0);
+
+  const T2 = fx.originSha('main');
+  const r2 = batch(fx, ['fix/b-12', 'fix/c-13']);
+  assert.strictEqual(r2.code, 3, r2.out + r2.err);
+  assert.match(r2.out, /step 3 of 1,3 — the last landed batch was green at 1/);
+  assert.strictEqual(fx.g(fx.origin, 'rev-list', '--count', `${T2}..ship-batch/${T2.slice(0, 7)}`), '2', 'grown: both remaining members fit');
+  assert.match(fx.g(fx.origin, 'log', '-1', '--format=%B', `ship-batch/${T2.slice(0, 7)}`), /^Ship-Batch-Size: 3$/m);
+});
+
+test('#557 adaptive: after a split of a red batch lands, the next batch shrinks one step', () => {
+  const fx = fixture({ yml: STEPS_YML('2,3') });
+  for (const b of MEMBERS) member(fx, b);
+  // seed trunk with a green sized landing at 2, so the next batch is built at 3
+  const T0 = fx.originSha('main');
+  const r0 = batch(fx, ['fix/a-11', 'fix/b-12']);
+  assert.strictEqual(r0.code, 3, r0.out + r0.err);
+  fx.setStatus(`ship-batch/${T0.slice(0, 7)}`, 'completed success 1');
+  assert.strictEqual(batch(fx, ['fix/a-11', 'fix/b-12']).code, 0);
+  member(fx, 'fix/d-14');
+  member(fx, 'fix/e-15');
+  const list = ['fix/c-13', 'fix/d-14', 'fix/e-15'];
+  const T = fx.originSha('main');
+  const ref = `ship-batch/${T.slice(0, 7)}`;
+  const r1 = batch(fx, list);
+  assert.strictEqual(r1.code, 3, r1.out + r1.err);
+  assert.match(r1.out, /step 3 of 2,3 — the last landed batch was green at 2/);
+  fx.setStatus(ref, 'completed failure 2');
+  assert.strictEqual(batch(fx, list).code, 3, 'red after the re-run → split');
+  fx.setStatus(ref, 'completed success 1');
+  assert.strictEqual(batch(fx, list).code, 0, 'the first half lands');
+  const r3 = batch(fx, ['fix/e-15']);
+  assert.strictEqual(r3.code, 3, r3.out + r3.err);
+  assert.match(r3.out, /step 2 of 2,3 — the last landed batch was a split of a red one at 3/);
+});
+
+test('#557: malformed ship-batch-steps fails closed to the fixed ship-batch size, with a warning', () => {
+  const fx = fixture({ yml: STEPS_YML('3,1') });
+  for (const b of MEMBERS) member(fx, b);
+  const T = fx.originSha('main');
+  const r = batch(fx);
+  assert.strictEqual(r.code, 3, r.out + r.err);
+  assert.match(r.err + r.out, /ship-batch-steps is "3,1", expected strictly ascending .* ignored: every batch is up to ship-batch: 3/);
+  assert.strictEqual(fx.g(fx.origin, 'rev-list', '--count', `${T}..ship-batch/${T.slice(0, 7)}`), '3');
+  assert.doesNotMatch(fx.g(fx.origin, 'log', '-1', '--format=%B', `ship-batch/${T.slice(0, 7)}`), /Ship-Batch-Size/, 'no steps → no size trailer');
 });
 
 test('#391: a declined batch at the base does not block a --batch of the survivors', () => {
@@ -533,10 +689,11 @@ test('#415: --dry never deletes a batch ref — trunk-moved and red-after-rerun 
   for (const b of MEMBERS) member(fx, b);
   const T = fx.originSha('main');
   const ref = `ship-batch/${T.slice(0, 7)}`;
-  assert.strictEqual(batch(fx).code, 3);
+  // a batch of ONE: a red one after its re-run is deleted (#557: two or more split instead)
+  assert.strictEqual(batch(fx, ['fix/a-11']).code, 3);
 
   fx.setStatus(ref, 'completed failure 2');
-  const red = batch(fx, MEMBERS, ['--dry']);
+  const red = batch(fx, ['fix/a-11'], ['--dry']);
   assert.strictEqual(red.code, 4, red.out + red.err);
   assert.match(red.out, /\[dry\] would delete origin\/ship-batch\//);
   assert.match(red.out, /would be deleted \[DRY RUN\]/);

@@ -1305,7 +1305,7 @@ function auditRepo(target, ctx) {
     if (prefixRaw !== null && prefixRaw !== "machine") fail(`branchPrefix is ${JSON.stringify(prefixRaw)}, expected "machine" (omit for the unprefixed default)`);
 
     // ---- ship-batch (#373) ------------------------------------------------------
-    // Batch landing's opt-in: an integer 1–3 (tools/lib/ship-batch.js parseShipBatch — the one reading
+    // Batch landing's opt-in: an integer 1–MAX_BATCH (tools/lib/ship-batch.js parseShipBatch — the one reading
     // `colab ship --batch` uses, so the two cannot disagree). A malformed value makes ship fail closed
     // to serial, which is safe but silent, so it fails here — and, since this audit is run by hand, in
     // the CI templates' descriptor check too (#416, held to this same parser by
@@ -1331,6 +1331,17 @@ function auditRepo(target, ctx) {
       const wCfg = shipBatch.parseShipBatchWait(cfg);
       if (!wCfg.valid) fail(`${wCfg.reason} — see project.schema.md, ship-batch-wait`);
       else if (wCfg.sec > 0 && shipBatch.parseShipBatch(cfg).n <= 1) warn(`${wCfg.reason} is inert without ship-batch > 1 — there is no batch for a partner to join`);
+    }
+
+    // ---- ship-batch-steps (#557) -------------------------------------------------
+    // The sizes an adaptive batch walks through (tools/lib/ship-batch.js parseShipBatchSteps, the
+    // reading `colab ship --batch` uses): ascending whole numbers within ship-batch. Malformed fails
+    // here and in the CI templates' descriptor check, the #416 pattern — ship fails closed to the fixed
+    // size, silently. Steps with no batch to size (ship-batch absent or 1) are inert, so they warn.
+    if (shipBatch.STEPS_KEY in (cfg || {}) && cfg[shipBatch.STEPS_KEY] !== null) {
+      const sCfg = shipBatch.parseShipBatchSteps(cfg);
+      if (!sCfg.valid) fail(`${sCfg.reason} — see project.schema.md, ship-batch-steps`);
+      else if (shipBatch.parseShipBatch(cfg).n <= 1) warn(`${sCfg.reason} is inert without ship-batch > 1 — there is no batch to size`);
     }
 
     // ---- ci-wait-factor (#559) ----------------------------------------------------
