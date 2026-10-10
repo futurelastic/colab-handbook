@@ -91,6 +91,14 @@ function fixture({ yml = YML(), ci = CI_WIRED } = {}) {
     'fi',
     'if [ "$1" = "issue" ]; then exit 0; fi',
     'if [ "$1" = "label" ]; then exit 0; fi',
+    // #584: open PRs per head branch — `prs/<branch with / as _>.json`, absent = none open.
+    'if [ "$1" = "pr" ] && [ "$2" = "list" ]; then',
+    '  HD=""; shift 2',
+    '  while [ $# -gt 0 ]; do if [ "$1" = "--head" ]; then HD="$2"; fi; shift; done',
+    `  F="${path.join(root, 'prs')}/$(echo "$HD" | tr / _).json"`,
+    '  if [ -f "$F" ]; then cat "$F"; else echo "[]"; fi; exit 0',
+    'fi',
+    'if [ "$1" = "pr" ] && [ "$2" = "close" ]; then exit 0; fi',
     'echo "fixture gh: refusing $*" >&2',
     'exit 1',
   ].join('\n') + '\n', { mode: 0o755 });
@@ -738,4 +746,26 @@ test('#581: inert where ship-batch is not enabled — no row, and no batch ref i
   const { row } = laneRow(fx, 'fix/d-14');
   assert.strictEqual(row, undefined);
   assert.doesNotMatch(ghLog(fx), /--branch ship-batch\//);
+});
+
+test('#584: a batch member with an open CI PR — the PR is closed once the batch lands; a non-member PR is untouched', () => {
+  const fx = fixture();
+  member(fx, 'fix/a-11');
+  const prDir = path.join(fx.root, 'prs');
+  fs.mkdirSync(prDir, { recursive: true });
+  const tip = fx.g(fx.work, 'rev-parse', 'fix/a-11');
+  fs.writeFileSync(path.join(prDir, 'fix_a-11.json'), JSON.stringify([{ number: 601, url: 'u', headRefOid: tip, headRefName: 'fix/a-11' }]));
+  fs.writeFileSync(path.join(prDir, 'fix_other-99.json'), JSON.stringify([{ number: 602, url: 'u', headRefOid: tip, headRefName: 'fix/other-99' }]));
+  const T = fx.originSha('main');
+  const ref = `ship-batch/${T.slice(0, 7)}`;
+  fx.setStatus(ref, 'in_progress null 1');
+  assert.strictEqual(batch(fx, ['fix/a-11']).code, 3);
+  fx.setStatus(ref, 'completed success 1');
+  const r = batch(fx, ['fix/a-11']);
+  assert.strictEqual(r.code, 0, r.out + r.err);
+  const log = ghLog(fx);
+  const close = log.split('\n').find((l) => l.startsWith('pr close 601 '));
+  assert.ok(close, log);
+  assert.match(close, /#11/);
+  assert.doesNotMatch(log, /pr close 602/);
 });

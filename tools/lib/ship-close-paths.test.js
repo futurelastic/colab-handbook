@@ -92,6 +92,15 @@ function fixture({ yml = 'tier: B\ntrunk: main\nproduction: null\ndeploy: none\n
     'if [ "$1" = "issue" ] && [ "$2" = "comment" ]; then exit 0; fi',
     'if [ "$1" = "issue" ] && [ "$2" = "close" ]; then exit 0; fi',
     'if [ "$1" = "label" ]; then exit 0; fi',
+    // #584: open PRs per head branch — `prs/<branch with / as _>.json`, absent = none open.
+    'if [ "$1" = "pr" ] && [ "$2" = "list" ]; then',
+    '  HD=""; shift 2',
+    '  while [ $# -gt 0 ]; do if [ "$1" = "--head" ]; then HD="$2"; fi; shift; done',
+    `  F="${path.join(root, 'prs')}/$(echo "$HD" | tr / _).json"`,
+    '  if [ -f "$F" ]; then cat "$F"; else echo "[]"; fi; exit 0',
+    'fi',
+    `if [ "$1" = "pr" ] && [ "$2" = "close" ] && [ -f "${path.join(root, 'pr-close-fails')}" ]; then echo "HTTP 502: fixture" >&2; exit 1; fi`,
+    'if [ "$1" = "pr" ] && [ "$2" = "close" ]; then exit 0; fi',
     'echo "fixture gh: refusing $*" >&2',
     'exit 1',
   ].join('\n') + '\n', { mode: 0o755 });
@@ -523,4 +532,61 @@ test('#344: gh fine but no origin remote — the refusal says so, and does not b
   assert.ok(row, JSON.stringify(j.checks));
   assert.strictEqual(row.ok, false);
   assert.match(row.detail, /gh not usable \(no origin remote\)/);
+});
+
+// =================================================================================================
+// #584 — the PR opened only to get branch CI is closed once ship squash-lands its branch
+// =================================================================================================
+
+function openPr(fx, branch, number, headRefOid) {
+  const dir = path.join(fx.root, 'prs');
+  fs.mkdirSync(dir, { recursive: true });
+  const f = path.join(dir, `${branch.replace(/\//g, '_')}.json`);
+  const list = fs.existsSync(f) ? JSON.parse(fs.readFileSync(f, 'utf8')) : [];
+  list.push({ number, url: `https://example.invalid/pull/${number}`, headRefOid, headRefName: branch });
+  fs.writeFileSync(f, JSON.stringify(list));
+}
+
+test('#584: a branch with an open CI PR is shipped — the PR is closed with the squash sha; a PR on another branch is untouched', () => {
+  const fx = fixture();
+  commitOnBranch(fx, 'fix/ci-pr-80', 'p.txt', 'fix: p');
+  commitOnBranch(fx, 'fix/other-81', 'o.txt', 'fix: o');
+  openPr(fx, 'fix/ci-pr-80', 501, fx.g(fx.work, 'rev-parse', 'fix/ci-pr-80'));
+  openPr(fx, 'fix/other-81', 502, fx.g(fx.work, 'rev-parse', 'fix/other-81'));
+  colab(fx, ['claim', '80', '--branch', 'fix/ci-pr-80', '--repo', fx.work]);
+  const r = colab(fx, ['ship', '--branch', 'fix/ci-pr-80', '--repo', fx.work]);
+  assert.strictEqual(r.code, 0, r.out + r.err);
+  const sha = fx.g(fx.work, 'rev-parse', '--short=7', 'main');
+  const log = ghLog(fx);
+  assert.match(log, /pr list --head fix\/ci-pr-80 --state open/);
+  const close = log.split('\n').find((l) => l.startsWith('pr close 501 '));
+  assert.ok(close, `PR #501 must be closed:\n${log}`);
+  assert.ok(close.includes(sha), `the close comment must name the squash sha ${sha}: ${close}`);
+  assert.match(close, /#80/);
+  assert.doesNotMatch(log, /pr close 502/, 'a PR on another branch is never touched');
+  assert.match(r.out, /closed PR #501/);
+});
+
+test('#584: the close fails (gh error) — the ship still succeeds, with a deferred warning', () => {
+  const fx = fixture();
+  commitOnBranch(fx, 'fix/ci-pr-82', 'q.txt', 'fix: q');
+  openPr(fx, 'fix/ci-pr-82', 503, fx.g(fx.work, 'rev-parse', 'fix/ci-pr-82'));
+  fs.writeFileSync(path.join(fx.root, 'pr-close-fails'), '');
+  colab(fx, ['claim', '82', '--branch', 'fix/ci-pr-82', '--repo', fx.work]);
+  const r = colab(fx, ['ship', '--branch', 'fix/ci-pr-82', '--repo', fx.work]);
+  assert.strictEqual(r.code, 0, r.out + r.err);
+  assert.match(r.out, /✓ Shipped fix\/ci-pr-82/);
+  assert.match(r.out + r.err, /could not close PR #503 \(HTTP 502: fixture\)/);
+  assert.match(fx.g(fx.work, 'log', '-1', '--format=%B', 'main'), /Closes #82/);
+});
+
+test('#584: a PR whose head carries commits that did not land is kept open, with a warning', () => {
+  const fx = fixture();
+  commitOnBranch(fx, 'fix/ci-pr-83', 'r.txt', 'fix: r');
+  openPr(fx, 'fix/ci-pr-83', 504, 'f'.repeat(40)); // a head this clone never saw — not in what landed
+  colab(fx, ['claim', '83', '--branch', 'fix/ci-pr-83', '--repo', fx.work]);
+  const r = colab(fx, ['ship', '--branch', 'fix/ci-pr-83', '--repo', fx.work]);
+  assert.strictEqual(r.code, 0, r.out + r.err);
+  assert.doesNotMatch(ghLog(fx), /pr close 504/);
+  assert.match(r.out + r.err, /kept PR #504 open/);
 });

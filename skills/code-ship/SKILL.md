@@ -136,7 +136,7 @@ Full text: [b1-base-ci.md](b1-base-ci.md).
 cancelling a queued same-sha duplicate; same-minute deaths on several runners ⇒ check the host
 first; a repeat ⇒ `TRUNK RED:` or ops; `red:finding` ⇒ it needs a `TRUNK RED:` issue and a patch). Only the branch **carrying the fix** goes first, may sync
 onto the red, and may open a PR (or dispatch a dry run / `workflow_dispatch`) to obtain the
-evidence the cure rule reads; a bystander waits for green trunk and records a defer. Not
+evidence the cure rule reads (`colab ship` closes that PR once the branch lands, #584); a bystander waits for green trunk and records a defer. Not
 sure ⇒ bystander. `ci-grant: reviewer` lets you mint a reviewer grant for the patch only.
 Read when `<base>` is red: [b1-red-trunk.md](b1-red-trunk.md).
 

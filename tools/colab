@@ -77,6 +77,7 @@ const releaseCut = require('./lib/release-cut');
 const releaseFinalize = require('./lib/release-finalize');
 const releaseChannel = require('./lib/release-channel');
 const shippedBranch = require('./lib/shipped-branch');
+const landedPrs = require('./lib/landed-prs');
 const shipRoles = require('./lib/ship-roles'); // #372
 const shipHandoff = require('./lib/ship-handoff'); // #578
 const refsBrake = require('./lib/refs-brake'); // #385
@@ -4513,7 +4514,8 @@ CI grant merges into a repo whose own test suite is known-failing:
      for the BRANCH's own current head (the same "ask by sha" check \`ship\` itself uses) — a human's
      say-so alone is never enough. \`--evidence-run\` is a RECORDING-ONLY pointer for the audit trail;
      it can never substitute for the measured run. If the branch has no run yet, open a PR for it
-     (\`gh pr create\`) and let CI finish, then re-run this command.
+     (\`gh pr create\`) and let CI finish, then re-run this command. You do not need to close that
+     PR afterwards: \`colab ship\` closes it once the branch lands (#584).
   2. NEVER STACKS. Creating a grant refuses outright if trunk is not currently red (nothing to
      exempt), and refuses again if a PRIOR ci-grant already merged something and trunk has been red
      continuously since — a second exemption on a still-broken repo is exactly the failure this gate
@@ -4862,7 +4864,7 @@ function cmdCiGrantCreate(repoAbs, num, opts) {
     throw new UserError(
       `"${opts.branch}" has no completed, successful CI run for its current head (${shortSha(evRun.sha)}) — ` +
       `a CI grant requires MEASURED evidence, never a human's say-so alone. Open a PR for it ` +
-      `(\`gh pr create\`) and let CI finish, then re-run this command.`);
+      `(\`gh pr create\`) and let CI finish, then re-run this command — \`colab ship\` closes that PR once the branch lands (#584).`);
   }
   const evidenceSha = evRun.sha;
 
@@ -6329,6 +6331,9 @@ in a cleanup cron.
             reported but never deleted (a label a triage session just created and has not
             applied yet is indistinguishable from one whose members were all transferred
             away — the labels API exposes no creation time, so a human decides).
+            Also lists open PRs whose head commit already landed in trunk (#584) — CI-trigger
+            PRs a squash ship left open. Report-only, --prune included: doctor never closes
+            a PR. A PR whose head is not in the local clone is not judged.
 `;
 
 const EMPTY_SET = new Set();
@@ -6413,7 +6418,7 @@ function cmdDoctor(argv) {
   const report = { deadWorktrees: [], orphanClaims: [], staleClaims: [], stalePlaces: [], unprovablePlaces: [], releasedPlaces: [], orphanPorts: [], brokenRecords: [], prunedPorts: [],
     renamedHostRecords: [], unprovenHostRecords: [],
     mergedFlips: [], mergedSweep: [], mergedDirty: [], mergedHookFail: [], mergedRemoveFail: [], shippedBranches: [], ghostPorts: [],
-    spentGroupLabels: [], groupLabelsChecked: !!opts.sync, pruned: !!opts.prune };
+    spentGroupLabels: [], groupLabelsChecked: !!opts.sync, landedPrs: [], landedPrsUnread: [], pruned: !!opts.prune };
 
   // One answer per (repo, branch) — pass 5b asks about the same branch from a worktree and from each
   // of its claims, and every miss costs two `git rev-parse` calls.
@@ -6804,6 +6809,28 @@ function cmdDoctor(argv) {
     }
   }
 
+  // 9b. open PRs whose head already landed (#584) — the CI-trigger PRs a squash ship left open before
+  //     ship learned to close them, or that a ship on another machine could not close. Report-only,
+  //     --prune included: closing a PR is a write on a shared forge, and a human may still want it.
+  //     Behind --sync for the same reason as pass 9 (network). A PR whose head commit is not in this
+  //     clone is not judged — the answer would be a guess — so the list is honest, not exhaustive.
+  if (opts.sync && git.ghAvailable()) {
+    const repos = [...new Set([...(config.repos || []), ...knownRepos(config)].map((r) => path.resolve(r)))]
+      .filter((r) => repoLive(r) && git.remoteUrl(r));
+    for (const repo of repos) {
+      const trunk = resolveTrunk(repo, projectDoc(repo));
+      if (!trunk) continue;
+      const listed = git.ghOpenPrs(repo);
+      if (listed.error) { report.landedPrsUnread.push({ repo: shortRepo(repo), error: listed.error }); continue; }
+      for (const pr of listed.prs) {
+        if (!pr.headRefOid || pr.headRefName === trunk) continue;
+        if (!git.git(['cat-file', '-e', `${pr.headRefOid}^{commit}`], repo).ok) continue;
+        if (landed.landedState(repo, trunk, pr.headRefOid).state !== 'landed') continue;
+        report.landedPrs.push({ repo: shortRepo(repo), number: pr.number, url: pr.url || '', branch: pr.headRefName || '', trunk });
+      }
+    }
+  }
+
   // 10. notifyUrl against a DECLARED local observer (#414). Read-only, never pruned, never counted in
   //     the verdict — it is configuration, not state drift. Silent on a machine with no
   //     <COLAB_HOME>/notify-endpoint: unset is the right default where no observer runs.
@@ -6953,6 +6980,17 @@ function cmdDoctor(argv) {
     print('  NOT exhaustive: a branch whose work trunk later rewrote can conflict against trunk');
     print('  instead of matching it, and is omitted here rather than risk calling unmerged work spent.');
   }
+  // #584 — after the verdict, not counted: an open PR on a landed branch breaks nothing, it reads as
+  // unmerged work on a tracker. Printed only under --sync.
+  if (report.landedPrs.length) {
+    print('');
+    print(`Open PRs whose branch already landed (${report.landedPrs.length}) — the squash left them open:`);
+    for (const p of report.landedPrs) print(`  #${p.number} ${p.branch} [${p.repo}] → in ${p.trunk}${p.url ? `  ${p.url}` : ''}`);
+    print('  `colab ship` closes these itself since #584; these predate that, or a ship could not close them.');
+    print('  doctor never closes a PR, --prune included. To close one:');
+    print(`    gh pr close ${report.landedPrs[0].number} --comment "Landed on ${report.landedPrs[0].trunk} by squash."   # in ${report.landedPrs[0].repo}`);
+  }
+  for (const u of report.landedPrsUnread) warn(`could not list open PRs in ${u.repo} (${u.error}) — landed-PR check skipped there`);
   // Also after the verdict, and also not drift: a spent group label breaks nothing, it is picker
   // noise on a tracker. Printed only under --sync, so silence here NEVER means "checked, clean" —
   // which is why a --sync run that finds nothing says so explicitly below.
@@ -14085,11 +14123,13 @@ function cmdShip(argv) {
   // a long ship these lines would otherwise scroll off above the `✓ Shipped` line — which is
   // exactly how #304's failure went unnoticed in the first place.
   deferredCollector = [];
+  let reviewPrHandled = null; // #584: the #350 review PR, already closed (or warned about) above
   // #350: the approved PR is spent — its work landed by squash, which the forge cannot see as a merge.
   if (coreReview.verdict === 'approved' && coreReview.pr && gh) {
     const closed = git.ghPrClose(repoAbs, coreReview.pr.number, `Landed on \`${target}\` as ${sha} by \`colab ship\` (#350), approved by ${coreReview.approval.by}.`);
     if (closed.ok) print(`  closed PR #${coreReview.pr.number} (landed as ${sha})`);
     else warnDeferred(`could not close PR #${coreReview.pr.number} (${(closed.stderr || '').split('\n')[0]}) — it landed as ${sha}; close it by hand`);
+    reviewPrHandled = coreReview.pr.number; // #584: either way the tail's landed-PR close must not touch it again
   }
   // Only when the target IS the shared checkout. `ephemeralTarget === false` means
   // `targetDir === repoAbs` (see #234's note above); a declared integration line merged in a
@@ -14155,6 +14195,7 @@ function cmdShip(argv) {
   // window itself now OPENS at the push (e2, #304), not here: post-ship's warnings belong in the
   // same block, and re-assigning the collector here would silently discard them.
   shipLandedTail({ repoAbs, sess, target, trunk, gh, sha, closeIssues, refsIssues, refsSet, integration, opts,
+    skipPrs: reviewPrHandled ? [reviewPrHandled] : [],
     evidenceExtra: (opts.humanDoorEvidence || '') + handoffEvidence(sess.handoff) }); // #525, #578
 
   print('');
@@ -14175,6 +14216,38 @@ function cmdShip(argv) {
 
 
 /**
+ * #584: close every open PR whose head is the branch this ship just landed — the PR a person or an
+ * automation opened only to obtain branch CI. The forge never sees a squash as a merge of that PR, so
+ * without this it stays open forever, reading as unmerged work. Only a PR whose head commit is the
+ * landed tip (or an ancestor of it) is closed; one carrying commits that did not land is kept and
+ * reported. Best-effort throughout: every failure defers a warning, none fails the ship.
+ */
+function shipCloseLandedPrs(repoAbs, sess, { target, sha, issues, skip = [] }) {
+  const remoteName = git.remoteInfo(repoAbs).name || 'origin';
+  const tipOf = (ref) => { const r = git.git(['rev-parse', '--verify', '--quiet', `${ref}^{commit}`], repoAbs); return r.ok ? r.stdout.trim() : null; };
+  const tip = tipOf(`refs/heads/${sess.branch}`) || tipOf(`refs/remotes/${remoteName}/${sess.branch}`);
+  const headLanded = (oid) => {
+    if (!tip) return false;
+    if (oid === tip) return true;
+    return git.git(['merge-base', '--is-ancestor', oid, tip], repoAbs).ok;
+  };
+  const res = landedPrs.closeLandedPrs({
+    prs: git.ghOpenPrsForBranch(repoAbs, sess.branch),
+    headLanded,
+    close: (n, comment) => git.ghPrClose(repoAbs, n, comment),
+    comment: landedPrs.landedPrComment({ target, sha, issues }),
+    skip,
+  });
+  if (res.listError) {
+    warnDeferred(`could not list open PRs for ${sess.branch} (${res.listError}) — any PR opened for its CI is still open; close it by hand (it landed as ${sha})`);
+    return;
+  }
+  for (const n of res.closed) print(`  closed PR #${n} — its branch ${sess.branch} landed as ${sha} (#584)`);
+  for (const f of res.failed) warnDeferred(`could not close PR #${f.number} (${f.error}) — ${sess.branch} landed as ${sha}; close it by hand`);
+  for (const k of res.kept) warnDeferred(`kept PR #${k.number} open: ${k.reason} (${sess.branch} landed as ${sha}) — it carries work that did not ship`);
+}
+
+/**
  * The post-merge tail every landed branch gets — cmdShip's B3 through i2, moved here unchanged (#373)
  * so a batch member gets exactly the same steps in the same order: worktree teardown (B3), the claims
  * worktree rm cannot reach (#319), the shipped branch (#368), B4's per-issue verify + 🚢 comment, the
@@ -14182,7 +14255,13 @@ function cmdShip(argv) {
  * addition — '' on a serial ship (so its comment is byte-identical), the combined-run clause for a
  * batch member.
  */
-function shipLandedTail({ repoAbs, sess, target, trunk, gh, sha, closeIssues, refsIssues, refsSet, integration, opts, evidenceExtra = '' }) {
+function shipLandedTail({ repoAbs, sess, target, trunk, gh, sha, closeIssues, refsIssues, refsSet, integration, opts, evidenceExtra = '', skipPrs = [] }) {
+  // #584: the CI-trigger PR(s) this squash left behind. FIRST, while the branch ref still resolves —
+  // B3 below may delete it, and "did the PR's head land?" is answered against that tip.
+  if (gh && sess.branch) {
+    try { shipCloseLandedPrs(repoAbs, sess, { target, sha, issues: closeIssues, skip: skipPrs }); }
+    catch (e) { warnDeferred(`landed-PR close for ${sess.branch} failed (${e.message}) — the ship landed as ${sha}; close any PR for it by hand`); }
+  }
   const worktreeKept = !!(sess.name && opts.keepWorktree);
   if (sess.name && !opts.keepWorktree) {
     print(`B3: removing worktree ${sess.name} …`);

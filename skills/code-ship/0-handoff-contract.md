@@ -46,7 +46,7 @@ git -C "$MAIN_REPO" status --porcelain -uall                 # trunk checkout st
   (#409). You may push a wrapped head, re-run an infra-class red run once (the test for
   *infra-class*: B1a, *Telling infra from finding*), cure-merge,
   open a PR to obtain branch CI for the branch that carries a red trunk's fix (that
-  branch only — B1, *Red trunk*), and — in B0 only — sync the base in, regenerate a
+  branch only — B1, *Red trunk*; `colab ship` closes that PR once the branch lands, #584), and — in B0 only — sync the base in, regenerate a
   generated file after taking one side, and resolve a purely mechanical conflict. You may
   **not** edit source, add a commit of your own beyond that sync, amend, or
   force-push — the grader is not the fixer, and a coordinator that writes code is
