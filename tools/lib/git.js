@@ -692,6 +692,30 @@ function ghPrForBranch(repo, branch) {
 }
 
 /**
+ * #584: EVERY open pull request whose head is `branch` — not just the first, as ghPrForBranch
+ * returns — so `colab ship` can close each CI-trigger PR its squash left behind. `{ prs }` on
+ * success (possibly empty), `{ error }` when the read failed; never conflate the two.
+ */
+function ghOpenPrsForBranch(repo, branch) {
+  const r = gh(['pr', 'list', '--head', branch, '--state', 'open', '--json', 'number,url,headRefOid,headRefName'], { cwd: repo });
+  if (!r.ok) return { error: (r.stderr || '').split('\n')[0] || `gh pr list exited ${r.code}` };
+  try {
+    const list = JSON.parse(r.stdout || '[]');
+    return { prs: Array.isArray(list) ? list : [] };
+  } catch (_) { return { error: 'gh pr list returned unparseable JSON' }; }
+}
+
+/** #584: every open pull request in the repo, for `colab doctor --sync`'s landed-PR listing. */
+function ghOpenPrs(repo) {
+  const r = gh(['pr', 'list', '--state', 'open', '--limit', '200', '--json', 'number,url,headRefOid,headRefName'], { cwd: repo });
+  if (!r.ok) return { error: (r.stderr || '').split('\n')[0] || `gh pr list exited ${r.code}` };
+  try {
+    const list = JSON.parse(r.stdout || '[]');
+    return { prs: Array.isArray(list) ? list : [] };
+  } catch (_) { return { error: 'gh pr list returned unparseable JSON' }; }
+}
+
+/**
  * #367: the forge's visibility for this repo — "PUBLIC" | "PRIVATE" | "INTERNAL" — or null when it
  * could not be read (no gh, no GitHub remote, offline). Null is "could not read", never "private":
  * tools/lib/machine-trailer.js fails closed on it.
@@ -1401,5 +1425,5 @@ module.exports = {
   ghRunJobCount, ghRunJobs, ghWorkflowDispatch,
   ghIssueListByLabel, ghLabelDelete, ghLabelCreate, ghListLabelsDetailed, ghLabelEditDescription,
   ghApi, isGraphqlRateLimit, ghIssueRelease, ghClaimHolder, ghIssueLabelEvents, ghIssueLabelActors,
-  ghPrForBranch, ghPrCreate, ghPrClose, ghRepoVisibility,
+  ghPrForBranch, ghOpenPrsForBranch, ghOpenPrs, ghPrCreate, ghPrClose, ghRepoVisibility,
 };

@@ -64,7 +64,7 @@ trunk-plus-branch, so it **includes the red**.
 
 | branch | how you tell | what this skill does |
 |---|---|---|
-| **the patch** | its title or issue says it repairs the red (`TRUNK RED:`), or its head fixes the failing test; its head contains the red sha, or will once synced (B0) | goes **first**, ahead of anything else queued. Sync it onto the red if it does not yet contain it (cure condition 1 — pays one CI round, by design), push, open a PR if the repo cannot otherwise run CI for the branch, then re-read B1a at the new head. Green → the cure door opens at B2 |
+| **the patch** | its title or issue says it repairs the red (`TRUNK RED:`), or its head fixes the failing test; its head contains the red sha, or will once synced (B0) | goes **first**, ahead of anything else queued. Sync it onto the red if it does not yet contain it (cure condition 1 — pays one CI round, by design), push, open a PR if the repo cannot otherwise run CI for the branch (`colab ship` closes it once the branch lands, #584), then re-read B1a at the new head. Green → the cure door opens at B2 |
 | **a bystander** | ready work that merely happens to be queued — nothing in it touches the red | **waits for green trunk.** No PR, no rebase onto the red: its PR's run inherits the red through the merge ref, says nothing about the branch, and spreads the failure signal. Record it as a defer — precondition: trunk red; clears on: a green run on `<base>`; re-measure trigger: that run |
 
 **Both read the same remedy** ("open a PR to obtain branch CI"; `colab ship`'s cure
