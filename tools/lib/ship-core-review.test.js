@@ -148,13 +148,18 @@ test('#350 (b): a non-author approval at the head sha lands it, and the PR is cl
   assert.doesNotMatch(log(fx), /pr create/);
 });
 
-test('#350 (c): a non-core branch lands unchanged, with no pr call at all', () => {
+// #584: every landed branch gets ONE post-land read — the open PRs on its head, so a CI-trigger PR is
+// closed. That read is not the review path; everything else under `pr ` stays forbidden here.
+const reviewPrCalls = (text) => text.replace(/^pr list --head \S+ --state open --json number,url,headRefOid,headRefName\n/gm, '');
+
+test('#350 (c): a non-core branch lands unchanged, with no review-path pr call at all', () => {
   const fx = fixture();
   branch(fx, 'feat/app-93', 93, { 'f.js': 'changed\n' });
   const r = colab(fx, ['ship', '--branch', 'feat/app-93', '--repo', fx.work]);
   assert.strictEqual(r.code, 0, r.out + r.err);
   assert.match(r.out, /no core path touched/);
-  assert.doesNotMatch(log(fx), /^pr /m);
+  assert.doesNotMatch(reviewPrCalls(log(fx)), /^pr /m);
+  assert.match(log(fx), /^pr list --head feat\/app-93 --state open/m, '#584: the landed-PR read runs');
 });
 
 test('#350 (d): no CODEOWNERS, or one naming only the author, is inert — the core branch lands', () => {
@@ -164,7 +169,7 @@ test('#350 (d): no CODEOWNERS, or one naming only the author, is inert — the c
     const r = colab(fx, ['ship', '--branch', 'feat/gate-94', '--repo', fx.work]);
     assert.strictEqual(r.code, 0, r.out + r.err);
     assert.match(r.out, /core-path review \(#350\)\s+inert: /);
-    assert.doesNotMatch(log(fx), /^pr /m);
+    assert.doesNotMatch(reviewPrCalls(log(fx)), /^pr /m);
   }
 });
 
