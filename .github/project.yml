@@ -134,3 +134,4 @@ release:
 # finalize automatically after a clean test period unless a human vetoes — a
 # permission that comes from §6, never from this grant.
 autonomy: auto-trunk
+ci-grant: reviewer   # owner 2026-10-09/10: the coordinator may mint a ci-reviewer grant for a TRUNK RED: patch
