@@ -19,14 +19,30 @@ function run(cmd, args, opts = {}) {
   const { timeoutMs, ...spawnOpts } = opts;
   const res = spawnSync(cmd, args, { encoding: 'utf8', ...(timeoutMs ? { timeout: timeoutMs } : {}), ...spawnOpts });
   const timedOut = !!(res.error && res.error.code === 'ETIMEDOUT');
+  const stderr = (res.stderr || '').trim();
   return {
-    ok: res.status === 0 && !timedOut,
+    ok: res.status === 0 && !timedOut && !res.error,
     code: res.status,
     stdout: (res.stdout || '').trim(),
-    stderr: timedOut ? `timed out after ${timeoutMs}ms with no output` : (res.stderr || '').trim(),
+    // A spawn error (#585) leaves stderr empty: ENOBUFS kills the child once stdout passes
+    // `maxBuffer` (1 MiB by default), ENOENT means the binary is missing. An empty detail then
+    // reads as "git said nothing" and a caller's remedy guesses at the wrong cause, so the error
+    // itself becomes the detail whenever the child wrote none.
+    stderr: timedOut ? `timed out after ${timeoutMs}ms with no output` : (stderr || spawnErrorLine(res.error, spawnOpts)),
     error: res.error || null,
     timedOut,
   };
+}
+
+/** One line naming a spawn error, or '' for none. ENOBUFS names the buffer it overran (#585). */
+function spawnErrorLine(error, spawnOpts = {}) {
+  if (!error) return '';
+  const code = error.code || 'error';
+  if (code === 'ENOBUFS') {
+    const max = spawnOpts.maxBuffer || 1024 * 1024;
+    return `ENOBUFS: output passed the ${Math.round(max / 1024)} KiB read buffer and the child was killed`;
+  }
+  return `${code}: ${error.message || 'spawn failed'}`;
 }
 
 /**
@@ -1415,7 +1431,7 @@ function ghAssignedIssues(repo) {
 
 module.exports = {
   ghCommitCheckRuns, ghCheckRunAnnotations,
-  run, git, repoRoot, mainRepoRoot, originUrl, remoteInfo, remoteName, remoteFor, remoteUrl, remoteProblem, _resetRemoteCache,
+  run, spawnErrorLine, git, repoRoot, mainRepoRoot, originUrl, remoteInfo, remoteName, remoteFor, remoteUrl, remoteProblem, _resetRemoteCache,
   detectTrunk, branchExists, branchRefs, existingBranchRef,
   claimRemote, remoteHeads, parseRemoteHeads, CLAIM_REF_PREFIX, claimRef, pushClaimRef, deleteClaimRef,
   worktreeList, worktreeListDetailed, resolveWorktreePathForBranch, gitFailureLine,
