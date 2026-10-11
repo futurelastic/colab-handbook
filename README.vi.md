@@ -5,7 +5,7 @@
 Bộ quy ước và công cụ nhỏ để vận hành nhiều repo — nhiều phiên code song song,
 người thật lẫn AI agent — mà không giẫm chân nhau.
 
-**Nếu bạn là AI agent, dừng ở đây và đọc [`CLAUDE.md`](CLAUDE.md).**
+**Nếu bạn là AI agent, dừng ở đây và đọc [`AGENTS.md`](AGENTS.md).**
 File này dành cho con người.
 
 ## Bắt đầu nhanh
@@ -239,7 +239,7 @@ quyền cấp trước khi chạy migration vẫn đứng vững dù có nó hay
 | Đường dẫn | Là gì |
 |---|---|
 | [`CONVENTIONS.md`](CONVENTIONS.md) | Luật. Chuẩn tắc, nguồn sự thật duy nhất (EN). |
-| [`CLAUDE.md`](CLAUDE.md) | Cửa vào cho AI agent — bản chưng cất vận hành (EN). |
+| [`AGENTS.md`](AGENTS.md) | Cửa vào cho AI agent — bản chưng cất vận hành (EN). |
 | [`project.schema.md`](project.schema.md) | Tham chiếu field của `.github/project.yml`. |
 | [`templates/`](templates/) | Điểm khởi đầu **copy-về-là-của-bạn**: CI, release, git hook (một bản quét secret và một bản quét danh tính), và block `CLAUDE.md` cho repo adopt. Không có gì được gọi từ xa — copy, sửa, sở hữu. |
 | [`tools/`](tools/) | `colab` — một CLI nhỏ (tùy chọn): adopt một repo, claim issue, cấp port, quản lý worktree, và merge nhánh đã xong vào trunk khi repo cho phép. State JSON, không dependency. Tham chiếu các lệnh: [`tools/README.md`](tools/README.md). |

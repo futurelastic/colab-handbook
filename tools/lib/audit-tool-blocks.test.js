@@ -94,3 +94,12 @@ test('the Conventions block in the CLAUDE.md shell is clean', () => {
   const r = audit(fixture({ 'CLAUDE.md': '@AGENTS.md\n\n' + block, 'AGENTS.md': '# Rules\n' }));
   assert.ok(!hasText(r.warns, /Conventions block is in/), r.warns.join(' | '));
 });
+
+// #587: the handbook's own AGENTS.md says it "follows the colab-handbook", which the block
+// heuristic reads as a Conventions block. The source has no block by design, so the
+// self-audit skips the misplaced-block half — and its shell + AGENTS.md pass the #419 shape check.
+test('the handbook source: no misplaced-Conventions-block warning, and its CLAUDE.md is a clean shell', () => {
+  const r = audit(path.resolve(__dirname, '..', '..'));
+  assert.ok(!hasText(r.warns, /Conventions block is in/), r.warns.join(' | '));
+  assert.ok(!hasText(r.warns, /^(prose-in-claude-md|no-agents-md):/), r.warns.join(' | '));
+});

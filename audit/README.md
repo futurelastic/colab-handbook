@@ -235,7 +235,8 @@ the handbook's current version, so a scheduled run is self-documenting.
     Byte-identical files (a symlinked pair) count as one.
   - **The Conventions block outside `CLAUDE.md`** — its stamp is read from `CLAUDE.md` by
     name (here, `handbook-sync`, `colab update`), so a block moved into `AGENTS.md` makes
-    the repo read as unstamped.
+    the repo read as unstamped. Skipped on the handbook source, which carries no block by
+    design, like every stamp check (#587).
 
 - **Instruction-file shape (#419)** — two more advisory (`warn`) checks, each opening with a
   stable token so it can be grepped:
