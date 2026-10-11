@@ -17,6 +17,12 @@
 #
 # THE BASE: a pull request → its base sha. A push to trunk (`trunk:` in .github/project.yml, else
 # the default branch) → the sha before the push. Any other push → origin/<trunk>.
+#
+# THE RUNNER (#594): `runs-on` defaults to ubuntu-latest. A caller whose org has no GitHub-hosted
+# minutes (spending limit, self-hosted-only org) has that job refused before it starts — a red
+# check on every PR it can never fix — so it passes its own runner: a bare label
+# (`runs-on: my-runner`) or a JSON label list (`runs-on: '["self-hosted","linux"]'`). The job needs
+# only git + Node (actions/checkout, `node`), so any Linux runner with Node on PATH works.
 name: instruction-files
 
 on:
@@ -27,6 +33,13 @@ on:
         type: string
         required: false
         default: main
+      runs-on:
+        description: >-
+          Runner for the job — a bare label (`ubuntu-latest`, `my-runner`) or a JSON label list
+          (`'["self-hosted","linux"]'`). Default ubuntu-latest. Needs git + Node on PATH.
+        type: string
+        required: false
+        default: ubuntu-latest
 
 permissions:
   contents: read
@@ -34,7 +47,8 @@ permissions:
 jobs:
   instruction-files:
     name: CLAUDE.md is @AGENTS.md + tool blocks
-    runs-on: ubuntu-latest
+    # A value starting with `[` is a JSON label list; anything else is one label, used as-is.
+    runs-on: ${{ startsWith(inputs.runs-on, '[') && fromJSON(inputs.runs-on) || inputs.runs-on }}
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
