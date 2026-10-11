@@ -113,8 +113,8 @@ test('shipguard.branchIssueNumbers is the same function as branch-name\'s', () =
 
 // --- one regex, three homes: the drift guard ---------------------------------------------------
 
-test('the §4 regex is byte-identical in CONVENTIONS.md §4, CLAUDE.md, audit/README.md and templates/branch-name.yml', () => {
-  for (const f of ['CONVENTIONS.md', 'CLAUDE.md', 'audit/README.md', 'templates/branch-name.yml']) {
+test('the §4 regex is byte-identical in CONVENTIONS.md §4, AGENTS.md, audit/README.md and templates/branch-name.yml', () => {
+  for (const f of ['CONVENTIONS.md', 'AGENTS.md', 'audit/README.md', 'templates/branch-name.yml']) {
     const text = fs.readFileSync(path.join(REPO_ROOT, f), 'utf8');
     assert.ok(text.includes(bn.BRANCH_RE_SOURCE), `${f} no longer carries lib/branch-name.js's regex verbatim — one of them drifted`);
   }
