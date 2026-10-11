@@ -17,6 +17,12 @@
 #
 # THE BASE: a pull request → its base sha. A push to trunk (`trunk:` in .github/project.yml, else
 # the default branch) → the sha before the push. Any other push → origin/<trunk>.
+#
+# THE RUNNER (#594): `runs-on` defaults to ubuntu-latest. A caller whose org has no GitHub-hosted
+# minutes (spending limit, self-hosted-only org) has that job refused before it starts — a red
+# check on every PR it can never fix — so it passes its own runner: a bare label
+# (`runs-on: my-runner`) or a JSON label list (`runs-on: '["self-hosted","linux"]'`). The job needs
+# only git (actions/checkout) — Node comes from actions/setup-node — so any Linux runner works.
 name: instruction-files
 
 on:
@@ -27,6 +33,13 @@ on:
         type: string
         required: false
         default: main
+      runs-on:
+        description: >-
+          Runner for the job — a bare label (`ubuntu-latest`, `my-runner`) or a JSON label list
+          (`'["self-hosted","linux"]'`). Default ubuntu-latest. Needs only git — Node is set up by the job.
+        type: string
+        required: false
+        default: ubuntu-latest
 
 permissions:
   contents: read
@@ -34,7 +47,8 @@ permissions:
 jobs:
   instruction-files:
     name: CLAUDE.md is @AGENTS.md + tool blocks
-    runs-on: ubuntu-latest
+    # A value starting with `[` is a JSON label list; anything else is one label, used as-is.
+    runs-on: ${{ startsWith(inputs.runs-on, '[') && fromJSON(inputs.runs-on) || inputs.runs-on }}
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
@@ -46,6 +60,10 @@ jobs:
           ref: ${{ inputs.handbook-ref }}
           path: .colab-handbook-checker
           persist-credentials: false
+      # Pinned Node, not whatever is on PATH: a plain self-hosted runner may have none (#594).
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
+        with:
+          node-version-file: .colab-handbook-checker/.nvmrc   # the checker's own pin
       - name: Judge every CLAUDE.md (ratcheted)
         env:
           EVENT: ${{ github.event_name }}
