@@ -22,7 +22,7 @@
 # minutes (spending limit, self-hosted-only org) has that job refused before it starts — a red
 # check on every PR it can never fix — so it passes its own runner: a bare label
 # (`runs-on: my-runner`) or a JSON label list (`runs-on: '["self-hosted","linux"]'`). The job needs
-# only git + Node (actions/checkout, `node`), so any Linux runner with Node on PATH works.
+# only git (actions/checkout) — Node comes from actions/setup-node — so any Linux runner works.
 name: instruction-files
 
 on:
@@ -36,7 +36,7 @@ on:
       runs-on:
         description: >-
           Runner for the job — a bare label (`ubuntu-latest`, `my-runner`) or a JSON label list
-          (`'["self-hosted","linux"]'`). Default ubuntu-latest. Needs git + Node on PATH.
+          (`'["self-hosted","linux"]'`). Default ubuntu-latest. Needs only git — Node is set up by the job.
         type: string
         required: false
         default: ubuntu-latest
@@ -60,6 +60,10 @@ jobs:
           ref: ${{ inputs.handbook-ref }}
           path: .colab-handbook-checker
           persist-credentials: false
+      # Pinned Node, not whatever is on PATH: a plain self-hosted runner may have none (#594).
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
+        with:
+          node-version-file: .colab-handbook-checker/.nvmrc   # the checker's own pin
       - name: Judge every CLAUDE.md (ratcheted)
         env:
           EVENT: ${{ github.event_name }}
