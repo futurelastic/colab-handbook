@@ -1541,8 +1541,9 @@ reading either sees the same spelling. Spell them exactly so, everywhere:
   run at *this* sha on another ref (a `ship-batch/*` run trunk fast-forwarded to) is asked for
   first, by an exact query, so a busy repo's listing window cannot miss it (#552). A cited run
   is reused only if it skipped no job but the guard: a job gated on the trunk ref is `skipped`
-  on every branch push, and reusing that run would skip it on trunk too (#511). A trunk-only job
-  (publish, deploy, release) never sits behind this gate. One reading turns such a run red: a
+  on every branch push, and reusing that run would skip it on trunk too (#511); matches are
+  walked newest first and the first that passes is cited, so a skipping one never hides an older
+  full run (#592). A trunk-only job (publish, deploy, release) never sits behind this gate. One reading turns such a run red: a
   cited head that is local and whose tree provably differs from trunk's (`HUMAN_GATED` —
   trunk is untested at that sha). A citation that cannot be read leaves the run green and says
   so, because the run's own `success` is the verdict, exactly as for #418. Why: [ADR 539](docs/adr/539-branch-ci-rationale.md).

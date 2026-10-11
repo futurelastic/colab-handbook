@@ -209,16 +209,40 @@ jobs:
               return 1
             fi
           }
-          # The cited run, as "<id> <head sha> <url> <branch>": a green push run of this workflow on
-          # another ref of this repo. #552: one at THIS sha first (a `ship-batch/*` run trunk
-          # fast-forwarded to), an exact query; else one whose commit has THIS tree (#493).
+          # The candidate runs, one per line as "<id> <head sha> <url> <branch>", newest first: green
+          # push runs of this workflow on another ref of this repo. #552: those at THIS sha first (a
+          # `ship-batch/*` run trunk fast-forwarded to), an exact query; then those whose commit has
+          # THIS tree (#493). The query's own per_page bounds the walk (#592).
           same_sha() {
             gh api "repos/$REPO/actions/workflows/$WFID/runs?head_sha=$SHA&event=push&status=success&per_page=20" \
-              --jq "first(.workflow_runs[] | select(.id != $RUN_ID and .head_branch != \"$REF_NAME\" and .head_repository.full_name == \"$REPO\") | \"\\(.id) \\(.head_sha) \\(.html_url) \\(.head_branch)\") // empty" 2>/dev/null | grep .
+              --jq ".workflow_runs[] | select(.id != $RUN_ID and .head_branch != \"$REF_NAME\" and .head_repository.full_name == \"$REPO\") | \"\\(.id) \\(.head_sha) \\(.html_url) \\(.head_branch)\"" 2>/dev/null
           }
           same_tree() {
             gh api "repos/$REPO/actions/workflows/$WFID/runs?event=push&status=success&per_page=50" \
-              --jq "first(.workflow_runs[] | select(.id != $RUN_ID and .head_branch != \"$REF_NAME\" and .head_repository.full_name == \"$REPO\" and .head_commit.tree_id == \"$OURS\") | \"\\(.id) \\(.head_sha) \\(.html_url) \\(.head_branch)\") // empty" 2>/dev/null
+              --jq ".workflow_runs[] | select(.id != $RUN_ID and .head_branch != \"$REF_NAME\" and .head_repository.full_name == \"$REPO\" and .head_commit.tree_id == \"$OURS\") | \"\\(.id) \\(.head_sha) \\(.html_url) \\(.head_branch)\"" 2>/dev/null
+          }
+          # #592: cite the newest candidate on stdin that passes every check. One that fails a check
+          # is passed over, not the end of the search: the newest green run can be a skip-chained one
+          # (#511) while an older run at the same sha or tree ran every job. A run already tried (the
+          # sha query's runs reappear in the tree listing) is not tried twice.
+          cite() {
+            local CID CSHA URL BR CTREE
+            while read -r CID CSHA URL BR; do
+              [ -n "$CID" ] || continue
+              case " $TRIED " in *" $CID "*) continue ;; esac
+              TRIED="$TRIED $CID"
+              if ! CTREE="$(gh api "repos/$REPO/git/commits/$CSHA" --jq .tree.sha 2>/dev/null)" || [ "$CTREE" != "$OURS" ]; then
+                echo "::notice::Could not confirm the tree of $CSHA — passing over run $CID (#493)."
+              elif reusable "$CID"; then
+                tested=true
+                cited="$URL"
+                echo "::notice title=tree-already-green::$URL tree=$OURS head=$CSHA branch=$BR"
+                echo "Tree $OURS already passed this workflow at $CSHA on $BR ($URL) — skipping the suite (#493)."
+                echo "Already tested: tree \`$OURS\` passed this workflow on \`$BR\` — [the run relied on]($URL); suite skipped (#493)." >> "$GITHUB_STEP_SUMMARY"
+                return 0
+              fi
+            done
+            return 1
           }
           if ! command -v gh >/dev/null 2>&1; then
             echo "::notice::gh is not installed on this runner — running the full suite (#418)."
@@ -234,20 +258,17 @@ jobs:
               echo "::notice::$REF_NAME is not this repo's trunk — running the full suite (#493)."
             elif ! OURS="$(gh api "repos/$REPO/git/commits/$SHA" --jq .tree.sha 2>/dev/null)" || [ -z "$OURS" ]; then
               echo "::notice::Could not read the tree of $SHA — running the full suite (#493)."
-            elif ! CAND="$(same_sha || same_tree)"; then
-              echo "::notice::Could not list this workflow's green runs — running the full suite (#493)."
-            elif [ -z "$CAND" ]; then
-              echo "No green run of this workflow on another ref has sha $SHA or tree $OURS — running the full suite."
             else
-              read -r CID CSHA URL BR <<< "$CAND"
-              if ! CTREE="$(gh api "repos/$REPO/git/commits/$CSHA" --jq .tree.sha 2>/dev/null)" || [ "$CTREE" != "$OURS" ]; then
-                echo "::notice::Could not confirm the tree of $CSHA — running the full suite (#493)."
-              elif reusable "$CID"; then
-                tested=true
-                cited="$URL"
-                echo "::notice title=tree-already-green::$URL tree=$OURS head=$CSHA branch=$BR"
-                echo "Tree $OURS already passed this workflow at $CSHA on $BR ($URL) — skipping the suite (#493)."
-                echo "Already tested: tree \`$OURS\` passed this workflow on \`$BR\` — [the run relied on]($URL); suite skipped (#493)." >> "$GITHUB_STEP_SUMMARY"
+              TRIED=
+              SC="$(same_sha)" || SC=    # the sha query failing falls through to the tree listing (#552)
+              if [ -n "$SC" ] && cite <<< "$SC"; then
+                :
+              elif ! TC="$(same_tree)"; then
+                echo "::notice::Could not list this workflow's green runs — running the full suite (#493)."
+              elif [ -z "$SC$TC" ]; then
+                echo "No green run of this workflow on another ref has sha $SHA or tree $OURS — running the full suite."
+              elif ! cite <<< "$TC"; then
+                echo "No green run of this workflow at sha $SHA or tree $OURS can be cited — running the full suite (#592)."
               fi
             fi
           elif ! N="$(gh api "repos/$REPO/actions/workflows/$WFID/runs?head_sha=$SHA&status=success&per_page=20" \

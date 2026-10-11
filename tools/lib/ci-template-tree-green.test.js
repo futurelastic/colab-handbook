@@ -271,4 +271,49 @@ for (const file of FILES) {
       cleanup();
     }
   });
+
+  test(`${file}: trunk walks the candidates and cites the newest reusable one, not just the newest (#592)`, { skip: !HAVE_JQ && 'jq not installed' }, () => {
+    const { run, cleanup } = makeRunner(guardScript(jobs.dedupe));
+    try {
+      const skipChained = [{ name: GUARD, conclusion: 'success' }, { name: 'Build', conclusion: 'skipped' }];
+      const e2eSkipped = [{ name: GUARD, conclusion: 'skipped' }, { name: 'Build', conclusion: 'success' }, { name: 'E2E (trunk only)', conclusion: 'skipped' }];
+
+      // At THIS sha: the newest green run is skip-chained, an older one ran every job → cite the older.
+      let r = run({ same: [runObj(91, 'ship-batch/b', 'abc123', 'T1'), runObj(90, 'ship-batch/a', 'abc123', 'T1')], jobs: { 91: skipChained } });
+      assert.deepStrictEqual(r.out, { tested: 'true', cited: 'https://github.com/o/r/actions/runs/90' });
+      assert.match(r.stdout, /Run 91 skipped Build/);
+      assert.match(r.stdout, /^::notice title=tree-already-green::https:\/\/github\.com\/o\/r\/actions\/runs\/90 tree=T1 head=abc123 branch=ship-batch\/a$/m);
+
+      // Same at THIS tree.
+      r = run({ list: [runObj(78, 'feat/x-2', 'ccc333', 'T1'), runObj(77, 'feat/x-1', 'bbb222', 'T1')], trees: { ccc333: 'T1', bbb222: 'T1' }, jobs: { 78: e2eSkipped } });
+      assert.deepStrictEqual(r.out, { tested: 'true', cited: 'https://github.com/o/r/actions/runs/77' });
+
+      // Every sha match unusable → the tree listing is walked next, and a run already tried there is not re-checked.
+      const atSha = runObj(91, 'ship-batch/b', 'abc123', 'T1');
+      r = run({ same: [atSha], list: [atSha, runObj(77, 'feat/x-1', 'bbb222', 'T1')], trees: { bbb222: 'T1' }, jobs: { 91: skipChained } });
+      assert.strictEqual(r.out.cited, 'https://github.com/o/r/actions/runs/77');
+      assert.strictEqual((r.args.match(/runs\/91\/jobs/g) || []).length, 1, 'run 91 is checked once');
+
+      // A candidate whose tree cannot be confirmed is passed over, not the end of the search.
+      r = run({ list: [runObj(78, 'feat/x-2', 'ccc333', 'T1'), runObj(77, 'feat/x-1', 'bbb222', 'T1')], trees: { ccc333: 'T2', bbb222: 'T1' } });
+      assert.strictEqual(r.out.cited, 'https://github.com/o/r/actions/runs/77');
+
+      // Every match unusable → the full suite, said once.
+      r = run({ same: [runObj(91, 'ship-batch/b', 'abc123', 'T1')], list: [runObj(78, 'feat/x-2', 'ccc333', 'T1')], trees: { ccc333: 'T1' }, jobs: { 91: skipChained, 78: e2eSkipped } });
+      assert.deepStrictEqual(r.out, { tested: 'false' });
+      assert.match(r.stdout, /can be cited — running the full suite \(#592\)/);
+      assert.doesNotMatch(r.stdout, /tree-already-green/);
+
+      // The sha query's hit is cited without listing the tree at all (no extra API call).
+      r = run({ same: [runObj(90, 'ship-batch/a', 'abc123', 'T1')], list: [runObj(77, 'feat/x-1', 'bbb222', 'T1')], trees: { bbb222: 'T1' } });
+      assert.strictEqual(r.out.cited, 'https://github.com/o/r/actions/runs/90');
+      assert.doesNotMatch(r.args, /runs\?event=push&status=success&per_page=50/);
+
+      // Sha matches unusable and the tree listing failing → the full suite.
+      r = run({ same: [runObj(91, 'ship-batch/b', 'abc123', 'T1')], jobs: { 91: skipChained }, fail: ['list'] });
+      assert.deepStrictEqual(r.out, { tested: 'false' });
+    } finally {
+      cleanup();
+    }
+  });
 }
