@@ -1770,8 +1770,10 @@ function auditRepo(target, ctx) {
   // the handbook's OWN CLAUDE.md too (not a stamp check, so it is not gated on !isSelf).
   checkClaudeMdSize(src, warn, th.values);
   // #417: same posture — a tool block loaded twice, or the Conventions block moved out of the
-  // file tools look it up in, is a repo-doc concern on every repo, the handbook's own included.
-  checkInstructionFileBlocks(src, warn);
+  // file tools look it up in, is a repo-doc concern on every repo, the handbook's own included —
+  // except the misplaced-Conventions-block half, which is a stamp check: the handbook has no
+  // block to place, and its AGENTS.md says it "follows the colab-handbook" (#587).
+  checkInstructionFileBlocks(src, warn, { self: isSelf });
   // #419: and prose left in CLAUDE.md / no AGENTS.md at all — same posture, same reason.
   checkInstructionFileShape(src, warn);
 
@@ -2621,7 +2623,7 @@ function checkClaudeMdSize(src, warn, limits = thresholdsLib.DEFAULTS) {
 // Both WARN, never FAIL: neither stops anything working, they cost tokens or drift tracking.
 // Byte-identical CLAUDE.md and AGENTS.md (a symlinked or copied pair) are ONE file here, or
 // every symlinked repo would warn on a duplicate it does not have.
-function checkInstructionFileBlocks(src, warn) {
+function checkInstructionFileBlocks(src, warn, { self = false } = {}) {
   const read = (p) => src.readFile(p);
   const loaded = instructionFile.collectLoaded(read, "CLAUDE.md").files;
   const claude = loaded.find((f) => f.path === "CLAUDE.md");
@@ -2644,6 +2646,9 @@ function checkInstructionFileBlocks(src, warn) {
     }
   }
 
+  // The handbook source carries no Conventions block by design (it is X, nothing to copy from),
+  // so "the block moved out of CLAUDE.md" cannot be true of it — skip, like every stamp check.
+  if (self) return;
   const hasBlock = (t) => !!(parseClaudeStamp(t) || looksLikeHandbookClaude(t));
   if (!(claude && hasBlock(claude.text))) {
     const elsewhere = scan.filter((f) => f.path !== "CLAUDE.md" && hasBlock(f.text)).map((f) => f.path);

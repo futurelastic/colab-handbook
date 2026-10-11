@@ -6,7 +6,7 @@ A small set of conventions and tools for running many repos — many coding
 sessions in parallel, humans and AI agents alike — without stepping on each
 other.
 
-**If you are an AI agent, stop here and read [`CLAUDE.md`](CLAUDE.md).**
+**If you are an AI agent, stop here and read [`AGENTS.md`](AGENTS.md).**
 This file is for humans.
 
 ## Quick start
@@ -240,7 +240,7 @@ migration hold with or without it.
 | Path | What it is |
 |---|---|
 | [`CONVENTIONS.md`](CONVENTIONS.md) | The rules. Normative, the single source of truth (EN). |
-| [`CLAUDE.md`](CLAUDE.md) | The entry point for AI agents — the operational distillation (EN). |
+| [`AGENTS.md`](AGENTS.md) | The entry point for AI agents — the operational distillation (EN). |
 | [`project.schema.md`](project.schema.md) | Field reference for `.github/project.yml`. |
 | [`templates/`](templates/) | **Copy-and-own** starting points: CI, release, git hooks (a secret scan and an identity scan), and the `CLAUDE.md` block for adopting repos. Nothing is called remotely — copy it, edit it, own it. |
 | [`tools/`](tools/) | `colab` — a small CLI (optional): adopt a repo, claim issues, allocate ports, manage worktrees, and merge a finished branch to trunk when the repo grants it. JSON state, zero dependencies. Command reference: [`tools/README.md`](tools/README.md). |
