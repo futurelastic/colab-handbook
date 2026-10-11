@@ -214,16 +214,11 @@ independent reasons not to automate it:
 - Most repos have *extended* the block well past the template (measured: 6 of 7).
 
 **Moving a repo to the `AGENTS.md` shape — the graft step (#419).** Offer it whenever the
-audit reports `prose-in-claude-md` (it names the line ranges) or `no-agents-md`. It is an offer,
-not a precondition: both are warnings until the repo touches the files, and a repo migrates when
-its owner takes the step. **Once anything edits `CLAUDE.md` or `AGENTS.md`, the move must be
-complete in that same change** — the ratchet (#588) fails a change that touches either file and
-leaves prose in a `CLAUDE.md`, at commit (`templates/pre-commit-instruction-files`), in CI
-(`templates/instruction-files.yml`) and in the audit; `colab instruction-files --base origin/<trunk>`
-answers it locally. Offer those two copies alongside the move. **Never
-on a fork of an upstream** (a remote named `upstream`, or the repo says it tracks one): there
-the prose belongs to the upstream, both warnings are expected, and the block stays appended at
-the end of the upstream's `CLAUDE.md` (`CONVENTIONS.md` [§9, *A fork of an upstream*](../../CONVENTIONS.md#a-fork-of-an-upstream--a-repo-you-own-that-tracks-one-you-dont-449), #449). Move
+audit reports `prose-in-claude-md` (it names the line ranges) or `no-agents-md`, with the CI caller
+and hooklet (#588). Warnings until a change touches `CLAUDE.md`/`AGENTS.md`; then the ratchet fails
+it, so finish the move in that change. **Never on a fork of an upstream** (a remote named
+`upstream`, or the repo says it tracks one): there the prose belongs to the upstream, both
+warnings are expected, and the block stays appended at the end of the upstream's `CLAUDE.md` (`CONVENTIONS.md` [§9, *A fork of an upstream*](../../CONVENTIONS.md#a-fork-of-an-upstream--a-repo-you-own-that-tracks-one-you-dont-449), #449). Move
 the prose, never the block:
 
 1. **Sort `CLAUDE.md`'s lines into two piles.** *Stays:* the `@AGENTS.md` import, this
