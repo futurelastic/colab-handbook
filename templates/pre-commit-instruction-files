@@ -1,0 +1,55 @@
+#!/bin/sh
+# pre-commit-instruction-files — refuse a commit that leaves repo prose in a CLAUDE.md (#588).
+#
+# THE RULE (CONVENTIONS.md §9 step 5). Repo prose lives in AGENTS.md; CLAUDE.md is only the
+# `@AGENTS.md` import plus the blocks tools look up in CLAUDE.md by name (the Conventions block
+# with its stamp, any paired tool-managed block). An editor-side hook only sees edits made through
+# one agent's file tools — a shell write, another agent, a person or a generator that rewrites
+# CLAUDE.md all pass it. This runs on every commit, whoever made it.
+#
+# THE JUDGEMENT IS NOT HERE. It is `colab instruction-files --staged` — the same code the audit
+# and the reusable CI workflow (.github/workflows/instruction-files.yml in the handbook) run, so
+# the three cannot disagree. Same ratchet too: staging a CLAUDE.md or AGENTS.md is touching the
+# rule's files, so every CLAUDE.md must then conform; a commit that leaves both alone is never
+# judged, so an unmigrated repo is not blocked by adding this hook.
+#
+# COST. With no CLAUDE.md/AGENTS.md staged this is one `git diff --cached --name-only` and exits —
+# a few milliseconds. Only a commit that stages one of them starts node.
+#
+# WHERE `colab` COMES FROM: $COLAB_BIN if set (the handbook's own hooklet points it at its
+# checkout), else `colab` on PATH. Neither present → warn and pass: an unconfigured machine is a
+# different statement from a failed check, and CI still runs the same judgement on the push.
+#
+# INSTALL — beside the dispatcher (templates/pre-commit-dispatch, see its header):
+#   cp templates/pre-commit-instruction-files <hooks>/pre-commit.d/30-instruction-files
+#   chmod +x <hooks>/pre-commit.d/30-instruction-files
+#
+# EXIT: 0 pass (or nothing to judge, or no colab), 1 refused — the message names the fix.
+
+set -u
+
+staged=$(git diff --cached --name-only --diff-filter=ACMRT 2>/dev/null | grep -E '(^|/)(CLAUDE|AGENTS)\.md$' || true)
+[ -n "$staged" ] || exit 0
+
+bin="${COLAB_BIN:-colab}"
+if [ -n "${COLAB_BIN:-}" ]; then
+  [ -f "$bin" ] || { printf '%s\n' "⚠ pre-commit-instruction-files: COLAB_BIN=$bin does not exist — not judged; CI will judge on push." >&2; exit 0; }
+  set -- node "$bin"
+elif command -v colab >/dev/null 2>&1; then
+  set -- colab
+else
+  printf '%s\n' "⚠ pre-commit-instruction-files: \`colab\` is not installed — CLAUDE.md not judged here; CI will judge it on push (npm i -g @futurelastic/colab-handbook)." >&2
+  exit 0
+fi
+
+"$@" instruction-files --staged
+status=$?
+if [ "$status" -eq 1 ]; then
+  printf '%s\n' "❌ commit BLOCKED: move the prose above into AGENTS.md and keep CLAUDE.md to \`@AGENTS.md\` + tool blocks." >&2
+  exit 1
+fi
+if [ "$status" -ne 0 ]; then
+  printf '%s\n' "❌ commit BLOCKED: the instruction-file check could not run (exit $status) — see above." >&2
+  exit 1
+fi
+exit 0

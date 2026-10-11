@@ -249,8 +249,13 @@ the handbook's current version, so a scheduled run is self-documenting.
   - **`no-agents-md`** — the repo has a `CLAUDE.md` but no `AGENTS.md`. A repo with neither
     file gets neither finding.
   Byte-identical `CLAUDE.md`/`AGENTS.md` (a symlinked pair) count as one file and get no
-  prose finding. Warn, never fail: repos migrate over time, through `handbook-sync`'s graft
-  step (§6).
+  prose finding. Repos migrate over time, through `handbook-sync`'s graft step (§6), so
+  `prose-in-claude-md` **fails only under the ratchet (#588)**: on a local repo, judged against
+  `merge-base(--base, HEAD)` (default `origin/<trunk>`), it fails when some tracked `CLAUDE.md`
+  does not conform AND either a `CLAUDE.md`/`AGENTS.md` changed since that merge base or every
+  `CLAUDE.md` conformed there; otherwise it stays a warning, as it does on every remote source.
+  Same judgement as `colab instruction-files`, the pre-commit hook and the reusable CI workflow
+  (`tools/lib/instruction-gate.js`). `no-agents-md` stays a warning.
 
 - **Markdown anchor links resolve (#158)** — section numbers used to be cited by
   number (`§5`) from ~20 files, and nothing checked them: a renumber broke every

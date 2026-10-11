@@ -84,6 +84,7 @@ const refsBrake = require('./lib/refs-brake'); // #385
 const localAdopt = require('./lib/local-adopt'); // #393
 const ownerBranch = require('./lib/owner-branch'); // #394
 const humanDoor = require('./lib/ship-human-door'); // #525
+const instructionGate = require('./lib/instruction-gate'); // #588
 const {
   HOST, UserError, normIssueNum, issueTag, claimKey, today, nowISO, hoursSince, humanAge,
   parseArgs, table, shortRepo,
@@ -15795,6 +15796,59 @@ Empty output is clean ground ONLY when the fetch succeeded. Exit: 0 answered, 2 
 staleness (fetch skipped or failed, and the result would have been "clean").
 `;
 
+const HELP_INSTRUCTION_FILES = `colab instruction-files [--base <rev> | --staged] [--repo <path>] [--json]
+
+Is every tracked CLAUDE.md the thin-shell shape — the \`@AGENTS.md\` import plus tool-managed blocks,
+with the repo's prose in AGENTS.md (CONVENTIONS.md §9 step 5, #588)? One judgement
+(tools/lib/instruction-file.js), shared with the audit, the pre-commit hook and the reusable CI
+workflow \`.github/workflows/instruction-files.yml\`.
+
+  --base <rev>  RATCHET against merge-base(<rev>, HEAD). Fails only when a CLAUDE.md does not
+                conform at HEAD AND either a CLAUDE.md/AGENTS.md changed since the merge base, or
+                every CLAUDE.md conformed there. An unmigrated repo whose change leaves both files
+                alone passes. This is what CI runs.
+  --staged      judge the INDEX against HEAD, same ratchet (staging a CLAUDE.md/AGENTS.md is
+                touching it). This is what the pre-commit hook runs.
+  (neither)     judge every CLAUDE.md at HEAD, no ratchet: any non-conforming file fails.
+  --repo <path> repo to run in (default: cwd)
+  --json        { ok, error?, mode, base, fail, reason, files: [{ path, conforming, message }], changed }
+
+Exit: 0 pass · 1 fail · 2 cannot judge (not a repo, base not fetched — never read as a pass).
+The fix for a failure is always the same: move the prose to AGENTS.md (handbook-sync's graft step
+does the move), keeping CLAUDE.md to \`@AGENTS.md\`, blank lines and tool blocks.
+`;
+
+function cmdInstructionFiles(argv) {
+  const opts = parseArgs(argv, {
+    values: { '--repo': 'repo', '--base': 'base' },
+    flags: { '--json': 'json', '--staged': 'staged', '-h': 'help', '--help': 'help' },
+  });
+  if (opts.help) return print(HELP_INSTRUCTION_FILES);
+  if (opts.staged && opts.base) throw new UserError('--staged and --base are two different questions — pass one: `colab instruction-files --staged` (a commit) or `colab instruction-files --base <rev>` (a branch)');
+  // The tree you stand in, NOT resolveRepo's main checkout: from inside a linked worktree the hook
+  // and CI must judge that worktree's index and HEAD, never trunk's.
+  const at = opts.repo ? path.resolve(String(opts.repo)) : process.cwd();
+  const cwd = git.repoRoot(at);
+  if (!cwd) throw new UserError(`${at} is not inside a git repo — pass --repo <path>`);
+  const r = instructionGate.gate({ cwd, staged: !!opts.staged, base: opts.base ? String(opts.base) : null });
+  if (opts.json) {
+    print(JSON.stringify(r, null, 2));
+    return !r.ok ? 2 : r.fail ? 1 : 0;
+  }
+  const lines = instructionGate.describe(r);
+  if (!r.ok) {
+    process.stderr.write(`✗ instruction-files: ${lines[0]} — re-run once the base is fetched (\`git fetch origin\`), or run \`colab instruction-files\` with no --base to judge without the ratchet\n`);
+    return 2;
+  }
+  if (r.fail) {
+    process.stderr.write(`✗ instruction-files: CLAUDE.md carries repo prose — move it to AGENTS.md (\`colab instruction-files --help\`)\n`);
+    for (const l of lines) process.stderr.write(`  ${l}\n`);
+    return 1;
+  }
+  for (const l of lines) print(r.bad.length ? `! ${l}` : `✓ ${l}`);
+  return 0;
+}
+
 function cmdHolders(argv) {
   const opts = parseArgs(argv, {
     values: { '--repo': 'repo', '--base': 'base' },
@@ -16461,6 +16515,10 @@ Commands:
   holders <path> [--base B] [--json]   who else is holding <path> — refs that touched it and
                                         have not landed on the base (filters the raw git-log
                                         one-liner through \`landed\`'s content classification)
+  instruction-files [--base B | --staged] [--json]
+                                        CLAUDE.md is only @AGENTS.md + tool blocks? ratcheted:
+                                        fails only where the change touches it or would regress
+                                        a migrated repo (#588) — the hook and CI run this
   promote [--repo P] [--message M] [--dry]   trunk → main (--no-ff); gated by deploy + promotion; never tags
   deliver [--repo P] [--dry] [--json] [--reopen]   project.yml owner: only — open/refresh ONE PR
                                         trunk → the owner's branch; never merges it (#394)
@@ -16548,6 +16606,7 @@ function main(argv) {
     case 'trunk-ci': return cmdTrunkCi(rest);
     case 'ci-wait': return cmdCiWait(rest);
     case 'holders': return cmdHolders(rest);
+    case 'instruction-files': return cmdInstructionFiles(rest);
     case 'promote': return cmdPromote(rest);
     case 'deliver': return cmdDeliver(rest);
     case 'doctor': return cmdDoctor(rest);

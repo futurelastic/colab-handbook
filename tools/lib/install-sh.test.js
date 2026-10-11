@@ -43,6 +43,7 @@ const NOT_IN_NEXT = {
   blocked: 'per-issue dependency-edge write',
   'migration-grant': 'human-only per-branch gate, not a setup step',
   decision: 'per-issue ruling record',
+  'instruction-files': 'run by the pre-commit hook and the reusable CI workflow, not typed at setup (#588)',
   'ci-grant': 'human-only per-branch gate, not a setup step',
   port: 'allocated by `worktree new`; hand use is rare',
   ports: 'diagnostic listing',

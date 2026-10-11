@@ -1,0 +1,10 @@
+#!/bin/sh
+# Instruction-file shape (#588): a staged CLAUDE.md must be `@AGENTS.md` + tool blocks only.
+#
+# Execs the template rather than copying it, for the reason in ../pre-commit, and points it at
+# this checkout's own CLI so the judgement is the one on this branch, not whatever `colab` is
+# installed. An adopting repo copies templates/pre-commit-instruction-files to
+# <hooks>/pre-commit.d/30-instruction-files instead.
+set -eu
+root=$(git rev-parse --show-toplevel)
+COLAB_BIN="$root/tools/colab" exec "$root/templates/pre-commit-instruction-files"

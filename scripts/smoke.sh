@@ -17,7 +17,7 @@ node --check tools/colab
 for f in tools/lib/*.js tools/lib/codec/*.js audit/audit.mjs; do node --check "$f"; done
 for f in templates/*.mjs; do node --check "$f"; done
 sh -n install.sh
-for f in .githooks/install.sh templates/pre-commit-identity templates/pre-commit-dispatch \
+for f in .githooks/install.sh templates/pre-commit-identity templates/pre-commit-dispatch templates/pre-commit-instruction-files \
          .githooks/pre-commit .githooks/pre-commit.d/*; do sh -n "$f"; done
 node scripts/check-text-bytes.mjs
 node audit/audit.mjs --local . >/dev/null

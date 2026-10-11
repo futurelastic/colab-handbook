@@ -16,7 +16,7 @@ cd "$repo_root"
 chmod +x .githooks/* 2>/dev/null || true
 chmod +x .githooks/pre-commit.d/* 2>/dev/null || true
 # The dispatcher and the identity scan exec the templates directly (see .githooks/pre-commit).
-chmod +x templates/pre-commit-dispatch templates/pre-commit-identity 2>/dev/null || true
+chmod +x templates/pre-commit-dispatch templates/pre-commit-identity templates/pre-commit-instruction-files 2>/dev/null || true
 git config core.hooksPath .githooks
 
 echo "✅ core.hooksPath = .githooks"

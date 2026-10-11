@@ -282,6 +282,52 @@ function lineRanges(nums, text = null) {
   return parts.join(', ');
 }
 
+/**
+ * Is one CLAUDE.md the thin-shell shape (#588)? The single judgement every enforcement point uses —
+ * the audit, the pre-commit hook and the reusable CI workflow all reach it through
+ * `instruction-gate.js`, never a second copy.
+ *
+ * `{ conforming, residue, legacy, message }`. `agents` is the sibling AGENTS.md text, or null.
+ * Conforming: no residue (`shellResidue`), or CLAUDE.md byte-identical to its AGENTS.md (a
+ * symlinked or copied pair is one file — nothing to move). A missing AGENTS.md on its own is not a
+ * failure: a CLAUDE.md that is only tool blocks breaks no rule; the audit still advises on it.
+ * `message` (null when conforming) names the fix, because a refusal that does not is a dead end.
+ */
+function judgeClaudeMd(claude, agents = null, rel = ENTRY) {
+  if (claude === null || claude === undefined) return { conforming: true, residue: [], legacy: false, message: null };
+  if (agents !== null && agents !== undefined && agents === claude) return { conforming: true, residue: [], legacy: false, message: null };
+  const residue = shellResidue(claude);
+  if (!residue.length) return { conforming: true, residue, legacy: false, message: null };
+  const legacy = !isThinShell(claude);
+  const shape = legacy ? 'and it has no @AGENTS.md import (a legacy prose-only file)' : 'next to its @AGENTS.md import';
+  const sibling = path.posix.join(path.posix.dirname(rel), AUTHORED).replace(/^\.\//, '');
+  return {
+    conforming: false,
+    residue,
+    legacy,
+    message: `${rel} line${residue.length === 1 ? '' : 's'} ${lineRanges(residue, claude)} carry repo prose ${shape} — move them to ${sibling} ` +
+      `and keep ${rel} to the \`@AGENTS.md\` import, blank lines and tool blocks such as the Conventions block`,
+  };
+}
+
+/**
+ * The ratchet (#588), pure. `changed` = repo-relative paths that differ between the base and the
+ * head; `head` / `base` = `[{ path, conforming }]` for every CLAUDE.md at each side (`base` null
+ * when there is no base to compare against). Fails iff some head CLAUDE.md does not conform AND
+ *   (a) a CLAUDE.md or AGENTS.md changed — the branch touched the rule's files, so it owns them; or
+ *   (b) every CLAUDE.md conformed at the base — the repo had migrated, and this would regress it.
+ * An unmigrated repo whose branch leaves both files alone stays green, so adding the check never
+ * turns a trunk red on its own. `{ fail, reason, bad }`; `reason` is 'touched' | 'regressed' | null.
+ */
+const RULE_FILE_RE = /(^|\/)(CLAUDE|AGENTS)\.md$/;
+function ratchetVerdict({ changed = [], head = [], base = null }) {
+  const bad = head.filter((f) => !f.conforming);
+  if (!bad.length) return { fail: false, reason: null, bad };
+  if (changed.some((p) => RULE_FILE_RE.test(p))) return { fail: true, reason: 'touched', bad };
+  if (base && base.every((f) => f.conforming)) return { fail: true, reason: 'regressed', bad };
+  return { fail: false, reason: null, bad };
+}
+
 module.exports = {
   stripCode,
   IMPORT_MAX_DEPTH,
@@ -300,4 +346,7 @@ module.exports = {
   conventionsBlock,
   shellResidue,
   lineRanges,
+  judgeClaudeMd,
+  RULE_FILE_RE,
+  ratchetVerdict,
 };
