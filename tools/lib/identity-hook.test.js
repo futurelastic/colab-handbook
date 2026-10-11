@@ -322,10 +322,12 @@ test("the handbook's own hooks are wired to the templates it ships", () => {
   const hook = fs.readFileSync(path.join(REPO_ROOT, '.githooks', 'pre-commit'), 'utf8');
   assert.match(hook, /templates\/pre-commit-dispatch/, 'the handbook is not exempt from its own handbook');
   const hooklets = fs.readdirSync(path.join(REPO_ROOT, '.githooks', 'pre-commit.d')).sort();
-  assert.deepStrictEqual(hooklets, ['10-secrets', '20-identity'],
+  assert.deepStrictEqual(hooklets, ['10-secrets', '20-identity', '30-instruction-files'],
     'the secret scan kept its own hooklet — this mechanism sequences checks, it never replaces one');
   const identity = fs.readFileSync(path.join(REPO_ROOT, '.githooks', 'pre-commit.d', '20-identity'), 'utf8');
   assert.match(identity, /templates\/pre-commit-identity/);
+  const shape = fs.readFileSync(path.join(REPO_ROOT, '.githooks', 'pre-commit.d', '30-instruction-files'), 'utf8');
+  assert.match(shape, /templates\/pre-commit-instruction-files/); // #588
 });
 
 test('no vocabulary is committed to this repo — only the invented example', () => {

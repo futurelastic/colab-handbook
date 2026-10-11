@@ -33,6 +33,7 @@ Starting points you **copy into your own repo**. That is the entire model.
 | `adr-README.md` | `docs/adr/README.md` | Any repo starting a `docs/adr/` directory ([`code-wrap`](../skills/code-wrap/SKILL.md)'s A2 step) | Same issue-keyed naming rule as `gotchas-d-README.md`, applied to architecture decision records instead of gotchas — an existing sequentially-numbered `docs/adr/` is left as-is; only new decisions use `<issue>-<slug>.md`. Optional, same as above. |
 | `docs-lint.mjs` | anywhere in-repo (e.g. `tools/docs-lint.mjs`) | Every repo — checks the STRUCTURE of the doc graph (router integrity, orphans, drafts-in-`docs/`, router size budget, dated files, §-citation resolution, `gotchas.d/` registry discipline, two-surface linkage) | Zero-dependency, plain Node — but it does **shell out to `git check-ignore`** once per enumeration, so that a git-ignored scratch file (your `.plans/` plan file, say) can never fail a structural check on your repo (#310). No git, or no repo, and it filters nothing and lints exactly as before. **Enumerated by `colab template` and DOES take an automatic version stamp** (colab-handbook #252): `colab template docs-lint.mjs --dest tools/docs-lint.mjs` copies it stamped on its **second** line (`// colab-handbook: docs-lint @ <version>`, after the `#!/usr/bin/env node` shebang — a bare `#` on any other line is a JS syntax error, unlike the YAML templates above) — `--dest` is required, since this file has no formulaic destination the way a workflow does. Pairs with `docs-lint.yml`. Also runs from `code-wrap`'s docs step and a weekly fleet sweep (colab-handbook #249) — this row is the third of its three seats. |
 | `docs-lint.yml` | `.github/workflows/docs-lint.yml` | Every repo that copied `docs-lint.mjs` | Advisory job — `continue-on-error: true` on the lint step, so a finding never blocks a merge until a repo deliberately removes that line. Requires `docs-lint.mjs` to already be in the repo; does not vendor it. |
+| `instruction-files.yml` | `.github/workflows/instruction-files.yml` | Every repo with a `CLAUDE.md` (#588) | **A caller, not a copy:** its one job `uses:` the handbook's reusable `.github/workflows/instruction-files.yml`, so the judgement is maintained once and works from any org. Fails when a `CLAUDE.md` carries repo prose instead of `@AGENTS.md` + tool blocks — **ratcheted**: only when the change touches `CLAUDE.md`/`AGENTS.md`, or the repo had already migrated. An unmigrated repo stays green until it edits those files. Pin `@<tag>` plus `with: handbook-ref: <tag>` to freeze the checker. |
 | `branch-name.yml` | `.github/workflows/branch-name.yml` | Opt-in — any repo that wants §4's branch shape checked on every PR | One step, no dependencies: the PR's head branch against CONVENTIONS.md §4's regex, both shapes (`<type>/<slug>-<N>` and the `<login>/<machine>/` prefixed one) passing as shipped. Once the repo declares `branchPrefix: machine`, delete the `?` after the regex's first group to require the prefix. The head ref reaches the script through `env:`, never interpolated — on a public repo it is attacker-chosen. |
 
 ### The `dedupe` job — why a claimed branch's first run skips the suite (#418)
@@ -110,7 +111,7 @@ match their source stem (`pre-push-guard` → `<hooks>/pre-push`) — so `colab 
 does not carry them, and they take **no version stamp**. The original reason a stamp
 was impossible here — prepending a comment line above a `#!` shebang breaks it — is
 fixed for `docs-lint.mjs` above (a second-line stamp, colab-handbook #252), but that fix
-still needs a destination formula before it can apply to these too, and these three
+still needs a destination formula before it can apply to these too, and these
 files don't have one. Copy them with `cp`, `chmod +x`, and own them exactly as you own
 a workflow.
 
@@ -119,6 +120,7 @@ a workflow.
 | `pre-push-guard` | `<hooks>/pre-push` | Every repo with a protected trunk | Refuses a raw push to trunk, a declared integration line, or `main` on a repo that promotes, and the release channels `next` / `stable`, which only `colab release cut` / `finalize` move (#445). Reads `project.yml`; missing descriptor → allows, with a warning. |
 | `pre-commit-dispatch` | `<hooks>/pre-commit` | Any repo that needs **more than one** pre-commit check | Runs every hooklet in `pre-commit.d/`, fails if any failed, and **refuses when there is nothing to run**. Read its header before installing — it replaces a hook you already have, and step 2 of its instructions is where your existing check survives. |
 | `pre-commit-identity` | `<hooks>/pre-commit.d/20-identity` | Any repo that could publish an identity — every public one, and any private one that may ever be opened | Scans staged content against a vocabulary the operator supplies **by path**. Also installs as `commit-msg`. |
+| `pre-commit-instruction-files` | `<hooks>/pre-commit.d/30-instruction-files` | Every repo with a `CLAUDE.md` (#588) | Runs `colab instruction-files --staged` only when a `CLAUDE.md`/`AGENTS.md` is staged — otherwise one `git diff --cached` and out. Same judgement and ratchet as the CI caller above. No `colab` on the machine → warns and passes; CI still judges the push. |
 | `identity-vocabulary.example` | *outside every repo* — e.g. `~/.colab/identity-vocabulary` | The above | Invented entries. **A real one is never committed anywhere**, which is the whole reason the scanner takes a path instead of shipping a list. |
 
 `<hooks>` is `git config core.hooksPath` if you set one, else `.git/hooks`. The
@@ -195,6 +197,7 @@ mkdir -p <hooks>/pre-commit.d
 git mv <hooks>/pre-commit <hooks>/pre-commit.d/10-secrets   # your existing check, unchanged
 cp templates/pre-commit-dispatch <hooks>/pre-commit
 cp templates/pre-commit-identity <hooks>/pre-commit.d/20-identity
+cp templates/pre-commit-instruction-files <hooks>/pre-commit.d/30-instruction-files
 chmod +x <hooks>/pre-commit <hooks>/pre-commit.d/*
 cp templates/identity-vocabulary.example ~/.colab/identity-vocabulary   # then EDIT it, outside any repo
 ```

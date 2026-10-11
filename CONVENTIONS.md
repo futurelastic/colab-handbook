@@ -4873,19 +4873,19 @@ only. Resolution order: `--config` flag > `~/.colab/repos.txt` > bundled example
      by filename.
    - **No block lives in both files.** A framework generator that supports targets is
      configured to write `AGENTS.md` **only** (Laravel Boost: its agent/target config).
-   - A repo with only a `CLAUDE.md` is still conforming — the shell is the shape for new
-     repos and the target for migrations, not a reason to fail an existing one.
+   - **Enforced, ratcheted (#588):** prose in `CLAUDE.md` fails at commit and in CI where the
+     change touches `CLAUDE.md`/`AGENTS.md` or the repo had migrated — unmigrated and untouched
+     stays green. Fix: move it to `AGENTS.md`. Add [`templates/instruction-files.yml`](templates/instruction-files.yml)
+     (calls the reusable workflow) and the hooklet `templates/pre-commit-instruction-files`.
    - **A fork of an upstream you don't own does not take this shape**. Its step 5 is the
-     append-only block in [*A fork of an
-     upstream*](#a-fork-of-an-upstream--a-repo-you-own-that-tracks-one-you-dont-449),
-     below.
+     append-only block in [*A fork of an upstream*](#a-fork-of-an-upstream--a-repo-you-own-that-tracks-one-you-dont-449), below.
 
    The audit holds this shape: its size advisory measures `CLAUDE.md` **plus every in-repo
    file it `@`-imports**, so a bloated `AGENTS.md` behind a tiny shell is still caught; it
    warns when a tool block appears in both files, when the Conventions block sits
    anywhere but `CLAUDE.md`, when `CLAUDE.md` carries repo prose (`prose-in-claude-md`, with
-   the line ranges) and when there is no `AGENTS.md` (`no-agents-md`) — #419. All warnings,
-   never failures; `handbook-sync` carries the move as a graft step.
+   the line ranges) and when there is no `AGENTS.md` (`no-agents-md`) — #419. Warnings, except
+   `prose-in-claude-md` where the ratchet trips (#588); `handbook-sync` grafts the move.
 6. **Make sure CI meets [§7](#7-ci-and-toolchain)'s outcome** — copy a template via `colab
    template <name>`, which stamps for reconciliation. **On `exposure: released`, this step
    also wires the release rung ([§6](#6-releases)) — at adoption, not later** (#492): the

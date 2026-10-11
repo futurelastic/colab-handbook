@@ -221,6 +221,17 @@ jobs:
       - name: actionlint templates/*.yml + this repo's own workflow
         run: actionlint -shellcheck= -pyflakes= templates/*.yml .github/workflows/*.yml
 
+  # #588: this repo calls its own reusable instruction-files workflow, at THIS sha, so every push
+  # exercises the file adopters call — the same caller as templates/instruction-files.yml, plus
+  # the pin that makes it judge with the branch's checker instead of main's.
+  instruction-files:
+    name: Instruction files
+    needs: dedupe
+    if: ${{ !cancelled() && needs.dedupe.outputs.tested != 'true' }}
+    uses: ./.github/workflows/instruction-files.yml
+    with:
+      handbook-ref: ${{ github.sha }}
+
   self-check:
     name: Self-audit + syntax
     needs: dedupe
@@ -249,7 +260,7 @@ jobs:
           # typo (an apostrophe in an awk comment) made the scanner unrunnable while looking
           # perfectly ordinary. Their BEHAVIOUR is covered by tools/lib/identity-hook.test.js;
           # this line is the cheap first gate, not the coverage.
-          for f in .githooks/install.sh templates/pre-commit-identity templates/pre-commit-dispatch \
+          for f in .githooks/install.sh templates/pre-commit-identity templates/pre-commit-dispatch templates/pre-commit-instruction-files \
                    .githooks/pre-commit .githooks/pre-commit.d/*; do sh -n "$f"; done
       # A syntax check reads bytes; it does not read like a human. Two raw NULs once made the CLI
       # read as "binary data" to file(1) and invisible to grep without -a, while node --check, the

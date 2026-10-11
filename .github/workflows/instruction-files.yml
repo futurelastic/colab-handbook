@@ -1,0 +1,67 @@
+# Instruction files — REUSABLE workflow (#588). Callable from any repo, any org, while this repo
+# is public. Copy the caller in templates/instruction-files.yml (≤10 lines); nothing here is
+# copied, which is the point: one judgement, maintained once.
+#
+# THE RULE (CONVENTIONS.md §9 step 5): repo prose lives in AGENTS.md; every CLAUDE.md is only
+# the `@AGENTS.md` import plus tool-managed blocks (the Conventions block with its stamp, paired
+# BEGIN/END or <name>:start/end blocks). The judgement is `colab instruction-files`
+# (tools/lib/instruction-gate.js over tools/lib/instruction-file.js) — the same code the audit and
+# the pre-commit hook run.
+#
+# THE RATCHET, so the caller can be added before a repo is migrated. Fails only when a CLAUDE.md
+# does not conform at the head AND either
+#   - a CLAUDE.md or AGENTS.md changed since the merge base (the change owns those files), or
+#   - every CLAUDE.md conformed at the merge base (this would regress a migrated repo).
+# An unmigrated repo whose change leaves both files alone stays green — adding the caller never
+# turns trunk red on its own.
+#
+# THE BASE: a pull request → its base sha. A push to trunk (`trunk:` in .github/project.yml, else
+# the default branch) → the sha before the push. Any other push → origin/<trunk>.
+name: instruction-files
+
+on:
+  workflow_call:
+    inputs:
+      handbook-ref:
+        description: Ref of the handbook whose checker runs (default main). Pin a tag to freeze it.
+        type: string
+        required: false
+        default: main
+
+permissions:
+  contents: read
+
+jobs:
+  instruction-files:
+    name: CLAUDE.md is @AGENTS.md + tool blocks
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          fetch-depth: 0          # the merge base must be reachable; a shallow clone cannot answer
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          repository: futurelastic/colab-handbook
+          ref: ${{ inputs.handbook-ref }}
+          path: .colab-handbook-checker
+          persist-credentials: false
+      - name: Judge every CLAUDE.md (ratcheted)
+        env:
+          EVENT: ${{ github.event_name }}
+          REF: ${{ github.ref }}
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          BEFORE: ${{ github.event.before }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          trunk=$(sed -n 's/^trunk:[[:space:]]*\([^[:space:]#]*\).*/\1/p' .github/project.yml 2>/dev/null | head -1)
+          trunk=${trunk:-$DEFAULT_BRANCH}
+          base="origin/$trunk"
+          if [ -n "$PR_BASE" ]; then
+            base="$PR_BASE"
+          elif [ "$EVENT" = push ] && [ "$REF" = "refs/heads/$trunk" ] && [ -n "$BEFORE" ] \
+               && [ "$BEFORE" != 0000000000000000000000000000000000000000 ] && git cat-file -e "$BEFORE^{commit}" 2>/dev/null; then
+            base="$BEFORE"
+          fi
+          echo "ratchet base: $base"
+          node .colab-handbook-checker/tools/colab instruction-files --base "$base"

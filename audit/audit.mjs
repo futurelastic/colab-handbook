@@ -39,6 +39,8 @@
 //                                        # private identity vocabulary — see "Identity" below
 //   node audit.mjs --batch-history       # also read each local repo's batch landing history
 //                                        # (colab batch-stats --json) — see "Batch history" below
+//   node audit.mjs --base <rev>          # the instruction-file ratchet's base for LOCAL repos
+//                                        # (default origin/<trunk>) — see checkInstructionFileShape
 //
 // Identity (--identity): metadata never passes through git, so the pre-commit identity scan
 // (templates/pre-commit-identity) structurally cannot see it, and it is the first thing a
@@ -132,6 +134,7 @@ const gateLib = require("../tools/lib/gate.js");
 // #417: CLAUDE.md as a thin shell over AGENTS.md — the @-import resolver and the tool-block table,
 // shared with `colab adopt` so the shell it writes and the shape the audit checks are one shape.
 const instructionFile = require("../tools/lib/instruction-file.js");
+const instructionGate = require("../tools/lib/instruction-gate.js"); // #588
 // #228's identity vocabulary — resolution, parsing, matching and REDACTION. Shared with the
 // conformance test that holds it and the shell hook (templates/pre-commit-identity) to the
 // same semantics; the shell scanner cannot require it (a template lands in repos with no
@@ -159,6 +162,11 @@ function parseArgs(argv) {
     else if (a === "--quiet" || a === "-q") opts.quiet = true;
     else if (a === "--identity") opts.identity = true;
     else if (a === "--batch-history") opts.batchHistory = true;
+    else if (a === "--base") {
+      const p = argv[++i];
+      if (!p) die("--base needs a rev");
+      opts.base = p;
+    }
     else if (a === "--local") {
       const p = argv[++i];
       if (!p) die("--local needs a path");
@@ -653,6 +661,7 @@ function makeSource(target) {
     return {
       label: target.label,
       kind: "local",
+      root,
       exists: existsSync(root),
       readFile: (p) => {
         const f = join(root, p);
@@ -1775,7 +1784,8 @@ function auditRepo(target, ctx) {
   // block to place, and its AGENTS.md says it "follows the colab-handbook" (#587).
   checkInstructionFileBlocks(src, warn, { self: isSelf });
   // #419: and prose left in CLAUDE.md / no AGENTS.md at all — same posture, same reason.
-  checkInstructionFileShape(src, warn);
+  // #588: and the same finding FAILS where the instruction-file ratchet trips (local repos only).
+  checkInstructionFileShape(src, warn, fail, { base: ctx.base, trunk: cfg?.trunk ?? null });
 
   // ---- markdown anchor links resolve (#158) --------------------------------
   // Unconditional, same posture as checkClaudeMdSize above: general markdown hygiene,
@@ -2674,10 +2684,33 @@ function checkInstructionFileBlocks(src, warn, { self = false } = {}) {
 //                        A repo with neither file is not this check's business (no instruction
 //                        file at all is an adoption gap, reported elsewhere).
 //
-// WARN, never FAIL: existing repos migrate over time (handbook-sync's graft step moves the prose).
-// Byte-identical CLAUDE.md and AGENTS.md (a symlinked or copied pair) are one file here, as in
-// checkInstructionFileBlocks: there is nothing to move, and the prose is loaded once.
-function checkInstructionFileShape(src, warn) {
+// WARN, and FAIL only under the ratchet (#588): existing repos migrate over time (handbook-sync's
+// graft step moves the prose), so the finding fails only where `colab instruction-files` would —
+// a LOCAL repo inside git, judged against merge-base(<base>, HEAD) with <base> = `--base`, else
+// origin/<trunk>: some CLAUDE.md non-conforming in the working tree AND either a CLAUDE.md/AGENTS.md
+// changed since the merge base, or every CLAUDE.md conformed there. Same code as the hook and the
+// reusable workflow (tools/lib/instruction-gate.js), so the three cannot disagree. A remote source,
+// or a local one with no base to compare against, keeps the warning: no ratchet, no failure.
+function instructionRatchet(src, opts) {
+  if (src.kind !== "local" || !src.root) return null;
+  const base = opts.base || (opts.trunk ? `origin/${opts.trunk}` : null);
+  if (!base) return null;
+  const r = instructionGate.gate({ cwd: src.root, base, head: "worktree" });
+  if (!r.ok) return opts.base ? { ok: false, error: r.error } : null; // an explicit base that cannot be read is said aloud
+  return r;
+}
+
+function checkInstructionFileShape(src, warn, fail = warn, opts = {}) {
+  const ratchet = instructionRatchet(src, opts);
+  if (ratchet && !ratchet.ok) warn(`instruction-file ratchet not evaluated: ${ratchet.error} (#588)`);
+  if (ratchet && ratchet.ok && ratchet.fail) {
+    const why = ratchet.reason === "touched"
+      ? "this change touches CLAUDE.md/AGENTS.md"
+      : "every CLAUDE.md conformed at the merge base, so this regresses the repo";
+    for (const f of ratchet.bad) {
+      fail(`prose-in-claude-md: ${f.message} (CONVENTIONS.md §9 step 5; ratchet: ${why}; \`colab instruction-files --base <rev>\` reproduces it) (#588)`);
+    }
+  }
   const claude = src.readFile("CLAUDE.md");
   if (claude === null || claude === undefined) return;
   const agents = src.readFile("AGENTS.md");
@@ -2689,6 +2722,7 @@ function checkInstructionFileShape(src, warn) {
   } else if (agents === claude) {
     return;
   }
+  if (ratchet && ratchet.ok && ratchet.fail) return; // already reported above, as a failure
   const residue = instructionFile.shellResidue(claude);
   if (!residue.length) return;
   const shape = instructionFile.isThinShell(claude)
@@ -3306,6 +3340,7 @@ function runAudit(opts) {
   const ctx = { handbook: handbookInfo(HANDBOOK_ROOT), templateNames: templateNames(HANDBOOK_ROOT) };
   ctx.identity = opts.identity ? loadIdentityVocabulary() : null;
   ctx.batchHistory = !!opts.batchHistory;
+  ctx.base = opts.base || null;
 
   const results = [];
   for (const t of targets) {
