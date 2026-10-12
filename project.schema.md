@@ -590,7 +590,7 @@ Why `migrations` exists, with the measurement: [ADR
 ### `migration-grant` — optional
 
 ```yaml
-migration-grant: human      # absent = human — today's behaviour
+migration-grant: human      # human-only whatever the owner sets; absent → owner value, else human
 migration-grant: reviewer   # a migration-reviewer grant may also be minted
 ```
 
@@ -602,6 +602,9 @@ reviewed migration content (a `migrations:` id in the record, #508), so a trunk 
 leaves the migration files byte-identical keeps it.
 The one reading is `tools/lib/migration-grant.js` `parseGrantPolicy`.
 
+- **[Hard — gate: colab ship refuses]** **Three levels, highest first (#596):** this key → the
+  owner-level value (`colab owner-policy`) → `human`. Declaring the key here always wins, so `human`
+  opts this repo out. `tools/lib/owner-policy.js` `resolveGrantPolicy` is the one precedence.
 - **It is a separate flat key, not nested under `migrations:`.**
 - **[Hard — gate: colab ship refuses]** **Only the trunk checkout's value counts.** `colab migration-grant` reads the checkout,
   never the branch, so a branch cannot raise its own policy.
@@ -614,7 +617,7 @@ The one reading is `tools/lib/migration-grant.js` `parseGrantPolicy`.
   CI job on the shipped head. See [CONVENTIONS.md §5, *Migration exemption*](CONVENTIONS.md#migration-exemption--a-narrow-door-through-no-new-migrations-opened-by-a-role-98-402).
   A repo with no such job can declare `reviewer`, but every reviewer grant there fails R and the
   audit warns. `ci-laravel.yml` carries the job; `ci-node.yml` carries it as an opt-in block (#494).
-- **The audit always reports the value.** It appears in `--json` as `migrationGrant`.
+- **The audit always reports the value** in `--json` as `migrationGrant` and `migrationGrantSource` (`repo`/`undeclared`).
 
 ### `ci-grant` — optional
 

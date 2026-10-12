@@ -2925,8 +2925,16 @@ properties hold it together:
   A record with no content id (minted before #508, or on a branch with no migration file)
   stays bound to its HEAD alone, and a new commit voids it as before. Older readers refuse the
   unknown key. A branch with a migration never gets one: no computable id is refused (#563).
-- **Opt-in per repo.** `migration-grant: reviewer` is read from the trunk checkout when a grant is minted. The default is `human`, and
-  `colab migration-grant` refuses to mint a reviewer grant anywhere else.
+- **Opt-in: per repo, or once per owner (#596).** The policy resolves, highest first: the repo's
+  own `migration-grant:` (the trunk checkout at mint, the target's tip at ship) → the owner-level
+  value, for every repo the GitHub owner runs → `human`. `colab migration-grant` refuses to mint a
+  reviewer grant unless the policy resolves to `reviewer`. A repo that writes `migration-grant: human`
+  opts out, and the refusal says so. **Setting the owner value is a human act, the same class as minting a grant.**
+  `COLAB_HUMAN=1 colab owner-policy set` refuses without it, and `config set` cannot reach it. The
+  value is a marker comment in `<owner>/.github`. It counts only if its author is the owner or an org member; where the
+  judged repo declares `trust-humans`, its author is a listed login too. An unreadable record reads as
+  unset. Every printed policy names its source: `repo`, `owner` (who, when) or `default`. Why not a file:
+  [ADR 539](docs/adr/539-migration-rationale.md#owner-level-reviewer-policy-596).
 - **Recorded only if the review passed.** The record must approve, pass the checklist,
   clear the escalation and pass the CI round-trip. A failing review is refused, not
   recorded. A *claimed* pass is checked too, before anything is written (#457): the CI
@@ -2942,8 +2950,8 @@ properties hold it together:
 
 **[Hard — gate: colab ship refuses without conditions P, M, HEAD, R]** **`colab ship` honours a reviewer grant only when four conditions hold together (#401):**
 
-- **P, policy.** `migration-grant: reviewer` in `project.yml` at the tip of the branch
-  being merged into. The branch's own copy never counts.
+- **P, policy.** The policy resolves to `reviewer` at the tip of the branch being merged
+  into (its key, else the owner level, #596). The branch's own copy never counts.
 - **M, record.** A live reviewer marker from a trusted author, bound to this branch,
   with a valid review record that passes.
 - **HEAD.** Ship reads the branch's head on the remote, and the local branch must agree

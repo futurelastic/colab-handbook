@@ -53,6 +53,7 @@ function audit(dir) {
   const r = JSON.parse(stdout).results[0];
   return {
     migrationGrant: r.migrationGrant,
+    migrationGrantSource: r.migrationGrantSource,
     trustHumans: r.trustHumans,
     fails: r.findings.filter((f) => f.level === 'fail').map((f) => f.text),
     warns: r.findings.filter((f) => f.level === 'warn').map((f) => f.text),
@@ -136,4 +137,10 @@ test('trust-humans: every malformed shape fails — the reader treats nobody as 
     assert.strictEqual(r.trustHumans, null, v);
     assert.ok(r.fails.some((t) => /^trust-humans .*nobody is human/.test(t)), `${v}: ${r.fails.join(' | ')}`);
   }
+});
+
+test('#596: the source is reported — repo when declared, undeclared otherwise (the owner level is not the audit\'s to read)', () => {
+  assert.strictEqual(audit(fixture(BASE)).migrationGrantSource, 'undeclared');
+  assert.strictEqual(audit(fixture(`${BASE}migration-grant: human\n`)).migrationGrantSource, 'repo');
+  assert.strictEqual(audit(fixture(`${BASE}migration-grant: reviewer\n`, { '.github/workflows/ci.yml': RT_JOB })).migrationGrantSource, 'repo');
 });
