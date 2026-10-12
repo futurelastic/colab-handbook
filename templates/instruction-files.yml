@@ -1,8 +1,13 @@
 # Copy to .github/workflows/instruction-files.yml — CLAUDE.md must be @AGENTS.md + tool blocks (#588).
 name: instruction-files
 on:
+  # Keep `push:` UNFILTERED (#599). The ratchet is meant to fail on the session branch that breaks
+  # it, before trunk; narrowed to `branches: [main]`, it first fails ON trunk, and the cure branch's
+  # push run cannot prove the job (#297). The audit reports a narrowed copy.
   push:
   pull_request:
+  # Lets `colab ship` prove a red job on a cure branch by dispatch (#510), with no human ci-grant.
+  workflow_dispatch:
 jobs:
   instruction-files:
     uses: futurelastic/colab-handbook/.github/workflows/instruction-files.yml@main

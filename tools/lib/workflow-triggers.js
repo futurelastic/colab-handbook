@@ -265,6 +265,62 @@ function prereleaseTagTriggers({ readFile, workflows, deploy }) {
   return out;
 }
 
+// ---- callers of the reusable instruction-files workflow (#599) ---------------
+// The ratchet (#588) is meant to fail on the SESSION BRANCH, before trunk. A caller narrowed to
+// `push: branches: [main]` (measured: 15 of 16 adopting copies) never runs there, so a branch that
+// trips it merges green and the failure first appears on trunk — where the cure rule (#297) then
+// cannot find the job on the cure branch's push run and, with no `workflow_dispatch` to fall back on
+// (#510), ships only through a human grant. A caller is recognised by what it RUNS — a job `uses:`
+// the reusable `.github/workflows/instruction-files.yml` — never by its file name. One branch per
+// session-branch type is probed (plus a machine-prefixed one, §4), so `branches: ['feat/**']` reads
+// as narrowed too; the trunk itself is probed as well, since a caller that skips trunk is narrowed
+// the other way.
+const INSTRUCTION_FILES_USES = /^\s*(?:-\s*)?uses:\s*["']?[^\s"'#]*\.github\/workflows\/instruction-files\.ya?ml(?:@[^\s"'#]*)?["']?\s*(?:#.*)?$/m;
+const SESSION_BRANCH_PROBES = ["feat/probe-1", "fix/probe-1", "docs/probe-1", "chore/probe-1", "refactor/probe-1",
+  "test/probe-1", "perf/probe-1", "design/probe-1", "ada/box-a/feat/probe-1"];
+
+/** Does this workflow call the reusable instruction-files workflow? (#599) */
+function isInstructionFilesCaller(text) {
+  return !!text && INSTRUCTION_FILES_USES.test(text);
+}
+
+/**
+ * Each caller of the reusable instruction-files workflow whose trigger cannot run it on a session
+ * branch, or which cannot be dispatched (#599). `readFile(relPath)` returns the text or null;
+ * `trunk` is project.yml's value (`main` when absent). Returns
+ * [{ workflow, narrowed:[branch…], dispatchable:boolean, text }] — only callers with a problem.
+ */
+function instructionFilesCallerFindings({ readFile, workflows, trunk }) {
+  const out = [];
+  for (const wf of workflows || []) {
+    const text = readFile(`.github/workflows/${wf}`);
+    if (!isInstructionFilesCaller(text)) continue;
+    const on = parseWorkflowOn(text);
+    const probes = [trunk || "main", ...SESSION_BRANCH_PROBES];
+    const narrowed = probes.filter((b) => !workflowFiresOnBranchPush(on, b));
+    const dispatchable = on.events.has("workflow_dispatch");
+    if (!narrowed.length && dispatchable) continue;
+    const why = [];
+    if (narrowed.length) {
+      why.push(!on.events.has("push")
+        ? "has no push trigger, so it never runs on a session branch"
+        : `its push trigger does not fire on ${narrowed.slice(0, 3).join(", ")}${narrowed.length > 3 ? ` (+${narrowed.length - 3} more)` : ""}` +
+          " — the ratchet then fails first on trunk instead of on the branch that broke it");
+    }
+    if (!dispatchable) {
+      why.push("it declares no workflow_dispatch, so a cure branch cannot prove the job by dispatch (#510) and a red trunk ships only through a human ci-grant");
+    }
+    out.push({
+      workflow: wf, narrowed, dispatchable,
+      text:
+        `.github/workflows/${wf} calls the reusable instruction-files workflow, but ${why.join("; and ")}. ` +
+        "Fix: use the template trigger — an unfiltered `push:`, `pull_request:` and `workflow_dispatch:` " +
+        "(templates/instruction-files.yml; handbook-sync grafts it) (#599)",
+    });
+  }
+  return out;
+}
+
 // --------------------------------------------------- workflow_dispatch inputs (#474)
 //
 // The names declared under `on: workflow_dispatch: inputs:`, in order. `[]` for a bare
@@ -318,4 +374,5 @@ module.exports = {
   workflowFiresOnBranchPush, workflowsFiringOnBranchPush,
   isDeployWorkflow, isReleaseTagTemplateCopy, prereleaseTagTriggers,
   workflowDispatchInputs, workflowNameOf,
+  SESSION_BRANCH_PROBES, isInstructionFilesCaller, instructionFilesCallerFindings,
 };

@@ -107,7 +107,7 @@ const ownerBranchLib = require("../tools/lib/owner-branch.js");
 const npmGuard = require("../tools/lib/npm-publish-guard.js");
 const installRoute = require("../tools/lib/install-route.js");
 const releaseRunner = require("../tools/lib/release-runner.js"); // #453
-const { parseWorkflowOn, workflowFiresOnTag, prereleaseTagTriggers, workflowsFiringOnBranchPush } = require("../tools/lib/workflow-triggers.js");
+const { parseWorkflowOn, workflowFiresOnTag, prereleaseTagTriggers, workflowsFiringOnBranchPush, instructionFilesCallerFindings } = require("../tools/lib/workflow-triggers.js");
 const shipBatch = require("../tools/lib/ship-batch.js");
 const ciProfile = require("../tools/lib/ci-profile.js"); // #559
 const thresholdsLib = require("../tools/lib/thresholds.js"); // #560
@@ -1792,6 +1792,9 @@ function auditRepo(target, ctx) {
   // #419: and prose left in CLAUDE.md / no AGENTS.md at all — same posture, same reason.
   // #588: and the same finding FAILS where the instruction-file ratchet trips (local repos only).
   checkInstructionFileShape(src, warn, fail, { base: ctx.base, trunk: cfg?.trunk ?? null });
+  // #599: a caller of the reusable instruction-files workflow narrowed off session branches, or not
+  // dispatchable, defeats the ratchet's point (fail on the branch) and the cure rule's way out.
+  checkInstructionFilesCaller(src, workflows, cfg?.trunk ?? null, warn);
 
   // ---- markdown anchor links resolve (#158) --------------------------------
   // Unconditional, same posture as checkClaudeMdSize above: general markdown hygiene,
@@ -2756,6 +2759,13 @@ function checkInstructionFileShape(src, warn, fail = warn, opts = {}) {
 // caller is `deploy: manual` (a human runs it) or `deploy: tag` deployed OUTSIDE CI (a GitOps
 // poller runs it). Both share the same invariant: the deploy runs off no in-repo workflow, so the
 // path to production must be WRITTEN DOWN or nobody but its author can ship it.
+// ---- the instruction-files caller's trigger (#599) ---------------------------
+// The logic lives in tools/lib/workflow-triggers.js beside the other trigger readers. WARN, never
+// fail: the caller is a copy the repo owns, and handbook-sync's trigger graft is the fix.
+function checkInstructionFilesCaller(src, workflows, trunk, warn) {
+  for (const f of instructionFilesCallerFindings({ readFile: (p) => src.readFile(p), workflows, trunk })) warn(f.text);
+}
+
 // ---- a deploy trigger that fires on a pre-release tag (#332) ---------------
 // The logic lives in tools/lib/workflow-triggers.js (#338) so `colab release cut` refuses on the
 // same finding; this maps its severity onto the audit's fail/warn.

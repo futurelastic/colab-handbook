@@ -170,8 +170,7 @@ If the upstream change conflicts with why you edited the file, that is a **findi
 say so on the Issue rather than silently choosing. Someone made both decisions for a
 reason and they now disagree.
 
-
-### The CI trigger blocks (#384, #512) — decide per copy before grafting
+### The CI trigger blocks (#384, #512, #599) — decide per copy before grafting
 
 Full text, with the runner table and the per-copy decision rows:
 [4-trigger-blocks.md](4-trigger-blocks.md).
@@ -184,6 +183,7 @@ Full text, with the runner table and the per-copy decision rows:
   `RUN_TESTS`) first; never replace the trigger with an `if:` skip or `paths-ignore`.
 - A `cancel-in-progress` that is unconditionally `true`, or a trunk missing from the cancel list, is
   a **finding**: trunk runs get cancelled.
+- **instruction-files caller (#599):** where the audit flags it, graft the template's `on:` — no runner decision.
 
 ## 5. `unstamped` — establish lineage before touching anything
 
