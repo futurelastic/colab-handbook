@@ -1753,6 +1753,32 @@ the *one* precondition it targets, never reads as blanket authority. On a fully-
 at all; a partially-granted branch still reads ✗ `human-gated`, naming which issue is missing a
 grant. See `colab migration-grant --help` for the full command reference.
 
+#### Owner-level reviewer policy (#596)
+
+Whether a bound reviewer may grant migrations is usually one decision made by whoever runs the
+repos, not a separate one per repo. `colab owner-policy` records it once, for every repo the
+GitHub owner runs:
+
+```sh
+COLAB_HUMAN=1 colab owner-policy set migration-grant reviewer   # human-only, like minting a grant
+colab owner-policy show [--json]     # the owner value, who set it and when, what THIS repo resolves to
+COLAB_HUMAN=1 colab owner-policy set migration-grant unset      # withdraw it
+```
+
+- **Precedence:** a repo's own `migration-grant:` beats the owner value, which beats the default
+  `human`. `migration-grant: human` in a repo opts it out, and the mint refusal says so.
+- **Where it lives:** marker comments on the open `colab-owner-policy` issue in `<owner>/.github`.
+  The first `set` creates the issue and the label. colab never creates the `.github` repo itself.
+- **How a reader tells a human set it:** the write is refused without `COLAB_HUMAN=1`. When
+  reading, only the latest marker counts, and only if its author is the owner or an org member
+  (`COLLABORATOR` is not enough) and, where the judged repo declares `trust-humans`, a listed
+  login. Any other marker is ignored, and `show` lists it. An unreadable record reads as unset,
+  so it fails closed to `human`.
+- **Where it is read:** by `colab migration-grant --role migration-reviewer` (mint) and by `colab
+  ship` on its migration path. Both read it only when the repo's key is absent or `human`, so the
+  ordinary no-migration ship makes no extra call. `--list --json` and ship's `--dry --json` name
+  the source: `repo`, `owner` or `default`.
+
 #### CI grants (#105) — the one-shot door through a genuinely red trunk
 
 A red trunk usually means "don't merge" — but when the candidate branch's entire content IS the

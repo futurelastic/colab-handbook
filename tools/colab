@@ -43,6 +43,7 @@ const decisionRecord = require('./lib/decision-record');
 const blockedBy = require('./lib/blocked-by');
 const ciGrant = require('./lib/ci-grant');
 const trustHumans = require('./lib/trust-humans');
+const ownerPolicy = require('./lib/owner-policy');
 const ciCure = require('./lib/ci-cure');
 const ciVerdict = require('./lib/ci-verdict');
 const baseCiVerdict = require('./lib/base-ci-verdict');
@@ -3810,7 +3811,8 @@ It is minted only when ALL of these hold, checked before any network call:
   - the record is well-formed AND passing (approve · checklist pass · escalation clear · CI pass) —
     a grant carrying a failing review is a contradiction, so it is refused, not recorded;
   - the branch is pushed, and --head (if given) equals origin's tip — the grant binds that tip;
-  - this checkout's project.yml declares \`migration-grant: reviewer\` (#398; absent = human);
+  - the policy resolves to \`reviewer\` (#596): this checkout's project.yml \`migration-grant:\` when
+    declared (#398), else the owner-level value (\`colab owner-policy\`), else human;
   - checklist-items, when given, is <passed>/${migrationGrant.REVIEW_CHECKLIST_ITEMS} and, with checklist pass, every item
     passed (#457) — the record counts against the checklist the migration-review skill walks today.
 Then, read from CI after the tracker read and before anything is written (#457):
@@ -3818,8 +3820,8 @@ Then, read from CI after the tracker read and before anything is written (#457):
     passed there (the rule ship applies), and --ci-run, when given, is one of the runs at that
     head and carries the job. A repo whose CI has no such job cannot mint a reviewer grant at all.
 COLAB_HUMAN=1 is still required for every role. The reviewer identity is DECLARED, not attested.
-\`colab ship\` honours a reviewer grant only when ALL of (#401): P the target's project.yml says
-\`migration-grant: reviewer\` · M this record is live, trusted and passing · HEAD its head is the
+\`colab ship\` honours a reviewer grant only when ALL of (#401): P the policy at the target resolves to
+reviewer (its project.yml key, else the owner-level value, else human — #596) · M this record is live, trusted and passing · HEAD its head is the
 branch's exact remote head, or its \`migrations\` id equals the id at that head · R the live
 "${migrationGrant.ROUNDTRIP_JOB_PREFIX}" CI job passed on the SHIPPED head (re-read by ship, never
 taken from the record). Any condition failing → a human runs Phase B.
@@ -3924,11 +3926,21 @@ function migrationGrantReviewRecord(repoAbs, opts) {
 
   // Policy first: under the default (human) a reviewer grant would do nothing and mislead. Read from
   // THIS checkout (trunk at rest), never the branch — a branch must not raise its own grant policy.
-  const pol = migrationGrant.parseGrantPolicy(projectDoc(repoAbs));
+  // #596: three levels — this checkout's key > the owner-level value > human. The owner record is
+  // read only when the repo key is absent or `human` (the opt-out case needs it to say so).
+  const mintDoc = projectDoc(repoAbs);
+  const pol = migrationGrantPolicyFor(repoAbs, mintDoc, trustHumans.parseTrustHumans(mintDoc));
   if (!pol.valid) throw new UserError(`${pol.reason} — fix project.yml before minting a reviewer grant`);
   if (pol.policy !== 'reviewer') {
+    if (pol.optedOut) {
+      throw new UserError(`${pol.reason} — no reviewer grant is minted here. A human grant still works: \`COLAB_HUMAN=1 colab migration-grant <N> --branch <branch>\``);
+    }
+    if (pol.ownerNote) {
+      throw new UserError(`this repo's migration-grant policy is "${pol.policy}" (absent = human), and ${pol.ownerNote} — re-run once \`colab owner-policy show\` reads it`);
+    }
     throw new UserError(`this repo's migration-grant policy is "${pol.policy}"${pol.declared ? '' : ' (absent = human)'} — a reviewer grant is minted only where project.yml declares migration-grant: reviewer`);
   }
+  opts.policyResolved = pol;
 
   // HEAD binding: the grant covers exactly the commit on origin. An unpushed branch has no tip any
   // other machine can check against, so it is refused rather than bound to a local-only sha.
@@ -4059,6 +4071,7 @@ function cmdMigrationGrantCreate(repoAbs, num, opts) {
       print('  Bound to that HEAD: any new commit voids it. It expires the moment the issue closes.');
     }
     print(`  colab ship honours it only while the "${migrationGrant.ROUNDTRIP_JOB_PREFIX}" CI job has passed on that HEAD and the policy still says reviewer.`);
+    if (opts.policyResolved && opts.policyResolved.source === 'owner') print(`  Policy source: ${opts.policyResolved.reason}.`);
     print(`  Revoke any time: colab migration-grant ${num} --revoke`);
     return 0;
   }
@@ -4131,9 +4144,16 @@ function cmdMigrationGrantList(opts) {
     grants.push(row);
   }
 
+  // #596: the policy these grants are judged under, with its source (repo | owner | default).
+  const listDoc = projectDoc(repoAbs);
+  const pol = migrationGrantPolicyFor(repoAbs, listDoc, trustHumans.parseTrustHumans(listDoc));
+  const policy = { value: pol.policy, source: pol.source, optedOut: pol.optedOut,
+    ...(pol.source === 'owner' ? { owner: pol.owner, by: pol.ownerBy, at: pol.ownerAt } : {}) };
   if (opts.json) {
-    return print(JSON.stringify({ repo: shortRepo(repoAbs), label: labels.MIGRATION_GRANT_LABEL, grants, stale }, null, 2));
+    return print(JSON.stringify({ repo: shortRepo(repoAbs), label: labels.MIGRATION_GRANT_LABEL, policy, grants, stale }, null, 2));
   }
+  // Prose names the source only where the owner level is in play — otherwise byte-identical.
+  if (pol.source === 'owner' || pol.optedOut || pol.ownerNote) print(`migration-grant policy: ${pol.policy} (source: ${ownerPolicy.sourceLabel(pol)}) — ${pol.reason}`);
 
   if (grants.length === 0 && stale.length === 0) {
     print(`no outstanding migration grants in ${shortRepo(repoAbs)}`);
@@ -4147,6 +4167,162 @@ function cmdMigrationGrantList(opts) {
     print('');
     for (const n of stale) warn(`#${n} carries the ${labels.MIGRATION_GRANT_LABEL} label but has NO live grant comment — stale state, looks owned and joins to nothing. Revoke or re-grant.`);
   }
+  return 0;
+}
+
+// ---------------------------------------------------------------------------
+// owner-policy (#596) — an owner-level `migration-grant` value, set once by a human for every repo
+// the GitHub owner runs. Record + proof rules: tools/lib/owner-policy.js. This section is gh I/O.
+// Precedence everywhere: the repo's own key > the owner value > human.
+
+const HELP_OWNER_POLICY = `colab owner-policy [show] [--json] [--repo <path>]
+COLAB_HUMAN=1 colab owner-policy set migration-grant <human|reviewer|unset> [--repo <path>]
+
+The owner-level grant policy (#596): ONE value for every repo the GitHub owner runs, so a new repo
+does not silently start at \`human\` and the owner does not land one project.yml commit per repo.
+
+Precedence (read by \`colab migration-grant\` when minting and \`colab ship\` when gating):
+  1. the repo's own \`migration-grant:\` in project.yml — \`human\` there opts the repo out
+  2. the owner-level value set here
+  3. the default, \`human\`
+
+Where it lives: marker comments on the open \`${ownerPolicy.LABEL}\`-labelled issue in the owner's
+\`${ownerPolicy.RECORD_REPO}\` repo (<owner>/${ownerPolicy.RECORD_REPO}). The latest marker per key whose author
+is the owner or an org MEMBER — and, where the judged repo declares trust-humans, a listed login —
+wins. A marker from anyone else is ignored and shown here, never honoured.
+
+  show           print the owner value, who set it and when, and what THIS repo resolves to
+  set K V        post a new marker. Human-only: refused without COLAB_HUMAN=1, exit 1. Never
+                 reachable through \`colab config set\` — migration-grant stays an authority key there.
+                 \`unset\` withdraws the owner value. The ${ownerPolicy.RECORD_REPO} repo must exist —
+                 colab never creates a repo; the issue and label are created on the first set.
+
+Only \`migration-grant\` is an owner-level key today. Nothing else about a reviewer grant changes:
+review record, CI round-trip job, HEAD binding and revoke are exactly as before.
+`;
+
+/** The `<owner>/.github` REST paths, with gh's {owner} placeholder — resolved from the repo's remote. */
+function ownerRecordPath(rest) { return `repos/{owner}/${ownerPolicy.RECORD_REPO}/${rest}`; }
+
+function ghFirstLine(s) { return String(s || '').trim().split('\n')[0] || 'gh failed'; }
+
+/**
+ * Locate the owner record issue. Returns { read: 'ok', issue, owner } · { read: 'none', owner? }
+ * (no .github repo, or no labelled open issue — "nothing set", never an error) · { read: 'unread', why }.
+ */
+function ownerRecordIssue(repoAbs) {
+  const r = git.ghApi(repoAbs, [ownerRecordPath(`issues?labels=${ownerPolicy.LABEL}&state=open&per_page=100`)]);
+  if (!r.ok) {
+    if (/HTTP 404|Not Found/i.test(r.stderr || '')) return { read: 'none', owner: null, why: `no ${ownerPolicy.RECORD_REPO} repo for this owner` };
+    return { read: 'unread', why: ghFirstLine(r.stderr) };
+  }
+  let list;
+  try { list = JSON.parse(r.stdout); } catch (_) { return { read: 'unread', why: 'unparseable issue list' }; }
+  const issues = (Array.isArray(list) ? list : []).filter((i) => i && !i.pull_request).sort((a, b) => a.number - b.number);
+  if (issues.length === 0) return { read: 'none', owner: null, why: `no open ${ownerPolicy.LABEL} issue` };
+  const m = String(issues[0].repository_url || '').match(/\/repos\/([^/]+)\//);
+  return { read: 'ok', issue: issues[0].number, owner: m ? m[1] : null };
+}
+
+/**
+ * #596: the owner-level value for `key`, judged with the reading repo's `trust`. Returns the shape
+ * owner-policy.js resolveGrantPolicy takes: { read, owner, issue, set, value, by, at, ignored, why }.
+ */
+function ownerPolicyRead(repoAbs, trust, key = 'migration-grant') {
+  const loc = ownerRecordIssue(repoAbs);
+  if (loc.read !== 'ok') return { ...loc, set: false, value: null, ignored: [] };
+  const c = git.ghApi(repoAbs, ['--paginate', ownerRecordPath(`issues/${loc.issue}/comments?per_page=100`),
+    '--jq', '.[] | {user: {login: .user.login}, author_association, created_at, body}']);
+  if (!c.ok) return { read: 'unread', why: ghFirstLine(c.stderr), set: false, value: null, ignored: [] };
+  const comments = [];
+  for (const line of c.stdout.split('\n')) {
+    if (!line.trim()) continue;
+    try { comments.push(JSON.parse(line)); } catch (_) { return { read: 'unread', why: 'unparseable comment list', set: false, value: null, ignored: [] }; }
+  }
+  return { read: 'ok', owner: loc.owner, issue: loc.issue, ...ownerPolicy.ownerValue(comments, key, trust) };
+}
+
+/**
+ * #596: the migration-grant policy for a repo, three levels. `doc` is the project.yml that counts
+ * (the trunk checkout for a mint, the merge target for ship). The owner record is read only when the
+ * repo key is absent or a valid `human` — a declared reviewer needs no lookup.
+ */
+function migrationGrantPolicyFor(repoAbs, doc, trust) {
+  const repoPol = migrationGrant.parseGrantPolicy(doc);
+  const needOwner = !repoPol.declared || (repoPol.valid && repoPol.policy === 'human');
+  return ownerPolicy.resolveGrantPolicy(repoPol, needOwner ? ownerPolicyRead(repoAbs, trust) : null);
+}
+
+function cmdOwnerPolicy(argv) {
+  const opts = parseArgs(argv, {
+    values: { '--repo': 'repo' },
+    flags: { '--json': 'json', '-h': 'help', '--help': 'help' },
+  });
+  if (opts.help) return print(HELP_OWNER_POLICY);
+  const sub = opts._[0] || 'show';
+  if (sub === 'set') {
+    // HUMAN-ONLY, first — before resolveRepo or any gh call. Same bar as minting a grant.
+    if (process.env.COLAB_HUMAN !== '1') {
+      process.stderr.write('✗ Refusing: setting the owner-level grant policy requires a human.\n');
+      process.stderr.write('  Re-run with COLAB_HUMAN=1. (No field, flag or config value can lower this bar.)\n');
+      return 1;
+    }
+    const [, key, value] = opts._;
+    if (!ownerPolicy.KEYS.includes(key)) throw new UserError(`owner-policy set: key ${JSON.stringify(key)} — expected one of ${ownerPolicy.KEYS.join(' | ')}`);
+    if (!ownerPolicy.isValidValue(key, value)) throw new UserError(`owner-policy set ${key}: value ${JSON.stringify(value)} — expected one of ${[...ownerPolicy.VALUES[key], ownerPolicy.UNSET].join(' | ')}`);
+    const repoAbs = resolveRepoOrCwd(opts);
+    if (!repoAbs) throw new UserError('not inside a git repo — pass --repo <path>');
+    if (!isGhUsable(repoAbs)) throw new UserError(`gh not usable here (${ghUnusableWhy(repoAbs)}) — the owner policy lives on the tracker`);
+    return cmdOwnerPolicySet(repoAbs, key, value);
+  }
+  if (sub !== 'show') throw new UserError(`unknown owner-policy subcommand "${sub}" — expected one of show | set`);
+  const repoAbs = resolveRepoOrCwd(opts);
+  if (!repoAbs) throw new UserError('not inside a git repo — pass --repo <path>');
+  if (!isGhUsable(repoAbs)) throw new UserError(`gh not usable here (${ghUnusableWhy(repoAbs)}) — the owner policy lives on the tracker`);
+  const doc = projectDoc(repoAbs);
+  const trust = trustHumans.parseTrustHumans(doc);
+  const owner = ownerPolicyRead(repoAbs, trust);
+  const res = ownerPolicy.resolveGrantPolicy(migrationGrant.parseGrantPolicy(doc), owner);
+  const out = {
+    repo: shortRepo(repoAbs),
+    owner: { read: owner.read, owner: owner.owner || null, issue: owner.issue || null, why: owner.why || null,
+      'migration-grant': owner.set ? { value: owner.value, by: owner.by, at: owner.at } : null, ignored: owner.ignored || [] },
+    resolved: { 'migration-grant': { policy: res.policy, source: res.source, valid: res.valid, optedOut: res.optedOut, reason: res.reason } },
+  };
+  if (opts.json) return print(JSON.stringify(out, null, 2));
+  const where = owner.owner ? `${owner.owner}/${ownerPolicy.RECORD_REPO}#${owner.issue}` : `<owner>/${ownerPolicy.RECORD_REPO}`;
+  if (owner.read === 'unread') warn(`could not read the owner record (${owner.why}) — read as unset`);
+  print(`owner-level migration-grant: ${owner.set ? `${owner.value} — set by ${owner.by} at ${owner.at} (${where})` : `not set (${owner.why || where})`}`);
+  for (const i of owner.ignored || []) warn(`ignored marker ${i.value} by ${i.login || '(unknown)'} at ${i.at}: ${i.reason}`);
+  print(`${shortRepo(repoAbs)} resolves to: ${res.policy} (source: ${ownerPolicy.sourceLabel(res)}) — ${res.reason}`);
+  return 0;
+}
+
+function cmdOwnerPolicySet(repoAbs, key, value) {
+  let loc = ownerRecordIssue(repoAbs);
+  if (loc.read === 'unread') throw new UserError(`could not read the owner record (${loc.why}) — nothing was posted; re-run once \`colab owner-policy show\` reads it`);
+  if (loc.read === 'none') {
+    // Is the .github repo there at all? colab never creates a repo — that is the owner's call.
+    const repoR = git.ghApi(repoAbs, [`repos/{owner}/${ownerPolicy.RECORD_REPO}`, '--jq', '.full_name']);
+    if (!repoR.ok) {
+      throw new UserError(`the owner has no ${ownerPolicy.RECORD_REPO} repo (${ghFirstLine(repoR.stderr)}) — nothing was posted. colab never creates a repo: the owner must create <owner>/${ownerPolicy.RECORD_REPO} (GitHub's owner-wide defaults repo), then re-run`);
+    }
+    git.ghApi(repoAbs, ['-X', 'POST', `repos/{owner}/${ownerPolicy.RECORD_REPO}/labels`, '-f', `name=${ownerPolicy.LABEL}`,
+      '-f', 'color=5319E7', '-f', 'description=colab owner-level policy record (#596) — human-set markers only']);
+    const body = 'The owner-level colab policy record. Each value is a marker comment posted by `COLAB_HUMAN=1 colab owner-policy set`; ' +
+      'the latest one from the owner or an org member wins. Do not close this issue — closing it withdraws every owner value.';
+    const created = git.ghApi(repoAbs, ['-X', 'POST', `repos/{owner}/${ownerPolicy.RECORD_REPO}/issues`, '-f', `title=${ownerPolicy.ISSUE_TITLE}`,
+      '-f', `body=${body}`, '-f', `labels[]=${ownerPolicy.LABEL}`, '--jq', '.number']);
+    if (!created.ok) throw new UserError(`could not create the owner record issue (${ghFirstLine(created.stderr)}) — nothing was posted; check write access with \`gh auth status\`, then re-run`);
+    loc = { read: 'ok', issue: Number(created.stdout.trim()), owner: null };
+  }
+  const iso = nowISO();
+  const c = git.ghApi(repoAbs, ['-X', 'POST', ownerRecordPath(`issues/${loc.issue}/comments`),
+    '-f', `body=${ownerPolicy.markerBody(key, value, commentHost(repoAbs), iso)}`]);
+  if (!c.ok) throw new UserError(`could not post the owner policy marker (${ghFirstLine(c.stderr)}) — nothing changed; check write access with \`gh auth status\`, then re-run`);
+  print(`Recorded owner-level ${key}: ${value} on ${loc.owner ? `${loc.owner}/` : '<owner>/'}${ownerPolicy.RECORD_REPO}#${loc.issue} at ${iso}.`);
+  print(`  Repos that declare their own ${key}: are unaffected; \`${key}: human\` in a repo opts it out.`);
+  print('  Check what a repo resolves to: colab owner-policy show');
   return 0;
 }
 
@@ -10159,7 +10335,11 @@ function shipMigrationGate(repoAbs, gh, target, branch, issues) {
 /** P, HEAD and the R thunk for shipMigrationGate. The thunk memoises its one verdict on the ctx
  *  (`roundtripResult`) so the payload can report what R saw without a second read. */
 function shipMigrationCtx(repoAbs, gh, target, branch, migrations) {
-  const policy = migrationGrant.parseGrantPolicy(projectDocAt(repoAbs, target)).policy;
+  // #596: the target's key > the owner-level value > human. `trust` (the target's trust-humans)
+  // also judges who wrote the owner record.
+  const trust = trustAt(repoAbs, target);
+  const pres = migrationGrantPolicyFor(repoAbs, projectDocAt(repoAbs, target), trust);
+  const policy = pres.policy;
   const remote = git.remoteInfo(repoAbs).name || 'origin';
   const ls = git.git(['ls-remote', remote, `refs/heads/${branch}`], repoAbs);
   const remoteSha = ls.ok ? ((ls.stdout.split('\n')[0] || '').split('\t')[0].trim() || null) : null;
@@ -10169,10 +10349,12 @@ function shipMigrationCtx(repoAbs, gh, target, branch, migrations) {
   if (!remoteSha) headNote = `${branch} could not be read on ${remote} — CI cannot have run a HEAD nobody can see`;
   else if (localSha && localSha !== remoteSha) headNote = `local ${branch} is ${localSha.slice(0, 7)}, ${remote} is ${remoteSha.slice(0, 7)} — push or pull until they agree`;
   else headSha = remoteSha;
-  const trust = trustAt(repoAbs, target);
   // #508: what the branch's migration files ARE at the shipped head, for a content-bound grant.
   const contentId = headSha ? migrationContentAt(repoAbs, migrations, headSha) : null;
   const ctx = { policy, headSha, contentId, headNote, roundtripResult: null, trust,
+    policySource: pres.source, policyRes: pres,
+    // Only where the owner level is in play: the default/repo refusal text stays byte-identical.
+    policyReason: pres.source === 'owner' || pres.optedOut || pres.ownerNote ? pres.reason : null,
     labelActors: (n) => git.ghIssueLabelActors(repoAbs, n, labels.MIGRATION_GRANT_LABEL) };
   ctx.roundtrip = () => {
     const d = git.git(['diff', '--name-only', `${target}...${branch}`], repoAbs);
@@ -10205,6 +10387,10 @@ function migDetail(migrations, grants, target, branch, ctx) {
   const payload = {
     branch, files: [...migrations],
     policy: ctx ? ctx.policy : null,
+    // #596: where the policy came from — repo | owner | default — and, for owner, who set it when.
+    policySource: ctx ? ctx.policySource || null : null,
+    policyOwner: ctx && ctx.policyRes && ctx.policyRes.source === 'owner'
+      ? { owner: ctx.policyRes.owner, by: ctx.policyRes.ownerBy, at: ctx.policyRes.ownerAt } : null,
     headSha: ctx ? ctx.headSha : null,
     contentId: ctx ? ctx.contentId || null : null,
     // #407: the human list as read from the TARGET — null when undeclared (association class).
@@ -10218,7 +10404,9 @@ function migDetail(migrations, grants, target, branch, ctx) {
   if (grants.ok) {
     const by = grants.granted.map((g) => (g.role === 'reviewer' ? `#${g.issue} (reviewer ${g.reviewer} @ ${String(g.head).slice(0, 7)}${g.via === 'content' ? `, migration content ${String(g.migrations).slice(0, 12)} unchanged since` : ''}, CI round-trip passed)` : '#' + g.issue)).join(' ');
     const roles = [...new Set(grants.granted.map((g) => g.role || 'human'))].join('+');
-    return { text: `${migrations.length} present, exempted by a ${roles} grant on ${by} for branch "${branch}" — ${files}`, payload };
+    const src = ctx && ctx.policySource === 'owner' && grants.granted.some((g) => g.role === 'reviewer')
+      ? ` (policy: ${ownerPolicy.sourceLabel(ctx.policyRes)})` : '';
+    return { text: `${migrations.length} present, exempted by a ${roles} grant on ${by} for branch "${branch}"${src} — ${files}`, payload };
   }
   // Each missing entry already carries its own specific, actionable reason (evaluateShipSet) —
   // report those verbatim rather than just an issue tag, so an operator or a scheduled driver's
@@ -16479,6 +16667,8 @@ Commands:
   blocked <blocked> --by <blocker> [--clear --reason R [--force]] [--repo P]
                                         own the blocked_by dependency-edge write (#251)
   migration-grant <issue> --branch B | --revoke | --list [--json]    human-only ship migration exemption (#98)
+  owner-policy [show [--json]] | set migration-grant <human|reviewer|unset>   owner-level grant policy,
+                                        every repo the GitHub owner runs; set is human-only (#596)
   decision <issue> --record --ruled-by N | --reopen --ruled-by N | --list [--json]
                                         record/reopen a needs-decision answer (#121, #122)
   ci-grant <issue> --branch B | --revoke | --list [--json]           ship trunk-CI-green exemption: human, or ci-reviewer under opt-in (#105, #504)
@@ -16591,6 +16781,7 @@ function main(argv) {
     case 'readiness': return cmdReadiness(rest);
     case 'blocked': return cmdBlocked(rest);
     case 'migration-grant': return cmdMigrationGrant(rest);
+    case 'owner-policy': return cmdOwnerPolicy(rest);
     case 'decision': return cmdDecision(rest);
     case 'ci-grant': return cmdCiGrant(rest);
     case 'claims': return cmdClaims(rest);
