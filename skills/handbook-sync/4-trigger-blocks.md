@@ -70,3 +70,32 @@ Offer it as an upstream change, deciding per copy from what it actually has:
   every branch.
 - **Never replace the trigger with an `if:` that skips jobs on same-repo PRs, or with
   `paths-ignore`**; both leave runs that `colab ship` reads as not green.
+
+### The instruction-files caller's trigger (#599) — always graft the template's `on:`
+
+A caller of the reusable `instruction-files.yml` (a job whose `uses:` points at it — whatever the
+file is named) must run on **every** branch push and be **dispatchable**. The audit names a caller
+that is not, with the branches it misses: `… calls the reusable instruction-files workflow, but …
+(#599)`. The template's block, verbatim:
+
+```yaml
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+```
+
+Why both halves matter (measured: 15 of 16 adopting copies narrowed `push:` to `branches: [main]`):
+
+- **Narrowed `push:`** — the ratchet (#588) never runs on the session branch, so a branch that
+  trips it merges green and the failure first appears **on trunk**. The ratchet exists to fail on
+  the branch, before trunk.
+- **No `workflow_dispatch:`** — the cure branch's push run then cannot contain the red trunk job,
+  the cure rule (#297) refuses, and `colab ship` cannot fall back to dispatch evidence (#510): a red
+  trunk ships only through a human `ci-grant`.
+
+Unlike the `ci-*` blocks above, there is **no runner-capacity decision**: the job is one short git
+check with no test suite, so the #355 queueing argument does not apply, and the graft is always
+offered. Keep the copy's `with: runs-on:` (#594) and its pinned `@ref` as they are — only `on:`
+changes. A `pull_request` trigger is part of the template here (no dedupe job to make it a
+duplicate); a copy that dropped it is not a finding.

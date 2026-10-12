@@ -19,6 +19,10 @@ on:
   # takes it once the session dashboard's run reader, like colab's, never lets a newer skipped
   # run shadow one that ran.
   pull_request:
+  # Dispatchable (#599), as every adopter's instruction-files caller must be: a cure branch whose push
+  # run cannot show a red trunk job proves it by dispatch (#510) instead of a human ci-grant. `dedupe`
+  # is push-only, so a dispatch always runs the full suite.
+  workflow_dispatch:
 
 # One live run per ref: a new push cancels the superseded run on the same branch.
 # `main` is NEVER cancelled — every trunk sha keeps a completed run of its own, which
