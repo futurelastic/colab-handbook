@@ -4885,9 +4885,7 @@ only. Resolution order: `--config` flag > `~/.colab/repos.txt` > bundled example
    - **Enforced, ratcheted (#588):** prose in `CLAUDE.md` fails at commit and in CI where the
      change touches `CLAUDE.md`/`AGENTS.md` or the repo had migrated — unmigrated and untouched
      stays green. Fix: move it to `AGENTS.md`. Add [`templates/instruction-files.yml`](templates/instruction-files.yml)
-     (calls the reusable workflow) and the hooklet `templates/pre-commit-instruction-files`. Keep the
-     caller's `push:` unfiltered and its `workflow_dispatch:` (#599): narrowed to trunk, the ratchet first
-     fails on trunk, where a cure ships only through a human grant; the audit warns on such a caller.
+     (keep its unfiltered `push:` and `workflow_dispatch:`, #599) and the hooklet `templates/pre-commit-instruction-files`.
    - **A fork of an upstream you don't own does not take this shape**. Its step 5 is the
      append-only block in [*A fork of an upstream*](#a-fork-of-an-upstream--a-repo-you-own-that-tracks-one-you-dont-449), below.
 
