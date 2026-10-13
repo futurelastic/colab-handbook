@@ -1,0 +1,45 @@
+#!/usr/bin/env bash
+# A fake `aws` for hermetic tests of artifact-store.sh (#601): it serves the calls the script
+# makes — `s3 sync`, `s3 ls [--recursive]`, `s3 cp <file> s3://…` — from a directory,
+# $FAKE_S3_ROOT, holding <bucket>/<key>; cp's --content-type/--cache-control land beside it in
+# $FAKE_S3_ROOT.meta/<bucket>/<key>. Put this directory first on PATH. A test double only.
+set -euo pipefail
+root="${FAKE_S3_ROOT:?FAKE_S3_ROOT is not set}"
+if command -v cygpath >/dev/null 2>&1; then root="$(cygpath -u "$root")"; fi
+args=(); del=0; rec=0; ct=""; cc=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --endpoint-url) shift ;;
+    --only-show-errors|--no-progress) ;;
+    --delete) del=1 ;;
+    --recursive) rec=1 ;;
+    --content-type) shift; ct="$1" ;;
+    --cache-control) shift; cc="$1" ;;
+    *) args+=("$1") ;;
+  esac
+  shift
+done
+loc() { case "$1" in s3://*) printf '%s/%s' "$root" "${1#s3://}" ;; *) printf '%s' "$1" ;; esac; }
+[ "${args[0]:-}" = s3 ] || { echo "fake aws: unsupported: ${args[*]:-}" >&2; exit 252; }
+case "${args[1]:-}" in
+  sync)
+    src="$(loc "${args[2]}")"; dst="$(loc "${args[3]}")"
+    [ -d "$src" ] || exit 0
+    [ "$del" = 0 ] || rm -rf "$dst"
+    mkdir -p "$dst"; cp -R "$src/." "$dst/" ;;
+  ls)
+    d="$(loc "${args[2]}")"; d="${d%/}"
+    [ -d "$d" ] || exit 1
+    if [ "$rec" = 1 ]; then
+      out="$(cd "$d" && find . -type f | sed 's#^\./##')"
+      [ -n "$out" ] || exit 1
+      printf '%s\n' "$out" | sed 's#^#2026-01-01 00:00:00          1 #'
+    else
+      for e in "$d"/*; do [ -d "$e" ] && printf '                           PRE %s/\n' "$(basename "$e")"; done
+    fi ;;
+  cp)
+    src="$(loc "${args[2]}")"; dst="$(loc "${args[3]}")"; m="$root.meta/${args[3]#s3://}"
+    mkdir -p "$(dirname "$dst")" "$(dirname "$m")"; cp "$src" "$dst"
+    printf 'content-type=%s\ncache-control=%s\n' "$ct" "$cc" > "$m" ;;
+  *) echo "fake aws: unsupported: ${args[*]}" >&2; exit 252 ;;
+esac

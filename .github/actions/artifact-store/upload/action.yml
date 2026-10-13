@@ -1,0 +1,149 @@
+# colab-handbook artifact-store/upload (#601) — a drop-in for actions/upload-artifact that stores
+# through any S3-compatible bucket instead of the GitHub artifact allowance. Doc: docs/artifact-store.md.
+name: artifact-store upload
+description: Upload a file, a directory or a glob to an S3-compatible store — for later jobs of the same run, or (mode publish) as release files for users.
+inputs:
+  mode:
+    description: artifact (default) — files for later jobs of this run | publish — release files for users, at <app>/<version>/<file>.
+    default: artifact
+  name:
+    description: Artifact name. Later jobs download it by this name.
+    default: artifact
+  path:
+    description: File, directory or glob; one per line; a leading `!` excludes. Same dialect as actions/upload-artifact.
+    required: true
+  if-no-files-found:
+    description: warn | error | ignore — what to do when `path` matches nothing.
+    default: warn
+  retention-days:
+    description: 'Passed through on `backend: github`. On S3 expiry is the bucket''s lifecycle rule; a value here only logs a notice.'
+    default: ''
+  include-hidden-files:
+    description: Include files and directories whose name starts with a dot.
+    default: 'false'
+  backend:
+    description: s3 (default) | github — `github` falls through to actions/upload-artifact, so one call site can switch back.
+    default: s3
+  endpoint:
+    description: S3 endpoint URL (e.g. https://s3.example.com). Empty means the AWS default endpoint.
+    default: ''
+  bucket:
+    description: Bucket name.
+    default: ''
+  access-key:
+    description: Access key id — pass from a secret.
+    default: ''
+  secret-key:
+    description: Secret access key — pass from a secret.
+    default: ''
+  region:
+    description: Region; most self-hosted stores accept the default.
+    default: us-east-1
+  client:
+    description: auto | aws | mc — the S3 client already on the runner. auto tries the AWS CLI, then the MinIO client.
+    default: auto
+  addressing-style:
+    description: path | virtual | auto. Path-style (endpoint/bucket/key) works behind most proxies.
+    default: path
+  part-size:
+    description: Multipart threshold and part size for the AWS CLI. Keep it under any request-size limit in front of the store.
+    default: 64MB
+  key-prefix:
+    description: Optional prefix before every key — e.g. to share one bucket between uses.
+    default: ''
+  # --- mode: publish only ---
+  app:
+    description: (publish) The app's key segment — <app>/<version>/<file>.
+    default: ''
+  version:
+    description: (publish) The version's key segment. A version already holding files is refused unless overwrite is true.
+    default: ''
+  public-base:
+    description: (publish) Public URL the bucket is served under; outputs urls as <public-base>/<key>.
+    default: ''
+  content-type:
+    description: (publish) Content-Type for every file. Empty guesses from the extension.
+    default: ''
+  cache-control:
+    description: (publish) Cache-Control of the versioned files.
+    default: 'public, max-age=31536000, immutable'
+  latest:
+    description: (publish) Also write <app>/latest/<file> and <app>/latest.json.
+    default: 'true'
+  latest-cache-control:
+    description: (publish) Cache-Control of the latest/ copies and latest.json.
+    default: 'public, max-age=300'
+  overwrite:
+    description: (publish) Replace a version that already holds files.
+    default: 'false'
+outputs:
+  key:
+    description: The s3:// prefix the files were written under (empty when nothing matched, or on backend github).
+    value: ${{ steps.s3.outputs.key }}
+  file-count:
+    description: Number of files uploaded (s3 backend).
+    value: ${{ steps.s3.outputs.file-count }}
+  urls:
+    description: (publish) Public URLs of the versioned files, one per line.
+    value: ${{ steps.s3.outputs.urls }}
+  latest-urls:
+    description: (publish) Public URLs of the latest/ copies, one per line.
+    value: ${{ steps.s3.outputs.latest-urls }}
+  artifact-id:
+    description: The GitHub artifact id (backend github only).
+    value: ${{ steps.github.outputs.artifact-id }}
+runs:
+  using: composite
+  steps:
+    - name: Check backend
+      if: inputs.backend != 's3' && inputs.backend != 'github'
+      shell: bash
+      env:
+        AS_BACKEND: ${{ inputs.backend }}
+      run: echo "::error title=artifact-store::backend must be s3 or github (got '$AS_BACKEND')"; exit 1
+    - name: Check mode
+      if: (inputs.mode != 'artifact' && inputs.mode != 'publish') || (inputs.mode == 'publish' && inputs.backend == 'github')
+      shell: bash
+      env:
+        AS_MODE: ${{ inputs.mode }}
+      run: echo "::error title=artifact-store::mode must be artifact or publish, and publish needs backend s3 (got mode '$AS_MODE')"; exit 1
+    - id: github
+      if: inputs.backend == 'github' && inputs.mode == 'artifact'
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+      with:
+        name: ${{ inputs.name }}
+        path: ${{ inputs.path }}
+        if-no-files-found: ${{ inputs.if-no-files-found }}
+        retention-days: ${{ inputs.retention-days }}
+        include-hidden-files: ${{ inputs.include-hidden-files }}
+    - id: s3
+      if: inputs.backend == 's3' && (inputs.mode == 'artifact' || inputs.mode == 'publish')
+      shell: bash
+      env:
+        AS_NAME: ${{ inputs.name }}
+        AS_PATH: ${{ inputs.path }}
+        AS_IF_NO_FILES_FOUND: ${{ inputs.if-no-files-found }}
+        AS_RETENTION_DAYS: ${{ inputs.retention-days }}
+        AS_INCLUDE_HIDDEN_FILES: ${{ inputs.include-hidden-files }}
+        AS_ENDPOINT: ${{ inputs.endpoint }}
+        AS_BUCKET: ${{ inputs.bucket }}
+        AS_ACCESS_KEY: ${{ inputs.access-key }}
+        AS_SECRET_KEY: ${{ inputs.secret-key }}
+        AS_REGION: ${{ inputs.region }}
+        AS_CLIENT: ${{ inputs.client }}
+        AS_ADDRESSING_STYLE: ${{ inputs.addressing-style }}
+        AS_PART_SIZE: ${{ inputs.part-size }}
+        AS_KEY_PREFIX: ${{ inputs.key-prefix }}
+        AS_APP: ${{ inputs.app }}
+        AS_VERSION: ${{ inputs.version }}
+        AS_PUBLIC_BASE: ${{ inputs.public-base }}
+        AS_CONTENT_TYPE: ${{ inputs.content-type }}
+        AS_CACHE_CONTROL: ${{ inputs.cache-control }}
+        AS_LATEST: ${{ inputs.latest }}
+        AS_LATEST_CACHE_CONTROL: ${{ inputs.latest-cache-control }}
+        AS_OVERWRITE: ${{ inputs.overwrite }}
+        AS_MODE: ${{ inputs.mode }}
+      # On Windows this is Git for Windows' bash; the action path arrives as D:\..., hence cygpath.
+      run: |
+        d="$GITHUB_ACTION_PATH"; if command -v cygpath >/dev/null 2>&1; then d="$(cygpath -u "$d")"; fi
+        if [ "$AS_MODE" = publish ]; then bash "$d/../lib/artifact-store.sh" publish; else bash "$d/../lib/artifact-store.sh" upload; fi

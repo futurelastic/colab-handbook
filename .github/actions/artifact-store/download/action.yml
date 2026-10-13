@@ -1,0 +1,102 @@
+# colab-handbook artifact-store/download (#601) — the drop-in for actions/download-artifact that
+# reads what artifact-store/upload wrote. Doc: docs/artifact-store.md.
+name: artifact-store download
+description: Download artifacts that an earlier job of the same run uploaded to an S3-compatible store.
+inputs:
+  name:
+    description: Artifact to download. Empty downloads every artifact of the run (filtered by `pattern`).
+    default: ''
+  path:
+    description: Destination directory. Defaults to the workspace.
+    default: ''
+  pattern:
+    description: Glob over artifact names, used when `name` is empty.
+    default: ''
+  merge-multiple:
+    description: With several artifacts, extract them all into `path` instead of `path/<name>`.
+    default: 'false'
+  run-id:
+    description: Read another run's artifacts. Defaults to this run.
+    default: ''
+  backend:
+    description: s3 (default) | github — `github` falls through to actions/download-artifact.
+    default: s3
+  endpoint:
+    description: S3 endpoint URL. Empty means the AWS default endpoint.
+    default: ''
+  bucket:
+    description: Bucket name.
+    default: ''
+  access-key:
+    description: Access key id — pass from a secret.
+    default: ''
+  secret-key:
+    description: Secret access key — pass from a secret.
+    default: ''
+  region:
+    description: Region; most self-hosted stores accept the default.
+    default: us-east-1
+  client:
+    description: auto | aws | mc.
+    default: auto
+  addressing-style:
+    description: path | virtual | auto.
+    default: path
+  part-size:
+    description: Multipart part size for the AWS CLI.
+    default: 64MB
+  key-prefix:
+    description: Must match the prefix the upload used.
+    default: ''
+outputs:
+  download-path:
+    description: Where the files were written.
+    value: ${{ steps.s3.outputs.download-path || steps.github.outputs.download-path || steps.github-run.outputs.download-path }}
+runs:
+  using: composite
+  steps:
+    - name: Check backend
+      if: inputs.backend != 's3' && inputs.backend != 'github'
+      shell: bash
+      env:
+        AS_BACKEND: ${{ inputs.backend }}
+      run: echo "::error title=artifact-store::backend must be s3 or github (got '$AS_BACKEND')"; exit 1
+    - id: github
+      if: inputs.backend == 'github' && inputs.run-id == ''
+      uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+      with:
+        name: ${{ inputs.name }}
+        path: ${{ inputs.path }}
+        pattern: ${{ inputs.pattern }}
+        merge-multiple: ${{ inputs.merge-multiple }}
+    - id: github-run
+      if: inputs.backend == 'github' && inputs.run-id != ''
+      uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+      with:
+        name: ${{ inputs.name }}
+        path: ${{ inputs.path }}
+        pattern: ${{ inputs.pattern }}
+        merge-multiple: ${{ inputs.merge-multiple }}
+        run-id: ${{ inputs.run-id }}
+        github-token: ${{ github.token }}
+    - id: s3
+      if: inputs.backend == 's3'
+      shell: bash
+      env:
+        AS_NAME: ${{ inputs.name }}
+        AS_PATH: ${{ inputs.path }}
+        AS_PATTERN: ${{ inputs.pattern }}
+        AS_MERGE_MULTIPLE: ${{ inputs.merge-multiple }}
+        AS_RUN_ID: ${{ inputs.run-id }}
+        AS_ENDPOINT: ${{ inputs.endpoint }}
+        AS_BUCKET: ${{ inputs.bucket }}
+        AS_ACCESS_KEY: ${{ inputs.access-key }}
+        AS_SECRET_KEY: ${{ inputs.secret-key }}
+        AS_REGION: ${{ inputs.region }}
+        AS_CLIENT: ${{ inputs.client }}
+        AS_ADDRESSING_STYLE: ${{ inputs.addressing-style }}
+        AS_PART_SIZE: ${{ inputs.part-size }}
+        AS_KEY_PREFIX: ${{ inputs.key-prefix }}
+      run: |
+        d="$GITHUB_ACTION_PATH"; if command -v cygpath >/dev/null 2>&1; then d="$(cygpath -u "$d")"; fi
+        bash "$d/../lib/artifact-store.sh" download
