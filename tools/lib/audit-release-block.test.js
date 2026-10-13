@@ -217,7 +217,7 @@ test('#446: no health-url, or deploy: manual, fails', () => {
 
 test('#446: a release workflow that deploys nothing, an unedited deploy step, or no release workflow at all — each fails', () => {
   const noDeploy = TEMPLATE.slice(0, TEMPLATE.indexOf('\n  # ---------------------------------------------------------------------------------------------\n  # deploy (#446)'))
-    .replace(/deploy-tag: \$\{\{ steps\.cut\.outputs\.final \}\}/, '').replace(/echo "final=\$TAG"[^\n]*\n/, '').replace(/jq -r '\.final \/\/ false'/, 'jq -r \'.x\'');
+    .replace(/deploy-tag: \$\{\{ steps\.cut\.outputs\.final \}\}/, '').replace(/echo "final=\$TAG"[^\n]*\n/, '').replace(/jq -r '\.final[^']*'/, 'jq -r \'.x\'');
   const r1 = auditWithGh(fixture(FAST, fastFiles(noDeploy)), fakeGhIssue(7, RECORDED));
   assert.ok(hasText(r1.fails, /deploys nothing from its result — a tag pushed with GITHUB_TOKEN starts no `push: tags` run/), r1.fails.join(' | '));
   const r2 = auditWithGh(fixture(FAST, fastFiles(TEMPLATE)), fakeGhIssue(7, RECORDED));
@@ -245,7 +245,7 @@ test('#454: deploy-tag-fast deploying from release-auto.yml with no deploy-*.yml
 
 test('#454: a release workflow that does not deploy the final is no deploy path — the external-deploy runbook is still owed', () => {
   const noDeploy = TEMPLATE.slice(0, TEMPLATE.indexOf('\n  # ---------------------------------------------------------------------------------------------\n  # deploy (#446)'))
-    .replace(/deploy-tag: \$\{\{ steps\.cut\.outputs\.final \}\}/, '').replace(/echo "final=\$TAG"[^\n]*\n/, '').replace(/jq -r '\.final \/\/ false'/, 'jq -r \'.x\'');
+    .replace(/deploy-tag: \$\{\{ steps\.cut\.outputs\.final \}\}/, '').replace(/echo "final=\$TAG"[^\n]*\n/, '').replace(/jq -r '\.final[^']*'/, 'jq -r \'.x\'');
   const r = auditWithGh(fixture(FAST, { '.github/workflows/release-auto.yml': noDeploy }), fakeGhIssue(7, RECORDED));
   assert.ok(hasText(r.fails, /deploy: tag deployed outside CI \(an external GitOps poller\) requires runbook:/), r.fails.join(' | '));
 });
