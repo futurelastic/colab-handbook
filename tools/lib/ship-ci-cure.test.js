@@ -206,6 +206,18 @@ test('#297: shipCiCure reads job evidence on every cure past containment + 2a, a
   assert.match(fn, /manifestScriptsTouched: diff\.manifestScriptsTouched/, 'condition 5 is fed to the verdict');
 });
 
+test('#589: shipCiCure resolves containment and the diff through the ref ship lands, not the bare branch name', () => {
+  // Source-level for the banner's reason; the behaviour is proven against real git in cure-diff.test.js.
+  const src = fs.readFileSync(path.join(REPO_ROOT, 'tools', 'colab'), 'utf8');
+  const fn = src.slice(src.indexOf('function shipCiCure('), src.indexOf('function shipCureJobEvidence('));
+  assert.match(fn, /cureDiff\.cureContainment\(git, repoAbs, redSha, branch\)/);
+  assert.doesNotMatch(fn, /'--is-ancestor', redSha, branch\]/, 'the bare-name ancestry read is gone');
+  assert.match(fn, /cureDiff\.cureDiffSignals\(git, repoAbs, trunk, branchRef\)/);
+  assert.match(fn, /containmentReason: containment\.reason/);
+  // The CI read keeps the name — ghRunForSha resolves the remote head itself.
+  assert.match(fn, /git\.ghRunForSha\(repoAbs, branch\)/);
+});
+
 test('#297: shipCureJobEvidence reads EVERY run at the branch head and tags each job with its workflow', () => {
   const src = fs.readFileSync(path.join(REPO_ROOT, 'tools', 'colab'), 'utf8');
   const fn = src.slice(src.indexOf('function shipCureJobEvidence('), src.indexOf('function ciCurePayload('));

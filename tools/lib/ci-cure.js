@@ -820,6 +820,8 @@ function stackingWithProgress(stacking, priorRedJobs, jobEvidence) {
  * `containsRedSha` — bool, whether the branch's tree contains the red trunk sha as an ancestor
  * (the caller's `git merge-base --is-ancestor <redSha> <branch>`, translated to a bool — never
  * re-derived here, this module does not touch git).
+ * `null` (#589) means the caller could NOT measure it — the ref did not resolve, or git failed —
+ * and refuses with `containmentReason` ("could not resolve …"), never as "does not contain".
  *
  * `evidence` — `{ok, sha}` for a completed, successful CI run measured on the branch's CURRENT
  * head, or `null` when the caller's own read of it FAILED. Passing `evidence: null` means "the
@@ -886,7 +888,14 @@ function stackingWithProgress(stacking, priorRedJobs, jobEvidence) {
  */
 function cureVerdict({ containsRedSha, evidence, redSha, stacking, workflowsTouched, jobEvidence,
   manifestScriptsTouched, manifestPaths, manifestScriptsAddOnly, pythonManifestTouched, pythonManifestPaths,
-  pythonPinOnly, dryRunCapable, dispatchable, branchRuns, priorRedJobs }) {
+  pythonPinOnly, dryRunCapable, dispatchable, branchRuns, priorRedJobs, containmentReason }) {
+  // #589: `null` = containment could not be MEASURED (an unresolvable ref, a failed git read) — a
+  // different fact from "not an ancestor", whose remedy (rebase onto the red) would be wrong advice.
+  if (containsRedSha === null) {
+    return { ok: false,
+      reason: `${containmentReason || `could not resolve the branch or trunk's red head \`${redSha}\``} — ` +
+        'containment was not measured, so this cannot prove a cure (an unmeasured read is never a cure)' };
+  }
   if (!containsRedSha) {
     return { ok: false,
       reason: `branch does not contain trunk's current red head \`${redSha}\` as an ancestor — ` +

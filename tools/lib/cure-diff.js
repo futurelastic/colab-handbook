@@ -359,6 +359,32 @@ function sideText(git, repo, sha) {
 }
 
 /**
+ * The cure rule's containment read (#281 condition 1), against the ref `ship` actually lands (#589).
+ *
+ * A `--handoff` land usually has no local branch — only `<remote>/<branch>` — so asking git about
+ * the bare name failed, and that failure read as "not an ancestor": a real cure refused until a
+ * local ref was made by hand. The ref is resolved here exactly as `shipRefFor` does (local branch,
+ * else its remote-tracking ref), and the three outcomes are kept apart:
+ *   `{ref, contains: true}` · `{ref, contains: false}` (git exit 1 — genuinely not an ancestor) ·
+ *   `{ref, contains: null, reason}` — the branch or the red sha could not be resolved, or git failed.
+ * `null` refuses in `cureVerdict` with the "could not resolve" reason, never "does not contain".
+ * Never throws.
+ */
+function cureContainment(git, repo, redSha, branch, remote) {
+  const refs = git.branchRefs(repo, branch, ...(remote ? [remote] : []));
+  const ref = refs.localSha || refs.remoteSha;
+  if (!ref) {
+    return { ref: null, contains: null,
+      reason: `could not resolve ${branch} — no local branch and no remote-tracking ref (fetch it first)` };
+  }
+  const r = git.git(['merge-base', '--is-ancestor', redSha, ref], repo);
+  if (r.ok) return { ref, contains: true, reason: '' };
+  if (r.code === 1) return { ref, contains: false, reason: '' };
+  return { ref, contains: null,
+    reason: `could not resolve trunk's red head \`${redSha}\` against ${branch} (${ref.slice(0, 7)}): ${(r.stderr || '').split('\n')[0] || `git exit ${r.code}`}` };
+}
+
+/**
  * The diff signals for one branch against trunk, over the merge-base range (`trunk...branch` — the
  * same tree a squash lands). Returns `{ ok, reason, workflowsTouched, manifestScriptsTouched,
  * manifestPaths, manifestScriptsAddOnly, pythonManifestTouched, pythonManifestPaths, pythonPinOnly }`
@@ -452,5 +478,5 @@ function pythonSignal(git, repo, trunk, branch, entries) {
   return { touched: paths.length > 0, paths, reason: '' };
 }
 
-module.exports = { cureDiffSignals, scriptsBlockDiffers, scriptsAddition, pythonPinChange, parseRequirement,
+module.exports = { cureDiffSignals, cureContainment, scriptsBlockDiffers, scriptsAddition, pythonPinChange, parseRequirement,
   isPythonManifest, pythonIncludes, ABSENT };

@@ -83,6 +83,19 @@ test('cureVerdict: containment is checked BEFORE evidence — a branch missing b
   assert.match(v.reason, /does not contain/);
 });
 
+test('#589: containment UNMEASURED (null) → refuses "could not resolve", never "does not contain" or the rebase remedy', () => {
+  const v = cureVerdict(base({ containsRedSha: null, containmentReason: 'could not resolve fix/x-1 — no local branch and no remote-tracking ref (fetch it first)' }));
+  assert.equal(v.ok, false);
+  assert.match(v.reason, /^could not resolve fix\/x-1/);
+  assert.doesNotMatch(v.reason, /does not contain/);
+  assert.doesNotMatch(v.reason, /rebas/);
+  // No caller reason → a generic "could not resolve" naming the red sha, still not "does not contain".
+  const bare = cureVerdict(base({ containsRedSha: null }));
+  assert.match(bare.reason, /could not resolve/);
+  assert.match(bare.reason, new RegExp(RED_SHA));
+  assert.doesNotMatch(bare.reason, /does not contain/);
+});
+
 // --- condition 2: evidence -----------------------------------------------------------------
 
 test('cureVerdict: evidence read failed (null) → refuses, distinct reason from "no successful run"', () => {
