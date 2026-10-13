@@ -45,7 +45,7 @@ const NOT_IN_NEXT = {
   decision: 'per-issue ruling record',
   'instruction-files': 'run by the pre-commit hook and the reusable CI workflow, not typed at setup (#588)',
   'ci-grant': 'human-only per-branch gate, not a setup step',
-  'owner-policy': 'human-only owner-level policy record (#596), not a setup step',
+  'owner-policy': 'retired owner-level policy record (#596 → #598): show is read-only, set refuses',
   port: 'allocated by `worktree new`; hand use is rare',
   ports: 'diagnostic listing',
   worktree: 'per-session, driven by code-start',

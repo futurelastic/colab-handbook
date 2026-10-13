@@ -1422,11 +1422,11 @@ function auditRepoInner(target, ctx) {
     {
       const pol = migrationGrant.parseGrantPolicy(cfg);
       info.migrationGrant = pol.policy;
-      // #596: an undeclared key is no longer "human, full stop" — the owner-level value (a tracker
-      // record, `colab owner-policy show`) may apply, and this offline audit cannot read it. So the
+      // #598: an undeclared key is not "human, full stop" — the machine-level value (the gating
+      // machine's colab config) may apply, and this audit cannot know which machine gates. So the
       // source is reported: `repo` (declared here, final) or `undeclared` (repo-local default human,
-      // owner level unread). The round-trip warning below stays on a DECLARED reviewer only: for an
-      // owner-level reviewer the mint itself refuses without the job, which is where it surfaces.
+      // machine level unread). The round-trip warning below stays on a DECLARED reviewer only: for a
+      // machine-level reviewer the mint itself refuses without the job, which is where it surfaces.
       info.migrationGrantSource = pol.declared ? "repo" : "undeclared";
       if (!pol.valid) fail(pol.reason);
       // #494: R needs a live `Migration round-trip…` job. Without one every reviewer grant fails R

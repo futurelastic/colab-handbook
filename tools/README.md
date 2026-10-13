@@ -677,6 +677,7 @@ append-only and never participates in that lock.
 | `worktreeSubdir` | where worktrees are created inside a repo (default `.worktrees` — gitignore it). |
 | `notifyUrl` | **absent by default** — optional observer endpoint, or a list of them, see below. Unset means colab makes no network call of its own, ever. |
 | `journal` | **absent by default** — set to `true` for a local append-only record of every state transition and invocation in `~/.colab/journal.jsonl`, see below. Unset means colab writes no journal file, ever. Unrelated to `notifyUrl`: local file vs. remote push. |
+| `policy` | **absent by default** — `policy["migration-grant"]` is this machine's migration-grant policy (#598), written only by `COLAB_HUMAN=1 colab config set migration-grant <human\|reviewer\|unset>`. See *Machine-level reviewer policy*. |
 | `claimIdentity` | **absent by default** (`login,host` behaviour, unchanged) — set to `login,host,session` to distinguish two of your own sessions on one machine in the claim tie-break (#267). See *Identity granularity* under *Claim lifecycle* above; only safe where `--session` is stable across a resume. |
 
 ### `notifyUrl` — optional event push (off by default)
@@ -1768,31 +1769,33 @@ the *one* precondition it targets, never reads as blanket authority. On a fully-
 at all; a partially-granted branch still reads ✗ `human-gated`, naming which issue is missing a
 grant. See `colab migration-grant --help` for the full command reference.
 
-#### Owner-level reviewer policy (#596)
+#### Machine-level reviewer policy (#598)
 
 Whether a bound reviewer may grant migrations is usually one decision made by whoever runs the
-repos, not a separate one per repo. `colab owner-policy` records it once, for every repo the
-GitHub owner runs:
+repos, not a separate one per repo. On a machine that runs a set of repos, a human records it once,
+in that machine's colab config:
 
 ```sh
-COLAB_HUMAN=1 colab owner-policy set migration-grant reviewer   # human-only, like minting a grant
-colab owner-policy show [--json]     # the owner value, who set it and when, what THIS repo resolves to
-COLAB_HUMAN=1 colab owner-policy set migration-grant unset      # withdraw it
+COLAB_HUMAN=1 colab config set migration-grant reviewer [--by <name>]   # human-only, like minting a grant
+colab config show                                  # prints the machine value, who set it and when
+COLAB_HUMAN=1 colab config set migration-grant unset                    # withdraw it
 ```
 
-- **Precedence:** a repo's own `migration-grant:` beats the owner value, which beats the default
-  `human`. `migration-grant: human` in a repo opts it out, and the mint refusal says so.
-- **Where it lives:** marker comments on the open `colab-owner-policy` issue in `<owner>/.github`.
-  The first `set` creates the issue and the label. colab never creates the `.github` repo itself.
-- **How a reader tells a human set it:** the write is refused without `COLAB_HUMAN=1`. When
-  reading, only the latest marker counts, and only if its author is the owner or an org member
-  (`COLLABORATOR` is not enough) and, where the judged repo declares `trust-humans`, a listed
-  login. Any other marker is ignored, and `show` lists it. An unreadable record reads as unset,
-  so it fails closed to `human`.
-- **Where it is read:** by `colab migration-grant --role migration-reviewer` (mint) and by `colab
-  ship` on its migration path. Both read it only when the repo's key is absent or `human`, so the
-  ordinary no-migration ship makes no extra call. `--list --json` and ship's `--dry --json` name
-  the source: `repo`, `owner` or `default`.
+- **Precedence:** a repo's own `migration-grant:` beats this machine's value, which beats the
+  default `human`. `migration-grant: human` in a repo opts it out, and the mint refusal says so.
+- **Where it lives:** `policy["migration-grant"]` in `config.json` — `{ value, by, at, host,
+  machine }`. The `machine` id binds it to the machine that wrote it: a copied or synced config
+  reads as unset elsewhere. A record that is malformed, unreadable or foreign fails closed to
+  `human`, and the refusal says why.
+- **Reach:** this machine only. A ship run on a machine where nobody set it resolves to `human`.
+- **Where it is read:** by `colab migration-grant` (mint and `--list`) and by `colab ship` on its
+  migration path, all through `tools/lib/grant-policy.js` `effectiveGrantPolicy`. A console on the
+  same machine imports that same function, so it never computes a different answer than the gate.
+  `--list --json` and ship's `--dry --json` name the source: `repo`, `machine` or `default`.
+- **The owner-level record (#596) is retired.** It was a marker comment in `<owner>/.github`
+  accepted from any org member, and the shared account agent sessions post from usually is one.
+  No gate reads it; `colab owner-policy show` still prints it, marked not honoured, and
+  `colab owner-policy set` refuses. Why: `docs/adr/539-migration-rationale.md`.
 
 #### CI grants (#105) — the one-shot door through a genuinely red trunk
 

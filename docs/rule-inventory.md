@@ -1338,7 +1338,7 @@ Each entry lists the rule text of a unit whose rationale clause moved out (the u
 | C5b.me.31 | default |  | Editing, adding, removing or renaming a migration changes the content id and voids the grant. | Editing, adding, removing or renaming a migration changes the id and voids it. | CONVENTIONS.md | #508 |
 | C5b.me.32 | explanation |  | Ship's stale-base sync voided a commit-bound grant every time, so the grant binds migration content. | ship's stale-base rule (#395) makes a branch merge trunk in before it ships | docs/adr/98-migration-exemption-rationale.md | #508 |
 | C5b.me.33 | default |  | A record with no content id stays bound to its HEAD alone, and a new commit voids it. | stays bound to its HEAD alone, and a new commit voids it as before. | CONVENTIONS.md | #508 |
-| C5b.me.34 | default |  | The repo's own `migration-grant:` is read from the trunk checkout when a grant is minted and from the merge target's tip at ship, so a branch cannot raise its own policy. | own `migration-grant:` (the trunk checkout at mint, the target's tip at ship) → the owner-level | CONVENTIONS.md | #397, #596 |
+| C5b.me.34 | default |  | The repo's own `migration-grant:` is read from the trunk checkout when a grant is minted and from the merge target's tip at ship, so a branch cannot raise its own policy. | own `migration-grant:` (the trunk checkout at mint, the target's tip at ship) → this machine's | CONVENTIONS.md | #397, #598 |
 | C5b.me.35 | default |  | `colab migration-grant` refuses to mint a reviewer grant where the policy is not `reviewer`. | `colab migration-grant` refuses to mint a reviewer grant unless the policy resolves to | CONVENTIONS.md | #397, #596 |
 | C5b.me.36 | default |  | A reviewer grant is recorded only if the review passed: approve, checklist, escalation and CI round-trip. | The record must approve, pass the checklist, clear the escalation and pass the CI round-trip. | CONVENTIONS.md | #397 |
 | C5b.me.37 | default |  | A failing review is refused, not recorded. | A failing review is refused, not recorded. | CONVENTIONS.md | #397 |
@@ -1357,10 +1357,10 @@ Each entry lists the rule text of a unit whose rationale clause moved out (the u
 | C5b.me.50 | default |  | If any condition fails, the gate behaves as it does without a reviewer grant. | If any condition fails, the gate behaves exactly as it does without a reviewer grant: | CONVENTIONS.md | #401 |
 | C5b.me.51 | default |  | One function makes the reviewer-grant decision for every ship path. | One function makes this decision for every ship path | CONVENTIONS.md | #401 |
 | C5b.me.52 | default |  | `needs-migration-grant` is the gate's plan-time half, not a second gate, and authorises nothing by itself. | is this gate's plan-time half, not a second gate (#230). | CONVENTIONS.md | #230 |
-| C5b.me.53 | default |  | The `migration-grant` policy resolves repo key → owner-level value → `human`; a repo's `migration-grant: human` opts it out of an owner-level `reviewer`. | A repo that writes | CONVENTIONS.md | #596 |
-| C5b.me.54 | default |  | Setting the owner-level value is a human act, refused without `COLAB_HUMAN=1`, and unreachable through `config set`. | **Setting the owner value is a human act, the same class as minting a grant.** | CONVENTIONS.md | #596 |
-| C5b.me.55 | default |  | An owner marker counts only from the owner or an org member, and a `trust-humans` login where the judged repo declares that key; an unreadable record reads as unset. | its author is the owner or an org member; | CONVENTIONS.md | #596 |
-| C5b.me.56 | default |  | Wherever `colab` prints the policy it names the source: `repo`, `owner` (who, when) or `default`. | Every printed policy names its source: `repo`, `owner` (who, when) or `default`. | CONVENTIONS.md | #596 |
+| C5b.me.53 | default |  | The `migration-grant` policy resolves repo key → this machine's value → `human`; a repo's `migration-grant: human` opts it out of a machine-level `reviewer`. | A repo that writes `migration-grant: human` opts out | CONVENTIONS.md | #598 |
+| C5b.me.54 | default |  | Setting the machine-level value is a human act, refused without `COLAB_HUMAN=1`, and recorded with who, when and host; it reaches only that machine. | **Setting the machine value is a human act, the same class as minting a grant.** | CONVENTIONS.md | #598 |
+| C5b.me.55 | default |  | The owner-level record (#596) is retired: no gate reads it. | The owner-level record (#596) is retired and no gate reads it | CONVENTIONS.md | #598 |
+| C5b.me.56 | default |  | Wherever `colab` prints the policy it names the source: `repo`, `machine` (who, when) or `default`. | Every printed policy names its source: `repo`, `machine` (who, when) or `default`. | CONVENTIONS.md | #598 |
 
 ### A red trunk with no patch — never parked in silence (#390)
 
@@ -2601,7 +2601,7 @@ Reworded units, one bullet each. Row key changed: C6.rel.111 (the moved sentence
 | S1.migrationgrant.07 | hard | tools/colab::function shipMigrationGate | Ship honours a reviewer grant only with P + M + HEAD + R: the key at the target tip, a passing review record binding the head, and a live passing `Migration round-trip` CI job. | `colab ship` honours a reviewer grant only with P + M + HEAD + R | project.schema.md | #401 |
 | S1.migrationgrant.08 | default |  | A repo with no `Migration round-trip` job can declare `reviewer`, but every reviewer grant there fails R and the audit warns (#494). | A repo with no such job can declare `reviewer`, but every reviewer grant there fails R and the audit warns. | project.schema.md | — |
 | S1.migrationgrant.09 | default |  | The audit always reports the value in `--json` as `migrationGrant`, with its source as `migrationGrantSource`. | in `--json` as `migrationGrant` and `migrationGrantSource` | project.schema.md | #596 |
-| S1.migrationgrant.10 | hard | tools/lib/owner-policy.js::function resolveGrantPolicy ; tools/colab::function migrationGrantPolicyFor | The policy has three levels: the repo key, then the owner-level value, then `human`; a declared repo key always wins. | **Three levels, highest first (#596):** this key → the | project.schema.md | #596 |
+| S1.migrationgrant.10 | hard | tools/lib/grant-policy.js::function resolveGrantPolicy ; tools/colab::function migrationGrantPolicyFor | The policy has three levels: the repo key, then this machine's value, then `human`; a declared repo key always wins. | **Three levels, highest first (#598):** this key → this | project.schema.md | #598 |
 
 ### `ci-grant`
 
