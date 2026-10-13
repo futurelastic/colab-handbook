@@ -11819,12 +11819,14 @@ function ciGrantPayload(ciResult) {
  * on its own.
  *
  * Measures, in order:
- *   1. containment — `git merge-base --is-ancestor <redSha> <branch>`, translated to a bool.
+ *   1. containment — cure-diff's `cureContainment`: `git merge-base --is-ancestor <redSha> <ref>`
+ *      against the ref ship lands (local branch, else `<remote>/<branch>` — #589), translated to
+ *      true/false, or null ("could not resolve") when the ref or the red sha does not resolve.
  *   2. evidence — a completed, successful CI run for `branch`'s CURRENT head, via the identical
  *      `ghRunForSha` the raw CI check and `shipCiGrants` both use.
  *   3. anti-stacking — `computeAntiStacking`, the SAME function `cmdCiGrantCreate` calls, so a cure
  *      and a human grant can never independently disagree about whether trunk is mid-stack.
- *   4. the diff signals — tools/lib/cure-diff.js's `cureDiffSignals` over `<trunk>...<branch>`
+ *   4. the diff signals — tools/lib/cure-diff.js's `cureDiffSignals` over `<trunk>...<ref>` (same ref)
  *      (merge-base-relative, the tree a squash lands), `--no-renames` so a workflow file or
  *      manifest MOVED away still counts (#297 — the old `--name-only` read listed only a rename's
  *      new path). It yields `workflowsTouched` (condition 4) and `manifestScriptsTouched`
@@ -11860,11 +11862,17 @@ function shipCiCure(repoAbs, gh, target, trunk, redSha, branch) {
   if (!gh) {
     return { ok: false, reason: `gh not usable (${ghUnusableWhy(repoAbs)}) — the cure rule needs a measured CI run`, redSha, evidenceSha: null };
   }
-  const containsRedSha = git.git(['merge-base', '--is-ancestor', redSha, branch], repoAbs).ok;
+  // #589: containment and the diff read the ref ship lands — the local branch, else its remote-tracking
+  // ref (a --handoff land has no local branch). The bare name failed there and read as "not an
+  // ancestor"; an unresolvable ref now refuses as "could not resolve", never as "does not contain".
+  // The CI read keeps the NAME: ghRunForSha resolves the remote head itself (ls-remote).
+  const containment = cureDiff.cureContainment(git, repoAbs, redSha, branch);
+  const containsRedSha = containment.contains;
+  const branchRef = containment.ref || branch;
   const evRun = git.ghRunForSha(repoAbs, branch);
   const evidence = !evRun ? null : { ok: evRun.status === 'completed' && evRun.conclusion === 'success', sha: evRun.sha };
   const stacking = computeAntiStacking(repoAbs, trunk, true /* trunkIsRed: shipCiCure is only ever reached from a HUMAN_GATED raw verdict */);
-  const diff = cureDiff.cureDiffSignals(git, repoAbs, trunk, branch);
+  const diff = cureDiff.cureDiffSignals(git, repoAbs, trunk, branchRef);
   // Measured only past containment + 2a: a verdict that already refuses on either never reads it,
   // so a branch that cannot cure pays no job-level `gh` calls for it.
   const jobEvidence = (containsRedSha && evidence && evidence.ok)
@@ -11876,7 +11884,7 @@ function shipCiCure(repoAbs, gh, target, trunk, redSha, branch) {
   const dispatchable = jobEvidence && evidence ? dispatchableWorkflows(repoAbs, evidence.sha) : [];
   // #477: a stacked refusal may be lifted by progress — measure the prior red set only then.
   const priorRedJobs = jobEvidence && stacking && stacking.stacked ? priorExemptionRedJobs(repoAbs, trunk, stacking) : null;
-  const verdict = ciCure.cureVerdict({ containsRedSha, evidence, redSha, stacking, jobEvidence, priorRedJobs,
+  const verdict = ciCure.cureVerdict({ containsRedSha, containmentReason: containment.reason, evidence, redSha, stacking, jobEvidence, priorRedJobs,
     workflowsTouched: diff.workflowsTouched,
     manifestScriptsTouched: diff.manifestScriptsTouched, manifestPaths: diff.manifestPaths,
     manifestScriptsAddOnly: diff.manifestScriptsAddOnly,
