@@ -29,11 +29,14 @@
 #                                             comment above that job
 #   the cut tagged a FINAL — route            deploy + health check (job `deploy`, #446) — see
 #   deploy-tag-fast only                      "DEPLOYING IN THIS RUN" below
+#   the cut tagged a FINAL — route            published like any tag (Release marked latest, npm
+#   library-fast (#590)                       `latest`); nothing deploys — see "A LIBRARY" below
 #
 # Every decision — whether a candidate is owed, which bump, whether the test period
 # elapsed clean, whether the final is automatic on this repo at all — is the colab CLI's,
 # read from .github/project.yml's release rung. This file only schedules it and publishes
-# what it tagged. Where the rung leaves candidates off, every run is a recorded refusal.
+# what it tagged. Where the rung leaves candidates off, every run is a recorded refusal — save on
+# route library-fast, where the cut is the final (below).
 #
 # WHERE IT FITS. `colab release cut` tags origin/main — release tags land on `main` on every
 # trunk shape — so the same file, unchanged, fits two kinds of repo:
@@ -93,6 +96,14 @@
 # its own health check and rollback. On every other route the job is skipped and the
 # run still concludes on the `release` job. EDIT: on this route, a cron more frequent than daily
 # tags a head that release.final-spacing held back sooner.
+#
+# A LIBRARY — THE CUT IS THE FINAL (library-fast, #590). On a repo with no production that declares
+# `release.route: library-fast`, `colab release cut --auto` tags the FINAL vX.Y.Z on a green main
+# head once a first final exists (the first is a human's tag) — no candidate, no test period. With
+# `release.version-source: manifest` (the route's default) the version is the manifest's: a merge
+# that bumps package.json releases it, a merge that does not is a no-op. This run publishes the
+# final itself — the Release step marks it latest, the npm job publishes it to `latest` — because a
+# publish-on-tag workflow would not fire for a tag this job pushes. The deploy job stays skipped.
 #
 # DRY RUN ON A FIX BRANCH (#474). This workflow never runs on a branch by itself, so a fix to it
 # (a moved runner label, a HANDBOOK_REF naming a missing branch) had no run to prove it, and the
@@ -475,8 +486,10 @@ jobs:
             echo "tag=$TAG" >> "$GITHUB_OUTPUT"
             echo "Cut $TAG" | tee -a "$GITHUB_STEP_SUMMARY"
             # #446: on route deploy-tag-fast the cut IS the final, and the deploy job deploys it in
-            # this run (a tag pushed with GITHUB_TOKEN starts no `push: tags` workflow).
-            if [ "$(jq -r '.final // false' "$OUT")" = "true" ]; then
+            # this run (a tag pushed with GITHUB_TOKEN starts no `push: tags` workflow). #590: route
+            # library-fast cuts a final too, with `deploy: null` — it is published below (Release, npm)
+            # and never handed to the deploy job, so key on the deploy facts, not on `final`.
+            if [ "$(jq -r '.final == true and .deploy != null' "$OUT")" = "true" ]; then
               echo "final=$TAG" >> "$GITHUB_OUTPUT"
               echo "health-url=$(jq -r '.deploy.healthUrl // ""' "$OUT")" >> "$GITHUB_OUTPUT"
             fi

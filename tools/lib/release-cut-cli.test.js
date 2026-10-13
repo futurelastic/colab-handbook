@@ -705,3 +705,62 @@ test('#446 deploy-tag-fast: inside final-spacing the run is a no-op (exit 0, not
   assert.strictEqual(r.body.checks.find((c) => c.condition === 'spacing').ok, false);
   assert.deepStrictEqual(originTags(fx), ['v1.2.0']);
 });
+
+// ---- #590: library-fast — the cut is the final, nothing deploys ----------------------------------
+
+const LIB_YML = 'trunk: main\nexposure: released\nproduction: null\ndeploy: none\nstack: node\n' +
+  'release:\n  route: library-fast\n  version-source: manifest\n';
+const PKG = (v) => `${JSON.stringify({ name: 'lib', version: v }, null, 2)}\n`;
+
+test('#590 library-fast --auto: a merge that bumps package.json is tagged final — no -rc, a full Release, stable moved, deploy: null', () => {
+  const fx = fixture({ projectYml: LIB_YML, files: { 'package.json': PKG('1.2.0') } });
+  // The fixture's fix commit left package.json at the last final: nothing to release yet.
+  const idle = cut(fx, ['--auto']);
+  assert.strictEqual(idle.code, 0, idle.out + idle.err);
+  assert.strictEqual(idle.body.noop, true, JSON.stringify(idle.body.checks, null, 2));
+  assert.strictEqual(idle.body.checks.find((c) => c.condition === 'release-policy').ok, true);
+  assert.deepStrictEqual(originTags(fx), ['v1.2.0']);
+
+  commit(fx, 'package.json', 'chore: release 1.2.1', PKG('1.2.1'));
+  const r = cut(fx, ['--auto']);
+  assert.strictEqual(r.code, 0, r.out + r.err);
+  assert.strictEqual(r.body.ok, true, JSON.stringify(r.body.checks, null, 2));
+  assert.strictEqual(r.body.tag, 'v1.2.1');
+  assert.strictEqual(r.body.final, true);
+  assert.strictEqual(r.body.route, 'library-fast');
+  assert.strictEqual(r.body.deploy, null);
+  assert.strictEqual(r.body.grant, null);
+  assert.deepStrictEqual(originTags(fx), ['v1.2.0', 'v1.2.1']);
+  const created = fs.readFileSync(fx.releasesFile, 'utf8');
+  assert.match(created, /^create v1\.2\.1 .*--latest/m);
+  assert.doesNotMatch(created, /--prerelease/);
+  assert.strictEqual(originBranch(fx, 'stable'), fx.g('rev-parse', 'HEAD'));
+  assert.strictEqual(originBranch(fx, 'next'), null);
+  assert.match(fx.g('tag', '-l', '--format=%(contents)', 'v1.2.1'), /library-fast — a library released per merge/);
+  // Re-run on the same head: the route holding, not a second final.
+  const again = cut(fx, ['--auto']);
+  assert.strictEqual(again.code, 0, again.out + again.err);
+  assert.strictEqual(again.body.noop, true);
+  assert.deepStrictEqual(originTags(fx), ['v1.2.0', 'v1.2.1']);
+});
+
+test('#590 library-fast by hand (no --auto) tags the same final', () => {
+  const fx = fixture({ projectYml: LIB_YML, files: { 'package.json': PKG('1.2.0') } });
+  commit(fx, 'package.json', 'feat: release 1.3.0', PKG('1.3.0'));
+  const r = cut(fx);
+  assert.strictEqual(r.code, 0, r.out + r.err);
+  assert.strictEqual(r.body.tag, 'v1.3.0');
+  assert.strictEqual(r.body.final, true);
+  assert.deepStrictEqual(originTags(fx), ['v1.2.0', 'v1.3.0']);
+});
+
+test('#590 library-fast with no final yet (the issue\'s measured case): release-policy passes, version stalls', () => {
+  const fx = fixture({ projectYml: LIB_YML, files: { 'package.json': PKG('0.1.0') }, lastFinal: null });
+  const r = cut(fx, ['--dry']);
+  assert.strictEqual(r.code, 1, r.out + r.err);
+  const policy = r.body.checks.find((c) => c.condition === 'release-policy');
+  assert.strictEqual(policy.ok, true, policy.detail);
+  assert.match(policy.detail, /route library-fast/);
+  assert.deepStrictEqual(r.body.standing, ['version']);
+  assert.deepStrictEqual(originTags(fx), []);
+});

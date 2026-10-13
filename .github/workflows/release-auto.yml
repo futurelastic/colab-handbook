@@ -200,8 +200,10 @@ jobs:
             echo "tag=$TAG" >> "$GITHUB_OUTPUT"
             echo "Cut $TAG" | tee -a "$GITHUB_STEP_SUMMARY"
             # #446: on route deploy-tag-fast the cut IS the final, and the deploy job deploys it in
-            # this run (a tag pushed with GITHUB_TOKEN starts no `push: tags` workflow).
-            if [ "$(jq -r '.final // false' "$OUT")" = "true" ]; then
+            # this run (a tag pushed with GITHUB_TOKEN starts no `push: tags` workflow). #590: route
+            # library-fast cuts a final too, with `deploy: null` — it is published below (Release, npm)
+            # and never handed to the deploy job, so key on the deploy facts, not on `final`.
+            if [ "$(jq -r '.final == true and .deploy != null' "$OUT")" = "true" ]; then
               echo "final=$TAG" >> "$GITHUB_OUTPUT"
               echo "health-url=$(jq -r '.deploy.healthUrl // ""' "$OUT")" >> "$GITHUB_OUTPUT"
             fi

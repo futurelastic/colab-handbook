@@ -1118,7 +1118,7 @@ Run `colab <cmd> --help` for full detail.
 | `deliver [--repo P] [--dry] [--json] [--reopen]` | **delivery** to the owner's branch, only where `project.yml` declares `owner:` (#394): opens or refreshes ONE PR trunk → `owner.branch`, never merges it. Delivered is read from PR state (squash/rebase safe); a rejected last PR stops it (exit 3). Writes need `COLAB_HUMAN=1`; `--dry` is read-only |
 | `doctor [--prune] [--ttl H] [--json] [--sync]` | heal dead worktrees / orphan + stale claims / orphan ports; report records whose branch or path cannot be resolved, including a zero-claim `pending` stub (no TTL — see *Records that cannot be acted on*); flip + sweep **merged** worktrees (see *Worktree lifecycle*); **list** shipped branches awaiting deletion (never deletes them); `--sync` also flags a worktree-less claim the tracker no longer shows assigned+in-progress (no TTL either), spent `group:<key>` labels, and open PRs whose head commit already landed in trunk (#584 — report-only, `--prune` never closes a PR) |
 | `release-notes [<range>] [--repo P] [--out F] [--headline "..."]` | grouped Markdown release summary from git history (see below) |
-| `release cut [--repo P] [--auto \| --bump patch\|minor --reason "..."] [--dry] [--json]` | cut a release **candidate** `vX.Y.Z-rc.N` on `origin/main` where §6's routes allow it and all four conditions plus the three pre-tag checks hold on that commit; `--auto` computes the bump (majors included) and honours the route's cadence; never a final tag — except on route `deploy-tag-fast`, where `--auto` tags the final itself (#446) (see *Release cut*, below) |
+| `release cut [--repo P] [--auto \| --bump patch\|minor --reason "..."] [--dry] [--json]` | cut a release **candidate** `vX.Y.Z-rc.N` on `origin/main` where §6's routes allow it and all four conditions plus the three pre-tag checks hold on that commit; `--auto` computes the bump (majors included) and honours the route's cadence; never a final tag — except on route `library-fast`, where the cut (by hand or `--auto`) tags the final once a first final exists (#590), and route `deploy-tag-fast`, where `--auto` tags the final itself (#446) (see *Release cut*, below) |
 | `release finalize [--repo P] [--auto \| --tag RC [--answered-by N]] [--dry] [--json]` | a candidate's next step under §6's routes; `--auto` finalizes the newest candidate clean on its own clock, `--tag` any open one (an older one on its own clean clock, #548) — `testing` / `held` / `needs-new-candidate` / `refused` / `candidate-ready` / `finalized`, re-checked every run, one tracking issue per version; tags the final only where the rung row makes it automatic, or behind the human bar (see *Release finalize*, below) |
 | `release npm [--repo P] [--json]` | whether release-auto.yml's `npm` job publishes this repo, and what: the package, its directory and the gate, read from `release.npm` / `release.npm-gate`; read-only (see *Release npm*, below) |
 | `template [<name>] [--dest F] [--repo P] [--force]` | copy a handbook workflow template into a repo, **stamped** with the handbook version (see below) |
@@ -1257,6 +1257,21 @@ so `pre-push-guard` lets it through. Forward only, never forced: a `next` that i
 the candidate is refused and left where it is. Best-effort like the pre-release: the tag already
 stands, so a failure is a warning and `--json` `channel: { channel, ok, action, detail }` says
 `ok: false`. `--dry` reports the move it would make. CONVENTIONS.md §6, *Release channels*.
+
+**Route `library-fast` — the cut is the final, nothing deploys (#590).** On a no-production repo
+that declares `release.route: library-fast`, `release cut` — by hand or `--auto` — tags the **final**
+`vX.Y.Z` on main's green head once a first final exists, publishes it as the latest GitHub Release,
+moves `stable` and posts `Released in vX.Y.Z` on every issue it carries. `--json` says `final: true`,
+`route: "library-fast"`, `deploy: null` — so the release workflow publishes it and its deploy job
+stays skipped. `already-final` replaces `already-candidate` (a head already final is a no-op) and
+`release-hold` is checked; nothing else from `deploy-tag-fast` below applies. On
+`release.version-source: manifest` (the route's default) the version is the manifest's
+(`decideManifestVersion`): equal to the last final is a **no-op**, never a stall; lower, a
+pre-release, manifests that disagree, `0.x` → `1.0.0` (a human tags it), a major without its
+`MIGRATION.md` section, or a breaking signal the bump under-declares (a major from 1.0, a minor below)
+**refuses**; `--bump` has nothing to override there. No manifest stating a version, or
+`version-source: tag`, computes the bump as for a candidate. A `final: human` narrowing makes every
+final a human act, and `release-policy` says so by route name.
 
 **Route `deploy-tag-fast` — the cut is the final (#446).** On a `deploy: tag` repo that declares
 `release.route: deploy-tag-fast` with the operator's grant and a health gate

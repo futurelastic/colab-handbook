@@ -1335,6 +1335,18 @@ Refuses, naming each failed condition (all are reported, not just the first):
                        There the bump reads the promoted commits (main's merge subject is skipped),
                        and a switch-removal child counts when its Closes #N was promoted.
 
+Route library-fast (#590) — a library released per merge, its consumers pin; nothing deploys:
+  once a first final exists (a human tags it), cut tags the next FINAL vX.Y.Z directly — no
+  candidate, no test period — by hand or with --auto, publishes it as the latest GitHub Release and
+  moves the stable channel. --json says final: true, deploy: null. In place of already-candidate:
+  already-final        main's head already carries a final — a NO-OP under --auto
+  release-hold         an open issue carries the release-hold label (a human veto)
+  With release.version-source: manifest (the route's default) the version IS the manifest's: equal
+  to the last final is a NO-OP (nothing to release until a merge bumps it), lower refuses, 0.x -> 1.0
+  refuses (a human tags it), a major needs MIGRATION.md's section, and a breaking change the
+  manifest under-declares refuses. --bump has nothing to override there. With version-source: tag
+  the bump is computed exactly as for a candidate.
+
 Route deploy-tag-fast (#446) — a deploy: tag repo with the operator's grant and a declared health gate:
   --auto tags the FINAL vX.Y.Z on main's green head — no candidate, no test period — publishes it as
   the latest GitHub Release, moves the stable channel, and prints final/deploy in --json so the
@@ -1682,11 +1694,23 @@ function cmdReleaseCut(argv) {
   const fast = releaseCut.isFastRoute(policy) && !policy.findings.length;
   const fastFacts = fast ? measureFastRoute(repoAbs, { policy, remote, issues, lastFinal, tags, auto, migrationPaths: migrationPathsSince }) : {};
   if (fast && auto) auto.spacing = fastFacts.spacing;
+  // #590: route library-fast — a final with nothing deployed. The release-hold veto is its one extra
+  // read; a hand cut also needs MIGRATION.md for a manifest-declared major (--auto reads it already).
+  const library = !fast && releaseCut.isLibraryRoute(policy) && !policy.findings.length;
+  let libraryMigration = null;
+  if (library) {
+    fastFacts.holds = releaseCut.holdsVerdict(issues);
+    if (!auto) {
+      const r = git.git(['show', `${sha}:${releaseCut.MIGRATION_FILE}`], repoAbs);
+      const text = r.ok ? r.stdout : null;
+      libraryMigration = (v) => releaseCut.parseMigrationSection(text, v);
+    }
+  }
 
   const verdict = releaseCut.decide({
     policy, triggers, lastFinal, suggestion, tags, tagsAtSha, ci, suite, schema, switches, manifests, ancestry, auto,
     override: opts.bump ? { bump: opts.bump, reason: opts.reason } : null,
-    finalGrant: fastFacts.finalGrant, holds: fastFacts.holds, migrations: fastFacts.migrations,
+    finalGrant: fastFacts.finalGrant, holds: fastFacts.holds, migrations: fastFacts.migrations, migration: libraryMigration,
     trackingIssue: fastFacts.tracking ? fastFacts.tracking.number : null,
   });
 
@@ -1716,6 +1740,11 @@ function cmdReleaseCut(argv) {
   // on the version's tracking issue (opened if there is none), for a human to grant.
   let announced = null;
   let handoff = verdict.handoff || null;
+  if (library && !opts.dry && created) {
+    // #590: every issue a library final carries hears which version has it, as on deploy-tag-fast.
+    const exclude = (issues || []).filter((i) => releaseFinalize.parseReleaseMarker(i.body)).map((i) => i.number);
+    announced = announceCarried(repoAbs, { tagNames: [...tags, verdict.tag], exclude, version: verdict.tag, sha });
+  }
   if (fast && !opts.dry) {
     if (created) {
       const exclude = (issues || []).filter((i) => releaseFinalize.parseReleaseMarker(i.body)).map((i) => i.number);
@@ -1745,10 +1774,11 @@ function cmdReleaseCut(argv) {
       repo: shortRepo(repoAbs), sha, ...(offTrunk ? { trunk } : {}), lastFinal, suggestion, dry: !!opts.dry, auto: !!opts.auto,
       ok: verdict.ok, noop: !!verdict.noop, standing: verdict.standing || [], tag: verdict.tag, created, published, channel, version: verdict.version, bump: verdict.bump,
       overridden: verdict.overridden, signals: verdict.signals ? verdict.signals.lines : null, checks: verdict.checks,
-      // #446: present on every route, so the workflow reads one shape — final only on deploy-tag-fast.
-      final: !!verdict.final,
+      // #446: present on every route, so the workflow reads one shape — final on deploy-tag-fast and
+      // library-fast (#590); deploy only on deploy-tag-fast, so the workflow deploys nothing a library tags.
+      final: !!verdict.final, route: verdict.route || null,
       deploy: verdict.final && verdict.healthGate ? { healthUrl: verdict.healthGate.url, rollback: verdict.healthGate.rollback } : null,
-      grant: verdict.grant || null, handoff, ...(fast ? { announced } : {}),
+      grant: verdict.grant || null, handoff, ...(fast || library ? { announced } : {}),
     }, null, 2));
     return verdict.ok || verdict.noop ? 0 : 1;
   }
@@ -1764,6 +1794,8 @@ function cmdReleaseCut(argv) {
   if (verdict.noop) {
     print(fast
       ? '· no-op — nothing owed, inside release.final-spacing, or main\'s head already carries a final; nothing tagged.'
+      : library
+        ? '· no-op — nothing owed (the manifest still says the last final), or main\'s head already carries a final; nothing tagged.'
       : '· no-op — nothing owed, inside the route\'s cadence window, or main\'s head is not a promotion of trunk; nothing cut.');
     return 0;
   }
@@ -1774,7 +1806,15 @@ function cmdReleaseCut(argv) {
     if (handoff) print(`\nA migration rides this release. The one command, for a human to run:\n  ${handoff}`);
     return 1;
   }
-  if (verdict.final) {
+  if (verdict.final && library) {
+    if (opts.dry) print(`[--dry] would tag the final ${verdict.tag} on ${at}, push it to ${remote}, publish its GitHub Release and move the stable channel — route library-fast, nothing deploys. Nothing created.`);
+    else {
+      print(`✓ tagged the final ${verdict.tag} on ${at} and pushed it to ${remote} — route library-fast: a library released per merge, nothing deploys from it.`);
+      if (published && published.ok) print(`✓ ${published.detail}`);
+      else if (published) warn(`${published.detail} — the tag stands; publish it by hand: gh release create ${verdict.tag} --verify-tag --latest`);
+      if (announced && announced.issues.length) print(`released in ${verdict.tag}: told ${announced.posted.length ? announced.posted.map((n) => `#${n}`).join(', ') : 'nobody new'}`);
+    }
+  } else if (verdict.final) {
     if (opts.dry) print(`[--dry] would tag the final ${verdict.tag} on ${at}, push it to ${remote}, publish its GitHub Release and move the stable channel — the workflow's deploy job would then deploy it and check ${verdict.healthGate.url}. Nothing created.`);
     else {
       print(`✓ tagged the final ${verdict.tag} on ${at} and pushed it to ${remote} — route deploy-tag-fast, by the operator's grant (decision #${verdict.grant.issue}); the release workflow deploys it in this run.`);
