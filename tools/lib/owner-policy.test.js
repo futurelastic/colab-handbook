@@ -1,23 +1,20 @@
 'use strict';
 /**
- * #596 — the owner-level migration-grant value: the pure record reading (who counts, latest wins,
- * unset), the three-level precedence, and the ship rule fed with the resolved policy.
- * The CLI wiring (mint, set, show) is in owner-policy-cli.test.js.
+ * #596 — the owner-level migration-grant record: the pure record reading (who counts, latest wins,
+ * unset). Retired as a resolution rung by #598; `colab owner-policy show` still reads it.
+ * The CLI wiring is in grant-policy-cli.test.js.
  *
  * Run: `node --test tools/lib/*.test.js`.
  */
 const test = require('node:test');
 const assert = require('node:assert');
 const op = require('./owner-policy.js');
-const mg = require('./migration-grant.js');
 const trustHumans = require('./trust-humans.js');
 
 const mark = (value, o = {}) => ({
   body: op.markerBody('migration-grant', value, 'box', o.at || '2026-10-12T00:00:00Z'),
   user: { login: o.login || 'boss' }, author_association: 'assoc' in o ? o.assoc : 'OWNER', created_at: o.at || '2026-10-12T00:00:00Z',
 });
-const repo = (doc) => mg.parseGrantPolicy(doc);
-const ownerOk = (value, by = 'boss', at = '2026-10-12T00:00:00Z') => ({ read: 'ok', owner: 'acme', issue: 1, set: true, value, by, at, ignored: [] });
 
 // ---- the record -------------------------------------------------------------------------------
 
@@ -59,73 +56,5 @@ test('an unknown value or another key is not read as migration-grant', () => {
   assert.throws(() => op.markerBody('ci-grant', 'reviewer', 'h', 'i'));
 });
 
-// ---- precedence -------------------------------------------------------------------------------
-
-test('no repo key + owner reviewer → reviewer, source owner, naming who set it', () => {
-  const r = op.resolveGrantPolicy(repo({}), ownerOk('reviewer'));
-  assert.deepEqual([r.policy, r.source, r.valid, r.declared], ['reviewer', 'owner', true, false]);
-  assert.match(r.reason, /owner-level migration-grant: reviewer .*acme\/\.github by boss at 2026-10-12/);
-  assert.equal(op.sourceLabel(r), 'owner (boss at 2026-10-12T00:00:00Z)');
-});
-
-test('repo human + owner reviewer → human, source repo, opted out — the reason says so', () => {
-  const r = op.resolveGrantPolicy(repo({ 'migration-grant': 'human' }), ownerOk('reviewer'));
-  assert.deepEqual([r.policy, r.source, r.optedOut], ['human', 'repo', true]);
-  assert.match(r.reason, /opted out/);
-});
-
-test('repo reviewer wins over owner human; repo human + owner human is not an opt-out', () => {
-  const a = op.resolveGrantPolicy(repo({ 'migration-grant': 'reviewer' }), ownerOk('human'));
-  assert.deepEqual([a.policy, a.source], ['reviewer', 'repo']);
-  const b = op.resolveGrantPolicy(repo({ 'migration-grant': 'human' }), ownerOk('human'));
-  assert.equal(b.optedOut, false);
-});
-
-test('no owner value → every pre-#596 field identical to parseGrantPolicy, source default/repo', () => {
-  for (const doc of [{}, { 'migration-grant': 'human' }, { 'migration-grant': 'reviewer' }, { 'migration-grant': 'bogus' }]) {
-    const base = repo(doc);
-    for (const owner of [null, { read: 'none', set: false }, { read: 'ok', set: false }]) {
-      const r = op.resolveGrantPolicy(base, owner);
-      for (const k of ['policy', 'declared', 'valid', 'reason']) assert.deepEqual(r[k], base[k], `${JSON.stringify(doc)} ${k}`);
-      assert.equal(r.source, base.declared ? 'repo' : 'default');
-      assert.equal(r.ownerNote, '');
-    }
-  }
-});
-
-test('an unreadable owner record fails closed to the default, with a note', () => {
-  const r = op.resolveGrantPolicy(repo({}), { read: 'unread', why: 'HTTP 502' });
-  assert.deepEqual([r.policy, r.source], ['human', 'default']);
-  assert.match(r.ownerNote, /could not be read \(HTTP 502\)/);
-});
-
-// ---- the ship rule, fed the resolved policy ------------------------------------------------------
-
-const LABEL = 'migration-granted';
-const BRANCH = 'feat/schema-change-1';
-const HEAD = 'a'.repeat(40);
-const reviewRec = () => ({ v: '1', role: 'migration-reviewer', reviewer: 'bot-a', head: HEAD, verdict: 'approve', checklist: 'pass',
-  'checklist-items': '7/7', escalation: 'destructive-ddl', 'escalation-result': 'clear', 'ci-roundtrip': 'pass' });
-const issue = { state: 'OPEN', labels: [{ name: LABEL }],
-  comments: [{ body: mg.reviewGrantCommentBody(BRANCH, 'box', '2026-10-12T00:00:00Z', reviewRec()), createdAt: '2026-10-12T00:00:00Z', author: { login: 'boss' }, authorAssociation: 'MEMBER' }] };
-const shipCtx = (pres) => ({ policy: pres.policy, policyReason: pres.source === 'owner' || pres.optedOut || pres.ownerNote ? pres.reason : null,
-  headSha: HEAD, roundtrip: () => ({ ok: true, reason: '' }) });
-
-test('ship: no repo key + owner reviewer → a passing reviewer grant ships', () => {
-  const v = mg.evaluateShipSet([1], { 1: issue }, BRANCH, LABEL, shipCtx(op.resolveGrantPolicy(repo({}), ownerOk('reviewer'))));
-  assert.equal(v.ok, true, JSON.stringify(v.missing));
-  assert.equal(v.granted[0].role, 'reviewer');
-});
-
-test('ship: repo human + owner reviewer → refused on P, and the reason says the repo opted out', () => {
-  const v = mg.evaluateShipSet([1], { 1: issue }, BRANCH, LABEL, shipCtx(op.resolveGrantPolicy(repo({ 'migration-grant': 'human' }), ownerOk('reviewer'))));
-  assert.equal(v.ok, false);
-  assert.equal(v.missing[0].failed, 'policy');
-  assert.match(v.missing[0].reason, /opted out/);
-});
-
-test('ship: no owner value → the P refusal text is the pre-#596 one, byte for byte', () => {
-  const before = mg.evaluateShipSet([1], { 1: issue }, BRANCH, LABEL, { policy: 'human', headSha: HEAD, roundtrip: () => ({ ok: true }) });
-  const after = mg.evaluateShipSet([1], { 1: issue }, BRANCH, LABEL, shipCtx(op.resolveGrantPolicy(repo({}), { read: 'none', set: false })));
-  assert.deepEqual(after, before);
-});
+// The precedence and the ship rule moved with the resolver to grant-policy.test.js (#598): the owner
+// record is no longer a rung. These tests keep the record reader `colab owner-policy show` uses.

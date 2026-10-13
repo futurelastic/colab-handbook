@@ -704,8 +704,8 @@ function parseGrantPolicy(doc) {
  * The reviewer-grant verdict for one issue — P, M and HEAD of the ship rule; evaluateShipSet()
  * (#401) calls it and adds R. `ctx` = { branch, headSha, contentId, issueNum, labelName, policy } where
  * `contentId` (#508) is migrationContentId at `headSha` (grantHeadBinding), and
- * `policy` is the resolved policy (repo key > owner-level > human, #596) and `policyReason` its
- * source sentence when the owner level is in play. Checks, cheapest/most-fundamental first, each with its
+ * `policy` is the resolved policy (repo key > machine-level > human, #598) and `policyReason` its
+ * source sentence when the machine level is in play. Checks, cheapest/most-fundamental first, each with its
  * own reason: read failed · not open · no label · policy not `reviewer` · no live reviewer grant ·
  * branch mismatch · untrusted author · record invalid · record not passing · HEAD binding.
  * The CI round-trip is checked here only as RECORDED; re-verifying it against live CI for `head`
@@ -720,8 +720,8 @@ function evaluateReviewerGrant(record, ctx) {
   if (record.state !== 'OPEN') return no(`#${issue} is ${record.state || 'not open'} — a grant expires when its issue closes`);
   const labelNames = (record.labels || []).map((l) => (l && typeof l === 'object' ? l.name : l));
   if (!labelNames.includes(c.labelName)) return no(`#${issue} does not carry the \`${c.labelName}\` label`);
-  // #596: `policyReason` is set only where the owner level is in play (an owner value, a repo opt-out,
-  // an unreadable owner record) — it names the source. Otherwise the text is the pre-#596 one.
+  // #598: `policyReason` is set only where the machine level is in play (a machine value, a repo
+  // opt-out, an unusable machine record) — it names the source. Otherwise the text is the pre-#596 one.
   if (c.policy !== 'reviewer') {
     return no(c.policyReason
       ? `${c.policyReason} — a reviewer grant is honoured only where the policy resolves to reviewer`

@@ -1,7 +1,15 @@
 'use strict';
 /**
- * Owner-level grant policy (#596): one `migration-grant` value set once, by a human, for every repo
- * an owner runs. Precedence: the repo's explicit `migration-grant:` > the owner value > `human`.
+ * Owner-level grant policy (#596) — RETIRED as a resolution rung by #598. No gate reads it: the
+ * policy resolves repo key > this machine's value > `human` (grant-policy.js). What remains here
+ * is the record reader `colab owner-policy show` uses, read-only, so an operator who relied on an
+ * owner value can see that it is no longer honoured and why. `owner-policy set` refuses.
+ *
+ * Why retired: the record is accepted from any OWNER/MEMBER comment, and the shared account agent
+ * sessions post from is typically an org member — one raw `gh api` POST, which skips the
+ * COLAB_HUMAN bar entirely, switched reviewer grants on for every repo of the owner (#407 class).
+ *
+ * As it was (#596): one `migration-grant` value set once, by a human, for every repo an owner runs.
  *
  * WHERE IT LIVES. Not in a file. A committed file (in the repo, or in the owner's `.github` repo)
  * is edited by any session that can commit, and nothing in it names who set it. So the value is a
@@ -93,41 +101,10 @@ function ownerValue(comments, key, trust) {
   return { set: true, value: cur.value, by: cur.by, at: cur.at, ignored };
 }
 
-/**
- * Three-level precedence for `migration-grant`. `repoPol` = migration-grant.js parseGrantPolicy(doc);
- * `owner` = { read: 'ok'|'none'|'unread', owner, set, value, by, at, why } from tools/colab's reader,
- * or null when the owner record was not consulted (the repo declares its own key, so it is not needed).
- * Returns repoPol's shape plus { source: 'repo'|'owner'|'default', optedOut, owner, ownerBy, ownerAt,
- * ownerNote }. `reason` is a sentence naming the source — the caller prints it on refusal.
- */
-function resolveGrantPolicy(repoPol, owner) {
-  const o = owner || null;
-  const ownerSet = !!(o && o.read === 'ok' && o.set);
-  const ownerBits = ownerSet ? { owner: o.owner || null, ownerBy: o.by || null, ownerAt: o.at || null } : { owner: null, ownerBy: null, ownerAt: null };
-  if (repoPol.declared) {
-    const optedOut = repoPol.valid && repoPol.policy === 'human' && ownerSet && o.value === 'reviewer';
-    return { ...repoPol, source: 'repo', optedOut, ...ownerBits, ownerNote: '',
-      reason: optedOut
-        ? `this repo opted out: project.yml declares migration-grant: human, which wins over the owner-level reviewer value (set by ${o.by} at ${o.at})`
-        : repoPol.reason };
-  }
-  if (ownerSet) {
-    return { policy: o.value, declared: false, valid: true, source: 'owner', optedOut: false, ...ownerBits, ownerNote: '',
-      reason: `owner-level migration-grant: ${o.value} (set on ${o.owner || 'the owner'}/${RECORD_REPO} by ${o.by} at ${o.at}; this repo declares no key of its own)` };
-  }
-  const ownerNote = o && o.read === 'unread' ? `the owner-level record could not be read (${o.why || 'unknown error'}) — read as unset` : '';
-  return { ...repoPol, source: 'default', optedOut: false, ...ownerBits, ownerNote,
-    reason: ownerNote ? `${repoPol.reason}; ${ownerNote}` : repoPol.reason };
-}
-
-/** One-line source label for a printed policy: `repo`, `owner (<by> at <at>)`, or `default`. */
-function sourceLabel(res) {
-  if (!res) return 'default';
-  if (res.source === 'owner') return `owner (${res.ownerBy || '?'} at ${res.ownerAt || '?'})`;
-  return res.source;
-}
-
 module.exports = {
   LABEL, RECORD_REPO, ISSUE_TITLE, KEYS, VALUES, UNSET, OWNER_ASSOCIATIONS, MARK_RE,
-  isValidValue, markerBody, normComment, ownerValue, resolveGrantPolicy, sourceLabel,
+  isValidValue, markerBody, normComment, ownerValue,
+  // #598: resolveGrantPolicy / sourceLabel moved to grant-policy.js and are deliberately NOT
+  // re-exported: an owner record has the same { read, set, value } shape as a machine record, so a
+  // caller still passing one would silently get it honoured as a machine value. Fail loudly instead.
 };

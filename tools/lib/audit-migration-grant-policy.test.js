@@ -139,7 +139,7 @@ test('trust-humans: every malformed shape fails — the reader treats nobody as 
   }
 });
 
-test('#596: the source is reported — repo when declared, undeclared otherwise (the owner level is not the audit\'s to read)', () => {
+test('#596: the source is reported — repo when declared, undeclared otherwise (the machine level is not the audit\'s to read)', () => {
   assert.strictEqual(audit(fixture(BASE)).migrationGrantSource, 'undeclared');
   assert.strictEqual(audit(fixture(`${BASE}migration-grant: human\n`)).migrationGrantSource, 'repo');
   assert.strictEqual(audit(fixture(`${BASE}migration-grant: reviewer\n`, { '.github/workflows/ci.yml': RT_JOB })).migrationGrantSource, 'repo');
