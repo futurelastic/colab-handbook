@@ -10492,7 +10492,12 @@ function migDetail(migrations, grants, target, branch, ctx) {
  *    from its base. An empty result is now left empty; the caller decides what to say about it
  *    (buildSquashMessage below), rather than this layer inventing a commit to hide it.
  */
-function branchCommits(mainRoot, trunk, branch) {
+function branchCommits(mainRoot, trunk, branchName) {
+  // #603: read the branch through the ref it resolves to. A hand-off branch (or any --branch with no
+  // local ref) is remote-only on the lander, and a bare name does not DWIM to refs/remotes/<remote>/
+  // — the log failed, the list came back empty, and the squash subject read "(none …)" on a branch
+  // that has commits. shipRefFor is local || remote || the name itself, so a sha passes unchanged.
+  const branch = shipRefFor(mainRoot, branchName);
   const mb = git.git(['merge-base', trunk, branch], mainRoot);
   const base = mb.ok && mb.stdout ? mb.stdout : trunk;
   const logShas = git.git(['log', '--first-parent', `${base}..${branch}`, '--no-merges', '--format=%H'], mainRoot);
@@ -10516,7 +10521,7 @@ function commitFiles(mainRoot, sha) {
 
 /** Files the whole branch changed against its base — the denominator for the same signal. */
 function branchChangedFiles(mainRoot, base, branch) {
-  const r = git.git(['diff', '--name-only', `${base}...${branch}`], mainRoot);
+  const r = git.git(['diff', '--name-only', `${base}...${shipRefFor(mainRoot, branch)}`], mainRoot); // #603: same remote-only gap
   return r.ok ? r.stdout.split('\n').map((s) => s.trim()).filter(Boolean) : [];
 }
 

@@ -562,3 +562,53 @@ test('#591: a bare --handoff beside --batch names no member and refuses, pointin
   assert.notStrictEqual(r.code, 0);
   assert.match(r.err, /--batch <b1>,<b2>@<hand-off-url>/);
 });
+
+// =================================================================================================
+// #603 — the squash subject on a lander with no local ref of the branch
+// =================================================================================================
+
+test('#603 e2e: a remote-only branch derives the same squash subject and bullets as one with a local ref', () => {
+  const fx = fixture();
+  const { wt, head: first } = executorBuilds(fx, BR, [90]);
+  // A second, lower-weight commit: the subject is picked by weight, the other becomes a bullet.
+  fs.writeFileSync(path.join(wt, 'notes.md'), 'docs\n');
+  g(wt, 'add', '-A'); g(wt, 'commit', '-q', '-m', 'docs: note the thing'); g(wt, 'push', '-q', 'origin', BR);
+  const head = g(wt, 'rev-parse', 'HEAD');
+  assert.notStrictEqual(head, first);
+  const url = postHandoff(fx, 90, '556', `wrapped on \`${BR}\` (head ${head.slice(0, 8)}, cut from main).`);
+  g(fx.workB, 'fetch', '-q', 'origin');
+  assert.strictEqual(spawnSync('git', ['rev-parse', '--verify', '--quiet', `refs/heads/${BR}`], { cwd: fx.workB }).status, 1,
+    'precondition: machine B has no local ref of the branch');
+
+  const subjectOf = () => {
+    const r = colab(fx, ['ship', '--branch', BR, '--handoff', url, '--repo', fx.workB, '--dry'], { home: fx.homeB, ...SHIPPER });
+    const m = r.out.match(/Squash subject:\s*(.*)/);
+    assert.ok(m, r.out + r.err);
+    return m[1].trim();
+  };
+  const remoteOnly = subjectOf();
+  assert.doesNotMatch(remoteOnly, /^\(none/, 'a remote-only branch has commits of its own');
+  assert.strictEqual(remoteOnly, 'feat: the thing (#90)');
+
+  // The real run composes the same message: subject from the weightiest commit, the other as a bullet.
+  const r = colab(fx, ['ship', '--branch', BR, '--handoff', url, '--repo', fx.workB], { home: fx.homeB, ...SHIPPER });
+  assert.strictEqual(r.code, 0, r.out + r.err);
+  const msg = execFileSync('git', ['--git-dir', fx.origin, 'log', '-1', '--format=%B', 'main'], { encoding: 'utf8' });
+  assert.match(msg, /^feat: the thing \(#90\)\n/);
+  assert.match(msg, /^- docs: note the thing$/m);
+  assert.match(msg, /Closes #90/);
+});
+
+test('#603 e2e: the remote-only subject is identical to the one derived with a local ref', () => {
+  const fx = fixture();
+  const { head } = executorBuilds(fx, BR, [90]);
+  const url = postHandoff(fx, 90, '557', `wrapped on \`${BR}\` (head ${head.slice(0, 8)}, cut from main).`);
+  g(fx.workB, 'fetch', '-q', 'origin');
+  const dry = () => colab(fx, ['ship', '--branch', BR, '--handoff', url, '--repo', fx.workB, '--dry'], { home: fx.homeB, ...SHIPPER });
+  const subj = (r) => ((r.out.match(/Squash subject:\s*(.*)/) || [])[1] || '').trim();
+  const remoteOnly = subj(dry());
+  g(fx.workB, 'branch', BR, `origin/${BR}`); // the issue's repro step 3 — the workaround
+  const withLocal = subj(dry());
+  assert.ok(withLocal && !/^\(none/.test(withLocal), withLocal);
+  assert.strictEqual(remoteOnly, withLocal);
+});
