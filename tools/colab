@@ -10582,7 +10582,7 @@ function ciCureTrailerLine(cureVerdict, branch, trunk) {
 }
 
 const HELP_SHIP = `colab ship [--repo <path>] [--worktree <name> | --branch <br> | --direct] [--message "<msg>"] [--refs <N[,M]>] [--keep-worktree] [--delete-branch | --keep-branch] [--adopt | --handoff <comment-url>] [--answered-by <name>] [--session <id>] [--session-name <s>] [--dry] [--json]
-       colab ship --batch <b1,b2[,…]> [--split] [--repo <path>] [--keep-worktree] [--delete-branch | --keep-branch] [--session <id>] [--session-name <s>] [--dry]
+       colab ship --batch <b1,b2[@<handoff-url>][,…]> [--split] [--repo <path>] [--keep-worktree] [--delete-branch | --keep-branch] [--session <id>] [--session-name <s>] [--dry]
 
 The ONE sanctioned door for code-wrap Phase B: squash-merge a session branch into the BASE IT WAS
 CUT FROM — trunk for an ordinary session, or the declared integration line recorded on its worktree
@@ -10687,8 +10687,15 @@ live \`🔒 Claimed\` comment on that branch, posted by the hand-off's author be
 claimed or taken over here: the executor keeps its claim, worktree and branch until it confirms
 the land, the shipped branch is kept, the squash carries \`Colab-Handoff: <url> @ <sha>\`, and each
 🚢 comment names the hand-off. Any check failing refuses (exit 1); --force is never involved, and
-the human takeover (\`colab claim --force\`) stays the only other way in. Not with --adopt,
---batch or --direct, and not when this machine already holds a claim on the branch.
+the human takeover (\`colab claim --force\`) stays the only other way in. Not with --adopt
+or --direct, and not when this machine already holds a claim on the branch.
+
+IN A BATCH (#591) the hand-off rides its member: \`--batch b1,b2@<url>\` (split on the first @).
+That member is verified by this SAME door — same checks, same refusal text, which drops it from
+the batch while the rest build — then joins the combined run with no sync of its own; its squash
+carries the Colab-Handoff trailer, and the land reads the door back from that commit. Repeat the
+same list, @ included, on every call: a rebuild re-verifies its members from the command line.
+A bare --handoff beside --batch names no member and refuses.
 
 A remote-built branch that fell BEHIND its base (#579) is synced by the lander as usual (B0: merge
 the base in, push) — and the hand-off still verifies, because the commits between the handed-off
@@ -12306,6 +12313,11 @@ function cmdShipDryJson(opts) {
       baseCi: baseCiPayloadVal, dirtyOwners: dirtyOwnersPayloadVal, autonomyGate: autonomyGatePayloadVal,
       coreReview: coreReviewPayloadVal,
       ...machineTrailerPayload(mode === 'squash' || mode === 'pr-pending'),
+      // #591: the verified hand-off (or its refusal), so `ship --batch` puts this member's
+      // Colab-Handoff trailer on its squash and words a refusal exactly as the single door does.
+      ...(handoff ? { handoff: handoff.ok
+        ? { ok: true, url: handoff.url, sha: handoff.sha, handedOff: handoff.handedOff, syncMerges: handoff.syncMerges || 0 }
+        : { ok: false, reason: handoff.reason, detail: handoff.detail } } : {}),
     };
     // #373: `ship --batch` reads each member through this SAME function — handed the body, not stdout.
     if (opts._report) opts._report.body = body;
@@ -12467,11 +12479,14 @@ function cmdShipDryJson(opts) {
   // ---- (c) no hand-merge conflict — NEW: the plain --dry prose path never checks this today ----
   const generated = [...DEFAULT_GENERATED, ...(Array.isArray(doc.generated) ? doc.generated.map(String) : [])];
   const hasPreShip = fs.existsSync(path.join(repoAbs, '.colab', 'hooks', 'pre-ship'));
-  const mc = shipMergeConflictCheck(repoAbs, target, sess.branch, generated, hasPreShip);
+  // #591: read the branch through the ref it actually resolves to — a hand-off branch is remote-only
+  // here, and its bare name resolves to nothing (the same gap #589 closed for the cure rule).
+  const dryShipRef = shipRefFor(repoAbs, sess.branch);
+  const mc = shipMergeConflictCheck(repoAbs, target, dryShipRef, generated, hasPreShip);
   checks.push({ name: 'no hand-merge conflict', ok: mc.ok, class: mc.ok ? null : (mc.unknown ? SELF_CLEARING : HUMAN_GATED), detail: mc.detail });
 
   // ---- (d) the two checks the machine-facing path was missing entirely ----
-  const dryCommits = branchCommits(repoAbs, target, sess.branch);
+  const dryCommits = branchCommits(repoAbs, target, dryShipRef);
 
   // #87: B1b's cross-check, same rule as the prose path — only over the issues that would CLOSE.
   const dryCorr = shipguard.corroborateIssues(closeIssues, sess.branch, dryCommits);
@@ -12514,7 +12529,7 @@ function cmdShipDryJson(opts) {
   // #90: "branch has commits" — the precondition whose absence told an unattended caller `ok: true`
   // about a branch that could not ship. It is NOT a failure when the branch qualifies for
   // evidence-close; it is a different mode, and saying so is the whole point.
-  const dryMode = shipMode(repoAbs, target, sess.branch, dryCommits);
+  const dryMode = shipMode(repoAbs, target, dryShipRef, dryCommits);
   if (dryMode.evidenceClose) {
     mode = 'evidence-close';
     checks.push({ name: 'branch has commits', ok: true, class: null,
@@ -13422,8 +13437,10 @@ function cmdShip(argv) {
   // — refuse the combination rather than silently ignore --json on a real ship.
   if (opts.json && !opts.dry) throw new UserError('--json currently only applies together with --dry — see `colab ship --help`');
   if (shippedBranch.conflictingFlags(opts)) throw new UserError('--delete-branch and --keep-branch contradict each other — pass one (see `colab ship --help`, #368)');
-  // #578: a hand-off names ONE branch; batch and trunk-direct have no single branch for it to name.
-  if (opts.handoff && (opts.batch || opts.direct)) throw new UserError(`--handoff applies to one --branch ship — not to ${opts.batch ? '--batch' : '--direct'} (see \`colab ship --help\`)`);
+  // #578: a hand-off names ONE branch; trunk-direct has no branch for it to name. #591: in a batch the
+  // hand-off rides its member (`--batch b1,b2@<url>`), so a bare --handoff beside --batch names no one.
+  if (opts.handoff && opts.batch) throw new UserError('--handoff names one --branch ship; in a batch, attach it to its member: --batch <b1>,<b2>@<hand-off-url> (#591, see `colab ship --help`)');
+  if (opts.handoff && opts.direct) throw new UserError('--handoff applies to one --branch ship — not to --direct (see `colab ship --help`)');
   if (opts.split && !opts.batch) throw new UserError('--split applies to a red combined run of --batch only (#557) — run `colab ship --batch <b1,b2,…> --split` with the members the red batch carries');
   if (opts.batch) return cmdShipBatch(opts); // #373 — its own re-entrant path; nothing below changes
   // A fully separate code path, deliberately: the prose/table path below is unchanged by this
@@ -14694,7 +14711,11 @@ function cmdShipBatch(opts) {
   const doc = projectDoc(repoAbs);
   const trunk = resolveTrunk(repoAbs, doc);
   if (!trunk) throw new UserError('Could not determine trunk branch (set project.yml trunk:)');
-  const members = [...new Set(String(opts.batch === true ? '' : opts.batch).split(',').map((s) => s.trim()).filter(Boolean))];
+  // #591: a member built on another machine names its hand-off inline — `<branch>@<hand-off-url>`.
+  const entries = shipHandoff.parseBatchEntries(opts.batch === true ? '' : opts.batch);
+  if (entries.errors.length) throw new UserError(`--batch: ${entries.errors.join('; ')}`);
+  const members = entries.members;
+  const handoffs = entries.handoffs;
   if (members.includes(trunk)) throw new UserError(`Refusing: ${trunk} is the trunk itself — it cannot be a batch member`);
   const serial = (why, list = members) => {
     print(`✗ ship-batch: ${why}`);
@@ -14865,13 +14886,19 @@ function cmdShipBatch(opts) {
     if (!refs.remoteSha) why = `not on ${remote} — push it first; its CI has never seen it`;
     else if (refs.localSha && refs.localSha !== refs.remoteSha) why = `local ${shortSha(refs.localSha)} ≠ ${remote} ${shortSha(refs.remoteSha)} — its CI never saw this head`;
     if (!why) {
-      const rep = shipDryJsonReport({ repo: repoAbs, branch: b, dry: true, json: true, session: opts.session, sessionName: opts.sessionName });
+      // #591: a hand-off member is read through the SAME door a single --handoff ship uses
+      // (applyShipHandoff inside cmdShipDryJson) — one verification, never a batch-local copy.
+      const rep = shipDryJsonReport({ repo: repoAbs, branch: b, dry: true, json: true, session: opts.session, sessionName: opts.sessionName,
+        ...(handoffs[b] ? { handoff: handoffs[b] } : {}) });
       report = rep.body;
       files = branchChangedFiles(repoAbs, trunkRef, refs.remoteSha);
       ciClass = shipBatch.branchCiClass(git.ghRunForSha(repoAbs, b), workflowsFiringAt(repoAbs, refs.remoteSha, b).length > 0);
-      const el = rep.error ? { ok: false, why: rep.error } : shipBatch.memberEligibility(report, ciClass, {
-        trunk, touchesWorkflows: files.some((f) => f.startsWith('.github/workflows/')),
-      });
+      const el = rep.error ? { ok: false, why: rep.error }
+        // #591: a refused hand-off is worded as the single door words it — the same reason, the same detail.
+        : (report && report.handoff && !report.handoff.ok) ? { ok: false, why: `Refusing --handoff: ${report.handoff.detail}` }
+          : shipBatch.memberEligibility(report, ciClass, {
+            trunk, touchesWorkflows: files.some((f) => f.startsWith('.github/workflows/')),
+          });
       if (!el.ok) why = el.why;
     }
     evaluated.push({ branch: b, sha: refs.remoteSha, report, ciClass, files, ok: !why, why: why || `own head CI: ${ciClass}` });
@@ -14969,8 +14996,9 @@ function cmdShipBatch(opts) {
     const closeIssues = m.report.closeIssues || [];
     const refsIssues = m.report.refsIssues || [];
     const conflicts = [];
+    // #591: a hand-off member's squash records the door its issue set came through, as a single ship's does.
     const msg = buildSquashMessage(repoAbs, trunkRef, m.sha, closeIssues, refsIssues, conflicts,
-      [machineLine, shipBatch.memberTrailer({ ref, branch: m.branch, sha: m.sha })].filter(Boolean));
+      [shipHandoff.handoffTrailer(m.report.handoff), machineLine, shipBatch.memberTrailer({ ref, branch: m.branch, sha: m.sha })].filter(Boolean));
     const coverage = msg ? shipguard.closesCoverage({ message: msg, closeIssues, refsIssues, commits: branchCommits(repoAbs, trunkRef, m.sha) }) : { ok: false, missing: [] };
     const inherited = msg && refsIssues.length ? squash.inheritedClosingKeywordConflicts(msg, refsIssues) : [];
     if (!msg || !coverage.ok || inherited.length) {
@@ -15117,10 +15145,26 @@ function shipBatchLand(repoAbs, doc, trunk, remote, base, existing, verdict, opt
   // The post-ship hook runs ONCE, over the whole batch — it is a trunk-checkout event, not a member one.
   const changed = git.git(['diff', '--name-only', `${base}..${head}`], repoAbs);
   const hits = changed.ok ? lockfileDrift.changedLockfiles(changed.stdout.split('\n').filter(Boolean)) : [];
+  // Which commit is whose — read from the trailers, never from position alone.
+  const log = git.git(['log', '--format=%H%x01%B%x00', `${base}..${head}`], repoAbs);
+  const commitOf = new Map();
+  for (const rec of (log.ok ? log.stdout.split('\0') : [])) {
+    const [sha, body] = rec.replace(/^\n+/, '').split('\x01');
+    const tr = shipBatch.parseMemberTrailers([body || ''])[0];
+    if (sha && tr) commitOf.set(tr.branch, { sha: sha.trim(), body: body || '' });
+  }
   const allIssues = [];
   const st0 = state.loadState();
   const sessions = existing.members.map((m) => {
     const sess = resolveShipSession(st0, repoAbs, { branch: m.branch, session: opts.session, sessionName: opts.sessionName });
+    // #591: a hand-off member holds no claim here. Its squash carries the Colab-Handoff trailer the
+    // build verified, and the issue set is the branch name's trailing run — handoffVerdict's own rule —
+    // so its tail is the single hand-off land's: Closes from git, the executor's claim and branch kept.
+    const ho = sess.issues.length ? null : shipHandoff.parseHandoffTrailer((commitOf.get(m.branch) || {}).body);
+    if (ho) {
+      sess.issues = shipguard.branchIssueNumbers(m.branch);
+      sess.handoff = { ok: true, url: ho.url, sha: m.sha, handedOff: ho.handedOff };
+    }
     allIssues.push(...sess.issues);
     return sess;
   });
@@ -15132,14 +15176,6 @@ function shipBatchLand(repoAbs, doc, trunk, remote, base, existing, verdict, opt
   if (hits.length && !hook.ran) warnDeferred(lockfileDrift.driftWarning(hits));
   release();
 
-  // Which commit is whose — read from the trailers, never from position alone.
-  const log = git.git(['log', '--format=%H%x01%B%x00', `${base}..${head}`], repoAbs);
-  const commitOf = new Map();
-  for (const rec of (log.ok ? log.stdout.split('\0') : [])) {
-    const [sha, body] = rec.replace(/^\n+/, '').split('\x01');
-    const tr = shipBatch.parseMemberTrailers([body || ''])[0];
-    if (sha && tr) commitOf.set(tr.branch, { sha: sha.trim(), body: body || '' });
-  }
   const gh = isGhUsable(repoAbs);
   const suffix = shipBatch.evidenceSuffix({ n: existing.members.length, ref: existing.ref, headSha: head, runIds: verdict.runIds });
   existing.members.forEach((m, i) => {
@@ -15171,14 +15207,16 @@ function shipBatchMemberTail({ repoAbs, doc, trunk, sess, sha, closeIssues, refs
   pushEvent('ship', {
     repo: repoAbs, worktree: sess.name, session: sess.session,
     issue: sess.issues.length === 1 ? sess.issues[0] : undefined,
-    payload: { state: 'merged', branch: sess.branch, target: trunk, sha, issues: sess.issues, batch: true },
+    payload: { state: 'merged', branch: sess.branch, target: trunk, sha, issues: sess.issues, batch: true,
+      ...(sess.handoff ? { handoff: { url: sess.handoff.url, sha: sess.handoff.sha } } : {}) },
   });
   for (const num of closeIssues) pushEvent('issue-merged', { repo: repoAbs, issue: num, payload: { sha } });
   shipLandedTail({
     repoAbs, sess, target: trunk, trunk, gh, sha, closeIssues, refsIssues, refsSet: new Set(refsIssues),
-    integration: resolveIntegration(repoAbs, doc, trunk), opts, evidenceExtra: suffix,
+    integration: resolveIntegration(repoAbs, doc, trunk), opts, evidenceExtra: suffix + handoffEvidence(sess.handoff), // #591
   });
   print(`  ✓ ${sess.branch} → ${trunk} @ ${sha}${sess.issues.length ? ' (' + sess.issues.map((n) => '#' + n).join(' ') + ')' : ''}`);
+  if (sess.handoff) print(`    landed from the hand-off ${sess.handoff.url} — the executor's claim and worktree stay until it confirms the land (#578)`);
 }
 
 // ---------------------------------------------------------------------------
