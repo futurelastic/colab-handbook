@@ -17,8 +17,9 @@ LaunchAgent).
 ## Requirements
 
 - Node (plain, no dependencies).
-- `gh`, authenticated — only needed for entries given as `owner/name` slugs. Entries
-  given as local paths need nothing but a filesystem.
+- `gh`, authenticated — only needed for entries given as `owner/name` slugs, and for the
+  label and visibility checks of a local repo with a GitHub remote. Entries given as local
+  paths need nothing but a filesystem under `--offline`.
 
 ## Usage
 
@@ -31,6 +32,9 @@ node audit.mjs my-org/my-repo           # one remote slug, ad hoc
 node audit.mjs --config other-list.txt  # a different repo list
 node audit.mjs --identity               # ALSO scan public repository metadata — see below
 node audit.mjs --batch-history          # ALSO read each local repo's batch landing history — see below
+node audit.mjs --offline                # local checks only, no GitHub read at all — see "Remote cache"
+node audit.mjs --fresh                  # ignore the cache TTL: re-ask GitHub (still conditional)
+node audit.mjs --cache-ttl 60           # serve cached GitHub reads for 60 s (default 600; 0 = always ask)
 ```
 
 Exit code: `0` when every repo passes, `1` when any repo has a finding, `2` on a
@@ -508,6 +512,34 @@ raised only against a `batch-*` value the repo declares under `thresholds:` in `
 Off by default for the same reason as `--identity`: it reads CI history over the network (one API
 listing per day of the 30-day window), and a fleet sweep must stay runnable offline. The header says
 which it was on every run (`batch: … NOT read (pass --batch-history)`; `--json`: `batchHistory.read`).
+
+## Remote cache — `--offline`, `--fresh`, `--cache-ttl`
+
+Every GitHub REST read — repository metadata, labels, and for a slug target its files, branches
+and tags — goes through one on-disk cache, a file per repo. A host that runs the audit often (a
+dashboard rebuilding its overview) otherwise turns it into the largest consumer of the account's
+REST quota: measured at about 10,000 calls an hour on one machine, twice the hourly limit.
+
+- **Within the TTL** (default 600 s; `--cache-ttl <s>` or `COLAB_AUDIT_CACHE_TTL`) a read is served
+  with no request at all.
+- **Past it**, each page is re-asked with `If-None-Match`; a `304` costs no quota and re-arms the
+  TTL. A `404` is cached for the TTL too (it has no ETag, so re-asking it costs one call).
+- **`--fresh`** skips the TTL: every read goes to the server, still conditional.
+- **A rate limit or no response** serves the cached copy, marked stale. Any other error is an
+  error: a deleted repo never keeps reporting its old labels.
+- **Where:** `COLAB_AUDIT_CACHE_DIR`, else `${COLAB_HOME:-~/.colab}/cache/audit`, but only when that
+  home already exists; the audit never creates it, and without it the cache lasts one run. Entries
+  are partitioned by the `gh` binary, `GH_HOST` and any token in the environment, so two
+  credentials (or a test's fake `gh`) never share them. Files untouched for 7 days are pruned.
+- **Provenance:** `--json` carries a top-level `remote` (`read`, `cache`, `ttlSeconds`, `fresh`)
+  and, per repo that read GitHub, `remote: { mode, reads, cache, revalidated, fetched, stale,
+  errors, oldestAgeSeconds }`. The text header says it once per run (`remote: …`).
+
+**`--offline`** (alias `--no-remote`) is the cheap frequent pass: local checks only, no `gh` call.
+Labels, visibility and a `release.final` grant go unchecked (the header says so once; the grant is
+recorded in `--json` as `releaseFinalGrant.checked: false`), and a slug entry is skipped
+(`skipped: "offline"`, counted as skipped in the summary). It refuses `--identity`,
+`--batch-history` and `--fresh` with exit 2, since each one asks for the network.
 
 ## The repo list — resolution order
 

@@ -148,7 +148,8 @@ test('audit --identity: ambiguous remotes FAIL the requested scan with the fix, 
 test('audit --identity: an `upstream`-only repo scans upstream\'s metadata', () => {
   const gh = fakeGh();
   audit(fixture({ upstream: 'https://github.com/up-owner/up-repo.git' }), { gh, args: ['--identity'], vocab: vocabulary() });
-  assert.ok(gh.calls().includes('api repos/up-owner/up-repo'), gh.calls().join('\n'));
+  // The path is the first argument after `api`; the cache (#593) appends `-i` and conditional headers.
+  assert.ok(gh.calls().some((c) => c.split(' ')[1] === 'repos/up-owner/up-repo'), gh.calls().join('\n'));
 });
 
 // --- pre-push-guard: the remedy names the remote actually pushed to ---------------------------

@@ -41,6 +41,19 @@
 //                                        # (colab batch-stats --json) — see "Batch history" below
 //   node audit.mjs --base <rev>          # the instruction-file ratchet's base for LOCAL repos
 //                                        # (default origin/<trunk>) — see checkInstructionFileShape
+//   node audit.mjs --offline             # local checks only: no GitHub read at all — see "Remote cache"
+//   node audit.mjs --fresh               # ignore the cache TTL: re-ask GitHub (still conditional)
+//   node audit.mjs --cache-ttl <secs>    # how long a cached GitHub read is served unasked
+//                                        # (default 600; env COLAB_AUDIT_CACHE_TTL; 0 = always ask)
+//
+// Remote cache (#593): the GitHub reads (repository metadata, labels, and a slug target's files,
+// branches and tags) are cached across runs, one file per repo under COLAB_AUDIT_CACHE_DIR, else
+// ${COLAB_HOME:-~/.colab}/cache/audit when that home already exists (the audit never creates it).
+// Within the TTL a read costs no request; past it each page is re-asked with If-None-Match, and a
+// 304 costs no quota. A rate limit or no response serves the cached copy, marked stale. --json
+// states per repo where its remote facts came from (`remote`). --offline is the cheap frequent
+// pass: local checks only, remote-only (slug) entries skipped, and it refuses --identity,
+// --batch-history and --fresh, which all need the network.
 //
 // Identity (--identity): metadata never passes through git, so the pre-commit identity scan
 // (templates/pre-commit-identity) structurally cannot see it, and it is the first thing a
@@ -112,6 +125,8 @@ const shipBatch = require("../tools/lib/ship-batch.js");
 const ciProfile = require("../tools/lib/ci-profile.js"); // #559
 const thresholdsLib = require("../tools/lib/thresholds.js"); // #560
 const batchHistory = require("../tools/lib/batch-history.js"); // #556
+// #593: every GitHub REST read goes through one on-disk, per-repo cache (ETag + TTL) — see the module.
+const auditCache = require("../tools/lib/audit-cache.js");
 // #383: where migrations live — the one rule `colab ship`'s gate and `release cut` read; the audit
 // validates the `migrations:` declaration against it and reports a `*/migrations/` dir it misses.
 const migrationPaths = require("../tools/lib/migration-paths.js");
@@ -155,13 +170,20 @@ const COLAB_HOME = process.env.COLAB_HOME || join(homedir(), ".colab");
 
 function parseArgs(argv) {
   // config === null means "resolve from the precedence chain"; a string means explicit.
-  const opts = { config: null, locals: [], slugs: [], json: false, quiet: false, help: false, identity: false, batchHistory: false };
+  const opts = { config: null, locals: [], slugs: [], json: false, quiet: false, help: false, identity: false, batchHistory: false, offline: false, fresh: false, cacheTtl: null };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === "--json") opts.json = true;
     else if (a === "--quiet" || a === "-q") opts.quiet = true;
     else if (a === "--identity") opts.identity = true;
     else if (a === "--batch-history") opts.batchHistory = true;
+    else if (a === "--offline" || a === "--no-remote") opts.offline = true;
+    else if (a === "--fresh") opts.fresh = true;
+    else if (a === "--cache-ttl") {
+      const p = argv[++i];
+      if (p === undefined) die("--cache-ttl needs a number of seconds");
+      opts.cacheTtl = p;
+    }
     else if (a === "--base") {
       const p = argv[++i];
       if (!p) die("--base needs a rev");
@@ -515,31 +537,30 @@ function runGh(args) {
 }
 
 // A slug is fetched read-only through the API — nothing is cloned, nothing is written
-// into anyone's working tree.
+// into anyone's working tree. Every REST read below goes through `remoteCache` (#593), set up
+// once per run in runAudit; the `--jq` filters these used to pass are applied here in JS,
+// because a cached page is the raw API body.
+let remoteCache = auditCache.create({ dir: null, ttlSeconds: 0 });
+
 function readRemoteFile(slug, path) {
-  try {
-    return runGh(["api", `repos/${slug}/contents/${path}`, "-H", "Accept: application/vnd.github.raw"]);
-  } catch {
-    return null;
-  }
+  const r = remoteCache.get(slug, `repos/${slug}/contents/${path}`, { accept: "application/vnd.github.raw" });
+  return r.status === "ok" ? r.text : null;
 }
 
 function listRemoteDir(slug, path) {
+  const r = remoteCache.get(slug, `repos/${slug}/contents/${path}`);
+  if (r.status !== "ok") return [];
   try {
-    const out = runGh(["api", `repos/${slug}/contents/${path}`, "--jq", ".[].name"]);
-    return out.split("\n").map((s) => s.trim()).filter(Boolean);
+    const arr = JSON.parse(r.text);
+    return Array.isArray(arr) ? arr.map((e) => String(e.name || "").trim()).filter(Boolean) : [];
   } catch {
     return [];
   }
 }
 
 function listRemoteBranches(slug) {
-  try {
-    const out = runGh(["api", `repos/${slug}/branches`, "--paginate", "--jq", ".[].name"]);
-    return out.split("\n").map((s) => s.trim()).filter(Boolean);
-  } catch {
-    return null; // null = could not determine, distinct from "no branches"
-  }
+  const r = remoteCache.get(slug, `repos/${slug}/branches`, { paginate: true });
+  return r.status === "ok" ? r.items.map((b) => String(b.name)) : null; // null = could not determine, distinct from "no branches"
 }
 
 // Same null/[] contract as listRemoteBranches: null = could not determine (no remote, no
@@ -547,33 +568,22 @@ function listRemoteBranches(slug) {
 // falsifiers (#137) — a version-shaped tag is evidence against a declared "nothing consumes
 // this" claim, whether the source is local or remote.
 function listRemoteTags(slug) {
-  try {
-    const out = runGh(["api", `repos/${slug}/tags`, "--paginate", "--jq", ".[].name"]);
-    return out.split("\n").map((s) => s.trim()).filter(Boolean);
-  } catch {
-    return null;
-  }
+  const r = remoteCache.get(slug, `repos/${slug}/tags`, { paginate: true });
+  return r.status === "ok" ? r.items.map((t) => String(t.name)) : null;
 }
 
 // Labels live on GitHub, not in the working tree, so this is the audit's one check that
 // needs the tracker. `null` means "could not determine" — no remote, no auth, gh absent,
-// API error — and the caller stays SILENT on it rather than warning: unlike branches
+// API error, --offline — and the caller stays SILENT on it rather than warning: unlike branches
 // (every git repo has them), labels are a GitHub-only concept and a remote-less or
 // offline audit legitimately cannot see them. A warn per offline repo would be noise,
 // and we cannot assert a label is missing when we could not read the set at all.
-//   Each entry is { name, description } (#364) — one JSON object per line from `--jq`, so a
-// paginated read never has to splice arrays. A line that does not parse makes the whole read
-// null: a half-read set would report the unread half as "missing".
+//   Each entry is { name, description } (#364). Any page that does not parse makes the whole
+// read null: a half-read set would report the unread half as "missing".
 function listRemoteLabels(slug) {
-  try {
-    const out = runGh(["api", `repos/${slug}/labels`, "--paginate", "--jq", ".[] | {name, description}"]);
-    return out.split("\n").map((s) => s.trim()).filter(Boolean).map((line) => {
-      const l = JSON.parse(line);
-      return { name: String(l.name), description: typeof l.description === "string" ? l.description : "" };
-    });
-  } catch {
-    return null;
-  }
+  const r = remoteCache.get(slug, `repos/${slug}/labels`, { paginate: true });
+  if (r.status !== "ok") return null;
+  return r.items.map((l) => ({ name: String(l.name), description: typeof l.description === "string" ? l.description : "" }));
 }
 
 // The repository's own METADATA — name, description, homepage, topics, visibility — which
@@ -596,6 +606,7 @@ function listRemoteLabels(slug) {
 // One issue's state, labels and comments (#441 — a release.final-grant's decision issue), or null
 // when it could not be read. null is never "no decision": the caller fails closed on it.
 function readRemoteIssue(slug, num) {
+  if (remoteCache.offline) return null; // --offline: no tracker read (the caller skips the check)
   try {
     return JSON.parse(runGh(["issue", "view", String(num), "--repo", slug, "--json", "state,labels,comments"]));
   } catch {
@@ -609,11 +620,11 @@ const remoteMetadataCache = new Map();
 function readRemoteMetadata(slug) {
   if (remoteMetadataCache.has(slug)) return remoteMetadataCache.get(slug);
   let r;
-  try {
-    const out = runGh(["api", `repos/${slug}`]);
-    r = { status: "ok", data: JSON.parse(out) };
-  } catch {
-    r = { status: "unreadable" };
+  const got = remoteCache.get(slug, `repos/${slug}`);
+  if (got.status === "offline") r = { status: "offline" };
+  else if (got.status !== "ok") r = { status: "unreadable" };
+  else {
+    try { r = { status: "ok", data: JSON.parse(got.text) }; } catch { r = { status: "unreadable" }; }
   }
   remoteMetadataCache.set(slug, r);
   return r;
@@ -1123,6 +1134,16 @@ function renderDuration(age, minDays = DURATION_MIN_DAYS) {
 }
 
 function auditRepo(target, ctx) {
+  remoteCache.begin();
+  const info = auditRepoInner(target, ctx);
+  // #593: where this repo's remote facts came from — cache, revalidated (304), fetched, stale —
+  // and how old the oldest is. Absent when the repo made no GitHub read at all.
+  const remote = remoteCache.summary();
+  if (remote) info.remote = remote;
+  return info;
+}
+
+function auditRepoInner(target, ctx) {
   const src = makeSource(target);
   // #522: the branch list is read by the single-trunk rule (tier B / exposure none|released) AND the
   // trunk-exists check below — one read, so a remote target costs one API listing, not three.
@@ -1572,7 +1593,11 @@ function auditRepo(target, ctx) {
       // not been reopened. Unreadable fails closed: an automatic production deploy nobody can
       // trace to a human's choice is exactly what the grant exists to rule out.
       const grant = rel.effective.finalGrant;
-      if (grant) {
+      if (grant && ctx.offline) {
+        // #593: --offline reads no tracker. Recorded, not judged — the run header says once that
+        // remote facts were not read, so this row is never mistaken for a verified grant.
+        info.releaseFinalGrant = { issue: grant.issue, ok: null, checked: false, reason: "--offline" };
+      } else if (grant) {
         const v = releasePolicy.finalGrantVerdict(src.issue ? src.issue(grant.issue) : null, { issue: grant.issue, trust: trustHumansLib.parseTrustHumans(cfg) });
         info.releaseFinalGrant = { issue: grant.issue, ok: v.ok, ruledBy: v.ruledBy };
         if (!v.ok) {
@@ -2900,6 +2925,9 @@ function checkPrivateNpm(src, workflows, fail, warn) {
   const assetSurface = npmGuard.releaseAssetUploads(workflows, reader.readFile).length > 0;
   if (!npmSurface && !assetSurface) return;
   const meta = src.metadata ? src.metadata() : { status: "unreadable" };
+  // #593: --offline reads no visibility by request; the run header already says so once, and a
+  // "could not be read" advisory on every offline pass would mark every such repo non-clean.
+  if (meta.status === "offline") return;
   let visibility = null;
   if (meta.status === "ok" && meta.data) {
     visibility = meta.data.visibility || (meta.data.private === true ? "private" : meta.data.private === false ? "public" : null);
@@ -3251,6 +3279,10 @@ function report(results, opts, ctx) {
         ? { scanned: true, vocabulary: ctx.identity.path, source: ctx.identity.source, terms: ctx.identity.count }
         : { scanned: false, reason: "not requested (--identity)" },
       batchHistory: ctx.batchHistory ? { read: true } : { read: false, reason: "not requested (--batch-history)" },
+      // #593: whether GitHub was read at all this run, and the cache it was read through.
+      remote: ctx.offline
+        ? { read: false, reason: "--offline" }
+        : { read: true, cache: ctx.cache.dir, persistent: !!ctx.cache.dir, ttlSeconds: ctx.cache.ttlSeconds, fresh: ctx.cache.fresh },
       results,
     }, null, 2));
     return;
@@ -3272,6 +3304,10 @@ function report(results, opts, ctx) {
   console.log(ctx.batchHistory
     ? "batch:     batch landing history read per local repo (colab batch-stats); advisories only against declared thresholds"
     : "batch:     batch landing history NOT read (pass --batch-history)");
+  // #593: same once-per-run statement for the remote reads.
+  console.log(ctx.offline
+    ? "remote:    GitHub NOT read (--offline) — labels, visibility and grants unchecked; remote-only entries skipped"
+    : `remote:    GitHub read through ${ctx.cache.dir ? `the cache at ${ctx.cache.dir}` : "an in-memory cache (no colab home to persist it)"}, TTL ${ctx.cache.ttlSeconds}s${ctx.cache.fresh ? ", --fresh" : ""}`);
   console.log("");
 
   const shown = opts.quiet ? results.filter((r) => !r.clean) : results;
@@ -3287,7 +3323,8 @@ function report(results, opts, ctx) {
     // The handbook's own row says WHY it carries no stamp findings. Without this it
     // would read as clean-by-luck, which is indistinguishable from a check that
     // quietly stopped working.
-    if (r.self) lines.push("⌂ handbook source — every rule applies except its own stamps (it has nothing to copy from)");
+    if (r.skipped === "offline") lines.push("– skipped (--offline: a remote-only entry has nothing local to check)");
+    else if (r.self) lines.push("⌂ handbook source — every rule applies except its own stamps (it has nothing to copy from)");
     else if (r.adoption === "local") lines.push(`⌂ adopted locally, not committed — descriptor hidden by .git/info/exclude; a repo the fleet does not own (CONVENTIONS.md §9)${r.clean ? " ✓" : ""}`);
     else if (r.clean) lines.push("✓");
     r.findings.forEach((f) => lines.push(`${f.level === "fail" ? "⚠" : "·"} ${f.text}`));
@@ -3304,8 +3341,9 @@ function report(results, opts, ctx) {
 
   const failed = results.filter((r) => !r.ok).length;
   const warned = results.filter((r) => r.ok && !r.clean).length;
+  const skipped = results.filter((r) => r.skipped).length;
   console.log("");
-  console.log(`${results.length} repo(s): ${results.length - failed - warned} clean, ${warned} with advisories, ${failed} with problems.`);
+  console.log(`${results.length} repo(s): ${results.length - failed - warned - skipped} clean, ${warned} with advisories, ${failed} with problems${skipped ? `, ${skipped} skipped` : ""}.`);
 }
 
 /**
@@ -3353,13 +3391,33 @@ function runAudit(opts) {
   const targets = loadTargets(opts);
   if (!targets.length) die("nothing to audit — add entries to the repo list or pass --local <path>");
 
+  if (opts.offline) {
+    // Each of these is a read of the network the operator asked for; an offline run that quietly
+    // skipped it would report clean over a check that never ran.
+    if (opts.identity) die("--offline and --identity conflict: the identity scan reads repository metadata from GitHub");
+    if (opts.batchHistory) die("--offline and --batch-history conflict: batch history reads CI runs from GitHub");
+    if (opts.fresh) die("--offline and --fresh conflict: --fresh asks GitHub, --offline never does");
+  }
+  const ttlSeconds = auditCache.resolveTtlSeconds(opts.cacheTtl);
+  if (ttlSeconds === null) die(`--cache-ttl / COLAB_AUDIT_CACHE_TTL must be a whole number of seconds (got "${opts.cacheTtl ?? process.env.COLAB_AUDIT_CACHE_TTL}")`);
+  remoteCache = auditCache.create({
+    dir: auditCache.resolveDir(process.env, COLAB_HOME), ttlSeconds, fresh: opts.fresh, offline: opts.offline,
+  });
+
   const ctx = { handbook: handbookInfo(HANDBOOK_ROOT), templateNames: templateNames(HANDBOOK_ROOT) };
+  ctx.offline = !!opts.offline;
+  ctx.cache = { dir: remoteCache.dir, ttlSeconds, fresh: !!opts.fresh };
   ctx.identity = opts.identity ? loadIdentityVocabulary() : null;
   ctx.batchHistory = !!opts.batchHistory;
   ctx.base = opts.base || null;
 
   const results = [];
   for (const t of targets) {
+    if (ctx.offline && t.kind !== "local") {
+      // A slug target has nothing local to check: every fact about it is a GitHub read.
+      results.push({ repo: t.label, kind: t.kind, tier: null, ok: true, clean: true, skipped: "offline", remote: { mode: "offline" }, findings: [] });
+      continue;
+    }
     try {
       results.push(auditRepo(t, ctx));
     } catch (err) {
