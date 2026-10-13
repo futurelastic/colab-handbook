@@ -15,6 +15,9 @@
 # An unmigrated repo whose change leaves both files alone stays green — adding the caller never
 # turns trunk red on its own.
 #
+# THE FORK EXEMPTION (#602): a repo declaring `instruction-files: upstream` in .github/project.yml
+# (a fork whose CLAUDE.md/AGENTS.md are its upstream's — CONVENTIONS.md §9) passes unjudged.
+#
 # THE BASE: a pull request → the first parent of the merge commit actions/checkout checked out
 # (refs/pull/N/merge), i.e. the base-branch tip GitHub merged the PR onto — so the diff is exactly
 # what the PR adds. Not `pull_request.base.sha`: that sha can be OLDER than the first parent (the

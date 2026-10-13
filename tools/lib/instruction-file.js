@@ -328,6 +328,30 @@ function ratchetVerdict({ changed = [], head = [], base = null }) {
   return { fail: false, reason: null, bad };
 }
 
+/**
+ * #602 — `instruction-files:` in .github/project.yml → `{ declared, exempt, valid, value, reason }`.
+ * `upstream` says this repo's CLAUDE.md/AGENTS.md belong to an upstream it tracks (a fork,
+ * CONVENTIONS.md §9 *A fork of an upstream*), so the shape is not judged here. Absent = judged.
+ * Any other value is invalid and read in the STRICTER direction — judged — while the audit fails
+ * the value. The committed record of `colab adopt`'s fork test, which reads a remote CI never has;
+ * never a second fork test.
+ */
+const INSTRUCTION_FILES_KEY = 'instruction-files';
+function parseInstructionFiles(doc) {
+  const has = !!doc && typeof doc === 'object' && Object.prototype.hasOwnProperty.call(doc, INSTRUCTION_FILES_KEY);
+  const v = has ? doc[INSTRUCTION_FILES_KEY] : null;
+  if (v === null || v === undefined) {
+    return { declared: false, exempt: false, valid: true, value: null, reason: 'instruction-files absent — every CLAUDE.md is judged (#588)' };
+  }
+  if (v === 'upstream') {
+    return { declared: true, exempt: true, valid: true, value: 'upstream', reason: 'instruction-files: upstream — CLAUDE.md/AGENTS.md are upstream-owned (a fork), so their shape is not judged here (CONVENTIONS.md §9, #602)' };
+  }
+  return {
+    declared: true, exempt: false, valid: false, value: v,
+    reason: `instruction-files is ${JSON.stringify(v)} — the only defined value is "upstream"; read as absent, so every CLAUDE.md is still judged (#602)`,
+  };
+}
+
 module.exports = {
   stripCode,
   IMPORT_MAX_DEPTH,
@@ -349,4 +373,6 @@ module.exports = {
   judgeClaudeMd,
   RULE_FILE_RE,
   ratchetVerdict,
+  INSTRUCTION_FILES_KEY,
+  parseInstructionFiles,
 };

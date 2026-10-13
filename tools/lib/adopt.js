@@ -397,7 +397,7 @@ function remainingSteps(ctx = {}) {
     { n: 4, text: 'Optional: add the tier topic to the GitHub repo — `gh repo edit --add-topic tier-<b|c|a>`, step 4. Needs repo ADMIN (push access alone gets `HTTP 404 …/topics`); nothing in colab or the audit reads it, so skip it when you are not one (#522)' },
   );
   if (ctx.fork) {
-    steps.push({ n: 5, text: `Fork of an upstream (${ctx.fork.source === 'flag' ? '--fork' : `remote "${ctx.fork.remote}"`}): do NOT make CLAUDE.md the thin shell — append templates/repo-CLAUDE-block.md at the END of the upstream's CLAUDE.md (create it only if upstream has none), record that append as a fork patch, leave AGENTS.md and the upstream prose untouched; CONVENTIONS.md §9 "A fork of an upstream", step 5` });
+    steps.push({ n: 5, text: `Fork of an upstream (${ctx.fork.source === 'flag' ? '--fork' : `remote "${ctx.fork.remote}"`}): do NOT make CLAUDE.md the thin shell — append templates/repo-CLAUDE-block.md at the END of the upstream's CLAUDE.md (create it only if upstream has none), record that append as a fork patch, leave AGENTS.md and the upstream prose untouched, and keep \`instruction-files: upstream\` in .github/project.yml (adopt writes it with the descriptor; add it by hand to one that predates #602) so the instruction-file check leaves the upstream's files unjudged; CONVENTIONS.md §9 "A fork of an upstream", step 5` });
     const agentFiles = ctx.upstreamAgentFiles || [];
     if (agentFiles.length) {
       steps.push({ n: 5, text: `Upstream ships its own agent workflow (${listShort(agentFiles)}): leave it in place, and say in the appended block that fork work runs code-start → code-wrap → code-ship, not that workflow — §9 "A fork of an upstream", step 5` });

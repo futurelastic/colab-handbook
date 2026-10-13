@@ -1425,6 +1425,23 @@ a Python requirements or constraints file, `CMakeLists.txt` — but a `.txt` a s
 any other name (a `-r` include) is: list it. Read at the pushed sha. The one reading in tooling is
 `tools/lib/docs-only.js` `parseCiDocsSkip` (`--json`: `ciDocsSkip`).
 
+### `instruction-files` — optional
+
+```yaml
+instruction-files: upstream   # absent = every CLAUDE.md is judged
+```
+
+A fork whose `CLAUDE.md`/`AGENTS.md` belong to the upstream it tracks (`CONVENTIONS.md` §9, *A
+fork of an upstream*) declares this, and the instruction-file check — the audit's
+`prose-in-claude-md`/`no-agents-md`, the pre-commit hooklet, the reusable CI workflow, all one gate —
+passes without judging them (#602). It is the committed record of `colab adopt`'s fork test (a
+remote CI cannot see), which adopt writes on a detected fork; never a second fork test.
+
+- **`upstream` is the only value.** Anything else is a finding; it reads as absent, so the files are judged.
+- **Read on the judged side** — the head commit, the index or the working tree — never the merge base,
+  so the change that adopts the CI caller and appends the Conventions block can declare it too.
+- The one reading is `tools/lib/instruction-file.js` `parseInstructionFiles` (`--json`: `instructionFiles`).
+
 ### `ship-gate-workflows`, `ship-ignore-workflows` — optional
 
 ```yaml
