@@ -46,7 +46,7 @@
  * section carrying its measured cost (parseMigrationSection). Every signal is written into the tag
  * message, so the reason for the bump is recorded mechanically.
  *
- * Never a final tag — with ONE exception, `deploy-tag-fast` (#446): there the operator granted a
+ * Never a final tag — with two exceptions, `library-fast` (#590, below) and `deploy-tag-fast` (#446): on the latter the operator granted a
  * final on every green trunk head, so `--auto` tags `vX.Y.Z` directly (no candidate, no test period)
  * and the release workflow deploys it in the same run. That branch adds five checks, all in the
  * same closed vocabulary:
@@ -59,6 +59,14 @@
  *   release-hold         no open issue carries the human veto label
  *   migration-grant      no migration since the last final unless the version's tracking issue is
  *                        granted one — otherwise a refusal whose `handoff` names the human command
+ *
+ * #590: route `library-fast` is the second final route — a library released per merge, nothing
+ * deployed. `cut` (by hand or `--auto`) tags `vX.Y.Z` directly once a first final exists, with
+ * `already-final` in place of `already-candidate` and the `release-hold` veto, and none of the fast
+ * route's grant, spacing, migration hand-off or health gate. Its version on `version-source:
+ * manifest` is the manifest's (decideManifestVersion): equal to the last final is a NO-OP, a break the
+ * manifest under-declares is a refusal; on `version-source: tag` the bump is computed as for a
+ * candidate.
  *
  * Elsewhere finalizing a candidate is the release skill's (#339), and a final is a human act on
  * every row where a tag reaches production.
@@ -108,6 +116,25 @@ const HOLD_LABEL = 'release-hold';
 /** #446: is this policy the fast route, where `cut --auto` tags the final itself? */
 function isFastRoute(policy) {
   return !!(policy && policy.effective && policy.effective.finalize === 'on-green-head');
+}
+
+/**
+ * #590: is this policy route library-fast as declared — no candidates, an automatic final reached
+ * by the tag itself? There `cut` tags the FINAL directly, as on deploy-tag-fast, but nothing deploys:
+ * no grant, no spacing, no migration hand-off, no health gate. A `final: human` narrowing keeps
+ * `finalize: on-tag` but makes every final a human act, so it is not this.
+ */
+function isLibraryRoute(policy) {
+  const e = policy && policy.effective;
+  return !!(e && e.finalize === 'on-tag' && e.final === 'auto' && e.candidates === 'off');
+}
+
+/** #590: the route a refusal names — the one in effect, never the derived default it replaced. */
+function routeWhy(policy) {
+  const releasePolicy = require('./release-policy');
+  const route = policy && policy.effective && policy.effective.route;
+  const own = route && releasePolicy.ROUTE_POLICY[route];
+  return { route, why: own ? own.why : policy.derived.why };
 }
 
 /** The file a major's migration section is read from, at the candidate commit (#422). */
@@ -411,6 +438,63 @@ function decideAutoVersion({ lastFinal, signals, migration, tags }) {
   }
   if ((tags || []).includes(version)) return refuse(`${version} is already a final tag — a candidate for a released version is meaningless`);
   return { ok: true, detail: `${lastFinal} -> ${version} (${bump}, computed: ${why})`, version, bump, why, overridden: null, migration: mig };
+}
+
+// ---- #590: library-fast — the version the manifest already says ------------------------------
+
+/**
+ * Route library-fast with `release.version-source: manifest`: the release is the version a merge
+ * already put in the manifest, so the cut computes no bump — it checks the manifest's.
+ *   manifests  release-tag.js manifestVersions() at the commit (null = unread)
+ *   breaking   [why] — a breaking signal since the last final (autoSignals' `breaking`, or the
+ *              manual cut's semverSuggestion when it says major); empty when none
+ *   migration  (version) => parseMigrationSection result, asked only for a major
+ * Returns decideVersion's shape, plus `nothing` (the manifest still says the last final — a no-op
+ * under --auto) and `fallback` (no manifest declares a version: the caller computes the bump as on
+ * version-source: tag).
+ */
+function decideManifestVersion({ lastFinal, manifests, tags, breaking, migration }) {
+  const refuse = (detail, extra = {}) => ({ ok: false, detail, ...extra });
+  if (!lastFinal) return refuse('no final release tag (vX.Y.Z) on main yet — the first version is a human decision, not a computed bump');
+  const last = parseVersion(lastFinal);
+  if (!last) return refuse(`the last release tag ${lastFinal} is not vX.Y.Z — cannot compare the manifest against it`);
+  if (manifests === null || manifests === undefined) return refuse('the manifests could not be read at the commit — an unread version is not a release', { unread: true });
+  const bad = manifests.filter((m) => m.error).map((m) => `${m.file}: ${m.error}`);
+  if (bad.length) return refuse(`a manifest does not read — ${bad.join('; ')}`);
+  const stated = manifests.filter((m) => !m.dynamic && m.version !== undefined && m.version !== null);
+  if (!stated.length) return { ok: false, fallback: true, detail: 'no manifest states a version' };
+  const values = [...new Set(stated.map((m) => String(m.version).replace(/^v/, '')))];
+  if (values.length > 1) return refuse(`the manifests disagree on the version — ${stated.map((m) => `${m.file} says ${m.version}`).join('; ')}`);
+  const v = parseVersion(`v${values[0]}`);
+  const where = stated.map((m) => m.file).join(', ');
+  if (!v) return refuse(`${where} says ${values[0]}, which is not X.Y.Z — route library-fast tags finals only, never a pre-release`);
+  const version = formatVersion(v);
+  const cmp = (a, b) => (a.major - b.major) || (a.minor - b.minor) || (a.patch - b.patch);
+  if (cmp(v, last) === 0) {
+    return refuse(`${where} still says ${values[0]}, the last final ${lastFinal} — nothing to release until a merge bumps it (route library-fast, release.version-source: manifest)`, { nothing: true });
+  }
+  if (cmp(v, last) < 0) return refuse(`${where} says ${values[0]}, below the last final ${lastFinal} — the manifest moved backwards`);
+  if ((tags || []).includes(version)) return refuse(`${version} is already a final tag`);
+
+  const bump = v.major !== last.major ? 'major' : v.minor !== last.minor ? 'minor' : 'patch';
+  const brk = breaking || [];
+  let mig = null;
+  if (bump === 'major') {
+    if (last.major === 0) {
+      return refuse(`${where} says ${values[0]} — the step from 0.x to ${version} is a human decision (CONVENTIONS.md §6, Versioning): tag it by hand, and later finals follow the manifest`, { bump });
+    }
+    mig = typeof migration === 'function' ? migration(version) : (migration || null);
+    if (!mig || !mig.ok) {
+      return refuse(`${lastFinal} -> ${version} is a major, refused: ${mig ? mig.detail : `no migration section read for ${version}`}`, { bump, migration: mig });
+    }
+  } else if (brk.length) {
+    const owed = last.major === 0 ? 'minor' : 'major';
+    if (owed === 'major' || bump === 'patch') {
+      return refuse(`a breaking change since ${lastFinal} (${brk.join('; ')}) but ${where} only bumps to ${values[0]} (a ${bump}) — a break needs a ${owed}. Bump the manifest on trunk, or show the change is not breaking`, { bump });
+    }
+  }
+  const why = `${where} says ${values[0]}${brk.length ? ` (breaking since ${lastFinal}: ${brk.join('; ')})` : ''}`;
+  return { ok: true, detail: `${lastFinal} -> ${version} (${bump}, from the manifest: ${why})`, version, bump, why, overridden: null, migration: mig };
 }
 
 // ---- --auto: cadence (#422) ------------------------------------------------------------------
@@ -866,17 +950,26 @@ function decide(facts) {
 
   const p = f.policy;
   const fast = isFastRoute(p) && !(p.findings && p.findings.length);
+  // #590: route library-fast — a final with no candidate, like the fast route, and nothing deployed.
+  const library = !fast && isLibraryRoute(p) && !(p.findings && p.findings.length);
+  const finalRoute = fast || library;
   if (!p) add('release-policy', false, 'no release policy was evaluated', true);
   else if (p.findings && p.findings.length) add('release-policy', false, `the release: block is invalid — ${p.findings.map((x) => x.text).join('; ')}`);
   else if (fast && !f.auto) {
     add('release-policy', false, 'route deploy-tag-fast tags its finals only from the release workflow (`colab release cut --auto`), where the deploy runs in the same run — a final cut by hand would reach production with no deploy job behind it');
   } else if (fast) {
     add('release-policy', true, `${p.derived.axis} (${p.derived.row}, route deploy-tag-fast): a final on every green head, granted by decision #${p.effective.finalGrant.issue}, health gate ${p.effective.healthGate.url} (rollback: ${p.effective.healthGate.rollback}), spacing ${p.effective.finalSpacingHours}h`);
+  } else if (library) {
+    add('release-policy', true, `${p.derived.axis} (${p.derived.row}, route library-fast): a final on every release the version source owes — no candidate, nothing deployed (version source: ${versionSourceOf(p)})`);
   } else if (p.effective.candidates !== 'auto') {
     const narrowed = p.declared && p.declared.candidates === 'off' && p.derived.candidates === 'auto';
+    const { route, why } = routeWhy(p);
+    const humanFinal = route === 'library-fast' && p.effective.final === 'human';
     add('release-policy', false, narrowed
       ? 'release: candidates: off — this repo narrowed its rung row to no automatic candidates'
-      : `candidates are off on ${p.derived.axis}: ${p.derived.why} (CONVENTIONS.md §6, The release rung)`);
+      : humanFinal
+        ? `route library-fast with release.final: human — every final here is a human act: tag vX.Y.Z by hand (CONVENTIONS.md §6, The release rung)`
+        : `candidates are off on ${p.derived.axis}${route ? `, route ${route}` : ''}: ${why} (CONVENTIONS.md §6, The release rung)`);
   } else {
     add('release-policy', true, `${p.derived.axis} (${p.derived.row}${p.effective.route ? `, route ${p.effective.route}` : ''}): candidates auto, final ${p.effective.final}, test period ${p.effective.testPeriodDays}d`);
   }
@@ -904,23 +997,38 @@ function decide(facts) {
   if (trig.length) add('prerelease-trigger', false, `a deploy would fire on a candidate tag: ${trig.map((t) => t.text).join('; ')}`);
   else add('prerelease-trigger', true, 'no deploy workflow fires on a pre-release tag');
 
-  const v = f.auto
+  const computed = () => (f.auto
     ? decideAutoVersion({ lastFinal: f.lastFinal, signals: f.auto.signals, migration: f.auto.migration, tags: f.tags })
-    : decideVersion({ lastFinal: f.lastFinal, suggestion: f.suggestion, override: f.override, tags: f.tags });
+    : decideVersion({ lastFinal: f.lastFinal, suggestion: f.suggestion, override: f.override, tags: f.tags }));
+  let v;
+  if (library && versionSourceOf(p) === 'manifest') {
+    // #590: the manifest is the version; the signals only decide whether it under-declares a break.
+    if (f.override && f.override.bump) v = { ok: false, detail: `--bump ${f.override.bump} has nothing to override — on route library-fast with release.version-source: manifest the version is the manifest's; bump it on trunk` };
+    else {
+      const sig = f.auto ? (f.auto.signals || {}) : null;
+      if (sig && sig.unread && sig.unread.length) v = { ok: false, unread: true, detail: `a bump signal could not be read — fail closed: ${sig.unread.join('; ')}` };
+      else {
+        const breaking = sig ? (sig.breaking || [])
+          : (f.suggestion && f.suggestion.bump === 'major' ? [f.suggestion.why || 'a breaking change'] : []);
+        v = decideManifestVersion({ lastFinal: f.lastFinal, manifests: f.manifests, tags: f.tags, breaking, migration: f.auto ? f.auto.migration : f.migration });
+        if (v.fallback) v = computed();
+      }
+    }
+  } else v = computed();
   add('version', v.ok, v.detail, isUnread(v));
   // "Nothing merged since the last final" is a no-op for the release workflow, not a failure.
   if (f.auto && v.nothing) noop = true;
 
   let tag = null;
   let derivable = [];
-  if (v.ok && fast) {
+  if (v.ok && finalRoute) {
     const finalHere = (f.tagsAtSha || []).filter((t) => VERSION_RE.test(t));
     if (finalHere.length) {
       add('already-final', false, `this commit is already the final ${finalHere.join(', ')} — a head that carries a final is the route holding`);
       if (f.auto) noop = true;
     } else {
       tag = v.version;
-      add('already-final', true, `next final: ${tag} (no candidate — route deploy-tag-fast)`);
+      add('already-final', true, `next final: ${tag} (no candidate — route ${fast ? 'deploy-tag-fast' : 'library-fast'})`);
     }
   } else if (v.ok) {
     const here = candidateNumbers(f.tagsAtSha || [], v.version);
@@ -966,6 +1074,10 @@ function decide(facts) {
     const mig = f.migrations || { ok: false, detail: 'migrations since the last final were not measured' };
     add('migration-grant', mig.ok, mig.detail, !f.migrations || isUnread(mig));
     if (!mig.ok && v.ok && mig.paths && mig.paths.length) handoff = migrationHandoff(f.trackingIssue, v.version);
+  } else if (library) {
+    // #590: a human veto still holds an automatic final; nothing else the fast route adds applies.
+    const h = f.holds || { ok: false, detail: `${HOLD_LABEL} was not measured` };
+    add('release-hold', h.ok, h.detail, !f.holds || isUnread(h));
   }
 
   const refusals = checks.filter((c) => !c.ok);
@@ -981,7 +1093,7 @@ function decide(facts) {
     signals: f.auto ? f.auto.signals || null : null, migration: v.migration || null,
     derivable,
     versionSourceDeclared: !!(p && p.effective && p.effective.versionSourceDeclared),
-    final: fast, grant, handoff,
+    final: finalRoute, route: finalRoute ? (fast ? 'deploy-tag-fast' : 'library-fast') : null, grant, handoff,
     healthGate: fast ? p.effective.healthGate : null,
   };
 }
@@ -996,8 +1108,9 @@ function tagMessage(verdict, { sha, lastFinal }) {
   // #446: a fast-route final. Its subject deliberately does NOT end in "(colab release cut)", so no
   // reader of candidates (cutCandidates, finalize's CUT_SUBJECT_SUFFIX) ever mistakes it for one.
   const fast = !!verdict.final;
+  const route = verdict.route || 'deploy-tag-fast';
   const lines = [
-    fast ? `${verdict.tag} — release (colab release cut, deploy-tag-fast)` : `${verdict.tag} — release candidate (colab release cut)`,
+    fast ? `${verdict.tag} — release (colab release cut, ${route})` : `${verdict.tag} — release candidate (colab release cut)`,
     '',
     `Commit: ${sha}`,
     `Since: ${lastFinal}`,
@@ -1015,14 +1128,18 @@ function tagMessage(verdict, { sha, lastFinal }) {
     'Conditions (CONVENTIONS.md §6):',
     ...verdict.checks.map((c) => `- ${c.condition}: ${c.detail}`),
     '',
-    fast ? 'A final with no candidate: route deploy-tag-fast, by the operator\'s grant (CONVENTIONS.md §6).' : 'A candidate, never a final: finalizing it is the release skill\'s, after its test period.',
+    fast
+      ? (route === 'library-fast'
+        ? 'A final with no candidate: route library-fast — a library released per merge; nothing deploys from this tag (CONVENTIONS.md §6).'
+        : 'A final with no candidate: route deploy-tag-fast, by the operator\'s grant (CONVENTIONS.md §6).')
+      : 'A candidate, never a final: finalizing it is the release skill\'s, after its test period.',
   ];
   return lines.join('\n') + '\n';
 }
 
 module.exports = {
   CONDITIONS, FAST_CONDITIONS, STANDING_CONDITIONS, BUMPS, MIGRATION_FILE, RELEASE_BRANCH, HOLD_LABEL,
-  isFastRoute, spacingVerdict, holdsVerdict, migrationHandoff,
+  isFastRoute, isLibraryRoute, decideManifestVersion, spacingVerdict, holdsVerdict, migrationHandoff,
   parseVersion, formatVersion, candidateNumbers, nextCandidateNumber, decideVersion,
   parseGuardOutput, exportsDiff, switchRemovalsSince, autoSignals, parseMigrationSection, decideAutoVersion, cadenceVerdict,
   fullSuiteVerdict, withoutOwnWorkflow, isMigrationPath, schemaVerdict,

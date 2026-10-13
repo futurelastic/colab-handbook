@@ -582,6 +582,14 @@ test('#446 cut step: a fast-route final writes final= and health-url=; a candida
   assert.strictEqual(old.output.final, undefined);
 });
 
+test('#590 cut step: a library-fast final is published (tag=) but never handed to the deploy job', { skip: !HAS_JQ && 'jq not installed' }, () => {
+  const lib = runWithStub(CUT, { stdout: JSON.stringify({ ok: true, created: true, tag: 'v1.2.1', final: true, route: 'library-fast', deploy: null, checks: [] }), exit: 0 });
+  assert.strictEqual(lib.status, 0);
+  assert.strictEqual(lib.output.tag, 'v1.2.1');
+  assert.strictEqual(lib.output.final, undefined);
+  assert.strictEqual(lib.output['health-url'], undefined);
+});
+
 test('#446 template: the deploy job needs release, runs only on a fast final, reads no secret, checks out the tag', () => {
   const job = TEXT.slice(TEXT.indexOf('\n  deploy:\n'));
   assert.ok(job.length > 1, 'no deploy job');
