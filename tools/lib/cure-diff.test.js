@@ -15,7 +15,7 @@ const os = require('os');
 const path = require('path');
 const { execFileSync } = require('child_process');
 const git = require('./git');
-const { cureDiffSignals, scriptsBlockDiffers, scriptsAddition, pythonPinChange, isPythonManifest, pythonIncludes, ABSENT } = require('./cure-diff');
+const { cureDiffSignals, cureContainment, scriptsBlockDiffers, scriptsAddition, pythonPinChange, isPythonManifest, pythonIncludes, ABSENT } = require('./cure-diff');
 
 const PKG = { name: 'app', version: '1.0.0', scripts: { lint: 'eslint .', test: 'node --test' }, dependencies: { a: '1.0.0' } };
 const json = (o) => `${JSON.stringify(o, null, 2)}\n`;
@@ -368,4 +368,82 @@ test('#476 pythonPinChange: the pure rules', () => {
   assert.equal(pp(opt('"pytest"').replace('"tests"', '"t"'), opt('"pytest<9"')), null, 'a non-dependency string changed');
   assert.deepEqual(pp('[build-system]\nrequires = ["setuptools>=61"]\n', '[build-system]\nrequires = ["setuptools>=61,<75"]\n'), { pins: ['setuptools'] });
   assert.equal(pp('[tool.x]\ndependencies = ["a"]\n', '[tool.x]\ndependencies = ["a<2"]\n'), null, 'not a table pip installs from');
+});
+
+// --- #589: containment against the ref ship lands -------------------------------------------------
+
+// A lander that never had the branch locally: the branch is built and pushed from a second clone, the
+// lander only fetches it — exactly a `--handoff` land. Red sha = trunk's tip the branch was cut over.
+function handoffRepos() {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cure-containment-'));
+  const sh = (cwd, ...args) => execFileSync('git', args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
+  const cfg = (d) => { sh(d, 'config', 'user.email', 'test@example.invalid'); sh(d, 'config', 'user.name', 't'); sh(d, 'config', 'core.hooksPath', path.join(d, '.nohooks')); };
+  const origin = path.join(root, 'origin.git');
+  sh(root, 'init', '-q', '--bare', '-b', 'main', origin);
+  const builder = path.join(root, 'builder');
+  sh(root, 'clone', '-q', origin, builder); cfg(builder);
+  sh(builder, 'checkout', '-q', '-b', 'main');
+  fs.writeFileSync(path.join(builder, 'a.txt'), 'a\n'); sh(builder, 'add', '-A'); sh(builder, 'commit', '-q', '-m', 'base');
+  fs.writeFileSync(path.join(builder, 'a.txt'), 'red\n'); sh(builder, 'commit', '-q', '-am', 'the red commit');
+  const red = sh(builder, 'rev-parse', 'HEAD');
+  sh(builder, 'push', '-q', 'origin', 'main');
+  sh(builder, 'checkout', '-q', '-b', 'fix/cure-1');
+  fs.writeFileSync(path.join(builder, 'a.txt'), 'cured\n'); sh(builder, 'commit', '-q', '-am', 'fix: the cure');
+  sh(builder, 'push', '-q', 'origin', 'fix/cure-1');
+  // A branch cut BEFORE the red commit: genuinely does not contain it.
+  sh(builder, 'checkout', '-q', '-b', 'fix/stale-2', 'HEAD~2');
+  fs.writeFileSync(path.join(builder, 'b.txt'), 'b\n'); sh(builder, 'add', '-A'); sh(builder, 'commit', '-q', '-m', 'fix: stale');
+  sh(builder, 'push', '-q', 'origin', 'fix/stale-2');
+  const lander = path.join(root, 'lander');
+  sh(root, 'clone', '-q', origin, lander); cfg(lander);
+  return { root, lander, red, sh, cleanup: () => fs.rmSync(root, { recursive: true, force: true }) };
+}
+
+test('#589: a REMOTE-ONLY branch containing the red head → contains:true, through its remote-tracking ref', () => {
+  const h = handoffRepos();
+  try {
+    assert.equal(h.sh(h.lander, 'branch', '--list', 'fix/cure-1'), '', 'precondition: no local branch on the lander');
+    // The pre-#589 read — the bare name — fails here, which is the refusal the issue measured.
+    assert.notEqual(git.git(['merge-base', '--is-ancestor', h.red, 'fix/cure-1'], h.lander).code, 0);
+    const c = cureContainment(git, h.lander, h.red, 'fix/cure-1');
+    assert.equal(c.contains, true);
+    assert.equal(c.ref, h.sh(h.lander, 'rev-parse', 'refs/remotes/origin/fix/cure-1'));
+    // The diff signals read the same resolved ref and measure, rather than failing on the bare name.
+    const d = cureDiffSignals(git, h.lander, 'origin/main', c.ref);
+    assert.equal(d.workflowsTouched, false);
+  } finally { h.cleanup(); }
+});
+
+test('#589: a remote-only branch NOT containing the red head → contains:false (genuinely, not a resolve failure)', () => {
+  const h = handoffRepos();
+  try {
+    const c = cureContainment(git, h.lander, h.red, 'fix/stale-2');
+    assert.equal(c.contains, false);
+    assert.ok(c.ref);
+  } finally { h.cleanup(); }
+});
+
+test('#589: an unresolvable branch or red sha → contains:null with "could not resolve", never false', () => {
+  const h = handoffRepos();
+  try {
+    const missing = cureContainment(git, h.lander, h.red, 'fix/nowhere-9');
+    assert.equal(missing.contains, null);
+    assert.equal(missing.ref, null);
+    assert.match(missing.reason, /^could not resolve fix\/nowhere-9/);
+    const badRed = cureContainment(git, h.lander, 'f'.repeat(40), 'fix/cure-1');
+    assert.equal(badRed.contains, null);
+    assert.match(badRed.reason, /could not resolve trunk's red head/);
+  } finally { h.cleanup(); }
+});
+
+test('#589: a local branch still wins over the remote-tracking ref (same order as shipRefFor)', () => {
+  const h = handoffRepos();
+  try {
+    h.sh(h.lander, 'branch', 'fix/cure-1', 'origin/fix/cure-1');
+    h.sh(h.lander, 'checkout', '-q', 'fix/cure-1');
+    fs.writeFileSync(path.join(h.lander, 'c.txt'), 'c\n'); h.sh(h.lander, 'add', '-A'); h.sh(h.lander, 'commit', '-q', '-m', 'local');
+    const c = cureContainment(git, h.lander, h.red, 'fix/cure-1');
+    assert.equal(c.ref, h.sh(h.lander, 'rev-parse', 'refs/heads/fix/cure-1'));
+    assert.equal(c.contains, true);
+  } finally { h.cleanup(); }
 });
