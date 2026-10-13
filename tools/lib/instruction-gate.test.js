@@ -236,3 +236,86 @@ test('audit: no base to compare against (no origin/<trunk>) keeps the warning', 
   assert.ok(!a.fails.some((t) => t.startsWith('prose-in-claude-md')), a.fails.join(' | '));
   assert.ok(a.warns.some((t) => t.startsWith('prose-in-claude-md:')));
 });
+
+// --- the reusable workflow's base resolution on a pull request (#595) ---------------------------
+//
+// These run the workflow's OWN `run:` block (read out of .github/workflows/instruction-files.yml,
+// not a copy of it) inside a fixture whose HEAD is what actions/checkout gives a pull_request run:
+// the merge commit refs/pull/N/merge, first parent = the base tip GitHub merged onto, second = the
+// PR head. The base branch moves AFTER `pull_request.base.sha` — the measured shape: base.sha is
+// older than the merge commit's first parent.
+
+const WORKFLOW = path.join(ROOT, '.github', 'workflows', 'instruction-files.yml');
+
+/** The `run: |` block of the judging step, dedented — the shell the runner executes. */
+function workflowScript() {
+  const lines = fs.readFileSync(WORKFLOW, 'utf8').split('\n');
+  const at = lines.findIndex((l) => /^\s+run: \|\s*$/.test(l));
+  assert.ok(at > 0, 'the workflow has a run: | block');
+  const keyIndent = lines[at].search(/\S/);
+  const body = [];
+  for (const l of lines.slice(at + 1)) {
+    if (l.trim() && l.search(/\S/) <= keyIndent) break;
+    body.push(l);
+  }
+  const ind = Math.min(...body.filter((l) => l.trim()).map((l) => l.search(/\S/)));
+  return body.map((l) => l.slice(ind)).join('\n');
+}
+
+/**
+ * Unmigrated repo: `main` at A (legacy CLAUDE.md) = the PR's base.sha; the PR branch forks at A and
+ * commits `pr`; then `main` gains `later` (after base.sha). HEAD = the merge of the PR onto main's tip.
+ */
+function prFixture(pr, later, { mergeCommit = true } = {}) {
+  const { dir, g } = repo({ 'CLAUDE.md': LEGACY, 'AGENTS.md': AGENTS });
+  const baseSha = g('rev-parse', 'HEAD').trim();
+  g('checkout', '-q', '-b', 'feat/x-1');
+  write(dir, pr); g('add', '-A'); g('commit', '-q', '-m', 'feat: the PR');
+  g('checkout', '-q', 'main');
+  write(dir, later); g('add', '-A'); g('commit', '-q', '-m', 'docs: main moves on after the PR was cut');
+  if (mergeCommit) {
+    g('checkout', '-q', '--detach', 'main');
+    g('merge', '-q', '--no-ff', '--no-edit', 'feat/x-1');
+  } else {
+    g('checkout', '-q', 'feat/x-1');
+  }
+  fs.symlinkSync(ROOT, path.join(dir, '.colab-handbook-checker'));
+  return { dir, g, baseSha };
+}
+
+function runWorkflow(dir, env) {
+  return spawnSync('bash', ['-e', '-c', workflowScript()], {
+    cwd: dir,
+    encoding: 'utf8',
+    env: {
+      ...process.env,
+      PATH: `${path.dirname(process.execPath)}:${process.env.PATH}`,
+      EVENT: 'pull_request', REF: 'refs/pull/7/merge', BEFORE: '', DEFAULT_BRANCH: 'main',
+      ...env,
+    },
+  });
+}
+
+test('#595 PR: unmigrated repo, PR touches neither file, base edits AGENTS.md after the cut → green', () => {
+  const { dir, g, baseSha } = prFixture({ 'README.md': '# r\n\nthe PR\n' }, { 'AGENTS.md': AGENTS + '\nTrunk prose.\n' });
+  // The failure being fixed, reproduced: judged from base.sha the base's own AGENTS.md edit is in the diff.
+  const old = gateLib.gate({ cwd: dir, base: baseSha });
+  assert.deepStrictEqual([old.fail, old.reason], [true, 'touched'], 'fixture reproduces the measured red');
+  const r = runWorkflow(dir, { PR_BASE: baseSha });
+  assert.strictEqual(r.status, 0, r.stdout + r.stderr);
+  assert.match(r.stdout, new RegExp(`ratchet base: ${g('rev-parse', 'HEAD^1').trim()}`));
+});
+
+test('#595 PR: unmigrated repo, PR edits CLAUDE.md and leaves it prose → still red, with the base moved', () => {
+  const { dir, baseSha } = prFixture({ 'CLAUDE.md': LEGACY + '\n- docs/b.md — thing b\n' }, { 'AGENTS.md': AGENTS + '\nTrunk prose.\n' });
+  const r = runWorkflow(dir, { PR_BASE: baseSha });
+  assert.strictEqual(r.status, 1, r.stdout + r.stderr);
+  assert.match(r.stderr, /move it to AGENTS\.md/);
+});
+
+test('#595 PR: a caller that checked out the head (no merge commit) keeps base.sha — the fork point', () => {
+  const { dir, baseSha } = prFixture({ 'README.md': '# r\n\nthe PR\n' }, { 'AGENTS.md': AGENTS + '\nTrunk prose.\n' }, { mergeCommit: false });
+  const r = runWorkflow(dir, { PR_BASE: baseSha });
+  assert.strictEqual(r.status, 0, r.stdout + r.stderr);
+  assert.match(r.stdout, new RegExp(`ratchet base: ${baseSha}`));
+});

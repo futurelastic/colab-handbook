@@ -15,8 +15,16 @@
 # An unmigrated repo whose change leaves both files alone stays green — adding the caller never
 # turns trunk red on its own.
 #
-# THE BASE: a pull request → its base sha. A push to trunk (`trunk:` in .github/project.yml, else
-# the default branch) → the sha before the push. Any other push → origin/<trunk>.
+# THE BASE: a pull request → the first parent of the merge commit actions/checkout checked out
+# (refs/pull/N/merge), i.e. the base-branch tip GitHub merged the PR onto — so the diff is exactly
+# what the PR adds. Not `pull_request.base.sha`: that sha can be OLDER than the first parent (the
+# base moved and the PR branch was not updated), and then every base-branch commit since — an
+# AGENTS.md edit on trunk, say — would be blamed on the PR (#595). A caller that checked out the
+# head instead of the merge commit has no second parent; then the base sha is right as-is, because
+# merge-base(base sha, head) is the PR's fork point. A push to trunk (`trunk:` in
+# .github/project.yml, else the default branch) → the sha before the push. Any other push →
+# origin/<trunk>. Resolved here in the shell, not by a checker flag, so a caller pinning an older
+# `handbook-ref` keeps working.
 #
 # THE RUNNER (#594): `runs-on` defaults to ubuntu-latest. A caller whose org has no GitHub-hosted
 # minutes (spending limit, self-hosted-only org) has that job refused before it starts — a red
@@ -77,6 +85,9 @@ jobs:
           base="origin/$trunk"
           if [ -n "$PR_BASE" ]; then
             base="$PR_BASE"
+            if git rev-parse -q --verify 'HEAD^2^{commit}' >/dev/null; then
+              base=$(git rev-parse 'HEAD^1')   # the merge commit's first parent — see THE BASE (#595)
+            fi
           elif [ "$EVENT" = push ] && [ "$REF" = "refs/heads/$trunk" ] && [ -n "$BEFORE" ] \
                && [ "$BEFORE" != 0000000000000000000000000000000000000000 ] && git cat-file -e "$BEFORE^{commit}" 2>/dev/null; then
             base="$BEFORE"
