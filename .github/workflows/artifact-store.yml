@@ -1,0 +1,223 @@
+# The oracle for .github/actions/artifact-store (#601).
+#   hermetic  — the same bash script on Linux, macOS and Windows, through a fake `aws`
+#               (test/aws): path handling, globs, attempts, publish, every refusal.
+#   produce → consume — a real S3-compatible store (SeaweedFS) round-trips a file AND a directory
+#               between two jobs, once per client (aws, mc). A store started in a job dies with it,
+#               so its data dir rides to the next job in actions/cache — the consuming job is a
+#               different runner and workspace, and finds the files only through the run key.
+name: artifact-store
+on:
+  push:
+    paths:
+      - '.github/actions/artifact-store/**'
+      - '.github/workflows/artifact-store.yml'
+  pull_request:
+    paths:
+      - '.github/actions/artifact-store/**'
+      - '.github/workflows/artifact-store.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+env:
+  SEAWEEDFS_IMAGE: chrislusf/seaweedfs:4.48
+  # Test-only: built from source because MinIO stopped publishing mc binaries. The action itself
+  # never installs a client.
+  MC_VERSION: RELEASE.2025-08-13T08-35-41Z
+  ENDPOINT: http://127.0.0.1:8333
+
+jobs:
+  hermetic:
+    name: Hermetic (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      - name: Script round-trip through the fake client
+        shell: bash
+        run: bash .github/actions/artifact-store/test/roundtrip.sh
+      - name: Put the fake aws first on PATH
+        shell: bash
+        run: |
+          echo "$GITHUB_WORKSPACE/.github/actions/artifact-store/test" >> "$GITHUB_PATH"
+          mkdir -p "$RUNNER_TEMP/fake-s3/artifacts"
+          echo "FAKE_S3_ROOT=$RUNNER_TEMP/fake-s3" >> "$GITHUB_ENV"
+          bash .github/actions/artifact-store/test/fixtures.sh fx
+      - name: Upload through the action
+        uses: ./.github/actions/artifact-store/upload
+        with:
+          name: tree
+          path: fx/tree
+          bucket: artifacts
+          client: aws
+          if-no-files-found: error
+      - name: Download through the action
+        uses: ./.github/actions/artifact-store/download
+        with:
+          name: tree
+          path: got/tree
+          bucket: artifacts
+          client: aws
+      - name: Compare
+        shell: bash
+        run: |
+          test ! -e got/tree/.cache
+          rm -rf fx/tree/.cache
+          diff -r fx/tree got/tree
+
+  produce:
+    name: Produce (${{ matrix.client }})
+    strategy:
+      fail-fast: false
+      matrix:
+        client: [aws, mc]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      - name: Build mc
+        if: matrix.client == 'mc'
+        run: |
+          GOBIN="$RUNNER_TEMP/store/bin" go install "github.com/minio/mc@$MC_VERSION"
+          echo "$RUNNER_TEMP/store/bin" >> "$GITHUB_PATH"
+      - name: Start the store
+        run: bash .github/actions/artifact-store/test/store.sh start
+      - run: bash .github/actions/artifact-store/test/fixtures.sh fx
+      - name: Upload a file
+        uses: ./.github/actions/artifact-store/upload
+        with:
+          name: file-${{ matrix.client }}
+          path: fx/one.txt
+          if-no-files-found: error
+          endpoint: ${{ env.ENDPOINT }}
+          bucket: artifacts
+          access-key: testkey
+          secret-key: testsecret
+          client: ${{ matrix.client }}
+      - name: Upload a directory
+        uses: ./.github/actions/artifact-store/upload
+        with:
+          name: dir-${{ matrix.client }}
+          path: fx/tree
+          if-no-files-found: error
+          endpoint: ${{ env.ENDPOINT }}
+          bucket: artifacts
+          access-key: testkey
+          secret-key: testsecret
+          client: ${{ matrix.client }}
+      - name: Publish release files
+        id: publish
+        uses: ./.github/actions/artifact-store/upload
+        with:
+          mode: publish
+          app: demo-${{ matrix.client }}
+          version: 1.0.0
+          path: fx/tree/sub
+          public-base: https://downloads.example.com
+          endpoint: ${{ env.ENDPOINT }}
+          bucket: artifacts
+          access-key: testkey
+          secret-key: testsecret
+          client: ${{ matrix.client }}
+      - name: Check the published keys and headers
+        env:
+          AWS_ACCESS_KEY_ID: testkey
+          AWS_SECRET_ACCESS_KEY: testsecret
+          AWS_DEFAULT_REGION: us-east-1
+          URLS: ${{ steps.publish.outputs.urls }}
+          APP: demo-${{ matrix.client }}
+        run: |
+          h() { aws --endpoint-url "$ENDPOINT" s3api head-object --bucket artifacts --key "$1" --query '[ContentType,CacheControl]' --output text; }
+          h "$APP/1.0.0/deeper/numbers.txt" | grep -q 'immutable'
+          h "$APP/latest/deeper/numbers.txt" | grep -q 'max-age=300'
+          h "$APP/latest.json" | grep -q 'application/json'
+          grep -qx "https://downloads.example.com/$APP/1.0.0/deeper/numbers.txt" <<< "$URLS"
+      - name: Stop the store
+        run: bash .github/actions/artifact-store/test/store.sh stop
+      - name: Hand the store's data to the next job
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/store
+          key: artifact-store-test-${{ github.run_id }}-${{ matrix.client }}-${{ github.run_attempt }}
+
+  consume:
+    name: Consume (${{ matrix.client }})
+    needs: produce
+    strategy:
+      fail-fast: false
+      matrix:
+        client: [aws, mc]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      - name: Take the store's data from the producing job
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/store
+          key: artifact-store-test-${{ github.run_id }}-${{ matrix.client }}-${{ github.run_attempt }}
+          restore-keys: artifact-store-test-${{ github.run_id }}-${{ matrix.client }}-
+          fail-on-cache-miss: true
+      - name: Restart the store on that data
+        run: |
+          if [ "${{ matrix.client }}" = mc ]; then echo "$RUNNER_TEMP/store/bin" >> "$GITHUB_PATH"; fi
+          bash .github/actions/artifact-store/test/store.sh start-again
+      - run: bash .github/actions/artifact-store/test/fixtures.sh fx
+      - name: Download the file
+        uses: ./.github/actions/artifact-store/download
+        with:
+          name: file-${{ matrix.client }}
+          path: got/file
+          endpoint: ${{ env.ENDPOINT }}
+          bucket: artifacts
+          access-key: testkey
+          secret-key: testsecret
+          client: ${{ matrix.client }}
+      - name: Download the directory
+        uses: ./.github/actions/artifact-store/download
+        with:
+          name: dir-${{ matrix.client }}
+          path: got/dir
+          endpoint: ${{ env.ENDPOINT }}
+          bucket: artifacts
+          access-key: testkey
+          secret-key: testsecret
+          client: ${{ matrix.client }}
+      - name: Download by pattern
+        uses: ./.github/actions/artifact-store/download
+        with:
+          pattern: '*-${{ matrix.client }}'
+          path: got/all
+          endpoint: ${{ env.ENDPOINT }}
+          bucket: artifacts
+          access-key: testkey
+          secret-key: testsecret
+          client: ${{ matrix.client }}
+      - name: A missing name must fail
+        id: missing
+        continue-on-error: true
+        uses: ./.github/actions/artifact-store/download
+        with:
+          name: never-uploaded
+          path: got/missing
+          endpoint: ${{ env.ENDPOINT }}
+          bucket: artifacts
+          access-key: testkey
+          secret-key: testsecret
+          client: ${{ matrix.client }}
+      - name: Compare with the regenerated fixtures
+        env:
+          MISSING: ${{ steps.missing.outcome }}
+          CLIENT: ${{ matrix.client }}
+        run: |
+          cmp fx/one.txt got/file/one.txt
+          test ! -e got/dir/.cache
+          rm -rf fx/tree/.cache
+          diff -r fx/tree got/dir
+          cmp fx/one.txt "got/all/file-$CLIENT/one.txt"
+          diff -r fx/tree "got/all/dir-$CLIENT"
+          test "$MISSING" = failure
+          echo "round-trip between two jobs through the store: ok ($CLIENT)"

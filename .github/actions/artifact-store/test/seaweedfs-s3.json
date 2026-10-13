@@ -1,0 +1,9 @@
+{
+  "identities": [
+    {
+      "name": "artifact-store-test",
+      "credentials": [{ "accessKey": "testkey", "secretKey": "testsecret" }],
+      "actions": ["Admin", "Read", "Write", "List", "Tagging"]
+    }
+  ]
+}

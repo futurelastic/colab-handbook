@@ -4401,7 +4401,8 @@ enabled for the user; `init` prints the command and never runs it.
 ## 7. CI and toolchain
 
 **Your CI lives in your repo and belongs to you.** [`templates/`](templates/) ships
-copyable starting points — nothing is called remotely, nothing is mandatory. That includes the
+copyable starting points — nothing is mandatory, and only the instruction-files workflow and the
+[artifact-store actions](#ci-artifacts--your-own-store-not-the-allowance-601) are called remotely (or copied). That includes the
 deploy templates (`deploy-xserver.yml`, and `deploy-container.yml` with its driver and platform
 adapter, #452 — [§6](#6-releases)): the handbook checks its own copies with `actionlint` and the
 container deploy's logic with hermetic tests against a fake platform, and a copy is the
@@ -4464,6 +4465,12 @@ release one is what ships
 workflow directly — copy-and-own already permits it, and the audit already classifies the
 edit as drift to reconcile, the same treatment every other stamped file gets. See
 [`project.schema.md`](project.schema.md#ci--deliberately-not-a-field).
+
+### CI artifacts — your own store, not the allowance (#601)
+
+**Files passed between jobs go through a store the organisation owns, not GitHub's capped
+artifact allowance** — `.github/actions/artifact-store/`, one for one with the official actions
+(`mode: publish` for release files): [`docs/artifact-store.md`](docs/artifact-store.md).
 
 ### Self-hosted runners — capacity is the agent count, not the machine (#355)
 

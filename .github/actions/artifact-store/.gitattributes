@@ -1,0 +1,3 @@
+# The scripts here run under bash on Windows too; a CRLF checkout (core.autocrlf) would break them.
+# This file travels with a copy of the directory, so a copy-and-own adopter keeps LF as well.
+* text=auto eol=lf
