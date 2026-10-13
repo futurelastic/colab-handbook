@@ -109,7 +109,7 @@ const TMP = [];
 process.on('exit', () => { for (const d of TMP) { try { fs.rmSync(d, { recursive: true, force: true }); } catch (_) {} } });
 const g = (cwd, ...args) => execFileSync('git', args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
 
-function fixture() {
+function fixture({ batch = false } = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'colab-handoff-'));
   TMP.push(root);
   const origin = path.join(root, 'origin.git');
@@ -130,7 +130,12 @@ function fixture() {
   g(workA, 'remote', 'add', 'origin', origin);
   fs.mkdirSync(path.join(workA, '.github'), { recursive: true });
   fs.writeFileSync(path.join(workA, '.github', 'project.yml'),
-    'tier: B\ntrunk: main\nproduction: null\ndeploy: none\nstack: node\nautonomy: auto-trunk\n');
+    `tier: B\ntrunk: main\nproduction: null\ndeploy: none\nstack: node\nautonomy: auto-trunk\n${batch ? 'ship-batch: 3\n' : ''}`);
+  if (batch) { // #591: a combined run can arrive — a workflow fires on ship-batch/**
+    fs.mkdirSync(path.join(workA, '.github', 'workflows'), { recursive: true });
+    fs.writeFileSync(path.join(workA, '.github', 'workflows', 'ci.yml'),
+      "name: CI\non:\n  push:\n    branches: [main, 'ship-batch/**']\n  pull_request:\njobs:\n  t:\n    runs-on: ubuntu-latest\n    steps:\n      - run: true\n");
+  }
   fs.writeFileSync(path.join(workA, '.gitignore'), '.worktrees/\n');
   fs.writeFileSync(path.join(workA, 'f.txt'), 'base\n');
   g(workA, 'add', '-A');
@@ -165,7 +170,11 @@ function fixture() {
     "if (argv[0] === 'run' && argv[1] === 'list') {",
     "  const i = argv.indexOf('--branch'); const br = i >= 0 ? argv[i + 1] : 'main';",
     "  let sha = ''; try { sha = execFileSync('git', ['--git-dir', ORIGIN, 'rev-parse', `refs/heads/${br}`], { encoding: 'utf8' }).trim(); } catch (_) {}",
-    "  console.log(JSON.stringify(sha ? [{ headSha: sha, status: 'completed', conclusion: 'success' }] : [])); process.exit(0);",
+    // #591: a deleted ship-batch ref's run still answers (GitHub keeps runs), so the land can read it.
+    "  const seen = path.join(STATE, `seen-${br.replace(/\\//g, '_')}`);",
+    "  if (sha) fs.writeFileSync(seen, sha); else if (fs.existsSync(seen)) sha = fs.readFileSync(seen, 'utf8');",
+    `  const extra = ${batch ? "{ attempt: 1, databaseId: 9001, workflowName: 'CI', createdAt: '2099-01-01T00:00:00Z' }" : '{}'};`,
+    "  console.log(JSON.stringify(sha ? [{ headSha: sha, status: 'completed', conclusion: 'success', ...extra }] : [])); process.exit(0);",
     "}",
     "function issueFile(n) { return path.join(STATE, `issue-${n}.json`); }",
     "function load(n) { try { return JSON.parse(fs.readFileSync(issueFile(n), 'utf8')); } catch (_) { return { comments: [], assignees: [], labels: [] }; } }",
@@ -253,6 +262,8 @@ test('#578 e2e: claim on machine A, ship on machine B from the hand-off — land
   const row = rep.checks.find((c) => /hand-off verified/.test(c.name));
   assert.ok(row && row.ok, JSON.stringify(rep.checks, null, 1));
   assert.ok(!rep.checks.some((c) => /registry-gap/.test(c.name) && !c.ok), JSON.stringify(rep.checks, null, 1));
+  // #591: the remote-only branch is read through the ref it resolves to — every check passes here.
+  assert.deepStrictEqual(rep.checks.filter((c) => !c.ok).map((c) => c.name), []);
 
   const r = colab(fx, ['ship', '--branch', BR, '--handoff', url, '--repo', fx.workB], { home: fx.homeB, ...SHIPPER });
   assert.strictEqual(r.code, 0, r.out + r.err);
@@ -458,4 +469,96 @@ test('#579 e2e: a non-merge commit after the handed-off head is still refused, s
   assert.strictEqual(r.code, 1, r.out + r.err);
   assert.match(r.err, /Refusing --handoff: .*moved after it was handed off by more than a clean merge of its base/);
   assert.doesNotMatch(execFileSync('git', ['--git-dir', fx.origin, 'log', '--format=%s', 'main'], { encoding: 'utf8' }), /the thing/);
+});
+
+// =================================================================================================
+// #591 — `ship --batch` takes hand-off members: a remote-built branch rides the combined run
+// =================================================================================================
+
+/** Machine B: a member of its own — one commit, claimed here, pushed. */
+function landerBuilds(fx, branch, n) {
+  g(fx.workB, 'checkout', '-q', '-b', branch, 'main');
+  fs.writeFileSync(path.join(fx.workB, 'local.txt'), 'built on B\n');
+  g(fx.workB, 'add', '-A');
+  g(fx.workB, 'commit', '-q', '-m', `fix: the local one (#${n})`);
+  g(fx.workB, 'checkout', '-q', 'main');
+  const c = colab(fx, ['claim', String(n), '--branch', branch, '--repo', fx.workB], { home: fx.homeB, ...SHIPPER });
+  assert.strictEqual(c.code, 0, c.out + c.err);
+  g(fx.workB, 'push', '-q', 'origin', branch);
+}
+
+const LOCAL = 'fix/local-91';
+
+test('#591 parseBatchEntries / parseHandoffTrailer: the member grammar and the trailer read back', () => {
+  assert.deepStrictEqual(ho.parseBatchEntries(`a-1, ${BR}@${URL},a-1`), { members: ['a-1', BR], handoffs: { [BR]: URL }, errors: [] });
+  assert.match(ho.parseBatchEntries(`@${URL}`).errors[0], /no branch/);
+  assert.match(ho.parseBatchEntries(`${BR}@`).errors[0], /no hand-off URL/);
+  assert.match(ho.parseBatchEntries(`${BR}@${URL},${BR}@${URL}0`).errors[0], /two different hand-offs/);
+  const v = ho.handoffVerdict(base());
+  assert.deepStrictEqual(ho.parseHandoffTrailer(`fix: x\n\nCloses #90\n${ho.handoffTrailer(v)}\n`), { url: URL, handedOff: HEAD.slice(0, 12) });
+  assert.strictEqual(ho.parseHandoffTrailer('fix: x\n\nCloses #90\n'), null);
+});
+
+test('#591 e2e: one local + one hand-off member land on ONE combined run — the hand-off member closes, keeps its branch, carries its trailer', () => {
+  const fx = fixture({ batch: true });
+  const { head } = executorBuilds(fx, BR, [90]);
+  const url = postHandoff(fx, 90, '555', `wrapped on \`${BR}\` (head ${head.slice(0, 8)}, cut from main). Wrapped, not merged.`);
+  g(fx.workB, 'pull', '-q', 'origin', 'main');
+  landerBuilds(fx, LOCAL, 91);
+
+  const list = `${LOCAL},${BR}@${url}`;
+  let r = colab(fx, ['ship', '--batch', list, '--repo', fx.workB], { home: fx.homeB, ...SHIPPER });
+  assert.strictEqual(r.code, 3, r.out + r.err);
+  assert.match(r.out, /BATCH-PENDING ship-batch\//);
+  assert.match(r.out, /pushed ship-batch\/\S+ = \S+ \+ 2 commit\(s\)/);
+
+  r = colab(fx, ['ship', '--batch', list, '--repo', fx.workB], { home: fx.homeB, ...SHIPPER });
+  assert.strictEqual(r.code, 0, r.out + r.err);
+  assert.match(r.out, /✓ Shipped batch → main/);
+  assert.match(r.out, /landed from the hand-off/);
+
+  // Two squashes on trunk, one fast-forward; the hand-off member's carries its door and its Closes.
+  const subjects = execFileSync('git', ['--git-dir', fx.origin, 'log', '--format=%B%x00', 'main'], { encoding: 'utf8' }).split('\0');
+  const hand = subjects.find((b) => /Ship-Batch-Member: .*feat\/thing-90/.test(b) || b.includes(`Colab-Handoff: ${url}`));
+  assert.ok(hand, subjects.join('\n---\n'));
+  assert.match(hand, /Closes #90/);
+  assert.match(hand, new RegExp(`Colab-Handoff: ${url.replace(/[.?/#]/g, '\\$&')} @ ${head.slice(0, 12)}`));
+  const local = subjects.find((b) => /Closes #91/.test(b));
+  assert.ok(local && !/Colab-Handoff/.test(local), 'the local member carries no hand-off trailer');
+  assert.strictEqual(execFileSync('git', ['--git-dir', fx.origin, 'show', 'main:thing.txt'], { encoding: 'utf8' }), 'built on A\n');
+  assert.strictEqual(execFileSync('git', ['--git-dir', fx.origin, 'show', 'main:local.txt'], { encoding: 'utf8' }), 'built on B\n');
+
+  // The single hand-off land's tail: 🚢 names the hand-off, the executor's branch is kept, no takeover.
+  const comments = issueState(fx, 90).comments.map((c) => c.body);
+  assert.ok(comments.some((b) => /Shipped to main by colab ship/.test(b) && b.includes(url)), comments.join('\n---\n'));
+  assert.ok(g(fx.workB, 'ls-remote', 'origin', `refs/heads/${BR}`), 'the executor\'s branch is not deleted');
+  assert.ok(!callLog(fx).includes('--force'));
+  const stB = JSON.parse(fs.readFileSync(path.join(fx.homeB, 'state.json'), 'utf8'));
+  assert.ok(!Object.keys(stB.claims || {}).some((k) => /90/.test(k)), JSON.stringify(stB.claims));
+});
+
+test('#591 e2e: a hand-off member that moved past its hand-off is refused for the batch with today\'s message; the rest still build', () => {
+  const fx = fixture({ batch: true });
+  const { wt, head } = executorBuilds(fx, BR, [90]);
+  const url = postHandoff(fx, 90, '555', `wrapped on \`${BR}\` (head ${head.slice(0, 8)}).`);
+  fs.writeFileSync(path.join(wt, 'more.txt'), 'later\n');
+  g(wt, 'add', '-A'); g(wt, 'commit', '-q', '-m', 'feat: more'); g(wt, 'push', '-q', 'origin', BR);
+  g(fx.workB, 'pull', '-q', 'origin', 'main');
+  landerBuilds(fx, LOCAL, 91);
+
+  const single = colab(fx, ['ship', '--branch', BR, '--handoff', url, '--repo', fx.workB], { home: fx.homeB, ...SHIPPER });
+  const today = (single.err.match(/Refusing --handoff: (.*?moved after it was handed off[^.]*)/) || [])[1];
+  assert.ok(today, single.out + single.err);
+
+  const r = colab(fx, ['ship', '--batch', `${LOCAL},${BR}@${url}`, '--repo', fx.workB, '--dry'], { home: fx.homeB, ...SHIPPER });
+  assert.strictEqual(r.code, 0, r.out + r.err);
+  assert.ok(r.out.includes(`Refusing --handoff: ${today}`), r.out);
+  assert.match(r.out, /READY: would push ship-batch\/\S+ = \S+ \+ 1 squash commit\(s\): fix\/local-91/);
+});
+
+test('#591: a bare --handoff beside --batch names no member and refuses, pointing at the @ form', () => {
+  const fx = fixture({ batch: true });
+  const r = colab(fx, ['ship', '--batch', BR, '--handoff', URL, '--repo', fx.workB], { home: fx.homeB, ...SHIPPER });
+  assert.notStrictEqual(r.code, 0);
+  assert.match(r.err, /--batch <b1>,<b2>@<hand-off-url>/);
 });

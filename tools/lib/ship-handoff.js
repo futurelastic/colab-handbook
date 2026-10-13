@@ -171,4 +171,42 @@ function syncMergeChain(run, head, baseRef, maxDepth = 50) {
   return chain;
 }
 
-module.exports = { parseHandoffUrl, namesBranch, namedShas, handoffVerdict, handoffTrailer, syncMergeChain };
+/**
+ * #591 — `--batch b1,b2@<handoff-url>`: split the batch list into member branch names and, for the
+ * members built on another machine, the hand-off each one names. One list, one source: the `@` rides
+ * the member it belongs to, so the hand-off cannot drift from the member list the way a second
+ * `--handoffs` map could. Each entry splits on its FIRST `@` — a §4 branch name never holds one, and
+ * a hand-off URL never holds a `,`. The URL itself is judged later by handoffVerdict, exactly as a
+ * single `--handoff` is, so a malformed one is refused with today's message, not a new one.
+ * Returns { members: [branch…] (deduped, in order), handoffs: { [branch]: url }, errors: [msg…] }.
+ */
+function parseBatchEntries(list) {
+  const members = [];
+  const handoffs = {};
+  const errors = [];
+  for (const raw of String(list || '').split(',').map((x) => x.trim()).filter(Boolean)) {
+    const at = raw.indexOf('@');
+    const branch = (at < 0 ? raw : raw.slice(0, at)).trim();
+    const url = at < 0 ? '' : raw.slice(at + 1).trim();
+    if (!branch) { errors.push(`"${raw}" names a hand-off but no branch — write <branch>@<hand-off-url>`); continue; }
+    if (at >= 0 && !url) { errors.push(`"${raw}" has an @ but no hand-off URL after it`); continue; }
+    if (url) {
+      if (handoffs[branch] && handoffs[branch] !== url) { errors.push(`${branch} is named with two different hand-offs (${handoffs[branch]}, ${url})`); continue; }
+      handoffs[branch] = url;
+    }
+    if (!members.includes(branch)) members.push(branch);
+  }
+  return { members, handoffs, errors };
+}
+
+/**
+ * #591 — read a `Colab-Handoff:` trailer back off a squash commit body (handoffTrailer's inverse):
+ * `{ url, handedOff }` or null. A batch lands in a second call, so the member's door is read from
+ * the commit the combined run graded, never re-supplied on the command line.
+ */
+function parseHandoffTrailer(body) {
+  const m = String(body || '').match(/^Colab-Handoff: (\S+) @ ([0-9a-f]{7,40})\b/m);
+  return m ? { url: m[1], handedOff: m[2] } : null;
+}
+
+module.exports = { parseHandoffUrl, namesBranch, namedShas, handoffVerdict, handoffTrailer, syncMergeChain, parseBatchEntries, parseHandoffTrailer };
