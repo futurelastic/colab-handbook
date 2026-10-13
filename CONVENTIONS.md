@@ -1393,9 +1393,7 @@ than guessed.
   handed-off branch that fell behind its base is synced by the lander as usual, and the hand-off
   still holds (#579): commits after the handed-off sha are accepted only when each is a pure
   base-sync merge — second parent already on the base, tree equal to git's own clean merge. Any
-  other movement still needs a new hand-off. Such a branch can ride a batch too (#591):
-  `colab ship --batch b1,b2@<comment-url>` verifies that member through the same door and lands
-  it on the combined run with no sync of its own. The hand-off comment is the last word on its head —
+  other movement still needs a new hand-off. The hand-off comment is the last word on its head —
   edited or re-posted, never followed by a plain comment (#586): [`code-wrap`, *Hand off*](skills/code-wrap/SKILL.md#post-the-hand-off-comment--the-last-word-on-its-head-586).
 - **[Hard — gate: colab ship refuses unless trunk CI green]** **Before merging to trunk, check that trunk's last CI run is green — and that it ran at
   all.** **Ask by commit, not by recency
