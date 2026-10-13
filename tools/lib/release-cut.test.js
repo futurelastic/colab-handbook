@@ -719,3 +719,119 @@ test('#467 every standing condition is one decide() can report', () => {
     assert.ok(!rc.STANDING_CONDITIONS.includes(c), `${c} must be transient or a no-op`);
   }
 });
+
+// ---- #590: library-fast — the cut is the final, nothing deploys --------------------------------
+
+const LIB_DESC = { trunk: 'main', exposure: 'released', production: null, deploy: 'none', release: { route: 'library-fast' } };
+const pkg = (version) => [{ file: 'package.json', version }];
+function libFacts({ manifest = '1.2.1', holds, ...over } = {}) {
+  return autoFacts({
+    policy: releasePolicy.evaluateRelease(LIB_DESC),
+    manifests: manifest === null ? null : pkg(manifest),
+    holds: holds === undefined ? rc.holdsVerdict([]) : holds,
+    ...over,
+  });
+}
+
+test('#590 isLibraryRoute: library-fast as declared only — not a final: human narrowing, not the fast route, not public-tool', () => {
+  assert.strictEqual(rc.isLibraryRoute(releasePolicy.evaluateRelease(LIB_DESC)), true);
+  assert.strictEqual(rc.isLibraryRoute(releasePolicy.evaluateRelease({ ...LIB_DESC, release: { route: 'library-fast', final: 'human' } })), false);
+  assert.strictEqual(rc.isLibraryRoute(releasePolicy.evaluateRelease(RELEASED)), false);
+  assert.strictEqual(rc.isLibraryRoute(releasePolicy.evaluateRelease(FAST_DESC)), false);
+});
+
+test('#590 a green library head with the manifest bumped tags the final directly — no -rc, final: true, nothing deployed', () => {
+  const v = rc.decide(libFacts());
+  assert.strictEqual(v.ok, true, JSON.stringify(v.refusals));
+  assert.strictEqual(v.tag, 'v1.2.1');
+  assert.strictEqual(v.final, true);
+  assert.strictEqual(v.route, 'library-fast');
+  assert.strictEqual(v.healthGate, null);
+  assert.strictEqual(v.grant, null);
+  assert.match(refusal(v, 'release-policy').detail, /route library-fast/);
+  assert.match(refusal(v, 'version').detail, /from the manifest: package\.json says 1\.2\.1/);
+  for (const c of ['already-final', 'release-hold']) assert.ok(refusal(v, c), c);
+  for (const c of ['already-candidate', 'spacing', 'final-grant', 'migration-grant']) assert.strictEqual(refusal(v, c), undefined, c);
+  const msg = rc.tagMessage(v, { sha: 'abc123', lastFinal: 'v1.2.0' });
+  assert.match(msg, /^v1\.2\.1 — release \(colab release cut, library-fast\)/);
+  assert.doesNotMatch(msg.split('\n')[0], /\(colab release cut\)$/);
+  assert.match(msg, /nothing deploys from this tag/);
+  assert.doesNotMatch(msg, /Health gate|final-grant ->/);
+});
+
+test('#590 the manifest decides the version, not the commit types: a fix with the manifest at a minor cuts the minor', () => {
+  const v = rc.decide(libFacts({ manifest: '1.3.0' }));
+  assert.strictEqual(v.tag, 'v1.3.0');
+  assert.strictEqual(v.bump, 'minor');
+});
+
+test('#590 a hand cut works too (no --auto): same final, from the manifest; --bump has nothing to override', () => {
+  const hand = facts({ policy: releasePolicy.evaluateRelease(LIB_DESC), manifests: pkg('1.2.1'), holds: rc.holdsVerdict([]) });
+  const v = rc.decide(hand);
+  assert.strictEqual(v.ok, true, JSON.stringify(v.refusals));
+  assert.strictEqual(v.tag, 'v1.2.1');
+  const o = rc.decide({ ...hand, override: { bump: 'minor', reason: 'x' } });
+  assert.strictEqual(o.ok, false);
+  assert.match(refusal(o, 'version').detail, /nothing to override/);
+});
+
+test('#590 manifest still at the last final is a no-op under --auto, never a stall', () => {
+  const v = rc.decide(libFacts({ manifest: '1.2.0' }));
+  assert.strictEqual(v.ok, false);
+  assert.strictEqual(v.noop, true);
+  assert.deepStrictEqual(v.standing, []);
+  assert.match(refusal(v, 'version').detail, /still says 1\.2\.0.*nothing to release until a merge bumps it/);
+});
+
+test('#590 the first final is a human act: release-policy passes, version refuses as a stall', () => {
+  const v = rc.decide(libFacts({ lastFinal: null, tags: [] }));
+  assert.strictEqual(v.ok, false);
+  assert.strictEqual(refusal(v, 'release-policy').ok, true);
+  assert.match(refusal(v, 'version').detail, /first version is a human decision/);
+  assert.deepStrictEqual(v.standing, ['version']);
+});
+
+test('#590 manifest refusals: backwards, disagreeing, pre-release, 0.x -> 1.0, an unread manifest list', () => {
+  assert.match(refusal(rc.decide(libFacts({ manifest: '1.1.9' })), 'version').detail, /moved backwards/);
+  assert.match(refusal(rc.decide(libFacts({ manifests: [{ file: 'package.json', version: '1.2.1' }, { file: 'VERSION', version: '1.2.2' }] })), 'version').detail, /disagree/);
+  assert.match(refusal(rc.decide(libFacts({ manifest: '1.2.1-beta.1' })), 'version').detail, /never a pre-release/);
+  assert.match(refusal(rc.decide(libFacts({ manifest: '1.0.0', lastFinal: 'v0.4.0', tags: ['v0.4.0'] })), 'version').detail, /0\.x to v1\.0\.0 is a human decision/);
+  const unread = rc.decide(libFacts({ manifest: null }));
+  assert.strictEqual(unread.ok, false);
+  assert.ok(!unread.standing.includes('version'), 'an unread manifest is transient');
+});
+
+test('#590 a break the manifest under-declares refuses; a declared major needs MIGRATION.md', () => {
+  const brk = CC({ fix: 1 }, { breaking: true });
+  assert.match(refusal(rc.decide(libFacts({ cc: brk, manifest: '1.3.0' })), 'version').detail, /a break needs a major/);
+  assert.match(refusal(rc.decide(libFacts({ cc: brk, manifest: '0.4.1', lastFinal: 'v0.4.0', tags: ['v0.4.0'] })), 'version').detail, /a break needs a minor/);
+  assert.strictEqual(rc.decide(libFacts({ cc: brk, manifest: '0.5.0', lastFinal: 'v0.4.0', tags: ['v0.4.0'] })).tag, 'v0.5.0');
+  assert.match(refusal(rc.decide(libFacts({ cc: brk, manifest: '2.0.0' })), 'version').detail, /no MIGRATION\.md for v2\.0\.0/);
+  const ok = rc.decide(libFacts({ cc: brk, manifest: '2.0.0', migration: () => ({ ok: true, section: '## v2.0.0\nMeasured cost: 1 line', detail: 'ok' }) }));
+  assert.strictEqual(ok.tag, 'v2.0.0');
+});
+
+test('#590 no manifest states a version: the bump is computed, as on version-source: tag', () => {
+  const v = rc.decide(libFacts({ manifests: [], cc: CC({ feat: 1 }) }));
+  assert.strictEqual(v.tag, 'v1.3.0');
+  const tagSrc = rc.decide(libFacts({ policy: releasePolicy.evaluateRelease({ ...LIB_DESC, release: { route: 'library-fast', 'version-source': 'tag' } }), manifest: '0.0.0', cc: CC({ fix: 1 }) }));
+  assert.strictEqual(tagSrc.tag, 'v1.2.1');
+});
+
+test('#590 the route\'s checks still apply: red CI, a release-hold, a head already final', () => {
+  assert.strictEqual(refusal(rc.decide(libFacts({ ci: { ok: false, detail: 'red' } })), 'ci-green').ok, false);
+  const held = rc.decide(libFacts({ holds: rc.holdsVerdict([{ number: 12, state: 'OPEN', labels: [{ name: 'release-hold' }] }]) }));
+  assert.strictEqual(refusal(held, 'release-hold').ok, false);
+  // Re-run on a head already tagged: that tag is now the last final, so the manifest equals it.
+  const again = rc.decide(libFacts({ lastFinal: 'v1.2.1', tagsAtSha: ['v1.2.1'], tags: ['v1.2.0', 'v1.2.1'], manifest: '1.2.1' }));
+  assert.strictEqual(again.ok, false);
+  assert.strictEqual(again.noop, true);
+});
+
+test('#590 release-policy names the route in effect: library-fast narrowed to a human final, and the derived row', () => {
+  const human = rc.decide(facts({ policy: releasePolicy.evaluateRelease({ ...LIB_DESC, release: { route: 'library-fast', final: 'human' } }) }));
+  assert.match(refusal(human, 'release-policy').detail, /route library-fast with release\.final: human — every final here is a human act/);
+  assert.doesNotMatch(refusal(human, 'release-policy').detail, /adopters install it/);
+  const self = rc.decide(facts({ policy: releasePolicy.evaluateRelease({ ...RELEASED, exposure: 'self' }) }));
+  assert.match(refusal(self, 'release-policy').detail, /route none/);
+});

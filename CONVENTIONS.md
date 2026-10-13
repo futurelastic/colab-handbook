@@ -3939,14 +3939,14 @@ pre-filled — unless the operator has granted one `deploy: tag` repo an automat
 (*An operator-granted automatic final*, below), or a final on every green head with no
 candidate at all (*A final on every green head*, below). Everything else is automatic, and a human can still veto any candidate with
 `release-hold`. Every candidate is `vX.Y.Z-rc.N`; the final `vX.Y.Z` is that candidate's
-commit, tagged final — on every route but `deploy-tag-fast`, which cuts no candidate.
+commit, tagged final — on every route but `library-fast`/`deploy-tag-fast`, which cut none.
 
 | Route | For | Candidate `vX.Y.Z-rc.N` | Final `vX.Y.Z` |
 |---|---|---|---|
 | `none` | `exposure: none` / `self` — nothing consumes a tag | no tags | no tags |
 | `rapid-app` | a fast-moving app with few installers | automatic, on every green trunk head | automatic: the **newest** candidate clean for the test period; a newer candidate does not restart an older one's clock |
 | `public-tool` | a public CLI or handbook — adopters install it, nothing deploys | automatic, on every green trunk head (#443) | automatic after a clean test period |
-| `library-fast` | a library released per merge, its consumers pin | none | the tag itself triggers the publish; the route's checks still apply |
+| `library-fast` | a library released per merge, its consumers pin | none | **[Hard — gate: colab release cut refuses]** automatic once a first final exists (a human's): `colab release cut` tags it on a green trunk head and the release run publishes it; under `version-source: manifest` the version is the manifest's, so a merge that bumps it releases that version and one that does not is a no-op; the route's checks still apply, nothing deploys (#590) |
 | `deploy-tag` | `deploy: tag` / `deploy: manual` — the tag deploys production | automatic; the agent prepares everything | **a human act (one click)** — automatic only on a `deploy: tag` repo the operator granted it (#441) |
 | `deploy-tag-fast` | `deploy: tag` with the operator's grant and a declared health-gated deploy (#446) | none | automatic on every green trunk head, deployed in the same run, finals at least `final-spacing` apart |
 | `live` | `exposure: live` (Tier C) — the merge is the deploy | unchanged — no automatic tags; the promotion is the deploy and stays human; tagging stays optional | — |
