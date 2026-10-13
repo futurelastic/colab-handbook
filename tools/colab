@@ -87,6 +87,7 @@ const localAdopt = require('./lib/local-adopt'); // #393
 const ownerBranch = require('./lib/owner-branch'); // #394
 const humanDoor = require('./lib/ship-human-door'); // #525
 const instructionGate = require('./lib/instruction-gate'); // #588
+const instructionFile = require('./lib/instruction-file'); // #602
 const {
   HOST, UserError, normIssueNum, issueTag, claimKey, today, nowISO, hoursSince, humanAge,
   parseArgs, table, shortRepo,
@@ -9315,6 +9316,13 @@ async function cmdAdopt(argv) {
           : `detected (the repo's default branch, ${nowDate})`;
       entries.push({ key: 'trunk', value: extra.trunk, comment: `# trunk: ${trunkNote}` });
     }
+    // #602: on a fork, the instruction-file check cannot see the `upstream` remote in CI — so the
+    // fork verdict above (adoptDetectFork, the one fork test) is recorded as the key CI reads.
+    // Detected, never asked, like trunk and stack; never written over an existing declaration.
+    if (extra.fork && !(instructionFile.INSTRUCTION_FILES_KEY in cfg)) {
+      entries.push({ key: instructionFile.INSTRUCTION_FILES_KEY, value: 'upstream',
+        comment: `# instruction-files: detected — a fork (${extra.fork.source === 'flag' ? '--fork' : `remote "${extra.fork.remote}"`}, ${nowDate}); CLAUDE.md/AGENTS.md are the upstream's, so the instruction-file check leaves them unjudged (CONVENTIONS.md §9, #602)` });
+    }
     if (!('stack' in cfg)) {
       if (opts.stack !== undefined) {
         const stackNote = stackAnsweredInteractively
@@ -16086,6 +16094,10 @@ workflow \`.github/workflows/instruction-files.yml\`.
   (neither)     judge every CLAUDE.md at HEAD, no ratchet: any non-conforming file fails.
   --repo <path> repo to run in (default: cwd)
   --json        { ok, error?, mode, base, fail, reason, files: [{ path, conforming, message }], changed }
+
+A fork whose CLAUDE.md/AGENTS.md belong to its upstream declares \`instruction-files: upstream\` in
+.github/project.yml (read on the judged side — HEAD, the index or the working tree): nothing is judged
+and the verdict is a pass (\`--json\`: \`exempt: "upstream"\`) — CONVENTIONS.md §9 "A fork of an upstream", #602.
 
 Exit: 0 pass · 1 fail · 2 cannot judge (not a repo, base not fetched — never read as a pass).
 The fix for a failure is always the same: move the prose to AGENTS.md (handbook-sync's graft step

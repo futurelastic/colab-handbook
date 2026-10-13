@@ -781,6 +781,20 @@ test('#449: a fork with no CLAUDE.md and no AGENTS.md gets the block alone — n
   assert.strictEqual(fs.existsSync(path.join(fx.work, 'AGENTS.md')), false);
 });
 
+test('#602: adopt on a detected fork records `instruction-files: upstream`; --no-fork does not', () => {
+  const fx = forkFixture();
+  const r = colab(fx, ['adopt', '--repo', fx.work, '--no-verify', ...FRESH_FLAGS], { COLAB_HUMAN: '1' });
+  assert.strictEqual(r.code, 0, r.err);
+  const yml = fs.readFileSync(path.join(fx.work, '.github', 'project.yml'), 'utf8');
+  assert.match(yml, /^instruction-files: upstream$/m);
+  assert.match(yml, /# instruction-files: detected — a fork \(remote "upstream"/);
+  assert.match(r.out, /keep `instruction-files: upstream` in \.github\/project\.yml/);
+  const nf = forkFixture();
+  const r2 = colab(nf, ['adopt', '--repo', nf.work, '--no-verify', '--no-fork', ...FRESH_FLAGS], { COLAB_HUMAN: '1' });
+  assert.strictEqual(r2.code, 0, r2.err);
+  assert.doesNotMatch(fs.readFileSync(path.join(nf.work, '.github', 'project.yml'), 'utf8'), /instruction-files/);
+});
+
 test('#449: a non-fork repo with no extra migrations still gets the step-2 reminder, "none detected"', () => {
   const fx = fixture(fullYml());
   const r = colab(fx, ['adopt', '--repo', fx.work, '--no-verify']);

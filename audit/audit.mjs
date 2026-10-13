@@ -1485,6 +1485,18 @@ function auditRepoInner(target, ctx) {
       if (!tr.valid) fail(tr.reason);
     }
 
+    // ---- instruction-files (#602) ---------------------------------------------
+    // `instruction-files: upstream` — a fork whose CLAUDE.md/AGENTS.md belong to the upstream it
+    // tracks; the instruction-file shape is then not judged (checkInstructionFileShape below, and
+    // the shared gate the hook and the CI workflow run). tools/lib/instruction-file.js
+    // parseInstructionFiles is the one reading. An invalid value fails: it reads as absent (judged —
+    // the stricter direction), so the declaration silently does nothing.
+    {
+      const ifl = instructionFile.parseInstructionFiles(cfg);
+      info.instructionFiles = ifl.declared ? ifl.value : null;
+      if (!ifl.valid) fail(ifl.reason);
+    }
+
     // ---- ci-docs-skip (#570) ----------------------------------------------------
     // Opts the CI templates' guard into docs-only mode: a change whose every path is documentation
     // (tools/lib/docs-only.js, the rule colab ship applies), from a green base, skips the suite.
@@ -1816,7 +1828,7 @@ function auditRepoInner(target, ctx) {
   checkInstructionFileBlocks(src, warn, { self: isSelf });
   // #419: and prose left in CLAUDE.md / no AGENTS.md at all — same posture, same reason.
   // #588: and the same finding FAILS where the instruction-file ratchet trips (local repos only).
-  checkInstructionFileShape(src, warn, fail, { base: ctx.base, trunk: cfg?.trunk ?? null });
+  checkInstructionFileShape(src, warn, fail, { base: ctx.base, trunk: cfg?.trunk ?? null, upstreamOwned: instructionFile.parseInstructionFiles(cfg).exempt });
   // #599: a caller of the reusable instruction-files workflow narrowed off session branches, or not
   // dispatchable, defeats the ratchet's point (fail on the branch) and the cure rule's way out.
   checkInstructionFilesCaller(src, workflows, cfg?.trunk ?? null, warn);
@@ -2734,7 +2746,12 @@ function instructionRatchet(src, opts) {
   return r;
 }
 
+//
+// #602: a fork declaring `instruction-files: upstream` is not judged at all — neither the ratchet's
+// failure nor the two warnings: its CLAUDE.md/AGENTS.md are the upstream's (CONVENTIONS.md §9, *A
+// fork of an upstream*), and the --json `instructionFiles` field says why nothing was reported.
 function checkInstructionFileShape(src, warn, fail = warn, opts = {}) {
+  if (opts.upstreamOwned) return;
   const ratchet = instructionRatchet(src, opts);
   if (ratchet && !ratchet.ok) warn(`instruction-file ratchet not evaluated: ${ratchet.error} (#588)`);
   if (ratchet && ratchet.ok && ratchet.fail) {

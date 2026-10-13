@@ -22,6 +22,7 @@ const fs = require('fs');
 const path = require('path');
 const { execFileSync } = require('child_process');
 const inst = require('./instruction-file.js');
+const yaml = require('./yaml.js');
 
 const CLAUDE_RE = /(^|\/)CLAUDE\.md$/;
 
@@ -85,6 +86,26 @@ function judgeSide(cwd, side) {
 }
 
 /**
+ * #602 — the `instruction-files:` declaration on `side`, read from the SAME tree the CLAUDE.md
+ * files are judged on (head, index or working tree), never the merge base: a fork's adoption
+ * change adds the key, the CI caller and the appended Conventions block together, and the block
+ * touches CLAUDE.md — a base-side read would fail exactly the change that declares the exemption.
+ * An unreadable or unparseable descriptor reads as absent (judged — the stricter direction).
+ */
+function declarationOn(cwd, side) {
+  const text = reader(cwd, side)('.github/project.yml');
+  if (text === null || text === undefined) return inst.parseInstructionFiles(null);
+  let doc = null;
+  try { doc = yaml.parse(text); } catch (_) { doc = null; }
+  return inst.parseInstructionFiles(doc);
+}
+
+/** The neutral verdict of a repo whose instruction files are upstream-owned. */
+function exemptVerdict(mode, base, decl) {
+  return { ok: true, mode, base, exempt: decl.value, reason: null, fail: false, files: [], bad: [], changed: [] };
+}
+
+/**
  * Run the gate. Options:
  *   cwd       repo (default process.cwd())
  *   staged    true → judge the index against HEAD (the pre-commit hook)
@@ -93,7 +114,10 @@ function judgeSide(cwd, side) {
  * With neither `staged` nor `base`, every CLAUDE.md at the head is judged with no ratchet:
  * any non-conforming file fails (`reason: 'strict'`).
  *
- * Returns `{ ok, error?, fail, reason, mode, base, files, bad, changed }`. `ok: false` means the
+ * A repo declaring `instruction-files: upstream` on the judged side (#602) is not judged: the
+ * verdict is `{ ok: true, exempt: 'upstream', fail: false, files: [] }`, whatever its CLAUDE.md says.
+ *
+ * Returns `{ ok, error?, exempt?, fail, reason, mode, base, files, bad, changed }`. `ok: false` means the
  * gate could not answer (not a repo, base unknown, merge base not reachable in a shallow clone)
  * — callers must refuse rather than read that as a pass.
  */
@@ -102,6 +126,8 @@ function gate({ cwd = process.cwd(), staged = false, base = null, head = null } 
   const hasHead = git(cwd, ['rev-parse', '--verify', '-q', 'HEAD^{commit}']) !== null;
 
   if (staged) {
+    const decl = declarationOn(cwd, 'index');
+    if (decl.exempt) return exemptVerdict('staged', hasHead ? 'HEAD' : null, decl);
     const files = judgeSide(cwd, 'index');
     const changed = (git(cwd, ['diff', '--cached', '--name-only', '-z']) || '').split('\0').filter(Boolean);
     const baseFiles = hasHead ? judgeSide(cwd, { ref: 'HEAD' }) : [];
@@ -111,6 +137,8 @@ function gate({ cwd = process.cwd(), staged = false, base = null, head = null } 
 
   const headSide = head === 'worktree' ? 'worktree' : { ref: head || 'HEAD' };
   if (headSide !== 'worktree' && !hasHead && !head) return { ok: false, error: 'HEAD has no commit yet' };
+  const decl = declarationOn(cwd, headSide);
+  if (decl.exempt) return exemptVerdict(base ? 'ratchet' : 'strict', null, decl);
   const files = judgeSide(cwd, headSide);
   if (files === null) return { ok: false, error: `cannot read ${head || 'HEAD'}` };
 
@@ -135,6 +163,7 @@ function gate({ cwd = process.cwd(), staged = false, base = null, head = null } 
 /** One human line per verdict, naming the fix. */
 function describe(r) {
   if (!r.ok) return [`cannot judge: ${r.error}`];
+  if (r.exempt) return [`instruction files not judged: \`instruction-files: ${r.exempt}\` in .github/project.yml — CLAUDE.md/AGENTS.md are upstream-owned on this fork (CONVENTIONS.md §9 "A fork of an upstream", #602)`];
   if (!r.bad.length) return [`instruction files conform (${r.files.length} CLAUDE.md judged)`];
   const why = {
     touched: 'this change touches CLAUDE.md/AGENTS.md, so every CLAUDE.md must conform',
@@ -147,4 +176,4 @@ function describe(r) {
   return lines;
 }
 
-module.exports = { CLAUDE_RE, listClaude, reader, judgeSide, gate, describe };
+module.exports = { CLAUDE_RE, listClaude, reader, judgeSide, declarationOn, gate, describe };

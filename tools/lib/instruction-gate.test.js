@@ -237,6 +237,63 @@ test('audit: no base to compare against (no origin/<trunk>) keeps the warning', 
   assert.ok(a.warns.some((t) => t.startsWith('prose-in-claude-md:')));
 });
 
+// --- #602: a fork whose instruction files are upstream-owned ---------------------------------
+
+const YML = 'tier: B\ntrunk: main\nproduction: null\ndeploy: none\nstack: node\n';
+const FORK_YML = `${YML}instruction-files: upstream\n`;
+
+test('#602: the key exempts every mode — --base, --staged, strict — whatever CLAUDE.md says', () => {
+  const { dir, g } = repo({ '.github/project.yml': FORK_YML, 'CLAUDE.md': LEGACY, 'AGENTS.md': AGENTS },
+    { 'CLAUDE.md': LEGACY + '\n' + CONV, 'AGENTS.md': AGENTS + 'upstream sync\n' });
+  const r = run(dir);
+  assert.deepStrictEqual([r.ok, r.fail, r.exempt, r.files.length], [true, false, 'upstream', 0]);
+  assert.match(gateLib.describe(r)[0], /not judged: `instruction-files: upstream`/);
+  assert.strictEqual(gateLib.gate({ cwd: dir }).fail, false, 'strict');
+  write(dir, { 'CLAUDE.md': LEGACY + 'staged prose\n' });
+  g('add', 'CLAUDE.md');
+  const s = gateLib.gate({ cwd: dir, staged: true });
+  assert.deepStrictEqual([s.ok, s.fail, s.exempt], [true, false, 'upstream']);
+});
+
+test('#602: without the key the same fork change fails exactly as before', () => {
+  const { dir } = repo({ 'CLAUDE.md': LEGACY, 'AGENTS.md': AGENTS }, { 'CLAUDE.md': LEGACY + '\n' + CONV });
+  const r = run(dir);
+  assert.deepStrictEqual([r.fail, r.reason, r.exempt], [true, 'touched', undefined]);
+});
+
+test('#602: read on the judged side — the change that adopts (key + appended block) passes on its own', () => {
+  const { dir } = repo({ 'CLAUDE.md': LEGACY }, { '.github/project.yml': FORK_YML, 'CLAUDE.md': LEGACY + '\n' + CONV });
+  assert.strictEqual(run(dir).fail, false);
+  // … and dropping the key on a branch is judged again.
+  const back = repo({ '.github/project.yml': FORK_YML, 'CLAUDE.md': LEGACY }, { '.github/project.yml': YML, 'CLAUDE.md': LEGACY + 'x\n' });
+  assert.strictEqual(run(back.dir).fail, true);
+});
+
+test('#602: any other value is judged (the stricter direction)', () => {
+  for (const v of ['yes', 'true', 'mirror']) {
+    const { dir } = repo({ '.github/project.yml': `${YML}instruction-files: ${v}\n`, 'CLAUDE.md': LEGACY }, { 'CLAUDE.md': LEGACY + 'x\n' });
+    assert.strictEqual(run(dir).fail, true, v);
+  }
+  assert.strictEqual(inst.parseInstructionFiles({ 'instruction-files': 'yes' }).valid, false);
+  assert.deepStrictEqual(inst.parseInstructionFiles({}), { declared: false, exempt: false, valid: true, value: null, reason: inst.parseInstructionFiles(null).reason });
+});
+
+test('#602: the CLI passes (exit 0) on a declaring fork and reports why', () => {
+  const { dir } = repo({ '.github/project.yml': FORK_YML, 'CLAUDE.md': LEGACY }, { 'CLAUDE.md': LEGACY + 'x\n' });
+  const r = spawnSync(process.execPath, [COLAB, 'instruction-files', '--base', 'main'], { cwd: dir, encoding: 'utf8' });
+  assert.strictEqual(r.status, 0, r.stderr);
+  assert.match(r.stdout, /not judged: `instruction-files: upstream`/);
+});
+
+test('#602: the audit reports neither the failure nor the warnings on a declaring fork; a bad value fails', () => {
+  const fork = repo({ '.github/project.yml': FORK_YML, 'CLAUDE.md': LEGACY }, { 'CLAUDE.md': LEGACY + 'more\n' });
+  const a = audit(fork.dir, '--base', 'main');
+  assert.ok(![...a.fails, ...a.warns].some((t) => /^(prose-in-claude-md|no-agents-md):/.test(t)), [...a.fails, ...a.warns].join(' | '));
+  const bad = repo({ '.github/project.yml': `${YML}instruction-files: mirror\n`, 'CLAUDE.md': LEGACY });
+  const b = audit(bad.dir);
+  assert.ok(b.fails.some((t) => /^instruction-files is "mirror" — the only defined value is "upstream"/.test(t)), b.fails.join(' | '));
+});
+
 // --- the reusable workflow's base resolution on a pull request (#595) ---------------------------
 //
 // These run the workflow's OWN `run:` block (read out of .github/workflows/instruction-files.yml,

@@ -4894,7 +4894,8 @@ only. Resolution order: `--config` flag > `~/.colab/repos.txt` > bundled example
      stays green. Fix: move it to `AGENTS.md`. Add [`templates/instruction-files.yml`](templates/instruction-files.yml)
      (keep its unfiltered `push:` and `workflow_dispatch:`, #599) and the hooklet `templates/pre-commit-instruction-files`.
    - **A fork of an upstream you don't own does not take this shape**. Its step 5 is the
-     append-only block in [*A fork of an upstream*](#a-fork-of-an-upstream--a-repo-you-own-that-tracks-one-you-dont-449), below.
+     append-only block in [*A fork of an upstream*](#a-fork-of-an-upstream--a-repo-you-own-that-tracks-one-you-dont-449), below,
+     and it declares `instruction-files: upstream` so the check above passes unjudged (#602).
 
    The audit holds this shape: its size advisory measures `CLAUDE.md` **plus every in-repo
    file it `@`-imports**, so a bloated `AGENTS.md` behind a tiny shell is still caught; it
@@ -5079,7 +5080,8 @@ workflow of its own.
 **`colab adopt` detects it, never asks.** It looks for a remote named `upstream` whose URL
 differs from `origin`'s. `--fork` asserts the shape when the upstream remote has another
 name, and `--no-fork` denies it when a remote called `upstream` means something else.
-Nothing is written to the descriptor: the remote is the fact.
+The remote is the fact, and one key records it: `instruction-files: upstream`, which adopt
+writes on a fork because CI has no `upstream` remote to read (#602). Nothing else is written.
 
 Four things change from [*Any repo, first-time adoption*](#any-repo-first-time-adoption):
 
@@ -5093,9 +5095,10 @@ Four things change from [*Any repo, first-time adoption*](#any-repo-first-time-a
      the block alone, and adopt writes **no** `AGENTS.md` stub.
    - **`CLAUDE.local.md` instead** only when the fork must stay byte-identical to the
      upstream (a pure mirror).
-   - The audit's `prose-in-claude-md` and `no-agents-md` warnings are expected on a fork, and so
-     is `handbook-sync`'s offer of the `AGENTS.md` graft. Leave the upstream's files alone and
-     decline the graft. Both are warnings, never failures.
+   - **Declare `instruction-files: upstream`** ([schema](project.schema.md#instruction-files--optional)).
+     The instruction-file check (audit, hook, CI) then skips the upstream's files, so an
+     upstream sync that touches them never turns trunk red. Without it, `prose-in-claude-md`
+     fails wherever the ratchet trips. Decline `handbook-sync`'s `AGENTS.md` graft.
 2. **The upstream's agent workflow stays where it is, and the appended block says which
    flow governs.** An upstream can ship skills and commands under `.claude/skills/` and
    `.claude/commands/`. Deleting or editing it is a fork patch with the same merge cost as
