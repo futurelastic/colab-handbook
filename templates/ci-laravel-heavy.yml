@@ -1,0 +1,365 @@
+# CI heavy lane (Laravel) — TEMPLATE. Copy me to .github/workflows/ci-heavy.yml, beside ci.yml
+# (copied from ci-laravel.yml). Guidance, not a dependency: you own the copy (CONVENTIONS.md §7).
+#
+# EDIT POINTS are marked `# EDIT:` — walk them once after copying.
+#
+# HEAVY LANE (#607): the whole suite, including tests marked heavy, plus anything too slow for
+# every merge (integration, browser/e2e, load). The light lane (ci.yml) runs on every push and
+# is the only lane `colab ship` reads. This one runs:
+#   - NIGHTLY, on trunk's tip. Skipped when trunk has not moved since the last green nightly.
+#     A red nightly opens one `trunk-red` issue naming the commit range that could have caused
+#     it. It never blocks a merge.
+#   - On every OFFICIAL BUILD: release-tag.yml calls this file and publishes only when it is
+#     green; release-auto.yml dispatches it at each candidate and finalizes only when it is
+#     green at that exact sha.
+#   - BY HAND: Actions → "CI (heavy)" → Run workflow, with a ref.
+# Heavy is opt-in per test; an unmarked test is light. The marker:
+#   the Pest/PHPUnit group `heavy` (`->group('heavy')`, `#[Group('heavy')]`). The light
+#   lane excludes it; this lane runs the whole suite.
+#
+# Deliberately NOT triggered by push or pull_request: a run of this workflow must never count as
+# a merge verdict (tools/lib/verify-runs.js sets schedule and dispatch runs aside).
+# No concurrency block: a heavy run is never cancelled — a release may be waiting on it.
+
+name: CI (heavy)
+
+on:
+  schedule:
+    - cron: "23 2 * * *" # EDIT: nightly, UTC. Keep the cron in this one place.
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Branch, tag or sha to test (empty = trunk's tip)"
+        required: false
+        default: ""
+  workflow_call:
+    inputs:
+      ref:
+        description: "Branch, tag or sha to test"
+        type: string
+        required: true
+
+permissions: {}
+
+env:
+  # EDIT: this repo's trunk (`trunk:` in .github/project.yml). A schedule always starts on the
+  # default branch; the nightly tests THIS branch's tip.
+  TRUNK: main
+  # EDIT: the same values as ci.yml.
+  VITE_APP_NAME: ""
+  WAYFINDER_ARGS: "--with-form"
+
+jobs:
+  # Resolves the one commit this run tests, and decides whether to test it. This job is the one
+  # that concludes `success` when the nightly skips: a run whose jobs all skip reads as not-green.
+  plan:
+    name: What to test
+    runs-on: ubuntu-latest # EDIT: needs `gh` (GitHub-hosted images have it).
+    timeout-minutes: 5
+    permissions:
+      actions: read
+      contents: read
+    outputs:
+      sha: ${{ steps.plan.outputs.sha }}
+      run: ${{ steps.plan.outputs.run }}
+      since: ${{ steps.plan.outputs.since }}
+    steps:
+      - name: Resolve the commit; skip a nightly on an unmoved trunk
+        id: plan
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT: ${{ github.event_name }}
+          REF: ${{ inputs.ref }}
+          REPO: ${{ github.repository }}
+          WORKFLOW_REF: ${{ github.workflow_ref }}
+        run: |
+          set -uo pipefail
+          target="${REF:-$TRUNK}"
+          if ! sha="$(gh api "repos/$REPO/commits/$target" --jq .sha)" || [ -z "$sha" ]; then
+            echo "::error::cannot resolve '$target' to a commit"
+            exit 1
+          fi
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          run=true; since=""
+          if [ "$EVENT" = "schedule" ]; then
+            # The last green nightly's tested commit, read from its `Full suite @ <sha>` job.
+            # Any read error leaves `since` empty, and the suite runs.
+            wf="${WORKFLOW_REF%@*}"; wf="${wf##*/}"
+            for id in $(gh api "repos/$REPO/actions/workflows/$wf/runs?event=schedule&status=success&per_page=10" \
+                          --jq '.workflow_runs[].id' 2>/dev/null); do
+              since="$(gh api "repos/$REPO/actions/runs/$id/jobs" \
+                --jq '[.jobs[] | select(.conclusion == "success" and (.name | startswith("Full suite @ "))) | .name | ltrimstr("Full suite @ ")][0] // ""' 2>/dev/null || true)"
+              [ -z "$since" ] || break
+            done
+            if [ "$since" = "$sha" ]; then
+              run=false
+              echo "::notice title=heavy-skipped::$TRUNK has not moved since the last green nightly ($sha)"
+            fi
+          fi
+          echo "run=$run" >> "$GITHUB_OUTPUT"
+          echo "since=$since" >> "$GITHUB_OUTPUT"
+          echo "Heavy lane: ${run} at \`$sha\`${since:+ (last green nightly: \`$since\`)}" >> "$GITHUB_STEP_SUMMARY"
+
+  heavy:
+    # The tested sha is in the job name: the next nightly reads it back to decide whether trunk moved.
+    name: Full suite @ ${{ needs.plan.outputs.sha }}
+    needs: plan
+    if: ${{ needs.plan.outputs.run == 'true' }}
+    runs-on: ubuntu-latest # EDIT: self-hosted label if this repo needs one.
+    timeout-minutes: 120 # EDIT: well above YOUR heavy p99; the default is 360.
+    permissions:
+      contents: read
+    defaults:
+      run:
+        # EDIT: the same directory as ci.yml's build job.
+        working-directory: .
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          ref: ${{ needs.plan.outputs.sha }}
+          persist-credentials: false
+
+      # Toolchain and install: the same steps as ci.yml's build job, so both lanes resolve the
+      # same versions. Keep them in step when you edit either.
+      # ---------------------------------------------------------------------------
+      # Toolchain resolution. Precedence, highest first:
+      #   PHP :  1. .github/project.yml -> php:      2. composer.json -> require.php
+      #   Node:  1. .github/project.yml -> node:     2. .nvmrc, else package.json engines.node
+      #   ...and if neither declares it, FAIL.
+      #
+      # There is deliberately NO fallback default. A silent default is exactly how a
+      # repo here ended up building on Node 20 in CI while deploying on Node 22 —
+      # CI was green and proved nothing about what actually shipped. Keep these equal
+      # to what the deploy target runs, or CI proves nothing.
+      # ---------------------------------------------------------------------------
+      - name: Resolve toolchain versions
+        id: toolchain
+        run: |
+          set -euo pipefail
+
+          # "^8.3" / ">=22.1" / "v22" / "8.4.*" -> "8.3" / "22.1" / "22" / "8.4"
+          normalise() {
+            printf '%s' "$1" \
+              | tr -d '"' \
+              | sed -E 's/^[^0-9]*//' \
+              | sed -E 's/[[:space:]].*$//' \
+              | sed -E 's/\.(x|\*)$//' \
+              | sed -E 's/[^0-9.].*$//' \
+              | sed -E 's/\.$//'
+          }
+
+          # Read a flat `key: value` out of .github/project.yml. That file is a
+          # handful of top-level keys by design, so this is sufficient.
+          from_project_yml() {
+            [ -f .github/project.yml ] || return 0
+            sed -nE "s/^[[:space:]]*$1:[[:space:]]*\"?([^\"#[:space:]]+)\"?.*/\1/p" .github/project.yml | head -1
+          }
+
+          # --- PHP ---------------------------------------------------------------
+          PHP_VERSION=""; PHP_SOURCE=""
+          V="$(from_project_yml php || true)"
+          if [ -n "$V" ] && [ "$V" != "null" ]; then
+            PHP_VERSION="$(normalise "$V")"; PHP_SOURCE=".github/project.yml (php:)"
+          fi
+          if [ -z "$PHP_VERSION" ] && [ -f composer.json ]; then
+            V=""
+            if command -v php >/dev/null 2>&1; then
+              V="$(php -r '$c=json_decode(file_get_contents("composer.json"),true); echo $c["require"]["php"] ?? "";' || true)"
+            elif command -v python3 >/dev/null 2>&1; then
+              V="$(python3 -c "import json;print((json.load(open('composer.json')).get('require') or {}).get('php') or '')" || true)"
+            elif command -v node >/dev/null 2>&1; then
+              V="$(node -e "try{const r=require('./composer.json').require||{};process.stdout.write(String(r.php||''))}catch(_){}" || true)"
+            fi
+            if [ -n "$V" ]; then
+              PHP_VERSION="$(normalise "$V")"; PHP_SOURCE="composer.json (require.php)"
+            fi
+          fi
+          if [ -z "$PHP_VERSION" ]; then
+            echo "::error::No PHP version is declared in this repository, and this workflow refuses to guess one."
+            {
+              echo "Declare it in ONE of:"
+              echo "  1. .github/project.yml  ->  php: \"8.4\"   (preferred)"
+              echo "  2. composer.json        ->  \"require\": { \"php\": \"^8.4\" }"
+              echo "Use the version the DEPLOY target runs."
+            } >&2
+            exit 1
+          fi
+
+          # --- Node --------------------------------------------------------------
+          NODE_VERSION=""; NODE_SOURCE=""
+          V="$(from_project_yml node || true)"
+          if [ -n "$V" ] && [ "$V" != "null" ]; then
+            NODE_VERSION="$(normalise "$V")"; NODE_SOURCE=".github/project.yml (node:)"
+          fi
+          if [ -z "$NODE_VERSION" ] && [ -f .nvmrc ]; then
+            V="$(grep -vE '^[[:space:]]*(#|$)' .nvmrc | head -1 | tr -d '[:space:]' || true)"
+            if [ -n "$V" ]; then
+              NODE_VERSION="$(normalise "$V")"; NODE_SOURCE=".nvmrc"
+            fi
+          fi
+          if [ -z "$NODE_VERSION" ] && [ -f package.json ]; then
+            V=""
+            if command -v node >/dev/null 2>&1; then
+              V="$(node -e "try{const e=require('./package.json').engines||{};process.stdout.write(String(e.node||''))}catch(_){}" || true)"
+            elif command -v python3 >/dev/null 2>&1; then
+              V="$(python3 -c "import json;print((json.load(open('package.json')).get('engines') or {}).get('node') or '')" || true)"
+            fi
+            if [ -n "$V" ]; then
+              NODE_VERSION="$(normalise "$V")"; NODE_SOURCE="package.json (engines.node)"
+            fi
+          fi
+          if [ -z "$NODE_VERSION" ]; then
+            echo "::error::No Node version is declared in this repository, and this workflow refuses to guess one."
+            {
+              echo "Declare it in ONE of:"
+              echo "  1. .github/project.yml  ->  node: \"22\"   (preferred)"
+              echo "  2. .nvmrc  ->  22        or  package.json -> \"engines\": { \"node\": \">=22\" }"
+              echo "Use the version the DEPLOY target runs."
+            } >&2
+            exit 1
+          fi
+
+          echo "php-version=$PHP_VERSION"   >> "$GITHUB_OUTPUT"
+          echo "node-version=$NODE_VERSION" >> "$GITHUB_OUTPUT"
+          echo "PHP $PHP_VERSION (from: $PHP_SOURCE) / Node $NODE_VERSION (from: $NODE_SOURCE)"
+          {
+            echo "PHP **$PHP_VERSION** — resolved from \`$PHP_SOURCE\`"
+            echo ""
+            echo "Node **$NODE_VERSION** — resolved from \`$NODE_SOURCE\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ steps.toolchain.outputs.php-version }}
+          # sqlite3 + pdo_sqlite are what the throwaway bootstrap below runs on.
+          extensions: mbstring, sqlite3, pdo_sqlite, bcmath, intl # EDIT: add what this app needs.
+          coverage: none
+
+      # Package cache (#571): Composer's download cache, on only on a GitHub-hosted runner AND
+      # with composer.lock present. Both halves are load-bearing:
+      #   - No composer.lock → nothing stable to key on; every run would save a fresh entry.
+      #   - Self-hosted → off. A persistent runner already keeps Composer's cache dir between
+      #     jobs; a remote cache on top was measured as a loss, not a saving (#512).
+      # Two NEW steps, both skipped where the gate is off. "Composer install" keeps its name
+      # and its body: `colab ship`'s cure rule matches steps by exact name.
+      # EDIT: self-hosted runners are already off; to turn caching off everywhere, delete these
+      # two steps.
+      - name: Locate Composer cache
+        id: composer-cache
+        if: runner.environment == 'github-hosted' && hashFiles('composer.lock') != ''
+        run: echo "dir=$(composer config cache-files-dir)" >> "$GITHUB_OUTPUT"
+
+      - name: Restore Composer cache
+        if: runner.environment == 'github-hosted' && hashFiles('composer.lock') != ''
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ steps.composer-cache.outputs.dir }}
+          key: composer-${{ runner.os }}-${{ hashFiles('composer.lock') }}
+          restore-keys: composer-${{ runner.os }}-
+
+      - name: Composer install
+        env:
+          RUN_TESTS: 'true' # the heavy lane always runs the suite
+        run: |
+          # --no-scripts: the post-autoload-dump hook runs `package:discover`, which
+          # boots the app — and the app cannot boot until the .env below exists.
+          # Dev dependencies are installed only when the Pest suite will run; a build-
+          # only job does not need them (wayfinder lives in require, not require-dev).
+          if [ "$RUN_TESTS" = "true" ]; then
+            composer install --no-interaction --prefer-dist --optimize-autoloader --no-scripts
+          else
+            composer install --no-dev --no-interaction --prefer-dist --optimize-autoloader --no-scripts
+          fi
+
+      - name: Prepare throwaway env for build-time codegen (wayfinder)
+        run: |
+          # See the header: .env.example ships DB_CONNECTION=mysql, but there is no
+          # MySQL on the runner. Rewrite to sqlite against an empty file so artisan
+          # boots. This .env is disposable — deploy workflows rsync with --exclude
+          # '.env', so it can never reach a server.
+          cp .env.example .env
+          sed -i 's/^DB_CONNECTION=.*/DB_CONNECTION=sqlite/' .env
+          touch database/database.sqlite
+          php artisan key:generate --force
+          php artisan package:discover --ansi
+
+          echo "=== PHP version on runner ==="
+          php -v
+
+          echo "=== wayfinder:generate (stderr visible) ==="
+          # Run it here rather than letting the Vite plugin invoke it: the plugin hides
+          # stderr and reports only "Command failed".
+          php artisan wayfinder:generate $WAYFINDER_ARGS
+
+      # npm cache (#571): the same gate as the Composer cache above — GitHub-hosted AND
+      # package-lock.json present (`cache: npm` fails the step without one). The automatic
+      # `packageManager` cache is pinned to the same condition so it cannot override it.
+      # EDIT: to turn it off everywhere, replace both expressions with '' and false.
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
+        with:
+          node-version: ${{ steps.toolchain.outputs.node-version }}
+          cache: ${{ runner.environment == 'github-hosted' && hashFiles('package-lock.json') != '' && 'npm' || '' }}
+          package-manager-cache: ${{ runner.environment == 'github-hosted' && hashFiles('package-lock.json') != '' }}
+
+      - name: Build frontend assets (Vite)
+        run: |
+          npm ci
+          npm run build
+
+      - name: Run migrations against sqlite
+        run: php artisan migrate --force
+
+      - name: Test (the whole suite)
+        run: |
+          if [ -f vendor/bin/pest ]; then
+            vendor/bin/pest --ci
+          elif [ -f vendor/bin/phpunit ]; then
+            vendor/bin/phpunit
+          else
+            echo "::error::neither vendor/bin/pest nor vendor/bin/phpunit exists."
+            exit 1
+          fi
+      # EDIT: integration, browser/e2e (Dusk) or load jobs go here, or as jobs of their own with
+      # `needs: plan` and the same `if:` and checkout ref as this one.
+
+  # A red NIGHTLY is a trunk finding, never a merge block: one open issue per lane. An open issue
+  # with the same title suppresses a new one; an issue list that cannot be read files nothing and
+  # fails this job, so a silent miss is never mistaken for "already reported".
+  report:
+    name: Report a red nightly
+    needs: [plan, heavy]
+    if: ${{ always() && github.event_name == 'schedule' && needs.heavy.result == 'failure' }}
+    runs-on: ubuntu-latest # EDIT: needs `gh`.
+    timeout-minutes: 5
+    permissions:
+      issues: write
+    steps:
+      - name: File one trunk-red issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ needs.plan.outputs.sha }}
+          SINCE: ${{ needs.plan.outputs.since }}
+          WORKFLOW: ${{ github.workflow }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -uo pipefail
+          title="Nightly heavy lane red: $WORKFLOW"
+          if ! open="$(gh issue list -R "$REPO" --state open --search "\"$title\" in:title" --json number,title \
+                         --jq "[.[] | select(.title == \"$title\")][0].number // \"\"")"; then
+            echo "::error::cannot read this repo's issues — nothing filed; the red run is the only report"
+            exit 1
+          fi
+          if [ -n "$open" ]; then
+            echo "::notice::#$open already reports this lane red — not filing another."
+            exit 0
+          fi
+          if [ -n "$SINCE" ]; then
+            range="[\`${SINCE:0:12}..${SHA:0:12}\`]($GITHUB_SERVER_URL/$REPO/compare/$SINCE...$SHA) — the commits since the last green nightly"
+          else
+            range="up to \`${SHA:0:12}\` — no green nightly on record to bound it"
+          fi
+          gh label create trunk-red -R "$REPO" --color B60205 --description "Trunk fails a check" 2>/dev/null || true
+          body="$(printf 'The heavy lane failed on trunk at `%s`: %s\n\nCould have caused it: %s.\n\nA nightly never blocks a merge. Close this issue once a nightly is green again.\n' "$SHA" "$RUN_URL" "$range")"
+          gh issue create -R "$REPO" --title "$title" --label trunk-red --body "$body"

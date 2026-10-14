@@ -1,0 +1,297 @@
+# CI heavy lane (Python) — TEMPLATE. Copy me to .github/workflows/ci-heavy.yml, beside ci.yml
+# (copied from ci-python.yml). Guidance, not a dependency: you own the copy (CONVENTIONS.md §7).
+#
+# EDIT POINTS are marked `# EDIT:` — walk them once after copying.
+#
+# HEAVY LANE (#607): the whole suite, including tests marked heavy, plus anything too slow for
+# every merge (integration, browser/e2e, load). The light lane (ci.yml) runs on every push and
+# is the only lane `colab ship` reads. This one runs:
+#   - NIGHTLY, on trunk's tip. Skipped when trunk has not moved since the last green nightly.
+#     A red nightly opens one `trunk-red` issue naming the commit range that could have caused
+#     it. It never blocks a merge.
+#   - On every OFFICIAL BUILD: release-tag.yml calls this file and publishes only when it is
+#     green; release-auto.yml dispatches it at each candidate and finalizes only when it is
+#     green at that exact sha.
+#   - BY HAND: Actions → "CI (heavy)" → Run workflow, with a ref.
+# Heavy is opt-in per test; an unmarked test is light. The marker:
+#   the pytest marker `heavy` (`@pytest.mark.heavy`, registered in pytest.ini or
+#   pyproject.toml). The light lane deselects it; this lane runs everything.
+#
+# Deliberately NOT triggered by push or pull_request: a run of this workflow must never count as
+# a merge verdict (tools/lib/verify-runs.js sets schedule and dispatch runs aside).
+# No concurrency block: a heavy run is never cancelled — a release may be waiting on it.
+
+name: CI (heavy)
+
+on:
+  schedule:
+    - cron: "23 2 * * *" # EDIT: nightly, UTC. Keep the cron in this one place.
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Branch, tag or sha to test (empty = trunk's tip)"
+        required: false
+        default: ""
+  workflow_call:
+    inputs:
+      ref:
+        description: "Branch, tag or sha to test"
+        type: string
+        required: true
+
+permissions: {}
+
+env:
+  # EDIT: this repo's trunk (`trunk:` in .github/project.yml). A schedule always starts on the
+  # default branch; the nightly tests THIS branch's tip.
+  TRUNK: main
+  # EDIT: the same value as ci.yml.
+  PACKAGE_DIR: "."
+
+jobs:
+  # Resolves the one commit this run tests, and decides whether to test it. This job is the one
+  # that concludes `success` when the nightly skips: a run whose jobs all skip reads as not-green.
+  plan:
+    name: What to test
+    runs-on: ubuntu-latest # EDIT: needs `gh` (GitHub-hosted images have it).
+    timeout-minutes: 5
+    permissions:
+      actions: read
+      contents: read
+    outputs:
+      sha: ${{ steps.plan.outputs.sha }}
+      run: ${{ steps.plan.outputs.run }}
+      since: ${{ steps.plan.outputs.since }}
+    steps:
+      - name: Resolve the commit; skip a nightly on an unmoved trunk
+        id: plan
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT: ${{ github.event_name }}
+          REF: ${{ inputs.ref }}
+          REPO: ${{ github.repository }}
+          WORKFLOW_REF: ${{ github.workflow_ref }}
+        run: |
+          set -uo pipefail
+          target="${REF:-$TRUNK}"
+          if ! sha="$(gh api "repos/$REPO/commits/$target" --jq .sha)" || [ -z "$sha" ]; then
+            echo "::error::cannot resolve '$target' to a commit"
+            exit 1
+          fi
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          run=true; since=""
+          if [ "$EVENT" = "schedule" ]; then
+            # The last green nightly's tested commit, read from its `Full suite @ <sha>` job.
+            # Any read error leaves `since` empty, and the suite runs.
+            wf="${WORKFLOW_REF%@*}"; wf="${wf##*/}"
+            for id in $(gh api "repos/$REPO/actions/workflows/$wf/runs?event=schedule&status=success&per_page=10" \
+                          --jq '.workflow_runs[].id' 2>/dev/null); do
+              since="$(gh api "repos/$REPO/actions/runs/$id/jobs" \
+                --jq '[.jobs[] | select(.conclusion == "success" and (.name | startswith("Full suite @ "))) | .name | ltrimstr("Full suite @ ")][0] // ""' 2>/dev/null || true)"
+              [ -z "$since" ] || break
+            done
+            if [ "$since" = "$sha" ]; then
+              run=false
+              echo "::notice title=heavy-skipped::$TRUNK has not moved since the last green nightly ($sha)"
+            fi
+          fi
+          echo "run=$run" >> "$GITHUB_OUTPUT"
+          echo "since=$since" >> "$GITHUB_OUTPUT"
+          echo "Heavy lane: ${run} at \`$sha\`${since:+ (last green nightly: \`$since\`)}" >> "$GITHUB_STEP_SUMMARY"
+
+  heavy:
+    # The tested sha is in the job name: the next nightly reads it back to decide whether trunk moved.
+    name: Full suite @ ${{ needs.plan.outputs.sha }}
+    needs: plan
+    if: ${{ needs.plan.outputs.run == 'true' }}
+    runs-on: ubuntu-latest # EDIT: self-hosted label if this repo needs one.
+    timeout-minutes: 120 # EDIT: well above YOUR heavy p99; the default is 360.
+    permissions:
+      contents: read
+    defaults:
+      run:
+        # EDIT: the same directory as ci.yml's build job.
+        working-directory: .
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          ref: ${{ needs.plan.outputs.sha }}
+          persist-credentials: false
+
+      # Toolchain and install: the same steps as ci.yml's build job, so both lanes resolve the
+      # same versions. Keep them in step when you edit either.
+      # ---------------------------------------------------------------------------
+      # Toolchain resolution. Precedence, highest first:
+      #   1. .github/project.yml    ->  python: <version>
+      #   2. .python-version        (pyenv; also what most local tooling reads)
+      #   3. pyproject.toml         ->  [project] requires-python
+      #   4. FAIL.
+      #
+      # NOTE what is NOT on that list: requirements.txt. It pins DEPENDENCIES, never
+      # the interpreter — a repo with only a requirements.txt has declared nothing
+      # about which Python it runs on, and this workflow will (correctly) stop and
+      # say so. Add `python:` to project.yml or a `.python-version`; do not paper
+      # over it with a hardcoded version here.
+      #
+      # There is deliberately NO fallback default. A silent default is exactly how a
+      # repo here ended up building on Node 20 in CI while deploying on Node 22 —
+      # CI was green and proved nothing about what actually shipped. Python has the
+      # same failure with sharper edges: a minor is a real feature release, so 3.12
+      # vs 3.13 is not a cosmetic difference.
+      # ---------------------------------------------------------------------------
+      - name: Resolve Python version
+        id: toolchain
+        run: |
+          set -euo pipefail
+
+          # ">=3.13" / "~=3.12" / "3.13.1" / "3.13" -> "3.13" / "3.12" / "3.13.1"
+          normalise() {
+            printf '%s' "$1" \
+              | tr -d '"' \
+              | sed -E 's/^[^0-9]*//' \
+              | sed -E 's/[[:space:],].*$//' \
+              | sed -E 's/\.(x|\*)$//' \
+              | sed -E 's/[^0-9.].*$//' \
+              | sed -E 's/\.$//'
+          }
+
+          PY_VERSION=""
+          SOURCE=""
+
+          # 1. project.yml wins. Flat `python: 3.13` mapping; good enough, this file
+          #    is a handful of keys by design.
+          if [ -f .github/project.yml ]; then
+            V="$(sed -nE 's/^[[:space:]]*python:[[:space:]]*"?([^"#[:space:]]+)"?.*/\1/p' .github/project.yml | head -1 || true)"
+            if [ -n "$V" ] && [ "$V" != "null" ]; then
+              PY_VERSION="$(normalise "$V")"; SOURCE=".github/project.yml (python:)"
+            fi
+          fi
+
+          # 2. .python-version
+          if [ -z "$PY_VERSION" ] && [ -f .python-version ]; then
+            V="$(grep -vE '^[[:space:]]*(#|$)' .python-version | head -1 | tr -d '[:space:]' || true)"
+            if [ -n "$V" ]; then
+              PY_VERSION="$(normalise "$V")"; SOURCE=".python-version"
+            fi
+          fi
+
+          # 3. pyproject.toml -> [project] requires-python. Read with a line match, not
+          #    a TOML parser: the field is a single top-level string and the runner is
+          #    not guaranteed to have tomllib available before setup-python has run.
+          if [ -z "$PY_VERSION" ] && [ -f pyproject.toml ]; then
+            V="$(sed -nE 's/^[[:space:]]*requires-python[[:space:]]*=[[:space:]]*["'"'"']([^"'"'"']+)["'"'"'].*/\1/p' pyproject.toml | head -1 || true)"
+            if [ -n "$V" ]; then
+              PY_VERSION="$(normalise "$V")"; SOURCE="pyproject.toml (requires-python)"
+            fi
+          fi
+
+          # 4. No declared source -> stop. Do not guess.
+          if [ -z "$PY_VERSION" ]; then
+            echo "::error::No Python version is declared in this repository, and this workflow refuses to guess one."
+            {
+              echo ""
+              echo "Declare it in ONE of these places (checked in this order):"
+              echo "  1. .github/project.yml  ->  python: \"3.13\"   (preferred: one descriptor for the whole repo)"
+              echo "  2. .python-version      ->  3.13              (also drives local dev via pyenv)"
+              echo "  3. pyproject.toml       ->  [project] requires-python = \">=3.13\""
+              echo ""
+              echo "requirements.txt does NOT count — it pins dependencies, not the interpreter."
+              echo "Pick the version your DEPLOY target runs. CI on a different minor than"
+              echo "production proves less than you think."
+            } >&2
+            exit 1
+          fi
+
+          echo "python-version=$PY_VERSION" >> "$GITHUB_OUTPUT"
+          echo "Python $PY_VERSION (resolved from: $SOURCE)"
+          echo "Python **$PY_VERSION** — resolved from \`$SOURCE\`" >> "$GITHUB_STEP_SUMMARY"
+
+      # Package cache (#571): pip's wheel cache, on only on a GitHub-hosted runner AND with a
+      # dependency manifest present. Both halves are load-bearing:
+      #   - No requirements*.txt / pyproject.toml → setup-python's `cache: pip` fails the step
+      #     ("No file ... matched"), and this template allows a repo with neither.
+      #   - Self-hosted → off. A persistent runner already keeps ~/.cache/pip between jobs; a
+      #     remote cache on top was measured as a loss, not a saving (#512).
+      # The cache holds downloaded wheels, never a resolution: it cannot change which versions
+      # install, so a repo without a pinned lockfile is no less reproducible with it on.
+      # EDIT: self-hosted runners are already off; to turn caching off everywhere, replace the
+      # `cache:` expression with ''. Manifests outside the root → widen cache-dependency-path
+      # and the hashFiles() to match.
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: ${{ steps.toolchain.outputs.python-version }}
+          cache: ${{ runner.environment == 'github-hosted' && hashFiles('requirements*.txt', 'pyproject.toml') != '' && 'pip' || '' }}
+          cache-dependency-path: |
+            requirements*.txt
+            pyproject.toml
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          # Whichever manifest the repo actually has. A packaged project (pyproject)
+          # installs itself so imports resolve the way they will in production;
+          # a plain requirements.txt service just installs its pins.
+          if [ -f pyproject.toml ]; then
+            pip install -e .
+          elif [ -f requirements.txt ]; then
+            pip install -r requirements.txt
+          else
+            echo "::warning::No pyproject.toml or requirements.txt — nothing to install."
+          fi
+
+      - name: Byte-compile
+        # The cheapest gate there is: every module parses. Catches the syntax error
+        # that only ever runs on a code path nobody tests.
+        run: python -m compileall -q "$PACKAGE_DIR"
+
+      - name: Test (the whole suite)
+        run: |
+          if [ -f requirements-dev.txt ]; then pip install -r requirements-dev.txt; fi
+          if python -m pytest --version >/dev/null 2>&1; then
+            python -m pytest -q
+          else
+            echo "::notice::pytest not installed — nothing to run."
+          fi
+      # EDIT: integration, browser/e2e or load jobs go here, or as jobs of their own with
+      # `needs: plan` and the same `if:` and checkout ref as this one.
+
+  # A red NIGHTLY is a trunk finding, never a merge block: one open issue per lane. An open issue
+  # with the same title suppresses a new one; an issue list that cannot be read files nothing and
+  # fails this job, so a silent miss is never mistaken for "already reported".
+  report:
+    name: Report a red nightly
+    needs: [plan, heavy]
+    if: ${{ always() && github.event_name == 'schedule' && needs.heavy.result == 'failure' }}
+    runs-on: ubuntu-latest # EDIT: needs `gh`.
+    timeout-minutes: 5
+    permissions:
+      issues: write
+    steps:
+      - name: File one trunk-red issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ needs.plan.outputs.sha }}
+          SINCE: ${{ needs.plan.outputs.since }}
+          WORKFLOW: ${{ github.workflow }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -uo pipefail
+          title="Nightly heavy lane red: $WORKFLOW"
+          if ! open="$(gh issue list -R "$REPO" --state open --search "\"$title\" in:title" --json number,title \
+                         --jq "[.[] | select(.title == \"$title\")][0].number // \"\"")"; then
+            echo "::error::cannot read this repo's issues — nothing filed; the red run is the only report"
+            exit 1
+          fi
+          if [ -n "$open" ]; then
+            echo "::notice::#$open already reports this lane red — not filing another."
+            exit 0
+          fi
+          if [ -n "$SINCE" ]; then
+            range="[\`${SINCE:0:12}..${SHA:0:12}\`]($GITHUB_SERVER_URL/$REPO/compare/$SINCE...$SHA) — the commits since the last green nightly"
+          else
+            range="up to \`${SHA:0:12}\` — no green nightly on record to bound it"
+          fi
+          gh label create trunk-red -R "$REPO" --color B60205 --description "Trunk fails a check" 2>/dev/null || true
+          body="$(printf 'The heavy lane failed on trunk at `%s`: %s\n\nCould have caused it: %s.\n\nA nightly never blocks a merge. Close this issue once a nightly is green again.\n' "$SHA" "$RUN_URL" "$range")"
+          gh issue create -R "$REPO" --title "$title" --label trunk-red --body "$body"

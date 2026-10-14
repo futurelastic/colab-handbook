@@ -517,9 +517,78 @@ jobs:
             fi
           fi
 
+      # THE HEAVY LANE AT EVERY CANDIDATE (#607). A candidate is an official build, so the heavy
+      # lane (ci-heavy.yml, from templates/ci-<stack>-heavy.yml) starts at its exact commit now and
+      # has the whole test period to finish; the finalize step below waits for its green. A dispatch,
+      # not `workflow_call`: a called workflow's jobs run inside THIS run, which colab ignores as its
+      # own (#425), so the verdict would be invisible at the sha. No heavy lane here → nothing to do.
+      - name: Start the heavy lane at the new candidate
+        if: steps.cut.outputs.tag != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.cut.outputs.tag }}
+          HEAVY_WORKFLOW: ci-heavy.yml # EDIT: the heavy lane's file name, if you named it otherwise.
+        run: |
+          set -uo pipefail
+          eval "$RETRY_TRANSIENT"
+          if [ ! -f ".github/workflows/$HEAVY_WORKFLOW" ]; then
+            echo "No .github/workflows/$HEAVY_WORKFLOW — no heavy lane to start."
+          elif retry_transient gh workflow run "$HEAVY_WORKFLOW" --ref "$TAG" -f ref="$TAG"; then
+            echo "Dispatched $HEAVY_WORKFLOW at $TAG — a final needs its green run at this commit." | tee -a "$GITHUB_STEP_SUMMARY"
+          else
+            echo "::warning::could not dispatch $HEAVY_WORKFLOW at $TAG — the finalize step dispatches it again"
+          fi
+
+      # THE HEAVY LANE GATES A FINAL (#607): a final is cut only when the heavy lane has a green run
+      # at the candidate's exact commit. None yet → it is dispatched (unless one is running) and this
+      # run does not finalize; a red one refuses until a human re-runs it green or cuts a new
+      # candidate. A refusal is not a failure: the step stays green. No heavy lane here → no gate.
+      - name: Heavy lane green at the candidate?
+        id: heavy
+        if: (github.event_name == 'schedule' && env.RETRY_RUN != 'true') || github.event_name == 'workflow_dispatch'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HEAVY_WORKFLOW: ci-heavy.yml # EDIT: the same name as in the step that starts it.
+        run: |
+          set -uo pipefail
+          eval "$RETRY_TRANSIENT"
+          if [ ! -f ".github/workflows/$HEAVY_WORKFLOW" ]; then
+            echo "No .github/workflows/$HEAVY_WORKFLOW — no heavy lane gates the final."
+            exit 0
+          fi
+          OUT="$RUNNER_TEMP/finalize-dry.json"
+          retry_transient node "$COLAB" release finalize --auto --dry --json > "$OUT" || true
+          TAG="$(jq -r '.candidate.tag // empty' "$OUT" 2>/dev/null || true)"
+          SHA="$(jq -r '.candidate.sha // empty' "$OUT" 2>/dev/null || true)"
+          if [ -z "$SHA" ]; then
+            echo "No candidate to finalize — nothing for the heavy lane to gate."
+            exit 0
+          fi
+          if ! RUNS="$(retry_transient gh run list --workflow "$HEAVY_WORKFLOW" --commit "$SHA" --json status,conclusion,url -L 20)"; then
+            echo "::warning::cannot read $HEAVY_WORKFLOW runs at $SHA — not finalizing in this run"
+            echo "ok=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if jq -e 'any(.[]; .conclusion == "success")' <<< "$RUNS" > /dev/null; then
+            echo "Heavy lane green at $TAG ($SHA): $(jq -r '[.[] | select(.conclusion == "success")][0].url' <<< "$RUNS")" | tee -a "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          echo "ok=false" >> "$GITHUB_OUTPUT"
+          if jq -e 'any(.[]; .status != "completed")' <<< "$RUNS" > /dev/null; then
+            echo "Heavy lane still running at $TAG — no final in this run." | tee -a "$GITHUB_STEP_SUMMARY"
+          elif jq -e 'length > 0' <<< "$RUNS" > /dev/null; then
+            echo "::warning::$TAG not finalized: the heavy lane is red at $SHA ($(jq -r '.[0].url' <<< "$RUNS")) — re-run it green, or cut a new candidate"
+          elif [ "${DRY_RUN:-false}" = "true" ]; then
+            echo "Dry run — would start $HEAVY_WORKFLOW at $TAG (no run at $SHA yet)." | tee -a "$GITHUB_STEP_SUMMARY"
+          elif retry_transient gh workflow run "$HEAVY_WORKFLOW" --ref "$TAG" -f ref="$TAG"; then
+            echo "No heavy run at $TAG yet — dispatched $HEAVY_WORKFLOW; a later run finalizes on its green." | tee -a "$GITHUB_STEP_SUMMARY"
+          else
+            echo "::warning::$TAG not finalized: no heavy run at $SHA and $HEAVY_WORKFLOW could not be dispatched"
+          fi
+
       - name: Finalize the newest clean candidate (colab release finalize --auto)
         id: finalize
-        if: (github.event_name == 'schedule' && env.RETRY_RUN != 'true') || github.event_name == 'workflow_dispatch'
+        if: ((github.event_name == 'schedule' && env.RETRY_RUN != 'true') || github.event_name == 'workflow_dispatch') && steps.heavy.outputs.ok != 'false'
         run: |
           set -uo pipefail
           eval "$RETRY_TRANSIENT"
