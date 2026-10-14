@@ -122,6 +122,7 @@ const installRoute = require("../tools/lib/install-route.js");
 const releaseRunner = require("../tools/lib/release-runner.js"); // #453
 const { parseWorkflowOn, workflowFiresOnTag, prereleaseTagTriggers, workflowsFiringOnBranchPush, instructionFilesCallerFindings } = require("../tools/lib/workflow-triggers.js");
 const shipBatch = require("../tools/lib/ship-batch.js");
+const integrationProfile = require("../tools/lib/integration-profile.js"); // #610
 const ciProfile = require("../tools/lib/ci-profile.js"); // #559
 const thresholdsLib = require("../tools/lib/thresholds.js"); // #560
 const batchHistory = require("../tools/lib/batch-history.js"); // #556
@@ -1771,6 +1772,31 @@ function auditRepoInner(target, ctx) {
     }
   }
 
+  // ---- integration-profile / heavy-workflow (#610) ---------------------------
+  // Read through tools/lib/integration-profile.js — the module `colab ship` and `colab release` use,
+  // so the audit and the gates cannot disagree about a value. A malformed value makes the gates fail
+  // closed to release-heavy (ship unchanged), which is safe but silent, so it fails here. The `live`
+  // restriction fails only a DECLARED qualify/release-heavy; a repo that never declared gets a
+  // suggestion, never a new failure.
+  let integrationSuggestion = null;
+  if (cfg) {
+    const ipCfg = integrationProfile.parseProfile(cfg);
+    const hwCfg = integrationProfile.parseHeavyWorkflow(cfg);
+    if (!ipCfg.valid) fail(`${ipCfg.reason} — see project.schema.md, integration-profile`);
+    if (!hwCfg.valid) fail(`${hwCfg.reason} — see project.schema.md, heavy-workflow`);
+    if (ipCfg.valid) {
+      const lr = integrationProfile.liveRestriction({ profile: ipCfg.profile, declared: ipCfg.declared, exposure: authority ? authority.exposure : null, deploy });
+      if (lr && lr.level === "fail") fail(lr.message);
+      else if (lr) integrationSuggestion = lr.message;
+      if (ipCfg.profile === "promote" && (!trunk || trunk === "main")) {
+        fail(`integration-profile: promote gates the promotion into main with the heavy lane, but trunk is ${JSON.stringify(trunk)} — there is no promotion to gate. Choose gated, qualify or release-heavy (CONVENTIONS.md §7, Integration profiles)`);
+      }
+      if (ipCfg.profile === "gated" && hwCfg.valid && !workflows.includes(hwCfg.file)) {
+        warn(`integration-profile: gated but no .github/workflows/${hwCfg.file} — colab ship refuses every code landing until a heavy lane exists (templates/ci-<stack>-heavy.yml), or name it with heavy-workflow:`);
+      }
+    }
+  }
+
   // Additive `--json` keys only (#144's oracle: "`tier` continues to report the DECLARED
   // letter... New keys are additive"). `axisOfRecord` names which key governs
   // ('exposure' | 'tier-legacy' | 'none' | null when project.yml itself did not parse);
@@ -2108,6 +2134,7 @@ function auditRepoInner(target, ctx) {
   info.predatesAxes = [];
   info.suggestions = [];
   const suggest = (t) => info.suggestions.push(t);
+  if (integrationSuggestion) suggest(integrationSuggestion); // #610
   if (!isSelf) checkStamps(src, ctx.handbook, ctx.templateNames, fail, warn, { ceremony, missingAxes, predatesAxes: info.predatesAxes, writesRaw, suggest });
 
   // ---- repository metadata identity scan (#228 part 4) ----------------------

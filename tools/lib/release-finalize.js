@@ -77,7 +77,7 @@ const STATES = Object.freeze([
 
 const CONDITIONS = Object.freeze([
   'release-policy', 'candidate', 'tracking-issue', 'release-hold', 'regressions', 'test-period', 'trunk-green',
-  'ci-green', 'full-suite', 'cut-run', 'deploy-report', 'schema-additive', 'switch-dependencies',
+  'ci-green', 'full-suite', 'heavy-lane', 'cut-run', 'deploy-report', 'schema-additive', 'switch-dependencies',
   ...releaseTag.PRE_TAG_CONDITIONS, 'final-grant', 'migration-grant', 'human',
 ]);
 
@@ -591,6 +591,7 @@ function handoffCommand(tag) {
  *   trunk        trunkGreenVerdict(...)
  *   regressions  regressionVerdict(...)
  *   ci, suite, schema, switches   { ok, detail }
+ *   heavy        #610 — integration-profile.js releaseHeavyCondition(): { ok, pending, detail }; absent → no row
  *   cutRun       #566 — cutRunVerdict(): the run that cut the candidate concluded success
  *   finalGrant   #441 — release-policy.js finalGrantVerdict() of policy.effective.finalGrant (only
  *                read when the policy carries one; absent = unresolved, never a grant)
@@ -677,6 +678,10 @@ function decide(facts) {
     add(condition, v && v.ok, v ? v.detail : 'not measured');
   }
   if (dr) add('deploy-report', false, deployReportDetail(dr.failures, { blocking: !lenient }), false);
+  // #610: the heavy lane green at the candidate's exact sha, under every integration profile.
+  // integration-profile.js releaseHeavyCondition; absent from `facts` (a caller predating it) → no row.
+  const hv = f.heavy || null;
+  if (hv) add('heavy-lane', hv.ok, hv.detail);
   for (const [condition, v] of [['schema-additive', f.schema], ['switch-dependencies', f.switches]]) {
     add(condition, v && v.ok, v ? v.detail : 'not measured');
   }
@@ -690,12 +695,14 @@ function decide(facts) {
 
   if (held.length) return out('held');
   if ((reg.permanent) || (ownClock && tr.permanent)) return out('needs-new-candidate');
-  const blocking = checks.filter((c) => c.required && !c.ok && !['test-period', 'trunk-green', 'human'].includes(c.condition));
+  const blocking = checks.filter((c) => c.required && !c.ok && !['test-period', 'trunk-green', 'human'].includes(c.condition)
+    && !(c.condition === 'heavy-lane' && hv && hv.pending));
   if (blocking.length) return out('refused');
   if (ownClock) {
     if (!tr.ok && !tr.pending) return out('refused');
     if (!per.elapsed || tr.pending) return out('testing');
   }
+  if (hv && hv.pending) return out('testing'); // #610: the heavy lane is still to run or still running
   if (auto) return out('finalized', { finalTag: cand.version, grant: grantUsed });
   if (!h.bar) return out('candidate-ready', { handoff: handoffCommand(cand.tag) });
   return out('finalized', { finalTag: cand.version });

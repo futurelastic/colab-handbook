@@ -698,3 +698,22 @@ test('#565 decide: human final + failed staging deploy -> candidate-ready, the f
   assert.strictEqual(strict.state, 'refused');
   assert.strictEqual(strict.checks.some((c) => c.condition === 'deploy-report'), false);
 });
+
+test('#610 decide: the heavy lane at the candidate — green finalizes, red refuses, pending keeps testing, absent fact adds no row', () => {
+  const ip = require('./integration-profile.js');
+  const heavy = (state) => ip.releaseHeavyCondition({ present: true, file: 'ci-heavy.yml', verdict: { state, why: state }, at: 'v1.2.1-rc.1@ccccccc', ref: 'v1.2.1-rc.1' });
+  assert.strictEqual(rf.decide(facts()).checks.some((c) => c.condition === 'heavy-lane'), false);
+  assert.strictEqual(rf.decide(facts({ heavy: heavy('green') })).state, 'finalized');
+  const red = rf.decide(facts({ heavy: heavy('red') }));
+  assert.strictEqual(red.state, 'refused');
+  assert.match(red.checks.find((c) => c.condition === 'heavy-lane').detail, /heavy lane red at v1\.2\.1-rc\.1@ccccccc/);
+  for (const s of ['none', 'pending', 'unread']) assert.strictEqual(rf.decide(facts({ heavy: heavy(s) })).state, 'testing', s);
+  assert.match(rf.decide(facts({ heavy: heavy('none') })).checks.find((c) => c.condition === 'heavy-lane').detail, /gh workflow run ci-heavy\.yml --ref v1\.2\.1-rc\.1 -f ref=v1\.2\.1-rc\.1/);
+  // The human bar does not walk past it: a final needs the heavy lane green at this exact sha.
+  assert.strictEqual(rf.decide(facts({ policy: HUMAN, human: { bar: true, answeredBy: 'Ops' }, heavy: heavy('pending') })).state, 'testing');
+  assert.strictEqual(rf.decide(facts({ policy: HUMAN, human: { bar: true, answeredBy: 'Ops' }, heavy: heavy('red') })).state, 'refused');
+  // No heavy lane in the repo: nothing to gate.
+  const none = ip.releaseHeavyCondition({ present: false, file: 'ci-heavy.yml', verdict: null, at: 'x', ref: 'x' });
+  assert.strictEqual(rf.decide(facts({ heavy: none })).state, 'finalized');
+  for (const c of rf.decide(facts({ heavy: heavy('red') })).checks) assert.ok(rf.CONDITIONS.includes(c.condition), c.condition);
+});
