@@ -86,14 +86,8 @@ re-apply: exclude lines, stub, the four labels, checkout) plus whatever the audi
 The reverse case: the audit warns that the descriptor is **untracked and not excluded**.
 Decide which of the two it is (commit it, or `colab adopt --local`) before anything else.
 
-**A CI template copy (`ci-*`, light or heavy lane) is guidance, not a conformance item (#607).**
-Its `behind`, `diverged` and `unstamped` states are suggestions: show the upstream diff, adopt
-what helps, and record nothing when the adopter declines. The audit prints them as `▸` lines and
-`colab update` never exits 1 on one. What still binds an adopter's CI is the short contract
-`colab ship` reads — `CONVENTIONS.md` [§7, *What ship reads*](../../CONVENTIONS.md#what-ship-reads--the-ci-contract-607):
-a CI run on every push to trunk, a branch-push run where `gate: authoritative: ci`, a
-`ship-batch/**` trigger where `ship-batch` > 1, and the `Migration round-trip` job where
-`migration-grant: reviewer`. The audit still reports those.
+**A CI template copy (`ci-*`, light or heavy) is guidance (#607):** its states are suggestions —
+offer, never require. Only what ship reads binds: [4-trigger-blocks.md](4-trigger-blocks.md#ci-copies-are-guidance-607).
 
 **`behind` does not mean "your file is old".** It means the *template* moved. If the
 template never changed, a stamp from three releases ago is still current — which is
@@ -371,8 +365,7 @@ git show --stat                                                 # verify the fil
 - Every `diverged` item is either grafted and re-stamped, or left with a written
   reason on the Issue — never silently skipped.
 - Every `unstamped` item is either stamped after checking lineage, or reported.
-- The ship contract holds for the CI copies (§1): the audit reports none of its findings.
-  Trigger blocks, timeouts and the light/heavy split are offered, not required (#607).
+- The CI copies meet the ship contract (§1); trigger blocks, timeouts and lanes are offered, not required (#607).
 - `audit.mjs --local .` is clean, or each remaining finding is explained.
 - `git show --stat` on your commits lists only files you meant to change.
 - Every tag-triggered `deploy-*` copy excludes pre-release tags, and every long-running deploy job declares `timeout-minutes` (§7) — or the reason is on the Issue. On a `ci-*` copy the timeout is a suggestion.

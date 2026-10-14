@@ -4,9 +4,18 @@ Reference for [`handbook-sync`](SKILL.md) §4. The core holds the step order, it
 condition; this file holds the step's full text — the commands, edge cases and the measurements
 behind them — moved here verbatim (#524).
 
-**Every block in this file is a suggestion (#607).** A CI template is guidance: offer the block
-with the reason it exists, and leave the adopter's copy as it is when they decline. Only a gap in
-what `colab ship` reads (`CONVENTIONS.md` §7, *What ship reads*) is a finding.
+### CI copies are guidance (#607)
+
+A CI template copy (`ci-*`, light or heavy lane) is guidance, not a conformance item. Its
+`behind`, `diverged` and `unstamped` states are suggestions: show the upstream diff, adopt what
+helps, and record nothing when the adopter declines. The audit prints them as `▸` lines and
+`colab update` never exits 1 on one. Every block in this file is such a suggestion.
+
+What still binds an adopter's CI is the short contract `colab ship` reads —
+[`CONVENTIONS.md` §7, *What ship reads*](../../CONVENTIONS.md#what-ship-reads--the-ci-contract-607):
+a CI run on every push to trunk, a branch-push run where `gate: authoritative: ci`, a
+`ship-batch/**` trigger where `ship-batch` > 1, and the `Migration round-trip` job where
+`migration-grant: reviewer`. The audit still reports those, and a gap there is a finding.
 
 ### The every-branch trigger block (#384) — offer it only where trunk has capacity
 
