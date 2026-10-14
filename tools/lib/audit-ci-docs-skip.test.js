@@ -2,9 +2,9 @@
 /**
  * Tests for the audit's `ci-docs-skip:` key (audit/audit.mjs) — issue #570.
  *
- * `ci-docs-skip` opts the CI guard into docs-only mode. Absent is clean and reported as null; a
- * list of plain repo paths is clean and reported; anything else fails — the guard reads it as not
- * opted in, so the declaration silently does nothing.
+ * `ci-docs-skip` is the docs-only path list (#606: on by default). Absent is clean and reported as
+ * `[]`; a list of plain repo paths is clean and reported; `off` is clean and reported as "off";
+ * anything else fails — every reader takes it as "CI required", so it silently opts the repo out.
  */
 
 const test = require('node:test');
@@ -53,9 +53,15 @@ function audit(dir) {
 const BASE = 'trunk: main\nproduction: null\ndeploy: none\nstack: node\nexposure: self\n';
 const mentions = (r) => [...r.fails, ...r.warns].filter((t) => /ci-docs-skip/.test(t));
 
-test('ci-docs-skip absent → reported as null, no finding', () => {
+test('ci-docs-skip absent → on by default, reported as [], no finding (#606)', () => {
   const r = audit(fixture(BASE));
-  assert.strictEqual(r.ciDocsSkip, null);
+  assert.deepStrictEqual(r.ciDocsSkip, []);
+  assert.deepStrictEqual(mentions(r), []);
+});
+
+test('ci-docs-skip: off → reported as "off", no finding (#606)', () => {
+  const r = audit(fixture(`${BASE}ci-docs-skip: off\n`));
+  assert.strictEqual(r.ciDocsSkip, 'off');
   assert.deepStrictEqual(mentions(r), []);
 });
 
@@ -67,7 +73,7 @@ test('ci-docs-skip as a list → reported, no finding', () => {
 });
 
 test('every other ci-docs-skip value fails', () => {
-  for (const v of ['on', 'true', '"docs/"', '[docs/*]', '[../x]']) {
+  for (const v of ['on', 'true', '', '"docs/"', '[docs/*]', '[../x]']) {
     const r = audit(fixture(`${BASE}ci-docs-skip: ${v}\n`));
     assert.strictEqual(r.ciDocsSkip, null, v);
     assert.ok(r.fails.some((t) => /^ci-docs-skip .* must be a list of repo paths/.test(t)), `${v}: ${r.fails.join(' | ')}`);

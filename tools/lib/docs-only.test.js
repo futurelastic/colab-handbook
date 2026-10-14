@@ -76,7 +76,32 @@ test('classify: a symlink, a submodule or a binary refuses even under an allowed
   assert.equal(d.classify([e('link.md', { newMode: '120000' })]).docsOnly, false);
   assert.equal(d.classify([e('link.md', { oldMode: '120000', newMode: '000000' })]).docsOnly, false);
   assert.equal(d.classify([e('docs/vendor', { newMode: '160000' })]).docsOnly, false);
-  assert.equal(d.classify([e('docs/logo.png', { binary: true })]).docsOnly, false);
+  assert.equal(d.classify([e('docs/logo.zip', { binary: true })]).docsOnly, false);
+  assert.equal(d.classify([e('docs/design/x.png', { newMode: '120000', binary: true })]).docsOnly, false);
+});
+
+test('#606: a binary design artifact under docs/ is documentation; any other binary is not', () => {
+  for (const p of ['docs/design/x.png', 'docs/a.JPG', 'docs/b.jpeg', 'docs/c.gif', 'docs/d.WebP', 'docs/e.svg', 'docs/spec.PDF']) {
+    assert.equal(d.classify([e(p, { binary: true })]).docsOnly, true, p);
+  }
+  for (const p of ['assets/x.png', 'a/docs/x.png', 'docs/x.zip', 'docs/x.exe', 'docs/.png', 'README.pdf']) {
+    const v = d.classify([e(p, { binary: true })]);
+    assert.equal(v.docsOnly, false, p);
+  }
+  assert.match(d.classify([e('assets/x.png', { binary: true })]).reason, /binary change/);
+  // the unchanged exclusions still hold, binary or not.
+  for (const p of ['AGENTS.md', 'docs/CLAUDE.md', '.github/x.png', 'docs/.claude/x.png', '.colab/skills/x.md']) {
+    assert.equal(d.classify([e(p)]).docsOnly, false, p);
+  }
+});
+
+test('#606: classify honours the ci-docs-skip exclusions — by path prefix, never string prefix', () => {
+  const ex = { exclude: ['docs/api', 'README.md'] };
+  assert.equal(d.classify([e('docs/api/x.md')], ex).docsOnly, false);
+  assert.match(d.classify([e('docs/api/x.md')], ex).reason, /listed in ci-docs-skip \(docs\/api\)/);
+  assert.equal(d.classify([e('README.md')], ex).docsOnly, false);
+  assert.equal(d.classify([e('docs/apiary.md'), e('a/README.md')], ex).docsOnly, true);
+  assert.equal(d.classify([e('docs/api/x.md')]).docsOnly, true, 'no list, no exclusion');
 });
 
 // ---- against real git: renames, deletions, binaries, symlinks -------------------------------
@@ -168,15 +193,21 @@ test('directChanges: every commit since the claim counts, including the root com
   } finally { r.cleanup(); }
 });
 
-test('#570: ci-docs-skip — absent is off, a list of plain repo paths is on, anything else is a finding', () => {
+test('#570/#606: ci-docs-skip — absent is ON, off is off, a list of plain repo paths is on, anything else is a finding', () => {
   const { parseCiDocsSkip } = require('./docs-only.js');
-  assert.deepStrictEqual(parseCiDocsSkip({}), { declared: false, valid: true, on: false, exclude: null, reason: parseCiDocsSkip({}).reason });
-  assert.strictEqual(parseCiDocsSkip({ 'ci-docs-skip': null }).declared, false);
+  assert.deepStrictEqual(parseCiDocsSkip({}), { declared: false, valid: true, on: true, exclude: [], reason: parseCiDocsSkip({}).reason });
+  assert.deepStrictEqual(parseCiDocsSkip(null).on, true);
+  for (const off of ['off', false]) {
+    const r = parseCiDocsSkip({ 'ci-docs-skip': off });
+    assert.deepStrictEqual([r.declared, r.valid, r.on], [true, true, false], String(off));
+  }
+  // an empty value is not absence: every reader takes it as "CI required", so it is a finding.
+  assert.deepStrictEqual([parseCiDocsSkip({ 'ci-docs-skip': null }).valid, parseCiDocsSkip({ 'ci-docs-skip': null }).on], [false, false]);
   assert.deepStrictEqual(parseCiDocsSkip({ 'ci-docs-skip': [] }).exclude, []);
   const on = parseCiDocsSkip({ 'ci-docs-skip': ['docs/api/', 'openapi.md'] });
   assert.ok(on.valid && on.on);
   assert.deepStrictEqual(on.exclude, ['docs/api', 'openapi.md']);
-  for (const v of [true, 'yes', 'off', {}, ['docs/*'], ['../x'], ['/abs'], ['a//b'], ['./x'], [''], [3], ['a b']]) {
+  for (const v of [true, 'yes', 'on', 'OFF', {}, ['docs/*'], ['../x'], ['/abs'], ['a//b'], ['./x'], [''], [3], ['a b']]) {
     const r = parseCiDocsSkip({ 'ci-docs-skip': v });
     assert.strictEqual(r.valid, false, JSON.stringify(v));
     assert.strictEqual(r.on, false, JSON.stringify(v));

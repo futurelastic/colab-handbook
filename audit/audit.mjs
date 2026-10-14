@@ -1497,13 +1497,16 @@ function auditRepoInner(target, ctx) {
       if (!ifl.valid) fail(ifl.reason);
     }
 
-    // ---- ci-docs-skip (#570) ----------------------------------------------------
-    // Opts the CI templates' guard into docs-only mode: a change whose every path is documentation
-    // (tools/lib/docs-only.js, the rule colab ship applies), from a green base, skips the suite.
-    // An invalid value fails: the guard reads it as not opted in, so it silently does nothing.
+    // ---- ci-docs-skip (#570, #606) ---------------------------------------------
+    // The docs-only path list (tools/lib/docs-only.js parseCiDocsSkip). ON BY DEFAULT (#606): absent
+    // = on, a list = on with those paths excluded (a change to one is not docs-only), `off` = off.
+    // `colab ship` reads it to decide a docs-only change needs no CI; the CI templates' legacy guard
+    // reads the same list. Reported as the exception list (`[]` when absent), `"off"`, or null when
+    // invalid. An invalid value fails: every reader takes it as "not docs-only", so it silently
+    // opts the repo out.
     {
       const ds = docsOnlyLib.parseCiDocsSkip(cfg);
-      info.ciDocsSkip = ds.declared && ds.valid ? ds.exclude : null;
+      info.ciDocsSkip = !ds.valid ? null : ds.on ? ds.exclude : "off";
       if (!ds.valid) fail(ds.reason);
     }
 

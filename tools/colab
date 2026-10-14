@@ -70,6 +70,7 @@ const shipBatch = require('./lib/ship-batch');
 const batchStats = require('./lib/batch-stats');
 const conflictMarkers = require('./lib/conflict-markers');
 const docsOnly = require('./lib/docs-only');
+const secretScan = require('./lib/secret-scan'); // #606
 const configSet = require('./lib/config-set'); // #561
 const cureDiff = require('./lib/cure-diff');
 const codeowners = require('./lib/codeowners');
@@ -11470,6 +11471,13 @@ function readCiVerdict(repoAbs, gh, target, trunk) {
       via = `${trunk} (by commit — the branch-filtered read was empty)`;
     }
   }
+  // #606: trunk's tip has no FINISHED run and is a docs-only commit (an adopter's CI `paths-ignore`s
+  // docs, or the run is simply not done) — docs change no code, so trunk's CI is the verdict of the
+  // newest trunk commit that is NOT docs-only. A finished red run at the tip is never overridden.
+  if (target === trunk && (run.status === 'none' || run.status !== 'completed')) {
+    const door = docsOnlyTipDoor(repoAbs, trunk, run.sha, readOpts);
+    if (door) return door;
+  }
   const at = `${via}@${shortSha(run.sha)}`;
   let verdict = classifyCiRun(repoAbs, run, at);
   // #413: still no run anywhere at a trunk sha committed minutes ago — the run may not exist YET
@@ -11649,6 +11657,75 @@ function baseCiAdvisory(repoAbs, gh, base, branch) {
 }
 
 /**
+ * #606: trunk's tip is docs-only and has no finished run — read trunk CI at the newest first-parent
+ * ancestor that is NOT docs-only (tools/lib/docs-only.js commitChanges, narrowed by trunk's
+ * `ci-docs-skip`). Returns a readCiVerdict result, or null when the door does not apply: the repo
+ * declared `ci-docs-skip: off` (or an invalid value), the tip is not local or not docs-only, no code
+ * commit within DOCS_TIP_WALK commits, or that commit's runs are unreadable. A null keeps every
+ * existing reading of the tip unchanged — the door only ever answers for a docs-only tip.
+ */
+const DOCS_TIP_WALK = 50;
+function docsOnlyTipDoor(repoAbs, trunk, tipSha, readOpts) {
+  if (!tipSha) return null;
+  const setting = docsOnly.parseCiDocsSkip(projectDoc(repoAbs));
+  if (!setting.on) return null;
+  const list = git.git(['rev-list', '--first-parent', `--max-count=${DOCS_TIP_WALK}`, tipSha], repoAbs);
+  if (!list.ok) return null;
+  let skipped = 0;
+  let code = null;
+  for (const sha of list.stdout.split('\n').map((x) => x.trim()).filter(Boolean)) {
+    const c = docsOnly.commitChanges(git, repoAbs, sha, { exclude: setting.exclude });
+    if (!c.docsOnly) { code = sha; break; }
+    skipped++;
+  }
+  if (!code || skipped === 0) return null;
+  const run = git.ghRunForCommitAnyRef(repoAbs, code, undefined, readOpts);
+  if (!run) return null;
+  const at = `${trunk}@${shortSha(code)}`;
+  const v = classifyCiRun(repoAbs, run, at);
+  const note = `docs-only tip (#606): ${trunk}@${shortSha(tipSha)}${skipped > 1 ? ` and ${skipped - 1} commit(s) below it` : ''} change only documentation, so trunk CI is read at the newest code commit — `;
+  const verdict = { ...v, detail: note + v.detail, docsOnlyTip: { tip: tipSha, read: code, skipped } };
+  return { run, verdict, final: verdict.ok || verdict.class !== HUMAN_GATED };
+}
+
+/**
+ * #606: is this branch DOCS-ONLY for CI purposes — so `colab ship` lands it without waiting for CI?
+ * tools/lib/docs-only.js shipDocsOnly (the #345 rule, narrowed by `ci-docs-skip`, off by `off`),
+ * measured on the ref ship would land. When it applies, the secret check runs too
+ * (tools/lib/secret-scan.js) — the suite's own secret scan may never see this change.
+ * Returns `{ applies, files, reason, scan }`; `scan` only when `applies`.
+ */
+function shipDocsOnlyCi(repoAbs, doc, target, branch) {
+  const ref = shipRefFor(repoAbs, branch);
+  const d = docsOnly.shipDocsOnly(git, repoAbs, target, ref, doc);
+  if (!d.docsOnly) return { applies: false, files: d.files, reason: d.reason, scan: null };
+  return { applies: true, files: d.files, reason: d.reason, scan: secretScan.scanBranch(git, repoAbs, target, ref) };
+}
+
+/** #606: the 🚢 comment's evidence clause for a docs-only ship — files, and the trunk sha CI was read at. */
+function docsOnlyEvidence(dc, ci) {
+  if (!dc || !dc.applies) return '';
+  const tip = ci && ci.docsOnlyTip;
+  const read = tip ? ` — trunk CI read at ${shortSha(tip.read)}, the newest code commit below the docs-only tip ${shortSha(tip.tip)}` : ' — trunk CI read at its tip';
+  return ` — docs-only: CI not required (${dc.files} files)${read}; secret check clean`;
+}
+
+/**
+ * #606: the branch-run row for a docs-only branch, in place of #395's stale-base row. CI is not
+ * required, so no run, a run in flight, or a run measured on an older base is fine — but a run that
+ * EXISTS at the pushed head and finished red still refuses: ship never overrides a red verdict.
+ */
+function docsOnlyBranchRow(dc, stale) {
+  const run = stale && stale.run;
+  const red = !!run && run.status === 'completed' && run.conclusion !== 'success' && run.conclusion !== 'cancelled' && run.conclusion !== 'skipped';
+  if (red) {
+    return { ok: false, class: HUMAN_GATED,
+      detail: `docs-only (${dc.files} files), but the branch's own run at ${shortSha(stale.headSha)} finished ${run.conclusion || 'red'} — CI is not required here, and a red verdict is still never overridden (#606)` };
+  }
+  return { ok: true, class: null, detail: `docs-only: CI not required (${dc.files} files) — the branch's own run is not awaited (#606; ${stale ? stale.verdict : 'unread'})` };
+}
+
+/**
  * #395: does the branch's CI verdict cover the CURRENT `base`? A PRECONDITION, unlike
  * `baseCiAdvisory` above: serial ship syncs the base in locally (B0) and squashes without the synced
  * head ever running, so a green run measured on a head cut before the base moved used to land on
@@ -11676,7 +11753,8 @@ function shipStaleBaseCheck(repoAbs, gh, base, branch) {
     if (contains === false && git.git(['diff', '--quiet', `${baseTip}...${headSha}`], repoAbs).code === 0) contains = 'no-change';
   }
   if (headSha && gh) run = git.ghRunForCommit(repoAbs, branch, headSha);
-  return staleBase.staleBaseVerdict({ headSha, run, baseTip, contains, behind, base, ghUsable: !!gh });
+  // #606: `run`/`headSha` are additive — the docs-only row reads whether that run finished red.
+  return { ...staleBase.staleBaseVerdict({ headSha, run, baseTip, contains, behind, base, ghUsable: !!gh }), run, headSha };
 }
 
 /**
@@ -12481,7 +12559,14 @@ function cmdShipDryJson(opts) {
   // read is exempt: the batch grades the COMBINED head (trunk + every member), which is exactly the
   // re-run this row demands of a serial land, so a member behind trunk is the ordinary case there.
   const staleJson = shipStaleBaseCheck(repoAbs, gh, target, sess.branch);
-  if (opts._batchMember) {
+  // #606: a docs-only branch needs no CI of its own — its row replaces the stale-base one, and the
+  // secret check stands in for the suite's secret scan. Same producers as the prose path.
+  const docsCiJson = shipDocsOnlyCi(repoAbs, doc, target, sess.branch);
+  if (docsCiJson.applies) {
+    const row = docsOnlyBranchRow(docsCiJson, staleJson);
+    checks.push({ name: 'branch CI (docs-only, #606)', ok: row.ok, class: row.class, verdict: staleJson.verdict, detail: row.detail });
+    checks.push({ name: 'docs-only secret check (#606)', ok: docsCiJson.scan.ok, class: docsCiJson.scan.ok ? null : HUMAN_GATED, detail: docsCiJson.scan.reason });
+  } else if (opts._batchMember) {
     checks.push({ name: 'branch run contains current base (#395)', ok: true, class: null, verdict: staleJson.verdict,
       detail: `batch member — the combined run grades it (${staleJson.detail})` });
   } else {
@@ -13662,7 +13747,18 @@ function cmdShip(argv) {
   // #395: the branch's run must have been measured on a head that contains the base's CURRENT tip —
   // B0 below syncs locally and never re-runs CI, so this is the only place a stale verdict is caught.
   const staleResult = shipStaleBaseCheck(repoAbs, gh, target, sess.branch);
-  checks.push([staleResult.ok ? '✓' : '✗', 'branch run contains current base (#395)', staleResult.detail]);
+  // #606: a docs-only branch needs no CI of its own — this row replaces the stale-base one (a red
+  // run that exists still refuses), and the secret check stands in for the suite's secret scan.
+  const docsCi = shipDocsOnlyCi(repoAbs, doc, target, sess.branch);
+  let docsRowOk = true;
+  if (docsCi.applies) {
+    const row = docsOnlyBranchRow(docsCi, staleResult);
+    checks.push([row.ok ? '✓' : '✗', 'branch CI (docs-only, #606)', row.detail]);
+    checks.push([docsCi.scan.ok ? '✓' : '✗', 'docs-only secret check (#606)', docsCi.scan.reason]);
+    docsRowOk = row.ok && docsCi.scan.ok;
+  } else {
+    checks.push([staleResult.ok ? '✓' : '✗', 'branch run contains current base (#395)', staleResult.detail]);
+  }
 
   // #350: the core-path review. A 'pending' verdict is not a failed precondition — it is the pause,
   // taken below once every real precondition has passed, so it is the ONLY thing between the branch
@@ -13688,7 +13784,7 @@ function cmdShip(argv) {
   // issue can be reopened, but the false claim stays in trunk's immutable history, and GitHub will
   // have closed it the instant trunk was pushed. #263: gateOk joins the same list — an unticked
   // checklist with no declared remainder is exactly as unrecoverable once `Closes #N` ships.
-  const preOk = ciOk && migOk && treeOk && corr.ok && gateOk && syncResult.ok && staleResult.ok && coreOk && recOk;
+  const preOk = ciOk && migOk && treeOk && corr.ok && gateOk && syncResult.ok && (docsCi.applies ? docsRowOk : staleResult.ok) && coreOk && recOk;
 
   // ---- report the table ----
   print(`ship ${shortRepo(repoAbs)} · branch ${sess.branch} → ${target}` +
@@ -14050,6 +14146,18 @@ function cmdShip(argv) {
     if (!again.docsOnly) {
       cleanupEphemeral();
       process.stderr.write(`✗ B1: the docs-only exception (#345) no longer holds after B0 sync — ${again.reason}. A human must trigger Phase B. Nothing pushed.\n`);
+      return 1;
+    }
+  }
+  // #606: the same for the docs-only CI path — B0 may have made the change something CI must see,
+  // or added a line the secret check has not read. Re-measured on the synced branch.
+  if (docsCi.applies) {
+    const again = docsOnly.shipDocsOnly(git, repoAbs, mergeRef, sess.branch, doc);
+    const rescan = again.docsOnly ? secretScan.scanBranch(git, repoAbs, mergeRef, sess.branch) : null;
+    if (!again.docsOnly || !rescan.ok) {
+      cleanupEphemeral();
+      process.stderr.write(`✗ B1: the docs-only CI path (#606) no longer holds after B0 sync — ${again.docsOnly ? rescan.reason : again.reason}. Nothing pushed.\n`);
+      process.stderr.write(`  Push the synced branch and re-run once its CI run completes (\`git push origin ${sess.branch}\`, then \`colab ship\` again) — or remove the finding first if the secret check refused.\n`);
       return 1;
     }
   }
@@ -14489,7 +14597,7 @@ function cmdShip(argv) {
   // same block, and re-assigning the collector here would silently discard them.
   shipLandedTail({ repoAbs, sess, target, trunk, gh, sha, closeIssues, refsIssues, refsSet, integration, opts,
     skipPrs: reviewPrHandled ? [reviewPrHandled] : [],
-    evidenceExtra: (opts.humanDoorEvidence || '') + handoffEvidence(sess.handoff) }); // #525, #578
+    evidenceExtra: (opts.humanDoorEvidence || '') + docsOnlyEvidence(docsCi, ciResult) + handoffEvidence(sess.handoff) }); // #525, #578, #606
 
   print('');
   print(`✓ Shipped ${sess.branch} → ${target} @ ${sha}${sess.issues.length ? ' (' + sess.issues.map((n) => '#' + n).join(' ') + ')' : ''}`);

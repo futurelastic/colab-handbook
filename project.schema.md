@@ -1412,18 +1412,29 @@ on.**
 ### `ci-docs-skip` — optional
 
 ```yaml
-ci-docs-skip: [docs/api/]   # absent = off · [] = on, no exceptions
+ci-docs-skip: [docs/api/]   # absent = on, nothing excluded · [] = the same · off = off
 ```
 
-Opts the CI templates' `dedupe` guard into docs-only mode: a change whose every path is
-documentation, from a green base, skips the suite (`CONVENTIONS.md` §4, *Branch CI*, #570).
-**Absent means off.** Each member is a repo path a test reads, so a change to it — or under it,
-`docs/api` never matching `docs/apiary.md` — runs the suite anyway. Members are plain paths: no
-glob, `..`, `.` or leading `/`, only `[A-Za-z0-9._/-]`. Anything else, or a non-list, is a
-finding: the guard reads it as off. Build inputs that end in `.txt` are never documentation —
-a Python requirements or constraints file, `CMakeLists.txt` — but a `.txt` a suite pulls in under
-any other name (a `-r` include) is: list it. Read at the pushed sha. The one reading in tooling is
-`tools/lib/docs-only.js` `parseCiDocsSkip` (`--json`: `ciDocsSkip`).
+The docs-only path list. `colab ship` lands a change whose every path is documentation
+(`tools/lib/docs-only.js`) without waiting for CI, after a secret check (`CONVENTIONS.md` §4,
+[*Docs-only — no CI wait*](CONVENTIONS.md#docs-only--no-ci-wait-606), #606). **Absent means on.**
+
+- **A suite that reads documentation MUST list what it reads** — a generator's `docs/api/`, a
+  README a link checker reads, a doc index a test checks. A change to a member, or under it
+  (`docs/api` never matching `docs/apiary.md`), is not docs-only. Nothing detects an unlisted one.
+- **`off`** (or a YAML 1.1 `false`): every change needs CI. Members are plain paths: no glob, `..`,
+  `.` or leading `/`, only `[A-Za-z0-9._/-]`. Anything else, an empty value included, is a finding
+  and reads as off. A `.txt` a suite pulls in under a name that is not a build input (a `-r`
+  include): list it. The list never narrows the autonomy exception (#345).
+- The CI templates' #570 guard reads the same list but stays opt-in until its follow-up: there,
+  absent and `off` both run the full suite. One reading in tooling: `tools/lib/docs-only.js`
+  `parseCiDocsSkip` (`--json`: `ciDocsSkip` — the list, `"off"`, or null when invalid).
+
+**`.github/secret-scan-terms` — optional.** Forbidden terms for that secret check, read at the
+target's tip, in [`templates/identity-vocabulary.example`](templates/identity-vocabulary.example)'s
+format (`re:` lines included). A term under 3 characters or a bad expression refuses the ship.
+**It is committed, so it is as public as the repo:** a vocabulary of sensitive names stays outside
+every repository ([ADR 606](docs/adr/606-docs-only-no-ci-wait-rationale.md)).
 
 ### `instruction-files` — optional
 
@@ -1683,7 +1694,7 @@ the shape that shows it. One writer at a time says nothing about who reads the r
 | `trust-humans` a non-empty list of GitHub logins when set → **finding** otherwise | a malformed list read as "nobody is human", so every human grant and ruling silently stops counting |
 | `live-env` = `none` when set → **finding** otherwise | a misspelled opt-out read as absent, so it silently does nothing |
 | `tree-reuse` = `off` when set → **finding** otherwise | the guard reads any value as off; an undefined value is not a declaration |
-| `ci-docs-skip` a list of plain repo paths when set → **finding** otherwise | the guard reads an invalid value as not opted in, so the declaration silently does nothing |
+| `ci-docs-skip` a list of plain repo paths or `off` when set → **finding** otherwise | every reader takes an invalid value as off, so the declaration silently opts the repo out of the docs-only path |
 | `ship-gate-workflows` / `ship-ignore-workflows` = a non-empty list of workflow names when set → **finding** otherwise | the reader ignores an invalid list, so the declaration does nothing |
 | `gate` a block with `smoke` + `authoritative` ∈ {`ci`,`local`} when set → **finding** otherwise; `ci` with no branch-push trigger → **warn** | a malformed block is read as absent, so it silently does nothing; a `ci` verdict that can never arrive leaves every reader on the local gate |
 | `holds` is a list of non-empty strings, each listed once, when set → **finding** otherwise | a scalar or malformed list silently read as "no holds declared", so triage reports held work ready |

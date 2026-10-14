@@ -625,7 +625,11 @@ Why, with the measurement: [ADR 345](docs/adr/345-docs-only-autonomy-exception-r
 - a build input despite its extension, at any depth (#570): a Python dependency manifest as the
   [cure rule](#cure-rule--the-machine-checkable-door-through-trunk-ci-green-281) names one (`requirements` in the name, or under
   `requirements/`), a pip `constraints*.txt`, `CMakeLists.txt`;
-- any binary or symlink change;
+- any binary change — **except a design artifact under the top-level `docs/`** (#606): a binary
+  whose extension is `.png`, `.jpg`, `.jpeg`, `.gif`, `.webp`, `.svg` or `.pdf`, compared
+  case-insensitively, is documentation. Any other binary under `docs/`, and every binary outside
+  it, is still not;
+- any symlink change;
 - an empty diff.
 
 The tool reads the exclusions at the strict end wherever the list is silent. The three file
@@ -649,7 +653,10 @@ nothing past the trunk merge — promotion and deploys stay human, and a tag fol
 
 **Nothing widens the allowlist.** No `project.yml` field, flag or environment variable can add
 to it: `tools/lib/docs-only.js` holds both lists as constants. Widening it is a handbook change,
-reviewed in a commit like this one.
+reviewed in a commit like this one. #606 was one: the design-artifact binaries above widened this
+exception **and** ship's no-CI-wait path for docs-only changes
+([§4](#docs-only--no-ci-wait-606)) at once, because both read the same module. `ci-docs-skip` only
+ever narrows the second; it never touches this exception.
 
 ### Autonomy — the tuning-only class (#561)
 
@@ -1547,7 +1554,10 @@ reading either sees the same spelling. Spell them exactly so, everywhere:
   cited head that is local and whose tree provably differs from trunk's (`HUMAN_GATED` —
   trunk is untested at that sha). A citation that cannot be read leaves the run green and says
   so, because the run's own `success` is the verdict, exactly as for #418. Why: [ADR 539](docs/adr/539-branch-ci-rationale.md).
-- **A docs-only change from a green base is tested — where the repo opts in (#570).** When
+- **A docs-only change from a green base is tested — the CI templates' legacy guard, where the
+  repo opts in (#570).** `colab ship` now decides docs-only itself ([*Docs-only — no CI wait*](#docs-only--no-ci-wait-606),
+  below), and this guard is on its way to guidance in a follow-up; until then it keeps working,
+  and its `success` + `docs-only-skip` notice still reads green. When
   neither mode above applies, a repo that declares `ci-docs-skip` (`project.schema.md`) gets a
   third question from the same guard, on a ref-creating push and on a push to trunk: is every
   path changed since the base documentation — by the rule `colab ship`'s docs-only exception
@@ -1684,6 +1694,33 @@ reading either sees the same spelling. Spell them exactly so, everywhere:
 - **One re-run per red episode, not per attempt** — and it is the only CI action the
   coordinator takes. A second identical failure is evidence; spending more re-runs on it
   just moves the wall further out.
+
+### Docs-only — no CI wait (#606)
+
+**[Hard — gate: colab ship]** **⚖ Ruled by the repo owner, 2026-10-14 ([#606](https://github.com/futurelastic/colab-handbook/issues/606)).**
+Documentation and design artifacts touch no code, so they do not wait for CI. **`colab ship`
+decides this; the CI templates do not.** Why: [ADR 606](docs/adr/606-docs-only-no-ci-wait-rationale.md).
+
+- **Which change.** Ship classifies the branch with `tools/lib/docs-only.js` — the
+  [docs-only rule](#autonomy--the-docs-only-exception-345), design artifacts under `docs/`
+  included — narrowed by `ci-docs-skip` ([schema](project.schema.md#ci-docs-skip--optional)).
+  **Absent means on.** A path listed there is one the suite reads; a change touching it needs CI
+  as usual. `ci-docs-skip: off` turns this path off.
+- **Branch CI is not required.** No run, a run in flight and a `stale-base` run (#395) all pass, as
+  `docs-only: CI not required (<n> files)`. **A run that exists at the pushed head and finished red
+  still refuses** — ship never overrides a red verdict.
+- **Trunk CI on a docs-only tip is read at the newest code commit.** A trunk tip with no finished
+  run that is itself docs-only takes the verdict of its newest first-parent ancestor that is not
+  (50 commits back at most), for every ship and for `colab trunk-ci`. A tip whose run finished red
+  stays red.
+- **A secret check runs before the merge.** Ship scans the lines a docs-only change **adds** for
+  credential shapes (private keys, cloud and API tokens, `password=`-style assignments) and for the
+  terms in `.github/secret-scan-terms` when the target has one (`tools/lib/secret-scan.js`). A hit
+  refuses with the file and line, never the matched text.
+- Every other precondition still applies; the classification and the scan are both measured again
+  after B0 sync. The 🚢 comment records `docs-only: CI not required (<n> files)` and the trunk sha CI
+  was read at. The templates' #570 guard keeps working until its follow-up: its `docs-only-skip`
+  `success` still reads green.
 
 ### Who may touch a branch — the coordinator never edits implementer work (#409)
 

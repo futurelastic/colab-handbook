@@ -24,7 +24,9 @@ const COLAB = path.join(REPO_ROOT, 'tools', 'colab');
 const TMP = [];
 process.on('exit', () => { for (const d of TMP) { try { fs.rmSync(d, { recursive: true, force: true }); } catch (_) {} } });
 
-const PROJECT_YML = 'tier: B\ntrunk: main\nproduction: null\ndeploy: none\nstack: node\nautonomy: auto-trunk\n';
+// `.txt` files stand in for code here, and a docs-only change does not wait for CI (#606) — so the
+// fixture turns that path off, keeping these tests about the #395 rule a code change meets.
+const PROJECT_YML = 'tier: B\ntrunk: main\nproduction: null\ndeploy: none\nstack: node\nautonomy: auto-trunk\nci-docs-skip: off\n';
 
 function fixture() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'colab-stale-base-'));

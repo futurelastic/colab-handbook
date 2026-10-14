@@ -25,7 +25,8 @@ const TMP = [];
 process.on('exit', () => { for (const d of TMP) { try { fs.rmSync(d, { recursive: true, force: true }); } catch (_) {} } });
 
 const SESSION = 'https://claude.ai/code/session_ship_batch_S';
-const YML = (extra = 'ship-batch: 3\n') => `tier: B\ntrunk: main\nproduction: null\ndeploy: none\nstack: node\nautonomy: auto-trunk\n${extra}`;
+// `ci-docs-skip: off`: the members' `.txt` files stand in for code, and a docs-only change skips CI (#606).
+const YML = (extra = 'ship-batch: 3\n') => `tier: B\ntrunk: main\nproduction: null\ndeploy: none\nstack: node\nautonomy: auto-trunk\nci-docs-skip: off\n${extra}`;
 const CI_WIRED = "name: CI\non:\n  push:\n    branches: [main, 'ship-batch/**']\n  pull_request:\njobs:\n  t:\n    runs-on: ubuntu-latest\n    steps:\n      - run: true\n";
 const CI_UNWIRED = 'name: CI\non:\n  push:\n    branches: [main]\n  pull_request:\njobs:\n  t:\n    runs-on: ubuntu-latest\n    steps:\n      - run: true\n';
 const MEMBERS = ['fix/a-11', 'fix/b-12', 'fix/c-13'];

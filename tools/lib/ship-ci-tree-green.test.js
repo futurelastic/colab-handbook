@@ -26,7 +26,7 @@ process.on('exit', () => { for (const d of TMP) { try { fs.rmSync(d, { recursive
 const PROJECT_YML = 'tier: B\ntrunk: main\nproduction: null\ndeploy: none\nstack: node\nautonomy: auto-trunk\n';
 const URL = 'https://github.com/o/r/actions/runs/77';
 
-function fixture() {
+function fixture(projectYml = PROJECT_YML) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'colab-tree-green-'));
   TMP.push(root);
   const origin = path.join(root, 'origin.git');
@@ -44,7 +44,7 @@ function fixture() {
   g(work, 'config', 'core.hooksPath', path.join(root, '.nohooks'));
   g(work, 'remote', 'add', 'origin', origin);
   fs.mkdirSync(path.join(work, '.github'), { recursive: true });
-  fs.writeFileSync(path.join(work, '.github', 'project.yml'), PROJECT_YML);
+  fs.writeFileSync(path.join(work, '.github', 'project.yml'), projectYml);
   fs.writeFileSync(path.join(work, 'f.txt'), 'base\n');
   g(work, 'add', '-A');
   g(work, 'commit', '-q', '-m', 'chore: fixture');
@@ -202,6 +202,20 @@ test('#570 a docs-only skip run → GREEN, named as docs-only with its base, nev
   const s = shipRow(fx);
   assert.strictEqual(s.ok, true, JSON.stringify(s));
   assert.strictEqual(s.detail, t.detail, 'one function, one detail');
+});
+
+test('#606 a legacy guard\'s docs-only skip run reads GREEN whatever ci-docs-skip declares — no declaration (default-on) or off', () => {
+  assert.doesNotMatch(PROJECT_YML, /ci-docs-skip/, 'the default fixture declares nothing: the default-on case');
+  for (const yml of [PROJECT_YML, `${PROJECT_YML}ci-docs-skip: off\n`]) {
+    const fx = fixture(yml);
+    fx.setRows(greenRun(fx.sha));
+    fx.setChecks(skipChecks);
+    fx.setAnn([{ title: 'docs-only-skip', level: 'notice', message: `base=${fx.sha} files=1 run=${URL}` }]);
+    const t = trunkCi(fx);
+    assert.strictEqual(t.verdict, 'GREEN', `${yml}: ${JSON.stringify(t)}`);
+    assert.notStrictEqual(t.verdict, 'NONE');
+    assert.strictEqual(shipRow(fx).ok, true, yml);
+  }
 });
 
 test('#570 tree-green.js: parseDocsSkip', () => {

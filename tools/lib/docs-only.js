@@ -8,15 +8,33 @@
  * caller. Nothing here takes a list, a flag, an env var or a project.yml field. The allowlist and the
  * exclusions below are constants, so widening them is a handbook change reviewed in a commit.
  *
- * Every doubt resolves to "not docs-only": an empty diff, a git read that failed, a binary, a
- * symlink, a submodule pointer. A false "no" costs a human click. A false "yes" merges code nobody
- * approved.
+ * Every doubt resolves to "not docs-only": an empty diff, a git read that failed, a binary (other
+ * than a design artifact under `docs/`, below), a symlink, a submodule pointer. A false "no" costs a
+ * human click. A false "yes" merges code nobody approved.
+ *
+ * #606: the same rule also decides when `colab ship` lands a change WITHOUT WAITING FOR CI
+ * (shipDocsOnly, below — on by default, narrowed by `ci-docs-skip`). So widening anything here
+ * widens BOTH at once — the binary design-artifact rule below did exactly that: a PNG mockup under
+ * `docs/design/` is now docs-only for the autonomy exception too (CONVENTIONS.md §2).
  */
 
 /** Extensions that count as documentation. Compared exactly (`README.MD` does not match). */
 const DOC_EXTENSIONS = Object.freeze(['.md', '.mdx', '.txt']);
 /** A path under this top-level directory counts as documentation whatever its extension. */
 const DOCS_DIR = 'docs/';
+/**
+ * #606: a BINARY under `docs/` with one of these extensions is a design artifact (a mockup, a
+ * diagram, a printed spec) and counts as documentation. Case-insensitive (`Mock.PNG` matches). Any
+ * other binary under `docs/`, and every binary outside it, is still not docs-only.
+ */
+const DOCS_BINARY_EXTENSIONS = Object.freeze(['.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg', '.pdf']);
+function docsBinaryOk(p) {
+  const s = String(p);
+  if (!s.startsWith(DOCS_DIR)) return false;
+  const base = s.slice(s.lastIndexOf('/') + 1);
+  const dot = base.lastIndexOf('.');
+  return dot > 0 && DOCS_BINARY_EXTENSIONS.includes(base.slice(dot).toLowerCase());
+}
 /** Rules and agent instructions: never documentation, at any depth, even though they are `.md`. */
 const NEVER_BASENAMES = Object.freeze(['CLAUDE.md', 'CLAUDE.local.md', 'AGENTS.md']);
 /**
@@ -77,15 +95,18 @@ function pathReason(p) {
  * Returns `{ docsOnly, files, offenders: [{ path, reason }], reason }`. `files` counts distinct paths.
  * `reason` is one line for a human, set on both outcomes.
  */
-function classify(entries) {
+function classify(entries, { exclude = [] } = {}) {
   const paths = new Map();
   for (const e of entries || []) {
     const why = [];
     const nameWhy = pathReason(e.path);
     if (nameWhy) why.push(nameWhy);
+    // #606: a path the repo's suite reads, listed in `ci-docs-skip` — documentation, but it needs CI.
+    const listed = excludedBy(e.path, exclude);
+    if (!nameWhy && listed) why.push(`listed in ci-docs-skip (${listed}) — the suite reads it`);
     if (e.oldMode === MODE_SYMLINK || e.newMode === MODE_SYMLINK) why.push('symlink change');
     if (e.oldMode === MODE_GITLINK || e.newMode === MODE_GITLINK) why.push('submodule change');
-    if (e.binary) why.push('binary change');
+    if (e.binary && !docsBinaryOk(e.path)) why.push('binary change');
     const prev = paths.get(e.path) || [];
     paths.set(e.path, [...new Set([...prev, ...why])]);
   }
@@ -99,6 +120,12 @@ function classify(entries) {
     return { docsOnly: false, files, offenders, reason: `${offenders.length} of ${files} file(s) not documentation: ${shown}${more}` };
   }
   return { docsOnly: true, files, offenders: [], reason: `docs-only (${files} files)` };
+}
+
+/** The `ci-docs-skip` member `p` is, or sits under — a path prefix, never a string prefix. */
+function excludedBy(p, exclude) {
+  const s = String(p);
+  return (exclude || []).find((x) => s === x || s.startsWith(`${x}/`)) || null;
 }
 
 /**
@@ -151,10 +178,30 @@ function readEntries(git, repo, cmd, range) {
  * The branch shape: what `branch` changes relative to its merge base with `base` — the same three-dot
  * diff the squash would land.
  */
-function branchChanges(git, repo, base, branch) {
+function branchChanges(git, repo, base, branch, opts = {}) {
   const entries = readEntries(git, repo, 'diff', [`${base}...${branch}`, '--']);
   if (!entries) return { docsOnly: false, files: 0, offenders: [], reason: `could not read the diff ${base}...${branch}` };
-  return classify(entries);
+  return classify(entries, opts);
+}
+
+/** One commit's own change (against its parent(s), `diff-tree -m`) — the shape a trunk squash has. */
+function commitChanges(git, repo, sha, opts = {}) {
+  const entries = readEntries(git, repo, 'diff-tree', [sha]);
+  if (!entries) return { docsOnly: false, files: 0, offenders: [], reason: `could not read commit ${String(sha).slice(0, 7)}` };
+  return classify(entries, opts);
+}
+
+/**
+ * #606: does `colab ship` treat this branch as needing no CI? The SAME classification as the
+ * autonomy exception (#345), narrowed by the repo's `ci-docs-skip` list — a path the suite reads is
+ * documentation but still needs CI — and switched off entirely by `ci-docs-skip: off`. An invalid
+ * value reads as off (every reader takes doubt as "CI required"); the audit fails it.
+ * Returns the classify() shape plus `{ setting }` (parseCiDocsSkip's verdict).
+ */
+function shipDocsOnly(git, repo, base, branch, doc) {
+  const setting = parseCiDocsSkip(doc);
+  if (!setting.on) return { docsOnly: false, files: 0, offenders: [], reason: setting.reason, setting };
+  return { ...branchChanges(git, repo, base, branch, { exclude: setting.exclude }), setting };
 }
 
 /**
@@ -179,24 +226,32 @@ function directChanges(git, repo, trunk, since) {
 }
 
 /**
- * #570: `ci-docs-skip:` in project.yml — the opt-in to the CI templates' docs-only mode. Absent (or
- * null) = off. A list = on; each member is a repo path whose changes always run the suite even though
- * this module calls them documentation (`docs/api/` feeding a generator). `[]` = on, nothing excluded.
+ * #570/#606: `ci-docs-skip:` in project.yml — which changes `colab ship` may land without waiting for
+ * CI (#606), and the paths the CI templates' legacy guard (#570) excludes. ON BY DEFAULT for ship:
+ * absent = on, nothing excluded. A list = on, and each member is a repo path whose changes always run
+ * the suite even though this module calls them documentation (`docs/api/` feeding a generator, a
+ * README a link checker reads). `[]` = on, nothing excluded. `off` = the one opt-out, for a repo whose
+ * suite reads most of its docs (YAML 1.1 readers turn a bare `off` into boolean false; both spell it).
  *
- * The CI guard parses the same shape in shell and reads anything else as "not opted in" — the
- * stricter direction — so an invalid value here is a finding: a declaration that silently does
- * nothing. Members are plain paths (the guard matches `p == x` or `p` under `x/`): no glob, no `..`
- * or `.` segment, not absolute, only `[A-Za-z0-9._/-]`.
+ * The legacy CI guard parses the same list in shell, but stays opt-in until its follow-up removes it:
+ * there `off` and absent both mean "run the full suite". Both readers take anything else — an empty
+ * `ci-docs-skip:` included — as "CI required", the stricter direction. So an invalid value here is a finding:
+ * a declaration that silently opts the repo out. Members are plain paths (the guard matches `p == x`
+ * or `p` under `x/`): no glob, no `..` or `.` segment, not absolute, only `[A-Za-z0-9._/-]`.
  */
 const CI_DOCS_SKIP_KEY = 'ci-docs-skip';
 function parseCiDocsSkip(doc) {
   const has = !!doc && Object.prototype.hasOwnProperty.call(doc, CI_DOCS_SKIP_KEY);
-  const v = has ? doc[CI_DOCS_SKIP_KEY] : null;
-  if (v === null || v === undefined) {
-    return { declared: false, valid: true, on: false, exclude: null, reason: 'ci-docs-skip absent — a docs-only change runs the full CI suite (#570)' };
+  if (!has) {
+    return { declared: false, valid: true, on: true, exclude: [], reason: 'ci-docs-skip absent — on by default (#606): colab ship lands a docs-only change without waiting for CI' };
+  }
+  const v = doc[CI_DOCS_SKIP_KEY];
+  if (v === 'off' || v === false) {
+    return { declared: true, valid: true, on: false, exclude: null, reason: 'ci-docs-skip: off — colab ship requires CI for every change' };
   }
   const bad = (why) => ({ declared: true, valid: false, on: false, exclude: null,
-    reason: `ci-docs-skip ${why} — it must be a list of repo paths (\`[]\` for none); the CI guard reads anything else as not opted in, so docs-only changes run the full suite` });
+    reason: `ci-docs-skip ${why} — it must be a list of repo paths (\`[]\` for none) or \`off\`; every reader takes anything else as "CI required", so the declaration silently opts this repo out of the docs-only path` });
+  if (v === null || v === undefined) return bad('is empty');
   if (!Array.isArray(v)) return bad(`is ${JSON.stringify(v)}`);
   const exclude = [];
   for (const m of v) {
@@ -207,11 +262,11 @@ function parseCiDocsSkip(doc) {
     exclude.push(s);
   }
   return { declared: true, valid: true, on: true, exclude,
-    reason: exclude.length ? `ci-docs-skip on, except ${exclude.join(', ')}` : 'ci-docs-skip on — a docs-only change skips the CI suite' };
+    reason: exclude.length ? `ci-docs-skip on, except ${exclude.join(', ')}` : 'ci-docs-skip on — colab ship lands a docs-only change without waiting for CI' };
 }
 
 module.exports = {
-  DOC_EXTENSIONS, DOCS_DIR, NEVER_BASENAMES, NEVER_DIRS, NEVER_SUBDIRS,
+  DOC_EXTENSIONS, DOCS_DIR, DOCS_BINARY_EXTENSIONS, docsBinaryOk, NEVER_BASENAMES, NEVER_DIRS, NEVER_SUBDIRS,
   pathReason, classify, parseRaw, parseBinary, readEntries, branchChanges, directChanges,
-  CI_DOCS_SKIP_KEY, parseCiDocsSkip,
+  CI_DOCS_SKIP_KEY, parseCiDocsSkip, excludedBy, commitChanges, shipDocsOnly,
 };

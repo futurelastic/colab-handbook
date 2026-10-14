@@ -1586,8 +1586,12 @@ autonomy: auto-trunk   # colab ship may squash-merge session branches into trunk
 `auto-trunk` is the *only* value that enables `ship` for any change. Anything else (or absent) → ship
 refuses, with one exception it computes itself: a **docs-only** diff (#345) — every changed path is
 `.md`/`.mdx`/`.txt` or under a top-level `docs/`; none is `CLAUDE.md`, `CLAUDE.local.md`, `AGENTS.md`
-or under `.claude/`, `.github/`, `.githooks/`; no binary, no symlink, not empty. The caller cannot
-assert it and nothing widens it ([CONVENTIONS §2](../CONVENTIONS.md#autonomy--the-docs-only-exception-345)). And
+or under `.claude/`, `.github/`, `.githooks/`; no binary (except a `.png`/`.jpg`/`.jpeg`/`.gif`/`.webp`/`.svg`/`.pdf`
+under `docs/`, #606), no symlink, not empty. The caller cannot
+assert it and nothing widens it ([CONVENTIONS §2](../CONVENTIONS.md#autonomy--the-docs-only-exception-345)). The same
+classification lands a docs-only change **without waiting for CI** — branch run not required (a red one
+still refuses), trunk CI on a docs-only tip read at the newest code commit, a secret check on the added
+lines first; `ci-docs-skip:` lists paths a suite reads, `off` turns it off ([CONVENTIONS §4](../CONVENTIONS.md#docs-only--no-ci-wait-606), #606). And
 one door for a person (#525): a human running `ship` at an interactive terminal (not an agent shell;
 ship asks `proceed? [y/N]`), or with `COLAB_HUMAN=1 --answered-by <name>`, is the go — every other
 precondition still runs, and the 🚢 comment records the door

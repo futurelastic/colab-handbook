@@ -750,6 +750,21 @@ Two units reworded on purpose (base `c56bac20`), each to carry one new clause in
 | C4.bci.41 | default |  | A red class is recorded by the implementer, who stops; only `red:finding` names the implementer, and only for the branch's own finding. | The implementer records it and stops; the | CONVENTIONS.md | — |
 | C4.bci.42 | default |  | One re-run per red episode, not per attempt, and it is the only CI action the coordinator takes. | **One re-run per red episode, not per attempt** — and it is the only CI action the | CONVENTIONS.md | — |
 
+### Docs-only — no CI wait (#606)
+
+| id | class | gate | rule | key | dest | source |
+|---|---|---|---|---|---|---|
+| C4.docsci.01 | hard | tools/colab::function shipDocsOnlyCi ; tools/colab::function docsOnlyBranchRow ; tools/colab::function docsOnlyTipDoor | A docs-only change does not wait for CI, and `colab ship` — not the CI templates — decides it. | Documentation and design artifacts touch no code, so they do not wait for CI. | CONVENTIONS.md | #606 |
+| C4.docsci.02 | default |  | Ship classifies with `tools/lib/docs-only.js`, narrowed by `ci-docs-skip`; absent means on, a listed path needs CI, `off` turns it off. | **Absent means on.** A path listed there is one the suite reads | CONVENTIONS.md | #606 |
+| C4.docsci.03 | default |  | Branch CI is not required for a docs-only change, but a red run at the pushed head still refuses. | A run that exists at the pushed head and finished red still refuses | CONVENTIONS.md | #606 |
+| C4.docsci.04 | default |  | Trunk CI on a docs-only tip with no finished run is read at the newest code commit; `colab trunk-ci` agrees. | Trunk CI on a docs-only tip is read at the newest code commit. | CONVENTIONS.md | #606 |
+| C4.docsci.05 | default |  | A docs-only change is secret-checked on its added lines before the merge; a hit refuses with file and line. | A secret check runs before the merge. | CONVENTIONS.md | #606 |
+| C4.docsci.06 | default |  | The docs-only classification and the secret check are re-measured after B0 sync. | the classification and the scan are both measured again | CONVENTIONS.md | #606 |
+| C4.docsci.07 | explanation |  | Why ship decides docs-only, why a red run still refuses, why trunk reads the last code commit, why the secret check is small. | Why ship decides, not the templates | docs/adr/606-docs-only-no-ci-wait-rationale.md | #606 |
+| C2x.docs.21 | default |  | A binary design artifact (png/jpg/jpeg/gif/webp/svg/pdf) under the top-level `docs/` is documentation. | except a design artifact under the top-level `docs/` | CONVENTIONS.md | #606 |
+| S.ci-docs-skip.01 | default |  | A suite that reads documentation must list the paths it reads in `ci-docs-skip`. | A suite that reads documentation MUST list what it reads | project.schema.md | #606 |
+| S.ci-docs-skip.02 | default |  | `.github/secret-scan-terms` is the repo's optional forbidden-terms file, committed and so as public as the repo. | It is committed, so it is as public as the repo: | project.schema.md | #606 |
+
 ### Who may touch a branch — the coordinator never edits implementer work (#409)
 
 | id | class | gate | rule | key | dest | source |
