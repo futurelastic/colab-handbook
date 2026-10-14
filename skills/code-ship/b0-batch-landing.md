@@ -26,7 +26,11 @@ arrive), merge-clean against trunk — land through one command instead of one s
    colab ship --batch <b1>,<b2>[,…] --repo <repo>
    ```
    It re-reads each member's own ship gates, builds trunk + one squash commit per member on
-   `ship-batch/<trunk-sha7>`, and pushes it. That ref's **one combined run replaces every
+   `ship-batch/<trunk-sha7>`, and pushes it. (A coordinator that wants the **next** batch
+   tested while this one is still in CI adds `--onto ship-batch/<sha7>`: the batch is built on
+   that batch's head and lands only after it — `CONVENTIONS.md` batch landing step 11, #605.
+   Use it only for members that are ready now; it is a bet on the parent going green, and a
+   red parent sends the child back to the queue.) That ref's **one combined run replaces every
    member's post-sync re-run** (B1a, below). A member whose overlap with those already in is
    confined to `generated:` paths is **not** dropped: the build runs `.colab/hooks/pre-ship` on
    the combined head, B0's rule, and prints a `↻ <member>: … regenerated` line naming the
@@ -56,6 +60,10 @@ arrive), merge-clean against trunk — land through one command instead of one s
    - **A split (`3`, `splitting (#557)`)** is a batch like any other: wait on its run and call
      again. A red half splits again; a green one lands. After it lands, step 0 gathers again —
      the held members are ready candidates like any other.
+   - **`3` with `⏸ BATCH-CHAINED`** (#605) — a batch built `--onto` another is green, but
+     its parent has not landed yet. Wait on the parent (land it with its own command), then
+     call again: once trunk's tip is the parent's head it lands with no second run. A red or
+     discarded parent turns this call into a `4`, and the child's members go back to step 0.
    - **`3` with `⏸ PARTNER-WAIT`** (#555) — only where `project.yml` declares
      `ship-batch-wait`: exactly one member could join, and the lane was otherwise idle. The
      line gives the seconds left in the window, counted from when that member became ready,

@@ -755,6 +755,11 @@ function ghPrClose(repo, num, comment) {
   return gh(['pr', 'close', String(num), '--comment', comment], { cwd: repo });
 }
 
+/** #605: cancel one workflow run (a deleted batch ref's run still in flight). The run result, ok or not. */
+function ghRunCancel(repo, id) {
+  return gh(['run', 'cancel', String(id)], { cwd: repo });
+}
+
 function ghIssueComment(repo, issueNum, body) {
   const r = gh(['issue', 'comment', String(issueNum), '--body', body], { cwd: repo });
   if (r.ok || !isGraphqlRateLimit(r.stderr)) return r;
@@ -1441,5 +1446,5 @@ module.exports = {
   ghRunJobCount, ghRunJobs, ghWorkflowDispatch,
   ghIssueListByLabel, ghLabelDelete, ghLabelCreate, ghListLabelsDetailed, ghLabelEditDescription,
   ghApi, isGraphqlRateLimit, ghIssueRelease, ghClaimHolder, ghIssueLabelEvents, ghIssueLabelActors,
-  ghPrForBranch, ghOpenPrsForBranch, ghOpenPrs, ghPrCreate, ghPrClose, ghRepoVisibility,
+  ghPrForBranch, ghOpenPrsForBranch, ghOpenPrs, ghPrCreate, ghPrClose, ghRepoVisibility, ghRunCancel,
 };

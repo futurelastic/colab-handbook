@@ -774,7 +774,7 @@ Two units reworded on purpose (base `c56bac20`), each to carry one new clause in
 | C4.batch.06 | default |  | A conflicting member drops to the next batch unless every conflicting path is `generated`, in which case `pre-ship` regenerates them. | A member that conflicts with those | CONVENTIONS.md | #387 |
 | C4.batch.07 | hard | tools/colab::<<<<<<< | A pre-ship hook that exits 0 but leaves a conflict-marker line staged in a path it was handed has failed; the staged index is the proof. | its exit code is a claim, the index is the proof | CONVENTIONS.md | #436 |
 | C4.batch.08 | default |  | One combined run at the batch head must be `green` and replaces each member's post-sync re-run. | One combined run** there must be `green`. It **replaces** each member's post-sync | CONVENTIONS.md | #373 |
-| C4.batch.09 | default |  | Trunk fast-forwards to the batch head only if trunk has not moved, by a plain non-forced push; otherwise rebuild. | Trunk fast-forwards to the batch head **only if trunk has not moved** since | CONVENTIONS.md | #373 |
+| C4.batch.09 | default |  | Trunk fast-forwards to the batch head only if trunk's tip is still the batch's base (for a chained batch: once its parent landed at exactly that sha), by a plain non-forced push; otherwise rebuild. | Trunk fast-forwards to the batch head **only if trunk's tip is still the | CONVENTIONS.md | #373 #605 |
 | C4.batch.10 | default |  | A green batch run stands in for trunk's own in-flight run only when the same workflows fire on a trunk push and a `ship-batch/**` push. | only when **the same workflows** ran there: the workflow files | CONVENTIONS.md | #373 |
 | C4.batch.11 | default |  | On `red:infra` re-run once; on `red:finding` (`--split`) or red after the re-run, a batch of two or more lands nothing and splits: the same ref is rebuilt with its first half, the rest wait for the next batch. | rebuilt on the same base with the **first half** of its members | CONVENTIONS.md | #557 |
 | C4.batch.19 | default |  | A red batch of one cannot split: it lands nothing and that member ships serially. | A red batch of **one** cannot split | CONVENTIONS.md | #557 |
@@ -786,6 +786,10 @@ Two units reworded on purpose (base `c56bac20`), each to carry one new clause in
 | C4.batch.18 | default |  | On a `ship-batch` repo a lone ready candidate lands through the batch path as a batch of one, never serially. | A batch of one is a batch | CONVENTIONS.md | #562 |
 | C4.batch.17 | default |  | A lone ready candidate waits for a partner only up to the repo's declared `ship-batch-wait`, with the lane otherwise idle. | it waits up to that window | CONVENTIONS.md | #555 |
 | C4.batch.20 | default |  | With `ship-batch-steps` declared, each batch is built one step up after a green batch, one step down after a red one. | one step up after a green batch, one step down after a red one | CONVENTIONS.md | #557 |
+| C4.batch.21 | default |  | `--onto` builds a batch on an in-flight batch's head; the chain is read from the remote's refs alone and kept only while it ends at a batch on trunk's tip, at most 3 deep. | the chain is kept only while it ends at a batch on trunk's tip | CONVENTIONS.md | #605 |
+| C4.batch.22 | default |  | `--onto` is refused when the named batch has no combined run in flight or green, is not rooted at trunk's tip, or is already 3 deep. | `--onto` is refused when the named batch has no combined | CONVENTIONS.md | #605 |
+| C4.batch.23 | default |  | A parent that is red, gone or rebuilt, or a trunk moved any other way, deletes the chained child (its run cancelled) and declines it. | deletes the child (its run cancelled) and declines it | CONVENTIONS.md | #605 |
+| C4.batch.24 | default |  | Every batch of a chain rooted at trunk's tip holds the lane, as one batch does. | trunk's tip holds the lane, as one batch does | CONVENTIONS.md | #605 |
 
 ### Is a shipped half actually shippable? — the mechanical gate is not the judgement call (#263)
 

@@ -409,3 +409,66 @@ test('settledAt: newest updatedAt among finished rows, null when none', () => {
   assert.strictEqual(sb.settledAt([]), null);
   assert.strictEqual(sb.settledAt(null), null);
 });
+
+// ---- #605: speculative chains, read from ls-remote alone ----
+const T5 = 'aaaaaaa1111111111111111111111111111111111';
+const P5 = 'bbbbbbb2222222222222222222222222222222222';
+const C5 = 'ccccccc3333333333333333333333333333333333';
+const D5 = 'ddddddd4444444444444444444444444444444444';
+const r5 = (base, sha) => ({ ref: `ship-batch/${base.slice(0, 7)}`, base7: base.slice(0, 7), sha });
+
+test('batchChains: a root and its children are rooted, with parentRef, rootSha and depth', () => {
+  const m = sb.batchChains({ trunkNow: T5, refs: [r5(T5, P5), r5(P5, C5), r5(C5, D5)] });
+  assert.deepStrictEqual([...m.values()].map((c) => [c.ref, c.parentRef, c.rootSha, c.depth, c.rooted]), [
+    ['ship-batch/aaaaaaa', null, T5, 1, true],
+    ['ship-batch/bbbbbbb', 'ship-batch/aaaaaaa', T5, 2, true],
+    ['ship-batch/ccccccc', 'ship-batch/bbbbbbb', T5, 3, true],
+  ]);
+  assert.strictEqual(m.get('ship-batch/ccccccc').rootRef, 'ship-batch/aaaaaaa');
+});
+
+test('batchChains: trunk moved → every link is unrooted; a parent gone or rebuilt orphans its child', () => {
+  const moved = sb.batchChains({ trunkNow: 'eeeeeee', refs: [r5(T5, P5), r5(P5, C5)] });
+  assert.deepStrictEqual([...moved.values()].map((c) => c.rooted), [false, false]);
+  assert.match(moved.get('ship-batch/bbbbbbb').why, /chain breaks at ship-batch\/aaaaaaa/);
+  // the parent was rebuilt: its head is no longer the child's base
+  const rebuilt = sb.batchChains({ trunkNow: T5, refs: [r5(T5, 'fffffff0'), r5(P5, C5)] });
+  assert.strictEqual(rebuilt.get('ship-batch/aaaaaaa').rooted, true);
+  assert.strictEqual(rebuilt.get('ship-batch/bbbbbbb').rooted, false);
+  assert.strictEqual(rebuilt.get('ship-batch/bbbbbbb').parentRef, null);
+  assert.match(rebuilt.get('ship-batch/bbbbbbb').why, /neither trunk's tip nor the head of another batch ref/);
+});
+
+test('batchChains: once the parent landed, its child is a root; deeper than MAX_CHAIN_DEPTH is unrooted', () => {
+  const landed = sb.batchChains({ trunkNow: P5, refs: [r5(P5, C5)] });
+  assert.deepStrictEqual([landed.get('ship-batch/bbbbbbb').rooted, landed.get('ship-batch/bbbbbbb').depth], [true, 1]);
+  assert.strictEqual(sb.MAX_CHAIN_DEPTH, 3);
+  const E5 = '1234567999';
+  const deep = sb.batchChains({ trunkNow: T5, refs: [r5(T5, P5), r5(P5, C5), r5(C5, D5), r5(D5, E5)] });
+  assert.strictEqual(deep.get('ship-batch/ddddddd').rooted, false);
+  assert.match(deep.get('ship-batch/ddddddd').why, /deeper than 3/);
+  assert.strictEqual(sb.batchChains({}).size, 0);
+});
+
+test('chainedLandStep: wait while the parent is in flight or green; decline when it is gone, unrooted or red', () => {
+  const parent = { ref: 'ship-batch/aaaaaaa', rooted: true };
+  assert.strictEqual(sb.chainedLandStep({ parent, parentVerdict: { state: 'pending', why: 'running' } }).step, 'wait');
+  assert.strictEqual(sb.chainedLandStep({ parent, parentVerdict: { state: 'green' } }).step, 'wait');
+  assert.strictEqual(sb.chainedLandStep({ parent }).step, 'wait', 'an unread verdict waits — a pause clears itself');
+  assert.strictEqual(sb.chainedLandStep({ parent, parentVerdict: { state: 'red', why: 'x' } }).step, 'decline');
+  assert.strictEqual(sb.chainedLandStep({ parent: null }).step, 'decline');
+  assert.strictEqual(sb.chainedLandStep({ parent: { ...parent, rooted: false, why: 'gone' } }).step, 'decline');
+});
+
+test('laneHold: a rooted chained batch holds the lane even though its base is not trunk\'s tip', () => {
+  const now = Date.parse('2099-01-01T00:00:00Z');
+  const held = sb.laneHold({ trunkNow: T5, nowMs: now, batches: [
+    { ref: 'ship-batch/aaaaaaa', base7: 'aaaaaaa', rooted: true, verdict: { state: 'green' }, settledAtMs: now - 20 * 60000 },
+    { ref: 'ship-batch/bbbbbbb', base7: 'bbbbbbb', rooted: true, verdict: { state: 'pending', why: 'running' } },
+  ] });
+  assert.deepStrictEqual([held.held, held.ref], [true, 'ship-batch/bbbbbbb']);
+  const orphan = sb.laneHold({ trunkNow: T5, nowMs: now, batches: [
+    { ref: 'ship-batch/bbbbbbb', base7: 'bbbbbbb', rooted: false, verdict: { state: 'pending', why: 'running' } },
+  ] });
+  assert.strictEqual(orphan.held, false);
+});

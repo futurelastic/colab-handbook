@@ -10595,7 +10595,7 @@ function ciCureTrailerLine(cureVerdict, branch, trunk) {
 }
 
 const HELP_SHIP = `colab ship [--repo <path>] [--worktree <name> | --branch <br> | --direct] [--message "<msg>"] [--refs <N[,M]>] [--keep-worktree] [--delete-branch | --keep-branch] [--adopt | --handoff <comment-url>] [--answered-by <name>] [--session <id>] [--session-name <s>] [--dry] [--json]
-       colab ship --batch <b1,b2[@<handoff-url>][,…]> [--split] [--repo <path>] [--keep-worktree] [--delete-branch | --keep-branch] [--session <id>] [--session-name <s>] [--dry]
+       colab ship --batch <b1,b2[@<handoff-url>][,…]> [--split] [--onto ship-batch/<sha7>] [--repo <path>] [--keep-worktree] [--delete-branch | --keep-branch] [--session <id>] [--session-name <s>] [--dry [--json]]
 
 The ONE sanctioned door for code-wrap Phase B: squash-merge a session branch into the BASE IT WAS
 CUT FROM — trunk for an ordinary session, or the declared integration line recorded on its worktree
@@ -10884,7 +10884,20 @@ The batch also holds the trunk LANE (#581): while a ship-batch/<trunk-sha7> ref 
 combined run in flight — or green within ${shipBatch.LANE_GRACE_SEC / 60}m, so its lander can land it — a serial
 \`colab ship --branch\` into trunk pauses with exit 3 (⏸ BATCH-IN-FLIGHT; its --dry --json row
 'no batch in flight (#581)' reads self-clearing) instead of moving trunk under it and discarding the run.
-A red batch, or one with no run / not landed past that grace, holds nothing.
+A red batch, or one with no run / not landed past that grace, holds nothing. A TRUNK RED: cure is never held.
+SPECULATIVE CHAIN (#605): --onto ship-batch/<sha7> builds the batch on that in-flight batch's HEAD
+instead of trunk's tip, named ship-batch/<parent-head-sha7> (one batch per base still holds). The chain
+is read from ls-remote alone: a ref's parent is the ref whose head its name starts with, and it is kept
+while that chain ends at a batch on trunk's tip (at most ${shipBatch.MAX_CHAIN_DEPTH} deep); a ref whose parent is gone or rebuilt,
+or whose root trunk moved past, is deleted by the next --batch call (its run cancelled if still going).
+  - refused (1): the named ref has no combined run in flight or green, is not rooted at trunk's tip,
+    or is already ${shipBatch.MAX_CHAIN_DEPTH} deep; a member the chain below already carries does not join (✗, the rest go on);
+  - lands in order: green and its parent not landed yet → ⏸ BATCH-CHAINED (exit 3); once trunk's tip IS
+    the parent's head, the same command (with or without --onto) lands it — no second build, no second run;
+  - declined (4): the parent is red, gone, or trunk moved some other way — the child is deleted, → SERIAL.
+  Every ref of a chain rooted at trunk's tip holds the lane, exactly as one batch does.
+  --dry --json: one JSON document on stdout ({ batch: { ref, parentRef, rootSha, base, depth, step, exit,
+  members: [{ branch, sha, eligible, inBatch, why }] } }), the prose on stderr.
 A member that conflicts with the members already in is dropped to the next batch; the rest go on —
 unless every conflicting path is generated (defaults + project.yml generated:): then .colab/hooks/pre-ship
 regenerates them on the combined head and the member stays in (#387). No hook, or a failing one → dropped.
@@ -12560,7 +12573,7 @@ function cmdShipDryJson(opts) {
   // lane would discard the batch's run. SELF_CLEARING: the batch lands or is declined on its own.
   // Never for a batch member read (the batch IS the lane) nor for evidence-close (trunk does not move).
   if (!dryMode.evidenceClose && !opts._batchMember) {
-    const laneJson = shipBatchLaneCheck(repoAbs, doc, trunk, target, gh);
+    const laneJson = shipBatchLaneCheck(repoAbs, doc, trunk, target, gh, ciResultJson);
     if (laneJson) {
       checks.push({ name: 'no batch in flight (#581)', ok: !laneJson.held, class: laneJson.held ? SELF_CLEARING : null,
         detail: laneJson.detail, ...(laneJson.held ? { batchRef: laneJson.ref } : {}) });
@@ -13435,7 +13448,7 @@ function shipRefFor(repoAbs, branch) {
 
 function cmdShip(argv) {
   const opts = parseArgs(argv, {
-    values: { '--repo': 'repo', '--worktree': 'worktree', '--branch': 'branch', '--message': 'message', '--session': 'session', '--session-name': 'sessionName', '--batch': 'batch', '--answered-by': 'answeredBy', '--handoff': 'handoff' },
+    values: { '--repo': 'repo', '--worktree': 'worktree', '--branch': 'branch', '--message': 'message', '--session': 'session', '--session-name': 'sessionName', '--batch': 'batch', '--answered-by': 'answeredBy', '--handoff': 'handoff', '--onto': 'onto' },
     // #479: a repeated --refs used to keep only its LAST value, and every dropped issue then became a
     // `Closes` line on trunk — an issue meant to stay open, auto-closed by the push. --refs now
     // accumulates (a repeat is the same as one comma list); every OTHER value flag to ship refuses a
@@ -13455,6 +13468,9 @@ function cmdShip(argv) {
   if (opts.handoff && opts.batch) throw new UserError('--handoff names one --branch ship; in a batch, attach it to its member: --batch <b1>,<b2>@<hand-off-url> (#591, see `colab ship --help`)');
   if (opts.handoff && opts.direct) throw new UserError('--handoff applies to one --branch ship — not to --direct (see `colab ship --help`)');
   if (opts.split && !opts.batch) throw new UserError('--split applies to a red combined run of --batch only (#557) — run `colab ship --batch <b1,b2,…> --split` with the members the red batch carries');
+  if (opts.onto && !opts.batch) throw new UserError('--onto applies to --batch only (#605) — run `colab ship --batch <b1,b2,…> --onto ship-batch/<sha7>`');
+  if (opts.onto && !shipBatch.parseBatchRef(opts.onto)) throw new UserError(`--onto ${opts.onto}: not a batch ref — expected ship-batch/<sha7> (#605)`);
+  if (opts.batch && opts.json) return cmdShipBatchJson(opts); // #605: the batch's facts as JSON, prose on stderr
   if (opts.batch) return cmdShipBatch(opts); // #373 — its own re-entrant path; nothing below changes
   // A fully separate code path, deliberately: the prose/table path below is unchanged by this
   // feature (CONVENTIONS/#77 requires it stay byte-identical), so --dry --json does its own
@@ -13657,7 +13673,7 @@ function cmdShip(argv) {
 
   // #581: a batch in flight at trunk's tip holds the lane. Like the core-path review's 'pending', a
   // hold is not a failed precondition — it is a pause, taken below once every real one has passed.
-  const lane = shipBatchLaneCheck(repoAbs, doc, trunk, target, gh);
+  const lane = shipBatchLaneCheck(repoAbs, doc, trunk, target, gh, ciResult);
   if (lane) checks.push([lane.held ? '⏸' : '✓', 'no batch in flight (#581)', lane.detail]);
   for (const w of coreReview.warnings) warn(`${coreReview.codeownersPath}: ${w}`);
 
@@ -14110,7 +14126,7 @@ function cmdShip(argv) {
   }
   // #581: re-read the lane right before the merge — B0 sits between the table and here, and a batch
   // built in that window is exactly as live as one the table saw.
-  const laneB1 = lane ? shipBatchLaneCheck(repoAbs, doc, trunk, target, gh) : null;
+  const laneB1 = lane ? shipBatchLaneCheck(repoAbs, doc, trunk, target, gh, ciCureForTrailer ? { cureVerdict: ciCureForTrailer } : null) : null;
   if (laneB1 && laneB1.held) { cleanupEphemeral(); printBatchLanePause(laneB1, trunk); return 3; }
   // WHERE the squash happens. Into trunk it is the main checkout, which is on trunk by invariant
   // (and was just verified to be). Into a declared line it must NOT be: checking the main checkout
@@ -14684,21 +14700,29 @@ function shipDryJsonReport(opts) {
  * Inert (null, no git or gh call) unless project.yml declares ship-batch > 1, the merge target is
  * trunk, and gh is usable. Out: null, or `{ held, ref, why, released, detail }`.
  */
-function shipBatchLaneCheck(repoAbs, doc, trunk, target, gh) {
+function shipBatchLaneCheck(repoAbs, doc, trunk, target, gh, ciResult = null) {
   if (target !== trunk || !gh || shipBatch.parseShipBatch(doc).n <= 1) return null;
+  // #605: a TRUNK RED: cure is never held by a batch (or a chain) — trunk is red, and the cure is the
+  // way out; no batch can land on a red trunk anyway.
+  if (ciResult && ciResult.cureVerdict && ciResult.cureVerdict.ok) {
+    return { held: false, released: [], detail: 'a TRUNK RED: cure is never held by a batch (#605)' };
+  }
   const remote = git.remoteFor(repoAbs);
   const ls = git.git(['ls-remote', remote, `refs/heads/${trunk}`, 'refs/heads/ship-batch/*'], repoAbs);
   if (!ls.ok) return { held: false, released: [], detail: `could not read ${remote} — no batch provably in flight` };
   const rows = ls.stdout.split('\n').map((l) => l.split('\t')).filter(([sha, ref]) => sha && ref);
   const trunkNow = ((rows.find(([, ref]) => ref.trim() === `refs/heads/${trunk}`) || [])[0] || '').trim();
-  const atTip = rows.map(([sha, ref]) => ({ sha: sha.trim(), parsed: shipBatch.parseBatchRef(ref.trim()) }))
-    .filter((x) => x.parsed && trunkNow.startsWith(x.parsed.base7));
+  // #605: the lane holder is the CHAIN rooted at trunk's tip — a batch built --onto another batch's head
+  // reaches trunk only through it, so its run holds the lane exactly as the root's does.
+  const refs = rows.map(([sha, ref]) => ({ sha: sha.trim(), parsed: shipBatch.parseBatchRef(ref.trim()) })).filter((x) => x.parsed);
+  const chains = shipBatch.batchChains({ refs: refs.map((x) => ({ ref: x.parsed.ref, base7: x.parsed.base7, sha: x.sha })), trunkNow });
+  const atTip = refs.filter((x) => chains.get(x.parsed.ref).rooted);
   const batches = atTip.map((x) => {
     const runs = git.ghRunsForRef(repoAbs, x.parsed.ref, x.sha);
     let t = git.git(['log', '-1', '--format=%cI', x.sha], repoAbs);
     if (!t.ok) { git.git(['fetch', '-q', remote, `refs/heads/${x.parsed.ref}`], repoAbs); t = git.git(['log', '-1', '--format=%cI', x.sha], repoAbs); }
     const built = t.ok ? Date.parse(t.stdout.trim()) : NaN;
-    return { ref: x.parsed.ref, base7: x.parsed.base7, verdict: shipBatch.combinedVerdict(runs),
+    return { ref: x.parsed.ref, base7: x.parsed.base7, rooted: true, verdict: shipBatch.combinedVerdict(runs),
       builtAtMs: Number.isFinite(built) ? built : null, settledAtMs: shipBatch.settledAt(runs) };
   });
   const r = shipBatch.laneHold({ batches, trunkNow, nowMs: Date.now() });
@@ -14715,8 +14739,32 @@ function printBatchLanePause(lane, trunk) {
   print('  or be declined (bounded, B1a — the same wait as any CI run), then run this command again.');
 }
 
+/**
+ * #605: `colab ship --batch … --dry --json` — the same single step as the prose path (it IS the prose
+ * path, with its prose moved to stderr), plus one JSON document on stdout carrying the facts a caller
+ * keys on: the batch ref, the ref it is chained onto, the trunk sha its chain is rooted at, the step
+ * taken and the exit class, and one row per member. A caller never parses prose for the chain.
+ */
+function cmdShipBatchJson(opts) {
+  const batch = { trunk: null, trunkSha: null, ref: null, parentRef: null, rootSha: null, base: null, depth: null, step: null, exit: null, error: null, members: [] };
+  const was = PRINT_TO_STDERR;
+  PRINT_TO_STDERR = true;
+  let code;
+  try { code = cmdShipBatch({ ...opts, _json: batch }); }
+  catch (e) {
+    if (!(e instanceof UserError)) throw e;
+    process.stderr.write(`✗ ${e.message}\n`);
+    batch.error = e.message;
+    batch.step = batch.step || 'refused';
+    code = 1;
+  } finally { PRINT_TO_STDERR = was; }
+  batch.exit = code;
+  process.stdout.write(`${JSON.stringify({ batch }, null, 2)}\n`);
+  return code;
+}
+
 function cmdShipBatch(opts) {
-  for (const [key, flag] of [['direct', '--direct'], ['worktree', '--worktree'], ['branch', '--branch'], ['message', '--message'], ['refs', '--refs'], ['adopt', '--adopt'], ['json', '--json']]) {
+  for (const [key, flag] of [['direct', '--direct'], ['worktree', '--worktree'], ['branch', '--branch'], ['message', '--message'], ['refs', '--refs'], ['adopt', '--adopt'], ...(opts._json ? [] : [['json', '--json']])]) {
     if (opts[key]) throw new UserError(`--batch does not combine with ${flag} — each member ships with its own recorded claims and composed message (#373)`);
   }
   const repoAbs = resolveRepo(opts);
@@ -14730,7 +14778,12 @@ function cmdShipBatch(opts) {
   const members = entries.members;
   const handoffs = entries.handoffs;
   if (members.includes(trunk)) throw new UserError(`Refusing: ${trunk} is the trunk itself — it cannot be a batch member`);
+  const J = opts._json || {}; // #605: the --dry --json report, filled as the facts are read
+  J.trunk = trunk;
   const serial = (why, list = members) => {
+    J.step = J.step && J.step !== 'build' ? J.step : 'serial';
+    J.reason = why;
+    if (!J.members || !J.members.length) J.members = list.map((b) => ({ branch: b, sha: null, eligible: null, inBatch: false, why }));
     print(`✗ ship-batch: ${why}`);
     print(shipBatch.serialLine(list));
     return 4;
@@ -14791,6 +14844,7 @@ function cmdShipBatch(opts) {
   const lsTrunk = git.git(['ls-remote', remote, `refs/heads/${trunk}`], repoAbs);
   const trunkNow = lsTrunk.ok ? (lsTrunk.stdout.split('\t')[0] || '').trim() : '';
   if (!trunkNow) throw new UserError(`could not read ${trunk} on ${remote}`);
+  J.trunkSha = trunkNow;
   const lsBatch = git.git(['ls-remote', remote, 'refs/heads/ship-batch/*'], repoAbs);
   const batchRefs = (lsBatch.ok ? lsBatch.stdout.split('\n') : []).map((l) => l.split('\t'))
     .map(([sha, ref]) => ({ sha: (sha || '').trim(), parsed: shipBatch.parseBatchRef((ref || '').trim()) }))
@@ -14802,14 +14856,102 @@ function cmdShipBatch(opts) {
     if (!d.ok) warn(`could not delete ${remote}/${ref}: ${git.gitFailureLine(d.stderr)} — delete it by hand`);
     return d.ok;
   };
-  for (const b of batchRefs.filter((x) => !trunkNow.startsWith(x.parsed.base7))) {
-    print(`  trunk moved since ${b.parsed.ref} was built (${b.parsed.base7} → ${shortSha(trunkNow)}) — nothing landed; rebuilding`);
+  // #605: the sweep is chain-aware. A ref built `--onto` another batch's head is kept while its chain
+  // ends at a batch on trunk's tip (lib/ship-batch.js batchChains, read from ls-remote alone); a ref
+  // whose parent is gone, or whose root trunk has moved past, is deleted. Without any chained ref this
+  // is exactly the old sweep: every ref not built on trunk's tip goes.
+  const chains = shipBatch.batchChains({ refs: batchRefs.map((x) => ({ ref: x.parsed.ref, base7: x.parsed.base7, sha: x.sha })), trunkNow });
+  const carriedBy = (ref, from, sha) => {
+    const lg = git.git(['log', '--format=%B%x00', `${from}..${sha}`], repoAbs);
+    return shipBatch.parseMemberTrailers(lg.ok ? lg.stdout.split('\0') : []).filter((m) => m.ref === ref).reverse();
+  };
+  const swept = [];
+  for (const b of batchRefs.filter((x) => !chains.get(x.parsed.ref).rooted)) {
+    const c = chains.get(b.parsed.ref);
+    // A ref built on a head trunk never reached (an orphaned chain link) may still have its run going;
+    // nothing can ever land it, so cancel that run. A ref on an OLD trunk tip is today's case, untouched.
+    const baseFull = git.git(['rev-parse', '--verify', '-q', `${b.parsed.base7}^{commit}`], repoAbs);
+    const offTrunk = !baseFull.ok || !git.git(['merge-base', '--is-ancestor', baseFull.stdout.trim(), trunkNow], repoAbs).ok;
+    if (offTrunk) {
+      print(`  ${b.parsed.ref} is not rooted at ${trunk}'s tip — ${c.why}; nothing landed from it; deleting it`);
+      for (const r of (git.ghRunsForRef(repoAbs, b.parsed.ref, b.sha) || []).filter((x) => x.status !== 'completed' && x.databaseId)) {
+        if (opts.dry) { print(`  [dry] would cancel run ${r.databaseId} on ${b.parsed.ref}`); continue; }
+        const cx = git.ghRunCancel(repoAbs, r.databaseId);
+        if (!cx.ok) warn(`could not cancel run ${r.databaseId} on ${b.parsed.ref} — it will finish on a ref that is gone`);
+      }
+    } else {
+      print(`  trunk moved since ${b.parsed.ref} was built (${b.parsed.base7} → ${shortSha(trunkNow)}) — nothing landed; rebuilding`);
+    }
+    swept.push({ ref: b.parsed.ref, members: offTrunk ? carriedBy(b.parsed.ref, trunkNow, b.sha) : [] });
     deleteRef(b.parsed.ref);
   }
-  const atBase = batchRefs.find((x) => trunkNow.startsWith(x.parsed.base7)) || null;
+  const rooted = batchRefs.filter((x) => chains.get(x.parsed.ref).rooted);
+  // Every member the chain up to `sha` carries (branch → the ref carrying it), read from its trailers.
+  const carriedByChain = (sha) => new Map(shipBatch.parseMemberTrailers((() => {
+    const lg = git.git(['log', '--format=%B%x00', `${trunkNow}..${sha}`], repoAbs);
+    return lg.ok ? lg.stdout.split('\0') : [];
+  })()).map((m) => [m.branch, m.ref]));
+
+  // #605: --onto <ship-batch ref> builds on that ref's HEAD instead of trunk's tip. `base` is what the
+  // batch sits on from here on; without --onto it is trunk's tip, and nothing below changes.
+  let base = trunkNow;
+  let parent = null; // { ref, sha, chain, verdict } while the parent has not landed
+  if (opts.onto) {
+    const want = shipBatch.parseBatchRef(opts.onto).ref;
+    const p = batchRefs.find((x) => x.parsed.ref === want) || null;
+    const ours = swept.find((x) => x.members.some((m) => members.includes(m.branch)));
+    if (p && p.sha === trunkNow) {
+      print(`  ${want} has landed — ${trunk} is at its head ${shortSha(trunkNow)}; this batch sits on ${trunk}'s tip`);
+    } else if (!p || !chains.get(want).rooted) {
+      if (ours) {
+        print(`✗ ship-batch: ${ours.ref} was built on ${want}, which ${p ? `is no longer rooted at ${trunk}'s tip (${chains.get(want).why})` : `is gone from ${remote}`} — nothing landed; ${ours.ref} ${opts.dry ? 'would be deleted [DRY RUN]' : 'deleted'}. Rebuild with the same command without --onto.`);
+        J.step = 'chained-decline';
+        return serial('its parent batch was discarded, or trunk moved some other way — the chain cannot land in order', ours.members.map((m) => m.branch));
+      }
+      // The parent landed and its lander deleted the ref: our batch (if staged) now sits on trunk's tip.
+      const atTip = rooted.find((x) => trunkNow.startsWith(x.parsed.base7));
+      const landedParent = !p && atTip && carriedBy(atTip.parsed.ref, trunkNow, atTip.sha).some((m) => members.includes(m.branch));
+      if (!landedParent && p) {
+        throw new UserError(`--onto ${want}: it is not rooted at ${trunk}'s tip (${chains.get(want).why}) — build on ${trunk} instead (drop --onto)`);
+      }
+      if (!landedParent) {
+        // ls-remote cannot tell "never existed" from "discarded" or "trunk moved some other way" — and
+        // for the last two the issue's rule is a decline. So a missing parent declines: nothing of
+        // this chain can land in order, and the members go back to the queue (#605).
+        J.step = 'chained-decline';
+        print(`✗ ship-batch: --onto ${want}: no such batch ref on ${remote} — it was discarded, landed under other members, or never existed.`);
+        return serial(`nothing to chain onto — build on ${trunk} instead (the same command without --onto)`);
+      }
+      print(`  ${want} is gone and ${atTip.parsed.ref} at ${trunk}'s tip carries this batch — its parent landed; resuming on ${trunk}'s tip`);
+    } else {
+      const pc = chains.get(want);
+      const verdict = shipBatch.combinedVerdict(git.ghRunsForRef(repoAbs, want, p.sha));
+      const child = rooted.find((x) => x !== p && p.sha.startsWith(x.parsed.base7)) || null;
+      if (verdict.state === 'red') {
+        if (child) {
+          const carried = carriedBy(child.parsed.ref, p.sha, child.sha);
+          print(`✗ ship-batch: ${want} is red (${verdict.why}) — it will not land at ${shortSha(p.sha)}, so ${child.parsed.ref} built on it cannot land in order. Nothing landed; ${child.parsed.ref} ${opts.dry ? 'would be deleted [DRY RUN]' : 'deleted'}. Rebuild with the same command without --onto once ${want} is settled.`);
+          deleteRef(child.parsed.ref);
+          J.step = 'chained-decline';
+          return serial(`its parent ${want} was declined — rebuild on ${trunk} once it is settled`, carried.length ? carried.map((m) => m.branch) : members);
+        }
+        throw new UserError(`--onto ${want}: its combined run is red (${verdict.why}) — nothing to chain onto; build on ${trunk} instead (drop --onto)`);
+      }
+      if (verdict.state === 'none' && !child) {
+        throw new UserError(`--onto ${want}: it has no combined run in flight or green yet — wait for its run to start, then run this command again`);
+      }
+      if (!child && pc.depth >= shipBatch.MAX_CHAIN_DEPTH) {
+        throw new UserError(`--onto ${want}: it is already ${pc.depth} deep from ${trunk}'s tip — a chain is at most ${shipBatch.MAX_CHAIN_DEPTH} batches (#605); wait for its root to land`);
+      }
+      base = p.sha;
+      parent = { ref: want, sha: p.sha, chain: pc, verdict };
+    }
+  }
+  Object.assign(J, { base, parentRef: parent ? parent.ref : null, rootSha: trunkNow, depth: parent ? parent.chain.depth + 1 : 1, ref: shipBatch.batchRefName(base) });
+  const atBase = rooted.find((x) => (!parent || x.parsed.ref !== parent.ref) && base.startsWith(x.parsed.base7)) || null;
   let existing = null;
   if (atBase) {
-    const log = git.git(['log', '--format=%B%x00', `${trunkNow}..${atBase.sha}`], repoAbs);
+    const log = git.git(['log', '--format=%B%x00', `${base}..${atBase.sha}`], repoAbs);
     const inBatch = shipBatch.parseMemberTrailers(log.ok ? log.stdout.split('\0') : []).reverse();
     const foreign = inBatch.filter((m) => !members.includes(m.branch));
     // #391: a DECLINED batch (combined run red) is not in flight — clear it and build the one asked for.
@@ -14839,7 +14981,10 @@ function cmdShipBatch(opts) {
     }
   }
   const verdict = existing && existing.matches ? shipBatch.combinedVerdict(git.ghRunsForRef(repoAbs, existing.ref, existing.sha)) : null;
-  let step = shipBatch.nextStep({ enabled: true, wired: true, trunkCi, eligibleCount: members.length, existing, trunkNow, verdict, split: !!opts.split });
+  // #605: a chained batch is measured against its own base (the parent's head), not trunk's tip.
+  let step = shipBatch.nextStep({ enabled: true, wired: true, trunkCi, eligibleCount: members.length, existing, trunkNow: base, verdict, split: !!opts.split });
+  J.step = step.step;
+  if (existing) J.members = existing.members.map((m) => ({ branch: m.branch, sha: m.sha, eligible: true, inBatch: true, why: `staged in ${existing.ref}` }));
   if (opts.split && !(verdict && verdict.state === 'red')) {
     print(`  --split ignored: ${existing ? `${existing.ref} is not red (${verdict ? verdict.state : 'members changed'})` : 'no batch is staged at this base'} — only a red combined run splits (#557)`);
   }
@@ -14888,15 +15033,33 @@ function cmdShipBatch(opts) {
     print(shipBatch.serialLine(existing.members.map((m) => m.branch)));
     return 4;
   }
+  if (step.step === 'land' && parent) {
+    // #605: land in order — only once trunk's tip IS the parent's head. Until then the parent is in
+    // flight (wait, exit 3); a parent that is red will never land at that sha (delete, exit 4).
+    const ls = shipBatch.chainedLandStep({ parent: parent.chain, parentVerdict: parent.verdict });
+    J.step = ls.step === 'wait' ? 'chained-wait' : 'chained-decline';
+    J.reason = ls.why;
+    if (ls.step === 'wait') {
+      print(`⏸ BATCH-CHAINED ${existing.ref}@${shortSha(existing.sha)} — combined run green; it lands after ${parent.ref}: ${ls.why}. Nothing landed.`);
+      print(`  Wait for ${parent.ref} to land (bounded, B1a), then run this command again — it lands with no second run.`);
+      return 3;
+    }
+    print(`✗ ship-batch: ${existing.ref} cannot land in order — ${ls.why}. Nothing landed; ${existing.ref} ${opts.dry ? 'would be deleted [DRY RUN]' : 'deleted'}. Rebuild with the same command without --onto.`);
+    deleteRef(existing.ref);
+    return serial('its parent batch was discarded', existing.members.map((m) => m.branch));
+  }
   if (step.step === 'land') return shipBatchLand(repoAbs, doc, trunk, remote, trunkNow, existing, verdict, opts);
 
   // ---- (d) pick the members — each through its OWN ship gates ----
   const st = state.loadState();
   const evaluated = [];
+  // #605: a member the chain below already carries lands with that batch — it never joins a second one.
+  const inChain = parent ? carriedByChain(parent.sha) : new Map();
   for (const b of members) {
     const refs = git.branchRefs(repoAbs, b, remote);
     let why = null, report = null, ciClass = null, files = [];
     if (!refs.remoteSha) why = `not on ${remote} — push it first; its CI has never seen it`;
+    else if (inChain.has(b)) why = `already in ${inChain.get(b)} — it lands with that batch, not this one`;
     else if (refs.localSha && refs.localSha !== refs.remoteSha) why = `local ${shortSha(refs.localSha)} ≠ ${remote} ${shortSha(refs.remoteSha)} — its CI never saw this head`;
     if (!why) {
       // #591: a hand-off member is read through the SAME door a single --handoff ship uses
@@ -14929,12 +15092,13 @@ function cmdShipBatch(opts) {
       return { selected: sel, overflow: eligible.filter((e) => !sel.includes(e)) };
     })()
     : shipBatch.selectMembers(eligible, size, { isGenerated: (f) => isGeneratedPath(f, generated) });
-  print(`ship --batch ${shortRepo(repoAbs)} → ${trunk} @ ${shortSha(trunkNow)}  (${splitHalf ? `split of a red batch of ${splitHalf.first.length + splitHalf.held.length}` : sizeLabel})${opts.dry ? '  [DRY RUN]' : ''}`);
+  print(`ship --batch ${shortRepo(repoAbs)} → ${trunk} @ ${shortSha(trunkNow)}${parent ? ` · onto ${parent.ref}@${shortSha(parent.sha)} (depth ${parent.chain.depth + 1}, lands after it)` : ''}  (${splitHalf ? `split of a red batch of ${splitHalf.first.length + splitHalf.held.length}` : sizeLabel})${opts.dry ? '  [DRY RUN]' : ''}`);
   print(table(evaluated.map((e) => [e.ok ? (selected.includes(e) ? '✓' : '·') : '✗', e.branch,
     e.ok && !selected.includes(e) ? (splitHalf ? 'eligible — held by the split for the next batch' : `eligible — waits for the next batch (cap ${size})`) : e.why]), ['', 'MEMBER', 'DETAIL']));
   const notJoining = evaluated.filter((e) => !selected.includes(e)).map((e) => e.branch);
+  J.members = evaluated.map((e) => ({ branch: e.branch, sha: e.sha || null, eligible: e.ok, inBatch: selected.includes(e), why: e.why }));
   step = shipBatch.nextStep({ enabled: true, wired: true, trunkCi, eligibleCount: selected.length, existing: null, trunkNow });
-  if (step.step === 'build' && selected.length === 1 && waitCfg.sec > 0 && !splitHalf) {
+  if (step.step === 'build' && selected.length === 1 && waitCfg.sec > 0 && !splitHalf && !parent) {
     // #555: the lane is idle here (trunk's run finished, no batch in flight at this base), and one
     // member is ready. Wait for a partner until the repo's window, counted from when it became ready.
     const lone = selected[0];
@@ -14953,10 +15117,11 @@ function cmdShipBatch(opts) {
   if (step.step === 'serial') return serial('no member can join — each one above says why');
 
   // ---- (e) build: trunk head + one squash commit per member, in an ephemeral detached worktree ----
-  const ref = shipBatch.batchRefName(trunkNow);
+  // #605: on a chain, the batch is built on the parent's head and named after it — one batch per base.
+  const ref = shipBatch.batchRefName(base);
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'colab-ship-batch-'));
-  const add = git.git(['worktree', 'add', '--detach', dir, trunkNow], repoAbs);
-  if (!add.ok) { try { fs.rmdirSync(dir); } catch (_) {} throw new UserError(`could not check out ${shortSha(trunkNow)} to build the batch: ${git.gitFailureLine(add.stderr)}`); }
+  const add = git.git(['worktree', 'add', '--detach', dir, base], repoAbs);
+  if (!add.ok) { try { fs.rmdirSync(dir); } catch (_) {} throw new UserError(`could not check out ${shortSha(base)} to build the batch: ${git.gitFailureLine(add.stderr)}`); }
   const cleanup = () => git.git(['worktree', 'remove', '--force', dir], repoAbs);
   const machineLine = shipMachineTrailerDecision(repoAbs, doc).line;
   const built = [];
@@ -15024,6 +15189,8 @@ function cmdShipBatch(opts) {
     built.push({ ...m, regenerated, commit: git.git(['rev-parse', 'HEAD'], dir).stdout });
   }
   for (const d of dropped) print(`  ✗ ${d.branch}: ${d.why}`);
+  for (const d of dropped) Object.assign(J.members.find((r) => r.branch === d.branch) || {}, { inBatch: false, why: d.why });
+  J.step = 'build';
   // #554: a drop leaves a durable trace — one Ship-Batch-Dropped trailer per dropped member on the
   // batch head, so it reaches trunk with a landed batch and rides a red combined run's head message.
   // Only when the batch is built (≥1 member, #562): a build that collapses to serial pushes nothing.
@@ -15049,8 +15216,10 @@ function cmdShipBatch(opts) {
   }
   if (opts.dry) {
     cleanup();
-    print(`→ READY: would push ${ref} = ${shortSha(trunkNow)} + ${built.length} squash commit(s): ${built.map((b) => b.branch).join(', ')}`);
-    print('  then wait on ONE combined run, and fast-forward trunk to it only if trunk has not moved.');
+    print(`→ READY: would push ${ref} = ${shortSha(base)} + ${built.length} squash commit(s): ${built.map((b) => b.branch).join(', ')}`);
+    print(parent
+      ? `  then wait on ONE combined run, and fast-forward trunk to it only once ${parent.ref} has landed at ${shortSha(parent.sha)} (#605).`
+      : '  then wait on ONE combined run, and fast-forward trunk to it only if trunk has not moved.');
     if (notJoining.length || dropped.length) print(`  not in this batch: ${[...new Set([...notJoining, ...dropped.map((d) => d.branch)])].join(', ')}`);
     return 0;
   }
@@ -15058,7 +15227,7 @@ function cmdShipBatch(opts) {
   const push = git.run('git', ['push', '--force', remote, `${head}:refs/heads/${ref}`], { cwd: repoAbs });
   cleanup();
   if (!push.ok) throw new UserError(`could not push ${ref}: ${git.gitFailureLine(push.stderr)} — nothing landed`);
-  print(`  pushed ${ref} = ${shortSha(trunkNow)} + ${built.length} commit(s) @ ${shortSha(head)} (${built.map((b) => b.branch).join(', ')})`);
+  print(`  pushed ${ref} = ${shortSha(base)} + ${built.length} commit(s) @ ${shortSha(head)} (${built.map((b) => b.branch).join(', ')})${parent ? ` — chained onto ${parent.ref}; it lands after it` : ''}`);
   if (overflow.length) print(`  eligible but ${splitHalf ? 'held by the split' : 'over the cap'} (next batch): ${overflow.map((o) => o.branch).join(', ')}`);
   print(`⏸ BATCH-PENDING ${ref}@${shortSha(head)} — wait on the combined run (bounded, B1a), then run this command again. Nothing landed yet.`);
   return 3;
@@ -16854,7 +17023,9 @@ re-running install.sh; \`colab update\` reports it when it is behind. \`colab --
 which of the two you are talking to.
 `;
 
-function print(s) { process.stdout.write(s.endsWith('\n') ? s : s + '\n'); return 0; }
+// #605: `ship --batch --dry --json` keeps stdout for its one JSON document; the prose goes to stderr.
+let PRINT_TO_STDERR = false;
+function print(s) { (PRINT_TO_STDERR ? process.stderr : process.stdout).write(s.endsWith('\n') ? s : s + '\n'); return 0; }
 function warn(s) { process.stderr.write(`! ${s}\n`); }
 /**
  * `colab ship` sets this to an array while it runs B3 (worktree teardown) through B4 (per-issue

@@ -1749,12 +1749,12 @@ tests every setup before trunk moves — whether or not a sibling was ready.
    exit code is a claim, the index is the proof, and serial B0 reads it the same way (#436).
    Sharing only generated
    paths does not count against disjointness in step 1's pre-filter either. The result is
-   pushed to `ship-batch/<trunk-sha7>`.
+   pushed to `ship-batch/<base-sha7>` — the base is trunk's tip, or a parent's head (step 11).
 3. **One combined run** there must be `green`. It **replaces** each member's post-sync
    re-run — not a skip justified by disjointness, but one run instead of N.
-4. **Landing.** Trunk fast-forwards to the batch head **only if trunk has not moved** since
-   the build, by a plain non-forced push (a moved trunk fails it; the batch is then rebuilt
-   on the new head). Each member's evidence names the combined run. While that run is in
+4. **Landing.** Trunk fast-forwards to the batch head **only if trunk's tip is still the
+   batch's base** (for a chain, once the parent landed at that sha — step 11), by a plain
+   non-forced push (a moved trunk fails it; the batch is then rebuilt on the new head). Each member's evidence names the combined run. While that run is in
    flight (or green, within a grace), the batch **holds the trunk lane**: serial ships pause (#581).
 5. **A green batch run stands in for trunk's own run at that same sha** — while trunk's
    run is still in flight — only when **the same workflows** ran there: the workflow files
@@ -1782,6 +1782,14 @@ tests every setup before trunk moves — whether or not a sibling was ready.
    is no wait. A repo picks the value from its own history.
 10. **Adaptive size** (#557): with [`ship-batch-steps`](project.schema.md#ship-batch-steps--optional),
    one step up after a green batch, one step down after a red one; no default steps.
+11. **Speculative chain** (#605). `--onto ship-batch/<sha7>` builds the batch on an in-flight
+   batch's head; the chain is kept only while it ends at a batch on trunk's tip, at most 3 deep.
+   `--onto` is refused when the named batch has no combined run in flight or green, is not
+   rooted at trunk's tip, or is already 3 deep. A child lands only once trunk's tip **is** its
+   parent's head; a parent that is red, gone or rebuilt, or a trunk moved any other way,
+   deletes the child (its run cancelled) and declines it. Every batch of a chain rooted at
+   trunk's tip holds the lane, as one batch does. Why, and the edge rulings:
+   [ADR 605](docs/adr/605-speculative-batch-chain-rationale.md).
 
 `colab ship --batch` never waits: each call reads the remote, takes one step, and exits
 `0` landed · `3` paused (wait on the printed run, bounded as any other CI wait, then run
