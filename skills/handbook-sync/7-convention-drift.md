@@ -104,6 +104,9 @@ by design: they record a pre-release and deploy nothing.
 
 ### A long-running CI or deploy job must declare `timeout-minutes` (#577)
 
+On a `deploy-*` copy this is a finding. On a `ci-*` copy it is a suggestion (#607): CI templates
+are guidance, so offer the value with its reason and accept a decline.
+
 #572 and #573 gave the templates' long-running jobs a job-level `timeout-minutes`. A copy cut
 before that keeps GitHub's 360-minute default, and a self-hosted runner does not even hold to that
 default: #572 measured Laravel builds cancelled at 1440 and 1544 minutes, with the runner held the

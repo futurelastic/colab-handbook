@@ -12,12 +12,56 @@ Starting points you **copy into your own repo**. That is the entire model.
 > workflow that silently changes under a hundred repos is the failure mode we are
 > avoiding.
 
+**The CI templates are guidance, not enforcement (#607).** Change your copy in any way you
+like. The audit reports a difference from a CI template as a `▸` suggestion only, never a fail
+or warn. The handbook enforces only what `colab ship` reads from your CI
+([CONVENTIONS §7, *What ship reads*](../CONVENTIONS.md#what-ship-reads--the-ci-contract-607)):
+- a run on every push to trunk;
+- a run on a branch push where `gate: authoritative: ci`;
+- a run on `ship-batch/**` where `ship-batch` is above 1;
+- a `Migration round-trip…` job where `migration-grant: reviewer`.
+
+### Two lanes — light on every merge, heavy on official builds and nightly
+
+| Lane | Template → copy | Runs | What |
+|---|---|---|---|
+| **light** | `ci-<stack>.yml` → `ci.yml` | every push (branch and trunk); the lane `colab ship` reads | secret scan, build, typecheck/lint, the fast tests — aim for under 5 minutes at p50 |
+| **heavy** | `ci-<stack>-heavy.yml` → `ci-heavy.yml` | nightly on trunk's tip (skipped when trunk has not moved since the last green nightly), at every release candidate and tag, and by hand — **never per merge** | the whole suite including heavy-marked tests, integration, browser/e2e, load |
+
+- **The adopter marks which tests are heavy; an unmarked test is light**, so nothing stops
+  running per merge until someone decides it should.
+  - Node: a `test:heavy` script, for example over `*.heavy.test.*` files that `test` does not run.
+  - Python: the pytest marker `heavy`.
+  - Laravel: the Pest/PHPUnit group `heavy`.
+- **The heavy lane gates official builds.** `release-tag.yml` calls it (`workflow_call`) at the
+  tag and publishes only on green. `release-auto.yml` dispatches it at every new candidate and
+  finalizes only on its green run at that candidate's exact sha. With no `ci-heavy.yml`, both
+  skip the gate.
+- **A red nightly is a trunk finding, not a merge block.** It files one `trunk-red` issue per
+  lane, naming the commit range since the last green nightly. An open issue for the lane
+  suppresses a new one. If the issue list cannot be read, it files nothing and fails the job.
+- **Exposure sets the bar.** `live`/`released` repos run the heavy lane before every official
+  build. `none`/`self` repos may run it nightly only.
+- **The trade-off:** a defect the light lane misses can sit on trunk for up to a day. Where a
+  merge queue and spare runners exist, a full run per batch is an optional third trigger.
+- **Traps the heavy template already handles:**
+  - It has no push or `pull_request` trigger, so ship never counts its run.
+  - The `plan` job, not an all-skipped run, is what concludes `success` on a skipped nightly.
+  - It has no `concurrency` group, so no heavy run is ever cancelled.
+  - The nightly never commits.
+  - The tested sha is in the job name, `Full suite @ <sha>`, which is how the next nightly knows
+    whether trunk moved.
+- **A docs-only change needs no CI wait:** `colab ship` decides that from the diff (#606). The
+  light templates show a commented `paths-ignore` for docs as an option; the old in-workflow
+  docs-only guard is gone.
+
 ## What each template is for
 
 | File | Copy to | For | Notes |
 |---|---|---|---|
 | `ci-node.yml` | `.github/workflows/ci.yml` | Pure Node repos: Vite SPA, node libs, Astro static, **Capacitor apps** | Resolves Node version from `project.yml` → `.nvmrc`/`engines` → **fails**. Never a default. |
 | `ci-laravel.yml` | `.github/workflows/ci.yml` | Laravel + Inertia + Vite fullstack (with route/type codegen) | Same resolution for **both** PHP and Node. Includes the sqlite bootstrap + explicit wayfinder step, and a `migrations` job that round-trips the schema (migrate → rollback → seed → migrate, schema compared) on the test engine **and** the deploy engine (a MariaDB/MySQL service container at production's version). Its data-dependent checks need `ROUNDTRIP_SEEDER` — see *Migration round-trip* below. |
+| `ci-node-heavy.yml`, `ci-python-heavy.yml`, `ci-laravel-heavy.yml` | `.github/workflows/ci-heavy.yml` | The heavy lane beside the matching `ci-<stack>.yml` (above) | `schedule` + `workflow_dispatch` + `workflow_call`, never a push. Toolchain and install steps are copied from the light lane's `build` job, so the two resolve the same versions — keep them in step. `TRUNK` is an edit point. |
 | `ci-python.yml` | `.github/workflows/ci.yml` | Python: FastAPI/Flask services, CLIs, libraries | Resolves Python from `project.yml` → `.python-version`/`requires-python` → **fails**. `requirements.txt` does not count. **Hybrid** Python+Node repo: copy this, then paste `ci-node.yml`'s `build:` job alongside — see the template header. |
 | `release-tag.yml` | `.github/workflows/release.yml` | Any repo cutting `v*.*.*` releases | Triggers on tag push. Publishes a grouped GitHub Release — a `-rc.N` tag as a pre-release, every summary since the previous *final* tag. No toolchain, no deploy; its header shows the `!v*.*.*-*` exclusion a deploy trigger needs. |
 | `release-auto.yml` | `.github/workflows/release-auto.yml` | A repo whose release tags land on `main` (`trunk: main`, `deploy: tag` or `none`) and whose §6 release route cuts candidates | Runs `colab release cut --auto` after CI goes green on main and `colab release finalize --auto` daily — plus an hourly run that re-tries only a refused cut, once the fetched CLI has moved within `RETRY_WINDOW_MINUTES` or a run at main's head was cancelled (#547) — from a handbook ref (`HANDBOOK_REF` — the `stable` channel by default, `next` for the fast channel, or an exact tag to freeze; #445) — the handbook's own copy runs its checkout's CLI instead, since it ships the CLI it releases with (#428). **Publishes the Release in the same run** — a tag pushed with `GITHUB_TOKEN` triggers no other workflow, so `release-tag.yml` would never fire for it. A refusal is a warning, not a red run. Reads and creates tags, and fast-forwards the release channels `next` / `stable` (branches naming the newest candidate / final, #445); never pushes a commit. The audit recognises any workflow running `release cut/finalize --auto` and warns when the route leaves candidates off, when it tags without publishing while a tag-push workflow waits, or when it commits. |
@@ -87,6 +131,8 @@ schema *before* the change — once more, the way a deploy lands new migrations 
 that predates them. The schema after both passes must match. Two things to know before
 trusting a green run:
 
+- **A `down()` that sqlite cannot run, or one that does not undo its `up()`**, turns a leg red —
+  and nothing else in CI ever runs `down()`.
 - **Both legs matter.** The engines disagree: a `NOT NULL` column added without a default
   fails on sqlite when rows exist, while MariaDB accepts it and silently writes `''` into
   every existing row. A deploy-engine leg at a version production does not run proves
@@ -144,6 +190,7 @@ directory into ~45 repos and was wrong — fixed 2026-08-20.
    ```sh
    colab template                                   # list templates + handbook version
    colab template ci-node   --dest .github/workflows/ci.yml
+   colab template ci-node-heavy --dest .github/workflows/ci-heavy.yml   # the heavy lane, optional
    colab template release-tag --dest .github/workflows/release.yml
    colab template deploy-xserver --dest .github/workflows/deploy-xserver.yml
    colab template deploy-container --dest .github/workflows/deploy-container.yml
@@ -270,8 +317,8 @@ silent updates, just an honest report that you are behind.
 If you're the one editing a template *in this repo* and the change touches no rule at
 all — a typo, a broken hyperlink, a comment — write `Rule-Neutral: yes` as a trailer on
 that commit. Every adopter's drift finding for it then downgrades to a warn instead of a
-hard fail, but only if **every** commit since their stamp declared it; a `ci-*` template
-is never eligible, trailer or not. Full contract: [CONVENTIONS.md §8](../CONVENTIONS.md#8-conformance-and-reconciliation).
+hard fail, but only if **every** commit since their stamp declared it. A `ci-*` template's
+drift is only ever a suggestion (#607), so the trailer is moot there. Full contract: [CONVENTIONS.md §8](../CONVENTIONS.md#8-conformance-and-reconciliation).
 
 ## Keeping honest
 

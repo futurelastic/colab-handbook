@@ -157,7 +157,7 @@ const instructionGate = require("../tools/lib/instruction-gate.js"); // #588
 const identity = require("../tools/lib/identity.js");
 const {
   handbookInfo, templateNames, templateChangedSince, cmpParts, cmpSemver,
-  parseWorkflowStamp, parseClaudeStamp, workflowProvenance, unstampedFinding, looksLikeHandbookClaude,
+  parseWorkflowStamp, parseClaudeStamp, workflowProvenance, unstampedFinding, isCiProvenance, looksLikeHandbookClaude,
 } = stamp;
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -483,7 +483,7 @@ function checkStamps(src, hb, tmplNames, fail, warn, { ceremony = "standard", mi
       const prov = workflowProvenance(text, stem, tmplNames);
       const finding = unstampedFinding(prov);
       // #607: an unstamped CI copy is the adopter's own CI — information, like any CI-template drift.
-      const isCiCopy = stamp.isCiProvenance(prov);
+      const isCiCopy = isCiProvenance(prov); // the bare import: `stamp` is shadowed in this loop
       if (finding && finding.state === 'unstamped') (isCiCopy ? suggest : warn)(`${wf} unstamped — ${finding.reason}`);
     }
   }

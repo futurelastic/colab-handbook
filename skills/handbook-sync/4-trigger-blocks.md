@@ -4,6 +4,10 @@ Reference for [`handbook-sync`](SKILL.md) §4. The core holds the step order, it
 condition; this file holds the step's full text — the commands, edge cases and the measurements
 behind them — moved here verbatim (#524).
 
+**Every block in this file is a suggestion (#607).** A CI template is guidance: offer the block
+with the reason it exists, and leave the adopter's copy as it is when they decline. Only a gap in
+what `colab ship` reads (`CONVENTIONS.md` §7, *What ship reads*) is a finding.
+
 ### The every-branch trigger block (#384) — offer it only where trunk has capacity
 
 A `ci-*` copy stamped before #384 is missing the templates' new `on:` + `concurrency:`
