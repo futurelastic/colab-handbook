@@ -1938,6 +1938,13 @@ completed verdict yet). Silent when the base was not measurably red.
 
 ## 5. Claiming work — how to say "I'm on this"
 
+> **Frozen — no new features ([#604](https://github.com/futurelastic/colab-handbook/issues/604), 2026-10-14).**
+> Scope is how code lands on git. Claims recorded on the issue, readiness, `Filed-by`
+> provenance, decision records, every `COLAB_HUMAN=1` gate except `solo`, and their commands
+> will move to a separate decision layer adopters run. They still apply as written; bug fixes
+> land, new features are refused. The git claim ref, place-claims and `solo` stay in scope.
+> Full list and retirement rule: [ADR 604](docs/adr/604-scope-freeze.md).
+
 Parallel sessions and parallel agents must not collide on the same Issue. Two layers:
 
 ### Who holds this

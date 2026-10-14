@@ -92,6 +92,25 @@ khác.
   này trên repo kia. Một repo chưa có production không phải repo tệ hơn; nó là
   repo có ít cổng hơn.
 
+### Phạm vi — và phần bị đóng băng
+
+Phạm vi của handbook là **cách code vào git**: tier và exposure,
+`project.yml`, branch và commit, CI của branch, worktree và port, claim ref
+trên git, cơ chế ship và release, template CI, kiểm tra tuân thủ, adopt và
+`solo`. Từ 2026-10-14
+([#604](https://github.com/futurelastic/colab-handbook/issues/604)), phần quyết
+định *ai giữ issue, đã quyết gì, việc gì được bắt đầu, và ai được làm một hành
+động* bị **đóng băng**: claim ghi trên issue, readiness, provenance `Filed-by`,
+decision record, và mọi cổng `COLAB_HUMAN=1` trừ `solo`. Phần này sẽ chuyển
+sang một lớp quyết định, công việc và cổng riêng do bên adopt tự chạy. Nó vẫn
+chạy, bug fix vẫn được nhận, và không gì bị gỡ trước khi phần thay thế đã chạy
+production đủ 7 ngày. Thông báo nằm ở đầu
+[`CONVENTIONS.md` §5](CONVENTIONS.md#5-claiming-work--how-to-say-im-on-this); danh sách
+đầy đủ ở [ADR 604](docs/adr/604-scope-freeze.md).
+
+**Đóng góp:** đề xuất tính năng mới trong vùng bị đóng băng sẽ bị từ chối, kèm
+đường dẫn tới [#604](https://github.com/futurelastic/colab-handbook/issues/604).
+
 ## Phiên làm việc đầu tiên
 
 Mỗi đầu việc đi qua một vòng. Mỗi bước là một skill, gọi theo tên trong phiên
