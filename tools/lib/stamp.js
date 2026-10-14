@@ -475,6 +475,9 @@ const WORKFLOW_FINGERPRINTS = [
   { marker: 'CI (Node) — TEMPLATE. Copy me into your repo', kind: 'text', template: 'ci-node' },
   { marker: 'CI (Laravel) — TEMPLATE. Copy me into your repo', kind: 'text', template: 'ci-laravel' },
   { marker: 'CI (Python) — TEMPLATE. Copy me into your repo', kind: 'text', template: 'ci-python' },
+  { marker: 'CI heavy lane (Node) — TEMPLATE. Copy me into your repo', kind: 'text', template: 'ci-node-heavy' },
+  { marker: 'CI heavy lane (Laravel) — TEMPLATE. Copy me into your repo', kind: 'text', template: 'ci-laravel-heavy' },
+  { marker: 'CI heavy lane (Python) — TEMPLATE. Copy me into your repo', kind: 'text', template: 'ci-python-heavy' },
   { marker: 'Release (tag) — TEMPLATE. Copy me into your repo', kind: 'text', template: 'release-tag' },
   { marker: 'Release (auto) — TEMPLATE. Copy me into your repo', kind: 'text', template: 'release-auto' },
   { marker: 'Deploy (SSH/rsync to shared hosting) — TEMPLATE. Copy me into your repo', kind: 'text', template: 'deploy-xserver' },
@@ -555,6 +558,18 @@ function workflowProvenance(text, stem, tmplNames) {
   }
   if (tmplNames.has(stem)) return { origin: 'name-only', template: stem, evidence: [] };
   return { origin: 'none', template: null, evidence: [] };
+}
+
+/**
+ * Is this provenance a CI template copy (#607)? Its named template is a `ci-*` one, or — when the
+ * evidence names several (a heavy-lane copy carries the light lane's step names too) — every
+ * attributed marker it matched belongs to a `ci-*` template. A CI copy's drift is information.
+ */
+function isCiProvenance(prov) {
+  if (!prov || prov.origin !== 'derived') return false;
+  if (prov.template) return /^ci-/.test(prov.template);
+  const owners = WORKFLOW_FINGERPRINTS.filter((fp) => fp.template && prov.evidence.some((e) => e === fp.marker || e.includes(fp.marker) || fp.marker.includes(e))).map((fp) => fp.template);
+  return owners.length > 0 && owners.every((n) => /^ci-/.test(n));
 }
 
 /**
@@ -745,7 +760,7 @@ module.exports = {
   AXES, axesPredating,
   WRITES_VETO_MARKER, writesRulingKnownAt,
   stampLine, stampCommentPrefix, insertStamp, parseWorkflowStamp, parseClaudeStamp,
-  fingerprintHits, workflowProvenance, unstampedFinding,
+  fingerprintHits, workflowProvenance, unstampedFinding, isCiProvenance,
   looksLikeHandbookWorkflow, looksLikeHandbookClaude,
   cmpParts, cmpSemver, sameContent, classifyStamped,
 };

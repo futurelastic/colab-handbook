@@ -86,15 +86,17 @@ function auditWithHandbook(hbDir, targetDir) {
     ok: r.ok,
     fails: r.findings.filter((f) => f.level === 'fail').map((f) => f.text),
     warns: r.findings.filter((f) => f.level === 'warn').map((f) => f.text),
+    suggestions: r.suggestions || [],
   };
 }
 
 const hasText = (list, rx) => list.some((t) => rx.test(t));
 
-test('a plain drift commit (no trailer) still fails on both the CI workflow and the CLAUDE block — the default is unaffected', () => {
+test('a plain drift commit (no trailer) still fails the CLAUDE block — the default is unaffected; CI drift is a suggestion (#607)', () => {
   const hb = fakeHandbook('fix(templates): comment tweak');
   const r = auditWithHandbook(hb, fixtureStampedAtV1());
-  assert.ok(hasText(r.fails, /ci\.yml copied @ v1\.0\.0 — template changed since/), r.fails.join(' | '));
+  assert.ok(!hasText([...r.fails, ...r.warns], /ci\.yml/), r.fails.join(' | '));
+  assert.ok(hasText(r.suggestions, /ci\.yml copied @ v1\.0\.0 — template has a newer suggestion/), r.suggestions.join(' | '));
   assert.ok(hasText(r.fails, /CLAUDE block copied @ v1\.0\.0 — template changed since/), r.fails.join(' | '));
 });
 
@@ -108,13 +110,11 @@ test('Rule-Neutral: yes downgrades the CLAUDE-block (non-CI) drift to a warn, ci
   );
 });
 
-test('Rule-Neutral: yes does NOT rescue a CI workflow — the same carve-out ceremony: light already respects', () => {
+test('Rule-Neutral: yes is moot on a CI workflow — CI drift is a suggestion either way (#607)', () => {
   const hb = fakeHandbook('fix(templates): comment tweak\n\nRule-Neutral: yes');
   const r = auditWithHandbook(hb, fixtureStampedAtV1());
-  assert.ok(
-    hasText(r.fails, /ci\.yml copied @ v1\.0\.0 — template changed since/),
-    `CI drift must stay a fail even when declared: ${r.fails.join(' | ')}`,
-  );
+  assert.ok(!hasText([...r.fails, ...r.warns], /ci\.yml/), [...r.fails, ...r.warns].join(' | '));
+  assert.ok(hasText(r.suggestions, /ci\.yml copied @ v1\.0\.0 — template has a newer suggestion/), r.suggestions.join(' | '));
 });
 
 test('a differently-spelled trailer (not Rule-Neutral) is not read as a declaration — still a fail', () => {

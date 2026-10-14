@@ -961,9 +961,9 @@ field: [ADR 539](docs/adr/539-schema-checks-and-gates-rationale.md).
 verdict the skills read (#410), never what CI is or how thorough it must be.
 
 A repo needing something its copied workflow doesn't cover edits that file directly.
-Copy-and-own already permits this, and the audit already classifies the edit as drift to
-reconcile, not a violation — the same treatment [`templates/`](templates/) gives every
-other stamped file. Nothing here refuses customization; it refuses a *declared summary* of
+Copy-and-own already permits this, and the audit reads the edit as a suggestion at most — CI
+templates are guidance (#607; [CONVENTIONS.md §7, *What ship reads*](CONVENTIONS.md#what-ship-reads--the-ci-contract-607)).
+Nothing here refuses customization; it refuses a *declared summary* of
 behavior the session-shape/`exposure` axes already determine.
 
 ### `ceremony` — optional
@@ -1426,8 +1426,8 @@ The docs-only path list. `colab ship` lands a change whose every path is documen
   `.` or leading `/`, only `[A-Za-z0-9._/-]`. Anything else, an empty value included, is a finding
   and reads as off. A `.txt` a suite pulls in under a name that is not a build input (a `-r`
   include): list it. The list never narrows the autonomy exception (#345).
-- The CI templates' #570 guard reads the same list but stays opt-in until its follow-up: there,
-  absent and `off` both run the full suite. One reading in tooling: `tools/lib/docs-only.js`
+- A CI copy cut before #607 may still run the #570 guard, which reads the same list but opt-in:
+  there, absent and `off` both run the full suite. One reading in tooling: `tools/lib/docs-only.js`
   `parseCiDocsSkip` (`--json`: `ciDocsSkip` — the list, `"off"`, or null when invalid).
 
 **`.github/secret-scan-terms` — optional.** Forbidden terms for that secret check, read at the

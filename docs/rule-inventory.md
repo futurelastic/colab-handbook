@@ -2033,6 +2033,15 @@ Each entry lists the rule text of a unit whose rationale clause moved out (the u
 | C7.ci.03 | default |  | Every pull request must run, at minimum, a secret scan and a build. | every pull request must run, at minimum, a secret scan and a build | CONVENTIONS.md | — |
 | C7.ci.04 | default |  | CI must trigger on pushes to the trunk itself, not only on branches the trunk no longer is. | CI must trigger on pushes to the trunk itself, not only on branches the trunk no | CONVENTIONS.md | — |
 | C7.ci.05 | default |  | When a repo's trunk moves, updating the CI triggers is part of the move. | When a repo's trunk moves, updating the CI triggers is part of the move, and the audit checks it. | CONVENTIONS.md | — |
+| C7.ci.06 | default |  | CI templates are guidance; the handbook enforces only what colab ship reads, and a copy's drift is a suggestion, never a fail or warn. | The CI templates are guidance; the handbook enforces only what `colab ship` reads. | CONVENTIONS.md | #607 |
+| C7.ci.07 | default |  | The CI contract the audit checks: a run on every trunk push, on a branch push under gate: ci, on ship-batch/** where ship-batch > 1, and a Migration round-trip job under migration-grant: reviewer. | The contract the audit does check: a run on | CONVENTIONS.md | #607 |
+| C7.ci.08 | default |  | Ship counts push and pull-request runs only (or ship-gate-workflows); scheduled and dispatched runs are set aside. | Ship counts push and pull-request runs only | CONVENTIONS.md | #607 |
+| C7.lanes.01 | default |  | The light lane runs on every push (secret scan, build, typecheck/lint, fast tests, ~5 min p50) and is the lane ship reads. | It is the lane ship reads. | CONVENTIONS.md | #607 |
+| C7.lanes.02 | default |  | The heavy lane never runs on a push: nightly on trunk's tip (skipped on an unmoved trunk) and at every official build. | never on a push: the whole suite | CONVENTIONS.md | #607 |
+| C7.lanes.03 | default |  | release-tag publishes only on a green heavy lane; release-auto finalizes a candidate only on its green heavy run at that exact sha. | finalizes a candidate only on its green run at that exact sha | CONVENTIONS.md | #607 |
+| C7.lanes.04 | default |  | A red nightly is a trunk finding, not a merge block: one trunk-red issue per lane names the commits since the last green nightly. | A red nightly is a trunk finding, not a merge block. | CONVENTIONS.md | #607 |
+| C7.lanes.05 | default |  | The adopter marks heavy tests by a per-stack marker; an unmarked test is light. | The adopter marks heavy tests; an unmarked test is light | CONVENTIONS.md | #607 |
+| C7.lanes.06 | default |  | live and released repos run the heavy lane before every official build; none and self may run it nightly only. | and `released` run the heavy lane before every official build | CONVENTIONS.md | #607 |
 
 ### CI — what it is follows the unit's shape, how much follows exposure
 
@@ -2111,7 +2120,7 @@ Each entry lists the rule text of a unit whose rationale clause moved out (the u
 | C8.stamps.09 | default |  | The person editing templates/ declares rule-neutrality with a Rule-Neutral: yes commit trailer. | the person editing `templates/` states the claim themselves | CONVENTIONS.md | — |
 | C8.stamps.10 | default |  | The audit downgrades fail to warn only when every commit touching that template since the stamp carries the trailer. | The audit only downgrades fail→warn when every commit touching that template | CONVENTIONS.md | — |
 | C8.stamps.11 | default |  | Declaring nothing is the default and keeps today's drift reporting. | Declaring nothing is the default and it is exactly today's behaviour | CONVENTIONS.md | — |
-| C8.stamps.12 | default |  | CI and secret-scan templates (ci-*) are never eligible for the rule-neutral downgrade. | CI and secret-scan templates (`ci-*`) are never eligible, trailer or not | CONVENTIONS.md | — |
+| C8.stamps.12 | default |  | A CI template's (ci-*) stamp drift, unknown, newer or unstamped copy is a suggestion only — CI templates are guidance. | except on a CI template (`ci-*`), where each is a | CONVENTIONS.md | #607 |
 | C8.stamps.13 | default |  | A Rule-Neutral declaration is a claim about intent; a false one is a human error to catch in review. | This is a claim about intent, not a computed fact | CONVENTIONS.md | — |
 | C8.stamps.14 | hard | tools/lib/squash.js::Rule-Neutral | The Rule-Neutral trailer must survive the squash, so it stays on the squash's carried-trailer allowlist. | The trailer must survive the squash. This repo's own | CONVENTIONS.md | — |
 | C8.stamps.15 | hard | tools/colab::Rewrite a behind-but-pristine workflow copy as the current template | colab update --apply refreshes only copies still pristine as of their own stamp and never commits or rewrites a hand-edited copy. | refreshes only those still pristine as of their own stamp — never commits, never rewrites a | CONVENTIONS.md | — |

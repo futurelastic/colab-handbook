@@ -243,8 +243,18 @@ jobs:
       # both disabled is clean on current templates/*.yml + this repo's own ci.yml, and
       # fails at the exact offending line when #245's job-level `if: hashFiles(...)` is
       # reintroduced.
+      # #607: release-tag.yml calls ./.github/workflows/ci-heavy.yml, which actionlint resolves on
+      # disk — so it is linted in an adopter's layout, once per stack's heavy lane, which also checks
+      # the call against each heavy template's inputs and permissions.
       - name: actionlint templates/*.yml + this repo's own workflow
-        run: actionlint -shellcheck= -pyflakes= templates/*.yml .github/workflows/*.yml
+        run: |
+          actionlint -shellcheck= -pyflakes= $(ls templates/*.yml | grep -v '/release-tag\.yml$') .github/workflows/*.yml
+          for s in node python laravel; do
+            d="$RUNNER_TEMP/adopter-$s"; mkdir -p "$d/.github/workflows"
+            cp "templates/ci-$s-heavy.yml" "$d/.github/workflows/ci-heavy.yml"
+            cp templates/release-tag.yml "$d/.github/workflows/release.yml"
+            (cd "$d" && git init -q && actionlint -shellcheck= -pyflakes= .github/workflows/*.yml)
+          done
 
   # #588: this repo calls its own reusable instruction-files workflow, at THIS sha, so every push
   # exercises the file adopters call — the same caller as templates/instruction-files.yml, plus

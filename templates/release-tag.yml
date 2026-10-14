@@ -8,9 +8,15 @@
 #
 # EDIT POINTS are marked `# EDIT:` — walk them once after copying.
 #
-# TIER A ONLY. Under the tiered branch model, a Tier A release is: merge dev -> main,
-# heavy CI on main goes green, tag v*.*.*. The tag is what triggers deployment. This
-# workflow runs alongside that deploy and produces the human-facing record of the release.
+# TIER A ONLY. Under the tiered branch model, a Tier A release is: merge dev -> main, tag
+# v*.*.*. The tag is what triggers deployment. This workflow runs alongside that deploy and
+# produces the human-facing record of the release.
+#
+# THE HEAVY LANE GATES THE RECORD (#607). The `heavy` job below calls ci-heavy.yml (copied
+# from templates/ci-<stack>-heavy.yml) at the tag's commit, and `release` publishes only when
+# it is green — a red heavy lane leaves no release record. EDIT: your deploy workflow fires on
+# the same tag independently; to hold the deploy too, give it the same `heavy` job and `needs:`.
+# No heavy lane in this repo? Delete the `heavy` job and the `needs:` line.
 #
 # Do NOT copy this into a Tier C repo. Tier C has no tag step — promotion dev -> main
 # IS the deploy — so this workflow would never fire. Tier B has no production at all.
@@ -88,8 +94,19 @@ env:
   # tag as a full release. Pre-release is derived from the tag name in the step below.
 
 jobs:
+  heavy:
+    name: Heavy lane at this tag
+    uses: ./.github/workflows/ci-heavy.yml
+    with:
+      ref: ${{ github.ref_name }}
+    permissions:
+      actions: read
+      contents: read
+      issues: write # only its nightly report job writes, and it never runs on a tag
+
   release:
     name: Publish release
+    needs: heavy
     runs-on: ubuntu-latest # EDIT: self-hosted label if this repo needs one.
     permissions:
       # Required to create the release. Nothing else is needed — keep it minimal.

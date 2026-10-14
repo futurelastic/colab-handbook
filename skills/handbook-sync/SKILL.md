@@ -86,6 +86,9 @@ re-apply: exclude lines, stub, the four labels, checkout) plus whatever the audi
 The reverse case: the audit warns that the descriptor is **untracked and not excluded**.
 Decide which of the two it is (commit it, or `colab adopt --local`) before anything else.
 
+**A CI template copy (`ci-*`, light or heavy) is guidance (#607):** its states are suggestions —
+offer, never require. Only what ship reads binds: [4-trigger-blocks.md](4-trigger-blocks.md#ci-copies-are-guidance-607).
+
 **`behind` does not mean "your file is old".** It means the *template* moved. If the
 template never changed, a stamp from three releases ago is still current — which is
 why this check compares template history, not version strings.
@@ -170,7 +173,7 @@ If the upstream change conflicts with why you edited the file, that is a **findi
 say so on the Issue rather than silently choosing. Someone made both decisions for a
 reason and they now disagree.
 
-### The CI trigger blocks (#384, #512, #599) — decide per copy before grafting
+### The CI trigger blocks (#384, #512, #599) — suggestions, decided per copy
 
 Full text, with the runner table and the per-copy decision rows:
 [4-trigger-blocks.md](4-trigger-blocks.md).
@@ -181,8 +184,8 @@ Full text, with the runner table and the per-copy decision rows:
   same-repo PR commit twice; offer dropping `pull_request` only where fork PRs cannot arrive and
   the copy has more than a trunk-only push. Check what the PR run was carrying (a Laravel
   `RUN_TESTS`) first; never replace the trigger with an `if:` skip or `paths-ignore`.
-- A `cancel-in-progress` that is unconditionally `true`, or a trunk missing from the cancel list, is
-  a **finding**: trunk runs get cancelled.
+- A `cancel-in-progress` that is unconditionally `true`, or a trunk missing from the cancel list:
+  say so — trunk runs get cancelled, which can leave ship without a run at trunk's head.
 - **instruction-files caller (#599):** where the audit flags it, graft the template's `on:` — no runner decision.
 
 ## 5. `unstamped` — establish lineage before touching anything
@@ -280,7 +283,7 @@ and the audit is what catches it:
   binaries to dist refs (`templates/dist-refs.yml` + `templates/npx-launcher.mjs`, CONVENTIONS.md
   §6 *Distribution*); an asset that is only a by-product (an SBOM) can stay — it is a warning.
 - **A tag-triggered deploy copy must exclude pre-release tags (#513):** `- "!v*.*.*-*"` right after `- "v*.*.*"`, else every candidate tag deploys; the audit fails it under `deploy: tag` — [graft and exemptions](7-convention-drift.md#a-tag-triggered-deploy-copy-must-exclude-pre-release-tags-513).
-- **A long-running CI or deploy job must declare `timeout-minutes` (#577):** a `deploy-*` job, or a `ci-*` `build` / live `migrations` job, without one is a finding — offer the template's value plus its `# EDIT:` note, sized by the adopter above their own p99, and never overwrite a value the copy has — [check and graft](7-convention-drift.md#a-long-running-ci-or-deploy-job-must-declare-timeout-minutes-577).
+- **A long-running CI or deploy job should declare `timeout-minutes` (#577):** a `deploy-*` job without one is a finding; a `ci-*` `build` / live `migrations` job without one is a suggestion (#607) — offer the template's value plus its `# EDIT:` note, sized by the adopter above their own p99, and never overwrite a value the copy has — [check and graft](7-convention-drift.md#a-long-running-ci-or-deploy-job-must-declare-timeout-minutes-577).
 - A workflow may trigger on branches that no longer exist — CI passing on nothing.
 - **A convention label may have been added since this repo adopted.** The label set
   is part of the model, and a repo that adopted at an older version never back-filled
@@ -358,17 +361,14 @@ git show --stat                                                 # verify the fil
 
 ## Verify complete
 
-- `colab update .` reports no `behind` for this repo.
+- `colab update .` reports no `behind` for this repo outside `ci-*` copies (those are suggestions, #607).
 - Every `diverged` item is either grafted and re-stamped, or left with a written
   reason on the Issue — never silently skipped.
 - Every `unstamped` item is either stamped after checking lineage, or reported.
-- Every `ci-*` copy either carries the every-branch trigger block (#384) or has the
-  single-runner warning recorded on the Issue (§4) — never neither.
-- Every `ci-*` copy either carries the single-run trigger block (#512) or has the reason it
-  keeps `pull_request` (trunk-only push, fork PRs) recorded on the Issue (§4).
+- The CI copies meet the ship contract (§1); trigger blocks, timeouts and lanes are offered, not required (#607).
 - `audit.mjs --local .` is clean, or each remaining finding is explained.
 - `git show --stat` on your commits lists only files you meant to change.
-- Every tag-triggered `deploy-*` copy excludes pre-release tags, and every long-running CI/deploy job declares `timeout-minutes` (§7) — or the reason is on the Issue.
+- Every tag-triggered `deploy-*` copy excludes pre-release tags, and every long-running deploy job declares `timeout-minutes` (§7) — or the reason is on the Issue. On a `ci-*` copy the timeout is a suggestion.
 - The §7 convention-drift check ran. Every `value`/`meaning` hit and every divergent text
   is reverted, refreshed, or declared in `Local divergences:` with a handbook issue URL.
   None is left reported as a local customisation.

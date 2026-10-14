@@ -9981,7 +9981,9 @@ What this command will NOT do, by design:
   • It skips the handbook repo itself.
 
 Exit code: 0 when nothing is behind, 1 when anything is behind — the frozen copy included,
-since a stale CLI is as much a thing to act on as a stale workflow. 2 on usage error.
+since a stale CLI is as much a thing to act on as a stale workflow — except a CI template
+(\`ci-*\`) copy: CI templates are guidance, so one behind is reported but never exits 1 (#607).
+2 on usage error.
 `;
 
 function cmdUpdate(argv) {
@@ -10056,7 +10058,11 @@ function cmdUpdate(argv) {
     skippedRepos: repos.filter((r) => !r.artifacts.length).length,
     refreshable: all.filter((a) => a.state === 'behind' && a.applicable && !a.written).length,
     written: written.length,
+    // #607: a CI template is guidance — a `ci-*` copy behind its template is a suggestion, counted in
+    // `behind` (it can still be refreshed) but never what makes this command exit 1.
+    suggestions: all.filter((a) => a.state === 'behind' && /^ci-/.test(a.template || '')).length,
   };
+  const actionable = summary.behind - summary.suggestions;
 
   if (opts.json) {
     print(JSON.stringify({
@@ -10066,7 +10072,7 @@ function cmdUpdate(argv) {
       applied: !!opts.apply,
       repos, written, failed, frozen, summary,
     }, null, 2));
-    return summary.behind > 0 || frozen.state === 'behind' ? 1 : 0;
+    return actionable > 0 || frozen.state === 'behind' ? 1 : 0;
   }
 
   // --- report ------------------------------------------------------------
@@ -10109,6 +10115,9 @@ function cmdUpdate(argv) {
     `${summary.current} current, ${summary.behind} behind, ${summary.diverged} diverged, ` +
     `${summary.unstamped} unstamped, ${summary.na} n-a` +
     (summary.unrelated ? `, ${summary.unrelated} unrelated (name clash only — not ours).` : '.'));
+  if (summary.suggestions) {
+    print(`${summary.suggestions} of the behind copies are CI templates — guidance, adopt what helps; they never fail this command (#607).`);
+  }
   if (summary.skippedRepos) {
     print(`${summary.skippedRepos} repo(s) had nothing to assess (nothing adopted, an audit-only slug, a missing path, or the handbook itself).`);
   }
@@ -10143,7 +10152,7 @@ function cmdUpdate(argv) {
     print('  --apply never touches it: it is the toolchain your always-on services are running.');
   }
 
-  return summary.behind > 0 || frozen.state === 'behind' ? 1 : 0;
+  return actionable > 0 || frozen.state === 'behind' ? 1 : 0;
 }
 
 // ---------------------------------------------------------------------------

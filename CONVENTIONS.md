@@ -1554,28 +1554,11 @@ reading either sees the same spelling. Spell them exactly so, everywhere:
   cited head that is local and whose tree provably differs from trunk's (`HUMAN_GATED` —
   trunk is untested at that sha). A citation that cannot be read leaves the run green and says
   so, because the run's own `success` is the verdict, exactly as for #418. Why: [ADR 539](docs/adr/539-branch-ci-rationale.md).
-- **A docs-only change from a green base is tested — the CI templates' legacy guard, where the
-  repo opts in (#570).** `colab ship` now decides docs-only itself ([*Docs-only — no CI wait*](#docs-only--no-ci-wait-606),
-  below), and this guard is on its way to guidance in a follow-up; until then it keeps working,
-  and its `success` + `docs-only-skip` notice still reads green. When
-  neither mode above applies, a repo that declares `ci-docs-skip` (`project.schema.md`) gets a
-  third question from the same guard, on a ref-creating push and on a push to trunk: is every
-  path changed since the base documentation — by the rule `colab ship`'s docs-only exception
-  applies ([§2](#autonomy--the-docs-only-exception-345), `tools/lib/docs-only.js`) — and does the
-  base have a green run of this workflow? The base is the merge base with trunk on a new branch,
-  and the previous tip on trunk. Yes ⇒ the suite is skipped, the run concludes `success`, and
-  the guard leaves a `docs-only-skip` notice naming the base and its green run, which
-  `colab ship` and `colab trunk-ci` print. **The rule: a green base plus a change no suite reads
-  is tested.** It needs both halves. The green base is why a docs commit on a red trunk still
-  runs (it cannot make red green), and the opt-in is why the rule is never assumed: some suites
-  *do* read documentation (`docs/api/` feeding a generator, a link checker), and those paths are
-  listed in `ci-docs-skip` so a change to them always runs the suite. `paths-ignore` is not
-  the same thing: a docs-only squash would then have *no* trunk run, which ship reads as
-  `none`. The guard reads the opt-in at the pushed sha, so a branch that adds it is not itself
-  docs-only. Any doubt — no opt-in, an unreadable value, a red or unrun base, an API or fetch
-  failure — runs the full suite. A run skipped this way skipped every job but the guard, so
-  tree mode never cites it (#511). The template cannot load `docs-only.js`, so it carries the
-  rule in shell, pinned to the module path by path by `tools/lib/ci-template-docs-only.test.js`.
+- **The docs-only guard has left the templates (#607).** `colab ship` decides docs-only itself
+  ([*Docs-only — no CI wait*](#docs-only--no-ci-wait-606), below), so a template no longer carries
+  the rule in shell. A copy that still runs the #570 guard keeps working: its `success` +
+  `docs-only-skip` notice reads green. A `paths-ignore` for docs is safe now, and the templates show
+  one as an option: a docs-only trunk tip with no run is read at its newest code commit.
 - **An unclassifiable red is `red:finding`.** Where a repo does not separate exit 1 from
   exit 2, `failure` is all the platform reports: read the failing job's log far enough to
   say which side of the line it fell on, and if that cannot be told, report `red:finding`. Why: [ADR 539](docs/adr/539-branch-ci-rationale.md).
@@ -1719,8 +1702,8 @@ decides this; the CI templates do not.** Why: [ADR 606](docs/adr/606-docs-only-n
   refuses with the file and line, never the matched text.
 - Every other precondition still applies; the classification and the scan are both measured again
   after B0 sync. The 🚢 comment records `docs-only: CI not required (<n> files)` and the trunk sha CI
-  was read at. The templates' #570 guard keeps working until its follow-up: its `docs-only-skip`
-  `success` still reads green.
+  was read at. A copy still carrying the #570 guard keeps working: its `docs-only-skip` `success`
+  still reads green.
 
 ### Who may touch a branch — the coordinator never edits implementer work (#409)
 
@@ -4474,6 +4457,32 @@ a **build**.
 longer is. Why: [ADR 539](docs/adr/539-ci-toolchain-rationale.md). When a repo's
 trunk moves, updating the CI triggers is part of the move, and the audit checks it.
 
+### What ship reads — the CI contract (#607)
+
+**The CI templates are guidance; the handbook enforces only what `colab ship` reads.** A copy may
+differ from its template in any way: the audit prints that drift as a `▸` suggestion, never a fail
+or warn, and `colab update` never exits 1 on it. The contract the audit does check: a run on
+every push to trunk (above), on a branch push where `gate: authoritative: ci`, on `ship-batch/**`
+where `ship-batch` is above 1, and a `Migration round-trip…` job where `migration-grant: reviewer`.
+Ship counts push and pull-request runs only (or what `ship-gate-workflows` names); scheduled and
+dispatched runs are set aside (`tools/lib/verify-runs.js`). Why: [ADR 607](docs/adr/607-ci-templates-guidance-two-lanes.md).
+
+### Two lanes — light on every merge, heavy on official builds and nightly (#607)
+
+- **Light** (`ci-<stack>.yml` → `ci.yml`), on every push: secret scan, build, typecheck/lint, the
+  fast tests — about 5 minutes at p50. It is the lane ship reads.
+- **Heavy** (`ci-<stack>-heavy.yml` → `ci-heavy.yml`), never on a push: the whole suite,
+  integration, browser/e2e, both configurations of a switched epic, load. It runs nightly on
+  trunk's tip, and is skipped when trunk has not moved since the last green nightly. It runs at
+  every official build: `release-tag.yml` publishes only on its green, and `release-auto.yml`
+  finalizes a candidate only on its green run at that exact sha.
+- **A red nightly is a trunk finding, not a merge block.** It opens one `trunk-red` issue per
+  lane, naming the commits since the last green nightly.
+- **The adopter marks heavy tests; an unmarked test is light**: a `test:heavy` script (Node), the
+  pytest marker `heavy`, or the Pest/PHPUnit group `heavy`.
+- **The trade-off:** a defect the light lane misses can sit on trunk for up to a day. A repo with
+  a merge queue and runners to spare may add a full run per batch as a third trigger.
+
 ### CI — what it is follows the unit's shape, how much follows exposure
 
 **What CI *is* comes from whether the unit has a branch — a fact about the session, not a
@@ -4495,7 +4504,10 @@ this fact, not a field.
 
 **How thorough it must be comes from [exposure](#exposure--what-consumes-a-merge-here).**
 `none` and `self` answer only to the room; `live` and `released` answer to a consumer with
-no way to ask a clarifying question, so more has to be caught before it reaches them.
+no way to ask a clarifying question, so more has to be caught before it reaches them. With two
+lanes ([below](#two-lanes--light-on-every-merge-heavy-on-official-builds-and-nightly-607)), `live`
+and `released` run the heavy lane before every official build; `none` and `self` may run it
+nightly only.
 
 **On low-exposure repos the gate is often not CI at all.** A deploy script that refuses a
 dirty tree is a stronger gate than any CI run, because it is the last thing before the
@@ -4521,8 +4533,8 @@ release one is what ships
 ([*Switched epics*](#switched-epics--concurrent-unfinished-features-336), rule 2).
 
 **No `ci:` field.** A repo needing something its copied templates don't cover edits that
-workflow directly — copy-and-own already permits it, and the audit already classifies the
-edit as drift to reconcile, the same treatment every other stamped file gets. See
+workflow directly — copy-and-own already permits it, and the audit reads the edit as a
+suggestion at most (#607). See
 [`project.schema.md`](project.schema.md#ci--deliberately-not-a-field).
 
 ### CI artifacts — your own store, not the allowance (#601)
@@ -4644,7 +4656,8 @@ is **stamped** with the handbook version it came from:
 
 The audit compares each stamp against the handbook's git history: a template **changed
 since the stamped version** is a finding; an unstamped copy, unknown template, or a
-stamp newer than the handbook is advisory. Reconcile deliberately: read the diff,
+stamp newer than the handbook is advisory — except on a CI template (`ci-*`), where each is a
+`▸` suggestion: CI templates are guidance (#607). Reconcile deliberately: read the diff,
 `colab template <name> --force`, commit.
 
 **A rule-neutral change downgrades the finding to a warn — declared, never inferred
@@ -4664,9 +4677,6 @@ Rule-Neutral: yes
   the range and the whole span stays a hard fail, same as today.
 - **Declaring nothing is the default and it is exactly today's behaviour** — an editor
   who never writes the trailer changes nothing about how drift is reported.
-- **CI and secret-scan templates (`ci-*`) are never eligible**, trailer or not — the
-  same carve-out `ceremony: light` already respects (above): integrity there is not
-  optional on any setting, so a declaration cannot soften it either.
 - This is a claim about intent, not a computed fact — a false declaration is a human
   error to catch in review, the same as a false `Closes #N` or a mis-typed commit
   prefix elsewhere in this file; the audit trusts the trailer exactly as far as it
