@@ -513,7 +513,10 @@ function laneHold({ batches, trunkNow, nowMs, graceSec = LANE_GRACE_SEC } = {}) 
   const fresh = (atMs) => Number.isFinite(atMs) && Number.isFinite(nowMs) && (nowMs - atMs) < graceSec * 1000;
   const mins = (atMs) => `${Math.max(0, Math.round((nowMs - atMs) / 60000))}m ago`;
   for (const b of (Array.isArray(batches) ? batches : [])) {
-    if (!b || !b.base7 || !now.startsWith(b.base7)) continue;
+    // #605: a chained batch (`rooted`, from batchChains) is part of the one holder its root is —
+    // built on another batch's head, so it reaches trunk only through that chain. Without the flag,
+    // only a batch built on trunk's tip counts, exactly as before.
+    if (!b || !b.base7 || !(b.rooted === undefined ? now.startsWith(b.base7) : b.rooted)) continue;
     const v = b.verdict || { state: 'pending', why: 'the run list could not be read' };
     if (v.state === 'red') { released.push({ ref: b.ref, why: `declined — ${v.why}` }); continue; }
     if (v.state === 'pending') return { held: true, ref: b.ref, why: `combined run in flight (${v.why})` };
@@ -530,6 +533,72 @@ function laneHold({ batches, trunkNow, nowMs, graceSec = LANE_GRACE_SEC } = {}) 
       : 'combined run green, but when it went green could not be read — not provably alive' });
   }
   return { held: false, released };
+}
+
+/**
+ * #605: speculative chains. A batch built with `--onto <ship-batch ref>` sits on that ref's HEAD, and
+ * its name already says so: `ship-batch/<parent-head-sha7>`. So the whole chain is read from
+ * `ls-remote` alone — a ref's parent is the ref whose head sha starts with its base7, and a ref is
+ * ROOTED when following parents ends at a ref built on trunk's tip. No chain state is kept anywhere.
+ *
+ * In:  refs `[{ ref, base7, sha }]` (every ship-batch/* on the remote), `trunkNow`.
+ * Out: Map ref → `{ ref, base7, sha, parentRef, rootRef, rootSha, depth, rooted, why }`:
+ *   - parentRef  null for a batch built on trunk's tip, else the ref it was built on (null too
+ *                when that ref is gone — then `rooted` is false);
+ *   - rootSha    trunk's tip when rooted, else null;
+ *   - depth      1 at trunk's tip, 2 for its child, …;
+ *   - why        for an unrooted ref, the reason it is (the sweep deletes it, and says this).
+ * A chain deeper than MAX_CHAIN_DEPTH is not rooted: every link pins trunk for one more combined run,
+ * and a wrong guess low in the chain throws away every run above it.
+ */
+const MAX_CHAIN_DEPTH = 3;
+
+function batchChains({ refs, trunkNow } = {}) {
+  const now = String(trunkNow || '');
+  const all = (Array.isArray(refs) ? refs : []).filter((r) => r && r.ref && r.base7 && r.sha);
+  const parentOf = (r) => all.find((p) => p !== r && String(p.sha).startsWith(r.base7)) || null;
+  const out = new Map();
+  for (const r of all) {
+    const atTip = !!now && now.startsWith(r.base7);
+    const parent = atTip ? null : parentOf(r);
+    let cur = r, depth = 1, why = null, root = null;
+    const seen = new Set([r.ref]);
+    while (true) {
+      if (now && now.startsWith(cur.base7)) { root = cur; break; }
+      const p = parentOf(cur);
+      if (!p) {
+        why = cur === r ? `its base ${r.base7} is neither trunk's tip nor the head of another batch ref — trunk moved, or its parent was rebuilt or deleted`
+          : `its chain breaks at ${cur.ref}, whose base ${cur.base7} is neither trunk's tip nor another batch's head`;
+        break;
+      }
+      if (seen.has(p.ref)) { why = `its chain loops at ${p.ref}`; break; }
+      seen.add(p.ref);
+      cur = p;
+      depth += 1;
+      if (depth > MAX_CHAIN_DEPTH) { why = `its chain is deeper than ${MAX_CHAIN_DEPTH}`; break; }
+    }
+    out.set(r.ref, {
+      ref: r.ref, base7: r.base7, sha: r.sha, parentRef: parent ? parent.ref : null,
+      rootRef: root ? root.ref : null, rootSha: root ? now : null, depth, rooted: !!root, why,
+    });
+  }
+  return out;
+}
+
+/**
+ * #605: what a chained batch (built `--onto` a parent) does when it is ready to land but its parent
+ * has not landed yet — trunk's tip is not its base. Facts: the parent's chain entry (null = gone)
+ * and the parent's combined verdict.
+ *   wait     the parent is rooted and its run is in flight, not yet run, or green → exit 3
+ *   decline  the parent is gone, unrooted, or red → nothing of this chain can land in order: delete
+ *            this batch and decline it (exit 4)
+ */
+function chainedLandStep({ parent, parentVerdict } = {}) {
+  if (!parent) return { step: 'decline', why: 'its parent batch is gone — discarded, or rebuilt on another head' };
+  if (!parent.rooted) return { step: 'decline', why: `its parent ${parent.ref} is no longer rooted at trunk's tip (${parent.why})` };
+  const v = parentVerdict || { state: 'pending', why: 'the run list could not be read' };
+  if (v.state === 'red') return { step: 'decline', why: `its parent ${parent.ref} is red (${v.why}) — it will not land at the sha this batch was built on` };
+  return { step: 'wait', why: `its parent ${parent.ref} has not landed yet (${v.state === 'green' ? 'green, waiting for its lander' : (v.why || v.state)})` };
 }
 
 /** #581: when a batch's combined run settled — the newest `updatedAt` among its finished rows, else null. */
@@ -599,5 +668,5 @@ module.exports = {
   droppedTrailer, parseDroppedTrailers, appendTrailers,
   branchCiClass, memberEligibility, selectMembers, wiring, combinedVerdict, nextStep, foreignBatchStep,
   batchGreenCoversTrunk, evidenceSuffix, serialLine, notStaged, landPushFailure,
-  LANE_GRACE_SEC, laneHold, settledAt,
+  LANE_GRACE_SEC, laneHold, settledAt, MAX_CHAIN_DEPTH, batchChains, chainedLandStep,
 };

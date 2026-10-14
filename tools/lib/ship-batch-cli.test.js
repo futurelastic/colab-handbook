@@ -67,6 +67,7 @@ function fixture({ yml = YML(), ci = CI_WIRED } = {}) {
     'if [ "$1" = "repo" ] && [ "$2" = "view" ]; then echo PRIVATE; exit 0; fi',
     'if [ "$1" = "run" ] && [ "$2" = "view" ]; then echo 1; exit 0; fi',
     'if [ "$1" = "run" ] && [ "$2" = "rerun" ]; then exit 0; fi',
+    'if [ "$1" = "run" ] && [ "$2" = "cancel" ]; then exit 0; fi',
     'if [ "$1" = "run" ] && [ "$2" = "list" ]; then',
     '  BR=""; shift 2',
     '  while [ $# -gt 0 ]; do if [ "$1" = "--branch" ]; then BR="$2"; fi; shift; done',
@@ -925,4 +926,199 @@ test('#584: a batch member with an open CI PR — the PR is closed once the batc
   assert.ok(close, log);
   assert.match(close, /#11/);
   assert.doesNotMatch(log, /pr close 602/);
+});
+
+// ---- #605: --onto builds a batch on an in-flight batch's head — a speculative chain that lands in order ----
+const onto = (fx, list, parentRef, extra = []) => batch(fx, list, ['--onto', parentRef, ...extra]);
+
+/** A root batch P of a,b at trunk's tip and a chained batch C of c on P's head — both pushed, runs set by the caller. */
+function chain(fx, { pStatus = 'in_progress null 1', cStatus = 'in_progress null 1' } = {}) {
+  for (const b of MEMBERS) member(fx, b);
+  const T = fx.originSha('main');
+  const P = `ship-batch/${T.slice(0, 7)}`;
+  fx.setStatus(P, pStatus);
+  const rp = batch(fx, MEMBERS.slice(0, 2));
+  assert.strictEqual(rp.code, 3, rp.out + rp.err);
+  const pHead = fx.originSha(P);
+  const C = `ship-batch/${pHead.slice(0, 7)}`;
+  fx.setStatus(C, cStatus);
+  const rc = onto(fx, ['fix/c-13'], P);
+  assert.strictEqual(rc.code, 3, rc.out + rc.err);
+  assert.match(rc.out, new RegExp(`onto ${P}@${pHead.slice(0, 7)} \\(depth 2, lands after it\\)`));
+  assert.match(rc.out, new RegExp(`pushed ${C} = ${pHead.slice(0, 7)} \\+ 1 commit\\(s\\).*chained onto ${P}`));
+  return { T, P, pHead, C, cHead: fx.originSha(C) };
+}
+
+test('#605 oracle: a two-deep chain, both green, lands parent then child — the child is never rebuilt or re-run', () => {
+  const fx = fixture();
+  const { T, P, pHead, C, cHead } = chain(fx);
+  assert.deepStrictEqual(fx.batchRefs().sort(), [P, C].sort());
+  assert.strictEqual(fx.g(fx.origin, 'rev-parse', `${cHead}^`), pHead, 'the child sits on the parent head');
+  assert.match(fx.g(fx.origin, 'log', '-1', '--format=%B', cHead), new RegExp(`^Ship-Batch: ${C} fix/c-13@`, 'm'));
+
+  // the parent's own call does not sweep its rooted child
+  const pWait = batch(fx, MEMBERS.slice(0, 2));
+  assert.strictEqual(pWait.code, 3, pWait.out + pWait.err);
+  assert.deepStrictEqual(fx.batchRefs().sort(), [P, C].sort(), 'a chained ref rooted at trunk tip is kept');
+
+  fx.setStatus(P, 'completed success 1');
+  fx.setStatus(C, 'completed success 1');
+  // the child is green first — it waits for its parent, it never lands out of order
+  const early = onto(fx, ['fix/c-13'], P);
+  assert.strictEqual(early.code, 3, early.out + early.err);
+  assert.match(early.out, new RegExp(`BATCH-CHAINED ${C}@`));
+  assert.strictEqual(fx.originSha('main'), T, 'trunk does not move for a child whose parent has not landed');
+
+  const pLand = batch(fx, MEMBERS.slice(0, 2));
+  assert.strictEqual(pLand.code, 0, pLand.out + pLand.err);
+  assert.strictEqual(fx.originSha('main'), pHead);
+  assert.deepStrictEqual(fx.batchRefs(), [C], 'the parent ref is gone once it lands; the child is now the root');
+
+  const cLand = onto(fx, ['fix/c-13'], P);
+  assert.strictEqual(cLand.code, 0, cLand.out + cLand.err);
+  assert.doesNotMatch(cLand.out, /rebuilding|BATCH-PENDING/, 'no second build, no second run');
+  assert.strictEqual(fx.originSha('main'), cHead, 'trunk fast-forwarded to the child head that was tested');
+  assert.deepStrictEqual(fx.batchRefs(), []);
+  assert.doesNotMatch(ghLog(fx), /run cancel/);
+});
+
+test('#605: the child lands the same way when its lander drops --onto after the parent landed', () => {
+  const fx = fixture();
+  const { pHead, cHead } = chain(fx, { pStatus: 'completed success 1', cStatus: 'completed success 1' });
+  assert.strictEqual(batch(fx, MEMBERS.slice(0, 2)).code, 0);
+  assert.strictEqual(fx.originSha('main'), pHead);
+  const r = batch(fx, ['fix/c-13']);
+  assert.strictEqual(r.code, 0, r.out + r.err);
+  assert.strictEqual(fx.originSha('main'), cHead);
+});
+
+test('#605: parent red → the child is deleted and declined; the parent stays for its own re-run or split', () => {
+  const fx = fixture();
+  const { T, P, C } = chain(fx);
+  fx.setStatus(P, 'completed failure 1');
+  const r = onto(fx, ['fix/c-13'], P);
+  assert.strictEqual(r.code, 4, r.out + r.err);
+  assert.match(r.out, new RegExp(`${P} is red .*${C} built on it cannot land in order`));
+  assert.match(r.out, /→ SERIAL: colab ship --branch fix\/c-13/);
+  assert.deepStrictEqual(fx.batchRefs(), [P], 'only the child is deleted');
+  assert.strictEqual(fx.originSha('main'), T);
+});
+
+test('#605: trunk moved by a serial door → the whole chain is deleted, the child\'s live run cancelled', () => {
+  const fx = fixture();
+  member(fx, 'fix/d-14');
+  const { P, C } = chain(fx, { pStatus: `completed success 1 ${isoAgo(20)}`, cStatus: `completed success 1 ${isoAgo(20)}` });
+  // both abandoned past the grace → the lane is free, and a serial ship moves trunk
+  const s = colab(fx, ['ship', '--branch', 'fix/d-14', '--repo', fx.work]);
+  assert.strictEqual(s.code, 0, s.out + s.err);
+  const moved = fx.originSha('main');
+  fx.setStatus(C, 'in_progress null 1');
+  const r = onto(fx, ['fix/c-13'], P);
+  assert.strictEqual(r.code, 4, r.out + r.err);
+  assert.match(r.out, new RegExp(`trunk moved since ${P} was built`));
+  assert.match(r.out, new RegExp(`${C} is not rooted at main's tip`));
+  assert.match(ghLog(fx), /run cancel 9001/, 'the orphaned child\'s in-flight run is cancelled');
+  assert.deepStrictEqual(fx.batchRefs(), [], 'the whole chain is gone');
+  assert.strictEqual(fx.originSha('main'), moved, 'nothing landed');
+});
+
+test('#605: --onto is refused for a ref with no run, a malformed ref, or without --batch; a missing ref declines', () => {
+  const fx = fixture();
+  for (const b of MEMBERS) member(fx, b);
+  const T = fx.originSha('main');
+  const P = `ship-batch/${T.slice(0, 7)}`;
+  fx.setStatus(P, 'none');
+  assert.strictEqual(batch(fx, MEMBERS.slice(0, 2)).code, 3);
+
+  const noRun = onto(fx, ['fix/c-13'], P);
+  assert.strictEqual(noRun.code, 1, noRun.out + noRun.err);
+  assert.match(noRun.err, /no combined run in flight or green/);
+  assert.deepStrictEqual(fx.batchRefs(), [P], 'nothing pushed');
+
+  const bad = onto(fx, ['fix/c-13'], 'feat/x');
+  assert.strictEqual(bad.code, 1);
+  assert.match(bad.err, /not a batch ref/);
+  const alone = colab(fx, ['ship', '--branch', 'fix/c-13', '--onto', P, '--repo', fx.work]);
+  assert.strictEqual(alone.code, 1);
+  assert.match(alone.err, /--onto applies to --batch only/);
+
+  const missing = onto(fx, ['fix/c-13'], 'ship-batch/0abcdef');
+  assert.strictEqual(missing.code, 4, missing.out + missing.err);
+  assert.match(missing.out, /no such batch ref/);
+  assert.deepStrictEqual(fx.batchRefs(), [P]);
+});
+
+test('#605: a member already in the parent does not join the child; a chain deeper than 3 is refused', () => {
+  const fx = fixture();
+  member(fx, 'fix/d-14');
+  member(fx, 'fix/e-15');
+  const { C } = chain(fx);
+  const dup = onto(fx, ['fix/a-11', 'fix/d-14'], C);
+  assert.strictEqual(dup.code, 3, dup.out + dup.err);
+  assert.match(dup.out, /fix\/a-11 +already in ship-batch\//);
+  const D = `ship-batch/${fx.originSha(C).slice(0, 7)}`;
+  const dHead = fx.originSha(D);
+  assert.strictEqual(fx.g(fx.origin, 'rev-list', '--count', `${fx.originSha(C)}..${dHead}`), '1', 'only fix/d-14 joined');
+  fx.setStatus(D, 'in_progress null 1');
+  const deep = onto(fx, ['fix/e-15'], D);
+  assert.strictEqual(deep.code, 1, deep.out + deep.err);
+  assert.match(deep.err, /at most 3 batches/);
+});
+
+test('#605: a serial land pauses while any batch of a chain rooted at trunk\'s tip is in flight', () => {
+  const fx = fixture();
+  member(fx, 'fix/d-14');
+  const { T, C } = chain(fx, { pStatus: `completed success 1 ${isoAgo(20)}`, cStatus: 'in_progress null 1' });
+  const s = colab(fx, ['ship', '--branch', 'fix/d-14', '--repo', fx.work]);
+  assert.strictEqual(s.code, 3, s.out + s.err);
+  assert.match(s.out, new RegExp(`BATCH-IN-FLIGHT ${C} — `), 'the chained child holds the lane though its root is abandoned');
+  assert.strictEqual(fx.originSha('main'), T);
+  const { row } = laneRow(fx, 'fix/d-14');
+  assert.strictEqual(row.ok, false);
+  assert.strictEqual(row.class, 'self-clearing');
+  assert.strictEqual(row.batchRef, C);
+});
+
+test('#605: --dry --json carries ref, parentRef, rootSha and member rows; prose stays off stdout', () => {
+  const fx = fixture();
+  for (const b of MEMBERS) member(fx, b);
+  const T = fx.originSha('main');
+  const P = `ship-batch/${T.slice(0, 7)}`;
+  const root = batch(fx, MEMBERS.slice(0, 2), ['--dry', '--json']);
+  assert.strictEqual(root.code, 0, root.out + root.err);
+  const rb = JSON.parse(root.out).batch;
+  assert.strictEqual(rb.ref, P);
+  assert.strictEqual(rb.parentRef, null);
+  assert.strictEqual(rb.rootSha, T);
+  assert.strictEqual(rb.step, 'build');
+  assert.strictEqual(rb.exit, 0);
+  assert.deepStrictEqual(rb.members.map((m) => [m.branch, m.inBatch]), [['fix/a-11', true], ['fix/b-12', true]]);
+  assert.deepStrictEqual(fx.batchRefs(), [], '--dry pushed nothing');
+
+  fx.setStatus(P, 'in_progress null 1');
+  assert.strictEqual(batch(fx, MEMBERS.slice(0, 2)).code, 3);
+  const pHead = fx.originSha(P);
+  const child = onto(fx, ['fix/c-13'], P, ['--dry', '--json']);
+  assert.strictEqual(child.code, 0, child.out + child.err);
+  const cb = JSON.parse(child.out).batch;
+  assert.strictEqual(cb.ref, `ship-batch/${pHead.slice(0, 7)}`);
+  assert.strictEqual(cb.parentRef, P);
+  assert.strictEqual(cb.rootSha, T);
+  assert.strictEqual(cb.base, pHead);
+  assert.strictEqual(cb.depth, 2);
+  assert.deepStrictEqual(cb.members.map((m) => [m.branch, m.eligible, m.inBatch]), [['fix/c-13', true, true]]);
+
+  const refused = onto(fx, ['fix/c-13'], 'ship-batch/0abcdef', ['--dry', '--json']);
+  assert.strictEqual(refused.code, 4);
+  assert.strictEqual(JSON.parse(refused.out).batch.step, 'chained-decline');
+  const noDry = batch(fx, ['fix/c-13'], ['--json']);
+  assert.strictEqual(noDry.code, 1, '--json still needs --dry');
+});
+
+test('#605: colab ship --help documents --onto beside "One batch per base"', () => {
+  const fx = fixture();
+  const h = colab(fx, ['ship', '--help']).out;
+  const at = h.indexOf('One batch per base');
+  assert.ok(at > 0);
+  assert.match(h.slice(at, at + 2500), /--onto ship-batch\/<sha7>/);
 });
