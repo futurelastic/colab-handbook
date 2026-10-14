@@ -1141,7 +1141,7 @@ Keys shortened because the sentence that followed them was moved whole (the rule
 | C5a.disposition.11 | default |  | split: part landed and the remainder is filed as a native sub-issue; closes with evidence. | Part landed; the remainder is filed as a native sub-issue carrying the same | CONVENTIONS.md | #315 |
 | C5a.disposition.12 | default |  | routed-out: the work belongs to another repo, whose issue exists and links back; closes with evidence. | The work belongs to another repo; `<other-repo>#N` exists and links back | CONVENTIONS.md | #315 |
 | C5a.disposition.13 | default |  | hold: parked on a named wake condition; converts to deferred:<kind> plus a Hold: line with a wake from the closed vocabulary. | Parked on a named wake condition | CONVENTIONS.md | #315 |
-| C5a.disposition.14 | default |  | needs-boss: a human must answer before anything else; converts to a recorded decision. | A human must answer before anything else can happen | CONVENTIONS.md | #315 |
+| C5a.disposition.14 | default |  | needs-owner: a human must answer before anything else; converts to a recorded decision. | A human must answer before anything else can happen | CONVENTIONS.md | #315 |
 | C5a.disposition.15 | default |  | not planned: superseded or abandoned; closes as not planned. | Superseded, or the direction was abandoned | CONVENTIONS.md | #315 |
 | C5a.disposition.16 | default |  | leave: nothing decided; never applied by an agent — a nameable wake becomes hold, nothing to name is a finding. | never applied by an agent — a nameable wake ⇒ `hold`; nothing to name ⇒ a finding | CONVENTIONS.md | #315 |
 | C5a.disposition.17 | default |  | An agent converts or reports leave and never leaves an issue; a human may leave with a reason that is itself the wake. | so an agent converts it or reports it, and never leaves it. | CONVENTIONS.md | #315 |
@@ -1159,7 +1159,7 @@ Keys shortened because the sentence that followed them was moved whole (the rule
 | C5a.disposition.29 | default |  | split is agent-applied when the remainder is filed as a native sub-issue with the same delivery: and a wake; never human-only. | the remainder is filed as a native sub-issue with the same `delivery:` | CONVENTIONS.md | #315 |
 | C5a.disposition.30 | default |  | routed-out is agent-applied when the other repo's issue exists and links back, obeying its language rule. | `<other-repo>#N` exists and links back to this issue | CONVENTIONS.md | #315 |
 | C5a.disposition.31 | default |  | hold is agent-applied with a wake condition present; a wake standing 30 d unmoved needs a human to confirm or not-plan. | a wake condition is present — `review-by:<date>`, a real `blockedBy` edge, | CONVENTIONS.md | #315 |
-| C5a.disposition.32 | default |  | needs-boss is never agent-applied: the agent records the question and moves on. | the agent records the question and moves on (record-first) | CONVENTIONS.md | #315 |
+| C5a.disposition.32 | default |  | needs-owner is never agent-applied: the agent records the question and moves on. | the agent records the question and moves on (record-first) | CONVENTIONS.md | #315 |
 | C5a.disposition.33 | default |  | not planned is agent-applied only when superseded by a merged or closed replacement referencing this issue. | superseded by a merged or closed replacement that references this issue | CONVENTIONS.md | #315 |
 | C5a.disposition.34 | default |  | leave is never agent-applied; the agent converts it. | the agent converts it (see above) | CONVENTIONS.md | #315 |
 | C5a.disposition.35 | default |  | The disposition verdict fails towards human, always. | Fails towards `human`, always. | CONVENTIONS.md | #315 |
@@ -1169,6 +1169,10 @@ Keys shortened because the sentence that followed them was moved whole (the rule
 | C5a.disposition.39 | default |  | Two consumers must call one function or copy-and-own disposition.js, never keep two prose copies of the table. | only if both call one function, or copy-and-own that file | CONVENTIONS.md | #315 |
 | C5a.disposition.40 | default |  | parseMarker / formatMarker are the only sanctioned way to read or write the disposition marker. | `parseMarker` / `formatMarker` are the only sanctioned way to read or write the marker | CONVENTIONS.md | #315 |
 | C5a.disposition.41 | default |  | The disposition section defines vocabulary only; nothing here writes or reads colab:disposition. | This section defines vocabulary only**, exactly as the park above does. | CONVENTIONS.md | #315 |
+| C5a.disposition.42 | default |  | The legacy needs-boss is read as a kind and a token and classifies exactly like needs-owner; writers emit needs-owner only. | reader accepts `needs-boss` as a kind and as a token and classifies it exactly like | CONVENTIONS.md | #609 |
+| C5a.disposition.43 | default |  | An old and a new marker for the same kind on one comment are one proposal, not a contradiction. | an old and a new marker on one comment are one proposal, not two | CONVENTIONS.md | #609 |
+| C5a.disposition.44 | default |  | The human-wait park label is blocked:needs-owner, with blocked:needs-boss still read as the same park; the handbook provisions neither. | with `blocked:needs-boss` still read as the same park | CONVENTIONS.md | #609 |
+| C5a.disposition.45 | default |  | Both names are accepted until the old one has had no open use for 14 days; dropping it is a separate change. | Accept both until the old name has had no open use for 14 | CONVENTIONS.md | #609 |
 
 #### #539 ledger — §5 Who holds this · Who decided it should exist · What may start (to the disposition marker)
 

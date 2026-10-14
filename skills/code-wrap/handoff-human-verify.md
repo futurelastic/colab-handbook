@@ -27,7 +27,7 @@ passed. The leftover is what a fake cannot prove.
 
 **What the wrap does — all in this step:**
 
-1. **No hold, no human-wait label.** Do not add `blocked:needs-boss`, the repo's `holds:` label,
+1. **No hold, no human-wait label.** Do not add `blocked:needs-owner` (or its legacy name `blocked:needs-boss`), the repo's `holds:` label,
    or any `deferred:*` label to the source issue. Do not post a `Hold:`/`Blocked:` line for this
    check. The issue stays claimed and goes to `code-ship` like any other finished branch.
 2. **Append one row to the repo's single open `Human verify:` issue**, and file that issue if
@@ -69,7 +69,7 @@ closed, so nothing waits on a check that may well pass.
 
 **Measured (one adopted repo, 2026-10-06).** One day after #491 shipped, an implementer finished
 a feature: tests against a fake server were green, the branch was pushed and the wrap was posted.
-It then parked its own issue with `blocked:needs-boss` and the line "Blocked: real-device
+It then parked its own issue with `blocked:needs-boss` (the label now named `blocked:needs-owner`, #609) and the line "Blocked: real-device
 measurement — needs staging server + a lid close". The host froze start, ship and heal on that
 issue. Four issues with a `blocked_by` edge to it waited about 15 hours, and the branch became
 conflicted in the meantime. #491 had given the rule to `code-ship` only, and the wrap's

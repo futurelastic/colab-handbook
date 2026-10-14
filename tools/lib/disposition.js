@@ -69,7 +69,19 @@ const HUMAN = 'human';
  * GitHub's close reason takes. Frozen and closed: a kind outside this list is not a disposition
  * with an unknown authority, it is not a disposition.
  */
-const KINDS = Object.freeze(['done', 'split', 'routed-out', 'hold', 'needs-boss', 'not planned', 'leave']);
+const KINDS = Object.freeze(['done', 'split', 'routed-out', 'hold', 'needs-owner', 'not planned', 'leave']);
+
+/**
+ * #609 — names this module still READS but never writes. `needs-owner` replaced `needs-boss`
+ * ("Boss" named one deployment's human; the standard is for any owner). During the switch a
+ * reader must accept both, or an issue marked under the old name reads as unrecognised — "not
+ * cleared" — to a tool that only knows the new one. Each legacy name classifies exactly like the
+ * kind it maps to. Kept out of KINDS / TOKENS / TOKEN_BY_KIND on purpose: those are what a writer
+ * may emit, and `formatMarker` refuses a legacy kind. Drop an entry once the old name has had no
+ * open use for its window (a separate issue, filed then).
+ */
+const LEGACY_KINDS = Object.freeze({ 'needs-boss': 'needs-owner' });
+const LEGACY_TOKENS = Object.freeze({ 'needs-boss': 'needs-owner' });
 
 /**
  * The same seven by MARKER TOKEN. No token is a prefix or a decorated variant of another — the
@@ -82,13 +94,14 @@ const TOKEN_BY_KIND = Object.freeze({
   split: 'split',
   'routed-out': 'routed-out',
   hold: 'hold',
-  'needs-boss': 'needs-boss',
+  'needs-owner': 'needs-owner',
   'not planned': 'not-planned',
   leave: 'leave',
 });
-const KIND_BY_TOKEN = Object.freeze(
-  Object.fromEntries(Object.entries(TOKEN_BY_KIND).map(([kind, token]) => [token, kind]))
-);
+const KIND_BY_TOKEN = Object.freeze({
+  ...Object.fromEntries(Object.entries(TOKEN_BY_KIND).map(([kind, token]) => [token, kind])),
+  ...LEGACY_TOKENS, // read-only: a legacy token parses to the current kind (#609)
+});
 const TOKENS = Object.freeze(Object.values(TOKEN_BY_KIND));
 
 /**
@@ -149,7 +162,10 @@ function parseMarker(text) {
   if (typeof text !== 'string' || text === '') return null;
   const tokens = [...text.matchAll(new RegExp(MARKER_PATTERN, 'g'))].map((m) => m[1]);
   if (tokens.length === 0) return null;
-  const distinct = [...new Set(tokens)];
+  // Distinct by the KIND a token reads as, so a legacy token and its current spelling (#609) are
+  // one proposal, not two; an unrecognised token stays distinct by its own spelling.
+  const distinct = [...new Set(tokens.map((t) => (
+    Object.prototype.hasOwnProperty.call(LEGACY_TOKENS, t) ? TOKEN_BY_KIND[LEGACY_TOKENS[t]] : t)))];
   if (distinct.length > 1) {
     return { token: null, kind: null, recognised: false, why: `${distinct.length} markers proposing different dispositions` };
   }
@@ -251,9 +267,10 @@ function verdict(kind, authority, applicable, why, blockers, extra) {
  */
 function classify(facts) {
   const f = facts && typeof facts === 'object' ? facts : {};
-  const kind = f.kind !== undefined && f.kind !== null
+  const named = f.kind !== undefined && f.kind !== null
     ? f.kind
     : (f.token !== undefined && f.token !== null ? KIND_BY_TOKEN[f.token] : undefined);
+  const kind = Object.prototype.hasOwnProperty.call(LEGACY_KINDS, named) ? LEGACY_KINDS[named] : named;
 
   if (!KINDS.includes(kind)) {
     return verdict(null, HUMAN, false, 'not a recognised disposition — not cleared, never a default', []);
@@ -331,11 +348,11 @@ function classify(facts) {
         : verdict(kind, AGENT, true, 'the park names what it is waiting on — the agent applies', []);
     }
 
-    case 'needs-boss':
+    case 'needs-owner':
       // Record-first: the pass writes the question down with the apply lever pre-filled and moves
       // on. It does not stop and wait, and it never applies this itself.
       return verdict(kind, HUMAN, true,
-        'never applied by an agent — the agent records the question, Boss answers, the issue returns to intake', []);
+        'never applied by an agent — the agent records the question, the owner answers, the issue returns to intake', []);
 
     case 'not planned': {
       const sup = f.supersededBy && typeof f.supersededBy === 'object' ? f.supersededBy : {};
@@ -375,7 +392,7 @@ function classify(facts) {
 
 module.exports = {
   AGENT, HUMAN,
-  KINDS, TOKENS, TOKEN_BY_KIND, KIND_BY_TOKEN,
+  KINDS, TOKENS, TOKEN_BY_KIND, KIND_BY_TOKEN, LEGACY_KINDS, LEGACY_TOKENS,
   ASSERTS_AN_OUTCOME, SKIP_FENCE_CLASSES, EVIDENCE_FIELDS, HOLD_STALE_DAYS, MARKER_PATTERN,
   parseMarker, formatMarker, evidenceShape, axisPermits, classify,
 };
