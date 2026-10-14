@@ -243,13 +243,47 @@ test('hold: a wake standing past the proposal threshold with no movement — hum
 });
 
 // ---------------------------------------------------------------------------------------------
-// needs-boss · not planned · leave
+// needs-owner · not planned · leave
 // ---------------------------------------------------------------------------------------------
 
-test('needs-boss: never an agent, on any repo, however clean the evidence', () => {
-  const v = d.classify({ ...DONE_OK, kind: 'needs-boss' });
+test('needs-owner: never an agent, on any repo, however clean the evidence', () => {
+  const v = d.classify({ ...DONE_OK, kind: 'needs-owner' });
   assert.equal(v.authority, d.HUMAN);
   assert.equal(v.applicable, true, 'recording it is legitimate — it is applying it that is human');
+});
+
+test('#609: the legacy needs-boss is still read, and classifies exactly like needs-owner', () => {
+  const current = d.classify({ ...DONE_OK, kind: 'needs-owner' });
+  assert.deepEqual(d.classify({ ...DONE_OK, kind: 'needs-boss' }), current, 'legacy kind');
+  assert.deepEqual(d.classify({ ...DONE_OK, kind: undefined, token: 'needs-boss' }), current, 'legacy token');
+
+  const parsed = d.parseMarker('<!-- colab:disposition proposed=needs-boss -->');
+  assert.equal(parsed.recognised, true, 'an issue marked under the old name must not read as unrecognised');
+  assert.equal(parsed.kind, 'needs-owner');
+  assert.deepEqual(d.classify({ ...DONE_OK, kind: parsed.kind }), current);
+});
+
+test('#609: everything written says needs-owner — the legacy name is read-only', () => {
+  assert.equal(d.formatMarker('needs-owner'), '<!-- colab:disposition proposed=needs-owner -->');
+  assert.throws(() => d.formatMarker('needs-boss'), /not a disposition kind/, 'a writer may not emit the legacy kind');
+  assert.ok(!d.KINDS.includes('needs-boss'));
+  assert.ok(!d.TOKENS.includes('needs-boss'));
+  for (const legacy of Object.keys(d.LEGACY_TOKENS)) {
+    assert.ok(d.KINDS.includes(d.LEGACY_TOKENS[legacy]), `${legacy} must map onto a current kind`);
+  }
+  for (const legacy of Object.keys(d.LEGACY_KINDS)) {
+    assert.ok(d.KINDS.includes(d.LEGACY_KINDS[legacy]), `${legacy} must map onto a current kind`);
+  }
+});
+
+test('#609: an old marker and a new one on the same issue are one proposal, not a contradiction', () => {
+  const v = d.parseMarker('<!-- colab:disposition proposed=needs-boss -->\n<!-- colab:disposition proposed=needs-owner -->');
+  assert.equal(v.recognised, true);
+  assert.equal(v.kind, 'needs-owner');
+  assert.equal(v.token, 'needs-owner', 'the token reported is the current spelling');
+
+  const clash = d.parseMarker('<!-- colab:disposition proposed=needs-boss -->\n<!-- colab:disposition proposed=hold -->');
+  assert.equal(clash.recognised, false, 'a legacy token still contradicts a genuinely different proposal');
 });
 
 test('not planned: superseded by a merged replacement referencing this issue — agent applies', () => {
