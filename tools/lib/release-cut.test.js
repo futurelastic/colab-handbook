@@ -835,3 +835,19 @@ test('#590 release-policy names the route in effect: library-fast narrowed to a 
   const self = rc.decide(facts({ policy: releasePolicy.evaluateRelease({ ...RELEASED, exposure: 'self' }) }));
   assert.match(refusal(self, 'release-policy').detail, /route none/);
 });
+
+test('#610 a final route needs the heavy lane green at the head: red refuses, pending no-ops under --auto, none-in-repo passes', () => {
+  const ip = require('./integration-profile.js');
+  const heavy = (state) => ip.releaseHeavyCondition({ present: true, file: 'ci-heavy.yml', verdict: { state, why: state }, at: 'main@abc1234', ref: 'main' });
+  assert.strictEqual(rc.decide(libFacts({ heavy: heavy('green') })).ok, true);
+  const red = rc.decide(libFacts({ heavy: heavy('red') }));
+  assert.strictEqual(red.ok, false);
+  assert.strictEqual(red.noop, false);
+  assert.match(refusal(red, 'heavy-lane').detail, /heavy lane red at main@abc1234/);
+  const pending = rc.decide(libFacts({ heavy: heavy('pending') }));
+  assert.deepStrictEqual([pending.ok, pending.noop], [false, true]);
+  assert.ok(!pending.standing.includes('heavy-lane'));
+  const absent = ip.releaseHeavyCondition({ present: false, file: 'ci-heavy.yml', verdict: null, at: 'main@abc1234', ref: 'main' });
+  assert.strictEqual(rc.decide(libFacts({ heavy: absent })).ok, true);
+  assert.strictEqual(refusal(rc.decide(libFacts()), 'heavy-lane'), undefined, 'no heavy fact → no row');
+});

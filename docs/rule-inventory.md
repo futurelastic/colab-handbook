@@ -2043,6 +2043,20 @@ Each entry lists the rule text of a unit whose rationale clause moved out (the u
 | C7.lanes.05 | default |  | The adopter marks heavy tests by a per-stack marker; an unmarked test is light. | The adopter marks heavy tests; an unmarked test is light | CONVENTIONS.md | #607 |
 | C7.lanes.06 | default |  | live and released repos run the heavy lane before every official build; none and self may run it nightly only. | and `released` run the heavy lane before every official build | CONVENTIONS.md | #607 |
 
+### Integration profiles — where the heavy lane runs, and what a green trunk promises (#610)
+
+| id | class | gate | rule | key | dest | source |
+|---|---|---|---|---|---|---|
+| C7.profiles.01 | default |  | `integration-profile:` picks one of gated, qualify, release-heavy, promote; every profile keeps the light lane on session branches. | picks one shape. Every profile keeps the light lane on session branches | CONVENTIONS.md | #610 |
+| C7.profiles.02 | default |  | Absent reads release-heavy, #607's shape: a repo that never declares changes nothing. | **Absent ⇒ `release-heavy`**, #607's shape | CONVENTIONS.md | #610 |
+| C7.profiles.03 | default |  | A final release needs the heavy lane green at its exact sha under every profile, wherever the repo has one; still running keeps the candidate testing. | **A final release needs the heavy lane green at its exact sha under every profile** | CONVENTIONS.md | #610 |
+| C7.profiles.04 | default |  | exposure live without deploy tag may only declare gated or promote; the audit fails a declared qualify or release-heavy there. | may only declare `gated` or `promote` | CONVENTIONS.md | #610 |
+| C7.profiles.05 | default |  | release-heavy is the higher-risk choice, which is why its nightly is never optional. | **`release-heavy` is the higher-risk choice** | CONVENTIONS.md | #610 |
+| C7.profiles.06 | default |  | promote is not for new repos; prefer a merge queue on trunk or a release/x.y branch cut from trunk for an approval gate. | **`promote` is not for new repos.** | CONVENTIONS.md | #610 |
+| C7.profiles.07 | default |  | Test tiers: smoke, affected, integration, full, heavy; an adopter maps tests with the marker and unmarked is light. | the vocabulary every profile uses | CONVENTIONS.md | #610 |
+| C7.profiles.08 | default |  | Revert first: bisect with isolated re-runs of the failing tests, retry once before calling red, auto-revert only a proven culprit, and hand the fixer a full brief. | bisect the red window with | CONVENTIONS.md | #610 |
+| C7.profiles.09 | default |  | Start batch size at 4–6 and tune from the per-branch wave failure rate and the flake rate. | start at 4–6 | CONVENTIONS.md | #610 |
+
 ### CI — what it is follows the unit's shape, how much follows exposure
 
 | id | class | gate | rule | key | dest | source |
@@ -2891,6 +2905,14 @@ Reworded units, one bullet each. Row key changed: C6.rel.111 (the moved sentence
 | S2.ship-workflows.06 | default |  | A run with no recorded trigger is counted. | A run with no recorded trigger (an older read) is counted. | project.schema.md | #503 |
 | S2.ship-workflows.07 | default |  | `ship-gate-workflows` is not the refused `ci` field: it says which runs the ship gate reads, never what CI is or how thorough it must be. | this says which runs the   ship gate reads | project.schema.md | #503 |
 | S2.ship-workflows.08 | default |  | The one reading of the ship workflow lists is `tools/lib/verify-runs.js` `parsePolicy`. | The one reading in tooling is `tools/lib/verify-runs.js` `parsePolicy` | project.schema.md | #503 |
+
+### `integration-profile`, `heavy-workflow` — optional
+
+| id | class | gate | rule | key | dest | source |
+|---|---|---|---|---|---|---|
+| S2.integration-profile.01 | hard | tools/lib/integration-profile.js::function landingGate ; tools/lib/release-finalize.js::add('heavy-lane' ; tools/colab::heavy lane green (integration-profile: promote, #610) | Where the heavy lane runs and what a green trunk promises; colab ship, release and promote refuse when the declared profile's heavy-lane condition is not met. | **[Hard — gate: colab ship / release / promote refuse]** Where the heavy CI | project.schema.md | #610 |
+| S2.integration-profile.02 | default |  | Absent reads release-heavy, so a repo that never declares changes nothing; only gated changes colab ship, promote gates colab promote, and every profile gates a final release where a heavy lane exists. | **Absent reads `release-heavy`** | project.schema.md | #610 |
+| S2.integration-profile.03 | default |  | heavy-workflow names the heavy lane by file (default ci-heavy.yml); any other value fails the audit and the readers fail closed to the default. | names the heavy lane by **file** | project.schema.md | #610 |
 
 ### `gate` — optional
 

@@ -1493,6 +1493,25 @@ does not make a workflow a code verifier, and a sha whose tree cannot be read re
 - The one reading in tooling is `tools/lib/verify-runs.js` `parsePolicy`; the audit reports the
   value (`--json`: `shipCiWorkflows`).
 
+### `integration-profile`, `heavy-workflow` — optional
+
+```yaml
+integration-profile: gated    # gated · qualify · release-heavy · promote; absent = release-heavy
+heavy-workflow: ci-heavy.yml  # the heavy lane's file in .github/workflows; absent = ci-heavy.yml
+```
+
+**[Hard — gate: colab ship / release / promote refuse]** Where the heavy CI lane runs and what a
+green trunk promises ([CONVENTIONS.md §7, *Integration profiles*](CONVENTIONS.md#integration-profiles--where-the-heavy-lane-runs-and-what-a-green-trunk-promises-610)).
+**Absent reads `release-heavy`** — #607's two lanes exactly, so a repo that never declares changes
+nothing. Only `gated` changes `colab ship`: a code landing (serial or `--batch`) needs a green run
+of the heavy workflow at the candidate's exact sha, and a real ship dispatches a missing one and
+pauses (exit `3`). `promote` gates `colab promote` the same way at the promoted trunk tip. Under
+every profile, a final release needs the heavy lane green at its sha wherever the repo has one.
+
+`heavy-workflow` names the heavy lane by **file**, because that is what a dispatch takes; ship reads
+the file's `name:` at the sha to know which runs are heavy. Any other value fails the audit and the
+readers fail closed to the default: a typo must not weaken a declared `gated` silently.
+
 ### `gate` — optional
 
 ```yaml
@@ -1696,6 +1715,9 @@ the shape that shows it. One writer at a time says nothing about who reads the r
 | `tree-reuse` = `off` when set → **finding** otherwise | the guard reads any value as off; an undefined value is not a declaration |
 | `ci-docs-skip` a list of plain repo paths or `off` when set → **finding** otherwise | every reader takes an invalid value as off, so the declaration silently opts the repo out of the docs-only path |
 | `ship-gate-workflows` / `ship-ignore-workflows` = a non-empty list of workflow names when set → **finding** otherwise | the reader ignores an invalid list, so the declaration does nothing |
+| `integration-profile` ∈ {`gated`, `qualify`, `release-heavy`, `promote`} when set; `heavy-workflow` a file name in `.github/workflows` when set → **finding** otherwise | a misspelled value silently read as `release-heavy` by every gate |
+| `integration-profile: qualify` or `release-heavy` declared on `exposure: live` without `deploy: tag` → **finding**; absent there → **suggestion** | a trunk allowed to be heavy-red, promoted straight to users |
+| `integration-profile: promote` with `trunk: main` → **finding**; `gated` with no heavy workflow file → **advisory** | a profile with no promotion to gate; a gate that refuses every code landing |
 | `gate` a block with `smoke` + `authoritative` ∈ {`ci`,`local`} when set → **finding** otherwise; `ci` with no branch-push trigger → **warn** | a malformed block is read as absent, so it silently does nothing; a `ci` verdict that can never arrive leaves every reader on the local gate |
 | `holds` is a list of non-empty strings, each listed once, when set → **finding** otherwise | a scalar or malformed list silently read as "no holds declared", so triage reports held work ready |
 | `exposure` ∈ {`none`, `self`, `live`, `released`} when set | a misspelled value silently read as undeclared |

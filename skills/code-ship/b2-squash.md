@@ -50,6 +50,11 @@ is a human integration event of a promotion's weight.
   with `colab close <N> --comment "<evidence>"`, never a bare `gh issue close`: the bare
   close leaves any claim standing and tells no observer, which kept a closed issue
   offered as startable for ~10 minutes (#381).
+- **Under `integration-profile: gated`, a code branch pauses until its heavy lane is green —
+  `⏸ HEAVY-PENDING`, exit 3 (#610).** A real ship dispatches the heavy workflow at the branch's
+  remote head when it has no run, and stops; nothing is merged. Wait on that run (bounded, B1a),
+  then re-run the same `colab ship`. A red heavy run is a ✗ row: route it like a branch-CI red
+  (`CONVENTIONS.md` [§7, *Integration profiles*](../../CONVENTIONS.md#integration-profiles--where-the-heavy-lane-runs-and-what-a-green-trunk-promises-610)).
 - **A core-path branch pauses here instead of merging — `⏸ PR-PENDING`, exit 3 (#350).**
   When the target's `CODEOWNERS` names an account other than the author and the branch
   touches a path it covers, `colab ship` pushes the branch, opens a PR (or reuses the open

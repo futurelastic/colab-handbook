@@ -70,6 +70,7 @@ const shipBatch = require('./lib/ship-batch');
 const batchStats = require('./lib/batch-stats');
 const conflictMarkers = require('./lib/conflict-markers');
 const docsOnly = require('./lib/docs-only');
+const integrationProfile = require('./lib/integration-profile');
 const secretScan = require('./lib/secret-scan'); // #606
 const configSet = require('./lib/config-set'); // #561
 const cureDiff = require('./lib/cure-diff');
@@ -1710,8 +1711,17 @@ function cmdReleaseCut(argv) {
     }
   }
 
+  // #610: on a final route the heavy lane must be green at this sha. Under --auto (the release
+  // workflow) a missing run is started here, once, and the run no-ops until it is green.
+  let heavy = null;
+  if (fast || library) {
+    const lane = heavyLaneAt(repoAbs, doc, sha);
+    heavy = integrationProfile.releaseHeavyCondition({ present: lane.present, file: lane.file, verdict: lane.verdict, at: `main@${shortSha(sha)}`, ref: 'main' });
+    if (lane.present && lane.verdict.state === 'none' && opts.auto && !opts.dry) dispatchHeavyLane(repoAbs, lane.file, 'main', sha);
+  }
+
   const verdict = releaseCut.decide({
-    policy, triggers, lastFinal, suggestion, tags, tagsAtSha, ci, suite, schema, switches, manifests, ancestry, auto,
+    policy, triggers, lastFinal, suggestion, tags, tagsAtSha, ci, suite, schema, switches, manifests, ancestry, auto, heavy,
     override: opts.bump ? { bump: opts.bump, reason: opts.reason } : null,
     finalGrant: fastFacts.finalGrant, holds: fastFacts.holds, migrations: fastFacts.migrations, migration: libraryMigration,
     trackingIssue: fastFacts.tracking ? fastFacts.tracking.number : null,
@@ -1996,6 +2006,16 @@ function readRegressionEdges(repoAbs, num) {
   }
 }
 
+/**
+ * #610: the heavy lane at a release candidate, as release-finalize.js decide()'s `heavy` fact. Read
+ * the same way ship's gated landing reads it (heavyLaneAt). Inside the release workflow the heavy
+ * lane is a separate workflow, never the one running, so #425's own-workflow filter does not apply.
+ */
+function releaseHeavyFact(repoAbs, doc, cand) {
+  const lane = heavyLaneAt(repoAbs, doc, cand.sha);
+  return integrationProfile.releaseHeavyCondition({ present: lane.present, file: lane.file, verdict: lane.verdict, at: `${cand.tag}@${shortSha(cand.sha)}`, ref: cand.tag });
+}
+
 function cmdReleaseFinalize(argv) {
   const opts = parseArgs(argv, {
     values: { '--repo': 'repo', '--tag': 'tag', '--answered-by': 'answeredBy' },
@@ -2138,6 +2158,7 @@ function cmdReleaseFinalize(argv) {
     const verdict = releaseFinalize.decide({
       policy, selection: sel, tracking, supersededHeld, period, trunk, regressions,
       ci: conditions.ci, suite: conditions.suite, cutRun, deployReport, schema: conditions.schema, switches: conditions.switches,
+      heavy: releaseHeavyFact(repoAbs, doc, cand), // #610
       manifests, ancestry, tags: tagNames, finalGrant, migrations,
       human: { bar: humanBar, answeredBy: opts.answeredBy || null },
     });
@@ -10650,6 +10671,10 @@ Sequence (each step gated; any failure aborts before the push — the target is 
                         and worktree untouched. Re-run the same command once an account other than the
                         author approved the branch's CURRENT head: it lands by the ordinary squash below
                         and closes the PR. Accounts sharing one login cannot approve each other.
+  b5. heavy lane        (#610) only with integration-profile: gated, never for a docs-only change:
+                        the heavy workflow (heavy-workflow:, default ci-heavy.yml) green at the
+                        branch's remote head. None yet → a real ship dispatches it and PAUSES —
+                        "⏸ HEAVY-PENDING", exit 3, nothing merged; running → the same pause; red → ✗.
   c. B0 sync            merge the target INTO the branch; non-generated conflict → abort (human merge);
                         generated-only conflict → repo's .colab/hooks/pre-ship regenerates, else abort
   d. B1 squash          re-check CI green, then squash-merge branch → target (Closes every claimed issue,
@@ -12582,6 +12607,14 @@ function cmdShipDryJson(opts) {
     checks.push({ name: 'branch run contains current base (#395)', ok: staleJson.ok,
       class: staleJson.ok ? null : SELF_CLEARING, verdict: staleJson.verdict, detail: staleJson.detail });
   }
+  // #610: the same gated heavy-lane read as the prose path. A missing or running heavy run clears on
+  // its own (a real ship dispatches it); a red, or no heavy lane at all, needs a person.
+  const heavyJson = shipHeavyGate(repoAbs, doc, sess.branch, { docsOnlyApplies: docsCiJson.applies, batchMember: !!opts._batchMember });
+  if (heavyJson) {
+    checks.push({ name: 'heavy lane green (integration-profile: gated, #610)', ok: heavyJson.ok,
+      class: heavyJson.ok ? null : (heavyJson.action === 'refuse' ? HUMAN_GATED : SELF_CLEARING),
+      action: heavyJson.action, detail: heavyJson.detail });
+  }
 
   // #350: same single producer as the prose path. 'pending' is not a failure — it is `mode`.
   const coreReviewJson = shipCoreReview(repoAbs, gh, target, sess.branch);
@@ -13768,6 +13801,12 @@ function cmdShip(argv) {
   } else {
     checks.push([staleResult.ok ? '✓' : '✗', 'branch run contains current base (#395)', staleResult.detail]);
   }
+  // #610: integration-profile: gated — the heavy lane green at the branch head. A missing or running
+  // heavy run is a pause (⏸, taken below once every real precondition passes); only a red, or no
+  // heavy lane at all, fails the table.
+  const heavyGate = shipHeavyGate(repoAbs, doc, sess.branch, { docsOnlyApplies: docsCi.applies });
+  if (heavyGate) checks.push([heavyGate.ok ? '✓' : (heavyGate.action === 'refuse' ? '✗' : '⏸'), 'heavy lane green (integration-profile: gated, #610)', heavyGate.detail]);
+  const heavyOk = !heavyGate || heavyGate.action !== 'refuse';
 
   // #350: the core-path review. A 'pending' verdict is not a failed precondition — it is the pause,
   // taken below once every real precondition has passed, so it is the ONLY thing between the branch
@@ -13793,7 +13832,7 @@ function cmdShip(argv) {
   // issue can be reopened, but the false claim stays in trunk's immutable history, and GitHub will
   // have closed it the instant trunk was pushed. #263: gateOk joins the same list — an unticked
   // checklist with no declared remainder is exactly as unrecoverable once `Closes #N` ships.
-  const preOk = ciOk && migOk && treeOk && corr.ok && gateOk && syncResult.ok && (docsCi.applies ? docsRowOk : staleResult.ok) && coreOk && recOk;
+  const preOk = ciOk && migOk && treeOk && corr.ok && gateOk && syncResult.ok && (docsCi.applies ? docsRowOk : staleResult.ok) && coreOk && recOk && heavyOk;
 
   // ---- report the table ----
   print(`ship ${shortRepo(repoAbs)} · branch ${sess.branch} → ${target}` +
@@ -14016,6 +14055,8 @@ function cmdShip(argv) {
       print('  Gate: every closing issue must already carry an evidence comment — checked at run time.');
     } else if (lane && lane.held && coreReview.verdict !== 'pending') {
       print(`  Plan: PAUSE (⏸ exit 3, nothing merged) — ${lane.ref} holds the ${trunk} lane (#581); run again once it has landed or been declined`);
+    } else if (heavyGate && !heavyGate.ok && coreReview.verdict !== 'pending') {
+      print(`  Plan: PAUSE (⏸ exit 3, nothing merged) — ${heavyGate.action === 'dispatch' ? `a real ship dispatches ${heavyGate.file} at ${shortSha(heavyGate.sha)}` : 'the heavy lane is not green yet'} (integration-profile: gated, #610); run again once it is green`);
     } else if (coreReview.verdict === 'pending') {
       print(`  Plan: push ${sess.branch} · ${coreReview.pr ? `PR #${coreReview.pr.number} already open` : 'open a PR → ' + target} · ` +
         'PAUSE (⏸ exit 3, no squash) until an account other than the author approves the current head (#350)');
@@ -14083,6 +14124,14 @@ function cmdShip(argv) {
 
   // ---- (b5) #581: a batch holds the trunk lane — pause before B0, so nothing is synced or merged ----
   if (lane && lane.held) { printBatchLanePause(lane, trunk); return 3; }
+
+  // ---- (b6) #610: gated — the heavy lane must be green at the branch head before trunk moves ----
+  if (heavyGate && !heavyGate.ok) {
+    print(`⏸ HEAVY-PENDING ${sess.branch} — ${heavyGate.detail}. Nothing landed.`);
+    if (heavyGate.action === 'dispatch' && gh) dispatchHeavyLane(repoAbs, heavyGate.file, sess.branch, heavyGate.sha);
+    else print('  Wait on the heavy run (bounded, B1a), then run this command again.');
+    return 3;
+  }
 
   // ---- (c) B0: merge the TARGET into the branch (in the worktree, or an ephemeral one) ----
   const generated = [...DEFAULT_GENERATED, ...(Array.isArray(doc.generated) ? doc.generated.map(String) : [])];
@@ -14850,6 +14899,58 @@ function shipBatchLaneCheck(repoAbs, doc, trunk, target, gh, ciResult = null) {
 }
 
 /** #581: the pause a serial ship takes while a batch holds the trunk lane — one message, every door. */
+/**
+ * #610: the heavy lane at one sha — which workflow it is, whether the tree there has it, and its
+ * verdict. The heavy workflow is named by FILE (`heavy-workflow:`, default ci-heavy.yml); its run
+ * rows carry the workflow's `name:`, so the file at that sha is read to learn which rows are heavy.
+ * `rows: null` (gh unreadable) stays `unread` — never "no heavy run", which would dispatch.
+ */
+function heavyLaneAt(repoAbs, doc, sha) {
+  const file = integrationProfile.parseHeavyWorkflow(doc).file;
+  const rel = `.github/workflows/${file}`;
+  let present = false, name = rel;
+  if (sha) {
+    if (!git.git(['cat-file', '-e', `${sha}^{commit}`], repoAbs).ok) git.git(['fetch', '--quiet', git.remoteFor(repoAbs) || 'origin', sha], repoAbs);
+    const show = git.git(['show', `${sha}:${rel}`], repoAbs);
+    if (show.ok) {
+      present = true;
+      const t = verifyRuns.workflowTriggers(show.stdout);
+      if (t && t.name) name = t.name; // GitHub names a workflow with no `name:` by its file path
+    }
+  }
+  const rows = present ? git.ghRunsAtCommit(repoAbs, sha) : [];
+  const heavyRows = Array.isArray(rows) ? rows.filter((r) => (r.workflowName || '') === name) : null;
+  return { file, name, present, verdict: integrationProfile.heavyVerdict(heavyRows) };
+}
+
+/**
+ * #610: `integration-profile: gated` — a serial landing waits on a green heavy run at the branch's
+ * remote head. Null under every other profile (ship reads the light lane, as before), for a docs-only
+ * change (no CI wait at all, #606), and for a batch member read (the batch head is graded instead).
+ */
+function shipHeavyGate(repoAbs, doc, branch, { docsOnlyApplies = false, batchMember = false } = {}) {
+  const profile = integrationProfile.parseProfile(doc).profile;
+  if (profile !== 'gated' || docsOnlyApplies || batchMember) return null;
+  const refs = git.branchRefs(repoAbs, branch);
+  const sha = refs.remoteSha || null;
+  const at = sha ? `${branch}@${shortSha(sha)}` : branch;
+  if (!sha) return { ok: false, action: 'wait', detail: `integration-profile: gated — ${branch} is not on the remote yet, so the heavy lane cannot run at its head (push it)`, sha: null, file: null };
+  if (refs.localSha && refs.localSha !== sha && !git.git(['merge-base', '--is-ancestor', refs.localSha, sha], repoAbs).ok) {
+    return { ok: false, action: 'wait', detail: `integration-profile: gated — local ${branch} has commits the remote head ${shortSha(sha)} does not; the heavy lane would test the wrong code (push it)`, sha: null, file: null };
+  }
+  const lane = heavyLaneAt(repoAbs, doc, sha);
+  const gate = integrationProfile.landingGate({ profile, heavyPresent: lane.present, verdict: lane.verdict, file: lane.file, at });
+  return { ...gate, sha, file: lane.file, name: lane.name };
+}
+
+/** #610: start the heavy lane at `sha` on `ref` — the real path only, never --dry. Never waits. */
+function dispatchHeavyLane(repoAbs, file, ref, sha) {
+  const d = git.ghWorkflowDispatch(repoAbs, file, ref, { ref: sha });
+  if (d.ok) print(`  ↻ dispatched ${file} on ${ref} at ${shortSha(sha)} (#610) — wait with \`gh run watch\` (bounded, B1a), then run this command again.`);
+  else warn(`  ${file} could NOT be dispatched (${d.detail}) — run it yourself: gh workflow run ${file} --ref ${ref} -f ref=${sha}`);
+  return d.ok;
+}
+
 function printBatchLanePause(lane, trunk) {
   print(`⏸ BATCH-IN-FLIGHT ${lane.ref} — ${lane.why}. Nothing landed.`);
   print(`  Landing now would move ${trunk} under it and throw its combined run away (#581). Wait for it to land`);
@@ -15097,7 +15198,20 @@ function cmdShipBatch(opts) {
       }
     }
   }
-  const verdict = existing && existing.matches ? shipBatch.combinedVerdict(git.ghRunsForRef(repoAbs, existing.ref, existing.sha)) : null;
+  let verdict = existing && existing.matches ? shipBatch.combinedVerdict(git.ghRunsForRef(repoAbs, existing.ref, existing.sha)) : null;
+  // #610: integration-profile: gated — a wave lands only on a green heavy run at its head too. The
+  // heavy verdict joins the combined one (integration-profile.js waveVerdict), so a heavy red takes
+  // the same re-run / split path a light red does, and the split walks toward the culprit.
+  let heavyWave = null;
+  if (verdict && integrationProfile.parseProfile(doc).profile === 'gated') {
+    heavyWave = heavyLaneAt(repoAbs, doc, existing.sha);
+    if (!heavyWave.present) {
+      print(`✗ ship-batch: integration-profile: gated, but no .github/workflows/${heavyWave.file} at ${existing.ref}@${shortSha(existing.sha)} — a wave lands only on a green heavy run, and there is no heavy lane to run. Nothing landed.`);
+      print('  Add one: `colab template ci-<stack>-heavy --dest .github/workflows/ci-heavy.yml` (or name yours with heavy-workflow:), land it, then re-run once it is on trunk.');
+      return 4;
+    }
+    verdict = integrationProfile.waveVerdict(verdict, heavyWave.verdict);
+  }
   // #605: a chained batch is measured against its own base (the parent's head), not trunk's tip.
   let step = shipBatch.nextStep({ enabled: true, wired: true, trunkCi, eligibleCount: members.length, existing, trunkNow: base, verdict, split: !!opts.split });
   J.step = step.step;
@@ -15114,6 +15228,7 @@ function cmdShipBatch(opts) {
   }
   if (step.step === 'wait-run') {
     print(`⏸ BATCH-PENDING ${existing.ref}@${shortSha(existing.sha)} — combined run ${verdict && verdict.runIds.length ? verdict.runIds.join(', ') + ' ' : ''}${verdict ? verdict.why : ''}.`);
+    if (verdict && verdict.heavyMissing && heavyWave && !opts.dry) dispatchHeavyLane(repoAbs, heavyWave.file, existing.ref, existing.sha); // #610
     print(`  Wait on it (bounded, B1a: gh run watch <id>), then run this command again. Nothing landed.`);
     return 3;
   }
@@ -16867,6 +16982,23 @@ function cmdPromote(argv) {
     else checks.push(['✗', 'trunk CI green', `${trunk}@${shortSha(run.sha)}: status=${run.status} conclusion=${run.conclusion || 'none'} (fail-to-start counts as not green)`]);
   }
 
+  // #610: integration-profile: promote — the heavy lane gates the promotion: green at the exact sha
+  // being promoted (origin's trunk tip). Never dispatched from here: promotion is a human act, and
+  // the command to start the heavy lane is printed instead.
+  let heavyOk = true;
+  if (integrationProfile.parseProfile(doc).profile === 'promote') {
+    const tipR = git.git(['rev-parse', `${remote}/${trunk}`], repoAbs);
+    const tip = tipR.ok ? tipR.stdout : null;
+    const lane = tip ? heavyLaneAt(repoAbs, doc, tip) : null;
+    const at = tip ? `${trunk}@${shortSha(tip)}` : trunk;
+    let detail;
+    if (!lane) { heavyOk = false; detail = `${remote}/${trunk} could not be read`; }
+    else if (!lane.present) { heavyOk = false; detail = `no .github/workflows/${lane.file} at ${at} — integration-profile: promote gates the promotion on the heavy lane, and there is none`; }
+    else if (lane.verdict.state === 'green') detail = `heavy lane green at ${at}${lane.verdict.url ? ` (${lane.verdict.url})` : ''}`;
+    else { heavyOk = false; detail = `heavy lane ${lane.verdict.state} at ${at} (${lane.verdict.why})${lane.verdict.state === 'none' ? ` — start it: gh workflow run ${lane.file} --ref ${trunk} -f ref=${tip}` : ''}`; }
+    checks.push([heavyOk ? '✓' : '✗', 'heavy lane green (integration-profile: promote, #610)', detail]);
+  }
+
   const localTrunk = git.git(['rev-parse', trunk], repoAbs);
   const originTrunk = git.git(['rev-parse', `${remote}/${trunk}`], repoAbs);
   const trunkSyncOk = localTrunk.ok && originTrunk.ok && localTrunk.stdout === originTrunk.stdout;
@@ -16896,7 +17028,7 @@ function cmdPromote(argv) {
       ahead > 0 ? `${ahead} commit(s) to promote` : `could not count ${remote}/${MAIN}..${remote}/${trunk}`]);
   }
 
-  const preOk = ciOk && trunkSyncOk && mainSyncOk && checkoutOk && (!opts.auto || ahead > 0);
+  const preOk = ciOk && heavyOk && trunkSyncOk && mainSyncOk && checkoutOk && (!opts.auto || ahead > 0);
 
   // ---- report ----
   say(`promote ${shortRepo(repoAbs)} · ${trunk} → ${MAIN}` + (opts.dry ? '  [DRY RUN]' : ''));

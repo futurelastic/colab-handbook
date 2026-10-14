@@ -931,6 +931,8 @@ function promotionVerdict({ trunk, sha, parents, headOnTrunk, mergedFromTrunk, e
  *   triggers      workflow-triggers.js prereleaseTagTriggers(...) findings
  *   lastFinal, suggestion, override, tags, tagsAtSha
  *   ci, suite, schema, switches   { ok, detail } each, measured by the caller
+ *   heavy         #610 — integration-profile.js releaseHeavyCondition(), read on the final routes only;
+ *                 absent → no row
  *
  * Returns { ok, checks: [{ condition, ok, detail }], refusals, version, tag, bump, overridden }.
  * Every check is reported, not just the first failure: a caller fixing one refusal should not
@@ -1060,6 +1062,14 @@ function decide(facts) {
   for (const [condition, verdict] of [['ci-green', f.ci], ['full-suite', f.suite], ['schema-additive', f.schema], ['switch-dependencies', f.switches]]) {
     if (!verdict) add(condition, false, 'not measured', true);
     else add(condition, verdict.ok, verdict.detail, isUnread(verdict));
+  }
+
+  // #610: a final needs the heavy lane green at its exact sha, under every integration profile. Only
+  // the two final routes tag a final here; a candidate is gated at `release finalize`. A heavy run
+  // still to start or still running is the route holding (a no-op under --auto), not a refusal.
+  if (finalRoute && tag && f.heavy) {
+    add('heavy-lane', f.heavy.ok, f.heavy.detail, f.heavy.pending);
+    if (!f.heavy.ok && f.heavy.pending && f.auto) noop = true;
   }
 
   // #446: what the fast route keeps in place of the test period it does not have.

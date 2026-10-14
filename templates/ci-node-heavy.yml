@@ -14,6 +14,10 @@
 #     green; release-auto.yml dispatches it at each candidate and finalizes only when it is
 #     green at that exact sha.
 #   - BY HAND: Actions → "CI (heavy)" → Run workflow, with a ref.
+#   - Per INTEGRATION PROFILE (project.yml `integration-profile:`, #610): `gated` — colab ship
+#     dispatches this file at each landing and lands only on its green (keep workflow_dispatch and
+#     its `ref` input); `qualify` — make the cron below a clock, every few hours; `promote` —
+#     dispatch it on trunk's tip before colab promote. Absent = release-heavy: as copied.
 # Heavy is opt-in per test; an unmarked test is light. The marker:
 #   a `test:heavy` script in package.json (e.g. over `*.heavy.test.*` files). `npm test`
 #   stays light; this lane runs both.

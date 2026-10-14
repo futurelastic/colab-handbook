@@ -1137,7 +1137,10 @@ never read as "none". The same is true of
 and [`writes:`](#writes--the-trunk-direct-veto-and-the-two-things-that-make-a-branch-mandatory)
 — each optional, each read as undeclared rather than defaulted when absent, and `exposure`
 in particular never defaults to `none`, which is a *declared* claim, not the absence of one.
-A repo whose green work queues behind its trunk CI may declare
+Where the heavy CI lane runs is
+[`integration-profile:`](project.schema.md#integration-profile-heavy-workflow--optional)
+([§7](#integration-profiles--where-the-heavy-lane-runs-and-what-a-green-trunk-promises-610));
+omitted, it is #607's two lanes. A repo whose green work queues behind its trunk CI may declare
 [`ship-batch:`](project.schema.md#ship-batch--optional) to land up to three candidates per
 CI cycle ([§4, *Batch landing*](#batch-landing--one-combined-run-then-a-fast-forward-373));
 omitted, landing stays serial exactly as before.
@@ -1747,7 +1750,9 @@ unchanged) may land through `colab ship --batch <b1,b2[,…]>`:
 
 **A batch of one is a batch** (#562): a lone ready candidate lands through the same path,
 never serially, so a repo running its full matrix only on `ship-batch/**` and trunk still
-tests every setup before trunk moves — whether or not a sibling was ready.
+tests every setup before trunk moves — whether or not a sibling was ready. Under
+[`integration-profile: gated`](#integration-profiles--where-the-heavy-lane-runs-and-what-a-green-trunk-promises-610)
+the heavy lane must also be green at the batch head; a heavy red re-runs or splits like a light one.
 
 1. **Joining.** A member is `green` at its own head ([*Branch CI*](#branch-ci--the-candidates-own-run-read-as-a-class-314),
    unchanged — or a `none` that cannot arrive), passes every gate its own serial ship would,
@@ -4480,8 +4485,42 @@ dispatched runs are set aside (`tools/lib/verify-runs.js`). Why: [ADR 607](docs/
   lane, naming the commits since the last green nightly.
 - **The adopter marks heavy tests; an unmarked test is light**: a `test:heavy` script (Node), the
   pytest marker `heavy`, or the Pest/PHPUnit group `heavy`.
-- **The trade-off:** a defect the light lane misses can sit on trunk for up to a day. A repo with
-  a merge queue and runners to spare may add a full run per batch as a third trigger.
+- **The trade-off:** a defect the light lane misses can sit on trunk for up to a day. A repo that
+  cannot accept that declares another [integration profile](#integration-profiles--where-the-heavy-lane-runs-and-what-a-green-trunk-promises-610).
+
+### Integration profiles — where the heavy lane runs, and what a green trunk promises (#610)
+
+`integration-profile:` in `project.yml` ([schema](project.schema.md#integration-profile-heavy-workflow--optional))
+picks one shape. Every profile keeps the light lane on session branches; ship, release and promote read it.
+
+| | `gated` | `qualify` | `release-heavy` (default) | `promote` |
+|---|---|---|---|---|
+| A landing (serial or batch) | waits on a **green heavy run at its sha** | light only | light only | light only, into `dev` |
+| Heavy lane | every landing + release gate | trunk on a clock (the heavy cron, every few hours) + nightly + release gate | nightly (required) + release gate | at the `dev → main` promotion |
+| Trunk promise | always heavy-green | heavy-red for at most one clock window | light-green; heavy-red until the next nightly | `dev` always heavy-green |
+| A heavy red | blocks landing; a red wave splits toward the culprit | revert first, landings continue | a trunk finding naming the sha range; blocks the final | blocks the promotion |
+| Meant for | trunk deploys or must always be shippable | tooling with many small landings a day | low-volume repos on a release train | repos already running `dev → main` for an approval gate |
+
+- **Absent ⇒ `release-heavy`**, #607's shape: a repo that never declares changes nothing.
+- **A final release needs the heavy lane green at its exact sha under every profile**, wherever the
+  repo has one; still running (or not yet run) keeps the candidate testing.
+- **`exposure: live` without `deploy: tag` may only declare `gated` or `promote`**: `qualify` and
+  `release-heavy` allow a heavy-red trunk, and there the promotion deploys it. The audit fails it.
+- **`release-heavy` is the higher-risk choice**: a red found late implicates the whole range, its
+  authors usually gone — which is why its nightly is never optional.
+- **`promote` is not for new repos.** For an approval gate prefer a merge queue on trunk, or a
+  `release/x.y` branch cut from trunk.
+- **Test tiers**, the vocabulary every profile uses: `smoke` (the dev machine) · `affected` (branch
+  CI) · `integration` (a wave's cross-feature subset) · `full` (the whole suite) · `heavy` (e2e,
+  multi-configuration, load). An adopter maps its tests with the [marker](#two-lanes--light-on-every-merge-heavy-on-official-builds-and-nightly-607); unmarked is light.
+- **Revert first** (`qualify`, and `gated` when a red reaches trunk): bisect the red window with
+  isolated re-runs of only the failing tests; retry a failure once before calling it red; revert
+  automatically only a culprit an isolated re-run proved, otherwise a human or coordinator decides.
+  The fixer gets a brief: failing tests, log excerpt and run link, culprit with the bisect proof,
+  the original issue, a reproduction command, the flaky-or-real verdict, and the revert to re-land with a regression test.
+- **Batch size:** start at 4–6; tune from the per-branch wave failure rate and the flake rate.
+
+Why each shape, and why only `gated` changes ship: [ADR 610](docs/adr/610-integration-profiles.md).
 
 ### CI — what it is follows the unit's shape, how much follows exposure
 
