@@ -809,3 +809,44 @@ test('templateChangedSince: two commits BOTH declared rule-neutral downgrade the
   assert.strictEqual(c.changed, true);
   assert.strictEqual(c.ruleNeutral, true);
 });
+
+// --- #607: a CI copy is guidance — its provenance is recognised so its drift is information ----
+
+test('isCiProvenance: a light-lane copy, a heavy-lane copy and nothing else', () => {
+  const HB = new Set(['ci-node', 'ci-node-heavy', 'ci-laravel', 'ci-python', 'release-tag', 'release-auto']);
+  const read = (n) => fs.readFileSync(path.join(REPO_ROOT, 'templates', `${n}.yml`), 'utf8');
+  assert.strictEqual(stamp.isCiProvenance(workflowProvenance(read('ci-node'), 'ci', HB)), true);
+  // A heavy copy carries the light lane's step names too, so no single template is named — still CI.
+  const heavy = workflowProvenance(read('ci-node-heavy'), 'ci-heavy', HB);
+  assert.strictEqual(heavy.origin, 'derived');
+  assert.strictEqual(stamp.isCiProvenance(heavy), true);
+  assert.strictEqual(stamp.isCiProvenance(workflowProvenance(read('release-tag'), 'release', HB)), false);
+  assert.strictEqual(stamp.isCiProvenance(workflowProvenance(HANDWRITTEN_DEPLOY, 'deploy', HB)), false);
+});
+
+test('`colab update`: a CI copy behind its template is a suggestion — reported, never exit 1 (#607)', () => {
+  const hb = stamp.handbookInfo(REPO_ROOT);
+  const tags = spawnSync('git', ['tag', '--sort=-version:refname'], { cwd: REPO_ROOT, encoding: 'utf8' }).stdout.split('\n')
+    .filter((t) => /^v\d+\.\d+\.\d+$/.test(t));
+  // The newest release whose ci-node.yml has changed since: a pristine copy of it reads `behind`.
+  const old = tags.find((t) => stamp.templateAt(REPO_ROOT, t, 'ci-node') !== null
+    && stamp.templateChangedSince(REPO_ROOT, stamp.templateFiles('ci-node'), t).changed);
+  if (hb.untagged || !old) return; // a shallow or tagless checkout cannot answer this question
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'colab-home-'));
+  const repo = fs.mkdtempSync(path.join(os.tmpdir(), 'colab-adopter-'));
+  try {
+    fs.mkdirSync(path.join(repo, '.github', 'workflows'), { recursive: true });
+    fs.writeFileSync(path.join(repo, '.github', 'workflows', 'ci.yml'), stamp.stampLine('ci-node', old) + stamp.templateAt(REPO_ROOT, old, 'ci-node'));
+    execFileSync('git', ['init', '-q'], { cwd: repo });
+    fs.writeFileSync(path.join(home, 'repos.txt'), `${repo}\n`);
+    const r = spawnSync(process.execPath, [path.join(REPO_ROOT, 'tools', 'colab'), 'update', '--json'],
+      { env: { ...process.env, COLAB_HOME: home }, encoding: 'utf8' });
+    const out = JSON.parse(r.stdout);
+    assert.strictEqual(out.summary.behind, 1, r.stdout);
+    assert.strictEqual(out.summary.suggestions, 1);
+    if (out.frozen && out.frozen.state !== 'behind') assert.strictEqual(r.status, 0, 'a CI-only behind must not exit 1');
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true });
+    fs.rmSync(repo, { recursive: true, force: true });
+  }
+});

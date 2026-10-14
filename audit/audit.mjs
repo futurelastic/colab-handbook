@@ -417,23 +417,29 @@ function satisfiesConstraint(version, constraint) {
 
 // Run all stamp/reconciliation checks for one repo, pushing findings via fail/warn.
 // Silent when there is nothing to say (the common, healthy case).
-function checkStamps(src, hb, tmplNames, fail, warn, { ceremony = "standard", missingAxes = [], predatesAxes = [], writesRaw = null } = {}) {
+function checkStamps(src, hb, tmplNames, fail, warn, { ceremony = "standard", missingAxes = [], predatesAxes = [], writesRaw = null, suggest = () => {} } = {}) {
   const cur = hb.version;
 
   const compareStamp = (kind, name, stampVersion, files, { isCi = false } = {}) => {
     // Deactivated while the handbook is untagged — a global note already says so.
     if (hb.untagged || !hb.hasGit) return;
+    // #607: a CI template is GUIDANCE. How an adopter's CI produces its verdict is the adopter's
+    // business; the handbook enforces only what `colab ship` reads (checked elsewhere in this file:
+    // trunk CI-gated, the branch trigger under gate: ci, ship-batch, the round-trip job name). So
+    // every stamp observation on a `ci-*` copy is information — never a fail, never a warn.
+    const warn_ = isCi ? suggest : warn;
+    const fail_ = isCi ? suggest : fail;
     if (name !== null && !tmplNames.has(name)) {
-      warn(`${kind} stamped @ ${stampVersion} names unknown template "${name}" — not in handbook templates/`);
+      warn_(`${kind} stamped @ ${stampVersion} names unknown template "${name}" — not in handbook templates/`);
       return;
     }
     if (cmpSemver(stampVersion, cur) > 0) {
-      warn(`${kind} stamped @ ${stampVersion} is NEWER than handbook current ${cur} — clock skew or a hand-edited stamp`);
+      warn_(`${kind} stamped @ ${stampVersion} is NEWER than handbook current ${cur} — clock skew or a hand-edited stamp`);
       return;
     }
     const { verifiable, changed, ruleNeutral } = templateChangedSince(HANDBOOK_ROOT, files, stampVersion);
     if (!verifiable) {
-      warn(`${kind} stamped @ ${stampVersion}, a version not in this handbook checkout — cannot verify drift (fetch tags, or re-copy)`);
+      warn_(`${kind} stamped @ ${stampVersion}, a version not in this handbook checkout — cannot verify drift (fetch tags, or re-copy)`);
       return;
     }
     if (changed) {
@@ -452,8 +458,9 @@ function checkStamps(src, hb, tmplNames, fail, warn, { ceremony = "standard", mi
       // template stays a hard fail regardless of the declaration, for the identical reason
       // `isCi` already overrides ceremony above. Declaring nothing (the default) is unaffected
       // — that repo gets exactly today's fail.
-      if (ruleNeutral && !isCi) warn(`${msg} (declared rule-neutral at commit time — see CONVENTIONS.md §8)`);
-      else if (ceremony === "light" && !isCi) warn(`${msg} (ceremony: light — advisory, not a build/secret-scan template)`);
+      if (isCi) fail_(`${kind} copied @ ${stampVersion} — template has a newer suggestion (${cur}); adopt it if it helps: \`colab update\` shows the diff`);
+      else if (ruleNeutral) warn(`${msg} (declared rule-neutral at commit time — see CONVENTIONS.md §8)`);
+      else if (ceremony === "light") warn(`${msg} (ceremony: light — advisory)`);
       else fail(msg);
     }
   };
@@ -473,8 +480,11 @@ function checkStamps(src, hb, tmplNames, fail, warn, { ceremony = "standard", mi
       // that name exists). `unstampedFinding` is shared with `colab update` so the two tools
       // cannot drift on this. The `unrelated` finding is deliberately NOT raised here: it has no
       // action, and the audit reports drift, not reassurance.
-      const finding = unstampedFinding(workflowProvenance(text, stem, tmplNames));
-      if (finding && finding.state === 'unstamped') warn(`${wf} unstamped — ${finding.reason}`);
+      const prov = workflowProvenance(text, stem, tmplNames);
+      const finding = unstampedFinding(prov);
+      // #607: an unstamped CI copy is the adopter's own CI — information, like any CI-template drift.
+      const isCiCopy = stamp.isCiProvenance(prov);
+      if (finding && finding.state === 'unstamped') (isCiCopy ? suggest : warn)(`${wf} unstamped — ${finding.reason}`);
     }
   }
 
@@ -2096,7 +2106,9 @@ function auditRepoInner(target, ctx) {
   // was ever asked.
   const missingAxes = cfg ? stamp.AXES.filter((a) => !(a in cfg)) : [];
   info.predatesAxes = [];
-  if (!isSelf) checkStamps(src, ctx.handbook, ctx.templateNames, fail, warn, { ceremony, missingAxes, predatesAxes: info.predatesAxes, writesRaw });
+  info.suggestions = [];
+  const suggest = (t) => info.suggestions.push(t);
+  if (!isSelf) checkStamps(src, ctx.handbook, ctx.templateNames, fail, warn, { ceremony, missingAxes, predatesAxes: info.predatesAxes, writesRaw, suggest });
 
   // ---- repository metadata identity scan (#228 part 4) ----------------------
   // Explicitly NOT gated on isSelf: the handbook is public, its description and topics are
@@ -3348,6 +3360,8 @@ function report(results, opts, ctx) {
     else if (r.adoption === "local") lines.push(`⌂ adopted locally, not committed — descriptor hidden by .git/info/exclude; a repo the fleet does not own (CONVENTIONS.md §9)${r.clean ? " ✓" : ""}`);
     else if (r.clean) lines.push("✓");
     r.findings.forEach((f) => lines.push(`${f.level === "fail" ? "⚠" : "·"} ${f.text}`));
+    // #607: CI-template drift — information, not a finding, so it never changes clean/ok.
+    (r.suggestions || []).forEach((s) => lines.push(`▸ ${s}`));
     // #556: the measured picture — information, not a finding, so it never changes clean/ok.
     if (r.batchHistory?.status === "read") {
       r.batchHistory.picture.forEach((l) => lines.push(`▸ ${l}`));

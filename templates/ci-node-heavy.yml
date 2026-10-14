@@ -1,5 +1,6 @@
-# CI heavy lane (Node) — TEMPLATE. Copy me to .github/workflows/ci-heavy.yml, beside ci.yml
-# (copied from ci-node.yml). Guidance, not a dependency: you own the copy (CONVENTIONS.md §7).
+# CI heavy lane (Node) — TEMPLATE. Copy me into your repo at .github/workflows/ci-heavy.yml,
+# beside ci.yml (copied from ci-node.yml). Guidance, not a dependency:
+# you own the copy (CONVENTIONS.md §7).
 #
 # EDIT POINTS are marked `# EDIT:` — walk them once after copying.
 #

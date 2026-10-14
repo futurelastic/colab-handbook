@@ -111,6 +111,7 @@ function auditWithHandbook(hbDir, targetDir) {
     ok: r.ok,
     fails: r.findings.filter((f) => f.level === 'fail').map((f) => f.text),
     warns: r.findings.filter((f) => f.level === 'warn').map((f) => f.text),
+    suggestions: r.suggestions || [],
   };
 }
 
@@ -126,6 +127,7 @@ function audit(dir) {
     ok: r.ok,
     fails: r.findings.filter((f) => f.level === 'fail').map((f) => f.text),
     warns: r.findings.filter((f) => f.level === 'warn').map((f) => f.text),
+    suggestions: r.suggestions || [],
   };
 }
 
@@ -195,19 +197,31 @@ test('a Tier B repo with autonomy: auto-trunk and no ceremony key is unaffected 
   assert.ok(!hasText(r.fails, /ceremony/), r.fails.join(' | '));
 });
 
-// --- item 3: stamp-drift severity downgrade, non-CI templates only ---------
+// --- item 3: stamp-drift severity — non-CI templates; a CI template is guidance (#607) -----
 
-test('ceremony: standard — stamp drift on BOTH a CI workflow and the CLAUDE block is a fail', () => {
+const ciSuggested = (r) => hasText(r.suggestions, /ci\.yml copied @ v1\.0\.0 — template has a newer suggestion/);
+const ciFound = (r) => hasText([...r.fails, ...r.warns], /ci\.yml/);
+
+test('ceremony: standard — CLAUDE-block drift is a fail; CI workflow drift is only a suggestion (#607)', () => {
   const hb = fakeHandbook();
   const r = auditWithHandbook(hb, fixtureStampedAtV1(''));
-  assert.ok(hasText(r.fails, /ci\.yml copied @ v1\.0\.0 — template changed since/), r.fails.join(' | '));
+  assert.ok(!ciFound(r), `CI drift must be neither fail nor warn: ${[...r.fails, ...r.warns].join(' | ')}`);
+  assert.ok(ciSuggested(r), r.suggestions.join(' | '));
   assert.ok(hasText(r.fails, /CLAUDE block copied @ v1\.0\.0 — template changed since/), r.fails.join(' | '));
 });
 
-test('ceremony: light — CI workflow drift STAYS a fail; CLAUDE-block (non-CI) drift downgrades to a warn', () => {
+test('ceremony: light — CLAUDE-block (non-CI) drift downgrades to a warn; CI drift stays a suggestion', () => {
   const hb = fakeHandbook();
   const r = auditWithHandbook(hb, fixtureStampedAtV1('ceremony: light\n'));
-  assert.ok(hasText(r.fails, /ci\.yml copied @ v1\.0\.0 — template changed since/), `CI drift must stay a fail even under light: ${r.fails.join(' | ')}`);
+  assert.ok(!ciFound(r), [...r.fails, ...r.warns].join(' | '));
+  assert.ok(ciSuggested(r), r.suggestions.join(' | '));
   assert.ok(!hasText(r.fails, /CLAUDE block copied/), `CLAUDE-block drift must NOT be a fail under light: ${r.fails.join(' | ')}`);
   assert.ok(hasText(r.warns, /CLAUDE block copied @ v1\.0\.0 — template changed since.*ceremony: light/), r.warns.join(' | '));
+});
+
+test('a CI-only drift leaves the repo clean — a suggestion never changes ok/clean (#607)', () => {
+  const hb = fakeHandbook();
+  const r = auditWithHandbook(hb, fixtureStampedAtV1(''));
+  assert.ok(r.suggestions.length >= 1);
+  assert.ok(r.fails.every((f) => !/ci\.yml/.test(f)) && r.warns.every((w) => !/ci\.yml/.test(w)));
 });
