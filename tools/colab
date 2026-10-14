@@ -10671,6 +10671,10 @@ Sequence (each step gated; any failure aborts before the push — the target is 
                         and worktree untouched. Re-run the same command once an account other than the
                         author approved the branch's CURRENT head: it lands by the ordinary squash below
                         and closes the PR. Accounts sharing one login cannot approve each other.
+  b5. heavy lane        (#610) only with integration-profile: gated, never for a docs-only change:
+                        the heavy workflow (heavy-workflow:, default ci-heavy.yml) green at the
+                        branch's remote head. None yet → a real ship dispatches it and PAUSES —
+                        "⏸ HEAVY-PENDING", exit 3, nothing merged; running → the same pause; red → ✗.
   c. B0 sync            merge the target INTO the branch; non-generated conflict → abort (human merge);
                         generated-only conflict → repo's .colab/hooks/pre-ship regenerates, else abort
   d. B1 squash          re-check CI green, then squash-merge branch → target (Closes every claimed issue,
@@ -15203,7 +15207,7 @@ function cmdShipBatch(opts) {
     heavyWave = heavyLaneAt(repoAbs, doc, existing.sha);
     if (!heavyWave.present) {
       print(`✗ ship-batch: integration-profile: gated, but no .github/workflows/${heavyWave.file} at ${existing.ref}@${shortSha(existing.sha)} — a wave lands only on a green heavy run, and there is no heavy lane to run. Nothing landed.`);
-      print('  Add one from templates/ci-<stack>-heavy.yml (or name it with heavy-workflow:), then run this command again.');
+      print('  Add one: `colab template ci-<stack>-heavy --dest .github/workflows/ci-heavy.yml` (or name yours with heavy-workflow:), land it, then re-run once it is on trunk.');
       return 4;
     }
     verdict = integrationProfile.waveVerdict(verdict, heavyWave.verdict);

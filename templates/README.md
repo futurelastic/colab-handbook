@@ -42,8 +42,23 @@ or warn. The handbook enforces only what `colab ship` reads from your CI
   suppresses a new one. If the issue list cannot be read, it files nothing and fails the job.
 - **Exposure sets the bar.** `live`/`released` repos run the heavy lane before every official
   build. `none`/`self` repos may run it nightly only.
-- **The trade-off:** a defect the light lane misses can sit on trunk for up to a day. Where a
-  merge queue and spare runners exist, a full run per batch is an optional third trigger.
+- **The trade-off:** a defect the light lane misses can sit on trunk for up to a day. A repo that
+  cannot accept that picks another `integration-profile:` (below).
+
+### Where each integration profile wires the heavy lane (#610)
+
+`integration-profile:` in `project.yml` ([CONVENTIONS §7](../CONVENTIONS.md#integration-profiles--where-the-heavy-lane-runs-and-what-a-green-trunk-promises-610))
+decides when the heavy lane runs. The light `ci.yml` is the same under every profile; only the heavy
+file's triggers change:
+
+| Profile | What to change in `ci-heavy.yml` |
+|---|---|
+| `release-heavy` (absent) | nothing — the template as copied: nightly, plus every official build |
+| `gated` | nothing — `colab ship` dispatches it (`workflow_dispatch`, input `ref` = the sha) at each landing's branch or batch head, and lands only on its green. Keep `workflow_dispatch` and its `ref` input. |
+| `qualify` | the `schedule` cron becomes the clock: every few hours on trunk's tip (e.g. `"23 */4 * * *"`), still skipped when trunk has not moved |
+| `promote` | dispatch it on the trunk tip before `colab promote` (`gh workflow run ci-heavy.yml --ref dev -f ref=<sha>`) — promote refuses until it is green |
+
+Named it something other than `ci-heavy.yml`? Say so with `heavy-workflow:` in `project.yml`.
 - **Traps the heavy template already handles:**
   - It has no push or `pull_request` trigger, so ship never counts its run.
   - The `plan` job, not an all-skipped run, is what concludes `success` on a skipped nightly.
