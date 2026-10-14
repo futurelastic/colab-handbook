@@ -4458,7 +4458,7 @@ or warn, and `colab update` never exits 1 on it. The contract the audit does che
 every push to trunk (above), on a branch push where `gate: authoritative: ci`, on `ship-batch/**`
 where `ship-batch` is above 1, and a `Migration round-trip…` job where `migration-grant: reviewer`.
 Ship counts push and pull-request runs only (or what `ship-gate-workflows` names); scheduled and
-dispatched runs are set aside (`tools/lib/verify-runs.js`).
+dispatched runs are set aside (`tools/lib/verify-runs.js`). Why: [ADR 607](docs/adr/607-ci-templates-guidance-two-lanes.md).
 
 ### Two lanes — light on every merge, heavy on official builds and nightly (#607)
 
