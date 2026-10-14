@@ -93,6 +93,25 @@ with no agent and no other tool.
 - **Not a maturity model.** No answer here ranks a repo above another. A repo
   with no production is not a worse repo; it is a repo with fewer gates.
 
+### Scope — and what is frozen
+
+The handbook's scope is **how code lands on git**: tiers and exposure,
+`project.yml`, branches and commits, branch CI, worktrees and ports, the git
+claim ref, ship and release mechanics, CI templates, conformance, adoption and
+`solo`. Since 2026-10-14
+([#604](https://github.com/futurelastic/colab-handbook/issues/604)), the surface
+that decides *who holds an issue, what was decided, what may start, and who may
+do an act* is **frozen**: claims recorded on the issue, readiness, `Filed-by`
+provenance, decision records, and every `COLAB_HUMAN=1` gate except `solo`. It
+will move to a separate decision, work and gate layer that adopters run. It
+keeps working, bug fixes still land, and nothing is removed before its
+replacement has run in production for 7 days. The notice heads
+[`CONVENTIONS.md` §5](CONVENTIONS.md#5-claiming-work--how-to-say-im-on-this); the full
+list is in [ADR 604](docs/adr/604-scope-freeze.md).
+
+**Contributing:** a proposal for a new feature in a frozen area is refused,
+with a pointer to [#604](https://github.com/futurelastic/colab-handbook/issues/604).
+
 ## Your first session
 
 A unit of work goes round one loop. Each step is a skill, invoked by name in an
