@@ -4197,9 +4197,9 @@ every cut.
 and the command that proves its tarball holds only what was meant to ship — and
 [`templates/release-auto.yml`](templates/release-auto.yml)'s `npm` job then publishes every tag the
 run created: a candidate `vX.Y.Z-rc.N` to dist-tag `next`, a final `vX.Y.Z` to `latest`, both with
-provenance; `latest` never moves to a candidate. Finals publish automatically like the tag they
-follow — the route's one human gate (a final that deploys production) never applies here, since
-npm is offered on `public-tool` alone and is an audit failure on any other route. Four rules
+provenance; `latest` never moves to a candidate; npm is offered on `public-tool` alone and is an audit failure on any other route.
+A final a person tags (`final: human`, #612) is one no run tagged, so the daily run also hands on
+the newest final on `main` when npm `latest` is older or absent (never older, never private). Four rules
 hold the shape:
 
 - **Trusted publishing (OIDC) only.** No npm token is stored, read, or offered as a fallback; the

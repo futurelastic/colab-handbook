@@ -27,6 +27,8 @@
 #   any of the above tagged something, and    npm publish (job `npm`, #433) — candidates to
 #   project.yml declares release.npm          dist-tag `next`, finals to `latest`; see the
 #                                             comment above that job
+#   the daily schedule or a dispatch, and     the same npm publish of the newest final on main
+#   npm `latest` is older than that final     — a final tagged by hand (`final: human`, #612)
 #   the cut tagged a FINAL — route            deploy + health check (job `deploy`, #446) — see
 #   deploy-tag-fast only                      "DEPLOYING IN THIS RUN" below
 #   the cut tagged a FINAL — route            published like any tag (Release marked latest, npm
@@ -280,8 +282,8 @@ jobs:
       contents: write # push the tags (and, with promotion: main-loop, the promotion), publish the GitHub Release
       issues: write # finalize opens / comments on / closes the "release: vX.Y.Z" tracking issue
       actions: write # read the runs at a commit (ci-green, full-suite, trunk-green); dispatch CI after a promotion
-    # What the npm job below needs (#433) — empty / publish=false unless this run tagged something
-    # AND .github/project.yml opts in with release.npm.
+    # What the npm job below needs (#433) — empty / publish=false unless this run tagged something (or
+    # the daily sweep found a final npm lacks, #612) AND .github/project.yml opts in with release.npm.
     outputs:
       tags: ${{ steps.npm-target.outputs.tags }}
       npm: ${{ steps.npm-target.outputs.publish }}
@@ -635,11 +637,17 @@ jobs:
       # Whether the npm job publishes what this run tagged — `colab release npm` reads the
       # release: block (one reading, the same as cut/finalize). A CLI older than #433 gives no
       # verdict; that is a warning and no npm publish, never a failed release.
+      # #612: the daily run (and a dispatch) also hands on the newest FINAL reachable from main when
+      # npm `latest` is older — a final a person tagged (`final: human`) is never tagged by a run, so
+      # without this sweep it never reached npm. Already on npm, newer on npm, a private repo, or an
+      # unreadable registry: nothing is added.
       - name: Read the npm target (colab release npm) [publish]
         id: npm-target
-        if: env.DRY_RUN != 'true' && (steps.cut.outputs.tag != '' || steps.finalize.outputs.tag != '')
+        if: env.DRY_RUN != 'true' && (steps.cut.outputs.tag != '' || steps.finalize.outputs.tag != '' || (github.event_name == 'schedule' && env.RETRY_RUN != 'true') || github.event_name == 'workflow_dispatch')
         env:
           TAGS: ${{ steps.cut.outputs.tag }} ${{ steps.finalize.outputs.tag }}
+          SWEEP: ${{ (github.event_name == 'schedule' && env.RETRY_RUN != 'true') || github.event_name == 'workflow_dispatch' }}
+          REPO: ${{ github.repository }}
         run: |
           set -uo pipefail
           OUT="$RUNNER_TEMP/npm.json"
@@ -656,12 +664,47 @@ jobs:
             echo "publish=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
+          TAGS="$(echo $TAGS)"
+          PACKAGE="$(jq -r '.package' "$OUT")"
+          # #612: a final tagged by hand. Only main's history counts (HEAD is main: this step never runs
+          # on a dry run), only a final (vX.Y.Z), only when npm `latest` is older or absent — so a version
+          # already published, or a newer one, is a no-op and `latest` never moves backwards.
+          if [ "${SWEEP:-false}" = "true" ]; then
+            eval "$RETRY_TRANSIENT"
+            FINAL="$(git tag --merged HEAD --list 'v*' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -n 1)"
+            if [ -n "$FINAL" ] && ! grep -qxF "$FINAL" <<< "$(tr ' ' '\n' <<< "$TAGS")"; then
+              VERSION="${FINAL#v}"
+              PRIVATE="$(retry_transient gh api "repos/$REPO" --jq '.private' 2> /dev/null)" || PRIVATE=unknown
+              ERR="$RUNNER_TEMP/npm-latest.err"
+              if [ "$PRIVATE" != "false" ]; then
+                echo "npm sweep: $REPO is not public ($PRIVATE) — $FINAL is not handed to npm" | tee -a "$GITHUB_STEP_SUMMARY"
+              elif LATEST="$(retry_transient curl -fsSL "https://registry.npmjs.org/${PACKAGE/\//%2F}/latest" 2> "$ERR" | jq -r '.version // empty')" && [ -n "$LATEST" ]; then
+                if [ "$LATEST" = "$VERSION" ]; then
+                  echo "npm sweep: $PACKAGE@$VERSION is already npm latest — nothing to publish"
+                elif [ "$(printf '%s\n' "$LATEST" "$VERSION" | sort -V | tail -n 1)" = "$LATEST" ]; then
+                  echo "npm sweep: npm latest $PACKAGE@$LATEST is newer than $FINAL — nothing to publish" | tee -a "$GITHUB_STEP_SUMMARY"
+                else
+                  TAGS="$(echo $TAGS $FINAL)"
+                  echo "npm sweep: $FINAL is final on main but npm latest is $LATEST — handing it to the npm job (#612)" | tee -a "$GITHUB_STEP_SUMMARY"
+                fi
+              elif grep -q 'error: 404' "$ERR"; then
+                TAGS="$(echo $TAGS $FINAL)"
+                echo "npm sweep: $FINAL is final on main and $PACKAGE has no npm latest — handing it to the npm job (#612)" | tee -a "$GITHUB_STEP_SUMMARY"
+              else
+                echo "::warning::npm sweep: could not read npm latest for $PACKAGE ($(tail -n 1 "$ERR" 2> /dev/null)) — $FINAL is not handed on in this run; the next daily run retries"
+              fi
+            fi
+          fi
+          if [ -z "$TAGS" ]; then
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
           {
             echo "publish=true"
-            echo "tags=$(echo $TAGS)"
+            echo "tags=$TAGS"
             echo "dir=$(jq -r '.dir' "$OUT")"
             echo "gate=$(jq -r '.gate' "$OUT")"
-            echo "package=$(jq -r '.package' "$OUT")"
+            echo "package=$PACKAGE"
           } >> "$GITHUB_OUTPUT"
 
       # Publishes every tag THIS run created. In this run, never via a tag-push workflow:
@@ -709,7 +752,9 @@ jobs:
           done
 
   # ---------------------------------------------------------------------------------------------
-  # npm (#433) — publishes what the release job tagged, in this same run. Opt-in: it runs only when
+  # npm (#433) — publishes what the release job tagged, in this same run — plus, on the daily run and a
+  # dispatch, the newest final on main that npm `latest` lacks: a final a person tagged by hand
+  # (`final: human`, #612), or one whose earlier publish failed. Opt-in: it runs only when
   # .github/project.yml declares release.npm + release.npm-gate on the public-tool route, so a repo
   # without them never gets this job.
   #
