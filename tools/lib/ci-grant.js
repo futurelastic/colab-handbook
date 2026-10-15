@@ -159,7 +159,9 @@ const { TRUSTED_ASSOCIATIONS, authorIsHuman, labelApplierIsHuman } = require('./
  *
  * `opts` (#407) — OPTIONAL `{ trust, labelActors }`, the same contract as migration-grant.js's
  * evaluateIssue: absent/undeclared trust keeps the association check byte-identical; declared, the
- * grant author and the label's latest applier must both be listed in trust-humans.
+ * grant author and the label's latest applier must both be listed in trust-humans. `opts.syncChain`
+ * (#615) — `(headSha, redSha) => [sha…]`, see syncedFrom: lets the grant survive a pure trunk sync
+ * of the reviewed head; a granted verdict then carries `synced: { to, merges }` (else null).
  */
 function evaluateIssue(record, branch, trunk, redTrunkSha, evidence, issueNum, labelName, opts) {
   const trust = opts && opts.trust;
@@ -206,9 +208,19 @@ function evaluateIssue(record, branch, trunk, redTrunkSha, evidence, issueNum, l
     return { issue, ok: false, grant: g,
       reason: `#${issue}'s grant requires a completed, successful CI run on \`${branch}\`'s current head — none exists` };
   }
+  let synced = null;
   if (evidence.sha !== g.evidenceSha) {
-    return { issue, ok: false, grant: g,
-      reason: `#${issue}'s grant was reviewed against evidence run \`${g.evidenceSha}\`, but \`${branch}\`'s head is now \`${evidence.sha}\` — the branch moved since the human reviewed it` };
+    // #615: the stale-base sync ship itself demands (#395) must not void the grant ship demands. A
+    // head that is the reviewed head plus nothing but PURE merges of trunk at-or-before the red sha
+    // (ship-handoff.js syncMergeChain, the #579 proof: two parents, the second already in the red
+    // sha, tree == git's own conflict-free merge) carries no content the human did not review —
+    // only trunk content the grant already exists to exempt. Anything else still voids it.
+    const at = syncedFrom(opts, evidence.sha, g.redSha, g.evidenceSha);
+    if (at < 0) {
+      return { issue, ok: false, grant: g,
+        reason: `#${issue}'s grant was reviewed against evidence run \`${g.evidenceSha}\`, but \`${branch}\`'s head is now \`${evidence.sha}\` — the branch moved since the human reviewed it by more than a clean merge of trunk up to the red sha` };
+    }
+    synced = { to: evidence.sha, merges: at + 1 };
   }
   if (trust && trust.declared) {
     // #407 Wanted 2 — the label applier, read last: only once the grant would otherwise pass.
@@ -217,7 +229,23 @@ function evaluateIssue(record, branch, trunk, redTrunkSha, evidence, issueNum, l
     const lab = labelApplierIsHuman(actors, trust, labelName);
     if (!lab.ok) return { issue, ok: false, grant: g, reason: `#${issue}: ${lab.reason}` };
   }
-  return { issue, ok: true, grant: g, reason: '' };
+  return { issue, ok: true, grant: g, synced, reason: '' };
+}
+
+/**
+ * #615 — where in the head's pure-sync lineage the reviewed evidence sha sits: the 0-based index of
+ * the sync merge whose first parent is `evidenceSha` (so `+1` merges were added on top of it), or -1
+ * when it is not there or the lineage could not be measured. `opts.syncChain(headSha, redSha)` is the
+ * caller's git thunk returning ship-handoff.js syncMergeChain's nearest-first sha list (this module
+ * stays pure); absent, throwing or non-array reads as "no proof" — the grant voids, as before #615.
+ */
+function syncedFrom(opts, headSha, redSha, evidenceSha) {
+  let chain = null;
+  try { chain = opts && typeof opts.syncChain === 'function' ? opts.syncChain(headSha, redSha) : null; } catch (_) { chain = null; }
+  if (!Array.isArray(chain)) return -1;
+  const want = String(evidenceSha || '').toLowerCase();
+  if (!want) return -1;
+  return chain.findIndex((s) => String(s || '').toLowerCase() === want);
 }
 
 /**
@@ -257,7 +285,8 @@ function evaluateShipSet(issues, records, branch, trunk, redTrunkSha, evidence, 
     const rec = records ? records[n] : null;
     const v = evaluateIssue(rec, branch, trunk, redTrunkSha, evidence, n, labelName, opts);
     if (v.ok) {
-      granted.push({ issue: n, branch: v.grant.branch, by: v.grant.login, at: v.grant.at, redSha: v.grant.redSha, evidenceSha: v.grant.evidenceSha });
+      granted.push({ issue: n, branch: v.grant.branch, by: v.grant.login, at: v.grant.at, redSha: v.grant.redSha, evidenceSha: v.grant.evidenceSha,
+        ...(v.synced ? { syncedTo: v.synced.to, syncMerges: v.synced.merges } : {}) });
       continue;
     }
     // #504: a reviewer grant is consulted only when the human one failed AND the issue carries a

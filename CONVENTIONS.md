@@ -3095,7 +3095,7 @@ Why, with the measurements: [ADR 105](docs/adr/105-red-trunk-exemption-rationale
   cancels every role). The reviewer identity is declared, not attested — the same caveat as
   the migration reviewer. Why, with the measurements: [ADR 105](docs/adr/105-red-trunk-exemption-rationale.md).
 - **[Hard — gate: colab ship refuses a stale CI grant]** **Bound to one issue, the branch, AND the exact red trunk sha reviewed against** — it
-  expires the instant trunk's head moves, for any reason.
+  expires the instant trunk's head moves, for any reason. A moved branch voids it too, except by the stale-base sync `ship` demands (#615): clean merges of trunk at or before the red sha keep it.
 - **[Hard — gate: colab ship refuses unmeasured evidence]** **Evidence is measured, never asserted** — creating one requires a completed,
   successful CI run for the branch's own current head sha; `--evidence-run` is
   recording-only and never substitutes for the measured run.

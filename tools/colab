@@ -10588,7 +10588,10 @@ function ciGrantTrailerLine(grantVerdict, branch, trunk) {
   // scan (ci-cure.js priorRedShaFromMessage) reads is unchanged.
   const rv = grantVerdict.granted.filter((x) => x.role && x.role !== 'human');
   const via = rv.length ? ` via ${rv[0].role} ${[...new Set(rv.map((x) => x.reviewer))].join(',')}` : '';
-  return `CI-Grant: ${issues} branch ${branch} over-red ${trunk}@${shortSha(g.redSha)} evidence ${shortSha(g.evidenceSha)}${via}`;
+  // #615: a grant that survived a pure trunk sync says so — the evidence sha is what the human
+  // reviewed, the synced head is what CI ran green and what lands.
+  const sy = g.syncedTo ? ` synced-to ${shortSha(g.syncedTo)} by ${g.syncMerges} trunk merge${g.syncMerges === 1 ? '' : 's'}` : '';
+  return `CI-Grant: ${issues} branch ${branch} over-red ${trunk}@${shortSha(g.redSha)} evidence ${shortSha(g.evidenceSha)}${sy}${via}`;
 }
 
 /**
@@ -11964,6 +11967,14 @@ function shipCiGrants(repoAbs, gh, issues, branch, trunk, redSha) {
   return ciGrant.evaluateShipSet(issues, records, branch, trunk, redSha, evidence, labels.CI_GRANT_LABEL, {
     trust: trustAt(repoAbs, trunk),
     labelActors: (n) => git.ghIssueLabelActors(repoAbs, n, labels.CI_GRANT_LABEL),
+    // #615: the head's pure trunk-sync lineage, bounded by the RED sha (not trunk's tip) — a merge of
+    // anything past what the human reviewed against is not a sync this grant covers.
+    // The head may have been synced from another machine: fetch it when absent (a failed fetch just
+    // yields an empty chain — the grant voids, as before #615).
+    syncChain: (head, red) => {
+      if (!git.git(['cat-file', '-e', `${head}^{commit}`], repoAbs).ok) git.git(['fetch', '--quiet', git.remoteFor(repoAbs) || 'origin', head], repoAbs);
+      return shipHandoff.syncMergeChain((a) => git.git(a, repoAbs), head, red);
+    },
     // #504 — the reviewer role: the opt-in as committed on TRUNK (never the branch), the clock for a
     // host's revoke window, and trunk's red checks at redSha, read lazily and at most once.
     policy: ciGrant.parseGrantPolicy(projectDocAt(repoAbs, trunk)).policy,
