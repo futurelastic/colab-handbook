@@ -455,7 +455,7 @@ test('npm target: not declared, declared-but-broken, or an old CLI — no publis
 // publishes what the run tagged — never saw it. The daily run / a dispatch sweeps for it.
 const NPM_VERDICT = JSON.stringify({ publish: true, dir: '.', gate: 'true', package: '@o/p', why: 'x', findings: [] });
 // curl stub: $NPM_LATEST is npm's `latest` version, or 404 / 503 for that registry answer.
-const CURL_STUB = 'echo "curl $*" >> "$LOG"; case "$NPM_LATEST" in 404|503) echo "curl: (22) The requested URL returned error: $NPM_LATEST" >&2; exit 22 ;; esac; echo "{\\"name\\":\\"@o/p\\",\\"version\\":\\"$NPM_LATEST\\"}"';
+const CURL_STUB = 'echo "curl $*" >> "$LOG"; case "$NPM_LATEST" in (404|503) echo "curl: (22) The requested URL returned error: $NPM_LATEST" >&2; exit 22 ;; esac; echo "{\\"name\\":\\"@o/p\\",\\"version\\":\\"$NPM_LATEST\\"}"';
 const VIS_STUB = 'echo "gh $*" >> "$LOG"; [ "${PRIV:-false}" = unreadable ] && exit 1; echo "${PRIV:-false}"';
 function sweep({ latest, tags = ' ', sweepOn = 'true', priv = 'false', repo = packageRepo() } = {}) {
   return runStep(NPM_TARGET, {
@@ -530,11 +530,11 @@ test('#612 wiring: the sweep runs on the daily schedule and a dispatch — never
   };
   const tpl = ifAndEnv(TEXT);
   const sweepTpl = "(github.event_name == 'schedule' && env.RETRY_RUN != 'true') || github.event_name == 'workflow_dispatch'";
-  assert.ok(tpl.includes(`|| ${sweepTpl})\n`), 'template if: runs the step on the daily run / a dispatch with nothing tagged');
+  assert.ok(tpl.includes(`steps.finalize.outputs.tag != '' || ${sweepTpl}`), 'template if: runs the step on the daily run / a dispatch with nothing tagged');
   assert.ok(tpl.includes(`SWEEP: \${{ ${sweepTpl} }}`), 'template SWEEP');
   const own = ifAndEnv(OWN);
   const sweepOwn = "github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'";
-  assert.ok(own.includes(`|| ${sweepOwn})\n`), 'own copy if:');
+  assert.ok(own.includes(`steps.finalize.outputs.tag != '' || ${sweepOwn}`), 'own copy if:');
   assert.ok(own.includes(`SWEEP: \${{ ${sweepOwn} }}`), 'own copy SWEEP (it has no hourly retry run)');
   for (const t of [tpl, own]) assert.match(t, /REPO: \$\{\{ github\.repository \}\}/);
 });
