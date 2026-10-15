@@ -1372,8 +1372,8 @@ than guessed.
   remainder issue either. Why: [ADR 539](docs/adr/539-branches-and-commits-rationale.md).
 - **[Hard — gate: colab ship refuses uncorroborated issue]** **Every closed issue must be corroborated by git, not the claim registry alone (#87).**
   Corroboration reads two git-side sources: the branch name's
-  **trailing** number group, and `#N` references in **commit bodies**. An issue named by
-  neither is a finding — `colab ship` refuses; a hand merge must perform the same check.
+  **trailing** number group, and `#N` or `(issue N)` (#611) references in **commit bodies** (never a
+  bare number). An issue named by neither is a finding — `colab ship` refuses; a hand merge must perform the same check.
   Do not resolve it by quietly writing `Refs #N` — that hides the collision; `--refs`
   exists for when an operator actually means it. Why: [ADR 539](docs/adr/539-branches-and-commits-rationale.md).
 - **[Hard — gate: evidence-close needs an evidence comment]** **A deliverable with no diff still has to close (#90).** A decision recorded, an

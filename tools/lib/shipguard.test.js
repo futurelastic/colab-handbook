@@ -53,6 +53,34 @@ test('corroboration accepts EITHER git-side source — branch name or commit bod
   assert.strictEqual(viaBody.corroborated[0].via, 'commit body');
 });
 
+test('#611: a group branch whose only mention of the second issue is "(issue N)" corroborates it', () => {
+  // The measured shape: two claimed issues, the branch name carries the first, and the second is
+  // named only by commit subjects ending `(issue N)` — no hash, by the adopter's own convention.
+  const commits = [
+    { subject: 'feat(api): add the export endpoint (issue 205)', body: '' },
+    { subject: 'fix(api): page size off by one (issue 205)', body: '' },
+    { subject: 'test(api): cover the first issue path', body: '' },
+  ];
+  const r = g.corroborateIssues([204, 205], 'feat/export-204', commits);
+  assert.strictEqual(r.ok, true);
+  assert.deepStrictEqual(r.corroborated.map((c) => [c.issue, c.via]),
+    [[204, 'branch name'], [205, 'commit body']]);
+});
+
+test('#611: "(issues N, M)" and "(issues N and M)" name every number in the group', () => {
+  assert.deepStrictEqual(g.commitIssueNumbers([{ subject: 'chore: tidy (issues 7, 8)', body: '' }]).sort((a, b) => a - b), [7, 8]);
+  assert.deepStrictEqual(g.commitIssueNumbers([{ subject: 'chore: tidy', body: 'Done (Issues 9 and #10)' }]).sort((a, b) => a - b), [9, 10]);
+});
+
+test('#611: the #87 guard keeps its strength — no mention is still refused, a bare number is not a mention', () => {
+  const none = g.corroborateIssues([204, 205], 'feat/export-204',
+    [{ subject: 'feat(api): add the export endpoint', body: 'Touches 205 files' }]);
+  assert.strictEqual(none.ok, false);
+  assert.deepStrictEqual(none.uncorroborated, [{ issue: 205 }]);
+  // A bare parenthesised number, or the keyword without parentheses, is not the reference form.
+  assert.deepStrictEqual(g.commitIssueNumbers([{ subject: 'perf: faster (205)', body: 'v2 (3 files), issue 205 is related' }]), []);
+});
+
 test('an empty claim set corroborates vacuously — ship has its own separate warning for that', () => {
   assert.strictEqual(g.corroborateIssues([], 'fix/thing-1', []).ok, true);
 });
