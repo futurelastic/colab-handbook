@@ -29,8 +29,12 @@
 #
 # 4. The route is not edited here: .github/project.yml (exposure: released, deploy: none,
 #    production: null) derives `public-tool` — candidates automatic, final automatic after a clean
-#    3-day test period (CONVENTIONS.md §6). The fleet reconciliation that scripts/release.sh runs
-#    after a final is NOT run here (no fleet clones on a runner); a human runs it afterwards.
+#    3-day test period (CONVENTIONS.md §6) — and its `release:` block narrows that to `final: human`
+#    + `test-period: 0d` (#613): this workflow still cuts candidates, but its daily finalize step
+#    never tags a final here — it stops at candidate-ready and posts the one command for the
+#    maintainer, who finalizes by hand. The fleet reconciliation that
+#    scripts/release.sh runs after a final is NOT run here (no fleet clones on a runner); a human
+#    runs it afterwards.
 
 name: Release (auto)
 
