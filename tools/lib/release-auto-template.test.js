@@ -451,6 +451,94 @@ test('npm target: not declared, declared-but-broken, or an old CLI — no publis
   assert.match(old.stdout, /::warning::colab release npm gave no verdict/);
 });
 
+// #612: a final a person tagged (`final: human`) is never tagged by a run, so the npm job — which
+// publishes what the run tagged — never saw it. The daily run / a dispatch sweeps for it.
+const NPM_VERDICT = JSON.stringify({ publish: true, dir: '.', gate: 'true', package: '@o/p', why: 'x', findings: [] });
+// curl stub: $NPM_LATEST is npm's `latest` version, or 404 / 503 for that registry answer.
+const CURL_STUB = 'echo "curl $*" >> "$LOG"; case "$NPM_LATEST" in (404|503) echo "curl: (22) The requested URL returned error: $NPM_LATEST" >&2; exit 22 ;; esac; echo "{\\"name\\":\\"@o/p\\",\\"version\\":\\"$NPM_LATEST\\"}"';
+const VIS_STUB = 'echo "gh $*" >> "$LOG"; [ "${PRIV:-false}" = unreadable ] && exit 1; echo "${PRIV:-false}"';
+function sweep({ latest, tags = ' ', sweepOn = 'true', priv = 'false', repo = packageRepo() } = {}) {
+  return runStep(NPM_TARGET, {
+    cwd: repo, stubs: { curl: CURL_STUB, gh: VIS_STUB },
+    env: { COLAB: colabStub(tmpdir('n-'), NPM_VERDICT), TAGS: tags, SWEEP: sweepOn, REPO: 'o/p', NPM_LATEST: latest, PRIV: priv },
+  });
+}
+
+test('#612 npm target: a hand-tagged final npm latest lacks is handed to the npm job on the daily run', { skip: !HAS_JQ && 'jq not installed' }, () => {
+  const older = sweep({ latest: '1.2.0' });
+  assert.strictEqual(older.status, 0, older.stderr);
+  assert.deepStrictEqual(older.output, { publish: 'true', tags: 'v1.3.0', dir: '.', gate: 'true', package: '@o/p' });
+  assert.match(older.log, /curl -fsSL https:\/\/registry\.npmjs\.org\/@o%2Fp\/latest/, 'a scoped name is encoded for the registry');
+  assert.match(older.stdout, /v1\.3\.0 is final on main but npm latest is 1\.2\.0/);
+
+  const never = sweep({ latest: '404' });
+  assert.deepStrictEqual([never.status, never.output.publish, never.output.tags], [0, 'true', 'v1.3.0'], 'a package with no npm latest yet');
+
+  const withCandidate = sweep({ latest: '1.2.0', tags: 'v1.4.0-rc.1 ' });
+  assert.strictEqual(withCandidate.output.tags, 'v1.4.0-rc.1 v1.3.0', 'what this run tagged still goes, the swept final beside it');
+});
+
+test('#612 npm target: already latest, older than latest, or tagged by this same run — nothing is added', { skip: !HAS_JQ && 'jq not installed' }, () => {
+  const same = sweep({ latest: '1.3.0' });
+  assert.deepStrictEqual([same.status, same.output], [0, { publish: 'false' }]);
+  assert.doesNotMatch(same.stdout, /::warning::/);
+
+  const newer = sweep({ latest: '1.10.0' });
+  assert.deepStrictEqual([newer.status, newer.output], [0, { publish: 'false' }], 'latest never moves backwards (1.10.0 > 1.3.0, by version not by string)');
+  assert.match(newer.stdout, /npm latest @o\/p@1\.10\.0 is newer than v1\.3\.0/);
+
+  const sameRun = sweep({ latest: '1.2.0', tags: ' v1.3.0' });
+  assert.strictEqual(sameRun.output.tags, 'v1.3.0', 'a final this run tagged is not listed twice');
+  assert.doesNotMatch(sameRun.log, /curl/);
+});
+
+test('#612 npm target: only a final reachable from main counts — never a candidate, never a tag off main', { skip: !HAS_JQ && 'jq not installed' }, () => {
+  const repo = packageRepo();
+  const g = (...a) => execFileSync('git', a, { cwd: repo, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+  g('tag', 'v1.9.0-rc.1');
+  g('checkout', '-q', '-b', 'side');
+  g('commit', '-q', '--allow-empty', '-m', 'feat: off main');
+  g('tag', 'v2.0.0');
+  g('checkout', '-q', 'main');
+  const r = sweep({ latest: '1.2.0', repo });
+  assert.strictEqual(r.output.tags, 'v1.3.0');
+});
+
+test('#612 npm target: a private or unreadable repo, or an unreadable registry, adds nothing and stays green', { skip: !HAS_JQ && 'jq not installed' }, () => {
+  for (const priv of ['true', 'unreadable']) {
+    const r = sweep({ latest: '1.2.0', priv });
+    assert.deepStrictEqual([r.status, r.output], [0, { publish: 'false' }], priv);
+    assert.doesNotMatch(r.log, /curl/, `${priv}: the registry is not asked`);
+  }
+  const down = sweep({ latest: '503' });
+  assert.deepStrictEqual([down.status, down.output], [0, { publish: 'false' }]);
+  assert.strictEqual((down.log.match(/^curl /gm) || []).length, 3, 'a transient registry error is retried (#464)');
+  assert.match(down.stdout, /::warning::npm sweep: could not read npm latest for @o\/p .*the next daily run retries/);
+});
+
+test('#612 npm target: off the sweep (a CI-triggered run, the hourly retry) nothing is swept', { skip: !HAS_JQ && 'jq not installed' }, () => {
+  const r = sweep({ latest: '1.2.0', sweepOn: 'false' });
+  assert.deepStrictEqual([r.status, r.output], [0, { publish: 'false' }]);
+  assert.strictEqual(r.log, '', 'neither GitHub nor the registry is asked');
+});
+
+test('#612 wiring: the sweep runs on the daily schedule and a dispatch — never on the hourly retry — in template and own copy', () => {
+  const ifAndEnv = (text) => {
+    const lines = text.split('\n');
+    const at = lines.findIndex((l) => l.trim() === `- name: ${NPM_TARGET}`);
+    return lines.slice(at + 1, at + 9).join('\n');
+  };
+  const tpl = ifAndEnv(TEXT);
+  const sweepTpl = "(github.event_name == 'schedule' && env.RETRY_RUN != 'true') || github.event_name == 'workflow_dispatch'";
+  assert.ok(tpl.includes(`steps.finalize.outputs.tag != '' || ${sweepTpl}`), 'template if: runs the step on the daily run / a dispatch with nothing tagged');
+  assert.ok(tpl.includes(`SWEEP: \${{ ${sweepTpl} }}`), 'template SWEEP');
+  const own = ifAndEnv(OWN);
+  const sweepOwn = "github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'";
+  assert.ok(own.includes(`steps.finalize.outputs.tag != '' || ${sweepOwn}`), 'own copy if:');
+  assert.ok(own.includes(`SWEEP: \${{ ${sweepOwn} }}`), 'own copy SWEEP (it has no hourly retry run)');
+  for (const t of [tpl, own]) assert.match(t, /REPO: \$\{\{ github\.repository \}\}/);
+});
+
 test('npm job: a private repository, an unreadable visibility, or a token in the environment is refused', () => {
   const gh = (v) => (v === null ? 'exit 1' : `echo ${v}`);
   assert.strictEqual(runStep(REFUSE, { stubs: { gh: gh('false') }, env: { REPO: 'o/p' } }).status, 0);
@@ -686,7 +774,7 @@ test('#464 every workflow-level network call goes through retry_transient', () =
     /retry_transient fetch_cli/, /retry_transient node "\$COLAB" promote --auto/, /retry_transient gh workflow run/,
     /retry_transient node "\$COLAB" release cut --auto/, /retry_transient node "\$COLAB" release finalize --auto/,
     /retry_transient gh release create/, /retry_transient gh api "repos\/\$REPO"/, /retry_transient npm install --global/,
-    /retry_transient npm view/, /retry_transient npm publish/, /retry_transient gh release view "\$TAG" --repo/, /retry_transient gh release edit/,
+    /retry_transient npm view/, /retry_transient npm publish/, /retry_transient curl -fsSL "https:\/\/registry\.npmjs\.org\//, /retry_transient gh release view "\$TAG" --repo/, /retry_transient gh release edit/,
   ]) assert.match(code, call);
   // Each step that calls it defines it first.
   const lines = TEXT.split('\n');
