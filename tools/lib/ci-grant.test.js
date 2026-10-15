@@ -274,6 +274,73 @@ test('evaluateIssue: evidence sha mismatch (branch moved since the human reviewe
   assert.match(v.reason, /branch moved/);
 });
 
+// --- #615: a pure trunk sync of the reviewed head keeps the grant --------------------------
+
+const SYNCED_HEAD = 'eeeeeee';
+const chainOpts = (chain, seen = []) => ({ syncChain: (head, red) => { seen.push([head, red]); return chain; } });
+
+test('evaluateIssue (#615): a head whose pure-sync lineage reaches the reviewed sha keeps the grant', () => {
+  const record = openRecord({ comments: [grantComment('feat/x-1', { evidenceSha: EVID_SHA })] });
+  const seen = [];
+  const v = evaluateIssue(record, 'feat/x-1', TRUNK, RED_SHA, okEvidence(SYNCED_HEAD), 105, LABEL, chainOpts([EVID_SHA], seen));
+  assert.equal(v.ok, true, v.reason);
+  assert.deepEqual(v.synced, { to: SYNCED_HEAD, merges: 1 });
+  assert.deepEqual(seen, [[SYNCED_HEAD, RED_SHA]], 'the lineage is bounded by the grant\'s RED sha, asked about the new head');
+});
+
+test('evaluateIssue (#615): two stacked syncs report two merges; case of the sha does not matter', () => {
+  const record = openRecord({ comments: [grantComment('feat/x-1', { evidenceSha: EVID_SHA })] });
+  const v = evaluateIssue(record, 'feat/x-1', TRUNK, RED_SHA, okEvidence(SYNCED_HEAD), 105, LABEL, chainOpts(['fffffff', EVID_SHA.toUpperCase()]));
+  assert.equal(v.ok, true, v.reason);
+  assert.equal(v.synced.merges, 2);
+});
+
+test('evaluateIssue (#615): a lineage that does not reach the reviewed sha (a commit of its own) still voids', () => {
+  const record = openRecord({ comments: [grantComment('feat/x-1', { evidenceSha: EVID_SHA })] });
+  for (const chain of [[], ['fffffff'], null, undefined, 'ccccccc']) {
+    const v = evaluateIssue(record, 'feat/x-1', TRUNK, RED_SHA, okEvidence(SYNCED_HEAD), 105, LABEL, chainOpts(chain));
+    assert.equal(v.ok, false, JSON.stringify(chain));
+    assert.match(v.reason, /branch moved .*clean merge of trunk up to the red sha/);
+  }
+});
+
+test('evaluateIssue (#615): a throwing or absent syncChain voids, never grants', () => {
+  const record = openRecord({ comments: [grantComment('feat/x-1', { evidenceSha: EVID_SHA })] });
+  const boom = { syncChain: () => { throw new Error('git died'); } };
+  assert.equal(evaluateIssue(record, 'feat/x-1', TRUNK, RED_SHA, okEvidence(SYNCED_HEAD), 105, LABEL, boom).ok, false);
+  assert.equal(evaluateIssue(record, 'feat/x-1', TRUNK, RED_SHA, okEvidence(SYNCED_HEAD), 105, LABEL).ok, false);
+});
+
+test('evaluateIssue (#615): the sync never rescues a grant whose red sha is no longer trunk\'s head', () => {
+  const record = openRecord({ comments: [grantComment('feat/x-1', { evidenceSha: EVID_SHA })] });
+  let asked = false;
+  const v = evaluateIssue(record, 'feat/x-1', TRUNK, OTHER_RED_SHA, okEvidence(SYNCED_HEAD), 105, LABEL,
+    { syncChain: () => { asked = true; return [EVID_SHA]; } });
+  assert.equal(v.ok, false);
+  assert.match(v.reason, /trunk moved/);
+  assert.equal(asked, false, 'trunk moving is checked first; the lineage is never consulted');
+});
+
+test('evaluateIssue (#615): an unmoved head never consults the lineage and carries synced: null', () => {
+  const record = openRecord({ comments: [grantComment('feat/x-1', { evidenceSha: EVID_SHA })] });
+  const v = evaluateIssue(record, 'feat/x-1', TRUNK, RED_SHA, okEvidence(EVID_SHA), 105, LABEL,
+    { syncChain: () => { throw new Error('must not be called'); } });
+  assert.equal(v.ok, true, v.reason);
+  assert.equal(v.synced, null);
+});
+
+test('evaluateShipSet (#615): a synced grant carries syncedTo/syncMerges; an unsynced one does not', () => {
+  const records = { 105: openRecord({ comments: [grantComment('feat/x-105', { evidenceSha: EVID_SHA })] }) };
+  const synced = evaluateShipSet([105], records, 'feat/x-105', TRUNK, RED_SHA, okEvidence(SYNCED_HEAD), LABEL, chainOpts([EVID_SHA]));
+  assert.equal(synced.ok, true, JSON.stringify(synced.missing));
+  assert.equal(synced.granted[0].evidenceSha, EVID_SHA, 'the trailer still names what the human reviewed');
+  assert.equal(synced.granted[0].syncedTo, SYNCED_HEAD);
+  assert.equal(synced.granted[0].syncMerges, 1);
+  const plain = evaluateShipSet([105], records, 'feat/x-105', TRUNK, RED_SHA, okEvidence(EVID_SHA), LABEL);
+  assert.equal(plain.ok, true);
+  assert.equal('syncedTo' in plain.granted[0], false);
+});
+
 // --- evaluateShipSet: group branch + non-vacuity, same shape as migration-grant's -----------
 
 test('evaluateShipSet: three issues, two granted and one not — refuses, naming exactly the ungranted one', () => {
