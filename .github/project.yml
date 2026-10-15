@@ -95,10 +95,13 @@
 #               final auto|human. Absent means the default DERIVED from exposure +
 #               deploy by CONVENTIONS §6's release rung (project.schema.md "release —
 #               optional", tools/lib/release-policy.js); a declared block may narrow that
-#               default and never widen it — the audit fails a widening attempt. This repo
-#               restates its default exactly, as the reference example: released with
-#               production null and deploy none (route public-tool), so every green trunk head
-#               gets a candidate and the final tag is automatic after a 3-day test period. No
+#               default and never widen it — the audit fails a widening attempt. This repo's
+#               default is route public-tool (released, production null, deploy none): every
+#               green trunk head gets a candidate and the final is automatic after a 3-day test
+#               period. Since #613 (2026-10-15, the maintainer's call) it narrows that default as
+#               the reference example of a narrowing: `final: human` + `test-period: 0d` — the
+#               final is a human act, taken whenever the maintainer judges a candidate ready
+#               (0d is valid only with final: human, #549). No
 #               candidates-per-day cap (#443, reversing #439's): a cap kept four merges out of any
 #               tag for a day (2026-10-02), and the newest candidate must always name trunk's
 #               head. A cap stays an opt-in narrowing; declaring one here is a human's call.
@@ -117,8 +120,8 @@ gate:
   authoritative: ci
 release:
   candidates: auto
-  test-period: 3d
-  final: auto
+  test-period: 0d   # was 3d (#613) — 0d is valid only with final: human (project.schema.md, #549)
+  final: human      # was auto (#613) — the maintainer finalizes when ready
   npm: .
   npm-gate: node scripts/check-pack-allowlist.mjs
 
@@ -130,8 +133,9 @@ release:
 # human finishes, never that the tool improvises around it.
 # What it does NOT grant, on this repo or any other: promotion, tags, or anything
 # that reaches production — `colab ship` never tags. This repo is `exposure: released`
-# with `production: null`, so under CONVENTIONS §6's release rung its candidates
-# finalize automatically after a clean test period unless a human vetoes — a
-# permission that comes from §6, never from this grant.
+# with `production: null`, so CONVENTIONS §6's release rung would let its candidates
+# finalize automatically after a clean test period — but its `release:` block
+# narrows that to `final: human` (#613), so a final here is a human act. Either
+# way the permission comes from §6 and the release block, never from this grant.
 autonomy: auto-trunk
 ci-grant: reviewer   # owner 2026-10-09/10: the coordinator may mint a ci-reviewer grant for a TRUNK RED: patch
