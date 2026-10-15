@@ -107,7 +107,7 @@ that one ever disagree, `CONVENTIONS.md` wins — and report the discrepancy.
    A bare `(#N)` does not auto-close, and we measured 26/30 issues sitting
    open with their code long since merged because of exactly that.
    **Each `Closes #N` must be corroborated by git** — the branch name's trailing
-   number group, or a `#N` in a commit body. The claim registry alone is not
+   number group, or a `#N` (or `(issue N)`) in a commit body. The claim registry alone is not
    enough: a co-tenant session's mid-flight claim reads identically to yours, and
    we measured one that would have closed an issue whose work had just started.
 4. **A deliverable with no diff still has to close.** Zero commits is a real

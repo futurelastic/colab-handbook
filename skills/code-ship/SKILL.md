@@ -154,7 +154,7 @@ Full text, with the exit-code table and the infra-vs-finding test: [b1a-branch-c
 
 ## B1b. Harvest every issue the branch carried
 
-**Rule:** build the complete issue set before the squash: `#N` from commit bodies plus the
+**Rule:** build the complete issue set before the squash: `#N` / `(issue N)` from commit bodies plus the
 branch name's **trailing** digit group, cross-checked against `colab claims` — a number in one
 source only is a finding. Verify by code, not by commit message. Sort each into Done
 (`Closes #N`) · Partial (close + remainder issue) · Untouched (leave open, next step written).

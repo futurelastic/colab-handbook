@@ -36,12 +36,28 @@ const squash = require('./squash.js');
 const branchNameLib = require('./branch-name.js');
 const { branchIssueNumbers } = branchNameLib;
 
-/** Every `#N` mentioned in any commit subject or body on the branch, de-duplicated. */
+// The parenthesised keyword form `(issue N)` / `(issues N, M)` / `(issues N and M)` (#611). Some
+// adopters write it instead of `#N` so that every commit does not cross-link into the issue's
+// timeline; a group branch on such a repo had its second claimed issue refused as uncorroborated
+// although four of its seven commits ended `(issue <that number>)`. The `issue` keyword is the
+// whole point — a BARE number (`(42)`, `v1.2 (3 files)`) stays uncounted, so the #87 co-tenant
+// guard is exactly as strong as before: a commit naming an issue this way names it as surely as
+// `#N` does. Deliberately the parenthesised shape only, which is what was measured; a prose
+// "see issue 12" is not a reference convention anyone was found writing.
+const ISSUE_KEYWORD_GROUP = /\(\s*issues?\s+(#?\d+(?:\s*(?:,|&|\band\b)\s*#?\d+)*)\s*\)/gi;
+
+/**
+ * Every issue a commit subject or body on the branch names, de-duplicated: each `#N`, plus each
+ * number inside an `(issue N)` / `(issues N, M)` group (#611).
+ */
 function commitIssueNumbers(commits) {
   const out = new Set();
   for (const c of Array.isArray(commits) ? commits : []) {
     const text = `${(c && c.subject) || ''}\n${(c && c.body) || ''}`;
     for (const m of text.matchAll(/#(\d+)\b/g)) out.add(Number(m[1]));
+    for (const m of text.matchAll(ISSUE_KEYWORD_GROUP)) {
+      for (const d of m[1].matchAll(/\d+/g)) out.add(Number(d[0]));
+    }
   }
   return [...out];
 }
