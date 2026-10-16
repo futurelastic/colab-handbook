@@ -143,6 +143,47 @@ test('full suite: a workflow whose only run was cancelled did not pass, even bes
   assert.strictEqual(rc.fullSuiteVerdict(null, 'main@abc').ok, false);
 });
 
+test('#616: a workflow whose only run at the sha was skipped is not run — full-suite and ci-green both pass', () => {
+  const git = require('./git');
+  const S = 'abc123';
+  const row = (workflowName, conclusion, i) => ({ workflowName, status: 'completed', conclusion, headSha: S, event: 'push', databaseId: i, createdAt: `2026-10-16T00:0${i}:00Z` });
+  const rows = [row('CI', 'success', 1), row('Release gate', 'success', 2), row('Load', 'skipped', 3)];
+  const suite = rc.fullSuiteVerdict(rows, 'main@abc');
+  assert.strictEqual(suite.ok, true, suite.detail);
+  assert.match(suite.detail, /2 workflow\(s\).*skipped: Load/);
+  const judged = rc.withoutSkippedOnlyWorkflows(rows);
+  assert.deepStrictEqual(judged.map((r) => r.workflowName), ['CI', 'Release gate']);
+  assert.strictEqual(rc.fullSuiteVerdict(judged, 'main@abc').ok, true);
+  const ci = git.summarizeRunsForCommit(judged, S);
+  assert.strictEqual(ci.conclusion, 'success');
+  // the ship gate is untouched: unfiltered, the same rows still read not-green there (#514)
+  assert.strictEqual(git.summarizeRunsForCommit(rows, S).conclusion, 'skipped');
+});
+
+test('#616: skipped beside a red run of the same workflow stays red; cancelled-only and all-skipped stay refused', () => {
+  const git = require('./git');
+  const S = 'abc123';
+  const row = (workflowName, conclusion, i) => ({ workflowName, status: 'completed', conclusion, headSha: S, event: 'push', databaseId: i, createdAt: `2026-10-16T00:0${i}:00Z` });
+  const red = [row('CI', 'success', 1), row('Load', 'skipped', 2), row('Load', 'failure', 3)];
+  assert.strictEqual(rc.fullSuiteVerdict(red, 'main@abc').ok, false);
+  const judged = rc.withoutSkippedOnlyWorkflows(red);
+  assert.strictEqual(judged, red, 'a workflow with any non-skipped run keeps all its rows');
+  assert.strictEqual(git.summarizeRunsForCommit(judged, S).conclusion, 'failure');
+  const cancelled = [row('CI', 'success', 1), row('suite', 'cancelled', 2)];
+  assert.strictEqual(rc.withoutSkippedOnlyWorkflows(cancelled), cancelled);
+  assert.strictEqual(rc.fullSuiteVerdict(cancelled, 'main@abc').ok, false);
+  const allSkipped = [row('Load', 'skipped', 1)];
+  const v = rc.fullSuiteVerdict(allSkipped, 'main@abc');
+  assert.strictEqual(v.ok, false);
+  assert.match(v.detail, /every run was skipped/);
+  assert.deepStrictEqual(rc.withoutSkippedOnlyWorkflows(allSkipped), []);
+  assert.strictEqual(git.summarizeRunsForCommit([], S).status, 'none');
+  // an unfinished run of the same workflow is not "skipped only"
+  const inFlight = [row('CI', 'success', 1), row('Load', 'skipped', 2), { ...row('Load', null, 3), status: 'in_progress' }];
+  assert.strictEqual(rc.withoutSkippedOnlyWorkflows(inFlight), inFlight);
+  assert.strictEqual(rc.withoutSkippedOnlyWorkflows(null), null);
+});
+
 // ---- schema -----------------------------------------------------------------------------------
 
 const LARAVEL_ADD = `<?php
