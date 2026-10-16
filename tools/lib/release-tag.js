@@ -176,10 +176,15 @@ function manifestVersions(readFile) {
       if (j && typeof j.version === 'string') out.push({ file, version: j.version });
       else if (j && j.version !== undefined) out.push({ file, error: `package.json version is ${JSON.stringify(j.version)}, not a string` });
     } else if (file === 'Cargo.toml') {
+      // #620: a workspace root states the shared version in [workspace.package] — the form Cargo
+      // documents — and may have no [package] at all, or one that inherits it with
+      // version.workspace = true. Either way that is the version this repo releases. A literal
+      // [package] version still wins: [workspace.package] is only what members inherit.
       const v = tomlTableVersion(text, 'package');
-      if (!v) continue;
-      if (v.workspace) out.push({ file, error: 'Cargo.toml takes version.workspace = true — the workspace root\'s version is not read here' });
-      else out.push({ file, version: v.value });
+      if (v && !v.workspace) { if (v.value !== undefined) out.push({ file, version: v.value }); continue; }
+      const ws = tomlTableVersion(text, 'workspace.package');
+      if (ws && ws.value !== undefined) out.push({ file, version: ws.value });
+      else if (v && v.workspace) out.push({ file, error: 'Cargo.toml takes version.workspace = true but declares no [workspace.package] version — this is a member crate, and its workspace root is not read here' });
     } else if (file === 'pyproject.toml') {
       const v = tomlTableVersion(text, 'project') || tomlTableVersion(text, 'tool.poetry');
       if (!v) continue;

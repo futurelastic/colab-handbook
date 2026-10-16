@@ -804,3 +804,28 @@ test('#590 library-fast with no final yet (the issue\'s measured case): release-
   assert.deepStrictEqual(r.body.standing, ['version']);
   assert.deepStrictEqual(originTags(fx), []);
 });
+
+// ---- #620: a Cargo workspace root's [workspace.package] version is the manifest version ----------
+
+const WS_CARGO = (v) => `[workspace]\nmembers = ["crates/a"]\nresolver = "2"\n\n[workspace.package]\nversion = "${v}"\nedition = "2021"\n`;
+
+test('#620 library-fast: a workspace manifest at 0.11.0 over last final v0.2.0 tags v0.11.0, not a bump derived from tags', () => {
+  const fx = fixture({ projectYml: LIB_YML, files: { 'Cargo.toml': WS_CARGO('0.2.0') }, lastFinal: 'v0.2.0' });
+  commit(fx, 'Cargo.toml', 'feat: release 0.11.0', WS_CARGO('0.11.0'));
+  const r = cut(fx, ['--dry']);
+  assert.strictEqual(r.code, 0, r.out + r.err);
+  assert.strictEqual(r.body.tag, 'v0.11.0', JSON.stringify(r.body.checks, null, 2));
+  const mv = r.body.checks.find((c) => c.condition === 'manifest-version');
+  assert.strictEqual(mv.ok, true, mv.detail);
+  assert.match(mv.detail, /Cargo\.toml 0\.11\.0/);
+  assert.deepStrictEqual(originTags(fx), ['v0.2.0'], '--dry tags nothing');
+});
+
+test('#620 library-fast: a workspace version below the last final is refused, never tagged', () => {
+  const fx = fixture({ projectYml: LIB_YML, files: { 'Cargo.toml': WS_CARGO('0.2.0') }, lastFinal: 'v0.2.0' });
+  commit(fx, 'Cargo.toml', 'fix: wrong version', WS_CARGO('0.1.9'));
+  const r = cut(fx, ['--dry']);
+  assert.strictEqual(r.code, 1, r.out + r.err);
+  assert.match(r.body.checks.find((c) => c.condition === 'version').detail, /below the last final v0\.2\.0/);
+  assert.deepStrictEqual(originTags(fx), ['v0.2.0']);
+});

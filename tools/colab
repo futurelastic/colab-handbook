@@ -1311,7 +1311,8 @@ Refuses, naming each failed condition (all are reported, not just the first):
                        judgement on the diff
   switch-dependencies  a colab:switch marker is malformed, or a finished switch needs one that is not
   manifest-version     the tag does not equal the version a manifest declares (VERSION, package.json,
-                       Cargo.toml [package], pyproject.toml [project]/[tool.poetry]) — none declared
+                       Cargo.toml [package], else [workspace.package] (#620), pyproject.toml
+                       [project]/[tool.poetry]) — none declared
                        passes: the tag is the version (#424). Under release.version-source: tag (#438;
                        the default where the machine cuts the tag, #484) a differing manifest is DERIVABLE — skipped, named in the tag message, and
                        stamped from the tag by the repo's own release step (never on trunk)
