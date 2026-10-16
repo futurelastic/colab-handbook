@@ -581,3 +581,119 @@ test('anti-drift: every number closedIssueNumbers reports, spliceCloses leaves u
     assert.match(squash.spliceCloses(msg, [notYet]), new RegExp(`Closes #${notYet}\\b`));
   }
 });
+
+// --- #621: a follow-up to the branch's own unshipped lines never titles the unit ------------------
+
+test('#621: a follow-up fix ranks below the refactor it repairs — the measured v1.14.0 case', () => {
+  const commits = [
+    { subject: 'fix(area): reword a plural the privacy word list matches', followUp: true },
+    c('refactor(area): slice — the unit split into modules'),
+  ];
+  assert.strictEqual(pickSubjectIndex(commits), 1);
+  assert.strictEqual(composeSquashMessage(commits, []).split('\n')[0], 'refactor(area): slice — the unit split into modules');
+});
+
+test('#621: without the flag the pre-#621 ranking stands — fix still beats refactor on merit', () => {
+  const commits = [c('fix(area): a real fix to trunk behaviour'), c('refactor(area): the split')];
+  assert.strictEqual(pickSubjectIndex(commits), 0);
+});
+
+test('#621: a follow-up ranks below every named type and below an unrecognised shape, above shapeless', () => {
+  assert.ok(squash.FOLLOW_UP_WEIGHT < squash.UNRECOGNISED_WEIGHT);
+  assert.ok(squash.FOLLOW_UP_WEIGHT > 0);
+  assert.strictEqual(commitWeight({ subject: 'feat: x', followUp: true }), squash.FOLLOW_UP_WEIGHT);
+  assert.strictEqual(commitWeight({ subject: 'feat!: x', followUp: true }), squash.FOLLOW_UP_WEIGHT + squash.BREAKING_BONUS);
+  const commits = [{ subject: 'fix: tidy the new text', followUp: true }, c('wip: the actual unit')];
+  assert.strictEqual(composeSquashMessage(commits, []).split('\n')[0], 'wip: the actual unit');
+});
+
+test('#621: the follow-up is not lost — it becomes a bullet, and unweightedCommits does not flag it', () => {
+  const commits = [{ subject: 'fix: reword', followUp: true }, c('refactor: the split')];
+  assert.match(composeSquashMessage(commits, []), /^- fix: reword$/m);
+  assert.deepStrictEqual(unweightedCommits(commits), []);
+});
+
+test('#621: parseZeroContextDiff reads paths, hunks, creation, deletion, binary and quoted paths', () => {
+  const diff = [
+    'diff --git a/src/x.js b/src/x.js', 'index 1..2 100644', '--- a/src/x.js', '+++ b/src/x.js',
+    '@@ -3 +3 @@', '-a', '+b', '@@ -10,0 +11,2 @@', '+c', '+d', '@@ -20,4 +22,0 @@',
+    'diff --git a/new.md b/new.md', 'new file mode 100644', '--- /dev/null', '+++ b/new.md', '@@ -0,0 +1 @@', '+n',
+    'diff --git a/gone.md b/gone.md', '--- a/gone.md', '+++ /dev/null', '@@ -1,2 +0,0 @@',
+    'diff --git a/i.png b/i.png', 'Binary files a/i.png and b/i.png differ',
+    'diff --git "a/sp\\303\\251c.md" "b/sp\\303\\251c.md"', '--- "a/sp\\303\\251c.md"', '+++ "b/sp\\303\\251c.md"',
+    'diff --git a/with space.md b/with space.md', '--- a/with space.md\t', '+++ b/with space.md\t', '@@ -1 +1 @@',
+  ].join('\n');
+  const f = squash.parseZeroContextDiff(diff);
+  assert.strictEqual(f.length, 6);
+  assert.deepStrictEqual(f[0].hunks, [{ oldStart: 3, oldCount: 1 }, { oldStart: 10, oldCount: 0 }, { oldStart: 20, oldCount: 4 }]);
+  assert.strictEqual(f[0].path, 'src/x.js');
+  assert.ok(f[1].created && !f[1].path);
+  assert.ok(f[2].deleted && f[2].path === 'gone.md');
+  assert.ok(f[3].binary);
+  assert.ok(f[4].unparsed);
+  assert.strictEqual(f[5].path, 'with space.md');
+  assert.deepStrictEqual(squash.parseZeroContextDiff(''), []);
+});
+
+// The measurement itself lives in tools/colab (git I/O). Run its real source against a real repo.
+test('#621: branchCommits marks a follow-up only when every changed line is the branch\'s own', (t) => {
+  const fs = require('node:fs');
+  const os = require('node:os');
+  const path = require('node:path');
+  const { execFileSync } = require('node:child_process');
+  const gitLib = require('./git.js');
+  const src = fs.readFileSync(path.join(__dirname, '..', 'colab'), 'utf8');
+  const grab = (name) => { const s = src.slice(src.indexOf(`function ${name}(`)); return s.slice(0, s.indexOf('\n}\n') + 3); };
+  // eslint-disable-next-line no-new-func
+  const branchCommits = new Function('git', 'squash', 'shipRefFor',
+    `${grab('branchCommits')}${grab('markFollowUps')}${grab('commitIsFollowUp')}; return branchCommits;`)(
+    gitLib, squash, (_root, b) => b);
+
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'squash-621-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const g = (...a) => execFileSync('git', a, { cwd: dir, encoding: 'utf8', env: { ...process.env, GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1' } }).trim();
+  const write = (f, lines) => fs.writeFileSync(path.join(dir, f), lines.join('\n') + '\n');
+  const commit = (msg) => { g('add', '-A'); g('-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-q', '-m', msg); };
+  g('init', '-q', '-b', 'main');
+  g('config', 'core.hooksPath', path.join(dir, '.nohooks'));
+  write('old.txt', ['trunk 1', 'trunk 2', 'trunk 3']);
+  commit('chore: base');
+
+  // 1. the measured case: a refactor adds lines to a trunk file and creates a file; the fix edits only those
+  g('checkout', '-q', '-b', 'refactor/split-1');
+  write('old.txt', ['trunk 1', 'branch A', 'branch B', 'trunk 2', 'trunk 3']);
+  write('new.txt', ['n1', 'n2']);
+  commit('refactor(area): split the unit');
+  write('old.txt', ['trunk 1', 'branch A fixed', 'branch B', 'trunk 2', 'trunk 3']);
+  write('new.txt', ['n1', 'n2 fixed', 'n3']);
+  commit('fix(area): reword a plural');
+  let cs = branchCommits(dir, 'main', 'refactor/split-1');
+  assert.strictEqual(cs[0].followUp, true, 'the fix only touches the refactor\'s own lines');
+  assert.strictEqual(squash.composeSquashMessage(cs, []).split('\n')[0], 'refactor(area): split the unit');
+
+  // 2. a fix that also touches a trunk line is a real fix — it still wins
+  g('checkout', '-q', '-b', 'refactor/split-2', 'main');
+  write('old.txt', ['trunk 1', 'branch A', 'trunk 2', 'trunk 3']);
+  commit('refactor(area): split the unit');
+  write('old.txt', ['trunk 1', 'branch A fixed', 'trunk 2 fixed', 'trunk 3']);
+  commit('fix(area): a trunk bug too');
+  cs = branchCommits(dir, 'main', 'refactor/split-2');
+  assert.ok(!cs[0].followUp);
+  assert.strictEqual(squash.composeSquashMessage(cs, []).split('\n')[0], 'fix(area): a trunk bug too');
+
+  // 3. a pure insertion into a trunk file adds behaviour beside trunk's lines — not a follow-up
+  g('checkout', '-q', '-b', 'refactor/split-3', 'main');
+  write('old.txt', ['trunk 1', 'branch A', 'trunk 2', 'trunk 3']);
+  commit('refactor(area): split the unit');
+  write('old.txt', ['trunk 1', 'branch A', 'trunk 2', 'trunk 3', 'inserted']);
+  commit('fix(area): insert a line');
+  assert.ok(!branchCommits(dir, 'main', 'refactor/split-3')[0].followUp);
+
+  // 4. a file the fix itself creates is new content — not a follow-up
+  g('checkout', '-q', '-b', 'refactor/split-4', 'main');
+  write('old.txt', ['trunk 1', 'branch A', 'trunk 2', 'trunk 3']);
+  commit('refactor(area): split the unit');
+  write('brand-new.txt', ['x']);
+  commit('fix(area): a new file');
+  assert.ok(!branchCommits(dir, 'main', 'refactor/split-4')[0].followUp);
+});

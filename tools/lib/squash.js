@@ -66,6 +66,19 @@ const TYPE_WEIGHT = {
  */
 const UNRECOGNISED_WEIGHT = 5;
 
+/**
+ * Weight of a FOLLOW-UP (#621): a commit whose every changed line was added by an EARLIER commit on
+ * the same branch and is absent from the merge base. It repairs the branch's own unshipped work, so
+ * whatever its type says, it means nothing to a consumer — no shipped behaviour was broken. Measured
+ * at v1.14.0: a 148-file `refactor:` shipped titled by a one-word `fix:` to text that refactor had
+ * just added, because `fix` (60) outweighs `refactor` (40). Ranked below every named type AND below
+ * `UNRECOGNISED_WEIGHT`, so it never titles a unit that has any other shaped commit; above 0 only so
+ * a branch of nothing but follow-ups and shapeless commits still reads as "weighed". The flag itself
+ * (`commit.followUp`) is measured by the CLI against git (`tools/colab` `markFollowUps`) — this
+ * module stays pure and only reads it.
+ */
+const FOLLOW_UP_WEIGHT = 3;
+
 /** A breaking change outranks every non-breaking one, whatever its type. */
 const BREAKING_BONUS = 1000;
 
@@ -105,6 +118,9 @@ function commitWeight(commit) {
   if (!parsed) return 0;
   const base = TYPE_WEIGHT[parsed.type];
   const breaking = parsed.breaking || /^BREAKING[ -]CHANGE:/m.test(String((commit && commit.body) || ''));
+  // #621: a follow-up keeps its breaking bonus — declaring a break is a consumer-facing claim, not a
+  // repair — but loses its type's rank.
+  if (commit && commit.followUp) return FOLLOW_UP_WEIGHT + (breaking ? BREAKING_BONUS : 0);
   if (base === undefined) return UNRECOGNISED_WEIGHT + (breaking ? BREAKING_BONUS : 0); // shaped, unnamed type (#261)
   return base + (breaking ? BREAKING_BONUS : 0);
 }
@@ -153,7 +169,8 @@ function unweightedCommits(commits) {
  * Rules, in order:
  *   1. sync-merge noise never titles a squash (unless it is all there is);
  *   2. highest weight wins — an unrecognised-but-shaped type (#261, weight `UNRECOGNISED_WEIGHT`)
- *      beats a truly shapeless commit here, so it is no longer a coin-flip against rule 4;
+ *      beats a truly shapeless commit here, so it is no longer a coin-flip against rule 4; a
+ *      follow-up to the branch's own unshipped lines (#621, `FOLLOW_UP_WEIGHT`) ranks below both;
  *   3. ties go to the OLDEST of the tied commits — on a branch of three `feat`s, the first one
  *      names the branch's purpose and the rest extend it;
  *   4. if NOTHING on the branch carries any Conventional Commit shape at all (weight 0, the one
@@ -507,8 +524,47 @@ function spliceCloses(message, closes = [], refs = [], conflicts) {
   return rest ? `${head}\n\n${refLine}\n\n${rest}` : `${head}\n\n${refLine}`;
 }
 
+/**
+ * Parse `git diff -U0 --no-renames` output into per-file records for the #621 follow-up measurement:
+ * `{ path, created, deleted, binary, unparsed, hunks: [{ oldStart, oldCount }] }`. `created` means
+ * the old side is /dev/null — the commit added the file. `unparsed` is set when a path is quoted
+ * (git's C-style escaping) — the caller must then refuse to call the commit a follow-up rather than
+ * guess at the name. Pure, so the hunk arithmetic is testable without a repository.
+ */
+function parseZeroContextDiff(diffText) {
+  const files = [];
+  let cur = null;
+  const strip = (p) => p.replace(/\t$/, '');
+  for (const line of String(diffText || '').split('\n')) {
+    if (line.startsWith('diff --git ')) {
+      cur = { path: null, created: false, deleted: false, binary: false, unparsed: false, hunks: [] };
+      files.push(cur);
+      continue;
+    }
+    if (!cur) continue;
+    if (line.startsWith('--- ')) {
+      const p = strip(line.slice(4));
+      if (p === '/dev/null') cur.created = true;
+      else if (p.startsWith('"')) cur.unparsed = true;
+      else if (p.startsWith('a/')) cur.path = p.slice(2);
+      else cur.unparsed = true;
+    } else if (line.startsWith('+++ ')) {
+      const p = strip(line.slice(4));
+      if (p === '/dev/null') cur.deleted = true;
+      else if (p.startsWith('"')) cur.unparsed = true;
+    } else if (line.startsWith('Binary files ') || line === 'GIT binary patch') {
+      cur.binary = true;
+    } else if (line.startsWith('@@ ')) {
+      const m = /^@@ -(\d+)(?:,(\d+))? \+\d+(?:,\d+)? @@/.exec(line);
+      if (!m) { cur.unparsed = true; continue; }
+      cur.hunks.push({ oldStart: Number(m[1]), oldCount: m[2] === undefined ? 1 : Number(m[2]) });
+    }
+  }
+  return files;
+}
+
 module.exports = {
-  TYPE_WEIGHT, UNRECOGNISED_WEIGHT, BREAKING_BONUS, TRAILER_RE,
+  TYPE_WEIGHT, UNRECOGNISED_WEIGHT, FOLLOW_UP_WEIGHT, BREAKING_BONUS, TRAILER_RE, parseZeroContextDiff,
   isSyncNoise, parseSubject, commitWeight, hasRecognisedType, unweightedCommits, pickSubjectIndex,
   harvestTrailers, composeSquashMessage, spliceCloses, reconcileClosesRefsConflict,
   closedIssueNumbers, inheritedClosingKeywordConflicts,
