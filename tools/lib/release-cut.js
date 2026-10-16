@@ -655,12 +655,11 @@ function handoffTrackingBody(version) {
 function fullSuiteVerdict(rows, at) {
   if (rows === null || rows === undefined) return { ok: false, detail: `gh run list failed — cannot confirm the suite ran at ${at}` };
   if (!rows.length) return { ok: false, detail: `no workflow run at ${at} — the suite never ran on this commit` };
-  const byWorkflow = new Map();
-  for (const r of rows) {
-    const name = r.workflowName || '(unnamed workflow)';
-    if (!byWorkflow.has(name)) byWorkflow.set(name, []);
-    byWorkflow.get(name).push(r);
-  }
+  const byWorkflow = groupByWorkflow(rows);
+  const skippedOnly = [];
+  for (const [name, runs] of byWorkflow) if (isSkippedOnly(runs)) { skippedOnly.push(name); byWorkflow.delete(name); }
+  // #616: a workflow whose every run was skipped did not run — it vouches for nothing and fails nothing.
+  if (!byWorkflow.size) return { ok: false, detail: `no workflow ran at ${at} — every run was skipped (${skippedOnly.join(', ')})` };
   const missing = [];
   for (const [name, runs] of byWorkflow) {
     if (!runs.some((r) => r.status === 'completed' && r.conclusion === 'success')) {
@@ -668,7 +667,41 @@ function fullSuiteVerdict(rows, at) {
     }
   }
   if (missing.length) return { ok: false, detail: `no successful run at ${at} for: ${missing.join('; ')}` };
-  return { ok: true, detail: `${byWorkflow.size} workflow(s) at ${at}, each with a successful run` };
+  const note = skippedOnly.length ? ` (not run, skipped: ${skippedOnly.join(', ')})` : '';
+  return { ok: true, detail: `${byWorkflow.size} workflow(s) at ${at}, each with a successful run${note}` };
+}
+
+function groupByWorkflow(rows) {
+  const byWorkflow = new Map();
+  for (const r of rows) {
+    const name = (r && r.workflowName) || '(unnamed workflow)';
+    if (!byWorkflow.has(name)) byWorkflow.set(name, []);
+    byWorkflow.get(name).push(r);
+  }
+  return byWorkflow;
+}
+
+/** Every run of the workflow finished and concluded `skipped` — it executed nothing (#514, #616). */
+function isSkippedOnly(runs) {
+  return runs.length > 0 && runs.every((r) => r && r.status === 'completed' && r.conclusion === 'skipped');
+}
+
+/**
+ * #616: the run rows minus every workflow whose runs at the sha were ALL `skipped` — an opt-in
+ * workflow gated off by an `if:` (a scheduled load profile waiting for its runner) records a skipped
+ * run on every tick, and one landing on the candidate's commit made ci-green read
+ * "conclusion=skipped" and refused every finalize older than one schedule period. Release-only on
+ * purpose: the ship gate (git.summarizeRunsForCommit, #514) keeps reading an all-skipped workflow
+ * as not-green, so this filter is applied by the release callers, never inside git.js.
+ * A workflow with a skipped run AND any other run keeps all its rows (skipped + failure stays red;
+ * cancelled-only is untouched and still fails full-suite). null passes through.
+ */
+function withoutSkippedOnlyWorkflows(rows) {
+  if (!Array.isArray(rows)) return rows;
+  const drop = new Set();
+  for (const [name, runs] of groupByWorkflow(rows)) if (isSkippedOnly(runs)) drop.add(name);
+  if (!drop.size) return rows;
+  return rows.filter((r) => !drop.has((r && r.workflowName) || '(unnamed workflow)'));
 }
 
 /**
@@ -1152,7 +1185,7 @@ module.exports = {
   isFastRoute, isLibraryRoute, decideManifestVersion, spacingVerdict, holdsVerdict, migrationHandoff,
   parseVersion, formatVersion, candidateNumbers, nextCandidateNumber, decideVersion,
   parseGuardOutput, exportsDiff, switchRemovalsSince, autoSignals, parseMigrationSection, decideAutoVersion, cadenceVerdict,
-  fullSuiteVerdict, withoutOwnWorkflow, isMigrationPath, schemaVerdict,
+  fullSuiteVerdict, withoutOwnWorkflow, withoutSkippedOnlyWorkflows, isMigrationPath, schemaVerdict,
   parseSwitchMarkers, switchVerdict,
   promotionVerdict, decide, tagMessage, versionSourceOf,
   DOWNSTREAM_EVENTS, headCandidateVerdict, prereleaseArgs, finalReleaseArgs, handoffTrackingBody,
