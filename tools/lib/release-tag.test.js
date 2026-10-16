@@ -263,8 +263,39 @@ test('release-status: a waiting candidate does not reset the unreleased gap (#81
     assert.deepStrictEqual(m.map((x) => [x.file, x.version]), [['VERSION', '1.3.0'], ['package.json', '1.3.0'], ['Cargo.toml', '1.3.0'], ['pyproject.toml', '1.3.0']]);
     assert.deepStrictEqual(rt.manifestVersions(files({ 'package.json': '{"private":true}' })), [], 'no version field declares nothing');
     assert.match(rt.manifestVersions(files({ 'package.json': '{' }))[0].error, /does not parse/);
-    assert.match(rt.manifestVersions(files({ 'Cargo.toml': '[package]\nversion.workspace = true\n' }))[0].error, /workspace/);
+    assert.match(rt.manifestVersions(files({ 'Cargo.toml': '[package]\nversion.workspace = true\n' }))[0].error, /no \[workspace\.package\] version/, 'a member crate with no workspace root here still refuses');
     assert.strictEqual(rt.manifestVersions(files({ 'pyproject.toml': '[project]\ndynamic = ["version"]\n' }))[0].dynamic, true);
+  });
+
+  test('#620 manifestVersions: a Cargo workspace root states its version in [workspace.package]', () => {
+    const cargo = (body) => rt.manifestVersions(files({ 'Cargo.toml': body }));
+    // No [package] at all — the virtual-workspace form the issue measured.
+    assert.deepStrictEqual(cargo('[workspace]\nmembers = ["a", "b"]\n\n[workspace.package]\nversion = "0.11.0"\nedition = "2021"\n'), [{ file: 'Cargo.toml', version: '0.11.0' }]);
+    // A root [package] inheriting it, in both spellings, and with the tables in either order.
+    assert.deepStrictEqual(cargo('[package]\nname = "x"\nversion.workspace = true\n[workspace.package]\nversion = "0.11.0"\n'), [{ file: 'Cargo.toml', version: '0.11.0' }]);
+    assert.deepStrictEqual(cargo('[workspace.package]\nversion = \'0.11.0\'\n[package]\nversion = { workspace = true }\n'), [{ file: 'Cargo.toml', version: '0.11.0' }]);
+    // A [package] with no version line falls through to the workspace one.
+    assert.deepStrictEqual(cargo('[package]\nname = "x"\n[workspace.package]\nversion = "0.11.0"\n'), [{ file: 'Cargo.toml', version: '0.11.0' }]);
+    // A literal [package] version is the root crate's own and wins — [workspace.package] is only what members inherit.
+    assert.deepStrictEqual(cargo('[package]\nversion = "1.0.0"\n[workspace.package]\nversion = "0.11.0"\n'), [{ file: 'Cargo.toml', version: '1.0.0' }]);
+    // [workspace] alone, or [workspace.package] without a version, declares nothing.
+    assert.deepStrictEqual(cargo('[workspace]\nmembers = []\n[workspace.package]\nedition = "2021"\n'), []);
+    // A [workspace.dependencies] version is not the workspace's version.
+    assert.deepStrictEqual(cargo('[workspace]\n[workspace.dependencies.serde]\nversion = "1.0.0"\n'), []);
+  });
+
+  test('#620 preTagChecks: the workspace version is checked like any manifest — tag must equal it and outrank the last final', () => {
+    const manifests = rt.manifestVersions(files({ 'Cargo.toml': '[workspace]\n[workspace.package]\nversion = "0.11.0"\n' }));
+    const ok = byName(rt.preTagChecks({ tag: 'v0.11.0', manifests, ancestry: okAnc, tags: ['v0.2.0'] }));
+    assert.strictEqual(ok['manifest-version'].ok, true, ok['manifest-version'].detail);
+    assert.strictEqual(ok['outranks-final'].ok, true, ok['outranks-final'].detail);
+    const derived = byName(rt.preTagChecks({ tag: 'v0.3.0', manifests, ancestry: okAnc, tags: ['v0.2.0'] }));
+    assert.strictEqual(derived['manifest-version'].ok, false, 'a tag derived from tags alone no longer passes as "no manifest"');
+    assert.match(derived['manifest-version'].detail, /Cargo\.toml says 0\.11\.0/);
+    const stale = rt.manifestVersions(files({ 'Cargo.toml': '[workspace.package]\nversion = "0.2.0"\n' }));
+    const notAbove = byName(rt.preTagChecks({ tag: 'v0.2.0', manifests: stale, ancestry: okAnc, tags: ['v0.2.0'] }));
+    assert.strictEqual(notAbove['manifest-version'].ok, true);
+    assert.strictEqual(notAbove['outranks-final'].ok, false, 'a workspace version not above the last final fails outranks-final');
   });
 
   test('preTagChecks: manifest-version — the tag must equal every declared manifest', () => {
