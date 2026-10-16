@@ -599,8 +599,12 @@ function headCandidateVerdict({ candidatesAuto, sha, tagsAtSha, owed, runs, prom
   const suite = runs.filter((r) => r && !DOWNSTREAM_EVENTS.includes(r.event));
   if (!suite.length) return out('not-green', `no suite run at ${at} yet — nothing is owed until it is green`);
   if (suite.some((r) => r.status !== 'completed')) return out('not-green', `a suite run at ${at} is still in flight`);
-  if (suite.some((r) => r.conclusion !== 'success' && r.conclusion !== 'cancelled')) return out('not-green', `${at} is not green — no candidate is owed for a red head`);
-  const ok = suite.filter((r) => r.conclusion === 'success');
+  // #618: a workflow whose every run here was `skipped` (an opt-in gated off by `if:`) did not run —
+  // same reading as release ci-green/full-suite (#616). Skipped beside a red run stays red; a head
+  // whose only runs were skipped falls through to "no successful suite run" below.
+  const judged = withoutSkippedOnlyWorkflows(suite);
+  if (judged.some((r) => r.conclusion !== 'success' && r.conclusion !== 'cancelled')) return out('not-green', `${at} is not green — no candidate is owed for a red head`);
+  const ok = judged.filter((r) => r.conclusion === 'success');
   if (!ok.length) return out('not-green', `no successful suite run at ${at}`);
   const ms = (x) => Date.parse(x);
   const greenMs = Math.max(...ok.map((r) => ms(r.updatedAt)).filter((n) => !Number.isNaN(n)));

@@ -599,6 +599,25 @@ test('#443 headCandidateVerdict: flags a head green for longer than one CI cycle
   assert.strictEqual(withRelease.state, 'untagged');
 });
 
+test('#618 headCandidateVerdict: an all-skipped workflow did not run — it no longer hides an untagged green head', () => {
+  const run = (o) => ({ status: 'completed', conclusion: 'success', event: 'push', workflowName: 'CI', createdAt: '2026-10-02T12:00:00Z', updatedAt: '2026-10-02T12:05:00Z', ...o });
+  const skipped = (o) => run({ conclusion: 'skipped', workflowName: 'Load', ...o }); // a push-triggered opt-in gated off by `if:` (schedule rows are already downstream)
+  const at = (runs) => rc.headCandidateVerdict({ candidatesAuto: true, sha: 'abcdef1234', tagsAtSha: [], owed: 3, runs, promotion: null, now: '2026-10-02T13:00:00Z' });
+  const green = at([run(), skipped()]);
+  assert.strictEqual(green.state, 'untagged');
+  assert.strictEqual(green.flag, true);
+  assert.strictEqual(green.cycleMs, 300000);
+  // skipped beside a failure of the same workflow is still red
+  const red = at([run(), skipped({ workflowName: 'CI' }), run({ conclusion: 'failure' })]);
+  assert.strictEqual(red.state, 'not-green');
+  assert.match(red.detail, /red head/);
+  // a head whose only runs were skipped never went green
+  const none = at([skipped(), skipped({ workflowName: 'Nightly' })]);
+  assert.strictEqual(none.state, 'not-green');
+  assert.strictEqual(none.flag, false);
+  assert.match(none.detail, /no successful suite run/);
+});
+
 test('#443 prereleaseArgs: a published pre-release that never becomes Latest', () => {
   assert.deepStrictEqual(rc.prereleaseArgs('v1.2.1-rc.1', '/tmp/n.md'),
     ['release', 'create', 'v1.2.1-rc.1', '--verify-tag', '--title', 'v1.2.1-rc.1', '--notes-file', '/tmp/n.md', '--prerelease', '--latest=false']);
