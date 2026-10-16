@@ -1328,6 +1328,12 @@ exactly as before. `colab ship --dry` warns about this class either way (`N comm
 recognised type, or ship with `--message "<subject>"` so the subject is stated rather
 than guessed.
 
+**A follow-up to the branch's own unshipped lines ranks below every type (#621).** A
+commit whose every changed line was added by an earlier commit on the same branch (absent
+from the merge base, measured by `git blame`) repairs nothing a consumer saw, so it never
+titles the unit — a `fix:` to a `refactor:`'s new text ships under the `refactor:`. A pure
+insertion into a trunk file, or a file the commit creates, is new content, not a follow-up.
+
 **Merging:**
 
 - Feature branch → trunk: **squash**, one commit per unit of work.

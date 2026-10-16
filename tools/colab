@@ -10556,7 +10556,7 @@ function branchCommits(mainRoot, trunk, branchName) {
   const base = mb.ok && mb.stdout ? mb.stdout : trunk;
   const logShas = git.git(['log', '--first-parent', `${base}..${branch}`, '--no-merges', '--format=%H'], mainRoot);
   const shas = logShas.ok ? logShas.stdout.split('\n').filter(Boolean) : [];
-  return shas.map((sha) => {
+  const commits = shas.map((sha) => {
     const full = git.git(['log', '-1', '--format=%B', sha], mainRoot).stdout;
     const nl = full.indexOf('\n');
     return {
@@ -10565,6 +10565,56 @@ function branchCommits(mainRoot, trunk, branchName) {
       body: (nl === -1 ? '' : full.slice(nl + 1)).replace(/^\n+/, '').replace(/\s+$/, ''),
     };
   });
+  markFollowUps(mainRoot, base, commits);
+  return commits;
+}
+
+/**
+ * #621: flag each commit that only rewrites lines an EARLIER commit on this branch added — lines
+ * absent from the merge base — as `followUp: true`, which lib/squash.js ranks below every named type.
+ * Measured, never inferred from the subject: a one-word `fix:` to a `refactor:`'s brand-new text once
+ * titled a 148-file unit, because `fix` outweighs `refactor`.
+ *
+ * Only a commit that could actually steal the subject is measured — one weighing MORE than every
+ * older commit (a tie already goes to the oldest), so the cost is a diff plus a blame per hunk of a
+ * handful of commits, not of the branch. Every uncertainty reads as "not a follow-up", leaving the
+ * pre-#621 ranking in place. Per changed file of the candidate commit:
+ *   - a file this commit creates → not contained (new content, not a repair);
+ *   - a file absent at the base but present in the parent → wholly branch-added, contained;
+ *   - a file present at the base → every hunk must REPLACE or DELETE lines (a pure insertion adds
+ *     behaviour beside trunk's lines, so it is not contained) and `git blame base..<sha>^` must
+ *     attribute every replaced line to a commit of this branch (a boundary line is trunk's);
+ *   - binary, quoted-path or unparseable diffs, and any failed git read → not contained.
+ */
+function markFollowUps(mainRoot, base, commits) {
+  if (!base || commits.length < 2) return;
+  const own = new Set(commits.map((c) => c.sha));
+  for (let i = commits.length - 2; i >= 0; i--) { // newest-first list; the oldest can never be one
+    const c = commits[i];
+    if (squash.isSyncNoise(c.subject)) continue;
+    const older = commits.slice(i + 1).filter((o) => !squash.isSyncNoise(o.subject));
+    if (!older.length || squash.commitWeight(c) <= Math.max(...older.map((o) => squash.commitWeight(o)))) continue;
+    if (commitIsFollowUp(mainRoot, base, c.sha, own)) c.followUp = true;
+  }
+}
+
+function commitIsFollowUp(mainRoot, base, sha, own) {
+  const d = git.git(['-c', 'core.quotePath=true', 'diff', '-U0', '--no-renames', '--no-ext-diff', '--no-color', `${sha}^`, sha], mainRoot);
+  if (!d.ok) return false;
+  const files = squash.parseZeroContextDiff(d.stdout);
+  if (!files.length) return false;
+  for (const f of files) {
+    if (f.binary || f.unparsed || f.created || !f.path || !f.hunks.length) return false;
+    if (!git.git(['cat-file', '-e', `${base}:${f.path}`], mainRoot).ok) continue; // the branch made this file
+    for (const h of f.hunks) {
+      if (h.oldCount === 0) return false;
+      const b = git.git(['blame', '--porcelain', '-L', `${h.oldStart},+${h.oldCount}`, `${base}..${sha}^`, '--', f.path], mainRoot);
+      if (!b.ok) return false;
+      const authors = b.stdout.split('\n').map((l) => /^([0-9a-f]{40}) \d+ \d+/.exec(l)).filter(Boolean).map((m) => m[1]);
+      if (!authors.length || authors.some((a) => !own.has(a))) return false;
+    }
+  }
+  return true;
 }
 
 /** Files one commit touched (#88's narrow-subject signal). [] when the read fails — never a guess. */
