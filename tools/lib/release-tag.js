@@ -56,15 +56,57 @@ function describeArgs({ ref = null, abbrev = 0, includePrerelease = false } = {}
  * there is none (no tags, only candidates, not a repo). Never throws.
  *
  * Nearest by ancestry, same as the describe it replaces — "latest reachable", not "highest SemVer".
+ *
+ * `onlyTags` (#617) — a Set of tag names, usually the push remote's (`remoteTagNames`). When given,
+ * every local tag outside it is excluded from the walk, so a clone holding tags the remote never
+ * had (a fork's fetched `upstream` line) answers exactly as a fresh CI checkout of the remote does.
  */
-function latestReleaseTag(root, { ref = null, includePrerelease = false } = {}) {
+function latestReleaseTag(root, { ref = null, includePrerelease = false, onlyTags = null } = {}) {
   try {
-    const out = execFileSync('git', ['-C', root, ...describeArgs({ ref, abbrev: 0, includePrerelease })], {
+    const args = describeArgs({ ref, abbrev: 0, includePrerelease });
+    if (onlyTags) {
+      const local = execFileSync('git', ['-C', root, 'tag', '--list'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] })
+        .split('\n').map((t) => t.trim()).filter(Boolean);
+      const foreign = local.filter((t) => !onlyTags.has(t)).map((t) => `--exclude=${t}`);
+      args.splice(args.length - (ref ? 1 : 0), 0, ...foreign);
+    }
+    const out = execFileSync('git', ['-C', root, ...args], {
       encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'],
     }).trim();
     return out || null;
   } catch (_) {
     return null;
+  }
+}
+
+/**
+ * `git ls-remote --tags` output → the Set of tag names it lists (#617). Peeled `^{}` lines name the
+ * same tag as the line before them, so they collapse into it.
+ */
+function parseLsRemoteTags(stdout) {
+  const names = new Set();
+  for (const line of String(stdout || '').split('\n')) {
+    const ref = line.split('\t')[1];
+    if (!ref || !ref.startsWith('refs/tags/')) continue;
+    names.add(ref.slice('refs/tags/'.length).replace(/\^\{\}$/, ''));
+  }
+  return names;
+}
+
+/**
+ * The tag names on `remote` (#617) — what a fresh CI checkout of that remote sees, which a local clone
+ * need not: a fork that fetched its `upstream` holds that line's tags too, and a release computed from
+ * them disagrees with the CI run of the same command. Asked of the remote directly (`ls-remote`), so
+ * no local ref can leak in. `{ ok, names, stderr }` — never throws; a caller fails closed on !ok.
+ */
+function remoteTagNames(root, remote) {
+  try {
+    const out = execFileSync('git', ['-C', root, 'ls-remote', '--tags', remote], {
+      encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 60_000,
+    });
+    return { ok: true, names: parseLsRemoteTags(out), stderr: '' };
+  } catch (e) {
+    return { ok: false, names: new Set(), stderr: String((e && e.stderr) || (e && e.message) || 'ls-remote failed').split('\n')[0] };
   }
 }
 
@@ -222,6 +264,6 @@ function preTagChecks({ tag, manifests, ancestry, tags, trunk = 'main', versionS
 }
 
 module.exports = {
-  PRERELEASE_TAG_GLOB, isPrereleaseTag, describeArgs, latestReleaseTag,
+  PRERELEASE_TAG_GLOB, isPrereleaseTag, describeArgs, latestReleaseTag, parseLsRemoteTags, remoteTagNames,
   PRE_TAG_CONDITIONS, MANIFESTS, parseSemver, manifestVersions, preTagChecks,
 };
