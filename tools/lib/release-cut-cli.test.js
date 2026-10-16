@@ -310,6 +310,46 @@ test('refuses: no final tag yet — the first version is a human decision', () =
   assertRefused(fx, cut(fx), 'version', /first version/);
 });
 
+/**
+ * #617: make `fx` a fork — an `upstream` remote carrying its own final line (`tags`, on the fixture's
+ * first commit), fetched into the clone and never pushed to origin. A fresh CI checkout of origin sees
+ * none of these tags; the cut must not either.
+ */
+function forkWithUpstreamTags(fx, tags) {
+  const upstream = path.join(fx.root, 'upstream.git');
+  execFileSync('git', ['init', '-q', '--bare', '-b', 'main', upstream]);
+  const first = fx.g('rev-list', '--max-parents=0', 'HEAD');
+  fx.g('remote', 'add', 'upstream', upstream);
+  fx.g('push', '-q', 'upstream', `${first}:refs/heads/main`);
+  const scratch = path.join(fx.root, 'upstream-work');
+  execFileSync('git', ['clone', '-q', upstream, scratch]);
+  const u = (...args) => execFileSync('git', args, { cwd: scratch, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
+  u('config', 'user.email', 'test@example.invalid'); u('config', 'user.name', 'upstream');
+  for (const t of tags) u('tag', '-a', t, '-m', t);
+  u('push', '-q', 'origin', '--tags');
+  fx.g('fetch', '-q', 'upstream', '--tags');
+  for (const t of tags) assert.ok(fx.g('tag', '--list', t), `fixture: ${t} not fetched into the clone`);
+}
+
+test('#617: a fork holding upstream\'s tags locally — no final on origin still refuses the first version, as CI does', () => {
+  const fx = fixture({ lastFinal: null });
+  forkWithUpstreamTags(fx, ['v1.7.1', 'v1.12.1']);
+  const r = cut(fx, ['--auto', '--dry']);
+  assertRefused(fx, r, 'version', /first version/);
+  assert.strictEqual(r.body.lastFinal, null, JSON.stringify(r.body));
+  assert.deepStrictEqual(originTags(fx), []);
+});
+
+test('#617: a fork with its own final on origin computes from it, never from a higher upstream tag', () => {
+  const fx = fixture();
+  forkWithUpstreamTags(fx, ['v1.12.1']);
+  const r = cut(fx, ['--auto']);
+  assert.strictEqual(r.code, 0, r.out + r.err);
+  assert.strictEqual(r.body.lastFinal, 'v1.2.0');
+  assert.strictEqual(r.body.tag, 'v1.2.1-rc.1');
+  assert.deepStrictEqual(originTags(fx), ['v1.2.0', 'v1.2.1-rc.1']);
+});
+
 // ---- --auto (#422) and the pre-tag checks (#424) ----------------------------------------------
 
 test('--auto: a fix cuts a patch candidate and writes every signal into the tag', () => {

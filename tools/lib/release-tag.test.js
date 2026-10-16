@@ -88,6 +88,35 @@ test('latestReleaseTag skips a candidate on top; includePrerelease asks for it e
   assert.strictEqual(g(repo, 'describe', '--tags', '--abbrev=0').trim(), 'v1.3.0-rc.1');
 });
 
+test('#617 parseLsRemoteTags: tag names only, peeled ^{} lines collapse, heads ignored', () => {
+  const out = 'a1\trefs/tags/v1.2.0\nb2\trefs/tags/v1.2.0^{}\nc3\trefs/tags/v1.3.0-rc.1\nd4\trefs/heads/main\n';
+  assert.deepStrictEqual([...releaseTag.parseLsRemoteTags(out)].sort(), ['v1.2.0', 'v1.3.0-rc.1']);
+  assert.strictEqual(releaseTag.parseLsRemoteTags('').size, 0);
+});
+
+test('#617 latestReleaseTag onlyTags: a nearer local-only tag is skipped; remoteTagNames reads the remote, not the clone', () => {
+  const root = tmp('colab-reltag-');
+  const origin = path.join(root, 'o.git');
+  const repo = path.join(root, 'r');
+  execFileSync('git', ['init', '-q', '--bare', '-b', 'main', origin]);
+  initRepo(repo, root);
+  g(repo, 'remote', 'add', 'origin', origin);
+  commit(repo, 'a.txt', 'a\n', 'chore: init');
+  g(repo, 'tag', '-a', 'v0.1.0', '-m', 'v0.1.0');
+  g(repo, 'push', '-q', 'origin', 'main', '--tags');
+  commit(repo, 'b.txt', 'b\n', 'fix: b');
+  g(repo, 'tag', '-a', 'v1.12.1', '-m', 'upstream line, never pushed');
+
+  const remote = releaseTag.remoteTagNames(repo, 'origin');
+  assert.strictEqual(remote.ok, true);
+  assert.deepStrictEqual([...remote.names], ['v0.1.0']);
+  assert.strictEqual(releaseTag.latestReleaseTag(repo), 'v1.12.1');
+  assert.strictEqual(releaseTag.latestReleaseTag(repo, { onlyTags: remote.names }), 'v0.1.0');
+  assert.strictEqual(releaseTag.latestReleaseTag(repo, { ref: 'HEAD', onlyTags: remote.names }), 'v0.1.0');
+  assert.strictEqual(releaseTag.latestReleaseTag(repo, { onlyTags: new Set() }), null);
+  assert.strictEqual(releaseTag.remoteTagNames(repo, 'nope').ok, false);
+});
+
 test('latestReleaseTag is null with only candidates, no tags, or no repo — never throws', () => {
   const root = tmp('colab-reltag-');
   const repo = path.join(root, 'r');

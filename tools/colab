@@ -1498,10 +1498,24 @@ function measurePromotion(repoAbs, { sha, trunk, remote, fetched }) {
   return releaseCut.promotionVerdict({ trunk, sha, parents, headOnTrunk, mergedFromTrunk: merged || false });
 }
 
-/** Every candidate `colab release cut` made, as [{ name, date }] — what the cadence window counts (#422). */
-function cutCandidates(repoAbs) {
+/**
+ * #617: the push remote's tag names, read with `ls-remote` — what a release cut/finalize may read.
+ * Fails closed: an unreadable remote tag set means the version cannot be computed the way CI would.
+ */
+function remoteTagSetOrThrow(repoAbs, remote) {
+  const r = releaseTag.remoteTagNames(repoAbs, remote);
+  if (!r.ok) throw new UserError(`git ls-remote --tags ${remote} failed — the release version is computed from ${remote}'s tags only, so nothing is decided without them (${r.stderr})`);
+  return r.names;
+}
+
+/**
+ * Every candidate `colab release cut` made, as [{ name, date }] — what the cadence window counts (#422).
+ * `onlyTags` (#617): the push remote's tag names — a local tag the remote never had is not a cut.
+ */
+function cutCandidates(repoAbs, onlyTags = null) {
   const fe = git.git(['for-each-ref', 'refs/tags', '--format=%(refname:short)%09%(objecttype)%09%(taggerdate:iso-strict)%09%(contents:subject)'], repoAbs);
   return (fe.ok ? fe.stdout.split('\n').filter(Boolean) : []).map((l) => l.split('\t'))
+    .filter(([name]) => !onlyTags || onlyTags.has(name))
     .filter(([name, type, , subject]) => type === 'tag' && /-rc\.[1-9][0-9]*$/.test(name) && String(subject || '').endsWith('(colab release cut)'))
     .map(([name, , date]) => ({ name, date }));
 }
@@ -1568,11 +1582,11 @@ function measureAutoSignals(repoAbs, { doc, sha, lastFinal, remote, issues, trun
   return { signals, migration: (v) => releaseCut.parseMigrationSection(migrationText, v) };
 }
 
-/** #446: every final `vX.Y.Z` tag as [{ name, date }] — what release.final-spacing counts. A human's final counts too. */
-function finalTags(repoAbs) {
+/** #446: every final `vX.Y.Z` tag as [{ name, date }] — what release.final-spacing counts. A human's final counts too. #617: only the push remote's (`onlyTags`). */
+function finalTags(repoAbs, onlyTags = null) {
   const fe = git.git(['for-each-ref', 'refs/tags', '--format=%(refname:short)%09%(creatordate:iso-strict)'], repoAbs);
   return (fe.ok ? fe.stdout.split('\n').filter(Boolean) : []).map((l) => l.split('\t'))
-    .filter(([name]) => releaseCut.parseVersion(name)).map(([name, date]) => ({ name, date }));
+    .filter(([name]) => (!onlyTags || onlyTags.has(name)) && releaseCut.parseVersion(name)).map(([name, date]) => ({ name, date }));
 }
 
 /**
@@ -1582,7 +1596,7 @@ function finalTags(repoAbs) {
  * since the newest final. The version is computed here only to find that tracking issue; decide()
  * computes it again from the same inputs, so the two cannot disagree.
  */
-function measureFastRoute(repoAbs, { policy, remote, issues, lastFinal, tags, auto, migrationPaths: paths }) {
+function measureFastRoute(repoAbs, { policy, remote, issues, lastFinal, tags, auto, migrationPaths: paths, remoteTags = null }) {
   const grantDecl = policy.effective.finalGrant;
   const trust = trustAt(repoAbs, `${remote}/main`);
   const finalGrant = isGhUsable(repoAbs)
@@ -1603,7 +1617,7 @@ function measureFastRoute(repoAbs, { policy, remote, issues, lastFinal, tags, au
     if (grant && grant.ok) grant = { ...grant, issue: tracking.number };
   }
   const migrations = { ...releaseFinalize.migrationGrantVerdict({ paths, grant, since: lastFinal }), paths: paths || null };
-  const spacing = releaseCut.spacingVerdict({ finals: finalTags(repoAbs), spacingHours: policy.effective.finalSpacingHours, now: new Date().toISOString() });
+  const spacing = releaseCut.spacingVerdict({ finals: finalTags(repoAbs, remoteTags), spacingHours: policy.effective.finalSpacingHours, now: new Date().toISOString() });
   return { finalGrant, holds, migrations, spacing, tracking };
 }
 
@@ -1673,13 +1687,18 @@ function cmdReleaseCut(argv) {
     deploy: doc.deploy === undefined || doc.deploy === null ? 'none' : String(doc.deploy),
   });
 
-  const lastFinal = releaseTag.latestReleaseTag(repoAbs, { ref: `${remote}/main` });
+  // #617: every tag this cut reads is one the push remote holds — a fresh CI checkout sees only those,
+  // and a clone holding more (a fork's fetched `upstream` line) must reach the same verdict, not cut
+  // a version off a line the remote never carried.
+  const remoteTags = remoteTagSetOrThrow(repoAbs, remote);
+  const lastFinal = releaseTag.latestReleaseTag(repoAbs, { ref: `${remote}/main`, onlyTags: remoteTags });
   const suggestion = lastFinal
     ? semverSuggestion(ccSummary(repoAbs, `${lastFinal}..${remote}/main`))
     : { bump: null, why: 'no final tag yet' };
   const lines = (r) => (r.ok ? r.stdout.split('\n').map((s) => s.trim()).filter(Boolean) : []);
-  const tags = lines(git.git(['tag', '--list'], repoAbs));
-  const tagsAtSha = lines(git.git(['tag', '--points-at', sha], repoAbs));
+  const onRemote = (t) => remoteTags.has(t);
+  const tags = lines(git.git(['tag', '--list'], repoAbs)).filter(onRemote);
+  const tagsAtSha = lines(git.git(['tag', '--points-at', sha], repoAbs)).filter(onRemote);
 
   const { ci, suite, schema, switches, issues, migrations: migrationPathsSince } = measureCandidateConditions(repoAbs, {
     sha, lastFinal, at, readRuns: () => releaseCut.withoutOwnWorkflow(git.ghRunsForCommit(repoAbs, 'main', sha)), // #425
@@ -1689,14 +1708,14 @@ function cmdReleaseCut(argv) {
   let auto = null; // #422
   if (opts.auto) {
     const { signals, migration } = measureAutoSignals(repoAbs, { doc, sha, lastFinal, remote, issues, trunk });
-    const cadence = releaseCut.cadenceVerdict({ candidates: cutCandidates(repoAbs), perDay: policy.effective.candidatesPerDay, now: new Date().toISOString() });
+    const cadence = releaseCut.cadenceVerdict({ candidates: cutCandidates(repoAbs, remoteTags), perDay: policy.effective.candidatesPerDay, now: new Date().toISOString() });
     auto = { signals, migration, cadence, promotion: offTrunk ? measurePromotion(repoAbs, { sha, trunk, remote, fetched: trunkFetch }) : null };
   }
 
   // #446: route deploy-tag-fast — the grant, the human veto, the migration gate and the spacing are
   // measured only there, so every candidate route's run is what it was.
   const fast = releaseCut.isFastRoute(policy) && !policy.findings.length;
-  const fastFacts = fast ? measureFastRoute(repoAbs, { policy, remote, issues, lastFinal, tags, auto, migrationPaths: migrationPathsSince }) : {};
+  const fastFacts = fast ? measureFastRoute(repoAbs, { policy, remote, issues, lastFinal, tags, auto, migrationPaths: migrationPathsSince, remoteTags }) : {};
   if (fast && auto) auto.spacing = fastFacts.spacing;
   // #590: route library-fast — a final with nothing deployed. The release-hold veto is its one extra
   // read; a hand cut also needs MIGRATION.md for a manifest-declared major (--auto reads it already).
@@ -2043,10 +2062,12 @@ function cmdReleaseFinalize(argv) {
   const shaR = git.git(['rev-parse', '--verify', '--quiet', `refs/remotes/${remote}/main^{commit}`], repoAbs);
   if (!shaR.ok || !shaR.stdout) throw new UserError(`no ${remote}/main — releases are cut from main (CONVENTIONS.md §6)`);
   const mainSha = shaR.stdout;
-  const lastFinal = releaseTag.latestReleaseTag(repoAbs, { ref: `${remote}/main` });
+  // #617: candidates and finals are the push remote's — never a tag only this clone holds.
+  const remoteTags = remoteTagSetOrThrow(repoAbs, remote);
+  const lastFinal = releaseTag.latestReleaseTag(repoAbs, { ref: `${remote}/main`, onlyTags: remoteTags });
 
   const fe = git.git(['for-each-ref', 'refs/tags', '--format=%(refname:short)%09%(objecttype)%09%(*objectname)%09%(objectname)%09%(taggerdate:iso-strict)%09%(contents:subject)'], repoAbs);
-  const tags = (fe.ok ? fe.stdout.split('\n').filter(Boolean) : []).map((l) => {
+  const tags = (fe.ok ? fe.stdout.split('\n').filter(Boolean) : []).filter((l) => remoteTags.has(l.split('\t')[0])).map((l) => {
     const [name, type, peeled, obj, date, subject] = l.split('\t');
     const annotated = type === 'tag';
     return { name, annotated, sha: annotated ? peeled : obj, date: annotated ? date : null, subject: annotated ? subject : '', onMain: false };
@@ -2108,7 +2129,7 @@ function cmdReleaseFinalize(argv) {
     let rows; let rawRows;
     const conditions = measureCandidateConditions(repoAbs, {
       sha: cand.sha,
-      lastFinal: releaseTag.latestReleaseTag(repoAbs, { ref: cand.sha }),
+      lastFinal: releaseTag.latestReleaseTag(repoAbs, { ref: cand.sha, onlyTags: remoteTags }),
       at: `${cand.tag}@${shortSha(cand.sha)}`,
       readRuns: () => { rawRows = git.ghRunsAtCommit(repoAbs, cand.sha); rows = releaseCut.withoutOwnWorkflow(rawRows); return rows; }, // #425
       issues,
@@ -2153,7 +2174,7 @@ function cmdReleaseFinalize(argv) {
       const mg = tracking && tracking.number
         ? migrationGrant.evaluateIssue(rec, cand.version, tracking.number, labels.MIGRATION_GRANT_LABEL, { trust })
         : { ok: false, reason: 'no tracking issue yet to carry a grant' };
-      migrations = releaseFinalize.migrationGrantVerdict({ paths: conditions.migrations, grant: mg, since: releaseTag.latestReleaseTag(repoAbs, { ref: cand.sha }) });
+      migrations = releaseFinalize.migrationGrantVerdict({ paths: conditions.migrations, grant: mg, since: releaseTag.latestReleaseTag(repoAbs, { ref: cand.sha, onlyTags: remoteTags }) });
     }
     const verdict = releaseFinalize.decide({
       policy, selection: sel, tracking, supersededHeld, period, trunk, regressions,
