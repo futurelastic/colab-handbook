@@ -13601,6 +13601,31 @@ function handoffEvidence(v) {
   return v ? ` · landed from the executor's hand-off ${v.url} — its claim and worktree stay until it confirms the land` : '';
 }
 
+/**
+ * #619: the one line a failed B1 git step is reported by. Never `stderr.split('\n')[0]` — a
+ * pre-commit hook that prints a banner first (gitleaks' ASCII art opens with `○`) made the banner
+ * the entire report and discarded the reason. gitFailureLine picks the `fatal:` line or the LAST
+ * line, which is where a hook's verdict lands. stdout is the fallback because git writes some
+ * failures there with an empty stderr (`merge --squash` conflicts, `nothing to commit`).
+ */
+function b1FailureLine(r, fallback) {
+  return git.gitFailureLine(r.stderr) || git.gitFailureLine(r.stdout) || fallback;
+}
+
+/**
+ * #619: the full output of a failed B1 git step, indented under the one-line summary, so the cause
+ * survives even when no single line names it (the measured failure could not be recovered: an
+ * identical retry passed). Empty when there is at most one line — the summary already said it.
+ * Capped at the last 40 lines; a hook's verdict is at the end, not the start.
+ */
+function b1FailureDetail(r) {
+  const lines = String((r.stderr || '').trim() ? r.stderr : (r.stdout || '')).split('\n').filter((l) => l.trim());
+  if (lines.length <= 1) return '';
+  const shown = lines.slice(-40);
+  const head = lines.length > shown.length ? `  … ${lines.length - shown.length} earlier line(s) omitted\n` : '';
+  return `  git output:\n${head}${shown.map((l) => `    ${l}`).join('\n')}\n`;
+}
+
 function shipRefFor(repoAbs, branch) {
   const r = git.branchRefs(repoAbs, branch);
   return r.localSha || r.remoteSha || branch;
@@ -14546,14 +14571,19 @@ function cmdShip(argv) {
   const sq = git.git(['merge', '--squash', sess.branch], targetDir);
   if (!sq.ok) {
     git.git(['merge', '--abort'], targetDir); cleanupEphemeral(); cleanupTarget();
-    process.stderr.write(`✗ B1: squash-merge failed: ${sq.stderr.split('\n')[0]}. Nothing pushed.\n`);
+    // #619: never stderr's first line — a conflict reports on STDOUT with an empty stderr.
+    process.stderr.write(`✗ B1: squash-merge failed: ${b1FailureLine(sq, 'no output from git')}. Nothing pushed.\n${b1FailureDetail(sq)}`);
+    process.stderr.write(`  Sync ${target} into the branch (\`git merge ${shipRemote}/${target}\` in its worktree), resolve, push, then re-run \`colab ship --branch ${sess.branch}\`.\n`);
     return 1;
   }
   const commit = git.run('git', ['commit', '-m', commitMsg], { cwd: targetDir });
   if (!commit.ok) {
     git.git(['reset', '--hard', `${shipRemote}/${target}`], targetDir); cleanupEphemeral(); cleanupTarget();
-    // if there was genuinely nothing to commit, say so plainly
-    process.stderr.write(`✗ B1: commit failed (${commit.stderr.split('\n')[0] || 'nothing to commit?'}). ${target} reset, nothing pushed.\n`);
+    // #619: a hook that prints a banner first (gitleaks' ASCII art) made stderr's FIRST line the
+    // whole report, discarding the reason. gitFailureLine picks the `fatal:` / last line instead,
+    // and the full hook output follows so the cause survives even when no single line names it.
+    process.stderr.write(`✗ B1: commit failed (${b1FailureLine(commit, 'nothing to commit?')}). ${target} reset, nothing pushed.\n${b1FailureDetail(commit)}`);
+    process.stderr.write(`  Fix what the output above names on ${sess.branch}, push, then re-run \`colab ship --branch ${sess.branch}\` once it passes.\n`);
     return 1;
   }
   const sha = git.git(['rev-parse', '--short', 'HEAD'], targetDir).stdout;
