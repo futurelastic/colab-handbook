@@ -166,8 +166,6 @@
   "tools/colab:write:B1: after B0 the branch touches core path(s) the approval did not cover:": "pre-#532: refusal with no next command yet",
   "tools/colab:write:B1: could not check out \"…\" to merge into: …. Nothing pushed.": "pre-#532: refusal with no next command yet",
   "tools/colab:write:B1: the composed squash message would close … kept open by --refs:": "pre-#532: refusal with no next command yet",
-  "tools/colab:write:B1: squash-merge failed: …. Nothing pushed.": "pre-#532: refusal with no next command yet",
-  "tools/colab:write:B1: commit failed (…). … reset, nothing pushed.": "pre-#532: refusal with no next command yet",
   "tools/colab:user-error:--batch does not combine with … — each member ships with its own recorde": "pre-#532: refusal with no next command yet",
   "tools/colab:user-error:… is not a git repo#6": "pre-#532: refusal with no next command yet",
   "tools/colab:user-error:Could not determine trunk branch (set project.yml trunk:)#6": "pre-#532: refusal with no next command yet",
