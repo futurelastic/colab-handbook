@@ -655,6 +655,7 @@ test('#621: branchCommits marks a follow-up only when every changed line is the 
   const write = (f, lines) => fs.writeFileSync(path.join(dir, f), lines.join('\n') + '\n');
   const commit = (msg) => { g('add', '-A'); g('-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-q', '-m', msg); };
   g('init', '-q', '-b', 'main');
+  g('config', 'core.hooksPath', path.join(dir, '.nohooks'));
   write('old.txt', ['trunk 1', 'trunk 2', 'trunk 3']);
   commit('chore: base');
 
