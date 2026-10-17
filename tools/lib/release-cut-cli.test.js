@@ -365,13 +365,13 @@ test('#622: --sha off main is refused on-trunk; an unknown or malformed sha is a
 
 // ---- #624: which runs may veto a cut — the code-verifying runs, by the ship gate's rule ----------
 
-/** #624's measured shape at `sha`: the queue-tested CI run, trunk's own "already tested" dedupe run, a nightly. */
+/** #624's measured shape at `sha` (not named `CI`: on Actions withoutOwnWorkflow drops the runner's own workflow, #425): the queue-tested CI run, trunk's own "already tested" dedupe run, a nightly. */
 function measuredRuns(sha, { nightly = { status: 'in_progress', conclusion: null }, ci = 'success' } = {}) {
   const t = (m) => new Date(Date.now() - m * 60000).toISOString();
   return [
-    { headSha: sha, status: 'completed', conclusion: ci, workflowName: 'CI', event: 'push', createdAt: t(1), databaseId: 302 }, // 29 s dedupe
+    { headSha: sha, status: 'completed', conclusion: ci, workflowName: 'Tests', event: 'push', createdAt: t(1), databaseId: 302 }, // 29 s dedupe
     { headSha: sha, workflowName: 'Nightly', event: 'schedule', createdAt: t(0), databaseId: 303, ...nightly },
-    { headSha: sha, status: 'completed', conclusion: 'success', workflowName: 'CI', event: 'push', createdAt: t(25), databaseId: 301 }, // full run
+    { headSha: sha, status: 'completed', conclusion: 'success', workflowName: 'Tests', event: 'push', createdAt: t(25), databaseId: 301 }, // full run
   ];
 }
 
@@ -411,7 +411,7 @@ test('#624: a FAILED scheduled run does not veto either; a red push run still do
 });
 
 test('#624: ship-gate-workflows naming the nightly makes it a veto again — the override narrows, as on ship', () => {
-  const fx = fixture({ projectYml: `${RELEASED_YML}ship-gate-workflows: [CI, Nightly]\n` });
+  const fx = fixture({ projectYml: `${RELEASED_YML}ship-gate-workflows: [Tests, Nightly]\n` });
   const sha = fx.g('rev-parse', 'HEAD');
   fs.writeFileSync(fx.runsFile, JSON.stringify(measuredRuns(sha)));
   const r = cut(fx, ['--dry']);
