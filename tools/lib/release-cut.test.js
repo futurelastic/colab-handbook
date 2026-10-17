@@ -950,3 +950,21 @@ test('#610 a final route needs the heavy lane green at the head: red refuses, pe
   assert.strictEqual(rc.decide(libFacts({ heavy: absent })).ok, true);
   assert.strictEqual(refusal(rc.decide(libFacts()), 'heavy-lane'), undefined, 'no heavy fact → no row');
 });
+
+// ---- #624: verifyingRunsForCut — the ship gate's rule for which runs may veto a cut ---------------
+
+test('#624 verifyingRunsForCut: push runs count, a schedule run is set aside and named; null passes through', () => {
+  const rows = [
+    { workflowName: 'CI', event: 'push', status: 'completed', conclusion: 'success', databaseId: 1 },
+    { workflowName: 'Nightly', event: 'schedule', status: 'in_progress', conclusion: null, databaseId: 2 },
+    { workflowName: 'legacy', status: 'completed', conclusion: 'success', databaseId: 3 }, // no event: counted
+  ];
+  const read = rc.verifyingRunsForCut(rows, { gate: null, ignore: [] });
+  assert.deepStrictEqual(read.rows.map((r) => r.workflowName), ['CI', 'legacy']);
+  assert.deepStrictEqual(read.setAside.map((r) => [r.workflowName, r.setAsideWhy]), [['Nightly', 'event: schedule']]);
+  assert.match(rc.verifyingNote(read), /set aside 1 run that does not verify the code .*Nightly \(in_progress, run 2; event: schedule\)/);
+  assert.strictEqual(rc.verifyingNote(rc.verifyingRunsForCut(rows.slice(0, 1), null)), '');
+  assert.strictEqual(rc.verifyingRunsForCut(null, null).rows, null);
+  const gated = rc.verifyingRunsForCut(rows, { gate: ['CI', 'Nightly'], ignore: [] });
+  assert.deepStrictEqual(gated.rows.map((r) => r.workflowName), ['CI', 'Nightly']);
+});

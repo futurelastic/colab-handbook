@@ -1302,7 +1302,10 @@ Refuses, naming each failed condition (all are reported, not just the first):
   already-candidate    this commit already carries a candidate of the same version
   ci-green             every run at the commit finished and one succeeded — colab ship's whole-sha check
   full-suite           every workflow that ran at the commit has a successful run (a cancelled-only
-                       workflow never ran its tests)
+                       workflow never ran its tests). Both read only the runs that verify the code,
+                       by colab ship's rule: a schedule / workflow_dispatch / workflow_run run (a
+                       nightly still in flight) is set aside and named; project.yml
+                       ship-gate-workflows / ship-ignore-workflows narrow it the same way
   schema-additive      a migration since the last final tag is destructive (Laravel database/migrations
                        up() drops/renames/->change(), Prisma DROP/RENAME/ALTER COLUMN, and .php/.sql
                        under a project.yml \`migrations:\` prefix) or an existing migration was
@@ -1440,7 +1443,7 @@ function releaseCutChanges(repoAbs, from, sha, declared) {
  * — by branch window for a fresh head (cut), by commit for an older candidate (finalize). Also
  * returns the issue list it read (null when unread or gh unusable), so a caller does not read it twice.
  */
-function measureCandidateConditions(repoAbs, { sha, lastFinal, at, readRuns, issues: knownIssues }) {
+function measureCandidateConditions(repoAbs, { sha, lastFinal, at, readRuns, issues: knownIssues, verifying }) {
   let ci; let suite; let switches; let issues = null;
   if (!isGhUsable(repoAbs)) {
     const why = ghUnusableWhy(repoAbs);
@@ -1449,11 +1452,16 @@ function measureCandidateConditions(repoAbs, { sha, lastFinal, at, readRuns, iss
     switches = { ok: false, unread: true, detail: `gh not usable (${why}) — the colab:switch markers cannot be read` };
   } else {
     // #616: a workflow whose every run at the sha was skipped did not run — not counted either way.
-    const rows = releaseCut.withoutSkippedOnlyWorkflows(readRuns());
+    // #624: `verifying` (release cut only) narrows the rows to the runs that verify the code — a
+    // scheduled run still in flight at the sha is not part of its verdict. Finalize passes none.
+    const read = verifying ? releaseCut.verifyingRunsForCut(readRuns(), verifying) : { rows: readRuns() };
+    const note = releaseCut.verifyingNote(read);
+    const rows = releaseCut.withoutSkippedOnlyWorkflows(read.rows);
     const run = git.summarizeRunsForCommit(rows, sha);
     if (!run) ci = { ok: false, detail: `gh run list failed — cannot confirm CI at ${at}` };
-    else { const v = classifyCiRun(repoAbs, run, at); ci = { ok: v.ok, detail: v.detail }; }
+    else { const v = classifyCiRun(repoAbs, run, at); ci = { ok: v.ok, detail: v.detail + note }; }
     suite = releaseCut.fullSuiteVerdict(rows, at);
+    if (note && rows) suite = { ...suite, detail: suite.detail + note };
     // #423: an --auto finalize judges several candidates in one run — the issue list is read once.
     issues = knownIssues !== undefined ? knownIssues : readAllIssuesForSwitches(repoAbs);
     switches = releaseCut.switchVerdict(issues);
@@ -1721,6 +1729,7 @@ function cmdReleaseCut(argv) {
 
   const { ci, suite, schema, switches, issues, migrations: migrationPathsSince } = measureCandidateConditions(repoAbs, {
     sha, lastFinal, at, readRuns: () => releaseCut.withoutOwnWorkflow(git.ghRunsForCommit(repoAbs, 'main', sha)), // #425
+    verifying: verifyingPolicy(repoAbs), // #624: the ship gate's rule for which runs may veto
   });
   const { manifests, ancestry } = measurePreTag(repoAbs, sha, `${remote}/main`); // #424
 
