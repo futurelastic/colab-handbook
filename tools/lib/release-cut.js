@@ -87,7 +87,7 @@ const BUMPS = Object.freeze(['patch', 'minor']);
 const RELEASE_BRANCH = 'main';
 
 const CONDITIONS = Object.freeze([
-  'release-policy', 'cadence', 'spacing', 'promotion', 'prerelease-trigger', 'version', 'already-candidate', 'already-final',
+  'release-policy', 'cadence', 'spacing', 'promotion', 'qualified-sha', 'prerelease-trigger', 'version', 'already-candidate', 'already-final',
   ...releaseTag.PRE_TAG_CONDITIONS,
   'ci-green', 'full-suite', 'schema-additive', 'switch-dependencies',
   'final-grant', 'release-hold', 'migration-grant',
@@ -513,6 +513,35 @@ function cadenceVerdict({ candidates, perDay, now }) {
   if (recent.length < perDay) return { ok: true, detail: `${recent.length} candidate(s) in the last 24h, cap ${perDay}`, nextAt: null };
   const nextAt = new Date(recent[recent.length - perDay].ms + 86400000).toISOString();
   return { ok: false, detail: `${recent.length} candidate(s) in the last 24h (${recent.map((c) => c.name).join(', ')}) — release.candidates-per-day caps at ${perDay} a day; the first run from ${nextAt} cuts main's head, never an older commit`, nextAt };
+}
+
+// ---- #622: a candidate at a named sha that is not main's head ----------------------------------
+
+/**
+ * `release cut --sha <sha>` (#622): a busy trunk moves during every long qualifying suite, so the sha
+ * that went green is rarely still main's head when its run ends. The cut may name that sha instead —
+ * every other condition is already measured at the sha; this verdict answers only what is new about
+ * tagging a commit below the head. Null when the sha IS main's head (nothing new: today's cut).
+ *
+ *   newer        release tags (candidate or final) on a commit that DESCENDS from the sha — a CI run
+ *                finishing out of order. A candidate here would move `next` backwards.
+ *   finalRoute   deploy-tag-fast / library-fast: their cut is a FINAL, and #622 is candidates-only —
+ *                those routes keep tagging main's head.
+ *   capped       --auto under a declared release.candidates-per-day cap: a capped route spends its
+ *                cut on the head (#443's "never an older commit").
+ *
+ * Returns { ok, detail, unread }. Not ok is a NO-OP under --auto (the head's own run cuts), a refusal
+ * by hand. `newer: null` = the tags could not be read — unread, never "none newer".
+ */
+function qualifiedShaVerdict({ sha, head, newer, finalRoute = false, capped = false, auto = false }) {
+  const s = String(sha || '').slice(0, 7);
+  const h = String(head || '').slice(0, 7);
+  if (!sha || !head || sha === head) return null;
+  if (finalRoute) return { ok: false, detail: `${s} is not main's head (${h}) — this route's cut is a final, and a final is tagged only on main's head; --sha names a candidate (#622)` };
+  if (auto && capped) return { ok: false, detail: `${s} is not main's head (${h}) — under a release.candidates-per-day cap a cut is spent on the head, never an older commit (#443)` };
+  if (newer === null || newer === undefined) return { ok: false, unread: true, detail: `the release tags on commits after ${s} could not be read — an unread newer candidate is not an absent one` };
+  if (newer.length) return { ok: false, detail: `${newer.join(', ')} already names a commit after ${s} — a candidate here would move \`next\` backwards; the newer one stands` };
+  return { ok: true, detail: `${s} is below main's head (${h}) and no release tag names a later commit — the candidate is cut at ${s} (#622)` };
 }
 
 // ---- #446: deploy-tag-fast — spacing and holds ------------------------------------------------
@@ -1032,6 +1061,14 @@ function decide(facts) {
     }
   }
 
+  // #622: a cut at a named sha below main's head — only what is new about it; every other row is
+  // already measured at the sha. Null (no row) when the sha is the head or no --sha was given.
+  const q = f.qualified;
+  if (q) {
+    add('qualified-sha', q.ok, q.detail, isUnread(q));
+    if (!q.ok && f.auto && !q.unread) noop = true;
+  }
+
   const trig = f.triggers || [];
   if (trig.length) add('prerelease-trigger', false, `a deploy would fire on a candidate tag: ${trig.map((t) => t.text).join('; ')}`);
   else add('prerelease-trigger', true, 'no deploy workflow fires on a pre-release tag');
@@ -1188,7 +1225,7 @@ module.exports = {
   CONDITIONS, FAST_CONDITIONS, STANDING_CONDITIONS, BUMPS, MIGRATION_FILE, RELEASE_BRANCH, HOLD_LABEL,
   isFastRoute, isLibraryRoute, decideManifestVersion, spacingVerdict, holdsVerdict, migrationHandoff,
   parseVersion, formatVersion, candidateNumbers, nextCandidateNumber, decideVersion,
-  parseGuardOutput, exportsDiff, switchRemovalsSince, autoSignals, parseMigrationSection, decideAutoVersion, cadenceVerdict,
+  parseGuardOutput, exportsDiff, switchRemovalsSince, autoSignals, parseMigrationSection, decideAutoVersion, cadenceVerdict, qualifiedShaVerdict,
   fullSuiteVerdict, withoutOwnWorkflow, withoutSkippedOnlyWorkflows, isMigrationPath, schemaVerdict,
   parseSwitchMarkers, switchVerdict,
   promotionVerdict, decide, tagMessage, versionSourceOf,

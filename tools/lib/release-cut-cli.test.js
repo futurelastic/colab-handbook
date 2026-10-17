@@ -278,6 +278,91 @@ test('refuses: CI green on an older commit only — the candidate\'s own commit 
   assertRefused(fx, cut(fx), 'ci-green', /no run for/);
 });
 
+// ---- #622: --sha — a candidate at a qualified sha the trunk has already moved past --------------
+
+/** Rows for every sha in `shas`, all green — the runs stub answers the same file for any commit. */
+function greenAt(fx, shas) {
+  fs.writeFileSync(fx.runsFile, JSON.stringify(shas.map((sha, i) => ({
+    headSha: sha, status: 'completed', conclusion: 'success', workflowName: 'ci', createdAt: new Date().toISOString(), databaseId: 200 + i,
+  }))));
+}
+
+test('#622: qualified sha = head~1, head newer and not green — the candidate is cut AT the qualified sha, not refused', () => {
+  const fx = fixture();
+  const qualified = fx.g('rev-parse', 'HEAD');
+  commit(fx, 'feat.txt', 'feat: landed during the suite run', 'x\n', []);
+  greenAt(fx, [qualified]); // only the qualified sha has a green run; the head has none yet
+  const head = fx.g('rev-parse', 'HEAD');
+
+  // Today's cut (no --sha) reads the head: no run there, refused — the bug #622 measured.
+  assertRefused(fx, cut(fx, ['--dry']), 'ci-green');
+
+  const r = cut(fx, ['--sha', qualified]);
+  assert.strictEqual(r.code, 0, r.out + r.err);
+  assert.strictEqual(r.body.ok, true, JSON.stringify(r.body.checks, null, 2));
+  assert.strictEqual(r.body.created, true);
+  assert.strictEqual(r.body.sha, qualified);
+  assert.strictEqual(r.body.head, head);
+  // The bump reads what the tagged commit carries (a fix), not the head's feat.
+  assert.strictEqual(r.body.tag, 'v1.2.1-rc.1');
+  assert.strictEqual(fx.g('rev-list', '-n', '1', 'v1.2.1-rc.1'), qualified, 'tagged at the qualified sha');
+  assert.notStrictEqual(qualified, head);
+  const q = r.body.checks.find((c) => c.condition === 'qualified-sha');
+  assert.ok(q && q.ok, JSON.stringify(r.body.checks));
+  assert.strictEqual(originBranch(fx, 'next'), qualified);
+
+  // --auto does the same, and a later green head then gets its own candidate on top.
+  greenAt(fx, [qualified, head]);
+  const atHead = cut(fx, ['--auto', '--sha', head]);
+  assert.strictEqual(atHead.code, 0, atHead.out + atHead.err);
+  assert.strictEqual(atHead.body.tag, 'v1.3.0-rc.1');
+  assert.strictEqual(atHead.body.head, undefined, 'at the head: no head field, no qualified-sha row');
+  assert.ok(!atHead.body.checks.some((c) => c.condition === 'qualified-sha'));
+});
+
+test('#622: a later commit already carries a candidate — --auto --sha on the older sha is a no-op, by hand a refusal', () => {
+  const fx = fixture();
+  const older = fx.g('rev-parse', 'HEAD');
+  commit(fx, 'fix2.txt', 'fix: another');
+  const head = fx.g('rev-parse', 'HEAD');
+  greenAt(fx, [older, head]);
+  assert.strictEqual(cut(fx).body.tag, 'v1.2.1-rc.1'); // the head's run finished first
+
+  const late = cut(fx, ['--auto', '--sha', older]); // the older sha's run finished second
+  assert.strictEqual(late.code, 0, late.out + late.err);
+  assert.strictEqual(late.body.noop, true);
+  assert.strictEqual(late.body.created, false);
+  const q = late.body.checks.find((c) => c.condition === 'qualified-sha');
+  assert.ok(q && !q.ok && /v1\.2\.1-rc\.1 already names a commit after/.test(q.detail), JSON.stringify(late.body.checks));
+  assert.deepStrictEqual(originTags(fx), ['v1.2.0', 'v1.2.1-rc.1']);
+  assert.strictEqual(originBranch(fx, 'next'), head, 'next never moves backwards');
+
+  const byHand = cut(fx, ['--sha', older]);
+  assert.strictEqual(byHand.code, 1);
+  assert.strictEqual(byHand.body.noop, false);
+});
+
+test('#622: --sha off main is refused on-trunk; an unknown or malformed sha is a usage error', () => {
+  const fx = fixture();
+  const base = fx.g('rev-parse', 'HEAD');
+  fx.g('checkout', '-q', '-b', 'side');
+  fs.writeFileSync(path.join(fx.work, 'side.txt'), 'side\n');
+  fx.g('add', '-A');
+  fx.g('commit', '-q', '-m', 'fix: never landed');
+  const side = fx.g('rev-parse', 'HEAD');
+  fx.g('checkout', '-q', 'main');
+  greenAt(fx, [base, side]);
+  assertRefused(fx, cut(fx, ['--sha', side]), 'on-trunk', /not an ancestor of origin\/main/);
+
+  const unknown = cut(fx, ['--sha', 'deadbeefdeadbeef']);
+  assert.strictEqual(unknown.code, 1, unknown.out + unknown.err);
+  assert.strictEqual(unknown.body, null, 'a usage error prints no verdict');
+  assert.match(unknown.err, /is not a commit in this clone/);
+  const bad = cut(fx, ['--sha', 'main~1']);
+  assert.notStrictEqual(bad.code, 0);
+  assert.match(bad.err, /--sha takes a commit sha/);
+});
+
 test('refuses: the full suite — a workflow whose only run was cancelled', () => {
   const fx = fixture();
   setRuns(fx, [{ workflowName: 'lint' }, { workflowName: 'test-suite', conclusion: 'cancelled' }]);
