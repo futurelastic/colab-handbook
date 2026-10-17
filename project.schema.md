@@ -1460,8 +1460,8 @@ ship-gate-workflows: [CI]          # absent = every push / pull_request-triggere
 ship-ignore-workflows: [Deploy]    # absent = nothing beyond the default is set aside
 ```
 
-Which workflow runs at a sha count as **its CI** for `colab ship`'s CI gate, `colab
-trunk-ci` and `colab ci-wait --sha` (#503). **Absent means the runs that verify the code
+Which workflow runs at a sha count as **its CI** for `colab ship`'s CI gate, `colab trunk-ci`,
+`colab ci-wait --sha` (#503) and `colab release cut`'s ci-green / full-suite (#624). **Absent means the runs that verify the code
 count** — those triggered by `push`, `pull_request`, `pull_request_target` or
 `merge_group` — and every run of another trigger at the same sha is set aside and named in
 the verdict: a `workflow_run` release ([`release-auto.yml`](templates/release-auto.yml)

@@ -4040,8 +4040,8 @@ notes = the summary since the last final plus the tag's own message, so a cut ru
 **[Hard — gate: colab release cut refuses]** **A candidate is cut only when all four hold, on the exact commit it names:**
 
 1. **[Hard — gate: colab release cut refuses]** **CI green on that commit** — every run at that sha finished and one succeeded; a
-   green trunk head later on does not count for it.
-2. **[Hard — gate: colab release cut refuses]** **The full suite passed on it** — the rule at the end of this section, unchanged.
+   green trunk head later on does not count for it. Only runs that verify the code count — the ship gate's rule (#503, #624).
+2. **[Hard — gate: colab release cut refuses]** **The full suite passed on it** — the rule at the end of this section, over those same runs.
 3. **[Hard — gate: colab release cut refuses]** **Every schema change since the last final tag is additive**
    ([*Switched epics*](#switched-epics--concurrent-unfinished-features-336), rule 5). A
    release carrying a destructive one is not a candidate an agent cuts; a human decides it.
