@@ -54,7 +54,8 @@ test('the cut step checks out main and leaves the promotion decision to the CLI'
   // main on every real run; the dispatched ref only on a #474 dry run.
   assert.match(CODE, /ref: \$\{\{ env\.DRY_RUN == 'true' && github\.sha \|\| 'main' \}\}\n/);
   assert.match(CODE, /fetch-depth: 0/);
-  assert.match(CODE, /node "\$COLAB" release cut --auto \$\{DRY\[@\]\+"\$\{DRY\[@\]\}"\} --json/);
+  // #622: `--sha` (the triggering CI run's sha) is the only other argument — still no trunk shape here.
+  assert.match(CODE, /node "\$COLAB" release cut --auto \$\{AT\[@\]\+"\$\{AT\[@\]\}"\} \$\{DRY\[@\]\+"\$\{DRY\[@\]\}"\} --json/);
   // No trunk-shape condition in YAML: the CLI reads project.yml's trunk:, the file does not.
   assert.doesNotMatch(CODE, /if:.*\b(trunk|dev|head_branch|head_commit)\b/);
   assert.doesNotMatch(CODE, /\btrunk\b/);
