@@ -428,6 +428,53 @@ function colabStub(dir, stdout) {
   return stub;
 }
 
+// #622: the cut step passes the sha its triggering CI run tested — not main's head.
+function cutShaFixture() {
+  const repo = tmpdir('release-auto-sha-');
+  const g = (...a) => execFileSync('git', a, { cwd: repo, encoding: 'utf8' }).trim();
+  g('init', '-q', '-b', 'main');
+  g('config', 'user.email', 't@example.invalid');
+  g('config', 'user.name', 't');
+  for (const n of ['1', '2']) { fs.writeFileSync(path.join(repo, 'f'), n); g('add', '-A'); g('commit', '-q', '-m', `fix: ${n}`); }
+  const stub = path.join(tmpdir('release-auto-sha-stub-'), 'colab.js');
+  fs.writeFileSync(stub, [
+    "const fs = require('fs'); const { execFileSync } = require('child_process');",
+    'const a = process.argv.slice(2);',
+    "if (a.includes('--help')) { if (process.env.HAS_SHA === '1') process.stdout.write('colab release cut [--repo <path>] [--sha <sha>] [--auto]\\n'); return; }",
+    "const head = execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();",
+    "fs.appendFileSync(process.env.LOG, JSON.stringify({ argv: a, head }) + '\\n');",
+    "process.stdout.write(JSON.stringify({ ok: false, noop: true, created: false, tag: null, checks: [] }));",
+  ].join('\n'));
+  return { repo, g, stub, qualified: g('rev-parse', 'HEAD~1'), head: g('rev-parse', 'HEAD') };
+}
+const cutCalls = (r) => r.log.trim().split('\n').filter(Boolean).map((l) => JSON.parse(l));
+
+test('#622 cut: a workflow_run passes --sha <the run\'s head_sha>, cut with the checkout at it, then restored', { skip: !HAS_JQ && 'jq not installed' }, () => {
+  const fx = cutShaFixture();
+  const r = runStep(CUT, { cwd: fx.repo, env: { COLAB: fx.stub, HAS_SHA: '1', EVENT: 'workflow_run', RUN_SHA: fx.qualified } });
+  assert.strictEqual(r.status, 0, r.stdout + r.stderr);
+  const [call] = cutCalls(r);
+  assert.deepStrictEqual(call.argv.slice(0, 5), ['release', 'cut', '--auto', '--sha', fx.qualified]);
+  assert.strictEqual(call.head, fx.qualified, 'a release.guard-run reads the working tree — it must be at the sha');
+  assert.strictEqual(fx.g('symbolic-ref', '--short', 'HEAD'), 'main', 'the checkout is restored for the steps after the cut');
+  assert.strictEqual(fx.g('rev-parse', 'HEAD'), fx.head);
+});
+
+test('#622 cut: the schedule, a dispatch, and a CLI without --sha all cut main\'s head', { skip: !HAS_JQ && 'jq not installed' }, () => {
+  const fx = cutShaFixture();
+  for (const env of [
+    { HAS_SHA: '1', EVENT: 'schedule', RUN_SHA: '' },
+    { HAS_SHA: '1', EVENT: 'workflow_dispatch', RUN_SHA: '' },
+    { HAS_SHA: '0', EVENT: 'workflow_run', RUN_SHA: fx.qualified }, // HANDBOOK_REF older than #622
+  ]) {
+    const r = runStep(CUT, { cwd: fx.repo, env: { COLAB: fx.stub, ...env } });
+    assert.strictEqual(r.status, 0, r.stdout + r.stderr);
+    const [call] = cutCalls(r);
+    assert.ok(!call.argv.includes('--sha'), `${JSON.stringify(env)}: ${call.argv.join(' ')}`);
+    assert.strictEqual(call.head, fx.head);
+  }
+});
+
 test('npm target: a publishing verdict hands tags, directory, gate and package to the npm job', { skip: !HAS_JQ && 'jq not installed' }, () => {
   const d = tmpdir('npm-target-');
   const COLAB = colabStub(d, JSON.stringify({ publish: true, dir: '.', gate: 'node scripts/check-pack-allowlist.mjs', package: '@o/p', why: 'x', findings: [] }));

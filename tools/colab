@@ -1252,7 +1252,7 @@ function existingWorktreeFor(repoAbs, wtName, branch) {
 }
 
 const HELP_RELEASE = `colab release <issue> [--repo <path>]
-colab release cut [--repo <path>] [--bump patch|minor --reason "<why>"] [--dry] [--json]   (see: colab release cut --help)
+colab release cut [--repo <path>] [--sha <sha>] [--bump patch|minor --reason "<why>"] [--dry] [--json]   (see: colab release cut --help)
 colab release finalize [--repo <path>] [--tag vX.Y.Z-rc.N] [--answered-by <name>] [--dry] [--json]   (see: colab release finalize --help)
 colab release npm [--repo <path>] [--json]   (see: colab release npm --help)
 
@@ -1284,9 +1284,9 @@ said so. Worktree claims never held the checkout; \`colab worktree rm\` owns the
 // release skill's (#339) and never this command's.
 // ---------------------------------------------------------------------------
 
-const HELP_RELEASE_CUT = `colab release cut [--repo <path>] [--auto | --bump patch|minor --reason "<why>"] [--dry] [--json]
+const HELP_RELEASE_CUT = `colab release cut [--repo <path>] [--sha <sha>] [--auto | --bump patch|minor --reason "<why>"] [--dry] [--json]
 
-Cut a release CANDIDATE, vX.Y.Z-rc.N, on origin/main's head — only where CONVENTIONS.md §6's release
+Cut a release CANDIDATE, vX.Y.Z-rc.N, on origin/main's head (or the commit --sha names) — only where CONVENTIONS.md §6's release
 rung lets an agent, and only once every condition below holds on that exact commit. Creates an
 annotated tag (the bump, its reason and every checked condition are recorded in its message) and
 pushes it to origin. NEVER creates a final vX.Y.Z tag — finalizing is the release skill's.
@@ -1370,6 +1370,14 @@ The bump (without --auto) is release-status's semverSuggestion since the last fi
 patch, feat -> minor; a breaking change is a minor pre-1.0 and a refusal from 1.0 on.
   --bump patch|minor   override the computed bump — requires --reason, which is recorded on the tag
   --reason "<why>"     why the override
+  --sha <sha>          (#622) cut at this commit instead of main's head — the qualified sha a busy trunk
+                       has already moved past. Every condition above is measured at it; on-trunk
+                       requires it on main. One more row when it is not the head:
+                       qualified-sha  refused (a NO-OP under --auto) when a release tag already names a
+                                      later commit (the newer candidate stands), on a final route (a
+                                      final is tagged only on main's head), or --auto under a
+                                      candidates-per-day cap (the cut is spent on the head)
+                       The release workflow passes the sha its triggering CI run tested.
   --dry                measure and report; create and push nothing
   --json               machine-readable: { ok, tag, created, checks: [{condition, ok, detail}], ... }
   --repo <path>        the repo (default: the one you are in)
@@ -1655,10 +1663,11 @@ function announceCarried(repoAbs, { tagNames, exclude, version, sha }) {
 
 function cmdReleaseCut(argv) {
   const opts = parseArgs(argv, {
-    values: { '--repo': 'repo', '--bump': 'bump', '--reason': 'reason' },
+    values: { '--repo': 'repo', '--bump': 'bump', '--reason': 'reason', '--sha': 'sha' },
     flags: { '--dry': 'dry', '--json': 'json', '--auto': 'auto', '-h': 'help', '--help': 'help' },
   });
   if (opts.help) return print(HELP_RELEASE_CUT);
+  if (opts.sha !== undefined && !/^[0-9a-f]{4,40}$/i.test(String(opts.sha))) throw new UserError(`--sha takes a commit sha (hex, 4–40 chars), got ${JSON.stringify(opts.sha)} — run \`git rev-parse <rev>\` and pass the sha it prints`);
   if (opts._.length) throw new UserError(`release cut takes no positional arguments (got: ${opts._.join(' ')})`);
   if (opts.auto && (opts.bump || opts.reason)) throw new UserError('--auto computes the bump with no human input — --bump/--reason cannot be combined with it');
   if (opts.reason && !opts.bump) throw new UserError('--reason records why --bump overrode the computed bump — pass --bump with it');
@@ -1678,7 +1687,15 @@ function cmdReleaseCut(argv) {
   const trunkFetch = offTrunk && opts.auto ? git.git(['fetch', remote, trunk], repoAbs) : null;
   const shaR = git.git(['rev-parse', '--verify', '--quiet', `refs/remotes/${remote}/main^{commit}`], repoAbs);
   if (!shaR.ok || !shaR.stdout) throw new UserError(`no ${remote}/main — candidates are cut from main (CONVENTIONS.md §6: never from dev)`);
-  const sha = shaR.stdout;
+  const head = shaR.stdout;
+  // #622: --sha names the commit to cut — a qualified sha a busy trunk has already moved past. Every
+  // condition below is measured at it; on-trunk still requires it to be an ancestor of main.
+  let sha = head;
+  if (opts.sha) {
+    const r = git.git(['rev-parse', '--verify', '--quiet', `${opts.sha}^{commit}`], repoAbs);
+    if (!r.ok || !r.stdout) throw new UserError(`--sha ${opts.sha} is not a commit in this clone (after fetching ${remote}/main) — run \`git log --oneline ${remote}/main\` and pass a sha from it`);
+    sha = r.stdout;
+  }
   const at = `main@${shortSha(sha)}`;
 
   const wf = git.git(['ls-tree', '--name-only', `${sha}:.github/workflows`], repoAbs);
@@ -1695,7 +1712,7 @@ function cmdReleaseCut(argv) {
   const remoteTags = remoteTagSetOrThrow(repoAbs, remote);
   const lastFinal = releaseTag.latestReleaseTag(repoAbs, { ref: `${remote}/main`, onlyTags: remoteTags });
   const suggestion = lastFinal
-    ? semverSuggestion(ccSummary(repoAbs, `${lastFinal}..${remote}/main`))
+    ? semverSuggestion(ccSummary(repoAbs, `${lastFinal}..${sha}`)) // #622: the bump reads what the tagged commit carries
     : { bump: null, why: 'no final tag yet' };
   const lines = (r) => (r.ok ? r.stdout.split('\n').map((s) => s.trim()).filter(Boolean) : []);
   const onRemote = (t) => remoteTags.has(t);
@@ -1741,8 +1758,21 @@ function cmdReleaseCut(argv) {
     if (lane.present && lane.verdict.state === 'none' && opts.auto && !opts.dry) dispatchHeavyLane(repoAbs, lane.file, 'main', sha);
   }
 
+  // #622: a cut below main's head — refused (a no-op under --auto) when a release tag already names a
+  // later commit, on a final route, or under a candidates-per-day cap. Null at the head: today's cut.
+  let qualified = null;
+  if (sha !== head) {
+    const c = git.git(['tag', '--contains', sha], repoAbs);
+    const atSha = new Set(tagsAtSha);
+    const newer = c.ok ? lines(c).filter(onRemote).filter((t) => !atSha.has(t) && /^v[0-9]+\.[0-9]+\.[0-9]+(-rc\.[1-9][0-9]*)?$/.test(t)) : null;
+    qualified = releaseCut.qualifiedShaVerdict({
+      sha, head, newer, finalRoute: fast || library, auto: !!opts.auto,
+      capped: policy.effective && policy.effective.candidatesPerDay !== null && policy.effective.candidatesPerDay !== undefined,
+    });
+  }
+
   const verdict = releaseCut.decide({
-    policy, triggers, lastFinal, suggestion, tags, tagsAtSha, ci, suite, schema, switches, manifests, ancestry, auto, heavy,
+    policy, triggers, lastFinal, suggestion, tags, tagsAtSha, ci, suite, schema, switches, manifests, ancestry, auto, heavy, qualified,
     override: opts.bump ? { bump: opts.bump, reason: opts.reason } : null,
     finalGrant: fastFacts.finalGrant, holds: fastFacts.holds, migrations: fastFacts.migrations, migration: libraryMigration,
     trackingIssue: fastFacts.tracking ? fastFacts.tracking.number : null,
@@ -1805,7 +1835,7 @@ function cmdReleaseCut(argv) {
 
   if (opts.json) {
     print(JSON.stringify({
-      repo: shortRepo(repoAbs), sha, ...(offTrunk ? { trunk } : {}), lastFinal, suggestion, dry: !!opts.dry, auto: !!opts.auto,
+      repo: shortRepo(repoAbs), sha, ...(sha !== head ? { head } : {}), ...(offTrunk ? { trunk } : {}), lastFinal, suggestion, dry: !!opts.dry, auto: !!opts.auto,
       ok: verdict.ok, noop: !!verdict.noop, standing: verdict.standing || [], tag: verdict.tag, created, published, channel, version: verdict.version, bump: verdict.bump,
       overridden: verdict.overridden, signals: verdict.signals ? verdict.signals.lines : null, checks: verdict.checks,
       // #446: present on every route, so the workflow reads one shape — final on deploy-tag-fast and
@@ -1817,7 +1847,7 @@ function cmdReleaseCut(argv) {
     return verdict.ok || verdict.noop ? 0 : 1;
   }
 
-  print(`colab release cut${opts.auto ? ' --auto' : ''} — ${shortRepo(repoAbs)} at ${at} (last final: ${lastFinal || 'none'})`);
+  print(`colab release cut${opts.auto ? ' --auto' : ''} — ${shortRepo(repoAbs)} at ${at}${sha !== head ? ` (main's head: ${shortSha(head)})` : ''} (last final: ${lastFinal || 'none'})`);
   if (verdict.signals) {
     print('  signals:');
     for (const l of verdict.signals.lines) print(`    · ${l}`);
@@ -1830,7 +1860,7 @@ function cmdReleaseCut(argv) {
       ? '· no-op — nothing owed, inside release.final-spacing, or main\'s head already carries a final; nothing tagged.'
       : library
         ? '· no-op — nothing owed (the manifest still says the last final), or main\'s head already carries a final; nothing tagged.'
-      : '· no-op — nothing owed, inside the route\'s cadence window, or main\'s head is not a promotion of trunk; nothing cut.');
+      : '· no-op — nothing owed, inside the route\'s cadence window, main\'s head is not a promotion of trunk, or a later commit already carries a candidate; nothing cut.');
     return 0;
   }
   if (!verdict.ok) {
@@ -17353,7 +17383,7 @@ Commands:
   release-notes [<range>] [--repo P] [--out F] [--headline "..."]   grouped Markdown release summary
   release-status [<repo>...] [--repo P] [--json]   merged-but-UNRELEASED lag on tag-gated repos —
                                         read-only, never tags (#81)
-  release cut [--repo P] [--bump patch|minor --reason R] [--dry] [--json]   cut a release CANDIDATE
+  release cut [--repo P] [--sha S] [--bump patch|minor --reason R] [--dry] [--json]   cut a release CANDIDATE
                                         vX.Y.Z-rc.N where §6's rung allows it; never a final tag (#338)
   release finalize [--repo P] [--tag RC] [--answered-by N] [--dry] [--json]   a candidate's next step:
                                         testing / held / new candidate owed / human handoff / final

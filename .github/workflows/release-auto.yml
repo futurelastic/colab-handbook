@@ -174,16 +174,36 @@ jobs:
 
       # #443: the scheduled run cuts too — a head held back by a declared candidates-per-day window
       # is tagged once the window ends; a head already carrying a candidate is a no-op.
+      # #622: a run fired by workflow_run cuts the sha that CI run tested (`--sha`), with the checkout —
+      # and so this checkout's own CLI — detached at it; the template's comment on this step says why.
       - name: Cut a candidate (colab release cut --auto)
         id: cut
         if: steps.gate.outputs.cut == 'true' && (github.event_name == 'workflow_run' || github.event_name == 'workflow_dispatch' || github.event_name == 'schedule')
+        env:
+          EVENT: ${{ github.event_name }}
+          RUN_SHA: ${{ github.event.workflow_run.head_sha }}
         run: |
           set -uo pipefail
           eval "$RETRY_TRANSIENT"
           OUT="$RUNNER_TEMP/cut.json"
           rc=0
           DRY=(); [ "${DRY_RUN:-false}" = "true" ] && DRY=(--dry)
-          retry_transient node "$COLAB" release cut --auto ${DRY[@]+"${DRY[@]}"} --json > "$OUT" || rc=$?
+          AT=(); RESTORE=""
+          if [ "${EVENT:-}" = "workflow_run" ] && [ -n "${RUN_SHA:-}" ]; then
+            if git rev-parse --git-dir > /dev/null 2>&1 && [ "$(git rev-parse HEAD)" != "$RUN_SHA" ]; then
+              RESTORE="$(git symbolic-ref --quiet --short HEAD || git rev-parse HEAD)"
+              git checkout --quiet --detach "$RUN_SHA" || RESTORE=""
+            fi
+            # Asked AFTER the detach, of the CLI that will run: a CLI older than #622 (a HANDBOOK_REF no
+            # final with --sha has reached yet, or a checkout's own CLI at an older sha) cuts the head.
+            if grep -q -- '--sha <sha>' <<< "$(node "$COLAB" release cut --help 2> /dev/null)"; then
+              AT=(--sha "$RUN_SHA")
+            elif [ -n "$RESTORE" ]; then
+              git checkout --quiet "$RESTORE"; RESTORE=""
+            fi
+          fi
+          retry_transient node "$COLAB" release cut --auto ${AT[@]+"${AT[@]}"} ${DRY[@]+"${DRY[@]}"} --json > "$OUT" || rc=$?
+          [ -z "$RESTORE" ] || git checkout --quiet "$RESTORE"
           # A verdict is JSON carrying `ok`; anything else is a run that never decided.
           if ! jq -e 'has("ok")' "$OUT" > /dev/null 2>&1; then
             echo "::error::colab release cut produced no verdict (exit $rc)"

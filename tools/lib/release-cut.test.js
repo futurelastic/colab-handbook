@@ -87,8 +87,9 @@ test('green path: every check ok, tag is the next candidate', () => {
   const v = rc.decide(facts({ tags: ['v1.2.0', 'v1.2.1-rc.1'] }));
   assert.strictEqual(v.ok, true, JSON.stringify(v.refusals));
   assert.strictEqual(v.tag, 'v1.2.1-rc.2');
-  // `cadence` is reported only under --auto (#422); `promotion` only under --auto off trunk: main (#429).
-  assert.deepStrictEqual(v.checks.map((c) => c.condition), rc.CONDITIONS.filter((c) => c !== 'cadence' && c !== 'promotion' && !rc.FAST_CONDITIONS.includes(c)));
+  // `cadence` is reported only under --auto (#422); `promotion` only under --auto off trunk: main (#429);
+  // `qualified-sha` only for a --sha below main's head (#622).
+  assert.deepStrictEqual(v.checks.map((c) => c.condition), rc.CONDITIONS.filter((c) => c !== 'cadence' && c !== 'promotion' && c !== 'qualified-sha' && !rc.FAST_CONDITIONS.includes(c)));
 });
 
 test('candidates off — derived (self) and narrowed (release: candidates: off) — refuse on release-policy', () => {
@@ -124,7 +125,7 @@ test('the tag message records the bump, the override reason and every condition'
   const msg = rc.tagMessage(v, { sha: 'abc123', lastFinal: 'v1.2.0' });
   assert.match(msg, /^v1\.2\.1-rc\.1 — release candidate/);
   assert.match(msg, /reason: adopters read the docs/);
-  for (const c of rc.CONDITIONS.filter((x) => x !== 'cadence' && x !== 'promotion' && !rc.FAST_CONDITIONS.includes(x))) assert.match(msg, new RegExp(`- ${c}: `));
+  for (const c of rc.CONDITIONS.filter((x) => x !== 'cadence' && x !== 'promotion' && x !== 'qualified-sha' && !rc.FAST_CONDITIONS.includes(x))) assert.match(msg, new RegExp(`- ${c}: `));
 });
 
 // ---- full suite -------------------------------------------------------------------------------
@@ -424,6 +425,44 @@ test('--auto: every signal and detector result is written into the tag message',
   assert.match(msg, /- exports: no export removed/);
   assert.match(msg, /- switches: no switch-removal child merged/);
   assert.match(msg, /- cadence: uncapped/);
+});
+
+test('#622 qualifiedShaVerdict: null at the head; newer tags, a final route and a cap each hold the older sha', () => {
+  const sha = 'a'.repeat(40), head = 'b'.repeat(40);
+  assert.strictEqual(rc.qualifiedShaVerdict({ sha: head, head, newer: [] }), null, 'the head is today\'s cut — no row');
+  const ok = rc.qualifiedShaVerdict({ sha, head, newer: [] });
+  assert.strictEqual(ok.ok, true);
+  assert.match(ok.detail, /below main's head \(bbbbbbb\)/);
+  const newer = rc.qualifiedShaVerdict({ sha, head, newer: ['v1.2.1-rc.3'] });
+  assert.strictEqual(newer.ok, false);
+  assert.match(newer.detail, /v1\.2\.1-rc\.3 already names a commit after aaaaaaa/);
+  const unread = rc.qualifiedShaVerdict({ sha, head, newer: null });
+  assert.strictEqual(unread.ok, false);
+  assert.strictEqual(unread.unread, true, 'an unread tag list is never "none newer"');
+  assert.match(rc.qualifiedShaVerdict({ sha, head, newer: [], finalRoute: true }).detail, /a final is tagged only on main's head/);
+  assert.match(rc.qualifiedShaVerdict({ sha, head, newer: [], capped: true, auto: true }).detail, /candidates-per-day cap/);
+  assert.strictEqual(rc.qualifiedShaVerdict({ sha, head, newer: [], capped: true, auto: false }).ok, true, 'a cap narrows --auto only');
+});
+
+test('#622 decide: qualified-sha is a row only when given; not ok is a no-op under --auto, a refusal by hand', () => {
+  const okRow = { ok: true, detail: 'below head' };
+  const v = rc.decide(facts({ qualified: okRow }));
+  assert.strictEqual(v.ok, true, JSON.stringify(v.checks));
+  assert.ok(v.checks.some((c) => c.condition === 'qualified-sha' && c.ok));
+  assert.ok(!rc.decide(facts()).checks.some((c) => c.condition === 'qualified-sha'));
+
+  const held = { ok: false, detail: 'v1.2.1-rc.3 already names a commit after aaaaaaa' };
+  const auto = rc.decide(autoFacts({ qualified: held }));
+  assert.strictEqual(auto.ok, false);
+  assert.strictEqual(auto.noop, true);
+  assert.deepStrictEqual(auto.standing, []);
+  const hand = rc.decide(facts({ qualified: held }));
+  assert.strictEqual(hand.ok, false);
+  assert.strictEqual(hand.noop, false);
+  assert.ok(!hand.standing.includes('qualified-sha'), 'not a standing refusal — the next run reads again');
+
+  const unread = rc.decide(autoFacts({ qualified: { ok: false, unread: true, detail: 'unread' } }));
+  assert.strictEqual(unread.noop, false, 'an unread read is a refusal, never a quiet no-op');
 });
 
 test('--auto cadence: at most N candidates per rolling day — inside the window is a no-op', () => {

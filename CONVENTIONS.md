@@ -4023,19 +4023,19 @@ candidates off, cap candidates per day, make an automatic final human, lengthen 
 test period — with the [`release:` block](project.schema.md#release--optional) (#337); a
 block that tries to widen it is an audit failure, not an override.
 
-**The newest candidate always names trunk's head (#443).** Wherever candidates are automatic,
-once trunk CI is green on `main`'s head, the newest candidate is that head: every green trunk
-run whose head carries no candidate cuts one, and no route caps how many a day. A repo may still declare
-`release.candidates-per-day` as a **narrowing**, and it keeps the guarantee: inside the window
-the run is a no-op, and the first run after the window closes — the next green CI, or the daily
-scheduled run, which cuts too — cuts **the head**, never an older commit. A head that already
-carries a candidate is a no-op, so the schedule re-runs safely. **Finals are unchanged:** a
-final is still the newest candidate whose own test period is clean, so a final lags head by at
-least the test period, by design. `colab release-status` reads the guarantee back and flags
-*head not a candidate* when a green head has stayed untagged for longer than one CI cycle (the
-longest suite run at that sha). And every candidate has a release page however it was cut:
-`colab release cut` publishes the GitHub pre-release itself, notes = the summary since the last
-final plus the tag's own message, so a cut run outside the workflow no longer leaves a bare tag. Why, with the measurement: [ADR 539](docs/adr/539-releases-routes-rationale.md).
+**The newest candidate always names trunk's head (#443).** Wherever candidates are automatic, once trunk CI is green
+on `main`'s head, the newest candidate is that head: every green trunk run whose head carries no candidate cuts one, and
+no route caps how many a day. A repo may still declare `release.candidates-per-day` as a **narrowing**, and it keeps the
+guarantee: inside the window the run is a no-op, and the first run after the window closes — the next green CI, or the
+daily scheduled run, which cuts too — cuts **the head**, never an older commit. A head that already carries a candidate is
+a no-op, so the schedule re-runs safely. **A green run cuts the sha it tested (#622):** on a busy trunk something lands
+during most suite runs, so the run a green CI fires cuts that run's sha (`release cut --sha`); the head gets its own when
+its run is green, an out-of-order run (a later commit already a candidate) is a no-op, and a capped or final route cuts
+only the head. **Finals are unchanged:** a final is still the newest candidate whose own test period is clean, so a final
+lags head by at least the test period, by design. `colab release-status` reads the guarantee back and flags *head not a
+candidate* when a green head has stayed untagged for longer than one CI cycle (the longest suite run at that sha). And
+every candidate has a release page however it was cut: `colab release cut` publishes the GitHub pre-release itself,
+notes = the summary since the last final plus the tag's own message, so a cut run outside the workflow no longer leaves a bare tag. Why, with the measurement: [ADR 539](docs/adr/539-releases-routes-rationale.md).
 
 **[Hard — gate: colab release cut refuses]** **A candidate is cut only when all four hold, on the exact commit it names:**
 
