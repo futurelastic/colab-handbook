@@ -363,6 +363,68 @@ test('#622: --sha off main is refused on-trunk; an unknown or malformed sha is a
   assert.match(bad.err, /--sha takes a commit sha/);
 });
 
+// ---- #624: which runs may veto a cut — the code-verifying runs, by the ship gate's rule ----------
+
+/** #624's measured shape at `sha` (not named `CI`: on Actions withoutOwnWorkflow drops the runner's own workflow, #425): the queue-tested CI run, trunk's own "already tested" dedupe run, a nightly. */
+function measuredRuns(sha, { nightly = { status: 'in_progress', conclusion: null }, ci = 'success' } = {}) {
+  const t = (m) => new Date(Date.now() - m * 60000).toISOString();
+  return [
+    { headSha: sha, status: 'completed', conclusion: ci, workflowName: 'Tests', event: 'push', createdAt: t(1), databaseId: 302 }, // 29 s dedupe
+    { headSha: sha, workflowName: 'Nightly', event: 'schedule', createdAt: t(0), databaseId: 303, ...nightly },
+    { headSha: sha, status: 'completed', conclusion: 'success', workflowName: 'Tests', event: 'push', createdAt: t(25), databaseId: 301 }, // full run
+  ];
+}
+
+function humanCut(fx, args = []) {
+  const r = spawnSync('node', [COLAB, 'release', 'cut', '--repo', fx.work, ...args], {
+    encoding: 'utf8',
+    env: { ...process.env, PATH: `${fx.bin}:${process.env.PATH}`, COLAB_HOME: fx.home, COLAB_SESSION: 'sess-release-cut-test' },
+  });
+  return { code: r.status, out: r.stdout || '', err: r.stderr || '' };
+}
+
+test('#624: a qualified sha with CI green and a scheduled Nightly still in flight is cut — the nightly is set aside and named', () => {
+  const fx = fixture();
+  const qualified = fx.g('rev-parse', 'HEAD');
+  commit(fx, 'feat.txt', 'feat: landed after the queue', 'x\n', []);
+  fs.writeFileSync(fx.runsFile, JSON.stringify(measuredRuns(qualified)));
+
+  const r = cut(fx, ['--auto', '--sha', qualified]);
+  assert.strictEqual(r.code, 0, r.out + r.err);
+  assert.strictEqual(r.body.ok, true, JSON.stringify(r.body.checks, null, 2));
+  assert.strictEqual(r.body.tag, 'v1.2.1-rc.1');
+  for (const condition of ['ci-green', 'full-suite']) {
+    const c = r.body.checks.find((x) => x.condition === condition);
+    assert.ok(c.ok, `${condition}: ${c.detail}`);
+    assert.match(c.detail, /set aside 1 run that does not verify the code.*Nightly \(in_progress, run 303; event: schedule\)/, condition);
+  }
+});
+
+test('#624: a FAILED scheduled run does not veto either; a red push run still does', () => {
+  const fx = fixture();
+  const sha = fx.g('rev-parse', 'HEAD');
+  fs.writeFileSync(fx.runsFile, JSON.stringify(measuredRuns(sha, { nightly: { status: 'completed', conclusion: 'failure' } })));
+  assert.strictEqual(cut(fx, ['--dry']).body.ok, true);
+
+  fs.writeFileSync(fx.runsFile, JSON.stringify(measuredRuns(sha, { ci: 'failure' }).slice(0, 2)));
+  assertRefused(fx, cut(fx, ['--dry']), 'ci-green', /conclusion=failure/);
+});
+
+test('#624: ship-gate-workflows naming the nightly makes it a veto again — the override narrows, as on ship', () => {
+  const fx = fixture({ projectYml: `${RELEASED_YML}ship-gate-workflows: [Tests, Nightly]\n` });
+  const sha = fx.g('rev-parse', 'HEAD');
+  fs.writeFileSync(fx.runsFile, JSON.stringify(measuredRuns(sha)));
+  const r = cut(fx, ['--dry']);
+  assertRefused(fx, r, 'ci-green');
+  assertRefused(fx, r, 'full-suite', /Nightly \(in_progress\)/);
+
+  // Done-when 3: the human output prints every refused condition's detail, not just its name.
+  const h = humanCut(fx, ['--dry']);
+  assert.strictEqual(h.code, 1, h.out + h.err);
+  assert.match(h.out, /✗ full-suite\s+no successful run at main@\w+ for: Nightly \(in_progress\)/);
+  assert.match(h.out, /✗ ci-green\s+\S/);
+});
+
 test('refuses: the full suite — a workflow whose only run was cancelled', () => {
   const fx = fixture();
   setRuns(fx, [{ workflowName: 'lint' }, { workflowName: 'test-suite', conclusion: 'cancelled' }]);

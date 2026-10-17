@@ -23,6 +23,7 @@
  *   already-candidate    the commit does not already carry a candidate of this version
  *   ci-green             §6 condition 1 — every run at the sha finished, one succeeded
  *   full-suite           §6 condition 2 — every workflow that ran at the sha has a successful run
+ *                        (both over the code-verifying runs only, the ship gate's rule — #624)
  *   schema-additive      §6 condition 3 — no destructive migration since the last final tag
  *   switch-dependencies  §6 condition 4 — the colab:switch markers are readable, and no finished
  *                        switch needs one that is still unfinished
@@ -75,6 +76,7 @@
 const migrationPaths = require('./migration-paths');
 const releaseTag = require('./release-tag');
 const { stripCode } = require('./instruction-file');
+const verifyRuns = require('./verify-runs');
 
 const VERSION_RE = /^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$/;
 const BUMPS = Object.freeze(['patch', 'minor']);
@@ -738,6 +740,34 @@ function withoutSkippedOnlyWorkflows(rows) {
 }
 
 /**
+ * #624: the run rows `release cut` judges ci-green and full-suite over — the runs that VERIFY the code
+ * at the sha, by the ship gate's own rule (verify-runs.js, #503: push / pull_request / merge_group
+ * triggers, project.yml `ship-gate-workflows` / `ship-ignore-workflows`, the #567 dispatch rescue).
+ * One rule for "which workflows may veto", not a second. Measured: a qualified sha whose CI push run
+ * had succeeded was refused ci-green AND full-suite because a scheduled `Nightly` run at the same sha
+ * was still in progress — a run that comes after the verdict, not part of it. Returns `{ rows,
+ * setAside }`; each set-aside row carries `setAsideWhy`. null passes through as `{ rows: null }`.
+ */
+function verifyingRunsForCut(rows, policy) {
+  if (!Array.isArray(rows)) return { rows, setAside: [], dispatchCounted: [] };
+  const split = verifyRuns.splitVerifying(rows, policy || { gate: null, ignore: [] });
+  return { rows: split.counted, setAside: split.setAside, dispatchCounted: split.dispatchCounted || [] };
+}
+
+/**
+ * #624: the detail suffix naming what `verifyingRunsForCut` set aside (and any lost-push dispatch run
+ * it counted, #567) — the ship gate's own wording, so one reader learns one phrase. '' when neither.
+ */
+function verifyingNote(read) {
+  if (!read) return '';
+  const summary = (list) => (list || []).map((x) => ({
+    workflowName: x.workflowName || null, status: x.status || null, conclusion: x.conclusion || null,
+    databaseId: x.databaseId || null, ...(x.setAsideWhy ? { why: x.setAsideWhy } : {}),
+  }));
+  return verifyRuns.setAsideNote(summary(read.setAside)) + verifyRuns.dispatchCountedNote(summary(read.dispatchCounted));
+}
+
+/**
  * The run rows minus the CALLING workflow's own runs (#425). Inside the release workflow
  * (templates/release-auto.yml) `release cut` / `release finalize` read the runs at the very commit
  * that workflow is running on — and its own run is one of them, still in progress. Counted, it makes
@@ -1226,7 +1256,7 @@ module.exports = {
   isFastRoute, isLibraryRoute, decideManifestVersion, spacingVerdict, holdsVerdict, migrationHandoff,
   parseVersion, formatVersion, candidateNumbers, nextCandidateNumber, decideVersion,
   parseGuardOutput, exportsDiff, switchRemovalsSince, autoSignals, parseMigrationSection, decideAutoVersion, cadenceVerdict, qualifiedShaVerdict,
-  fullSuiteVerdict, withoutOwnWorkflow, withoutSkippedOnlyWorkflows, isMigrationPath, schemaVerdict,
+  fullSuiteVerdict, withoutOwnWorkflow, withoutSkippedOnlyWorkflows, verifyingRunsForCut, verifyingNote, isMigrationPath, schemaVerdict,
   parseSwitchMarkers, switchVerdict,
   promotionVerdict, decide, tagMessage, versionSourceOf,
   DOWNSTREAM_EVENTS, headCandidateVerdict, prereleaseArgs, finalReleaseArgs, handoffTrackingBody,
