@@ -1521,6 +1521,17 @@ function auditRepoInner(target, ctx) {
       if (!ds.valid) fail(ds.reason);
     }
 
+    // ---- docs-only-paths (#626) -----------------------------------------------
+    // Extra repo paths whose content files (text + the design-artifact binaries) count as
+    // documentation for the no-CI-wait path only (tools/lib/docs-only.js parseDocsOnlyPaths) — never
+    // for the autonomy exception. Reported as the list (`[]` when absent), or null when invalid. An
+    // invalid value fails: every reader takes it as absent, so the declaration silently adds nothing.
+    {
+      const dp = docsOnlyLib.parseDocsOnlyPaths(cfg);
+      info.docsOnlyPaths = dp.valid ? dp.include : null;
+      if (!dp.valid) fail(dp.reason);
+    }
+
     // ---- ship-gate-workflows / ship-ignore-workflows (#503) ---------------------
     // Which workflow runs at trunk's head count as "trunk CI" for ship. Absent = the runs that verify
     // the code (push / pull_request triggered); post-CI release/deploy runs are set aside. An invalid

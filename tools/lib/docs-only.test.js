@@ -222,3 +222,68 @@ test('#570: a build input is never documentation, despite the .txt extension', (
   for (const p of ['notes.txt', 'requirements.md', 'cmakelists.txt', 'docs/build.txt']) assert.strictEqual(d.pathReason(p), null, p);
   assert.strictEqual(d.classify([{ path: 'README.md' }, { path: 'requirements.txt' }]).docsOnly, false);
 });
+
+// ---- #626: docs-only-paths ------------------------------------------------------------------------
+
+test('#626 parseDocsOnlyPaths: absent and [] add nothing; a plain list is read, trailing slash dropped', () => {
+  assert.deepEqual(d.parseDocsOnlyPaths({}).include, []);
+  assert.equal(d.parseDocsOnlyPaths({}).declared, false);
+  assert.deepEqual(d.parseDocsOnlyPaths({ 'docs-only-paths': [] }).include, []);
+  const v = d.parseDocsOnlyPaths({ 'docs-only-paths': ['public/images/blog/', 'content'] });
+  assert.equal(v.valid, true);
+  assert.deepEqual(v.include, ['public/images/blog', 'content']);
+});
+
+test('#626 parseDocsOnlyPaths: a glob, an absolute path, .., a scalar or an empty value is invalid and reads as absent', () => {
+  for (const val of [['public/images/blog/**'], ['/abs'], ['a/../b'], ['./a'], 'public/images', null, [''], [3]]) {
+    const v = d.parseDocsOnlyPaths({ 'docs-only-paths': val });
+    assert.equal(v.valid, false, JSON.stringify(val));
+    assert.deepEqual(v.include, [], JSON.stringify(val));
+    assert.match(v.reason, /^docs-only-paths .* plain repo paths/);
+  }
+});
+
+const INC = { include: ['public/images/blog'] };
+
+test('#626 classify: an image under a declared path is docs-only WITH include, and never without it (autonomy unchanged)', () => {
+  const set = [e('public/images/blog/a.PNG', { binary: true }), e('public/images/blog/x/b.webp', { binary: true }),
+    e('public/images/blog/c.svg'), e('content/post.md')];
+  assert.equal(d.classify(set, INC).docsOnly, true);
+  const narrow = d.classify(set);
+  assert.equal(narrow.docsOnly, false);
+  assert.equal(narrow.offenders.length, 3);
+});
+
+test('#626 classify: under a declared path only content extensions count — code, no extension and a look-alike prefix refuse', () => {
+  for (const p of ['public/images/blog/app.js', 'public/images/blog/Makefile', 'public/images/blogroll/a.png', 'public/images/a.png']) {
+    assert.equal(d.classify([e(p, { binary: p.endsWith('.png') })], INC).docsOnly, false, p);
+  }
+});
+
+test('#626 classify: the never-rules, ci-docs-skip, symlinks and submodules still win inside a declared path', () => {
+  const inc = { include: ['public/images/blog', '.github'], exclude: ['public/images/blog/feed'] };
+  for (const ent of [e('public/images/blog/CLAUDE.md'), e('.github/x.png', { binary: true }),
+    e('public/images/blog/feed/a.png', { binary: true }), e('public/images/blog/l.png', { newMode: '120000' }),
+    e('public/images/blog/m.png', { newMode: '160000' }), e('public/images/blog/requirements.txt')]) {
+    assert.equal(d.classify([ent], inc).docsOnly, false, ent.path);
+  }
+});
+
+test('#626 shipDocsOnly reads the declaration; branchChanges (the autonomy exception) does not', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'docs-only-paths-'));
+  try {
+    const g = (...a) => execFileSync('git', a, { cwd: dir, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+    g('init', '-q', '-b', 'main', '.'); g('config', 'user.email', 't@example.invalid'); g('config', 'user.name', 't');
+    g('config', 'core.hooksPath', path.join(dir, '.nohooks'));
+    fs.writeFileSync(path.join(dir, 'README.md'), 'x\n'); g('add', '-A'); g('commit', '-q', '-m', 'init');
+    g('checkout', '-q', '-b', 'b');
+    fs.mkdirSync(path.join(dir, 'public/images/blog'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'public/images/blog/a.png'), Buffer.from([0x89, 0x50, 0x4e, 0x47, 0, 0, 0, 1, 2, 0]));
+    g('add', '-A'); g('commit', '-q', '-m', 'img');
+    const doc = { 'docs-only-paths': ['public/images/blog'] };
+    assert.equal(d.shipDocsOnly(git, dir, 'main', 'b', doc).docsOnly, true);
+    assert.equal(d.shipDocsOnly(git, dir, 'main', 'b', {}).docsOnly, false);
+    assert.equal(d.shipDocsOnly(git, dir, 'main', 'b', { ...doc, 'ci-docs-skip': 'off' }).docsOnly, false);
+    assert.equal(d.branchChanges(git, dir, 'main', 'b').docsOnly, false);
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});

@@ -273,3 +273,43 @@ test('#606: the trunk door never overrides a finished red tip, a red code commit
   assert.notStrictEqual(off.verdict, 'GREEN');
   assert.doesNotMatch(off.detail, /#606/);
 });
+
+// ---- #626: docs-only-paths — a content-image path the adopter declares ---------------------------
+
+const PNG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0, 1, 0, 255]);
+const DECLARED = `${YML}docs-only-paths:\n  - public/images/blog\n`;
+
+test('#626: an image-only trunk tip under a declared docs-only-paths member reads past to the code commit; undeclared it reads none', () => {
+  for (const [yml, declared] of [[DECLARED, true], [YML, false]]) {
+    const fx = fixture(yml);
+    const code = fx.g(fx.work, 'rev-parse', 'HEAD');
+    fs.mkdirSync(path.join(fx.work, 'public', 'images', 'blog'), { recursive: true });
+    fs.writeFileSync(path.join(fx.work, 'public', 'images', 'blog', 'hero.png'), PNG);
+    fx.g(fx.work, 'add', '-A');
+    fx.g(fx.work, 'commit', '-q', '-m', 'content: post images');
+    fx.g(fx.work, 'push', '-q', 'origin', 'main');
+    const tip = fx.g(fx.work, 'rev-parse', 'HEAD');
+    // The adopter's CI paths-ignores public/images/blog/**, so the tip has no run at all.
+    fx.setState({ branches: { main: 'none' }, commitDefault: 'none', commits: { [code]: { status: 'completed', conclusion: 'success' } } });
+    const t = JSON.parse(colab(fx, ['trunk-ci', '--repo', fx.work, '--json']).out);
+    if (declared) {
+      assert.strictEqual(t.verdict, 'GREEN', JSON.stringify(t));
+      assert.match(t.detail, new RegExp(`docs-only tip \\(#606\\): main@${tip.slice(0, 7)} change only documentation`));
+    } else {
+      assert.notStrictEqual(t.verdict, 'GREEN', JSON.stringify(t));
+      assert.doesNotMatch(t.detail, /#606/);
+    }
+  }
+});
+
+test('#626: a branch adding only images under the declared path needs no CI; code there still does', () => {
+  const fx = fixture(DECLARED);
+  branch(fx, 'docs/post-72', 72, { 'public/images/blog/a.png': PNG, 'content/post.md': '# Post\n' });
+  branch(fx, 'feat/script-73', 73, { 'public/images/blog/lazy.js': 'x()\n' });
+  fx.setState({ branches: { 'docs/post-72': 'none', 'feat/script-73': 'none' } });
+  const ok = dry(fx, 'docs/post-72');
+  assert.strictEqual(ok.row(DOCS_ROW).ok, true, JSON.stringify(ok.j.checks));
+  assert.match(ok.row(DOCS_ROW).detail, /docs-only: CI not required \(2 files\)/);
+  const no = dry(fx, 'feat/script-73');
+  assert.strictEqual(no.row(DOCS_ROW), undefined, JSON.stringify(no.j.checks));
+});

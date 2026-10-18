@@ -1430,6 +1430,20 @@ The docs-only path list. `colab ship` lands a change whose every path is documen
   there, absent and `off` both run the full suite. One reading in tooling: `tools/lib/docs-only.js`
   `parseCiDocsSkip` (`--json`: `ciDocsSkip` — the list, `"off"`, or null when invalid).
 
+### `docs-only-paths` — optional
+
+```yaml
+docs-only-paths: [public/images/blog]   # absent = [] = nothing added
+```
+
+Extra repo paths whose content files count as docs-only **for the no-CI-wait path only** (#626):
+under a member, `.md`/`.mdx`/`.txt` and the `docs/` design-artifact types
+(`.png .jpg .jpeg .gif .webp .svg .pdf`, any case), text or binary. Plain paths as `ci-docs-skip`
+members — no glob (`public/images/blog`, not `public/images/blog/**`). It never widens the autonomy
+exception (#345); `ci-docs-skip`, agent rules, config dirs, symlinks and submodules still win.
+Anything else is a finding and reads as absent. One reading: `tools/lib/docs-only.js`
+`parseDocsOnlyPaths` (`--json`: `docsOnlyPaths`, null when invalid).
+
 **`.github/secret-scan-terms` — optional.** Forbidden terms for that secret check, read at the
 target's tip, in [`templates/identity-vocabulary.example`](templates/identity-vocabulary.example)'s
 format (`re:` lines included). A term under 3 characters or a bad expression refuses the ship.
@@ -1714,6 +1728,7 @@ the shape that shows it. One writer at a time says nothing about who reads the r
 | `live-env` = `none` when set → **finding** otherwise | a misspelled opt-out read as absent, so it silently does nothing |
 | `tree-reuse` = `off` when set → **finding** otherwise | the guard reads any value as off; an undefined value is not a declaration |
 | `ci-docs-skip` a list of plain repo paths or `off` when set → **finding** otherwise | every reader takes an invalid value as off, so the declaration silently opts the repo out of the docs-only path |
+| `docs-only-paths` a list of plain repo paths when set → **finding** otherwise | every reader takes an invalid value as absent, so the declaration silently adds nothing |
 | `ship-gate-workflows` / `ship-ignore-workflows` = a non-empty list of workflow names when set → **finding** otherwise | the reader ignores an invalid list, so the declaration does nothing |
 | `integration-profile` ∈ {`gated`, `qualify`, `release-heavy`, `promote`} when set; `heavy-workflow` a file name in `.github/workflows` when set → **finding** otherwise | a misspelled value silently read as `release-heavy` by every gate |
 | `integration-profile: qualify` or `release-heavy` declared on `exposure: live` without `deploy: tag` → **finding**; absent there → **suggestion** | a trunk allowed to be heavy-red, promoted straight to users |

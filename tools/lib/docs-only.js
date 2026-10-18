@@ -16,6 +16,11 @@
  * (shipDocsOnly, below — on by default, narrowed by `ci-docs-skip`). So widening anything here
  * widens BOTH at once — the binary design-artifact rule below did exactly that: a PNG mockup under
  * `docs/design/` is now docs-only for the autonomy exception too (CONVENTIONS.md §2).
+ *
+ * #626: the ONE repo-declared widening, `docs-only-paths:`, reaches only the no-CI-wait path
+ * (shipDocsOnly and the trunk-tip door) through classify()'s `include` option. branchChanges and
+ * directChanges called without it — the #345 autonomy exception — are exactly as narrow as before:
+ * no project.yml field widens who may merge.
  */
 
 /** Extensions that count as documentation. Compared exactly (`README.MD` does not match). */
@@ -34,6 +39,22 @@ function docsBinaryOk(p) {
   const base = s.slice(s.lastIndexOf('/') + 1);
   const dot = base.lastIndexOf('.');
   return dot > 0 && DOCS_BINARY_EXTENSIONS.includes(base.slice(dot).toLowerCase());
+}
+/**
+ * #626: under a path the repo declares in `docs-only-paths`, a file with one of these extensions is
+ * documentation — text or binary. Every other extension there is not. Case-insensitive.
+ */
+const DECLARED_EXTENSIONS = Object.freeze([...DOC_EXTENSIONS, ...DOCS_BINARY_EXTENSIONS]);
+function extOf(p) {
+  const s = String(p);
+  const base = s.slice(s.lastIndexOf('/') + 1);
+  const dot = base.lastIndexOf('.');
+  return dot > 0 ? base.slice(dot).toLowerCase() : '';
+}
+/** The declared `docs-only-paths` member a content file sits in, or null. */
+function includedBy(p, include) {
+  const m = excludedBy(p, include);
+  return m && DECLARED_EXTENSIONS.includes(extOf(p)) ? m : null;
 }
 /** Rules and agent instructions: never documentation, at any depth, even though they are `.md`. */
 const NEVER_BASENAMES = Object.freeze(['CLAUDE.md', 'CLAUDE.local.md', 'AGENTS.md']);
@@ -67,7 +88,7 @@ const MODE_GITLINK = '160000';
  * Classify ONE path by name alone. Returns `null` when the path is documentation, else the reason it
  * is not.
  */
-function pathReason(p) {
+function pathReason(p, { include = [] } = {}) {
   const segs = String(p).split('/');
   const base = segs[segs.length - 1];
   if (NEVER_BASENAMES.includes(base)) return `${base} is agent rules, not documentation`;
@@ -82,6 +103,7 @@ function pathReason(p) {
     }
   }
   if (String(p).startsWith(DOCS_DIR)) return null;
+  if (includedBy(p, include)) return null;
   const dot = base.lastIndexOf('.');
   const ext = dot > 0 ? base.slice(dot) : '';
   if (DOC_EXTENSIONS.includes(ext)) return null;
@@ -95,18 +117,18 @@ function pathReason(p) {
  * Returns `{ docsOnly, files, offenders: [{ path, reason }], reason }`. `files` counts distinct paths.
  * `reason` is one line for a human, set on both outcomes.
  */
-function classify(entries, { exclude = [] } = {}) {
+function classify(entries, { exclude = [], include = [] } = {}) {
   const paths = new Map();
   for (const e of entries || []) {
     const why = [];
-    const nameWhy = pathReason(e.path);
+    const nameWhy = pathReason(e.path, { include });
     if (nameWhy) why.push(nameWhy);
     // #606: a path the repo's suite reads, listed in `ci-docs-skip` — documentation, but it needs CI.
     const listed = excludedBy(e.path, exclude);
     if (!nameWhy && listed) why.push(`listed in ci-docs-skip (${listed}) — the suite reads it`);
     if (e.oldMode === MODE_SYMLINK || e.newMode === MODE_SYMLINK) why.push('symlink change');
     if (e.oldMode === MODE_GITLINK || e.newMode === MODE_GITLINK) why.push('submodule change');
-    if (e.binary && !docsBinaryOk(e.path)) why.push('binary change');
+    if (e.binary && !docsBinaryOk(e.path) && !includedBy(e.path, include)) why.push('binary change');
     const prev = paths.get(e.path) || [];
     paths.set(e.path, [...new Set([...prev, ...why])]);
   }
@@ -201,7 +223,8 @@ function commitChanges(git, repo, sha, opts = {}) {
 function shipDocsOnly(git, repo, base, branch, doc) {
   const setting = parseCiDocsSkip(doc);
   if (!setting.on) return { docsOnly: false, files: 0, offenders: [], reason: setting.reason, setting };
-  return { ...branchChanges(git, repo, base, branch, { exclude: setting.exclude }), setting };
+  const declared = parseDocsOnlyPaths(doc);
+  return { ...branchChanges(git, repo, base, branch, { exclude: setting.exclude, include: declared.include }), setting, declared };
 }
 
 /**
@@ -265,8 +288,38 @@ function parseCiDocsSkip(doc) {
     reason: exclude.length ? `ci-docs-skip on, except ${exclude.join(', ')}` : 'ci-docs-skip on — colab ship lands a docs-only change without waiting for CI' };
 }
 
+/**
+ * #626: `docs-only-paths:` in project.yml — extra repo paths whose content files (DECLARED_EXTENSIONS:
+ * the text types plus the design-artifact binaries) count as documentation FOR THE NO-CI-WAIT PATH
+ * ONLY (shipDocsOnly, the trunk-tip door). It never widens the autonomy exception. Shape: a list of
+ * plain repo paths, validated exactly as `ci-docs-skip` members are — no glob (write
+ * `public/images/blog`, not `public/images/blog/**`). Absent or `[]` = nothing added. An invalid
+ * value reads as absent (the stricter direction: nothing widened); the audit fails it.
+ * `ci-docs-skip` members still win over it, and so do the never-rules above.
+ */
+const DOCS_ONLY_PATHS_KEY = 'docs-only-paths';
+function parseDocsOnlyPaths(doc) {
+  const has = !!doc && Object.prototype.hasOwnProperty.call(doc, DOCS_ONLY_PATHS_KEY);
+  if (!has) return { declared: false, valid: true, include: [], reason: 'docs-only-paths absent — nothing added to the docs-only rule' };
+  const v = doc[DOCS_ONLY_PATHS_KEY];
+  const bad = (why) => ({ declared: true, valid: false, include: [],
+    reason: `docs-only-paths ${why} — it must be a list of plain repo paths (no glob, \`..\`, \`.\` or leading \`/\`); every reader takes anything else as absent, so the declaration silently adds nothing` });
+  if (!Array.isArray(v)) return bad(v === null || v === undefined ? 'is empty' : `is ${JSON.stringify(v)}`);
+  const include = [];
+  for (const m of v) {
+    const s = typeof m === 'string' ? m.replace(/\/+$/, '') : null;
+    if (!s || !/^[A-Za-z0-9._/-]+$/.test(s) || s.startsWith('/') || s.split('/').some((x) => x === '..' || x === '.' || x === '')) {
+      return bad(`lists ${JSON.stringify(m)}, which is not a plain repo path`);
+    }
+    include.push(s);
+  }
+  return { declared: true, valid: true, include,
+    reason: include.length ? `docs-only-paths: ${include.join(', ')} (content files there skip the CI wait)` : 'docs-only-paths: [] — nothing added' };
+}
+
 module.exports = {
   DOC_EXTENSIONS, DOCS_DIR, DOCS_BINARY_EXTENSIONS, docsBinaryOk, NEVER_BASENAMES, NEVER_DIRS, NEVER_SUBDIRS,
   pathReason, classify, parseRaw, parseBinary, readEntries, branchChanges, directChanges,
   CI_DOCS_SKIP_KEY, parseCiDocsSkip, excludedBy, commitChanges, shipDocsOnly,
+  DECLARED_EXTENSIONS, includedBy, DOCS_ONLY_PATHS_KEY, parseDocsOnlyPaths,
 };
