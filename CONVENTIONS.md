@@ -656,7 +656,8 @@ to it: `tools/lib/docs-only.js` holds both lists as constants. Widening it is a 
 reviewed in a commit like this one. #606 was one: the design-artifact binaries above widened this
 exception **and** ship's no-CI-wait path for docs-only changes
 ([§4](#docs-only--no-ci-wait-606)) at once, because both read the same module. `ci-docs-skip` only
-ever narrows the second; it never touches this exception.
+ever narrows the second; it never touches this exception. `docs-only-paths` (#626) only ever
+widens the second — content images an adopter declares — and never this exception either.
 
 ### Autonomy — the tuning-only class (#561)
 
@@ -1697,7 +1698,9 @@ decides this; the CI templates do not.** Why: [ADR 606](docs/adr/606-docs-only-n
   [docs-only rule](#autonomy--the-docs-only-exception-345), design artifacts under `docs/`
   included — narrowed by `ci-docs-skip` ([schema](project.schema.md#ci-docs-skip--optional)).
   **Absent means on.** A path listed there is one the suite reads; a change touching it needs CI
-  as usual. `ci-docs-skip: off` turns this path off.
+  as usual. `ci-docs-skip: off` turns this path off. **`docs-only-paths`** (#626,
+  [schema](project.schema.md#docs-only-paths--optional)) adds repo paths whose content files —
+  text and the design-artifact types — count here, for a content site whose CI `paths-ignore`s them.
 - **Branch CI is not required.** No run, a run in flight and a `stale-base` run (#395) all pass, as
   `docs-only: CI not required (<n> files)`. **A run that exists at the pushed head and finished red
   still refuses** — ship never overrides a red verdict.

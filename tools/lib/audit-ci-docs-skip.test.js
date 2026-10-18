@@ -79,3 +79,27 @@ test('every other ci-docs-skip value fails', () => {
     assert.ok(r.fails.some((t) => /^ci-docs-skip .* must be a list of repo paths/.test(t)), `${v}: ${r.fails.join(' | ')}`);
   }
 });
+
+// #626: `docs-only-paths` — the same validator shape; a list is clean, anything else fails.
+function auditRaw(dir) {
+  let stdout;
+  try { stdout = execFileSync('node', [AUDIT, '--json', '--local', dir], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }); }
+  catch (err) { stdout = err.stdout || ''; }
+  return JSON.parse(stdout).results[0];
+}
+const dopFails = (r) => r.findings.filter((f) => f.level === 'fail' && /docs-only-paths/.test(f.text));
+
+test('#626 docs-only-paths absent → [], a plain list → reported, no finding', () => {
+  assert.deepStrictEqual(auditRaw(fixture(BASE)).docsOnlyPaths, []);
+  const r = auditRaw(fixture(`${BASE}docs-only-paths:\n  - public/images/blog\n`));
+  assert.deepStrictEqual(r.docsOnlyPaths, ['public/images/blog']);
+  assert.deepStrictEqual(dopFails(r), []);
+});
+
+test('#626 docs-only-paths with a glob or a scalar fails and is reported null', () => {
+  for (const v of ['["public/images/blog/**"]', 'public/images', '']) {
+    const r = auditRaw(fixture(`${BASE}docs-only-paths: ${v}\n`));
+    assert.strictEqual(r.docsOnlyPaths, null, v);
+    assert.strictEqual(dopFails(r).length, 1, v);
+  }
+});

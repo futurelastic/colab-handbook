@@ -11817,13 +11817,15 @@ const DOCS_TIP_WALK = 50;
 function docsOnlyTipDoor(repoAbs, trunk, tipSha, readOpts) {
   if (!tipSha) return null;
   const setting = docsOnly.parseCiDocsSkip(projectDoc(repoAbs));
+  const declared = docsOnly.parseDocsOnlyPaths(projectDoc(repoAbs));
   if (!setting.on) return null;
   const list = git.git(['rev-list', '--first-parent', `--max-count=${DOCS_TIP_WALK}`, tipSha], repoAbs);
   if (!list.ok) return null;
   let skipped = 0;
   let code = null;
   for (const sha of list.stdout.split('\n').map((x) => x.trim()).filter(Boolean)) {
-    const c = docsOnly.commitChanges(git, repoAbs, sha, { exclude: setting.exclude });
+    // #626: the declared `docs-only-paths` widen this door (the no-CI-wait path), never autonomy.
+    const c = docsOnly.commitChanges(git, repoAbs, sha, { exclude: setting.exclude, include: declared.include });
     if (!c.docsOnly) { code = sha; break; }
     skipped++;
   }
