@@ -130,10 +130,28 @@ test('combinedVerdict applies the all-runs rule and reports the attempt', () => 
   assert.strictEqual(sb.combinedVerdict([]).state, 'none');
   assert.strictEqual(sb.combinedVerdict([ok, { status: 'in_progress', databaseId: 2 }]).state, 'pending');
   assert.strictEqual(sb.combinedVerdict([ok, { status: 'completed', conclusion: 'failure', databaseId: 2 }]).state, 'red');
+  // unnamed cancelled row beside a success stays neutral (#629 mirrors #628's unnamed carve-out)
   assert.strictEqual(sb.combinedVerdict([ok, { status: 'completed', conclusion: 'cancelled' }]).state, 'green');
   assert.strictEqual(sb.combinedVerdict([{ status: 'completed', conclusion: 'cancelled' }]).state, 'red');
   const g = sb.combinedVerdict([ok, { ...ok, databaseId: 2, attempt: 2 }]);
   assert.deepStrictEqual([g.state, g.attempt, g.runIds], ['green', 2, [1, 2]]);
+});
+
+test('#629: a named workflow whose only run was cancelled keeps the batch head from green', () => {
+  const lint = { status: 'completed', conclusion: 'success', databaseId: 1, workflowName: 'lint' };
+  const testsCancelled = { status: 'completed', conclusion: 'cancelled', databaseId: 2, workflowName: 'CI' };
+  const v = sb.combinedVerdict([lint, testsCancelled]);
+  assert.strictEqual(v.state, 'red');
+  assert.match(v.why, /"CI"/);
+  assert.match(v.why, /run 2/);
+  // a success of the SAME workflow clears it
+  assert.strictEqual(sb.combinedVerdict([lint, testsCancelled, { ...testsCancelled, conclusion: 'success', databaseId: 3 }]).state, 'green');
+  // a cancelled row still in a pending batch reads pending, never red early
+  assert.strictEqual(sb.combinedVerdict([lint, testsCancelled, { status: 'in_progress', databaseId: 4, workflowName: 'e2e' }]).state, 'pending');
+  // a real failure still wins its own why
+  assert.match(sb.combinedVerdict([testsCancelled, { ...lint, conclusion: 'failure' }]).why, /finished failure/);
+  // a named cancelled row beside an unnamed success is still not green
+  assert.strictEqual(sb.combinedVerdict([{ status: 'completed', conclusion: 'success' }, testsCancelled]).state, 'red');
 });
 
 test('nextStep: the declined, waiting and building states', () => {

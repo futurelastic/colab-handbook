@@ -379,8 +379,8 @@ function wiring(fires) {
 
 /**
  * The combined run's verdict from every run row at the batch head (`{status, conclusion, attempt,
- * databaseId}`). Same all-runs rule as summarizeRunsForCommit: any finished not-green row (cancelled
- * aside) makes it red; any unfinished row keeps it pending; green needs every row finished and at
+ * databaseId, workflowName}`). Same all-runs rule as summarizeRunsForCommit: any finished not-green
+ * row (cancelled aside) makes it red; a named workflow with only cancelled rows makes it red (#629); any unfinished row keeps it pending; green needs every row finished and at
  * least one success. `attempt` is the highest run attempt seen — how many times it was re-run.
  * Unlike summarizeRunsForCommit it does NOT reduce to the newest run per workflow (#461): a batch
  * ref is built fresh and re-run in place (same run, higher `attempt`), so it carries no superseded
@@ -395,6 +395,18 @@ function combinedVerdict(rows) {
   const bad = list.find((r) => r.status === 'completed' && r.conclusion !== 'success' && r.conclusion !== 'cancelled');
   if (bad) return { state: 'red', attempt, runIds, why: `a run finished ${bad.conclusion}` };
   if (list.some((r) => r.status !== 'completed')) return { state: 'pending', attempt, runIds, why: 'a run is still in flight' };
+  // #629 (the batch-ref twin of #628): a NAMED workflow whose rows here are all cancelled verified
+  // nothing, and another workflow's success must not carry the verdict for it — measured shape: the
+  // test workflow hung and was cancelled, a lint workflow passed, and the batch read green. A
+  // batch ref is re-run in place (same run, higher attempt), so a cancelled row is never a
+  // superseded straggler beside a newer run of its workflow; a same-workflow success still clears
+  // it. Unnamed rows (batch-stats.js projections, older fixtures) stay neutral, as in #628.
+  const succeeded = new Set(list.filter((r) => r.conclusion === 'success' && r.workflowName).map((r) => r.workflowName));
+  const cancelledOnly = list.find((r) => r.workflowName && r.conclusion === 'cancelled' && !succeeded.has(r.workflowName));
+  if (cancelledOnly) {
+    const id = cancelledOnly.databaseId !== null && cancelledOnly.databaseId !== undefined ? ` (run ${cancelledOnly.databaseId})` : '';
+    return { state: 'red', attempt, runIds, why: `workflow "${cancelledOnly.workflowName}" never finished here — its only run${id} was cancelled, so it verified nothing; re-run it` };
+  }
   if (list.some((r) => r.conclusion === 'success')) return { state: 'green', attempt, runIds, why: `${list.length} run(s): all success` };
   return { state: 'red', attempt, runIds, why: 'every run was cancelled' };
 }
