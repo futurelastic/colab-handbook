@@ -1784,10 +1784,8 @@ the heavy lane must also be green at the batch head; a heavy red re-runs or spli
    Sharing only generated
    paths does not count against disjointness in step 1's pre-filter either. The result is
    pushed to `ship-batch/<base-sha7>` — the base is trunk's tip, or a parent's head (step 11).
-3. **One combined run** there must be `green`. It **replaces** each member's post-sync
-   re-run — not a skip justified by disjointness, but one run instead of N. `green` is the
-   trunk rule's: a workflow whose only run at the batch head was cancelled verified nothing,
-   so another workflow's success does not carry it — the batch reads red until it is re-run (#629).
+3. **One combined run** there must be `green` — a workflow whose only run was cancelled blocks it, as on trunk
+   (#629). It **replaces** each member's post-sync re-run — not a skip justified by disjointness, but one run instead of N.
 4. **Landing.** Trunk fast-forwards to the batch head **only if trunk's tip is still the
    batch's base** (for a chain, once the parent landed at that sha — step 11), by a plain
    non-forced push (a moved trunk fails it; the batch is then rebuilt on the new head). Each member's evidence names the combined run. While that run is in
