@@ -1652,7 +1652,7 @@ function commentOnce(repoAbs, num, fields, text) {
  * in (previous final, sha], minus `exclude` (the release tracking issues). Idempotent by event marker.
  * Shared by `release finalize` and, on route deploy-tag-fast (#446), `release cut`.
  */
-function announceCarried(repoAbs, { tagNames, exclude, version, sha }) {
+function announceCarried(repoAbs, { tagNames, exclude, version, sha, early = null }) {
   const prev = releaseFinalize.previousFinal(tagNames, version);
   if (!prev) return { range: null, issues: [], posted: [], skipped: [], detail: 'no previous final — the first version announces nothing' };
   const log = git.git(['log', '--format=%B%x00', `${prev}..${sha}`], repoAbs);
@@ -1663,7 +1663,7 @@ function announceCarried(repoAbs, { tagNames, exclude, version, sha }) {
     const view = git.ghIssueView(repoAbs, n, ['comments']);
     if (!view) { skipped.push(n); continue; }
     if (releaseFinalize.hasEvent(view.comments, releaseFinalize.releasedEvent(version))) continue;
-    const r = git.ghIssueComment(repoAbs, n, releaseFinalize.releasedComment(version, sha));
+    const r = git.ghIssueComment(repoAbs, n, releaseFinalize.releasedComment(version, sha, early));
     if (r.ok) posted.push(n); else { skipped.push(n); warn(`could not comment on #${n}: ${String(r.stderr || '').split('\n')[0]}`); }
   }
   return { range: `${prev}..${version}`, issues: nums, posted, skipped };
@@ -1967,7 +1967,7 @@ workflow refuses a private repo itself.
 (publish true, or nothing declared); exit 1 when the npm keys are declared but cannot publish.
 `;
 
-const HELP_RELEASE_FINALIZE = `colab release finalize [--repo <path>] [--auto | --tag vX.Y.Z-rc.N [--answered-by <name>]] [--dry] [--json]
+const HELP_RELEASE_FINALIZE = `colab release finalize [--repo <path>] [--auto | --tag vX.Y.Z-rc.N [--answered-by <name> [--early]]] [--dry] [--json]
 
 Take the newest release CANDIDATE (a vX.Y.Z-rc.N tag made by \`colab release cut\`) one step further
 under CONVENTIONS.md §6's release rung, re-checking everything at the moment it runs. Every run:
@@ -1999,7 +1999,8 @@ under CONVENTIONS.md §6's release rung, re-checking everything at the moment it
 
 Conditions (--json checks[].condition; required:false means reported, not blocking, on this row):
   release-policy  candidate  tracking-issue  release-hold  regressions  test-period  trunk-green
-  ci-green  full-suite  cut-run  schema-additive  switch-dependencies  final-grant  migration-grant  human
+  ci-green  full-suite  cut-run  schema-additive  switch-dependencies  final-grant  migration-grant
+  early-final  human
 
   regressions   blocked_by edges on the tracking issue: open -> refused; closed after the period
                 began -> needs-new-candidate. Record one with: colab blocked <tracking> --by <issue>
@@ -2037,16 +2038,26 @@ Conditions (--json checks[].condition; required:false means reported, not blocki
                       every row; release-hold and regressions as always. Newer candidates stay open
                       for the next version — only versions below the final are closed as superseded
   --answered-by <n>   with COLAB_HUMAN=1 and --tag: the human bar for a final that is a human act.
-                      No field, flag or project.yml value lowers it, and it never shortens a test period.
-                      Where the final is a human act the period is informational anyway, and
-                      release.test-period: 0d declares none at all (#549)
+                      No field, flag or project.yml value lowers it, and on its own it never shortens a
+                      test period. Where the final is a human act the period is informational anyway,
+                      and release.test-period: 0d declares none at all (#549)
+  --early             with COLAB_HUMAN=1, --tag and --answered-by, on a route whose final is automatic
+                      (#627): finalize the newest candidate before its test period elapses. The floor
+                      binds the machine, not a person who answers for the release: test-period is
+                      reported, not required; trunk-green stays required over the elapsed part of the
+                      window, and every other check applies. The tag message, the tracking issue and
+                      every "Released in" comment record who answered and how much of the period had
+                      elapsed. Refused without the bar, on an older candidate, and where the final is
+                      already a human act (deploy-tag, or automatic only by release.final-grant).
+                      --auto never takes it
   --dry               measure and report; open, post, tag and close nothing
   --json              { repo, row, route, final, testPeriodDays, lastFinal, dry, auto, candidate, tracking,
                         periodStart, periodEndsAt, state, tagged, finalTag, checks, handoff,
                         skipped (--auto: [{tag, state, detail?}] — the other open candidates),
                         channel (null, or {channel, ok, action, detail} — the stable move, #445),
                         announced (null, or {range, issues, posted, skipped} — the "Released in" comments),
-                        grant (null, or {issue, ruledBy} — the operator grant that made this final automatic) }
+                        grant (null, or {issue, ruledBy} — the operator grant that made this final automatic),
+                        early (null, or {answeredBy, elapsedHours, periodHours, at} — an early human final, #627) }
 
 Needs origin and gh (the tracking issue, runs and edges live on GitHub). Never cuts a candidate, never
 a major, never removes a label or an edge. Exit 0 when finalized (or would be) or candidate-ready; 1
@@ -2079,16 +2090,20 @@ function releaseHeavyFact(repoAbs, doc, cand) {
 function cmdReleaseFinalize(argv) {
   const opts = parseArgs(argv, {
     values: { '--repo': 'repo', '--tag': 'tag', '--answered-by': 'answeredBy' },
-    flags: { '--dry': 'dry', '--json': 'json', '--auto': 'auto', '-h': 'help', '--help': 'help' },
+    flags: { '--dry': 'dry', '--json': 'json', '--auto': 'auto', '--early': 'early', '-h': 'help', '--help': 'help' },
   });
   if (opts.help) return print(HELP_RELEASE_FINALIZE);
   if (opts._.length) throw new UserError(`release finalize takes no positional arguments (got: ${opts._.join(' ')})`);
   // #423: --auto is the release workflow's mode. The human bar names one reviewed candidate; --auto
   // picks among them — the two never combine, so an unattended run can never carry a human's assertion.
-  if (opts.auto && (opts.tag || opts.answeredBy)) throw new UserError('--auto picks the candidate itself and never carries the human bar — drop --tag/--answered-by, or drop --auto');
+  if (opts.auto && (opts.tag || opts.answeredBy || opts.early)) throw new UserError('--auto picks the candidate itself and never carries the human bar — drop --tag/--answered-by/--early, or drop --auto');
   const humanBar = !opts.auto && process.env.COLAB_HUMAN === '1' && !!opts.answeredBy;
   if (humanBar && !opts.tag) {
     throw new UserError('the human bar needs --tag <vX.Y.Z-rc.N>: it names the exact candidate the human reviewed, so a newer one cut meanwhile is never finalized in its place');
+  }
+  // #627: an early final is a human's act alone — refused before anything is read without the whole bar.
+  if (opts.early && !humanBar) {
+    throw new UserError('--early finalizes before the test period elapses only as a human act: run it with COLAB_HUMAN=1, --tag <vX.Y.Z-rc.N> and --answered-by <your name>');
   }
   const repoAbs = resolveRepo(opts);
   if (!isGhUsable(repoAbs)) throw new UserError(`gh not usable (${ghUnusableWhy(repoAbs)}) — the tracking issue, runs and regression edges live on GitHub`);
@@ -2222,7 +2237,8 @@ function cmdReleaseFinalize(argv) {
       ci: conditions.ci, suite: conditions.suite, cutRun, deployReport, schema: conditions.schema, switches: conditions.switches,
       heavy: releaseHeavyFact(repoAbs, doc, cand), // #610
       manifests, ancestry, tags: tagNames, finalGrant, migrations,
-      human: { bar: humanBar, answeredBy: opts.answeredBy || null },
+      human: { bar: humanBar, answeredBy: opts.answeredBy || null, early: !!opts.early },
+      now, // #627: how much of the period an early final cut short
     });
     return { candidate: cand, verdict, period, tracking, trunk };
   };
@@ -2281,10 +2297,10 @@ function cmdReleaseFinalize(argv) {
   // #426: one "Released in vX.Y.Z" comment on every issue the version carries (release-finalize.js
   // carriedIssues — the closing references in (previous final, sha]). Idempotent by event marker.
   let announced = null;
-  const announceRelease = (version, sha) => announceCarried(repoAbs, { tagNames, exclude: records.map((r) => r.number), version, sha });
+  const announceRelease = (version, sha, early = null) => announceCarried(repoAbs, { tagNames, exclude: records.map((r) => r.number), version, sha, early });
   if (!opts.dry) {
     if (verdict.state === 'finalized') {
-      const actor = humanBar && !verdict.grant ? `${opts.answeredBy} (human bar: COLAB_HUMAN=1)` : `automatic — clean test period (CONVENTIONS.md §6)${verdict.grant ? `, by the operator's grant (decision #${verdict.grant.issue})` : ''}${walk ? ', newest candidate clean on its own clock (--auto)' : ''}${selection.older ? `, an older candidate clean on its own clock (--tag; newest open: ${selection.newest})` : ''}`;
+      const actor = humanBar && !verdict.grant ? `${opts.answeredBy} (human bar: COLAB_HUMAN=1${verdict.early ? ', --early' : ''})` : `automatic — clean test period (CONVENTIONS.md §6)${verdict.grant ? `, by the operator's grant (decision #${verdict.grant.issue})` : ''}${walk ? ', newest candidate clean on its own clock (--auto)' : ''}${selection.older ? `, an older candidate clean on its own clock (--tag; newest open: ${selection.newest})` : ''}`;
       const message = releaseFinalize.tagMessage(verdict, { candidate: cand, period, actor });
       const t = git.git(['tag', '-a', '--cleanup=verbatim', cand.version, cand.sha, '-m', message], repoAbs);
       if (!t.ok) throw new UserError(`git tag ${cand.version} failed: ${(t.stderr || '').split('\n')[0]}`);
@@ -2318,13 +2334,13 @@ function cmdReleaseFinalize(argv) {
           `**${cand.tag} is ready.** The final tag is a human act on this repo — the one command, run by a human:\n\n\`\`\`sh\n${verdict.handoff}\n\`\`\``);
       }
       if (tagged) {
-        comment(tracking.number, { state: 'finalized', tag: cand.version }, `**${cand.version}** tagged final on \`${shortSha(cand.sha)}\` (from ${cand.tag}).`);
+        comment(tracking.number, { state: 'finalized', tag: cand.version }, `**${cand.version}** tagged final on \`${shortSha(cand.sha)}\` (from ${cand.tag}).${verdict.early ? `\n\nEarly final: ${releaseFinalize.earlyLine(verdict.early)}.` : ''}`);
         close(tracking.number);
       }
     }
     // #426: every issue the final carries hears which version has it — on the run that tags, and on
     // the already-final resume (a run that died between the tag push and these comments finishes them).
-    if (tagged) announced = announceRelease(cand.version, cand.sha);
+    if (tagged) announced = announceRelease(cand.version, cand.sha, verdict.early || null);
     // Superseded records: only versions BELOW one just tagged, on every path (#548). Before #548 a run
     // without --auto closed every other open version at once, because only the newest candidate could
     // ever be finalized; now `--tag` may finalize any open candidate, so an older version's record has
@@ -2358,7 +2374,7 @@ function cmdReleaseFinalize(argv) {
       lastFinal, dry: !!opts.dry, auto: !!opts.auto, candidate: cand, tracking: trackingOut,
       periodStart: period ? period.start : null, periodEndsAt: period ? period.endsAt : null,
       state: verdict.state, tagged, finalTag: verdict.finalTag, checks: verdict.checks, handoff: verdict.handoff,
-      skipped: walk ? skipped : undefined, why, next: why ? why.next : null, announced, grant: verdict.grant || null, channel,
+      skipped: walk ? skipped : undefined, why, next: why ? why.next : null, announced, grant: verdict.grant || null, early: verdict.early || null, channel,
     }, null, 2));
   } else {
     print(`colab release finalize${opts.auto ? ' --auto' : ''} — ${shortRepo(repoAbs)} (last final: ${lastFinal || 'none'}${cand ? `, candidate: ${cand.tag}` : ''})`);
@@ -2370,6 +2386,7 @@ function cmdReleaseFinalize(argv) {
     }
     print('');
     print(`state: ${verdict.state}${opts.dry ? ' [--dry: nothing written]' : ''}${tagged ? ` — tagged ${verdict.finalTag} and pushed it to ${remote}` : ''}`);
+    if (verdict.early) print(`early final: ${releaseFinalize.earlyLine(verdict.early)}`);
     if (why) print(`why no final: ${why.line}`);
     if (announced && announced.issues.length) print(`released in ${verdict.finalTag || version0}: told ${announced.posted.length ? announced.posted.map((n) => `#${n}`).join(', ') : 'nobody new'} (carried: ${announced.issues.map((n) => `#${n}`).join(', ')}${announced.skipped.length ? `; unreadable: ${announced.skipped.map((n) => `#${n}`).join(', ')}` : ''})`);
     if (channel && channel.ok) print(`✓ ${channel.detail}`);

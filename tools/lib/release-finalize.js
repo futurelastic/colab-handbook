@@ -78,7 +78,7 @@ const STATES = Object.freeze([
 const CONDITIONS = Object.freeze([
   'release-policy', 'candidate', 'tracking-issue', 'release-hold', 'regressions', 'test-period', 'trunk-green',
   'ci-green', 'full-suite', 'heavy-lane', 'cut-run', 'deploy-report', 'schema-additive', 'switch-dependencies',
-  ...releaseTag.PRE_TAG_CONDITIONS, 'final-grant', 'migration-grant', 'human',
+  ...releaseTag.PRE_TAG_CONDITIONS, 'final-grant', 'migration-grant', 'early-final', 'human',
 ]);
 
 // A completed run with one of these conclusions does not make trunk red.
@@ -660,14 +660,43 @@ function decide(facts) {
   }
   const reg = f.regressions || { ok: false, permanent: false, detail: 'not measured' };
   add('regressions', reg.ok, reg.detail);
+  const per = f.period || { elapsed: false, detail: 'not measured' };
+  // #627: an early human final. On a route whose final is automatic (and not by an operator's grant —
+  // a granted deploy-tag final is already a human act whenever a human runs it), the test-period floor
+  // binds the MACHINE: a human who answers for the release (the bar: COLAB_HUMAN=1 + --answered-by,
+  // and --early, all three) may finalize the newest candidate before its period elapses. test-period
+  // is then reported, not required; trunk-green stays required over the part of the window that has
+  // elapsed (the CLI reads it up to now); every other check applies unchanged. --auto never carries
+  // the bar, so nothing an agent sets alone shortens a period.
+  let early = null;
+  if (h.early) {
+    const why = !h.bar ? 'needs the human bar (COLAB_HUMAN=1 + --answered-by)'
+      : finalMode !== 'auto' ? 'applies only where the final is automatic — here the final is already a human act, and the test period is not required of it'
+        : granted ? `applies only where the final is automatic by the row — here it is automatic only by the operator's grant (release.final-grant #${granted.issue}), so a human final already skips the period`
+          : s.older ? 'applies only to the newest open candidate — an older one is finalized only once its own period elapsed clean (#548)'
+            : null;
+    if (why) add('early-final', false, `--early ${why}`);
+    else {
+      const startMs = Date.parse(per.start);
+      const nowMs = Date.parse(f.now);
+      const elapsedHours = Number.isNaN(startMs) || Number.isNaN(nowMs) ? null : Math.max(0, Math.floor((nowMs - startMs) / 3600000));
+      const periodHours = Number(per.days) * 24;
+      early = { answeredBy: h.answeredBy, elapsedHours, periodHours, at: f.now || null };
+      add('early-final', true, per.elapsed
+        ? `--early by ${h.answeredBy}, but the ${per.days}d test period has already elapsed — an ordinary human final`
+        : `early human final, answered by ${h.answeredBy}: ${elapsedHours === null ? 'an unknown part' : `${elapsedHours}h`} of the ${periodHours}h test period elapsed — the floor binds the machine, not a person who answers for the release (CONVENTIONS.md §6)`);
+      auto = false;
+    }
+  }
   // #548: an older candidate pinned by --tag is finalized only on its own clean clock — the rule
   // --auto applies to it — whatever the row: a newer candidate exists, so "the human is the test"
   // no longer explains why THIS one, and its own clean period is what does.
   const ownClock = auto || !!s.older;
-  const per = f.period || { elapsed: false, detail: 'not measured' };
-  add('test-period', per.elapsed, s.older && !auto ? `${per.detail} — required: an older candidate is finalized only once its own period elapsed clean (#548)` : per.detail, ownClock);
+  add('test-period', per.elapsed, s.older && !auto ? `${per.detail} — required: an older candidate is finalized only once its own period elapsed clean (#548)` : early && !per.elapsed ? `${per.detail} — reported, not required: an early human final (#627)` : per.detail, ownClock);
   const tr = f.trunk || { ok: false, permanent: false, pending: false, detail: 'not measured' };
-  add('trunk-green', tr.ok, tr.detail, ownClock);
+  // #627: an early final keeps trunk-green REQUIRED — over the elapsed part of the window.
+  const trunkRequired = ownClock || !!early;
+  add('trunk-green', tr.ok, early ? `${tr.detail} (the elapsed part of the window, up to the early final)` : tr.detail, trunkRequired);
   // #565: a run that failed only in deploy jobs is a report on a human final (the human who decides
   // sees it), and stays a gate on an automatic one. `deployReport` carries the verdicts re-read with
   // those runs counted as passed; it is absent when no such run exists.
@@ -694,7 +723,7 @@ function decide(facts) {
   }
 
   if (held.length) return out('held');
-  if ((reg.permanent) || (ownClock && tr.permanent)) return out('needs-new-candidate');
+  if ((reg.permanent) || (trunkRequired && tr.permanent)) return out('needs-new-candidate');
   const blocking = checks.filter((c) => c.required && !c.ok && !['test-period', 'trunk-green', 'human'].includes(c.condition)
     && !(c.condition === 'heavy-lane' && hv && hv.pending));
   if (blocking.length) return out('refused');
@@ -702,10 +731,14 @@ function decide(facts) {
     if (!tr.ok && !tr.pending) return out('refused');
     if (!per.elapsed || tr.pending) return out('testing');
   }
+  if (early) {
+    if (!tr.ok && !tr.pending) return out('refused');
+    if (tr.pending) return out('testing');
+  }
   if (hv && hv.pending) return out('testing'); // #610: the heavy lane is still to run or still running
   if (auto) return out('finalized', { finalTag: cand.version, grant: grantUsed });
   if (!h.bar) return out('candidate-ready', { handoff: handoffCommand(cand.tag) });
-  return out('finalized', { finalTag: cand.version });
+  return out('finalized', { finalTag: cand.version, ...(early && !per.elapsed ? { early } : {}) });
 }
 
 // ---- announcing the final (#426) ----------------------------------------------------------------
@@ -742,8 +775,18 @@ function previousFinal(tagNames, version) {
 function releasedEvent(version) { return { released: version }; }
 
 /** The comment body posted on each carried issue (marker included) — codec `encodeReleasedComment`. */
-function releasedComment(version, sha) {
-  return releaseCodec.encodeReleasedComment({ version, sha });
+function releasedComment(version, sha, early = null) {
+  return releaseCodec.encodeReleasedComment({ version, sha, early });
+}
+
+/**
+ * #627: the one sentence an early human final is recorded with — on the tag, the tracking issue and
+ * every "Released in" comment: who answered, how much of the period had elapsed.
+ */
+function earlyLine(early) {
+  const e = early || {};
+  const part = e.elapsedHours === null || e.elapsedHours === undefined ? 'an unknown part' : `${e.elapsedHours}h`;
+  return `answered by ${e.answeredBy} after ${part} of the ${e.periodHours}h test period${e.at ? ` (${e.at})` : ''} — a human final before the period elapsed (CONVENTIONS.md §6)`;
 }
 
 /** The final tag's annotated message: which candidate, which period, every condition, who. */
@@ -754,6 +797,7 @@ function tagMessage(verdict, { candidate, period, actor }) {
     `Candidate: ${candidate.tag}`,
     `Commit: ${candidate.sha}`,
     period ? (period.days === 0 ? 'Test period: none (release.test-period: 0d — the human final is the test)' : `Test period: ${period.start} -> ${period.endsAt}`) : null,
+    verdict.early ? `Early final: ${earlyLine(verdict.early)}` : null,
     `Finalized by: ${actor}`,
     verdict.grant ? `Automatic final granted by: release.final-grant -> decision #${verdict.grant.issue}${verdict.grant.ruledBy ? `, ruled by ${verdict.grant.ruledBy}` : ''} (an operator's per-repo grant; deleting it, or final: human, revokes it)` : null,
     '',
@@ -767,6 +811,6 @@ module.exports = {
   parseVersion, compareVersions, parseCandidate,
   parseReleaseMarker, releaseMarker, eventMarker, hasEvent, trackingTitle, trackingBody,
   selectCandidate, openCandidates, pickNewestClean, stateDetail, windowHasRed, whyNoFinal, periodVerdict, cutRunVerdict, isDeployJob, deployOnlyFailures, deployReportDetail, trunkGreenVerdict, windowBranches, mergeWindowRuns, regressionVerdict,
-  handoffCommand, decide, tagMessage, migrationGrantVerdict,
+  handoffCommand, decide, tagMessage, earlyLine, migrationGrantVerdict,
   carriedIssues, previousFinal, releasedEvent, releasedComment,
 };

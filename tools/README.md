@@ -1120,7 +1120,7 @@ Run `colab <cmd> --help` for full detail.
 | `doctor [--prune] [--ttl H] [--json] [--sync]` | heal dead worktrees / orphan + stale claims / orphan ports; report records whose branch or path cannot be resolved, including a zero-claim `pending` stub (no TTL — see *Records that cannot be acted on*); flip + sweep **merged** worktrees (see *Worktree lifecycle*); **list** shipped branches awaiting deletion (never deletes them); `--sync` also flags a worktree-less claim the tracker no longer shows assigned+in-progress (no TTL either), spent `group:<key>` labels, and open PRs whose head commit already landed in trunk (#584 — report-only, `--prune` never closes a PR) |
 | `release-notes [<range>] [--repo P] [--out F] [--headline "..."]` | grouped Markdown release summary from git history (see below) |
 | `release cut [--repo P] [--sha S] [--auto \| --bump patch\|minor --reason "..."] [--dry] [--json]` | cut a release **candidate** `vX.Y.Z-rc.N` on `origin/main` (its head, or the commit `--sha` names, #622) where §6's routes allow it and all four conditions plus the three pre-tag checks hold on that commit; `--auto` computes the bump (majors included) and honours the route's cadence; never a final tag — except on route `library-fast`, where the cut (by hand or `--auto`) tags the final once a first final exists (#590), and route `deploy-tag-fast`, where `--auto` tags the final itself (#446) (see *Release cut*, below) |
-| `release finalize [--repo P] [--auto \| --tag RC [--answered-by N]] [--dry] [--json]` | a candidate's next step under §6's routes; `--auto` finalizes the newest candidate clean on its own clock, `--tag` any open one (an older one on its own clean clock, #548) — `testing` / `held` / `needs-new-candidate` / `refused` / `candidate-ready` / `finalized`, re-checked every run, one tracking issue per version; tags the final only where the rung row makes it automatic, or behind the human bar (see *Release finalize*, below) |
+| `release finalize [--repo P] [--auto \| --tag RC [--answered-by N [--early]]] [--dry] [--json]` | a candidate's next step under §6's routes; `--auto` finalizes the newest candidate clean on its own clock, `--tag` any open one (an older one on its own clean clock, #548), `--early` the newest one before its period elapses on an automatic-final route, as a human act (#627) — `testing` / `held` / `needs-new-candidate` / `refused` / `candidate-ready` / `finalized`, re-checked every run, one tracking issue per version; tags the final only where the rung row makes it automatic, or behind the human bar (see *Release finalize*, below) |
 | `release npm [--repo P] [--json]` | whether release-auto.yml's `npm` job publishes this repo, and what: the package, its directory and the gate, read from `release.npm` / `release.npm-gate`; read-only (see *Release npm*, below) |
 | `template [<name>] [--dest F] [--repo P] [--force]` | copy a handbook workflow template into a repo, **stamped** with the handbook version (see below) |
 | `update [<repo>...] [--apply] [--json] [--quiet]` | sweep the fleet registry for stamped copies that fell behind a changed template; `--apply` refreshes the **pristine** ones. Never commits; never touches a hand-edited copy (see below) |
@@ -1308,7 +1308,7 @@ earlier route is superseded by the next final, never finalized.
 
 ### Release finalize
 
-`colab release finalize [--repo P] [--auto | --tag vX.Y.Z-rc.N [--answered-by N]] [--dry] [--json]` (#339)
+`colab release finalize [--repo P] [--auto | --tag vX.Y.Z-rc.N [--answered-by N [--early]]] [--dry] [--json]` (#339)
 takes the newest candidate — or the one `--tag` names — one step further under §6's release rung. It is run — repeatedly — by
 the release workflow ([`templates/release-auto.yml`](../templates/release-auto.yml), `--auto`, daily);
 the [`release-rung`](../skills/release-rung/SKILL.md) skill is the manual fallback that runs the same
@@ -1369,8 +1369,8 @@ daemon: every run re-measures from git and GitHub, and the decision is `tools/li
 | `tracking-issue` | exactly one findable record for the version | always |
 | `release-hold` | no hold on it or on a superseded open record | always |
 | `regressions` | as above | always |
-| `test-period` | the period has ended | automatic-final row, or an older `--tag` (#548) |
-| `trunk-green` | every run created since the period began on `main` — and on `trunk:` too where that is another branch (`trunk: dev`, #437: there `main` gets CI only at promotions, so a `main`-only window is close to vacuous) — of the workflows that ran at the candidate (not `pull_request`), finished without going red — a `cancelled` one needs a later success; a read that hit its limit fails closed | automatic-final row only |
+| `test-period` | the period has ended | automatic-final row, or an older `--tag` (#548) — reported, not required, on an early human final (#627) |
+| `trunk-green` | every run created since the period began on `main` — and on `trunk:` too where that is another branch (`trunk: dev`, #437: there `main` gets CI only at promotions, so a `main`-only window is close to vacuous) — of the workflows that ran at the candidate (not `pull_request`), finished without going red — a `cancelled` one needs a later success; a read that hit its limit fails closed | automatic-final row, an older `--tag`, and an early human final (read up to now, #627) |
 | `ci-green` · `full-suite` · `schema-additive` · `switch-dependencies` | §6's four candidate conditions, re-measured at the candidate's commit by the same code `release cut` uses | always |
 | `heavy-lane` | #610, under every `integration-profile`: the heavy workflow (`heavy-workflow:`, default `ci-heavy.yml`) has a green run at the candidate's exact commit. Red refuses; not yet run or still running keeps the candidate `testing` (the release workflow starts it at each candidate). No heavy workflow at the commit → passes, nothing to gate | always, where a heavy lane exists |
 | `cut-run` | #566: the run that cut the candidate — every workflow run at its commit in progress at the tag's date, minus the calling run and a cancelled one with zero jobs (a pending run displaced from the concurrency group) — concluded `success`. A cancelled cutter is a failure: what it publishes after the cut (an image, a package) may not exist. An earlier green run at the same commit that cut nothing never vouches for it — `full-suite` sets the cancelled run aside as superseded (#461), this does not. No run around the cut (cut by hand) passes | always |
@@ -1378,7 +1378,8 @@ daemon: every run re-measures from git and GitHub, and the decision is `tools/li
 | `manifest-version` · `on-trunk` · `outranks-final` | #424's pre-tag checks (see *Release cut*), on the final `vX.Y.Z` | always |
 | `final-grant` | #441: the decision issue `release.final-grant` names still carries a recorded, trusted, not-reopened ruling (`decision-recorded` label + live `⚖ Decision recorded` comment) | granted `deploy-tag` only; reported — failing takes the automatic final away (→ `candidate-ready`) |
 | `migration-grant` | #441: no migration file (any, destructive or not) since the last final, or a live migration grant on the version's tracking issue bound to `vX.Y.Z` (`COLAB_HUMAN=1 colab migration-grant <tracking> --branch vX.Y.Z`) | granted `deploy-tag` only; reported — failing takes the automatic final away (→ `candidate-ready`) |
-| `human` | human-final row only: `COLAB_HUMAN=1` + `--answered-by` + `--tag` (the `adopt` gate's precedent) | reported; absent → `candidate-ready` |
+| `early-final` | #627, present only with `--early`: the human bar is met, the final is automatic by the row (not by `final-grant`), and the candidate is the newest open one. Its detail says how much of the period had elapsed | always, when `--early` is passed |
+| `human` | human-final row only (and an early final): `COLAB_HUMAN=1` + `--answered-by` + `--tag` (the `adopt` gate's precedent) | reported; absent → `candidate-ready` |
 
 The human bar never shortens a test period and never overrides a hold — on a human-final row the
 period is informational, and `release: test-period: 0d` declares none (#549). Where it is met, the final's
@@ -1386,6 +1387,20 @@ annotated message records who answered. On a granted `deploy-tag` repo (#441) th
 only while both grant checks pass; the tag message then names the grant and its decision issue
 (`Automatic final granted by: …`), and `--json` carries it as `grant: {issue, ruledBy}`. A human bar
 there takes the human path, never the grant's.
+
+**An early human final (#627).** On an automatic-final row the period floor binds the machine, not a
+person who answers for the release. `--early`, with the whole human bar (`COLAB_HUMAN=1` + `--tag`
++ `--answered-by` — refused before anything is read without it, and never with `--auto`), finalizes
+the **newest** candidate before its period elapses: `test-period` is reported, not required;
+`trunk-green` stays required, read over `[start, now)` — the elapsed part of the window; every other
+condition applies unchanged (a hold still holds, a red run still owes a new candidate). The final's
+tag message carries an `Early final:` line and `Finalized by: <name> (human bar: COLAB_HUMAN=1,
+--early)`; the tracking issue's finalized comment and every "Released in" comment add
+`Early final: answered by <name> after <N>h of the <M>h test period.`; `--json` carries
+`early: {answeredBy, elapsedHours, periodHours, at}`. Refused (`early-final` fails) on a human-final
+row, on a `final-grant` row (a human final there already skips the period), and on an older
+candidate (#548's own-clock rule stands). Run once the period has elapsed, it is an ordinary human
+final with no early record.
 
 **An older candidate by `--tag` (#548).** On an active trunk every merge cuts a candidate, and each
 starts its own clock — so a final that may only name the newest needs trunk to stop merging for a

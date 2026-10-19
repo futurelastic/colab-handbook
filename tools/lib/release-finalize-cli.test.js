@@ -641,3 +641,65 @@ test('#468 --auto: one red run inside many candidates\' windows does not exhaust
   // At most one of them paid for a full judge: the rest were skipped on the red run already seen.
   assert.ok(nnc.filter((x) => /seen judging a newer candidate/.test(x.detail)).length >= 10);
 });
+
+test('#627 auto row: a human early final tags before the period ends and records it; the bar alone, or --early alone, does not', () => {
+  const fx = fixture();
+  writeState(fx, (s) => { s.issues.push({ number: 7, title: 'bug 7', body: '', state: 'CLOSED', stateReason: 'COMPLETED', labels: [], createdAt: ago(10), url: 'https://github.com/o/r/issues/7', comments: [] }); });
+  commit(fx, 'a.txt', 'fix: a bug\n\nCloses #7');
+  const rc = cutCandidate(fx, 1);
+  const rcSha = fx.g('rev-parse', `${rc}^{commit}`);
+  assert.strictEqual(finalize(fx).body.state, 'testing');
+  ageTracking(fx, 1);
+
+  // --early is a human's act alone: refused before anything is read without the whole bar.
+  for (const [args, env] of [[['--tag', rc, '--answered-by', 'Ops', '--early'], {}], [['--tag', rc, '--early'], { COLAB_HUMAN: '1' }], [['--early'], { COLAB_HUMAN: '1' }]]) {
+    const r = finalize(fx, args, { env });
+    assert.strictEqual(r.code, 1, args.join(' '));
+    assert.match(r.err, /--early finalizes before the test period elapses only as a human act/, args.join(' '));
+  }
+  const auto = finalize(fx, ['--auto', '--early'], { env: { COLAB_HUMAN: '1' } });
+  assert.strictEqual(auto.code, 1);
+  assert.match(auto.err, /never carries the human bar/);
+
+  // The bar without --early still waits the full period (unchanged).
+  const bar = finalize(fx, ['--tag', rc, '--answered-by', 'Ops'], { env: { COLAB_HUMAN: '1' } });
+  assert.strictEqual(bar.body.state, 'testing', bar.out + bar.err);
+  assert.ok(!originTags(fx).includes('v1.2.1'));
+
+  const dry = finalize(fx, ['--tag', rc, '--answered-by', 'Ops', '--early', '--dry'], { env: { COLAB_HUMAN: '1' } });
+  assert.strictEqual(dry.body.state, 'finalized', dry.out + dry.err);
+  assert.strictEqual(dry.body.tagged, false);
+  assert.ok(!originTags(fx).includes('v1.2.1'), '--dry tags nothing');
+
+  const done = finalize(fx, ['--tag', rc, '--answered-by', 'Ops', '--early'], { env: { COLAB_HUMAN: '1' } });
+  assert.strictEqual(done.code, 0, done.out + done.err);
+  assert.strictEqual(done.body.state, 'finalized');
+  assert.strictEqual(done.body.tagged, true);
+  assert.strictEqual(done.body.early.answeredBy, 'Ops');
+  assert.strictEqual(done.body.early.periodHours, 72);
+  assert.ok(done.body.early.elapsedHours >= 23 && done.body.early.elapsedHours <= 25, String(done.body.early.elapsedHours));
+  const tp = done.body.checks.find((c) => c.condition === 'test-period');
+  assert.deepStrictEqual([tp.ok, tp.required], [false, false]);
+  assert.strictEqual(done.body.checks.find((c) => c.condition === 'trunk-green').required, true);
+  assert.ok(originTags(fx).includes('v1.2.1'));
+  fx.g('fetch', '-q', '--tags', 'origin');
+  assert.strictEqual(fx.g('rev-parse', 'v1.2.1^{commit}'), rcSha);
+  const msg = fx.g('tag', '-l', '--format=%(contents)', 'v1.2.1');
+  assert.match(msg, /^Early final: answered by Ops after \d+h of the 72h test period/m);
+  assert.match(msg, /^Finalized by: Ops \(human bar: COLAB_HUMAN=1, --early\)/m);
+  const rec = tracking(fx)[0];
+  assert.strictEqual(rec.state, 'CLOSED');
+  assert.ok(rec.comments.some((c) => /tagged final/.test(c.body) && /Early final: answered by Ops/.test(c.body)));
+  const said = readState(fx).issues.find((i) => i.number === 7).comments.filter((c) => c.body.includes('<!-- colab:release-event released=v1.2.1 -->'));
+  assert.strictEqual(said.length, 1);
+  assert.match(said[0].body, /\nEarly final: answered by Ops after \d+h of the 72h test period\.$/);
+});
+
+test('#627 human row: --early is refused — the final is already a human act there', () => {
+  const fx = fixture(HUMAN_YML);
+  const rc = cutCandidate(fx, 1);
+  const r = finalize(fx, ['--tag', rc, '--answered-by', 'Ops', '--early'], { env: { COLAB_HUMAN: '1' } });
+  assert.strictEqual(r.body.state, 'refused', r.out + r.err);
+  assert.match(r.body.checks.find((c) => c.condition === 'early-final').detail, /already a human act/);
+  assert.ok(!originTags(fx).includes('v1.2.1'));
+});

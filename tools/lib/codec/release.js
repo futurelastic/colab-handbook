@@ -11,7 +11,8 @@
  *   event marker     — `<!-- colab:release-event k=v … -->`, one per thing announced on the
  *                      tracking issue, keys in the order written. Its exact presence is what makes
  *                      a re-run post nothing twice, so key order is part of the wire format.
- *   released comment — the event marker `released=vX.Y.Z` plus one visible line, posted once on
+ *   released comment — the event marker `released=vX.Y.Z` plus one visible line (two after an early
+ *                      human final, #627), posted once on
  *                      each issue a release carried.
  *
  * Deciding which candidate, which period, and whether to finalize stays in
@@ -21,7 +22,7 @@
 const VERSION_RE = /^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$/;
 const TRACKING_MARKER_RE = /^\s*<!--\s*colab:release\s+version=(v[0-9]+\.[0-9]+\.[0-9]+)\s*-->/;
 const RELEASE_EVENT_RE = /^<!-- colab:release-event((?: [^\s=]+=\S*)+) -->$/;
-const RELEASED_COMMENT_RE = /^<!-- colab:release-event released=(\S+) -->\nReleased in \*\*(\S+)\*\* \(`([^`]*)`\)\.$/;
+const RELEASED_COMMENT_RE = /^<!-- colab:release-event released=(\S+) -->\nReleased in \*\*(\S+)\*\* \(`([^`]*)`\)\.(?:\nEarly final: answered by ([^\n]+) after ([0-9]+)h of the ([0-9]+)h test period\.)?$/;
 
 /** `vX.Y.Z` → the tracking marker. */
 function encodeTrackingMarker(version) { return `<!-- colab:release version=${version} -->`; }
@@ -52,16 +53,24 @@ function decodeReleaseEvent(marker) {
   return out;
 }
 
-/** `{version, sha}` → the "released in" comment; `sha` is shortened to 7 characters. */
-function encodeReleasedComment({ version, sha } = {}) {
-  return `${encodeReleaseEvent({ released: version })}\nReleased in **${version}** (\`${String(sha || '').slice(0, 7)}\`).`;
+/**
+ * `{version, sha, early?}` → the "released in" comment; `sha` is shortened to 7 characters. `early`
+ * ({answeredBy, elapsedHours, periodHours}, #627) adds one line naming an early human final; without
+ * it the comment is byte-identical to the two-line form every earlier final wrote.
+ */
+function encodeReleasedComment({ version, sha, early = null } = {}) {
+  const base = `${encodeReleaseEvent({ released: version })}\nReleased in **${version}** (\`${String(sha || '').slice(0, 7)}\`).`;
+  if (!early || !Number.isInteger(early.elapsedHours) || !Number.isInteger(early.periodHours)) return base;
+  return `${base}\nEarly final: answered by ${String(early.answeredBy).replace(/\s+/g, ' ').trim()} after ${early.elapsedHours}h of the ${early.periodHours}h test period.`;
 }
 
-/** A "released in" comment → `{version, sha}` (sha as written, 7 characters), or null. */
+/** A "released in" comment → `{version, sha}` (sha as written, 7 characters) plus `early` when it names one (#627), or null. */
 function decodeReleasedComment(body) {
   const m = RELEASED_COMMENT_RE.exec(String(body == null ? '' : body).replace(/\r\n/g, '\n').trim());
   if (!m || m[1] !== m[2]) return null;
-  return { version: m[1], sha: m[3] };
+  const out = { version: m[1], sha: m[3] };
+  if (m[4] !== undefined) out.early = { answeredBy: m[4], elapsedHours: Number(m[5]), periodHours: Number(m[6]) };
+  return out;
 }
 
 module.exports = {

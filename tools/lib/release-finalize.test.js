@@ -717,3 +717,76 @@ test('#610 decide: the heavy lane at the candidate — green finalizes, red refu
   assert.strictEqual(rf.decide(facts({ heavy: none })).state, 'finalized');
   for (const c of rf.decide(facts({ heavy: heavy('red') })).checks) assert.ok(rf.CONDITIONS.includes(c.condition), c.condition);
 });
+
+// ---- #627: an early human final on an automatic-final route ----------------------------------------
+
+const YOUNG = () => rf.periodVerdict({ cutAt: T0, trackingCreatedAt: T0, testPeriodDays: 3, now: at(1.25) });
+const EARLY_BAR = { bar: true, answeredBy: 'Ops', early: true };
+
+test('#627 decide, auto row: the human bar + --early finalizes before the period ends; test-period reported, trunk-green required', () => {
+  const v = rf.decide(facts({ period: YOUNG(), human: EARLY_BAR, now: at(1.25) }));
+  assert.strictEqual(v.state, 'finalized');
+  assert.strictEqual(v.finalTag, 'v1.2.1');
+  assert.strictEqual(v.grant, null);
+  assert.deepStrictEqual(v.early, { answeredBy: 'Ops', elapsedHours: 30, periodHours: 72, at: at(1.25) });
+  const tp = v.checks.find((c) => c.condition === 'test-period');
+  assert.deepStrictEqual([tp.ok, tp.required], [false, false]);
+  assert.match(tp.detail, /reported, not required: an early human final/);
+  assert.strictEqual(v.checks.find((c) => c.condition === 'trunk-green').required, true);
+  const ef = v.checks.find((c) => c.condition === 'early-final');
+  assert.strictEqual(ef.ok, true);
+  assert.match(ef.detail, /answered by Ops: 30h of the 72h test period elapsed/);
+  assert.strictEqual(v.checks.find((c) => c.condition === 'human').ok, true);
+  for (const c of v.checks) assert.ok(rf.CONDITIONS.includes(c.condition), c.condition);
+  const msg = rf.tagMessage(v, { candidate: { version: 'v1.2.1', tag: 'v1.2.1-rc.1', sha: 'a'.repeat(40) }, period: YOUNG(), actor: 'Ops (human bar: COLAB_HUMAN=1, --early)' });
+  assert.match(msg, /^Early final: answered by Ops after 30h of the 72h test period/m);
+});
+
+test('#627 decide, auto row: without --early the bar still waits the period (unchanged)', () => {
+  const v = rf.decide(facts({ period: YOUNG(), human: { bar: true, answeredBy: 'Ops' }, now: at(1.25) }));
+  assert.strictEqual(v.state, 'testing');
+  assert.ok(!v.checks.some((c) => c.condition === 'early-final'));
+  assert.strictEqual(v.early, undefined);
+});
+
+test('#627 decide: --early never lowers anything else — trunk red/pending, holds, regressions and failed checks still stop it', () => {
+  const f = (over) => rf.decide(facts({ period: YOUNG(), human: EARLY_BAR, now: at(1.25), ...over }));
+  assert.strictEqual(f({ trunk: { ok: false, permanent: true, pending: false, detail: 'red' } }).state, 'needs-new-candidate');
+  assert.strictEqual(f({ trunk: { ok: false, permanent: false, pending: true, detail: 'in flight' } }).state, 'testing');
+  assert.strictEqual(f({ trunk: { ok: false, permanent: false, pending: false, detail: 'unread' } }).state, 'refused');
+  assert.strictEqual(f({ tracking: { number: 12, createdAt: T0, held: true } }).state, 'held');
+  assert.strictEqual(f({ regressions: { ok: false, permanent: false, detail: 'open' } }).state, 'refused');
+  assert.strictEqual(f({ schema: { ok: false, detail: 'drop' } }).state, 'refused');
+  assert.strictEqual(f({ ancestry: { ok: false, shallow: false } }).state, 'refused');
+});
+
+test('#627 decide: --early is refused without the bar, off an automatic row, on a granted row, and on an older candidate', () => {
+  const noBar = rf.decide(facts({ period: YOUNG(), human: { bar: false, answeredBy: null, early: true }, now: at(1.25) }));
+  assert.strictEqual(noBar.state, 'refused');
+  assert.match(noBar.checks.find((c) => c.condition === 'early-final').detail, /needs the human bar/);
+  const human = rf.decide(facts({ policy: HUMAN, period: YOUNG(), human: EARLY_BAR, now: at(1.25) }));
+  assert.strictEqual(human.state, 'refused');
+  assert.match(human.checks.find((c) => c.condition === 'early-final').detail, /already a human act/);
+  const granted = rf.decide(facts({ policy: GRANTED, finalGrant: GRANT_OK, migrations: NO_MIGRATION, period: YOUNG(), human: EARLY_BAR, now: at(1.25) }));
+  assert.strictEqual(granted.state, 'refused');
+  assert.match(granted.checks.find((c) => c.condition === 'early-final').detail, /operator's grant/);
+  const older = rf.selectCandidate([rcTag('v1.2.1-rc.1'), rcTag('v1.2.1-rc.2')], 'v1.2.1-rc.1');
+  assert.strictEqual(older.older, true);
+  const o = rf.decide(facts({ selection: older, period: YOUNG(), human: EARLY_BAR, now: at(1.25) }));
+  assert.strictEqual(o.state, 'refused');
+  assert.match(o.checks.find((c) => c.condition === 'early-final').detail, /newest open candidate/);
+});
+
+test('#627 decide: --early once the period has elapsed is an ordinary human final — no early record', () => {
+  const v = rf.decide(facts({ human: EARLY_BAR, now: at(4) }));
+  assert.strictEqual(v.state, 'finalized');
+  assert.strictEqual(v.early, undefined);
+  assert.match(v.checks.find((c) => c.condition === 'early-final').detail, /already elapsed/);
+});
+
+test('#627 releasedComment: the early line rides along; without it the comment is byte-identical', () => {
+  assert.strictEqual(rf.releasedComment('v1.2.1', 'a'.repeat(40)), '<!-- colab:release-event released=v1.2.1 -->\nReleased in **v1.2.1** (`aaaaaaa`).');
+  const e = rf.releasedComment('v1.2.1', 'a'.repeat(40), { answeredBy: 'Ops', elapsedHours: 30, periodHours: 72, at: at(1.25) });
+  assert.strictEqual(e, '<!-- colab:release-event released=v1.2.1 -->\nReleased in **v1.2.1** (`aaaaaaa`).\nEarly final: answered by Ops after 30h of the 72h test period.');
+  assert.strictEqual(rf.hasEvent([{ body: e }], rf.releasedEvent('v1.2.1')), true);
+});

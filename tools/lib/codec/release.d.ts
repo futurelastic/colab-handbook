@@ -12,6 +12,9 @@ export function decodeTrackingMarker(body: string | null | undefined): string | 
 export function encodeReleaseEvent(fields: Record<string, string | number>): string;
 export function decodeReleaseEvent(marker: string | null | undefined): Record<string, string> | null;
 
-export function encodeReleasedComment(c?: { version: string; sha: string }): string;
-/** `sha` is the 7-character form the comment carries. */
-export function decodeReleasedComment(body: string | null | undefined): { version: string; sha: string } | null;
+/** #627: an early human final — who answered, and how much of the test period had elapsed. */
+export interface EarlyFinal { answeredBy: string; elapsedHours: number; periodHours: number }
+
+export function encodeReleasedComment(c?: { version: string; sha: string; early?: EarlyFinal | null }): string;
+/** `sha` is the 7-character form the comment carries; `early` only when the comment names an early final. */
+export function decodeReleasedComment(body: string | null | undefined): { version: string; sha: string; early?: EarlyFinal } | null;
