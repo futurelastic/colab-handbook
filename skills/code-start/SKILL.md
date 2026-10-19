@@ -512,10 +512,8 @@ gh issue view $N --json labels -q '.labels[].name|select(startswith("group:"))'
   that gap does not shrink by waiting for a sweep; a repo mid-teardown is still a repo
   that has not finished one, which is exactly when this check has to be correct).
   Empty output — or a path that does not
-  exist yet — is clean ground. Non-empty is information, not a stop: group onto their
-  branch only when it changes the same logic you will, or the path is listed in
-  `contention.coupled`; otherwise start in parallel and expect a rebase at ship
-  (`CONVENTIONS.md` [§5](../../CONVENTIONS.md#writing-a-conclusion-down--the-decision-and-the-document-are-two-units), *Writing a conclusion down*, #630). **It fetches for you** — the
+  exist yet — is clean ground. Non-empty is information, not a stop: group onto their branch
+  only for the same logic or a `contention.coupled` path; else start in parallel (`CONVENTIONS.md` [§5](../../CONVENTIONS.md#writing-a-conclusion-down--the-decision-and-the-document-are-two-units), *Writing a conclusion down*, #630). **It fetches for you** — the
   enumeration reads local refs, so a branch pushed by another session and never fetched
   here would be invisible, and it refuses (exit 2) to report "clean ground" when it could
   not fetch rather than answering off stale data. A row reporting `unknown` still means

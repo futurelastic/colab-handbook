@@ -228,10 +228,9 @@ named. Unclaimed (no half-claim) · verifiably undone (§2) · actionable · not
 missing — read `blockedBy`, judge each open blocker's state (§5.1), and empty means *nobody
 looked* · trunk CI alive — `colab trunk-ci` must print `GREEN` for trunk's current head sha,
 never a `gh run list` filter of your own; red with no patch ⇒ §5.2, once per repo · no live
-branch on this work, nor on a `contention.coupled` path it edits (any other overlap is printed,
-never blocks — #630) · no pending `needs-decision` (look for a recorded or
-unrecorded ruling first; a second question is `colab decision --reopen`; an ask in neither
-shape is a finding) · delivery code, docs-only or not asked · not held. Full text: [5-gates.md](5-gates.md).
+branch on this work or a `contention.coupled` path it edits (other overlap prints, #630) · no
+pending `needs-decision` (look for a recorded or unrecorded ruling first; a second question is
+`colab decision --reopen`; an ask in neither shape is a finding) · delivery code, docs-only or not asked · not held. Full text: [5-gates.md](5-gates.md).
 
 ### Every label that affects a start — who sets it, who clears it (#360)
 
