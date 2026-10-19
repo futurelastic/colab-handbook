@@ -1435,12 +1435,12 @@ insertion into a trunk file, or a file the commit creates, is new content, not a
   run at its remote head decides (green passes; red, in flight or absent still refuses). A
   trunk that has workflows but no run at its sha is a real gap and still refuses.
   Each workflow is then judged by its **newest** run at the sha (#461): an earlier attempt of
-  the *same* workflow that a later one superseded is set aside and named in the detail, so a
-  `workflow_run`-triggered workflow that skipped for two red CI attempts and passed for the
-  green third no longer holds the sha red forever. A newer run decides in both directions — a
-  newer failure vetoes an older success, a newer run still in flight blocks (#307) — except
-  that a `cancelled` run never supersedes, because it ran nothing (#92). Runs of *different*
-  workflows are never reduced: a failing one beside a passing one is still not green.
+  the *same* workflow that a later one superseded is set aside and named in the detail, so
+  skipped `workflow_run` attempts no longer hold the sha red. A newer run decides in both
+  directions — a newer failure vetoes an older success, a newer run still in flight blocks
+  (#307) — except that a `cancelled` run never supersedes, because it ran nothing (#92). Runs of
+  *different* workflows are never reduced: a failing one beside a passing one is still not
+  green, and a workflow whose **only** run was cancelled verified nothing, so it blocks green (#628).
   `colab trunk-ci` prints that verdict for trunk's head, read-only and from the same function
   (#463); a skill that needs it calls the verb instead of restating the rule as a `gh run
   list` filter ([why](docs/adr/539-schema-checks-and-gates-rationale.md)).
@@ -1526,8 +1526,8 @@ reading either sees the same spelling. Spell them exactly so, everywhere:
 - **The quantifiers are the trunk rule's, unchanged (#92, #307).** `every … completed`: a
   fast sibling already green never answers for a slow one still running — that sha is
   `none`, not `green`. `cancelled` is `completed` and not a `failure`, so a cancelled
-  straggler beside a real `success` is still `green`; the ladder must not reintroduce the
-  deadlock #92 fixed.
+  straggler beside a real `success` of its own workflow is still `green` (a cancelled-only
+  workflow is not, #628); the ladder must not reintroduce the deadlock #92 fixed.
 - **A claim's first push is `green` from a guard run, not a second suite run (#418).** A
   branch pushed at trunk's head (a plain-git cut; `colab` pushes a claim ref instead, §5,
   *Record of a claim*) sits on a sha the same workflow has usually already tested. The CI templates (and this repo's own

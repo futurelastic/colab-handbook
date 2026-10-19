@@ -1304,6 +1304,22 @@ function summarizeRepoOwnedRuns(forSha, sha) {
   );
   if (notGreen) return { status: 'completed', conclusion: notGreen.conclusion, sha, createdAt: notGreen.createdAt || null, databaseId: notGreen.databaseId || null, runCount };
 
+  // #628: a NAMED workflow whose head is `cancelled` has no run at this sha that ran to the end —
+  // newestRunPerWorkflow never lets a cancelled row stand for a workflow that has a non-neutral
+  // run (#92), so a cancelled head means cancelled is all it has. That workflow verified nothing,
+  // and a sibling workflow's success must not carry the verdict for it. Measured: the only test
+  // workflow at a trunk head hung and was cancelled, and the head read GREEN on a lint workflow's
+  // success. Unnamed rows (older reads, hand-built fixtures) stay neutral exactly as before — they
+  // cannot be told apart from a superseded straggler of a passing run, which is #92's case.
+  const cancelledOnly = forSha.find((x) => x && x.workflowName && x.status === 'completed' && x.conclusion === 'cancelled');
+  if (cancelledOnly) {
+    return {
+      status: 'completed', conclusion: 'cancelled', sha, createdAt: cancelledOnly.createdAt || null,
+      databaseId: cancelledOnly.databaseId || null, runCount,
+      cancelledOnly: { workflowName: cancelledOnly.workflowName, databaseId: cancelledOnly.databaseId || null },
+    };
+  }
+
   // A green verdict is owed only when EVERY sibling at this sha has finished (#307). A row that is
   // still queued/in_progress has not passed — it has not run — so picking the first completed
   // success here would stamp `runCount` (the FULL sibling count) onto a verdict that inspected one

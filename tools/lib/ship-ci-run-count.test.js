@@ -114,3 +114,17 @@ test('three agreeing green workflows at the sha read "3 runs … all success" �
   assert.strictEqual(ci.ok, true, JSON.stringify(ci));
   assert.match(ci.detail, /^3 runs at main@[0-9a-f]+: all success$/);
 });
+
+test('#628: the test workflow\'s only run cancelled beside a green sibling workflow — CI green FAILS and names the workflow + run', () => {
+  const fx = fixture(PROJECT_YML_AUTO_TRUNK, [
+    { workflowName: 'instruction-files', event: 'push', databaseId: 2002, createdAt: '2026-10-19T01:00:00Z' },
+    { workflowName: 'CI', event: 'push', conclusion: 'cancelled', databaseId: 2001, createdAt: '2026-10-19T00:00:00Z' },
+  ]);
+  shippableBranch(fx, 6, 'feat/clean-6');
+  const r = colab(fx, ['ship', '--branch', 'feat/clean-6', '--repo', fx.work, '--dry', '--json']);
+  const body = JSON.parse(r.out);
+  const ci = body.checks.find((c) => /CI green/.test(c.name));
+  assert.strictEqual(ci.ok, false, JSON.stringify(ci));
+  assert.match(ci.detail, /workflow "CI" never finished here — its only run \(run 2001\) was cancelled/);
+  assert.strictEqual(body.ok, false);
+});

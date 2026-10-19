@@ -11764,6 +11764,12 @@ function classifyCiRunRaw(repoAbs, run, at) {
       const detail = n === 1 ? `1 run at ${at}: success` : `${n} runs at ${at}: all success`;
       return { ok: true, class: null, detail };
     }
+    if (run.cancelledOnly) {
+      // #628: one workflow's only run at this sha was cancelled — it verified nothing, and the other
+      // workflows' success does not stand in for it. Name it so a human knows what to re-run.
+      const c = run.cancelledOnly;
+      return { ok: false, class: HUMAN_GATED, detail: `run for ${at}: workflow "${c.workflowName}" never finished here — its only run${c.databaseId ? ` (run ${c.databaseId})` : ''} was cancelled, so it verified nothing; re-run it (#628)` };
+    }
     return { ok: false, class: HUMAN_GATED, detail: `run for ${at}: status=completed conclusion=${run.conclusion || 'none'}` };
   }
   if (run.status === 'none') {

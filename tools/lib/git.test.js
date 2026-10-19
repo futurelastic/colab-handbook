@@ -667,6 +667,53 @@ test('#461: every run of a workflow cancelled — still not green, as before', (
   assert.notStrictEqual(r.conclusion, 'success');
 });
 
+test('#628: one workflow\'s only run cancelled beside another workflow\'s success — NOT green, and it names the workflow', () => {
+  const r = git.summarizeRunsForCommit([
+    wf('instruction-files', 'success', '2026-10-03T12:00:00Z', 30),
+    wf('CI', 'cancelled', '2026-10-03T10:00:00Z', 10),
+  ], S461);
+  assert.strictEqual(r.status, 'completed');
+  assert.strictEqual(r.conclusion, 'cancelled');
+  assert.deepStrictEqual(r.cancelledOnly, { workflowName: 'CI', databaseId: 10 });
+  assert.strictEqual(r.runCount, 2);
+});
+
+test('#628: cancelled-only workflow beside a skipped attempt of itself and a sibling success — still not green', () => {
+  const r = git.summarizeRunsForCommit([
+    wf('lint', 'success', '2026-10-03T12:00:00Z', 40),
+    wf('CI', 'cancelled', '2026-10-03T11:00:00Z', 20),
+    wf('CI', 'skipped', '2026-10-03T10:00:00Z', 10),
+  ], S461);
+  assert.notStrictEqual(r.conclusion, 'success');
+});
+
+test('#628 keeps #92: same workflow success + a NEWER cancelled, beside another workflow\'s success — green', () => {
+  const r = git.summarizeRunsForCommit([
+    wf('CI', 'cancelled', '2026-10-03T12:00:00Z', 30),
+    wf('lint', 'success', '2026-10-03T11:00:00Z', 20),
+    wf('CI', 'success', '2026-10-03T10:00:00Z', 10),
+  ], S461);
+  assert.strictEqual(r.conclusion, 'success');
+  assert.ok(!('cancelledOnly' in r));
+});
+
+test('#628: every workflow cancelled — not green', () => {
+  const r = git.summarizeRunsForCommit([
+    wf('CI', 'cancelled', '2026-10-03T12:00:00Z', 30),
+    wf('lint', 'cancelled', '2026-10-03T10:00:00Z', 10),
+  ], S461);
+  assert.notStrictEqual(r.conclusion, 'success');
+  assert.strictEqual(r.status, 'completed');
+});
+
+test('#628: an UNNAMED cancelled row stays neutral (#92/#307 fixtures carry no workflowName)', () => {
+  const r = git.summarizeRunsForCommit([
+    { headSha: S461, status: 'completed', conclusion: 'cancelled' },
+    { headSha: S461, status: 'completed', conclusion: 'success' },
+  ], S461);
+  assert.strictEqual(r.conclusion, 'success');
+});
+
 test('#461: no createdAt — databaseId orders; neither — gh newest-first order decides', () => {
   const byId = git.summarizeRunsForCommit([
     { headSha: S461, status: 'completed', conclusion: 'skipped', databaseId: 10, workflowName: 'release' },
