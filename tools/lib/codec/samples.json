@@ -745,6 +745,19 @@
           "sha": "3e2f810"
         },
         "note": "synthetic: no final has announced on an issue yet"
+      },
+      {
+        "wire": "<!-- colab:release-event released=v2.4.0 -->\nReleased in **v2.4.0** (`9c1d2e3`).\nEarly final: answered by Ada Lovelace after 30h of the 72h test period.",
+        "decoded": {
+          "version": "v2.4.0",
+          "sha": "9c1d2e3",
+          "early": {
+            "answeredBy": "Ada Lovelace",
+            "elapsedHours": 30,
+            "periodHours": 72
+          }
+        },
+        "note": "synthetic: an early human final (#627) — no early final has announced yet"
       }
     ]
   },

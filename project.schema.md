@@ -1218,7 +1218,7 @@ direction only, measured against the route — declared, or derived:
   is the test: `colab release finalize --tag <newest rc> --answered-by <name>` tags it as soon
   as every other check passes, and `--auto` posts `candidate-ready` on its first run (#549).
   Where the final is automatic, `0d` is a failure: the period is the only look a candidate
-  gets there, and no human looked.
+  gets there, and no human looked. No value shortens it for one version — a person does (#627): `--early` with the human bar ([CONVENTIONS §6](CONVENTIONS.md#6-releases)) finalizes the newest candidate before the period elapses, every other check intact; the declared period still binds every automatic final.
 
 **Three keys add evidence to the computed version, never permission** (#422) — they narrow and
 widen nothing, so each only has to be a non-empty string:
