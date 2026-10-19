@@ -1,6 +1,6 @@
 ---
 name: code-triage
-description: "Decide what to work on next in ONE repo. Takes every open Issue, discards the ones already shipped and the ones someone else holds, groups what must move together (issues touching the same files must serialize — usually one branch, or a place-claim on any repo not declaring writes: isolated), orders what remains by blast radius, and says which groups can be started RIGHT NOW — including whether the repo's trunk CI is alive enough to merge into. Outputs claim + branch commands that feed straight into code-start. A group is ONE unit of work, so a second live branch across its members is reported as a finding naming the carrier branch and the rebase order — never offered as a second spawn. Flags a group judged genuinely hard with a needs-plan label + one-line reason, for code-plan to draft against later — never a plan of its own. Also asks, per ready group, whether the work is batch-mechanical with a usable oracle, and tags the minority that qualifies with a mechanical-lane label + suggested batch size, for a cheap mechanical-work engine to pick up — never routes or dispatches it itself. Cheap to re-run only when §0 is honoured first: a five-input fingerprint compare that ends a genuine no-change ping in three calls — a convention the executing agent follows, not a gate anything enforces, so every run opens by naming which §0 outcome it took (unchanged / changed:<inputs> / no usable cache). Trigger phrases: 'what should I work on', 'triage the issues', 'what can we start', 'plan the next session', 'group the open issues', 'what is ready to pick up', 'sort the backlog'; and — when this session's last act was a triage — the re-ping forms 'again', 'anything new?', 'check again', 'anything to pick up yet?', or a bare 'go'. Runs before code-start; pairs with code-start and code-wrap."
+description: "Decide what to work on next in ONE repo. Takes every open Issue, discards the ones already shipped and the ones someone else holds, groups what must move together (issues that change the same logic share one unit — usually one branch, or a place-claim on any repo not declaring writes: isolated; a shared file alone is reported, never grouped), orders what remains by blast radius, and says which groups can be started RIGHT NOW — including whether the repo's trunk CI is alive enough to merge into. Outputs claim + branch commands that feed straight into code-start. A group is ONE unit of work, so a second live branch across its members is reported as a finding naming the carrier branch and the rebase order — never offered as a second spawn. Flags a group judged genuinely hard with a needs-plan label + one-line reason, for code-plan to draft against later — never a plan of its own. Also asks, per ready group, whether the work is batch-mechanical with a usable oracle, and tags the minority that qualifies with a mechanical-lane label + suggested batch size, for a cheap mechanical-work engine to pick up — never routes or dispatches it itself. Cheap to re-run only when §0 is honoured first: a five-input fingerprint compare that ends a genuine no-change ping in three calls — a convention the executing agent follows, not a gate anything enforces, so every run opens by naming which §0 outcome it took (unchanged / changed:<inputs> / no usable cache). Trigger phrases: 'what should I work on', 'triage the issues', 'what can we start', 'plan the next session', 'group the open issues', 'what is ready to pick up', 'sort the backlog'; and — when this session's last act was a triage — the re-ping forms 'again', 'anything new?', 'check again', 'anything to pick up yet?', or a bare 'go'. Runs before code-start; pairs with code-start and code-wrap."
 ---
 
 # code-triage — what should we work on next?
@@ -164,10 +164,10 @@ own bucket (§6), never silently dropped.
 
 ## 3. Group — this is a correctness constraint, not tidiness
 
-**Rule:** issues that touch the same files must serialize — one branch on `writes: isolated`;
-on a repo permitting trunk-direct, an attended human session behind a place-claim unless one
-of the two mandatory-branch conditions fires. Group on overlapping files or subsystem, a
-prerequisite, or children of one epic landing together; keep disjoint files apart. On
+**Rule:** issues that change the same logic, or where one needs the other's unmerged code,
+share one unit — one branch on `writes: isolated`; on a repo permitting trunk-direct, an
+attended human session behind a place-claim unless one of the two mandatory-branch conditions
+fires. A shared file alone is not a group: report the overlap and start both (#630). On
 `isolated`, all issue numbers in one **trailing** run. Read an epic's state, never its title
 (a checklist is a claim); verify `file:line` before quoting. Full text: [3-group.md](3-group.md).
 
@@ -196,7 +196,7 @@ Full text: [3-touches.md](3-touches.md).
 
 ### Then count the hot files — one path holding ≥ 3 waiting issues is a structure issue (#540)
 
-**Rule:** ≥ `hot-file-count` open issues (3 unless the repo declares it — `colab thresholds`, #560) held on one path by §5's file gate ⇒ write 9, read by title first; one
+**Rule:** ≥ `hot-file-count` open issues (3 unless the repo declares it — `colab thresholds`, #560) held on one `contention.coupled` path by §5's file gate ⇒ write 9, read by title first; one
 restructuring that path is itself waiting ⇒ `self-deadlock` finding. Full text: [3-hot-file.md](3-hot-file.md).
 
 ## 4. Order by blast radius, not by number
@@ -210,7 +210,7 @@ queue order outranks yours among groups it names, never as an edge. Full text: [
 
 **Rule:** a dependency you determined (B needs something A produces) becomes an edge:
 `colab blocked <blocked> --by <blocker>`, which reads before and after writing. Never an edge
-for a queue position, for file contention (report that as a finding), or from titles alone.
+for a queue position, for a shared file (report that as a finding), or from titles alone.
 A partly-external wait is a finding; triage does not split it. `--clear --reason` only a false
 edge, never one whose blocker landed. Full text: [4-dependency-edges.md](4-dependency-edges.md).
 
@@ -228,9 +228,9 @@ named. Unclaimed (no half-claim) · verifiably undone (§2) · actionable · not
 missing — read `blockedBy`, judge each open blocker's state (§5.1), and empty means *nobody
 looked* · trunk CI alive — `colab trunk-ci` must print `GREEN` for trunk's current head sha,
 never a `gh run list` filter of your own; red with no patch ⇒ §5.2, once per repo · no live
-worktree on this group's own paths · no pending `needs-decision` (look for a recorded or
-unrecorded ruling first; a second question is `colab decision --reopen`; an ask in neither
-shape is a finding) · delivery code, docs-only or not asked · not held. Full text: [5-gates.md](5-gates.md).
+branch on this work or a `contention.coupled` path it edits (other overlap prints, #630) · no
+pending `needs-decision` (look for a recorded or unrecorded ruling first; a second question is
+`colab decision --reopen`; an ask in neither shape is a finding) · delivery code, docs-only or not asked · not held. Full text: [5-gates.md](5-gates.md).
 
 ### Every label that affects a start — who sets it, who clears it (#360)
 

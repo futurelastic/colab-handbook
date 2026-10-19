@@ -39,5 +39,5 @@ done
 Only `group:*` labels are ever in scope — never `in-progress`, `deps-checked`,
 `agent-filed`, `needs-plan`, or `epic`. Deleting the label does not erase the record:
 the closed issues' timelines still show it was applied, and each member's `Because:`
-comment (`CONVENTIONS.md` [§5](../../CONVENTIONS.md#grouping--issues-that-must-share-one-branch), *Grouping*) is the durable evidence of *why*, independent
+comment (`CONVENTIONS.md` [§5](../../CONVENTIONS.md#grouping--issues-that-change-the-same-logic-share-one-branch), *Grouping*) is the durable evidence of *why*, independent
 of whether the label object survives.

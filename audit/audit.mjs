@@ -264,7 +264,9 @@ function parseScalarValue(raw) {
   return val;
 }
 
-const NESTED_MAP_KEYS = new Set(["release", "owner", "gate", "thresholds"]); // owner: #394 · gate: #410 · thresholds: #560
+const NESTED_MAP_KEYS = new Set(["release", "owner", "gate", "thresholds", "contention"]); // owner: #394 · gate: #410 · thresholds: #560 · contention: #630
+// The one map whose pairs may hold an INLINE list (`coupled: [a, b]`) — still one level, still no block list (#630).
+const LIST_IN_MAP_KEYS = new Set(["contention"]);
 
 function parseFlatYaml(text) {
   const out = {};
@@ -291,7 +293,14 @@ function parseFlatYaml(text) {
         const [, indent, sub, subRaw] = pair;
         if (mapIndent === null) mapIndent = indent.length;
         const subTrimmed = subRaw.replace(/\s+#.*$/, "").trim();
-        if (indent.length === mapIndent && subTrimmed !== "" && !/^\[.*\]$/.test(subTrimmed)) {
+        const inlineList = /^\[.*\]$/.test(subTrimmed);
+        if (indent.length === mapIndent && inlineList && LIST_IN_MAP_KEYS.has(mapKey)) {
+          if (out[mapKey] === null || typeof out[mapKey] !== "object") out[mapKey] = {};
+          const inner = subTrimmed.slice(1, -1).trim();
+          out[mapKey][sub] = inner === "" ? [] : inner.split(",").map((s) => parseScalarValue(s));
+          return;
+        }
+        if (indent.length === mapIndent && subTrimmed !== "" && !inlineList) {
           if (out[mapKey] === null || typeof out[mapKey] !== "object") out[mapKey] = {};
           // #439: an unquoted whole number under `release:` is a number, as the CLI's YAML reader
           // reads it (`candidates-per-day: 1`, `final-grant: 7`) — kept a string, the one reading

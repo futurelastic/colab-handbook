@@ -59,14 +59,12 @@ relationship is the part the readiness gate above (and any other tool) reads.
 - **Never write an edge for file contention, and flag one you find (#371, `CONVENTIONS.md`
   [§5](../../CONVENTIONS.md#readiness--open-and-unclaimed-is-not-enough), *File
   contention is never an edge*).** Two issues that edit the same file do not need each
-  other's output. A real collision is a §3 group: one branch, one review cycle. A
+  other's output. A real collision (same logic) is a §3 group: one branch, one review cycle; a shared file alone is neither. A
   `blocked_by` chain gives one review cycle per member. When an existing edge's only
   justification is a shared file (the edge's comment or the ruling says "to avoid
   conflicts on `<file>`", or the two issues share nothing but a path), report it:
-  `finding: #B blocked_by #A only for shared file <path> — contention is a group, not an edge`.
-  When the file is one that every issue in a set must edit (an index, a registry, a
-  README with one row per item), also report that the file itself is the defect: make it
-  a pointer, then the items run in parallel. Do not clear the edge yourself. The
+  `finding: #B blocked_by #A only for shared file <path> — a shared file is neither an edge nor a group`.
+  Do not clear the edge yourself. The
   guarded `--clear` is for an edge you judged false on this pass, and a human may have
   wanted that sequence for a reason the record does not show.
 - **Split at the external-wait line — report it, do not block the whole issue (#371).**

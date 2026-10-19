@@ -1,13 +1,15 @@
-# code-triage · §3 Group — when issues must serialize
+# code-triage · §3 Group — when issues share one branch
 
 Reference for [`code-triage`](SKILL.md) §3. The core holds the step order, its rule and its stop
 condition; this file holds the step's full text — the commands, edge cases and the measurements
 behind them — moved here verbatim (#524).
 
 
-**Issues that touch the same files must serialize.** Two sessions editing the same
-files merge over each other; grouping is how that is prevented — the obligation is
-serialization, and how it is realized follows
+**Issues that change the same logic share one unit** — or where one needs the other's
+unmerged code (`CONVENTIONS.md` §5, *Readiness*, #630). Two sessions rewriting the same
+logic merge over each other; grouping is how that is prevented. **A shared file alone is
+not that**: report the overlap and start both — integration settles it, and only a
+`contention.coupled` path holds a start (§5's file gate). How a group is realized follows
 [`writes`](../../CONVENTIONS.md#writes--the-trunk-direct-veto-and-the-two-things-that-make-a-branch-mandatory)
 (⚖ #233 — a veto now, not a method choice): on `writes: isolated` (the veto), one
 branch, always — every rule below applies unchanged. On a repo permitting trunk-direct
@@ -19,11 +21,11 @@ itself is consumed by sessions that may be UNATTENDED, so `start:` never assumes
 attendance on its own — see §6.
 
 Group when:
-- the issues touch overlapping files or the same subsystem
-- one is a prerequisite of another
+- the issues change the same logic (the same function, branch, rule or contract)
+- one needs the other's unmerged code
 - they are children of the same epic and land together naturally
 
-Keep separate when the files are disjoint — parallel sessions are the point.
+Keep separate otherwise, including when they only share a file — parallel sessions are the point.
 
 **On `isolated`, name the group per [`CONVENTIONS.md` §4](../../CONVENTIONS.md#4-branches-and-commits):**
 every issue number in one **trailing** run, e.g. `fix/import-fixes-115-114-113`.

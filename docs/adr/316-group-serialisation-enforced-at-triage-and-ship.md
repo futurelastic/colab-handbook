@@ -1,5 +1,7 @@
 # A `group:` label is enforced at triage and ship, and triage promises only pass time
 
+> **Superseded in part by [ADR 630](630-shared-files-start-in-parallel.md) (2026-10-19):** a shared file alone no longer groups or serialises; only issues that change the same logic do, and only `contention.coupled` paths hold a start. The text below is kept as the record.
+
 ## Context
 
 `group:<key>` has meant "these issues collide on files and must serialise — usually one

@@ -8,7 +8,7 @@ behind them — moved here verbatim (#524).
 A group printed to a terminal dies with the terminal, and the next session claiming one
 member never learns the other exists — the exact collision this section computes in order
 to prevent. "Which files does this issue touch" is a judgement, so nothing downstream can
-recover it; **triage is the only writer** (`CONVENTIONS.md` [§5](../../CONVENTIONS.md#grouping--issues-that-must-share-one-branch), *Grouping*).
+recover it; **triage is the only writer** (`CONVENTIONS.md` [§5](../../CONVENTIONS.md#grouping--issues-that-change-the-same-logic-share-one-branch), *Grouping*).
 
 Two writes per group, and both are needed: the label makes it *queryable*, the comment
 carries the *evidence*.
@@ -16,7 +16,7 @@ carries the *evidence*.
 ```sh
 KEY=import-fixes            # the branch slug WITHOUT the trailing numbers (or any <login>/<machine>/ prefix)
 gh label create "group:$KEY" --color 5319E7 \
-  --description "Must share one branch — these issues touch the same files" 2>/dev/null || true
+  --description "Must share one branch — these issues change the same logic" 2>/dev/null || true
 for N in 115 114 113; do gh issue edit "$N" --add-label "group:$KEY"; done
 
 # then, once per member — the why, ending in the machine-readable pair

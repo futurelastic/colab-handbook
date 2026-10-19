@@ -3,8 +3,9 @@
 Reference for [`code-triage`](SKILL.md) §3. The core holds the step order, its rule and its stop
 condition; this file holds the step's full text — the commands and edge cases (#540).
 
-§5's file gate keeps an issue off READY while a live branch writes a path it will edit, and
-§3 records that collision on the issue's `Touches:` line. Each of those is correct for one
+§5's file gate keeps an issue off READY while a live branch writes a `contention.coupled`
+path it will edit (#630 — any other shared path no longer holds a start, so it is never
+counted here), and §3 records that collision on the issue's `Touches:` line. Each of those is correct for one
 issue. Neither notices when the **same path** is what holds many of them: the queue then
 drains one issue at a time through that file, and every new issue touching it joins the
 line. The usual cause is structural — a ledger every change appends to, a size-budget file,

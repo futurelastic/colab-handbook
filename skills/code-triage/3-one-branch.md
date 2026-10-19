@@ -5,7 +5,7 @@ condition; this file holds the step's full text — the commands, edge cases and
 behind them — moved here verbatim (#524).
 
 
-The group you just persisted is **one unit of work** (`CONVENTIONS.md` [§5](../../CONVENTIONS.md#grouping--issues-that-must-share-one-branch), *Grouping*).
+The group you just persisted is **one unit of work** (`CONVENTIONS.md` [§5](../../CONVENTIONS.md#grouping--issues-that-change-the-same-logic-share-one-branch), *Grouping*).
 So before §6 can offer anything for it, ask whether it already has a live branch — and
 whether it has **more than one**. Two live branches in one group is the collision §3
 computed the group in order to prevent, arriving anyway.

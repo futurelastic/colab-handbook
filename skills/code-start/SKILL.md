@@ -469,8 +469,8 @@ gh issue view $N --json labels -q '.labels[].name|select(startswith("group:"))'
   duplicate branch.
 - Use `colab worktrees`, not `colab claims`, for this: B3 already released the
   claims, so a kept worktree shows up in the worktree list and **nowhere else**.
-- **A `group:` label means your issue is not alone.** Triage found that these issues touch
-  the same files, so they must move on **one** branch (`CONVENTIONS.md` [§5](../../CONVENTIONS.md#grouping--issues-that-must-share-one-branch), *Grouping*).
+- **A `group:` label means your issue is not alone.** Triage found that these issues change
+  the same logic, so they must move on **one** branch (`CONVENTIONS.md` [§5](../../CONVENTIONS.md#grouping--issues-that-change-the-same-logic-share-one-branch), *Grouping*).
   List the members and read the `Because:` line that carries the collision:
   ```sh
   gh issue list --label "group:<key>" --state open        # every member
@@ -512,9 +512,8 @@ gh issue view $N --json labels -q '.labels[].name|select(startswith("group:"))'
   that gap does not shrink by waiting for a sweep; a repo mid-teardown is still a repo
   that has not finished one, which is exactly when this check has to be correct).
   Empty output — or a path that does not
-  exist yet — is clean ground. Non-empty means group onto their branch, or sequence
-  after it lands; never a parallel branch on a file someone else is holding
-  (`CONVENTIONS.md` [§5](../../CONVENTIONS.md#writing-a-conclusion-down--the-decision-and-the-document-are-two-units), *Writing a conclusion down*). **It fetches for you** — the
+  exist yet — is clean ground. Non-empty is information, not a stop: group onto their branch
+  only for the same logic or a `contention.coupled` path; else start in parallel (`CONVENTIONS.md` [§5](../../CONVENTIONS.md#writing-a-conclusion-down--the-decision-and-the-document-are-two-units), *Writing a conclusion down*, #630). **It fetches for you** — the
   enumeration reads local refs, so a branch pushed by another session and never fetched
   here would be invisible, and it refuses (exit 2) to report "clean ground" when it could
   not fetch rather than answering off stale data. A row reporting `unknown` still means
