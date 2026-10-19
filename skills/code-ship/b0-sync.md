@@ -188,7 +188,7 @@ git add -A && git commit -m "chore(sync): merge <base> + regen generated files"
 
 **`<base>` is the only ref this step may merge — never a sibling member's branch.** If
 this branch carries a `group:` label and a sibling still has unmerged work you want, the
-answer is to sequence behind it or group onto it (`CONVENTIONS.md` [§5](../../CONVENTIONS.md#grouping--issues-that-must-share-one-branch), *Grouping*),
+answer is to sequence behind it or group onto it (`CONVENTIONS.md` [§5](../../CONVENTIONS.md#grouping--issues-that-change-the-same-logic-share-one-branch), *Grouping*),
 never to pull it in here.
 Why: [ADR 536](../../docs/adr/536-code-ship-b0-sync-rationale.md).
 

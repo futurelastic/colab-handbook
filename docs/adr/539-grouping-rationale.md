@@ -1,6 +1,8 @@
 # Grouping: why, with the reasons
 
-Moved from [`CONVENTIONS.md` §5, *Grouping — issues that must share one branch*](../../CONVENTIONS.md#grouping--issues-that-must-share-one-branch) by #539 (phase 2 of #523). The rule stays there; this file holds its rationale. Headings below are added for navigation only.
+> **Superseded in part by [ADR 630](630-shared-files-start-in-parallel.md) (2026-10-19):** a shared file alone no longer groups or serialises; only issues that change the same logic do, and only `contention.coupled` paths hold a start. The text below is kept as the record.
+
+Moved from [`CONVENTIONS.md` §5, *Grouping — issues that must share one branch*](../../CONVENTIONS.md#grouping--issues-that-change-the-same-logic-share-one-branch) by #539 (phase 2 of #523). The rule stays there; this file holds its rationale. Headings below are added for navigation only.
 
 ## Why a group exists
 

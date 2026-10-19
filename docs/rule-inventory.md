@@ -986,9 +986,12 @@ Keys shortened because the sentence that followed them was moved whole (the rule
 | C5a.readiness.09 | default |  | File contention is never an edge. | File contention is never an edge (#371). | CONVENTIONS.md | #371 |
 | C5a.readiness.10 | explanation |  | Why contention is stated separately: six design issues chained to serialise one docs index. | It is stated separately because it was the | docs/adr/361-readiness-and-dependency-edges-rationale.md | #371 |
 | C5a.readiness.11 | default |  | A real collision is answered by Grouping: one group:<key> label, one branch, one review cycle, never a chain of edges. | one `group:<key>` label, one branch, one review cycle | CONVENTIONS.md | #371 |
-| C5a.readiness.12 | default |  | A shared file every unit of work must edit is a design defect: fix the file, do not serialize the work (mixed). | A shared file that every unit of work must edit is a design defect. | CONVENTIONS.md | #371 |
+| C5a.readiness.12 | explanation |  | Dropped by #630: a shared file every unit must edit no longer serializes anything, so it is no longer a process defect. | Dropped as a rule. With parallel starts | docs/adr/630-shared-files-start-in-parallel.md | #630 |
 | C5a.readiness.13 | default |  | An issue names the files it will edit on a Touches: line in its body. | An issue names the files it will edit on a `Touches:` line in its body | CONVENTIONS.md | #386 |
 | C5a.readiness.14 | default |  | code-triage appends a live branch's held path to Touches: in the same step it reports the collision. | that path to `Touches:` in the same step it reports the collision | CONVENTIONS.md | #386 |
+| C5a.readiness.31 | default |  | A collision is two issues that change the same logic, or one needing the other's unmerged code; a shared file alone is not one, and such issues start in parallel. | A shared file alone is not a collision | CONVENTIONS.md | #630 |
+| C5a.readiness.32 | default |  | A path declared in contention.coupled is the one place a shared file holds a start: no two live branches edit it at once. | the one place a shared file holds a start | CONVENTIONS.md | #630 |
+| C5a.readiness.33 | default |  | The Touches: line is a hint, not a brake. | a hint, not a brake | CONVENTIONS.md | #630 |
 | C5a.readiness.15 | default |  | Split an issue at the external-wait line: the part the repo can build now becomes its own issue; the part behind the wait keeps the edge or the park. | Split an issue at the external-wait line (#371). | CONVENTIONS.md | #371 |
 | C5a.readiness.16 | explanation |  | Why split: one issue bundled a buildable surface with a mode needing an outside API, holding back two more issues. | Measured: one issue bundled a surface the repo owned, whose | docs/adr/361-readiness-and-dependency-edges-rationale.md | #371 |
 | C5a.readiness.17 | default |  | code-triage reports the split as a structural finding; it does not split the issue itself. | `code-triage` reports the split as a structural finding | CONVENTIONS.md | #371 |
@@ -1590,8 +1593,8 @@ Each entry lists the rule text of a unit whose rationale clause moved out (the u
 
 | id | class | gate | rule | key | dest | source |
 |---|---|---|---|---|---|---|
-| C5c.grouping.01 | default |  | Issues that touch the same files must move on one branch; the group is a collision-prevention mechanism. | Issues that touch the same files must move on one branch | CONVENTIONS.md | — |
-| C5c.grouping.02 | default |  | A one-way blocked_by chain is the wrong shape for a group; when the only overlap is a file every unit must edit, fix the file before grouping on it (mixed). | fix the file before grouping on it | CONVENTIONS.md | #371 |
+| C5c.grouping.01 | default |  | Issues that change the same logic share one branch; a shared file alone is not a group — report the overlap, start both. | Issues that change the same logic share one branch | CONVENTIONS.md | #630 |
+| C5c.grouping.02 | explanation |  | Retired by #630: "fix the file before grouping on it" no longer applies, since a shared file never groups. | fix the file before grouping | docs/adr/630-shared-files-start-in-parallel.md | #630 |
 | C5c.grouping.03 | default |  | The group key is the branch slug minus its trailing numbers and minus any login/machine prefix; label every member group:<key>. | The key is the branch slug minus its trailing numbers | CONVENTIONS.md | — |
 | C5c.grouping.04 | default |  | Each member also gets a comment with machine-readable Group: and Because: lines, re-quoted from the current tree. | Each member also gets a comment | CONVENTIONS.md | — |
 | C5c.grouping.05 | default |  | The group:<key> label has three states: grouped on two or more open issues, spent on exactly one, and absent meaning ungrouped or nobody triaged. | on two-or-more open issues = grouped (start together or not at | CONVENTIONS.md | — |
@@ -1658,7 +1661,7 @@ Each entry lists the rule text of a unit whose rationale clause moved out (the u
 | C5c.switched.04 | default |  | Two configurations only: release (every remaining switch off) and development (every remaining switch on); CI runs the suite in both; an intermediate combination is unsupported. | Two configurations, never more | CONVENTIONS.md | #336 |
 | C5c.switched.05 | default |  | Absent a selector, the code runs the release configuration. | Absent a selector, the code runs the release configuration | CONVENTIONS.md | #336 |
 | C5c.switched.06 | default |  | Switch dependencies are declared and enforced: B's declaration names A and B's switch-removal child carries a native blocked_by edge on A's switch-removal child. | Switch dependencies are declared and enforced, following the issue graph | CONVENTIONS.md | #336 |
-| C5c.switched.07 | default |  | File-level collisions are not a switch's job; they still serialize through Grouping. | File-level collisions are not a switch's job | CONVENTIONS.md | #336 |
+| C5c.switched.07 | default |  | Collisions are not a switch's job; same-logic children still share a branch through Grouping, a shared file alone starts in parallel. | Collisions are not a switch's job | CONVENTIONS.md | #630 |
 | C5c.switched.08 | default |  | What a switch cannot hide stays backward-compatible while the epic is unfinished: schema changes add only and every destructive step happens in the switch-removal child. | What a switch cannot hide stays backward-compatible while the epic is | CONVENTIONS.md | #336 |
 | C5c.switched.09 | default |  | At most about 3 unfinished switched epics at once, and a switch older than about 4 weeks surfaces for a decision; both are findings for a human, never blockers. | At most ~3 unfinished switched epics at once | CONVENTIONS.md | #336 |
 | C5c.switched.10 | default |  | Releases are cut from trunk and versions live in tags only; a release/X.Y branch exists only when an older version needs a fix of its own. | Releases are cut from trunk; versions live in tags only | CONVENTIONS.md | #336 |
@@ -1762,7 +1765,7 @@ Each entry lists the rule text of a unit whose rationale clause moved out (the u
 | C5c.conclusion.02 | default |  | Step 1: the conclusion goes on an Issue immediately, before any file is touched. | the conclusion goes on an Issue immediately, before any file is touched | CONVENTIONS.md | — |
 | C5c.conclusion.03 | default |  | Step 2: the write is its own coding unit: own Issue, claim, branch off trunk in a worktree, wrapped normally. | own Issue, claim, branch off trunk in a worktree, wrapped normally | CONVENTIONS.md | — |
 | C5c.conclusion.04 | default |  | The collision unit is the file (the hunk), never the folder. | The collision unit is the file (the hunk), never the folder | CONVENTIONS.md | — |
-| C5c.conclusion.05 | default |  | Run colab holders <path>: empty output (or a nonexistent path) is clean ground; non-empty is a file-level group, so use the same branch or sequence after theirs lands. | Empty output (or a nonexistent path) is clean ground | CONVENTIONS.md | — |
+| C5c.conclusion.05 | default |  | Run colab holders <path>: empty output (or a nonexistent path) is clean ground; non-empty is information — group only on the same logic or a contention.coupled path. | Empty output (or a nonexistent path) is clean ground | CONVENTIONS.md | #630 |
 | C5c.conclusion.06 | default |  | An unknown holders verdict means look, never assume clear. | `unknown` still means *look*, never *assume clear* | CONVENTIONS.md | — |
 | C5c.conclusion.07 | default |  | colab holders fetches before it enumerates, as part of the check; with --no-fetch it still reports holders it can see but refuses the clean verdict with exit 2. | It fetches before it enumerates. | CONVENTIONS.md | — |
 | C5c.conclusion.08 | default |  | With no colab installed, run git fetch --prune origin first, then the git log --all --not origin/<trunk> --source sweep; every ref it lists is a candidate to check by hand. | No `colab` installed: `git fetch --prune origin` **first** | CONVENTIONS.md | — |
@@ -2799,6 +2802,13 @@ Reworded units, one bullet each. Row key changed: C6.rel.111 (the moved sentence
 | S2.writes.14 | default |  | Reclassifying an existing repo's descriptor to `serial-gated` is presentation-only and changes nothing observable. | is now presentation-only — | project.schema.md | #233 |
 | S2.writes.15 | default |  | `writes` is deliberately not coupled to `tier`, `production` or exposure, and no coherence rule is audited against them; do not add one. | No coherence rule is audited against `tier`/`production` | project.schema.md | — |
 | S2.writes.16 | default |  | There is no field for the place-claim itself; it lives in session state (`~/.colab/state.json`), never in this file. | never in this file. | project.schema.md | — |
+
+### `contention` — optional
+
+| id | class | gate | rule | key | dest | source |
+|---|---|---|---|---|---|---|
+| S2.contention.01 | default |  | `contention.coupled` lists exact paths or directory prefixes no two live branches may edit at once; it is the only path-keyed start brake. | It is the only path-keyed start brake | project.schema.md | #630 |
+| S2.contention.02 | default |  | The coupled list is inline only; a block list inside the map is an audit reader finding. | The list is **inline only** | project.schema.md | #630 |
 
 ### `promotion` — optional
 

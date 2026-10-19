@@ -1222,7 +1222,7 @@ issues that did not get finished; an unfinished issue that stays claimed silentl
 whoever picks it up next. (`colab ship` releases every claim it carried itself, worktree or
 not — #319.)
 
-**A group is not a chain.** A *group* is issues that touch the same code and must move
+**A group is not a chain.** A *group* is issues that change the same logic and must move
 together on one branch, spelled with trailing numbers in the branch name. A *chain* is
 issues that must happen in order, across separate branches — recorded as a dependency
 ([§5](#5-claiming-work--how-to-say-im-on-this)), never by a branch name.
@@ -2173,17 +2173,21 @@ Rejected alternative, with the measured chain: [ADR 361](docs/adr/361-readiness-
 
 **File contention is never an edge (#371).** Two issues that edit the same file have no
 dependency: neither needs anything the other produces. So an edge between them is a queue
-position, which the rule above already forbids. Contention has its own two answers:
+position, which the rule above already forbids.
 
-Why, with the measurements: [ADR 361](docs/adr/361-readiness-and-dependency-edges-rationale.md).
+**A collision is two issues that change the same logic, or one that needs the other's
+unmerged code (#630). A shared file alone is not a collision** — such issues start in
+parallel, and integration (a trial merge, landing order) settles the rest. The two answers:
 
 - **A real collision → *Grouping*** (below): one `group:<key>` label, one branch, one review
   cycle. It is never recorded as a chain of edges.
-- **A shared file that every unit of work must edit is a design defect. Fix the file; do not
-  serialize the work.**
+- **A path declared in [`contention.coupled`](project.schema.md#contention--optional)** is
+  the one place a shared file holds a start: no two live branches edit it at once.
 
-**Contention between an issue and a live branch is recorded in the issue text (#386).** An
-issue names the files it will edit on a `Touches:` line in its body. When `code-triage` measures an issue's file held by a live branch, it appends
+Why, with the measurements: [ADR 361](docs/adr/361-readiness-and-dependency-edges-rationale.md), [ADR 630](docs/adr/630-shared-files-start-in-parallel.md).
+
+**An issue names the files it will edit on a `Touches:` line in its body (#386)** — a hint,
+not a brake. When `code-triage` measures an issue's file held by a live branch, it appends
 that path to `Touches:` in the same step it reports the collision.
 
 **Split an issue at the external-wait line (#371).** When only part of an issue waits on
@@ -3423,17 +3427,15 @@ watch for clearing without a person acting again mid-cycle — whichever role it
 the grant itself is still only ever minted by a human (`COLAB_HUMAN=1`), and a reviewer
 grant clears the gate only where the repo's policy accepts that role.
 
-#### Grouping — issues that must share one branch
+#### Grouping — issues that change the same logic share one branch
 
-**Issues that touch the same files must move on one branch.**
-
-And when the only
-overlap is a file that every unit must edit, fix the file before grouping on it.
+**Issues that change the same logic share one branch** — a *collision* as *Readiness* defines
+it (#630). A shared file alone is not one: report the overlap, start both.
 
 ```sh
 KEY=import-fixes    # the branch slug WITHOUT the numbers: fix/import-fixes-115-114-113
 gh label create "group:$KEY" --color 5319E7 \
-  --description "Must share one branch — these issues touch the same files"
+  --description "Must share one branch — these issues change the same logic"
 for N in 115 114 113; do gh issue edit "$N" --add-label "group:$KEY"; done
 gh issue list --label "group:$KEY"                 # the members, from any machine
 ```
@@ -3470,23 +3472,16 @@ spawn.** Two enforcement points, and neither may be mistaken for the other:
   members can be landed one at a time.
 - **ship orders** — a ship lands one member branch at a time against a re-fetched base,
   and **never merges a sibling member's branch to borrow its unmerged fix**: sequence
-  behind it or group onto it (the same rule *Writing a conclusion down* below states for
-  a file-level group).
+  behind it or group onto it.
 
 `code-start` is not a third enforcement point — it is the reader that honours the offer.
 
-**The limit, stated rather than rounded up: triage sees pass time only.** A second branch
-created after a pass ends is invisible to that pass — no skill here polls, and a promise
-of mid-flight detection would be one nothing can keep. It is caught on the **next** pass,
-which is a real bound rather than a hope: a newly-pushed sibling ref moves `code-triage`
+**Triage sees pass time only.** A second branch created after a pass ends is invisible to
+that pass and is caught on the **next**: a newly-pushed sibling ref moves `code-triage`
 §0's branch digest, so the next ping cannot short-circuit and takes a full pass.
 
-The alternatives weighed and rejected — including a live re-check at ship time, and a
-path-keyed check whose false-positive rate was measured at 6-of-6 on this repo's own
-history — are recorded in
-[`docs/adr/316-group-serialisation-enforced-at-triage-and-ship.md`](docs/adr/316-group-serialisation-enforced-at-triage-and-ship.md).
-
-Why, with the measurements: [ADR 316](docs/adr/316-grouping-measured-incident-rationale.md).
+Why, the alternatives rejected, and why a shared file alone no longer groups: ADR
+[316](docs/adr/316-grouping-measured-incident-rationale.md), [316 (enforcement)](docs/adr/316-group-serialisation-enforced-at-triage-and-ship.md), [630](docs/adr/630-shared-files-start-in-parallel.md).
 
 #### Scope — diagnosing across repos is not license to act in them
 
@@ -3516,8 +3511,8 @@ items differ on paper:
 2. **Different blockers** — if item A waits on something item B does not, sharing a
    claim lets one hold the other hostage.
 3. **Disjoint file sets** — items touching non-overlapping files are not one piece of
-   work. (Overlapping files is the opposite finding — the argument for one *branch*,
-   never one issue: see *Grouping*, above.)
+   work. (Changing the same logic is the opposite finding — the argument for one
+   *branch*, never one issue: see *Grouping*, above.)
 
 **No backfill** — this governs what gets filed next, not existing checklist issues;
 converting one is optional cleanup, never required by adoption. **Not every checklist
@@ -3587,8 +3582,8 @@ it is ruled otherwise, this paragraph changes, and nothing else here needs to.*
    B's feature needs epic A's, B's declaration names A (below) **and** B's
    switch-removal child carries a native `blocked_by` edge on A's switch-removal child
    (*Readiness*, above).
-4. **File-level collisions are not a switch's job.** Two epics' children touching one
-   file still serialize through *Grouping*, above.
+4. **Collisions are not a switch's job.** Two epics' children that change the same logic
+   still share a branch through *Grouping*, above; a shared file alone starts in parallel.
 5. **What a switch cannot hide stays backward-compatible while the epic is
    unfinished.** Schema changes **add only**; old config files and old API responses
    keep working; every destructive step — dropping a column, retiring a config key,
@@ -3827,9 +3822,9 @@ adding a new file under one tree cannot conflict:
 colab holders <path>          # fetches first; refuses to say "clean" if it could not
 ```
 
-Empty output (or a nonexistent path) is clean ground; non-empty is a file-level group —
-same branch, or sequence after theirs lands. `unknown` still means *look*, never *assume
-clear*.
+Empty output (or a nonexistent path) is clean ground; non-empty is information — group
+only when theirs changes the same logic (*Grouping*) or the path is `contention.coupled`.
+`unknown` still means *look*, never *assume clear*.
 
 **It fetches before it enumerates.**
 `--no-fetch` (offline, or a pinned view) still reports holders it *can* see, but

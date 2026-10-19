@@ -1099,6 +1099,21 @@ machine at one moment — the same reasoning that keeps `deploys: {host: branch}
 this schema ([§2](CONVENTIONS.md#2-tiers)) applies here: a path on one host is meaningless
 read from another, so it lives in session state (`~/.colab/state.json`), never in this file.
 
+### `contention` — optional
+
+```yaml
+contention:
+  coupled: [database/migrations/, db/schema.rb, openapi.yaml]   # absent = [] = nothing coupled
+```
+
+`coupled` lists the repo paths — an exact file, or a directory prefix ending in `/` — that no
+two live branches may edit at once: migrations, a schema, a public API contract (#630). It is
+the only path-keyed start brake: an orchestrator, and `code-triage` §5's file gate, hold an
+issue's start only while a live branch edits a path it will edit **and** that path is listed
+here. Every other shared file starts in parallel (`CONVENTIONS.md` §5, *Readiness*). No glob.
+The list is **inline only** — the audit's reader takes no block list inside a map and reports
+one as a finding; an unreadable value reads as absent.
+
 ### `promotion` — optional
 
 ```yaml

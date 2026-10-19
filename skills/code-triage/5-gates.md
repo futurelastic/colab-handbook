@@ -41,17 +41,18 @@ with the blocker named:
       structurally cannot exist.
       **Red, and no patch yet?** That is not only a blocked gate — it is §5.2's step,
       run once for the repo before ordering, not once per group.
-- [ ] **No live worktree owns those files** — `colab worktrees`, and
-      `git branch -a --list '*<n>*'` after `git fetch --prune`. A clean label does
-      not prove clean ground: claims are released unconditionally at wrap, so an
-      abandoned branch can exist with no claim on it at all.
-      **Scope the check to this group's own deliverable paths.** `colab worktrees`
-      lists every live worktree in the repo, most of them on files this group never
-      touches; a repo-wide list is not evidence of contention unless it intersects
-      the paths this group would actually edit. An empty intersection is not a
-      finding — do not narrate it in the report, and do not let it vary the
-      per-beat verdict when the only thing that moved was an unrelated worktree.
-      Report contention only when there is a real path overlap, and name it.
+- [ ] **No live branch already carries this work, and none holds a coupled path it
+      will edit** — `colab worktrees`, and `git branch -a --list '*<n>*'` after
+      `git fetch --prune`. A clean label does not prove clean ground: claims are
+      released unconditionally at wrap, so an abandoned branch can exist with no claim
+      on it at all. **The file half of this gate holds only `contention.coupled` paths**
+      (`project.schema.md`, #630): a live branch editing a path this group will edit
+      blocks it only when that path is listed there. Any other overlap is printed as
+      `overlap: <path> (<branch>)` — information, never a blocker; the two start in
+      parallel and integration settles the rest. **Scope the check to this group's own
+      deliverable paths** — a repo-wide worktree list is not evidence unless it
+      intersects them. An empty intersection is not a finding — do not narrate it, and
+      do not let it vary the per-beat verdict when only an unrelated worktree moved.
       **A group's own members are the exception to "do not narrate it".** Where this
       group carries a `group:` label, a second live branch across its members is a
       **finding** regardless of whether this gate leaves the group ready — see §3,
