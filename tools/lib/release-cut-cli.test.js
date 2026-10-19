@@ -430,7 +430,9 @@ test('refuses: the full suite — a workflow whose only run was cancelled', () =
   setRuns(fx, [{ workflowName: 'lint' }, { workflowName: 'test-suite', conclusion: 'cancelled' }]);
   const r = cut(fx);
   assertRefused(fx, r, 'full-suite', /test-suite \(cancelled\)/);
-  assert.strictEqual(r.body.checks.find((c) => c.condition === 'ci-green').ok, true, 'ship\'s check alone reads this green — that is the gap');
+  // #628 closed the gap this line used to pin (ship's check alone read this green): ci-green now
+  // refuses too, naming the cancelled-only workflow.
+  assertRefused(fx, r, 'ci-green', /test-suite/);
 });
 
 test('refuses: a destructive schema change since the last final tag', () => {
