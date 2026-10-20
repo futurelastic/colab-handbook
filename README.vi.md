@@ -153,7 +153,7 @@ vào nhau.
   dòng, 2 plan đầy đủ từ `code-plan`.
 
 Người mới: đọc [`CONVENTIONS.md` §1](CONVENTIONS.md#1-the-model-in-one-picture)
-(mô hình) và [§11](CONVENTIONS.md#11-quick-reference) (tra nhanh) trước. Phần
+(mô hình) và [bảng tra nhanh](tools/docs/quick-reference.md) trước. Phần
 còn lại của `CONVENTIONS.md` là tài liệu tra cứu — cần gì tra nấy, đừng đọc từ
 đầu tới cuối.
 
@@ -192,7 +192,8 @@ này. Chạy lại về sau, chính skill đó kéo một repo đã adopt lên b
 nhất mà không làm mất phần bạn đã sửa.
 
 Làm bằng tay thì cũng đúng các bước đó (checklist đầy đủ:
-[`CONVENTIONS.md` §9](CONVENTIONS.md#9-adopting-this)):
+[`skills/handbook-sync/2-adoption-procedure.md`](skills/handbook-sync/2-adoption-procedure.md);
+các quy tắc nó phục vụ: [`CONVENTIONS.md` §9](CONVENTIONS.md#9-adopting-this)):
 
 1. `colab adopt` — trả lời hai câu hỏi về cổng và ghi `.github/project.yml`. Nó dừng ở
    đó và in ra các bước còn lại.

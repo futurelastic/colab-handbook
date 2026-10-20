@@ -6,32 +6,33 @@ behind them — moved here verbatim (#524).
 
 ### The checklist is not in this file, on purpose
 
-**[`CONVENTIONS.md` §9 "Adopting this"](../../CONVENTIONS.md#9-adopting-this) is the
-procedure** — nine steps, already written, already correct. Open it and work it in
-order. This section adds only what [§9](../../CONVENTIONS.md#9-adopting-this) cannot know: how to interleave it with your
-session, which step blocks, and which steps get skipped.
+**[`2-adoption-procedure.md`](2-adoption-procedure.md) is the procedure** — nine steps,
+already written, already correct, moved there verbatim from [`CONVENTIONS.md` §9 "Adopting
+this"](../../CONVENTIONS.md#9-adopting-this) by #640; §9 keeps the adoption contract those steps
+serve. Open the procedure and work it in order. This section adds only what the procedure cannot
+know: how to interleave it with your session, which step blocks, and which steps get skipped.
 
 **Step 1 (the shared question set) is `colab adopt` — run the tool, don't walk the
 five rows by hand (#199).** It detects what the repo already states, asks only what
 is missing (flags, or a prompt at a terminal), derives the rest, and writes
 `.github/project.yml` in one act, append-only. This skill's job around it is
 unchanged: judge whether a *detected* candidate (a stack manifest, a channel
-candidate) is actually right before answering with it, decide what [§9](../../CONVENTIONS.md#9-adopting-this)'s "going
+candidate) is actually right before answering with it, decide what [the procedure](2-adoption-procedure.md)'s "going
 live" ladder means for THIS repo, and carry the session/Issue ceremony `colab
 adopt` deliberately does not touch. What moved to the tool is steps 3–7 of typing
 the answers in — this skill still grafts, proposes, and judges; it never writes
 the descriptor itself.
 
-Do **not** copy [§9](../../CONVENTIONS.md#9-adopting-this)'s steps into this skill, or into the Issue as a restated list. Two
+Do **not** copy the procedure's steps into this file, into `SKILL.md`, or into the Issue as a restated list. Two
 copies of one checklist drift, and the disagreement is then found by whoever followed
 the wrong one. This handbook has paid for that twice in a single day — a duplicated
 detection predicate that broke invisibly, and a list that quietly conflated two
-different things. Link to [§9](../../CONVENTIONS.md#9-adopting-this), summarise its outcomes, never fork it.
+different things. Link to the procedure, summarise its outcomes, never fork it.
 
 ### The ordering trap — you cannot claim before the label exists
 
-[§9](../../CONVENTIONS.md#9-adopting-this)'s step 3 creates the `in-progress` label, because on an unadopted repo it does not
-exist. But **code-start claims the Issue in its own step 3, before any of [§9](../../CONVENTIONS.md#9-adopting-this) runs** —
+[The procedure](2-adoption-procedure.md)'s step 3 creates the `in-progress` label, because on an unadopted repo it does not
+exist. But **code-start claims the Issue in its own step 3, before any of [the procedure](2-adoption-procedure.md) runs** —
 so the claim depends on machinery adoption has not built yet.
 
 On the path most sessions take, the failure is quiet:
@@ -43,7 +44,7 @@ On the path most sessions take, the failure is quiet:
   nothing. That is precisely the collision `CONVENTIONS.md` [§5](../../CONVENTIONS.md#5-claiming-work--how-to-say-im-on-this) exists to prevent,
   reached from underneath.
 
-So **pull [§9](../../CONVENTIONS.md#9-adopting-this)'s step 3 forward, ahead of the claim** — and provision the **whole label
+So **pull [the procedure](2-adoption-procedure.md)'s step 3 forward, ahead of the claim** — and provision the **whole label
 set** while you are there, not just the claim label:
 
 ```sh
@@ -55,36 +56,36 @@ creates the whole twenty-three-name set in one idempotent call (#206) — readin
 `tools/lib/labels.js`'s `CONVENTION_LABELS`, never restated here — and creating a
 subset is the exact bug this leads to: a `deps-checked` never created leaves a
 readiness column that can never fill, and nothing downstream can tell *free* from
-*nobody looked*. Create the set, not the claim label alone. Then claim, then work [§9](../../CONVENTIONS.md#9-adopting-this)
+*nobody looked*. Create the set, not the claim label alone. Then claim, then work [the procedure](2-adoption-procedure.md)
 from its step 1. Safe to re-run on a repo that already has some or all of the labels —
 which matters, because partial adoption is the normal case.
 
 **No GitHub remote at all?** There is no label and no claim to be made. Take
-code-start's notes-file path; [§9](../../CONVENTIONS.md#9-adopting-this)'s steps 3 and 4 and the GitHub half of 7 do not
+code-start's notes-file path; [the procedure](2-adoption-procedure.md)'s steps 3 and 4 and the GitHub half of 7 do not
 apply. Say so in your report rather than leaving them looking undone.
 
 ### The question set blocks — ask it, never infer it
 
-[§9](../../CONVENTIONS.md#9-adopting-this)'s step 1 is a **shared question set — five questions, not one** — and every
+[The procedure](2-adoption-procedure.md)'s step 1 is a **shared question set — five questions, not one** — and every
 answer is a **judgement, not yours to make.** `CLAUDE.md` is explicit about the
 oldest of them: a missing marker means treat the repo as Tier B and *propose* the
 file. Proposing is the agent's job; deciding is not, for `tier` or for any of the
 newer four (`room`, `exposure`, `writes`, `channels`).
 
-**Do not restate the five rows here** — that is the exact fork [§9](../../CONVENTIONS.md#9-adopting-this)'s own text
-forbids, one section above this one. Link to [§9](../../CONVENTIONS.md#9-adopting-this)'s table, and know the two outcomes
+**Do not restate the five rows here** — that is the exact fork [the procedure](2-adoption-procedure.md)'s own text
+forbids, one section above this one. Link to [the procedure](2-adoption-procedure.md)'s table, and know the two outcomes
 that matter for how you run a sync:
 
 - **You may propose, from committed evidence, and never conclude on your own:**
   a non-null `production:` or a committed deploy path lets you propose `exposure:
   live` or `released` — never `none` or `self`, because those declare the *absence*
   of a consumer, which nothing in a checkout can verify. The identical asymmetry
-  [§9](../../CONVENTIONS.md#9-adopting-this) states for `exposure` applies to reading a tier off a `Dockerfile`, a URL in
+  [the procedure](2-adoption-procedure.md) states for `exposure` applies to reading a tier off a `Dockerfile`, a URL in
   a README, or a deploy workflow that may be dormant: guessing costs nothing at
   the time it is written and misroutes something later. A repo that describes
   nothing is more honest than one that describes itself wrongly.
 - **Asking is not writing.** When a sync meets a repo missing one of the newer
-  four axes, put [§9](../../CONVENTIONS.md#9-adopting-this)'s question to the human and record the answer through
+  four axes, put [the procedure](2-adoption-procedure.md)'s question to the human and record the answer through
   `colab adopt` (`--room`/`--exposure`/`--writes`/`--channels`, or run it at a
   terminal and answer the prompt) — never fill the gap yourself, and never
   "resolve" the undeclared-pairing advisory (`exposure: none` +
@@ -96,7 +97,7 @@ that matter for how you run a sync:
   answer before it goes in.
 
 Two things not to do while the trunk/tier answer is still pending: do not create
-`dev` "to be ready" ([§9](../../CONVENTIONS.md#9-adopting-this) step 9) — `trunk:` is whatever the finished descriptor
+`dev` "to be ready" ([the procedure](2-adoption-procedure.md) step 9) — `trunk:` is whatever the finished descriptor
 declares, never assumed ahead of it — and if the answer is the legacy Tier B (trunk
 `main`, no `exposure`), `production: null` and `deploy: none` are the finished values, not
 placeholders to revisit.
@@ -104,7 +105,7 @@ placeholders to revisit.
 ### Partial adoption is the normal case — resume, don't restart
 
 A marker but no label; CI but no registration; everything but the CLAUDE pointer.
-Treat [§9](../../CONVENTIONS.md#9-adopting-this) as a checklist to **complete**, and probe each step rather than assume it:
+Treat [the procedure](2-adoption-procedure.md) as a checklist to **complete**, and probe each step rather than assume it:
 
 ```sh
 colab adopt --repo . --no-verify        # step 2 — one command: which of the five §9 rows
@@ -118,16 +119,16 @@ ls .github/workflows/                   # step 6
 colab register --list                   # step 7 — is this repo in BOTH registries?
 ```
 
-Every step of [§9](../../CONVENTIONS.md#9-adopting-this) is safe to re-run, and `colab register` documents it in its own help
+Every step of [the procedure](2-adoption-procedure.md) is safe to re-run, and `colab register` documents it in its own help
 ("Idempotent: registering an already-registered repo reports it and exits 0"). Record
-the *outcomes* in the Issue as a checklist; leave the *steps* in [§9](../../CONVENTIONS.md#9-adopting-this).
+the *outcomes* in the Issue as a checklist; leave the *steps* in [the procedure](2-adoption-procedure.md).
 
-**Leave existing branches alone** ([§9](../../CONVENTIONS.md#9-adopting-this) step 8) — [§4](../../CONVENTIONS.md#4-branches-and-commits) grandfathers them, and a first sync
+**Leave existing branches alone** ([the procedure](2-adoption-procedure.md) step 8) — [§4](../../CONVENTIONS.md#4-branches-and-commits) grandfathers them, and a first sync
 is exactly when someone is tempted to tidy. Renaming one can break a live worktree.
 
 ### Runner preflight — before `colab template` writes `runs-on`
 
-Step 6 of [§9](../../CONVENTIONS.md#9-adopting-this) (`colab template <name>`) stamps a CI workflow whose jobs
+Step 6 of [the procedure](2-adoption-procedure.md) (`colab template <name>`) stamps a CI workflow whose jobs
 default to `runs-on: ubuntu-latest`, with a `# EDIT: self-hosted label if this repo
 needs one.` comment left for a human to act on later. On a **private repo owned by a
 personal account**, that default is not a placeholder to revisit — it is a red trunk
@@ -189,7 +190,7 @@ empty preflight failure has none of those — go do the runner check above inste
 
 ### `exposure: released` — the release rung is part of adoption (#492)
 
-[§9](../../CONVENTIONS.md#9-adopting-this) step 6 does not end at CI on a released repo: the
+[the procedure](2-adoption-procedure.md) step 6 does not end at CI on a released repo: the
 release rung ([§6](../../CONVENTIONS.md#6-releases)) is wired in the same pass, or the repo
 never cuts a candidate until someone notices. `colab adopt` prints what is still missing as
 extra step-6 lines — read them there; this section adds only the judgement around them.
@@ -215,7 +216,7 @@ extra step-6 lines — read them there; this section adds only the judgement aro
 
 ### Registration is the step that gets skipped
 
-**`colab register` ([§9](../../CONVENTIONS.md#9-adopting-this) step 7) is last on the list and first to be forgotten**, because
+**`colab register` ([the procedure](2-adoption-procedure.md) step 7) is last on the list and first to be forgotten**, because
 nothing local breaks without it. The repo builds, CI passes, the session wraps — and
 the repo simply never appears in a sweep, accumulating drift nobody can see. It is the
 mechanism by which a cohort that size goes unnoticed. Run it, do not defer it.
@@ -236,5 +237,5 @@ fleet list, `C` = the ports config); a path in only one is drift, and the comman
 exits non-zero when it finds any. Paste that output onto the Issue. A repo is adopted
 when the fleet can see it, and this is the evidence for it.
 
-Then return to §1. Anything you copied in [§9](../../CONVENTIONS.md#9-adopting-this)'s step 6 is now a stamped artifact, and
+Then return to §1. Anything you copied in [the procedure](2-adoption-procedure.md)'s step 6 is now a stamped artifact, and
 the rest of this skill applies to it in the ordinary way.

@@ -11,15 +11,16 @@ history), which served as each section's checklist.
 
 - a row's key is no longer found in the file its `dest` names — the rule was reworded, moved
   or dropped. Update the row in the same commit as the edit, or restore the rule;
-- a `hard` or `default` row's `dest` is not `CONVENTIONS.md`, `project.schema.md` or a file
+- a `hard` or `default` row's `dest` is not `CONVENTIONS.md`, `project.schema.md`, a file
   under `tools/docs/` — the CLI's own docs, where mechanism text moves while the CLI still
-  enforces it (#635; [`tools/docs/README.md`](../tools/docs/README.md)). Only an `explanation`
-  may move to `docs/adr/` or `docs/gotchas.d/`;
+  enforces it (#635; [`tools/docs/README.md`](../tools/docs/README.md)) — or a file under
+  `skills/handbook-sync/`, where §9's adoption steps moved with their rows (#640). Only an
+  `explanation` may move to `docs/adr/` or `docs/gotchas.d/`;
 - a row's id is empty, repeated, or not of the shape `C<§>.<sub>.<nn>` / `S<§>.<sub>.<nn>`;
 - a row's `dest` carries an `#anchor` that is not a heading of that file — a dead anchor;
 - a `hard` row's key is not inside a unit carrying a Hard marker, or one of its gate literals
   is no longer in the named file — the rule may no longer be gated;
-- a marker in either document, or in a file under `tools/docs/`, holds no `hard` row's key;
+- a marker in either document, or in a file under `tools/docs/` or `skills/handbook-sync/`, holds no `hard` row's key;
 - a `**[Hard <id> — refuse: …]**` marker cites an id that is not a `hard` row whose key sits
   in that unit, or its refuse clause is under three words or names a tool (a code span,
   `colab`, `gh`, `hook`). It says what must be refused; who refuses it is the adopter's.
@@ -156,6 +157,26 @@ readiness, the park and holds, the decision gate's rules, the red-trunk stubs an
 *Scheduled drivers* on verbatim, plus the claims and decisions contract in nine new rows,
 `C5.contract.01`–`09`.
 
+Result for #640 (base `69ca671d`; §9's adoption procedure moved verbatim to
+`skills/handbook-sync/2-adoption-procedure.md`, §11 to `tools/docs/quick-reference.md`, §10's lessons
+into `docs/adr/539-anti-patterns-rationale.md`, each heading left as a stub; three restated rules cut
+to a link, each excused in [`move-ledger-640.md`](move-ledger-640.md)), run as
+`node scripts/check-doc-move.mjs --base 69ca671d --allow docs/move-ledger-640.md`:
+
+```
+CONVENTIONS.md @ 69ca671d: units 871 · found whole 868 · by sentence 0 · now 2973 lines
+project.schema.md @ 69ca671d: units 476 · found whole 476 · by sentence 0 · now 1802 lines
+missing 0 · headings gone from their file 0 · ledger entries 3 (stale 0)
+```
+
+The 132 rows whose text moved keep their ids; only `dest` changed, to
+`skills/handbook-sync/2-adoption-procedure.md` (113) or `tools/docs/quick-reference.md` (10).
+The 8 `C10.anti.*` rows became `explanation`, `dest` the ADR: each lesson is already a rule in the
+section it governs, and §10 had become the story's caption. `C5a.mirror.01` now names
+`tools/docs/claims.md`, where #639 moved the rule its key had also matched in §11; `C2x.veto.10` was
+re-keyed to the link that replaced its restatement. §9 keeps the fixtures rule verbatim and gains
+the adoption contract in nine new rows, `C9.contract.01`–`09`.
+
 Phase 2 split rationale off rule sentences under the ruling on #539 (option A): the rule half
 keeps its meaning and modal verb, the rationale moves verbatim to `docs/adr/539-*.md`, and each
 reworded unit the check could not find by itself is listed in a `#539 ledger` block after its
@@ -268,7 +289,7 @@ Two units reworded on purpose (base `c56bac20`), each to carry one new clause in
 | id | class | gate | rule | key | dest | source |
 |---|---|---|---|---|---|---|
 | C2.frame.01 | default | | Read §2 through `exposure`: what consumes a merge sets the gate count — `none`/`self` 0, `live` 1, `released` 2. | What consumes a merge sets the gate count | CONVENTIONS.md | #144 |
-| C2.frame.02 | default | | `tier:` is a legacy read of exposure: `A` → `released`, `C` → `live`, `B` → no derivable value. | `tier:` is a legacy read of it | CONVENTIONS.md | #144 |
+| C2.frame.02 | default | | `tier:` is a legacy read of exposure, mapped once in *Exposure* (`A` → `released`, `C` → `live`, `B` → no derivable value). | `tier:` is a legacy read of it | CONVENTIONS.md | #144 |
 | C2.frame.03 | default | | A bare `B` is never renamed to an exposure value without asking what consumes the repo. | a bare `B` cannot be renamed to an exposure value | CONVENTIONS.md | #523 |
 
 
@@ -400,29 +421,29 @@ Two units reworded on purpose (base `c56bac20`), each to carry one new clause in
 
 | id | class | gate | rule | key | dest | source |
 |---|---|---|---|---|---|---|
-| C10.anti.01 | default | | A branch with no pipeline hanging off it decays into noise; Tier B is the default and going live starts with adding the deploy workflow. | A branch with no pipeline hanging off it decays into noise | CONVENTIONS.md | — |
-| C10.anti.02 | default | | Three tiers without automated promotion is a tax on every hotfix; use two. | Three tiers without automated promotion is a tax on every hotfix | CONVENTIONS.md | — |
-| C10.anti.03 | default | | Do not copy CI that encodes intentions nobody adopted. | Copy-pasted CI encodes intentions nobody adopted | CONVENTIONS.md | — |
-| C10.anti.04 | default | | Do not claim a gate you do not have; a tier claiming a release gate while deploying on `main` push is a finding. | claiming a gate you do not have is not | CONVENTIONS.md | — |
-| C10.anti.05 | default | | Docs must describe the repo as it is; an aspirational doc is worse than none. | An aspirational doc is worse than no doc | CONVENTIONS.md | — |
-| C10.anti.06 | default | | Reference config by name, not by copy, so branch references do not drift. | Config drifts silently when copied rather than referenced | CONVENTIONS.md | — |
-| C10.anti.07 | default | | A decision goes on an Issue before any file is touched; work only agreed in a room is undocumented once it closes. | Work only agreed to in a room is undocumented the moment the room closes | CONVENTIONS.md | — |
-| C10.anti.08 | default | | A silent version default hides behind green CI (see §7). | the bug was invisible because CI was green the whole time | CONVENTIONS.md | — |
+| C10.anti.01 | explanation | | A branch with no pipeline hanging off it decays into noise; Tier B is the default and going live starts with adding the deploy workflow. | A branch with no pipeline hanging off it decays into no| docs/adr/539-anti-patterns-rationale.md | — |
+| C10.anti.02 | explanation | | Three tiers without automated promotion is a tax on every hotfix; use two. | Three tiers without automated promotion is a tax on every hot| docs/adr/539-anti-patterns-rationale.md | — |
+| C10.anti.03 | explanation | | Do not copy CI that encodes intentions nobody adopted. | Copy-pasted CI encodes intentions nobody adop| docs/adr/539-anti-patterns-rationale.md | — |
+| C10.anti.04 | explanation | | Do not claim a gate you do not have; a tier claiming a release gate while deploying on `main` push is a finding. | claiming a gate you do not have is | docs/adr/539-anti-patterns-rationale.md | — |
+| C10.anti.05 | explanation | | Docs must describe the repo as it is; an aspirational doc is worse than none. | An aspirational doc is worse than no | docs/adr/539-anti-patterns-rationale.md | — |
+| C10.anti.06 | explanation | | Reference config by name, not by copy, so branch references do not drift. | Config drifts silently when copied rather than referen| docs/adr/539-anti-patterns-rationale.md | — |
+| C10.anti.07 | explanation | | A decision goes on an Issue before any file is touched; work only agreed in a room is undocumented once it closes. | Work only agreed to in a room is undocumented the moment the room clo| docs/adr/539-anti-patterns-rationale.md | — |
+| C10.anti.08 | explanation | | A silent version default hides behind green CI (see §7). | the bug was invisible because CI was green the whole t| docs/adr/539-anti-patterns-rationale.md | — |
 
 ### 11. Quick reference
 
 | id | class | gate | rule | key | dest | source |
 |---|---|---|---|---|---|---|
-| C11.quick.01 | default | | Start by listing taken issues and claiming with `gh issue edit N --add-assignee @me --add-label in-progress`. | gh issue edit N --add-assignee @me --add-label in-progress | CONVENTIONS.md | — |
-| C11.quick.02 | default | | Leave `agent-filed`, `epic`, `delivery:*` and `deferred:*` issues alone: a human approves, a container is never a start, non-code work is routed, parked work names a wake condition. | a container for sub-issues — never a start candidate | CONVENTIONS.md | — |
-| C11.quick.03 | default | | Issues under one `group:<key>` label share one branch and start together. | must share one branch — start them together | CONVENTIONS.md | — |
-| C11.quick.04 | default | | Cut the branch from a fresh `origin/<trunk>`, never local trunk; the `<login>/<machine>/` prefix only under `branchPrefix: machine`. | cut from a FRESH origin/<trunk>, never local trunk | CONVENTIONS.md | — |
-| C11.quick.05 | default | | Before editing an existing file run `colab holders <path>`, which refuses to answer "clean ground" if it could not fetch. | REFUSES (exit 2) to answer | CONVENTIONS.md | — |
-| C11.quick.06 | default | | Finish with `colab landed --worktree <name>`: landed means teardown, cargo means merge. | landed → teardown, cargo → merge | CONVENTIONS.md | — |
-| C11.quick.07 | default | | Release both halves of a claim; a lone half is a half-claim, and `<claimer>` is `@me` only if you claimed it. | both halves — one alone is a half-claim | CONVENTIONS.md | — |
-| C11.quick.08 | default | | Release a Tier A / `released` repo by promoting `dev` into `main` with `--no-ff`, never squash. | --no-ff, never squash | CONVENTIONS.md | — |
-| C11.quick.09 | default | | `colab release cut` makes a candidate and refuses unless §6's four conditions hold; the final tag is automatic after 3 clean days where nothing deploys and a human act where the tag deploys. | refuses unless §6's four conditions hold | CONVENTIONS.md | — |
-| C11.quick.10 | default | | The version number is computed and its reasoning goes in the release notes. | its reasoning goes in the release notes | CONVENTIONS.md | — |
+| C11.quick.01 | default | | Start by listing taken issues and claiming with `gh issue edit N --add-assignee @me --add-label in-progress`. | gh issue edit N --add-assignee @me --add-label in-progress | tools/docs/quick-reference.md | — |
+| C11.quick.02 | default | | Leave `agent-filed`, `epic`, `delivery:*` and `deferred:*` issues alone: a human approves, a container is never a start, non-code work is routed, parked work names a wake condition. | a container for sub-issues — never a start candidate | tools/docs/quick-reference.md | — |
+| C11.quick.03 | default | | Issues under one `group:<key>` label share one branch and start together. | must share one branch — start them together | tools/docs/quick-reference.md | — |
+| C11.quick.04 | default | | Cut the branch from a fresh `origin/<trunk>`, never local trunk; the `<login>/<machine>/` prefix only under `branchPrefix: machine`. | cut from a FRESH origin/<trunk>, never local trunk | tools/docs/quick-reference.md | — |
+| C11.quick.05 | default | | Before editing an existing file run `colab holders <path>`, which refuses to answer "clean ground" if it could not fetch. | REFUSES (exit 2) to answer | tools/docs/quick-reference.md | — |
+| C11.quick.06 | default | | Finish with `colab landed --worktree <name>`: landed means teardown, cargo means merge. | landed → teardown, cargo → merge | tools/docs/quick-reference.md | — |
+| C11.quick.07 | default | | Release both halves of a claim; a lone half is a half-claim, and `<claimer>` is `@me` only if you claimed it. | both halves — one alone is a half-claim | tools/docs/quick-reference.md | — |
+| C11.quick.08 | default | | Release a Tier A / `released` repo by promoting `dev` into `main` with `--no-ff`, never squash. | --no-ff, never squash | tools/docs/quick-reference.md | — |
+| C11.quick.09 | default | | `colab release cut` makes a candidate and refuses unless §6's four conditions hold; the final tag is automatic after 3 clean days where nothing deploys and a human act where the tag deploys. | refuses unless §6's four conditions hold | tools/docs/quick-reference.md | — |
+| C11.quick.10 | default | | The version number is computed and its reasoning goes in the release notes. | its reasoning goes in the release notes | tools/docs/quick-reference.md | — |
 | C11.quick.11 | default | | Changes to this file change how everyone works; explain the why in the PR body. | Explain the why in the PR body | CONVENTIONS.md | — |
 ### Writes — the trunk-direct veto
 
@@ -437,7 +458,7 @@ Two units reworded on purpose (base `c56bac20`), each to carry one new clause in
 | C2x.veto.07 | default |  | `serial`, `serial-direct`, `serial-gated` stay valid and are inert, identical to `free`. | These spellings stay valid (no adopter's descriptor breaks) | CONVENTIONS.md | #283 |
 | C2x.veto.08 | default |  | Anything that acts on the veto reads `trunkDirectVetoed(raw)`, never the 3-way `resolveWrites` value. | is the one function anything may act on | CONVENTIONS.md | — |
 | C2x.veto.09 | hard | tools/lib/solo.js::function soloEligibility | An automated session never gets trunk-direct, veto or not; only an attended human session may. | An automated session never gets trunk-direct here, veto or not | CONVENTIONS.md | #233 |
-| C2x.veto.10 | default |  | Attendance is asserted with `COLAB_HUMAN=1`, set only on a human's explicit instruction, never inferred. | set only on a human's explicit instruction (never inferred, never | CONVENTIONS.md | — |
+| C2x.veto.10 | default |  | Attendance is asserted with the human flag, whose meaning (a human's explicit instruction, never inferred) is stated once in §5. | attendance is asserted with the human flag, whose meaning is stated once in | CONVENTIONS.md | #640 |
 | C2x.veto.11 | default |  | Matrix: trunk-direct by a human at the keyboard is forbidden under `writes: isolated`, allowed under coexistence. | trunk-direct, human at the keyboard (`COLAB_HUMAN=1`) | CONVENTIONS.md | #233 |
 | C2x.veto.12 | default |  | Matrix: trunk-direct by an automated session is forbidden in both columns. | trunk-direct, automated session | CONVENTIONS.md | #233 |
 | C2x.veto.13 | default |  | Matrix: `ceremony: light` combined with `autonomy: auto-trunk` is forbidden in both columns. | `ceremony: light` + `autonomy: auto-trunk` | CONVENTIONS.md | — |
@@ -994,7 +1015,7 @@ Keys shortened because the sentence that followed them was moved whole (the rule
 
 | id | class | gate | rule | key | dest | source |
 |---|---|---|---|---|---|---|
-| C5a.mirror.01 | default |  | Check in-progress before taking work; claim with assignee plus label at session start; release at session end. | gh issue list --label in-progress | CONVENTIONS.md | — |
+| C5a.mirror.01 | default |  | Check in-progress before taking work; claim with assignee plus label at session start; release at session end. | gh issue list --label in-progress | tools/docs/claims.md | — |
 | C5a.mirror.02 | hard | tools/colab::half-claim — labeled in-progress but nobody is assigned | A claim is both halves, the assignee and in-progress; `colab claim` refuses a half-claim until repaired, --force taking it over loudly. | `colab claim` refuses it until then, `--force` taking it over loudly like any other claim | tools/docs/claims.md | #323 |
 | C5a.mirror.03 | default |  | Either half alone is a half-claim: a broken claim, neither free nor taken. | a broken claim, which is neither free nor taken | tools/docs/claims.md | #323 |
 | C5a.mirror.04 | default |  | Nobody starts on a half-claim; triage reports it for repair — the assignee completes it or drops it. | Nobody starts on it; triage reports it for repair | tools/docs/claims.md | #323 |
@@ -2366,143 +2387,157 @@ Reworded units, one bullet each. Row key changed: C6.rel.111 (the moved sentence
 - `CONVENTIONS.md:4854` — before: "Bytes drift is always a hard fail by default: … including a fix that touches no rule at all (a corrected hyperlink, once, flipped every under-stamped adopter red — the incident that motivated this). The fix is not a classifier that reads the diff and guesses whether it mattered; that trades a loud, honest failure for a quiet, wrong one. Instead, the person editing `templates/` states the claim themselves …" → after: "Bytes drift is always a hard fail by default: … including a fix that touches no rule at all. Instead of a classifier, the person editing `templates/` states the claim themselves …". Rationale → `docs/adr/539-conformance-rationale.md`. Rows: C8.stamps.07, C8.stamps.08, C8.stamps.09 (keys unchanged).
 - `CONVENTIONS.md:4893` — before: "**The frozen CLI copy is measured against the latest tag, not `HEAD`** — measured against `HEAD` it reported "behind" for every unreleased CLI commit and advised adopting untagged code." → after: "**The frozen CLI copy is measured against the latest tag, not `HEAD`**.". Rationale → `docs/adr/539-conformance-rationale.md`. Rows: C8.stamps.17 (keys unchanged).
 
+### §9 The adoption contract (#640)
+
+| id | class | gate | rule | key | dest | source |
+|---|---|---|---|---|---|---|
+| C9.contract.01 | default |  | The descriptor answers five questions asked as a person answers them; only production/deploy and exposure are asked at adoption. | The descriptor answers five questions, asked as a person answers them | CONVENTIONS.md | #640 |
+| C9.contract.02 | default |  | What the repo already states is detected and what follows from the answers is derived; neither is asked. | What the repo already states is detected, never asked | CONVENTIONS.md | #640 |
+| C9.contract.03 | default |  | Asking is not writing: a sync or interrupted adoption never fills a missing key or deletes a declared one to quiet a warning. | never deletes a declared one to quiet a warning | CONVENTIONS.md | #640 |
+| C9.contract.04 | default |  | Only a person writes that nothing, or only the room, consumes a merge; adoption does not relax §2's asymmetry. | Only a person writes that nothing, or only the room, consumes a merge | CONVENTIONS.md | #640 |
+| C9.contract.05 | default |  | The descriptor reaches trunk by a person's act, and the convention vocabulary exists before the first claim. | The descriptor reaches trunk by a person's act | CONVENTIONS.md | #640 |
+| C9.contract.06 | default |  | Instruction files keep one shape: prose in AGENTS.md, CLAUDE.md a thin shell, no block in both; a fork appends. | The instruction files keep one shape: | CONVENTIONS.md | #640 |
+| C9.contract.07 | default |  | Going live waits for a deploy target that exists today, with the path to production committed first. | Going live waits for a deploy target that exists today | CONVENTIONS.md | #640 |
+| C9.contract.08 | default |  | In a repo you don't own nothing lands in the owner's history; the owner's branch moves only by the owner's merge. | In a repo you don't own, nothing lands in the owner's history. | CONVENTIONS.md | #640 |
+| C9.contract.09 | default |  | Existing branches are grandfathered, and no dev is created where nothing is live. | Existing branches are grandfathered | CONVENTIONS.md | #640 |
+
 ### §9 Any repo, first-time adoption
 
 | id | class | gate | rule | key | dest | source |
 |---|---|---|---|---|---|---|
-| C9.first-time.01 | default | | Answer the shared question set, asking each question as a human answers it rather than as a schema field name. | Each question is asked as a human answers it, not as a schema field name | CONVENTIONS.md | — |
-| C9.first-time.02 | default | | Ask question 1 (deploy target and how it is reached) at adoption, asking for the URL only when deploy is not none. | the URL only when `deploy` is not `none` | CONVENTIONS.md | — |
-| C9.first-time.03 | default | | Phrase question 3 as what would break if you merged something wrong here, and ask it at adoption. | what would break if you merged something wrong here? | CONVENTIONS.md | #128 |
-| C9.first-time.04 | default | | Ask only what changes a gate: leave questions 2, 4 and 5 unanswered on a fresh adoption and print one line naming the `colab adopt --axis` that answers each later. | fresh adoption leaves them unanswered and prints one line naming them and the | CONVENTIONS.md | #533 |
-| C9.first-time.05 | hard | tools/lib/adopt.js::function gateVerdict | Answering question 3 with none or self is a human's act. | Answering question 3 with `none` or `self` is a human's act | CONVENTIONS.md | #522 |
-| C9.first-time.06 | default | | When adopt cannot finish without a human, the first line it prints is the one command the human runs, with the answers already filled in. | the first line it prints is the one command the human runs | CONVENTIONS.md | #522 |
-| C9.first-time.07 | hard | tools/lib/adopt.js::function exposureShapeVerdict | At a terminal, check the exposure answer against the repo's shape when it is given and re-ask with the reason. | At a terminal, the exposure answer is checked | CONVENTIONS.md | #522 |
-| C9.first-time.08 | default | | Question 1 writes production and deploy, never tier directly, because tier is a pure function of the two. | Question 1 writes `production` and `deploy`, never `tier` directly | CONVENTIONS.md | — |
-| C9.first-time.09 | default | | Phrase question 3 as what breaks, never as who consumes this. | Question 3 is phrased this way | CONVENTIONS.md | #128 |
-| C9.first-time.10 | default | | Never ask a human for trunk, stack, toolchain pins or ports; detect them. | Do not ask a human something the repo already states. | CONVENTIONS.md | — |
-| C9.first-time.11 | default | | Never ask for a derived value (gate count, CI role and thoroughness, ceremony weight, branch-mandatory, rollback obligation). | Every one of these follows from the answers above | CONVENTIONS.md | — |
-| C9.first-time.12 | default | | A repo with nothing recorded asks the two gating questions now and leaves the optional three for later. | A repo with nothing recorded yet asks the two gating | CONVENTIONS.md | — |
-| C9.first-time.13 | default | | A sync asks the same five questions in the same wording; it does not grow its own paraphrase of the rows. | do not let a sync grow its own paraphrase of these five | CONVENTIONS.md | — |
-| C9.first-time.14 | default | | A sync or interrupted adoption records a human's answer and never fills a missing key on its own. | it never fills a missing key on its own, | CONVENTIONS.md | — |
-| C9.first-time.15 | default | | Never resolve the production-pairing advisory by deleting an already-declared key; declaring must never be riskier than omitting. | Declaring must never be riskier than omitting. | CONVENTIONS.md | — |
-| C9.first-time.16 | hard | tools/lib/adopt.js::function gateVerdict | Only a human answer may write down that nothing, or only the room, consumes a merge here. | only a human answer may write down that nothing, or only | CONVENTIONS.md | — |
-| C9.first-time.17 | default | | An agent walking the checklist may propose live or released on committed evidence, never none or self; omission reports as null. | may propose `live` or `released` when it finds committed evidence for one | CONVENTIONS.md | — |
-| C9.first-time.18 | hard | tools/lib/adopt.js::function gateVerdict | Lowering an existing exposure, or a first declaration of none or self, requires a human: an interactive terminal or COLAB_HUMAN=1 with --answered-by. | an interactive terminal, or `COLAB_HUMAN=1` together | CONVENTIONS.md | — |
-| C9.first-time.19 | default | | `colab adopt` never runs steps 3 onward; it prints them as a to-do list on exit. | never runs steps 3 onward below; it prints | CONVENTIONS.md | — |
-| C9.first-time.20 | default | | The five questions are asked as forced numbered menus, each answerable by number or literal value. | The five questions above are asked as forced numbered | CONVENTIONS.md | #283 |
-| C9.first-time.21 | default | | Exposure is the only one of the five questions that carries a skip option. | `exposure` is the only one of the five that carries a skip option | CONVENTIONS.md | #283 |
-| C9.first-time.22 | default | | On a freshly adopted repo the maintainer's adoption command lands its own output on trunk in the same human act. | The maintainer's adoption command is the human step, so it can land its own output | CONVENTIONS.md | #481 |
-| C9.first-time.23 | hard | tools/lib/adopt.js::--land commits to trunk, which is a human act | `--land` requires COLAB_HUMAN=1 and --answered-by, with no terminal substitute, since it writes trunk. | It requires `COLAB_HUMAN=1` and `--answered-by`, with no terminal substitute, since it writes trunk | CONVENTIONS.md | #481 |
-| C9.first-time.24 | hard | tools/lib/adopt.js::function autonomyGateVerdict | `--autonomy auto-trunk` records the grant with the same provenance comment as every answer, behind the same bar as writes: direct. | records the grant with the same provenance comment as every | CONVENTIONS.md | #481 |
-| C9.first-time.25 | hard | tools/lib/adopt.js::function autonomyGateVerdict | `ceremony: light` refuses the auto-trunk grant; manual is never gated. | `manual` is never gated, and `ceremony: light` refuses it | CONVENTIONS.md | #481 |
-| C9.first-time.26 | hard | tools/lib/adopt.js::function landVerdict ; tools/colab::--land refuses: origin/ | `--land` refuses off trunk, with --local, and when origin's trunk is ahead. | it refuses off trunk, with `--local`, and when origin's trunk is ahead | CONVENTIONS.md | #481 |
-| C9.first-time.27 | default | | Everything else in the adoption (CI workflow, guards, docs) ships through the normal lane under the grant; the CI-adding branch passes trunk CI green on its own run. | then ships through the normal lane under the grant. | CONVENTIONS.md | #482 |
-| C9.first-time.28 | default | | `ci-granted` stays the door only for a trunk that already has workflows and no run at its sha. | `ci-granted` stays the door only for a trunk that already has workflows | CONVENTIONS.md | #482 |
-| C9.first-time.29 | default | | Write `.github/project.yml` with the answers from step 1. | with the answers from step 1 | CONVENTIONS.md | — |
-| C9.first-time.30 | default | | Declare `migrations:` when the repo keeps migrations anywhere but the two default paths; adopt lists it as the first remaining step. | declare `migrations:` when the repo keeps migrations anywhere but | CONVENTIONS.md | #449 |
-| C9.first-time.31 | default | | Create the whole label set, all twenty-three names, with `colab labels --ensure`. | Create the whole label set — twenty-three names, not a subset | CONVENTIONS.md | #206 |
-| C9.first-time.32 | default | | Rewrite an existing convention label's description only when asked with --refresh-descriptions. | description differs from the handbook's, and rewrites it only when asked | CONVENTIONS.md | #364 |
-| C9.first-time.33 | default | | When adding a label, bump the pinned test and grep the other three prose counts. | bump that test, then grep for the other three prose counts before you're done | CONVENTIONS.md | #274 |
-| C9.first-time.34 | default | | Provision the full label set again on every sync, not only at adoption. | This full set is provisioned again on every sync, not only at adoption. | CONVENTIONS.md | — |
-| C9.first-time.35 | default | | Add the tier topic with gh repo edit --add-topic. | Add the tier topic — `gh repo edit <owner>/<repo> --add-topic tier-b` | CONVENTIONS.md | — |
-| C9.first-time.36 | default | | Add the handbook pointer block to CLAUDE.md, creating the file if none exists; do not skip it. | create the file if none exists | CONVENTIONS.md | — |
-| C9.first-time.37 | default | | Repo prose goes in AGENTS.md, the repo's instruction file. | what the repo is, how to run and test it, | CONVENTIONS.md | #417 |
-| C9.first-time.38 | default | | CLAUDE.md is a thin shell: @AGENTS.md on its first line plus the name-looked-up blocks (Conventions block with stamp, Local divergences list). | `@AGENTS.md` on its first line, plus the blocks tools | CONVENTIONS.md | #417 |
-| C9.first-time.39 | default | | No block lives in both files; configure a generator that supports targets to write AGENTS.md only. | No block lives in both files. | CONVENTIONS.md | #417 |
-| C9.first-time.40 | default | | Prose in CLAUDE.md fails at commit and in CI, ratcheted: only where the change touches CLAUDE.md/AGENTS.md or the repo had migrated; an unmigrated, untouched repo stays green. | unmigrated and untouched stays green | CONVENTIONS.md | #588 |
-| C9.first-time.41 | default | | A fork of an upstream you don't own does not take the thin-shell shape and uses the append-only block instead. | A fork of an upstream you don't own does not take this shape | CONVENTIONS.md | #449 |
-| C9.first-time.42 | default | | The audit holds the shape with warnings — tool block in both files, Conventions block outside CLAUDE.md, prose-in-claude-md, no-agents-md — and fails prose-in-claude-md where the ratchet trips. | warns when a tool block appears in both files, when the Conventions | CONVENTIONS.md | #419 |
-| C9.first-time.43 | default | | Make sure CI meets §7's outcome by copying a template via `colab template`, which stamps for reconciliation. | copy a template via `colab template <name>`, which stamps for reconciliation | CONVENTIONS.md | — |
-| C9.first-time.44 | default | | On exposure: released, step 6 also wires the release rung at adoption: release block, release workflow, deploy template, first final. | On `exposure: released`, this step also wires the release rung | CONVENTIONS.md | #492 |
-| C9.first-time.45 | default | | The first final is the operator's to set, because `colab release cut` refuses with none to bump from. | which is the operator's to set because `colab release cut` refuses | CONVENTIONS.md | #492 |
-| C9.first-time.46 | default | | The no-production row's release route is a proposal for the human to confirm, never a choice the agent makes. | the no-production row's route is a proposal for the human to confirm | CONVENTIONS.md | #492 |
-| C9.first-time.47 | default | | Register the repo with `colab register`, updating both the audit fleet list and the reserved-ports aggregation. | `colab register`, updating both the audit fleet list and the | CONVENTIONS.md | — |
-| C9.first-time.48 | default | | Leave existing branches alone, grandfathered. | Leave existing branches alone — grandfathered. | CONVENTIONS.md | — |
-| C9.first-time.49 | default | | Do not create dev unless the repo is genuinely Tier A or Tier C. | Do not create `dev` unless the repo is genuinely Tier A or Tier C | CONVENTIONS.md | — |
+| C9.first-time.01 | default | | Answer the shared question set, asking each question as a human answers it rather than as a schema field name. | Each question is asked as a human answers it, not as a schema field name | skills/handbook-sync/2-adoption-procedure.md | — |
+| C9.first-time.02 | default | | Ask question 1 (deploy target and how it is reached) at adoption, asking for the URL only when deploy is not none. | the URL only when `deploy` is not `none` | skills/handbook-sync/2-adoption-procedure.md | — |
+| C9.first-time.03 | default | | Phrase question 3 as what would break if you merged something wrong here, and ask it at adoption. | what would break if you merged something wrong here? | skills/handbook-sync/2-adoption-procedure.md | #128 |
+| C9.first-time.04 | default | | Ask only what changes a gate: leave questions 2, 4 and 5 unanswered on a fresh adoption and print one line naming the `colab adopt --axis` that answers each later. | fresh adoption leaves them unanswered and prints one line naming them and the | skills/handbook-sync/2-adoption-procedure.md | #533 |
+| C9.first-time.05 | hard | tools/lib/adopt.js::function gateVerdict | Answering question 3 with none or self is a human's act. | Answering question 3 with `none` or `self` is a human's act | skills/handbook-sync/2-adoption-procedure.md | #522 |
+| C9.first-time.06 | default | | When adopt cannot finish without a human, the first line it prints is the one command the human runs, with the answers already filled in. | the first line it prints is the one command the human runs | skills/handbook-sync/2-adoption-procedure.md | #522 |
+| C9.first-time.07 | hard | tools/lib/adopt.js::function exposureShapeVerdict | At a terminal, check the exposure answer against the repo's shape when it is given and re-ask with the reason. | At a terminal, the exposure answer is checked | skills/handbook-sync/2-adoption-procedure.md | #522 |
+| C9.first-time.08 | default | | Question 1 writes production and deploy, never tier directly, because tier is a pure function of the two. | Question 1 writes `production` and `deploy`, never `tier` directly | skills/handbook-sync/2-adoption-procedure.md | — |
+| C9.first-time.09 | default | | Phrase question 3 as what breaks, never as who consumes this. | Question 3 is phrased this way | skills/handbook-sync/2-adoption-procedure.md | #128 |
+| C9.first-time.10 | default | | Never ask a human for trunk, stack, toolchain pins or ports; detect them. | Do not ask a human something the repo already states. | skills/handbook-sync/2-adoption-procedure.md | — |
+| C9.first-time.11 | default | | Never ask for a derived value (gate count, CI role and thoroughness, ceremony weight, branch-mandatory, rollback obligation). | Every one of these follows from the answers above | skills/handbook-sync/2-adoption-procedure.md | — |
+| C9.first-time.12 | default | | A repo with nothing recorded asks the two gating questions now and leaves the optional three for later. | A repo with nothing recorded yet asks the two gating | skills/handbook-sync/2-adoption-procedure.md | — |
+| C9.first-time.13 | default | | A sync asks the same five questions in the same wording; it does not grow its own paraphrase of the rows. | do not let a sync grow its own paraphrase of these five | skills/handbook-sync/2-adoption-procedure.md | — |
+| C9.first-time.14 | default | | A sync or interrupted adoption records a human's answer and never fills a missing key on its own. | it never fills a missing key on its own, | skills/handbook-sync/2-adoption-procedure.md | — |
+| C9.first-time.15 | default | | Never resolve the production-pairing advisory by deleting an already-declared key; declaring must never be riskier than omitting. | Declaring must never be riskier than omitting. | skills/handbook-sync/2-adoption-procedure.md | — |
+| C9.first-time.16 | hard | tools/lib/adopt.js::function gateVerdict | Only a human answer may write down that nothing, or only the room, consumes a merge here. | only a human answer may write down that nothing, or only | skills/handbook-sync/2-adoption-procedure.md | — |
+| C9.first-time.17 | default | | An agent walking the checklist may propose live or released on committed evidence, never none or self; omission reports as null. | may propose `live` or `released` when it finds committed evidence for one | skills/handbook-sync/2-adoption-procedure.md | — |
+| C9.first-time.18 | hard | tools/lib/adopt.js::function gateVerdict | Lowering an existing exposure, or a first declaration of none or self, requires a human: an interactive terminal or COLAB_HUMAN=1 with --answered-by. | an interactive terminal, or `COLAB_HUMAN=1` together | skills/handbook-sync/2-adoption-procedure.md | — |
+| C9.first-time.19 | default | | `colab adopt` never runs steps 3 onward; it prints them as a to-do list on exit. | never runs steps 3 onward below; it prints | skills/handbook-sync/2-adoption-procedure.md | — |
+| C9.first-time.20 | default | | The five questions are asked as forced numbered menus, each answerable by number or literal value. | The five questions above are asked as forced numbered | skills/handbook-sync/2-adoption-procedure.md | #283 |
+| C9.first-time.21 | default | | Exposure is the only one of the five questions that carries a skip option. | `exposure` is the only one of the five that carries a skip option | skills/handbook-sync/2-adoption-procedure.md | #283 |
+| C9.first-time.22 | default | | On a freshly adopted repo the maintainer's adoption command lands its own output on trunk in the same human act. | The maintainer's adoption command is the human step, so it can land its own output | skills/handbook-sync/2-adoption-procedure.md | #481 |
+| C9.first-time.23 | hard | tools/lib/adopt.js::--land commits to trunk, which is a human act | `--land` requires COLAB_HUMAN=1 and --answered-by, with no terminal substitute, since it writes trunk. | It requires `COLAB_HUMAN=1` and `--answered-by`, with no terminal substitute, since it writes trunk | skills/handbook-sync/2-adoption-procedure.md | #481 |
+| C9.first-time.24 | hard | tools/lib/adopt.js::function autonomyGateVerdict | `--autonomy auto-trunk` records the grant with the same provenance comment as every answer, behind the same bar as writes: direct. | records the grant with the same provenance comment as every | skills/handbook-sync/2-adoption-procedure.md | #481 |
+| C9.first-time.25 | hard | tools/lib/adopt.js::function autonomyGateVerdict | `ceremony: light` refuses the auto-trunk grant; manual is never gated. | `manual` is never gated, and `ceremony: light` refuses it | skills/handbook-sync/2-adoption-procedure.md | #481 |
+| C9.first-time.26 | hard | tools/lib/adopt.js::function landVerdict ; tools/colab::--land refuses: origin/ | `--land` refuses off trunk, with --local, and when origin's trunk is ahead. | it refuses off trunk, with `--local`, and when origin's trunk is ahead | skills/handbook-sync/2-adoption-procedure.md | #481 |
+| C9.first-time.27 | default | | Everything else in the adoption (CI workflow, guards, docs) ships through the normal lane under the grant; the CI-adding branch passes trunk CI green on its own run. | then ships through the normal lane under the grant. | skills/handbook-sync/2-adoption-procedure.md | #482 |
+| C9.first-time.28 | default | | `ci-granted` stays the door only for a trunk that already has workflows and no run at its sha. | `ci-granted` stays the door only for a trunk that already has workflows | skills/handbook-sync/2-adoption-procedure.md | #482 |
+| C9.first-time.29 | default | | Write `.github/project.yml` with the answers from step 1. | with the answers from step 1 | skills/handbook-sync/2-adoption-procedure.md | — |
+| C9.first-time.30 | default | | Declare `migrations:` when the repo keeps migrations anywhere but the two default paths; adopt lists it as the first remaining step. | declare `migrations:` when the repo keeps migrations anywhere but | skills/handbook-sync/2-adoption-procedure.md | #449 |
+| C9.first-time.31 | default | | Create the whole label set, all twenty-three names, with `colab labels --ensure`. | Create the whole label set — twenty-three names, not a subset | skills/handbook-sync/2-adoption-procedure.md | #206 |
+| C9.first-time.32 | default | | Rewrite an existing convention label's description only when asked with --refresh-descriptions. | description differs from the handbook's, and rewrites it only when asked | skills/handbook-sync/2-adoption-procedure.md | #364 |
+| C9.first-time.33 | default | | When adding a label, bump the pinned test and grep the other three prose counts. | bump that test, then grep for the other three prose counts before you're done | skills/handbook-sync/2-adoption-procedure.md | #274 |
+| C9.first-time.34 | default | | Provision the full label set again on every sync, not only at adoption. | This full set is provisioned again on every sync, not only at adoption. | skills/handbook-sync/2-adoption-procedure.md | — |
+| C9.first-time.35 | default | | Add the tier topic with gh repo edit --add-topic. | Add the tier topic — `gh repo edit <owner>/<repo> --add-topic tier-b` | skills/handbook-sync/2-adoption-procedure.md | — |
+| C9.first-time.36 | default | | Add the handbook pointer block to CLAUDE.md, creating the file if none exists; do not skip it. | create the file if none exists | skills/handbook-sync/2-adoption-procedure.md | — |
+| C9.first-time.37 | default | | Repo prose goes in AGENTS.md, the repo's instruction file. | what the repo is, how to run and test it, | skills/handbook-sync/2-adoption-procedure.md | #417 |
+| C9.first-time.38 | default | | CLAUDE.md is a thin shell: @AGENTS.md on its first line plus the name-looked-up blocks (Conventions block with stamp, Local divergences list). | `@AGENTS.md` on its first line, plus the blocks tools | skills/handbook-sync/2-adoption-procedure.md | #417 |
+| C9.first-time.39 | default | | No block lives in both files; configure a generator that supports targets to write AGENTS.md only. | No block lives in both files. | skills/handbook-sync/2-adoption-procedure.md | #417 |
+| C9.first-time.40 | default | | Prose in CLAUDE.md fails at commit and in CI, ratcheted: only where the change touches CLAUDE.md/AGENTS.md or the repo had migrated; an unmigrated, untouched repo stays green. | unmigrated and untouched stays green | skills/handbook-sync/2-adoption-procedure.md | #588 |
+| C9.first-time.41 | default | | A fork of an upstream you don't own does not take the thin-shell shape and uses the append-only block instead. | A fork of an upstream you don't own does not take this shape | skills/handbook-sync/2-adoption-procedure.md | #449 |
+| C9.first-time.42 | default | | The audit holds the shape with warnings — tool block in both files, Conventions block outside CLAUDE.md, prose-in-claude-md, no-agents-md — and fails prose-in-claude-md where the ratchet trips. | warns when a tool block appears in both files, when the Conventions | skills/handbook-sync/2-adoption-procedure.md | #419 |
+| C9.first-time.43 | default | | Make sure CI meets §7's outcome by copying a template via `colab template`, which stamps for reconciliation. | copy a template via `colab template <name>`, which stamps for reconciliation | skills/handbook-sync/2-adoption-procedure.md | — |
+| C9.first-time.44 | default | | On exposure: released, step 6 also wires the release rung at adoption: release block, release workflow, deploy template, first final. | On `exposure: released`, this step also wires the release rung | skills/handbook-sync/2-adoption-procedure.md | #492 |
+| C9.first-time.45 | default | | The first final is the operator's to set, because `colab release cut` refuses with none to bump from. | which is the operator's to set because `colab release cut` refuses | skills/handbook-sync/2-adoption-procedure.md | #492 |
+| C9.first-time.46 | default | | The no-production row's release route is a proposal for the human to confirm, never a choice the agent makes. | the no-production row's route is a proposal for the human to confirm | skills/handbook-sync/2-adoption-procedure.md | #492 |
+| C9.first-time.47 | default | | Register the repo with `colab register`, updating both the audit fleet list and the reserved-ports aggregation. | `colab register`, updating both the audit fleet list and the | skills/handbook-sync/2-adoption-procedure.md | — |
+| C9.first-time.48 | default | | Leave existing branches alone, grandfathered. | Leave existing branches alone — grandfathered. | skills/handbook-sync/2-adoption-procedure.md | — |
+| C9.first-time.49 | default | | Do not create dev unless the repo is genuinely Tier A or Tier C. | Do not create `dev` unless the repo is genuinely Tier A or Tier C | skills/handbook-sync/2-adoption-procedure.md | — |
 
 ### §9 Going live: Tier B → Tier C or Tier A
 
 | id | class | gate | rule | key | dest | source |
 |---|---|---|---|---|---|---|
-| C9.going-live.01 | default | | Go live on the day a deploy target exists, not before. | Do this on the day a deploy target exists | CONVENTIONS.md | — |
-| C9.going-live.02 | default | | Commit the path to production (deploy workflow, tag workflow or runbook) before proceeding. | One of these must be committed before proceeding. | CONVENTIONS.md | — |
-| C9.going-live.03 | default | | Create dev from main and push it. | `git checkout -b dev main && git push -u origin dev` | CONVENTIONS.md | — |
-| C9.going-live.04 | default | | Set the repo's default branch to dev. | Set the repo's default branch to `dev`. | CONVENTIONS.md | — |
-| C9.going-live.05 | default | | Add dev to every CI workflow's trigger branches. | Add `dev` to every CI workflow's trigger branches | CONVENTIONS.md | — |
-| C9.going-live.06 | default | | Update project.yml: C is tier C, trunk dev, real production, deploy push-main; A is tier A, trunk dev, real production, deploy tag or manual plus runbook, never push-main. | `deploy: tag` or `deploy: manual` + `runbook:` — never `push-main` | CONVENTIONS.md | — |
-| C9.going-live.07 | default | | The tag-gated single-trunk variant keeps trunk: main and skips creating dev. | keep `trunk: main` and skip steps 2–3 entirely | CONVENTIONS.md | — |
-| C9.going-live.08 | default | | Swap the topic to tier-c or tier-a and update the internal project table. | Swap the topic to `tier-c`/`tier-a`; update the internal project table. | CONVENTIONS.md | — |
-| C9.going-live.09 | default | | Tier A only: tag the first release; Tier C has nothing to tag. | tag the first release (on `manual`, tags are still worth cutting) | CONVENTIONS.md | — |
-| C9.going-live.10 | default | | Re-answer questions 3 and 5 of the shared question set at going live. | Re-answer questions 3 and 5 of the shared question set above | CONVENTIONS.md | — |
-| C9.going-live.11 | default | | Leave room and writes alone unless who works here or how many units are in flight genuinely changed. | Leave `room` and `writes` alone unless who works | CONVENTIONS.md | — |
+| C9.going-live.01 | default | | Go live on the day a deploy target exists, not before. | Do this on the day a deploy target exists | skills/handbook-sync/2-adoption-procedure.md | — |
+| C9.going-live.02 | default | | Commit the path to production (deploy workflow, tag workflow or runbook) before proceeding. | One of these must be committed before proceeding. | skills/handbook-sync/2-adoption-procedure.md | — |
+| C9.going-live.03 | default | | Create dev from main and push it. | `git checkout -b dev main && git push -u origin dev` | skills/handbook-sync/2-adoption-procedure.md | — |
+| C9.going-live.04 | default | | Set the repo's default branch to dev. | Set the repo's default branch to `dev`. | skills/handbook-sync/2-adoption-procedure.md | — |
+| C9.going-live.05 | default | | Add dev to every CI workflow's trigger branches. | Add `dev` to every CI workflow's trigger branches | skills/handbook-sync/2-adoption-procedure.md | — |
+| C9.going-live.06 | default | | Update project.yml: C is tier C, trunk dev, real production, deploy push-main; A is tier A, trunk dev, real production, deploy tag or manual plus runbook, never push-main. | `deploy: tag` or `deploy: manual` + `runbook:` — never `push-main` | skills/handbook-sync/2-adoption-procedure.md | — |
+| C9.going-live.07 | default | | The tag-gated single-trunk variant keeps trunk: main and skips creating dev. | keep `trunk: main` and skip steps 2–3 entirely | skills/handbook-sync/2-adoption-procedure.md | — |
+| C9.going-live.08 | default | | Swap the topic to tier-c or tier-a and update the internal project table. | Swap the topic to `tier-c`/`tier-a`; update the internal project table. | skills/handbook-sync/2-adoption-procedure.md | — |
+| C9.going-live.09 | default | | Tier A only: tag the first release; Tier C has nothing to tag. | tag the first release (on `manual`, tags are still worth cutting) | skills/handbook-sync/2-adoption-procedure.md | — |
+| C9.going-live.10 | default | | Re-answer questions 3 and 5 of the shared question set at going live. | Re-answer questions 3 and 5 of the shared question set above | skills/handbook-sync/2-adoption-procedure.md | — |
+| C9.going-live.11 | default | | Leave room and writes alone unless who works here or how many units are in flight genuinely changed. | Leave `room` and `writes` alone unless who works | skills/handbook-sync/2-adoption-procedure.md | — |
 
 ### §9 Tier C → Tier A — when the site earns a release ritual
 
 | id | class | gate | rule | key | dest | source |
 |---|---|---|---|---|---|---|
-| C9.c-to-a.01 | default | | Migrate C to A only when you find yourself wanting to name what shipped, not before. | Do this when you find yourself wanting to name what shipped | CONVENTIONS.md | — |
-| C9.c-to-a.02 | default | | Retrigger the deploy workflow on a tag instead of a main push; until it lands the tier claim is false. | Retrigger the deploy workflow on a tag instead of a `main` push | CONVENTIONS.md | — |
-| C9.c-to-a.03 | default | | Update project.yml to tier A, deploy tag, trunk stays dev; swap the topic to tier-a. | Update `project.yml`: `tier: A`, `deploy: tag`. `trunk` stays `dev` | CONVENTIONS.md | — |
-| C9.c-to-a.04 | default | | Tag the current main so the first tagged release names what is already live. | Tag the current `main`, so the first tagged release names what is already live | CONVENTIONS.md | — |
-| C9.c-to-a.05 | default | | Re-answer question 5 (channels): a tag ritual is itself a new channel. | Re-answer question 5 (`channels`) — a tag ritual is itself a new channel | CONVENTIONS.md | — |
-| C9.c-to-a.06 | default | | Check questions 2–4 at this transition only if who works here or how work lands changed. | rarely move at this transition; check them only if something about who works here | CONVENTIONS.md | — |
-| C9.c-to-a.07 | default | | A to C (tier A with deploy push-main) is descriptor-only: set tier C, leave the pipeline, swap the topic. | is descriptor-only: set `tier: C`, leave the pipeline exactly as it is, | CONVENTIONS.md | — |
+| C9.c-to-a.01 | default | | Migrate C to A only when you find yourself wanting to name what shipped, not before. | Do this when you find yourself wanting to name what shipped | skills/handbook-sync/2-adoption-procedure.md | — |
+| C9.c-to-a.02 | default | | Retrigger the deploy workflow on a tag instead of a main push; until it lands the tier claim is false. | Retrigger the deploy workflow on a tag instead of a `main` push | skills/handbook-sync/2-adoption-procedure.md | — |
+| C9.c-to-a.03 | default | | Update project.yml to tier A, deploy tag, trunk stays dev; swap the topic to tier-a. | Update `project.yml`: `tier: A`, `deploy: tag`. `trunk` stays `dev` | skills/handbook-sync/2-adoption-procedure.md | — |
+| C9.c-to-a.04 | default | | Tag the current main so the first tagged release names what is already live. | Tag the current `main`, so the first tagged release names what is already live | skills/handbook-sync/2-adoption-procedure.md | — |
+| C9.c-to-a.05 | default | | Re-answer question 5 (channels): a tag ritual is itself a new channel. | Re-answer question 5 (`channels`) — a tag ritual is itself a new channel | skills/handbook-sync/2-adoption-procedure.md | — |
+| C9.c-to-a.06 | default | | Check questions 2–4 at this transition only if who works here or how work lands changed. | rarely move at this transition; check them only if something about who works here | skills/handbook-sync/2-adoption-procedure.md | — |
+| C9.c-to-a.07 | default | | A to C (tier A with deploy push-main) is descriptor-only: set tier C, leave the pipeline, swap the topic. | is descriptor-only: set `tier: C`, leave the pipeline exactly as it is, | skills/handbook-sync/2-adoption-procedure.md | — |
 
 ### §9 Working in a repo you don't own
 
 | id | class | gate | rule | key | dest | source |
 |---|---|---|---|---|---|---|
-| C9.not-your-repo.01 | default | | Keep `.github/project.yml` in the local clone's main checkout only, hidden by `.git/info/exclude`. | the local clone's main checkout only, hidden by `.git/info/exclude` | CONVENTIONS.md | #393 |
-| C9.not-your-repo.02 | default | | Provision only the four load-bearing labels; other convention labels are opt-in via `colab labels --ensure --minimal`. | the load-bearing subset a session itself writes | CONVENTIONS.md | #393 |
-| C9.not-your-repo.03 | default | | Carry the rules the owner's repo cannot in an excluded `CLAUDE.local.md` operating note. | carries the rules the owner's repo cannot | CONVENTIONS.md | #393 |
-| C9.not-your-repo.04 | default | | Exclude the worktree subdir (`.worktrees/`) locally, since the owner's repo does not ignore it. | an adopted repo hides it in its committed `.gitignore`; the owner's repo does not | CONVENTIONS.md | #393 |
-| C9.not-your-repo.05 | default | | Do not add CI templates, CODEOWNERS, the CLAUDE.md block or the topic to the owner's repo. | nothing in claim, start or ship gates on them, and each would be a | CONVENTIONS.md | #393 |
-| C9.not-your-repo.06 | default | | `trunk:` names the fleet's own integration branch, never the owner's default branch. | `trunk:` names the fleet's own integration branch | CONVENTIONS.md | #393 |
-| C9.not-your-repo.07 | default | | The owner's trunk is reached only by a pull request he reviews and merges himself, via `colab deliver`. | the owner's trunk is reached only by a pull request he reviews and | CONVENTIONS.md | #393 |
-| C9.not-your-repo.08 | default | | Declare exposure: self, because a merge onto the integration branch reaches only the fleet. | Declare `exposure: self`: a merge onto the integration branch reaches | CONVENTIONS.md | #393 |
-| C9.not-your-repo.09 | hard | tools/lib/adopt.js::function gateVerdict | Exposure self is human-gated as always. | reaches only the fleet, and the owner's review is the next gate | CONVENTIONS.md | #393 |
-| C9.not-your-repo.10 | hard | tools/lib/adopt.js::function gateVerdict | A human answers the exposure row of the one-command local adoption, at a terminal or with COLAB_HUMAN=1 --answered-by. | a human answers the exposure row, at a terminal or with | CONVENTIONS.md | #393 |
-| C9.not-your-repo.11 | default | | Push the integration branch once from the owner's trunk if it does not exist yet. | origin <owner-trunk>:refs/heads/<prefix>/integration # once, if it doesn't exist yet | CONVENTIONS.md | #393 |
-| C9.not-your-repo.12 | hard | tools/colab::is TRACKED here ; tools/colab::--local needs --trunk ; tools/colab::is the owner's own default branch | `colab adopt --local` refuses when the descriptor is tracked, when --trunk is missing, and when --trunk names the owner's own trunk. | It refuses when the descriptor is tracked (the repo is adopted, so use plain | CONVENTIONS.md | #393 |
-| C9.not-your-repo.13 | default | | `colab adopt --local` appends the exclude lines before writing anything and writes the descriptor into the main checkout. | exclude lines before writing anything, writes the descriptor into the main checkout | CONVENTIONS.md | #393 |
-| C9.not-your-repo.14 | default | | A bare re-run of `colab adopt --local` is the idempotent re-apply. | A bare re-run is the idempotent re-apply | CONVENTIONS.md | #393 |
-| C9.not-your-repo.15 | default | | Declare the owner's branch in the same local descriptor under an owner block. | The owner's branch is declared in the same local descriptor | CONVENTIONS.md | #394 |
-| C9.not-your-repo.16 | default | | Each session still ships onto the integration branch and closes its issues there; delivery is a separate batch-shaped step. | each session still ships onto the integration branch, | CONVENTIONS.md | #394 |
-| C9.not-your-repo.17 | hard | tools/lib/owner-branch.js::no colab command moves it | `colab deliver` never merges; no colab command moves the owner's branch, and ship, the ship batch and promote refuse a push to it. | moves his branch: `ship`, the ship batch and `promote` refuse a push to it | CONVENTIONS.md | #394 |
-| C9.not-your-repo.18 | default | | Delivered is read from PR state: the last merged delivery PR's head is the boundary; the next run offers only what landed after it. | merged delivery PR's head is the boundary; the next run offers only what landed | CONVENTIONS.md | #394 |
-| C9.not-your-repo.19 | default | | An open delivery PR is refreshed, never duplicated. | An open PR is refreshed (its head follows the integration branch on its | CONVENTIONS.md | #394 |
-| C9.not-your-repo.20 | hard | tools/lib/owner-branch.js::re-run with --reopen to offer the batch again | A closed-without-merge delivery PR stops deliver (exit 3) until a human re-offers the batch with --reopen. | opens nothing until a human re-offers the batch with `--reopen` | CONVENTIONS.md | #394 |
-| C9.not-your-repo.21 | default | | The delivery PR carries no closing keywords; the body lists the issues as carried. | The PR carries no closing keywords | CONVENTIONS.md | #394 |
-| C9.not-your-repo.22 | hard | tools/colab::the delivery PR — re-run with COLAB_HUMAN=1 (--dry needs none) | Opening or editing the delivery PR needs a human (COLAB_HUMAN=1); --dry needs none. | Opening or editing the PR needs a human | CONVENTIONS.md | #394 |
-| C9.not-your-repo.23 | default | | A scheduled driver may run --dry and read the state; it never acts on the owner's branch. | A scheduled driver may run `--dry` and read the state | CONVENTIONS.md | #394 |
-| C9.not-your-repo.24 | hard | tools/colab::PR-PENDING | The core-path rule still applies: a branch touching a CODEOWNERS path needs a non-author approval before it lands on the integration branch. | The core-path rule still applies on top | CONVENTIONS.md | #350 |
-| C9.not-your-repo.25 | default | | A PR per issue that the owner merges one by one is a different shape, deferred until a repo asks for it. | A PR per issue that the owner merges one by one is a different shape, | CONVENTIONS.md | #394 |
-| C9.not-your-repo.26 | default | | Hide the descriptor with `.git/info/exclude`, never a `.gitignore` entry, which is itself a tracked file. | Hiding the descriptor that way is exactly the commit you are avoiding | CONVENTIONS.md | #393 |
-| C9.not-your-repo.27 | default | | Scheduled autopilot must stay off on such a repo. | Scheduled autopilot must stay OFF on such a repo | CONVENTIONS.md | #393 |
-| C9.not-your-repo.28 | default | | Before the first ship, find out whether any workflow runs on push to the integration branch; if none, each ship needs a ci-granted exemption per branch. | Find out which case you are in before the first ship | CONVENTIONS.md | #393 |
-| C9.not-your-repo.29 | default | | The main checkout must rest on the integration branch, not on the owner's trunk. | The main checkout must rest on the integration branch | CONVENTIONS.md | #393 |
-| C9.not-your-repo.30 | default | | A dashboard's cached repo scan does not pick the repo up until refreshed. | A dashboard's cached repo scan does not pick the repo up | CONVENTIONS.md | #393 |
-| C9.not-your-repo.31 | default | | A local audit reports a locally adopted repo as such and flags a descriptor that is untracked but not excluded. | A local audit reports `⌂ adopted locally, not committed` | CONVENTIONS.md | #393 |
-| C9.not-your-repo.32 | default | | Prefer full adoption whenever the owner is willing to carry the files; local adoption is a working arrangement for one operator's clones. | Prefer full adoption instead whenever the owner is willing to carry the files | CONVENTIONS.md | #393 |
+| C9.not-your-repo.01 | default | | Keep `.github/project.yml` in the local clone's main checkout only, hidden by `.git/info/exclude`. | the local clone's main checkout only, hidden by `.git/info/exclude` | skills/handbook-sync/2-adoption-procedure.md | #393 |
+| C9.not-your-repo.02 | default | | Provision only the four load-bearing labels; other convention labels are opt-in via `colab labels --ensure --minimal`. | the load-bearing subset a session itself writes | skills/handbook-sync/2-adoption-procedure.md | #393 |
+| C9.not-your-repo.03 | default | | Carry the rules the owner's repo cannot in an excluded `CLAUDE.local.md` operating note. | carries the rules the owner's repo cannot | skills/handbook-sync/2-adoption-procedure.md | #393 |
+| C9.not-your-repo.04 | default | | Exclude the worktree subdir (`.worktrees/`) locally, since the owner's repo does not ignore it. | an adopted repo hides it in its committed `.gitignore`; the owner's repo does not | skills/handbook-sync/2-adoption-procedure.md | #393 |
+| C9.not-your-repo.05 | default | | Do not add CI templates, CODEOWNERS, the CLAUDE.md block or the topic to the owner's repo. | nothing in claim, start or ship gates on them, and each would be a | skills/handbook-sync/2-adoption-procedure.md | #393 |
+| C9.not-your-repo.06 | default | | `trunk:` names the fleet's own integration branch, never the owner's default branch. | `trunk:` names the fleet's own integration branch | skills/handbook-sync/2-adoption-procedure.md | #393 |
+| C9.not-your-repo.07 | default | | The owner's trunk is reached only by a pull request he reviews and merges himself, via `colab deliver`. | the owner's trunk is reached only by a pull request he reviews and | skills/handbook-sync/2-adoption-procedure.md | #393 |
+| C9.not-your-repo.08 | default | | Declare exposure: self, because a merge onto the integration branch reaches only the fleet. | Declare `exposure: self`: a merge onto the integration branch reaches | skills/handbook-sync/2-adoption-procedure.md | #393 |
+| C9.not-your-repo.09 | hard | tools/lib/adopt.js::function gateVerdict | Exposure self is human-gated as always. | reaches only the fleet, and the owner's review is the next gate | skills/handbook-sync/2-adoption-procedure.md | #393 |
+| C9.not-your-repo.10 | hard | tools/lib/adopt.js::function gateVerdict | A human answers the exposure row of the one-command local adoption, at a terminal or with COLAB_HUMAN=1 --answered-by. | a human answers the exposure row, at a terminal or with | skills/handbook-sync/2-adoption-procedure.md | #393 |
+| C9.not-your-repo.11 | default | | Push the integration branch once from the owner's trunk if it does not exist yet. | origin <owner-trunk>:refs/heads/<prefix>/integration # once, if it doesn't exist yet | skills/handbook-sync/2-adoption-procedure.md | #393 |
+| C9.not-your-repo.12 | hard | tools/colab::is TRACKED here ; tools/colab::--local needs --trunk ; tools/colab::is the owner's own default branch | `colab adopt --local` refuses when the descriptor is tracked, when --trunk is missing, and when --trunk names the owner's own trunk. | It refuses when the descriptor is tracked (the repo is adopted, so use plain | skills/handbook-sync/2-adoption-procedure.md | #393 |
+| C9.not-your-repo.13 | default | | `colab adopt --local` appends the exclude lines before writing anything and writes the descriptor into the main checkout. | exclude lines before writing anything, writes the descriptor into the main checkout | skills/handbook-sync/2-adoption-procedure.md | #393 |
+| C9.not-your-repo.14 | default | | A bare re-run of `colab adopt --local` is the idempotent re-apply. | A bare re-run is the idempotent re-apply | skills/handbook-sync/2-adoption-procedure.md | #393 |
+| C9.not-your-repo.15 | default | | Declare the owner's branch in the same local descriptor under an owner block. | The owner's branch is declared in the same local descriptor | skills/handbook-sync/2-adoption-procedure.md | #394 |
+| C9.not-your-repo.16 | default | | Each session still ships onto the integration branch and closes its issues there; delivery is a separate batch-shaped step. | each session still ships onto the integration branch, | skills/handbook-sync/2-adoption-procedure.md | #394 |
+| C9.not-your-repo.17 | hard | tools/lib/owner-branch.js::no colab command moves it | `colab deliver` never merges; no colab command moves the owner's branch, and ship, the ship batch and promote refuse a push to it. | moves his branch: `ship`, the ship batch and `promote` refuse a push to it | skills/handbook-sync/2-adoption-procedure.md | #394 |
+| C9.not-your-repo.18 | default | | Delivered is read from PR state: the last merged delivery PR's head is the boundary; the next run offers only what landed after it. | merged delivery PR's head is the boundary; the next run offers only what landed | skills/handbook-sync/2-adoption-procedure.md | #394 |
+| C9.not-your-repo.19 | default | | An open delivery PR is refreshed, never duplicated. | An open PR is refreshed (its head follows the integration branch on its | skills/handbook-sync/2-adoption-procedure.md | #394 |
+| C9.not-your-repo.20 | hard | tools/lib/owner-branch.js::re-run with --reopen to offer the batch again | A closed-without-merge delivery PR stops deliver (exit 3) until a human re-offers the batch with --reopen. | opens nothing until a human re-offers the batch with `--reopen` | skills/handbook-sync/2-adoption-procedure.md | #394 |
+| C9.not-your-repo.21 | default | | The delivery PR carries no closing keywords; the body lists the issues as carried. | The PR carries no closing keywords | skills/handbook-sync/2-adoption-procedure.md | #394 |
+| C9.not-your-repo.22 | hard | tools/colab::the delivery PR — re-run with COLAB_HUMAN=1 (--dry needs none) | Opening or editing the delivery PR needs a human (COLAB_HUMAN=1); --dry needs none. | Opening or editing the PR needs a human | skills/handbook-sync/2-adoption-procedure.md | #394 |
+| C9.not-your-repo.23 | default | | A scheduled driver may run --dry and read the state; it never acts on the owner's branch. | A scheduled driver may run `--dry` and read the state | skills/handbook-sync/2-adoption-procedure.md | #394 |
+| C9.not-your-repo.24 | hard | tools/colab::PR-PENDING | The core-path rule still applies: a branch touching a CODEOWNERS path needs a non-author approval before it lands on the integration branch. | The core-path rule still applies on top | skills/handbook-sync/2-adoption-procedure.md | #350 |
+| C9.not-your-repo.25 | default | | A PR per issue that the owner merges one by one is a different shape, deferred until a repo asks for it. | A PR per issue that the owner merges one by one is a different shape, | skills/handbook-sync/2-adoption-procedure.md | #394 |
+| C9.not-your-repo.26 | default | | Hide the descriptor with `.git/info/exclude`, never a `.gitignore` entry, which is itself a tracked file. | Hiding the descriptor that way is exactly the commit you are avoiding | skills/handbook-sync/2-adoption-procedure.md | #393 |
+| C9.not-your-repo.27 | default | | Scheduled autopilot must stay off on such a repo. | Scheduled autopilot must stay OFF on such a repo | skills/handbook-sync/2-adoption-procedure.md | #393 |
+| C9.not-your-repo.28 | default | | Before the first ship, find out whether any workflow runs on push to the integration branch; if none, each ship needs a ci-granted exemption per branch. | Find out which case you are in before the first ship | skills/handbook-sync/2-adoption-procedure.md | #393 |
+| C9.not-your-repo.29 | default | | The main checkout must rest on the integration branch, not on the owner's trunk. | The main checkout must rest on the integration branch | skills/handbook-sync/2-adoption-procedure.md | #393 |
+| C9.not-your-repo.30 | default | | A dashboard's cached repo scan does not pick the repo up until refreshed. | A dashboard's cached repo scan does not pick the repo up | skills/handbook-sync/2-adoption-procedure.md | #393 |
+| C9.not-your-repo.31 | default | | A local audit reports a locally adopted repo as such and flags a descriptor that is untracked but not excluded. | A local audit reports `⌂ adopted locally, not committed` | skills/handbook-sync/2-adoption-procedure.md | #393 |
+| C9.not-your-repo.32 | default | | Prefer full adoption whenever the owner is willing to carry the files; local adoption is a working arrangement for one operator's clones. | Prefer full adoption instead whenever the owner is willing to carry the files | skills/handbook-sync/2-adoption-procedure.md | #393 |
 
 ### §9 A fork of an upstream — a repo you own that tracks one you don't (#449)
 
 | id | class | gate | rule | key | dest | source |
 |---|---|---|---|---|---|---|
-| C9.fork.01 | default | | A fork you own adopts in full: descriptor, labels, CI and registration, all committed. | The fork is yours, so it adopts in full | CONVENTIONS.md | #449 |
-| C9.fork.02 | default | | `colab adopt` detects a fork by a remote named upstream whose URL differs from origin's; --fork and --no-fork override. | `colab adopt` detects it, never asks. | CONVENTIONS.md | #449 |
-| C9.fork.03 | default | | The remote is the fact; the descriptor records only `instruction-files: upstream`, which adopt writes on a fork because CI has no upstream remote. | The remote is the fact, and one key records it | CONVENTIONS.md | #449, #602 |
-| C9.fork.04 | default | | Step 5 is append-only: paste the pointer block at the end of the upstream's CLAUDE.md and leave the upstream's prose where it is. | at the end of the upstream's `CLAUDE.md`. Leave the upstream's prose where it is, | CONVENTIONS.md | #449 |
-| C9.fork.05 | default | | Leave AGENTS.md alone and record the append in the fork's patch list. | and record the append in whatever list the fork keeps of its patches | CONVENTIONS.md | #449 |
-| C9.fork.06 | default | | Without an upstream CLAUDE.md, adopt writes one; without an upstream AGENTS.md it writes the block alone and no AGENTS.md stub. | Without one it is the block alone, and adopt writes no `AGENTS.md` stub | CONVENTIONS.md | #449 |
-| C9.fork.07 | default | | Use CLAUDE.local.md instead only when the fork must stay byte-identical to the upstream. | only when the fork must stay byte-identical to the upstream | CONVENTIONS.md | #449 |
-| C9.fork.08 | default | | Declare `instruction-files: upstream` so the instruction-file check skips the upstream's files, and decline the AGENTS.md graft. | Declare `instruction-files: upstream` | CONVENTIONS.md | #449, #602 |
-| C9.fork.09 | default | | The upstream's agent workflow stays where it is, and the appended block says which flow governs. | The upstream's agent workflow stays where it is, and the appended block says which flow | CONVENTIONS.md | #449 |
-| C9.fork.10 | default | | Do not delete or edit the upstream's skills and commands; add one line inside the appended block instead. | Add one line inside the appended block instead | CONVENTIONS.md | #449 |
-| C9.fork.11 | default | | Declare `migrations:` before the first ship; an upstream's layout is usually not a default. | Declare `migrations:` (step 2) before the first ship. | CONVENTIONS.md | #449 |
-| C9.fork.12 | default | | The upstream's CODEOWNERS is inert here; leave the file alone unless some paths need a review. | Leave the file alone unless some paths here need a review | CONVENTIONS.md | #449 |
-| C9.fork.13 | default | | Everything else in §9 applies to a fork unchanged: the five questions, labels, topic, CI and registration. | Everything else in §9 applies unchanged: the five questions, labels, | CONVENTIONS.md | #449 |
-| C9.fork.14 | default | | Upstream merges come into the fork, and nothing is pushed to the upstream's branches. | nothing is pushed to the upstream's branches | CONVENTIONS.md | #449 |
+| C9.fork.01 | default | | A fork you own adopts in full: descriptor, labels, CI and registration, all committed. | The fork is yours, so it adopts in full | skills/handbook-sync/2-adoption-procedure.md | #449 |
+| C9.fork.02 | default | | `colab adopt` detects a fork by a remote named upstream whose URL differs from origin's; --fork and --no-fork override. | `colab adopt` detects it, never asks. | skills/handbook-sync/2-adoption-procedure.md | #449 |
+| C9.fork.03 | default | | The remote is the fact; the descriptor records only `instruction-files: upstream`, which adopt writes on a fork because CI has no upstream remote. | The remote is the fact, and one key records it | skills/handbook-sync/2-adoption-procedure.md | #449, #602 |
+| C9.fork.04 | default | | Step 5 is append-only: paste the pointer block at the end of the upstream's CLAUDE.md and leave the upstream's prose where it is. | at the end of the upstream's `CLAUDE.md`. Leave the upstream's prose where it is, | skills/handbook-sync/2-adoption-procedure.md | #449 |
+| C9.fork.05 | default | | Leave AGENTS.md alone and record the append in the fork's patch list. | and record the append in whatever list the fork keeps of its patches | skills/handbook-sync/2-adoption-procedure.md | #449 |
+| C9.fork.06 | default | | Without an upstream CLAUDE.md, adopt writes one; without an upstream AGENTS.md it writes the block alone and no AGENTS.md stub. | Without one it is the block alone, and adopt writes no `AGENTS.md` stub | skills/handbook-sync/2-adoption-procedure.md | #449 |
+| C9.fork.07 | default | | Use CLAUDE.local.md instead only when the fork must stay byte-identical to the upstream. | only when the fork must stay byte-identical to the upstream | skills/handbook-sync/2-adoption-procedure.md | #449 |
+| C9.fork.08 | default | | Declare `instruction-files: upstream` so the instruction-file check skips the upstream's files, and decline the AGENTS.md graft. | Declare `instruction-files: upstream` | skills/handbook-sync/2-adoption-procedure.md | #449, #602 |
+| C9.fork.09 | default | | The upstream's agent workflow stays where it is, and the appended block says which flow governs. | The upstream's agent workflow stays where it is, and the appended block says which flow | skills/handbook-sync/2-adoption-procedure.md | #449 |
+| C9.fork.10 | default | | Do not delete or edit the upstream's skills and commands; add one line inside the appended block instead. | Add one line inside the appended block instead | skills/handbook-sync/2-adoption-procedure.md | #449 |
+| C9.fork.11 | default | | Declare `migrations:` before the first ship; an upstream's layout is usually not a default. | Declare `migrations:` (step 2) before the first ship. | skills/handbook-sync/2-adoption-procedure.md | #449 |
+| C9.fork.12 | default | | The upstream's CODEOWNERS is inert here; leave the file alone unless some paths need a review. | Leave the file alone unless some paths here need a review | skills/handbook-sync/2-adoption-procedure.md | #449 |
+| C9.fork.13 | default | | Everything else in §9 applies to a fork unchanged: the five questions, labels, topic, CI and registration. | Everything else in §9 applies unchanged: the five questions, labels, | skills/handbook-sync/2-adoption-procedure.md | #449 |
+| C9.fork.14 | default | | Upstream merges come into the fork, and nothing is pushed to the upstream's branches. | nothing is pushed to the upstream's branches | skills/handbook-sync/2-adoption-procedure.md | #449 |
 
 ### §9 Fixtures and examples use invented values
 

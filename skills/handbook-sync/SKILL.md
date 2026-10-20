@@ -108,7 +108,7 @@ own*](../../CONVENTIONS.md#working-in-a-repo-you-dont-own)) instead, which commi
 
 **One step is a human's, and you should know it before step 1, not after (#522).**
 Answering `exposure` with `none` or `self` needs a human — the bar in
-[§9](../../CONVENTIONS.md#9-adopting-this). Drive everything else; when `colab adopt`
+[the procedure](2-adoption-procedure.md). Drive everything else; when `colab adopt`
 reaches that gate it prints, as its first line, the one command the human runs with
 every answer already filled in. Hand the maintainer that line, unchanged — never
 clear the bar yourself. Adoption asks only the gating rows (deploy/production and
@@ -125,8 +125,9 @@ it, never a substitute.
 
 **Adoption, in the order a run needs it** — full text: [2-adoption-details.md](2-adoption-details.md).
 
-- **The checklist is [`CONVENTIONS.md` §9](../../CONVENTIONS.md#9-adopting-this)** — work it in
-  order; never copy its steps into this skill or the Issue (two copies drift).
+- **The checklist is [2-adoption-procedure.md](2-adoption-procedure.md)** (moved from
+  [`CONVENTIONS.md` §9](../../CONVENTIONS.md#9-adopting-this) by #640, which keeps the contract) —
+  work it in order; never copy its steps elsewhere in this skill or into the Issue (two copies drift).
 - **Ordering trap:** run `colab labels --ensure` *before* the claim — `colab claim` keeps a local
   claim silently when the label does not exist yet.
 - **The question set blocks:** every §9 axis answer is a human's; you may propose `live`/`released`
@@ -209,7 +210,7 @@ name. Re-copying over it destroys work that never came from the handbook.
 ## 6. The CLAUDE conventions block — always a graft
 
 **Never regenerate this block.** It sits inside `CLAUDE.md` — a thin shell importing
-`AGENTS.md` (`CONVENTIONS.md` [§9](../../CONVENTIONS.md#9-adopting-this) step 5, #417), or a hand-written file — and the
+`AGENTS.md` ([the adoption procedure](2-adoption-procedure.md) step 5, #417), or a hand-written file — and the
 template ships placeholders (`<A|B|C>`, `<dev|main>`) that an adopter fills in. Two
 independent reasons not to automate it:
 
@@ -267,7 +268,7 @@ and the audit is what catches it:
   disagree about gate count (`tools/lib/axis-authority.js`) — fixing `project.yml`
   (usually by trusting `exposure`, the axis of record) is part of this work.
   Declaring **neither** key is the other, unconditional finding — "no axis of
-  record" (`CONVENTIONS.md` [§2](../../CONVENTIONS.md#2-tiers)) — which this sync should close by putting [§9](../../CONVENTIONS.md#9-adopting-this)'s
+  record" (`CONVENTIONS.md` [§2](../../CONVENTIONS.md#2-tiers)) — which this sync should close by putting [the procedure](2-adoption-procedure.md)'s
   question set to the repo's own owner, never by guessing an answer.
 - Toolchain pins must still agree between `project.yml` and the manifest.
 - **A private repo must not be able to publish to public npm (#432).** The audit fails a
@@ -290,7 +291,7 @@ and the audit is what catches it:
   a label introduced later — so the check that label powers silently cannot fire (a
   readiness column that never leaves "nobody looked", provenance that reads every issue
   as human-filed). The audit now reports this as `missing convention label(s): …`.
-  Back-fill it here — the same idempotent command §2 and [§9](../../CONVENTIONS.md#9-adopting-this) step 3 use, safe to re-run:
+  Back-fill it here — the same idempotent command §2 and [the procedure](2-adoption-procedure.md) step 3 use, safe to re-run:
   ```sh
   colab labels --ensure
   ```
@@ -301,13 +302,13 @@ and the audit is what catches it:
   exist, so a repo adopted before one of them landed simply has no key for it — legal,
   and silent everywhere else in the audit. But when the audit can also see that the
   repo's own `CLAUDE.md` stamp names a handbook version *older than the axis itself*,
-  it reports one extra `warn`: `marker predates the axis model — … run through [§9](../../CONVENTIONS.md#9-adopting-this)'s
+  it reports one extra `warn`: `marker predates the axis model — … run through [the procedure](2-adoption-procedure.md)'s
   question set`. That is your cue, not the label back-fill's: put the missing
-  question(s) — [§9](../../CONVENTIONS.md#9-adopting-this)'s shared set, the same
+  question(s) — [the procedure](2-adoption-procedure.md)'s shared set, the same
   wording as first-time adoption — to the repo's own owner, and write the answer into
   `project.yml`. **Unlike the label back-fill, this DOES belong in §8's commit** — it
   is a `project.yml` change, not a GitHub-side one. **`writes` is now a veto question
-  (⚖ #233), not a method choice** — put it to the owner as [§9](../../CONVENTIONS.md#9-adopting-this)'s
+  (⚖ #233), not a method choice** — put it to the owner as [the procedure](2-adoption-procedure.md)'s
   question 4 phrases it: should a human ever be allowed to commit straight to this
   repo's trunk checkout? Leaving it unanswered is a legal, common answer (coexistence,
   the default), not a gap that needs closing.
@@ -375,7 +376,7 @@ git show --stat                                                 # verify the fil
 
 **If this was an adoption (§2), additionally:**
 
-- **Each question in [§9](../../CONVENTIONS.md#9-adopting-this)'s shared set was answered by a human**, not inferred — and
+- **Each question in [the procedure](2-adoption-procedure.md)'s shared set was answered by a human**, not inferred — and
   the report says who, and which of the five rows (`tier`/`room`/`exposure`/
   `writes`/`channels`) were actually asked versus already detected/undeclared.
 - **No `exposure` (or any axis) value claiming the absence of a consumer was
@@ -386,7 +387,7 @@ git show --stat                                                 # verify the fil
   longer reports "repo is undescribed" — pasted onto the Issue as output, not
   summarised as a claim.
 - `colab register --list` shows this repo in **both** registries and exits 0.
-- Every step of [§9](../../CONVENTIONS.md#9-adopting-this) is either done or explicitly recorded as not applicable (a repo
+- Every step of [the procedure](2-adoption-procedure.md) is either done or explicitly recorded as not applicable (a repo
   with no GitHub remote skips several) — none left ambiguous.
 - Pre-existing branches are untouched.
 
