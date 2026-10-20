@@ -35,6 +35,13 @@
  *   7. every issue the branch carries has a LIVE `🔒 Claimed` comment naming this branch, posted by
  *      the hand-off's author before the hand-off — the claim really does live elsewhere, and the
  *      party handing off is the party holding it.
+ *      ONE exemption (#647): an issue the trailing run carries that was already CLOSED before the
+ *      hand-off was posted only names history (a flaky test named after it) — it needs no claim, and
+ *      goes back in `refIssues` so the squash says `Refs #A` and ship neither closes it nor posts a
+ *      ship comment on it. Closed AFTER the hand-off is no exemption: closing an issue must never
+ *      launder away the claim it lacked. An issue whose state could not be read is not exempt. Every
+ *      OPEN issue still needs its claim, `--refs` or not — `--refs` decides Closes vs Refs, never who
+ *      may land; and at least one issue must remain to close, or there is nothing handed off.
  *
  * Pure: every input is already read. tools/colab does the IO (`gh api`, `git fetch`, issue views).
  */
@@ -72,11 +79,15 @@ function namedShas(body) {
  *                  or null for an issue whose comments could not be read
  *   syncChain    — (#579) the first-parent ancestors of the remote head reached through pure
  *                  base-sync merges only, nearest first (syncMergeChain's output); [] or absent = none
- * Returns { ok: true, issues, sha, handedOff, syncMerges, executor, url } or { ok: false, reason, detail }.
+ *   issueStates  — (#647) { [n]: { state, closedAt } } per issue as read now; a missing entry is
+ *                  unknown and earns no exemption
+ *   refNumbers   — (#647) the --refs numbers; used only to say why they do not waive a claim
+ * Returns { ok: true, issues, refIssues, sha, handedOff, syncMerges, executor, url } or { ok: false, reason, detail }.
+ * `issues` is the whole trailing run; `refIssues` is its closed-before-the-hand-off subset (#647).
  * `sha` is what lands (the remote head); `handedOff` is the sha the hand-off named — equal to `sha`
  * unless the head was synced, in which case `syncMerges` counts the merges between them.
  */
-function handoffVerdict({ url, comment, branch, refs, claimsByIssue, syncChain }) {
+function handoffVerdict({ url, comment, branch, refs, claimsByIssue, syncChain, issueStates, refNumbers }) {
   const no = (reason, detail) => ({ ok: false, reason, detail });
   const u = parseHandoffUrl(url);
   if (!u) return no('bad-url', `--handoff ${url || '(empty)'} is not an issue-comment URL (…/issues/<N>#issuecomment-<id>)`);
@@ -109,18 +120,36 @@ function handoffVerdict({ url, comment, branch, refs, claimsByIssue, syncChain }
       ? `the hand-off names ${shas.map((s) => s.slice(0, 8)).join(', ')}, but the remote ${branch} is at ${head.slice(0, 8)}${synced} — the branch moved after it was handed off by more than a clean merge of its base; ask its executor for a new hand-off`
       : `the hand-off names no head sha — it must say which commit it hands off (the remote is at ${head.slice(0, 8)})`);
   }
+  const refIssues = issues.filter((n) => closedBefore(issueStates && issueStates[n], comment.createdAt));
+  if (refIssues.length === issues.length) {
+    return no('nothing-to-close', `every issue ${branch} carries (${issues.map((n) => '#' + n).join(' ')}) was closed before the hand-off — there is no open, claimed issue for it to land`);
+  }
+  const waived = new Set((refNumbers || []).map(Number));
   let executor = null;
   for (const n of issues) {
+    if (refIssues.includes(n)) continue;
     const live = claimsByIssue ? claimsByIssue[n] : null;
     if (!live) return no('claims-unreadable', `#${n}'s comments could not be read — the executor's claim cannot be checked`);
     const match = live.find((c) => c.branch === branch && c.login === comment.login && c.at < comment.createdAt);
     if (!match) {
-      return no('no-executor-claim', `#${n} has no live 🔒 claim on ${branch} by ${comment.login || 'the hand-off author'} posted before the hand-off — ` +
+      const st = issueStates && issueStates[n];
+      const why = st && String(st.state).toUpperCase() === 'CLOSED'
+        ? ` (it was closed at ${st.closedAt || 'an unreadable time'}, not before the hand-off at ${comment.createdAt} — only an issue already closed when the hand-off was posted needs no claim)`
+        : waived.has(n) ? ' (--refs keeps it open in the squash; it does not waive the claim of an open issue)' : '';
+      return no('no-executor-claim', `#${n} has no live 🔒 claim on ${branch} by ${comment.login || 'the hand-off author'} posted before the hand-off${why} — ` +
         'the hand-off must come from the party holding the claim');
     }
     if (!executor) executor = { login: match.login, host: match.host, machine: match.machine || '' };
   }
-  return { ok: true, issues, sha: refs.remoteSha, handedOff: lineage[at], syncMerges: at, executor, url: String(url).trim() };
+  return { ok: true, issues, refIssues, sha: refs.remoteSha, handedOff: lineage[at], syncMerges: at, executor, url: String(url).trim() };
+}
+
+/** #647: was this issue CLOSED strictly before `at` (the hand-off's createdAt)? Unknown ⇒ false. */
+function closedBefore(st, at) {
+  if (!st || String(st.state || '').toUpperCase() !== 'CLOSED') return false;
+  const c = Date.parse(st.closedAt || '');
+  const h = Date.parse(at || '');
+  return Number.isFinite(c) && Number.isFinite(h) && c < h;
 }
 
 /**
@@ -209,4 +238,4 @@ function parseHandoffTrailer(body) {
   return m ? { url: m[1], handedOff: m[2] } : null;
 }
 
-module.exports = { parseHandoffUrl, namesBranch, namedShas, handoffVerdict, handoffTrailer, syncMergeChain, parseBatchEntries, parseHandoffTrailer };
+module.exports = { parseHandoffUrl, namesBranch, namedShas, handoffVerdict, closedBefore, handoffTrailer, syncMergeChain, parseBatchEntries, parseHandoffTrailer };

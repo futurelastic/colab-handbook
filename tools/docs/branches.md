@@ -133,7 +133,10 @@ The rules: [CONVENTIONS.md §4, the landing contract](../../CONVENTIONS.md#4-bra
   lands without a takeover from its executor's hand-off (#578): `colab ship --branch <b>
   --handoff <comment-url>` takes the issue set from the branch name once that comment names the
   branch and its current remote head and every issue carries the executor's live claim on it;
-  nothing is claimed here, and the executor keeps its worktree until it confirms the land. A
+  nothing is claimed here, and the executor keeps its worktree until it confirms the land. An
+  issue in the run that was already closed before the hand-off only names history: it needs no
+  claim and lands as `Refs #N`, with no ship comment (#647). Closed after the hand-off is no
+  exemption, and `--refs` never waives an open issue's claim. A
   handed-off branch that fell behind its base is synced by the lander as usual, and the hand-off
   still holds (#579): commits after the handed-off sha are accepted only when each is a pure
   base-sync merge — second parent already on the base, tree equal to git's own clean merge. Any

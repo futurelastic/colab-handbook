@@ -99,6 +99,46 @@ test('#578 a local ref equal to the remote head is fine (a DWIM checkout of the 
   assert.strictEqual(ho.handoffVerdict(base({ refs: { localSha: HEAD, remoteSha: HEAD, localFromRemote: true } })).ok, true);
 });
 
+// #647 — a trailing-run issue already CLOSED before the hand-off only names history: a reference.
+const BR2 = 'fix/flaky-89-90';
+const C2 = { ...COMMENT, body: `wrapped on \`${BR2}\` (head ${HEAD.slice(0, 8)})` };
+const CLAIM2 = { ...CLAIM, branch: BR2 };
+const CLOSED_BEFORE = { state: 'CLOSED', closedAt: '2026-09-01T00:00:00Z' };
+const base2 = (over = {}) => base({ branch: BR2, comment: C2, claimsByIssue: { 89: [], 90: [CLAIM2] }, ...over });
+
+test('#647 an issue closed BEFORE the hand-off needs no claim and comes back as a ref', () => {
+  const v = ho.handoffVerdict(base2({ issueStates: { 89: CLOSED_BEFORE, 90: { state: 'OPEN', closedAt: null } } }));
+  assert.strictEqual(v.ok, true, JSON.stringify(v));
+  assert.deepStrictEqual(v.issues, [89, 90]);
+  assert.deepStrictEqual(v.refIssues, [89]);
+  assert.strictEqual(v.executor.login, 'exec', 'the executor is read off the claimed issue, not the ref');
+});
+
+test('#647 an OPEN unclaimed issue in the run is still no-executor-claim — --refs does not waive it', () => {
+  const open = { 89: { state: 'OPEN', closedAt: null }, 90: { state: 'OPEN' } };
+  const v = ho.handoffVerdict(base2({ issueStates: open }));
+  assert.strictEqual(v.reason, 'no-executor-claim');
+  assert.match(v.detail, /#89/);
+  const r = ho.handoffVerdict(base2({ issueStates: open, refNumbers: [89] }));
+  assert.strictEqual(r.reason, 'no-executor-claim');
+  assert.match(r.detail, /does not waive the claim/);
+});
+
+test('#647 closed AFTER the hand-off is still refused — closing never launders a missing claim', () => {
+  const v = ho.handoffVerdict(base2({ issueStates: { 89: { state: 'CLOSED', closedAt: '2026-10-08T12:00:01Z' }, 90: { state: 'OPEN' } }, refNumbers: [89] }));
+  assert.strictEqual(v.reason, 'no-executor-claim');
+  assert.match(v.detail, /not before the hand-off/);
+  // Same instant is not "before" either; unreadable state earns nothing.
+  assert.strictEqual(ho.handoffVerdict(base2({ issueStates: { 89: { state: 'CLOSED', closedAt: COMMENT.createdAt } } })).reason, 'no-executor-claim');
+  assert.strictEqual(ho.handoffVerdict(base2({ issueStates: { 89: { state: 'CLOSED', closedAt: '' } } })).reason, 'no-executor-claim');
+  assert.strictEqual(ho.handoffVerdict(base2()).reason, 'no-executor-claim', 'no issueStates at all = today\'s rule');
+});
+
+test('#647 a run with every issue closed before the hand-off has nothing to land', () => {
+  const v = ho.handoffVerdict(base2({ issueStates: { 89: CLOSED_BEFORE, 90: CLOSED_BEFORE } }));
+  assert.strictEqual(v.reason, 'nothing-to-close');
+});
+
 // =================================================================================================
 // The real CLI — two registries, one tracker
 // =================================================================================================
@@ -196,7 +236,7 @@ function fixture({ batch = false } = {}) {
     "}",
     "if (argv[0] === 'issue' && argv[1] === 'view') {",
     "  const n = argv[2]; const st = load(n);",
-    "  console.log(JSON.stringify({ state: 'OPEN', comments: st.comments, assignees: st.assignees.map((login) => ({ login })), labels: st.labels.map((name) => ({ name })) }));",
+    "  console.log(JSON.stringify({ state: st.state || 'OPEN', closedAt: st.closedAt || null, comments: st.comments, assignees: st.assignees.map((login) => ({ login })), labels: st.labels.map((name) => ({ name })) }));",
     "  process.exit(0);",
     "}",
     "if (argv[0] === 'issue' || argv[0] === 'label') process.exit(0);",
@@ -611,4 +651,38 @@ test('#603 e2e: the remote-only subject is identical to the one derived with a l
   const withLocal = subj(dry());
   assert.ok(withLocal && !/^\(none/.test(withLocal), withLocal);
   assert.strictEqual(remoteOnly, withLocal);
+});
+
+test('#647 e2e: a run carrying an issue closed before the hand-off lands — Closes the claimed one, Refs the closed one, no comment on it', () => {
+  const fx = fixture();
+  // #89 was closed long before the work started; the branch only names it.
+  fs.writeFileSync(path.join(fx.ghState, 'issue-89.json'),
+    JSON.stringify({ state: 'CLOSED', closedAt: '2020-01-01T00:00:00Z', comments: [], assignees: [], labels: [] }));
+  const { head } = executorBuilds(fx, BR2, [90]);
+  const url = postHandoff(fx, 90, '647', `wrapped on \`${BR2}\` (head ${head.slice(0, 8)}).`);
+
+  const dry = JSON.parse(colab(fx, ['ship', '--branch', BR2, '--handoff', url, '--repo', fx.workB, '--dry', '--json'], { home: fx.homeB, ...SHIPPER }).out);
+  assert.deepStrictEqual(dry.checks.filter((c) => !c.ok).map((c) => c.name), [], JSON.stringify(dry.checks, null, 1));
+  assert.deepStrictEqual(dry.refsIssues, [89]);
+  assert.deepStrictEqual(dry.closeIssues, [90]);
+
+  const r = colab(fx, ['ship', '--branch', BR2, '--handoff', url, '--repo', fx.workB], { home: fx.homeB, ...SHIPPER });
+  assert.strictEqual(r.code, 0, r.out + r.err);
+  assert.match(r.out, /closed before the hand-off — Refs only/);
+  const msg = execFileSync('git', ['--git-dir', fx.origin, 'log', '-1', '--format=%B', 'main'], { encoding: 'utf8' });
+  assert.match(msg, /Closes #90/);
+  assert.match(msg, /Refs #89/);
+  assert.doesNotMatch(msg, /Closes #89/);
+  assert.deepStrictEqual(issueState(fx, 89).comments, [], 'nothing is posted on the closed reference');
+  assert.ok(issueState(fx, 90).comments.some((c) => /Shipped to main by colab ship/.test(c.body)));
+
+  // The same run with #89 closed AFTER the hand-off is refused (no laundering).
+  const fx2 = fixture();
+  const b2 = executorBuilds(fx2, BR2, [90]);
+  const url2 = postHandoff(fx2, 90, '648', `wrapped on \`${BR2}\` (head ${b2.head.slice(0, 8)}).`);
+  fs.writeFileSync(path.join(fx2.ghState, 'issue-89.json'),
+    JSON.stringify({ state: 'CLOSED', closedAt: '2099-01-01T00:00:00Z', comments: [], assignees: [], labels: [] }));
+  const r2 = colab(fx2, ['ship', '--branch', BR2, '--handoff', url2, '--refs', '89', '--repo', fx2.workB], { home: fx2.homeB, ...SHIPPER });
+  assert.strictEqual(r2.code, 1, r2.out + r2.err);
+  assert.match(r2.err, /#89 has no live 🔒 claim/);
 });
