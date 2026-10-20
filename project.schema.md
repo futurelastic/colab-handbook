@@ -1132,6 +1132,7 @@ two live branches may edit at once: migrations, a schema, a public API contract 
 the only path-keyed start brake: an orchestrator, and `code-triage` §5's file gate, hold an
 issue's start only while a live branch edits a path it will edit **and** that path is listed
 here. Every other shared file starts in parallel (`CONVENTIONS.md` §5, *Readiness*). No glob.
+`coupled` is the key's only field; the rule it serves is [`CONVENTIONS.md` §2, *Contention*](CONVENTIONS.md#contention--what-may-run-at-once-636).
 The list is **inline only** — the audit's reader takes no block list inside a map and reports
 one as a finding; an unreadable value reads as absent.
 

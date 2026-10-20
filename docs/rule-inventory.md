@@ -97,6 +97,19 @@ The 209 rows whose text moved keep their ids; only `dest` changed, to `tools/doc
 `tools/docs/red-trunk.md` or `tools/docs/ci-lanes.md`. The contract left in §7 is five new rows,
 `C7.contract.01`–`05`.
 
+Result for #636 (base `68e6d61e`; §2's *Solo flow* and *Place-claims* moved verbatim to
+`tools/docs/contention.md`, each heading left as a stub), run as
+`node scripts/check-doc-move.mjs --base 68e6d61e`:
+
+```
+CONVENTIONS.md @ 68e6d61e: units 1150 · found whole 1150 · by sentence 0 · now 4443 lines
+project.schema.md @ 68e6d61e: units 476 · found whole 475 · by sentence 1 · now 1802 lines
+missing 0 · headings gone from their file 0 · ledger entries 0 (stale 0)
+```
+
+The 74 `C2x.solo.*` / `C2x.place.*` rows whose text moved keep their ids; only `dest` changed, to
+`tools/docs/contention.md`. The rule left in §2 is four new rows, `C2.contention.01`–`04`.
+
 Phase 2 split rationale off rule sentences under the ruling on #539 (option A): the rule half
 keeps its meaning and modal verb, the rationale moves verbatim to `docs/adr/539-*.md`, and each
 reworded unit the check could not find by itself is listed in a `#539 ledger` block after its
@@ -514,95 +527,104 @@ Two units reworded on purpose (base `c56bac20`), each to carry one new clause in
 
 | id | class | gate | rule | key | dest | source |
 |---|---|---|---|---|---|---|
-| C2x.solo.01 | default |  | Solo flow is legal on any repo that does not declare `writes: isolated`, and only to a session a human is behind. | legal on any repo that does not declare `writes: isolated` | CONVENTIONS.md | #233 |
-| C2x.solo.02 | hard | tools/lib/solo.js::function soloEligibility | Attendance comes first, before any mechanical check: `colab solo` requires `COLAB_HUMAN=1`. | Attendance comes first — before any mechanical check below. | CONVENTIONS.md | #237 |
-| C2x.solo.03 | default |  | Set `COLAB_HUMAN=1` only on a human's explicit instruction: transcription, never inference. | Set it only on a human's explicit instruction — transcription, never inference | CONVENTIONS.md | — |
-| C2x.solo.04 | default |  | A headless, scheduled or driver session may never set `COLAB_HUMAN=1`, whatever its prompt contains. | Live conversation only — a headless, scheduled, or driver session may never set it | CONVENTIONS.md | — |
-| C2x.solo.05 | hard | tools/lib/solo.js::function soloEligibility | `writes: isolated` vetoes solo flow for a human exactly as for an automated session. | `writes: isolated` vetoes this outright, for a human exactly as for | CONVENTIONS.md | #233 |
-| C2x.solo.06 | hard | tools/lib/solo.js::function entryProblems ; tools/colab::solo refused in | `colab solo` checks fresh on every invocation: `COLAB_HUMAN=1`, no veto, no live solo session, trunk checked out with nothing unpushed, a clean tree, no conflicting place-claim. | `colab solo` checks fresh on every invocation, never a cached answer | CONVENTIONS.md | #136 |
-| C2x.solo.07 | hard | tools/lib/solo.js::function entryProblems ; tools/colab::solo refused in | Anything held or unmet refuses solo entry outright: full ceremony, no partial credit. | held/unmet refuses outright — full ceremony, no partial credit | CONVENTIONS.md | — |
-| C2x.solo.08 | default |  | A solo record whose co-located place-claim holder is confirmed dead is superseded rather than refused. | a solo record whose co-located place-claim holder is confirmed dead is superseded rather than refused | CONVENTIONS.md | #285 |
+| C2x.solo.01 | default |  | Solo flow is legal on any repo that does not declare `writes: isolated`, and only to a session a human is behind. | legal on any repo that does not declare `writes: isolated` | tools/docs/contention.md | #233 |
+| C2x.solo.02 | hard | tools/lib/solo.js::function soloEligibility | Attendance comes first, before any mechanical check: `colab solo` requires `COLAB_HUMAN=1`. | Attendance comes first — before any mechanical check below. | tools/docs/contention.md | #237 |
+| C2x.solo.03 | default |  | Set `COLAB_HUMAN=1` only on a human's explicit instruction: transcription, never inference. | Set it only on a human's explicit instruction — transcription, never inference | tools/docs/contention.md | — |
+| C2x.solo.04 | default |  | A headless, scheduled or driver session may never set `COLAB_HUMAN=1`, whatever its prompt contains. | Live conversation only — a headless, scheduled, or driver session may never set it | tools/docs/contention.md | — |
+| C2x.solo.05 | hard | tools/lib/solo.js::function soloEligibility | `writes: isolated` vetoes solo flow for a human exactly as for an automated session. | `writes: isolated` vetoes this outright, for a human exactly as for | tools/docs/contention.md | #233 |
+| C2x.solo.06 | hard | tools/lib/solo.js::function entryProblems ; tools/colab::solo refused in | `colab solo` checks fresh on every invocation: `COLAB_HUMAN=1`, no veto, no live solo session, trunk checked out with nothing unpushed, a clean tree, no conflicting place-claim. | `colab solo` checks fresh on every invocation, never a cached answer | tools/docs/contention.md | #136 |
+| C2x.solo.07 | hard | tools/lib/solo.js::function entryProblems ; tools/colab::solo refused in | Anything held or unmet refuses solo entry outright: full ceremony, no partial credit. | held/unmet refuses outright — full ceremony, no partial credit | tools/docs/contention.md | — |
+| C2x.solo.08 | default |  | A solo record whose co-located place-claim holder is confirmed dead is superseded rather than refused. | a solo record whose co-located place-claim holder is confirmed dead is superseded rather than refused | tools/docs/contention.md | #285 |
 | C2x.solo.09 | explanation |  | Why the place-claim, not the solo record, is asked for liveness. | carries no liveness signal — it used to refuse on mere presence | docs/adr/236-solo-flow-entry-gate-rationale.md | #285 |
-| C2x.solo.10 | default |  | A solo-record holder with liveness `true` or `null` (unprovable) keeps the refusal: fail closed. | `live: true` and `live: null` (unprovable | CONVENTIONS.md | #288 |
-| C2x.solo.11 | default |  | The dead-holder supersession is not gated on any `writes:` value. | is deliberately not gated on any `writes:` value | CONVENTIONS.md | #285 |
-| C2x.solo.12 | default |  | A worktree elsewhere in the repo (#236) or a claim held elsewhere (#240) is not on the entry-gate list. | a worktree existing anywhere else in the repo (#236), or a claim held | CONVENTIONS.md | #236 |
+| C2x.solo.10 | default |  | A solo-record holder with liveness `true` or `null` (unprovable) keeps the refusal: fail closed. | `live: true` and `live: null` (unprovable | tools/docs/contention.md | #288 |
+| C2x.solo.11 | default |  | The dead-holder supersession is not gated on any `writes:` value. | is deliberately not gated on any `writes:` value | tools/docs/contention.md | #285 |
+| C2x.solo.12 | default |  | A worktree elsewhere in the repo (#236) or a claim held elsewhere (#240) is not on the entry-gate list. | a worktree existing anywhere else in the repo (#236), or a claim held | tools/docs/contention.md | #236 |
 | C2x.solo.13 | explanation |  | Why a worktree's claim is that worktree's business, not this checkout's. | holds an *issue*, not a *place*, so a claim tied to a worktree elsewhere is that | docs/adr/236-solo-flow-entry-gate-rationale.md | #240 |
-| C2x.solo.14 | default |  | A claim taken directly against this checkout, with no worktree, still refuses solo entry via the place-claim check. | A claim taken directly against this checkout, with no worktree, already acquires | CONVENTIONS.md | #240 |
-| C2x.solo.15 | default |  | Small Conventional Commits go straight to trunk in solo flow. | Small Conventional Commits go straight to trunk; | CONVENTIONS.md | — |
-| C2x.solo.16 | default |  | CI after a solo push is an alarm, not a gate, so recovery rather than prevention is the obligation. | an alarm, not a gate, so recovery rather than prevention is the obligation | CONVENTIONS.md | — |
-| C2x.solo.17 | default |  | Solo flow stops requiring a branch but does not forbid one. | solo flow stops requiring a branch, it does not forbid one. | CONVENTIONS.md | — |
-| C2x.solo.18 | default |  | An Issue is filed on demand, not on entry. | An Issue is filed on demand, not on entry | CONVENTIONS.md | — |
-| C2x.solo.19 | default |  | The exit check is never gated on attendance: `colab solo --done` re-derives fresh that the tree is clean and everything pushed. | Exit check, not teardown, and never gated on attendance. | CONVENTIONS.md | #237 |
-| C2x.solo.20 | default |  | `colab solo --done` dispatches before the eligibility check, so a missing `COLAB_HUMAN=1` cannot strand the lock. | so it dispatches before the eligibility check | CONVENTIONS.md | #237 |
-| C2x.solo.21 | default |  | Solo flow's own invariants are never relaxed: CI secret scan, reserved ports, Conventional Commits, no scheduled driver. | Solo flow's own invariants, never relaxed even here: | CONVENTIONS.md | — |
-| C2x.solo.22 | default |  | `production: null` is not required for solo flow; a live repo may run it if it does not declare the veto. | is not on this list — `writes` is deliberately not coupled to production | CONVENTIONS.md | — |
-| C2x.solo.23 | default |  | `autonomy: auto-trunk` is not required for solo flow; the grant governs only the branch fallback. | is not either — a solo-flow trunk-direct commit produces no branch | CONVENTIONS.md | — |
-| C2x.solo.24 | default |  | A checkout more than one session touches can never legally run solo flow there, scoped to the checkout, not the repo. | A *checkout* more than one session touches can never legally run solo flow there | CONVENTIONS.md | #236 |
-| C2x.solo.25 | default |  | A repo hosting another session via a worktree or a claim tied to one is not disqualifying by itself. | is not disqualifying by itself | CONVENTIONS.md | #240 |
-| C2x.solo.26 | default |  | Consumers inferring activity from worktrees and claims under-report a solo session; fixing that is each consumer's call. | fixing that is each such consumer's own call, not mandated here. | CONVENTIONS.md | — |
+| C2x.solo.14 | default |  | A claim taken directly against this checkout, with no worktree, still refuses solo entry via the place-claim check. | A claim taken directly against this checkout, with no worktree, already acquires | tools/docs/contention.md | #240 |
+| C2x.solo.15 | default |  | Small Conventional Commits go straight to trunk in solo flow. | Small Conventional Commits go straight to trunk; | tools/docs/contention.md | — |
+| C2x.solo.16 | default |  | CI after a solo push is an alarm, not a gate, so recovery rather than prevention is the obligation. | an alarm, not a gate, so recovery rather than prevention is the obligation | tools/docs/contention.md | — |
+| C2x.solo.17 | default |  | Solo flow stops requiring a branch but does not forbid one. | solo flow stops requiring a branch, it does not forbid one. | tools/docs/contention.md | — |
+| C2x.solo.18 | default |  | An Issue is filed on demand, not on entry. | An Issue is filed on demand, not on entry | tools/docs/contention.md | — |
+| C2x.solo.19 | default |  | The exit check is never gated on attendance: `colab solo --done` re-derives fresh that the tree is clean and everything pushed. | Exit check, not teardown, and never gated on attendance. | tools/docs/contention.md | #237 |
+| C2x.solo.20 | default |  | `colab solo --done` dispatches before the eligibility check, so a missing `COLAB_HUMAN=1` cannot strand the lock. | so it dispatches before the eligibility check | tools/docs/contention.md | #237 |
+| C2x.solo.21 | default |  | Solo flow's own invariants are never relaxed: CI secret scan, reserved ports, Conventional Commits, no scheduled driver. | Solo flow's own invariants, never relaxed even here: | tools/docs/contention.md | — |
+| C2x.solo.22 | default |  | `production: null` is not required for solo flow; a live repo may run it if it does not declare the veto. | is not on this list — `writes` is deliberately not coupled to production | tools/docs/contention.md | — |
+| C2x.solo.23 | default |  | `autonomy: auto-trunk` is not required for solo flow; the grant governs only the branch fallback. | is not either — a solo-flow trunk-direct commit produces no branch | tools/docs/contention.md | — |
+| C2x.solo.24 | default |  | A checkout more than one session touches can never legally run solo flow there, scoped to the checkout, not the repo. | A *checkout* more than one session touches can never legally run solo flow there | tools/docs/contention.md | #236 |
+| C2x.solo.25 | default |  | A repo hosting another session via a worktree or a claim tied to one is not disqualifying by itself. | is not disqualifying by itself | tools/docs/contention.md | #240 |
+| C2x.solo.26 | default |  | Consumers inferring activity from worktrees and claims under-report a solo session; fixing that is each consumer's call. | fixing that is each such consumer's own call, not mandated here. | tools/docs/contention.md | — |
 
 ### Place-claims — the writer-verifiable hold a shared checkout needs
 
 | id | class | gate | rule | key | dest | source |
 |---|---|---|---|---|---|---|
-| C2x.place.01 | default |  | A worktree writer needs no lock; a writer of the shared trunk checkout needs a place-claim. | A **worktree** writer needs no lock | CONVENTIONS.md | #233 |
-| C2x.place.02 | default |  | A place-claim is path-scoped, held by a session and verified by the writer itself. | **path-scoped**, not repo-scoped — the checkout path is the unit | CONVENTIONS.md | — |
+| C2x.place.01 | default |  | A worktree writer needs no lock; a writer of the shared trunk checkout needs a place-claim. | A **worktree** writer needs no lock | tools/docs/contention.md | #233 |
+| C2x.place.02 | default |  | A place-claim is path-scoped, held by a session and verified by the writer itself. | **path-scoped**, not repo-scoped — the checkout path is the unit | tools/docs/contention.md | — |
 | C2x.place.03 | explanation |  | What a place-claim is not: the claim registry, a worktree's existence, a spawner's trunk-lock. | Three partial mechanisms already exist in this fleet | docs/adr/242-place-claims-rationale.md | — |
-| C2x.place.04 | default |  | A hold on the main checkout records `branch: null`; a hold on a worktree records its real branch; the literal `trunk` is refused. | the main checkout records `branch: null` | CONVENTIONS.md | — |
-| C2x.place.05 | default |  | Release is a read-time liveness lookup, never a state transition written at kill time. | Release is a liveness lookup at read time — never a state transition written at kill time. | CONVENTIONS.md | — |
-| C2x.place.06 | default |  | A place-claim's check re-derives whether its holder is alive every time it is read, not a stored `released` flag. | re-derives whether its holder is still alive every time it is | CONVENTIONS.md | — |
+| C2x.place.04 | default |  | A hold on the main checkout records `branch: null`; a hold on a worktree records its real branch; the literal `trunk` is refused. | the main checkout records `branch: null` | tools/docs/contention.md | — |
+| C2x.place.05 | default |  | Release is a read-time liveness lookup, never a state transition written at kill time. | Release is a liveness lookup at read time — never a state transition written at kill time. | tools/docs/contention.md | — |
+| C2x.place.06 | default |  | A place-claim's check re-derives whether its holder is alive every time it is read, not a stored `released` flag. | re-derives whether its holder is still alive every time it is | tools/docs/contention.md | — |
 | C2x.place.07 | explanation |  | The measured lag of the spawn-time trunk-lock's poller. | Measured on the one such lock already running in this fleet | docs/adr/242-place-claims-rationale.md | — |
-| C2x.place.08 | default |  | Adopt the read-time liveness semantics rather than the poller's. | A read-time liveness check has no such lag; adopt that stronger semantics rather than the poller's. | CONVENTIONS.md | — |
-| C2x.place.09 | default |  | `colab release` frees a trunk claim's hold once no claim of that session still holds that checkout. | `colab release` frees it once | CONVENTIONS.md | #305 |
-| C2x.place.10 | default |  | A hold is released on ownership proved from the claim record's own session, never an ambient `--session`. | never from an ambient `--session` | CONVENTIONS.md | #305 |
+| C2x.place.08 | default |  | Adopt the read-time liveness semantics rather than the poller's. | A read-time liveness check has no such lag; adopt that stronger semantics rather than the poller's. | tools/docs/contention.md | — |
+| C2x.place.09 | default |  | `colab release` frees a trunk claim's hold once no claim of that session still holds that checkout. | `colab release` frees it once | tools/docs/contention.md | #305 |
+| C2x.place.10 | default |  | A hold is released on ownership proved from the claim record's own session, never an ambient `--session`. | never from an ambient `--session` | tools/docs/contention.md | #305 |
 | C2x.place.11 | explanation |  | The 45-minute measurement of a hold that outlived its release. | blocking every sibling claim on the machine. | docs/adr/242-place-claims-rationale.md | #305 |
-| C2x.place.12 | default |  | Identity is fixed when the hold is written, never matched loosely when it is released. | Identity is fixed when the hold is written, never matched loosely when it is released. | CONVENTIONS.md | #306 |
-| C2x.place.13 | default |  | `sessionName` is never widened into an exemption key. | `sessionName` is **never** widened into an exemption key | CONVENTIONS.md | #306 |
-| C2x.place.14 | default |  | The place-claim decision happens inside the state lock, in `acquire`, called from within `state.mutate`. | The decision happens INSIDE the state lock, not beside it (#285). | CONVENTIONS.md | #285 |
+| C2x.place.12 | default |  | Identity is fixed when the hold is written, never matched loosely when it is released. | Identity is fixed when the hold is written, never matched loosely when it is released. | tools/docs/contention.md | #306 |
+| C2x.place.13 | default |  | `sessionName` is never widened into an exemption key. | `sessionName` is **never** widened into an exemption key | tools/docs/contention.md | #306 |
+| C2x.place.14 | default |  | The place-claim decision happens inside the state lock, in `acquire`, called from within `state.mutate`. | The decision happens INSIDE the state lock, not beside it (#285). | tools/docs/contention.md | #285 |
 | C2x.place.15 | explanation |  | The measured 8-of-8 concurrent acquire race on one checkout. | Measured on a fixture: 8 concurrent `colab place acquire` invocations against one checkout ALL exited 0 | docs/adr/242-place-claims-rationale.md | #285 |
-| C2x.place.16 | default |  | The cheap lock-free pre-check remains at every call site and owns the `--force`/`COLAB_HUMAN=1` policy, but is not the authority. | The cheap lock-free pre-check remains at every call site | CONVENTIONS.md | #285 |
-| C2x.place.17 | default |  | The lock is a same-filesystem `mkdir`: it orders writers on one machine only. | the lock is a same-filesystem `mkdir`, so it orders writers on ONE machine | CONVENTIONS.md | #285 |
-| C2x.place.18 | default |  | Serialization means acquire-or-refuse, never a queue with waiting. | Serialization means acquire-or-refuse, never a queue with waiting. | CONVENTIONS.md | #285 |
-| C2x.place.19 | default |  | Nothing sleeps, polls or blocks inside the place-claim tool. | Nothing sleeps, polls, or blocks inside the tool. | CONVENTIONS.md | #285 |
+| C2x.place.16 | default |  | The cheap lock-free pre-check remains at every call site and owns the `--force`/`COLAB_HUMAN=1` policy, but is not the authority. | The cheap lock-free pre-check remains at every call site | tools/docs/contention.md | #285 |
+| C2x.place.17 | default |  | The lock is a same-filesystem `mkdir`: it orders writers on one machine only. | the lock is a same-filesystem `mkdir`, so it orders writers on ONE machine | tools/docs/contention.md | #285 |
+| C2x.place.18 | default |  | Serialization means acquire-or-refuse, never a queue with waiting. | Serialization means acquire-or-refuse, never a queue with waiting. | tools/docs/contention.md | #285 |
+| C2x.place.19 | default |  | Nothing sleeps, polls or blocks inside the place-claim tool. | Nothing sleeps, polls, or blocks inside the tool. | tools/docs/contention.md | #285 |
 | C2x.place.20 | explanation |  | The two structural reasons against a waiting queue. | Two reasons, both structural rather than stylistic | docs/adr/242-place-claims-rationale.md | #285 |
-| C2x.place.21 | default |  | A caller that wants to wait polls `colab place check <path>` itself. | A caller that wants to wait polls `colab place check <path>` itself | CONVENTIONS.md | #285 |
-| C2x.place.22 | hard | tools/lib/place.js::syncedStateProblem | A place-claim refuses to acquire from a file-synced location. | A place-claim refuses to acquire from such a path. | CONVENTIONS.md | #289 |
-| C2x.place.23 | default |  | The synced-path rule rules only on the lock's own state path, not on the checkout being synced. | **This rules only on the lock's own state path** | CONVENTIONS.md | #289 |
-| C2x.place.24 | default |  | A repo whose working tree is synced to another machine cannot use trunk-direct at all. | a repo whose working tree is synced to another machine cannot use | CONVENTIONS.md | #289 |
-| C2x.place.25 | default |  | Degraded mode: if the lock cannot be reached, the writer is told to use a worktree and branch, never to proceed unlocked. | the writer is told to use a worktree and branch instead | CONVENTIONS.md | — |
-| C2x.place.26 | default |  | Nothing ever proceeds trunk-direct without a hold. | nothing ever proceeds trunk-direct without a hold. | CONVENTIONS.md | — |
-| C2x.place.27 | hard | tools/lib/place.js::live-other | Overriding a held place-claim with a live holder requires `COLAB_HUMAN=1`, the same bar as a migration grant or a promotion. | overriding one requires the same `COLAB_HUMAN=1` bar as | CONVENTIONS.md | #289 |
-| C2x.place.28 | default |  | An `unknown`-liveness holder needs a human: wait for the liveness window or override on confirmed knowledge. | An `unknown`-liveness holder (recorded by session URL | CONVENTIONS.md | #289 |
-| C2x.place.29 | default |  | A place-claim refusal always names a resolvable holder, never a bare unknown. | The refusal always names a resolvable holder — never a bare "unknown" (#235). | CONVENTIONS.md | #235 |
-| C2x.place.30 | default |  | Acquiring without `--session`/`--session-name` through `colab place acquire` or a worktree's hold succeeds but warns. | still succeeds without `--session`/`--session-name` (a never-fail stance) but warns | CONVENTIONS.md | #235 |
-| C2x.place.31 | default |  | Supply an identity when one is available; the pid fallback is a floor, not a substitute. | supply an identity when one is available, this is a floor, not a substitute. | CONVENTIONS.md | #235 |
-| C2x.place.32 | hard | tools/colab::function requirePlaceIdentity | `colab claim` with no `--worktree` and `colab solo` refuse outright when no `--session` or `COLAB_SESSION` is given. | So both now REFUSE outright, before any state is touched, when no `--session` | CONVENTIONS.md | #242 |
-| C2x.place.33 | default |  | A bare `pid` is process lineage, never used to decide the re-acquire exemption, only surfaced as a hint (mixed). | A BARE `pid` is process lineage, not a session, and is never used to decide the re-acquire exemption | CONVENTIONS.md | #242 |
+| C2x.place.21 | default |  | A caller that wants to wait polls `colab place check <path>` itself. | A caller that wants to wait polls `colab place check <path>` itself | tools/docs/contention.md | #285 |
+| C2x.place.22 | hard | tools/lib/place.js::syncedStateProblem | A place-claim refuses to acquire from a file-synced location. | A place-claim refuses to acquire from such a path. | tools/docs/contention.md | #289 |
+| C2x.place.23 | default |  | The synced-path rule rules only on the lock's own state path, not on the checkout being synced. | **This rules only on the lock's own state path** | tools/docs/contention.md | #289 |
+| C2x.place.24 | default |  | A repo whose working tree is synced to another machine cannot use trunk-direct at all. | a repo whose working tree is synced to another machine cannot use | tools/docs/contention.md | #289 |
+| C2x.place.25 | default |  | Degraded mode: if the lock cannot be reached, the writer is told to use a worktree and branch, never to proceed unlocked. | the writer is told to use a worktree and branch instead | tools/docs/contention.md | — |
+| C2x.place.26 | default |  | Nothing ever proceeds trunk-direct without a hold. | nothing ever proceeds trunk-direct without a hold. | tools/docs/contention.md | — |
+| C2x.place.27 | hard | tools/lib/place.js::live-other | Overriding a held place-claim with a live holder requires `COLAB_HUMAN=1`, the same bar as a migration grant or a promotion. | overriding one requires the same `COLAB_HUMAN=1` bar as | tools/docs/contention.md | #289 |
+| C2x.place.28 | default |  | An `unknown`-liveness holder needs a human: wait for the liveness window or override on confirmed knowledge. | An `unknown`-liveness holder (recorded by session URL | tools/docs/contention.md | #289 |
+| C2x.place.29 | default |  | A place-claim refusal always names a resolvable holder, never a bare unknown. | The refusal always names a resolvable holder — never a bare "unknown" (#235). | tools/docs/contention.md | #235 |
+| C2x.place.30 | default |  | Acquiring without `--session`/`--session-name` through `colab place acquire` or a worktree's hold succeeds but warns. | still succeeds without `--session`/`--session-name` (a never-fail stance) but warns | tools/docs/contention.md | #235 |
+| C2x.place.31 | default |  | Supply an identity when one is available; the pid fallback is a floor, not a substitute. | supply an identity when one is available, this is a floor, not a substitute. | tools/docs/contention.md | #235 |
+| C2x.place.32 | hard | tools/colab::function requirePlaceIdentity | `colab claim` with no `--worktree` and `colab solo` refuse outright when no `--session` or `COLAB_SESSION` is given. | So both now REFUSE outright, before any state is touched, when no `--session` | tools/docs/contention.md | #242 |
+| C2x.place.33 | default |  | A bare `pid` is process lineage, never used to decide the re-acquire exemption, only surfaced as a hint (mixed). | A BARE `pid` is process lineage, not a session, and is never used to decide the re-acquire exemption | tools/docs/contention.md | #242 |
 | C2x.place.34 | explanation |  | Why a bare pid never exempts a re-acquire: the falsifier run. | Two invocations sharing a parent shell share one `pid` without being one writer | docs/adr/242-place-claims-rationale.md | #242 |
-| C2x.place.35 | default |  | The anchor pid is resolved per call, not always `process.ppid`. | The anchor pid is resolved per call, not always `process.ppid` (#288). | CONVENTIONS.md | #288 |
-| C2x.place.36 | default |  | Anchor resolution: an explicit `--pid` or `COLAB_PLACE_PID` wins, then a verified auto-detected ancestor. | an explicit `--pid <n\|none>` (or `COLAB_PLACE_PID`) always wins; | CONVENTIONS.md | #288 |
-| C2x.place.37 | default |  | An agent shell with nothing provable fails closed rather than anchoring on its own `ppid`. | an agent shell (`CLAUDECODE`/`AI_AGENT`) with nothing provable fails CLOSED rather than | CONVENTIONS.md | #288 |
-| C2x.place.38 | default |  | A pid that fails closed is recorded and surfaced as a lead but never treated as a liveness signal. | it is simply never treated as a liveness signal, so it | CONVENTIONS.md | #288 |
-| C2x.place.39 | default |  | A hold's holder is identified by its proven anchor process as well as its session string. | A hold's holder is identified by its proven anchor process as well as by its session string (#317). | CONVENTIONS.md | #317 |
-| C2x.place.40 | default |  | A hold is also yours when its recorded anchor pid is alive and provably contains this invocation. | So a hold is also yours when its recorded anchor pid is alive and | CONVENTIONS.md | #317 |
-| C2x.place.41 | default |  | A `default`-proof anchor and every record written before #317 are excluded from self-ownership. | A `default` proof — a bare `process.ppid` — and every | CONVENTIONS.md | #317 |
-| C2x.place.42 | default |  | `sessionName` is never an ownership key, on any path. | `sessionName` is still never an ownership key, on any path. | CONVENTIONS.md | #317 |
-| C2x.place.43 | default |  | A confirmed-dead holder lapses at read time: it is a record to clear, not a conflict to override. | A confirmed-dead holder lapses at read time — it is a record to clear, not a conflict to override (#317). | CONVENTIONS.md | #317 |
+| C2x.place.35 | default |  | The anchor pid is resolved per call, not always `process.ppid`. | The anchor pid is resolved per call, not always `process.ppid` (#288). | tools/docs/contention.md | #288 |
+| C2x.place.36 | default |  | Anchor resolution: an explicit `--pid` or `COLAB_PLACE_PID` wins, then a verified auto-detected ancestor. | an explicit `--pid <n\|none>` (or `COLAB_PLACE_PID`) always wins; | tools/docs/contention.md | #288 |
+| C2x.place.37 | default |  | An agent shell with nothing provable fails closed rather than anchoring on its own `ppid`. | an agent shell (`CLAUDECODE`/`AI_AGENT`) with nothing provable fails CLOSED rather than | tools/docs/contention.md | #288 |
+| C2x.place.38 | default |  | A pid that fails closed is recorded and surfaced as a lead but never treated as a liveness signal. | it is simply never treated as a liveness signal, so it | tools/docs/contention.md | #288 |
+| C2x.place.39 | default |  | A hold's holder is identified by its proven anchor process as well as its session string. | A hold's holder is identified by its proven anchor process as well as by its session string (#317). | tools/docs/contention.md | #317 |
+| C2x.place.40 | default |  | A hold is also yours when its recorded anchor pid is alive and provably contains this invocation. | So a hold is also yours when its recorded anchor pid is alive and | tools/docs/contention.md | #317 |
+| C2x.place.41 | default |  | A `default`-proof anchor and every record written before #317 are excluded from self-ownership. | A `default` proof — a bare `process.ppid` — and every | tools/docs/contention.md | #317 |
+| C2x.place.42 | default |  | `sessionName` is never an ownership key, on any path. | `sessionName` is still never an ownership key, on any path. | tools/docs/contention.md | #317 |
+| C2x.place.43 | default |  | A confirmed-dead holder lapses at read time: it is a record to clear, not a conflict to override. | A confirmed-dead holder lapses at read time — it is a record to clear, not a conflict to override (#317). | tools/docs/contention.md | #317 |
 | C2x.place.44 | explanation |  | The 01:35 incident: a dead holder's record that needed `COLAB_HUMAN=1` to clear. | Only `colab doctor --prune` removed one, and only when | docs/adr/242-place-claims-rationale.md | #317 |
-| C2x.place.45 | default |  | Every command that writes at a path clears a confirmed-dead holder, and releasing one needs no human flag. | releasing one needs no human flag: overriding nobody is not a human decision. | CONVENTIONS.md | #317 |
-| C2x.place.46 | default |  | `unknown` liveness is untouched by the lapse and keeps the human bar. | `unknown` liveness is untouched — that is the case #288/#289 deliberately fail closed on | CONVENTIONS.md | #317 |
-| C2x.place.47 | default |  | `colab places` stays a read: it labels a lapsed row rather than deleting it. | `colab places` stays a READ: it labels a lapsed row rather than deleting | CONVENTIONS.md | #317 |
-| C2x.place.48 | default |  | A claim's hold is given back by every command that deletes the claim, not just `release`. | A claim's hold is given back by every command that deletes that claim, not just by `release` | CONVENTIONS.md | #312 |
-| C2x.place.49 | default |  | The hold give-back applies three guards: skip a claim with a worktree, skip while another no-worktree claim of the session holds the checkout, never on a branch that keeps the claim. | Each applies the same three guards: skip a claim that | CONVENTIONS.md | #312 |
-| C2x.place.50 | default |  | Machine identity is compared in two tiers: canonicalized hostname, then a hardware-bound id when both sides carry one. | Comparison is now two-tier: a cheap, pure canonicalization | CONVENTIONS.md | #289 |
-| C2x.place.51 | default |  | A record written before #289 carries no hardware id and takes the hostname-comparison branch. | A record written before this landed carries no such id and | CONVENTIONS.md | #289 |
+| C2x.place.45 | default |  | Every command that writes at a path clears a confirmed-dead holder, and releasing one needs no human flag. | releasing one needs no human flag: overriding nobody is not a human decision. | tools/docs/contention.md | #317 |
+| C2x.place.46 | default |  | `unknown` liveness is untouched by the lapse and keeps the human bar. | `unknown` liveness is untouched — that is the case #288/#289 deliberately fail closed on | tools/docs/contention.md | #317 |
+| C2x.place.47 | default |  | `colab places` stays a read: it labels a lapsed row rather than deleting it. | `colab places` stays a READ: it labels a lapsed row rather than deleting | tools/docs/contention.md | #317 |
+| C2x.place.48 | default |  | A claim's hold is given back by every command that deletes the claim, not just `release`. | A claim's hold is given back by every command that deletes that claim, not just by `release` | tools/docs/contention.md | #312 |
+| C2x.place.49 | default |  | The hold give-back applies three guards: skip a claim with a worktree, skip while another no-worktree claim of the session holds the checkout, never on a branch that keeps the claim. | Each applies the same three guards: skip a claim that | tools/docs/contention.md | #312 |
+| C2x.place.50 | default |  | Machine identity is compared in two tiers: canonicalized hostname, then a hardware-bound id when both sides carry one. | Comparison is now two-tier: a cheap, pure canonicalization | tools/docs/contention.md | #289 |
+| C2x.place.51 | default |  | A record written before #289 carries no hardware id and takes the hostname-comparison branch. | A record written before this landed carries no such id and | tools/docs/contention.md | #289 |
 | C2x.place.52 | explanation |  | How this section relates to the spawn-time lock a session dashboard already keeps. | A related lock already exists outside this convention | docs/adr/242-place-claims-rationale.md | — |
-| C2x.place.53 | default |  | Any cross-machine or distributed form of the place-claim lock is out of scope. | Explicitly out of scope: any cross-machine or distributed form of this lock. | CONVENTIONS.md | — |
-| C2x.place.54 | default |  | Separate working trees plus git's own push rejection on a stale ref remain the cross-machine backstop. | The existing backstop — separate working trees, plus git's own push rejection on a stale ref | CONVENTIONS.md | — |
-| C2x.place.55 | default |  | With no `--session` and `COLAB_SESSION` unset, a person at a plain terminal is given a derived `person:` identity instead of a refusal. | a person at a plain terminal is given an identity instead of a refusal | CONVENTIONS.md | #528 |
-| C2x.place.56 | default |  | An explicitly empty `COLAB_SESSION=''` still means no identity. | still means "no identity" | CONVENTIONS.md | #528 |
-| C2x.place.57 | default |  | Agents never derive an identity, because concurrent agent sessions on one machine would derive the same value. | Agents never derive: two concurrent agent sessions on | CONVENTIONS.md | #528 |
-| C2x.place.58 | default |  | A person running several units at once from separate shells gives each shell its own `COLAB_SESSION`. | gives each shell its own `COLAB_SESSION` | CONVENTIONS.md | #528 |
+| C2x.place.53 | default |  | Any cross-machine or distributed form of the place-claim lock is out of scope. | Explicitly out of scope: any cross-machine or distributed form of this lock. | tools/docs/contention.md | — |
+| C2x.place.54 | default |  | Separate working trees plus git's own push rejection on a stale ref remain the cross-machine backstop. | The existing backstop — separate working trees, plus git's own push rejection on a stale ref | tools/docs/contention.md | — |
+| C2x.place.55 | default |  | With no `--session` and `COLAB_SESSION` unset, a person at a plain terminal is given a derived `person:` identity instead of a refusal. | a person at a plain terminal is given an identity instead of a refusal | tools/docs/contention.md | #528 |
+| C2x.place.56 | default |  | An explicitly empty `COLAB_SESSION=''` still means no identity. | still means "no identity" | tools/docs/contention.md | #528 |
+| C2x.place.57 | default |  | Agents never derive an identity, because concurrent agent sessions on one machine would derive the same value. | Agents never derive: two concurrent agent sessions on | tools/docs/contention.md | #528 |
+| C2x.place.58 | default |  | A person running several units at once from separate shells gives each shell its own `COLAB_SESSION`. | gives each shell its own `COLAB_SESSION` | tools/docs/contention.md | #528 |
+
+### Contention — what may run at once
+
+| id | class | gate | rule | key | dest | source |
+|---|---|---|---|---|---|---|
+| C2.contention.01 | default |  | Coupled paths never run at the same time: a path declared in contention.coupled is edited by one live branch at once. | Coupled paths never run at the same time. | CONVENTIONS.md#contention--what-may-run-at-once-636 | #636 |
+| C2.contention.02 | default |  | File overlap alone never blocks a start; issues that only share a file start in parallel. | File overlap alone never blocks a start. | CONVENTIONS.md#contention--what-may-run-at-once-636 | #636 |
+| C2.contention.03 | default |  | The merged result is tested before it lands: the branch brought up to trunk, or a batch's one combined run, never each side alone. | The merged result is tested before it lands | CONVENTIONS.md#contention--what-may-run-at-once-636 | #636 |
+| C2.contention.04 | default |  | One checkout is written by one session at a time; a worktree is its own checkout. | One checkout is written by one session at a time | CONVENTIONS.md#contention--what-may-run-at-once-636 | #636 |
 
 ### Channels — by what path does code reach the thing that runs it?
 

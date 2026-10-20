@@ -10,6 +10,7 @@ adopter with its own tooling follows `CONVENTIONS.md` and may ignore this direct
 | [`ci-gate.md`](ci-gate.md) | trunk CI by commit, a branch's own run, the docs-only skip, batch landing | [§7, the CI contract](../../CONVENTIONS.md#what-ship-reads--the-ci-contract-607), invariants 2–3 |
 | [`red-trunk.md`](red-trunk.md) | who opens a red trunk's patch; the grant and cure doors | [§7, the CI contract](../../CONVENTIONS.md#what-ship-reads--the-ci-contract-607), invariant 1 |
 | [`ci-lanes.md`](ci-lanes.md) | what ship reads, the two lanes, integration profiles, the artifact store, self-hosted runners | [§7, the CI contract](../../CONVENTIONS.md#what-ship-reads--the-ci-contract-607), invariant 4 |
+| [`contention.md`](contention.md) | solo flow (trunk-direct on a shared checkout) and the place-claim lock | [§2, *Contention*](../../CONVENTIONS.md#contention--what-may-run-at-once-636), rule 4 |
 
 ## How a section moves here (#635, the pattern #636–#640 follow)
 

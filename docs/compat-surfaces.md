@@ -60,6 +60,7 @@ autonomy--the-docs-only-exception-345
 autonomy--the-tuning-only-class-561
 autonomy--the-human-door-525
 core-paths--a-pr-and-a-non-author-approval-before-landing-350
+contention--what-may-run-at-once-636
 solo-flow--trunk-direct-issue-on-demand-entry-gated-a-human-must-be-at-the-keyboard
 place-claims--the-writer-verifiable-hold-a-shared-checkout-needs-and-a-worktree-does-not
 channels--by-what-path-does-code-reach-the-thing-that-runs-it
