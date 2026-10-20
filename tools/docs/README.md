@@ -13,6 +13,7 @@ adopter with its own tooling follows `CONVENTIONS.md` and may ignore this direct
 | [`contention.md`](contention.md) | solo flow (trunk-direct on a shared checkout) and the place-claim lock | [§2, *Contention*](../../CONVENTIONS.md#contention--what-may-run-at-once-636), rule 4 |
 | [`releases.md`](releases.md) | cutting and finalizing candidates, the release workflow, operator grants, deploy-tag-fast, container deploys, version-source, npm, channels, the release summary | [§6, the release contract](../../CONVENTIONS.md#6-releases) |
 | [`distribution.md`](distribution.md) | install routes, dist refs, services over npx | [§6, *Distribution* and *Services over npx*](../../CONVENTIONS.md#distribution--one-install-surface-npx-442) |
+| [`branches.md`](branches.md) | the `Machine:` trailer, the squash-subject picker, the issue-close gates and the doors through them, the landed check's CI advisory | [§4, the landing contract](../../CONVENTIONS.md#4-branches-and-commits) |
 
 ## How a section moves here (#635, the pattern #636–#640 follow)
 

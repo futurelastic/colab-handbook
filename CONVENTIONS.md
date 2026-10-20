@@ -1008,27 +1008,6 @@ reader (ship's harvest, the remote-claim check, the skills) anchors there, so no
 needs to know the prefix exists. An opt-in CI check for either shape ships as
 `templates/branch-name.yml`.
 
-**The `Machine:` trailer (#350).** Every squash `colab ship` lands carries
-`Machine: <label>`, whether the message is composed or given with `--message`, and whether or
-not the repo declares a prefix. The label is the same normalised host label the prefix uses —
-a name, never a hardware identifier. It exists so that conflicts across machines can be
-measured from git alone:
-`git log --format='%h %(trailers:key=Machine,valueonly)' <trunk>` lists which machine landed
-each unit. It records where a landing ran. It is not an identity, and no gate reads it
-([§2, *Core paths*](#core-paths--a-pr-and-a-non-author-approval-before-landing-350)).
-
-**Not on a public repository (#367).** `colab ship` reads the destination first. If the forge reports
-the repository as public, or `project.yml` declares `room: public`, the squash carries no
-`Machine:` trailer, and the `Colab-Adopted:` trailer (#324) keeps its branch and sha but drops
-its `on <host> (machine <id>)` tail. A private repository is unchanged. When the visibility
-cannot be read (no forge CLI, a remote that is not on the forge, offline) and `room:` does not
-declare `solo` or `team`, ship **omits** the trailer and warns. It fails closed because a missing
-line costs one traceability record and a published hostname cannot be taken back. Declaring
-`room:` restores it. `colab ship --dry` prints `Machine trailer: …` with the decision, and
-`--dry --json` reports it as `machineTrailerDecision`. The cross-machine measurement above
-therefore covers private repositories only. A `branchPrefix: machine` branch name still carries
-the label too, and that stays a deliberate choice for the repo that declares it. Why: [ADR 539](docs/adr/539-branches-and-commits-rationale.md).
-
 **A branch may carry a group of related issues** — suffix them all:
 `fix/import-fixes-115-114-113`. Claim every issue in the group before starting, and
 **release every claim in the group together at wrap** — unconditionally, including
@@ -1119,36 +1098,6 @@ the recipe two paragraphs above, never a stash). Why: [ADR 539](docs/adr/539-bra
 `test:`, `perf:`, `design:`). Not decoration: [§6](#6-releases) builds the release summary
 by grouping on these prefixes. A commit with no prefix is invisible in release notes.
 
-**The squash-subject picker recognises a wider, RANKED set, not just the branch-name
-list above (#261).** `colab ship`'s default subject is the branch's highest-weight
-commit — highest wins, ties go to the oldest — in this order, documented here because
-before #261 it was discoverable only by shipping a branch and reading a warning:
-
-```
-breaking (any type, +1000) > feat > fix > perf > refactor / revert > design > docs
-  > test > build / ci > style > chore
-```
-
-`design:` (a specification, mockup, or visual decision rather than a behaviour change)
-is ranked here, not merely branch-legal. Why: [ADR 539](docs/adr/539-branches-and-commits-rationale.md).
-
-**A type outside this list is not invisible, but it cannot outrank a named one.** A
-commit shaped like a Conventional Commit (`type(scope): text`) whose `type` this repo
-does not weigh — `wip:`, `spike:`, an adopter-invented type not yet added here — ranks
-below every named type, but above a commit with no Conventional Commit shape at all: on
-a branch where nothing else carries a named type it now wins the subject over a
-shapeless commit, and on a mixed branch it still loses to a named type, silently,
-exactly as before. `colab ship --dry` warns about this class either way (`N commit(s)
-… carry no recognised Conventional Commit type`); the fix is to re-word the commit to a
-recognised type, or ship with `--message "<subject>"` so the subject is stated rather
-than guessed.
-
-**A follow-up to the branch's own unshipped lines ranks below every type (#621).** A
-commit whose every changed line was added by an earlier commit on the same branch (absent
-from the merge base, measured by `git blame`) repairs nothing a consumer saw, so it never
-titles the unit — a `fix:` to a `refactor:`'s new text ships under the `refactor:`. A pure
-insertion into a trunk file, or a file the commit creates, is new content, not a follow-up.
-
 **Merging:**
 
 - Feature branch → trunk: **squash**, one commit per unit of work.
@@ -1156,81 +1105,46 @@ insertion into a trunk file, or a file the commit creates, is new content, not a
   the merge commit *is* the release boundary.
 - **The merge message closes its issues: write `Closes #N`** (one per issue), not a bare
   `(#N)` — GitHub auto-closes only on the keyword. Why: [ADR 539](docs/adr/539-branches-and-commits-rationale.md).
-- **[Hard — gate: colab ship refuses unticked plan]** **`Closes #N` requires the issue's own scope fully accounted for — a mechanical gate,
-  not an honour system (#74).** An issue's `## Plan` is a real GitHub checklist — one
-  `- [ ]` line per deliverable, load-bearing. A prose-only `## Plan` cannot be verified
-  mechanically (reported, not blocking; cannot bind an issue opened before this
-  convention). `colab ship` parses the checklist before composing the squash body: any
-  claimed issue with an unticked box and no declared `Remainder: #M` **refuses the
-  merge outright (#263)** — a precondition row exactly like a red CI run, not a silent
-  `Closes #N` → `Refs #N` downgrade that lets the ship proceed anyway. Ticking every box, declaring
-  `Remainder: #M`, or an explicit `--refs #N` (a deliberate choice, never gated) all
-  clear it. A hand-merge runs the identical check by reading the same two fields
-  (`gh issue view N --json body,comments`). Why: [ADR 539](docs/adr/539-branches-and-commits-rationale.md).
-- **Requiring the remainder issue is the convention — the gate does not file one for
-  you (#263).** Why: [ADR 539](docs/adr/539-branches-and-commits-rationale.md).
-- **`--refs` keeps an issue open, so the same step must also stop it being started
-  (#385).** `--refs #N` is still a deliberate choice and still ungated. But after the ship,
-  #N is open, possibly `deps-checked`, and unclaimed. If nothing on it says "do not start",
-  a scheduler picks it up again as code work. So when you choose `--refs` over closing:
-  - **The leftover is a check only a person can run** (a UI click-through, a look on a
-    real device, a live end-to-end proof): do not `--refs` it. Close #N and add one row to
-    the repo's single open `Human verify:` issue (§5 *Human verify*, #491).
-  - **The leftover is another non-code wait** (a measurement a machine can take, a date,
-    an outside party): park #N in the same ship. Add `deferred:<kind>` +
-    `review-by:<date>`, plus a `Hold:` line naming who posts the proof (*Disposition* and
-    *Holds*, §5).
-  - **The leftover is code**: prefer `Remainder: #M` and let #N close. The remainder
-    issue is a start candidate of its own and can carry its own hold. #N kept open for
-    code is a second start candidate for the same work.
-
-  `colab ship` prints a **reminder, never a refusal**, when a `--refs`'d issue still has
-  an unticked `- [ ]` box under any heading and carries nothing that stops a start:
-  `deferred:*`, `needs-decision`, a non-code `delivery:*`, `tracking`, or a label declared
-  under `holds:`. `--dry --json` reports the same thing as `refsBrakeFindings` and as an
-  `ok: true` advisory row. The tool never applies the hold itself. Which kind, whose wake
-  and which date are the shipper's call, never the tool's — the gate does not file the
-  remainder issue either. Why: [ADR 539](docs/adr/539-branches-and-commits-rationale.md).
-- **[Hard — gate: colab ship refuses uncorroborated issue]** **Every closed issue must be corroborated by git, not the claim registry alone (#87).**
-  Corroboration reads two git-side sources: the branch name's
-  **trailing** number group, and `#N` or `(issue N)` (#611) references in **commit bodies** (never a
-  bare number). An issue named by neither is a finding — `colab ship` refuses; a hand merge must perform the same check.
-  Do not resolve it by quietly writing `Refs #N` — that hides the collision; `--refs`
-  exists for when an operator actually means it. Why: [ADR 539](docs/adr/539-branches-and-commits-rationale.md).
-- **[Hard — gate: evidence-close needs an evidence comment]** **A deliverable with no diff still has to close (#90).** A decision recorded, an
-  investigation concluding "no change needed", an artifact stored outside the repo —
-  there is nothing to squash. `colab ship` detects `landed ∧ zero own commits` (both
-  measured from git, never declared by the session) and switches to **evidence-close**:
-  post evidence, close each issue, tear down — no merge, no push, no `--allow-empty`
-  marker commit. Gated on the issue **already carrying a comment the tool did not write**.
-  A unit committed straight to trunk has no branch to detect this from; it closes the same
-  way through `colab ship --direct` (#302), which matches its claims by session identity and
-  refuses until the work is published.
-- **A ship releases every claim it carried (#319)** — not only the worktree's. An unattached
-  claim of the *same session* is carried by a branch ship only when the branch name's
-  trailing group names it; otherwise it is reported and left alone, never closed. Why: [ADR 539](docs/adr/539-branches-and-commits-rationale.md).
-- **[Hard — gate: colab ship refuses unadopted remote-only branch]** **A branch this machine never held is not a legit zero (#324).** A branch that exists only
-  on `origin`, with no issue number in its name and no local claim, is most likely another
-  machine's work in flight; `colab ship` refuses it unless `--adopt` is passed, and an
-  adopted squash carries a `Colab-Adopted:` trailer naming the remote sha and this machine.
-  A local ref does not make it this machine's (#343): when the ref's oldest reflog entry says
-  git created it from `origin/<same name>` (a DWIM `checkout`/`switch`/`worktree add`, or
-  `--track`), it reads the same as remote-only. Where no reflog survives, nothing contradicts
-  the local reading. A branch that **does** name its issues, with the claim on another machine,
-  lands without a takeover from its executor's hand-off (#578): `colab ship --branch <b>
-  --handoff <comment-url>` takes the issue set from the branch name once that comment names the
-  branch and its current remote head and every issue carries the executor's live claim on it;
-  nothing is claimed here, and the executor keeps its worktree until it confirms the land. A
-  handed-off branch that fell behind its base is synced by the lander as usual, and the hand-off
-  still holds (#579): commits after the handed-off sha are accepted only when each is a pure
-  base-sync merge — second parent already on the base, tree equal to git's own clean merge. Any
-  other movement still needs a new hand-off. The hand-off comment is the last word on its head —
-  edited or re-posted, never followed by a plain comment (#586): [`code-wrap`, *Hand off*](skills/code-wrap/SKILL.md#post-the-hand-off-comment--the-last-word-on-its-head-586).
 - **Before merging to trunk, trunk's CI must have run at its head commit and be green there** —
   invariants 1 and 2 of [the CI contract](#what-ship-reads--the-ci-contract-607); a genuinely red
   trunk takes only its fix, through the *Red-trunk exemption* or the *Cure rule* below. How the CLI
   reads that verdict (which runs count, the newest run per workflow, cancelled runs, the bounded
   wait): [`tools/docs/ci-gate.md`](tools/docs/ci-gate.md#trunk-ci--by-commit-not-by-recency).
+
+**The landing contract (#638).** Whatever tooling a repo uses, landing a branch on trunk keeps these
+rules. How this repo's CLI carries them out — the squash it composes, the close gates and the doors
+through them, the landed check and its CI advisory — is documented with the CLI, in
+[`tools/docs/branches.md`](tools/docs/branches.md).
+
+1. **[Hard C4.contract.01 — refuse: a commit reaching trunk other than by landing a branch]**
+   Trunk moves only by landing a branch — one squash per unit of work, or the tested head of a
+   batch. Nobody pushes to trunk by hand.
+2. **[Hard C4.contract.02 — refuse: closing an issue whose own checklist is not accounted for]**
+   An issue closes at a landing only when its own scope is accounted for: every box of its plan
+   checklist ticked, the rest declared as a remainder issue, or the issue deliberately kept open
+   instead of closed. A merge made by hand reads the same two fields.
+3. An issue kept open at a landing must not read as startable again. A leftover only a person can
+   check closes the issue and adds a row to the repo's open `Human verify:` issue; another non-code
+   wait parks it, with its wake and its date; leftover code goes to its own remainder issue, and the
+   original closes.
+4. **[Hard C4.contract.04 — refuse: closing an issue that git does not name]**
+   Each issue a landing closes is named by git — the branch name's trailing number group, or a
+   `#N` or `(issue N)` reference in a commit body — never by the claim record alone. An issue named
+   by neither is a finding, never quietly downgraded to a reference.
+5. **[Hard C4.contract.05 — refuse: an evidence close on an issue with no evidence comment]**
+   A unit with no diff — a decision recorded, an investigation that changes nothing, an artifact
+   kept outside the repo — still closes, with no merge and no marker commit, once the issue carries
+   an evidence comment that the closing tooling did not write.
+6. Landing a unit releases every claim it carried, finished or not.
+7. **[Hard C4.contract.07 — refuse: landing a branch this machine never held, without adoption or a hand-off]**
+   A branch this machine never held — one that exists only on the remote, or a local copy created
+   from it — lands only when it is adopted on the record, the squash naming the remote head and the
+   machine that adopted it, or when its executor handed it off in a comment naming the branch and
+   the head that lands.
+8. A squash is titled by the branch's most significant Conventional Commit type; when no commit
+   carries a recognised type, the subject is stated, never guessed.
+9. A squash on a public repository publishes no host or machine identity; where the visibility
+   cannot be read, the identity is left out.
 
 ### Branch CI — the candidate's own run, read as a class (#314)
 
@@ -1319,11 +1233,6 @@ behavior) independent of the unshipped remainder, cases 1 and 2 apply and a decl
 
 ### Has it landed? — the one rule, because the obvious one is wrong
 
-```sh
-colab landed --worktree <name>     # landed · cargo · unknown
-colab landed --all                 # every worktree of this repo
-```
-
 **Never decide it by counting commits** — a squash mints a new commit with a new sha, so
 a shipped branch's own commits are never ancestors of its base; a count-only test reports
 every branch ever shipped as unfinished. Comparing diffs alone also fails: zero commits
@@ -1357,21 +1266,9 @@ landed` still owns that, and an unmatched grep never rounds a verdict toward `la
 `in-progress` label answers *does someone believe they hold this*; git answers *what
 state is this actually in*. Do not collapse them.
 
-**A green branch can be reporting a red base's problem, not its own (#293).** `colab
-ship`'s trunk-CI-green check asks whether trunk is green *right now* — never whether
-the sha a branch was actually *cut from* was green *at the time*, and those differ
-once trunk has moved. Why: [ADR 539](docs/adr/539-landed-rationale.md).
-
-```sh
-colab landed --worktree <name> --ci     # adds: was the cut-from sha actually green?
-```
-
-Advisory only — it never blocks `colab landed` or `colab ship` (both surface it as an
-additive field/row, never as a new precondition). Three severities, loudest first:
-`suspect-green` (base red, branch's own head green — the branch's green may be
-inherited, not earned), `inherited-red` (base red, branch's own head red too — likely
-the same pre-existing failure), `unresolved` (base red, branch's own head has no
-completed verdict yet). Silent when the base was not measurably red.
+How the CLI answers it — its verdicts, and the advisory that asks whether the commit a branch was
+cut from was green — is documented with the CLI, in
+[`tools/docs/branches.md`](tools/docs/branches.md#has-it-landed--the-clis-check).
 
 ---
 

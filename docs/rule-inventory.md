@@ -125,6 +125,20 @@ The 146 rows whose text moved keep their ids; only `dest` changed, to `tools/doc
 or `tools/docs/distribution.md` (52). §6 keeps the routes, the human-only steps and the versioning
 rules verbatim (43 rows), plus the release contract in eight new rows, `C6.contract.01`–`08`.
 
+Result for #638 (base `c091e6fa`; §4's `Machine:` trailer, squash-subject picker, issue-close gates
+and the landed check's CI advisory moved verbatim to `tools/docs/branches.md`), run as
+`node scripts/check-doc-move.mjs --base c091e6fa`:
+
+```
+CONVENTIONS.md @ c091e6fa: units 1062 · found whole 1062 · by sentence 0 · now 3980 lines
+project.schema.md @ c091e6fa: units 476 · found whole 476 · by sentence 0 · now 1802 lines
+missing 0 · headings gone from their file 0 · ledger entries 0 (stale 0)
+```
+
+The 27 rows whose text moved keep their ids; only `dest` changed, to `tools/docs/branches.md`. §4
+keeps branch naming, commits, the squash, who may touch a branch and whether it has landed
+verbatim, plus the landing contract in nine new rows, `C4.contract.01`–`09`.
+
 Phase 2 split rationale off rule sentences under the ruling on #539 (option A): the rule half
 keeps its meaning and modal verb, the rationale moves verbatim to `docs/adr/539-*.md`, and each
 reworded unit the check could not find by itself is listed in a `#539 ledger` block after its
@@ -714,10 +728,10 @@ Two units reworded on purpose (base `c56bac20`), each to carry one new clause in
 | C4.s4.02 | default |  | A repo declaring `branchPrefix: machine` gets session branches `<login>/<machine>/<type>/<slug>-<issue-number>`. | gets session branches shaped `<login>/<machine>/<type>/<slug>-<issue-number>`, e.g. | CONVENTIONS.md | #348 |
 | C4.s4.03 | default |  | `colab worktree new` adds the prefix itself; the session passes the unprefixed name. | `colab worktree new` adds the prefix itself — you still pass the unprefixed name | CONVENTIONS.md | #348 |
 | C4.s4.04 | default |  | Issue numbers stay in the trailing `-<N>` run so every reader anchors there regardless of prefix. | the issue numbers stay in the **trailing** `-<N>` run, and every | CONVENTIONS.md | #348 |
-| C4.s4.05 | default |  | Every squash `colab ship` lands carries a `Machine: <label>` trailer, composed or `--message`. | Every squash `colab ship` lands carries `Machine: <label>`, whether the message is composed | CONVENTIONS.md | #350 |
-| C4.s4.06 | default |  | The `Machine:` label is a normalised host label, a name and never a hardware identifier. | same normalised host label the prefix uses — a name, never a hardware identifier | CONVENTIONS.md | #350 |
-| C4.s4.07 | default |  | On a public repository (forge-reported or `room: public`) the squash carries no `Machine:` trailer and `Colab-Adopted:` drops its host tail. | If the forge reports the repository as public, or `project.yml` declares `room: public`, the squash carries no | CONVENTIONS.md | #367 |
-| C4.s4.08 | default |  | When visibility cannot be read and `room:` is not `solo`/`team`, ship omits the trailer and warns (fails closed). | ship **omits** the trailer and warns. It fails closed because a missing | CONVENTIONS.md | #367 |
+| C4.s4.05 | default |  | Every squash `colab ship` lands carries a `Machine: <label>` trailer, composed or `--message`. | Every squash `colab ship` lands carries `Machine: <label>`, whether the message is composed | tools/docs/branches.md | #350 |
+| C4.s4.06 | default |  | The `Machine:` label is a normalised host label, a name and never a hardware identifier. | same normalised host label the prefix uses — a name, never a hardware identifier | tools/docs/branches.md | #350 |
+| C4.s4.07 | default |  | On a public repository (forge-reported or `room: public`) the squash carries no `Machine:` trailer and `Colab-Adopted:` drops its host tail. | If the forge reports the repository as public, or `project.yml` declares `room: public`, the squash carries no | tools/docs/branches.md | #367 |
+| C4.s4.08 | default |  | When visibility cannot be read and `room:` is not `solo`/`team`, ship omits the trailer and warns (fails closed). | ship **omits** the trailer and warns. It fails closed because a missing | tools/docs/branches.md | #367 |
 | C4.s4.09 | default |  | A branch may carry a related group of issues by suffixing every number in its name. | A branch may carry a group of related issues — suffix them all: | CONVENTIONS.md | — |
 | C4.s4.10 | default |  | Claim every issue in the group before starting. | Claim every issue in the group before starting, and | CONVENTIONS.md | — |
 | C4.s4.11 | default |  | Release every claim in the group together at wrap, unconditionally, including unfinished issues. | release every claim in the group together at wrap — unconditionally, including | CONVENTIONS.md | — |
@@ -741,31 +755,31 @@ Two units reworded on purpose (base `c56bac20`), each to carry one new clause in
 | C4.s4.29 | default |  | A dirty path conclusively not yours is reported, never cleaned. | original rule still holds exactly as before: **report it, never clean it.** | CONVENTIONS.md | #294 |
 | C4.s4.30 | default |  | Commits use Conventional Commit prefixes, which §6 groups into the release summary. | Conventional Commits (`feat:`, `fix:`, `docs:`, `chore:`, `refactor:`, | CONVENTIONS.md | — |
 | C4.s4.31 | default |  | A commit with no prefix is invisible in release notes. | A commit with no prefix is invisible in release notes. | CONVENTIONS.md | — |
-| C4.s4.32 | default |  | `colab ship`'s default squash subject is the branch's highest-weight commit, ranked as listed (ties to the oldest). | commit — highest wins, ties go to the oldest — in this order, | CONVENTIONS.md | #261 |
-| C4.s4.33 | default |  | A Conventional-Commit-shaped commit of an unweighed type ranks below every named type but above a shapeless commit. | below every named type, but above a commit with no Conventional Commit shape at all: | CONVENTIONS.md | #261 |
-| C4.s4.34 | default |  | Fix an unrecognised commit type by re-wording it, or ship with `--message` so the subject is stated. | the fix is to re-word the commit to a recognised type, or ship with | CONVENTIONS.md | #261 |
+| C4.s4.32 | default |  | `colab ship`'s default squash subject is the branch's highest-weight commit, ranked as listed (ties to the oldest). | commit — highest wins, ties go to the oldest — in this order, | tools/docs/branches.md | #261 |
+| C4.s4.33 | default |  | A Conventional-Commit-shaped commit of an unweighed type ranks below every named type but above a shapeless commit. | below every named type, but above a commit with no Conventional Commit shape at all: | tools/docs/branches.md | #261 |
+| C4.s4.34 | default |  | Fix an unrecognised commit type by re-wording it, or ship with `--message` so the subject is stated. | the fix is to re-word the commit to a recognised type, or ship with | tools/docs/branches.md | #261 |
 | C4.s4.35 | default |  | Feature branch to trunk merges are squashes, one commit per unit of work. | Feature branch → trunk: **squash**, one commit per unit of work. | CONVENTIONS.md | — |
 | C4.s4.36 | default |  | `dev` to `main` promotion is a `--no-ff` merge commit, never a squash. | promotion (Tiers A and C): **`--no-ff` merge commit**, never squash — | CONVENTIONS.md | — |
 | C4.s4.37 | default |  | The merge message writes `Closes #N` once per issue, not a bare `(#N)`. | The merge message closes its issues: write `Closes #N` (one per issue), not a bare | CONVENTIONS.md | — |
-| C4.s4.38 | default |  | An issue's `## Plan` is a real GitHub checklist, one `- [ ]` per deliverable. | An issue's `## Plan` is a real GitHub checklist — one | CONVENTIONS.md | #74 |
-| C4.s4.39 | hard | tools/colab::remainder declared for unticked issues | `colab ship` refuses to merge a claimed issue with an unticked Plan box and no declared `Remainder: #M`. | `colab ship` parses the checklist before composing the squash body: any | CONVENTIONS.md | #263 |
-| C4.s4.40 | default |  | Ticking every box, declaring `Remainder: #M`, or an explicit `--refs #N` clears the close gate. | Ticking every box, declaring | CONVENTIONS.md | #263 |
-| C4.s4.41 | default |  | A hand-merge runs the identical checklist check by reading the issue body and comments. | A hand-merge runs the identical check by reading the same two fields | CONVENTIONS.md | #74 |
-| C4.s4.42 | default |  | The remainder issue is required by convention; the gate does not file it for you. | Requiring the remainder issue is the convention — the gate does not file one for | CONVENTIONS.md | #263 |
-| C4.s4.43 | default |  | Choosing `--refs` must also stop the open issue being started again. | keeps an issue open, so the same step must also stop it being started | CONVENTIONS.md | #385 |
-| C4.s4.44 | default |  | When the leftover is a human-only check, do not `--refs`: close the issue and add a row to the open `Human verify:` issue. | do not `--refs` it. Close #N and add one row to | CONVENTIONS.md | #385 |
-| C4.s4.45 | default |  | When the leftover is another non-code wait, park the issue in the same ship with `deferred:<kind>`, `review-by:<date>` and a `Hold:` line. | park #N in the same ship. Add `deferred:<kind>` + | CONVENTIONS.md | #385 |
-| C4.s4.46 | default |  | When the leftover is code, prefer `Remainder: #M` and let the issue close. | prefer `Remainder: #M` and let #N close. | CONVENTIONS.md | #385 |
-| C4.s4.47 | default |  | `colab ship` prints a reminder, never a refusal, for a `--refs`'d issue with unticked boxes and nothing stopping a start. | prints a **reminder, never a refusal**, when a `--refs`'d issue still has | CONVENTIONS.md | #385 |
-| C4.s4.48 | hard | tools/colab::claims corroborated by git | `colab ship` refuses an issue named by neither the branch name's trailing number group nor a commit-body `#N`; a hand merge performs the same check. | Every closed issue must be corroborated by git, not the claim registry alone | CONVENTIONS.md | #87 |
-| C4.s4.49 | default |  | Do not resolve an uncorroborated issue by quietly writing `Refs #N`. | Do not resolve it by quietly writing `Refs #N` — that hides the collision | CONVENTIONS.md | #87 |
-| C4.s4.50 | default |  | A deliverable with no diff still has to close, through `colab ship` evidence-close (`landed` and zero own commits, measured from git). | `colab ship` detects `landed ∧ zero own commits` (both | CONVENTIONS.md | #90 |
-| C4.s4.51 | hard | tools/colab::carries no evidence comment | Evidence-close is gated on the issue already carrying a comment the tool did not write. | Gated on the issue **already carrying a comment the tool did not write**. | CONVENTIONS.md | #90 |
-| C4.s4.52 | default |  | A unit committed straight to trunk closes through `colab ship --direct`, which matches claims by session identity and refuses until published. | way through `colab ship --direct` (#302), which matches its claims by session identity and | CONVENTIONS.md | #302 |
-| C4.s4.53 | default |  | A ship releases every claim it carried, not only the worktree's. | A ship releases every claim it carried (#319)** — not only the worktree's. | CONVENTIONS.md | #319 |
-| C4.s4.54 | default |  | An unattached claim of the same session is carried by a branch ship only when the branch name's trailing group names it; otherwise it is reported and left alone. | is carried by a branch ship only when the branch name's trailing group names it; | CONVENTIONS.md | #319 |
-| C4.s4.55 | hard | tools/colab::remote-only-unclaimed | `colab ship` refuses a branch that exists only on origin with no issue number and no local claim unless `--adopt` is passed. | `colab ship` refuses it unless `--adopt` is passed, and an | CONVENTIONS.md | #324 |
-| C4.s4.56 | default |  | A local ref created by git from `origin/<same name>` reads the same as remote-only. | A local ref does not make it this machine's (#343): when the ref's oldest reflog entry says | CONVENTIONS.md | #343 |
+| C4.s4.38 | default |  | An issue's `## Plan` is a real GitHub checklist, one `- [ ]` per deliverable. | An issue's `## Plan` is a real GitHub checklist — one | tools/docs/branches.md | #74 |
+| C4.s4.39 | hard | tools/colab::remainder declared for unticked issues | `colab ship` refuses to merge a claimed issue with an unticked Plan box and no declared `Remainder: #M`. | `colab ship` parses the checklist before composing the squash body: any | tools/docs/branches.md | #263 |
+| C4.s4.40 | default |  | Ticking every box, declaring `Remainder: #M`, or an explicit `--refs #N` clears the close gate. | Ticking every box, declaring | tools/docs/branches.md | #263 |
+| C4.s4.41 | default |  | A hand-merge runs the identical checklist check by reading the issue body and comments. | A hand-merge runs the identical check by reading the same two fields | tools/docs/branches.md | #74 |
+| C4.s4.42 | default |  | The remainder issue is required by convention; the gate does not file it for you. | Requiring the remainder issue is the convention — the gate does not file one for | tools/docs/branches.md | #263 |
+| C4.s4.43 | default |  | Choosing `--refs` must also stop the open issue being started again. | keeps an issue open, so the same step must also stop it being started | tools/docs/branches.md | #385 |
+| C4.s4.44 | default |  | When the leftover is a human-only check, do not `--refs`: close the issue and add a row to the open `Human verify:` issue. | do not `--refs` it. Close #N and add one row to | tools/docs/branches.md | #385 |
+| C4.s4.45 | default |  | When the leftover is another non-code wait, park the issue in the same ship with `deferred:<kind>`, `review-by:<date>` and a `Hold:` line. | park #N in the same ship. Add `deferred:<kind>` + | tools/docs/branches.md | #385 |
+| C4.s4.46 | default |  | When the leftover is code, prefer `Remainder: #M` and let the issue close. | prefer `Remainder: #M` and let #N close. | tools/docs/branches.md | #385 |
+| C4.s4.47 | default |  | `colab ship` prints a reminder, never a refusal, for a `--refs`'d issue with unticked boxes and nothing stopping a start. | prints a **reminder, never a refusal**, when a `--refs`'d issue still has | tools/docs/branches.md | #385 |
+| C4.s4.48 | hard | tools/colab::claims corroborated by git | `colab ship` refuses an issue named by neither the branch name's trailing number group nor a commit-body `#N`; a hand merge performs the same check. | Every closed issue must be corroborated by git, not the claim registry alone | tools/docs/branches.md | #87 |
+| C4.s4.49 | default |  | Do not resolve an uncorroborated issue by quietly writing `Refs #N`. | Do not resolve it by quietly writing `Refs #N` — that hides the collision | tools/docs/branches.md | #87 |
+| C4.s4.50 | default |  | A deliverable with no diff still has to close, through `colab ship` evidence-close (`landed` and zero own commits, measured from git). | `colab ship` detects `landed ∧ zero own commits` (both | tools/docs/branches.md | #90 |
+| C4.s4.51 | hard | tools/colab::carries no evidence comment | Evidence-close is gated on the issue already carrying a comment the tool did not write. | Gated on the issue **already carrying a comment the tool did not write**. | tools/docs/branches.md | #90 |
+| C4.s4.52 | default |  | A unit committed straight to trunk closes through `colab ship --direct`, which matches claims by session identity and refuses until published. | way through `colab ship --direct` (#302), which matches its claims by session identity and | tools/docs/branches.md | #302 |
+| C4.s4.53 | default |  | A ship releases every claim it carried, not only the worktree's. | A ship releases every claim it carried (#319)** — not only the worktree's. | tools/docs/branches.md | #319 |
+| C4.s4.54 | default |  | An unattached claim of the same session is carried by a branch ship only when the branch name's trailing group names it; otherwise it is reported and left alone. | is carried by a branch ship only when the branch name's trailing group names it; | tools/docs/branches.md | #319 |
+| C4.s4.55 | hard | tools/colab::remote-only-unclaimed | `colab ship` refuses a branch that exists only on origin with no issue number and no local claim unless `--adopt` is passed. | `colab ship` refuses it unless `--adopt` is passed, and an | tools/docs/branches.md | #324 |
+| C4.s4.56 | default |  | A local ref created by git from `origin/<same name>` reads the same as remote-only. | A local ref does not make it this machine's (#343): when the ref's oldest reflog entry says | tools/docs/branches.md | #343 |
 | C4.s4.57 | hard | tools/colab::'line'} CI green | `colab ship` refuses to merge unless trunk's CI is green and actually ran. | Before merging to trunk, check that trunk's last CI run is green — and that it ran at | tools/docs/ci-gate.md | — |
 | C4.s4.58 | default |  | Read trunk CI by commit: every run at the head sha completed and one succeeded. | The right question: has EVERY run at this branch's current head sha completed, and did | tools/docs/ci-gate.md | #92 |
 | C4.s4.59 | default |  | A sibling run still in progress has not passed; a fast green workflow never answers for a slow one. | a sibling that is merely still in progress has not passed either (#307) | tools/docs/ci-gate.md | #307 |
@@ -906,7 +920,16 @@ Two units reworded on purpose (base `c56bac20`), each to carry one new clause in
 | C4.landed.08 | default |  | Anything short of all three (reopened issue, later commit, `Refs #N` only) stays cargo. | Anything short of all three (an issue reopened since, a commit after | CONVENTIONS.md | #370 |
 | C4.landed.09 | default |  | The grep answers whether a ship happened, never whether the content is on base; an unmatched grep never rounds toward `landed`. | an unmatched grep never rounds a verdict toward `landed`. | CONVENTIONS.md | #370 |
 | C4.landed.10 | default |  | Git state and claim state are two signals; neither replaces the other. | Git state and claim state are two signals, and neither replaces the other. | CONVENTIONS.md | — |
-| C4.landed.11 | default |  | `colab landed --ci` is advisory only and never blocks `colab landed` or `colab ship`. | Advisory only — it never blocks `colab landed` or `colab ship` | CONVENTIONS.md | #293 |
+| C4.landed.11 | default |  | `colab landed --ci` is advisory only and never blocks `colab landed` or `colab ship`. | Advisory only — it never blocks `colab landed` or `colab ship` | tools/docs/branches.md | #293 |
+| C4.contract.01 | hard |  | Trunk moves only by landing a branch (one squash per unit, or a batch's tested head); nobody pushes to trunk by hand. | Trunk moves only by landing a branch | CONVENTIONS.md | #638 |
+| C4.contract.02 | hard |  | An issue closes at a landing only with its scope accounted for: every plan box ticked, a declared remainder issue, or kept open on purpose. | An issue closes at a landing only when its own scope is accounted for | CONVENTIONS.md | #638 |
+| C4.contract.03 | default |  | An issue kept open at a landing must not read as startable: a person-only check closes it with a Human verify row, another wait parks it, leftover code gets a remainder issue. | An issue kept open at a landing must not read as startable again. | CONVENTIONS.md | #638 |
+| C4.contract.04 | hard |  | Each issue a landing closes is named by git (trailing number group or a commit-body reference), never by the claim record alone. | Each issue a landing closes is named by git | CONVENTIONS.md | #638 |
+| C4.contract.05 | hard |  | A unit with no diff still closes, without a merge, once the issue carries an evidence comment the tooling did not write. | an evidence comment that the closing tooling did not write | CONVENTIONS.md | #638 |
+| C4.contract.06 | default |  | Landing a unit releases every claim it carried, finished or not. | Landing a unit releases every claim it carried, finished or not. | CONVENTIONS.md | #638 |
+| C4.contract.07 | hard |  | A branch this machine never held lands only when adopted on the record or handed off by its executor naming the head that lands. | A branch this machine never held | CONVENTIONS.md | #638 |
+| C4.contract.08 | default |  | A squash is titled by the branch's most significant Conventional Commit type; with no recognised type the subject is stated. | A squash is titled by the branch's most significant Conventional Commit type | CONVENTIONS.md | #638 |
+| C4.contract.09 | default |  | A squash on a public repository publishes no host or machine identity; unreadable visibility leaves it out. | A squash on a public repository publishes no host or machine identity | CONVENTIONS.md | #638 |
 
 #### #539 ledger — §4 Branches and commits (slice B)
 
