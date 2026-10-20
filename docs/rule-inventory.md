@@ -139,6 +139,23 @@ The 27 rows whose text moved keep their ids; only `dest` changed, to `tools/docs
 keeps branch naming, commits, the squash, who may touch a branch and whether it has landed
 verbatim, plus the landing contract in nine new rows, `C4.contract.01`–`09`.
 
+Result for #639 (base `de649ea8`; §5's claim records, readiness markers, the `wake:` vocabulary and
+`shape:` field, the disposition marker, the decision records and asks, the human flag and the
+migration grant moved verbatim to `tools/docs/claims.md`, `readiness.md`, `decisions.md` and
+`grants.md`, each heading left as a stub), run as `node scripts/check-doc-move.mjs --base de649ea8`:
+
+```
+CONVENTIONS.md @ de649ea8: units 1051 · found whole 1051 · by sentence 0 · now 3340 lines
+project.schema.md @ de649ea8: units 476 · found whole 476 · by sentence 0 · now 1802 lines
+missing 0 · headings gone from their file 0 · ledger entries 0 (stale 0)
+```
+
+The 273 rows whose text moved keep their ids; only `dest` changed, to `tools/docs/claims.md` (52),
+`readiness.md` (96), `decisions.md` (61) or `grants.md` (64). §5 keeps provenance, *Human verify*,
+readiness, the park and holds, the decision gate's rules, the red-trunk stubs and everything from
+*Scheduled drivers* on verbatim, plus the claims and decisions contract in nine new rows,
+`C5.contract.01`–`09`.
+
 Phase 2 split rationale off rule sentences under the ruling on #539 (option A): the rule half
 keeps its meaning and modal verb, the rationale moves verbatim to `docs/adr/539-*.md`, and each
 reworded unit the check could not find by itself is listed in a `#539 ledger` block after its
@@ -948,85 +965,94 @@ Keys shortened because the sentence that followed them was moved whole (the rule
 | id | class | gate | rule | key | dest | source |
 |---|---|---|---|---|---|---|
 | C5a.claim.01 | default |  | Parallel sessions and agents must not collide on the same Issue. | Parallel sessions and parallel agents must not collide on the same Issue. | CONVENTIONS.md | — |
+| C5.contract.01 | hard |  | One holder per issue: a claim is taken before work and recorded where every machine can read it; a second claim on a live-held issue is refused. | One holder per issue. | CONVENTIONS.md | #639 |
+| C5.contract.02 | default |  | A claim is whole or broken: both halves, either alone neither free nor taken; released when its unit lands. | A claim is whole or it is broken. | CONVENTIONS.md | #639 |
+| C5.contract.03 | default |  | Dependencies are tracker-readable structure (parent/child, blocked-by), never prose; an edge is never a queue position or shared file. | Dependencies are recorded as structure the tracker can read | CONVENTIONS.md | #639 |
+| C5.contract.04 | default |  | Dependency-checked is set only by someone who looked; a mechanical empty read never sets it; readiness fails toward blocked. | "No blockers" and "nobody checked" are told apart. | CONVENTIONS.md | #639 |
+| C5.contract.05 | default |  | Every start-stopping hold names an owner and a checkable wake; otherwise it is a stall; a met wake proposes, never lifts. | Every hold that stops a start names its owner and a wake condition a scheduler can check. | CONVENTIONS.md | #639 |
+| C5.contract.06 | default |  | A session does not dispose of its own issue; a later pass applies the proposal; unreadable facts fail toward a person. | A session does not dispose of its own issue. | CONVENTIONS.md | #639 |
+| C5.contract.07 | hard |  | A waiting decision is recorded where the tracker reads it — question with options, then the answer naming who ruled and which question. | A decision waiting on a person is recorded where the tracker can read it | CONVENTIONS.md | #639 |
+| C5.contract.08 | default |  | An ask a person must answer is put once; later passes report it still waiting and never re-ask over time. | An ask a person must answer is put once. | CONVENTIONS.md | #639 |
+| C5.contract.09 | hard |  | Only a person decides migrations (or an opted-in reviewer), red-trunk landings without a cure, deploying promotions/finals, production, credentials, destructive acts. | Some acts only a person decides | CONVENTIONS.md | #639 |
 
 ### §5 Record of a claim — the branch on the remote
 
 | id | class | gate | rule | key | dest | source |
 |---|---|---|---|---|---|---|
-| C5a.record.01 | hard | tools/colab::Refusing — one or more issues are already claimed | A branch or claim ref on the remote carrying #N that is not this machine's refuses a second claim on #N from anywhere. | refuses a second claim on `#N` from anywhere, naming the ref | CONVENTIONS.md | #325, #550 |
-| C5a.record.02 | default |  | The record of a claim is its branch on the remote, recorded when cut at session start and pushed at wrap. | the moment it is cut at session start and pushed at wrap | CONVENTIONS.md | #325 |
-| C5a.record.10 | default |  | At the cut the claim is recorded as the claim ref refs/claims/<branch>, not the branch, so no CI push trigger fires; colab worktree rm deletes it. | a claim ref fires none | CONVENTIONS.md | #550 |
-| C5a.record.03 | default |  | Each machine sweeps its own worktrees. | Each machine sweeps its own worktrees. | CONVENTIONS.md | — |
-| C5a.record.04 | hard | tools/colab::function printRemoteUnreachable | Fail closed: with the remote unreachable, make no claim (a repo with no remote at all excepted). | Fail closed: a claim checked against nothing is not a lock. | CONVENTIONS.md | #325 |
-| C5a.record.05 | default |  | A repo with no remote at all relies on the machine's own record. | A repo with no remote at all is the one exception | CONVENTIONS.md | — |
-| C5a.record.06 | default |  | With the tracker unreachable the claim stands; its tracker half is recorded pending and posted on re-run. | Tracker unreachable → the claim still stands. | CONVENTIONS.md | — |
-| C5a.record.07 | default |  | One account on two machines is two holders; a live claim comment from the same login on another machine refuses too. | One account on two machines is two holders | CONVENTIONS.md | — |
-| C5a.record.08 | default |  | Name the machine in a claim by canonical id (not hostname), and carry only a digest of it in the comment. | A claim names the machine by a canonical id, not its hostname | CONVENTIONS.md | #327 |
-| C5a.record.09 | default |  | A planner may hold an issue before its session exists (--session intent:<id>); the session's own claim upgrades it, and an unused planner claim is released after a short window. | A planner may hold an issue before the session that will work it exists | CONVENTIONS.md | #326 |
+| C5a.record.01 | hard | tools/colab::Refusing — one or more issues are already claimed | A branch or claim ref on the remote carrying #N that is not this machine's refuses a second claim on #N from anywhere. | refuses a second claim on `#N` from anywhere, naming the ref | tools/docs/claims.md | #325, #550 |
+| C5a.record.02 | default |  | The record of a claim is its branch on the remote, recorded when cut at session start and pushed at wrap. | the moment it is cut at session start and pushed at wrap | tools/docs/claims.md | #325 |
+| C5a.record.10 | default |  | At the cut the claim is recorded as the claim ref refs/claims/<branch>, not the branch, so no CI push trigger fires; colab worktree rm deletes it. | a claim ref fires none | tools/docs/claims.md | #550 |
+| C5a.record.03 | default |  | Each machine sweeps its own worktrees. | Each machine sweeps its own worktrees. | tools/docs/claims.md | — |
+| C5a.record.04 | hard | tools/colab::function printRemoteUnreachable | Fail closed: with the remote unreachable, make no claim (a repo with no remote at all excepted). | Fail closed: a claim checked against nothing is not a lock. | tools/docs/claims.md | #325 |
+| C5a.record.05 | default |  | A repo with no remote at all relies on the machine's own record. | A repo with no remote at all is the one exception | tools/docs/claims.md | — |
+| C5a.record.06 | default |  | With the tracker unreachable the claim stands; its tracker half is recorded pending and posted on re-run. | Tracker unreachable → the claim still stands. | tools/docs/claims.md | — |
+| C5a.record.07 | default |  | One account on two machines is two holders; a live claim comment from the same login on another machine refuses too. | One account on two machines is two holders | tools/docs/claims.md | — |
+| C5a.record.08 | default |  | Name the machine in a claim by canonical id (not hostname), and carry only a digest of it in the comment. | A claim names the machine by a canonical id, not its hostname | tools/docs/claims.md | #327 |
+| C5a.record.09 | default |  | A planner may hold an issue before its session exists (--session intent:<id>); the session's own claim upgrades it, and an unused planner claim is released after a short window. | A planner may hold an issue before the session that will work it exists | tools/docs/claims.md | #326 |
 
 ### §5 Mirror for people — GitHub
 
 | id | class | gate | rule | key | dest | source |
 |---|---|---|---|---|---|---|
 | C5a.mirror.01 | default |  | Check in-progress before taking work; claim with assignee plus label at session start; release at session end. | gh issue list --label in-progress | CONVENTIONS.md | — |
-| C5a.mirror.02 | hard | tools/colab::half-claim — labeled in-progress but nobody is assigned | A claim is both halves, the assignee and in-progress; `colab claim` refuses a half-claim until repaired, --force taking it over loudly. | `colab claim` refuses it until then, `--force` taking it over loudly like any other claim | CONVENTIONS.md | #323 |
-| C5a.mirror.03 | default |  | Either half alone is a half-claim: a broken claim, neither free nor taken. | a broken claim, which is neither free nor taken | CONVENTIONS.md | #323 |
-| C5a.mirror.04 | default |  | Nobody starts on a half-claim; triage reports it for repair — the assignee completes it or drops it. | Nobody starts on it; triage reports it for repair | CONVENTIONS.md | #323 |
-| C5a.mirror.05 | default |  | Our own half-claim is the one exception: re-claiming completes it. | Our own half-claim is the one exception: re-claiming completes it. | CONVENTIONS.md | #323 |
-| C5a.mirror.06 | default |  | Release drops both halves, never only the label. | Release therefore drops both halves; removing only the label is what leaves | CONVENTIONS.md | #323 |
-| C5a.mirror.07 | default |  | Release removes the assignee who holds the claim, not the account releasing it. | Release removes the assignee who holds the claim, not the account releasing it | CONVENTIONS.md | #363 |
-| C5a.mirror.08 | default |  | The claimer is the account that applied in-progress (the latest such event on the issue). | The claimer is the account that applied `in-progress` | CONVENTIONS.md | #363 |
+| C5a.mirror.02 | hard | tools/colab::half-claim — labeled in-progress but nobody is assigned | A claim is both halves, the assignee and in-progress; `colab claim` refuses a half-claim until repaired, --force taking it over loudly. | `colab claim` refuses it until then, `--force` taking it over loudly like any other claim | tools/docs/claims.md | #323 |
+| C5a.mirror.03 | default |  | Either half alone is a half-claim: a broken claim, neither free nor taken. | a broken claim, which is neither free nor taken | tools/docs/claims.md | #323 |
+| C5a.mirror.04 | default |  | Nobody starts on a half-claim; triage reports it for repair — the assignee completes it or drops it. | Nobody starts on it; triage reports it for repair | tools/docs/claims.md | #323 |
+| C5a.mirror.05 | default |  | Our own half-claim is the one exception: re-claiming completes it. | Our own half-claim is the one exception: re-claiming completes it. | tools/docs/claims.md | #323 |
+| C5a.mirror.06 | default |  | Release drops both halves, never only the label. | Release therefore drops both halves; removing only the label is what leaves | tools/docs/claims.md | #323 |
+| C5a.mirror.07 | default |  | Release removes the assignee who holds the claim, not the account releasing it. | Release removes the assignee who holds the claim, not the account releasing it | tools/docs/claims.md | #363 |
+| C5a.mirror.08 | default |  | The claimer is the account that applied in-progress (the latest such event on the issue). | The claimer is the account that applied `in-progress` | tools/docs/claims.md | #363 |
 | C5a.mirror.09 | explanation |  | Why a release that drops @me leaves the claimer assigned: measured on this repo. | A fleet working under more than one account claims under one | docs/adr/363-claim-release-rationale.md | #363 |
-| C5a.mirror.10 | default |  | `colab release` reads the claimer from the issue, unassigns it alongside the caller, and says so when the login differs. | `colab release` (and every path that releases through it) reads the claimer from the issue | CONVENTIONS.md | #363 |
-| C5a.mirror.11 | default |  | By hand, <claimer> is @me only when you took the claim yourself. | By hand, `<claimer>` is `@me` only when you took the claim yourself | CONVENTIONS.md | #363 |
-| C5a.mirror.12 | default |  | When yielding a lost race, the latest labeler is the winner and its assignee must stay. | there the latest labeler is the winner, whose assignee must stay | CONVENTIONS.md | #363 |
-| C5a.mirror.13 | default |  | Assignee plus in-progress is the mirror for people, not the lock; the lock is the branch on the remote. | is the claim's mirror for people, not its lock | CONVENTIONS.md | #325 |
-| C5a.mirror.14 | default |  | Create the in-progress label as part of adoption; it does not exist in a fresh repo. | The label does not exist in a fresh repo — creating it is part of adoption | CONVENTIONS.md | — |
+| C5a.mirror.10 | default |  | `colab release` reads the claimer from the issue, unassigns it alongside the caller, and says so when the login differs. | `colab release` (and every path that releases through it) reads the claimer from the issue | tools/docs/claims.md | #363 |
+| C5a.mirror.11 | default |  | By hand, <claimer> is @me only when you took the claim yourself. | By hand, `<claimer>` is `@me` only when you took the claim yourself | tools/docs/claims.md | #363 |
+| C5a.mirror.12 | default |  | When yielding a lost race, the latest labeler is the winner and its assignee must stay. | there the latest labeler is the winner, whose assignee must stay | tools/docs/claims.md | #363 |
+| C5a.mirror.13 | default |  | Assignee plus in-progress is the mirror for people, not the lock; the lock is the branch on the remote. | is the claim's mirror for people, not its lock | tools/docs/claims.md | #325 |
+| C5a.mirror.14 | default |  | Create the in-progress label as part of adoption; it does not exist in a fresh repo. | The label does not exist in a fresh repo — creating it is part of adoption | tools/docs/claims.md | — |
 
 ### §5 Fast path — local cache
 
 | id | class | gate | rule | key | dest | source |
 |---|---|---|---|---|---|---|
-| C5a.fastpath.01 | default |  | The machine-local cache at ~/.colab/state.json is a cache, not the truth. | It is a cache, not the truth | CONVENTIONS.md | — |
-| C5a.fastpath.02 | default |  | When cache and GitHub disagree about the assignee/label, GitHub wins. | When cache and GitHub disagree about the assignee/label, GitHub wins. | CONVENTIONS.md | — |
-| C5a.fastpath.03 | default |  | Never file-sync the cache between machines — it answers which remote branches are this machine's own. | which is why it is never file-synced between machines | CONVENTIONS.md | — |
-| C5a.fastpath.04 | default |  | Reconcile the cache with `colab claims --sync` and free dead claims with `colab doctor --prune`. | colab doctor --prune # free claims whose worktrees no longer exist | CONVENTIONS.md | — |
+| C5a.fastpath.01 | default |  | The machine-local cache at ~/.colab/state.json is a cache, not the truth. | It is a cache, not the truth | tools/docs/claims.md | — |
+| C5a.fastpath.02 | default |  | When cache and GitHub disagree about the assignee/label, GitHub wins. | When cache and GitHub disagree about the assignee/label, GitHub wins. | tools/docs/claims.md | — |
+| C5a.fastpath.03 | default |  | Never file-sync the cache between machines — it answers which remote branches are this machine's own. | which is why it is never file-synced between machines | tools/docs/claims.md | — |
+| C5a.fastpath.04 | default |  | Reconcile the cache with `colab claims --sync` and free dead claims with `colab doctor --prune`. | colab doctor --prune # free claims whose worktrees no longer exist | tools/docs/claims.md | — |
 
 ### §5 Rules
 
 | id | class | gate | rule | key | dest | source |
 |---|---|---|---|---|---|---|
-| C5a.rules.01 | hard | tools/colab::Refusing — one or more issues are already claimed ; tools/colab::zeroClaimVerdict | Claim before you start, not when you open the PR. | Claim before you start, not when you open the PR | CONVENTIONS.md | — |
-| C5a.rules.02 | hard | tools/colab::Refusing — one or more issues are already claimed | A live claim is enforced, not advisory: claim and worktree-new refuse an issue with a live claim, naming the holder. | `colab claim`/`colab worktree new` refuse an issue with a live claim | CONVENTIONS.md | — |
-| C5a.rules.03 | default |  | --force takes over a live claim loudly. | naming the holder; `--force` takes over loudly | CONVENTIONS.md | — |
-| C5a.rules.04 | default |  | Say so on the Issue if you intend to return to an unfinished issue whose claim a wrap released. | say so on the Issue if you intend to return | CONVENTIONS.md | — |
-| C5a.rules.05 | default |  | A claim carries its details as a structured Issue comment: 🔒 Claimed on claim, ✅ Released on release. | A claim carries its details as a structured Issue comment | CONVENTIONS.md | — |
-| C5a.rules.06 | default |  | code-ship's evidence comment prepends an invisible `<!-- colab:evidence sha=<trunk-sha> -->` marker line to free prose. | `<!-- colab:evidence sha=<trunk-sha> -->`, prepended to free prose | CONVENTIONS.md | — |
-| C5a.rules.07 | default |  | Degrade, never gate: a comment missing the evidence marker still counts as evidence; no consumer treats its absence as no evidence. | a comment missing the marker still counts as evidence; no consumer may treat its absence | CONVENTIONS.md | — |
-| C5a.rules.08 | default |  | code-ship's grade verdict is a `<!-- colab:grade verdict=<token> round=<n> -->` line, the token one of a closed set (pass, reject-decision, reject-escalate, rework). | `<token>` one of a closed set | CONVENTIONS.md | — |
-| C5a.rules.09 | default |  | No grade token is a prefix or decorated variant of another. | no token a prefix or decorated variant of another | CONVENTIONS.md | — |
-| C5a.rules.10 | default |  | `rework` is posted only at round=1 and is held, never cleared. | It is emitted only at `round=1`, and it is held, never cleared. | CONVENTIONS.md | #328, #406 |
-| C5a.rules.11 | default |  | Read marker attributes by name, never position. | Attributes are read by name, never position | CONVENTIONS.md | — |
-| C5a.rules.12 | default |  | Read markers by equality, never prefix or heading; an unrecognised token or a missing marker both mean not cleared. | an unrecognised token or a missing marker both mean "not cleared" | CONVENTIONS.md | — |
-| C5a.rules.13 | default |  | A third marker, `colab:disposition proposed=<token>`, proposes how a non-code unit of work ends, under the same closed-set rules. | proposes how a non-code unit of work ends | CONVENTIONS.md | — |
-| C5a.rules.14 | default |  | Simultaneous claims break ties deterministically: re-read after claiming; the earliest live claim comment wins and the loser posts Released (yielded). | Simultaneous claims break ties deterministically | CONVENTIONS.md | — |
-| C5a.rules.15 | default |  | Release the claim even if you did not finish; a stale claim silently blocks others. | Release the claim even if you did not finish | CONVENTIONS.md | — |
-| C5a.rules.16 | default |  | For long-running work, comment progress onto the Issue. | For long-running work, comment progress onto the Issue | CONVENTIONS.md | — |
+| C5a.rules.01 | hard | tools/colab::Refusing — one or more issues are already claimed ; tools/colab::zeroClaimVerdict | Claim before you start, not when you open the PR. | Claim before you start, not when you open the PR | tools/docs/claims.md | — |
+| C5a.rules.02 | hard | tools/colab::Refusing — one or more issues are already claimed | A live claim is enforced, not advisory: claim and worktree-new refuse an issue with a live claim, naming the holder. | `colab claim`/`colab worktree new` refuse an issue with a live claim | tools/docs/claims.md | — |
+| C5a.rules.03 | default |  | --force takes over a live claim loudly. | naming the holder; `--force` takes over loudly | tools/docs/claims.md | — |
+| C5a.rules.04 | default |  | Say so on the Issue if you intend to return to an unfinished issue whose claim a wrap released. | say so on the Issue if you intend to return | tools/docs/claims.md | — |
+| C5a.rules.05 | default |  | A claim carries its details as a structured Issue comment: 🔒 Claimed on claim, ✅ Released on release. | A claim carries its details as a structured Issue comment | tools/docs/claims.md | — |
+| C5a.rules.06 | default |  | code-ship's evidence comment prepends an invisible `<!-- colab:evidence sha=<trunk-sha> -->` marker line to free prose. | `<!-- colab:evidence sha=<trunk-sha> -->`, prepended to free prose | tools/docs/claims.md | — |
+| C5a.rules.07 | default |  | Degrade, never gate: a comment missing the evidence marker still counts as evidence; no consumer treats its absence as no evidence. | a comment missing the marker still counts as evidence; no consumer may treat its absence | tools/docs/claims.md | — |
+| C5a.rules.08 | default |  | code-ship's grade verdict is a `<!-- colab:grade verdict=<token> round=<n> -->` line, the token one of a closed set (pass, reject-decision, reject-escalate, rework). | `<token>` one of a closed set | tools/docs/claims.md | — |
+| C5a.rules.09 | default |  | No grade token is a prefix or decorated variant of another. | no token a prefix or decorated variant of another | tools/docs/claims.md | — |
+| C5a.rules.10 | default |  | `rework` is posted only at round=1 and is held, never cleared. | It is emitted only at `round=1`, and it is held, never cleared. | tools/docs/claims.md | #328, #406 |
+| C5a.rules.11 | default |  | Read marker attributes by name, never position. | Attributes are read by name, never position | tools/docs/claims.md | — |
+| C5a.rules.12 | default |  | Read markers by equality, never prefix or heading; an unrecognised token or a missing marker both mean not cleared. | an unrecognised token or a missing marker both mean "not cleared" | tools/docs/claims.md | — |
+| C5a.rules.13 | default |  | A third marker, `colab:disposition proposed=<token>`, proposes how a non-code unit of work ends, under the same closed-set rules. | proposes how a non-code unit of work ends | tools/docs/claims.md | — |
+| C5a.rules.14 | default |  | Simultaneous claims break ties deterministically: re-read after claiming; the earliest live claim comment wins and the loser posts Released (yielded). | Simultaneous claims break ties deterministically | tools/docs/claims.md | — |
+| C5a.rules.15 | default |  | Release the claim even if you did not finish; a stale claim silently blocks others. | Release the claim even if you did not finish | tools/docs/claims.md | — |
+| C5a.rules.16 | default |  | For long-running work, comment progress onto the Issue. | For long-running work, comment progress onto the Issue | tools/docs/claims.md | — |
 
 ### §5 Tracking issues — claimed but referenced, not closed
 
 | id | class | gate | rule | key | dest | source |
 |---|---|---|---|---|---|---|
-| C5a.tracking.01 | default |  | A tracking issue may be claimed and referenced without closing; the merge message says Refs #N instead of Closes #N. | The merge message says `Refs #N` (links, does not auto-close) | CONVENTIONS.md | — |
-| C5a.tracking.02 | default |  | A `tracking` label makes any session claiming the issue reference it automatically. | declarative and durable; any session claiming a labelled issue references it automatically | CONVENTIONS.md | — |
-| C5a.tracking.03 | default |  | `colab ship --refs <N[,M]>` references an unlabelled issue explicitly, per ship. | explicit, per-ship, for an unlabelled issue | CONVENTIONS.md | — |
-| C5a.tracking.04 | default |  | An issue kept open for a non-code leftover must also be parked in the same step. | must also be parked in the same step, or it reads as startable again | CONVENTIONS.md | #385 |
-| C5a.tracking.05 | default |  | A leftover that is only a check a person must run: close the issue and add a row to the Human verify issue. | close it and add a row to the `Human verify:` issue | CONVENTIONS.md | — |
-| C5a.tracking.06 | default |  | The claim is released unconditionally either way. | The claim is released unconditionally either way | CONVENTIONS.md | — |
-| C5a.tracking.07 | default |  | `tracking` is deliberately not in the convention label set, so adoption does not provision it. | `tracking` is deliberately not in the convention label set | CONVENTIONS.md | — |
-| C5a.tracking.08 | default |  | Do not write Closes #<tracking> in a commit body; GitHub closes on the keyword regardless of intent. | Do not write `Closes #<tracking>` in a commit body | CONVENTIONS.md | — |
-| C5a.tracking.09 | default |  | `colab ship` detects a stray Closes on a tracking issue after the push and warns to reopen by hand. | `colab ship` detects this after the push and warns to reopen by hand | CONVENTIONS.md | — |
-| C5a.tracking.10 | default |  | `ship` drops a stale Refs before the push when the same issue is now one of the branch's Closes. | `ship` drops the stale `Refs` before the push rather than shipping | CONVENTIONS.md | #58 |
+| C5a.tracking.01 | default |  | A tracking issue may be claimed and referenced without closing; the merge message says Refs #N instead of Closes #N. | The merge message says `Refs #N` (links, does not auto-close) | tools/docs/claims.md | — |
+| C5a.tracking.02 | default |  | A `tracking` label makes any session claiming the issue reference it automatically. | declarative and durable; any session claiming a labelled issue references it automatically | tools/docs/claims.md | — |
+| C5a.tracking.03 | default |  | `colab ship --refs <N[,M]>` references an unlabelled issue explicitly, per ship. | explicit, per-ship, for an unlabelled issue | tools/docs/claims.md | — |
+| C5a.tracking.04 | default |  | An issue kept open for a non-code leftover must also be parked in the same step. | must also be parked in the same step, or it reads as startable again | tools/docs/claims.md | #385 |
+| C5a.tracking.05 | default |  | A leftover that is only a check a person must run: close the issue and add a row to the Human verify issue. | close it and add a row to the `Human verify:` issue | tools/docs/claims.md | — |
+| C5a.tracking.06 | default |  | The claim is released unconditionally either way. | The claim is released unconditionally either way | tools/docs/claims.md | — |
+| C5a.tracking.07 | default |  | `tracking` is deliberately not in the convention label set, so adoption does not provision it. | `tracking` is deliberately not in the convention label set | tools/docs/claims.md | — |
+| C5a.tracking.08 | default |  | Do not write Closes #<tracking> in a commit body; GitHub closes on the keyword regardless of intent. | Do not write `Closes #<tracking>` in a commit body | tools/docs/claims.md | — |
+| C5a.tracking.09 | default |  | `colab ship` detects a stray Closes on a tracking issue after the push and warns to reopen by hand. | `colab ship` detects this after the push and warns to reopen by hand | tools/docs/claims.md | — |
+| C5a.tracking.10 | default |  | `ship` drops a stale Refs before the push when the same issue is now one of the branch's Closes. | `ship` drops the stale `Refs` before the push rather than shipping | tools/docs/claims.md | #58 |
 
 ### §5 Human verify — a person-only check closes the issue and becomes one row (#491)
 
@@ -1093,19 +1119,19 @@ Keys shortened because the sentence that followed them was moved whole (the rule
 | C5a.readiness.15 | default |  | Split an issue at the external-wait line: the part the repo can build now becomes its own issue; the part behind the wait keeps the edge or the park. | Split an issue at the external-wait line (#371). | CONVENTIONS.md | #371 |
 | C5a.readiness.16 | explanation |  | Why split: one issue bundled a buildable surface with a mode needing an outside API, holding back two more issues. | Measured: one issue bundled a surface the repo owned, whose | docs/adr/361-readiness-and-dependency-edges-rationale.md | #371 |
 | C5a.readiness.17 | default |  | code-triage reports the split as a structural finding; it does not split the issue itself. | `code-triage` reports the split as a structural finding | CONVENTIONS.md | #371 |
-| C5a.readiness.18 | default |  | colab owns the blocked_by write, taking issue numbers only, and reads back to confirm. | write a sequence — colab owns this write (#251); it takes NUMBERS ONLY, | CONVENTIONS.md | #251 |
-| C5a.readiness.19 | default |  | removeSubIssue requires both ids. | a child cannot be detached by naming only itself | CONVENTIONS.md | — |
-| C5a.readiness.20 | default |  | Sub-issues are GraphQL keyed by node id; dependencies are REST keyed by database id — the two halves do not share an API. | The two halves do not share an API, and that is the trap. | CONVENTIONS.md | — |
+| C5a.readiness.18 | default |  | colab owns the blocked_by write, taking issue numbers only, and reads back to confirm. | write a sequence — colab owns this write (#251); it takes NUMBERS ONLY, | tools/docs/readiness.md | #251 |
+| C5a.readiness.19 | default |  | removeSubIssue requires both ids. | a child cannot be detached by naming only itself | tools/docs/readiness.md | — |
+| C5a.readiness.20 | default |  | Sub-issues are GraphQL keyed by node id; dependencies are REST keyed by database id — the two halves do not share an API. | The two halves do not share an API, and that is the trap. | tools/docs/readiness.md | — |
 | C5a.readiness.21 | explanation |  | Why reading back matters: the REST endpoint accepted an issue number as a database id and attached a stranger's blocker. | Measured: `issue_id=34` silently attached a blocker | docs/adr/361-readiness-and-dependency-edges-rationale.md | #251 |
-| C5a.readiness.22 | default |  | Read blockedBy back after every write. | Read `blockedBy` back after every write. | CONVENTIONS.md | — |
-| C5a.readiness.23 | default |  | Read the confirmation from the blockedBy/blocking connections, never issueDependenciesSummary. | Read that confirmation from the `blockedBy`/`blocking` connections, never | CONVENTIONS.md | — |
-| C5a.readiness.24 | default |  | "No blockers" and "nobody checked" are the same empty list; the second needs its own marker, deps-checked. | "No blockers" and "nobody checked" are the same empty list | CONVENTIONS.md | — |
-| C5a.readiness.25 | default |  | Set deps-checked only after actually looking, with `colab readiness <N>`. | set only after actually looking | CONVENTIONS.md | — |
-| C5a.readiness.26 | default |  | Clear deps-checked only for a genuinely new blocker or a reopened issue, never for "not now". | a genuinely NEW blocker appeared, or the issue reopened — never "not now" | CONVENTIONS.md | — |
-| C5a.readiness.27 | default |  | deps-checked is monotonic: once set, it stays set. | `deps-checked` is monotonic (#279): once set, it stays set. | CONVENTIONS.md | #279 |
-| C5a.readiness.28 | default |  | Clearing deps-checked means exactly one of two things: a new blocker appeared, or the issue reopened. | Clearing it means exactly one of two things | CONVENTIONS.md | #279 |
-| C5a.readiness.29 | default |  | It never means startable in principle but not now; that fact has its own carrier (Disposition). | It never means "startable in principle, but not right now" | CONVENTIONS.md | #279 |
-| C5a.readiness.30 | default |  | A prose note saying checked, no blockers does not count as setting deps-checked. | A prose note saying "checked, no blockers" does not count as setting it. | CONVENTIONS.md | #279 |
+| C5a.readiness.22 | default |  | Read blockedBy back after every write. | Read `blockedBy` back after every write. | tools/docs/readiness.md | — |
+| C5a.readiness.23 | default |  | Read the confirmation from the blockedBy/blocking connections, never issueDependenciesSummary. | Read that confirmation from the `blockedBy`/`blocking` connections, never | tools/docs/readiness.md | — |
+| C5a.readiness.24 | default |  | "No blockers" and "nobody checked" are the same empty list; the second needs its own marker, deps-checked. | "No blockers" and "nobody checked" are the same empty list | tools/docs/readiness.md | — |
+| C5a.readiness.25 | default |  | Set deps-checked only after actually looking, with `colab readiness <N>`. | set only after actually looking | tools/docs/readiness.md | — |
+| C5a.readiness.26 | default |  | Clear deps-checked only for a genuinely new blocker or a reopened issue, never for "not now". | a genuinely NEW blocker appeared, or the issue reopened — never "not now" | tools/docs/readiness.md | — |
+| C5a.readiness.27 | default |  | deps-checked is monotonic: once set, it stays set. | `deps-checked` is monotonic (#279): once set, it stays set. | tools/docs/readiness.md | #279 |
+| C5a.readiness.28 | default |  | Clearing deps-checked means exactly one of two things: a new blocker appeared, or the issue reopened. | Clearing it means exactly one of two things | tools/docs/readiness.md | #279 |
+| C5a.readiness.29 | default |  | It never means startable in principle but not now; that fact has its own carrier (Disposition). | It never means "startable in principle, but not right now" | tools/docs/readiness.md | #279 |
+| C5a.readiness.30 | default |  | A prose note saying checked, no blockers does not count as setting deps-checked. | A prose note saying "checked, no blockers" does not count as setting it. | tools/docs/readiness.md | #279 |
 
 ### §5 Readiness is not a boolean — read the blocker's state, not just its existence
 
@@ -1122,20 +1148,20 @@ Keys shortened because the sentence that followed them was moved whole (the rule
 | C5a.boolean.09 | explanation |  | Why a session is not evidence: a session open ten minutes was already dead. | Measured: a session open ten minutes | docs/adr/361-readiness-and-dependency-edges-rationale.md | — |
 | C5a.boolean.10 | default |  | An unpushed branch does not count. | An unpushed branch does not count either | CONVENTIONS.md | — |
 | C5a.boolean.11 | default |  | The judgement fails toward blocked, never toward ready. | The judgement fails toward `blocked`, never toward `ready` | CONVENTIONS.md | — |
-| C5a.boolean.12 | default |  | Reference implementation: tools/lib/readiness.js (classify, isStartable), pure, deriving unmerged-code from landed.js. | Reference implementation: `tools/lib/readiness.js` (`classify`, `isStartable`), pure | CONVENTIONS.md | — |
+| C5a.boolean.12 | default |  | Reference implementation: tools/lib/readiness.js (classify, isStartable), pure, deriving unmerged-code from landed.js. | Reference implementation: `tools/lib/readiness.js` (`classify`, `isStartable`), pure | tools/docs/readiness.md | — |
 
 ### §5 Mechanical readiness — a weaker, honest claim for the empty case (#69)
 
 | id | class | gate | rule | key | dest | source |
 |---|---|---|---|---|---|---|
-| C5a.mechanical.01 | default |  | A mechanical check must never write deps-checked itself. | A mechanical check must never write `deps-checked` itself | CONVENTIONS.md | #69 |
-| C5a.mechanical.02 | default |  | `colab readiness <N> --mechanical` reads blockedBy and, if empty, applies graph-empty and posts a receipt. | reads blockedBy; if empty, applies graph-empty + posts a receipt | CONVENTIONS.md | #69 |
-| C5a.mechanical.03 | default |  | The mechanical check re-derives its own evidence on every run, not trusting a caller-supplied flag. | Re-derives its own evidence on every run, rather than trusting a caller-supplied | CONVENTIONS.md | #69 |
-| C5a.mechanical.04 | default |  | The mechanical check posts a receipt naming what was read and when. | Posts a receipt naming what was read and when. | CONVENTIONS.md | #69 |
-| C5a.mechanical.05 | default |  | The mechanical check reads blockedBy only, nothing about parent/child relations. | says nothing about parent/child relations | CONVENTIONS.md | #69 |
-| C5a.mechanical.06 | default |  | classify() keeps graphEmpty and depsChecked distinct; empty-but-unchecked reads unchecked-mechanical and isStartable stays no. | empty-but-unchecked reads a fourth verdict, `unchecked-mechanical` | CONVENTIONS.md | #69 |
-| C5a.mechanical.07 | default |  | graph-empty is not in the convention label set. | Not in the convention label set | CONVENTIONS.md | #69 |
-| C5a.mechanical.08 | default |  | No readiness.marked event fires for --mechanical. | No `readiness.marked` event fires for `--mechanical` | CONVENTIONS.md | #45, #46 |
+| C5a.mechanical.01 | default |  | A mechanical check must never write deps-checked itself. | A mechanical check must never write `deps-checked` itself | tools/docs/readiness.md | #69 |
+| C5a.mechanical.02 | default |  | `colab readiness <N> --mechanical` reads blockedBy and, if empty, applies graph-empty and posts a receipt. | reads blockedBy; if empty, applies graph-empty + posts a receipt | tools/docs/readiness.md | #69 |
+| C5a.mechanical.03 | default |  | The mechanical check re-derives its own evidence on every run, not trusting a caller-supplied flag. | Re-derives its own evidence on every run, rather than trusting a caller-supplied | tools/docs/readiness.md | #69 |
+| C5a.mechanical.04 | default |  | The mechanical check posts a receipt naming what was read and when. | Posts a receipt naming what was read and when. | tools/docs/readiness.md | #69 |
+| C5a.mechanical.05 | default |  | The mechanical check reads blockedBy only, nothing about parent/child relations. | says nothing about parent/child relations | tools/docs/readiness.md | #69 |
+| C5a.mechanical.06 | default |  | classify() keeps graphEmpty and depsChecked distinct; empty-but-unchecked reads unchecked-mechanical and isStartable stays no. | empty-but-unchecked reads a fourth verdict, `unchecked-mechanical` | tools/docs/readiness.md | #69 |
+| C5a.mechanical.07 | default |  | graph-empty is not in the convention label set. | Not in the convention label set | tools/docs/readiness.md | #69 |
+| C5a.mechanical.08 | default |  | No readiness.marked event fires for --mechanical. | No `readiness.marked` event fires for `--mechanical` | tools/docs/readiness.md | #45, #46 |
 
 ### §5 Disposition — a park must name its wake condition (#279)
 
@@ -1190,39 +1216,39 @@ Keys shortened because the sentence that followed them was moved whole (the rule
 | id | class | gate | rule | key | dest | source |
 |---|---|---|---|---|---|---|
 | C5a.wake.01 | explanation |  | Why wake needed a checkable vocabulary: conditions came true and nothing noticed; four measured cases. | Until #382, `wake:` was one of three forms, | docs/adr/382-wake-vocabulary-rationale.md | #382 |
-| C5a.wake.02 | default |  | wake: is one of the listed forms, and a scheduler can evaluate every form on every beat. | So `wake:` is now one of these, and a scheduler can evaluate every form on every beat: | CONVENTIONS.md | #382 |
-| C5a.wake.03 | default |  | review-by:<date> is met when the date is reached; the label is on the issue too. | the date is reached. The `review-by:<date>` label is on the issue too. | CONVENTIONS.md | #382 |
-| C5a.wake.04 | default |  | #N is met when the issue behind the blocked_by edge closes; the edge must exist. | the issue behind the `blocked_by` edge to `#N` closes | CONVENTIONS.md | #382 |
-| C5a.wake.05 | default |  | ruling is met when the owner acts; the owner's act is removing the label. | the owner acts. `Because:` is the ask (below). | CONVENTIONS.md | #382 |
-| C5a.wake.06 | default |  | issueClosed:<owner>/<repo>#<n> is met when that issue is closed. | that issue is closed. Use it for another repo's issue when no cross-repo edge is set. | CONVENTIONS.md | #382 |
-| C5a.wake.07 | default |  | branchLanded:<ref> is met when the ref is an ancestor of trunk; where branches land by squash, wait on the issue or a landed commit instead. | `<ref>`, resolved as written, is an ancestor of trunk. | CONVENTIONS.md | #382 |
-| C5a.wake.08 | default |  | trunkAt:<sha> is met when trunk contains the sha (7-40 hex). | trunk contains `<sha>` (7–40 hex) | CONVENTIONS.md | #382 |
-| C5a.wake.09 | default |  | labelPresent:<label> is met when the held issue carries the label. | the held issue carries `<label>` | CONVENTIONS.md | #382 |
-| C5a.wake.10 | default |  | after:<date> is met when the date is reached, the form a scheduler stores. | Same meaning as `review-by:`, in the form a scheduler stores | CONVENTIONS.md | #382 |
-| C5a.wake.11 | default |  | ruling is the one definition of the waiting-on-the-operator reason line. | `ruling` is the one definition of the "waiting on the operator" reason line. | CONVENTIONS.md | #382 |
-| C5a.wake.12 | default |  | When the wake is ruling, the Because: line is the ask itself. | the `Because:` line is the ask itself, written as what the owner has to | CONVENTIONS.md | #382 |
-| C5a.wake.13 | default |  | A consumer's card reader does not invent a second syntax for the reason line. | A consumer's card reader parses this line and does not invent a second | CONVENTIONS.md | #382 |
-| C5a.wake.14 | default |  | A question rather than an act belongs under needs-decision. | it belongs under `needs-decision` instead, where the answer gets a record of its own | CONVENTIONS.md | #382 |
-| C5a.wake.15 | default |  | Every checkable wake name is spelled exactly as the adopting scheduler spells it. | Every checkable name above is spelled exactly the way the one | CONVENTIONS.md | #382 |
+| C5a.wake.02 | default |  | wake: is one of the listed forms, and a scheduler can evaluate every form on every beat. | So `wake:` is now one of these, and a scheduler can evaluate every form on every beat: | tools/docs/readiness.md | #382 |
+| C5a.wake.03 | default |  | review-by:<date> is met when the date is reached; the label is on the issue too. | the date is reached. The `review-by:<date>` label is on the issue too. | tools/docs/readiness.md | #382 |
+| C5a.wake.04 | default |  | #N is met when the issue behind the blocked_by edge closes; the edge must exist. | the issue behind the `blocked_by` edge to `#N` closes | tools/docs/readiness.md | #382 |
+| C5a.wake.05 | default |  | ruling is met when the owner acts; the owner's act is removing the label. | the owner acts. `Because:` is the ask (below). | tools/docs/readiness.md | #382 |
+| C5a.wake.06 | default |  | issueClosed:<owner>/<repo>#<n> is met when that issue is closed. | that issue is closed. Use it for another repo's issue when no cross-repo edge is set. | tools/docs/readiness.md | #382 |
+| C5a.wake.07 | default |  | branchLanded:<ref> is met when the ref is an ancestor of trunk; where branches land by squash, wait on the issue or a landed commit instead. | `<ref>`, resolved as written, is an ancestor of trunk. | tools/docs/readiness.md | #382 |
+| C5a.wake.08 | default |  | trunkAt:<sha> is met when trunk contains the sha (7-40 hex). | trunk contains `<sha>` (7–40 hex) | tools/docs/readiness.md | #382 |
+| C5a.wake.09 | default |  | labelPresent:<label> is met when the held issue carries the label. | the held issue carries `<label>` | tools/docs/readiness.md | #382 |
+| C5a.wake.10 | default |  | after:<date> is met when the date is reached, the form a scheduler stores. | Same meaning as `review-by:`, in the form a scheduler stores | tools/docs/readiness.md | #382 |
+| C5a.wake.11 | default |  | ruling is the one definition of the waiting-on-the-operator reason line. | `ruling` is the one definition of the "waiting on the operator" reason line. | tools/docs/readiness.md | #382 |
+| C5a.wake.12 | default |  | When the wake is ruling, the Because: line is the ask itself. | the `Because:` line is the ask itself, written as what the owner has to | tools/docs/readiness.md | #382 |
+| C5a.wake.13 | default |  | A consumer's card reader does not invent a second syntax for the reason line. | A consumer's card reader parses this line and does not invent a second | tools/docs/readiness.md | #382 |
+| C5a.wake.14 | default |  | A question rather than an act belongs under needs-decision. | it belongs under `needs-decision` instead, where the answer gets a record of its own | tools/docs/readiness.md | #382 |
+| C5a.wake.15 | default |  | Every checkable wake name is spelled exactly as the adopting scheduler spells it. | Every checkable name above is spelled exactly the way the one | tools/docs/readiness.md | #382 |
 | C5a.wake.16 | explanation |  | Why session-liveness wake kinds are not adopted. | That scheduler also accepts two kinds about a live session | docs/adr/382-wake-vocabulary-rationale.md | #382 |
-| C5a.wake.17 | default |  | A consumer evaluating a wake never invents a second spelling for a name on the list. | a consumer that evaluates a `wake:` never invents a second spelling for a name on this list | CONVENTIONS.md | #382 |
-| C5a.wake.18 | default |  | tools/lib/wake.js is the parser and evaluator, and its tests pin the list. | `tools/lib/wake.js` is the parser and evaluator, and its tests pin the list. | CONVENTIONS.md | #382 |
-| C5a.wake.19 | default |  | Several wake conditions on one line are ANDed. | Several conditions on one line are ANDed: | CONVENTIONS.md | #382 |
-| C5a.wake.20 | default |  | A hold never wakes early on part of its condition; a line with one piece outside the vocabulary names no wake. | A hold never wakes early on part of its condition | CONVENTIONS.md | #382 |
-| C5a.wake.21 | default |  | A wait on other work must use a checkable form; if the work has no issue yet, file one and point the hold at it. | A wait on other work must use one of the checkable forms. | CONVENTIONS.md | #382 |
-| C5a.wake.22 | default |  | A wait with no checkable form stays prose in Because: and must carry review-by:<date>. | That wait must carry `review-by:<date>`. | CONVENTIONS.md | #382 |
-| C5a.wake.23 | default |  | A wake naming an issue or ref that does not exist is a finding when it is written. | A `wake:` that names an issue or ref that does not exist is a finding when it is written | CONVENTIONS.md | #382 |
-| C5a.wake.24 | default |  | A met wake does not lift the hold by itself; the scheduler posts once and hands the issue to triage, the owner removes the label. | A met wake does not lift the hold by itself. | CONVENTIONS.md | #382 |
-| C5a.wake.25 | default |  | The evaluator proposes; it never clears. | The evaluator proposes; it never clears. | CONVENTIONS.md | #382 |
-| C5a.wake.26 | default |  | Wakes are re-checked on every triage pass, not only once review-by: is reached. | Wakes are re-checked on every triage pass | CONVENTIONS.md | #382 |
-| C5a.wake.27 | default |  | The wake rules apply to deferred:* and every label under holds: alike. | This applies to `deferred:*` and to every label declared under `holds:` alike | CONVENTIONS.md | #382 |
-| C5a.wake.28 | default |  | Whoever parks the issue writes the Hold: line, and code-triage reads it. | Whoever parks the issue writes the line, and `code-triage` reads it | CONVENTIONS.md | #382 |
-| C5a.wake.29 | default |  | The codec decodes only the exact Hold: line shape; a looser line names no owner or wake and stays a stall. | decodes only this exact shape | CONVENTIONS.md | #382 |
-| C5a.shape.01 | default |  | shape: is optional, sits between owner: and wake: (never after wake:), and every new hold declares it. | Optional, between `owner:` and `wake:`, never after `wake:`; every new hold declares it. | CONVENTIONS.md | #569 |
-| C5a.shape.02 | default |  | An owner choice is never a bare hold: it goes through needs-decision plus a decision:options block with a recommended option. | a **choice** between ways forward | CONVENTIONS.md | #569 |
-| C5a.shape.03 | default |  | A task is an act only a person can perform; it is a hold with wake: ruling and Because: is the act. | an **act** only a person can perform | CONVENTIONS.md | #569 |
-| C5a.shape.04 | default |  | A wait is a hold with a checkable wake: or review-by:<date>. | a hold with a checkable `wake:` or `review-by:<date>` | CONVENTIONS.md | #569 |
-| C5a.shape.05 | default |  | Present shape: is used; absent is inferred from the wake (ruling -> ask, else wait); any other value is a finding that falls back to the inference. | absent → inferred from the wake as before | CONVENTIONS.md | #569 |
+| C5a.wake.17 | default |  | A consumer evaluating a wake never invents a second spelling for a name on the list. | a consumer that evaluates a `wake:` never invents a second spelling for a name on this list | tools/docs/readiness.md | #382 |
+| C5a.wake.18 | default |  | tools/lib/wake.js is the parser and evaluator, and its tests pin the list. | `tools/lib/wake.js` is the parser and evaluator, and its tests pin the list. | tools/docs/readiness.md | #382 |
+| C5a.wake.19 | default |  | Several wake conditions on one line are ANDed. | Several conditions on one line are ANDed: | tools/docs/readiness.md | #382 |
+| C5a.wake.20 | default |  | A hold never wakes early on part of its condition; a line with one piece outside the vocabulary names no wake. | A hold never wakes early on part of its condition | tools/docs/readiness.md | #382 |
+| C5a.wake.21 | default |  | A wait on other work must use a checkable form; if the work has no issue yet, file one and point the hold at it. | A wait on other work must use one of the checkable forms. | tools/docs/readiness.md | #382 |
+| C5a.wake.22 | default |  | A wait with no checkable form stays prose in Because: and must carry review-by:<date>. | That wait must carry `review-by:<date>`. | tools/docs/readiness.md | #382 |
+| C5a.wake.23 | default |  | A wake naming an issue or ref that does not exist is a finding when it is written. | A `wake:` that names an issue or ref that does not exist is a finding when it is written | tools/docs/readiness.md | #382 |
+| C5a.wake.24 | default |  | A met wake does not lift the hold by itself; the scheduler posts once and hands the issue to triage, the owner removes the label. | A met wake does not lift the hold by itself. | tools/docs/readiness.md | #382 |
+| C5a.wake.25 | default |  | The evaluator proposes; it never clears. | The evaluator proposes; it never clears. | tools/docs/readiness.md | #382 |
+| C5a.wake.26 | default |  | Wakes are re-checked on every triage pass, not only once review-by: is reached. | Wakes are re-checked on every triage pass | tools/docs/readiness.md | #382 |
+| C5a.wake.27 | default |  | The wake rules apply to deferred:* and every label under holds: alike. | This applies to `deferred:*` and to every label declared under `holds:` alike | tools/docs/readiness.md | #382 |
+| C5a.wake.28 | default |  | Whoever parks the issue writes the Hold: line, and code-triage reads it. | Whoever parks the issue writes the line, and `code-triage` reads it | tools/docs/readiness.md | #382 |
+| C5a.wake.29 | default |  | The codec decodes only the exact Hold: line shape; a looser line names no owner or wake and stays a stall. | decodes only this exact shape | tools/docs/readiness.md | #382 |
+| C5a.shape.01 | default |  | shape: is optional, sits between owner: and wake: (never after wake:), and every new hold declares it. | Optional, between `owner:` and `wake:`, never after `wake:`; every new hold declares it. | tools/docs/readiness.md | #569 |
+| C5a.shape.02 | default |  | An owner choice is never a bare hold: it goes through needs-decision plus a decision:options block with a recommended option. | a **choice** between ways forward | tools/docs/readiness.md | #569 |
+| C5a.shape.03 | default |  | A task is an act only a person can perform; it is a hold with wake: ruling and Because: is the act. | an **act** only a person can perform | tools/docs/readiness.md | #569 |
+| C5a.shape.04 | default |  | A wait is a hold with a checkable wake: or review-by:<date>. | a hold with a checkable `wake:` or `review-by:<date>` | tools/docs/readiness.md | #569 |
+| C5a.shape.05 | default |  | Present shape: is used; absent is inferred from the wake (ruling -> ask, else wait); any other value is a finding that falls back to the inference. | absent → inferred from the wake as before | tools/docs/readiness.md | #569 |
 | C5a.shape.06 | explanation |  | Why shape: is declared, why a choice is never a bare hold, and why the field sits between owner: and wake:. | Measured on one installation: an owner's decision queue held 21 items. | docs/adr/569-hold-shape-rationale.md | #569 |
 
 ### §5 Disposition — the marker, the seven kinds, and who may apply one (#315)
@@ -1230,50 +1256,50 @@ Keys shortened because the sentence that followed them was moved whole (the rule
 | id | class | gate | rule | key | dest | source |
 |---|---|---|---|---|---|---|
 | C5a.disposition.01 | default |  | A session does not dispose of its own issue. | A session does not dispose of its own issue. | CONVENTIONS.md | #315 |
-| C5a.disposition.02 | default |  | A session does the work, posts evidence and proposes a disposition; a separate later pass applies it. | proposes a disposition; a separate later pass applies it | CONVENTIONS.md | #315 |
+| C5a.disposition.02 | default |  | A session does the work, posts evidence and proposes a disposition; a separate later pass applies it. | proposes a disposition; a separate later pass applies it | tools/docs/readiness.md | #315 |
 | C5a.disposition.03 | explanation |  | Why the separation: looking something up is not doing it; a session grading its own measurement. | That separation is the whole | docs/adr/315-disposition-kinds-rationale.md | #315 |
-| C5a.disposition.04 | default |  | The proposal is a one-line colab:disposition marker followed by a one-line reason. | The proposal is a marker, one line, the family | CONVENTIONS.md | #315 |
-| C5a.disposition.05 | default |  | The token is one of a closed set of seven, read by equality. | is one of a closed set of seven, read by equality | CONVENTIONS.md | #315 |
-| C5a.disposition.06 | default |  | No disposition token is a prefix or decorated variant of another. | No token is a prefix or a decorated variant of another. | CONVENTIONS.md | #315 |
-| C5a.disposition.07 | default |  | An unrecognised token, a missing marker, or two markers proposing different things all mean not cleared. | An unrecognised token, a missing marker, or two markers proposing different things all mean | CONVENTIONS.md | #315 |
-| C5a.disposition.08 | default |  | Degrade, never gate applies: a comment with no marker is evidence with no proposal. | a comment with no marker is evidence with no proposal | CONVENTIONS.md | #315 |
-| C5a.disposition.09 | default |  | The not planned kind uses the token not-planned. | its token is `not-planned`, because a token compared by equality cannot carry whitespace | CONVENTIONS.md | #315 |
-| C5a.disposition.10 | default |  | done: the ask was executed and cross-checked; acceptance ticked or a remainder declared; closes with evidence. | The ask was executed and cross-checked; acceptance ticked, or a remainder declared | CONVENTIONS.md | #315 |
-| C5a.disposition.11 | default |  | split: part landed and the remainder is filed as a native sub-issue; closes with evidence. | Part landed; the remainder is filed as a native sub-issue carrying the same | CONVENTIONS.md | #315 |
-| C5a.disposition.12 | default |  | routed-out: the work belongs to another repo, whose issue exists and links back; closes with evidence. | The work belongs to another repo; `<other-repo>#N` exists and links back | CONVENTIONS.md | #315 |
-| C5a.disposition.13 | default |  | hold: parked on a named wake condition; converts to deferred:<kind> plus a Hold: line with a wake from the closed vocabulary. | Parked on a named wake condition | CONVENTIONS.md | #315 |
-| C5a.disposition.14 | default |  | needs-owner: a human must answer before anything else; converts to a recorded decision. | A human must answer before anything else can happen | CONVENTIONS.md | #315 |
-| C5a.disposition.15 | default |  | not planned: superseded or abandoned; closes as not planned. | Superseded, or the direction was abandoned | CONVENTIONS.md | #315 |
-| C5a.disposition.16 | default |  | leave: nothing decided; never applied by an agent — a nameable wake becomes hold, nothing to name is a finding. | never applied by an agent — a nameable wake ⇒ `hold`; nothing to name ⇒ a finding | CONVENTIONS.md | #315 |
-| C5a.disposition.17 | default |  | An agent converts or reports leave and never leaves an issue; a human may leave with a reason that is itself the wake. | so an agent converts it or reports it, and never leaves it. | CONVENTIONS.md | #315 |
-| C5a.disposition.18 | default |  | A human may leave with a reason; that reason is itself the wake condition. | A human may leave with a reason; that reason is itself the wake condition. | CONVENTIONS.md | #315 |
-| C5a.disposition.19 | default |  | The evidence a marker rides on has a fixed shape: what was done, the command, the result, what remains. | The evidence a marker rides on has a fixed shape | CONVENTIONS.md | #315 |
-| C5a.disposition.20 | default |  | Free-form evidence is a finding, not a disposition. | Free-form evidence is a **finding, not a disposition** | CONVENTIONS.md | #315 |
-| C5a.disposition.21 | default |  | Where the ask was an action, a fifth line carries a second, independent, re-runnable cross-check. | a fifth line carries the cross-check: a second, independent, re-runnable | CONVENTIONS.md | #315 |
-| C5a.disposition.22 | default |  | Who may apply a disposition is decided from measurable facts on the issue, never an agent's confidence. | decided from facts on the issue, never from an agent's own confidence in its work. | CONVENTIONS.md | #315 |
-| C5a.disposition.23 | default |  | The two shared inputs gate only done and not planned, whose close asserts an outcome. | both gate only the two kinds whose close asserts an outcome | CONVENTIONS.md | #315 |
-| C5a.disposition.24 | default |  | Axis of record: exposure released means a human confirms; none, self and live mean the agent applies. | `exposure: released` ⇒ a human confirms; `none`, `self` and `live` ⇒ the agent applies. | CONVENTIONS.md | #315 |
-| C5a.disposition.25 | default |  | Read a legacy tier-only descriptor through the axis; a bare tier: B is no opinion, and no opinion is not permission. | a bare `tier: B` resolves to *no opinion*, and no opinion is not permission | CONVENTIONS.md | #315 |
-| C5a.disposition.26 | default |  | Skip-fence class evidence (production, credentials, destructive, promotion) means human, whatever the exposure. | Evidence naming one of these ⇒ human, whatever the exposure. | CONVENTIONS.md | #315 |
-| C5a.disposition.27 | default |  | The agent names the skip-fence classes its evidence touches; nothing sniffs prose for them. | The agent names the classes its evidence touches; nothing sniffs prose for them. | CONVENTIONS.md | #315 |
-| C5a.disposition.28 | default |  | done is agent-applied only with fixed-shape evidence, a re-runnable cross-check, acceptance ticked, nothing open gated, the axis permitting and no skip-fence class. | evidence in the fixed shape ∧ a re-runnable cross-check recorded | CONVENTIONS.md | #315 |
-| C5a.disposition.29 | default |  | split is agent-applied when the remainder is filed as a native sub-issue with the same delivery: and a wake; never human-only. | the remainder is filed as a native sub-issue with the same `delivery:` | CONVENTIONS.md | #315 |
-| C5a.disposition.30 | default |  | routed-out is agent-applied when the other repo's issue exists and links back, obeying its language rule. | `<other-repo>#N` exists and links back to this issue | CONVENTIONS.md | #315 |
-| C5a.disposition.31 | default |  | hold is agent-applied with a wake condition present; a wake standing 30 d unmoved needs a human to confirm or not-plan. | a wake condition is present — `review-by:<date>`, a real `blockedBy` edge, | CONVENTIONS.md | #315 |
-| C5a.disposition.32 | default |  | needs-owner is never agent-applied: the agent records the question and moves on. | the agent records the question and moves on (record-first) | CONVENTIONS.md | #315 |
-| C5a.disposition.33 | default |  | not planned is agent-applied only when superseded by a merged or closed replacement referencing this issue. | superseded by a merged or closed replacement that references this issue | CONVENTIONS.md | #315 |
-| C5a.disposition.34 | default |  | leave is never agent-applied; the agent converts it. | the agent converts it (see above) | CONVENTIONS.md | #315 |
-| C5a.disposition.35 | default |  | The disposition verdict fails towards human, always. | Fails towards `human`, always. | CONVENTIONS.md | #315 |
-| C5a.disposition.36 | default |  | An agent may is never a human may not: a human can apply any disposition at any time. | "An agent may" is never "a human may not." | CONVENTIONS.md | #315 |
-| C5a.disposition.37 | default |  | A mechanical gap is incomplete, not escalated; only outcome-asserting kinds escalate. | A mechanical gap is not a judgement call. | CONVENTIONS.md | #315 |
-| C5a.disposition.38 | default |  | The reference implementation is tools/lib/disposition.js, pure: facts in, agent or human out. | The reference implementation is `tools/lib/disposition.js` | CONVENTIONS.md | #315 |
-| C5a.disposition.39 | default |  | Two consumers must call one function or copy-and-own disposition.js, never keep two prose copies of the table. | only if both call one function, or copy-and-own that file | CONVENTIONS.md | #315 |
-| C5a.disposition.40 | default |  | parseMarker / formatMarker are the only sanctioned way to read or write the disposition marker. | `parseMarker` / `formatMarker` are the only sanctioned way to read or write the marker | CONVENTIONS.md | #315 |
-| C5a.disposition.41 | default |  | The disposition section defines vocabulary only; nothing here writes or reads colab:disposition. | This section defines vocabulary only**, exactly as the park above does. | CONVENTIONS.md | #315 |
-| C5a.disposition.42 | default |  | The legacy needs-boss is read as a kind and a token and classifies exactly like needs-owner; writers emit needs-owner only. | reader accepts `needs-boss` as a kind and as a token and classifies it exactly like | CONVENTIONS.md | #609 |
-| C5a.disposition.43 | default |  | An old and a new marker for the same kind on one comment are one proposal, not a contradiction. | an old and a new marker on one comment are one proposal, not two | CONVENTIONS.md | #609 |
-| C5a.disposition.44 | default |  | The human-wait park label is blocked:needs-owner, with blocked:needs-boss still read as the same park; the handbook provisions neither. | with `blocked:needs-boss` still read as the same park | CONVENTIONS.md | #609 |
-| C5a.disposition.45 | default |  | Both names are accepted until the old one has had no open use for 14 days; dropping it is a separate change. | Accept both until the old name has had no open use for 14 | CONVENTIONS.md | #609 |
+| C5a.disposition.04 | default |  | The proposal is a one-line colab:disposition marker followed by a one-line reason. | The proposal is a marker, one line, the family | tools/docs/readiness.md | #315 |
+| C5a.disposition.05 | default |  | The token is one of a closed set of seven, read by equality. | is one of a closed set of seven, read by equality | tools/docs/readiness.md | #315 |
+| C5a.disposition.06 | default |  | No disposition token is a prefix or decorated variant of another. | No token is a prefix or a decorated variant of another. | tools/docs/readiness.md | #315 |
+| C5a.disposition.07 | default |  | An unrecognised token, a missing marker, or two markers proposing different things all mean not cleared. | An unrecognised token, a missing marker, or two markers proposing different things all mean | tools/docs/readiness.md | #315 |
+| C5a.disposition.08 | default |  | Degrade, never gate applies: a comment with no marker is evidence with no proposal. | a comment with no marker is evidence with no proposal | tools/docs/readiness.md | #315 |
+| C5a.disposition.09 | default |  | The not planned kind uses the token not-planned. | its token is `not-planned`, because a token compared by equality cannot carry whitespace | tools/docs/readiness.md | #315 |
+| C5a.disposition.10 | default |  | done: the ask was executed and cross-checked; acceptance ticked or a remainder declared; closes with evidence. | The ask was executed and cross-checked; acceptance ticked, or a remainder declared | tools/docs/readiness.md | #315 |
+| C5a.disposition.11 | default |  | split: part landed and the remainder is filed as a native sub-issue; closes with evidence. | Part landed; the remainder is filed as a native sub-issue carrying the same | tools/docs/readiness.md | #315 |
+| C5a.disposition.12 | default |  | routed-out: the work belongs to another repo, whose issue exists and links back; closes with evidence. | The work belongs to another repo; `<other-repo>#N` exists and links back | tools/docs/readiness.md | #315 |
+| C5a.disposition.13 | default |  | hold: parked on a named wake condition; converts to deferred:<kind> plus a Hold: line with a wake from the closed vocabulary. | Parked on a named wake condition | tools/docs/readiness.md | #315 |
+| C5a.disposition.14 | default |  | needs-owner: a human must answer before anything else; converts to a recorded decision. | A human must answer before anything else can happen | tools/docs/readiness.md | #315 |
+| C5a.disposition.15 | default |  | not planned: superseded or abandoned; closes as not planned. | Superseded, or the direction was abandoned | tools/docs/readiness.md | #315 |
+| C5a.disposition.16 | default |  | leave: nothing decided; never applied by an agent — a nameable wake becomes hold, nothing to name is a finding. | never applied by an agent — a nameable wake ⇒ `hold`; nothing to name ⇒ a finding | tools/docs/readiness.md | #315 |
+| C5a.disposition.17 | default |  | An agent converts or reports leave and never leaves an issue; a human may leave with a reason that is itself the wake. | so an agent converts it or reports it, and never leaves it. | tools/docs/readiness.md | #315 |
+| C5a.disposition.18 | default |  | A human may leave with a reason; that reason is itself the wake condition. | A human may leave with a reason; that reason is itself the wake condition. | tools/docs/readiness.md | #315 |
+| C5a.disposition.19 | default |  | The evidence a marker rides on has a fixed shape: what was done, the command, the result, what remains. | The evidence a marker rides on has a fixed shape | tools/docs/readiness.md | #315 |
+| C5a.disposition.20 | default |  | Free-form evidence is a finding, not a disposition. | Free-form evidence is a **finding, not a disposition** | tools/docs/readiness.md | #315 |
+| C5a.disposition.21 | default |  | Where the ask was an action, a fifth line carries a second, independent, re-runnable cross-check. | a fifth line carries the cross-check: a second, independent, re-runnable | tools/docs/readiness.md | #315 |
+| C5a.disposition.22 | default |  | Who may apply a disposition is decided from measurable facts on the issue, never an agent's confidence. | decided from facts on the issue, never from an agent's own confidence in its work. | tools/docs/readiness.md | #315 |
+| C5a.disposition.23 | default |  | The two shared inputs gate only done and not planned, whose close asserts an outcome. | both gate only the two kinds whose close asserts an outcome | tools/docs/readiness.md | #315 |
+| C5a.disposition.24 | default |  | Axis of record: exposure released means a human confirms; none, self and live mean the agent applies. | `exposure: released` ⇒ a human confirms; `none`, `self` and `live` ⇒ the agent applies. | tools/docs/readiness.md | #315 |
+| C5a.disposition.25 | default |  | Read a legacy tier-only descriptor through the axis; a bare tier: B is no opinion, and no opinion is not permission. | a bare `tier: B` resolves to *no opinion*, and no opinion is not permission | tools/docs/readiness.md | #315 |
+| C5a.disposition.26 | default |  | Skip-fence class evidence (production, credentials, destructive, promotion) means human, whatever the exposure. | Evidence naming one of these ⇒ human, whatever the exposure. | tools/docs/readiness.md | #315 |
+| C5a.disposition.27 | default |  | The agent names the skip-fence classes its evidence touches; nothing sniffs prose for them. | The agent names the classes its evidence touches; nothing sniffs prose for them. | tools/docs/readiness.md | #315 |
+| C5a.disposition.28 | default |  | done is agent-applied only with fixed-shape evidence, a re-runnable cross-check, acceptance ticked, nothing open gated, the axis permitting and no skip-fence class. | evidence in the fixed shape ∧ a re-runnable cross-check recorded | tools/docs/readiness.md | #315 |
+| C5a.disposition.29 | default |  | split is agent-applied when the remainder is filed as a native sub-issue with the same delivery: and a wake; never human-only. | the remainder is filed as a native sub-issue with the same `delivery:` | tools/docs/readiness.md | #315 |
+| C5a.disposition.30 | default |  | routed-out is agent-applied when the other repo's issue exists and links back, obeying its language rule. | `<other-repo>#N` exists and links back to this issue | tools/docs/readiness.md | #315 |
+| C5a.disposition.31 | default |  | hold is agent-applied with a wake condition present; a wake standing 30 d unmoved needs a human to confirm or not-plan. | a wake condition is present — `review-by:<date>`, a real `blockedBy` edge, | tools/docs/readiness.md | #315 |
+| C5a.disposition.32 | default |  | needs-owner is never agent-applied: the agent records the question and moves on. | the agent records the question and moves on (record-first) | tools/docs/readiness.md | #315 |
+| C5a.disposition.33 | default |  | not planned is agent-applied only when superseded by a merged or closed replacement referencing this issue. | superseded by a merged or closed replacement that references this issue | tools/docs/readiness.md | #315 |
+| C5a.disposition.34 | default |  | leave is never agent-applied; the agent converts it. | the agent converts it (see above) | tools/docs/readiness.md | #315 |
+| C5a.disposition.35 | default |  | The disposition verdict fails towards human, always. | Fails towards `human`, always. | tools/docs/readiness.md | #315 |
+| C5a.disposition.36 | default |  | An agent may is never a human may not: a human can apply any disposition at any time. | "An agent may" is never "a human may not." | tools/docs/readiness.md | #315 |
+| C5a.disposition.37 | default |  | A mechanical gap is incomplete, not escalated; only outcome-asserting kinds escalate. | A mechanical gap is not a judgement call. | tools/docs/readiness.md | #315 |
+| C5a.disposition.38 | default |  | The reference implementation is tools/lib/disposition.js, pure: facts in, agent or human out. | The reference implementation is `tools/lib/disposition.js` | tools/docs/readiness.md | #315 |
+| C5a.disposition.39 | default |  | Two consumers must call one function or copy-and-own disposition.js, never keep two prose copies of the table. | only if both call one function, or copy-and-own that file | tools/docs/readiness.md | #315 |
+| C5a.disposition.40 | default |  | parseMarker / formatMarker are the only sanctioned way to read or write the disposition marker. | `parseMarker` / `formatMarker` are the only sanctioned way to read or write the marker | tools/docs/readiness.md | #315 |
+| C5a.disposition.41 | default |  | The disposition section defines vocabulary only; nothing here writes or reads colab:disposition. | This section defines vocabulary only**, exactly as the park above does. | tools/docs/readiness.md | #315 |
+| C5a.disposition.42 | default |  | The legacy needs-boss is read as a kind and a token and classifies exactly like needs-owner; writers emit needs-owner only. | reader accepts `needs-boss` as a kind and as a token and classifies it exactly like | tools/docs/readiness.md | #609 |
+| C5a.disposition.43 | default |  | An old and a new marker for the same kind on one comment are one proposal, not a contradiction. | an old and a new marker on one comment are one proposal, not two | tools/docs/readiness.md | #609 |
+| C5a.disposition.44 | default |  | The human-wait park label is blocked:needs-owner, with blocked:needs-boss still read as the same park; the handbook provisions neither. | with `blocked:needs-boss` still read as the same park | tools/docs/readiness.md | #609 |
+| C5a.disposition.45 | default |  | Both names are accepted until the old one has had no open use for 14 days; dropping it is a separate change. | Accept both until the old name has had no open use for 14 | tools/docs/readiness.md | #609 |
 
 #### #539 ledger — §5 Who holds this · Who decided it should exist · What may start (to the disposition marker)
 
@@ -1316,175 +1342,175 @@ Each entry lists the rule text of a unit whose rationale clause moved out (the u
 | C5b.dg.11 | explanation |  | Eleven design issues held for about 4 h by a filing-time label with nothing to approve. | Measured in one adopting repo: 11 design issues each got `needs-decision` within 2 s | docs/adr/122-decision-gate-rationale.md | #361 |
 | C5b.dg.12 | default |  | An epic never carries `needs-decision` and never a `decision:options` block. | An epic never carries `needs-decision`, and never a `decision:options` block | CONVENTIONS.md | #361 |
 | C5b.dg.13 | explanation |  | A decision inbox may leave epics out, so a question on an epic goes unseen. | A decision inbox built on start gates may also leave | docs/adr/122-decision-gate-rationale.md | #361 |
-| C5b.dg.14 | default |  | A question about an epic goes on its own decision issue carrying the question and any `decision:options` block. | goes on its own decision issue**, the same shape as the third | CONVENTIONS.md | #361 |
-| C5b.dg.15 | default |  | The decision issue carries `needs-decision` and is attached to the epic as a sub-issue; a held-back child gets a `blocked_by` edge to it. | It carries `needs-decision`, and it is attached to the epic as a sub-issue. | CONVENTIONS.md | #361 |
-| C5b.dg.16 | default |  | Once the ruling is recorded the decision issue closes with the record as its evidence. | the decision issue closes with the record as its evidence. | CONVENTIONS.md | #361 |
-| C5b.dg.17 | hard | tools/colab::is an epic — an epic never carries | `colab decision --reopen` refuses on an `epic`-labelled issue and names the decision-issue path. | `colab decision --reopen` refuses on an `epic`-labelled issue and names this path. | CONVENTIONS.md | #361 |
+| C5b.dg.14 | default |  | A question about an epic goes on its own decision issue carrying the question and any `decision:options` block. | goes on its own decision issue**, the same shape as the third | tools/docs/decisions.md | #361 |
+| C5b.dg.15 | default |  | The decision issue carries `needs-decision` and is attached to the epic as a sub-issue; a held-back child gets a `blocked_by` edge to it. | It carries `needs-decision`, and it is attached to the epic as a sub-issue. | tools/docs/decisions.md | #361 |
+| C5b.dg.16 | default |  | Once the ruling is recorded the decision issue closes with the record as its evidence. | the decision issue closes with the record as its evidence. | tools/docs/decisions.md | #361 |
+| C5b.dg.17 | hard | tools/colab::is an epic — an epic never carries | `colab decision --reopen` refuses on an `epic`-labelled issue and names the decision-issue path. | `colab decision --reopen` refuses on an `epic`-labelled issue and names this path. | tools/docs/decisions.md | #361 |
 | C5b.dg.18 | explanation |  | Why the epic's question is a sub-issue: it stays visible from the epic and from every inbox reading start gates. | Why a sub-issue: it keeps the question visible | docs/adr/122-decision-gate-rationale.md | #361 |
 | C5b.dg.19 | default |  | A session discovering a significant design decision mid-work continues on the designer's spec rather than stopping to request a ruling. | A session discovering a significant design decision mid-work continues on the designer's spec | CONVENTIONS.md | #122 |
 | C5b.dg.20 | default |  | Such a session records `design-not-preapproved` in its ship evidence. | records `design-not-preapproved` in its ship evidence | CONVENTIONS.md | #122 |
 | C5b.dg.21 | default |  | Only when there is no usable default and the work cannot finish, the session files the ruling as its own issue and wires a `blocked_by` edge to it. | files the ruling as its own issue, wires a `blocked_by` edge | CONVENTIONS.md | #122 |
 | C5b.dg.22 | default |  | The session keeps its claim while the ruling issue is open. | from the issue it is working, and keeps its claim | CONVENTIONS.md | #122 |
 | C5b.dg.23 | default |  | The third path is not licence to stop on any fork; the usable-default case stays the ordinary rule. | This is not licence to stop on any fork | CONVENTIONS.md | #122 |
-| C5b.dg.24 | default |  | Recording the decision clears the gate: a `⚖ Decision recorded` comment plus `decision-recorded`, written together by `colab decision --record`, never `needs-decision` cleared alone. | written together by `colab decision <N> --record --ruled-by <name>` — never | CONVENTIONS.md | #127 |
-| C5b.dg.25 | default |  | A reader checks for `decision-recorded` or the live comment marker, never merely for `needs-decision`'s absence. | A reader checking whether an issue is decided looks for `decision-recorded` or the live | CONVENTIONS.md | #127 |
-| C5b.dg.26 | default |  | A second question on a decided issue goes through `colab decision --reopen`, never a hand-added `needs-decision`. | A second question on an already-decided issue goes through `colab decision <N> --reopen --ruled-by | CONVENTIONS.md | #357 |
+| C5b.dg.24 | default |  | Recording the decision clears the gate: a `⚖ Decision recorded` comment plus `decision-recorded`, written together by `colab decision --record`, never `needs-decision` cleared alone. | written together by `colab decision <N> --record --ruled-by <name>` — never | tools/docs/decisions.md | #127 |
+| C5b.dg.25 | default |  | A reader checks for `decision-recorded` or the live comment marker, never merely for `needs-decision`'s absence. | A reader checking whether an issue is decided looks for `decision-recorded` or the live | tools/docs/decisions.md | #127 |
+| C5b.dg.26 | default |  | A second question on a decided issue goes through `colab decision --reopen`, never a hand-added `needs-decision`. | A second question on an already-decided issue goes through `colab decision <N> --reopen --ruled-by | tools/docs/decisions.md | #357 |
 | C5b.dg.27 | explanation |  | A hand-added second label hid the question from a decision inbox for about nine hours. | Measured in one adopting repo: one such hand-added label hid the second question | docs/adr/122-decision-gate-rationale.md | #357 |
-| C5b.dg.28 | default |  | Both labels at once is ambiguous and a reader resolves it by time. | Both labels at once is ambiguous, and a reader resolves it by time. | CONVENTIONS.md | #357 |
-| C5b.dg.29 | default |  | Compare the newest ask with the newest live, trusted `⚖ Decision recorded` marker; the ask is the newest `needs-decision` labeled event or `decision:options` comment. | Compare the newest ask with the newest live, trusted `⚖ Decision recorded` marker. | CONVENTIONS.md | #357 |
-| C5b.dg.30 | default |  | An ask newer than the marker is an open question, pending. | The ask is newer than the marker | CONVENTIONS.md | #357 |
-| C5b.dg.31 | default |  | No live marker at all, only the label, is an open question. | No live marker at all, only the label | CONVENTIONS.md | #357 |
-| C5b.dg.32 | default |  | When the label timeline was read and every ask predates the marker, the write was interrupted: finish it by removing `needs-decision`. | The label timeline was read, and every ask predates the marker | CONVENTIONS.md | #357 |
-| C5b.dg.33 | default |  | Anything the reader cannot prove is undetermined and surfaced as pending, never hidden. | Anything the reader cannot prove (timeline unread, no event found) | CONVENTIONS.md | #357 |
-| C5b.dg.34 | default |  | The reading leans towards showing the issue, like Readiness. | This leans towards showing the issue, like Readiness does. | CONVENTIONS.md | #357 |
+| C5b.dg.28 | default |  | Both labels at once is ambiguous and a reader resolves it by time. | Both labels at once is ambiguous, and a reader resolves it by time. | tools/docs/decisions.md | #357 |
+| C5b.dg.29 | default |  | Compare the newest ask with the newest live, trusted `⚖ Decision recorded` marker; the ask is the newest `needs-decision` labeled event or `decision:options` comment. | Compare the newest ask with the newest live, trusted `⚖ Decision recorded` marker. | tools/docs/decisions.md | #357 |
+| C5b.dg.30 | default |  | An ask newer than the marker is an open question, pending. | The ask is newer than the marker | tools/docs/decisions.md | #357 |
+| C5b.dg.31 | default |  | No live marker at all, only the label, is an open question. | No live marker at all, only the label | tools/docs/decisions.md | #357 |
+| C5b.dg.32 | default |  | When the label timeline was read and every ask predates the marker, the write was interrupted: finish it by removing `needs-decision`. | The label timeline was read, and every ask predates the marker | tools/docs/decisions.md | #357 |
+| C5b.dg.33 | default |  | Anything the reader cannot prove is undetermined and surfaced as pending, never hidden. | Anything the reader cannot prove (timeline unread, no event found) | tools/docs/decisions.md | #357 |
+| C5b.dg.34 | default |  | The reading leans towards showing the issue, like Readiness. | This leans towards showing the issue, like Readiness does. | tools/docs/decisions.md | #357 |
 | C5b.dg.35 | explanation |  | Showing a settled question costs a glance; hiding an open one costs a ruling. | Showing a settled question once more costs a glance. | docs/adr/122-decision-gate-rationale.md | #357 |
-| C5b.dg.36 | hard | tools/colab::Recording over this pair must name the question it answers | `colab decision --record` refuses over the both-labels pair unless `--answers <ref>` names the question answered. | over the pair unless `--answers <ref>` says which question the new record answers | CONVENTIONS.md | #357 |
+| C5b.dg.36 | hard | tools/colab::Recording over this pair must name the question it answers | `colab decision --record` refuses over the both-labels pair unless `--answers <ref>` names the question answered. | over the pair unless `--answers <ref>` says which question the new record answers | tools/docs/decisions.md | #357 |
 
 ### Decision options — what a ruling chooses between (#126)
 
 | id | class | gate | rule | key | dest | source |
 |---|---|---|---|---|---|---|
 | C5b.do.01 | explanation |  | Options left as prose are unreadable by consumers and a recommendation reads like an acceptance. | Left as prose — headings, bullets, a sentence saying | docs/adr/126-decision-options-rationale.md | #126 |
-| C5b.do.02 | default |  | The filer of a `needs-decision` issue writes the options as a fenced `decision:options` block at filing time. | The filer of a `needs-decision` issue writes the options as a fenced block | CONVENTIONS.md | #126 |
-| C5b.do.03 | default |  | Each option is one `LETTER: label \| detail` line; detail is optional. | `LETTER: label \| detail`, one option per line; | CONVENTIONS.md | #126 |
-| C5b.do.04 | default |  | The block needs two or more lines to count. | Two or more lines, or the block does not count | CONVENTIONS.md | #126 |
-| C5b.do.05 | default |  | The block is an HTML comment fence. | An HTML comment fence, so it costs a human reader nothing | CONVENTIONS.md | #126 |
-| C5b.do.06 | default |  | The block states the choices and never the answer. | The block states the choices. It never states the answer | CONVENTIONS.md | #126 |
-| C5b.do.07 | default |  | The options block lives in the issue body by default; a re-posted block makes the newest by creation time live. | the newest block by creation time is the live one | CONVENTIONS.md | #126 |
-| C5b.do.08 | default |  | Which block a recorded decision answers is named by `--answers <ref>`, never inferred from recency. | is never inferred from recency: `--answers <ref>` names it explicitly, | CONVENTIONS.md | #126 |
-| C5b.do.09 | default |  | An absent block means options not declared, with no backfill. | no backfill, no new failure state for issues filed before this | CONVENTIONS.md | #126 |
-| C5b.do.10 | default |  | A `needs-decision` question in neither shape is reported to its filer as a finding. | in neither shape is reported to its filer as a finding | CONVENTIONS.md | #379 |
-| C5b.do.11 | default |  | That report is never a gate and never changes whether the question is pending. | That is a report, never a gate, and it never changes whether the question is pending. | CONVENTIONS.md | #379 |
+| C5b.do.02 | default |  | The filer of a `needs-decision` issue writes the options as a fenced `decision:options` block at filing time. | The filer of a `needs-decision` issue writes the options as a fenced block | tools/docs/decisions.md | #126 |
+| C5b.do.03 | default |  | Each option is one `LETTER: label \| detail` line; detail is optional. | `LETTER: label \| detail`, one option per line; | tools/docs/decisions.md | #126 |
+| C5b.do.04 | default |  | The block needs two or more lines to count. | Two or more lines, or the block does not count | tools/docs/decisions.md | #126 |
+| C5b.do.05 | default |  | The block is an HTML comment fence. | An HTML comment fence, so it costs a human reader nothing | tools/docs/decisions.md | #126 |
+| C5b.do.06 | default |  | The block states the choices and never the answer. | The block states the choices. It never states the answer | tools/docs/decisions.md | #126 |
+| C5b.do.07 | default |  | The options block lives in the issue body by default; a re-posted block makes the newest by creation time live. | the newest block by creation time is the live one | tools/docs/decisions.md | #126 |
+| C5b.do.08 | default |  | Which block a recorded decision answers is named by `--answers <ref>`, never inferred from recency. | is never inferred from recency: `--answers <ref>` names it explicitly, | tools/docs/decisions.md | #126 |
+| C5b.do.09 | default |  | An absent block means options not declared, with no backfill. | no backfill, no new failure state for issues filed before this | tools/docs/decisions.md | #126 |
+| C5b.do.10 | default |  | A `needs-decision` question in neither shape is reported to its filer as a finding. | in neither shape is reported to its filer as a finding | tools/docs/decisions.md | #379 |
+| C5b.do.11 | default |  | That report is never a gate and never changes whether the question is pending. | That is a report, never a gate, and it never changes whether the question is pending. | tools/docs/decisions.md | #379 |
 
 ### Design-approval ask — the `Mockup:` line (#379)
 
 | id | class | gate | rule | key | dest | source |
 |---|---|---|---|---|---|---|
 | C5b.da.01 | explanation |  | Design-approval asks posted as review comments read as unstructured and gated seven build issues. | The design lane did what the text said: it posted the frozen | docs/adr/379-design-approval-ask-rationale.md | #379 |
-| C5b.da.02 | default |  | The design issue's body carries the approval ask as one `Mockup:` line. | The design issue's body carries the ask as one line: | CONVENTIONS.md | #379 |
-| C5b.da.03 | default |  | The `Mockup:` line goes in the body, never only in a comment. | In the body, never only in a comment. | CONVENTIONS.md | #379 |
-| C5b.da.04 | default |  | `Mockup:` is anchored at the start of a line and followed by the URL of the frozen image. | Anchored at the start of a line: `Mockup:`, then the URL of the frozen image. | CONVENTIONS.md | #379 |
-| C5b.da.05 | default |  | A set reviewed together puts one `Mockup:` line in each member's body. | A set reviewed together (one review per workflow set) puts one `Mockup:` line in | CONVENTIONS.md | #379 |
-| C5b.da.06 | default |  | Several `Mockup:` lines are allowed when one approval covers several frozen images. | Several lines are allowed when one issue's approval covers several | CONVENTIONS.md | #379 |
-| C5b.da.07 | default |  | When both shapes are present, the options block is read. | Both shapes present read as the options block | CONVENTIONS.md | #379 |
-| C5b.da.08 | default |  | On an issue already carrying `decision-recorded`, the ask still goes through `colab decision --reopen`. | the ask still goes through `colab decision <N> --reopen` | CONVENTIONS.md | #379 |
-| C5b.da.09 | default |  | A `needs-decision` issue whose ask is in neither shape is a finding for its filer. | A `needs-decision` issue whose ask is in neither shape is a finding for its filer | CONVENTIONS.md | #379 |
-| C5b.da.10 | default |  | `code-triage` and `code-sweep` report an unshaped ask and name the filer; they never rewrite the ask. | They do not rewrite the ask, because the question is not theirs to restate. | CONVENTIONS.md | #379 |
+| C5b.da.02 | default |  | The design issue's body carries the approval ask as one `Mockup:` line. | The design issue's body carries the ask as one line: | tools/docs/decisions.md | #379 |
+| C5b.da.03 | default |  | The `Mockup:` line goes in the body, never only in a comment. | In the body, never only in a comment. | tools/docs/decisions.md | #379 |
+| C5b.da.04 | default |  | `Mockup:` is anchored at the start of a line and followed by the URL of the frozen image. | Anchored at the start of a line: `Mockup:`, then the URL of the frozen image. | tools/docs/decisions.md | #379 |
+| C5b.da.05 | default |  | A set reviewed together puts one `Mockup:` line in each member's body. | A set reviewed together (one review per workflow set) puts one `Mockup:` line in | tools/docs/decisions.md | #379 |
+| C5b.da.06 | default |  | Several `Mockup:` lines are allowed when one approval covers several frozen images. | Several lines are allowed when one issue's approval covers several | tools/docs/decisions.md | #379 |
+| C5b.da.07 | default |  | When both shapes are present, the options block is read. | Both shapes present read as the options block | tools/docs/decisions.md | #379 |
+| C5b.da.08 | default |  | On an issue already carrying `decision-recorded`, the ask still goes through `colab decision --reopen`. | the ask still goes through `colab decision <N> --reopen` | tools/docs/decisions.md | #379 |
+| C5b.da.09 | default |  | A `needs-decision` issue whose ask is in neither shape is a finding for its filer. | A `needs-decision` issue whose ask is in neither shape is a finding for its filer | tools/docs/decisions.md | #379 |
+| C5b.da.10 | default |  | `code-triage` and `code-sweep` report an unshaped ask and name the filer; they never rewrite the ask. | They do not rewrite the ask, because the question is not theirs to restate. | tools/docs/decisions.md | #379 |
 
 ### An ask is said once — a later pass reports that it is still waiting (#489)
 
 | id | class | gate | rule | key | dest | source |
 |---|---|---|---|---|---|---|
 | C5b.as.01 | explanation |  | A coordinator re-rendering every ask on every pass buried the one copy a human might read. | On a repo blocked only on its operator, every pass added | docs/adr/489-ask-said-once-rationale.md | #489 |
-| C5b.as.02 | default |  | An ask is open when the tracker already carries it as a pending `needs-decision` with a shape, or a newest `Hold:` line with `wake: ruling`. | The tracker already carries it. The issue has a pending `needs-decision` | CONVENTIONS.md | #489 |
-| C5b.as.03 | default |  | An ask is also open when an earlier pass of the same skill already rendered it and stored it. | An earlier pass of the same skill already rendered it in its own output and stored | CONVENTIONS.md | #489 |
-| C5b.as.04 | default |  | An open ask gets exactly one line on every later pass and its options are never rendered again. | An open ask gets exactly one line on every later pass. A pass never renders its options | CONVENTIONS.md | #489 |
-| C5b.as.05 | default |  | The `<link>` in the one-liner is where the answer goes. | `<link>` is where the answer goes: the options-block comment, the `Hold:` line comment, | CONVENTIONS.md | #489 |
-| C5b.as.06 | default |  | The `<date>` is when the ask was first put, never the date of this pass. | `<date>` is when the ask was first put. | CONVENTIONS.md | #489 |
-| C5b.as.07 | default |  | A pass may append who clears the ask but never repeats the question, options or recommendation. | A pass may append who clears the ask. | CONVENTIONS.md | #489 |
-| C5b.as.08 | default |  | A new ask is rendered once as a five-line card: question, options, recommendation, what stays parked, link. | A new ask is rendered once, as a five-line card: | CONVENTIONS.md | #489 |
-| C5b.as.09 | default |  | A card is session output and never authorises a tracker comment a skill's write list does not name. | It never authorises a tracker comment that a skill's own write list does | CONVENTIONS.md | #489 |
-| C5b.as.10 | default |  | Waiting on a human is not a change: age is never an input, and a pass never re-asks, escalates or re-renders for it. | It never re-asks, escalates or re-renders because time has passed. | CONVENTIONS.md | #489 |
-| C5b.as.11 | default |  | A repo with no open human ask renders nothing new. | A repo with no open human ask renders nothing new. | CONVENTIONS.md | #489 |
+| C5b.as.02 | default |  | An ask is open when the tracker already carries it as a pending `needs-decision` with a shape, or a newest `Hold:` line with `wake: ruling`. | The tracker already carries it. The issue has a pending `needs-decision` | tools/docs/decisions.md | #489 |
+| C5b.as.03 | default |  | An ask is also open when an earlier pass of the same skill already rendered it and stored it. | An earlier pass of the same skill already rendered it in its own output and stored | tools/docs/decisions.md | #489 |
+| C5b.as.04 | default |  | An open ask gets exactly one line on every later pass and its options are never rendered again. | An open ask gets exactly one line on every later pass. A pass never renders its options | tools/docs/decisions.md | #489 |
+| C5b.as.05 | default |  | The `<link>` in the one-liner is where the answer goes. | `<link>` is where the answer goes: the options-block comment, the `Hold:` line comment, | tools/docs/decisions.md | #489 |
+| C5b.as.06 | default |  | The `<date>` is when the ask was first put, never the date of this pass. | `<date>` is when the ask was first put. | tools/docs/decisions.md | #489 |
+| C5b.as.07 | default |  | A pass may append who clears the ask but never repeats the question, options or recommendation. | A pass may append who clears the ask. | tools/docs/decisions.md | #489 |
+| C5b.as.08 | default |  | A new ask is rendered once as a five-line card: question, options, recommendation, what stays parked, link. | A new ask is rendered once, as a five-line card: | tools/docs/decisions.md | #489 |
+| C5b.as.09 | default |  | A card is session output and never authorises a tracker comment a skill's write list does not name. | It never authorises a tracker comment that a skill's own write list does | tools/docs/decisions.md | #489 |
+| C5b.as.10 | default |  | Waiting on a human is not a change: age is never an input, and a pass never re-asks, escalates or re-renders for it. | It never re-asks, escalates or re-renders because time has passed. | tools/docs/decisions.md | #489 |
+| C5b.as.11 | default |  | A repo with no open human ask renders nothing new. | A repo with no open human ask renders nothing new. | tools/docs/decisions.md | #489 |
 
 ### An ask the human must answer can be raised once in a decision box (#490)
 
 | id | class | gate | rule | key | dest | source |
 |---|---|---|---|---|---|---|
-| C5b.db.01 | default |  | The decision box is optional and set by the deployment; a skill reads its endpoint from a deployment setting. | A skill reads its endpoint from a deployment setting. | CONVENTIONS.md | #490 |
-| C5b.db.02 | default |  | No host is ever written into a skill or into the handbook. | No host is ever written into a skill or into this handbook. | CONVENTIONS.md | #490 |
-| C5b.db.03 | default |  | With no endpoint set, nothing changes and the ask stays on the issue. | No endpoint set means no change: | CONVENTIONS.md | #490 |
-| C5b.db.04 | default |  | Only a human-only item is raised; an ask a coordinator can rule on is ruled on, not sent on. | Only a human-only item is raised. | CONVENTIONS.md | #490 |
-| C5b.db.05 | default |  | Raising an item changes nothing on the issue; the tracker stays the record and the box only delivers. | The tracker stays the record. The box only delivers. | CONVENTIONS.md | #490 |
-| C5b.db.06 | default |  | A box that is down loses a delivery, never the ask. | A box that is down, or never answers, loses a delivery, never the ask. | CONVENTIONS.md | #490 |
-| C5b.db.07 | default |  | A raise carries everything needed to answer without opening the tracker. | A raise carries everything needed to answer without opening the tracker: | CONVENTIONS.md | #490 |
-| C5b.db.08 | default |  | Raised options come from the issue's `decision:options` block, never re-derived. | taken from the issue's `decision:options` block, never re-derived; | CONVENTIONS.md | #490 |
-| C5b.db.09 | default |  | A raise carries an opaque reply-to that the box hands back unchanged and never parses. | an opaque reply-to. The raiser composes it and the box hands it back unchanged with | CONVENTIONS.md | #490 |
-| C5b.db.10 | default |  | An item is keyed by its issue link plus the date of its newest ask. | An item is identified by its issue link plus the date of its newest ask | CONVENTIONS.md | #490 |
-| C5b.db.11 | default |  | Before raising, a pass looks for an earlier raise under that key in its stored asks and in the box. | Before raising, a pass looks for an earlier raise under that key. | CONVENTIONS.md | #490 |
-| C5b.db.12 | default |  | An item already raised is not raised again; the pass writes the one-line unchanged form. | It does not raise the item again. | CONVENTIONS.md | #490 |
-| C5b.db.13 | default |  | A newer ask on the issue is a new key and is raised once in turn. | A newer ask on the issue (a re-posted options block, a | CONVENTIONS.md | #490 |
-| C5b.db.14 | default |  | The answer comes back as a comment on the issue and the raiser never polls. | The answer comes back as a comment on the issue, and the raiser never polls. | CONVENTIONS.md | #490 |
-| C5b.db.15 | default |  | The raising skill never asks the box whether an answer has arrived. | The raising skill never asks the box whether an answer has arrived. | CONVENTIONS.md | #490 |
-| C5b.db.16 | default |  | A comment answer is recorded as Decision gate requires before the gate lifts. | it is recorded as Decision gate requires before the gate lifts. | CONVENTIONS.md | #490 |
-| C5b.db.17 | default |  | The box itself never removes a label or records a decision. | The box itself never removes a label or records a decision. | CONVENTIONS.md | #490 |
+| C5b.db.01 | default |  | The decision box is optional and set by the deployment; a skill reads its endpoint from a deployment setting. | A skill reads its endpoint from a deployment setting. | tools/docs/decisions.md | #490 |
+| C5b.db.02 | default |  | No host is ever written into a skill or into the handbook. | No host is ever written into a skill or into this handbook. | tools/docs/decisions.md | #490 |
+| C5b.db.03 | default |  | With no endpoint set, nothing changes and the ask stays on the issue. | No endpoint set means no change: | tools/docs/decisions.md | #490 |
+| C5b.db.04 | default |  | Only a human-only item is raised; an ask a coordinator can rule on is ruled on, not sent on. | Only a human-only item is raised. | tools/docs/decisions.md | #490 |
+| C5b.db.05 | default |  | Raising an item changes nothing on the issue; the tracker stays the record and the box only delivers. | The tracker stays the record. The box only delivers. | tools/docs/decisions.md | #490 |
+| C5b.db.06 | default |  | A box that is down loses a delivery, never the ask. | A box that is down, or never answers, loses a delivery, never the ask. | tools/docs/decisions.md | #490 |
+| C5b.db.07 | default |  | A raise carries everything needed to answer without opening the tracker. | A raise carries everything needed to answer without opening the tracker: | tools/docs/decisions.md | #490 |
+| C5b.db.08 | default |  | Raised options come from the issue's `decision:options` block, never re-derived. | taken from the issue's `decision:options` block, never re-derived; | tools/docs/decisions.md | #490 |
+| C5b.db.09 | default |  | A raise carries an opaque reply-to that the box hands back unchanged and never parses. | an opaque reply-to. The raiser composes it and the box hands it back unchanged with | tools/docs/decisions.md | #490 |
+| C5b.db.10 | default |  | An item is keyed by its issue link plus the date of its newest ask. | An item is identified by its issue link plus the date of its newest ask | tools/docs/decisions.md | #490 |
+| C5b.db.11 | default |  | Before raising, a pass looks for an earlier raise under that key in its stored asks and in the box. | Before raising, a pass looks for an earlier raise under that key. | tools/docs/decisions.md | #490 |
+| C5b.db.12 | default |  | An item already raised is not raised again; the pass writes the one-line unchanged form. | It does not raise the item again. | tools/docs/decisions.md | #490 |
+| C5b.db.13 | default |  | A newer ask on the issue is a new key and is raised once in turn. | A newer ask on the issue (a re-posted options block, a | tools/docs/decisions.md | #490 |
+| C5b.db.14 | default |  | The answer comes back as a comment on the issue and the raiser never polls. | The answer comes back as a comment on the issue, and the raiser never polls. | tools/docs/decisions.md | #490 |
+| C5b.db.15 | default |  | The raising skill never asks the box whether an answer has arrived. | The raising skill never asks the box whether an answer has arrived. | tools/docs/decisions.md | #490 |
+| C5b.db.16 | default |  | A comment answer is recorded as Decision gate requires before the gate lifts. | it is recorded as Decision gate requires before the gate lifts. | tools/docs/decisions.md | #490 |
+| C5b.db.17 | default |  | The box itself never removes a label or records a decision. | The box itself never removes a label or records a decision. | tools/docs/decisions.md | #490 |
 
 ### The human flag — what `COLAB_HUMAN=1` asserts
 
 | id | class | gate | rule | key | dest | source |
 |---|---|---|---|---|---|---|
-| C5b.hf.01 | default |  | `COLAB_HUMAN=1` asserts that a human is behind the command, and every gate site is one instance of that assertion. | Read every site below as an instance of the same assertion, never as a separate rule | CONVENTIONS.md | #233 |
-| C5b.hf.02 | default |  | Promotion uses the flag to authorise the act that deploys to production. | authorises the act that deploys to production. | CONVENTIONS.md | #233 |
-| C5b.hf.03 | default |  | The migration and red-trunk exemptions use the flag to authorise a write that did not exist before. | authorise a write that did not exist before the command ran. | CONVENTIONS.md | #233 |
-| C5b.hf.04 | default |  | A place-claim override uses the flag to authorise taking over a live hold. | authorises taking over a live hold. | CONVENTIONS.md | #233 |
-| C5b.hf.05 | default |  | `colab adopt`'s exposure-lowering gate uses the flag to authorise a descriptor claiming fewer consumers than the tool can verify. | authorises a descriptor claiming fewer consumers exist than the tool can verify. | CONVENTIONS.md | #233 |
-| C5b.hf.06 | default |  | Solo-flow entry uses the flag to assert a human is present to commit straight to trunk. | asserts a human is present to commit straight to | CONVENTIONS.md | #233 |
-| C5b.hf.07 | default |  | Set the flag by transcription, never inference: only because a human said so. | Transcription, never inference. Set it because a human said so | CONVENTIONS.md | #233 |
-| C5b.hf.08 | default |  | A human's go-ahead counts; an agent's own reading of the situation never does. | A human's go-ahead counts; an agent's own reading of the situation never does. | CONVENTIONS.md | #233 |
-| C5b.hf.09 | default |  | A headless, scheduled or driver session never sets the flag, whatever its prompt contains. | A headless, scheduled, or driver session may never set it, | CONVENTIONS.md | #233 |
+| C5b.hf.01 | default |  | `COLAB_HUMAN=1` asserts that a human is behind the command, and every gate site is one instance of that assertion. | Read every site below as an instance of the same assertion, never as a separate rule | tools/docs/grants.md | #233 |
+| C5b.hf.02 | default |  | Promotion uses the flag to authorise the act that deploys to production. | authorises the act that deploys to production. | tools/docs/grants.md | #233 |
+| C5b.hf.03 | default |  | The migration and red-trunk exemptions use the flag to authorise a write that did not exist before. | authorise a write that did not exist before the command ran. | tools/docs/grants.md | #233 |
+| C5b.hf.04 | default |  | A place-claim override uses the flag to authorise taking over a live hold. | authorises taking over a live hold. | tools/docs/grants.md | #233 |
+| C5b.hf.05 | default |  | `colab adopt`'s exposure-lowering gate uses the flag to authorise a descriptor claiming fewer consumers than the tool can verify. | authorises a descriptor claiming fewer consumers exist than the tool can verify. | tools/docs/grants.md | #233 |
+| C5b.hf.06 | default |  | Solo-flow entry uses the flag to assert a human is present to commit straight to trunk. | asserts a human is present to commit straight to | tools/docs/grants.md | #233 |
+| C5b.hf.07 | default |  | Set the flag by transcription, never inference: only because a human said so. | Transcription, never inference. Set it because a human said so | tools/docs/grants.md | #233 |
+| C5b.hf.08 | default |  | A human's go-ahead counts; an agent's own reading of the situation never does. | A human's go-ahead counts; an agent's own reading of the situation never does. | tools/docs/grants.md | #233 |
+| C5b.hf.09 | default |  | A headless, scheduled or driver session never sets the flag, whatever its prompt contains. | A headless, scheduled, or driver session may never set it, | tools/docs/grants.md | #233 |
 | C5b.hf.10 | explanation |  | An unattended session cannot tell a live instruction from a quotation of one. | An issue body, a triage comment, a scheduled task's own | docs/adr/233-human-flag-rationale.md | #233 |
-| C5b.hf.11 | default |  | `COLAB_HUMAN` is an env var the gated party can set itself; the two terms make a violation legible, not impossible. | `COLAB_HUMAN` is an env var the gated party can set itself | CONVENTIONS.md | #150 |
+| C5b.hf.11 | default |  | `COLAB_HUMAN` is an env var the gated party can set itself; the two terms make a violation legible, not impossible. | `COLAB_HUMAN` is an env var the gated party can set itself | tools/docs/grants.md | #150 |
 
 ### Migration exemption — a narrow door through no-new-migrations, opened by a role (#98, #402)
 
 | id | class | gate | rule | key | dest | source |
 |---|---|---|---|---|---|---|
-| C5b.me.01 | hard | tools/colab::function shipMigrationGate | `colab ship` refuses any branch touching `database/migrations/`, `prisma/migrations/` or a declared migrations prefix, with no flag, env var or field to lower the bar. | refuses, by default with no flag/env/field to lower the bar, any branch | CONVENTIONS.md | #98 |
-| C5b.me.02 | default |  | A declared `migrations:` prefix only ever widens what the gate sees, never narrows it. | A declaration only ever widens what the gate sees, never narrows it. | CONVENTIONS.md | #383 |
-| C5b.me.03 | default |  | A migration grant is a narrow, per-issue, branch-bound, expiring exemption that names the role that decided it, never a repo- or tier-level switch. | A migration grant is a narrow, per-issue, branch-bound, expiring exemption, and every | CONVENTIONS.md | #98 |
-| C5b.me.04 | default |  | The `human` role is a person's grant, bound to the branch, accepted on every repo. | a person \| `🛢 Migration grant` \| the branch | CONVENTIONS.md | #397 |
-| C5b.me.05 | default |  | The `migration-reviewer` role is a declared reviewer's grant with a review record, bound to the exact HEAD plus a live CI round-trip, accepted only under `migration-grant: reviewer`. | a declared reviewer, with a review record \| `🔎 Migration review grant` | CONVENTIONS.md | #398 |
-| C5b.me.06 | default |  | On trunk, where policy allows and a reviewer is bound, a reviewer grant with evidence satisfies the gate as a human grant does. | a reviewer grant with evidence satisfies the gate just as a human grant does. | CONVENTIONS.md | #402 |
-| C5b.me.07 | default |  | `COLAB_HUMAN=1`, promotion, release and production stay human on every repo under every policy. | `COLAB_HUMAN=1`, promotion, release and production stay human on every repo, under every | CONVENTIONS.md | #402 |
-| C5b.me.08 | hard | tools/colab::a migration grant requires a human | `colab migration-grant` refuses unless `COLAB_HUMAN=1`, for either role, checked before any network call. | `colab migration-grant` refuses (exit 1) unless | CONVENTIONS.md | #98 |
-| C5b.me.09 | default |  | The reviewer role changes what a grant must prove, not who may post it. | The reviewer role changes what a grant must prove, not who may post it. | CONVENTIONS.md | #397 |
-| C5b.me.10 | default |  | A grant is two parts: a `migration-granted` label and a comment naming the exact branch; it never authorises another branch. | Two required parts: a `migration-granted` label (requires write/triage permission) | CONVENTIONS.md | #98 |
-| C5b.me.11 | default |  | A grant expires the instant its issue closes; `ship` reads the live open/closed state. | Expires the instant its issue closes — `ship` reads the issue's live open/closed | CONVENTIONS.md | #98 |
-| C5b.me.12 | default |  | A grant is visible from any machine, with no local-only fallback. | Visible from any machine — no local-only fallback. | CONVENTIONS.md | #98 |
-| C5b.me.13 | default |  | A grant covers the whole ship set, never narrowed by `--refs`; one issue without a valid grant fails the set. | Covers the whole ship set, never narrowed by `--refs`. | CONVENTIONS.md | #98 |
-| C5b.me.14 | default |  | `--revoke` removes the label first, then posts a receipt. | `--revoke` removes the label first (gate restored immediately), then posts a receipt. | CONVENTIONS.md | #98 |
-| C5b.me.15 | default |  | A revoke cancels every earlier grant on the issue, of either role, whoever posted it. | A revoke cancels every earlier grant on the issue, of either role, whoever posted it. | CONVENTIONS.md | #98 |
-| C5b.me.16 | default |  | `colab migration-grant --list` names every live grant. | `colab migration-grant --list` names every live grant. | CONVENTIONS.md | #98 |
-| C5b.me.17 | default |  | A grant never weakens any other precondition: CI green, claim corroboration, trunk-checkout and hand-merge checks still run in full. | Never weakens any other precondition — CI green, claim corroboration, trunk-checkout | CONVENTIONS.md | #98 |
-| C5b.me.18 | default |  | `--batch` still refuses every member that carries a migration, granted or not. | `--batch` still refuses every member that carries a migration, granted or not. | CONVENTIONS.md | #98 |
+| C5b.me.01 | hard | tools/colab::function shipMigrationGate | `colab ship` refuses any branch touching `database/migrations/`, `prisma/migrations/` or a declared migrations prefix, with no flag, env var or field to lower the bar. | refuses, by default with no flag/env/field to lower the bar, any branch | tools/docs/grants.md | #98 |
+| C5b.me.02 | default |  | A declared `migrations:` prefix only ever widens what the gate sees, never narrows it. | A declaration only ever widens what the gate sees, never narrows it. | tools/docs/grants.md | #383 |
+| C5b.me.03 | default |  | A migration grant is a narrow, per-issue, branch-bound, expiring exemption that names the role that decided it, never a repo- or tier-level switch. | A migration grant is a narrow, per-issue, branch-bound, expiring exemption, and every | tools/docs/grants.md | #98 |
+| C5b.me.04 | default |  | The `human` role is a person's grant, bound to the branch, accepted on every repo. | a person \| `🛢 Migration grant` \| the branch | tools/docs/grants.md | #397 |
+| C5b.me.05 | default |  | The `migration-reviewer` role is a declared reviewer's grant with a review record, bound to the exact HEAD plus a live CI round-trip, accepted only under `migration-grant: reviewer`. | a declared reviewer, with a review record \| `🔎 Migration review grant` | tools/docs/grants.md | #398 |
+| C5b.me.06 | default |  | On trunk, where policy allows and a reviewer is bound, a reviewer grant with evidence satisfies the gate as a human grant does. | a reviewer grant with evidence satisfies the gate just as a human grant does. | tools/docs/grants.md | #402 |
+| C5b.me.07 | default |  | `COLAB_HUMAN=1`, promotion, release and production stay human on every repo under every policy. | `COLAB_HUMAN=1`, promotion, release and production stay human on every repo, under every | tools/docs/grants.md | #402 |
+| C5b.me.08 | hard | tools/colab::a migration grant requires a human | `colab migration-grant` refuses unless `COLAB_HUMAN=1`, for either role, checked before any network call. | `colab migration-grant` refuses (exit 1) unless | tools/docs/grants.md | #98 |
+| C5b.me.09 | default |  | The reviewer role changes what a grant must prove, not who may post it. | The reviewer role changes what a grant must prove, not who may post it. | tools/docs/grants.md | #397 |
+| C5b.me.10 | default |  | A grant is two parts: a `migration-granted` label and a comment naming the exact branch; it never authorises another branch. | Two required parts: a `migration-granted` label (requires write/triage permission) | tools/docs/grants.md | #98 |
+| C5b.me.11 | default |  | A grant expires the instant its issue closes; `ship` reads the live open/closed state. | Expires the instant its issue closes — `ship` reads the issue's live open/closed | tools/docs/grants.md | #98 |
+| C5b.me.12 | default |  | A grant is visible from any machine, with no local-only fallback. | Visible from any machine — no local-only fallback. | tools/docs/grants.md | #98 |
+| C5b.me.13 | default |  | A grant covers the whole ship set, never narrowed by `--refs`; one issue without a valid grant fails the set. | Covers the whole ship set, never narrowed by `--refs`. | tools/docs/grants.md | #98 |
+| C5b.me.14 | default |  | `--revoke` removes the label first, then posts a receipt. | `--revoke` removes the label first (gate restored immediately), then posts a receipt. | tools/docs/grants.md | #98 |
+| C5b.me.15 | default |  | A revoke cancels every earlier grant on the issue, of either role, whoever posted it. | A revoke cancels every earlier grant on the issue, of either role, whoever posted it. | tools/docs/grants.md | #98 |
+| C5b.me.16 | default |  | `colab migration-grant --list` names every live grant. | `colab migration-grant --list` names every live grant. | tools/docs/grants.md | #98 |
+| C5b.me.17 | default |  | A grant never weakens any other precondition: CI green, claim corroboration, trunk-checkout and hand-merge checks still run in full. | Never weakens any other precondition — CI green, claim corroboration, trunk-checkout | tools/docs/grants.md | #98 |
+| C5b.me.18 | default |  | `--batch` still refuses every member that carries a migration, granted or not. | `--batch` still refuses every member that carries a migration, granted or not. | tools/docs/grants.md | #98 |
 | C5b.me.19 | explanation |  | The association class cannot tell a person from an agent running under its own account. | That class cannot tell a person from an agent that runs under | docs/adr/98-migration-exemption-rationale.md | #407 |
-| C5b.me.20 | default |  | With `trust-humans:` declared, a human grant or ruling counts only when its author's login is listed. | a human grant or ruling counts only when its author's login is listed | CONVENTIONS.md | #407 |
-| C5b.me.21 | default |  | For `migration-granted` and `ci-granted`, the account that last applied the label must be listed too. | the account that last applied the label must be listed too | CONVENTIONS.md | #407 |
-| C5b.me.22 | default |  | An unlisted, unknown or unreadable author is not human, and the refusal names the login. | An unlisted, unknown or unreadable author is not human, and the | CONVENTIONS.md | #407 |
-| C5b.me.23 | default |  | With `trust-humans:` absent, the association class decides as before. | the association class decides, exactly as before. | CONVENTIONS.md | #407 |
-| C5b.me.24 | default |  | Ship reads the `trust-humans` list from `project.yml` at the tip of the target, and rulings read trunk's; a branch cannot add its own author. | Ship reads the list from `project.yml` at the tip of the branch being merged into, | CONVENTIONS.md | #407 |
-| C5b.me.25 | default |  | Editing the `trust-humans` list is a human act. | Editing the list is a human act | CONVENTIONS.md | #407 |
-| C5b.me.26 | default |  | A reviewer grant is not judged by the `trust-humans` list. | A reviewer grant is not judged by this list. | CONVENTIONS.md | #407 |
-| C5b.me.27 | default |  | The human role is branch-bound, not HEAD-bound, and honoured on every repo; where both roles are live a valid human grant wins. | Where both roles are live on an issue, a valid human grant wins. | CONVENTIONS.md | #98 |
-| C5b.me.28 | default |  | The reviewer role names the reviewer's declared identity and carries a `migration-review` record. | names the reviewer's declared identity and carries a review record: | CONVENTIONS.md | #397 |
-| C5b.me.29 | default |  | A reviewer grant is bound to the migration content id, not the commit. | The grant covers that content, not that commit. | CONVENTIONS.md | #508 |
-| C5b.me.30 | default |  | The content id is a sha256 over the path and git blob id of every migration file the branch changes at the reviewed HEAD. | The content id is a sha256 over the path and git | CONVENTIONS.md | #508 |
-| C5b.me.31 | default |  | Editing, adding, removing or renaming a migration changes the content id and voids the grant. | Editing, adding, removing or renaming a migration changes the id and voids it. | CONVENTIONS.md | #508 |
+| C5b.me.20 | default |  | With `trust-humans:` declared, a human grant or ruling counts only when its author's login is listed. | a human grant or ruling counts only when its author's login is listed | tools/docs/grants.md | #407 |
+| C5b.me.21 | default |  | For `migration-granted` and `ci-granted`, the account that last applied the label must be listed too. | the account that last applied the label must be listed too | tools/docs/grants.md | #407 |
+| C5b.me.22 | default |  | An unlisted, unknown or unreadable author is not human, and the refusal names the login. | An unlisted, unknown or unreadable author is not human, and the | tools/docs/grants.md | #407 |
+| C5b.me.23 | default |  | With `trust-humans:` absent, the association class decides as before. | the association class decides, exactly as before. | tools/docs/grants.md | #407 |
+| C5b.me.24 | default |  | Ship reads the `trust-humans` list from `project.yml` at the tip of the target, and rulings read trunk's; a branch cannot add its own author. | Ship reads the list from `project.yml` at the tip of the branch being merged into, | tools/docs/grants.md | #407 |
+| C5b.me.25 | default |  | Editing the `trust-humans` list is a human act. | Editing the list is a human act | tools/docs/grants.md | #407 |
+| C5b.me.26 | default |  | A reviewer grant is not judged by the `trust-humans` list. | A reviewer grant is not judged by this list. | tools/docs/grants.md | #407 |
+| C5b.me.27 | default |  | The human role is branch-bound, not HEAD-bound, and honoured on every repo; where both roles are live a valid human grant wins. | Where both roles are live on an issue, a valid human grant wins. | tools/docs/grants.md | #98 |
+| C5b.me.28 | default |  | The reviewer role names the reviewer's declared identity and carries a `migration-review` record. | names the reviewer's declared identity and carries a review record: | tools/docs/grants.md | #397 |
+| C5b.me.29 | default |  | A reviewer grant is bound to the migration content id, not the commit. | The grant covers that content, not that commit. | tools/docs/grants.md | #508 |
+| C5b.me.30 | default |  | The content id is a sha256 over the path and git blob id of every migration file the branch changes at the reviewed HEAD. | The content id is a sha256 over the path and git | tools/docs/grants.md | #508 |
+| C5b.me.31 | default |  | Editing, adding, removing or renaming a migration changes the content id and voids the grant. | Editing, adding, removing or renaming a migration changes the id and voids it. | tools/docs/grants.md | #508 |
 | C5b.me.32 | explanation |  | Ship's stale-base sync voided a commit-bound grant every time, so the grant binds migration content. | ship's stale-base rule (#395) makes a branch merge trunk in before it ships | docs/adr/98-migration-exemption-rationale.md | #508 |
-| C5b.me.33 | default |  | A record with no content id stays bound to its HEAD alone, and a new commit voids it. | stays bound to its HEAD alone, and a new commit voids it as before. | CONVENTIONS.md | #508 |
-| C5b.me.34 | default |  | The repo's own `migration-grant:` is read from the trunk checkout when a grant is minted and from the merge target's tip at ship, so a branch cannot raise its own policy. | own `migration-grant:` (the trunk checkout at mint, the target's tip at ship) → this machine's | CONVENTIONS.md | #397, #598 |
-| C5b.me.35 | default |  | `colab migration-grant` refuses to mint a reviewer grant where the policy is not `reviewer`. | `colab migration-grant` refuses to mint a reviewer grant unless the policy resolves to | CONVENTIONS.md | #397, #596 |
-| C5b.me.36 | default |  | A reviewer grant is recorded only if the review passed: approve, checklist, escalation and CI round-trip. | The record must approve, pass the checklist, clear the escalation and pass the CI round-trip. | CONVENTIONS.md | #397 |
-| C5b.me.37 | default |  | A failing review is refused, not recorded. | A failing review is refused, not recorded. | CONVENTIONS.md | #397 |
-| C5b.me.38 | default |  | A claimed pass is checked before anything is written: the round-trip job ran and passed at the recorded HEAD and the checklist count matches. | A claimed pass is checked too, before anything is written | CONVENTIONS.md | #457 |
-| C5b.me.39 | default |  | A repo whose CI has no round-trip job cannot mint a reviewer grant at all. | A repo whose CI has no round-trip job cannot mint a reviewer grant at all | CONVENTIONS.md | #457 |
-| C5b.me.40 | default |  | The reviewer id and recorded CI result are claims, so a gate re-verifies CI for the recorded HEAD itself. | The reviewer id and the recorded CI result are claims made in the | CONVENTIONS.md | #397 |
-| C5b.me.41 | hard | tools/colab::function shipMigrationGate | `colab ship` honours a reviewer grant only when policy P, record M, HEAD and round-trip R all hold. | honours a reviewer grant only when four conditions hold together (#401): | CONVENTIONS.md | #401 |
-| C5b.me.42 | default |  | P: `migration-grant: reviewer` in `project.yml` at the tip of the branch being merged into; the branch's own copy never counts. | The policy resolves to `reviewer` at the tip of the branch being merged | CONVENTIONS.md | #401 |
-| C5b.me.43 | default |  | M: a live reviewer marker from a trusted author, bound to this branch, with a valid record. | A live reviewer marker from a trusted author, bound to this branch, | CONVENTIONS.md | #401 |
-| C5b.me.44 | default |  | HEAD: the local branch must agree with the remote head, and the grant binds that head or the same migrations id. | Ship reads the branch's head on the remote, and the local branch must agree | CONVENTIONS.md | #508 |
-| C5b.me.45 | default |  | R: the live CI round-trip must have passed on the shipped head. | The live CI round-trip passed on the shipped head, which after a | CONVENTIONS.md | #401 |
-| C5b.me.46 | default |  | Ship re-reads CI itself and never trusts the recorded `ci-roundtrip:` value. | Ship re-reads CI itself | CONVENTIONS.md | #401 |
-| C5b.me.47 | default |  | Every round-trip leg needs a run that completed with success and ran at least one step. | Every leg needs a run that completed with success and ran at least one step. | CONVENTIONS.md | #401 |
-| C5b.me.48 | default |  | A copy of the round-trip job that counts added files only must be re-synced before a reviewer grant relies on it. | re-sync it before a reviewer grant | CONVENTIONS.md | #507 |
-| C5b.me.49 | default |  | A branch that edits `.github/workflows/` cannot pass R and ships on a human grant. | a branch that edits `.github/workflows/` cannot pass it either. | CONVENTIONS.md | #401 |
-| C5b.me.50 | default |  | If any condition fails, the gate behaves as it does without a reviewer grant. | If any condition fails, the gate behaves exactly as it does without a reviewer grant: | CONVENTIONS.md | #401 |
-| C5b.me.51 | default |  | One function makes the reviewer-grant decision for every ship path. | One function makes this decision for every ship path | CONVENTIONS.md | #401 |
-| C5b.me.52 | default |  | `needs-migration-grant` is the gate's plan-time half, not a second gate, and authorises nothing by itself. | is this gate's plan-time half, not a second gate (#230). | CONVENTIONS.md | #230 |
-| C5b.me.53 | default |  | The `migration-grant` policy resolves repo key → this machine's value → `human`; a repo's `migration-grant: human` opts it out of a machine-level `reviewer`. | A repo that writes `migration-grant: human` opts out | CONVENTIONS.md | #598 |
-| C5b.me.54 | default |  | Setting the machine-level value is a human act, refused without `COLAB_HUMAN=1`, and recorded with who, when and host; it reaches only that machine. | **Setting the machine value is a human act, the same class as minting a grant.** | CONVENTIONS.md | #598 |
-| C5b.me.55 | default |  | The owner-level record (#596) is retired: no gate reads it. | The owner-level record (#596) is retired and no gate reads it | CONVENTIONS.md | #598 |
-| C5b.me.56 | default |  | Wherever `colab` prints the policy it names the source: `repo`, `machine` (who, when) or `default`. | Every printed policy names its source: `repo`, `machine` (who, when) or `default`. | CONVENTIONS.md | #598 |
+| C5b.me.33 | default |  | A record with no content id stays bound to its HEAD alone, and a new commit voids it. | stays bound to its HEAD alone, and a new commit voids it as before. | tools/docs/grants.md | #508 |
+| C5b.me.34 | default |  | The repo's own `migration-grant:` is read from the trunk checkout when a grant is minted and from the merge target's tip at ship, so a branch cannot raise its own policy. | own `migration-grant:` (the trunk checkout at mint, the target's tip at ship) → this machine's | tools/docs/grants.md | #397, #598 |
+| C5b.me.35 | default |  | `colab migration-grant` refuses to mint a reviewer grant where the policy is not `reviewer`. | `colab migration-grant` refuses to mint a reviewer grant unless the policy resolves to | tools/docs/grants.md | #397, #596 |
+| C5b.me.36 | default |  | A reviewer grant is recorded only if the review passed: approve, checklist, escalation and CI round-trip. | The record must approve, pass the checklist, clear the escalation and pass the CI round-trip. | tools/docs/grants.md | #397 |
+| C5b.me.37 | default |  | A failing review is refused, not recorded. | A failing review is refused, not recorded. | tools/docs/grants.md | #397 |
+| C5b.me.38 | default |  | A claimed pass is checked before anything is written: the round-trip job ran and passed at the recorded HEAD and the checklist count matches. | A claimed pass is checked too, before anything is written | tools/docs/grants.md | #457 |
+| C5b.me.39 | default |  | A repo whose CI has no round-trip job cannot mint a reviewer grant at all. | A repo whose CI has no round-trip job cannot mint a reviewer grant at all | tools/docs/grants.md | #457 |
+| C5b.me.40 | default |  | The reviewer id and recorded CI result are claims, so a gate re-verifies CI for the recorded HEAD itself. | The reviewer id and the recorded CI result are claims made in the | tools/docs/grants.md | #397 |
+| C5b.me.41 | hard | tools/colab::function shipMigrationGate | `colab ship` honours a reviewer grant only when policy P, record M, HEAD and round-trip R all hold. | honours a reviewer grant only when four conditions hold together (#401): | tools/docs/grants.md | #401 |
+| C5b.me.42 | default |  | P: `migration-grant: reviewer` in `project.yml` at the tip of the branch being merged into; the branch's own copy never counts. | The policy resolves to `reviewer` at the tip of the branch being merged | tools/docs/grants.md | #401 |
+| C5b.me.43 | default |  | M: a live reviewer marker from a trusted author, bound to this branch, with a valid record. | A live reviewer marker from a trusted author, bound to this branch, | tools/docs/grants.md | #401 |
+| C5b.me.44 | default |  | HEAD: the local branch must agree with the remote head, and the grant binds that head or the same migrations id. | Ship reads the branch's head on the remote, and the local branch must agree | tools/docs/grants.md | #508 |
+| C5b.me.45 | default |  | R: the live CI round-trip must have passed on the shipped head. | The live CI round-trip passed on the shipped head, which after a | tools/docs/grants.md | #401 |
+| C5b.me.46 | default |  | Ship re-reads CI itself and never trusts the recorded `ci-roundtrip:` value. | Ship re-reads CI itself | tools/docs/grants.md | #401 |
+| C5b.me.47 | default |  | Every round-trip leg needs a run that completed with success and ran at least one step. | Every leg needs a run that completed with success and ran at least one step. | tools/docs/grants.md | #401 |
+| C5b.me.48 | default |  | A copy of the round-trip job that counts added files only must be re-synced before a reviewer grant relies on it. | re-sync it before a reviewer grant | tools/docs/grants.md | #507 |
+| C5b.me.49 | default |  | A branch that edits `.github/workflows/` cannot pass R and ships on a human grant. | a branch that edits `.github/workflows/` cannot pass it either. | tools/docs/grants.md | #401 |
+| C5b.me.50 | default |  | If any condition fails, the gate behaves as it does without a reviewer grant. | If any condition fails, the gate behaves exactly as it does without a reviewer grant: | tools/docs/grants.md | #401 |
+| C5b.me.51 | default |  | One function makes the reviewer-grant decision for every ship path. | One function makes this decision for every ship path | tools/docs/grants.md | #401 |
+| C5b.me.52 | default |  | `needs-migration-grant` is the gate's plan-time half, not a second gate, and authorises nothing by itself. | is this gate's plan-time half, not a second gate (#230). | tools/docs/grants.md | #230 |
+| C5b.me.53 | default |  | The `migration-grant` policy resolves repo key → this machine's value → `human`; a repo's `migration-grant: human` opts it out of a machine-level `reviewer`. | A repo that writes `migration-grant: human` opts out | tools/docs/grants.md | #598 |
+| C5b.me.54 | default |  | Setting the machine-level value is a human act, refused without `COLAB_HUMAN=1`, and recorded with who, when and host; it reaches only that machine. | **Setting the machine value is a human act, the same class as minting a grant.** | tools/docs/grants.md | #598 |
+| C5b.me.55 | default |  | The owner-level record (#596) is retired: no gate reads it. | The owner-level record (#596) is retired and no gate reads it | tools/docs/grants.md | #598 |
+| C5b.me.56 | default |  | Wherever `colab` prints the policy it names the source: `repo`, `machine` (who, when) or `default`. | Every printed policy names its source: `repo`, `machine` (who, when) or `default`. | tools/docs/grants.md | #598 |
 
 ### A red trunk with no patch — never parked in silence (#390)
 

@@ -1281,138 +1281,82 @@ cut from was green — is documented with the CLI, in
 > land, new features are refused. The git claim ref, place-claims and `solo` stay in scope.
 > Full list and retirement rule: [ADR 604](docs/adr/604-scope-freeze.md).
 
+**The claims and decisions contract (#639).** Whatever tooling a repo uses, holding work, recording
+what it waits on and recording what a person decided keep these rules. How this repo's CLI carries
+them out — the claim ref and its tracker mirror, the readiness markers, the hold codec, the
+disposition marker, the decision record and the grants — is documented with the CLI, in
+[`tools/docs/claims.md`](tools/docs/claims.md), [`tools/docs/readiness.md`](tools/docs/readiness.md),
+[`tools/docs/decisions.md`](tools/docs/decisions.md) and [`tools/docs/grants.md`](tools/docs/grants.md).
+
+1. **[Hard C5.contract.01 — refuse: a second claim on an issue a live claim already holds]**
+   One holder per issue. A claim is taken before work starts and recorded where every machine
+   sharing the repo can read it; a second claim on an issue a live claim holds is refused, and
+   taking one over is a loud, deliberate act. Where that record cannot be read, no claim is taken.
+2. A claim is whole or it is broken. The record a person reads names both the holder and that the
+   work is in progress; either half alone is neither free nor taken until its holder repairs or
+   releases it. A claim is released when its unit lands, finished or not.
+3. Dependencies are recorded as structure the tracker can read — parent and child, blocked-by —
+   never as prose. An edge means one issue needs what another produces; it never records a queue
+   position or a shared file.
+4. "No blockers" and "nobody checked" are told apart. An issue is marked dependency-checked only by
+   someone who looked, a mechanical read of an empty graph never sets that mark, and a readiness
+   verdict fails toward blocked, never toward ready.
+5. Every hold that stops a start names its owner and a wake condition a scheduler can check. A hold
+   with no owner, or no checkable wake, is a stall and never ready; a met wake proposes lifting the
+   hold and never lifts it.
+6. A session does not dispose of its own issue. It posts evidence and proposes how the work ends; a
+   later pass applies that disposition. Who may apply it is decided from facts on the issue, and an
+   absent or unreadable fact fails toward a person.
+7. **[Hard C5.contract.07 — refuse: recording an answer that does not name the open question it answers]**
+   A decision waiting on a person is recorded where the tracker can read it: the question with its
+   options, and then the answer, naming who ruled and which question it answers. A waiting decision
+   blocks the issue from starting, and the waiting mark's absence is never read as the answer.
+8. An ask a person must answer is put once. A later pass reports that it is still waiting, and never
+   asks again because time has passed.
+9. **[Hard C5.contract.09 — refuse: landing a migration that carries no valid grant]**
+   Some acts only a person decides: landing a migration (or a declared reviewer, where the repo opts
+   in), landing onto a red trunk without a proven cure, a promotion or a final that deploys,
+   production access, credentials, and destructive or non-undoable operations. A grant is bound to
+   one branch and expires with its issue, an agent never mints one, and "a person is behind this" is
+   transcribed from that person in a live conversation, never inferred.
+
 Parallel sessions and parallel agents must not collide on the same Issue. Two layers:
 
 ### Who holds this
 
 #### Record of a claim — the branch on the remote
 
-**[Hard — gate: colab claim refuses]** **The record of a claim is its branch on the git remote** — the branch whose name carries
-the issue number ([§4](#4-branches-and-commits)), recorded **the moment it is cut** at session
-start and pushed at wrap (#325). At the cut it is recorded as the **claim ref**
-`refs/claims/<branch>`, not the branch: a branch push fires every CI `push` trigger on a commit
-trunk already tested, and a claim ref fires none (#550). It is deleted at `colab worktree rm`.
-A claim is refused against the git remote: a branch or claim ref on the remote carrying `#N` that is not this machine's refuses a second claim on `#N` from
-anywhere, naming the ref and how to continue it. Each machine sweeps its own worktrees.
-
-- **[Hard — gate: colab claim refuses]** **Remote unreachable → no claim.** Fail closed: a claim checked against nothing is not a
-  lock. A repo with **no remote at all** is the one exception — nothing else could ever share
-  its branches, so the machine's own record is the whole truth.
-- **Tracker unreachable → the claim still stands.** Its tracker half (below) is recorded as
-  *pending* and posted when the same claim is re-run.
-- One account on **two machines** is two holders: a live claim comment from the same login on
-  a different machine refuses too — the assignee set cannot say which machine holds it.
-- A claim names the machine by a canonical id, not its hostname (#327). The comment carries only a digest of that id. Why, with the measurement: [ADR 539](docs/adr/539-claims-rationale.md).
-- A **planner** may hold an issue before the session that will work it exists
-  (`--session intent:<id>`, no worktree, #326). That session's own claim from the same machine
-  upgrades it in place; a planner claim whose session never claimed is released after a short
-  window.
+A claim is taken before work starts and recorded where every machine sharing the repo can read it —
+the [claims and decisions contract](#5-claiming-work--how-to-say-im-on-this), item 1. How the CLI
+records it, what it refuses and the planner hold:
+[`tools/docs/claims.md`](tools/docs/claims.md#record-of-a-claim--the-branch-on-the-remote).
 
 #### Mirror for people — GitHub
 
-```sh
-gh issue list --label in-progress                               # check, before taking work
-gh issue edit <N> --add-assignee @me --add-label in-progress    # claim, at session start
-gh issue edit <N> --remove-assignee <claimer> --remove-label in-progress   # release, at session end
-```
-
-**[Hard — gate: colab claim refuses]** **A claim is both halves — the assignee *and* `in-progress`.** Either half alone is a
-**half-claim**: a broken claim, which is neither free nor taken (ruled in #323). Nobody
-starts on it; triage reports it for **repair** — whoever holds the assignee completes the
-claim (adds the label) or drops the assignee (releases it) — and `colab claim` refuses it
-until then, `--force` taking it over loudly like any other claim. Our own half-claim is
-the one exception: re-claiming completes it. Release therefore drops **both** halves;
-removing only the label is what leaves the assignee-only half-claim behind.
-
-**Release removes the assignee who holds the claim, not the account releasing it** (#363).
-The claimer is the account that applied `in-progress` — the latest such event on the issue,
-which survives the label's removal.
-`colab release` (and every path that releases through it) reads the claimer from the issue,
-unassigns it alongside the caller, and says so whenever that is a different login. By hand,
-`<claimer>` is `@me` only when you took the claim yourself. The one exception is yielding a
-lost race: there the latest labeler is the winner, whose assignee must stay.
-
-Why, with the measurements: [ADR 363](docs/adr/363-claim-release-rationale.md).
-
-Assignee plus `in-progress` is the claim's **mirror for people**, not its lock: it is what a
-human reading the Issue sees, and the half-claim rule above still governs it exactly. It is
-no longer what a claim is refused against across machines — that is the branch on the remote,
-above. Why, with the measurement: [ADR 539](docs/adr/539-claims-rationale.md). The label does not exist in a fresh repo — creating it is part of
-adoption ([§9](#9-adopting-this)).
+What a person reads on the tracker names both the holder and that work is in progress; either half
+alone is a broken claim — the [claims and decisions
+contract](#5-claiming-work--how-to-say-im-on-this), item 2. The commands, the half-claim refusal and
+whose assignee a release removes:
+[`tools/docs/claims.md`](tools/docs/claims.md#mirror-for-people--github).
 
 #### Fast path — local cache
 
-`colab` keeps a machine-local cache at `~/.colab/state.json` (override with
-`COLAB_HOME`), written automatically on claim/worktree-create — a zero-latency read for
-same-machine parallel sessions. **It is a cache, not the truth**: uncommitted,
-machine-local, cannot see work claimed elsewhere. It does answer one question nothing else
-can — *which branches on the remote are this machine's own* — which is why it is never
-file-synced between machines. **When cache and GitHub disagree about the assignee/label,
-GitHub wins.**
-
-```sh
-colab claims --sync      # reconcile local cache against GitHub
-colab doctor --prune     # free claims whose worktrees no longer exist
-```
+A machine-local cache of claims answers fast and is never the truth: where it disagrees with the
+tracker, the tracker wins. The CLI's cache and its reconcile commands:
+[`tools/docs/claims.md`](tools/docs/claims.md#fast-path--local-cache).
 
 #### Rules
 
-- **[Hard — gate: colab ship refuses unclaimed branch]** Claim **before** you start, not when you open the PR — an unclaimed issue is fair game.
-- **[Hard — gate: colab claim refuses]** **A live claim is enforced, not advisory.** `colab claim`/`colab worktree new` *refuse*
-  an issue with a live claim, naming the holder; `--force` takes over loudly. This
-  protects an issue only while the claim is *live* — a session releases its whole group
-  at wrap, so an unfinished issue is immediately reclaimable; say so on the Issue if you
-  intend to return.
-- **A claim carries its details as a structured Issue comment**:
-  `🔒 Claimed — worktree … · branch … · host … · <timestamp>` on claim, `✅ Released` on
-  release. `code-ship`'s evidence comment (B2b, `ceremony: standard` only) uses the same
-  pattern: an invisible marker line, `<!-- colab:evidence sha=<trunk-sha> -->`, prepended
-  to free prose. **Degrade, never gate** — a comment missing the marker still counts as
-  evidence; no consumer may treat its absence as "no evidence exists". `code-ship`'s grade
-  verdict (B1c) uses the same family of marker, on its own line: `<!-- colab:grade
-  verdict=<token> round=<n> -->`, `<token>` one of a **closed** set (`pass` ·
-  `reject-decision` · `reject-escalate` · `rework` — no token a prefix or decorated variant of
-  another). `rework` is a reject whose
-  recommended fix needs no authority the coordinator lacks, posted as a direction the author
-  follows unless a human overrules (#328, #406). It is emitted only at `round=1`, and it is
-  held, never cleared. Attributes are read by name, never position; an optional
-  `reviewer=<lane>` names which review produced the verdict, and absent means the ship grade. Read by equality, never by
-  prefix or heading text; an unrecognised token or a missing marker both mean "not
-  cleared", never a silent default to the safe-looking value — the same *degrade, never
-  gate* posture applies to its absence. A **third** member of the family, `<!-- colab:disposition
-  proposed=<token> -->`, proposes how a non-code unit of work ends — same closed-set,
-  read-by-equality, degrade-never-gate rules (*Disposition — the marker, the seven kinds, and who
-  may apply one*, below).
-- **Simultaneous claims break ties deterministically**: re-read after claiming, the
-  earliest live claim comment (by `createdAt`) wins, the loser posts
-  `✅ Released (yielded — …)`.
-- Release the claim even if you did not finish — a stale claim silently blocks others.
-  `colab doctor --prune` frees claims whose worktrees died.
-- For long-running work, comment progress onto the Issue — the feature's external memory.
+Claim before you start; a live claim is enforced, not advisory; release it even if you did not
+finish — the [claims and decisions contract](#5-claiming-work--how-to-say-im-on-this), items 1–2.
+The claim and release comments, the evidence marker family and the tie-break:
+[`tools/docs/claims.md`](tools/docs/claims.md#rules).
 
 #### Tracking issues — claimed but referenced, not closed
 
-A long-lived tracking issue may be **claimed** (to signal work in the domain) and
-**referenced**, without closing. The merge message says `Refs #N` (links, does not auto-close)
-instead of `Closes #N`.
-
-- **A `tracking` label** — declarative and durable; any session claiming a labelled
-  issue references it automatically.
-- **`colab ship --refs <N[,M]>`** — explicit, per-ship, for an unlabelled issue. An
-  issue kept open this way for a leftover that is **not** code must also be parked in the
-  same step, or it reads as startable again (#385, §4 *Merging*). A leftover that is
-  only a check a person must run is not a reason to keep the issue open: close it and
-  add a row to the `Human verify:` issue (*Human verify*, below).
-
-The claim is released unconditionally either way. `tracking` is deliberately **not** in
-the convention label set ([§9](#9-adopting-this)) — its absence breaks no check, so adoption does not
-provision it and the audit does not report it missing.
-
-Do not write `Closes #<tracking>` in a commit body. `colab ship` detects
-this after the push and warns to reopen by hand. The reverse is not the same kind of
-edge: a stray `Refs #N` written while N was open, now one of the branch's own
-`Closes #N` — `ship` drops the stale `Refs` before the push rather than shipping a commit
-that says both (#58).
+A long-lived tracking issue may be claimed and referenced without being closed; its claim is still
+released at every landing. The label, the per-landing reference and the stray close:
+[`tools/docs/claims.md`](tools/docs/claims.md#tracking-issues--claimed-but-referenced-not-closed).
 
 #### Human verify — a person-only check closes the issue and becomes one row (#491)
 
@@ -1539,64 +1483,11 @@ itself: filing issues is not one of its writes.
 
 Why, with the measurements: [ADR 361](docs/adr/361-readiness-and-dependency-edges-rationale.md).
 
-```sh
-# read (repo-relative — no owner/name to get wrong)
-gh issue view <N> --json blockedBy,blocking,parent,subIssues,subIssuesSummary
-
-# write a sequence — colab owns this write (#251); it takes NUMBERS ONLY, resolves the
-# database id itself, reads before writing, writes, and reads back to confirm the edge
-# names the blocker you meant. Refuses cross-repo, structurally.
-colab blocked <N> --by <M>
-colab blocked <N> --by <M> --clear --reason "<why>" [--force]   # --force only overrides
-                                                                  # the closed-blocker guard
-
-# raw (portable fallback; the payload is the DATABASE id, not the issue number — the trap
-# `colab blocked` exists to make unreachable, see below)
-gh api -X POST   repos/{owner}/{repo}/issues/<N>/dependencies/blocked_by -F issue_id=<db-id>
-gh api -X DELETE repos/{owner}/{repo}/issues/<N>/dependencies/blocked_by/<db-id>
-gh api repos/{owner}/{repo}/issues/<M> -q .id      # ← how to get that db-id
-
-# write a parent/child — GraphQL, and this one takes NODE ids
-gh api graphql -f query='mutation($p:ID!,$c:ID!){addSubIssue(input:{issueId:$p,subIssueId:$c}){clientMutationId}}' \
-  -f p=<parent-node-id> -f c=<child-node-id>
-gh api graphql -f query='mutation($p:ID!,$c:ID!){removeSubIssue(input:{issueId:$p,subIssueId:$c}){clientMutationId}}' \
-  -f p=<parent-node-id> -f c=<child-node-id>
-gh issue view <M> --json id -q .id                 # ← how to get that node id
-```
-
-`removeSubIssue` requires **both** ids — a child cannot be detached by naming only
-itself. (`addSubIssue` is the laxer of the two — it accepts `subIssueUrl` in place of
-`subIssueId`, and `replaceParent: true` to move a child that already has a parent; `removeSubIssue` has neither.)
-
-**The two halves do not share an API, and that is the trap.** Sub-issues are GraphQL,
-keyed by **node** id; dependencies are REST, keyed by **database** id — no dependency
-mutation exists in GraphQL. Three mistakes fail loud (wrong type, `NOT_FOUND`); one is
-silent and is the one to fear: the REST endpoint accepts an **issue number** as a valid
-integer database id and **succeeds**, attaching a blocker from whichever issue happens to
-hold that id *anywhere on GitHub*. **Read `blockedBy` back after every write.** `colab
-blocked` (#251) takes issue numbers only, so this hazardous value never passes through a
-caller's hands at all.
-
-Why, with the measurements: [ADR 361](docs/adr/361-readiness-and-dependency-edges-rationale.md).
-
-**Read that confirmation from the `blockedBy`/`blocking` connections, never
-`issueDependenciesSummary` — the summary lags the graph.**
-
-**"No blockers" and "nobody checked" are the same empty list** — the second needs its
-own marker:
-
-```sh
-gh label create deps-checked --color 0E8A16 --description "Dependencies verified — no open blocker"
-colab readiness <N>           # set only after actually looking (raw: gh issue edit <N> --add-label deps-checked)
-colab readiness <N> --clear   # a genuinely NEW blocker appeared, or the issue reopened — never "not now"
-```
-
-**`deps-checked` is monotonic (#279): once set, it stays set.** It records that a
-reasoning session looked and found no open blocker — not that the issue is startable
-*today*. Clearing it means exactly one of two things: a new blocker appeared (already
-carried by the `blockedBy` edge above, so stripping the label on top of that edge adds no
-information), or the issue reopened after being closed. It never means "startable in
-principle, but not right now" — that fact has its own carrier, below (*Disposition*). A prose note saying "checked, no blockers" does not count as setting it.
+How the graph is written and read back — two APIs, two id kinds, one silent trap — and the
+dependency-checked marker with its commands:
+[`tools/docs/readiness.md`](tools/docs/readiness.md#writing-and-reading-the-graph-and-the-checked-marker).
+The rule they serve: the [claims and decisions contract](#5-claiming-work--how-to-say-im-on-this),
+items 3–4.
 
 ##### Readiness is not a boolean — read the blocker's state, not just its existence
 
@@ -1623,30 +1514,15 @@ judgement fails toward `blocked`, never toward `ready`** — the mirror of the l
 
 Why, with the measurements: [ADR 361](docs/adr/361-readiness-and-dependency-edges-rationale.md).
 
-Reference implementation: `tools/lib/readiness.js` (`classify`, `isStartable`), pure —
-facts in, verdict out — deriving "blocker's code written but unmerged" from
-`tools/lib/landed.js` rather than re-counting commits.
+Reference implementation:
+[`tools/docs/readiness.md`](tools/docs/readiness.md#reference-implementation-of-the-readiness-verdict).
 
 ##### Mechanical readiness — a weaker, honest claim for the empty case (#69)
 
-`deps-checked` asserts *somebody looked* — stronger than "the encoded graph, read via
-the API, has zero edges". **A mechanical check must never write `deps-checked` itself**.
-
-```sh
-gh label create graph-empty --color BFDADC --description "Mechanical check: the recorded dependency graph reads empty — NOT a substitute for deps-checked"
-colab readiness <N> --mechanical           # reads blockedBy; if empty, applies graph-empty + posts a receipt
-colab readiness <N> --mechanical --clear
-```
-
-- **Re-derives its own evidence** on every run, rather than trusting a caller-supplied
-  flag.
-- **Posts a receipt** naming what was read and when.
-- **`blockedBy` only** — says nothing about parent/child relations (*Epics*, below).
-- `readiness.classify()` keeps `graphEmpty`/`depsChecked` as distinct type-level inputs;
-  empty-but-unchecked reads a fourth verdict, `unchecked-mechanical` — `isStartable()`
-  still says no by default.
-- Not in the convention label set ([§9](#9-adopting-this)), same reasoning as `tracking`.
-- **No `readiness.marked` event fires for `--mechanical`**. Why, with the measurement: [ADR 539](docs/adr/539-readiness-rationale.md).
+A mechanical read that finds the graph empty is a weaker claim than a person having looked, and
+never sets the checked marker — the [claims and decisions
+contract](#5-claiming-work--how-to-say-im-on-this), item 4. Its label, receipt and verdict:
+[`tools/docs/readiness.md`](tools/docs/readiness.md#mechanical-readiness--a-weaker-honest-claim-for-the-empty-case-69).
 
 #### Disposition — a park must name its wake condition (#279)
 
@@ -1753,189 +1629,32 @@ Because: the import model changed in #88; the parser steps must be rewritten aga
 
 ###### The `wake:` vocabulary — a wake a scheduler can check (#382)
 
-Why a wake had to be checkable, with the measurements: [ADR 382](docs/adr/382-wake-vocabulary-rationale.md).
-
-So `wake:` is now one of these, and a scheduler can evaluate every form on every beat:
-
-| `wake:` | Met when |
-|---|---|
-| `review-by:<date>` | the date is reached. The `review-by:<date>` label is on the issue too. The label is what a query reads, and this line restates it |
-| `#N` | the issue behind the `blocked_by` edge to `#N` closes (*Readiness*, above). The edge must exist |
-| `ruling` | the owner acts. `Because:` is the ask (below). No fact makes this one "met": the owner's act *is* removing the label |
-| `issueClosed:<owner>/<repo>#<n>` | that issue is closed. Use it for another repo's issue when no cross-repo edge is set. `issueClosed:<n>` (no owner/repo) names this repo's own, but a same-repo wait should normally be a `#N` edge instead |
-| `branchLanded:<ref>` | `<ref>`, resolved as written, is an ancestor of trunk. A squash-merge never makes a branch tip an ancestor, so where branches land by squash, wait on the branch's issue (`#N`, `issueClosed:`) or on the landed commit (`trunkAt:`) instead |
-| `trunkAt:<sha>` | trunk contains `<sha>` (7–40 hex) |
-| `labelPresent:<label>` | the held issue carries `<label>` |
-| `after:<date>` | the date is reached. Same meaning as `review-by:`, in the form a scheduler stores |
-
-**`ruling` is the one definition of the "waiting on the operator" reason line.** When the
-wake is `ruling`, the `Because:` line is the ask itself, written as what the owner has to
-do or answer. A consumer's card reader parses this line and does not invent a second
-syntax for it. If the ask is a question rather than an act, it belongs under
-`needs-decision` instead, where the answer gets a record of its own (`shape:`, below).
-
-**One spelling, not two.** Every checkable name above is spelled exactly the way the one
-adopting scheduler that evaluates wakes already spells it, argument rules included. The direction is one way: a consumer that evaluates a
-`wake:` never invents a second spelling for a name on this list.
-`tools/lib/wake.js` is the parser and evaluator, and its tests pin the list.
-
-Why two kinds are not adopted: [ADR 382](docs/adr/382-wake-vocabulary-rationale.md).
-
-The rules:
-
-1. **Several conditions on one line are ANDed:**
-   `wake: issueClosed:owner/repo#12, trunkAt:abc1234`. A hold never wakes early on part of
-   its condition, and a line with one piece outside the vocabulary names no wake at all.
-   It is never read as its checkable rest.
-2. **A wait on other work must use one of the checkable forms.** If that work has no
-   issue yet, file one and point the hold at it. Only a wait that has no checkable form
-   at all stays prose in `Because:`, such as a vendor or a person outside the repo. That
-   wait **must** carry `review-by:<date>`.
-3. **A `wake:` that names an issue or ref that does not exist is a finding when it is
-   written**, not at the review date.
-4. **A met wake does not lift the hold by itself.** A scheduler that evaluates wakes
-   posts once that the condition is met and hands the issue to triage. Triage reads the
-   newest ruling or `Hold:` line, and reports the hold as *wake met, lift?*. The owner removes the label, as above. The
-   evaluator proposes; it never clears.
-5. **Wakes are re-checked on every triage pass**, not only once `review-by:` is reached
-   (`code-triage` §0, §2, §5). A wake that comes true between two passes is noticed on the
-   next one, whether or not anything else in the backlog moved.
-
-This applies to `deferred:*` and to every label declared under `holds:` alike, because
-both carry the same `Hold:` line.
-
-Nothing in this repo's tooling writes a `Hold:` line. The mechanical parts are the
-audit's shape check on `holds:`, the codec's `Hold:` line pair (`tools/lib/codec/hold.js`, which
-decodes only this exact shape — a looser line names no owner or wake and stays a stall), and
-`tools/lib/wake.js`, which parses a `wake:` value and evaluates it against facts a caller has
-already gathered. Whoever parks the issue writes
-the line, and `code-triage` reads it (its §0, §2, §5 and §6).
+A `wake:` is one of a small closed vocabulary a scheduler can evaluate on every beat — never free
+text, and a met wake proposes lifting the hold, never lifts it — the [claims and decisions
+contract](#5-claiming-work--how-to-say-im-on-this), item 5. The vocabulary, its one spelling and its
+rules:
+[`tools/docs/readiness.md`](tools/docs/readiness.md#the-wake-vocabulary--a-wake-a-scheduler-can-check-382).
 
 ###### The `shape:` field — what the owner is asked for (#569)
 
-Optional, between `owner:` and `wake:`, never after `wake:`; every new hold declares it.
-Why, and why that position: [ADR 569](docs/adr/569-hold-shape-rationale.md).
-
-| `shape:` | The owner is asked for | Carrier |
-|---|---|---|
-| `ask` | a **choice** between ways forward | **never a bare hold:** `needs-decision` + a `decision:options` block (*Decision options*, below) — 2–4 options, one `(recommended)`, `Because:` names what makes it the owner's call |
-| `task` | an **act** only a person can perform: sign, run a privileged script, supply a credential | a hold, `wake: ruling`; `Because:` is the act |
-| `wait` | nothing yet: a third party, other work, a date | a hold with a checkable `wake:` or `review-by:<date>` |
-
-```
-Hold: needs-decision — owner: @maintainer — shape: ask — wake: ruling
-Hold: hold:manual — owner: @maintainer — shape: task — wake: ruling
-Hold: deferred:external-party — owner: upstream — shape: wait — wake: issueClosed:owner/repo#22
-```
-
-Present → readers use it; absent → inferred from the wake as before (`ruling` → `ask`, else
-`wait`); any other value is a finding and falls back to the inference. A reader that does not
-know the field still parses the line, wake whole. `holdShape()` in `tools/lib/codec/hold.js`
-returns the declared or inferred shape. A person-only check on finished code is no hold at all.
+A hold may say what its owner is asked for: a choice, an act, or nothing yet. A choice is never a
+bare hold — it is a recorded decision. The field, its values and how a reader infers it:
+[`tools/docs/readiness.md`](tools/docs/readiness.md#the-shape-field--what-the-owner-is-asked-for-569).
 
 #### Disposition — the marker, the seven kinds, and who may apply one (#315)
 
-The park above is one of seven ways a piece of work can end. This subsection names all
-seven, the marker that proposes one, and the rule deciding whether an agent may apply it
-unattended or a human must.
-
-**A session does not dispose of its own issue.** It does the work, posts evidence, and
-proposes a disposition; a **separate later pass applies it**.
-
-Why the separation: [ADR 315](docs/adr/315-disposition-kinds-rationale.md).
-
-**The proposal is a marker**, one line, the family `colab:evidence` / `colab:grade` already
-use (*Rules*, above), followed by a one-line reason in prose:
-
-```md
-<!-- colab:disposition proposed=hold -->
-Waiting on the DNS change; `review-by:2026-10-01`.
-```
-
-`<token>` is one of a **closed** set of seven, **read by equality** — never by prefix, never
-by heading text. No token is a prefix or a decorated variant of another. An unrecognised
-token, a missing marker, or two markers proposing different things all mean **"not
-cleared"** — never a silent default to the safe-looking value. *Degrade, never gate* applies
-to absence exactly as it does for `colab:evidence`: a comment with no marker is evidence
-with no proposal, never "no evidence exists".
-
-**The kind and the token differ for exactly one member.** `not planned` keeps GitHub's own
-close-reason spelling, because that is the string the close is made with; its token is
-`not-planned`, because a token compared by equality cannot carry whitespace.
-
-**One kind has a legacy name, read but never written** (#609, why on the issue). A
-reader accepts `needs-boss` as a kind and as a token and classifies it exactly like
-`needs-owner`; an old and a new marker on one comment are one proposal, not two; writers emit
-`needs-owner` only. The park label adopters keep switches alike: `blocked:needs-owner`, with
-`blocked:needs-boss` still read as the same park (the handbook provisions neither). Accept both
-until the old name has had no open use for 14 days; dropping it is a separate change.
-
-| Kind | Token | What it means | What it converts to |
-|---|---|---|---|
-| `done` | `done` | The ask was executed **and** cross-checked; acceptance ticked, or a remainder declared | closes with evidence |
-| `split` | `split` | Part landed; the remainder is filed as a native sub-issue carrying the same `delivery:` and a wake condition, evidence copied across | closes with evidence |
-| `routed-out` | `routed-out` | The work belongs to another repo; `<other-repo>#N` exists and links back | closes with evidence |
-| `hold` | `hold` | Parked on a named wake condition | `deferred:<kind>` + a `Hold:` line whose `wake:` is from the closed vocabulary (above) |
-| `needs-owner` | `needs-owner` | A human must answer before anything else can happen | a recorded decision (*Decision gate*, below) |
-| `not planned` | `not-planned` | Superseded, or the direction was abandoned | closes as `not planned` |
-| `leave` | `leave` | Nothing decided | **never applied by an agent** — a nameable wake ⇒ `hold`; nothing to name ⇒ a *finding* |
-
-`leave` is the one kind that is not really a disposition. An issue on its fourth session
-with no disposition is a **brief problem, not a measurement problem** — so an agent converts
-it or reports it, and never leaves it. A human may leave with a reason; that reason is
-itself the wake condition.
-
-**The evidence a marker rides on has a fixed shape** — *what was done · the command · the
-result · what remains*. Free-form evidence is a **finding, not a disposition**. Where the ask was an **action** rather than a
-measurement, a fifth line carries the **cross-check**: a second, independent, re-runnable
-command confirming the effect.
+A session does not dispose of its own issue: it posts evidence and proposes; a later pass applies
+the disposition — the [claims and decisions contract](#5-claiming-work--how-to-say-im-on-this), item
+6. The seven kinds, the marker and the evidence it rides on:
+[`tools/docs/readiness.md`](tools/docs/readiness.md#disposition--the-marker-the-seven-kinds-and-who-may-apply-one-315).
 
 ##### Who may apply one — a table over measurable inputs, never a judgement call
 
-"Sometimes an agent, sometimes a human" has to be **deterministic**, decided from facts on
-the issue, never from an agent's own confidence in its work. Two inputs are shared, and both
-gate only the two kinds whose close **asserts an outcome** — `done` and `not planned`.
-`split` and `routed-out` close too, but they re-home work rather than claim it finished, so
-neither input reaches them.
-
-- **The axis of record** (*Exposure*, §2). `exposure: released` ⇒ a human confirms; `none`,
-  `self` and `live` ⇒ the agent applies. Read a legacy `tier`-only descriptor **through**
-  that axis (`A -> released`, `C -> live`, `B -> null`) rather than by letter — which means
-  a bare `tier: B` resolves to *no opinion*, and no opinion is not permission.
-- **Skip-fence class** — production access, credentials, destructive or non-undoable
-  operations, promotion. Evidence naming one of these ⇒ human, whatever the exposure. The
-  agent names the classes its evidence touches; nothing sniffs prose for them.
-
-| Disposition | **Agent applies** unattended when… | **Human must** apply when… |
-|---|---|---|
-| `done` | evidence in the fixed shape **∧** a re-runnable cross-check recorded **∧** acceptance ticked or a remainder declared **∧** the issue gates nothing still open **∧** the axis permits **∧** no skip-fence class | the axis does not permit · a skip-fence class · no cross-check possible · the issue is a gate node for something open |
-| `split` | the remainder is filed as a native sub-issue with the same `delivery:` and a wake condition, evidence copied across | never — filing is mechanical |
-| `routed-out` | `<other-repo>#N` exists **and** links back to this issue | never — but the filing itself obeys the destination repo's own language rule |
-| `hold` | a wake condition is present — `review-by:<date>`, a real `blockedBy` edge, **or** a `wake:` from *Holds*' closed vocabulary | the wake has stood **30 d** (a PROPOSAL, unmeasured; a repo may declare `thresholds.hold-stale-days`) with no movement ⇒ a human confirms it is still wanted, else `not planned` |
-| `needs-owner` | **never** — the agent *records* the question and moves on (record-first) | always; the answer returns the issue to intake |
-| `not planned` | superseded by a **merged or closed** replacement that references this issue | an abandoned direction — a human judgement, always |
-| `leave` | **never** — the agent converts it (see above) | a human may leave with a reason |
-
-Three properties hold this together, and each is load-bearing:
-
-- **Fails towards `human`, always.** An absent, malformed or unresolvable fact never yields
-  `agent` — the posture *Readiness* (above) takes towards `ready`. Why, with the measurement: [ADR 539](docs/adr/539-disposition-marker-rationale.md).
-- **"An agent may" is never "a human may not."** A human can apply any disposition on any
-  issue at any time, in either direction. The verdict is a proposal, not a lock.
-- **A mechanical gap is not a judgement call.** `split` with nothing filed yet, or `hold`
-  with no wake named, is not *escalated* — it is *incomplete*. The fix is to file the
-  sub-issue or name the wake, not to ask somebody. Only the outcome-asserting kinds escalate.
-
-**The reference implementation is `tools/lib/disposition.js`** — pure, facts in, `agent` |
-`human` out, no tracker I/O, the pattern `readiness.js`, `landed.js` and `axis-authority.js`
-already set. Two consumers reaching the same verdict from the same evidence holds **by
-construction** only if both call one function, or copy-and-own that file ([§9](#9-adopting-this)); two prose
-copies of the table above is the two-places-drift disease this handbook exists to kill.
-`parseMarker` / `formatMarker` are the only sanctioned way to read or write the marker —
-they are what keeps the token set closed and the comparison by equality.
-
-**This section defines vocabulary only**, exactly as the park above does. Nothing in this
-repo's own tooling writes `colab:disposition` today, and no skill here reads it. What lives here is the table both sides agree on.
+Who may apply a disposition is decided from facts on the issue, never from an agent's confidence,
+and an absent or unreadable fact fails toward a person — the [claims and decisions
+contract](#5-claiming-work--how-to-say-im-on-this), item 6. The inputs, the table and the reference
+implementation:
+[`tools/docs/readiness.md`](tools/docs/readiness.md#who-may-apply-one--a-table-over-measurable-inputs-never-a-judgement-call).
 
 #### Decision gate — a human must answer first (#122)
 
@@ -1970,14 +1689,6 @@ Why, with the measurements: [ADR 122](docs/adr/122-decision-gate-rationale.md).
 **An epic never carries `needs-decision`, and never a `decision:options` block (#361).**
 Why, with the measurements: [ADR 122](docs/adr/122-decision-gate-rationale.md).
 
-**[Hard — gate: colab decision --reopen refuses]** **A question about an epic goes on its own decision issue**, the same shape as the third
-path below. Its body carries the question and, if there are options, the
-`decision:options` block. It carries `needs-decision`, and it is attached to the epic
-**as a sub-issue**. If the question holds back a specific child, that child also gets a
-`blocked_by` edge to the decision issue. Why, with the measurements: [ADR 122](docs/adr/122-decision-gate-rationale.md). Once the ruling is recorded
-(`colab decision --record`), the decision issue closes with the record as its evidence.
-`colab decision --reopen` refuses on an `epic`-labelled issue and names this path.
-
 **A session discovering a significant design decision mid-work continues on the
 designer's spec** rather than stopping to request a ruling, and records
 `design-not-preapproved` in its ship evidence. This default stays the rule everywhere a usable default exists.
@@ -1990,403 +1701,52 @@ issue it is working, and **keeps its claim**. **This is not licence to
 stop on any fork** — the default-exists case above is unchanged and still the ordinary
 rule; this path exists only for the genuinely blocking, no-default case.
 
-**Recording the decision is what clears the gate — it is not a separate act a human must
-remember.** The answer, not the label's
-absence, is the artifact: a `⚖ Decision recorded` comment (`tools/lib/decision-record.js`)
-naming who ruled and what it answers, plus the `decision-recorded` label, written together
-by `colab decision <N> --record --ruled-by <name>` — never `needs-decision` cleared alone.
-A reader checking whether an issue is decided looks for `decision-recorded` or the live
-comment marker, never merely for `needs-decision`'s absence.
-
-**A second question on an already-decided issue goes through `colab decision <N> --reopen
---ruled-by <name>` — never a hand-added `needs-decision` (#357).** `--reopen` removes
-`decision-recorded`, re-applies `needs-decision` and posts a `↩ Decision reopened` receipt,
-so the issue reads as open to every reader. A hand-added `needs-decision` does not: it
-leaves the issue with **both** labels. Why, with the measurements: [ADR 122](docs/adr/122-decision-gate-rationale.md).
-
-**Both labels at once is ambiguous, and a reader resolves it by time.** Two histories leave
-the same pair. An **interrupted write** is `--record` posting its `⚖` comment and then
-failing its label swap, so the question is answered. A **second question** is someone
-re-adding the label by hand, so the question is open. Compare the newest *ask* with the
-newest live, trusted `⚖ Decision recorded` marker. The ask is the newest `needs-decision`
-`labeled` event on the issue, or the newest `<!-- decision:options -->` comment, whichever
-is later.
-
-| Evidence | Reading |
-|---|---|
-| The ask is newer than the marker | an **open question** — pending |
-| No live marker at all, only the label | an **open question** — `--record` posts its comment first, so an interrupted write always leaves one |
-| The label timeline was read, and every ask predates the marker | an **interrupted write** — answered; finish it with `gh issue edit <N> --remove-label needs-decision` |
-| Anything the reader cannot prove (timeline unread, no event found) | **undetermined** — surfaced as **pending**, never hidden |
-
-**[Hard — gate: colab decision --record refuses]** This leans towards showing the issue, like *Readiness* does. Why, with the measurements: [ADR 122](docs/adr/122-decision-gate-rationale.md). The reference reading
-is `pairVerdict` in `tools/lib/decision-record.js`. `colab decision --list` names every
-issue carrying the pair, with its verdict and fix. `colab decision --record` **refuses**
-over the pair unless `--answers <ref>` says which question the new record answers.
-
-Why, with the measurement: [ADR 539](docs/adr/539-decision-gate-rationale.md).
+A ruling clears the gate only once it is recorded where the tracker reads it — who ruled, and what
+it answers; the label's absence is never the answer — the [claims and decisions
+contract](#5-claiming-work--how-to-say-im-on-this), item 7. How a ruling is recorded and reopened,
+how a reader resolves both labels at once, and a question about an epic:
+[`tools/docs/decisions.md`](tools/docs/decisions.md#recording-reopening-and-both-labels-at-once).
 
 #### Decision options — what a ruling chooses between (#126)
 
-The mechanics above make the **answer** to a `needs-decision` gate machine-readable.
-They say nothing about the **question**: what a human is actually choosing between.
-Why, with the measurements: [ADR 126](docs/adr/126-decision-options-rationale.md).
-
-**The filer of a `needs-decision` issue writes the options as a fenced block**, at
-filing time, whether the filer is human or an agent — this is not scoped to
-`agent-filed`/`Ask:` (above), because `needs-decision` itself gates issues from either
-provenance:
-
-```
-<!-- decision:options
-A: Short label (recommended) | One line of detail — the trade this option makes.
-B: Short label | What this one buys and what it costs.
-C: Short label | Listed for completeness; why it is probably wrong.
--->
-```
-
-- `LETTER: label | detail`, one option per line; `detail` is optional.
-- **Two or more lines, or the block does not count**.
-- An HTML comment fence, so it costs a human reader nothing in the rendered issue.
-- **The block states the choices. It never states the answer** — recording the
-  acceptance is the separate, later act above (`colab decision --record --answers
-  <ref>`), naming the block it resolves.
-
-**Lives in the issue body by default** — written once, at filing, alongside the rest
-of the ask. A discussion that narrows the choices may re-post the block as a comment,
-and then **the newest block by creation time is the live one** — the same
-most-recent-wins reading `liveDecisions` already applies on the answer side. That rule
-is for a reader rendering an issue nobody has answered yet. Which block a *recorded*
-decision answers is never inferred from recency: `--answers <ref>` names it explicitly,
-and that reference is what a consumer cross-checks against (`answeredOptionRefs`,
-`tools/lib/decision-record.js`).
-
-**Absent block means "options not declared"** — exactly as an absent `Ask:` line reads
-as `backlog` (above): no backfill, no new failure state for issues filed before this
-existed. The one exception is the design-approval ask below: a `needs-decision` question
-in neither shape is reported to its filer as a finding (#379). That is a report, never a
-gate, and it never changes whether the question is pending.
-
-Why, with the measurement: [ADR 539](docs/adr/539-decision-gate-rationale.md).
+The filer of a waiting decision records the options with the question, never the answer — the
+[claims and decisions contract](#5-claiming-work--how-to-say-im-on-this), item 7. The block's shape
+and which block is live:
+[`tools/docs/decisions.md`](tools/docs/decisions.md#decision-options--what-a-ruling-chooses-between-126).
 
 #### Design-approval ask — the `Mockup:` line (#379)
 
-The options block is the shape for a pick-one question. The other common ask, approving
-a finished design artifact (*Design conclusions are three units*, below), is a yes/no on
-an image, and had no machine-readable shape at all. Why, with the measurements: [ADR 379](docs/adr/379-design-approval-ask-rationale.md).
-
-**The design issue's body carries the ask as one line:**
-
-```
-Mockup: https://…/frozen-screenshot.png
-```
-
-- **In the body, never only in a comment.** The session that produced the artifact edits the body when it asks.
-- **Anchored at the start of a line**: `Mockup:`, then the URL of the frozen image. An
-  indented or inline `Mockup:` is quoted text, not a declaration. The image is the same
-  frozen evidence unit 3 attaches to the ruling.
-- **A set reviewed together** (one review per workflow set) puts one `Mockup:` line in
-  **each** member's body, pointing at that member's image. The review comment keeps the
-  full gallery and the per-page A/B lines.
-- **Several lines are allowed** when one issue's approval covers several frozen images.
-- **Both shapes present** read as the options block: a pick-one question is the more
-  specific ask.
-- **On an issue that already carries `decision-recorded`**, the ask still goes through
-  `colab decision <N> --reopen` (*Decision gate*, above). The `Mockup:` line says *what*
-  is asked. `--reopen` is what makes it read as asked.
-
-**A `needs-decision` issue whose ask is in neither shape is a finding for its filer**, not
-an item left in the queue. `code-triage` and `code-sweep` report it and name the filer.
-They do not rewrite the ask, because the question is not theirs to restate. The reference
-reading is `askShape` in `tools/lib/decision-record.js`, which `evaluateIssue` reports as
-`unshapedAsk` when it is given the body.
-
-Why, with the measurement: [ADR 539](docs/adr/539-decision-gate-rationale.md).
+Approving a finished design artifact is asked in the issue body, naming the frozen image. The line's
+shape:
+[`tools/docs/decisions.md`](tools/docs/decisions.md#design-approval-ask--the-mockup-line-379).
 
 #### An ask is said once — a later pass reports that it is still waiting (#489)
 
-The shapes above say how a question is put to a human. This rule says how often. Why, with the measurements: [ADR 489](docs/adr/489-ask-said-once-rationale.md).
-
-**An ask is open when either of these holds:**
-
-- **The tracker already carries it.** The issue has a pending `needs-decision` (*Decision
-  gate*, above, read with `pairVerdict`) whose ask has a shape, either an options block or
-  a `Mockup:` line. Or its newest `Hold:` line has `wake: ruling` (*Holds*, above), and the
-  `Because:` line is the ask. A decision inbox that an adopting fleet runs reads these same
-  marks, so a question already in that inbox is open in this sense too.
-- **An earlier pass of the same skill already rendered it** in its own output and stored
-  it (`code-triage` §0.1, `asks`). Use this when the question exists only in that
-  session's output, for example *wake met, lift?* or *a ruling exists in a comment, record
-  it?*.
-
-**An open ask gets exactly one line on every later pass. A pass never renders its options
-again:**
-
-```
-unchanged, waiting on <link> since <date>
-```
-
-- `<link>` is where the answer goes: the options-block comment, the `Hold:` line comment,
-  or the issue itself for an ask that was only in session output.
-- `<date>` is when the ask was first put. That is the newest ask event for a tracker ask
-  (the same "newest ask" *Decision gate* compares with the marker), and the date of the
-  first rendering for an ask that was only in session output. It is never the date of this pass.
-- A pass may append who clears the ask. It never adds the question, the options or the
-  recommendation again: those are behind the link.
-
-**A new ask is rendered once, as a five-line card:** the question first, then two or more
-options, then the recommendation on its own line, then what stays parked if nobody
-answers, then the link. Any of these makes an ask new: it was never rendered before, the
-tracker now carries a newer ask than the stored one (a re-posted options block, or a
-`--reopen`), or the question itself changed. A card is session output, like the rest of a
-triage report. It never authorises a tracker comment that a skill's own write list does
-not name.
-
-**Waiting on a human is not a change.** An unanswered ask gets older on every pass, but its
-age is not an input to anything. A pass whose only news is "still unanswered" is an
-unchanged pass: on a skill with a no-change short-circuit (`code-triage` §0), it stays on
-the cheap path. It never re-asks, escalates or re-renders because time has passed. What
-moves an ask is the human's answer (a recorded decision, a label removed, a hold lifted).
-Those already move the inputs that the short-circuit compares.
-
-**No open ask, no change.** A repo with no open human ask renders nothing new.
-
-Why, with the measurement: [ADR 539](docs/adr/539-decision-gate-rationale.md).
+An ask a person must answer is put once; a later pass reports that it is still waiting and never
+re-asks because time passed — the [claims and decisions
+contract](#5-claiming-work--how-to-say-im-on-this), item 8. What makes an ask open or new, and the
+one line a later pass writes:
+[`tools/docs/decisions.md`](tools/docs/decisions.md#an-ask-is-said-once--a-later-pass-reports-that-it-is-still-waiting-489).
 
 #### An ask the human must answer can be raised once in a decision box (#490)
 
-The rule above controls how often a coordinator says an ask. It does not control where the
-human sees it. Some items cannot be settled by any coordinator: a migration grant, a
-promotion, a design ruling, a production credential, a destructive operation. A pass that
-finds one sets it aside and leaves it in the tracker's decision queue. The human who owns
-it may not watch that queue. A deployment may run a separate **decision box** that the
-human does watch. This rule says how a coordinator delivers the ask there, and how the
-answer gets back.
-
-**The box is optional and set by the deployment.** A skill reads its endpoint from a
-deployment setting. No host is ever written into a skill or into this handbook. **No
-endpoint set means no change:** the ask stays where it already lives, as the issue's
-`needs-decision` label and its `decision:options` block (*Decision options*, above).
-
-**Only a human-only item is raised.** That is an item the pass set aside because no
-coordinator may decide it, the list above. An ask that a coordinator can rule on is ruled
-on, not sent on.
-
-**The tracker stays the record. The box only delivers.** Raising an item changes nothing
-on the issue. The label, the options block and any `Hold:` line stay exactly as they were,
-and readiness still reads them. A box that is down, or never answers, loses a delivery,
-never the ask.
-
-**A raise carries everything needed to answer without opening the tracker:**
-
-- the issue link;
-- the question;
-- two or more options, taken from the issue's `decision:options` block, never re-derived;
-- the recommendation, on its own line;
-- what stays parked if nobody answers;
-- an opaque **reply-to**. The raiser composes it and the box hands it back unchanged with
-  the answer. The box never parses it. It is what lets the answer find its issue.
-
-These are the five lines of a new-ask card (above), plus the reply-to.
-
-**Raised once, checked first.** An item is identified by its issue link plus the date of
-its newest ask (the same "newest ask" *Decision gate* compares). Before raising, a pass
-looks for an earlier raise under that key. It looks in its own stored asks, and in the box
-when the box can answer the lookup. If it finds one, the pass writes the one line from the
-rule above, with `<link>` pointing at the raise in the box:
-
-```
-unchanged, waiting on <link> since <date>
-```
-
-It does not raise the item again. A newer ask on the issue (a re-posted options block, a
-`--reopen`, a changed question) is a new key, and it is raised once in turn.
-
-**The answer comes back as a comment on the issue, and the raiser never polls.** The box
-has an answer notifier. The deployment wires it to post the human's answer onto the issue
-named by the reply-to. The raising skill never asks the box whether an answer has arrived.
-Waiting is not a change (above). The comment that arrives is an answer left in a comment.
-It moves the issue the same way as one typed into the tracker by hand: it is recorded as
-*Decision gate* requires before the gate lifts. The box itself never removes a label or
-records a decision.
+A deployment may deliver an ask only a person can answer to a decision box that person watches; the
+tracker stays the record, and the box only delivers. How it is raised, keyed and answered:
+[`tools/docs/decisions.md`](tools/docs/decisions.md#an-ask-the-human-must-answer-can-be-raised-once-in-a-decision-box-490).
 
 #### The human flag — what `COLAB_HUMAN=1` asserts
 
-`COLAB_HUMAN=1` is one mechanism carrying one assertion, used at several gates in this
-handbook: **a human is behind this command.** Read every site below as an instance
-of the same assertion, never as a separate rule with its own semantics:
-
-- **Promotion** ([`colab promote`](#4-branches-and-commits)) — authorises the act that
-  deploys to production.
-- **Migration exemption** (below) and **Red-trunk exemption** (below) — authorise a write
-  that did not exist before the command ran.
-- **A place-claim override** ([Place-claims](#place-claims--the-writer-verifiable-hold-a-shared-checkout-needs-and-a-worktree-does-not),
-  above) — authorises taking over a live hold.
-- **`colab adopt`'s exposure-lowering gate** — authorises a descriptor claiming fewer
-  consumers exist than the tool can verify.
-- **Solo-flow entry** ([Solo flow](#solo-flow--trunk-direct-issue-on-demand-entry-gated-a-human-must-be-at-the-keyboard),
-  above) — the newest instance (⚖ #233): asserts a human is present to commit straight to
-  trunk, on any repo that does not declare the veto.
-
-**Two terms make the assertion checkable, not just statable**:
-
-- **Transcription, never inference.** Set it because a human said so — "take the trunk,"
-  "promote this," "grant the migration" — never because the situation seemed to call for
-  it. A human's go-ahead counts; an agent's own reading of the situation never does.
-- **Live conversation only.** A headless, scheduled, or driver session may never set it,
-  whatever its prompt contains. Why, with the measurements: [ADR 233](docs/adr/233-human-flag-rationale.md).
-
-**The honest limit, stated once here rather than wherever it currently gets re-derived:**
-`COLAB_HUMAN` is an env var the gated party can set itself — nothing enforces the two
-terms above beyond the discipline of everyone honoring them (#150, parked: a stronger
-mechanism would need an out-of-band attestation this fleet does not have). The two terms
-are what make a violation *legible* after the fact, not what makes one impossible.
-
-Why, with the measurement: [ADR 539](docs/adr/539-human-flag-rationale.md).
+That a person is behind a command is transcribed from that person in a live conversation, never
+inferred — the [claims and decisions contract](#5-claiming-work--how-to-say-im-on-this), item 9. The
+flag, the gates that read it and its honest limit:
+[`tools/docs/grants.md`](tools/docs/grants.md#the-human-flag--what-colab-human1-asserts).
 
 #### Migration exemption — a narrow door through no-new-migrations, opened by a role (#98, #402)
 
-**[Hard — gate: colab ship refuses]** `colab ship` refuses, by default with no flag/env/field to lower the bar, any branch
-touching `database/migrations/` or `prisma/migrations/` — or any prefix the repo declares in
-`project.yml` `migrations:` (#383, [`project.schema.md`](project.schema.md#migrations--optional)).
-A declaration only ever widens what the gate sees, never narrows it.
-
-**A migration grant is a narrow, per-issue, branch-bound, expiring exemption, and every
-grant names the role that decided it** — deliberately not a repo- or tier-level switch.
-There are two roles. The repo says which ones it accepts (#397, #398):
-
-| Role | Who decided | Marker | Bound to | Accepted |
-|---|---|---|---|---|
-| `human` | a person | `🛢 Migration grant` | the branch | on every repo — the default |
-| `migration-reviewer` | a declared reviewer, with a review record | `🔎 Migration review grant` | the branch's exact HEAD, plus a live CI round-trip on it | only under [`migration-grant: reviewer`](project.schema.md#migration-grant--optional) |
-
-**On trunk, where the repo's policy allows it and a reviewer is bound, a reviewer grant with
-evidence satisfies the gate just as a human grant does.** Nothing else moves with it:
-`COLAB_HUMAN=1`, promotion, release and production stay human on every repo, under every
-policy.
-
-**What holds for every role:**
-
-- **[Hard — gate: colab migration-grant refuses]** **Minting is a human act.** `colab migration-grant` refuses (exit 1) unless
-  `COLAB_HUMAN=1`, checked before any network call, for either role — no agent may create
-  or infer one ([*The human flag*](#the-human-flag--what-colab-human1-asserts), above).
-  The reviewer role changes what a grant must *prove*, not who may post it.
-- **Two required parts**: a `migration-granted` label (requires write/triage permission)
-  and a comment naming the exact branch. Never authorises a migration arriving on a different branch later.
-- **Expires the instant its issue closes** — `ship` reads the issue's live open/closed
-  state, never a separate expiry.
-- Visible from any machine — no local-only fallback.
-- **Covers the whole ship set**, never narrowed by `--refs`. One issue without a valid grant fails the set.
-- `--revoke` removes the label first (gate restored immediately), then posts a receipt.
-  A revoke cancels every earlier grant on the issue, of either role, whoever posted it.
-  `colab migration-grant --list` names every live grant.
-- **Never weakens any other precondition** — CI green, claim corroboration, trunk-checkout
-  check, and hand-merge conflict check all still run in full on a granted branch.
-  `--batch` still refuses every member that carries a migration, granted or not.
-
-**Who counts as a human — `trust-humans` (#407).** By default a grant (or a ruling,
-[*Decision gate*](#decision-gate--a-human-must-answer-first-122), above) counts as a
-human's when its author's GitHub association is `OWNER`, `MEMBER` or `COLLABORATOR`. Why, with the measurements: [ADR 98](docs/adr/98-migration-exemption-rationale.md). A repo
-in that position lists its humans:
-
-- **Declared** ([`trust-humans:`](project.schema.md#trust-humans--optional)) → a human
-  grant or ruling counts only when its author's login is listed (and still holds that
-  association). For `migration-granted` and `ci-granted`, the account that **last applied
-  the label** must be listed too, so a label re-added by an agent does not ride on a
-  human's old comment. An unlisted, unknown or unreadable author is not human, and the
-  refusal names the login.
-- **Absent** → the association class decides, exactly as before. Nothing changes for a
-  repo that does not declare it.
-- **Read from the target, never the branch.** Ship reads the list from `project.yml` at
-  the tip of the branch being merged into, and rulings read trunk's — a branch cannot
-  add its own author. **Editing the list is a human act**, like lowering exposure. As
-  with every other human-only rule here, #150's limit applies to *enforcing* that: the
-  handbook cannot stop an account with write access from editing the file.
-- **A reviewer grant is not judged by this list.** It passes or fails on the policy, the
-  review record, the HEAD and the round-trip below. The list decides only what a *human*
-  grant is.
-
-**The human role** is unchanged since #98: branch-bound, not HEAD-bound, and honoured on
-every repo. Where both roles are live on an issue, a valid human grant wins.
-
-**The reviewer role** names the reviewer's **declared** identity and carries a **review
-record**: a fenced `` ```migration-review `` block giving the verdict, the checklist
-result, the escalation condition checked, the CI round-trip result, the reviewed HEAD
-sha, and a `migrations:` content id that `colab migration-grant` computes itself. Four
-properties hold it together:
-
-- **Bound to what was reviewed (#508).** The content id is a sha256 over the path and git
-  blob id of every migration file the branch changes, at the reviewed HEAD. The grant covers
-  that content, not that commit. A commit that leaves every migration file byte-identical
-  keeps the grant live. Editing, adding, removing or renaming a migration changes the id
-  and voids it.
-  Why, with the measurements: [ADR 98](docs/adr/98-migration-exemption-rationale.md).
-  A record with no content id (minted before #508, or on a branch with no migration file)
-  stays bound to its HEAD alone, and a new commit voids it as before. Older readers refuse the
-  unknown key. A branch with a migration never gets one: no computable id is refused (#563).
-- **Opt-in: per repo, or once per machine (#598).** The policy resolves, highest first: the repo's
-  own `migration-grant:` (the trunk checkout at mint, the target's tip at ship) → this machine's
-  value, in its colab config → `human`. `colab migration-grant` refuses to mint a reviewer grant
-  unless the policy resolves to `reviewer`. A repo that writes `migration-grant: human` opts out,
-  and the refusal says so. **Setting the machine value is a human act, the same class as minting a grant.**
-  `COLAB_HUMAN=1 colab config set migration-grant` refuses without it and records who, when and on
-  which host. Its reach is that one machine: a gate run elsewhere resolves to `human`. The
-  owner-level record (#596) is retired and no gate reads it: any org member could post it, and the
-  shared account agents post from usually is one. Every printed policy names its source: `repo`,
-  `machine` (who, when) or `default`. Why: [ADR 539](docs/adr/539-migration-rationale.md#machine-level-reviewer-policy-598).
-- **Recorded only if the review passed.** The record must approve, pass the checklist,
-  clear the escalation and pass the CI round-trip. A failing review is refused, not
-  recorded. A *claimed* pass is checked too, before anything is written (#457): the CI
-  round-trip job must have run and passed at the recorded HEAD, a cited run must be one of
-  that HEAD's runs and carry the job, and a checklist count must be out of the checklist the
-  review skill walks today, every item passed. A repo whose CI has no round-trip job cannot
-  mint a reviewer grant at all — it adopts the template's job or ships on a human grant.
-- **Not attested.** The reviewer id and the recorded CI result are claims made in the
-  comment. The label's write permission and the trusted-author check are the only
-  anti-forgery properties, so a gate re-verifies CI for the recorded HEAD itself — the
-  mint-time check only keeps an honest tool from writing a false record; it proves nothing
-  about a comment posted by hand.
-
-**[Hard — gate: colab ship refuses without conditions P, M, HEAD, R]** **`colab ship` honours a reviewer grant only when four conditions hold together (#401):**
-
-- **P, policy.** The policy resolves to `reviewer` at the tip of the branch being merged
-  into (its key, else this machine's value, #598). The branch's own copy never counts.
-- **M, record.** A live reviewer marker from a trusted author, bound to this branch,
-  with a valid review record that passes.
-- **HEAD.** Ship reads the branch's head on the remote, and the local branch must agree
-  with it. The grant binds that head when the record's head is exactly it, or when the
-  record's `migrations:` id equals the id ship computes at that head (#508), using the
-  same path rule the gate fires on. An unreadable id never matches.
-- **R, round-trip.** The live CI round-trip passed on the **shipped** head, which after a
-  sync is not the reviewed one. Ship re-reads CI itself
-  and never trusts the recorded `ci-roundtrip:` value. The job is found by the name
-  prefix `Migration round-trip` (the legs of `templates/ci-laravel.yml`, or of the opt-in
-  block in `templates/ci-node.yml` / `ci-python.yml`, #494, #625). A skipped leg fails R. Every leg
-  needs a run that completed with success and ran at least one step. The template's job
-  rolls back to the oldest migration the branch **adds or modifies** (#507), so a branch
-  that only repairs an existing `down()` gets a round-trip that actually runs it, and the
-  run's log names every file it exercised. A copy older than that counts added files only:
-  its green says nothing about a modified migration, so re-sync it before a reviewer grant
-  relies on it. Node and Python have no canonical migration runner, so their job runs the repo's own
-  forward-only runner three times — fresh, re-applied, and on top of the base's migrations —
-  and each schema must equal the first: a forward-only runner has no `down()` to exercise,
-  and an edit to an applied migration shows up as a differing schema instead. A repo without
-  that job cannot pass R — the audit warns when one declares `reviewer` anyway — and a branch
-  that edits `.github/workflows/` cannot pass it either. Those branches ship on a human grant.
-
-If any condition fails, the gate behaves exactly as it does without a reviewer grant: a
-human grant, or a human running Phase B. The refusal says which condition failed
-(`reviewer grant [HEAD]: …`). One function makes this decision for every ship path —
-`--dry`, `--dry --json`, a real ship and the auto-trunk path — so no path can accept a
-grant another refuses.
-
-**`needs-migration-grant` is this gate's plan-time half, not a second gate (#230).**
-It is provisioned in `CONVENTION_LABELS` alongside `migration-granted`, but nothing in this repo's own tooling reads it — a
-downstream consumer (the fleet dashboard) applies it at plan/triage time, as soon as
-it can tell an issue's deliverable IS a schema migration. It authorises nothing by itself;
-only a grant minted as above does that.
-
-Why, with the measurement: [ADR 539](docs/adr/539-migration-rationale.md).
+A migration lands only with a grant from a person, or from a declared reviewer where the repo opts
+in — the [claims and decisions contract](#5-claiming-work--how-to-say-im-on-this), item 9. The gate,
+the two roles, who counts as a human and the reviewer conditions:
+[`tools/docs/grants.md`](tools/docs/grants.md#migration-exemption--a-narrow-door-through-no-new-migrations-opened-by-a-role-98-402).
 
 #### A red trunk with no patch — never parked in silence (#390)
 
